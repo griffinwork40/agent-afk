@@ -19,7 +19,8 @@
  *   1. custom name    — a user-assigned `name` on a binding      (tier; {@link slotForInput})
  *   2. neutral name   — `local` | `small` | `medium` | `large`   (tier; {@link slotForInput})
  *   3. identity alias — haiku/sonnet/opus/fable/*_1m/grok → fixed id   ({@link resolveBinding})
- *   4. otherwise      — raw concrete id or the `auto` sentinel (passthrough)
+ *   4. slot id match  — a raw id equal to a configured slot's `id` carries that slot's creds
+ *   5. otherwise      — raw concrete id or the `auto` sentinel (passthrough)
  *
  * Bindings are process-global config (one afk.config.json + env per process),
  * read threadlessly by `providerForModel`/`resolveModelId` via
@@ -360,9 +361,10 @@ export function slotForInput(input: string, bindings: ModelSlots = getSlotBindin
  * neutral name) resolve to the configured `bindings[slot]` (id + any per-slot
  * provider/baseUrl/apiKey); fixed-identity aliases ({@link DIRECT_MODEL_ALIASES}
  * — `sonnet`/`opus`/`haiku`/`fable`/`*_1m`) resolve to a bare `{ id }` pinned to
- * their canonical wire id; raw ids and the `auto` sentinel also resolve to a bare
- * `{ id }` with no credentials. The returned object may be the live binding —
- * treat it as read-only.
+ * their canonical wire id; a raw id that matches a configured slot's `id`
+ * (case-insensitive) carries that slot's provider/baseUrl/apiKey; unbound raw
+ * ids and the `auto` sentinel resolve to a bare `{ id }` with no credentials.
+ * The returned object may be the live binding — treat it as read-only.
  */
 export function resolveBinding(
   input: string | undefined,
@@ -375,6 +377,12 @@ export function resolveBinding(
   // bypass slot bindings and resolve straight to their pinned wire id.
   const directId = DIRECT_MODEL_ALIASES[input.trim().toLowerCase()];
   if (directId) return { id: directId };
+  // A raw id that matches a configured slot's own id carries that slot's
+  // provider/baseUrl/apiKey. Prefer the first match in SLOT_NAMES order.
+  const trimmed = input.trim().toLowerCase();
+  for (const s of SLOT_NAMES) {
+    if (bindings[s].id.trim().toLowerCase() === trimmed && trimmed) return bindings[s];
+  }
   return { id: input };
 }
 
