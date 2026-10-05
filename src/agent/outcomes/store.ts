@@ -141,15 +141,26 @@ export function upsertVotes(
     record.closure_reason = opts.closureReason;
   }
 
+  // Backfill closure_reason from base when the existing record lacks it and
+  // opts.closureReason was not supplied. This covers the race where
+  // appendArtifacts creates a skeleton (no base → no closure_reason) and the
+  // later session-end upsertVotes finds the existing skeleton.  Without the
+  // backfill the skeleton's absent closure_reason causes normalClosure to fall
+  // back to the conservative 'treat as normal' default, which is incorrect for
+  // abnormal terminations already captured in base.
+  if (record.closure_reason === undefined && base?.closure_reason !== undefined && opts.closureReason === undefined) {
+    record.closure_reason = base.closure_reason;
+  }
+
   // session_ended_at is immutable after first write — preserve the existing
   // value across all subsequent upsertVotes calls (relabel-job, reask, etc.).
   // The base record from the session-end hook supplies the initial value.
-  // When the record already has session_ended_at (from the skeleton or an
-  // earlier upsert), do not overwrite it. This is enforced by the _skeleton
-  // helper which copies it from base; subsequent upserts read an existing
-  // record that already carries the field.
-  // No explicit action needed here — the existing record value is preserved
-  // when we pass `record` (which already has the field) to writeRecord.
+  // Backfill from base when the existing record (e.g. an appendArtifacts
+  // skeleton) lacks it — without backfill, lf-reask falls back to mtime for
+  // sessions where a child artifact arrived before session teardown.
+  if (record.session_ended_at === undefined && base?.session_ended_at !== undefined) {
+    record.session_ended_at = base.session_ended_at;
+  }
 
   // Merge votes: dedupe by lf+evidence (incoming wins on collision)
   const merged = _mergeVotes(record.votes, newVotes);
@@ -296,9 +307,9 @@ function _latestExplicitFeedback(votes: Vote[]): Vote | undefined {
     if (v.lf !== 'explicit_feedback') continue;
     if (
       latest === undefined ||
-      v.observed_at > latest.observed_at ||
-      // Tie-break: later position wins (stable on equal timestamps)
-      (v.observed_at === latest.observed_at)
+      // Tie-break: later position wins on equal timestamps (>= replaces the
+      // prior > … || === pair, which was correct but unnecessarily verbose).
+      v.observed_at >= latest.observed_at
     ) {
       latest = v;
     }

@@ -60,7 +60,14 @@ function closureFromTrace(tracePath: string | undefined): ClosureInfo | null {
           const reason = p?.['reason'];
           if (reason === 'abort') return { reason: 'abort' };
           if (reason === 'iteration_cap') return { reason: 'iteration_cap' };
-          return { reason: 'normal' };
+          // Invariant: only 'model_end_turn' should map to 'normal'.
+          // 'truncated', 'timeout', 'budget_exceeded', 'hook_blocked', and
+          // 'max_turns_exceeded' are abnormal termination reasons — mapping them
+          // to 'normal' lets combiner rules 6/7 label abnormal sessions as
+          // succeeded. Use 'unknown' as a safe non-normal sentinel for any
+          // trace reason that is not explicitly known to be clean.
+          if (reason === 'model_end_turn') return { reason: 'normal' };
+          return { reason: 'unknown' };
         }
       } catch {
         // malformed line — skip

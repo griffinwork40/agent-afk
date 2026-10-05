@@ -490,6 +490,126 @@ describe('upsertVotes – normalClosure derived from closure_reason (finding #1)
 });
 
 // ---------------------------------------------------------------------------
+// Finding #1 (extended): non-model-end-turn closure reasons are non-normal
+// ---------------------------------------------------------------------------
+
+describe('upsertVotes – abnormal closure reasons block good-by-default rules', () => {
+  // Invariant: 'truncated', 'timeout', 'budget_exceeded', 'hook_blocked', and
+  // 'max_turns_exceeded' from the trace must NOT trigger combiner rules 6/7.
+  // closureFromTrace now maps them to 'unknown' (not 'normal'), so normalClosure
+  // stays false and the session is not promoted to succeeded.
+  const pastWindow = () => new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+
+  for (const abnormalReason of ['unknown', 'abort', 'iteration_cap'] as const) {
+    it(`closure_reason='${abnormalReason}' session with minor vote past window stays unknown (rule 6/7 blocked)`, () => {
+      const sessionId = `sess-abnormal-${abnormalReason}`;
+      const base = {
+        schema_version: 1 as const,
+        session_id: sessionId,
+        label: 'unknown' as const,
+        confidence: 0,
+        state: 'provisional' as const,
+        settles_after: pastWindow(),
+        session_kind: 'text' as const,
+        self_report: 'none' as const,
+        artifacts: { commits: [], prs: [], repo: null },
+        closure_reason: abnormalReason,
+      };
+
+      upsertVotes(
+        sessionId,
+        [makeVote({ lf: 'cross_session_reask', vote: -1, strength: 'weak', severity: 'minor', evidence: 'minor' })],
+        base,
+        { outcomesDir: tmpDir },
+      );
+
+      const rec = readRecord(sessionId, tmpDir);
+      // abnormal closure → normalClosure=false → rules 6/7 must not fire
+      expect(rec?.label).toBe('unknown');
+      expect(rec?.closure_reason).toBe(abnormalReason);
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Finding #2: session_ended_at backfill when skeleton was created without base
+// ---------------------------------------------------------------------------
+
+describe('upsertVotes – session_ended_at backfill from base (finding #2)', () => {
+  it('backfills session_ended_at when existing record (skeleton) lacks it', () => {
+    const endedAt = '2025-03-15T08:00:00.000Z';
+
+    // Simulate appendArtifacts creating a skeleton without base (no session_ended_at)
+    const skeleton: VerifiedOutcome = {
+      schema_version: 1,
+      session_id: 'sess-backfill',
+      label: 'unknown',
+      confidence: 0,
+      state: 'provisional',
+      settles_after: null,
+      session_kind: 'text',
+      self_report: 'none',
+      artifacts: { commits: ['abc123'], prs: [], repo: null },
+      votes: [],
+      history: [],
+      // Intentionally no session_ended_at — simulates appendArtifacts skeleton
+    };
+    writeRecord(skeleton, tmpDir);
+
+    // Now session-end hook runs upsertVotes with base carrying session_ended_at
+    const base = {
+      schema_version: 1 as const,
+      session_id: 'sess-backfill',
+      label: 'unknown' as const,
+      confidence: 0,
+      state: 'provisional' as const,
+      settles_after: null,
+      session_kind: 'text' as const,
+      self_report: 'none' as const,
+      artifacts: { commits: [], prs: [], repo: null },
+      session_ended_at: endedAt,
+      closure_reason: 'normal' as const,
+    };
+
+    upsertVotes('sess-backfill', [], base, { outcomesDir: tmpDir });
+
+    const rec = readRecord('sess-backfill', tmpDir);
+    // session_ended_at must be backfilled from base into the existing skeleton
+    expect(rec?.session_ended_at).toBe(endedAt);
+    // closure_reason also backfilled
+    expect(rec?.closure_reason).toBe('normal');
+  });
+
+  it('does not overwrite existing session_ended_at on re-upsert', () => {
+    const originalEndedAt = '2025-01-01T00:00:00.000Z';
+    const laterEndedAt = '2025-06-01T00:00:00.000Z';
+
+    const base = {
+      schema_version: 1 as const,
+      session_id: 'sess-no-overwrite',
+      label: 'unknown' as const,
+      confidence: 0,
+      state: 'provisional' as const,
+      settles_after: null,
+      session_kind: 'text' as const,
+      self_report: 'none' as const,
+      artifacts: { commits: [], prs: [], repo: null },
+      session_ended_at: originalEndedAt,
+    };
+
+    upsertVotes('sess-no-overwrite', [], base, { outcomesDir: tmpDir });
+
+    // Second upsert with a different session_ended_at in base
+    const base2 = { ...base, session_ended_at: laterEndedAt };
+    upsertVotes('sess-no-overwrite', [], base2, { outcomesDir: tmpDir });
+
+    const rec = readRecord('sess-no-overwrite', tmpDir);
+    // Must not overwrite the original session_ended_at (already present)
+    expect(rec?.session_ended_at).toBe(originalEndedAt);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Finding #3: session_ended_at is written once and preserved across upserts
 // ---------------------------------------------------------------------------
 
