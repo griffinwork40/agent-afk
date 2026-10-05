@@ -77,6 +77,15 @@ function makeVerifiedPred(id: string, verdict: 'confirmed' | 'refuted' | 'unclea
   };
 }
 
+function makeUnobservablePred(id: string): VerifiedPrediction {
+  return {
+    prediction: makePred(id),
+    rates: { baseline: 0.1, candidate: 0.1, delta: 0.0, ci: [-0.3, 0.3], n: { baseline: 10, candidate: 10 } },
+    verdict: 'unobservable',
+    unobservableReason: 'downstream of the episode boundary: the tests must run to completion',
+  };
+}
+
 function makeFeatureDelta(label: string): FeatureDelta {
   return {
     label,
@@ -260,6 +269,69 @@ describe('renderMarkdown', () => {
     expect(md).toContain('claude');
     expect(md).toContain('88%');
   });
+
+  it('unobservable verdict shows 🔭 marker and reason in MD table', () => {
+    const vp = makeUnobservablePred('p1');
+    const report = makeReport(makeVerifyResult([vp]));
+    const md = renderMarkdown(report);
+    expect(md).toContain('🔭');
+    expect(md).toContain('unobservable');
+    expect(md).toContain('episode boundary');
+  });
+
+  it('unobservable is not counted as resolved in headline', () => {
+    const vp = makeUnobservablePred('p1');
+    const verify = makeVerifyResult([vp]);
+    // Override predictionAccuracy to undefined (no resolved predictions)
+    verify.predictionAccuracy = undefined;
+    const report = makeReport(verify);
+    // Headline must not claim any predictions were confirmed/refuted; the
+    // unobservable one gets its own bucket (#2406 wording + #2409).
+    expect(report.headline).toContain('0 confirmed, 0 refuted, 0 unclear, 1 unobservable (of 1 predictions)');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderMarkdown: per-prediction evidence (#2403)
+// ---------------------------------------------------------------------------
+
+describe('renderMarkdown: per-prediction scope', () => {
+  it('shows probe count, n, background rate, and contributing episodes', () => {
+    const vp: VerifiedPrediction = {
+      ...makeVerifiedPred('p1', 'confirmed'),
+      rates: { baseline: 0, candidate: 1, delta: 1, ci: [0.3, 1], n: { baseline: 6, candidate: 6 } },
+      scope: {
+        episodes: { baseline: ['s1', 's2'], candidate: ['s1', 's2'] },
+        targetedEpisodes: 2,
+        background: { baseline: 0.1, candidate: 0.15, delta: 0.05, ci: [-0.1, 0.2], n: { baseline: 54, candidate: 54 } },
+      },
+    };
+    const md = renderMarkdown(makeReport(makeVerifyResult([vp])));
+    expect(md).toContain('Scored on');
+    expect(md).toContain('2 probes, n=6/6');
+    expect(md).toContain('10% → 15% (n=54/54)');
+    expect(md).toContain('- p1: s1, s2');
+    expect(md).toContain('does not affect the result');
+  });
+
+  it('zero graded probes renders as unclear with a plain note', () => {
+    const vp: VerifiedPrediction = {
+      prediction: makePred('p1'),
+      rates: { baseline: 0, candidate: 0, delta: 0, ci: [-1, 1], n: { baseline: 0, candidate: 0 } },
+      verdict: 'unclear',
+      scope: { episodes: { baseline: [], candidate: [] }, targetedEpisodes: 1 },
+    };
+    const md = renderMarkdown(makeReport(makeVerifyResult([vp])));
+    expect(md).toContain('no graded probes (1 planned)');
+    expect(md).toContain('- p1: none graded');
+    expect(md).toContain('⚪ unclear');
+  });
+
+  it('pre-#2403 result without scope still renders n', () => {
+    const md = renderMarkdown(makeReport(makeVerifyResult([makeVerifiedPred('p1', 'confirmed')])));
+    expect(md).toContain('n=20/20');
+    expect(md).not.toContain('Episodes behind each result');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -304,6 +376,16 @@ describe('renderTerminal', () => {
     expect(joined).toContain('confirmed');
   });
 
+  it('unobservable verdict shows 🔭 and reason in terminal render', () => {
+    const vp = makeUnobservablePred('p1');
+    const report = makeReport(makeVerifyResult([vp]));
+    const lines = renderTerminal(report, identityPalette);
+    const joined = lines.join('\n');
+    expect(joined).toContain('🔭');
+    expect(joined).toContain('unobservable');
+    expect(joined).toContain('episode boundary');
+  });
+
   it('contains cost at end', () => {
     const report = makeReport();
     const lines = renderTerminal(report, identityPalette);
@@ -340,5 +422,156 @@ describe('standardLimits', () => {
   it('external judge: includes Jev note', () => {
     const limits = standardLimits({ verified: false, judgeExternal: true });
     expect(limits.some((l) => l.toLowerCase().includes('jev') || l.includes('external'))).toBe(true);
+  });
+
+  it('verified with small n: includes MDE limit bullet for underpowered predictions', () => {
+    // n=20 per arm → MDE ≈ 62pp > 10pp → limit line should appear
+    const vp = makeVerifiedPred('p1', 'unclear');
+    const limits = standardLimits({ verified: true, judgeExternal: false, verifiedPredictions: [vp] });
+    const mdeLimits = limits.filter((l) => l.includes('p1'));
+    expect(mdeLimits.length).toBeGreaterThan(0);
+    expect(mdeLimits[0]).toContain('undetectable');
+    expect(mdeLimits[0]).toContain('n=20');
+  });
+
+  it('verified with large n: no MDE limit bullet when powered', () => {
+    // n=769 per arm → MDE ≈ 10pp = threshold → no limit
+    const vpLarge: VerifiedPrediction = {
+      prediction: makePred('p2'),
+      rates: {
+        baseline: 0.5, candidate: 0.5, delta: 0, ci: [-0.1, 0.1],
+        n: { baseline: 769, candidate: 769 },
+      },
+      verdict: 'unclear',
+    };
+    const limits = standardLimits({ verified: true, judgeExternal: false, verifiedPredictions: [vpLarge] });
+    const mdeLimits = limits.filter((l) => l.includes('p2'));
+    expect(mdeLimits.length).toBe(0);
+  });
+
+  it('no verifiedPredictions: no MDE bullets', () => {
+    const limits = standardLimits({ verified: true, judgeExternal: false });
+    const mdeLimits = limits.filter((l) => l.includes('undetectable'));
+    expect(mdeLimits.length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderMarkdown: failed episodes table and arm-imbalance banner (#2411)
+// ---------------------------------------------------------------------------
+
+describe('renderMarkdown: failed episodes', () => {
+  it('no failed episodes: no Failed Episodes section', () => {
+    const vp = makeVerifiedPred('p1', 'confirmed');
+    const verify = makeVerifyResult([vp]);
+    verify.failedEpisodeRecords = [];
+    const md = renderMarkdown(makeReport(verify));
+    expect(md).not.toContain('## Failed Episodes');
+  });
+
+  it('shows Failed Episodes table with arm, class, duration, message', () => {
+    const vp = makeVerifiedPred('p1', 'confirmed');
+    const verify = makeVerifyResult([vp]);
+    verify.failedEpisodes = 1;
+    verify.failedEpisodeRecords = [
+      {
+        episodeId: 's3',
+        arm: 'candidate',
+        sample: 0,
+        errorClass: 'timeout',
+        errorMessage: 'Episode timed out after 180000ms.',
+        durationMs: 180007,
+      },
+    ];
+    const md = renderMarkdown(makeReport(verify));
+    expect(md).toContain('## Failed Episodes');
+    expect(md).toContain('s3');
+    expect(md).toContain('candidate');
+    expect(md).toContain('timeout');
+    expect(md).toContain('180.0s');
+    expect(md).toContain('Episode timed out after 180000ms.');
+  });
+
+  it('includes probe column when probe is set on a failure record', () => {
+    const vp = makeVerifiedPred('p1', 'confirmed');
+    const verify = makeVerifyResult([vp]);
+    verify.failedEpisodes = 1;
+    verify.failedEpisodeRecords = [
+      {
+        episodeId: 's6',
+        arm: 'candidate',
+        sample: 0,
+        errorClass: 'timeout',
+        errorMessage: 'timed out',
+        probe: 'p2',
+        durationMs: 180000,
+      },
+    ];
+    const md = renderMarkdown(makeReport(verify));
+    expect(md).toContain('s6 (p2)');
+  });
+
+  it('shows arm-imbalance warning block when armImbalance is set', () => {
+    const vp = makeVerifiedPred('p1', 'unclear');
+    const verify = makeVerifyResult([vp]);
+    verify.failedEpisodes = 6;
+    verify.failedEpisodeRecords = [];
+    verify.armImbalance = {
+      baselineFailRate: 0,
+      candidateFailRate: 0.375,
+      rateDiff: 0.375,
+      allInOneArm: true,
+      concentrationArm: 'candidate',
+      summary:
+        'Arm-imbalance warning: failures are concentrated in one arm (all 6 failures in the candidate arm). This may bias the verdict toward "no change". Consider raising --timeout.',
+    };
+    const md = renderMarkdown(makeReport(verify));
+    expect(md).toContain('[!WARNING]');
+    expect(md).toContain('Arm-imbalance warning');
+    expect(md).toContain('--timeout');
+  });
+
+  it('no arm-imbalance warning when armImbalance is absent', () => {
+    const vp = makeVerifiedPred('p1', 'confirmed');
+    const md = renderMarkdown(makeReport(makeVerifyResult([vp])));
+    expect(md).not.toContain('[!WARNING]');
+    expect(md).not.toContain('Arm-imbalance warning');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderTerminal: arm-imbalance banner (#2411)
+// ---------------------------------------------------------------------------
+
+describe('renderTerminal: arm-imbalance banner', () => {
+  const identityPalette = new Proxy(
+    {},
+    { get: () => (s: string) => s },
+  ) as Parameters<typeof renderTerminal>[1];
+
+  it('shows imbalance banner at the top when armImbalance is set', () => {
+    const verify = makeVerifyResult([makeVerifiedPred('p1', 'unclear')]);
+    verify.armImbalance = {
+      baselineFailRate: 0,
+      candidateFailRate: 0.5,
+      rateDiff: 0.5,
+      allInOneArm: true,
+      concentrationArm: 'candidate',
+      summary: 'Arm-imbalance warning: test summary.',
+    };
+    const report = makeReport(verify);
+    const lines = renderTerminal(report, identityPalette);
+    const joined = lines.join('\n');
+    expect(joined).toContain('Arm-imbalance warning');
+    // Banner must appear before the headline (first non-empty line).
+    const bannerIdx = lines.findIndex((l) => l.includes('Arm-imbalance warning'));
+    const headlineIdx = lines.findIndex((l) => l === report.headline);
+    expect(bannerIdx).toBeLessThan(headlineIdx);
+  });
+
+  it('no banner when armImbalance is absent', () => {
+    const report = makeReport(makeVerifyResult([makeVerifiedPred('p1', 'confirmed')]));
+    const lines = renderTerminal(report, identityPalette);
+    expect(lines.every((l) => !l.includes('Arm-imbalance'))).toBe(true);
   });
 });

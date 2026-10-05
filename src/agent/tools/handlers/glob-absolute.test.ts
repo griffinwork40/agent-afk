@@ -23,10 +23,13 @@ describe('splitAbsolutePattern', () => {
   it('splits at the first segment containing a metacharacter', () => {
     expect(splitAbsolutePattern('/tmp/repo/src/foo*')).toEqual({
       base: path.normalize('/tmp/repo/src'),
+      // pattern is always forward-slash: glob engines require '/' as separator.
       pattern: 'foo*',
     });
     expect(splitAbsolutePattern('/tmp/repo/**/*.ts')).toEqual({
       base: path.normalize('/tmp/repo'),
+      // pattern must never be path.normalize()'d — that would emit backslashes
+      // on Windows (e.g. '**\*.ts'), breaking the glob matcher (#703).
       pattern: '**/*.ts',
     });
   });
@@ -51,7 +54,8 @@ describe('splitAbsolutePattern', () => {
     // no trailing slash is added; normalize produces 'C:\Users'.
     expect(result).toEqual({
       base: path.win32.normalize('C:/Users'),
-      pattern: path.win32.normalize('*'),
+      // Production returns rest.join('/') without normalization — always a bare glob token.
+      pattern: '*',
     });
   });
 
@@ -61,7 +65,8 @@ describe('splitAbsolutePattern', () => {
     const result = splitAbsolutePattern('C:\\*', path.win32);
     expect(result).toEqual({
       base: path.win32.normalize('C:/'),
-      pattern: path.win32.normalize('*'),
+      // Production returns rest.join('/') without normalization — always a bare glob token.
+      pattern: '*',
     });
   });
 });

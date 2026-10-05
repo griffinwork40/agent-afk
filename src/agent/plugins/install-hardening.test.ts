@@ -78,7 +78,11 @@ function makeFakeGit(manifestName = 'test-plugin'): {
       return { stdout: '', stderr: '' };
     }
     if (sub === 'tag') return { stdout: 'v1.0.0\n', stderr: '' };
-    if (sub === 'rev-parse') return { stdout: 'abc123\n', stderr: '' };
+    if (sub === 'rev-parse') {
+      const lastArg = args[args.length - 1] as string;
+      if (lastArg === 'HEAD') return { stdout: 'abc123\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    }
     if (sub === 'symbolic-ref') return { stdout: 'origin/main\n', stderr: '' };
     return { stdout: '', stderr: '' };
   };

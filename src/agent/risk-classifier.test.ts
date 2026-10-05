@@ -263,6 +263,83 @@ describe('classifyRisk — bash safe', () => {
   it('grep  → safe', () => {
     expect(classifyRisk('bash', { command: 'grep -r "foo" src/' }, ctx)).toBe('safe');
   });
+
+  // #2750: gh CLI read-only subcommands — used by agents to poll CI/PR status
+  it('gh pr view → safe (read-only CI poll)', () => {
+    expect(classifyRisk('bash', { command: 'gh pr view 123 --json statusCheckRollup' }, ctx)).toBe('safe');
+  });
+
+  it('gh pr list → safe', () => {
+    expect(classifyRisk('bash', { command: 'gh pr list --state open --json number,title' }, ctx)).toBe('safe');
+  });
+
+  it('gh pr checks → safe', () => {
+    expect(classifyRisk('bash', { command: 'gh pr checks 123' }, ctx)).toBe('safe');
+  });
+
+  it('gh pr status → safe', () => {
+    expect(classifyRisk('bash', { command: 'gh pr status' }, ctx)).toBe('safe');
+  });
+
+  it('gh pr diff → safe', () => {
+    expect(classifyRisk('bash', { command: 'gh pr diff 42' }, ctx)).toBe('safe');
+  });
+
+  it('gh run view → safe', () => {
+    expect(classifyRisk('bash', { command: 'gh run view 7890 --log' }, ctx)).toBe('safe');
+  });
+
+  it('gh run list → safe (CI polling use-case from issue #2750)', () => {
+    // This exact pattern was the one blocked in the reported session.
+    expect(
+      classifyRisk(
+        'bash',
+        { command: 'gh run list --branch main --workflow CI --limit 1 --json status,headSha' },
+        ctx,
+      ),
+    ).toBe('safe');
+  });
+
+  it('gh issue view → safe', () => {
+    expect(classifyRisk('bash', { command: 'gh issue view 2750 --json title,state' }, ctx)).toBe('safe');
+  });
+
+  it('gh issue list → safe', () => {
+    expect(classifyRisk('bash', { command: 'gh issue list --label bug' }, ctx)).toBe('safe');
+  });
+
+  it('gh repo view → safe', () => {
+    expect(classifyRisk('bash', { command: 'gh repo view griffinwork40/agent-afk' }, ctx)).toBe('safe');
+  });
+
+  it('curl --head → safe (HTTP HEAD probe)', () => {
+    expect(classifyRisk('bash', { command: 'curl --head https://example.com/health' }, ctx)).toBe('safe');
+  });
+
+  it('curl -I  → safe (short-form HEAD probe)', () => {
+    expect(classifyRisk('bash', { command: 'curl -I https://example.com/health' }, ctx)).toBe('safe');
+  });
+
+  it('curl -sI  → safe (silent HEAD probe)', () => {
+    expect(classifyRisk('bash', { command: 'curl -sI https://api.example.com/status' }, ctx)).toBe('safe');
+  });
+
+  it('wget --spider → safe (non-mutating spider mode)', () => {
+    expect(classifyRisk('bash', { command: 'wget --spider https://example.com/health' }, ctx)).toBe('safe');
+  });
+
+  // Mutating gh subcommands must NOT be safe-listed
+  it('gh pr merge → medium (mutating, not safe-listed)', () => {
+    expect(classifyRisk('bash', { command: 'gh pr merge 123 --squash' }, ctx)).toBe('medium');
+  });
+
+  it('gh pr create → medium (mutating, not safe-listed)', () => {
+    expect(classifyRisk('bash', { command: 'gh pr create --title "fix" --body ""' }, ctx)).toBe('medium');
+  });
+
+  it('gh pr comment → medium (mutating, not safe-listed)', () => {
+    expect(classifyRisk('bash', { command: 'gh pr comment 123 --body "LGTM"' }, ctx)).toBe('medium');
+  });
 });
 
 // ---- write_file / edit_file path-based rules ----------------------------

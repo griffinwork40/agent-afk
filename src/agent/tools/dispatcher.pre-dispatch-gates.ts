@@ -524,10 +524,21 @@ export async function runPreDispatchGates(
       ...(call.id !== undefined ? { toolUseId: call.id } : {}),
     };
     try {
-      await dispatchPreToolUse(deps.hookRegistry, preCtx, {
+      const preDecision = await dispatchPreToolUse(deps.hookRegistry, preCtx, {
         signal: call.signal,
         ...(deps.traceWriter ? { traceWriter: deps.traceWriter } : {}),
       });
+      // Apply input rewrite from the hook chain. The registry dispatches all
+      // handlers against the original context; last-writer-wins — the final
+      // non-blocking hook's updatedInput is used. Hooks do NOT see each
+      // other's rewrites during dispatch (only the winner is applied here).
+      // The rewritten input goes through the same permission gates and
+      // tool-schema validation below — a hook can narrow a call but cannot
+      // widen it past policy. Only plain objects are accepted;
+      // arrays/primitives are rejected at parse time.
+      if (preDecision.updatedInput !== undefined) {
+        call.input = preDecision.updatedInput;
+      }
     } catch (err) {
       if (err instanceof HookBlockedError) {
         const blockResult: ToolResult = {

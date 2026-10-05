@@ -34,7 +34,8 @@ import type {
   BackgroundAgentRegistry,
   BackgroundJob,
 } from '../../../agent/background-registry.js';
-import { annotateIfIncomplete } from '../../../agent/subagent/result.js';
+import { extractOutputText } from '../../../agent/background-registry.result.js';
+import { redactSecrets } from '../../../agent/redact-secrets.js';
 import { env } from '../../../config/env.js';
 import { formatDuration } from '../../format-utils.js';
 
@@ -73,24 +74,8 @@ function escapeXml(text: string): string {
 
 /** Extract the model-facing output text from a settled job's result. */
 function extractOutput(job: BackgroundJob): string {
-  const result = job.result;
-  if (!result) return '';
-  if (job.status === 'failed') {
-    const errText = result.error
-      ? `${result.error.name}: ${result.error.message}`
-      : 'unknown error';
-    const partial =
-      typeof result.partialOutput === 'string' && result.partialOutput.length > 0
-        ? `\n\nPartial output before failure:\n${result.partialOutput}`
-        : '';
-    return `Subagent failed — ${errText}${partial}`;
-  }
-  const raw = result.message?.content;
-  // A `completed` background job can still carry an incomplete partial (capped
-  // or stream-truncated); mark it so the injected result isn't read as final.
-  if (typeof raw === 'string') return annotateIfIncomplete(raw, result.stopReason);
-  if (raw !== undefined) return JSON.stringify(raw);
-  return '';
+  // Single source with the persisted result.json body (see background-registry.result.ts).
+  return job.result ? extractOutputText(job.result, job.status) : '';
 }
 
 /**
@@ -98,12 +83,15 @@ function extractOutput(job: BackgroundJob): string {
  * job so the model knows how to retrieve the full result. Byte-accurate
  * (not char-accurate) so multi-byte content can't overshoot the cap.
  *
- * Invariant: called on ALREADY-ESCAPED text so the cap bounds the final
- * injected size. Escape-then-truncate matters: escaping expands `<` to
- * `&lt;` (4×), so truncating pre-escape text would let adversarial output
- * (e.g. 16KB of `<`) balloon to ~64KB post-escape and bypass the cap.
- * Truncation may cut an entity mid-sequence (`&am`); harmless in model
- * context.
+ * Escaping is the CALLER's responsibility. When embedding in an XML envelope
+ * (model-injection context), pass already-escaped text so the byte cap bounds
+ * the final injected size — escaping expands `<` to `&lt;` (4×), so truncating
+ * pre-escape text would let adversarial output (e.g. 16KB of `<`) balloon to
+ * ~64KB post-escape and bypass the cap. Plain-text surfaces (e.g. Telegram push
+ * via {@link formatBgResultBody}) intentionally skip escaping and call this on
+ * raw output — that is correct, not an omission.
+ * Truncation may cut a multi-byte codepoint or XML entity mid-sequence; harmless
+ * in the respective contexts.
  */
 function truncateBytes(text: string, maxBytes: number, jobId: string): string {
   if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
@@ -114,6 +102,22 @@ function truncateBytes(text: string, maxBytes: number, jobId: string): string {
     buf.toString('utf8') +
     `\n… [truncated at ${maxBytes} bytes — full result via /bgsub:join ${jobId}]`
   );
+}
+
+/**
+ * Human-readable result body for one settled job (no XML envelope, no
+ * escaping), capped at {@link MAX_INJECTION_BYTES} with the same
+ * `/bgsub:join <jobId>` marker. Used by push surfaces (Telegram) that show
+ * the result to the operator rather than the model.
+ *
+ * Secret redaction is applied here because this is the off-device delivery
+ * boundary: the returned string is forwarded verbatim to Telegram (and any
+ * future push surface). The persisted `result.json` body is intentionally
+ * left unredacted — local consumers (REPL replay via `/bgsub:join`,
+ * `buildBgResultInjection`) read the full text from disk without this filter.
+ */
+export function formatBgResultBody(job: BackgroundJob): string {
+  return truncateBytes(redactSecrets(extractOutput(job)), MAX_INJECTION_BYTES, job.jobId);
 }
 
 /**
@@ -243,8 +247,30 @@ export class BgResultNotifier {
     return this.pendingInjections.length > 0;
   }
 
-  /** Unsubscribe from the registry. Idempotent. */
+  /**
+   * Unsubscribe from the registry. Idempotent.
+   *
+   * Any jobs buffered in `pendingInjections` at this point have COMPLETED but
+   * were never drained into a turn (the user exited before the next message).
+   * They are NOT marked delivered — that would mislabel them in the witness
+   * trace. Instead, we print a one-line notice naming the job ids so the
+   * operator can recover them via `/bgsub:join` in the next session.
+   *
+   * The notice goes to `process.stderr` (not `console.log`) so it does not
+   * corrupt any piped stdout stream and survives surfaces where the compositor
+   * has already been torn down.
+   */
   dispose(): void {
     this.registry.off('settled', this.onSettled);
+    if (this.pendingInjections.length > 0) {
+      const ids = this.pendingInjections.map((j) => j.jobId).join(', ');
+      process.stderr.write(
+        `[afk] ${this.pendingInjections.length} background job(s) completed but were never delivered ` +
+        `(session ended before next user message). Recover with: /bgsub:join <id>\n` +
+        `  Job IDs: ${ids}\n`,
+      );
+    }
+    this.pendingInjections = [];
+    this.pendingNotifications = [];
   }
 }

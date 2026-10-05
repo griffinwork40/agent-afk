@@ -1,9 +1,5 @@
 /**
- * Shared fixture helpers for tool-lane-render-compact test files.
- *
- * Consumed by:
- *   - tool-lane-render-compact.test.ts
- *   - tool-lane-render-compact-coverage.test.ts
+ * Shared fixture helpers for tool-lane test files.
  *
  * Named to match the existing __fixtures__ convention in the repo (see
  * src/agent/__fixtures__/) so tsconfig correctly excludes it from the build.
@@ -19,13 +15,14 @@ export function makeResult(
   isError = false,
   failureClass?: ToolFailureClass,
 ): ToolResultChunk {
-  return {
-    type: 'tool_result',
-    toolUseId: 'unused',
-    content,
-    isError,
-    ...(failureClass ? { failureClass } : {}),
-  };
+  const chunk: ToolResultChunk = { type: 'tool_result', toolUseId: 'unused', content, isError };
+  if (failureClass) chunk.failureClass = failureClass;
+  return chunk;
+}
+
+/** Convenience wrapper: a completed error result. */
+export function makeError(content: string, failureClass?: ToolFailureClass): ToolResultChunk {
+  return makeResult(content, true, failureClass);
 }
 
 /**

@@ -23,6 +23,28 @@ import { validateScheduleCwd } from '../../agent/daemon/cwd-validator.js';
 import { getTelemetryPath } from '../../paths.js';
 import { trySyncToDaemon, SYNC_FAILED_NOTE } from '../../agent/daemon/http-client.js';
 
+/**
+ * Print the schedule list as an ASCII table.
+ * Adds a CWD column only when at least one task has a per-task cwd.
+ */
+function printScheduleList(schedules: ReturnType<typeof loadSchedules>): void {
+  if (schedules.length === 0) {
+    console.log('No scheduled tasks.');
+    return;
+  }
+  const hasCwd = schedules.some((s) => s.cwd !== undefined);
+  const header = hasCwd
+    ? 'ID                   | NAME                           | CRON            | ENABLED | CWD'
+    : 'ID                   | NAME                           | CRON            | ENABLED';
+  console.log(header);
+  console.log('-'.repeat(header.length));
+  for (const s of schedules) {
+    const row = [s.id.padEnd(20), s.name.padEnd(30), s.cron.padEnd(15), String(s.enabled).padEnd(7)];
+    if (hasCwd) row.push(s.cwd ?? '');
+    console.log(row.join(' | '));
+  }
+}
+
 export function registerScheduleCommand(program: Command): void {
   const schedule = program.command('schedule').description('Manage scheduled daemon tasks');
 
@@ -105,26 +127,7 @@ export function registerScheduleCommand(program: Command): void {
     .description('List all scheduled tasks')
     .action(() => {
       try {
-        const schedules = loadSchedules();
-        if (schedules.length === 0) {
-          console.log('No scheduled tasks.');
-          return;
-        }
-        // ASCII table: ID | NAME | CRON | ENABLED
-        const header = 'ID                   | NAME                           | CRON            | ENABLED';
-        const sep = '-'.repeat(header.length);
-        console.log(header);
-        console.log(sep);
-        for (const s of schedules) {
-          console.log(
-            [
-              s.id.padEnd(20),
-              s.name.padEnd(30),
-              s.cron.padEnd(15),
-              String(s.enabled),
-            ].join(' | '),
-          );
-        }
+        printScheduleList(loadSchedules());
       } catch (err) {
         handleCommandError(err);
       }

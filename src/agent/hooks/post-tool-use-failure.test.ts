@@ -31,6 +31,8 @@ function makeConfig(
     },
     userGlobalEnabled,
     allowProjectHooks: false,
+    pluginHooksEnabled: false,
+    pluginHookEnv: {},
     sources: [],
     warnings: [],
   };
@@ -61,6 +63,26 @@ describe('PostToolUseFailure — registry dispatch', () => {
       toolName: 'bash',
       error: 'command not found',
     });
+  });
+
+  it('carries tool_input on the context when provided (issue #2376)', async () => {
+    const registry = createHookRegistry();
+    const handler = vi.fn(async () => ({}));
+    registry.register('PostToolUseFailure', handler);
+
+    const input = { command: 'echo hi' };
+    const ctx: PostToolUseFailureContext = {
+      event: 'PostToolUseFailure',
+      toolName: 'bash',
+      error: 'some error',
+      input,
+    };
+
+    await dispatchPostToolUseFailure(registry, ctx);
+
+    expect(handler).toHaveBeenCalledOnce();
+    const callArgs = handler.mock.calls[0] as unknown[];
+    expect(callArgs[0]).toMatchObject({ input });
   });
 
   it('does not fire PostToolUse handlers for a failure event', async () => {

@@ -25,7 +25,6 @@ export interface AutoRoutingConfig {
   interactive?: boolean;
   chat?: boolean;
   telegram?: boolean;
-  daemon?: boolean;
 }
 
 export interface CliConfig {
@@ -98,6 +97,13 @@ export interface CliConfig {
       maxAgeDaysClean: number;
       maxAgeDaysDirty: number;
       scope: string;
+    };
+    /** Tool-health builtin configuration. Mirrors worktreePrune shape. */
+    toolHealth?: {
+      /** When false, the builtin is not registered. Defaults to enabled. */
+      enabled: boolean;
+      /** Cron expression. Defaults to '17 * * * *' (hourly). */
+      cron: string;
     };
     /**
      * Daemon-surface "Done" verification gate (**default: true** — the daemon
@@ -309,6 +315,17 @@ export interface CliConfig {
    * `undefined` / absent = nothing imported (strict opt-in).
    */
   importFrom?: ImportFromConfig;
+  /**
+   * Skill visibility overrides. Skill names listed in `hidden` are excluded
+   * from the model-facing manifest but remain slash-invocable by the user.
+   * Accepts bare names (`"forge"`) and plugin-qualified names
+   * (`"awa-dev:qualify"`). Matching is bidirectional (see `isHiddenByConfig`).
+   * Human-tier: the operator controls which skills the model can
+   * self-dispatch — the agent must not reverse this.
+   */
+  skills?: {
+    hidden?: string[];
+  };
 }
 
 /** One per-tier model binding in afk.config.json's `models` block. */
@@ -344,7 +361,6 @@ export interface ConfigFileSchema {
     interactive?: boolean;
     chat?: boolean;
     telegram?: boolean;
-    daemon?: boolean;
   };
   daemon?: {
     task?: string;
@@ -355,6 +371,10 @@ export interface ConfigFileSchema {
       maxAgeDaysClean?: number;
       maxAgeDaysDirty?: number;
       scope?: string;
+    };
+    toolHealth?: {
+      enabled?: boolean;
+      cron?: string;
     };
     verifyDone?: boolean;
   };
@@ -404,6 +424,10 @@ export interface ConfigFileSchema {
   importFrom?: Partial<
     Record<ImportSourceBinary, boolean | { plugins?: boolean; skills?: boolean; mcp?: boolean }>
   >;
+  /** Skill visibility overrides — see `CliConfig.skills`. */
+  skills?: {
+    hidden?: unknown[];
+  };
 }
 
 export const DEFAULT_CONFIG: Omit<CliConfig, 'apiKey'> = {

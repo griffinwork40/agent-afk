@@ -92,6 +92,7 @@ import {
   relocatedAfkSensitiveRoots,
 } from './afk-home-refs.js';
 import { escapeRegExp } from '../../../utils/regexp.js';
+import { homeAliasSpellings, restrictedRootSpellings } from './bash-restriction-hook.win32-spellings.js';
 
 /**
  * Interpreter denylist regex. Matches `<interpreter> -<flag>` where flag is
@@ -132,13 +133,7 @@ export const SENSITIVE_PATH_SIGNAL =
   /\.ssh\b|\bid_rsa\b|\bid_ed25519\b|\.gnupg\b|\.aws\b|\.config[/\\]gh\b|\.config[/\\]gcloud\b|\.netrc\b|\.password-store\b|\.afk[/\\]config\b|\.npmrc\b|\.docker[/\\]config\.json\b|\.git-credentials\b|\.kube[/\\]config\b|Library[/\\]Application Support\b|[/\\]etc[/\\]shadow\b|[/\\]etc[/\\]sudoers\b|master\.passwd\b|Library[/\\]LaunchAgents\b|Library[/\\]LaunchDaemons\b|\.config[/\\]systemd\b|AppData[/\\]Roaming[/\\]Mozilla\b|AppData[/\\]Roaming[/\\]gcloud\b|AppData[/\\]Roaming[/\\]Docker\b|AppData[/\\]Local[/\\]Google[/\\]Chrome\b|AppData[/\\]Local[/\\]Chromium\b|AppData[/\\]Local[/\\]BraveSoftware\b|AppData[/\\]Local[/\\]Microsoft[/\\]Edge\b/i;
 
 export interface BashRestrictionHookOptions {
-  /**
-   * @deprecated (#528) — use `context.grantManager` (injected per-session by
-   * the dispatcher) instead. This field is a test-only fallback; production
-   * code must NOT populate it. Survives so existing unit tests need not be
-   * rewritten.
-   */
-  getGrantManager?: () => (import('../grant-manager.js').GrantManager | undefined);
+
   /**
    * When true, skip the interpreter-eval denylist (check 1 below). The
    * restricted-root substring check (check 2) is unaffected. Wired from
@@ -191,9 +186,7 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     // forked child's restricted-root view is derived from ITS own grants, not
     // the top-level session's (#435/#514). The process-global ref has been
     // retired (#528); `context.grantManager` is the primary source.
-    // `opts.getGrantManager` is a deprecated test-only fallback (never used
-    // in production); see BashRestrictionHookOptions.getGrantManager JSDoc.
-    const grantManager = context.grantManager ?? opts.getGrantManager?.();
+    const grantManager = context.grantManager;
     const interactiveSurface = grantManager !== undefined;
 
     // Precompute the sensitive-path view ONCE — both checks below consume it.
@@ -236,7 +229,7 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     if (
       interpreterGuardActive &&
       INTERPRETER_DENYLIST.test(command) &&
-      referencesSensitivePath(scanned, restrictedSubstrings)
+      referencesSensitivePath(scanned, restrictedSubstrings, home)
     ) {
       return {
         decision: 'block',
@@ -245,7 +238,8 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
           '(SSH keys, cloud credentials, GPG, /etc/shadow, ...) is blocked by the path-approval ' +
           'policy — an interpreter can assemble a path the shell-substring check cannot see. Use ' +
           'the typed file tools (read_file, write_file, edit_file), which support per-call user ' +
-          'approval, or ask the user to run the script themselves. To lift this block — e.g. ' +
+          'approval. Only if those tools cannot do the job, ask the user to run the script ' +
+          'themselves. To lift this block — e.g. ' +
           'headless automation that legitimately reads such paths — set ' +
           'AFK_DISABLE_BASH_INTERPRETER_GUARD=1, or disable all of path-approval with ' +
           'AFK_DISABLE_PATH_APPROVAL=1.',
@@ -271,7 +265,7 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     if (restrictedSubstrings.length === 0) return {};
 
     for (const sub of restrictedSubstrings) {
-      if (textMentionsPath(scanned, sub)) {
+      if (mentionsRestrictedRoot(scanned, sub, home)) {
         return {
           decision: 'block',
           reason:
@@ -375,10 +369,12 @@ function allowlistedFileForms(home: string, afkHome: string | undefined): string
     if (isReadDenied(path.join(home, rel)).denied) return [];
     return [path.join(home, rel), `~/${rel}`, `$HOME/${rel}`];
   });
-  if (afkHome === undefined) return homeForms;
-
-  const afkForms = afkAllowlistFileForms(afkHome);
-  return [...new Set([...homeForms, ...afkForms])];
+  const forms = afkHome === undefined ? homeForms : [...homeForms, ...afkAllowlistFileForms(afkHome)];
+  // Invariant: a win32 absolute form must be scrubbed in the same
+  // forward-slash spellings the restricted roots are matched in (see
+  // mentionsRestrictedRoot), or an allowed exact file (`~/.ssh/config`) would
+  // stay visible and over-block on Windows. POSIX forms map to themselves.
+  return [...new Set(forms.flatMap((form) => restrictedRootSpellings(form, home)))];
 }
 
 /**
@@ -448,13 +444,38 @@ function scrubAllowlistedRefs(text: string, home: string, afkHome: string | unde
  * `relocatedAfkSensitiveRoots()` value whenever AFK_HOME is configured outside
  * the default home directory.
  */
-function referencesSensitivePath(scanned: string, restrictedSubstrings: string[]): boolean {
-  if (restrictedSubstrings.some((sub) => textMentionsPath(scanned, sub))) return true;
+function referencesSensitivePath(
+  scanned: string,
+  restrictedSubstrings: string[],
+  home: string,
+): boolean {
+  if (restrictedSubstrings.some((sub) => mentionsRestrictedRoot(scanned, sub, home))) return true;
   if (SENSITIVE_PATH_SIGNAL.test(scanned)) return true;
   // Relocated-AFK_HOME gap: when restrictedSubstrings is empty (headless, no
   // grant manager) and the lexical signal misses a relocated config tree, fall
   // back to a direct check against the runtime sensitive roots.
-  return relocatedAfkSensitiveRoots().some((root) => textMentionsPath(scanned, root));
+  return relocatedAfkSensitiveRoots().some((root) => mentionsRestrictedRoot(scanned, root, home));
+}
+
+/**
+ * Whether the normalized command mentions `root` in any of its lexical
+ * spellings.
+ *
+ * Invariant: `scanned` is forward-slash only (see {@link normalizeHomeRefs}),
+ * so a win32 root has to be compared in forward-slash form too, plus its
+ * Git Bash `/c/...` twin and both home-prefix spellings. Comparing the raw
+ * backslash root is what made the whole bash credential floor fail OPEN on
+ * Windows (#703). On POSIX `restrictedRootSpellings` returns `[root]`, so this
+ * is exactly the previous `textMentionsPath(scanned, root)`.
+ */
+function mentionsRestrictedRoot(scanned: string, root: string, home: string): boolean {
+  const folded = scanned.toLowerCase();
+  // Invariant: the folded prefilter cannot change the verdict — textMentionsPath
+  // is true only when the folded strings overlap — it only skips the statSync
+  // case probe for spellings that cannot match (same ordering as #2543).
+  return restrictedRootSpellings(root, home).some(
+    (spelling) => folded.includes(spelling.toLowerCase()) && textMentionsPath(scanned, spelling),
+  );
 }
 
 /**
@@ -627,10 +648,22 @@ export function deriveRestrictedSubstrings(grants: {
   // `ungatedSensitiveRoot`'s (subagent/root-validation.ts) — that identity is
   // what the #852 lockstep property rests on, so the two must not drift again.
   // No-op on POSIX: relative() between two absolute paths is never absolute.
+  //
+  // Invariant: on win32 a candidate is tested in each of its home-alias
+  // spellings (raw `homedir()` vs its realpath, which differ under an 8.3
+  // USERPROFILE) because the read denylist keys its roots to the realpath form
+  // while grants arrive in whatever spelling the caller used. Both spellings
+  // name ONE directory, so this never lifts anything a grant did not cover.
+  // It stays inside ungatedSensitiveRoot's lockstep: that guard already checks
+  // a grant's lexical AND realpath form against the unfiltered candidates.
+  // POSIX: homeAliasSpellings(c) is [c], so this is the prior predicate.
+  const home = homedir();
   return candidates.filter((c) => {
     for (const g of granted) {
-      const rel = path.relative(g, c);
-      if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) return false;
+      for (const form of homeAliasSpellings(c, home)) {
+        const rel = path.relative(g, form);
+        if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) return false;
+      }
     }
     return true;
   });

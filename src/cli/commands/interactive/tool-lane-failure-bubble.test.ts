@@ -14,15 +14,7 @@ import { describe, it, expect } from 'vitest';
 import { ToolLane } from './tool-lane.js';
 import { childFailureBadge } from './tool-lane-format.js';
 import { stripAnsi } from '../../display.js';
-import type { ToolResultChunk } from '../../../agent/types/message-types.js';
-
-function makeResult(content: string, isError = false): ToolResultChunk {
-  return { type: 'tool_result', toolUseId: 'unused', content, isError };
-}
-
-function makeError(content: string): ToolResultChunk {
-  return { type: 'tool_result', toolUseId: 'unused', content, isError: true };
-}
+import { makeResult, makeError } from './__fixtures__/tool-lane-render.fixtures.js';
 
 // ─── childFailureBadge unit tests ─────────────────────────────────────────────
 
@@ -228,6 +220,35 @@ describe('overlay failure badge rendering', () => {
     const rows = stripAnsi(lane.getOverlay()).split('\n');
     const headRow = rows.find((r) => r.includes('Agent(task)'));
     expect(headRow).toContain('⚠ 1');
+  });
+
+  it('badge appears on completed nested-child row (pushCompletedChildRows path)', () => {
+    // Exercises the path in tool-lane-render-children.ts pushCompletedChildRows.
+    // The parent has failedChildCount=1 and a result (completed); its only
+    // grandchild has been removed from the lane (simulates flushSource of the
+    // grandchild), so renderOverlayChildren falls through to the else-if-result
+    // branch and calls pushCompletedChildRows. Grandparent is still in flight.
+    const lane = new ToolLane();
+    lane.addStartWithAgentContext('__gp', 'Agent', '(grand)', undefined);
+    lane.addStartWithAgentContext('__p', 'Agent', '(parent)', '__gp');
+    lane.addStartWithAgentContext('__c', 'Agent', '(child)', '__p');
+
+    // Child fails — propagates failedChildCount=1 onto parent
+    lane.addResult('__c', makeError('child failed'));
+    lane.propagateChildFailure('__c');
+
+    // Remove the child from the lane (simulates flushSource removing it from
+    // entries), so parent no longer has in-lane grandchildren and hits
+    // pushCompletedChildRows rather than the has-grandchildren NESTING branch.
+    (lane as unknown as { entries: Map<string, unknown> }).entries.delete('__c');
+
+    // Parent completes with success — grandparent still in flight.
+    lane.addResult('__p', makeResult('parent done'));
+
+    const rows = stripAnsi(lane.getOverlay()).split('\n');
+    const parentRow = rows.find((r) => r.includes('Agent(parent)'));
+    expect(parentRow).toBeDefined();
+    expect(parentRow).toContain('⚠ 1');
   });
 
   it('badge appears on childless NESTING in-flight row', () => {

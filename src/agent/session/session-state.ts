@@ -4,6 +4,7 @@
  */
 
 import type { SessionIdentity, SessionMetadata } from '../types.js';
+import { debugLog } from '../../utils/debug.js';
 
 /**
  * Callback invoked by {@link SessionStateManager.updateSessionIdentity}
@@ -14,6 +15,15 @@ import type { SessionIdentity, SessionMetadata } from '../types.js';
  *   on first assignment.
  *
  * The callback is fire-and-forget at the call site; it must not throw.
+ *
+ * **Known limitation — /clear reset / reconnect:** `buildProviderLifecycle`
+ * constructs a fresh `SessionStateManager` on every call, which resets
+ * `lastEmittedSessionId` to `undefined`. If the provider re-delivers the same
+ * session id after a `/clear` reset or reconnect, this callback will fire again
+ * with `priorSessionId === undefined` even though the id was previously
+ * assigned. Consumers should treat a `session_id_assigned` event with a known
+ * id and no `priorSessionId` as a possible re-emission rather than a guaranteed
+ * first assignment.
  */
 export type OnSessionIdAssigned = (
   sessionId: string,
@@ -91,9 +101,10 @@ export class SessionStateManager {
     this.sessionMetadata = { ...this.sessionMetadata, sessionId };
     try {
       this.onSessionIdAssigned?.(sessionId, prior);
-    } catch {
+    } catch (err) {
       // Never let a callback failure propagate — the state update has already
       // landed and the session must continue regardless of trace errors.
+      debugLog(`[session-state] onSessionIdAssigned callback threw: ${String(err)}`);
     }
   }
 

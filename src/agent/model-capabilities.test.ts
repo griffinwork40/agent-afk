@@ -52,7 +52,7 @@ describe('supportsVision', () => {
     expect(supportsVision('claude-sonnet-5')).toBe(true);
     expect(supportsVision('claude-opus-4-8')).toBe(true);
     expect(supportsVision('claude-haiku-4-5-20251001')).toBe(true);
-    expect(supportsVision('fable')).toBe(true); // direct alias → claude-fable-5
+    expect(supportsVision('fable')).toBe(true); // direct alias → claude-fable-5-1
   });
 
   it('recognises common local vision-language families', () => {

@@ -76,7 +76,7 @@ const EnvChangeSchema = z.object({
   value: z.string(),
 });
 
-const AnyChangeSchema = z.discriminatedUnion('kind', [
+export const AnyChangeSchema = z.discriminatedUnion('kind', [
   AppendChangeSchema,
   FileChangeSchema,
   HotChangeSchema,
@@ -89,7 +89,7 @@ const AnyChangeSchema = z.discriminatedUnion('kind', [
   EnvChangeSchema,
 ]);
 
-const SpecOutputSchema = z.object({
+export const SpecOutputSchema = z.object({
   title: z.string(),
   changes: z.array(z.unknown()),
 });

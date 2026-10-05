@@ -8,7 +8,7 @@
  * rather than crash a caller like /fork.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import {
   clipboardToolsFor,
   copyToClipboard,
@@ -18,6 +18,30 @@ import {
   wrapTmuxPassthrough,
   type Osc52Sink,
 } from './clipboard.js';
+
+// Invariant: vi.mock is hoisted to the top of the module and applies to the
+// whole file, so it must be declared here (not inside a hook). The mock is a
+// pass-through to the real spawnSync until a test flips `forceEnoent`, which
+// keeps every other test in this file running against real child_process.
+const childProcessMock = vi.hoisted(() => ({ forceEnoent: false }));
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawnSync: ((...args: Parameters<typeof actual.spawnSync>) =>
+      childProcessMock.forceEnoent
+        ? {
+            pid: 0,
+            output: [],
+            stdout: Buffer.alloc(0),
+            stderr: Buffer.alloc(0),
+            status: null,
+            signal: null,
+            error: new Error('ENOENT: mock, no clipboard tool available'),
+          }
+        : actual.spawnSync(...args)) as typeof actual.spawnSync,
+  };
+});
 
 /** A recording write sink; `isTTY` controls the OSC 52 gate. */
 function makeSink(isTTY: boolean | undefined): Osc52Sink & { chunks: string[] } {
@@ -153,27 +177,34 @@ describe('copyToClipboard', () => {
     expect(typeof result).toBe('boolean');
   });
 
-  // The win32 tool (`clip`) is absent on the POSIX test hosts (CI = ubuntu,
-  // dev = macOS), so the external-tool loop exhausts and the OSC 52 fallback
-  // fires deterministically. Skipped on Windows, where a real `clip` would
-  // intercept before the fallback is reached.
-  it.skipIf(process.platform === 'win32')(
-    'falls back to OSC 52 when no local tool succeeds',
-    () => {
+  // These two tests exercise the OSC 52 fallback path (reached when every local
+  // clipboard tool fails). spawnSync is mocked to always report ENOENT so the
+  // test is portable across all platforms — on Windows real `clip` would
+  // succeed and bypass the fallback, making the assertions wrong.
+  describe('OSC 52 fallback (all local tools mocked absent)', () => {
+    // Contract: the toggle (not vi.mock placement) scopes the mock. vi.mock
+    // is file-level, so it is declared at top level and passes through to the
+    // real spawnSync unless a test in this block has switched it on.
+    beforeAll(() => {
+      childProcessMock.forceEnoent = true;
+    });
+
+    afterAll(() => {
+      childProcessMock.forceEnoent = false;
+    });
+
+    it('falls back to OSC 52 when no local tool succeeds', () => {
       const sink = makeSink(true);
       const ok = copyToClipboard('hi', 'win32', {}, sink);
       expect(ok).toBe(true);
       expect(sink.chunks.join('')).toBe(osc52Copy('hi'));
-    },
-  );
+    });
 
-  it.skipIf(process.platform === 'win32')(
-    'does not emit OSC 52 into a non-TTY sink (piped output stays clean)',
-    () => {
+    it('does not emit OSC 52 into a non-TTY sink (piped output stays clean)', () => {
       const sink = makeSink(false);
       const ok = copyToClipboard('hi', 'win32', {}, sink);
       expect(sink.chunks).toHaveLength(0);
       expect(ok).toBe(false);
-    },
-  );
+    });
+  });
 });

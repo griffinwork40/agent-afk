@@ -15,7 +15,7 @@
  */
 
 import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { pluginManifestPath } from '../../config/plugin-discovery.js';
 
 export interface PluginManifestFields {
   /** Manifest `name` when present and non-empty, else `null`. */
@@ -29,7 +29,7 @@ export interface PluginManifestFields {
  * Returns nulls for a missing file, unreadable file, or malformed JSON.
  */
 export function readPluginManifest(dir: string): PluginManifestFields {
-  const path = join(dir, '.claude-plugin', 'plugin.json');
+  const path = pluginManifestPath(dir);
   if (!existsSync(path)) return { name: null, version: null };
   try {
     const raw = JSON.parse(readFileSync(path, 'utf8')) as {

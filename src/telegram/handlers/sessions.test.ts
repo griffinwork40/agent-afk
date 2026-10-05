@@ -16,6 +16,7 @@ import { handleSessions, handleNew, handleSwitchCallback, SWITCH_CALLBACK_PREFIX
 import { SessionManager } from '../session-manager.js';
 import { useUnsetAfkHome } from '../../__test-utils__/unset-afk-home.js';
 import type { IAgentSession, AgentConfig, SessionState } from '../../agent/types.js';
+import { closeStore } from '../../agent/goals/goal-store.js';
 
 class MockAgentSession implements IAgentSession {
   state: SessionState = 'idle';
@@ -97,6 +98,14 @@ describe('session switcher handlers', () => {
 
   afterEach(async () => {
     await manager.closeAll().catch(() => {});
+    // Reset the goal-store module-level singleton before unlinking the tmp dir.
+    // SessionManager.getSession calls injectGoalPrompt, which lazily opens the
+    // module-level StateStore singleton at AFK_HOME/state/kv/kv.db. On Windows
+    // an open SQLite handle prevents rmSync from deleting the directory (EBUSY).
+    // closeStore() closes the handle and resets the singleton so the next test
+    // can open a fresh store at its own tmp path.
+    closeStore();
+    delete process.env['AFK_HOME']; // audit-env-access: allow — test teardown
     if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
     if (existsSync(testDataDir)) rmSync(testDataDir, { recursive: true, force: true });
     if (originalHome !== undefined) process.env['HOME'] = originalHome;

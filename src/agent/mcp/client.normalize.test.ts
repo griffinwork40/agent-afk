@@ -255,3 +255,126 @@ describe('normalizeCallToolResult — image block forwarding (#1421)', () => {
     expect(result.content).toContain('future_type');
   });
 });
+
+describe('normalizeCallToolResult — resource blob image forwarding (#1421)', () => {
+  // Re-use the module-level warnSpy (declared outside both describe blocks).
+  afterEach(() => warnSpy.mockClear());
+
+  const PNG_1x1 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+  it('forwards a resource blob with a supported image mimeType as ToolResult.image', () => {
+    const result = normalizeCallToolResult({
+      content: [
+        {
+          type: 'resource',
+          resource: { uri: 'file:///screenshot.png', mimeType: 'image/png', blob: PNG_1x1 },
+        },
+      ],
+    } as unknown as CallToolResult);
+
+    expect(result.image?.mediaType).toBe('image/png');
+    expect(result.image?.data).toBe(PNG_1x1);
+    expect(result.content).toContain('file:///screenshot.png');
+    expect(result.content).toContain('image: image/png');
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('falls back to URI placeholder for a resource blob with an unsupported mimeType', () => {
+    const result = normalizeCallToolResult({
+      content: [
+        {
+          type: 'resource',
+          resource: { uri: 'file:///data.bin', mimeType: 'application/octet-stream', blob: PNG_1x1 },
+        },
+      ],
+    } as unknown as CallToolResult);
+
+    expect(result.image).toBeUndefined();
+    expect(result.content).toContain('[resource block: file:///data.bin]');
+  });
+
+  it('falls back to URI placeholder for a resource link (no blob field)', () => {
+    const result = normalizeCallToolResult({
+      content: [
+        {
+          type: 'resource',
+          resource: { uri: 'https://example.com/page', mimeType: 'text/html' },
+        },
+      ],
+    } as unknown as CallToolResult);
+
+    expect(result.image).toBeUndefined();
+    expect(result.content).toContain('[resource block: https://example.com/page]');
+  });
+
+  it('falls back to placeholder when a resource image blob exceeds the 5 MiB byte cap', () => {
+    const oversizedBlob = 'A'.repeat(7_000_000);
+    const result = normalizeCallToolResult({
+      content: [
+        {
+          type: 'resource',
+          resource: { uri: 'file:///big.png', mimeType: 'image/png', blob: oversizedBlob },
+        },
+      ],
+    } as unknown as CallToolResult);
+
+    expect(result.image).toBeUndefined();
+    expect(result.content).toContain('image blob too large for model context');
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('exceeds'));
+  });
+
+  it('forwards only the first image resource blob; subsequent ones become text placeholders', () => {
+    const result = normalizeCallToolResult({
+      content: [
+        {
+          type: 'resource',
+          resource: { uri: 'file:///a.png', mimeType: 'image/png', blob: PNG_1x1 },
+        },
+        {
+          type: 'resource',
+          resource: { uri: 'file:///b.png', mimeType: 'image/png', blob: PNG_1x1 },
+        },
+      ],
+    } as unknown as CallToolResult);
+
+    expect(result.image?.mediaType).toBe('image/png');
+    expect(result.content).toContain('additional image blob not forwarded');
+    expect(result.content).toContain('file:///b.png');
+  });
+
+  it('an image block takes precedence over a subsequent resource blob image', () => {
+    const result = normalizeCallToolResult({
+      content: [
+        { type: 'image', mimeType: 'image/jpeg', data: PNG_1x1 },
+        {
+          type: 'resource',
+          resource: { uri: 'file:///extra.png', mimeType: 'image/png', blob: PNG_1x1 },
+        },
+      ],
+    } as unknown as CallToolResult);
+
+    // Only the image block image is forwarded (it was first).
+    expect(result.image?.mediaType).toBe('image/jpeg');
+    // The resource blob is the "additional" and becomes a placeholder.
+    expect(result.content).toContain('additional image blob not forwarded');
+  });
+
+  it('a resource blob image takes precedence if it appears before an image block', () => {
+    const result = normalizeCallToolResult({
+      content: [
+        {
+          type: 'resource',
+          resource: { uri: 'file:///first.png', mimeType: 'image/png', blob: PNG_1x1 },
+        },
+        { type: 'image', mimeType: 'image/jpeg', data: PNG_1x1 },
+      ],
+    } as unknown as CallToolResult);
+
+    // Resource blob came first — forwarded as the primary image.
+    expect(result.image?.mediaType).toBe('image/png');
+    // The image block is now the "additional" and becomes a text placeholder.
+    expect(result.content).toContain('[image block:');
+    expect(result.content).toContain('additional image not forwarded');
+  });
+});

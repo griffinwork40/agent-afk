@@ -11,11 +11,9 @@ import type { CliOptions, InteractiveCtx } from './shared.js';
 import { ContextSampler } from '../../context-sampler.js';
 import { ensurePluginEntrypointsLoaded } from '../../../agent/tools/skill-bridge.js';
 import { installPluginHooks } from '../../../agent/plugins/load-entrypoints.js';
-import type { ResolvedResumeTarget } from '../../resume-session.js';
 import { emitSessionPhase } from '../../../agent/trace/emit.js';
-import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
-import type { TraceWriter } from '../../../agent/trace/writer.js'; // owner handle — kept for pendingTraceWriter
-import { performResumeSwap, resumeConfigFor } from './resume-swap.js';
+import { wireSessionSidebands } from './bootstrap-sidebands.js';
+import { createResumeRequest } from './bootstrap-resume.js';
 import { resolveBootstrapConfig } from './bootstrap-config.js';
 import { createBootstrapInfra } from './bootstrap-infra.js';
 import { connectReplMcp } from './bootstrap-mcp.js';
@@ -23,7 +21,7 @@ import { createReplProviders } from './bootstrap-providers.js';
 import { createReplSurface } from './bootstrap-surface.js';
 import { createReplHookRegistry } from './bootstrap-hooks.js';
 import { createReplSlashContext } from './bootstrap-slash-context.js';
-import { wireTrustedSkillEvents, wireProviderGrants, createReplInput } from './bootstrap-wiring.js';
+import { wireTrustedSkillEvents, wireProviderGrants, createReplInput, createTurnBridgeRefs } from './bootstrap-wiring.js';
 import { buildAgentSession, buildSharedDeps } from './bootstrap-session-builder.js';
 import { registerAll } from '../../slash/index.js';
 import { setTasksIctx } from '../../slash/commands/tasks.js';
@@ -37,6 +35,11 @@ export { buildAgentSession } from './bootstrap-session-builder.js';
  * Load plugin JS entrypoints and install their hook declarations onto an
  * already-built session registry. Extracted from {@link bootstrapSession} to
  * keep that function within its baselined line-count ceiling.
+ *
+ * Import any plugin JS entrypoints (manifest `main`) before constructing the
+ * session: the skill manifest is assembled synchronously in the constructor,
+ * so a plugin's registerSkill() side-effects must already have run for its
+ * code-backed skills to appear. Idempotent + non-fatal; no-op without plugins.
  *
  * Idempotent: {@link ensurePluginEntrypointsLoaded} is process-scoped and
  * skips already-loaded entrypoints. {@link installPluginHooks} is safe to
@@ -63,9 +66,7 @@ export async function bootstrapSession(
   options: CliOptions,
   extras?: { cwd?: string; bootWarnings?: string[] },
 ): Promise<InteractiveCtx> {
-  // Witness layer: capture true bootstrap entry time. The trace writer is
-  // created a few lines below, so bootstrap_start (writer-ready marker) and
-  // bootstrap_done (full span, measured from here) are emitted once it exists.
+  // Capture bootstrap entry time before the trace writer exists.
   const bootstrapStartedAt = Date.now();
 
   const {
@@ -74,11 +75,7 @@ export async function bootstrapSession(
     basePrompt, systemPrompt, systemPromptSource, cliConfig,
   } = resolveBootstrapConfig(options, extras);
 
-  // Wire Agent tool by creating SubagentExecutor first.
-  // The executor needs the session's methods, so we use a deferred parent proxy
-  // that reads through sessionRef so a mid-session swap is transparent to all
-  // child executors without re-wiring.
-  // sessionRef is populated after the session is constructed below.
+  // Deferred parent proxy reads through sessionRef across mid-session swaps.
   const sessionRef: SessionRef = { current: null! };
 
   // Bootstrap warnings that must outlive the startup screen clear. Everything
@@ -100,7 +97,7 @@ export async function bootstrapSession(
   const sharedStateStore = new StateStore(getStateDatabasePath());
 
   const {
-    trace, apiKey, backgroundRegistry, bgSummarizer,
+    trace, backgroundRegistry, detachRegistry, bgSummarizer,
     rootManager, subagentExecutor, skillExecutor, composeExecutor,
   } = createBootstrapInfra({
     sessionRef, options, cliConfig, sessionModel, basePrompt, effectiveCwd, resumeTarget, bootWarnings,
@@ -142,14 +139,13 @@ export async function bootstrapSession(
 
   // Stable hookRegistry shared across sessions (including swaps), plus the
   // terminal-state Stop gate registered on top of it.
-  const { hookRegistry, addPreviewDiffRef } = createReplHookRegistry({
+  const { hookRegistry, addPreviewDiffRef, setTranscriptPathGetter } = createReplHookRegistry({
     completionWriter, memoryStore: sharedMemoryStore, stateStore: sharedStateStore, stats, effectiveCwd, traceWriter: trace?.writer,
   });
 
-  // Mutable ref for the per-turn bash output tail bridge (issue #1506).
-  // The factory below closes over this; the per-turn StreamRenderer sets
-  // .current when it starts and clears it when the turn ends.
-  const bashTailSetter: { current: ((toolUseId: string, tail: string | undefined) => void) | undefined } = { current: undefined };
+  // Mutable refs bridging per-turn renderer state back to the session context
+  // (issues #1505 and #1506 — see bootstrap-wiring.ts for field docs).
+  const { bashTailSetter, capturePathRef } = createTurnBridgeRefs();
   const bashOutputTailReporter = (toolUseId: string) => {
     return (tail: string | undefined) => { bashTailSetter.current?.(toolUseId, tail); };
   };
@@ -160,6 +156,9 @@ export async function bootstrapSession(
     maxOutputTokens, maxToolUseIterations, cliConfig, providerFactory, hookRegistry,
     traceWriter: trace?.writer, effectiveCwd, maxTurns: options.maxTurns, initialPermissionMode,
     bashOutputTailReporter,
+    // #2542/#2735: Detach registry shared between REPL Ctrl+B handler and
+    // every per-query dispatcher for this session.
+    detachRegistry,
     // Cascade-abort and drain in-flight children before the writer seals,
     // so a wave still running when this session ends emits real `cancelled`
     // rows instead of vanishing (#733).
@@ -178,61 +177,11 @@ export async function bootstrapSession(
   // from prior sessions. Fire-and-forget — never blocks session startup.
   runReplReconcile(session.sessionId ?? '');
 
-  // Step 7: register this REPL session in the cross-surface session registry so
-  // it appears alongside Telegram/daemon sessions. Best-effort (never throws).
-  // Process-scoped — the in-memory registry dies with the REPL — so no dispose
-  // is wired here (unlike the long-running daemon, which archives on close).
-  registerSurfaceSession(session, {
-    surface: 'cli',
-    model: sharedDeps.model,
-    ...(sharedDeps.cwd !== undefined ? { cwd: sharedDeps.cwd } : {}),
-    ...(resumeTarget?.stored?.sessionId !== undefined
-      ? { sdkSessionId: resumeTarget.stored.sessionId }
-      : {}),
-  });
+  registerReplSession(session, sharedDeps, resumeTarget?.stored?.sessionId);
 
-  // Witness layer: wire the subagent-success rollup so the rootManager's
-  // foreground forks accumulate token/cost data into the parent session's
-  // session_sealed payload. Late-bound here because session is constructed
-  // after rootManager to avoid a circular reference.
-  //
-  // Read through `sessionRef.current` (not the closed-over `session`) so a
-  // mid-session `/resume` swap — which rebinds `sessionRef.current` to a
-  // freshly built AgentSession via performResumeSwap — routes subsequent
-  // subagent completions into the live session's accumulators. Closing over
-  // `session` would silently strand post-resume rollups on the old, discarded
-  // session, dropping them from the active session's session_sealed payload.
-  const onSubagentSucceeded = (usage: import('../../../agent/subagent/result.js').SubagentTrace['usage'], costUsd: number | undefined): void => {
-    sessionRef.current?.recordSubagentCompletion(usage, costUsd);
-  };
-  rootManager.setOnSubagentSucceeded(onSubagentSucceeded);
-  // Wire the same rollup for compose DAG nodes. The compose executor creates
-  // a fresh SubagentManager per execute() call, so setOnSubagentSucceeded on
-  // rootManager does not reach compose node costs — they require their own
-  // wiring here. Without this, compose node token/cost data is silently
-  // dropped from session_sealed telemetry.
-  composeExecutor.setOnSubagentSucceeded(onSubagentSucceeded);
+  wireSessionSidebands(sessionRef, rootManager, composeExecutor, backgroundRegistry);
 
-  // Step 1A: wire subagent_lifecycle and background_job OutputEvent emission.
-  // Read through sessionRef so post-resume swaps route into the live session.
-  const sidebandSink = (event: import('../../../agent/types/session-types.js').OutputEvent): void => {
-    sessionRef.current?.pushSidebandEvent(event);
-  };
-  rootManager.setOutputEventSink(sidebandSink);
-  // Wire background_job events via the registry's existing EventEmitter API.
-  backgroundRegistry.on('started', (job) => {
-    sidebandSink({ type: 'background_job', jobId: job.jobId, status: 'started', label: job.label });
-  });
-  backgroundRegistry.on('settled', (job) => {
-    const status = job.status === 'completed' ? 'completed' as const
-      : job.status === 'failed' ? 'failed' as const
-      : 'cancelled' as const;
-    sidebandSink({ type: 'background_job', jobId: job.jobId, status, label: job.label });
-  });
-
-  // ContextSampler constructor assigns `session` as the source.  attach() is
-  // called by performResumeSwap (resume-swap.ts step 8) on every mid-session
-  // swap to rebind the source and reset the cache; no call needed here.
+  // Resume rebinds the sampler source and resets its cache.
   const contextSampler = new ContextSampler(session);
 
   const maxTurnsNum = parseInt(options.maxTurns, 10);
@@ -245,100 +194,11 @@ export async function bootstrapSession(
     ...(maxTurnsNum > 0 ? { maxTurns: maxTurnsNum } : {}),
   });
 
-  // requestResume delegates to performResumeSwap (resume-swap.ts).
-  // The sharedDeps + model-precedence resolution lives here; the swap
-  // sequence itself is tested independently via the exported function.
-  // Invariant: a REPL `/resume` must hand the incoming session a LIVE writer,
-  // and the swap's own ordering is what makes that mandatory. performResumeSwap
-  // closes the outgoing session (step 5) BEFORE the pointer flip (step 6), and
-  // closing is what seals the writer — so any writer shared with the outgoing
-  // session is already sealed by the time the incoming session is current.
-  // NdjsonTraceWriter.write() throws on a sealed writer and emit.ts swallows the
-  // rejection, so the resumed session's every turn, tool call, and subagent
-  // dispatch would vanish with no error, no warning, and no marker in the trace
-  // (#731). Each built session therefore gets its OWN writer here, and the
-  // long-lived executors/managers — constructed once at bootstrap and never
-  // rebuilt across a swap — are re-pointed at it in `onSwapped`, AFTER the flip
-  // commits. Ordering matters both ways: build-time is too early to cascade
-  // (the swap can still roll back and leave the original session current), and
-  // anywhere after `onSwapped` is too late (the first post-resume fork may
-  // already have been dispatched into the sealed writer).
-  let pendingTraceWriter: TraceWriter | undefined;
-
-  const requestResume = (target: ResolvedResumeTarget) => {
-    // Clear the trusted-skill ledger so the resumed session starts with a
-    // clean slate. The ledger accumulates per-session run statistics
-    // (displayed by /stats); entries from the outgoing session would
-    // otherwise bleed into the new session's display. Mirrors the /clear
-    // behaviour (core.ts) which also calls ledger.clear().
-    trustedSkillLedger.clear();
-    return performResumeSwap(target, {
-      sessionRef,
-      stats,
-      contextSampler,
-      gitStatusSampler,
-      statusLine,
-      maxTurns: maxTurnsNum > 0 ? maxTurnsNum : undefined,
-      backgroundRegistry,
-      completionWriter,
-      isInFlight: () => ctx.getInFlight?.() ?? false,
-      onSwapped: (t) => {
-        ctx.resumeTarget = t;
-        // Reset the verdict ledger so the outgoing session's terminal-state
-        // trajectory does not contaminate the resumed session. The ledger is
-        // owned by repl-loop's closure; the setter is wired by runReplLoop
-        // before /resume can fire. Optional — early /resume calls before
-        // the ledger is wired are a no-op (safe).
-        ctx.clearVerdictLedger?.();
-        // Drop buffered background-subagent results from the outgoing
-        // session — cancelAll ran at the swap commit point, but a job that
-        // settled just before it may already sit in the notifier's buffer
-        // and would otherwise inject into the resumed session's first turn.
-        ctx.clearBgResultBuffer?.();
-        // Drop any pending Stop-hook injection from the outgoing session so
-        // its injectContext cannot leak into the resumed session's first turn.
-        // Mirrors clearVerdictLedger and clearBgResultBuffer above.
-        ctx.clearPendingStopInjection?.();
-        // Re-point every long-lived holder of the outgoing (now sealed) writer
-        // at the incoming session's live one. These are built once in
-        // createBootstrapInfra and survive the swap, so without this the
-        // resumed session's own turns would be traced while its `agent` /
-        // skill / compose dispatches silently vanished (#731). Mirrors the
-        // `setCwd` cascade in dispatcher.ts. `undefined` when tracing is
-        // disabled (AFK_TRACE_DISABLED=1), which correctly propagates "no
-        // writer" rather than leaving the sealed one in place.
-        subagentExecutor.setTraceWriter(pendingTraceWriter);
-        skillExecutor.setTraceWriter(pendingTraceWriter);
-        composeExecutor.setTraceWriter(pendingTraceWriter);
-        rootManager.setTraceWriter(pendingTraceWriter);
-        backgroundRegistry.setTraceWriter(pendingTraceWriter);
-        // Re-wire the plan-exit queue check on the resumed session so
-        // exit_plan_mode still skips the picker when the user has queued text.
-        if (ctx.hasPendingUserMessage) {
-          sessionRef.current?.setPlanExitQueueCheck(ctx.hasPendingUserMessage);
-        }
-      },
-      buildSession: (t) => {
-        // Resuming session X appends to X's own trace directory, matching how
-        // a launch-time `--resume` labels its writer in createBootstrapInfra.
-        // The label is the witness directory name, not the SDK session id.
-        const resumedLabel = t.stored?.sessionId;
-        pendingTraceWriter = createDefaultTraceWriter(
-          resumedLabel !== undefined ? { sessionLabel: resumedLabel } : {},
-        )?.writer;
-        return buildAgentSession({
-          ...sharedDeps,
-          model: t.stored?.model ?? sharedDeps.model,
-          resumeConfig: resumeConfigFor(t),
-          // Preserve the LIVE permission mode across a model swap (e.g. the user
-          // toggled /bypass after startup) rather than resetting to the initial
-          // config value carried in sharedDeps.
-          permissionMode: stats.permissionMode,
-          traceWriter: pendingTraceWriter,
-        });
-      },
-    });
-  };
+  const requestResume = createResumeRequest(
+    () => ctx, sessionRef, sharedDeps,
+    { subagentExecutor, skillExecutor, composeExecutor, rootManager, backgroundRegistry },
+    () => trustedSkillLedger.clear(), maxTurnsNum,
+  );
 
   // Build the ctx object first (so requestResume can close over it for
   // getInFlight and resumeTarget mutation), then wire requestResume in.
@@ -353,6 +213,7 @@ export async function bootstrapSession(
     completionWriter,
     replRenderer,
     bashTailSetter,
+    capturePathRef,
     slashCtx,
     rl: null!,  // overwritten below
     options,
@@ -362,11 +223,15 @@ export async function bootstrapSession(
     // interactive.ts. Passed by reference so a late producer (anything between
     // here and `return ctx`) still lands.
     bootWarnings,
-    backgroundRegistry,
+    backgroundRegistry, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
+    subagentManager: rootManager,
     // Expose the root executor's narrow promotion seam so the turn handler can
     // make Ctrl+B background a running foreground subagent. The executor
     // implements `SubagentControl`; the keyboard layer sees only that interface.
     subagentControl: subagentExecutor,
+    // #2542/#2735: Detach registry shared with every per-query dispatcher so
+    // Ctrl+B can free the model's turn while a bash process keeps running.
+    detachRegistry,
     ...(bgSummarizer !== undefined ? { bgSummarizer } : {}),
     requestResume,
     // Default to false so any code path that reads getInFlight before
@@ -375,13 +240,10 @@ export async function bootstrapSession(
     // misclassify the in-flight state.
     getInFlight: () => false,
     ...(mcpManager !== undefined ? { mcpManager } : {}),
-    // Thread the resolved auth credentials into ctx so the ghost-text
-    // suggest engine's getContext() closure uses the same token and
-    // endpoint the AgentSession was constructed with. Captured once here
-    // (session-stable values) to avoid per-keystroke loadConfig() I/O.
-    // `apiKey` was resolved above by getApiKey() (line 149); `cliConfig`
-    // was loaded above by loadConfig() (line 137).
-    suggestApiKey: apiKey,
+    // The session credential (`apiKey`) is deliberately NOT threaded to the
+    // ghost-text suggest engine: its model may belong to another provider, so
+    // it resolves its own credential per suggestion model
+    // (src/cli/input/suggest-credential.ts).
     // Mirror the main session's OpenAI-compatible endpoint: the suggest engine
     // forwards `suggestBaseUrl` as an `openaiBaseUrl` provider hint
     // (suggest.ts:355), and parseProvider above (line 352) wires the live
@@ -397,11 +259,44 @@ export async function bootstrapSession(
     addPreviewDiffRef,
   };
 
+  finishBootstrapWiring(ctx, trustedSkillLedger, startupProvider, setTranscriptPathGetter, bootstrapStartedAt);
+
+  return ctx;
+}
+
+/** Best-effort process-scoped cross-surface registration. */
+function registerReplSession(
+  session: ReturnType<typeof buildAgentSession>,
+  sharedDeps: ReturnType<typeof buildSharedDeps>,
+  sdkSessionId: string | undefined,
+): void {
+  // Step 7: register this REPL session in the cross-surface session registry so
+  // it appears alongside Telegram/daemon sessions. Best-effort (never throws).
+  // Process-scoped — the in-memory registry dies with the REPL — so no dispose
+  // is wired here (unlike the long-running daemon, which archives on close).
+  registerSurfaceSession(session, {
+    surface: 'cli',
+    model: sharedDeps.model,
+    ...(sharedDeps.cwd !== undefined ? { cwd: sharedDeps.cwd } : {}),
+    ...(sdkSessionId !== undefined
+      ? { sdkSessionId }
+      : {}),
+  });
+
+}
+/** Install the surface callbacks only after ctx and slash commands exist. */
+function finishBootstrapWiring(
+  ctx: InteractiveCtx,
+  trustedSkillLedger: ReturnType<typeof createReplSurface>['trustedSkillLedger'],
+  startupProvider: ReturnType<typeof createReplProviders>['startupProvider'],
+  setTranscriptPathGetter: ReturnType<typeof createReplHookRegistry>['setTranscriptPathGetter'],
+  bootstrapStartedAt: number,
+): void {
   // Trusted-skill event subscriptions — emit in-flight + completion badges
   // inline at the invocation point via completionWriter (routed to
   // compositor.commitAbove during a live turn; falls back to console.log
   // outside a turn). Recorded in the ledger on completion.
-  ctx.teardownTrustedSkillEvents = wireTrustedSkillEvents(completionWriter, trustedSkillLedger);
+  ctx.teardownTrustedSkillEvents = wireTrustedSkillEvents(ctx.completionWriter, trustedSkillLedger);
 
   registerAll();
 
@@ -420,15 +315,14 @@ export async function bootstrapSession(
   ctx.inputSurfaceRef = inputSurfaceRef;
 
   // Wire requestResume into slashCtx so slash commands can call it.
-  slashCtx.requestResume = requestResume;
-
+  ctx.slashCtx.requestResume = ctx.requestResume;
+  ctx.setTranscriptPathGetter = setTranscriptPathGetter;
   // Witness layer: bootstrap complete — emit the done marker with the full
   // span measured from function entry (covers config load, manager + writer
   // construction, MCP connect, provider + session build).
-  void emitSessionPhase(trace?.writer, {
+  void emitSessionPhase(ctx.traceWriter, {
     phase: 'bootstrap_done',
     durationMs: Date.now() - bootstrapStartedAt,
   });
 
-  return ctx;
 }

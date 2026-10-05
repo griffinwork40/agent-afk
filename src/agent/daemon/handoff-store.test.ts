@@ -326,6 +326,7 @@ describe('updateHandoffAnswer', () => {
 
 describe('file permissions', () => {
   // Permissions are reliable on Linux (our CI target). Skip on other platforms.
+  // Windows: genuinely POSIX-only — NTFS has no POSIX permission bits; mode 0o700/0o600 assertions are Linux-specific
   const itOnLinux = process.platform === 'linux' ? it : it.skip;
 
   itOnLinux('handoffs directory is created with mode 0o700', async () => {

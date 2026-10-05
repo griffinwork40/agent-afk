@@ -19,21 +19,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToolLane } from './tool-lane.js';
 import { stripAnsi } from '../../display.js';
 import { checkPauseAnnotations } from '../../../cli/_lib/stream-renderer-lifecycle.js';
-import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import type { LifecycleContext } from '../../../cli/_lib/stream-renderer-lifecycle.js';
+import { makeResult } from './__fixtures__/tool-lane-render.fixtures.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const BASE_TIME = new Date('2026-01-01T00:00:00.000Z').getTime();
-
-function makeResult(content: string, isError = false): ToolResultChunk {
-  return {
-    type: 'tool_result',
-    toolUseId: 'unused',
-    content,
-    isError,
-  };
-}
 
 /**
  * Extract the raw (ANSI-stripped) overlay text from a ToolLane.

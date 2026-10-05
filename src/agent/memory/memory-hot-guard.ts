@@ -27,6 +27,7 @@
  */
 
 import type { ToolHandler } from '../tools/types.js';
+import { debugLog } from '../../utils/debug.js';
 
 /** Per-query dispatcher signals that identify a forked sub-agent session. */
 export interface ForkSignals {
@@ -37,6 +38,10 @@ export interface ForkSignals {
 /**
  * True when the session being dispatched is a forked sub-agent. Fails toward
  * "child": any one signal is enough. Top-level sessions set none of them.
+ *
+ * @internal Stability: **package-private**. Exported for use within
+ * `src/agent/` (build-dispatcher, openai-compatible provider, hook-utils).
+ * Not part of the public API surface; may change without a semver bump.
  */
 export function isForkedChildSession(readOnlyState: boolean | undefined, opts: ForkSignals | undefined): boolean {
   return readOnlyState === true || opts?.parentSessionId !== undefined || opts?.subagentToolOutputCapBytes !== undefined;
@@ -63,7 +68,10 @@ export function guardChildHotWrites(
   const guarded = new Map(handlers);
   guarded.set('memory_update', async (input, ...rest) => {
     const target = (input as { target?: unknown } | null | undefined)?.target;
-    if (target === 'hot') return { content: CHILD_HOT_WRITE_DENIED, isError: true };
+    if (target === 'hot') {
+      debugLog('[memory-hot-guard] blocked child hot-write (guardChildHotWrites)');
+      return { content: CHILD_HOT_WRITE_DENIED, isError: true };
+    }
     return inner(input, ...rest);
   });
   return guarded;

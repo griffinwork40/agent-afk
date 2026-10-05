@@ -1,6 +1,6 @@
 /**
  * Shared first-failure-visible reporter for fire-and-forget observability
- * writes (trace events, subagent prompt/output capture).
+ * writes (trace events, subagent journals).
  *
  * Contract: an artifact write failing must NEVER fail the caller's turn —
  * every call site here already wraps its write in its own try/catch and
@@ -10,9 +10,8 @@
  *
  * Problem this fixes (#850): every witness/forensics swallow site reported
  * failure only via `debugLog`, which no-ops unless AFK_DEBUG=1/DEBUG=1. An
- * operator who deliberately turns an observability feature ON (e.g.
- * `AFK_CAPTURE_SUBAGENT_PROMPTS=1`) got total silence whether it worked or
- * was 100% broken — reachable total-silent-no-op modes include
+ * operator who enables an observability feature got total silence whether it
+ * worked or was 100% broken — reachable total-silent-no-op modes include
  * EACCES/ENOSPC/EROFS on `mkdir` and a session label that fails
  * `validateSessionId` (see `src/paths.ts`). The gap surfaced only when an
  * operator went looking for evidence that was never written — exactly when
@@ -121,7 +120,7 @@ function latchFirstSeen(subsystem: string, dedupKey: string | object): boolean {
  * `warnAfkHomeRejectedOnce` makes in `agent/tools/afk-home-warn.ts`.
  *
  * @param subsystem Short stable label for the failing module, e.g.
- *   `'trace.emit'` or `'subagent-output-capture'`. Combined with `dedupKey`
+ *   `'trace.emit'` or `'subagent-journal'`. Combined with `dedupKey`
  *   for the latch, so two different subsystems failing on the same sink each
  *   still get their own first-failure warning.
  * @param dedupKey Identifies the specific sink that failed. Pass the sink
@@ -129,7 +128,7 @@ function latchFirstSeen(subsystem: string, dedupKey: string | object): boolean {
  *   never by calling a method on it. Pass a string (e.g. a witness session
  *   id) when the sink has no stable object to hand.
  * @param context Short human label for the operation that failed, e.g.
- *   `'tool_call'` or `'captureSubagentPrompt'` — included in the message so
+ *   `'tool_call'` or `'journalSync'` — included in the message so
  *   the one visible line is actionable rather than a bare "something broke".
  * @param err The caught error.
  */

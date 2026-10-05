@@ -25,6 +25,8 @@ import type { ReadScopeInputs } from '../../subagent-read-scope.js';
 import type { ModelProvider } from '../../provider.js';
 import type { AgentModelInput, IAgentSession } from '../../types.js';
 import type { AgentConfig } from '../../types/config-types.js';
+import type { MessageJournal } from '../../journal/types.js';
+import type { JournalParent } from '../../subagent/fork-types.js';
 import { providerForModel } from '../../providers/index.js';
 import { resolveChildModel } from '../../subagent/resolve-child-model.js';
 import { applyParentCredentialFallback } from '../child-credential.js';
@@ -45,9 +47,14 @@ import type { SubagentExecutor, SubagentExecutorContext } from '../subagent-exec
 import type { AgentInput } from './input-parse.js';
 import { isChildReplaySafe } from './retry-safety.js';
 
-/** Mutable child parent-session stub: `sessionId` is backfilled to `handle.id`. */
+/**
+ * Mutable child parent-session stub: `sessionId` is backfilled to `handle.id`
+ * and `messageJournal` to the child's own (subagent) journal, so depth-2+
+ * forks journal via `child.messageJournal.forSubagent(grandchildId)`.
+ */
 export type ChildParentSession = ReturnType<typeof createStubParentSession> & {
   sessionId: string | undefined;
+  messageJournal?: MessageJournal;
 };
 
 /**
@@ -83,6 +90,9 @@ export interface BuildChildConfigArgs {
     inheritedCwd?: string,
     inheritedReadScope?: ReadScopeInputs,
     skillDispatchName?: string,
+    // Forking child's journal view (read lazily): nested skill forks journal
+    // via its `forSubagent(id)`. Absent → nested skill forks run unjournaled.
+    journalParent?: JournalParent,
   ) => SkillExecutor;
   surface?: Surface;
   allowedTools?: string[];
@@ -135,6 +145,19 @@ export interface BuildChildConfigResult {
   childWriteCapable: boolean;
   /** True only when every granted tool is proven free of persistent side effects. */
   childSideEffectFree: boolean;
+  /**
+   * The nested-dispatch allowlist for the child just built. Equals
+   * `resolvedAccess.nestedAgentTypes` when a named agent declared a scoped
+   * `Agent(x)` grant; `undefined` otherwise (unscoped / no-registry dispatch).
+   *
+   * The executor must pass this value as `ForkSubagentOptions.nestedAgentAllowlist`
+   * when calling `forkSubagent`, so it reaches `assembleChildConfig` and is
+   * included in the child's identity preamble. The executor ALSO stamps the
+   * same value onto the child executor's `SubagentExecutorContext.nestedAgentAllowlist`
+   * (at line ~460 in this file), ensuring text and enforcement derive from one
+   * resolved value.
+   */
+  nestedAgentAllowlist: readonly string[] | undefined;
 }
 
 /**
@@ -455,7 +478,7 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     const childSkillExecutor = args.childSkillExecutorFactory
       ? args.childSkillExecutorFactory(
           depth + 1, maxDepth, signal, currentCwd, childReadScope,
-          namedAgent === undefined ? defaultConfig.skillDispatchName : undefined, // Fix A
+          namedAgent === undefined ? defaultConfig.skillDispatchName : undefined, childParentSession, // Fix A; journal view
         )
       : undefined;
     // Pass `model` so the factory routes between AnthropicDirect /
@@ -497,5 +520,5 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     );
   }
 
-  return { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree };
+  return { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist: resolvedAccess?.nestedAgentTypes };
 }

@@ -71,6 +71,24 @@ describe('syntheticEpisodes', () => {
     ]);
     expect(eps.map((e) => e.id)).toEqual(['s1', 's2', 's3']);
   });
+
+  // finding #4 (advisory review #2455): a prediction whose probes were all
+  // dropped by grounding (probes: []) must produce zero synthetic episodes so
+  // the downstream scorer sees an empty targeted set and marks it "unclear".
+  it('produces zero episodes for a prediction with probes: [] (all-dropped by grounding)', () => {
+    const eps = syntheticEpisodes([makePred('p1', [])]);
+    expect(eps).toHaveLength(0);
+  });
+
+  it('skips all-dropped predictions without disrupting ids for the next prediction', () => {
+    const eps = syntheticEpisodes([
+      makePred('p1', []),          // all probes dropped — contributes nothing
+      makePred('p2', ['x', 'y']), // ids start from s1 (not s0 or s3)
+    ]);
+    expect(eps).toHaveLength(2);
+    expect(eps.map((e) => e.id)).toEqual(['s1', 's2']);
+    expect(eps.every((e) => e.targets === 'p2')).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
