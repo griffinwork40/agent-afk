@@ -51,13 +51,31 @@ import { redactInlineSecrets } from '../session/prompt-dump.js';
  *      check unreliable if/when the disk recovers).
  *   b) The file is absent AND the parent directory is not writable
  *      (`appendFileSync` will fail on the first write attempt).
+ *
+ * TOCTOU note: `existsSync` + `accessSync` is a probe, not a lock. Permissions
+ * or disk state can change between this probe and the later `appendFileSync` in
+ * `writeTelemetry`. That window is intentional and acceptable as defense-in-depth:
+ * the probe eliminates the most common case (permissions set incorrectly at
+ * startup) without blocking real I/O errors from surfacing normally.
+ *
+ * @param telemetryPath  Path to the telemetry file to probe.
+ * @param _fsProbe  Optional fs probe for testing (defaults to `node:fs`
+ *   `accessSync` + `existsSync`). Pass a stub to exercise error paths without
+ *   relying on platform-specific permission enforcement.
  */
-export function probeTelemetryWritable(telemetryPath: string): string | null {
-  if (!existsSync(telemetryPath)) {
+export function probeTelemetryWritable(
+  telemetryPath: string,
+  _fsProbe?: {
+    existsSync: (p: string) => boolean;
+    accessSync: (p: string, mode: number) => void;
+  },
+): string | null {
+  const probe = _fsProbe ?? { existsSync, accessSync };
+  if (!probe.existsSync(telemetryPath)) {
     // File absent — check that the parent directory is writable so the first
     // write (which creates the file) will succeed.
     try {
-      accessSync(dirname(telemetryPath), constants.W_OK);
+      probe.accessSync(dirname(telemetryPath), constants.W_OK);
       return null; // parent writable — fresh install, safe to proceed
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
@@ -66,7 +84,7 @@ export function probeTelemetryWritable(telemetryPath: string): string | null {
     }
   }
   try {
-    accessSync(telemetryPath, constants.W_OK);
+    probe.accessSync(telemetryPath, constants.W_OK);
     return null; // writable
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
