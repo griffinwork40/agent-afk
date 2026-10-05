@@ -16,5 +16,8 @@ export interface ExecError extends Error {
 }
 
 export function isExecError(value: unknown): value is ExecError {
-  return value instanceof Error;
+  return (
+    value instanceof Error &&
+    ('stderr' in value || 'stdout' in value)
+  );
 }
