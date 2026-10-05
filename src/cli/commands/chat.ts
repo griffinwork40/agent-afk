@@ -5,6 +5,7 @@ import { handleCommandError } from '../errors/index.js';
 import * as path from 'node:path';
 import { existsSync } from 'node:fs';
 import { AgentSession } from '../../agent/session.js';
+import { wireOneShotChatSession } from './chat.session-wiring.js';
 import { createDefaultHookRegistry } from '../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
 import { MemoryStore, injectHotMemory, injectGoalPrompt } from '../../agent/memory/index.js';
@@ -44,6 +45,7 @@ import { emitSessionPhase } from '../../agent/trace/emit.js';
 import { runNonInteractiveReconcile } from '../../agent/manifest/startup-reconcile.js';
 import { errorMessage } from '../../utils/errors.js';
 import { buildOneShotJsonOutput } from './chat.json-output.js';
+import { closeLazyBrowser } from './chat.browser-teardown.js';
 
 
 /** Loose UUID format check: 8-4-4-4-12 hex groups separated by dashes. */
@@ -433,7 +435,7 @@ export function registerChatCommand(program: Command): void {
           },
           // Live registry so forked subagents resolve it via forkSubagent's
           // parent fallback (SubagentStart/Stop + shadow-verify nudge).
-          get hookRegistry() { return boundSession?.hookRegistry; },
+          get hookRegistry() { return boundSession?.hookRegistry; }, get messageJournal() { return boundSession?.messageJournal; },
         };
 
         // Invariant: ONE root manager per session, shared by all three
@@ -542,6 +544,8 @@ export function registerChatCommand(program: Command): void {
         // + non-fatal; no-op without plugins.
         await ensurePluginEntrypointsLoaded();
 
+        // Resolved permission mode getter — wires the AFK gate for 'autonomous' (#2298).
+        const getChatPermissionMode = (): import('../../agent/types/sdk-types.js').PermissionMode => options.dangerouslySkipPermissions ? 'bypassPermissions' : (cliConfig.permissionMode ?? 'bypassPermissions');
         // Witness layer: `trace` was opened above (before executors) so
         // SkillExecutor could be wired with traceWriter; reuse it here for
         // the AgentSession.
@@ -582,9 +586,7 @@ export function registerChatCommand(program: Command): void {
             : cliConfig.permissionMode !== undefined
               ? { permissionMode: cliConfig.permissionMode }
               : {}),
-          hookRegistry: createDefaultHookRegistry((info) => {
-            console.log(formatSubagentCompletion(info));
-          }, 'cli', sharedMemoryStore, undefined, loadHooksConfig({ cwd: worktreeCwd }), { cwd: worktreeCwd, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}) }).registry,
+          hookRegistry: createDefaultHookRegistry((info) => { console.log(formatSubagentCompletion(info)); }, 'cli', sharedMemoryStore, getChatPermissionMode, loadHooksConfig({ cwd: worktreeCwd }), { cwd: worktreeCwd, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}) }).registry,
           ...(systemPrompt !== undefined ? { systemPrompt } : {}),
           ...(systemPromptSource !== undefined ? { systemPromptSource } : {}),
           ...(thinking !== undefined ? { thinking } : {}),
@@ -614,19 +616,8 @@ export function registerChatCommand(program: Command): void {
         // AFK_WAVE_RESUME_UNATTENDED=1. Fire-and-forget.
         runNonInteractiveReconcile(boundSession?.sessionId ?? '');
 
-        // Subagent-success rollup: wire both the root manager and the compose
-        // executor so all subagent token/cost data (including compose DAG nodes)
-        // accumulates into this session's session_sealed telemetry. Late-bound
-        // here because the session is constructed after the executors.
-        // Use a local const to give the TypeScript narrowing a stable reference
-        // (the outer `session` variable is `AgentSession | null`).
-        const wiredSession = session;
-        rootManager.setOnSubagentSucceeded((usage, costUsd) => {
-          wiredSession.recordSubagentCompletion(usage, costUsd);
-        });
-        composeExecutor.setOnSubagentSucceeded((usage, costUsd) => {
-          wiredSession.recordSubagentCompletion(usage, costUsd);
-        });
+        // Stop wiring + subagent-success rollup (see chat.session-wiring.ts).
+        wireOneShotChatSession(session, [rootManager, composeExecutor]);
 
         spinner.text = 'Sending message...';
 
@@ -761,7 +752,7 @@ export function registerChatCommand(program: Command): void {
         // Suppress on error — see encounteredError declaration above.
         if (shouldPersist && stats.totalTurns > 0 && !encounteredError) {
           try {
-            const savedPath = saveSession(stats, persistId);
+            const savedPath = saveSession(stats, persistId, { closeTime: true });
             // Derive the resume id from the saved path's basename.
             const savedId = path.basename(savedPath, '.json') || persistId || stats.sessionId || 'unknown';
             process.stderr.write(`Continue with: afk chat <msg> --resume ${savedId}\n`);
@@ -786,6 +777,7 @@ export function registerChatCommand(program: Command): void {
         if (mcpManager) {
           await mcpManager.disconnectAll();
         }
+        await closeLazyBrowser(); // after session.close() — browser may be in use until session drains (#2580)
         try { sharedMemoryStore?.close(); } catch {}
         try { sharedStateStore?.close(); } catch {}
         try { workspaceStore?.close(); } catch {}

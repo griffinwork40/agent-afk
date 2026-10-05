@@ -17,15 +17,7 @@ import { palette } from '../../palette.js';
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import type { OutputEvent, SubagentProgressMeta } from '../../../agent/types.js';
 import type { DiffPayload } from '../../../utils/diff.js';
-
-function makeResult(content: string, isError = false): ToolResultChunk {
-  return {
-    type: 'tool_result',
-    toolUseId: 'unused',
-    content,
-    isError,
-  };
-}
+import { makeResult } from './__fixtures__/tool-lane-render.fixtures.js';
 
 describe('ToolLane — batch (parallel-wave) badge on root rows', () => {
   const batchResult = (content: string, batchIndex: number, batchSize: number): ToolResultChunk => ({

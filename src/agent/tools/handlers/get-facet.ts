@@ -14,6 +14,7 @@ import { getOrDeriveFacet, listSessionIds } from '../../facets/index.js';
 import { getSessionsDir } from '../../../paths.js';
 import { resolveSessionByName } from '../../trace/session-name-resolver.js';
 import { FACET_INTERNAL_FIELDS } from '../schemas.facet.js';
+import { readRecord } from '../../outcomes/store.js';
 import type { ToolHandler } from '../types.js';
 
 export const getFacetHandler: ToolHandler = async (input, _signal) => {
@@ -53,15 +54,28 @@ export const getFacetHandler: ToolHandler = async (input, _signal) => {
     return { content: `Session not found: ${sessionArg}`, isError: true };
   }
 
+  // Join VerifiedOutcome record when present — read-only, never affects
+  // existing facet fields. Absent means no record yet (not an error).
+  const outcomeRecord = readRecord(sessionId);
+
   const raw = facet as Record<string, unknown>;
   const result: Record<string, unknown> = {};
   const exclude = new Set<string>(FACET_INTERNAL_FIELDS);
 
   if (fields && fields.length > 0) {
-    for (const f of fields) result[f] = raw[f];
+    for (const f of fields) {
+      if (f === 'verified_outcome') {
+        result[f] = outcomeRecord ?? null;
+      } else {
+        result[f] = raw[f];
+      }
+    }
   } else {
     for (const [k, v] of Object.entries(raw)) {
       if (!exclude.has(k)) result[k] = v;
+    }
+    if (outcomeRecord !== undefined) {
+      result['verified_outcome'] = outcomeRecord;
     }
   }
 

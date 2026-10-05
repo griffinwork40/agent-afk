@@ -185,6 +185,9 @@ export function buildOAuthRefreshQuery(opts: XaiQueryBootstrapArgs): ProviderQue
     listRewindTargets() {
       return innerQuery?.listRewindTargets?.() ?? [];
     },
+    journalSnapshot() {
+      return innerQuery?.journalSnapshot?.();
+    },
     async rewindConversation(turnIndex) {
       const q = innerQuery ?? (await ensureInner().catch(() => undefined));
       if (q?.rewindConversation) return q.rewindConversation(turnIndex);

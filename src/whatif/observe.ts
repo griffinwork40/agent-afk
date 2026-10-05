@@ -45,6 +45,35 @@ const MEMORY_SEARCH_TOOLS = new Set(['memory_search']);
 const ASK_TOOL = 'ask_question';
 
 // ---------------------------------------------------------------------------
+// textContainsQuestion
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns `true` when the assistant's reply text contains a question.
+ *
+ * Two patterns are recognised:
+ *   1. The last non-empty line ends with `?`.
+ *   2. Any line starts with `Question:` or `**Question:**` (with optional
+ *      surrounding whitespace), followed by at least one whitespace character.
+ *      Note: the regex `(\*{1,2})?Question:\*{0,2}\s` also matches a
+ *      single-star `*Question:* text` form (one leading star, one trailing
+ *      star, then space). This is an intentional residual match — the
+ *      single-star form is close enough to a real question framing that
+ *      treating it as a positive is the safe default.
+ *
+ * Exported so it can be tested in isolation.
+ */
+export function textContainsQuestion(t: string): boolean {
+  const lines = t.split('\n');
+  const nonEmpty = lines.filter((l) => l.trim().length > 0);
+  const lastLine = nonEmpty[nonEmpty.length - 1] ?? '';
+  if (lastLine.trim().endsWith('?')) return true;
+  // Require at least one whitespace after the colon to avoid matching
+  // a bare `*Question:*` bullet marker with no text following.
+  return lines.some((l) => /^\s*(\*{1,2})?Question:\*{0,2}\s/.test(l));
+}
+
+// ---------------------------------------------------------------------------
 // extractFeatures
 // ---------------------------------------------------------------------------
 
@@ -63,8 +92,11 @@ const ASK_TOOL = 'ask_question';
  *
  * `askedBeforeActing` is `true` when:
  *   - `ask_question` appears before any tool with a `recorded` verdict, OR
- *   - there are no tools at all AND the final non-empty line of `text` ends
- *     with `?` (heuristic: the agent typed a question to the user).
+ *   - the episode reached `ask_question` or exhausted the tool list without
+ *     encountering a `recorded` verdict (so it only did read-only work) and
+ *     `text` contains a question — the last non-empty line ends with `?` OR
+ *     any line starts with `Question:` / `**Question:**`, OR
+ *   - there are no tools at all and the same text heuristic matches.
  *
  * `usedSkills` collects the `name` input from every `skill` tool call.
  * `searchedMemory` is `true` when `memory_search` appears in the tool list.
@@ -138,24 +170,32 @@ export function extractFeatures(trace: EpisodeTrace): EpisodeFeatures {
   let askedBeforeActing = false;
 
   if (tools.length === 0) {
-    // Heuristic: last non-empty line ends with '?'
-    const nonEmpty = text.split('\n').filter((l) => l.trim().length > 0);
-    const lastLine = nonEmpty[nonEmpty.length - 1] ?? '';
-    askedBeforeActing = lastLine.trim().endsWith('?');
+    askedBeforeActing = textContainsQuestion(text);
   } else {
-    // Ask before any recorded side effect.
+    // Walk the tool list looking for ask_question before any recorded side effect.
     let foundAsk = false;
+    let foundSideEffect = false;
     for (const t of tools) {
       if (t.tool === ASK_TOOL) {
         foundAsk = true;
         break;
       }
       if (t.verdict === 'recorded') {
-        // A side effect appeared before any ask → false.
+        // A side effect appeared before any ask → stop looking.
+        foundSideEffect = true;
         break;
       }
     }
-    askedBeforeActing = foundAsk;
+
+    if (foundAsk) {
+      askedBeforeActing = true;
+    } else if (!foundSideEffect) {
+      // No ask_question tool used and no recorded side effect (agent only read
+      // things).  Fall back to the text heuristic — this covers the common
+      // pattern where the agent reads files and then asks in prose.
+      askedBeforeActing = textContainsQuestion(text);
+    }
+    // else: side effect appeared before any ask → askedBeforeActing stays false.
   }
 
   // ── delegated (derived) ───────────────────────────────────────────────────

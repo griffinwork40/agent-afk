@@ -14,18 +14,19 @@
  */
 
 import { Command } from 'commander';
-import { createInterface } from 'node:readline';
 import ora from 'ora';
 import { loadConfig } from '../config.js';
 import { handleCommandError } from '../errors/index.js';
 import { getAfkHome, getSkillsDir, getPluginsDir } from '../../paths.js';
 import { palette } from '../palette.js';
 import { REPL_SPINNER_OPTIONS } from './interactive/shared.js';
+import { confirmSpec } from './whatif.confirm.js';
 import { renderTerminal } from '../../whatif/report.js';
 import { describeChange } from '../../whatif/operators/index.js';
 import {
   parseWhatifArgs,
 } from '../../whatif/args.js';
+import { decideMdeAction } from './whatif.mde-handler.js';
 import {
   resolveSpec,
   buildWhatifDeps,
@@ -39,7 +40,10 @@ import type { WhatifReport } from '../../whatif/types.js';
 // during tsc; the static import below is what callers see at runtime.
 // ---------------------------------------------------------------------------
 // eslint-disable-next-line @typescript-eslint/consistent-type-imports
-import type { WhatifBudgetError as WhatifBudgetErrorType } from '../../whatif/run.js';
+import type {
+  WhatifBudgetError as WhatifBudgetErrorType,
+  WhatifMdeError as WhatifMdeErrorType,
+} from '../../whatif/run.js';
 
 function isBudgetError(err: unknown): err is WhatifBudgetErrorType {
   return (
@@ -49,22 +53,8 @@ function isBudgetError(err: unknown): err is WhatifBudgetErrorType {
   );
 }
 
-// ---------------------------------------------------------------------------
-// TTY confirmation helper
-// ---------------------------------------------------------------------------
-
-async function confirmSpec(lines: string[]): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    const rl = createInterface({ input: process.stdin, output: process.stderr });
-    process.stderr.write('\n');
-    for (const l of lines) process.stderr.write(`  ${l}\n`);
-    process.stderr.write('\nProceed with this change? [y/N] ');
-    rl.once('line', (answer) => {
-      rl.close();
-      resolve(answer.trim().toLowerCase() === 'y');
-    });
-    rl.once('close', () => resolve(false));
-  });
+function isMdeError(err: unknown): err is WhatifMdeErrorType {
+  return err instanceof Error && err.name === 'WhatifMdeError';
 }
 
 // ---------------------------------------------------------------------------
@@ -103,8 +93,12 @@ export function registerWhatifCommand(program: Command): void {
     .option('--concurrency <n>', 'Parallel episodes (default: 4)')
     .option('--max-turns <n>', 'Max turns per episode (default: 3)')
     .option('--timeout <sec>', 'Episode timeout in seconds (default: 180)')
+    .option('--probes <n>', 'Synthetic probe episodes per prediction (1–12; default 6)')
+    .option('--max-predictions <n>', 'Max predictions to retain (1–8; default 3 when probes>2, else 8)')
     .option('--keep-sandboxes', 'Keep sandbox directories after run')
+    .option('--no-baseline-sample', 'Skip the baseline-sample preflight (#2511)')
     .option('--yes', 'Skip confirmation of compiled spec')
+    .option('--force', 'Bypass the MDE underpowered gate (--verify only)')
     .option('--json', 'Print results as JSON to stdout')
     .action(async (changeParts: string[], opts: Record<string, unknown>) => {
       try {
@@ -194,42 +188,46 @@ async function runWhatifCommand(
 
   let report: WhatifReport;
 
+  // Hoist runOpts and depsWithProgress so the MDE-gate catch path can re-run.
+  const depsWithProgress: typeof deps = {
+    ...deps,
+    onProgress: (p) => {
+      const msg = `${p.stage}: ${p.message}`;
+      if (spinner) {
+        spinner.text = msg;
+      } else {
+        process.stderr.write(`[whatif] ${msg}\n`);
+      }
+    },
+  };
+
+  const runOpts = {
+    spec,
+    realHome,
+    realCwd,
+    agentModel,
+    analystModel,
+    verify: parsed.options.verify,
+    turns: parsed.options.turns,
+    samples: parsed.options.samples,
+    maxUsd: parsed.options.maxUsd,
+    judge: parsed.options.judge,
+    concurrency: parsed.options.concurrency,
+    maxTurns: parsed.options.maxTurns,
+    episodeTimeoutMs: parsed.options.episodeTimeoutMs,
+    keepSandboxes: parsed.options.keepSandboxes,
+    force: parsed.force,
+    ...(parsed.options.probes !== undefined ? { probes: parsed.options.probes } : {}),
+    ...(parsed.options.maxPredictions !== undefined ? { maxPredictions: parsed.options.maxPredictions } : {}),
+    ...(parsed.options.noBaselineSample ? { noBaselineSample: true } : {}),
+  };
+
   try {
     // Dynamic import tolerates run.ts not existing during type-check if this
     // file is compiled before the sibling agent writes it.
     const { runWhatif } = await import('../../whatif/run.js');
 
-    const depsWithProgress: typeof deps = {
-      ...deps,
-      onProgress: (p) => {
-        const msg = `${p.stage}: ${p.message}`;
-        if (spinner) {
-          spinner.text = msg;
-        } else {
-          process.stderr.write(`[whatif] ${msg}\n`);
-        }
-      },
-    };
-
-    report = await runWhatif(
-      {
-        spec,
-        realHome,
-        realCwd,
-        agentModel,
-        analystModel,
-        verify: parsed.options.verify,
-        turns: parsed.options.turns,
-        samples: parsed.options.samples,
-        maxUsd: parsed.options.maxUsd,
-        judge: parsed.options.judge,
-        concurrency: parsed.options.concurrency,
-        maxTurns: parsed.options.maxTurns,
-        episodeTimeoutMs: parsed.options.episodeTimeoutMs,
-        keepSandboxes: parsed.options.keepSandboxes,
-      },
-      depsWithProgress,
-    );
+    report = await runWhatif(runOpts, depsWithProgress);
   } catch (err) {
     spinner?.stop();
 
@@ -243,7 +241,37 @@ async function runWhatifCommand(
       process.exit(2);
     }
 
-    throw err;
+    if (isMdeError(err)) {
+      const me = err as WhatifMdeErrorType;
+      const action = decideMdeAction(me, parsed.yes, !!process.stdin.isTTY);
+
+      if (action.kind === 'refuse') {
+        process.stderr.write(`${palette.error('whatif:')} ${action.message}\n`);
+        process.exit(2);
+      }
+
+      // action.kind === 'prompt': interactive session, clearable refusal.
+      process.stderr.write(`\n${palette.warning('whatif: underpowered run')}\n  ${action.detail}\n`);
+      const proceed = await confirmSpec([], 'Proceed anyway?');
+      if (!proceed) {
+        process.stderr.write('Aborted.\n');
+        process.exit(0);
+      }
+      // Re-run with force=true after user confirms, then fall through to
+      // the shared render block below instead of duplicating it here.
+      const { runWhatif: rerun } = await import('../../whatif/run.js');
+      spinner?.start();
+      try {
+        report = await rerun({ ...runOpts, force: true }, depsWithProgress);
+      } catch (err2) {
+        spinner?.stop();
+        throw err2;
+      }
+      spinner?.stop();
+      // Fall through to shared render block.
+    } else {
+      throw err;
+    }
   }
 
   spinner?.stop();
@@ -257,6 +285,11 @@ async function runWhatifCommand(
   const termLines = renderTerminal(report, palette);
   for (const line of termLines) process.stdout.write(line + '\n');
   process.stdout.write(`\nFull report: ${report.runDir}/report.md\n`);
+  if (report.keptSandboxes) {
+    process.stdout.write(`Sandboxes kept — baseline: ${report.keptSandboxes.baseline}\n`);
+    process.stdout.write(`              candidate: ${report.keptSandboxes.candidate}\n`);
+    process.stdout.write(`(mapping written to ${report.runDir}/sandboxes.json)\n`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -303,8 +336,12 @@ function buildArgvFromOpts(
   push('--concurrency', opts['concurrency']);
   push('--max-turns', opts['maxTurns']);
   push('--timeout', opts['timeout']);
+  push('--probes', opts['probes']);
+  push('--max-predictions', opts['maxPredictions']);
   push('--keep-sandboxes', opts['keepSandboxes']);
+  push('--no-baseline-sample', opts['noBaselineSample']);
   push('--yes', opts['yes']);
+  push('--force', opts['force']);
   push('--json', opts['json']);
 
   return argv;

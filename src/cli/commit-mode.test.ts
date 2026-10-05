@@ -50,6 +50,50 @@ describe('decideCommitMode', () => {
     expect(m.useBandHold).toBe(false);
   });
 
+  // Contract (issue #2229 — content-hug strand exclusion):
+  // overlayTallEnoughToStrand is skipped when hugSlack > 0 (hug frame has
+  // slack below it — viewport not yet full). Once hugSlack == 0 (frame
+  // bottom-pinned) the protection applies when anchorRow <= 1 (no banner).
+  it('hug-strand: hugSlack > 0 — strand check skipped even when room < maxBandModel', () => {
+    // hugSlack > 0 means the hug frame is above the viewport floor. While it
+    // has slack, fits-path LFs cannot introduce blank rows into scrollback
+    // (no void on collapse). Skip the band-hold routing and use fits.
+    const m = decideCommitMode(base({ prevTopRow: 10, frameTop: 10, lineCount: 2, hugSlack: 5 }));
+    expect(m.fitsAboveFrame).toBe(true);
+    // room = 9 < maxBandModel = 20, but hugSlack > 0 → strand check skipped.
+    expect(m.useBandHold).toBe(false);
+  });
+
+  it('hug-strand: hugSlack == 0 + anchorRow == 1 — strand check fires, routes to band-hold', () => {
+    // hugSlack == 0 means the hug frame has bottom-pinned (viewport full).
+    // The strand check applies exactly as in bottom-pin mode when anchorRow <= 1.
+    const m = decideCommitMode(base({ prevTopRow: 10, frameTop: 10, lineCount: 2, hugSlack: 0 }));
+    expect(m.fitsAboveFrame).toBe(true);
+    // room = 9 < maxBandModel = 20, hugSlack == 0, anchorRow == 1 → fires.
+    expect(m.useBandHold).toBe(true);
+  });
+
+  it('hug-strand: hugSlack == 0 + anchorRow > 1 (banner) — strand check skipped', () => {
+    // When anchorRow > 1, overflowPriorContiguous is always false and
+    // band-hold cannot accumulate the prior band safely. Routing to band-hold
+    // would drop the prior band (content loss), so the check is skipped.
+    // Geometry: anchorRow=11, frameTop=22 (room=11), maxBandModel=22.
+    // room=11 < maxBandModel=22 AND fitsAboveFrame=true → would normally
+    // trigger the strand check, but anchorRow > 1 suppresses it.
+    const m = decideCommitMode(base({
+      prevTopRow: 22,
+      frameTop: 22,
+      anchorRow: 11,
+      anchorFloor: 11,
+      lineCount: 2,
+      hugSlack: 0,
+      extraRows: 0, // absoluteBottom=23, maxBandModel=23-11=12; room=22-11=11 < 12
+    }));
+    expect(m.fitsAboveFrame).toBe(true);
+    // room = 11 < maxBandModel = 12, hugSlack == 0, but anchorRow > 1 → skipped.
+    expect(m.useBandHold).toBe(false);
+  });
+
   it('BLOCKER-1 guard: fitsAboveFrame is false when prevTopRow<=1 (frame fills the viewport)', () => {
     // Caller passes the fallback frameTop (max(1, rows-1-extraRows)=21) when prevTopRow<=1.
     const m = decideCommitMode(base({ prevTopRow: 1, frameTop: 21, lineCount: 2 }));
@@ -211,6 +255,29 @@ describe('decideCommitMode', () => {
         anchorRow: 2,
         committedBand: ['x', 'y'],
         committedBandBottomRow: 2,
+      }),
+    );
+    expect(m.overflowPriorContiguous).toBe(false);
+    expect(m.overflowRun).toEqual(['a', 'b']);
+  });
+
+  it('geometryStale + anchorRow>1: does NOT merge prior band (anchorRow guard takes precedence)', () => {
+    // Regression guard for the finding from PR #2390 review: when frameErased
+    // (now geometryStale) was true, an earlier design bypassed the anchorRow<=1
+    // gate and merged the prior band unconditionally. With anchorRow > 1 the
+    // banner occupies rows above the band; merging across a potential
+    // anchor-evict shift would silently corrupt those rows. The anchorRow<=1
+    // guard must remain even when geometryStale is true.
+    const m = decideCommitMode(
+      base({
+        prevTopRow: 3,
+        frameTop: 3,
+        lineCount: 2,
+        textLines: ['a', 'b'],
+        anchorRow: 2,
+        committedBand: ['x', 'y'],
+        committedBandBottomRow: 2,
+        geometryStale: true,
       }),
     );
     expect(m.overflowPriorContiguous).toBe(false);

@@ -23,10 +23,12 @@
 import { extractReadableMarkdown, THIN_CONTENT_CHARS } from './extract.js';
 import { extractionAdvisory } from './extraction-advisory.js';
 import type { ExtractedContent, FetchFn, RenderFn, RenderedPage } from './types.js';
-import { assertEgressAllowed, guardedFetch, EgressBlockedError } from './egress-guard.js';
+import { assertEgressAllowed, guardedFetch } from './egress-guard.js';
+import { extractEgressBlockedError } from '../utils/errors.js';
 import type { EgressGuardOptions } from './egress-guard.js';
 import { debugLog } from '../utils/debug.js';
 import { errorMessage } from '../utils/errors.js';
+import { rateLimitMessage } from './retryFetch.js';
 
 /** Content-types we treat as HTML (run the extraction pipeline). */
 const HTMLISH_RE = /(text\/html|application\/xhtml\+xml)/i;
@@ -65,6 +67,21 @@ export interface ScrapeOptions {
   lookupFn?: EgressGuardOptions['lookupFn'];
 }
 
+export interface ScrapeDiagnostics {
+  /** Plain-fetch response metadata, absent when no response was received. */
+  fetch?: {
+    httpStatus: number;
+    finalUrl: string;
+    contentType: string;
+    /** UTF-8 bytes of the decoded, unextracted body (not wire/compressed bytes). */
+    rawBodyBytes?: number;
+  };
+  /** Navigation outcome, not whether rendered HTML yielded readable content. */
+  render: 'not-run' | 'failed' | 'succeeded';
+  renderHttpStatus?: number | null;
+  renderFinalUrl?: string;
+}
+
 export interface ScrapeResult {
   title: string;
   markdown: string;
@@ -72,6 +89,8 @@ export interface ScrapeResult {
   finalUrl: string;
   /** True when the result came from the Playwright-render escalation. */
   usedRender: boolean;
+  /** Additive metadata for diagnosing empty extraction without another request. */
+  diagnostics?: ScrapeDiagnostics;
   /**
    * Set when extraction retained suspiciously little of the source's visible
    * text — see `extraction-advisory.ts`. Optional and non-blocking: the result
@@ -154,6 +173,7 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
   let fetchedUrl = url;
   let fetchStatus: number | null = null;
   let fetchErr: unknown = null;
+  const diagnostics: ScrapeDiagnostics = { render: 'not-run' };
 
   try {
     // guardedFetch = retryFetch (transient 429/5xx + network blips on an
@@ -167,7 +187,11 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
     );
     fetchStatus = res.status;
     fetchedUrl = res.url || url;
+    // Invariant: rendering a throttled host immediately is another request,
+    // not a recovery path. Surface the cooldown guidance without escalation.
+    if (res.status === 429) throw new Error(rateLimitMessage(res, url));
     const contentType = res.headers.get('content-type') ?? '';
+    diagnostics.fetch = { httpStatus: res.status, finalUrl: fetchedUrl, contentType };
 
     if (res.ok) {
       if (BINARY_RE.test(contentType)) {
@@ -177,9 +201,10 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
         );
       }
       const body = await res.text();
+      diagnostics.fetch.rawBodyBytes = Buffer.byteLength(body, 'utf8');
       if (TEXTISH_RE.test(contentType) && !HTMLISH_RE.test(contentType)) {
         // JSON / XML / plain text / CSV — already readable; return verbatim.
-        return { title: '', markdown: body.trim(), finalUrl: fetchedUrl, usedRender: false };
+        return { title: '', markdown: body.trim(), finalUrl: fetchedUrl, usedRender: false, diagnostics };
       }
       // HTML or unknown content-type → extraction pipeline.
       fetchedHtml = body;
@@ -199,7 +224,12 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
     // egress path (chromium does its own DNS + redirect handling), so degrading
     // to it would hand an attacker exactly the internal fetch the guard just
     // refused. Re-throw before any escalation decision (issue #575).
-    if (err instanceof EgressBlockedError) throw err;
+    // Also handles the connect-time case: undici wraps EgressBlockedError as
+    // TypeError('fetch failed', { cause: EgressBlockedError }) — unwrap and
+    // re-throw the cause so the isinstance check passes for callers.
+    const blockedEgress = extractEgressBlockedError(err);
+    if (blockedEgress !== null) throw blockedEgress;
+    if (err instanceof Error && err.message.startsWith('web_scrape HTTP 429')) throw err;
     // A thrown binary-content error must surface, not silently escalate.
     if (err instanceof Error && err.message.startsWith('web_scrape markdown mode received binary')) {
       throw err;
@@ -225,6 +255,7 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
       markdown: fetched.markdown,
       finalUrl: fetchedUrl,
       usedRender: false,
+      diagnostics,
       ...(advisory !== undefined ? { advisory } : {}),
     };
   }
@@ -237,6 +268,7 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
     // then re-validate `finalUrl` after, because an in-browser redirect chain is
     // opaque to us (same pre/post pattern `act()` uses for the domain policy).
     await assertEgressAllowed(url, guardOpts);
+    diagnostics.render = 'failed';
     const rendered = await renderFn(url, {
       timeoutMs: opts.timeoutMs,
       signal: opts.signal,
@@ -249,6 +281,9 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
     if (rendered.finalUrl !== url && /^https?:\/\//i.test(rendered.finalUrl)) {
       await assertEgressAllowed(rendered.finalUrl, guardOpts);
     }
+    diagnostics.render = 'succeeded';
+    diagnostics.renderHttpStatus = rendered.httpStatus;
+    diagnostics.renderFinalUrl = rendered.finalUrl;
     const renderedContent = await safeExtract(rendered.html, rendered.finalUrl);
     // Same async-boundary abort re-check as the fetch path above: extraction
     // does not observe the signal, so honor a cancel/timeout that landed during
@@ -265,6 +300,7 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
         markdown: renderedContent.markdown,
         finalUrl: rendered.finalUrl,
         usedRender: true,
+        diagnostics,
         ...(advisory !== undefined ? { advisory } : {}),
       };
     }
@@ -273,8 +309,9 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
     if (opts.signal.aborted) throw renderErr;
     // An egress refusal on the render path is terminal too: degrading to thin
     // fetched content here would report partial success for a request the guard
-    // refused, hiding the block from the caller.
-    if (renderErr instanceof EgressBlockedError) throw renderErr;
+    // refused, hiding the block from the caller. Unwrap undici wrapping too.
+    const blockedRender = extractEgressBlockedError(renderErr);
+    if (blockedRender !== null) throw blockedRender;
     // Render failed (e.g. Playwright not installed). If we have *some* fetched
     // content, degrade gracefully to it. If a missing-Playwright error is the
     // only signal AND we have nothing, re-throw it so the handler can hint.
@@ -300,6 +337,7 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
       markdown: fetched.markdown,
       finalUrl: fetchedUrl,
       usedRender: false,
+      diagnostics,
     };
   }
 

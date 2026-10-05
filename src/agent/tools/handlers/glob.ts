@@ -16,9 +16,11 @@ import path from 'path';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { fsErrorToToolResult } from './_fs-error.js';
-import { isReadDenied } from './read-denylist.js';
+import { isCanonicalPathReadDenied, isReadDenied } from './read-denylist.js';
+import { safeRealpath } from './write-denylist.js';
 import { splitAbsolutePattern } from './glob-absolute.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { Readahead, READAHEAD_CONCURRENCY } from './glob-readahead.js';
 
 /**
  * Directory basenames pruned from recursion by default: VCS metadata,
@@ -106,10 +108,33 @@ function globToRegExp(pattern: string): RegExp {
   return new RegExp(`^${re}$`);
 }
 
+/** Thrown out of the walk when the tool call's AbortSignal fires. */
+class GlobAbortedError extends Error {
+  constructor() {
+    super('glob walk aborted');
+  }
+}
+
 /**
  * Recursively collect files matching a glob pattern.
+ *
+ * Invariant (#2543): the walk tracks each directory's CANONICAL path beside its
+ * logical one. It recurses only into `entry.isDirectory()` entries, and
+ * withFileTypes Dirents report a symlink as a symlink, never as a directory, so
+ * no symlink is ever traversed. The canonical path of a non-symlink child is
+ * therefore exactly `join(realParent, name)`, and the denylist verdict can be
+ * computed with {@link isCanonicalPathReadDenied} without a `realpathSync` per
+ * entry. Symlink entries are the one case where the leaf itself dereferences,
+ * so they still go through the full {@link isReadDenied}. Verdicts are
+ * identical to the old per-entry `isReadDenied(entryPath)`.
+ *
+ * Performance (#2586): a {@link Readahead} schedules `readdir` calls for child
+ * directories ahead of the walker, up to {@link READAHEAD_CONCURRENCY}
+ * concurrent reads, so I/O and CPU overlap. The walker still visits entries in
+ * the same depth-first order, so output under the 500-entry cap is
+ * **byte-identical** to the sequential walker.
  */
-async function collectMatches(dir: string, pattern: string): Promise<string[]> {
+async function collectMatches(dir: string, pattern: string, signal?: AbortSignal): Promise<string[]> {
   const matches: string[] = [];
   const maxResults = 500;
   // Directory names the caller explicitly named as literal pattern segments
@@ -117,63 +142,119 @@ async function collectMatches(dir: string, pattern: string): Promise<string[]> {
   const literalSegments = literalPatternSegments(pattern);
   // Compile the pattern once; the walker tests every entry against it.
   const matcher = globToRegExp(pattern);
+  // Read-ahead cache: pre-schedules readdir for child directories so I/O
+  // overlaps with the walker's CPU work, bounded at READAHEAD_CONCURRENCY.
+  const ra = new Readahead(READAHEAD_CONCURRENCY, signal);
 
-  async function walk(currentPath: string, relPath: string): Promise<boolean> {
+  /**
+   * Returns true when the caller should stop (cap hit or abort).
+   *
+   * The inner logic mirrors the original sequential walk exactly — same
+   * entry order, same denylist checks, same pruning — but replaces the
+   * inline `fs.readdir` call with `ra.get()`, which resolves instantly when
+   * a prior `ra.schedule()` call already completed the I/O.
+   */
+  async function walk(currentPath: string, realPath: string, relPath: string): Promise<boolean> {
     if (matches.length >= maxResults) {
       return true;
     }
+    if (signal?.aborted) {
+      throw new GlobAbortedError();
+    }
 
+    let entries;
     try {
-      const entries = await fs.readdir(currentPath, { withFileTypes: true });
+      entries = await ra.get(currentPath);
+    } catch (err) {
+      if (err instanceof GlobAbortedError) throw err;
+      return false; // inaccessible directory — skip silently
+    }
 
-      for (const entry of entries) {
-        if (matches.length >= maxResults) {
-          return true;
-        }
+    for (const entry of entries) {
+      if (matches.length >= maxResults) {
+        return true;
+      }
 
-        const entryPath = path.join(currentPath, entry.name);
-        // '/' is intentional here: entryRel lives in pattern-space (not OS
-        // path-space). Glob patterns are always normalized to '/' separators
-        // (see globToRegExp / literalPatternSegments above) so entryRel must
-        // also use '/' for matcher.test(entryRel) to work correctly on all
-        // platforms. It is never passed to fs APIs.
-        const entryRel = relPath ? `${relPath}/${entry.name}` : entry.name;
+      const entryPath = path.join(currentPath, entry.name);
+      const entryReal = path.join(realPath, entry.name);
+      // '/' is intentional here: entryRel lives in pattern-space (not OS
+      // path-space). Glob patterns are always normalized to '/' separators
+      // (see globToRegExp / literalPatternSegments above) so entryRel must
+      // also use '/' for matcher.test(entryRel) to work correctly on all
+      // platforms. It is never passed to fs APIs.
+      const entryRel = relPath ? `${relPath}/${entry.name}` : entry.name;
 
-        // The requested root has already passed resolveAndContain, but a
-        // readable parent may contain protected descendants. Check every
-        // entry before matching or recursion so neither filenames nor file
-        // contents beneath a read-denylist floor are exposed.
-        if (isReadDenied(entryPath).denied) {
+      // The requested root has already passed resolveAndContain, but a
+      // readable parent may contain protected descendants. Check every
+      // entry before matching or recursion so neither filenames nor file
+      // contents beneath a read-denylist floor are exposed.
+      const denied = entry.isSymbolicLink()
+        ? isReadDenied(entryPath).denied
+        : isCanonicalPathReadDenied(entryReal).denied;
+      if (denied) {
+        continue;
+      }
+
+      // Test if this entry matches the pattern
+      if (matcher.test(entryRel)) {
+        matches.push(entryRel);
+      }
+
+      // Recurse into directories to find deeper matches, but skip the
+      // default-pruned dirs (DEFAULT_PRUNE_DIRS) unless the caller
+      // named them literally in the pattern. The search root itself is
+      // never pruned here (it is walked directly, not as a child entry).
+      //
+      // Invariant: withFileTypes Dirents report symlinks as symlinks, never as
+      // directories, so isDirectory() is never true for a symlink — the guard
+      // below enforces this assumption explicitly so a future Node change or
+      // test double cannot silently violate it.
+      if (entry.isDirectory()) {
+        if (entry.isSymbolicLink()) {
+          // This branch should be unreachable: withFileTypes Dirents cannot be
+          // both isDirectory() and isSymbolicLink() simultaneously on any
+          // supported Node version. If somehow reached, recursing would derive
+          // a wrong canonical path (join(realPath, name) skips the symlink
+          // target), so we skip safely rather than mis-classify.
+          // Note: this guard does NOT replace the denylist check at the real
+          // prune site (~line 182 above, DEFAULT_PRUNE_DIRS). Do not remove
+          // that check thinking this guard covers it — it does not.
           continue;
         }
-
-        // Test if this entry matches the pattern
-        if (matcher.test(entryRel)) {
-          matches.push(entryRel);
+        if (DEFAULT_PRUNE_DIRS.has(entry.name) && !literalSegments.has(entry.name)) {
+          continue;
         }
-
-        // Recurse into directories to find deeper matches, but skip the
-        // default-pruned dirs (DEFAULT_PRUNE_DIRS) unless the caller
-        // named them literally in the pattern. The search root itself is
-        // never pruned here (it is walked directly, not as a child entry).
-        if (entry.isDirectory()) {
-          if (DEFAULT_PRUNE_DIRS.has(entry.name) && !literalSegments.has(entry.name)) {
-            continue;
-          }
-          const shouldStop = await walk(entryPath, entryRel);
-          if (shouldStop) {
-            return true;
-          }
+        // Schedule the child readdir ahead of the walk so I/O runs in
+        // parallel with the rest of this loop. The walker will await it
+        // via ra.get() when recursion actually begins.
+        //
+        // Intentional fast-path guard: the abort and cap checks here
+        // duplicate the identical checks at the top of walk(), but they
+        // avoid enqueuing a readdir that walk() would immediately discard
+        // (abort) or never consume (cap hit). Reads already in flight from
+        // prior schedule() calls complete normally — the consumer (walk)
+        // re-checks abort/cap before acting on any result, so that is safe.
+        if (!signal?.aborted && matches.length < maxResults) {
+          ra.schedule(entryPath);
+        }
+        const shouldStop = await walk(entryPath, entryReal, entryRel);
+        if (shouldStop) {
+          return true;
         }
       }
-    } catch {
-      // Silently skip inaccessible directories
     }
 
     return false;
   }
 
-  await walk(dir, '');
+  try {
+    // Pre-schedule the root directory read so it overlaps with any
+    // synchronous setup the caller does before the first await.
+    ra.schedule(dir);
+    await walk(dir, safeRealpath(dir), '');
+  } finally {
+    ra.drain();
+  }
   return matches;
 }
 
@@ -209,7 +290,7 @@ interface GlobInput {
  * `AgentSession.setCwd()` propagates on the next turn.
  */
 export function createGlobHandler(cwd?: string): ToolHandler {
-  return async (input: unknown, _signal: AbortSignal, context?: ToolHandlerContext) => {
+  return async (input: unknown, signal: AbortSignal, context?: ToolHandlerContext) => {
   // Validate input shape
   if (!input || typeof input !== 'object') {
     return { content: 'Invalid input: expected an object', isError: true };
@@ -219,11 +300,10 @@ export function createGlobHandler(cwd?: string): ToolHandler {
   const rawPattern = obj.pattern;
   // Effective cwd priority:
   // 1. context?.resolveBase — permission-system anchor (from dispatcher)
-  // 2. context?.cwd — per-call back-compat alias
-  // 3. factory-level cwd — session worktree isolation
-  // 4. process.cwd() fallback
+  // 2. factory-level cwd — session worktree isolation
+  // 3. process.cwd() fallback
   const explicitPath = obj.path !== undefined && obj.path !== null;
-  let rawPath = obj.path ?? context?.resolveBase ?? context?.cwd ?? cwd ?? process.cwd();
+  let rawPath = obj.path ?? context?.resolveBase ?? cwd ?? process.cwd();
 
   // Validate required field
   if (typeof rawPattern !== 'string') {
@@ -272,7 +352,7 @@ export function createGlobHandler(cwd?: string): ToolHandler {
     }
 
     // Collect matching files
-    const relMatches = await collectMatches(basePath, pattern);
+    const relMatches = await collectMatches(basePath, pattern, signal);
     const matches = absolute ? relMatches.map((m) => path.join(basePath, m)) : relMatches;
 
     // No matches
@@ -290,6 +370,10 @@ export function createGlobHandler(cwd?: string): ToolHandler {
 
     return { content: output };
   } catch (err) {
+    // Same wording as the grep handler's abort result.
+    if (err instanceof GlobAbortedError) {
+      return { content: 'Search aborted', isError: true };
+    }
     // Handle specific error types
     const known = fsErrorToToolResult(err, basePath, 'Path');
     if (known) return known;

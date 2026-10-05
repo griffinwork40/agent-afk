@@ -496,7 +496,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
         if (outcome.preserved) {
           debugLog(
             `[isolation] preserved worktree ${worktreePath} ` +
-              `(${outcome.reason ? describePreserveReason(outcome.reason) : 'unknown'}) — ` +
+              `(${outcome.reason ? describePreserveReason(outcome.reason, outcome.ignoredDetail, outcome.ignoredBecause) : 'unknown'}) — ` +
               `locked so the sweep will not reap it; recover via the worktree tool`,
           );
         }

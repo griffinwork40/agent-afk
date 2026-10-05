@@ -24,6 +24,7 @@
  */
 
 import { debugLog } from '../../utils/debug.js';
+import { runInTmpdirScope } from '../session/session-tmpdir.js';
 import { dispatchPostToolUse, dispatchPostToolUseFailure } from '../subagent-hooks.js';
 import { headAndTail } from './handlers/_output-cap.js';
 import { emitPreToolUseBlock } from './dispatcher.pre-dispatch-gates.js';
@@ -38,6 +39,7 @@ import type { ToolHandler, ToolHandlerContext } from './types.js';
 import type { TraceSink } from '../trace/index.js';
 import type { GrantManager } from './grant-manager.js';
 import type { PreDispatchGateDeps } from './dispatcher.pre-dispatch-gates.js';
+import type { DetachableToolRegistry } from './detach-registry.js';
 import { errorMessage } from '../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
@@ -77,6 +79,15 @@ export interface CoreExecDeps {
   /** Compose executor (backs the `compose` tool). */
   composeExecutor: ComposeExecutor | undefined;
   /**
+   * Detach registry for the Ctrl+B backgrounding contract (#2542).
+   *
+   * Forwarded to {@link executeCompose} so the compose executor can register
+   * its in-flight DAG and respond to detachment (mirrors the dispatcher's own
+   * `callHandlerContext` path that injects this for bash). Present only on
+   * REPL surfaces where a background-result notifier can inject the late result.
+   */
+  detachRegistry?: DetachableToolRegistry;
+  /**
    * Per-call handler context factory. The class supplies this as an arrow
    * calling its own private `callHandlerContext(call)` method so the free
    * functions here never need the class reference.
@@ -93,6 +104,12 @@ export interface CoreExecDeps {
    * to build the "available tools" hint. Corresponds to `toolDefs` on the class.
    */
   toolDefs: readonly AnthropicToolDef[];
+  /**
+   * This session's private TMPDIR (session-tmpdir.ts). Every call runs inside
+   * it as the async scope so forks created by `agent`/`skill`/`compose` nest
+   * their own temp dir under this session's.
+   */
+  tmpdirScope?: string | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -264,6 +281,10 @@ export function applyOutputCap(result: ToolResult, deps: CoreExecDeps): ToolResu
 /**
  * Compose tool dispatch wrapper. Returns an error result when no executor
  * is configured rather than throwing.
+ *
+ * Forwards `deps.detachRegistry` so the compose executor can register its
+ * in-flight DAG and respond to Ctrl+B detachment (#2542). The registry is
+ * absent on headless surfaces (no REPL to inject the late result).
  */
 export async function executeCompose(call: ToolCall, deps: CoreExecDeps): Promise<ToolResult> {
   if (!deps.composeExecutor) {
@@ -273,7 +294,7 @@ export async function executeCompose(call: ToolCall, deps: CoreExecDeps): Promis
     };
   }
   try {
-    return await deps.composeExecutor.execute(call);
+    return await deps.composeExecutor.execute(call, deps.detachRegistry);
   } catch (err) {
     const message = errorMessage(err);
     return { content: `Compose tool error: ${message}`, isError: true };
@@ -374,6 +395,6 @@ export async function executeCoreInner(call: ToolCall, deps: CoreExecDeps): Prom
  * PostToolUse has already observed the full, uncapped content.
  */
 export async function executeCore(call: ToolCall, deps: CoreExecDeps): Promise<ToolResult> {
-  const result = await executeCoreInner(call, deps);
+  const result = await runInTmpdirScope(deps.tmpdirScope, () => executeCoreInner(call, deps));
   return applyOutputCap(result, deps);
 }

@@ -5,7 +5,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, isAbsolute } from 'node:path';
 import {
   slugify,
   resolveSlugCollision,
@@ -680,5 +680,45 @@ describe('schedule-store cwd field', () => {
     expect(loaded[0]?.cwd).toBeUndefined();
     const task = toScheduledTask(loaded[0]!);
     expect('cwd' in task).toBe(false);
+  });
+
+  it('updateSchedule with cwd: null clears a previously-set cwd', () => {
+    setup();
+    const config = addSchedule(
+      { name: 'Clear Cwd', command: '/c', cron: '0 2 * * *', enabled: true, cwd: realDir },
+      storePath,
+    );
+    expect(config.cwd).toBe(realDir);
+    const cleared = updateSchedule(config.id, { cwd: null }, storePath);
+    expect(cleared?.cwd).toBeUndefined();
+    expect('cwd' in (cleared ?? {})).toBe(false);
+    // Persisted correctly
+    const loaded = loadSchedules(storePath);
+    expect(loaded[0]?.cwd).toBeUndefined();
+  });
+
+  it('toScheduledTask expands tilde in cwd from hand-edited schedules', () => {
+    setup();
+    // Simulate a hand-edited schedules.json with a tilde path
+    const raw = JSON.stringify([
+      {
+        id: 'tilde-task',
+        name: 'Tilde',
+        command: '/t',
+        cron: '* * * * *',
+        enabled: true,
+        cwd: '~',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      },
+    ]);
+    writeFileSync(storePath, raw, 'utf-8');
+    const loaded = loadSchedules(storePath);
+    const task = toScheduledTask(loaded[0]!);
+    // Should be the expanded home directory, not the literal '~'
+    expect(task.cwd).not.toBe('~');
+    // Use path.isAbsolute instead of startsWith('/') so the assertion is
+    // platform-neutral (Windows absolute paths start with a drive letter).
+    expect(isAbsolute(task.cwd ?? '')).toBe(true);
   });
 });

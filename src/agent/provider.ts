@@ -22,6 +22,7 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AgentConfig } from './types/config-types.js';
 import type { ToolFailureClass } from './trace/types.js';
+import type { UsageLimitProvider } from '../utils/errors.js';
 
 /**
  * Normalized session identity emitted on the synthetic `session.init` event.
@@ -147,13 +148,6 @@ export type ProviderEvent =
       toolInput: string;
       /** Raw JSON-serialized tool input object — used by facet derivation for exact field extraction. */
       toolInputRaw?: string;
-      /**
-       * Verbatim tool input for CAPTURE purposes only (subagent-output-capture).
-       * Includes `command` (secret-redacted) at a generous CAPTURE_FIELD_CAP byte
-       * ceiling. Do NOT read this in derive.ts or the session sidecar — those
-       * consumers require the strict RAW_INPUT_FIELDS whitelist in toolInputRaw.
-       */
-      toolInputCapture?: string;
       /**
        * Contract: `true` marks a PENDING paint — the block was announced but its
        * arguments have not finished streaming, so `toolInput` is a placeholder
@@ -376,6 +370,26 @@ export type ProviderEvent =
        * (auto-resume → "no need to retype"; manual → "send the message again").
        */
       autoResume?: boolean;
+      /**
+       * Absolute wall-clock deadline by which this park will end (either by
+       * resuming or by surfacing the error). Present when the provider has
+       * bounded the park (e.g. the hot-swap wait loop capped at TWO_HOURS_MS).
+       * Absent for unbounded parks. The watchdog and pause-ceiling prefer this
+       * over `resetsAt` when present, because `resetsAt` may be days away (a
+       * far-reset park) while `waitDeadline` is always the actual exit time.
+       * MUST NOT be used by UI layers to show "resumes at X" copy — that role
+       * belongs to `resetsAt`. Use only for timeout arithmetic.
+       */
+      waitDeadline?: Date;
+      /**
+       * Which subscription hit its limit. `'anthropic'` = Claude, `'codex'` =
+       * the ChatGPT/Codex subscription backend. Absent means unknown (a
+       * generic OpenAI-compatible quota 429); UI layers treat absent as the
+       * legacy Claude copy for backward compatibility.
+       */
+      provider?: UsageLimitProvider;
+      /** Subscription plan label when the provider reports one (e.g. `plus`). */
+      plan?: string;
     }
   | {
       type: 'resumed';
@@ -464,6 +478,14 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
    */
   rewindConversation?(turnIndex: number): Promise<ProviderRewindConversationResult>;
   /**
+   * Optional. The live conversation in provider-neutral journal form (synced
+   * first, so it is current), or `undefined` when this query keeps no
+   * journal. The provider router hands it to a swapped-in inner as
+   * `resumeMessages` so a `/model` swap continues the CURRENT conversation,
+   * not the process-start resume snapshot (docs/message-journal.md).
+   */
+  journalSnapshot?(): import('./journal/types.js').JournalMessage[] | undefined;
+  /**
    * Optional. Update the working directory used by the system prompt and
    * tool handlers for all **subsequent** turns in this query's lifetime.
    *
@@ -491,11 +513,9 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
    * hot-reload it did not achieve, so a `false` here means "saved to disk,
    * applies on next launch".
    *
-   * Implemented by `AnthropicDirectQuery` and forwarded by `ProviderRouter`.
-   * `OpenAICompatibleQuery` deliberately leaves this undefined — it assembles
-   * its system parts as locals inside `query()` rather than retaining them on
-   * the instance, so a live swap there needs the #876 staleness rework first.
-   * `AgentSession.setSystemPrompt()` calls this only when present.
+   * Implemented by `AnthropicDirectQuery`, `OpenAICompatibleQuery`, and
+   * forwarded by `ProviderRouter`. `AgentSession.setSystemPrompt()` calls
+   * this only when present.
    */
   setSystemPrompt?(basePrompt: string | undefined): boolean;
   /**
@@ -507,6 +527,17 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
    * `AgentSession.setBeforeNextRound()` calls this only when present.
    */
   setBeforeNextRound?(cb: (() => string | undefined) | undefined): void;
+  /**
+   * Optional. Wire the provider-side stop-hook seam (issue #2714).
+   * When wired, the provider calls this callback before emitting `turn.completed`
+   * on natural turn ends. A return value of `{ continueWith: string }` causes
+   * the provider to push a framework user message and re-enter the model loop
+   * in the same turn. `undefined` / `{}` ends the turn normally.
+   *
+   * Wired by `AgentSession.wireStopHook()` via the session layer, so the same
+   * mechanism that delivers Stop on every surface also enables continuation.
+   */
+  setBeforeTurnEnd?(cb: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined): void;
   /**
    * Optional. Force a fresh SDK client by re-reading whatever credential
    * source the provider uses (e.g. the macOS Keychain for OAuth tokens).
@@ -525,7 +556,7 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
    * Implemented by `AnthropicDirectQuery`. Providers that do not implement
    * leave it undefined; `AgentSession.reauth()` returns `null` in that case.
    */
-  reauth?(): Promise<{ accountId: string; swapped: boolean } | null>;
+  reauth?(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null>;
   close(): void | Promise<void>;
 }
 
@@ -636,6 +667,12 @@ export interface ProviderCompactResult {
     blocksCleared: number;
     /** Total content bytes reclaimed. */
     bytesReclaimed: number;
+    /**
+     * Message index of the earliest cleared block. The edit is IN PLACE on
+     * already-journaled messages, so the provider re-syncs its message
+     * journal from here (docs/message-journal.md).
+     */
+    firstClearedIndex?: number;
   };
 }
 

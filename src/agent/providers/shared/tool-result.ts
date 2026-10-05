@@ -64,6 +64,14 @@ export interface ToolResult {
   blockReason?: string;
   batchIndex?: number;
   batchSize?: number;
+  /**
+   * Wall-clock timestamp (Date.now()) recorded by the batch dispatcher when
+   * this call's handler promise settled — stamped per-call so trace events
+   * carry the individual call's elapsed time rather than the whole batch's.
+   * Set by executeCallUnit (concurrent path) and runSequentialBatch.
+   * Not model-facing. See issue #2249.
+   */
+  completedAt?: number;
   render?: RenderHints;
   testResult?: import('../../tools/handlers/test-runner-detector.js').TestResult;
   image?: {

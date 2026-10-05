@@ -127,6 +127,9 @@ export function rewindConversationHistory(
   // new tail is normally clean — but repair covers histories restored from an
   // older persist that leaked an orphan.
   repairOrphanToolUses(state.messages);
+  // Journal the rewind as a truncate at the divergence (plus any repair).
+  state.journalSync.sync(state.messages, { reason: 'rewind' });
+  state.messageJournal?.mark('rewind', { turnIndex });
 
   return {
     rewound: true,

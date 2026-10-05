@@ -35,6 +35,13 @@ import { buildSkillManifest, type PluginSkillBody } from './skill-bridge.js';
 import { RECON_ALLOWED_TOOLS } from './nesting.js';
 import { errorMessage } from '../../utils/errors.js';
 
+// Captured at module load, BEFORE any test installs a `vi.spyOn` on the
+// namespace export. Since Vitest 3, `vi.spyOn` on an already-spied export
+// returns that same spy, so reading `SubagentExecutorModule.SubagentExecutor`
+// inside a later test would capture the spy itself and the pass-through
+// `new OriginalSubagentExecutor(...)` would recurse forever.
+const RealSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+
 const abortSignal = new AbortController().signal;
 
 function makeCall(input: unknown) {
@@ -1330,8 +1337,9 @@ describe('SkillExecutor', () => {
 
       expect(result.isError).toBeUndefined();
       expect(resolveApiKeyForModel).toHaveBeenCalledWith('sonnet');
-      expect((capture.get() as unknown as { parentApiKey: string | undefined }).parentApiKey)
-        .toBe('anthropic-keychain-token');
+      const mgr1 = capture.get() as unknown as { parentApiKey: (() => string | undefined) | undefined };
+      expect(typeof mgr1.parentApiKey).toBe('function');
+      expect(mgr1.parentApiKey!()).toBe('anthropic-keychain-token');
     });
 
     it('calls resolveCredentialForModel directly when no resolver is injected', async () => {
@@ -1356,8 +1364,9 @@ describe('SkillExecutor', () => {
       await executor.execute(makeCall({ name: 'fork-skill-legacy' }));
 
       expect(mockResolveCredentialForModel).toHaveBeenCalledWith('sonnet');
-      expect((capture.get() as unknown as { parentApiKey: string | undefined }).parentApiKey)
-        .toBe('resolved-test-credential');
+      const mgr2 = capture.get() as unknown as { parentApiKey: (() => string | undefined) | undefined };
+      expect(typeof mgr2.parentApiKey).toBe('function');
+      expect(mgr2.parentApiKey!()).toBe('resolved-test-credential');
     });
   });
 
@@ -1952,9 +1961,9 @@ describe('SkillExecutor', () => {
       });
 
       const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
-      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      const OriginalSubagentExecutor = RealSubagentExecutor;
       vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
-        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+        function (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) {
           capturedCtorArgs.push(args);
           return new OriginalSubagentExecutor(...args);
         },
@@ -2004,9 +2013,9 @@ describe('SkillExecutor', () => {
       });
 
       const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
-      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      const OriginalSubagentExecutor = RealSubagentExecutor;
       vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
-        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+        function (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) {
           capturedCtorArgs.push(args);
           return new OriginalSubagentExecutor(...args);
         },
@@ -2061,9 +2070,9 @@ describe('SkillExecutor', () => {
       });
 
       const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
-      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      const OriginalSubagentExecutor = RealSubagentExecutor;
       vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
-        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+        function (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) {
           capturedCtorArgs.push(args);
           return new OriginalSubagentExecutor(...args);
         },
@@ -2114,9 +2123,9 @@ describe('SkillExecutor', () => {
       });
 
       const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
-      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      const OriginalSubagentExecutor = RealSubagentExecutor;
       vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
-        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+        function (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) {
           capturedCtorArgs.push(args);
           return new OriginalSubagentExecutor(...args);
         },
@@ -2159,9 +2168,9 @@ describe('SkillExecutor', () => {
       });
 
       const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
-      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      const OriginalSubagentExecutor = RealSubagentExecutor;
       vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
-        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+        function (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) {
           capturedCtorArgs.push(args);
           return new OriginalSubagentExecutor(...args);
         },
@@ -2206,9 +2215,9 @@ describe('SkillExecutor', () => {
       });
 
       const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
-      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      const OriginalSubagentExecutor = RealSubagentExecutor;
       vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
-        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+        function (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) {
           capturedCtorArgs.push(args);
           return new OriginalSubagentExecutor(...args);
         },
@@ -3193,4 +3202,85 @@ describe('SkillExecutor', () => {
     });
   });
 
+});
+
+describe('SkillExecutor — hidden skills stay dispatchable (slash path round-trips through the skill tool)', () => {
+  let tmpAfkHome: string;
+  let tmpCwd: string;
+  let origCwd: string;
+
+  beforeEach(() => {
+    _resetRegistry();
+    tmpAfkHome = mkdtempSync(join(tmpdir(), 'skill-executor-hidden-afkhome-'));
+    tmpCwd = mkdtempSync(join(tmpdir(), 'skill-executor-hidden-cwd-'));
+    origCwd = process.cwd();
+    vi.stubEnv('AFK_HOME', tmpAfkHome);
+    process.chdir(tmpCwd);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    process.chdir(origCwd);
+    try { rmSync(tmpAfkHome, { recursive: true }); } catch { /* non-fatal */ }
+    try { rmSync(tmpCwd, { recursive: true }); } catch { /* non-fatal */ }
+  });
+
+  function makeExecutor() {
+    return new SkillExecutor({
+      parentSession: {
+        sessionId: 'test',
+        getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+        abortSignal,
+      },
+    });
+  }
+
+  it('dispatches a skill with disableModelInvocation:true (a /name slash command arrives this way)', async () => {
+    const handler = vi.fn().mockResolvedValue('hidden output');
+    registerSkill({
+      name: 'no-model-skill',
+      description: 'Hidden from model',
+      handler,
+      disableModelInvocation: true,
+    });
+
+    const executor = makeExecutor();
+    const result = await executor.execute(makeCall({ name: 'no-model-skill' }));
+
+    expect(result.isError).toBeUndefined();
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('dispatches a skill hidden via skills.hidden config', async () => {
+    mkdirSync(join(tmpAfkHome, 'config'), { recursive: true });
+    writeFileSync(
+      join(tmpAfkHome, 'config', 'afk.config.json'),
+      JSON.stringify({ skills: { hidden: ['config-model-hidden'] } }),
+    );
+    const handler = vi.fn().mockResolvedValue('hidden output');
+    registerSkill({
+      name: 'config-model-hidden',
+      description: 'Hidden via config',
+      handler,
+    });
+
+    const executor = makeExecutor();
+    const result = await executor.execute(makeCall({ name: 'config-model-hidden' }));
+
+    expect(result.isError).toBeUndefined();
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('non-hidden skills are still invocable by the model', async () => {
+    registerSkill({
+      name: 'model-ok-skill',
+      description: 'Visible to model',
+      handler: vi.fn().mockResolvedValue('output'),
+    });
+
+    const executor = makeExecutor();
+    const result = await executor.execute(makeCall({ name: 'model-ok-skill' }));
+
+    expect(result.isError).toBeUndefined();
+  });
 });

@@ -22,13 +22,16 @@ import type { ChildProviderFactoryArgs } from '../nesting.js';
 import type { Surface } from '../../awareness/types.js';
 import type { ReadScopeInputs } from '../../subagent-read-scope.js';
 import type { SkillExecutor } from '../skill-executor.js';
+import type { JournalParent } from '../../subagent/fork-types.js';
 
 export interface SkillExecutorContext {
   parentSession: Pick<IAgentSession, 'sessionId' | 'getInputStreamRef' | 'abortSignal'> &
     // Optional: a skill orchestrator forked under a parent that exposes its
     // hook registry dispatches SubagentStop (incl. the shadow-verify nudge)
     // back to that parent. See SubagentManager.forkSubagent's parent fallback.
-    Partial<Pick<IAgentSession, 'hookRegistry'>>;
+    Partial<Pick<IAgentSession, 'hookRegistry'>> &
+    // Optional journal view; skill forks journal to its `forSubagent(id)`.
+    JournalParent;
   defaultModel?: string;
   /**
    * User-facing surface of the session that owns this executor (cli/telegram/
@@ -106,6 +109,9 @@ export interface SkillExecutorContext {
     inheritedCwd?: string,
     inheritedReadScope?: ReadScopeInputs,
     skillDispatchName?: string,
+    // Forking child's journal view (read lazily): nested skill forks journal
+    // via its `forSubagent(id)`. Absent → nested skill forks run unjournaled.
+    journalParent?: JournalParent,
   ) => SkillExecutor;
   /**
    * Witness-layer trace writer. When provided, the per-call

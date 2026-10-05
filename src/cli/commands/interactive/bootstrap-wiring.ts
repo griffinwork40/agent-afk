@@ -117,6 +117,29 @@ export function wireProviderGrants(
  * suspend/resume works at invocation time even though the surface isn't
  * armed yet at install time.
  */
+/**
+ * Allocate the two session-scoped mutable refs that bridge per-turn renderer
+ * state back to the session context (issues #1505 and #1506).
+ *
+ *   - `bashTailSetter`  — set by the per-turn StreamRenderer; drives the live
+ *                         tail badge on the tool lane.
+ *   - `capturePathRef`  — written by the turn-handler finally path after each
+ *                         turn; holds the most-recent large-output capture file
+ *                         path so Ctrl+G can open the viewer.
+ *
+ * Extracted from `bootstrapSession` so the grandfathered function does not
+ * grow beyond its baselined ceiling (issue #1505).
+ */
+export function createTurnBridgeRefs(): {
+  bashTailSetter: { current: ((toolUseId: string, tail: string | undefined) => void) | undefined };
+  capturePathRef: { current: string | undefined };
+} {
+  return {
+    bashTailSetter: { current: undefined },
+    capturePathRef: { current: undefined },
+  };
+}
+
 export function createReplInput(): {
   rl: readline.Interface;
   inputSurfaceRef: { current: InputSurface | null };

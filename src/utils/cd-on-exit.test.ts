@@ -21,7 +21,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname as pathDirname, join, resolve } from 'node:path';
 
 import {
   clearCdIntent,
@@ -122,7 +122,7 @@ describe('cd-on-exit', () => {
     // on the parent succeeds but writeFileSync to last-cwd fails because
     // a path component is a file, not a directory.
     const stateDir = join(tmp, 'state');
-    mkdirSync(dirname(stateDir), { recursive: true });
+    mkdirSync(pathDirname(stateDir), { recursive: true });
     writeFileSync(stateDir, 'not-a-dir', 'utf8');
     // Use tmpdir()-relative absolute path instead of '/x' so that on Windows
     // resolve() does not produce a drive-root path where mkdirSync throws
@@ -210,8 +210,3 @@ describe('cd-on-exit', () => {
   });
 });
 
-// Local dirname helper to avoid an extra import on the type-checker.
-function dirname(p: string): string {
-  const i = p.lastIndexOf('/');
-  return i <= 0 ? '/' : p.slice(0, i);
-}

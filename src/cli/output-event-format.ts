@@ -31,12 +31,12 @@ export function formatOutputEvent(event: OutputEvent): string | null {
     const chunk = event.chunk;
     if (chunk.type === 'content') return stripEscapeSequences(chunk.content);
     if (chunk.type === 'tool_use_detail') {
-      return palette.dim(`  [tool: ${chunk.toolName}]`);
+      return palette.dim(`  [tool: ${stripEscapeSequences(chunk.toolName)}]`);
     }
     return null;
   }
   if (event.type === 'error') {
-    return palette.dim(`  [error: ${event.error.message}]`);
+    return palette.dim(`  [error: ${stripEscapeSequences(event.error.message)}]`);
   }
   if (event.type === 'message') {
     const c = event.message.content;

@@ -14,6 +14,7 @@ import {
   createWhatifEpisodeGate,
   resetWhatifEpisodeGateForTests,
   EPISODE_BLOCK_REASON,
+  EPISODE_ASK_BLOCK_REASON,
 } from './whatif-episode-gate.js';
 import type { HookContext } from './hooks.js';
 
@@ -376,5 +377,98 @@ describe('tool log lines shape', () => {
     const gate = createWhatifEpisodeGate();
     // Must not throw even when log write fails
     expect(() => gate(makePreToolUse('read_file', {}))).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #2600: ask_question is observable in episodes
+// ---------------------------------------------------------------------------
+
+describe('ask_question: observable intent signal (issue #2600)', () => {
+  beforeEach(() => {
+    vi.stubEnv('AFK_WHATIF_EPISODE', '1');
+  });
+
+  it('blocks ask_question with EPISODE_ASK_BLOCK_REASON', () => {
+    const gate = createWhatifEpisodeGate();
+    const result = gate(makePreToolUse('ask_question', { question: 'Which approach?' }));
+    expect(result).toEqual({ decision: 'block', reason: EPISODE_ASK_BLOCK_REASON });
+  });
+
+  it('logs ask_question as executed (not recorded)', () => {
+    const logPath = join(tmp, 'ask-log.jsonl');
+    vi.stubEnv('AFK_WHATIF_TOOL_LOG', logPath);
+    const gate = createWhatifEpisodeGate();
+    gate(makePreToolUse('ask_question', { question: 'What do you prefer?' }));
+
+    const line = JSON.parse(readFileSync(logPath, 'utf-8').trim()) as Record<string, unknown>;
+    expect(line['tool']).toBe('ask_question');
+    expect(line['verdict']).toBe('executed');
+  });
+
+  it('does NOT set the latch: read-only tools still execute after ask_question', () => {
+    const gate = createWhatifEpisodeGate();
+    // ask_question first — should not latch
+    gate(makePreToolUse('ask_question', { question: 'Which option?' }));
+    // read_file should still be allowed
+    const result = gate(makePreToolUse('read_file', { file_path: '/tmp/x' }));
+    expect(result).toEqual({});
+  });
+
+  it('does NOT set the latch: mutating tools after ask_question trigger first recorded verdict', () => {
+    const logPath = join(tmp, 'ask-then-write.jsonl');
+    vi.stubEnv('AFK_WHATIF_TOOL_LOG', logPath);
+    const gate = createWhatifEpisodeGate();
+    // ask first — no latch
+    gate(makePreToolUse('ask_question', { question: 'Confirm?' }));
+    // write_file is the FIRST recorded verdict (not caught by latch from ask_question)
+    const result = gate(makePreToolUse('write_file', { file_path: '/tmp/y', content: 'z' }));
+    expect(result).toEqual({ decision: 'block', reason: EPISODE_BLOCK_REASON });
+
+    const lines = readFileSync(logPath, 'utf-8').trim().split('\n');
+    expect(lines).toHaveLength(2);
+    const first = JSON.parse(lines[0]!) as Record<string, unknown>;
+    expect(first['tool']).toBe('ask_question');
+    expect(first['verdict']).toBe('executed');
+    const second = JSON.parse(lines[1]!) as Record<string, unknown>;
+    expect(second['tool']).toBe('write_file');
+    expect(second['verdict']).toBe('recorded');
+  });
+
+  it('ask_question after latch fires is blocked with EPISODE_BLOCK_REASON (not ask reason)', () => {
+    const gate = createWhatifEpisodeGate();
+    // Trigger latch with a write first
+    gate(makePreToolUse('write_file', {}));
+    // Now ask_question — latch wins
+    const result = gate(makePreToolUse('ask_question', { question: 'Too late?' }));
+    expect(result).toEqual({ decision: 'block', reason: EPISODE_BLOCK_REASON });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #2425: block reason must be neutral — no "what-if" or "sandbox" wording
+// ---------------------------------------------------------------------------
+
+describe('EPISODE_BLOCK_REASON neutrality (issue #2425)', () => {
+  it('does not contain "what-if" (case-insensitive)', () => {
+    expect(EPISODE_BLOCK_REASON.toLowerCase()).not.toContain('what-if');
+  });
+
+  it('does not contain "sandbox" (case-insensitive)', () => {
+    expect(EPISODE_BLOCK_REASON.toLowerCase()).not.toContain('sandbox');
+  });
+});
+
+describe('EPISODE_ASK_BLOCK_REASON neutrality (issue #2425)', () => {
+  it('does not contain "what-if" (case-insensitive)', () => {
+    expect(EPISODE_ASK_BLOCK_REASON.toLowerCase()).not.toContain('what-if');
+  });
+
+  it('does not contain "sandbox" (case-insensitive)', () => {
+    expect(EPISODE_ASK_BLOCK_REASON.toLowerCase()).not.toContain('sandbox');
+  });
+
+  it('does not contain "experiment" (case-insensitive)', () => {
+    expect(EPISODE_ASK_BLOCK_REASON.toLowerCase()).not.toContain('experiment');
   });
 });

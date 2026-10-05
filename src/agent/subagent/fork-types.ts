@@ -17,6 +17,7 @@ import type { SubagentProgressSink, OutputEvent } from '../types/session-types.j
 import type { TraceSink } from '../trace/index.js';
 import type { Surface } from '../awareness/types.js';
 import type { PhaseRole } from '../tools/nesting.js';
+import type { MessageJournal } from '../journal/index.js';
 
 export interface ForkParent {
   sessionId?: string;
@@ -26,6 +27,19 @@ export interface ForkParent {
    * to `sessionId` when not set.
    */
   id?: string;
+  /** See {@link JournalParent}. */
+  readonly messageJournal?: MessageJournal;
+}
+
+/**
+ * Optional message-journal view of a forking parent. When present, the child
+ * journals to `parent.messageJournal.forSubagent(childId)`
+ * (`sessions/<parentId>/subagents/<childId>.jsonl`); when absent (stub parents,
+ * DAG nodes) the child runs unjournaled. Never the parent's own journal: see
+ * the invariant in ./fork-child-config.ts.
+ */
+export interface JournalParent {
+  readonly messageJournal?: MessageJournal;
 }
 
 export interface ForkSubagentOptions<T = unknown> {
@@ -40,7 +54,8 @@ export interface ForkSubagentOptions<T = unknown> {
    * the child config. This is why the shadow-verify nudge reaches the parent.
    */
   parent: Pick<IAgentSession, 'sessionId'> &
-    Partial<Pick<IAgentSession, 'getInputStreamRef' | 'abortSignal' | 'hookRegistry'>>;
+    Partial<Pick<IAgentSession, 'getInputStreamRef' | 'abortSignal' | 'hookRegistry'>> &
+    JournalParent;
   /** Child config. `resume`/`forkSession` are managed by this module. */
   config: AgentConfig;
   /** Optional prefix to help identify subagents in logs. */
@@ -147,6 +162,40 @@ export interface ForkSubagentOptions<T = unknown> {
    * for the canonical allowlist.
    */
   phaseRole?: PhaseRole;
+  /**
+   * The nested-dispatch allowlist for the child this fork creates. Derived from
+   * `resolvedAccess.nestedAgentTypes` in `buildChildConfig` and threaded here so
+   * `assembleChildConfig` can surface it in the identity preamble. When present,
+   * the preamble tells the child which `agent_type` values it may dispatch.
+   *
+   * Invariant: this value MUST equal what `SubagentExecutorContext.nestedAgentAllowlist`
+   * is set to for the child's executor (child-config.ts). Text and enforcement
+   * derive from one value. See identity-preamble.ts `SubagentIdentityFacts.nestedAgentAllowlist`.
+   *
+   * Undefined = unscoped (no restriction emitted). Empty array = deny-all.
+   */
+  nestedAgentAllowlist?: readonly string[];
+}
+
+/**
+ * A credential paired with the model it was resolved for.
+ *
+ * Bundling these two fields prevents the key/provider mismatch that caused the
+ * compose 401 (#2844): `applyManagerApiKeyFallback` derives `parentProvider`
+ * from `sourceModel`, so both values come from a single authoritative source
+ * rather than being supplied as independent options that can be mismatched.
+ *
+ * Use this instead of the separate `apiKey` + `parentModel` options whenever
+ * a credential is available at construction time. The getter form of `key` is
+ * preferred for long-lived managers (fix #2471): it lets the credential be
+ * re-read at fork time so a mid-session `/reauth` or usage-limit hot-swap is
+ * reflected in every child forked after it.
+ */
+export interface ParentCredential {
+  /** The API key (or OAuth token) the parent session runs with. */
+  key: string | (() => string | undefined);
+  /** The model the credential was resolved for (provider source of truth). */
+  sourceModel: string;
 }
 
 export interface SubagentManagerOptions {
@@ -179,11 +228,36 @@ export interface SubagentManagerOptions {
    */
   progressSink?: SubagentProgressSink;
   /**
+   * Paired credential — the API key (or token) together with the model it was
+   * resolved for. Prefer this over the separate `apiKey` + `parentModel`
+   * options (#2844): bundling them makes a key/provider mismatch impossible to
+   * express at the type level, ensuring `applyManagerApiKeyFallback` always
+   * uses the credential's real provider.
+   *
+   * When both `parentCredential` and the legacy `apiKey`/`parentModel` are
+   * supplied, `parentCredential` takes precedence.
+   *
+   * The getter form of `key` is preferred for long-lived managers (fix #2471):
+   * it lets the credential be re-read at fork time so a mid-session `/reauth`
+   * or usage-limit hot-swap is reflected in every child forked after it.
+   */
+  parentCredential?: ParentCredential;
+  /**
    * API key (or OAuth token) inherited by all forked children whose
    * `config.apiKey` is missing or empty. Mirrors the hookRegistry /
    * permissionBubbler auto-fill pattern in {@link SubagentManager.forkSubagent}.
+   *
+   * May be a plain string (backward-compatible) or a zero-arg getter.
+   * The getter form is preferred for long-lived managers (fix #2471): it
+   * lets the credential be re-read at fork time so a mid-session `/reauth`
+   * or usage-limit hot-swap is reflected in every child forked after it.
+   *
+   * @deprecated Use {@link parentCredential} instead — pairing the key with its
+   * source model prevents provider mismatches (#2844). This option remains
+   * backward-compatible but degrades to key-shape inference when `parentModel`
+   * is also absent.
    */
-  apiKey?: string;
+  apiKey?: string | (() => string | undefined);
   /**
    * Local-server base URL inherited by all forked children whose
    * `config.baseUrl` is missing. Ensures subagents spawned by the `agent`
@@ -201,6 +275,9 @@ export interface SubagentManagerOptions {
    * degrades to key-shape inference (forward guard only) — pass this wherever
    * `apiKey` is provided to get both-direction protection. See
    * `applyManagerApiKeyFallback` in ./tools/child-credential.ts.
+   *
+   * @deprecated Use {@link parentCredential} instead — `parentCredential.sourceModel`
+   * provides the same information atomically paired with the key (#2844).
    */
   parentModel?: string;
   /**
@@ -296,4 +373,20 @@ export interface SubagentManagerOptions {
    * phase forks count against the same tree-wide counters.
    */
   delegationBudget?: import('../tools/delegation-budget.js').DelegationBudget;
+}
+
+/**
+ * Resolve the effective `(key, sourceModel)` pair from `SubagentManagerOptions`.
+ *
+ * Precedence: `parentCredential` wins over separate `apiKey` + `parentModel`.
+ * See `SubagentManagerOptions.parentCredential` for the rationale (#2844).
+ */
+export function resolveParentCredential(options: SubagentManagerOptions): {
+  effectiveKey: string | (() => string | undefined) | undefined;
+  effectiveModel: string | undefined;
+} {
+  if (options.parentCredential !== undefined) {
+    return { effectiveKey: options.parentCredential.key, effectiveModel: options.parentCredential.sourceModel };
+  }
+  return { effectiveKey: options.apiKey, effectiveModel: options.parentModel };
 }

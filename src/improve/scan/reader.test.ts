@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parseDuration, parseTraceContent, scanWitness } from './reader.js';
 
@@ -195,8 +195,8 @@ describe('pathRelativeTo (via scanWitness)', () => {
     const result = scanWitness({ witnessRoot, afkHome: tmp });
     expect(result.sessionsScanned).toBe(1);
     const session = result.sessions[0]!;
-    // relativeTracePath should be relative, not absolute
-    expect(session.relativeTracePath).not.toMatch(/^\//);
+    // relativeTracePath should be relative, not absolute (cross-platform check)
+    expect(isAbsolute(session.relativeTracePath)).toBe(false);
     expect(session.relativeTracePath).toContain('witness');
   });
 
@@ -214,7 +214,7 @@ describe('pathRelativeTo (via scanWitness)', () => {
     const result = scanWitness({ witnessRoot, afkHome });
     expect(result.sessionsScanned).toBe(1);
     const session = result.sessions[0]!;
-    // Must NOT have stripped the prefix; the path should still be absolute
-    expect(session.relativeTracePath).toMatch(/^\//);
+    // Must NOT have stripped the prefix; the path should still be absolute (cross-platform check)
+    expect(isAbsolute(session.relativeTracePath)).toBe(true);
   });
 });

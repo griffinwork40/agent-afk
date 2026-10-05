@@ -9,6 +9,7 @@
  */
 
 import { runBuiltinWorktreePruneTask } from './worktree-prune-task.js';
+import { runBuiltinToolHealthTask } from './tool-health-task.js';
 import type { TelemetryRecord, TelemetryTrigger } from './scheduler.js';
 
 export interface BuiltinTaskOptions {
@@ -30,6 +31,10 @@ export async function runBuiltinTask(
 ): Promise<TelemetryRecord> {
   if (task.command === 'worktree-prune') {
     return runBuiltinWorktreePruneTask(task, trigger, options);
+  }
+
+  if (task.command === 'tool-health') {
+    return runBuiltinToolHealthTask(task, trigger, options);
   }
 
   // Unknown builtin -- should not happen if validateScheduledTask caught it

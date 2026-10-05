@@ -28,6 +28,8 @@
 import type { MessageParam } from '@anthropic-ai/sdk/resources';
 import type { ProviderUsage } from '../../../provider.js';
 import type { ToolDispatcher } from '../tool-dispatcher.js';
+import { JournalSync, type MessageJournal } from '../../../journal/index.js';
+import { anthropicJournalAdapter } from '../journal-adapter.js';
 
 /**
  * Per-session mutable state. Construct one with {@link createSessionState}
@@ -111,6 +113,17 @@ export interface SessionState {
    * `this.compact()` when truthy — subject to the `abort.isIdle()` guard.
    */
   autoCompactThreshold: number | undefined;
+
+  /**
+   * Differ that mirrors {@link messages} into the session's message journal
+   * (docs/message-journal.md). Always present; a no-op when no journal is
+   * wired. Seeded with the initial (resumed) messages at construction; the
+   * loop calls `sync(messages)` at its commit points.
+   */
+  readonly journalSync: JournalSync<MessageParam>;
+
+  /** The raw journal behind {@link journalSync}, for `mark` annotations. */
+  readonly messageJournal: MessageJournal | undefined;
 }
 
 /**
@@ -144,13 +157,20 @@ export function createSessionState(opts: {
    * already-full context reach the wire and get rejected with HTTP 400.
    */
   initialUsageInputTokens?: number;
+  /** Durable journal sink (`AgentConfig.messageJournal`). Absent = journaling off. */
+  messageJournal?: MessageJournal;
 }): SessionState {
   const initialLastUsage: ProviderUsage | null =
     opts.initialUsageInputTokens !== undefined && opts.initialUsageInputTokens > 0
       ? { inputTokens: opts.initialUsageInputTokens, stopReason: null, resultSubtype: 'success', isError: false }
       : null;
+  const messages: MessageParam[] = opts.initialMessages ? [...opts.initialMessages] : [];
+  const journalSync = new JournalSync<MessageParam>(opts.messageJournal, anthropicJournalAdapter);
+  journalSync.seed(messages);
   return {
-    messages: opts.initialMessages ? [...opts.initialMessages] : [],
+    messages,
+    journalSync,
+    messageJournal: opts.messageJournal,
     currentModel: opts.model,
     requestedModel: opts.requestedModel ?? opts.model,
     currentPermissionMode: opts.permissionMode,

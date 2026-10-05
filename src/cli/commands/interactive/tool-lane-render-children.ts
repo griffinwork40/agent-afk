@@ -1,11 +1,9 @@
-import { displayWidth, stripAnsi } from '../../display.js';
 import { palette } from '../../palette.js';
 import { NESTING_TOOLS } from '../../tool-category.js';
 import { formatElapsed } from '../../terminal-compositor.scrollback.js';
 import {
   MAX_VISIBLE_CHILDREN,
   inProgressVerb,
-  formatOutcome,
   formatDiffBlock,
   formatPreviewDiffBlock,
   doneGlyph,
@@ -22,8 +20,8 @@ import {
   renderTextChildLines,
   getGlyphs,
   toolLaneWidth,
-  pushOutcomeLines,
 } from './tool-lane-render.js';
+import { pushOutcomeRows } from './tool-lane-outcome-rows.js';
 import {
   groupSiblings,
   addOverflowSynthetic,
@@ -110,12 +108,15 @@ function pushCompletedChildRows(
   cols: number,
 ): void {
   // formatOutcome may return multi-line content (hiddenLineCount +
-  // tailPreview). pushOutcomeLines splits on \n so continuation lines
+  // tailPreview). pushOutcomeRows splits on \n so continuation lines
   // carry the spine-aware indent instead of the bare 4-space indent
   // that formatOutcome embeds.
-  const headLine = lead + child.prefix + palette.dim(' — ') + doneGlyph(result.isError, result.failureClass) + ' ';
-  const outcomeBudget = Math.max(20, cols - displayWidth(stripAnsi(headLine)));
-  pushOutcomeLines(lines, headLine, formatOutcome(result, undefined, outcomeBudget, child.toolName), continuationIndent, cols);
+  pushOutcomeRows(lines, {
+    lead,
+    label: child.prefix,
+    sep: palette.dim(' — ') + doneGlyph(result.isError, result.failureClass) + ' ',
+    suffix: childFailureBadge(child.failedChildCount),
+  }, result, { continuationIndent, cols, toolName: child.toolName });
   if (child.diff && !result.isError) {
     // Clamp each diff body line to terminal width. Diff lines are
     // model-controlled (file content) and routinely exceed `cols`;
@@ -330,7 +331,7 @@ function renderOverlayChildren(
           // Pre-execution diff preview for nested edit_file. formatPreviewDiffBlock
           // renders ⟳ Proposed and applies the AFK_SHOW_DIFFS=0 opt-out.
           const previewIndent = indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ';
-          for (const line of formatPreviewDiffBlock(child.previewDiff, previewIndent)) {
+          for (const line of formatPreviewDiffBlock(child.previewDiff, previewIndent, cols)) {
             lines.push(clampLineToTerminal(line, cols));
           }
         }
@@ -487,13 +488,14 @@ function renderFlushChildren(
         const parentSlot = parentIsLast ?? isLast;
         lines.push(...renderFlushChildren(grandchildren, childMap, homeDir, undefined, cols, [...ancestorIsLast, parentSlot], g, isLast));
       } else if (child.result) {
-        // Mirror overlay path: pushOutcomeLines splits on \n so continuation
+        // Mirror overlay path: pushOutcomeRows splits on \n so continuation
         // lines carry the spine-aware indent in scrollback.
-        const headLine = indentColored + connector + child.prefix + palette.dim(' — ') + doneGlyph(child.result.isError, child.result.failureClass) + ' ';
         const continuationIndent = indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ';
-        const outcomeBudget = Math.max(20, cols - displayWidth(stripAnsi(headLine)));
-        const outcomeText = formatOutcome(child.result, homeDir, outcomeBudget, child.toolName);
-        pushOutcomeLines(lines, headLine, outcomeText, continuationIndent, cols);
+        pushOutcomeRows(lines, {
+          lead: indentColored + connector,
+          label: child.prefix,
+          sep: palette.dim(' — ') + doneGlyph(child.result.isError, child.result.failureClass) + ' ',
+        }, child.result, { continuationIndent, cols, homeDir, toolName: child.toolName });
         if (child.diff && !child.result.isError) {
           // Clamp each diff body line to terminal width -- scrollback is
           // append-only: an unclamped line that soft-wraps to column 0

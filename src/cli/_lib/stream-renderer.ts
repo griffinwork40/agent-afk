@@ -55,8 +55,8 @@ import { makeOrchestratorCtx } from './stream-renderer-contexts.js';
 import { armSmokeEffects, THOUGHT_SUMMARY_SLOT, type SmokeEffects } from './stream-renderer-smoke.js';
 import { processEvent, type ProcessCtx } from './stream-renderer-process.js';
 import { disposeRenderer, type DisposeCtx } from './stream-renderer-dispose.js';
+import { SkillIdentityState } from './skill-identity-state.js';
 import { applyFirstContent } from './stream-renderer-ttfb.js';
-import { type SubagentStatusBarSpec } from '../render.js';
 
 export type { StreamRendererOptions } from './stream-renderer-options.js';
 import type { StreamRendererOptions } from './stream-renderer-options.js';
@@ -67,6 +67,7 @@ import type { StreamRendererOptions } from './stream-renderer-options.js';
  */
 export class StreamRenderer {
   private readonly out: Writer;
+  private readonly skillIdentity: SkillIdentityState;
   private readonly thinkingMode: 'off' | 'summary' | 'live' | 'digest';
   private readonly isTTY: boolean;
   private readonly captureMode: boolean;
@@ -156,6 +157,8 @@ export class StreamRenderer {
    * source, so a single tracker is correct here.
    */
   private inFlightTools = new InFlightToolTracker();
+  /** Root-session-only tools; drives the wait_for hint (subagent waits never yield). */
+  private rootTools = new InFlightToolTracker();
 
   private disposed = false;
   /** Flash tracker for 150ms glyph pulses on tool completion. Null until arm(). */
@@ -165,18 +168,6 @@ export class StreamRenderer {
   private pauseTickInterval: ReturnType<typeof setInterval> | null = null;
   /** ResizeBus unsubscriber — re-derives the overlay at the new terminal width on resize. */
   private resizeUnsub: (() => void) | null = null;
-  /** Ticker for subagent elapsed-time updates (250ms); cleared in dispose(). */
-  private subagentTickInterval: ReturnType<typeof setInterval> | null = null;
-  /** Live status bars for active subagent dispatches, keyed by subagentId. */
-  private activeSubagents = new Map<string, SubagentStatusBarSpec>();
-  /** Start timestamps (Date.now()) for each active subagent, keyed by subagentId. */
-  private subagentStartedAt = new Map<string, number>();
-  /**
-   * Sum of whole elapsed seconds across all active subagents at the last flush.
-   * Drives second-boundary change detection: markDirty + flush only fires when
-   * this value changes, matching the pattern used by checkPauseAnnotations.
-   */
-  private lastSubagentTotalSec = -1;
 
   /** TTFB elapsed timer: start timestamp + done flag. See stream-renderer-ttfb.ts. */
   private readonly ttfbStartedAt: number | undefined;
@@ -197,6 +188,7 @@ export class StreamRenderer {
     // Resolve capture-mode first: it can force-downgrade `thinkingMode: 'live'`
     // → `'summary'` because per-thinking-chunk overlay repaints would flood
     // a captured stream with redundant frames. See `_lib/capture-mode.ts`.
+    this.skillIdentity = new SkillIdentityState(opts.skillIdentity);
     this.captureMode = opts.captureMode ?? detectCaptureMode();
     // Resolve reduced-motion: a user preference to suppress the spinner ticker.
     // Independent of capture-mode (motion sensitivity vs. artifact preservation).
@@ -216,13 +208,11 @@ export class StreamRenderer {
     // trailing suppressed run is summarized in the artifact rather than
     // silently dropped. See `dispose()`.
     this.out = this.captureMode ? makeDedupingLineWriter(opts.out, 2) : opts.out;
-    // Resolve thinking mode: explicit option wins; otherwise the deprecated
-    // `verbose` boolean maps to 'live' (true) or 'summary' (false/unset).
+    // Resolve thinking mode: explicit option wins; default is 'summary'.
     // In capture-mode, 'live' is downgraded to 'summary' so the captured
     // artifact records one collapsed summary per turn rather than N
     // overlay-paint frames mid-turn.
-    const requestedThinkingMode =
-      opts.thinkingMode ?? (opts.verbose === true ? 'live' : 'summary');
+    const requestedThinkingMode = opts.thinkingMode ?? 'summary';
     this.thinkingMode = this.captureMode && requestedThinkingMode === 'live'
       ? 'summary'
       : requestedThinkingMode;
@@ -275,7 +265,8 @@ export class StreamRenderer {
    * non-TTY surfaces (Telegram, daemon, tests).
    */
   async arm(): Promise<void> {
-    if (this.disposed || !this.isTTY || this.compositor) return;
+    if (this.disposed || this.compositor) return;
+    if (!this.isTTY) { await this.skillIdentity.introduce(this.coordinator, null, this.out); return; }
     let compositor: TerminalCompositor;
     if (this.borrowedCompositor) {
       // Persistent-compositor path (Stage 3b+). The InputSurface armed
@@ -348,7 +339,7 @@ export class StreamRenderer {
       };
     }
 
-    // Construct the OverlayComposer with the five overlay slot types in z-order.
+    // Construct the OverlayComposer with the overlay slot types in z-order.
     // The slots read live state at flush time, so there's no initialization
     // needed beyond construction and registration. 'interrupt' is bottom-most
     // so the live "interrupting…" affordance sits nearest the prompt.
@@ -356,17 +347,19 @@ export class StreamRenderer {
     // Note: 'stage-rail' has been removed from this overlay. The stage rail is
     // now a reserved footer row managed by LoopStageBar (same DECSTBM pattern as
     // BackgroundStatusBar) and painted independently of the compositor frame.
+    // Note: 'subagent-status' has been removed from this overlay (#2661). The
+    // status stack was redundant with the tool-lane Agent rows, which already
+    // surface every running subagent with elapsed time, nesting, and labels.
     this.overlayComposer = new OverlayComposer(compositor, [
       THOUGHT_SUMMARY_SLOT, // held `◆ thought for Xs` while it fades (smoke only); above the next phase
       'thinking-live',
-      'subagent-status',    // live status bars for active subagent dispatches
       'markdown-pending',
       'tool-lane',
       'progress-banner',
       'interrupt',
     ]);
 
-    // Register all six slots via the lifecycle module, which preserves
+    // Register the overlay slots via the lifecycle module, which preserves
     // the exact slot order. Each slot's render() method reads the
     // corresponding live state from the renderer's fields at flush time.
     registerOverlaySlots(this.overlayComposer, {
@@ -380,7 +373,6 @@ export class StreamRenderer {
       childActivity: this.childActivity,
       getInterrupting: () => this.interrupting,
       getSoftStopping: () => this.softStopping,
-      getActiveSubagents: () => this.activeSubagents,
     });
 
     // Wire the flash tracker: completed tool glyphs pulse bold for 150ms.
@@ -398,34 +390,18 @@ export class StreamRenderer {
     // repaints remain active — only the high-frequency 12.5 Hz animation is gated.
     compositor.setSpinner({ enabled: !this.reducedMotion, rotateVerbEveryMs: 3500 });
     this.pauseTickInterval = setInterval(() => this.checkPauseAnnotations(), 80).unref();
-    // Subagent elapsed-time ticker: updates activeSubagents' elapsedMs fields and
-    // flushes the 'subagent-status' overlay slot every 250ms. Stopped in dispose().
-    // markDirty + flush are gated on a second-boundary change: formatElapsed has
-    // 1-second granularity, so 3 out of 4 ticks would otherwise produce identical
-    // output. We track the sum of whole elapsed seconds across all active subagents
-    // and skip the flush when that sum hasn't changed — matching the pattern used
-    // by checkPauseAnnotations / lastTtfbAnnotation.
-    this.subagentTickInterval = setInterval(() => {
-      if (this.disposed || this.activeSubagents.size === 0) return;
-      const now = Date.now();
-      let totalSec = 0;
-      for (const [id, spec] of this.activeSubagents) {
-        const startedAt = this.subagentStartedAt.get(id) ?? now;
-        const elapsedMs = now - startedAt;
-        this.activeSubagents.set(id, { ...spec, elapsedMs });
-        totalSec += Math.floor(elapsedMs / 1000);
-      }
-      if (this.overlayComposer && totalSec !== this.lastSubagentTotalSec) {
-        this.lastSubagentTotalSec = totalSec;
-        this.overlayComposer.markDirty('subagent-status');
-        this.overlayComposer.flush();
-      }
-    }, 250).unref();
     // Re-derive the composed overlay (tool lane / thinking / progress) at the
     // current terminal width whenever the window resizes. The markdown stream
     // owns its own resize subscription; this covers the rest of the overlay
     // surface. Debounced + coalesced upstream by ResizeBus.
     this.resizeUnsub = subscribeToResize(this.overlayComposer, false);
+    // Invariant: the skill identity (/name, purpose, args) renders exactly
+    // once, as this durable scrollback introduction. The live progress banner
+    // must not repeat it: #2895 also prefixed the banner with the identity,
+    // which painted the same preview twice on every slash-skill dispatch
+    // (full preview directly beneath the intro, then `/name` above the
+    // activity rows).
+    await this.skillIdentity.introduce(this.coordinator, compositor, this.out);
   }
 
   /**
@@ -521,6 +497,16 @@ export class StreamRenderer {
    * Delegate to this turn's ToolLane for live bash output tail. Issue #1506.
    * Safe to call after dispose (no-op).
    */
+  /**
+   * Return the most recent bash capture path seen across all turns on this
+   * renderer, or `undefined` when no capture has been recorded yet. Used by
+   * the Ctrl+G viewer to open the last large output without requiring the user
+   * to know the path. Safe to call at any time (including after dispose).
+   */
+  getLastCapturePath(): string | undefined {
+    return this.toolLane.getLastCapturePath();
+  }
+
   setBashOutputTail(toolUseId: string, tail: string | undefined): void {
     if (this.disposed) return;
     this.toolLane.setBashOutputTail(toolUseId, tail);
@@ -599,6 +585,7 @@ export class StreamRenderer {
       coordinator: this.coordinator,
       childActivity: this.childActivity,
       inFlightTools: this.inFlightTools,
+      rootTools: this.rootTools,
       sources: this.sources,
       subagentMarkdown: this.subagentMarkdown,
       lastProgressByTask: this.lastProgressByTask,
@@ -606,9 +593,6 @@ export class StreamRenderer {
       activeSkillName: this.activeSkillName,
       onStageChange: this.onStageChange,
       buildOrchestratorCtx: () => this.buildOrchestratorCtx(),
-      activeSubagents: this.activeSubagents,
-      subagentStartedAt: this.subagentStartedAt,
-      overlayComposerForStatus: this.overlayComposer,
     };
     processEvent(ctx, event, meta);
   }
@@ -626,19 +610,18 @@ export class StreamRenderer {
     // Reset the preview-diff ref to a no-op so the disposed turn's toolLane
     // reference is released and the hook cannot write into a stale lane.
     if (this.addPreviewDiffRef) this.addPreviewDiffRef.current = () => {};
-    // Clear the subagent elapsed-time ticker immediately — it guards against
-    // `this.disposed` but clearing here is cleaner and avoids one extra tick.
-    if (this.subagentTickInterval !== null) {
-      clearInterval(this.subagentTickInterval);
-      this.subagentTickInterval = null;
-    }
-    // Contract: clear softStopping on the class BEFORE building the DisposeCtx
-    // snapshot. The overlay's progress-banner slot reads this.softStopping via
-    // the getSoftStopping closure registered in arm(), not through the ref
-    // wrapper. If we only clear the ref inside disposeRenderer(), the closure
-    // still sees true and repaints a stale "stopping…" banner during the
-    // overlay flush. The write-back at the end is still needed for consistency.
+    // Clear turn-local flags on the class BEFORE building the DisposeCtx
+    // snapshot. The progress-banner and interrupt slots read these fields via
+    // closures registered in arm(), not through the ref wrappers. Clearing only
+    // refs inside disposeRenderer() would repaint stale stopping/interrupting
+    // affordances during the final overlay flush on a borrowed compositor.
     this.softStopping = false;
+    this.interrupting = false;
+    this.skillIdentity.clear();
+    // Clear the wait hint so an aborted/resumed turn cannot leave it stale on a
+    // borrowed compositor.
+    this.rootTools.reset();
+    this.compositor?.setRootWaitActive?.(false);
     const ctx: DisposeCtx = {
       out: this.out,
       isTTY: this.isTTY,
