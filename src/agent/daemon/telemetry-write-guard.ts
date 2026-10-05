@@ -36,6 +36,7 @@
 import { existsSync, accessSync, constants } from 'node:fs';
 import { dirname } from 'node:path';
 import { pushIfConfigured } from '../../telegram/push.js';
+import { redactInlineSecrets } from '../session/prompt-dump.js';
 
 // ─── Writability probe ────────────────────────────────────────────────────────
 
@@ -106,8 +107,8 @@ export class TelemetryAlertLatch {
     this.alerted = true;
     const text =
       `[daemon] Telemetry file is not writable — sessionstart agent tasks will be skipped.\n` +
-      `Path: ${telemetryPath}\n` +
-      `Error: ${errno}\n` +
+      `Path: ${redactInlineSecrets(telemetryPath)}\n` +
+      `Error: ${redactInlineSecrets(errno)}\n` +
       `Fix the file permissions or disk issue and restart the daemon. ` +
       `Cooldown records cannot be saved while the file is unwritable, so tasks ` +
       `would re-fire on every restart if allowed to run.`;

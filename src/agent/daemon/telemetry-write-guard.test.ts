@@ -38,7 +38,26 @@ function platformEnforcesFileMode(): boolean {
   }
 }
 
+// Windows ignores directory mode bits (chmod on a dir has no effect), so a
+// separate probe is needed for tests that use chmodSync on a directory.
+function platformEnforcesDirMode(): boolean {
+  const probeDir = mkdtempSync(join(tmpdir(), 'afk-dirperm-check-'));
+  try {
+    chmodSync(probeDir, 0o555);
+    try {
+      accessSync(probeDir, constants.W_OK);
+      return false; // write still permitted — directory mode not enforced
+    } catch {
+      return true; // write correctly denied
+    }
+  } finally {
+    try { chmodSync(probeDir, 0o755); } catch { /* ignore */ }
+    rmSync(probeDir, { recursive: true, force: true });
+  }
+}
+
 const PERMS_ENFORCED = platformEnforcesFileMode();
+const DIR_PERMS_ENFORCED = platformEnforcesDirMode();
 
 // ─── probeTelemetryWritable ────────────────────────────────────────────────────
 
@@ -61,7 +80,7 @@ describe('probeTelemetryWritable', () => {
     expect(probeTelemetryWritable(filePath)).toBeNull();
   });
 
-  it.skipIf(!PERMS_ENFORCED)('returns an error string when the file is absent but the parent dir is read-only', () => {
+  it.skipIf(!DIR_PERMS_ENFORCED)('returns an error string when the file is absent but the parent dir is read-only', () => {
     // Make the parent dir read-only so appendFileSync would fail on first write.
     chmodSync(dir, 0o555);
     try {
