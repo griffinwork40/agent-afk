@@ -39,7 +39,7 @@ async function safeAnswer(ctx: Context, text: string, log: LogFn): Promise<void>
  * the daemon log instead of vanishing silently. Detached + unref semantics are
  * intentionally preserved -- we add observability only.
  */
-export function defaultSpawnFarm(args: string[], log: LogFn = () => {}): void {
+function defaultSpawnFarm(args: string[], log: LogFn = () => {}): void {
   log('[farm] spawning child afk process', { args });
   const child = spawn('afk', args, { detached: true, stdio: 'ignore' });
   child.on('error', (err) => {
@@ -146,7 +146,7 @@ export async function handleRespawn(
   // ctx.reply for the terminal success so both messages reach the user.
   try {
     await ctx.reply(
-      `Respawning as \`${childSlug}\` from ${winnerBranch.branch}\n🔄 Farm \`${manifest.taskSlug}\` respawned.\nChild slug: \`${childSlug}\`\nWinner branch: \`${winnerBranch.branch}\``,
+      `Respawning as \`${childSlug}\` from ${winnerBranch.branch} ✓\n🔄 Farm \`${manifest.taskSlug}\` respawned.\nChild slug: \`${childSlug}\`\nWinner branch: \`${winnerBranch.branch}\``,
     );
   } catch (err) {
     log('[farm-callback] reply failed:', err);

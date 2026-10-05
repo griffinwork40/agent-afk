@@ -11,6 +11,33 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.296.1] - 2026-10-05
+
+### Changed
+- split eval-run/contracts, runner, and propose/template-engine under the 350-line ceiling (#832) (#2961) (6f01d6d2)
+
+## [5.296.0] - 2026-10-05
+
+### Added
+- export plugin userConfig options and data dir to plugin hooks (#2732) (2ddcab6d)
+- add soft-delete GC sweep for stale fact archive entries (#2733) (78d51225)
+- burn-rate projection for subscription-quota indicator (#2951) (ceaeda9c)
+
+### Fixed
+- restore context.cwd as deprecated alias of context.resolveBase (#2948) (f9963c36)
+- hoist wslPrefixes, document dirname assumption, add ordering comment (#2949) (caa6088d)
+- peer-messaging docs/schema polish (#2950) (6e807701)
+
+## [5.295.9] - 2026-10-05
+
+### Fixed
+- enforce domain policy independently of unrelated browser config fields (#2919) (5a4ee000)
+
+## [5.295.8] - 2026-10-05
+
+### Fixed
+- replace wall-clock budget with ordering probe in 'returns immediately' test (#2947) (6dfbe3ae)
+
 ## [5.295.7] - 2026-10-05
 
 ### Fixed

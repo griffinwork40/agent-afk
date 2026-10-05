@@ -324,6 +324,7 @@ export const QueuedUserMessagePayloadSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const PeerMessagePayloadSchema = z.object({
+  // 'delivered' is a legacy value (pre-#2810); retained for backward-compatible deserialization of historical traces.
   action: z.enum(['sent', 'claimed', 'injected', 'delivered', 'held', 'refused', 'dropped', 'reclaimed']),
   messageId: z.string().optional(),
   peer: z.string(),

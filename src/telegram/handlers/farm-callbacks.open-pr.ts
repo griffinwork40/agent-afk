@@ -22,7 +22,7 @@ import type { FarmCallbackDeps } from './farm-callbacks.js';
 
 type LogFn = (...args: unknown[]) => void;
 
-/** Re-export for convenience -- callers import safeAnswer from the original module. */
+/** Local copy of safeAnswer -- identical to the one in farm-callbacks.ts. */
 async function safeAnswer(ctx: Context, text: string, log: LogFn): Promise<void> {
   try {
     await ctx.answerCbQuery(text);
@@ -129,7 +129,7 @@ export async function handleOpenPr(
   // The progress ack ('Opening PR…') already answered the callback; use
   // ctx.reply for the terminal success so both messages reach the user.
   try {
-    await ctx.reply(`PR opened\n🔗 ${prUrl}`);
+    await ctx.reply(`PR opened ✓\n🔗 ${prUrl}`);
   } catch (err) {
     log('[farm-callback] reply failed:', err);
   }

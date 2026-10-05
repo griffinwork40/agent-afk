@@ -2,7 +2,8 @@
  * Image MIME-type sniffing, response-body size-limiting, and photo-fetch helpers.
  *
  * Extracted from message.ts to stay under the 350-code-line ceiling.
- * Pure utility functions with no coupling to Telegram sessions.
+ * Mostly pure utilities; fetchAndClassifyPhoto accepts a Telegraf Context to
+ * call getFileLink, so there is a light Telegram coupling in that function.
  *
  * @module telegram/handlers/message.media-helpers
  */

@@ -22,7 +22,8 @@ import { contextLimitFor } from '../../model-limits.js';
 import { ContextSampler } from '../../context-sampler.js';
 import type { GitStatusSampler } from '../../git-status-sampler.js';
 import { formatTurnSparkline } from '../../render/context-sparkline.js';
-import { quotaWindowsFromSnapshot } from '../../quota-indicator.js';
+import { quotaWindowsFromRecord, quotaWindowsFromSnapshot } from '../../quota-indicator.js';
+import { readUsageRecord, ANTHROPIC_OAUTH } from '../../../agent/usage/usage-snapshot.js';
 import { palette } from '../../palette.js';
 import { replayTurns } from './turn-record-renderer.replay.js';
 
@@ -854,7 +855,9 @@ export function formatStatusFields(
 
   const branch = gitSampler?.getBranch();
   const pr = gitSampler?.getPr();
-  const quotaWindows = quotaWindowsFromSnapshot(getQuotaSnapshot());
+  const quotaWindows =
+    quotaWindowsFromRecord(readUsageRecord(ANTHROPIC_OAUTH.provider, ANTHROPIC_OAUTH.account))
+    ?? quotaWindowsFromSnapshot(getQuotaSnapshot());
 
   // Turn indicator: always include turnCount (1-based completed turns) so the
   // status line can show `turn N`. Include maxTurns only when the caller
