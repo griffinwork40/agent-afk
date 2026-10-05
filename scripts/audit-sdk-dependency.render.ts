@@ -8,7 +8,7 @@ import { TRACKED_PACKAGES } from './audit-sdk-dependency.types.js';
 import { hashSymbolSet } from './audit-sdk-dependency.lock.js';
 
 const TELEMETRY_DIR = path.join(os.homedir(), '.afk', 'agent-framework');
-const TELEMETRY_PATH = path.join(TELEMETRY_DIR, 'sdk-dependency-telemetry.jsonl');
+export const TELEMETRY_PATH = path.join(TELEMETRY_DIR, 'sdk-dependency-telemetry.jsonl');
 
 export function renderSnapshot(inventory: Inventory, versions: { sdk: string | null }): string {
   const now = new Date().toISOString();

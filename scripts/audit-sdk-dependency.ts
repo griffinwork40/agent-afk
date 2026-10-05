@@ -13,7 +13,6 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 // Re-export types so importers of this module remain unchanged.
@@ -30,11 +29,11 @@ export type {
 
 export { buildInventory } from './audit-sdk-dependency.scan.js';
 export { readLock, writeLock, diffAgainstLock, diffIsBlocking, describeDiff } from './audit-sdk-dependency.lock.js';
-export { renderSnapshot, buildTelemetry, appendTelemetry } from './audit-sdk-dependency.render.js';
+export { renderSnapshot, buildTelemetry, appendTelemetry, TELEMETRY_PATH } from './audit-sdk-dependency.render.js';
 
 import { buildInventory } from './audit-sdk-dependency.scan.js';
 import { readLock, writeLock, diffAgainstLock, diffIsBlocking, describeDiff } from './audit-sdk-dependency.lock.js';
-import { renderSnapshot, buildTelemetry, appendTelemetry } from './audit-sdk-dependency.render.js';
+import { renderSnapshot, buildTelemetry, appendTelemetry, TELEMETRY_PATH } from './audit-sdk-dependency.render.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -106,7 +105,7 @@ function main(argv: string[]): number {
   appendTelemetry(telemetry);
 
   console.log(`audit:sdk: snapshot written \u2192 ${path.relative(process.cwd(), SNAPSHOT_PATH)}`);
-  console.log(`audit:sdk: telemetry appended \u2192 ${path.join(os.homedir(), '.afk', 'agent-framework', 'sdk-dependency-telemetry.jsonl')}`);
+  console.log(`audit:sdk: telemetry appended \u2192 ${TELEMETRY_PATH}`);
 
   if (diffIsBlocking(diff) || diff.dropped.length > 0) {
     console.log('');

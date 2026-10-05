@@ -670,7 +670,7 @@ describe('discoverPluginHooksConfigs', () => {
   it('finds <plugin>/hooks/hooks.json in flat layout with pluginRoot', () => {
     const pluginDir = makePlugin(root, 'my-plugin', true);
     expect(discoverPluginHooksConfigs(root)).toEqual([
-      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir, pluginName: null },
+      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir, pluginName: null, pluginKey: 'my-plugin' },
     ]);
   });
 
@@ -680,7 +680,7 @@ describe('discoverPluginHooksConfigs', () => {
     const pluginDir = makePlugin(join(root, 'cache', 'mp1'), 'plugin-a', true);
     writeIndex(root, { 'mp1:plugin-a': { enabled: true } });
     expect(discoverPluginHooksConfigs(root)).toEqual([
-      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir, pluginName: null },
+      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir, pluginName: null, pluginKey: 'mp1:plugin-a' },
     ]);
   });
 
@@ -724,6 +724,7 @@ describe('discoverPluginHooksConfigs', () => {
       expect(found).toHaveLength(1);
       expect(found[0]!.path).toBe(join(linkPath, 'hooks', 'hooks.json'));
       expect(found[0]!.pluginRoot).toBe(linkPath);
+      expect(found[0]!.pluginKey).toBe('linked-plugin');
     } finally {
       rmSync(realBase, { recursive: true, force: true });
     }
@@ -838,7 +839,7 @@ describe('loadHooksConfig — plugin hooks gate', () => {
   // pluginName threading: plugin hooks carry the manifest name (#2459)
   // -----------------------------------------------------------------------
 
-  it('plugin hook carries pluginName from the manifest when the manifest has a name', () => {
+  it('plugin hook carries manifest pluginName and install pluginKey', () => {
     const pluginDir = join(pluginsDir, 'demo-plugin');
     // Overwrite the blank manifest written by beforeEach with a named one.
     writeFileSync(
@@ -851,6 +852,7 @@ describe('loadHooksConfig — plugin hooks gate', () => {
     const hook = result.hooks.SessionStart?.[0]?.hooks[0];
     expect(hook).toBeDefined();
     expect(hook!.pluginName).toBe('claude-jev-afk');
+    expect(hook!.pluginKey).toBe('demo-plugin');
   });
 
   it('plugin hook has pluginName=undefined when manifest has no name field', () => {
@@ -861,6 +863,7 @@ describe('loadHooksConfig — plugin hooks gate', () => {
     expect(hook).toBeDefined();
     // readPluginManifest returns null for a missing name → not set on the hook.
     expect(hook!.pluginName).toBeUndefined();
+    expect(hook!.pluginKey).toBe('demo-plugin');
   });
 });
 
