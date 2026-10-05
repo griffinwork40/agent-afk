@@ -85,21 +85,24 @@ function configuredHooksPath() {
  * normalise separators. On Windows (case-insensitive FS), also lower-cases
  * the result so that paths differing only in case or in 8.3 vs long-name form
  * compare equal.
+ *
+ * Contract: on Windows, git rev-parse returns forward-slash paths (e.g.
+ * `C:/Users/...`). Node's path.resolve() converts them to backslash but
+ * realpathSync() may fail on raw forward-slash Windows paths. We normalise
+ * to backslash BEFORE calling realpathSync so both sides receive the same
+ * input format.
  * @param {string} p
  * @returns {string}
  */
 function normalisedPath(p) {
+  // Normalise separators first so realpathSync receives a well-formed path
+  // on Windows regardless of whether git or Node produced the input.
+  const native = normalize(resolve(p));
   try {
-    const real = realpathSync(p);
-    // Replace forward slashes with platform separator then normalise.
-    // On Windows git returns forward-slash paths; resolve() converts them but
-    // realpathSync() may not have received the already-resolved form, so we
-    // normalise the raw real path instead.
-    const n = normalize(real);
-    return process.platform === 'win32' ? n.toLowerCase() : n;
+    const real = realpathSync(native);
+    return process.platform === 'win32' ? normalize(real).toLowerCase() : normalize(real);
   } catch {
-    const n = normalize(resolve(p));
-    return process.platform === 'win32' ? n.toLowerCase() : n;
+    return process.platform === 'win32' ? native.toLowerCase() : native;
   }
 }
 
