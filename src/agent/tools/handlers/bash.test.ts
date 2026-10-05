@@ -1075,4 +1075,41 @@ describe('bash path-containment scan — C4 (#354)', () => {
   });
 });
 
+// bypassPermissions mode must behave identically to 'default' after #2716 removed
+// the stale warnIfBypassPermissions branch.  These tests mirror the most important
+// 'default' behaviours to confirm no special-case survives the removal.
+describe("createBashHandler('bypassPermissions') — behaves identically to 'default'", () => {
+  function createSignal(): AbortSignal {
+    return new AbortController().signal;
+  }
+
+  it('executes commands and returns output', async () => {
+    const handler = createBashHandler('bypassPermissions');
+    const result = await handler({ command: 'echo bypass-ok' }, createSignal());
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('bypass-ok');
+  });
+
+  it('does not emit a path-escape warning for out-of-root paths (warning removed in #2716)', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'bypass-test-'));
+    try {
+      const warned: string[] = [];
+      const origWarn = console.warn.bind(console);
+      vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+        warned.push(String(args[0]));
+        origWarn(...args);
+      });
+      const handler = createBashHandler('bypassPermissions', root);
+      const ctx = { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: false };
+      await handler({ command: 'echo hi /etc/hosts' }, createSignal(), ctx);
+      vi.restoreAllMocks();
+      // No bypass-specific warning; advisory path-escape warns the same as 'default'.
+      const bypassWarnings = warned.filter((w) => w.includes('bypass'));
+      expect(bypassWarnings).toHaveLength(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 
