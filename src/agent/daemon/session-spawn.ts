@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 import { env } from '../../config/env.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
-import { getStateDatabasePath } from '../../paths.js';
+import { getStateDatabasePath, getDaemonStateDir } from '../../paths.js';
 import { createDefaultHookRegistry } from '../default-hook-registry.js';
 import { MemoryStore, injectHotMemory, injectGoalPrompt } from '../memory/index.js';
 import { McpManager, loadMcpConfig } from '../mcp/index.js';
@@ -23,7 +25,7 @@ export interface DaemonSpawnOptions {
   trigger?: 'cron' | 'sessionstart' | 'pull';
   /**
    * Per-task working directory. Takes precedence over `sessionConfig.cwd`
-   * (daemon-wide AFK_DAEMON_CWD). Precedence: taskCwd ?? sessionConfig.cwd ?? process.cwd().
+   * (daemon-wide AFK_DAEMON_CWD). Precedence: taskCwd ?? sessionConfig.cwd ?? daemonDefaultCwd().
    */
   taskCwd?: string;
 }
@@ -44,6 +46,68 @@ export function daemonTraceLabel(taskId: string): string {
   return `${safe || 'task'}-${randomUUID()}`;
 }
 
+/**
+ * Last-resort cwd for daemon sessions when neither per-task `cwd` nor the
+ * daemon-wide `AFK_DAEMON_CWD` is configured.
+ *
+ * Returns the daemon state directory (`~/.afk/state/daemon/agent-afk@default/`)
+ * and creates it if it does not yet exist. This is a small, project-neutral
+ * directory — not `$HOME` — so unscoped glob/grep calls made by the agent do
+ * not walk the whole home directory.
+ *
+ * Callers that have an explicit cwd (task.cwd or sessionConfig.cwd) never reach
+ * this function, so the precedence `task.cwd ?? AFK_DAEMON_CWD ?? daemonDefaultCwd()`
+ * is preserved.
+ */
+// Contract: daemonDefaultCwd() never throws. On EACCES/ENOSPC it falls back to
+// os.tmpdir() so every scheduler tick has a valid cwd even when the daemon
+// state directory cannot be created (e.g. permission denied after a system
+// misconfiguration or a full disk). The caller that has an explicit cwd
+// (task.cwd or sessionConfig.cwd) never reaches this function.
+
+/**
+ * Memoized result of the first daemonDefaultCwd() call (success or fallback).
+ *
+ * Contract: once set, this value is returned for every subsequent call without
+ * re-running mkdirSync or re-emitting the warning. The cached path is NOT
+ * re-verified for liveness — a directory that is later removed or unmounted is
+ * still returned. This is intentional: the daemon state dir is owned by the
+ * process and re-checking every tick would add I/O overhead with no recovery
+ * path (the scheduler has no mechanism to quarantine a single tick on cwd
+ * failure). Call `_resetDaemonDefaultCwdCache()` in tests that swap AFK_HOME.
+ */
+let _daemonDefaultCwdCache: string | null = null;
+
+/**
+ * Reset the memoized cwd cache. Exposed for tests that change AFK_HOME between
+ * cases — production code never calls this.
+ */
+export function _resetDaemonDefaultCwdCache(): void {
+  _daemonDefaultCwdCache = null;
+}
+
+export function daemonDefaultCwd(): string {
+  if (_daemonDefaultCwdCache !== null) return _daemonDefaultCwdCache;
+  const dir = getDaemonStateDir();
+  try {
+    mkdirSync(dir, { recursive: true });
+    _daemonDefaultCwdCache = dir;
+    return dir;
+  } catch (err) {
+    const fallback = tmpdir();
+    const code = (err as NodeJS.ErrnoException).code ?? String(err);
+    console.warn(
+      `[daemon] daemonDefaultCwd: could not create ${dir} (${code}); ` +
+        `falling back to ${fallback}. ` +
+        `To fix: correct permissions on ${dir} or set AFK_STATE_DIR (or AFK_HOME) to a writable path.`,
+    );
+    // Memoize the fallback too so the warning fires only once per process even
+    // if mkdirSync keeps throwing (e.g. EACCES on every scheduler tick).
+    _daemonDefaultCwdCache = fallback;
+    return fallback;
+  }
+}
+
 export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOptions): Promise<{
   session: AgentSession;
   memoryStore: MemoryStore;
@@ -56,8 +120,14 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
   // suffix, so each tick gets its own label) so hook commands receive a
   // non-empty AFK_SESSION_ID and traces stay greppable by task name.
   const sessionId = daemonTraceLabel(taskId);
-  // Precedence: per-task cwd ?? daemon-wide sessionConfig.cwd ?? process.cwd().
-  const agentCwd = options.taskCwd ?? options.sessionConfig?.cwd ?? process.cwd();
+  // Precedence: per-task cwd ?? daemon-wide sessionConfig.cwd ?? daemonDefaultCwd().
+  // The daemon state dir (~/.afk/state/daemon/agent-afk@default/) is used as the
+  // last-resort fallback instead of process.cwd(). When installed as a service,
+  // process.cwd() is $HOME, which causes unscoped glob/grep to walk the whole home
+  // directory (~1.5 M entries). The daemon state dir is a small, project-neutral
+  // directory that already exists (the daemon creates it on startup). Users who
+  // explicitly set task.cwd or AFK_DAEMON_CWD are unaffected — those values win.
+  const agentCwd = options.taskCwd ?? options.sessionConfig?.cwd ?? daemonDefaultCwd();
   // Witness layer: open a fresh trace per spawned daemon session so its
   // subagent + skill lifecycle events are durable on disk — the AFK
   // (away-from-keyboard) surface where post-hoc inspection matters most.
@@ -71,9 +141,22 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     undefined,
     'daemon',
     undefined,
-    undefined,
+    // Always pass a mode getter so createAfkModeGate registers. Daemon ticks
+    // run autonomously by definition — pass 'autonomous' unconditionally.
+    // Because no elicitation handler is installed on this surface, high-risk
+    // ops degrade to the hard-block path (the gate's "no operator reachable"
+    // degrade). promptForApproval: false enforces this; it mirrors the Telegram
+    // posture (always-on, no deliberate human arming). See afk-mode-gate.ts.
+    (): 'autonomous' => 'autonomous',
     loadHooksConfig({ cwd: agentCwd }),
-    { cwd: agentCwd, sessionId, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}) },
+    {
+      cwd: agentCwd,
+      sessionId,
+      ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
+      // Hard-block posture: no operator is reachable on a daemon tick.
+      // High-risk ops are refused immediately rather than queued for approval.
+      afkPromptForApproval: false,
+    },
   );
   const stateStore = new StateStore(getStateDatabasePath());
 
@@ -189,7 +272,7 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     // Per-task cwd wins over sessionConfig.cwd (daemon-wide AFK_DAEMON_CWD).
     // Placed AFTER the sessionConfig spread so the task-level value is never
     // overwritten by the daemon-wide one. agentCwd already encodes the correct
-    // precedence (taskCwd ?? sessionConfig.cwd ?? process.cwd()).
+    // precedence (taskCwd ?? sessionConfig.cwd ?? daemonDefaultCwd()).
     cwd: agentCwd,
   };
   try {
@@ -197,6 +280,16 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     const session = options.sessionFactory
       ? options.sessionFactory(config, traceOwner)
       : new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectHotMemory(config))), traceOwner);
+    // Wire session-layer Stop dispatch for the daemon surface. Daemon/cron tasks
+    // are one-shot: there is no next user turn for injectContext delivery.
+    // `getHasNextTurn: () => false` causes the session layer to drop injectContext
+    // and emit a `stop_inject_dropped` trace event instead.
+    //
+    // The terminal-state gate is NOT registered here: it only returns
+    // injectContext, which a one-shot tick always drops. It joins the daemon
+    // with same-turn continuation (PR 2); `daemon.verifyDone` still relabels
+    // an unbacked Done in the push. Shell hooks run only with enableShellHooks.
+    session.wireStopHook?.({ getHasNextTurn: () => false });
     // Step 7: register the daemon session in the cross-surface registry.
     // Best-effort; dispose() (archive) is invoked by runOnce on session close
     // so the long-running daemon never accumulates registry handles.

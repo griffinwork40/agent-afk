@@ -118,8 +118,8 @@ describe('read denylist — relocated AFK_HOME under a denied root (#779)', () =
 // (rather than hardcoding each entry) means a FUTURE carve-out added without
 // a matching exclusion in `CARVEOUT_PIERCED_SOURCE` fails this test instead
 // of silently shipping denied.
-// Windows: homedir() 8.3 short-path vs safeRealpath long-path mismatch means
-// BUILTIN_READ_ALLOWLIST entries don't match join(homedir(), rel) paths.
+// Windows: TODO needs native equivalent — homedir() 8.3 short-path vs safeRealpath long-path mismatch
+// means BUILTIN_READ_ALLOWLIST entries don't match join(homedir(), rel) paths on Windows.
 describe.skipIf(process.platform === 'win32')('read denylist — every static carve-out survives its own gate', () => {
   it('keeps every READ_ALLOWLIST_REL entry allowed under the default AFK_HOME', () => {
     for (const rel of READ_ALLOWLIST_REL) {

@@ -176,10 +176,10 @@ const ERROR_HEAD_CAP = 200;
  * `tool_call.completed` trace payload.
  *
  * - Returns `undefined` for successful calls or empty error content.
- * - Collapses all newline sequences (CR, LF, CRLF) to a single space so the
- *   head is always one line (trace JSONL must not embed raw newlines in field
- *   values).
- * - Trims surrounding whitespace after newline collapse.
+ * - Collapses all control characters (C0 range \x00–\x1F, DEL \x7F, and C1
+ *   range \x80–\x9F) to a single space, keeping the head one line and free
+ *   of raw control bytes (trace JSONL must not embed them in field values).
+ * - Trims surrounding whitespace after control-character collapse.
  * - Passes the result through {@link redactSecrets} so common token shapes
  *   (sk-ant-*, Authorization Bearer, JWT, AWS key IDs, ≥32-char opaque
  *   hex/base64 blobs) are replaced with `[REDACTED]`.
@@ -193,10 +193,11 @@ const ERROR_HEAD_CAP = 200;
  */
 export function buildErrorHead(isError: boolean, content: string): string | undefined {
   if (!isError) return undefined;
-  // Collapse all control characters (including newlines) to a space, then
-  // collapse consecutive spaces and trim.
+  // Collapse all control characters (C0, DEL, and C1) to a space, then
+  // collapse consecutive spaces and trim. Includes \x80-\x9F (C1) for parity
+  // with sanitizeForDisplay in terminal-sanitize.ts.
   // eslint-disable-next-line no-control-regex
-  const oneLine = content.replace(/[\x00-\x1F\x7F]/g, ' ').replace(/  +/g, ' ').trim();
+  const oneLine = content.replace(/[\x00-\x1F\x7F-\x9F]/g, ' ').replace(/  +/g, ' ').trim();
   if (oneLine.length === 0) return undefined;
   const redacted = redactSecrets(oneLine);
   // Use Array.from to count/slice by Unicode code points (not UTF-16 code

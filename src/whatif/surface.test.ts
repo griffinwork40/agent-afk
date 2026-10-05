@@ -10,9 +10,13 @@ import type { ParsedWhatifArgs } from './args.js';
 // Mocks — must be hoisted before the imports under test
 // ---------------------------------------------------------------------------
 
-vi.mock('./compile.js', () => ({
-  compileChangeSpec: vi.fn(),
-}));
+vi.mock('./compile.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./compile.js')>();
+  return {
+    ...actual,
+    compileChangeSpec: vi.fn(),
+  };
+});
 
 vi.mock('./complete.js', () => ({
   createAnthropicComplete: vi.fn().mockReturnValue(() =>

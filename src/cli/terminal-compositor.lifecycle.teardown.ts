@@ -1,7 +1,7 @@
 /**
  * Teardown flush helpers — extracted from terminal-compositor.lifecycle.ts (#2108).
  *
- * Contains the two committed-band flush functions that run during or before
+ * Contains the committed-band flush functions that run during or before
  * compositor teardown:
  *
  *   • {@link endTurnFlush} — Stage 3 end-of-turn flush. Called BEFORE disarm().
@@ -14,12 +14,21 @@
  *     but never materialized to screen). No-op when all rows are painted (the
  *     common case when endTurnFlush ran first).
  *
- * Both functions are "soft" best-effort: a throwing stdout write is swallowed
- * so teardown continues. They share the same C1 (scrollback append-only)
- * contract — every row is written to scrollback exactly once.
+ *   • {@link appendLinesAtCursor} — owner-wrote disarm helper. Emits a list of
+ *     logical lines as a plain append starting at the cursor row (CUP to R col 1,
+ *     then \r\n-joined output). Used on the owner-wrote disarm path to avoid the
+ *     CUP-paint-at-anchorFloor erase that buildScrollbackArchiveEscape performs,
+ *     which would overwrite still-visible prior-transcript content.
+ *
+ * All functions are "soft" best-effort: a throwing stdout write is swallowed
+ * so teardown continues. They share the C1 (scrollback append-only) contract —
+ * every row is written to scrollback exactly once.
  */
 
-import { scrollbackFlushLines, buildScrollbackArchiveEscape, eraseAndPaintRow } from './terminal-compositor.scrollback.js';
+import { buildScrollbackArchiveEscape, eraseAndPaintRow } from './terminal-compositor.scrollback.js';
+import { flushLinesSkippingArchived } from './terminal-compositor.band-archived-prefix.js';
+import { cup } from './cup-frame-renderer.escapes.js';
+import { contentMargin } from './render/measure.js';
 import type { LifecycleHost } from './terminal-compositor.lifecycle.js';
 
 /**
@@ -97,7 +106,8 @@ export function endTurnFlush(self: LifecycleHost): void {
   // as soft-wrappable logical lines via the shared archive path. `scrollbackFlushLines`
   // with count === bandLen emits the whole band; `buildScrollbackArchiveEscape`
   // paints it top-aligned at anchorFloor and scrolls it into scrollback.
-  const allLines = scrollbackFlushLines(self.committedBand, self.committedBandMeta, bandLen);
+  // The archived prefix (content-hug) is already in scrollback: skip it.
+  const allLines = flushLinesSkippingArchived(self.committedBand, self.committedBandMeta, bandLen, self.committedBandArchivedPrefix);
   const archiveEscape = buildScrollbackArchiveEscape(allLines, anchorFloor, rows, cols);
   if (archiveEscape.length > 0) {
     const write = (): void => { self.stdout.write(archiveEscape); };
@@ -154,7 +164,8 @@ export function flushPendingCommittedBand(self: LifecycleHost): void {
   const rows = Math.max(1, self.stdout.rows ?? 24);
   const cols = Math.max(1, self.stdout.columns ?? 80);
   const anchorFloor = Math.max(self.anchorRow ?? 1, 1);
-  const archiveLines = scrollbackFlushLines(self.committedBand, self.committedBandMeta, pendingCount);
+  // Pending archived-prefix rows (content-hug) are already in scrollback: skip them.
+  const archiveLines = flushLinesSkippingArchived(self.committedBand, self.committedBandMeta, pendingCount, self.committedBandArchivedPrefix);
   const escape = buildScrollbackArchiveEscape(archiveLines, anchorFloor, rows, cols);
   if (escape.length === 0) return;
   const write = (): void => {
@@ -168,5 +179,55 @@ export function flushPendingCommittedBand(self: LifecycleHost): void {
     }
   } catch {
     /* stdout closed mid-flush (process exiting) — nothing more we can do */
+  }
+}
+
+/**
+ * Emit `lines` as a plain append to the terminal starting at cursor row R.
+ *
+ * Used on the owner-wrote disarm path (F2 fix) where the owner has already
+ * written to stdout and the cursor is at row R. The regular archive path
+ * (buildScrollbackArchiveEscape) CUP-paints at anchorFloor with per-row
+ * `\x1b[2K` erases — on the owner-wrote path anchorFloor is often row 1,
+ * so that erase silently destroys still-visible prior-transcript rows that
+ * never reach scrollback. Instead, move to row R col 1 and write each line
+ * separated by `\r\n`, letting the terminal scroll naturally. Wrapped in
+ * withFullScrollRegion when a scroll region is active so the `\n` produces
+ * a full-screen scroll that enters real scrollback.
+ *
+ * Contract: `lines` must already be unwrapped logical lines (as produced by
+ * scrollbackFlushLines or decomposeCommitText.contentLines). Best-effort:
+ * a throwing write is swallowed (terminal closed during teardown).
+ */
+export function appendLinesAtCursor(
+  lines: readonly string[],
+  cursorRow: number,
+  self: LifecycleHost,
+): void {
+  if (lines.length === 0) return;
+  // Content centering (AFK_CENTER_CONTENT): apply the same left margin that
+  // buildScrollbackArchiveEscape applies on the normal archive path — a non-empty
+  // pad is prepended to every non-empty line so archived rows are left-aligned at
+  // the same horizontal offset as the live centered frame. The band stores raw
+  // (unpadded) content; padding is applied at emit time only, matching the
+  // behaviour of commitPhase3Band, commitPhase3Hold, and the scrollback archive.
+  const pad = contentMargin();
+  const paddedLines = pad
+    ? lines.map((l) => (l !== '' ? pad + l : l))
+    : lines;
+  // Invariant: CUP to R col 1 first so that if the owner left the cursor
+  // mid-line the \r\n sequence starts cleanly at the row boundary.
+  const payload = cup(Math.max(1, cursorRow), 1) + paddedLines.join('\r\n') + '\r\n';
+  const write = (): void => {
+    self.stdout.write(payload);
+  };
+  try {
+    if (self.scrollRegion) {
+      self.scrollRegion.withFullScrollRegion(write);
+    } else {
+      write();
+    }
+  } catch {
+    /* stdout closed mid-teardown */
   }
 }

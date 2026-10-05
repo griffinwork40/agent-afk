@@ -6,16 +6,11 @@
 
 import { describe, it, expect } from 'vitest';
 import { segmentAnsi } from './smoke-reveal.ansi.js';
-import {
-  SmokeReveal,
-  LIFETIME_MS,
-  MAX_LAG_MS,
-} from './smoke-reveal.js';
+import { SmokeReveal } from './smoke-reveal.js';
 
 const ESC = '\u001b';
 const BEL = '\u0007';
 const ST = `${ESC}\\`;
-const SETTLED = MAX_LAG_MS + LIFETIME_MS + 1;
 
 function clockAt(start = 1_000): { now: () => number; advance: (ms: number) => void } {
   let t = start;

@@ -28,8 +28,11 @@ import {
 import { join, basename, resolve, relative, isAbsolute } from 'path';
 import { getMemoryDir } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
+import { factsToResults, sanitizeFtsQuery } from './memory-store.fts.js';
+import { queryUnaccessed, queryAccessStats } from './memory-store.access.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
 import type {
+  AccessStats,
   Fact,
   NewFact,
   SearchOpts,
@@ -547,6 +550,20 @@ export class MemoryStore {
     return (row as Fact) ?? null;
   }
 
+  /**
+   * Returns non-superseded facts with `access_count = 0` that are older than
+   * `minAgeDays` days (default 30). Read-only — no facts are modified or
+   * deleted. Use as a dry-run signal for a future GC sweep.
+   */
+  getUnaccessed(minAgeDays?: number): Fact[] {
+    return queryUnaccessed(this.db, minAgeDays);
+  }
+
+  /** Returns aggregate access-count statistics for the fact archive. */
+  getAccessStats(): AccessStats {
+    return queryAccessStats(this.db);
+  }
+
   searchFacts(query: string, opts?: SearchOpts): Fact[] {
     const limit = opts?.limit ?? 10;
     const conditions: string[] = ['facts_fts MATCH ?'];
@@ -702,26 +719,29 @@ export class MemoryStore {
   // ── Combined search ─────────────────────────────────────────
 
   search(query: string, opts?: SearchOpts): MemorySearchResult[] {
-    const results: MemorySearchResult[] = [];
-
+    let factResults: MemorySearchResult[];
     try {
-      const facts = this.searchFacts(query, opts);
-      for (const f of facts) {
-        results.push({
-          type: 'fact',
-          content: f.content,
-          category: f.category as MemorySearchResult['category'],
-          created_at: f.created_at,
-          source_session: f.session_id,
-          confidence: f.confidence,
-          // Raw provenance; the verdict + [unverified] tag are applied by the
-          // memory-tool handler (policy layer) only when the gate is enabled.
-          evidence: f.evidence ?? null,
-        });
+      factResults = factsToResults(this.searchFacts(query, opts));
+    } catch (err) {
+      // FTS5 MATCH syntax can fail on queries with bareword characters that FTS5
+      // treats as operators or column names (hyphens, colons, slashes, dots).
+      // Retry once with a sanitized query that wraps problematic bare tokens in
+      // double-quotes while preserving explicit FTS5 operators (AND, OR, NOT,
+      // quoted phrases, prefix*). If the sanitized query also fails, rethrow so
+      // the handler in memory-tools.ts can surface a diagnostic error instead of
+      // returning a silent empty result indistinguishable from a true miss.
+      const sanitized = sanitizeFtsQuery(query);
+      if (sanitized !== query) {
+        debugLog('memory-store: FTS5 query failed, retrying with sanitized form:', sanitized);
+        factResults = factsToResults(this.searchFacts(sanitized, opts)); // throws → propagates
+      } else {
+        throw err; // No sanitization possible; surface the error to the handler.
       }
-    } catch {
-      // FTS5 match syntax can fail on malformed queries — degrade gracefully
     }
+    // Invariant: `results` aliases `factResults` (no defensive copy).
+    // The array is consumed exactly once (push + slice below) and never read
+    // from again. Add a spread copy here if a second reader ever appears.
+    const results: MemorySearchResult[] = factResults;
 
     if (!opts?.category) {
       const procs = this.searchProcedures(query);

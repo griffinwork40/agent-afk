@@ -46,7 +46,7 @@ import {
 } from './terminal-compositor.frame.layout.js';
 import { buildFrameLines, buildPickerFrameLines } from './terminal-compositor.frame.lines.js';
 import { computeFramePosition } from './terminal-compositor.frame.position.js';
-import { contentHugAnchor, contentHugTargetBottom } from './terminal-compositor.content-hug.js';
+import { contentHugAnchor, contentHugBandReserve, contentHugTargetBottom } from './terminal-compositor.content-hug.js';
 
 /**
  * Narrowest TerminalCompositor state slice the frame-composition functions
@@ -96,6 +96,8 @@ export interface FrameHost {
   /** content-hug: post-commit band length during an in-flight commit, else null. */
   pendingContentRows: number | null;
   committedBandPaintedRows: number;
+  /** Leading band rows already in scrollback (terminal-compositor.band-archived-prefix.ts). */
+  committedBandArchivedPrefix: number;
   /** Memoization for reflowCommittedBandToWidth — see the field doc on the class. */
   bandReflowCache: BandReflowCache | null;
   hasCommitted: boolean;
@@ -168,6 +170,7 @@ export function repaint(self: FrameHost): void {
     hintRow !== null,
     self.stdout.rows ?? 24,
     self.scrollRegion,
+    contentHugBandReserve(self, self.stdout.rows ?? 24),
   );
   const frameLines = buildFrameLines(
     chrome,
@@ -261,6 +264,7 @@ function repaintPickerFrame(self: FrameHost): void {
     pickerRows.length,
     self.stdout.rows ?? 24,
     self.scrollRegion,
+    contentHugBandReserve(self, self.stdout.rows ?? 24),
   );
   const frameLines = buildPickerFrameLines(chrome, layout.trimmedOverlay, layout.renderGap, pickerRows);
   // Empty-frame guard: when the picker's renderRows() is empty and no

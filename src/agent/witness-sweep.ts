@@ -2,11 +2,10 @@
  * Bounded retention for the witness tree (`$AFK_STATE_DIR/witness/`).
  *
  * Nothing pruned this tree before: the trace writer, compaction sidecars, and
- * the opt-in prompt/output captures all appended forever. On one developer
- * machine it reached 546 MB / 13,052 directories with no opt-in artifact even
- * enabled (#849). This module is the sibling of `log-retention.ts` for a tree
- * of directories rather than a single JSONL file, and is the standing gate on
- * ever defaulting `AFK_CAPTURE_SUBAGENT_PROMPTS` / `_OUTPUT` to on.
+ * subagent journals all appended forever. On one developer machine it reached
+ * 546 MB / 13,052 directories (#849). This module is the sibling of
+ * `log-retention.ts` for a tree of directories rather than a single JSONL
+ * file.
  *
  * Retention unit is the WHOLE session directory. Per-artifact caps inside a
  * session were rejected: a trace stripped of its sidecars is a more confusing
@@ -19,6 +18,7 @@ import { readdir, stat, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { env } from '../config/env.js';
 import { getWitnessRoot, getSubagentLogsRoot } from '../paths.js';
+import { newestMtimeAndBytes, type DirStats } from './_lib/dir-newest-mtime.js';
 import { sweepExpiredManifests as sweepWaveManifests } from './manifest/reconcile.js';
 
 /** Evict a session directory once its newest content is older than this. */
@@ -128,50 +128,6 @@ const noop = (): WitnessSweepResult => ({
 function positiveNumber(raw: string | undefined, fallback: number): number {
   const n = Number.parseFloat(raw ?? '');
   return Number.isFinite(n) && n > 0 ? n : fallback;
-}
-
-interface DirStats { newestMtimeMs: number; bytes: number }
-
-// Invariant: a directory's OWN mtime is not a usable liveness signal here.
-// POSIX bumps a directory's mtime when an entry is created or unlinked, but NOT
-// when an existing file inside it is appended to. A long-running session that
-// creates no new sidecars (no subagents, no compaction) therefore keeps
-// appending to trace.jsonl while its directory mtime stays frozen at creation
-// time — so an mtime-only sweep would evict a LIVE session's trace out from
-// under it. Liveness must come from the newest mtime across the directory's
-// CONTENTS, and the active session is additionally excluded by identity so its
-// survival never depends on this walk being right.
-async function newestMtimeAndBytes(dir: string): Promise<DirStats> {
-  let newestMtimeMs = 0;
-  let bytes = 0;
-  const walk = async (path: string): Promise<void> => {
-    const entries = await readdir(path, { withFileTypes: true });
-    for (const entry of entries) {
-      const child = join(path, entry.name);
-      if (entry.isDirectory()) {
-        await walk(child);
-        continue;
-      }
-      try {
-        const st = await stat(child);
-        bytes += st.size;
-        if (st.mtimeMs > newestMtimeMs) newestMtimeMs = st.mtimeMs;
-      } catch {
-        /* raced away mid-walk — ignore */
-      }
-    }
-  };
-  await walk(dir);
-  if (newestMtimeMs === 0) {
-    // No files at all (empty or freshly-created dir). Fall back to the
-    // directory's own mtime so an empty dir is not treated as epoch-old.
-    try {
-      newestMtimeMs = (await stat(dir)).mtimeMs;
-    } catch {
-      newestMtimeMs = Date.now();
-    }
-  }
-  return { newestMtimeMs, bytes };
 }
 
 /** True when the stamp says a sweep ran recently enough to skip this one. */

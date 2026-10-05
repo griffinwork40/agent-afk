@@ -29,6 +29,7 @@ import {
   type RouteContext,
 } from './routes.js';
 import { handleStream } from './stream-route.js';
+import { handleGetToolResult } from './routes.tool-results.js';
 import {
   handleCreateSchedule,
   handleDaemonStatus,
@@ -296,6 +297,12 @@ async function dispatch(
   const streamMatch = /^\/api\/sessions\/([^/]+)\/stream$/.exec(path);
   if (streamMatch?.[1] && method === 'GET') {
     await handleStream(req, res, decodeURIComponent(streamMatch[1]), streams);
+    return;
+  }
+
+  const toolResultMatch = /^\/api\/sessions\/([^/]+)\/tool-results\/([^/]+)$/.exec(path);
+  if (toolResultMatch?.[1] && toolResultMatch[2] && method === 'GET') {
+    await handleGetToolResult(res, decodeURIComponent(toolResultMatch[1]), decodeURIComponent(toolResultMatch[2]));
     return;
   }
 

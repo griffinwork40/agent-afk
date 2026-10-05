@@ -15,6 +15,8 @@ import { describe, it, expect } from 'vitest';
 
 import { parseTerminalState } from '../cli/commands/interactive/terminal-state.js';
 
+import { NARRATION_DIRECTIVE } from './narration-directive.js';
+import { SHARED_CONTEXT_DIRECTIVE } from './shared-context-directive.js';
 import {
   END_OF_TURN_DIRECTIVE,
   ROUTING_DIRECTIVE,
@@ -85,6 +87,63 @@ describe('assembleSystemPrompt', () => {
     });
   });
 
+  describe('narration directive (surface)', () => {
+    it.each(['repl', 'telegram'] as const)('appends NARRATION_DIRECTIVE on the %s surface', (surface) => {
+      expect(assembleSystemPrompt(BASE, false, surface)).toContain(NARRATION_DIRECTIVE);
+    });
+
+    it('omits NARRATION_DIRECTIVE on the one-shot surface and by default', () => {
+      // Invariant: nobody watches one-shot / daemon / subagent turns live, so
+      // narration there is pure token cost; the base "do not narrate" stands.
+      expect(assembleSystemPrompt(BASE, true, 'one-shot')).not.toContain(NARRATION_DIRECTIVE);
+      expect(assembleSystemPrompt(BASE, true)).not.toContain(NARRATION_DIRECTIVE);
+    });
+
+    it('places narration after routing and before the end-of-turn protocol', () => {
+      const out = assembleSystemPrompt(BASE, true, 'repl')!;
+      const routingIdx = out.indexOf(ROUTING_DIRECTIVE);
+      const narrationIdx = out.indexOf(NARRATION_DIRECTIVE);
+      const endIdx = out.indexOf(END_OF_TURN_DIRECTIVE);
+      expect(routingIdx).toBeLessThan(narrationIdx);
+      expect(narrationIdx).toBeLessThan(endIdx);
+      expect(out.endsWith(END_OF_TURN_DIRECTIVE)).toBe(true);
+    });
+
+    it('names the base-prompt line it refines', () => {
+      // Contract: the directive must reference the base line explicitly so
+      // the model reads it as a scoped refinement, not a conflict.
+      expect(NARRATION_DIRECTIVE).toContain('"Run the loop; do not narrate it"');
+    });
+  });
+
+  describe('shared-context directive (surface)', () => {
+    it.each(['repl', 'telegram'] as const)('appends SHARED_CONTEXT_DIRECTIVE on the %s surface', (surface) => {
+      expect(assembleSystemPrompt(BASE, false, surface)).toContain(SHARED_CONTEXT_DIRECTIVE);
+    });
+
+    it('omits SHARED_CONTEXT_DIRECTIVE on the one-shot surface and by default', () => {
+      expect(assembleSystemPrompt(BASE, true, 'one-shot')).not.toContain(SHARED_CONTEXT_DIRECTIVE);
+      expect(assembleSystemPrompt(BASE, true)).not.toContain(SHARED_CONTEXT_DIRECTIVE);
+    });
+
+    it('places shared-context after narration and before the end-of-turn protocol', () => {
+      const out = assembleSystemPrompt(BASE, true, 'repl') ?? '';
+      const narrationIdx = out.indexOf(NARRATION_DIRECTIVE);
+      const sharedIdx = out.indexOf(SHARED_CONTEXT_DIRECTIVE);
+      const endIdx = out.indexOf(END_OF_TURN_DIRECTIVE);
+      expect(narrationIdx).toBeGreaterThan(-1);
+      expect(narrationIdx).toBeLessThan(sharedIdx);
+      expect(sharedIdx).toBeLessThan(endIdx);
+    });
+
+    it('is normative and makes no claim about what the renderer shows', () => {
+      // Invariant (see shared-context-directive.ts): a rendering claim is false
+      // on some surface; the directive must stay phrased as an instruction.
+      expect(SHARED_CONTEXT_DIRECTIVE).toContain('Do not assume the user has seen the underlying results.');
+      expect(SHARED_CONTEXT_DIRECTIVE).not.toMatch(/collapsed|has not seen|cannot see|sees a/i);
+    });
+  });
+
   describe('combined directives', () => {
     it('appends both directives when autoRouting=true and surface=repl', () => {
       const out = assembleSystemPrompt(BASE, true, 'repl');
@@ -93,26 +152,30 @@ describe('assembleSystemPrompt', () => {
       expect(out).toContain(END_OF_TURN_DIRECTIVE);
     });
 
-    it('orders sections as: base, routing, end-of-turn', () => {
+    it('orders sections as: base, routing, shared-context, end-of-turn', () => {
       // Invariant: end-of-turn must be the final block so it lands in the
       // model's highest-attention tail region. Routing rides between base
       // and end-of-turn — its content is structural guidance, not a
-      // turn-terminator.
+      // turn-terminator. SHARED_CONTEXT_DIRECTIVE sits after routing (and
+      // after narration) but before end-of-turn.
       const out = assembleSystemPrompt(BASE, true, 'repl');
       expect(out).toBeDefined();
       const baseIdx = out!.indexOf(BASE);
       const routingIdx = out!.indexOf(ROUTING_DIRECTIVE);
+      const sharedIdx = out!.indexOf(SHARED_CONTEXT_DIRECTIVE);
       const endIdx = out!.indexOf(END_OF_TURN_DIRECTIVE);
       expect(baseIdx).toBeLessThan(routingIdx);
-      expect(routingIdx).toBeLessThan(endIdx);
+      expect(routingIdx).toBeLessThan(sharedIdx);
+      expect(sharedIdx).toBeLessThan(endIdx);
     });
 
     it('separates sections with a blank line', () => {
       const out = assembleSystemPrompt(BASE, true, 'repl');
       expect(out).toBeDefined();
-      // Three sections → at least two `\n\n` separators.
+      // Five sections (base, routing, narration, shared-context, end-of-turn)
+      // → at least four `\n\n` separators.
       const separators = (out!.match(/\n\n/g) ?? []).length;
-      expect(separators).toBeGreaterThanOrEqual(2);
+      expect(separators).toBeGreaterThanOrEqual(4);
     });
   });
 

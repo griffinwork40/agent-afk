@@ -492,7 +492,23 @@ export function _resetReadDenylistCacheForTests(): void {
  * read-denylisted prefix. Never throws.
  */
 export function isReadDenied(filePath: string): { denied: boolean; matched?: string } {
-  const real = safeRealpath(resolve(filePath));
+  return isCanonicalPathReadDenied(safeRealpath(resolve(filePath)));
+}
+
+/**
+ * {@link isReadDenied} for a path the caller has ALREADY canonicalized, so it
+ * skips the per-call `realpathSync`.
+ *
+ * Contract: `real` must equal `safeRealpath(resolve(p))` for the path being
+ * checked; the verdict is then identical to `isReadDenied(p)`. The glob walker
+ * relies on this (#2543): it resolves its base once and derives each
+ * non-symlink child as `join(realParent, name)`. The synchronous realpath was
+ * about 120µs per entry, which made a `$HOME` walk take minutes and blocked the
+ * event loop for every concurrent tool call. Passing an un-canonicalized path
+ * here is a fail-open bug: a symlink into a denied root would slip past the
+ * prefix checks.
+ */
+export function isCanonicalPathReadDenied(real: string): { denied: boolean; matched?: string } {
   const { builtins, extras, allow } = resolveLists();
 
   // Invariant: operator-supplied `AFK_READ_DENYLIST` extras are matched BEFORE

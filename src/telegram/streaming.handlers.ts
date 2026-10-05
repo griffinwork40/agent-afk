@@ -18,6 +18,9 @@ import type { SenderState } from './streaming.sender.js';
 import type { ProgressEntry } from './streaming.preview.js';
 import { replyWithFloodRetry as replyWithFloodRetryImpl } from './streaming.retry.js';
 import type { ResponseMetadata } from '../agent/types.js';
+import type { UsageLimitProvider } from '../utils/errors.js';
+import { pausedMessage } from './streaming.paused-copy.js';
+import { normalizeUsageLimitError } from '../agent/usage/usage-limit-info.js';
 
 /** Countdown update granularity during a usage-limit pause: every 5 minutes. */
 export const PAUSE_COUNTDOWN_INTERVAL_MS = 5 * 60 * 1_000;
@@ -68,6 +71,8 @@ export async function handlePaused(
     resetsAt?: Date | null;
     autoResume?: boolean;
     accountId?: string;
+    provider?: UsageLimitProvider;
+    plan?: string;
   },
   params: HandlerParams,
 ): Promise<void> {
@@ -80,14 +85,12 @@ export async function handlePaused(
   const timeStr = state.pausedUntil !== null
     ? state.pausedUntil.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true })
     : null;
-  const accountLine = event.accountId ? `\n\nAccount: ${event.accountId}` : '';
-  const pauseMsg = timeStr !== null && minutesRemaining !== null
-    ? autoResume
-      ? `⏸ **Usage paused**${accountLine}\n\nResets at ${timeStr} (in ~${minutesRemaining} min).\n\nI'll auto-resume when the limit resets — no need to retype.`
-      : `⏸ **Usage paused**${accountLine}\n\nResets at ${timeStr} (in ~${minutesRemaining} min).\n\nWait for the limit to reset, then send again — or abort and retry later.`
-    : autoResume
-      ? `⏸ **Usage paused**${accountLine}\n\nNo reset time available. I'll resume automatically if you log in with a different Claude account — or abort and retry later.`
-      : `⏸ **Usage paused**${accountLine}\n\nNo reset time available. Wait for the limit to reset, then send again — or abort and retry later.`;
+  const pauseMsg = pausedMessage({
+    timeStr, minutesRemaining, autoResume,
+    ...(event.accountId !== undefined ? { accountId: event.accountId } : {}),
+    ...(event.provider !== undefined ? { provider: event.provider } : {}),
+    ...(event.plan !== undefined ? { plan: event.plan } : {}),
+  });
   await sendOrEdit(state, ctx, chatId, pauseMsg, true);
 
   if (state.pausedUntil !== null && autoResume) {
@@ -99,7 +102,14 @@ export async function handlePaused(
       if (bucket !== state.lastCountdownBucket) {
         state.lastCountdownBucket = bucket;
         const ts = state.pausedUntil!.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true });
-        const msg = `⏸ **Usage paused**\n\nResets at ${ts} (in ~${remaining} min).\n\nI'll auto-resume when the limit resets — no need to retype.`;
+        // Same provider-aware copy as the initial message, so a Codex pause
+        // never reverts to generic wording on a countdown edit.
+        const msg = pausedMessage({
+          timeStr: ts, minutesRemaining: remaining, autoResume: true,
+          ...(event.accountId !== undefined ? { accountId: event.accountId } : {}),
+          ...(event.provider !== undefined ? { provider: event.provider } : {}),
+          ...(event.plan !== undefined ? { plan: event.plan } : {}),
+        });
         state.editInFlight = true;
         void sendOrEdit(state, ctx, chatId, msg, true).finally(() => { state.editInFlight = false; });
       }
@@ -191,7 +201,9 @@ export async function handleDone(
 /**
  * Handle an `error` event — the provider already emitted a terminal error and
  * parked itself, so no interrupt() is needed (and would wrongly abort the
- * NEXT turn). Marks the turn as finished and throws the error.
+ * NEXT turn). Marks the turn as finished and throws the error. A usage limit
+ * that reached here unwrapped (raw ChatGPT body) is rethrown as the shared
+ * `UsageLimitError` so the reply shows the provider-labeled sentence.
  */
 export function handleError(error: unknown, params: HandlerParams): never {
   const { state, clearProgressTimer } = params;
@@ -204,7 +216,7 @@ export function handleError(error: unknown, params: HandlerParams): never {
     clearInterval(state.countdownInterval);
     state.countdownInterval = null;
   }
-  throw error;
+  throw normalizeUsageLimitError(error);
 }
 
 /**

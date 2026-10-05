@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatSpineDuration, formatSpineCost } from '@/lib/topology';
+import { FullToolOutput } from './full-tool-output';
 import type { SpineNode, ToolCategory } from '@/lib/topology-types';
 
 // ---------------------------------------------------------------------------
@@ -169,6 +170,12 @@ export function TopologyNode({ node, depth = 0, isLast: _isLast = false }: Topol
   // Default: expanded when active, collapsed when done.
   const isCollapsible = node.kind === 'agent' && node.children.length > 0;
   const [expanded, setExpanded] = useState<boolean>(node.isActive);
+  // Tool nodes with a result (or a lazy-loadable one) can reveal their output.
+  const hasToolOutput =
+    node.kind === 'tool' &&
+    ((node.output !== undefined && node.output.trim().length > 0) ||
+      (node.sourceId !== undefined && node.outputUnavailable === true));
+  const [outputOpen, setOutputOpen] = useState(false);
 
   const hasChildren = node.children.length > 0;
   const isAgent = node.kind === 'agent';
@@ -248,6 +255,30 @@ export function TopologyNode({ node, depth = 0, isLast: _isLast = false }: Topol
           </span>
         )}
       </div>
+
+      {/* ── Output (tool nodes) ─────────────────────────────── */}
+      {hasToolOutput && (
+        <div className="pl-5">
+          <button
+            type="button"
+            onClick={() => setOutputOpen((v) => !v)}
+            aria-expanded={outputOpen}
+            className="text-[10px] text-muted-foreground/70 hover:text-foreground"
+          >
+            {outputOpen ? 'Hide output' : 'Output'}
+          </button>
+          {outputOpen && (
+            <div className="mt-0.5 mb-1 max-h-96 overflow-y-auto rounded border border-border/50 bg-card px-2 py-1">
+              <FullToolOutput
+                toolUseId={node.sourceId}
+                preview={node.output}
+                clipped={node.outputClipped}
+                unavailable={node.outputUnavailable}
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Preview line (agents only) ─────────────────────── */}
       {isAgent && node.preview && (

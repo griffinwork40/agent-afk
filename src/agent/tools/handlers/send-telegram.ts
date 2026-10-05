@@ -2,14 +2,15 @@
  * Handler for the `send_telegram` tool.
  *
  * Sends a Telegram message to the operator from inside an agent loop.
- * Delegates to the `push()` primitive from `src/telegram/push.ts` — same
- * raw-fetch path used by daemon crash-push and task-completion notifications.
+ * Delegates to the `pushMarkdown()` helper from `src/telegram/push.ts`, which
+ * renders Markdown to Telegram HTML (bold, italic, code, links) and falls back
+ * to plain text if Telegram rejects the formatting.
  *
  * @module agent/tools/handlers/send-telegram
  */
 
 import { env } from '../../../config/env.js';
-import { push, type PushOptions, type PushResult } from '../../../telegram/push.js';
+import { pushMarkdown, type PushOptions, type PushResult } from '../../../telegram/push.js';
 import type { ToolHandler } from '../types.js';
 import {
   resolveConfiguredNotifyTargets,
@@ -23,7 +24,7 @@ const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
 type PushFn = (options: PushOptions) => Promise<PushResult>;
 
 export function createSendTelegramHandler(
-  pushFn: PushFn = push,
+  pushFn: PushFn = pushMarkdown,
 ): ToolHandler {
   return async (input, _signal) => {
     if (!input || typeof input !== 'object') {

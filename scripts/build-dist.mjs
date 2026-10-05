@@ -14,7 +14,7 @@
 
 import { build } from 'esbuild';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, rmSync, mkdirSync, statSync, chmodSync, copyFileSync, readdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync, mkdirSync, statSync, chmodSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { prepareSources } from './esbuild-plugin-inline-prompts.mjs';
@@ -143,8 +143,8 @@ try {
     chmodSync(filePath, 0o755);
   }
 
-  // Copy postinstall script into dist/ so it ships in the npm tarball
-  copyFileSync(join(repoRoot, 'scripts/postinstall.mjs'), join(distDir, 'postinstall.mjs'));
+  // postinstall is NOT copied into dist/: package.json#scripts.postinstall runs
+  // scripts/postinstall.mjs directly, and package.json#files ships it (#2523).
 
   // Copy the bundled-plugins tree (awa-bundled orchestration skills) into dist/.
   // esbuild only emits the four JS entry points; these data files are read from
@@ -185,8 +185,6 @@ try {
     const kb = (size / 1024).toFixed(1);
     console.log(`  dist/${name}: ${kb} KB`);
   }
-  const postSize = statSync(join(distDir, 'postinstall.mjs')).size;
-  console.log(`  dist/postinstall.mjs: ${(postSize / 1024).toFixed(1)} KB (copied)`);
   console.log(`  dist/bundled-plugins/: ${bundled.fileCount} files (copied)`);
   console.log(`  dist/web-ui-assets/: ${webUi.fileCount} files (copied)`);
 } catch (error) {
