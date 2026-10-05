@@ -273,10 +273,10 @@ describe('F2(c): fully-pending band (F3 scenario): pending rows survive disarm-o
   });
 
   it('partially-pending band is not lost when owner scrolls before disarm (content-hug)', async () => {
-    // With contentHugBandReserve active the newest band rows stay painted, so a
-    // 1-row band can no longer go fully pending. Commit a band LARGER than the
-    // reserve (max(3, rows/4) = 6 at 24 rows) so the older rows are genuinely
-    // pending, then assert every row survives disarm-owner-wrote exactly once.
+    // Commit a band LARGER than contentHugBandReserve (max(3, rows/4) = 6 at 24
+    // rows) under a full-viewport overlay so the older rows are genuinely
+    // pending (already in scrollback as the archived prefix, hidden on screen),
+    // then assert every row survives disarm-owner-wrote exactly once.
     const overlay = Array.from({ length: ROWS }, (_, i) => `overlay-hug-${i}`).join('\n');
     const { c, vs, stdout, repaint } = await makeRig({ overlay, contentHug: true });
 

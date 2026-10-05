@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs/promises';
+import * as fsSync from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createImageGenerateHandler } from './image-generate.js';
+import { _resetWriteDenylistCacheForTests } from './write-denylist.js';
+import { _resetRootRealpathCacheForTests } from './_cwd-utils.js';
 
 // Mock resolveOpenAIAuth so tests control auth resolution without touching disk.
 vi.mock('../../providers/openai-compatible/auth.js', () => ({
@@ -81,7 +84,7 @@ describe('image_generate handler', () => {
     mockResolveAuth.mockReturnValue({ apiKey: 'sk-resolved', source: 'env', envVar: 'OPENAI_API_KEY' });
     const handler = createImageGenerateHandler();
     // Should NOT error on missing key — proceeds to input validation.
-    const result = await handler({}, signal, { cwd: tmpDir, sessionId: 'fallback-auth-test' });
+    const result = await handler({}, signal, { resolveBase: tmpDir, sessionId: 'fallback-auth-test' });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('prompt');
     expect(result.content).not.toContain('auth');
@@ -94,7 +97,7 @@ describe('image_generate handler', () => {
     const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
     const handler = createImageGenerateHandler(fetchFn);
     mockResolveAuth.mockClear(); // clear prior calls from other tests
-    await handler({ prompt: 'test' }, signal, { cwd: tmpDir, sessionId: 'pref-test' });
+    await handler({ prompt: 'test' }, signal, { resolveBase: tmpDir, sessionId: 'pref-test' });
     // Should use the dedicated key, not the OAuth token.
     const [, opts] = fetchFn.mock.calls[0]!;
     expect(opts.headers['Authorization']).toBe('Bearer dedicated-key');
@@ -116,7 +119,7 @@ describe('image_generate handler', () => {
     });
     const fetchFn = vi.fn(); // should NOT be called directly
     const handler = createImageGenerateHandler(fetchFn);
-    const result = await handler({ prompt: 'test' }, signal, { cwd: tmpDir, sessionId: 'oauth-test' });
+    const result = await handler({ prompt: 'test' }, signal, { resolveBase: tmpDir, sessionId: 'oauth-test' });
 
     expect(result.isError).toBeUndefined();
     // The direct fetchFn should NOT be called — ChatGPT path uses its own fetch.
@@ -144,7 +147,7 @@ describe('image_generate handler', () => {
       error: 'ChatGPT backend returned 429: usage limit reached',
     });
     const handler = createImageGenerateHandler();
-    const result = await handler({ prompt: 'test' }, signal, { cwd: tmpDir, sessionId: 'oauth-err' });
+    const result = await handler({ prompt: 'test' }, signal, { resolveBase: tmpDir, sessionId: 'oauth-err' });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('429');
     vi.unstubAllEnvs();
@@ -166,7 +169,7 @@ describe('image_generate handler', () => {
   it('rejects missing prompt', async () => {
     vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
     const handler = createImageGenerateHandler();
-    const result = await handler({}, signal, { cwd: tmpDir, sessionId: 'val-prompt-test' });
+    const result = await handler({}, signal, { resolveBase: tmpDir, sessionId: 'val-prompt-test' });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('prompt');
     vi.unstubAllEnvs();
@@ -175,7 +178,7 @@ describe('image_generate handler', () => {
   it('rejects invalid model', async () => {
     vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
     const handler = createImageGenerateHandler();
-    const result = await handler({ prompt: 'test', model: 'dall-e-3' }, signal, { cwd: tmpDir, sessionId: 'val-model-test' });
+    const result = await handler({ prompt: 'test', model: 'dall-e-3' }, signal, { resolveBase: tmpDir, sessionId: 'val-model-test' });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('Invalid model');
     vi.unstubAllEnvs();
@@ -184,7 +187,7 @@ describe('image_generate handler', () => {
   it('rejects invalid size', async () => {
     vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
     const handler = createImageGenerateHandler();
-    const result = await handler({ prompt: 'test', size: '512x512' }, signal, { cwd: tmpDir, sessionId: 'val-size-test' });
+    const result = await handler({ prompt: 'test', size: '512x512' }, signal, { resolveBase: tmpDir, sessionId: 'val-size-test' });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('Invalid size');
     vi.unstubAllEnvs();
@@ -208,7 +211,7 @@ describe('image_generate handler', () => {
     vi.stubEnv('AFK_IMAGE_ALLOW_DAEMON', '1');
     const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
     const handler = createImageGenerateHandler(fetchFn);
-    const result = await handler({ prompt: 'test' }, signal, { cwd: tmpDir, sessionId: 'daemon-allow-test' });
+    const result = await handler({ prompt: 'test' }, signal, { resolveBase: tmpDir, sessionId: 'daemon-allow-test' });
     expect(result.isError).toBeUndefined();
     vi.unstubAllEnvs();
   });
@@ -225,7 +228,7 @@ describe('image_generate handler', () => {
       .mockResolvedValueOnce(makeOkResponse(TINY_PNG_B64));
     const handler = createImageGenerateHandler(fetchFn);
     const sid = `limit-test-${Date.now()}`;
-    const ctx = { cwd: tmpDir, sessionId: sid };
+    const ctx = { resolveBase: tmpDir, sessionId: sid };
 
     // First two should succeed
     const r1 = await handler({ prompt: 'test1' }, signal, ctx);
@@ -252,7 +255,7 @@ describe('image_generate handler', () => {
     const result = await handler(
       { prompt: 'a cat', model: 'gpt-image-1', size: '1024x1024' },
       signal,
-      { cwd: tmpDir, sessionId: 'gen-test-session' },
+      { resolveBase: tmpDir, sessionId: 'gen-test-session' },
     );
 
     expect(result.isError).toBeUndefined();
@@ -289,7 +292,7 @@ describe('image_generate handler', () => {
     const result = await handler(
       { prompt: 'test', output_path: customPath },
       signal,
-      { cwd: tmpDir, sessionId: 'custom-path-session' },
+      { resolveBase: tmpDir, sessionId: 'custom-path-session' },
     );
 
     expect(result.isError).toBeUndefined();
@@ -308,7 +311,7 @@ describe('image_generate handler', () => {
       makeErrorResponse(429, 'Rate limit exceeded'),
     );
     const handler = createImageGenerateHandler(fetchFn);
-    const result = await handler({ prompt: 'test' }, signal, { cwd: tmpDir, sessionId: 'err-session' });
+    const result = await handler({ prompt: 'test' }, signal, { resolveBase: tmpDir, sessionId: 'err-session' });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('429');
     vi.unstubAllEnvs();
@@ -318,7 +321,7 @@ describe('image_generate handler', () => {
     vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
     const fetchFn = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'));
     const handler = createImageGenerateHandler(fetchFn);
-    const result = await handler({ prompt: 'test' }, signal, { cwd: tmpDir, sessionId: 'net-err-session' });
+    const result = await handler({ prompt: 'test' }, signal, { resolveBase: tmpDir, sessionId: 'net-err-session' });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('ECONNREFUSED');
     vi.unstubAllEnvs();
@@ -330,7 +333,7 @@ describe('image_generate handler', () => {
       new Response(JSON.stringify({ data: [{}] }), { status: 200 }),
     );
     const handler = createImageGenerateHandler(fetchFn);
-    const result = await handler({ prompt: 'test' }, signal, { cwd: tmpDir, sessionId: 'no-data-session' });
+    const result = await handler({ prompt: 'test' }, signal, { resolveBase: tmpDir, sessionId: 'no-data-session' });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('no image data');
     vi.unstubAllEnvs();
@@ -345,7 +348,7 @@ describe('image_generate handler', () => {
     const result = await handler(
       { prompt: 'a cat', inspect: true },
       signal,
-      { cwd: tmpDir, sessionId: 'inspect-on-session' },
+      { resolveBase: tmpDir, sessionId: 'inspect-on-session' },
     );
 
     expect(result.isError).toBeUndefined();
@@ -366,7 +369,7 @@ describe('image_generate handler', () => {
     const result = await handler(
       { prompt: 'a cat' },
       signal,
-      { cwd: tmpDir, sessionId: 'inspect-off-session' },
+      { resolveBase: tmpDir, sessionId: 'inspect-off-session' },
     );
 
     expect(result.isError).toBeUndefined();
@@ -381,7 +384,7 @@ describe('image_generate handler', () => {
     const result = await handler(
       { prompt: 'a cat', inspect: false },
       signal,
-      { cwd: tmpDir, sessionId: 'inspect-false-session' },
+      { resolveBase: tmpDir, sessionId: 'inspect-false-session' },
     );
 
     expect(result.isError).toBeUndefined();
@@ -398,7 +401,7 @@ describe('image_generate handler', () => {
     const result = await handler(
       { prompt: 'a cat', inspect: true },
       signal,
-      { cwd: tmpDir, sessionId: 'inspect-cap-session' },
+      { resolveBase: tmpDir, sessionId: 'inspect-cap-session' },
     );
 
     expect(result.isError).toBeUndefined();
@@ -415,7 +418,7 @@ describe('image_generate handler', () => {
     const result = await handler(
       { prompt: 'a cat', output_format: 'jpeg', inspect: true },
       signal,
-      { cwd: tmpDir, sessionId: 'inspect-jpeg-session' },
+      { resolveBase: tmpDir, sessionId: 'inspect-jpeg-session' },
     );
 
     expect(result.isError).toBeUndefined();
@@ -436,7 +439,7 @@ describe('image_generate handler', () => {
     vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
     const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
     const handler = createImageGenerateHandler(fetchFn);
-    await handler({ prompt: 'test' }, signal, { cwd: tmpDir, sessionId: 'defaults-session' });
+    await handler({ prompt: 'test' }, signal, { resolveBase: tmpDir, sessionId: 'defaults-session' });
 
     const body = JSON.parse(fetchFn.mock.calls[0]![1].body);
     expect(body.model).toBe('gpt-image-1');
@@ -444,5 +447,130 @@ describe('image_generate handler', () => {
     expect(body.quality).toBe('auto');
     expect(body.output_format).toBe('png');
     vi.unstubAllEnvs();
+  });
+
+  // ── Dangling symlink security (#2823) ────────────────────────────────────
+
+  it('refuses a dangling symlink whose target is outside the write root', async () => {
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    _resetRootRealpathCacheForTests();
+    _resetWriteDenylistCacheForTests();
+
+    // Create an outside dir with an existing parent (the symlink target parent must
+    // exist for the kernel to follow the link and write there).
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-outside-'));
+    const outsideFile = path.join(outsideDir, 'escaped.png');
+    const linkPath = path.join(tmpDir!, 'evil.png');
+    // Dangling symlink: link exists inside root but target does not exist yet.
+    fsSync.symlinkSync(outsideFile, linkPath);
+
+    const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
+    const handler = createImageGenerateHandler(fetchFn);
+    const result = await handler(
+      { prompt: 'test', output_path: linkPath },
+      signal,
+      { cwd: tmpDir, sessionId: 'symlink-escape-test', resolveBase: tmpDir, writeRoots: [tmpDir!] },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/outside.*write roots|write roots/i);
+    // The outside file must NOT have been created.
+    await expect(fs.access(outsideFile)).rejects.toThrow();
+
+    await fs.rm(outsideDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+    _resetRootRealpathCacheForTests();
+  });
+
+  it('refuses a dangling symlink that points at a denylisted path', async () => {
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    _resetRootRealpathCacheForTests();
+    _resetWriteDenylistCacheForTests();
+
+    const homeDir = os.homedir();
+    const denyTarget = path.join(homeDir, '.ssh', 'injected.png');
+    const linkPath = path.join(tmpDir!, 'denylink.png');
+    // Dangling symlink pointing at a denylisted path (~/.ssh/).
+    fsSync.symlinkSync(denyTarget, linkPath);
+
+    const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
+    const handler = createImageGenerateHandler(fetchFn);
+    const result = await handler(
+      { prompt: 'test', output_path: linkPath },
+      signal,
+      { cwd: tmpDir, sessionId: 'symlink-deny-test', resolveBase: tmpDir, writeRoots: [tmpDir!, homeDir] },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/protected path|denylist/i);
+    vi.unstubAllEnvs();
+    _resetRootRealpathCacheForTests();
+    _resetWriteDenylistCacheForTests();
+  });
+
+  // ── Intermediate symlinked-directory escape (#2836 Item 1) ───────────────
+
+  it('refuses output_path via intermediate symlinked dir whose relative target escapes root', async () => {
+    // Scenario:
+    //   root/subdir/         (real directory)
+    //   root/dirLink -> root/subdir/  (directory symlink)
+    //   root/subdir/hop.png -> ../../outside/escaped.png  (relative escape)
+    //   Access via: root/dirLink/hop.png
+    //
+    // The physical-parent fix resolves the relative symlink against the real
+    // parent (root/subdir), so ../../ correctly escapes root. Without the fix
+    // the lexical parent (root/dirLink) would be used, which may resolve
+    // differently.
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    _resetRootRealpathCacheForTests();
+    _resetWriteDenylistCacheForTests();
+
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-gen-outside-'));
+    try {
+      // Create outside destination.
+      await fs.mkdir(path.join(outsideDir, 'outside'), { recursive: true });
+      const escapedFile = path.join(outsideDir, 'outside', 'escaped.png');
+      await fs.writeFile(escapedFile, 'sensitive');
+
+      // Create subdir inside root.
+      const subdir = path.join(tmpDir!, 'subdir');
+      await fs.mkdir(subdir);
+
+      // Create directory symlink: root/dirLink -> root/subdir.
+      const dirLink = path.join(tmpDir!, 'dirLink');
+      fsSync.symlinkSync(subdir, dirLink);
+
+      // Create relative escape symlink inside subdir.
+      // Relative from subdir: go up to outsideDir then into outside/escaped.png.
+      const relEscape = path.join(
+        path.relative(subdir, path.dirname(outsideDir)),
+        'outside',
+        'escaped.png',
+      );
+      fsSync.symlinkSync(relEscape, path.join(subdir, 'hop.png'));
+
+      // Access via the directory symlink.
+      const accessPath = path.join(dirLink, 'hop.png');
+
+      const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
+      const handler = createImageGenerateHandler(fetchFn);
+      const result = await handler(
+        { prompt: 'test', output_path: accessPath },
+        signal,
+        { cwd: tmpDir, sessionId: 'dirlink-escape-test', resolveBase: tmpDir, writeRoots: [tmpDir!] },
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/outside.*write roots|write roots/i);
+      // The outside file must NOT have been created by the handler.
+      await expect(fs.access(escapedFile)).resolves.toBeUndefined(); // file exists (we created it)
+      const stat = await fs.stat(escapedFile);
+      expect(stat.size).toBe('sensitive'.length); // must not have grown
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true });
+      vi.unstubAllEnvs();
+      _resetRootRealpathCacheForTests();
+      _resetWriteDenylistCacheForTests();
+    }
   });
 });

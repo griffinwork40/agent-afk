@@ -21,11 +21,11 @@ vi.mock('../routing-telemetry.js', () => ({
 // Minimal SubagentManager stub — ComposeExecutor tests need it to prevent
 // real subagent forks. runSubagentDAG is stubbed to return a clean empty result.
 vi.mock('../subagent.js', () => ({
-  SubagentManager: vi.fn(() => ({
+  SubagentManager: vi.fn(function () { return {
     forkSubagent: vi.fn(),
     teardownAll: vi.fn(async () => {}),
     kill: vi.fn(async () => true),
-  })),
+  }; }),
 }));
 const mockRunSubagentDAG = vi.hoisted(() =>
   vi.fn().mockResolvedValue({ outputs: { n1: 'ok' }, failed: [], skipped: [] }),

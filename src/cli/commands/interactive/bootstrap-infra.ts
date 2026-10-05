@@ -13,6 +13,7 @@ import type { ComposeExecutor } from '../../../agent/tools/compose-executor.js';
 import type { SubagentManager } from '../../../agent/subagent.js';
 import { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
+import { DetachableToolRegistry } from '../../../agent/tools/detach-registry.js';
 import { setBgsubRegistry, setBgsubSummarizer } from '../../slash/commands/bgsub.js';
 import { setTasksRegistry } from '../../slash/commands/tasks.js';
 import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
@@ -27,6 +28,12 @@ export interface BootstrapInfra {
   trace: ReturnType<typeof createDefaultTraceWriter>;
   apiKey: string | undefined;
   backgroundRegistry: BackgroundAgentRegistry;
+  /**
+   * Session-scoped detach registry for the Ctrl+B bash-backgrounding contract
+   * (#2542, #2735). Constructed alongside BackgroundAgentRegistry so the REPL
+   * Ctrl+B handler and the per-query dispatcher can share the same instance.
+   */
+  detachRegistry: DetachableToolRegistry;
   bgSummarizer: BackgroundSummarizer | undefined;
   rootManager: SubagentManager;
   subagentExecutor: SubagentExecutor;
@@ -103,6 +110,12 @@ export function createBootstrapInfra(a: {
     trace ? { traceWriter: trace.writer } : {},
   );
   setBgsubRegistry(backgroundRegistry);
+
+  // Detach registry for the Ctrl+B bash-backgrounding contract (#2542, #2735).
+  // Constructed here alongside BackgroundAgentRegistry so both the REPL Ctrl+B
+  // handler and every per-query dispatcher can share the same instance.
+  // cancelAll() is called by the interactive teardown path (Invariant:D3).
+  const detachRegistry = new DetachableToolRegistry();
 
   // Opt-in background summarizer — only constructed when bgSummaries: true.
   const bgSummariesEnabled = a.cliConfig.bgSummaries === true;
@@ -201,6 +214,7 @@ export function createBootstrapInfra(a: {
     trace,
     apiKey,
     backgroundRegistry,
+    detachRegistry,
     bgSummarizer,
     rootManager,
     subagentExecutor,

@@ -282,9 +282,8 @@ describe('SQLite connection setup — WAL-mode concurrency', () => {
     expect(walSwitchAttempts).toBeGreaterThanOrEqual(3);
   });
 
-  // Skip on Windows: when the MemoryStore constructor throws mid-open, the
-  // better-sqlite3 file handle is not returned and cannot be closed before the
-  // afterEach rmSync — GC is non-deterministic, leaving the file locked (EBUSY).
+  // Windows: TODO needs native equivalent — when constructor throws mid-open, the better-sqlite3 file handle
+  // is not returned and cannot be closed before afterEach rmSync — GC is non-deterministic, leaving it EBUSY.
   it.skipIf(process.platform === 'win32')('does not swallow a non-BUSY SQLite error from the WAL switch', () => {
     const original = Database.prototype.pragma;
     vi.spyOn(Database.prototype, 'pragma').mockImplementation(function (
@@ -481,7 +480,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     }
   });
 
-  // Skip on Windows: constructor throws mid-open, leaving better-sqlite3 handle unreachable (EBUSY).
+  // Windows: TODO needs native equivalent — constructor throws mid-open, leaving better-sqlite3 handle unreachable (EBUSY)
   it.skipIf(process.platform === 'win32')('re-throws a non-duplicate ALTER failure that leaves the column absent', () => {
     const dbPath = join(migDir, 'memory.db');
     seedV2Db(dbPath);
@@ -528,7 +527,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     }
   });
 
-  // Skip on Windows: constructor throws mid-open, leaving better-sqlite3 handle unreachable (EBUSY).
+  // Windows: TODO needs native equivalent — constructor throws mid-open, leaving better-sqlite3 handle unreachable (EBUSY)
   it.skipIf(process.platform === 'win32')('atomicity: a pragma throw after the ALTER rolls back the whole step (version NOT stamped, column absent)', () => {
     const dbPath = join(migDir, 'memory.db');
     // Start from v2: sessions table without actor, facts table without evidence.

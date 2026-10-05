@@ -406,3 +406,103 @@ describe('runIterationWithQuotaLimitPause — autoResumeOnUsageLimit=false', () 
     expect(events.some((e) => e.type === 'resumed')).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// ChatGPT/Codex `usage_limit_reached` (no retry-after; reset in the body)
+// ---------------------------------------------------------------------------
+
+function chatGptLimitEvent(resetsInSec: number, status: number | undefined = 429): ProviderEvent {
+  const body = {
+    type: 'usage_limit_reached',
+    message: 'The usage limit has been reached',
+    plan_type: 'plus',
+    resets_at: Math.floor(Date.now() / 1000) + resetsInSec,
+    resets_in_seconds: resetsInSec,
+  };
+  const e = Object.assign(new Error('429 The usage limit has been reached'), {
+    status,
+    error: body,
+    type: 'usage_limit_reached',
+  });
+  return { type: 'error', error: e };
+}
+
+type PausedEv = Extract<ProviderEvent, { type: 'paused' }>;
+
+describe('runIterationWithQuotaLimitPause — ChatGPT usage_limit_reached', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-03T12:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    __setQuotaTwoHoursMs(null);
+    __setQuotaFallbackWaitMs(null);
+  });
+
+  it('isQuotaLimitErrorEvent matches the marker with no retry-after, with or without a status', () => {
+    expect(isQuotaLimitErrorEvent(chatGptLimitEvent(600))).toBe(true);
+    expect(isQuotaLimitErrorEvent(chatGptLimitEvent(600, undefined))).toBe(true);
+  });
+
+  it('parks until the body reset time, emitting paused with resetsAt, provider codex and plan', async () => {
+    let calls = 0;
+    const factory = (): AsyncGenerator<ProviderEvent, IterationResult | null> => {
+      calls++;
+      return makeGen(calls === 1 ? [chatGptLimitEvent(600)] : [textEvent()], calls === 1 ? null : successResult())();
+    };
+    const tierPromise = runTier(factory);
+    // Not yet at the reset: still parked on the first call.
+    await vi.advanceTimersByTimeAsync(599_000);
+    expect(calls).toBe(1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const { events, result } = await tierPromise;
+
+    expect(calls).toBe(2);
+    const paused = events.filter((e): e is PausedEv => e.type === 'paused');
+    expect(paused).toHaveLength(1);
+    expect(paused[0]!.provider).toBe('codex');
+    expect(paused[0]!.plan).toBe('plus');
+    expect(paused[0]!.autoResume).toBe(true);
+    expect(paused[0]!.resetsAt?.toISOString()).toBe('2026-10-03T12:10:00.000Z');
+    expect(events.filter((e) => e.type === 'resumed')).toHaveLength(1);
+    expect(result?.text).toBe('done');
+  });
+
+  it('a reset more than 2h away emits paused (autoResume false) then surfaces the error without sleeping', async () => {
+    let calls = 0;
+    const errEvent = chatGptLimitEvent(5 * 60 * 60);
+    const factory = (): AsyncGenerator<ProviderEvent, IterationResult | null> => {
+      calls++;
+      return makeGen([errEvent], null)();
+    };
+    // No timer advance: the tier must settle without waiting.
+    const { events, result } = await runTier(factory);
+
+    expect(calls).toBe(1);
+    expect(result).toBeNull();
+    expect(events.map((e) => e.type)).toEqual(['paused', 'error']);
+    const paused = events[0] as PausedEv;
+    expect(paused.provider).toBe('codex');
+    expect(paused.autoResume).toBe(false);
+    expect(paused.resetsAt).toBeInstanceOf(Date);
+  });
+
+  it('fail-fast (autoResumeOnUsageLimit=false): paused then error, one call', async () => {
+    let calls = 0;
+    const factory = (): AsyncGenerator<ProviderEvent, IterationResult | null> => {
+      calls++;
+      return makeGen([chatGptLimitEvent(600)], null)();
+    };
+    const { events } = await runTier(factory, { autoResumeOnUsageLimit: false });
+    expect(calls).toBe(1);
+    expect(events.map((e) => e.type)).toEqual(['paused', 'error']);
+    expect((events[0] as PausedEv).provider).toBe('codex');
+  });
+
+  it('a generic long-retry-after quota 429 carries no provider (unchanged shape)', async () => {
+    const { events } = await runTier(makeGen([quotaErrorEvent(600)], null), { autoResumeOnUsageLimit: false });
+    const paused = events[0] as PausedEv;
+    expect(paused).toEqual({ type: 'paused', reason: 'usage-limit', autoResume: false });
+  });
+});

@@ -62,11 +62,7 @@ import {
   resolveSubagentIdleTimeoutMs,
 } from './subagent/constants.js';
 
-import type {
-  ForkParent,
-  ForkSubagentOptions,
-  SubagentManagerOptions,
-} from './subagent/fork-types.js';
+import { resolveParentCredential, type ForkParent, type ForkSubagentOptions, type SubagentManagerOptions } from './subagent/fork-types.js';
 
 // Re-export-only symbols forwarded without local use.
 export {
@@ -146,13 +142,15 @@ export class SubagentManager {
     this.parentCanUseTool = options.canUseTool;
     this.hookRegistry = options.hookRegistry;
     this.progressSink = options.progressSink;
+    // #2844: resolve key+model atomically — see subagent.credential-resolution.ts.
+    const { effectiveKey, effectiveModel } = resolveParentCredential(options);
     // Wrap plain strings into a getter; function form passed through unchanged.
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any
-    this.parentApiKey = options.apiKey === undefined ? undefined : typeof options.apiKey === 'function' ? options.apiKey : (() => options.apiKey as string);
+    this.parentApiKey = effectiveKey === undefined ? undefined : typeof effectiveKey === 'function' ? effectiveKey : (() => effectiveKey as string);
     this.parentBaseUrl = options.baseUrl;
     this.parentProvider =
-      options.parentModel !== undefined ? providerForModel(options.parentModel) : undefined;
-    this.parentModel = options.parentModel;
+      effectiveModel !== undefined ? providerForModel(effectiveModel) : undefined;
+    this.parentModel = effectiveModel;
     this.parentCwd = options.cwd;
     this.parentReadRoots = options.parentReadRoots;
     this.parentTraceWriter = options.traceWriter;
@@ -440,7 +438,7 @@ export class SubagentManager {
         parentTraceWriter: this.parentTraceWriter,
         parentSurface: this.parentSurface,
         parentCanUseTool: this.parentCanUseTool,
-        workspaceStore: this.workspaceStore,
+        workspaceStore: this.workspaceStore, ...(options.nestedAgentAllowlist !== undefined ? { nestedAgentAllowlist: options.nestedAgentAllowlist } : {}),
       });
 
       // Occupancy touch: subagents never write presence files (top-level-only

@@ -407,7 +407,12 @@ describe('evaluateCommand', () => {
     mockClassifyRisk.mockReturnValue('safe');
   });
 
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    // Vitest 4: restoreAllMocks() only restores vi.spyOn spies; it no longer
+    // resets vi.fn() mocks as v2 did. resetAllMocks() keeps the v2 isolation.
+    vi.resetAllMocks();
+    vi.restoreAllMocks();
+  });
 
   it('returns met:true when command exits 0', () => {
     mockExecSync.mockReturnValue(Buffer.from(''));

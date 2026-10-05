@@ -147,15 +147,26 @@ export class TelegramBgResultNotifier {
     return jobs.map((j) => buildBgResultInjection(j)).join('\n') + '\n';
   }
 
-  /** Unsubscribe from the registry and drop the route registration. Idempotent. */
+  /**
+   * Unsubscribe from the registry and drop the route registration. Idempotent.
+   *
+   * Jobs still in `pendingInjections` at teardown have completed (and were push-
+   * notified) but were never drained into a model turn — the session ended before
+   * another message arrived. They are NOT marked delivered in the witness trace
+   * because `drainInjections()` was never called; the operator received a push
+   * notification and can use `/bgsub:join` to replay the result in the next
+   * session. Calling `markDelivered()` here would mislabel them as having been
+   * injected into model context when they were not.
+   */
   dispose(): void {
     this.disposed = true;
     this.registry.off('settled', this.onSettled);
     if (this.routeKey !== undefined) unregisterBgInjectionSource(this.routeKey, this);
-    // Mark any buffered-but-undrained jobs delivered so the witness trace
-    // accounts for them. dispose() is called at session teardown — drainInjections()
-    // will not be called afterward, so this is the only accounting opportunity.
-    for (const job of this.pendingInjections) this.registry.markDelivered(job.jobId);
+    // Do NOT call markDelivered() for undrained jobs. drainInjections() was never
+    // called, so these results were never surfaced to the model. Silently
+    // discarding them here (without a witness event) is the correct behavior —
+    // the witness trace remains accurate: no 'delivered' event fires for a job
+    // that was never actually injected into model context.
     this.pendingInjections = [];
   }
 }

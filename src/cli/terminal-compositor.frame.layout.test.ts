@@ -427,8 +427,11 @@ describe('computeViewportLayout — bandReserveRows', () => {
     const chrome = bareChrome(lines);
     const layout = computeViewportLayout(chrome, 0, false, 4, noScrollRegion, 10);
     expect(layout.maxLines).toBe(3); // maxLines = rows - 1 = 3
-    // overlayBudget = avail = 1; length === budget → no truncation
-    expect(layout.trimmedOverlay).toBe(lines); // same reference, not truncated
+    // overlayBudget = avail = 1; length === budget → no truncation.
+    // Intentionally asserts same reference (toBe, not toEqual) to lock the
+    // zero-copy contract: the implementation must return the original array
+    // without allocating a new one when no truncation is needed.
+    expect(layout.trimmedOverlay).toBe(lines);
   });
 
   it('reserve of 0 when avail is 0 results in empty trimmedOverlay (no crash)', () => {

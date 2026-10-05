@@ -5,8 +5,10 @@ export interface BetaHeaderOptions {
   effort?: boolean;
   extendedCacheTtl?: boolean;
   fast?: boolean;
+  thinkingBindingControls?: boolean;
   effortEntry: string;
   extendedCacheEntry: string;
+  thinkingBindingControlsEntry?: string;
 }
 
 export function composeBetaHeader(options: BetaHeaderOptions): string | undefined {
@@ -15,6 +17,9 @@ export function composeBetaHeader(options: BetaHeaderOptions): string | undefine
     ...(options.effort ? [options.effortEntry] : []),
     ...(options.extendedCacheTtl ? [options.extendedCacheEntry] : []),
     ...(options.fast ? [FAST_MODE_BETA] : []),
+    ...(options.thinkingBindingControls && options.thinkingBindingControlsEntry
+      ? [options.thinkingBindingControlsEntry]
+      : []),
   ].filter(Boolean);
   const value = [...new Set(entries)].join(',');
   return value || undefined;

@@ -25,7 +25,6 @@ export interface AutoRoutingConfig {
   interactive?: boolean;
   chat?: boolean;
   telegram?: boolean;
-  daemon?: boolean;
 }
 
 export interface CliConfig {
@@ -98,6 +97,13 @@ export interface CliConfig {
       maxAgeDaysClean: number;
       maxAgeDaysDirty: number;
       scope: string;
+    };
+    /** Tool-health builtin configuration. Mirrors worktreePrune shape. */
+    toolHealth?: {
+      /** When false, the builtin is not registered. Defaults to enabled. */
+      enabled: boolean;
+      /** Cron expression. Defaults to '17 * * * *' (hourly). */
+      cron: string;
     };
     /**
      * Daemon-surface "Done" verification gate (**default: true** — the daemon
@@ -355,7 +361,6 @@ export interface ConfigFileSchema {
     interactive?: boolean;
     chat?: boolean;
     telegram?: boolean;
-    daemon?: boolean;
   };
   daemon?: {
     task?: string;
@@ -366,6 +371,10 @@ export interface ConfigFileSchema {
       maxAgeDaysClean?: number;
       maxAgeDaysDirty?: number;
       scope?: string;
+    };
+    toolHealth?: {
+      enabled?: boolean;
+      cron?: string;
     };
     verifyDone?: boolean;
   };

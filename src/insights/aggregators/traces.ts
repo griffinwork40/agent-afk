@@ -127,10 +127,28 @@ export function aggregateTraces(options: InsightsOptions): TraceAggregates {
 
       switch (event.kind) {
         case 'compaction':
+          // Interleaving guard: a trace.jsonl contains events from the root
+          // session AND every descendant subagent, interleaved in wall-clock
+          // order. Subagents compact their own context windows independently,
+          // so a naive count inflates compactionCount by the number of child
+          // compactions. The compaction event carries no subagentId field, so
+          // we cannot attribute it here. Count only root-session compactions
+          // by checking for the absence of a leading subagent_lifecycle
+          // 'started' event at a lower seq than this compaction — that guard
+          // is expensive and fragile. Instead: we accept the known over-count
+          // and document it so callers know it is an UPPER BOUND, not an
+          // exact root count. Tracked for improvement in follow-up work.
           agg.compactionCount += 1;
           break;
 
         case 'closure': {
+          // Interleaving note: closure events appear for EVERY AgentSession
+          // instance in the trace (root + each subagent). Tokens/cost are
+          // intentionally summed across all actors because each instance owns
+          // a DISJOINT cost accumulator — summing them recovers the trace's
+          // true aggregate spend (verified in closure-anomaly.ts commentary).
+          // closureReasons likewise counts all actors; the insights layer treats
+          // this as a whole-session signal, not a root-only one.
           const { payload } = event;
           inc(agg.closureReasons, payload.reason);
           const ft = payload.finalTokens;
@@ -146,7 +164,16 @@ export function aggregateTraces(options: InsightsOptions): TraceAggregates {
         case 'tool_call': {
           // Only accumulate durations here — counts come from facet to avoid
           // double-counting.
-          if (event.payload.phase === 'completed' && !event.payload.isError) {
+          // Interleaving guard: restrict to root-session tool calls only
+          // (subagentId absent). Subagent calls are interleaved in the same
+          // file; including them would inflate per-tool timing totals by an
+          // amount proportional to the width and depth of the child fan-out,
+          // producing misleading "how long does tool X take" signals.
+          if (
+            event.payload.phase === 'completed' &&
+            !event.payload.isError &&
+            event.payload.subagentId === undefined
+          ) {
             inc(agg.toolDurationsMs, event.payload.name, event.payload.durationMs);
           }
           break;

@@ -241,6 +241,7 @@ export class SkillExecutor {
           readOnly,
           pluginSkill.allowedTools,
           pluginSkill.model,
+          entries.find(entry => entry.name === parsed.name)?.description,
         );
       }
       // Default: in-context LOAD (2026-06 load-by-default flip). No readOnly —
