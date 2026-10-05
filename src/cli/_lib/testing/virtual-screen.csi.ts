@@ -44,9 +44,13 @@ export interface CsiHost {
   clampRow(r: number): number;
   /** Clamp a column value to [1, cols]. */
   clampCol(c: number): number;
-  // Called by VirtualScreen internally (via dispatchCsi); not used by CSI helpers directly.
-  lineAt(row: number): string;
-  scrollRegionUp(): void;
+  // Contract: lineAt() and scrollRegionUp() are intentionally ABSENT from this
+  // interface. Both methods exist on VirtualScreen and are called by the class
+  // internally (scrollRegionUp via lineFeed, lineAt via scrollRegionUp), but
+  // dispatchCsi and the erase helpers never invoke them. Keeping them out of
+  // CsiHost keeps the interface minimal and makes it clear that the CSI helpers
+  // do not depend on those methods — only the VirtualScreen → CsiHost cast site
+  // (virtual-screen.ts) needs the full class surface.
 }
 
 // ---------------------------------------------------------------------------
