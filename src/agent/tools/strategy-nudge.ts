@@ -26,7 +26,9 @@
  *     signature and can never trigger the nudge: a false positive teaches the
  *     model to ignore nudges, which is worse than a missed one.
  *   - Recurrence must happen within {@link STRATEGY_NUDGE_WINDOW} observed
- *     results; an error that comes back much later is a new incident.
+ *     results; an error that comes back much later resets the count. A
+ *     signature that already nudged never nudges again, even if the count
+ *     resets and climbs back up to the threshold.
  *
  * @module agent/tools/strategy-nudge
  */
@@ -87,6 +89,12 @@ const GENERIC_LINES: readonly RegExp[] = [
   /^at\s/,
   /^error:?\s*$/i,
   /^\s*\^+\s*$/,
+  // test_run summary line (from test-run.ts:327): count summary with duration
+  /\d+ passed \| \d+ failed/,
+  // test_run command line: "Command: pnpm test ..."
+  /^command:/i,
+  // test_run failure-list header (bare, always identical)
+  /^failed tests:\s*$/i,
 ];
 
 /** Cue that a line names a concrete failure. Deliberately unanchored ("AssertionError"). */
@@ -112,10 +120,30 @@ export function findErrorLine(content: string): string | null {
  * numbers such as `expected 1 to be 2`).
  */
 export function normalizeErrorLine(line: string): string {
-  return line
+  // Protect quoted non-absolute module specifiers before the path-collapse pass
+  // so they remain distinct across different module-not-found errors.
+  // Rule: a quoted token with no whitespace is preserved when it does NOT start
+  // with '/', '~/', or a Windows drive prefix ('c:\', 'c:/').  That covers
+  // scoped ('@x/y'), relative ('./x', '../x'), and bare subpath ('lodash/fp',
+  // 'react-dom/client') specifiers.  Quoted absolute/home paths and all
+  // unquoted paths still collapse — including ENOENT messages that quote the
+  // path (e.g. `open '/tmp/afk-abc/x.ts'`), which the quoted-absolute regex
+  // below handles explicitly.
+  const protected_: string[] = [];
+  const withPlaceholders = line
     .toLowerCase()
     .replace(/https?:\/\/\S+/g, '<url>')
+    .replace(
+      /(['"])(?!(?:[a-z]:[\\/]|~\/|\/))\S+?\1/g,
+      (m) => `\x00p${(protected_.push(m) - 1).toString()}\x00`,
+    );
+  return withPlaceholders
+    .replace(
+      /(['"])(?:[a-z]:[\\/]|~\/|\/)[\w.@+\-/\\]*(?::\d+){0,2}\1/g,
+      '<path>',
+    )
     .replace(/(?:[a-z]:)?(?:\.{0,2}\/|~\/)?(?:[\w.@+-]+\/)+[\w.@+-]*(?::\d+){0,2}/g, '<path>')
+    .replace(/\x00p(\d+)\x00/g, (_m, n: string) => protected_[parseInt(n, 10)] ?? _m)
     .replace(/\b[0-9a-f]{7,}\b/g, '<hex>')
     .replace(/\b\d+(?:\.\d+)?\s?(?:ms|s)\b/g, '<dur>')
     .replace(/\b\d{4,}\b/g, '<n>')
@@ -218,7 +246,7 @@ function buildNotice(line: string, occurrences: number, distinctCalls: boolean):
     `\n\n[strategy-nudge] This error has come back ${occurrences} times in recent attempts${how}: ` +
     `${quoted}\n` +
     'Another variation of the same approach is unlikely to fix it. Before the next attempt, ' +
-    'change mode: search the web for the exact error message and the versions involved, ' +
+    'change mode: search the web (if a search tool is available) for the exact error message and the versions involved, ' +
     'reread the code, config, or docs you are relying on, or re-plan the approach. ' +
     'If you still believe the current approach is right, state what you expected and what ' +
     'you observed before continuing.'

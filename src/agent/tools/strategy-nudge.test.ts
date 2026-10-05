@@ -23,6 +23,21 @@ function bashFail(body: string, code = 1): ToolResult {
   return { content: `Command exited with code ${code}\n${body}`, isError: true };
 }
 
+/**
+ * Build a test_run content string matching the real handler format (test-run.ts:326-331).
+ * passed/failed counts go in the summary; errorMsg is the first bullet (the real error line).
+ */
+function testRunFail(opts: { passed: number; failed: number; errorMsg: string; testName?: string }): ToolResult {
+  const { passed, failed, errorMsg, testName = 'MyTest (src/x.test.ts:1)' } = opts;
+  const content =
+    `❌ vitest: ${passed} passed | ${failed} failed — 123ms\n` +
+    `Command: pnpm test src/x.test.ts\n` +
+    `\nFailed tests:\n` +
+    `  • ${testName}: ${errorMsg}\n` +
+    `\nRAW OUTPUT`;
+  return { content, isError: true };
+}
+
 const ok: ToolResult = { content: 'ok' };
 
 describe('findErrorLine', () => {
@@ -46,6 +61,23 @@ describe('findErrorLine', () => {
   it('strips ANSI color codes', () => {
     expect(findErrorLine('\x1b[31mTypeError: x is not a function\x1b[0m')).toBe('TypeError: x is not a function');
   });
+
+  it('skips the test_run summary line, Command line, and Failed tests header', () => {
+    const content =
+      '❌ vitest: 0 passed | 1 failed — 42ms\n' +
+      'Command: pnpm test src/foo.test.ts\n' +
+      '\nFailed tests:\n' +
+      '  • handlesMissingToken (src/foo.test.ts:10): AssertionError: expected null to be "tok"\n' +
+      '\nRAW OUTPUT';
+    expect(findErrorLine(content)).toBe(
+      '• handlesMissingToken (src/foo.test.ts:10): AssertionError: expected null to be "tok"',
+    );
+  });
+
+  it('does not skip non-header lines containing "failed" (real error lines)', () => {
+    const content = 'TypeError: failed to parse response from server';
+    expect(findErrorLine(content)).toBe('TypeError: failed to parse response from server');
+  });
 });
 
 describe('normalizeErrorLine', () => {
@@ -63,6 +95,30 @@ describe('normalizeErrorLine', () => {
     expect(normalizeErrorLine('connect ECONNREFUSED 127.0.0.1:54321')).toBe(
       normalizeErrorLine('connect ECONNREFUSED 127.0.0.1:61234'),
     );
+  });
+
+  it('keeps quoted scoped module specifiers distinct', () => {
+    const a = normalizeErrorLine("Cannot find module '@prisma/client'");
+    const b = normalizeErrorLine("Cannot find module '@tanstack/react-query'");
+    expect(a).not.toBe(b);
+  });
+
+  it('keeps quoted relative module specifiers distinct', () => {
+    const a = normalizeErrorLine("Cannot find module './auth'");
+    const b = normalizeErrorLine("Cannot find module './config'");
+    expect(a).not.toBe(b);
+  });
+
+  it('collapses quoted absolute paths just like unquoted ones', () => {
+    const a = normalizeErrorLine("ENOENT: no such file '/tmp/afk-abc/src/x.ts'");
+    const b = normalizeErrorLine("ENOENT: no such file '/tmp/afk-xyz/src/y.ts'");
+    expect(a).toBe(b);
+  });
+
+  it('keeps quoted bare subpath specifiers distinct (lodash/fp vs react-dom/client)', () => {
+    const a = normalizeErrorLine("Cannot find module 'lodash/fp'");
+    const b = normalizeErrorLine("Cannot find module 'react-dom/client'");
+    expect(a).not.toBe(b);
   });
 });
 
@@ -154,6 +210,38 @@ describe('StrategyNudger', () => {
   it('never fires on generic-only bash failures', () => {
     const n = new StrategyNudger();
     for (let i = 0; i < 5; i++) expect(n.observe(call(), bashFail('some output\nmore output'))).toBeNull();
+  });
+
+  // Item 1: test_run content format; summary/Command/header lines must be skipped
+  it('does not nudge when test_run failures differ even with the same pass/fail counts', () => {
+    const n = new StrategyNudger();
+    // Both have "0 passed | 1 failed" in the summary but different error bullets
+    const assertionFail = testRunFail({ passed: 0, failed: 1, errorMsg: 'AssertionError: expected 1 to be 2' });
+    const typeFail = testRunFail({ passed: 0, failed: 1, errorMsg: 'TypeError: x is not a function' });
+    n.observe(call('test_run', 'pnpm test -t a'), assertionFail);
+    expect(n.observe(call('test_run', 'pnpm test -t b'), typeFail)).toBeNull();
+  });
+
+  it('nudges when the same test_run failure recurs in the real content format', () => {
+    const n = new StrategyNudger();
+    const fail = testRunFail({ passed: 0, failed: 1, errorMsg: 'AssertionError: expected "foo" to equal "bar"' });
+    n.observe(call('test_run', 'pnpm test -t x'), fail);
+    expect(n.observe(call('test_run', 'pnpm test -t y'), fail)).not.toBeNull();
+  });
+
+  it('counts a recurrence of the same error bullet in test_run regardless of path differences', () => {
+    // The test file path in the bullet normalizes away, so the same test
+    // error on different runs produces the same signature.
+    const n = new StrategyNudger();
+    const failA = testRunFail({
+      passed: 0, failed: 1, testName: 'handlesMissing (src/a.test.ts:1)', errorMsg: 'AssertionError: expected 1 to be 2',
+    });
+    const failB = testRunFail({
+      passed: 0, failed: 1, testName: 'handlesMissing (src/b.test.ts:1)', errorMsg: 'AssertionError: expected 1 to be 2',
+    });
+    n.observe(call('test_run', 'pnpm test -t a'), failA);
+    // Same test name + same error message; only file path differs and normalizes away.
+    expect(n.observe(call('test_run', 'pnpm test -t b'), failB)).not.toBeNull();
   });
 });
 

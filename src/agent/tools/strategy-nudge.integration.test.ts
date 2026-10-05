@@ -22,8 +22,15 @@ function testRunCall(): ToolCall {
   return { id: `t${seq}`, name: 'test_run', input: { name: `case ${seq}` }, signal: ABORT };
 }
 
+// Emit the real test_run content format (matches test-run.ts:326-331) so this
+// wiring test exercises the same path that findErrorLine must navigate in production.
 const failing: ToolHandler = async () => ({
-  content: 'FAIL src/x.test.ts\nError: Cannot find module "zod" imported from /repo/src/x.ts',
+  content:
+    '❌ vitest: 0 passed | 1 failed — 42ms\n' +
+    'Command: pnpm test src/x.test.ts\n' +
+    '\nFailed tests:\n' +
+    '  • myTest (src/x.test.ts:1): Error: Cannot find module "zod" imported from /repo/src/x.ts\n' +
+    '\nRAW OUTPUT',
   isError: true,
 });
 
@@ -40,6 +47,22 @@ function nudgeEvents(writer: InMemoryTraceWriter) {
   return writer.events.filter(
     (e) => e.kind === 'session_phase' && (e.payload as { phase?: string }).phase === 'strategy_nudge_fired',
   );
+}
+
+function makeConcurrentDispatcher(writer: InMemoryTraceWriter) {
+  // Override the default classifier to mark test_run as concurrency-safe.
+  // bash and test_run are concurrencySafe:false in production schemas, so the
+  // default classifier never routes them through runConcurrentBatch. This
+  // custom classifier lets the test verify that applyStrategyNudge is also
+  // called correctly on the concurrent path and still fires at most once.
+  return new SessionToolDispatcher({
+    handlers: new Map<string, ToolHandler>([['test_run', failing]]),
+    schemas: [...builtinToolSchemas],
+    permissions: { allowedTools: ['test_run'] },
+    traceWriter: writer,
+    concurrencyClassifier: () => true,
+    maxConcurrentSafeCalls: 4,
+  });
 }
 
 describe('StrategyNudger integration (dispatcher)', () => {
@@ -65,6 +88,19 @@ describe('StrategyNudger integration (dispatcher)', () => {
 
   it('nudges exactly once across a multi-call batch', async () => {
     const d = makeDispatcher(writer);
+    const results = await d.executeBatch([testRunCall(), testRunCall(), testRunCall()]);
+    const nudged = results.filter((r) => r.content.includes('[strategy-nudge]'));
+    expect(nudged).toHaveLength(1);
+    expect(results.every((r) => r.isError === true)).toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(nudgeEvents(writer)).toHaveLength(1);
+  });
+
+  it('nudges exactly once via the concurrent batch path (custom classifier)', async () => {
+    // bash and test_run are concurrencySafe:false by default, so they never
+    // reach runConcurrentBatch normally. This test uses a custom classifier to
+    // force the concurrent path and verify applyStrategyNudge is wired there too.
+    const d = makeConcurrentDispatcher(writer);
     const results = await d.executeBatch([testRunCall(), testRunCall(), testRunCall()]);
     const nudged = results.filter((r) => r.content.includes('[strategy-nudge]'));
     expect(nudged).toHaveLength(1);
