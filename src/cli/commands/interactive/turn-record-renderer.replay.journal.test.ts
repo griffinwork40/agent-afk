@@ -243,18 +243,16 @@ describe('renderReplayTurns (unit — no disk I/O)', () => {
     const makeTurn = (u: string): ReplayTurn => ({ user: u, body: [] });
     const turns: ReplayTurn[] = [makeTurn('one'), makeTurn('THROW'), makeTurn('three')];
     const lines: string[] = [];
-    const sink = { fn: (l: string) => lines.push(l) };
 
     // Patch renderRound (called inside renderTurn for each round) to throw on
     // the second turn. Because the body is empty, renderRound is never called
     // and we instead throw directly in renderTurn via the WriterSink when the
-    // user echo fires. We can simulate this by making the sink throw on the
-    // second call (which corresponds to the second user echo).
-    let callCount = 0;
+    // user echo fires. We trigger on content so the test stays stable even if
+    // emit counts change: the user-echo for the 'THROW' turn will include the
+    // text 'THROW', making the trigger content-based rather than positional.
     const throwingSink = {
       fn: (l: string) => {
-        callCount++;
-        if (callCount === 2) throw new Error('simulated mid-render failure');
+        if (l.includes('THROW')) throw new Error('simulated mid-render failure');
         lines.push(l);
       },
     };
@@ -280,15 +278,14 @@ describe('renderReplayTurns (unit — no disk I/O)', () => {
       // The line must contain the user text without any leading space padding
       // that the TTY right-align path would produce.
       expect(out).toContain('hello from user');
-      // TTY path would right-pad with spaces; non-TTY path produces no leading spaces.
-      // The non-TTY echo is "promptText + buffer" with no right-alignment spaces.
+      // TTY path would right-pad with spaces; non-TTY path produces zero leading spaces.
+      // The non-TTY echo is "promptText + buffer" with no right-alignment padding.
       const echoLine = lines.find((l) => stripAnsi(l).includes('hello from user')) ?? '';
-      // If the TTY path had fired, the line would start with many spaces (right-align
-      // pad). Non-TTY produces "▶ hello from user" style or "prompt> hello from user" —
-      // either way the content appears immediately after the prompt, not after a
-      // long whitespace run. We assert fewer than 10 leading spaces.
+      // Non-TTY produces "promptText + buffer" verbatim — no leading whitespace at all.
+      // Asserting toBe(0) proves the non-TTY path was taken, not just that fewer
+      // than 10 spaces appear (which a TTY path could also satisfy).
       const leadingSpaces = (stripAnsi(echoLine).match(/^(\s*)/) ?? ['', ''])[1]!.length;
-      expect(leadingSpaces).toBeLessThan(10);
+      expect(leadingSpaces).toBe(0);
     } finally {
       if (originalIsTTY !== undefined) {
         Object.defineProperty(process.stdout, 'isTTY', originalIsTTY);
