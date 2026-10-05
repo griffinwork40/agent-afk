@@ -24,10 +24,15 @@
  *   - The compaction preamble (summary user message + canned assistant ack)
  *     is model-only and never displayed.
  *
- * Matching window: re-appends follow their truncate immediately, so the
- * pending-match set is discarded at the first append that matches nothing.
- * A later, genuinely new message with an identical fingerprint (the user
- * typing "continue" twice) therefore always gets its own row.
+ * Matching window: re-appends follow their truncate immediately. When an
+ * append matches nothing in the pending set it creates a new row, but the
+ * pending set remains alive so a later re-append (e.g. a tool-result that
+ * arrives after an unmatched orphan repair message) can still match back.
+ * Candidates are consumed newest-first (`pop()`) so a compaction kept-tail
+ * always reuses the most-recent occurrence when the same fingerprint appears
+ * more than once in the pending window. A later, genuinely new message with
+ * an identical fingerprint always gets its own row once the pending entries
+ * for that fingerprint are exhausted.
  *
  * Fork chains: `forkJournal` writes only the parent's CURRENT fold, which after
  * a compaction no longer contains the early history. The display fold follows
@@ -93,12 +98,19 @@ export function isCompactionPreamble(m: JournalMessage): boolean {
 /**
  * Stateful fold. `rows` holds displayed messages (null = removed by a hard
  * truncate); `live[i]` maps model-array index i to its row (-1 = not
- * displayed, e.g. the compaction preamble).
+ * displayed, e.g. the compaction preamble). `pendingWindowCap` tracks the
+ * highest model index that was displaced into the pending map; appends
+ * arriving beyond that boundary are definitively past the re-append window.
  */
 class DisplayFoldState {
   private rows: Array<JournalMessage | null> = [];
   private live: number[] = [];
   private pending = new Map<string, number[]>();
+  // Invariant: pendingWindowCap is the highest model-array index (== live index)
+  // of any message currently in the pending map. -1 when pending is empty.
+  // Used to distinguish an orphan insertion (index <= cap, no match) from a
+  // genuinely new message (index > cap, no match); only the latter clears the map.
+  private pendingWindowCap = -1;
 
   softTruncate(length: number): void {
     for (const row of this.live.slice(length)) {
@@ -109,6 +121,7 @@ class DisplayFoldState {
       list.push(row);
       this.pending.set(fp, list);
     }
+    if (this.live.length > length) this.pendingWindowCap = this.live.length - 1;
     this.live.length = Math.min(this.live.length, length);
   }
 
@@ -116,12 +129,14 @@ class DisplayFoldState {
     for (const row of this.live.slice(length)) if (row >= 0) this.rows[row] = null;
     this.live.length = Math.min(this.live.length, length);
     this.pending.clear();
+    this.pendingWindowCap = -1;
   }
 
   private clear(): void {
     this.rows = [];
     this.live = [];
     this.pending.clear();
+    this.pendingWindowCap = -1;
   }
 
   private append(index: number, message: JournalMessage): void {
@@ -132,13 +147,24 @@ class DisplayFoldState {
     }
     const fp = messageFingerprint(message);
     const matches = this.pending.get(fp);
-    const matched = matches?.shift();
+    // Pop (newest) rather than shift (oldest): softTruncate pushes rows in
+    // live-array order (oldest first), so the last entry is the most-recent
+    // occurrence — correct for a compaction kept-tail match.
+    const matched = matches?.pop();
     if (matched !== undefined) {
       if (matches && matches.length === 0) this.pending.delete(fp);
+      if (this.pending.size === 0) this.pendingWindowCap = -1;
       this.live.push(matched);
       return;
     }
-    this.pending.clear();
+    // Miss: if the current model index is still within the re-append window
+    // (i.e., an orphan message was inserted before the tail is fully re-synced),
+    // keep the pending map alive so subsequent re-appends can still match back.
+    // Only clear when we are definitively past the window boundary.
+    if (index > this.pendingWindowCap) {
+      this.pending.clear();
+      this.pendingWindowCap = -1;
+    }
     this.rows.push(message);
     this.live.push(this.rows.length - 1);
   }

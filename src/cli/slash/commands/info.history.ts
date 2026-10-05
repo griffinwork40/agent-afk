@@ -20,16 +20,15 @@ export const historyCmd: SlashCommand = {
   hint: 'When you want to review recent conversation turns with full content. Pass a number to limit output: `/history 10` shows the last 10 turns.',
   async handler(ctx, args) {
     const { stats, out } = ctx;
-    if (stats.turns.length === 0) {
-      out.info('No conversation history yet.');
-      return 'continue';
-    }
     // Parse an optional numeric argument: `/history 20` shows last 20 turns.
     const parsed = parseInt((args ?? '').trim(), 10);
     const maxTurns = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
     // Journal first (full fidelity, same renderer as a live turn); the
     // sidecar replay only when the journal has nothing. The live journal
     // writes through an async queue, so drain it before reading the file.
+    // Contract: check the journal BEFORE testing stats.turns — a resumed
+    // session may have journal content but an empty turns array (the sidecar
+    // tracks only the current-session turns, not the replayed history).
     try {
       await ctx.session.current.messageJournal?.flush();
     } catch {
@@ -40,7 +39,13 @@ export const historyCmd: SlashCommand = {
       hints: stats.turns.map((t) => t.user),
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     });
-    if (rendered === null) replayTurns(stats.turns, sink.fn, { maxTurns });
+    if (rendered === null) {
+      if (stats.turns.length === 0) {
+        out.info('No conversation history yet.');
+        return 'continue';
+      }
+      replayTurns(stats.turns, sink.fn, { maxTurns });
+    }
     return 'continue';
   },
 };

@@ -100,6 +100,40 @@ describe('foldForDisplay', () => {
     expect(texts(foldForDisplay([recs]))).toEqual(['continue', 'a1', 'a2', 'continue']);
   });
 
+  // M1: newest-candidate match — a rewind after compaction keeps the ORIGINAL
+  // row for a message that appeared twice, not the most-recently displaced one.
+  it('M1: softTruncate matches the newest pending candidate so a later rewind keeps the original row', () => {
+    // History: continue(0) → a1(1) → continue(2) → a2(3).
+    // Compact to 0: summary, ack, continue(2), a2(3) re-appended.
+    // continue(2) pops the NEWEST pending candidate (row2 = the second continue),
+    // leaving row0 (the original first continue) untouched.
+    // Rewind to 2: row2 (second continue) and row3 (a2) are nulled.
+    // Display: the original continue(row0) and a1(row1) survive.
+    const recs = [
+      ap(0, user('continue')), ap(1, assistant('a1')), ap(2, user('continue')), ap(3, assistant('a2')),
+      tr(0, 'compact'),
+      ap(0, summary()), ap(1, ack()), ap(2, user('continue')), ap(3, assistant('a2')),
+      tr(2, 'rewind'),
+    ];
+    expect(texts(foldForDisplay([recs]))).toEqual(['continue', 'a1']);
+  });
+
+  // M2: mid-history insertion — a resync that inserts a tool result before the
+  // kept tail must NOT duplicate q2/a2 (the orphan miss should not clear pending).
+  it('M2: an orphan insertion within the pending window does not duplicate the subsequent re-append tail', () => {
+    // History: q1(0) → use(X)(1) → q2(2) → a2(3).
+    // Resync to 2: result(X) inserted at index 2, then q2(3) and a2(4) re-appended.
+    // result(X) misses pending (it is an orphan — no prior row for it), but its
+    // model index (2) is within the pending window (cap=3), so pending is kept.
+    // q2 and a2 then match their original pending rows; no duplicates.
+    const recs = [
+      ap(0, user('q1')), ap(1, toolUse('t1')), ap(2, user('q2')), ap(3, assistant('a2')),
+      tr(2, 'resync'),
+      ap(2, toolResult('t1', 'result output')), ap(3, user('q2')), ap(4, assistant('a2')),
+    ];
+    expect(texts(foldForDisplay([recs]))).toEqual(['q1', 'use:t1', 'q2', 'a2', 'result:result output']);
+  });
+
   it('treats an append at index < length as a soft overwrite (re-append matches)', () => {
     const recs = [ap(0, user('a')), ap(1, assistant('b')), ap(1, assistant('b')), ap(2, user('c'))];
     expect(texts(foldForDisplay([recs]))).toEqual(['a', 'b', 'c']);
