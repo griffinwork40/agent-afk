@@ -51,12 +51,18 @@ jobs:
       - name: Lint (tsc --noEmit)
         run: pnpm lint
 
-      - name: Lint test files (tsc -p tsconfig.test.json — non-blocking, burn-down #3053)
-        # Advisory gate: `|| true` keeps this non-blocking while the backlog of
-        # existing test type errors is burned down (baseline: ~2,454 errors on
-        # the day this gate was added). Remove `|| true` once the count reaches
-        # zero. Tracked in issue #3053.
+      - name: Lint test files (informational — full tsc output, burn-down #3053)
+        # Informational step: prints the full tsc error list without failing CI.
+        # The ratchet step below is what actually blocks regressions.
         run: pnpm lint:tests || true
+
+      - name: Lint test files — error-count ratchet (CI-blocking, #3105)
+        # One-way ratchet: fails when the `error TS` count EXCEEDS the committed
+        # baseline in `.test-typecheck-baseline.json`. Regressions are caught
+        # immediately; the burn-down (#3053) continues unimpeded because the gate
+        # only blocks growth, never requires zero errors. Lower the baseline after
+        # fixing a batch: `pnpm lint:tests:update`.
+        run: pnpm lint:tests:check
 
       - name: Audit env-var access (no scattered process.env reads outside src/config/env.ts)
         run: pnpm audit:env:check
