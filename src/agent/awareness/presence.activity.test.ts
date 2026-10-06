@@ -154,6 +154,35 @@ describe('normalizePromptHead', () => {
     // The path should survive redaction.
     expect(result).toContain('/Users/me');
   });
+
+  // Finding #4 from #2850 review: auto-resume directive text must not be
+  // silently stored in promptHead. normalizePromptHead itself does not filter
+  // directives (it is a pure text normaliser); the guard lives in
+  // markPresenceTurn (loop-iteration.injections.ts). These tests verify that
+  // if auto-resume text were passed to normalizePromptHead it would survive
+  // (no accidental filtering), while the wiring guard test in
+  // loop-iteration.injections.test.ts verifies markPresenceTurn never reaches
+  // this code path for directive text.
+  it('does not strip the [auto-resume] prefix (normalisation is prefix-agnostic)', async () => {
+    const { normalizePromptHead } = await getActivityMod();
+    const directive =
+      '[auto-resume] The background task above has finished. Continue the work it was dispatched for.';
+    const result = normalizePromptHead(directive);
+    // normalizePromptHead does NOT filter directives — the caller (markPresenceTurn)
+    // must skip calling it for auto-resume text. Verify it is non-empty and
+    // starts with the expected prefix after normalisation.
+    expect(result).toBeDefined();
+    expect(result!.startsWith('[auto-resume]')).toBe(true);
+  });
+
+  it('normalizes auto-resume text exactly like any other string (whitespace collapse, truncation)', async () => {
+    const { normalizePromptHead, ACTIVITY_PROMPT_HEAD_MAX } = await getActivityMod();
+    // A directive that is too long to fit in the window should be truncated.
+    const directive = '[auto-resume] ' + 'x'.repeat(200);
+    const result = normalizePromptHead(directive);
+    expect(result).toBeDefined();
+    expect(result!.length).toBeLessThanOrEqual(ACTIVITY_PROMPT_HEAD_MAX);
+  });
 });
 
 // ---------------------------------------------------------------------------
