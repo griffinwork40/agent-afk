@@ -210,13 +210,18 @@ function assertWin32InstallCommandInvariants(text: string): void {
   const ms = Number(/PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=(\d+)/.exec(text)?.[1]);
   expect(ms).toBeGreaterThanOrEqual(120_000);
   // The action must still be to install chromium.
+  // Note: we cannot use a $ anchor here because this helper is also called with
+  // full hint strings (e.g. playwrightMissingHint) that include trailing prose
+  // after the command (e.g. "Do NOT use `npx`…"). The pre-PR standalone test
+  // that anchored with $ only tested playwrightInstallCommand() in isolation.
   expect(text).toMatch(/install chromium/);
   // The embedded command itself must not use npx (version-skew risk, issue #1998).
-  // Extract only the $env:… node … install chromium part, then check it.
-  const cmdMatch = /(\$env:PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=\d+;[^.]+install chromium)/.exec(text);
-  if (cmdMatch) {
-    expect(cmdMatch[1]).not.toMatch(/npx/);
-  }
+  // Use a lazy [\ \S]+? so the match succeeds on real paths that contain dots
+  // (e.g. `.pnpm/…/cli.js`). The `[^.]+` form stopped at the first dot and
+  // silently made cmdMatch null, meaning the no-npx assertion never ran.
+  const cmdMatch = /(\$env:PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=\d+;[\s\S]+?install chromium)/.exec(text);
+  expect(cmdMatch).not.toBeNull();
+  expect(cmdMatch![1]).not.toMatch(/npx/);
 }
 
 describe('playwrightInstallCommand — Windows PowerShell syntax (issue #2758)', () => {

@@ -30,6 +30,10 @@ function mockPrefix(s: string): ReturnType<typeof import('child_process').execSy
   return s as unknown as ReturnType<typeof import('child_process').execSync>;
 }
 
+// The module-scope mock ensures the real execSync is never called when
+// checkNpmBinOnPath is invoked without an explicit `deps.execSync`.
+// `_execSync` is imported so its return type (`typeof _execSync`) can be used
+// to cast DI-injected stubs in the `checkNpmBinOnPath` tests below.
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
   return { ...actual, execSync: vi.fn(() => '/usr/local\n') };
