@@ -176,6 +176,25 @@ describe('withTransientRetry — exhaustion', () => {
     expect(attempt).toHaveBeenCalledTimes(1);
   });
 
+  it('calls onExhausted with attempt === 1 when maxRetries is 0', async () => {
+    // maxRetries:0 means the first (and only) attempt exhausts the budget
+    // immediately; onExhausted must fire with attempt=1.
+    const err = makeStatusError(503);
+    const attempt = vi.fn().mockRejectedValue(err);
+    const onExhausted = vi.fn();
+
+    await expect(
+      withTransientRetry(attempt, { maxRetries: 0, sleep: fastSleep, onExhausted }),
+    ).rejects.toThrow();
+
+    expect(onExhausted).toHaveBeenCalledTimes(1);
+    const info = onExhausted.mock.calls[0]?.[0] as RetryInfo;
+    // n === 0 === maxRetries at budget exhaustion → attempt = n+1 = 1
+    expect(info.attempt).toBe(1);
+    expect(info.delayMs).toBe(0);
+    expect(info.status).toBe(503);
+  });
+
   it('calls onExhausted exactly once when budget is spent', async () => {
     const err = makeStatusError(500);
     const attempt = vi.fn().mockRejectedValue(err);
