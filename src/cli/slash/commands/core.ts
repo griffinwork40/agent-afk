@@ -215,8 +215,15 @@ const rewindCmd: SlashCommand = {
       return 'continue';
     }
 
+    // Report in PROMPTS, not raw API messages: `messagesBefore/After` count
+    // every assistant tool_use and user tool_result message (~2 per tool
+    // round), so a 12-prompt session reads as "Rewound 247 → 232 messages".
+    // Targets are newest-first, so picking index `choice` discards the
+    // chosen prompt plus the `choice` newer ones.
+    const dropped = choice + 1;
+    const kept = targets.length - dropped;
     ctx.out.success(
-      `Rewound ${result.messagesBefore} → ${result.messagesAfter} messages. Edit the message below and press Enter to resend.`,
+      `Rewound ${dropped} ${dropped === 1 ? 'prompt' : 'prompts'} (${kept} earlier kept). Edit the message below and press Enter to resend.`,
     );
     return { kind: 'prefill', message: result.reloadText ?? '' };
   },

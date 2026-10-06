@@ -105,7 +105,7 @@ describe('/rewind slash handler', () => {
         messagesAfter: 4,
       }),
     };
-    const { ctx, suspend, resume } = makeCtx(session);
+    const { ctx, lines, suspend, resume } = makeCtx(session);
     // Pick index 1 → the { turnIndex: 4 } target.
     (renderSelector as Mock).mockResolvedValue(1);
 
@@ -120,6 +120,11 @@ describe('/rewind slash handler', () => {
     expect(resume).toHaveBeenCalledTimes(1);
     expect(session.rewindConversation).toHaveBeenCalledWith(4);
     expect(result).toEqual({ kind: 'prefill', message: 'second question' });
+    // Counts user prompts, never raw API messages (which include every
+    // tool_use/tool_result message and read as "100+").
+    const success = lines.find((l) => l.startsWith('SUCCESS:'));
+    expect(success).toContain('Rewound 2 prompts (1 earlier kept)');
+    expect(success).not.toContain('messages');
   });
 
   it('cancelling the picker is a no-op', async () => {
