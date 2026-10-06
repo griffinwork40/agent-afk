@@ -349,9 +349,10 @@ export function checkPauseAnnotations(ctx: LifecycleContext): boolean {
   if (ctx.isTTY && ctx.overlayComposer) {
     if (changed) ctx.overlayComposer.markDirty('tool-lane');
     // The progress banner is already marked dirty by checkTtfbAnnotation.
-    // Also drain resize invalidations on quiet preparation frames. flush()
-    // is a no-op when clean, retaining a single composed repaint per tick.
-    ctx.overlayComposer.flush();
+    // Also drain resize invalidations on quiet preparation frames. Gate on
+    // isDirty() so the full compose-and-setOverlay path is skipped entirely
+    // on ticks where neither the tool lane nor any other slot changed.
+    if (changed || ctx.overlayComposer.isDirty()) ctx.overlayComposer.flush();
   }
 
   return changed;

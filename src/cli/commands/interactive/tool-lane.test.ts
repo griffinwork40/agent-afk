@@ -2102,6 +2102,23 @@ describe('ToolLane.mergeAgentLabel', () => {
     expect(overlayAfterSecond).toContain('first');
     expect(overlayAfterSecond).not.toContain('second');
   });
+
+  it('strips 8-bit C1 control 0x9C (ST) from LLM-emitted label before storage', () => {
+    // 0x9C is the 8-bit String Terminator — stripAnsi misses it; sanitizeForDisplay
+    // covers it via CONTROL_RE which replaces [\x80-\x9F] with spaces.
+    const lane = new ToolLane();
+    lane.addStart('dispatch-1', 'agent', '(task)');
+    const merged = lane.mergeAgentLabel('dispatch-1', 'critic\x9Cpragmatist');
+    expect(merged).toBe(true);
+    const overlay = lane.getOverlay();
+    // The raw C1 byte must not appear in either the overlay or flushed scrollback.
+    expect(overlay).not.toContain('\x9C');
+    const flushed = lane.flush().join('\n');
+    // After result, check scrollback too
+    lane.addResult('dispatch-1', makeResult('done'));
+    const scrollback = lane.flush().join('\n');
+    expect(scrollback).not.toContain('\x9C');
+  });
 });
 
 describe('ToolLane.addDiff — render-only diff sidechannel', () => {

@@ -36,4 +36,18 @@ describe('skill display identity', () => {
     expect(displayWidth(safe.arguments!)).toBeLessThanOrEqual(96);
     expect(sanitizeSkillIdentity({ name: 'x', purpose: 'sk-ant-' + 'a'.repeat(200) }).purpose).toBe('[REDACTED]');
   });
+  it.each([
+    '--password short',
+    '--api-key=short',
+    'token=short',
+    'https://user:pass@example.com',
+    'Bearer short',
+    '-----BEGIN PRIVATE KEY-----',
+  ])('omits credential-bearing purpose: %s', purposeText => {
+    expect(sanitizeSkillIdentity({ name: 'review', purpose: purposeText }).purpose).toBe('[purpose omitted]');
+  });
+  it('innocuous purpose passes through unchanged', () => {
+    const safe = sanitizeSkillIdentity({ name: 'review', purpose: 'analyze the codebase for issues' });
+    expect(safe.purpose).toBe('analyze the codebase for issues');
+  });
 });
