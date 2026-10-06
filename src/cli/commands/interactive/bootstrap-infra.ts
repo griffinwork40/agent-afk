@@ -125,7 +125,7 @@ export function createBootstrapInfra(a: {
   // Background process registry for `bash run_in_background`. Same lifetime
   // as the detach registry: shared with every per-query dispatcher of this
   // root session, stopped by the interactive teardown path.
-  const processJobs = new ProcessJobRegistry();
+  const processJobs = new ProcessJobRegistry(trace ? { traceWriter: trace.writer } : {});
 
   // Opt-in background summarizer — only constructed when bgSummaries: true.
   const bgSummariesEnabled = a.cliConfig.bgSummaries === true;

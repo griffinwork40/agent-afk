@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { ProcessJobRegistry } from '../../../agent/shell-jobs/process-jobs.js';
-import { ProcessJobNotifier, buildProcessResultInjection } from './process-job-notifier.js';
+import { ProcessJobNotifier, buildProcessResultInjection, escapeXmlAttr } from './process-job-notifier.js';
 
 let dir: string;
 let reg: ProcessJobRegistry;
@@ -89,6 +89,16 @@ describe('ProcessJobNotifier', () => {
       logPath: '/tmp/a"><evil', maxRuntimeMs: 1, bytes: 0,
     });
     expect(text).toContain('log="/tmp/a&quot;&gt;&lt;evil"');
+  });
+
+  it('escapeXmlAttr encodes all five special characters including single quote', () => {
+    expect(escapeXmlAttr("&<>\"'")).toBe('&amp;&lt;&gt;&quot;&apos;');
+    // Paths containing single quotes must not break attribute framing.
+    const text = buildProcessResultInjection({
+      id: 'proc-1', command: 'x', pid: 1, startedAt: 0, endedAt: 1, status: 'completed', exitCode: 0, signal: null,
+      logPath: "/tmp/it's-a-path", maxRuntimeMs: 1, bytes: 0,
+    });
+    expect(text).toContain("log=\"/tmp/it&apos;s-a-path\"");
   });
 
   it('stops receiving after dispose', async () => {

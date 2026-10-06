@@ -247,7 +247,19 @@ export type SessionPhaseName =
   // i.e. a corruption path evaded both the tool-round rollback and the
   // turn-driver repair. metadata carries hoistedIndices, orphanIds,
   // assistantIndices, bridgedIndices, messageCount, shapeBefore. See #2136.
-  | 'orphan_repair';
+  | 'orphan_repair'
+  // Background process lifecycle — emitted by `bash run_in_background` so
+  // `afk trace show` can reconstruct which background jobs ran in a session
+  // (analogous to `background_agent` for subagent jobs).
+  // `background_process_started`: emitted at launch from the bash handler;
+  //   metadata carries `jobId`, `pid` (string, may be 'undefined'), `command`
+  //   (first 200 chars), and `maxRuntimeMs`.
+  // `background_process_settled`: emitted from ProcessJobRegistry.onSettled
+  //   via the registry's optional traceWriter; metadata carries `jobId`,
+  //   `status`, `exitCode` (string), `signal` (string|''), `durationMs`, and
+  //   `bytes`. PURE OBSERVABILITY — never alters control flow.
+  | 'background_process_started'
+  | 'background_process_settled';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

@@ -97,6 +97,10 @@ export const SessionPhaseNameSchema = z.enum([
   // hoistedIndices, orphanIds, assistantIndices, bridgedIndices, messageCount,
   // and shapeBefore (structural summary, never message content). See #2136.
   'orphan_repair',
+  // Background process lifecycle. See SessionPhaseName JSDoc in
+  // types.session-phase.ts for the full contract.
+  'background_process_started',
+  'background_process_settled',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({
