@@ -171,7 +171,7 @@ export interface ScheduledTaskConfig {
   /**
    * Per-task working directory (absolute path). When set, the spawned session's
    * cwd is pinned to this directory instead of the daemon-wide `AFK_DAEMON_CWD`.
-   * Precedence: task.cwd ?? AFK_DAEMON_CWD ?? process.cwd().
+   * Precedence: task.cwd ?? AFK_DAEMON_CWD ?? daemonDefaultCwd().
    * Must be an existing directory; tilde (~) is expanded at save time.
    */
   cwd?: string;
@@ -420,6 +420,9 @@ export function resolveSlugCollision(base: string, existing: string[]): string {
 
 /**
  * Map a `ScheduledTaskConfig` to a `ScheduledTask` (daemon trigger shape).
+ *
+ * Tilde in `cwd` is expanded via `expandCwd` so hand-edited schedules.json
+ * entries with `"cwd": "~/my-project"` resolve to absolute paths at runtime.
  */
 export function toScheduledTask(config: ScheduledTaskConfig): ScheduledTask {
   return {
