@@ -265,7 +265,7 @@ describe('runStreamJsonPath', () => {
         { type: 'chunk', chunk: { type: 'content', content: 'Hello ' } },
         { type: 'chunk', chunk: { type: 'content', content: 'world' } },
         { type: 'done', metadata: undefined },
-      ] as OutputEvent[]),
+      ] satisfies OutputEvent[]),
     );
     const maybePublish = vi.fn().mockResolvedValue(undefined);
     const params = makeParams({ maybePublish });
@@ -280,7 +280,7 @@ describe('runStreamJsonPath', () => {
       makeStream([
         { type: 'chunk', chunk: { type: 'content', content: 'partial' } },
         { type: 'error', error: new Error('stream failure') },
-      ] as OutputEvent[]),
+      ] satisfies OutputEvent[]),
     );
     const maybePublish = vi.fn().mockResolvedValue(undefined);
     const params = makeParams({ maybePublish });
@@ -291,12 +291,12 @@ describe('runStreamJsonPath', () => {
   });
 
   it('exits the event loop after an error event (does not process further events)', async () => {
-    const afterError: OutputEvent = { type: 'done', metadata: undefined };
+    const afterError = { type: 'done', metadata: undefined } satisfies OutputEvent;
     mockSendMessageStream = vi.fn().mockReturnValue(
       makeStream([
         { type: 'error', error: new Error('early failure') },
         afterError,
-      ] as OutputEvent[]),
+      ] satisfies OutputEvent[]),
     );
 
     const { writeAndDrain: mockWrite } = await import('./chat.stdin-stream.js');
@@ -316,7 +316,7 @@ describe('runStreamJsonPath', () => {
 
   it('sets process.exitCode to 1 on error event', async () => {
     mockSendMessageStream = vi.fn().mockReturnValue(
-      makeStream([{ type: 'error', error: new Error('oops') }] as OutputEvent[]),
+      makeStream([{ type: 'error', error: new Error('oops') }] satisfies OutputEvent[]),
     );
     const params = makeParams();
 
