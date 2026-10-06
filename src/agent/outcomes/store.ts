@@ -187,7 +187,10 @@ export function upsertVotes(
   // Derive normalClosure from stored closure_reason.
   // Records without closure_reason (written before this field was added) are
   // treated as normal closure (conservative: we don't know it was abnormal).
-  // Only 'abort' and 'iteration_cap' are considered non-normal.
+  // Non-normal values are: 'abort', 'iteration_cap', 'unknown'.
+  // The field is populated at session-end time by closureFromTrace() in
+  // src/agent/outcomes/session-end-hook.ts — if a new ClosureReason member is
+  // added there, update this whitelist and the exhaustive switch in that file.
   const normalClosure =
     record.closure_reason === undefined ||
     record.closure_reason === 'normal';

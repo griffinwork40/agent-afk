@@ -1,6 +1,7 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
+import { AUDIT_GATES } from '../scripts/check-audits.js';
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const exitMock = vi.hoisted(() => vi.fn((code?: string | number | null | undefined) => {
@@ -78,10 +79,10 @@ describe('scripts/check-audits runner', () => {
   });
 
   it('exits 2 when every gate fails or spawn errors', async () => {
-    const allFail = await runWithStatuses(Array.from({ length: 20 }, () => 1));
+    const allFail = await runWithStatuses(Array.from({ length: AUDIT_GATES.length }, () => 1));
     expect(allFail.exitCode).toBe(2);
 
-    const spawnErrors = await runWithStatuses(Array.from({ length: 20 }, () => new Error('ENOENT')));
+    const spawnErrors = await runWithStatuses(Array.from({ length: AUDIT_GATES.length }, () => new Error('ENOENT')));
     expect(spawnErrors.exitCode).toBe(2);
   });
 });

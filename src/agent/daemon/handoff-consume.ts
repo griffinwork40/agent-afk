@@ -151,6 +151,12 @@ async function listAnsweredHandoffs(
 
     // Phase 2: parse JSON. A SyntaxError here means the file is persistently
     // malformed — it will never parse. Dead-letter it immediately.
+    //
+    // BENIGN RACE: two concurrent sweeps (startup + tick-teardown) both see the
+    // same malformed file. The first rename in deadLetterHandoffFile wins; the
+    // second sees ENOENT on the source and falls through to the unlink fallback
+    // (also ENOENT), so the outer catch logs "failed to dead-letter" once. No
+    // task is lost and the file is already gone. The spurious log is benign.
     let record: HandoffRecord;
     try {
       record = JSON.parse(raw) as HandoffRecord;
@@ -166,7 +172,8 @@ async function listAnsweredHandoffs(
     // Phase 3: validate taskId. An unsafe taskId would allow path traversal if
     // used to construct downstream paths. Dead-letter before using the taskId
     // anywhere. Note: we use `filename` (from readdir) to build the src path
-    // here — not `record.taskId` — so the move is always safe.
+    // here — not `record.taskId` — so the move is always safe. Same benign
+    // concurrent-sweep race as Phase 2 above applies here.
     try {
       assertSafeJobId(record.taskId);
     } catch (idErr) {
@@ -210,20 +217,45 @@ async function recoverOrphanedClaims(
   }
   for (const filename of filenames) {
     if (!filename.startsWith('.claiming-') || !filename.endsWith('.json')) continue;
+    const fullPath = join(handoffsDir, filename);
     try {
-      const fullPath = join(handoffsDir, filename);
       const { mtimeMs } = await stat(fullPath);
       if (Date.now() - mtimeMs < STALE_MS) continue; // still fresh — active claim
       const raw = await readFile(fullPath, 'utf-8');
-      const record = JSON.parse(raw) as HandoffRecord;
-      assertSafeJobId(record.taskId);
+      let record: HandoffRecord;
+      try {
+        record = JSON.parse(raw) as HandoffRecord;
+      } catch (parseErr) {
+        // Malformed JSON in an orphaned .claiming-* file — the file is
+        // permanently unprocessable. Dead-letter so it is not re-encountered
+        // on every daemon restart (same class as #2954 fixed for the main
+        // sweep in listAnsweredHandoffs Phase 2).
+        const reason =
+          parseErr instanceof SyntaxError
+            ? 'SyntaxError: invalid JSON'
+            : redactInlineSecrets(errorMessage(parseErr));
+        await deadLetterHandoffFile(handoffsDir, fullPath, filename, reason);
+        continue;
+      }
+      try {
+        assertSafeJobId(record.taskId);
+      } catch (idErr) {
+        // Unsafe taskId — dead-letter for the same reason as Phase 3 in
+        // listAnsweredHandoffs: path traversal risk if used downstream.
+        const reason = redactInlineSecrets(errorMessage(idErr));
+        await deadLetterHandoffFile(handoffsDir, fullPath, filename, reason);
+        continue;
+      }
       if (record.status === 'answered') {
         const command = buildHandoffResumeCommand(record);
         enqueue(command, {}, queueDir);
       }
       await unlink(fullPath);
     } catch {
-      // Best-effort — skip corrupt or already-removed orphans silently.
+      // Best-effort — transient I/O errors (ENOENT from concurrent removal,
+      // EPERM from FS hiccup) are skipped silently; they may resolve on the
+      // next restart. Parse/taskId errors are handled above and dead-lettered
+      // before reaching this catch.
     }
   }
 }

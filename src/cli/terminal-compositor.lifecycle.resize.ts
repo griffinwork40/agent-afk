@@ -13,6 +13,7 @@
  * erase/repaint happens on the next call to `repaint()`.
  */
 
+import { resetArchivedReveal } from './terminal-compositor.archived-reveal.js';
 import type { LifecycleHost } from './terminal-compositor.lifecycle.js';
 
 /**
@@ -30,6 +31,7 @@ import type { LifecycleHost } from './terminal-compositor.lifecycle.js';
  * race the debounced subscriber and double-paint.
  */
 export function handleResizeImmediate(self: LifecycleHost): void {
+  resetArchivedReveal(self);
   const newRows = self.stdout.rows ?? 24;
   if (self.lastKnownRows > 0 && newRows > self.lastKnownRows) {
     // EXPAND: snapshot the old footprint for ghost-row erase.

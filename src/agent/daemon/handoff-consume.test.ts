@@ -187,6 +187,13 @@ describe('processAnsweredHandoffs', () => {
     expect(result.requeued).toBe(1);
     expect(result.cleaned).toBe(1);
     expect(listPending(queueDir)).toHaveLength(1);
+
+    // The corrupt file must be moved to dead-letter/ (not left in the hot dir).
+    expect(existsSync(join(handoffsDir, 'q-corrupt-aaa.json'))).toBe(false);
+    const deadLetterDir = join(handoffsDir, DEAD_LETTER_SUBDIR);
+    expect(existsSync(deadLetterDir)).toBe(true);
+    const deadFiles = readdirSync(deadLetterDir);
+    expect(deadFiles.some((f) => f.includes('q-corrupt-aaa'))).toBe(true);
   });
 
   it('returns correct counts for multiple answered handoffs', async () => {
@@ -415,6 +422,75 @@ describe('processAnsweredHandoffs', () => {
     );
     expect(logged).toBe(true);
 
+    errorSpy.mockRestore();
+  });
+
+  // -------------------------------------------------------------------------
+  // recoverOrphanedClaims — dead-letter on malformed orphan (Finding #2983)
+  // -------------------------------------------------------------------------
+
+  it('dead-letters a malformed orphaned .claiming-* file instead of swallowing it', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    // Write a stale (old mtime) .claiming-* file with invalid JSON.
+    const claimFile = join(handoffsDir, '.claiming-q-orphan-ppp.json');
+    await writeFile(claimFile, '{ not valid json ]]', 'utf-8');
+    // Back-date by setting mtime to 2 minutes ago via utime workaround:
+    // we can't easily manipulate mtime in the test environment without
+    // native calls, so we simulate the staleness check by writing the file
+    // content and relying on processAnsweredHandoffs calling recoverOrphanedClaims.
+    // Instead: write the file so old stat passes by patching stat is complex —
+    // so we rely on the actual stale check.  The simplest approach is to use
+    // a workaround: write the file then utime it to be old.
+    const { utimes } = await import('node:fs/promises');
+    const twoMinutesAgo = (Date.now() - 120_000) / 1000;
+    await utimes(claimFile, twoMinutesAgo, twoMinutesAgo);
+
+    await processAnsweredHandoffs(queueDir, handoffsDir);
+
+    // The stale orphan with bad JSON must be dead-lettered (not left in place).
+    expect(existsSync(claimFile)).toBe(false);
+    const deadLetterDir = join(handoffsDir, DEAD_LETTER_SUBDIR);
+    const deadFiles = existsSync(deadLetterDir) ? readdirSync(deadLetterDir) : [];
+    expect(deadFiles.some((f) => f.includes('.claiming-q-orphan-ppp'))).toBe(true);
+
+    // A log message must mention dead-lettered.
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('dead-lettered'));
+
+    errorSpy.mockRestore();
+  });
+
+  it('dead-letters a stale orphaned .claiming-* file with an unsafe taskId', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const unsafeRecord = {
+      taskId: '../../../etc/passwd',
+      sessionId: 'sess-unsafe-001',
+      question: { type: 'text', message: 'unsafe?' },
+      requestType: 'ask_question',
+      createdAt: new Date().toISOString(),
+      status: 'answered',
+      answer: { action: 'accept', content: { value: 'yes' } },
+      answeredAt: new Date().toISOString(),
+      answerSource: 'telegram',
+      originalCommand: '/cmd',
+    };
+
+    const claimFile = join(handoffsDir, '.claiming-q-unsafe-qqq.json');
+    await writeFile(claimFile, JSON.stringify(unsafeRecord), 'utf-8');
+    const { utimes } = await import('node:fs/promises');
+    const twoMinutesAgo = (Date.now() - 120_000) / 1000;
+    await utimes(claimFile, twoMinutesAgo, twoMinutesAgo);
+
+    await processAnsweredHandoffs(queueDir, handoffsDir);
+
+    // Must be dead-lettered.
+    expect(existsSync(claimFile)).toBe(false);
+    const deadLetterDir = join(handoffsDir, DEAD_LETTER_SUBDIR);
+    const deadFiles = existsSync(deadLetterDir) ? readdirSync(deadLetterDir) : [];
+    expect(deadFiles.some((f) => f.includes('.claiming-q-unsafe-qqq'))).toBe(true);
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('dead-lettered'));
     errorSpy.mockRestore();
   });
 });

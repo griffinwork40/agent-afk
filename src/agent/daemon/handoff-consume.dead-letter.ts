@@ -13,7 +13,7 @@
  */
 
 import { mkdir, rename, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { errorMessage } from '../../utils/errors.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
@@ -50,10 +50,14 @@ export const claimRereadFailures: Map<string, number> = new Map();
 /**
  * Move a malformed or unsafe handoff file into `<handoffsDir>/dead-letter/`
  * so it stops being re-scanned on every sweep tick, while preserving it for
- * operator diagnosis. Uses an atomic same-directory rename; appends a
- * timestamp+random suffix on name collision. Never throws — if the move fails,
- * logs the failure and leaves the file in place (it will be re-encountered and
- * re-attempted on the next sweep).
+ * operator diagnosis. Uses an atomic same-directory rename; always appends a
+ * timestamp+random suffix so no existing dead-letter file is ever overwritten.
+ * Never throws — if the move fails, logs the failure and leaves the file in
+ * place (it will be re-encountered and re-attempted on the next sweep).
+ *
+ * NOTE(dead-letter-telemetry): events are logged to `console.error` only.
+ * A structured telemetry record (parity with `runOnce` poison telemetry) is a
+ * tracked follow-up; see queue-store.ts NOTE(#337-poison-telemetry).
  *
  * The `srcPath` must be a safe path derived from OS readdir output or an
  * internal `.claiming-*` path, not from user-controlled content.
@@ -74,20 +78,23 @@ export async function deadLetterHandoffFile(
   const deadLetterDir = join(handoffsDir, DEAD_LETTER_SUBDIR);
   try {
     await mkdir(deadLetterDir, { recursive: true });
-    // Invariant: `displayName` is used unredacted in the destination path
-    // (same as quarantinePoisonEntry in queue-store.ts, which uses the raw
-    // `filename` from readdir). Redaction is applied only to log output, not
-    // to filesystem paths, so the operator can correlate the dead-letter file
-    // with the original filename on disk.
-    let dest = join(deadLetterDir, displayName);
-    try {
-      await rename(srcPath, dest);
-    } catch {
-      // Name collision in dead-letter/ — append unique suffix and retry.
-      const suffix = `${Date.now()}-${randomBytes(3).toString('hex')}`;
-      dest = join(deadLetterDir, `${suffix}-${displayName}`);
-      await rename(srcPath, dest);
-    }
+    // `basename()` guard: strip any directory component from `displayName` so
+    // a caller that accidentally passes a multi-segment path cannot write
+    // outside dead-letter/. Current callers are safe (readdir filenames +
+    // internal .claiming-* names), but the guard makes the boundary explicit.
+    // Redaction is applied only to log output, not to filesystem paths, so the
+    // operator can correlate the dead-letter file with the original on disk.
+    const safeName = basename(displayName);
+    // Always include a timestamp+random suffix so two dead-letter attempts for
+    // the same filename (e.g. a re-quarantine after manual restore) never
+    // overwrite each other. POSIX rename() silently overwrites an existing
+    // destination, so the original try/catch collision-fallback was dead code
+    // for same-name collisions — the first rename would silently replace an
+    // older dead-letter copy. (Mirrors the same fix applied to
+    // quarantinePoisonEntry in queue-store.ts.)
+    const suffix = `${Date.now()}-${randomBytes(3).toString('hex')}`;
+    const dest = join(deadLetterDir, `${suffix}-${safeName}`);
+    await rename(srcPath, dest);
     // eslint-disable-next-line no-console
     console.error(
       `[daemon] handoff-consume: dead-lettered malformed record ${redactedName} → ${DEAD_LETTER_SUBDIR}/ (${reason})`,

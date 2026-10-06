@@ -44,8 +44,10 @@ function deriveCIGates(ciYmlText: string): string[] {
       continue;
     }
 
-    // Detect end: another top-level job at the same indent level.
-    if (inLintBuild && /^\s{2}\S/.test(line) && !/^\s{4}/.test(line)) {
+    // Detect end: another top-level job definition at the same indent level.
+    // Match only job-key patterns (`  job-name:`) to avoid false-positive breaks
+    // on 2-space-indented YAML comments (`  # comment`).
+    if (inLintBuild && /^\s{2}[a-z_-]+:/.test(line)) {
       break;
     }
 

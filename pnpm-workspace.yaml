@@ -52,3 +52,10 @@ overrides:
   # body-parser: invalid limit value silently disables size enforcement
   # GHSA-v422-hmwv-36x6
   body-parser: ">=2.3.0"
+
+  # proxy-addr: IP spoofing via IPv4-mapped IPv6 trust subnet (critical)
+  # GHSA-jqcg-44mw-7w3h — via @modelcontextprotocol/sdk > express
+  proxy-addr: ">=2.0.8"
+
+  # source-map-js: GHSA-68fv-2mgg-jv7q (high) — via jsdom > css-tree
+  source-map-js: ">=1.2.2"

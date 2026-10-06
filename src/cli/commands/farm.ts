@@ -135,7 +135,7 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
   } = opts;
 
   // Captured at runFarm entry so the FarmRunRecord reports actual wall-clock
-  // span end-to-end (createFarm -> DAG -> scoring -> exit handling).
+  // span end-to-end (createFarm → DAG → scoring → exit handling).
   const startedAt = new Date().toISOString();
 
   // -- Validation --
@@ -380,10 +380,10 @@ export function registerFarmCommand(program: Command): void {
       cwd?: string;
       failFast: boolean;
       taskSlug?: string;
-      score: boolean; // commander inverts --no-score -> { score: false }
+      score: boolean; // commander inverts --no-score → { score: false }
       scoreTimeout?: string;
-      memory: boolean;  // commander inverts --no-memory -> { memory: false }
-      digest: boolean;  // commander inverts --no-digest -> { digest: false }
+      memory: boolean;  // commander inverts --no-memory → { memory: false }
+      digest: boolean;  // commander inverts --no-digest → { digest: false }
     }) => {
       const count = parseInt(options.branches, 10);
       const labels = options.labels

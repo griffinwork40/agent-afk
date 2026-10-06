@@ -281,13 +281,16 @@ describe('getFacetHandler – resolution-context fields', () => {
     expect(parsed['is_current_session']).toBe(false);
   });
 
-  it('is_current_session is true when context.sessionId matches the resolved session', async () => {
+  it('is_current_session is false for explicit-id lookup even when id coincidentally equals caller id (Finding 3)', async () => {
+    // Explicit-id lookup (session: 'sess-self') MUST NOT set is_current_session
+    // even when context.sessionId happens to match. The flag is only true when
+    // the session was resolved through the "current"/"self" alias path.
     writeSession('sess-self');
     const ctx: ToolHandlerContext = { sessionId: 'sess-self' };
     const result = await getFacetHandler({ session: 'sess-self' }, ABORT, ctx);
     expect(result.isError).toBeFalsy();
     const parsed = JSON.parse(result.content as string) as Record<string, unknown>;
-    expect(parsed['is_current_session']).toBe(true);
+    expect(parsed['is_current_session']).toBe(false);
   });
 
   it('is_current_session is false when context.sessionId differs from resolved session', async () => {

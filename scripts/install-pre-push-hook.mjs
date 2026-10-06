@@ -21,6 +21,14 @@
  * worktrees. The launcher itself resolves the CURRENT worktree's toplevel at
  * run time and delegates to scripts/git-hooks/pre-push from that tree — so
  * branches/worktrees without the script are unaffected (the launcher exits 0).
+ *
+ * NOTE: this file is intentionally absent from the `files` array in package.json.
+ * It is a contributor-only tool and must NOT ship on the npm registry.  It runs
+ * during `prepare` (which npm always executes locally), but when it is invoked as
+ * a dependency the `installerBelongsToTopLevel` guard silently skips the install.
+ * The `|| true` on the prepare script ensures any unexpected error never breaks a
+ * consumer's `npm install`.  ENOENT from the registry install is therefore benign
+ * and intentional.
  */
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
@@ -75,7 +83,13 @@ function gitTopLevel() {
 function configuredHooksPath() {
   try {
     return git(['config', '--get', 'core.hooksPath']);
-  } catch {
+  } catch (err) {
+    // `git config --get` exits 1 when the key is not set (normal / expected).
+    // Any other status (e.g. 128 for "not a git repo") is an unexpected git
+    // failure — propagate it so the caller can decide.
+    if (err && typeof err === 'object' && 'status' in err && err.status !== 1) {
+      throw err;
+    }
     return '';
   }
 }
@@ -202,7 +216,13 @@ function main() {
   }
 
   if (!installerBelongsToTopLevel(topLevel)) {
-    console.warn('[agent-afk] install-pre-push-hook: package is nested under a different git toplevel; skipping hook install');
+    // This script is running from inside node_modules (e.g. when a downstream
+    // project runs `npm install agent-afk`).  The `prepare` lifecycle hook
+    // fires in that case too, but we must never write into a consumer's git
+    // hooks directory — so we intentionally skip and log a note.  This is
+    // expected behaviour: the pre-push hook is only installed for contributors
+    // working directly inside the agent-afk repository itself.
+    console.warn('[agent-afk] install-pre-push-hook: running as a dependency (not the agent-afk source repo); skipping pre-push hook install');
     return;
   }
 

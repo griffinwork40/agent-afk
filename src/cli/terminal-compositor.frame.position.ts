@@ -53,7 +53,7 @@ export function computeFramePosition(
   placementMode: FramePlacementMode,
   anchorRow: number | undefined,
   logUpdate: LogUpdateFn,
-  hugAnchor?: number,
+  hugAnchor?: number | ((physicalRows: number) => number),
 ): FramePosition {
   // Invariant (wrap-aware frame height): physicalRows must reflect the
   // POST-wrap row count — not just frameLines.length (the logical count).
@@ -93,7 +93,7 @@ export function computeFramePosition(
     placementMode === 'cursor-follow' && anchorRow !== undefined
       ? Math.min(absoluteBottom, (anchorRow - 1) + physicalRows)
       : placementMode === 'content-hug' && hugAnchor !== undefined
-        ? contentHugTargetBottom(hugAnchor, physicalRows, absoluteBottom)
+        ? contentHugTargetBottom(typeof hugAnchor === 'function' ? hugAnchor(physicalRows) : hugAnchor, physicalRows, absoluteBottom)
         : absoluteBottom;
   // Wrap-aware top row: derived from the same physicalRows (lineCount) already
   // computed above — equivalent to measure().topRow but without a second wrap
