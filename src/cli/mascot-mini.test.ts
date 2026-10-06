@@ -70,7 +70,7 @@ describe('mini mascot grids', () => {
   it('uses only known palette tokens', () => {
     // Mirrors PIXEL_PALETTE's key set (mascot.ts). An unknown token renders as
     // transparent, i.e. silently punches a hole in the sprite.
-    const known = /^[.DMLYKWXBR]+$/;
+    const known = /^[.DMLYKWXBRSCG]+$/;
     for (const state of STATES) {
       for (const grid of FRAMES[state]) {
         for (const row of grid) expect(row).toMatch(known);
