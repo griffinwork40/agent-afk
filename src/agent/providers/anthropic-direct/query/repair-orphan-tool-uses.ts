@@ -81,27 +81,41 @@ export interface OrphanRepairReport {
 const SHAPE_CAP = 2000;
 
 /**
+ * Narrows `MessageParam.content` to the block-array form.
+ *
+ * The SDK type for `content` is `string | ContentBlockParam[]` (user) or
+ * `string | ContentBlock[]` (assistant). Both union arms that are not strings
+ * are arrays, so `Array.isArray` is the correct discriminant. This guard
+ * makes the narrowing explicit and keeps `buildShape` total against any
+ * future SDK shape drift.
+ */
+function isContentBlockArray(content: MessageParam['content']): content is ContentBlockParam[] {
+  return Array.isArray(content);
+}
+
+/**
  * Build a compact structural summary of a message array.
  * Roles: `u` = user, `a` = assistant. Block types are abbreviated by `type`.
  * Repeated block types in one message are collapsed into `type*N`.
  * Never includes text content, tool inputs, or tool result content.
+ *
+ * Accepts the structural subset (`Pick<MessageParam, 'role' | 'content'>`) so
+ * the pre-mutation snapshot can be passed directly without a cast.
  */
-function buildShape(messages: readonly MessageParam[]): string {
+function buildShape(messages: ReadonlyArray<Pick<MessageParam, 'role' | 'content'>>): string {
   const parts: string[] = [];
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]!;
     const role = msg.role === 'user' ? 'u' : 'a';
     let blockSummary: string;
-    // Contract: string content is always 'text'; non-string non-array content
-    // (e.g. a single ContentBlockParam object) is treated as 'text' — the SDK
-    // types do not surface that shape today but the guard keeps buildShape total.
-    if (typeof msg.content === 'string' || !Array.isArray(msg.content)) {
+    if (!isContentBlockArray(msg.content)) {
+      // String content (or any non-array fallback) → treated as plain text.
       blockSummary = 'text';
     } else {
       // Count occurrences of each block type in order.
       const counts = new Map<string, number>();
       const order: string[] = [];
-      for (const b of msg.content as ContentBlockParam[]) {
+      for (const b of msg.content) {
         const t = b.type;
         if (!counts.has(t)) { counts.set(t, 0); order.push(t); }
         counts.set(t, counts.get(t)! + 1);
@@ -316,6 +330,6 @@ export function repairOrphanToolUses(messages: MessageParam[]): OrphanRepairRepo
     orphanAssistantIndices,
     bridgedIndices,
     messageCountBefore,
-    shapeBefore: buildShape(snapshot as readonly MessageParam[]),
+    shapeBefore: buildShape(snapshot),
   };
 }

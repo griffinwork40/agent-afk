@@ -26,6 +26,7 @@ export const SubagentStartedPayloadSchema = z.object({
   promptHead: z.string().optional(),
   agentType: z.string().optional(),
   resolvedAgentType: z.string().optional(),
+  maxToolUseIterations: z.number().int().nonnegative().optional(),
 });
 
 export const SubagentSucceededPayloadSchema = z.object({

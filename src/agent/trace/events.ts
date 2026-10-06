@@ -18,12 +18,34 @@
 
 import { z } from 'zod';
 import { TOOL_FAILURE_CLASSES } from './types.js';
-import { BackgroundAgentCancelledPayloadSchema } from './background-agent-schema.js';
+import {
+  BackgroundAgentCancelledPayloadSchema,
+  BackgroundAgentCompletedPayloadSchema,
+  BackgroundAgentDeliveredPayloadSchema,
+  BackgroundAgentFailedPayloadSchema,
+  BackgroundAgentJoinedPayloadSchema,
+  BackgroundAgentStartedPayloadSchema,
+} from './background-agent-schema.js';
 import { BrowserEventPayloadSchema } from './events.browser.js';
 import { CompactionPayloadInputSchema, CompactionPayloadPersistedSchema } from './events.compaction.js';
 import { SessionPhasePayloadSchema } from './events.session-phase.js';
+import { SubagentLifecyclePayloadSchema } from './events.subagent-lifecycle.js';
 
-export { BackgroundAgentCancelledPayloadSchema } from './background-agent-schema.js';
+export {
+  BackgroundAgentCancelledPayloadSchema,
+  BackgroundAgentCompletedPayloadSchema,
+  BackgroundAgentDeliveredPayloadSchema,
+  BackgroundAgentFailedPayloadSchema,
+  BackgroundAgentJoinedPayloadSchema,
+  BackgroundAgentStartedPayloadSchema,
+} from './background-agent-schema.js';
+export {
+  SubagentStartedPayloadSchema,
+  SubagentSucceededPayloadSchema,
+  SubagentFailedPayloadSchema,
+  SubagentCancelledPayloadSchema,
+  SubagentLifecyclePayloadSchema,
+} from './events.subagent-lifecycle.js';
 export {
   BrowserEventToolSchema,
   BrowserActActionSchema,
@@ -135,97 +157,8 @@ export const HookDecisionPayloadSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// subagent_lifecycle
-// ---------------------------------------------------------------------------
-
-export const SubagentStartedPayloadSchema = z.object({
-  transition: z.literal('started'),
-  subagentId: z.string(),
-  parentId: z.string(),
-  model: z.string(),
-  allowedTools: z.array(z.string()).readonly().optional(),
-  systemPromptHash: z.string().optional(),
-  promptHead: z.string().optional(),
-  agentType: z.string().optional(),
-  resolvedAgentType: z.string().optional(),
-  maxToolUseIterations: z.number().int().nonnegative().optional(),
-});
-
-export const SubagentSucceededPayloadSchema = z.object({
-  transition: z.literal('succeeded'),
-  subagentId: z.string(),
-  durationMs: z.number().nonnegative(),
-  turnCount: z.number().int().nonnegative(),
-  totalCostUsd: z.number().nonnegative().optional(),
-  outputBytes: z.number().int().nonnegative(),
-  stopReason: z.string().optional(),
-});
-
-export const SubagentFailedPayloadSchema = z.object({
-  transition: z.literal('failed'),
-  subagentId: z.string(),
-  errorClass: z.string(),
-  errorMessage: z.string(),
-  partialOutputBytes: z.number().int().nonnegative(),
-  failureClass: ToolFailureClassSchema.optional(),
-});
-
-export const SubagentCancelledPayloadSchema = z.object({
-  transition: z.literal('cancelled'),
-  subagentId: z.string(),
-  source: z.enum(['cascade', 'explicit']),
-  timeout: z.boolean().optional(),
-});
-
-export const SubagentLifecyclePayloadSchema = z.discriminatedUnion('transition', [
-  SubagentStartedPayloadSchema,
-  SubagentSucceededPayloadSchema,
-  SubagentFailedPayloadSchema,
-  SubagentCancelledPayloadSchema,
-]);
-
-// ---------------------------------------------------------------------------
 // background_agent
 // ---------------------------------------------------------------------------
-
-export const BackgroundAgentStartedPayloadSchema = z.object({
-  transition: z.literal('started'),
-  jobId: z.string(),
-  subagentId: z.string(),
-  label: z.string(),
-  model: z.string(),
-});
-
-export const BackgroundAgentCompletedPayloadSchema = z.object({
-  transition: z.literal('completed'),
-  jobId: z.string(),
-  subagentId: z.string(),
-  durationMs: z.number().nonnegative(),
-  outputBytes: z.number().int().nonnegative(),
-});
-
-export const BackgroundAgentFailedPayloadSchema = z.object({
-  transition: z.literal('failed'),
-  jobId: z.string(),
-  subagentId: z.string(),
-  durationMs: z.number().nonnegative(),
-  errorClass: z.string(),
-  errorMessage: z.string(),
-});
-
-export const BackgroundAgentJoinedPayloadSchema = z.object({
-  transition: z.literal('joined'),
-  jobId: z.string(),
-  subagentId: z.string(),
-  jobStatus: z.enum(['completed', 'failed', 'cancelled']),
-});
-
-export const BackgroundAgentDeliveredPayloadSchema = z.object({
-  transition: z.literal('delivered'),
-  jobId: z.string(),
-  subagentId: z.string(),
-  jobStatus: z.enum(['completed', 'failed', 'cancelled']),
-});
 
 export const BackgroundAgentPayloadSchema = z.discriminatedUnion('transition', [
   BackgroundAgentStartedPayloadSchema,
