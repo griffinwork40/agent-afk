@@ -17,7 +17,6 @@
  */
 
 import { z } from 'zod';
-import { TOOL_FAILURE_CLASSES } from './types.js';
 import {
   BackgroundAgentCancelledPayloadSchema,
   BackgroundAgentCompletedPayloadSchema,
@@ -29,7 +28,7 @@ import {
 import { BrowserEventPayloadSchema } from './events.browser.js';
 import { CompactionPayloadInputSchema, CompactionPayloadPersistedSchema } from './events.compaction.js';
 import { SessionPhasePayloadSchema } from './events.session-phase.js';
-import { SubagentLifecyclePayloadSchema } from './events.subagent-lifecycle.js';
+import { ToolFailureClassSchema, SubagentLifecyclePayloadSchema } from './events.subagent-lifecycle.js';
 
 export {
   BackgroundAgentCancelledPayloadSchema,
@@ -40,6 +39,7 @@ export {
   BackgroundAgentStartedPayloadSchema,
 } from './background-agent-schema.js';
 export {
+  ToolFailureClassSchema,
   SubagentStartedPayloadSchema,
   SubagentSucceededPayloadSchema,
   SubagentFailedPayloadSchema,
@@ -76,11 +76,6 @@ export const ToolCallStartedPayloadSchema = z.object({
   resourceFingerprint: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   subagentId: z.string().optional(),
 });
-
-/** Mirrors {@link import('./types.js').ToolFailureClass}. The literal tuple is
- *  imported from `types.ts` (the canonical source) so the validator and the TS
- *  type cannot drift. */
-export const ToolFailureClassSchema = z.enum(TOOL_FAILURE_CLASSES);
 
 export const ToolCallCompletedPayloadSchema = z.object({
   phase: z.literal('completed'),

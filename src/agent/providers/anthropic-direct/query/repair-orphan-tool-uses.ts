@@ -36,7 +36,7 @@
  * @module agent/providers/anthropic-direct/query/repair-orphan-tool-uses
  */
 
-import type { ContentBlockParam, MessageParam } from '@anthropic-ai/sdk/resources';
+import type { ContentBlock, ContentBlockParam, MessageParam } from '@anthropic-ai/sdk/resources';
 
 /**
  * Report describing what `repairOrphanToolUses` changed.
@@ -89,7 +89,9 @@ const SHAPE_CAP = 2000;
  * makes the narrowing explicit and keeps `buildShape` total against any
  * future SDK shape drift.
  */
-function isContentBlockArray(content: MessageParam['content']): content is ContentBlockParam[] {
+function isContentBlockArray(
+  content: MessageParam['content'],
+): content is ContentBlockParam[] | ContentBlock[] {
   return Array.isArray(content);
 }
 
