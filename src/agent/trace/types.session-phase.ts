@@ -45,6 +45,7 @@ export type SessionPhaseName =
   | 'loop_end'
   | 'model_ttfb'
   | 'context_pressure_wind_down'
+  | 'catalog_model_upgrade'
   // Interrupt→halt latency. A SINGLE event (no paired start) emitted on the
   // turn's abort path when an ESC soft-stop (`interrupt()`) is what ended the
   // stream, carrying in `durationMs` the wall-clock from the abort signal firing

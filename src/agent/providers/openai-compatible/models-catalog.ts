@@ -25,6 +25,11 @@ export interface CatalogModel {
   slug: string;
   context_window?: number;
   effective_context_window_percent?: number;
+  max_context_window?: number;
+  visibility?: string;
+  supported_in_api?: boolean;
+  priority?: number;
+  upgrade?: { model: string; migration_markdown?: string };
   /** Service tiers the model supports (e.g. `[{id:'priority'}]`). */
   service_tiers?: Array<{ id: string; name?: string; description?: string }>;
   default_service_tier?: string;
@@ -89,9 +94,19 @@ function parseCatalogJson(raw: string): Map<string, CatalogModel> {
       const slug = typeof e['slug'] === 'string' ? e['slug'] : '';
       if (!slug) continue;
       const model: CatalogModel = { slug };
-      for (const key of ['context_window', 'effective_context_window_percent'] as const) {
+      for (const key of ['context_window', 'effective_context_window_percent', 'max_context_window', 'priority'] as const) {
         const value = e[key];
         if (typeof value === 'number' && Number.isFinite(value) && value > 0) model[key] = value;
+      }
+      if (typeof e['visibility'] === 'string') model.visibility = e['visibility'];
+      if (typeof e['supported_in_api'] === 'boolean') model.supported_in_api = e['supported_in_api'];
+      const upgrade = e['upgrade'];
+      if (typeof upgrade === 'object' && upgrade !== null) {
+        const u = upgrade as Record<string, unknown>;
+        if (typeof u['model'] === 'string') {
+          model.upgrade = { model: u['model'] };
+          if (typeof u['migration_markdown'] === 'string') model.upgrade.migration_markdown = u['migration_markdown'];
+        }
       }
       if (Array.isArray(e['service_tiers'])) {
         model.service_tiers = (e['service_tiers'] as unknown[]).filter(
