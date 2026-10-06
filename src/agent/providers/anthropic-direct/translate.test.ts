@@ -1257,8 +1257,10 @@ describe('translateMessageStream: input_transformations (thinking drop_block)', 
       (e) => e.kind === 'session_phase' && e.payload.phase === 'thinking_block_dropped',
     );
     expect(phaseEvents).toHaveLength(1);
-    expect(phaseEvents[0]?.payload.metadata?.['droppedCount']).toBe(1);
-    expect(phaseEvents[0]?.payload.metadata?.['source']).toBe('message_start');
+    const first = phaseEvents[0];
+    const metadata = first?.kind === 'session_phase' ? first.payload.metadata : undefined;
+    expect(metadata?.['droppedCount']).toBe(1);
+    expect(metadata?.['source']).toBe('message_start');
   });
 
   it('does NOT emit thinking_block_dropped trace event when no traceWriter is supplied', async () => {
