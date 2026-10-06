@@ -2,15 +2,16 @@
  * Orphan detection for background-job meta records (#2304).
  *
  * Extracted from `bg-job-log.ts` to keep that file under the 350-code-line
- * ceiling. `bg-job-log.ts` re-exports `reconcileOrphanedMeta`, so importers
- * are unchanged. Type-only import of `BgJobMeta` avoids a runtime cycle.
+ * ceiling. `bg-job-log.ts` re-exports `reconcileOrphanedMeta` (async — callers
+ * must await it), so importers are unchanged. Type-only import of `BgJobMeta`
+ * avoids a runtime cycle.
  */
 
 import { atomicWriteFileAsync } from '../utils/atomic-write.js';
 import { classifyPidLiveness } from './process-liveness.js';
 import {
   probeProcessStartTimes,
-  ownProcessStartTicks,
+  ownProcessStartedAt,
 } from './process-liveness.start-time.js';
 import type { StartTimeProbeDeps } from './process-liveness.start-time.js';
 import type { BgJobMeta } from './bg-job-log.js';
@@ -40,6 +41,9 @@ export interface ReconcileOrphanDeps {
  *   1. `startTicks` (Linux only) — immune to wall-clock steps; preferred.
  *   2. `startedAtMs` with a 5-second tolerance — subject to NTP jitter and
  *      the `etime` parse precision of `ps` (1-second granularity).
+ *
+ * Invariant: this function is only called for FOREIGN pids (ownerPid !== process.pid).
+ * Own-pid reuse detection is handled in reconcileOrphanedMeta before probing.
  */
 function isPidReused(
   recordedStartTime: number | undefined,
@@ -48,17 +52,23 @@ function isPidReused(
 ): boolean {
   if (probedInfo === undefined) return false; // probe could not determine start time → keep alive
 
-  // Tick identity (Linux) — compare against own ticks when the meta was written
-  // by the current process, and against the meta's own ownerStartTime otherwise
-  // (which on Linux would be startTicks stored as ms … but ownerStartTime is
-  // always epoch-ms in BgJobMeta). So for ticks we only have the own-process
-  // comparison path. If the probed pid has ticks AND we know our own ticks:
+  // Tick identity (Linux) — ownTicks is only defined when the probed pid is
+  // our own pid, which no longer reaches this function. Kept for forward
+  // compatibility in case a caller path resurfaces the own-pid case.
   if (probedInfo.startTicks !== undefined && ownTicks !== undefined) {
-    // The recorded ownerPid IS our own pid — compare ticks directly.
     return probedInfo.startTicks !== ownTicks;
   }
 
-  // Wall-clock epoch ms comparison with 5-second tolerance.
+  // Finding 2 fix: when startTicks is available but ownTicks is not (Linux
+  // foreign pid), the ms value is derived from btime + ticks/HZ and is
+  // unreliable under NTP makestep or VM resume.  Skip the ms fallback and
+  // fail safe (cannot confirm reuse → treat as alive).
+  if (probedInfo.startTicks !== undefined) {
+    return false;
+  }
+
+  // Wall-clock epoch ms comparison with 5-second tolerance (darwin / platforms
+  // where only startedAtMs is returned by the probe).
   if (recordedStartTime !== undefined && probedInfo.startedAtMs !== undefined) {
     return Math.abs(probedInfo.startedAtMs - recordedStartTime) > 5_000;
   }
@@ -115,25 +125,43 @@ export async function reconcileOrphanedMeta(
   }
 
   // liveness === 'alive': pid exists, but could be a reused pid.
-  // Run start-time probe only when ownerStartTime was recorded.
-  if (meta.ownerPid === undefined || meta.ownerStartTime === undefined) return meta;
+
+  // Finding 1 fix: when the alive pid is OUR OWN pid, probing is pointless —
+  // kill(pid,0) + probe both see ourselves and always report a match.  Instead,
+  // compare the recorded ownerStartTime against our own process start time.
+  // A divergence > 5 s means the PID was previously held by a different process
+  // that has since exited, and the OS recycled the PID to us.
+  if (meta.ownerPid === process.pid) {
+    if (meta.ownerStartTime !== undefined) {
+      const ownStartMs = (deps?.ownMs ?? ownProcessStartedAt)();
+      if (Math.abs(ownStartMs - meta.ownerStartTime) > 5_000) {
+        return { ...meta, status: 'failed', stopReason: 'owner-process-exited' };
+      }
+    }
+    return meta; // same process — definitely alive
+  }
+
+  // Foreign pid: run start-time probe only when ownerStartTime was recorded.
+  // meta.ownerPid is guaranteed non-undefined here: classifyPidLiveness returns
+  // 'unknown' for undefined pids and we returned early on that verdict above.
+  const ownerPid = meta.ownerPid as number;
+  if (meta.ownerStartTime === undefined) return meta;
 
   const probe = deps?.probe ?? probeProcessStartTimes;
-  const ownTicks = (deps?.ownTicks ?? ownProcessStartTicks)();
-  // Only pass ownTicks when the alive pid IS our own pid — otherwise we have
-  // no recorded ticks to compare against (ownerStartTime is always epoch-ms).
-  const effectiveOwnTicks = meta.ownerPid === process.pid ? ownTicks : undefined;
 
   let probedMap: Map<number, { startedAtMs?: number; startTicks?: number } | undefined>;
   try {
-    probedMap = await probe([meta.ownerPid]);
+    probedMap = await probe([ownerPid]);
   } catch {
     // Probe threw unexpectedly — fail safe, keep alive.
     return meta;
   }
 
-  const probedInfo = probedMap.get(meta.ownerPid);
-  if (!isPidReused(meta.ownerStartTime, probedInfo, effectiveOwnTicks)) return meta;
+  // For foreign pids, ownTicks is irrelevant (no recorded ticks to compare
+  // against — ownerStartTime is always epoch-ms).  Pass undefined so
+  // isPidReused uses the ms or Linux-ticks-skip paths as appropriate.
+  const probedInfo = probedMap.get(ownerPid);
+  if (!isPidReused(meta.ownerStartTime, probedInfo, undefined)) return meta;
 
   // Start time mismatch — the pid has been recycled by a different process.
   return { ...meta, status: 'failed', stopReason: 'owner-process-exited' };
