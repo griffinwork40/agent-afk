@@ -465,7 +465,7 @@ describe('evaluateCommand', () => {
       { command: 'gh run list --limit 1 --json status' },
       expect.any(Object),
     );
-    expect(mockExecSync).toHaveBeenCalled();
+    expect(mockExecSync).toHaveBeenCalledWith(expect.stringContaining('gh run list'), expect.any(Object));
   });
 
   // H-1: Medium-risk commands must now be blocked (only 'safe' is allowed)

@@ -188,7 +188,7 @@ const BASH_SAFE: readonly string[] = [
   'curl --head',
   'curl -I ',
   'curl -sI ',
-  'curl -si ',
+  'curl -si ', // trailing space is intentional — blocks `-siX POST` (flags without separator)
   'wget --spider',
 ];
 
