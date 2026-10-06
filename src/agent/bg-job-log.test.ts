@@ -374,34 +374,35 @@ describe('isProcessAlive', () => {
 // ---------------------------------------------------------------------------
 
 describe('reconcileOrphanedMeta', () => {
-  it('returns meta unchanged when status is already terminal', () => {
+  it('returns meta unchanged when status is already terminal', async () => {
     const meta = makeMeta('orphan-completed', { status: 'completed', ownerPid: 99999 });
-    expect(reconcileOrphanedMeta(meta)).toBe(meta);
+    expect(await reconcileOrphanedMeta(meta)).toBe(meta);
   });
 
-  it('returns meta unchanged when ownerPid is absent (legacy meta)', () => {
+  it('returns meta unchanged when ownerPid is absent (legacy meta)', async () => {
     const meta = makeMeta('orphan-legacy', { status: 'running' });
     // No ownerPid set — should not promote
-    const result = reconcileOrphanedMeta(meta);
+    const result = await reconcileOrphanedMeta(meta);
     expect(result.status).toBe('running');
     expect(result).toBe(meta);
   });
 
-  it('returns meta unchanged when ownerPid is the current process (alive)', () => {
-    const meta = makeMeta('orphan-alive', { status: 'running', ownerPid: process.pid });
-    const result = reconcileOrphanedMeta(meta);
+  it('returns meta unchanged when ownerPid is the current process (alive) and no ownerStartTime', async () => {
+    // ownerStartTime absent → no pid-reuse probe → relies on kill(pid,0) only
+    const meta = makeMeta('orphan-alive-no-starttime', { status: 'running', ownerPid: process.pid });
+    const result = await reconcileOrphanedMeta(meta);
     expect(result.status).toBe('running');
   });
 
-  it('returns meta unchanged when ownerPid is a non-integer (malformed — classifyPidLiveness returns unknown)', () => {
+  it('returns meta unchanged when ownerPid is a non-integer (malformed — classifyPidLiveness returns unknown)', async () => {
     // A corrupted or hand-edited ownerPid of 1.5 must NOT be treated as dead.
     const meta = makeMeta('orphan-float', { status: 'running', ownerPid: 1.5 as any });
-    const result = reconcileOrphanedMeta(meta);
+    const result = await reconcileOrphanedMeta(meta);
     expect(result.status).toBe('running');
     expect(result).toBe(meta);
   });
 
-  it('promotes running meta to failed when ownerPid is a dead process', () => {
+  it('promotes running meta to failed when ownerPid is a dead process', async () => {
     const spy = vi.spyOn(process, 'kill').mockImplementation(() => {
       const err = new Error('ESRCH') as NodeJS.ErrnoException;
       err.code = 'ESRCH';
@@ -409,7 +410,7 @@ describe('reconcileOrphanedMeta', () => {
     });
     try {
       const meta = makeMeta('orphan-dead', { status: 'running', ownerPid: 999999999 });
-      const result = reconcileOrphanedMeta(meta);
+      const result = await reconcileOrphanedMeta(meta);
       expect(result.status).toBe('failed');
       expect(result.stopReason).toBe('owner-process-exited');
       expect(result.endedAt).toBeUndefined(); // not stamped — exit time is unknown
@@ -419,6 +420,83 @@ describe('reconcileOrphanedMeta', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('promotes to failed when pid is alive but start-time probe shows reuse (ms comparison)', async () => {
+    // pid appears alive via kill(pid,0) but the probed start time is far from
+    // the recorded ownerStartTime → pid was recycled.
+    const fakeProbe = vi.fn(async () =>
+      new Map([[process.pid, { startedAtMs: Date.now() - 100_000 }]]),
+    );
+    const ownerStartTime = Date.now(); // recorded "now", probed 100 s ago → mismatch
+    const meta = makeMeta('orphan-reuse-ms', {
+      status: 'running',
+      ownerPid: process.pid,
+      ownerStartTime,
+    });
+    const result = await reconcileOrphanedMeta(meta, { probe: fakeProbe });
+    expect(result.status).toBe('failed');
+    expect(result.stopReason).toBe('owner-process-exited');
+    expect(fakeProbe).toHaveBeenCalledWith([process.pid]);
+  });
+
+  it('does NOT promote when pid is alive and start-time probe matches within tolerance', async () => {
+    const ownerStartTime = Date.now() - 1000;
+    // Probed start differs by only 2 s — within the 5 s tolerance.
+    const fakeProbe = vi.fn(async () =>
+      new Map([[process.pid, { startedAtMs: ownerStartTime + 2000 }]]),
+    );
+    const meta = makeMeta('orphan-alive-match', {
+      status: 'running',
+      ownerPid: process.pid,
+      ownerStartTime,
+    });
+    const result = await reconcileOrphanedMeta(meta, { probe: fakeProbe });
+    expect(result.status).toBe('running');
+    expect(result).toBe(meta);
+  });
+
+  it('does NOT promote when probe returns undefined (start time unavailable — fail safe)', async () => {
+    // Probe cannot determine start time → fail safe, keep meta as-is.
+    const fakeProbe = vi.fn(async () => new Map([[process.pid, undefined]]));
+    const meta = makeMeta('orphan-probe-unknown', {
+      status: 'running',
+      ownerPid: process.pid,
+      ownerStartTime: Date.now(),
+    });
+    const result = await reconcileOrphanedMeta(meta, { probe: fakeProbe });
+    expect(result.status).toBe('running');
+    expect(result).toBe(meta);
+  });
+
+  it('promotes via tick mismatch when pid is own process (Linux ticks path)', async () => {
+    // Simulate: probed ticks differ from ownTicks → pid recycled.
+    const fakeProbe = vi.fn(async () =>
+      new Map([[process.pid, { startTicks: 9999 }]]),
+    );
+    const meta = makeMeta('orphan-reuse-ticks', {
+      status: 'running',
+      ownerPid: process.pid,
+      ownerStartTime: Date.now() - 1000,
+    });
+    // ownTicks returns 1234 but probed is 9999 → mismatch → reuse detected.
+    const result = await reconcileOrphanedMeta(meta, { probe: fakeProbe, ownTicks: () => 1234 });
+    expect(result.status).toBe('failed');
+    expect(result.stopReason).toBe('owner-process-exited');
+  });
+
+  it('does NOT promote via ticks when both sides match', async () => {
+    const fakeProbe = vi.fn(async () =>
+      new Map([[process.pid, { startTicks: 1234 }]]),
+    );
+    const meta = makeMeta('orphan-ticks-match', {
+      status: 'running',
+      ownerPid: process.pid,
+      ownerStartTime: Date.now() - 1000,
+    });
+    const result = await reconcileOrphanedMeta(meta, { probe: fakeProbe, ownTicks: () => 1234 });
+    expect(result.status).toBe('running');
+    expect(result).toBe(meta);
   });
 });
 
