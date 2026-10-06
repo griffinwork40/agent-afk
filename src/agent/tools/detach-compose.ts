@@ -62,10 +62,12 @@ export function composeDetachLabel(nodeIds: readonly string[]): string {
  * Build the {@link DetachedToolResult} delivered to the registry's 'settled'
  * notifier once the detached DAG actually finishes.
  *
- * Status is 'failed' when the session was aborted or the DAG itself threw;
- * 'completed' otherwise (even when individual nodes failed — compose already
- * surfaces node failures in its output, so the tool result is only an error
- * when the DAG threw entirely).
+ * Status is 'failed' when `failed` is true — meaning either the DAG threw
+ * entirely (caught by the `.catch` continuation), the session was aborted, or
+ * one or more DAG nodes failed. This mirrors the non-detached path, which
+ * returns `isError: result.failed.length > 0` (see compose-executor.ts). Node
+ * failures are surfaced in the formatted output text; the status flag signals
+ * the same "at least one node did not succeed" condition to downstream consumers.
  *
  * @param toolUseId   Stable id from the provider's tool-use block.
  * @param label       Human-readable summary (from {@link composeDetachLabel}).
@@ -204,6 +206,10 @@ export async function raceComposeDetach(
   // this second one resolves the race leg without coupling to that callback.
   const detachPromise = new Promise<ToolResult>((resolve) => {
     token.detachSignal.addEventListener('abort', () => {
+      // Defensive shouldDetach() guard — mirrors applyComposeDetach's listener.
+      // Prevents resolve() from firing if the token was already settled by the
+      // normal (DAG-finished-first) path and its abort was never triggered.
+      if (!token.shouldDetach()) return;
       resolve(token.detachResult(label));
     }, { once: true });
   });

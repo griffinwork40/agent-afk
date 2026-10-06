@@ -666,7 +666,7 @@ export class ComposeExecutor {
       // When detachRegistry is absent it returns { kind: 'normal', dagResult } immediately.
       const nodeIds = dagNodes.map((n) => n.id);
       const spillSessionId = this.ctx.parentSession.sessionId ?? 'unknown-session';
-      const outcome = detachRegistry !== undefined && call.id
+      const outcome = detachRegistry !== undefined && call.id.length > 0 // guard empty string (defensive)
         ? await raceComposeDetach({
             dagPromise, nodeIds, toolUseId: call.id, attachmentErrors, startedAt,
             formatResult: (r) => formatDAGResult(r, { sessionId: spillSessionId, callId: call.id }).content,
@@ -740,7 +740,7 @@ export class ComposeExecutor {
     } catch (err) {
       // On any throw in the normal (non-detach) path, also deregister so
       // hasDetachable() returns false — parallel to Fix #2 for bash.
-      if (detachRegistry !== undefined && call.id) detachRegistry.deregister(call.id);
+      if (detachRegistry !== undefined && call.id.length > 0) detachRegistry.deregister(call.id);
       const message = errorMessage(err);
       void appendRoutingDecision({
         ...identity,
