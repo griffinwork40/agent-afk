@@ -213,11 +213,34 @@ async function _runImmediatePass(
 
   // Map ClosureInfo → closure_reason field (stored in the outcome record).
   // 'unknown' is used when the trace was unavailable (closure === null).
-  const closureReason: VerifiedOutcome['closure_reason'] =
-    closure === null ? 'unknown'
-    : closure.reason === 'abort' ? 'abort'
-    : closure.reason === 'iteration_cap' ? 'iteration_cap'
-    : 'normal';
+  // The switch is exhaustive over ClosureInfo['reason'] so that adding a new
+  // member to that union causes a compile-time error here rather than silently
+  // falling through to a wrong value. The never assertion at default enforces
+  // this — TypeScript will reject any unhandled branch.
+  let closureReason: VerifiedOutcome['closure_reason'];
+  if (closure === null) {
+    closureReason = 'unknown';
+  } else {
+    switch (closure.reason) {
+      case 'abort':
+        closureReason = 'abort';
+        break;
+      case 'iteration_cap':
+        closureReason = 'iteration_cap';
+        break;
+      case 'normal':
+        closureReason = 'normal';
+        break;
+      case 'unknown':
+        closureReason = 'unknown';
+        break;
+      default: {
+        const _exhaustive: never = closure.reason;
+        closureReason = 'unknown'; // unreachable at runtime
+        void _exhaustive;
+      }
+    }
+  }
 
   const base: Omit<VerifiedOutcome, 'votes' | 'history'> = {
     schema_version: 1,

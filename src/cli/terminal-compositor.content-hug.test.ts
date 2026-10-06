@@ -223,6 +223,42 @@ describe.each([24, 62])('content-hug placement (%i rows)', (ROWS) => {
     rig.dispose();
   });
 
+  it('full viewport: small frame jitter does not re-show archived rows', async () => {
+    const rig = await makeRig(ROWS);
+    const committed = Array.from({ length: ROWS * 2 }, (_, i) => `JITTER-${String(i).padStart(4, '0')}`);
+    rig.c.commitAbove(`${committed.join('\n')}\n`);
+    rig.repaint();
+    rig.c.setSpinner({ enabled: true });
+    rig.repaint();
+    rig.c.setSpinner({ enabled: false });
+    rig.repaint();
+    const lines = await rig.lines();
+    expect(reshownArchivedRows(rig.c), dumpOf(lines)).toBe(0);
+    const frame = assertNoGaps(lines, committed, PROMPT);
+    const gap = rig.viewportTop() + ROWS - 2 - frame;
+    expect(gap).toBeLessThanOrEqual(Math.max(3, Math.floor(ROWS / 8)));
+    rig.dispose();
+  });
+
+  it('full viewport: exactly one overlay row grows and shrinks without seam overlap', async () => {
+    const rig = await makeRig(ROWS);
+    rig.c.setSpinner({ enabled: true });
+    const committed = Array.from({ length: ROWS * 2 }, (_, i) => `ONE-${String(i).padStart(4, '0')}`);
+    rig.c.commitAbove(`${committed.join('\n')}\n`);
+    rig.repaint();
+    const host = rig.c as unknown as { lastMeasuredFrameTop: number };
+    const top = host.lastMeasuredFrameTop;
+    rig.c.setOverlay('ONE-LIVE'); rig.repaint();
+    expect(host.lastMeasuredFrameTop).toBe(top - 1);
+    rig.c.setOverlay(''); rig.repaint();
+    const lines = await rig.lines();
+    expect(reshownArchivedRows(rig.c)).toBe(0);
+    for (const marker of committed) expect(lines.filter((l) => l.includes(marker))).toHaveLength(1);
+    const frame = lines.findIndex((l) => l.includes(PROMPT));
+    expect(rig.viewportTop() + ROWS - 2 - frame).toBeLessThanOrEqual(Math.max(3, Math.floor(ROWS / 8)));
+    rig.dispose();
+  });
+
   it('full viewport: a tall overlay grows then collapses: no history hole, and the prompt returns to the bottom (no gap, no bobbing)', async () => {
     const rig = await makeRig(ROWS);
     const committed = Array.from({ length: ROWS * 2 }, (_, i) => `FILL-${String(i).padStart(4, '0')}`);

@@ -68,14 +68,16 @@ function shellCommandArgs(command: string): { command: string; args: string[] } 
 
 function runHook(
   stdin: string,
-  options: { pkg?: Record<string, unknown>; pnpmExit?: number } = {},
+  options: { pkg?: Record<string, unknown>; pnpmExit?: number; omitNodeModules?: boolean } = {},
 ): SpawnSyncReturns<string> & { dir: string; pnpmLog: string } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-pre-push-'));
   const pnpmLog = path.join(dir, 'pnpm.log');
   try {
     spawnSync('git', ['init', '-q', dir], { encoding: 'utf8' });
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(options.pkg ?? { scripts: { 'check:audits': 'echo ok' } }), 'utf8');
-    fs.mkdirSync(path.join(dir, 'node_modules'));
+    if (!options.omitNodeModules) {
+      fs.mkdirSync(path.join(dir, 'node_modules'));
+    }
     const bin = path.join(dir, 'bin');
     fs.mkdirSync(bin);
     fs.writeFileSync(path.join(bin, 'pnpm'), `#!/bin/sh\necho "$@" >> "${shellPath(pnpmLog)}"\nexit \${PNPM_EXIT:-0}\n`, 'utf8');
@@ -178,6 +180,31 @@ describe('scripts/git-hooks/pre-push', () => {
       expect(result.status).toBe(0);
       expect(result.stderr).toContain('environment may be broken');
       expect(fs.readFileSync(result.pnpmLog, 'utf8')).toBe('check:audits\n');
+    } finally {
+      cleanup(result);
+    }
+  });
+
+  it('blocks when check:audits exits with a signal code >= 3', () => {
+    // pnpm terminated by a signal (or any non-zero exit >= 3 that is not the
+    // "all gates broken" sentinel of 2) must still block the push — exit 1.
+    const result = runHook('refs/heads/main abcdef refs/heads/main 123456\n', { pnpmExit: 3 });
+    try {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('CI will fail these checks');
+      expect(fs.readFileSync(result.pnpmLog, 'utf8')).toBe('check:audits\n');
+    } finally {
+      cleanup(result);
+    }
+  });
+
+  it('fails open when node_modules is absent', () => {
+    // Fail-open: when node_modules is missing the hook must exit 0 (never block).
+    const result = runHook('refs/heads/main abcdef refs/heads/main 123456\n', { omitNodeModules: true });
+    try {
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain('node_modules not found');
+      expect(fs.existsSync(result.pnpmLog)).toBe(false);
     } finally {
       cleanup(result);
     }

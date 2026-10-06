@@ -36,6 +36,7 @@ import { defaultConcurrencyClassifier } from './dispatch-batching.js';
 import type { SuspectedLoopWindow } from './suspected-loop-detector.js';
 import { RepeatFailureGuard } from './repeat-failure-guard.js';
 import { ToolHealthMonitor, applyToolHealth } from './tool-health-monitor.js';
+import { StrategyNudger, applyStrategyNudge } from './strategy-nudge.js';
 import { executeBatchImpl } from './dispatcher.execute-batch.js';
 import {
   runPreDispatchGates as _runPreDispatchGates,
@@ -363,6 +364,9 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * or forked child), never module-scope.
    */
   private readonly toolHealthMonitor = new ToolHealthMonitor();
+
+  /** Advisory same-error strategy nudge; per dispatcher, see strategy-nudge.ts. */
+  private readonly strategyNudger = new StrategyNudger();
 
 
 
@@ -778,7 +782,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // append a model notice and emit one trace event per (tool, errorHead).
     // Fire-and-forget: applyToolHealth → emitToolDegraded swallows errors;
     // never alters isError. Shared helper used by both execute() and batch paths.
-    return applyToolHealth(this.toolHealthMonitor, this.traceWriter, call, coreResult);
+    const healthChecked = applyToolHealth(this.toolHealthMonitor, this.traceWriter, call, coreResult);
+    return applyStrategyNudge(this.strategyNudger, this.traceWriter, call, healthChecked);
   }
 
   // History: executeBatch's Phase 1 gate loop, Phase 2 batch-partition loop, and
@@ -801,6 +806,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       gateDeps: () => this.gateDeps(),
       traceWriter: this.traceWriter,
       toolHealthMonitor: this.toolHealthMonitor,
+      strategyNudger: this.strategyNudger,
     }, onActivity);
   }
 

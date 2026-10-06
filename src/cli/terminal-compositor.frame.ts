@@ -82,6 +82,8 @@ export interface FrameHost {
   readonly spinnerController: SpinnerController;
   attachments: ImageAttachment[];
   clipboardFailureMsg: string | null;
+  /** Transient Shift+Tab mode notice (terminal-compositor.mode-notice.ts). */
+  modeNotice: string | null;
   // ── committed-band tracking (mutated by preserveRowsBeforeFrameRender) ──
   committedBand: string[];
   /** #540: per-physical-row logical provenance, index-aligned 1:1 with committedBand. */
@@ -160,6 +162,7 @@ export function repaint(self: FrameHost): void {
     self.attachments,
     clipboardRef,
     self.stdout.columns ?? 80,
+    self.modeNotice,
   );
   self.clipboardFailureMsg = clipboardRef.value;
   const dropdownRows = self.renderDropdownRows();
@@ -193,7 +196,7 @@ export function repaint(self: FrameHost): void {
     self.placementMode,
     self.anchorRow,
     self.logUpdate,
-    hug ? contentHugAnchor(self) : undefined,
+    hug ? (physicalRows) => contentHugAnchor(self, physicalRows, absoluteBottom) : undefined,
   );
   // Record the real (unpadded) frame top for commitAbove's routing. This is the
   // value Phase-2 will re-establish; logUpdate.topRow (shrink-padded) is not.
@@ -257,6 +260,7 @@ function repaintPickerFrame(self: FrameHost): void {
     self.attachments,
     clipboardRef,
     self.stdout.columns ?? 80,
+    self.modeNotice,
   );
   self.clipboardFailureMsg = clipboardRef.value;
   const layout = computePickerViewportLayout(
@@ -285,7 +289,7 @@ function repaintPickerFrame(self: FrameHost): void {
     ? self.logUpdate.measure(frame, absoluteBottom).lineCount
     : frameLines.length;
   const bottomRow = self.placementMode === 'content-hug'
-    ? contentHugTargetBottom(contentHugAnchor(self), physicalRows, absoluteBottom)
+    ? contentHugTargetBottom(contentHugAnchor(self, physicalRows, absoluteBottom), physicalRows, absoluteBottom)
     : absoluteBottom;
   const desiredTopRow = Math.max(1, bottomRow - physicalRows + 1);
   // Record the real (unpadded) frame top for commitAbove's routing, exactly as
