@@ -56,6 +56,7 @@ export interface ResetStateHost {
   pasteStartCursor: number;
   readonly pasteRegistry: Map<string, string>;
   clipboardFailureMsg: string | null;
+  modeNotice: string | null;
   readonly autocompleteState?: AutocompleteState;
   resizeUnsub: (() => void) | null;
   resizeImmediateUnsub: (() => void) | null;
@@ -141,6 +142,7 @@ export function resetState(self: ResetStateHost): void {
   self.pasteStartCursor = 0;
   self.pasteRegistry.clear();
   self.clipboardFailureMsg = null;
+  self.modeNotice = null;
   // clipboardInFlight is NOT reset — an in-flight osascript probe is
   // tied to a Promise that will resolve/reject independently. Setting
   // the flag to false here would allow a new probe to spawn while the

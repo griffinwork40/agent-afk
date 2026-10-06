@@ -42,6 +42,7 @@ export interface CwdDependentsFactoryArgs {
     writeRoots?: string[];
     sessionId?: string;
     parentSessionId?: string;
+    rootSessionId?: string;
     traceWriter?: AgentConfig['traceWriter'];
     runtimeStateSource?: RuntimeStateSource;
     hookRegistry?: AgentConfig['hookRegistry'];
@@ -125,6 +126,9 @@ export function createCwdDependentsFactory(args: CwdDependentsFactoryArgs): CwdD
       ...(args.config.env !== undefined ? { env: args.config.env } : {}),
       sessionId: args.config.sessionId,
       parentSessionId: args.config.parentSessionId,
+      // #2442: keep root attribution across a cwd re-anchor (parity with
+      // dispatcher-wiring.ts), else a depth-2 child's artifacts are lost.
+      ...(args.config.rootSessionId !== undefined ? { rootSessionId: args.config.rootSessionId } : {}),
       traceWriter: args.config.traceWriter,
       runtimeStateSource: args.runtimeStateSource,
       hookRegistry: args.config.hookRegistry,

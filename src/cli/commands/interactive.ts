@@ -49,7 +49,7 @@ import {
 import {
   installSignalHandlers,
   printExitSummary,
-  snapshotGitStateForCancelAll,
+  cancelSessionBackgroundWork,
   makeSessionSaver,
   type ExitReasonRef,
 } from './interactive/interactive.cleanup.js';
@@ -299,12 +299,9 @@ export function registerInteractiveCommand(program: Command): void {
         ctx.teardownTrustedSkillEvents?.();
         elicitationRouter.uninstall();
         ctx.bgSummarizer?.stop();
-        const runningJobs = ctx.backgroundRegistry.list().filter((j) => j.status === 'running');
-        if (runningJobs.length > 0) await snapshotGitStateForCancelAll(ctx.stats.cwd ?? process.cwd());
-        await ctx.backgroundRegistry.cancelAll().catch(() => { /* best-effort */ });
-        // #2542/#2735: Cancel in-flight detachable tool calls so detached bash
-        // processes are killed on session exit (Invariant:D3). Best-effort.
-        ctx.detachRegistry?.cancelAll();
+        // Background subagents, Ctrl+B-detached calls (Invariant:D3) and
+        // `bash run_in_background` process jobs all stop with the session.
+        await cancelSessionBackgroundWork(ctx);
         await Promise.race([
           ctx.session.current.close(),
           new Promise<void>(resolve => {
@@ -368,7 +365,7 @@ export function registerInteractiveCommand(program: Command): void {
           hintLine: startupHintLine(),
         }));
         if (bootPruneNotice !== undefined) console.log(palette.dim(`  ${bootPruneNotice}`));
-        if (ctx.resumeTarget) printResumeBanner(ctx.stats, ctx.completionWriter);
+        if (ctx.resumeTarget) await printResumeBanner(ctx.stats, ctx.completionWriter);
         printFirstRunBanner({ isTTY: Boolean(process.stdout.isTTY), isResume: ctx.resumeTarget !== undefined });
         drainBootWarnings(ctx.bootWarnings);
         console.log();

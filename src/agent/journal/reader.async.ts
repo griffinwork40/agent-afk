@@ -28,7 +28,9 @@ import {
 } from '../../paths.js';
 import { hydrateBlock } from './hydrate.js';
 import { parseJournalLine } from './records.js';
-import type { JournalBlock } from './types.js';
+import type { JournalBlock, ToolResultLookup } from './types.js';
+
+export type { ToolResultLookup } from './types.js';
 
 type ToolResultBlock = Extract<JournalBlock, { type: 'tool_result' }>;
 
@@ -104,7 +106,7 @@ async function listSubagentJournalsAsync(sessionId: string): Promise<string[]> {
 export async function findToolResultAsync(
   sessionId: string,
   toolUseId: string,
-): Promise<{ block: ToolResultBlock; subagentId?: string } | null> {
+): Promise<ToolResultLookup | null> {
   if (typeof sessionId !== 'string' || !isSafeLedgerSessionId(sessionId)) return null;
   if (typeof toolUseId !== 'string' || toolUseId.length === 0) return null;
 

@@ -23,6 +23,7 @@ import type { ToolCall, ToolResult } from '../anthropic-direct/types.js';
 import type { AccumulatedToolCall } from './translate.js';
 import type { OpenAIContentPart, OpenAIMessage } from './messages.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { tagResultFlags } from '../../journal/index.js';
 
 /**
  * OpenAI function-tool shape. We keep this structurally typed (not pulled
@@ -206,15 +207,21 @@ export function toolResultsToMessages(
   // rides the tool message, and on vision-capable models the actual pixels ride
   // a separate follow-up `role:'user'` message built by
   // `toolImageFollowupMessage`. See query.ts:dispatchAndAppend.
-  return results.map(({ call, result }) => ({
-    role: 'tool',
-    tool_call_id: call.id,
-    // OpenAI tolerates an `is_error` field on tool messages on some
-    // versions, but the canonical contract is "content carries the error
-    // text and the model decides." Mirror that — embed a clear prefix when
-    // isError so the model can spot failures in its context.
-    content: result.isError ? `[error] ${result.content}` : result.content,
-  }));
+  return results.map(({ call, result }) => {
+    const msg: OpenAIToolResultMessage = {
+      role: 'tool',
+      tool_call_id: call.id,
+      // OpenAI tolerates an `is_error` field on tool messages on some
+      // versions, but the canonical contract is "content carries the error
+      // text and the model decides." Mirror that — embed a clear prefix when
+      // isError so the model can spot failures in its context.
+      content: result.isError ? `[error] ${result.content}` : result.content,
+    };
+    // Partial-answer flags ride beside the message (never sent on the wire)
+    // so the journal adapter can persist them (#2978).
+    tagResultFlags(msg, result);
+    return msg;
+  });
 }
 
 /**

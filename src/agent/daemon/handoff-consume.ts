@@ -12,6 +12,9 @@
  *      was down.
  *   2. pullTick() teardown — pick up answers recorded during the completed run.
  *
+ * Dead-letter quarantine for malformed/unsafe records lives in:
+ *   ./handoff-consume.dead-letter.ts
+ *
  * @module agent/daemon/handoff-consume
  */
 
@@ -22,6 +25,12 @@ import { assertSafeJobId, getHandoffsDir } from '../../paths.js';
 import type { HandoffRecord } from './handoff-store.js';
 import { enqueue } from './queue-store.js';
 import { errorMessage } from '../../utils/errors.js';
+import { redactInlineSecrets } from '../session/prompt-dump.js';
+import {
+  deadLetterHandoffFile,
+  claimRereadFailures,
+  MAX_CLAIM_REREAD_FAILURES,
+} from './handoff-consume.dead-letter.js';
 
 // ---------------------------------------------------------------------------
 // buildHandoffResumeCommand
@@ -89,7 +98,12 @@ export function buildHandoffResumeCommand(record: HandoffRecord): string {
 /**
  * List all HandoffRecords with status === 'answered' from the handoffs dir.
  * Mirrors listPendingHandoffs but filters for 'answered' status.
- * Skips temp files, lock files, unreadable files, and malformed JSON silently.
+ *
+ * Transient I/O errors (ENOENT, EPERM, etc.) on individual files are skipped
+ * silently — they may resolve on the next sweep tick. Records that are
+ * readable but fail JSON.parse or assertSafeJobId are moved to
+ * `<handoffsDir>/dead-letter/` and logged — these would otherwise be skipped
+ * silently on every subsequent sweep tick, permanently losing the task.
  */
 async function listAnsweredHandoffs(
   handoffsDir: string,
@@ -109,17 +123,66 @@ async function listAnsweredHandoffs(
 
   const answered: HandoffRecord[] = [];
   for (const filename of filenames) {
-    if (!filename.endsWith('.json') || filename.startsWith('.tmp-') || filename.startsWith('.claiming-') || filename.endsWith('.lock')) continue;
+    if (
+      !filename.endsWith('.json') ||
+      filename.startsWith('.tmp-') ||
+      filename.startsWith('.claiming-') ||
+      filename.endsWith('.lock')
+    ) continue;
+
+    const fullPath = join(handoffsDir, filename);
+
+    // Phase 1: read the raw bytes. An I/O error here is likely transient
+    // (e.g. ENOENT from a concurrent rename/delete, EPERM from a FS hiccup).
+    // Log and skip: it may succeed on the next sweep, and a persistent failure
+    // stays visible on stderr instead of being skipped silently forever.
+    let raw: string;
     try {
-      const raw = await readFile(join(handoffsDir, filename), 'utf-8');
-      const record = JSON.parse(raw) as HandoffRecord;
-      // Validate taskId before allowing it downstream — skips records with
-      // path-traversal or injection characters in the taskId field.
-      assertSafeJobId(record.taskId);
-      if (record.status === 'answered') answered.push(record);
-    } catch {
-      // Silently skip unreadable, malformed, or unsafe records.
+      raw = await readFile(fullPath, 'utf-8');
+    } catch (readErr) {
+      const redactedName = redactInlineSecrets(filename);
+      const reason = redactInlineSecrets(errorMessage(readErr));
+      // eslint-disable-next-line no-console
+      console.error(
+        `[daemon] handoff-consume: readFile failed for ${redactedName} (${reason}); skipping this tick`,
+      );
+      continue;
     }
+
+    // Phase 2: parse JSON. A SyntaxError here means the file is persistently
+    // malformed — it will never parse. Dead-letter it immediately.
+    //
+    // BENIGN RACE: two concurrent sweeps (startup + tick-teardown) both see the
+    // same malformed file. The first rename in deadLetterHandoffFile wins; the
+    // second sees ENOENT on the source and falls through to the unlink fallback
+    // (also ENOENT), so the outer catch logs "failed to dead-letter" once. No
+    // task is lost and the file is already gone. The spurious log is benign.
+    let record: HandoffRecord;
+    try {
+      record = JSON.parse(raw) as HandoffRecord;
+    } catch (parseErr) {
+      const reason =
+        parseErr instanceof SyntaxError
+          ? 'SyntaxError: invalid JSON'
+          : redactInlineSecrets(errorMessage(parseErr));
+      await deadLetterHandoffFile(handoffsDir, fullPath, filename, reason);
+      continue;
+    }
+
+    // Phase 3: validate taskId. An unsafe taskId would allow path traversal if
+    // used to construct downstream paths. Dead-letter before using the taskId
+    // anywhere. Note: we use `filename` (from readdir) to build the src path
+    // here — not `record.taskId` — so the move is always safe. Same benign
+    // concurrent-sweep race as Phase 2 above applies here.
+    try {
+      assertSafeJobId(record.taskId);
+    } catch (idErr) {
+      const reason = redactInlineSecrets(errorMessage(idErr));
+      await deadLetterHandoffFile(handoffsDir, fullPath, filename, reason);
+      continue;
+    }
+
+    if (record.status === 'answered') answered.push(record);
   }
   return answered;
 }
@@ -154,20 +217,45 @@ async function recoverOrphanedClaims(
   }
   for (const filename of filenames) {
     if (!filename.startsWith('.claiming-') || !filename.endsWith('.json')) continue;
+    const fullPath = join(handoffsDir, filename);
     try {
-      const fullPath = join(handoffsDir, filename);
       const { mtimeMs } = await stat(fullPath);
       if (Date.now() - mtimeMs < STALE_MS) continue; // still fresh — active claim
       const raw = await readFile(fullPath, 'utf-8');
-      const record = JSON.parse(raw) as HandoffRecord;
-      assertSafeJobId(record.taskId);
+      let record: HandoffRecord;
+      try {
+        record = JSON.parse(raw) as HandoffRecord;
+      } catch (parseErr) {
+        // Malformed JSON in an orphaned .claiming-* file — the file is
+        // permanently unprocessable. Dead-letter so it is not re-encountered
+        // on every daemon restart (same class as #2954 fixed for the main
+        // sweep in listAnsweredHandoffs Phase 2).
+        const reason =
+          parseErr instanceof SyntaxError
+            ? 'SyntaxError: invalid JSON'
+            : redactInlineSecrets(errorMessage(parseErr));
+        await deadLetterHandoffFile(handoffsDir, fullPath, filename, reason);
+        continue;
+      }
+      try {
+        assertSafeJobId(record.taskId);
+      } catch (idErr) {
+        // Unsafe taskId — dead-letter for the same reason as Phase 3 in
+        // listAnsweredHandoffs: path traversal risk if used downstream.
+        const reason = redactInlineSecrets(errorMessage(idErr));
+        await deadLetterHandoffFile(handoffsDir, fullPath, filename, reason);
+        continue;
+      }
       if (record.status === 'answered') {
         const command = buildHandoffResumeCommand(record);
         enqueue(command, {}, queueDir);
       }
       await unlink(fullPath);
     } catch {
-      // Best-effort — skip corrupt or already-removed orphans silently.
+      // Best-effort — transient I/O errors (ENOENT from concurrent removal,
+      // EPERM from FS hiccup) are skipped silently; they may resolve on the
+      // next restart. Parse/taskId errors are handled above and dead-lettered
+      // before reaching this catch.
     }
   }
 }
@@ -219,11 +307,38 @@ export async function processAnsweredHandoffs(
       try {
         const raw = await readFile(claimed, 'utf-8');
         record = JSON.parse(raw) as HandoffRecord;
-      } catch {
-        // Cannot read the claimed file — restore and skip.
-        await rename(claimed, src).catch(() => undefined);
+      } catch (rereadErr) {
+        // Cannot re-read the claimed file. Track consecutive failures per
+        // taskId. Likely transient I/O on the first few hits; after
+        // MAX_CLAIM_REREAD_FAILURES dead-letter rather than restore-and-loop.
+        const failures = (claimRereadFailures.get(summary.taskId) ?? 0) + 1;
+        claimRereadFailures.set(summary.taskId, failures);
+        if (failures >= MAX_CLAIM_REREAD_FAILURES) {
+          claimRereadFailures.delete(summary.taskId);
+          const reason =
+            rereadErr instanceof SyntaxError
+              ? 'SyntaxError: invalid JSON'
+              : redactInlineSecrets(errorMessage(rereadErr));
+          // eslint-disable-next-line no-console
+          console.error(
+            `[daemon] handoff-consume: claim re-read failed ${failures}x for ${summary.taskId}; dead-lettering (${reason})`,
+          );
+          await deadLetterHandoffFile(
+            handoffsDir,
+            claimed,
+            `.claiming-${summary.taskId}.json`,
+            reason,
+          );
+        } else {
+          // Restore so next sweep can retry.
+          await rename(claimed, src).catch(() => undefined);
+        }
         continue;
       }
+
+      // Successful re-read — reset the failure counter.
+      claimRereadFailures.delete(summary.taskId);
+
       if (record.status !== 'answered') {
         // Record changed status between list and claim — put it back.
         await rename(claimed, src).catch(() => undefined);

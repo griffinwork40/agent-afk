@@ -387,6 +387,106 @@ describe('findGitBashOnWindows — WSL bash filtering', () => {
 });
 
 // ---------------------------------------------------------------------------
+// buildWslPrefixes — hoisted prefix construction (issue #2937)
+// ---------------------------------------------------------------------------
+// buildWslPrefixes is not exported; its behaviour is verified by observing
+// that resolveShell skips or accepts candidates based on the env vars it reads.
+
+describe('buildWslPrefixes — env-var wiring', () => {
+  const originalPlatform = process.platform;
+  const originalPath = process.env['PATH'];
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Object.defineProperty(process, 'platform', { value: originalPlatform });
+    delete process.env['MSYSTEM'];
+    delete process.env['SystemRoot'];
+    delete process.env['LOCALAPPDATA'];
+    process.env['PATH'] = originalPath;
+  });
+
+  it('uses env.SystemRoot to build the System32 prefix (non-default root)', () => {
+    // If buildWslPrefixes reads env.SystemRoot correctly, a custom root causes
+    // resolveShell to skip bash.exe under that custom root, not under C:\\Windows.
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    delete process.env['MSYSTEM'];
+    process.env['SystemRoot'] = 'D:\\WinCustom';
+    process.env['LOCALAPPDATA'] = '';
+    // bash.exe under the custom root's System32 — should be skipped
+    process.env['PATH'] = 'D:\\WinCustom\\System32;C:\\Program Files\\Git\\bin';
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      const s = String(p);
+      return (
+        s === 'D:\\WinCustom\\System32\\bash.exe' ||
+        s === 'C:\\Program Files\\Git\\bin\\bash.exe'
+      );
+    });
+    const result = resolveShell();
+    // Must skip D:\WinCustom\System32\bash.exe and return the real Git Bash
+    expect(result.shell).toBe('C:\\Program Files\\Git\\bin\\bash.exe');
+  });
+
+  it('uses env.LOCALAPPDATA to build the WindowsApps prefix', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    delete process.env['MSYSTEM'];
+    process.env['SystemRoot'] = 'C:\\Windows';
+    process.env['LOCALAPPDATA'] = 'D:\\CustomAppData';
+    process.env['PATH'] =
+      'D:\\CustomAppData\\Microsoft\\WindowsApps;C:\\Program Files\\Git\\bin';
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      const s = String(p);
+      return (
+        s === 'D:\\CustomAppData\\Microsoft\\WindowsApps\\bash.exe' ||
+        s === 'C:\\Program Files\\Git\\bin\\bash.exe'
+      );
+    });
+    const result = resolveShell();
+    // Must skip the WindowsApps alias and return the real Git Bash
+    expect(result.shell).toBe('C:\\Program Files\\Git\\bin\\bash.exe');
+  });
+
+  it('falsifies SystemRoot wiring: only custom-root WSL candidate on PATH → powershell fallback', () => {
+    // This test has NO Git Bash fallback on PATH, so if buildWslPrefixes
+    // ignores env.SystemRoot and hard-codes C:\\Windows, the
+    // D:\\WinCustom\\System32 prefix would NOT match and bash.exe would be
+    // returned instead of powershell.exe — a false pass.  With correct wiring
+    // the custom-root prefix IS added and the only candidate is skipped.
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    delete process.env['MSYSTEM'];
+    process.env['SystemRoot'] = 'D:\\WinCustom';
+    process.env['LOCALAPPDATA'] = '';
+    // Only the WSL shim under the custom root — no Git Bash anywhere.
+    process.env['PATH'] = 'D:\\WinCustom\\System32';
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      return String(p) === 'D:\\WinCustom\\System32\\bash.exe';
+    });
+    const result = resolveShell();
+    // buildWslPrefixes must have read env.SystemRoot: the candidate is skipped,
+    // no Git Bash is found, and resolveShell falls back to PowerShell.
+    expect(result.shell).toBe('powershell.exe');
+  });
+
+  it('falsifies LOCALAPPDATA wiring: only custom WindowsApps candidate on PATH → powershell fallback', () => {
+    // Same pattern for LOCALAPPDATA: if buildWslPrefixes ignores the env var
+    // and uses a hard-coded path, the candidate under the custom dir would
+    // slip through.  Correct wiring blocks it, leaving only powershell.exe.
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    delete process.env['MSYSTEM'];
+    process.env['SystemRoot'] = 'C:\\Windows';
+    process.env['LOCALAPPDATA'] = 'D:\\CustomAppData';
+    // Only the WindowsApps alias shim — no Git Bash anywhere.
+    process.env['PATH'] = 'D:\\CustomAppData\\Microsoft\\WindowsApps';
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      return String(p) === 'D:\\CustomAppData\\Microsoft\\WindowsApps\\bash.exe';
+    });
+    const result = resolveShell();
+    // buildWslPrefixes must have read env.LOCALAPPDATA: the candidate is
+    // skipped, no Git Bash is found, resolveShell falls back to PowerShell.
+    expect(result.shell).toBe('powershell.exe');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // git.exe-derived discovery (issue #2759)
 // ---------------------------------------------------------------------------
 

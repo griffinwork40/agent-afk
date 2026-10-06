@@ -273,6 +273,14 @@ export interface PostToolUseContext {
    * authors can treat both events uniformly for subagent correlation.
    */
   parentSessionId?: string;
+  /**
+   * Root (depth-0) session id, threaded from {@link AgentConfig.rootSessionId}.
+   * For depth-1 children this equals `parentSessionId`; for deeper descendants
+   * it points past the immediate parent to the original root. Child-attribution
+   * hooks use this so grandchild artifacts are credited to the root record
+   * rather than to an intermediate session that never writes a sidecar.
+   */
+  rootSessionId?: string;
   toolName: string;
   /**
    * Tool-call input passed through from {@link PreToolUseContext}. Carried

@@ -149,6 +149,16 @@ export class SessionOwner {
     wiring.__bindSession(session);
     seedPersistedGrants(wiring.provider);
 
+    // Wire session-layer Stop dispatch (#2957) — every other surface (REPL,
+    // chat, Telegram, daemon) does, and until a surface calls this the session
+    // never fires Stop. Web sessions are persistent and take further prompts,
+    // so injectContext rides the next user turn. Block/timeout outcomes are
+    // already recorded in the trace; the browser has no notice channel for them.
+    session.wireStopHook({
+      getHasNextTurn: () => true,
+      onStopInjectContext: (text) => { session.queueFrameworkContext(text); },
+    });
+
     // Invariant: the id is provider-issued and undefined until initialization
     // resolves. Registering as owned before this point would make prompt and
     // approve 409 against an id the caller was just handed.

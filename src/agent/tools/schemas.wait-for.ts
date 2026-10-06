@@ -19,7 +19,8 @@ export const waitForTool: AnthropicToolDef = {
     'Condition types: ' +
     '"url" — polls an HTTP/HTTPS endpoint until it returns the expected status (default: any 2xx). ' +
     '"file" — waits until a file exists (and optionally contains a substring). ' +
-    '"process" — waits until a PID has exited (process.kill(pid, 0) → ESRCH). ' +
+    '"process" — waits until a PID has exited (process.kill(pid, 0) → ESRCH). Only PIDs this session\'s bash tool spawned ' +
+    '(the shell it launched, including the pid returned by bash run_in_background) are accepted; grandchildren and other PIDs are refused. ' +
     '"command" — runs a shell command repeatedly; exit 0 signals the condition is met. ' +
     'The tool returns when the condition is met, the timeout elapses (status: timed_out), or ' +
     'the session is cancelled (status: cancelled). Timeout is NOT an error — the model can retry. ' +
@@ -67,7 +68,7 @@ export const waitForTool: AnthropicToolDef = {
       },
       pid: {
         type: 'number',
-        description: 'For process type: PID to wait on. Condition is met when the process exits.',
+        description: 'For process type: PID to wait on (must be one this session\'s bash tool spawned). Condition is met when the process exits.',
       },
       command: {
         type: 'string',

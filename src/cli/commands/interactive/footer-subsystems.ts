@@ -8,8 +8,10 @@ import { HealthRail } from '../../health-rail.js';
 import { ShellPassthrough } from './shell-passthrough.js';
 import { BgResultNotifier } from './bg-result-notifier.js';
 import type { PeerInboxNotifier } from './peer-inbox-notifier.js';
+import { ProcessJobNotifier } from './process-job-notifier.js';
 import { buildAndWirePeerNotifier } from './footer-subsystems.peer.js';
 import { setShellPassthrough } from '../../slash/commands/sh.js';
+import { setShProcessJobs } from '../../slash/commands/sh.process-jobs.js';
 import type { TurnState } from './repl-loop-shared.js';
 import { startFooterPainters } from './footer-painters.js';
 
@@ -29,6 +31,8 @@ export interface FooterSubsystems {
   shellPassthrough: ShellPassthrough;
   bgResultNotifier: BgResultNotifier;
   peerNotifier: PeerInboxNotifier;
+  /** Settled `bash run_in_background` jobs; undefined when no registry is wired. */
+  processJobNotifier: ProcessJobNotifier | undefined;
 }
 
 /**
@@ -114,6 +118,7 @@ export function setupFooterSubsystems(
     getCwd: () => ctx.stats.cwd,
   });
   setShellPassthrough(shellPassthrough);
+  setShProcessJobs(ctx.processJobs);
   // Expose the foreground-abort closure so the sigint handler installed
   // in `interactive.ts` can route Ctrl+C to the active shell (if any)
   // instead of the exit-cycle. Cleared in the orchestrator's finally.
@@ -136,5 +141,6 @@ export function setupFooterSubsystems(
     verdictLedger,
     shellPassthrough,
     bgResultNotifier, peerNotifier: buildAndWirePeerNotifier(ctx),
+    processJobNotifier: ctx.processJobs !== undefined ? new ProcessJobNotifier(ctx.processJobs) : undefined,
   };
 }

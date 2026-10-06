@@ -45,6 +45,19 @@ export interface WindowObservation {
   resetsAt?: number;
 }
 
+/**
+ * One entry in the per-window observation history ring.
+ * Stored inside {@link WindowsObservation.history} — a bounded ring of recent
+ * snapshots used by the burn-rate projector (`burn-rate.ts`). Absent on records
+ * written by older AFK versions; the projector treats missing history as "no
+ * projection".
+ */
+export interface WindowHistorySample {
+  readonly observedAt: number;
+  readonly utilization: number;
+  readonly resetsAt?: number;
+}
+
 /** Subscription windows (Anthropic OAuth unified 5h / 7d headers, or the OAuth usage endpoint). */
 export interface WindowsObservation {
   fiveHour?: WindowObservation;
@@ -53,6 +66,12 @@ export interface WindowsObservation {
   sevenDaySonnet?: WindowObservation;
   sevenDayOpus?: WindowObservation;
   observedAt: number;
+  /**
+   * Bounded ring of recent binding-window snapshots (oldest-first), used by
+   * the burn-rate projector. Only present on records written by AFK versions
+   * that support burn-rate projection. Absent = no projection.
+   */
+  history?: WindowHistorySample[];
 }
 
 /** Every window key, in display order. The single source for window iteration. */
@@ -109,14 +128,38 @@ export function mergePerMinute(
   return { ...rest, ...(frozenUntil !== undefined ? { frozenUntil } : {}) };
 }
 
-/** Merge two window observations: the newer reading wins whole. */
+/**
+ * Merge two window history rings: concatenate, deduplicate by observedAt,
+ * sort oldest-first, and trim to the newest {@link WINDOWS_HISTORY_MAX} entries.
+ * Exported so tests can call it directly.
+ */
+export const WINDOWS_HISTORY_MAX = 12;
+
+export function mergeWindowHistory(
+  a: WindowHistorySample[] | undefined,
+  b: WindowHistorySample[] | undefined,
+): WindowHistorySample[] | undefined {
+  if (!a?.length && !b?.length) return undefined;
+  const all = [...(a ?? []), ...(b ?? [])];
+  const byTime = new Map<number, WindowHistorySample>();
+  for (const s of all) byTime.set(s.observedAt, s);
+  const sorted = [...byTime.values()].sort((x, y) => x.observedAt - y.observedAt);
+  const trimmed = sorted.length > WINDOWS_HISTORY_MAX
+    ? sorted.slice(sorted.length - WINDOWS_HISTORY_MAX)
+    : sorted;
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/** Merge two window observations: the newer reading wins whole; histories are unioned. */
 export function mergeWindows(
   a: WindowsObservation | undefined,
   b: WindowsObservation | undefined,
 ): WindowsObservation | undefined {
   if (a === undefined) return b;
   if (b === undefined) return a;
-  return b.observedAt >= a.observedAt ? b : a;
+  const winner = b.observedAt >= a.observedAt ? b : a;
+  const history = mergeWindowHistory(a.history, b.history);
+  return history !== undefined ? { ...winner, history } : winner;
 }
 
 /**
@@ -179,6 +222,30 @@ export function parseUsageRecord(raw: unknown): UsageRecord | undefined {
           ...(isFiniteNumber(resetsAt) ? { resetsAt } : {}),
         };
       }
+    }
+    // Parse bounded history ring; silently drop malformed entries.
+    // Cap the raw array before iterating so an oversized payload cannot cause
+    // unbounded work — only the newest WINDOWS_HISTORY_MAX entries can matter.
+    const rawHistory = w['history'];
+    if (Array.isArray(rawHistory)) {
+      const cappedHistory = rawHistory.length > WINDOWS_HISTORY_MAX
+        ? rawHistory.slice(rawHistory.length - WINDOWS_HISTORY_MAX)
+        : rawHistory;
+      const parsed: WindowHistorySample[] = [];
+      for (const entry of cappedHistory) {
+        if (entry && typeof entry === 'object') {
+          const e = entry as Record<string, unknown>;
+          if (isFiniteNumber(e['observedAt']) && isFiniteNumber(e['utilization'])) {
+            const s: WindowHistorySample = {
+              observedAt: e['observedAt'],
+              utilization: Math.min(1, Math.max(0, e['utilization'])),
+              ...(isFiniteNumber(e['resetsAt']) ? { resetsAt: e['resetsAt'] } : {}),
+            };
+            parsed.push(s);
+          }
+        }
+      }
+      if (parsed.length > 0) win.history = parsed;
     }
     out.windows = win;
   }

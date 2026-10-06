@@ -135,7 +135,10 @@ vi.mock('../manifest/write.js', () => ({
   updateWaveUnit: (...args: Parameters<typeof mockUpdateWaveUnit>) => mockUpdateWaveUnit(...args),
 }));
 
-const mockResolveCredentialForModel = vi.fn(() => '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' as string | undefined);
+// Neutral token — deliberately avoids the sk-ant- prefix so prefix-based secret
+// scanners do not flag it. The code under test (applyParentCredentialFallback)
+// returns early when `resolved` is non-empty, so the prefix is irrelevant here.
+const mockResolveCredentialForModel = vi.fn(() => 'test-credential-FAKE' as string | undefined);
 vi.mock('../auth/credential-resolver.js', () => ({
   resolveCredentialForModel: (...args: unknown[]) => mockResolveCredentialForModel(...args),
 }));

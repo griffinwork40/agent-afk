@@ -48,6 +48,8 @@ export interface BuildAgentSessionDeps {
    * dispatcher. Absent for subagent forks and headless surfaces.
    */
   detachRegistry?: import('../../../agent/tools/detach-registry.js').DetachableToolRegistry;
+  /** Background process registry (`bash run_in_background`); root REPL only. */
+  processJobs?: import('../../../agent/shell-jobs/process-jobs.js').ProcessJobRegistry;
   cwd: string | undefined;
   maxTurns: number;
   autoResumeOnUsageLimit: boolean | undefined;
@@ -101,6 +103,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
     ...(deps.detachRegistry !== undefined
       ? { detachRegistry: deps.detachRegistry }
       : {}),
+    ...(deps.processJobs !== undefined ? { processJobs: deps.processJobs } : {}),
     ...(deps.drainSubagents !== undefined ? { drainSubagents: deps.drainSubagents } : {}),
     ...(deps.autoResumeOnUsageLimit !== undefined
       ? { autoResumeOnUsageLimit: deps.autoResumeOnUsageLimit }
@@ -132,6 +135,7 @@ export function buildSharedDeps(a: {
   drainSubagents?: ((reason: string) => Promise<unknown>) | undefined;
   bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
   detachRegistry?: import('../../../agent/tools/detach-registry.js').DetachableToolRegistry;
+  processJobs?: import('../../../agent/shell-jobs/process-jobs.js').ProcessJobRegistry;
   effectiveCwd: string | undefined;
   maxTurns: string;
   initialPermissionMode: PermissionMode | undefined;
@@ -158,6 +162,7 @@ export function buildSharedDeps(a: {
     ...(a.detachRegistry !== undefined
       ? { detachRegistry: a.detachRegistry }
       : {}),
+    ...(a.processJobs !== undefined ? { processJobs: a.processJobs } : {}),
     cwd: a.effectiveCwd,
     maxTurns: parseInt(a.maxTurns, 10),
     autoResumeOnUsageLimit: a.cliConfig.autoResumeOnUsageLimit,

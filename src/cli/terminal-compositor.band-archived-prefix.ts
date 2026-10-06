@@ -1,10 +1,13 @@
 /**
  * Archived-prefix bookkeeping for the committed band (content-hug only).
  *
- * Invariant (archived prefix): `committedBandArchivedPrefix` counts the
+ * Invariant: archived prefix: `committedBandArchivedPrefix` counts the
  * LEADING rows of `committedBand` that are already in native scrollback. They
- * stay in the band model so a later frame shrink can re-show them (the screen
- * refills instead of leaving a blank gap below the prompt), but they must never
+ * stay in the band model so a large collapse can refill the screen. The shared
+ * hiddenArchivedRows plan (archived-reveal.ts) keeps them hidden on small shrinks
+ * when the bottom gap is <= max(3, floor(rows/8)). Reveal latches until the next
+ * archive, commit, or resize; threshold oscillation cannot hide them again.
+ * Initial small shrinks may progress to a large collapse and reveal once. They must never
  * reach scrollback a second time. Hence two rules every scrollback-writing site
  * follows:
  *   1. A logical-line archive (scrollbackFlushLines + buildScrollbackArchiveEscape)
@@ -17,7 +20,7 @@
  * reset with the band (clear/forget); decremented by n whenever a band prefix
  * of n rows is removed. Bounded by {@link capArchivedPrefix}.
  *
- * Accepted trade-off: while re-shown archived rows are on screen, tmux
+ * Accepted trade-off: only after a large collapse re-shows archived rows, tmux
  * copy-mode shows them twice at the seam (bottom of history, top of screen).
  * They are never written to scrollback twice. Full account: docs/scrollback.md
  * "Fixed: blank gap below prompt after tall overlay collapses (content-hug)".

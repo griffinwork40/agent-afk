@@ -37,19 +37,23 @@ export const MINI_MASCOT_HEIGHT = 3;
  *
  * Pixel rows pair into character rows top/bottom (see renderHalfBlockGrid):
  *   char row 0 = cap tip over cap body     (pixel rows 0,1) -> pointed cone
- *   char row 1 = gold hatband over brow    (pixel rows 2,3) -> band + ear tips
+ *   char row 1 = gold hatband over brow    (pixel rows 2,3) -> band, brow, ears
  *   char row 2 = eye band over grin        (pixel rows 4,5) -> face
  *
- * Palette tokens are PIXEL_PALETTE's (mascot.ts): B brown cap, Y gold, M olive
- * skin, D dark-olive ears, K near-black outline, L light-olive glint, R alarm
- * red, '.' transparent. Only the eye band and grin change between frames — the
- * cap and brow are shared, so animation reads as expression, not as jitter.
+ * Palette tokens are PIXEL_PALETTE's (mascot.ts): B brown cap, G dim gold
+ * band, Y gold eyes, M olive skin, D dark-olive ears, K near-black outline, L
+ * light-olive glint, R alarm red, '.' transparent. The band is G rather than
+ * the banner's Y so the eyes are the brightest pixels in the sprite; the eyes
+ * are close-set 2px pairs with a dark lid pixel over each inner corner, which
+ * gives the face a brow at this scale. Only the eye band and grin change
+ * between frames — the cap and brow are shared, so animation reads as
+ * expression, not as jitter.
  */
 const CAP_ROWS: readonly string[] = [
   '.....BBB.....', // cap tip
   '...BBBBBBB...', // cap body
-  '..KYYYYYYYK..', // gold hatband
-  'DDKMMMMMMMKDD', // brow, ears at their widest
+  'D.KGGGGGGGK.D', // dim-gold hatband; ear tips sweep UP beside it
+  'DDKMMKMKMMKDD', // V-brow: one dark lid pixel over each eye's inner corner
 ];
 
 /** Compose a full grid from the shared cap/brow rows + a face pair. */
@@ -77,12 +81,13 @@ function grid(eyeRow: string, grinRow: string): readonly string[] {
  * rendering every frame at level 0 and asserting the set is not a single frame.
  */
 
-// Eye bands (pixel row 4) — eyes at cols 4 and 8, ears tapering at the edges.
-const EYES_OPEN = '.DKMYMMMYMKD.'; // gold eyes forward
-const EYES_SHUT = '.DKM.MMM.MKD.'; // blink — sockets drop out (glyph change)
-const EYES_GLINT = '.DKMLMMMLMKD.'; // light-olive glint
-const EYES_RED = 'DDKMRMMMRMKDD'; // alarm red, ears flared wide
-const EYES_WINCE = 'DDKM.MMM.MKDD'; // alarm wince, ears still flared
+// Eye bands (pixel row 4) — close-set eyes at cols 4–5 and 7–8 under the
+// V-brow, ears tapering at the edges.
+const EYES_OPEN = '.DKMYYMYYMKD.'; // gold eyes forward
+const EYES_SHUT = '.DKM..M..MKD.'; // blink — sockets drop out (glyph change)
+const EYES_GLINT = '.DKMLYMYLMKD.'; // outer corners catch light (L)
+const EYES_RED = 'DDKMRRMRRMKDD'; // alarm red, ears flared wide
+const EYES_WINCE = 'DDKM..M..MKDD'; // alarm wince, ears still flared
 
 // Grins (pixel row 5) — jaw narrower than the brow above it.
 const GRIN_CLOSED = '..KMMKKKMMK..'; // narrow closed grin

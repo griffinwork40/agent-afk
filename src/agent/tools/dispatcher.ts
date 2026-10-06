@@ -36,6 +36,7 @@ import { defaultConcurrencyClassifier } from './dispatch-batching.js';
 import type { SuspectedLoopWindow } from './suspected-loop-detector.js';
 import { RepeatFailureGuard } from './repeat-failure-guard.js';
 import { ToolHealthMonitor, applyToolHealth } from './tool-health-monitor.js';
+import { StrategyNudger, applyStrategyNudge } from './strategy-nudge.js';
 import { executeBatchImpl } from './dispatcher.execute-batch.js';
 import {
   runPreDispatchGates as _runPreDispatchGates,
@@ -54,6 +55,8 @@ import {
 import type { CoreExecDeps } from './dispatcher.core-exec.js';
 import { isYieldableTool, type UserAttention } from './user-yield.js';
 import { isDetachableTool, type DetachableToolRegistry } from './detach-bash.js';
+import type { ProcessJobRegistry } from '../shell-jobs/process-jobs.js';
+import { filterBackgroundToolDefs } from './process-job-tools.js';
 
 // Re-exported for backward compatibility: external importers (dispatcher.test.ts,
 // schema-classification.test.ts) historically import this from './dispatcher.js'.
@@ -170,6 +173,12 @@ export interface SessionToolDispatcherOptions {
    */
   parentSessionId?: string;
   /**
+   * Root (depth-0) session id, inherited from {@link AgentConfig.rootSessionId}.
+   * Undefined for top-level (depth-0) sessions. Stamped on PostToolUse so
+   * child-attribution credits artifacts to the root record regardless of depth.
+   */
+  rootSessionId?: string;
+  /**
    * This fork's own subagent id, when the dispatcher belongs to a forked child.
    * Stamped onto every `hook_decision` this dispatcher emits so a block can be
    * ATTRIBUTED to the child that provoked it, mirroring what `tool_call`
@@ -259,6 +268,12 @@ export interface SessionToolDispatcherOptions {
    * that have no REPL to inject the result into.
    */
   detachRegistry?: DetachableToolRegistry;
+  /**
+   * Background process registry (`bash run_in_background`). Root interactive
+   * sessions only; handed to `bash` and to the background health/cancel tools
+   * for `proc-` ids. Never propagated to subagent children.
+   */
+  processJobs?: ProcessJobRegistry;
 }
 
 export class SessionToolDispatcher implements ToolDispatcher {
@@ -300,6 +315,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly _env: Record<string, string> | undefined;
   private readonly sessionId: string | undefined;
   private readonly parentSessionId: string | undefined;
+  private readonly rootSessionId: string | undefined;
   private readonly subagentId: string | undefined;
   /**
    * Provider that owns this dispatcher (implements GrantManager). Injected onto
@@ -323,6 +339,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly userAttention: UserAttention | undefined;
   /** Detach registry for Ctrl+B backgrounding (#2542); handed to `DETACHABLE_TOOLS`. */
   private readonly detachRegistry: DetachableToolRegistry | undefined;
+  /** Background process registry; handed to `bash` and the background tools. */
+  private readonly processJobs: ProcessJobRegistry | undefined;
   /** Live bash output tail reporter factory (issue #1506). */
   private readonly bashOutputTailReporter:
     | ((toolUseId: string) => (tail: string | undefined) => void)
@@ -357,6 +375,9 @@ export class SessionToolDispatcher implements ToolDispatcher {
    */
   private readonly toolHealthMonitor = new ToolHealthMonitor();
 
+  /** Advisory same-error strategy nudge; per dispatcher, see strategy-nudge.ts. */
+  private readonly strategyNudger = new StrategyNudger();
+
 
 
   /**
@@ -388,6 +409,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this._env = opts.env;
     this.sessionId = opts.sessionId;
     this.parentSessionId = opts.parentSessionId;
+    this.rootSessionId = opts.rootSessionId;
     this.subagentId = opts.subagentId;
     this.sessionGrantManager = opts.sessionGrantManager;
     this.traceWriter = opts.traceWriter;
@@ -405,6 +427,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this.spawnedPidRegistry = opts.spawnedPidRegistry;
     this.userAttention = opts.userAttention;
     this.detachRegistry = opts.detachRegistry;
+    this.processJobs = opts.processJobs;
     this.bashOutputTailReporter = opts.bashOutputTailReporter;
 
     // When caller passes arrays by reference (provider sharing pattern), use
@@ -439,6 +462,14 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private get handlerContext(): ToolHandlerContext {
     return {
       resolveBase: this.resolveBase,
+      // @deprecated alias — kept for back-compat with custom tools that read
+      // context.cwd (#2935). Internal code must NOT start reading this field;
+      // use resolveBase directly. Will be removed in the next semver-major.
+      // `cwd` is conditionally spread (only when resolveBase is defined) so
+      // that tool implementations doing `'cwd' in context` still get the
+      // correct "absent" signal when no base path is set; `resolveBase` is
+      // always present on the type so undefined is its own meaningful absence.
+      ...(this.resolveBase !== undefined ? { cwd: this.resolveBase } : {}),
       readRoots: this._readRoots.slice(),
       writeRoots: this._writeRoots.slice(),
       ...(this._allowAll ? { allowAll: true } : {}),
@@ -478,6 +509,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       ...(this.detachRegistry !== undefined && isDetachableTool(call.name)
         ? { detachRegistry: this.detachRegistry }
         : {}),
+      ...(this.processJobs !== undefined && call.name === 'bash' ? { processJobs: this.processJobs } : {}),
     };
   }
 
@@ -611,12 +643,11 @@ export class SessionToolDispatcher implements ToolDispatcher {
   // with live MCP wire-names before reaching the dispatcher (see
   // permissions.ts:withMcpToolsAllowed).
   get toolDefs(): readonly AnthropicToolDef[] {
-    const withBg = this.subagentExecutor?.supportsBackgroundJobs?.()
-      ? this.schemas
-      : this.schemas.filter(
-          (schema) =>
-            schema.name !== 'cancel_background_job' && schema.name !== 'send_message_to_agent' && schema.name !== 'get_background_job_health',
-        );
+    const withBg = filterBackgroundToolDefs(
+      this.schemas,
+      this.subagentExecutor?.supportsBackgroundJobs?.() === true,
+      this.processJobs !== undefined,
+    );
     // Peer-messaging tools are top-level only: subagents (parentSessionId set)
     // cannot use list_sessions or send_to_session.
     const available = this.parentSessionId === undefined
@@ -697,6 +728,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       hookRegistry: this.hookRegistry,
       sessionId: this.sessionId,
       parentSessionId: this.parentSessionId,
+      rootSessionId: this.rootSessionId,
       sessionGrantManager: this.sessionGrantManager,
       traceWriter: this.traceWriter,
       maxOutputBytes: this.maxOutputBytes,
@@ -707,6 +739,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       // executor can register its DAG and respond to Ctrl+B detachment.
       // Mirrors the `callHandlerContext` injection path for bash.
       ...(this.detachRegistry !== undefined ? { detachRegistry: this.detachRegistry } : {}),
+      ...(this.processJobs !== undefined ? { processJobs: this.processJobs } : {}),
       callHandlerContext: (call) => this.callHandlerContext(call),
       gateDeps: () => this.gateDeps(),
       toolDefs: this.toolDefs,
@@ -761,7 +794,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // append a model notice and emit one trace event per (tool, errorHead).
     // Fire-and-forget: applyToolHealth → emitToolDegraded swallows errors;
     // never alters isError. Shared helper used by both execute() and batch paths.
-    return applyToolHealth(this.toolHealthMonitor, this.traceWriter, call, coreResult);
+    const healthChecked = applyToolHealth(this.toolHealthMonitor, this.traceWriter, call, coreResult);
+    return applyStrategyNudge(this.strategyNudger, this.traceWriter, call, healthChecked);
   }
 
   // History: executeBatch's Phase 1 gate loop, Phase 2 batch-partition loop, and
@@ -784,6 +818,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       gateDeps: () => this.gateDeps(),
       traceWriter: this.traceWriter,
       toolHealthMonitor: this.toolHealthMonitor,
+      strategyNudger: this.strategyNudger,
     }, onActivity);
   }
 

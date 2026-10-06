@@ -10,7 +10,7 @@ vi.mock('./loop-iteration.turn-run.js', () => ({ runOneTurn: turn }));
 vi.mock('./loop-iteration.drain.js', () => ({ drainLoopNotifications: vi.fn() }));
 vi.mock('./loop-iteration.first-turn.js', () => ({ runFirstTurnHookIfNeeded: vi.fn() }));
 vi.mock('./loop-iteration.hooks.js', () => ({
-  dispatchUserPromptSubmit: async (runText: string) => ({ runText }), dispatchStop: vi.fn(),
+  dispatchUserPromptSubmit: async (runText: string) => ({ runText }),
 }));
 vi.mock('./version-notice.js', () => ({ createVersionNotice: () => () => undefined }));
 vi.mock('../../slash/plugin-skills.js', () => ({
@@ -41,6 +41,7 @@ function harness(opts: { peer?: boolean; bg?: boolean; typed?: string; initial?:
   let awaiting = false, buffer = opts.typed ?? '', reads = 0;
   let resolveRead: ((value: { text: string; attachments: [] }) => void) | undefined;
   const surface = {
+    getCompositor: () => null,
     onAwaitingInput: undefined as (() => void) | undefined,
     isAwaitingInput: () => awaiting, bufferIsEmpty: () => buffer === '',
     abortPendingRead: vi.fn(() => { awaiting = false; resolveRead?.({ text: '', attachments: [] }); }),

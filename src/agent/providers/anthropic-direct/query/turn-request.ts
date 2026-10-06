@@ -30,6 +30,7 @@ export interface TurnRequestInput {
   throttleQueue?: RunTurnInput['throttleQueue'];
   onUsageProgress?: RunTurnInput['onUsageProgress'];
   beforeNextRound?: RunTurnInput['beforeNextRound'];
+  beforeTurnEnd?: RunTurnInput['beforeTurnEnd'];
   journalSync?: RunTurnInput['journalSync'];
 }
 
@@ -80,6 +81,9 @@ export function prepareTurnRequest(input: TurnRequestInput): {
       ...(input.throttleQueue ? { throttleQueue: input.throttleQueue } : {}),
       ...(input.onUsageProgress ? { onUsageProgress: input.onUsageProgress } : {}),
       ...(input.beforeNextRound ? { beforeNextRound: input.beforeNextRound } : {}),
+      // Stop-hook seam (#2714): without this forward the seam is dead on
+      // anthropic-direct and blocking Stop hooks never continue (#2957).
+      ...(input.beforeTurnEnd ? { beforeTurnEnd: input.beforeTurnEnd } : {}),
       ...(input.journalSync ? { journalSync: input.journalSync } : {}),
       // One accumulator per USER TURN, shared by every retry-tier replay of it
       // (see RunTurnInput.turnState).

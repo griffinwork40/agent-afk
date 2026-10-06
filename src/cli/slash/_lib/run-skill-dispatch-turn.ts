@@ -216,6 +216,8 @@ export async function runSkillDispatchTurn(
           if (pending) {
             pending.result = c.content;
             pending.isError = c.isError;
+            if (c.incomplete === true) pending.incomplete = true;
+            if (c.partialNodeCount !== undefined) pending.partialNodeCount = c.partialNodeCount;
             const isVerify = pending.toolName === 'test_run' ||
               (pending.toolName === 'bash' && isVerificationCommand(pending.input));
             if (isVerify) {

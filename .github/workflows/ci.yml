@@ -51,6 +51,13 @@ jobs:
       - name: Lint (tsc --noEmit)
         run: pnpm lint
 
+      - name: Lint test files (tsc -p tsconfig.test.json — non-blocking, burn-down #3053)
+        # Advisory gate: `|| true` keeps this non-blocking while the backlog of
+        # existing test type errors is burned down (baseline: ~2,454 errors on
+        # the day this gate was added). Remove `|| true` once the count reaches
+        # zero. Tracked in issue #3053.
+        run: pnpm lint:tests || true
+
       - name: Audit env-var access (no scattered process.env reads outside src/config/env.ts)
         run: pnpm audit:env:check
 

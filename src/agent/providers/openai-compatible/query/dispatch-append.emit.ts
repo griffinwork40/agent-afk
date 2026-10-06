@@ -82,6 +82,7 @@ export async function* emitDispatchedToolOutputs({
       ...(result.capturePath !== undefined ? { capturePath: result.capturePath } : {}),
       ...(result.incomplete === true ? { incomplete: true } : {}),
       ...(result.incompleteReason ? { incompleteReason: result.incompleteReason } : {}),
+      ...(typeof result.partialNodeCount === 'number' ? { partialNodeCount: result.partialNodeCount } : {}),
       // Plumb concurrency-batch membership onto the render-facing event, not
       // just the trace event above, so the TUI `∥i/N` badge works here too.
       // Parity with anthropic-direct/loop.ts's tool.output yield — omitting it

@@ -231,18 +231,19 @@ describe('runIterationWithQuotaLimitPause — auto-resume=true', () => {
   });
 
   it('waits the retry-after duration before probing (budget large enough to allow probe)', async () => {
-    // Use a tiny two-hours budget (2000ms) so the wait is capped:
-    // wait = Math.min(600_000ms, 2000ms) = 2000ms.
-    // Budget (2000ms) ≥ first wait (2000ms) → post-sleep budget check: elapsed≈2000ms ≤ 2000ms
-    // NOT strictly greater → probe fires. Factory call 2 succeeds.
-    __setQuotaTwoHoursMs(2000);
+    // threshold=500ms, budget=3000ms, retry-after=1s (1000ms):
+    //   1000ms > 500ms → classified as quota (not transient).
+    //   wait = Math.min(1000ms, 3000ms) = 1000ms.
+    //   After sleeping 1000ms: elapsed ≈ 1000ms < budget (3000ms) → >= check false → probe fires.
+    __setQuotaTransientThresholdMs(500);
+    __setQuotaTwoHoursMs(3000);
 
     let callCount = 0;
     const factory = (): AsyncGenerator<ProviderEvent, IterationResult | null> => {
       callCount++;
       if (callCount === 1) {
         return (function* () {
-          yield quotaErrorEvent(600); // 600s retry-after → capped to 2000ms budget
+          yield quotaErrorEvent(1); // 1s retry-after > 500ms threshold → quota
           return null;
         })() as unknown as AsyncGenerator<ProviderEvent, IterationResult | null>;
       }
@@ -253,8 +254,8 @@ describe('runIterationWithQuotaLimitPause — auto-resume=true', () => {
     };
 
     const tierPromise = runTier(factory);
-    // Advance past the 2000ms sleep.
-    await vi.advanceTimersByTimeAsync(3000);
+    // Advance past the 1000ms sleep.
+    await vi.advanceTimersByTimeAsync(2000);
     const { events, result } = await tierPromise;
 
     expect(callCount).toBe(2);
@@ -371,6 +372,35 @@ describe('runIterationWithQuotaLimitPause — auto-resume=true', () => {
     // A quota error was yielded when cap hit
     const errs = events.filter((e) => e.type === 'error');
     expect(errs.length).toBeGreaterThan(0);
+  });
+
+  it('caps at exact two-hour equality (>= boundary, not just >)', async () => {
+    // Budget set to the same value as the wait, so elapsed === budget exactly
+    // at the post-sleep re-check. With strict >, this probe would re-fire;
+    // with >=, the error is surfaced without an extra iteration.
+    const BUDGET = 1000;
+    __setQuotaTwoHoursMs(BUDGET);
+    __setQuotaFallbackWaitMs(BUDGET); // sleep exactly 1000ms = budget
+
+    let callCount = 0;
+    const factory = (): AsyncGenerator<ProviderEvent, IterationResult | null> => {
+      callCount++;
+      return (function* () {
+        yield quotaErrorEvent(600); // always quota (no retry-after)
+        return null;
+      })() as unknown as AsyncGenerator<ProviderEvent, IterationResult | null>;
+    };
+
+    const tierPromise = runTier(factory);
+    await vi.advanceTimersByTimeAsync(BUDGET); // advance exactly to the boundary
+    const { events, result } = await tierPromise;
+
+    expect(result).toBeNull();
+    // Error must have been yielded (cap fired at equality)
+    const errs = events.filter((e) => e.type === 'error');
+    expect(errs.length).toBeGreaterThan(0);
+    // Only one probe should have fired (the cap applied at the post-sleep check)
+    expect(callCount).toBe(1);
   });
 });
 

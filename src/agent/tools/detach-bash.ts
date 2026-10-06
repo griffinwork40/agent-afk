@@ -15,7 +15,10 @@
  *      which the bash handler defines as a closure over its local state.
  *   3. When the process eventually closes, `onDetach` must wire a separate
  *      `proc.once('close', ...)` for late delivery via `token.deliver()`.
- *   4. The registry emits 'settled'; the REPL's notifier injects the result.
+ *   4. The registry emits 'settled'. NOTE: no production subscriber consumes
+ *      it yet (#2932), so a detached bash result does not reach the model.
+ *      Model-initiated background work uses `bash run_in_background` instead
+ *      (see docs/background-processes.md), which does deliver completion.
  *
  * OpenAI-compatible parity (Invariant:D2): both provider loops call
  * `dispatcher.execute()` → `callHandlerContext()` → the same bash handler.

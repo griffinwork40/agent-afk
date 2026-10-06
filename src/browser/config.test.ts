@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { loadBrowserConfig, enforceDomainPolicy } from './config.js';
+import { describe, it, expect, vi } from 'vitest';
+import { loadBrowserConfig, loadDomainLists, enforceDomainPolicy } from './config.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -393,6 +393,116 @@ describe('enforceDomainPolicy', () => {
     });
     // Browsers normalise hostnames to lowercase; URL constructor does too.
     expect(enforceDomainPolicy('https://github.com/', cfg)).toEqual({ allowed: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// loadDomainLists domain-only loader
+// ---------------------------------------------------------------------------
+
+describe('loadDomainLists — env-only and file override semantics', () => {
+  it('returns env allowed + blocked domains when no file is present', () => {
+    const lists = loadDomainLists({
+      env: makeEnv({
+        AFK_BROWSER_ALLOWED_DOMAINS: 'env.example.com',
+        AFK_BROWSER_BLOCKED_DOMAINS: 'bad.example.com',
+      }),
+      readFileSync: noFile,
+    });
+    expect(lists.allowedDomains).toEqual(['env.example.com']);
+    expect(lists.blockedDomains).toEqual(['bad.example.com']);
+  });
+
+  it('file allowedDomains replaces env allowedDomains, not unions', () => {
+    const lists = loadDomainLists({
+      env: makeEnv({ AFK_BROWSER_ALLOWED_DOMAINS: 'env.example.com' }),
+      readFileSync: withFile(JSON.stringify({ allowedDomains: ['file.example.com'] })),
+    });
+    expect(lists.allowedDomains).toEqual(['file.example.com']);
+  });
+
+  it('partial file preserves env blockedDomains when only allowedDomains is present', () => {
+    const lists = loadDomainLists({
+      env: makeEnv({
+        AFK_BROWSER_ALLOWED_DOMAINS: 'env-allowed.example.com',
+        AFK_BROWSER_BLOCKED_DOMAINS: 'env-blocked.example.com',
+      }),
+      readFileSync: withFile(JSON.stringify({ allowedDomains: ['file-allowed.example.com'] })),
+    });
+    expect(lists.allowedDomains).toEqual(['file-allowed.example.com']);
+    expect(lists.blockedDomains).toEqual(['env-blocked.example.com']);
+  });
+
+  it('malformed browser.json returns env lists and warns once', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const opts = {
+        env: makeEnv({
+          AFK_BROWSER_ALLOWED_DOMAINS: 'env-allowed.example.com',
+          AFK_BROWSER_CONFIG: '/tmp/loadDomainLists-bad-json-test.json',
+        }),
+        readFileSync: (_path: string) => '{ not valid json',
+      };
+      expect(loadDomainLists(opts).allowedDomains).toEqual(['env-allowed.example.com']);
+      expect(loadDomainLists(opts).allowedDomains).toEqual(['env-allowed.example.com']);
+      const matchingCalls = warnSpy.mock.calls.filter(
+        (args) => typeof args[0] === 'string' && (args[0] as string).includes('loadDomainLists-bad-json-test.json'),
+      );
+      expect(matchingCalls.length).toBe(1);
+      expect(matchingCalls[0]?.[0]).toMatch(/could not be parsed/);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('non-object browser.json returns env lists', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const lists = loadDomainLists({
+        env: makeEnv({
+          AFK_BROWSER_BLOCKED_DOMAINS: 'env-blocked.example.com',
+          AFK_BROWSER_CONFIG: '/tmp/loadDomainLists-array-test.json',
+        }),
+        readFileSync: () => '["not","an","object"]',
+      });
+      expect(lists.blockedDomains).toEqual(['env-blocked.example.com']);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('unreadable browser.json returns env lists instead of dropping policy', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const lists = loadDomainLists({
+        env: makeEnv({
+          AFK_BROWSER_BLOCKED_DOMAINS: 'blocked.example.com',
+          AFK_BROWSER_CONFIG: '/tmp/loadDomainLists-eacces-test.json',
+        }),
+        readFileSync: () => {
+          throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+        },
+      });
+      expect(lists.blockedDomains).toEqual(['blocked.example.com']);
+      const matchingCalls = warnSpy.mock.calls.filter(
+        (args) => typeof args[0] === 'string' && (args[0] as string).includes('loadDomainLists-eacces-test.json'),
+      );
+      expect(matchingCalls.length).toBe(1);
+      expect(matchingCalls[0]?.[0]).toMatch(/could not be read/);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('invalid AFK_BROWSER_BACKEND does not affect domain list loading', () => {
+    const lists = loadDomainLists({
+      env: makeEnv({
+        AFK_BROWSER_BLOCKED_DOMAINS: 'blocked.example.com',
+        AFK_BROWSER_BACKEND: 'bogus-backend-value',
+      }),
+      readFileSync: noFile,
+    });
+    expect(lists.blockedDomains).toEqual(['blocked.example.com']);
   });
 });
 

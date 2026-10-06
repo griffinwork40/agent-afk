@@ -81,6 +81,11 @@ function sameOwner(a: LockOwner | undefined, b: LockOwner | undefined): boolean 
   return a !== undefined && b !== undefined && a.pid === b.pid && a.token === b.token;
 }
 
+// Invariant: reclamation uses hardlink (linkSync) to atomically claim ownership
+// of a dead lock file — only one contender's claim can match the original inode.
+// On filesystems where hardlinks are unavailable (cross-device EXDEV, permission
+// EPERM), this throws and the caller falls through to the catch block, degrading
+// gracefully to retry-based polling until the lock holder releases or times out.
 function tryReclaimDeadLock(lockPath: string, owner: LockOwner): void {
   if (isProcessAlive(owner.pid)) return;
   const claimPath = `${lockPath}.claim.${process.pid}.${randomBytes(4).toString('hex')}`;
@@ -99,6 +104,11 @@ function tryReclaimDeadLock(lockPath: string, owner: LockOwner): void {
   }
 }
 
+// Invariant: SharedArrayBuffer + Atomics.wait is intentional here — it is the only
+// way to block the current thread synchronously without a spin-loop or busy-wait.
+// Available on Node >=12; safe in non-worker contexts since Node >=22 (no
+// --experimental-shared-memory flag required). We need synchronous blocking
+// because withFileLock must be callable from synchronous code paths.
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -200,6 +210,12 @@ export interface ScheduledTaskConfig {
 /**
  * Load all scheduled task configs from the store.
  * Returns [] when the file is missing or contains invalid JSON.
+ *
+ * Consistency model: reads are lock-free (plain readFileSync). A concurrent
+ * write via `withFileLock` may be in-flight; in that case this read returns
+ * either the previous or the next committed snapshot, never a partial write,
+ * because `saveSchedules` writes atomically (temp + renameSync). Callers that
+ * need read-modify-write consistency must go through `withFileLock`.
  */
 export function loadSchedules(path?: string): ScheduledTaskConfig[] {
   const storePath = path ?? getSchedulesPath();
@@ -298,6 +314,10 @@ export function removeSchedule(id: string, path?: string): boolean {
 
 /**
  * Get a single schedule by ID. Returns undefined if not found.
+ *
+ * Inherits `loadSchedules`' lock-free consistency model: the returned config
+ * reflects the latest atomically committed snapshot but may be stale relative
+ * to a concurrent `withFileLock` write.
  */
 export function getSchedule(id: string, path?: string): ScheduledTaskConfig | undefined {
   return loadSchedules(path).find((s) => s.id === id);
