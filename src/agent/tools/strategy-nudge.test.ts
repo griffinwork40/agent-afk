@@ -120,6 +120,29 @@ describe('normalizeErrorLine', () => {
     const b = normalizeErrorLine("Cannot find module 'react-dom/client'");
     expect(a).not.toBe(b);
   });
+
+  // perf regression test — 100K-char slash-free run must complete fast
+  it('completes quickly on a 100K-char slash-free error line (O(n^2) path-collapse regression)', () => {
+    const line = 'Error: ' + 'a'.repeat(100_000);
+    const start = Date.now();
+    const sig = normalizeErrorLine(line);
+    const elapsed = Date.now() - start;
+    // Signature must still be produced (non-empty)
+    expect(sig.length).toBeGreaterThan(0);
+    // Must complete well under 200ms even on slow CI / Windows runners
+    expect(elapsed).toBeLessThan(200);
+  });
+
+  // NUL-collision regression test
+  it('treats lines that differ only by a real NUL as distinct from each other', () => {
+    // Without stripping NUL, 'thing \x00p0\x00 failed' collides with the first
+    // placeholder token and would be restored as the quoted token from the other line.
+    // Both lines carry a quoted token, so protected_[0] exists and an unstripped
+    // literal \x00p0\x00 would be restored to it, collapsing the two signatures.
+    const withNul = normalizeErrorLine("thing \x00p0\x00 failed for './x'");
+    const withPath = normalizeErrorLine("thing './x' failed for './x'");
+    expect(withNul).not.toBe(withPath);
+  });
 });
 
 describe('errorSignature', () => {
@@ -212,7 +235,7 @@ describe('StrategyNudger', () => {
     for (let i = 0; i < 5; i++) expect(n.observe(call(), bashFail('some output\nmore output'))).toBeNull();
   });
 
-  // Item 1: test_run content format; summary/Command/header lines must be skipped
+  // test_run content format; summary/Command/header lines must be skipped
   it('does not nudge when test_run failures differ even with the same pass/fail counts', () => {
     const n = new StrategyNudger();
     // Both have "0 passed | 1 failed" in the summary but different error bullets
@@ -242,6 +265,48 @@ describe('StrategyNudger', () => {
     n.observe(call('test_run', 'pnpm test -t a'), failA);
     // Same test name + same error message; only file path differs and normalizes away.
     expect(n.observe(call('test_run', 'pnpm test -t b'), failB)).not.toBeNull();
+  });
+
+  // eviction must not let an already-fired signature nudge again
+  it('never fires again after >256 distinct other signatures evict the original from the map', () => {
+    const n = new StrategyNudger();
+    const targetFail = () => bashFail('Error: Cannot find module "zod" from /repo/src/x.ts');
+    // Fire the nudge for the target signature.
+    n.observe(call('bash', 'a'), targetFail());
+    expect(n.observe(call('bash', 'b'), targetFail())).not.toBeNull(); // fires once
+    // Flood with >256 unique signatures to evict the target from the Map.
+    for (let i = 0; i < 260; i++) {
+      n.observe(call('bash', `cmd${i}`), bashFail(`Error: unique-error-number-${i} cannot resolve dep unique-${i}`));
+    }
+    // The target signature's Map entry may have been evicted, but `fired` keeps it.
+    expect(n.observe(call('bash', 'c'), targetFail())).toBeNull();
+    expect(n.observe(call('bash', 'd'), targetFail())).toBeNull();
+  });
+
+  // summary line with a skipped count — bullet must be chosen over the summary
+  it('picks the bullet line from a test_run result that includes a skipped count', () => {
+    const content =
+      '\u274c vitest: 0 passed | 1 failed | 2 skipped \u2014 123ms\n' +
+      'Command: pnpm test src/x.test.ts\n' +
+      '\nFailed tests:\n' +
+      '  \u2022 myTest (src/x.test.ts:5): AssertionError: expected 42 to be 0\n' +
+      '\nRAW OUTPUT';
+    expect(findErrorLine(content)).toBe(
+      '\u2022 myTest (src/x.test.ts:5): AssertionError: expected 42 to be 0',
+    );
+  });
+
+  // runner crash with no bullet lines — errorSignature must return null
+  it('returns null errorSignature for a runner crash with no error-cue bullet', () => {
+    // Raw output contains no ERROR_CUE word — simulates a runner segfault / OOM.
+    const content =
+      '\u274c vitest: 0 passed | 0 failed \u2014 5ms\n' +
+      'Command: pnpm test src/x.test.ts\n' +
+      '\nKilled\n' +
+      'Segmentation fault\n';
+    // 'Killed' and 'Segmentation fault' contain no ERROR_CUE match, so null.
+    const result: ToolResult = { content, isError: true };
+    expect(errorSignature(result)).toBeNull();
   });
 });
 

@@ -74,6 +74,12 @@ const MAX_TRACKED_SIGNATURES = 256;
 const MIN_SIGNATURE_CHARS = 12;
 const MAX_QUOTED_CHARS = 200;
 const MAX_LINES_SCANNED = 400;
+/**
+ * Maximum line length fed into normalizeErrorLine. Bounds the O(n^2) path-collapse
+ * regex against a long slash-free run of [\w.@+-] chars in untrusted tool output.
+ * 500 chars is enough for any real error message; bash output can reach ~100KB.
+ */
+const MAX_NORMALIZE_LINE_LEN = 500;
 
 // eslint-disable-next-line no-control-regex
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
@@ -120,6 +126,14 @@ export function findErrorLine(content: string): string | null {
  * numbers such as `expected 1 to be 2`).
  */
 export function normalizeErrorLine(line: string): string {
+  // Bound input length before the O(n^2) path-collapse regex.
+  // The slice is taken BEFORE any substitution so callers that already hold the
+  // raw line for the notice still receive the full text (errorSignature keeps raw).
+  const bounded = line.length > MAX_NORMALIZE_LINE_LEN ? line.slice(0, MAX_NORMALIZE_LINE_LEN) : line;
+  // Strip literal NUL bytes before the placeholder pass: a real \x00pN\x00 in
+  // tool output would collide with placeholder tokens and corrupt restoration.
+  // eslint-disable-next-line no-control-regex
+  const safe = bounded.replace(/\x00/g, '');
   // Protect quoted non-absolute module specifiers before the path-collapse pass
   // so they remain distinct across different module-not-found errors.
   // Rule: a quoted token with no whitespace is preserved when it does NOT start
@@ -130,7 +144,7 @@ export function normalizeErrorLine(line: string): string {
   // path (e.g. `open '/tmp/afk-abc/x.ts'`), which the quoted-absolute regex
   // below handles explicitly.
   const protected_: string[] = [];
-  const withPlaceholders = line
+  const withPlaceholders = safe
     .toLowerCase()
     .replace(/https?:\/\/\S+/g, '<url>')
     .replace(
@@ -189,6 +203,13 @@ interface SignatureState {
  */
 export class StrategyNudger {
   private readonly signatures = new Map<string, SignatureState>();
+  /**
+   * Signatures that have already fired the nudge. Kept in a separate Set so
+   * evictOverflow cannot remove a fired entry from `signatures` and let the
+   * same signature nudge a second time. Strings are short so
+   * the set is left unbounded; even 10K entries is < 1 MB in practice.
+   */
+  private readonly fired = new Set<string>();
   private clock = 0;
 
   /** Observe every settled result; returns a verdict only when the nudge fires. */
@@ -202,6 +223,9 @@ export class StrategyNudger {
     if (state !== undefined && this.clock - state.lastSeen > STRATEGY_NUDGE_WINDOW) {
       state.count = 0;
       state.fingerprints.clear();
+      // Invariant: `nudged` is intentionally NOT reset here. Once a signature
+      // has fired the nudge it must never fire again, even after a window reset
+      // (the `fired` Set is the authoritative guard; it also survives eviction).
     }
     if (state === undefined) {
       state = { count: 0, lastSeen: this.clock, fingerprints: new Set(), nudged: false };
@@ -212,8 +236,9 @@ export class StrategyNudger {
     state.lastSeen = this.clock;
     state.fingerprints.add(repeatFailureFingerprint(call));
 
-    if (state.nudged || state.count < STRATEGY_NUDGE_THRESHOLD) return null;
+    if (this.fired.has(sig.signature) || state.count < STRATEGY_NUDGE_THRESHOLD) return null;
     state.nudged = true;
+    this.fired.add(sig.signature);
     const distinctCalls = state.fingerprints.size > 1;
     return {
       tool: call.name,
