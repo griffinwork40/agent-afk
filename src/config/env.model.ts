@@ -16,6 +16,14 @@ import type { EnvVarMeta } from './env.js';
 
 export const MODEL_ENV_REGISTRY = [
   {
+    name: 'AFK_CONNECT_RETRY_BUDGET_MS',
+    description: 'Experimental streaming connection retry wall budget in milliseconds. Positive finite value enables capped jittered backoff before the stream opens; unset or invalid preserves legacy retry counts. In-flight attempts retain existing timeouts.',
+    type: 'number',
+    required: false,
+    example: '120000',
+    category: 'model',
+  },
+  {
     name: 'AFK_COMPACT_KEEP_LAST_TURNS',
     description: 'Number of recent turns the compactor keeps verbatim during /compact. Default tuned in compact-handler.ts.',
     type: 'number',

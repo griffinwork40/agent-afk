@@ -172,6 +172,7 @@ export async function* runIteration(
     traceWriter: ctx.traceWriter,
     initSessionId: ctx.initSessionId,
     currentModel: ctx.currentModel,
+    endpoint: ctx.client.baseURL,
     isClosed: () => ctx.closed,
   };
 
