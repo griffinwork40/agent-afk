@@ -222,6 +222,7 @@ export async function* runTurnInner(
     ctx.currentModel,
     ctx.opts.config.maxOutputTokens,
     ctx.opts.config.model ?? ctx.currentModel,
+    ctx.opts.auth.source === 'chatgpt-oauth',
   );
   if (overflowErr) {
     ctx.abort.clear(controller);
