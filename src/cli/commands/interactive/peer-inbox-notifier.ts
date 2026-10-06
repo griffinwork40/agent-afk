@@ -365,7 +365,8 @@ export class PeerInboxNotifier {
   private noteHeld(e: PeerEnvelope, reason: Exclude<HeldReason, 'corrupt'>): void {
     const bytes = Buffer.byteLength(e.body, 'utf8');
     const why = reason === 'wake-budget' ? 'wake budget reached' : 'AFK_PEER_INBOUND=hold';
-    this.opts.writeLine(palette.dim(`↘ peer message from ${safePeerSender(e.from)} held (${why}) · /inbox to review`));
+    const sizeHint = bytes >= 1024 ? ` · ${(bytes / 1024).toFixed(1)} kB` : '';
+    this.opts.writeLine(palette.dim(`↘ peer message from ${safePeerSender(e.from)} held (${why})${sizeHint} · /inbox to review`));
     // resolveTraceWriter() reads live so mid-session resume is reflected.
     void emitPeerMessage(this.resolveTraceWriter(), { action: 'held', messageId: e.messageId, peer: e.from.id, bytes, reason });
   }

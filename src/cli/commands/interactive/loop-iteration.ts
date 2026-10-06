@@ -133,6 +133,7 @@ export async function runInputLoop(
 
     let text: string;
     let attachments: ReadWithAutocompleteResult['attachments'];
+    let silentSeed = false;
 
     // Plan-exit seed: promote a queued exit_plan_mode seed to seedBuffer.
     if (seedBuffer === undefined) {
@@ -146,6 +147,7 @@ export async function runInputLoop(
     if (seedBuffer !== undefined) {
       const queued = seedBuffer;
       seedBuffer = undefined;
+      silentSeed = queued.echo === 'silent';
       if (queued.echo !== 'silent') {
         const prompt = buildPrompt(ctx.stats.permissionMode, queued.text);
         const echo = formatSubmittedEcho({
@@ -211,7 +213,7 @@ export async function runInputLoop(
       isPluginForward = true;
     }
 
-    history.push(text);
+    if (!silentSeed) history.push(text);
     await runFirstTurnHookIfNeeded(ctx, text);
 
     // Plugin preflight — only on the plugin-forward path.

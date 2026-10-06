@@ -195,6 +195,32 @@ describe('PeerInboxNotifier — accept path', () => {
     expect(stripAnsi(lines[0]!)).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
   });
 
+  it('held path appends size hint when message body >= 1024 bytes', async () => {
+    const sessionId = randomUUID();
+    const largeBody = 'x'.repeat(1024);
+    await writeEnvelope(makeEnvelope(sessionId, { body: largeBody }));
+
+    const { notifier, lines } = makeNotifier(sessionId, { mode: () => 'hold' });
+    await notifier.scan();
+
+    const plain = stripAnsi(lines[0]!);
+    expect(plain).toContain('held (AFK_PEER_INBOUND=hold)');
+    expect(plain).toMatch(/\d+\.\d+ kB/);
+    expect(plain).toContain('/inbox to review');
+  });
+
+  it('held path omits size hint when message body < 1024 bytes', async () => {
+    const sessionId = randomUUID();
+    await writeEnvelope(makeEnvelope(sessionId, { body: 'short' }));
+
+    const { notifier, lines } = makeNotifier(sessionId, { mode: () => 'hold' });
+    await notifier.scan();
+
+    const plain = stripAnsi(lines[0]!);
+    expect(plain).toContain('held (AFK_PEER_INBOUND=hold) · /inbox to review');
+    expect(plain).not.toMatch(/\d+\.\d+ kB/);
+  });
+
   it('two notifiers on the same inbox deliver each message exactly once total', async () => {
     const sessionId = randomUUID();
     await writeEnvelope(makeEnvelope(sessionId));
