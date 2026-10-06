@@ -214,6 +214,14 @@ export type SessionPhaseName =
   // sessions and pushes a Telegram alert.
   // metadata: { tool, errorHead, errorCount, callCount }
   | 'tool_degraded'
+  // Advisory same-error strategy nudge (src/agent/tools/strategy-nudge.ts).
+  // Emitted at most once per normalized error signature per dispatcher when
+  // the same error recurs within a short window of bash/test_run attempts, at
+  // the moment the nudge text is appended to the failing result. PURE
+  // OBSERVABILITY — never alters dispatch or isError. `distinctCalls` is true
+  // when the recurrences came from different calls (the case the repeat-failure
+  // guard cannot see). metadata: { tool, errorHead, occurrences, distinctCalls }
+  | 'strategy_nudge_fired'
   // Stop-hook injectContext was returned on a one-shot surface (daemon/cron task,
   // `afk chat`) that has no next user turn. The context is dropped — delivery
   // requires a subsequent prompt, which never arrives. Emitted by the session-

@@ -72,6 +72,33 @@ Going through a file keeps backticks, `$(...)`, and quotes in the message litera
 
 Never `--amend` (creates a new commit each time). Never bypass hooks (`--no-verify`).
 
+**Phase 4.5 — Orchestrator-owned pre-push re-check (mandatory).**
+Record `git rev-parse HEAD` (the SHA you are about to push). Then run each gate below **yourself** as a fresh process — never accept a sub-agent's self-reported result as a gate outcome.
+
+Detect and run these three gate classes against the current tree:
+
+1. **Tests** — same detection order as Phase 2 (`scripts.test` in `package.json`, `pytest`, `cargo test`, `go test ./...`, `Makefile test` target). If Phase 2 ran successfully **and** HEAD has not moved since (compare the recorded SHA), you may reuse the Phase 2 result and record it as `REUSED (HEAD unchanged)` — but you must still run typecheck and lint fresh.
+
+2. **Typecheck** — detect in order:
+   - `package.json` → `scripts.typecheck` if present
+   - `package.json` → `scripts.lint` when it invokes `tsc` (e.g. `tsc --noEmit`) — run it as-is
+   - `pyproject.toml` / `setup.cfg` → `mypy` if configured
+   - `Cargo.toml` → `cargo check`
+   - If none detected → record as `SKIPPED: no typecheck command detected`
+
+3. **Lint** — detect in order:
+   - `package.json` → `scripts.lint` if present and not already used for typecheck above
+   - `.eslintrc*` / `eslint.config.*` → `eslint .` (or the project's lint invocation)
+   - `Makefile` → `lint` target
+   - If none detected → record as `SKIPPED: no lint command detected`
+
+**For each gate:** run the command as-is (no added flags such as `--strict`). Capture exit code and a brief excerpt of the output.
+
+- Any **non-zero exit** → **abort**; do not push. Surface the verbatim failing output and recommend `/diagnose` or `/heal`. Cap any in-skill repair attempt at **two passes**; if still failing after two passes, emit `BLOCKED` and stop — do not loop indefinitely.
+- A gate that cannot be detected → record as `SKIPPED: <reason>`. Never record a skipped gate as passed.
+
+Record all results (command, exit code, HEAD SHA, SKIPPED reason if applicable) for inclusion in the Phase 7 PR body.
+
 **Phase 5 — Push.**
 - **Assertion (before any push):** `git rev-parse --abbrev-ref HEAD` must NOT equal the default branch. If it does, abort with the same error as Phase 1 — Branch lock was violated somewhere upstream.
 - Upstream unset → `git push -u origin <branch>`
@@ -99,6 +126,13 @@ Structure:
 ## Test results
 - <command>: <passed/failed + counts>
 <repeat per test invocation>
+
+## Pre-push re-check (HEAD <sha>)
+| Gate       | Command                        | Exit | Result                          |
+|------------|-------------------------------|------|---------------------------------|
+| Tests      | <command or "REUSED">          | <N>  | passed / failed / REUSED (HEAD unchanged) |
+| Typecheck  | <command>                      | <N>  | passed / failed / SKIPPED: <reason> |
+| Lint       | <command>                      | <N>  | passed / failed / SKIPPED: <reason> |
 
 ## Verification
 <if --verify ran: per-claim verdict + evidence>

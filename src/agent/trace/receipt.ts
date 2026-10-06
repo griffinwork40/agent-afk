@@ -22,7 +22,6 @@
  */
 
 import { mkdir, readFile, writeFile } from 'fs/promises';
-export { renderReceiptMarkdown } from './receipt.render.js';
 import { renderReceiptMarkdown } from './receipt.render.js';
 import { basename, dirname, join } from 'path';
 import { getReceiptsDir } from '../../paths.js';
@@ -37,6 +36,8 @@ import {
   type TraceEvent,
   type TraceEventKind,
 } from './types.js';
+
+export { renderReceiptMarkdown };
 
 export const RECEIPT_SCHEMA_VERSION = 1 as const;
 

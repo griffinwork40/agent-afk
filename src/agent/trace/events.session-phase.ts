@@ -75,6 +75,9 @@ export const SessionPhaseNameSchema = z.enum([
   // (tool, errorHead) per session. See SessionPhaseName JSDoc in types.ts.
   // metadata: { tool, errorHead, errorCount, callCount }
   'tool_degraded',
+  // Advisory same-error strategy nudge. See SessionPhaseName JSDoc in
+  // types.session-phase.ts. metadata: { tool, errorHead, occurrences, distinctCalls }
+  'strategy_nudge_fired',
   // Stop-hook injectContext dropped on one-shot surfaces (no next user turn).
   // See SessionPhaseName JSDoc in types.session-phase.ts for the full rationale.
   'stop_inject_dropped',

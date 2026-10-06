@@ -38,6 +38,7 @@ import type { RepeatFailureGuard } from './repeat-failure-guard.js';
 import type { SubagentExecutor } from './subagent-executor.js';
 import type { ConcurrencyClassifier } from './types.js';
 import type { ToolHealthMonitor } from './tool-health-monitor.js';
+import type { StrategyNudger } from './strategy-nudge.js';
 
 /**
  * Dependency surface for {@link executeBatchImpl}. Every field maps 1:1 to a
@@ -96,6 +97,8 @@ export interface ExecuteBatchDeps {
    * only for the multi-call code path.
    */
   toolHealthMonitor: ToolHealthMonitor;
+  /** Same-error strategy nudge; same single-observation rule as toolHealthMonitor. */
+  strategyNudger: StrategyNudger;
 }
 
 /**
@@ -274,6 +277,7 @@ export async function executeBatchImpl(
     sessionId: deps.sessionId,
     maxConcurrentSafeCalls: deps.maxConcurrentSafeCalls,
     toolHealthMonitor: deps.toolHealthMonitor,
+    strategyNudger: deps.strategyNudger,
     traceWriter: deps.traceWriter,
     onActivity,
   };

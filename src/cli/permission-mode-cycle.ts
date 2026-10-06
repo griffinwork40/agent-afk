@@ -43,35 +43,39 @@ export const PERMISSION_CYCLE = ['default', 'plan', 'bypassPermissions'] as cons
 
 type CycleMode = (typeof PERMISSION_CYCLE)[number];
 
-/** Emit the one-line status copy for the mode the ring just landed on. */
-function emitCycleCopy(ctx: SlashContext, mode: CycleMode): void {
+/** The one-line status copy for the mode the ring just landed on. */
+export function cycleCopy(mode: CycleMode): string {
   switch (mode) {
     case 'plan':
-      ctx.out.success(
-        palette.warning('● plan mode ON') +
-          palette.dim(' — writes refused; read-only bash runs, mutating bash blocked.'),
-      );
-      return;
+      return palette.warning('● plan mode ON') +
+        palette.dim(' — writes refused; read-only bash runs, mutating bash blocked.');
     case 'bypassPermissions':
-      // Plain line (not the ✓ channel) so bypass reads as a cool "full-power"
-      // badge rather than a red alarm. Since the `/bypass` slash command was
-      // retired, Shift+Tab is the only live entry into bypass, so this notice is
-      // the sole at-toggle explainer of what bypass does.
-      ctx.out.line(
-        palette.bypass('⚡ bypass ON') +
-          palette.dim(
-            ' — path-approval prompts + containment OFF; read/write any path. ' +
-              '(Does not affect ask_question.)',
-          ),
-      );
-      return;
+      // Since the `/bypass` slash command was retired, Shift+Tab is the only
+      // live entry into bypass, so this notice is the sole at-toggle explainer
+      // of what bypass does.
+      return palette.bypass('⚡ bypass ON') +
+        palette.dim(
+          ' — path-approval prompts + containment OFF; read/write any path. ' +
+            '(Does not affect ask_question.)',
+        );
     case 'default':
-      ctx.out.success(
-        palette.success('○ default') +
-          palette.dim(' — path containment + approval prompts restored.'),
-      );
-      return;
+      return palette.success('○ default') +
+        palette.dim(' — path containment + approval prompts restored.');
   }
+}
+
+/**
+ * Emit the cycle copy. Contract: when a live compositor frame is armed the
+ * copy goes to its transient mode-notice row, which the NEXT Shift+Tab
+ * overwrites and the next other keystroke clears — so repeated presses toggle
+ * one line in place instead of stacking stale lines in scrollback (the status
+ * line already carries the persistent mode badge). Without an armed frame
+ * (readLine fallback, non-TTY, tests) it falls back to a scrollback line.
+ */
+function emitCycleCopy(ctx: SlashContext, mode: CycleMode): void {
+  const text = cycleCopy(mode);
+  if (ctx.getCompositor?.()?.setModeNotice(text)) return;
+  ctx.out.line(text);
 }
 
 /**

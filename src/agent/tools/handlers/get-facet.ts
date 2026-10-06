@@ -15,7 +15,9 @@
  * New response fields added regardless of `fields`:
  *   - `session_cwd`: the `cwd` recorded in the session sidecar (may be absent
  *     for legacy sidecars).
- *   - `is_current_session`: true when `sessionId` === `context.sessionId`.
+ *   - `is_current_session`: true only when the session was resolved via the
+ *     `"current"`/`"self"` alias path (not when an explicit id coincidentally
+ *     matches the caller's sessionId).
  *   - `cwd_mismatch`: true when `session_cwd` differs from `context.resolveBase`
  *     (i.e., a cross-cwd session was returned).
  *
@@ -24,7 +26,7 @@
  * @module agent/tools/handlers/get-facet
  */
 
-import { readFileSync, statSync } from 'node:fs';
+import { openSync, readSync, closeSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { getOrDeriveFacet, listSessionIds } from '../../facets/index.js';
 import { getSessionsDir } from '../../../paths.js';
@@ -43,20 +45,60 @@ interface SidecarCwdSlice {
 }
 
 /**
- * Read the mtime and `cwd` field from a session sidecar in one pass.
- * Returns undefined when the file is unreadable or not valid JSON.
- * Parses the full sidecar JSON (which includes turns) but extracts only the
- * top-level `cwd` key.
+ * Number of bytes to read from the start of a sidecar file to extract `cwd`.
+ * The `cwd` key is always in the first few top-level fields of a sidecar, so
+ * 2 KiB is far more than needed even for sidecars with long session names.
+ */
+const SIDECAR_PREFIX_BYTES = 2048;
+
+/**
+ * Regex that extracts the value of the top-level `"cwd"` key from a JSON
+ * prefix. Handles the standard JSON encoding: any character except unescaped
+ * backslash or double-quote inside the string value.
+ */
+const CWD_FIELD_RE = /"cwd"\s*:\s*"((?:[^\\"]|\\.)*)"/;
+
+/**
+ * Read the mtime and `cwd` field from a session sidecar cheaply.
+ *
+ * Reads only the first {@link SIDECAR_PREFIX_BYTES} bytes rather than the full
+ * sidecar (which contains all turns and can be several MB). The `cwd` key
+ * appears in the first handful of top-level fields, so the prefix always
+ * covers it. Falls back to returning `cwd: undefined` when the field is absent
+ * in the prefix (e.g. legacy sidecars that pre-date the field).
+ *
+ * Returns undefined when the file is unreadable.
  */
 function readSidecarCwdSlice(path: string): SidecarCwdSlice | undefined {
+  let fd: number | undefined;
   try {
-    const mtimeMs = statSync(path).mtimeMs;
-    const raw: unknown = JSON.parse(readFileSync(path, 'utf-8'));
-    if (typeof raw !== 'object' || raw === null) return undefined;
-    const cwd = (raw as Record<string, unknown>)['cwd'];
-    return { mtimeMs, cwd: typeof cwd === 'string' ? cwd : undefined };
+    const stat = statSync(path);
+    fd = openSync(path, 'r');
+    const buf = Buffer.alloc(SIDECAR_PREFIX_BYTES);
+    const bytesRead = readSync(fd, buf, 0, SIDECAR_PREFIX_BYTES, 0);
+    const prefix = buf.slice(0, bytesRead).toString('utf-8');
+    const m = CWD_FIELD_RE.exec(prefix);
+    // JSON.parse the matched value to unescape any backslash sequences (e.g.
+    // Windows paths with \\). Wrapping in quotes makes it a valid JSON string.
+    let cwd: string | undefined;
+    if (m) {
+      try {
+        cwd = JSON.parse(`"${m[1]}"`) as string;
+      } catch {
+        cwd = m[1]; // fallback: use raw match if re-parse fails
+      }
+    }
+    return { mtimeMs: stat.mtimeMs, cwd };
   } catch {
     return undefined;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // ignore close errors
+      }
+    }
   }
 }
 
@@ -202,14 +244,12 @@ export const getFacetHandler: ToolHandler = async (input, _signal, context) => {
     sessionCwd = latestWinnerCwd;
   }
 
-  // is_current_session: true when the resolved session is the caller's own.
-  // For "current"/"self" with a known callerSessionId this is true by definition
-  // (the SDK id may differ from the sidecar filename stem, so we cannot compare
-  // sessionId === callerSessionId directly in that case — Item 4).
-  // For all other paths, compare sessionId against callerSessionId directly.
-  const isCurrentSession =
-    isSelfResolution ||
-    (callerSessionId !== undefined && sessionId === callerSessionId);
+  // is_current_session: true only when the session was resolved via the
+  // "current"/"self" alias path and the resolved session is genuinely the
+  // caller's own (isSelfResolution). An explicit-name lookup that coincidentally
+  // resolves to the same id as the caller MUST NOT set this to true — the flag
+  // is meant to indicate intentional self-inspection, not accidental id collision.
+  const isCurrentSession = isSelfResolution;
 
   // When no callerCwd is available, cwd_mismatch stays false (not a cross-cwd call).
   // When callerCwd is set but sessionCwd is unknown, also stays false (Item 3).

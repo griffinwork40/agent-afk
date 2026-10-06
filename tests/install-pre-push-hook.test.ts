@@ -221,7 +221,7 @@ describe('install-pre-push-hook', () => {
 
     const result = runInstaller(consumer, {}, consumer);
     expect(result.code).toBe(0);
-    expect(result.stdout + result.stderr).toContain('nested under a different git toplevel');
+    expect(result.stdout + result.stderr).toContain('running as a dependency');
     expect(fs.existsSync(hookPath(outer))).toBe(false);
   });
 
