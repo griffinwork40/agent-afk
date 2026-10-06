@@ -16,7 +16,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, chmodSync, accessSync, constants } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
 
@@ -64,20 +64,27 @@ describe('probeTelemetryWritable', () => {
   });
 
   it('returns an error string when the file is absent but the parent dir is read-only (injected probe)', () => {
-    // Inject a fake accessSync that denies writes to the parent directory.
+    // Inject a spy-based accessSync that denies writes to the parent directory.
     // This is portable across Windows and root CI where chmodSync on a dir has
     // no effect — the probe function is the test boundary, not the OS.
+    // Using vi.fn() lets us assert the exact arguments passed, catching a
+    // regression from dirname(filePath) back to the raw filePath.
     const eaccessErr = Object.assign(new Error('EACCES: permission denied, access \'/fake/dir\''), {
       code: 'EACCES',
     });
+    const accessSyncSpy = vi.fn((_p: string, _mode: number) => { throw eaccessErr; });
     const probe = {
       existsSync: () => false,   // file does not exist
-      accessSync: (_p: string, _mode: number) => { throw eaccessErr; },
+      accessSync: accessSyncSpy,
     };
     const result = probeTelemetryWritable(filePath, probe);
     expect(result).not.toBeNull();
     expect(typeof result).toBe('string');
     expect((result as string).length).toBeGreaterThan(0);
+    // Assert that accessSync was called with dirname(filePath) and W_OK, not
+    // the raw filePath. A dirname() → filePath regression would fail here.
+    // dirname(filePath) === dir in this test, so the expected path is deterministic.
+    expect(accessSyncSpy).toHaveBeenCalledWith(dirname(filePath), constants.W_OK);
   });
 
   it('returns null when the file exists and is writable', () => {
@@ -142,7 +149,9 @@ describe('TelemetryAlertLatch', () => {
   it('real notify() calls console.warn and pushIfConfigured on first invocation only', async () => {
     // Exercise the real notify() path (no subclass override) so pushIfConfigured
     // and console.warn are confirmed to be called.
-    // pushIfConfigured is already mocked via the hoisted vi.mock above.
+    // pushIfConfigured is mocked via the hoisted vi.mock('../../telegram/push.js')
+    // below; the mock is active for this whole file at module-evaluation time.
+    vi.mocked(pushIfConfigured).mockClear();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const fakePath = join(tmpdir(), 'afk-latch-real.jsonl');
     const latch = new TelemetryAlertLatch();
@@ -152,6 +161,9 @@ describe('TelemetryAlertLatch', () => {
 
     expect(warnSpy).toHaveBeenCalledOnce();
     expect(warnSpy.mock.calls[0][0]).toContain('Telemetry file is not writable');
+    // A dropped push call — e.g. if the await pushIfConfigured(...) line were
+    // removed — would have passed silently before; this assertion closes the gap.
+    expect(vi.mocked(pushIfConfigured)).toHaveBeenCalledOnce();
 
     warnSpy.mockRestore();
   });

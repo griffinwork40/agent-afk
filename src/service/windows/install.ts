@@ -12,15 +12,15 @@
  * @module service/windows/install
  */
 
-import { execFileSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
 import { homedir, userInfo } from 'os';
 import { dirname } from 'path';
 import type { ServiceInstallOptions, ServiceInstallOutcome, ServiceName, ServiceUninstallOutcome } from '../types.js';
 import { resolveWindowsProgramArguments } from './argv.js';
-import { SCHTASKS_TIMEOUT_MS, serviceLogPath, taskName, taskXmlPath } from './paths.js';
+import { serviceLogPath, taskName, taskXmlPath } from './paths.js';
 import { renderTaskXml } from './task-xml.js';
 import { errorMessage } from '../../utils/errors.js';
+import { schtasks, errorDetail } from './schtasks-exec.js';
 
 /** Internal install opts — adds a test seam for the neutral options. */
 export interface WindowsInstallOptions extends ServiceInstallOptions {
@@ -29,22 +29,6 @@ export interface WindowsInstallOptions extends ServiceInstallOptions {
    * For tests that stub the telegram manager to return a fake path.
    */
   _entrypointExistsCheck?: (p: string) => boolean;
-}
-
-/** Run a `schtasks` subcommand with standard options. */
-function schtasks(args: string[]): Buffer {
-  return execFileSync('schtasks', args, {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-    timeout: SCHTASKS_TIMEOUT_MS,
-  });
-}
-
-/** Extract the most actionable message from an execFileSync error. */
-function errorDetail(err: unknown): string {
-  const stderr = (err as { stderr?: Buffer | string }).stderr;
-  const text = stderr ? stderr.toString().trim() : '';
-  return text || errorMessage(err);
 }
 
 /**

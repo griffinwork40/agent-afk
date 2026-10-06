@@ -7,7 +7,6 @@
  * @module service/windows/manager
  */
 
-import { execFileSync } from 'child_process';
 import { existsSync } from 'fs';
 import type {
   ServiceInstallOptions,
@@ -19,25 +18,11 @@ import type {
   ServiceUninstallOutcome,
   ServiceUpgradeOutcome,
 } from '../types.js';
-import { SCHTASKS_TIMEOUT_MS, serviceLogPath, taskName, taskXmlPath } from './paths.js';
+import { serviceLogPath, taskName, taskXmlPath } from './paths.js';
 import { installWindowsTask, readTaskFile, renderWindowsTask, uninstallWindowsTask, writeUtf16Le } from './install.js';
 import { windowsStatus } from './status.js';
 import { errorMessage } from '../../utils/errors.js';
-
-/** Run a `schtasks` command; extract stderr on failure. */
-function schtasks(args: string[]): Buffer {
-  return execFileSync('schtasks', args, {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-    timeout: SCHTASKS_TIMEOUT_MS,
-  });
-}
-
-function errorDetail(err: unknown): string {
-  const stderr = (err as { stderr?: Buffer | string }).stderr;
-  const text = stderr ? stderr.toString().trim() : '';
-  return text || errorMessage(err);
-}
+import { schtasks, errorDetail } from './schtasks-exec.js';
 
 export const windowsManager: ServiceManager = {
   backend: 'task-scheduler',
@@ -81,17 +66,28 @@ export const windowsManager: ServiceManager = {
     return { kind: 'upgraded', configPath: xmlPath, label };
   },
 
-  restart(name: ServiceName, _opts?: ServiceInstallOptions): ServiceRestartOutcome {
+  restart(name: ServiceName, opts?: ServiceInstallOptions): ServiceRestartOutcome {
     const xmlPath = taskXmlPath(name);
     const label = taskName(name);
     if (!existsSync(xmlPath)) {
       return { kind: 'not-installed', configPath: xmlPath };
     }
+
+    // Per the ServiceManager.restart docstring: attempt to upgrade the
+    // on-disk task XML before restarting so that any config changes take
+    // effect. A failed upgrade is non-fatal — we surface it as a warning
+    // and continue with the restart against the existing XML.
+    const notes: string[] = [];
+    const upgradeResult = windowsManager.upgrade(name, opts ?? {});
+    if (upgradeResult.kind === 'failed') {
+      notes.push(`[afk:service] upgrade before restart failed: ${upgradeResult.reason}`);
+    }
+
     // End best-effort (may fail if not running — that's fine).
     try { schtasks(['/End', '/TN', label]); } catch { /* ignore */ }
     try {
       schtasks(['/Run', '/TN', label]);
-      return { kind: 'restarted', label };
+      return notes.length > 0 ? { kind: 'restarted', label, notes } : { kind: 'restarted', label };
     } catch (err) {
       return { kind: 'failed', reason: `schtasks /Run failed: ${errorDetail(err)}` };
     }

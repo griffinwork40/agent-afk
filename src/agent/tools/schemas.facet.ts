@@ -37,8 +37,9 @@ export const getFacetTool: AnthropicToolDef = {
     'allowlist:\n' +
     '  - `session_cwd` — the `cwd` recorded in the session sidecar (null for legacy ' +
     'sidecars that predate the field).\n' +
-    '  - `is_current_session` — true when the resolved session is the caller\'s own ' +
-    'session (i.e. session id matches the dispatch context).\n' +
+    '  - `is_current_session` — true only when the session was resolved via the ' +
+    '"current"/"self" alias and the resolved session matches the caller\'s id. ' +
+    'An explicit id lookup that coincidentally matches the caller\'s id does NOT set this.\n' +
     '  - `cwd_mismatch` — true when `session_cwd` differs from the caller\'s working ' +
     'directory (signals a cross-cwd analysis that may be unintentional).',
   input_schema: {

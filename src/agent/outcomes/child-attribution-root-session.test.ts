@@ -15,7 +15,7 @@
  * and works without an outcomesDir override.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Mock appendArtifacts before importing child-attribution
@@ -46,11 +46,6 @@ function runHook(context: Record<string, unknown>) {
 describe('createChildAttributionHook — rootSessionId chain (#2442)', () => {
   beforeEach(() => {
     appendArtifactsSpy.mockClear();
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
   });
 
   /**
@@ -67,8 +62,10 @@ describe('createChildAttributionHook — rootSessionId chain (#2442)', () => {
       output: '[main abc1111] feat: direct-child commit',
     });
 
-    // Drain the fire-and-forget microtask (Promise.resolve().then(...))
-    await vi.runAllTimersAsync();
+    // Production uses Promise.resolve().then(...) — a microtask, not a timer.
+    // One await Promise.resolve() yields to the microtask queue and is enough
+    // for the fire-and-forget callback to run.
+    await Promise.resolve();
 
     expect(appendArtifactsSpy).toHaveBeenCalledOnce();
     expect(appendArtifactsSpy.mock.calls[0][0]).toBe('root-depth-0');
@@ -92,7 +89,7 @@ describe('createChildAttributionHook — rootSessionId chain (#2442)', () => {
       output: '[main bbb2222] fix: grandchild commit',
     });
 
-    await vi.runAllTimersAsync();
+    await Promise.resolve();
 
     expect(appendArtifactsSpy).toHaveBeenCalledOnce();
     // Must credit to the ROOT, not the intermediate
@@ -116,7 +113,7 @@ describe('createChildAttributionHook — rootSessionId chain (#2442)', () => {
       output: 'https://github.com/org/repo/pull/99',
     });
 
-    await vi.runAllTimersAsync();
+    await Promise.resolve();
 
     expect(appendArtifactsSpy).toHaveBeenCalledOnce();
     expect(appendArtifactsSpy.mock.calls[0][0]).toBe('root-pr-depth-0');
@@ -138,7 +135,7 @@ describe('createChildAttributionHook — rootSessionId chain (#2442)', () => {
       output: '[main ccc3333] chore: explicit-root commit',
     });
 
-    await vi.runAllTimersAsync();
+    await Promise.resolve();
 
     expect(appendArtifactsSpy).toHaveBeenCalledOnce();
     expect(appendArtifactsSpy.mock.calls[0][0]).toBe('same-root');
@@ -157,7 +154,7 @@ describe('createChildAttributionHook — rootSessionId chain (#2442)', () => {
       output: '[main ddd4444] feat: top-level commit',
     });
 
-    await vi.runAllTimersAsync();
+    await Promise.resolve();
 
     expect(result).toEqual({});
     expect(appendArtifactsSpy).not.toHaveBeenCalled();

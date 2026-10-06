@@ -14,8 +14,16 @@
  *
  * Environment: Task Scheduler has no native env block in the XML schema.
  * We prepend `set "K=V" && ` segments in the cmd.exe command line. Only
- * sorted, safe values are accepted (values containing `"` or `%` are
- * rejected to keep the quoting model simple).
+ * sorted, safe values are accepted (values containing `"`, `%`, CR, LF,
+ * or NUL are rejected to keep the quoting model simple and to prevent
+ * newline injection that could split the `set` chain).
+ *
+ * Security note: the task XML file is written to disk with mode 0o600,
+ * but NTFS does not honour POSIX permission bits — the file ACL is
+ * controlled by Windows, not by the mode parameter. Environment variable
+ * values stored in the task XML therefore sit in plaintext on disk under
+ * standard NTFS ACLs. Do not pass secrets through the task environment
+ * until NTFS ACL hardening is implemented.
  *
  * @module service/windows/task-xml
  */
@@ -36,8 +44,8 @@ export interface TaskXmlOptions {
    * Extra env vars. Task Scheduler has no native env block; each entry is
    * prepended as `set "K=V" && ` in the cmd.exe arguments string.
    * Keys must match `[A-Za-z_][A-Za-z0-9_]*` — entries with non-conforming
-   * keys are silently skipped. Values containing `"` or `%` are also silently
-   * skipped (documented here).
+   * keys are silently skipped. Values containing `"`, `%`, CR, LF, or NUL
+   * are also silently skipped (documented here).
    */
   environmentVariables?: Record<string, string>;
 }
@@ -70,8 +78,8 @@ function cmdQuoteArg(arg: string): string {
  *   3. Redirects stdout+stderr to the log file (appending).
  *
  * The entire expression is wrapped in an extra pair of double-quotes as
- * required by `cmd /d /s /c "<expression>"`. Values containing `"` or `%`
- * are skipped (see module docstring).
+ * required by `cmd /d /s /c "<expression>"`. Values containing `"`, `%`,
+ * CR, LF, or NUL are skipped (see module docstring).
  */
 function buildCmdArguments(
   args: string[],
@@ -86,7 +94,9 @@ function buildCmdArguments(
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) continue;
       const v = env[k] ?? '';
       // Reject values with " or % — both break cmd.exe quoting.
-      if (v.includes('"') || v.includes('%')) continue;
+      // Also reject CR, LF, NUL — any of these would split the `set` chain
+      // or corrupt the cmd.exe command line.
+      if (v.includes('"') || v.includes('%') || /[\r\n\0]/.test(v)) continue;
       // set "K=V" — wrapping value in quotes handles spaces; no % expansion.
       envParts.push(`set "${k}=${v}"`);
     }
@@ -114,6 +124,9 @@ function buildCmdArguments(
 export function renderTaskXml(opts: TaskXmlOptions): string {
   const cmdArgs = buildCmdArguments(opts.programArguments, opts.logFile, opts.environmentVariables);
   const lines: string[] = [];
+  // The declaration says UTF-16 because the caller (writeUtf16Le) re-encodes
+  // this UTF-8 string as UTF-16LE with a BOM before writing to disk.
+  // The in-memory string is UTF-8; the on-disk file is UTF-16LE.
   lines.push('<?xml version="1.0" encoding="UTF-16"?>');
   lines.push('<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">');
   // RegistrationInfo

@@ -11,8 +11,48 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.299.7] - 2026-10-06
+
+### Fixed
+- replace `as OutputEvent[]` casts with `satisfies` in stream tests (#3041) (2742fbdd)
+- head+tail signature cap, remove dead nudged field, reword invariant comment (#3043) (be05492c)
+- parentRootSessionId JSDoc and microtask test drain (#3035) (fcf63c7a)
+- consolidate safeAnswer into farm-callbacks.helpers.ts (#3044) (7992ff73)
+- update is_current_session description, fix TOCTOU, document 2048-byte bound (#3045) (47eb5f2e)
+- locale-neutral schtasks CSV parsing, CR/LF/NUL guard, restart upgrade, dedup (#3034) (f29b7d75)
+
+### Changed
+- strengthen spy assertions in telemetry-write-guard tests (#3036) (988d38a7)
+
+## [5.299.6] - 2026-10-06
+
+### Fixed
+- override proxy-addr >=2.0.8 and source-map-js >=1.2.2 (GHSA-jqcg-44mw-7w3h, GHSA-68fv-2mgg-jv7q) (#3046) (d627aedd)
+- exhaustive switch in closureFromTrace and inline comment in normalClosure (#3031) (2e6349e7)
+
+## [5.299.5] - 2026-10-06
+
 ### Added
 - Windows Task Scheduler backend for `afk service` (install/uninstall/status/restart/upgrade via `schtasks`, user-level, no elevation) (#1602)
+
+### Added
+- advisory same-error strategy nudge + surprise rule in system prompt (#3016) (6bfe6196)
+- add orchestrator-owned pre-push re-check to /ship (#3023) (c1134ebc)
+
+### Fixed
+- restore handleEnter invariants and narrow CsiHost width (#3025) (6cdbd0d9)
+- don't re-show archived rows on small content-hug shrinks (#3018) (b207b50e)
+- Shift+Tab mode switch toggles one live notice instead of stacking scrollback lines (#3021) (856931eb)
+- harden dead-letter quarantine — unique suffix, orphan dead-letter, benign race doc (#3024) (8d64c73c)
+- address advisory findings from pre-push hook review (#3019) (74661760)
+- tighten isExecError guard, add response-output tests, fix farm.ts arrows (#3022) (e44c2c2c)
+- readSidecarCwdSlice prefix read, is_current_session self-alias only, additive contract doc (#3017) (5def1400)
+- import renderReceiptMarkdown before re-exporting in receipt.ts (#3020) (a5e0edfc)
+
+### Changed
+- no service/auto-start support (daemon, Telegram bot) (#2347) (2e16379c)
+- audit production code for POSIX path assumptions (#2345) (585a17ae)
+- add hook-level dedup test and root-only contract comment (#3011) (8e2c1ce8)
 
 ## [5.299.4] - 2026-10-06
 
