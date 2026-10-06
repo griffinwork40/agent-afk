@@ -57,7 +57,7 @@ const PIXEL_PALETTE: Record<string, [number, number, number] | null> = {
   // out-shouted the eyes; the band steps down so the eyes stay the brightest
   // thing in the footer. The banner band keeps full Y (it has room).
   // #C4A030 ≈ [196, 160, 48]
-  G: [196, 160, 48],
+  G: [196, 160, 48], // mini-only accent
 };
 
 /**
@@ -79,7 +79,8 @@ const PIXEL_PALETTE: Record<string, [number, number, number] | null> = {
  * and read as mean; 1px arches read as wire-rim glasses); the nose is a lit,
  * bulbous hook with nostrils, separated from the mouth by the upper lip; the
  * cheeks stay in line with the head (stepping them out a column read as
- * jowly) and the jaw tapers to a pointed chin. Rows 7 down are authored as mirrored halves, so the symmetry
+ * jowly) and the jaw tapers to a pointed chin.
+ * Rows 7 down are authored as mirrored halves, so the symmetry
  * rule holds by construction. Supersedes v14/v15/v16.
  */
 const GOBLIN_GRID: readonly string[] = [
