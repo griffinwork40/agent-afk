@@ -37,6 +37,28 @@ import { setupPeerBoundary, applyDeferPeers } from './loop-iteration.boundary.js
 const MAX_AUTO_RESUMES_PER_TURN = 3;
 
 /**
+ * Render and write the submitted-echo line for a non-silent seed-buffer entry.
+ *
+ * Contract: only called when `queued.echo !== 'silent'`; the caller is
+ * responsible for the guard. Takes explicit parameters rather than closing over
+ * loop locals so the function is extractable without behavioural change.
+ */
+function renderSeedEcho(
+  replRenderer: InteractiveCtx['replRenderer'],
+  permissionMode: InteractiveCtx['stats']['permissionMode'],
+  queued: { text: string; attachments: readonly ImageAttachment[] },
+): void {
+  const prompt = buildPrompt(permissionMode, queued.text);
+  const echo = formatSubmittedEcho({
+    buffer: queued.text,
+    promptText: prompt,
+    isTTY: Boolean(process.stdout.isTTY),
+    attachmentSummary: describeAttachmentSummary([...queued.attachments]),
+  });
+  replRenderer.writeLine(echo);
+}
+
+/**
  * Phase 3 of the REPL loop — the main input loop.
  *
  * Owns the per-loop mutable state (seed buffer, deferred init metadata,
@@ -149,14 +171,7 @@ export async function runInputLoop(
       seedBuffer = undefined;
       silentSeed = queued.echo === 'silent';
       if (queued.echo !== 'silent') {
-        const prompt = buildPrompt(ctx.stats.permissionMode, queued.text);
-        const echo = formatSubmittedEcho({
-          buffer: queued.text,
-          promptText: prompt,
-          isTTY: Boolean(process.stdout.isTTY),
-          attachmentSummary: describeAttachmentSummary([...queued.attachments]),
-        });
-        ctx.replRenderer.writeLine(echo);
+        renderSeedEcho(ctx.replRenderer, ctx.stats.permissionMode, queued);
       }
       queuedHumanTurn = queued.queuedSubmission === true;
       text = queued.text.trim();
