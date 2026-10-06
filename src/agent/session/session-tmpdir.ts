@@ -224,7 +224,20 @@ export class SessionTmpdir {
    *      directory (not a symlink that somehow replaced it between steps 3
    *      and 4, which would require attacker knowledge of the random name
    *      before it is chosen, which is infeasible with 32 bits of entropy).
+   *      Best-effort rm(sibling) on bail to avoid a dangling .rm entry.
    *   5. rm(sibling) with recursive+force.
+   *
+   * EXDEV (cross-device rename): On bind-mounted tmpdirs in containers, rename
+   * can fail with EXDEV. We fall back to a direct rm in that case. The TOCTOU
+   * window is not fully closed for the EXDEV path: a concurrent actor with
+   * write access to the parent could swap this.dir for a symlink between the
+   * fresh lstat and the rm call. However, the parent directory (afk-<uid>/) is
+   * created with mode 0o700 and is owned by this process's uid, so the attacker
+   * would need to already be running as this uid — at which point they have
+   * full access to the session dir anyway. The residual exposure is therefore
+   * negligible within the threat model (concurrent session isolation on a
+   * developer machine or CI runner). A fresh lstat immediately before the rm
+   * eliminates the window for any adversary who cannot predict the syscall gap.
    *
    * Residual risk: on network filesystems (NFS, SMB) or across mount points
    * rename may not be atomic, and the parent-directory write-access
@@ -252,17 +265,36 @@ export class SessionTmpdir {
       // cannot swap it for a symlink before the rm that follows.
       const siblingName = randomBytes(4).toString('hex') + '.rm';
       const sibling = path.join(path.dirname(this.dir), siblingName);
-      await fs.promises.rename(this.dir, sibling);
+      try {
+        await fs.promises.rename(this.dir, sibling);
+      } catch (renameErr) {
+        if ((renameErr as NodeJS.ErrnoException).code !== 'EXDEV') throw renameErr;
+        // EXDEV: this.dir and its parent are on different mount points (e.g. a
+        // bind-mounted tmpdir in a container). Rename cannot cross devices, so
+        // fall back to a direct rm. Re-lstat immediately to close most of the
+        // lstat-to-rm window; the 0o700 parent dir restricts who can race here
+        // (see EXDEV comment in the docblock above).
+        const st3 = await fs.promises.lstat(this.dir);
+        if (!st3.isDirectory() || st3.isSymbolicLink()) return;
+        await fs.promises.rm(this.dir, { recursive: true, force: true });
+        return;
+      }
       // Step 4: re-verify the renamed entry is still a real directory.
       // If rename landed on a symlink (infeasible with 32-bit random suffix
-      // on a local FS, but checked for defense-in-depth), bail.
+      // on a local FS, but checked for defense-in-depth), bail. Best-effort
+      // remove the sibling so it does not linger as a dangling .rm entry.
       const st2 = await fs.promises.lstat(sibling);
-      if (!st2.isDirectory() || st2.isSymbolicLink()) return;
+      if (!st2.isDirectory() || st2.isSymbolicLink()) {
+        // Best-effort: remove the sibling we just created (unguessable name,
+        // so attacker cannot pre-target it; rm is safe here).
+        await fs.promises.rm(sibling, { recursive: true, force: true }).catch(() => undefined);
+        return;
+      }
       // Step 5: remove the renamed directory. The path is unguessable and
       // this.dir no longer exists, so the TOCTOU window is closed.
       await fs.promises.rm(sibling, { recursive: true, force: true });
     } catch {
-      // Already gone, rename failed (cross-device), or unreadable:
+      // Already gone, rename failed (non-EXDEV), or unreadable:
       // nothing this session can reclaim.
     }
   }

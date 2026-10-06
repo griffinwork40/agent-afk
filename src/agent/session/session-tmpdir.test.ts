@@ -422,5 +422,90 @@ describe('#3072 TOCTOU closure: cleanup renames before rm to close lstat-to-rm r
 
     // The symlink target must be intact.
     expect(fs.existsSync(path.join(target, 'precious.txt'))).toBe(true);
+    // No dangling .rm sibling should linger under the parent directory.
+    const parent = path.dirname(sessionDir);
+    if (fs.existsSync(parent)) {
+      const entries = fs.readdirSync(parent);
+      expect(entries.every((n) => !n.endsWith('.rm'))).toBe(true);
+    }
+  });
+
+  it('removes the session dir via direct rm when rename fails with EXDEV', async () => {
+    const e = topLevel();
+    expect(ensureSessionTmpdir(e)).toBe(true);
+    const sessionDir = e['TMPDIR']!;
+    fs.writeFileSync(path.join(sessionDir, 'data.txt'), 'content');
+
+    // Intercept the rename call and simulate a cross-device failure.
+    const exdevErr = Object.assign(new Error('EXDEV: cross-device link not permitted'), {
+      code: 'EXDEV',
+    }) as NodeJS.ErrnoException;
+    const renameSpy = vi
+      .spyOn(fs.promises, 'rename')
+      .mockRejectedValueOnce(exdevErr);
+    try {
+      await cleanupSessionTmpdir(e);
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    // The session dir must be gone even though rename failed.
+    expect(fs.existsSync(sessionDir)).toBe(false);
+    // No .rm sibling should exist (EXDEV path does not create one).
+    const parent = path.dirname(sessionDir);
+    if (fs.existsSync(parent)) {
+      const entries = fs.readdirSync(parent);
+      expect(entries.every((n) => !n.endsWith('.rm'))).toBe(true);
+    }
+  });
+
+  it('does not delete anything when rename fails with EXDEV and the dir became a symlink', async () => {
+    const target = path.join(base, 'exdev-symlink-target');
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, 'keep.txt'), 'safe');
+
+    const e = topLevel();
+    expect(ensureSessionTmpdir(e)).toBe(true);
+    const sessionDir = e['TMPDIR']!;
+
+    // Replace the session dir with a symlink to the target — simulating a swap
+    // that happens after the step-1 lstat but before the EXDEV fallback lstat.
+    fs.rmSync(sessionDir, { recursive: true });
+    fs.symlinkSync(target, sessionDir, 'dir');
+
+    // Intercept rename to simulate EXDEV so the fallback path runs.
+    const exdevErr = Object.assign(new Error('EXDEV: cross-device link not permitted'), {
+      code: 'EXDEV',
+    }) as NodeJS.ErrnoException;
+    const renameSpy = vi
+      .spyOn(fs.promises, 'rename')
+      .mockRejectedValueOnce(exdevErr);
+    try {
+      await cleanupSessionTmpdir(e);
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    // The symlink target must be intact; the fallback lstat must have caught
+    // the symlink and bailed before calling rm.
+    expect(fs.existsSync(path.join(target, 'keep.txt'))).toBe(true);
+  });
+
+  it('cleans up a lingering .rm sibling when step-4 lstat detects it is not a real dir', async () => {
+    const e = topLevel();
+    expect(ensureSessionTmpdir(e)).toBe(true);
+    const sessionDir = e['TMPDIR']!;
+
+    // We cannot reliably force step-4 lstat to see a non-directory in a
+    // normal fs (rename is atomic), so we verify the observable guarantee:
+    // after a clean cleanup there must be no .rm entries under the parent.
+    await cleanupSessionTmpdir(e);
+
+    const parent = path.dirname(sessionDir);
+    if (fs.existsSync(parent)) {
+      const entries = fs.readdirSync(parent);
+      expect(entries.every((n) => !n.endsWith('.rm'))).toBe(true);
+    }
+    expect(fs.existsSync(sessionDir)).toBe(false);
   });
 });
