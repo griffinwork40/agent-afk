@@ -100,6 +100,7 @@ export function classifyClosureReason(i: ClosureReasonInputs): ClosureReason {
   // never `model_end_turn`: the turn did NOT end because the model was done.
   if (i.lastStopReason === OVERLOAD_EXHAUSTED) return 'abort';
   if (i.lastStopReason === 'tool_use_loop_capped') return 'iteration_cap';
+  if (i.lastStopReason === 'context_pressure_wind_down') return 'truncated';
   // Sibling of the round cap above, keyed off the TIME trigger. Reuses the
   // existing `timeout` reason rather than minting a new one: the session ended
   // because its wall-clock budget ran out, which is exactly what `timeout`

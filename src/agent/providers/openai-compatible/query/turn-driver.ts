@@ -34,6 +34,8 @@ import { supportsVision } from '../../../model-capabilities.js';
 import { usageFromState, finalizedToolCalls, type StreamState } from '../translate.js';
 import { checkContextOverflow } from './context-overflow.js';
 import { roundContextWindowTokens } from './turn-driver.context-window.js';
+import { windDownForContextPressure, canSynthesizeUnderPressure } from './context-pressure.js';
+import { CONTEXT_PRESSURE_WIND_DOWN } from '../../shared/context-pressure.js';
 import {
   runIteration,
   finishTurn,
@@ -145,7 +147,7 @@ function makeCompositeIteration(
   ctx: TurnDriverContext,
   controller: AbortController,
   vision: boolean,
-  windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null,
+  windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | typeof CONTEXT_PRESSURE_WIND_DOWN | null,
 ): ReturnType<typeof runIterationWithQuotaLimitPause> {
   return runIterationWithQuotaLimitPause(
     () => runIterationWithOverloadPause(
@@ -258,7 +260,7 @@ export async function* runTurnInner(
     let finalAssistantText = '';
     let finalReasoningText = '';
     let finalReasoningField: 'reasoning_content' | 'reasoning' = 'reasoning_content';
-    let windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null = null;
+    let windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | typeof CONTEXT_PRESSURE_WIND_DOWN | null = null;
     let round = 0;
     let toolCallCount = 0;
     // Invariant: tool calls that were being streamed when the output cap cut the
@@ -310,6 +312,7 @@ export async function* runTurnInner(
         break;
       }
 
+      const appendedAt = ctx.priorTurns.length;
       const denialTrip = yield* dispatchAndAppend(ctx, result.state, controller.signal, vision);
       if (denialTrip) {
         ctx.abort.clear(controller);
@@ -331,6 +334,14 @@ export async function* runTurnInner(
         return;
       }
 
+      if (windDownForContextPressure(ctx, appendedAt)) {
+        windDownReason = CONTEXT_PRESSURE_WIND_DOWN;
+        if (!canSynthesizeUnderPressure(ctx, appendedAt)) {
+          finalAssistantText ||= 'Context capacity exhausted. Partial tool outputs are journaled; resume from saved work.';
+          break;
+        }
+        continue;
+      }
       const roundsSpent = shouldWindDown(round, maxIterations);
       const timeSpent = softDeadlineExpired(turnStartTime, softDeadlineMs);
       if (roundsSpent || timeSpent) {
@@ -406,7 +417,7 @@ async function* emitTurnTerminal(
   finalAssistantText: string,
   droppedToolNames: string[],
   accumulatedUsage: ProviderUsage,
-  windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null,
+  windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | typeof CONTEXT_PRESSURE_WIND_DOWN | null,
   turnStartTime: number,
 ): AsyncGenerator<ProviderEvent> {
   // Invariant: the truncation notice is APPENDED to the single terminal
