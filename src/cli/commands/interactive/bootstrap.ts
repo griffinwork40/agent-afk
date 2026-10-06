@@ -196,7 +196,7 @@ export async function bootstrapSession(
 
   const requestResume = createResumeRequest(
     () => ctx, sessionRef, sharedDeps,
-    { subagentExecutor, skillExecutor, composeExecutor, rootManager, backgroundRegistry },
+    { subagentExecutor, skillExecutor, composeExecutor, rootManager, backgroundRegistry, processJobs },
     () => trustedSkillLedger.clear(), maxTurnsNum,
   );
 

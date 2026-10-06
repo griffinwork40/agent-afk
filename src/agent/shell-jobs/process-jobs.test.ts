@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { InMemoryTraceWriter } from '../trace/writer.js';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -214,6 +215,27 @@ describe('ProcessJobRegistry', () => {
     const job = reg.start({ command: 'true', env: process.env, cwd: path.join(dir, 'nope') });
     const done = await reg.waitFor(job.id);
     expect(done?.status).toBe('failed');
+  });
+});
+
+describe('ProcessJobRegistry.setTraceWriter (resume rebind)', () => {
+  it('events after a rebind go to the new writer, not the original writer', async () => {
+    const writer1 = new InMemoryTraceWriter();
+    const writer2 = new InMemoryTraceWriter();
+    const r = new ProcessJobRegistry({ logDir: dir, sweep: false, cancelGraceMs: 300, traceWriter: writer1 });
+    // Rebind to writer2 before any job runs.
+    r.setTraceWriter(writer2);
+    const job = r.start({ command: 'echo settled-test', env: process.env });
+    await r.waitFor(job.id);
+    const isSettled = (e: { kind: string; payload: unknown }): boolean =>
+      e.kind === 'session_phase' &&
+      typeof e.payload === 'object' && e.payload !== null &&
+      (e.payload as Record<string, unknown>)['phase'] === 'background_process_settled';
+    const settled1 = writer1.events.filter(isSettled);
+    const settled2 = writer2.events.filter(isSettled);
+    expect(settled1).toHaveLength(0);
+    expect(settled2).toHaveLength(1);
+    await r.killAll();
   });
 });
 

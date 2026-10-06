@@ -130,7 +130,7 @@ export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
   readonly sessionLabel: string;
   readonly logDir: string;
   readonly maxConcurrent: number;
-  private readonly opts: ProcessJobRegistryOptions;
+  private opts: ProcessJobRegistryOptions;
   private readonly jobs = new Map<string, InternalJob>();
   private counter = 0;
   /** Set by killAll(): a registry being torn down accepts no new jobs. */
@@ -270,6 +270,15 @@ export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
     return running.map((j) => this.snapshot(j));
   }
 
+  /**
+   * Replace the trace writer used for settlement events. Called by the resume
+   * rebind cascade (`bootstrap-resume.ts`) so events after a `/resume` go to
+   * the new session's writer instead of the sealed pre-resume writer.
+   */
+  setTraceWriter(writer: TraceSink | undefined): void {
+    this.opts = { ...this.opts, traceWriter: writer };
+  }
+
   /** Remove the process exit hook. Running jobs are NOT stopped. */
   dispose(): void {
     if (!this.exitHookInstalled) return;
@@ -294,6 +303,9 @@ export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
         status: snap.status,
         exitCode: snap.exitCode !== undefined && snap.exitCode !== null ? String(snap.exitCode) : '',
         signal: snap.signal ?? '',
+        // snap.endedAt is always set by onSettled() before this runs; the
+        // ?? Date.now() fallback is unreachable in practice but kept as a
+        // defensive guard against future refactoring that separates the two.
         durationMs: (snap.endedAt ?? Date.now()) - snap.startedAt,
         bytes: snap.bytes,
       },
