@@ -12,7 +12,7 @@ function makeSpySink(): { sink: TraceSink; written: unknown[] } {
   const written: unknown[] = [];
   const sink: TraceSink = {
     write: vi.fn(async (event: unknown) => { written.push(event); }),
-    filePath: '/tmp/test-trace.jsonl',
+    getTracePath: () => '/tmp/test-trace.jsonl',
   };
   return { sink, written };
 }
