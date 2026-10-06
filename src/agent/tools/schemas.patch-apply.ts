@@ -65,7 +65,7 @@ export const patchApplyTool: AnthropicToolDef = {
               },
             },
             content: {
-              type: 'string',
+              type: ['string', 'null'],
               description:
                 'Full replacement content for the file. Mutually exclusive with `edits`: ' +
                 'when using `edits`, omit this field or pass `""` or `null` as a placeholder. ' +
