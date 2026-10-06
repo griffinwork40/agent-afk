@@ -346,6 +346,53 @@ describe('setPresenceActivityTurnEnd', () => {
     // Must store 42, not 1 (old code would compute (prev?.turns ?? 0) + 1 = 1).
     expect(rec?.activity?.turns).toBe(42);
   });
+
+  it('does NOT store auto-resume directive as promptHead when no prior promptHead exists (security)', async () => {
+    // Security regression test (spec item #3 / PR #3139):
+    // setPresenceActivityTurnEnd has a fallback that seeds promptHead from
+    // rawUserText when no promptHead has been stored yet (first-turn case where
+    // sessionId was undefined at turn start). If rawUserText is a synthetic
+    // auto-resume directive, the fallback must silently skip it — the directive
+    // is internal wakeup text, not operator-typed content, and must never appear
+    // in the presence file where peer sessions can read it.
+    await writeInitialPresence();
+    const { setPresenceActivityTurnEnd } = await getActivityMod();
+
+    // No prior setPresenceActivityPromptHead call — activity.promptHead is absent.
+    const directive = '[auto-resume] The background task above has finished. Continue the work it was dispatched for.';
+    await setPresenceActivityTurnEnd(SESSION_ID, 1, directive);
+
+    const rec = await readPresenceRecord();
+    // Turns must be recorded normally.
+    expect(rec?.activity?.turns).toBe(1);
+    // promptHead must remain absent — the directive must not be stored.
+    expect(rec?.activity?.promptHead).toBeUndefined();
+  });
+
+  it('does NOT store peer-wake auto-resume directive as promptHead when no prior promptHead exists', async () => {
+    // Same security guard, peer-message variant of the directive.
+    await writeInitialPresence();
+    const { setPresenceActivityTurnEnd } = await getActivityMod();
+
+    const directive = '[auto-resume] A message from another afk session arrived above. Handle it per the peer-message rules; reply with send_to_session only if a reply is useful.';
+    await setPresenceActivityTurnEnd(SESSION_ID, 2, directive);
+
+    const rec = await readPresenceRecord();
+    expect(rec?.activity?.turns).toBe(2);
+    expect(rec?.activity?.promptHead).toBeUndefined();
+  });
+
+  it('normal rawUserText is still seeded as promptHead when no prior promptHead exists (guard does not over-block)', async () => {
+    // Confirm the auto-resume guard does NOT affect the legitimate fallback path.
+    await writeInitialPresence();
+    const { setPresenceActivityTurnEnd } = await getActivityMod();
+
+    await setPresenceActivityTurnEnd(SESSION_ID, 1, 'run the test suite');
+
+    const rec = await readPresenceRecord();
+    expect(rec?.activity?.turns).toBe(1);
+    expect(rec?.activity?.promptHead).toBe('run the test suite');
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -76,8 +76,10 @@ export function prependTurnInjections(runText: string, sources: readonly Injecti
  *
  * When state is `'idle'`, `totalTurns` is `ctx.stats.totalTurns` after the
  * turn is counted — stored directly so resumed sessions start from the
- * correct historical total rather than resetting to 1. `rawUserText` is also
- * forwarded for first-turn fallback (see setPresenceActivityTurnEnd JSDoc).
+ * correct historical total rather than resetting to 1. `rawUserText` is
+ * forwarded for first-turn fallback (see setPresenceActivityTurnEnd JSDoc),
+ * but `setPresenceActivityTurnEnd` will silently discard it when it is a
+ * synthetic auto-resume directive — those must never appear as promptHead.
  */
 export function markPresenceTurn(sessionId: string | undefined, state: 'busy', rawUserText?: string): void;
 export function markPresenceTurn(sessionId: string | undefined, state: 'idle', rawUserText: string | undefined, totalTurns: number): void;
