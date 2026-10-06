@@ -1,6 +1,7 @@
 ---
 name: shadow-verify
-description: "Dispatch a parallel adversarial verifier wave after any high-stakes sub-agent investigation (code reviews, audits, findings reports, large refactors, gap analyses) — or whenever a sub-agent asserts a claim with high-confidence language (\"confident\", \"certain\", \"clearly\", ≥80%), since confidence is a trigger, not a verdict. Shadow verifiers independently re-derive 2–3 key claims from scratch using tool calls only, returning CONFIRMED/REFUTED/STALE/UNVERIFIABLE, and flag disagreements before the user acts. Use when sub-agent output will drive decisions, file changes, commits, or external side-effects."
+description: "Dispatch a parallel adversarial verifier wave after any high-stakes sub-agent investigation (code reviews, audits, findings reports, large refactors, gap analyses) — or whenever a sub-agent asserts a claim with high-confidence language (\"confident\", \"certain\", \"clearly\", ≥80%), since confidence is a trigger, not a verdict. Default mode: shadow verifiers independently re-derive 2–3 key claims from scratch using tool calls only. --findings-list mode: exhaustively verifies every finding in a pre-existing findings document before any action phase is dispatched, producing a numbered completeness checklist and a terminal gate verdict (VERIFIED/PARTIAL/BLOCKED). Both modes return CONFIRMED/REFUTED/STALE/UNVERIFIABLE verdicts and flag disagreements before the user acts."
+argument-hint: "[--findings-list <file | inline-findings>] [--goal <session-goal>] [--action <planned-action>]"
 context: load
 ---
 
@@ -9,29 +10,43 @@ context: load
 
 When a sub-agent (or wave) returns investigation findings, code-review conclusions, audit claims, refactor plans, gap-analysis results, or counts that will drive user decisions or file changes, do NOT surface the report. Instead, run a shadow verification wave **before** merging.
 
+---
+
+## Invocation modes
+
+This skill has two invocation modes that share the same verifier machinery, normalization pre-flight, merge rules, gate logic, and composition-axis guard — but differ in scope and output shape.
+
+**Default mode (no flag):** Sample 2–3 highest-stakes claims from a sub-agent's live output and verify them before surfacing the report. Optimized for latency — catches critical errors without blocking on exhaustive coverage.
+
+**`--findings-list` mode:** Exhaustively verify every finding in a pre-existing findings document (a file path or inline text) before any downstream action phase is dispatched. Every finding 1–N must appear in the output checklist — no finding may be omitted or left blank. Produces a terminal gate verdict (`VERIFIED` / `PARTIAL` / `BLOCKED`) that controls whether a downstream action phase may proceed. Use this when an operator supplies a research-phase output and wants a completeness guarantee before committing to action.
+
+---
+
 ### Pre-flight: claim normalization and scale guard
 
-Before dispatching verifiers, the coordinating agent normalizes each claim to a canonical form:
+Before dispatching any verifiers (in either mode), the coordinating agent normalizes each finding/claim to a canonical tuple:
 
 ```
-[CLAIM_ID] <subject> :: <predicate> :: <evidence_ref>
+[FINDING_ID] <subject> :: <predicate> :: <evidence_ref>
 ```
 
-`evidence_ref` must be a concrete pointer — a file path, line number, git ref, config key, or API endpoint. Claims that cannot be anchored to a concrete `evidence_ref` are classified **`UNVERIFIABLE`** immediately and removed from the verification queue. They are preserved in the final output under a dedicated section with the reason they could not be anchored (no re-derivation sub-agent is dispatched for them).
+`evidence_ref` must be a concrete pointer — a file path, line number, git ref, config key, or API endpoint. Claims that cannot be anchored to a concrete `evidence_ref` are classified **`UNVERIFIABLE`** immediately and removed from the verification queue. They are preserved in the final output under a **dedicated UNVERIFIABLE section** with the reason they could not be anchored (no re-derivation sub-agent is dispatched for them).
 
-**Scale cap:** if the normalized claim list exceeds 50 items, the coordinating agent halts and asks the operator to scope the investigation before proceeding. Verification at scale degrades into noise; a 50-item cap prevents a finding flood from becoming an echo-chamber rubber-stamp.
+**Scale cap:**
+- *Default mode:* if the normalized claim list exceeds 50 items, the coordinating agent halts and asks the operator to scope the investigation before proceeding. Verification at scale degrades into noise; a 50-item cap prevents a finding flood from becoming an echo-chamber rubber-stamp.
+- *`--findings-list` mode:* if the normalized findings list exceeds 30 items, the orchestrator halts and asks the operator to scope before proceeding. Exhaustive verification is more expensive per item; a tighter cap prevents runaway fan-out.
 
-Select 2–3 of the highest-stakes normalized claims to send to the verifier wave. Prefer claims that are (a) decision-driving, (b) expressed with high-confidence language, or (c) hard to re-derive from a single artifact.
+**Claim selection (default mode only):** After normalization, select 2–3 of the highest-stakes normalized claims to send to the verifier wave. Prefer claims that are (a) decision-driving, (b) expressed with high-confidence language, or (c) hard to re-derive from a single artifact. In `--findings-list` mode, every finding after normalization enters the queue — no sampling.
 
 ---
 
 **Wave 2 — Adversarial verifiers (parallel, independent):**
-1. Extract 2–3 concrete, re-checkable claims from the returned report (e.g., "X function is unused", "file Y exceeds 300 lines", "PR targets main", "no tests cover Z") and normalize them to `[CLAIM_ID] subject :: predicate :: evidence_ref` form as described above.
+1. Normalize claims as described above. In default mode, extract 2–3 concrete, re-checkable claims from the returned report (e.g., "X function is unused", "file Y exceeds 300 lines", "PR targets main", "no tests cover Z"). In `--findings-list` mode, all normalized findings enter the queue.
 2. Dispatch one shadow sub-agent per claim, in parallel. Each receives the normalized claim text + the user's original goal + **the search surface** — the inventory of files, directories, or URLs the original investigation touched. It must NOT receive the original agent's reasoning, verdict, confidence language, or the specific line/region it concluded from. **Withhold the conclusion, not the map.** Withholding the map too does not buy extra independence — the verifier still has to reach the same evidence, it just spends its budget guessing paths to get there. Measured: one verifier denied the inventory spent 70 `grep` + 18 `read_file` calls re-locating files the parent already had paths for, guessed 5 nonexistent paths on the way, and hit its tool-loop ceiling before finishing. The independence that matters is epistemic (re-deriving the verdict), not navigational.
    - The inventory is a **starting surface, not a boundary**: it does not satisfy the composition-axis guard below, and a verifier that reads only inside it still returns `evidence_base: artifact-internal`. At least one primary source outside that surface is still required for `independent-rederivation`.
    - **Default to `subagent_type: "research-agent"` (mechanically locked to Read/Grep/Glob/WebFetch/WebSearch — cannot Edit/commit/push).** If the claim requires Bash to verify (running a failing test, `gh pr view`, `git log origin/...`), fall back to a Bash-capable subagent type with `isolation: "worktree"` and prepend this prefix to the prompt: *"Verifier sub-agent — do not Edit, Write, commit, push, `gh pr create`, or `curl`. Return findings only."*
    - **Set `id_prefix`** to a short label identifying the claim being verified, e.g. `"verify: unused export"` or `"verify: missing null check"`, so the live TUI shows which claim each verifier is checking.
-   - **Every verifier dispatch carries an explicit budget** — `max_tool_use_iterations` (a wave of 2–3 claim checks needs ~15–25 rounds each, not 50) plus the cheapest sufficient model. An unbudgeted verifier does not fail loudly: it exhausts the default tool-round ceiling, terminates `stopReason: "tool_use_loop_capped"`, and emits its verdict from a tools-stripped wind-down round built on partial evidence. A `CONFIRMED` produced that way is indistinguishable from a real one and silently defeats the entire point of the wave. Check each returned verifier's stop reason before merging its verdict; treat a capped or wind-down verifier as `UNVERIFIABLE`, not as a verdict.
+   - **Every verifier dispatch carries an explicit budget** — `max_tool_use_iterations` (a wave of 2–3 claim checks needs ~15–25 rounds each, not 50; `--findings-list` waves with many findings should budget proportionally but cap individual verifiers at 12 rounds each) plus the cheapest sufficient model. An unbudgeted verifier does not fail loudly: it exhausts the default tool-round ceiling, terminates `stopReason: "tool_use_loop_capped"`, and emits its verdict from a tools-stripped wind-down round built on partial evidence. A `CONFIRMED` produced that way is indistinguishable from a real one and silently defeats the entire point of the wave. Check each returned verifier's stop reason before merging its verdict; treat a capped or wind-down verifier as `UNVERIFIABLE`, not as a verdict.
 3. Each verifier re-derives the verdict independently using tool calls only — never re-reading the original report's reasoning. Returns `{claim_id, verifier_verdict, evidence_pointer, evidence_base}`, where `verifier_verdict` is one of `CONFIRMED`, `REFUTED`, `STALE`, or `UNVERIFIABLE`, and `evidence_base` is `independent-rederivation` (read primary sources *outside* the cited artifact's boundary) or `artifact-internal` (re-read only the cited file/region). On `REFUTED` or `STALE`, the verifier also emits a corrected or updated finding.
 
 ---
@@ -53,7 +68,9 @@ Bound the loop: at most 3 verification rounds per session. Claims still unresolv
 
 **Gate verdict:**
 
-After all verifier results are merged, the coordinating agent emits a single gate verdict before surfacing findings downstream:
+After all verifier results are merged, the coordinating agent emits a single gate verdict before surfacing findings downstream. The verdict shape differs by mode:
+
+*Default mode:*
 
 | Verdict | Condition |
 |---|---|
@@ -61,7 +78,31 @@ After all verifier results are merged, the coordinating agent emits a single gat
 | `WARN` | One or more claims are `STALE`, `UNVERIFIABLE`, or `UNVERIFIED-COMPOSITION`/`UNVERIFIED-ECHO-CHAMBER`; proceed only with explicit caveats attached |
 | `FAIL` | One or more claims `REFUTED`; findings must not be forwarded until re-investigated |
 
-A `FAIL` verdict blocks downstream use. The coordinating agent surfaces the specific refuted claims and their contradicting evidence to the operator before any remediation work begins. A `WARN` may proceed but must carry the flagged claims and their tags — stripping the caveats before forwarding is a protocol violation.
+*`--findings-list` mode* — emit a numbered completeness checklist followed by a terminal gate verdict:
+
+```
+Verification checklist (N findings total):
+[1] <finding summary> → CONFIRMED (file:line)
+[2] <finding summary> → REFUTED (contradicting_pointer) [was: confident, now: refuted]
+[3] <finding summary> → STALE (updated_pointer) [was true, now stale]
+[4] <finding summary> → UNVERIFIABLE (reason: no concrete evidence_ref) [needs-human-review]
+...
+
+UNVERIFIABLE findings (pre-flight, no verifier dispatched):
+[5] <finding summary> → UNVERIFIABLE (reason: file not found)
+
+Gate verdict: BLOCKED — finding [2] refuted; do not proceed to action phase.
+```
+
+Terminal gate verdicts for `--findings-list` mode:
+
+| Verdict | Condition |
+|---|---|
+| `VERIFIED` | All findings are `CONFIRMED` or `UNVERIFIABLE` with annotation; action phase may proceed |
+| `PARTIAL` | ≥1 finding is `STALE` or `UNVERIFIABLE [budget-exhausted]`; proceed with explicit caveats |
+| `BLOCKED` | ≥1 finding is `REFUTED`; action phase must not be dispatched until the operator resolves the conflict or re-scopes the finding list |
+
+In both modes: a `FAIL` / `BLOCKED` verdict blocks downstream use. The coordinating agent surfaces the specific refuted claims and their contradicting evidence to the operator before any remediation work begins. A `WARN` / `PARTIAL` may proceed but must carry the flagged claims and their tags — stripping the caveats before forwarding is a protocol violation.
 
 ---
 
@@ -77,6 +118,8 @@ A verifier that re-derives a claim by re-reading the *same* file/region the orig
 
 **When to invoke:**
 Any time sub-agent output will drive user decisions, file edits, commits, external side-effects, or is the basis of a user-facing summary — including gap analyses, audit findings, and issue lists that will be forwarded to a downstream session. Treat **high-confidence language as a trigger in its own right**: when a review/audit sub-agent asserts a claim with markers like "confident", "certain", "clearly", "obviously", "must be", or a stated probability ≥ 80%, verify it as if it were decision-driving regardless of stakes. Confidence is a trigger, not a verdict.
+
+Use `--findings-list` when the operator supplies a pre-existing findings document (from a prior research session, a handed-off report, or an audit output) and needs a completeness guarantee — a numbered checklist with every finding accounted for — before an action phase is dispatched.
 
 **Skip when:**
 Sub-agent ran inside an orchestrator skill that already verifies (`resolve`, `diagnose`, `appmap`); sub-agent returned explicit failure; work was purely exploratory and no decision follows; or the session is **text-terminal** — a pure explanation, architecture walkthrough, onboarding Q&A, or capability map that names no mutated artifact (file/PR/commit/test), where there are no re-checkable state claims for adversarial verifiers to re-derive (assess coverage, coherence, and citation density instead of dispatching re-derivation sub-agents).

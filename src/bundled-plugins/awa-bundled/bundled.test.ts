@@ -37,7 +37,7 @@ const PINNED_HASHES = {
   // automate: afk-native scheduled-run skill (create_schedule + send_telegram +
   // `afk service install daemon`). Vendored byte-equal from the upstream
   // framework plugin at the time it was bundled.
-  automate: '93380f58316e607f6b95b27a9c2375f0a5403f3a42eb695d0490b50225d8838c',
+  automate: '708c47ddd600e57d0d847befc9298abc68d29a0a093b46f11fed3120d3df421c',
   contract: '0ea822d8124f5fc55103a3e5e6d0fcb43889bf3f089bc722350da02ecf4f960f',
   // Hash re-bumped during PR #187 review: the Merge section now routes the
   // second convergence condition (≥2 critics agree on the same alternative) to
@@ -134,7 +134,7 @@ const PINNED_HASHES = {
   // Hash re-bumped: search-surface sharing + explicit verifier budgets (#995).
   // Full rationale: docs/bundled-plugins.md#shadow-verify-52
   'shadow-verify':
-    'd38252df942bc87978fe051f81bb3a02114f80e7dee46e120cb1d0d58c91f06f',
+    'fd061d6b08ce305b25c825f14f94b9ad05acff13dc3ac0df8ffd80466f6a5cba',
   // Hash bumped 2026-06: Phase 4 (commit) + Phase 8 (PR) switched from the
   // `--body "$(cat <<'EOF' … EOF)"` heredoc-in-command-substitution antipattern
   // to the file-based form (`git commit -F` / `gh pr create --body-file`). The
