@@ -16,6 +16,7 @@ import { resolveAndContain } from './_cwd-utils.js';
 import { computeLineDiff } from '../../../utils/diff.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { sha256Hex } from './patch-validate.js';
+import { isBlankInput } from '../subagent/optional-input.js';
 
 /**
  * Input shape for the edit_file tool (validated at runtime).
@@ -65,8 +66,13 @@ function parseEditFileInput(input: unknown): {
     replace_all = editInput.replace_all;
   }
 
+  // Contract: a blank expected_hash ("", whitespace, null) means "no hash
+  // precondition", not a malformed hash. Some models (notably GPT-family)
+  // populate every optional string param, sending `expected_hash: ""`; a
+  // blank precondition carries no caller intent, so it is dropped rather than
+  // rejected. Opt-in per field, per optional-input.ts scope rules.
   let expected_hash: string | undefined;
-  if (editInput.expected_hash !== undefined) {
+  if (!isBlankInput(editInput.expected_hash)) {
     if (typeof editInput.expected_hash !== 'string') {
       throw new Error('expected_hash must be a string');
     }

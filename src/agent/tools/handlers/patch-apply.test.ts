@@ -539,3 +539,79 @@ describe('patch_apply handler — unconfined session (no cwd, empty writeRoots)'
     //   expect(parsed.errors[0].detail).toContain('write roots []');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Blank optional fields (GPT-family models fill every optional param)
+// ---------------------------------------------------------------------------
+
+describe('patch_apply — blank optional fields', () => {
+  it.each([
+    ['empty string', ''],
+    ['whitespace', '  '],
+    ['null', null],
+  ])('treats a blank expected_hash (%s) as omitted', async (_label, blank) => {
+    const filePath = await writeTemp(`bh-${randomBytes(3).toString('hex')}.txt`, 'one two\n');
+    const handler = createPatchApplyHandler(tempDir);
+    const result = await handler(
+      { changes: [{ path: filePath, expected_hash: blank, edits: [{ old: 'two', new: 'TWO' }] }] },
+      signal,
+      makeCtx(),
+    );
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content as string).status).toBe('applied');
+    expect(await readFile(filePath, 'utf-8')).toBe('one TWO\n');
+  });
+
+  it.each([
+    ['empty string', ''],
+    ['null', null],
+  ])('treats content %s alongside non-empty edits as omitted and applies the edits', async (_label, placeholder) => {
+    const filePath = await writeTemp(`pc-${randomBytes(3).toString('hex')}.txt`, 'alpha beta\n');
+    const handler = createPatchApplyHandler(tempDir);
+    const result = await handler(
+      { changes: [{ path: filePath, content: placeholder, edits: [{ old: 'beta', new: 'BETA' }] }] },
+      signal,
+      makeCtx(),
+    );
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content as string).status).toBe('applied');
+    expect(await readFile(filePath, 'utf-8')).toBe('alpha BETA\n');
+  });
+
+  it('still rejects whitespace-only content alongside edits (whitespace is a real payload)', async () => {
+    const filePath = await writeTemp('ws.txt', 'alpha beta\n');
+    const handler = createPatchApplyHandler(tempDir);
+    const result = await handler(
+      { changes: [{ path: filePath, content: '  ', edits: [{ old: 'beta', new: 'BETA' }] }] },
+      signal,
+      makeCtx(),
+    );
+    const parsed = JSON.parse(result.content as string);
+    expect(parsed.status).toBe('validation_failed');
+    expect(parsed.errors[0].error).toBe('mutually_exclusive');
+    expect(await readFile(filePath, 'utf-8')).toBe('alpha beta\n');
+  });
+
+  it('still rejects empty content alongside an EMPTY edits array (ambiguous intent)', async () => {
+    const filePath = await writeTemp('ee.txt', 'keep me\n');
+    const handler = createPatchApplyHandler(tempDir);
+    const result = await handler(
+      { changes: [{ path: filePath, content: '', edits: [] }] },
+      signal,
+      makeCtx(),
+    );
+    const parsed = JSON.parse(result.content as string);
+    expect(parsed.status).toBe('validation_failed');
+    expect(parsed.errors[0].error).toBe('mutually_exclusive');
+    expect(await readFile(filePath, 'utf-8')).toBe('keep me\n');
+  });
+
+  it('empty content on its own still truncates the file', async () => {
+    const filePath = await writeTemp('trunc.txt', 'to be emptied\n');
+    const handler = createPatchApplyHandler(tempDir);
+    const result = await handler({ changes: [{ path: filePath, content: '' }] }, signal, makeCtx());
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content as string).status).toBe('applied');
+    expect(await readFile(filePath, 'utf-8')).toBe('');
+  });
+});

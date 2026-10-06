@@ -150,7 +150,9 @@ export const editFileTool: AnthropicToolDef = {
         description:
           'SHA-256 hash to verify the file has not changed (format: "sha256:<hex>"). ' +
           "If the file's current hash does not match, the edit is rejected before any write occurs. " +
-          'Use to guard against stale-context overwrites after a prior patch_apply modified the file.',
+          'Use to guard against stale-context overwrites after a prior patch_apply modified the file. ' +
+          'Omit this field unless you are copying a hash verbatim from a prior tool result ' +
+          '(e.g. patch_apply `after_hash`); never compute, guess, or pass an empty string.',
       },
     },
     required: ['file_path', 'old_string', 'new_string'],
