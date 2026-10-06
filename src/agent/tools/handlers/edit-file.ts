@@ -67,8 +67,9 @@ function parseEditFileInput(input: unknown): {
   }
 
   // Contract: a blank expected_hash ("", whitespace, null) means "no hash
-  // precondition", not a malformed hash. Some models (notably GPT-family)
-  // populate every optional string param, sending `expected_hash: ""`; a
+  // precondition", not a malformed hash. Callers under OpenAI strict function
+  // calling (the Responses API defaults `strict` to true) must emit every
+  // schema property, so they send `expected_hash: ""` when they have none; a
   // blank precondition carries no caller intent, so it is dropped rather than
   // rejected. Opt-in per field, per optional-input.ts scope rules.
   let expected_hash: string | undefined;

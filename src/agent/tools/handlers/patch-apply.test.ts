@@ -541,7 +541,7 @@ describe('patch_apply handler — unconfined session (no cwd, empty writeRoots)'
 });
 
 // ---------------------------------------------------------------------------
-// Blank optional fields (GPT-family models fill every optional param)
+// Blank optional fields (strict-mode callers must emit every param)
 // ---------------------------------------------------------------------------
 
 describe('patch_apply — blank optional fields', () => {

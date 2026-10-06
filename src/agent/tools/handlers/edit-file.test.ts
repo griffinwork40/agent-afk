@@ -674,7 +674,7 @@ describe('editFileHandler cwd containment', () => {
       expect(await readTempFile(filePath)).toBe('changed\n');
     });
 
-    // Some models (GPT-family) fill every optional string param, sending
+    // Strict-mode callers (OpenAI Responses API) must emit every param, sending
     // `expected_hash: ""`. A blank precondition carries no intent: it must be
     // treated as omitted, not rejected as a malformed hash.
     it.each([

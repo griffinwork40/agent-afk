@@ -46,8 +46,9 @@ export const patchApplyTool: AnthropicToolDef = {
               description:
                 'SHA-256 hash to verify the file has not changed (format: "sha256:<hex>"). ' +
                 'If the file\'s current hash does not match, the entire patch is rejected. ' +
-                'Omit this field unless you are copying a hash verbatim from a prior tool result ' +
-                '(e.g. a previous patch_apply `after_hash`); never compute, guess, or pass an empty string.',
+                'Only set this to a hash copied verbatim from a prior tool result ' +
+                '(e.g. a previous patch_apply `after_hash`); never compute or guess one. ' +
+                'Otherwise omit it or pass an empty string (treated as no hash check).',
             },
             edits: {
               type: 'array',
@@ -67,7 +68,7 @@ export const patchApplyTool: AnthropicToolDef = {
               type: 'string',
               description:
                 'Full replacement content for the file. Mutually exclusive with `edits`: ' +
-                'when using `edits`, omit this field entirely.',
+                'when using `edits`, omit this field or pass an empty string.',
             },
           },
           required: ['path'],
