@@ -141,6 +141,9 @@ function installLocal(
   symlinkSync(parsed.path, dest, 'dir');
 
   const ts = now().toISOString();
+  // Carry forward user-configured options from a previous install so that
+  // reinstalling (--force) does not wipe values the user set.
+  const existingOptions = readIndex(indexPath).plugins[name]?.options;
   const entry: PluginIndexEntry = {
     source: parsed.path,
     sourceType: 'local',
@@ -150,6 +153,7 @@ function installLocal(
     installedAt: ts,
     updatedAt: ts,
     ...(manifestName && manifestName !== name ? { manifestName } : {}),
+    ...(existingOptions !== undefined ? { options: existingOptions } : {}),
   };
   upsertPlugin(name, entry, indexPath);
   // Invalidate scan cache — the running session must see the new plugin. (F2)
@@ -221,15 +225,20 @@ async function installGit(
     }
 
     const ts = now().toISOString();
+    // Carry forward user-configured options from a previous install so that
+    // reinstalling (--force) does not wipe values the user set.
+    const existingOptionsGit = readIndex(indexPath).plugins[finalName]?.options;
     const entry: PluginIndexEntry = {
       source: sourceString,
       sourceType: parsed.type,
       ref,
       commit,
+      pinnedRef: options.ref !== undefined ? true : false,
       enabled: true,
       installedAt: ts,
       updatedAt: ts,
       ...(manifestName && manifestName !== finalName ? { manifestName } : {}),
+      ...(existingOptionsGit !== undefined ? { options: existingOptionsGit } : {}),
     };
     upsertPlugin(finalName, entry, indexPath);
     // Invalidate scan cache — the running session must see the new plugin. (F2)

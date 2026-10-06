@@ -37,7 +37,11 @@
  * new model sees prior turns as plain prose, not structured tool/thinking
  * content. This is the documented, accepted degradation for any inner rebuild
  * (cross-family, or same-family onto a different endpoint); same-signature runs
- * keep full native fidelity inside the live inner.
+ * keep full native fidelity inside the live inner. When the outgoing inner
+ * keeps a message journal, its live {@link ProviderQuery.journalSnapshot} is
+ * handed over as `resumeMessages` instead (structured, degraded only where
+ * the new family cannot replay a block); the process-start resume snapshot is
+ * never re-used on a swap (docs/message-journal.md).
  *
  * @module agent/providers/router/provider-router
  */
@@ -59,6 +63,7 @@ import type {
   RewindTarget,
 } from '../../provider.js';
 import type { AgentConfig, ResumeHistoryTurn } from '../../types/config-types.js';
+import type { JournalMessage } from '../../journal/index.js';
 import { QueryInputStream } from '../../session/input-iterable.js';
 import { applySlotCredentials } from '../../session/slot-credentials.js';
 import { debugLog } from '../../../utils/debug.js';
@@ -99,62 +104,13 @@ interface ActiveInner {
   input: QueryInputStream;
 }
 
-function stringifyUserContent(content: ProviderUserTurn['content']): string {
-  if (typeof content === 'string') return content;
-  // ContentBlockParam[] — extract text blocks for the text-only shadow history.
-  // Non-text blocks (images) are dropped from the carry; this is intentional.
-  return content
-    .map((block) => {
-      const b = block as { type?: string; text?: string };
-      return b.type === 'text' && typeof b.text === 'string' ? b.text : '';
-    })
-    .filter((t) => t.length > 0)
-    .join('\n');
-}
-
-/**
- * Build the one-turn "your model was switched" system context prepended to the
- * first turn a freshly-swapped inner serves.
- *
- * Motivation: an inner rebuild is otherwise INVISIBLE to the model — the new
- * inner's `session.init` is swallowed (so no re-init is surfaced) and the
- * carried conversation is anonymous prose (the module-level cross-family
- * invariant). Without this notice the switched-to model has no in-context signal
- * that (a) it is a different model than the one that produced earlier turns, or
- * (b) prior structured tool/thinking content was flattened to text — which
- * invites it to over-trust or misattribute the history (e.g. narrate its own
- * identity from a stale premise). The notice is descriptive context, NOT an
- * instruction, and rides only the swap turn — it expires after one turn like any
- * framework nudge.
- */
-function buildSwitchNotice(
-  previousModel: string,
-  currentModel: string,
-  previousFamily: string | undefined,
-  currentFamily: string,
-): string {
-  const familyClause =
-    previousFamily && previousFamily !== currentFamily
-      ? ` (provider ${previousFamily} → ${currentFamily})`
-      : '';
-  return (
-    `[System context — not from the user. Your model was switched at the start of this turn: ` +
-    `${previousModel} → ${currentModel}${familyClause}. Earlier turns in this conversation were produced ` +
-    `by ${previousModel}; the history carried across the switch is plain text only, so any prior tool ` +
-    `calls and extended reasoning are now prose — treat their structure as lost, not authoritative.]`
-  );
-}
-
-/** Prepend a synthetic notice as a leading text block (or line) to outbound turn content. */
-function prependNotice(
-  content: ProviderUserTurn['content'],
-  notice: string,
-): ProviderUserTurn['content'] {
-  if (typeof content === 'string') {
-    return content.length > 0 ? `${notice}\n\n${content}` : notice;
-  }
-  return [{ type: 'text' as const, text: notice }, ...content];
-}
+// Switch-notice helpers extracted to keep this file within the 350-code-line
+// ceiling. See provider-router.switch.ts for docs and rationale.
+import {
+  buildSwitchNotice,
+  prependNotice,
+  stringifyUserContent,
+} from './provider-router.switch.js';
 
 export class ProviderRouter implements ProviderQuery {
   private readonly outerIterator: AsyncIterator<ProviderUserTurn>;
@@ -192,6 +148,21 @@ export class ProviderRouter implements ProviderQuery {
   private pendingAssistantText = '';
   /** sessionId of the most recent outer turn, forwarded to inner input streams. */
   private lastSessionId: string | undefined;
+  /**
+   * Steering callback registered via `setBeforeNextRound()`. Stored here so
+   * it survives inner provider swaps: whenever `buildInner()` constructs a new
+   * active inner, we immediately forward the stored callback if the inner
+   * supports it — preventing a model-swap from silently dropping steering.
+   */
+  private _beforeNextRound: (() => string | undefined) | undefined;
+  /**
+   * Stop-hook seam callback registered via `setBeforeTurnEnd()`. Stored here
+   * so it survives inner provider swaps: whenever `buildInner()` constructs a
+   * new active inner, we immediately forward the stored callback if the inner
+   * supports it — preventing a model-swap from silently dropping blocking-Stop
+   * continuation wiring.
+   */
+  private _beforeTurnEnd: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined;
 
   constructor(args: ProviderRouterArgs, deps: ProviderRouterDeps) {
     this.outerIterator = args.prompt[Symbol.asyncIterator]();
@@ -267,11 +238,12 @@ export class ProviderRouter implements ProviderQuery {
 
   /**
    * Build the inner provider for `model`. When `seed` is true (a swap), the
-   * inner is seeded with the text shadow history so the new model sees prior
-   * turns as prose. Credentials/endpoint are resolved for the model's OWN family
+   * inner is seeded with `live` (the outgoing inner's journal snapshot, taken
+   * BEFORE it closed) when non-empty, else with the text shadow history so
+   * the new model sees prior turns as prose. Credentials/endpoint are resolved for the model's OWN family
    * + tier via {@link resolveInner}.
    */
-  private buildInner(model: string | undefined, seed: boolean): ActiveInner {
+  private buildInner(model: string | undefined, seed: boolean, live?: JournalMessage[]): ActiveInner {
     const { provider, innerConfig, signature } = this.resolveInner(model);
     const input = new QueryInputStream(() => this.lastSessionId);
 
@@ -283,9 +255,27 @@ export class ProviderRouter implements ProviderQuery {
     // legitimate override that must survive a model swap too.
     if (this.systemPromptOverridden) innerConfig.systemPrompt = this.currentSystemPrompt;
 
-    if (seed) innerConfig.resumeHistory = [...this.shadowHistory];
+    if (seed) {
+      // Keep the prose shadow for the overflow-guard seed / legacy replay,
+      // but hand the new inner the LIVE structured conversation: baseConfig's
+      // process-start resumeMessages is stale by now, and both providers
+      // prefer it over resumeHistory. Empty/absent snapshot (no journal):
+      // drop it so the shadow history is what gets replayed.
+      innerConfig.resumeHistory = [...this.shadowHistory];
+      if (live !== undefined && live.length > 0) innerConfig.resumeMessages = live;
+      else delete innerConfig.resumeMessages;
+    }
 
     const query = provider.query({ prompt: input.createIterable(), config: innerConfig });
+    // Forward the stored steering callback onto the new inner immediately so a
+    // model swap never silently drops it. The inner silently ignores the call
+    // when it does not implement `setBeforeNextRound` (the method is optional).
+    if (this._beforeNextRound !== undefined) {
+      query.setBeforeNextRound?.(this._beforeNextRound);
+    }
+    if (this._beforeTurnEnd !== undefined) {
+      query.setBeforeTurnEnd?.(this._beforeTurnEnd);
+    }
     return {
       family: provider.name,
       signature,
@@ -360,8 +350,9 @@ export class ProviderRouter implements ProviderQuery {
         this.activeModel = this.currentModel;
         let switchNotice: string | undefined;
         if (needSwap) {
+          const live = this.active?.query.journalSnapshot?.(); // before close: the live conversation
           await this.closeActive();
-          this.active = this.buildInner(this.currentModel, /* seed */ true);
+          this.active = this.buildInner(this.currentModel, /* seed */ true, live);
           debugLog(`🔀 ProviderRouter: switched inner provider → ${this.active.family} (model=${this.currentModel})`);
           // A rebuild is otherwise invisible to the model (init swallowed, history
           // carried as anonymous prose). On a genuine model change, prepend a
@@ -450,6 +441,26 @@ export class ProviderRouter implements ProviderQuery {
     await this.active?.query.interrupt(reason);
   }
 
+  /**
+   * Store and forward the steering callback. Stored on `this` so it survives
+   * inner provider rebuilds (model swap); `buildInner()` forwards it onto
+   * every newly-constructed inner immediately after construction.
+   */
+  setBeforeNextRound(cb: (() => string | undefined) | undefined): void {
+    this._beforeNextRound = cb;
+    this.active?.query.setBeforeNextRound?.(cb);
+  }
+
+  /**
+   * Store and forward the stop-hook seam callback. Stored on `this` so it
+   * survives inner provider rebuilds (model swap); `buildInner()` forwards it
+   * onto every newly-constructed inner immediately after construction.
+   */
+  setBeforeTurnEnd(cb: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined): void {
+    this._beforeTurnEnd = cb;
+    this.active?.query.setBeforeTurnEnd?.(cb);
+  }
+
   async setModel(model?: string): Promise<void> {
     if (typeof model === 'string' && model.length > 0) {
       this.currentModel = model;
@@ -494,7 +505,7 @@ export class ProviderRouter implements ProviderQuery {
     return this.active?.query.setSystemPrompt?.(basePrompt) ?? false;
   }
 
-  async reauth(): Promise<{ accountId: string; swapped: boolean } | null> {
+  async reauth(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null> {
     return (await this.active?.query.reauth?.()) ?? null;
   }
 
@@ -540,6 +551,10 @@ export class ProviderRouter implements ProviderQuery {
       messagesBefore: 0,
       messagesAfter: 0,
     };
+  }
+
+  journalSnapshot(): JournalMessage[] | undefined {
+    return this.active?.query.journalSnapshot?.();
   }
 
   listRewindTargets(): RewindTarget[] {

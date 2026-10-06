@@ -12,6 +12,8 @@
 
 import type { ProviderQuery, ProviderQueryArgs } from '../../provider.js';
 import { AnthropicDirectQuery } from './query-runtime.js';
+import { anthropicJournalAdapter } from './journal-adapter.js';
+import { resumeSeedInputTokens } from '../shared/resume-usage-seed.js';
 import {
   resolveAnthropicTemperature,
   resolveAutoCompactThreshold,
@@ -58,14 +60,15 @@ export function buildProviderQuery(
   // resume behavior — so supplying a minted id here is inert apart from
   // making the id known earlier.
   const resumedSessionId = resolvedSessionId;
-  const initialMessages = resumeHistoryToMessages(config.resumeHistory);
-  // Seed the context-overflow guard from the last stored turn's token count
-  // (#1294). The last turn of resumeHistory carries `inputTokens` when the
-  // session was saved with a recent enough sidecar; absent on legacy sidecars.
-  // Conservative: prefer over-estimate (triggers compaction) over under-estimate
-  // (lets a full context reach the wire and get rejected with HTTP 400).
-  const lastResumedTurn = config.resumeHistory?.at(-1);
-  const initialUsageInputTokens = lastResumedTurn?.inputTokens;
+  // Full-fidelity journal resume wins over the lossy sidecar transcript.
+  const initialMessages = config.resumeMessages !== undefined && config.resumeMessages.length > 0
+    ? anthropicJournalAdapter.fromJournalMessages(config.resumeMessages)
+    : resumeHistoryToMessages(config.resumeHistory);
+  // Seed the context-overflow guard (#1294): the last stored turn's token
+  // count when the sidecar has one, else an estimate over resumeMessages
+  // (journal-only resume / router swap). Conservative: prefer over-estimate
+  // (triggers compaction) over under-estimate (HTTP 400 on a full context).
+  const initialUsageInputTokens = resumeSeedInputTokens(config);
 
   const cwdDependentsFactory = ctx.externalTools
     ? undefined
@@ -105,7 +108,7 @@ export function buildProviderQuery(
 
   const resolvedEffort = resolveEffort(config.effort, model);
   const resolvedTemperature = config.temperature !== undefined
-    ? resolveAnthropicTemperature(config.temperature)
+    ? resolveAnthropicTemperature(config.temperature, model)
     : undefined;
   // Use requestedModel (the alias, e.g. sonnet_1m) rather than the resolved
   // wire id so safeAutoCompactThresholdFor sees the full 1M window when
@@ -127,6 +130,7 @@ export function buildProviderQuery(
     toolDispatcher: queryDispatcher,
     ...(resumedSessionId !== undefined ? { sessionId: resumedSessionId } : {}),
     ...(initialMessages !== undefined ? { initialMessages } : {}),
+    ...(config.messageJournal ? { messageJournal: config.messageJournal } : {}),
     ...(initialUsageInputTokens !== undefined ? { initialUsageInputTokens } : {}),
     model,
     // Preserve the requested alias (e.g. opus_1m) so context-window lookups
@@ -144,9 +148,17 @@ export function buildProviderQuery(
     systemPrefix,
     tokenRefresher,
     ...(config.thinking !== undefined
-      ? { thinking: resolveThinkingParam(config.thinking, maxTokens, model, resolvedEffort) }
+      ? {
+          thinking: resolveThinkingParam(config.thinking, maxTokens, model, resolvedEffort),
+          // Pass the original unresolved config so the query can re-resolve
+          // per-turn when a mid-session /model switch changes the current model.
+          rawThinkingConfig: config.thinking,
+        }
       : {}),
     ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
+    // Pass the original caller effort (may be undefined = "use model default")
+    // so the per-turn getter can re-resolve after a /model switch.
+    ...(config.effort !== undefined ? { rawEffort: config.effort } : {}),
     ...(resolvedTemperature !== undefined ? { temperature: resolvedTemperature } : {}),
     ...(localMode ? { baseUrl: config.baseUrl } : {}),
     ...(config.traceWriter ? { traceWriter: config.traceWriter } : {}),
@@ -174,6 +186,7 @@ export function buildProviderQuery(
     ...(config.softDeadlineMs !== undefined
       ? { softDeadlineMs: config.softDeadlineMs }
       : {}),
+    cwd,
     ...(cwdDependentsFactory !== undefined ? { cwdDependentsFactory } : {}),
     ...(systemPromptRebuildFactory !== undefined ? { systemPromptRebuildFactory } : {}),
     // Path-approval half of the live `/bypass` toggle: keep the provider's

@@ -12,6 +12,7 @@
 
 import { launchdManager } from './launchd/manager.js';
 import { systemdManager } from './systemd/manager.js';
+import { windowsManager } from './windows/manager.js';
 import type { ServiceManager } from './types.js';
 
 export * from './types.js';
@@ -27,10 +28,12 @@ export function serviceManagerFor(platform: NodeJS.Platform = process.platform):
       return launchdManager;
     case 'linux':
       return systemdManager;
+    case 'win32':
+      return windowsManager;
     default:
       return null;
   }
 }
 
 /** Human-readable list of supported platforms, for CLI error copy. */
-export const SUPPORTED_SERVICE_PLATFORMS = 'macOS (launchd) and Linux (systemd --user)';
+export const SUPPORTED_SERVICE_PLATFORMS = 'macOS (launchd), Linux (systemd --user), and Windows (Task Scheduler)';

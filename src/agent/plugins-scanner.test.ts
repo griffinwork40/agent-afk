@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { scanLocalPlugins, _resetPluginScanCache } from './plugins-scanner.js';
@@ -36,6 +36,27 @@ afterEach(() => {
 });
 
 describe('plugins-scanner', () => {
+  it('loads only the registered version for trusted imports and preserves disabled state', () => {
+    const old = join(tmpHome, 'cache', 'mp', 'test', '1.0');
+    const active = join(tmpHome, 'cache', 'mp', 'test', '2.0');
+    writePluginManifest(old);
+    writePluginManifest(active);
+    writeFileSync(join(tmpHome, 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: {
+      'test@mp': [{ scope: 'user', installPath: active }],
+    } }));
+    // path is now the resolved realpath (symlinks expanded) — use realpathSync to survive macOS aliasing.
+    expect(scanLocalPlugins(tmpHome, { trustAll: true })).toEqual([{ type: 'local', path: realpathSync(active) }]);
+    expect(scanLocalPlugins(tmpHome, { trustAll: true, sourceEnabled: new Map([['test@mp', false]]) })).toEqual([]);
+  });
+
+  it('loads native Codex manifests and respects disabled imports', () => {
+    const dir = join(tmpHome, 'cache', 'mp', 'native', '1.0');
+    mkdirSync(join(dir, '.codex-plugin'), { recursive: true });
+    writeFileSync(join(dir, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'native', main: 'index.js' }));
+    expect(scanLocalPlugins(tmpHome, { trustAll: true })).toEqual([{ type: 'local', path: dir, main: 'index.js' }]);
+    expect(scanLocalPlugins(tmpHome, { trustAll: true, sourceEnabled: new Map([['native@mp', false]]) })).toEqual([]);
+  });
+
   it('returns [] when the plugins dir does not exist', () => {
     expect(scanLocalPlugins(join(tmpHome, 'missing'))).toEqual([]);
   });
@@ -229,6 +250,54 @@ describe('plugins-scanner', () => {
     writePluginManifest(pluginDir);
 
     expect(scanLocalPlugins(tmpHome)).toEqual([]);
+  });
+
+  describe('marketplace whose root is also a plugin', () => {
+    function writeRootMarketplace(installed: string[]): { rootDir: string; nestedDir: string } {
+      const rootDir = join(tmpHome, 'cache', 'mp-root');
+      const nestedDir = join(rootDir, 'adapters', 'host');
+      writePluginManifest(rootDir);
+      writePluginManifest(nestedDir);
+      writeFileSync(
+        join(rootDir, '.claude-plugin', 'marketplace.json'),
+        JSON.stringify({
+          name: 'mp-root',
+          plugins: [
+            { name: 'root-plugin', source: './' },
+            { name: 'host-plugin', source: './adapters/host' },
+          ],
+        }),
+      );
+      const plugins: Record<string, unknown> = {};
+      for (const name of installed) {
+        plugins[`mp-root:${name}`] = {
+          source: `mp-root:${name}`, sourceType: 'marketplace',
+          ref: null, commit: null, enabled: true,
+          installedAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+          marketplace: 'mp-root',
+        };
+      }
+      writeFileSync(join(tmpHome, '.index.json'), JSON.stringify({ version: 2, plugins, marketplaces: {} }));
+      return { rootDir, nestedDir };
+    }
+
+    it('does not load the root plugin when it is not installed', () => {
+      writeRootMarketplace([]);
+
+      expect(scanLocalPlugins(tmpHome)).toEqual([]);
+    });
+
+    it('loads an installed plugin nested under an uninstalled root', () => {
+      const { nestedDir } = writeRootMarketplace(['host-plugin']);
+
+      expect(scanLocalPlugins(tmpHome)).toEqual([{ type: 'local', path: nestedDir }]);
+    });
+
+    it('loads the root plugin when it is installed', () => {
+      const { rootDir } = writeRootMarketplace(['root-plugin']);
+
+      expect(scanLocalPlugins(tmpHome)).toEqual([{ type: 'local', path: rootDir }]);
+    });
   });
 
   it('loads a cache-layout plugin WITHOUT an index entry when trustAll is set', () => {

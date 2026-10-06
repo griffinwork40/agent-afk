@@ -8,6 +8,7 @@
 import type { CommittedBandHost } from './terminal-compositor.committed-band-commit.js';
 import { eraseAndPaintRow } from './terminal-compositor.scrollback.js';
 import { withAutowrapDisabled } from './terminal-compositor.band-reflow.js';
+import { hiddenArchivedRows } from './terminal-compositor.archived-reveal.js';
 import { contentMargin } from './render/measure.js';
 
 /**
@@ -121,7 +122,7 @@ export function repositionCommittedBand(
   // belong at [targetBottom - fit + 1, targetBottom], which the fit math below
   // computes. The paint is always above the frame top, so it never overwrites
   // the live frame.
-  if (targetBottom < floor) return; // F2: band exists but has NO room above the
+  if (targetBottom < floor && hiddenArchivedRows(self) === 0) return; // F2: band exists but has NO room above the
   // current floor — do NOT clear bandGeometryStale here: committedBandBottomRow
   // is left at its old (possibly stale) value below, so a later commit must
   // keep distrusting it as a floor until a repaint actually re-establishes it.
@@ -130,9 +131,8 @@ export function repositionCommittedBand(
   // (a real re-pin below, or "already correct, nothing moved") reflects
   // CURRENT geometry — safe to trust committedBandBottomRow again from here.
   self.bandGeometryStale = false;
-  const maxFit = targetBottom - floor + 1;
-  const fit = Math.min(self.committedBand.length, maxFit);
-  if (fit <= 0) return;
+  const maxFit = Math.max(0, targetBottom - floor + 1);
+  const fit = Math.min(self.committedBand.length - hiddenArchivedRows(self), maxFit);
   // Invariant (bottom-aligned band): the band is pinned at
   // [targetBottom - fit + 1, targetBottom] so committed content hugs the frame
   // top — the user's most recent output sits immediately above the input line
@@ -155,7 +155,16 @@ export function repositionCommittedBand(
   // The render's erase pass clears [preRenderFrameTop, …]; if it started at or
   // above the band's current bottom it wiped the band → must repaint.
   const renderErasedBand = preRenderFrameTop > 0 && preRenderFrameTop <= self.committedBandBottomRow;
-  if (!moved && !renderErasedBand) return;
+  // Invariant (#2382 review, pending rows that now fit): a band-hold model
+  // stored while no frame was on screen (commitPhase3HoldStore) is tracked at
+  // the collapsed-frame position with committedBandPaintedRows = 0. When the
+  // next frame lands exactly there (the idle 1-row frame after resumeInput),
+  // `moved` is false and the render erased nothing, yet `fit` rows are owed to
+  // the screen. Repaint whenever fewer than `fit` rows are materialized; the
+  // paint below sets committedBandPaintedRows = fit, so this stays idempotent
+  // (no per-tick churn once the owed rows are on screen).
+  const owesRows = self.committedBandPaintedRows !== fit;
+  if (!moved && !renderErasedBand && !owesRows) return;
   const paint = self.committedBand.slice(self.committedBand.length - fit);
   // Content centering (AFK_CENTER_CONTENT): derive the margin from the CURRENT
   // terminal width so the band adapts on resize. The band stores raw (unpadded)
@@ -198,7 +207,7 @@ export function repositionCommittedBand(
       /* terminal closed mid-repaint — next render's lifecycle tears us down */
     }
   });
-  self.committedBandTopRow = newTop;
+  self.committedBandTopRow = fit > 0 ? newTop : 0;
   self.committedBandBottomRow = targetBottom;
   // `fit` rows (the band's bottom suffix) are now materialized on screen — this
   // is the collapse repaint that drains a fully-pending band-hold model. Record

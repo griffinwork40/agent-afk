@@ -13,6 +13,8 @@ import type { ComposeExecutor } from '../../../agent/tools/compose-executor.js';
 import type { SubagentManager } from '../../../agent/subagent.js';
 import { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
+import { DetachableToolRegistry } from '../../../agent/tools/detach-registry.js';
+import { ProcessJobRegistry } from '../../../agent/shell-jobs/process-jobs.js';
 import { setBgsubRegistry, setBgsubSummarizer } from '../../slash/commands/bgsub.js';
 import { setTasksRegistry } from '../../slash/commands/tasks.js';
 import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
@@ -27,6 +29,17 @@ export interface BootstrapInfra {
   trace: ReturnType<typeof createDefaultTraceWriter>;
   apiKey: string | undefined;
   backgroundRegistry: BackgroundAgentRegistry;
+  /**
+   * Session-scoped detach registry for the Ctrl+B bash-backgrounding contract
+   * (#2542, #2735). Constructed alongside BackgroundAgentRegistry so the REPL
+   * Ctrl+B handler and the per-query dispatcher can share the same instance.
+   */
+  detachRegistry: DetachableToolRegistry;
+  /**
+   * Model-started background processes (`bash run_in_background`). Root REPL
+   * only; the teardown path calls `killAll()`.
+   */
+  processJobs: ProcessJobRegistry;
   bgSummarizer: BackgroundSummarizer | undefined;
   rootManager: SubagentManager;
   subagentExecutor: SubagentExecutor;
@@ -104,6 +117,16 @@ export function createBootstrapInfra(a: {
   );
   setBgsubRegistry(backgroundRegistry);
 
+  // Detach registry for the Ctrl+B bash-backgrounding contract (#2542, #2735).
+  // Constructed here alongside BackgroundAgentRegistry so both the REPL Ctrl+B
+  // handler and every per-query dispatcher can share the same instance.
+  // cancelAll() is called by the interactive teardown path (Invariant:D3).
+  const detachRegistry = new DetachableToolRegistry();
+  // Background process registry for `bash run_in_background`. Same lifetime
+  // as the detach registry: shared with every per-query dispatcher of this
+  // root session, stopped by the interactive teardown path.
+  const processJobs = new ProcessJobRegistry();
+
   // Opt-in background summarizer — only constructed when bgSummaries: true.
   const bgSummariesEnabled = a.cliConfig.bgSummaries === true;
   const bgSummarizer = bgSummariesEnabled && apiKey
@@ -132,6 +155,9 @@ export function createBootstrapInfra(a: {
     // inheritance. The registry is constructed after this proxy, so reading
     // it lazily through sessionRef.current is required.
     get hookRegistry() { return a.sessionRef.current?.hookRegistry; },
+    // Journal parent view: forks journal to `messageJournal.forSubagent(id)`,
+    // never to the parent's own file (see fork-child-config.ts).
+    get messageJournal() { return a.sessionRef.current?.messageJournal; },
   };
 
   // Invariant: ONE root manager per session, shared by all three executors.
@@ -198,6 +224,8 @@ export function createBootstrapInfra(a: {
     trace,
     apiKey,
     backgroundRegistry,
+    detachRegistry,
+    processJobs,
     bgSummarizer,
     rootManager,
     subagentExecutor,

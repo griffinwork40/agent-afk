@@ -170,6 +170,8 @@ export function* emitNonToolUseTerminal(
   if (safeAssistantBlocks.length > 0) {
     input.messages.push({ role: 'assistant', content: safeAssistantBlocks });
   }
+  // Journal commit point: the turn's final assistant message.
+  input.journalSync?.sync(input.messages);
 
   yield {
     type: 'turn.completed',

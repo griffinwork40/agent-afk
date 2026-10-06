@@ -11,6 +11,7 @@
  */
 
 import type { Environment } from '../types.js';
+import { SANDBOX_OWNED_KEYS } from '../sandbox.home.js';
 
 // ---------------------------------------------------------------------------
 // Vars to delete from the child env (security / isolation)
@@ -57,11 +58,6 @@ export function buildChildEnv(
     if (v !== undefined) result[k] = v;
   }
 
-  // Apply sandbox overrides so the child sees its own isolated home tree.
-  result['AFK_HOME'] = env.home;
-  result['AFK_STATE_DIR'] = `${env.home}/state`;
-  result['AFK_FRAMEWORK_DIR'] = `${env.home}/agent-framework`;
-
   // Episode mode: read-only tools execute; side-effecting tools are recorded.
   result['AFK_WHATIF_EPISODE'] = '1';
 
@@ -82,6 +78,10 @@ export function buildChildEnv(
   }
 
   // Drop inherited keys the child must re-read from its sandbox afk.env copy.
+  // Sandbox-owned keys (SANDBOX_OWNED_KEYS) are intentionally NOT in
+  // launch.unset (sandboxedAfkEnvKeys already excludes them), so this loop
+  // never touches them — but even if a stale path somehow added them, the
+  // sandbox-path writes below would overwrite them anyway.
   for (const key of env.launch.unset ?? []) {
     delete result[key];
   }
@@ -89,15 +89,36 @@ export function buildChildEnv(
   // Apply launch-level overrides from the sandbox spec (model, effort, etc.).
   // Keys on the security delete list are skipped so launch.env can never
   // re-add them.
+  // Sandbox-owned keys are also skipped here — they are applied unconditionally
+  // below to guarantee the child always sees the sandbox paths.
   const denied = new Set(VARS_TO_DELETE);
   for (const [k, v] of Object.entries(env.launch.env)) {
-    if (!denied.has(k)) result[k] = v;
+    if (!denied.has(k) && !SANDBOX_OWNED_KEYS.has(k)) result[k] = v;
   }
 
-  // Apply caller-supplied extras last — they win over everything else.
+  // Build the set of keys that launch.unset explicitly removed so that extra
+  // cannot silently reverse an explicit unset.
+  const unsetKeys = new Set(env.launch.unset ?? []);
+
+  // Apply caller-supplied extras — filtered through the same deny list so
+  // a caller cannot re-introduce a Telegram or MCP side-effecting var, and
+  // skipping any key that launch.unset explicitly removed.
+  // Sandbox-owned keys are also blocked here; their values are applied below.
+  // Note: credential keys (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, etc.)
+  // are deliberately NOT in the deny list here — the child is a full `afk chat`
+  // invocation that needs them to talk to the model; they arrive via the
+  // process.env inheritance at the top of this function, not through `extra`.
   for (const [k, v] of Object.entries(extra)) {
-    result[k] = v;
+    if (!denied.has(k) && !unsetKeys.has(k) && !SANDBOX_OWNED_KEYS.has(k)) result[k] = v;
   }
+
+  // Apply sandbox-owned path overrides LAST so they cannot be removed or
+  // overridden by the launch.unset loop, launch.env, or extra above.
+  // This is the authoritative fix for the AFK_FRAMEWORK_DIR isolation breach:
+  // previously these were set before the unset loop and could be deleted.
+  result['AFK_HOME'] = env.home;
+  result['AFK_STATE_DIR'] = `${env.home}/state`;
+  result['AFK_FRAMEWORK_DIR'] = `${env.home}/agent-framework`;
 
   return result;
 }

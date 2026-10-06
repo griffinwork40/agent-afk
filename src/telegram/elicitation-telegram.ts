@@ -246,12 +246,64 @@ function formatRequest(req: ElicitationRequest): string {
   // syntax would render literally. The body carries filesystem paths
   // (underscores, brackets) that would also break a Markdown/HTML parser, so
   // emitting plain text is the correct (and safe) choice here.
-  if (req.title) parts.push(req.title);
+  //
+  // Spoofing guard: mirror the REPL form-mode's `_harnessInternal` gate
+  // (src/cli/elicitation/form-mode.ts). An external MCP server can set
+  // `serverName: 'agent-afk'` and supply a convincing title, but it cannot
+  // set `_harnessInternal` — that flag is set only by the AFK harness in
+  // `afk-mode-gate.ts` and is never deserialised from MCP wire data.
+  // Only harness requests get the title rendered; external requests use a
+  // fixed banner so a spoofed title cannot mislead the operator.
+  if (req._harnessInternal === true) {
+    parts.push(req.title ? `⚠ ${req.title}` : '⚠ AFK safety approval');
+  } else {
+    parts.push('⚠ MCP elicitation');
+  }
   parts.push(req.message);
-  // Telegram has a 4096-char body limit. Truncate defensively (path strings
-  // can be long; we don't want to fail-silent on send).
+  // Telegram has a 4096-char body limit. Truncate at whole-line boundaries and
+  // emit an explicit count so the operator knows how many lines were omitted.
+  // A bare mid-word slice (the previous approach) hid paths silently — issue
+  // #2366. NOTICE_RESERVE leaves room for the truncation notice itself.
   const joined = parts.join('\n\n');
-  return joined.length > 4000 ? joined.slice(0, 3997) + '...' : joined;
+  if (joined.length <= 4000) return joined;
+  return truncateLinesWithCount(joined, 4000);
+}
+
+/**
+ * Truncate `s` to at most `limit` characters by dropping whole trailing lines.
+ * Appends `[list truncated: showing N of M lines]` when lines are dropped so
+ * the operator knows how many paths/items were omitted (issue #2366).
+ *
+ * Behaviour when content has no newlines: falls back to a raw char slice with
+ * the notice appended, because there are no line boundaries to respect.
+ */
+function truncateLinesWithCount(s: string, limit: number): string {
+  // Reserve room for the count notice inside `limit`.
+  const NOTICE_RESERVE = 60;
+  const contentBudget = limit - NOTICE_RESERVE;
+  const lines = s.split('\n');
+  const totalLines = lines.length;
+
+  let kept = 0;
+  let acc = 0;
+  for (const line of lines) {
+    const needed = acc === 0 ? line.length : acc + 1 + line.length;
+    if (needed > contentBudget) break;
+    acc = needed;
+    kept += 1;
+  }
+
+  if (kept === 0) {
+    // Budget too small for even the first line — raw slice as a last resort.
+    return s.slice(0, limit);
+  }
+  if (kept >= totalLines) {
+    // All lines fit after accounting for NOTICE_RESERVE.
+    return s.slice(0, limit);
+  }
+
+  const body = lines.slice(0, kept).join('\n');
+  return `${body}\n[list truncated: showing ${kept} of ${totalLines} lines]`;
 }
 
 function buildKeyboard(ulid: string, choices: string[]): InlineKeyboardMarkup {

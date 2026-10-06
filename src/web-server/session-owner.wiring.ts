@@ -92,6 +92,9 @@ export async function wireWebSession(
     getInputStreamRef() { return boundSession?.getInputStreamRef?.() ?? { pushUserMessage: () => {} }; },
     get abortSignal() { return boundSession?.abortSignal ?? new AbortController().signal; },
     get hookRegistry() { return boundSession?.hookRegistry; },
+    // Journal parent view: forks journal to `messageJournal.forSubagent(id)`,
+    // never to the parent's own file (see fork-child-config.ts).
+    get messageJournal() { return boundSession?.messageJournal; },
   };
 
   // -- 6. wireExecutors (cwd, executors, root manager) ------------------------

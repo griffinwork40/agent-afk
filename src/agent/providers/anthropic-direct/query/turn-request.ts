@@ -3,6 +3,7 @@ import type { FastModeController, FastTurnDecision } from '../../../fast-mode.js
 import type { AnthropicClientLike, AnthropicToolDef, RunTurnInput, ToolDispatcher } from '../types.js';
 import { buildRequestHeaders } from '../auth.js';
 import { isExtendedCacheTtlActive } from '../cache-policy.js';
+import { TurnAccumulator } from '../loop/turn-accumulator.js';
 
 export interface TurnRequestInput {
   client: AnthropicClientLike;
@@ -21,6 +22,7 @@ export interface TurnRequestInput {
   thinking?: RunTurnInput['thinking'];
   effort?: RunTurnInput['effort'];
   temperature?: number;
+  thinkingBlockBinding?: RunTurnInput['thinkingBlockBinding'];
   maxToolUseIterations?: number;
   softDeadlineMs?: number;
   traceWriter?: RunTurnInput['traceWriter'];
@@ -28,6 +30,8 @@ export interface TurnRequestInput {
   throttleQueue?: RunTurnInput['throttleQueue'];
   onUsageProgress?: RunTurnInput['onUsageProgress'];
   beforeNextRound?: RunTurnInput['beforeNextRound'];
+  beforeTurnEnd?: RunTurnInput['beforeTurnEnd'];
+  journalSync?: RunTurnInput['journalSync'];
 }
 
 /** Snapshot eligibility and construct the immutable input reused by all rounds/retries. */
@@ -49,6 +53,7 @@ export function prepareTurnRequest(input: TurnRequestInput): {
     input.effort !== undefined,
     isExtendedCacheTtlActive(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
     fast,
+    input.thinkingBlockBinding !== undefined,
   );
   return {
     decision,
@@ -66,6 +71,7 @@ export function prepareTurnRequest(input: TurnRequestInput): {
       ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
       ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+      ...(input.thinkingBlockBinding !== undefined ? { thinkingBlockBinding: input.thinkingBlockBinding } : {}),
       ...(fast ? { fastMode: true } : {}),
       ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
       ...(input.maxToolUseIterations !== undefined ? { maxToolUseIterations: input.maxToolUseIterations } : {}),
@@ -75,6 +81,13 @@ export function prepareTurnRequest(input: TurnRequestInput): {
       ...(input.throttleQueue ? { throttleQueue: input.throttleQueue } : {}),
       ...(input.onUsageProgress ? { onUsageProgress: input.onUsageProgress } : {}),
       ...(input.beforeNextRound ? { beforeNextRound: input.beforeNextRound } : {}),
+      // Stop-hook seam (#2714): without this forward the seam is dead on
+      // anthropic-direct and blocking Stop hooks never continue (#2957).
+      ...(input.beforeTurnEnd ? { beforeTurnEnd: input.beforeTurnEnd } : {}),
+      ...(input.journalSync ? { journalSync: input.journalSync } : {}),
+      // One accumulator per USER TURN, shared by every retry-tier replay of it
+      // (see RunTurnInput.turnState).
+      turnState: new TurnAccumulator(),
     },
   };
 }

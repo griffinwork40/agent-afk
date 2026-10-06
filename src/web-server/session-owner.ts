@@ -100,7 +100,21 @@ export class SessionOwner {
     const model = request.model ?? this.options.model;
     const apiKey = getApiKeyForModel(model);
 
-    const { prompt: rawPrompt, source: rawPromptSource } = resolveBaseSystemPrompt(cwd);
+    // `resolveBaseSystemPrompt()` calls `loadSystemPrompt()` which throws when
+    // AFK_FRAMEWORK_PROMPT_FILE is set to a bad path. Catch here so a stale
+    // value in afk.env cannot crash a mid-server session-create request while
+    // other sessions stay alive. No bundled-prompt fallback is performed.
+    let rawPrompt: string | undefined;
+    let rawPromptSource: string | undefined;
+    try {
+      ({ prompt: rawPrompt, source: rawPromptSource } = resolveBaseSystemPrompt(cwd));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Session creation failed: AFK_FRAMEWORK_PROMPT_FILE error: ${message}. ` +
+          'Unset or fix AFK_FRAMEWORK_PROMPT_FILE to create new sessions.',
+      );
+    }
 
     // Full executor + trace + MCP wiring (mirrors REPL/Telegram Anthropic).
     const wiring = await wireWebSession({
@@ -134,6 +148,16 @@ export class SessionOwner {
     // Late-bind the deferred parent proxy so executors resolve session fields.
     wiring.__bindSession(session);
     seedPersistedGrants(wiring.provider);
+
+    // Wire session-layer Stop dispatch (#2957) — every other surface (REPL,
+    // chat, Telegram, daemon) does, and until a surface calls this the session
+    // never fires Stop. Web sessions are persistent and take further prompts,
+    // so injectContext rides the next user turn. Block/timeout outcomes are
+    // already recorded in the trace; the browser has no notice channel for them.
+    session.wireStopHook({
+      getHasNextTurn: () => true,
+      onStopInjectContext: (text) => { session.queueFrameworkContext(text); },
+    });
 
     // Invariant: the id is provider-issued and undefined until initialization
     // resolves. Registering as owned before this point would make prompt and

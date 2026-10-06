@@ -39,6 +39,18 @@ export interface PluginIndexEntry {
   ref: string | null;
   /** The commit SHA currently checked out. `null` for local/marketplace plugins. */
   commit: string | null;
+  /**
+   * True when `ref` was explicitly supplied by the user (`--ref`) at install or
+   * last update. False/absent means the updater auto-picked it (latest semver tag
+   * or default branch).
+   *
+   * Legacy migration rule: when `pinnedRef` is `undefined` (pre-fix entry), treat
+   * it as pinned when `ref` is non-null AND is not a semver tag AND is not the
+   * repo's default branch. Auto-pick only ever stores a semver tag or the default
+   * branch, so any other value in an old entry must have come from `--ref`.
+   * Use `isPinnedRef()` to evaluate this rule consistently.
+   */
+  pinnedRef?: boolean;
   /** Whether the scanner should include this plugin. */
   enabled: boolean;
   /** ISO timestamp of first install. */
@@ -49,6 +61,13 @@ export interface PluginIndexEntry {
   manifestName?: string;
   /** For `sourceType: 'marketplace'`, the marketplace this plugin came from. */
   marketplace?: string;
+  /**
+   * User-supplied option values for this plugin's `userConfig` keys.
+   * Map of manifest key → string value.  Set by `afk plugin config <name> <key> <value>`.
+   * Sensitive keys are stored here but NEVER exported to hook env vars; stale
+   * keys (removed from the manifest) are silently skipped at export time.
+   */
+  options?: Record<string, string>;
 }
 
 export interface MarketplaceIndexEntry {
@@ -60,6 +79,15 @@ export interface MarketplaceIndexEntry {
   ref: string | null;
   /** The commit SHA currently checked out. `null` for local marketplaces. */
   commit: string | null;
+  /**
+   * True when `ref` was explicitly supplied by the user (`--ref`) at install or
+   * last update. False/absent means the updater auto-picked it (latest semver tag
+   * or default branch).
+   *
+   * Legacy migration rule: same as PluginIndexEntry.pinnedRef — use
+   * `isMarketplacePinnedRef()` to evaluate consistently.
+   */
+  pinnedRef?: boolean;
   /** ISO timestamp of first install. */
   installedAt: string;
   /** ISO timestamp of most recent install/update. */
@@ -219,6 +247,87 @@ export function removeMarketplace(
     }
   }
   if (mutated) writeIndex(index, path);
+  return index;
+}
+
+/**
+ * Evaluate whether a PluginIndexEntry ref is user-pinned.
+ *
+ * Rule: explicit `pinnedRef: true` → pinned. `pinnedRef: false` → auto-picked.
+ * `pinnedRef: undefined` (legacy entry) → apply the migration heuristic: treat
+ * as pinned when `entry.ref` is non-null AND does not parse as semver AND is not
+ * the repo's default branch. Auto-pick only ever stores a semver tag (e.g.
+ * `v2.0.0`) or the default branch (e.g. `main`), so any other stored ref must
+ * have originated from `--ref`.
+ */
+export function isPinnedRef(entry: Pick<PluginIndexEntry, 'ref' | 'pinnedRef'>, defaultBranch: string): boolean {
+  if (entry.pinnedRef === true) return true;
+  if (entry.pinnedRef === false) return false;
+  const ref = entry.ref;
+  if (!ref) return false;
+  if (ref === defaultBranch) return false;
+  const SEMVER_RE = /^v?\d+\.\d+\.\d+/;
+  return !SEMVER_RE.test(ref);
+}
+
+/**
+ * Evaluate whether a MarketplaceIndexEntry ref is user-pinned.
+ * Identical semantics to isPinnedRef; duplicated so callers receive the
+ * correct entry type without casting.
+ */
+export function isMarketplacePinnedRef(entry: Pick<MarketplaceIndexEntry, 'ref' | 'pinnedRef'>, defaultBranch: string): boolean {
+  if (entry.pinnedRef === true) return true;
+  if (entry.pinnedRef === false) return false;
+  const ref = entry.ref;
+  if (!ref) return false;
+  if (ref === defaultBranch) return false;
+  const SEMVER_RE = /^v?\d+\.\d+\.\d+/;
+  return !SEMVER_RE.test(ref);
+}
+
+/**
+ * Set a single option key for a plugin. Throws if the plugin is not in the index.
+ * The caller is responsible for validating that `key` is declared in the manifest
+ * and is not sensitive (see `validateOptionKey` in `plugin-user-config.ts`).
+ */
+export function setPluginOption(
+  name: string,
+  key: string,
+  value: string,
+  path: string = getPluginsIndexPath(),
+): PluginIndex {
+  const index = readIndex(path);
+  const entry = index.plugins[name];
+  if (!entry) {
+    throw new Error(`plugin "${name}" is not in the index`);
+  }
+  entry.options = { ...(entry.options ?? {}), [key]: value };
+  entry.updatedAt = new Date().toISOString();
+  writeIndex(index, path);
+  return index;
+}
+
+/**
+ * Unset (remove) a single option key for a plugin. No-op when the key is absent.
+ * Throws if the plugin is not in the index.
+ */
+export function unsetPluginOption(
+  name: string,
+  key: string,
+  path: string = getPluginsIndexPath(),
+): PluginIndex {
+  const index = readIndex(path);
+  const entry = index.plugins[name];
+  if (!entry) {
+    throw new Error(`plugin "${name}" is not in the index`);
+  }
+  if (entry.options && key in entry.options) {
+    const updated = { ...entry.options };
+    delete updated[key];
+    entry.options = Object.keys(updated).length > 0 ? updated : undefined;
+    entry.updatedAt = new Date().toISOString();
+    writeIndex(index, path);
+  }
   return index;
 }
 

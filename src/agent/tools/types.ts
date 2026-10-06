@@ -16,6 +16,9 @@ export type { ToolDispatcher } from '../providers/anthropic-direct/tool-dispatch
 import type { ToolResult } from '../providers/shared/tool-result.js';
 import type { TraceSink } from '../trace/index.js';
 import type { SpawnedPidRegistry } from './handlers/pid-registry.js';
+import type { UserAttention } from './user-yield.js';
+import type { DetachableToolRegistry } from './detach-registry.js';
+import type { ProcessJobRegistry } from '../shell-jobs/process-jobs.js';
 
 /**
  * Per-invocation context forwarded to every tool handler.
@@ -31,19 +34,22 @@ import type { SpawnedPidRegistry } from './handlers/pid-registry.js';
  *   - `writeRoots` gates write-class tools (write_file, edit_file).
  *     Defaults to `[resolveBase]` when unset.
  *   - A path is allowed if it falls inside ANY root in the list.
- *
- * Back-compat: the legacy `cwd` field is kept as an alias for
- * `resolveBase` so existing callers (including tests) that set only
- * `{ cwd: x }` continue to work without change.
  */
 export interface ToolHandlerContext {
+  /** Path-resolution anchor for relative paths. */
+  resolveBase?: string;
   /**
-   * @deprecated Prefer `resolveBase`. Kept for back-compat; treated as an
-   * alias for `resolveBase` inside the shared `resolveAndContain` helper.
+   * @deprecated Use `resolveBase` instead. Populated at runtime as a direct
+   * alias of `resolveBase` for back-compatibility with custom tools that read
+   * `context.cwd`. Will be removed in the next semver-major release.
+   *
+   * `context.cwd` was removed in #2748 as an internal clean-up. It reaches the
+   * public npm surface via the exported `tool()` API (`custom-tool.ts`), making
+   * the removal a silent breaking change for JS consumers. This alias restores
+   * the field so existing third-party tools continue to work; migrate to
+   * `context.resolveBase` before the next major version.
    */
   cwd?: string;
-  /** Path-resolution anchor for relative paths. Was: cwd. */
-  resolveBase?: string;
   /**
    * Allowed roots for read-class tools (read_file, glob, grep,
    * list_directory). Defaults to `[resolveBase]` when unset.
@@ -139,6 +145,38 @@ export interface ToolHandlerContext {
    *     from this callback to preserve the "never blocks execution" guarantee.
    */
   onBashOutputTail?: (tail: string | undefined) => void;
+  /**
+   * Operator-attention probe for the yield contract (see `./user-yield.ts`).
+   *
+   * Attached by the dispatcher ONLY for tools in `YIELDABLE_TOOLS` and only on
+   * top-level interactive sessions. A yieldable handler checks it and, when the
+   * operator has a queued message, stops early and tells the model to end its
+   * turn. Absent for every non-yieldable tool (bash never sees it), for
+   * subagents, and for headless surfaces.
+   */
+  userAttention?: UserAttention;
+  /**
+   * Detach registry for the Ctrl+B backgrounding contract (#2542).
+   *
+   * Attached by the dispatcher ONLY for tools in `DETACHABLE_TOOLS` and
+   * only on interactive sessions that have a detach registry wired. A
+   * detachable handler calls `register(toolUseId)` to obtain a
+   * {@link import('./detach-registry.js').DetachToken}, polls
+   * `token.shouldDetach()`, and on fire returns `token.detachResult()` while
+   * keeping the underlying operation alive, then calls `token.deliver()` when
+   * the operation eventually completes.
+   *
+   * Absent for non-detachable tools, subagents, and headless surfaces.
+   */
+  detachRegistry?: DetachableToolRegistry;
+  /**
+   * Registry for model-started background processes (`bash` with
+   * `run_in_background: true`). Attached by the dispatcher to `bash` only, and
+   * only on root interactive sessions that wire one. Absent for subagent
+   * children, Telegram, daemon and one-shot runs, where the bash handler
+   * refuses background launches with an explicit "unavailable" error.
+   */
+  processJobs?: ProcessJobRegistry;
 }
 
 /**

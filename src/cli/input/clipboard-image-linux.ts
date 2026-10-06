@@ -50,7 +50,7 @@ function dbg(msg: string): void {
  * (some tools like `wl-paste --version` exit 1 on certain distros).
  *
  * Uses `spawn` (not `execFile`) so the same mock used in clipboard-image.test.ts
- * (`vi.mock('child_process', () => ({ spawn: vi.fn() }))`) covers this probe
+ * (a `vi.mock` of `child_process` returning `{ spawn: vi.fn() }`) covers this probe
  * without extra mock plumbing.
  */
 export function isCommandAvailable(cmd: string, args: string[]): Promise<boolean> {

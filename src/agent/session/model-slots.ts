@@ -19,7 +19,8 @@
  *   1. custom name    — a user-assigned `name` on a binding      (tier; {@link slotForInput})
  *   2. neutral name   — `local` | `small` | `medium` | `large`   (tier; {@link slotForInput})
  *   3. identity alias — haiku/sonnet/opus/fable/*_1m/grok → fixed id   ({@link resolveBinding})
- *   4. otherwise      — raw concrete id or the `auto` sentinel (passthrough)
+ *   4. slot id match  — a raw id equal to a configured slot's `id` carries that slot's creds
+ *   5. otherwise      — raw concrete id or the `auto` sentinel (passthrough)
  *
  * Bindings are process-global config (one afk.config.json + env per process),
  * read threadlessly by `providerForModel`/`resolveModelId` via
@@ -84,6 +85,14 @@ export interface ModelSlotBinding {
   baseUrl?: string;
   /** Per-slot API key. Wins over global credentials for this tier. */
   apiKey?: string;
+  /**
+   * Optional context-window override (tokens). When set, {@link contextLimitFor}
+   * uses this value instead of the built-in table. Useful for providers whose
+   * window depends on account tier (e.g. Cerebras free 64k vs paid 128k).
+   * Must be a positive integer ≤ 10_000_000. Invalid values are silently ignored
+   * at load time; rejected at the config_set write path.
+   */
+  contextWindow?: number;
 }
 
 /** Full set of resolved tier bindings. */
@@ -121,8 +130,10 @@ export const CLAUDE_OPUS_ID = 'claude-opus-5-5';
  * exact model even if {@link CLAUDE_OPUS_ID} is later bumped to Opus 6+.
  */
 export const CLAUDE_OPUS_55_ID = 'claude-opus-5-5';
-/** Claude Fable 5 wire id — Anthropic's most-capable widely-released model. */
+/** Claude Fable 5 wire id — preserved for explicit raw-id back-compat. */
 export const CLAUDE_FABLE_5_ID = 'claude-fable-5';
+/** Claude Fable 5.1 wire id — current target for the stable `fable` alias. */
+export const CLAUDE_FABLE_5_1_ID = 'claude-fable-5-1';
 /**
  * Current xAI Grok flagship wire id — the concrete target for the `grok`
  * short alias. Update this constant when a new flagship ships; the alias
@@ -177,7 +188,7 @@ export const DIRECT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   sonnet: CLAUDE_SONNET_ID,
   sonnet_1m: CLAUDE_SONNET_ID,
   haiku: CLAUDE_HAIKU_ID,
-  fable: CLAUDE_FABLE_5_ID,
+  fable: CLAUDE_FABLE_5_1_ID,
   // xAI Grok flagship alias — a stable short handle that tracks
   // GROK_FLAGSHIP_ID so upgrading the default Grok model is a one-line
   // change. Not a capability tier: `grok` always resolves to one pinned id.
@@ -306,6 +317,8 @@ export function computeSlotBindings(
     if (baseUrl) binding.baseUrl = baseUrl;
     const apiKey = e.apiKey ?? file?.apiKey;
     if (apiKey) binding.apiKey = apiKey;
+    const contextWindow = file?.contextWindow;
+    if (contextWindow !== undefined) binding.contextWindow = contextWindow;
     out[slot] = binding;
   }
   return out;
@@ -348,9 +361,10 @@ export function slotForInput(input: string, bindings: ModelSlots = getSlotBindin
  * neutral name) resolve to the configured `bindings[slot]` (id + any per-slot
  * provider/baseUrl/apiKey); fixed-identity aliases ({@link DIRECT_MODEL_ALIASES}
  * — `sonnet`/`opus`/`haiku`/`fable`/`*_1m`) resolve to a bare `{ id }` pinned to
- * their canonical wire id; raw ids and the `auto` sentinel also resolve to a bare
- * `{ id }` with no credentials. The returned object may be the live binding —
- * treat it as read-only.
+ * their canonical wire id; a raw id that matches a configured slot's `id`
+ * (case-insensitive) carries that slot's provider/baseUrl/apiKey; unbound raw
+ * ids and the `auto` sentinel resolve to a bare `{ id }` with no credentials.
+ * The returned object may be the live binding — treat it as read-only.
  */
 export function resolveBinding(
   input: string | undefined,
@@ -359,10 +373,16 @@ export function resolveBinding(
   if (input === undefined) return { id: '' };
   const slot = slotForInput(input, bindings);
   if (slot) return bindings[slot];
+  const trimmed = input.trim().toLowerCase();
   // Fixed-id aliases (e.g. `fable` → claude-fable-5) are not tiers, so they
   // bypass slot bindings and resolve straight to their pinned wire id.
-  const directId = DIRECT_MODEL_ALIASES[input.trim().toLowerCase()];
+  const directId = DIRECT_MODEL_ALIASES[trimmed];
   if (directId) return { id: directId };
+  // A raw id that matches a configured slot's own id carries that slot's
+  // provider/baseUrl/apiKey. Prefer the first match in SLOT_NAMES order.
+  for (const s of SLOT_NAMES) {
+    if (bindings[s].id.trim().toLowerCase() === trimmed && trimmed) return bindings[s];
+  }
   return { id: input };
 }
 
@@ -419,7 +439,7 @@ export function parseModelsConfig(raw: unknown): Partial<Record<SlotName, ModelS
   if (!raw || typeof raw !== 'object') return out;
   const obj = raw as Record<string, unknown>;
   for (const slot of SLOT_NAMES) {
-    const binding = parseBinding(obj[slot]);
+    const binding = parseBinding(obj[slot], slot);
     if (binding) out[slot] = binding;
   }
   return out;
@@ -464,10 +484,121 @@ const RESERVED_NAMES: ReadonlySet<string> = new Set([
   ...Object.keys(DIRECT_MODEL_ALIASES),
 ]);
 
-function parseBinding(value: unknown): ModelSlotBinding | undefined {
+/** Max accepted contextWindow override (10M tokens). Values above are ignored at load / rejected at write. */
+export const MAX_CONTEXT_WINDOW_OVERRIDE = 10_000_000;
+
+/**
+ * Leniently parse a raw config value as a context-window override. Returns
+ * the integer when valid (positive integer, ≤ MAX_CONTEXT_WINDOW_OVERRIDE);
+ * returns `undefined` for anything invalid so the loader can silently skip.
+ */
+function parseContextWindow(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isInteger(n) || n <= 0 || n > MAX_CONTEXT_WINDOW_OVERRIDE) return undefined;
+  return n;
+}
+
+/**
+ * Return the context-window override for a concrete model id (already resolved),
+ * scanning all active slot bindings. Returns `undefined` when no binding carries
+ * a matching `contextWindow`. Used by `contextLimitFor` in `model-limits.ts` to
+ * honour per-slot overrides on the real provider path (the provider passes the
+ * resolved concrete id, not the tier alias).
+ */
+export function contextWindowOverrideFor(
+  concreteId: string,
+  bindings: ModelSlots = getSlotBindings(),
+): number | undefined {
+  for (const slot of SLOT_NAMES) {
+    const b = bindings[slot];
+    if (b.contextWindow !== undefined && b.id === concreteId) return b.contextWindow;
+  }
+  return undefined;
+}
+
+/** Slots for which we've already emitted a JSON-string recovery warning. */
+const warnedJsonStringSlots = new Set<string>();
+
+/** Reset the JSON-string-slot warning latch. Exported for tests only. */
+export function _resetJsonStringSlotWarnings(): void {
+  warnedJsonStringSlots.clear();
+}
+
+/**
+ * Project a recovered JSON-string slot onto ONLY its agent-settable fields
+ * (`id`, `name`, `provider`). `baseUrl`/`apiKey` are human-gated (and `apiKey`
+ * is a secret that must never be echoed), so they are always omitted. Used both
+ * as the recovered binding and as the re-save suggestion.
+ */
+function safeSlotFields(parsed: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (parsed && typeof parsed === 'object') {
+    const obj = parsed as Record<string, unknown>;
+    for (const key of ['id', 'name', 'provider'] as const) {
+      const v = obj[key];
+      if (typeof v === 'string' && v.trim()) out[key] = v.trim();
+    }
+  }
+  return out;
+}
+
+/** True when a recovered JSON-string slot carried any human-gated field. */
+function hasPrivilegedSlotFields(parsed: unknown): boolean {
+  if (!parsed || typeof parsed !== 'object') return false;
+  const obj = parsed as Record<string, unknown>;
+  return obj['baseUrl'] !== undefined || obj['apiKey'] !== undefined;
+}
+
+function parseBinding(value: unknown, slotHint?: string): ModelSlotBinding | undefined {
   if (typeof value === 'string') {
     const id = value.trim();
-    return id ? { id } : undefined;
+    if (!id) return undefined;
+    // A string that starts with '{' is almost certainly a JSON-encoded object
+    // that was stored by a caller that serialized a binding object to a string
+    // instead of writing it as an object. Recover by parsing it so already-broken
+    // configs start working, and emit a one-shot warning so the user knows to
+    // re-write the slot value correctly.
+    if (id.startsWith('{')) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(id);
+      } catch {
+        if (slotHint && !warnedJsonStringSlots.has(`drop:${slotHint}`)) {
+          warnedJsonStringSlots.add(`drop:${slotHint}`);
+          process.stderr.write(
+            `[afk] warning: models.${slotHint} is a malformed JSON-encoded string — dropping binding and falling back to default.\n` +
+            `  Fix: run \`afk config set models.${slotHint} <id>\` with a bare model id or an object.\n`,
+          );
+        }
+        return undefined;
+      }
+      // Invariant: a JSON-encoded STRING slot value could historically be written
+      // by the agent-tier `models.*` setter (it accepted any non-empty string), so
+      // it is agent-provenance data. Only the agent-settable fields (id, name,
+      // provider) may be recovered from it. `baseUrl`/`apiKey` are human-gated and
+      // are DISCARDED here — honouring them would let a previously inert,
+      // agent-written string redirect model traffic and pair it with a credential,
+      // bypassing the human-only write gate. Hand-written object values (not
+      // strings) keep the lenient path below and are unaffected.
+      const recovered = safeSlotFields(parsed);
+      const droppedPrivileged = hasPrivilegedSlotFields(parsed);
+      if (slotHint && !warnedJsonStringSlots.has(`recover:${slotHint}`)) {
+        warnedJsonStringSlots.add(`recover:${slotHint}`);
+        // Never echo the raw stored string: it may carry an `apiKey`. Rebuild the
+        // suggestion from the non-secret fields only, single-quoted for the shell.
+        const tier = slotHint.toUpperCase();
+        process.stderr.write(
+          `[afk] warning: models.${slotHint} was stored as a JSON-encoded string instead of an object — recovered, but please re-save:\n` +
+            `  afk config set models.${slotHint} '${JSON.stringify(recovered)}'\n` +
+            (droppedPrivileged
+              ? `  baseUrl/apiKey in that string were IGNORED; set them via AFK_MODEL_${tier}_BASE_URL / AFK_MODEL_${tier}_API_KEY.\n`
+              : ''),
+        );
+      }
+      return parseBinding(recovered, slotHint);
+    }
+    return { id };
   }
   if (value && typeof value === 'object') {
     const obj = value as Record<string, unknown>;
@@ -482,6 +613,8 @@ function parseBinding(value: unknown): ModelSlotBinding | undefined {
     if (baseUrl) binding.baseUrl = baseUrl;
     const apiKey = parseStringField(obj['apiKey']);
     if (apiKey) binding.apiKey = apiKey;
+    const cw = parseContextWindow(obj['contextWindow']);
+    if (cw !== undefined) binding.contextWindow = cw;
     return binding;
   }
   return undefined;
@@ -559,6 +692,17 @@ export function coerceSlotBindingInput(
       };
     }
     binding.provider = provider;
+  }
+  if (obj['contextWindow'] !== undefined && obj['contextWindow'] !== '') {
+    const raw = obj['contextWindow'];
+    const n = typeof raw === 'number' ? raw : Number(raw);
+    if (!Number.isInteger(n) || n <= 0 || n > MAX_CONTEXT_WINDOW_OVERRIDE) {
+      return {
+        ok: false,
+        error: `model binding "contextWindow" must be a positive integer ≤ ${MAX_CONTEXT_WINDOW_OVERRIDE.toLocaleString()} (got ${JSON.stringify(raw)})`,
+      };
+    }
+    binding.contextWindow = n;
   }
   return { ok: true, value: binding };
 }

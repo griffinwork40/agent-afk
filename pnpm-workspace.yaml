@@ -1,0 +1,61 @@
+# pnpm 11 settings (pnpm 11 reads non-auth config only from this file, not
+# .npmrc or package.json#pnpm). This repo is a single package, not a
+# multi-package workspace; dashboard/ keeps its own lockfile and its own
+# pnpm-workspace.yaml.
+#
+# allowBuilds replaces package.json#pnpm.onlyBuiltDependencies (removed in
+# pnpm 11). pnpm 11 fails the install on any dependency build script that is
+# not listed here, so a new native dependency must be added explicitly.
+#   better-sqlite3: native SQLite binding (prebuild or node-gyp fallback)
+#   node-pty:       native PTY binding, compiled from source on Linux CI
+#   esbuild:        postinstall verifies the platform binary
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+  node-pty: true
+
+# Security overrides: pin transitive vulnerabilities to first patched release.
+# These come in via @modelcontextprotocol/sdk and ajv; direct bumps to those
+# packages do not pull in a new enough transitive version on their own because
+# the upstream ranges are wide (e.g. hono "^4.11.4", fast-uri "^3.0.1").
+overrides:
+  # fast-uri: 7 SSRF/host-confusion CVEs fixed across 3.1.4–3.1.8
+  # GHSA-v2hh-gcrm-f6hx, GHSA-7p8r-x3mc-p8w7, GHSA-f65p-4m7j-42xc,
+  # GHSA-fph4-wmhf-6fwf, GHSA-jqff-g426-hqxp, GHSA-qw65-cvwx-89v3,
+  # GHSA-hrr3-gc8f-f4qj
+  fast-uri: ">=3.1.8"
+
+  # ip-address: 6 SSRF/trust-boundary CVEs fixed across 10.2.1–10.7.1
+  # GHSA-mwp4-54f8-5fhr, GHSA-4xrf-jv44-h6hh, GHSA-22jq-vg5j-6vgg,
+  # GHSA-rpw4-54j3-4h4q, GHSA-2vr4-cq9g-pvrc, GHSA-j6r3-76f7-8jcv,
+  # GHSA-h3mg-xc3c-68pw
+  ip-address: ">=10.7.1"
+
+  # hono: 14 CVEs (CORS reflection, XSS, DoS, path traversal, data disclosure)
+  # fixed across 4.12.25–4.13.7; 4.13.7 is the first fully-clean release
+  # GHSA-88fw-hqm2-52qc, GHSA-rv63-4mwf-qqc2, GHSA-wgpf-jwqj-8h8p,
+  # GHSA-wwfh-h76j-fc44, GHSA-j6c9-x7qj-28xf, GHSA-xgm2-5f3f-mvvc,
+  # GHSA-hvrm-45r6-mjfj, GHSA-w62v-xxxg-mg59, GHSA-8j4g-w8fx-2239,
+  # GHSA-f23p-vx2j-j53r, GHSA-54fx-42gc-7vw4, GHSA-gqvv-2mrq-wpjv,
+  # GHSA-g6gw-c38x-mqfc, GHSA-crvj-82cr-hjcx, GHSA-hxh3-vqpv-xpqv,
+  # GHSA-79qm-7rj5-m7r9
+  hono: ">=4.13.7"
+
+  # @hono/node-server: path traversal on Windows via encoded backslash
+  # GHSA-frvp-7c67-39w9
+  "@hono/node-server": ">=1.19.15"
+
+  # qs: array-limit bypass + DoS via attacker-controlled isBuffer
+  # GHSA-x5fp-wj9c-mxmx, GHSA-4mjr-xmp4-gh2g
+  qs: ">=6.16.0"
+
+  # body-parser: invalid limit value silently disables size enforcement
+  # GHSA-v422-hmwv-36x6
+  body-parser: ">=2.3.0"
+
+  # proxy-addr: IP spoofing via IPv4-mapped IPv6 trust subnet (critical)
+  # GHSA-jqcg-44mw-7w3h — via @modelcontextprotocol/sdk > express
+  proxy-addr: ">=2.0.8"
+
+  # source-map-js: GHSA-68fv-2mgg-jv7q (high) — via jsdom > css-tree
+  source-map-js: ">=1.2.2"

@@ -175,6 +175,13 @@ export interface InputSurfaceArmOpts {
    */
   onOpenEditor?: () => void;
   /**
+   * Stable Ctrl+G handler — opens the in-TUI bash output viewer on the
+   * most recent capture file. Fires in any input mode (the compositor
+   * consumes Ctrl+G even when idle so it never leaks into the buffer).
+   * Absent on surfaces without a ToolLane.
+   */
+  onOpenOutputViewer?: () => void;
+  /**
    * Optional DECSTBM scroll-region guard (typically the active
    * StatusLine). Forwarded to the compositor so `commitAbove`'s
    * scrollback writes use full-screen scroll semantics.
@@ -376,6 +383,7 @@ export class InputSurface {
       onTaskView: () => this.taskViewHandler?.() ?? false,
       ...(opts.onShiftTab ? { onShiftTab: opts.onShiftTab } : {}),
       ...(opts.onOpenEditor ? { onOpenEditor: opts.onOpenEditor } : {}),
+      ...(opts.onOpenOutputViewer ? { onOpenOutputViewer: opts.onOpenOutputViewer } : {}),
       history: this.history,
       autocompleteState: this.autocompleteState,
       formatInputBuffer: (segment) => colorizeInputBuffer(segment, this.slashRegistryView),
@@ -528,6 +536,9 @@ export class InputSurface {
   async readLine(opts: InputSurfaceReadOpts): Promise<ReadWithAutocompleteResult> {
     if (this.compositor && this.compositor.isArmed()) {
       const compositor = this.compositor;
+      // Snapshot before the synchronous idle drain removes the FIFO head.
+      // Preserve provenance even for the final queued submission.
+      const queuedSubmission = compositor.hasPendingSubmission();
       return new Promise<ReadWithAutocompleteResult>((resolve, reject) => {
         // Store the reject so dispose() can abort this Promise if
         // the surface is torn down before the user presses Enter, and the
@@ -605,7 +616,7 @@ export class InputSurface {
           // model under a tall overlay (the "weird gaps" bug). See commit-block.ts.
           commitBlockAbove(compositor, echo.split('\n'));
 
-          resolve({ text: payload.text, attachments: [...payload.attachments] });
+          resolve({ text: payload.text, attachments: [...payload.attachments], queuedSubmission });
         };
         compositor.setOnSubmit(handler);
         // Rewind reload-for-edit: seed the editable buffer BEFORE flipping to

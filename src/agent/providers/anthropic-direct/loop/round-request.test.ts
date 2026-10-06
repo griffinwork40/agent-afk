@@ -211,4 +211,76 @@ describe('buildRoundParams', () => {
     });
     expect('temperature' in params).toBe(false);
   });
+
+  // ── Fable 5.1 drop_block / block_binding wiring ──────────────────────────
+  // thinking.block_binding.prefix_mismatch_behavior:'drop_block' tells the
+  // Anthropic API to drop stale thinking blocks instead of returning HTTP 400.
+  // It requires the thinking-binding-controls-2026-08-01 beta header and is
+  // injected by resolve-params.ts for Fable 5.1 sessions.
+
+  it('wires thinking.block_binding.prefix_mismatch_behavior:"drop_block" when thinkingBlockBinding is set (Fable 5.1)', () => {
+    const params = buildRoundParams({
+      model: 'claude-fable-5-1',
+      maxTokens: 128_000,
+      messages: MESSAGES,
+      system: null,
+      tools: null,
+      thinking: { type: 'adaptive' },
+      thinkingBlockBinding: { prefix_mismatch_behavior: 'drop_block' },
+    });
+    expect(params.thinking).toEqual({
+      type: 'adaptive',
+      block_binding: { prefix_mismatch_behavior: 'drop_block' },
+    });
+  });
+
+  it('omits thinking.block_binding when thinkingBlockBinding is absent (non-Fable models)', () => {
+    const params = buildRoundParams({
+      model: 'claude-sonnet-4-20250514',
+      maxTokens: 16_000,
+      messages: MESSAGES,
+      system: null,
+      tools: null,
+      thinking: { type: 'enabled', budget_tokens: 8_000 },
+      // thinkingBlockBinding intentionally absent
+    });
+    // block_binding must not appear on the wire
+    expect(params.thinking).toEqual({ type: 'enabled', budget_tokens: 8_000 });
+    expect((params.thinking as Record<string, unknown>)['block_binding']).toBeUndefined();
+  });
+
+  it('omits thinking entirely when neither thinking nor thinkingBlockBinding is set', () => {
+    const params = buildRoundParams({
+      model: 'claude-sonnet-4-20250514',
+      maxTokens: 4096,
+      messages: MESSAGES,
+      system: null,
+      tools: null,
+    });
+    expect('thinking' in params).toBe(false);
+  });
+
+  // ITEM 1: When thinking is undefined but thinkingBlockBinding IS defined (e.g.
+  // daemon/Telegram sessions where no explicit thinking config is set but the
+  // Fable 5.1 drop_block beta header was requested), buildRoundParams must
+  // synthesize an adaptive thinking object with the block_binding wired.
+  // Without this fix the beta header is sent with no drop_block policy → HTTP 400.
+  it('synthesizes adaptive thinking with block_binding when thinkingBlockBinding is set but thinking is undefined (daemon/Telegram path)', () => {
+    const params = buildRoundParams({
+      model: 'claude-fable-5-1',
+      maxTokens: 128_000,
+      messages: MESSAGES,
+      system: null,
+      tools: null,
+      // thinking intentionally absent — simulates daemon/Telegram session
+      thinkingBlockBinding: { prefix_mismatch_behavior: 'drop_block' },
+    });
+    // Must produce a synthesized adaptive thinking object with block_binding
+    expect(params.thinking).toEqual({
+      type: 'adaptive',
+      block_binding: { prefix_mismatch_behavior: 'drop_block' },
+    });
+    // Confirm the thinking key is actually present
+    expect('thinking' in params).toBe(true);
+  });
 });

@@ -19,6 +19,7 @@
 import path from 'path';
 import { safeRealpath, getWriteDenylist } from './tools/handlers/write-denylist.js';
 import { categorizeTool } from './tool-category.js';
+import { isBackgroundBashLaunch } from './tools/bash-background-flag.js';
 
 /** Three-tier risk level for a tool invocation. */
 export type RiskLevel = 'safe' | 'medium' | 'high';
@@ -159,6 +160,36 @@ const BASH_SAFE: readonly string[] = [
   'grep ',
   'echo ',
   'printf ',
+  // GitHub CLI read-only subcommands — commonly used by agents to poll CI/PR
+  // status without mutating anything. Only the read-access verbs (view, list,
+  // checks, status, diff) are safe-listed; mutating verbs (merge, create, edit,
+  // close, comment, review, approve) are NOT listed here and fall through to
+  // the default-medium rule.
+  // Matched by substring so `gh pr view --json` and `gh run list --limit 5`
+  // both hit the entry. The check order (high → medium → safe) means any
+  // command that ALSO contains a BASH_HIGH token (e.g. `| bash`) is gated
+  // before it ever reaches this table.
+  'gh pr view',
+  'gh pr list',
+  'gh pr checks',
+  'gh pr status',
+  'gh pr diff',
+  'gh run view',
+  'gh run list',
+  'gh issue view',
+  'gh issue list',
+  'gh issue status',
+  'gh repo view',
+  // curl/wget read-only HTTP probes — these modes are non-mutating and widely
+  // used in CI health checks. `-I`/`--head` issue an HTTP HEAD request; `-sI`
+  // combines silent + HEAD. Note: `-si` (lowercase i) prints response headers
+  // for a GET — still read-only, but NOT a HEAD probe. `wget --spider` is the
+  // wget equivalent of HEAD mode.
+  'curl --head',
+  'curl -I ',
+  'curl -sI ',
+  'curl -si ', // trailing space is intentional — blocks `-siX POST` (flags without separator)
+  'wget --spider',
 ];
 
 // ---------------------------------------------------------------------------
@@ -316,7 +347,11 @@ export function classifyRisk(
   // ---- bash ----------------------------------------------------------------
   if (tool === 'bash') {
     const cmd = extractBashCommand(input);
-    return classifyBash(cmd);
+    const level = classifyBash(cmd);
+    // Background floor: a `run_in_background` launch can run for up to 24 h,
+    // so a "safe" substring match (e.g. `cat ` or `pnpm test` anywhere in the
+    // string) must never auto-approve it.
+    return isBackgroundBashLaunch(tool, input) && level === 'safe' ? 'medium' : level;
   }
 
   // ---- write_file / edit_file ---------------------------------------------

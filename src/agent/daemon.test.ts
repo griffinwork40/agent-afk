@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentConfig, Message } from './types.js';
@@ -361,10 +361,11 @@ describe('CronScheduler onTaskComplete callback', () => {
     expect(callback).toHaveBeenCalledTimes(1);
   });
 
-  it('onTaskComplete is NOT fired when appendFileSync throws', async () => {
+  it('onTaskComplete IS fired even when appendFileSync throws (#2305)', async () => {
     // Point telemetryPath at a location that will fail to write (a directory
     // path masquerading as a file path — writing to a directory errors on all
-    // platforms).
+    // platforms). The new contract: telemetry failure must never suppress the
+    // completion push; fireOnTaskComplete runs after the catch block.
     const badTelemetryPath = mkdtempSync(join(tmpdir(), 'agent-afk-badtel-'));
     const callback = vi.fn();
     scheduler = new CronScheduler({
@@ -382,8 +383,8 @@ describe('CronScheduler onTaskComplete callback', () => {
 
     // tick still resolves (telemetry failure is swallowed)
     await expect(scheduler.tick('t')).resolves.toMatchObject({ status: 'success' });
-    // callback must NOT have been called because the write threw before it was reached
-    expect(callback).not.toHaveBeenCalled();
+    // callback MUST have been called exactly once despite the write throwing
+    expect(callback).toHaveBeenCalledTimes(1);
 
     rmSync(badTelemetryPath, { recursive: true, force: true });
   });
@@ -782,7 +783,12 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
     expect(task?.notifyChat).toBeUndefined();
   });
 
-  it('POST /tasks preserves executor: "shell" through GET /tasks', async () => {
+  it('POST /tasks rejects executor: "shell" with 400 (security: shell blocked over HTTP)', async () => {
+    // Security fix (#2300): executor:"shell" is not accepted over the
+    // unauthenticated HTTP control surface. Any local process could otherwise
+    // register a persistent shell cron job without going through the CLI or
+    // create_schedule tool. Shell tasks must be created via the schedule store
+    // or CLI where operator intent is explicit.
     const h = await spinDaemon();
     const res = await fetch(`http://localhost:${h.port}/tasks`, {
       method: 'POST',
@@ -794,19 +800,42 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
         executor: 'shell',
       }),
     });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/executor "shell"/);
+
+    // The task must NOT have been registered.
+    const listRes = await fetch(`http://localhost:${h.port}/tasks`);
+    const tasks = (await listRes.json()) as Array<{ taskId: string }>;
+    expect(tasks.some((t) => t.taskId === 'shell-task')).toBe(false);
+  });
+
+  it('POST /tasks still accepts executor: "agent" over HTTP', async () => {
+    // Regression guard: the shell block must not break agent-executor live-sync
+    // (the create_schedule tool path).
+    const h = await spinDaemon();
+    const res = await fetch(`http://localhost:${h.port}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        taskId: 'agent-task',
+        command: '/forge-friction --auto',
+        cron: '* * * * *',
+        executor: 'agent',
+      }),
+    });
     expect(res.status).toBe(201);
 
     const listRes = await fetch(`http://localhost:${h.port}/tasks`);
     const tasks = (await listRes.json()) as Array<{ taskId: string; executor?: string }>;
-    const task = tasks.find((t) => t.taskId === 'shell-task');
-    expect(task?.executor).toBe('shell');
+    const task = tasks.find((t) => t.taskId === 'agent-task');
+    expect(task?.executor).toBe('agent');
   });
 
-  it('POST /tasks does not propagate executor: "builtin" — body guard drops it', async () => {
-    // Regression guard: the body guard previously accepted 'builtin' while the
-    // tool handler and CLI both explicitly rejected it. Tightened to 'agent'|'shell' only.
-    // The guard silently drops unrecognised executor values; the task is still
-    // registered, but without an executor field (it must not be 'builtin').
+  it('POST /tasks rejects executor: "builtin" with 400 (unknown executor guard)', async () => {
+    // Regression guard: unknown executor values must not silently fall back to agent.
+    // "builtin" tasks are internally registered via startDaemon(tasks:[...]), never
+    // via the HTTP control surface.
     const h = await spinDaemon();
     const res = await fetch(`http://localhost:${h.port}/tasks`, {
       method: 'POST',
@@ -818,14 +847,19 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
         executor: 'builtin',
       }),
     });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/executor "builtin"/);
+
     const listRes = await fetch(`http://localhost:${h.port}/tasks`);
-    const tasks = (await listRes.json()) as Array<{ taskId: string; executor?: string }>;
-    const task = tasks.find((t) => t.taskId === 'builtin-task');
-    expect(task?.executor).not.toBe('builtin');
+    const tasks = (await listRes.json()) as Array<{ taskId: string }>;
+    expect(tasks.some((t) => t.taskId === 'builtin-task')).toBe(false);
   });
 
   it('POST /tasks carries cwd through to GET /tasks', async () => {
+    // Use tmpdir() so the path is guaranteed to exist on all platforms
+    // (POSIX: /tmp, Windows: C:\Users\...\Temp). The validator checks existence.
+    const cwdValue = tmpdir();
     const h = await spinDaemon();
     const res = await fetch(`http://localhost:${h.port}/tasks`, {
       method: 'POST',
@@ -834,7 +868,7 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
         taskId: 'cwd-task',
         command: '/cmd',
         cron: '* * * * *',
-        cwd: '/tmp',
+        cwd: cwdValue,
       }),
     });
     expect(res.status).toBe(201);
@@ -842,7 +876,7 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
     const listRes = await fetch(`http://localhost:${h.port}/tasks`);
     const tasks = (await listRes.json()) as Array<{ taskId: string; cwd?: string }>;
     const task = tasks.find((t) => t.taskId === 'cwd-task');
-    expect(task?.cwd).toBe('/tmp');
+    expect(task?.cwd).toBe(cwdValue);
   });
 
   it('POST /tasks rejects a nonexistent cwd with 400 and does not register the task', async () => {
@@ -925,6 +959,89 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
     const h = await spinDaemon();
     const res = await fetch(`http://localhost:${h.port}/tasks/ghost`, { method: 'DELETE' });
     expect(res.status).toBe(404);
+  });
+
+  it('POST /tasks shell: accepts matching enabled store entry for trusted live-sync', async () => {
+    const tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-shell-'));
+    vi.stubEnv('AFK_HOME', tmpHome);
+    mkdirSync(join(tmpHome, 'config'), { recursive: true });
+    writeFileSync(
+      join(tmpHome, 'config', 'schedules.json'),
+      JSON.stringify([
+        {
+          id: 'shell-live',
+          name: 'Shell Live',
+          command: 'echo hello',
+          cron: '0 2 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+          enabled: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ]),
+    );
+    try {
+      const h = await spinDaemon();
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: 'shell-live',
+          command: 'echo hello',
+          cron: '0 2 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+        }),
+      });
+      expect(res.status).toBe(201);
+      const task = h.scheduler.list().find((t) => t.taskId === 'shell-live');
+      expect(task?.executor).toBe('shell');
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /tasks shell: rejects command mismatch for an existing store id', async () => {
+    const tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-shell-'));
+    vi.stubEnv('AFK_HOME', tmpHome);
+    mkdirSync(join(tmpHome, 'config'), { recursive: true });
+    writeFileSync(
+      join(tmpHome, 'config', 'schedules.json'),
+      JSON.stringify([
+        {
+          id: 'shell-live',
+          name: 'Shell Live',
+          command: 'echo safe',
+          cron: '0 2 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+          enabled: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ]),
+    );
+    try {
+      const h = await spinDaemon();
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: 'shell-live',
+          command: 'rm -rf /',
+          cron: '0 2 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+        }),
+      });
+      expect(res.status).toBe(400);
+      expect(h.scheduler.list().some((t) => t.taskId === 'shell-live')).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1125,12 +1242,18 @@ describe('notifyChat threading in CronScheduler', () => {
 
 describe('oauthRefresher timer (proactive token refresh, #1296)', () => {
   let handle: DaemonHandle | null = null;
+  let telemetryPath: string;
+
+  beforeEach(() => {
+    telemetryPath = tmpTelemetryFile();
+  });
 
   afterEach(async () => {
     if (handle) {
       await handle.stop();
       handle = null;
     }
+    rmSync(telemetryPath, { force: true });
   });
 
   it('calls oauthRefresher on the configured interval', async () => {
@@ -1139,6 +1262,7 @@ describe('oauthRefresher timer (proactive token refresh, #1296)', () => {
     handle = await startDaemon({
       port: 0,
       writePortFile: false,
+      telemetryPath,
       oauthRefresher: refresher,
       oauthRefreshIntervalMs: 100,
     });
@@ -1162,6 +1286,7 @@ describe('oauthRefresher timer (proactive token refresh, #1296)', () => {
     handle = await startDaemon({
       port: 0,
       writePortFile: false,
+      telemetryPath,
       oauthRefresher: refresher,
       oauthRefreshIntervalMs: 100,
     });
@@ -1186,6 +1311,7 @@ describe('oauthRefresher timer (proactive token refresh, #1296)', () => {
     handle = await startDaemon({
       port: 0,
       writePortFile: false,
+      telemetryPath,
       oauthRefresher: async () => {
         try { await refresher(); } catch (e) { resolve(); throw e; }
       },
@@ -1209,7 +1335,7 @@ describe('oauthRefresher timer (proactive token refresh, #1296)', () => {
     // interval, but we verify that stop() succeeds and the daemon functions
     // normally — previously the oauthRefreshTimer undefined-check ensured
     // clearInterval is safely skipped.
-    handle = await startDaemon({ port: 0, writePortFile: false });
+    handle = await startDaemon({ port: 0, writePortFile: false, telemetryPath });
     await handle.stop();
     handle = null;
     vi.useRealTimers();
@@ -1228,34 +1354,37 @@ type SessionFactoryReturn = NonNullable<
 
 describe('port file lifecycle', () => {
   let tmpHome: string;
+  let telemetryPath: string;
   const portFilePath = (): string => join(getDaemonStateDir('default'), 'port');
 
   beforeEach(() => {
     tmpHome = mkdtempSync(join(tmpdir(), 'agent-afk-portfile-'));
     vi.stubEnv('AFK_HOME', tmpHome);
+    telemetryPath = tmpTelemetryFile();
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
     rmSync(tmpHome, { recursive: true, force: true });
+    rmSync(telemetryPath, { force: true });
   });
 
   it('writes the port file by default and removes it on stop', async () => {
-    const h = await startDaemon({ port: 0 });
+    const h = await startDaemon({ port: 0, telemetryPath });
     expect(readFileSync(portFilePath(), 'utf-8').trim()).toBe(`${h.host}:${h.port}`);
     await h.stop();
     expect(existsSync(portFilePath())).toBe(false);
   });
 
   it('writePortFile: false skips the port file entirely', async () => {
-    const h = await startDaemon({ port: 0, writePortFile: false });
+    const h = await startDaemon({ port: 0, writePortFile: false, telemetryPath });
     expect(existsSync(portFilePath())).toBe(false);
     await h.stop();
     expect(existsSync(portFilePath())).toBe(false);
   });
 
   it('stop() leaves a port file it no longer owns intact', async () => {
-    const h = await startDaemon({ port: 0 });
+    const h = await startDaemon({ port: 0, telemetryPath });
     // Another instance (re)claims the discovery path while we are running —
     // unconditional unlink would sever live-sync for that instance.
     writeFileSync(portFilePath(), '65501', 'utf-8');
@@ -1265,7 +1394,7 @@ describe('port file lifecycle', () => {
   });
 
   it('binds the control surface to loopback (127.0.0.1) by default', async () => {
-    const h = await startDaemon({ port: 0, writePortFile: false });
+    const h = await startDaemon({ port: 0, writePortFile: false, telemetryPath });
     // Regression guard: the prior code omitted the host argument, so Node bound
     // the unspecified address (all interfaces) — exposing the unauthenticated
     // control surface to the local network. Loopback-by-default closes that.
@@ -1277,13 +1406,13 @@ describe('port file lifecycle', () => {
   it('honors an explicit bind host option', async () => {
     // Exercises the `options.host`-defined branch (the default test above
     // covers the fallback branch). Loopback only — no external interface bind.
-    const h = await startDaemon({ port: 0, host: '127.0.0.1', writePortFile: false });
+    const h = await startDaemon({ port: 0, host: '127.0.0.1', writePortFile: false, telemetryPath });
     expect(h.host).toBe('127.0.0.1');
     await h.stop();
   });
 
   it('POST /tasks accepts cronExpression as an alias for cron', async () => {
-    const h = await startDaemon({ port: 0, writePortFile: false });
+    const h = await startDaemon({ port: 0, writePortFile: false, telemetryPath });
     try {
       const res = await fetch(`http://localhost:${h.port}/tasks`, {
         method: 'POST',

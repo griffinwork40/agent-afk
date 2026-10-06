@@ -39,10 +39,20 @@ import {
   type RoundRetryBudget,
   isTransientServerError,
 } from './retry-budget.js';
+import {
+  CONNECTION_ERROR_BASE_DELAY_MS,
+  CONNECTION_ERROR_MAX_RETRIES,
+  connectionRetryMetadata,
+  isConnectionPhaseNetworkError,
+  isConnectionTimeoutError,
+  isRetryableConnectionStatus,
+} from './connection-error.js';
 import { awaitCreateWithThrottleSignals } from './throttle-signals.js';
 import { dumpThinkingDiagnostic } from './thinking-diagnostic.js';
+import { isNonDefaultSamplingForbiddenModel } from '../resolve-params.js';
+import { buildSignatureRetryMessages, isInvalidSignatureError } from './signature-retry.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
-import { enforceManyImageLimit } from './_many-image-guard.js';
+import { enforceManyImageLimit, MANY_IMAGE_THRESHOLD, MAX_DIMENSION_MANY_IMAGES } from './_many-image-guard.js';
 
 /**
  * Contract: project an internal {@link AnthropicToolDef} to the wire-safe shape
@@ -84,18 +94,23 @@ class ConnectionOverloadExhaustedError extends Error {
 // so aborting it covers BOTH a user interrupt and a first-byte timeout. The
 // 529/503 connection-phase backoff sleeps still gate on the caller's `turnSignal`
 // so a persistent overload wakes on interrupt but not on the TTFB timer alone.
-async function createWithRetry(
+//
+// Two independent budgets: 529/503 overload (OVERLOAD_MAX_RETRIES) and
+// connection-phase network failures (CONNECTION_ERROR_MAX_RETRIES, see
+// connection-error.ts for why the latter exists since #2422).
+export async function createWithRetry(
   client: { messages: { create(params: unknown, opts: unknown): unknown } },
   params: AnthropicMessagesCreateParams,
   headers: Record<string, string>,
   requestSignal: AbortSignal,
   turnSignal: AbortSignal,
+  onConnectionRetry?: (info: ConnectionRetryInfo) => void,
 ): Promise<AsyncIterable<unknown>> {
-  for (let attempt = 0; ; attempt++) {
-    if (attempt > 0) {
-      // Jittered (#762): concurrent sessions hitting the same 529 must not
-      // retry in lockstep. Additive, so the documented minimum still holds.
-      const delay = jitterBackoff(OVERLOAD_BASE_DELAY_MS * Math.pow(2, attempt - 1));
+  let overloadAttempts = 0;
+  let connectionAttempts = 0;
+  let delay = 0;
+  for (;;) {
+    if (delay > 0) {
       await sleepWithAbort(delay, turnSignal);
       if (turnSignal.aborted) throw new Error('aborted');
     }
@@ -107,14 +122,54 @@ async function createWithRetry(
       if (requestSignal.aborted) throw err;
       const e = err instanceof Error ? err : new Error(String(err));
       if (isTransientServerError(e)) {
-        if (attempt < OVERLOAD_MAX_RETRIES) continue;
-        // Budget exhausted: signal the caller with a typed sentinel so it can
-        // route to the CLEAN overload terminal instead of the fatal error path.
-        throw new ConnectionOverloadExhaustedError();
+        if (overloadAttempts >= OVERLOAD_MAX_RETRIES) {
+          // Budget exhausted: signal the caller with a typed sentinel so it can
+          // route to the CLEAN overload terminal instead of the fatal error path.
+          throw new ConnectionOverloadExhaustedError();
+        }
+        overloadAttempts++;
+        // Jittered (#762): concurrent sessions hitting the same 529 must not
+        // retry in lockstep. Additive, so the documented minimum still holds.
+        delay = jitterBackoff(OVERLOAD_BASE_DELAY_MS * Math.pow(2, overloadAttempts - 1));
+        continue;
+      }
+      // `requestSignal` is known NOT aborted here (checked above), so an
+      // `APIConnectionTimeoutError` is the SDK's own connect timeout, not the
+      // TTFB/stall watchdog (an AFK abort surfaces as APIUserAbortError). See
+      // isConnectionTimeoutError for why it must be retried.
+      if (
+        (isConnectionPhaseNetworkError(e) ||
+          isConnectionTimeoutError(e) ||
+          isRetryableConnectionStatus(e)) &&
+        connectionAttempts < CONNECTION_ERROR_MAX_RETRIES
+      ) {
+        connectionAttempts++;
+        delay = jitterBackoff(CONNECTION_ERROR_BASE_DELAY_MS * Math.pow(2, connectionAttempts - 1));
+        onConnectionRetry?.({ attempt: connectionAttempts, delayMs: delay, error: e });
+        continue;
       }
       throw e;
     }
   }
+}
+
+/** One connection-phase network retry, reported to the trace callback. */
+export interface ConnectionRetryInfo {
+  attempt: number;
+  delayMs: number;
+  error: Error;
+}
+
+/** Trace callback for connection-phase network retries. Fire-and-forget. */
+function traceConnectionRetry(input: RunTurnInput): (info: ConnectionRetryInfo) => void {
+  return (info) => {
+    void emitSessionPhase(input.traceWriter, {
+      phase: 'connection_retry',
+      durationMs: info.delayMs,
+      resolvedModel: input.model,
+      metadata: connectionRetryMetadata(info),
+    });
+  };
 }
 
 
@@ -146,6 +201,89 @@ export type OpenRoundResult =
   | { kind: 'overload-exhausted' }
   | { kind: 'terminated' };
 
+/**
+ * Stall-watchdog callback for one round. Witness layer: reuse the
+ * `idle_watchdog_fired` phase, the established vocabulary for "a
+ * progress-aware watchdog fired on unexplained silence"
+ * (subagent/idle-watchdog.ts). `source` distinguishes this provider-stream
+ * fire from a forked sub-agent's. Fire-and-forget; a slow trace write must
+ * never delay the abort.
+ */
+function traceStreamStall(input: RunTurnInput): (info: { elapsedSinceLastProgressMs: number; stallTimeoutMs: number }) => void {
+  return (info) => {
+    void emitSessionPhase(input.traceWriter, {
+      phase: 'idle_watchdog_fired',
+      durationMs: info.elapsedSinceLastProgressMs,
+      resolvedModel: input.model,
+      metadata: {
+        source: 'model-stream',
+        stallTimeoutMs: info.stallTimeoutMs,
+        elapsedSinceLastProgressMs: info.elapsedSinceLastProgressMs,
+      },
+    });
+  };
+}
+
+/** Throttle callback: extend the TTFB bound by the provider's retry-after (see the Invariant at the call site). */
+function extendOnThrottle(ttfb: { extend(ms: number): void }): (retryAfterMs: number | undefined) => void {
+  return (retryAfterMs) => {
+    const extension = throttleExtensionMs(retryAfterMs);
+    if (extension !== undefined) ttfb.extend(extension);
+  };
+}
+
+/**
+ * One-shot retry for HTTP 400 "invalid signature in thinking block".
+ *
+ * Contract: called only when `isInvalidSignatureError` already matched. Strips
+ * earlier-turn thinking blocks, re-arms watchdogs (the originals were disposed
+ * in the `openRound` catch block), and attempts one more `messages.create`.
+ * Returns the `OpenRoundTransport` on success, or `null` when there is nothing
+ * to strip or the retry also fails — letting the caller surface the original
+ * error unchanged.
+ *
+ * Why (#2464): a provider switch (Anthropic → OpenAI → Anthropic) replays
+ * recovered signed thinking, and whether Anthropic still accepts it is
+ * unverified. See loop/signature-retry.ts for `buildSignatureRetryMessages`.
+ */
+async function* attemptSignatureRetry(
+  input: RunTurnInput,
+  turn: Pick<TurnAccumulator, 'windDownReason'>,
+  ttfbTimeoutMs: number,
+  stallTimeoutMs: number,
+  requestStartedAt: number,
+): AsyncGenerator<ProviderEvent, OpenRoundTransport | null, void> {
+  const retryMessages = buildSignatureRetryMessages(input.messages);
+  if (retryMessages === null) return null;
+  // Invariant: mutate in place so subsequent rounds in this tool loop see stripped
+  // history and do not re-fail with the same stale signatures. The journal differ
+  // records this as a truncate+re-append, which is acceptable for this rare path.
+  input.messages.splice(0, input.messages.length, ...retryMessages);
+  const retryParams = buildRoundParams({
+    ...input,
+    messages: isCacheEnabled({ baseUrl: input.baseUrl })
+      ? withMessagesBreakpoint(input.messages, getCacheTtl())
+      : input.messages,
+    tools: turn.windDownReason !== null ? null : input.tools,
+  });
+  const retryTtfb = armFirstByteTimeout(input.signal, ttfbTimeoutMs);
+  const retryStall = armStreamStallWatchdog(retryTtfb.signal, stallTimeoutMs, traceStreamStall(input));
+  try {
+    const retryEvents = yield* awaitCreateWithThrottleSignals(
+      createWithRetry(input.client, retryParams, input.headers, retryStall.signal, input.signal, traceConnectionRetry(input)),
+      input,
+      extendOnThrottle(retryTtfb),
+    );
+    return { kind: 'opened', events: retryEvents, ttfb: retryTtfb, stall: retryStall, requestStartedAt };
+  } catch {
+    // Retry also failed — dispose fresh watchdogs and return null so the caller
+    // surfaces the original error unchanged.
+    retryTtfb.dispose();
+    retryStall.dispose();
+    return null;
+  }
+}
+
 /** Everything the connection phase needs from the enclosing turn. */
 export interface OpenRoundContext {
   input: RunTurnInput;
@@ -157,14 +295,20 @@ export interface OpenRoundContext {
   stallTimeoutMs: number;
 }
 
-export function buildRoundParams(input: Pick<RunTurnInput, 'model' | 'maxTokens' | 'messages' | 'system' | 'tools' | 'thinking' | 'effort' | 'temperature' | 'fastMode'>): AnthropicMessagesCreateParams {
+export function buildRoundParams(input: Pick<RunTurnInput, 'model' | 'maxTokens' | 'messages' | 'system' | 'tools' | 'thinking' | 'effort' | 'temperature' | 'thinkingBlockBinding' | 'fastMode'>): AnthropicMessagesCreateParams {
   return {
     model: input.model, max_tokens: input.maxTokens, messages: input.messages, stream: true,
     ...(input.system !== null ? { system: input.system } : {}),
     ...(input.tools !== null && input.tools.length > 0 ? { tools: input.tools.map(toWireTool) } : {}),
-    ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
+    ...(input.thinking !== undefined || input.thinkingBlockBinding !== undefined
+      ? {
+          thinking: input.thinkingBlockBinding !== undefined
+            ? { ...(input.thinking ?? { type: 'adaptive' as const }), block_binding: input.thinkingBlockBinding }
+            : input.thinking!,
+        }
+      : {}),
     ...(input.effort !== undefined ? { output_config: { effort: input.effort } } : {}),
-    ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+    ...(input.temperature !== undefined && !isNonDefaultSamplingForbiddenModel(input.model) ? { temperature: input.temperature } : {}),
     ...(input.fastMode === true ? { speed: 'fast' as const } : {}),
   };
 }
@@ -219,7 +363,23 @@ export async function* openRound({
   // in the 2 001–8 000 px range pass the tool-level guards but cause a hard
   // HTTP 400 here. Replace out-of-range images with imageOmitted text blocks
   // so the request succeeds instead of permanently poisoning the session.
-  enforceManyImageLimit(input.messages);
+  const manyImageDegraded = enforceManyImageLimit(input.messages);
+  if (manyImageDegraded > 0) {
+    void emitSessionPhase(input.traceWriter, {
+      phase: 'many_image_degraded',
+      metadata: {
+        degradedCount: manyImageDegraded,
+        threshold: MANY_IMAGE_THRESHOLD,
+        maxDimension: MAX_DIMENSION_MANY_IMAGES,
+      },
+    });
+  }
+
+  // Journal commit point: history is final for this request (orphan repair and
+  // image degradation applied, cache marker not yet stamped — the clone below
+  // never reaches stored history). Captures the new user turn and the previous
+  // round's tool_result turn with its FULL content.
+  input.journalSync?.sync(input.messages);
 
   // Stamp a prompt-cache breakpoint on the last content block of the last
   // message before sending — non-mutating clone-and-stamp so the marker never
@@ -256,23 +416,7 @@ export async function* openRound({
   // pre-first-byte window remains governed solely by the TTFB bound and the two
   // can never both be pending. Every subsequent event re-arms it, so only
   // genuine silence — not slowness — can fire it.
-  const stall = armStreamStallWatchdog(ttfb.signal, stallTimeoutMs, (info) => {
-    // Witness layer: reuse the `idle_watchdog_fired` phase — the established
-    // vocabulary for "a progress-aware watchdog fired on unexplained silence"
-    // (subagent/idle-watchdog.ts). `source` distinguishes this provider-stream
-    // fire from a forked sub-agent's. Fire-and-forget; a slow trace write must
-    // never delay the abort.
-    void emitSessionPhase(input.traceWriter, {
-      phase: 'idle_watchdog_fired',
-      durationMs: info.elapsedSinceLastProgressMs,
-      resolvedModel: input.model,
-      metadata: {
-        source: 'model-stream',
-        stallTimeoutMs: info.stallTimeoutMs,
-        elapsedSinceLastProgressMs: info.elapsedSinceLastProgressMs,
-      },
-    });
-  });
+  const stall = armStreamStallWatchdog(ttfb.signal, stallTimeoutMs, traceStreamStall(input));
 
   try {
     // Race the create await against the out-of-band throttle queue so a
@@ -292,6 +436,7 @@ export async function* openRound({
         // arm() returns the base signal unchanged, so this degrades cleanly.
         stall.signal,
         input.signal,
+        traceConnectionRetry(input),
       ),
       input,
       // Invariant: the TTFB bound is armed ABOVE this call, so its window spans
@@ -305,10 +450,7 @@ export async function* openRound({
       // leave the bound untouched when no window was communicated, so
       // unexplained silence still trips on schedule. Same policy the forked
       // subagent idle watchdog applies via pause-window.ts.
-      (retryAfterMs) => {
-        const extension = throttleExtensionMs(retryAfterMs);
-        if (extension !== undefined) ttfb.extend(extension);
-      },
+      extendOnThrottle(ttfb),
     );
     return { kind: 'opened', events, ttfb, stall, requestStartedAt };
   } catch (err) {
@@ -340,6 +482,15 @@ export async function* openRound({
       return { kind: 'overload-exhausted' };
     }
     const e = annotateFastError(err, input.fastMode === true);
+    if (isInvalidSignatureError(e)) {
+      const hit = yield* attemptSignatureRetry(input, turn, ttfbTimeoutMs, stallTimeoutMs, requestStartedAt);
+      if (hit !== null) return hit;
+      // A user interrupt during the retry is a clean stop, not the stale 400.
+      if (input.signal.aborted) {
+        yield { type: 'turn.completed', usage: turn.terminalUsage(), sessionId: input.ctx.sessionId };
+        return { kind: 'terminated' };
+      }
+    }
     if (e.message.includes('thinking')) {
       dumpThinkingDiagnostic(input.messages, e);
     }

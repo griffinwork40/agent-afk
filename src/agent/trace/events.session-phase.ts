@@ -1,9 +1,9 @@
 /**
- * Zod schemas for the `session_phase` trace event payload — extracted from
- * `events.ts` to keep that file within the 350-code-line ceiling.
- *
- * This module is the canonical source for `SessionPhaseNameSchema` and
- * `SessionPhasePayloadSchema`; `events.ts` re-exports them from here.
+ * Zod schemas for `session_phase` trace payloads, extracted from
+ * {@link ./events} to keep that module under the 350-code-line ceiling.
+ * Re-exported from `./events` — import from there. The TypeScript
+ * `SessionPhaseName` union in {@link ./types} is the canonical list; this
+ * enum must mirror it (see session-phase.test.ts parity check).
  *
  * @module agent/trace/events.session-phase
  */
@@ -62,6 +62,34 @@ export const SessionPhaseNameSchema = z.enum([
   // `sessionId` on the payload carries the provider-issued id; present only
   // on this phase kind. Absent on all older traces — treat absence as unknown.
   'session_id_assigned',
+  // Many-image dimension guard replacement. See SessionPhaseName JSDoc in
+  // types.ts — metadata carries degradedCount, threshold, maxDimension.
+  'many_image_degraded',
+  // Mid-stream transport drop accepted as clean completion (#2780).
+  // See SessionPhaseName JSDoc in types.ts for the full contract.
+  'stream_accepted_after_drop',
+  // Connection-phase network retry. See SessionPhaseName JSDoc in types.ts.
+  'connection_retry',
+  'usage_notice',
+  // Per-session tool-degradation signal (#2774). Emitted at most once per
+  // (tool, errorHead) per session. See SessionPhaseName JSDoc in types.ts.
+  // metadata: { tool, errorHead, errorCount, callCount }
+  'tool_degraded',
+  // Advisory same-error strategy nudge. See SessionPhaseName JSDoc in
+  // types.session-phase.ts. metadata: { tool, errorHead, occurrences, distinctCalls }
+  'strategy_nudge_fired',
+  // Stop-hook injectContext dropped on one-shot surfaces (no next user turn).
+  // See SessionPhaseName JSDoc in types.session-phase.ts for the full rationale.
+  'stop_inject_dropped',
+  // A blocking Stop hook triggered a same-turn continuation round. Emitted
+  // once per continuation. `metadata` carries `continuation` (1-based count)
+  // and `reasonHead` (first ≤200 chars of the blocking reason, passed through
+  // redactSecrets). See SessionPhaseName JSDoc in types.ts.
+  'stop_hook_continuation',
+  // The per-turn same-turn continuation cap was reached; the turn ends
+  // normally. `metadata` carries `cap` (the configured ceiling). See
+  // SessionPhaseName JSDoc in types.ts.
+  'stop_hook_cap_reached',
   // Last-resort orphan repair fired (single event, no paired start). Emitted
   // from openRound only when repairOrphanToolUses actually changed history —
   // i.e. a corruption path evaded both the tool-round rollback (tool-round.ts)

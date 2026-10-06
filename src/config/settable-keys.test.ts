@@ -58,6 +58,16 @@ describe('classifyEnvKey', () => {
     expect(classifyEnvKey('HOME')).toBe('non-config');
     expect(classifyEnvKey('NODE_ENV')).toBe('non-config');
   });
+  it('marks Windows OS-owned WSL-related vars as non-config (security: feed buildWslPrefixes)', () => {
+    // SystemRoot, MSYSTEM, and LOCALAPPDATA are OS-owned process vars that
+    // directly feed the security-sensitive WSL prefix check in
+    // resolve-shell.ts.  An agent must not be able to persist them —
+    // classifyEnvKey must return 'non-config' so config_set refuses them
+    // unconditionally.
+    expect(classifyEnvKey('SystemRoot')).toBe('non-config');
+    expect(classifyEnvKey('MSYSTEM')).toBe('non-config');
+    expect(classifyEnvKey('LOCALAPPDATA')).toBe('non-config');
+  });
   it('marks unknown names as unknown', () => {
     expect(classifyEnvKey('TOTALLY_MADE_UP')).toBe('unknown');
   });
@@ -98,6 +108,7 @@ describe('classifyConfigKey / specs', () => {
     expect(classifyConfigKey('enableShellHooks')).toBe('human'); // trust gate — agent must not flip it
     expect(classifyConfigKey('hooks')).toBe('unknown'); // hooks intentionally not listed (no safe per-key validator)
     expect(classifyConfigKey('permissionMode')).toBe('human'); // self-escalation vector — agent must not set bypass on itself
+    expect(classifyConfigKey('pluginHookEnv')).toBe('human'); // per-plugin env allowlist — agent must not expand its own hook env access
     expect(classifyConfigKey('interactive.worktreeBranchPrefix')).toBe('human');
     expect(classifyConfigKey('nonsense.key')).toBe('unknown');
   });
@@ -209,6 +220,109 @@ describe('coerceConfigValue', () => {
     it('rejects an array', () => {
       expect(coerceConfigValue(spec, ['glm-5.2']).ok).toBe(false);
     });
+
+    // JSON-string model-slot fix: write-path handling
+    it('accepts a JSON-encoded object string and stores it as an object (minimal)', () => {
+      const res = coerceConfigValue(spec, '{"id":"gpt-oss-120b"}');
+      expect(res).toEqual({ ok: true, value: { id: 'gpt-oss-120b' } });
+    });
+    it('accepts a JSON-encoded object string with name + provider', () => {
+      const res = coerceConfigValue(spec, '{"id":"gpt-oss-120b","name":"Cerebras GPT-OSS 120B","provider":"openai-compatible"}');
+      expect(res).toEqual({ ok: true, value: { id: 'gpt-oss-120b', name: 'Cerebras GPT-OSS 120B', provider: 'openai' } });
+    });
+    it('accepts the exact broken config shape from the observed bug', () => {
+      // The real config had: "small": "{\"id\":\"gpt-oss-120b\",\"name\":\"Cerebras GPT-OSS 120B\"}"
+      const jsonString = '{"id":"gpt-oss-120b","name":"Cerebras GPT-OSS 120B"}';
+      const res = coerceConfigValue(spec, jsonString);
+      expect(res).toEqual({ ok: true, value: { id: 'gpt-oss-120b', name: 'Cerebras GPT-OSS 120B' } });
+    });
+    it('rejects a JSON-encoded object string carrying baseUrl (human gate preserved)', () => {
+      const res = coerceConfigValue(spec, '{"id":"gpt-oss-120b","baseUrl":"https://attacker.example/v1"}');
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toMatch(/AFK_MODEL_.*BASE_URL/);
+    });
+    it('rejects a JSON-encoded object string carrying apiKey (human gate preserved)', () => {
+      const res = coerceConfigValue(spec, '{"id":"gpt-oss-120b","apiKey":"sk-secret"}');
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toMatch(/apiKey|api.*key/i);
+    });
+    it('rejects a JSON-encoded object string with missing id', () => {
+      const res = coerceConfigValue(spec, '{"provider":"openai"}');
+      expect(res.ok).toBe(false);
+    });
+    it('rejects a malformed {-prefixed string that is not valid JSON', () => {
+      const res = coerceConfigValue(spec, '{not valid json}');
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toMatch(/JSON|parse/i);
+    });
+    it('still accepts bare id strings unchanged (regression guard)', () => {
+      expect(coerceConfigValue(spec, 'claude-haiku-4-5-20251001')).toEqual({ ok: true, value: 'claude-haiku-4-5-20251001' });
+      expect(coerceConfigValue(spec, 'llama3.2:3b')).toEqual({ ok: true, value: 'llama3.2:3b' });
+    });
+  });
+});
+
+describe('coerceConfigValue — string-array type', () => {
+  const spec = getConfigKeySpec('skills.hidden')!;
+
+  it('accepts an array of strings', () => {
+    const result = coerceConfigValue(spec, ['forge', 'mint']);
+    expect(result).toEqual({ ok: true, value: ['forge', 'mint'] });
+  });
+
+  it('accepts a comma-separated string and splits it', () => {
+    const result = coerceConfigValue(spec, 'forge,mint,ship');
+    expect(result).toEqual({ ok: true, value: ['forge', 'mint', 'ship'] });
+  });
+
+  it('trims whitespace from comma-split entries', () => {
+    const result = coerceConfigValue(spec, ' forge , mint ');
+    expect(result).toEqual({ ok: true, value: ['forge', 'mint'] });
+  });
+
+  it('rejects a non-string element in the array', () => {
+    const result = coerceConfigValue(spec, ['forge', 42]);
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toMatch(/non-string/);
+  });
+
+  it('rejects a non-string non-array input', () => {
+    const result = coerceConfigValue(spec, 123);
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toMatch(/expects an array/);
+  });
+
+  it('returns an empty array for an empty comma-string', () => {
+    const result = coerceConfigValue(spec, '');
+    expect(result).toEqual({ ok: true, value: [] });
+  });
+});
+
+describe('coerceConfigValue — object type', () => {
+  const spec = getConfigKeySpec('pluginHookEnv')!;
+
+  it('accepts a plain object', () => {
+    const value = { 'my-plugin': ['SECRET_A', 'SECRET_B'] };
+    const result = coerceConfigValue(spec, value);
+    expect(result).toEqual({ ok: true, value });
+  });
+
+  it('rejects null (not an object)', () => {
+    const result = coerceConfigValue(spec, null);
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toMatch(/expects an object/);
+  });
+
+  it('rejects an array (not a plain object)', () => {
+    const result = coerceConfigValue(spec, ['foo', 'bar']);
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toMatch(/expects an object/);
+  });
+
+  it('rejects a string (not an object)', () => {
+    const result = coerceConfigValue(spec, 'my-plugin=SECRET_A');
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toMatch(/expects an object/);
   });
 });
 

@@ -322,6 +322,13 @@ export interface TerminalCompositorOptions {
    */
   onOpenEditor?: () => void;
   /**
+   * Ctrl+G handler — open the in-TUI bash output viewer on the most recent
+   * capture file. Wired at REPL-arm time by `surface-setup.ts`; absent on
+   * surfaces that don't have a ToolLane (daemon, Telegram, non-TTY).
+   * The handler owns the async picker lifecycle; dispatch just fires it.
+   */
+  onOpenOutputViewer?: () => void;
+  /**
    * One-shot submission handler invoked when a message "submits" —
    * either immediately on Enter in `'idle'` mode, or deferred until
    * the mode transitions to `'idle'` (draining one queued payload,

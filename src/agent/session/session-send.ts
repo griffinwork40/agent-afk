@@ -172,6 +172,9 @@ export function sendMessageStreamInternal(
   // user actually RESTED in the current mode, so a transient-default stash
   // from `setPermissionMode` must not survive into a later `default → plan`.
   deps.planExit.clearModeBeforeDefault();
+  // A new user turn starts a fresh visible-plan-text window and refusal budget
+  // for the `exit_plan_mode` gate (see plan-text-tracker.ts).
+  deps.planExit.planText.beginTurn();
   return deps.runner.runStream(content, deps.getInputStream());
 }
 

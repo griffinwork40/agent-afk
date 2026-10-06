@@ -49,8 +49,9 @@ import {
 import {
   installSignalHandlers,
   printExitSummary,
-  snapshotGitStateForCancelAll,
+  cancelSessionBackgroundWork,
   makeSessionSaver,
+  type ExitReasonRef,
 } from './interactive/interactive.cleanup.js';
 import { measurePreArmAnchorRow } from './interactive/interactive.pty-setup.js';
 
@@ -298,9 +299,9 @@ export function registerInteractiveCommand(program: Command): void {
         ctx.teardownTrustedSkillEvents?.();
         elicitationRouter.uninstall();
         ctx.bgSummarizer?.stop();
-        const runningJobs = ctx.backgroundRegistry.list().filter((j) => j.status === 'running');
-        if (runningJobs.length > 0) await snapshotGitStateForCancelAll(ctx.stats.cwd ?? process.cwd());
-        await ctx.backgroundRegistry.cancelAll().catch(() => { /* best-effort */ });
+        // Background subagents, Ctrl+B-detached calls (Invariant:D3) and
+        // `bash run_in_background` process jobs all stop with the session.
+        await cancelSessionBackgroundWork(ctx);
         await Promise.race([
           ctx.session.current.close(),
           new Promise<void>(resolve => {
@@ -329,8 +330,8 @@ export function registerInteractiveCommand(program: Command): void {
       const transcript = await initTranscript(() => ctx.stats.model);
       console.log(palette.dim(`  transcript: ${transcript.path()}`));
       registerCleanup(async () => { await transcript.appendEnded(); });
-
-      const { saveCurrentSession, isSaved } = makeSessionSaver(ctx);
+      ctx.setTranscriptPathGetter?.(() => transcript.path());
+      const { saveCurrentSession, isSaved } = makeSessionSaver(ctx, (ctx.exitReasonRef = { current: undefined } as ExitReasonRef));
       registerCleanup(async () => {
         if (isSaved()) return;
         try { saveCurrentSession(); } catch { /* session-sidecar best-effort */ }
@@ -339,7 +340,7 @@ export function registerInteractiveCommand(program: Command): void {
       const turnState: TurnState = { turnInFlight: false, lastSigintAt: 0 };
       ctx.getInFlight = () => turnState.turnInFlight;
 
-      const { handleSigint, removeListeners } = installSignalHandlers({ ctx, turnState, pickerAbort });
+      const { handleSigint, removeListeners } = installSignalHandlers({ ctx, turnState, pickerAbort, exitReasonRef: ctx.exitReasonRef! });
       registerCleanup(async () => { removeListeners(); });
 
       // Screen clear then measure the pre-arm anchor row (newlines from
@@ -364,7 +365,7 @@ export function registerInteractiveCommand(program: Command): void {
           hintLine: startupHintLine(),
         }));
         if (bootPruneNotice !== undefined) console.log(palette.dim(`  ${bootPruneNotice}`));
-        if (ctx.resumeTarget) printResumeBanner(ctx.stats, ctx.completionWriter);
+        if (ctx.resumeTarget) await printResumeBanner(ctx.stats, ctx.completionWriter);
         printFirstRunBanner({ isTTY: Boolean(process.stdout.isTTY), isResume: ctx.resumeTarget !== undefined });
         drainBootWarnings(ctx.bootWarnings);
         console.log();

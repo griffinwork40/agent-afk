@@ -39,6 +39,8 @@ import { createSkillRenderer } from './create-skill-renderer.js';
 import { recordTurn } from '../session-stats.js';
 import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
 import { buildSkillInvocationMessage } from './skill-message-bridge.js';
+import { redactSecrets } from '../../../agent/redact-secrets.js';
+import { isVerificationCommand, RESULT_TAIL_CHARS } from '../../../agent/outcomes/verification-patterns.js';
 
 /**
  * Minimum ms between onContextProgress fires during a skill-dispatch turn.
@@ -102,6 +104,8 @@ export async function runSkillDispatchTurn(
 ): Promise<string> {
   const renderer = createSkillRenderer(ctx, {
     skillName: params.skillName,
+    // Effective args: plugin /review has already stripped --post here.
+    skillIdentity: { name: params.skillMeta.name, purpose: params.skillMeta.description, arguments: params.args },
     onCancel: () => {
       ctx.session.current.interrupt().catch(() => { /* best effort */ });
     },
@@ -212,6 +216,20 @@ export async function runSkillDispatchTurn(
           if (pending) {
             pending.result = c.content;
             pending.isError = c.isError;
+            if (c.incomplete === true) pending.incomplete = true;
+            if (c.partialNodeCount !== undefined) pending.partialNodeCount = c.partialNodeCount;
+            const isVerify = pending.toolName === 'test_run' ||
+              (pending.toolName === 'bash' && isVerificationCommand(pending.input));
+            if (isVerify) {
+              const tailLines = c.tailPreview;
+              const rawForTail = tailLines !== undefined && tailLines.length > 0
+                ? tailLines.join('\n')
+                : c.content;
+              const tail = rawForTail.length > RESULT_TAIL_CHARS
+                ? rawForTail.slice(-RESULT_TAIL_CHARS)
+                : rawForTail;
+              pending.resultTail = redactSecrets(tail);
+            }
             pendingTools.delete(c.toolUseId);
           }
           if (ctx.onContextProgress) {

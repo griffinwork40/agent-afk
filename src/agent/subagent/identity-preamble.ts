@@ -30,6 +30,10 @@
  * callers) converges there. Provider-agnostic; shape handling mirrors
  * `budget-preamble.ts`.
  *
+ * Dependencies: imports `resolveMaxNestingDepth` from `../tools/nesting.js` as
+ * a pure env-reader fallback (same architectural layer). If this module grows
+ * further cross-layer imports, revisit the coupling.
+ *
  * @module agent/subagent/identity-preamble
  */
 
@@ -44,6 +48,19 @@ export interface SubagentIdentityFacts {
   depth: number | undefined;
   /** The dispatch cap; a child at `depth >= maxDepth` cannot dispatch further. */
   maxDepth: number | undefined;
+  /**
+   * The set of `agent_type` values this child may dispatch, if its definition
+   * carried a scoped `Agent(x)` grant. Undefined = unrestricted (top-level or
+   * bare-`Agent`); empty array = deny-all (`Agent()` grant). When set, the
+   * executor enforces this list at every nested dispatch attempt, so the preamble
+   * must name the same list (single authoritative source).
+   *
+   * Invariant: this value MUST be derived from the same resolved field the
+   * executor reads (`ctx.nestedAgentAllowlist`, set from
+   * `resolvedAccess.nestedAgentTypes` in child-config.ts). Text and enforcement
+   * derive from one value.
+   */
+  nestedAgentAllowlist?: readonly string[];
 }
 
 function isFiniteNumber(n: unknown): n is number {
@@ -104,6 +121,27 @@ export function renderSubagentIdentityPreamble(facts: SubagentIdentityFacts): st
     );
   }
 
+  // Nested-dispatch scope. Emitted only when the allowlist is set (scoped agent),
+  // so unscoped children are unchanged. Text is semantically consistent with the
+  // executor rejection message (subagent-executor.ts nestedScope gate) so the child
+  // sees the preamble instruction and error text as aligned, single-source guidance.
+  const { nestedAgentAllowlist } = facts;
+  if (nestedAgentAllowlist !== undefined) {
+    if (nestedAgentAllowlist.length === 0) {
+      lines.push(
+        '',
+        'Nested dispatch is not permitted for this agent (its definition granted the dispatch',
+        'tool but named zero allowed types, e.g. `Agent()`). Complete the task with your own tools.',
+      );
+    } else {
+      lines.push(
+        '',
+        `When dispatching nested agents, agent_type is required and must be one of: ${nestedAgentAllowlist.join(', ')}.`,
+        'A bare dispatch with no agent_type is not permitted here — set agent_type to one of the allowed types, or complete the task with your own tools.',
+      );
+    }
+  }
+
   return lines.join('\n');
 }
 
@@ -114,12 +152,21 @@ export function renderSubagentIdentityPreamble(facts: SubagentIdentityFacts): st
  * config AFTER defaults (`isNonInteractive ?? true`, depth threading) have
  * been applied. Does not mutate the input; returns a shallow copy. When no
  * prompt is set the block becomes the prompt.
+ *
+ * @param nestedAgentAllowlist - The allowlist from the CHILD's own executor
+ *   context (set from `resolvedAccess.nestedAgentTypes` in child-config.ts).
+ *   When provided, the rendered block names the allowed types so the child
+ *   never needs to guess. Mirrors the executor's enforcement gate exactly.
  */
-export function injectSubagentIdentityPreamble(config: AgentConfig): AgentConfig {
+export function injectSubagentIdentityPreamble(
+  config: AgentConfig,
+  nestedAgentAllowlist?: readonly string[],
+): AgentConfig {
   const block = renderSubagentIdentityPreamble({
     isNonInteractive: config.isNonInteractive,
     depth: config.depth,
     maxDepth: config.maxDepth,
+    nestedAgentAllowlist,
   });
   const sp = config.systemPrompt;
 

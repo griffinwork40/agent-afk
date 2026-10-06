@@ -10,11 +10,16 @@ Thanks for your interest in contributing! Here's everything you need to get star
 ## Dev loop
 
 ```bash
-pnpm install        # install dependencies
+pnpm install        # install dependencies (also installs the pre-push hook — see below)
 pnpm build          # tsc compile + copy prompt *.md files → dist/
 pnpm test           # run all tests with vitest
 pnpm lint           # tsc --noEmit (strict type-check, no emit)
+pnpm check:audits   # run all deterministic CI audit gates locally before pushing
 ```
+
+### Pre-push hook
+
+`pnpm install` installs a git pre-push launcher (via the `prepare` lifecycle script) that runs `pnpm check:audits` before every push. This runs the same audit gates CI checks in the lint-build job. The hook is fail-open: if node_modules is missing or pnpm is not on PATH it exits 0 and lets the push through. Bypass with `git push --no-verify`.
 
 Run a single test file:
 ```bash

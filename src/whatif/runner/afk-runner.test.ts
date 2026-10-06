@@ -18,9 +18,11 @@ import type { Environment, Episode, RunnerOptions } from '../types.js';
 // ---------------------------------------------------------------------------
 
 /**
- * A fake "afk chat" script that:
+ * A fake "afk chat --format stream-json" script that:
  *   - Appends two JSONL lines to $AFK_WHATIF_TOOL_LOG.
- *   - Prints a JSON object to stdout.
+ *   - Emits NDJSON OutputEvent lines on stdout (stream-json format):
+ *       chunk/content "Hello, ", then tool_use_detail for read_file,
+ *       then chunk/content " world", then done with metadata.
  *   - Exits 0.
  */
 const FAKE_RUN_SCRIPT = `
@@ -30,16 +32,14 @@ if (logPath) {
   fs.appendFileSync(logPath, JSON.stringify({ts:1,tool:'read_file',input:{path:'/foo'},verdict:'executed',subagent:false}) + '\\n');
   fs.appendFileSync(logPath, JSON.stringify({ts:2,tool:'bash',input:{command:'echo hi'},verdict:'recorded',subagent:false}) + '\\n');
 }
-const out = {
-  success: true,
-  model: 'claude-3-5-sonnet',
-  message: 'Hello from fake agent',
-  costUsd: 0.01,
-  durationMs: 500,
-  inputTokens: 100,
-  outputTokens: 50,
-};
-console.log(JSON.stringify(out, null, 2));
+// stream-json NDJSON: text before tool, tool marker, text after tool, done with metadata
+const events = [
+  { type: 'chunk', chunk: { type: 'content', content: 'Hello, ' } },
+  { type: 'chunk', chunk: { type: 'tool_use_detail', toolUseId: 'tu1', toolName: 'read_file', toolInput: '{}' } },
+  { type: 'chunk', chunk: { type: 'content', content: ' world' } },
+  { type: 'done', metadata: { totalCostUsd: 0.01, durationMs: 500, usage: { input_tokens: 100, output_tokens: 50 } } },
+];
+for (const e of events) process.stdout.write(JSON.stringify(e) + '\\n');
 process.exit(0);
 `;
 
@@ -55,6 +55,17 @@ process.exit(1);
  * A fake script that sleeps forever (for timeout testing).
  */
 const FAKE_TIMEOUT_SCRIPT = `
+setTimeout(() => {}, 60000);
+`;
+
+/**
+ * A fake script that exits cleanly on SIGTERM (simulates a well-behaved child
+ * that exits before the SIGKILL follow-up timer fires).
+ * Medium fix #2295: verifies the SIGKILL timer is cleared by settle() so the
+ * test resolves quickly instead of hanging for SIGKILL_DELAY_MS (5 s).
+ */
+const FAKE_SIGTERM_EXITS_SCRIPT = `
+process.on('SIGTERM', () => { process.exit(0); });
 setTimeout(() => {}, 60000);
 `;
 
@@ -103,6 +114,7 @@ let tmpDir: string;
 let runScript: string;
 let errorScript: string;
 let timeoutScript: string;
+let sigtermExitsScript: string;
 let snapshotScript: string;
 let sandboxHome: string;
 
@@ -137,6 +149,8 @@ beforeAll(async () => {
   await writeFile(runScript, FAKE_RUN_SCRIPT, 'utf-8');
   await writeFile(errorScript, FAKE_ERROR_SCRIPT, 'utf-8');
   await writeFile(timeoutScript, FAKE_TIMEOUT_SCRIPT, 'utf-8');
+  sigtermExitsScript = join(tmpDir, 'fake-sigterm-exits.js');
+  await writeFile(sigtermExitsScript, FAKE_SIGTERM_EXITS_SCRIPT, 'utf-8');
   await writeFile(snapshotScript, FAKE_SNAPSHOT_SCRIPT, 'utf-8');
 });
 
@@ -155,7 +169,8 @@ describe('createAfkRunner().run()', () => {
     const trace = await runner.run(env, baseEpisode, 0, baseOpts);
 
     expect(trace.error).toBeUndefined();
-    expect(trace.text).toBe('Hello from fake agent');
+    // stream-json: text segments with [tool: name] marker between them
+    expect(trace.text).toBe('Hello, [tool: read_file] world');
     expect(trace.costUsd).toBe(0.01);
     expect(trace.inputTokens).toBe(100);
     expect(trace.outputTokens).toBe(50);
@@ -196,6 +211,44 @@ describe('createAfkRunner().run()', () => {
     expect(trace.error).toBeDefined();
     expect(trace.error).toContain('timed out');
   }, 15_000);
+
+  it('resolves quickly when child exits on SIGTERM (SIGKILL timer cleared by settle)', async () => {
+    // Medium fix #2295: before the fix, the SIGKILL setTimeout was not tracked in
+    // killTimer, so settle() never cleared it — the timer fired 5 s later
+    // (SIGKILL_DELAY_MS) on an already-exited process.  The process completing
+    // in well under 5 s is the observable signal that the timer was cleared.
+    const runner = createAfkRunner({ cliEntry: { command: process.execPath, args: [sigtermExitsScript] } });
+    const env: Environment = { ...baseEnv, home: sandboxHome, cwd: tmpDir };
+
+    const start = Date.now();
+    const trace = await runner.run(env, baseEpisode, 0, { ...baseOpts, timeoutMs: 300 });
+    const elapsed = Date.now() - start;
+
+    // Child should exit on SIGTERM well before SIGKILL_DELAY_MS (5000 ms).
+    expect(elapsed).toBeLessThan(3_000);
+    expect(trace.error).toBeDefined();
+    expect(trace.error).toContain('timed out');
+  }, 10_000);
+
+  it('cancels SIGTERM kill timer before setting the SIGKILL follow-up on AbortSignal.abort()', async () => {
+    // Uses the infinite-sleep timeoutScript so the process never exits on its own.
+    // We abort immediately after starting run(); the path must resolve cleanly
+    // (no ghost timers, no hang) with an error trace.
+    const runner = createAfkRunner({ cliEntry: { command: process.execPath, args: [timeoutScript] } });
+    const env: Environment = { ...baseEnv, home: sandboxHome, cwd: tmpDir };
+    const controller = new AbortController();
+
+    const tracePromise = runner.run(env, baseEpisode, 0, { ...baseOpts, signal: controller.signal });
+    // Abort immediately — the onAbort handler should clear the pending SIGTERM
+    // deadline timer before arming the SIGKILL follow-up, leaving exactly one
+    // live timer.
+    controller.abort();
+
+    const trace = await tracePromise;
+    expect(trace.error).toBeTruthy();
+    expect(trace.text).toBe('');
+    expect(trace.tools).toEqual([]);
+  }, 10_000);
 
   it('redacts sk-ant credentials in error messages', async () => {
     const scriptWithKey = join(tmpDir, 'fake-key-error.js');

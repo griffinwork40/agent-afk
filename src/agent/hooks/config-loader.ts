@@ -38,10 +38,15 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getAfkHome, getJsonConfigPath, getSettingsPath, getProjectSettingsPath, getPluginsDir } from '../../paths.js';
-import { scanLocalPlugins } from '../plugins-scanner.js';
+import { indexKeyForPath, scanLocalPlugins } from '../plugins-scanner.js';
+import { readPluginManifest } from '../plugins/plugin-manifest.js';
 import type { HarnessHookEvent } from '../hooks.js';
 import { HOOK_HANDLER_TIMEOUT_MS } from '../hook-registry.js';
 import { errorMessage } from '../../utils/errors.js';
+import { parseDisabledPluginHooks, mergeDisabledPluginHooks } from './disabled-plugin-hooks.js';
+import { loadPluginHookConfigs } from './config-loader.plugin-hooks.js';
+export { compileMatcher, CLAUDE_CODE_ALIASES } from './matcher.js';
+export { isPluginHookDisabled } from './disabled-plugin-hooks.js';
 
 // ---------------------------------------------------------------------------
 // Raw shapes (as they appear on disk)
@@ -51,6 +56,8 @@ export interface RawCommandHook {
   type: 'command';
   command: string;
   timeout_ms?: number;
+  /** Claude Code field: seconds. Honored when `timeout_ms` is absent. */
+  timeout?: number;
 }
 
 /** Union type for hook entries; extensible for future hook types. */
@@ -81,6 +88,16 @@ export interface ResolvedCommandHook {
    * user-global / project-local config hooks.
    */
   pluginRoot?: string;
+  /**
+   * Canonical plugin name (from `.claude-plugin/plugin.json` `name` field),
+   * set only for hooks sourced from an installed plugin. Used to look up the
+   * per-plugin env allowlist (`pluginHookEnv` in `afk.config.json`) so only
+   * the correct plugin's hook subprocess receives user-listed secrets.
+   * Undefined for user-global / project-local config hooks.
+   */
+  pluginName?: string;
+  /** Install/index key used in `.index.json` for options and plugin data. */
+  pluginKey?: string;
 }
 
 export interface ResolvedMatcherGroup {
@@ -118,6 +135,24 @@ export interface LoadedHooksConfig {
    * third-party code and get their own explicit opt-in.
    */
   pluginHooksEnabled: boolean;
+  /**
+   * Per-plugin env allowlist from `afk.config.json → pluginHookEnv`.
+   * Maps plugin name → array of env-var names the user has explicitly listed
+   * for forwarding to that plugin's hook subprocesses. Only user-global files
+   * (layers 0 and 1) are consulted; last-writer-wins per plugin name.
+   * Empty object when not configured.
+   */
+  pluginHookEnv: Record<string, string[]>;
+  /**
+   * Per-plugin hook disable list from `afk.config.json → disabledPluginHooks`.
+   * Maps plugin name (the `name` field from `plugin.json`) → array of hook
+   * specifiers to suppress. Each specifier is either `"<Event>"` (suppresses
+   * all hooks for that event) or `"<Event>:<matcher>"` (suppresses only groups
+   * whose `matcher` field equals the given string). Only user-global files
+   * (layers 0 and 1) are consulted; entries are merged across layers.
+   * Empty object when not configured.
+   */
+  disabledPluginHooks: Record<string, string[]>;
   /** Absolute paths of every file that contributed to this config. */
   sources: string[];
   /** Non-fatal validation warnings the caller should surface. */
@@ -139,42 +174,13 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 // keeps the executor's SIGKILL deadline aligned with the registry ceiling, so
 // there is no orphan window and the documented cap matches reality.
 
-/**
- * Compile a matcher string into a predicate that tests a tool name.
- *
- * - `undefined` or `"*"` → always true
- * - `"/regex/[flags]"` → compiled as `RegExp`
- * - any other string → strict equality
- */
-export function compileMatcher(matcher: string | undefined): (toolName: string) => boolean {
-  if (matcher === undefined || matcher === '*') return () => true;
-
-  // Regex syntax: /pattern/ or /pattern/flags
-  const regexMatch = /^\/(.+)\/([gimsuy]*)$/.exec(matcher);
-  if (regexMatch !== null) {
-    const pattern = regexMatch[1]!;
-    const flags = regexMatch[2]!;
-    try {
-      // Strip g/y flags before constructing the RegExp. Both are stateful:
-      // they advance `lastIndex` on each re.test() call, so a reused instance
-      // (cached once per group in config-bridge) would alternate true/false on
-      // successive invocations of the same tool. i/m/s/u are stateless and safe.
-      const safeFlags = flags.replace(/[gy]/g, '');
-      const re = new RegExp(pattern, safeFlags);
-      return (toolName: string) => re.test(toolName);
-    } catch {
-      // Malformed regex — fall through to exact-match
-    }
-  }
-
-  return (toolName: string) => toolName === matcher;
-}
-
 interface SingleFileResult {
   hooks: ResolvedHooksConfig;
   enableShellHooks: boolean;
   allowProjectHooks: boolean;
   enablePluginHooks: boolean;
+  pluginHookEnv: Record<string, string[]>;
+  disabledPluginHooks: Record<string, string[]>;
   sources: string[];
   warnings: string[];
 }
@@ -188,10 +194,16 @@ function validateHook(raw: unknown): ResolvedCommandHook | null {
   if (typeof obj['command'] !== 'string' || obj['command'].length === 0) {
     return null;
   }
-  const rawTimeout =
-    typeof obj['timeout_ms'] === 'number' && obj['timeout_ms'] > 0
-      ? obj['timeout_ms']
-      : DEFAULT_TIMEOUT_MS;
+  // timeout_ms wins; fall back to timeout (seconds, Claude Code field) × 1000;
+  // both default to DEFAULT_TIMEOUT_MS when absent or non-positive.
+  let rawTimeout: number;
+  if (typeof obj['timeout_ms'] === 'number' && obj['timeout_ms'] > 0) {
+    rawTimeout = obj['timeout_ms'];
+  } else if (typeof obj['timeout'] === 'number' && obj['timeout'] > 0) {
+    rawTimeout = obj['timeout'] * 1_000;
+  } else {
+    rawTimeout = DEFAULT_TIMEOUT_MS;
+  }
   // Clamp to the registry's per-handler ceiling — see DEFAULT_TIMEOUT_MS note.
   const timeoutMs = Math.min(rawTimeout, HOOK_HANDLER_TIMEOUT_MS);
   return { type: 'command', command: obj['command'], timeoutMs };
@@ -206,13 +218,18 @@ export function loadHooksConfigFile(
   path: string,
   tier: 'user-global' | 'project-local' | 'plugin',
   pluginRoot?: string,
+  pluginName?: string | null,
+  pluginKey?: string | null,
 ): SingleFileResult {
   const warnings: string[] = [];
   const sources: string[] = [];
   const hooks: ResolvedHooksConfig = {};
 
+  const emptyPluginHookEnv: Record<string, string[]> = {};
+  const emptyDisabledPluginHooks: Record<string, string[]> = {};
+
   if (!existsSync(path)) {
-    return { hooks, enableShellHooks: false, allowProjectHooks: false, enablePluginHooks: false, sources, warnings };
+    return { hooks, enableShellHooks: false, allowProjectHooks: false, enablePluginHooks: false, pluginHookEnv: emptyPluginHookEnv, disabledPluginHooks: emptyDisabledPluginHooks, sources, warnings };
   }
   sources.push(path);
 
@@ -222,12 +239,12 @@ export function loadHooksConfigFile(
   } catch (err) {
     const msg = errorMessage(err);
     warnings.push(`hooks config at ${path}: parse error — ${msg}`);
-    return { hooks, enableShellHooks: false, allowProjectHooks: false, enablePluginHooks: false, sources, warnings };
+    return { hooks, enableShellHooks: false, allowProjectHooks: false, enablePluginHooks: false, pluginHookEnv: emptyPluginHookEnv, disabledPluginHooks: emptyDisabledPluginHooks, sources, warnings };
   }
 
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     warnings.push(`hooks config at ${path}: top-level must be an object`);
-    return { hooks, enableShellHooks: false, allowProjectHooks: false, enablePluginHooks: false, sources, warnings };
+    return { hooks, enableShellHooks: false, allowProjectHooks: false, enablePluginHooks: false, pluginHookEnv: emptyPluginHookEnv, disabledPluginHooks: emptyDisabledPluginHooks, sources, warnings };
   }
   const file = parsed as Record<string, unknown>;
 
@@ -239,14 +256,46 @@ export function loadHooksConfigFile(
   const allowProjectHooks = file['allowProjectHooks'] === true;
   const enablePluginHooks = file['enablePluginHooks'] === true;
 
+  // Parse pluginHookEnv: Record<pluginName, string[]>. Only meaningful in
+  // user-global files (enforced by loadHooksConfig). Tolerates malformed values
+  // by warning and falling through to an empty map for that plugin entry.
+  const pluginHookEnv: Record<string, string[]> = {};
+  const rawPhe = file['pluginHookEnv'];
+  if (rawPhe !== undefined && rawPhe !== null) {
+    if (typeof rawPhe !== 'object' || Array.isArray(rawPhe)) {
+      warnings.push(`hooks config at ${path}: "pluginHookEnv" must be an object — ignored`);
+    } else {
+      for (const [pluginKey, rawVars] of Object.entries(rawPhe as Record<string, unknown>)) {
+        if (!Array.isArray(rawVars)) {
+          warnings.push(
+            `hooks config at ${path}: pluginHookEnv["${pluginKey}"] must be an array — ignored`,
+          );
+          continue;
+        }
+        const vars: string[] = [];
+        for (const v of rawVars) {
+          if (typeof v === 'string' && v.trim().length > 0) {
+            vars.push(v.trim());
+          }
+        }
+        pluginHookEnv[pluginKey] = vars;
+      }
+    }
+  }
+
+  // Parse disabledPluginHooks: Record<pluginName, string[]>. Only meaningful
+  // in user-global files (enforced by loadHooksConfig). Delegated to the
+  // sibling helper so the parse logic and the disable-check logic live together.
+  const disabledPluginHooks = parseDisabledPluginHooks(file, path, warnings);
+
   // Extract hooks block
   const rawHooks = file['hooks'];
   if (rawHooks === undefined || rawHooks === null) {
-    return { hooks, enableShellHooks, allowProjectHooks, enablePluginHooks, sources, warnings };
+    return { hooks, enableShellHooks, allowProjectHooks, enablePluginHooks, pluginHookEnv, disabledPluginHooks, sources, warnings };
   }
   if (typeof rawHooks !== 'object' || Array.isArray(rawHooks)) {
     warnings.push(`hooks config at ${path}: "hooks" must be an object`);
-    return { hooks, enableShellHooks, allowProjectHooks, enablePluginHooks, sources, warnings };
+    return { hooks, enableShellHooks, allowProjectHooks, enablePluginHooks, pluginHookEnv, disabledPluginHooks, sources, warnings };
   }
 
   const rawHooksObj = rawHooks as Record<string, unknown>;
@@ -310,6 +359,8 @@ export function loadHooksConfigFile(
           continue;
         }
         if (pluginRoot !== undefined) validated.pluginRoot = pluginRoot;
+        if (pluginName != null) validated.pluginName = pluginName;
+        if (pluginKey != null) validated.pluginKey = pluginKey;
         resolvedHooks.push(validated);
       }
       if (resolvedHooks.length > 0) {
@@ -325,7 +376,7 @@ export function loadHooksConfigFile(
     }
   }
 
-  return { hooks, enableShellHooks, allowProjectHooks, enablePluginHooks, sources, warnings };
+  return { hooks, enableShellHooks, allowProjectHooks, enablePluginHooks, pluginHookEnv, disabledPluginHooks, sources, warnings };
 }
 
 // ---------------------------------------------------------------------------
@@ -341,22 +392,33 @@ export function loadHooksConfigFile(
  * uninstalled marketplace-cache plugins contribute no hooks) and its symlink
  * following (local installs are symlinked into the plugins root). A plugin
  * contributes hooks when it ships `<plugin>/hooks/hooks.json` (the Claude Code
- * layout). Returns `{ path, pluginRoot }` pairs; `pluginRoot` is the plugin's
- * install directory, threaded to the executor as `CLAUDE_PLUGIN_ROOT`. Missing
- * root → `[]`.
+ * layout). Returns `{ path, pluginRoot, pluginName, pluginKey }` triples;
+ * `pluginRoot` is the plugin's install directory, `pluginName` is the
+ * manifest name used for `pluginHookEnv`, and `pluginKey` is the install/index
+ * key used for userConfig options and plugin data. Missing root → `[]`.
  */
 export function discoverPluginHooksConfigs(
   pluginsRoot: string = getPluginsDir(),
-): Array<{ path: string; pluginRoot: string }> {
+): Array<{ path: string; pluginRoot: string; pluginName: string | null; pluginKey: string | null }> {
   if (!existsSync(pluginsRoot)) return [];
-  const out: Array<{ path: string; pluginRoot: string }> = [];
+  const out: Array<{ path: string; pluginRoot: string; pluginName: string | null; pluginKey: string | null }> = [];
   // Reuse scanLocalPlugins (index-honoring, symlink-following, realpath-keyed)
   // rather than a bespoke walk — see PR 607 review: a private walk diverged on
   // all three, running disabled/uninstalled plugins' hooks while dropping
   // symlinked local plugins' hooks.
   for (const plugin of scanLocalPlugins(pluginsRoot)) {
     const hooksJson = join(plugin.path, 'hooks', 'hooks.json');
-    if (existsSync(hooksJson)) out.push({ path: hooksJson, pluginRoot: plugin.path });
+    if (existsSync(hooksJson)) {
+      const manifest = readPluginManifest(plugin.path);
+      const keyInfo = indexKeyForPath(pluginsRoot, plugin.path);
+      const pluginKey = keyInfo?.key ?? indexKeyForPath(pluginsRoot, hooksJson)?.key ?? null;
+      out.push({
+        path: hooksJson,
+        pluginRoot: plugin.path,
+        pluginName: manifest.name,
+        pluginKey,
+      });
+    }
   }
   return out;
 }
@@ -396,6 +458,12 @@ export function loadHooksConfig(opts: LoadHooksConfigOptions = {}): LoadedHooksC
   let userGlobalEnabled = false;
   let allowProjectHooks = false;
   let pluginHooksEnabled = false;
+  // Collected from user-global layers only. Later-layer entries overwrite
+  // earlier ones for the same plugin name (last-writer-wins per key).
+  const mergedPluginHookEnv: Record<string, string[]> = {};
+  // Collected from user-global layers only. Entries are merged: same plugin
+  // key across multiple layers unions the specifier lists (no duplicates).
+  const mergedDisabledPluginHooks: Record<string, string[]> = {};
 
   const allLayers: Array<{ path: string; tier: 'user-global' | 'project-local' }> = [
     { path: getJsonConfigPath(), tier: 'user-global' },
@@ -432,13 +500,22 @@ export function loadHooksConfig(opts: LoadHooksConfigOptions = {}): LoadedHooksC
   }
 
   // First pass (user-global layers only): determine trust flags before
-  // deciding which project-local hooks to admit.
+  // deciding which project-local hooks to admit. Also collect pluginHookEnv
+  // from user-global layers — it is only honoured from those layers so a
+  // project-local afk.config.json cannot grant itself access to the user's
+  // secrets (same security model as enableShellHooks/enablePluginHooks).
   for (const layer of layers) {
     if (layer.tier !== 'user-global') continue;
     const result = loadHooksConfigFile(layer.path, layer.tier);
     if (result.enableShellHooks) userGlobalEnabled = true;
     if (result.allowProjectHooks) allowProjectHooks = true;
     if (result.enablePluginHooks) pluginHooksEnabled = true;
+    // Merge per-plugin env allowlists (last-writer-wins per plugin name).
+    for (const [pn, vars] of Object.entries(result.pluginHookEnv)) {
+      mergedPluginHookEnv[pn] = vars;
+    }
+    // Merge disabled plugin hook specifiers (union across layers, no duplicates).
+    mergeDisabledPluginHooks(mergedDisabledPluginHooks, result.disabledPluginHooks);
   }
 
   // Second pass: load all layers and concatenate hooks, filtering out
@@ -485,41 +562,22 @@ export function loadHooksConfig(opts: LoadHooksConfigOptions = {}): LoadedHooksC
   // installed plugins under the plugins root, tagged `tier: 'plugin'`, merged
   // last. Gated by the independent `enablePluginHooks` trust flag — plugin
   // hooks execute third-party code, so they never ride on `enableShellHooks`.
-  const pluginConfigs = discoverPluginHooksConfigs(opts.pluginsDir);
-  if (pluginConfigs.length > 0 && !pluginHooksEnabled) {
-    // Don't silently drop plugin hooks — surface the boundary so the user
-    // knows they exist and how to opt in (mirrors the config-bridge warning
-    // for disabled shell hooks).
-    allWarnings.push(
-      `found ${pluginConfigs.length} plugin hooks.json file(s) but plugin hooks are disabled; ` +
-        `set "enablePluginHooks": true in ${getJsonConfigPath()} to run them`,
-    );
-  }
-  if (pluginHooksEnabled) {
-    for (const { path, pluginRoot } of pluginConfigs) {
-      const result = loadHooksConfigFile(path, 'plugin', pluginRoot);
-      for (const src of result.sources) {
-        if (!allSources.includes(src)) allSources.push(src);
-      }
-      for (const w of result.warnings) allWarnings.push(w);
-      for (const event of validEvents) {
-        const incoming = result.hooks[event];
-        if (incoming === undefined || incoming.length === 0) continue;
-        const existing = merged[event];
-        if (existing === undefined) {
-          merged[event] = [...incoming];
-        } else {
-          merged[event] = [...existing, ...incoming];
-        }
-      }
-    }
-  }
+  loadPluginHookConfigs({
+    pluginConfigs: discoverPluginHooksConfigs(opts.pluginsDir),
+    pluginHooksEnabled,
+    validEvents,
+    merged,
+    allSources,
+    allWarnings,
+  });
 
   return {
     hooks: merged,
     userGlobalEnabled,
     allowProjectHooks,
     pluginHooksEnabled,
+    pluginHookEnv: mergedPluginHookEnv,
+    disabledPluginHooks: mergedDisabledPluginHooks,
     sources: allSources,
     warnings: allWarnings,
   };

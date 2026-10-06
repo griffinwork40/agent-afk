@@ -19,9 +19,11 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { contentHugBandReserve } from './terminal-compositor.content-hug.js';
 import { PassThrough } from 'node:stream';
 import { Terminal as HeadlessTerminal } from '@xterm/headless';
 import { TerminalCompositor } from './terminal-compositor.js';
+import { mergeSeamBuffer, reshownArchivedRows } from './_lib/testing/scrollback-seam.js';
 
 type MockStdout = NodeJS.WriteStream & { isTTY: boolean; columns: number; rows: number };
 type MockStdin = NodeJS.ReadStream & {
@@ -106,6 +108,11 @@ async function makeRig(rows: number, opts: { anchorRow?: number; preamble?: stri
       return out;
     },
     viewportTop: () => term.buffer.active.baseY,
+    /** Buffer with the sanctioned seam overlap (re-shown archived rows) removed; see scrollback-seam.ts. */
+    async seamLines() {
+      const all = await this.lines();
+      return mergeSeamBuffer(all, term.buffer.active.baseY, reshownArchivedRows(c), dumpOf(all));
+    },
     dispose() {
       term.dispose();
       c.disarm();
@@ -178,7 +185,7 @@ describe.each([24, 62])('content-hug placement (%i rows)', (ROWS) => {
     rig.c.setSpinner({ enabled: false });
     rig.repaint();
     rig.repaint();
-    const lines = await rig.lines();
+    const lines = await rig.seamLines();
     assertNoGaps(lines, committed, PROMPT);
     rig.dispose();
   });
@@ -211,12 +218,48 @@ describe.each([24, 62])('content-hug placement (%i rows)', (ROWS) => {
     committed.push('AFTER-0000');
     rig.c.setSpinner({ enabled: false });
     rig.repaint();
-    const lines = await rig.lines();
+    const lines = await rig.seamLines();
     assertNoGaps(lines, committed, PROMPT);
     rig.dispose();
   });
 
-  it('full viewport: a tall overlay grows then collapses and the prompt returns to the bottom (no bobbing)', async () => {
+  it('full viewport: small frame jitter does not re-show archived rows', async () => {
+    const rig = await makeRig(ROWS);
+    const committed = Array.from({ length: ROWS * 2 }, (_, i) => `JITTER-${String(i).padStart(4, '0')}`);
+    rig.c.commitAbove(`${committed.join('\n')}\n`);
+    rig.repaint();
+    rig.c.setSpinner({ enabled: true });
+    rig.repaint();
+    rig.c.setSpinner({ enabled: false });
+    rig.repaint();
+    const lines = await rig.lines();
+    expect(reshownArchivedRows(rig.c), dumpOf(lines)).toBe(0);
+    const frame = assertNoGaps(lines, committed, PROMPT);
+    const gap = rig.viewportTop() + ROWS - 2 - frame;
+    expect(gap).toBeLessThanOrEqual(Math.max(3, Math.floor(ROWS / 8)));
+    rig.dispose();
+  });
+
+  it('full viewport: exactly one overlay row grows and shrinks without seam overlap', async () => {
+    const rig = await makeRig(ROWS);
+    rig.c.setSpinner({ enabled: true });
+    const committed = Array.from({ length: ROWS * 2 }, (_, i) => `ONE-${String(i).padStart(4, '0')}`);
+    rig.c.commitAbove(`${committed.join('\n')}\n`);
+    rig.repaint();
+    const host = rig.c as unknown as { lastMeasuredFrameTop: number };
+    const top = host.lastMeasuredFrameTop;
+    rig.c.setOverlay('ONE-LIVE'); rig.repaint();
+    expect(host.lastMeasuredFrameTop).toBe(top - 1);
+    rig.c.setOverlay(''); rig.repaint();
+    const lines = await rig.lines();
+    expect(reshownArchivedRows(rig.c)).toBe(0);
+    for (const marker of committed) expect(lines.filter((l) => l.includes(marker))).toHaveLength(1);
+    const frame = lines.findIndex((l) => l.includes(PROMPT));
+    expect(rig.viewportTop() + ROWS - 2 - frame).toBeLessThanOrEqual(Math.max(3, Math.floor(ROWS / 8)));
+    rig.dispose();
+  });
+
+  it('full viewport: a tall overlay grows then collapses: no history hole, and the prompt returns to the bottom (no gap, no bobbing)', async () => {
     const rig = await makeRig(ROWS);
     const committed = Array.from({ length: ROWS * 2 }, (_, i) => `FILL-${String(i).padStart(4, '0')}`);
     rig.c.commitAbove(`${committed.join('\n')}\n`);
@@ -229,13 +272,23 @@ describe.each([24, 62])('content-hug placement (%i rows)', (ROWS) => {
     rig.c.setSpinner({ enabled: false });
     rig.c.setOverlay('');
     rig.repaint();
-    const lines = await rig.lines();
+    const lines = await rig.seamLines();
     const frameIdx = assertNoGaps(lines, committed, PROMPT);
     const dump = dumpOf(lines);
     expect(lines.some((l) => l.includes('THINK-')), `ghost overlay rows:\n${dump}`).toBe(false);
+    // Rows the grown overlay covered went to scrollback immediately (no
+    // history hole) AND stay in the band as the archived prefix, so the
+    // collapse re-shows them and the screen refills (no blank gap below the
+    // prompt; repro: terminal-compositor.shrink-gap-ghost.repro.test.ts).
+    // assertNoGaps above (on the seam-merged buffer) proves every row is
+    // present exactly once, in order, with the prompt directly after the last
+    // committed row. Nothing committed or overlay-related may sit BELOW it.
+    const below = lines.slice(frameIdx + 1).filter((l) => l.includes('FILL-') || l.includes('THINK-'));
+    expect(below, `content below the prompt after collapse:\n${dump}`).toEqual([]);
     // The prompt sits on the last compositor row (absoluteBottom = rows - 1):
-    // hidden-on-growth rows were repainted, so the band still fills the viewport.
-    expect(frameIdx - rig.viewportTop(), `prompt left the bottom after collapse:\n${dump}`).toBe(ROWS - 2);
+    // the re-shown archived rows refill the viewport. `lines` is seam-merged, so
+    // the viewport starts at lines.length - ROWS (xterm keeps ROWS viewport rows).
+    expect(frameIdx - (lines.length - ROWS), `prompt left the bottom after collapse:\n${dump}`).toBe(ROWS - 2);
     rig.dispose();
   });
 
@@ -251,8 +304,51 @@ describe.each([24, 62])('content-hug placement (%i rows)', (ROWS) => {
     rig.c.setOverlay('');
     rig.c.setSpinner({ enabled: false });
     rig.repaint();
-    const lines = await rig.lines();
+    const lines = await rig.seamLines();
     assertNoGaps(lines, [...banner, 'ECHO-0000', 'CARD-0001', 'CARD-0002'], PROMPT);
     rig.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// contentHugBandReserve — unit tests
+// ---------------------------------------------------------------------------
+
+describe('contentHugBandReserve', () => {
+  it('returns 0 outside content-hug', () => {
+    expect(contentHugBandReserve({ placementMode: 'bottom-pinned', committedBand: ['a', 'b', 'c'] }, 24)).toBe(0);
+    expect(contentHugBandReserve({ placementMode: 'cursor-follow', committedBand: ['a', 'b'] }, 24)).toBe(0);
+  });
+
+  it('returns 0 when committedBand is empty (content-hug)', () => {
+    expect(contentHugBandReserve({ placementMode: 'content-hug', committedBand: [] }, 24)).toBe(0);
+  });
+
+  it('returns max(3, floor(rows/4)) capped at band length — standard terminal', () => {
+    // rows=24: floor(24/4)=6; band.length=10 → min(10,max(3,6))=6
+    const band = Array.from({ length: 10 }, (_, i) => `row ${i}`);
+    expect(contentHugBandReserve({ placementMode: 'content-hug', committedBand: band }, 24)).toBe(6);
+  });
+
+  it('applies floor(rows/4) on a large terminal', () => {
+    // rows=80: floor(80/4)=20; band.length=30 → min(30,max(3,20))=20
+    const band = Array.from({ length: 30 }, (_, i) => `row ${i}`);
+    expect(contentHugBandReserve({ placementMode: 'content-hug', committedBand: band }, 80)).toBe(20);
+  });
+
+  it('caps at committedBand.length when band is shorter than rows/4', () => {
+    // rows=24: floor(24/4)=6; band.length=2 → min(2,6)=2
+    expect(contentHugBandReserve({ placementMode: 'content-hug', committedBand: ['a', 'b'] }, 24)).toBe(2);
+  });
+
+  it('floor of 3 applies on a very small terminal', () => {
+    // rows=8: floor(8/4)=2 < 3 → max(3,2)=3; band.length=5 → min(5,3)=3
+    const band = Array.from({ length: 5 }, (_, i) => `row ${i}`);
+    expect(contentHugBandReserve({ placementMode: 'content-hug', committedBand: band }, 8)).toBe(3);
+  });
+
+  it('floor of 3 clamps to band length when band is shorter than 3', () => {
+    // rows=8: formula gives 3; band.length=1 → min(1,3)=1
+    expect(contentHugBandReserve({ placementMode: 'content-hug', committedBand: ['only'] }, 8)).toBe(1);
   });
 });

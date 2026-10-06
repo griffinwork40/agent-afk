@@ -51,7 +51,10 @@ import type { ContentBlockParam, MessageParam } from '@anthropic-ai/sdk/resource
  * index only when Pass 1 inserted nothing.
  *
  * The `shapeBefore` string is computed lazily — only when a repair is
- * detected — from a shallow copy of the pre-repair array. It is a compact
+ * detected — from a snapshot of each message's role + content refs captured
+ * before any pass runs. The expensive buildShape walk is deferred to the
+ * repair path; on healthy histories only the O(N) snapshot (reference copies,
+ * no block scanning) runs. It is a compact
  * structural summary of each message: `<idx>:<role>[<blockType>*<N>, ...]`.
  * Example: `0:u[text] 1:a[text,tool_use*2] 2:u[tool_result*2] 3:a[text]`.
  * It NEVER contains message text, tool inputs, or tool result content.
@@ -89,6 +92,9 @@ function buildShape(messages: readonly MessageParam[]): string {
     const msg = messages[i]!;
     const role = msg.role === 'user' ? 'u' : 'a';
     let blockSummary: string;
+    // Contract: string content is always 'text'; non-string non-array content
+    // (e.g. a single ContentBlockParam object) is treated as 'text' — the SDK
+    // types do not surface that shape today but the guard keeps buildShape total.
     if (typeof msg.content === 'string' || !Array.isArray(msg.content)) {
       blockSummary = 'text';
     } else {
@@ -276,13 +282,14 @@ export function repairOrphanToolUses(messages: MessageParam[]): OrphanRepairRepo
 
   const messageCountBefore = messages.length;
 
-  // Capture the pre-repair structural shape BEFORE any pass mutates content.
-  // We compute it eagerly here (instead of lazily from a shallow-copy snapshot)
-  // so that Pass 0's in-place content reassignments do not corrupt shapeBefore.
-  // On healthy histories the function returns null, so this string is discarded —
-  // the cost is one O(N) scan avoided on the happy path vs. the old lazy-slice
-  // approach, which paid the slice allocation unconditionally.
-  const shapeBeforeEager = buildShape(messages);
+  // Invariant: shapeBefore must reflect the array BEFORE any pass mutates it.
+  // Pass 0 reassigns `msg.content` in place (line-order rewrite), so a mere
+  // shallow-copy of MessageParam references would observe the post-mutation
+  // content. We snapshot each message's { role, content } cheaply (O(N)
+  // reference copies, no block scanning) and defer the expensive buildShape
+  // string construction until a repair is actually detected.
+  const snapshot: ReadonlyArray<Pick<MessageParam, 'role' | 'content'>> =
+    messages.map((m) => ({ role: m.role, content: m.content }));
 
   // Pass 0: put tool_result blocks first in each user message (heals sidecars
   // persisted with text-before-tool_result ordering).
@@ -309,6 +316,6 @@ export function repairOrphanToolUses(messages: MessageParam[]): OrphanRepairRepo
     orphanAssistantIndices,
     bridgedIndices,
     messageCountBefore,
-    shapeBefore: shapeBeforeEager,
+    shapeBefore: buildShape(snapshot as readonly MessageParam[]),
   };
 }

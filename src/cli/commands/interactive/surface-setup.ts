@@ -17,6 +17,7 @@ import type { MascotBar } from './mascot-bar.js';
 import { buildPrompt, type TurnState } from './repl-loop-shared.js';
 import { installHistorySubmissionTracker } from './surface-setup.history-tracking.js';
 import { buildSuggestConfig } from './surface-setup.suggest-config.js';
+import { buildOutputViewerCallback } from './surface-setup.viewer-callback.js';
 import { boundLineToTerminal } from '../../render/bounded-line.js';
 
 /**
@@ -79,10 +80,11 @@ export async function setupSurface(
   // captures the mutable refs (not snapshot values) so mid-session /model
   // swaps are reflected automatically.
   //
-  // Tier-2 (LLM fallback) is gated by `AFK_SUGGEST_ENABLED` and `apiKey`.
-  // When neither is set, `llmEnabled()` returns false and the engine runs
-  // Tier-1 only (synchronous history/dropdown prefix match) — zero extra
-  // latency, zero API traffic.
+  // Tier-2 (LLM fallback) is gated by `AFK_SUGGEST_ENABLED`. When disabled,
+  // `llmEnabled()` returns false and the engine runs Tier-1 only (synchronous
+  // history/dropdown prefix match) — zero extra latency, zero API traffic.
+  // The engine resolves its own credential per suggestion model; the session
+  // credential is deliberately never handed to it (see suggest-credential.ts).
   const suggestEngine = createSuggestEngine({
     // Surface Tier-2 failures (auth, network, 404 model, unreachable shim)
     // under AFK_DEBUG=1; a no-op otherwise so normal sessions stay silent and
@@ -145,6 +147,7 @@ export async function setupSurface(
         resumeFooter: () => ctx.slashCtx.resumeFooter?.(),
       }).catch(() => {});
     },
+    onOpenOutputViewer: buildOutputViewerCallback(ctx.capturePathRef, () => surface.getCompositor()),
     // StatusLine doubles as DECSTBM scroll-region guard so commitAbove
     // writes survive the persistent bottom-row reservation.
     scrollRegion: ctx.statusLine,
@@ -163,7 +166,6 @@ export async function setupSurface(
       engine: suggestEngine,
       surface,
       stats: ctx.stats,
-      apiKey: ctx.suggestApiKey,
       baseUrl: ctx.suggestBaseUrl,
       historyTracker,
     }),
@@ -206,7 +208,7 @@ export async function setupSurface(
   // (so resume-swap can re-wire it) and installed on the session via
   // setPlanExitQueueCheck. Only armed when a compositor exists (TTY mode).
   if (armedCompositor) {
-    ctx.hasPendingUserMessage = () => armedCompositor.peekQueuedText() !== undefined;
+    ctx.hasPendingUserMessage = () => armedCompositor.hasPendingSubmission();
     ctx.session.current?.setPlanExitQueueCheck(ctx.hasPendingUserMessage);
   }
 

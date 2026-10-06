@@ -32,7 +32,6 @@ import type { StreamingMarkdownRenderer } from '../markdown-stream.js';
 import type { Writer } from '../slash/types.js';
 import type { ProgressEvent } from '../../agent/types.js';
 import { checkTtfbAnnotation, type TtfbTickCtx } from './stream-renderer-ttfb.js';
-import { subagentStatusStack, type SubagentStatusBarSpec } from '../render.js';
 
 const PAUSE_THRESHOLD_MS = 30_000;
 const WAITING_LABEL_PREFIX = ' · waiting ';
@@ -95,16 +94,12 @@ export function registerOverlaySlots(
      * repaint. See stream-renderer's `setSoftStopping`.
      */
     getSoftStopping: () => boolean;
-    /**
-     * Live accessor for the active subagent status bar specs, keyed by subagentId.
-     * Optional so existing non-TTY callers and tests register slots unchanged;
-     * when absent the subagent-status slot always renders empty.
-     */
-    getActiveSubagents?: () => ReadonlyMap<string, SubagentStatusBarSpec>;
   },
 ): void {
-  // Register overlay slots (thinking-live, subagent-status, markdown-pending,
-  // tool-lane, progress-banner, interrupt). The stage-rail slot has been promoted
+  // Register overlay slots (thinking-live, markdown-pending, tool-lane,
+  // progress-banner, interrupt). Running subagents are shown by the tool-lane
+  // tree's Agent rows; the separate subagent-status stack was removed as a
+  // duplicate surface. The stage-rail slot has been promoted
   // to a reserved footer row via LoopStageBar and is no longer part of the overlay.
   overlayComposer.register({
     key: 'thinking-live',
@@ -134,17 +129,6 @@ export function registerOverlaySlots(
       // (which adds centering centrally), so prepend the margin here.
       const pad = contentMargin();
       return pad ? paragraph.split('\n').map(l => l === '' ? l : pad + l).join('\n') : paragraph;
-    },
-  });
-
-  // Subagent status bars — one line per active subagent dispatch, capped at 3.
-  // Reads live from getActiveSubagents(); renders '' when no subagents are running
-  // (slot occupies no space in the composed frame when all returns are empty).
-  overlayComposer.register({
-    key: 'subagent-status',
-    render: () => {
-      const entries = ctx.getActiveSubagents ? [...ctx.getActiveSubagents().values()] : [];
-      return subagentStatusStack(entries);
     },
   });
 
@@ -360,12 +344,19 @@ export function checkPauseAnnotations(ctx: LifecycleContext): boolean {
   // geometry and produce phantom blank rows in scrollback). Does NOT call
   // flush() itself; the block below owns the single flush. Mutates
   // ctx.lastTtfbAnnotation in place when the displayed second advances.
-  const ttfbDirtied = checkTtfbAnnotation(ctx, now);
+  checkTtfbAnnotation(ctx, now);
 
-  if ((changed || ttfbDirtied) && ctx.isTTY && ctx.overlayComposer) {
+  if (ctx.isTTY && ctx.overlayComposer) {
     if (changed) ctx.overlayComposer.markDirty('tool-lane');
-    // progress-banner already marked dirty by checkTtfbAnnotation when ttfbDirtied.
-    ctx.overlayComposer.flush();
+    // The progress banner is already marked dirty by checkTtfbAnnotation.
+    // Also drain resize invalidations on quiet preparation frames. Gate on
+    // isDirty() so the full compose-and-setOverlay path is skipped entirely
+    // on ticks where neither the tool lane nor any other slot changed.
+    // Rationale: setOverlay() triggers a terminal write + compositor geometry
+    // recalculation on every call; skipping it on clean ticks avoids redundant
+    // escape-sequence output (~dozens of bytes per tick) and prevents the double-
+    // setOverlay desync that produces phantom blank rows in scrollback (see c862d2b3).
+    if (changed || ctx.overlayComposer.isDirty()) ctx.overlayComposer.flush();
   }
 
   return changed;

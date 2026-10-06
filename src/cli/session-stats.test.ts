@@ -327,46 +327,19 @@ describe('resetStats', () => {
   });
 });
 
-describe('recordTurn — structured content blocks', () => {
-  it('stores userContentBlocks and assistantContentBlocks when provided', () => {
+describe('recordTurn — sidecar turns are text + metadata', () => {
+  // Content blocks are no longer written: their tool_result content was the
+  // ~80-char display preview. The message journal carries full content.
+  it('never writes userContentBlocks / assistantContentBlocks, even with tool events', () => {
     const s = createSessionStats('sonnet');
-    const userBlocks = [{ type: 'text' as const, text: 'hello' }];
-    const assistantBlocks = [
-      { type: 'text' as const, text: 'hi' },
-      { type: 'tool_use' as const, id: 'tu_1', name: 'bash', input: { command: 'echo hi' } },
+    const toolEvents = [
+      { toolName: 'bash', toolUseId: 'tu_1', input: '{"command":"ls"}', result: 'preview…' },
     ];
-    const rec = recordTurn(
-      s,
-      'hello',
-      'hi',
-      { totalCostUsd: 0.01, durationMs: 100, usage: { input_tokens: 10, output_tokens: 5 } },
-      [],
-      userBlocks,
-      assistantBlocks,
-    );
-    expect(rec.userContentBlocks).toEqual(userBlocks);
-    expect(rec.assistantContentBlocks).toEqual(assistantBlocks);
-  });
-
-  it('omits userContentBlocks and assistantContentBlocks when not provided', () => {
-    const s = createSessionStats('sonnet');
-    const rec = recordTurn(s, 'hello', 'hi', undefined);
+    const rec = recordTurn(s, 'hello', 'hi', undefined, toolEvents);
     expect(rec.userContentBlocks).toBeUndefined();
     expect(rec.assistantContentBlocks).toBeUndefined();
-  });
-
-  it('omits userContentBlocks when empty array is passed', () => {
-    const s = createSessionStats('sonnet');
-    const rec = recordTurn(s, 'hello', 'hi', undefined, undefined, [], []);
-    expect(rec.userContentBlocks).toBeUndefined();
-    expect(rec.assistantContentBlocks).toBeUndefined();
-  });
-
-  it('stores userContentBlocks independently of assistantContentBlocks', () => {
-    const s = createSessionStats('sonnet');
-    const userBlocks = [{ type: 'text' as const, text: 'query' }];
-    const rec = recordTurn(s, 'query', 'response', undefined, undefined, userBlocks, undefined);
-    expect(rec.userContentBlocks).toEqual(userBlocks);
-    expect(rec.assistantContentBlocks).toBeUndefined();
+    expect(rec.toolEvents).toEqual(toolEvents);
+    expect(rec.user).toBe('hello');
+    expect(rec.assistant).toBe('hi');
   });
 });

@@ -49,7 +49,11 @@ function makeFakeGit(
       return { stdout: '', stderr: '' };
     }
     if (sub === 'tag') return { stdout: tags.join('\n') + '\n', stderr: '' };
-    if (sub === 'rev-parse') return { stdout: sha + '\n', stderr: '' };
+    if (sub === 'rev-parse') {
+      const lastArg = args[args.length - 1] as string;
+      if (lastArg === 'HEAD') return { stdout: sha + '\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    }
     if (sub === 'checkout') return { stdout: '', stderr: '' };
     if (sub === 'symbolic-ref') return { stdout: 'origin/main\n', stderr: '' };
     if (sub === 'fetch') return { stdout: '', stderr: '' };
@@ -282,5 +286,78 @@ describe('installMarketplace — S7-hooks hardening on clone/checkout', () => {
     const checkout = calls.find((c) => subcommandOf(c.args) === 'checkout');
     expect(checkout, 'explicit --ref should invoke checkout').toBeDefined();
     expect(hasFlagPair(checkout!.args, 'core.hooksPath=/dev/null')).toBe(true);
+  });
+});
+
+describe('installMarketplace — remote-only branch ref (fix #2357)', () => {
+  it('installs with --ref when the branch exists only on the remote', async () => {
+    const calls: Array<{ args: readonly string[]; cwd: string | undefined }> = [];
+    const gitRunner: GitRunner = async (args, cwd) => {
+      calls.push({ args, cwd });
+      const sub = subcommandOf(args);
+      if (sub === 'clone') {
+        const dest = args[args.length - 1] as string;
+        mkdirSync(dest, { recursive: true });
+        writeMarketplaceManifest(dest, 'mp-remote-branch', [
+          { name: 'foo', source: './plugins/foo' },
+        ]);
+        return { stdout: '', stderr: '' };
+      }
+      if (sub === 'symbolic-ref') return { stdout: 'origin/main\n', stderr: '' };
+      if (sub === 'rev-parse') {
+        const lastArg = args[args.length - 1] as string;
+        if (lastArg === 'HEAD') return { stdout: 'cafef00d\n', stderr: '' };
+        if (lastArg === 'refs/remotes/origin/afk') return { stdout: 'deadbeef\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      }
+      if (sub === 'checkout') return { stdout: '', stderr: '' };
+      return { stdout: '', stderr: '' };
+    };
+
+    const result = await installMarketplace(
+      'owner/my-marketplace',
+      { ref: 'afk' },
+      { cacheDir, indexPath, gitRunner, now: () => new Date('2026-09-27T00:00:00Z') },
+    );
+
+    const checkoutCall = calls.find((c) => subcommandOf(c.args) === 'checkout');
+    expect(checkoutCall, 'checkout should have been called').toBeDefined();
+    const checkoutTail = checkoutCall!.args.slice(checkoutCall!.args.indexOf('checkout'));
+    expect(checkoutTail).toEqual(['checkout', '--detach', 'refs/remotes/origin/afk']);
+
+    expect(result.entry.ref).toBe('afk');
+    expect(result.entry.commit).toBe('cafef00d');
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// pinnedRef tests (fix #2358)
+// ---------------------------------------------------------------------------
+
+describe('installMarketplace — pinnedRef recorded in index', () => {
+  it('sets pinnedRef: true when --ref is supplied', async () => {
+    const { runner } = makeFakeGit(['v1.0.0'], 'sha1', 'my-mp');
+    const result = await installMarketplace(
+      'anthropics/my-mp',
+      { ref: 'afk' },
+      { cacheDir, indexPath, gitRunner: runner, now: () => new Date() },
+    );
+    expect(result.entry.pinnedRef).toBe(true);
+    const stored = readIndex(indexPath).marketplaces[result.name];
+    expect(stored.pinnedRef).toBe(true);
+    expect(stored.ref).toBe('afk');
+  });
+
+  it('sets pinnedRef: false when no --ref is supplied', async () => {
+    const { runner } = makeFakeGit(['v2.0.0'], 'sha2', 'auto-mp');
+    const result = await installMarketplace(
+      'anthropics/auto-mp',
+      {},
+      { cacheDir, indexPath, gitRunner: runner, now: () => new Date() },
+    );
+    expect(result.entry.pinnedRef).toBe(false);
+    const stored = readIndex(indexPath).marketplaces[result.name];
+    expect(stored.pinnedRef).toBe(false);
   });
 });

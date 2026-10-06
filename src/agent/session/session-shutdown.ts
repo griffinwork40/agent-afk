@@ -32,6 +32,8 @@ export interface ShutdownDeps {
   ownedTraceWriter: TraceWriter | undefined;
   /** Whether this session owns the trace seal (second-arg ownership check). */
   ownsTraceSeal: boolean;
+  /** Assistant texts from the in-memory history, threaded to SessionEnd hooks. */
+  getAssistantTexts?: () => readonly string[];
 }
 
 /**
@@ -92,6 +94,7 @@ export class SessionShutdown {
       getSessionId,
       ownsTraceSeal,
       ownedTraceWriter,
+      getAssistantTexts,
     } = this.deps;
     const config = getConfig();
 
@@ -148,6 +151,8 @@ export class SessionShutdown {
         // session-end hooks (e.g. the yield probe) run git/gh against the
         // session's repo rather than process.cwd().
         ...(config.cwd ? { cwd: config.cwd } : {}),
+        // In-memory assistant turns, for surfaces that never write a sidecar.
+        ...(getAssistantTexts ? { assistantTexts: getAssistantTexts() } : {}),
       },
       // Invariant: skip traceWriter when this session owns the seal (step 3
       // above) — the writer is sealed, so the hook_decision write would throw.

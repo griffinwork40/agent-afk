@@ -466,6 +466,86 @@ describe('InputSurface', () => {
       await surface.dispose();
     });
 
+    /**
+     * queuedSubmission unit tests (#2958).
+     *
+     * `readLine` snapshots `compositor.hasPendingSubmission()` BEFORE
+     * installing the onSubmit handler, so the flag captures whether a
+     * human payload was already sitting in the FIFO when this turn
+     * started (i.e. the user typed + Enter while the previous turn was
+     * streaming). The REPL uses this to know whether to defer peer
+     * injections until after the human turn runs.
+     */
+    it('queuedSubmission is false when the compositor is idle with no pending payload (fresh Enter)', async () => {
+      // Case (a): a normal idle Enter with nothing queued.
+      // hasPendingSubmission() is false at the moment readLine is called,
+      // so queuedSubmission must be false in the resolved result.
+      const stdout = makeMockStdout();
+      const stdin = makeMockStdin();
+      const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+
+      await surface.armCompositor({
+        promptFn: () => 'afk › ',
+        onCancel: () => {},
+        stdout,
+        stdin,
+      });
+
+      const readPromise = surface.readLine({ promptFn: () => 'afk › ' });
+      // Fresh idle: no payload in the FIFO before the handler fires.
+      for (const ch of 'hello') {
+        stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      }
+      stdin.emit('keypress', undefined, { name: 'return' });
+
+      const result = await readPromise;
+      expect(result.text).toBe('hello');
+      expect(result.queuedSubmission).toBe(false);
+
+      await surface.dispose();
+    });
+
+    it('queuedSubmission is true when a payload was queued during streaming and drained by the next readLine', async () => {
+      // Case (b): user types + Enter while no handler is installed
+      // (simulating the inter-turn gap where the compositor is in
+      // streaming mode and the Enter falls through to the FIFO queue).
+      // When the NEXT readLine flips the compositor to idle the widened
+      // flush invariant drains the queued payload via the freshly-
+      // installed onSubmit handler. Because hasPendingSubmission() was
+      // true at the snapshot point (before the handler was installed),
+      // the resolved result must carry queuedSubmission: true.
+      const stdout = makeMockStdout();
+      const stdin = makeMockStdin();
+      const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+
+      await surface.armCompositor({
+        promptFn: () => 'afk › ',
+        onCancel: () => {},
+        stdout,
+        stdin,
+      });
+
+      // Queue a payload WITHOUT a handler installed (streaming-gap simulation).
+      const compositor = surface.getCompositor()!;
+      for (const ch of 'queued-human') {
+        stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      }
+      stdin.emit('keypress', undefined, { name: 'return' });
+      // Confirm the payload is in the FIFO before we call readLine.
+      expect(compositor.getPendingCount()).toBe(1);
+      expect(compositor.hasPendingSubmission()).toBe(true);
+
+      // Now call readLine — setInputMode('idle') flushes the queued payload
+      // through the freshly-installed handler synchronously.
+      const result = await surface.readLine({ promptFn: () => 'afk › ' });
+      expect(result.text).toBe('queued-human');
+      // The flag must record that a payload was already queued when readLine
+      // started — this is what runInputLoop uses to defer peer injections.
+      expect(result.queuedSubmission).toBe(true);
+
+      await surface.dispose();
+    });
+
     it('readLine auto-resolves when a buffer was queued between calls (idle → idle flush)', async () => {
       // Scenario the widened setInputMode flush invariant closes: the
       // user types + Enters in the brief gap between two readLine calls

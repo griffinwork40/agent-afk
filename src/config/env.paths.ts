@@ -18,6 +18,13 @@ import type { EnvVarMeta } from './env.js';
 
 export const PATHS_ENV_REGISTRY = [
   {
+    name: 'CODEX_HOME',
+    description: 'Codex configuration, plugin, and skill directory used for imports. Defaults to ~/.codex.',
+    type: 'string',
+    required: false,
+    category: 'paths',
+  },
+  {
     name: 'AFK_HOME',
     description: 'Override the AFK home directory. Default: ~/.afk/.',
     type: 'string',
@@ -47,5 +54,69 @@ export const PATHS_ENV_REGISTRY = [
     required: false,
     example: '/Users/me/Projects/afk-companion/PRIMER.md',
     category: 'paths',
+  },
+  // ── OS / process path conventions ─────────────────────────────────────────
+  {
+    name: 'HOME',
+    description: 'Standard Unix home directory. Used as the fallback when AFK_HOME is unset.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
+  {
+    name: 'PATH',
+    description: 'System PATH. Read for executable resolution (git, gh, etc.) in tool handlers.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
+  {
+    name: 'APPDATA',
+    description: 'Windows %APPDATA% (Roaming). Used for VS Code/Cursor settings discovery and credential denylist paths.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
+  {
+    name: 'LOCALAPPDATA',
+    description: 'Windows %LOCALAPPDATA%. Used for browser credential denylist paths (Chrome, Firefox, Edge, etc.).',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
+  {
+    name: 'USERPROFILE',
+    description: 'Windows %USERPROFILE%. Used for credential denylist paths (.ssh, .aws, .gnupg) on win32.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
+  {
+    name: 'USER',
+    description: 'Unix login name of the current user. Used as a default approver identity in improve/approve.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
+  {
+    name: 'USERNAME',
+    description: 'Windows login name of the current user. Fallback after USER when identifying the approver.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
+  {
+    name: 'SystemRoot',
+    description: 'Windows system root directory (typically C:\\Windows). Used to identify WSL bash.exe shim paths in resolve-shell.ts.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
+  {
+    name: 'MSYSTEM',
+    description: 'Set by Git Bash environments (e.g. MINGW64). Signals that bash.exe is already on PATH in resolve-shell.ts.',
+    type: 'string',
+    required: false,
+    category: 'process',
   },
 ] as const satisfies readonly EnvVarMeta[];

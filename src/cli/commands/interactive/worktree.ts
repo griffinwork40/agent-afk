@@ -8,6 +8,9 @@
  * Resolution of the main repo root uses `git rev-parse --git-common-dir`
  * (not `--show-toplevel`) so the helper still points to the primary repo
  * even when invoked from inside an existing linked worktree.
+ *
+ * Git ref resolution helpers live in worktree.refs.ts.
+ * Cleanup logic lives in worktree.cleanup.ts.
  */
 
 import { execFile as execFileCallback } from 'node:child_process';
@@ -19,11 +22,16 @@ import { randomBytes } from 'node:crypto';
 
 import { resolveRepoRoot as resolveRepoRootCanonical } from '../../../utils/git.js';
 
-import { recordCdIntent, shellWrapperActive } from '../../../utils/cd-on-exit.js';
-import { detectShellFromEnv } from '../shell-init.js';
-import { probeNonRebuildableIgnoredFiles } from '../../../agent/worktree/worktree-ignored-probe.js';
 import { registerWorktreeRoot } from '../../../agent/worktree/worktree-root-registry.js';
 import type { WorktreeDisposition } from './worktree-disposition.js';
+import {
+  fetchIfRemoteRef,
+  resolveRefToSha,
+  resolveRefToShaOrUndefined,
+  detectDefaultBaseRef,
+} from './worktree.refs.js';
+import { runWorktreeCleanup } from './worktree.cleanup.js';
+import { isExecError } from './worktree.errors.js';
 
 const execFileDefault = promisify(execFileCallback);
 
@@ -142,15 +150,6 @@ export function resolveBranchPrefix(override?: string): string {
     return validateBranchPrefix(envValue, 'AFK_WORKTREE_BRANCH_PREFIX');
   }
   return DEFAULT_BRANCH_PREFIX;
-}
-
-interface ExecError extends Error {
-  stderr?: string;
-  stdout?: string;
-}
-
-function isExecError(value: unknown): value is ExecError {
-  return value instanceof Error;
 }
 
 /**
@@ -441,116 +440,6 @@ export function resolveBaseRef(override?: string): string | undefined {
 }
 
 /**
- * If `ref` names a configured remote's branch (e.g. `origin/main`), fetch it
- * first so the worktree is based on fresh upstream rather than a stale local
- * tracking ref. A local branch with a slash (e.g. `feature/x`) is left alone
- * because its first path segment is not a known remote name.
- *
- * Best-effort: a fetch failure (offline, auth, removed remote) is downgraded
- * to a warning and the existing local copy of the ref is used. A genuinely
- * unresolvable ref then surfaces from {@link resolveRefToSha}.
- */
-async function fetchIfRemoteRef(repoRoot: string, ref: string, execFile: ExecFileFn): Promise<void> {
-  const slashIdx = ref.indexOf('/');
-  if (slashIdx <= 0) return;
-  const candidateRemote = ref.slice(0, slashIdx);
-
-  let remotes: string[];
-  try {
-    const { stdout } = await execFile('git', ['-C', repoRoot, 'remote']);
-    remotes = stdout.split('\n').map((s) => s.trim()).filter((s) => s.length > 0);
-  } catch {
-    return; // can't enumerate remotes — skip fetch, let rev-parse try the ref as-is
-  }
-  if (!remotes.includes(candidateRemote)) return; // local ref (e.g. feature/x), not remote/<branch>
-
-  // Peel any revision modifiers (~, ^, @{...}, :path) — `git fetch` wants a
-  // branch name, not a full revision expression.
-  const branchName = ref.slice(slashIdx + 1).replace(/[~^@:].*$/, '');
-  if (branchName.length === 0) return;
-
-  try {
-    await execFile('git', ['-C', repoRoot, 'fetch', '--no-tags', candidateRemote, branchName]);
-  } catch (err) {
-    const message = isExecError(err) ? (err.message || err.stderr || '') : String(err);
-    // eslint-disable-next-line no-console
-    console.warn(
-      `Worktree base: could not fetch '${candidateRemote}/${branchName}' (${message.trim()}). ` +
-        `Using the local copy of '${ref}', which may be stale.`,
-    );
-  }
-}
-
-/**
- * Resolve a ref/revision to a full commit SHA, peeling annotated tags via
- * `^{commit}`. Throws a clear, actionable error when the ref is unknown.
- */
-async function resolveRefToSha(repoRoot: string, ref: string, execFile: ExecFileFn): Promise<string> {
-  try {
-    const { stdout } = await execFile('git', ['-C', repoRoot, 'rev-parse', '--verify', `${ref}^{commit}`]);
-    const sha = stdout.trim();
-    if (sha.length === 0) throw new Error('empty rev-parse output');
-    return sha;
-  } catch (err) {
-    const message = isExecError(err) ? (err.message || err.stderr || '') : String(err);
-    throw new Error(
-      `Cannot resolve worktree base ref '${ref}': ${message.trim()} — check the ref exists ` +
-        `(for a remote branch, make sure the remote is reachable so it can be fetched).`,
-    );
-  }
-}
-
-/**
- * Detect the base ref AFK uses by DEFAULT when no explicit override is given:
- * the primary remote's default branch. Tries `origin/HEAD` first (set by
- * `git clone`, and it already tracks whatever the remote's default is — main,
- * master, trunk, …), then falls back to a conventional `origin/main` /
- * `origin/master` whose tracking ref exists locally. Returns `undefined` when
- * no remote default is discoverable (e.g. a local-only repo with no `origin`),
- * so the caller bases the worktree on the repo's current HEAD instead.
- *
- * All calls are local ref reads — no network. The caller's subsequent fetch is
- * what refreshes the chosen ref from upstream.
- */
-async function detectDefaultBaseRef(repoRoot: string, execFile: ExecFileFn): Promise<string | undefined> {
-  try {
-    const { stdout } = await execFile('git', [
-      '-C', repoRoot, 'symbolic-ref', '--short', '--quiet', 'refs/remotes/origin/HEAD',
-    ]);
-    const ref = stdout.trim();
-    if (ref.length > 0) return ref; // e.g. "origin/main"
-  } catch { /* origin/HEAD not configured — fall through to conventions */ }
-
-  for (const candidate of ['origin/main', 'origin/master']) {
-    try {
-      const { stdout } = await execFile('git', [
-        '-C', repoRoot, 'rev-parse', '--verify', '--quiet', `${candidate}^{commit}`,
-      ]);
-      if (stdout.trim().length > 0) return candidate;
-    } catch { /* candidate's tracking ref doesn't exist locally */ }
-  }
-  return undefined;
-}
-
-/**
- * {@link resolveRefToSha} variant that returns `undefined` instead of throwing
- * when the ref can't be resolved. Used on the DEFAULT (auto-detected) path,
- * where an unresolvable ref should silently fall back to HEAD rather than fail
- * worktree creation — the user didn't explicitly ask for this ref.
- */
-async function resolveRefToShaOrUndefined(
-  repoRoot: string,
-  ref: string,
-  execFile: ExecFileFn,
-): Promise<string | undefined> {
-  try {
-    return await resolveRefToSha(repoRoot, ref, execFile);
-  } catch {
-    return undefined;
-  }
-}
-
-/**
  * Internal core: create the worktree at an already-resolved `repoRoot`
  * (caller is responsible for `resolveRepoRoot` + `ensureGitignoreEntry`).
  * Shared by {@link setupWorktree} (eager) and {@link setupWorktreeDeferred}
@@ -602,9 +491,9 @@ async function createWorktreeAt(
         baseSha = sha;
         baseRef = detected;
       }
-      // sha === undefined → detected ref vanished post-fetch → fall back to HEAD.
+      // sha === undefined -> detected ref vanished post-fetch -> fall back to HEAD.
     }
-    // detected === undefined → no remote default → base off local HEAD.
+    // detected === undefined -> no remote default -> base off local HEAD.
   }
 
   const addArgs = ['-C', repoRoot, 'worktree', 'add', '-b', branch, worktreePath];
@@ -625,169 +514,20 @@ async function createWorktreeAt(
   await registerWorktreeRoot(repoRoot);
 
   // Constraint: cleanup() runs at session shutdown, potentially LONG after
-  // the worktree was created. The closure reads `handle.path`/`handle.branch`
-  // at invocation time (not construction time) so it remains correct even if
-  // a future caller ever mutates the handle; today the worktree is created
-  // once with its final name and never moved, so these are effectively stable.
+  // the worktree was created. All state needed for cleanup is passed as
+  // explicit parameters to runWorktreeCleanup — no closures over locals.
   const handle: WorktreeHandle = {
     path: worktreePath,
     branch,
-    cleanup: async (opts?: { force?: boolean; disposition?: WorktreeDisposition }): Promise<void> => {
-      // Best-effort: every git invocation below is guarded so a failure during
-      // shutdown (e.g. worktree dir manually deleted, transient git lock) cannot
-      // surface as an unhandled rejection from `rl.on('close', ...)`.
-      const currentPath = handle.path;
-      const currentBranch = handle.branch;
-
-      if (opts?.force === true) {
-        // Zero-turn session: no work was done, so skip the dirty-state check
-        // AND the ignored-state probe below — nothing can have been written in
-        // a session that took zero turns, so there is nothing to preserve.
-        // and remove unconditionally. Log before the git call so the user sees
-        // confirmation even if the removal fails.
-        // eslint-disable-next-line no-console
-        console.log(`Worktree removed (zero turns — no work done): ${currentPath}`);
-        try {
-          await execFile('git', ['-C', repoRoot, 'worktree', 'remove', '--force', currentPath]);
-        } catch (err) {
-          const message = isExecError(err) ? (err.message || err.stderr || '') : String(err);
-          // eslint-disable-next-line no-console
-          console.warn(
-            `Worktree cleanup: 'git worktree remove --force ${currentPath}' failed (${message}). Manual removal may be needed.`,
-          );
-          return;
-        }
-        try {
-          await execFile('git', ['-C', repoRoot, 'branch', '-d', currentBranch]);
-        } catch (err) {
-          const message = isExecError(err) ? (err.message || err.stderr || '') : String(err);
-          // eslint-disable-next-line no-console
-          console.warn(`Could not delete branch '${currentBranch}': ${message}`);
-        }
-        return;
-      }
-
-      let status: { stdout: string; stderr: string };
-      let ignoredProbeEarly: Awaited<ReturnType<typeof probeNonRebuildableIgnoredFiles>> | undefined;
-      try {
-        [status, ignoredProbeEarly] = await Promise.all([
-          execFile('git', ['-C', currentPath, 'status', '--porcelain']),
-          probeNonRebuildableIgnoredFiles(execFile, currentPath),
-        ]);
-      } catch (err) {
-        const message = isExecError(err) ? (err.message || err.stderr || '') : String(err);
-        // eslint-disable-next-line no-console
-        console.warn(
-          `Worktree cleanup: could not check status at ${currentPath} (${message}). Skipping removal — manual cleanup may be needed.`,
-        );
-        return;
-      }
-
-      const preserveWorktree = (reason: string): void => {
-        // eslint-disable-next-line no-console
-        console.log(
-          `Worktree preserved at ${currentPath} (branch: ${currentBranch}) — ${reason}.`,
-        );
-        // Record the worktree as the parent shell's desired cwd. The
-        // optional `afk` shell wrapper (installed via `afk shell-init`)
-        // reads this marker after the binary exits and cd's the user
-        // into the preserved worktree. Without the wrapper this file
-        // is harmless — every subsequent `afk` invocation clears it.
-        recordCdIntent(currentPath);
-        if (!shellWrapperActive()) {
-          // Match the install hint to the user's shell so fish users
-          // don't get the bash `eval "$(...)"` form (which fails in
-          // fish). Auto-detect falls back to bash if $SHELL is unset.
-          const userShell = detectShellFromEnv(env.SHELL);
-          const installHint =
-            userShell === 'fish'
-              ? `afk shell-init fish | source   (add to ~/.config/fish/config.fish)`
-              : `eval "$(afk shell-init)"   (add to ~/.zshrc or ~/.bashrc)`;
-          // eslint-disable-next-line no-console
-          console.log(`  → cd ${currentPath}\n  → Or install one-time:  ${installHint}`);
-        }
-      };
-
-      if (status.stdout.trim().length > 0) {
-        preserveWorktree('uncommitted changes');
-        return;
-      }
-
-      // Invariant: the `git status --porcelain` above reports untracked files
-      // but NEVER ignored ones, so a tree whose only content is ignored reads
-      // clean here and falls straight through to `remove --force` below. That
-      // deletes a worktree-local `.env` or gitignored scratch file with no
-      // warning and no recovery (#759) — this is the same defect the sweep
-      // engine and the `worktree` tool's remove path already guard against, and
-      // it is the most frequently executed removal path of the three.
-      // Rebuildable output (node_modules/, dist/) stays non-protective on
-      // purpose: treating it as protective would strand every worktree the
-      // user ever finished with.
-      // Contract: name the entry that ACTUALLY protected the tree. The old
-      // wording ("non-rebuildable ignored files (e.g. .env)") read as a
-      // finding, so a user who had no `.env` went hunting for a secret that
-      // did not exist while the real cause — leftover test detritus, a
-      // scratch dir — stayed invisible and the tree was preserved on every
-      // single exit with nothing in the message to explain why.
-      // ignoredProbeEarly was fetched concurrently with the status check above.
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-      const ignoredProbe = ignoredProbeEarly!;
-      if (ignoredProbe.protect) {
-        preserveWorktree(
-          ignoredProbe.because === 'git-failed'
-            ? `the ignored-file probe failed (${ignoredProbe.detail}), so removal would be a guess`
-            : `ignored local state \`git status\` cannot see: ${ignoredProbe.detail}`,
-        );
-        return;
-      }
-
-      const disposition = opts?.disposition ?? 'remove';
-      if (disposition === 'keep-locked') {
-        // External sweep constraint: lock BEFORE advertising preservation; a clean
-        // dead-owner worktree without this lock may be reclaimed at the next sweep.
-        try {
-          await execFile('git', [
-            '-C', repoRoot, 'worktree', 'lock',
-            '--reason', `afk: kept on exit ${new Date().toISOString()}`,
-            currentPath,
-          ]);
-        } catch (err) {
-          const message = isExecError(err) ? (err.message || err.stderr || '') : String(err);
-          // eslint-disable-next-line no-console
-          console.warn(
-            `Worktree cleanup: could not lock ${currentPath} (${message}). It is preserved now, but a later sweep may reclaim it.`,
-          );
-        }
-        preserveWorktree('kept on exit');
-        return;
-      }
-      if (disposition === 'keep-unlocked') {
-        // Deliberately NOT locked: nobody chose to keep this tree (the input
-        // surface was gone), so it is preserved as a grace window and left
-        // sweep-eligible rather than pinned forever. Say so, because "preserved"
-        // alone would imply the durability that only a lock provides.
-        preserveWorktree('kept on exit (not locked — a later sweep may reclaim it)');
-        return;
-      }
-
-      try {
-        await execFile('git', ['-C', repoRoot, 'worktree', 'remove', '--force', currentPath]);
-      } catch (err) {
-        const message = isExecError(err) ? (err.message || err.stderr || '') : String(err);
-        // eslint-disable-next-line no-console
-        console.warn(
-          `Worktree cleanup: 'git worktree remove --force ${currentPath}' failed (${message}). Manual removal may be needed.`,
-        );
-        return;
-      }
-
-      try {
-        await execFile('git', ['-C', repoRoot, 'branch', '-d', currentBranch]);
-      } catch (err) {
-        const message = isExecError(err) ? (err.message || err.stderr || '') : String(err);
-        // eslint-disable-next-line no-console
-        console.warn(`Could not delete branch '${currentBranch}': ${message}`);
-      }
+    cleanup: async (cleanupOpts?: { force?: boolean; disposition?: WorktreeDisposition }): Promise<void> => {
+      await runWorktreeCleanup({
+        worktreePath: handle.path,
+        branch: handle.branch,
+        repoRoot,
+        execFile,
+        force: cleanupOpts?.force,
+        disposition: cleanupOpts?.disposition,
+      });
     },
   };
 

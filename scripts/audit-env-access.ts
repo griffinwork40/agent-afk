@@ -60,6 +60,11 @@ const ALLOWED_FILES: ReadonlyArray<{ file: string; reason: string }> = [
       'Forwards process.env to child processes via `{ ...process.env, ...context.env }`. This is whole-env forwarding, not a read of a specific var.',
   },
   {
+    file: 'src/agent/tools/handlers/bash-env-scrub.ts',
+    reason:
+      'Whole-env forwarding to provide a scrubbed copy for bash child processes (issue #2425). Inherits process.env and strips episode-revealing vars; this is dynamic whole-env access, not a specific-var read.',
+  },
+  {
     file: 'src/agent/tools/handlers/web-scrape.ts',
     reason: 'Accepts `env` as an injectable opt for testing; default is `process.env` (whole object).',
   },
@@ -71,11 +76,6 @@ const ALLOWED_FILES: ReadonlyArray<{ file: string; reason: string }> = [
     file: 'src/agent/mcp/transport.ts',
     reason:
       'Inherits a fixed allowlist of OS-level env vars (PATH, USER, SHELL, TERM, TMPDIR, etc.) into spawned MCP server child processes. The keys are bounded but include vars outside the AFK domain (TMP, SYSTEMROOT, APPDATA) that do not belong in ENV_REGISTRY.',
-  },
-  {
-    file: 'src/utils/resolve-shell.ts',
-    reason:
-      'Reads OS-level env vars (MSYSTEM, PATH) to probe for Git Bash on Windows. These are system vars that do not belong in ENV_REGISTRY — same rationale as mcp/transport.ts.',
   },
   {
     file: 'src/agent/providers/openai-compatible/auth.ts',

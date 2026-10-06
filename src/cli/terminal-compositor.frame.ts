@@ -46,7 +46,7 @@ import {
 } from './terminal-compositor.frame.layout.js';
 import { buildFrameLines, buildPickerFrameLines } from './terminal-compositor.frame.lines.js';
 import { computeFramePosition } from './terminal-compositor.frame.position.js';
-import { contentHugAnchor, contentHugTargetBottom } from './terminal-compositor.content-hug.js';
+import { contentHugAnchor, contentHugBandReserve, contentHugTargetBottom } from './terminal-compositor.content-hug.js';
 
 /**
  * Narrowest TerminalCompositor state slice the frame-composition functions
@@ -82,6 +82,8 @@ export interface FrameHost {
   readonly spinnerController: SpinnerController;
   attachments: ImageAttachment[];
   clipboardFailureMsg: string | null;
+  /** Transient Shift+Tab mode notice (terminal-compositor.mode-notice.ts). */
+  modeNotice: string | null;
   // ── committed-band tracking (mutated by preserveRowsBeforeFrameRender) ──
   committedBand: string[];
   /** #540: per-physical-row logical provenance, index-aligned 1:1 with committedBand. */
@@ -96,6 +98,8 @@ export interface FrameHost {
   /** content-hug: post-commit band length during an in-flight commit, else null. */
   pendingContentRows: number | null;
   committedBandPaintedRows: number;
+  /** Leading band rows already in scrollback (terminal-compositor.band-archived-prefix.ts). */
+  committedBandArchivedPrefix: number;
   /** Memoization for reflowCommittedBandToWidth — see the field doc on the class. */
   bandReflowCache: BandReflowCache | null;
   hasCommitted: boolean;
@@ -158,6 +162,7 @@ export function repaint(self: FrameHost): void {
     self.attachments,
     clipboardRef,
     self.stdout.columns ?? 80,
+    self.modeNotice,
   );
   self.clipboardFailureMsg = clipboardRef.value;
   const dropdownRows = self.renderDropdownRows();
@@ -168,6 +173,7 @@ export function repaint(self: FrameHost): void {
     hintRow !== null,
     self.stdout.rows ?? 24,
     self.scrollRegion,
+    contentHugBandReserve(self, self.stdout.rows ?? 24),
   );
   const frameLines = buildFrameLines(
     chrome,
@@ -190,7 +196,7 @@ export function repaint(self: FrameHost): void {
     self.placementMode,
     self.anchorRow,
     self.logUpdate,
-    hug ? contentHugAnchor(self) : undefined,
+    hug ? (physicalRows) => contentHugAnchor(self, physicalRows, absoluteBottom) : undefined,
   );
   // Record the real (unpadded) frame top for commitAbove's routing. This is the
   // value Phase-2 will re-establish; logUpdate.topRow (shrink-padded) is not.
@@ -254,6 +260,7 @@ function repaintPickerFrame(self: FrameHost): void {
     self.attachments,
     clipboardRef,
     self.stdout.columns ?? 80,
+    self.modeNotice,
   );
   self.clipboardFailureMsg = clipboardRef.value;
   const layout = computePickerViewportLayout(
@@ -261,6 +268,7 @@ function repaintPickerFrame(self: FrameHost): void {
     pickerRows.length,
     self.stdout.rows ?? 24,
     self.scrollRegion,
+    contentHugBandReserve(self, self.stdout.rows ?? 24),
   );
   const frameLines = buildPickerFrameLines(chrome, layout.trimmedOverlay, layout.renderGap, pickerRows);
   // Empty-frame guard: when the picker's renderRows() is empty and no
@@ -281,7 +289,7 @@ function repaintPickerFrame(self: FrameHost): void {
     ? self.logUpdate.measure(frame, absoluteBottom).lineCount
     : frameLines.length;
   const bottomRow = self.placementMode === 'content-hug'
-    ? contentHugTargetBottom(contentHugAnchor(self), physicalRows, absoluteBottom)
+    ? contentHugTargetBottom(contentHugAnchor(self, physicalRows, absoluteBottom), physicalRows, absoluteBottom)
     : absoluteBottom;
   const desiredTopRow = Math.max(1, bottomRow - physicalRows + 1);
   // Record the real (unpadded) frame top for commitAbove's routing, exactly as

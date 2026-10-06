@@ -14,6 +14,7 @@ import type { ModelProvider } from '../provider.js';
 import type { AgentModelInput } from '../types.js';
 import type { Surface } from '../awareness/types.js';
 import type { ReadScopeInputs } from '../subagent-read-scope.js';
+import type { JournalParent } from '../subagent/fork-types.js';
 import { AnthropicDirectProvider } from '../providers/anthropic-direct/index.js';
 import { OpenAICompatibleProvider } from '../providers/openai-compatible/index.js';
 import type { WorkspaceStore } from '../workspace/workspace-store.js';
@@ -462,6 +463,8 @@ export function createChildSkillExecutorFactory(
   inheritedCwd?: string,
   inheritedReadScope?: ReadScopeInputs,
   skillDispatchName?: string,
+  journalParent?: JournalParent,
+  rootSessionId?: string,
 ) => SkillExecutor {
   const factory: (
     depth: number,
@@ -470,7 +473,9 @@ export function createChildSkillExecutorFactory(
     inheritedCwd?: string,
     inheritedReadScope?: ReadScopeInputs,
     skillDispatchName?: string,
-  ) => SkillExecutor = (depth, maxDepth, signal, inheritedCwd, inheritedReadScope, skillDispatchName) => {
+    journalParent?: JournalParent,
+    rootSessionId?: string,
+  ) => SkillExecutor = (depth, maxDepth, signal, inheritedCwd, inheritedReadScope, skillDispatchName, journalParent, rootSessionId) => {
     // Invariant: the closure-captured `cwd` is frozen at bootstrap. For
     // born-named `afk -w` worktrees it is `undefined` (the worktree is
     // created on turn 1 via worktree-autoname, after bootstrap). A later
@@ -479,8 +484,22 @@ export function createChildSkillExecutorFactory(
     // depth-1 caller) carries the live value so grandchild SkillExecutors
     // anchor to the worktree, not the host's process.cwd().
     const effectiveCwd = inheritedCwd ?? cwd;
+    // Journal view AND session id are read LAZILY: the forking child's journal
+    // and id are backfilled only after its fork returns (subagent-executor /
+    // fork-dispatch). The live id gives nested skill forks a real
+    // `parentSessionId`, without which child-attribution drops them (#2442).
+    const stub = createStubParentSession(signal);
     return new SkillExecutor({
-      parentSession: createStubParentSession(signal),
+      parentSession: journalParent === undefined
+        ? stub
+        : {
+            ...stub,
+            get sessionId() { return journalParent.sessionId; },
+            get messageJournal() { return journalParent.messageJournal; },
+          },
+      // Root (depth-0) session id (#2442): the nested executor's skill forks
+      // and their `agent` grandchildren credit artifacts to the root record.
+      ...(rootSessionId !== undefined ? { parentRootSessionId: rootSessionId } : {}),
       defaultModel,
       // Resolved default-subagent policy threaded through every depth so a
       // nested skill child (and the SubagentExecutor it builds) defaults to the

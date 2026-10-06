@@ -33,12 +33,12 @@ import type { Surface } from './awareness/types.js';
 import { admitFork, wrapTerminalWithRelease, type SpawnReceipt, type DelegationBudget } from './subagent/fork-budget.js';
 import { getCurrentSink } from './_lib/skill-sink-channel.js';
 import { touchWorktreeOccupancy, startWorktreeOccupancyHeartbeat } from './worktree/worktree-occupancy.js';
-import { resolveWorktreeMainRoot } from './worktree/worktree-read-root.js';
+import { WorktreeMainRootCache } from './subagent/worktree-main-root-cache.js';
 import { type ReadScopeInputs } from './subagent-read-scope.js';
 import { resolveReadScope, composeWriteRoots } from './subagent/resolve-fork-scope.js';
 import { providerForModel, type BundledProviderName } from './providers/index.js';
 import { validatePhaseRole } from './subagent/fork-validation.js';
-import { assembleChildConfig } from './subagent/fork-child-config.js';
+import { assembleChildConfig, type ParentForkFields } from './subagent/fork-child-config.js';
 import { emitForkStarted, appendForkTelemetry, emitSubagentStartedEvent } from './subagent/fork-lifecycle.js';
 import { SubagentHandleImpl, type SubagentHandle } from './subagent/handle.js';
 import { resolveForkInputs } from './subagent/fork-resolution.js';
@@ -62,11 +62,7 @@ import {
   resolveSubagentIdleTimeoutMs,
 } from './subagent/constants.js';
 
-import type {
-  ForkParent,
-  ForkSubagentOptions,
-  SubagentManagerOptions,
-} from './subagent/fork-types.js';
+import { resolveParentCredential, type ForkParent, type ForkSubagentOptions, type SubagentManagerOptions } from './subagent/fork-types.js';
 
 // Re-export-only symbols forwarded without local use.
 export {
@@ -92,7 +88,9 @@ export class SubagentManager {
   private readonly parentCanUseTool: CanUseTool | undefined;
   private readonly hookRegistry: HookRegistry | undefined;
   private readonly progressSink: SubagentProgressSink | undefined;
-  private readonly parentApiKey: string | undefined;
+  // Getter: read live at fork time so /reauth is visible to children (#2471).
+  // Plain-string callers are wrapped at construction for backward compat.
+  private readonly parentApiKey: (() => string | undefined) | undefined;
   private readonly parentBaseUrl: string | undefined;
   // Derived once from options.parentModel (constructor). Source of truth for
   // the both-direction cross-provider credential gate in forkSubagent —
@@ -111,12 +109,13 @@ export class SubagentManager {
   // (see ./subagent-read-scope). `undefined` = derive from parentCwd
   // (defined → confined base; undefined → unconfined parent → read-open child).
   private readonly parentReadRoots: string[] | undefined;
-  // Per-cwd cache of the resolved main-repo root for worktree children (see
-  // `resolveWorktreeMainRoot`). Forks overwhelmingly share one cwd, so this
-  // collapses N git subprocesses to one per distinct cwd for the whole
-  // manager lifetime. `undefined` value = resolved-and-there-is-none, so the
-  // Map's `.has()` distinguishes "not yet resolved" from "resolved to none".
-  private readonly worktreeMainRootCache = new Map<string, string | undefined>();
+  // Root (depth-0) session id inherited from the forking parent's config.
+  // Undefined when THIS manager belongs to a top-level session. Threaded into
+  // assembleChildConfig so grandchild forks inherit the real root id.
+  private readonly parentRootSessionId: string | undefined;
+  // Per-cwd cache of the resolved main-repo root for worktree children.
+  // Extracted to WorktreeMainRootCache (./subagent/worktree-main-root-cache.ts).
+  private readonly worktreeMainRootCache = new WorktreeMainRootCache();
   // Not readonly: a REPL `/resume` swaps the session out from under this
   // long-lived manager and hands it a fresh writer via `setTraceWriter`,
   // because the outgoing session sealed the one captured here (#731).
@@ -144,13 +143,18 @@ export class SubagentManager {
     this.parentCanUseTool = options.canUseTool;
     this.hookRegistry = options.hookRegistry;
     this.progressSink = options.progressSink;
-    this.parentApiKey = options.apiKey;
+    // #2844: resolve key+model atomically — see subagent.credential-resolution.ts.
+    const { effectiveKey, effectiveModel } = resolveParentCredential(options);
+    // Wrap plain strings into a getter; function form passed through unchanged.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any
+    this.parentApiKey = effectiveKey === undefined ? undefined : typeof effectiveKey === 'function' ? effectiveKey : (() => effectiveKey as string);
     this.parentBaseUrl = options.baseUrl;
     this.parentProvider =
-      options.parentModel !== undefined ? providerForModel(options.parentModel) : undefined;
-    this.parentModel = options.parentModel;
+      effectiveModel !== undefined ? providerForModel(effectiveModel) : undefined;
+    this.parentModel = effectiveModel;
     this.parentCwd = options.cwd;
     this.parentReadRoots = options.parentReadRoots;
+    this.parentRootSessionId = options.parentRootSessionId;
     this.parentTraceWriter = options.traceWriter;
     this.parentSurface = options.surface;
     this.parentAbortSignal = options.parentAbortSignal;
@@ -187,6 +191,13 @@ export class SubagentManager {
   list(): Array<Pick<SubagentHandle, 'id' | 'status'>> {
     return [...this.active.values()].map((h) => ({ id: h.id, status: h.status }));
   }
+
+  /**
+   * Total subagents ever dispatched by this manager (foreground + background).
+   * Monotonically increasing. Used by the health rail's foreground-counts getter
+   * to compute fg-only totals: `dispatchCount − backgroundRegistry.list().length`.
+   */
+  get dispatchCount(): number { return this.counter; }
 
   get(id: string): SubagentHandle | undefined {
     return this.active.get(id) ?? this.completed.get(id)?.handle;
@@ -239,7 +250,7 @@ export class SubagentManager {
     // which would otherwise hand every subsequent fork a stale mainRoot from
     // the cache (#441). setCwd is rare (born-named worktree creation on turn 1),
     // so forcing one re-resolution on the next fork costs nothing.
-    this.worktreeMainRootCache.delete(cwd);
+    this.worktreeMainRootCache.invalidate(cwd);
   }
 
   /**
@@ -272,20 +283,17 @@ export class SubagentManager {
   }
 
   /**
-   * Resolve (and memoize) the main-repo root for a worktree `cwd`. Returns the
-   * main repository root when `cwd` is inside a linked git worktree distinct
-   * from the main worktree, else undefined. Best-effort — never throws.
-   *
-   * Cached per cwd so a fan-out of subagents sharing one worktree pays a single
-   * `git rev-parse`, not one per fork.
+   * The manager-owned parent fields every fork hands to
+   * {@link assembleChildConfig}. Extracted from `forkSubagent` (function-size
+   * ceiling); `parentRootSessionId` (#2442) seeds grandchild root attribution.
    */
+  private parentForkFields(): ParentForkFields {
+    const { parentCwd, parentApiKey, parentBaseUrl, parentProvider, parentTraceWriter, parentSurface, parentCanUseTool, parentRootSessionId } = this;
+    return { parentCwd, parentApiKey, parentBaseUrl, parentProvider, parentTraceWriter, parentSurface, parentCanUseTool, parentRootSessionId };
+  }
+
   private async resolveMainRootForCwd(cwd: string): Promise<string | undefined> {
-    if (this.worktreeMainRootCache.has(cwd)) {
-      return this.worktreeMainRootCache.get(cwd);
-    }
-    const mainRoot = await resolveWorktreeMainRoot(cwd);
-    this.worktreeMainRootCache.set(cwd, mainRoot);
-    return mainRoot;
+    return this.worktreeMainRootCache.resolve(cwd);
   }
 
   /**
@@ -422,14 +430,8 @@ export class SubagentManager {
         inheritedReadRoots,
         composedWriteRoots,
         childController,
-        parentCwd: this.parentCwd,
-        parentApiKey: this.parentApiKey,
-        parentBaseUrl: this.parentBaseUrl,
-        parentProvider: this.parentProvider,
-        parentTraceWriter: this.parentTraceWriter,
-        parentSurface: this.parentSurface,
-        parentCanUseTool: this.parentCanUseTool,
-        workspaceStore: this.workspaceStore,
+        ...this.parentForkFields(),
+        workspaceStore: this.workspaceStore, ...(options.nestedAgentAllowlist !== undefined ? { nestedAgentAllowlist: options.nestedAgentAllowlist } : {}),
       });
 
       // Occupancy touch: subagents never write presence files (top-level-only

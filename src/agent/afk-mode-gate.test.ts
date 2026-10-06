@@ -1000,3 +1000,35 @@ describe('createAfkModeGate — blocked-marker session id', () => {
     expect('sessionId' in seen.opts!).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #2363: approval request must show the full command (head+tail preview)
+// ---------------------------------------------------------------------------
+
+describe('createAfkModeGate — command preview in approval request', () => {
+  it('includes the destructive tail of a command past 300 chars in the elicitation message', async () => {
+    // Old MAX_INPUT_PREVIEW was 300 chars: a command whose dangerous part starts
+    // after char 300 was completely invisible to the operator.
+    const preamble = 'echo safe && '.repeat(30);  // ~390 chars of innocent prefix
+    const dangerousTail = '; rm -rf /important';
+    const command = preamble + dangerousTail;
+
+    let captured: ElicitationRequest | undefined;
+    const route = vi.fn(async (req: ElicitationRequest): Promise<ElicitationResult> => {
+      captured = req;
+      return { action: 'decline' };
+    });
+
+    const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, { route });
+    await gate({ event: 'PreToolUse', toolName: 'bash', input: { command } });
+
+    expect(captured).toBeDefined();
+    // The dangerous tail must appear in the approval message
+    expect(captured!.message).toContain('rm -rf /important');
+    // The request must carry the harness-internal flag so the renderer applies
+    // the larger message cap and the correct banner
+    expect(captured!._harnessInternal).toBe(true);
+    // serverName must be 'agent-afk'
+    expect(captured!.serverName).toBe('agent-afk');
+  });
+});

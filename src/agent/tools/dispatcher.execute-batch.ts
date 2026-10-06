@@ -37,6 +37,8 @@ import type { ToolActivityReporter } from '../providers/shared/tool-activity.js'
 import type { RepeatFailureGuard } from './repeat-failure-guard.js';
 import type { SubagentExecutor } from './subagent-executor.js';
 import type { ConcurrencyClassifier } from './types.js';
+import type { ToolHealthMonitor } from './tool-health-monitor.js';
+import type { StrategyNudger } from './strategy-nudge.js';
 
 /**
  * Dependency surface for {@link executeBatchImpl}. Every field maps 1:1 to a
@@ -87,6 +89,16 @@ export interface ExecuteBatchDeps {
    * trace writers suppress the event with no side effects.
    */
   traceWriter: TraceSink | undefined;
+  /**
+   * Per-session tool-health monitor. Threaded into `batchDeps` so the batch
+   * paths observe every settled result identically to the single-call `execute()`
+   * path. The length-1 fast path delegates to `execute()` directly and is
+   * therefore NOT double-counted — `applyToolHealth` is called from batch-process
+   * only for the multi-call code path.
+   */
+  toolHealthMonitor: ToolHealthMonitor;
+  /** Same-error strategy nudge; same single-observation rule as toolHealthMonitor. */
+  strategyNudger: StrategyNudger;
 }
 
 /**
@@ -264,6 +276,9 @@ export async function executeBatchImpl(
     subagentExecutor: deps.subagentExecutor,
     sessionId: deps.sessionId,
     maxConcurrentSafeCalls: deps.maxConcurrentSafeCalls,
+    toolHealthMonitor: deps.toolHealthMonitor,
+    strategyNudger: deps.strategyNudger,
+    traceWriter: deps.traceWriter,
     onActivity,
   };
 

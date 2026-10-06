@@ -39,6 +39,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { functionKey, measureFile, parseFunctionKey } from './lib/function-extents.js';
+import { parseGrowthArgs } from './lib/growth-args.js';
 import {
   changedSince,
   collectViolations,
@@ -207,19 +208,16 @@ function main(): void {
   const argv = process.argv.slice(2);
   const measured = scanAll();
 
-  if (argv.includes('--update-baseline')) {
-    const allowGrowth = argv.includes('--allow-growth');
-    const reasonIdx = argv.indexOf('--reason');
-    const reason = reasonIdx >= 0 ? (argv[reasonIdx + 1] ?? '') : '';
+  /** All flag tokens this script recognises — used by parseGrowthArgs to detect missing --reason values. */
+  const KNOWN_FLAGS = ['--check', '--update-baseline', '--changed-vs', '--list', '--allow-growth', '--reason'];
 
-    if (allowGrowth && !reason) {
-      console.error('✗ check-function-size: --allow-growth requires --reason "<text>" (non-empty).');
+  if (argv.includes('--update-baseline')) {
+    const parsed = parseGrowthArgs(argv, KNOWN_FLAGS);
+    if ('error' in parsed) {
+      console.error(`✗ check-function-size: ${parsed.error}`);
       process.exit(1);
     }
-    if (reason.startsWith('--')) {
-      console.error('✗ check-function-size: --reason value looks like a flag. Did you mean: --reason "..." --allow-growth?');
-      process.exit(1);
-    }
+    const { allowGrowth, reason } = parsed;
 
     const { kept, dropped, blocked } = updateBaseline(RATCHET, measured.sizes, { allowGrowth, reason });
 

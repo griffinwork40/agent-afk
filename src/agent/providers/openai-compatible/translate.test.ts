@@ -129,6 +129,31 @@ describe('translateChunk — reasoning streaming', () => {
     const { state } = collect([{ choices: [{ delta: { reasoning: 'inner monologue' } }] }]);
     expect(state.reasoningText).toBe('inner monologue');
   });
+
+  it('sets reasoningField to reasoning_content when delivered via reasoning_content', () => {
+    const { state } = collect([
+      { choices: [{ delta: { reasoning_content: 'deep think' } }] },
+      { choices: [{ delta: { reasoning_content: ' more' } }] },
+    ]);
+    expect(state.reasoningField).toBe('reasoning_content');
+    expect(state.reasoningText).toBe('deep think more');
+  });
+
+  it('sets reasoningField to reasoning when delivered via reasoning (Cerebras)', () => {
+    const { state } = collect([
+      { choices: [{ delta: { reasoning: 'cerebras thought' } }] },
+      { choices: [{ delta: { reasoning: ' part2' } }] },
+    ]);
+    expect(state.reasoningField).toBe('reasoning');
+    expect(state.reasoningText).toBe('cerebras thought part2');
+  });
+
+  it('defaults reasoningField to reasoning_content when no reasoning arrives', () => {
+    const { state } = collect([
+      { choices: [{ delta: { content: 'hello' } }] },
+    ]);
+    expect(state.reasoningField).toBe('reasoning_content');
+  });
 });
 
 describe('translateChunk — tool calls', () => {

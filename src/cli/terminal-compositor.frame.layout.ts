@@ -10,6 +10,8 @@
  */
 
 import { palette } from './palette.js';
+import { stripAnsi, truncateDisplayWidth } from './display.js';
+import { getGlyphs, type Glyphs } from './commands/interactive/tool-lane-render.js';
 import { renderStatusLine, type ImageAttachment } from './input/attachments.js';
 import type { SpinnerController } from './input/spinner.js';
 import type { CompositorScrollRegionGuard } from './terminal-compositor.types.js';
@@ -29,6 +31,11 @@ export interface ChromeRows {
  * ref) so it clears after one repaint, matching the original behaviour. Callers
  * must forward the returned `attachmentRow` to the frame-line assembler rather
  * than re-reading the host field.
+ *
+ * `modeNotice` (terminal-compositor.mode-notice.ts) shares the same one-row
+ * slot at the lowest precedence and is NOT consumed here: it persists across
+ * repaints until the key dispatcher clears it. It is truncated to the terminal
+ * width so a long notice can never wrap and skew the frame's row math.
  */
 export function gatherChromeRows(
   overlay: string,
@@ -36,6 +43,7 @@ export function gatherChromeRows(
   attachments: ImageAttachment[],
   clipboardFailureMsgRef: { value: string | null },
   cols: number,
+  modeNotice: string | null = null,
 ): ChromeRows {
   const overlayLines = overlay ? overlay.split('\n') : [];
   const spinnerRow = spinnerController.renderSpinnerRow();
@@ -46,6 +54,8 @@ export function gatherChromeRows(
   } else if (clipboardFailureMsgRef.value !== null) {
     attachmentRow = palette.dim(clipboardFailureMsgRef.value);
     clipboardFailureMsgRef.value = null;
+  } else if (modeNotice !== null) {
+    attachmentRow = truncateDisplayWidth(modeNotice, Math.max(1, cols - 1));
   }
   return { overlayLines, spinnerRow, tipRow, attachmentRow };
 }
@@ -88,8 +98,93 @@ export function truncateOverlayPreservingHead(lines: string[], budget: number): 
   // tailCount >= 2 for any budget >= 4: headCount >= 1, so budget - 1 - 1 >= 2.
   const tailCount = budget - headCount - 1;
   const hidden = lines.length - headCount - tailCount;
-  const indicator = palette.dim(`      ${hidden} earlier ${hidden === 1 ? 'line' : 'lines'} hidden`);
-  return [...lines.slice(0, headCount), indicator, ...lines.slice(-tailCount)];
+  const head = lines.slice(0, headCount);
+  const tail = lines.slice(-tailCount);
+  // Find the first non-blank tail row to use as the "below" reference for the
+  // gutter.  When every tail row is blank (degenerate input), `below` is
+  // `undefined` and `hiddenIndicatorGutter` returns `''`, so the indicator
+  // renders flush-left — harmless on degenerate output.
+  const below = tail.find((l) => stripAnsi(l).trim().length > 0);
+  // `above` is the last VISIBLE head row, not the structurally adjacent hidden
+  // row.  On well-formed tool-lane output the two are equivalent because rails
+  // are continuous: `tool-lane-render.ts` draws every intermediate row, so no
+  // rail ever jumps across a cut.  Using the last head row is safe and avoids
+  // having to re-scan the hidden region.
+  const gutter = hiddenIndicatorGutter(head[head.length - 1], below);
+  const indicator = palette.dim(`${gutter}${hidden} earlier ${hidden === 1 ? 'line' : 'lines'} hidden`);
+  return [...head, indicator, ...tail];
+}
+
+/**
+ * Glyphs whose rail continues UP out of their cell (so the row above must draw
+ * a rail).  The set is a superset of what `tool-lane-render.ts` actually emits
+ * (`│`, `├`, `╰`) — the extra glyphs (`└`, `┤`, `┼`, `┴`) are included
+ * defensively so the gutter remains correct if new connectors are added to the
+ * renderer without touching this file.
+ */
+const RAIL_UP = new Set(['│', '├', '╰', '└', '┤', '┼', '┴']);
+/**
+ * Glyphs whose rail continues DOWN out of their cell.  The set is likewise a
+ * defensive superset — `tool-lane-render.ts` emits only `│` and `├`; the
+ * others (`╭`, `┌`, `┤`, `┼`, `┬`) are included for future-proofing.
+ */
+const RAIL_DOWN = new Set(['│', '├', '╭', '┌', '┤', '┼', '┬']);
+/** Tree node glyphs that sit ON a parent rail (e.g. nested `◉ → Agent(...)`). */
+const NODE = new Set(['◉', '○', '●', '◆', '◇']);
+
+interface GutterGlyphs { rail: string; up: Set<string>; down: Set<string>; horiz: Set<string>; node: Set<string> }
+
+/**
+ * Contract: the Unicode box-drawing sets are always recognised (they never
+ * lead ordinary content). ASCII spine chars (`|`, `+`, `\\`, `-`, `o`) DO lead
+ * ordinary content (markdown bullets, tables, "+2 more"), so they are added only
+ * when the tool lane is actually drawing with {@link getGlyphs}' ASCII set, and
+ * the drawn rail follows the active set.
+ */
+function gutterGlyphs(g: Readonly<Glyphs>): GutterGlyphs {
+  const rail = g.spine[0]!;
+  const up = new Set(RAIL_UP), down = new Set(RAIL_DOWN), horiz = new Set(['─']), node = new Set(NODE);
+  if (rail !== '│') {
+    up.add(rail).add(g.midConnector[0]!).add(g.lastConnector[0]!);
+    down.add(rail).add(g.midConnector[0]!);
+    horiz.add(g.midConnector[1]!);
+    node.add(g.turnRoot[0]!);
+  }
+  return { rail, up, down, horiz, node };
+}
+
+/**
+ * Contract: derive the leading gutter for the synthetic "N earlier lines hidden"
+ * row from its neighbours so it neither breaks the tree spine nor escapes the
+ * content margin.
+ *
+ * Scans the leading run of `below` (the first non-blank row after the
+ * indicator) cell by cell: spaces are copied, any glyph whose rail connects
+ * upward becomes the active rail, a horizontal run directly after a connector
+ * (`├─`, `+-`) becomes spaces. The scan stops at the first content glyph; if that glyph is a tree node sitting on a rail that the
+ * row `above` carries down, a rail is drawn in its column. Returns a string
+ * ending in whitespace (or empty) so the indicator text never touches a rail.
+ * Box-drawing glyphs are single-cell, so code-point index == column.
+ */
+export function hiddenIndicatorGutter(
+  above: string | undefined,
+  below: string | undefined,
+  glyphs: Readonly<Glyphs> = getGlyphs(),
+): string {
+  const { rail, up: railUp, down: railDown, horiz, node } = gutterGlyphs(glyphs);
+  const a = [...stripAnsi(above ?? '')];
+  const b = [...stripAnsi(below ?? '')];
+  let out = '';
+  for (let i = 0; i < b.length; i++) {
+    const ch = b[i]!;
+    if (ch === ' ') { out += ' '; continue; }
+    if (railUp.has(ch)) { out += rail; continue; }
+    if (horiz.has(ch) && i > 0 && (railUp.has(b[i - 1]!) || horiz.has(b[i - 1]!))) { out += ' '; continue; }
+    const up = a[i];
+    if (node.has(ch) && up !== undefined && railDown.has(up)) out += rail;
+    break;
+  }
+  return out.length === 0 || out.endsWith(' ') ? out : out + ' ';
 }
 
 /**
@@ -100,6 +195,21 @@ export function truncateOverlayPreservingHead(lines: string[], budget: number): 
  * @param hasHintRow      Whether the hint slot is occupied (even when empty-string).
  * @param rows            `stdout.rows` (terminal height).
  * @param scrollRegion    Optional bg-status-bar guard for DECSTBM reservation.
+ * @param bandReserveRows Optional number of overlay budget rows to withhold for
+ *                        the committed band. Default 0 (no reserve). See
+ *                        {@link contentHugBandReserve} for the content-hug
+ *                        computation.
+ *
+ * Invariant (band reserve): when the overlay grows tall in content-hug mode
+ * the hugging frame rises over the committed band. Covered band rows are
+ * archived to scrollback and retained hidden as the archived prefix (the
+ * archive-and-retain invariant in terminal-compositor.content-hug.ts), so they
+ * are off screen until the overlay shrinks. Reducing overlayBudget by `bandReserveRows` shortens
+ * trimmedOverlay and therefore the frame, keeping the newest band rows —
+ * including the prompt echo — on screen.
+ *
+ * Known limit: band rows older than the reserve still scroll into history
+ * during a sufficiently long fan-out whose overlay exceeds (avail - reserve).
  */
 export function computeViewportLayout(
   chrome: ChromeRows,
@@ -107,6 +217,7 @@ export function computeViewportLayout(
   hasHintRow: boolean,
   rows: number,
   scrollRegion: CompositorScrollRegionGuard | undefined,
+  bandReserveRows = 0,
 ): ViewportLayout {
   const { overlayLines, spinnerRow, tipRow, attachmentRow } = chrome;
   // Invariant: the bg status bar (when active) owns rows (rows-extraRows)..(rows-1).
@@ -123,7 +234,11 @@ export function computeViewportLayout(
   const fixedRows = (spinnerRow ? 1 : 0) + (tipRow ? 1 : 0)
     + (attachmentRow ? 1 : 0) + gapRows + dropdownLength
     + (hasHintRow ? 1 : 0) + 1; // +1 for the input line
-  const overlayBudget = Math.max(0, maxLines - fixedRows);
+  const avail = Math.max(0, maxLines - fixedRows);
+  // Clamp so the reserve never consumes all available rows — at least 1 overlay
+  // row must remain available (prevents an empty frame when the overlay is active).
+  const reserve = Math.min(Math.max(0, bandReserveRows), Math.max(0, avail - 1));
+  const overlayBudget = avail - reserve;
   const trimmedOverlay = overlayLines.length > overlayBudget
     ? truncateOverlayPreservingHead(overlayLines, overlayBudget)
     : overlayLines;
@@ -139,12 +254,18 @@ export function computeViewportLayout(
  *
  * Picker rows replace the input cluster (dropdown + hint + input line), so
  * `fixedRows` is calculated differently from {@link computeViewportLayout}.
+ *
+ * @param bandReserveRows Optional number of overlay budget rows to withhold for
+ *                        the committed band. Default 0. See
+ *                        {@link contentHugBandReserve} and the Invariant on
+ *                        {@link computeViewportLayout} for rationale.
  */
 export function computePickerViewportLayout(
   chrome: ChromeRows,
   pickerRowCount: number,
   rows: number,
   scrollRegion: CompositorScrollRegionGuard | undefined,
+  bandReserveRows = 0,
 ): Omit<ViewportLayout, 'gapRows'> {
   const { overlayLines, spinnerRow, tipRow, attachmentRow } = chrome;
   const extraRows = scrollRegion?.getExtraRows() ?? 0;
@@ -154,7 +275,9 @@ export function computePickerViewportLayout(
   const gapRows = hasContentAboveInput ? 1 : 0;
   const fixedRows = (spinnerRow ? 1 : 0) + (tipRow ? 1 : 0)
     + (attachmentRow ? 1 : 0) + gapRows + pickerRowCount;
-  const overlayBudget = Math.max(0, maxLines - fixedRows);
+  const avail = Math.max(0, maxLines - fixedRows);
+  const reserve = Math.min(Math.max(0, bandReserveRows), Math.max(0, avail - 1));
+  const overlayBudget = avail - reserve;
   const trimmedOverlay = overlayLines.length > overlayBudget
     ? truncateOverlayPreservingHead(overlayLines, overlayBudget)
     : overlayLines;

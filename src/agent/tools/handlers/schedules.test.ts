@@ -450,6 +450,24 @@ describe('get_schedule_history handler', () => {
     const result = await getScheduleHistoryHandler({}, fakeSignal);
     expect(result.isError).toBe(true);
   });
+
+  it('surfaces doneUnverified:true from telemetry records that carry the field (#2307)', async () => {
+    const afDir = join(tmpDir, 'agent-framework');
+    mkdirSync(afDir, { recursive: true });
+    const telemetryPath = join(afDir, 'forge-telemetry.jsonl');
+    const records = [
+      { taskId: 'probe-task', status: 'success', triggeredAt: '2024-06-01T00:00:00Z', doneUnverified: true },
+      { taskId: 'probe-task', status: 'success', triggeredAt: '2024-06-01T01:00:00Z' },
+    ];
+    writeFileSync(telemetryPath, records.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
+
+    const result = await getScheduleHistoryHandler({ taskId: 'probe-task', limit: 10 }, fakeSignal);
+    const parsed = JSON.parse(result.content as string) as Array<{ taskId: string; doneUnverified?: boolean }>;
+    expect(parsed).toHaveLength(2);
+    // Oldest-first order: first record has doneUnverified:true, second omits it.
+    expect(parsed[0]?.doneUnverified).toBe(true);
+    expect(parsed[1]?.doneUnverified).toBeUndefined();
+  });
 });
 
 describe('live-sync surface (daemonSynced)', () => {
@@ -698,5 +716,157 @@ describe('update_schedule handler — cwd field', () => {
     );
     expect(result.isError).toBe(true);
     expect(result.content).toMatch(/does not exist/);
+  });
+
+  it('cwd: null clears a previously-pinned cwd', async () => {
+    // Set up a schedule with a cwd
+    await createScheduleHandler(
+      { name: 'Clear Me', command: '/t', cron: '0 2 * * *', cwd: tmpDir },
+      fakeSignal,
+    );
+    const { loadSchedules } = await import('../../daemon/schedule-store.js');
+    expect(loadSchedules()[0]?.cwd).toBe(tmpDir);
+    // Clear it
+    const result = await updateScheduleHandler(
+      { taskId: 'clear-me', cwd: null },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    expect(loadSchedules()[0]?.cwd).toBeUndefined();
+  });
+
+  it('cwd: "" (empty string) clears a previously-pinned cwd', async () => {
+    await createScheduleHandler(
+      { name: 'Clear Empty', command: '/t', cron: '0 2 * * *', cwd: tmpDir },
+      fakeSignal,
+    );
+    const { loadSchedules } = await import('../../daemon/schedule-store.js');
+    expect(loadSchedules()[0]?.cwd).toBe(tmpDir);
+    const result = await updateScheduleHandler(
+      { taskId: 'clear-empty', cwd: '' },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    expect(loadSchedules()[0]?.cwd).toBeUndefined();
+  });
+
+  it('non-string cwd (number) returns isError', async () => {
+    await createScheduleHandler(
+      { name: 'Bad Type', command: '/t', cron: '0 2 * * *' },
+      fakeSignal,
+    );
+    const result = await updateScheduleHandler(
+      { taskId: 'bad-type', cwd: 123 },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/string/);
+  });
+});
+
+// ── shell executor live-sync (handler level) (#2316) ─────────────────────────
+//
+// create_schedule and update_schedule write the schedule store BEFORE calling
+// trySyncToDaemon.  The daemon's store-backed shell guard relies on this
+// ordering.  These tests spin a real in-process daemon, run the handler, and
+// verify that the daemon's scheduler still holds the shell task after the sync.
+
+describe('shell executor live-sync — create_schedule + update_schedule with live daemon', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedules-shell-sync-'));
+    vi.stubEnv('AFK_HOME', tmpDir);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  interface SyncShape {
+    id?: string;
+    daemonSynced: boolean;
+    syncDetail: string;
+    syncNote?: string;
+  }
+
+  it('create_schedule with executor:"shell" live-syncs into a running daemon', async () => {
+    // The handler writes the schedule to disk, then POSTs to the daemon.
+    // The daemon's store-backed guard reads the freshly-written entry and
+    // admits the request — so the shell task is live without a restart.
+    const handle = await startDaemon({ port: 0 });
+    try {
+      const result = await createScheduleHandler(
+        {
+          name: 'Shell Live',
+          command: 'echo from-create',
+          cron: '0 4 * * *',
+          executor: 'shell',
+        },
+        fakeSignal,
+      );
+      expect(result.isError).toBeUndefined();
+      const parsed = JSON.parse(result.content as string) as SyncShape;
+      expect(parsed.daemonSynced).toBe(true);
+      expect(parsed.syncDetail).toBe('synced');
+      // The task must be live in the daemon's scheduler.
+      const tasks = (await (await fetch(`http://localhost:${handle.port}/tasks`)).json()) as Array<{
+        taskId: string;
+        executor?: string;
+      }>;
+      const task = tasks.find((t) => t.taskId === 'shell-live');
+      expect(task).toBeDefined();
+      expect(task?.executor).toBe('shell');
+    } finally {
+      await handle.stop();
+    }
+  });
+
+  it('update_schedule shell: enabled task stays live after DELETE+POST update cycle', async () => {
+    // Regression guard for PR #2316 review high finding:
+    // The update path does DELETE then POST.  With the old flat shell block the
+    // POST returned 400 and the job was silently dropped.  After the fix the job
+    // must remain live with the new command.
+    const handle = await startDaemon({ port: 0 });
+    try {
+      // 1. Create a live shell schedule.
+      const createResult = await createScheduleHandler(
+        {
+          name: 'Shell Update Live',
+          command: 'echo original',
+          cron: '0 5 * * *',
+          executor: 'shell',
+        },
+        fakeSignal,
+      );
+      const created = JSON.parse(createResult.content as string) as SyncShape;
+      expect(created.daemonSynced).toBe(true);
+      expect(created.syncDetail).toBe('synced');
+
+      // 2. Update the command — handler writes the updated store entry, then
+      //    DELETEs the stale registration, then POSTs the new one.
+      const updateResult = await updateScheduleHandler(
+        { taskId: 'shell-update-live', command: 'echo updated' },
+        fakeSignal,
+      );
+      expect(updateResult.isError).toBeUndefined();
+      const updated = JSON.parse(updateResult.content as string) as SyncShape;
+      expect(updated.daemonSynced).toBe(true);
+      expect(updated.syncDetail).toBe('synced');
+
+      // 3. The daemon must still have the task registered with the new command.
+      const tasks = (await (await fetch(`http://localhost:${handle.port}/tasks`)).json()) as Array<{
+        taskId: string;
+        command: string;
+        executor?: string;
+      }>;
+      const task = tasks.find((t) => t.taskId === 'shell-update-live');
+      expect(task).toBeDefined();
+      expect(task?.executor).toBe('shell');
+      expect(task?.command).toBe('echo updated');
+    } finally {
+      await handle.stop();
+    }
   });
 });
