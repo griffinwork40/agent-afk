@@ -44,6 +44,7 @@ import { AdmissionQueue } from '../../../agent/peer/admission-queue.js';
 import { renderPeerMessageBlock } from '../../../agent/peer/envelope.js';
 import type { InteractiveCtx } from './shared.js';
 import type { InputSurface } from '../../input/input-surface.js';
+import { prependTurnInjections, type InjectionSource } from './loop-iteration.injections.js';
 
 /**
  * Minimal compositor surface: a read-only probe of the human queue.
@@ -87,10 +88,13 @@ export interface PeerBoundaryOpts {
  *
  * The callback, when invoked by the provider loop (Anthropic or OpenAI) at each
  * tool-round boundary:
- *   1. Checks `hasPendingSubmission()` — if any human payload is pending
- *      (including attachment-bearing payloads that `peekQueuedText` returns
- *      undefined for), the human-priority barrier is active: peer injection is
- *      skipped entirely this boundary. Peer messages stay in the notifier buffer.
+ *   1. Checks `isQueuedHumanTurn()` (a human already dequeued from FIFO and
+ *      currently running as the turn) OR `hasPendingSubmission()` (any human
+ *      payload still waiting: text, attachment, slash command, or shell
+ *      passthrough — including attachment-bearing payloads that
+ *      `peekQueuedText` returns undefined for). If either is true the
+ *      human-priority barrier is active: peer injection is skipped entirely
+ *      this boundary. Peer messages stay in the notifier buffer.
  *   2. If no human barrier: admits peer messages one envelope at a time using
  *      `peekEnvelopes()` + `consumeEnvelopes()` — each envelope is attempted
  *      individually with its stable source id. Only admitted envelopes are
@@ -218,6 +222,35 @@ export function drainAdmissionQueueFallback(text: string, q: AdmissionQueue): st
   const snap = q.snapshot();
   const extra = q.drain(snap);
   return extra.length > 0 ? extra + '\n\n' + text : text;
+}
+
+/**
+ * Peer-deferral injection block extracted from `runInputLoop`.
+ *
+ * Computes the `deferPeers` flag from the explicit parameters (human-turn
+ * barrier via `queuedHumanTurn` OR a pending compositor submission), then:
+ *   - Calls `prependTurnInjections` with shell, bg, and — when not deferring —
+ *     peer sources.
+ *   - When not deferring, drains any peers already in the admission queue that
+ *     the boundary callback did not consume (turns with no tool rounds).
+ *
+ * Returns the updated `runText`. All parameters are passed explicitly — no
+ * closure over enclosing loop locals — so this function is trivially testable
+ * and adds zero lines to `runInputLoop`.
+ */
+export function applyDeferPeers(
+  runText: string,
+  queuedHumanTurn: boolean,
+  surface: Pick<InputSurface, 'getCompositor'>,
+  shellPassthrough: InjectionSource,
+  bgResultNotifier: InjectionSource,
+  peerNotifier: InjectionSource,
+  admissionQueue: AdmissionQueue,
+): string {
+  const deferPeers = queuedHumanTurn || (surface.getCompositor()?.hasPendingSubmission() ?? false);
+  let out = prependTurnInjections(runText, [shellPassthrough, bgResultNotifier, ...(!deferPeers ? [peerNotifier] : [])]);
+  if (!deferPeers) out = drainAdmissionQueueFallback(out, admissionQueue);
+  return out;
 }
 
 /**

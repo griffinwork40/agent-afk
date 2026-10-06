@@ -16,7 +16,7 @@ import type { ReplHistory } from '../../input/history.js';
 import { buildPrompt, type TurnState } from './repl-loop-shared.js';
 import type { FooterSubsystems } from './footer-subsystems.js';
 import { runFirstTurnHookIfNeeded } from './loop-iteration.first-turn.js';
-import { prependTurnInjections, autoResumeDirective } from './loop-iteration.injections.js';
+import { autoResumeDirective } from './loop-iteration.injections.js';
 import { drainLoopNotifications } from './loop-iteration.drain.js';
 import { handleShellPassthrough } from './loop-iteration.shell-branch.js';
 import { handleSlashCommand, runPluginPreflight } from './loop-iteration.slash-branch.js';
@@ -24,7 +24,7 @@ import { dispatchUserPromptSubmit } from './loop-iteration.hooks.js';
 import { wireReplStopHook } from './loop-iteration.stop-wiring.js';
 import { runOneTurn } from './loop-iteration.turn-run.js';
 import { createVersionNotice } from './version-notice.js';
-import { setupPeerBoundary, drainAdmissionQueueFallback } from './loop-iteration.boundary.js';
+import { setupPeerBoundary, applyDeferPeers } from './loop-iteration.boundary.js';
 
 /**
  * Per-turn cap on autonomous auto-resumes — an idle REPL woken by a settled
@@ -218,11 +218,8 @@ export async function runInputLoop(
     let runText = text;
     if (isPluginForward) runText = await runPluginPreflight(text, ctx);
 
-    // Prepend shell/bg/peer injections, then any pending Stop correction.
-    const deferPeers = queuedHumanTurn || (surface.getCompositor()?.hasPendingSubmission() ?? false);
-    runText = prependTurnInjections(runText, [footer.shellPassthrough, bgResultNotifier, ...(!deferPeers ? [peerNotifier] : [])]);
-    // The same human barrier covers peers already admitted but not delivered.
-    if (!deferPeers) runText = drainAdmissionQueueFallback(runText, admissionQueue);
+    // Prepend shell/bg/peer injections (human barrier + admission-queue drain).
+    runText = applyDeferPeers(runText, queuedHumanTurn, surface, footer.shellPassthrough, bgResultNotifier, peerNotifier, admissionQueue);
     if (pendingStopInjection !== undefined) {
       runText = pendingStopInjection + '\n\n' + runText;
       pendingStopInjection = undefined;
