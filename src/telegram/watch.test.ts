@@ -369,14 +369,21 @@ describe('SessionWatchManager — elicitation intercept + signed write-back (cri
       request: { type: 'text', message: 'Skip?' },
     });
 
-    await sleep(200);
+    // tailLedger polls at 250ms — vi.waitFor instead of a fixed sleep so the
+    // test is correct on slow macOS runners where 200ms expires before the
+    // first poll fires and installs the pending resolver.
+    await vi.waitFor(() => {
+      expect(pendingElicitations.get(String(chatId))).toBeDefined();
+    }, { timeout: 2000 });
 
     // Answer the pending resolver.
     const resolver = pendingElicitations.get(String(chatId));
-    expect(resolver).toBeDefined();
     resolver!('any answer');
 
-    await sleep(200);
+    // The skip path writes nothing to disk: readSessionKey returns null so
+    // watch.ts logs and continues.  Drain microtasks plus a short grace
+    // period to let the async continuation in watch.ts settle.
+    await sleep(100);
 
     // No elicitation_response should be in the ledger.
     const ledgerPath = path.join(tmpDir, 'state', 'sessions', id, 'events.jsonl');

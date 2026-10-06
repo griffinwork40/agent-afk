@@ -1852,16 +1852,27 @@ describe('SubagentExecutor', () => {
       };
       const bgExecutor = new SubagentExecutor(ctxWithBg);
 
-      // Time the call — must return promptly even though terminal never fires.
-      const before = Date.now();
       const result = await bgExecutor.execute(
         makeCall({ input: { prompt: 'long investigation', mode: 'background' } }),
       );
-      const elapsed = Date.now() - before;
-      expect(elapsed).toBeLessThan(200);
+
+      // Ordering probe: execute() must return without blocking on terminal state.
+      // We verify this deterministically — without any wall-clock budget — by
+      // racing registry.join(jobId) (pending; no terminal event has fired yet)
+      // against a macrotask sentinel.  setImmediate fires in the event-loop's
+      // check phase, AFTER all microtasks.  If execute() had driven the job to a
+      // terminal state before returning, join()'s .then() would queue a microtask
+      // that fires BEFORE the setImmediate, so 'join' would win.  On correct code
+      // join() is still pending and 'sentinel' wins.
+      const payload = JSON.parse(result.content as string);
+      const SENTINEL = 'sentinel';
+      const winner = await Promise.race([
+        registry.join(payload.jobId).then(() => 'join'),
+        new Promise<string>((resolve) => setImmediate(resolve, SENTINEL)),
+      ]);
+      expect(winner).toBe(SENTINEL);
 
       expect(result.isError).toBeUndefined();
-      const payload = JSON.parse(result.content as string);
       expect(payload.status).toBe('running');
       expect(payload.jobId).toMatch(/^bg-/);
       expect(payload.subagentId).toBe('sub-1');
@@ -1874,12 +1885,14 @@ describe('SubagentExecutor', () => {
       expect(observed?.provenance).toBe('model');
 
       // Terminal callback was wired correctly: firing it transitions the
-      // registry without touching the executor.
+      // registry without touching the executor.  Also settles the dangling
+      // join() from the ordering-probe race so it doesn't leak.
       fireTerminal({
         id: 'sub-1',
         status: 'succeeded' as SubagentResult['status'],
         message: { content: 'final', role: 'assistant' } as any,
       });
+      await registry.join(payload.jobId);
       expect(registry.get(payload.jobId)?.status).toBe('completed');
     });
 
