@@ -13,7 +13,7 @@ import {
   handleDaemonStatus,
 } from './routes.schedules.js';
 import { trySyncToDaemon } from '../agent/daemon/http-client.js';
-import { addSchedule, updateSchedule } from '../agent/daemon/schedule-store.js';
+import { addSchedule, toggleScheduleEnabled, updateSchedule } from '../agent/daemon/schedule-store.js';
 
 // ---- mocks -----------------------------------------------------------------
 
@@ -44,6 +44,11 @@ vi.mock('../agent/daemon/schedule-store.js', () => ({
   updateSchedule: vi.fn((id: string, patch: Record<string, unknown>) =>
     id === 'nightly-forge'
       ? { ...mockSchedules[0], ...patch, updatedAt: new Date().toISOString() }
+      : undefined,
+  ),
+  toggleScheduleEnabled: vi.fn((id: string, enabled: boolean) =>
+    id === 'nightly-forge'
+      ? { ...mockSchedules[0], enabled, updatedAt: new Date().toISOString() }
       : undefined,
   ),
   removeSchedule: vi.fn((id: string) => id === 'nightly-forge'),
@@ -317,6 +322,7 @@ describe('routes.schedules', () => {
       await handleToggleSchedule(res, 'nightly-forge');
       const { status, body } = json();
       expect(status).toBe(200);
+      expect(vi.mocked(toggleScheduleEnabled)).toHaveBeenCalledWith('nightly-forge', false);
       // Was enabled, now disabled
       expect((body as { enabled: boolean }).enabled).toBe(false);
     });

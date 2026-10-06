@@ -16,8 +16,8 @@ import {
   getSchedule,
   loadSchedules,
   removeSchedule,
-  saveSchedules,
   toScheduledTask,
+  toggleScheduleEnabled,
   updateSchedule,
   type ScheduledTaskConfig,
 } from '../agent/daemon/schedule-store.js';
@@ -290,18 +290,18 @@ export async function handleToggleSchedule(
   }
 
   const newEnabled = !existing.enabled;
-  const schedules = loadSchedules();
-  const updated = schedules.map((s) =>
-    s.id === id ? { ...s, enabled: newEnabled, updatedAt: new Date().toISOString() } : s,
-  );
-  saveSchedules(updated);
+  const updated = toggleScheduleEnabled(id, newEnabled);
+  if (!updated) {
+    sendJson(res, 404, { error: 'not_found', message: `schedule ${id} not found` });
+    return;
+  }
 
   let sync;
   if (newEnabled) {
     sync = await trySyncToDaemon(
       'POST',
       '/tasks',
-      toScheduledTask({ ...existing, enabled: true }),
+      toScheduledTask(updated),
     );
   } else {
     sync = await trySyncToDaemon('DELETE', `/tasks/${id}`);

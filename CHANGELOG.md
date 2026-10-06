@@ -11,6 +11,25 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.302.1] - 2026-10-06
+
+### Fixed
+- record ownerPid in bg meta.json and reconcile dead-owner jobs on read (#2319) (d2387bcb)
+
+## [5.302.0] - 2026-10-06
+
+### Added
+- fold forge SALVAGE candidates into shadow-verify and automate (#3094) (4b652616)
+
+### Fixed
+- guard schedule read-modify-write with O_EXCL advisory lock (#2318) (ae6b8696)
+- decouple fireOnTaskComplete from telemetry append try-catch (#2317) (2a30f2e2)
+- reject executor:"shell" on POST /tasks HTTP control surface (#2316) (b2ecd991)
+
+### Changed
+- unknown corruption path that orphans tool_use blocks past two defenses (#2344) (62c18815)
+- add non-blocking test-file typecheck gate (#3054) (124e2184)
+
 ## [5.301.3] - 2026-10-06
 
 ### Changed
