@@ -3,7 +3,7 @@
  * redacted before being written to the witness trace.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { traceTransientRetry } from './transient-retry.trace.js';
+import { traceTransientRetry, traceExhaustedRetry } from './transient-retry.trace.js';
 import type { TraceSink } from '../../trace/index.js';
 import type { RetryInfo } from './transient-retry.js';
 
@@ -39,6 +39,51 @@ function errorFieldOf(event: unknown): string {
   };
   return e?.payload?.metadata?.error ?? '';
 }
+
+/**
+ * Helper: extract the `phase` field from a trace event written by the trace
+ * adapter. Shape: `{ kind: 'session_phase', payload: { phase } }`.
+ */
+function phaseFieldOf(event: unknown): string {
+  const e = event as { kind?: string; payload?: { phase?: string } };
+  return e?.payload?.phase ?? '';
+}
+
+describe('traceExhaustedRetry', () => {
+  it('emits a connection_retry_exhausted phase event with durationMs 0', async () => {
+    const { sink, written } = makeSpySink();
+    const onExhausted = traceExhaustedRetry(sink, 'compaction', 2);
+
+    const info: RetryInfo = { attempt: 3, delayMs: 0, error: new Error('network fail') };
+    onExhausted(info);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(written).toHaveLength(1);
+    expect(phaseFieldOf(written[0])).toBe('connection_retry_exhausted');
+    const event = written[0] as { payload?: { durationMs?: number; metadata?: { attempt?: number; maxRetries?: number; error?: string } } };
+    expect(event?.payload?.durationMs).toBe(0);
+    expect(event?.payload?.metadata?.attempt).toBe(3);
+    expect(event?.payload?.metadata?.maxRetries).toBe(2);
+    expect(event?.payload?.metadata?.error).toBe('network fail');
+  });
+
+  it('redacts secrets in the error message of the exhaustion event', async () => {
+    const { sink, written } = makeSpySink();
+    const onExhausted = traceExhaustedRetry(sink, 'compaction', 2);
+
+    const secret = 'sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnop';
+    const info: RetryInfo = { attempt: 3, delayMs: 0, error: new Error(`Failed with key ${secret}`) };
+    onExhausted(info);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(written).toHaveLength(1);
+    const errorField = errorFieldOf(written[0]);
+    expect(errorField).not.toContain('sk-ant-api03-');
+    expect(errorField).toContain('[REDACTED]');
+  });
+});
 
 describe('traceTransientRetry — secret redaction', () => {
   it('(a) redacts an Anthropic API key that fits entirely within 200 chars', async () => {

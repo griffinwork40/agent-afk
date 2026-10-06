@@ -201,6 +201,13 @@ export type SessionPhaseName =
   // followed by success means the retry saved the turn; `attempt === maxRetries`
   // then an error means it ran out.
   | 'connection_retry'
+  // One-shot retry budget exhausted (withTransientRetry / traceExhaustedRetry):
+  // all `maxRetries` attempts were spent and the error is about to be rethrown.
+  // `durationMs` is 0 (no further backoff). Same `metadata` shape as
+  // `connection_retry` — `attempt` is the last attempt number, `maxRetries`
+  // is the configured ceiling, `error`/`code`/`status` identify the final failure.
+  // PURE OBSERVABILITY — emitted as `onExhausted` fires, before the rethrow.
+  | 'connection_retry_exhausted'
   // Fan-out dispatch usage notice (compose / agent wave start). Emitted once at
   // dispatch start when the Anthropic quota snapshot shows warn (≥80%) or over
   // (≥100%) usage. PURE OBSERVABILITY — no blocking, no routing change.

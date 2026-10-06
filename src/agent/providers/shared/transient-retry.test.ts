@@ -175,6 +175,55 @@ describe('withTransientRetry — exhaustion', () => {
     ).rejects.toThrow();
     expect(attempt).toHaveBeenCalledTimes(1);
   });
+
+  it('calls onExhausted exactly once when budget is spent', async () => {
+    const err = makeStatusError(500);
+    const attempt = vi.fn().mockRejectedValue(err);
+    const onExhausted = vi.fn();
+
+    await expect(
+      withTransientRetry(attempt, { maxRetries: 2, sleep: fastSleep, onExhausted }),
+    ).rejects.toThrow();
+
+    expect(onExhausted).toHaveBeenCalledTimes(1);
+    const info = onExhausted.mock.calls[0]?.[0] as RetryInfo;
+    expect(info.attempt).toBe(3); // attempt n+1 when n === maxRetries (2)
+    expect(info.status).toBe(500);
+    expect(info.delayMs).toBe(0);
+  });
+
+  it('does NOT call onExhausted for a non-retryable error', async () => {
+    const err = makeStatusError(400, 'bad request');
+    const attempt = vi.fn().mockRejectedValue(err);
+    const onExhausted = vi.fn();
+
+    await expect(
+      withTransientRetry(attempt, { sleep: fastSleep, onExhausted }),
+    ).rejects.toThrow('bad request');
+
+    expect(onExhausted).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call onExhausted when aborted mid-backoff', async () => {
+    const controller = new AbortController();
+    const err = makeStatusError(500);
+    const attempt = vi.fn().mockRejectedValue(err);
+    const onExhausted = vi.fn();
+
+    const mockSleep = async (_ms: number, _signal: AbortSignal): Promise<void> => {
+      controller.abort();
+    };
+
+    await expect(
+      withTransientRetry(attempt, {
+        maxRetries: 3,
+        signal: controller.signal,
+        sleep: mockSleep,
+        onExhausted,
+      }),
+    ).rejects.toThrow();
+    expect(onExhausted).not.toHaveBeenCalled();
+  });
 });
 
 describe('withTransientRetry — non-retryable errors', () => {
@@ -192,6 +241,13 @@ describe('withTransientRetry — non-retryable errors', () => {
     const err = makeStatusError(401, 'unauthorized');
     const attempt = vi.fn().mockRejectedValue(err);
     await expect(withTransientRetry(attempt, { sleep: fastSleep })).rejects.toThrow('unauthorized');
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT retry a 409 Conflict error (semantically wrong for POST one-shots)', async () => {
+    const err = makeStatusError(409, 'conflict');
+    const attempt = vi.fn().mockRejectedValue(err);
+    await expect(withTransientRetry(attempt, { sleep: fastSleep })).rejects.toThrow('conflict');
     expect(attempt).toHaveBeenCalledTimes(1);
   });
 
