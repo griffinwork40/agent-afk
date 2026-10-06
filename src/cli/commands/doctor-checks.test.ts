@@ -33,7 +33,11 @@ vi.mock('child_process', async (importOriginal) => {
 import { execSync as _execSync } from 'child_process';
 
 vi.mock('../../agent/providers/openai-compatible/auth.js', () => ({
-  resolveOpenAIAuth: vi.fn(),
+  resolveOpenAIAuth: vi.fn().mockImplementation(() => {
+    throw new Error(
+      'resolveOpenAIAuth mock not set — call mockResolve() at the start of this test',
+    );
+  }),
 }));
 
 describe('checkAnthropicKey', () => {
@@ -53,6 +57,14 @@ describe('checkCodexKey — uses full resolveOpenAIAuth chain', () => {
     );
     vi.mocked(resolveOpenAIAuth).mockReturnValue(resolution);
   }
+
+  it('passes when an explicit config key is set (source: config)', async () => {
+    await mockResolve({ apiKey: 'sk-x', source: 'config', last4: 'xxxx' });
+    const result = await checkCodexKey();
+    expect(result.state).toBe('pass');
+    expect(result.detail).toContain('config');
+    expect(result.detail).toContain('xxxx');
+  });
 
   it('passes when OPENAI_API_KEY env var is present', async () => {
     await mockResolve({ apiKey: 'sk-openai-test1234', source: 'env', last4: '1234', envVar: 'OPENAI_API_KEY' });
@@ -110,6 +122,14 @@ describe('checkCodexKey — uses full resolveOpenAIAuth chain', () => {
     expect(result.state).toBe('warn');
     expect(result.detail).toContain('ChatGPT');
     expect(result.fix).toContain('AFK_OPENAI_CHATGPT_OAUTH=1');
+  });
+
+  it('warns with forced-OAuth detail when AFK_OPENAI_CHATGPT_OAUTH=1 but no token found', async () => {
+    await mockResolve({ apiKey: null, source: 'no-usable-auth-forced-chatgpt-oauth' });
+    const result = await checkCodexKey();
+    expect(result.state).toBe('warn');
+    expect(result.detail).toContain('Forced ChatGPT OAuth');
+    expect(result.fix).toContain('codex');
   });
 
   it('warns when no OpenAI auth is available at all', async () => {

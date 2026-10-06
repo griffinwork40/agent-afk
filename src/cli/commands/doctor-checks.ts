@@ -100,6 +100,12 @@ export async function checkCodexKey(): Promise<Check> {
         fix: 'Set AFK_OPENAI_CHATGPT_OAUTH=1 to use your ChatGPT subscription, or set OPENAI_API_KEY',
       };
     case 'no-usable-auth-forced-chatgpt-oauth':
+      return {
+        name: 'Codex/OpenAI API Key',
+        state: 'warn',
+        detail: 'Forced ChatGPT OAuth mode (AFK_OPENAI_CHATGPT_OAUTH=1) but no usable OAuth token found',
+        fix: 'Run `codex` once to authenticate, or unset AFK_OPENAI_CHATGPT_OAUTH and set OPENAI_API_KEY',
+      };
     case 'no-usable-auth':
     default:
       return {
