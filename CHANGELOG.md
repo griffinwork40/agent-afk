@@ -11,6 +11,43 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.301.0] - 2026-10-06
+
+### Added
+- perfect the goblin — v17 banner portrait + sharper mini sprite (#3064) (23c6001d)
+
+### Fixed
+- correct curl -si comment; add gh run list wait_for test (#3060) (ef678e0d)
+- advisory findings from #2895 — security, perf, nit cleanup (#3061) (6aa297d8)
+- close lstat-to-rm TOCTOU window in session-tmpdir cleanup (#3076) (c31f825e)
+- address advisory findings from #2883 review (#3063) (bf4383e4)
+
+### Changed
+- replace fixed sleeps with vi.waitFor polling in afk-two-way-roundtrip (#3073) (f65a3fe3)
+- harden gate-liveness tests — fake token, fail-open coverage, real workspace dir (#3062) (939d49b1)
+- direct _mergeVotes ordering tests + accurate ordering docs (#3074) (a5ee46fa)
+- cover cappedHistory and falling-start/rising-tail burn-rate paths (#3075) (2b1173bf)
+- assert pendingWindowCap via test hook in S2 (#3077) (caaa28ef)
+
+## [5.300.0] - 2026-10-06
+
+### Added
+- run_in_background for managed long-running processes (#3037) (254fb1cc)
+
+## [5.299.9] - 2026-10-06
+
+### Fixed
+- harden per-session TMPDIR (TOCTOU, registry leak, hook shells, cache, docs) (#3052) (e5faf816)
+- restore pendingWindowCap invariant on all-sentinel displacement, document sync guarantee, add compact+sentinel tests (#3014) (6c06fbb0)
+- treat blank optional args as absent in edit_file and patch_apply (#3051) (359fbcca)
+- suppress burn-rate ETA when latest sample pair is non-increasing (#3048) (d068b217)
+- real candidates count + debugLog in memory GC sweep (#3049) (a0e22e77)
+- delete-then-set in _mergeVotes to preserve Map arrival order (#3047) (c5bc6887)
+- use path.relative-based containment in sandbox-guard (#3033) (a4cb15fd)
+
+### Changed
+- unit-test queuedSubmission + restore runInputLoop funcsize headroom (#3050) (88c290df)
+
 ## [5.299.8] - 2026-10-06
 
 ### Fixed

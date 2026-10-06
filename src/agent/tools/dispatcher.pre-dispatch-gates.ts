@@ -50,6 +50,7 @@ import type { ToolCall, ToolResult } from '../providers/anthropic-direct/types.j
 import type { CanUseTool, PermissionResult } from '../types/sdk-types.js';
 import type { TraceSink } from '../trace/index.js';
 import type { GrantManager } from './grant-manager.js';
+import { isBackgroundBashLaunch } from './bash-background-flag.js';
 
 // ---------------------------------------------------------------------------
 // Mutable state
@@ -266,6 +267,15 @@ async function checkReadOnlyBash(
       ? (input as Record<string, unknown>)['command']
       : undefined;
   if (typeof command !== 'string') return null;
+  // A background launch outlives the call and is never read-only recon,
+  // whatever the command text says.
+  if (isBackgroundBashLaunch(call.name, input)) {
+    const bgReason =
+      'Bash command blocked: read-only agents may not start background processes ' +
+      '(run_in_background). Run read-only commands in the foreground instead.';
+    await emitPreToolUseBlock(call.name, bgReason, deps);
+    return { content: bgReason, isError: true, failureClass: 'permission-denied' };
+  }
   const verdict = classifyBashCommand(command);
   if (!verdict.mutating) return null;
   // Reason text is shared by the model-visible result and the trace event so

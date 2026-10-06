@@ -264,8 +264,7 @@ export async function* runIterationWithQuotaLimitPause(
         // Consume the generator's final return step (which will be null from
         // driveStream's error path) before breaking so the generator is
         // properly exhausted and GC-able.
-        const terminal = await gen.next();
-        returnValue = terminal.done ? terminal.value : null;
+        await gen.next();
         // isQuotaLimitErrorEvent guards event.type === 'error', so this cast is safe.
         quotaEvent = event as Extract<ProviderEvent, { type: 'error' }>;
         await gen.return(null);
@@ -325,7 +324,9 @@ export async function* runIterationWithQuotaLimitPause(
     }
 
     // ── Two-hour cap: if total wait already exceeds budget, surface the error ─
-    if (Date.now() - pausedAt > resolveQuotaTwoHoursMs()) {
+    // Use >= so the session at exact equality is also capped (one extra probe
+    // at strict > would otherwise fire at the boundary).
+    if (Date.now() - pausedAt >= resolveQuotaTwoHoursMs()) {
       yield terminalQuotaEvent(quotaEvent, codex);
       return null;
     }
@@ -338,7 +339,7 @@ export async function* runIterationWithQuotaLimitPause(
     if (ctx.signal.aborted) return null;
 
     // Still within budget?
-    if (Date.now() - pausedAt > resolveQuotaTwoHoursMs()) {
+    if (Date.now() - pausedAt >= resolveQuotaTwoHoursMs()) {
       yield terminalQuotaEvent(quotaEvent, codex);
       return null;
     }

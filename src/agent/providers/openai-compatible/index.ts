@@ -63,7 +63,7 @@ import {
 import { resolveSessionId, registerSessionPresence } from './session-wiring.js';
 import { buildSystemPromptWiring } from './system-prompt-wiring.js';
 import { type ChildSessionOptions, isStateRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
-import type { BuildDispatcherOpts } from './index.dispatcher-opts.js';
+import { sessionRegistryOpts, type BuildDispatcherOpts } from './index.dispatcher-opts.js';
 
 const PROVIDER_NAME = 'openai-compatible';
 
@@ -337,11 +337,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
           ...(config.bashOutputTailReporter !== undefined
             ? { bashOutputTailReporter: config.bashOutputTailReporter }
             : {}),
-          // #2542/#2735: Forward detach registry from AgentConfig so REPL
-          // Ctrl+B handler and this dispatcher share the same instance.
-          ...(config.detachRegistry !== undefined
-            ? { detachRegistry: config.detachRegistry }
-            : {}),
+          // #2542/#2735 detach registry + background process registry,
+          // forwarded from AgentConfig (root REPL sessions only).
+          ...sessionRegistryOpts(config),
           runtimeStateSource,
           ...(config.isSkillDispatch ? { isSkillDispatch: true } : {}),
           ...(config.isNonInteractive ? { isNonInteractive: true } : {}),
@@ -549,9 +547,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
     dispatcherOpts.spawnedPidRegistry = this._spawnedPidRegistry;
     // Yield contract: queued-message probe, late-bound off planExitControls (top-level only).
     if (planExitControls) dispatcherOpts.userAttention = userAttentionFrom(planExitControls);
-    // #2542/#2735: Detach registry for Ctrl+B bash backgrounding — parity with
+    // #2542/#2735 detach registry + background process registry — parity with
     // AnthropicDirectProvider.buildDispatcher. Top-level REPL sessions only.
-    if (opts.detachRegistry !== undefined) dispatcherOpts.detachRegistry = opts.detachRegistry;
+    Object.assign(dispatcherOpts, sessionRegistryOpts(opts));
 
     return new SessionToolDispatcher(dispatcherOpts);
   }

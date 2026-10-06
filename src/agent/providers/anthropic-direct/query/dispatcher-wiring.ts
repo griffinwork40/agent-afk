@@ -203,6 +203,7 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
         ...(config.detachRegistry !== undefined
           ? { detachRegistry: config.detachRegistry }
           : {}),
+        ...(config.processJobs !== undefined ? { processJobs: config.processJobs } : {}),
         runtimeStateSource,
         hookRegistry: config.hookRegistry,
         planExitControls: config.planExitControls,

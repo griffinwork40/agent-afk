@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { createDefaultHookRegistry, _resetWarningForTests } from './default-hook-registry.js';
 import { elicitationRouter } from './elicitation-router.js';
@@ -15,7 +16,11 @@ vi.mock('../telegram/push.js', async (importOriginal) => ({
   pushIfConfigured: vi.fn().mockResolvedValue(undefined),
 }));
 
-const workspace = path.join(tmpdir(), 'afk-liveness-workspace');
+// workspace is created fresh per test so the root exists on disk and grants
+// resolve against a real directory (previously a literal tmpdir path was used
+// which never existed; worked only because the handler spy is inert, but caused
+// confusion for path-approval hooks that inspect the root).
+let workspace: string;
 const outside = path.join(tmpdir(), 'afk-liveness-outside', 'note.txt');
 
 function setup(toolName: string, grants?: GrantManager, parentSessionId?: string) {
@@ -44,6 +49,7 @@ function confinedGrants(): GrantManager {
 }
 
 beforeEach(() => {
+  workspace = mkdtempSync(path.join(tmpdir(), 'afk-liveness-workspace-'));
   vi.stubEnv('AFK_WHATIF_EPISODE', '0');
   vi.stubEnv('AFK_WHATIF_TOOL_LOG', '');
   vi.stubEnv('AFK_DISABLE_PATH_APPROVAL', '0');
@@ -60,6 +66,13 @@ afterEach(() => {
   _resetWarningForTests();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+  try {
+    rmSync(workspace, { recursive: true, force: true });
+  } catch {
+    // Expected: ENOENT when the test itself removed the directory, or when the
+    // mkdtempSync in beforeEach was never reached (e.g. an error before it ran).
+    // Either way the workspace is gone; nothing to clean up.
+  }
 });
 
 describe('default registry safety gate liveness through dispatcher initialization', () => {

@@ -76,6 +76,8 @@ export interface DetachedToolResult {
   readonly incomplete?: boolean;
   /** Reason code paired with `incomplete` (compose: `'compose_partial_nodes'`). */
   readonly incompleteReason?: string;
+  /** Compose only: number of partial DAG nodes (#2978). Present only alongside `incomplete`. */
+  readonly partialNodeCount?: number;
 }
 
 /**

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { COMPACT_ACK_TEXT, COMPACT_SUMMARY_HEADER } from '../providers/shared/compaction.js';
-import { cutAtFork, displaySegments, foldForDisplay, isCompactionPreamble, loadDisplayMessages, messageFingerprint } from './display-fold.js';
+import { _testFoldForDisplay, cutAtFork, displaySegments, foldForDisplay, isCompactionPreamble, loadDisplayMessages, messageFingerprint } from './display-fold.js';
 import { forkJournal } from './fork.js';
 import { foldJournal, readJournalRecords } from './reader.js';
 import { JournalSync } from './sync.js';
@@ -145,9 +145,10 @@ describe('foldForDisplay', () => {
     expect(texts(foldForDisplay([parent, fork]))).toEqual(['q1', 'a1', 'q2']);
   });
 
-  // S1: soft-truncate reasons other than 'compact' — resync, repair, provider_switch,
+  // S1: soft-truncate reasons — compact, resync, repair, provider_switch,
   // and a bare truncate (no reason) — must all keep displaced rows in the display.
   it.each<[JournalTruncateReason | undefined, string]>([
+    ['compact', 'compact'],
     ['resync', 'resync'],
     ['repair', 'repair'],
     ['provider_switch', 'provider_switch'],
@@ -164,6 +165,28 @@ describe('foldForDisplay', () => {
       ap(4, user('q3')),
     ];
     expect(texts(foldForDisplay([recs]))).toEqual(['q1', 'a1', 'q2', 'a2', 'q3']);
+  });
+
+  // S2: all-sentinel displacement — when every displaced row is a preamble
+  // sentinel (-1), pending stays empty and pendingWindowCap must reset to -1.
+  //
+  // No behavioral path distinguishes stale-cap from correct-cap when pending is
+  // empty: any fingerprint miss pushes a new row regardless of the cap value, so
+  // the output is identical in both cases. The invariant is therefore asserted
+  // directly via the _testFoldForDisplay hook, which returns pendingWindowCap
+  // alongside the display messages. This is the only reliable witness of the bug
+  // #3014 fixed: without the post-loop guard "if (pending.size === 0)
+  // pendingWindowCap = -1", the cap is left at live.length-1 (1 here) instead of -1.
+  it('S2: pendingWindowCap resets to -1 when all displaced rows are preamble sentinels', () => {
+    // Setup: summary(-1) + ack(-1) are the only rows (both sentinels).
+    // Soft-truncate to 0 displaces them; the loop skips both (sentinel rows).
+    // After the loop: pending is empty, so the post-loop guard must reset cap to -1.
+    // Without the guard the cap stays at live.length-1 = 1, violating the invariant
+    // "pendingWindowCap is -1 when pending is empty".
+    const recs = [ap(0, summary()), ap(1, ack()), tr(0, 'compact')];
+    const { messages, pendingWindowCap } = _testFoldForDisplay(recs);
+    expect(messages).toEqual([]);
+    expect(pendingWindowCap).toBe(-1);
   });
 
   // C1: chained compact → preamble → provider_switch → re-append.

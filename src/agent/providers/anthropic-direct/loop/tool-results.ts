@@ -25,6 +25,7 @@ import { emitToolCall } from '../../../trace/emit.js';
 import { buildToolCallCompletedPayload } from '../../shared/tool-call-trace.js';
 import { DENIAL_BREAKER_FAILURE_CLASS } from '../../../tools/denial-circuit-breaker.js';
 import { DenialCircuitBreakerError } from '../../../../utils/errors.js';
+import { tagResultFlags } from '../../../journal/index.js';
 
 /**
  * Commit outcome.
@@ -88,6 +89,7 @@ export async function* emitAndCommitToolResults(
       ...(result.capturePath !== undefined ? { capturePath: result.capturePath } : {}),
       ...(result.incomplete === true ? { incomplete: true } : {}),
       ...(result.incompleteReason ? { incompleteReason: result.incompleteReason } : {}),
+      ...(typeof result.partialNodeCount === 'number' ? { partialNodeCount: result.partialNodeCount } : {}),
       ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'
         ? { batchIndex: result.batchIndex, batchSize: result.batchSize }
         : {}),
@@ -143,12 +145,16 @@ export async function* emitAndCommitToolResults(
             ...(resultContent.length > 0 ? [{ type: 'text' as const, text: resultContent }] : []),
           ]
         : resultContent;
-    toolResultBlocks.push({
+    const block: ToolResultBlockParam = {
       type: 'tool_result',
       tool_use_id: call.id,
       content: toolResultContent,
       ...(resultIsError === true ? { is_error: true } : {}),
-    });
+    };
+    // Partial-answer flags ride beside the block, not on it (the API rejects
+    // unknown keys), so the journal adapter can persist them (#2978).
+    tagResultFlags(block, result);
+    toolResultBlocks.push(block);
   }
 
   // Harness notes are appended as genuine user text blocks, structurally outside

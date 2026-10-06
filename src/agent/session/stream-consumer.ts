@@ -178,6 +178,7 @@ function buildToolOutputEvent(
       ? {
           incomplete: true as const,
           ...(event.incompleteReason !== undefined && { incompleteReason: event.incompleteReason }),
+          ...(event.partialNodeCount !== undefined && { partialNodeCount: event.partialNodeCount }),
         }
       : {};
 

@@ -108,8 +108,8 @@ export interface UpsertVotesOptions {
  * combiner, and persist atomically. Creates a new skeleton record when none
  * exists yet (requires `base` to be supplied). History is appended only when
  * the computed label changes. Deduplication: a vote is considered a duplicate
- * if an existing vote shares the same `lf` and `evidence` pair — the incoming
- * vote replaces it (idempotent re-submission updates observed_at / strength).
+ * if an existing vote shares the same `lf` and `evidence` pair; the incoming
+ * vote replaces it and moves to the tail of the Map (see _mergeVotes).
  *
  * explicit_feedback override semantics (design §"Explicit feedback"):
  *   - A vote with lf === 'explicit_feedback' causes upsertVotes to call
@@ -326,9 +326,14 @@ function _mergeVotes(existing: Vote[], incoming: Vote[]): Vote[] {
   for (const v of existing) {
     map.set(`${v.lf}\x00${v.evidence}`, v);
   }
-  // Incoming replaces on collision (idempotent re-submission)
+  // Incoming replaces on collision. delete-then-set moves the updated entry
+  // to the tail of the Map: _latestExplicitFeedback scans forward, so the
+  // last-arrived value at a colliding key always appears after any earlier
+  // entries with the same timestamp, making it the winner on a >= tie-break.
   for (const v of incoming) {
-    map.set(`${v.lf}\x00${v.evidence}`, v);
+    const key = `${v.lf}\x00${v.evidence}`;
+    map.delete(key);
+    map.set(key, v);
   }
   return Array.from(map.values());
 }

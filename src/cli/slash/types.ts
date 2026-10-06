@@ -59,6 +59,11 @@ export interface ToolEvent {
    */
   incomplete?: boolean;
   /**
+   * Compose only: number of partial DAG nodes, plumbed from
+   * `ToolResultChunk.partialNodeCount`. Written since #2978.
+   */
+  partialNodeCount?: number;
+  /**
    * Last ~240 characters of the tool's raw output, after secret redaction.
    * Present only on verification-like commands (test/lint/build) where the
    * result summary is commonly at the tail. Optional — absent on older records

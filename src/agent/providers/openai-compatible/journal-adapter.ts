@@ -46,7 +46,7 @@ import type {
   JournalMessage,
   JournalResultPart,
 } from '../../journal/index.js';
-import { JournalProvenance } from '../../journal/index.js';
+import { JournalProvenance, readResultFlags, tagResultFlags } from '../../journal/index.js';
 import type { OpenAIContentPart, OpenAIMessage } from './messages.js';
 
 interface NativeToolCall {
@@ -154,6 +154,8 @@ function toolToJournal(msg: OpenAIMessage): JournalMessage {
   const block: JournalBlock = {
     type: 'tool_result',
     toolUseId: msg.tool_call_id ?? '',
+    // Harness-only partial flags (#2978), tagged by loop.ts toolResultsToMessages.
+    ...readResultFlags(msg),
     content: [{ type: 'text', text }],
   };
   if (text.startsWith(ERROR_PREFIX)) block.isError = true;
@@ -204,7 +206,9 @@ function toolResultMessage(block: Extract<JournalBlock, { type: 'tool_result' }>
   }
   let text = texts.join('\n');
   if (block.isError === true && !text.startsWith(ERROR_PREFIX)) text = ERROR_PREFIX + text;
-  return { role: 'tool', tool_call_id: block.toolUseId, content: text };
+  const native: OpenAIMessage = { role: 'tool', tool_call_id: block.toolUseId, content: text };
+  tagResultFlags(native, block); // survive resume so a resync re-writes them (#2978)
+  return native;
 }
 
 function userFromJournal(msg: JournalMessage, out: OpenAIMessage[]): void {

@@ -118,6 +118,11 @@ class DisplayFoldState {
       // soft-truncate (e.g. a compaction preamble phase) must not bleed into
       // this window's match set.  Reset first, then populate from the newly
       // displaced rows only.
+      //
+      // Invariant: pending.clear() is safe here because JournalSync emits a
+      // truncate and ALL its subsequent re-appends atomically within a single
+      // sync() call, so no pending match that belongs to the current window
+      // can exist in the map at this point.
       this.pending.clear();
       this.pendingWindowCap = this.live.length - 1;
       for (const row of this.live.slice(length)) {
@@ -128,6 +133,10 @@ class DisplayFoldState {
         list.push(row);
         this.pending.set(fp, list);
       }
+      // Post-loop guard: if every displaced entry was a preamble sentinel (-1),
+      // nothing was added to pending.  Reset cap to -1 to preserve the invariant
+      // "pendingWindowCap is -1 when pending is empty".
+      if (this.pending.size === 0) this.pendingWindowCap = -1;
     }
     this.live.length = Math.min(this.live.length, length);
   }
@@ -189,6 +198,11 @@ class DisplayFoldState {
   messages(): JournalMessage[] {
     return this.rows.filter((m): m is JournalMessage => m !== null);
   }
+
+  /** Test hook: exposes the internal cap so tests can assert the invariant directly. */
+  getPendingWindowCap(): number {
+    return this.pendingWindowCap;
+  }
 }
 
 /**
@@ -203,6 +217,21 @@ export function foldForDisplay(segments: readonly (readonly JournalRecord[])[]):
     for (const rec of records) state.apply(rec);
   });
   return state.messages();
+}
+
+/**
+ * Test-only: fold records and return both the display messages and the
+ * internal `pendingWindowCap` at the end of the fold. Exported under a
+ * `_test` prefix so linters can flag accidental use in production code.
+ * @internal
+ */
+export function _testFoldForDisplay(records: readonly JournalRecord[]): {
+  messages: JournalMessage[];
+  pendingWindowCap: number;
+} {
+  const state = new DisplayFoldState();
+  for (const rec of records) state.apply(rec);
+  return { messages: state.messages(), pendingWindowCap: state.getPendingWindowCap() };
 }
 
 type ReadRecords = (sessionId: string) => JournalRecord[];

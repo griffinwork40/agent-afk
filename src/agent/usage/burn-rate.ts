@@ -15,6 +15,11 @@
  *      decaying sessions produce a negative or zero slope and are suppressed).
  *   4. The projected cap time is before `resetsAt` — after the reset the window
  *      drains, so the projection is nonsensical past that point.
+ *   5. The most recent adjacent pair is rising (latest delta > 0). This prevents
+ *      a "plateau-then-cool" series like [0.50, 0.80, 0.79, 0.78] from showing
+ *      an ETA: rule 3 passes (0.50→0.80 is rising) but utilization has been
+ *      falling for the last two samples, so the projection misleads users.
+ *      Requiring a positive latest delta is the simplest tail-weighted rule.
  *
  * The projection math uses the rate computed between the OLDEST and NEWEST
  * samples that both show rising utilization (widest span → least noise).
@@ -77,10 +82,8 @@ export function computeBurnRate(
   const recent = samples.filter((s) => s.observedAt >= cutoff);
   if (recent.length < MIN_SAMPLES) return null;
 
-  // Find the oldest and newest sample among those that form a rising pair.
-  // A rising pair: the later sample has strictly higher utilization.
-  // We scan forward: if any adjacent pair is rising, the overall slope must be
-  // positive, so we use the full-span oldest→newest for the rate (least noise).
+  // Rule 3: find whether any adjacent pair is rising (suppresses flat / purely
+  // decaying sessions). We scan forward; first rising pair ends the search.
   let hasRisingPair = false;
   for (let i = 1; i < recent.length; i++) {
     const prev = recent[i - 1];
@@ -91,6 +94,21 @@ export function computeBurnRate(
     }
   }
   if (!hasRisingPair) return null;
+
+  // Rule 5: the most recent adjacent pair must also be rising. A plateau-then-
+  // cool series like [0.50, 0.80, 0.79, 0.78] passes rule 3 (the 0.50→0.80
+  // pair is rising) but utilization has been falling for the last two samples,
+  // so projecting forward misleads users. Requiring a positive latest delta
+  // suppresses the ETA as soon as utilization starts cooling.
+  const secondLast = recent[recent.length - 2];
+  const last = recent[recent.length - 1];
+  if (
+    secondLast === undefined ||
+    last === undefined ||
+    last.utilization <= secondLast.utilization
+  ) {
+    return null;
+  }
 
   const oldest = recent[0];
   const newest = recent[recent.length - 1];

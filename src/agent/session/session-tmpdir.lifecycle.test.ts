@@ -63,3 +63,55 @@ describe('AgentSession private TMPDIR', () => {
     expect(fs.existsSync(inherited)).toBe(true);
   });
 });
+
+describe('#2933 registry cleanup in close() finally block', () => {
+  it('removes the session dir even when shutdown.dispatchOnce throws', async () => {
+    // Arrange: a provider whose close() throws so the dispatchOnce chain
+    // exercises error handling; we verify cleanup still runs.
+    const inner = createMockProvider({ sessionId: `tmpdir-throw-${Date.now()}` });
+    const throwingProvider = {
+      ...inner,
+      query(args: ProviderQueryArgs) {
+        const q = inner.query(args);
+        const originalClose = q.close.bind(q);
+        return {
+          ...q,
+          close() {
+            void originalClose();
+            // Throw so one of the earlier close steps fails.
+            throw new Error('simulated provider close failure');
+          },
+        };
+      },
+    };
+
+    const seen: Array<Record<string, string> | undefined> = [];
+    const session = new AgentSession({
+      model: 'sonnet',
+      provider: {
+        ...throwingProvider,
+        query(args: ProviderQueryArgs) {
+          seen.push(args.config.env);
+          return throwingProvider.query(args);
+        },
+      },
+    });
+
+    const e = seen[0];
+    expect(e?.['TMPDIR']).toBeDefined();
+    // Materialize the directory so we can observe its removal.
+    expect(ensureSessionTmpdir(e)).toBe(true);
+    const dir = e!['TMPDIR']!;
+    expect(fs.existsSync(dir)).toBe(true);
+
+    // close() may reject (provider threw) — but cleanup must still run.
+    try {
+      await session.close();
+    } catch {
+      // Expected: the simulated error may propagate.
+    }
+
+    // The session dir must have been cleaned up regardless of the error.
+    expect(fs.existsSync(dir)).toBe(false);
+  });
+});

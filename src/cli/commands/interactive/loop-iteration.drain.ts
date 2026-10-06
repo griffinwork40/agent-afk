@@ -10,6 +10,7 @@
 import { drainLoopNotifications as drainJobNotifications } from './loop-notifications.js';
 import type { InteractiveCtx } from './shared.js';
 import type { FooterSubsystems } from './footer-subsystems.js';
+import { palette } from '../../palette.js';
 
 /**
  * Drain and render all pending human-visible notifications: shell-job
@@ -30,6 +31,10 @@ export function drainLoopNotifications(ctx: InteractiveCtx, footer: FooterSubsys
   const { shellPassthrough, bgResultNotifier, contextPane } = footer;
 
   drainJobNotifications(ctx, shellPassthrough, bgResultNotifier);
+  // Background processes (`bash run_in_background`): one dim line each.
+  for (const line of footer.processJobNotifier?.drainNotices() ?? []) {
+    ctx.replRenderer.writeLine(palette.dim(line));
+  }
 
   const paneLines = contextPane.renderIfChanged(ctx.stats.sessionId);
   if (paneLines.length > 0) {

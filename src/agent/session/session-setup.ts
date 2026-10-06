@@ -12,6 +12,7 @@ import {
 import { sweepWitnessTree, WITNESS_SWEEP_START_DELAY_MS } from '../witness-sweep.js';
 import { sweepSessionSidecars, SESSION_SIDECAR_SWEEP_START_DELAY_MS } from '../session-sidecar-sweep.js';
 import { sweepMemoryGc, MEMORY_GC_SWEEP_START_DELAY_MS } from '../memory/memory-gc-sweep.js';
+import { debugLog } from '../../utils/debug.js';
 import type {
   AgentConfig,
   SessionIdentity,
@@ -112,8 +113,17 @@ export function scheduleTopLevelHousekeeping(
   sidecarSweepTimer.unref();
   // Memory GC sweep — opt-in, OFF by default (AFK_MEMORY_GC_SWEEP_ENABLE=1).
   // Self-throttled to at most once per 24 hours. Fire-and-forget; never throws.
+  // The sweep logs internally when it archives facts or encounters an error.
   const memoryGcTimer = setTimeout(() => {
-    void sweepMemoryGc();
+    sweepMemoryGc().then((result) => {
+      if (!result.skipped) {
+        debugLog(
+          `[session-setup] memory GC sweep complete: candidates=${result.candidates} archived=${result.archived}${result.error ? ` error=${result.error}` : ''}`,
+        );
+      }
+    }).catch(() => {
+      // sweepMemoryGc itself never rejects, but guard just in case.
+    });
   }, MEMORY_GC_SWEEP_START_DELAY_MS);
   memoryGcTimer.unref();
 }

@@ -81,6 +81,7 @@ function exitStatusTrustworthy(ev: ToolEvent): boolean {
 const MACHINE_TAG_NAMES = [
   'peer-session-message',
   'background-subagent-result',
+  'background-process-result',
   'command-name',
   'command-message',
   'command-args',

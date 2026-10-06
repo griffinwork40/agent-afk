@@ -229,6 +229,12 @@ export type ProviderEvent =
        */
       incompleteReason?: string;
       /**
+       * Compose only: number of partial DAG nodes, plumbed from
+       * `ToolResult.partialNodeCount`. Present only alongside
+       * `incomplete: true` (#2978).
+       */
+      partialNodeCount?: number;
+      /**
        * Plumbed from `ToolResult.failureClass` — WHY this call returned
        * `isError: true`. Present only alongside `isError: true`; an absent
        * class on an errored result means "unclassified failure", which is the

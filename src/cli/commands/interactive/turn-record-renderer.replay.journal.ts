@@ -45,6 +45,7 @@ const DEFAULT_MAX_TURNS = 50;
 
 const SYSTEM_REMINDER_RE = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
 const BACKGROUND_RESULT_TAG = '<background-subagent-result';
+const BACKGROUND_PROCESS_TAG = '<background-process-result';
 
 /** One replayed exchange: what the human sent, then everything that followed. */
 export interface ReplayTurn {
@@ -92,6 +93,7 @@ export function humanText(m: JournalMessage, hints: ReadonlySet<string> = new Se
     .map((b) => b.text)
     .join('\n');
   if (raw.includes(BACKGROUND_RESULT_TAG)) return { text: '', note: 'background subagent result delivered' };
+  if (raw.includes(BACKGROUND_PROCESS_TAG)) return { text: '', note: 'background process result delivered' };
   let text = raw.replace(SYSTEM_REMINDER_RE, '').trim();
   const hinted = matchHint(text, hints);
   if (hinted !== undefined) {

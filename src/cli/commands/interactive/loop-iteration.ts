@@ -16,7 +16,7 @@ import type { ReplHistory } from '../../input/history.js';
 import { buildPrompt, type TurnState } from './repl-loop-shared.js';
 import type { FooterSubsystems } from './footer-subsystems.js';
 import { runFirstTurnHookIfNeeded } from './loop-iteration.first-turn.js';
-import { prependTurnInjections, autoResumeDirective } from './loop-iteration.injections.js';
+import { autoResumeDirective } from './loop-iteration.injections.js';
 import { drainLoopNotifications } from './loop-iteration.drain.js';
 import { handleShellPassthrough } from './loop-iteration.shell-branch.js';
 import { handleSlashCommand, runPluginPreflight } from './loop-iteration.slash-branch.js';
@@ -24,7 +24,7 @@ import { dispatchUserPromptSubmit } from './loop-iteration.hooks.js';
 import { wireReplStopHook } from './loop-iteration.stop-wiring.js';
 import { runOneTurn } from './loop-iteration.turn-run.js';
 import { createVersionNotice } from './version-notice.js';
-import { setupPeerBoundary, drainAdmissionQueueFallback } from './loop-iteration.boundary.js';
+import { setupPeerBoundary, applyDeferPeers } from './loop-iteration.boundary.js';
 
 /**
  * Per-turn cap on autonomous auto-resumes — an idle REPL woken by a settled
@@ -59,7 +59,7 @@ export async function runInputLoop(
   footer: FooterSubsystems,
   history: ReplHistory,
 ): Promise<void> {
-  const { verdictLedger, bgResultNotifier, peerNotifier } = footer;
+  const { verdictLedger, bgResultNotifier, peerNotifier, processJobNotifier } = footer;
   const maxTurnsNum = (() => { const mt = parseInt(ctx.options.maxTurns, 10); return mt > 0 ? mt : undefined; })();
 
   // Init metadata deferred to loop top so it prints cleanly between turns.
@@ -105,14 +105,14 @@ export async function runInputLoop(
   const tryAutoResume = (): void => {
     if (autoResumeCount >= MAX_AUTO_RESUMES_PER_TURN) return;
     if (!surface.isAwaitingInput() || !surface.bufferIsEmpty()) return;
-    if (!bgResultNotifier.hasPendingInjections() && !peerNotifier.hasPendingInjections()) return;
+    const bgPending = bgResultNotifier.hasPendingInjections() || processJobNotifier?.hasPendingInjections() === true;
+    if (!bgPending && !peerNotifier.hasPendingInjections()) return;
     autoResumeCount++;
     ringBellIfEnabled(process.stdout);
-    seedBuffer = { text: autoResumeDirective(bgResultNotifier.hasPendingInjections()), attachments: [], echo: 'silent' };
+    seedBuffer = { text: autoResumeDirective(bgPending), attachments: [], echo: 'silent' };
     surface.abortPendingRead();
   };
-  bgResultNotifier.onInjectable = tryAutoResume;
-  peerNotifier.onInjectable = tryAutoResume;
+  for (const n of [bgResultNotifier, peerNotifier, processJobNotifier]) if (n) n.onInjectable = tryAutoResume;
   surface.onAwaitingInput = tryAutoResume;
 
   while (true) {
@@ -218,11 +218,10 @@ export async function runInputLoop(
     let runText = text;
     if (isPluginForward) runText = await runPluginPreflight(text, ctx);
 
-    // Prepend shell/bg/peer injections, then any pending Stop correction.
-    const deferPeers = queuedHumanTurn || (surface.getCompositor()?.hasPendingSubmission() ?? false);
-    runText = prependTurnInjections(runText, [footer.shellPassthrough, bgResultNotifier, ...(!deferPeers ? [peerNotifier] : [])]);
-    // The same human barrier covers peers already admitted but not delivered.
-    if (!deferPeers) runText = drainAdmissionQueueFallback(runText, admissionQueue);
+    // Prepend shell/bg/peer injections (human barrier + admission-queue drain).
+    // processJobNotifier is passed as the optional extra source so background
+    // process job results are injected between bg-subagent and peer messages.
+    runText = applyDeferPeers(runText, queuedHumanTurn, surface, footer.shellPassthrough, bgResultNotifier, peerNotifier, admissionQueue, processJobNotifier);
     if (pendingStopInjection !== undefined) {
       runText = pendingStopInjection + '\n\n' + runText;
       pendingStopInjection = undefined;

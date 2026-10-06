@@ -9,7 +9,7 @@
  */
 
 import { realpathSync, existsSync, mkdirSync } from 'node:fs';
-import { sep } from 'node:path';
+import { relative, isAbsolute } from 'node:path';
 import type { Environment } from '../types.js';
 
 /**
@@ -30,25 +30,38 @@ export function assertInsideSandbox(dir: string, env: Environment): void {
   const home = realpathSync(env.home);
   const cwd = realpathSync(env.cwd);
 
-  // Allow exact match (the dir IS the sandbox root) or containment (startsWith with separator)
-  const insideHome = real === home || real.startsWith(trailingSlash(home));
-  const insideCwd = real === cwd || real.startsWith(trailingSlash(cwd));
-
-  if (!insideHome && !insideCwd) {
+  if (!isInside(real, home) && !isInside(real, cwd)) {
     throw new Error(
       `[whatif] sandbox containment violation: attempted write to "${real}" which is outside ` +
-        `env.home "${trailingSlash(home)}" and env.cwd "${trailingSlash(cwd)}". ` +
+        `env.home "${home}" and env.cwd "${cwd}". ` +
         `This is a bug in the operator — only sandbox paths may be mutated.`,
     );
   }
 }
 
 /**
- * Append the platform separator to `p` if it does not already end with one.
- * Using path.sep (not hardcoded '/') ensures correctness on Windows where
- * realpathSync returns backslash-separated paths and startsWith('C:\\foo\\') must
- * be used rather than startsWith('C:\\foo/').
+ * Return true when `child` is inside `root` or IS `root` (exact match).
+ *
+ * Uses `path.relative`-based containment — the same idiom as the sibling
+ * `_cwd-utils.ts` handler — so there is one containment idiom across the
+ * whatif sandbox rather than two. This correctly handles:
+ *
+ *   - Exact match: `path.relative(root, root)` returns `''`, which does not
+ *     start with `..` and is not absolute → accepted.
+ *   - `..`-prefixed siblings (e.g. `/sandbox-evil` vs `/sandbox`): relative
+ *     returns a `..`-prefixed string → rejected.
+ *   - Windows different-drive paths (e.g. root on `C:`, child on `D:`):
+ *     `path.win32.relative` returns a drive-qualified absolute string instead
+ *     of a `..`-prefixed one; the `!isAbsolute(rel)` guard catches this.
+ *
+ * @param child - The already-realpath-resolved candidate path.
+ * @param root  - The already-realpath-resolved sandbox boundary.
  */
-function trailingSlash(p: string): string {
-  return p.endsWith(sep) ? p : p + sep;
+function isInside(child: string, root: string): boolean {
+  const rel = relative(root, child);
+  // rel === '' means child === root (exact match); an empty string does not
+  // start with '..' and is not absolute, so the condition below admits it.
+  // On Windows, when root and child are on different drives, relative() returns
+  // a drive-qualified absolute path (e.g. 'D:\evil'), which isAbsolute catches.
+  return !rel.startsWith('..') && !isAbsolute(rel);
 }

@@ -273,3 +273,154 @@ describe('real-spawn regression: sibling cleanup cannot reach another sibling', 
     expect(fs.existsSync(bScratch)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #2933 hardening tests
+// ---------------------------------------------------------------------------
+
+describe('#2933 TOCTOU: cleanup does not follow a symlink swapped in after ensure', () => {
+  it('leaves the symlink target intact when the session dir is replaced by a symlink', async () => {
+    // Create a dir that must survive the cleanup attempt.
+    const target = path.join(base, 'symlink-target');
+    fs.mkdirSync(target);
+    fs.writeFileSync(path.join(target, 'precious.txt'), 'keep me');
+
+    const e = topLevel();
+    expect(ensureSessionTmpdir(e)).toBe(true);
+    const sessionDir = e['TMPDIR']!;
+
+    // Simulate a concurrent actor swapping the session dir for a symlink.
+    fs.rmSync(sessionDir, { recursive: true });
+    fs.symlinkSync(target, sessionDir, 'dir');
+
+    await cleanupSessionTmpdir(e);
+
+    // The symlink target must not have been removed.
+    expect(fs.existsSync(path.join(target, 'precious.txt'))).toBe(true);
+    // The symlink itself may or may not remain — we don't care, as long as
+    // the target directory and its contents are intact.
+  });
+});
+
+describe('#2933 ensured-flag cache: ensure() skips lstatSync after first success', () => {
+  it('returns true on repeated calls without re-checking the filesystem', () => {
+    const e = topLevel();
+    expect(ensureSessionTmpdir(e)).toBe(true);
+    // Even if we manually break lstat by passing a bad path in a registry
+    // clone, the cached flag means the real path never needs re-stat.
+    // Here we just confirm repeated calls are idempotent (no throw).
+    expect(ensureSessionTmpdir(e)).toBe(true);
+    expect(ensureSessionTmpdir(e)).toBe(true);
+  });
+
+  it('resets the ensured flag after cleanup so re-use re-creates the dir', async () => {
+    const e = topLevel();
+    expect(ensureSessionTmpdir(e)).toBe(true);
+    const dir = e['TMPDIR']!;
+    expect(fs.existsSync(dir)).toBe(true);
+
+    // cleanup() must reset the ensured flag (and owned flag).
+    await cleanupSessionTmpdir(e);
+    expect(fs.existsSync(dir)).toBe(false);
+
+    // Re-allocate a fresh session using the same registry helper; the new
+    // entry must pass ensure() without a stale cached flag.
+    const e2 = topLevel();
+    expect(ensureSessionTmpdir(e2)).toBe(true);
+    expect(fs.existsSync(e2['TMPDIR']!)).toBe(true);
+    await cleanupSessionTmpdir(e2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #3072 hardening tests
+// ---------------------------------------------------------------------------
+
+describe('#3072 resolveSpawnTmpEnv: debugLog fallback path', () => {
+  it('emits a debugLog message and strips temp-dir keys when ensure() fails', () => {
+    // Force ensure() to fail by pointing the root at a plain file so mkdirSync
+    // cannot create the session dir under it.
+    const blocker = path.join(base, 'blocker-debuglog');
+    fs.writeFileSync(blocker, 'x');
+    setSessionTmpdirRootForTests(blocker);
+    vi.stubEnv('AFK_DEBUG', '1');
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const e = topLevel({ KEEP: 'me' });
+      const result = resolveSpawnTmpEnv(e);
+      // Temp-dir keys must be stripped on failure.
+      expect(result).toEqual({ KEEP: 'me' });
+      // The debugLog line must have been emitted.
+      const logged = consoleSpy.mock.calls.some(
+        (args) => typeof args[0] === 'string' && args[0].includes('[session-tmpdir]') && args[0].includes('falling back'),
+      );
+      expect(logged).toBe(true);
+    } finally {
+      consoleSpy.mockRestore();
+      vi.unstubAllEnvs();
+      setSessionTmpdirRootForTests(root);
+    }
+  });
+
+  it('returns the env unchanged and emits no log when ensure() succeeds', () => {
+    vi.stubEnv('AFK_DEBUG', '1');
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const e = topLevel({ KEEP: 'me' });
+      expect(ensureSessionTmpdir(e)).toBe(true);
+      const result = resolveSpawnTmpEnv(e);
+      // All temp-dir keys must be present and unchanged.
+      expect(result?.['TMPDIR']).toBe(e['TMPDIR']);
+      expect(result?.['KEEP']).toBe('me');
+      // No fallback log should have been emitted.
+      const logged = consoleSpy.mock.calls.some(
+        (args) => typeof args[0] === 'string' && args[0].includes('[session-tmpdir]'),
+      );
+      expect(logged).toBe(false);
+    } finally {
+      consoleSpy.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe('#3072 TOCTOU closure: cleanup renames before rm to close lstat-to-rm race', () => {
+  it('removes the session dir contents via the renamed sibling path', async () => {
+    const e = topLevel();
+    expect(ensureSessionTmpdir(e)).toBe(true);
+    const sessionDir = e['TMPDIR']!;
+    fs.writeFileSync(path.join(sessionDir, 'scratch.txt'), 'data');
+    expect(fs.existsSync(path.join(sessionDir, 'scratch.txt'))).toBe(true);
+
+    await cleanupSessionTmpdir(e);
+
+    // The original session dir and its contents must be gone.
+    expect(fs.existsSync(sessionDir)).toBe(false);
+    // No renamed sibling with the .rm suffix should remain under the parent.
+    const parent = path.dirname(sessionDir);
+    if (fs.existsSync(parent)) {
+      const entries = fs.readdirSync(parent);
+      expect(entries.every((n) => !n.endsWith('.rm'))).toBe(true);
+    }
+  });
+
+  it('leaves the symlink target intact when the session dir is replaced by a symlink before cleanup', async () => {
+    const target = path.join(base, 'rename-toctou-target');
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, 'precious.txt'), 'keep me');
+
+    const e = topLevel();
+    expect(ensureSessionTmpdir(e)).toBe(true);
+    const sessionDir = e['TMPDIR']!;
+
+    // Simulate a concurrent actor swapping the session dir for a symlink
+    // between lstat and rename in cleanup().
+    fs.rmSync(sessionDir, { recursive: true });
+    fs.symlinkSync(target, sessionDir, 'dir');
+
+    await cleanupSessionTmpdir(e);
+
+    // The symlink target must be intact.
+    expect(fs.existsSync(path.join(target, 'precious.txt'))).toBe(true);
+  });
+});

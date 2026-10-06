@@ -237,6 +237,7 @@ describe('stream-consumer: render-registry → chunk.display → formatOutcome',
       content: 'Output too large (1.2 MB). Full output saved to: /tmp/compose-out.txt',
       incomplete: true,
       incompleteReason: 'compose_partial_nodes',
+      partialNodeCount: 2,
       sessionId: 's1',
     };
     const out = transformProviderEvent(partialPersisted, noopDeps) as Extract<
@@ -247,6 +248,7 @@ describe('stream-consumer: render-registry → chunk.display → formatOutcome',
     expect(out.chunk.persistedPath).toBe('/tmp/compose-out.txt');
     expect(out.chunk.incomplete).toBe(true);
     expect(out.chunk.incompleteReason).toBe('compose_partial_nodes');
+    expect(out.chunk.partialNodeCount).toBe(2); // #2978
   });
 
   it('propagates incomplete/incompleteReason through the normal (non-persisted) branch', () => {

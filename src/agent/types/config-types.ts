@@ -554,6 +554,14 @@ export interface AgentConfig {
   detachRegistry?: import('../tools/detach-registry.js').DetachableToolRegistry;
 
   /**
+   * Session-scoped registry for model-started background processes (`bash`
+   * with `run_in_background: true`). Root interactive REPL sessions only;
+   * never copied into forked child configs, so subagents get an explicit
+   * "unavailable" refusal. Teardown must call `killAll()`.
+   */
+  processJobs?: import('../shell-jobs/process-jobs.js').ProcessJobRegistry;
+
+  /**
    * Cascade-abort and drain in-flight subagents before the trace writer is
    * sealed.
    *

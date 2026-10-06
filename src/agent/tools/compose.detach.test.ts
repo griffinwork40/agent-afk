@@ -418,6 +418,7 @@ describe('ComposeExecutor detach contract (#2542)', () => {
     expect(settled!.status).toBe('completed');
     expect(settled!.incomplete).toBe(true);
     expect(settled!.incompleteReason).toBe('compose_partial_nodes');
+    expect(settled!.partialNodeCount).toBe(1); // #2978
     await drainMicrotasks();
   });
 
