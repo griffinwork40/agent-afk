@@ -48,12 +48,11 @@ import {
 import { writeFarmDecisionFact } from '../../skills/score/memory-write.js';
 import { resolveWinnerBranch } from '../../skills/score/winner.js';
 import { parseFarmCallback, type FarmCallbackAction } from '../farm-callback-data.js';
+import { safeAnswer, type LogFn } from './farm-callbacks.helpers.js';
 import { handleOpenPr } from './farm-callbacks.open-pr.js';
 import { handleRespawn } from './farm-callbacks.respawn.js';
 
 const execFileAsync = promisify(execFile);
-
-type LogFn = (...args: unknown[]) => void;
 
 // ---------------------------------------------------------------------------
 // M1: Per-slug in-process lock to prevent double-tap races on Open PR / Respawn
@@ -169,14 +168,6 @@ function extractCallbackData(ctx: Context): string | undefined {
   // members; pull it out defensively.
   const cb = ctx.callbackQuery as { data?: string } | undefined;
   return cb?.data;
-}
-
-async function safeAnswer(ctx: Context, text: string, log: LogFn): Promise<void> {
-  try {
-    await ctx.answerCbQuery(text);
-  } catch (err) {
-    log('[farm-callback] answerCbQuery failed:', err);
-  }
 }
 
 async function dispatch(
