@@ -49,12 +49,26 @@ function makeStats(): SessionStats {
 interface FakeSession {
   compact: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
+  listRewindTargets: ReturnType<typeof vi.fn>;
 }
 
 function fakeSession(): FakeSession {
   return {
     compact: vi.fn(),
     sendMessage: vi.fn().mockResolvedValue({ content: 'ok' }),
+    // Default: 5 prompts before, 2 after (compact removes older ones).
+    listRewindTargets: vi.fn()
+      .mockReturnValueOnce([
+        { turnIndex: 8, preview: 'fifth' },
+        { turnIndex: 6, preview: 'fourth' },
+        { turnIndex: 4, preview: 'third' },
+        { turnIndex: 2, preview: 'second' },
+        { turnIndex: 0, preview: 'first' },
+      ])
+      .mockReturnValue([
+        { turnIndex: 2, preview: 'second' },
+        { turnIndex: 0, preview: 'first' },
+      ]),
   };
 }
 
@@ -138,8 +152,10 @@ describe('/compact slash handler', () => {
     expect(session.sendMessage).not.toHaveBeenCalled();
     const success = lines.find((l) => l.startsWith('SUCCESS:'));
     expect(success).toBeDefined();
-    expect(success).toContain('12');
-    expect(success).toContain('5');
+    // Reports user-facing prompt counts (5 before → 2 after), not raw API
+    // message counts (12 → 5) which inflate per tool_use/tool_result pair.
+    expect(success).toContain('5 → 2 prompts');
+    expect(success).not.toContain('messages');
     expect(success).toContain('200');
   });
 

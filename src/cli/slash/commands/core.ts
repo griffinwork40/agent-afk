@@ -113,7 +113,14 @@ const compactCmd: SlashCommand = {
         }).start();
         spinnerActive = true;
       }
+      // Report in PROMPTS, not raw API messages: `messagesBefore/After` count
+      // every assistant tool_use and user tool_result message (~2 per tool
+      // round), so a 12-prompt session reads as "Compacted 247 → 5 messages".
+      // Snapshot the genuine user-prompt count before and after compaction the
+      // same way /rewind does (fix #3109), so the two commands stay consistent.
+      const promptsBefore = session.listRewindTargets().length;
       const result = await session.compact();
+      const promptsAfter = session.listRewindTargets().length;
       stopSpinner();
       if (!result.compacted) {
         const reason = result.reason ?? 'unknown';
@@ -148,7 +155,7 @@ const compactCmd: SlashCommand = {
           ? ` (~${result.tokensSavedEstimate} input tokens saved)`
           : '';
         ctx.out.success(
-          `Compacted ${result.messagesBefore} → ${result.messagesAfter} messages${saved}.`,
+          `Compacted ${promptsBefore} → ${promptsAfter} prompts${saved}.`,
         );
       }
     } catch (err) {
