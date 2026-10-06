@@ -120,7 +120,7 @@ Implementation: `src/cli/slash/index.ts` (`registerAll()`), individual command m
 `agent-afk` speaks to providers through a single abstraction (`src/agent/providers/`):
 
 **Anthropic (direct)** — default. Selects from:
-- **fable** — most capable (Claude Fable 5, Mythos-class) — hardest reasoning + long-horizon agentic work; 1M context
+- **fable** — most capable (Claude Fable 5.1, Mythos-class) — hardest reasoning + long-horizon agentic work; 1M context. **Breaking change from Fable 5:** `disabled` thinking throws a 400 (use `adaptive` instead), non-default temperature/top_p/top_k are rejected, and effort defaults to `high`. Users previously pinned to `fable` will now be on Fable 5.1 with these constraints.
 - **opus** — most capable Opus-tier, for complex tasks
 - **sonnet** — balanced performance and speed (default)
 - **haiku** — fastest, best for simple tasks

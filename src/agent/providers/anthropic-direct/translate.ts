@@ -56,15 +56,21 @@ function hasDroppedBlocks(transformations: unknown): boolean {
  * value in; when it is already `true`, both the check and the warn are skipped
  * (this frame duplicates what message_start already warned). Returns `true`
  * when a warn was emitted or was already emitted before.
+ *
+ * `frame` is the SDK object carrying `input_transformations` (the
+ * `message_start` message, or the `message_delta` event itself); the field is
+ * read here so call sites stay one line.
  */
 function warnDropsDeduped(
-  transformations: unknown,
+  frame: unknown,
   source: 'message_start' | 'message_delta',
   alreadyWarned: boolean,
+  traceWriter: TranslateCtx['traceWriter'],
 ): boolean {
   if (alreadyWarned) return true;
+  const transformations = (frame as Record<string, unknown> | undefined)?.['input_transformations'];
   const fired = hasDroppedBlocks(transformations);
-  warnOnDroppedThinkingBlocks(transformations, source);
+  warnOnDroppedThinkingBlocks(transformations, source, traceWriter);
   return fired;
 }
 
@@ -228,11 +234,7 @@ export async function* translateMessageStream(
       switch (evt.type) {
         case 'message_start': {
           if (evt.message?.usage) usage = { ...evt.message.usage };
-          warnedThisStream = warnDropsDeduped(
-            (evt.message as unknown as Record<string, unknown>)?.['input_transformations'],
-            'message_start',
-            warnedThisStream,
-          );
+          warnedThisStream = warnDropsDeduped(evt.message, 'message_start', warnedThisStream, ctx.traceWriter);
           break;
         }
 
@@ -355,11 +357,7 @@ export async function* translateMessageStream(
           // the serving model's input_transformations entries (docs: preserved-thinking).
           // warnDropsDeduped skips when message_start already warned (same drops,
           // both frames carry them) but fires normally when only delta has drops.
-          warnedThisStream = warnDropsDeduped(
-            (evt as unknown as Record<string, unknown>)?.['input_transformations'],
-            'message_delta',
-            warnedThisStream,
-          );
+          warnedThisStream = warnDropsDeduped(evt, 'message_delta', warnedThisStream, ctx.traceWriter);
           if (evt.usage) {
             usage = applyDeltaUsage(usage, evt.usage);
           }

@@ -14,6 +14,7 @@ import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
 import { translateMessageStream } from './translate.js';
 import type { TranslateOutput } from './types.js';
 import { _resetWarnCountForTest } from './input-transformations.js';
+import { InMemoryTraceWriter } from '../../trace/writer.js';
 
 async function* fromArray<T>(arr: T[]): AsyncIterable<T> {
   for (const x of arr) yield x;
@@ -1212,5 +1213,130 @@ describe('translateMessageStream: input_transformations (thinking drop_block)', 
     // An 11th stream should produce no warn (cap already exhausted)
     await collect(translateMessageStream(fromArray(makeBothFramesStream()), { sessionId: SESSION_ID }));
     expect(warnSpy).toHaveBeenCalledTimes(10);
+  });
+
+  // ── Finding 2 (observability): thinking_block_dropped trace event ────────
+  // Drops must be emitted as a thinking_block_dropped session_phase event in
+  // addition to the bounded console.warn. The trace event fires once per
+  // stream (per-stream dedup via alreadyWarned) and is independent of the
+  // process-global console warn cap.
+
+  it('emits thinking_block_dropped session_phase trace event when traceWriter is supplied', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const writer = new InMemoryTraceWriter();
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_trace_test',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'reply'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID, traceWriter: writer }));
+    // Give the async void emitSessionPhase a tick to settle.
+    await new Promise((r) => setTimeout(r, 0));
+
+    const phaseEvents = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'thinking_block_dropped',
+    );
+    expect(phaseEvents).toHaveLength(1);
+    expect(phaseEvents[0]?.payload.metadata?.['droppedCount']).toBe(1);
+    expect(phaseEvents[0]?.payload.metadata?.['source']).toBe('message_start');
+  });
+
+  it('does NOT emit thinking_block_dropped trace event when no traceWriter is supplied', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_no_trace',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'reply'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    // No traceWriter — should warn to console but NOT throw; trace event cannot fire.
+    await expect(
+      collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID })),
+    ).resolves.not.toThrow();
+  });
+
+  it('emits exactly one thinking_block_dropped trace event per stream (per-stream dedup)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const writer = new InMemoryTraceWriter();
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_dedup_trace',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'x'),
+      blockStop(0),
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { output_tokens: 5, cache_creation_input_tokens: null, cache_read_input_tokens: null, input_tokens: null, server_tool_use: null },
+        // Server echoes the same drop — the per-stream dedup must suppress a second event.
+        input_transformations: [
+          { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+        ],
+      } as unknown as RawMessageStreamEvent,
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID, traceWriter: writer }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const phaseEvents = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'thinking_block_dropped',
+    );
+    // Both frames have drops, but per-stream dedup should produce exactly 1 event.
+    expect(phaseEvents).toHaveLength(1);
   });
 });

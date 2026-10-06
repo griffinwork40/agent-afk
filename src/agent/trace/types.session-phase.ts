@@ -247,7 +247,16 @@ export type SessionPhaseName =
   // i.e. a corruption path evaded both the tool-round rollback and the
   // turn-driver repair. metadata carries hoistedIndices, orphanIds,
   // assistantIndices, bridgedIndices, messageCount, shapeBefore. See #2136.
-  | 'orphan_repair';
+  | 'orphan_repair'
+  // Server dropped one or more thinking blocks via `input_transformations`
+  // (thinking-binding-controls-2026-08-01 beta, `drop_block` policy). Emitted
+  // at most once per stream (per-stream dedup parallels the console.warn guard).
+  // Distinct from the process-global warn cap — the trace event fires on
+  // every stream that has drops so operators can correlate per-session without
+  // depending on the bounded console output.
+  // metadata: { droppedCount, source ('message_start'|'message_delta') }
+  // No path values, thinking text, or signatures are recorded.
+  | 'thinking_block_dropped';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

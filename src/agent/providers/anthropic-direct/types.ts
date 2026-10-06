@@ -78,9 +78,13 @@ export type TranslateOutput =
  * Per-turn translator context. Threaded through so synthetic events
  * (`session.init`, `assistant.message`) can carry the session id and so the
  * translator can stamp `sessionId` onto delta events the consumer relies on.
+ * `traceWriter` is optional — when present, the translator emits
+ * `thinking_block_dropped` session_phase events for every stream that has
+ * server-dropped thinking blocks.
  */
 export interface TranslateCtx {
   sessionId: string;
+  traceWriter?: import('../../trace/index.js').TraceSink;
 }
 
 /**

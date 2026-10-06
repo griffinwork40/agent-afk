@@ -97,6 +97,10 @@ export const SessionPhaseNameSchema = z.enum([
   // hoistedIndices, orphanIds, assistantIndices, bridgedIndices, messageCount,
   // and shapeBefore (structural summary, never message content). See #2136.
   'orphan_repair',
+  // Server dropped thinking blocks via `input_transformations` (drop_block beta).
+  // Emitted at most once per stream. metadata: { droppedCount, source }. See
+  // SessionPhaseName JSDoc in types.session-phase.ts.
+  'thinking_block_dropped',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({
