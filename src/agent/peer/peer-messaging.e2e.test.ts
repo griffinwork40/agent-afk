@@ -34,7 +34,7 @@ afterEach(async () => {
   else delete process.env['AFK_HOME'];
   delete process.env['AFK_STATE_DIR'];
   delete process.env['AFK_FRAMEWORK_DIR'];
-  await rm(tmpHome, { recursive: true, force: true });
+  await rm(tmpHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 // ── helpers ──────────────────────────────────────────────────────────────────
