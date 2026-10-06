@@ -44,9 +44,10 @@ export const MINI_MASCOT_HEIGHT = 3;
  * band, Y gold eyes, M olive skin, D dark-olive ears, K near-black outline, L
  * light-olive glint, R alarm red, '.' transparent. The band is G rather than
  * the banner's Y so the eyes are the brightest pixels in the sprite; the eyes
- * are close-set 2px pairs, and the brow row's lid pixels sit over their inner
- * corners, so the banner's V scowl survives at this scale. Only the eye band and grin change between frames — the
- * cap and brow are shared, so animation reads as expression, not as jitter.
+ * are close-set 2px pairs with a dark lid pixel over each inner corner, which
+ * gives the face a brow at this scale. Only the eye band and grin change
+ * between frames — the cap and brow are shared, so animation reads as
+ * expression, not as jitter.
  */
 const CAP_ROWS: readonly string[] = [
   '.....BBB.....', // cap tip

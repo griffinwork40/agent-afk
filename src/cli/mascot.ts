@@ -44,8 +44,9 @@ const PIXEL_PALETTE: Record<string, [number, number, number] | null> = {
   // #C83C28 ≈ [200, 60, 40]
   R: [200, 60, 40],
   // Shade olive — between D and M. The banner's form shading: the hat-brim
-  // shadow across the forehead, the nose's flanks, the jaw's rounding, and the
-  // lit top rim of each ear. #6C8330 ≈ [108, 131, 48]
+  // shadow across the forehead, the soft lids and under-eye shadows, the nose's
+  // flanks, the jaw's rounding, and the lit top rim of each ear.
+  // #6C8330 ≈ [108, 131, 48]
   S: [108, 131, 48],
   // Leather highlight — the cap cone's lit left facet. A small accent: the cap
   // body stays the (twice-darkened, on request) deep brown B.
@@ -72,10 +73,12 @@ const PIXEL_PALETTE: Record<string, [number, number, number] | null> = {
  * leaning right over a gold hatband, solid dark-olive ears widest at cols
  * 0/26, yellow eyes, the closed grin, the lone ▼ fang and its notch); what
  * changed is form and expression. The cap is a hooked cone with a lit left
- * facet and a brim; the brim casts a shadow on the forehead; the brow is a V
- * scowl whose inner ends sit lowest; the pupils are vertical slits; the nose is
- * a lit, bulbous hook with nostrils, separated from the mouth by the upper lip;
- * the cheeks step out one column below the ears and the jaw tapers to a
+ * facet and a brim; the brim casts a shadow on the forehead; the brows are
+ * raised arches with a skin gap above soft-lidded eyes and round forward
+ * pupils (mischief, not menace: an earlier v17 draft used a V scowl and slit
+ * pupils and read as mean); the nose is a lit, bulbous hook with nostrils,
+ * separated from the mouth by the upper lip; the cheeks stay in line with the
+ * head (stepping them out a column read as jowly) and the jaw tapers to a
  * pointed chin. Rows 7 down are authored as mirrored halves, so the symmetry
  * rule holds by construction. Supersedes v14/v15/v16.
  */
@@ -98,24 +101,24 @@ const GOBLIN_GRID: readonly string[] = [
   '.....KMMMMMMLLLMMMMMMK.....',
   // ears begin — solid dark-olive, tapering in toward the head top
   '....DKMMMMMMMMMMMMMMMKD....',
-  // brow outer ends ride high; each ear's top rim catches light (S)
-  '...SDKMKKMMMMMMMMMKKMKDS...',
-  // brow slants down toward the nose ...
-  '.SSDDKMMKKKMMMMMKKKMMKDDSS.',
-  // ... inner ends lowest (the V scowl); ears at their widest (cols 0/26)
-  'DDDDDKMMMKKKMMMKKKMMMKDDDDD',
-  // yellow eyes with vertical slit pupils
-  '.DDDDKMMYKYMMMMMYKYMMKDDDD.',
-  // slits continue (YKY); the nose bridge (L) starts between the eyes
+  // arched brows, crest of the arch; each ear's top rim catches light (S)
+  '...SDKMMKKKMMMMMKKKMMKDS...',
+  // arch ends drop to either side of the eye — raised, cheeky, not a scowl
+  '.SSDDKMKMMMKMMMKMMMKMKDDSS.',
+  // soft lid shadow (S), a clear skin gap under the brow; ears widest (0/26)
+  'DDDDDKMMSSSMMMMMSSSMMKDDDDD',
+  // open yellow eyes
+  '.DDDDKMMYYYMMMMMYYYMMKDDDD.',
+  // round forward pupils (YKY); the nose bridge (L) starts between the eyes
   '..DDDKMMYKYMMLMMYKYMMKDDD..',
-  // under-eye bags (D); the bridge runs down
-  '....KMMMDDDMMLMMDDDMMMK....',
-  // nose widens — lit ridge, shaded flanks; gaunt cheek hollows
-  '....KMDMMMMMSLSMMMMMDMK....',
+  // soft under-eye shadow (S); cheeks stay in line with the head, no jowls
+  '.....KMMSSSMMLMMSSSMMK.....',
+  // nose widens — lit ridge, shaded flanks; gaunt cheek hollows (D)
+  '.....KMDMMMMSLSMMMMDMK.....',
   // bulbous lit nose tip
-  '....KMDMMMMSLLLSMMMMDMK....',
-  // dark underside with two nostrils, kept clear of the mouth
-  '....KMMMMMMDKDKDMMMMMMK....',
+  '.....KMDMMMSLLLSMMMDMK.....',
+  // shaded underside with two nostrils, kept clear of the mouth
+  '.....KMMMMMSKDKSMMMMMK.....',
   // upper lip; grin corners pulled UP
   '.....KMMKKMMMMMMMKKMMK.....',
   // grin — low curve across the middle (mouth stays closed)
