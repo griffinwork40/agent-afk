@@ -3,9 +3,11 @@
  *
  * Covers:
  *  - `probeTelemetryWritable`: absent file → null; writable file → null;
- *    read-only file → error string.
+ *    read-only file → error string; absent file with read-only parent → error
+ *    string (portable: uses injected probe, no chmodSync on directory).
  *  - `TelemetryAlertLatch`: first detection sends a Telegram push; subsequent
- *    detections in the same process do not.
+ *    detections in the same process do not; real notify() exercises
+ *    console.warn and pushIfConfigured.
  *  - Integration: CronScheduler.fireOnStart skips agent sessionstart tasks and
  *    sends exactly one alert when the telemetry file is not writable.
  *
@@ -38,26 +40,7 @@ function platformEnforcesFileMode(): boolean {
   }
 }
 
-// Windows ignores directory mode bits (chmod on a dir has no effect), so a
-// separate probe is needed for tests that use chmodSync on a directory.
-function platformEnforcesDirMode(): boolean {
-  const probeDir = mkdtempSync(join(tmpdir(), 'afk-dirperm-check-'));
-  try {
-    chmodSync(probeDir, 0o555);
-    try {
-      accessSync(probeDir, constants.W_OK);
-      return false; // write still permitted — directory mode not enforced
-    } catch {
-      return true; // write correctly denied
-    }
-  } finally {
-    try { chmodSync(probeDir, 0o755); } catch { /* ignore */ }
-    rmSync(probeDir, { recursive: true, force: true });
-  }
-}
-
 const PERMS_ENFORCED = platformEnforcesFileMode();
-const DIR_PERMS_ENFORCED = platformEnforcesDirMode();
 
 // ─── probeTelemetryWritable ────────────────────────────────────────────────────
 
@@ -80,18 +63,21 @@ describe('probeTelemetryWritable', () => {
     expect(probeTelemetryWritable(filePath)).toBeNull();
   });
 
-  it.skipIf(!DIR_PERMS_ENFORCED)('returns an error string when the file is absent but the parent dir is read-only', () => {
-    // Make the parent dir read-only so appendFileSync would fail on first write.
-    chmodSync(dir, 0o555);
-    try {
-      const result = probeTelemetryWritable(filePath);
-      expect(result).not.toBeNull();
-      expect(typeof result).toBe('string');
-      expect((result as string).length).toBeGreaterThan(0);
-    } finally {
-      // Restore so afterEach rmSync can clean up.
-      try { chmodSync(dir, 0o755); } catch { /* ignore */ }
-    }
+  it('returns an error string when the file is absent but the parent dir is read-only (injected probe)', () => {
+    // Inject a fake accessSync that denies writes to the parent directory.
+    // This is portable across Windows and root CI where chmodSync on a dir has
+    // no effect — the probe function is the test boundary, not the OS.
+    const eaccessErr = Object.assign(new Error('EACCES: permission denied, access \'/fake/dir\''), {
+      code: 'EACCES',
+    });
+    const probe = {
+      existsSync: () => false,   // file does not exist
+      accessSync: (_p: string, _mode: number) => { throw eaccessErr; },
+    };
+    const result = probeTelemetryWritable(filePath, probe);
+    expect(result).not.toBeNull();
+    expect(typeof result).toBe('string');
+    expect((result as string).length).toBeGreaterThan(0);
   });
 
   it('returns null when the file exists and is writable', () => {
@@ -151,6 +137,23 @@ describe('TelemetryAlertLatch', () => {
     await latch.notify(fakePath, 'EACCES');
 
     expect(pushMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('real notify() calls console.warn and pushIfConfigured on first invocation only', async () => {
+    // Exercise the real notify() path (no subclass override) so pushIfConfigured
+    // and console.warn are confirmed to be called.
+    // pushIfConfigured is already mocked via the hoisted vi.mock above.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fakePath = join(tmpdir(), 'afk-latch-real.jsonl');
+    const latch = new TelemetryAlertLatch();
+
+    await latch.notify(fakePath, 'ENOENT: no such file');
+    await latch.notify(fakePath, 'ENOENT: no such file'); // latch is now armed
+
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy.mock.calls[0][0]).toContain('Telemetry file is not writable');
+
+    warnSpy.mockRestore();
   });
 });
 

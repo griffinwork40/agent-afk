@@ -108,5 +108,7 @@ describe('CronScheduler.fireOnStart — zero-cooldown agent task bypasses teleme
     // Exactly one record, and it must not be a guard skip.
     expect(records).toHaveLength(1);
     expect(records[0].taskId).toBe('zero-cooldown-agent');
+    // The task fired and completed — status must be 'success'.
+    expect(records[0].status).toBe('success');
   });
 });

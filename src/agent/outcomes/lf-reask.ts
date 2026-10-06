@@ -164,18 +164,29 @@ export function lfReask(
     const storedTokens = record.first_prompt_tokens;
     if (!storedTokens || storedTokens.length === 0) continue;
 
-    // Check time window using the record file's mtime as a proxy for session end
-    // When outcomesDir is overridden, construct the record path accordingly.
-    let mtime: number;
-    try {
-      const recordPath = outcomesDir
-        ? `${outcomesDir}/${priorId}.json`
-        : getOutcomeRecordPath(priorId);
-      mtime = statSync(recordPath).mtimeMs;
-      if (mtime < windowStart) continue;
-    } catch {
-      continue; // file disappeared between list and stat
+    // Determine session-end time using session_ended_at when available (immutable
+    // field written once at immediate-LF time). Fall back to the record file's
+    // mtime only for old records that predate this field — mtime is non-monotonic
+    // (every upsertVotes call refreshes it), so using it on new records would
+    // collapse old sessions into the "within 30min" major severity band.
+    let sessionEndMs: number;
+    if (record.session_ended_at !== undefined) {
+      const endMs = new Date(record.session_ended_at).getTime();
+      if (isNaN(endMs)) continue;
+      sessionEndMs = endMs;
+    } else {
+      // Legacy path: fall back to file mtime for records without session_ended_at
+      try {
+        const recordPath = outcomesDir
+          ? `${outcomesDir}/${priorId}.json`
+          : getOutcomeRecordPath(priorId);
+        sessionEndMs = statSync(recordPath).mtimeMs;
+      } catch {
+        continue; // file disappeared between list and stat
+      }
     }
+
+    if (sessionEndMs < windowStart) continue;
 
     // Similarity check using stored fingerprint
     const priorTokens = new Set(storedTokens);
@@ -183,7 +194,7 @@ export function lfReask(
     if (similarity < REASK_THRESHOLD) continue;
 
     // Determine severity based on how soon after the prior session the reask arrived
-    const ageMs = Math.max(0, nowMs - mtime);
+    const ageMs = Math.max(0, nowMs - sessionEndMs);
     const isWithin30Min = ageMs <= REASK_MAJOR_WINDOW_MS;
     const severity = isWithin30Min ? ('major' as const) : ('minor' as const);
     const windowLabel = isWithin30Min ? 'within 30min' : 'within 24h';

@@ -197,6 +197,12 @@ function fetchRawDiff(root: string): string {
  *  - A `diff --git` hunk header matching `b/SPINE.md` or `b/spine-pending.jsonl`
  *    is excluded along with every line up to the next `diff --git` header.
  *  - The filter is purely textual; it never re-parses git output.
+ *  - Only root-level occurrences are matched: the comparison uses the canonical
+ *    git diff path format `a/<file> b/<file>` with no leading directory component.
+ *    Files relocated into a subdirectory (e.g. `docs/SPINE.md`) will NOT be
+ *    filtered and will pass through to the classifier unchanged. This is intentional
+ *    — the hook only self-references the root-level SPINE.md that it writes.
+ *    If SPINE.md is ever moved, update SPINE_FILES to include the new path.
  */
 function filterSpineEdits(diff: string): string {
   // Invariant: git diff uses "diff --git a/... b/..." as the chunk separator.

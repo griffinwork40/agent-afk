@@ -14,6 +14,18 @@ auto-release workflow to deduplicate commits across successive runs.
 ### Added
 - Windows Task Scheduler backend for `afk service` (install/uninstall/status/restart/upgrade via `schtasks`, user-level, no elevation) (#1602)
 
+## [5.299.4] - 2026-10-06
+
+### Fixed
+- bare-filename guard, corrupt trace file field, races test coverage (#3009) (1b0177cb)
+- outcomes combiner v2 advisory findings (#3012) (9201818c)
+
+## [5.299.3] - 2026-10-05
+
+### Fixed
+- fix misleading JSDoc comments and deflake attribution tests (#3005) (27951e02)
+- address advisory findings from #2974 review (#3010) (cfa71b5e)
+
 ## [5.299.2] - 2026-10-05
 
 ### Fixed

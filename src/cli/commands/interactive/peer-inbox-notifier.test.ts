@@ -401,6 +401,48 @@ describe('PeerInboxNotifier — live trace writer', () => {
     expect(writer.events).toHaveLength(1);
     expect(writer.events[0]).toMatchObject({ kind: 'peer_message', payload: { action: 'claimed' } });
   });
+
+  it('noteCorrupt trace event includes sanitized file field for correlation', async () => {
+    // Write a corrupt (non-JSON) file directly into pending/ so the scan
+    // cannot parse it and calls noteCorrupt → emitPeerMessage with file=safeFile.
+    const { mkdir: mkdirFs, writeFile } = await import('fs/promises');
+    const { getPeerInboxDir } = await import('../../../paths.js');
+    const sessionId = randomUUID();
+    const pendingDir = join(getPeerInboxDir(sessionId), 'pending');
+    await mkdirFs(pendingDir, { recursive: true, mode: 0o700 });
+    const corruptFilename = 'corrupt-quarantine-test.json';
+    await writeFile(join(pendingDir, corruptFilename), 'NOT VALID JSON', { mode: 0o600 });
+
+    const writer = new InMemoryTraceWriter();
+    const { notifier } = makeNotifier(sessionId, {});
+    // Attach writer.
+    const notifierWithWriter = new PeerInboxNotifier({
+      getSessionId: () => sessionId,
+      writeLine: () => undefined,
+      mode: () => 'accept',
+      traceWriter: writer,
+    });
+    await notifierWithWriter.scan();
+    notifierWithWriter.dispose();
+
+    // The trace should contain a 'held' event with reason:'corrupt' and
+    // file: corruptFilename (the sanitized name).
+    const heldEvent = writer.events.find(
+      (e) => e.kind === 'peer_message' && (e as { kind: string; payload: { action: string } }).payload.action === 'held',
+    );
+    expect(heldEvent).toBeDefined();
+    expect(heldEvent).toMatchObject({
+      kind: 'peer_message',
+      payload: {
+        action: 'held',
+        peer: 'unknown',
+        bytes: 0,
+        reason: 'corrupt',
+        file: corruptFilename,
+      },
+    });
+    notifier.dispose();
+  });
 });
 
 describe('PeerInboxNotifier — dispose race (regression)', () => {

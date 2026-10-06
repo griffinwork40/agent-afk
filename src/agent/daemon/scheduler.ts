@@ -50,7 +50,6 @@ import { makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord
 import { BudgetAlertLatch, evaluateBudgetGate, formatBudgetSkipMessage, resolveDaemonUsageTarget } from './budget-gate.js';
 import { probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
 
-
 export interface SchedulerOptions {
   /** Per-tick session config; merged with defaults at spawn time. */
   sessionConfig?: Partial<AgentConfig>;

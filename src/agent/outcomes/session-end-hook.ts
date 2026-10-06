@@ -60,7 +60,14 @@ function closureFromTrace(tracePath: string | undefined): ClosureInfo | null {
           const reason = p?.['reason'];
           if (reason === 'abort') return { reason: 'abort' };
           if (reason === 'iteration_cap') return { reason: 'iteration_cap' };
-          return { reason: 'normal' };
+          // Invariant: only 'model_end_turn' should map to 'normal'.
+          // 'truncated', 'timeout', 'budget_exceeded', 'hook_blocked', and
+          // 'max_turns_exceeded' are abnormal termination reasons — mapping them
+          // to 'normal' lets combiner rules 6/7 label abnormal sessions as
+          // succeeded. Use 'unknown' as a safe non-normal sentinel for any
+          // trace reason that is not explicitly known to be clean.
+          if (reason === 'model_end_turn') return { reason: 'normal' };
+          return { reason: 'unknown' };
         }
       } catch {
         // malformed line — skip
@@ -204,6 +211,14 @@ async function _runImmediatePass(
 
   const fingerprint = firstPrompt !== undefined ? promptFingerprint(firstPrompt) : [];
 
+  // Map ClosureInfo → closure_reason field (stored in the outcome record).
+  // 'unknown' is used when the trace was unavailable (closure === null).
+  const closureReason: VerifiedOutcome['closure_reason'] =
+    closure === null ? 'unknown'
+    : closure.reason === 'abort' ? 'abort'
+    : closure.reason === 'iteration_cap' ? 'iteration_cap'
+    : 'normal';
+
   const base: Omit<VerifiedOutcome, 'votes' | 'history'> = {
     schema_version: 1,
     session_id: sessionId,
@@ -214,11 +229,15 @@ async function _runImmediatePass(
     session_kind: sessionKind,
     self_report: selfReport,
     artifacts,
+    closure_reason: closureReason,
+    // session_ended_at is set once here and preserved across all later upsertVotes
+    // calls (the store only writes it when absent). See schema.ts for rationale.
+    session_ended_at: now,
     ...(fingerprint.length > 0 ? { first_prompt_tokens: fingerprint } : {}),
     ...(cwd !== undefined ? { first_cwd: cwd } : {}),
   };
 
-  upsertVotes(sessionId, votes, base);
+  upsertVotes(sessionId, votes, base, { closureReason });
 
   // cross_session_reask: check if this NEW session should add a -1 to a
   // prior session (fire-and-forget within the already-void context)

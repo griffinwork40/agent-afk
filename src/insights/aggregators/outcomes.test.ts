@@ -231,3 +231,89 @@ describe('aggregateOutcomes', () => {
     expect(result.parseErrors).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Finding #2: settles_after null falls back to history[last].at, not new Date()
+// ---------------------------------------------------------------------------
+
+describe('aggregateOutcomes – settles_after null fallback (finding #2)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = join(tmpdir(), `outcomes-agg-finding2-${Date.now()}`);
+    mkdirSync(tmpDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function writeRecord(name: string, record: unknown): void {
+    writeFileSync(join(tmpDir, `${name}.json`), JSON.stringify(record), 'utf8');
+  }
+
+  it('uses last history entry at when settles_after is null (not current report time)', () => {
+    // An old explicit-feedback record: settles_after=null, last history entry
+    // is 45 days ago (outside the 30-day window). Must NOT appear in results.
+    const oldAt = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString();
+    writeRecord('sess-old-ef', {
+      state: 'settled',
+      label: 'succeeded',
+      basis: 'proven',
+      settles_after: null,
+      history: [{ at: oldAt, label: 'succeeded', reason: 'explicit_feedback' }],
+    });
+
+    const result = aggregateOutcomes({ days: 30, outcomesDir: tmpDir });
+    // Old record should NOT be counted — its history.at is outside the window
+    expect(result.totalRecords).toBe(0);
+  });
+
+  it('includes record with null settles_after when history.at is within window', () => {
+    const recentAt = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
+    writeRecord('sess-recent-ef', {
+      state: 'settled',
+      label: 'succeeded',
+      basis: 'proven',
+      settles_after: null,
+      history: [{ at: recentAt, label: 'succeeded', reason: 'explicit_feedback' }],
+    });
+
+    const result = aggregateOutcomes({ days: 30, outcomesDir: tmpDir });
+    expect(result.totalRecords).toBe(1);
+    const weeks = Object.values(result.byWeek);
+    expect(weeks[0]?.goodProven).toBe(1);
+  });
+
+  it('skips record with null settles_after and no history (no timestamp available)', () => {
+    // No settles_after, no history → cannot determine week → must skip the record
+    writeRecord('sess-no-ts', {
+      state: 'settled',
+      label: 'succeeded',
+      basis: 'proven',
+      settles_after: null,
+      history: [],
+    });
+
+    const result = aggregateOutcomes({ days: 30, outcomesDir: tmpDir });
+    // Must skip — no timestamp available (previously would have landed in the current week)
+    expect(result.totalRecords).toBe(0);
+  });
+
+  it('prefers settles_after over history.at when settles_after is present', () => {
+    // settles_after is within window but the last history entry is old (45 days)
+    const recentSettles = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
+    const oldAt = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString();
+    writeRecord('sess-prefer-sa', {
+      state: 'settled',
+      label: 'succeeded',
+      basis: 'proven',
+      settles_after: recentSettles,
+      history: [{ at: oldAt, label: 'succeeded', reason: 'prior' }],
+    });
+
+    const result = aggregateOutcomes({ days: 30, outcomesDir: tmpDir });
+    // settles_after wins → record is within window → counted
+    expect(result.totalRecords).toBe(1);
+  });
+});

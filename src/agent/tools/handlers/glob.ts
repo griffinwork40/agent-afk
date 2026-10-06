@@ -177,6 +177,11 @@ async function collectMatches(dir: string, pattern: string, signal?: AbortSignal
 
       const entryPath = path.join(currentPath, entry.name);
       const entryReal = path.join(realPath, entry.name);
+      // '/' is intentional here: entryRel lives in pattern-space (not OS
+      // path-space). Glob patterns are always normalized to '/' separators
+      // (see globToRegExp / literalPatternSegments above) so entryRel must
+      // also use '/' for matcher.test(entryRel) to work correctly on all
+      // platforms. It is never passed to fs APIs.
       const entryRel = relPath ? `${relPath}/${entry.name}` : entry.name;
 
       // The requested root has already passed resolveAndContain, but a

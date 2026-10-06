@@ -664,3 +664,126 @@ describe('rescoreSettledUnknown', () => {
     expect(result.relabeled).toBeLessThanOrEqual(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Finding #4: rescoreSettledUnknown must pass normalClosure to combine()
+// ---------------------------------------------------------------------------
+
+describe('rescoreSettledUnknown – normalClosure from closure_reason (finding #4)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'relabel-rescore-f4-'));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeSettledUnknownWithClosure(
+    sessionId: string,
+    closureReason: VerifiedOutcome['closure_reason'],
+    extraVotes: Vote[] = [],
+  ): VerifiedOutcome {
+    return {
+      schema_version: 1,
+      session_id: sessionId,
+      label: 'unknown',
+      confidence: 0,
+      state: 'settled',
+      settles_after: new Date(Date.now() - 1000).toISOString(),
+      session_kind: 'text',
+      self_report: 'done',
+      artifacts: { commits: [], prs: [], repo: null },
+      closure_reason: closureReason,
+      votes: [
+        { lf: 'self_report', vote: 0, strength: 'weak', evidence: 'self_report=done', observed_at: NOW },
+        ...extraVotes,
+      ],
+      history: [],
+    };
+  }
+
+  it('iteration_cap session with one minor vote stays unknown after rescore (rule 7 blocked)', async () => {
+    // The bug: rescoreSettledUnknown passed settleWindowPassed=true but not normalClosure.
+    // combineV2 defaulted normalClosure=true → rule 7 fired → relabeled to succeeded 0.3.
+    // Fix: normalClosure derived from closure_reason='iteration_cap' → false → rule 7 skipped.
+    const id = 'rescore-iter-cap-minor-001';
+    writeRecord(
+      makeSettledUnknownWithClosure(id, 'iteration_cap', [
+        { lf: 'budget_cap', vote: -1, strength: 'weak', severity: 'minor', evidence: 'trace', observed_at: NOW },
+      ]),
+      tmpDir,
+    );
+
+    const result = await rescoreSettledUnknown({ outcomesDir: tmpDir });
+    expect(result.scanned).toBe(1);
+    // Must NOT be relabeled — normalClosure=false means rule 7 does not apply
+    expect(result.relabeled).toBe(0);
+    expect(result.skipped).toBe(1);
+
+    const rec = readRecord(id, tmpDir);
+    expect(rec?.label).toBe('unknown');
+  });
+
+  it('abort-closure session with no negatives stays unknown (rule 6 blocked by normalClosure=false)', async () => {
+    // abort sessions should not get good-by-default even with no negative votes
+    const id = 'rescore-abort-no-neg-001';
+    writeRecord(
+      makeSettledUnknownWithClosure(id, 'abort', [
+        { lf: 'self_report', vote: 0, strength: 'weak', evidence: 'self_report=none', observed_at: NOW },
+      ]),
+      tmpDir,
+    );
+
+    const result = await rescoreSettledUnknown({ outcomesDir: tmpDir });
+    // rule 6 requires normalClosure=true → abort → normalClosure=false → stays unknown
+    expect(result.relabeled).toBe(0);
+
+    const rec = readRecord(id, tmpDir);
+    expect(rec?.label).toBe('unknown');
+  });
+
+  it('normal-closure session with no negatives is relabeled to succeeded (rule 6 applies)', async () => {
+    const id = 'rescore-normal-no-neg-001';
+    writeRecord(
+      makeSettledUnknownWithClosure(id, 'normal'),
+      tmpDir,
+    );
+
+    const result = await rescoreSettledUnknown({ outcomesDir: tmpDir });
+    expect(result.relabeled).toBe(1);
+
+    const rec = readRecord(id, tmpDir);
+    expect(rec?.label).toBe('succeeded');
+    expect(rec?.basis).toBe('no_bad_signals');
+  });
+
+  it('old record without closure_reason is treated as normal (backward-compatible)', async () => {
+    // Records written before closure_reason was added: absence → treated as normal
+    const id = 'rescore-no-closure-reason-001';
+    const rec: VerifiedOutcome = {
+      schema_version: 1,
+      session_id: id,
+      label: 'unknown',
+      confidence: 0,
+      state: 'settled',
+      settles_after: new Date(Date.now() - 1000).toISOString(),
+      session_kind: 'text',
+      self_report: 'done',
+      artifacts: { commits: [], prs: [], repo: null },
+      votes: [
+        { lf: 'self_report', vote: 0, strength: 'weak', evidence: 'self_report=done', observed_at: NOW },
+      ],
+      history: [],
+      // no closure_reason field
+    };
+    writeRecord(rec, tmpDir);
+
+    const result = await rescoreSettledUnknown({ outcomesDir: tmpDir });
+    // No closure_reason → treated as normal → rule 6 fires → relabeled
+    expect(result.relabeled).toBe(1);
+    const updated = readRecord(id, tmpDir);
+    expect(updated?.label).toBe('succeeded');
+  });
+});

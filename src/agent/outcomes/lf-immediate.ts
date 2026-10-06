@@ -114,9 +114,25 @@ const MACHINE_TAG_PATTERNS: RegExp[] = MACHINE_TAG_NAMES.map(makeTagPattern);
  */
 const MACHINE_BLOCK_PATTERNS: RegExp[] = [
   ...MACHINE_TAG_PATTERNS,
-  // Bracketed harness preambles: [jev rules], [memory: ...], [bridge: ...],
-  // [placeholder-prevent], [afk: ...], etc. Match the whole line.
-  /^\[[a-z][a-z0-9 _:-]*\][^\n]*/gim,
+  // Bracketed harness preambles: [memory: ...], [bridge: ...], [afk: ...],
+  // [placeholder-prevent], [jev rules]: etc. Match the whole line.
+  //
+  // Three sub-patterns, joined by alternation:
+  //   A) \[[a-z][a-z0-9 _-]*:[a-z0-9 _:-]*\]    — bracket contains a colon
+  //      (e.g. [memory: user name], [bridge: id], [afk: note])
+  //   B) \[[a-z][a-z0-9 _-]*\]:                  — label followed by external ':'
+  //      (e.g. [jev rules]: ..., [afk]:)
+  //   C) \[[a-z][a-z0-9]*(?:-[a-z0-9]+)+\]       — kebab-case single label
+  //      (e.g. [placeholder-prevent]) — must have at least one hyphen, so
+  //      `[please]` is NOT matched but `[placeholder-prevent]` is.
+  //
+  // This deliberately excludes plain human-readable phrases like `[please fix]`
+  // or `[note]` (no colon, no hyphen, no external colon) which are valid human
+  // text and must NOT be stripped. False negatives (a new harness tag without
+  // colon or hyphen) are safer than false positives (stripping human text).
+  //
+  // The `m` flag makes `^` match the start of each line (multiline).
+  /^(?:\[[a-z][a-z0-9 _-]*:[a-z0-9 _:-]*\]|\[[a-z][a-z0-9 _-]*\]:|\[[a-z][a-z0-9]*(?:-[a-z0-9]+)+\])[^\n]*/gim,
 ];
 
 /**

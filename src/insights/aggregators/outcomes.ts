@@ -127,10 +127,30 @@ export function aggregateOutcomes(options: InsightsOptions & { outcomesDir?: str
       // Only count settled records
       if (rec['state'] !== 'settled') continue;
 
-      // Determine the date to bucket by — prefer settles_after, fall back to now
+      // Determine the date to bucket by.
+      // Preference order:
+      //   1. settles_after — the canonical settlement timestamp (set when the
+      //      relabel-job force-settles, or by explicit_feedback override).
+      //   2. Last history entry's `at` field — written when the label was last
+      //      changed, giving an immutable persisted timestamp close to settle time.
+      //   3. Skip the record — falling back to new Date() (report time) would
+      //      misplace old explicit-feedback records into the current week.
       const settlesAfterStr = rec['settles_after'];
-      const dateStr =
-        typeof settlesAfterStr === 'string' ? settlesAfterStr : new Date().toISOString();
+      let dateStr: string | undefined;
+      if (typeof settlesAfterStr === 'string') {
+        dateStr = settlesAfterStr;
+      } else {
+        // Try the last history entry's at field as an immutable fallback
+        const history = rec['history'];
+        if (Array.isArray(history) && history.length > 0) {
+          const last = history[history.length - 1] as Record<string, unknown> | undefined;
+          if (typeof last?.['at'] === 'string') {
+            dateStr = last['at'] as string;
+          }
+        }
+      }
+      if (dateStr === undefined) continue; // no timestamp available — skip
+
       const dateMs = new Date(dateStr).getTime();
 
       if (isNaN(dateMs) || dateMs < cutoffMs) continue;

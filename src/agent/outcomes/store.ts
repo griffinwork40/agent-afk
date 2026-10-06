@@ -94,6 +94,13 @@ export function listRecords(
 export interface UpsertVotesOptions {
   /** Override the outcomes directory (default: getOutcomesDir()). */
   outcomesDir?: string;
+  /**
+   * Closure reason to store in the record (supplied at immediate-LF time via
+   * the witness trace). When omitted the existing record value is preserved.
+   * Callers that don't know the closure reason (e.g. relabel-job) should omit
+   * this — the value written at session-end time is authoritative.
+   */
+  closureReason?: VerifiedOutcome['closure_reason'];
 }
 
 /**
@@ -128,6 +135,33 @@ export function upsertVotes(
   // Build the record to mutate
   const record: VerifiedOutcome = existing ?? _skeleton(sessionId, base);
 
+  // Persist closure reason when supplied (only at immediate-LF time).
+  // Preserve the existing value when the caller does not know it (relabel-job etc.)
+  if (opts.closureReason !== undefined) {
+    record.closure_reason = opts.closureReason;
+  }
+
+  // Backfill closure_reason from base when the existing record lacks it and
+  // opts.closureReason was not supplied. This covers the race where
+  // appendArtifacts creates a skeleton (no base → no closure_reason) and the
+  // later session-end upsertVotes finds the existing skeleton.  Without the
+  // backfill the skeleton's absent closure_reason causes normalClosure to fall
+  // back to the conservative 'treat as normal' default, which is incorrect for
+  // abnormal terminations already captured in base.
+  if (record.closure_reason === undefined && base?.closure_reason !== undefined && opts.closureReason === undefined) {
+    record.closure_reason = base.closure_reason;
+  }
+
+  // session_ended_at is immutable after first write — preserve the existing
+  // value across all subsequent upsertVotes calls (relabel-job, reask, etc.).
+  // The base record from the session-end hook supplies the initial value.
+  // Backfill from base when the existing record (e.g. an appendArtifacts
+  // skeleton) lacks it — without backfill, lf-reask falls back to mtime for
+  // sessions where a child artifact arrived before session teardown.
+  if (record.session_ended_at === undefined && base?.session_ended_at !== undefined) {
+    record.session_ended_at = base.session_ended_at;
+  }
+
   // Merge votes: dedupe by lf+evidence (incoming wins on collision)
   const merged = _mergeVotes(record.votes, newVotes);
   record.votes = merged;
@@ -150,6 +184,14 @@ export function upsertVotes(
     record.settles_after !== null &&
     nowMs > new Date(record.settles_after).getTime();
 
+  // Derive normalClosure from stored closure_reason.
+  // Records without closure_reason (written before this field was added) are
+  // treated as normal closure (conservative: we don't know it was abnormal).
+  // Only 'abort' and 'iteration_cap' are considered non-normal.
+  const normalClosure =
+    record.closure_reason === undefined ||
+    record.closure_reason === 'normal';
+
   // Re-combine
   const { label, confidence, basis } = combine({
     votes: merged,
@@ -157,6 +199,7 @@ export function upsertVotes(
     artifacts: record.artifacts,
     explicit_feedback: explicitFeedback,
     settleWindowPassed,
+    normalClosure,
   });
 
   // Settle immediately when explicit_feedback overrides
@@ -264,9 +307,9 @@ function _latestExplicitFeedback(votes: Vote[]): Vote | undefined {
     if (v.lf !== 'explicit_feedback') continue;
     if (
       latest === undefined ||
-      v.observed_at > latest.observed_at ||
-      // Tie-break: later position wins (stable on equal timestamps)
-      (v.observed_at === latest.observed_at)
+      // Tie-break: later position wins on equal timestamps (>= replaces the
+      // prior > … || === pair, which was correct but unnecessarily verbose).
+      v.observed_at >= latest.observed_at
     ) {
       latest = v;
     }

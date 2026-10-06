@@ -330,6 +330,9 @@ export const PeerMessagePayloadSchema = z.object({
   peer: z.string(),
   bytes: z.number().int().nonnegative(),
   reason: z.string().optional(),
+  // Present only for action:'held' + reason:'corrupt'; allows correlation of
+  // repeated quarantine events by filename when no parseable envelope exists.
+  file: z.string().optional(),
 });
 
 // ---------------------------------------------------------------------------
