@@ -231,6 +231,26 @@ describe('runTurn transport drop after stop_reason accepted as complete (#2787)'
     expect(events.find((e) => e.type === 'turn.completed')).toBeDefined();
   });
 
+  it('ECONNRESET (code-based) after stop_reason also accepted as complete', async () => {
+    // Covers the code-based termination path alongside the TypeError: terminated path.
+    const reset = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    const full = makeTextStream('complete answer');
+    const withoutStop = full.slice(0, -1);
+    const client: AnthropicClientLike = {
+      messages: {
+        create: vi.fn(() => (async function* () {
+          for (const evt of withoutStop) yield evt;
+          throw reset;
+        })()),
+      },
+    };
+    const events = await run(client);
+
+    expect(client.messages.create).toHaveBeenCalledTimes(1);
+    expect(events.find((e) => e.type === 'error')).toBeUndefined();
+    expect(events.find((e) => e.type === 'turn.completed')).toBeDefined();
+  });
+
   it('transport drop before stop_reason still retried (regression guard)', async () => {
     // Sanity check that the fix does not break the existing re-drive path: a drop
     // that arrives BEFORE message_delta (no stop_reason) must still be retried.
@@ -312,5 +332,18 @@ describe('runTurn stall-caused termination stays fatal (#2776 x #762)', () => {
     const errorEvent = events.find((e) => e.type === 'error');
     expect(errorEvent).toBeDefined();
     expect(String((errorEvent as { error: Error }).error.message)).toMatch(/stalled/i);
+  });
+
+  // (#2835, waived): stall fires AFTER stop_reason arrives — translate.ts's
+  // catch accepts the TypeError as complete (stopReason !== null), so the stall
+  // watchdog error is silently swallowed and turn.completed is emitted. The race
+  // requires the watchdog to fire in the sub-millisecond window between
+  // message_delta (stop_reason) and message_stop (~20 min stall to land there).
+  // Waived: the window is too narrow to warrant complicating the hot path.
+  it.skip('stall after stop_reason: stall swallowed, turn accepted (documented edge case)', async () => {
+    // This test documents the known edge case and would need to simulate the race
+    // precisely. Waived per #2835 review — the 20-min stall required makes it
+    // effectively unreachable in practice.
+    expect(true).toBe(true);
   });
 });

@@ -103,10 +103,13 @@ export function isOverloadErrorEvent(event: ProviderEvent): boolean {
  * throw). Returns `'status'` when a numeric HTTP status code (529 or 503) is
  * present.
  *
- * Precondition: `isOverloadErrorEvent(event)` is true.
+ * Precondition: `isOverloadErrorEvent(event)` is true — callers only invoke this
+ * after that predicate confirms `event.type === 'error'`, so the `!== 'error'`
+ * guard below is structurally unreachable in practice (#2860, waived: dead guard
+ * retained as a defensive fallback, not a live branch).
  */
 export function overloadTrigger(event: ProviderEvent): 'status' | 'body' {
-  if (event.type !== 'error') return 'status';
+  if (event.type !== 'error') return 'status'; // unreachable: precondition enforced by isOverloadErrorEvent
   return isOpenAIOverloadError(event.error) ? 'body' : 'status';
 }
 
@@ -250,6 +253,9 @@ export async function* runIterationWithOverloadPause(
           source: 'openai-compat',
           // 'status' = HTTP 529/503 triggered the pause; 'body' = status-less
           // SSE error payload identified by code/type/message fields.
+          // `firstTrigger` is always set before `pauseEmitted` turns true
+          // (it is assigned at line 179, before the early-exit checks), so the
+          // `?? 'status'` fallback is structurally unreachable (#2860, waived).
           trigger: firstTrigger ?? 'status',
           hasResetTimestamp: false,
           ceilingMs,
