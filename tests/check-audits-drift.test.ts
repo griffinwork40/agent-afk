@@ -135,6 +135,11 @@ jobs:
     // Regression guard for the widened job-boundary regex (^\s{2}[a-zA-Z0-9_-]+:).
     // Before the fix the regex excluded digits, so a job like `test-node26:` would
     // not terminate the lint-build scan and its steps would be misclassified.
+    //
+    // The test-node26 fixture job uses a DIFFERENT gate (audit:funcsize:check) so
+    // that bleed-through produces ['audit:env:check', 'audit:funcsize:check'] and
+    // the toEqual(['audit:env:check']) assertion fails with the broken regex.
+    // Using the same gate in both jobs would allow Set deduplication to mask bleed.
     const gates = deriveCIGates(`
 jobs:
   lint-build:
@@ -144,7 +149,7 @@ jobs:
   test-node26:
     steps:
       - name: should not appear
-        run: pnpm audit:env:check
+        run: pnpm audit:funcsize:check
 `);
 
     expect(gates).toEqual(['audit:env:check']);
