@@ -528,7 +528,10 @@ export async function updatePresenceCwd(sessionId: string, cwd: string): Promise
       const raw = await readFile(filePath, 'utf8');
       const parsed = JSON.parse(raw) as PresenceFileInfo;
       parsed.cwd = cwd;
-      await writeFile(filePath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
+      await atomicWriteFileAsync(filePath, JSON.stringify(parsed, null, 2), {
+        mode: 0o600,
+        mkdirp: false,
+      });
     } catch {
       // Best-effort — presence is non-critical.
     }
@@ -677,16 +680,10 @@ export async function readLivePresenceFiles(
   options: ReadLivePresenceOptions = {},
 ): Promise<PresenceRecord[]> {
   const { maxHeartbeatAgeMs, startTimeProbe } = options;
+  // filterVerifiedLive already excludes 'dead' records; no post-filter needed here.
   const records = await filterVerifiedLive(await readPresenceFiles(), startTimeProbe);
-  return records.filter((r) => {
-    if (r.liveness === 'dead') return false;
-    if (
-      maxHeartbeatAgeMs !== undefined &&
-      r.heartbeatAgeMs !== null &&
-      r.heartbeatAgeMs > maxHeartbeatAgeMs
-    ) {
-      return false;
-    }
-    return true;
-  });
+  if (maxHeartbeatAgeMs === undefined) return records;
+  return records.filter(
+    (r) => r.heartbeatAgeMs === null || r.heartbeatAgeMs <= maxHeartbeatAgeMs,
+  );
 }
