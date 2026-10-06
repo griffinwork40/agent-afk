@@ -12,7 +12,7 @@ import type { AnthropicToolDef } from './types.js';
 
 export const listSessionsTool: AnthropicToolDef = {
   name: 'list_sessions',
-  category: 'subagent',
+  category: 'peer',
   concurrencySafe: true,
   description:
     'List live afk peer sessions on this machine (excluding yourself). ' +
@@ -33,7 +33,7 @@ export const listSessionsTool: AnthropicToolDef = {
 
 export const sendToSessionTool: AnthropicToolDef = {
   name: 'send_to_session',
-  category: 'subagent',
+  category: 'peer',
   concurrencySafe: false,
   description:
     'Send a message to another live afk session on this machine. ' +

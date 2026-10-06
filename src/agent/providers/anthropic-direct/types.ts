@@ -121,6 +121,7 @@ export type ToolCategory =
   | 'write'
   | 'shell'
   | 'subagent'
+  | 'peer'
   | 'skill'
   | 'dag'
   | 'mcp'
