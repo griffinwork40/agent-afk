@@ -28,9 +28,10 @@
  * platforms `os.tmpdir()` is short enough that we use it unchanged.
  *
  * Invariant (ownership): a directory is deleted at close ONLY if this process
- * created it (`owned`), only after `realpath` proves it sits strictly inside
- * the root, and never through a symlink. Pre-existing or foreign directories
- * are used but never removed.
+ * created it (`owned`), only after `lstat` proves it is not a symlink, only
+ * after `realpath` proves it sits strictly inside the root, and always via
+ * the lstat'd path (never via a realpath result that could race). Pre-existing
+ * or foreign directories are used but never removed.
  *
  * Invariant (laziness): allocation only reserves a path. The directory is
  * created on the first shell spawn ({@link ensureSessionTmpdir}), so sessions
@@ -54,6 +55,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { env } from '../../config/env.js';
+import { debugLog } from '../../utils/debug.js';
 import type { AgentConfig } from '../types.js';
 
 type Env = Record<string, string>;
@@ -131,11 +133,19 @@ export function sessionTmpdirRoot(): string {
   return path.join(base, `afk-${who}`);
 }
 
-/** A real directory (not a symlink) owned by this uid. */
+/**
+ * Whether `dir` is a real directory (not a symlink) owned by this process's uid.
+ *
+ * Windows note: `process.getuid` is undefined on Windows, so `currentUid()`
+ * returns `undefined` and the uid ownership check is skipped. The symlink and
+ * isDirectory checks still apply. A full ACL-based ownership check would
+ * require native bindings (e.g. `icacls`) and is left as a future improvement.
+ */
 function isPrivateDir(dir: string): boolean {
   const st = fs.lstatSync(dir);
   if (!st.isDirectory() || st.isSymbolicLink()) return false;
   const uid = currentUid();
+  // uid === undefined on Windows — ownership check skipped (see comment above).
   return uid === undefined || st.uid === uid;
 }
 
@@ -154,6 +164,12 @@ function mkdirPrivate(dir: string): boolean {
 /** One allocated (possibly not yet created) session temp directory. */
 export class SessionTmpdir {
   private owned = false;
+  /**
+   * Cached "ensured" flag: true after the first successful `ensure()` call.
+   * Avoids repeated `lstatSync` on every shell spawn. Reset to false by
+   * `cleanup()` so a re-used instance does not skip re-creation after removal.
+   */
+  private ensured = false;
 
   constructor(
     readonly dir: string,
@@ -168,6 +184,7 @@ export class SessionTmpdir {
 
   /** Create the directory (and its ancestors) if missing. False = unusable. */
   ensure(): boolean {
+    if (this.ensured) return true;
     try {
       if (this.parent !== undefined) {
         if (!this.parent.ensure()) return false;
@@ -176,22 +193,42 @@ export class SessionTmpdir {
         if (!isPrivateDir(this.root)) return false;
       }
       if (mkdirPrivate(this.dir)) this.owned = true;
-      return isPrivateDir(this.dir);
+      const ok = isPrivateDir(this.dir);
+      if (ok) this.ensured = true;
+      return ok;
     } catch {
       return false;
     }
   }
 
-  /** Remove the directory iff owned and provably inside the root. Never throws. */
+  /**
+   * Remove the directory iff owned and provably inside the root. Never throws.
+   *
+   * TOCTOU hardening: the `lstat` result is used to check for a symlink AND
+   * the path we operate on is always `this.dir` (the lstat'd path), never a
+   * realpath result. We still call `realpath` to verify containment inside the
+   * root, but we pass the original `this.dir` to `fs.promises.rm` so that a
+   * concurrent symlink-swap between lstat and realpath cannot redirect the
+   * removal to an unintended target. The `isOwned` guard ensures only paths
+   * this process created are ever deleted.
+   */
   async cleanup(): Promise<void> {
     if (!this.owned) return;
     this.owned = false;
+    this.ensured = false;
     try {
-      if ((await fs.promises.lstat(this.dir)).isSymbolicLink()) return;
+      // Lstat the recorded path. If it is a symlink, bail — never follow it.
+      const st = await fs.promises.lstat(this.dir);
+      if (st.isSymbolicLink()) return;
+      // Verify containment inside our root via realpath (resolves any ancestor
+      // symlinks in the root path itself, e.g. /tmp → /private/tmp on macOS).
       const realRoot = await fs.promises.realpath(this.root);
+      // Use realpath on this.dir only to check containment. We rm this.dir
+      // itself (not realDir) to avoid the TOCTOU window between realpath and rm.
       const realDir = await fs.promises.realpath(this.dir);
       if (!realDir.startsWith(realRoot + path.sep)) return;
-      await fs.promises.rm(realDir, { recursive: true, force: true });
+      // Remove this.dir (the lstat-verified, non-symlink path).
+      await fs.promises.rm(this.dir, { recursive: true, force: true });
     } catch {
       // Already gone, or unreadable: nothing this session can reclaim.
     }
@@ -268,9 +305,14 @@ export function ensureSessionTmpdir(e: Env | undefined): boolean {
  * The env to spawn with: `e` as-is when its session dir exists (created
  * lazily here), else `e` minus the temp-dir keys so the child inherits the
  * process temp dir instead of a path that does not exist.
+ *
+ * When `ensure()` fails the temp-dir keys are silently dropped, falling back
+ * to the inherited TMPDIR. A debugLog line is emitted so operators running
+ * with AFK_DEBUG=1 can diagnose the root cause without spamming production.
  */
 export function resolveSpawnTmpEnv(e: Env | undefined): Env | undefined {
   if (e === undefined || ensureSessionTmpdir(e)) return e;
+  debugLog(`[session-tmpdir] ensure() failed for ${e['TMPDIR'] ?? '(none)'}; falling back to inherited TMPDIR`);
   const copy = { ...e };
   for (const key of TMP_ENV_KEYS) delete copy[key];
   return copy;

@@ -11,6 +11,24 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.299.8] - 2026-10-06
+
+### Fixed
+- widen drift-test job regex to include digits/uppercase; annotate heredoc (#3042) (2a7676d8)
+
+## [5.299.7] - 2026-10-06
+
+### Fixed
+- replace `as OutputEvent[]` casts with `satisfies` in stream tests (#3041) (2742fbdd)
+- head+tail signature cap, remove dead nudged field, reword invariant comment (#3043) (be05492c)
+- parentRootSessionId JSDoc and microtask test drain (#3035) (fcf63c7a)
+- consolidate safeAnswer into farm-callbacks.helpers.ts (#3044) (7992ff73)
+- update is_current_session description, fix TOCTOU, document 2048-byte bound (#3045) (47eb5f2e)
+- locale-neutral schtasks CSV parsing, CR/LF/NUL guard, restart upgrade, dedup (#3034) (f29b7d75)
+
+### Changed
+- strengthen spy assertions in telemetry-write-guard tests (#3036) (988d38a7)
+
 ## [5.299.6] - 2026-10-06
 
 ### Fixed

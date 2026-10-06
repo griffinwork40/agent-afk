@@ -145,9 +145,10 @@ describe('foldForDisplay', () => {
     expect(texts(foldForDisplay([parent, fork]))).toEqual(['q1', 'a1', 'q2']);
   });
 
-  // S1: soft-truncate reasons other than 'compact' — resync, repair, provider_switch,
+  // S1: soft-truncate reasons — compact, resync, repair, provider_switch,
   // and a bare truncate (no reason) — must all keep displaced rows in the display.
   it.each<[JournalTruncateReason | undefined, string]>([
+    ['compact', 'compact'],
     ['resync', 'resync'],
     ['repair', 'repair'],
     ['provider_switch', 'provider_switch'],
@@ -164,6 +165,23 @@ describe('foldForDisplay', () => {
       ap(4, user('q3')),
     ];
     expect(texts(foldForDisplay([recs]))).toEqual(['q1', 'a1', 'q2', 'a2', 'q3']);
+  });
+
+  // S2: all-sentinel displacement — when every displaced row is a preamble
+  // sentinel (-1), pending stays empty and pendingWindowCap must reset to -1.
+  // A new message appended after the truncate must get its own display row
+  // (not be misclassified as an orphan within a phantom window).
+  it('S2: pendingWindowCap resets to -1 when all displaced rows are preamble sentinels', () => {
+    // History: summary(-1) + ack(-1) are the only rows (both sentinels).
+    // Soft-truncate to 0: pending stays empty → cap must be -1.
+    // Re-append user('new') at index 0: index (0) > cap (-1), so it is treated
+    // as a genuinely new message and gets its own display row.
+    const recs = [
+      ap(0, summary()), ap(1, ack()),
+      tr(0, 'compact'),
+      ap(0, user('new')),
+    ];
+    expect(texts(foldForDisplay([recs]))).toEqual(['new']);
   });
 
   // C1: chained compact → preamble → provider_switch → re-append.

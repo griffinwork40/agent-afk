@@ -17,10 +17,19 @@ import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { validatePatchChanges, type PatchFileChange } from './patch-validate.js';
 import { applyPatch } from './patch-apply-engine.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { isBlankInput } from '../subagent/optional-input.js';
 
 // ---------------------------------------------------------------------------
 // Input parsing
 // ---------------------------------------------------------------------------
+
+/**
+ * True when `content` is an unused placeholder: exactly `''` or `null` while
+ * `edits` is a non-empty array.
+ */
+function isPlaceholderContent(content: unknown, edits: unknown): boolean {
+  return (content === '' || content === null) && Array.isArray(edits) && edits.length > 0;
+}
 
 /**
  * Parse and coerce the raw tool input into a typed PatchApplyInput.
@@ -55,14 +64,22 @@ function parsePatchApplyInput(input: unknown): {
 
     const change: PatchFileChange = { path: rawItem['path'] };
 
-    if (rawItem['expected_hash'] !== undefined) {
+    // Contract: a blank expected_hash ("", whitespace, null) is treated as
+    // absent: no hash precondition. See edit-file.ts for the rationale.
+    if (!isBlankInput(rawItem['expected_hash'])) {
       if (typeof rawItem['expected_hash'] !== 'string') {
         throw new Error(`changes[${i}].expected_hash must be a string.`);
       }
       change.expected_hash = rawItem['expected_hash'];
     }
 
-    if (rawItem['content'] !== undefined) {
+    // Contract: `content` exactly "" or null alongside a NON-EMPTY `edits`
+    // array is a filled-in placeholder, not a request to truncate the file, so
+    // it is treated as absent and the edits apply. Deliberately NOT
+    // isBlankInput: whitespace-only content is a real payload, and a blank
+    // `content` with no edits (or empty edits) still means "replace the file
+    // with this" and still trips the mutually_exclusive check when ambiguous.
+    if (rawItem['content'] !== undefined && !isPlaceholderContent(rawItem['content'], rawItem['edits'])) {
       if (typeof rawItem['content'] !== 'string') {
         throw new Error(`changes[${i}].content must be a string.`);
       }

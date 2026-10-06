@@ -19,17 +19,7 @@ import {
 import { recordPrCreated, type FarmManifest } from '../../agent/worktree.js';
 import { resolveWinnerBranch } from '../../skills/score/winner.js';
 import type { FarmCallbackDeps } from './farm-callbacks.js';
-
-type LogFn = (...args: unknown[]) => void;
-
-/** Local copy of safeAnswer -- identical to the one in farm-callbacks.ts. */
-async function safeAnswer(ctx: Context, text: string, log: LogFn): Promise<void> {
-  try {
-    await ctx.answerCbQuery(text);
-  } catch (err) {
-    log('[farm-callback] answerCbQuery failed:', err);
-  }
-}
+import { safeAnswer, type LogFn } from './farm-callbacks.helpers.js';
 
 /**
  * Handle the Open PR (`p`) button.

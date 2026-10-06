@@ -326,9 +326,14 @@ function _mergeVotes(existing: Vote[], incoming: Vote[]): Vote[] {
   for (const v of existing) {
     map.set(`${v.lf}\x00${v.evidence}`, v);
   }
-  // Incoming replaces on collision (idempotent re-submission)
+  // Incoming replaces on collision (idempotent re-submission).
+  // delete-then-set preserves Map insertion order: the updated entry moves to
+  // the end so _latestExplicitFeedback's forward scan sees arrival order, not
+  // the position of the first occurrence of this key.
   for (const v of incoming) {
-    map.set(`${v.lf}\x00${v.evidence}`, v);
+    const key = `${v.lf}\x00${v.evidence}`;
+    map.delete(key);
+    map.set(key, v);
   }
   return Array.from(map.values());
 }

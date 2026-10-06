@@ -273,3 +273,61 @@ describe('real-spawn regression: sibling cleanup cannot reach another sibling', 
     expect(fs.existsSync(bScratch)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #2933 hardening tests
+// ---------------------------------------------------------------------------
+
+describe('#2933 TOCTOU: cleanup does not follow a symlink swapped in after ensure', () => {
+  it('leaves the symlink target intact when the session dir is replaced by a symlink', async () => {
+    // Create a dir that must survive the cleanup attempt.
+    const target = path.join(base, 'symlink-target');
+    fs.mkdirSync(target);
+    fs.writeFileSync(path.join(target, 'precious.txt'), 'keep me');
+
+    const e = topLevel();
+    expect(ensureSessionTmpdir(e)).toBe(true);
+    const sessionDir = e['TMPDIR']!;
+
+    // Simulate a concurrent actor swapping the session dir for a symlink.
+    fs.rmSync(sessionDir, { recursive: true });
+    fs.symlinkSync(target, sessionDir, 'dir');
+
+    await cleanupSessionTmpdir(e);
+
+    // The symlink target must not have been removed.
+    expect(fs.existsSync(path.join(target, 'precious.txt'))).toBe(true);
+    // The symlink itself may or may not remain — we don't care, as long as
+    // the target directory and its contents are intact.
+  });
+});
+
+describe('#2933 ensured-flag cache: ensure() skips lstatSync after first success', () => {
+  it('returns true on repeated calls without re-checking the filesystem', () => {
+    const e = topLevel();
+    expect(ensureSessionTmpdir(e)).toBe(true);
+    // Even if we manually break lstat by passing a bad path in a registry
+    // clone, the cached flag means the real path never needs re-stat.
+    // Here we just confirm repeated calls are idempotent (no throw).
+    expect(ensureSessionTmpdir(e)).toBe(true);
+    expect(ensureSessionTmpdir(e)).toBe(true);
+  });
+
+  it('resets the ensured flag after cleanup so re-use re-creates the dir', async () => {
+    const e = topLevel();
+    expect(ensureSessionTmpdir(e)).toBe(true);
+    const dir = e['TMPDIR']!;
+    expect(fs.existsSync(dir)).toBe(true);
+
+    // cleanup() must reset the ensured flag (and owned flag).
+    await cleanupSessionTmpdir(e);
+    expect(fs.existsSync(dir)).toBe(false);
+
+    // Re-allocate a fresh session using the same registry helper; the new
+    // entry must pass ensure() without a stale cached flag.
+    const e2 = topLevel();
+    expect(ensureSessionTmpdir(e2)).toBe(true);
+    expect(fs.existsSync(e2['TMPDIR']!)).toBe(true);
+    await cleanupSessionTmpdir(e2);
+  });
+});

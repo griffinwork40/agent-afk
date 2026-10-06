@@ -318,6 +318,49 @@ describe('upsertVotes – newest explicit_feedback vote wins', () => {
     expect(labels).toContain('succeeded');
     expect(labels).toContain('failed');
   });
+
+  // Regression test for #2934: _mergeVotes collision on same lf+evidence key
+  // must delete-then-set so the updated entry moves to the end of the Map,
+  // preserving arrival order for _latestExplicitFeedback's forward scan.
+  //
+  // Sequence:
+  //   1. good/operator@t1       → key 'explicit_feedback\x00operator' enters Map at position 0
+  //   2. bad/<note>@t2          → key 'explicit_feedback\x00<note>'   enters Map at position 1
+  //   3. good/operator@t2       → same key as #1 — without delete-then-set it stays at position 0,
+  //                               and _latestExplicitFeedback's >= scan returns the bad vote (#2)
+  //                               rather than the most-recently-arrived good vote (#3).
+  it('3-vote tie-break: good/operator@t1, bad/<note>@t2, good/operator@t2 → latest must be good (regression #2934)', () => {
+    const t1 = '2024-01-01T10:00:00.000Z';
+    const t2 = '2024-01-01T10:00:00.000Z'; // same timestamp as t1 to exercise the tie-break path
+
+    // Vote 1: good/operator@t1
+    upsertVotes('sess-2934', [
+      makeVote({ lf: 'explicit_feedback', vote: 1, strength: 'strong', evidence: 'operator',
+        observed_at: t1 }),
+    ], undefined, { outcomesDir: tmpDir });
+
+    // Vote 2: bad/<note>@t2 (different evidence, both survive dedup)
+    upsertVotes('sess-2934', [
+      makeVote({ lf: 'explicit_feedback', vote: -1, strength: 'strong', evidence: 'my note',
+        observed_at: t2 }),
+    ], undefined, { outcomesDir: tmpDir });
+
+    // Vote 3: good/operator@t2 — same lf+evidence as vote 1, same timestamp as vote 2.
+    // Without the delete-then-set fix, _mergeVotes leaves this entry at position 0
+    // in the Map, so _latestExplicitFeedback's >= scan returns the bad vote at position 1.
+    upsertVotes('sess-2934', [
+      makeVote({ lf: 'explicit_feedback', vote: 1, strength: 'strong', evidence: 'operator',
+        observed_at: t2 }),
+    ], undefined, { outcomesDir: tmpDir });
+
+    const rec = readRecord('sess-2934', tmpDir);
+    // The 3rd vote (good/operator) is the last operator action — it must win.
+    expect(rec?.label).toBe('succeeded');
+    expect(rec?.confidence).toBe(1.0);
+    expect(rec?.state).toBe('settled');
+    // Two distinct lf+evidence entries survive: good/operator (replaced) + bad/<note>
+    expect(rec?.votes.filter((v) => v.lf === 'explicit_feedback')).toHaveLength(2);
+  });
 });
 
 // ---------------------------------------------------------------------------

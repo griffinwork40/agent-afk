@@ -54,6 +54,10 @@ if [ -n "$push_stdin" ]; then
       0000000000000000000000000000000000000000) ;;
       *) all_deletions=0 ;;
     esac
+  # Unquoted heredoc delimiter is intentional: $push_stdin must expand here.
+  # Primary safety boundary: `IFS=' ' read -r` splits on spaces only with no
+  # eval, so each field is consumed as a plain string regardless of content.
+  # Secondary: git refs cannot contain '$' or backticks, so no injection risk.
   done <<PUSH_STDIN_END
 $push_stdin
 PUSH_STDIN_END

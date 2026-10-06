@@ -13,16 +13,7 @@ import type { Context } from 'telegraf';
 import { buildFarmSlug, recordRespawn, type FarmManifest } from '../../agent/worktree.js';
 import { resolveWinnerBranch } from '../../skills/score/winner.js';
 import type { FarmCallbackDeps } from './farm-callbacks.js';
-
-type LogFn = (...args: unknown[]) => void;
-
-async function safeAnswer(ctx: Context, text: string, log: LogFn): Promise<void> {
-  try {
-    await ctx.answerCbQuery(text);
-  } catch (err) {
-    log('[farm-callback] answerCbQuery failed:', err);
-  }
-}
+import { safeAnswer, type LogFn } from './farm-callbacks.helpers.js';
 
 // Child slug derivation: delegated to `buildFarmSlug` in worktree.ts so the
 // slug we write into `respawnedAs` on the parent manifest is byte-identical

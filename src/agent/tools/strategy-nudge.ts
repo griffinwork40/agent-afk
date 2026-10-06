@@ -75,11 +75,14 @@ const MIN_SIGNATURE_CHARS = 12;
 const MAX_QUOTED_CHARS = 200;
 const MAX_LINES_SCANNED = 400;
 /**
- * Maximum line length fed into normalizeErrorLine. Bounds the O(n^2) path-collapse
- * regex against a long slash-free run of [\w.@+-] chars in untrusted tool output.
- * 500 chars is enough for any real error message; bash output can reach ~100KB.
+ * Head and tail length used when capping a long line fed into normalizeErrorLine.
+ * Bounds the O(n²) path-collapse regex against a long slash-free run of
+ * [\w.@+-] chars in untrusted tool output, while keeping the trailing error
+ * message. test_run bullets put the message LAST (after the test name), so a
+ * prefix-only cap can drop the distinguishing message and collapse two different
+ * errors into the same signature.
  */
-const MAX_NORMALIZE_LINE_LEN = 500;
+const MAX_NORMALIZE_LINE_HALF = 250;
 
 // eslint-disable-next-line no-control-regex
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
@@ -126,10 +129,17 @@ export function findErrorLine(content: string): string | null {
  * numbers such as `expected 1 to be 2`).
  */
 export function normalizeErrorLine(line: string): string {
-  // Bound input length before the O(n^2) path-collapse regex.
+  // Keep head + tail when the line is long so the trailing error message is
+  // preserved. test_run bullets put the message LAST (after the test name), so
+  // a prefix-only cap can drop it and collapse two different errors into one
+  // signature. The total fed to the regex is ≤ 2*MAX_NORMALIZE_LINE_HALF + 3,
+  // which keeps the O(n²) path-collapse regex bounded.
   // The slice is taken BEFORE any substitution so callers that already hold the
   // raw line for the notice still receive the full text (errorSignature keeps raw).
-  const bounded = line.length > MAX_NORMALIZE_LINE_LEN ? line.slice(0, MAX_NORMALIZE_LINE_LEN) : line;
+  const bounded =
+    line.length > MAX_NORMALIZE_LINE_HALF * 2
+      ? line.slice(0, MAX_NORMALIZE_LINE_HALF) + ' … ' + line.slice(-MAX_NORMALIZE_LINE_HALF)
+      : line;
   // Strip literal NUL bytes before the placeholder pass: a real \x00pN\x00 in
   // tool output would collide with placeholder tokens and corrupt restoration.
   // eslint-disable-next-line no-control-regex
@@ -192,7 +202,6 @@ interface SignatureState {
   count: number;
   lastSeen: number;
   fingerprints: Set<string>;
-  nudged: boolean;
 }
 
 /**
@@ -223,12 +232,15 @@ export class StrategyNudger {
     if (state !== undefined && this.clock - state.lastSeen > STRATEGY_NUDGE_WINDOW) {
       state.count = 0;
       state.fingerprints.clear();
-      // Invariant: `nudged` is intentionally NOT reset here. Once a signature
-      // has fired the nudge it must never fire again, even after a window reset
-      // (the `fired` Set is the authoritative guard; it also survives eviction).
+      // Invariant: the count and fingerprints reset on window expiry, but the
+      // `fired` Set is the authoritative re-fire guard and is intentionally NOT
+      // touched here. Once a signature fires the nudge it must never fire again,
+      // even after the window resets and the count climbs back to the threshold.
+      // `fired` also survives Map eviction (evictOverflow), so there is no path
+      // through which a previously-fired signature can nudge a second time.
     }
     if (state === undefined) {
-      state = { count: 0, lastSeen: this.clock, fingerprints: new Set(), nudged: false };
+      state = { count: 0, lastSeen: this.clock, fingerprints: new Set() };
       this.signatures.set(sig.signature, state);
       this.evictOverflow();
     }
@@ -237,7 +249,6 @@ export class StrategyNudger {
     state.fingerprints.add(repeatFailureFingerprint(call));
 
     if (this.fired.has(sig.signature) || state.count < STRATEGY_NUDGE_THRESHOLD) return null;
-    state.nudged = true;
     this.fired.add(sig.signature);
     const distinctCalls = state.fingerprints.size > 1;
     return {
