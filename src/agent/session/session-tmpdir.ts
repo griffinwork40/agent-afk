@@ -204,33 +204,66 @@ export class SessionTmpdir {
   /**
    * Remove the directory iff owned and provably inside the root. Never throws.
    *
-   * TOCTOU hardening: the `lstat` result is used to check for a symlink AND
-   * the path we operate on is always `this.dir` (the lstat'd path), never a
-   * realpath result. We still call `realpath` to verify containment inside the
-   * root, but we pass the original `this.dir` to `fs.promises.rm` so that a
-   * concurrent symlink-swap between lstat and realpath cannot redirect the
-   * removal to an unintended target. The `isOwned` guard ensures only paths
-   * this process created are ever deleted.
+   * Invariant (TOCTOU window, residual risk, and mitigation strategy):
+   * Node has no O_NOFOLLOW equivalent for recursive rm, so an attacker who
+   * can write to the parent directory could swap this.dir for a symlink in
+   * the gap between our lstat and the fs.promises.rm call. The previous
+   * implementation operated directly on this.dir throughout, leaving that
+   * window open.
+   *
+   * We close the window by renaming this.dir to a randomly-named sibling
+   * before removing it. The sequence is:
+   *   1. lstat(this.dir) to confirm it is a real directory, not a symlink.
+   *   2. realpath containment check to confirm it sits inside this.root.
+   *   3. rename(this.dir, sibling) where sibling is an unpredictable name
+   *      in the same parent directory. The rename is atomic on POSIX local
+   *      filesystems: once it succeeds, this.dir no longer exists, so an
+   *      attacker cannot swap it. The renamed path is unguessable, so an
+   *      attacker cannot pre-place a symlink at it.
+   *   4. lstat(sibling) to re-confirm the renamed entry is still a real
+   *      directory (not a symlink that somehow replaced it between steps 3
+   *      and 4, which would require attacker knowledge of the random name
+   *      before it is chosen, which is infeasible with 32 bits of entropy).
+   *   5. rm(sibling) with recursive+force.
+   *
+   * Residual risk: on network filesystems (NFS, SMB) or across mount points
+   * rename may not be atomic, and the parent-directory write-access
+   * prerequisite for this attack requires uid-level privilege in a
+   * uid-restricted directory. The residual exposure is therefore negligible
+   * in the threat model this module targets (concurrent session isolation on
+   * a local developer machine or CI runner). The isOwned guard ensures we
+   * only ever delete directories this process created.
    */
   async cleanup(): Promise<void> {
     if (!this.owned) return;
     this.owned = false;
     this.ensured = false;
     try {
-      // Lstat the recorded path. If it is a symlink, bail — never follow it.
+      // Step 1: lstat the recorded path. If it is a symlink, bail immediately.
       const st = await fs.promises.lstat(this.dir);
-      if (st.isSymbolicLink()) return;
-      // Verify containment inside our root via realpath (resolves any ancestor
-      // symlinks in the root path itself, e.g. /tmp → /private/tmp on macOS).
+      if (!st.isDirectory() || st.isSymbolicLink()) return;
+      // Step 2: verify containment inside our root via realpath (resolves
+      // ancestor symlinks in the root path itself, e.g. /tmp on macOS).
       const realRoot = await fs.promises.realpath(this.root);
-      // Use realpath on this.dir only to check containment. We rm this.dir
-      // itself (not realDir) to avoid the TOCTOU window between realpath and rm.
       const realDir = await fs.promises.realpath(this.dir);
       if (!realDir.startsWith(realRoot + path.sep)) return;
-      // Remove this.dir (the lstat-verified, non-symlink path).
-      await fs.promises.rm(this.dir, { recursive: true, force: true });
+      // Step 3: atomically rename this.dir to an unguessable sibling name.
+      // After this succeeds, this.dir no longer exists, so a concurrent actor
+      // cannot swap it for a symlink before the rm that follows.
+      const siblingName = randomBytes(4).toString('hex') + '.rm';
+      const sibling = path.join(path.dirname(this.dir), siblingName);
+      await fs.promises.rename(this.dir, sibling);
+      // Step 4: re-verify the renamed entry is still a real directory.
+      // If rename landed on a symlink (infeasible with 32-bit random suffix
+      // on a local FS, but checked for defense-in-depth), bail.
+      const st2 = await fs.promises.lstat(sibling);
+      if (!st2.isDirectory() || st2.isSymbolicLink()) return;
+      // Step 5: remove the renamed directory. The path is unguessable and
+      // this.dir no longer exists, so the TOCTOU window is closed.
+      await fs.promises.rm(sibling, { recursive: true, force: true });
     } catch {
-      // Already gone, or unreadable: nothing this session can reclaim.
+      // Already gone, rename failed (cross-device), or unreadable:
+      // nothing this session can reclaim.
     }
   }
 }
