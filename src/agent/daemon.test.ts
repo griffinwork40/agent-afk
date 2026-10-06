@@ -19,7 +19,7 @@ import type { AgentConfig, Message } from './types.js';
 import { validateScheduledTask, type ScheduledTask } from './daemon/triggers.js';
 import { CronScheduler } from './daemon/scheduler.js';
 import { startDaemon, type DaemonHandle } from './daemon.js';
-import { getDaemonStateDir } from '../paths.js';
+import { getDaemonStateDir, getAfkHome } from '../paths.js';
 
 // node-cron schedules tasks against real wall-clock time. We never let them
 // fire — every test uses scheduler.tick(taskId) directly to invoke the
@@ -982,6 +982,10 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
       ]),
     );
     try {
+      // Isolation assertion: getAfkHome() must resolve to tmpHome so the store
+      // module reads from our temp dir, not ~/.afk.  Verifies that vi.stubEnv
+      // is active before the daemon is spun up and getSchedule() is called.
+      expect(getAfkHome()).toBe(tmpHome);
       const h = await spinDaemon();
       const res = await fetch(`http://localhost:${h.port}/tasks`, {
         method: 'POST',
@@ -999,6 +1003,9 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
       expect(task?.executor).toBe('shell');
     } finally {
       vi.unstubAllEnvs();
+      // Isolation assertion: after unstub the store path must no longer resolve
+      // to tmpHome, so a subsequent test in any order cannot inherit this dir.
+      expect(getAfkHome()).not.toBe(tmpHome);
       rmSync(tmpHome, { recursive: true, force: true });
     }
   });
@@ -1024,6 +1031,10 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
       ]),
     );
     try {
+      // Isolation assertion: getAfkHome() must resolve to tmpHome so the store
+      // module reads from our temp dir, not ~/.afk.  Verifies that vi.stubEnv
+      // is active before the daemon is spun up and getSchedule() is called.
+      expect(getAfkHome()).toBe(tmpHome);
       const h = await spinDaemon();
       const res = await fetch(`http://localhost:${h.port}/tasks`, {
         method: 'POST',
@@ -1040,6 +1051,9 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
       expect(h.scheduler.list().some((t) => t.taskId === 'shell-live')).toBe(false);
     } finally {
       vi.unstubAllEnvs();
+      // Isolation assertion: after unstub the store path must no longer resolve
+      // to tmpHome, so a subsequent test in any order cannot inherit this dir.
+      expect(getAfkHome()).not.toBe(tmpHome);
       rmSync(tmpHome, { recursive: true, force: true });
     }
   });
