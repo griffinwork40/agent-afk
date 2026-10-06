@@ -90,6 +90,13 @@ export const SessionPhaseNameSchema = z.enum([
   // normally. `metadata` carries `cap` (the configured ceiling). See
   // SessionPhaseName JSDoc in types.ts.
   'stop_hook_cap_reached',
+  // Last-resort orphan repair fired (single event, no paired start). Emitted
+  // from openRound only when repairOrphanToolUses actually changed history —
+  // i.e. a corruption path evaded both the tool-round rollback (tool-round.ts)
+  // and the turn-driver repair (query-turn-driver.ts:132). metadata carries
+  // hoistedIndices, orphanIds, assistantIndices, bridgedIndices, messageCount,
+  // and shapeBefore (structural summary, never message content). See #2136.
+  'orphan_repair',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

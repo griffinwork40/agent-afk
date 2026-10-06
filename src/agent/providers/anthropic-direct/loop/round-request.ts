@@ -336,7 +336,27 @@ export async function* openRound({
   // the only site that surfaces the 400 — so catching it here eliminates the
   // entire class of orphan-induced request failures. The function is a no-op
   // when history is healthy (single linear scan), so the overhead is negligible.
-  repairOrphanToolUses(input.messages);
+  //
+  // Diagnostic (#2136): when repair fires here it means corruption evaded BOTH
+  // prior defenses — high-signal event. Capture the report and emit an
+  // `orphan_repair` session_phase trace event so the shape of the corruption
+  // is preserved for analysis. The emit is fire-and-forget (consistent with
+  // other phase events in this file) and never delays the request.
+  const orphanRepairReport = repairOrphanToolUses(input.messages);
+  if (orphanRepairReport !== null) {
+    void emitSessionPhase(input.traceWriter, {
+      phase: 'orphan_repair',
+      resolvedModel: input.model,
+      metadata: {
+        hoistedIndices: orphanRepairReport.hoistedMessageIndices.join(','),
+        orphanIds: orphanRepairReport.orphanToolUseIds.join(','),
+        assistantIndices: orphanRepairReport.orphanAssistantIndices.join(','),
+        bridgedIndices: orphanRepairReport.bridgedIndices.join(','),
+        messageCount: orphanRepairReport.messageCountBefore,
+        shapeBefore: orphanRepairReport.shapeBefore,
+      },
+    });
+  }
 
   // Many-image dimension guard: Anthropic drops the per-image pixel ceiling
   // from 8 000 px to 2 000 px when a request carries >20 image blocks. Images
