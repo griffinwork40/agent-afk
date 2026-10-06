@@ -2113,9 +2113,9 @@ describe('ToolLane.mergeAgentLabel', () => {
     const overlay = lane.getOverlay();
     // The raw C1 byte must not appear in either the overlay or flushed scrollback.
     expect(overlay).not.toContain('\x9C');
-    const flushed = lane.flush().join('\n');
-    // After result, check scrollback too
+    lane.flush(); // advance to post-start state before adding result
     lane.addResult('dispatch-1', makeResult('done'));
+    // After result, check scrollback too
     const scrollback = lane.flush().join('\n');
     expect(scrollback).not.toContain('\x9C');
   });

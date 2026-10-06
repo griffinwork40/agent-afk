@@ -352,6 +352,10 @@ export function checkPauseAnnotations(ctx: LifecycleContext): boolean {
     // Also drain resize invalidations on quiet preparation frames. Gate on
     // isDirty() so the full compose-and-setOverlay path is skipped entirely
     // on ticks where neither the tool lane nor any other slot changed.
+    // Rationale: setOverlay() triggers a terminal write + compositor geometry
+    // recalculation on every call; skipping it on clean ticks avoids redundant
+    // escape-sequence output (~dozens of bytes per tick) and prevents the double-
+    // setOverlay desync that produces phantom blank rows in scrollback (see c862d2b3).
     if (changed || ctx.overlayComposer.isDirty()) ctx.overlayComposer.flush();
   }
 
