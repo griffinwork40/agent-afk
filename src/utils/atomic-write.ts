@@ -44,6 +44,7 @@ import { mkdir, writeFile, rename, rm, chmod } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { sleepSync } from './sleep-sync.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -137,15 +138,6 @@ function makeTmpPath(dest: string): string {
 const WIN_RENAME_TRANSIENT = new Set(['EPERM', 'EACCES', 'EBUSY']);
 
 /**
- * Synchronous sleep using `Atomics.wait` on a shared buffer.
- * `setTimeout` is not available in synchronous contexts; this is the
- * standard portable alternative for a sync delay.
- */
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/**
  * Attempt `rename(tmp, dest)` synchronously, retrying up to `maxRetries`
  * times on transient Windows errors (EPERM / EACCES / EBUSY).  Each retry
  * waits an exponentially increasing, clamped delay so callers converge quickly.
@@ -177,6 +169,11 @@ export function renameWithRetrySync(
       const code = (err as NodeJS.ErrnoException).code;
       if (platform !== 'win32' || !WIN_RENAME_TRANSIENT.has(code ?? '')) throw err;
       lastErr = err;
+      // Emit on entry to the retry path so Windows transient rename races are
+      // visible to operators rather than silently absorbed (finding #2870-3).
+      if (attempt === 0) {
+        process.stderr.write(`[atomic-write] rename retry: ${code} on attempt 0 of ${retries} (${dest})\n`);
+      }
       if (attempt < retries) sleepSync(Math.min(10 * 2 ** attempt, 5000));
     }
   }
@@ -214,6 +211,11 @@ export async function renameWithRetry(
       // codes are permanent and must propagate immediately.
       if (_platform !== 'win32' || !WIN_RENAME_TRANSIENT.has(code ?? '')) throw err;
       lastErr = err;
+      // Emit on entry to the retry path so Windows transient rename races are
+      // visible to operators rather than silently absorbed (finding #2870-3).
+      if (attempt === 0) {
+        process.stderr.write(`[atomic-write] rename retry: ${code} on attempt 0 of ${maxRetries} (${dest})\n`);
+      }
       // Skip the sleep on the final attempt — we are about to throw anyway.
       if (attempt < maxRetries) await sleep(Math.min(10 * 2 ** attempt, 5000));
     }

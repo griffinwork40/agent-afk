@@ -13,6 +13,7 @@ import Database from 'better-sqlite3';
 import type BetterSqlite3 from 'better-sqlite3';
 import { chmodSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
+import { sleepSync } from '../../utils/sleep-sync.js';
 
 const SCHEMA_VERSION = 1;
 const NS_KEY_PATTERN = /^[A-Za-z0-9_.-]+$/;
@@ -74,10 +75,6 @@ function validateJson(v: unknown): void {
   } catch {
     throw new Error(`StateStore: value is not JSON-serializable`);
   }
-}
-
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /**

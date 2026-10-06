@@ -10,6 +10,7 @@
 
 import type BetterSqlite3 from 'better-sqlite3';
 import { debugLog } from '../../utils/debug.js';
+import { sleepSync } from '../../utils/sleep-sync.js';
 
 /**
  * Increment this constant whenever the schema changes in a backward-incompatible way.
@@ -217,12 +218,4 @@ export function enableWalMode(db: BetterSqlite3.Database): void {
   }
 }
 
-/**
- * Block the current thread for `ms` without a busy loop, via a never-notified
- * Atomics.wait on a private SharedArrayBuffer. Used only to back off a
- * contended WAL-mode switch during MemoryStore construction (rare, bounded).
- * Node permits Atomics.wait on the main thread (unlike browsers).
- */
-export function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
+
