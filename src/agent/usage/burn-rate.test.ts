@@ -36,6 +36,31 @@ describe('computeBurnRate — suppression: too few samples', () => {
   });
 });
 
+describe('computeBurnRate — suppression: plateau-then-cool (rule 5)', () => {
+  it('returns null for rising-start / declining-tail with positive net delta', () => {
+    // Codex P1 scenario: [0.50, 0.80, 0.79, 0.78].
+    // Rule 3 passes (0.50→0.80 is a rising pair).
+    // Net delta is +0.28 so the old code would project an ETA.
+    // Rule 5 (latest delta must be positive) suppresses: 0.79→0.78 is declining.
+    const s = samples([0.50, 0.80, 0.79, 0.78], NOW - 4 * MIN_MS, MIN_MS);
+    expect(computeBurnRate(s, NOW)).toBeNull();
+  });
+
+  it('returns null when last pair is flat after a rise', () => {
+    // [0.50, 0.70, 0.70]: rule 3 passes, rule 5 suppresses (0.70 === 0.70).
+    const s = samples([0.50, 0.70, 0.70], NOW - 3 * MIN_MS, MIN_MS);
+    expect(computeBurnRate(s, NOW)).toBeNull();
+  });
+
+  it('returns a projection when the tail pair is still rising after a plateau', () => {
+    // [0.50, 0.80, 0.79, 0.81]: last pair 0.79→0.81 is rising — ETA allowed.
+    const s = samples([0.50, 0.80, 0.79, 0.81], NOW - 4 * MIN_MS, MIN_MS);
+    const result = computeBurnRate(s, NOW);
+    expect(result).not.toBeNull();
+    expect(result!.ratePerMs).toBeGreaterThan(0);
+  });
+});
+
 describe('computeBurnRate — suppression: idle / decaying session', () => {
   it('returns null when utilization is flat (no rising pair)', () => {
     const s = samples([0.6, 0.6, 0.6, 0.6], NOW - 4 * MIN_MS, MIN_MS);
@@ -49,13 +74,12 @@ describe('computeBurnRate — suppression: idle / decaying session', () => {
     expect(computeBurnRate(s, NOW)).toBeNull();
   });
 
-  it('does not suppress when at least one adjacent pair is rising', () => {
-    // Pattern: falls, rises, falls — the rising pair (0.8→0.85) is enough.
+  it('suppresses when mid-series rises but the last pair falls (rule 5)', () => {
+    // Pattern: falls, rises, falls — e.g. [0.9, 0.8, 0.85, 0.82].
+    // Rule 3 passes (0.8→0.85 is a rising adjacent pair).
+    // Rule 5 suppresses: the last pair 0.85→0.82 is declining, so an ETA
+    // would mislead users about a session that is cooling off.
     const s = samples([0.9, 0.8, 0.85, 0.82], NOW - 4 * MIN_MS, MIN_MS);
-    // One rising adjacent pair (0.8→0.85) → hasRisingPair=true.
-    // The overall oldest→newest delta is negative (0.9→0.82) but the function
-    // uses oldest→newest span for rate. 0.82 - 0.9 = -0.08 → deltaUtilization ≤ 0 → null.
-    // This is correct: suppress when the net slope is negative, even if one pair rose.
     expect(computeBurnRate(s, NOW)).toBeNull();
   });
 });

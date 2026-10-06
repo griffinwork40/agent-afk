@@ -224,10 +224,15 @@ export function parseUsageRecord(raw: unknown): UsageRecord | undefined {
       }
     }
     // Parse bounded history ring; silently drop malformed entries.
+    // Cap the raw array before iterating so an oversized payload cannot cause
+    // unbounded work — only the newest WINDOWS_HISTORY_MAX entries can matter.
     const rawHistory = w['history'];
     if (Array.isArray(rawHistory)) {
+      const cappedHistory = rawHistory.length > WINDOWS_HISTORY_MAX
+        ? rawHistory.slice(rawHistory.length - WINDOWS_HISTORY_MAX)
+        : rawHistory;
       const parsed: WindowHistorySample[] = [];
-      for (const entry of rawHistory) {
+      for (const entry of cappedHistory) {
         if (entry && typeof entry === 'object') {
           const e = entry as Record<string, unknown>;
           if (isFiniteNumber(e['observedAt']) && isFiniteNumber(e['utilization'])) {
