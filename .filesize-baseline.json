@@ -2,7 +2,6 @@
   "limit": 350,
   "entries": {
     "src/agent/background-registry.ts": { "loc": 402, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/agent/bg-job-log.ts": { "loc": 353, "reason": "PR #2319: persistReconciled helper in bg-job-log.ts" },
     "src/agent/providers/openai-compatible/index.ts": { "loc": 358, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/subagent.ts": { "loc": 373, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/tools/compose-executor.ts": { "loc": 394, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
