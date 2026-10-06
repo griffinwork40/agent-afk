@@ -19,15 +19,17 @@
  * arbitrary file.
  *
  * Implementation note: the lookup uses {@link findToolResultAsync} so the
- * journal read is fully non-blocking (readline over a ReadStream). The sync
- * `findToolResult` from reader.ts is retained for `afk trace show --results`,
- * which is a one-shot CLI where synchronous reads are acceptable.
+ * journal read is fully non-blocking (readline over a ReadStream), and the 404
+ * branch uses {@link journalExistsAsync} (fs.promises.access) so the entire
+ * handler is non-blocking. The sync `findToolResult`/`journalExists` from
+ * reader.ts are retained for `afk trace show --results`, which is a one-shot
+ * CLI where synchronous reads are acceptable.
  *
  * @module web-server/routes.tool-results
  */
 
 import type { ServerResponse } from 'node:http';
-import { findToolResultAsync, journalExists } from '../agent/journal/index.js';
+import { findToolResultAsync, journalExistsAsync } from '../agent/journal/index.js';
 import { requireValidSessionId, sendJson } from './routes.js';
 import { toolResultToText } from './tool-result-text.js';
 import { errorMessage } from '../utils/errors.js';
@@ -62,14 +64,6 @@ export function isSafeToolUseId(id: string): boolean {
   return TOOL_USE_ID_PATTERN.test(id);
 }
 
-function safeJournalExists(sessionId: string): boolean {
-  try {
-    return journalExists(sessionId);
-  } catch {
-    return false;
-  }
-}
-
 export async function handleGetToolResult(res: ServerResponse, sessionId: string, toolUseId: string): Promise<void> {
   if (!requireValidSessionId(res, sessionId)) return;
   if (!isSafeToolUseId(toolUseId)) {
@@ -89,7 +83,8 @@ export async function handleGetToolResult(res: ServerResponse, sessionId: string
   }
 
   if (found === null) {
-    const hasJournal = safeJournalExists(sessionId);
+    // journalExistsAsync uses fs.promises.access — no statSync, fully async.
+    const hasJournal = await journalExistsAsync(sessionId);
     sendJson(res, 404, {
       error: hasJournal ? 'tool_result_not_found' : 'journal_not_found',
       message: hasJournal
