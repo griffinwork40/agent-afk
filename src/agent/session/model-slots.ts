@@ -505,6 +505,12 @@ function parseContextWindow(value: unknown): number | undefined {
  * a matching `contextWindow`. Used by `contextLimitFor` in `model-limits.ts` to
  * honour per-slot overrides on the real provider path (the provider passes the
  * resolved concrete id, not the tier alias).
+ *
+ * Tie-breaking: when two slots bind the SAME id but different `contextWindow`
+ * values, the first slot in `SLOT_NAMES` order (`local → small → medium → large`)
+ * wins. This is deterministic and intentional — the lower-tier slot is more
+ * user-configured and more specific. Add `contextWindow` only to the tier you
+ * intend to raise; a second binding with a different value will silently lose.
  */
 export function contextWindowOverrideFor(
   concreteId: string,

@@ -295,6 +295,17 @@ function routesToOpenAICompatible(model: string): boolean {
   if (lowered.startsWith('codex-') || lowered.startsWith('codex_') || lowered === 'codex') return true;
   // Grok / xAI — first-class `xai` provider, OpenAI-compatible context defaults.
   if (lowered === 'grok' || lowered.startsWith('grok-') || lowered.startsWith('grok_')) return true;
+  // Common third-party OpenAI-shim families that `providers/index.ts` Tier 3
+  // also routes to openai-compatible. Without these, an unknown `deepseek-v4-pro`
+  // or `qwen-3.8-27b` id falls through to the 200k Anthropic default instead of
+  // the 262k openai-compatible fallback. Keep in sync with providers/index.ts Tier 3.
+  if (
+    lowered.startsWith('deepseek-') || lowered.startsWith('deepseek_') ||
+    lowered.startsWith('mistral-') || lowered.startsWith('mistral_') ||
+    lowered.startsWith('mixtral-') || lowered.startsWith('mixtral_') ||
+    lowered.startsWith('llama-') || lowered.startsWith('llama_') ||
+    lowered.startsWith('qwen-') || lowered.startsWith('qwen_')
+  ) return true;
   return false;
 }
 
@@ -314,6 +325,10 @@ export function contextLimitFor(model: ClaudeModel | string): number {
   // Resolve slot alias → bound id, then look up the concrete id. A lowercased
   // fallback lets mixed-case HF-style ids (e.g.
   // "mlx-community/Qwen3-30B-A3B-4bit") still hit their entry.
+  // Invariant: the override lookup below relies on resolveModelInput having run
+  // first (alias → concrete id). An early return before this line (e.g. caching
+  // by alias) would silently break alias callers whose slot has a contextWindow
+  // override — the keyed lookup in contextWindowOverrideFor uses the concrete id.
   const id = resolveModelInput(model) ?? String(model);
   // Check per-slot contextWindow override BEFORE the built-in table. This lets
   // paid-tier users raise the window for providers whose limit depends on

@@ -770,6 +770,18 @@ describe('contextWindowOverrideFor', () => {
     });
     expect(contextWindowOverrideFor('gpt-4o')).toBeUndefined();
   });
+
+  it('first slot in SLOT_NAMES order wins when two slots bind the same id with different contextWindow', () => {
+    // local is first in SLOT_NAMES (local → small → medium → large), so its
+    // 128_000 wins over small's 64_000 — deterministic, documented behaviour.
+    setSlotBindings({
+      local: { id: 'shared-model', contextWindow: 128_000 },
+      small: { id: 'shared-model', contextWindow: 64_000 },
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    expect(contextWindowOverrideFor('shared-model')).toBe(128_000);
+  });
 });
 
 describe('contextLimitFor + autoCompactLimitFor honour slot contextWindow override', () => {

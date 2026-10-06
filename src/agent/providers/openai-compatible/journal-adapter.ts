@@ -135,6 +135,11 @@ function assistantToJournal(msg: OpenAIMessage): JournalMessage {
   // assistantFromJournal can restore the correct echo key on resume. Cerebras
   // uses `reasoning`; DeepSeek uses `reasoning_content`. Both are encoded as
   // `openai-compatible:<field>` for easy lossless round-tripping.
+  //
+  // Branch order is load-bearing: `reasoning` is checked FIRST so that a message
+  // carrying BOTH `reasoning` and `reasoning_content` (a hypothetical dual-field
+  // response) persists under the `reasoning` key — the safer choice, because the
+  // Cerebras echo contract requires it. Do NOT reorder this if/else if.
   if (typeof msg.reasoning === 'string' && msg.reasoning.length > 0) {
     content.push({ type: 'thinking', thinking: msg.reasoning, origin: encodeReasoningOrigin('reasoning') });
   } else if (typeof msg.reasoning_content === 'string' && msg.reasoning_content.length > 0) {
