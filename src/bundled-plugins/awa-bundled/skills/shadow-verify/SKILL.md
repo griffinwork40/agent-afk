@@ -1,6 +1,6 @@
 ---
 name: shadow-verify
-description: "Dispatch a parallel adversarial verifier wave after any high-stakes sub-agent investigation (code reviews, audits, findings reports, large refactors, gap analyses) — or whenever a sub-agent asserts a claim with high-confidence language (\"confident\", \"certain\", \"clearly\", ≥80%), since confidence is a trigger, not a verdict. Default mode: shadow verifiers independently re-derive 2–3 key claims from scratch using tool calls only. --findings-list mode: exhaustively verifies every finding in a pre-existing findings document before any action phase is dispatched, producing a numbered completeness checklist and a terminal gate verdict (VERIFIED/PARTIAL/BLOCKED). Both modes return CONFIRMED/REFUTED/STALE/UNVERIFIABLE verdicts and flag disagreements before the user acts."
+description: "Dispatch a parallel adversarial verifier wave after any high-stakes sub-agent investigation (code reviews, audits, findings reports, large refactors, gap analyses) — or whenever a sub-agent asserts a claim with high-confidence language, since confidence is a trigger, not a verdict. Use when sub-agent output will drive decisions, file changes, commits, or external side-effects."
 argument-hint: "[--findings-list <file | inline-findings>] [--goal <session-goal>] [--action <planned-action>]"
 context: load
 ---

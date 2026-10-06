@@ -1,6 +1,6 @@
 ---
 name: automate
-description: "Set up a scheduled headless afk run that pushes a summary to Telegram. Accepts a task description, directory path, or session ID — for session IDs, runs an isolation-contamination probe via read_witness to assess automation fit before gating on an explicit APPROVE token. Use when the user wants to automate a recurring task via the afk daemon scheduler (cron) with push-notified results."
+description: "Set up a scheduled headless afk run that pushes a summary to Telegram. Use when the user wants to automate a recurring task via the afk daemon scheduler (cron) with push-notified results."
 disable-model-invocation: true
 context: load
 failure_modes:
