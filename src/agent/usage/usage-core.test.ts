@@ -78,10 +78,12 @@ describe('usage-record merge', () => {
     };
     const parsed = parseUsageRecord(raw);
     expect(parsed?.windows?.history).toBeDefined();
-    expect(parsed!.windows!.history!.length).toBeLessThanOrEqual(WINDOWS_HISTORY_MAX);
+    const parsedHistory = parsed!.windows!.history!;
+    expect(parsedHistory.length).toBeLessThanOrEqual(WINDOWS_HISTORY_MAX);
+    expect(parsedHistory.length).toBeGreaterThan(0);
     // Newest entries are kept: the last parsed entry must be the last raw entry.
-    const lastParsed = parsed!.windows!.history![parsed!.windows!.history!.length - 1]!;
-    const lastRaw = history[history.length - 1]!;
+    const lastParsed = parsedHistory.at(-1)!;
+    const lastRaw = history.at(-1)!;
     expect(lastParsed.observedAt).toBe(lastRaw.observedAt);
     expect(lastParsed.utilization).toBeCloseTo(lastRaw.utilization, 6);
   });

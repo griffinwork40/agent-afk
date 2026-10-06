@@ -61,6 +61,7 @@ describe('computeBurnRate — suppression: plateau-then-cool (rule 5)', () => {
   });
 });
 
+// pins: burn-rate.ts:121
 describe('computeBurnRate — suppression: falling-start / rising-tail (deltaUtilization guard)', () => {
   it('returns null when Rule 5 passes but net oldest-to-newest delta is zero', () => {
     // Series [0.70, 0.80, 0.60, 0.70]:
