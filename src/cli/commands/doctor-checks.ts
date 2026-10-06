@@ -141,13 +141,15 @@ export async function checkXaiAuth(): Promise<Check> {
 export interface NpmBinOnPathDeps {
   platform?: NodeJS.Platform;
   pathDelimiter?: string;
+  execSync?: typeof import('child_process').execSync;
 }
 
 export async function checkNpmBinOnPath(deps: NpmBinOnPathDeps = {}): Promise<Check> {
   const platform = deps.platform ?? process.platform;
   const pathDelimiter = deps.pathDelimiter ?? nodePath.delimiter;
+  const _execSync = deps.execSync ?? execSync;
   try {
-    const prefix = execSync('npm config get prefix', {
+    const prefix = _execSync('npm config get prefix', {
       timeout: 2000,
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],

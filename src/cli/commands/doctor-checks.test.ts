@@ -25,6 +25,11 @@ vi.mock('../../agent/auth/credential-resolver.js', async (importOriginal) => {
   return { ...orig, preloadClaudeKeychainOAuth: vi.fn().mockResolvedValue(undefined) };
 });
 
+/** Cast a raw string to the return type expected by `execSync` mock stubs. */
+function mockPrefix(s: string): ReturnType<typeof import('child_process').execSync> {
+  return s as unknown as ReturnType<typeof import('child_process').execSync>;
+}
+
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
   return { ...actual, execSync: vi.fn(() => '/usr/local\n') };
@@ -219,16 +224,15 @@ describe('checkImportAvailable', () => {
 });
 
 // ─── checkNpmBinOnPath — cross-platform regression tests (#2756) ──────────────
-// Platform and PATH delimiter are injected so Windows behaviour is exercised
-// on any host OS (no real win32 required).
+// Platform, PATH delimiter, and execSync are injected so Windows behaviour is
+// exercised on any host OS (no real win32 required).
 describe('checkNpmBinOnPath', () => {
-  // child_process is mocked at module scope via vi.mock above; _execSync is
-  // the vi.fn() stub imported after the mock declaration.
-  const mockedExecSync = vi.mocked(_execSync);
+  // Build a fresh execSync stub per test; injected via deps for DI symmetry.
+  let stubbedExecSync: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     // Default: POSIX prefix; reset before each test
-    mockedExecSync.mockReturnValue('/usr/local\n' as unknown as ReturnType<typeof import('child_process').execSync>);
+    stubbedExecSync = vi.fn(() => mockPrefix('/usr/local\n'));
   });
 
   afterEach(() => {
@@ -238,23 +242,23 @@ describe('checkNpmBinOnPath', () => {
   describe('POSIX (linux/darwin)', () => {
     it('returns pass when <prefix>/bin is on PATH', async () => {
       vi.stubEnv('PATH', '/usr/local/bin:/usr/bin:/bin');
-      const result = await checkNpmBinOnPath({ platform: 'linux', pathDelimiter: ':' });
+      const result = await checkNpmBinOnPath({ platform: 'linux', pathDelimiter: ':', execSync: stubbedExecSync as typeof _execSync });
       expect(result.state).toBe('pass');
       expect(result.detail).toBe('/usr/local/bin');
     });
 
     it('returns fail when <prefix>/bin is NOT on PATH', async () => {
       vi.stubEnv('PATH', '/usr/bin:/bin');
-      const result = await checkNpmBinOnPath({ platform: 'linux', pathDelimiter: ':' });
+      const result = await checkNpmBinOnPath({ platform: 'linux', pathDelimiter: ':', execSync: stubbedExecSync as typeof _execSync });
       expect(result.state).toBe('fail');
       expect(result.detail).toBe('/usr/local/bin');
       expect(result.fix).toContain('/usr/local/bin');
     });
 
     it('strips trailing slash from prefix before appending /bin', async () => {
-      mockedExecSync.mockReturnValue('/usr/local/\n' as unknown as ReturnType<typeof import('child_process').execSync>);
+      stubbedExecSync.mockReturnValue(mockPrefix('/usr/local/\n'));
       vi.stubEnv('PATH', '/usr/local/bin:/usr/bin');
-      const result = await checkNpmBinOnPath({ platform: 'linux', pathDelimiter: ':' });
+      const result = await checkNpmBinOnPath({ platform: 'linux', pathDelimiter: ':', execSync: stubbedExecSync as typeof _execSync });
       expect(result.state).toBe('pass');
       expect(result.detail).toBe('/usr/local/bin');
     });
@@ -266,42 +270,42 @@ describe('checkNpmBinOnPath', () => {
     it('returns pass when the prefix itself is on PATH (no /bin suffix)', async () => {
       // npm prefix on Windows: C:\Users\Alice\AppData\Roaming\npm
       // npm places binaries directly there, not in a /bin subdirectory.
-      mockedExecSync.mockReturnValue(`${WIN_PREFIX}\n` as unknown as ReturnType<typeof import('child_process').execSync>);
+      stubbedExecSync.mockReturnValue(mockPrefix(`${WIN_PREFIX}\n`));
       vi.stubEnv('PATH', `C:\\Windows\\System32;${WIN_PREFIX}`);
-      const result = await checkNpmBinOnPath({ platform: 'win32', pathDelimiter: ';' });
+      const result = await checkNpmBinOnPath({ platform: 'win32', pathDelimiter: ';', execSync: stubbedExecSync as typeof _execSync });
       expect(result.state).toBe('pass');
       expect(result.detail).toBe(WIN_PREFIX);
     });
 
     it('returns fail when prefix is NOT on PATH (old POSIX /bin bug would never match)', async () => {
-      mockedExecSync.mockReturnValue(`${WIN_PREFIX}\n` as unknown as ReturnType<typeof import('child_process').execSync>);
+      stubbedExecSync.mockReturnValue(mockPrefix(`${WIN_PREFIX}\n`));
       // PATH uses ';' delimiter; the npm dir is absent
       vi.stubEnv('PATH', 'C:\\Windows\\System32;C:\\Windows');
-      const result = await checkNpmBinOnPath({ platform: 'win32', pathDelimiter: ';' });
+      const result = await checkNpmBinOnPath({ platform: 'win32', pathDelimiter: ';', execSync: stubbedExecSync as typeof _execSync });
       expect(result.state).toBe('fail');
       expect(result.detail).toBe(WIN_PREFIX);
     });
 
     it('strips trailing backslash from Windows prefix', async () => {
-      mockedExecSync.mockReturnValue(`${WIN_PREFIX}\\\n` as unknown as ReturnType<typeof import('child_process').execSync>);
+      stubbedExecSync.mockReturnValue(mockPrefix(`${WIN_PREFIX}\\\n`));
       vi.stubEnv('PATH', `C:\\Windows\\System32;${WIN_PREFIX}`);
-      const result = await checkNpmBinOnPath({ platform: 'win32', pathDelimiter: ';' });
+      const result = await checkNpmBinOnPath({ platform: 'win32', pathDelimiter: ';', execSync: stubbedExecSync as typeof _execSync });
       expect(result.state).toBe('pass');
     });
 
     it('does NOT append /bin on win32 (regression guard for #2756)', async () => {
-      mockedExecSync.mockReturnValue(`${WIN_PREFIX}\n` as unknown as ReturnType<typeof import('child_process').execSync>);
+      stubbedExecSync.mockReturnValue(mockPrefix(`${WIN_PREFIX}\n`));
       // Only the raw prefix is on PATH — adding /bin would cause a false fail
       vi.stubEnv('PATH', WIN_PREFIX);
-      const result = await checkNpmBinOnPath({ platform: 'win32', pathDelimiter: ';' });
+      const result = await checkNpmBinOnPath({ platform: 'win32', pathDelimiter: ';', execSync: stubbedExecSync as typeof _execSync });
       expect(result.state).toBe('pass');
       expect(result.detail).not.toContain('/bin');
     });
   });
 
   it('returns warn when execSync throws', async () => {
-    mockedExecSync.mockImplementation(() => { throw new Error('npm not found'); });
-    const result = await checkNpmBinOnPath();
+    stubbedExecSync.mockImplementation(() => { throw new Error('npm not found'); });
+    const result = await checkNpmBinOnPath({ execSync: stubbedExecSync as typeof _execSync });
     expect(result.state).toBe('warn');
     expect(result.detail).toMatch(/could not query/);
   });
