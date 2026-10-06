@@ -13,7 +13,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AdmissionQueue } from '../../../agent/peer/admission-queue.js';
-import { installPeerBoundary, reinstallPeerBoundary } from './loop-iteration.boundary.js';
+import { installPeerBoundary, reinstallPeerBoundary, applyDeferPeers } from './loop-iteration.boundary.js';
+import type { InjectionSource } from './loop-iteration.injections.js';
 
 // ── Minimal fakes ────────────────────────────────────────────────────────────
 
@@ -1039,5 +1040,185 @@ describe('Slash and shell passthrough as human barriers', () => {
     expect(result).toBeUndefined();
     // Peer still in buffer.
     expect(peerNotifier.hasPendingInjections()).toBe(true);
+  });
+});
+
+// ── applyDeferPeers unit tests ───────────────────────────────────────────────
+// Directly tests the peer-deferral injection block extracted from `runInputLoop`.
+//
+// `applyDeferPeers` collects InjectionSource drains in order and optionally
+// calls drainAdmissionQueueFallback. We spy on drainInjections() to observe
+// which sources were called and in what order.
+
+describe('applyDeferPeers', () => {
+  /**
+   * Build a named InjectionSource spy. The source emits `[<name>]` exactly
+   * once; subsequent drains return ''. The spy records calls so tests can
+   * assert ordering.
+   */
+  function makeNamedSource(name: string): InjectionSource & { calls: string[] } {
+    const calls: string[] = [];
+    let drained = false;
+    return {
+      calls,
+      drainInjections() {
+        calls.push(name);
+        if (drained) return '';
+        drained = true;
+        return `[${name}]`;
+      },
+    };
+  }
+
+  /** Minimal InputSurface stub — only getCompositor() is used by applyDeferPeers. */
+  function makeSurface(hasPending: boolean) {
+    return {
+      getCompositor: () => ({
+        hasPendingSubmission: () => hasPending,
+      }),
+    };
+  }
+
+  /** Empty-queue AdmissionQueue — pending=false, drain returns ''. */
+  function makeEmptyQueue(): AdmissionQueue {
+    return new AdmissionQueue();
+  }
+
+  it('queuedHumanTurn=true: peer notifier is deferred; shell, bgResult, and processJob sources are still injected', () => {
+    const shell = makeNamedSource('shell');
+    const bg = makeNamedSource('bg');
+    const peer = makeNamedSource('peer');
+    const processJob = makeNamedSource('processJob');
+    // No compositor pending submission — deferral comes only from queuedHumanTurn.
+    const surface = makeSurface(false);
+
+    const result = applyDeferPeers(
+      'base',
+      /* queuedHumanTurn */ true,
+      surface as never,
+      shell,
+      bg,
+      peer,
+      makeEmptyQueue(),
+      processJob,
+    );
+
+    // shell, bg, and processJob were drained (injected).
+    expect(shell.calls).toHaveLength(1);
+    expect(bg.calls).toHaveLength(1);
+    expect(processJob.calls).toHaveLength(1);
+    // peer was NOT drained (deferred).
+    expect(peer.calls).toHaveLength(0);
+    // The output does not contain the peer block.
+    expect(result).not.toContain('[peer]');
+    // But it does contain the other three injections.
+    expect(result).toContain('[shell]');
+    expect(result).toContain('[bg]');
+    expect(result).toContain('[processJob]');
+  });
+
+  it('hasPendingSubmission=true: peer notifier is deferred; shell, bgResult, and processJob sources are still injected', () => {
+    const shell = makeNamedSource('shell');
+    const bg = makeNamedSource('bg');
+    const peer = makeNamedSource('peer');
+    const processJob = makeNamedSource('processJob');
+    // Deferral comes from the compositor's pending submission (queuedHumanTurn=false).
+    const surface = makeSurface(true);
+
+    const result = applyDeferPeers(
+      'base',
+      /* queuedHumanTurn */ false,
+      surface as never,
+      shell,
+      bg,
+      peer,
+      makeEmptyQueue(),
+      processJob,
+    );
+
+    // shell, bg, and processJob were drained.
+    expect(shell.calls).toHaveLength(1);
+    expect(bg.calls).toHaveLength(1);
+    expect(processJob.calls).toHaveLength(1);
+    // peer was NOT drained.
+    expect(peer.calls).toHaveLength(0);
+    expect(result).not.toContain('[peer]');
+    expect(result).toContain('[shell]');
+    expect(result).toContain('[bg]');
+    expect(result).toContain('[processJob]');
+  });
+
+  it('neither flag set: all sources injected in order [shell, bg, processJob, peer]', () => {
+    // prependTurnInjections prepends each source in argument order, so the last
+    // source in the array ends up first in the output string. To verify argument
+    // order we inspect the call sequence directly: drainInjections() is called in
+    // array order: shell, bg, processJob, peer.
+    const callOrder: string[] = [];
+
+    function makeOrderSource(name: string): InjectionSource {
+      return {
+        drainInjections() {
+          callOrder.push(name);
+          return `[${name}]`;
+        },
+      };
+    }
+
+    const shell = makeOrderSource('shell');
+    const bg = makeOrderSource('bg');
+    const processJob = makeOrderSource('processJob');
+    const peer = makeOrderSource('peer');
+    const surface = makeSurface(false);
+
+    applyDeferPeers(
+      '',
+      /* queuedHumanTurn */ false,
+      surface as never,
+      shell,
+      bg,
+      peer,
+      makeEmptyQueue(),
+      processJob,
+    );
+
+    // All four sources must have been called, in the documented order.
+    expect(callOrder).toEqual(['shell', 'bg', 'processJob', 'peer']);
+  });
+
+  it('processJobNotifier omitted: no hole in the array; shell, bg, peer ordering unchanged', () => {
+    const callOrder: string[] = [];
+
+    function makeOrderSource(name: string): InjectionSource {
+      return {
+        drainInjections() {
+          callOrder.push(name);
+          return `[${name}]`;
+        },
+      };
+    }
+
+    const shell = makeOrderSource('shell');
+    const bg = makeOrderSource('bg');
+    const peer = makeOrderSource('peer');
+    const surface = makeSurface(false);
+
+    // processJobNotifier is NOT passed.
+    const result = applyDeferPeers(
+      '',
+      /* queuedHumanTurn */ false,
+      surface as never,
+      shell,
+      bg,
+      peer,
+      makeEmptyQueue(),
+      // processJobNotifier omitted
+    );
+
+    // Exactly three sources called, in order — no hole where processJob would be.
+    expect(callOrder).toEqual(['shell', 'bg', 'peer']);
+    // All three injections present in output.
+    expect(result).toContain('[shell]');
+    expect(result).toContain('[bg]');
+    expect(result).toContain('[peer]');
   });
 });
