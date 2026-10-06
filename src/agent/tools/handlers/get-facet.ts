@@ -26,13 +26,14 @@
  * @module agent/tools/handlers/get-facet
  */
 
-import { openSync, readSync, closeSync, statSync } from 'node:fs';
+import { openSync, readSync, closeSync, fstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { getOrDeriveFacet, listSessionIds } from '../../facets/index.js';
 import { getSessionsDir } from '../../../paths.js';
 import { resolveSessionByName } from '../../trace/session-name-resolver.js';
 import { FACET_INTERNAL_FIELDS } from '../schemas.facet.js';
 import { readRecord } from '../../outcomes/store.js';
+import { debugLog } from '../../../utils/debug.js';
 import type { ToolHandler } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -46,8 +47,14 @@ interface SidecarCwdSlice {
 
 /**
  * Number of bytes to read from the start of a sidecar file to extract `cwd`.
- * The `cwd` key is always in the first few top-level fields of a sidecar, so
- * 2 KiB is far more than needed even for sidecars with long session names.
+ * The `cwd` key appears in the first few top-level fields of a sidecar JSON
+ * object, so 2 KiB is far more than needed for typical sidecars.
+ *
+ * Bound assumption: the fields that precede `cwd` in the serialised sidecar
+ * (e.g. `sessionId`, `model`, `startedAt`, sidecar-level `name`) are expected
+ * to fit within 2 048 bytes. If a session has pathologically long values for
+ * those fields the `cwd` key may be pushed past the prefix; in that case the
+ * read returns `cwd: undefined` and a debug log is emitted (see below).
  */
 const SIDECAR_PREFIX_BYTES = 2048;
 
@@ -72,8 +79,11 @@ const CWD_FIELD_RE = /"cwd"\s*:\s*"((?:[^\\"]|\\.)*)"/;
 function readSidecarCwdSlice(path: string): SidecarCwdSlice | undefined {
   let fd: number | undefined;
   try {
-    const stat = statSync(path);
+    // Open first, then fstat the fd — avoids the TOCTOU window between a
+    // stat(path) call and the subsequent open (the inode could change in
+    // between on a live-rotating sidecar).
     fd = openSync(path, 'r');
+    const stat = fstatSync(fd);
     const buf = Buffer.alloc(SIDECAR_PREFIX_BYTES);
     const bytesRead = readSync(fd, buf, 0, SIDECAR_PREFIX_BYTES, 0);
     const prefix = buf.slice(0, bytesRead).toString('utf-8');
@@ -87,6 +97,15 @@ function readSidecarCwdSlice(path: string): SidecarCwdSlice | undefined {
       } catch {
         cwd = m[1]; // fallback: use raw match if re-parse fails
       }
+    }
+    // Debug: warn when the file is larger than the prefix and cwd was not
+    // found — the cwd field may have been pushed past SIDECAR_PREFIX_BYTES by
+    // unusually long preceding fields (sessionId, name, etc.).
+    if (!cwd && stat.size > SIDECAR_PREFIX_BYTES) {
+      debugLog(
+        `[get_facet] cwd absent from ${SIDECAR_PREFIX_BYTES}-byte prefix of ${path} ` +
+          `(file size: ${stat.size}); sidecar may have long fields before "cwd"`,
+      );
     }
     return { mtimeMs: stat.mtimeMs, cwd };
   } catch {
