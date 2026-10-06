@@ -345,7 +345,11 @@ describe('Gate 4b — WEB_REQUEST_DOMAIN_POLICY_FAIL_OPEN', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.doUnmock('../../browser/config.js');
-    vi.resetModules();
+    // NOTE: vi.resetModules() is called inside the it() body so it is scoped to
+    // that single test and does not bleed into sibling describe blocks.
+    // Ordering constraint: this describe block must be last in the file if
+    // vi.resetModules() were moved here; keeping it inside the it() avoids that
+    // fragility entirely.
   });
 
   it('resolveDomainCheck fail-open: allows request when browser/config.js fails to load and emits console.warn', async () => {
@@ -354,6 +358,8 @@ describe('Gate 4b — WEB_REQUEST_DOMAIN_POLICY_FAIL_OPEN', () => {
     vi.doMock('../../browser/config.js', () => {
       throw new Error('simulated browser/config.js load failure — fail-open gate test');
     });
+    // vi.resetModules() is scoped here (not in afterEach) to avoid resetting the
+    // entire module registry for all other tests in this file.
     vi.resetModules();
 
     // Re-import createWebRequestHandler so it uses the fresh module graph where
@@ -361,6 +367,7 @@ describe('Gate 4b — WEB_REQUEST_DOMAIN_POLICY_FAIL_OPEN', () => {
     // so we must use a dynamic import here.
     const { createWebRequestHandler: freshCreateHandler } = await import('../tools/handlers/web-request.js');
 
+    const FAILOPEN_URL = 'https://blocked-gate-liveness-failopen.example.com/path';
     const fetchSpy = vi.fn(async () => new Response('ok-failopen', { status: 200 }));
     const publicLookup = async (): Promise<readonly { address: string }[]> => [
       { address: '93.184.216.34' },
@@ -375,14 +382,21 @@ describe('Gate 4b — WEB_REQUEST_DOMAIN_POLICY_FAIL_OPEN', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const result = await handler(
-      { url: 'https://blocked-gate-liveness-failopen.example.com/path', method: 'GET' },
+      { url: FAILOPEN_URL, method: 'GET' },
       new AbortController().signal,
     );
 
     // Fail-open: the request must be ALLOWED even though the domain appears in
     // AFK_BROWSER_BLOCKED_DOMAINS, because the domain-policy module failed to load.
     expect(result.isError, 'fail-open must allow the request through').not.toBe(true);
+    // Assert fetchSpy was called with the exact URL — if the vi.doMock path drifts
+    // and the mock does not apply, the real domain check fires and blocks the request
+    // before fetch, so fetchSpy would not be called at all, making this assertion fail.
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('blocked-gate-liveness-failopen.example.com'),
+      expect.anything(),
+    );
 
     // The warn must have fired so the operator is not silently misled.
     const warnCalls = warnSpy.mock.calls.flat().map(String);

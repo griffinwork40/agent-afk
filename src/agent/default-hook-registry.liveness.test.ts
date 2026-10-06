@@ -69,7 +69,9 @@ afterEach(() => {
   try {
     rmSync(workspace, { recursive: true, force: true });
   } catch {
-    // best-effort cleanup
+    // Expected: ENOENT when the test itself removed the directory, or when the
+    // mkdtempSync in beforeEach was never reached (e.g. an error before it ran).
+    // Either way the workspace is gone; nothing to clean up.
   }
 });
 
