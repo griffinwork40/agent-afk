@@ -198,6 +198,11 @@ class DisplayFoldState {
   messages(): JournalMessage[] {
     return this.rows.filter((m): m is JournalMessage => m !== null);
   }
+
+  /** Test hook: exposes the internal cap so tests can assert the invariant directly. */
+  getPendingWindowCap(): number {
+    return this.pendingWindowCap;
+  }
 }
 
 /**
@@ -212,6 +217,21 @@ export function foldForDisplay(segments: readonly (readonly JournalRecord[])[]):
     for (const rec of records) state.apply(rec);
   });
   return state.messages();
+}
+
+/**
+ * Test-only: fold records and return both the display messages and the
+ * internal `pendingWindowCap` at the end of the fold. Exported under a
+ * `_test` prefix so linters can flag accidental use in production code.
+ * @internal
+ */
+export function _testFoldForDisplay(records: readonly JournalRecord[]): {
+  messages: JournalMessage[];
+  pendingWindowCap: number;
+} {
+  const state = new DisplayFoldState();
+  for (const rec of records) state.apply(rec);
+  return { messages: state.messages(), pendingWindowCap: state.getPendingWindowCap() };
 }
 
 type ReadRecords = (sessionId: string) => JournalRecord[];
