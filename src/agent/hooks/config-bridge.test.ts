@@ -867,6 +867,105 @@ describe('getTranscriptPath threading (issue #2372)', () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// Plugin userConfig lookup uses install/index key, not manifest name (#2732)
+// ---------------------------------------------------------------------------
+
+describe('plugin option lookup — install key', () => {
+  it('uses pluginKey for options and data while keeping pluginName for pluginHookEnv', async () => {
+    const afkHome = join(tmp, 'afk-home');
+    const pluginsDir = join(afkHome, 'plugins');
+    const indexPath = join(pluginsDir, '.index.json');
+    mkdirSync(pluginsDir, { recursive: true });
+    writeFileSync(
+      indexPath,
+      JSON.stringify({
+        version: 2,
+        plugins: {
+          'alias-key': {
+            source: 'x',
+            sourceType: 'local',
+            ref: null,
+            commit: null,
+            enabled: true,
+            installedAt: '2026-01-01T00:00:00Z',
+            updatedAt: '2026-01-01T00:00:00Z',
+            options: { provider: 'openai' },
+          },
+          'manifest-name': {
+            source: 'other',
+            sourceType: 'local',
+            ref: null,
+            commit: null,
+            enabled: true,
+            installedAt: '2026-01-01T00:00:00Z',
+            updatedAt: '2026-01-01T00:00:00Z',
+            options: { provider: 'wrong' },
+          },
+        },
+        marketplaces: {},
+      }),
+      'utf-8',
+    );
+
+    mkdirSync(join(tmp, '.claude-plugin'), { recursive: true });
+    writeFileSync(
+      join(tmp, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({
+        name: 'manifest-name',
+        userConfig: { provider: { type: 'string' } },
+      }),
+      'utf-8',
+    );
+
+    const scriptPath = join(tmp, 'check-plugin-key.js');
+    writeFileSync(
+      scriptPath,
+      `const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(0, 'utf8'));
+if (process.env.CLAUDE_PLUGIN_OPTION_PROVIDER !== 'openai') process.exit(2);
+if (!process.env.CLAUDE_PLUGIN_DATA || !process.env.CLAUDE_PLUGIN_DATA.includes('p-alias-key')) process.exit(3);
+if (process.env.PLUGIN_FLAG !== 'ok') process.exit(4);
+console.log(JSON.stringify({ decision: 'approve' }));
+`,
+      'utf-8',
+    );
+    const registry = createHookRegistry();
+    const config = makeEnabledConfig({
+      pluginHookEnv: { 'manifest-name': ['PLUGIN_FLAG'] },
+      hooks: {
+        SessionStart: [
+          makeGroup([
+            {
+              type: 'command',
+              command: `"${process.execPath}" "${scriptPath}"`,
+              timeoutMs: 5000,
+              pluginRoot: tmp,
+              pluginName: 'manifest-name',
+              pluginKey: 'alias-key',
+            },
+          ], { tier: 'plugin' }),
+        ],
+      },
+    });
+    const oldHome = process.env['AFK_HOME'];
+    const oldSecret = process.env['PLUGIN_FLAG'];
+    process.env['AFK_HOME'] = afkHome;
+    process.env['PLUGIN_FLAG'] = 'ok';
+    try {
+      loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+      const decision = await registry.dispatch({ event: 'SessionStart', sessionId: 'sid' });
+      expect(decision).toEqual({ decision: 'approve' });
+    } finally {
+      if (oldHome === undefined) delete process.env['AFK_HOME'];
+      else process.env['AFK_HOME'] = oldHome;
+      if (oldSecret === undefined) delete process.env['PLUGIN_FLAG'];
+      else process.env['PLUGIN_FLAG'] = oldSecret;
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // disabledPluginHooks gate (issue #2816)
 // ---------------------------------------------------------------------------

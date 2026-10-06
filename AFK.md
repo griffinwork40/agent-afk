@@ -17,6 +17,7 @@ pnpm test:watch                                    # vitest watch
 pnpm test:coverage                                 # CI gate: has coverage floors that `pnpm test` does not enforce
 pnpm test:pty                                      # PTY suite — separate config (vitest.pty.config.ts), own CI job
 pnpm lint                                          # tsc --noEmit (strict)
+pnpm lint:tests                                    # tsc -p tsconfig.test.json — type-checks test files (non-blocking in CI until #3053 backlog is cleared)
 
 pnpm audit:sdk:check                               # CI gate: fail on unlocked SDK symbols (audit:sdk regenerates the doc)
 pnpm audit:sdk:update-lock                         # add new symbols → .sdk-dependency.lock.json (edit `reason` before commit)
@@ -30,6 +31,7 @@ pnpm audit:funcsize:update                         # regenerate the function bas
 pnpm audit:module-state:check                      # CI gate: no module-scope singleton/process.on duplicated across a sibling family
 pnpm fix:pins:check                                # CI gate: SHA-256 pins for vendored agents + bundled skills (pnpm fix:pins to rewrite)
 pnpm audit:deps                                    # CI gate: pnpm audit --audit-level=critical --prod
+pnpm check:audits                                  # run all deterministic CI audit gates locally (full-scan; exit 0=pass, 1=some failed, 2=all failed→broken env)
 pnpm release                                       # release pipeline (scripts/release.mjs; --dry via release:dry)
 ```
 
@@ -42,6 +44,10 @@ pnpm dev                                     # tsx watch — live-reloads CLI
 afk chat "hi" / afk interactive / afk daemon # one-shot / REPL (alias: afk i) / cron headless runner
 pnpm telegram:start                          # Telegram bot
 ```
+
+### Pre-push hook
+
+`pnpm install` (via the `prepare` lifecycle script) installs a launcher at `.git/hooks/pre-push` (the git common dir, covering all worktrees). Before every push it runs `pnpm check:audits` — the same deterministic audit gates CI runs in the lint-build job. If the environment looks broken (node_modules missing or pnpm not on PATH) the hook exits 0 (fail-open). Bypass with `git push --no-verify`.
 
 ### Observability / tracing
 
@@ -104,6 +110,7 @@ Both providers emit a normalized `ProviderEvent` stream consumed by `src/agent/s
 
 - **Hooks** (`src/agent/hooks.ts`, `hook-registry.ts`) — SessionStart/End, SubagentStart/Stop, PreToolUse/PostToolUse. Sequential; `decision: 'block'` short-circuits. SubagentStop supports `injectContext` for parent-session context injection.
 - **SubagentManager** (`src/agent/subagent.ts`) — Forks child `AgentSession`s with permission bubbling, transitive abort via `AbortGraph`, optional Zod output schemas.
+- **Background processes** (`src/agent/shell-jobs/process-jobs.ts`) — `bash` with `run_in_background: true` starts a supervised process (`proc-N`, own process group, capped log under `$AFK_STATE_DIR/proc-jobs/`), returns at once, and delivers a metadata-only `<background-process-result>` on exit via the REPL injection + idle-wake path. Inspect/stop through `get_background_job_health` / `cancel_background_job`; `/sh` lists and kills them. Root interactive REPL only (children, Telegram, daemon get an explicit refusal); jobs end with the session. Separate from the user `!&` `ShellJobRegistry` on purpose. Spec: `docs/background-processes.md`.
 - **AbortGraph** (`src/agent/abort-graph.ts`) — Tree of `AbortController`s. Parent abort cascades down; child abort notifies up (never auto-aborts parent). Abort beats hook decisions.
 - **Elicitation Router** (`src/agent/elicitation-router.ts`) — Module-scope handler bridging SDK elicitations to REPL/Telegram/iMessage surfaces.
 - **Plugins** (`src/agent/plugins-scanner.ts`, `src/agent/plugins/`) — Scans `~/.afk/plugins/` at session construction; install/remove/update + git-based sources.

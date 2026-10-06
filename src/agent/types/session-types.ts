@@ -170,7 +170,8 @@ export type OutputEvent =
        * surface error). Watchdog/ceiling arithmetic prefers this over `resetsAt`
        * when present. Never shown to users as "resumes at X" copy.
        */
-      waitDeadline?: Date;      /**
+      waitDeadline?: Date;
+      /**
        * Mirror of {@link import('../provider.js').ProviderEvent.paused.provider}.
        * Absent = unknown; UI layers render the legacy Claude copy for it.
        */
@@ -470,6 +471,9 @@ export interface StopWiring {
    * Finding 2: set to `true` by `buildBeforeTurnEnd` after the provider seam
    * dispatches Stop. Checked by `dispatchTurnStop` in turn-stream-runner.ts to
    * avoid firing Stop twice on the same turn. Reset per turn by the session.
+   *
+   * @internal Runtime bookkeeping mutated by the session harness; not part of
+   * the public surface contract. Surfaces must not set or read it.
    */
   stopDispatchedBySeam?: boolean;
 }

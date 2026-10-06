@@ -50,7 +50,7 @@ function workspaceFor(cwd: string) {
       };
 }
 
-function setup() {
+function setup(configExtra: Partial<AgentConfig> = {}, buildDispatcher: () => ToolDispatcher = () => ({}) as ToolDispatcher) {
   // The provider's live cwd, mutated by setCurrentCwd exactly as
   // AnthropicDirectProvider._currentCwd is.
   let currentCwd: string | undefined = LAUNCH_CWD;
@@ -79,7 +79,7 @@ function setup() {
       manifest: '',
       userSystem: null,
     }),
-    config: { cwd: LAUNCH_CWD } as AgentConfig,
+    config: { cwd: LAUNCH_CWD, ...configExtra } as AgentConfig,
     surface: 'cli',
     runtimeStateSource,
     getCurrentCwd: () => currentCwd,
@@ -90,7 +90,7 @@ function setup() {
     subagentExecutor: undefined,
     skillExecutor: undefined,
     composeExecutor: undefined,
-    buildDispatcher: () => ({}) as ToolDispatcher,
+    buildDispatcher,
   });
 
   return { factory, runtimeStateSource, setCurrentCwd };
@@ -142,5 +142,17 @@ describe('cwdDependentsFactory — workspace follows the re-anchored cwd', () =>
 
     expect(runtimeStateSource.getSelf().cwd).toBe(WORKTREE_CWD);
     expect(runtimeStateSource.getWorkspace().branch).toBe('afk/feature');
+  });
+
+  it('preserves rootSessionId on the rebuilt dispatcher (#2442)', () => {
+    const buildDispatcher = vi.fn(() => ({}) as ToolDispatcher);
+    const { factory } = setup({ parentSessionId: 'mid', rootSessionId: 'root-0' }, buildDispatcher);
+
+    factory(WORKTREE_CWD);
+
+    expect(buildDispatcher).toHaveBeenCalledWith(
+      'default',
+      expect.objectContaining({ parentSessionId: 'mid', rootSessionId: 'root-0' }),
+    );
   });
 });

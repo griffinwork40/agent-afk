@@ -100,6 +100,12 @@ export async function checkCodexKey(): Promise<Check> {
         fix: 'Set AFK_OPENAI_CHATGPT_OAUTH=1 to use your ChatGPT subscription, or set OPENAI_API_KEY',
       };
     case 'no-usable-auth-forced-chatgpt-oauth':
+      return {
+        name: 'Codex/OpenAI API Key',
+        state: 'warn',
+        detail: 'Forced ChatGPT OAuth mode (AFK_OPENAI_CHATGPT_OAUTH=1) but no usable OAuth token found',
+        fix: 'Run `codex` once to authenticate, or unset AFK_OPENAI_CHATGPT_OAUTH and set OPENAI_API_KEY',
+      };
     case 'no-usable-auth':
     default:
       return {
@@ -141,13 +147,15 @@ export async function checkXaiAuth(): Promise<Check> {
 export interface NpmBinOnPathDeps {
   platform?: NodeJS.Platform;
   pathDelimiter?: string;
+  execSync?: typeof import('child_process').execSync;
 }
 
 export async function checkNpmBinOnPath(deps: NpmBinOnPathDeps = {}): Promise<Check> {
   const platform = deps.platform ?? process.platform;
   const pathDelimiter = deps.pathDelimiter ?? nodePath.delimiter;
+  const _execSync = deps.execSync ?? execSync;
   try {
-    const prefix = execSync('npm config get prefix', {
+    const prefix = _execSync('npm config get prefix', {
       timeout: 2000,
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],

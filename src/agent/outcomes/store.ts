@@ -11,16 +11,13 @@
 
 import {
   existsSync,
-  mkdirSync,
   readdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
 import { getOutcomesDir, getOutcomeRecordPath, validateSessionId } from '../../paths.js';
 import { VerifiedOutcomeSchema, type VerifiedOutcome, type Vote } from './schema.js';
 import { combine } from './combine.js';
+import { atomicWriteFile } from '../../utils/atomic-write.js';
 
 // ---------------------------------------------------------------------------
 // Read
@@ -60,7 +57,7 @@ export function writeRecord(
 ): void {
   VerifiedOutcomeSchema.parse(outcome); // throws on invalid
   const path = _recordPath(outcome.session_id, outcomesDir);
-  _atomicWrite(path, outcome);
+  atomicWriteFile(path, `${JSON.stringify(outcome, null, 2)}\n`);
 }
 
 // ---------------------------------------------------------------------------
@@ -97,6 +94,13 @@ export function listRecords(
 export interface UpsertVotesOptions {
   /** Override the outcomes directory (default: getOutcomesDir()). */
   outcomesDir?: string;
+  /**
+   * Closure reason to store in the record (supplied at immediate-LF time via
+   * the witness trace). When omitted the existing record value is preserved.
+   * Callers that don't know the closure reason (e.g. relabel-job) should omit
+   * this — the value written at session-end time is authoritative.
+   */
+  closureReason?: VerifiedOutcome['closure_reason'];
 }
 
 /**
@@ -104,8 +108,8 @@ export interface UpsertVotesOptions {
  * combiner, and persist atomically. Creates a new skeleton record when none
  * exists yet (requires `base` to be supplied). History is appended only when
  * the computed label changes. Deduplication: a vote is considered a duplicate
- * if an existing vote shares the same `lf` and `evidence` pair — the incoming
- * vote replaces it (idempotent re-submission updates observed_at / strength).
+ * if an existing vote shares the same `lf` and `evidence` pair; the incoming
+ * vote replaces it and moves to the tail of the Map (see _mergeVotes).
  *
  * explicit_feedback override semantics (design §"Explicit feedback"):
  *   - A vote with lf === 'explicit_feedback' causes upsertVotes to call
@@ -131,6 +135,33 @@ export function upsertVotes(
   // Build the record to mutate
   const record: VerifiedOutcome = existing ?? _skeleton(sessionId, base);
 
+  // Persist closure reason when supplied (only at immediate-LF time).
+  // Preserve the existing value when the caller does not know it (relabel-job etc.)
+  if (opts.closureReason !== undefined) {
+    record.closure_reason = opts.closureReason;
+  }
+
+  // Backfill closure_reason from base when the existing record lacks it and
+  // opts.closureReason was not supplied. This covers the race where
+  // appendArtifacts creates a skeleton (no base → no closure_reason) and the
+  // later session-end upsertVotes finds the existing skeleton.  Without the
+  // backfill the skeleton's absent closure_reason causes normalClosure to fall
+  // back to the conservative 'treat as normal' default, which is incorrect for
+  // abnormal terminations already captured in base.
+  if (record.closure_reason === undefined && base?.closure_reason !== undefined && opts.closureReason === undefined) {
+    record.closure_reason = base.closure_reason;
+  }
+
+  // session_ended_at is immutable after first write — preserve the existing
+  // value across all subsequent upsertVotes calls (relabel-job, reask, etc.).
+  // The base record from the session-end hook supplies the initial value.
+  // Backfill from base when the existing record (e.g. an appendArtifacts
+  // skeleton) lacks it — without backfill, lf-reask falls back to mtime for
+  // sessions where a child artifact arrived before session teardown.
+  if (record.session_ended_at === undefined && base?.session_ended_at !== undefined) {
+    record.session_ended_at = base.session_ended_at;
+  }
+
   // Merge votes: dedupe by lf+evidence (incoming wins on collision)
   const merged = _mergeVotes(record.votes, newVotes);
   record.votes = merged;
@@ -147,12 +178,31 @@ export function upsertVotes(
       : ('bad' as const)
     : undefined;
 
+  // Determine whether the settle window has passed (for good-by-default rule)
+  const nowMs = Date.now();
+  const settleWindowPassed =
+    record.settles_after !== null &&
+    nowMs > new Date(record.settles_after).getTime();
+
+  // Derive normalClosure from stored closure_reason.
+  // Records without closure_reason (written before this field was added) are
+  // treated as normal closure (conservative: we don't know it was abnormal).
+  // Non-normal values are: 'abort', 'iteration_cap', 'unknown'.
+  // The field is populated at session-end time by closureFromTrace() in
+  // src/agent/outcomes/session-end-hook.ts — if a new ClosureReason member is
+  // added there, update this whitelist and the exhaustive switch in that file.
+  const normalClosure =
+    record.closure_reason === undefined ||
+    record.closure_reason === 'normal';
+
   // Re-combine
-  const { label, confidence } = combine({
+  const { label, confidence, basis } = combine({
     votes: merged,
     selfReport: record.self_report,
     artifacts: record.artifacts,
     explicit_feedback: explicitFeedback,
+    settleWindowPassed,
+    normalClosure,
   });
 
   // Settle immediately when explicit_feedback overrides
@@ -175,6 +225,12 @@ export function upsertVotes(
   record.confidence = confidence;
   record.state = state;
   record.settles_after = settlesAfter;
+  if (basis !== undefined) {
+    record.basis = basis;
+  } else {
+    // Clear stale basis when combiner returns unknown/blocked
+    delete record.basis;
+  }
 
   writeRecord(record, outcomesDir);
   return record;
@@ -240,13 +296,6 @@ function _recordPath(sessionId: string, outcomesDir: string): string {
   return `${outcomesDir}/${sessionId}.json`;
 }
 
-function _atomicWrite(path: string, data: VerifiedOutcome): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
-  renameSync(tmp, path);
-}
-
 /**
  * Return the most recent explicit_feedback vote from `votes` (by observed_at,
  * ties broken by later position in the array). Returns undefined when none
@@ -261,9 +310,9 @@ function _latestExplicitFeedback(votes: Vote[]): Vote | undefined {
     if (v.lf !== 'explicit_feedback') continue;
     if (
       latest === undefined ||
-      v.observed_at > latest.observed_at ||
-      // Tie-break: later position wins (stable on equal timestamps)
-      (v.observed_at === latest.observed_at)
+      // Tie-break: later position wins on equal timestamps (>= replaces the
+      // prior > … || === pair, which was correct but unnecessarily verbose).
+      v.observed_at >= latest.observed_at
     ) {
       latest = v;
     }
@@ -277,9 +326,14 @@ function _mergeVotes(existing: Vote[], incoming: Vote[]): Vote[] {
   for (const v of existing) {
     map.set(`${v.lf}\x00${v.evidence}`, v);
   }
-  // Incoming replaces on collision (idempotent re-submission)
+  // Incoming replaces on collision. delete-then-set moves the updated entry
+  // to the tail of the Map: _latestExplicitFeedback scans forward, so the
+  // last-arrived value at a colliding key always appears after any earlier
+  // entries with the same timestamp, making it the winner on a >= tie-break.
   for (const v of incoming) {
-    map.set(`${v.lf}\x00${v.evidence}`, v);
+    const key = `${v.lf}\x00${v.evidence}`;
+    map.delete(key);
+    map.set(key, v);
   }
   return Array.from(map.values());
 }

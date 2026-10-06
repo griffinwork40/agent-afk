@@ -186,6 +186,7 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
         ...(config.env !== undefined ? { env: config.env } : {}),
         sessionId: resolvedSession.id,
         parentSessionId: config.parentSessionId,
+        ...(config.rootSessionId !== undefined ? { rootSessionId: config.rootSessionId } : {}),
         ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
         // Fork-scoped central output cap (#661): forwarded from the child
         // config that forkSubagent stamped, arming maxOutputBytes for forks
@@ -202,6 +203,7 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
         ...(config.detachRegistry !== undefined
           ? { detachRegistry: config.detachRegistry }
           : {}),
+        ...(config.processJobs !== undefined ? { processJobs: config.processJobs } : {}),
         runtimeStateSource,
         hookRegistry: config.hookRegistry,
         planExitControls: config.planExitControls,

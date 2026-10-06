@@ -10,7 +10,7 @@
  */
 
 import { palette } from './palette.js';
-import { stripAnsi } from './display.js';
+import { stripAnsi, truncateDisplayWidth } from './display.js';
 import { getGlyphs, type Glyphs } from './commands/interactive/tool-lane-render.js';
 import { renderStatusLine, type ImageAttachment } from './input/attachments.js';
 import type { SpinnerController } from './input/spinner.js';
@@ -31,6 +31,11 @@ export interface ChromeRows {
  * ref) so it clears after one repaint, matching the original behaviour. Callers
  * must forward the returned `attachmentRow` to the frame-line assembler rather
  * than re-reading the host field.
+ *
+ * `modeNotice` (terminal-compositor.mode-notice.ts) shares the same one-row
+ * slot at the lowest precedence and is NOT consumed here: it persists across
+ * repaints until the key dispatcher clears it. It is truncated to the terminal
+ * width so a long notice can never wrap and skew the frame's row math.
  */
 export function gatherChromeRows(
   overlay: string,
@@ -38,6 +43,7 @@ export function gatherChromeRows(
   attachments: ImageAttachment[],
   clipboardFailureMsgRef: { value: string | null },
   cols: number,
+  modeNotice: string | null = null,
 ): ChromeRows {
   const overlayLines = overlay ? overlay.split('\n') : [];
   const spinnerRow = spinnerController.renderSpinnerRow();
@@ -48,6 +54,8 @@ export function gatherChromeRows(
   } else if (clipboardFailureMsgRef.value !== null) {
     attachmentRow = palette.dim(clipboardFailureMsgRef.value);
     clipboardFailureMsgRef.value = null;
+  } else if (modeNotice !== null) {
+    attachmentRow = truncateDisplayWidth(modeNotice, Math.max(1, cols - 1));
   }
   return { overlayLines, spinnerRow, tipRow, attachmentRow };
 }

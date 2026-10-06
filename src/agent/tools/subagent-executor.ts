@@ -19,7 +19,7 @@ import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
 import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from '../session/session-identity.js';
 import { parseAgentInput, type AgentInput, type AgentExecutionMode } from './subagent/input-parse.js';
 import { emitTelemetry, truncate } from './subagent/failure-payload.js';
-import { buildChildConfig } from './subagent/child-config.js';
+import { buildChildConfig, type BuildChildConfigArgs } from './subagent/child-config.js';
 import { runBackgroundBranch } from './subagent/background-branch.js'; import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
 import { sendMessageToAgent as executeSendMessage } from './subagent/send-message.js'; import { getBackgroundJobHealth as executeBackgroundHealth } from './subagent/background-health.js';
 import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
@@ -38,12 +38,8 @@ import { buildBudgetRefusalMessage, type SpawnReceipt } from './delegation-budge
 import { evaluateDispatchUsageForModel, prependUsageNotice } from './usage-notice.js';
 import { collectPostRunWarnings } from './subagent-executor.write-intent.js';
 import { buildSubagentsLite } from './subagent-executor.lite-snapshot.js';
-import {
-  buildWaveUnit,
-  createManifest,
-  updateWaveUnit,
-} from '../manifest/write.js';
-import { env } from '../../config/env.js';
+import { updateWaveUnit } from '../manifest/write.js';
+import { WaveManifestTracker } from './subagent-executor.wave-manifest.js';
 import { errorMessage } from '../../utils/errors.js';
 import type { SubagentExecutorContext, SubagentControl } from './subagent-executor/types.js';
 import type { QueuedNoteClaim, PromotedSubagentInfo } from './subagent-executor/types.js';
@@ -126,52 +122,21 @@ export class SubagentExecutor implements SubagentControl {
   // trigger in execute()'s foreground branch and cleared in the same finally.
   private readonly activeForegroundHandles = new Map<string, { cancel: () => Promise<void> }>();
 
-  // Wave manifest tracking. Set by notifyWaveStart() before a parallel batch
-  // runs; cleared (set to undefined) after all units in the batch settle.
-  // Maps tool-call id → unit id so executeOnce can update the right unit.
-  private currentWaveId: string | undefined = undefined;
-  private currentWaveCallIds: Set<string> = new Set();
+  // Wave-manifest tracking delegated to WaveManifestTracker
+  // (./subagent-executor.wave-manifest.ts). Public surface is unchanged.
+  private readonly waveTracker = new WaveManifestTracker();
 
   /**
    * Called by the dispatcher BEFORE a parallel batch of ≥2 agent tool calls
-   * starts. Creates a wave manifest with all units in 'pending' status using
-   * the tool call ids as unit ids. Fire-and-forget: never throws.
+   * starts. Creates a wave manifest with all units in 'pending' status.
+   * Fire-and-forget: never throws.
    */
   notifyWaveStart(
     calls: ReadonlyArray<ToolCall>,
     sessionId: string,
     traceLabel: string | null,
   ): void {
-    if (env.AFK_WAVE_MANIFEST_DISABLED === '1') return;
-    if (calls.length < 2) return;
-    // Only root-level sessions write manifests (depth === 0).
-    if (this.ctx.depth !== 0) return;
-    try {
-      const units = calls.map((call) => {
-        let parsed: { prompt: string; model?: string; cwd?: string } | undefined;
-        try {
-          parsed = parseAgentInput(call.input);
-        } catch {
-          parsed = undefined;
-        }
-        const prompt = parsed?.prompt ?? '';
-        const model = parsed?.model ?? 'sonnet';
-        const cwd = parsed?.cwd ?? this.currentCwd;
-        return buildWaveUnit({ id: call.id, prompt, cwd, model });
-      });
-      const waveId = createManifest({
-        source: 'agent-tool',
-        parentSessionId: sessionId,
-        traceLabel,
-        units,
-      });
-      if (waveId !== undefined) {
-        this.currentWaveId = waveId;
-        this.currentWaveCallIds = new Set(calls.map((c) => c.id));
-      }
-    } catch {
-      // Fire-and-forget: manifest errors must never abort a wave.
-    }
+    this.waveTracker.notifyWaveStart(calls, sessionId, traceLabel, this.ctx.depth, this.currentCwd);
   }
 
   /**
@@ -179,29 +144,38 @@ export class SubagentExecutor implements SubagentControl {
    * Clears the wave state.
    */
   notifyWaveEnd(): void {
-    this.currentWaveId = undefined;
-    this.currentWaveCallIds = new Set();
+    this.waveTracker.notifyWaveEnd();
   }
 
-  /**
-   * Update a unit's status in the current wave manifest. No-op when no wave
-   * is active or the call is not part of the current wave.
-   * Fire-and-forget: never throws.
-   */
   private updateCurrentWaveUnit(
     callId: string,
     status: 'running' | 'done' | 'failed',
     error?: string,
     cwd?: string,
   ): void {
-    const waveId = this.currentWaveId;
-    if (waveId === undefined) return;
-    if (!this.currentWaveCallIds.has(callId)) return;
-    const extra: { errorMessage?: string; cwd?: string } | undefined =
-      error !== undefined || cwd !== undefined
-        ? { ...(error !== undefined ? { errorMessage: error } : {}), ...(cwd !== undefined ? { cwd } : {}) }
-        : undefined;
-    updateWaveUnit(waveId, callId, status, extra);
+    this.waveTracker.updateUnit(callId, status, error, cwd);
+  }
+
+  /**
+   * Executor-context fields `buildChildConfig` inherits unchanged. Extracted
+   * from `executeOnce` (function-size ceiling). `parentRootSessionId` (#2442)
+   * falls back to this executor's live parent id, which IS the root at depth 0,
+   * so depth-1 forks seed the root id their own descendants inherit.
+   */
+  private inheritedChildConfigArgs(): Partial<BuildChildConfigArgs> {
+    const c = this.ctx;
+    const rootSessionId = c.parentRootSessionId ?? c.parentSession.sessionId;
+    return {
+      ...(c.surface !== undefined ? { surface: c.surface } : {}),
+      ...(c.allowedTools !== undefined ? { allowedTools: c.allowedTools } : {}),
+      ...(c.readOnlyBash !== undefined ? { readOnlyBash: c.readOnlyBash } : {}),
+      ...(c.agentRegistry !== undefined ? { agentRegistry: c.agentRegistry } : {}),
+      ...(c.parentModel !== undefined ? { parentModel: c.parentModel } : {}),
+      ...(c.traceWriter !== undefined ? { traceWriter: c.traceWriter } : {}),
+      ...(c.workspaceStore !== undefined ? { workspaceStore: c.workspaceStore } : {}),
+      ...(c.delegationBudget !== undefined ? { delegationBudget: c.delegationBudget } : {}),
+      ...(rootSessionId !== undefined ? { parentRootSessionId: rootSessionId } : {}),
+    };
   }
 
   supportsBackgroundJobs(): boolean { return this.ctx.backgroundRegistry !== undefined; }
@@ -487,13 +461,7 @@ export class SubagentExecutor implements SubagentControl {
       ...(this.ctx.childSkillExecutorFactory !== undefined
         ? { childSkillExecutorFactory: this.ctx.childSkillExecutorFactory }
         : {}),
-      ...(this.ctx.surface !== undefined ? { surface: this.ctx.surface } : {}),
-      ...(this.ctx.allowedTools !== undefined ? { allowedTools: this.ctx.allowedTools } : {}),
-      ...(this.ctx.readOnlyBash !== undefined ? { readOnlyBash: this.ctx.readOnlyBash } : {}),
-      ...(this.ctx.agentRegistry !== undefined ? { agentRegistry: this.ctx.agentRegistry } : {}),
-      ...(this.ctx.parentModel !== undefined ? { parentModel: this.ctx.parentModel } : {}),
-      ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}), ...(this.ctx.workspaceStore !== undefined ? { workspaceStore: this.ctx.workspaceStore } : {}),
-      ...(this.ctx.delegationBudget !== undefined ? { delegationBudget: this.ctx.delegationBudget } : {}),
+      ...this.inheritedChildConfigArgs(),
       createChildExecutor: (childCtx) => new SubagentExecutor(childCtx),
     });
 
@@ -680,7 +648,7 @@ export class SubagentExecutor implements SubagentControl {
       // notifyWaveEnd() can clear this.currentWaveId. The onSettled closure
       // outlives the wave and writes the terminal status when the background
       // job finishes, preventing false resumption offers for completed work.
-      const capturedWaveId = this.currentWaveId;
+      const capturedWaveId = this.waveTracker.waveId;
       const capturedCallId = call.id;
       return runBackgroundBranch({
         handle,

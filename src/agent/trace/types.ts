@@ -675,8 +675,15 @@ export interface QueuedUserMessagePayload {
  * are persisted so the trace can never be used to exfiltrate message content.
  */
 export interface PeerMessagePayload {
-  /** What happened to this message. */
-  action: 'sent' | 'claimed' | 'injected' | 'delivered' | 'held' | 'refused' | 'dropped' | 'reclaimed';
+  /**
+   * What happened to this message.
+   *
+   * Note: the `'delivered'` member is the pre-#2810 receiver action. Traces
+   * from older builds show `sent → delivered` instead of `sent → claimed →
+   * injected`. New code never emits `'delivered'`; it is retained only for
+   * backward-compatible deserialization of historical trace files (see #2901).
+   */
+  action: 'sent' | 'claimed' | 'injected' | /** Legacy value (pre-#2810); never emitted by new code — retained only for backward-compatible deserialization of historical trace files. */ 'delivered' | 'held' | 'refused' | 'dropped' | 'reclaimed';
   /** The stable message id (uuid). Absent when action is 'dropped' by a sweep. */
   messageId?: string;
   /** The OTHER session's id (sender when action is delivered/held/dropped; target when sent/refused). */
@@ -685,6 +692,12 @@ export interface PeerMessagePayload {
   bytes: number;
   /** Why the message was refused or dropped. Absent for other actions. */
   reason?: string;
+  /**
+   * Sanitized inbox filename. Present only for `action: 'held'` with
+   * `reason: 'corrupt'` — allows repeated corrupt-quarantine events to be
+   * correlated by filename in the trace even when no parseable envelope exists.
+   */
+  file?: string;
 }
 
 export interface BrowserEventPayload {

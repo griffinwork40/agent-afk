@@ -51,7 +51,7 @@ const PLAYWRIGHT_DOWNLOAD_TIMEOUT_MS = 120_000;
  * side effects.
  *
  * Note: `VAR=value cmd` is POSIX shell / bash syntax that does NOT work in
- * PowerShell. On Windows the caller must use {@link envPrefix} with
+ * PowerShell. On Windows the caller must use {@link playwrightEnvPrefix} with
  * `platform = 'win32'` to get the PowerShell-compatible form (issue #2758).
  */
 const TIMEOUT_ENV_PREFIX_POSIX = `PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=${PLAYWRIGHT_DOWNLOAD_TIMEOUT_MS}`;
@@ -74,7 +74,7 @@ const TIMEOUT_ENV_PREFIX_POWERSHELL = `$env:PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEO
  * - win32 (PowerShell): `$env:PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=120000;`
  *   (PowerShell assignment, followed by `;` separator then the `node` call).
  */
-function envPrefix(platform: NodeJS.Platform): string {
+function playwrightEnvPrefix(platform: NodeJS.Platform): string {
   return platform === 'win32' ? TIMEOUT_ENV_PREFIX_POWERSHELL : TIMEOUT_ENV_PREFIX_POSIX;
 }
 
@@ -165,7 +165,7 @@ function resolveBundledInstallCommand(platform: NodeJS.Platform): string | undef
     const arg = /\s/.test(cli) ? `"${cli}"` : cli;
     // Prepend the connection-timeout override so slow-network installs do not
     // time out at Playwright's default 30 s limit (issue #1998).
-    return `${envPrefix(platform)} node ${arg} install chromium`;
+    return `${playwrightEnvPrefix(platform)} node ${arg} install chromium`;
   } catch {
     return undefined;
   }
@@ -192,7 +192,7 @@ export function playwrightInstallCommand(platform: NodeJS.Platform = process.pla
   const cached = cachedInstallCommands.get(platform);
   if (cached !== undefined) return cached;
 
-  const staticFallback = `${envPrefix(platform)} pnpm exec playwright install chromium`;
+  const staticFallback = `${playwrightEnvPrefix(platform)} pnpm exec playwright install chromium`;
   const cmd = resolveBundledInstallCommand(platform) ?? staticFallback;
   cachedInstallCommands.set(platform, cmd);
   return cmd;

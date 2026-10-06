@@ -324,11 +324,15 @@ export const QueuedUserMessagePayloadSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const PeerMessagePayloadSchema = z.object({
+  // 'delivered' is a legacy value (pre-#2810); retained for backward-compatible deserialization of historical traces.
   action: z.enum(['sent', 'claimed', 'injected', 'delivered', 'held', 'refused', 'dropped', 'reclaimed']),
   messageId: z.string().optional(),
   peer: z.string(),
   bytes: z.number().int().nonnegative(),
   reason: z.string().optional(),
+  // Present only for action:'held' + reason:'corrupt'; allows correlation of
+  // repeated quarantine events by filename when no parseable envelope exists.
+  file: z.string().optional(),
 });
 
 // ---------------------------------------------------------------------------

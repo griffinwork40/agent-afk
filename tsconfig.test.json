@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    /* Tests are never emitted — typecheck only. */
+    "noEmit": true,
+    /* Relax noUnusedLocals/noUnusedParameters for test helpers and fixtures
+       that intentionally declare variables used only as type witnesses. */
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": [
+    "src/**/*",
+    "tests/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

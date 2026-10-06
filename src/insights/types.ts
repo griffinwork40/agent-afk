@@ -124,6 +124,26 @@ export interface RoutingAggregates {
 }
 
 // ---------------------------------------------------------------------------
+// OutcomeAggregates — derived from ~/.afk/agent-framework/outcomes/
+// ---------------------------------------------------------------------------
+
+/** Per-ISO-week outcome counts (re-exported from outcomes aggregator). */
+export interface OutcomeWeekCounts {
+  goodProven: number;
+  goodPresumed: number;
+  bad: number;
+  blocked: number;
+  unknown: number;
+}
+
+export interface OutcomeAggregates {
+  /** key: ISO week string 'YYYY-Www' */
+  byWeek: Record<string, OutcomeWeekCounts>;
+  totalRecords: number;
+  parseErrors: number;
+}
+
+// ---------------------------------------------------------------------------
 // InsightAggregates — full merged result
 // ---------------------------------------------------------------------------
 
@@ -135,6 +155,8 @@ export interface InsightAggregates {
   traces: TraceAggregates;
   daemon: DaemonAggregates;
   routing: RoutingAggregates;
+  /** Per-week outcome label counts (good-proven / good-presumed / bad / blocked / unknown). */
+  outcomes: OutcomeAggregates;
 }
 
 // ---------------------------------------------------------------------------

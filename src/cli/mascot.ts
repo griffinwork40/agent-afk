@@ -43,6 +43,21 @@ const PIXEL_PALETTE: Record<string, [number, number, number] | null> = {
   // only for the reacting sprite states.
   // #C83C28 ≈ [200, 60, 40]
   R: [200, 60, 40],
+  // Shade olive — between D and M. The banner's form shading: the hat-brim
+  // shadow across the forehead, the soft lids and under-eye shadows, the nose's
+  // flanks, the jaw's rounding, and the lit top rim of each ear.
+  // #6C8330 ≈ [108, 131, 48]
+  S: [108, 131, 48],
+  // Leather highlight — the cap cone's lit left facet. A small accent: the cap
+  // body stays the (twice-darkened, on request) deep brown B.
+  // #583A20 ≈ [88, 58, 32]
+  C: [88, 58, 32],
+  // Dim gold — the MINI sprite's hatband only. At 13 columns the hatband and
+  // the eyes are both one pixel row of gold, and full-bright Y on the band
+  // out-shouted the eyes; the band steps down so the eyes stay the brightest
+  // thing in the footer. The banner band keeps full Y (it has room).
+  // #C4A030 ≈ [196, 160, 48]
+  G: [196, 160, 48],
 };
 
 /**
@@ -54,66 +69,68 @@ const PIXEL_PALETTE: Record<string, [number, number, number] | null> = {
  * is enforced left-right symmetric, so a single-side fang cannot live in it.
  * `mascot.test.ts` pins the load-bearing shape.
  *
- * v16 "goblin, refined fang": v14's polished portrait — a brown leather cap
- * (rows 0–6) over a gold hatband (row 7); plain olive forehead; a heavy dark
- * brow over yellow eyes with forward pupils and dark under-eye bags (rows
- * 12–16); a shaded protruding nose (rows 15–18); solid dark-olive swept ears
- * widest at cols 0/26 (rows 12–13); and a symmetric closed grin (rows 20–21).
- * A single pointed ▼ fang hangs at the viewer's-left canine (overlay, col 11)
- * against a small dark notch carved into the jaw row (row 22) — the notch is
- * what keeps the pointy glyph gap-free (see GLYPH_OVERLAY). Reverts v15's
- * hollow-bracket ears (they read as monkey ears) to v14's solid blobs and
- * restores the original pointed fang. Supersedes v14/v15.
+ * v17 "goblin, perfected": v16's anchors are kept on purpose (the brown cap
+ * leaning right over a gold hatband, solid dark-olive ears widest at cols
+ * 0/26, yellow eyes, the closed grin, the lone ▼ fang and its notch); what
+ * changed is form and expression. The cap is a hooked cone with a lit left
+ * facet and a brim; the brim casts a shadow on the forehead; the brows are
+ * level bars with a skin gap above soft-lidded eyes and round forward pupils
+ * (mischief, not menace: an earlier v17 draft used a V scowl and slit pupils
+ * and read as mean; 1px arches read as wire-rim glasses); the nose is a lit,
+ * bulbous hook with nostrils, separated from the mouth by the upper lip; the
+ * cheeks stay in line with the head (stepping them out a column read as
+ * jowly) and the jaw tapers to a pointed chin. Rows 7 down are authored as mirrored halves, so the symmetry
+ * rule holds by construction. Supersedes v14/v15/v16.
  */
 const GOBLIN_GRID: readonly string[] = [
-  // pointed goblin cap (brown leather) — clean cone, tip leans right
-  '..............BBB..........',
-  '............BBBBB..........',
-  '..........BBBBBBB..........',
-  '.........BBBBBBBBB.........',
-  // cap body widening to the head
-  '.......BBBBBBBBBBBB........',
-  '......BBBBBBBBBBBBBB.......',
-  '.....BBBBBBBBBBBBBBBBB.....',
+  // pointed goblin cap (brown leather) — the tip hooks over to the right
+  '................BBB........',
+  '..............BBBB.........',
+  '............BCBBB..........',
+  '..........BCCBBBB..........',
+  // cone widening; the lit left facet (C) gives the leather volume
+  '........BCCCBBBBBB.........',
+  '......BCCCCBBBBBBBBB.......',
+  // brim — one pixel proud of the head on each side
+  '....BBBBBBBBBBBBBBBBBBB....',
   // gold hatband — the "this is a hat" signal
   '.....KYYYYYYYYYYYYYYYK.....',
-  // forehead — plain olive under the cap
-  '.....KMMMMMMMMMMMMMMMK.....',
-  // upper face
-  '.....KMMMMMMMMMMMMMMMK.....',
-  // ears — solid dark-olive swept triangles, tapering in toward the head top
+  // brim shadow (S) cast across the top of the forehead
+  '.....KSSSSSSSSSSSSSSSK.....',
+  // forehead, lit at the dome (L)
+  '.....KMMMMMMLLLMMMMMMK.....',
+  // ears begin — solid dark-olive, tapering in toward the head top
   '....DKMMMMMMMMMMMMMMMKD....',
-  // upper ear body widening
-  '...DDKMMMMMMMMMMMMMMMKDD...',
-  // brow ridge — heavy dark over the eyes; ears widening
-  '.DDDDKMKKKKKMMMKKKKKMKDDDD.',
-  // heavy hooded lids + ears at their widest point (cols 0/26)
-  'DDDDDKMMKKKMMMMMKKKMMKDDDDD',
-  // eyes — yellow slit peering out; ears tapering back in
+  // plain brow-line skin; each ear's top rim catches light (S)
+  '...SDKMMMMMMMMMMMMMMMKDS...',
+  // level brows, one pixel wider than the eye on the outside — calm, not a scowl
+  '.SSDDKMKKKKMMMMMKKKKMKDDSS.',
+  // soft lid shadow (S), a clear skin gap under the brow; ears widest (0/26)
+  'DDDDDKMMSSSMMMMMSSSMMKDDDDD',
+  // open yellow eyes
   '.DDDDKMMYYYMMMMMYYYMMKDDDD.',
-  // pupils gaze forward from under the lids; ear tip meets the head
+  // round forward pupils (YKY); the nose bridge (L) starts between the eyes
   '..DDDKMMYKYMMLMMYKYMMKDDD..',
-  // under-eye bags (dark-olive) + nose bridge; brackets closed below here
-  '.....KMMDDDMMLMMDDDMMK.....',
-  // nose widens — lit ridge, shadowed sides; gaunt cheek hollows
-  '.....KMDMMMMDLDMMMMDMK.....',
-  // bulbous nose tip (dark underside) + cheek hollows
-  '.....KMDMMMMDDDMMMMDMK.....',
-  // upper lip / cheeks
-  '.....KMMMMMMMMMMMMMMMK.....',
-  // grin — both corners pulled UP (symmetric closed-mouth smile)
+  // soft under-eye shadow (S); cheeks stay in line with the head, no jowls
+  '.....KMMSSSMMLMMSSSMMK.....',
+  // nose widens — lit ridge, shaded flanks; gaunt cheek hollows (D)
+  '.....KMDMMMMSLSMMMMDMK.....',
+  // bulbous lit nose tip
+  '.....KMDMMMSLLLSMMMDMK.....',
+  // shaded underside with two nostrils, kept clear of the mouth
+  '.....KMMMMMSKDKSMMMMMK.....',
+  // upper lip; grin corners pulled UP
   '.....KMMKKMMMMMMMKKMMK.....',
   // grin — low curve across the middle (mouth stays closed)
   '.....KMMMKKKKKKKKKMMMK.....',
-  // jaw + a small dark notch under the grin's centre (cols 10–16): the dark
-  // backing the ▼ fang overlay sits against so no olive shows above the tooth
-  '.....KMMMMKKKKKKKMMMMK.....',
-  // jaw narrowing
-  '......KMMMMMMMMMMMMMK......',
+  // jaw + dark notch under the grin (cols 10–16) backing the ▼ fang overlay
+  '......KSMMKKKKKKKMMSK......',
+  // jaw narrowing, shaded at the edges (S)
+  '.......KSMMMMMMMMMSK.......',
   // chin
-  '........KMMMMMMMMMK........',
-  // chin base
-  '..........KMMMMMK..........',
+  '.........KSMMMMMSK.........',
+  // pointed chin base
+  '...........KMMMK...........',
 ];
 
 export const MASCOT_WIDTH = 27;

@@ -239,4 +239,27 @@ describe('/inbox drop', () => {
     await inboxCmd.handler(ctx, 'drop all');
     expect(clean(lines)).toMatch(/dropped 2/i);
   });
+
+  it('drops a corrupt held entry by filename prefix', async () => {
+    const sessionId = 'sess-drop-corrupt-' + Math.random().toString(36).slice(2, 8);
+    // Write a valid held envelope first.
+    const env = makeEnvelope({ to: sessionId });
+    await writeAndHold(sessionId, env);
+    // Manually create a corrupt held file.
+    const heldDir = join(tmpDir, 'inbox', sessionId, 'held');
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(join(heldDir, 'corrupt-file.json'), 'NOT-JSON', { mode: 0o600 });
+
+    const notifier = makeNotifierStub(sessionId);
+    setPeerNotifier(notifier, () => sessionId);
+    const { ctx, lines } = makeCtx(makeStats({ sessionId }));
+    // Drop only the corrupt entry by its filename prefix.
+    await inboxCmd.handler(ctx, 'drop corrupt');
+    expect(clean(lines)).toMatch(/dropped 1/i);
+    // The valid entry should still be there.
+    const { listHeld } = await import('../../../agent/peer/inbox-store.js');
+    const remaining = await listHeld(sessionId);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.corrupt).toBeFalsy();
+  });
 });

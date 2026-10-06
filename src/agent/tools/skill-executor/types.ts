@@ -112,6 +112,9 @@ export interface SkillExecutorContext {
     // Forking child's journal view (read lazily): nested skill forks journal
     // via its `forSubagent(id)`. Absent → nested skill forks run unjournaled.
     journalParent?: JournalParent,
+    // Root (depth-0) session id for child-attribution (#2442); becomes the
+    // nested executor's `parentRootSessionId`.
+    rootSessionId?: string,
   ) => SkillExecutor;
   /**
    * Witness-layer trace writer. When provided, the per-call
@@ -224,6 +227,13 @@ export interface SkillExecutorContext {
   workspaceStore?: import('../../workspace/index.js').WorkspaceStore;
   /** Tree-wide delegation budget. Opt-in: undefined when no budget env vars set. */
   delegationBudget?: import('../../tools/delegation-budget.js').DelegationBudget;
+  /**
+   * Root (depth-0) session id inherited by this executor's parent. Threaded
+   * into the per-call {@link SubagentManager} so skill-forked sub-agents
+   * are attributed to the root record. Parity with
+   * {@link SubagentExecutorContext.parentRootSessionId}.
+   */
+  parentRootSessionId?: string;
 }
 
 export interface SkillInput {

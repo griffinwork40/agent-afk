@@ -46,9 +46,9 @@ import {
   type FireOnTaskCompleteOptions,
 } from './scheduler.pull-tick.js';
 import { errorMessage } from '../../utils/errors.js';
-import { makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord } from './scheduler.overlap-guard.js';
+import { makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord, makeTelemetryUnwritableSkipRecord } from './scheduler.overlap-guard.js';
 import { BudgetAlertLatch, evaluateBudgetGate, formatBudgetSkipMessage, resolveDaemonUsageTarget } from './budget-gate.js';
-
+import { probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
 
 export interface SchedulerOptions {
   /** Per-tick session config; merged with defaults at spawn time. */
@@ -66,9 +66,9 @@ export interface SchedulerOptions {
   /** Clock injection (tests). Defaults to `Date.now`. */
   now?: () => number;
   /**
-   * Optional callback invoked after the telemetry record is successfully
-   * written to disk (success, error, or skipped). If the telemetry write
-   * itself fails, the callback is NOT fired. Callback errors are caught so
+   * Optional callback invoked after every task completion (success, error, or
+   * skipped). A telemetry write failure is logged to stderr and never suppresses
+   * the callback — it fires unconditionally. Callback errors are caught so
    * notification failures never crash the scheduler. Used for out-of-band
    * notifications (Telegram push, webhooks, etc.).
    */
@@ -194,6 +194,8 @@ export class CronScheduler {
   private readonly inFlightTaskIds = new Set<string>();
   /** One Telegram alert per usage-budget episode (see BudgetAlertLatch). */
   private readonly budgetAlerts = new BudgetAlertLatch();
+  /** One Telegram alert per daemon process for a non-writable telemetry file. */
+  private readonly telemetryAlerts = new TelemetryAlertLatch();
   // TODO(#337-hook): hook-driven dequeue path will share isDequeuing mutex
 
   constructor(options: SchedulerOptions = {}) {
@@ -269,8 +271,31 @@ export class CronScheduler {
       .map((entry) => entry.task)
       .filter((task) => task.trigger === 'sessionstart' || task.trigger === 'both');
     const records: TelemetryRecord[] = [];
+
+    // Probe writability once for the whole fireOnStart call so we can send a
+    // single Telegram alert rather than one per task.
+    const writeError = probeTelemetryWritable(this.telemetryPath());
+    if (writeError !== null) {
+      void this.telemetryAlerts.notify(this.telemetryPath(), writeError);
+    }
+
     for (const task of eligible) {
+      // Agent tasks depend on the telemetry file to enforce the sessionstart
+      // cooldown. If the file is not writable the cooldown record cannot be
+      // saved, causing the task to re-fire on every daemon restart. Skip and
+      // record the reason. Shell and builtin tasks are exempt — they don't
+      // consume model quota and don't rely on the cooldown gate.
+      const isAgentTask = (task.executor ?? 'agent') === 'agent';
       const cooldownMs = task.debounceMs ?? this.defaultCooldownMs;
+      if (writeError !== null && isAgentTask && cooldownMs > 0) {
+        const skipRecord = makeTelemetryUnwritableSkipRecord(task, this.now(), writeError);
+        // Do NOT call writeTelemetry here — it calls appendFileSync to the same
+        // unwritable path, which would silently fail. Keep only the in-memory
+        // record and fire the completion callback directly for notifications.
+        records.push(skipRecord);
+        fireOnTaskComplete(skipRecord, { onTaskComplete: this.options.onTaskComplete }, task);
+        continue;
+      }
       const decision = evaluateSessionStartGates({
         taskId: task.taskId,
         cooldownMs,
@@ -466,13 +491,14 @@ export class CronScheduler {
     const persistedRecord: TelemetryRecord = details?.doneUnverified === true ? { ...record, doneUnverified: true } : record;
     try {
       appendFileSync(this.telemetryPath(), `${JSON.stringify(persistedRecord)}\n`, 'utf-8');
-      const opts: FireOnTaskCompleteOptions = { onTaskComplete: this.options.onTaskComplete };
-      fireOnTaskComplete(persistedRecord, opts, task, details);
     } catch (err) {
-      // Telemetry failure must not crash the daemon. Log to stderr and move on.
+      // Telemetry write failure must not crash the daemon or suppress the
+      // completion push — log and fall through so fireOnTaskComplete still runs.
       const msg = errorMessage(err);
       // eslint-disable-next-line no-console
       console.error(`[daemon] telemetry write failed: ${msg}`);
     }
+    const opts: FireOnTaskCompleteOptions = { onTaskComplete: this.options.onTaskComplete };
+    fireOnTaskComplete(persistedRecord, opts, task, details);
   }
 }

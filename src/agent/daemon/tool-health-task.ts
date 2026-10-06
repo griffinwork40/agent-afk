@@ -28,6 +28,28 @@ import { errorMessage } from '../../utils/errors.js';
 import type { TelemetryRecord, TelemetryTrigger } from './scheduler.js';
 
 // ---------------------------------------------------------------------------
+// In-process fallback cooldown (survives disk-write failures within one daemon
+// lifetime). Declared here — sibling files must import this binding, never
+// re-declare it (enforced by pnpm audit:module-state:check).
+// ---------------------------------------------------------------------------
+
+/**
+ * Maps `"${tool}::${errorHead}"` → epoch ms of the last alert sent this
+ * process lifetime. Written even when the disk-state write fails, so the
+ * cooldown is honoured within the current daemon run regardless of disk health.
+ */
+const _inProcessAlertTimes = new Map<string, number>();
+
+/**
+ * Reset the in-process cooldown map. Call from `beforeEach` in tests that
+ * exercise the write-failure path so cases do not bleed cooldown into each
+ * other. Never call in production code.
+ */
+export function _resetToolHealthAlertCooldownForTests(): void {
+  _inProcessAlertTimes.clear();
+}
+
+// ---------------------------------------------------------------------------
 // Thresholds / constants — exported for tests
 // ---------------------------------------------------------------------------
 
@@ -100,11 +122,16 @@ async function readAlertState(path: string): Promise<AlertState> {
   return { alerts: {} };
 }
 
-async function writeAlertState(path: string, state: AlertState): Promise<void> {
+/**
+ * Attempt to persist alert state to disk. Returns an error message string when
+ * the write failed (caller logs it), or `undefined` on success.
+ */
+async function writeAlertState(path: string, state: AlertState): Promise<string | undefined> {
   try {
     await atomicWriteFileAsync(path, JSON.stringify(state, null, 2), { mode: 0o600 });
-  } catch {
-    // Best-effort: a write failure means cooldown is lost but we never throw
+    return undefined;
+  } catch (err) {
+    return errorMessage(err);
   }
 }
 
@@ -272,14 +299,19 @@ export async function runBuiltinToolHealthTask(
       return record;
     }
 
-    // Apply cooldown: filter out groups alerted within 24h
+    // Apply cooldown: filter out groups alerted within 24h.
+    // Two sources are checked: (1) on-disk persisted state (survives daemon
+    // restarts) and (2) the in-process map (guards against disk-write failures
+    // within one daemon lifetime so the same alert cannot re-fire every tick).
     const alertState = await readAlertState(alertStatePath);
     const nowMs = options.now();
     const newAlerts: GroupSummary[] = [];
 
     for (const g of groups) {
       const key = `${g.tool}::${g.errorHead}`;
-      const lastAlert = alertState.alerts[key] ?? 0;
+      const lastDisk = alertState.alerts[key] ?? 0;
+      const lastInProcess = _inProcessAlertTimes.get(key) ?? 0;
+      const lastAlert = Math.max(lastDisk, lastInProcess);
       if (nowMs - lastAlert >= TOOL_HEALTH_COOLDOWN_MS) {
         newAlerts.push(g);
       }
@@ -297,12 +329,21 @@ export async function runBuiltinToolHealthTask(
       return record;
     }
 
-    // Update alert state for newly firing groups
+    // Update cooldown state for newly firing groups.
+    // Write in-process map FIRST (always succeeds) so cooldown is honoured
+    // even when the disk write below fails.
     for (const g of newAlerts) {
       const key = `${g.tool}::${g.errorHead}`;
       alertState.alerts[key] = nowMs;
+      _inProcessAlertTimes.set(key, nowMs);
     }
-    await writeAlertState(alertStatePath, alertState);
+    const writeErr = await writeAlertState(alertStatePath, alertState);
+    let stateWriteNote: string | undefined;
+    if (writeErr !== undefined) {
+      const note = `tool-health: alert state write failed (in-process cooldown active): ${writeErr}`;
+      process.stderr.write(`${note}\n`);
+      stateWriteNote = note;
+    }
 
     // Build alert message — operator-readable Telegram text
     const windowHours = Math.round(lookbackMs / 3600000);
@@ -311,13 +352,14 @@ export async function runBuiltinToolHealthTask(
         `tool-health: ${g.tool} degraded in ${g.sessionCount} sessions (last ${windowHours}h): ${g.errorHead}` +
         ` [${g.totalErrorCount}/${g.totalCallCount} calls failed]`,
     );
-    const errorMessage = lines.join('\n');
+    const alertErrorMessage = lines.join('\n');
 
     const record: TelemetryRecord = {
       ...baseRecord,
       durationMs: options.now() - startTimeMs,
       status: 'error',
-      errorMessage,
+      errorMessage: alertErrorMessage,
+      ...(stateWriteNote !== undefined ? { responseExcerpt: stateWriteNote } : {}),
     };
     options.writeTelemetry(record);
     return record;

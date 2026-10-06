@@ -91,11 +91,16 @@ function sanitizePlan(v: unknown): string | undefined {
   return /^[A-Za-z0-9 _.-]{1,32}$/.test(plan) ? plan : undefined;
 }
 
-/** Best-effort window length from the `x-codex-*` rate-limit headers. */
+/**
+ * Best-effort window length from the `x-codex-primary-window-minutes` header.
+ *
+ * The header name is hardcoded — the server-controlled `x-codex-active-limit`
+ * value is intentionally not used to construct it, because doing so would
+ * allow a hostile server to select an arbitrary response header as the source
+ * for this field.
+ */
 function windowMinutesFromHeaders(err: unknown): number | undefined {
-  const limit = getHeader(err, 'x-codex-active-limit')?.trim() || 'codex';
-  const prefix = /^[A-Za-z0-9_-]{1,40}$/.test(limit) ? limit : 'codex';
-  const raw = getHeader(err, `x-${prefix}-primary-window-minutes`);
+  const raw = getHeader(err, 'x-codex-primary-window-minutes');
   const n = toFiniteNumber(raw);
   return n !== undefined && n > 0 ? n : undefined;
 }

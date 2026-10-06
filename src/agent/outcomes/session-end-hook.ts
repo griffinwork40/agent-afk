@@ -60,7 +60,14 @@ function closureFromTrace(tracePath: string | undefined): ClosureInfo | null {
           const reason = p?.['reason'];
           if (reason === 'abort') return { reason: 'abort' };
           if (reason === 'iteration_cap') return { reason: 'iteration_cap' };
-          return { reason: 'normal' };
+          // Invariant: only 'model_end_turn' should map to 'normal'.
+          // 'truncated', 'timeout', 'budget_exceeded', 'hook_blocked', and
+          // 'max_turns_exceeded' are abnormal termination reasons — mapping them
+          // to 'normal' lets combiner rules 6/7 label abnormal sessions as
+          // succeeded. Use 'unknown' as a safe non-normal sentinel for any
+          // trace reason that is not explicitly known to be clean.
+          if (reason === 'model_end_turn') return { reason: 'normal' };
+          return { reason: 'unknown' };
         }
       } catch {
         // malformed line — skip
@@ -107,6 +114,13 @@ function extractFirstPrompt(
 // ---------------------------------------------------------------------------
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * No-artifact sessions are held provisional for 24h so that a cross_session_reask
+ * arriving later can still land a vote before the record is settled.
+ * Previously these were settled immediately, causing them to never be revisited
+ * by relabel-job.ts (which only processes provisional records).
+ */
+const NO_ARTIFACT_SETTLE_MS = 24 * 60 * 60 * 1000;
 
 export function createOutcomeSessionEndHook(): HookHandler {
   return (context) => {
@@ -183,31 +197,70 @@ async function _runImmediatePass(
   );
 
   // Determine state / settles_after
+  // No-artifact sessions are now written provisional with settles_after = 24h
+  // so relabel-job can apply combiner v2 good-by-default and late reask signals
+  // can still land before the record is settled (fixes the 'settled immediately'
+  // regression where 563/564 unknown records could never be revisited).
   const hasArtifacts = artifacts.commits.length > 0 || artifacts.prs.length > 0;
   const settlesAfter = hasArtifacts
     ? new Date(Date.now() + SEVEN_DAYS_MS).toISOString()
-    : null;
+    : new Date(Date.now() + NO_ARTIFACT_SETTLE_MS).toISOString();
 
   const sessionKind = detectSessionKind(turns);
   const firstPrompt = extractFirstPrompt(turns);
 
   const fingerprint = firstPrompt !== undefined ? promptFingerprint(firstPrompt) : [];
 
+  // Map ClosureInfo → closure_reason field (stored in the outcome record).
+  // 'unknown' is used when the trace was unavailable (closure === null).
+  // The switch is exhaustive over ClosureInfo['reason'] so that adding a new
+  // member to that union causes a compile-time error here rather than silently
+  // falling through to a wrong value. The never assertion at default enforces
+  // this — TypeScript will reject any unhandled branch.
+  let closureReason: VerifiedOutcome['closure_reason'];
+  if (closure === null) {
+    closureReason = 'unknown';
+  } else {
+    switch (closure.reason) {
+      case 'abort':
+        closureReason = 'abort';
+        break;
+      case 'iteration_cap':
+        closureReason = 'iteration_cap';
+        break;
+      case 'normal':
+        closureReason = 'normal';
+        break;
+      case 'unknown':
+        closureReason = 'unknown';
+        break;
+      default: {
+        const _exhaustive: never = closure.reason;
+        closureReason = 'unknown'; // unreachable at runtime
+        void _exhaustive;
+      }
+    }
+  }
+
   const base: Omit<VerifiedOutcome, 'votes' | 'history'> = {
     schema_version: 1,
     session_id: sessionId,
     label: 'unknown',
     confidence: 0,
-    state: hasArtifacts ? 'provisional' : 'settled',
+    state: 'provisional',
     settles_after: settlesAfter,
     session_kind: sessionKind,
     self_report: selfReport,
     artifacts,
+    closure_reason: closureReason,
+    // session_ended_at is set once here and preserved across all later upsertVotes
+    // calls (the store only writes it when absent). See schema.ts for rationale.
+    session_ended_at: now,
     ...(fingerprint.length > 0 ? { first_prompt_tokens: fingerprint } : {}),
     ...(cwd !== undefined ? { first_cwd: cwd } : {}),
   };
 
-  upsertVotes(sessionId, votes, base);
+  upsertVotes(sessionId, votes, base, { closureReason });
 
   // cross_session_reask: check if this NEW session should add a -1 to a
   // prior session (fire-and-forget within the already-void context)

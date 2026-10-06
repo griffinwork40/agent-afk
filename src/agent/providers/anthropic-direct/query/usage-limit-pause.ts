@@ -108,7 +108,9 @@ async function* runHotSwapParkLoop(
     // Resumed (or the turn ended without re-limiting) — done.
     if (!reLimited) return;
 
-    if (Date.now() - startedAt > TWO_HOURS_MS) {
+    // Use >= so the session at exact equality is also capped (one extra probe
+    // at strict > would otherwise fire at the boundary).
+    if (Date.now() - startedAt >= TWO_HOURS_MS) {
       // Limit never lifted within the cap — stop polling and surface it.
       ctx.markCredentialSnapshotStale();
       yield anthropicLimitErrorEvent(reLimited, reLimitedResetsAt);

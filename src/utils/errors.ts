@@ -253,6 +253,12 @@ export interface UsageLimitInfo {
  * value `errorClass` telemetry records). No SDK import: this is a leaf module.
  */
 export class UsageLimitError extends Error {
+  /**
+   * HTTP status code for this error: `400` when `info.kind === 'credit'`
+   * (empty API credit balance), `429` for all other usage-limit kinds
+   * (subscription window exhausted). Matches the raw SDK error it replaces so
+   * status-keyed classifiers continue to work.
+   */
   public readonly status: number;
   public override readonly cause?: unknown;
 

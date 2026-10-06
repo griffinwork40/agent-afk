@@ -267,19 +267,15 @@ function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown)
   const src = join(queueDir, filename);
   try {
     mkdirSync(poisonDir, { recursive: true });
-    let dest = join(poisonDir, filename);
-    try {
-      renameSync(src, dest);
-    } catch {
-      // First rename failed — almost always a name collision with a file of the
-      // same name already in poison/ (e.g. re-quarantined after a manual
-      // restore). Retry once with a unique timestamp+random prefix so an
-      // existing poison file is never overwritten. poison/ is a subdir of
-      // queueDir, so a cross-device (EXDEV) rename cannot occur here; any other
-      // rename failure rethrows and is handled by the outer catch.
-      dest = join(poisonDir, `${Date.now()}-${randomBytes(3).toString('hex')}-${filename}`);
-      renameSync(src, dest);
-    }
+    // Always include a timestamp+random suffix so two quarantine attempts for
+    // the same filename (e.g. re-quarantined after a manual restore) never
+    // overwrite each other. POSIX renameSync() silently overwrites an existing
+    // destination, so the original try/catch collision-fallback was dead code
+    // for same-name collisions — the first rename would silently replace an
+    // older poison copy. poison/ is a subdir of queueDir, so a cross-device
+    // (EXDEV) rename cannot occur here.
+    const dest = join(poisonDir, `${Date.now()}-${randomBytes(3).toString('hex')}-${filename}`);
+    renameSync(src, dest);
     // eslint-disable-next-line no-console
     console.error(
       `[daemon] pull-queue: quarantined malformed entry ${redactedFilename} → ${POISON_SUBDIR}/ (${reason})`,

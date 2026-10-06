@@ -301,6 +301,40 @@ describe('lfReask store interaction', () => {
     expect(similarity).toBeLessThan(thr);
   });
 
+  it('assigns major severity when reask is within 30 minutes', async () => {
+    // Set up a prior session record that was written ~1 minute ago (well within 30min)
+    const { promptFingerprint: fp, lfReask: lf } = await import('./lf-reask.js');
+    const { writeRecord, readRecord } = await import('./store.js');
+
+    const sharedPrompt = 'deploy infrastructure terraform apply staging environment';
+
+    const priorTokens = fp(sharedPrompt);
+    const priorRecord = {
+      schema_version: 1 as const,
+      session_id: 'sess-reask-major',
+      label: 'unknown' as const,
+      confidence: 0,
+      state: 'settled' as const,
+      settles_after: null,
+      session_kind: 'text' as const,
+      self_report: 'none' as const,
+      artifacts: { commits: [], prs: [], repo: null },
+      votes: [],
+      history: [],
+      first_prompt_tokens: priorTokens,
+      first_cwd: tmpDir,
+    };
+    writeRecord(priorRecord, tmpDir);
+
+    // Trigger reask from a "new" session (within 30min window — just written)
+    lf('sess-reask-major-new', sharedPrompt, tmpDir, new Date().toISOString(), { outcomesDir: tmpDir });
+
+    const updated = readRecord('sess-reask-major', tmpDir);
+    const reaskVote = updated?.votes.find((v) => v.lf === 'cross_session_reask');
+    expect(reaskVote).toBeDefined();
+    expect(reaskVote?.severity).toBe('major');
+  });
+
   it('does NOT match a legacy record that has only first_prompt (no tokens)', async () => {
     // A legacy record without first_prompt_tokens should be skipped by lfReask
     const { writeRecord } = await import('./store.js');
@@ -337,5 +371,101 @@ describe('lfReask store interaction', () => {
     // Since stored tokens is undefined/empty, lfReask would skip this record
     const storedTokens = rec?.first_prompt_tokens;
     expect(!storedTokens || storedTokens.length === 0).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Finding #3: use session_ended_at instead of mtime for age/severity check
+// ---------------------------------------------------------------------------
+
+describe('lfReask – session_ended_at prevents mtime drift (finding #3)', () => {
+  it('uses session_ended_at for age calculation (not mtime)', async () => {
+    const { writeRecord, readRecord, upsertVotes: upsert } = await import('./store.js');
+    const { promptFingerprint: fp, lfReask: lf } = await import('./lf-reask.js');
+
+    const sharedPrompt = 'migrate database schema postgres postgres16 upgrade';
+    const priorFp = fp(sharedPrompt);
+
+    // Write a prior session with session_ended_at = 2 hours ago (minor severity territory)
+    // If we used mtime, a subsequent upsertVotes call would refresh mtime to ~now
+    // and incorrectly assign major severity. session_ended_at is immune.
+    const endedAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(); // 2h ago
+
+    const prior = {
+      schema_version: 1 as const,
+      session_id: 'sess-reask-ended-at',
+      label: 'unknown' as const,
+      confidence: 0,
+      state: 'settled' as const,
+      settles_after: null,
+      session_kind: 'text' as const,
+      self_report: 'none' as const,
+      artifacts: { commits: [], prs: [], repo: null },
+      votes: [],
+      history: [],
+      first_prompt_tokens: priorFp,
+      first_cwd: tmpDir,
+      session_ended_at: endedAt,
+    };
+    writeRecord(prior, tmpDir);
+
+    // Simulate a relabel-job vote that refreshes mtime to NOW
+    upsert(
+      'sess-reask-ended-at',
+      [{ lf: 'ci', vote: 1, strength: 'weak', evidence: 'ci-ok', observed_at: new Date().toISOString() }],
+      undefined,
+      { outcomesDir: tmpDir },
+    );
+
+    // Now trigger reask — if using mtime, ageMs ~0 → major; session_ended_at → 2h → minor
+    lf('sess-reask-new-1', sharedPrompt, tmpDir, new Date().toISOString(), { outcomesDir: tmpDir });
+
+    const updated = readRecord('sess-reask-ended-at', tmpDir);
+    const reaskVote = updated?.votes.find((v) => v.lf === 'cross_session_reask');
+    expect(reaskVote).toBeDefined();
+    // 2 hours old → minor (not major); would be major if mtime were used (mtime ≈ now after relabel)
+    expect(reaskVote?.severity).toBe('minor');
+  });
+
+  it('falls back to mtime for old records without session_ended_at', async () => {
+    const { writeRecord } = await import('./store.js');
+    const { promptFingerprint: fp, lfReask: lf, REASK_THRESHOLD: thr, jaccardSimilarity: sim } =
+      await import('./lf-reask.js');
+
+    const sharedPrompt = 'reindex elasticsearch clusters shards mapping rebuild';
+    const priorFp = fp(sharedPrompt);
+
+    // Verify similarity is above threshold
+    const simScore = sim(new Set(fp(sharedPrompt)), new Set(priorFp));
+    expect(simScore).toBeGreaterThanOrEqual(thr);
+
+    // Write a legacy record without session_ended_at (simulating pre-fix record)
+    const prior = {
+      schema_version: 1 as const,
+      session_id: 'sess-reask-legacy-mtime',
+      label: 'unknown' as const,
+      confidence: 0,
+      state: 'settled' as const,
+      settles_after: null,
+      session_kind: 'text' as const,
+      self_report: 'none' as const,
+      artifacts: { commits: [], prs: [], repo: null },
+      votes: [],
+      history: [],
+      first_prompt_tokens: priorFp,
+      first_cwd: tmpDir,
+      // no session_ended_at — will fall back to mtime
+    };
+    writeRecord(prior, tmpDir);
+
+    // Trigger reask — just written so mtime ≈ now → within 30min window → major severity
+    lf('sess-reask-new-2', sharedPrompt, tmpDir, new Date().toISOString(), { outcomesDir: tmpDir });
+
+    const { readRecord } = await import('./store.js');
+    const updated = readRecord('sess-reask-legacy-mtime', tmpDir);
+    const reaskVote = updated?.votes.find((v) => v.lf === 'cross_session_reask');
+    expect(reaskVote).toBeDefined();
+    // mtime ≈ now → within 30min → major (legacy behavior preserved)
+    expect(reaskVote?.severity).toBe('major');
   });
 });

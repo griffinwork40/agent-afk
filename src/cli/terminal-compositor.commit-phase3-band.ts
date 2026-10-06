@@ -1,3 +1,4 @@
+import { hiddenArchivedRows } from './terminal-compositor.archived-reveal.js';
 import type { CommittedBandHost } from './terminal-compositor.committed-band-commit.js';
 import type { CommitGeometry } from './terminal-compositor.commit-geometry.js';
 import type { CommitRoute } from './terminal-compositor.commit-route.js';
@@ -101,7 +102,10 @@ export function commitPhase3Band(
     const capped = run.length > maxRun ? run.slice(run.length - maxRun) : run;
     // #540: cap the provenance by the SAME row count so it stays 1:1 with `capped`.
     const cappedMeta = run.length > maxRun ? runMeta.slice(runMeta.length - maxRun) : runMeta;
-    const bandTop = newTopRow - capped.length;
+    const prefix = retainedArchivedPrefix(self, contiguousPriorBand, run.length - capped.length);
+    const hidden = hiddenArchivedRows(self, undefined, { length: capped.length, prefix });
+    const painted = capped.slice(hidden);
+    const bandTop = newTopRow - painted.length;
     // Stale band rows above bandTop: when the extended contiguity arm fires, the
     // old band's tracked top (self.committedBandTopRow) may be ABOVE the new
     // bandTop — those rows hold echo content that was physically scrolled there
@@ -147,10 +151,10 @@ export function commitPhase3Band(
       // CURRENT terminal width so painted rows adapt on resize. The band stores
       // raw (unpadded) content; padding is applied at paint time only.
       const pad = contentMargin();
-      for (let i = 0; i < capped.length; i++) {
+      for (let i = 0; i < painted.length; i++) {
         const row = bandTop + i;
         if (row >= newTopRow) break; // Never overwrite the live frame.
-        const line = pad && capped[i] !== '' ? pad + capped[i] : capped[i];
+        const line = pad && painted[i] !== '' ? pad + painted[i] : painted[i];
         out += eraseAndPaintRow(row, line);
       }
     } else {
@@ -189,7 +193,7 @@ export function commitPhase3Band(
     // it above the frame; the overflow arm paints the tail that fits AND
     // Phase 1 already archived the full block to scrollback. Either way no row
     // of `capped` is unpainted-and-unarchived, so nothing is pending here.
-    self.committedBandPaintedRows = capped.length;
+    self.committedBandPaintedRows = painted.length;
   } else {
     clearCommittedBand(self);
   }

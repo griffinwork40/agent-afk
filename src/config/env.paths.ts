@@ -105,4 +105,18 @@ export const PATHS_ENV_REGISTRY = [
     required: false,
     category: 'process',
   },
+  {
+    name: 'SystemRoot',
+    description: 'Windows system root directory (typically C:\\Windows). Used to identify WSL bash.exe shim paths in resolve-shell.ts.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
+  {
+    name: 'MSYSTEM',
+    description: 'Set by Git Bash environments (e.g. MINGW64). Signals that bash.exe is already on PATH in resolve-shell.ts.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
 ] as const satisfies readonly EnvVarMeta[];

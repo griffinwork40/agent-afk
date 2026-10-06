@@ -11,6 +11,237 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.301.3] - 2026-10-06
+
+### Changed
+- inject execSync via deps, extract mockPrefix helper, share win32 invariant helper (#3055) (41062f4b)
+- replace wall-clock budget, fix EBUSY teardown, harden watch timing (#3056) (67ef042b)
+
+## [5.301.2] - 2026-10-06
+
+### Fixed
+- wire Stop on afk web, forward beforeTurnEnd, honor cap=0 (#3057) (9a918d6c)
+
+## [5.301.1] - 2026-10-06
+
+### Fixed
+- persist compose partial flags in the journal and count partial nodes (#3058) (f0dc157a)
+- explicit case + tests for no-usable-auth-forced-chatgpt-oauth and source:config (#3059) (c37ef0d9)
+- harden gate-liveness test assertions — URL check, module reset scope, neutral token, catch comment (#3092) (146b93e9)
+- drop unused flushed var, move comment, add isDirty rationale (#3091) (f736859a)
+- bind resolver inside vi.waitFor to eliminate post-poll non-null assertion (#3090) (b03df02d)
+- add curl -si allowlist comment; pin execSync arg in gh run list test; fix double-space nit (#3089) (fd608e90)
+- de-flake windows tests (rm retries; sync process-jobs cancel test on registry leader-exit) (#3093) (b11580ae)
+
+## [5.301.0] - 2026-10-06
+
+### Added
+- perfect the goblin — v17 banner portrait + sharper mini sprite (#3064) (23c6001d)
+
+### Fixed
+- correct curl -si comment; add gh run list wait_for test (#3060) (ef678e0d)
+- advisory findings from #2895 — security, perf, nit cleanup (#3061) (6aa297d8)
+- close lstat-to-rm TOCTOU window in session-tmpdir cleanup (#3076) (c31f825e)
+- address advisory findings from #2883 review (#3063) (bf4383e4)
+
+### Changed
+- replace fixed sleeps with vi.waitFor polling in afk-two-way-roundtrip (#3073) (f65a3fe3)
+- harden gate-liveness tests — fake token, fail-open coverage, real workspace dir (#3062) (939d49b1)
+- direct _mergeVotes ordering tests + accurate ordering docs (#3074) (a5ee46fa)
+- cover cappedHistory and falling-start/rising-tail burn-rate paths (#3075) (2b1173bf)
+- assert pendingWindowCap via test hook in S2 (#3077) (caaa28ef)
+
+## [5.300.0] - 2026-10-06
+
+### Added
+- run_in_background for managed long-running processes (#3037) (254fb1cc)
+
+## [5.299.9] - 2026-10-06
+
+### Fixed
+- harden per-session TMPDIR (TOCTOU, registry leak, hook shells, cache, docs) (#3052) (e5faf816)
+- restore pendingWindowCap invariant on all-sentinel displacement, document sync guarantee, add compact+sentinel tests (#3014) (6c06fbb0)
+- treat blank optional args as absent in edit_file and patch_apply (#3051) (359fbcca)
+- suppress burn-rate ETA when latest sample pair is non-increasing (#3048) (d068b217)
+- real candidates count + debugLog in memory GC sweep (#3049) (a0e22e77)
+- delete-then-set in _mergeVotes to preserve Map arrival order (#3047) (c5bc6887)
+- use path.relative-based containment in sandbox-guard (#3033) (a4cb15fd)
+
+### Changed
+- unit-test queuedSubmission + restore runInputLoop funcsize headroom (#3050) (88c290df)
+
+## [5.299.8] - 2026-10-06
+
+### Fixed
+- widen drift-test job regex to include digits/uppercase; annotate heredoc (#3042) (2a7676d8)
+
+## [5.299.7] - 2026-10-06
+
+### Fixed
+- replace `as OutputEvent[]` casts with `satisfies` in stream tests (#3041) (2742fbdd)
+- head+tail signature cap, remove dead nudged field, reword invariant comment (#3043) (be05492c)
+- parentRootSessionId JSDoc and microtask test drain (#3035) (fcf63c7a)
+- consolidate safeAnswer into farm-callbacks.helpers.ts (#3044) (7992ff73)
+- update is_current_session description, fix TOCTOU, document 2048-byte bound (#3045) (47eb5f2e)
+- locale-neutral schtasks CSV parsing, CR/LF/NUL guard, restart upgrade, dedup (#3034) (f29b7d75)
+
+### Changed
+- strengthen spy assertions in telemetry-write-guard tests (#3036) (988d38a7)
+
+## [5.299.6] - 2026-10-06
+
+### Fixed
+- override proxy-addr >=2.0.8 and source-map-js >=1.2.2 (GHSA-jqcg-44mw-7w3h, GHSA-68fv-2mgg-jv7q) (#3046) (d627aedd)
+- exhaustive switch in closureFromTrace and inline comment in normalClosure (#3031) (2e6349e7)
+
+## [5.299.5] - 2026-10-06
+
+### Added
+- Windows Task Scheduler backend for `afk service` (install/uninstall/status/restart/upgrade via `schtasks`, user-level, no elevation) (#1602)
+
+### Added
+- advisory same-error strategy nudge + surprise rule in system prompt (#3016) (6bfe6196)
+- add orchestrator-owned pre-push re-check to /ship (#3023) (c1134ebc)
+
+### Fixed
+- restore handleEnter invariants and narrow CsiHost width (#3025) (6cdbd0d9)
+- don't re-show archived rows on small content-hug shrinks (#3018) (b207b50e)
+- Shift+Tab mode switch toggles one live notice instead of stacking scrollback lines (#3021) (856931eb)
+- harden dead-letter quarantine — unique suffix, orphan dead-letter, benign race doc (#3024) (8d64c73c)
+- address advisory findings from pre-push hook review (#3019) (74661760)
+- tighten isExecError guard, add response-output tests, fix farm.ts arrows (#3022) (e44c2c2c)
+- readSidecarCwdSlice prefix read, is_current_session self-alias only, additive contract doc (#3017) (5def1400)
+- import renderReceiptMarkdown before re-exporting in receipt.ts (#3020) (a5e0edfc)
+
+### Changed
+- no service/auto-start support (daemon, Telegram bot) (#2347) (2e16379c)
+- audit production code for POSIX path assumptions (#2345) (585a17ae)
+- add hook-level dedup test and root-only contract comment (#3011) (8e2c1ce8)
+
+## [5.299.4] - 2026-10-06
+
+### Fixed
+- bare-filename guard, corrupt trace file field, races test coverage (#3009) (1b0177cb)
+- outcomes combiner v2 advisory findings (#3012) (9201818c)
+
+## [5.299.3] - 2026-10-05
+
+### Fixed
+- fix misleading JSDoc comments and deflake attribution tests (#3005) (27951e02)
+- address advisory findings from #2974 review (#3010) (cfa71b5e)
+
+## [5.299.2] - 2026-10-05
+
+### Fixed
+- tighten replay-renderer test assertions per advisory review (#3013) (5eb61262)
+- harden /history test hygiene — 4 advisory findings from #3000 review (#3015) (96147112)
+
+## [5.299.1] - 2026-10-05
+
+### Fixed
+- resolveBinding promotes a raw slot id to the full slot binding (#3001) (1f211c21)
+- protect worktrees pinned by scheduled task cwd fields (#2996) (737f34b9)
+- close stale pending window after compact→preamble→provider_switch; add soft-truncate tests (#3002) (64da2894)
+- three small journal replay renderer defects (blank paragraph, overcount, TTY echo) (#2999) (1769b0b2)
+- drop stale hardcoded model list from ChatGPT backend 400 error (#2998) (20bbddd6)
+
+### Changed
+- cover /history journal-first path and flush-before-read (#3000) (70c9f939)
+
+## [5.299.0] - 2026-10-05
+
+### Added
+- combiner v2 with severity tiers and good-by-default (#2997) (db76e12a)
+
+## [5.298.2] - 2026-10-05
+
+### Fixed
+- skip sessionstart agent tasks and alert when telemetry file is not writable (#2974) (22f4fbc5)
+
+## [5.298.1] - 2026-10-05
+
+### Fixed
+- remove stale bypass-mode execFile warning (#2716) (a73ac02c)
+- stop SessionEnd hook classifying its own SPINE.md edits and the main checkout's stale diff (#2641) (6fbb9d98)
+- credit nested sub-agent commits to the root session (#2710) (698bdf4f)
+- get_facet cwd-aware 'latest'; add 'current'/'self'; add resolution fields (#2975) (1bd93f34)
+- quarantine unparseable pending/ peer envelopes to held/ (#2976) (8eb6408b)
+
+## [5.298.0] - 2026-10-05
+
+### Added
+- self-installing pre-push hook running CI audit gates (#2686) (9686172f)
+
+## [5.297.0] - 2026-10-05
+
+### Added
+- re-render resumed and forked sessions from the message journal (#2715) (fefcf386)
+
+## [5.296.9] - 2026-10-05
+
+### Fixed
+- dead-letter malformed handoff records instead of silently skipping forever (#2973) (403ef1a9)
+- address remaining advisory findings from 2026-09-29 pr-triage (#2731) (217ef7f5)
+
+## [5.296.8] - 2026-10-05
+
+### Changed
+- split memory-store and memory-tools under the 350-line ceiling (#832) (#2959) (e75edd2e)
+
+## [5.296.7] - 2026-10-05
+
+### Fixed
+- make dynamic .mjs import tests portable to Windows (#2730) (3ee6bc78)
+
+## [5.296.6] - 2026-10-05
+
+### Fixed
+- surface soft-deadline partial compose nodes in the facet (#2977) (d852cbb7)
+
+### Changed
+- split 4 files under the 350-line ceiling (#832) (#2962) (46a8b1a8)
+
+## [5.296.5] - 2026-10-05
+
+### Changed
+- split worktree-sweep, readonly-bash, receipt, path-approval-hook under the 350-line ceiling (#832) (#2965) (10818c08)
+
+## [5.296.4] - 2026-10-05
+
+### Fixed
+- add in-process cooldown fallback when alert state write fails (#2972) (ee31fa7d)
+
+### Changed
+- split chat.ts, farm.ts, interactive/worktree.ts under the 350-line ceiling (#832) (#2963) (5831eb62)
+
+## [5.296.3] - 2026-10-05
+
+### Changed
+- split message handler, session manager and farm callbacks under the 350-line ceiling (#832) (#2964) (e0c0087f)
+
+## [5.296.2] - 2026-10-05
+
+### Changed
+- split audit-sdk-dependency and audit-fit under the 350-line ceiling (#832) (#2960) (babec7ad)
+- regenerate env-registry var count after concurrent merges (#2969) (d2c7b1b7)
+
+## [5.296.1] - 2026-10-05
+
+### Changed
+- split eval-run/contracts, runner, and propose/template-engine under the 350-line ceiling (#832) (#2961) (6f01d6d2)
+
+## [5.296.0] - 2026-10-05
+
+### Added
+- export plugin userConfig options and data dir to plugin hooks (#2732) (2ddcab6d)
+- add soft-delete GC sweep for stale fact archive entries (#2733) (78d51225)
+- burn-rate projection for subscription-quota indicator (#2951) (ceaeda9c)
+
+### Fixed
+- restore context.cwd as deprecated alias of context.resolveBase (#2948) (f9963c36)
+- hoist wslPrefixes, document dirname assumption, add ordering comment (#2949) (caa6088d)
+- peer-messaging docs/schema polish (#2950) (6e807701)
+
 ## [5.295.9] - 2026-10-05
 
 ### Fixed

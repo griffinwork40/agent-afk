@@ -38,12 +38,13 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getAfkHome, getJsonConfigPath, getSettingsPath, getProjectSettingsPath, getPluginsDir } from '../../paths.js';
-import { scanLocalPlugins } from '../plugins-scanner.js';
+import { indexKeyForPath, scanLocalPlugins } from '../plugins-scanner.js';
 import { readPluginManifest } from '../plugins/plugin-manifest.js';
 import type { HarnessHookEvent } from '../hooks.js';
 import { HOOK_HANDLER_TIMEOUT_MS } from '../hook-registry.js';
 import { errorMessage } from '../../utils/errors.js';
 import { parseDisabledPluginHooks, mergeDisabledPluginHooks } from './disabled-plugin-hooks.js';
+import { loadPluginHookConfigs } from './config-loader.plugin-hooks.js';
 export { compileMatcher, CLAUDE_CODE_ALIASES } from './matcher.js';
 export { isPluginHookDisabled } from './disabled-plugin-hooks.js';
 
@@ -95,6 +96,8 @@ export interface ResolvedCommandHook {
    * Undefined for user-global / project-local config hooks.
    */
   pluginName?: string;
+  /** Install/index key used in `.index.json` for options and plugin data. */
+  pluginKey?: string;
 }
 
 export interface ResolvedMatcherGroup {
@@ -216,6 +219,7 @@ export function loadHooksConfigFile(
   tier: 'user-global' | 'project-local' | 'plugin',
   pluginRoot?: string,
   pluginName?: string | null,
+  pluginKey?: string | null,
 ): SingleFileResult {
   const warnings: string[] = [];
   const sources: string[] = [];
@@ -356,6 +360,7 @@ export function loadHooksConfigFile(
         }
         if (pluginRoot !== undefined) validated.pluginRoot = pluginRoot;
         if (pluginName != null) validated.pluginName = pluginName;
+        if (pluginKey != null) validated.pluginKey = pluginKey;
         resolvedHooks.push(validated);
       }
       if (resolvedHooks.length > 0) {
@@ -387,16 +392,16 @@ export function loadHooksConfigFile(
  * uninstalled marketplace-cache plugins contribute no hooks) and its symlink
  * following (local installs are symlinked into the plugins root). A plugin
  * contributes hooks when it ships `<plugin>/hooks/hooks.json` (the Claude Code
- * layout). Returns `{ path, pluginRoot, pluginName }` triples; `pluginRoot` is
- * the plugin's install directory (threaded to the executor as `CLAUDE_PLUGIN_ROOT`);
- * `pluginName` is the canonical name from the plugin manifest (used to look up
- * the `pluginHookEnv` allowlist in `afk.config.json`). Missing root → `[]`.
+ * layout). Returns `{ path, pluginRoot, pluginName, pluginKey }` triples;
+ * `pluginRoot` is the plugin's install directory, `pluginName` is the
+ * manifest name used for `pluginHookEnv`, and `pluginKey` is the install/index
+ * key used for userConfig options and plugin data. Missing root → `[]`.
  */
 export function discoverPluginHooksConfigs(
   pluginsRoot: string = getPluginsDir(),
-): Array<{ path: string; pluginRoot: string; pluginName: string | null }> {
+): Array<{ path: string; pluginRoot: string; pluginName: string | null; pluginKey: string | null }> {
   if (!existsSync(pluginsRoot)) return [];
-  const out: Array<{ path: string; pluginRoot: string; pluginName: string | null }> = [];
+  const out: Array<{ path: string; pluginRoot: string; pluginName: string | null; pluginKey: string | null }> = [];
   // Reuse scanLocalPlugins (index-honoring, symlink-following, realpath-keyed)
   // rather than a bespoke walk — see PR 607 review: a private walk diverged on
   // all three, running disabled/uninstalled plugins' hooks while dropping
@@ -405,7 +410,14 @@ export function discoverPluginHooksConfigs(
     const hooksJson = join(plugin.path, 'hooks', 'hooks.json');
     if (existsSync(hooksJson)) {
       const manifest = readPluginManifest(plugin.path);
-      out.push({ path: hooksJson, pluginRoot: plugin.path, pluginName: manifest.name });
+      const keyInfo = indexKeyForPath(pluginsRoot, plugin.path);
+      const pluginKey = keyInfo?.key ?? indexKeyForPath(pluginsRoot, hooksJson)?.key ?? null;
+      out.push({
+        path: hooksJson,
+        pluginRoot: plugin.path,
+        pluginName: manifest.name,
+        pluginKey,
+      });
     }
   }
   return out;
@@ -550,35 +562,14 @@ export function loadHooksConfig(opts: LoadHooksConfigOptions = {}): LoadedHooksC
   // installed plugins under the plugins root, tagged `tier: 'plugin'`, merged
   // last. Gated by the independent `enablePluginHooks` trust flag — plugin
   // hooks execute third-party code, so they never ride on `enableShellHooks`.
-  const pluginConfigs = discoverPluginHooksConfigs(opts.pluginsDir);
-  if (pluginConfigs.length > 0 && !pluginHooksEnabled) {
-    // Don't silently drop plugin hooks — surface the boundary so the user
-    // knows they exist and how to opt in (mirrors the config-bridge warning
-    // for disabled shell hooks).
-    allWarnings.push(
-      `found ${pluginConfigs.length} plugin hooks.json file(s) but plugin hooks are disabled; ` +
-        `set "enablePluginHooks": true in ${getJsonConfigPath()} to run them`,
-    );
-  }
-  if (pluginHooksEnabled) {
-    for (const { path, pluginRoot, pluginName } of pluginConfigs) {
-      const result = loadHooksConfigFile(path, 'plugin', pluginRoot, pluginName);
-      for (const src of result.sources) {
-        if (!allSources.includes(src)) allSources.push(src);
-      }
-      for (const w of result.warnings) allWarnings.push(w);
-      for (const event of validEvents) {
-        const incoming = result.hooks[event];
-        if (incoming === undefined || incoming.length === 0) continue;
-        const existing = merged[event];
-        if (existing === undefined) {
-          merged[event] = [...incoming];
-        } else {
-          merged[event] = [...existing, ...incoming];
-        }
-      }
-    }
-  }
+  loadPluginHookConfigs({
+    pluginConfigs: discoverPluginHooksConfigs(opts.pluginsDir),
+    pluginHooksEnabled,
+    validEvents,
+    merged,
+    allSources,
+    allWarnings,
+  });
 
   return {
     hooks: merged,

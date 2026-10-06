@@ -429,6 +429,55 @@ describe('Stage 2: per-slot provider credentials', () => {
   });
 });
 
+// ── #2985: resolveBinding raw-id slot-id match ────────────────────────────────
+
+describe('resolveBinding — raw slot id match (#2985)', () => {
+  it('returns the full slot binding (including baseUrl/apiKey) when input equals a slot id', () => {
+    // The exact repro from #2985: model: "qwen-3.8-27b" must carry the local
+    // slot's endpoint and key, not fall through to the ambient credential.
+    const bindings = computeSlotBindings({
+      local: { id: 'qwen-3.8-27b', name: 'cerebras', provider: 'openai',
+               baseUrl: 'https://api.cerebras.ai/v1', apiKey: 'csk-secret' },
+    });
+    expect(resolveBinding('qwen-3.8-27b', bindings)).toEqual({
+      id: 'qwen-3.8-27b', name: 'cerebras', provider: 'openai',
+      baseUrl: 'https://api.cerebras.ai/v1', apiKey: 'csk-secret',
+    });
+  });
+
+  it('is case-insensitive for the slot id comparison', () => {
+    const bindings = computeSlotBindings({
+      small: { id: 'Qwen-3.8-27b', provider: 'openai', baseUrl: 'http://h/v1', apiKey: 'k' },
+    });
+    expect(resolveBinding('qwen-3.8-27b', bindings)).toMatchObject({ baseUrl: 'http://h/v1', apiKey: 'k' });
+    expect(resolveBinding('QWEN-3.8-27B', bindings)).toMatchObject({ baseUrl: 'http://h/v1', apiKey: 'k' });
+  });
+
+  it('prefers the first SLOT_NAMES match when multiple slots share the same id', () => {
+    // local is first in SLOT_NAMES order — it wins.
+    const bindings: ModelSlots = {
+      local: { id: 'shared-model', provider: 'anthropic', baseUrl: 'http://local/v1' },
+      small: { id: 'shared-model', provider: 'openai', baseUrl: 'http://small/v1' },
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    };
+    expect(resolveBinding('shared-model', bindings)).toMatchObject({ provider: 'anthropic', baseUrl: 'http://local/v1' });
+  });
+
+  it('still returns bare {id} for an id that matches no slot', () => {
+    const bindings = computeSlotBindings({
+      local: { id: 'qwen-3.8-27b', provider: 'openai', baseUrl: 'http://h/v1', apiKey: 'k' },
+    });
+    expect(resolveBinding('unrecognized-model-xyz', bindings)).toEqual({ id: 'unrecognized-model-xyz' });
+  });
+
+  it('does not match an empty slot id (unconfigured local default)', () => {
+    // The default local slot has id '' — an empty string must never match.
+    expect(resolveBinding('', getSlotBindings())).toEqual({ id: '' });
+    expect(resolveBinding('  ', getSlotBindings())).toEqual({ id: '  ' });
+  });
+});
+
 describe('coerceSlotBindingInput', () => {
   it('accepts a minimal object with just an id', () => {
     expect(coerceSlotBindingInput({ id: 'glm-5.2' })).toEqual({ ok: true, value: { id: 'glm-5.2' } });

@@ -40,6 +40,13 @@ export interface ForkParent {
  */
 export interface JournalParent {
   readonly messageJournal?: MessageJournal;
+  /**
+   * Live id of the forking parent, when the view is backed by a mutable stub
+   * that is backfilled after its own fork returns (#2442). Read lazily by the
+   * nested SkillExecutor factory so skill forks inside a sub-agent get a real
+   * `parentSessionId`. Absent on plain journal-only views.
+   */
+  readonly sessionId?: string | undefined;
 }
 
 export interface ForkSubagentOptions<T = unknown> {
@@ -302,6 +309,13 @@ export interface SubagentManagerOptions {
    * never widens a deliberately-confined worker.
    */
   parentReadRoots?: string[];
+  /**
+   * Root (depth-0) session id of the forking parent, forwarded from its own
+   * {@link AgentConfig.rootSessionId}. Undefined when the forking parent is a
+   * top-level session. Passed through to {@link assembleChildConfig} so
+   * grandchild forks inherit the REAL root id, not the intermediate parent's id.
+   */
+  parentRootSessionId?: string;
   /**
    * Witness-layer trace writer. Threaded into the manager's {@link AbortGraph}
    * so cascade aborts emit `abort` events, AND auto-inherited by every forked

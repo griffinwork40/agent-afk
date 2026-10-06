@@ -32,6 +32,7 @@ const MIN_LEN_LATER = 40;
 const DISQUALIFY_SUBSTRINGS = [
   '<bash-passthrough',
   '<background-subagent-result',
+  '<background-process-result',
   '<command-name>',
   'The user has switched off plan mode',
 ] as const;

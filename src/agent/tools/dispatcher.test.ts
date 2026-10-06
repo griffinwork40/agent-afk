@@ -2326,6 +2326,29 @@ describe('SessionToolDispatcher grant API', () => {
     // unset must remain undefined, not an empty object.
     expect(capturedContext?.env).toBeUndefined();
   });
+
+  it('context.cwd is a back-compat alias for context.resolveBase (#2935)', async () => {
+    // Custom tools that read context.cwd (removed in #2748) must still receive
+    // the session base path so their path resolution is not silently broken.
+    // Internal code must NOT start reading context.cwd — use resolveBase.
+    let capturedContext: import('./types.js').ToolHandlerContext | undefined;
+    const capturingHandler: import('./types.js').ToolHandler = async (_input, _signal, ctx) => {
+      capturedContext = ctx;
+      return { content: 'ok' };
+    };
+    const d = new SessionToolDispatcher({
+      handlers: new Map([['capture', capturingHandler]]),
+      schemas: [],
+      permissions: { allowedTools: ['capture'] },
+      cwd: '/my/project',
+    });
+
+    await d.execute(makeCall({ name: 'capture' }));
+
+    expect(capturedContext?.resolveBase).toBe('/my/project');
+    // The deprecated alias must equal resolveBase — not undefined.
+    expect(capturedContext?.cwd).toBe(capturedContext?.resolveBase);
+  });
 });
 
 // ---------------------------------------------------------------------------

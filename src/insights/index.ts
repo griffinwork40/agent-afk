@@ -20,4 +20,6 @@ export type {
   TraceAggregates,
   DaemonAggregates,
   RoutingAggregates,
+  OutcomeAggregates,
+  OutcomeWeekCounts,
 } from './types.js';

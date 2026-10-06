@@ -251,7 +251,10 @@ describe('query — Responses wire (ChatGPT subscription auth)', () => {
     const err = events.find((e) => e.type === 'error') as { type: 'error'; error: Error } | undefined;
     expect(err).toBeDefined();
     expect(err!.error.message).toContain('gpt-5.1');
-    expect(err!.error.message).toContain('gpt-5.5');
+    // Must NOT name specific "working" models — the list goes stale (#2986).
+    expect(err!.error.message).not.toMatch(/gpt-5\.\d[\d.]*\s+(?:and\s+gpt|work)/);
+    expect(err!.error.message).toContain('ChatGPT-subscription backend restriction');
+    expect(err!.error.message).toContain('OPENAI_API_KEY');
     expect(err!.error.message).toContain('Backend said');
   });
 });
