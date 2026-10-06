@@ -107,14 +107,15 @@ describe('two-way AFK round-trip (real daemon ↔ real REPL over one ledger)', (
 
     // The daemon tail should observe the elicitation and install the resolver.
     // Poll instead of a fixed sleep so slow Windows CI runners don't flake.
+    let resolver!: (text: string) => void;
     await vi.waitFor(() => {
-      expect(pendingElicitations.get(String(chatId))).toBeDefined();
+      resolver = pendingElicitations.get(String(chatId))!;
+      expect(resolver).toBeDefined();
     }, { timeout: 5000, interval: 50 });
-    const resolver = pendingElicitations.get(String(chatId));
 
     // Operator answers on the phone. The daemon signs + writes back the response;
     // the REPL handler verifies the HMAC and resolves.
-    resolver!('Alice');
+    resolver('Alice');
 
     const result = await answerP;
     expect(result.action).toBe('accept'); // resolved by the phone, not declined
