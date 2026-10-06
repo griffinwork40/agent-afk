@@ -241,7 +241,13 @@ export type SessionPhaseName =
   // was reached; the turn ends normally without another model round.
   // `metadata` carries `cap` (the configured ceiling value). Distinct from
   // `stop_hook_continuation` — that fires per-round; this fires once at cap.
-  | 'stop_hook_cap_reached';
+  | 'stop_hook_cap_reached'
+  // Last-resort orphan repair fired (single event, no paired start). Emitted
+  // from openRound only when repairOrphanToolUses actually changed history —
+  // i.e. a corruption path evaded both the tool-round rollback and the
+  // turn-driver repair. metadata carries hoistedIndices, orphanIds,
+  // assistantIndices, bridgedIndices, messageCount, shapeBefore. See #2136.
+  | 'orphan_repair';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

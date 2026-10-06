@@ -83,7 +83,9 @@ describe('ProcessJobRegistry', () => {
     expect(snap?.cancelSource).toBe('model');
     const done = await reg.waitFor(job.id);
     expect(done?.status).toBe('cancelled');
-    expect(groupAlive(job.pid!)).toBe(false);
+    // Poll until the group is gone: the killed process can linger as a zombie
+    // briefly after SIGKILL until init/subreaper collects it.
+    await vi.waitFor(() => expect(groupAlive(job.pid!)).toBe(false), { timeout: 5000, interval: 20 });
   });
 
   it('escalates to SIGKILL when the process traps SIGTERM', async () => {
@@ -92,7 +94,9 @@ describe('ProcessJobRegistry', () => {
     reg.cancel(job.id, 'model');
     const done = await reg.waitFor(job.id);
     expect(done?.status).toBe('cancelled');
-    expect(groupAlive(job.pid!)).toBe(false);
+    // Poll until the group is gone: the killed process can linger as a zombie
+    // briefly after SIGKILL until init/subreaper collects it.
+    await vi.waitFor(() => expect(groupAlive(job.pid!)).toBe(false), { timeout: 5000, interval: 20 });
   });
 
   it('cancel after natural exit sends no signal and keeps the natural status', async () => {
@@ -114,7 +118,10 @@ describe('ProcessJobRegistry', () => {
     // only releases the pipes and reports no reap.
     expect(done?.orphansReaped).toBe(HAS_PROCESS_GROUPS);
     expect(done?.exitCode).toBe(0);
-    expect(groupAlive(job.pid!)).toBe(false);
+    // Poll until the group is gone: the SIGKILLed orphan can remain a zombie
+    // briefly until init/subreaper collects it; a single immediate check
+    // can land inside that window on a loaded ubuntu runner.
+    await vi.waitFor(() => expect(groupAlive(job.pid!)).toBe(false), { timeout: 5000, interval: 20 });
   });
 
   it('reaps output-redirected group members that escape pipe detection', async () => {
@@ -130,7 +137,9 @@ describe('ProcessJobRegistry', () => {
     expect(done?.exitCode).toBe(0);
     // POSIX: the reaped group is gone. win32: the probe is the leader pid,
     // which is gone once the leader exited.
-    expect(groupAlive(job.pid!)).toBe(false);
+    // Poll until the group is gone: the SIGKILLed orphan can remain a zombie
+    // briefly until init/subreaper collects it.
+    await vi.waitFor(() => expect(groupAlive(job.pid!)).toBe(false), { timeout: 5000, interval: 20 });
   });
 
   it('a cancel during the post-exit grace keeps the natural outcome', async () => {
