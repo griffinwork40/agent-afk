@@ -131,6 +131,8 @@ export interface BuildDispatcherOptions {
    * surfaces and forked children.
    */
   detachRegistry?: import('../../tools/detach-registry.js').DetachableToolRegistry;
+  /** Background process registry (`bash run_in_background`); root REPL sessions only. */
+  processJobs?: import('../../shell-jobs/process-jobs.js').ProcessJobRegistry;
 }
 
 /**
@@ -369,5 +371,6 @@ export function buildDispatcher(
     ...(opts?.detachRegistry !== undefined
       ? { detachRegistry: opts.detachRegistry }
       : {}),
+    ...(opts?.processJobs !== undefined ? { processJobs: opts.processJobs } : {}),
   });
 }

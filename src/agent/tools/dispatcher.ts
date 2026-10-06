@@ -54,6 +54,8 @@ import {
 import type { CoreExecDeps } from './dispatcher.core-exec.js';
 import { isYieldableTool, type UserAttention } from './user-yield.js';
 import { isDetachableTool, type DetachableToolRegistry } from './detach-bash.js';
+import type { ProcessJobRegistry } from '../shell-jobs/process-jobs.js';
+import { filterBackgroundToolDefs } from './process-job-tools.js';
 
 // Re-exported for backward compatibility: external importers (dispatcher.test.ts,
 // schema-classification.test.ts) historically import this from './dispatcher.js'.
@@ -265,6 +267,12 @@ export interface SessionToolDispatcherOptions {
    * that have no REPL to inject the result into.
    */
   detachRegistry?: DetachableToolRegistry;
+  /**
+   * Background process registry (`bash run_in_background`). Root interactive
+   * sessions only; handed to `bash` and to the background health/cancel tools
+   * for `proc-` ids. Never propagated to subagent children.
+   */
+  processJobs?: ProcessJobRegistry;
 }
 
 export class SessionToolDispatcher implements ToolDispatcher {
@@ -330,6 +338,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly userAttention: UserAttention | undefined;
   /** Detach registry for Ctrl+B backgrounding (#2542); handed to `DETACHABLE_TOOLS`. */
   private readonly detachRegistry: DetachableToolRegistry | undefined;
+  /** Background process registry; handed to `bash` and the background tools. */
+  private readonly processJobs: ProcessJobRegistry | undefined;
   /** Live bash output tail reporter factory (issue #1506). */
   private readonly bashOutputTailReporter:
     | ((toolUseId: string) => (tail: string | undefined) => void)
@@ -413,6 +423,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this.spawnedPidRegistry = opts.spawnedPidRegistry;
     this.userAttention = opts.userAttention;
     this.detachRegistry = opts.detachRegistry;
+    this.processJobs = opts.processJobs;
     this.bashOutputTailReporter = opts.bashOutputTailReporter;
 
     // When caller passes arrays by reference (provider sharing pattern), use
@@ -494,6 +505,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       ...(this.detachRegistry !== undefined && isDetachableTool(call.name)
         ? { detachRegistry: this.detachRegistry }
         : {}),
+      ...(this.processJobs !== undefined && call.name === 'bash' ? { processJobs: this.processJobs } : {}),
     };
   }
 
@@ -627,12 +639,11 @@ export class SessionToolDispatcher implements ToolDispatcher {
   // with live MCP wire-names before reaching the dispatcher (see
   // permissions.ts:withMcpToolsAllowed).
   get toolDefs(): readonly AnthropicToolDef[] {
-    const withBg = this.subagentExecutor?.supportsBackgroundJobs?.()
-      ? this.schemas
-      : this.schemas.filter(
-          (schema) =>
-            schema.name !== 'cancel_background_job' && schema.name !== 'send_message_to_agent' && schema.name !== 'get_background_job_health',
-        );
+    const withBg = filterBackgroundToolDefs(
+      this.schemas,
+      this.subagentExecutor?.supportsBackgroundJobs?.() === true,
+      this.processJobs !== undefined,
+    );
     // Peer-messaging tools are top-level only: subagents (parentSessionId set)
     // cannot use list_sessions or send_to_session.
     const available = this.parentSessionId === undefined
@@ -724,6 +735,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       // executor can register its DAG and respond to Ctrl+B detachment.
       // Mirrors the `callHandlerContext` injection path for bash.
       ...(this.detachRegistry !== undefined ? { detachRegistry: this.detachRegistry } : {}),
+      ...(this.processJobs !== undefined ? { processJobs: this.processJobs } : {}),
       callHandlerContext: (call) => this.callHandlerContext(call),
       gateDeps: () => this.gateDeps(),
       toolDefs: this.toolDefs,

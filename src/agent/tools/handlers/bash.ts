@@ -32,6 +32,8 @@ import { buildChildEnv } from './bash-env-scrub.js';
 import { interruptedBashResult } from './bash-interrupted.js';
 import { applyBashDetach, execOnDetach } from '../detach-bash.js';
 import type { OnDetachParams } from '../detach-bash.js';
+import { startBackgroundBash } from './bash.background.js';
+import { MAX_PROCESS_MAX_RUNTIME_MS } from '../../shell-jobs/process-jobs.js';
 
 /**
  * Input shape for the bash tool (validated at runtime).
@@ -39,13 +41,19 @@ import type { OnDetachParams } from '../detach-bash.js';
 interface BashInput {
   command?: unknown;
   timeout_ms?: unknown;
+  run_in_background?: unknown;
 }
 
 /**
  * Validate and parse bash tool input.
  * @throws if `command` is not a string
  */
-function parseBashInput(input: unknown): { command: string; timeout_ms: number } {
+function parseBashInput(input: unknown): {
+  command: string;
+  timeout_ms: number;
+  background: boolean;
+  explicitTimeout: boolean;
+} {
   if (typeof input !== 'object' || input === null) {
     throw new Error('Input must be an object');
   }
@@ -56,21 +64,51 @@ function parseBashInput(input: unknown): { command: string; timeout_ms: number }
     throw new Error('Input must have a "command" field of type string');
   }
 
+  if (bashInput.run_in_background !== undefined && typeof bashInput.run_in_background !== 'boolean') {
+    throw new Error('run_in_background must be a boolean');
+  }
+  const background = bashInput.run_in_background === true;
+  // Background runs use timeout_ms as their max runtime, so the ceiling is
+  // the process-job maximum (24 h) instead of the foreground 10 minutes.
+  const maxTimeout = background ? MAX_PROCESS_MAX_RUNTIME_MS : 600000;
+
   let timeout_ms = 120000; // default 2 minutes
   if (bashInput.timeout_ms !== undefined) {
     if (typeof bashInput.timeout_ms !== 'number') {
       throw new Error('timeout_ms must be a number');
     }
-    if (bashInput.timeout_ms < 0 || bashInput.timeout_ms > 600000) {
-      throw new Error('timeout_ms must be between 0 and 600000');
+    if (bashInput.timeout_ms < 0 || bashInput.timeout_ms > maxTimeout) {
+      throw new Error(`timeout_ms must be between 0 and ${maxTimeout}`);
     }
     timeout_ms = bashInput.timeout_ms;
+  }
+  if (background && bashInput.timeout_ms !== undefined && timeout_ms < 1000) {
+    throw new Error('timeout_ms must be at least 1000 with run_in_background');
   }
 
   return {
     command: bashInput.command,
     timeout_ms,
+    background,
+    explicitTimeout: bashInput.timeout_ms !== undefined,
   };
+}
+
+/**
+ * Live rolling tail buffer for the TUI, or undefined when the context has no
+ * `onBashOutputTail` callback. The callback must not throw; it is guarded
+ * defensively anyway so a renderer bug can never fail the command.
+ */
+function makeTailBuffer(context: ToolHandlerContext | undefined): RollingTailBuffer | undefined {
+  const report = context?.onBashOutputTail;
+  if (report === undefined) return undefined;
+  return new RollingTailBuffer((tail) => {
+    try {
+      report(tail);
+    } catch {
+      // Contract: callback must not throw, but we swallow defensively.
+    }
+  });
 }
 
 /**
@@ -175,7 +213,7 @@ export function createBashHandler(
   }
 
   return async (input: unknown, signal: AbortSignal, context?: ToolHandlerContext) => {
-    let { command, timeout_ms } = parseBashInput(input);
+    let { command, timeout_ms, background, explicitTimeout } = parseBashInput(input);
 
     if (signal.aborted) {
       return { content: 'Command aborted', isError: true };
@@ -194,6 +232,12 @@ export function createBashHandler(
       }
     }
 
+    // Background launch: supervised by the session's ProcessJobRegistry and
+    // returned immediately. timeout_ms is the max runtime (default 2 h).
+    if (background) {
+      return startBackgroundBash(command, explicitTimeout ? timeout_ms : undefined, context, cwd);
+    }
+
     const startedAt = Date.now();
     return new Promise((resolve) => {
       let resolved = false;
@@ -202,16 +246,7 @@ export function createBashHandler(
       // Created only when the context supplies an onBashOutputTail callback.
       // Cleared (and a final `undefined` sent) in every settle path so the TUI
       // always erases the tail row regardless of how the command ends.
-      const tailBuffer =
-        context?.onBashOutputTail !== undefined
-          ? new RollingTailBuffer((tail) => {
-              try {
-                context.onBashOutputTail!(tail);
-              } catch {
-                // Contract: callback must not throw, but we swallow defensively.
-              }
-            })
-          : undefined;
+      const tailBuffer = makeTailBuffer(context);
   
       function settle(result: { content: string; isError?: boolean; truncated?: boolean; capturePath?: string; durationMs?: number; exitCode?: number; testResult?: import('./test-runner-detector.js').TestResult }) {
         if (resolved) return;

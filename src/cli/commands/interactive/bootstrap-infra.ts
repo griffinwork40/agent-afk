@@ -14,6 +14,7 @@ import type { SubagentManager } from '../../../agent/subagent.js';
 import { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
 import { DetachableToolRegistry } from '../../../agent/tools/detach-registry.js';
+import { ProcessJobRegistry } from '../../../agent/shell-jobs/process-jobs.js';
 import { setBgsubRegistry, setBgsubSummarizer } from '../../slash/commands/bgsub.js';
 import { setTasksRegistry } from '../../slash/commands/tasks.js';
 import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
@@ -34,6 +35,11 @@ export interface BootstrapInfra {
    * Ctrl+B handler and the per-query dispatcher can share the same instance.
    */
   detachRegistry: DetachableToolRegistry;
+  /**
+   * Model-started background processes (`bash run_in_background`). Root REPL
+   * only; the teardown path calls `killAll()`.
+   */
+  processJobs: ProcessJobRegistry;
   bgSummarizer: BackgroundSummarizer | undefined;
   rootManager: SubagentManager;
   subagentExecutor: SubagentExecutor;
@@ -116,6 +122,10 @@ export function createBootstrapInfra(a: {
   // handler and every per-query dispatcher can share the same instance.
   // cancelAll() is called by the interactive teardown path (Invariant:D3).
   const detachRegistry = new DetachableToolRegistry();
+  // Background process registry for `bash run_in_background`. Same lifetime
+  // as the detach registry: shared with every per-query dispatcher of this
+  // root session, stopped by the interactive teardown path.
+  const processJobs = new ProcessJobRegistry();
 
   // Opt-in background summarizer — only constructed when bgSummaries: true.
   const bgSummariesEnabled = a.cliConfig.bgSummaries === true;
@@ -215,6 +225,7 @@ export function createBootstrapInfra(a: {
     apiKey,
     backgroundRegistry,
     detachRegistry,
+    processJobs,
     bgSummarizer,
     rootManager,
     subagentExecutor,

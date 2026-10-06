@@ -19,6 +19,7 @@
 import path from 'path';
 import { safeRealpath, getWriteDenylist } from './tools/handlers/write-denylist.js';
 import { categorizeTool } from './tool-category.js';
+import { isBackgroundBashLaunch } from './tools/bash-background-flag.js';
 
 /** Three-tier risk level for a tool invocation. */
 export type RiskLevel = 'safe' | 'medium' | 'high';
@@ -343,7 +344,11 @@ export function classifyRisk(
   // ---- bash ----------------------------------------------------------------
   if (tool === 'bash') {
     const cmd = extractBashCommand(input);
-    return classifyBash(cmd);
+    const level = classifyBash(cmd);
+    // Background floor: a `run_in_background` launch can run for up to 24 h,
+    // so a "safe" substring match (e.g. `cat ` or `pnpm test` anywhere in the
+    // string) must never auto-approve it.
+    return isBackgroundBashLaunch(tool, input) && level === 'safe' ? 'medium' : level;
   }
 
   // ---- write_file / edit_file ---------------------------------------------

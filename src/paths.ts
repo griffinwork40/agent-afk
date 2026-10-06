@@ -550,6 +550,20 @@ export function getBgJobsRoot(): string {
   return join(getAfkStateDir(), 'bg');
 }
 
+/** Root for model-started background process logs (`bash run_in_background`). */
+export function getProcessJobsRoot(): string {
+  return join(getAfkStateDir(), 'proc-jobs');
+}
+
+/**
+ * Per-session log directory for background process jobs.
+ * @throws if `sessionLabel` fails {@link assertSafeJobId}.
+ */
+export function getProcessJobSessionDir(sessionLabel: string): string {
+  assertSafeJobId(sessionLabel);
+  return join(getProcessJobsRoot(), sessionLabel);
+}
+
 /**
  * Directory for a specific background job's persisted data.
  * @throws if `jobId` fails {@link assertSafeJobId}.

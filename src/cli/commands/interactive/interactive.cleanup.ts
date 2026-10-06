@@ -326,6 +326,21 @@ export async function snapshotGitStateForCancelAll(cwd: string): Promise<void> {
   }
 }
 
+/**
+ * Stop all background work this REPL session owns, at session teardown:
+ * background subagents (with the #1514 pre-cancel git snapshot), Ctrl+B
+ * detached tool calls (Invariant:D3), and `bash run_in_background` process
+ * jobs (TERM, short grace, KILL; awaited so no group outlives the session).
+ * Every step is best-effort and never throws.
+ */
+export async function cancelSessionBackgroundWork(ctx: InteractiveCtx): Promise<void> {
+  const runningJobs = ctx.backgroundRegistry.list().filter((j) => j.status === 'running');
+  if (runningJobs.length > 0) await snapshotGitStateForCancelAll(ctx.stats.cwd ?? process.cwd());
+  await ctx.backgroundRegistry.cancelAll().catch(() => { /* best-effort */ });
+  ctx.detachRegistry?.cancelAll();
+  await ctx.processJobs?.killAll().catch(() => { /* best-effort */ });
+}
+
 // ---------------------------------------------------------------------------
 // saveCurrentSession factory
 // ---------------------------------------------------------------------------

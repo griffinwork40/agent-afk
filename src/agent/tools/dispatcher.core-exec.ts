@@ -40,6 +40,7 @@ import type { TraceSink } from '../trace/index.js';
 import type { GrantManager } from './grant-manager.js';
 import type { PreDispatchGateDeps } from './dispatcher.pre-dispatch-gates.js';
 import type { DetachableToolRegistry } from './detach-registry.js';
+import type { ProcessJobRegistry } from '../shell-jobs/process-jobs.js';
 import { errorMessage } from '../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
@@ -90,6 +91,11 @@ export interface CoreExecDeps {
    */
   detachRegistry?: DetachableToolRegistry;
   /**
+   * Background process registry (root interactive sessions only). Backs the
+   * background health/cancel tools for `proc-` ids.
+   */
+  processJobs?: ProcessJobRegistry;
+  /**
    * Per-call handler context factory. The class supplies this as an arrow
    * calling its own private `callHandlerContext(call)` method so the free
    * functions here never need the class reference.
@@ -126,9 +132,9 @@ export function isRegisteredTool(toolName: string, deps: CoreExecDeps): boolean 
   return (
     deps.handlers.has(toolName) ||
     (toolName === 'agent' && deps.subagentExecutor !== undefined) ||
-    (toolName === 'cancel_background_job' && deps.subagentExecutor?.supportsBackgroundJobs?.() === true) ||
+    (toolName === 'cancel_background_job' && (deps.subagentExecutor?.supportsBackgroundJobs?.() === true || deps.processJobs !== undefined)) ||
     (toolName === 'send_message_to_agent' && deps.subagentExecutor?.supportsBackgroundJobs?.() === true) ||
-    (toolName === 'get_background_job_health' && deps.subagentExecutor?.supportsBackgroundJobs?.() === true) ||
+    (toolName === 'get_background_job_health' && (deps.subagentExecutor?.supportsBackgroundJobs?.() === true || deps.processJobs !== undefined)) ||
     (toolName === 'skill' && deps.skillExecutor !== undefined) ||
     (toolName === 'compose' && deps.composeExecutor !== undefined)
   );
@@ -317,7 +323,7 @@ export async function executeCompose(call: ToolCall, deps: CoreExecDeps): Promis
 export async function executeCoreInner(call: ToolCall, deps: CoreExecDeps): Promise<ToolResult> {
   // Agent dispatch and model cancellation share the provider-level executor.
   if (isSubagentProviderTool(call.name)) {
-    const outcome = await executeSubagentProviderTool(deps.subagentExecutor, call);
+    const outcome = await executeSubagentProviderTool(deps.subagentExecutor, call, deps.processJobs);
     if (outcome.thrownMessage !== undefined) {
       firePostToolUseFailure(call.name, outcome.thrownMessage, call.signal, deps, call.input);
     } else {

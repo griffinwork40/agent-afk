@@ -51,6 +51,8 @@ export interface BuildDispatcherOpts {
    * Absent for headless surfaces and forked children.
    */
   detachRegistry?: import('../../tools/detach-registry.js').DetachableToolRegistry;
+  /** Background process registry (`bash run_in_background`); root REPL sessions only. */
+  processJobs?: import('../../shell-jobs/process-jobs.js').ProcessJobRegistry;
   /**
    * Live source for the `get_runtime_state` tool — see the matching
    * comment in `anthropic-direct/index.ts:buildDispatcher`.
@@ -83,4 +85,20 @@ export interface BuildDispatcherOpts {
    * 'plan'`, the handler + schema are registered. Mirrors AnthropicDirectProvider.
    */
   planExitControls?: PlanExitControls;
+}
+
+/**
+ * Root-REPL-only session registries forwarded from AgentConfig to the
+ * per-query dispatcher: the Ctrl+B detach registry (#2542) and the background
+ * process registry. Both are absent for forks, so a child never inherits them.
+ * Extracted so `index.ts` (file-size baselined) forwards both in one line.
+ */
+export function sessionRegistryOpts(src: {
+  detachRegistry?: BuildDispatcherOpts['detachRegistry'];
+  processJobs?: BuildDispatcherOpts['processJobs'];
+}): Pick<BuildDispatcherOpts, 'detachRegistry' | 'processJobs'> {
+  return {
+    ...(src.detachRegistry !== undefined ? { detachRegistry: src.detachRegistry } : {}),
+    ...(src.processJobs !== undefined ? { processJobs: src.processJobs } : {}),
+  };
 }

@@ -12,6 +12,7 @@ import type { BackgroundAgentRegistry } from '../../../agent/background-registry
 import type { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
 import type { SubagentControl } from '../../../agent/tools/subagent-executor.js';
 import type { DetachableToolRegistry } from '../../../agent/tools/detach-registry.js';
+import type { ProcessJobRegistry } from '../../../agent/shell-jobs/process-jobs.js';
 import type { SubagentManager } from '../../../agent/subagent.js';
 import type { SlashContext, SessionStats, ResumeSwapResult, ThinkingUiMode } from '../../slash/types.js';
 import type { StoredSession } from '../../session-store.js';
@@ -335,6 +336,11 @@ export interface InteractiveCtx {
    * process keeps running. The teardown path calls cancelAll() (Invariant:D3).
    */
   detachRegistry?: DetachableToolRegistry;
+  /**
+   * Model-started background processes (`bash run_in_background`). Read by
+   * the completion notifier, `/sh`, and the teardown path (`killAll()`).
+   */
+  processJobs?: ProcessJobRegistry;
   /**
    * Optional background summarizer. Constructed only when `bgSummaries: true`
    * in afk.config.json. The teardown path calls `stop()` before

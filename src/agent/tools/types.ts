@@ -18,6 +18,7 @@ import type { TraceSink } from '../trace/index.js';
 import type { SpawnedPidRegistry } from './handlers/pid-registry.js';
 import type { UserAttention } from './user-yield.js';
 import type { DetachableToolRegistry } from './detach-registry.js';
+import type { ProcessJobRegistry } from '../shell-jobs/process-jobs.js';
 
 /**
  * Per-invocation context forwarded to every tool handler.
@@ -168,6 +169,14 @@ export interface ToolHandlerContext {
    * Absent for non-detachable tools, subagents, and headless surfaces.
    */
   detachRegistry?: DetachableToolRegistry;
+  /**
+   * Registry for model-started background processes (`bash` with
+   * `run_in_background: true`). Attached by the dispatcher to `bash` only, and
+   * only on root interactive sessions that wire one. Absent for subagent
+   * children, Telegram, daemon and one-shot runs, where the bash handler
+   * refuses background launches with an explicit "unavailable" error.
+   */
+  processJobs?: ProcessJobRegistry;
 }
 
 /**
