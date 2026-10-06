@@ -320,46 +320,127 @@ describe('upsertVotes – newest explicit_feedback vote wins', () => {
   });
 
   // Regression test for #2934: _mergeVotes collision on same lf+evidence key
-  // must delete-then-set so the updated entry moves to the end of the Map,
-  // preserving arrival order for _latestExplicitFeedback's forward scan.
+  // must delete-then-set so the updated entry moves to the tail of the Map,
+  // making _latestExplicitFeedback's forward scan see it last.
   //
-  // Sequence:
-  //   1. good/operator@t1       → key 'explicit_feedback\x00operator' enters Map at position 0
-  //   2. bad/<note>@t2          → key 'explicit_feedback\x00<note>'   enters Map at position 1
-  //   3. good/operator@t2       → same key as #1 — without delete-then-set it stays at position 0,
-  //                               and _latestExplicitFeedback's >= scan returns the bad vote (#2)
-  //                               rather than the most-recently-arrived good vote (#3).
-  it('3-vote tie-break: good/operator@t1, bad/<note>@t2, good/operator@t2 → latest must be good (regression #2934)', () => {
+  // Sequence (all-equal timestamps — exercises the >= tie-break path):
+  //   1. good/operator@t1       key 'explicit_feedback\x00operator' enters Map at position 0
+  //   2. bad/<note>@t1          key 'explicit_feedback\x00<note>'   enters Map at position 1
+  //   3. good/operator@t1       same key as #1 — without delete-then-set it stays at position 0,
+  //                             so _latestExplicitFeedback's >= scan returns bad (#2) instead of
+  //                             the most-recently-arrived good (#3).
+  it('3-vote tie-break (t1=t2=t3): good/operator, bad/<note>, good/operator (collision) → latest must be good (regression #2934)', () => {
     const t1 = '2024-01-01T10:00:00.000Z';
-    const t2 = '2024-01-01T10:00:00.000Z'; // same timestamp as t1 to exercise the tie-break path
 
-    // Vote 1: good/operator@t1
     upsertVotes('sess-2934', [
       makeVote({ lf: 'explicit_feedback', vote: 1, strength: 'strong', evidence: 'operator',
         observed_at: t1 }),
     ], undefined, { outcomesDir: tmpDir });
 
-    // Vote 2: bad/<note>@t2 (different evidence, both survive dedup)
     upsertVotes('sess-2934', [
       makeVote({ lf: 'explicit_feedback', vote: -1, strength: 'strong', evidence: 'my note',
-        observed_at: t2 }),
+        observed_at: t1 }),
     ], undefined, { outcomesDir: tmpDir });
 
-    // Vote 3: good/operator@t2 — same lf+evidence as vote 1, same timestamp as vote 2.
-    // Without the delete-then-set fix, _mergeVotes leaves this entry at position 0
-    // in the Map, so _latestExplicitFeedback's >= scan returns the bad vote at position 1.
+    // Vote 3: same lf+evidence as vote 1 at the same timestamp. Without the
+    // delete-then-set fix, _mergeVotes leaves the key at position 0 in the Map,
+    // so _latestExplicitFeedback's >= scan returns bad (position 1) instead of good.
     upsertVotes('sess-2934', [
       makeVote({ lf: 'explicit_feedback', vote: 1, strength: 'strong', evidence: 'operator',
-        observed_at: t2 }),
+        observed_at: t1 }),
     ], undefined, { outcomesDir: tmpDir });
 
     const rec = readRecord('sess-2934', tmpDir);
-    // The 3rd vote (good/operator) is the last operator action — it must win.
     expect(rec?.label).toBe('succeeded');
     expect(rec?.confidence).toBe(1.0);
     expect(rec?.state).toBe('settled');
     // Two distinct lf+evidence entries survive: good/operator (replaced) + bad/<note>
     expect(rec?.votes.filter((v) => v.lf === 'explicit_feedback')).toHaveLength(2);
+  });
+
+  // Realistic variant with t1 < t2 = t3: the colliding re-submission arrives
+  // at the same time as the competing vote, so the tail position is the only
+  // tiebreaker. Ensures the fix holds under the most common real-world pattern.
+  it('3-vote realistic variant (t1 < t2 = t3): good/operator@t1, bad/<note>@t2, good/operator@t2 (collision) → latest must be good', () => {
+    const t1 = '2024-01-01T10:00:00.000Z';
+    const t2 = '2024-01-01T10:01:00.000Z'; // later than t1; equal to t3
+
+    upsertVotes('sess-2934-realistic', [
+      makeVote({ lf: 'explicit_feedback', vote: 1, strength: 'strong', evidence: 'operator',
+        observed_at: t1 }),
+    ], undefined, { outcomesDir: tmpDir });
+
+    upsertVotes('sess-2934-realistic', [
+      makeVote({ lf: 'explicit_feedback', vote: -1, strength: 'strong', evidence: 'my note',
+        observed_at: t2 }),
+    ], undefined, { outcomesDir: tmpDir });
+
+    // Collision: good/operator re-submitted at t2. Because t2 >= t2, the >= tie-break
+    // in _latestExplicitFeedback makes tail position decisive. With delete-then-set
+    // this entry is at the tail, so it wins; without the fix it stays at position 0.
+    upsertVotes('sess-2934-realistic', [
+      makeVote({ lf: 'explicit_feedback', vote: 1, strength: 'strong', evidence: 'operator',
+        observed_at: t2 }),
+    ], undefined, { outcomesDir: tmpDir });
+
+    const rec = readRecord('sess-2934-realistic', tmpDir);
+    expect(rec?.label).toBe('succeeded');
+    expect(rec?.confidence).toBe(1.0);
+    expect(rec?.state).toBe('settled');
+    expect(rec?.votes.filter((v) => v.lf === 'explicit_feedback')).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// _mergeVotes ordering — direct assertions via upsertVotes (function is private)
+// ---------------------------------------------------------------------------
+
+describe('_mergeVotes ordering', () => {
+  // Invariant: a colliding incoming vote must move to the tail of the merged
+  // array. _latestExplicitFeedback's forward scan with >= tie-break depends on
+  // this: the last-in-array entry wins when timestamps are equal.
+
+  it('non-colliding incoming vote appends after all existing votes', () => {
+    // Existing: [A], incoming: [B] — no collision, B must be last.
+    upsertVotes('sess-mv-append', [
+      makeVote({ lf: 'explicit_feedback', vote: 1, strength: 'strong', evidence: 'A',
+        observed_at: '2024-01-01T10:00:00.000Z' }),
+    ], undefined, { outcomesDir: tmpDir });
+
+    upsertVotes('sess-mv-append', [
+      makeVote({ lf: 'explicit_feedback', vote: -1, strength: 'strong', evidence: 'B',
+        observed_at: '2024-01-01T10:01:00.000Z' }),
+    ], undefined, { outcomesDir: tmpDir });
+
+    const rec = readRecord('sess-mv-append', tmpDir);
+    const efVotes = rec?.votes.filter((v) => v.lf === 'explicit_feedback') ?? [];
+    expect(efVotes).toHaveLength(2);
+    expect(efVotes[efVotes.length - 1]?.evidence).toBe('B');
+  });
+
+  it('colliding incoming vote moves to the tail (not left at original position)', () => {
+    // Existing: [A, B], incoming: [A-updated] — A collides.
+    // After merge the order must be [B, A-updated], not [A-updated, B].
+    upsertVotes('sess-mv-tail', [
+      makeVote({ lf: 'explicit_feedback', vote: 1, strength: 'strong', evidence: 'A',
+        observed_at: '2024-01-01T10:00:00.000Z' }),
+      makeVote({ lf: 'explicit_feedback', vote: -1, strength: 'strong', evidence: 'B',
+        observed_at: '2024-01-01T10:00:00.000Z' }),
+    ], undefined, { outcomesDir: tmpDir });
+
+    upsertVotes('sess-mv-tail', [
+      makeVote({ lf: 'explicit_feedback', vote: 1, strength: 'strong', evidence: 'A',
+        observed_at: '2024-01-01T10:00:00.000Z' }),
+    ], undefined, { outcomesDir: tmpDir });
+
+    const rec = readRecord('sess-mv-tail', tmpDir);
+    const efVotes = rec?.votes.filter((v) => v.lf === 'explicit_feedback') ?? [];
+    // A was updated and must now be last; B (non-colliding) must precede it.
+    expect(efVotes).toHaveLength(2);
+    expect(efVotes[efVotes.length - 1]?.evidence).toBe('A');
+    expect(efVotes[0]?.evidence).toBe('B');
+    // Tail position means _latestExplicitFeedback returns the good (A) vote.
+    expect(rec?.label).toBe('succeeded');
   });
 });
 
