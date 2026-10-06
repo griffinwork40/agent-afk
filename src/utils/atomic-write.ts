@@ -277,11 +277,17 @@ export function atomicWriteFile(
  * @param dest    - Absolute path of the destination file.
  * @param content - String (or Buffer) to write.
  * @param opts    - Optional mode, encoding, and mkdirp flag.
+ * @internal `_renameFn` — test-only injectable rename function forwarded to
+ *   {@link renameWithRetry}.  Production callers must not pass this.
+ * @internal `_platform` — test-only platform override forwarded to
+ *   {@link renameWithRetry}.  Production callers must not pass this.
  */
 export async function atomicWriteFileAsync(
   dest: string,
   content: string | Buffer,
   opts: AtomicWriteOptions = {},
+  /** @internal */ _renameFn?: (from: string, to: string) => Promise<void>,
+  /** @internal */ _platform?: string,
 ): Promise<boolean> {
   const mode = opts.mode ?? 0o600;
   const encoding = opts.encoding ?? 'utf-8';
@@ -307,7 +313,7 @@ export async function atomicWriteFileAsync(
       renameSync(tmp, dest);
       return true;
     }
-    await renameWithRetry(tmp, dest);
+    await renameWithRetry(tmp, dest, undefined, _platform, _renameFn);
     return true;
   } catch (err) {
     // Best-effort cleanup — suppress rm errors.

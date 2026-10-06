@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, statSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -361,12 +361,16 @@ describe('renameWithRetrySync', () => {
 // ---------------------------------------------------------------------------
 // atomicWriteFileAsync — end-to-end wiring: routes through renameWithRetry
 //
-// This test injects a rename that throws EPERM once on the simulated win32
+// These tests inject a rename that throws EPERM once on the simulated win32
 // platform to prove that atomicWriteFileAsync uses renameWithRetry rather than
 // a bare rename call.  Because renameWithRetry accepts injectable params, and
-// atomicWriteFileAsync calls renameWithRetry directly, we verify the E2E
-// contract by checking that a transient EPERM on "win32" is recovered without
-// corrupting the destination.
+// atomicWriteFileAsync forwards _renameFn to renameWithRetry, we verify the
+// E2E contract by checking that a transient EPERM on "win32" is recovered
+// without corrupting the destination.
+//
+// Fix for #2819: atomicWriteFileAsync now accepts an optional `_renameFn`
+// parameter that threads into renameWithRetry, making the retry path testable
+// without relying on real filesystem concurrency (which is inherently flaky).
 // ---------------------------------------------------------------------------
 
 describe('atomicWriteFileAsync — E2E wiring through renameWithRetry', () => {
@@ -374,10 +378,12 @@ describe('atomicWriteFileAsync — E2E wiring through renameWithRetry', () => {
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'afk-e2e-'));
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
   });
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
+    vi.restoreAllMocks();
   });
 
   it('atomicWriteFileAsync resolves after one transient EPERM via renameWithRetry', async () => {
@@ -403,6 +409,42 @@ describe('atomicWriteFileAsync — E2E wiring through renameWithRetry', () => {
     await renameWithRetry(tmpPath, dest, 5, 'win32', injectFn);
     expect(renameCalls).toBe(2);
     expect(readFileSync(dest, 'utf-8')).toBe('e2e-content');
+  });
+
+  it('atomicWriteFileAsync retries a simulated EPERM through its own _renameFn injectable (fix for #2819)', async () => {
+    // Root cause of #2819: concurrent same-file writers on Windows can each
+    // get EPERM when the winning rename lands just before them. This test
+    // exercises the FULL code path — atomicWriteFileAsync → renameWithRetry
+    // retry loop — without relying on real filesystem concurrency (which is
+    // flaky by nature). The injectable _renameFn simulates one transient EPERM
+    // then succeeds, proving the retry survives end-to-end.
+    const dest = join(dir, 'issue-2819.json');
+    const eperm = Object.assign(new Error('EPERM'), { code: 'EPERM' });
+    let renameCalls = 0;
+    const injectFn = async (from: string, to: string): Promise<void> => {
+      renameCalls++;
+      if (renameCalls === 1) throw eperm;
+      const { rename: realRename } = await import('node:fs/promises');
+      await realRename(from, to);
+    };
+    // Drive through atomicWriteFileAsync with "win32" platform injected via
+    // renameWithRetry's _platform default — but here we pass _renameFn through
+    // atomicWriteFileAsync's new injectable parameter. The function must thread
+    // it into renameWithRetry; if it uses a bare rename instead the first call
+    // would throw and the test fails.
+    // Pass 'win32' as the platform injectable so the retry path fires on all
+    // host OSes (including macOS/Linux in CI) — repo rule R4: no platform skips.
+    const result = await atomicWriteFileAsync(
+      dest, JSON.stringify({ writer: 1 }), {}, injectFn, 'win32',
+    );
+    expect(result).toBe(true);
+    expect(renameCalls).toBe(2); // First call threw EPERM, second succeeded.
+    expect(existsSync(dest)).toBe(true);
+    const parsed = JSON.parse(readFileSync(dest, 'utf-8')) as { writer: number };
+    expect(parsed.writer).toBe(1);
+    // Temp file must be cleaned up by atomicWriteFileAsync on success.
+    const leftovers = readdirSync(dir).filter((f: string) => f.startsWith('.tmp-'));
+    expect(leftovers).toHaveLength(0);
   });
 });
 
