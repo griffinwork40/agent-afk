@@ -10,7 +10,7 @@ vi.mock('./loop-iteration.turn-run.js', () => ({ runOneTurn: turn }));
 vi.mock('./loop-iteration.drain.js', () => ({ drainLoopNotifications: vi.fn() }));
 vi.mock('./loop-iteration.first-turn.js', () => ({ runFirstTurnHookIfNeeded: vi.fn() }));
 vi.mock('./loop-iteration.hooks.js', () => ({
-  dispatchUserPromptSubmit: async (runText: string) => ({ runText }), dispatchStop: vi.fn(),
+  dispatchUserPromptSubmit: async (runText: string) => ({ runText }),
 }));
 vi.mock('./version-notice.js', () => ({ createVersionNotice: () => () => undefined }));
 vi.mock('../../slash/plugin-skills.js', () => ({

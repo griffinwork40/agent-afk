@@ -470,6 +470,9 @@ export interface StopWiring {
    * Finding 2: set to `true` by `buildBeforeTurnEnd` after the provider seam
    * dispatches Stop. Checked by `dispatchTurnStop` in turn-stream-runner.ts to
    * avoid firing Stop twice on the same turn. Reset per turn by the session.
+   *
+   * @internal Runtime bookkeeping mutated by the session harness; not part of
+   * the public surface contract. Surfaces must not set or read it.
    */
   stopDispatchedBySeam?: boolean;
 }
