@@ -109,7 +109,8 @@ export interface UpsertVotesOptions {
  * exists yet (requires `base` to be supplied). History is appended only when
  * the computed label changes. Deduplication: a vote is considered a duplicate
  * if an existing vote shares the same `lf` and `evidence` pair; the incoming
- * vote replaces it and moves to the tail of the Map (see _mergeVotes).
+ * vote replaces it: the old entry is deleted then re-inserted, which moves it
+ * to the tail of the Map so insertion-order scans see the newest arrival last.
  *
  * explicit_feedback override semantics (design §"Explicit feedback"):
  *   - A vote with lf === 'explicit_feedback' causes upsertVotes to call

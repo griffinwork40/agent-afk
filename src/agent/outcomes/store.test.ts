@@ -329,7 +329,7 @@ describe('upsertVotes – newest explicit_feedback vote wins', () => {
   //   3. good/operator@t1       same key as #1 — without delete-then-set it stays at position 0,
   //                             so _latestExplicitFeedback's >= scan returns bad (#2) instead of
   //                             the most-recently-arrived good (#3).
-  it('3-vote tie-break (t1=t2=t3): good/operator, bad/<note>, good/operator (collision) → latest must be good (regression #2934)', () => {
+  it('regression #2934: collision on equal timestamps -> last-arrived good vote wins', () => {
     const t1 = '2024-01-01T10:00:00.000Z';
 
     upsertVotes('sess-2934', [
@@ -358,10 +358,12 @@ describe('upsertVotes – newest explicit_feedback vote wins', () => {
     expect(rec?.votes.filter((v) => v.lf === 'explicit_feedback')).toHaveLength(2);
   });
 
-  // Realistic variant with t1 < t2 = t3: the colliding re-submission arrives
-  // at the same time as the competing vote, so the tail position is the only
-  // tiebreaker. Ensures the fix holds under the most common real-world pattern.
-  it('3-vote realistic variant (t1 < t2 = t3): good/operator@t1, bad/<note>@t2, good/operator@t2 (collision) → latest must be good', () => {
+  // Kept alongside the all-equal test because it exercises the full
+  // upsertVotes -> _latestExplicitFeedback -> label pipeline under the most
+  // common real-world pattern (t1 < t2 = t3): the initial good vote arrives
+  // earlier, so the >= timestamp tie-break can only be resolved by tail
+  // position — a different code path than pure t1=t2=t3.
+  it('regression #2934 realistic (t1 < t2 = t3): good@t1, bad@t2, good@t2 collision -> last-arrived wins', () => {
     const t1 = '2024-01-01T10:00:00.000Z';
     const t2 = '2024-01-01T10:01:00.000Z'; // later than t1; equal to t3
 
