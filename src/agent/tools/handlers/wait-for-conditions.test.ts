@@ -451,6 +451,23 @@ describe('evaluateCommand', () => {
     );
   });
 
+  // #2913: Confirm gh run list is allowed through to execSync (not blocked).
+  // The real BASH_SAFE allowlist is exercised by risk-classifier.test.ts; this
+  // test pins that evaluateCommand passes 'gh run list' to the classifier and
+  // executes it when the classifier returns 'safe'.
+  it('#2913: gh run list — passes through to execSync when classifier returns safe', () => {
+    // mockClassifyRisk defaults to 'safe' in beforeEach.
+    mockExecSync.mockReturnValue(Buffer.from('[{"status":"completed"}]'));
+    const result = evaluateCommand({ type: 'command', command: 'gh run list --limit 1 --json status' });
+    expect(result.met).toBe(true);
+    expect(mockClassifyRisk).toHaveBeenCalledWith(
+      'bash',
+      { command: 'gh run list --limit 1 --json status' },
+      expect.any(Object),
+    );
+    expect(mockExecSync).toHaveBeenCalled();
+  });
+
   // H-1: Medium-risk commands must now be blocked (only 'safe' is allowed)
   it('H-1: blocks medium-risk commands before execSync is called', () => {
     mockClassifyRisk.mockReturnValue('medium');

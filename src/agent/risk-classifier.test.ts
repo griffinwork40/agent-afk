@@ -324,6 +324,13 @@ describe('classifyRisk — bash safe', () => {
     expect(classifyRisk('bash', { command: 'curl -sI https://api.example.com/status' }, ctx)).toBe('safe');
   });
 
+  it('curl -si  → safe (silent GET with response headers — read-only, not a HEAD probe)', () => {
+    // `-si` (lowercase i) prints response headers for a GET request — still
+    // read-only. The comment in BASH_SAFE was corrected in #2913 to not call
+    // this a HEAD probe; the entry itself is kept because the command is safe.
+    expect(classifyRisk('bash', { command: 'curl -si https://api.example.com/status' }, ctx)).toBe('safe');
+  });
+
   it('wget --spider → safe (non-mutating spider mode)', () => {
     expect(classifyRisk('bash', { command: 'wget --spider https://example.com/health' }, ctx)).toBe('safe');
   });

@@ -179,8 +179,11 @@ const BASH_SAFE: readonly string[] = [
   'gh issue list',
   'gh issue status',
   'gh repo view',
-  // curl/wget read-only HTTP probes — HEAD and spider modes are non-mutating
-  // and widely used in CI health checks. `-I` is the short form of --head.
+  // curl/wget read-only HTTP probes — these modes are non-mutating and widely
+  // used in CI health checks. `-I`/`--head` issue an HTTP HEAD request; `-sI`
+  // combines silent + HEAD. Note: `-si` (lowercase i) prints response headers
+  // for a GET — still read-only, but NOT a HEAD probe. `wget --spider` is the
+  // wget equivalent of HEAD mode.
   'curl --head',
   'curl -I ',
   'curl -sI ',
