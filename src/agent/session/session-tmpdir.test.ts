@@ -489,28 +489,47 @@ describe('#3072 TOCTOU closure: cleanup renames before rm to close lstat-to-rm r
   });
 
   it('EXDEV fallback bails when realpath containment check fails', async () => {
-    // Create a directory outside the root to act as the "session dir".
-    const outside = path.join(base, 'exdev-outside-root');
-    fs.mkdirSync(outside, { recursive: true });
-    fs.writeFileSync(path.join(outside, 'sentinel.txt'), 'keep');
-
     const e = topLevel();
     expect(ensureSessionTmpdir(e)).toBe(true);
     const sessionDir = e['TMPDIR']!;
+    // Write a sentinel into the session dir so we can detect whether rm ran.
+    fs.writeFileSync(path.join(sessionDir, 'sentinel.txt'), 'keep');
 
-    // Simulate EXDEV on rename so the fallback path runs.  We also need the
-    // fallback lstat to see a real dir — we keep sessionDir intact for that.
     const exdevErr = Object.assign(new Error('EXDEV: cross-device link not permitted'), {
       code: 'EXDEV',
     }) as NodeJS.ErrnoException;
 
-    // Override realpath so that this.dir resolves to outside the root.
+    // cleanup() makes exactly 4 realpath calls in this flow:
+    //   call 1: realpath(this.root) — step 2 happy path
+    //   call 2: realpath(this.dir)  — step 2 happy path (must pass → rename is tried)
+    //   call 3: realpath(this.root) — EXDEV fallback containment re-check
+    //   call 4: realpath(this.dir)  — EXDEV fallback containment re-check
+    //
+    // We return a path outside the root only on call 4 so that:
+    //   - calls 1-2 pass step 2 (cleanup continues to rename)
+    //   - rename throws EXDEV → enters fallback
+    //   - calls 3-4 run in the fallback; call 4 returns outside → guard bails
+    //   - rm(sessionDir) is NEVER called, so sentinel.txt survives
+    //
+    // If the guard is deleted from the production code, rm runs on sessionDir
+    // and sentinel.txt disappears, causing the assertion below to FAIL — which
+    // proves the test is not inert.
     const origRealpath = fs.promises.realpath.bind(fs.promises);
+    let totalRealpathCalls = 0;
+    // Track whether rename was called via a closure flag — mockRestore() clears
+    // spy.mock.calls before the post-finally assertion can read them.
+    let renameWasCalled = false;
+    const renameSpy = vi.spyOn(fs.promises, 'rename').mockImplementation(async () => {
+      renameWasCalled = true;
+      throw exdevErr;
+    });
+    const outsidePath = path.join(base, 'exdev-outside-root-rp');
     const realpathSpy = vi.spyOn(fs.promises, 'realpath').mockImplementation(async (p) => {
-      if (p === sessionDir) return outside; // claim it resolves outside the root
+      totalRealpathCalls++;
+      // Call 4 = EXDEV fallback realpath(this.dir): return a path outside root.
+      if (totalRealpathCalls === 4) return outsidePath;
       return origRealpath(p as string);
     });
-    const renameSpy = vi.spyOn(fs.promises, 'rename').mockRejectedValue(exdevErr);
     try {
       await cleanupSessionTmpdir(e);
     } finally {
@@ -518,10 +537,11 @@ describe('#3072 TOCTOU closure: cleanup renames before rm to close lstat-to-rm r
       realpathSpy.mockRestore();
     }
 
-    // The outside directory must still exist — containment check must have bailed.
-    expect(fs.existsSync(path.join(outside, 'sentinel.txt'))).toBe(true);
-    // The actual session dir may or may not be present (we did not rm it).
-    expect(fs.existsSync(outside)).toBe(true);
+    // rename must have been attempted (proves we entered the EXDEV path, not step 2).
+    expect(renameWasCalled).toBe(true);
+    // sentinel.txt must still exist: the containment check must have bailed before rm.
+    // If the EXDEV-fallback guard is deleted, rm(sessionDir) runs and this assertion fails.
+    expect(fs.existsSync(path.join(sessionDir, 'sentinel.txt'))).toBe(true);
   });
 
   it('EXDEV fallback bails when uid ownership check fails', async () => {
@@ -544,8 +564,12 @@ describe('#3072 TOCTOU closure: cleanup renames before rm to close lstat-to-rm r
       const st = await origLstat(p as string);
       lstatCallCount++;
       if (lstatCallCount === 2) {
-        // Return a stat-like object with uid=0 (root) to trigger the uid bail.
-        return Object.create(st, { uid: { value: 0, enumerable: true } }) as typeof st;
+        // Return a stat-like object with a uid that differs from the current
+        // process uid, triggering the ownership bail. Avoid hard-coding 0 (root)
+        // because a CI runner executing as root would produce uid===currentUid(),
+        // making the check a no-op and causing the assertion below to fail.
+        const foreignUid = (process.getuid?.() ?? 0) + 1;
+        return Object.create(st, { uid: { value: foreignUid, enumerable: true } }) as typeof st;
       }
       return st;
     });
