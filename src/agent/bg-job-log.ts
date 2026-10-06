@@ -28,7 +28,10 @@ import * as fsp from 'node:fs/promises';
 import * as readline from 'node:readline';
 import { getBgJobsRoot, getBgJobDir, getBgJobLog, getBgJobMeta, getBgJobResult } from '../paths.js';
 import { atomicWriteFileAsync } from '../utils/atomic-write.js';
+import { persistReconciled, reconcileOrphanedMeta } from './bg-job-log.orphan.js';
 import type { OutputEvent } from './types/session-types.js';
+
+export { reconcileOrphanedMeta };
 
 // ---------------------------------------------------------------------------
 // Public schema
@@ -52,8 +55,30 @@ export interface BgJobMeta {
    * `isIncompleteStopReason` / `annotateIfIncomplete` partial-result labeling
    * the in-memory replay applies. Optional and additive: old logs written
    * before this field existed simply lack it (schemaVersion stays 1).
+   *
+   * Synthetic sentinel values (not emitted by the subagent runtime):
+   * - `'owner-process-exited'` — set by `reconcileOrphanedMeta` when the job
+   *   was still `running` on disk but its owner PID has since died. The job
+   *   was never explicitly stopped; this value signals post-hoc detection.
    */
   stopReason?: string;
+  /**
+   * PID of the process that created this job. Written at registration time so
+   * that if the owner crashes or is killed, readers can detect the orphan and
+   * promote it from `running` to `failed` with `reason: 'owner-process-exited'`
+   * instead of leaving it stuck in `running` forever. Optional and additive —
+   * old meta.json files that predate this field are treated as if the owner is
+   * alive (no promotion), preserving backward compatibility.
+   */
+  ownerPid?: number;
+  /**
+   * Epoch ms at which the owner process started, captured at registration time
+   * via `ownProcessStartedAt()`. Complements `ownerPid` for future pid-reuse
+   * detection: if a new process inherits the recorded pid, its start time will
+   * differ from this value. Optional and additive — old meta.json files that
+   * predate this field simply lack it.
+   */
+  ownerStartTime?: number;
   schemaVersion: 1;
 }
 
@@ -316,7 +341,10 @@ export class BgJobLogReader {
       const parsed = JSON.parse(raw) as BgJobMeta;
       // Reject files with an unexpected schema version (stale v0, future v2, etc.)
       if (parsed.schemaVersion !== 1) return null;
-      return parsed;
+      // Lazily promote orphaned running entries whose owner PID has died.
+      const reconciled = reconcileOrphanedMeta(parsed);
+      if (reconciled !== parsed) persistReconciled(metaPath, reconciled);
+      return reconciled;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
       // Corrupted meta — log and return null

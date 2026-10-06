@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.302.1] - 2026-10-06
+
+### Fixed
+- record ownerPid in bg meta.json and reconcile dead-owner jobs on read (#2319) (d2387bcb)
+
 ## [5.302.0] - 2026-10-06
 
 ### Added
