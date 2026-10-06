@@ -68,7 +68,12 @@ export const patchApplyTool: AnthropicToolDef = {
               type: 'string',
               description:
                 'Full replacement content for the file. Mutually exclusive with `edits`: ' +
-                'when using `edits`, omit this field or pass an empty string.',
+                'when using `edits`, omit this field or pass `""` or `null` as a placeholder. ' +
+                'A standalone `null` (no `edits` key) is treated as absent and triggers the ' +
+                '`no_change_specified` validator error. ' +
+                'Note: whitespace-only content alongside `edits` is treated as a real payload ' +
+                'and will trigger a `mutually_exclusive` error — only `""` and `null` qualify ' +
+                'as placeholder values.',
             },
           },
           required: ['path'],

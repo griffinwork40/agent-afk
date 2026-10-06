@@ -73,13 +73,21 @@ function parsePatchApplyInput(input: unknown): {
       change.expected_hash = rawItem['expected_hash'];
     }
 
-    // Contract: `content` exactly "" or null alongside a NON-EMPTY `edits`
-    // array is a filled-in placeholder, not a request to truncate the file, so
-    // it is treated as absent and the edits apply. Deliberately NOT
-    // isBlankInput: whitespace-only content is a real payload, and a blank
-    // `content` with no edits (or empty edits) still means "replace the file
-    // with this" and still trips the mutually_exclusive check when ambiguous.
-    if (rawItem['content'] !== undefined && !isPlaceholderContent(rawItem['content'], rawItem['edits'])) {
+    // Contract: `content` is skipped (treated as absent) when:
+    //   (a) it is a filled-in placeholder — exactly `""` or `null` alongside a
+    //       NON-EMPTY `edits` array — so the edits take effect; or
+    //   (b) it is `null` with no `edits` key (or an empty `edits` array) —
+    //       `null` carries no caller intent and should reach the structured
+    //       `no_change_specified` validator rather than a parse-layer type error.
+    // Deliberately NOT isBlankInput for `""`: whitespace-only content is a real
+    // payload, and `""` alone (no edits) means "truncate the file", which still
+    // reaches the validator correctly.
+    const contentIsAbsent =
+      rawItem['content'] === undefined ||
+      rawItem['content'] === null ||
+      isPlaceholderContent(rawItem['content'], rawItem['edits']);
+
+    if (!contentIsAbsent) {
       if (typeof rawItem['content'] !== 'string') {
         throw new Error(`changes[${i}].content must be a string.`);
       }

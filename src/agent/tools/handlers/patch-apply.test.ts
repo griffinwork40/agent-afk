@@ -614,4 +614,25 @@ describe('patch_apply — blank optional fields', () => {
     expect(JSON.parse(result.content as string).status).toBe('applied');
     expect(await readFile(filePath, 'utf-8')).toBe('');
   });
+
+  // Issue #3067: standalone content: null (no edits key) must reach the
+  // structured validator and fire no_change_specified, not a parse-layer type
+  // error ("content must be a string").
+  it('standalone content: null fires no_change_specified, not a parse error (#3067)', async () => {
+    const filePath = await writeTemp('null-content.txt', 'unchanged\n');
+    const handler = createPatchApplyHandler(tempDir);
+    const result = await handler(
+      { changes: [{ path: filePath, content: null }] },
+      signal,
+      makeCtx(),
+    );
+    expect(result.isError).toBe(true);
+    const parsed = JSON.parse(result.content as string);
+    // Must reach the structured validator — not a parse-layer error.
+    expect(parsed.status).toBe('validation_failed');
+    expect(parsed.errors).toHaveLength(1);
+    expect(parsed.errors[0].error).toBe('no_change_specified');
+    // File untouched.
+    expect(await readFile(filePath, 'utf-8')).toBe('unchanged\n');
+  });
 });
