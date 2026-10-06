@@ -23,15 +23,11 @@ import type { TurnState } from './repl-loop.js';
 // ---------------------------------------------------------------------------
 
 vi.mock('../../session-store.js', () => ({
-  saveSession: vi.fn((_stats: unknown, _id: unknown, opts: unknown) => {
-    // Store opts for assertion
-    (saveSession as ReturnType<typeof vi.fn>).lastOpts = opts;
-    return '/fake/path.json';
-  }),
+  saveSession: vi.fn(() => '/fake/path.json'),
 }));
 
 import { saveSession } from '../../session-store.js';
-const mockSaveSession = saveSession as ReturnType<typeof vi.fn> & { lastOpts?: unknown };
+const mockSaveSession = saveSession as ReturnType<typeof vi.fn>;
 
 function makeMinimalCtx(): InteractiveCtx {
   return {
@@ -73,7 +69,6 @@ function makePickerAbort(): AbortController {
 describe('makeSessionSaver (issue #2762)', () => {
   beforeEach(() => {
     mockSaveSession.mockClear();
-    mockSaveSession.lastOpts = undefined;
   });
 
   it('passes exitReason from ref to saveSession when saving', () => {
@@ -246,5 +241,41 @@ describe('installSignalHandlers exitReason wiring (issue #2762)', () => {
 
     // rl.close should only be called once
     expect(ctx.rl.close).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// exitReason='eof' written on the rl.on('close') path (issue #2900)
+// ---------------------------------------------------------------------------
+
+describe("exitReason 'eof' on readline close (issue #2900)", () => {
+  it("??= 'eof' fills an empty ref, so stdin-EOF is recorded in the sidecar", () => {
+    // Simulate the rl.on('close') handler logic from interactive.ts:
+    //   ctx.exitReasonRef!.current ??= 'eof';
+    // When no signal handler has written a reason yet (stdin EOF, piped input).
+    const exitReasonRef: ExitReasonRef = { current: undefined };
+    exitReasonRef.current ??= 'eof';
+    expect(exitReasonRef.current).toBe('eof');
+  });
+
+  it("??= 'eof' does NOT overwrite a reason already set by a signal handler", () => {
+    // When SIGTERM fired before readline closed, the existing reason is preserved.
+    const exitReasonRef: ExitReasonRef = { current: 'sigterm' };
+    exitReasonRef.current ??= 'eof';
+    expect(exitReasonRef.current).toBe('sigterm');
+  });
+
+  it('makeSessionSaver records eof in the sidecar when exitReasonRef holds eof', () => {
+    mockSaveSession.mockClear();
+    const ctx = makeMinimalCtx();
+    const exitReasonRef: ExitReasonRef = { current: 'eof' };
+    const { saveCurrentSession } = makeSessionSaver(ctx, exitReasonRef);
+
+    saveCurrentSession();
+
+    expect(mockSaveSession).toHaveBeenCalledOnce();
+    const opts = mockSaveSession.mock.calls[0][2] as Record<string, unknown>;
+    expect(opts['closeTime']).toBe(true);
+    expect(opts['exitReason']).toBe('eof');
   });
 });

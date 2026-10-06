@@ -113,6 +113,7 @@ export async function runOneTurn(
         await transcript.appendTurn(userInput, assistantText);
         if (ctx.stats.sessionId) {
           try {
+            // Mid-turn autosave: no closeTime (session is still running).
             saveSession(ctx.stats);
           } catch (err) {
             if (!autosaveState[0]) {
