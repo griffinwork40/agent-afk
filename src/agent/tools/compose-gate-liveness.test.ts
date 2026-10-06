@@ -135,7 +135,7 @@ vi.mock('../manifest/write.js', () => ({
   updateWaveUnit: (...args: Parameters<typeof mockUpdateWaveUnit>) => mockUpdateWaveUnit(...args),
 }));
 
-const mockResolveCredentialForModel = vi.fn(() => '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' as string | undefined);
+const mockResolveCredentialForModel = vi.fn(() => 'sk-ant-test-FAKE' as string | undefined);
 vi.mock('../auth/credential-resolver.js', () => ({
   resolveCredentialForModel: (...args: unknown[]) => mockResolveCredentialForModel(...args),
 }));

@@ -318,3 +318,77 @@ describe('Gate 4 — WEB_REQUEST_DOMAIN_POLICY_PROD_PATH', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });
+
+// ============================================================================
+// Gate 4b: WEB_REQUEST_DOMAIN_POLICY_FAIL_OPEN
+//
+// When browser/config.js fails to load (e.g. missing dependency), resolveDomainCheck()
+// catches the error, emits a console.warn, and returns undefined — allowing the
+// request through (fail-open). This test pins that path so a silent regression
+// (e.g. the catch block being removed) is immediately detected.
+//
+// Strategy: use vi.resetModules() + vi.doMock() to register a module-load failure
+// for browser/config.js, then re-import createWebRequestHandler fresh so it
+// picks up the throwing mock for its dynamic import call.
+//
+// Mutation probe target: remove the try/catch in resolveDomainCheck() — the
+// import error propagates uncaught, the handler throws instead of returning a
+// result, and the test fails because the result is not an allowed response.
+// ============================================================================
+
+describe('Gate 4b — WEB_REQUEST_DOMAIN_POLICY_FAIL_OPEN', () => {
+  beforeEach(() => {
+    vi.stubEnv('AFK_BROWSER_CONFIG', '/nonexistent/afk-gate-liveness-browser.json');
+    vi.stubEnv('AFK_BROWSER_BLOCKED_DOMAINS', 'blocked-gate-liveness-failopen.example.com');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.doUnmock('../../browser/config.js');
+    vi.resetModules();
+  });
+
+  it('resolveDomainCheck fail-open: allows request when browser/config.js fails to load and emits console.warn', async () => {
+    // Register a throwing mock for browser/config.js BEFORE resetting modules,
+    // so the fresh module graph picks it up on the next dynamic import().
+    vi.doMock('../../browser/config.js', () => {
+      throw new Error('simulated browser/config.js load failure — fail-open gate test');
+    });
+    vi.resetModules();
+
+    // Re-import createWebRequestHandler so it uses the fresh module graph where
+    // browser/config.js throws. The static top-level import is stale (cached),
+    // so we must use a dynamic import here.
+    const { createWebRequestHandler: freshCreateHandler } = await import('../tools/handlers/web-request.js');
+
+    const fetchSpy = vi.fn(async () => new Response('ok-failopen', { status: 200 }));
+    const publicLookup = async (): Promise<readonly { address: string }[]> => [
+      { address: '93.184.216.34' },
+    ];
+
+    const handler = freshCreateHandler({
+      fetchFn: fetchSpy as typeof fetch,
+      lookupFn: publicLookup,
+      // domainCheck intentionally omitted — exercises resolveDomainCheck()
+    });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await handler(
+      { url: 'https://blocked-gate-liveness-failopen.example.com/path', method: 'GET' },
+      new AbortController().signal,
+    );
+
+    // Fail-open: the request must be ALLOWED even though the domain appears in
+    // AFK_BROWSER_BLOCKED_DOMAINS, because the domain-policy module failed to load.
+    expect(result.isError, 'fail-open must allow the request through').not.toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // The warn must have fired so the operator is not silently misled.
+    const warnCalls = warnSpy.mock.calls.flat().map(String);
+    expect(warnCalls.some((msg) => msg.includes('[web_request]'))).toBe(true);
+    expect(warnCalls.some((msg) => msg.includes('domain policy module failed to load'))).toBe(true);
+
+    warnSpy.mockRestore();
+  });
+});
