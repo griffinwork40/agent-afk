@@ -11,7 +11,7 @@ You are installing an AFK background process (telegram bot or daemon) as an OS-s
    - `afk service list`
    - `afk telegram check-token` — JSON `{set, valid, username?, botId?, reason?}` (only used during pre-flight for the telegram service)
 3. **Never install the telegram service if the token isn't valid.** `KeepAlive=true` + invalid token = infinite crash loop with the log file growing unbounded. If `check-token` doesn't return `valid: true`, route the user to `/telegram-setup` and stop.
-4. **`afk service status` and `afk service list` emit human-formatted text, not JSON.** Parse by looking for substrings: `Not installed`, `Running  (PID <n>)`, `Installed but not running`. Do not invent fields.
+4. **`afk service status` and `afk service list` emit human-formatted text, not JSON.** Parse by looking for substrings: `Not installed`, `Running` (with or without a following `(PID <n>)` — on Windows the PID is not available), `Installed but not running`. Do not invent fields.
 
 ## The flow
 
@@ -58,9 +58,9 @@ On **Windows**, note once:
 Run `afk service status <name>`. Three branches based on the human-formatted output:
 
 - Contains `Not installed` → not installed yet. Continue to Step 4.
-- Contains `Running  (PID <n>)` → already installed and running. Tell the user:
+- Contains `Running` (optionally followed by `(PID <n>)` — PID is absent on Windows) → already installed and running. Tell the user:
 
-  > ✓ `<name>` is already installed and running (PID <n>). Manage it with:
+  > ✓ `<name>` is already installed and running. Manage it with:
   > - `afk service status <name>` — running state + log path
   > - `afk service restart <name>` — bounce the process
   > - `afk service uninstall <name>` — stop + remove plist
@@ -107,9 +107,11 @@ Run `afk service install <name>`. Read the human-formatted output:
 
 ### Step 6 — Verify
 
-Run `afk service status <name>` again. If the output shows `Running  (PID <n>)`:
+Run `afk service status <name>` again. If the output contains `Running`:
 
-> ✓ `<name>` is now running as an OS service (PID <n>). It will auto-start on login and relaunch if it crashes.
+> ✓ `<name>` is now running as an OS service. It will auto-start on login and relaunch if it crashes.
+
+On macOS/Linux the status line includes the PID: `Running  (PID <n>)`. On Windows, PID is not reported by Task Scheduler.
 
 If it still shows `Installed but not running` after install:
 
