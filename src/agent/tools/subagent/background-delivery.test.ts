@@ -21,6 +21,33 @@ describe('resolveBackgroundDelivery', () => {
     expect(resolveBackgroundDelivery({ depth: 0, backgroundAutoWake: () => false })).toBe('next-message');
   });
 
+  it('depth 0 with AFK_BG_AUTO_DELIVER=0 (backgroundAutoDeliver returns false) is manual-join, not next-message', () => {
+    // When auto-deliver is disabled, BgResultNotifier.onSettled returns early
+    // without buffering. Classifying as next-message would falsely promise
+    // automatic delivery. manual-join tells the model to use /bgsub:join.
+    expect(
+      resolveBackgroundDelivery({ depth: 0, backgroundAutoDeliver: () => false }),
+    ).toBe('manual-join');
+    // Same result even when the wake probe would otherwise fire — deliver check
+    // takes precedence because a non-buffered result can never be auto-delivered.
+    expect(
+      resolveBackgroundDelivery({
+        depth: 0,
+        backgroundAutoWake: () => true,
+        backgroundAutoDeliver: () => false,
+      }),
+    ).toBe('manual-join');
+  });
+
+  it('depth 0 with backgroundAutoDeliver explicitly true behaves like no probe (next-message or auto-wake)', () => {
+    expect(
+      resolveBackgroundDelivery({ depth: 0, backgroundAutoDeliver: () => true }),
+    ).toBe('next-message');
+    expect(
+      resolveBackgroundDelivery({ depth: 0, backgroundAutoWake: () => true, backgroundAutoDeliver: () => true }),
+    ).toBe('auto-wake');
+  });
+
   it('reads the probe live at each call', () => {
     let on = false;
     const ctx = { depth: 0, backgroundAutoWake: () => on };
@@ -43,7 +70,7 @@ describe('backgroundTarget', () => {
 
 describe('backgroundDeliveryNote', () => {
   it('every mode forbids polling', () => {
-    for (const mode of ['auto-wake', 'next-message', 'root-session', undefined] as const) {
+    for (const mode of ['auto-wake', 'next-message', 'manual-join', 'root-session', undefined] as const) {
       expect(backgroundDeliveryNote(mode, 'bg-1')).toMatch(/Do not poll/);
     }
   });
@@ -54,10 +81,24 @@ describe('backgroundDeliveryNote', () => {
     expect(note).toMatch(/woken automatically/);
   });
 
-  it('next-message makes no wake promise', () => {
+  it('next-message makes no wake promise but does promise automatic delivery', () => {
     const note = backgroundDeliveryNote('next-message', 'bg-1');
     expect(note).toMatch(/next user message/);
     expect(note).not.toMatch(/woken/);
+    // Must promise delivery so the model knows it will arrive without polling.
+    expect(note).toMatch(/delivered/);
+  });
+
+  it('manual-join does NOT promise automatic delivery and names /bgsub:join', () => {
+    // Invariant: when AFK_BG_AUTO_DELIVER=0, BgResultNotifier.onSettled
+    // returns early — no buffering, no injection. The note must not claim
+    // delivery will happen automatically.
+    const note = backgroundDeliveryNote('manual-join', 'bg-42');
+    expect(note).not.toMatch(/delivered.*automatically/i);
+    expect(note).not.toMatch(/woken/);
+    expect(note).toMatch(/bgsub:join bg-42/);
+    expect(note).toMatch(/get_background_job_health/);
+    // Must still forbid polling (covered by the shared test above).
   });
 
   it('root-session says the result never reaches this context and names the job to cancel', () => {

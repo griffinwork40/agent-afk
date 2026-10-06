@@ -99,8 +99,8 @@ export const agentTool: AnthropicToolDef = {
         description:
           'Execution mode. "foreground" (default) waits for the subagent to finish ' +
           'and returns its output. "background" returns a jobId immediately and ' +
-          'leaves the subagent running detached — its result is auto-delivered ' +
-          'when it settles (the dispatch result says how; do not poll for it; ' +
+          'leaves the subagent running detached — the dispatch result tells you ' +
+          'exactly how the result will be delivered on this surface (do not poll; ' +
           '/bgsub:join remains available for manual replay). Background jobs ' +
           'are cancelled when the parent session ends.',
       },

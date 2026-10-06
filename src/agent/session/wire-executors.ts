@@ -135,6 +135,13 @@ export interface WireExecutorsOptions {
    */
   backgroundAutoWake?: () => boolean;
   /**
+   * Live probe: will BgResultNotifier buffer the result for the next user
+   * message? Forwarded alongside backgroundAutoWake so `resolveBackgroundDelivery`
+   * can distinguish `next-message` (deliver enabled) from `manual-join`
+   * (AFK_BG_AUTO_DELIVER=0, notifier disabled). See SubagentExecutorContext.backgroundAutoDeliver.
+   */
+  backgroundAutoDeliver?: () => boolean;
+  /**
    * Sink for named-agent scan warnings (e.g. a user agent file shadowing a
    * tool-restricted builtin). When omitted, `loadAgentRegistry` uses its
    * default writer.
@@ -164,15 +171,17 @@ export interface WiredExecutors {
 
 /**
  * Background-dispatch fields for the root `agent` executor: the registry plus
- * the surface's auto-wake probe. Only the `agent` tool reads the probe (to
- * pick a truthful delivery note), so skill/compose keep the bare registry.
+ * the surface probes that drive `resolveBackgroundDelivery`. Only the `agent`
+ * tool reads the probes (to pick a truthful delivery note), so skill/compose
+ * keep the bare registry.
  */
 function agentBackgroundOpts(
-  opts: Pick<WireExecutorsOptions, 'backgroundRegistry' | 'backgroundAutoWake'>,
-): Pick<WireExecutorsOptions, 'backgroundRegistry' | 'backgroundAutoWake'> {
+  opts: Pick<WireExecutorsOptions, 'backgroundRegistry' | 'backgroundAutoWake' | 'backgroundAutoDeliver'>,
+): Pick<WireExecutorsOptions, 'backgroundRegistry' | 'backgroundAutoWake' | 'backgroundAutoDeliver'> {
   return {
     ...(opts.backgroundRegistry !== undefined ? { backgroundRegistry: opts.backgroundRegistry } : {}),
     ...(opts.backgroundAutoWake !== undefined ? { backgroundAutoWake: opts.backgroundAutoWake } : {}),
+    ...(opts.backgroundAutoDeliver !== undefined ? { backgroundAutoDeliver: opts.backgroundAutoDeliver } : {}),
   };
 }
 

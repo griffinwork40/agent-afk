@@ -134,7 +134,7 @@ export function buildBgResultInjection(job: BackgroundJob): string {
   const output = truncateBytes(escapeXml(extractOutput(job)), MAX_INJECTION_BYTES, job.jobId);
   const lines: string[] = [];
   lines.push(
-    `<background-subagent-result jobId="${job.jobId}" status="${job.status}" ` +
+    `<background-subagent-result jobId="${escapeXml(job.jobId)}" status="${escapeXml(job.status)}" ` +
       `model="${escapeXml(job.model)}" duration="${duration}">`,
   );
   lines.push(`<task>${escapeXml(job.label)}</task>`);
