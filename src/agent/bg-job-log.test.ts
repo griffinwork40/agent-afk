@@ -325,34 +325,30 @@ describe('isProcessAlive', () => {
   });
 
   it('returns false when kill throws ESRCH (no such process)', () => {
-    const origKill = process.kill.bind(process);
-    let killCalled = false;
-    (process as any).kill = (_pid: number, _sig: number) => {
-      killCalled = true;
+    const spy = vi.spyOn(process, 'kill').mockImplementation(() => {
       const err = new Error('ESRCH') as NodeJS.ErrnoException;
       err.code = 'ESRCH';
       throw err;
-    };
+    });
     try {
       const result = isProcessAlive(999999999);
       expect(result).toBe(false);
-      expect(killCalled).toBe(true);
+      expect(spy).toHaveBeenCalled();
     } finally {
-      (process as any).kill = origKill;
+      spy.mockRestore();
     }
   });
 
   it('returns true when kill throws EPERM (process exists, no permission)', () => {
-    const origKill = process.kill.bind(process);
-    (process as any).kill = (_pid: number, _sig: number) => {
+    const spy = vi.spyOn(process, 'kill').mockImplementation(() => {
       const err = new Error('EPERM') as NodeJS.ErrnoException;
       err.code = 'EPERM';
       throw err;
-    };
+    });
     try {
       expect(isProcessAlive(1)).toBe(true);
     } finally {
-      (process as any).kill = origKill;
+      spy.mockRestore();
     }
   });
 
@@ -360,16 +356,15 @@ describe('isProcessAlive', () => {
     // EINVAL can occur with invalid pid or signal arguments. The canonical
     // isProcessAlive (process-liveness.ts) returns false for any error except
     // EPERM — including EINVAL — so orphan detection is safe against it.
-    const origKill = process.kill.bind(process);
-    (process as any).kill = (_pid: number, _sig: number) => {
+    const spy = vi.spyOn(process, 'kill').mockImplementation(() => {
       const err = new Error('EINVAL') as NodeJS.ErrnoException;
       err.code = 'EINVAL';
       throw err;
-    };
+    });
     try {
       expect(isProcessAlive(0)).toBe(false);
     } finally {
-      (process as any).kill = origKill;
+      spy.mockRestore();
     }
   });
 });
@@ -407,12 +402,11 @@ describe('reconcileOrphanedMeta', () => {
   });
 
   it('promotes running meta to failed when ownerPid is a dead process', () => {
-    const origKill = process.kill.bind(process);
-    (process as any).kill = (_pid: number, _sig: number) => {
+    const spy = vi.spyOn(process, 'kill').mockImplementation(() => {
       const err = new Error('ESRCH') as NodeJS.ErrnoException;
       err.code = 'ESRCH';
       throw err;
-    };
+    });
     try {
       const meta = makeMeta('orphan-dead', { status: 'running', ownerPid: 999999999 });
       const result = reconcileOrphanedMeta(meta);
@@ -423,7 +417,7 @@ describe('reconcileOrphanedMeta', () => {
       expect(result.jobId).toBe(meta.jobId);
       expect(result.ownerPid).toBe(999999999);
     } finally {
-      (process as any).kill = origKill;
+      spy.mockRestore();
     }
   });
 });
@@ -440,19 +434,18 @@ describe('BgJobLogReader.readMeta — orphan reconciliation', () => {
     await w.writeMeta(makeMeta(jobId, { status: 'running', ownerPid: 999999999 }));
     await w.close();
 
-    const origKill = process.kill.bind(process);
-    (process as any).kill = (_pid: number, _sig: number) => {
+    const spy = vi.spyOn(process, 'kill').mockImplementation(() => {
       const err = new Error('ESRCH') as NodeJS.ErrnoException;
       err.code = 'ESRCH';
       throw err;
-    };
+    });
     try {
       const read = await BgJobLogReader.readMeta(jobId);
       expect(read).not.toBeNull();
       expect(read!.status).toBe('failed');
       expect(read!.stopReason).toBe('owner-process-exited');
     } finally {
-      (process as any).kill = origKill;
+      spy.mockRestore();
     }
   });
 

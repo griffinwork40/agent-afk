@@ -315,6 +315,8 @@ export class BgJobLogWriter {
  */
 export function reconcileOrphanedMeta(meta: BgJobMeta): BgJobMeta {
   if (meta.status !== 'running') return meta;
+  // ownerStartTime is recorded for future pid-reuse detection and is
+  // intentionally unused in the current reconciliation logic.
   const liveness = classifyPidLiveness(meta.ownerPid);
   if (liveness !== 'dead') return meta;
   return {
@@ -322,6 +324,17 @@ export function reconcileOrphanedMeta(meta: BgJobMeta): BgJobMeta {
     status: 'failed',
     stopReason: 'owner-process-exited',
   };
+}
+
+/**
+ * Fire-and-forget persist of a reconciled meta back to disk.
+ * Swallows all errors — the reader already has the corrected in-memory copy,
+ * so a write failure only means the next read will reconcile again.
+ */
+function persistReconciled(metaPath: string, reconciled: BgJobMeta): void {
+  atomicWriteFileAsync(metaPath, JSON.stringify(reconciled, null, 2)).catch(() => {
+    /* best-effort — next read will re-reconcile */
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -376,8 +389,7 @@ export class BgJobLogReader {
       if (parsed.schemaVersion !== 1) return null;
       // Lazily promote orphaned running entries whose owner PID has died.
       const reconciled = reconcileOrphanedMeta(parsed);
-      // Write-back on promotion: best-effort, fire-and-forget, suppress errors.
-      if (reconciled !== parsed) atomicWriteFileAsync(metaPath, JSON.stringify(reconciled, null, 2), { encoding: 'utf8', mode: 0o600, mkdirp: false }).catch(() => {});
+      if (reconciled !== parsed) persistReconciled(metaPath, reconciled);
       return reconciled;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
