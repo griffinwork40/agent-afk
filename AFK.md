@@ -17,6 +17,7 @@ pnpm test:watch                                    # vitest watch
 pnpm test:coverage                                 # CI gate: has coverage floors that `pnpm test` does not enforce
 pnpm test:pty                                      # PTY suite — separate config (vitest.pty.config.ts), own CI job
 pnpm lint                                          # tsc --noEmit (strict)
+pnpm lint:tests                                    # tsc -p tsconfig.test.json — type-checks test files (non-blocking in CI until #3053 backlog is cleared)
 
 pnpm audit:sdk:check                               # CI gate: fail on unlocked SDK symbols (audit:sdk regenerates the doc)
 pnpm audit:sdk:update-lock                         # add new symbols → .sdk-dependency.lock.json (edit `reason` before commit)
