@@ -74,12 +74,12 @@ const PIXEL_PALETTE: Record<string, [number, number, number] | null> = {
  * 0/26, yellow eyes, the closed grin, the lone ▼ fang and its notch); what
  * changed is form and expression. The cap is a hooked cone with a lit left
  * facet and a brim; the brim casts a shadow on the forehead; the brows are
- * raised arches with a skin gap above soft-lidded eyes and round forward
- * pupils (mischief, not menace: an earlier v17 draft used a V scowl and slit
- * pupils and read as mean); the nose is a lit, bulbous hook with nostrils,
- * separated from the mouth by the upper lip; the cheeks stay in line with the
- * head (stepping them out a column read as jowly) and the jaw tapers to a
- * pointed chin. Rows 7 down are authored as mirrored halves, so the symmetry
+ * level bars with a skin gap above soft-lidded eyes and round forward pupils
+ * (mischief, not menace: an earlier v17 draft used a V scowl and slit pupils
+ * and read as mean; 1px arches read as wire-rim glasses); the nose is a lit,
+ * bulbous hook with nostrils, separated from the mouth by the upper lip; the
+ * cheeks stay in line with the head (stepping them out a column read as
+ * jowly) and the jaw tapers to a pointed chin. Rows 7 down are authored as mirrored halves, so the symmetry
  * rule holds by construction. Supersedes v14/v15/v16.
  */
 const GOBLIN_GRID: readonly string[] = [
@@ -101,10 +101,10 @@ const GOBLIN_GRID: readonly string[] = [
   '.....KMMMMMMLLLMMMMMMK.....',
   // ears begin — solid dark-olive, tapering in toward the head top
   '....DKMMMMMMMMMMMMMMMKD....',
-  // arched brows, crest of the arch; each ear's top rim catches light (S)
-  '...SDKMMKKKMMMMMKKKMMKDS...',
-  // arch ends drop to either side of the eye — raised, cheeky, not a scowl
-  '.SSDDKMKMMMKMMMKMMMKMKDDSS.',
+  // plain brow-line skin; each ear's top rim catches light (S)
+  '...SDKMMMMMMMMMMMMMMMKDS...',
+  // level brows, one pixel wider than the eye on the outside — calm, not a scowl
+  '.SSDDKMKKKKMMMMMKKKKMKDDSS.',
   // soft lid shadow (S), a clear skin gap under the brow; ears widest (0/26)
   'DDDDDKMMSSSMMMMMSSSMMKDDDDD',
   // open yellow eyes
