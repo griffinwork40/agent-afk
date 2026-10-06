@@ -18,6 +18,10 @@
  *   - exited on its own, timed out, or killed by the USER (/sh kill): inject.
  *   - cancelled by the MODEL: the cancel tool already returned the final
  *     state, so nothing is injected (one-line notice only).
+ *   - cancelled by the MODEL and the cancel tool TIMED OUT before observing
+ *     the final state: inject, because the model never received the outcome.
+ *     The registry's 'cancelTimeout' event marks the job id so the notifier
+ *     breaks the model-suppress rule for that specific job.
  *   - cancelled by session TEARDOWN: nothing; the session is ending.
  *
  * @module cli/commands/interactive/process-job-notifier
@@ -70,20 +74,49 @@ export class ProcessJobNotifier {
   private pendingNotices: ProcessJobSnapshot[] = [];
   /** Wake hook; the REPL loop wires its auto-resume trigger here. */
   onInjectable: (() => void) | null = null;
+  /**
+   * Job ids whose model-cancel tool timed out without observing the final
+   * state.  When such a job settles, we inject the envelope anyway so the
+   * model learns the outcome — the normal model-cancel suppress rule does not
+   * apply when the tool returned before the job actually stopped.
+   */
+  private readonly timedOutCancels = new Set<string>();
 
   private readonly onSettled = (job: ProcessJobSnapshot): void => {
     if (job.cancelSource === 'teardown') return;
     this.pendingNotices.push(job);
     if (this.pendingNotices.length > MAX_PENDING) this.pendingNotices.shift();
-    if (job.cancelSource === 'model') return;
-    this.pendingInjections.push(job);
-    if (this.pendingInjections.length > MAX_PENDING) this.pendingInjections.shift();
-    // Fired last so the buffer is populated when the woken turn drains it.
-    this.onInjectable?.();
+    // Suppress model-cancel completions unless the cancel tool timed out
+    // (timedOutCancels) — in that case the model never received the final
+    // status from the tool, so we must inject it now.
+    if (job.cancelSource === 'model' && !this.timedOutCancels.has(job.id)) return;
+    this.timedOutCancels.delete(job.id);
+    this.queueInjection(job);
+  };
+
+  /**
+   * The model's cancel tool returned before the job settled. Still running:
+   * mark it so its eventual settle is injected. Already settled (it finished
+   * between the tool's timeout and this event, so onSettled suppressed it):
+   * inject now, or the model never learns the outcome.
+   */
+  private readonly onCancelTimeout = (jobId: string): void => {
+    const job = this.registry.get(jobId);
+    if (job === undefined) return;
+    if (job.status === 'running') this.timedOutCancels.add(jobId);
+    else this.queueInjection(job);
   };
 
   constructor(private readonly registry: ProcessJobRegistry) {
     registry.on('settled', this.onSettled);
+    registry.on('cancelTimeout', this.onCancelTimeout);
+  }
+
+  private queueInjection(job: ProcessJobSnapshot): void {
+    this.pendingInjections.push(job);
+    if (this.pendingInjections.length > MAX_PENDING) this.pendingInjections.shift();
+    // Fired last so the buffer is populated when the woken turn drains it.
+    this.onInjectable?.();
   }
 
   hasPendingInjections(): boolean {
@@ -107,6 +140,8 @@ export class ProcessJobNotifier {
 
   dispose(): void {
     this.registry.off('settled', this.onSettled);
+    this.registry.off('cancelTimeout', this.onCancelTimeout);
+    this.timedOutCancels.clear();
     this.onInjectable = null;
   }
 }

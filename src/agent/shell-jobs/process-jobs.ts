@@ -21,7 +21,6 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { getProcessJobSessionDir } from '../../paths.js';
-import { killProcessGroup } from '../../utils/kill-process-group.js';
 import { ProcessLogSink } from './process-log-sink.js';
 import { launchProcess, terminateWithGrace, type LaunchedProcess, type ProcessExit } from './process-launcher.js';
 import { enforceSessionQuota, scheduleProcessJobSweep } from './process-jobs.sweep.js';
@@ -110,6 +109,13 @@ export class ProcessJobCapError extends Error {
 
 export interface ProcessJobRegistryEvents {
   settled: [job: ProcessJobSnapshot];
+  /**
+   * Emitted when the cancel tool's CANCEL_WAIT_MS race resolves undefined,
+   * meaning the model-cancel did NOT observe the job's final state.  Listeners
+   * (e.g. ProcessJobNotifier) can use this to arrange a deferred delivery so
+   * the model eventually learns the outcome.
+   */
+  cancelTimeout: [jobId: string];
 }
 
 export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
@@ -124,8 +130,11 @@ export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
   private exitHookInstalled = false;
   private readonly exitHook = (): void => {
     // Synchronous last resort: the event loop is gone, so no grace period.
+    // Use signalGroup() rather than killProcessGroup() directly so the
+    // launcher's win32 freed-PID guard (no signal after leader exit) is
+    // respected inside the exit hook too.
     for (const job of this.jobs.values()) {
-      if (job.launched.isLive() && job.launched.pid !== undefined) killProcessGroup(job.launched.pid, 'SIGKILL');
+      if (job.launched.isLive()) job.launched.signalGroup('SIGKILL');
     }
   };
 
@@ -208,6 +217,15 @@ export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
       terminateWithGrace(job.launched, graceMs);
     }
     return this.snapshot(job);
+  }
+
+  /**
+   * Signal that the model-cancel tool timed out before observing the job's
+   * final state.  Emits `'cancelTimeout'` so the notifier can arrange deferred
+   * delivery when the job eventually settles.
+   */
+  emitCancelTimeout(id: string): void {
+    this.emit('cancelTimeout', id);
   }
 
   /** Wait for a job to settle. Resolves undefined for an unknown id. */

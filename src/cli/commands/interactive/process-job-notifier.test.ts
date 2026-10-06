@@ -49,6 +49,26 @@ describe('ProcessJobNotifier', () => {
     expect(notifier.drainNotices()).toHaveLength(1);
   });
 
+  it('a model cancel whose tool timed out is injected when the job settles', async () => {
+    const wake = vi.fn();
+    notifier.onInjectable = wake;
+    const job = reg.start({ command: 'sleep 300', env: process.env });
+    reg.cancel(job.id, 'model');
+    reg.emitCancelTimeout(job.id); // the cancel tool's 12 s wait ran out
+    await reg.waitFor(job.id);
+    expect(wake).toHaveBeenCalledTimes(1);
+    expect(notifier.drainInjections()).toContain(`<background-process-result job="${job.id}" status="cancelled"`);
+  });
+
+  it('a cancel timeout for a job that already settled is injected at once', async () => {
+    const job = reg.start({ command: 'sleep 300', env: process.env });
+    reg.cancel(job.id, 'model');
+    await reg.waitFor(job.id);
+    expect(notifier.hasPendingInjections()).toBe(false); // suppressed as a normal model cancel
+    reg.emitCancelTimeout(job.id); // timeout raced the settle
+    expect(notifier.drainInjections()).toContain(`job="${job.id}"`);
+  });
+
   it('a user kill is injected and marked cancelled_by user', async () => {
     const job = reg.start({ command: 'sleep 300', env: process.env });
     reg.cancel(job.id, 'user');

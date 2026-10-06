@@ -146,6 +146,44 @@ export function launchProcess(opts: LaunchOptions): LaunchedProcess {
     }, closeGraceMs));
   });
   proc.once('close', (code, signal) => {
+    // Invariant: on POSIX, pipe closure after the leader exits is not proof
+    // that the process group is gone — an output-redirected descendant
+    // (`sleep 300 >/dev/null 2>&1 &`) closes the leader's pipe ends while
+    // keeping its own separate file descriptors, so it is still alive.  Probe
+    // the group; if alive, reap before settling so no descendant escapes
+    // max-runtime, cancel, or session teardown.
+    //
+    // Contract: settle is called exactly once — the reaping branch below calls
+    // settle itself, so early return is required to avoid a double call.
+    //
+    // History: without this probe, the 'close' fired immediately after the
+    // leader exited (because the leader's own pipe ends closed), the orphan-
+    // reap timer was cancelled, and output-redirected descendants escaped
+    // every supervision path.
+    const leader = leaderExit; // const: keeps the narrowing inside the timer closure
+    if (leader !== undefined && !reaping && !isWin32 && pid !== undefined) {
+      let groupStillAlive = false;
+      try { process.kill(-pid, 0); groupStillAlive = true; } catch { /* ESRCH: group gone */ }
+      if (groupStillAlive) {
+        // Group has survivors — run the same TERM → reapGraceMs → KILL reap
+        // that the closeGraceMs timer would have triggered.  Clear the grace
+        // timer first so it does not fire a second reap after we've settled.
+        for (const t of timers) clearTimeout(t);
+        timers.length = 0;
+        reaping = true;
+        signalGroup('SIGTERM');
+        const killTimer = setTimeout(() => {
+          signalGroup('SIGKILL');
+          try { proc.stdout?.destroy(); } catch { /* best effort */ }
+          try { proc.stderr?.destroy(); } catch { /* best effort */ }
+          settle({ exitCode: leader.code, signal: leader.signal, orphansReaped: true });
+        }, reapGraceMs);
+        timers.push(killTimer);
+        return;
+      }
+    }
+    // Windows path, or group already gone, or leader still running (leaderExit
+    // undefined, should not happen here but safe to handle).
     const e = leaderExit ?? { code, signal };
     settle({ exitCode: e.code, signal: e.signal, orphansReaped: reaping });
   });

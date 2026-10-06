@@ -94,6 +94,12 @@ async function cancelProcessJob(registry: ProcessJobRegistry, call: ToolCall, jo
     }),
   ]);
   if (settled === undefined || settled.status === 'running') {
+    // Contract: the cancel tool did not observe the final state within CANCEL_WAIT_MS.
+    // Emit 'cancelTimeout' so ProcessJobNotifier delivers a deferred injection when
+    // the job eventually settles — without this, the model never learns the outcome
+    // because the notifier normally suppresses model-cancelled job completions
+    // (the cancel tool is assumed to have already reported the final status).
+    registry.emitCancelTimeout(jobId);
     return { content: `Cancellation requested for ${jobId}: SIGTERM sent to its process group; SIGKILL follows if it does not exit.` };
   }
   return { content: `Background process ${jobId} stopped: status ${settled.status}${exitText(settled)}. Log: ${settled.logPath}` };

@@ -60,6 +60,13 @@ export function killProcessJob(out: SlashContext['out'], id: string): void {
     out.warn(`${id} is not running (status: ${before.status}).`);
     return;
   }
-  processJobsRef?.cancel(id, 'user');
+  const after = processJobsRef?.cancel(id, 'user');
+  // cancel() returns undefined cancelSource when the leader already exited
+  // and the job is still settling (orphan reap / close-grace).  In that case
+  // no signal was sent and the job will finish on its own; tell the operator.
+  if (after?.cancelSource !== 'user') {
+    out.warn(`${id} is already exiting (leader exited; reaping orphans). No signal sent.`);
+    return;
+  }
   out.success(`Stopping ${id} (SIGTERM, then SIGKILL after a grace period).`);
 }

@@ -117,16 +117,61 @@ describe('ProcessJobRegistry', () => {
     expect(groupAlive(job.pid!)).toBe(false);
   });
 
-  it('a cancel during the post-exit grace keeps the natural outcome', async () => {
-    // Leader exits 0 at once; a backgrounded sleep holds the pipe, so the job
-    // is still settling (close-grace) when the cancel lands.
-    const job = reg.start({ command: 'sleep 30 & exit 0', env: process.env });
-    await new Promise((r) => setTimeout(r, 100));
-    const snap = reg.cancel(job.id, 'model');
-    expect(snap?.cancelSource).toBeUndefined();
+  it('reaps output-redirected group members that escape pipe detection', async () => {
+    // Invariant: `sleep 30 >/dev/null 2>&1 & exit 0` closes the leader's pipe
+    // ends as soon as it exits (the descendant uses its own redirected fds, not
+    // the inherited pipes), so the 'close' event fires immediately — before the
+    // closeGraceMs timer.  On POSIX the launcher must probe the group before
+    // settling and reap survivors; on Windows it cannot signal after leader exit
+    // (freed PID) so orphansReaped is false.
+    const job = reg.start({ command: 'sleep 30 >/dev/null 2>&1 & exit 0', env: process.env });
     const done = await reg.waitFor(job.id);
-    expect(done?.status).toBe('completed');
     expect(done?.orphansReaped).toBe(HAS_PROCESS_GROUPS);
+    expect(done?.exitCode).toBe(0);
+    // POSIX: the reaped group is gone. win32: the probe is the leader pid,
+    // which is gone once the leader exited.
+    expect(groupAlive(job.pid!)).toBe(false);
+  });
+
+  it('a cancel during the post-exit grace keeps the natural outcome', async () => {
+    // Leader exits 0 at once; a backgrounded sleep holds the pipe (not output-
+    // redirected), so the job is still settling (close-grace or orphan reap) when
+    // the cancel lands.
+    //
+    // We probe the leader PID directly until it dies (ESRCH), which is the
+    // observable proxy for leaderExited().  closeGraceMs is large (1000 ms) so
+    // there is time for cancel to land while the job is still unsettled.  The
+    // poll is bounded to 5 s — immune to scheduler jitter and CI slowness —
+    // unlike the original fixed 100 ms sleep.
+    //
+    // `sleep 30 & exit 0` keeps the inherited pipe open, so 'close' fires only
+    // after the closeGraceMs reap; this still exercises the post-exit-grace
+    // cancel path.
+    const registry = makeRegistry({ closeGraceMs: 1000, reapGraceMs: 200 });
+    try {
+      const job = registry.start({ command: 'sleep 30 & exit 0', env: process.env });
+      const leaderPid = job.pid!;
+      // Wait until the leader process itself is gone (it runs `exit 0` instantly).
+      // On POSIX we signal pid directly (positive); on Windows the leader PID is
+      // the observable root and we use the positive probe too.
+      await vi.waitFor(
+        () => {
+          let alive = true;
+          try { process.kill(leaderPid, 0); } catch { alive = false; }
+          expect(alive).toBe(false);
+        },
+        { timeout: 5000, interval: 20 },
+      );
+      const snap = registry.cancel(job.id, 'model');
+      // process-jobs.ts cancel(): leaderExited() guard refuses the cancel, so
+      // cancelSource stays undefined and the job keeps its natural outcome.
+      expect(snap?.cancelSource).toBeUndefined();
+      const done = await registry.waitFor(job.id);
+      expect(done?.status).toBe('completed');
+      expect(done?.orphansReaped).toBe(HAS_PROCESS_GROUPS);
+    } finally {
+      await registry.killAll();
+    }
   });
 
   it('refuses new jobs once teardown has begun', async () => {
