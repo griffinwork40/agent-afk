@@ -124,6 +124,12 @@ export async function executePullTick(ctx: PullTickContext): Promise<void> {
 // ─── Task-completion notification funnel ──────────────────────────────────────
 
 export interface FireOnTaskCompleteOptions {
+  /**
+   * Contract: the `record` argument reflects the in-memory TelemetryRecord that
+   * was *attempted* to be written to disk. When the telemetry append throws, the
+   * callback still fires with that record — the record may not be on disk.
+   * Callers that require durability guarantees must verify the write independently.
+   */
   onTaskComplete?: (record: TelemetryRecord, details?: TaskCompletionDetails) => void | Promise<void>;
 }
 

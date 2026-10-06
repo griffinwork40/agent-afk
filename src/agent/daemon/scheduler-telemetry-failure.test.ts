@@ -78,6 +78,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Assert the flag was reset by the test itself (via finally) — a live `true`
+  // here means a prior test leaked the flag without resetting it.
+  expect(appendShouldThrow, 'appendShouldThrow was not reset — flag leaked from a test').toBe(false);
+  // Defensive reset so subsequent tests are not poisoned even on assertion failure.
   appendShouldThrow = false;
   realFs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -107,6 +111,8 @@ describe('CronScheduler — telemetry append failure (issue #2305)', () => {
       await scheduler.tick('telemetry-fail-test');
     } finally {
       errSpy.mockRestore();
+      // Reset the flag so the afterEach assertion does not report a leak.
+      appendShouldThrow = false;
     }
 
     // The push callback must have fired despite the failed write.
@@ -140,6 +146,8 @@ describe('CronScheduler — telemetry append failure (issue #2305)', () => {
       await scheduler.tick('telemetry-fail-log-test');
     } finally {
       errSpy.mockRestore();
+      // Reset the flag so the afterEach assertion does not report a leak.
+      appendShouldThrow = false;
     }
 
     // A "[daemon] telemetry write failed" line must appear in stderr.

@@ -71,6 +71,12 @@ export interface SchedulerOptions {
    * the callback — it fires unconditionally. Callback errors are caught so
    * notification failures never crash the scheduler. Used for out-of-band
    * notifications (Telegram push, webhooks, etc.).
+   *
+   * Contract: the `record` argument reflects the in-memory TelemetryRecord that
+   * was *attempted* to be written to disk. When the underlying `appendFileSync`
+   * call throws (e.g. ENOSPC), the callback still fires with that record, but the
+   * record may not have been persisted to the telemetry file. Callers that require
+   * durability guarantees must verify the write independently.
    */
   onTaskComplete?: (record: TelemetryRecord, details?: TaskCompletionDetails) => void | Promise<void>;
   /**
@@ -498,6 +504,8 @@ export class CronScheduler {
       // eslint-disable-next-line no-console
       console.error(`[daemon] telemetry write failed: ${msg}`);
     }
+    // Contract: persistedRecord is passed unconditionally — if appendFileSync
+    // threw above, the record may not be on disk (see CronSchedulerOptions.onTaskComplete).
     const opts: FireOnTaskCompleteOptions = { onTaskComplete: this.options.onTaskComplete };
     fireOnTaskComplete(persistedRecord, opts, task, details);
   }
