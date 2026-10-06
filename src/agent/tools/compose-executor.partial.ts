@@ -11,6 +11,8 @@ import type { DAGRunResult } from '../dag.js';
  */
 export function partialNodeFlag(
   partial: DAGRunResult['partial'] | undefined,
-): { incomplete: true; incompleteReason: string } | Record<string, never> {
-  return (partial ?? []).length > 0 ? { incomplete: true, incompleteReason: 'compose_partial_nodes' } : {};
+): { incomplete: true; incompleteReason: string; partialNodeCount: number } | Record<string, never> {
+  const count = (partial ?? []).length;
+  // partialNodeCount (#2978) lets the facet count nodes, not just calls.
+  return count > 0 ? { incomplete: true, incompleteReason: 'compose_partial_nodes', partialNodeCount: count } : {};
 }

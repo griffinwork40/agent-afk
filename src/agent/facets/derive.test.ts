@@ -43,7 +43,7 @@ describe('deriveSessionFacet', () => {
   it('produces a schema-valid facet', () => {
     const facet = deriveSessionFacet(richSession());
     expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
-    expect(facet.facet_version).toBe(8); // v8: added compose_partial_nodes (#2970)
+    expect(facet.facet_version).toBe(9); // v9: added compose_partial_node_count (#2978)
     expect(facet.derived_from).toBe('afk-session');
   });
 
@@ -1306,7 +1306,7 @@ describe('deriveSessionFacet', () => {
 
   // --- compose_partial_nodes (#2970) ---
   describe('compose_partial_nodes', () => {
-    function sessionWithToolEvent(events: Array<{ toolName: string; toolUseId: string; incomplete?: boolean }>): StoredSessionInput {
+    function sessionWithToolEvent(events: Array<{ toolName: string; toolUseId: string; incomplete?: boolean; isError?: boolean; partialNodeCount?: number }>): StoredSessionInput {
       return {
         sessionId: 'partial-test',
         model: 'haiku',
@@ -1374,6 +1374,39 @@ describe('deriveSessionFacet', () => {
         { toolName: 'compose', toolUseId: 'a', isError: true }, // hard failure; no incomplete
       ]));
       expect(facet.compose_partial_nodes).toBeUndefined();
+    });
+
+    // --- compose_partial_node_count (#2978) ---
+    it('compose_partial_node_count sums partialNodeCount across calls', () => {
+      const facet = deriveSessionFacet(sessionWithToolEvent([
+        { toolName: 'compose', toolUseId: 'a', incomplete: true, partialNodeCount: 3 },
+        { toolName: 'compose', toolUseId: 'b' },
+        { toolName: 'compose', toolUseId: 'c', incomplete: true, partialNodeCount: 2 },
+      ]));
+      expect(facet.compose_partial_nodes).toBe(2); // calls (meaning unchanged)
+      expect(facet.compose_partial_node_count).toBe(5); // nodes
+      expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
+    });
+
+    it('a partial call without a recorded node count (pre-#2978) contributes 1', () => {
+      const facet = deriveSessionFacet(sessionWithToolEvent([
+        { toolName: 'compose', toolUseId: 'a', incomplete: true },
+      ]));
+      expect(facet.compose_partial_node_count).toBe(1);
+    });
+
+    it('compose_partial_node_count is absent when no compose call was partial', () => {
+      const facet = deriveSessionFacet(sessionWithToolEvent([
+        { toolName: 'compose', toolUseId: 'a', partialNodeCount: 4 }, // no incomplete flag
+        { toolName: 'agent', toolUseId: 'b', incomplete: true, partialNodeCount: 2 },
+      ]));
+      expect(facet.compose_partial_node_count).toBeUndefined();
+    });
+
+    it('schema rejects negative compose_partial_nodes / compose_partial_node_count', () => {
+      const facet = deriveSessionFacet(sessionWithToolEvent([]));
+      expect(SessionFacetSchema.safeParse({ ...facet, compose_partial_nodes: -1 }).success).toBe(false);
+      expect(SessionFacetSchema.safeParse({ ...facet, compose_partial_node_count: -1 }).success).toBe(false);
     });
   });
 });

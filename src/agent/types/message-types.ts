@@ -124,6 +124,11 @@ export interface ToolResultChunk {
    */
   incompleteReason?: string;
   /**
+   * Compose only: number of partial DAG nodes, plumbed from
+   * `tool.output.partialNodeCount`. Present only alongside `incomplete` (#2978).
+   */
+  partialNodeCount?: number;
+  /**
    * `true` when the originating tool handler reported its byte cap was hit
    * (e.g. bash/grep 100KB overflow). Plumbed from `ToolResult.truncated`
    * through `tool.output.truncated`. Distinct from the cosmetic 80-char

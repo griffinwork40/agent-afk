@@ -24,3 +24,4 @@ export {
 export { findToolResultAsync } from './reader.async.js';
 export { forkJournal } from './fork.js';
 export { foldForDisplay, loadDisplayMessages } from './display-fold.js';
+export { pickResultFlags, readResultFlags, tagResultFlags, type JournalResultFlags } from './result-flags.js';

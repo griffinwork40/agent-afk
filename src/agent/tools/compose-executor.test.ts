@@ -355,6 +355,7 @@ describe('ComposeExecutor', () => {
       expect(result.isError).toBe(false);
       expect(result.incomplete).toBe(true);
       expect(result.incompleteReason).toBe('compose_partial_nodes');
+      expect(result.partialNodeCount).toBe(1); // per-node count (#2978)
     });
 
     it('does NOT mark compose result incomplete when no partial nodes', async () => {
@@ -373,6 +374,7 @@ describe('ComposeExecutor', () => {
 
       expect(result.isError).toBe(false);
       expect(result.incomplete).toBeUndefined();
+      expect(result.partialNodeCount).toBeUndefined();
     });
 
     it('isError stays true even when both failed and partial nodes exist', async () => {

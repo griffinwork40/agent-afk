@@ -38,7 +38,7 @@ import type {
   JournalMessage,
   JournalResultPart,
 } from '../../journal/index.js';
-import { JournalProvenance } from '../../journal/index.js';
+import { JournalProvenance, readResultFlags, tagResultFlags } from '../../journal/index.js';
 import { filterContentBlocks } from './resolve-params.js';
 
 /** Provider family stamped on thinking blocks this adapter writes. */
@@ -96,6 +96,9 @@ function toolResultToJournal(block: ToolResultBlockParam): JournalBlock {
     type: 'tool_result',
     toolUseId: block.tool_use_id,
     ...(block.is_error !== undefined ? { isError: block.is_error } : {}),
+    // Harness-only partial flags (#2978): tagged beside the native block by
+    // loop/tool-results.ts, since the API rejects unknown block keys.
+    ...readResultFlags(block),
     content,
   };
 }
@@ -176,12 +179,15 @@ function blockFromJournal(block: JournalBlock): ContentBlockParam | null {
     case 'tool_use': return { type: 'tool_use', id: block.id, name: block.name, input: block.input };
     case 'tool_result': {
       const content = resultContentFromJournal(block.content);
-      return {
+      const native: ToolResultBlockParam = {
         type: 'tool_result',
         tool_use_id: block.toolUseId,
         ...(block.isError !== undefined ? { is_error: block.isError } : {}),
         ...(content.length > 0 ? { content } : {}),
       };
+      // Keep the partial flags across resume so a later resync re-writes them (#2978).
+      tagResultFlags(native, block);
+      return native;
     }
     case 'image': return imageFromJournal(block.source);
     case 'document': return documentFromJournal(block.source, block.title);

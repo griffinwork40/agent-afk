@@ -70,10 +70,19 @@ export type JournalBlock =
        * True when the tool result carries a subagent's capped or wind-down
        * partial answer. Mirrors `ToolResult.incomplete` / `ProviderEvent['tool.output'].incomplete`.
        * Present only when true; absent for clean completions.
-       * Written since #2970; older journal files that lack this field are read as
-       * `undefined` (absent = not incomplete).
+       * Read since #2970; WRITTEN by the provider journal adapters since #2978
+       * (via `result-flags.ts`, since the native block cannot carry it). Older
+       * journal files that lack this field are read as `undefined` (absent =
+       * not incomplete).
        */
       incomplete?: boolean;
+      /** Reason paired with `incomplete` (compose: `'compose_partial_nodes'`). Since #2978. */
+      incompleteReason?: string;
+      /**
+       * Compose only: how many DAG nodes wound down partial in this call.
+       * Present only alongside `incomplete: true`. Since #2978.
+       */
+      partialNodeCount?: number;
       content: JournalResultPart[];
     }
   | { type: 'image'; source: JournalBinary }
