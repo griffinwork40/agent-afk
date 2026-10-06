@@ -25,7 +25,6 @@ import type {
   ProviderRewindConversationResult,
   RewindTarget,
 } from '../provider.js';
-import { RESET_DRAIN_TIMEOUT_MS } from '../timeout.js';
 import type {
   AccountInfo,
   AgentConfig,
@@ -64,7 +63,8 @@ import { AccountingAccumulator } from './accounting-accumulator.js';
 import { buildProviderLifecycle, ProviderInitializer } from './provider-lifecycle.js';
 import { TurnStreamRunner } from './turn-stream-runner.js';
 import { SessionShutdown } from './session-shutdown.js';
-import { withSessionTmpdir, cleanupSessionTmpdir } from './session-tmpdir.js';
+import { withSessionTmpdir } from './session-tmpdir.js';
+import { drainAndFinalizeClose } from './agent-session.close.js';
 import { resetSession } from './session-reset.js';
 import * as compact from './session-compact.js';
 import * as ss from './session-send.js';
@@ -465,38 +465,13 @@ export class AgentSession implements IAgentSession {
     this.currentState = 'closed';
     this.outputBroadcast.close();
     await this.ledger.seal('close');
-    // Invariant: abort and drain the provider BEFORE closing the journal.
-    // Both providers perform final journal synchronization during their
-    // abort/turn-finalization paths (JournalSync.sync at commit points).
-    // Closing the journal first silently discards those writes, leaving the
-    // journal ending at an unmatched tool_use or missing completed tool
-    // results — corrupting the resume source. The reset path (session-reset.ts)
-    // already follows this order: provider.close() + iterator.return + drain
-    // initPromise → closeForReset(). close() must match it.
-    if (!this.abortController.signal.aborted) this.abortController.abort('closed');
-    this.stateManager.resolveInitializationIfNeeded();
-    try {
-      await this.providerQuery.close();
-    } catch {
-      // ignore
-    }
-    await this.providerIterator.return?.();
-    if (this.initPromise) {
-      try {
-        await Promise.race([this.initPromise, new Promise((resolve) => setTimeout(resolve, RESET_DRAIN_TIMEOUT_MS))]);
-      } catch {
-        // ignore
-      }
-    }
-    try {
-      await this.journal.close();
-      await this.shutdown.dispatchOnce('close');
-    } finally {
-      // Registry cleanup runs in a finally so a journal-close or shutdown-dispatch
-      // error does not leak the registry entry (fix for #2933 registry-leak).
-      // After drain: children are done with their dirs.
-      await cleanupSessionTmpdir(this.config.env);
-    }
+    // Invariant: provider abort+drain precedes journal close (see agent-session.close.ts).
+    await drainAndFinalizeClose({
+      abortController: this.abortController, stateManager: this.stateManager,
+      providerQuery: this.providerQuery, providerIterator: this.providerIterator,
+      initPromise: this.initPromise, journal: this.journal, shutdown: this.shutdown,
+      env: this.config.env,
+    });
   }
 
   /**
