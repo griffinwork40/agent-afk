@@ -170,7 +170,8 @@ export type OutputEvent =
        * surface error). Watchdog/ceiling arithmetic prefers this over `resetsAt`
        * when present. Never shown to users as "resumes at X" copy.
        */
-      waitDeadline?: Date;      /**
+      waitDeadline?: Date;
+      /**
        * Mirror of {@link import('../provider.js').ProviderEvent.paused.provider}.
        * Absent = unknown; UI layers render the legacy Claude copy for it.
        */
