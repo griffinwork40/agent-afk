@@ -475,6 +475,14 @@ function buildChildEnv(
 
   // Allowed passthrough: PATH, HOME, SHELL, LANG, TERM (basic shell operation),
   // TMPDIR / TMP / TEMP (temp-file ops), USER / LOGNAME (some hooks probe them).
+  //
+  // Note (#2933): TMPDIR/TMP/TEMP are sourced from process.env here, NOT from
+  // the session's private per-session TMPDIR (session-tmpdir.ts). Hook-spawned
+  // shells therefore share the inherited process TMPDIR rather than the session's
+  // isolated directory. Threading the session env through to buildChildEnv would
+  // require touching many call sites. The risk is bounded: hooks run short
+  // user-supplied scripts whose TMPDIR usage is outside the agent's control, and
+  // the per-session isolation invariant applies only to bash/test_run tools.
   const ENV_PASSTHROUGH = ['PATH', 'HOME', 'SHELL', 'LANG', 'TERM', 'TMPDIR', 'TMP', 'TEMP', 'USER', 'LOGNAME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA'] as const;
   const childEnv: NodeJS.ProcessEnv = {};
   for (const key of ENV_PASSTHROUGH) {

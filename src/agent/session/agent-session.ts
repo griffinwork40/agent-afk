@@ -488,9 +488,15 @@ export class AgentSession implements IAgentSession {
         // ignore
       }
     }
-    await this.journal.close();
-    await this.shutdown.dispatchOnce('close');
-    await cleanupSessionTmpdir(this.config.env); // after drain: children are done with it
+    try {
+      await this.journal.close();
+      await this.shutdown.dispatchOnce('close');
+    } finally {
+      // Registry cleanup runs in a finally so a journal-close or shutdown-dispatch
+      // error does not leak the registry entry (fix for #2933 registry-leak).
+      // After drain: children are done with their dirs.
+      await cleanupSessionTmpdir(this.config.env);
+    }
   }
 
   /**
