@@ -41,6 +41,7 @@ import { stat, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { env } from '../../config/env.js';
 import { getMemoryDir } from '../../paths.js';
+import { debugLog } from '../../utils/debug.js';
 import type { FactCategory } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -88,6 +89,20 @@ export const MEMORY_ACCESS_TRACKING_STARTED_AT = '2026-09-23T00:00:00.000Z';
  * (e.g. searchFacts, queryUnaccessed) already excludes these rows correctly.
  *
  * There is no exported numeric sentinel — the marker is per-row (`fact.id`).
+ *
+ * **Restoring soft-deleted rows.** GC-archived facts are recoverable: each
+ * archived row has `superseded_by = id` (self-reference). To restore a fact,
+ * set `superseded_by = NULL` — e.g.:
+ *
+ * ```sql
+ * UPDATE facts SET superseded_by = NULL WHERE id = <fact_id>;
+ * ```
+ *
+ * To list all GC-archived facts for inspection:
+ *
+ * ```sql
+ * SELECT * FROM facts WHERE superseded_by = id;
+ * ```
  */
 
 /**
@@ -127,7 +142,12 @@ export interface MemoryGcSweepResult {
   skipped: boolean;
   /** Reason for skipping (set when skipped=true). */
   skipReason?: 'disabled' | 'too-soon' | 'no-db';
-  /** Number of facts examined as candidates. */
+  /**
+   * Number of facts that matched the GC eligibility predicate (examined as
+   * candidates). Always >= `archived`. A value greater than `archived` means
+   * some candidates were skipped (e.g. due to a concurrent write between the
+   * count query and the UPDATE). Equal to zero when `skipped=true`.
+   */
   candidates: number;
   /** Number of facts soft-deleted (superseded_by set to the fact's own id). */
   archived: number;
@@ -222,11 +242,28 @@ export async function sweepMemoryGc(
     try {
       db.pragma('busy_timeout = 5000');
 
-      // Single-pass soft-delete: UPDATE directly with the full eligibility
-      // predicate.  A separate SELECT + UPDATE is redundant and can diverge
-      // under concurrent access.  The epoch floor (created_at >= tracking
-      // start) ensures pre-tracking rows with access_count = 0 are treated
-      // as unknown, not unused.
+      // Shared eligibility predicate parameters.
+      const predicateParams = [MEMORY_ACCESS_TRACKING_STARTED_AT, cutoff, ...excludedValues];
+
+      // Count candidates first so that `candidates` reflects how many facts
+      // matched the predicate — not just how many were changed.  The two
+      // values can differ under concurrent writes, but that is acceptable:
+      // candidates is informational, not transactional.
+      const countRow = db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM facts
+            WHERE access_count = 0
+              AND created_at >= ?
+              AND created_at < ?
+              AND superseded_by IS NULL
+              AND category NOT IN (${placeholders})`,
+        )
+        .get(...predicateParams) as { n: number };
+      const candidates = countRow.n;
+
+      // Soft-delete: UPDATE directly with the full eligibility predicate.
+      // The epoch floor (created_at >= tracking start) ensures pre-tracking
+      // rows with access_count = 0 are treated as unknown, not unused.
       const info = db
         .prepare(
           `UPDATE facts
@@ -237,22 +274,31 @@ export async function sweepMemoryGc(
               AND superseded_by IS NULL
               AND category NOT IN (${placeholders})`,
         )
-        .run(MEMORY_ACCESS_TRACKING_STARTED_AT, cutoff, ...excludedValues);
+        .run(...predicateParams);
 
       const archived = info.changes;
 
       await touchStamp(dir, now);
-      return { skipped: false, candidates: archived, archived };
+
+      if (archived > 0) {
+        debugLog(
+          `[memory-gc-sweep] archived ${archived} fact(s) (${candidates} candidate(s) examined)`,
+        );
+      }
+
+      return { skipped: false, candidates, archived };
     } finally {
       db.close();
     }
   } catch (err) {
     // Swallow all errors — GC must never fail session construction.
+    const error = err instanceof Error ? err.message : String(err);
+    debugLog(`[memory-gc-sweep] sweep error (swallowed): ${error}`);
     return {
       skipped: false,
       candidates: 0,
       archived: 0,
-      error: err instanceof Error ? err.message : String(err),
+      error,
     };
   }
 }

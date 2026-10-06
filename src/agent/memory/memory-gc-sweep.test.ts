@@ -7,11 +7,14 @@
  * @module agent/memory/memory-gc-sweep.test
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
+
+vi.mock('../../utils/debug.js', () => ({ debugLog: vi.fn() }));
 import { mkdirSync, rmSync, existsSync, writeFileSync, utimesSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import BetterSqlite3 from 'better-sqlite3';
+import { debugLog } from '../../utils/debug.js';
 import { MemoryStore } from './memory-store.js';
 import {
   sweepMemoryGc,
@@ -474,5 +477,135 @@ describe('sweepMemoryGc — mixed eligibility', () => {
 
     expect(result.candidates).toBe(1);
     expect(result.archived).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// candidates = real pre-sweep count, not just archived (#2967)
+// ---------------------------------------------------------------------------
+
+describe('sweepMemoryGc — candidates reflects a real count, not just archived', () => {
+  it('candidates equals zero when no facts match the predicate', async () => {
+    // No facts in DB at all — candidates and archived must both be 0.
+    const result = await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
+      force: true,
+    });
+
+    expect(result.candidates).toBe(0);
+    expect(result.archived).toBe(0);
+  });
+
+  it('candidates counts only predicate-matching facts, not ineligible ones', async () => {
+    // One eligible fact.
+    const idEligible = store.storeFact({
+      category: 'decision',
+      content: 'Eligible fact for real-count test.',
+      source_surface: 'cli',
+    });
+    backdateFactSync(idEligible, daysAgo(MEMORY_GC_MIN_AGE_DAYS_DEFAULT + 1));
+
+    // One ineligible fact (too young — not backdated).
+    store.storeFact({
+      category: 'decision',
+      content: 'Too-young fact — must not inflate candidates.',
+      source_surface: 'cli',
+    });
+
+    // One ineligible fact (preference — excluded category).
+    const idPref = store.storeFact({
+      category: 'preference',
+      content: 'Preference fact — excluded from GC.',
+      source_surface: 'cli',
+    });
+    backdateFactSync(idPref, daysAgo(MEMORY_GC_MIN_AGE_DAYS_DEFAULT + 1));
+
+    const result = await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
+      force: true,
+    });
+
+    // Only the first fact matches; candidates must equal 1, not 3.
+    expect(result.candidates).toBe(1);
+    expect(result.archived).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// debugLog is called when archived > 0 or error is set (#2967)
+// ---------------------------------------------------------------------------
+
+describe('sweepMemoryGc — debugLog behavior', () => {
+  let mockedDebugLog: MockInstance;
+
+  beforeEach(() => {
+    mockedDebugLog = vi.mocked(debugLog);
+    mockedDebugLog.mockClear();
+  });
+
+  it('calls debugLog when at least one fact is archived', async () => {
+    const id = store.storeFact({
+      category: 'decision',
+      content: 'Fact that will be archived for log test.',
+      source_surface: 'cli',
+    });
+    backdateFactSync(id, daysAgo(MEMORY_GC_MIN_AGE_DAYS_DEFAULT + 1));
+
+    await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
+      force: true,
+    });
+
+    // debugLog must have been called at least once with a message mentioning
+    // "archived" and a non-zero count.
+    const archiveCalls = mockedDebugLog.mock.calls.filter(
+      (args) => typeof args[0] === 'string' && args[0].includes('archived'),
+    );
+    expect(archiveCalls.length).toBeGreaterThan(0);
+    const msg = archiveCalls[0]![0] as string;
+    expect(msg).toMatch(/archived 1/);
+    expect(msg).toMatch(/candidate/);
+  });
+
+  it('does NOT call debugLog for the archive message when nothing is archived', async () => {
+    // No facts in the DB — nothing is archived.
+    mockedDebugLog.mockClear();
+
+    await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
+      force: true,
+    });
+
+    // No "archived N" log line should be emitted when archived === 0.
+    const archiveCalls = mockedDebugLog.mock.calls.filter(
+      (args) => typeof args[0] === 'string' && (args[0] as string).includes('archived'),
+    );
+    expect(archiveCalls).toHaveLength(0);
+  });
+
+  it('calls debugLog with the error message when the DB is corrupt', async () => {
+    const corruptDir = join(
+      tmpdir(),
+      `afk-mem-gc-corrupt-log-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(corruptDir, { recursive: true });
+    writeFileSync(join(corruptDir, 'memory.db'), 'not a sqlite database');
+    mockedDebugLog.mockClear();
+
+    try {
+      await sweepMemoryGc({ memoryDir: corruptDir, force: true });
+    } finally {
+      rmSync(corruptDir, { recursive: true, force: true });
+    }
+
+    // An error log line must be emitted.
+    const errorCalls = mockedDebugLog.mock.calls.filter(
+      (args) => typeof args[0] === 'string' && (args[0] as string).includes('error'),
+    );
+    expect(errorCalls.length).toBeGreaterThan(0);
   });
 });
