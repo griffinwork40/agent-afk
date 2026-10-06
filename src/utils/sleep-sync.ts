@@ -17,5 +17,6 @@
  * @param ms - Duration in milliseconds. Values ≤ 0 return immediately.
  */
 export function sleepSync(ms: number): void {
+  if (ms <= 0) return;
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }

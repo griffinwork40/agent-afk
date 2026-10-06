@@ -199,6 +199,7 @@ export async function renameWithRetry(
   maxRetries = 5,
   /** @internal */ _platform: string = process.platform,
   /** @internal */ _renameFn: (from: string, to: string) => Promise<void> = rename,
+  /** @internal */ _sleepFn: (ms: number) => Promise<void> = sleep,
 ): Promise<void> {
   let lastErr: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -217,7 +218,7 @@ export async function renameWithRetry(
         process.stderr.write(`[atomic-write] rename retry: ${code} on attempt 0 of ${maxRetries} (${dest})\n`);
       }
       // Skip the sleep on the final attempt — we are about to throw anyway.
-      if (attempt < maxRetries) await sleep(Math.min(10 * 2 ** attempt, 5000));
+      if (attempt < maxRetries) await _sleepFn(Math.min(10 * 2 ** attempt, 5000));
     }
   }
   throw lastErr;

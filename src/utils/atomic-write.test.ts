@@ -292,30 +292,16 @@ describe('renameWithRetry', () => {
   });
 
   it('clamps exponential backoff to 5000 ms ceiling for large attempt numbers', async () => {
-    // failTimes=9 means the first 9 attempts fail, so attempt indices 0-8 all
-    // hit the sleep path. At attempt=9 (index 8 before success), the delay is
-    // Math.min(10 * 2^8, 5000) = Math.min(2560, 5000) = 2560, and at attempt=9
-    // Math.min(10 * 2^9, 5000) = Math.min(5120, 5000) = 5000 — the clamp fires.
-    // Fake timers let the test complete instantly while asserting that the total
-    // simulated time does not exceed what the clamped formula produces.
-    vi.useFakeTimers();
-    try {
-      const eperm = Object.assign(new Error('EPERM'), { code: 'EPERM' });
-      const { fn, callCount } = mockRename(eperm, 9);
-      const promise = renameWithRetry('a', 'b', 10, 'win32', fn);
-      // Advance time past the maximum possible clamped delay per retry (5000 ms)
-      // times the number of retries (9), confirming the clamp is applied on
-      // every iteration rather than an unclamped value like 10 * 2^9 = 5120.
-      // Total clamped budget: sum of clamped delays for attempts 0-8:
-      //   10+20+40+80+160+320+640+1280+2560 = 5110ms (all below 5000 ceiling)
-      // Advancing by 10*9=90ms chunks is safe — any unclamped value would keep
-      // the timer unresolved while fake time is only advanced by the clamped sum.
-      await vi.advanceTimersByTimeAsync(50_000);
-      await expect(promise).resolves.toBeUndefined();
-      expect(callCount()).toBe(10);
-    } finally {
-      vi.useRealTimers();
-    }
+    // failTimes=10 makes attempts 0-9 fail, so attempt 9 schedules the first
+    // clamped sleep: Math.min(10 * 2^9, 5000) = 5000 (not the unclamped 5120).
+    const eperm = Object.assign(new Error('EPERM'), { code: 'EPERM' });
+    const { fn, callCount } = mockRename(eperm, 10);
+    const delays: number[] = [];
+    const sleepSpy = async (ms: number): Promise<void> => { delays.push(ms); };
+
+    await expect(renameWithRetry('a', 'b', 10, 'win32', fn, sleepSpy)).resolves.toBeUndefined();
+    expect(delays).toEqual([10, 20, 40, 80, 160, 320, 640, 1280, 2560, 5000]);
+    expect(callCount()).toBe(11);
   });
 });
 

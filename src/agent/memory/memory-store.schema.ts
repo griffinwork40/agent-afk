@@ -217,5 +217,3 @@ export function enableWalMode(db: BetterSqlite3.Database): void {
     }
   }
 }
-
-
