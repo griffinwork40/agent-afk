@@ -6,6 +6,9 @@
  *  - Env var on ('1' / 'true', case-insensitive) → true for non-daemon surfaces
  *  - Env var off (unset / '0' / garbage) → false
  *  - daemon surface ignores the env default
+ *  - Provider-agnostic: env=on returns true for all non-daemon surfaces
+ *    (the flag applies to OpenAI-compatible children too, not only Anthropic
+ *    keychain hot-swap flows — see the @note in resolveChildAutoResume)
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
@@ -53,6 +56,18 @@ describe('resolveChildAutoResume', () => {
       expect(resolveChildAutoResume(undefined, surface)).toBe(true);
     },
   );
+
+  // Provider-agnostic documentation test (#2876 item 2):
+  // resolveChildAutoResume is not gated by provider. AFK_SUBAGENT_AUTO_RESUME_ON_USAGE_LIMIT
+  // applies to all non-daemon child surfaces regardless of whether the child uses Anthropic
+  // keychain hot-swap or an OpenAI-compatible timer-only pause. On OpenAI-compatible children
+  // only the timer path is available (no account-switch shortcut), but the flag is intentionally
+  // not gated to Anthropic-resolved forks — the pause protocol is provider-neutral.
+  it('provider-agnostic: env=on returns true for a non-daemon surface (documents all-provider scope)', () => {
+    process.env[envKey] = '1';
+    // 'cli' is representative; the provider is not passed to this resolver
+    expect(resolveChildAutoResume(undefined, 'cli')).toBe(true);
+  });
 });
 
 describe('isSubagentAutoResumeEnvEnabled', () => {
