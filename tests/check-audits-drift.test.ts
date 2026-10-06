@@ -47,7 +47,7 @@ function deriveCIGates(ciYmlText: string): string[] {
     // Detect end: another top-level job definition at the same indent level.
     // Match only job-key patterns (`  job-name:`) to avoid false-positive breaks
     // on 2-space-indented YAML comments (`  # comment`).
-    if (inLintBuild && /^\s{2}[a-z_-]+:/.test(line)) {
+    if (inLintBuild && /^\s{2}[a-zA-Z0-9_-]+:/.test(line)) {
       break;
     }
 
@@ -129,6 +129,25 @@ jobs:
 `);
 
     expect(gates).toEqual(['audit:env:check', 'scan:env:check', 'audit:chalk:check', 'fix:pins:check']);
+  });
+
+  it('terminates scan at a digit-bearing job name (e.g. test-node26)', () => {
+    // Regression guard for the widened job-boundary regex (^\s{2}[a-zA-Z0-9_-]+:).
+    // Before the fix the regex excluded digits, so a job like `test-node26:` would
+    // not terminate the lint-build scan and its steps would be misclassified.
+    const gates = deriveCIGates(`
+jobs:
+  lint-build:
+    steps:
+      - name: audit
+        run: pnpm audit:env:check
+  test-node26:
+    steps:
+      - name: should not appear
+        run: pnpm audit:env:check
+`);
+
+    expect(gates).toEqual(['audit:env:check']);
   });
 
   it('ci.yml lint-build audit gates equal AUDIT_GATES in check-audits.ts', () => {
