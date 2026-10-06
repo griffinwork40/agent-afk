@@ -37,8 +37,10 @@ export const agentTool: AnthropicToolDef = {
     'for the subagent to finish and returns its final message. Pass mode="background" ' +
     'to fire-and-forget — the tool returns a jobId immediately so you can keep ' +
     'working in the same turn. When a background job finishes, its result is ' +
-    'delivered automatically into your context with the next user message, wrapped ' +
-    'in a <background-subagent-result> block; you do not need to poll or join. ' +
+    'delivered automatically to the top-level session in a <background-subagent-result> ' +
+    'block; the dispatch result tells you exactly how it arrives on this surface. ' +
+    'Never poll for it with wait_for proxies, sleep loops, or repeated status checks: ' +
+    'once you have nothing else to do, end your turn. ' +
     'The `/bgsub:join <jobId>` slash command remains available for manual replay. ' +
     'Use background mode for long investigations the user does not ' +
     'need to wait on; use foreground for anything whose result you need to reason ' +
@@ -98,8 +100,8 @@ export const agentTool: AnthropicToolDef = {
           'Execution mode. "foreground" (default) waits for the subagent to finish ' +
           'and returns its output. "background" returns a jobId immediately and ' +
           'leaves the subagent running detached — its result is auto-delivered ' +
-          'into this context with the next user message when it settles ' +
-          '(/bgsub:join remains available for manual replay). Background jobs ' +
+          'when it settles (the dispatch result says how; do not poll for it; ' +
+          '/bgsub:join remains available for manual replay). Background jobs ' +
           'are cancelled when the parent session ends.',
       },
       cwd: {

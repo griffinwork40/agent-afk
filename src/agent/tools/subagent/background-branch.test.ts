@@ -220,6 +220,24 @@ describe('runBackgroundBranch', () => {
       expect(payload.message).toMatch(/\/bgsub:join bg-xyz/);
     });
 
+    it('selects the delivery note from args.delivery (auto-wake / root-session)', async () => {
+      const run = async (delivery: 'auto-wake' | 'root-session'): Promise<string> => {
+        const { handle } = fakeHandle('sub-1');
+        const registry = fakeRegistry(() => makeJob({ jobId: 'bg-d', subagentId: 'sub-1' }));
+        const result = await runBackgroundBranch({
+          handle, registry, prompt: 'p', model: 'sonnet', parentSessionId: 'parent-1', delivery,
+        });
+        return (JSON.parse(result.content) as { message: string }).message;
+      };
+      const wake = await run('auto-wake');
+      expect(wake).toMatch(/End your turn/);
+      expect(wake).toMatch(/Do not poll/);
+      const child = await run('root-session');
+      expect(child).toMatch(/top-level session, NOT to this context/);
+      expect(child).toMatch(/cancel_background_job bg-d/);
+      expect(child).not.toMatch(/delivered into this context/);
+    });
+
     it('forwards prompt, model, and parentSessionId into register', async () => {
       const { handle } = fakeHandle();
       const registerSpy = vi.fn(() => makeJob());

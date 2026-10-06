@@ -36,7 +36,7 @@ import type {
 } from '../../../agent/background-registry.js';
 import { extractOutputText } from '../../../agent/background-registry.result.js';
 import { redactSecrets } from '../../../agent/redact-secrets.js';
-import { env } from '../../../config/env.js';
+import { env, isPlainOutputRequested } from '../../../config/env.js';
 import { formatDuration } from '../../format-utils.js';
 
 /**
@@ -152,6 +152,25 @@ export function buildBgResultInjection(job: BackgroundJob): string {
 export function isAutoDeliverEnabled(raw: string | undefined): boolean {
   if (raw === undefined) return true;
   return !/^(0|false|off|no)$/i.test(raw);
+}
+
+/**
+ * Can this REPL wake an idle prompt when a background result lands?
+ *
+ * Invariant: mirrors the conditions under which the wake path can fire.
+ * `tryAutoResume` (loop-iteration.ts) needs `surface.isAwaitingInput()`, which
+ * is only ever true on the compositor path, and the compositor arms only when
+ * both stdio streams are TTYs and plain output was not requested
+ * (input-surface.ts armCompositor). Auto-deliver must also be on, or nothing
+ * is buffered to wake for. Read live at each dispatch so the agent tool's
+ * delivery note stays truthful (agent/tools/subagent/background-delivery.ts).
+ */
+export function replCanAutoWake(): boolean {
+  return (
+    Boolean(process.stdin.isTTY && process.stdout.isTTY) &&
+    !isPlainOutputRequested() &&
+    isAutoDeliverEnabled(env.AFK_BG_AUTO_DELIVER)
+  );
 }
 
 /**

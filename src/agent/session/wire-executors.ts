@@ -129,6 +129,12 @@ export interface WireExecutorsOptions {
    */
   backgroundRegistry?: BackgroundAgentRegistry;
   /**
+   * Surface wakes an idle prompt when a background result lands (TTY REPL
+   * only). Forwarded to the root `agent` executor; see
+   * SubagentExecutorContext.backgroundAutoWake.
+   */
+  backgroundAutoWake?: () => boolean;
+  /**
    * Sink for named-agent scan warnings (e.g. a user agent file shadowing a
    * tool-restricted builtin). When omitted, `loadAgentRegistry` uses its
    * default writer.
@@ -154,6 +160,20 @@ export interface WiredExecutors {
   subagentExecutor: SubagentExecutor;
   skillExecutor: SkillExecutor;
   composeExecutor: ComposeExecutor;
+}
+
+/**
+ * Background-dispatch fields for the root `agent` executor: the registry plus
+ * the surface's auto-wake probe. Only the `agent` tool reads the probe (to
+ * pick a truthful delivery note), so skill/compose keep the bare registry.
+ */
+function agentBackgroundOpts(
+  opts: Pick<WireExecutorsOptions, 'backgroundRegistry' | 'backgroundAutoWake'>,
+): Pick<WireExecutorsOptions, 'backgroundRegistry' | 'backgroundAutoWake'> {
+  return {
+    ...(opts.backgroundRegistry !== undefined ? { backgroundRegistry: opts.backgroundRegistry } : {}),
+    ...(opts.backgroundAutoWake !== undefined ? { backgroundAutoWake: opts.backgroundAutoWake } : {}),
+  };
 }
 
 /**
@@ -290,7 +310,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     defaultSubagentModel,
     childProviderFactory,
     childSkillExecutorFactory,
-    ...bgRegistryOpt,
+    ...agentBackgroundOpts(opts),
     resolveApiKeyForModel,
     // Top-level wiring → explicit depth 0. See SubagentExecutorContext.depth
     // for why this is required rather than defaulted.

@@ -127,6 +127,13 @@ export interface SubagentExecutorContext {
    */
   backgroundRegistry?: BackgroundAgentRegistry;
   /**
+   * Live probe: does this surface wake an idle prompt when a background result
+   * lands? Only the TTY REPL wires it (depth 0). Read at dispatch time by
+   * `resolveBackgroundDelivery` to pick a truthful model-facing note. Never
+   * forwarded to nested executors: depth >= 1 results go to the root session.
+   */
+  backgroundAutoWake?: () => boolean;
+  /**
    * Worktree cwd inherited from the parent session. Forwarded to the
    * per-depth child {@link SubagentManager} and to the recursive child
    * {@link SubagentExecutor} so depth ≥ 2 forks (a depth-1 subagent calling

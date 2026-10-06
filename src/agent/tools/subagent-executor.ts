@@ -20,7 +20,7 @@ import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from 
 import { parseAgentInput, type AgentInput, type AgentExecutionMode } from './subagent/input-parse.js';
 import { emitTelemetry, truncate } from './subagent/failure-payload.js';
 import { buildChildConfig, type BuildChildConfigArgs } from './subagent/child-config.js';
-import { runBackgroundBranch } from './subagent/background-branch.js'; import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
+import { runBackgroundBranch } from './subagent/background-branch.js'; import { backgroundTarget } from './subagent/background-delivery.js'; import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
 import { sendMessageToAgent as executeSendMessage } from './subagent/send-message.js'; import { getBackgroundJobHealth as executeBackgroundHealth } from './subagent/background-health.js';
 import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
 import { createIsolatedWorktree } from './handlers/worktree-managed.js';
@@ -652,7 +652,7 @@ export class SubagentExecutor implements SubagentControl {
       const capturedCallId = call.id;
       return runBackgroundBranch({
         handle,
-        registry: this.ctx.backgroundRegistry,
+        ...backgroundTarget(this.ctx),
         prompt: parsed.prompt,
         model: childConfig.model,
         parentSessionId: this.ctx.parentSession.sessionId,
@@ -741,7 +741,7 @@ export class SubagentExecutor implements SubagentControl {
       ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
       depth,
       parentSessionId: this.ctx.parentSession.sessionId,
-      registry: this.ctx.backgroundRegistry,
+      ...backgroundTarget(this.ctx),
       promotionTriggers: this.promotionTriggers,
       activeForegroundHandles: this.activeForegroundHandles,
       ...(isolationTeardown !== undefined ? { isolationTeardown } : {}),
