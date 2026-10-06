@@ -138,33 +138,28 @@ describe('ProcessJobRegistry', () => {
     // redirected), so the job is still settling (close-grace or orphan reap) when
     // the cancel lands.
     //
-    // We probe the leader PID directly until it dies (ESRCH), which is the
-    // observable proxy for leaderExited().  closeGraceMs is large (1000 ms) so
-    // there is time for cancel to land while the job is still unsettled.  The
-    // poll is bounded to 5 s — immune to scheduler jitter and CI slowness —
-    // unlike the original fixed 100 ms sleep.
+    // We poll registry.leaderExited() — the same Node 'exit'-event flag that
+    // cancel() checks — rather than an OS PID probe.  On slow Windows runners
+    // the OS PID can be gone before Node delivers 'exit', so a PID probe
+    // triggers cancel() before the guard has fired, stamping cancelSource and
+    // causing the assertion to fail.  Polling the registry's own signal removes
+    // the race: once leaderExited() is true the cancel() guard will always
+    // reject the cancel.
     //
-    // `sleep 30 & exit 0` keeps the inherited pipe open, so 'close' fires only
-    // after the closeGraceMs reap; this still exercises the post-exit-grace
-    // cancel path.
+    // closeGraceMs is large (1000 ms) so the job is still settling when cancel
+    // lands; this still exercises the post-exit-grace cancel path.
     const registry = makeRegistry({ closeGraceMs: 1000, reapGraceMs: 200 });
     try {
       const job = registry.start({ command: 'sleep 30 & exit 0', env: process.env });
-      const leaderPid = job.pid!;
-      // Wait until the leader process itself is gone (it runs `exit 0` instantly).
-      // On POSIX we signal pid directly (positive); on Windows the leader PID is
-      // the observable root and we use the positive probe too.
+      // Wait until the registry's leader-exit flag is set (Node 'exit' event
+      // delivered).  The poll is bounded to 5 s — immune to scheduler jitter.
       await vi.waitFor(
-        () => {
-          let alive = true;
-          try { process.kill(leaderPid, 0); } catch { alive = false; }
-          expect(alive).toBe(false);
-        },
+        () => { expect(registry.leaderExited(job.id)).toBe(true); },
         { timeout: 5000, interval: 20 },
       );
       const snap = registry.cancel(job.id, 'model');
-      // process-jobs.ts cancel(): leaderExited() guard refuses the cancel, so
-      // cancelSource stays undefined and the job keeps its natural outcome.
+      // cancel() leaderExited() guard refuses the cancel, so cancelSource stays
+      // undefined and the job keeps its natural outcome.
       expect(snap?.cancelSource).toBeUndefined();
       const done = await registry.waitFor(job.id);
       expect(done?.status).toBe('completed');

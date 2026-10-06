@@ -203,6 +203,17 @@ export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
   }
 
   /**
+   * True once the leader process has exited for the given job id (the job may
+   * still be settling: close-grace or orphan reap). Returns false for an
+   * unknown id. Used by tests that need to synchronise on the same signal as
+   * the cancel() guard — the Node 'exit' event — rather than an OS PID probe,
+   * which can report the PID gone before Node has delivered the event.
+   */
+  leaderExited(id: string): boolean {
+    return this.jobs.get(id)?.launched.leaderExited() ?? false;
+  }
+
+  /**
    * Gracefully stop a job (TERM the group, KILL after the grace period).
    * Returns the snapshot, or undefined for an unknown id. An already-settled
    * job is returned unchanged and no signal is sent.
