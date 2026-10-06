@@ -61,6 +61,20 @@ describe('computeBurnRate — suppression: plateau-then-cool (rule 5)', () => {
   });
 });
 
+describe('computeBurnRate — suppression: falling-start / rising-tail (deltaUtilization guard)', () => {
+  it('returns null when Rule 5 passes but net oldest-to-newest delta is zero', () => {
+    // Series [0.70, 0.80, 0.60, 0.70]:
+    //   Rule 3 passes (0.70->0.80 is a rising adjacent pair).
+    //   Rule 5 passes (last pair 0.60->0.70 is rising, latest delta > 0).
+    //   BUT oldest=0.70, newest=0.70 => deltaUtilization=0 => ratePerMs=0.
+    //   Without the deltaUtilization <= 0 guard the result would be
+    //   { capsAtMs: Infinity, ratePerMs: 0 }. The guard suppresses it.
+    //   Removing the guard makes this test fail, pinning it as live.
+    const s = samples([0.70, 0.80, 0.60, 0.70], NOW - 4 * MIN_MS, MIN_MS);
+    expect(computeBurnRate(s, NOW)).toBeNull();
+  });
+});
+
 describe('computeBurnRate — suppression: idle / decaying session', () => {
   it('returns null when utilization is flat (no rising pair)', () => {
     const s = samples([0.6, 0.6, 0.6, 0.6], NOW - 4 * MIN_MS, MIN_MS);

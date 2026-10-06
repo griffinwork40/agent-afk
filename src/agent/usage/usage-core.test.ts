@@ -13,6 +13,7 @@ import {
   parseUsageRecord,
   usageKey,
   USAGE_STALE_AFTER_MS,
+  WINDOWS_HISTORY_MAX,
   type UsageRecord,
 } from './usage-record.js';
 import {
@@ -57,6 +58,32 @@ describe('usage-record merge', () => {
     expect(parseUsageRecord(null)).toBeUndefined();
     const p = parseUsageRecord({ v: 1, provider: 'p', account: 'a', windows: { observedAt: 1, sevenDayOpus: { utilization: 3 } } });
     expect(p?.windows?.sevenDayOpus?.utilization).toBe(1);
+  });
+
+  it('parseUsageRecord caps oversized history to WINDOWS_HISTORY_MAX, keeping newest entries', () => {
+    // Build a raw record with WINDOWS_HISTORY_MAX + 5 history entries (17 total
+    // when WINDOWS_HISTORY_MAX is 12). The cappedHistory branch in
+    // usage-record.ts slices to the last WINDOWS_HISTORY_MAX before iterating;
+    // this test pins that guard as live.
+    const overSize = WINDOWS_HISTORY_MAX + 5;
+    const history = Array.from({ length: overSize }, (_, i) => ({
+      observedAt: 1000 + i * 1000,
+      utilization: (i + 1) / overSize,
+    }));
+    const raw = {
+      v: 1,
+      provider: 'p',
+      account: 'a',
+      windows: { observedAt: 1000 + (overSize - 1) * 1000, history },
+    };
+    const parsed = parseUsageRecord(raw);
+    expect(parsed?.windows?.history).toBeDefined();
+    expect(parsed!.windows!.history!.length).toBeLessThanOrEqual(WINDOWS_HISTORY_MAX);
+    // Newest entries are kept: the last parsed entry must be the last raw entry.
+    const lastParsed = parsed!.windows!.history![parsed!.windows!.history!.length - 1]!;
+    const lastRaw = history[history.length - 1]!;
+    expect(lastParsed.observedAt).toBe(lastRaw.observedAt);
+    expect(lastParsed.utilization).toBeCloseTo(lastRaw.utilization, 6);
   });
 
   it('usageKey sanitizes to the StateStore key pattern', () => {
