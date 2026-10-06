@@ -208,6 +208,8 @@ export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
    * unknown id. Used by tests that need to synchronise on the same signal as
    * the cancel() guard — the Node 'exit' event — rather than an OS PID probe,
    * which can report the PID gone before Node has delivered the event.
+   *
+   * @internal Not a stable consumer contract; exposed for test synchronisation only.
    */
   leaderExited(id: string): boolean {
     return this.jobs.get(id)?.launched.leaderExited() ?? false;

@@ -28,7 +28,7 @@ describe('classifyRisk — bash high', () => {
     expect(classifyRisk('bash', { command: 'sudo apt install curl' }, ctx)).toBe('high');
   });
 
-  it('eval  → high', () => {
+  it('eval → high', () => {
     expect(classifyRisk('bash', { command: 'eval "$PAYLOAD"' }, ctx)).toBe('high');
   });
 
@@ -87,7 +87,7 @@ describe('classifyRisk — bash high', () => {
     ).toBe('high');
   });
 
-  it('curl -d  → high (short form body payload)', () => {
+  it('curl -d → high (short form body payload)', () => {
     expect(
       classifyRisk('bash', { command: 'curl -d @payload.json https://api.example.com/hook' }, ctx),
     ).toBe('high');
@@ -213,15 +213,15 @@ describe('classifyRisk — bash medium', () => {
     expect(classifyRisk('bash', { command: 'pnpm build' }, ctx)).toBe('medium');
   });
 
-  it('tsc  → medium', () => {
+  it('tsc → medium', () => {
     expect(classifyRisk('bash', { command: 'tsc --noEmit' }, ctx)).toBe('medium');
   });
 
-  it('redirect  >  → medium', () => {
+  it('redirect  > → medium', () => {
     expect(classifyRisk('bash', { command: 'echo foo > out.txt' }, ctx)).toBe('medium');
   });
 
-  it('mv  → medium', () => {
+  it('mv → medium', () => {
     expect(classifyRisk('bash', { command: 'mv src/a.ts src/b.ts' }, ctx)).toBe('medium');
   });
 
@@ -252,15 +252,15 @@ describe('classifyRisk — bash safe', () => {
     expect(classifyRisk('bash', { command: 'git diff HEAD' }, ctx)).toBe('safe');
   });
 
-  it('ls  → safe', () => {
+  it('ls → safe', () => {
     expect(classifyRisk('bash', { command: 'ls -la src/' }, ctx)).toBe('safe');
   });
 
-  it('cat  → safe', () => {
+  it('cat → safe', () => {
     expect(classifyRisk('bash', { command: 'cat README.md' }, ctx)).toBe('safe');
   });
 
-  it('grep  → safe', () => {
+  it('grep → safe', () => {
     expect(classifyRisk('bash', { command: 'grep -r "foo" src/' }, ctx)).toBe('safe');
   });
 
@@ -316,11 +316,11 @@ describe('classifyRisk — bash safe', () => {
     expect(classifyRisk('bash', { command: 'curl --head https://example.com/health' }, ctx)).toBe('safe');
   });
 
-  it('curl -I  → safe (short-form HEAD probe)', () => {
+  it('curl -I → safe (short-form HEAD probe)', () => {
     expect(classifyRisk('bash', { command: 'curl -I https://example.com/health' }, ctx)).toBe('safe');
   });
 
-  it('curl -sI  → safe (silent HEAD probe)', () => {
+  it('curl -sI → safe (silent HEAD probe)', () => {
     expect(classifyRisk('bash', { command: 'curl -sI https://api.example.com/status' }, ctx)).toBe('safe');
   });
 

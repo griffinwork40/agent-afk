@@ -23,6 +23,7 @@ import { createDefaultHookRegistry } from '../agent/default-hook-registry.js';
 import { seedPersistedGrants } from '../agent/permissions-store.js';
 import { getApiKeyForModel, resolveBaseSystemPrompt } from '../cli/shared-helpers.js';
 import { wireWebSession, type WebSessionWiringInternal } from './session-owner.wiring.js';
+import { capContinueWith } from '../agent/providers/shared/stop-hook-continuation.js';
 import type { AgentConfig } from '../agent/types.js';
 import type { PermissionMode } from '../agent/types/sdk-types.js';
 import type { McpManager } from '../agent/mcp/index.js';
@@ -154,9 +155,15 @@ export class SessionOwner {
     // never fires Stop. Web sessions are persistent and take further prompts,
     // so injectContext rides the next user turn. Block/timeout outcomes are
     // already recorded in the trace; the browser has no notice channel for them.
+    //
+    // Limitation: `getHasNextTurn: () => true` queues hook context optimistically,
+    // assuming the browser tab is still open. If the tab closes before the next
+    // prompt arrives, the queued context prepends to a much-later turn instead of
+    // being discarded. This is a known trade-off for web sessions; the daemon
+    // surface avoids it by returning `() => false` (drop context).
     session.wireStopHook({
       getHasNextTurn: () => true,
-      onStopInjectContext: (text) => { session.queueFrameworkContext(text); },
+      onStopInjectContext: (text) => { session.queueFrameworkContext(capContinueWith(text)); },
     });
 
     // Invariant: the id is provider-issued and undefined until initialization

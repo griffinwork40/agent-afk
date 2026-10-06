@@ -190,7 +190,7 @@ function buildStopContext(ctx: BeforeTurnEndContext): StopContext {
  *
  * Guards:
  *   - No-op when hookRegistry or config.parentSessionId is set (forks excluded).
- *   - No-op when cap is 0 or already reached (`continuation >= maxContinuations`).
+ *   - 0 = no continuation (seam does not dispatch); already-reached cap also skips.
  *   - AbortError propagates; all other errors are swallowed and treated as pass.
  *
  * @param ctx   Turn-end context from the provider.

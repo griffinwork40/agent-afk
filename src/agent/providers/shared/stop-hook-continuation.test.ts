@@ -351,12 +351,12 @@ describe('runBeforeTurnEnd — dispatched flag (#2957)', () => {
     const dispatch = vi.fn().mockResolvedValue({});
     const result = await runBeforeTurnEnd(makeCtx({ config: makeConfig(makeRegistry({ dispatch })) }));
     expect(dispatch).not.toHaveBeenCalled();
-    expect(result.dispatched).not.toBe(true);
+    expect(result.dispatched).toBeUndefined();
   });
 
   it('reports dispatched=false with no hook registry', async () => {
     const result = await runBeforeTurnEnd(makeCtx({ config: makeConfig(undefined) }));
-    expect(result.dispatched).not.toBe(true);
+    expect(result.dispatched).toBeUndefined();
   });
 
   it('reports dispatched=true on a pass-through dispatch', async () => {
