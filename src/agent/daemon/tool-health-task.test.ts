@@ -59,6 +59,7 @@ import {
   _resetToolHealthAlertCooldownForTests,
 } from './tool-health-task.js';
 import { runBuiltinTask } from './builtin-task.js';
+import { buildToolHealthTask } from '../../cli/commands/daemon-builtin-tasks.js';
 import type { TelemetryRecord } from './scheduler.js';
 
 const mockListTraces = vi.mocked(listTraces);
@@ -577,24 +578,14 @@ describe('runBuiltinTask – tool-health dispatch', () => {
 
 describe('tool-health daemon registration', () => {
   it('notifyOn constant: task object should have notifyOn "failure"', () => {
-    // We verify the task object shape by inspecting what would be registered.
-    // The daemon.ts wires a constant toolHealthTask — we re-derive that object
-    // here to guard the invariant without importing daemon.ts (which has side
-    // effects).
-    const toolHealthTask = {
-      taskId: 'tool-health',
-      executor: 'builtin' as const,
-      command: 'tool-health',
-      trigger: 'cron' as const,
-      cronExpression: '17 * * * *',
-      notifyOn: 'failure' as const,
-    };
+    // Verify the real builder emits notifyOn 'failure' so success runs don't
+    // push Telegram — the daemon wires this via buildToolHealthTask().
+    const task = buildToolHealthTask('17 * * * *');
 
-    expect(toolHealthTask.notifyOn).toBe('failure');
-    // The task must NOT be 'never' or 'always' — only 'failure' is correct
-    // because success runs should not push Telegram
-    expect(toolHealthTask.notifyOn).not.toBe('never');
-    expect(toolHealthTask.notifyOn).not.toBe('always');
+    expect(task.notifyOn).toBe('failure');
+    // Must NOT be 'never' or 'always' — only 'failure' is correct.
+    expect(task.notifyOn).not.toBe('never');
+    expect(task.notifyOn).not.toBe('always');
   });
 
   it('TOOL_HEALTH_MIN_SESSIONS threshold is 2', () => {

@@ -279,11 +279,17 @@ export async function runBuiltinToolHealthTask(
       .filter((t) => t.mtimeMs >= cutoffMs)
       .slice(0, TOOL_HEALTH_MAX_FILES);
 
-    // Scan each trace for tool_degraded events
+    // Scan each trace for tool_degraded events — bounded concurrency pool so
+    // we don't open 200 file descriptors simultaneously. 8 concurrent reads is
+    // a practical balance between throughput and fd pressure.
+    const SCAN_CONCURRENCY = 8;
     const allEvents: DegradedEvent[] = [];
-    for (const trace of recentTraces) {
-      const events = await scanTrace(trace.tracePath, trace.sessionId);
-      allEvents.push(...events);
+    for (let i = 0; i < recentTraces.length; i += SCAN_CONCURRENCY) {
+      const batch = recentTraces.slice(i, i + SCAN_CONCURRENCY);
+      const batchResults = await Promise.all(
+        batch.map((trace) => scanTrace(trace.tracePath, trace.sessionId)),
+      );
+      for (const events of batchResults) allEvents.push(...events);
     }
 
     // Aggregate by (tool, errorHead), filter for >= 2 sessions
