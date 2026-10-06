@@ -267,6 +267,27 @@ describe('StrategyNudger', () => {
     expect(n.observe(call('test_run', 'pnpm test -t b'), failB)).not.toBeNull();
   });
 
+  // head+tail cap: long bullets that differ only in the trailing error message must stay distinct
+  it('does not share a signature when two >500-char bullets differ only in the trailing error message', () => {
+    const n = new StrategyNudger();
+    // Construct a test name that is ~510 chars so the full bullet exceeds 500 chars.
+    // The error message is appended AFTER the test name, so a prefix-only cap would
+    // cut it off and collapse both bullets into the same signature.
+    const longTestName = 'describe ' + 'nested '.repeat(70) + 'it (src/x.test.ts:1)';
+    // Sanity: bullet must be >500 chars before the error message is appended.
+    const bulletPrefix = `• ${longTestName}: `;
+    expect(bulletPrefix.length).toBeGreaterThan(500);
+
+    const failA = testRunFail({ passed: 0, failed: 1, testName: longTestName, errorMsg: 'AssertionError: expected 1 to be 2' });
+    const failB = testRunFail({ passed: 0, failed: 1, testName: longTestName, errorMsg: 'TypeError: foo is not a function' });
+
+    n.observe(call('test_run', 'pnpm test -t first'), failA);
+    // The two bullets differ ONLY in the trailing error message.
+    // With a prefix-only cap both truncate to the same prefix → false nudge.
+    // With head+tail they must NOT share a signature.
+    expect(n.observe(call('test_run', 'pnpm test -t second'), failB)).toBeNull();
+  });
+
   // eviction must not let an already-fired signature nudge again
   it('never fires again after >256 distinct other signatures evict the original from the map', () => {
     const n = new StrategyNudger();
