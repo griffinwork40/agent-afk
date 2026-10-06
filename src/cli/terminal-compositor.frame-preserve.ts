@@ -174,6 +174,15 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     const growRoom = Math.max(0, desiredTopRow - 1);
     const growOverflow = bandLen - growRoom;
     if (growOverflow <= skip) return; // every non-archived row fits above the new frame — no scroll
+    // Advisory note (#2871.4): this early return does not update committedBandTopRow /
+    // committedBandBottomRow to reflect the frame's new position. The positions
+    // therefore drift whenever the frame grows but all non-archived rows still fit.
+    // There is no visible effect today — re-pin happens at the next repaint that
+    // actually moves the band — but if a future path reads the tracked positions
+    // between this return and the next repaint it would see stale coordinates.
+    // A position update here is not safe without a repaint (the band is still on
+    // screen at the old rows), so the correct fix is to note the stale state rather
+    // than update it prematurely.
     // #540 axis-2: archive the oldest `growOverflow` rows to scrollback as
     // SOFT-WRAPPABLE logical lines, then re-place the survivors at
     // [1, growRoom] — already hugging the new frame top (growRoom ===

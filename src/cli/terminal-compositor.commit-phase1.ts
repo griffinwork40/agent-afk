@@ -119,6 +119,13 @@ export function commitPhase1Teardown(
 
   // Archived-prefix rows (content-hug; already in scrollback) are skipped by
   // every archive below and dropped by repaint before any raw scroll.
+  // `prefix` is captured once, BEFORE the writeWithScrollGuard callback, and
+  // reused across the mutually exclusive arms below. This is safe: the only arm
+  // that calls dropScrollingArchivedRows (`fitsAboveFrame`) does so strictly
+  // before any scroll that would change the prefix, and the other arms skip
+  // `prefix` rows on their archives. An arm that archives (band-hold or overflow)
+  // never also scrolls archived rows, so capturing once is equivalent to
+  // reading fresh inside each arm.
   const prefix = archivedPrefix(self);
   writeWithScrollGuard(self, () => {
     if (useBandHold) {

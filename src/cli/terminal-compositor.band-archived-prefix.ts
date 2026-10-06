@@ -31,7 +31,13 @@ import { eraseAndPaintRow, scrollbackFlushLines } from './terminal-compositor.sc
 import { withAutowrapDisabled } from './terminal-compositor.band-reflow.js';
 import { contentMargin } from './render/measure.js';
 
-/** State slice the archived-prefix helpers read and mutate. */
+/**
+ * State slice the archived-prefix helpers read and mutate.
+ *
+ * @internal — host-protocol interface, not a public API. Exported only so
+ * sibling modules (frame-preserve.ts, committed-band-commit.ts, lifecycle.ts)
+ * can implement it structurally. External code must not reference this type.
+ */
 export interface ArchivedPrefixHost {
   committedBand: string[];
   committedBandMeta: BandRowMeta[];
@@ -147,6 +153,13 @@ export function dropScrollingArchivedRows(self: Omit<ArchivedPrefixHost, 'placem
   const bottom = self.committedBandBottomRow;
   const top = self.committedBandTopRow > 0 ? self.committedBandTopRow : bottom - painted + 1;
   if (bottom <= 0 || top <= 0) return 0; // position unknown: cannot repaint safely
+  // Safety note (advisory finding #2871.3): this guard is verified unreachable
+  // today — the only paths that set committedBandArchivedPrefix > 0 also always
+  // set valid (> 0) bottom/top positions. If a future path sets the prefix
+  // without first establishing positions this early return prevents the caller
+  // from performing a raw scroll that would carry the archived rows into history
+  // a second time; it does not drop them from the model (the caller scrolls
+  // fewer rows instead). Keep this guard when adding new prefix-setting paths.
   const lastLeaving = Math.min(top + paintedArchived - 1, scrollRows);
   const d = Math.max(0, Math.min(paintedArchived, lastLeaving - top + 1));
   if (d === 0) return 0;

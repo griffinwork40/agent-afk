@@ -216,7 +216,9 @@ describe.each([24, 64])(
         let blankRunBelowPrompt = 0;
         for (let i = promptIdx + 1; i <= viewportEnd && i < allLines.length; i++) {
           if ((allLines[i] ?? '').trim() === '') blankRunBelowPrompt++;
-          else break; // stop at first non-blank (should not happen if bug is present)
+          // Do NOT break on non-blank: a displaced frame line (spinner, status row)
+          // can interrupt the blank run, hiding further blank rows from an early exit.
+          // Counting all blanks in the region is the correct invariant (#2871.5).
         }
 
         // When the bug is present, there are many blank rows below the input line.
