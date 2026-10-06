@@ -18,8 +18,13 @@ function makeRegistry(extra: Partial<ConstructorParameters<typeof ProcessJobRegi
   });
 }
 
+// POSIX has process groups (probe `-pgid`); Windows has none, so the job's
+// reach there is the leader's tree and the probe is the leader pid. This picks
+// a probe, it does not skip anything: every assertion runs on every platform.
+const HAS_PROCESS_GROUPS = process.platform !== 'win32';
+
 function groupAlive(pgid: number): boolean {
-  try { process.kill(-pgid, 0); return true; } catch { return false; }
+  try { process.kill(HAS_PROCESS_GROUPS ? -pgid : pgid, 0); return true; } catch { return false; }
 }
 
 beforeEach(() => {
@@ -103,9 +108,11 @@ describe('ProcessJobRegistry', () => {
 
   it('reaps group members that outlive the leader and reports it', async () => {
     // The leader exits at once; the backgrounded sleep keeps the pipe open.
-    const job = reg.start({ command: 'sleep 300 & exit 0', env: process.env });
+    const job = reg.start({ command: 'sleep 30 & exit 0', env: process.env });
     const done = await reg.waitFor(job.id);
-    expect(done?.orphansReaped).toBe(true);
+    // Contract: Windows never signals after leader exit (freed PID), so it
+    // only releases the pipes and reports no reap.
+    expect(done?.orphansReaped).toBe(HAS_PROCESS_GROUPS);
     expect(done?.exitCode).toBe(0);
     expect(groupAlive(job.pid!)).toBe(false);
   });
@@ -113,13 +120,13 @@ describe('ProcessJobRegistry', () => {
   it('a cancel during the post-exit grace keeps the natural outcome', async () => {
     // Leader exits 0 at once; a backgrounded sleep holds the pipe, so the job
     // is still settling (close-grace) when the cancel lands.
-    const job = reg.start({ command: 'sleep 300 & exit 0', env: process.env });
+    const job = reg.start({ command: 'sleep 30 & exit 0', env: process.env });
     await new Promise((r) => setTimeout(r, 100));
     const snap = reg.cancel(job.id, 'model');
     expect(snap?.cancelSource).toBeUndefined();
     const done = await reg.waitFor(job.id);
     expect(done?.status).toBe('completed');
-    expect(done?.orphansReaped).toBe(true);
+    expect(done?.orphansReaped).toBe(HAS_PROCESS_GROUPS);
   });
 
   it('refuses new jobs once teardown has begun', async () => {

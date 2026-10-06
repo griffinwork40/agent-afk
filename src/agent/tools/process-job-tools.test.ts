@@ -67,9 +67,11 @@ describe('bash run_in_background via the dispatcher', () => {
 
   it('runs in the session cwd', async () => {
     const d = makeDispatcher({ processJobs: reg });
-    const job = await startJob(d, 'pwd');
+    // node, not `pwd`: Git Bash's pwd prints an MSYS path (/tmp/...) on Windows.
+    const job = await startJob(d, 'node -e "console.log(process.cwd())"');
     await reg.waitFor(job.job_id);
-    expect(fs.readFileSync(job.log_path, 'utf8').trim()).toBe(fs.realpathSync(dir));
+    const printed = fs.readFileSync(job.log_path, 'utf8').trim();
+    expect(fs.realpathSync(printed)).toBe(fs.realpathSync(dir));
   });
 
   it('accepts a timeout above the foreground ceiling only when backgrounded', async () => {
