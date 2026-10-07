@@ -212,9 +212,16 @@ function extractLooseYieldTracking(loose: Record<string, unknown> | null): {
  * Callers treat `undefined` as "no trace data → no signal" — never a
  * downgrade. This is intentional: absence of data must not downgrade (#2798).
  *
+ * Returns `{ signals, traceMtimeMs }` so the caller can fold `traceMtimeMs`
+ * into `effectiveMtimeMs` for staleness checks — a facet cached before an
+ * async trace flush should be invalidated by a later trace write.
+ *
  * Synchronous so it fits into the existing sync I/O pattern of store.ts.
  */
-function tryReadTraceSignals(sessionId: string, sessionsDir: string): TraceSignals | undefined {
+function tryReadTraceSignals(
+  sessionId: string,
+  sessionsDir: string,
+): { signals: TraceSignals; traceMtimeMs: number } | undefined {
   try {
     // Only resolve the ledger under the default sessions dir. When the caller
     // has overridden sessionsDir (e.g. `afk insights --afk-home`), we might
@@ -248,11 +255,17 @@ function tryReadTraceSignals(sessionId: string, sessionsDir: string): TraceSigna
     // `null` means tracing was explicitly disabled for this session.
     if (traceLabel == null) return undefined;
 
+    // Defense-in-depth: the traceLabel comes from the ledger file (external
+    // data). Guard it with the same safety check applied to the sessionId so
+    // it never reaches getTraceDir/validateSessionId with a bad value.
+    if (!isSafeLedgerSessionId(traceLabel)) return undefined;
+
     const tracePath = join(getTraceDir(traceLabel), 'trace.jsonl');
     if (!existsSync(tracePath)) return undefined;
 
+    const traceMtimeMs = safeMtimeMs(tracePath);
     const traceContent = readFileSync(tracePath, 'utf8');
-    return parseTraceSignals(traceContent);
+    return { signals: parseTraceSignals(traceContent), traceMtimeMs };
   } catch {
     return undefined;
   }
@@ -278,11 +291,28 @@ export function getOrDeriveFacet(
   // (sidecar path) when the journal is absent, disabled, or unreadable.
   const journalData = tryReadJournal(sessionId, sessionsDir);
 
-  // Effective mtime for staleness: max(sidecar, journal files) so a journal
-  // append after the sidecar is saved still triggers a re-derive.
-  const effectiveMtimeMs = journalData !== undefined
+  // Read trace signals BEFORE the isFresh check so the trace file's mtime can
+  // participate in effectiveMtimeMs. A facet cached before the async trace
+  // flush would otherwise never be invalidated by a later trace write.
+  // We load the session sidecar first only to resolve session.sessionId for the
+  // override-id case (Finding 2). In the no-override case the sidecar load is
+  // a cheap no-op that is repeated below with the same result.
+  const sessionForId = loadStoredSession(sessionId, sessionsDir);
+  // Use the SDK session ID from the sidecar when it differs from the sidecar
+  // filename. getSessionLedgerPath needs the SDK ID because the ledger lives
+  // under ~/.afk/state/sessions/<SDK-sessionId>/.
+  const traceSessionId = sessionForId?.sessionId ?? sessionId;
+  const traceResult = tryReadTraceSignals(traceSessionId, sessionsDir);
+
+  // Effective mtime for staleness: max(sidecar, journal, trace file) so a
+  // journal append or an async trace flush after the sidecar is saved still
+  // triggers a re-derive.
+  let effectiveMtimeMs = journalData !== undefined
     ? Math.max(sessionMtimeMs, journalData.journalMtimeMs)
     : sessionMtimeMs;
+  if (traceResult !== undefined) {
+    effectiveMtimeMs = Math.max(effectiveMtimeMs, traceResult.traceMtimeMs);
+  }
 
   if (!options.force) {
     const cached = readCachedFacet(cachePath);
@@ -298,10 +328,13 @@ export function getOrDeriveFacet(
   const staleCached = readCachedFacetLoose(cachePath);
   const staleYield = extractLooseYieldTracking(staleCached);
 
-  const session = loadStoredSession(sessionId, sessionsDir);
+  // Re-use the already-loaded sidecar; fall back to a fresh load (defensive
+  // against the unlikely case the first load returned undefined but the file
+  // now exists — same file so in practice identical).
+  const session = sessionForId ?? loadStoredSession(sessionId, sessionsDir);
   if (!session) return undefined;
 
-  const traceSignals = tryReadTraceSignals(sessionId, sessionsDir);
+  const traceSignals = traceResult?.signals;
 
   const facet = deriveSessionFacet(session, {
     sourceSessionPath: sessionPath,

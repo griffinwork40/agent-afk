@@ -73,13 +73,22 @@ export function parseTraceSignals(content: string): TraceSignals {
     if (kind === 'closure') {
       const payload = obj['payload'];
       if (payload && typeof payload === 'object') {
-        const reason = (payload as Record<string, unknown>)['reason'];
-        if (typeof reason === 'string' && DOWNGRADE_REASONS.has(reason)) {
-          traceClosureReason = reason as DowngradableClosureReason;
+        const p = payload as Record<string, unknown>;
+        // Only accept the root session's closure event. Descendant events
+        // interleave in the same trace file: a child subagent's closure carries
+        // `subagentId` in its payload; the root session's closure does not.
+        // Accepting a child's budget_exceeded/iteration_cap/truncated closure
+        // would falsely downgrade the root session.
+        if (p['subagentId'] == null) {
+          const reason = p['reason'];
+          if (typeof reason === 'string' && DOWNGRADE_REASONS.has(reason)) {
+            traceClosureReason = reason as DowngradableClosureReason;
+          }
         }
       }
-      // There is at most one closure event — no need to continue scanning for it,
-      // but we must continue to find subagent_lifecycle events.
+      // Multiple closure events may appear (one per actor). We filter for the
+      // root session's closure above and continue scanning for subagent_lifecycle
+      // events.
     }
 
     if (kind === 'subagent_lifecycle') {

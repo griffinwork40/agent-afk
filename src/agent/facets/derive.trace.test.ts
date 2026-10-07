@@ -24,6 +24,26 @@ function closureLine(reason: string): string {
   });
 }
 
+/**
+ * Build a `closure` trace event that optionally carries `subagentId` in its
+ * payload — used to simulate descendant (child) closure events interleaved in
+ * the root session trace.
+ */
+function closureLineWithSubagent(reason: string, subagentId?: string): string {
+  return JSON.stringify({
+    ts: '2025-01-01T00:00:00.000Z',
+    seq: 99,
+    kind: 'closure',
+    payload: {
+      reason,
+      finalTurnCount: 5,
+      finalCostUsd: 0.01,
+      finalTokens: {},
+      ...(subagentId !== undefined ? { subagentId } : {}),
+    },
+  });
+}
+
 /** Build a minimal `subagent_lifecycle` `succeeded` event. */
 function subagentSucceededLine(stopReason?: string): string {
   return JSON.stringify({
@@ -195,5 +215,45 @@ describe('parseTraceSignals', () => {
     const signals = parseTraceSignals(content);
     expect(signals.traceClosureReason).toBeUndefined();
     expect(signals.hasSubagentBudgetExhaustion).toBe(false);
+  });
+
+  // --- root-vs-child closure interleaving ---
+
+  it('ignores child budget_exceeded closure before root model_end_turn closure', () => {
+    // Child's closure has subagentId — must be skipped.
+    // Root's closure has no subagentId — model_end_turn is not a downgrade signal.
+    const content = [
+      closureLineWithSubagent('budget_exceeded', 'child-sub-001'),
+      closureLineWithSubagent('model_end_turn'),
+    ].join('\n');
+    const signals = parseTraceSignals(content);
+    expect(signals.traceClosureReason).toBeUndefined();
+  });
+
+  it('returns no closure signal when only child closures are present (no root closure)', () => {
+    // Two child closures, both budget_exceeded — root never closed, so no signal.
+    const content = [
+      closureLineWithSubagent('budget_exceeded', 'child-sub-001'),
+      closureLineWithSubagent('budget_exceeded', 'child-sub-002'),
+    ].join('\n');
+    const signals = parseTraceSignals(content);
+    expect(signals.traceClosureReason).toBeUndefined();
+  });
+
+  it('accepts a root-only clean closure (no subagentId) as non-downgrade', () => {
+    const content = closureLineWithSubagent('model_end_turn'); // no subagentId — root
+    const signals = parseTraceSignals(content);
+    expect(signals.traceClosureReason).toBeUndefined();
+  });
+
+  it('reports root budget_exceeded even when a child closure with iteration_cap comes first', () => {
+    // Child closed with iteration_cap — must NOT influence the root signal.
+    // Root closed with budget_exceeded — IS a downgrade signal.
+    const content = [
+      closureLineWithSubagent('iteration_cap', 'child-sub-001'),
+      closureLineWithSubagent('budget_exceeded'), // no subagentId — root
+    ].join('\n');
+    const signals = parseTraceSignals(content);
+    expect(signals.traceClosureReason).toBe('budget_exceeded');
   });
 });
