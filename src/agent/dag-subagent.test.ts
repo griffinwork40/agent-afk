@@ -699,7 +699,7 @@ describe('runSubagentDAG', () => {
   // ---------------------------------------------------------------------------
   // resolvedAttachments branch (lines 340-349 of dag-subagent.ts)
   //
-  // When a node has `resolvedAttachments` set (and no `buildPromptAsync`), the
+  // When a node has `resolvedAttachments` set, the
   // run loop must build a ContentBlockParam[] array: a text block with the
   // string prompt followed by base64-encoded image blocks. The compose-executor
   // populates this field via resolveSubagentAttachments for nodes that declare
