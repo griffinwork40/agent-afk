@@ -263,9 +263,10 @@ describe('SIGINT in-flight exitReason wiring (issue #2900)', () => {
 
   beforeEach(() => {
     addedListeners = new Map();
-    vi.spyOn(process, 'on').mockImplementation((event: string, handler: () => void) => {
-      const existing = addedListeners.get(event) ?? [];
-      addedListeners.set(event, [...existing, handler]);
+    vi.spyOn(process, 'on').mockImplementation((event: string | symbol, handler: (...args: unknown[]) => void) => {
+      const key = String(event);
+      const existing = addedListeners.get(key) ?? [];
+      addedListeners.set(key, [...existing, handler as () => void]);
       return process;
     });
     vi.spyOn(process, 'removeListener').mockImplementation(() => process);
@@ -317,7 +318,7 @@ describe('SIGINT in-flight exitReason wiring (issue #2900)', () => {
     handleSigint(); // fires launchInterruptPicker with onCancel arg
 
     expect(mockLaunchInterruptPicker).toHaveBeenCalledOnce();
-    const opts = mockLaunchInterruptPicker.mock.calls[0][0] as { onCancel: () => void };
+    const opts = mockLaunchInterruptPicker.mock.calls[0]?.[0] as { onCancel: () => void };
 
     // Simulate the user clicking "Cancel" in the interrupt picker
     opts.onCancel();
