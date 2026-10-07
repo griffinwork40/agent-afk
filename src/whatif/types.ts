@@ -59,9 +59,10 @@ export interface ChangeSpec {
   title: string;
   changes: Change[];
   /**
-   * Operator-supplied predictions (#2861). When present, these are prepended
-   * to analyst-generated predictions. Analyst generation is skipped entirely
-   * when `predictions` is non-empty and `--predict` is used without `--verify`.
+   * Operator-supplied predictions (#2861), merged after any CLI `--predict`
+   * values. When the merged list is non-empty it replaces analyst-generated
+   * predictions: the analyst call is skipped entirely, with or without
+   * `--verify`, so the run is deterministic.
    */
   predictions?: OperatorPrediction[];
 }
