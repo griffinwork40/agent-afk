@@ -14,7 +14,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { getSessionJournalPath, getSessionLedgerDir, getSubagentJournalsDir } from '../../paths.js';
 import { useTmpAfkHome } from './__test-utils__/helpers.js';
-import { findToolResultAsync } from './reader.async.js';
+import { findToolResultAsync, journalExistsAsync } from './reader.async.js';
 
 useTmpAfkHome();
 
@@ -209,5 +209,33 @@ describe('scanFileAsync: mid-stream error returns partial result', () => {
     const found = await findToolResultAsync(sessionId, 'tu-mid');
     expect(found).not.toBeNull();
     expect(found?.block.content).toEqual([{ type: 'text', text: 'partial output' }]);
+  });
+});
+
+describe('journalExistsAsync', () => {
+  it('returns true when the journal file exists', async () => {
+    const sessionId = 'async-exists-file';
+    fs.mkdirSync(getSessionLedgerDir(sessionId), { recursive: true });
+    fs.writeFileSync(getSessionJournalPath(sessionId), '');
+    expect(await journalExistsAsync(sessionId)).toBe(true);
+  });
+
+  it('returns false when the journal path does not exist', async () => {
+    expect(await journalExistsAsync('async-exists-missing')).toBe(false);
+  });
+
+  it('returns false when a directory occupies the journal path (parity with sync journalExists)', async () => {
+    // The sync journalExists uses statSync(path).isFile(), which returns false
+    // for directories. journalExistsAsync must match that behaviour.
+    const sessionId = 'async-exists-dir';
+    // Create a directory at the exact path the journal file would occupy.
+    const journalPath = getSessionJournalPath(sessionId);
+    fs.mkdirSync(journalPath, { recursive: true });
+    expect(await journalExistsAsync(sessionId)).toBe(false);
+  });
+
+  it('returns false for an unsafe session id', async () => {
+    expect(await journalExistsAsync('../evil')).toBe(false);
+    expect(await journalExistsAsync('')).toBe(false);
   });
 });

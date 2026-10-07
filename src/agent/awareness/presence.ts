@@ -29,6 +29,7 @@ import type { RuntimeWorkspace } from './types.js';
 import type { TraceActor } from '../session/session-identity.js';
 import { classifyPidLiveness, type ProcessLiveness } from '../process-liveness.js';
 import { filterVerifiedLive, type StartTimeProbe } from './presence.liveness.js';
+import type { PresenceActivity } from './presence.activity.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -187,11 +188,7 @@ export interface PresenceFileInfo {
    * most recent turn finished. Both update at turn end; `promptHead` updates at
    * turn start so a busy session shows what it is working on RIGHT NOW.
    */
-  activity?: {
-    promptHead?: string;
-    turns: number;
-    lastTurnEndedAt?: string;
-  };
+  activity?: PresenceActivity;
 }
 
 /**

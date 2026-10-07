@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, statSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -186,6 +186,12 @@ describe('atomicWriteFileAsync (async)', () => {
 // ---------------------------------------------------------------------------
 
 describe('renameWithRetry', () => {
+  // Suppress retry-log stderr noise across all tests in this suite; individual
+  // tests that assert the log message will mock more specifically.
+  let stderrSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => { stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true); });
+  afterEach(() => { stderrSpy.mockRestore(); });
+
   // Helper: build a rename mock that throws `err` for the first `failTimes`
   // calls, then resolves successfully.
   function mockRename(
@@ -224,6 +230,25 @@ describe('renameWithRetry', () => {
     const { fn, callCount } = mockRename(eperm, 1);
     await expect(renameWithRetry('a', 'b', 3, 'win32', fn)).resolves.toBeUndefined();
     expect(callCount()).toBe(2);
+  });
+
+  it('logs to stderr on the first retry attempt so Windows retries are visible to operators', async () => {
+    // Finding #2870-3: the retry path must emit a diagnostic so operators can
+    // observe Windows rename races rather than absorbing them silently.
+    const eperm = Object.assign(new Error('EPERM'), { code: 'EPERM' });
+    const { fn } = mockRename(eperm, 1);
+    // Override the suite-level suppress spy to capture instead.
+    stderrSpy.mockRestore();
+    const captured: string[] = [];
+    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((msg: unknown) => {
+      captured.push(String(msg));
+      return true;
+    });
+    await renameWithRetry('a', 'b', 3, 'win32', fn);
+    // Exactly one log line on entry to the retry path (attempt 0 only).
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toContain('[atomic-write] rename retry');
+    expect(captured[0]).toContain('EPERM');
   });
 
   it('does NOT retry EPERM when platform is not win32 — throws immediately', async () => {
@@ -267,15 +292,16 @@ describe('renameWithRetry', () => {
   });
 
   it('clamps exponential backoff to 5000 ms ceiling for large attempt numbers', async () => {
-    // With attempt=30, 10 * 2^30 would overflow into billions of ms. After
-    // clamping the delay is Math.min(10 * 2^attempt, 5000) — we verify the
-    // function does not hang by using a mock that succeeds on the second call.
+    // failTimes=10 makes attempts 0-9 fail, so attempt 9 schedules the first
+    // clamped sleep: Math.min(10 * 2^9, 5000) = 5000 (not the unclamped 5120).
     const eperm = Object.assign(new Error('EPERM'), { code: 'EPERM' });
-    const { fn, callCount } = mockRename(eperm, 1);
-    // The clamping is internal; if sleep(huge) were called this test would time
-    // out — passing confirms the clamp is in place.
-    await expect(renameWithRetry('a', 'b', 5, 'win32', fn)).resolves.toBeUndefined();
-    expect(callCount()).toBe(2);
+    const { fn, callCount } = mockRename(eperm, 10);
+    const delays: number[] = [];
+    const sleepSpy = async (ms: number): Promise<void> => { delays.push(ms); };
+
+    await expect(renameWithRetry('a', 'b', 10, 'win32', fn, sleepSpy)).resolves.toBeUndefined();
+    expect(delays).toEqual([10, 20, 40, 80, 160, 320, 640, 1280, 2560, 5000]);
+    expect(callCount()).toBe(11);
   });
 });
 
@@ -284,6 +310,10 @@ describe('renameWithRetry', () => {
 // ---------------------------------------------------------------------------
 
 describe('renameWithRetrySync', () => {
+  // Suppress retry-log stderr noise across all tests in this suite.
+  beforeEach(() => { vi.spyOn(process.stderr, 'write').mockReturnValue(true); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
   function mockRenameSync(
     err: Error,
     failTimes: number,
@@ -374,10 +404,12 @@ describe('atomicWriteFileAsync — E2E wiring through renameWithRetry', () => {
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'afk-e2e-'));
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
   });
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
+    vi.restoreAllMocks();
   });
 
   it('atomicWriteFileAsync resolves after one transient EPERM via renameWithRetry', async () => {

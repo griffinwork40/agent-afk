@@ -38,6 +38,22 @@ export function isSubagentAutoResumeEnvEnabled(): boolean {
  * @param childSurface - the effective surface the child will run under.
  * @returns `true` when the child should park and wait on a usage-limit 429;
  *   `false` to fail fast (default).
+ *
+ * @note Provider scope: this resolver is **provider-agnostic**. The env var
+ * `AFK_SUBAGENT_AUTO_RESUME_ON_USAGE_LIMIT` is documented primarily for the
+ * Anthropic keychain hot-swap flow, but the resolved flag is forwarded to the
+ * child's `AgentConfig` regardless of which provider the child uses. For
+ * OpenAI-compatible children a usage-limit 429 results in a sleep-retry pause;
+ * `resetsAt` is included in the `paused` event only when the 429 body carries a
+ * parseable `resets_at` or `resets_in_seconds` field — it is omitted for generic
+ * `Retry-After` 429s and for ChatGPT payloads whose reset field is missing or
+ * invalid. In either case the pause works correctly (the timer falls back to the
+ * `Retry-After` value or a 60-second probe cadence). OpenAI-compatible children
+ * do not benefit from a keychain hot-swap because that mechanism is Anthropic-
+ * specific; only the timer path applies, with no account-switch shortcut.
+ * Gating the env default to Anthropic-resolved forks only would prevent safe
+ * reuse on other providers that support the pause protocol, so we document
+ * instead of gate.
  */
 export function resolveChildAutoResume(
   explicitCallerValue: boolean | undefined,

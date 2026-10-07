@@ -298,6 +298,12 @@ export async function guardedFetch(
   // tests continue to control the full fetch seam without a real dispatcher.
   // Invariant: fetchFn is immutable across hops — the useUndici hoist is safe
   // because fetchFn is captured once from the caller and never reassigned.
+  // Use npm undici's own fetch + guardedDispatcher only when the SSRF guard is
+  // active. When AFK_WEB_ALLOW_PRIVATE_HOSTS is set (opts.allowPrivateHosts or
+  // the env flag), the guarded dispatcher is intentionally skipped — private
+  // hosts are legitimately reachable, so the connect-time lookup hook that
+  // would block them must not be applied. An injected fetchFn (tests or callers
+  // that supply their own transport) also bypasses this path.
   const useUndici =
     fetchFn === globalThis.fetch && !(opts.allowPrivateHosts ?? privateHostsAllowed());
 

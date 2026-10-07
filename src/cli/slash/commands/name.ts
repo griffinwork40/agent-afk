@@ -68,6 +68,7 @@ export const nameCmd: SlashCommand = {
     // not the name, so no duplicate sidecar is created.
     if (ctx.stats.totalTurns > 0) {
       try {
+        // Mid-session rename: no closeTime.
         saveSession(ctx.stats);
         ctx.out.success(palette.success('Named') + palette.dim(`  ${slug}`));
         ctx.out.line(palette.dim(`  Resume:  ${formatResumeCommand(slug, ctx.stats.model)}`));

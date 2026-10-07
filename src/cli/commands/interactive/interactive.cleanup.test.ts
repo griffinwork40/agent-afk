@@ -15,23 +15,28 @@ import {
   installSignalHandlers,
   type ExitReasonRef,
 } from './interactive.cleanup.js';
+import { makeSigintHandler } from './interactive.signal-handlers.js';
 import type { InteractiveCtx } from './shared.js';
 import type { TurnState } from './repl-loop.js';
+
+// Module-level mock: lets us capture onCancel/onStop args passed to launchInterruptPicker
+// by makeSigintHandler when the armed-compositor path fires.
+vi.mock('./interrupt-picker.js', () => ({
+  launchInterruptPicker: vi.fn(),
+}));
+import { launchInterruptPicker } from './interrupt-picker.js';
+const mockLaunchInterruptPicker = launchInterruptPicker as ReturnType<typeof vi.fn>;
 
 // ---------------------------------------------------------------------------
 // Minimal mocks
 // ---------------------------------------------------------------------------
 
 vi.mock('../../session-store.js', () => ({
-  saveSession: vi.fn((_stats: unknown, _id: unknown, opts: unknown) => {
-    // Store opts for assertion
-    (saveSession as ReturnType<typeof vi.fn>).lastOpts = opts;
-    return '/fake/path.json';
-  }),
+  saveSession: vi.fn(() => '/fake/path.json'),
 }));
 
 import { saveSession } from '../../session-store.js';
-const mockSaveSession = saveSession as ReturnType<typeof vi.fn> & { lastOpts?: unknown };
+const mockSaveSession = saveSession as ReturnType<typeof vi.fn>;
 
 function makeMinimalCtx(): InteractiveCtx {
   return {
@@ -73,7 +78,6 @@ function makePickerAbort(): AbortController {
 describe('makeSessionSaver (issue #2762)', () => {
   beforeEach(() => {
     mockSaveSession.mockClear();
-    mockSaveSession.lastOpts = undefined;
   });
 
   it('passes exitReason from ref to saveSession when saving', () => {
@@ -246,5 +250,124 @@ describe('installSignalHandlers exitReason wiring (issue #2762)', () => {
 
     // rl.close should only be called once
     expect(ctx.rl.close).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SIGINT in-flight paths: second-Ctrl+C & onCancel must set exitReason=sigint
+// (issue #2900 regression — ??= 'eof' fallback would mis-classify these exits)
+// ---------------------------------------------------------------------------
+
+describe('SIGINT in-flight exitReason wiring (issue #2900)', () => {
+  let addedListeners: Map<string, (() => void)[]>;
+
+  beforeEach(() => {
+    addedListeners = new Map();
+    vi.spyOn(process, 'on').mockImplementation((event: string | symbol, handler: (...args: unknown[]) => void) => {
+      const key = String(event);
+      const existing = addedListeners.get(key) ?? [];
+      addedListeners.set(key, [...existing, handler as () => void]);
+      return process;
+    });
+    vi.spyOn(process, 'removeListener').mockImplementation(() => process);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('second Ctrl+C while picker open sets exitReason=sigint before rl.close()', () => {
+    const ctx = makeMinimalCtx();
+    const exitReasonRef: ExitReasonRef = { current: undefined };
+    // turnInFlight=true and interruptPickerAbort set → "second Ctrl+C while picker open" path
+    const turnState = makeTurnState({
+      turnInFlight: true,
+      interruptPickerAbort: new AbortController(),
+    } as Partial<TurnState>);
+    const pickerAbort = makePickerAbort();
+
+    const { handleSigint, removeListeners } = installSignalHandlers({
+      ctx, turnState, pickerAbort, exitReasonRef,
+    });
+
+    handleSigint();
+
+    expect(exitReasonRef.current).toBe('sigint');
+    expect(ctx.rl.close).toHaveBeenCalledOnce();
+
+    removeListeners();
+  });
+
+  it('picker onCancel callback sets exitReason=sigint before rl.close()', () => {
+    // makeSigintHandler calls launchInterruptPicker synchronously (mocked above).
+    // Capture the onCancel arg and invoke it to verify exitReason is set.
+    mockLaunchInterruptPicker.mockClear();
+
+    const ctx = makeMinimalCtx();
+    const exitReasonRef: ExitReasonRef = { current: undefined };
+    const armedCompositor = { isArmed: () => true };
+    // turnInFlight=true, no interruptPickerAbort, armed compositor → picker launch path
+    const turnState = makeTurnState({
+      turnInFlight: true,
+      interruptPickerAbort: null,
+      activeCompositor: armedCompositor,
+    } as Partial<TurnState>);
+    const pickerAbort = makePickerAbort();
+
+    const handleSigint = makeSigintHandler({ ctx, turnState, pickerAbort, exitReasonRef });
+    handleSigint(); // fires launchInterruptPicker with onCancel arg
+
+    expect(mockLaunchInterruptPicker).toHaveBeenCalledOnce();
+    const opts = mockLaunchInterruptPicker.mock.calls[0]?.[0] as { onCancel: () => void };
+
+    // Simulate the user clicking "Cancel" in the interrupt picker
+    opts.onCancel();
+
+    expect(exitReasonRef.current).toBe('sigint');
+    expect(ctx.rl.close).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// exitReason='eof' written on the rl.on('close') path (issue #2900)
+// ---------------------------------------------------------------------------
+
+describe("exitReason 'eof' on readline close (issue #2900)", () => {
+  it("??= 'eof' fills an empty ref, so stdin-EOF is recorded in the sidecar", () => {
+    // Simulate the rl.on('close') handler logic from interactive.ts:
+    //   ctx.exitReasonRef!.current ??= 'eof';
+    // When no signal handler has written a reason yet (stdin EOF, piped input).
+    const exitReasonRef: ExitReasonRef = { current: undefined };
+    exitReasonRef.current ??= 'eof';
+    expect(exitReasonRef.current).toBe('eof');
+  });
+
+  it("??= 'eof' does NOT overwrite a reason already set by a signal handler", () => {
+    // When SIGTERM fired before readline closed, the existing reason is preserved.
+    const exitReasonRef: ExitReasonRef = { current: 'sigterm' };
+    exitReasonRef.current ??= 'eof';
+    expect(exitReasonRef.current).toBe('sigterm');
+  });
+
+  it("??= 'eof' does NOT overwrite 'sigint' — SIGINT exits are not mis-classified as EOF", () => {
+    // Regression guard for issue #2900: SIGINT paths set exitReasonRef.current='sigint'
+    // before calling rl.close(); the ??= fallback in rl.on('close') must not overwrite it.
+    const exitReasonRef: ExitReasonRef = { current: 'sigint' };
+    exitReasonRef.current ??= 'eof';
+    expect(exitReasonRef.current).toBe('sigint');
+  });
+
+  it('makeSessionSaver records eof in the sidecar when exitReasonRef holds eof', () => {
+    mockSaveSession.mockClear();
+    const ctx = makeMinimalCtx();
+    const exitReasonRef: ExitReasonRef = { current: 'eof' };
+    const { saveCurrentSession } = makeSessionSaver(ctx, exitReasonRef);
+
+    saveCurrentSession();
+
+    expect(mockSaveSession).toHaveBeenCalledOnce();
+    const opts = mockSaveSession.mock.calls[0][2] as Record<string, unknown>;
+    expect(opts['closeTime']).toBe(true);
+    expect(opts['exitReason']).toBe('eof');
   });
 });

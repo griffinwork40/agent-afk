@@ -31,6 +31,8 @@ export function drainLoopNotifications(ctx: InteractiveCtx, footer: FooterSubsys
   const { shellPassthrough, bgResultNotifier, contextPane } = footer;
 
   drainJobNotifications(ctx, shellPassthrough, bgResultNotifier);
+  // Settled Ctrl+B tool calls: one dim line each.
+  for (const line of bgResultNotifier.drainToolNotices()) ctx.replRenderer.writeLine(palette.dim(line));
   // Background processes (`bash run_in_background`): one dim line each.
   for (const line of footer.processJobNotifier?.drainNotices() ?? []) {
     ctx.replRenderer.writeLine(palette.dim(line));

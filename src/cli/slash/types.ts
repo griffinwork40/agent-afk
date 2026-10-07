@@ -58,6 +58,8 @@ export interface ToolEvent {
    * #2970; older session files that lack this field are read as `undefined`.
    */
   incomplete?: boolean;
+  /** Reason paired with incomplete, including detached compose partial nodes. */
+  incompleteReason?: string;
   /**
    * Compose only: number of partial DAG nodes, plumbed from
    * `ToolResultChunk.partialNodeCount`. Written since #2978.

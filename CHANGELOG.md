@@ -14,6 +14,20 @@ auto-release workflow to deduplicate commits across successive runs.
 ### Changed
 - note dropped `**Done** — text` single-line form next to `'unknown'` in `FacetOutcomeSchema` JSDoc (#2797)
 
+## [5.302.9] - 2026-10-07
+
+### Fixed
+- session sidecar exitReason/eof advisory findings (#3145) (7402bddf)
+
+## [5.302.8] - 2026-10-07
+
+### Fixed
+- extract shared sleepSync util, strengthen backoff ceiling test, add retry log (#3146) (561f230d)
+- address advisory findings from traced retry layer (#2851) (#3144) (73b10717)
+- address advisory findings from 2026-09-29 /pr-triage (#3142) (ae9d977b)
+- document far-reset probe tradeoff and provider scope for autoResume env var (#3140) (e75ddf2d)
+- advisory findings from #2850 — peer activity presence fixes (#3139) (b09ae05d)
+
 ## [5.302.7] - 2026-10-06
 
 ### Fixed

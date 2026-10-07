@@ -16,6 +16,7 @@ import Database from 'better-sqlite3';
 import type BetterSqlite3 from 'better-sqlite3';
 import type { WorkspaceSubscription } from './workspace-subscription.js';
 import { notifySubscribers } from './workspace-subscription.js';
+import { sleepSync } from '../../utils/sleep-sync.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -159,7 +160,7 @@ export class WorkspaceStore {
       } catch (err) {
         const busy = (err as { code?: string } | null)?.code === 'SQLITE_BUSY';
         if (!busy || attempt >= MAX_ATTEMPTS) throw err;
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, BACKOFF_MS);
+        sleepSync(BACKOFF_MS);
       }
     }
   }
