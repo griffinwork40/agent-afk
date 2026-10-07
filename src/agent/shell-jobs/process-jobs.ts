@@ -130,7 +130,9 @@ export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
   readonly sessionLabel: string;
   readonly logDir: string;
   readonly maxConcurrent: number;
-  private opts: ProcessJobRegistryOptions;
+  private readonly opts: ProcessJobRegistryOptions;
+  /** Mutable trace writer; updated by setTraceWriter() without mutating opts. */
+  private traceWriter: TraceSink | undefined;
   private readonly jobs = new Map<string, InternalJob>();
   private counter = 0;
   /** Set by killAll(): a registry being torn down accepts no new jobs. */
@@ -149,6 +151,7 @@ export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
   constructor(opts: ProcessJobRegistryOptions = {}) {
     super();
     this.opts = opts;
+    this.traceWriter = opts.traceWriter;
     this.maxConcurrent = opts.maxConcurrent ?? DEFAULT_MAX_CONCURRENT_PROCESS_JOBS;
     this.sessionLabel = opts.sessionLabel ?? `${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`;
     this.logDir = opts.logDir ?? getProcessJobSessionDir(this.sessionLabel);
@@ -278,7 +281,7 @@ export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
    * the new session's writer instead of the sealed pre-resume writer.
    */
   setTraceWriter(writer: TraceSink | undefined): void {
-    this.opts = { ...this.opts, traceWriter: writer };
+    this.traceWriter = writer;
   }
 
   /** Remove the process exit hook. Running jobs are NOT stopped. */
@@ -298,12 +301,16 @@ export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
     // reconstruct background job outcomes. Fire-and-forget — trace errors are
     // swallowed inside emitSessionPhase and must never break settlement.
     const snap = this.snapshot(job);
-    void emitSessionPhase(this.opts.traceWriter, {
+    void emitSessionPhase(this.traceWriter, {
       phase: 'background_process_settled',
       metadata: {
         jobId: snap.id,
         status: snap.status,
-        exitCode: snap.exitCode !== undefined && snap.exitCode !== null ? String(snap.exitCode) : '',
+        // exitCode is a number (like durationMs/bytes) so trace consumers can
+        // compare without coercing; omit when the process ended by signal only.
+        ...(snap.exitCode !== undefined && snap.exitCode !== null
+          ? { exitCode: snap.exitCode }
+          : {}),
         signal: snap.signal ?? '',
         // snap.endedAt is always set by onSettled() before this runs; the
         // ?? Date.now() fallback is unreachable in practice but kept as a

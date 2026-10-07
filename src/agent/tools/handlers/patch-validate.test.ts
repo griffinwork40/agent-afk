@@ -136,6 +136,15 @@ describe('validatePatchChanges', () => {
     expect(result.errors[0]!.error).toBe('no_change_specified');
   });
 
+  it.each([undefined])('rejects empty edits with content %s directly', async (content) => {
+    const filePath = await writeTemp('empty-edits.txt', 'unchanged\n');
+    const result = await validatePatchChanges(
+      [{ path: filePath, edits: [], content }], tempDir, makeCtx(),
+    );
+    expect(result.valid).toBe(false);
+    expect(result.errors).toEqual([expect.objectContaining({ error: 'no_change_specified' })]);
+  });
+
   it('collects ALL errors across multiple files without short-circuiting', async () => {
     const file1 = await writeTemp('j1.txt', 'aaa\n');
     const file2 = await writeTemp('j2.txt', 'bbb\n');

@@ -23,7 +23,7 @@ import { createDefaultHookRegistry } from '../agent/default-hook-registry.js';
 import { seedPersistedGrants } from '../agent/permissions-store.js';
 import { getApiKeyForModel, resolveBaseSystemPrompt } from '../cli/shared-helpers.js';
 import { wireWebSession, type WebSessionWiringInternal } from './session-owner.wiring.js';
-import { capContinueWith } from '../agent/providers/shared/stop-hook-continuation.js';
+
 import type { AgentConfig } from '../agent/types.js';
 import type { PermissionMode } from '../agent/types/sdk-types.js';
 import type { McpManager } from '../agent/mcp/index.js';
@@ -167,7 +167,7 @@ export class SessionOwner {
     // surface avoids it by returning `() => false` (drop context).
     session.wireStopHook({
       getHasNextTurn: () => true,
-      onStopInjectContext: (text) => { session.queueFrameworkContext(capContinueWith(text)); },
+      onStopInjectContext: (text) => { session.queueFrameworkContext(text); },
     });
 
     // Invariant: the id is provider-issued and undefined until initialization

@@ -218,6 +218,7 @@ describe('runBackgroundBranch', () => {
       expect(payload.message).toMatch(/Background subagent started/);
       expect(payload.message).toMatch(/delivered into this context/);
       expect(payload.message).toMatch(/\/bgsub:join bg-xyz/);
+      expect(payload.message).not.toMatch(/ {2,}/);
     });
 
     it('selects the delivery note from args.delivery (auto-wake / root-session)', async () => {

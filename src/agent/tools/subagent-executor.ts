@@ -20,8 +20,11 @@ import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from 
 import { parseAgentInput, type AgentInput, type AgentExecutionMode } from './subagent/input-parse.js';
 import { emitTelemetry, truncate } from './subagent/failure-payload.js';
 import { buildChildConfig, type BuildChildConfigArgs } from './subagent/child-config.js';
-import { runBackgroundBranch } from './subagent/background-branch.js'; import { backgroundTarget } from './subagent/background-delivery.js'; import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
-import { sendMessageToAgent as executeSendMessage } from './subagent/send-message.js'; import { getBackgroundJobHealth as executeBackgroundHealth } from './subagent/background-health.js';
+import { runBackgroundBranch } from './subagent/background-branch.js';
+import { backgroundTarget } from './subagent/background-delivery.js';
+import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
+import { sendMessageToAgent as executeSendMessage } from './subagent/send-message.js';
+import { getBackgroundJobHealth as executeBackgroundHealth } from './subagent/background-health.js';
 import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
 import { createIsolatedWorktree } from './handlers/worktree-managed.js';
 import { lockWorktreeForBackground, teardownBackgroundWorktree } from './handlers/worktree-managed.background.js';
