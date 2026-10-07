@@ -34,7 +34,7 @@ const VALID_MODES = new Set<string>(['accept', 'hold', 'off']);
 let warnedValue: string | undefined;
 
 /** Maximum length of the raw `AFK_PEER_INBOUND` value echoed in diagnostics. */
-const RAW_VALUE_CAP = 20;
+export const RAW_VALUE_CAP = 20;
 
 /**
  * Structured result from {@link getPeerInboundModeConfig}.

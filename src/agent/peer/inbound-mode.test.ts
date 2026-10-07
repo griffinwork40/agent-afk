@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
+import { RAW_VALUE_CAP } from './inbound-mode.js';
 
 beforeEach(() => {
   vi.resetModules();
@@ -98,30 +99,23 @@ describe('getPeerInboundModeConfig', () => {
     expect(cfg.rawTruncated).toBe('hol');
   });
 
-  it('caps rawTruncated at 20 chars and appends "…" for a long invalid value', async () => {
-    const longValue = 'x'.repeat(50);
-    vi.stubEnv('AFK_PEER_INBOUND', longValue);
-    const { getPeerInboundModeConfig } = await freshMode();
-    const cfg = getPeerInboundModeConfig();
-    expect(cfg.invalid).toBe(true);
-    expect(cfg.rawTruncated).toBe('x'.repeat(20) + '…');
-  });
-
-  it('does NOT truncate rawTruncated when the invalid value is exactly 20 chars (boundary)', async () => {
-    const atCap = 'x'.repeat(20);
+  it('does NOT truncate rawTruncated when the invalid value is exactly RAW_VALUE_CAP chars (boundary)', async () => {
+    const atCap = 'x'.repeat(RAW_VALUE_CAP);
     vi.stubEnv('AFK_PEER_INBOUND', atCap);
     const { getPeerInboundModeConfig } = await freshMode();
     const cfg = getPeerInboundModeConfig();
+    expect(cfg.mode).toBe('accept');
     expect(cfg.invalid).toBe(true);
     expect(cfg.rawTruncated).toBe(atCap); // no "…" appended
   });
 
-  it('truncates rawTruncated when the invalid value is 21 chars (one over cap)', async () => {
-    const overCap = 'x'.repeat(21);
+  it('truncates rawTruncated when the invalid value is RAW_VALUE_CAP + 1 chars (one over cap)', async () => {
+    const overCap = 'x'.repeat(RAW_VALUE_CAP + 1);
     vi.stubEnv('AFK_PEER_INBOUND', overCap);
     const { getPeerInboundModeConfig } = await freshMode();
     const cfg = getPeerInboundModeConfig();
+    expect(cfg.mode).toBe('accept');
     expect(cfg.invalid).toBe(true);
-    expect(cfg.rawTruncated).toBe('x'.repeat(20) + '…');
+    expect(cfg.rawTruncated).toBe('x'.repeat(RAW_VALUE_CAP) + '…');
   });
 });
