@@ -31,7 +31,7 @@ import { anthropicLimitErrorEvent } from '../usage-limit.error.js';
  * can render the pause panel immediately. The helper assumes that has happened
  * and does NOT emit `paused` itself.
  *
- * @perf The far-reset + autoResume=true path enters this loop instead of
+ * @remarks The far-reset + autoResume=true path enters this loop instead of
  * sleeping until the distant reset. Each iteration waits up to
  * {@link NO_TS_RETRY_INTERVAL_MS} (60 s) before replaying a probe, so over
  * a 2 h cap the loop can issue up to ~120 API probes on the same account.
