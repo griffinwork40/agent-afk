@@ -103,6 +103,11 @@ export const SessionPhaseNameSchema = z.enum([
   // types.session-phase.ts for the full contract.
   'background_process_started',
   'background_process_settled',
+  // In-turn context guard and catalog model awareness. Must mirror the
+  // SessionPhaseName union in types.session-phase.ts; session-phase.test.ts
+  // parity enforces it.
+  'context_pressure_wind_down',
+  'catalog_model_upgrade',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({
