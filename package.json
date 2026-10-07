@@ -159,7 +159,6 @@
     "@types/better-sqlite3": "^9.6.0",
     "@types/jsdom": "^30.0.0",
     "@types/node": "^26.6.3",
-    "@types/node-cron": "^3.0.11",
     "@types/turndown": "^5.0.6",
     "@vitest/coverage-v8": "^4.1.11",
     "@xterm/headless": "^6.0.0",

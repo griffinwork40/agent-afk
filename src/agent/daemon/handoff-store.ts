@@ -34,7 +34,7 @@ import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
  * - 'mcp'           — MCP server elicitation (form / url mode)
  * - 'path_approval' — filesystem path approval gate
  */
-export type HandoffRequestType = 'ask_question' | 'mcp' | 'path_approval';
+type HandoffRequestType = 'ask_question' | 'mcp' | 'path_approval';
 
 /**
  * Telegram route information needed to re-present the question after a

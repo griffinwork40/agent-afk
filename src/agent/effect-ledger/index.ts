@@ -12,19 +12,11 @@
  * // In default-hook-registry.ts:
  * import { createEffectLedgerPostHook } from './effect-ledger/index.js';
  * registry.register('PostToolUse', createEffectLedgerPostHook());
- *
- * // Query the ledger:
- * import { EffectStore } from './effect-ledger/index.js';
- * const store = new EffectStore();
- * const records = await store.query({ sessionId: 'abc123', status: 'ambiguous' });
  * ```
  *
  * @module agent/effect-ledger
  */
 
-export { EffectStore } from './store.js';
-export { classifyToolCall } from './classifier.js';
-export { computeIdempotencyKey } from './idempotency.js';
 export { createEffectLedgerPostHook, createEffectLedgerPreHook } from './hook.js';
 export type {
   EffectRecord,
