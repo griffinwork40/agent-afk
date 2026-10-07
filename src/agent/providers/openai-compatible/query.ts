@@ -333,7 +333,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
         // Auto-compaction fires at the natural turn boundary.
         if (this.autoCompactThreshold !== undefined && !this.closed) {
           const usage = this.lastUsage;
-          const compactionLimit = autoCompactLimitFor(this.currentModel);
+          const compactionLimit = autoCompactLimitFor(this.currentModel, this.opts.auth.source === 'chatgpt-oauth');
           if (usage !== null && compactionLimit > 0) {
             const usedTokens = contextWindowTokensUsed(usage);
             if (shouldAutoCompact(usedTokens, compactionLimit, this.autoCompactThreshold)) {
@@ -469,7 +469,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
 
   async getContextUsage(): Promise<ProviderContextUsage> {
     const last = this.lastUsage;
-    const contextLimit = contextLimitFor(this.currentModel);
+    const contextLimit = contextLimitFor(this.currentModel, this.opts.auth.source === 'chatgpt-oauth');
     let percentage: number | undefined;
     if (last && contextLimit > 0) {
       const used = contextWindowTokensUsed(last);

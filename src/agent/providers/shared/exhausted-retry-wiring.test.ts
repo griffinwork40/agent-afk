@@ -198,7 +198,7 @@ describe('compaction production wiring — connection_retry_exhausted trace even
     await runCompactionCore({
       ...baseDeps(),
       summarize,
-      onRetry: traceExhaustedRetry !== undefined ? undefined : undefined, // not under test
+      onRetry: undefined, // not under test
       onExhausted: traceExhaustedRetry(sink, 'compaction', DEFAULT_TRANSIENT_MAX_RETRIES),
     });
 

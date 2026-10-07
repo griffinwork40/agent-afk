@@ -32,7 +32,7 @@ import { checkTaskCwdAtRuntime, warnIfBuiltinHasCwd } from './cwd-validator.js';
 export { resolveWorktreePruneRoot } from './worktree-prune-task.js';
 export { daemonTraceLabel } from './session-spawn.js';
 import { spawnDaemonSession, daemonDefaultCwd } from './session-spawn.js';
-import { executeAgentTask } from './scheduler.execute-agent-task.js';
+import { executeAgentTask, type TaskTurnCompleteArgs } from './scheduler.execute-agent-task.js';
 import {
   DEFAULT_SESSIONSTART_COOLDOWN_MS,
   evaluateSessionStartGates,
@@ -107,6 +107,12 @@ export interface SchedulerOptions {
    * guards it defensively so a bug can never crash a tick.
    */
   doneUnverifiedProbe?: (args: { responseText: string; successfulToolNames: readonly string[] }) => boolean;
+  /**
+   * Persist a completed agent-task turn as a resumable session sidecar.
+   * INJECTED for the same layering reason as `doneUnverifiedProbe`: the
+   * sidecar store lives in `src/cli/`. Optional; must not throw (guarded).
+   */
+  onTaskTurnComplete?: (args: TaskTurnCompleteArgs) => void;
   /**
    * Telegraf bot instance for rich elicitation in pull-mode tasks. When
    * provided together with `primaryChatId`, daemon ask_question calls use

@@ -2103,6 +2103,11 @@ describe('ComposeExecutor', () => {
       const dagOpts = mockRunSubagentDAG.mock.calls[0]?.[0];
       // Named agent's definition prompt replaces the generic system prompt
       expect(dagOpts.nodes[0].systemPrompt).toBe('You are a research specialist.');
+      // Workspace-backed compose nodes always get replaySafe:false because
+      // the provider grants CHILD_ALLOWED_TOOLS (write surface) regardless
+      // of the named agent's declared frontmatter tools.
+      expect(dagOpts.nodes[0].replaySafe).toBe(false);
+      expect(dagOpts.nodes[0].canUseTool).toBeTypeOf('function');
     });
 
     it('sets agentType render label from the named agent', async () => {
@@ -2124,6 +2129,7 @@ describe('ComposeExecutor', () => {
       const dagOpts = mockRunSubagentDAG.mock.calls[0]?.[0];
       expect(dagOpts.nodes[0].agentType).toBe('a [1/1]');
       expect(dagOpts.nodes[0].systemPrompt).toBe('You are a helpful assistant.');
+      expect(dagOpts.nodes[0].replaySafe).toBe(false);
     });
 
     it('returns error when agent_type set but no registry wired', async () => {

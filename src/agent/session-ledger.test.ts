@@ -312,6 +312,19 @@ describe('SessionLedgerWriter', () => {
     expect(closed).toMatchObject({ kind: 'closed', reason: 'close' });
   });
 
+  it('records `input` only when it differs from the model-facing `text`', async () => {
+    const id = freshId();
+    const writer = new SessionLedgerWriter(id);
+    writer.record({ kind: 'meta', sessionId: id, model: 'sonnet' });
+    writer.recordUser('[placeholder-prevent] ctx\n\nwhy no titles', 'why no titles');
+    writer.recordUser('second turn', 'second turn');
+    await writer.close('close');
+
+    const users = (await collect(readLedger(id))).filter((r) => r.kind === 'user');
+    expect(users[0]).toMatchObject({ text: '[placeholder-prevent] ctx\n\nwhy no titles', input: 'why no titles' });
+    expect(users[1]).not.toHaveProperty('input');
+  });
+
   it('recordEvent no-ops for skipped event types (no file created)', async () => {
     const id = freshId();
     const writer = new SessionLedgerWriter(id);

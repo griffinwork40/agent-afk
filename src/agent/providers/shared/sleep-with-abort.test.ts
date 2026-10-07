@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { sleepWithAbort } from './sleep-with-abort.js';
+import { sleep, sleepWithAbort } from './sleep-with-abort.js';
 
 describe('sleepWithAbort', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -16,7 +16,8 @@ describe('sleepWithAbort', () => {
       return timer;
     }) as unknown as typeof setTimeout);
     await sleepWithAbort(5, new AbortController().signal);
-    expect(unrefSpies.length).toBeGreaterThan(0);
+    // Exactly one setTimeout fires for a single sleepWithAbort call.
+    expect(unrefSpies.length).toBe(1);
     for (const spy of unrefSpies) expect(spy).not.toHaveBeenCalled();
   });
 
@@ -33,5 +34,54 @@ describe('sleepWithAbort', () => {
     const ac = new AbortController();
     ac.abort();
     await expect(sleepWithAbort(60_000, ac.signal)).resolves.toBeUndefined();
+  });
+
+  it('calls unref when { unref: true } is passed', async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    const unrefSpies: Array<ReturnType<typeof vi.fn>> = [];
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number) => {
+      const timer = realSetTimeout(fn, ms);
+      const spy = vi.fn(() => timer);
+      timer.unref = spy as unknown as typeof timer.unref;
+      unrefSpies.push(spy);
+      return timer;
+    }) as unknown as typeof setTimeout);
+    await sleepWithAbort(5, new AbortController().signal, { unref: true });
+    expect(unrefSpies.length).toBe(1);
+    expect(unrefSpies[0]).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('sleep', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('does NOT call unref by default (event loop stays alive)', async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    const unrefSpies: Array<ReturnType<typeof vi.fn>> = [];
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number) => {
+      const timer = realSetTimeout(fn, ms);
+      const spy = vi.fn(() => timer);
+      timer.unref = spy as unknown as typeof timer.unref;
+      unrefSpies.push(spy);
+      return timer;
+    }) as unknown as typeof setTimeout);
+    await sleep(5);
+    expect(unrefSpies.length).toBe(1);
+    expect(unrefSpies[0]).not.toHaveBeenCalled();
+  });
+
+  it('calls unref when { unref: true } is passed', async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    const unrefSpies: Array<ReturnType<typeof vi.fn>> = [];
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number) => {
+      const timer = realSetTimeout(fn, ms);
+      const spy = vi.fn(() => timer);
+      timer.unref = spy as unknown as typeof timer.unref;
+      unrefSpies.push(spy);
+      return timer;
+    }) as unknown as typeof setTimeout);
+    await sleep(5, { unref: true });
+    expect(unrefSpies.length).toBe(1);
+    expect(unrefSpies[0]).toHaveBeenCalledTimes(1);
   });
 });

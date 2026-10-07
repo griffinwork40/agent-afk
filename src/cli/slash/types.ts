@@ -169,7 +169,7 @@ export interface SessionStats {
    * can flag and resume conversations that started in chat; the daemon sets
    * 'daemon'.
    */
-  source?: 'cli' | 'telegram' | 'daemon';
+  source?: 'cli' | 'telegram' | 'daemon' | 'web';
   /**
    * Telegram chat id, set only when `source === 'telegram'`. Enables reverse
    * lookup from a stored session back to its chat (used by later phases).
