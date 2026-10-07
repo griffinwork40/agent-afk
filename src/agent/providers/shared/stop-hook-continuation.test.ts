@@ -413,4 +413,11 @@ describe('continueWith length cap (#2957)', () => {
     expect(result.continueWith!.length).toBeLessThan(CONTINUE_WITH_MAX_CHARS + 100);
     expect(result.continueWith).toContain('stop hook reason truncated');
   });
+
+  it('capContinueWith is idempotent on already-capped input', () => {
+    const input = 'a'.repeat(100_000);
+    const onceCapped = capContinueWith(input);
+    const twiceCapped = capContinueWith(onceCapped);
+    expect(twiceCapped).toBe(onceCapped);
+  });
 });

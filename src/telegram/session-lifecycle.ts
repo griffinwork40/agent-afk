@@ -24,7 +24,7 @@
  * @module telegram/session-lifecycle
  */
 
-import { capContinueWith } from '../agent/providers/shared/stop-hook-continuation.js';
+
 import { seedPersistedGrants } from '../agent/permissions-store.js';
 import { assembleSystemPrompt } from '../agent/routing-directive.js';
 import { createTelegramAfkHookBundle } from './afk-hook-bundle.js';
@@ -175,7 +175,7 @@ export function finalizeTelegramSession(
   // unless `enableShellHooks` is true in afk.config.json.
   session.wireStopHook?.({
     getHasNextTurn: () => true,
-    onStopInjectContext: (text) => { session.queueFrameworkContext(capContinueWith(text)); },
+    onStopInjectContext: (text) => { session.queueFrameworkContext(text); },
     // Blocked/timeout notices: Telegram does not render dim lines; swallow silently.
     onStopBlocked: () => undefined,
     onStopTimeout: () => undefined,
