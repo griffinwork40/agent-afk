@@ -246,7 +246,7 @@ jobs:
       # explicitly. The tag already exists on the remote from the push above.
       - name: Create GitHub Release
         if: steps.bump.outputs.release == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.bump.outputs.next }}
           generate_release_notes: true
