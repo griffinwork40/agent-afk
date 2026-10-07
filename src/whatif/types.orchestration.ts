@@ -79,7 +79,7 @@ export interface WhatifOptions {
   /**
    * Operator-supplied predictions (#2861). When non-empty, these are prepended
    * to analyst predictions. The analyst call is skipped entirely when this list
-   * is non-empty and verify is not requested, so runs are deterministic.
+   * is non-empty, so runs are deterministic.
    */
   operatorPredictions?: OperatorPrediction[];
 }

@@ -205,6 +205,12 @@ export interface PredictInput {
   repoManifest?: RepoManifest;
   /** Number of probes per prediction (default: DEFAULT_PROBES). */
   probesPerPrediction?: number;
+  /**
+   * Whether the verify phase is requested. When true and an operator prediction
+   * has no probes, predictChanges warns — the prediction produces zero episodes
+   * and will show as 'unclear' in the verify report.
+   */
+  verify?: boolean;
   /** Maximum number of predictions to retain (resolved via resolveMaxPredictions). */
   maxPredictions?: number;
   /**
@@ -265,6 +271,17 @@ export async function predictChanges(
   // When operator predictions are supplied, normalize them and return immediately
   // (no analyst model call, so the run is fully deterministic).
   if (operatorPredictions && operatorPredictions.length > 0) {
+    if (input.verify) {
+      for (const op of operatorPredictions) {
+        if (!op.probes || op.probes.length === 0) {
+          process.stderr.write(
+            `[whatif] warning: operator prediction "${op.behavior}" has no probes — ` +
+              `it will produce zero episodes under --verify and score as 'unclear'.\n` +
+              `Add a probes[] array to your prediction or omit --verify.\n`,
+          );
+        }
+      }
+    }
     return operatorPredictions.map((op, i) => normalizeOperatorPrediction(op, `p${i + 1}`));
   }
 

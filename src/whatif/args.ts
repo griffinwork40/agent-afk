@@ -212,7 +212,7 @@ function parseRunOptionFlag(token: string, nextVal: string | undefined, state: R
     case '--no-baseline-sample': state.noBaselineSample = true; return 1;
     case '--predict': {
       if (!nextVal) return `--predict requires a prediction text\n\n${WHATIF_USAGE}`;
-      state.operatorPredictions.push({ behavior: nextVal, testQuestion: `Does the response ${nextVal}?` });
+      state.operatorPredictions.push({ behavior: nextVal, testQuestion: `Does the response ${nextVal}` });
       return 2;
     }
     case '--turns': {

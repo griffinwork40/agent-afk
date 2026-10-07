@@ -205,6 +205,7 @@ async function runPredictPhase(
       probesPerPrediction, maxPredictions,
       ...(redundancySection !== undefined ? { redundancySection } : {}),
       ...(allOperatorPredictions.length > 0 ? { operatorPredictions: allOperatorPredictions } : {}),
+      ...(options.verify ? { verify: true } : {}),
     },
     wrappedComplete,
     options.analystModel,

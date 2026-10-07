@@ -97,7 +97,7 @@ export function registerWhatifCommand(program: Command): void {
     .option('--max-predictions <n>', 'Max predictions to retain (1–8; default 3 when probes>2, else 8)')
     .option('--keep-sandboxes', 'Keep sandbox directories after run')
     .option('--no-baseline-sample', 'Skip the baseline-sample preflight (#2511)')
-    .option('--predict <text>', 'Supply a prediction directly (can be repeated; skips analyst model)')
+    .option('--predict <text>', 'Supply a prediction directly (can be repeated; skips analyst model)', (v: string, p: string[]) => [...p, v], [] as string[])
     .option('--yes', 'Skip confirmation of compiled spec')
     .option('--force', 'Bypass the MDE underpowered gate (--verify only)')
     .option('--json', 'Print results as JSON to stdout')
@@ -343,7 +343,12 @@ function buildArgvFromOpts(
   push('--max-predictions', opts['maxPredictions']);
   push('--keep-sandboxes', opts['keepSandboxes']);
   push('--no-baseline-sample', opts['noBaselineSample']);
-  push('--predict', opts['predict']);
+  const predictVals = opts['predict'];
+  if (Array.isArray(predictVals)) {
+    for (const v of predictVals) push('--predict', v);
+  } else {
+    push('--predict', predictVals);
+  }
   push('--yes', opts['yes']);
   push('--force', opts['force']);
   push('--json', opts['json']);

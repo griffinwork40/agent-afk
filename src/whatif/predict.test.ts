@@ -468,6 +468,51 @@ describe('predictChanges', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // --verify + empty probes warning (#2861)
+  // ---------------------------------------------------------------------------
+
+  describe('operator predictions with --verify and empty probes', () => {
+    const localBase = {
+      spec: { title: 't', changes: [] },
+      changeDescriptions: [],
+      structural: emptyStructural(),
+    };
+
+    it('emits a warning to stderr when verify=true and an operator prediction has no probes', async () => {
+      const fn = makeFake('[]');
+      const stderrLines: string[] = [];
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+        stderrLines.push(String(chunk));
+        return true;
+      });
+      try {
+        const op: OperatorPrediction = { behavior: 'agent asks a clarifying question', testQuestion: 'q' };
+        await predictChanges({ ...localBase, operatorPredictions: [op], verify: true }, fn, MODEL);
+        expect(stderrLines.join('')).toMatch(/warning.*no probes/i);
+        expect(stderrLines.join('')).toContain('agent asks a clarifying question');
+      } finally {
+        stderrSpy.mockRestore();
+      }
+    });
+
+    it('does not warn when verify=false and operator prediction has no probes', async () => {
+      const fn = makeFake('[]');
+      const stderrLines: string[] = [];
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+        stderrLines.push(String(chunk));
+        return true;
+      });
+      try {
+        const op: OperatorPrediction = { behavior: 'agent asks a clarifying question', testQuestion: 'q' };
+        await predictChanges({ ...localBase, operatorPredictions: [op] }, fn, MODEL);
+        expect(stderrLines.join('')).not.toMatch(/warning.*no probes/i);
+      } finally {
+        stderrSpy.mockRestore();
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // normalizeOperatorPrediction
   // ---------------------------------------------------------------------------
 
