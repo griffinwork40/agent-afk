@@ -274,8 +274,10 @@ describe('markPresenceTurn', () => {
     //
     // Direct assertion: the exported string must equal the hardcoded literal.
     expect(AUTO_RESUME_PREFIX).toBe('[auto-resume]');
-    // Ensure setPresenceActivityTurnEnd is importable (guards against module split).
-    expect(typeof setPresenceActivityTurnEnd).toBe('function');
+    // Verify setPresenceActivityTurnEnd is the real function (guards against module
+    // split that could silently replace it with a stub).
+    expect(setPresenceActivityTurnEnd).toBeTypeOf('function');
+    expect(setPresenceActivityTurnEnd.length).toBeGreaterThan(0);
   });
 
   it('busy + auto-resume directive: setPresenceActivityPromptHead is NOT called (uses real sessionId)', async () => {

@@ -190,7 +190,7 @@ describe.each([24, 64])(
   'shrink-gap-ghost repro (content-hug, %i rows)',
   (ROWS) => {
     it(
-      '(a) after shrink, no blank rows between last committed row and bottom of compositor region',
+      '(a) after shrink, no run of >1 consecutive blank rows between last committed row and bottom of compositor region',
       async () => {
         const { allLines, rig } = await buildShrinkScenario(ROWS);
         const dump = dumpLines(allLines);
