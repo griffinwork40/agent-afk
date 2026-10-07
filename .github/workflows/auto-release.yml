@@ -73,7 +73,7 @@ jobs:
       id-token: write # npm provenance attestation (OIDC)
     steps:
       - name: Checkout tip of main (full history + tags)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # Operate on the branch TIP, not the triggering SHA: under the
           # concurrency lock this guarantees a second release run sees the first
