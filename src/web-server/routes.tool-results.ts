@@ -20,10 +20,10 @@
  *
  * Implementation note: the lookup uses {@link findToolResultAsync} so the
  * journal read is fully non-blocking (readline over a ReadStream), and the 404
- * branch uses {@link journalExistsAsync} (fs.promises.access) so the entire
- * handler is non-blocking. The sync `findToolResult`/`journalExists` from
- * reader.ts are retained for `afk trace show --results`, which is a one-shot
- * CLI where synchronous reads are acceptable.
+ * branch uses {@link journalExistsAsync} (fs.promises.stat().isFile()) so the
+ * entire handler is non-blocking. The sync `findToolResult`/`journalExists`
+ * from reader.ts are retained for `afk trace show --results`, which is a
+ * one-shot CLI where synchronous reads are acceptable.
  *
  * @module web-server/routes.tool-results
  */
@@ -83,7 +83,7 @@ export async function handleGetToolResult(res: ServerResponse, sessionId: string
   }
 
   if (found === null) {
-    // journalExistsAsync uses fs.promises.access — no statSync, fully async.
+    // journalExistsAsync uses fs.promises.stat().isFile() — no statSync, fully async.
     const hasJournal = await journalExistsAsync(sessionId);
     sendJson(res, 404, {
       error: hasJournal ? 'tool_result_not_found' : 'journal_not_found',

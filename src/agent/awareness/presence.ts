@@ -442,6 +442,12 @@ export async function patchPresenceFile(
       const filePath = presenceFilePath(sessionId);
       const parsed = JSON.parse(await readFile(filePath, 'utf8')) as PresenceFileInfo;
       patch(parsed);
+      // Non-atomic writeFile is deliberate here. The PR that introduced this
+      // function (#2869) intentionally limited atomic writes to updatePresenceCwd,
+      // where the worktree-sweep guard requires crash-safety. patchPresenceFile
+      // is used by setPresenceAfk and setPresenceBlocked, which are best-effort
+      // markers where a partial write is equally harmless — if the process dies
+      // mid-write the presence file is removed at cleanup anyway.
       await writeFile(filePath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
     } catch {
       // Best-effort — presence is non-critical.
@@ -525,6 +531,10 @@ export async function updatePresenceCwd(sessionId: string, cwd: string): Promise
       const raw = await readFile(filePath, 'utf8');
       const parsed = JSON.parse(raw) as PresenceFileInfo;
       parsed.cwd = cwd;
+      // mkdirp:false — the presence directory is always created by writePresenceFile
+      // before any cwd update can be queued. updatePresenceCwd is only called from
+      // AgentSession.setCwd, which runs AFTER presence has been written with the
+      // launch dir, so the parent directory is guaranteed to exist.
       await atomicWriteFileAsync(filePath, JSON.stringify(parsed, null, 2), {
         mode: 0o600,
         mkdirp: false,
