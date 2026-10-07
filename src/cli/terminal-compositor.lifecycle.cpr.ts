@@ -336,6 +336,12 @@ function _requestCpr(self: CprHost): void {
       return;
     }
 
+    if (env.AFK_DEBUG_COMPOSITOR) {
+      process.stderr.write(
+        `[afk/cpr] apply delta=${delta} range=[${lo},${hi}] expectedRow=${expectedRow}` +
+        ` reportedRow=${parsed.row} rows=${currentRows} requeries=${burst?.requeryCt ?? 0}\n`,
+      );
+    }
     // Apply the delta (may be 0 on a net-zero burst — still repaint below).
     if (delta !== 0) {
       applyScrollDelta(self, delta, currentRows);
@@ -364,6 +370,9 @@ function _requestCpr(self: CprHost): void {
     // pendingResizeErase snapshot (if any) is already set; the repaint will
     // proceed without a delta correction (correct for terminals that do not
     // shift history on resize).
+    if (env.AFK_DEBUG_COMPOSITOR) {
+      process.stderr.write(`[afk/cpr] timeout after ${CPR_TIMEOUT_MS}ms — falling back + repainting\n`);
+    }
     self.cprBurst = null;
     self.repaint();
   }, CPR_TIMEOUT_MS);
