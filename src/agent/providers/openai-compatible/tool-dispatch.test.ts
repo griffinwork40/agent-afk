@@ -836,6 +836,9 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
 
     // 3 tool-use rounds + 1 tools-stripped wind-down round = 4 model calls.
     expect(createCalls.length).toBe(4);
+    expect(fixture.handlerCalls).toHaveLength(3); // no duplicated side effects
+    const warningMessages = createCalls[1]!.args.messages as Array<{ content: unknown }>;
+    expect(warningMessages.some(m => typeof m.content === 'string' && m.content.includes('Deliver useful findings now'))).toBe(true);
     // The first (tool) round advertised tools; the wind-down round (last) did not.
     expect(createCalls[0]!.args.tools?.length ?? 0).toBeGreaterThan(0);
     expect(createCalls[3]!.args.tools).toBeUndefined();
@@ -859,6 +862,7 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
       e.type === 'progress' ? e.progress.summary : undefined,
     );
     expect(summaries).toEqual(['round 1/3: echo', 'round 2/3: echo', 'round 3/3: echo']);
+    expect(progressEvents.at(-1)).toMatchObject({ progress: { roundsUsed: 3, budget: 3 } });
   });
 
   // --- SOFT WALL-CLOCK DEADLINE (issue #938) ---

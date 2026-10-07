@@ -24,6 +24,7 @@ import {
   TOOL_USE_LOOP_CAPPED,
   resolveMaxToolIterations,
   shouldWindDown,
+  roundDeliveryNotice,
 } from '../../shared/tool-loop-cap.js';
 import {
   SOFT_DEADLINE_WIND_DOWN,
@@ -195,6 +196,21 @@ async function* dispatchAndAppend(
 }
 
 /**
+ * Inject a round-cap delivery notice into the last tool-result message so the
+ * model sees the budget reminder before its next reply.  Extracted from
+ * `runTurnInner` to keep it under the 200-line function ceiling.
+ */
+function injectRoundCapNotice(priorTurns: OpenAIMessage[], round: number, maxIterations: number): void {
+  const notice = roundDeliveryNotice(round, maxIterations);
+  if (notice) {
+    const lastTool = [...priorTurns].reverse().find(m => m.role === 'tool');
+    if (lastTool && typeof lastTool.content === 'string') {
+      lastTool.content += '\n\n' + notice;
+    }
+  }
+}
+
+/**
  * Drive a single user turn through the model + tool loop.
  *
  * This is the body of `OpenAICompatibleQuery._runTurnInner`, extracted here so
@@ -342,6 +358,8 @@ export async function* runTurnInner(
         }
         continue;
       }
+
+      injectRoundCapNotice(ctx.priorTurns, round, maxIterations);
       const roundsSpent = shouldWindDown(round, maxIterations);
       const timeSpent = softDeadlineExpired(turnStartTime, softDeadlineMs);
       if (roundsSpent || timeSpent) {

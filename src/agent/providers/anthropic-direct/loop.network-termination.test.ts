@@ -196,8 +196,11 @@ describe('runTurn transport drop after stop_reason accepted as complete (#2787)'
   afterEach(() => { vi.useRealTimers(); });
 
   /** Streams a full text response (stop_reason delivered via message_delta), then drops
-   * the transport before message_stop can arrive. */
-  function completedThenDroppedStream(): AsyncIterable<RawMessageStreamEvent> {
+   * the transport before message_stop can arrive.
+   * @param err - The error to throw after the last yielded event. Defaults to
+   *   `undiciTerminated()` (the TypeError: terminated path). Pass a code-based
+   *   error (e.g. ECONNRESET) to exercise the alternative termination path. */
+  function completedThenDroppedStream(err: Error = undiciTerminated()): AsyncIterable<RawMessageStreamEvent> {
     // makeTextStream produces: [message_start, content_block_start, content_block_delta,
     // content_block_stop, message_delta (stop_reason), message_stop].
     // We take all but the last (message_stop) and then throw.
@@ -206,7 +209,7 @@ describe('runTurn transport drop after stop_reason accepted as complete (#2787)'
     return (async function* () {
       for (const evt of withoutStop) yield evt;
       // Transport drops here — AFTER message_delta carried stop_reason='end_turn'.
-      throw undiciTerminated();
+      throw err;
     })();
   }
 
@@ -234,15 +237,8 @@ describe('runTurn transport drop after stop_reason accepted as complete (#2787)'
   it('ECONNRESET (code-based) after stop_reason also accepted as complete', async () => {
     // Covers the code-based termination path alongside the TypeError: terminated path.
     const reset = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
-    const full = makeTextStream('complete answer');
-    const withoutStop = full.slice(0, -1);
     const client: AnthropicClientLike = {
-      messages: {
-        create: vi.fn(() => (async function* () {
-          for (const evt of withoutStop) yield evt;
-          throw reset;
-        })()),
-      },
+      messages: { create: vi.fn(() => completedThenDroppedStream(reset)) },
     };
     const events = await run(client);
 

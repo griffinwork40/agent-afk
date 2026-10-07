@@ -129,7 +129,7 @@ export interface SchedulerOptions {
 }
 
 export type TelemetryTrigger = 'cron' | 'sessionstart' | 'pull';
-export type TelemetryStatus = 'success' | 'error' | 'skipped';
+type TelemetryStatus = 'success' | 'error' | 'skipped';
 
 export interface TelemetryRecord {
   taskId: string;

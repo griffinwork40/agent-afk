@@ -16,6 +16,14 @@ import type { EnvVarMeta } from './env.js';
 
 export const MODEL_ENV_REGISTRY = [
   {
+    name: 'AFK_CONNECT_RETRY_BUDGET_MS',
+    description: 'Experimental streaming connection retry wall budget in milliseconds. Positive finite value enables capped jittered backoff before the stream opens; unset or invalid preserves legacy retry counts. In-flight attempts retain existing timeouts.',
+    type: 'number',
+    required: false,
+    example: '120000',
+    category: 'model',
+  },
+  {
     name: 'AFK_CONTEXT_GUARD_PCT',
     description: 'Temporary within-turn context guard operational threshold as percent of the effective provider-route limit (catalog metadata for subscription routes; contextLimitFor() for API-key routes). Default 95. Not a documented model capacity or guaranteed server cutoff. Valid range 1–99.',
     type: 'number', required: false, default: '95', example: '90', category: 'model',

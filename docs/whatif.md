@@ -76,7 +76,15 @@ afk whatif --model claude-haiku-4-5
 # With verification
 afk whatif --append "Never use bash" --verify
 
-# From a prepared spec file
+# Operator-supplied prediction — deterministic, no analyst model call (#2861)
+afk whatif --append "Always ask first." --predict "agent asks a clarifying question"
+
+# Multiple predictions (accumulate in order)
+afk whatif --model claude-haiku-4-5 \
+  --predict "agent responds faster" \
+  --predict "agent uses fewer tokens"
+
+# From a prepared spec file (may include predictions field)
 afk whatif --spec my-change.json
 
 # REPL
@@ -167,6 +175,7 @@ is no TTY readline prompt in the REPL.
 | `--quick` | off | Single-turn episodes (sets `--max-turns 1`) |
 | `--probes <n>` | 6 | Synthetic probe episodes per prediction (1–12). More probes give each prediction more statistical power. Near-duplicate probes are dropped automatically. |
 | `--max-predictions <n>` | 3 (when `--probes > 2`), 8 otherwise | Maximum predictions to retain. Concentrating on fewer predictions with more probes improves verdict reliability. |
+| `--predict <text>` | — | Operator-supplied prediction (repeatable). The text becomes the `behavior`; a default `testQuestion` is generated. When one or more `--predict` flags are supplied, the analyst model call is skipped entirely and these predictions are used instead, making the predict step fully deterministic (#2861). |
 | `--turns <n>` | 12 | Real turns to replay |
 | `--samples <n>` | 3 | Samples per episode per environment |
 | `--max-usd <n>` | 5 | Budget cap in USD |
@@ -411,6 +420,34 @@ afk whatif / /whatif
 (append, file, hot, memory-add, memory-remove, disable-skill, disable-plugin,
 model, effort, env). New change kinds are added by implementing the interface
 and registering in `src/whatif/operators/index.ts`.
+
+**Operator predictions** (`--predict`, spec `predictions` field, #2861): the
+operator can supply predictions directly, bypassing the analyst model entirely.
+This makes the predict step deterministic — the same prediction appears on
+every run, regardless of what the analyst would have chosen. Operator
+predictions are normalized with sensible defaults (`direction: 'added'`,
+`confidence: 'high'`, `observable: 'decision'`) and participate in the
+standard verify flow. A spec file can supply predictions via the optional
+`predictions` array:
+
+```json
+{
+  "title": "Test faster responses",
+  "changes": [{ "kind": "model", "model": "claude-haiku-4-5" }],
+  "predictions": [
+    {
+      "behavior": "Responds with shorter answers",
+      "testQuestion": "Does the response contain fewer than 200 words?",
+      "direction": "strengthened",
+      "confidence": "high"
+    }
+  ]
+}
+```
+
+CLI predictions (`--predict`) and spec-file predictions are merged, with CLI
+predictions prepended. The analyst model is skipped when any operator
+predictions are present.
 
 **AgentRunner** (`src/whatif/types.ts`): the afk-runner spawns real `afk chat`
 subprocesses. A generic OpenAI-messages runner (model + endpoint + system prompt

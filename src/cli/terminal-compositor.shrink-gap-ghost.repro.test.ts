@@ -190,7 +190,7 @@ describe.each([24, 64])(
   'shrink-gap-ghost repro (content-hug, %i rows)',
   (ROWS) => {
     it(
-      '(a) after shrink, no run of >1 blank rows between last committed row and bottom of compositor region',
+      '(a) after shrink, no run of >1 consecutive blank rows between last committed row and bottom of compositor region',
       async () => {
         const { allLines, rig } = await buildShrinkScenario(ROWS);
         const dump = dumpLines(allLines);
@@ -198,13 +198,15 @@ describe.each([24, 64])(
         // Find the input/prompt row (the frame bottom marker).
         const promptIdx = allLines.findIndex((l) => l.includes(PROMPT_GLYPH));
         expect(promptIdx, `prompt not found in buffer:\n${dump}`).toBeGreaterThanOrEqual(0);
+        // The prompt must be within the visible viewport (not above it).
+        expect(promptIdx, `prompt row ${promptIdx} is above viewportTop ${rig.viewportTop()}:\n${dump}`).toBeGreaterThanOrEqual(rig.viewportTop());
 
-        // Count blank rows immediately BELOW the prompt row (still within the
-        // compositor scroll region). The bug: after a tall overlay collapses to a
-        // short one the screen is not refilled, so the reclaimed rows below the
-        // input line stay blank (a large dead zone). A healthy compositor refills
-        // them with prior committed rows so at most 0 trailing blank rows appear
-        // below the prompt within the scroll region.
+        // Count ALL blank rows below the prompt row (still within the compositor
+        // scroll region). The bug: after a tall overlay collapses to a short one
+        // the screen is not refilled, so the reclaimed rows below the input line
+        // stay blank (a large dead zone). A healthy compositor refills them with
+        // prior committed rows so at most 0 blank rows appear below the prompt
+        // within the scroll region.
         //
         // We scan from promptIdx+1 to the end of the viewport (baseY + rows - 1).
         const viewportBase = rig.viewportTop();
@@ -213,19 +215,19 @@ describe.each([24, 64])(
         // terminal-compositor.frame.layout.ts), so it is blank in this harness
         // even with no overlay at all and is excluded from the scan.
         const viewportEnd = viewportBase + ROWS - 2; // inclusive, 0-based in allLines
-        let blankRunBelowPrompt = 0;
+        let blankCountBelowPrompt = 0;
         for (let i = promptIdx + 1; i <= viewportEnd && i < allLines.length; i++) {
-          if ((allLines[i] ?? '').trim() === '') blankRunBelowPrompt++;
+          if ((allLines[i] ?? '').trim() === '') blankCountBelowPrompt++;
           // Do NOT break on non-blank: a displaced frame line (spinner, status row)
           // can interrupt the blank run, hiding further blank rows from an early exit.
           // Counting all blanks in the region is the correct invariant (#2871.5).
         }
 
         // When the bug is present, there are many blank rows below the input line.
-        // The fix should repaint prior committed rows there so blankRunBelowPrompt === 0.
+        // The fix should repaint prior committed rows there so blankCountBelowPrompt === 0.
         expect(
-          blankRunBelowPrompt,
-          `${blankRunBelowPrompt} blank rows below the prompt row after tall-to-small overlay shrink (screen not refilled):\n${dump}`,
+          blankCountBelowPrompt,
+          `${blankCountBelowPrompt} blank rows below the prompt row after tall-to-small overlay shrink (screen not refilled):\n${dump}`,
         ).toBe(0);
 
         rig.dispose();

@@ -350,6 +350,9 @@ describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
     orphan_repair: true,
     background_process_started: true,
     background_process_settled: true,
+    connection_failure: true,
+    connection_recovered: true,
+    connection_budget_exhausted: true,
     context_pressure_wind_down: true,
     catalog_model_upgrade: true,
   };
