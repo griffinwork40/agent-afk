@@ -105,6 +105,13 @@ export interface LifecycleHost {
   // SIGWINCH subscriber to snapshot the pre-resize footprint for erase.
   lastKnownRows: number;
   pendingResizeErase: { top: number; bottom: number } | null;
+  /**
+   * Set to `true` while a CPR (Cursor Position Report) reply is in-flight
+   * after a tmux EXPAND SIGWINCH. Frame.repaint() checks this flag and skips
+   * the physical write to prevent a stale-row repaint from racing the
+   * delta correction applied once the reply arrives.
+   */
+  cprPending: boolean;
   committedBand: string[];
   // #540: per-physical-row logical provenance, index-aligned 1:1 with
   // committedBand. Read by flushPendingCommittedBand to archive the pending

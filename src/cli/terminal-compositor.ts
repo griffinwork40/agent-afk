@@ -578,6 +578,14 @@ export class TerminalCompositor {
   lastKnownRows = 0;
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   pendingResizeErase: { top: number; bottom: number } | null = null;
+  /**
+   * True while a CPR (Cursor Position Report, ESC[6n) reply is in-flight
+   * after a tmux EXPAND SIGWINCH. Frame.repaint() skips the physical write
+   * while this flag is set so the stale-row repaint cannot race the delta
+   * correction applied once the CPR reply arrives.
+   * @internal Relaxed from `private` for the lifecycle module (LifecycleHost).
+   */
+  cprPending = false;
   // Invariant (F2 — fail-safe commit mode on stale geometry): set by the
   // SIGWINCH-immediate handler alongside logUpdate.resetGeometry() and cleared
   // only once the debounced post-resize repaint has re-established real
