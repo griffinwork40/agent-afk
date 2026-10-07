@@ -24,39 +24,16 @@
 import { z } from 'zod';
 
 /**
- * Bump when the facet shape or derivation changes — invalidates caches.
+ * History: bump when the facet shape or derivation changes — invalidates caches.
+ * Full per-version log: docs/facet-version-history.md
  *
- * v7 (#2777): added `outcome_source`, `tool_errors_total`, and required
- * nullable `yield_tracking.pr_url`; added `'unknown'` to FacetOutcomeSchema;
- * replaced inline TERMINAL_STATE_RE in derive.ts with the shared
- * parseTerminalState() parser; yield_tracking carry-forward on re-derive in
- * store.ts. Public consumers should filter on `facet_version >= 7` and inspect
- * `outcome_source`; headingless sessions now derive `outcome: 'unknown'`, and
- * single-line `**Done** — text` is no longer a terminal-state heading.
- *
- * v8 (#2970): added `compose_partial_nodes`, the number of compose CALLS in
- * which at least one node succeeded with a partial result (soft-deadline
- * wind-down, tool-use cap). Omitted when zero. Also added
- * `incomplete?: boolean` to `ToolEventInputSchema` so the sidecar path
- * carries the signal. On `facet_version >= 8` an absent field means zero.
- *
- * v9 (#2978): added `compose_partial_node_count`, the number of partial NODES
- * summed across compose calls (`compose_partial_nodes` keeps counting calls).
- * Omitted when zero. Also added `partialNodeCount?: number` to
- * `ToolEventInputSchema`; journal `tool_result` blocks now persist
- * `incomplete`, so journal-derived facets see the partial signal too.
- *
- * v10 (#2798): added `outcome_downgrade_reason` — when a self-reported
- * `fully_achieved` (Done) is downgraded to `partially_achieved`, this field
- * records the first matching signal that triggered the downgrade:
- * `'deferred_items'` (Done block has a non-empty Deferred bullet),
- * `'no_corroborating_evidence'` (Done with no world mutations and no evidence
- * bullet), or `'compose_partial_nodes'` (at least one compose call wound down
- * partial). Omitted when no downgrade occurred. Consumers on
- * `facet_version >= 10` can use `outcome_downgrade_reason` to distinguish a
- * genuine Done from a self-report that was downgraded.
+ * v11 (#3182): `patch_apply` counted as a file write in world_changes /
+ * no_corroborating_evidence check; common external-effects bash commands
+ * (`git push`, `gh pr create`, `gh pr merge`, `npm publish`, `pnpm publish`)
+ * now count as corroboration. FACET_VERSION bump: derivation changes observable
+ * output for sessions using patch_apply or external-effects-only bash.
  */
-export const FACET_VERSION = 10;
+export const FACET_VERSION = 11;
 
 // ---------------------------------------------------------------------------
 // Input: the subset of StoredSession the deriver reads (local, layering-safe)

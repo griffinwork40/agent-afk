@@ -43,7 +43,7 @@ describe('deriveSessionFacet', () => {
   it('produces a schema-valid facet', () => {
     const facet = deriveSessionFacet(richSession());
     expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
-    expect(facet.facet_version).toBe(10); // v10: added outcome_downgrade_reason (#2798)
+    expect(facet.facet_version).toBe(11); // v11: patch_apply as file write, bash external effects (#3182)
     expect(facet.derived_from).toBe('afk-session');
   });
 
@@ -1641,6 +1641,84 @@ describe('deriveSessionFacet', () => {
       }));
       expect(facet.outcome).toBe('partially_achieved');
       expect(facet.primary_success).toBe('implemented the handler.');
+    });
+
+    // --- patch_apply regression (#3182) ---
+
+    it('no downgrade when Done uses only patch_apply (counted as file write, #3182)', () => {
+      // patch_apply writes files — a session using only patch_apply must NOT be
+      // wrongly downgraded with no_corroborating_evidence.
+      const changes = [
+        { path: '/src/a.ts', edits: [{ old: 'x', new: 'y' }] },
+        { path: '/src/b.ts', content: 'new content' },
+      ];
+      const facet = deriveSessionFacet(doneSession({
+        toolEvents: [
+          { toolName: 'patch_apply', toolUseId: 'pa1', inputRaw: JSON.stringify({ changes }) },
+        ],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+      expect(facet.world_changes.files_written).toBe(1);
+      expect(facet.world_changes.mutated).toBe(true);
+      // Evidence paths are collected from patch_apply changes[].path
+      expect(facet.evidence_pointers).toContain('/src/a.ts');
+      expect(facet.evidence_pointers).toContain('/src/b.ts');
+      expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
+    });
+
+    it('no downgrade when Done uses git push without a local file write (#3182)', () => {
+      // A session that pushes (e.g. force-push or amend+push) without write_file/edit_file
+      // should not be downgraded — the push is a recognisable external effect.
+      const facet = deriveSessionFacet(doneSession({
+        toolEvents: [
+          { toolName: 'bash', toolUseId: 'b1', inputRaw: JSON.stringify({ command: 'git push -u origin main' }) },
+        ],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade when Done uses gh pr create without a local file write (#3182)', () => {
+      // Opening a PR is an external observable effect — corroborates Done.
+      const facet = deriveSessionFacet(doneSession({
+        toolEvents: [
+          { toolName: 'bash', toolUseId: 'b1', inputRaw: JSON.stringify({ command: 'gh pr create --fill' }) },
+        ],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade when Done uses gh pr merge (#3182)', () => {
+      const facet = deriveSessionFacet(doneSession({
+        toolEvents: [
+          { toolName: 'bash', toolUseId: 'b1', inputRaw: JSON.stringify({ command: 'gh pr merge --squash 42' }) },
+        ],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade when Done uses npm publish (#3182)', () => {
+      const facet = deriveSessionFacet(doneSession({
+        toolEvents: [
+          { toolName: 'bash', toolUseId: 'b1', inputRaw: JSON.stringify({ command: 'npm publish --access public' }) },
+        ],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('downgrade still fires when bash only runs ls (not an external-effect command, #3182)', () => {
+      // Regression: non-matching bash commands must not suppress the downgrade.
+      const facet = deriveSessionFacet(doneSession({
+        toolEvents: [
+          { toolName: 'bash', toolUseId: 'b1', inputRaw: JSON.stringify({ command: 'ls -la' }) },
+        ],
+      }));
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_downgrade_reason).toBe('no_corroborating_evidence');
     });
   });
 });

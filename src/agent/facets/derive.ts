@@ -22,14 +22,16 @@ import {
   type FacetOutcomeSource,
   type SessionFacet,
   type StoredSessionInput,
-  type SubagentInvocation,
   type SubagentToolSummary,
   type ToolEventInput,
   type YieldTracking,
 } from './schema.js';
 import { computeParallelDispatch } from './parallel-dispatch.js';
 import { parseTerminalState } from '../outcomes/terminal-state.js';
-import { detectPrUrlFromEvents } from './derive.pr-detect.js';
+import { aggregateToolEvents, dedupeToolEvents } from './derive.aggregate.js';
+
+// Re-export dedupeToolEvents so external callers (parallel-dispatch, store) keep working.
+export { dedupeToolEvents } from './derive.aggregate.js';
 
 export interface DeriveOptions {
   /** Absolute path of the source session sidecar (recorded for provenance). */
@@ -53,14 +55,8 @@ export interface DeriveOptions {
   subagentBreakdown?: SubagentToolSummary[];
 }
 
-const SUBAGENT_TOOLS = new Set(['agent', 'compose', 'skill']);
-const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file']);
 const GOAL_CAP = 1000;
 const SUMMARY_CAP = 240;
-const EVIDENCE_CAP = 50;
-// `(?![\w-])` rejects `git commit-tree` / `git commits` (a trailing word char or
-// hyphen) while still matching `git commit`, `git commit -m …`, `git commit;`.
-const COMMIT_RE = /\bgit\s+commit(?![\w-])/;
 const SLASH_CMD_RE = /^\s*\/([a-zA-Z][\w-]*)/;
 
 /**
@@ -160,8 +156,9 @@ function deriveOutcome(
  *   1. `deferred_items` — Done block has a non-empty "Deferred / pending"
  *      bullet. The agent itself declared pending work.
  *   2. `no_corroborating_evidence` — Done with zero world mutations (no file
- *      writes, edits, or commits) and no evidence bullet in the Done block.
- *      A pure-text Done with no observable side-effects is suspect.
+ *      writes, edits, commits, patch_apply calls, or external-effects bash) and
+ *      no evidence bullet in the Done block. A pure-text Done with no observable
+ *      side-effects is suspect.
  *   3. `compose_partial_nodes` — at least one compose call wound down partial
  *      (soft-deadline or tool-use-iteration cap) during the session.
  *
@@ -174,6 +171,7 @@ function checkDowngradeSignals({
   filesWritten,
   filesEdited,
   commits,
+  bashExternalEffects,
   composePartialNodes,
 }: {
   parsedDeferred: string | undefined;
@@ -181,6 +179,8 @@ function checkDowngradeSignals({
   filesWritten: number;
   filesEdited: number;
   commits: number;
+  /** Count of bash calls matching BASH_EXTERNAL_RE (git push, gh pr create/merge, npm/pnpm publish). */
+  bashExternalEffects: number;
   composePartialNodes: number;
 }): FacetOutcomeDowngradeReason | undefined {
   // Signal 1: explicit deferred/pending items in the Done block.
@@ -189,7 +189,9 @@ function checkDowngradeSignals({
   }
 
   // Signal 2: no corroborating world mutations and no evidence bullet.
-  const hasMutation = filesWritten > 0 || filesEdited > 0 || commits > 0;
+  // patch_apply is folded into filesWritten. External-effects bash (git push,
+  // gh pr create/merge, npm/pnpm publish) also corroborate (#3182).
+  const hasMutation = filesWritten > 0 || filesEdited > 0 || commits > 0 || bashExternalEffects > 0;
   const hasEvidenceBullet = parsedEvidence !== undefined && parsedEvidence.trim().length > 0;
   if (!hasMutation && !hasEvidenceBullet) {
     return 'no_corroborating_evidence';
@@ -201,21 +203,6 @@ function checkDowngradeSignals({
   }
 
   return undefined;
-}
-
-/** Parse a stringified tool input to an object, swallowing malformed JSON. */
-function parseInput(input: string | undefined): Record<string, unknown> | undefined {
-  if (!input) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(input);
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function asString(v: unknown): string | undefined {
-  return typeof v === 'string' ? v : undefined;
 }
 
 /** Collapse whitespace and cap length for single-line summary fields. */
@@ -234,129 +221,6 @@ function classifySessionType(firstPrompt: string, source: string): string {
   return 'task';
 }
 
-/**
- * Invariant: the recorder persists TWO ToolEvent entries per tool call under one
- * toolUseId — an early placeholder emitted at content_block_start (translate.ts:
- * input ' …', no inputRaw, no result) and the real entry emitted post-stream
- * (loop.ts: summarized input + result). Both are pushed to the turn's toolEvents
- * array (turn-handler.ts / background.ts), so counting raw events double-counts
- * every tool. The real entry is always emitted AFTER its placeholder, so a
- * last-write-wins Map keyed by toolUseId keeps the real one; Map iteration order
- * preserves each id's first-seen position (call order). Events without a
- * toolUseId cannot be paired and are kept individually.
- */
-export function dedupeToolEvents(events: ToolEventInput[]): ToolEventInput[] {
-  const byId = new Map<string, ToolEventInput>();
-  const noId: ToolEventInput[] = [];
-  for (const ev of events) {
-    if (ev.toolUseId === undefined) noId.push(ev);
-    else byId.set(ev.toolUseId, ev); // last write wins → real entry supersedes placeholder
-  }
-  return [...byId.values(), ...noId];
-}
-
-interface AggregateToolEventsResult {
-  toolCounts: Record<string, number>;
-  toolErrorCategories: Record<string, number>;
-  subagents: SubagentInvocation[];
-  skills: string[];
-  evidencePaths: string[];
-  toolErrors: number;
-  filesWritten: number;
-  filesEdited: number;
-  bashCommands: number;
-  commits: number;
-  /** GitHub PR URL from a gh pr create result, if found. */
-  detectedPrUrl: string | null;
-  /** Compose calls with >=1 node that wound down partial (#2970). */
-  composePartialNodes: number;
-  /** Partial compose nodes summed across calls (#2978). */
-  composePartialNodeCount: number;
-}
-
-function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolEventsResult {
-  const toolCounts: Record<string, number> = {};
-  const toolErrorCategories: Record<string, number> = {};
-  const subagents: SubagentInvocation[] = [];
-  const skills: string[] = [];
-  const evidencePaths: string[] = [];
-  let toolErrors = 0;
-  let filesWritten = 0;
-  let filesEdited = 0;
-  let bashCommands = 0;
-  let commits = 0;
-  let composePartialNodes = 0;
-  let composePartialNodeCount = 0;
-  for (const ev of allEvents) {
-    const name = ev.toolName;
-    toolCounts[name] = (toolCounts[name] ?? 0) + 1;
-
-    if (ev.isError === true) {
-      toolErrors += 1;
-      toolErrorCategories[name] = (toolErrorCategories[name] ?? 0) + 1;
-    }
-
-    // Prefer inputRaw (full JSON, populated for sessions recorded after this fix) over
-    // input (summarized string). For older sidecars without inputRaw, parseInput falls
-    // back to input — which will still return undefined for summarized strings, preserving
-    // the pre-fix behaviour rather than crashing.
-    const parsed = parseInput(ev.inputRaw ?? ev.input);
-
-    if (name === 'write_file') filesWritten += 1;
-    if (name === 'edit_file') filesEdited += 1;
-    if (name === 'bash') {
-      bashCommands += 1;
-      // Commit detection reads the parsed `command` when present (older sidecars
-      // written before the secret-at-rest fix) and otherwise falls back to the
-      // summarized `input` (a flattened, ≤160-char one-line summary — newlines
-      // collapsed to spaces; see summarizeToolInput). The raw `command` is no
-      // longer persisted to inputRaw — it can carry inline secrets verbatim — so
-      // for current sidecars detection runs against that summary, which catches a
-      // `git commit` anywhere in the flattened command (not just line 1). See
-      // raw-input.ts.
-      const cmd = asString(parsed?.['command']) ?? ev.input;
-      if (cmd && COMMIT_RE.test(cmd)) commits += 1;
-
-    }
-
-    if (FILE_TOOLS.has(name)) {
-      const fp = asString(parsed?.['file_path']);
-      if (fp && !evidencePaths.includes(fp) && evidencePaths.length < EVIDENCE_CAP) {
-        evidencePaths.push(fp);
-      }
-    }
-
-    if (SUBAGENT_TOOLS.has(name)) {
-      let label: string | undefined;
-      if (name === 'skill') {
-        label = asString(parsed?.['name']);
-        if (label && !skills.includes(label)) skills.push(label);
-      } else if (name === 'agent') {
-        label = asString(parsed?.['id_prefix']);
-      } else {
-        label = 'compose';
-      }
-      subagents.push(label ? { tool: name, label } : { tool: name });
-    }
-
-    // Count compose calls that had at least one partial node (#2970).
-    // ev.incomplete is set by the compose executor when result.partial.length > 0.
-    if (name === 'compose' && ev.incomplete === true) {
-      composePartialNodes += 1;
-      // #2978: per-node count. A call without a recorded count (pre-#2978)
-      // had at least one partial node, so it contributes 1.
-      const n = ev.partialNodeCount;
-      composePartialNodeCount += typeof n === 'number' && n > 0 ? n : 1;
-    }
-  }
-
-  // PR detection (#2777, #2795): delegate to the shared helper so subagent
-  // journals can reuse identical logic via journal-adapter.ts.
-  const detectedPrUrl = detectPrUrlFromEvents(allEvents);
-
-  return { toolCounts, toolErrorCategories, subagents, skills, evidencePaths, toolErrors, filesWritten, filesEdited, bashCommands, commits, detectedPrUrl, composePartialNodes, composePartialNodeCount };
-}
-
 export function deriveSessionFacet(
   session: StoredSessionInput,
   options: DeriveOptions = {},
@@ -371,7 +235,11 @@ export function deriveSessionFacet(
     : dedupeToolEvents(turns.flatMap((t) => t.toolEvents ?? []));
 
   // --- mechanical: tool + error aggregation ---
-  const { toolCounts, toolErrorCategories, subagents, skills, evidencePaths, toolErrors, filesWritten, filesEdited, bashCommands, commits, detectedPrUrl, composePartialNodes, composePartialNodeCount } = aggregateToolEvents(allEvents);
+  const {
+    toolCounts, toolErrorCategories, subagents, skills, evidencePaths,
+    toolErrors, filesWritten, filesEdited, bashCommands, commits,
+    bashExternalEffects, detectedPrUrl, composePartialNodes, composePartialNodeCount,
+  } = aggregateToolEvents(allEvents);
 
   // tool_errors_total = parent tool_errors + sum of per-subagent tool_errors (#2777)
   const subagentToolErrorsTotal = (options.subagentBreakdown ?? [])
@@ -420,6 +288,7 @@ export function deriveSessionFacet(
       filesWritten,
       filesEdited,
       commits,
+      bashExternalEffects,
       composePartialNodes,
     });
     if (outcomeDowngradeReason !== undefined) {
