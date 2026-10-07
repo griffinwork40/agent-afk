@@ -50,6 +50,9 @@ export async function streamToFinalMessage<T>(
   let finalMessage: Message | undefined;
   let streamError: Error | undefined;
   const handoff = new CappedHandoffAccumulator();
+  // Snapshot current history length so finish() only walks messages from THIS run,
+  // preventing cross-turn leakage when a handle is reused (Finding 1, PR #3176).
+  handoff.setHistoryBaseline(handle.session.getHistory?.()?.length ?? 0);
 
   // Reset partial-content accumulator before each run. Surviving across the
   // throw boundary is the whole point — the local `streamedContent` of the

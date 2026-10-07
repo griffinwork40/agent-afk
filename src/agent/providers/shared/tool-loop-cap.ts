@@ -97,7 +97,9 @@ export function formatRoundLabel(round: number, maxIterations: number): string {
  */
 export function roundDeliveryNotice(completedRounds: number, budget: number): string | null {
   if (budget <= 1 || completedRounds !== Math.max(1, budget - 3)) return null;
-  return `[Budget notice: ${budget - completedRounds} tool-use rounds remain of ${budget}. ` +
+  const remaining = budget - completedRounds;
+  const roundWord = remaining === 1 ? 'round remains' : 'rounds remain';
+  return `[Budget notice: ${remaining} tool-use ${roundWord} of ${budget}. ` +
     'Deliver useful findings now. Persist any requested artifact while tools are still available; ' +
     'stop expanding scope. Your final reply must contain findings and remaining work, not future actions.]';
 }

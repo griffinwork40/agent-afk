@@ -11,7 +11,7 @@
  * @module agent/session/stream-consumer
  */
 
-import type { ProviderEvent, ProviderUsage } from '../provider.js';
+import type { ProviderEvent, ProviderProgress, ProviderUsage } from '../provider.js';
 import { recordToolOutput, recordToolUseStart, type ToolEventAccumulator } from './stream-consumer.tool-events.js';
 import type {
   Message,
@@ -238,6 +238,24 @@ function buildToolOutputEvent(
   };
 }
 
+/** Map a provider `progress` event to the output-layer shape with explicit field allow-list. */
+function mapProgressEvent(progress: ProviderProgress): OutputEvent {
+  return {
+    type: 'progress',
+    progress: {
+      taskId: progress.taskId,
+      description: progress.description,
+      ...(progress.summary !== undefined ? { summary: progress.summary } : {}),
+      ...(progress.roundsUsed !== undefined ? { roundsUsed: progress.roundsUsed } : {}),
+      ...(progress.budget !== undefined ? { budget: progress.budget } : {}),
+      ...(progress.lastToolName !== undefined ? { lastToolName: progress.lastToolName } : {}),
+      totalTokens: progress.totalTokens,
+      toolUses: progress.toolUses,
+      durationMs: progress.durationMs,
+    },
+  };
+}
+
 /** Map a provider `paused` event to the output-layer `paused` shape. */
 function mapPausedEvent(event: Extract<ProviderEvent, { type: 'paused' }>): Extract<OutputEvent, { type: 'paused' }> {
   return {
@@ -381,10 +399,7 @@ export function transformProviderEvent(
       };
 
     case 'progress':
-      return {
-        type: 'progress',
-        progress: { ...event.progress },
-      };
+      return mapProgressEvent(event.progress);
 
     case 'suggestion':
       return { type: 'suggestion', suggestion: event.suggestion };

@@ -7,7 +7,7 @@ import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
 export function isNarrationOnly(text: string): boolean {
   const trimmed = text.trim();
   return trimmed.length > 0 && trimmed.length <= 300 && !trimmed.includes('\n') &&
-    /^(?:now\s+)?(?:let me|i(?:'ll| will| am going to))\b/i.test(trimmed) &&
+    /^(?:(?:okay|sure|alright|right|great|so|well|yes)[,.]?\s+)?(?:now\s+)?(?:let me|i(?:'ll| will| am going to))\b/i.test(trimmed) &&
     /\b(?:write|check|read|return|create|finish|prepare|summarize)\b/i.test(trimmed);
 }
 
@@ -18,6 +18,13 @@ export class CappedHandoffAccumulator {
   private lastMessage: Message | undefined;
   private roundsUsed: number | undefined;
   private budget: number | undefined;
+  /** History length at construction time — bounds the backward walk in finish() to this turn only. */
+  private historyLengthAtStart = 0;
+
+  /** Call once at the start of a turn to prevent cross-turn history leakage when a handle is reused. */
+  setHistoryBaseline(length: number): void {
+    this.historyLengthAtStart = length;
+  }
 
   onEvent(event: OutputEvent): void {
     if (event.type === 'chunk' && event.chunk.type === 'content') this.roundText += event.chunk.content;
@@ -39,7 +46,7 @@ export class CappedHandoffAccumulator {
   finish(finalMessage: Message | undefined, session: IAgentSession): Message {
     const history = session.getHistory?.() ?? [];
     let historyText = '';
-    for (let i = history.length - 1; i >= 0; i--) {
+    for (let i = history.length - 1; i >= this.historyLengthAtStart; i--) {
       const m = history[i];
       if (m?.role === 'assistant' && m.content.trim() && !isNarrationOnly(m.content) && m !== finalMessage) {
         historyText = m.content;

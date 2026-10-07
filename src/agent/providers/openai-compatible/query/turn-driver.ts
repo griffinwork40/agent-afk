@@ -332,7 +332,12 @@ export async function* runTurnInner(
       }
 
       const notice = roundDeliveryNotice(round, maxIterations);
-      if (notice) ctx.priorTurns.push({ role: 'user', content: notice });
+      if (notice) {
+        const lastTool = [...ctx.priorTurns].reverse().find(m => m.role === 'tool');
+        if (lastTool && typeof lastTool.content === 'string') {
+          lastTool.content += '\n\n' + notice;
+        }
+      }
       const roundsSpent = shouldWindDown(round, maxIterations);
       const timeSpent = softDeadlineExpired(turnStartTime, softDeadlineMs);
       if (roundsSpent || timeSpent) {
