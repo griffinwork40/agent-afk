@@ -61,6 +61,8 @@ export interface StreamDriveStrategy<TEvent> {
   translate: (event: TEvent, state: StreamState) => Iterable<ProviderEvent>;
   /** Coerce a connection- or stream-phase error into the Error surfaced for this wire. */
   clarifyError: (err: unknown) => Error;
+  /** Defaults to Chat Completions semantics; Responses usage is terminal, not trailing. */
+  expectsTrailingUsage?: boolean;
 }
 
 /** Session-scoped context the driver needs but does not own. */
@@ -199,6 +201,7 @@ export async function* driveStream<TEvent>(
           timeouts.ttfb.timedOut(),
           state.finishReason,
           state.usage !== null,
+          strategy.expectsTrailingUsage ?? true,
         );
         streamRetries = newStreamRetries;
 
@@ -210,6 +213,7 @@ export async function* driveStream<TEvent>(
             attempt: action.attempt,
           };
           if (action.errorCode !== undefined) retryMeta['errorCode'] = action.errorCode;
+          if (action.awaitingUsage) retryMeta['awaitingUsage'] = true;
           const userAborted = await emitAndSleepRetry(
             ctx.traceWriter, ctx.currentModel, action.delay,
             ctx.controller.signal, ctx.controller.signal,
@@ -219,7 +223,7 @@ export async function* driveStream<TEvent>(
           continue;
         }
         if (action.kind === 'fatal') {
-          yield { type: 'error', error: action.error };
+          yield { type: 'error', error: strategy.clarifyError(action.error) };
           return null;
         }
         if (action.kind === 'accept') {

@@ -200,6 +200,7 @@ export async function* runIteration(
         return translateResponsesEvent(event, state, ctx.initSessionId);
       },
       clarifyError: (err) => clarifyResponsesError(err, isChatGptBackend, ctx.currentModel),
+      expectsTrailingUsage: false,
     });
     yield* ctx.fastTier.drainNotice(ctx.initSessionId);
     return result;
