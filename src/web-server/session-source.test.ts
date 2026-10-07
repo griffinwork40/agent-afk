@@ -441,4 +441,22 @@ describe('listWebSessions', () => {
     const sessions = await listWebSessions(new Set(['fresh-owned']));
     expect(sessions.map((s) => s.id)).toEqual(['fresh-owned', 'old']);
   });
+
+  it('prefers the sidecar name (what /resume shows) over the first-message preview', async () => {
+    writeLedger('named', [metaLine('named', { cwd: '/w' }), userLine('what are the local changes on main?')]);
+    const sidecar = { sessionId: 'named', name: 'what-are-the-local-changes-on', model: 'm', turns: [{ toolEvents: [{ name: 'bash' }] }] };
+    fs.writeFileSync(path.join(getSessionsDir(), 'named.json'), JSON.stringify(sidecar, null, 2));
+    const [s0] = await listWebSessions(new Set());
+    expect(s0?.title).toBe('what-are-the-local-changes-on');
+  });
+
+  it('falls back to the preview when the sidecar has no top-level name', async () => {
+    writeLedger('unnamed', [metaLine('unnamed'), userLine('hello there')]);
+    // A nested `name` inside turns must never be mistaken for the session name.
+    const sidecar = { sessionId: 'unnamed', model: 'm', turns: [{ toolEvents: [{ name: 'bash' }] }] };
+    fs.writeFileSync(path.join(getSessionsDir(), 'unnamed.json'), JSON.stringify(sidecar, null, 2));
+    const [s0] = await listWebSessions(new Set());
+    expect(s0?.title).toBe('hello there');
+  });
 });
+

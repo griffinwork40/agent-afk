@@ -21,6 +21,7 @@ import { getSessionLedgerPath, getSessionsDir, isSafeLedgerSessionId } from '../
 import { readLedger } from '../agent/session-ledger.js';
 import { readLivePresenceFiles } from '../agent/awareness/presence.js';
 import { isPreamble, extractUserContent } from '../agent/session/preamble-strip.js';
+import { readSidecarName } from './session-name-head.js';
 
 /** One agent session as the web UI's session list can render it. */
 export interface WebSessionSummary {
@@ -32,7 +33,11 @@ export interface WebSessionSummary {
   surface?: string;
   /** ISO 8601 timestamp — the session ledger file's mtime. */
   updatedAt?: string;
-  /** First user message, truncated to ~80 chars. */
+  /**
+   * The session's sidecar `name` (the same name `/resume` lists and `/name`
+   * sets) when it has one; otherwise the first user message, truncated to
+   * ~80 chars.
+   */
   title?: string;
   /** Liveness from presence records. Set for foreign sessions only. */
   alive?: boolean;
@@ -217,13 +222,14 @@ export async function listWebSessions(
   const summaries = await Promise.all(
     [...ids].map(async (id): Promise<WebSessionSummary> => {
       const mode: 'live' | 'readonly' = owned.has(id) ? 'live' : 'readonly';
-      const head = await readLedgerHead(id);
+      const [head, name] = await Promise.all([readLedgerHead(id), readSidecarName(id)]);
       const mtime = onDisk.get(id);
 
       const summary: WebSessionSummary = { id, mode };
       if (head.cwd !== undefined) summary.cwd = head.cwd;
       if (head.surface !== undefined) summary.surface = head.surface;
-      if (head.title !== undefined) summary.title = head.title;
+      const title = name ?? head.title;
+      if (title !== undefined) summary.title = title;
       if (mtime !== undefined) summary.updatedAt = mtime.toISOString();
       if (mode === 'readonly' && aliveIds !== null) summary.alive = aliveIds.has(id);
       return summary;
