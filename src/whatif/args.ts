@@ -45,7 +45,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import type { Change } from './types.js';
+import type { Change, OperatorPrediction } from './types.js';
 export { WHATIF_USAGE } from './args.usage.js';
 
 // ---------------------------------------------------------------------------
@@ -130,6 +130,8 @@ export interface WhatifFlagOptions {
   maxPredictions?: number;
   /** Skip the baseline-sample preflight; use analyst-estimate check instead (#2511). */
   noBaselineSample?: boolean;
+  /** Operator-supplied predictions (#2861); accumulated in order. */
+  operatorPredictions?: OperatorPrediction[];
 }
 
 export interface ParsedWhatifArgs {
@@ -182,6 +184,7 @@ interface RunState {
   probes?: number;
   maxPredictions?: number;
   noBaselineSample: boolean;
+  operatorPredictions: OperatorPrediction[];
 }
 
 /**
@@ -207,6 +210,11 @@ function parseRunOptionFlag(token: string, nextVal: string | undefined, state: R
     case '--json': state.json = true; return 1;
     case '--keep-sandboxes': state.keepSandboxes = true; return 1;
     case '--no-baseline-sample': state.noBaselineSample = true; return 1;
+    case '--predict': {
+      if (!nextVal) return `--predict requires a prediction text\n\n${WHATIF_USAGE}`;
+      state.operatorPredictions.push({ behavior: nextVal, testQuestion: `Does the response ${nextVal}?` });
+      return 2;
+    }
     case '--turns': {
       if (!nextVal) return `--turns requires a number\n\n${WHATIF_USAGE}`;
       const n = parseInt(nextVal, 10);
@@ -291,6 +299,7 @@ export function parseWhatifArgs(argv: string[]): ParseResult {
     json: false,
     force: false,
     noBaselineSample: false,
+    operatorPredictions: [],
   };
 
   let i = 0;
@@ -351,6 +360,7 @@ export function parseWhatifArgs(argv: string[]): ParseResult {
       ...(state.probes !== undefined ? { probes: state.probes } : {}),
       ...(state.maxPredictions !== undefined ? { maxPredictions: state.maxPredictions } : {}),
       ...(state.noBaselineSample ? { noBaselineSample: true } : {}),
+      ...(state.operatorPredictions.length > 0 ? { operatorPredictions: state.operatorPredictions } : {}),
     },
     yes: state.yes,
     json: state.json,

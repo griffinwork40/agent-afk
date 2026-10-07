@@ -8,7 +8,7 @@
  * @module whatif/types.orchestration
  */
 
-import type { AgentRunner, ChangeSpec, Judge } from './types.js';
+import type { AgentRunner, ChangeSpec, Judge, OperatorPrediction } from './types.js';
 
 export type WhatifStage =
   | 'compile'
@@ -76,6 +76,12 @@ export interface WhatifOptions {
    * The analyst-estimate headroom check is used instead when present.
    */
   noBaselineSample?: boolean;
+  /**
+   * Operator-supplied predictions (#2861). When non-empty, these are prepended
+   * to analyst predictions. The analyst call is skipped entirely when this list
+   * is non-empty and verify is not requested, so runs are deterministic.
+   */
+  operatorPredictions?: OperatorPrediction[];
 }
 
 export interface WhatifDeps {

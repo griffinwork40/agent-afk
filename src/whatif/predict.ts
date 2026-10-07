@@ -15,7 +15,7 @@
 
 import { z } from 'zod';
 import { extractJsonAs } from './json-extract.js';
-import type { CompleteFn, Prediction, StructuralImpact } from './types.js';
+import type { CompleteFn, OperatorPrediction, Prediction, StructuralImpact } from './types.js';
 import type { RepoManifest } from './repo-manifest.js';
 import { formatRepoManifest } from './repo-manifest.js';
 import { dedupeProbes } from './probe-dedupe.js';
@@ -213,6 +213,34 @@ export interface PredictInput {
    * when the change merely restates an existing baseline instruction.
    */
   redundancySection?: string;
+  /**
+   * Operator-supplied predictions (#2861). When non-empty, these are used
+   * instead of calling the analyst model. Each entry is normalized into a
+   * full Prediction with sensible defaults for omitted fields.
+   */
+  operatorPredictions?: OperatorPrediction[];
+}
+
+// ---------------------------------------------------------------------------
+// Operator prediction normalization
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalize an operator-supplied prediction into a full {@link Prediction}.
+ * Fills in defaults for omitted fields so the prediction participates in the
+ * standard verify flow without requiring the operator to specify everything.
+ */
+export function normalizeOperatorPrediction(op: OperatorPrediction, id: string): Prediction {
+  return {
+    id,
+    behavior: op.behavior,
+    direction: op.direction ?? 'added',
+    confidence: op.confidence ?? 'high',
+    reason: 'Operator-supplied prediction',
+    testQuestion: op.testQuestion,
+    probes: op.probes ?? [],
+    observable: 'decision',
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -232,7 +260,13 @@ export async function predictChanges(
   complete: CompleteFn,
   model: string,
 ): Promise<Prediction[]> {
-  const { spec, changeDescriptions, structural, trackRecord, repoManifest, redundancySection } = input;
+  const { spec, changeDescriptions, structural, trackRecord, repoManifest, redundancySection, operatorPredictions } = input;
+
+  // When operator predictions are supplied, normalize them and return immediately
+  // (no analyst model call, so the run is fully deterministic).
+  if (operatorPredictions && operatorPredictions.length > 0) {
+    return operatorPredictions.map((op, i) => normalizeOperatorPrediction(op, `p${i + 1}`));
+  }
 
   const probesPerPrediction = input.probesPerPrediction ?? DEFAULT_PROBES;
   const maxPredictions = input.maxPredictions ?? resolveMaxPredictions(probesPerPrediction);

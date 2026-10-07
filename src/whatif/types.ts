@@ -38,10 +38,32 @@ export type Change =
 
 export type ChangeKind = Change['kind'];
 
+/**
+ * Operator-supplied prediction injected directly, bypassing the analyst model.
+ * Only `behavior` and `testQuestion` are required; the engine fills in the
+ * remaining fields so the prediction participates in the standard verify flow.
+ */
+export interface OperatorPrediction {
+  /** Plain English, e.g. "Asks a clarifying question before using tools". */
+  behavior: string;
+  direction?: PredictionDirection;
+  confidence?: Confidence;
+  /** Positively framed yes/no question, e.g. "Does the response ask a clarifying question?" */
+  testQuestion: string;
+  /** Optional synthetic probes; if absent the engine generates default ones. */
+  probes?: string[];
+}
+
 export interface ChangeSpec {
   /** One-line human description, e.g. "Append an always-ask rule to AFK.md". */
   title: string;
   changes: Change[];
+  /**
+   * Operator-supplied predictions (#2861). When present, these are prepended
+   * to analyst-generated predictions. Analyst generation is skipped entirely
+   * when `predictions` is non-empty and `--predict` is used without `--verify`.
+   */
+  predictions?: OperatorPrediction[];
 }
 
 /** Launch settings for an episode subprocess (model, effort, extra env). */
