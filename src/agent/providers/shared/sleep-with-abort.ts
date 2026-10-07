@@ -3,9 +3,11 @@
  *
  * Resolves immediately when `signal` is already aborted; otherwise waits
  * `ms` milliseconds, resolving early if the signal fires while sleeping.
- * The `timer.unref()` call prevents Node.js from keeping the event loop
- * alive solely due to the timeout — correct for server-side agentic loops
- * where the process should exit freely when all real work is done.
+ * Invariant: the timer is ref'd. An awaited backoff IS pending work: a
+ * one-shot `afk chat` waiting out a connection outage has no other ref'd
+ * handle, and an unref'd timer let the event loop drain so the process
+ * exited 0 mid-retry with no output (observed 2026-10-06, sprint Lane V).
+ * Abort clears the timer, so cancellation never waits it out.
  *
  * Previously duplicated verbatim in:
  *   - `anthropic-direct/loop.ts`   (`sleepWithAbort`)
@@ -37,7 +39,6 @@ export function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
     if (signal.aborted) { resolve(); return; }
     const onAbort = (): void => { clearTimeout(timer); resolve(); };
     const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms);
-    timer.unref();
     signal.addEventListener('abort', onAbort, { once: true });
   });
 }
