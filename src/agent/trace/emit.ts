@@ -43,9 +43,9 @@ import type {
   SessionPhasePayload,
   SubagentLifecyclePayload,
   ToolCallPayload,
-  TraceSink,
   TraceEventInput,
-} from './index.js';
+} from './types.js';
+import type { TraceSink } from './writer.js';
 
 /**
  * Generic emit helper — handles the common pattern of every trace emit

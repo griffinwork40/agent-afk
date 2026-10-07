@@ -11,6 +11,37 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.303.1] - 2026-10-07
+
+### Added
+- catalog-backed route limits, configurable in-turn context guard, model awareness (#3177) (5f9e91bf)
+
+### Fixed
+- re-fork zero-output transport failures once, fail closed on any tool activity (#3172) (2bcae018)
+
+## [5.303.0] - 2026-10-07
+
+### Added
+- opt-in elapsed-time connection retry budget + connect-failure diagnostics (#3173) (c605e2b2)
+- explicit incomplete handoff and findings salvage at the tool-round cap (#3176) (5e15142c)
+
+### Fixed
+- address advisory review findings from 2026-10-06 pr-triage (#3175) (22971afa)
+
+### Changed
+- add unit tests for three worst-coverage CLI/service modules (#3178) (92e7f89b)
+
+## [5.302.13] - 2026-10-07
+
+### Fixed
+- observe yield probe failures and cover cached PR paths (#3154) (130d8ed4)
+- add maxRetries to rm in peer wake teardown to avoid Windows ENOTEMPTY (#3179) (0daf2a5b)
+- keep the event loop alive during retry backoff sleeps (#3171) (72991e20)
+- replace shell execSync with execFileSync for worktree ops; add .gitleaksignore (#3180) (69c38902)
+
+### Changed
+- delete task-view.ts, remove @types/node-cron, prune 25 unused exports (#3174) (4a9def34)
+
 ## [5.302.12] - 2026-10-07
 
 ### Fixed

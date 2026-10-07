@@ -50,8 +50,9 @@ export { endTurnFlush } from './terminal-compositor.lifecycle.teardown.js';
  *
  * @internal — this is a host-protocol interface, not a public API. Fields that
  * were previously `readonly` (committedBand, committedBandMeta,
- * committedBandTopRow, committedBandBottomRow, committedBandPaintedRows) are
- * intentionally mutable here because the lifecycle functions (`arm`, `disarm`,
+ * committedBandTopRow, committedBandBottomRow, committedBandPaintedRows,
+ * committedBandArchivedPrefix, bandGeometryStale) are intentionally mutable
+ * here because the lifecycle functions (`arm`, `disarm`,
  * `dropScrollingArchivedRows`, `flushPendingCommittedBand`) own them during
  * teardown. They remain `readonly` on the class declaration in
  * terminal-compositor.ts because external code must not mutate them directly.

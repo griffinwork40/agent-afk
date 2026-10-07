@@ -16,13 +16,20 @@
  * @module agent/providers/openai-compatible/models-catalog
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 /** A single model entry from the catalog (only the fields we need). */
 export interface CatalogModel {
   slug: string;
+  context_window?: number;
+  effective_context_window_percent?: number;
+  max_context_window?: number;
+  visibility?: string;
+  supported_in_api?: boolean;
+  priority?: number;
+  upgrade?: { model: string; migration_markdown?: string };
   /** Service tiers the model supports (e.g. `[{id:'priority'}]`). */
   service_tiers?: Array<{ id: string; name?: string; description?: string }>;
   default_service_tier?: string;
@@ -38,23 +45,27 @@ interface ModelsCacheJson {
 export interface CatalogReaderDeps {
   homedir?: () => string;
   readFile?: (path: string) => string | null;
+  revision?: (path: string) => string | undefined;
 }
 
 /**
- * Process-scope catalog cache. Populated once on first call, reused for the
- * lifetime of the process.
- *
- * Known staleness: if Codex rewrites `~/.codex/models_cache.json` while AFK
- * is running (e.g. after a `codex refresh`) the cached map is NOT refreshed.
- * In practice this window is harmless — fast-mode eligibility for the current
- * model does not change mid-session — but tests should call `resetCatalogCache`
- * between cases to start from a clean state.
+ * Process-scope cache refreshed on file mtime or size changes.
+ * Metadata checks avoid repeated parsing while picking up subscription changes.
  */
 let catalogCache: Map<string, CatalogModel> | undefined;
+let catalogRevision: string | undefined;
+
+function fileRevision(path: string): string | undefined {
+  try {
+    const stat = statSync(path);
+    return `${stat.mtimeMs}:${stat.size}`;
+  } catch { return undefined; }
+}
 
 /** Test-only: clear the process-scope cache so tests start from a fresh state. */
 export function resetCatalogCache(): void {
   catalogCache = undefined;
+  catalogRevision = undefined;
 }
 
 /** Default file reader: returns null on any error rather than throwing. */
@@ -83,6 +94,20 @@ function parseCatalogJson(raw: string): Map<string, CatalogModel> {
       const slug = typeof e['slug'] === 'string' ? e['slug'] : '';
       if (!slug) continue;
       const model: CatalogModel = { slug };
+      for (const key of ['context_window', 'effective_context_window_percent', 'max_context_window', 'priority'] as const) {
+        const value = e[key];
+        if (typeof value === 'number' && Number.isFinite(value) && value > 0) model[key] = value;
+      }
+      if (typeof e['visibility'] === 'string') model.visibility = e['visibility'];
+      if (typeof e['supported_in_api'] === 'boolean') model.supported_in_api = e['supported_in_api'];
+      const upgrade = e['upgrade'];
+      if (typeof upgrade === 'object' && upgrade !== null) {
+        const u = upgrade as Record<string, unknown>;
+        if (typeof u['model'] === 'string') {
+          model.upgrade = { model: u['model'] };
+          if (typeof u['migration_markdown'] === 'string') model.upgrade.migration_markdown = u['migration_markdown'];
+        }
+      }
       if (Array.isArray(e['service_tiers'])) {
         model.service_tiers = (e['service_tiers'] as unknown[]).filter(
           (t): t is { id: string } => typeof t === 'object' && t !== null && typeof (t as Record<string, unknown>)['id'] === 'string',
@@ -109,11 +134,14 @@ function parseCatalogJson(raw: string): Map<string, CatalogModel> {
  * Contract: the `identity` key in the JSON is never read or surfaced.
  */
 export function loadModelsCatalog(deps: CatalogReaderDeps = {}): Map<string, CatalogModel> {
-  if (catalogCache !== undefined) return catalogCache;
   const home = (deps.homedir ?? homedir)();
   const readFile = deps.readFile ?? defaultReadFile;
   const path = join(home, '.codex', 'models_cache.json');
-  const raw = readFile(path);
+  const revision = (deps.revision ?? (deps.readFile ? () => undefined : fileRevision))(path);
+  if (catalogCache !== undefined && revision === catalogRevision) return catalogCache;
+  let raw: string | null;
+  try { raw = readFile(path); } catch { raw = null; }
+  catalogRevision = revision;
   catalogCache = raw !== null ? parseCatalogJson(raw) : new Map();
   return catalogCache;
 }

@@ -258,8 +258,8 @@ describe('runDAG — fail-fast', () => {
       { failFast: true },
     );
 
-    expect(result.failed).toHaveLength(1);
-    expect(result.failed[0]!.id).toBe('B');
+    expect(result.failed.map((entry) => entry.id)).toEqual(['B', 'C']);
+    expect(cRun).not.toHaveBeenCalled();
     expect(result.skipped).toContain('D');
     expect(result.outputs['A']).toBe(1);
     expect(result.outputs['D']).toBeUndefined();
