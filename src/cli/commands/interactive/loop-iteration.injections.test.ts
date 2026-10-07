@@ -178,7 +178,11 @@ describe('auto-resume wiring — peer cases (unit level)', () => {
     } finally {
       if (savedHome !== undefined) process.env['AFK_HOME'] = savedHome;
       else delete process.env['AFK_HOME'];
-      await rm(tmp, { recursive: true, force: true });
+      // maxRetries/retryDelay: drainInjections() fires void writeInjectionAck()
+      // (fire-and-forget) which may still be writing into delivered/acked/ when
+      // rm runs. On Windows rmdir fails with ENOTEMPTY if a write is in flight.
+      // Retries give the async ack writes time to finish before each rmdir attempt.
+      await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -220,7 +224,9 @@ describe('auto-resume wiring — peer cases (unit level)', () => {
     } finally {
       if (savedHome !== undefined) process.env['AFK_HOME'] = savedHome;
       else delete process.env['AFK_HOME'];
-      await rm(tmp, { recursive: true, force: true });
+      // Same race as the first test: scan() → consumeEnvelopes() fires void
+      // writeInjectionAck() which may still be writing into delivered/acked/.
+      await rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
