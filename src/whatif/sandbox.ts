@@ -31,7 +31,7 @@ import {
 } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { relative } from 'node:path';
 
 import type {
@@ -82,7 +82,7 @@ function findGitRoot(dir: string): string | null {
 
 /** Add a detached git worktree at `path`, pointing at HEAD. */
 function addWorktree(repoRoot: string, path: string): void {
-  execSync(`git worktree add --detach "${path}" HEAD`, {
+  execFileSync('git', ['worktree', 'add', '--detach', path, 'HEAD'], {
     cwd: repoRoot,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -91,7 +91,7 @@ function addWorktree(repoRoot: string, path: string): void {
 /** Remove a git worktree (forced). */
 function removeWorktree(repoRoot: string, path: string): void {
   try {
-    execSync(`git worktree remove --force "${path}"`, {
+    execFileSync('git', ['worktree', 'remove', '--force', path], {
       cwd: repoRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
     });

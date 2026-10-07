@@ -107,6 +107,12 @@ export const SessionPhaseNameSchema = z.enum([
   // Must mirror the SessionPhaseName union in types.session-phase.ts;
   // session-phase.test.ts parity enforces it.
   'compose_recovery_decision',
+  // Streaming connection opener diagnostics (opt-in AFK_CONNECT_RETRY_BUDGET_MS).
+  // Must mirror the SessionPhaseName union in types.session-phase.ts;
+  // session-phase.test.ts parity enforces it.
+  'connection_failure',
+  'connection_recovered',
+  'connection_budget_exhausted',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

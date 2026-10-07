@@ -20,6 +20,7 @@ import { emitSessionPhase, emitSubagentLifecycle } from '../trace/emit.js';
 import type { TraceSink } from '../trace/index.js';
 import { PauseAwareCeiling, SUBAGENT_MAX_PAUSE_EXTENSION_MS } from './pause-ceiling.js';
 import { PROGRESS_RING_CAPACITY } from './progress-constants.js';
+import { emitSuccessfulHandoff } from './capped-handoff.js';
 import type { WorkspaceEntry, WorkspaceStore } from '../workspace/workspace-store.js';
 import { formatWorkspaceDeliveryEnvelope } from '../workspace/workspace-subscription.js';
 import {
@@ -331,18 +332,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       // FIFO queue BEFORE any seal can run. Safe: write() is a bounded FS append
       // and emitSubagentLifecycle already swallows errors, so the await cannot
       // introduce a new failure mode or an unbounded hang.
-      await emitSubagentLifecycle(this._traceWriter, {
-        transition: 'succeeded',
-        subagentId: this.id,
-        durationMs: Date.now() - startTime,
-        turnCount: this._currentTrace.turnCount,
-        outputBytes: Buffer.byteLength(this._lastMessage, 'utf8'),
-        // Record the terminal stop reason so trace forensics can distinguish a
-        // clean completion from a capped/truncated partial (tool_use_loop_capped
-        // / stream_incomplete) WITHOUT recomputing marker byte-lengths. Absent
-        // when the provider reported no stop reason (a plain clean end).
-        ...(this._lastStopReason !== undefined && { stopReason: this._lastStopReason }),
-      });
+      await emitSuccessfulHandoff(this, lastMsg, startTime);
       // Propagate usage and cost to the parent session's rollup accumulators.
       // Fire synchronously before onTerminal() so the session_sealed event
       // always captures this subagent's contribution even if onTerminal()

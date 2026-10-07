@@ -9,6 +9,7 @@
 
 import type { ZodError, ZodType } from 'zod';
 import type { Message } from '../types.js';
+import { cappedHandoffFields, type CappedHandoff } from './capped-handoff.js';
 import { extractStructuredOutput } from '../output-extractor.js';
 import { parseSignal, type Signal } from '../signal-block.js';
 import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
@@ -186,7 +187,7 @@ export function createEmptyTrace(): SubagentTrace {
   return { toolCalls: [], toolResults: [], thinkingPresent: false, turnCount: 0 };
 }
 
-export interface SubagentResult<T = unknown> {
+export interface SubagentResult<T = unknown> extends Partial<CappedHandoff> {
   id: string;
   status: SubagentStatus;
   message?: Message;
@@ -260,6 +261,7 @@ export function buildResultFromMessage<T>(
       id,
       status,
       message,
+      ...cappedHandoffFields(message, stopReason),
       trace,
       ...(signal !== undefined && { signal }),
       ...(stopReason !== undefined && { stopReason }),
@@ -274,6 +276,7 @@ export function buildResultFromMessage<T>(
       status,
       message,
       output: parsed.data,
+      ...cappedHandoffFields(message, stopReason),
       trace,
       ...(signal !== undefined && { signal }),
       ...(stopReason !== undefined && { stopReason }),
@@ -288,6 +291,7 @@ export function buildResultFromMessage<T>(
       cause: parsed.error,
     }),
     schemaError: parsed.error,
+    ...cappedHandoffFields(message, stopReason),
     trace,
     ...(signal !== undefined && { signal }),
     ...(stopReason !== undefined && { stopReason }),

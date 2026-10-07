@@ -33,7 +33,7 @@ import { evaluateUsage, type BindingWindow } from '../usage/usage-budget.js';
 import { describeBindingWindow } from '../usage/usage-formatter.js';
 
 /** Result when the gate allows the task to proceed. */
-export interface BudgetGatePass {
+interface BudgetGatePass {
   readonly skip: false;
 }
 

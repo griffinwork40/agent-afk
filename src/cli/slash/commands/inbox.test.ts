@@ -6,7 +6,7 @@
  * touch the developer's real ~/.afk.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, afterAll } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -261,5 +261,59 @@ describe('/inbox drop', () => {
     const remaining = await listHeld(sessionId);
     expect(remaining).toHaveLength(1);
     expect(remaining[0]!.corrupt).toBeFalsy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AFK_PEER_INBOUND typo visibility (#2820 item 3)
+// ---------------------------------------------------------------------------
+
+describe('/inbox list — AFK_PEER_INBOUND typo warning', () => {
+  // Reset modules so getPeerInboundModeConfig re-reads the env in each test.
+  beforeEach(() => { vi.resetModules(); });
+  afterAll(() => { vi.unstubAllEnvs(); vi.resetModules(); });
+
+  it('shows the resolved mode line when AFK_PEER_INBOUND is valid', async () => {
+    vi.stubEnv('AFK_PEER_INBOUND', 'hold');
+    const sessionId = 'sess-mode-valid-' + Math.random().toString(36).slice(2, 8);
+    const notifier = makeNotifierStub(sessionId);
+    setPeerNotifier(notifier, () => sessionId);
+    const { ctx, lines } = makeCtx(makeStats({ sessionId }));
+    await inboxCmd.handler(ctx, '');
+    const output = clean(lines);
+    expect(output).toContain('AFK_PEER_INBOUND=hold');
+    // No typo warning for a valid value.
+    expect(output).not.toMatch(/is not recognised/i);
+  });
+
+  it('emits a WARN line when AFK_PEER_INBOUND is a typo like "hol"', async () => {
+    vi.stubEnv('AFK_PEER_INBOUND', 'hol');
+    const sessionId = 'sess-mode-typo-' + Math.random().toString(36).slice(2, 8);
+    const notifier = makeNotifierStub(sessionId);
+    setPeerNotifier(notifier, () => sessionId);
+    const { ctx, lines } = makeCtx(makeStats({ sessionId }));
+    await inboxCmd.handler(ctx, '');
+    const output = clean(lines);
+    // Mode line shows the fallback 'accept' (not the typo).
+    expect(output).toContain('AFK_PEER_INBOUND=accept');
+    // A WARN line must surface the raw typo so the operator notices without AFK_DEBUG=1.
+    const warnLine = lines.find((l) => l.startsWith('WARN:') && l.includes('hol'));
+    expect(warnLine).toBeDefined();
+    expect(warnLine).toMatch(/is not recognised/i);
+  });
+
+  it('caps the echoed raw value at 20 chars in the warning', async () => {
+    const longValue = 'z'.repeat(50);
+    vi.stubEnv('AFK_PEER_INBOUND', longValue);
+    const sessionId = 'sess-mode-long-' + Math.random().toString(36).slice(2, 8);
+    const notifier = makeNotifierStub(sessionId);
+    setPeerNotifier(notifier, () => sessionId);
+    const { ctx, lines } = makeCtx(makeStats({ sessionId }));
+    await inboxCmd.handler(ctx, '');
+    const warnLine = lines.find((l) => l.startsWith('WARN:'));
+    expect(warnLine).toBeDefined();
+    // The truncated value (20 z's + "…") must appear, not all 50 z's.
+    expect(warnLine).toContain('z'.repeat(20) + '…');
+    expect(warnLine).not.toContain('z'.repeat(21));
   });
 });

@@ -24,6 +24,7 @@ import {
   TOOL_USE_LOOP_CAPPED,
   resolveMaxToolIterations,
   shouldWindDown,
+  roundDeliveryNotice,
 } from '../../shared/tool-loop-cap.js';
 import {
   SOFT_DEADLINE_WIND_DOWN,
@@ -330,6 +331,13 @@ export async function* runTurnInner(
         return;
       }
 
+      const notice = roundDeliveryNotice(round, maxIterations);
+      if (notice) {
+        const lastTool = [...ctx.priorTurns].reverse().find(m => m.role === 'tool');
+        if (lastTool && typeof lastTool.content === 'string') {
+          lastTool.content += '\n\n' + notice;
+        }
+      }
       const roundsSpent = shouldWindDown(round, maxIterations);
       const timeSpent = softDeadlineExpired(turnStartTime, softDeadlineMs);
       if (roundsSpent || timeSpent) {

@@ -299,6 +299,15 @@ describe('SIGINT in-flight exitReason wiring (issue #2900)', () => {
   });
 
   it('picker onCancel callback sets exitReason=sigint before rl.close()', () => {
+    // Note: this test calls makeSigintHandler directly and does not exercise the
+    // installSignalHandlers registration path. The registration path (process.on
+    // wiring) is covered by the 'SIGINT handler sets exitReason' test above via
+    // installSignalHandlers. The onCancel behaviour is isolated here because
+    // triggering the picker's cancel callback via installSignalHandlers would
+    // require a real process.emit('SIGINT') after the picker is launched, which is
+    // harder to coordinate reliably. A separate integration-level test would be
+    // needed to close that gap — tracked as advisory in #3170.
+    //
     // makeSigintHandler calls launchInterruptPicker synchronously (mocked above).
     // Capture the onCancel arg and invoke it to verify exitReason is set.
     mockLaunchInterruptPicker.mockClear();

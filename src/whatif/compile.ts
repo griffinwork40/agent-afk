@@ -89,9 +89,18 @@ export const AnyChangeSchema = z.discriminatedUnion('kind', [
   EnvChangeSchema,
 ]);
 
+export const OperatorPredictionSchema = z.object({
+  behavior: z.string(),
+  direction: z.enum(['added', 'removed', 'strengthened', 'weakened']).optional(),
+  confidence: z.enum(['high', 'medium', 'low']).optional(),
+  testQuestion: z.string(),
+  probes: z.array(z.string()).optional(),
+});
+
 export const SpecOutputSchema = z.object({
   title: z.string(),
   changes: z.array(z.unknown()),
+  predictions: z.array(z.unknown()).optional(),
 });
 
 // ---------------------------------------------------------------------------

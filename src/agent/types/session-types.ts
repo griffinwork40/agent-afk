@@ -233,6 +233,9 @@ export interface ProgressEvent {
   taskId: string;
   description: string;
   summary?: string;
+  /** Completed tool rounds, distinct from the tool call count. */
+  roundsUsed?: number;
+  budget?: number;
   lastToolName?: string;
   totalTokens: number;
   toolUses: number;

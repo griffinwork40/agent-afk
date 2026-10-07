@@ -99,6 +99,7 @@ export async function runOneTurn(
     ctx.stats,
     {
       setInFlight(v: boolean) { turnState.turnInFlight = v; },
+      onToolEvent: (event) => footer.bgResultNotifier.observeToolEvent(event),
       ...(ctx.subagentControl ? { subagentControl: ctx.subagentControl } : {}),
       // #2542/#2735: Forward the detach registry so the Ctrl+B handler can
       // free the model's turn while a bash process keeps running.

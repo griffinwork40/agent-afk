@@ -24,7 +24,7 @@ import type { TelemetryRecord, TelemetryTrigger, TaskCompletionDetails } from '.
 import type { Telegraf } from 'telegraf';
 
 /** Subset of `SchedulerOptions` needed by the agent-executor path. */
-export interface AgentTaskOptions {
+interface AgentTaskOptions {
   bot?: Telegraf;
   primaryChatId?: number;
   primaryThreadId?: number;

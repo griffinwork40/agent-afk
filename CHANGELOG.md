@@ -11,6 +11,57 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.303.0] - 2026-10-07
+
+### Added
+- opt-in elapsed-time connection retry budget + connect-failure diagnostics (#3173) (c605e2b2)
+- explicit incomplete handoff and findings salvage at the tool-round cap (#3176) (5e15142c)
+
+### Fixed
+- address advisory review findings from 2026-10-06 pr-triage (#3175) (22971afa)
+
+### Changed
+- add unit tests for three worst-coverage CLI/service modules (#3178) (92e7f89b)
+
+## [5.302.13] - 2026-10-07
+
+### Fixed
+- observe yield probe failures and cover cached PR paths (#3154) (130d8ed4)
+- add maxRetries to rm in peer wake teardown to avoid Windows ENOTEMPTY (#3179) (0daf2a5b)
+- keep the event loop alive during retry backoff sleeps (#3171) (72991e20)
+- replace shell execSync with execFileSync for worktree ops; add .gitleaksignore (#3180) (69c38902)
+
+### Changed
+- delete task-view.ts, remove @types/node-cron, prune 25 unused exports (#3174) (4a9def34)
+
+## [5.302.12] - 2026-10-07
+
+### Fixed
+- pass --allow-scripts=agent-afk to npm install so postinstall runs on npm >=11.19 (#3152) (9005022b)
+
+## [5.302.11] - 2026-10-07
+
+### Added
+- add --predict flag and spec predictions field for deterministic operator-supplied predictions (#3162) (9cfccc5f)
+
+### Fixed
+- add portable POSIX-utility regression test for settle-after-kill fallback (#3167) (7833d6f9)
+- dispatch UserPromptSubmit in Telegram per-turn path (#3163) (f3853eb6)
+
+## [5.302.10] - 2026-10-07
+
+### Changed
+- note dropped `**Done** — text` single-line form next to `'unknown'` in `FacetOutcomeSchema` JSDoc (#2797)
+
+### Added
+- downgrade self-reported Done using corroborating signals (#3168) (4b1b07a5)
+
+### Fixed
+- note dropped single-line Done form next to 'unknown' in schema JSDoc (#3165) (a4d78b4b)
+- wire DetachableToolRegistry.settled subscriber (#3164) (644bf907)
+- peer hardening — typo visibility, bare-filename guard, corrupt-orphan rescan test (#3161) (649073cb)
+- harden createGuardedLookup — catch callback throw, block non-IP, prove all=true (#3166) (ad9dfea9)
+
 ## [5.302.9] - 2026-10-07
 
 ### Fixed

@@ -138,6 +138,30 @@ describe('registerWhatifCommand', () => {
 });
 
 // ---------------------------------------------------------------------------
+// --predict collector → buildArgvFromOpts bridge (#2861)
+// ---------------------------------------------------------------------------
+
+describe('registerWhatifCommand — --predict collector', () => {
+  it('accumulates two --predict values and forwards both to runWhatif as operatorPredictions', async () => {
+    const program = buildProgram();
+    await program.parseAsync([
+      'node', 'afk', 'whatif',
+      '--append', 'Always ask first.',
+      '--predict', 'agent asks a clarifying question',
+      '--predict', 'response is concise',
+      '--yes',
+    ]);
+    const calls = vi.mocked(runWhatif).mock.calls;
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    const opts = calls[calls.length - 1]![0];
+    expect(opts.operatorPredictions).toBeDefined();
+    expect(opts.operatorPredictions).toHaveLength(2);
+    expect(opts.operatorPredictions![0]!.behavior).toBe('agent asks a clarifying question');
+    expect(opts.operatorPredictions![1]!.behavior).toBe('response is concise');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Budget error handling
 // ---------------------------------------------------------------------------
 

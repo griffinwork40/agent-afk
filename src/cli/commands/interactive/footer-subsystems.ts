@@ -129,7 +129,7 @@ export function setupFooterSubsystems(
   // ShellPassthrough drain contract. Subscribed here (with the other
   // registry-driven subsystems); unsubscribed by the orchestrator's finally
   // via dispose() so a swapped/late-settling job can't touch a dead buffer.
-  const bgResultNotifier = new BgResultNotifier(ctx.backgroundRegistry);
+  const bgResultNotifier = new BgResultNotifier(ctx.backgroundRegistry, ctx.detachRegistry);
   // Expose buffer reset so the /resume swap path can drop outgoing-session jobs.
   ctx.clearBgResultBuffer = () => bgResultNotifier.reset();
   return {
