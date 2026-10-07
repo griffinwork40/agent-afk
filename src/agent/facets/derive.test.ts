@@ -43,7 +43,7 @@ describe('deriveSessionFacet', () => {
   it('produces a schema-valid facet', () => {
     const facet = deriveSessionFacet(richSession());
     expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
-    expect(facet.facet_version).toBe(9); // v9: added compose_partial_node_count (#2978)
+    expect(facet.facet_version).toBe(10); // v10: added outcome_downgrade_reason (#2798)
     expect(facet.derived_from).toBe('afk-session');
   });
 
@@ -1190,7 +1190,12 @@ describe('deriveSessionFacet', () => {
       startedAt: 0,
       savedAt: 60_000,
       totalTurns: 1,
-      turns: [{ user: 'do something', assistant, timestamp: 1 }],
+      // Include a write_file event so Done sessions don't trigger the
+      // no_corroborating_evidence downgrade signal (#2798) and the terminal-state
+      // heading tests can focus solely on outcome parsing.
+      turns: [{ user: 'do something', assistant, timestamp: 1, toolEvents: [
+        { toolName: 'write_file', toolUseId: 'ts-wf', inputRaw: JSON.stringify({ file_path: '/out.ts', content: 'x' }) },
+      ] }],
     };
   }
 
@@ -1407,6 +1412,235 @@ describe('deriveSessionFacet', () => {
       const facet = deriveSessionFacet(sessionWithToolEvent([]));
       expect(SessionFacetSchema.safeParse({ ...facet, compose_partial_nodes: -1 }).success).toBe(false);
       expect(SessionFacetSchema.safeParse({ ...facet, compose_partial_node_count: -1 }).success).toBe(false);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // outcome_downgrade_reason (#2798) — downgrade self-reported Done
+  // ---------------------------------------------------------------------------
+
+  describe('outcome_downgrade_reason', () => {
+    // Helper: a Done session with configurable tool events and Done block content.
+    function doneSession({
+      doneText = '**Done**\n- What was done: completed.',
+      toolEvents = [] as Array<{ toolName: string; toolUseId: string; inputRaw?: string; result?: string; isError?: boolean; incomplete?: boolean }>,
+    } = {}): StoredSessionInput {
+      return {
+        sessionId: 'downgrade-test',
+        model: 'sonnet',
+        startedAt: 0,
+        savedAt: 60_000,
+        totalTurns: 1,
+        turns: [{ user: 'go', assistant: doneText, timestamp: 1, toolEvents }],
+      };
+    }
+
+    // --- no downgrade cases ---
+
+    it('no downgrade when Done has a world mutation (file write)', () => {
+      // A file write corroborates the Done — no downgrade should fire.
+      const facet = deriveSessionFacet(doneSession({
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+      expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
+    });
+
+    it('no downgrade when Done has a file edit', () => {
+      const facet = deriveSessionFacet(doneSession({
+        toolEvents: [{ toolName: 'edit_file', toolUseId: 'ef1', inputRaw: JSON.stringify({ file_path: '/b.ts', old_string: 'x', new_string: 'y' }) }],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade when Done has a git commit', () => {
+      const facet = deriveSessionFacet(doneSession({
+        toolEvents: [{ toolName: 'bash', toolUseId: 'b1', inputRaw: JSON.stringify({ command: 'git commit -m "feat: done"' }) }],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade when Done has an evidence bullet (no mutations needed)', () => {
+      // An evidence bullet in the Done block is corroborating — no downgrade.
+      const doneWithEvidence = '**Done**\n- What was done: analysed data.\n- Evidence: see attached report.';
+      const facet = deriveSessionFacet(doneSession({ doneText: doneWithEvidence }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade for non-Done outcomes (Blocked, Asking, Interrupted stay unchanged)', () => {
+      for (const [heading, expected] of [
+        ['**Blocked**\n- What blocks: API key missing.', 'not_achieved'],
+        ['**Asking**\n- Question: which approach?', 'partially_achieved'],
+        ['**Interrupted**', 'aborted'],
+      ] as const) {
+        const facet = deriveSessionFacet(doneSession({ doneText: heading }));
+        expect(facet.outcome).toBe(expected);
+        expect(facet.outcome_downgrade_reason).toBeUndefined();
+      }
+    });
+
+    it('no downgrade when outcome is structural (empty assistant)', () => {
+      const facet = deriveSessionFacet(doneSession({ doneText: '' }));
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_source).toBe('structural');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade when outcome is unknown (no terminal heading)', () => {
+      const facet = deriveSessionFacet(doneSession({ doneText: 'Here is a summary with no heading.' }));
+      expect(facet.outcome).toBe('unknown');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    // --- signal 1: deferred_items ---
+
+    it('downgrade: deferred_items — Done block has a non-empty Deferred bullet (#2798)', () => {
+      // The "Deferred / pending" bullet signals the agent admitted leaving work.
+      const doneWithDeferred = '**Done**\n- What was done: partial fix.\n- Deferred: the UI layer was skipped.';
+      const facet = deriveSessionFacet(doneSession({
+        doneText: doneWithDeferred,
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      }));
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_source).toBe('terminal_state'); // source unchanged — heading was found
+      expect(facet.outcome_downgrade_reason).toBe('deferred_items');
+      expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
+    });
+
+    it('downgrade: deferred_items fires even when there ARE world mutations', () => {
+      // World mutations do not suppress the deferred_items signal.
+      const doneWithDeferred = '**Done**\n- What was done: saved config.\n- Pending: tests still failing.';
+      const facet = deriveSessionFacet(doneSession({
+        doneText: doneWithDeferred,
+        toolEvents: [
+          { toolName: 'edit_file', toolUseId: 'ef1', inputRaw: JSON.stringify({ file_path: '/cfg.ts' }) },
+          { toolName: 'bash', toolUseId: 'b1', inputRaw: JSON.stringify({ command: 'git commit -m "cfg"' }) },
+        ],
+      }));
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_downgrade_reason).toBe('deferred_items');
+    });
+
+    it('downgrade: deferred_items wins over no_corroborating_evidence (priority order)', () => {
+      // Both signals could fire; deferred_items is checked first.
+      const doneWithDeferred = '**Done**\n- What was done: researched.\n- Follow-up: implement what was found.';
+      const facet = deriveSessionFacet(doneSession({ doneText: doneWithDeferred })); // no tool events → no mutations
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_downgrade_reason).toBe('deferred_items');
+    });
+
+    // --- signal 2: no_corroborating_evidence ---
+
+    it('downgrade: no_corroborating_evidence — Done with no mutations and no evidence bullet (#2798)', () => {
+      // A pure-text Done with no file writes/edits/commits and no evidence bullet.
+      const doneText = '**Done**\n- What was done: thought about the problem.';
+      const facet = deriveSessionFacet(doneSession({ doneText })); // no tool events
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_downgrade_reason).toBe('no_corroborating_evidence');
+      expect(facet.outcome_source).toBe('terminal_state');
+      expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
+    });
+
+    it('downgrade: no_corroborating_evidence fires when only read_file calls were made (no mutations)', () => {
+      // read_file is not a mutation; outcome should still be downgraded.
+      const facet = deriveSessionFacet(doneSession({
+        doneText: '**Done**\n- What was done: reviewed the code.',
+        toolEvents: [{ toolName: 'read_file', toolUseId: 'rf1', inputRaw: JSON.stringify({ file_path: '/a.ts' }) }],
+      }));
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_downgrade_reason).toBe('no_corroborating_evidence');
+    });
+
+    it('downgrade: no_corroborating_evidence — bash calls that are NOT commits do not count as mutations', () => {
+      // A bash ls / cat call without a `git commit` is not a mutation.
+      const facet = deriveSessionFacet(doneSession({
+        doneText: '**Done**\n- What was done: ran diagnostics.',
+        toolEvents: [{ toolName: 'bash', toolUseId: 'b1', inputRaw: JSON.stringify({ command: 'ls -la' }) }],
+      }));
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_downgrade_reason).toBe('no_corroborating_evidence');
+    });
+
+    // --- signal 3: compose_partial_nodes ---
+
+    it('downgrade: compose_partial_nodes — Done after a partial compose call (#2798)', () => {
+      // A compose call that wound down partial (soft-deadline) during a Done session.
+      const facet = deriveSessionFacet(doneSession({
+        doneText: '**Done**\n- What was done: parallel work completed.',
+        toolEvents: [
+          // File write provides corroboration so no_corroborating_evidence does NOT fire.
+          { toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) },
+          // Partial compose call — at least one node wound down.
+          { toolName: 'compose', toolUseId: 'cp1', incomplete: true },
+        ],
+      }));
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_downgrade_reason).toBe('compose_partial_nodes');
+      expect(facet.compose_partial_nodes).toBe(1);
+      expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
+    });
+
+    it('downgrade: compose_partial_nodes does NOT fire when compose ran cleanly', () => {
+      // A clean compose call (no incomplete flag) does not trigger the downgrade.
+      const facet = deriveSessionFacet(doneSession({
+        doneText: '**Done**\n- What was done: all nodes completed.',
+        toolEvents: [
+          { toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) },
+          { toolName: 'compose', toolUseId: 'cp1' }, // no incomplete flag
+        ],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('downgrade: deferred_items takes priority over compose_partial_nodes', () => {
+      // Both deferred_items and compose_partial_nodes fire; deferred_items wins.
+      const doneWithDeferred = '**Done**\n- What was done: partial.\n- Deferred: the rest.';
+      const facet = deriveSessionFacet(doneSession({
+        doneText: doneWithDeferred,
+        toolEvents: [
+          { toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) },
+          { toolName: 'compose', toolUseId: 'cp1', incomplete: true },
+        ],
+      }));
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_downgrade_reason).toBe('deferred_items');
+    });
+
+    it('outcome_downgrade_reason is absent on the facet when no downgrade occurred', () => {
+      // Verify the field is not present (not just undefined) when not needed.
+      const facet = deriveSessionFacet(doneSession({
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(Object.prototype.hasOwnProperty.call(facet, 'outcome_downgrade_reason')).toBe(false);
+    });
+
+    it('outcome_downgrade_reason is schema-valid as an enum value', () => {
+      // All three downgrade reason values are valid schema members.
+      const base = deriveSessionFacet(doneSession({
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      }));
+      for (const reason of ['deferred_items', 'no_corroborating_evidence', 'compose_partial_nodes'] as const) {
+        expect(SessionFacetSchema.safeParse({ ...base, outcome_downgrade_reason: reason }).success).toBe(true);
+      }
+      // Invalid value must be rejected.
+      expect(SessionFacetSchema.safeParse({ ...base, outcome_downgrade_reason: 'some_other_reason' }).success).toBe(false);
+    });
+
+    it('primary_success is preserved from the Done block after downgrade', () => {
+      // The agent's self-reported "What was done" is still useful even after downgrade.
+      const doneWithDeferred = '**Done**\n- What was done: implemented the handler.\n- Deferred: tests skipped.';
+      const facet = deriveSessionFacet(doneSession({
+        doneText: doneWithDeferred,
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      }));
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.primary_success).toBe('implemented the handler.');
     });
   });
 });
