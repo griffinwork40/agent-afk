@@ -12,14 +12,12 @@ import { SubagentManager, SUBAGENT_BACKGROUND_TIMEOUT_MS } from '../subagent.js'
 import { computeInheritedReadRoots } from '../subagent-read-scope.js';
 import type { TraceSink } from '../trace/index.js';
 import type { AnthropicToolDef, ToolCall, ToolResult } from './types.js';
-import { resolveMaxNestingDepth } from './nesting.js';
 import { buildAgentToolDef } from '../agents/index.js';
-import type { RegisteredAgent } from '../agents/index.js';
 import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
-import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from '../session/session-identity.js';
-import { parseAgentInput, type AgentInput, type AgentExecutionMode } from './subagent/input-parse.js';
+import type { AgentExecutionMode } from './subagent/input-parse.js';
 import { emitTelemetry, truncate } from './subagent/failure-payload.js';
 import { buildChildConfig, type BuildChildConfigArgs } from './subagent/child-config.js';
+import { runAdmissionGates } from './subagent-executor.admission.js';
 import { runBackgroundBranch } from './subagent/background-branch.js';
 import { backgroundTarget } from './subagent/background-delivery.js';
 import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
@@ -35,9 +33,6 @@ import { appendImageBlocks } from '../content/image-blocks.js';
 import { addForegroundNotices, withCatalogNotice } from './subagent-executor.notices.js';
 import { resolveSubagentAttachments } from './subagent/attachment-resolve.js';
 import { inboundAttachmentRegistry } from '../content/attachment-registry.js';
-import { appendRoutingDecision } from '../routing-telemetry.js';
-import { buildAgentMaxDepthRefusal } from './skill-depth-message.js';
-import { buildBudgetRefusalMessage, type SpawnReceipt } from './delegation-budget.js';
 import { evaluateDispatchUsageForModel } from './usage-notice.js';
 import { buildSubagentsLite } from './subagent-executor.lite-snapshot.js';
 import { updateWaveUnit } from '../manifest/write.js';
@@ -292,130 +287,13 @@ export class SubagentExecutor implements SubagentControl {
     probe?: StreamCutProbe,
     retryCancelGeneration?: number,
   ): Promise<ToolResult> {
-    // If signal is already aborted, return immediately
-    if (call.signal.aborted) {
-      return { content: 'Agent tool call aborted', isError: true };
-    }
-
-    let parsed: AgentInput;
-    try {
-      parsed = parseAgentInput(call.input);
-    } catch (err) {
-      const message = errorMessage(err);
-      return {
-        content: `Agent tool input validation failed: ${message}`,
-        isError: true,
-      };
-    }
-
-    // Named-agent resolution. A miss fails fast with the available list
-    // (mirrors skill-executor.ts's "Skill not found. Available skills: …")
-    // rather than silently dispatching an unrestricted generic child under
-    // a name the caller believed carried constraints.
-    let namedAgent: RegisteredAgent | undefined;
-    if (parsed.agent_type !== undefined) {
-      namedAgent = this.ctx.agentRegistry?.get(parsed.agent_type);
-      if (namedAgent === undefined) {
-        const available = [...(this.ctx.agentRegistry?.keys() ?? [])].sort().join(', ');
-        return {
-          content:
-            `Agent type "${parsed.agent_type}" not found. ` +
-            `Available agent types: ${available.length > 0 ? available : '(none)'}`,
-          isError: true,
-        };
-      }
-    }
-
-    // Nested-dispatch scope gate. When THIS executor belongs to an agent that
-    // declared a scoped `Agent(x)` grant (e.g. research-agent's
-    // `Agent(git-investigator)`), it may dispatch ONLY those agent types.
-    // Reject any out-of-scope type AND any bare/no-type dispatch (which would
-    // otherwise fork an unrestricted general-purpose grandchild inheriting the
-    // parent's unrestricted cage — the escalation this gate closes). An empty
-    // allowlist (`[]`, from an `Agent()` deny-all grant) matches nothing and so
-    // rejects every dispatch. Top-level executors and inherit-all/bare-`Agent`
-    // agents leave the allowlist unset (`undefined`), so their dispatch is
-    // unchanged. The guard is on presence, not length — see nestedAgentAllowlist.
-    const nestedScope = this.ctx.nestedAgentAllowlist;
-    if (nestedScope !== undefined) {
-      const requested = parsed.agent_type;
-      if (requested === undefined || !nestedScope.includes(requested)) {
-        return {
-          content:
-            nestedScope.length === 0
-              ? 'This agent is not permitted to dispatch any nested agents ' +
-                '(its definition granted the dispatch tool but named zero allowed ' +
-                'types, e.g. `Agent()`). Complete the task with your own tools.'
-              : `This agent may only dispatch the following agent type(s): ${nestedScope.join(', ')}. ` +
-                (requested === undefined
-                  ? 'A bare dispatch with no agent_type is not permitted here — ' +
-                    'set agent_type to one of the allowed types, or complete the task with your own tools.'
-                  : `agent_type "${requested}" is out of scope.`),
-          isError: true,
-        };
-      }
-    }
-
-    // Invariant: `ctx.depth` is required (see SubagentExecutorContext.depth
-    // jsdoc) — top-level callers pass explicit `0` so the child's `depth + 1`
-    // arithmetic in buildChildConfig produces a confident nesting position. A
-    // future change that loosens the type back to optional would re-introduce
-    // the silent misconfig fallback the Phase 1 awareness contract is designed
-    // to avoid.
-    const depth = this.ctx.depth;
-    const maxDepth = this.ctx.maxDepth ?? resolveMaxNestingDepth();
-
-    // Session identity for routing-decision rows. Only emitted when this
-    // executor was wired with a `surface` (the new top-level wiring); legacy/
-    // un-threaded contexts omit both fields, preserving back-compat. `actor`
-    // comes from `depth` (>0 ⟺ this executor is owned by a subagent).
-    const identity: { origin?: TraceOrigin; actor?: TraceActor } =
-      this.ctx.surface !== undefined
-        ? { origin: deriveOrigin(this.ctx.surface), actor: actorFromDepth(depth) }
-        : {};
-
-    // Depth cap, mirroring the `skill` tool's guard (skill-executor.ts). Before
-    // this existed the cap was enforced only by child-config.ts NOT wiring
-    // nested executors into the child it builds (`depth < maxDepth`), which
-    // made the two tools stop one generation apart: a depth-3 child (wired by
-    // its depth-2 parent, which passed that gate) still held a live `agent`
-    // tool and could fork a depth-4 leaf, whereas `skill` already refused at
-    // depth 3. The leaf then answered "Agent tool is not available in this
-    // session configuration" from the dispatcher — a config-shaped message for
-    // what is really a depth wall, with no recovery hint. Refusing here makes
-    // `maxDepth` mean one thing for both tools and hands back the actionable
-    // "work inline" clause instead.
-    if (depth >= maxDepth) {
-      void appendRoutingDecision({
-        ...identity,
-        event: 'delegation.skipped',
-        parent_session_id: this.ctx.parentSession.sessionId,
-        reason: 'max_depth',
-        depth,
-        ...(parsed.agent_type !== undefined ? { requested_name: parsed.agent_type } : {}),
-      }).catch(() => {});
-      return {
-        content: buildAgentMaxDepthRefusal(depth, maxDepth),
-        isError: true,
-      };
-    }
-
-    // Delegation budget: per-agent child cap, tree-wide concurrent/total caps.
-    // Item 1: record the spawn atomically with the admission check — BEFORE the
-    // first await — so concurrent parallel `agent` calls cannot all pass canSpawn
-    // before any reaches recordSpawn. The SpawnReceipt is stored below; call
-    // receipt.rollback() on fork failure (undoes all counters) and receipt.release()
-    // on normal completion (decrements only concurrent).
-    let budgetReceipt: SpawnReceipt | undefined;
-    if (this.ctx.delegationBudget) {
-      const check = this.ctx.delegationBudget.canSpawn(this.ctx.parentSession.sessionId ?? '');
-      if (!check.allowed) {
-        void appendRoutingDecision({ ...identity, event: 'delegation.skipped', parent_session_id: this.ctx.parentSession.sessionId, reason: check.reason ?? 'budget', depth, ...(parsed.agent_type !== undefined ? { requested_name: parsed.agent_type } : {}) }).catch(() => {});
-        return { content: buildBudgetRefusalMessage(check), isError: true };
-      }
-      // Admitted: charge the slot now, synchronously, before any await.
-      budgetReceipt = this.ctx.delegationBudget.recordSpawn(this.ctx.parentSession.sessionId ?? '');
-    }
+    // Pre-fork admission gates: input parse, named-agent resolution,
+    // nested-scope check, depth cap, and delegation budget. Extracted to
+    // subagent-executor.admission.ts (file-size ceiling).
+    const admission = runAdmissionGates(call, this.ctx);
+    if (!admission.admitted) return admission.result;
+    const { parsed, namedAgent, depth, maxDepth, identity } = admission;
+    let { budgetReceipt } = admission;
 
     // Usage notice: evaluate quota at dispatch start (observer-only, no blocking).
     const usageNotice = await evaluateDispatchUsageForModel(this.ctx.parentModel, this.ctx.traceWriter);
