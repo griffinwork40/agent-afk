@@ -66,7 +66,32 @@ describe('compose node recovery', () => {
     expect(trace.write).toHaveBeenCalledWith(expect.objectContaining({ payload: expect.objectContaining({ metadata: expect.objectContaining({ eligible: false, reason: 'unsafe_or_missing_trace' }) }) }));
   });
 
-  it.each(['partial', 'unsafe', 'missing', 'ordinary', 'cancelled'])('declines %s failures', async (kind) => {
+  it('replays an unrestricted-surface node that failed on transport before any tool activity', async () => {
+    vi.useFakeTimers();
+    let attempts = 0;
+    const m = manager(async () => (++attempts === 1 ? cut() : success('recovered')));
+    const trace: TraceSink = { write: vi.fn(async () => {}), getTracePath: () => 'in-memory://trace' };
+    const result = await advance(runSubagentDAG({ manager: m.instance, parentSession: { abortSignal: new AbortController().signal },
+      nodes: [{ ...node('a'), replaySafe: false }], edges: [], traceWriter: trace }));
+    expect(result.failed).toEqual([]);
+    expect(result.outputs).toEqual({ a: 'recovered' });
+    expect(m.fork).toHaveBeenCalledTimes(2);
+    expect(trace.write).toHaveBeenCalledWith(expect.objectContaining({ payload: expect.objectContaining({ metadata: expect.objectContaining({ eligible: true, reason: 'eligible_no_tool_activity' }) }) }));
+  });
+
+  it.each(['read_file', 'bash'])('never replays an unrestricted-surface node that already called %s', async (name) => {
+    const failure = cut();
+    failure.trace!.toolCalls.push({ id: 'tool', name });
+    const m = manager(async () => failure);
+    const trace: TraceSink = { write: vi.fn(async () => {}), getTracePath: () => 'in-memory://trace' };
+    const result = await runSubagentDAG({ manager: m.instance, parentSession: { abortSignal: new AbortController().signal },
+      nodes: [{ ...node('a'), replaySafe: false }], edges: [], traceWriter: trace });
+    expect(result.failed).toHaveLength(1);
+    expect(m.fork).toHaveBeenCalledTimes(1);
+    expect(trace.write).toHaveBeenCalledWith(expect.objectContaining({ payload: expect.objectContaining({ metadata: expect.objectContaining({ eligible: false, reason: 'unsafe_tool_surface' }) }) }));
+  });
+
+  it.each(['partial', 'missing', 'ordinary', 'cancelled'])('declines %s failures', async (kind) => {
     const failure = cut();
     if (kind === 'partial') failure.partialOutput = 'useful work';
     if (kind === 'missing') delete failure.trace;
@@ -187,10 +212,15 @@ describe('compose node recovery', () => {
         const count = (attempts.get(id) ?? 0) + 1;
         attempts.set(id, count);
         if (id === '6') { effects++; return success('wrote once'); }
-        return count === 1 ? cut() : success('recovered');
+        if (count > 1) return success('recovered');
+        // Baseline arm: an unknown trace fails closed, which reproduces origin/main's
+        // no-recovery outcome for the same injected transport failure.
+        const failure = cut();
+        if (!recovery) delete failure.trace;
+        return failure;
       });
       const start = Date.now();
-      const nodes = Array.from({ length: 7 }, (_, i) => ({ ...node(String(i)), replaySafe: recovery && i !== 6 }));
+      const nodes = Array.from({ length: 7 }, (_, i) => ({ ...node(String(i)), replaySafe: i !== 6 }));
       const promise = runSubagentDAG({ manager: m.instance, parentSession: { abortSignal: new AbortController().signal }, nodes, edges: [], failFast: false });
       let elapsed = 0;
       void promise.then(() => { elapsed = Date.now() - start; });

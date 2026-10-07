@@ -19,6 +19,7 @@ export async function recoverDagNode(
   traceWriter?: TraceSink,
 ): Promise<SubagentResult> {
   let last: SubagentResult;
+  let lastEligible = false;
   const onAbort = (): void => {
     void emitSessionPhase(traceWriter, { phase: 'compose_recovery_decision',
       metadata: { nodeId: id, eligible: false, reason: 'aborted' } });
@@ -36,15 +37,25 @@ export async function recoverDagNode(
           (last.message !== undefined && last.message.content !== '');
         const pureTrace = last.trace !== undefined && last.trace.toolCalls.every((call) =>
           isComposeReplaySafe([call.name]));
-        const eligible = transport && !hasOutput && sideEffectFree && pureTrace && !signal.aborted;
+        // Invariant: `trace.toolCalls` is filled from the runtime's own `tool_use_detail` stream
+        // events (subagent/handle.streaming.ts), which precede any tool execution, and
+        // `toolResults` from completions. A known trace with neither proves no tool ran, so a
+        // zero-output transport failure is replay-safe on ANY tool surface (the 853e8516 case:
+        // unrestricted nodes that died on connect before their first tool call).
+        const noToolActivity = last.trace !== undefined && last.trace.toolCalls.length === 0 &&
+          last.trace.toolResults.length === 0;
+        const safeEffects = noToolActivity || (sideEffectFree && pureTrace);
+        const eligible = transport && !hasOutput && safeEffects && !signal.aborted;
+        lastEligible = eligible;
         const reason = signal.aborted ? 'aborted' : !transport ? 'not_transport_failure' : hasOutput ? 'output_present' :
-          !sideEffectFree ? 'unsafe_tool_surface' : !pureTrace ? 'unsafe_or_missing_trace' : attempt > 0 ? 'retry_exhausted' : 'eligible';
+          !safeEffects ? (sideEffectFree ? 'unsafe_or_missing_trace' : 'unsafe_tool_surface') :
+            attempt > 0 ? 'retry_exhausted' : noToolActivity && !sideEffectFree ? 'eligible_no_tool_activity' : 'eligible';
         void emitSessionPhase(traceWriter, { phase: 'compose_recovery_decision',
           metadata: { nodeId: id, attempt, eligible: eligible && attempt === 0, reason } });
         return { content: '', isError: last.status !== 'succeeded',
           ...(eligible ? { incompleteReason: STREAM_INCOMPLETE } : {}) };
       },
-      canRedispatch: () => sideEffectFree && !signal.aborted,
+      canRedispatch: () => lastEligible && !signal.aborted,
       onRedispatch: (attempt) => {
         void emitSessionPhase(traceWriter, { phase: 'compose_recovery_decision',
           metadata: { nodeId: id, attempt, eligible: true, reason: 'redispatch' } });
