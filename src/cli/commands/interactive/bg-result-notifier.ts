@@ -38,6 +38,9 @@ import { extractOutputText } from '../../../agent/background-registry.result.js'
 import { redactSecrets } from '../../../agent/redact-secrets.js';
 import { env, isPlainOutputRequested } from '../../../config/env.js';
 import { formatDuration } from '../../format-utils.js';
+import { DetachedToolNotifier } from './detached-tool-notifier.js';
+import type { DetachableToolRegistry } from '../../../agent/tools/detach-registry.js';
+import type { ToolEvent } from '../../slash/types.js';
 
 /**
  * Maximum byte length of one job's injected output. Results beyond this are
@@ -214,9 +217,19 @@ export class BgResultNotifier {
     this.onInjectable?.();
   };
 
-  constructor(private readonly registry: BackgroundAgentRegistry) {
+  private readonly detachedTools: DetachedToolNotifier | undefined;
+
+  constructor(private readonly registry: BackgroundAgentRegistry, detachRegistry?: DetachableToolRegistry) {
     registry.on('settled', this.onSettled);
+    if (detachRegistry) {
+      this.detachedTools = new DetachedToolNotifier(detachRegistry);
+      // Explicit Ctrl+B promises delivery even when background-subagent auto-delivery is off.
+      this.detachedTools.onInjectable = () => this.onInjectable?.();
+    }
   }
+
+  observeToolEvent(event: ToolEvent): void { this.detachedTools?.observe(event); }
+  drainToolNotices(): string[] { return this.detachedTools?.drainNotices() ?? []; }
 
   /**
    * Drain and return the concatenated injection envelopes to prepend to the
@@ -226,11 +239,12 @@ export class BgResultNotifier {
    * joins.
    */
   drainInjections(): string {
-    if (this.pendingInjections.length === 0) return '';
+    const detached = this.detachedTools?.drainInjections() ?? '';
+    if (this.pendingInjections.length === 0) return detached;
     const jobs = this.pendingInjections;
     this.pendingInjections = [];
     for (const job of jobs) this.registry.markDelivered(job.jobId);
-    return jobs.map((j) => buildBgResultInjection(j)).join('\n') + '\n';
+    return detached + jobs.map((j) => buildBgResultInjection(j)).join('\n') + '\n';
   }
 
   /**
@@ -251,6 +265,7 @@ export class BgResultNotifier {
    * session's first turn (mirrors the verdict-ledger reset semantics).
    */
   reset(): void {
+    this.detachedTools?.reset();
     this.pendingInjections = [];
     this.pendingNotifications = [];
   }
@@ -263,7 +278,7 @@ export class BgResultNotifier {
    * fired but `isAwaitingInput()` was false.
    */
   hasPendingInjections(): boolean {
-    return this.pendingInjections.length > 0;
+    return this.pendingInjections.length > 0 || this.detachedTools?.hasPendingInjections() === true;
   }
 
   /**
@@ -280,6 +295,7 @@ export class BgResultNotifier {
    * has already been torn down.
    */
   dispose(): void {
+    this.detachedTools?.dispose();
     this.registry.off('settled', this.onSettled);
     if (this.pendingInjections.length > 0) {
       const ids = this.pendingInjections.map((j) => j.jobId).join(', ');
