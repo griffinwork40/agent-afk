@@ -71,6 +71,7 @@ describe('T2: requestCprAndApplyDelta applies delta to tracked rows', () => {
     eraseBottom?: number;
     logUpdateTopRow?: number;
     anchorRow?: number;
+    pendingEvictionRows?: number;
   } = {}): CprHost & { repaintCalls: number } {
     const stdin = new PassThrough() as unknown as NodeJS.ReadStream & { isTTY: boolean };
     stdin.isTTY = true;
@@ -93,6 +94,7 @@ describe('T2: requestCprAndApplyDelta applies delta to tracked rows', () => {
         ? { topRow: opts.logUpdateTopRow }
         : null,
       anchorRow: opts.anchorRow,
+      pendingEvictionRows: opts.pendingEvictionRows ?? 0,
       repaint() { repaintCalls++; },
       get repaintCalls() { return repaintCalls; },
     } as unknown as CprHost & { repaintCalls: number };
@@ -261,6 +263,7 @@ describe('T4: CPR data-listener intercepts reply before readline emits keypress'
         pendingResizeErase: null,
         logUpdate: { topRow: 20 },
         anchorRow: 1 as number | undefined,
+        pendingEvictionRows: 0,
         repaintCalls: 0,
         repaint() { this.repaintCalls++; },
       } as unknown as CprHost & { repaintCalls: number };
@@ -381,6 +384,7 @@ describe('T6: CPR timeout fallback — existing behaviour preserved when no repl
       pendingResizeErase: { top: 5, bottom: 23 },
       logUpdate: { topRow: 10 },
       anchorRow: 1,
+      pendingEvictionRows: 0,
       repaint() { repaintCalls++; },
     } as unknown as CprHost;
 
@@ -510,6 +514,7 @@ describe('T7: regression — tmux pane growth + CPR shift → no frame duplicati
       pendingResizeErase: null,
       logUpdate: { topRow: 10 },
       anchorRow: 1,
+      pendingEvictionRows: 0,
       repaint() { repaintCalls++; },
     } as unknown as CprHost;
 
@@ -541,6 +546,7 @@ describe('T8: burst correctness — measure until quiescent', () => {
     frameBottom?: number;
     bandTop?: number;
     bandBottom?: number;
+    pendingEvictionRows?: number;
   } = {}): CprHost & { repaintCalls: number; cprRequests: string[] } {
     const stdin = new PassThrough() as unknown as NodeJS.ReadStream & { isTTY: boolean };
     stdin.isTTY = true;
@@ -564,6 +570,7 @@ describe('T8: burst correctness — measure until quiescent', () => {
       pendingResizeErase: null,
       logUpdate: null,
       anchorRow: undefined,
+      pendingEvictionRows: opts.pendingEvictionRows ?? 0,
       repaint() { repaintCalls++; },
       get repaintCalls() { return repaintCalls; },
       get cprRequests() { return cprRequests; },
@@ -738,5 +745,150 @@ describe('T8: burst correctness — measure until quiescent', () => {
     expect(host.repaintCalls).toBe(1); // ALWAYS repaint on timeout
     expect(host.lastMeasuredFrameTop).toBe(5);  // no delta applied
     expect(host.lastMeasuredFrameBottom).toBe(15); // no delta applied
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T9: pendingEvictionRows — eviction between resize cycles widens growTotal
+// ---------------------------------------------------------------------------
+
+/**
+ * RED-FIRST regression: a repaint with eviction between two resize cycles
+ * caused the second cycle's CPR delta to fall outside the plausibility range
+ * [−shrinkTotal, +growTotal], causing the guard to discard the delta and
+ * fall back to absolute-row behaviour — which duplicates the frame.
+ *
+ * Reproduces the observed failure:
+ *   [afk/cpr] apply delta=-17 ...
+ *   [compositor] evict:enter rows=3 ...              ← eviction in repaint
+ *   [afk/cpr] plausibility guard: delta=11 outside [0,8] — discarding
+ *
+ * After the fix: pendingEvictionRows=3 is folded into the next burst's
+ * growTotal (8+3=11), so delta=11 is within [0,11] and IS applied.
+ */
+describe('T9: pendingEvictionRows — eviction between cycles widens plausibility range', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  function makeEvictionHost(opts: {
+    frameTop?: number;
+    frameBottom?: number;
+    pendingEvictionRows?: number;
+  } = {}): CprHost & { repaintCalls: number; cprRequests: string[] } {
+    const stdin = new PassThrough() as unknown as NodeJS.ReadStream & { isTTY: boolean };
+    stdin.isTTY = true;
+    const stdout = new PassThrough() as unknown as NodeJS.WriteStream;
+    let repaintCalls = 0;
+    const cprRequests: string[] = [];
+    stdout.on('data', (c: unknown) => {
+      const s = Buffer.isBuffer(c) ? c.toString() : (typeof c === 'string' ? c : '');
+      if (s.includes('\x1b[6n')) cprRequests.push(s);
+    });
+    return {
+      stdout,
+      stdin,
+      armed: true,
+      cprPending: false,
+      cprBurst: null,
+      lastMeasuredFrameTop: opts.frameTop ?? 10,
+      lastMeasuredFrameBottom: opts.frameBottom ?? 23,
+      committedBandTopRow: 0,
+      committedBandBottomRow: 0,
+      pendingResizeErase: null,
+      logUpdate: null,
+      anchorRow: undefined,
+      pendingEvictionRows: opts.pendingEvictionRows ?? 0,
+      repaint() { repaintCalls++; },
+      get repaintCalls() { return repaintCalls; },
+      get cprRequests() { return cprRequests; },
+    } as unknown as CprHost & { repaintCalls: number; cprRequests: string[] };
+  }
+
+  it('T9a: delta accepted when eviction rows are included in growTotal (regression fix)', async () => {
+    // Simulate: frame at row 27, eviction of 3 rows happened since last CPR.
+    // Next resize: grow by 8 rows (rowDelta=+8).
+    // tmux shifts cursor by 8 (grow) + 3 (evicted rows pulled back) = 11.
+    // Without fix: growTotal=8, delta=11 outside [0,8] → discarded.
+    // With fix:    growTotal=8+3=11, delta=11 within [0,11] → applied.
+    const host = makeEvictionHost({
+      frameTop: 20,
+      frameBottom: 27,
+      pendingEvictionRows: 3,
+    });
+
+    requestCprOrMarkDirty(host, /* expectedRow= */ 27, /* newRows= */ 40, /* rowDelta= */ 8);
+
+    // pendingEvictionRows must be consumed (reset to 0) when seeding the burst.
+    expect(host.pendingEvictionRows).toBe(0);
+    // growTotal must include the 3 eviction rows (8 + 3 = 11).
+    expect(host.cprBurst?.growTotal).toBe(11);
+
+    // CPR reply: cursor shifted by 11 (8 grow + 3 eviction pull-back).
+    // delta = 38 - 27 = 11, within [0, 11] — must be APPLIED, not discarded.
+    host.stdin.emit('data', Buffer.from('\x1b[38;1R'));
+    await Promise.resolve();
+
+    expect(host.cprPending).toBe(false);
+    expect(host.repaintCalls).toBe(1); // repaint after applied delta
+    // Rows shifted by +11 (not discarded).
+    expect(host.lastMeasuredFrameTop).toBe(31);   // 20 + 11
+    expect(host.lastMeasuredFrameBottom).toBe(38); // 27 + 11, clamped to 40
+  });
+
+  it('T9b: without fix, same scenario would discard delta (documents the red state at e4b3e8827)', async () => {
+    // Same scenario but pendingEvictionRows=0 (no fix): growTotal=8 alone, delta=11 outside [0,8].
+    // The burst host discards delta → no row shift, repaint still fires (fallback).
+    const host = makeEvictionHost({
+      frameTop: 20,
+      frameBottom: 27,
+      pendingEvictionRows: 0, // no fix: eviction rows not included
+    });
+
+    requestCprOrMarkDirty(host, /* expectedRow= */ 27, /* newRows= */ 40, /* rowDelta= */ 8);
+    expect(host.cprBurst?.growTotal).toBe(8); // no eviction bonus
+
+    // Same CPR reply: delta=11 outside [0,8] → plausibility guard discards.
+    host.stdin.emit('data', Buffer.from('\x1b[38;1R'));
+    await Promise.resolve();
+
+    // Delta discarded — rows NOT shifted (fallback repaint fires but no row change).
+    expect(host.repaintCalls).toBe(1); // fallback repaint (always repaints on discard)
+    expect(host.lastMeasuredFrameBottom).toBe(27); // UNCHANGED — demonstrates the pre-fix bug
+    expect(host.lastMeasuredFrameTop).toBe(20);    // UNCHANGED
+  });
+
+  it('T9c: pendingEvictionRows resets to 0 after burst seeded', async () => {
+    const host = makeEvictionHost({ frameBottom: 15, pendingEvictionRows: 5 });
+    requestCprOrMarkDirty(host, 15, 30, /* rowDelta= */ 6);
+    // Eviction bonus consumed at burst-seed time.
+    expect(host.pendingEvictionRows).toBe(0);
+    expect(host.cprBurst?.growTotal).toBe(11); // 6 + 5
+
+    // Clean up CPR listener.
+    vi.advanceTimersByTime(CPR_TIMEOUT_MS + 20);
+  });
+
+  it('T9d: pendingEvictionRows not consumed when CPR already in-flight (burst dirty path)', async () => {
+    // When a CPR is already in-flight, requestCprOrMarkDirty marks dirty but
+    // does NOT seed a new burst — pendingEvictionRows is NOT reset yet.
+    // It will be consumed at the next burst-seed (when the in-flight resolves).
+    const host = makeEvictionHost({ frameBottom: 15, pendingEvictionRows: 2 });
+
+    // First SIGWINCH seeds a burst (consumes pendingEvictionRows=2 → reset to 0).
+    requestCprOrMarkDirty(host, 15, 30, /* rowDelta= */ 4);
+    expect(host.pendingEvictionRows).toBe(0);
+    expect(host.cprBurst?.growTotal).toBe(6); // 4 + 2
+
+    // Another SIGWINCH arrives while CPR is in-flight.
+    // Simulate new eviction happening during the in-flight repaint.
+    host.pendingEvictionRows = 3;
+    requestCprOrMarkDirty(host, 15, 34, /* rowDelta= */ 4);
+    // CPR is still pending — burst marked dirty, eviction NOT consumed.
+    expect(host.cprPending).toBe(true);
+    expect(host.cprBurst?.dirty).toBe(true);
+    expect(host.pendingEvictionRows).toBe(3); // still 3 — not consumed yet
+
+    // Simulate quiescent reply resetting via timeout (simplest path).
+    vi.advanceTimersByTime(CPR_TIMEOUT_MS + 20);
   });
 });

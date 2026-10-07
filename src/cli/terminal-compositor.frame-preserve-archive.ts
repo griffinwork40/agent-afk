@@ -163,6 +163,13 @@ export function archiveBandPrefixAndRepaintSurvivors(
   // (4) Bookkeeping. Honest by construction now: every survivor was painted
   // above, so none are pending. Meta slices in lockstep to hold the 1:1
   // band<->meta invariant the reflow and logical-flush sites rely on.
+  // CPR plausibility accounting: the archive step (2) sent `overflow` physical
+  // rows to terminal scrollback. tmux can pull those back on a pane GROW,
+  // shifting the cursor by more than the raw row-delta alone. Fold the count
+  // into pendingEvictionRows so the next CPR burst's plausibility guard remains
+  // accurate (see evictRowsToScrollback and requestCprOrMarkDirty in
+  // terminal-compositor.lifecycle.cpr.ts).
+  self.pendingEvictionRows += overflow;
   if (retain) {
     // Archive-and-retain: the archived rows stay in the model as the hidden
     // pending prefix; only the survivors are painted.

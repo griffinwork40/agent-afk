@@ -146,6 +146,9 @@ export interface LifecycleHost {
   // Real frame top/bottom from the last repaint (0 = no frame measured).
   lastMeasuredFrameTop: number;
   lastMeasuredFrameBottom: number;
+  // Cumulative rows evicted to terminal scrollback since the last CPR burst.
+  // Forwarded to CprHost and folded into growTotal when the next burst starts.
+  pendingEvictionRows: number;
   // Stale-guard for endTurnFlush: set true when committed-band state changes
   // (a commit arrives); cleared by clearCommittedBand() after the flush so
   // a redundant call to endTurnFlush on an already-flushed band is a no-op.

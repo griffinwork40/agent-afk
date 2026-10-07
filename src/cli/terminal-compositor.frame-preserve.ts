@@ -333,6 +333,12 @@ function scrollBannerDeficit(self: FrameHost, deficit: number): void {
 export function evictRowsToScrollback(self: FrameHost, rows: number): void {
   if (rows <= 0) return;
   self.debugLog('evict:enter', { rows, anchorRow: self.anchorRow ?? null });
+  // Account for the scrollback rows that tmux can pull back on a pane GROW:
+  // each row evicted here enters terminal scrollback and expands the pool tmux
+  // may restore, shifting the cursor by more than the raw terminal-row delta.
+  // The CPR burst's plausibility range (requestCprOrMarkDirty) folds this
+  // counter into growTotal when seeding the next burst, then resets it.
+  self.pendingEvictionRows += rows;
   // Invariant (DECSTBM scroll trigger): a `\n` scrolls the region only when
   // the cursor sits AT the bottom margin. Under withFullScrollRegion (and the
   // no-scrollRegion default) that margin is the physical last row

@@ -65,6 +65,7 @@ function makeCprHost(opts: {
       : null,
     logUpdate: opts.logUpdateTopRow != null ? { topRow: opts.logUpdateTopRow } : null,
     anchorRow: opts.anchorRow,
+    pendingEvictionRows: 0,
     repaint() { repaintCalls++; },
     get repaintCalls() { return repaintCalls; },
   } as unknown as CprHost & { repaintCalls: number };

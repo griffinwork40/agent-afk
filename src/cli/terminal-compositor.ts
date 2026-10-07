@@ -600,6 +600,13 @@ export class TerminalCompositor {
     shrinkTotal: number;
     requeryCt: number;
   } | null = null;
+  /**
+   * Cumulative rows pushed to terminal scrollback via evictRowsToScrollback or
+   * archiveBandPrefixAndRepaintSurvivors since the last CPR burst started.
+   * Folded into growTotal when seeding the next burst; reset then to 0.
+   * @internal Relaxed from `private` for the frame + lifecycle modules.
+   */
+  pendingEvictionRows = 0;
   // Invariant (F2 — fail-safe commit mode on stale geometry): set by the
   // SIGWINCH-immediate handler alongside logUpdate.resetGeometry() and cleared
   // only once the debounced post-resize repaint has re-established real

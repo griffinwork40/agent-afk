@@ -118,6 +118,15 @@ export interface FrameHost {
    * the CPR reply arrives and applyScrollDelta runs.
    */
   cprPending: boolean;
+  /**
+   * Cumulative rows pushed to terminal scrollback via evictRowsToScrollback
+   * (or archiveBandPrefixAndRepaintSurvivors) since the last CPR burst was
+   * seeded. Folded into the next burst's growTotal so the plausibility guard
+   * remains accurate when a repaint with eviction fires between two resize
+   * events. Managed by CprHost; declared here so FrameHost/evictRowsToScrollback
+   * can increment it without importing the CPR module.
+   */
+  pendingEvictionRows: number;
   // ── collaborators ──
   readonly scrollRegion?: CompositorScrollRegionGuard;
   readonly stdout: NodeJS.WriteStream;
