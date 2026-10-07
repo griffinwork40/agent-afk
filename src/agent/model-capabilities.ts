@@ -189,8 +189,8 @@ export function isOSeriesModel(model: string | undefined): boolean {
  * lower-cased id from {@link bareModelId}, so no `/i` flag is needed.
  */
 const REASONING_MODEL_PATTERNS: readonly RegExp[] = [
-  /^gpt-5/, // gpt-5.x line: gpt-5, gpt-5.1, gpt-5.5, gpt-5-mini, gpt-5-codex, …
-  /^gpt-6/, // gpt-6.x line: every catalog entry lists reasoning levels
+  /^gpt-5(?:[.-]|$)/, // gpt-5.x line: gpt-5, gpt-5.1, gpt-5.5, gpt-5-mini, gpt-5-codex, …
+  /^gpt-6(?:[.-]|$)/, // gpt-6.x line: every catalog entry lists reasoning levels
 ];
 
 /**
@@ -207,11 +207,14 @@ const REASONING_MODEL_PATTERNS: readonly RegExp[] = [
 export function isReasoningModel(model: string | undefined): boolean {
   if (!model) return false;
   if (isOSeriesModel(model)) return true;
+  // Resolve slot aliases (local/small/medium/large, etc.) to their concrete ids
+  // before the catalog lookup — consistent with supportsVision.
+  const resolved = (resolveModelInput(model) ?? model).trim();
   // The Codex catalog knows ids no pattern can (gpt-reserve,
   // codex-auto-review, the next family) and also knows a listed model that
   // takes no reasoning effort, so its answer wins whenever it has one.
-  const fromCatalog = catalogIsReasoningModel(model);
+  const fromCatalog = catalogIsReasoningModel(resolved);
   if (fromCatalog !== undefined) return fromCatalog;
-  const bare = bareModelId(model);
+  const bare = bareModelId(resolved);
   return REASONING_MODEL_PATTERNS.some((re) => re.test(bare));
 }

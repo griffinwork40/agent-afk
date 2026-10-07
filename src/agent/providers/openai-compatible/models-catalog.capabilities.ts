@@ -24,8 +24,16 @@
 import { loadModelsCatalog, type CatalogModel, type CatalogReaderDeps } from './models-catalog.js';
 
 /**
+ * Known provider prefixes that may appear before the model slug in a
+ * provider-qualified id (e.g. `openai/gpt-6-sol`). Only these prefixes are
+ * stripped — an arbitrary org prefix like `acme/gpt-reserve` is NOT touched,
+ * so it does not inherit a catalog entry it does not own.
+ */
+const KNOWN_PROVIDER_PREFIXES = ['openai/', 'openrouter/'];
+
+/**
  * Find the catalog entry for `model`. Matches the exact slug first, then the
- * lower-cased id with any leading `provider/` segment stripped, so
+ * lower-cased id with any known provider prefix stripped, so
  * `openai/gpt-6-sol` and `GPT-6-SOL` resolve like `gpt-6-sol`.
  */
 export function catalogEntryFor(
@@ -40,7 +48,13 @@ export function catalogEntryFor(
   const exact = catalog.get(trimmed);
   if (exact !== undefined) return exact;
   const lowered = trimmed.toLowerCase();
-  const bare = lowered.includes('/') ? lowered.slice(lowered.lastIndexOf('/') + 1) : lowered;
+  let bare = lowered;
+  for (const prefix of KNOWN_PROVIDER_PREFIXES) {
+    if (lowered.startsWith(prefix)) {
+      bare = lowered.slice(prefix.length);
+      break;
+    }
+  }
   return catalog.get(bare);
 }
 

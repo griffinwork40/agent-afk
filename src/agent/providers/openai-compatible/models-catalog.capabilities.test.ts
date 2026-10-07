@@ -60,10 +60,17 @@ describe('models-catalog capability lookups', () => {
     expect(catalogContextWindow('')).toBeUndefined();
   });
 
-  it('matches case-insensitively and ignores a provider/ prefix', () => {
+  it('matches case-insensitively and ignores a known provider/ prefix', () => {
     expect(catalogSupportsImages('GPT-6-SOL')).toBe(true);
     expect(catalogSupportsImages('openai/gpt-6-sol')).toBe(true);
     expect(catalogContextWindow('  gpt-6-sol  ')).toBe(272000);
+  });
+
+  it('does NOT strip arbitrary org prefixes — acme/gpt-6-sol must not inherit gpt-6-sol', () => {
+    // Only known prefixes (openai/, openrouter/) are stripped. An arbitrary
+    // org prefix like acme/ must not inherit the gpt-6-sol entry.
+    expect(catalogSupportsImages('acme/gpt-6-sol')).toBeUndefined();
+    expect(catalogIsReasoningModel('acme/gpt-6-sol')).toBeUndefined();
   });
 
   it('returns undefined for everything when no catalog file exists', () => {

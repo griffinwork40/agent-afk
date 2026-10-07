@@ -116,13 +116,25 @@ function parseCatalogJson(raw: string): Map<string, CatalogModel> {
 function parseCapabilityFields(e: Record<string, unknown>, model: CatalogModel): void {
   const modalities = e['input_modalities'];
   if (Array.isArray(modalities)) {
-    model.input_modalities = modalities.filter((m): m is string => typeof m === 'string');
+    const parsed = modalities.filter((m): m is string => typeof m === 'string');
+    // A non-empty source that filters to empty means the entries are
+    // schema-changed objects we do not understand — treat as "unknown"
+    // (undefined) not "definitely none" ([]). An empty source assigns [].
+    if (modalities.length === 0 || parsed.length > 0) {
+      model.input_modalities = parsed;
+    }
   }
   const levels = e['supported_reasoning_levels'];
   if (Array.isArray(levels)) {
-    model.supported_reasoning_levels = levels
+    const parsed = levels
       .map((l) => (typeof l === 'object' && l !== null ? (l as Record<string, unknown>)['effort'] : l))
       .filter((l): l is string => typeof l === 'string');
+    // A non-empty source that filters to empty means the entries are
+    // schema-changed objects we do not understand — treat as "unknown"
+    // (undefined) not "definitely none" ([]). An empty source assigns [].
+    if (levels.length === 0 || parsed.length > 0) {
+      model.supported_reasoning_levels = parsed;
+    }
   }
   const window = e['context_window'];
   if (typeof window === 'number' && Number.isFinite(window) && window > 0) {

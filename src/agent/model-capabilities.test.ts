@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { supportsVision, isOSeriesModel, isReasoningModel } from './model-capabilities.js';
-import { resetSlotBindings } from './session/model-slots.js';
+import {
+  resetSlotBindings,
+  setSlotBindings,
+  DEFAULT_SLOT_BINDINGS,
+} from './session/model-slots.js';
 import { resetCatalogCache } from './providers/openai-compatible/models-catalog.js';
 import { useCodexCatalog } from '../__test-utils__/codex-catalog.js';
 
@@ -243,5 +247,15 @@ describe('catalog-backed capabilities', () => {
     expect(isReasoningModel('codex-auto-review')).toBe(true);
     expect(isReasoningModel('gpt-5-chat-latest')).toBe(false);
     expect(isReasoningModel('o3')).toBe(true); // o-series rule precedes the catalog
+  });
+
+  it('resolves slot alias before catalog lookup so a slot bound to a catalog model inherits its reasoning flag', () => {
+    // Bind the 'large' slot to gpt-reserve, which the fixture declares as a
+    // reasoning model (supported_reasoning_levels: [{effort:'low'}]).
+    setSlotBindings({ ...DEFAULT_SLOT_BINDINGS, large: { id: 'gpt-reserve' } });
+    expect(isReasoningModel('large')).toBe(true);
+    // Also verify a slot bound to a text-only catalog model returns false.
+    setSlotBindings({ ...DEFAULT_SLOT_BINDINGS, large: { id: 'gpt-5-chat-latest' } });
+    expect(isReasoningModel('large')).toBe(false);
   });
 });
