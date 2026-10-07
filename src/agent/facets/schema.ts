@@ -64,10 +64,16 @@ import { z } from 'zod';
  * forked subagent hit its tool-round budget and wound down before finishing
  * naturally). All four require trace data; absence of trace means no signal.
  * Stores plumb these signals through `DeriveOptions.traceSignals`.
- * NOTE: open PR #3191 also bumps to v11 — whichever merges second will need
- * to re-bump to v12 and resolve the overlap.
+ *
+ * v12 (#3182): `patch_apply` counted as a file write in world_changes /
+ * no_corroborating_evidence check (skip on isError or dry_run); common
+ * external-effects bash commands (`git push`, `gh pr create`, `gh pr merge`,
+ * `npm publish`, `pnpm publish`) now count as corroboration (skip on
+ * isError). `extractRawToolInput` persists a bounded `changes_paths`
+ * projection for `patch_apply` so evidence-path collection works in
+ * production.
  */
-export const FACET_VERSION = 11;
+export const FACET_VERSION = 12;
 
 // ---------------------------------------------------------------------------
 // Input: the subset of StoredSession the deriver reads (local, layering-safe)

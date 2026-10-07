@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.303.5] - 2026-10-07
+
+### Fixed
+- complete advisory review follow-ups (#3158) (e4db9d85)
+
 ## [5.303.4] - 2026-10-07
 
 ### Fixed

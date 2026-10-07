@@ -17,6 +17,7 @@
 import type { ClaudeModel } from './types.js';
 import { resolveModelInput, contextWindowOverrideFor } from './session/model-slots.js';
 import { isOSeriesModel } from './model-capabilities.js';
+import { catalogContextWindow } from './providers/openai-compatible/models-catalog.capabilities.js';
 import { loadModelsCatalog } from './providers/openai-compatible/models-catalog.js';
 
 /**
@@ -303,6 +304,11 @@ function routesToOpenAICompatible(model: string): boolean {
  * Look up the context-window limit for a given model identifier.
  *
  * Accepts both the short ClaudeModel aliases and arbitrary model strings.
+ * Precedence: per-slot `contextWindow` override → {@link MODEL_CONTEXT_LIMITS}
+ * → the Codex models catalog's `context_window` (covers OpenAI ids the table
+ * has not caught up with, e.g. the gpt-6 line) → per-provider default. The
+ * table wins over the catalog on purpose: its entries are deliberate API-tier
+ * values (gpt-5.5 → 1M) that a Codex-plan catalog figure must not shrink.
  * Unknown models fall back per-provider:
  *   - openai-compatible-routed (HF-style or gpt/o/codex prefix): 256k
  *   - everything else (Anthropic): 200k
@@ -333,6 +339,8 @@ export function contextLimitFor(model: ClaudeModel | string, subscriptionPath = 
   }
   const known = MODEL_CONTEXT_LIMITS[id] ?? MODEL_CONTEXT_LIMITS[id.toLowerCase()];
   if (known !== undefined) return known;
+  const fromCatalog = catalogContextWindow(id);
+  if (fromCatalog !== undefined) return fromCatalog;
   return routesToOpenAICompatible(id)
     ? DEFAULT_CONTEXT_LIMIT_OPENAI_COMPATIBLE
     : DEFAULT_CONTEXT_LIMIT;

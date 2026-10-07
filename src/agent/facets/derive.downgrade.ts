@@ -20,8 +20,9 @@ import type { TraceSignals } from './derive.trace.js';
  *   1. `deferred_items` — Done block has a non-empty "Deferred / pending"
  *      bullet. The agent itself declared pending work.
  *   2. `no_corroborating_evidence` — Done with zero world mutations (no file
- *      writes, edits, or commits) and no evidence bullet in the Done block.
- *      A pure-text Done with no observable side-effects is suspect.
+ *      writes, edits, commits, patch_apply calls, or external-effects bash)
+ *      and no evidence bullet in the Done block. A pure-text Done with no
+ *      observable side-effects is suspect.
  *   3. `compose_partial_nodes` — at least one compose call wound down partial
  *      (soft-deadline or tool-use-iteration cap) during the session.
  *   4. `budget_exceeded_closure` — trace closure reason was 'budget_exceeded'.
@@ -39,6 +40,7 @@ export function checkDowngradeSignals({
   filesWritten,
   filesEdited,
   commits,
+  bashExternalEffects = 0,
   composePartialNodes,
   traceSignals,
 }: {
@@ -47,6 +49,8 @@ export function checkDowngradeSignals({
   filesWritten: number;
   filesEdited: number;
   commits: number;
+  /** Count of SUCCESSFUL bash calls matching BASH_EXTERNAL_RE (#3182). */
+  bashExternalEffects?: number;
   composePartialNodes: number;
   traceSignals: TraceSignals | undefined;
 }): FacetOutcomeDowngradeReason | undefined {
@@ -56,7 +60,9 @@ export function checkDowngradeSignals({
   }
 
   // Signal 2: no corroborating world mutations and no evidence bullet.
-  const hasMutation = filesWritten > 0 || filesEdited > 0 || commits > 0;
+  // patch_apply is folded into filesWritten. External-effects bash (git push,
+  // gh pr create/merge, npm/pnpm publish) also corroborate (#3182).
+  const hasMutation = filesWritten > 0 || filesEdited > 0 || commits > 0 || bashExternalEffects > 0;
   const hasEvidenceBullet = parsedEvidence !== undefined && parsedEvidence.trim().length > 0;
   if (!hasMutation && !hasEvidenceBullet) {
     return 'no_corroborating_evidence';

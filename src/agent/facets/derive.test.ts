@@ -43,7 +43,7 @@ describe('deriveSessionFacet', () => {
   it('produces a schema-valid facet', () => {
     const facet = deriveSessionFacet(richSession());
     expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
-    expect(facet.facet_version).toBe(11); // v11: trace-backed downgrade signals (#2798 cont.)
+    expect(facet.facet_version).toBe(12); // v12: patch_apply file write, bash external effects (#3182)
     expect(facet.derived_from).toBe('afk-session');
   });
 
@@ -1747,6 +1747,118 @@ describe('deriveSessionFacet', () => {
       });
       expect(facet.outcome).toBe('not_achieved');
       expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    // --- patch_apply regression (#3182) ---
+
+    it('no downgrade when Done uses only patch_apply (counted as file write, #3182)', () => {
+      // patch_apply writes files — a session using only patch_apply must NOT be
+      // wrongly downgraded with no_corroborating_evidence.
+      const changes = [
+        { path: '/src/a.ts', edits: [{ old: 'x', new: 'y' }] },
+        { path: '/src/b.ts', content: 'new content' },
+      ];
+      const facet = deriveSessionFacet(doneSession({
+        toolEvents: [
+          { toolName: 'patch_apply', toolUseId: 'pa1', inputRaw: JSON.stringify({ changes }) },
+        ],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+      expect(facet.world_changes.files_written).toBe(1);
+      expect(facet.world_changes.mutated).toBe(true);
+      // Evidence paths are collected from patch_apply changes[].path
+      expect(facet.evidence_pointers).toContain('/src/a.ts');
+      expect(facet.evidence_pointers).toContain('/src/b.ts');
+      expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
+    });
+
+    it('downgrade fires when patch_apply has isError (failed write does not corroborate, #3182)', () => {
+      // A failed patch_apply must NOT suppress the no_corroborating_evidence downgrade.
+      const changes = [{ path: '/src/a.ts', edits: [{ old: 'x', new: 'y' }] }];
+      const facet = deriveSessionFacet(doneSession({
+        toolEvents: [
+          { toolName: 'patch_apply', toolUseId: 'pa1', isError: true, inputRaw: JSON.stringify({ changes }) },
+        ],
+      }));
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_downgrade_reason).toBe('no_corroborating_evidence');
+      expect(facet.world_changes.files_written).toBe(0);
+    });
+
+    it('downgrade fires when patch_apply has dry_run:true (preview does not corroborate, #3182)', () => {
+      // A dry-run patch_apply must NOT suppress the downgrade.
+      const changes = [{ path: '/src/a.ts', edits: [{ old: 'x', new: 'y' }] }];
+      const facet = deriveSessionFacet(doneSession({
+        toolEvents: [
+          { toolName: 'patch_apply', toolUseId: 'pa1', inputRaw: JSON.stringify({ changes, dry_run: true }) },
+        ],
+      }));
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_downgrade_reason).toBe('no_corroborating_evidence');
+      expect(facet.world_changes.files_written).toBe(0);
+    });
+
+    it('no downgrade when Done uses git push without a local file write (#3182)', () => {
+      // A session that pushes without write_file/edit_file should not be downgraded.
+      const facet = deriveSessionFacet(doneSession({
+        toolEvents: [
+          { toolName: 'bash', toolUseId: 'b1', inputRaw: JSON.stringify({ command: 'git push -u origin main' }) },
+        ],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade when Done uses gh pr create without a local file write (#3182)', () => {
+      const facet = deriveSessionFacet(doneSession({
+        toolEvents: [
+          { toolName: 'bash', toolUseId: 'b1', inputRaw: JSON.stringify({ command: 'gh pr create --fill' }) },
+        ],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade when Done uses gh pr merge (#3182)', () => {
+      const facet = deriveSessionFacet(doneSession({
+        toolEvents: [
+          { toolName: 'bash', toolUseId: 'b1', inputRaw: JSON.stringify({ command: 'gh pr merge --squash 42' }) },
+        ],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade when Done uses npm publish (#3182)', () => {
+      const facet = deriveSessionFacet(doneSession({
+        toolEvents: [
+          { toolName: 'bash', toolUseId: 'b1', inputRaw: JSON.stringify({ command: 'npm publish --access public' }) },
+        ],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('downgrade fires when git push has isError (failed push does not corroborate, #3182)', () => {
+      // A failed git push must NOT suppress the no_corroborating_evidence downgrade.
+      const facet = deriveSessionFacet(doneSession({
+        toolEvents: [
+          { toolName: 'bash', toolUseId: 'b1', isError: true, inputRaw: JSON.stringify({ command: 'git push origin main' }) },
+        ],
+      }));
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_downgrade_reason).toBe('no_corroborating_evidence');
+    });
+
+    it('downgrade still fires when bash only runs ls (not an external-effect command, #3182)', () => {
+      const facet = deriveSessionFacet(doneSession({
+        toolEvents: [
+          { toolName: 'bash', toolUseId: 'b1', inputRaw: JSON.stringify({ command: 'ls -la' }) },
+        ],
+      }));
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_downgrade_reason).toBe('no_corroborating_evidence');
     });
   });
 });
