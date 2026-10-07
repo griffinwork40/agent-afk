@@ -50,6 +50,10 @@ class FileJournal implements MessageJournal {
     }
   }
 
+  get path(): string | undefined {
+    try { return this.file.path; } catch { return undefined; }
+  }
+
   append(index: number, message: JournalMessage): void {
     this.file.record({ kind: 'append', index, message });
   }

@@ -34,9 +34,10 @@ import { contentMargin } from './render/measure.js';
 /**
  * State slice the archived-prefix helpers read and mutate.
  *
- * @internal — host-protocol interface, not a public API. Exported only so
- * sibling modules (frame-preserve.ts, committed-band-commit.ts, lifecycle.ts)
- * can implement it structurally. External code must not reference this type.
+ * @internal — host-protocol interface, not a public API. Exported for type
+ * inference only: sibling modules (frame-preserve.ts, committed-band-commit.ts,
+ * lifecycle.ts) reference it via `Pick<>`/`Omit<>` rather than implementing it
+ * directly. External code must not reference this type.
  */
 export interface ArchivedPrefixHost {
   committedBand: string[];

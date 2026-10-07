@@ -104,20 +104,82 @@ const GENERIC_LINES: readonly RegExp[] = [
   /^command:/i,
   // test_run failure-list header (bare, always identical)
   /^failed tests:\s*$/i,
+  // Python traceback header: identical for every Python exception. The real
+  // exception is the LAST line of the traceback (see lastPythonException).
+  /^traceback \(most recent call last\):?$/i,
+  // Section banners bracketed by rule characters, e.g. vitest
+  // "⎯⎯⎯ Failed Tests 1 ⎯⎯⎯" / "⎯⎯⎯ Unhandled Errors ⎯⎯⎯".
+  /^[⎯─━=-]{3,}.*[⎯─━=-]{3,}$/,
+  // vitest per-file summary: "❯ src/a.test.ts (4 tests | 1 failed) 20ms".
+  /^❯\s+\S+\s+\(\d+ tests?\b/,
+  // vitest/jest per-test status lines: they name the TEST, not the error, and
+  // a test named "throws an error ..." would otherwise match ERROR_CUE.
+  /^[×✗✕]\s/,
+  /^FAIL\s+\S+\.(?:test|spec)\.[cm]?[jt]sx?\b/,
+  // Success lines that merely mention errors ("PASS desktop: no console errors").
+  /^(?:pass\b|✓|✔)/i,
+  // Node internals echoed above an unhandled rejection.
+  /^node:internal\//,
+  /^triggeruncaughtexception\(/i,
 ];
 
 /** Cue that a line names a concrete failure. Deliberately unanchored ("AssertionError"). */
 const ERROR_CUE =
   /(error|errno|exception|cannot|can't|could not|couldn't|not found|no such|failed|denied|refused|undefined|unexpected|invalid|missing|unable|panic|fatal|traceback|assert)/i;
 
-/** First line of `content` that names a concrete error, or null. */
+/** A caret marker line, as printed under an echoed source line by node and Python. */
+const CARET_LINE = /^\^+$/;
+
+/**
+ * A Python exception line: dotted name ending in a standard exception suffix,
+ * then ":" or end of line ("KeyError: 'k'", "requests.exceptions.ConnectionError: …",
+ * "KeyboardInterrupt"). Anchored so frame lines and echoed source never match.
+ */
+const PY_EXCEPTION_LINE = /^[A-Za-z_][\w.]*(?:Error|Exception|Exit|Interrupt|Warning)(?::|$)/;
+
+/**
+ * When `lines` hold a Python traceback, the LAST exception line in them.
+ * Python prints the raised exception at the bottom, and for chained
+ * exceptions ("During handling of the above exception ...") the last one is
+ * the exception that actually escaped. Taking the first cue line instead keys
+ * every Python failure on the identical traceback header.
+ */
+function lastPythonException(lines: readonly string[]): string | null {
+  if (!lines.some((l) => /^traceback \(most recent call last\):?$/i.test(l.trim()))) return null;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = (lines[i] ?? '').trim();
+    if (PY_EXCEPTION_LINE.test(line)) return line;
+  }
+  return null;
+}
+
+/** True when the next non-empty line after `index` is a caret marker. */
+function isEchoedSource(lines: readonly string[], index: number): boolean {
+  for (let j = index + 1; j < lines.length; j += 1) {
+    const next = (lines[j] ?? '').trim();
+    if (next.length === 0) continue;
+    return CARET_LINE.test(next);
+  }
+  return false;
+}
+
+/**
+ * The line of `content` that names a concrete error, or null: the final
+ * exception of a Python traceback, otherwise the first error-cue line that is
+ * neither boilerplate (GENERIC_LINES) nor echoed source (a line followed by a
+ * caret marker, as node prints above "TypeError: ..." for an uncaught throw).
+ */
 export function findErrorLine(content: string): string | null {
   const lines = content.replace(ANSI, '').split('\n', MAX_LINES_SCANNED);
-  for (const raw of lines) {
-    const line = raw.trim();
+  const pyException = lastPythonException(lines);
+  if (pyException !== null) return pyException;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = (lines[i] ?? '').trim();
     if (line.length === 0) continue;
     if (GENERIC_LINES.some((re) => re.test(line))) continue;
-    if (ERROR_CUE.test(line)) return line;
+    if (!ERROR_CUE.test(line)) continue;
+    if (isEchoedSource(lines, i)) continue;
+    return line;
   }
   return null;
 }

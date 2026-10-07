@@ -3,16 +3,26 @@
 Full per-version change log for `FACET_VERSION` in `src/agent/facets/schema.ts`.
 Consumers should filter on `facet_version >= N` to guard against older cached facets.
 
-## v11 (#3182)
+## v12 (#3182)
 
-- `world_changes.files_written` now includes `patch_apply` calls. Sessions that
-  write files exclusively via `patch_apply` no longer trigger the
-  `no_corroborating_evidence` downgrade. Evidence paths from `patch_apply` are also
-  collected.
+- `world_changes.files_written` now includes successful `patch_apply` calls (skip
+  on `isError` or `dry_run`). Sessions that write files exclusively via
+  `patch_apply` no longer trigger the `no_corroborating_evidence` downgrade.
+  Evidence paths from `patch_apply` are also collected.
 - `no_corroborating_evidence` now recognises common external-effects bash commands
   (`git push`, `gh pr create`, `gh pr merge`, `npm publish`, `pnpm publish`) as
-  corroborating signals. A session that opens a PR without writing a local file is
-  no longer downgraded.
+  corroborating signals, but only when `isError` is false. A session that opens a
+  PR without writing a local file is no longer downgraded.
+- `extractRawToolInput` now persists `dry_run` and a bounded `changes_paths`
+  projection for `patch_apply`, so evidence-path collection works in production.
+- `world_changes.mutated` is documented as local-file-only (excludes
+  `bashExternalEffects`).
+
+## v11 (#2798 cont.)
+
+- Added trace-backed downgrade reasons: `budget_exceeded_closure`,
+  `iteration_cap_closure`, `truncated_closure`, and `subagent_budget_exhaustion`.
+  All require trace data plumbed via `DeriveOptions.traceSignals`.
 
 ## v10 (#2798)
 

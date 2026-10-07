@@ -10,6 +10,7 @@
  *  - settlements for untracked toolUseIds (outgoing-session after /resume) are dropped
  *  - reset() clears tracked entries, injections, and notices
  *  - dispose() unsubscribes from the registry
+ *  - settle-before-observe race: result buffered and applied when observe() arrives
  *
  * @module cli/commands/interactive/detached-tool-notifier.test
  */
@@ -93,6 +94,10 @@ describe('DetachedToolNotifier', () => {
     // NOT observed — simulates an outgoing-session call
     token.deliver(makeResult({ toolUseId: 'call-unknown' }));
 
+    // After reset() (which dispose() also calls), earlySettled is cleared
+    // and the result must not leak.
+    notifier.reset();
+
     expect(notifier.hasPendingInjections()).toBe(false);
     expect(notifier.drainNotices()).toHaveLength(0);
   });
@@ -109,12 +114,14 @@ describe('DetachedToolNotifier', () => {
     token.notifyDetached();
     token.deliver(makeResult({ toolUseId: 'call-rf' }));
 
-    // No injection: untracked toolUseId (observe() bailed out early)
+    // observe() bailed early → id is in earlySettled but not tracked.
+    // reset() to verify nothing leaked into injections.
+    notifier.reset();
     expect(notifier.hasPendingInjections()).toBe(false);
   });
 
-  it('reapplies settled metadata when settlement races ahead of observe()', () => {
-    // Settlement arrives before observe() is called (timing edge case).
+  it('observe() after settlement: patches event and queues injection (normal path)', () => {
+    // observe() is called first (normal ordering), then settled fires.
     const registry = new DetachableToolRegistry();
     const notifier = new DetachedToolNotifier(registry);
 
@@ -126,6 +133,42 @@ describe('DetachedToolNotifier', () => {
 
     expect(event.result).toBe('err');
     expect(event.isError).toBe(true);
+  });
+
+  it('settle before observe(): result buffered and applied when observe() arrives', () => {
+    // This is the REAL race: settled fires before observe() is called.
+    // Prior to the fix, the !entry guard in onSettled silently dropped the result.
+    // Now earlySettled buffers it so observe() can pick it up.
+    const registry = new DetachableToolRegistry();
+    const notifier = new DetachedToolNotifier(registry);
+
+    const woke = vi.fn();
+    notifier.onInjectable = woke;
+
+    // Settle BEFORE observe() is called — simulates a very fast bash command
+    // whose settled event fires before the turn handler processes the tool_use_start.
+    const token = registry.register('call-1');
+    token.notifyDetached();
+    token.deliver(makeResult({ status: 'completed', output: 'fast' }));
+
+    // At this point observe() has NOT been called yet.
+    // The old code would have dropped the result here with `if (!entry) return`.
+    // Injection should NOT be queued yet (we don't have the event to patch).
+    expect(notifier.hasPendingInjections()).toBe(false);
+
+    // Now observe() arrives with the tool_use_start event (no result yet).
+    const event = makeEvent();
+    notifier.observe(event);
+
+    // The early-settled result should now be applied and the injection queued.
+    expect(event.result).toBe('fast');
+    expect(event.isError).toBe(false);
+    expect(notifier.hasPendingInjections()).toBe(true);
+    expect(woke).toHaveBeenCalledOnce();
+
+    const injected = notifier.drainInjections();
+    expect(injected).toContain('call-1');
+    expect(injected).toContain('completed');
   });
 
   it('reset() clears all state', () => {
@@ -191,5 +234,17 @@ describe('buildDetachedToolInjection', () => {
     const xml = buildDetachedToolInjection(result);
     expect(xml).not.toContain('<script>');
     expect(xml).toContain('&lt;script&gt;');
+  });
+
+  it('does not leave a partial XML entity after truncation', () => {
+    // Build a string that when escaped and truncated ends mid-entity.
+    // 16KB of 'a', then some '<' chars so escaping produces '&lt;' sequences.
+    // Position the '<' so the escaped form is cut mid-entity at the byte cap.
+    const safe = 'a'.repeat(16 * 1024 - 4); // leave 4 bytes for '&lt;'
+    const tricky = safe + '<<<<'; // each '<' → '&lt;' (4 bytes)
+    const xml = buildDetachedToolInjection(makeResult({ output: tricky }));
+    // Must not end with an orphaned '&' or '&l' or '&lt' fragment before the marker
+    const outputContent = xml.split('<output>')[1]?.split('\n… [detached output truncated]')[0] ?? '';
+    expect(outputContent).not.toMatch(/&[^;]*$/);
   });
 });

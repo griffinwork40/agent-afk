@@ -28,6 +28,8 @@ import {
 } from './schema.js';
 import { computeParallelDispatch } from './parallel-dispatch.js';
 import { parseTerminalState } from '../outcomes/terminal-state.js';
+import type { TraceSignals } from './derive.trace.js';
+import { checkDowngradeSignals } from './derive.downgrade.js';
 import { aggregateToolEvents, dedupeToolEvents } from './derive.aggregate.js';
 
 // Re-export dedupeToolEvents so external callers (parallel-dispatch, store) keep working.
@@ -53,11 +55,18 @@ export interface DeriveOptions {
    * parent's `tool_counts`. (#2461)
    */
   subagentBreakdown?: SubagentToolSummary[];
+  /**
+   * Signals extracted from the session's witness trace by the store layer.
+   * When absent (no trace available, or tracing disabled) all trace-backed
+   * downgrade signals are suppressed — absence is never treated as a
+   * downgrade. Populated by `store.ts` via `derive.trace.ts`. (#2798 cont.)
+   */
+  traceSignals?: TraceSignals;
 }
 
 const GOAL_CAP = 1000;
 const SUMMARY_CAP = 240;
-const SLASH_CMD_RE = /^\s*\/([a-zA-Z][\w-]*)/;
+const SLASH_CMD_RE = /^\s*\/([a-zA-Z][\w-]*)/
 
 /**
  * Map a parsed TerminalKind to a FacetOutcome.
@@ -147,64 +156,6 @@ function deriveOutcome(
   return { outcome, outcomeSource, primarySuccess, parsedDeferred, parsedEvidence };
 }
 
-/**
- * Check whether a self-reported `fully_achieved` should be downgraded to
- * `partially_achieved` based on corroborating signals (#2798). Returns the
- * first matching downgrade reason, or `undefined` when no signal fires.
- *
- * Evaluated in priority order (most reliable signal first):
- *   1. `deferred_items` — Done block has a non-empty "Deferred / pending"
- *      bullet. The agent itself declared pending work.
- *   2. `no_corroborating_evidence` — Done with zero world mutations (no file
- *      writes, edits, commits, patch_apply calls, or external-effects bash) and
- *      no evidence bullet in the Done block. A pure-text Done with no observable
- *      side-effects is suspect.
- *   3. `compose_partial_nodes` — at least one compose call wound down partial
- *      (soft-deadline or tool-use-iteration cap) during the session.
- *
- * Signals that require external data (trace closure reasons) are deferred
- * and not implemented here.
- */
-function checkDowngradeSignals({
-  parsedDeferred,
-  parsedEvidence,
-  filesWritten,
-  filesEdited,
-  commits,
-  bashExternalEffects,
-  composePartialNodes,
-}: {
-  parsedDeferred: string | undefined;
-  parsedEvidence: string | undefined;
-  filesWritten: number;
-  filesEdited: number;
-  commits: number;
-  /** Count of bash calls matching BASH_EXTERNAL_RE (git push, gh pr create/merge, npm/pnpm publish). */
-  bashExternalEffects: number;
-  composePartialNodes: number;
-}): FacetOutcomeDowngradeReason | undefined {
-  // Signal 1: explicit deferred/pending items in the Done block.
-  if (parsedDeferred !== undefined && parsedDeferred.trim().length > 0) {
-    return 'deferred_items';
-  }
-
-  // Signal 2: no corroborating world mutations and no evidence bullet.
-  // patch_apply is folded into filesWritten. External-effects bash (git push,
-  // gh pr create/merge, npm/pnpm publish) also corroborate (#3182).
-  const hasMutation = filesWritten > 0 || filesEdited > 0 || commits > 0 || bashExternalEffects > 0;
-  const hasEvidenceBullet = parsedEvidence !== undefined && parsedEvidence.trim().length > 0;
-  if (!hasMutation && !hasEvidenceBullet) {
-    return 'no_corroborating_evidence';
-  }
-
-  // Signal 3: compose partial nodes — some parallel work was cut short.
-  if (composePartialNodes > 0) {
-    return 'compose_partial_nodes';
-  }
-
-  return undefined;
-}
-
 /** Collapse whitespace and cap length for single-line summary fields. */
 function oneLine(text: string, cap: number): string {
   const flat = text.replace(/\s+/g, ' ').trim();
@@ -213,6 +164,19 @@ function oneLine(text: string, cap: number): string {
 
 function humanizeName(name: string): string {
   return name.replace(/[-_]+/g, ' ').trim();
+}
+
+/**
+ * Build yield-tracking fields for the facet (#2016, #2777, #2795).
+ * Extracted to keep deriveSessionFacet under the 200-line function ceiling.
+ */
+function buildYieldTracking(source: string, effectivePrUrl: string | null): YieldTracking {
+  return {
+    is_scheduled_session: source === 'daemon',
+    produced_pr: effectivePrUrl !== null ? true : null,
+    pr_merged: null,
+    ...(effectivePrUrl !== null ? { pr_url: effectivePrUrl } : { pr_url: null }),
+  };
 }
 
 function classifySessionType(firstPrompt: string, source: string): string {
@@ -290,6 +254,7 @@ export function deriveSessionFacet(
       commits,
       bashExternalEffects,
       composePartialNodes,
+      traceSignals: options.traceSignals,
     });
     if (outcomeDowngradeReason !== undefined) {
       outcome = 'partially_achieved';
@@ -322,19 +287,8 @@ export function deriveSessionFacet(
     ? [...evidencePaths, options.sourceSessionPath]
     : evidencePaths;
 
-  // Yield tracking: is_scheduled_session is mechanical (from source); produced_pr
-  // and pr_merged require async git/gh probes run by the session-end hook after
-  // teardown, so they start as null here and are written back by that hook.
-  // Exception: when derive detects a `gh pr create` URL in bash output (#2777,
-  // #2795), set produced_pr=true and record the URL immediately. effectivePrUrl
-  // covers both the parent session and any subagent-opened PR (#2795 gap 6).
-  // Never set false here.
-  const yieldTracking: YieldTracking = {
-    is_scheduled_session: source === 'daemon',
-    produced_pr: effectivePrUrl !== null ? true : null,
-    pr_merged: null,
-    ...(effectivePrUrl !== null ? { pr_url: effectivePrUrl } : { pr_url: null }),
-  };
+  // session yield tracking (#2016) — pr fields enriched asynchronously by session-end hook
+  const yieldTracking = buildYieldTracking(source, effectivePrUrl);
 
   const facet: SessionFacet = {
     facet_version: FACET_VERSION,
@@ -385,6 +339,11 @@ export function deriveSessionFacet(
       files_edited: filesEdited,
       bash_commands: bashCommands,
       commits,
+      // Invariant: `mutated` reflects local-file-only mutations (write_file,
+      // edit_file, patch_apply, git commit). Remote side-effects tracked by
+      // bashExternalEffects (git push, gh pr create/merge, npm/pnpm publish)
+      // are deliberately excluded — they corroborate Done (via
+      // checkDowngradeSignals) but do not count as local file mutations.
       mutated: filesWritten > 0 || filesEdited > 0 || commits > 0,
     },
 

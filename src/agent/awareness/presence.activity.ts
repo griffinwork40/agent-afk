@@ -152,9 +152,13 @@ const AUTO_RESUME_PREFIX = '[auto-resume]';
  *   where ctx.stats.sessionId was undefined at turn start), it is stored as
  *   the promptHead so the first prompt is never silently lost. Never pass the
  *   composited runText — that would leak peer/bg-injection bodies.
- *   Auto-resume directives (text starting with `[auto-resume]`) are silently
- *   skipped even when no promptHead exists yet: they are synthetic wakeup text,
- *   not operator-typed content, and must never appear in `activity.promptHead`.
+ *   Auto-resume directives (text starting with `AUTO_RESUME_PREFIX`, i.e.
+ *   `[auto-resume]`) are silently skipped even when no promptHead exists yet:
+ *   they are synthetic wakeup text, not operator-typed content, and must never
+ *   appear in `activity.promptHead`. This guard mirrors the one in
+ *   `markPresenceTurn` (loop-iteration.injections.ts) for the busy path;
+ *   having it here ensures the idle path is also protected without requiring
+ *   the caller to filter first.
  *
  * Best-effort and never throws.
  */

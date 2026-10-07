@@ -24,16 +24,56 @@
 import { z } from 'zod';
 
 /**
- * History: bump when the facet shape or derivation changes — invalidates caches.
- * Full per-version log: docs/facet-version-history.md
+ * Bump when the facet shape or derivation changes — invalidates caches.
  *
- * v11 (#3182): `patch_apply` counted as a file write in world_changes /
- * no_corroborating_evidence check; common external-effects bash commands
- * (`git push`, `gh pr create`, `gh pr merge`, `npm publish`, `pnpm publish`)
- * now count as corroboration. FACET_VERSION bump: derivation changes observable
- * output for sessions using patch_apply or external-effects-only bash.
+ * v7 (#2777): added `outcome_source`, `tool_errors_total`, and required
+ * nullable `yield_tracking.pr_url`; added `'unknown'` to FacetOutcomeSchema;
+ * replaced inline TERMINAL_STATE_RE in derive.ts with the shared
+ * parseTerminalState() parser; yield_tracking carry-forward on re-derive in
+ * store.ts. Public consumers should filter on `facet_version >= 7` and inspect
+ * `outcome_source`; headingless sessions now derive `outcome: 'unknown'`, and
+ * single-line `**Done** — text` is no longer a terminal-state heading.
+ *
+ * v8 (#2970): added `compose_partial_nodes`, the number of compose CALLS in
+ * which at least one node succeeded with a partial result (soft-deadline
+ * wind-down, tool-use cap). Omitted when zero. Also added
+ * `incomplete?: boolean` to `ToolEventInputSchema` so the sidecar path
+ * carries the signal. On `facet_version >= 8` an absent field means zero.
+ *
+ * v9 (#2978): added `compose_partial_node_count`, the number of partial NODES
+ * summed across compose calls (`compose_partial_nodes` keeps counting calls).
+ * Omitted when zero. Also added `partialNodeCount?: number` to
+ * `ToolEventInputSchema`; journal `tool_result` blocks now persist
+ * `incomplete`, so journal-derived facets see the partial signal too.
+ *
+ * v10 (#2798): added `outcome_downgrade_reason` — when a self-reported
+ * `fully_achieved` (Done) is downgraded to `partially_achieved`, this field
+ * records the first matching signal that triggered the downgrade:
+ * `'deferred_items'` (Done block has a non-empty Deferred bullet),
+ * `'no_corroborating_evidence'` (Done with no world mutations and no evidence
+ * bullet), or `'compose_partial_nodes'` (at least one compose call wound down
+ * partial). Omitted when no downgrade occurred. Consumers on
+ * `facet_version >= 10` can use `outcome_downgrade_reason` to distinguish a
+ * genuine Done from a self-report that was downgraded.
+ *
+ * v11 (#2798 cont.): added two trace-backed downgrade reasons:
+ * `'budget_exceeded_closure'` (session ended because a monetary budget ceiling
+ * was reached), `'iteration_cap_closure'` (session ended because the tool-use
+ * round cap fired), `'truncated_closure'` (last model turn was cut off by the
+ * output-token ceiling), and `'subagent_budget_exhaustion'` (at least one
+ * forked subagent hit its tool-round budget and wound down before finishing
+ * naturally). All four require trace data; absence of trace means no signal.
+ * Stores plumb these signals through `DeriveOptions.traceSignals`.
+ *
+ * v12 (#3182): `patch_apply` counted as a file write in world_changes /
+ * no_corroborating_evidence check (skip on isError or dry_run); common
+ * external-effects bash commands (`git push`, `gh pr create`, `gh pr merge`,
+ * `npm publish`, `pnpm publish`) now count as corroboration (skip on
+ * isError). `extractRawToolInput` persists a bounded `changes_paths`
+ * projection for `patch_apply` so evidence-path collection works in
+ * production.
  */
-export const FACET_VERSION = 11;
+export const FACET_VERSION = 12;
 
 // ---------------------------------------------------------------------------
 // Input: the subset of StoredSession the deriver reads (local, layering-safe)
@@ -132,8 +172,10 @@ export type FacetOutcomeSource = z.infer<typeof FacetOutcomeSourceSchema>;
 
 /**
  * Why a self-reported `fully_achieved` (Done heading) was downgraded to
- * `partially_achieved`. Added in v10 (#2798).
+ * `partially_achieved`. Added in v10 (#2798); extended in v11 with four
+ * trace-backed reasons.
  *
+ * Sidecar-derived (always available, v10+):
  * - `'deferred_items'`: the Done block's "Deferred / pending" bullet was
  *   non-empty — the agent admitted leaving work behind.
  * - `'no_corroborating_evidence'`: Done with no world mutations (no file
@@ -143,6 +185,25 @@ export type FacetOutcomeSource = z.infer<typeof FacetOutcomeSourceSchema>;
  *   (soft-deadline or tool-use-iteration cap) and the session still declared
  *   Done — some parallel work may be incomplete.
  *
+ * Trace-backed (v11+; absent when no trace is available):
+ * - `'budget_exceeded_closure'`: the session's trace `closure` event carries
+ *   `reason: 'budget_exceeded'` — the monetary budget ceiling was hit before
+ *   natural completion.
+ * - `'iteration_cap_closure'`: `closure.reason === 'iteration_cap'` — the
+ *   top-level tool-use round cap fired; the agent was wound down before
+ *   finishing.
+ * - `'truncated_closure'`: `closure.reason === 'truncated'` — the last model
+ *   turn was cut off by the output-token ceiling, so the final message may be
+ *   incomplete.
+ * - `'subagent_budget_exhaustion'`: at least one forked subagent's
+ *   `subagent_lifecycle.succeeded` trace event carried
+ *   `stopReason === 'tool_use_loop_capped'`, meaning a child was wound down
+ *   before it could finish naturally.
+ *
+ * Priority order (checked in derive.ts): deferred_items >
+ * no_corroborating_evidence > compose_partial_nodes > budget_exceeded_closure >
+ * iteration_cap_closure > truncated_closure > subagent_budget_exhaustion.
+ *
  * Omitted when the outcome was not downgraded (i.e. the session did not
  * start as `fully_achieved`, or no downgrade signal fired).
  */
@@ -150,6 +211,10 @@ export const FacetOutcomeDowngradeReasonSchema = z.enum([
   'deferred_items',
   'no_corroborating_evidence',
   'compose_partial_nodes',
+  'budget_exceeded_closure',
+  'iteration_cap_closure',
+  'truncated_closure',
+  'subagent_budget_exhaustion',
 ]);
 export type FacetOutcomeDowngradeReason = z.infer<typeof FacetOutcomeDowngradeReasonSchema>;
 

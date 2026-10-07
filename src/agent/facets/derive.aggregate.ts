@@ -109,7 +109,11 @@ export function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolE
     if (name === 'edit_file') filesEdited += 1;
     // patch_apply writes files just like write_file/edit_file — count as a file write
     // so sessions using only patch_apply are not wrongly downgraded (#3182).
-    if (name === 'patch_apply') filesWritten += 1;
+    // Skip on isError (the write failed) or dry_run (nothing was written).
+    if (name === 'patch_apply' && ev.isError !== true) {
+      const dryRun = parsed?.['dry_run'];
+      if (dryRun !== true) filesWritten += 1;
+    }
     if (name === 'bash') {
       bashCommands += 1;
       // Commit detection reads the parsed `command` when present (older sidecars
@@ -123,7 +127,8 @@ export function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolE
       const cmd = asString(parsed?.['command']) ?? ev.input;
       if (cmd && COMMIT_RE.test(cmd)) commits += 1;
       // External-effects bash corroborates Done even without a local file write (#3182).
-      if (cmd && BASH_EXTERNAL_RE.test(cmd)) bashExternalEffects += 1;
+      // Skip on isError — a failed `git push` is not corroboration.
+      if (cmd && BASH_EXTERNAL_RE.test(cmd) && ev.isError !== true) bashExternalEffects += 1;
     }
 
     if (FILE_TOOLS.has(name)) {
@@ -132,14 +137,26 @@ export function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolE
         evidencePaths.push(fp);
       }
     }
-    // patch_apply: collect evidence paths from the changes array (each entry has a `path` field).
+    // patch_apply: collect evidence paths. Try `changes_paths` first (the
+    // bounded projection persisted by extractRawToolInput, #3182) then fall
+    // back to `changes[].path` (hand-constructed test inputs or old sidecars).
     if (name === 'patch_apply') {
-      const changes = parsed?.['changes'];
-      if (Array.isArray(changes)) {
-        for (const ch of changes) {
-          const fp = asString((ch as Record<string, unknown>)?.['path']);
+      const changesPaths = parsed?.['changes_paths'];
+      if (Array.isArray(changesPaths)) {
+        for (const p of changesPaths) {
+          const fp = asString(p);
           if (fp && !evidencePaths.includes(fp) && evidencePaths.length < EVIDENCE_CAP) {
             evidencePaths.push(fp);
+          }
+        }
+      } else {
+        const changes = parsed?.['changes'];
+        if (Array.isArray(changes)) {
+          for (const ch of changes) {
+            const fp = asString((ch as Record<string, unknown>)?.['path']);
+            if (fp && !evidencePaths.includes(fp) && evidencePaths.length < EVIDENCE_CAP) {
+              evidencePaths.push(fp);
+            }
           }
         }
       }
