@@ -51,6 +51,7 @@ import { BROWSER_ENV_REGISTRY } from './env.browser.js';
 import { DAEMON_ENV_REGISTRY } from './env.daemon.js';
 import { DEBUG_ENV_REGISTRY } from './env.debug.js';
 import { DISPLAY_ENV_REGISTRY } from './env.display.js';
+import { HOOKS_ENV_REGISTRY } from './env.hooks.js';
 import { MCP_ENV_REGISTRY } from './env.mcp.js';
 import { MISC_ENV_REGISTRY } from './env.misc.js';
 import { MODEL_ENV_REGISTRY } from './env.model.js';
@@ -169,6 +170,9 @@ export const ENV_REGISTRY = [
 
   // ── Filesystem / Rate-limit / Web egress / CLI / Session / Shell (env.misc.ts)
   ...MISC_ENV_REGISTRY,
+
+  // ── Hook feature flags (env.hooks.ts) ────────────────────────────────────
+  ...HOOKS_ENV_REGISTRY,
 ] as const satisfies readonly EnvVarMeta[];
 
 /**

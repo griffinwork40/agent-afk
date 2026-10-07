@@ -408,6 +408,21 @@ export interface StopContext {
    * hooks can count how many times they have already blocked this turn.
    */
   continuation?: number;
+  /**
+   * The final assistant text of the completed turn. Populated by
+   * `buildStopContext` from the provider-side `assistantText` (or by scanning
+   * message history when the direct value is absent). Available so Stop hook
+   * handlers can inspect the turn's prose without access to the provider layer.
+   * Absent on surfaces that do not compute it.
+   */
+  assistantText?: string;
+  /**
+   * Names of tools that executed successfully (no error) in this turn. Lets
+   * Stop hook handlers check for instrumentation evidence (hash checks, counter
+   * insertions, bypass reruns) without accessing the raw tool-event stream.
+   * Absent on surfaces that do not compute it.
+   */
+  successfulToolNames?: readonly string[];
 }
 
 export interface UserPromptSubmitContext {

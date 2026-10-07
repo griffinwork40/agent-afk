@@ -1207,6 +1207,15 @@
       "category": "misc"
     },
     {
+      "name": "AFK_UNPROVEN_DIAGNOSIS_GATE",
+      "description": "Opt-in Stop hook that prevents a turn from closing with an unproven \"external / root cause unknown\" diagnosis. When set to 1, the hook scans the final assistant text for cause-unknown language (\"root cause\" near \"not found|unknown\", \"something else in\", \"likely upstream\") AND checks for the absence of instrumentation tool calls (hash/manifest checks, bypass reruns, counter/log insertions). When both conditions are met it injects a correction asking the agent to run the elimination ladder (byte-verify installs, bypass wrapper, clean-env repeat, instrument the path) before closing. Fires at most once per turn. Does not fire when instrumentation evidence is already present, or on subagent turns. Default: 0 (off).",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "misc"
+    },
+    {
       "name": "AFK_USAGE_LEDGER_DISABLED",
       "description": "Set to 1 to stop publishing/reading the cross-process usage ledger (namespace `usage` in state/kv/kv.db). Usage surfaces (`afk usage`, get_runtime_state, fan-out notice, daemon budget gate) then see only this process's in-memory quota cache. Default 0 (ledger active).",
       "type": "boolean",
