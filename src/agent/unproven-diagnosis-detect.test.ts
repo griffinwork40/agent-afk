@@ -18,7 +18,7 @@ import {
   hasInstrumentationEvidence,
   INSTRUMENTATION_TOOL_NAMES,
 } from './unproven-diagnosis-detect.js';
-import type { StopContext } from './hooks.js';
+import type { HookDecision, StopContext } from './hooks.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -166,7 +166,7 @@ describe('createUnprovenDiagnosisDetectHook', () => {
   it('fires with injectContext when cause-unknown text and no instrumentation', () => {
     const hook = createUnprovenDiagnosisDetectHook({ isEnabled: () => true });
     const ctx = makeStopCtx({ assistantText: CAUSE_UNKNOWN_TEXT, successfulToolNames: [] });
-    const result = hook(ctx);
+    const result = hook(ctx) as HookDecision;
     expect(result).toHaveProperty('injectContext');
     expect(typeof result.injectContext).toBe('string');
     expect(result.injectContext).toMatch(/elimination ladder/i);
@@ -267,7 +267,7 @@ describe('createUnprovenDiagnosisDetectHook', () => {
       successfulToolNames: [], // no instrumentation was run
       terminalState: 'done',
     });
-    const result = hook(ctx);
+    const result = hook(ctx) as HookDecision;
     expect(result).toHaveProperty('injectContext');
     expect(result.injectContext).toMatch(/byte-for-byte|hash-check/i);
   });
