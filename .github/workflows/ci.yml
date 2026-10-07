@@ -219,7 +219,7 @@ jobs:
 
       - name: Upload coverage report
         if: always() && matrix.os != 'windows-2022'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           # Per-OS name — a matrix can't upload multiple artifacts under one name (v4 immutable).
           name: coverage-report-${{ matrix.os }}
