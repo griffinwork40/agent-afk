@@ -410,7 +410,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 
     const check = new Database(dbPath, { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(4);
+      expect(check.pragma('user_version', { simple: true })).toBe(5);
       const cols = (check.pragma('table_info(sessions)') as Array<{ name: string }>).map(
         (c) => c.name,
       );
@@ -437,7 +437,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     }
   });
 
-  it('stamps a fresh DB at v4 with the actor column present', () => {
+  it('stamps a fresh DB at v5 with the actor column present', () => {
     const freshStore = new MemoryStore(migDir);
     freshStore.startSession({ session_id: 's', surface: 'cli', actor: 'main' });
     // Close before opening a readonly copy; also prevents EBUSY on Windows rmSync.
@@ -445,7 +445,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 
     const check = new Database(join(migDir, 'memory.db'), { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(4);
+      expect(check.pragma('user_version', { simple: true })).toBe(5);
       const row = check
         .prepare('SELECT actor FROM sessions WHERE session_id = ?')
         .get('s') as { actor: string | null };
@@ -455,7 +455,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     }
   });
 
-  it('handles concurrent racer adding the actor column via pre-check (no try/catch) and still reaches v4', () => {
+  it('handles concurrent racer adding the actor column via pre-check (no try/catch) and still reaches v5', () => {
     const dbPath = join(migDir, 'memory.db');
     // Simulate a cross-process race: another opener has already added the actor
     // column to the DB (user_version still 2 — the racer ran the ALTER but was
@@ -469,7 +469,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 
     const check = new Database(dbPath, { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(4);
+      expect(check.pragma('user_version', { simple: true })).toBe(5);
       const cols = (check.pragma('table_info(sessions)') as Array<{ name: string }>).map(
         (c) => c.name,
       );
@@ -520,7 +520,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 
     const check = new Database(dbPath, { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(4);
+      expect(check.pragma('user_version', { simple: true })).toBe(5);
     } finally {
       check.close();
       interrupted.close();
@@ -584,8 +584,8 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     try {
       expect(
         check2.pragma('user_version', { simple: true }),
-        'user_version must be 4 after self-heal',
-      ).toBe(4);
+        'user_version must be 5 after self-heal',
+      ).toBe(5);
       const cols = (check2.pragma('table_info(sessions)') as Array<{ name: string }>).map(
         (c) => c.name,
       );

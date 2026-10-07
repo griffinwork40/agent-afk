@@ -23,7 +23,8 @@ export const MEMORY_GC_ENV_REGISTRY = [
       'When set to 1, never-accessed facts older than AFK_MEMORY_GC_MIN_AGE_DAYS ' +
       'are marked superseded (soft-deleted) at most once every 24 hours at session ' +
       'start. Off by default — enable only when archive noise becomes measurable. ' +
-      '"preference" facts are always excluded regardless of this setting.',
+      '"preference" facts and facts predating this database\'s tracking-start marker ' +
+      'are always excluded regardless of this setting.',
     type: 'boolean',
     required: false,
     default: '0',
@@ -34,11 +35,11 @@ export const MEMORY_GC_ENV_REGISTRY = [
     name: 'AFK_MEMORY_GC_MIN_AGE_DAYS',
     description:
       'Minimum age in days for a never-accessed fact to become a GC candidate. ' +
-      'Only meaningful when AFK_MEMORY_GC_SWEEP_ENABLE=1. Default 90 (three months). ' +
+      'Only meaningful when AFK_MEMORY_GC_SWEEP_ENABLE=1. Default 30. Age is counted only for facts created since tracking began. ' +
       'Must be a positive number; invalid values fall back to the default.',
     type: 'number',
     required: false,
-    default: '90',
+    default: '30',
     example: '60',
     category: 'misc',
   },
