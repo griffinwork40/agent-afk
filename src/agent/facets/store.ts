@@ -16,7 +16,7 @@
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'fs';
 import { basename, dirname, join, resolve } from 'path';
-import { getFacetCacheDir, getSessionJournalPath, getSessionsDir, getSubagentJournalPath, validateSessionId } from '../../paths.js';
+import { getFacetCacheDir, getSessionJournalPath, getSessionLedgerPath, getSessionsDir, getSubagentJournalPath, getTraceDir, isSafeLedgerSessionId, validateSessionId } from '../../paths.js';
 import { journalExists, listSubagentJournals, readJournalRecords } from '../journal/reader.js';
 import { isMessageJournalDisabled } from '../journal/noop.js';
 import { journalRecordsToToolEvents, summarizeSubagentJournal } from './journal-adapter.js';
@@ -30,6 +30,7 @@ import {
   type SubagentToolSummary,
   type ToolEventInput,
 } from './schema.js';
+import { parseTraceSignals, type TraceSignals } from './derive.trace.js';
 
 export interface FacetStoreOptions {
   /** Override the session sidecar directory (default: getSessionsDir()). */
@@ -201,6 +202,63 @@ function extractLooseYieldTracking(loose: Record<string, unknown> | null): {
 }
 
 /**
+ * Attempt to read trace signals for a session by locating the witness trace
+ * through the session ledger's `meta.traceLabel`. Returns undefined when:
+ * - the ledger file is absent (old session, tracing disabled);
+ * - no `meta` record with a non-null `traceLabel` is found;
+ * - the trace file does not exist;
+ * - any I/O error occurs.
+ *
+ * Callers treat `undefined` as "no trace data → no signal" — never a
+ * downgrade. This is intentional: absence of data must not downgrade (#2798).
+ *
+ * Synchronous so it fits into the existing sync I/O pattern of store.ts.
+ */
+function tryReadTraceSignals(sessionId: string, sessionsDir: string): TraceSignals | undefined {
+  try {
+    // Only resolve the ledger under the default sessions dir. When the caller
+    // has overridden sessionsDir (e.g. `afk insights --afk-home`), we might
+    // be looking at a different home — skip trace-signal extraction, same
+    // policy as tryReadJournal.
+    if (resolve(sessionsDir) !== resolve(getSessionsDir())) return undefined;
+    if (!isSafeLedgerSessionId(sessionId)) return undefined;
+
+    const ledgerPath = getSessionLedgerPath(sessionId);
+    if (!existsSync(ledgerPath)) return undefined;
+
+    // Read the ledger file synchronously and scan for the `meta` record that
+    // carries `traceLabel`. Only the first `meta` record is meaningful.
+    const ledgerContent = readFileSync(ledgerPath, 'utf8');
+    let traceLabel: string | null | undefined;
+    for (const rawLine of ledgerContent.split('\n')) {
+      const trimmed = rawLine.trim();
+      if (!trimmed) continue;
+      try {
+        const rec = JSON.parse(trimmed) as Record<string, unknown>;
+        if (rec['kind'] === 'meta' && 'traceLabel' in rec) {
+          const tl = rec['traceLabel'];
+          traceLabel = typeof tl === 'string' ? tl : null;
+          break;
+        }
+      } catch {
+        // malformed line — skip
+      }
+    }
+
+    // `null` means tracing was explicitly disabled for this session.
+    if (traceLabel == null) return undefined;
+
+    const tracePath = join(getTraceDir(traceLabel), 'trace.jsonl');
+    if (!existsSync(tracePath)) return undefined;
+
+    const traceContent = readFileSync(tracePath, 'utf8');
+    return parseTraceSignals(traceContent);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Return the facet for `sessionId`, deriving + caching on a miss or when the
  * cache is stale. Returns undefined if the session sidecar does not exist.
  */
@@ -243,6 +301,8 @@ export function getOrDeriveFacet(
   const session = loadStoredSession(sessionId, sessionsDir);
   if (!session) return undefined;
 
+  const traceSignals = tryReadTraceSignals(sessionId, sessionsDir);
+
   const facet = deriveSessionFacet(session, {
     sourceSessionPath: sessionPath,
     sourceSessionMtimeMs: effectiveMtimeMs,
@@ -252,6 +312,7 @@ export function getOrDeriveFacet(
           subagentBreakdown: journalData.subagentBreakdown,
         }
       : {}),
+    ...(traceSignals !== undefined ? { traceSignals } : {}),
   });
 
   // Carry forward yield fields that the new derivation left null (#2777).
