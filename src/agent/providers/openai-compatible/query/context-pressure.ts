@@ -8,6 +8,9 @@ import {
 } from '../../shared/context-pressure.js';
 import type { TurnDriverContext } from './turn-driver.js';
 
+/** Max output tokens reserved for the bounded synthesis pass during wind-down. */
+export const WIND_DOWN_MAX_OUTPUT_TOKENS = 4096;
+
 /**
  * Return the route label used by {@link contextGuardFraction} for a turn's auth source.
  *
@@ -38,16 +41,19 @@ export function windDownForContextPressure(ctx: TurnDriverContext, appendedAt: n
   // have already been persisted by dispatchAndAppend's journal commit point.
   // The available budget is computed relative to the operational threshold (not
   // the raw limit) so the truncation target matches the guard's trip point.
-  const results = appended.filter(m => m.role === 'tool' || m.role === 'user');
-  const envelopeBytes = Buffer.byteLength(JSON.stringify(appended.filter(m => m.role !== 'tool' && m.role !== 'user')));
-  const availableBytes = Math.max(0, Math.floor((limit * fraction - last) * 3) - envelopeBytes - 4096);
+  const results = appended.filter(m => m.role === 'tool');
+  const envelopeBytes = Buffer.byteLength(JSON.stringify(appended.filter(m => m.role !== 'tool')));
+  const availableBytes = Math.max(0, Math.floor((limit * fraction - last) * 3) - envelopeBytes - WIND_DOWN_MAX_OUTPUT_TOKENS * 3);
   const each = Math.floor(availableBytes / Math.max(1, results.length));
   for (const message of results) {
     const text = typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
     if (Buffer.byteLength(text) > each) {
       // Unicode-safe byte bound: worst-case UTF-8 is four bytes per code point.
       const count = Math.floor(Math.max(0, each - 100) / 4);
-      message.content = text.slice(0, count) + '\n[Context pressure: result truncated for final synthesis; full output is journaled.]';
+      const idx = ctx.priorTurns.indexOf(message);
+      if (idx !== -1) {
+        ctx.priorTurns[idx] = { ...message, content: text.slice(0, count) + '\n[Context pressure: result truncated for final synthesis; full output is journaled.]' };
+      }
     }
   }
   return true;
@@ -57,5 +63,5 @@ export function canSynthesizeUnderPressure(ctx: TurnDriverContext, appendedAt: n
   const subscriptionPath = ctx.opts.auth.source === 'chatgpt-oauth';
   const limit = contextLimitFor(ctx.currentModel, subscriptionPath);
   const appendedBytes = Buffer.byteLength(JSON.stringify(ctx.priorTurns.slice(appendedAt)));
-  return projectedContextTokens(contextWindowTokensUsed(ctx.lastUsage ?? {}), appendedBytes) + 8192 < limit;
+  return projectedContextTokens(contextWindowTokensUsed(ctx.lastUsage ?? {}), appendedBytes) + WIND_DOWN_MAX_OUTPUT_TOKENS < limit;
 }

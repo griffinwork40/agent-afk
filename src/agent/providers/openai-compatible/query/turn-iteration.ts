@@ -16,6 +16,7 @@
 
 import OpenAI from 'openai';
 import { CONTEXT_PRESSURE_WIND_DOWN, CONTEXT_PRESSURE_NOTE } from '../../shared/context-pressure.js';
+import { WIND_DOWN_MAX_OUTPUT_TOKENS } from './context-pressure.js';
 import type { AgentConfig } from '../../../types/config-types.js';
 import type { ProviderEvent, ProviderUsage } from '../../../provider.js';
 import { buildMessages, buildUserContent, type OpenAIMessage } from '../messages.js';
@@ -189,7 +190,7 @@ export async function* runIteration(
       model: ctx.currentModel,
       messages,
       activeTools,
-      maxOutputTokens: windDown === CONTEXT_PRESSURE_WIND_DOWN ? 4096 : ctx.opts.config.maxOutputTokens,
+      maxOutputTokens: windDown === CONTEXT_PRESSURE_WIND_DOWN ? WIND_DOWN_MAX_OUTPUT_TOKENS : ctx.opts.config.maxOutputTokens,
       effort: ctx.opts.config.effort, temperature: ctx.opts.config.temperature,
       isChatGptBackend,
     });
@@ -210,7 +211,7 @@ export async function* runIteration(
       model: ctx.currentModel,
       messages,
       activeTools,
-      maxOutputTokens: windDown === CONTEXT_PRESSURE_WIND_DOWN ? 4096 : ctx.opts.config.maxOutputTokens,
+      maxOutputTokens: windDown === CONTEXT_PRESSURE_WIND_DOWN ? WIND_DOWN_MAX_OUTPUT_TOKENS : ctx.opts.config.maxOutputTokens,
       effort: ctx.opts.config.effort, temperature: ctx.opts.config.temperature,
     });
 

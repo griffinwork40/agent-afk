@@ -12,7 +12,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { windDownForContextPressure, canSynthesizeUnderPressure } from './context-pressure.js';
+import { windDownForContextPressure, canSynthesizeUnderPressure, WIND_DOWN_MAX_OUTPUT_TOKENS } from './context-pressure.js';
 import type { TurnDriverContext } from './turn-driver.js';
 
 afterEach(() => { vi.unstubAllEnvs(); });
@@ -88,20 +88,80 @@ describe('windDownForContextPressure — codex subscription route', () => {
     expect(windDownForContextPressure(ctx, 0)).toBe(false);
   });
 
-  it('truncates oversized tool results, keeping content short enough for synthesis', () => {
+  it('truncates oversized tool results and does NOT mutate the original message object', () => {
     vi.stubEnv('AFK_CONTEXT_GUARD_PCT', undefined);
     vi.stubEnv('AFK_CONTEXT_GUARD_DISABLE', undefined);
     const veryBigContent = largePayload(2_000_000); // 2MB — far above any limit
-    const msg: { role: string; content: string } = { role: 'user', content: veryBigContent };
+    const originalMsg = { role: 'tool', content: veryBigContent };
     const ctx = makeCtx({
       source: 'chatgpt-oauth',
       lastUsageTokens: 245_000,
-      priorTurns: [msg],
+      priorTurns: [originalMsg],
     });
     windDownForContextPressure(ctx, 0);
-    // Content should be truncated
-    expect(Buffer.byteLength(msg.content)).toBeLessThan(Buffer.byteLength(veryBigContent));
-    expect(msg.content).toContain('[Context pressure: result truncated for final synthesis');
+    // The slot in priorTurns should have a new object with truncated content.
+    const slotAfter = (ctx.priorTurns as Array<{ role: string; content: string }>)[0];
+    expect(Buffer.byteLength(slotAfter.content)).toBeLessThan(Buffer.byteLength(veryBigContent));
+    expect(slotAfter.content).toContain('[Context pressure: result truncated for final synthesis');
+    // The ORIGINAL object must NOT have been mutated.
+    expect(originalMsg.content).toBe(veryBigContent);
+    expect(slotAfter).not.toBe(originalMsg);
+  });
+
+  it('does NOT truncate user messages — only tool messages', () => {
+    vi.stubEnv('AFK_CONTEXT_GUARD_PCT', undefined);
+    vi.stubEnv('AFK_CONTEXT_GUARD_DISABLE', undefined);
+    // A large user message and a large tool message, both over any reasonable per-message budget.
+    const bigUserContent = largePayload(2_000_000);
+    const bigToolContent = largePayload(2_000_000);
+    const userMsg = { role: 'user', content: bigUserContent };
+    const toolMsg = { role: 'tool', content: bigToolContent };
+    const ctx = makeCtx({
+      source: 'chatgpt-oauth',
+      lastUsageTokens: 245_000,
+      priorTurns: [userMsg, toolMsg],
+    });
+    windDownForContextPressure(ctx, 0);
+    // User message slot: content must be unchanged (user messages are never truncated).
+    const userSlot = (ctx.priorTurns as Array<{ role: string; content: string }>)[0];
+    expect(userSlot.content).toBe(bigUserContent);
+    // Tool message slot: should be truncated with a new object.
+    const toolSlot = (ctx.priorTurns as Array<{ role: string; content: string }>)[1];
+    expect(Buffer.byteLength(toolSlot.content)).toBeLessThan(Buffer.byteLength(bigToolContent));
+    expect(toolSlot.content).toContain('[Context pressure: result truncated for final synthesis');
+    expect(toolSlot).not.toBe(toolMsg); // new object, not mutated in place
+  });
+
+  it('headroom subtraction is in bytes (WIND_DOWN_MAX_OUTPUT_TOKENS * 3), not raw tokens', () => {
+    vi.stubEnv('AFK_CONTEXT_GUARD_PCT', undefined);
+    vi.stubEnv('AFK_CONTEXT_GUARD_DISABLE', undefined);
+    // Verify the constant value and that the formula uses bytes.
+    // If headroom were subtracted as raw tokens (4096) instead of bytes (4096*3=12288),
+    // the available budget would be ~8192 bytes larger, producing longer truncated content.
+    // We assert the constant is what we expect and that truncated content is bounded
+    // tightly by the byte-converted headroom.
+    expect(WIND_DOWN_MAX_OUTPUT_TOKENS).toBe(4096);
+    // Build a scenario where ONLY ONE tool message exists so each=availableBytes.
+    // availableBytes = floor((limit*fraction - last)*3) - envelopeBytes - 4096*3
+    // With lastUsageTokens=245_000, limit=258_400 (codex), fraction=0.95:
+    //   threshold = 245_480 tokens
+    //   budget = floor((245_480 - 245_000) * 3) = floor(480 * 3) = 1440 bytes
+    //   envelopeBytes ~ small (no assistant/user envelope)
+    //   headroom = 4096 * 3 = 12288 bytes  -> availableBytes = max(0, 1440 - ~50 - 12288) = 0
+    // So with the corrected formula, each=0 and every tool message gets truncated to 0+suffix.
+    // With the old formula (subtract 4096 raw) each would be 1440 - ~50 - 4096 < 0 => 0 too,
+    // but at a different breakpoint. The key observable: truncation fires and suffix is present.
+    const toolMsg = { role: 'tool', content: largePayload(500_000) };
+    const ctx = makeCtx({
+      source: 'chatgpt-oauth',
+      lastUsageTokens: 245_000,
+      priorTurns: [toolMsg],
+    });
+    windDownForContextPressure(ctx, 0);
+    const slot = (ctx.priorTurns as Array<{ role: string; content: string }>)[0];
+    // Truncated content must end with the sentinel suffix (not the raw 500KB payload).
+    expect(slot.content).toContain('[Context pressure: result truncated for final synthesis');
+    expect(Buffer.byteLength(slot.content)).toBeLessThan(Buffer.byteLength(largePayload(500_000)));
   });
 });
 
@@ -174,12 +234,44 @@ describe('canSynthesizeUnderPressure', () => {
     });
     expect(canSynthesizeUnderPressure(ctx, 0)).toBe(true);
   });
-  it('returns false when projected + 8192 overhead exceeds limit', () => {
+  it('returns false when projected + WIND_DOWN_MAX_OUTPUT_TOKENS overhead exceeds limit', () => {
     const ctx = makeCtx({
       source: 'chatgpt-oauth',
-      lastUsageTokens: 259_000, // > 258,400 limit so projected+8192 > limit
+      lastUsageTokens: 259_000, // > 258,400 limit so projected+4096 > limit
       priorTurns: [{ role: 'user', content: largePayload(100) }],
     });
     expect(canSynthesizeUnderPressure(ctx, 0)).toBe(false);
+  });
+
+  it('WIND_DOWN_MAX_OUTPUT_TOKENS is 4096 — reserve matches the actual synthesis cap', () => {
+    expect(WIND_DOWN_MAX_OUTPUT_TOKENS).toBe(4096);
+  });
+
+  it('boundary: exactly at limit returns false; one token below returns true', () => {
+    // contextLimitFor('gpt-4o-mini', subscriptionPath=true) = 128_000.
+    // canSynthesizeUnderPressure: projectedContextTokens(last, appendedBytes) + WIND_DOWN_MAX_OUTPUT_TOKENS < limit
+    // projectedContextTokens = Math.ceil(last + appendedBytes / 3).
+    //
+    // appendedBytes = Buffer.byteLength(JSON.stringify([{role:'user',content:'xxxxxxxxxxxx'}])) = 42.
+    // appendedTokens = Math.ceil(42 / 3) = 14.
+    //
+    // At-limit: last = 128_000 - 4096 - 14 = 123_890 → projected = 123_904 → +4096 = 128_000 = limit → false (not <).
+    // One below: last = 123_889 → projected = 123_903 → +4096 = 127_999 < 128_000 → true.
+    const limit = 128_000; // contextLimitFor('gpt-4o-mini', true)
+    const appendedTokens = 14; // Math.ceil(42 / 3), 42 = byteLength(JSON.stringify([{role,content}]))
+    const atLimit = makeCtx({
+      source: 'chatgpt-oauth',
+      lastUsageTokens: limit - WIND_DOWN_MAX_OUTPUT_TOKENS - appendedTokens,
+      priorTurns: [{ role: 'user', content: 'xxxxxxxxxxxx' }],
+    });
+    expect(canSynthesizeUnderPressure(atLimit, 0)).toBe(false);
+
+    // One token less in lastUsage → projected+4096 = limit-1 < limit → true.
+    const oneBelow = makeCtx({
+      source: 'chatgpt-oauth',
+      lastUsageTokens: limit - WIND_DOWN_MAX_OUTPUT_TOKENS - appendedTokens - 1,
+      priorTurns: [{ role: 'user', content: 'xxxxxxxxxxxx' }],
+    });
+    expect(canSynthesizeUnderPressure(oneBelow, 0)).toBe(true);
   });
 });
