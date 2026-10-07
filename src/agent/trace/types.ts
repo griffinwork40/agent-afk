@@ -381,6 +381,12 @@ export interface SubagentStartedPayload {
 }
 
 export interface SubagentSucceededPayload {
+  incomplete?: true;
+  incompleteReason?: string;
+  roundsUsed?: number;
+  budget?: number;
+  journalPath?: string;
+  salvaged?: true;
   transition: 'succeeded';
   subagentId: string;
   durationMs: number;

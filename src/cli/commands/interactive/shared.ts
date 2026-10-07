@@ -716,6 +716,8 @@ export interface TurnHandles {
    * non-REPL callers, where Ctrl+B does nothing for tool calls.
    */
   detachRegistry?: DetachableToolRegistry;
+  /** Track original tool records for asynchronous detached-result updates. */
+  onToolEvent?(event: import('../../slash/types.js').ToolEvent): void;
   /**
    * Install/clear a per-turn ESC soft-stop handler on the surface's
    * persistent compositor. Used by the turn handler to flip

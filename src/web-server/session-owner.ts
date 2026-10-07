@@ -28,6 +28,8 @@ import type { AgentConfig } from '../agent/types.js';
 import type { PermissionMode } from '../agent/types/sdk-types.js';
 import type { McpManager } from '../agent/mcp/index.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
+import { createSessionAutosaver, type SessionAutosaver } from '../cli/session-autosave.js';
+import { drainAndPersistTurn } from './session-owner.autosave.js';
 
 export interface CreateSessionRequest {
   /** Working directory. Ignored unless `allowArbitraryCwd` — see the guard. */
@@ -88,6 +90,8 @@ export class SessionOwner {
    * was still queued behind it.
    */
   private readonly pending = new Map<string, number>();
+  /** Per-session sidecar autosave, so web sessions show up in `/resume`. */
+  private readonly autosavers = new Map<string, SessionAutosaver>();
 
   constructor(private readonly options: SessionOwnerOptions) {}
 
@@ -185,6 +189,10 @@ export class SessionOwner {
     this.sessions.set(id, session);
     this.info.set(id, record);
     this.owned.add(id);
+    this.autosavers.set(id, createSessionAutosaver({
+      model, cwd, source: 'web', sessionId: id,
+      onError: (err) => { console.error(`[afk web] session ${id} autosave failed; it may not be resumable:`, err); },
+    }));
     if (wiring.mcpManager !== undefined) this.mcpManagers.set(id, wiring.mcpManager);
     return record;
   }
@@ -212,10 +220,9 @@ export class SessionOwner {
       .then(async () => {
         try {
           // The ledger is written as a side effect of the turn; the SSE route
-          // tails it. Draining just runs the turn to completion.
-          for await (const _event of session.sendMessageStream(text)) {
-            void _event;
-          }
+          // tails it. Draining runs the turn to completion, then the completed
+          // turn is saved to the session sidecar.
+          await drainAndPersistTurn(session, text, this.autosavers.get(sessionId));
         } finally {
           const remaining = (this.pending.get(sessionId) ?? 1) - 1;
           if (remaining > 0) this.pending.set(sessionId, remaining);
@@ -249,9 +256,7 @@ export class SessionOwner {
       .catch(() => {})
       .then(async () => {
         try {
-          for await (const _event of session.sendMessageStream(message)) {
-            void _event;
-          }
+          await drainAndPersistTurn(session, message, this.autosavers.get(sessionId));
         } finally {
           const remaining = (this.pending.get(sessionId) ?? 1) - 1;
           if (remaining > 0) this.pending.set(sessionId, remaining);
@@ -341,6 +346,7 @@ export class SessionOwner {
     this.pending.clear();
     this.turns.clear();
     this.mcpManagers.clear();
+    this.autosavers.clear();
     // Sessions close BEFORE MCP disconnect: a closing session may raise a final
     // tool call that needs the MCP transport alive.
     await Promise.all(all.map((s) => s.close().catch(() => {})));

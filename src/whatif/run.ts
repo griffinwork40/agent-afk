@@ -194,11 +194,18 @@ async function runPredictPhase(
   const probesPerPrediction = options.probes ?? DEFAULT_PROBES;
   const maxPredictions = resolveMaxPredictions(probesPerPrediction, options.maxPredictions);
 
+  // Collect operator predictions from options and from the spec file (#2861).
+  const specPredictions = options.spec.predictions ?? [];
+  const cliPredictions = options.operatorPredictions ?? [];
+  const allOperatorPredictions = [...cliPredictions, ...specPredictions];
+
   const rawPredictions = await predictChanges(
     {
       spec, changeDescriptions, structural, trackRecord, repoManifest,
       probesPerPrediction, maxPredictions,
       ...(redundancySection !== undefined ? { redundancySection } : {}),
+      ...(allOperatorPredictions.length > 0 ? { operatorPredictions: allOperatorPredictions } : {}),
+      ...(options.verify ? { verify: true } : {}),
     },
     wrappedComplete,
     options.analystModel,

@@ -65,7 +65,7 @@ export const TOOL_HEALTH_MIN_SESSIONS = 2;
 export const TOOL_HEALTH_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 /** Maximum number of trace files to scan per run (cost bound). */
-export const TOOL_HEALTH_MAX_FILES = 200;
+const TOOL_HEALTH_MAX_FILES = 200;
 
 // ---------------------------------------------------------------------------
 // Internal types

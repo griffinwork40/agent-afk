@@ -252,7 +252,11 @@ export class TurnStreamRunner {
     inputStream.pushUserMessage(effectiveContent);
 
     this.ensureLedger();
-    this.deps.ledger.recordUser(historySummary);
+    // `content` is the caller's own message; `effectiveContent` may carry
+    // drained framework context in front of it. Record both so the web
+    // session list can title the session from what the user actually typed.
+    const inputSummary = typeof content === 'string' ? content : this.summarize(content);
+    this.deps.ledger.recordUser(historySummary, inputSummary);
 
     this.deps.incInboundMessageCount();
 

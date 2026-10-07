@@ -18,6 +18,7 @@ import {
   FACET_VERSION,
   SessionFacetSchema,
   type FacetOutcome,
+  type FacetOutcomeDowngradeReason,
   type FacetOutcomeSource,
   type SessionFacet,
   type StoredSessionInput,
@@ -29,6 +30,8 @@ import {
 import { computeParallelDispatch } from './parallel-dispatch.js';
 import { parseTerminalState } from '../outcomes/terminal-state.js';
 import { detectPrUrlFromEvents } from './derive.pr-detect.js';
+import type { TraceSignals } from './derive.trace.js';
+import { checkDowngradeSignals } from './derive.downgrade.js';
 
 export interface DeriveOptions {
   /** Absolute path of the source session sidecar (recorded for provenance). */
@@ -50,6 +53,13 @@ export interface DeriveOptions {
    * parent's `tool_counts`. (#2461)
    */
   subagentBreakdown?: SubagentToolSummary[];
+  /**
+   * Signals extracted from the session's witness trace by the store layer.
+   * When absent (no trace available, or tracing disabled) all trace-backed
+   * downgrade signals are suppressed — absence is never treated as a
+   * downgrade. Populated by `store.ts` via `derive.trace.ts`. (#2798 cont.)
+   */
+  traceSignals?: TraceSignals;
 }
 
 const SUBAGENT_TOOLS = new Set(['agent', 'compose', 'skill']);
@@ -79,6 +89,10 @@ interface OutcomeResult {
   outcome: FacetOutcome;
   outcomeSource: FacetOutcomeSource;
   primarySuccess: string;
+  /** Non-empty when the Done block had a deferred/pending bullet (#2798). */
+  parsedDeferred: string | undefined;
+  /** Non-empty when the Done block had an evidence bullet (#2798). */
+  parsedEvidence: string | undefined;
 }
 
 /**
@@ -101,6 +115,8 @@ function deriveOutcome(
   let whatWasDone: string | undefined;
 
   const tArr = turns ?? [];
+  let parsedDeferred: string | undefined;
+  let parsedEvidence: string | undefined;
   if (tArr.length === 0) {
     outcome = 'aborted';
     outcomeSource = 'structural';
@@ -113,6 +129,10 @@ function deriveOutcome(
       outcome = terminalKindToOutcome(parsed.kind);
       outcomeSource = 'terminal_state';
       whatWasDone = parsed.whatWasDone;
+      // Capture deferred and evidence bullets for downgrade signals (#2798).
+      // Only meaningful when kind is 'done'; other kinds are ignored downstream.
+      parsedDeferred = parsed.deferred;
+      parsedEvidence = parsed.evidence;
     } else {
       outcome = 'unknown';
       outcomeSource = 'none';
@@ -137,7 +157,7 @@ function deriveOutcome(
     primarySuccess = oneLine(lastAssistant || firstPrompt || sessionType, 160) || sessionType;
   }
 
-  return { outcome, outcomeSource, primarySuccess };
+  return { outcome, outcomeSource, primarySuccess, parsedDeferred, parsedEvidence };
 }
 
 /** Parse a stringified tool input to an object, swallowing malformed JSON. */
@@ -340,7 +360,32 @@ export function deriveSessionFacet(
   const assistantMessageCount = turns.filter((t) => (t.assistant ?? '').trim().length > 0).length;
   const lastAssistant = [...turns].reverse().find((t) => (t.assistant ?? '').trim().length > 0)?.assistant ?? '';
 
-  const { outcome, outcomeSource, primarySuccess } = deriveOutcome(turns, sessionType);
+  const { outcome: rawOutcome, outcomeSource, primarySuccess: rawPrimarySuccess, parsedDeferred, parsedEvidence } = deriveOutcome(turns, sessionType);
+
+  // Downgrade self-reported Done to partially_achieved when corroborating
+  // signals indicate the session did not fully complete (#2798). The check
+  // only applies when the initial outcome is fully_achieved; other outcomes
+  // are not modified. primarySuccess is preserved as-is — it still describes
+  // what the agent reported doing.
+  let outcome = rawOutcome;
+  let primarySuccess = rawPrimarySuccess;
+  let outcomeDowngradeReason: FacetOutcomeDowngradeReason | undefined;
+  if (rawOutcome === 'fully_achieved') {
+    outcomeDowngradeReason = checkDowngradeSignals({
+      parsedDeferred,
+      parsedEvidence,
+      filesWritten,
+      filesEdited,
+      commits,
+      composePartialNodes,
+      traceSignals: options.traceSignals,
+    });
+    if (outcomeDowngradeReason !== undefined) {
+      outcome = 'partially_achieved';
+      // Keep primarySuccess from the Done block — it still describes what the
+      // agent reported. Only the outcome label changes to reflect the doubt.
+    }
+  }
 
   const frictionDetail =
     toolErrors > 0
@@ -421,6 +466,8 @@ export function deriveSessionFacet(
 
     outcome,
     outcome_source: outcomeSource,
+    // outcome_downgrade_reason: present only when a downgrade fired (#2798).
+    ...(outcomeDowngradeReason !== undefined ? { outcome_downgrade_reason: outcomeDowngradeReason } : {}),
     primary_success: primarySuccess,
     world_changes: {
       files_written: filesWritten,

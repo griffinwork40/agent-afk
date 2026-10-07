@@ -58,6 +58,8 @@ export interface ToolEvent {
    * #2970; older session files that lack this field are read as `undefined`.
    */
   incomplete?: boolean;
+  /** Reason paired with incomplete, including detached compose partial nodes. */
+  incompleteReason?: string;
   /**
    * Compose only: number of partial DAG nodes, plumbed from
    * `ToolResultChunk.partialNodeCount`. Written since #2978.
@@ -167,7 +169,7 @@ export interface SessionStats {
    * can flag and resume conversations that started in chat; the daemon sets
    * 'daemon'.
    */
-  source?: 'cli' | 'telegram' | 'daemon';
+  source?: 'cli' | 'telegram' | 'daemon' | 'web';
   /**
    * Telegram chat id, set only when `source === 'telegram'`. Enables reverse
    * lookup from a stored session back to its chat (used by later phases).

@@ -69,3 +69,59 @@ describe('resolvePeerInboundMode', () => {
     expect(called).toBe(true);
   });
 });
+
+describe('getPeerInboundModeConfig', () => {
+  it('returns mode=accept, invalid=false when AFK_PEER_INBOUND is unset', async () => {
+    vi.stubEnv('AFK_PEER_INBOUND', undefined as unknown as string);
+    const { getPeerInboundModeConfig } = await freshMode();
+    const cfg = getPeerInboundModeConfig();
+    expect(cfg.mode).toBe('accept');
+    expect(cfg.invalid).toBe(false);
+    expect(cfg.rawTruncated).toBeUndefined();
+  });
+
+  it('returns mode=hold, invalid=false when AFK_PEER_INBOUND=hold', async () => {
+    vi.stubEnv('AFK_PEER_INBOUND', 'hold');
+    const { getPeerInboundModeConfig } = await freshMode();
+    const cfg = getPeerInboundModeConfig();
+    expect(cfg.mode).toBe('hold');
+    expect(cfg.invalid).toBe(false);
+    expect(cfg.rawTruncated).toBeUndefined();
+  });
+
+  it('returns mode=accept, invalid=true and rawTruncated for a typo like "hol"', async () => {
+    vi.stubEnv('AFK_PEER_INBOUND', 'hol');
+    const { getPeerInboundModeConfig } = await freshMode();
+    const cfg = getPeerInboundModeConfig();
+    expect(cfg.mode).toBe('accept');
+    expect(cfg.invalid).toBe(true);
+    expect(cfg.rawTruncated).toBe('hol');
+  });
+
+  it('caps rawTruncated at 20 chars and appends "…" for a long invalid value', async () => {
+    const longValue = 'x'.repeat(50);
+    vi.stubEnv('AFK_PEER_INBOUND', longValue);
+    const { getPeerInboundModeConfig } = await freshMode();
+    const cfg = getPeerInboundModeConfig();
+    expect(cfg.invalid).toBe(true);
+    expect(cfg.rawTruncated).toBe('x'.repeat(20) + '…');
+  });
+
+  it('does NOT truncate rawTruncated when the invalid value is exactly 20 chars (boundary)', async () => {
+    const atCap = 'x'.repeat(20);
+    vi.stubEnv('AFK_PEER_INBOUND', atCap);
+    const { getPeerInboundModeConfig } = await freshMode();
+    const cfg = getPeerInboundModeConfig();
+    expect(cfg.invalid).toBe(true);
+    expect(cfg.rawTruncated).toBe(atCap); // no "…" appended
+  });
+
+  it('truncates rawTruncated when the invalid value is 21 chars (one over cap)', async () => {
+    const overCap = 'x'.repeat(21);
+    vi.stubEnv('AFK_PEER_INBOUND', overCap);
+    const { getPeerInboundModeConfig } = await freshMode();
+    const cfg = getPeerInboundModeConfig();
+    expect(cfg.invalid).toBe(true);
+    expect(cfg.rawTruncated).toBe('x'.repeat(20) + '…');
+  });
+});

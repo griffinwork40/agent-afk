@@ -224,8 +224,8 @@ export function printUpdateBanner(info: UpdateInfo): void {
   const hint = isMajorUpgrade(info.currentVersion, info.latestVersion)
     ? `Major release (may include breaking changes), not installed automatically.\n` +
       `See https://github.com/griffinwork40/agent-afk/releases/tag/v${info.latestVersion} ` +
-      `then run \`npm install -g agent-afk@${info.latestVersion}\` to update`
-    : 'Run `npm install -g agent-afk` to update';
+      `then run \`npm install -g --allow-scripts=agent-afk agent-afk@${info.latestVersion}\` to update`
+    : 'Run `npm install -g --allow-scripts=agent-afk agent-afk` to update';
   process.stderr.write(
     `\n${palette.warning(palette.bold('Update available:'))} ` +
     `${palette.dim(info.currentVersion)} → ${palette.bold(info.latestVersion)}\n` +
@@ -382,10 +382,14 @@ export function triggerAutoUpdate(latestVersion: string): void {
   if (existsSync(pendingPath())) return;
   try {
     writePendingUpdateMarker(latestVersion);
-    const child = spawn('npm', ['install', '-g', `agent-afk@${latestVersion}`], {
-      detached: true,
-      stdio: 'ignore',
-    });
+    // --allow-scripts=agent-afk is required on npm >=11.19, which began
+    // silently skipping postinstall for packages not in allow-scripts.
+    // The flag is safe on all npm versions agent-afk supports (npm >=10).
+    const child = spawn(
+      'npm',
+      ['install', '-g', '--allow-scripts=agent-afk', `agent-afk@${latestVersion}`],
+      { detached: true, stdio: 'ignore' },
+    );
     child.unref();
   } catch {
     // silent — auto-update is best-effort

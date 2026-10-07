@@ -51,7 +51,6 @@ import {
   printExitSummary,
   cancelSessionBackgroundWork,
   makeSessionSaver,
-  type ExitReasonRef,
 } from './interactive/interactive.cleanup.js';
 import { measurePreArmAnchorRow } from './interactive/interactive.pty-setup.js';
 
@@ -304,10 +303,7 @@ export function registerInteractiveCommand(program: Command): void {
         await cancelSessionBackgroundWork(ctx);
         await Promise.race([
           ctx.session.current.close(),
-          new Promise<void>(resolve => {
-            const t = setTimeout(resolve, 2000);
-            t.unref();
-          }),
+          new Promise<void>(resolve => { const t = setTimeout(resolve, 2000); t.unref(); }),
         ]);
         if (ctx.mcpManager) await ctx.mcpManager.disconnectAll();
         ctx.memoryStore.close();
@@ -331,7 +327,8 @@ export function registerInteractiveCommand(program: Command): void {
       console.log(palette.dim(`  transcript: ${transcript.path()}`));
       registerCleanup(async () => { await transcript.appendEnded(); });
       ctx.setTranscriptPathGetter?.(() => transcript.path());
-      const { saveCurrentSession, isSaved } = makeSessionSaver(ctx, (ctx.exitReasonRef = { current: undefined } as ExitReasonRef));
+      ctx.exitReasonRef = { current: undefined };
+      const { saveCurrentSession, isSaved } = makeSessionSaver(ctx, ctx.exitReasonRef);
       registerCleanup(async () => {
         if (isSaved()) return;
         try { saveCurrentSession(); } catch { /* session-sidecar best-effort */ }
@@ -340,7 +337,7 @@ export function registerInteractiveCommand(program: Command): void {
       const turnState: TurnState = { turnInFlight: false, lastSigintAt: 0 };
       ctx.getInFlight = () => turnState.turnInFlight;
 
-      const { handleSigint, removeListeners } = installSignalHandlers({ ctx, turnState, pickerAbort, exitReasonRef: ctx.exitReasonRef! });
+      const { handleSigint, removeListeners } = installSignalHandlers({ ctx, turnState, pickerAbort, exitReasonRef: ctx.exitReasonRef });
       registerCleanup(async () => { removeListeners(); });
 
       // Screen clear then measure the pre-arm anchor row (newlines from
@@ -379,6 +376,8 @@ export function registerInteractiveCommand(program: Command): void {
       ctx.rl.on('close', async () => {
         ctx.statusLine.stop();
         setTerminalTitleIfEnabled(process.stdout, '');
+        // No signal handler wrote exitReason → stdin reached EOF.
+        ctx.exitReasonRef!.current ??= 'eof';
         printExitSummary(ctx, worktreeHandle, saveCurrentSession);
         console.log(palette.info('ℹ ') + 'Goodbye!');
         await runCleanupFunctions();

@@ -814,6 +814,9 @@ describe('AnthropicDirectProvider', () => {
 
     // 2 tool-use rounds + 1 tools-stripped wind-down round, not left to spin.
     expect(messagesCreateMock).toHaveBeenCalledTimes(3);
+    const secondRequest = JSON.stringify(messagesCreateMock.mock.calls[1]?.[0].messages);
+    expect(secondRequest).toContain('Deliver useful findings now');
+    expect(events.filter(e => e.type === 'progress').at(-1)).toMatchObject({ progress: { roundsUsed: 2, budget: 2 } });
     const completed = events.find((e) => e.type === 'turn.completed');
     expect(completed).toBeDefined();
     if (completed?.type === 'turn.completed') {

@@ -33,15 +33,53 @@ const VALID_MODES = new Set<string>(['accept', 'hold', 'off']);
 // Warn at most once per process for the same invalid value.
 let warnedValue: string | undefined;
 
+/** Maximum length of the raw `AFK_PEER_INBOUND` value echoed in diagnostics. */
+const RAW_VALUE_CAP = 20;
+
+/**
+ * Structured result from {@link getPeerInboundModeConfig}.
+ *
+ * Callers that only need the resolved mode should prefer
+ * {@link resolvePeerInboundMode}. Use this struct when you also need to
+ * surface a warning about an invalid raw value (e.g. in `/inbox` header).
+ */
+export interface PeerInboundModeConfig {
+  /** Resolved mode (always a valid `PeerInboundMode`). */
+  mode: PeerInboundMode;
+  /**
+   * Whether the raw `AFK_PEER_INBOUND` value was set but unrecognised.
+   * When `true`, `rawTruncated` contains the (capped) raw value for display.
+   */
+  invalid: boolean;
+  /**
+   * The raw `AFK_PEER_INBOUND` value truncated to {@link RAW_VALUE_CAP}
+   * characters. `undefined` when the env var was absent or valid.
+   */
+  rawTruncated?: string;
+}
+
 /**
  * Resolve the current peer inbound mode from `AFK_PEER_INBOUND`.
  * Invalid or absent values default to `'accept'`. A one-time `debugLog`
  * warning is emitted when an unrecognised value is detected.
  */
 export function resolvePeerInboundMode(): PeerInboundMode {
+  return getPeerInboundModeConfig().mode;
+}
+
+/**
+ * Like {@link resolvePeerInboundMode} but also returns structured information
+ * about whether the raw `AFK_PEER_INBOUND` value was invalid, so callers
+ * (e.g. `/inbox` list) can surface a TUI-safe warning without re-reading the
+ * env themselves.
+ *
+ * The raw value is capped at {@link RAW_VALUE_CAP} characters to prevent an
+ * arbitrarily long env value from disrupting the display.
+ */
+export function getPeerInboundModeConfig(): PeerInboundModeConfig {
   const raw = env.AFK_PEER_INBOUND;
   if (raw !== undefined && VALID_MODES.has(raw.trim().toLowerCase())) {
-    return raw.trim().toLowerCase() as PeerInboundMode;
+    return { mode: raw.trim().toLowerCase() as PeerInboundMode, invalid: false };
   }
   if (raw !== undefined && raw !== warnedValue) {
     warnedValue = raw;
@@ -50,5 +88,11 @@ export function resolvePeerInboundMode(): PeerInboundMode {
         `expected 'accept', 'hold', or 'off'. Falling back to 'accept'.`,
     );
   }
-  return 'accept';
+  const rawTruncated =
+    raw !== undefined
+      ? raw.length > RAW_VALUE_CAP
+        ? raw.slice(0, RAW_VALUE_CAP) + '…'
+        : raw
+      : undefined;
+  return { mode: 'accept', invalid: raw !== undefined, rawTruncated };
 }

@@ -65,7 +65,7 @@ All environment variables recognized by `agent-afk` are listed here, grouped by 
 
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
-| `AFK_AUTO_ROUTING` | boolean | Auto-route bare slash inputs to matching skills. Applies to interactive, chat, and telegram surfaces. | — |
+| `AFK_AUTO_ROUTING` | boolean | Auto-route bare slash inputs to matching skills. Applies to interactive, chat, and telegram surfaces. The `afk web` surface also inherits the interactive value (`autoRouting.interactive`), so this setting covers web sessions too. | — |
 | `AFK_INTERNAL` | boolean | Tier gate. Unlocks only when set to the literal string `1` — other truthy values (`true`, `yes`) leave the tier locked. When unlocked, internal-audience skills (e.g. `/audit-fit`) become visible in slash listings, `/help`, and tab-complete. Gates surfacing only — not an access boundary; it does not change what's accessible. | — |
 
 

@@ -613,6 +613,14 @@ export interface CompactionCoreDeps<M> {
    */
   onRetry?(info: RetryInfo): void;
   /**
+   * Called once when the retry budget is fully exhausted (all maxRetries
+   * attempts have been made and the last error is about to be rethrown). Route
+   * to the witness trace as a `connection_retry_exhausted` session_phase event.
+   * Fire-and-forget — errors here are not caught. Not called when the loop
+   * exits early due to abort, shouldStop, or a non-transient error.
+   */
+  onExhausted?(info: RetryInfo): void;
+  /**
    * Injected sleep function for tests. When omitted, defaults to the real
    * `sleepWithAbort`. Lets unit tests fast-forward through backoff waits
    * without fake timers.
@@ -691,6 +699,7 @@ export async function runCompactionCore<M>(
       {
         shouldStop: () => timedOut || isAborted(),
         onRetry: deps.onRetry,
+        onExhausted: deps.onExhausted,
         ...(deps.retrySleep !== undefined ? { sleep: deps.retrySleep } : {}),
         ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
       },

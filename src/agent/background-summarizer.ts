@@ -20,7 +20,9 @@ import { debugLog } from '../utils/debug.js';
 import type { BackgroundAgentRegistry } from './background-registry.js';
 import { oneShotCompletion } from './providers/anthropic-direct/oneshot.js';
 import { withTransientRetry } from './providers/shared/transient-retry.js';
+import { traceExhaustedRetry } from './providers/shared/transient-retry.trace.js';
 import { redactSecrets } from './redact-secrets.js';
+import type { TraceSink } from './trace/index.js';
 
 export interface SummaryEntry {
   text: string;
@@ -40,6 +42,13 @@ export interface BackgroundSummarizerOptions {
   maxOutputTokens?: number;
   /** Session-wide budget: skip after this many calls. Default 200. */
   maxCallsPerSession?: number;
+  /**
+   * Witness trace sink for recording retry-exhaustion events. When provided,
+   * a `connection_retry_exhausted` session_phase event is emitted via
+   * {@link traceExhaustedRetry} whenever the one-shot retry budget is spent.
+   * Optional — omitting it silently disables trace emission (no-op path).
+   */
+  traceWriter?: TraceSink;
   /**
    * Injected for tests. When provided, supplants real oneShotCompletion.
    * The function receives the full user prompt and an optional AbortSignal.
@@ -79,6 +88,7 @@ export class BackgroundSummarizer {
   private readonly maxCallsPerSession: number;
   private readonly callLLM: (prompt: string, signal?: AbortSignal) => Promise<string>;
   private readonly getTranscriptFn: (jobId: string) => string | undefined;
+  private readonly traceWriter: TraceSink | undefined;
 
   /** Summaries keyed by jobId. */
   private readonly summaries = new Map<string, SummaryEntry>();
@@ -103,6 +113,7 @@ export class BackgroundSummarizer {
     this.maxInputTokens = opts.maxInputTokens ?? DEFAULT_MAX_INPUT_TOKENS;
     this.maxOutputTokens = opts.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
     this.maxCallsPerSession = opts.maxCallsPerSession ?? DEFAULT_MAX_CALLS;
+    this.traceWriter = opts.traceWriter;
 
     // Tick interval is ~1/10 of the base interval so we can achieve
     // per-job jitter granularity without a separate timer per job.
@@ -113,10 +124,13 @@ export class BackgroundSummarizer {
     } else {
       // Contract: maxRetries: 1 — one retry for transient errors; the existing
       // stale-on-failure fallback (catch block in refreshJobSummary) handles
-      // permanent failures. No trace sink needed here.
+      // permanent failures.
       // onRetry increments callsThisSession so each actual LLM call (initial
       // + each retry) is counted toward the budget cap, preventing a 1-retry
       // scenario from making 2 calls against a budget that charged only 1.
+      // onExhausted emits a connection_retry_exhausted trace event when the
+      // one-shot retry budget is spent (maxRetries: 1 → attempt 2 is the
+      // terminal failure).
       this.callLLM = (prompt: string, signal?: AbortSignal) =>
         withTransientRetry(
           () => oneShotCompletion({
@@ -131,6 +145,7 @@ export class BackgroundSummarizer {
             maxRetries: 1,
             signal,
             onRetry: () => { this.callsThisSession++; },
+            onExhausted: traceExhaustedRetry(this.traceWriter, 'background_summarizer', 1),
           },
         );
     }

@@ -37,7 +37,7 @@ export type PrState = 'open' | 'merged' | 'closed' | 'none';
  *              that don't belong to a merged PR.
  * - `error`  — gh / git invocation failed; skip and warn.
  */
-export type BranchVerdict = 'prune' | 'keep' | 'error';
+type BranchVerdict = 'prune' | 'keep' | 'error';
 
 export interface BranchCandidate {
   /** Fully-qualified remote branch name, e.g. `origin/afk/my-feature`. */
@@ -177,7 +177,7 @@ export function classify(prState: PrState, commitsAhead: number): Pick<BranchCan
  * Runs `git ls-remote --heads <remote> <prefix>*` and extracts the short ref
  * names (e.g. `afk/my-feature`).
  */
-export async function listRemoteBranches(
+async function listRemoteBranches(
   execFn: ExecForBranchPrune,
   remote: string,
   branchPrefix: string,

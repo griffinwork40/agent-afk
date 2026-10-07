@@ -9,6 +9,38 @@ every field in that object, which events carry which fields, and the contract fo
 
 ---
 
+## Per-surface event support
+
+Not every event fires on every AFK surface. The table below is the authoritative
+reference (#2817):
+
+| Event | REPL | Telegram | `afk chat` | Daemon |
+|---|---|---|---|---|
+| `SessionStart` | ✓ | ✓ | ✓ | ✓ |
+| `SessionEnd` | ✓ | ✓ | ✓ | ✓ |
+| `SubagentStart` | ✓ | ✓ | ✓ | ✓ |
+| `SubagentStop` | ✓ | ✓ | ✓ | ✓ |
+| `PreToolUse` | ✓ | ✓ | ✓ | ✓ |
+| `PostToolUse` | ✓ | ✓ | ✓ | ✓ |
+| `PostToolUseFailure` | ✓ | ✓ | ✓ | ✓ |
+| `PreCompact` | ✓ | ✓ | – | – |
+| `Stop` | ✓ | ✓ | ✓¹ | ✓² |
+| `UserPromptSubmit` | ✓ | ✓ | – | – |
+
+¹ `Stop` fires on `afk chat`, but `injectContext` is dropped — one-shot surfaces
+  have no next turn to prepend it to.
+
+² `Stop` fires in the daemon, but `injectContext` is dropped for the same reason.
+
+**`UserPromptSubmit` on `afk chat` / daemon**: these surfaces are headless or
+one-shot (no interactive human on the other end per turn), so there is no natural
+"prompt submission" event — the content is a scheduled task body or a CLI argument.
+Wiring `UserPromptSubmit` there would require surfacing a block as an error exit,
+with no recourse for the operator. Kept scoped to human-facing interactive surfaces
+for now; file a feature request if your use case needs it.
+
+---
+
 ## Always-present fields
 
 | Field | Type | Description |

@@ -32,13 +32,13 @@ import { runWithStreamCutRetry, type StreamCutProbe } from '../subagent/stream-c
 import { debugLog } from '../../utils/debug.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { appendImageBlocks } from '../content/image-blocks.js';
+import { addForegroundNotices, withCatalogNotice } from './subagent-executor.notices.js';
 import { resolveSubagentAttachments } from './subagent/attachment-resolve.js';
 import { inboundAttachmentRegistry } from '../content/attachment-registry.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { buildAgentMaxDepthRefusal } from './skill-depth-message.js';
 import { buildBudgetRefusalMessage, type SpawnReceipt } from './delegation-budget.js';
 import { evaluateDispatchUsageForModel } from './usage-notice.js';
-import { applyPostRunNotices } from './subagent-executor.write-intent.js';
 import { buildSubagentsLite } from './subagent-executor.lite-snapshot.js';
 import { updateWaveUnit } from '../manifest/write.js';
 import { WaveManifestTracker } from './subagent-executor.wave-manifest.js';
@@ -652,7 +652,7 @@ export class SubagentExecutor implements SubagentControl {
       // job finishes, preventing false resumption offers for completed work.
       const capturedWaveId = this.waveTracker.waveId;
       const capturedCallId = call.id;
-      return runBackgroundBranch({
+      return withCatalogNotice(runBackgroundBranch({
         handle,
         ...backgroundTarget(this.ctx),
         prompt: parsed.prompt,
@@ -678,7 +678,7 @@ export class SubagentExecutor implements SubagentControl {
               debugLog(`background worktree teardown: ${JSON.stringify(result)}`);
             } : undefined,
         isolationTeardown,
-      });
+      }), childConfig.model, this.ctx.traceWriter);
     }
 
     // Invariant: assemble multimodal content only after every label, promptHead,
@@ -752,7 +752,7 @@ export class SubagentExecutor implements SubagentControl {
     // Budget: foreground child finished — release the slot, unless the
     // promotion path deferred it to the registry's onSettled hook (Item 4).
     if (!promotionTookBudget.value) budgetRelease?.();
-    applyPostRunNotices(result, childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, usageNotice);
+    addForegroundNotices(result, childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, usageNotice, this.ctx.traceWriter);
     // Wave manifest: update unit to 'done' or 'failed' after the foreground run.
     if (result.isError === true) {
       this.updateCurrentWaveUnit(call.id, 'failed', typeof result.content === 'string' ? result.content.slice(0, 500) : undefined);
