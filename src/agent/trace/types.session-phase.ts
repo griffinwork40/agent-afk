@@ -266,7 +266,9 @@ export type SessionPhaseName =
   //   `status`, `exitCode` (string), `signal` (string|''), `durationMs`, and
   //   `bytes`. PURE OBSERVABILITY — never alters control flow.
   | 'background_process_started'
-  | 'background_process_settled';
+  | 'background_process_settled'
+  // Bounded compose node replay eligibility and actual redispatch. No control-flow effects.
+  | 'compose_recovery_decision';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */
