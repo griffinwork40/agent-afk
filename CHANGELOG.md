@@ -11,6 +11,9 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Changed
+- note dropped `**Done** — text` single-line form next to `'unknown'` in `FacetOutcomeSchema` JSDoc (#2797)
+
 ## [5.302.7] - 2026-10-06
 
 ### Fixed

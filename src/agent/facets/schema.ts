@@ -121,6 +121,8 @@ export const FacetOutcomeSchema = z.enum([
    * 'unknown': the last assistant message is non-empty but carries no
    * recognizable terminal-state heading. Added in v7 (#2777) — replaces the
    * prior implicit fall-through to 'fully_achieved' for headingless sessions.
+   * Note: the single-line `**Done** — text` form is also not a valid heading
+   * and resolves to 'unknown' (#2797).
    */
   'unknown',
 ]);
