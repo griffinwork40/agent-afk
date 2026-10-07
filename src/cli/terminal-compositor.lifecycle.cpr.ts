@@ -145,16 +145,6 @@ export interface CprHost {
   logUpdate: { topRow?: number; resetGeometry?: () => void } | null;
   anchorRow: number | undefined;
 
-  /**
-   * Cumulative rows sent to terminal scrollback (via evictRowsToScrollback or
-   * archiveBandPrefixAndRepaintSurvivors) since the last CPR burst was seeded.
-   * When the next resize SIGWINCH seeds a fresh CPR burst, this count is folded
-   * into growTotal — because those scrollback rows can be pulled back by tmux on
-   * a pane grow, increasing the cursor shift beyond the raw terminal-row delta.
-   * Reset to 0 each time a new burst starts.
-   */
-  pendingEvictionRows: number;
-
   /** Trigger an immediate repaint after the delta is applied. */
   repaint(): void;
 }
@@ -185,18 +175,11 @@ export function requestCprOrMarkDirty(
 ): void {
   if (!self.cprPending) {
     // No CPR in-flight — seed a fresh burst and start measuring.
-    // Include any rows recently sent to terminal scrollback (eviction or
-    // archive) in growTotal: tmux can pull those rows back onto the screen
-    // on a pane GROW, shifting the cursor by more than the raw row-count
-    // delta alone. Folding them in here keeps the plausibility range correct
-    // even when a repaint with eviction fires between two resize events.
-    const evictionBonus = self.pendingEvictionRows;
-    self.pendingEvictionRows = 0;
     self.cprBurst = {
       dirty: false,
       originalExpectedRow: expectedRow,
       currentRows: newRows,
-      growTotal: (rowDelta > 0 ? rowDelta : 0) + evictionBonus,
+      growTotal: rowDelta > 0 ? rowDelta : 0,
       shrinkTotal: rowDelta < 0 ? -rowDelta : 0,
       requeryCt: 0,
     };
@@ -353,12 +336,6 @@ function _requestCpr(self: CprHost): void {
       return;
     }
 
-    if (env.AFK_DEBUG_COMPOSITOR) {
-      process.stderr.write(
-        `[afk/cpr] apply delta=${delta} range=[${lo},${hi}] expectedRow=${expectedRow}` +
-        ` reportedRow=${parsed.row} rows=${currentRows} requeries=${burst?.requeryCt ?? 0}\n`,
-      );
-    }
     // Apply the delta (may be 0 on a net-zero burst — still repaint below).
     if (delta !== 0) {
       applyScrollDelta(self, delta, currentRows);
@@ -387,9 +364,6 @@ function _requestCpr(self: CprHost): void {
     // pendingResizeErase snapshot (if any) is already set; the repaint will
     // proceed without a delta correction (correct for terminals that do not
     // shift history on resize).
-    if (env.AFK_DEBUG_COMPOSITOR) {
-      process.stderr.write(`[afk/cpr] timeout after ${CPR_TIMEOUT_MS}ms — falling back + repainting\n`);
-    }
     self.cprBurst = null;
     self.repaint();
   }, CPR_TIMEOUT_MS);
