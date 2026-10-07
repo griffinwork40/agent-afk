@@ -52,12 +52,14 @@ export async function runConnectionPhase<TEvent>(
   const trace = (phase: 'connection_failure' | 'connection_recovered' | 'connection_budget_exhausted', metadata: Record<string, string | number | boolean>): void => {
     void emitSessionPhase(traceWriter, { phase, resolvedModel, metadata });
   };
-  for (let attempt = 0; ; attempt++) {
+  let networkAttempts = 0;
+  let overloadAttempts = 0;
+  for (;;) {
     try {
       // Invariant: turn-driver dispatches tools only after driveStream returns a
       // completed iteration. A failed opener has no tool effects to duplicate.
       const stream = await createStream(streamSignal);
-      if (attempt) trace('connection_recovered', { attempts: attempt + 1, outageMs: budget.elapsedMs() });
+      if (networkAttempts) trace('connection_recovered', { attempts: networkAttempts + 1, outageMs: budget.elapsedMs() });
       return { ok: true, stream };
     } catch (err) {
       // A watchdog abort during connection is NOT a user interrupt. Check the
@@ -70,11 +72,16 @@ export async function runConnectionPhase<TEvent>(
       // because that predicate has no signal to gate on.
       const sdkTimeout = isConnectionTimeoutError(err) && !streamSignal.aborted;
       const retryable = sdkTimeout || isRetryableConnectionError(err);
-      // 429 and overload retain their existing count and retry-after contract.
+      // Invariant: network errors (DNS, socket, connection-phase status codes)
+      // and non-network retryable errors (429 rate-limit, 503 overload) use
+      // independent attempt counters so exhausting one budget does not starve
+      // the other. Mirrors anthropic-direct's connectionAttempts/overloadAttempts.
       const network = sdkTimeout || isConnectionPhaseNetworkError(err) || isRetryableConnectionStatus(err);
       if (network && !streamSignal.aborted) trace('connection_failure', connectionFailureMetadata(err, budget, endpoint));
+      const attempt = network ? networkAttempts : overloadAttempts;
       const allowed = network ? budget.canRetry(attempt, MAX_CONNECTION_RETRIES) : attempt < MAX_CONNECTION_RETRIES;
       if (retryable && (budget.budgetMs === undefined || !streamSignal.aborted) && allowed) {
+        if (network) networkAttempts++; else overloadAttempts++;
         const hinted = retryAfterDelayMs(err);
         const legacyDelay = hinted ?? computeBackoffDelay(attempt);
         const delay = network ? budget.delay(legacyDelay, 2_000, attempt) : legacyDelay;
@@ -95,7 +102,7 @@ export async function runConnectionPhase<TEvent>(
         );
         if (userAborted) return { ok: false, error: 'aborted' };
         if (budget.budgetMs !== undefined && streamSignal.aborted) return { ok: false, error: err };
-        if (network && budget.budgetMs !== undefined && !budget.canRetry(0, 0)) {
+        if (network && budget.budgetMs !== undefined && !budget.canRetry(networkAttempts, MAX_CONNECTION_RETRIES)) {
           trace('connection_budget_exhausted', connectionFailureMetadata(err, budget, endpoint));
           return { ok: false, error: err };
         }
