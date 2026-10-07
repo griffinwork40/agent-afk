@@ -784,6 +784,9 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
   });
 
   it('winds a child down after context pressure, returning partial text within the window', async () => {
+    // Pin the operational threshold: this fixture exercises the wind-down mechanism at 85%;
+    // the default (95%) is covered by context-pressure.test.ts / context-pressure.guard.test.ts.
+    vi.stubEnv('AFK_CONTEXT_GUARD_PCT', '85');
     const fixture = makeDispatcher();
     const tool = toolCallTurn('pressure');
     tool.chunks[0]!.choices![0]!.delta!.tool_calls![0]!.function!.arguments = JSON.stringify({ msg: 'x'.repeat(12000) });
@@ -804,6 +807,7 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
     expect(events.some(e => e.type === 'assistant.message' && e.text.includes('Partial findings'))).toBe(true);
     const completed = events.at(-1);
     expect(completed?.type === 'turn.completed' && completed.usage.stopReason).toBe('context_pressure_wind_down');
+    vi.unstubAllEnvs();
   });
 
   it('caps tool rounds at an explicit maxToolUseIterations, then runs a tools-stripped wind-down round', async () => {
