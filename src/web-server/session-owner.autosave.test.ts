@@ -13,8 +13,8 @@ function fakeSession(events: unknown[], throwAfter = false): AgentSession {
   } as unknown as AgentSession;
 }
 
-function fakeSaver(): SessionAutosaver & { saveTurn: ReturnType<typeof vi.fn> } {
-  return { stats: {} as SessionAutosaver['stats'], saveTurn: vi.fn() };
+function fakeSaver(): SessionAutosaver & { saveTurn: ReturnType<typeof vi.fn<SessionAutosaver['saveTurn']>> } {
+  return { stats: {} as SessionAutosaver['stats'], saveTurn: vi.fn<SessionAutosaver['saveTurn']>() };
 }
 
 describe('webTurnLabel', () => {
