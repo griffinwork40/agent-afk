@@ -63,9 +63,24 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     if (frameBottom > 0 && self.stdin.isTTY) {
       requestCprAndApplyDelta(self, frameBottom, newRows);
     }
+  } else if (newRows < self.lastKnownRows) {
+    // SHRINK: drop any stale EXPAND snapshot (existing contract), then emit a
+    // CPR request to measure how many rows tmux pushed into scrollback history.
+    // When the pane shrinks, tmux first trims blank rows below the cursor, then
+    // pushes top rows into history — shifting the cursor UP by delta rows
+    // (0 ≤ |delta| ≤ shrink amount). The CPR reply reports the real cursor row;
+    // delta = reported - lastMeasuredFrameBottom (negative on a push). We apply
+    // applyScrollDelta with the negative delta so tracked rows shift UP with the
+    // content, preventing the stale high-row frame ghost that appears below the
+    // live frame after a shrink. The CPR suppress guard (cprPending) is the same
+    // as on EXPAND so no stale-row repaint races the correction.
+    self.pendingResizeErase = null;
+    const frameBottom = self.lastMeasuredFrameBottom;
+    if (frameBottom > 0 && self.stdin.isTTY) {
+      requestCprAndApplyDelta(self, frameBottom, newRows);
+    }
   } else {
-    // SHRINK or net-zero: drop any stale EXPAND snapshot so a clamped flush
-    // cannot wipe post-shrink reflowed/status rows.
+    // Net-zero (same row count): drop any stale EXPAND snapshot.
     self.pendingResizeErase = null;
   }
   self.logUpdate?.resetGeometry?.();
