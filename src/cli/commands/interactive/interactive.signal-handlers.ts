@@ -74,6 +74,7 @@ export function makeSigintHandler(deps: SignalHandlerDeps): () => void {
         turnState.interruptPickerAbort.abort();
         turnState.interruptPickerAbort = null;
         ctx.session.current?.abort('sigint');
+        exitReasonRef.current = 'sigint';
         ctx.rl.close();
         return;
       }
@@ -90,7 +91,7 @@ export function makeSigintHandler(deps: SignalHandlerDeps): () => void {
           compositor: c,
           turnState,
           onStop: doStop,
-          onCancel: () => { ctx.session.current?.abort('sigint'); ctx.rl.close(); },
+          onCancel: () => { ctx.session.current?.abort('sigint'); exitReasonRef.current = 'sigint'; ctx.rl.close(); },
         });
         return;
       }
