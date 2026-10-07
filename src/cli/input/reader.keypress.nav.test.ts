@@ -588,10 +588,14 @@ describe('Ctrl+P — multi-line buffer up movement', () => {
     const st = makeState(buf, buf.length); // cursor at end of second line
     const hist = makeHistory('prev');
     const stdout = { columns: 80 } as NodeJS.WriteStream;
-    // The moveUpLine call may succeed (moves up) or fail (recalls history).
-    // Either path should be exercised without throwing.
     const handled = handleNavKey(key('p', { ctrl: true }), st, stdout, ctx, repaintFn, hist);
     expect(handled).toBe(true);
+    // Must have moved up: cursor should now be before the '\n' (on line one)
+    expect(st.input.cursor).toBeLessThan(buf.indexOf('\n'));
+    // Repaint must have been called (cursor moved into buffer)
+    expect(repaintFn).toHaveBeenCalled();
+    // history.back must NOT have been called — we moved within the buffer
+    expect(hist.back).not.toHaveBeenCalled();
   });
 });
 
@@ -605,6 +609,12 @@ describe('Ctrl+N — multi-line buffer down movement', () => {
     const stdout = { columns: 80 } as NodeJS.WriteStream;
     const handled = handleNavKey(key('n', { ctrl: true }), st, stdout, ctx, repaintFn, hist);
     expect(handled).toBe(true);
+    // Must have moved down: cursor should now be past the '\n' (on line two)
+    expect(st.input.cursor).toBeGreaterThan(buf.indexOf('\n'));
+    // Repaint must have been called (cursor moved into buffer)
+    expect(repaintFn).toHaveBeenCalled();
+    // history.forward must NOT have been called — we moved within the buffer
+    expect(hist.forward).not.toHaveBeenCalled();
   });
 });
 

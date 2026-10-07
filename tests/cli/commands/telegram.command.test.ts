@@ -477,7 +477,9 @@ describe('formatUptime branch coverage via status', () => {
     mocks.status.mockReturnValue({ ...runningStatus, uptimeSec: 3661 }); // 1h 1m 1s
     const prog = makeProgram();
     await prog.parseAsync(['telegram', 'status'], { from: 'user' });
-    expect(logLines.join('\n')).toContain('1h');
+    const out = logLines.join('\n');
+    expect(out).toContain('1h');
+    expect(out).toContain('1m'); // minutes component must also appear
   });
 
   it('shows d h for uptime in days', async () => {

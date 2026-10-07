@@ -392,8 +392,13 @@ describe('service list', () => {
     mocks.configPath.mockReturnValue('/fake/plist');
     const prog = makeProgram();
     await prog.parseAsync(['service', 'list'], { from: 'user' });
-    const all = logLines.join('\n');
-    expect(all).toContain('installed');
+    const telegramLine = logLines.find((l) => l.includes('telegram')) ?? '';
+    const daemonLine = logLines.find((l) => l.includes('daemon')) ?? '';
+    // telegram is installed — its line must contain 'installed' but not 'not installed'
+    expect(telegramLine).toContain('installed');
+    expect(telegramLine).not.toContain('not installed');
+    // daemon is NOT installed — its line must contain 'not installed'
+    expect(daemonLine).toContain('not installed');
   });
 });
 
