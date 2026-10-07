@@ -20,7 +20,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   proc = Object.assign(new EventEmitter(), {
     pid: 123, stdout: new PassThrough(), stderr: new PassThrough(), unref: vi.fn(),
-  }) as ChildProcess;
+  }) as unknown as ChildProcess;
   vi.mocked(spawn).mockReturnValue(proc);
 });
 afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });

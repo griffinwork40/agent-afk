@@ -7,7 +7,7 @@ import { BASH_KILL_PIPE_GRACE_MS, killBashProcess } from './bash-kill.js';
 function stubbornProcess(pid: number | undefined = 42): ChildProcess {
   return Object.assign(new EventEmitter(), {
     pid, stdout: new PassThrough(), stderr: new PassThrough(),
-  }) as ChildProcess;
+  }) as unknown as ChildProcess;
 }
 
 afterEach(() => vi.useRealTimers());
