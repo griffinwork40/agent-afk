@@ -145,4 +145,18 @@ describe('ResizeGhostRow', () => {
     immCb!();
     expect(tracker.consumeGhostRow()).toBeNull();
   });
+
+  it('RGR-9: afterSnapshot runs in the same handler, strictly after the snapshot', () => {
+    let row: number | null = 24;
+    const tracker = new ResizeGhostRow(() => row);
+    const order: string[] = [];
+    // The hook nulls the owner's row, exactly as StatusLine.resetGeometry() does.
+    tracker.subscribe(() => { order.push('hook'); row = null; });
+    expect(ResizeBus.subscribeImmediate).toHaveBeenCalledOnce();
+    immCb!();
+    order.push('after');
+    expect(order).toEqual(['hook', 'after']);
+    // The snapshot survived the hook nulling the source row.
+    expect(tracker.consumeGhostRow()).toBe(24);
+  });
 });

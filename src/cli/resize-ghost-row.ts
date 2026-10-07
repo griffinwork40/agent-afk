@@ -95,12 +95,18 @@ export class ResizeGhostRow {
    * owning bar's `start()` method. Idempotent — safe to call when already
    * subscribed.
    *
+   * @param afterSnapshot Optional owner hook run in the SAME immediate handler,
+   *   strictly after the snapshot is taken. Use it for work that must observe
+   *   the snapshot ordering (e.g. StatusLine nulls `lastPaintedRow` here), so
+   *   correctness never depends on the registration order of two separate
+   *   ResizeBus subscribers.
    * @returns Unsubscribe function (also stored internally for `unsubscribe()`).
    */
-  subscribe(): () => void {
+  subscribe(afterSnapshot?: () => void): () => void {
     if (this.unsub !== null) return this.unsub;
     this.unsub = ResizeBus.subscribeImmediate(() => {
       this.preResizePaintedRow = this.getLastPaintedRow();
+      afterSnapshot?.();
     });
     return this.unsub;
   }

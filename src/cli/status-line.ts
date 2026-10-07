@@ -48,16 +48,12 @@ export class StatusLine {
   private lastRepaint = 0;
   private lastFields: StatusLineFields | null = null;
   private resizeUnsub: (() => void) | null = null;
-  private resizeImmediateUnsub: (() => void) | null = null;
   private lastPaintedRow: number | null = null;
   /**
-   * Tracks the pre-SIGWINCH painted row so onResize() can erase the ghost
-   * left behind when the pane grows. Uses the shared ResizeGhostRow helper for
-   * subscribe/consumeGhostRow/unsubscribe. StatusLine also registers a SECOND
-   * immediate subscriber (resizeImmediateUnsub) that nulls lastPaintedRow and
-   * resets lastRepaint — the extra work the simple snapshot-only helper does
-   * not perform. Both immediate handlers fire synchronously in the same resize
-   * event so ordering is not a concern.
+   * Tracks the pre-SIGWINCH painted row so onResize() and stop() can erase the
+   * ghost left behind by a resize. Its immediate handler snapshots
+   * lastPaintedRow and then runs resetGeometry() in the same callback, so the
+   * snapshot always precedes the null.
    */
   private readonly ghostRowTracker = new ResizeGhostRow(() => this.lastPaintedRow);
   private extraRows = 0;
@@ -97,16 +93,9 @@ export class StatusLine {
       this.resizeUnsub = ResizeBus.subscribe(() => {
         this.onResize();
       });
-      // Two immediate-channel subscriptions, both fire synchronously in the same
-      // resize event (ResizeBus.subscribeImmediate uses a Set, iteration order is
-      // insertion order):
-      //   1. ghostRowTracker.subscribe(): snapshots lastPaintedRow → preResizePaintedRow
-      //      before any debounced repaint can mutate it.
-      //   2. resetGeometry(): nulls lastPaintedRow + resets lastRepaint (the extra
-      //      work StatusLine needs beyond the snapshot — prevents mid-window repaint
-      //      from reading a stale lastPaintedRow and keeps the throttle open).
-      this.ghostRowTracker.subscribe();
-      this.resizeImmediateUnsub = ResizeBus.subscribeImmediate(() => this.resetGeometry());
+      // One immediate-channel subscription: snapshot lastPaintedRow, THEN
+      // resetGeometry() (null it + open the throttle), atomically in one handler.
+      this.ghostRowTracker.subscribe(() => this.resetGeometry());
     }
     // Invariant: this is the ONLY time-driven repaint of the status row, and
     // clock-derived content depends on it. The quota segment renders a reset
@@ -126,10 +115,10 @@ export class StatusLine {
   }
 
   private resetGeometry(): void {
-    // Invariant: the snapshot of lastPaintedRow → preResizePaintedRow is
-    // performed by ghostRowTracker's subscribeImmediate handler (registered in
-    // start() BEFORE this handler). This second immediate subscriber handles
-    // the extra work StatusLine needs beyond the snapshot:
+    // Invariant: runs as ghostRowTracker's afterSnapshot hook, i.e. in the same
+    // immediate handler and strictly AFTER lastPaintedRow was snapshotted into
+    // the tracker. Nulling here therefore never loses the pre-SIGWINCH row.
+    // The extra work StatusLine needs beyond the snapshot:
     //
     //   1. null lastPaintedRow — prevents mid-window repaint() calls from
     //      updating lastPaintedRow to the new paintRow, which would cause
@@ -138,10 +127,6 @@ export class StatusLine {
     //      repaint() fires immediately (unconditionally) and seeds
     //      lastPaintedRow with the new-geometry row address that onResize()
     //      then uses as the reference for "old !== new" skipping.
-    //
-    // Both immediate handlers fire synchronously in the same resize event
-    // (ResizeBus uses a Set with insertion-order iteration), so the snapshot
-    // is always taken before lastPaintedRow is nulled here.
     this.lastPaintedRow = null;
     this.lastRepaint = 0;
   }
@@ -151,7 +136,7 @@ export class StatusLine {
     if (!this.started || !this.enabled) return;
     const rows = this.currentRows();
     // consumeGhostRow() returns the pre-SIGWINCH row captured by ghostRowTracker's
-    // immediate handler (registered before resetGeometry() in start(), fires first).
+    // immediate handler (taken before resetGeometry() nulls lastPaintedRow).
     // Fall back to lastPaintedRow if the snapshot was null (no paint had occurred).
     // lastPaintedRow may have been updated by a mid-window repaint() call and
     // therefore already reflects the new geometry — the snapshot is the authoritative
@@ -338,13 +323,8 @@ export class StatusLine {
       this.resizeUnsub();
       this.resizeUnsub = null;
     }
-    if (this.resizeImmediateUnsub !== null) {
-      this.resizeImmediateUnsub();
-      this.resizeImmediateUnsub = null;
-    }
-    // Unsubscribe the ghost-row tracker and clear its snapshot (unsubscribe()
-    // also nulls the internal preResizePaintedRow, so the consumeGhostRow()
-    // call below sees null and the ?? fallback kicks in).
+    // Read the pending ghost row BEFORE unsubscribe() (which clears the
+    // snapshot), then tear the immediate handler down.
     const pendingGhostRow = this.ghostRowTracker.consumeGhostRow();
     this.ghostRowTracker.unsubscribe();
     if (!this.started || !this.enabled) {
