@@ -14,6 +14,14 @@
  * registry.register('PostToolUse', createEffectLedgerPostHook());
  * ```
  *
+ * ## Internal helpers (not re-exported)
+ *
+ * `EffectStore`, `classifyToolCall`, and `computeIdempotencyKey` are
+ * implementation details consumed by the hook factories above and are
+ * intentionally NOT part of this public surface.  Import them directly
+ * from `./store.js`, `./classifier.js`, and `./idempotency.js` only if
+ * you are extending the ledger internals.
+ *
  * @module agent/effect-ledger
  */
 
