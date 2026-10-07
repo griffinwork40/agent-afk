@@ -19,7 +19,7 @@
 import { describe, expect, it } from 'vitest';
 import { createBashHandler } from './bash.js';
 import { DetachableToolRegistry, type DetachedToolResult } from '../detach-registry.js';
-import { buildBashDelivery } from '../detach-bash.js';
+import { buildBashDelivery, SETTLE_AFTER_KILL_MS } from '../detach-bash.js';
 import type { ToolHandlerContext } from '../types.js';
 
 function makeContext(
@@ -220,6 +220,84 @@ describe('post-detach session abort kills process (Fix #1)', () => {
     expect(deliveredResults[0]!.status).toBe('failed');
     expect(deliveredResults[0]!.output).not.toContain('afterwait');
   });
+
+  it(
+    'POSIX-utility child (sleep): deliver() fires via kill or settle-fallback (#2742)',
+    async () => {
+      // Regression test for #2742: on Windows, `taskkill /F /T` may not reach
+      // MSYS2 (Git Bash) grandchildren such as sleep.exe, leaving the pipe open
+      // so `close` never fires. The settle-fallback in execOnDetach must then
+      // fire deliver() after SETTLE_AFTER_KILL_MS.
+      //
+      // On POSIX: process.kill(-pid, SIGKILL) kills the whole process group;
+      // `close` fires quickly (<200 ms in practice); test completes well
+      // within the timeout window.
+      //
+      // On Windows (Git Bash): sleep.exe may survive taskkill /T; the settle
+      // fallback fires after SETTLE_AFTER_KILL_MS (5 s) and delivers with
+      // status 'failed'. The test budget is SETTLE_AFTER_KILL_MS + 10 s.
+      //
+      // In both cases deliver() must have been called before the race window
+      // closes — that is the invariant being tested.
+      const handler = createBashHandler('default');
+      const registry = new DetachableToolRegistry();
+      const sessionAbort = new AbortController();
+      const context = makeContext(registry, 'call-posix-child');
+
+      const deliveredResults: DetachedToolResult[] = [];
+      const settledPromise = new Promise<DetachedToolResult>((resolve) => {
+        registry.on('settled', (r: DetachedToolResult) => {
+          deliveredResults.push(r);
+          resolve(r);
+        });
+      });
+
+      // `sleep 30` is a POSIX-utility (or MSYS2 sleep.exe on Windows via Git
+      // Bash). On POSIX the process group kill reaches it; on Windows it is the
+      // exact process class that may survive taskkill /T (the #2742 scenario).
+      // The 30 s duration ensures it never exits naturally during the test.
+      const handlerPromise = handler(
+        { command: 'sleep 30', timeout_ms: 60000 },
+        sessionAbort.signal,
+        context,
+      );
+
+      // Generous spawn wait — 200 ms is enough even on slow Windows CI runners.
+      await new Promise<void>((r) => setTimeout(r, 200));
+
+      // Ctrl+B: detach all tokens.
+      registry.detachAll();
+      const placeholderResult = await handlerPromise;
+
+      const parsed = JSON.parse(placeholderResult.content as string) as { status: string };
+      expect(parsed.status).toBe('detached');
+
+      // Session abort: triggers killProcessGroup (taskkill on Windows) and arms
+      // the settle-fallback timer in execOnDetach (SETTLE_AFTER_KILL_MS = 5 s).
+      sessionAbort.abort();
+
+      // Race window:
+      //   POSIX  — close fires in < 200 ms after SIGKILL
+      //   Windows — either close fires after taskkill, OR the settle-fallback
+      //             fires after SETTLE_AFTER_KILL_MS (5 s)
+      // Budget: SETTLE_AFTER_KILL_MS + 10 s headroom.
+      const raceMs = SETTLE_AFTER_KILL_MS + 10_000;
+      const settled = await Promise.race([
+        settledPromise,
+        new Promise<null>((r) => setTimeout(() => r(null), raceMs)),
+      ]);
+
+      // deliver() must have been called — process killed or fallback fired.
+      expect(settled).not.toBeNull();
+      expect(deliveredResults).toHaveLength(1);
+      // Killed or fallback → status must be 'failed'.
+      expect(deliveredResults[0]!.status).toBe('failed');
+    },
+    // Vitest timeout: SETTLE_AFTER_KILL_MS + 15 s so the test body's race
+    // (SETTLE_AFTER_KILL_MS + 10 s) always has a 5 s margin before Vitest
+    // kills the test itself.
+    SETTLE_AFTER_KILL_MS + 15_000,
+  );
 
   it('normal-close deregisters token so hasDetachable() becomes false', async () => {
     const handler = createBashHandler('default');
