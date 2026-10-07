@@ -56,7 +56,9 @@ export function startBackgroundBash(
     phase: 'background_process_started',
     metadata: {
       jobId: job.id,
-      pid: String(job.pid ?? 'undefined'),
+      // Omit pid when it is not yet known (process launch in flight) rather
+      // than emitting the literal string 'undefined' into the trace record.
+      ...(job.pid !== undefined ? { pid: job.pid } : {}),
       command: command.slice(0, 200),
       maxRuntimeMs: job.maxRuntimeMs,
     },

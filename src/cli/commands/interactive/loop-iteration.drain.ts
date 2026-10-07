@@ -30,9 +30,10 @@ import { palette } from '../../palette.js';
 export function drainLoopNotifications(ctx: InteractiveCtx, footer: FooterSubsystems): void {
   const { shellPassthrough, bgResultNotifier, contextPane } = footer;
 
-  drainJobNotifications(ctx, shellPassthrough, bgResultNotifier);
-  // Settled Ctrl+B tool calls: one dim line each.
+  // Settled Ctrl+B tool calls: one dim line each. Rendered before background-
+  // subagent notices to match the detached-first ordering used in drainInjections().
   for (const line of bgResultNotifier.drainToolNotices()) ctx.replRenderer.writeLine(palette.dim(line));
+  drainJobNotifications(ctx, shellPassthrough, bgResultNotifier);
   // Background processes (`bash run_in_background`): one dim line each.
   for (const line of footer.processJobNotifier?.drainNotices() ?? []) {
     ctx.replRenderer.writeLine(palette.dim(line));

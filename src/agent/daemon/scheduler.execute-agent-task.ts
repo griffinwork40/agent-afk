@@ -22,6 +22,7 @@ import type { StateStore } from '../state/state-store.js';
 import type { ScheduledTask } from './triggers.js';
 import type { TelemetryRecord, TelemetryTrigger, TaskCompletionDetails } from './scheduler.js';
 import type { Telegraf } from 'telegraf';
+import type { Message } from '../types/message-types.js';
 
 /** Subset of `SchedulerOptions` needed by the agent-executor path. */
 interface AgentTaskOptions {
@@ -29,6 +30,20 @@ interface AgentTaskOptions {
   primaryChatId?: number;
   primaryThreadId?: number;
   doneUnverifiedProbe?: (args: { responseText: string; successfulToolNames: readonly string[] }) => boolean;
+  onTaskTurnComplete?: (args: TaskTurnCompleteArgs) => void;
+}
+
+/**
+ * A completed agent-task turn, handed to `SchedulerOptions.onTaskTurnComplete`
+ * so the CLI can persist it as a resumable session sidecar. Text fields are
+ * already secret-redacted (same treatment as telemetry).
+ */
+export interface TaskTurnCompleteArgs {
+  task: ScheduledTask;
+  sessionId: string | undefined;
+  cwd: string | undefined;
+  userInput: string;
+  response: Message;
 }
 
 /** Context supplied by `CronScheduler` to the agent-executor. */
@@ -105,6 +120,20 @@ export async function executeAgentTask(
 
     const response = await session.sendMessage(task.command);
     const responseText = redactInlineSecrets(response.content);
+    // Persist the run like a REPL turn so it appears in `/resume`. Injected
+    // (the sidecar store lives in src/cli/) and guarded: persistence must
+    // never fail a tick that already succeeded.
+    try {
+      ctx.options.onTaskTurnComplete?.({
+        task,
+        sessionId: session.sessionId ?? response.metadata?.sessionId,
+        cwd: session.cwd,
+        userInput: redactInlineSecrets(task.command),
+        response: { ...response, content: responseText },
+      });
+    } catch {
+      // best-effort
+    }
     // "Done"-verification probe (opt-in via injected `doneUnverifiedProbe`,
     // ultimately gated on `daemon.verifyDone` at the push layer). Fully
     // guarded: a probe bug or a metadata surprise must NEVER crash a tick, so

@@ -34,11 +34,25 @@ export function sleep(ms: number, opts?: { unref?: boolean }): Promise<void> {
   });
 }
 
-export function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+/**
+ * Abort-aware sleep.
+ *
+ * By default the timer is **ref'd** so the event loop stays alive during
+ * backoff (required fix for #3171 — an unref'd timer let a one-shot CLI exit
+ * 0 mid-retry).  Pass `{ unref: true }` for purely advisory sleeps that
+ * should not prevent process exit (e.g. background health-probes that already
+ * have other ref'd work in flight).
+ */
+export function sleepWithAbort(
+  ms: number,
+  signal: AbortSignal,
+  opts?: { unref?: boolean },
+): Promise<void> {
   return new Promise((resolve) => {
     if (signal.aborted) { resolve(); return; }
     const onAbort = (): void => { clearTimeout(timer); resolve(); };
     const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms);
+    if (opts?.unref) timer.unref();
     signal.addEventListener('abort', onAbort, { once: true });
   });
 }

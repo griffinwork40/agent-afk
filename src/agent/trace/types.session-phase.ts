@@ -266,11 +266,11 @@ export type SessionPhaseName =
   // `afk trace show` can reconstruct which background jobs ran in a session
   // (analogous to `background_agent` for subagent jobs).
   // `background_process_started`: emitted at launch from the bash handler;
-  //   metadata carries `jobId`, `pid` (string, may be 'undefined'), `command`
+  //   metadata carries `jobId`, `pid` (number, omitted when not yet known), `command`
   //   (first 200 chars), and `maxRuntimeMs`.
   // `background_process_settled`: emitted from ProcessJobRegistry.onSettled
   //   via the registry's optional traceWriter; metadata carries `jobId`,
-  //   `status`, `exitCode` (string), `signal` (string|''), `durationMs`, and
+  //   `status`, `exitCode` (number, omitted when process ended by signal only), `signal` (string|''), `durationMs`, and
   //   `bytes`. PURE OBSERVABILITY — never alters control flow.
   | 'background_process_started'
   | 'background_process_settled'

@@ -10,7 +10,6 @@
  */
 
 import type { ZodType } from 'zod';
-import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AgentModelInput, CanUseTool, IAgentSession } from './types.js';
 import type { ModelProvider } from './provider.js';
 import type { SubagentManager } from './subagent.js';
@@ -151,33 +150,12 @@ export interface SubagentDAGNode {
    */
   maxDepth?: number;
   /**
-   * Optional async alternative to {@link promptBuilder}. When present, the DAG
-   * executor awaits this function and uses its result as the node's prompt
-   * instead of `promptBuilder`. Used by the compose executor to attach
-   * resolved image bytes as multimodal `ContentBlockParam[]` blocks without
-   * requiring synchronous resolution or changing the base `promptBuilder`
-   * signature. Prefer this over `promptBuilder` when the prompt construction
-   * involves I/O (e.g. reading attachment files).
-   *
-   * @deprecated This field is scheduled for removal once the compose executor
-   * migrates to a unified async prompt contract. New callers should use
-   * `promptBuilder` for synchronous prompts; the multimodal attachment use
-   * case will be served by a dedicated `attachments` field on the node spec.
-   * Existing callers will receive a compatibility shim during the transition.
-   */
-  buildPromptAsync?: (
-    inputs: Record<string, unknown>,
-  ) => Promise<string | ContentBlockParam[]>;
-  /**
    * Pre-resolved image attachments for this node's initial prompt. When set,
-   * the run loop builds a `ContentBlockParam[]` array — a text block with
-   * the prompt followed by image blocks — instead of a bare string. Populated
-   * by compose-executor.ts via `resolveSubagentAttachments` for nodes that
-   * declare `attachments` in the compose input.
-   *
-   * Invariant: `resolvedAttachments` takes effect only when `buildPromptAsync`
-   * is absent. If both are set, `buildPromptAsync` owns the full prompt
-   * construction (it is responsible for injecting images too).
+   * the run loop (see dag-subagent.dispatch.ts) builds a `ContentBlockParam[]`
+   * array — a text block with the prompt followed by image blocks — instead of
+   * a bare string. Populated by compose-executor.ts via
+   * `resolveSubagentAttachments` for nodes that declare `attachments` in the
+   * compose input.
    */
   resolvedAttachments?: ImageBlockAttachment[];
 }

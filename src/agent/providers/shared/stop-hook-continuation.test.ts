@@ -123,6 +123,17 @@ describe('runBeforeTurnEnd — pass-through', () => {
     expect(dispatch).toHaveBeenCalledOnce();
   });
 
+  it('caps oversized non-blocking injectContext before surface dispatch', async () => {
+    const text = 'x'.repeat(CONTINUE_WITH_MAX_CHARS + 500);
+    const dispatch = vi.fn().mockResolvedValue({ injectContext: text });
+    const onStopInjectContext = vi.fn();
+    await runBeforeTurnEnd(makeCtx({
+      config: makeConfig(makeRegistry({ dispatch })), wiring: { onStopInjectContext },
+    }));
+    expect(onStopInjectContext).toHaveBeenCalledWith(capContinueWith(text));
+    expect(onStopInjectContext.mock.calls[0]?.[0].length).toBeLessThan(text.length);
+  });
+
   it('delivers injectContext via wiring when hook passes with context', async () => {
     const dispatch = vi.fn().mockResolvedValue({ injectContext: 'some context note' });
     const onStopInjectContext = vi.fn();
@@ -401,5 +412,12 @@ describe('continueWith length cap (#2957)', () => {
     expect(result.continueWith).toBeDefined();
     expect(result.continueWith!.length).toBeLessThan(CONTINUE_WITH_MAX_CHARS + 100);
     expect(result.continueWith).toContain('stop hook reason truncated');
+  });
+
+  it('capContinueWith is idempotent on already-capped input', () => {
+    const input = 'a'.repeat(100_000);
+    const onceCapped = capContinueWith(input);
+    const twiceCapped = capContinueWith(onceCapped);
+    expect(twiceCapped).toBe(onceCapped);
   });
 });

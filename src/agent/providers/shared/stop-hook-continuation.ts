@@ -56,9 +56,12 @@ const REASON_HEAD_MAX = 200;
  */
 export const CONTINUE_WITH_MAX_CHARS = 4_000;
 
-/** Bound `text` to {@link CONTINUE_WITH_MAX_CHARS}, appending a marker when cut. */
+/** Bound `text` to {@link CONTINUE_WITH_MAX_CHARS}, appending a marker when cut. Idempotent: already-capped text is returned unchanged. */
 export function capContinueWith(text: string): string {
   if (text.length <= CONTINUE_WITH_MAX_CHARS) return text;
+  // Idempotency guard: if the text already carries a truncation marker from a
+  // prior application, do not re-truncate (which would corrupt the marker).
+  if (/\n… \[stop hook reason truncated: \d+ more chars\]$/.test(text)) return text;
   const dropped = text.length - CONTINUE_WITH_MAX_CHARS;
   return `${text.slice(0, CONTINUE_WITH_MAX_CHARS)}\n… [stop hook reason truncated: ${dropped} more chars]`;
 }
@@ -241,7 +244,11 @@ export async function runBeforeTurnEnd(ctx: BeforeTurnEndContext): Promise<Befor
     if (result.wasTimeout) {
       ctx.wiring?.onStopTimeout?.();
     } else if (result.injectContext) {
-      ctx.wiring?.onStopInjectContext?.(result.injectContext);
+      // Cap injectContext at CONTINUE_WITH_MAX_CHARS to prevent oversized hook
+      // output from being forwarded unbounded to queueFrameworkContext on
+      // Telegram, REPL, and other surfaces. Mirrors the cap already applied on
+      // the same-turn block path (capContinueWith at the continueWith site).
+      ctx.wiring?.onStopInjectContext?.(capContinueWith(result.injectContext));
     }
     return dispatchedNoop;
   }

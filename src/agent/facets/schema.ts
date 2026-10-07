@@ -55,8 +55,19 @@ import { z } from 'zod';
  * partial). Omitted when no downgrade occurred. Consumers on
  * `facet_version >= 10` can use `outcome_downgrade_reason` to distinguish a
  * genuine Done from a self-report that was downgraded.
+ *
+ * v11 (#2798 cont.): added two trace-backed downgrade reasons:
+ * `'budget_exceeded_closure'` (session ended because a monetary budget ceiling
+ * was reached), `'iteration_cap_closure'` (session ended because the tool-use
+ * round cap fired), `'truncated_closure'` (last model turn was cut off by the
+ * output-token ceiling), and `'subagent_budget_exhaustion'` (at least one
+ * forked subagent hit its tool-round budget and wound down before finishing
+ * naturally). All four require trace data; absence of trace means no signal.
+ * Stores plumb these signals through `DeriveOptions.traceSignals`.
+ * NOTE: open PR #3191 also bumps to v11 — whichever merges second will need
+ * to re-bump to v12 and resolve the overlap.
  */
-export const FACET_VERSION = 10;
+export const FACET_VERSION = 11;
 
 // ---------------------------------------------------------------------------
 // Input: the subset of StoredSession the deriver reads (local, layering-safe)
@@ -155,8 +166,10 @@ export type FacetOutcomeSource = z.infer<typeof FacetOutcomeSourceSchema>;
 
 /**
  * Why a self-reported `fully_achieved` (Done heading) was downgraded to
- * `partially_achieved`. Added in v10 (#2798).
+ * `partially_achieved`. Added in v10 (#2798); extended in v11 with four
+ * trace-backed reasons.
  *
+ * Sidecar-derived (always available, v10+):
  * - `'deferred_items'`: the Done block's "Deferred / pending" bullet was
  *   non-empty — the agent admitted leaving work behind.
  * - `'no_corroborating_evidence'`: Done with no world mutations (no file
@@ -166,6 +179,25 @@ export type FacetOutcomeSource = z.infer<typeof FacetOutcomeSourceSchema>;
  *   (soft-deadline or tool-use-iteration cap) and the session still declared
  *   Done — some parallel work may be incomplete.
  *
+ * Trace-backed (v11+; absent when no trace is available):
+ * - `'budget_exceeded_closure'`: the session's trace `closure` event carries
+ *   `reason: 'budget_exceeded'` — the monetary budget ceiling was hit before
+ *   natural completion.
+ * - `'iteration_cap_closure'`: `closure.reason === 'iteration_cap'` — the
+ *   top-level tool-use round cap fired; the agent was wound down before
+ *   finishing.
+ * - `'truncated_closure'`: `closure.reason === 'truncated'` — the last model
+ *   turn was cut off by the output-token ceiling, so the final message may be
+ *   incomplete.
+ * - `'subagent_budget_exhaustion'`: at least one forked subagent's
+ *   `subagent_lifecycle.succeeded` trace event carried
+ *   `stopReason === 'tool_use_loop_capped'`, meaning a child was wound down
+ *   before it could finish naturally.
+ *
+ * Priority order (checked in derive.ts): deferred_items >
+ * no_corroborating_evidence > compose_partial_nodes > budget_exceeded_closure >
+ * iteration_cap_closure > truncated_closure > subagent_budget_exhaustion.
+ *
  * Omitted when the outcome was not downgraded (i.e. the session did not
  * start as `fully_achieved`, or no downgrade signal fired).
  */
@@ -173,6 +205,10 @@ export const FacetOutcomeDowngradeReasonSchema = z.enum([
   'deferred_items',
   'no_corroborating_evidence',
   'compose_partial_nodes',
+  'budget_exceeded_closure',
+  'iteration_cap_closure',
+  'truncated_closure',
+  'subagent_budget_exhaustion',
 ]);
 export type FacetOutcomeDowngradeReason = z.infer<typeof FacetOutcomeDowngradeReasonSchema>;
 

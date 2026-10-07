@@ -198,31 +198,12 @@ export async function dispatchDagNode(
 
   try {
     if (nodeSignal.aborted) throw new DOMException('Aborted', 'AbortError');
-    // Prefer buildPromptAsync (used for multimodal nodes with image
-    // attachments) over the synchronous promptBuilder. When the async
-    // builder is present it takes full responsibility for constructing the
-    // final prompt — including upstream context injection — so promptBuilder
-    // is only called as a fallback when no async builder is wired.
-    //
-    // When resolvedAttachments is set (and buildPromptAsync is absent),
-    // build a multimodal ContentBlockParam[] array: a text block carrying
-    // the string prompt followed by image blocks. This is the compose-
-    // executor path for per-node attachments declared in the compose input.
+    // When resolvedAttachments is set, build a multimodal ContentBlockParam[]
+    // array: a text block carrying the string prompt followed by image blocks.
+    // This is the compose-executor path for per-node attachments declared in
+    // the compose input.
     let prompt: string | ContentBlockParam[];
-    if (spec.buildPromptAsync !== undefined) {
-      // Development-time warning: resolvedAttachments is silently dropped
-      // when buildPromptAsync is present because the async builder owns the
-      // full prompt construction. Callers that set both likely intended to
-      // let resolvedAttachments drive image injection instead.
-      if (spec.resolvedAttachments !== undefined && spec.resolvedAttachments.length > 0) {
-        console.warn(
-          `[dag-subagent] node "${spec.id}": both buildPromptAsync and resolvedAttachments ` +
-            `are set — resolvedAttachments will be ignored. The async builder is responsible ` +
-            `for injecting images into the prompt.`,
-        );
-      }
-      prompt = await spec.buildPromptAsync(inputs);
-    } else if (spec.resolvedAttachments !== undefined && spec.resolvedAttachments.length > 0) {
+    if (spec.resolvedAttachments !== undefined && spec.resolvedAttachments.length > 0) {
       const blocks: ContentBlockParam[] = [{ type: 'text', text: spec.promptBuilder(inputs) }];
       appendImageBlocks(blocks, spec.resolvedAttachments);
       prompt = blocks;

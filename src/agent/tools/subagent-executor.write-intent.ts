@@ -18,6 +18,10 @@
  * @module agent/tools/subagent-executor.write-intent
  */
 
+import { supportsVision } from '../model-capabilities.js';
+import { prependUsageNotice } from './usage-notice.js';
+import type { ToolResult } from './types.js';
+
 /**
  * Pattern matching write-intent phrases in an agent prompt.
  *
@@ -71,4 +75,19 @@ export function collectPostRunWarnings(
       `Use a general-purpose agent when the task requires file output.\n\n`;
   }
   return prefix;
+}
+
+/** Apply post-run warning and usage prefixes in their established order. */
+export function applyPostRunNotices(
+  result: ToolResult,
+  model: string,
+  hasAttachments: boolean,
+  agentName: string | undefined,
+  prompt: string,
+  childWriteCapable: boolean,
+  usageNotice: string | undefined,
+): void {
+  const warn = collectPostRunWarnings(model, hasAttachments, agentName, prompt, childWriteCapable, supportsVision);
+  if (warn && !result.isError) result.content = warn + result.content;
+  result.content = prependUsageNotice(usageNotice, result.content);
 }
