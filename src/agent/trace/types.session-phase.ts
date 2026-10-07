@@ -44,6 +44,8 @@ export type SessionPhaseName =
   | 'loop_start'
   | 'loop_end'
   | 'model_ttfb'
+  | 'context_pressure_wind_down'
+  | 'catalog_model_upgrade'
   // Interrupt→halt latency. A SINGLE event (no paired start) emitted on the
   // turn's abort path when an ESC soft-stop (`interrupt()`) is what ended the
   // stream, carrying in `durationMs` the wall-clock from the abort signal firing
@@ -208,6 +210,11 @@ export type SessionPhaseName =
   // is the configured ceiling, `error`/`code`/`status` identify the final failure.
   // PURE OBSERVABILITY — emitted as `onExhausted` fires, before the rethrow.
   | 'connection_retry_exhausted'
+  // Streaming openers: pure diagnostics, including the final failed attempt.
+  | 'connection_failure'
+  | 'connection_recovered'
+  // Separate from #3144's one-shot connection_retry_exhausted hook.
+  | 'connection_budget_exhausted'
   // Fan-out dispatch usage notice (compose / agent wave start). Emitted once at
   // dispatch start when the Anthropic quota snapshot shows warn (≥80%) or over
   // (≥100%) usage. PURE OBSERVABILITY — no blocking, no routing change.
@@ -266,7 +273,9 @@ export type SessionPhaseName =
   //   `status`, `exitCode` (string), `signal` (string|''), `durationMs`, and
   //   `bytes`. PURE OBSERVABILITY — never alters control flow.
   | 'background_process_started'
-  | 'background_process_settled';
+  | 'background_process_settled'
+  // Bounded compose node replay eligibility and actual redispatch. No control-flow effects.
+  | 'compose_recovery_decision';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

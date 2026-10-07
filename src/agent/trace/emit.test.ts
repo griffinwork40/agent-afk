@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetArtifactFailureReporterForTests } from '../../utils/artifact-failure-reporter.js';
 import { emitSessionPhase, emitAbort, emitToolCall } from './emit.js';
 import { InMemoryTraceWriter } from './writer.js';
-import type { TraceWriter } from './index.js';
+import type { TraceWriter } from './writer.js';
 
 /**
  * A writer whose `write()` always rejects. `tracePath` is cosmetic content

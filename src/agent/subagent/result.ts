@@ -9,10 +9,12 @@
 
 import type { ZodError, ZodType } from 'zod';
 import type { Message } from '../types.js';
+import { cappedHandoffFields, type CappedHandoff } from './capped-handoff.js';
 import { extractStructuredOutput } from '../output-extractor.js';
 import { parseSignal, type Signal } from '../signal-block.js';
 import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
 import { SOFT_DEADLINE_WIND_DOWN } from '../providers/shared/soft-deadline.js';
+import { CONTEXT_PRESSURE_WIND_DOWN } from '../providers/shared/context-pressure.js';
 import { OVERLOAD_EXHAUSTED } from '../providers/shared/overload-sentinel.js';
 import { isTruncationStopReason } from '../providers/shared/truncation.js';
 
@@ -72,6 +74,10 @@ export const STREAM_INCOMPLETE = 'stream_incomplete';
  * remains unresolved", so omitting this arm would hand a parent model an
  * explicitly-unfinished report as though it were a conclusion.
  *
+ * {@link CONTEXT_PRESSURE_WIND_DOWN} is the same mechanism fired by a third
+ * budget (projected context near the route limit); its synthesis round is told
+ * to return partial findings, so it must be labelled exactly like the other two.
+ *
  * A truncation stop reason (`'max_tokens'` / `'length'`, via
  * {@link isTruncationStopReason}) is included for the same reason (#952): a
  * child cut off at the output-token cap streamed real text and reached a
@@ -84,10 +90,22 @@ export function isIncompleteStopReason(stopReason: string | undefined): boolean 
   return (
     stopReason === TOOL_USE_LOOP_CAPPED ||
     stopReason === SOFT_DEADLINE_WIND_DOWN ||
+    stopReason === CONTEXT_PRESSURE_WIND_DOWN ||
     stopReason === STREAM_INCOMPLETE ||
     stopReason === OVERLOAD_EXHAUSTED ||
     isTruncationStopReason(stopReason)
   );
+}
+
+function incompleteCause(stopReason: string | undefined): string {
+  if (stopReason === TOOL_USE_LOOP_CAPPED) return 'hit its tool-use iteration cap before finishing';
+  if (stopReason === SOFT_DEADLINE_WIND_DOWN) return 'ran out of wall-clock budget and was asked to summarize early';
+  if (stopReason === CONTEXT_PRESSURE_WIND_DOWN) {
+    return 'neared its context-window limit and was asked to summarize early (full tool outputs are journaled)';
+  }
+  if (stopReason === OVERLOAD_EXHAUSTED) return 'was stopped by a sustained upstream overload (HTTP 529) before finishing';
+  if (isTruncationStopReason(stopReason)) return 'was cut off at the output-token limit before finishing';
+  return 'was cut off before finishing (its stream ended without a final message)';
 }
 
 /**
@@ -102,16 +120,7 @@ export function isIncompleteStopReason(stopReason: string | undefined): boolean 
  */
 export function annotateIfIncomplete(content: string, stopReason: string | undefined): string {
   if (!isIncompleteStopReason(stopReason)) return content;
-  const why =
-    stopReason === TOOL_USE_LOOP_CAPPED
-      ? 'hit its tool-use iteration cap before finishing'
-      : stopReason === SOFT_DEADLINE_WIND_DOWN
-        ? 'ran out of wall-clock budget and was asked to summarize early'
-        : stopReason === OVERLOAD_EXHAUSTED
-          ? 'was stopped by a sustained upstream overload (HTTP 529) before finishing'
-          : isTruncationStopReason(stopReason)
-            ? 'was cut off at the output-token limit before finishing'
-            : 'was cut off before finishing (its stream ended without a final message)';
+  const why = incompleteCause(stopReason);
   return (
     `[⚠ PARTIAL RESULT — the subagent ${why}. The text below is an incomplete ` +
     `intermediate finding, NOT a final answer; treat it as such.]\n\n${content}`
@@ -186,7 +195,7 @@ export function createEmptyTrace(): SubagentTrace {
   return { toolCalls: [], toolResults: [], thinkingPresent: false, turnCount: 0 };
 }
 
-export interface SubagentResult<T = unknown> {
+export interface SubagentResult<T = unknown> extends Partial<CappedHandoff> {
   id: string;
   status: SubagentStatus;
   message?: Message;
@@ -260,6 +269,7 @@ export function buildResultFromMessage<T>(
       id,
       status,
       message,
+      ...cappedHandoffFields(message, stopReason),
       trace,
       ...(signal !== undefined && { signal }),
       ...(stopReason !== undefined && { stopReason }),
@@ -274,6 +284,7 @@ export function buildResultFromMessage<T>(
       status,
       message,
       output: parsed.data,
+      ...cappedHandoffFields(message, stopReason),
       trace,
       ...(signal !== undefined && { signal }),
       ...(stopReason !== undefined && { stopReason }),
@@ -288,6 +299,7 @@ export function buildResultFromMessage<T>(
       cause: parsed.error,
     }),
     schemaError: parsed.error,
+    ...cappedHandoffFields(message, stopReason),
     trace,
     ...(signal !== undefined && { signal }),
     ...(stopReason !== undefined && { stopReason }),

@@ -106,4 +106,22 @@ describe('getPeerInboundModeConfig', () => {
     expect(cfg.invalid).toBe(true);
     expect(cfg.rawTruncated).toBe('x'.repeat(20) + '…');
   });
+
+  it('does NOT truncate rawTruncated when the invalid value is exactly 20 chars (boundary)', async () => {
+    const atCap = 'x'.repeat(20);
+    vi.stubEnv('AFK_PEER_INBOUND', atCap);
+    const { getPeerInboundModeConfig } = await freshMode();
+    const cfg = getPeerInboundModeConfig();
+    expect(cfg.invalid).toBe(true);
+    expect(cfg.rawTruncated).toBe(atCap); // no "…" appended
+  });
+
+  it('truncates rawTruncated when the invalid value is 21 chars (one over cap)', async () => {
+    const overCap = 'x'.repeat(21);
+    vi.stubEnv('AFK_PEER_INBOUND', overCap);
+    const { getPeerInboundModeConfig } = await freshMode();
+    const cfg = getPeerInboundModeConfig();
+    expect(cfg.invalid).toBe(true);
+    expect(cfg.rawTruncated).toBe('x'.repeat(20) + '…');
+  });
 });

@@ -57,7 +57,7 @@ export type {
   SubagentResult,
   SubagentStatus,
 } from './subagent.js';
-export type { ChildAbortedEvent, ChildAbortedListener } from './abort-graph.js';
+export type { ChildAbortedListener } from './abort-graph.js';
 export type { WithTimeoutOptions } from './timeout.js';
 export { runDAG, validateDAG } from './dag.js';
 export { runSubagentDAG } from './dag-subagent.js';

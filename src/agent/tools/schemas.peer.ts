@@ -21,7 +21,7 @@ export const listSessionsTool: AnthropicToolDef = {
     'turnState reflects whether the session is idle (ready to be woken), busy (running a turn), or blocked (waiting on a human prompt). ' +
     'pendingMessages is the count of unread messages already queued in that session\'s inbox. ' +
     'acceptsMessages is true when the session has a peer-inbox receiver (REPL sessions only in v1). ' +
-    'activity (optional, absent until the first REPL turn ends) contains: promptHead (≤120 chars of the raw user-typed text for the current or most recent turn, redacted of secrets; set at turn START so a busy session shows what it is working on now), turns (total completed turns; set at turn end), lastTurnEndedAt (ISO timestamp of last turn end; set at turn end). ' +
+    'activity (optional, absent until the first REPL turn ends) contains: promptHead (≤120 chars of the raw user-typed text for the current or most recent turn, redacted of secrets; set at turn START when the user sends a message, so a busy session shows what it is working on now; also absent until the first user message is received), turns (total completed turns; set at turn end), lastTurnEndedAt (ISO timestamp of last turn end; set at turn end). ' +
     'For deeper per-turn detail — tool calls, subagents, session phases — call read_witness with the peer\'s sessionId. ' +
     'Note: read_witness may return empty results for a very new session that has not yet written its witness trace.',
   input_schema: {

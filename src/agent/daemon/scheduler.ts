@@ -32,7 +32,7 @@ import { checkTaskCwdAtRuntime, warnIfBuiltinHasCwd } from './cwd-validator.js';
 export { resolveWorktreePruneRoot } from './worktree-prune-task.js';
 export { daemonTraceLabel } from './session-spawn.js';
 import { spawnDaemonSession, daemonDefaultCwd } from './session-spawn.js';
-import { executeAgentTask } from './scheduler.execute-agent-task.js';
+import { executeAgentTask, type TaskTurnCompleteArgs } from './scheduler.execute-agent-task.js';
 import {
   DEFAULT_SESSIONSTART_COOLDOWN_MS,
   evaluateSessionStartGates,
@@ -108,6 +108,12 @@ export interface SchedulerOptions {
    */
   doneUnverifiedProbe?: (args: { responseText: string; successfulToolNames: readonly string[] }) => boolean;
   /**
+   * Persist a completed agent-task turn as a resumable session sidecar.
+   * INJECTED for the same layering reason as `doneUnverifiedProbe`: the
+   * sidecar store lives in `src/cli/`. Optional; must not throw (guarded).
+   */
+  onTaskTurnComplete?: (args: TaskTurnCompleteArgs) => void;
+  /**
    * Telegraf bot instance for rich elicitation in pull-mode tasks. When
    * provided together with `primaryChatId`, daemon ask_question calls use
    * `sendHandoffQuestion` (inline keyboards, reply-to matching) instead of
@@ -129,7 +135,7 @@ export interface SchedulerOptions {
 }
 
 export type TelemetryTrigger = 'cron' | 'sessionstart' | 'pull';
-export type TelemetryStatus = 'success' | 'error' | 'skipped';
+type TelemetryStatus = 'success' | 'error' | 'skipped';
 
 export interface TelemetryRecord {
   taskId: string;

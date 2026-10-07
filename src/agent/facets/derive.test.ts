@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveSessionFacet } from './derive.js';
+import { deriveSessionFacet, type DeriveOptions } from './derive.js';
 import { SessionFacetSchema, type StoredSessionInput } from './schema.js';
 
 function richSession(): StoredSessionInput {
@@ -43,7 +43,7 @@ describe('deriveSessionFacet', () => {
   it('produces a schema-valid facet', () => {
     const facet = deriveSessionFacet(richSession());
     expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
-    expect(facet.facet_version).toBe(10); // v10: added outcome_downgrade_reason (#2798)
+    expect(facet.facet_version).toBe(11); // v11: trace-backed downgrade signals (#2798 cont.)
     expect(facet.derived_from).toBe('afk-session');
   });
 
@@ -1621,11 +1621,19 @@ describe('deriveSessionFacet', () => {
     });
 
     it('outcome_downgrade_reason is schema-valid as an enum value', () => {
-      // All three downgrade reason values are valid schema members.
+      // All seven downgrade reason values are valid schema members.
       const base = deriveSessionFacet(doneSession({
         toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
       }));
-      for (const reason of ['deferred_items', 'no_corroborating_evidence', 'compose_partial_nodes'] as const) {
+      for (const reason of [
+        'deferred_items',
+        'no_corroborating_evidence',
+        'compose_partial_nodes',
+        'budget_exceeded_closure',
+        'iteration_cap_closure',
+        'truncated_closure',
+        'subagent_budget_exhaustion',
+      ] as const) {
         expect(SessionFacetSchema.safeParse({ ...base, outcome_downgrade_reason: reason }).success).toBe(true);
       }
       // Invalid value must be rejected.
@@ -1641,6 +1649,104 @@ describe('deriveSessionFacet', () => {
       }));
       expect(facet.outcome).toBe('partially_achieved');
       expect(facet.primary_success).toBe('implemented the handler.');
+    });
+
+    // --- trace-backed signals (signals 4–7, #2798 cont.) ---
+
+    // Helper: a Done session with world mutations (to suppress no_corroborating_evidence)
+    // and optional trace signals.
+    function doneSessionWithTrace({
+      traceSignals,
+    }: {
+      traceSignals?: import('./derive.js').DeriveOptions['traceSignals'];
+    } = {}): ReturnType<typeof deriveSessionFacet> {
+      const session = doneSession({
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      });
+      return deriveSessionFacet(session, { traceSignals });
+    }
+
+    it('no downgrade when traceSignals is absent (no trace available)', () => {
+      // Absence of trace data must never trigger a downgrade.
+      const facet = doneSessionWithTrace({ traceSignals: undefined });
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade when traceSignals has no closure reason and no exhaustion', () => {
+      // A trace with a clean closure provides no signal.
+      const facet = doneSessionWithTrace({
+        traceSignals: { traceClosureReason: undefined, hasSubagentBudgetExhaustion: false },
+      });
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('downgrade: budget_exceeded_closure — session ended because budget ceiling was hit (#2798)', () => {
+      const facet = doneSessionWithTrace({
+        traceSignals: { traceClosureReason: 'budget_exceeded', hasSubagentBudgetExhaustion: false },
+      });
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_downgrade_reason).toBe('budget_exceeded_closure');
+      expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
+    });
+
+    it('downgrade: iteration_cap_closure — top-level tool-use round cap fired (#2798)', () => {
+      const facet = doneSessionWithTrace({
+        traceSignals: { traceClosureReason: 'iteration_cap', hasSubagentBudgetExhaustion: false },
+      });
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_downgrade_reason).toBe('iteration_cap_closure');
+      expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
+    });
+
+    it('downgrade: truncated_closure — last model turn cut off by output-token ceiling (#2798)', () => {
+      const facet = doneSessionWithTrace({
+        traceSignals: { traceClosureReason: 'truncated', hasSubagentBudgetExhaustion: false },
+      });
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_downgrade_reason).toBe('truncated_closure');
+      expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
+    });
+
+    it('downgrade: subagent_budget_exhaustion — a forked subagent hit its tool-round cap (#2798)', () => {
+      const facet = doneSessionWithTrace({
+        traceSignals: { traceClosureReason: undefined, hasSubagentBudgetExhaustion: true },
+      });
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_downgrade_reason).toBe('subagent_budget_exhaustion');
+      expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
+    });
+
+    it('budget_exceeded_closure takes priority over subagent_budget_exhaustion', () => {
+      // When both signals fire, the higher-priority one wins.
+      const facet = doneSessionWithTrace({
+        traceSignals: { traceClosureReason: 'budget_exceeded', hasSubagentBudgetExhaustion: true },
+      });
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_downgrade_reason).toBe('budget_exceeded_closure');
+    });
+
+    it('deferred_items takes priority over all trace signals', () => {
+      // Signal 1 (deferred_items) must beat trace signals.
+      const session = doneSession({
+        doneText: '**Done**\n- What was done: partial.\n- Deferred: still pending.',
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      });
+      const facet = deriveSessionFacet(session, {
+        traceSignals: { traceClosureReason: 'budget_exceeded', hasSubagentBudgetExhaustion: true },
+      });
+      expect(facet.outcome_downgrade_reason).toBe('deferred_items');
+    });
+
+    it('trace signals do not fire when outcome is not fully_achieved', () => {
+      // Trace-backed signals only apply when the initial outcome is fully_achieved.
+      const session = doneSession({ doneText: '**Blocked**\n- What blocks: missing key.' });
+      const facet = deriveSessionFacet(session, {
+        traceSignals: { traceClosureReason: 'budget_exceeded', hasSubagentBudgetExhaustion: true },
+      });
+      expect(facet.outcome).toBe('not_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
     });
   });
 });

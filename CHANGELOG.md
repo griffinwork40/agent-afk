@@ -11,6 +11,83 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.303.4] - 2026-10-07
+
+### Fixed
+- strategy-nudge keys on the real error line, not boilerplate (#3160) (343c2503)
+- add RAW_VALUE_CAP boundary tests and move getPeerInboundModeConfig into list branch (#3186) (00b7acfe)
+- address advisory findings from detached-tool-notifier review (#3189) (688ec803)
+- use makeNonIpError on deps so non-IP records reject with EgressBlockedError (#3187) (14d60a55)
+
+## [5.303.3] - 2026-10-07
+
+### Added
+- trace-backed downgrade signals — closure reason + subagent budget exhaustion (#3195) (b3f82314)
+
+### Changed
+- add unit tests for three worst-coverage CLI/service modules (COV-007..009) (#3203) (a5903f52)
+- remove buildPromptAsync internal deprecated shim (#3196) (80b8167e)
+
+## [5.303.2] - 2026-10-07
+
+### Added
+- add UPDATE-failure-resilience test for access tracking (#3192) (358c8669)
+
+### Fixed
+- migrate task-view describe blocks to task-view-mode.test.ts (#3200) (1308f538)
+- execFileSync for findGitRoot; shell-metachar tests; gitleaksignore cleanup (#3199) (ee2f4181)
+- add { unref? } option to sleepWithAbort; tighten test; cover sleep() unref paths (#3198) (b551e708)
+
+### Changed
+- Web dashboard: session titles, new-session hang, and sidecars for daemon/web/skill sessions (#3197) (91e2d6d5)
+- DEAD-033 incremental — remove 72 unused exports from src/agent/trace/index.ts (#3202) (3a725829)
+- patch picomatch ReDoS, bump openai+@types/node, fix website/ baseline-browser-mapping (#3193) (d7ba5ea7)
+
+## [5.303.1] - 2026-10-07
+
+### Added
+- catalog-backed route limits, configurable in-turn context guard, model awareness (#3177) (5f9e91bf)
+
+### Fixed
+- re-fork zero-output transport failures once, fail closed on any tool activity (#3172) (2bcae018)
+
+## [5.303.0] - 2026-10-07
+
+### Added
+- opt-in elapsed-time connection retry budget + connect-failure diagnostics (#3173) (c605e2b2)
+- explicit incomplete handoff and findings salvage at the tool-round cap (#3176) (5e15142c)
+
+### Fixed
+- address advisory review findings from 2026-10-06 pr-triage (#3175) (22971afa)
+
+### Changed
+- add unit tests for three worst-coverage CLI/service modules (#3178) (92e7f89b)
+
+## [5.302.13] - 2026-10-07
+
+### Fixed
+- observe yield probe failures and cover cached PR paths (#3154) (130d8ed4)
+- add maxRetries to rm in peer wake teardown to avoid Windows ENOTEMPTY (#3179) (0daf2a5b)
+- keep the event loop alive during retry backoff sleeps (#3171) (72991e20)
+- replace shell execSync with execFileSync for worktree ops; add .gitleaksignore (#3180) (69c38902)
+
+### Changed
+- delete task-view.ts, remove @types/node-cron, prune 25 unused exports (#3174) (4a9def34)
+
+## [5.302.12] - 2026-10-07
+
+### Fixed
+- pass --allow-scripts=agent-afk to npm install so postinstall runs on npm >=11.19 (#3152) (9005022b)
+
+## [5.302.11] - 2026-10-07
+
+### Added
+- add --predict flag and spec predictions field for deterministic operator-supplied predictions (#3162) (9cfccc5f)
+
+### Fixed
+- add portable POSIX-utility regression test for settle-after-kill fallback (#3167) (7833d6f9)
+- dispatch UserPromptSubmit in Telegram per-turn path (#3163) (f3853eb6)
+
 ## [5.302.10] - 2026-10-07
 
 ### Changed

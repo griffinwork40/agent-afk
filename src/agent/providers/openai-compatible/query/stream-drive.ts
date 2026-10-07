@@ -69,6 +69,7 @@ export interface StreamDriveContext {
   traceWriter: TraceSink | undefined;
   initSessionId: string;
   currentModel: string;
+  endpoint?: string;
   /** Live liveness check — the query sets this true on close(). */
   isClosed: () => boolean;
   /**
@@ -126,6 +127,7 @@ export async function* driveStream<TEvent>(
         ctx.controller.signal,
         ctx.traceWriter,
         ctx.currentModel,
+        ctx.endpoint,
       );
 
       if (!conn.ok) {

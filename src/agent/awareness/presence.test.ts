@@ -5,7 +5,7 @@
  * real ~/.afk/state/presence/ during tests.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -444,6 +444,56 @@ describe('readLivePresenceFiles', () => {
 
     const live = await readLivePresenceFiles({ maxHeartbeatAgeMs: 1 });
     expect(live.map((r) => r.sessionId)).toEqual(['no-hb']);
+  });
+
+  it('keeps a record whose heartbeatAgeMs equals maxHeartbeatAgeMs exactly (boundary is inclusive)', async () => {
+    // The filter is `heartbeatAgeMs <= maxHeartbeatAgeMs`, so the boundary value
+    // must be KEPT, not dropped. This pins the exact boundary condition.
+    //
+    // We freeze time (vi.useFakeTimers) so Date.now() inside readPresenceFiles
+    // returns a known value T, then write a heartbeatAt of exactly T - THRESHOLD_MS.
+    // The computed heartbeatAgeMs is then exactly THRESHOLD_MS, and the `<=`
+    // assertion should keep it. A second record 1 ms older verifies the
+    // boundary is not off-by-one in the other direction.
+    const { readLivePresenceFiles } = await getPresenceMod();
+    const THRESHOLD_MS = 60_000;
+    const NOW = Date.now();
+
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      // Exactly at boundary: heartbeatAgeMs === THRESHOLD_MS → must be KEPT.
+      writeRawPresence('at-boundary', {
+        sessionId: 'at-boundary',
+        surface: 'cli',
+        cwd: '/tmp/x',
+        startedAt: new Date().toISOString(),
+        model: { provider: 'p', name: 'm' },
+        workspace: NULL_WS,
+        pid: process.pid,
+        heartbeatAt: new Date(NOW - THRESHOLD_MS).toISOString(),
+      });
+      // One millisecond over boundary: heartbeatAgeMs === THRESHOLD_MS + 1 → must be DROPPED.
+      writeRawPresence('over-boundary', {
+        sessionId: 'over-boundary',
+        surface: 'cli',
+        cwd: '/tmp/x',
+        startedAt: new Date().toISOString(),
+        model: { provider: 'p', name: 'm' },
+        workspace: NULL_WS,
+        pid: process.pid,
+        heartbeatAt: new Date(NOW - THRESHOLD_MS - 1).toISOString(),
+      });
+
+      const live = await readLivePresenceFiles({ maxHeartbeatAgeMs: THRESHOLD_MS });
+      const ids = live.map((r) => r.sessionId);
+      // Boundary record must be kept (heartbeatAgeMs === maxHeartbeatAgeMs is inclusive).
+      expect(ids).toContain('at-boundary');
+      // One-ms-over record must be dropped.
+      expect(ids).not.toContain('over-boundary');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
