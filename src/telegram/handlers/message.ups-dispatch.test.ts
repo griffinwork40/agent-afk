@@ -229,7 +229,11 @@ describe('dispatchTelegramUserPromptSubmit – sessionId forwarding', () => {
  */
 
 const { mockStreamResponse } = vi.hoisted(() => ({
-  mockStreamResponse: vi.fn(async () => {}),
+  // Typed to match streamResponse(ctx, session, content, ...rest) so that
+  // mock.calls[0]?.[2] is correctly inferred as string | unknown rather than
+  // `undefined` from an empty-tuple call signature. Context and IAgentSession
+  // are unavailable in vi.hoisted (pre-import), so we use `unknown` placeholders.
+  mockStreamResponse: vi.fn<(ctx: unknown, session: unknown, content: string | unknown[], ...rest: unknown[]) => Promise<void>>(),
 }));
 
 vi.mock('../streaming.js', () => ({
