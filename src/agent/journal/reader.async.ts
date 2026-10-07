@@ -35,9 +35,10 @@ export type { ToolResultLookup } from './types.js';
 /**
  * Async equivalent of the sync `journalExists` helper in reader.ts.
  *
- * Uses `fs.promises.access` so the check never calls `statSync` and never
- * blocks the event loop. Returns `true` when the top-level session journal
- * file exists, `false` otherwise (including on any error).
+ * Uses `fs.promises.stat(path).isFile()` — matching the sync path's
+ * `statSync(path).isFile()` — so a directory at the journal path returns
+ * `false`, not `true`. Returns `true` only when the path exists AND is a
+ * regular file; returns `false` otherwise (including on any error).
  *
  * Consumed by the 404 path in `web-server/routes.tool-results.ts` so the
  * entire request handler stays non-blocking.
@@ -51,8 +52,7 @@ export async function journalExistsAsync(sessionId: string): Promise<boolean> {
     return false;
   }
   try {
-    await fs.promises.access(path, fs.constants.F_OK);
-    return true;
+    return (await fs.promises.stat(path)).isFile();
   } catch {
     return false;
   }
