@@ -235,6 +235,9 @@ describe('ProcessJobRegistry.setTraceWriter (resume rebind)', () => {
     const settled2 = writer2.events.filter(isSettled);
     expect(settled1).toHaveLength(0);
     expect(settled2).toHaveLength(1);
+    const payload = settled2[0]!.payload as { metadata: Record<string, unknown> };
+    expect(payload.metadata['exitCode']).toBe(0);
+    expect(typeof payload.metadata['durationMs']).toBe('number');
     await r.killAll();
   });
 });

@@ -241,7 +241,11 @@ export async function runBeforeTurnEnd(ctx: BeforeTurnEndContext): Promise<Befor
     if (result.wasTimeout) {
       ctx.wiring?.onStopTimeout?.();
     } else if (result.injectContext) {
-      ctx.wiring?.onStopInjectContext?.(result.injectContext);
+      // Cap injectContext at CONTINUE_WITH_MAX_CHARS to prevent oversized hook
+      // output from being forwarded unbounded to queueFrameworkContext on
+      // Telegram, REPL, and other surfaces. Mirrors the cap already applied on
+      // the same-turn block path (capContinueWith at the continueWith site).
+      ctx.wiring?.onStopInjectContext?.(capContinueWith(result.injectContext));
     }
     return dispatchedNoop;
   }

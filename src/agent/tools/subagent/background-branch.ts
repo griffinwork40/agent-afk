@@ -181,8 +181,8 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
     label: job.label,
     message:
       `Background subagent started (jobId=${job.jobId}). It is running detached. ` +
-      `${backgroundDeliveryNote(delivery, job.jobId)} ` +
-      `/bgsub:join ${job.jobId} remains available for manual replay.`,
+      `${backgroundDeliveryNote(delivery, job.jobId).trimEnd()}` +
+      ` /bgsub:join ${job.jobId} remains available for manual replay.`,
   };
   return { content: JSON.stringify(payload) };
 }
