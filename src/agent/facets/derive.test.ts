@@ -1533,6 +1533,91 @@ describe('deriveSessionFacet', () => {
       expect(facet.outcome_downgrade_reason).toBe('deferred_items');
     });
 
+    // --- null-equivalent Deferred values must NOT trigger deferred_items (#2798) ---
+
+    it('no downgrade: Deferred: none is a null-equivalent marker (#2798)', () => {
+      // "Deferred: none" explicitly says nothing is deferred — must not downgrade.
+      const text = '**Done**\n- What was done: fixed it.\n- Deferred: none';
+      const facet = deriveSessionFacet(doneSession({
+        doneText: text,
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade: Deferred: n/a is a null-equivalent marker (#2798)', () => {
+      const text = '**Done**\n- What was done: fixed it.\n- Deferred: n/a';
+      const facet = deriveSessionFacet(doneSession({
+        doneText: text,
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade: Pending: N/A (uppercase, alias bullet) is a null-equivalent marker (#2798)', () => {
+      const text = '**Done**\n- What was done: fixed it.\n- Pending: N/A';
+      const facet = deriveSessionFacet(doneSession({
+        doneText: text,
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade: Follow-up: nothing is a null-equivalent marker (#2798)', () => {
+      const text = '**Done**\n- What was done: fixed it.\n- Follow-up: nothing';
+      const facet = deriveSessionFacet(doneSession({
+        doneText: text,
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade: Deferred: - (dash) is a null-equivalent marker (#2798)', () => {
+      const text = '**Done**\n- What was done: fixed it.\n- Deferred: -';
+      const facet = deriveSessionFacet(doneSession({
+        doneText: text,
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade: Deferred: none. (trailing period) is a null-equivalent marker (#2798)', () => {
+      const text = '**Done**\n- What was done: fixed it.\n- Pending: none.';
+      const facet = deriveSessionFacet(doneSession({
+        doneText: text,
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade: Deferred: (none) parenthesised is a null-equivalent marker (#2798)', () => {
+      const text = '**Done**\n- What was done: fixed it.\n- Deferred: (none)';
+      const facet = deriveSessionFacet(doneSession({
+        doneText: text,
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('downgrade fires for a real Deferred value even with null-like prefix (#2798)', () => {
+      // "Deferred: none of the items were completed" — not a null-equivalent marker
+      // because it has real content after stripping the trailing punctuation.
+      const text = '**Done**\n- What was done: partial fix.\n- Deferred: none of the items were completed';
+      const facet = deriveSessionFacet(doneSession({
+        doneText: text,
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      }));
+      expect(facet.outcome).toBe('partially_achieved');
+      expect(facet.outcome_downgrade_reason).toBe('deferred_items');
+    });
+
     // --- signal 2: no_corroborating_evidence ---
 
     it('downgrade: no_corroborating_evidence — Done with no mutations and no evidence bullet (#2798)', () => {
