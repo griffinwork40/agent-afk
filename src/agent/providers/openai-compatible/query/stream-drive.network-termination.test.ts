@@ -280,7 +280,7 @@ describe('driveStream — network-termination re-drive (#2780)', () => {
       translate: (event, state: StreamState) => {
         state.assistantText += event.text;
         if (event.text !== 'partial') state.finishReason = 'stop';
-        return [{ type: 'text', text: event.text } as ProviderEvent];
+        return [{ type: 'text', text: event.text } as unknown as ProviderEvent];
       },
       clarifyError: (e) => (e instanceof Error ? e : new Error(String(e))),
     };
@@ -947,9 +947,9 @@ describe('stream termination follow-ups (#2792)', () => {
     // The fatal error passed to clarifyError is the expanded stall message
     // produced by stallTimeoutError(), not the raw STALL_TIMEOUT_MESSAGE marker.
     // Verify it is an Error that mentions the stall (catching any wrong-error regressions).
-    const callArg = clarifyError.mock.calls[0]?.[0];
+    const callArg = (clarifyError.mock.calls as unknown as [unknown[]])[0]?.[0];
     expect(callArg).toBeInstanceOf(Error);
-    expect((callArg as Error).message).toMatch(/stall/i);
+    expect((callArg as unknown as Error).message).toMatch(/stall/i);
     expect(events).toContainEqual({ type: 'error', error: clarified });
   });
 });
