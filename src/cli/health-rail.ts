@@ -94,8 +94,24 @@ export class HealthRail {
   private snapshot: RailSnapshot | null = null;
   private onRowCountChange?: (rows: number) => void;
   private resizeUnsub: (() => void) | null = null;
+  private resizeImmediateUnsub: (() => void) | null = null;
   /** Interval that triggers a repaint every second while the rail is running. */
   private tickInterval: ReturnType<typeof setInterval> | null = null;
+  /**
+   * The absolute row at which the health rail was most recently painted.
+   * Updated on every paint so the immediate-channel resize snapshot captures
+   * the TRUE pre-SIGWINCH address. Mirrors LoopStageBar.lastPaintedRow.
+   */
+  private lastPaintedRow: number | null = null;
+  /**
+   * Snapshot of `lastPaintedRow` captured synchronously by the
+   * ResizeBus.subscribeImmediate callback — the only moment the pre-SIGWINCH
+   * address is still recoverable (stream.rows has already changed by the time
+   * any debounced handler runs). Consumed by the next repaint() to erase the
+   * ghost row left behind when the pane grows and the rail moves down. Mirrors
+   * StatusLine.preResizePaintedRow / LoopStageBar.preResizePaintedRow.
+   */
+  private preResizePaintedRow: number | null = null;
   /**
    * Monotonic high-water mark for total background subagent jobs ever dispatched.
    *
@@ -135,6 +151,12 @@ export class HealthRail {
     if (isPlainOutputRequested()) return;
     this.started = true;
     this.onRowCountChange?.(1);
+    // Immediate channel: snapshot lastPaintedRow before the debounce window
+    // opens so repaint() can erase the ghost row on GROW. Mirrors the pattern
+    // used by StatusLine.resetGeometry() and LoopStageBar.resizeImmediateUnsub.
+    this.resizeImmediateUnsub = ResizeBus.subscribeImmediate(() => {
+      this.preResizePaintedRow = this.lastPaintedRow;
+    });
     this.resizeUnsub = ResizeBus.subscribe(() => this.repaint());
     // Tick every second so the elapsed-time counter advances even when no
     // events arrive (e.g. between tool calls or while the model is streaming
@@ -150,10 +172,15 @@ export class HealthRail {
       this.resizeUnsub();
       this.resizeUnsub = null;
     }
+    if (this.resizeImmediateUnsub) {
+      this.resizeImmediateUnsub();
+      this.resizeImmediateUnsub = null;
+    }
     if (this.tickInterval !== null) {
       clearInterval(this.tickInterval);
       this.tickInterval = null;
     }
+    this.preResizePaintedRow = null;
     this.clearRow();
     this.onRowCountChange?.(0);
   }
@@ -260,10 +287,22 @@ export class HealthRail {
     // health rail floats at the same horizontal position as other content.
     const pad = contentMargin();
     this.stream.write('\x1b[s');
+    // Erase the ghost left by a pane GROW: `preResizePaintedRow` holds the
+    // pre-SIGWINCH row captured by the immediate channel before stream.rows
+    // changed. Only erase when the old row differs from the new paint row AND
+    // is inside the current viewport — addressing rows outside [1, totalRows]
+    // would scroll. Mirrors LoopStageBar.repaint()'s ghost-erase pattern.
+    const ghostRow = this.preResizePaintedRow;
+    this.preResizePaintedRow = null;
+    if (ghostRow !== null && ghostRow !== paintRow && ghostRow >= 1 && ghostRow <= totalRows) {
+      this.stream.write(`\x1b[${ghostRow};1H`);
+      this.stream.write('\x1b[2K');
+    }
     this.stream.write(`\x1b[${paintRow};1H`);
     this.stream.write('\x1b[2K');
     this.stream.write(pad + formatHealthRail(fields, Math.max(4, maxW - pad.length)));
     this.stream.write('\x1b[u');
+    this.lastPaintedRow = paintRow;
   }
 
   private clearRow(): void {
