@@ -13,6 +13,7 @@
  */
 
 import { ResizeBus } from './terminal-size.js';
+import { ResizeGhostRow } from './resize-ghost-row.js';
 import { isPlainOutputRequested } from '../config/env.js';
 import { formatStatusLine, type StatusLineFields } from './render/status-line-format.js';
 
@@ -49,8 +50,16 @@ export class StatusLine {
   private resizeUnsub: (() => void) | null = null;
   private resizeImmediateUnsub: (() => void) | null = null;
   private lastPaintedRow: number | null = null;
-  /** Captures lastPaintedRow at SIGWINCH time for onResize() to use as the stale-row target. */
-  private preResizePaintedRow: number | null = null;
+  /**
+   * Tracks the pre-SIGWINCH painted row so onResize() can erase the ghost
+   * left behind when the pane grows. Uses the shared ResizeGhostRow helper for
+   * subscribe/consumeGhostRow/unsubscribe. StatusLine also registers a SECOND
+   * immediate subscriber (resizeImmediateUnsub) that nulls lastPaintedRow and
+   * resets lastRepaint — the extra work the simple snapshot-only helper does
+   * not perform. Both immediate handlers fire synchronously in the same resize
+   * event so ordering is not a concern.
+   */
+  private readonly ghostRowTracker = new ResizeGhostRow(() => this.lastPaintedRow);
   private extraRows = 0;
   private afterScrollRestore: (() => void) | null = null;
 
@@ -88,6 +97,15 @@ export class StatusLine {
       this.resizeUnsub = ResizeBus.subscribe(() => {
         this.onResize();
       });
+      // Two immediate-channel subscriptions, both fire synchronously in the same
+      // resize event (ResizeBus.subscribeImmediate uses a Set, iteration order is
+      // insertion order):
+      //   1. ghostRowTracker.subscribe(): snapshots lastPaintedRow → preResizePaintedRow
+      //      before any debounced repaint can mutate it.
+      //   2. resetGeometry(): nulls lastPaintedRow + resets lastRepaint (the extra
+      //      work StatusLine needs beyond the snapshot — prevents mid-window repaint
+      //      from reading a stale lastPaintedRow and keeps the throttle open).
+      this.ghostRowTracker.subscribe();
       this.resizeImmediateUnsub = ResizeBus.subscribeImmediate(() => this.resetGeometry());
     }
     // Invariant: this is the ONLY time-driven repaint of the status row, and
@@ -108,36 +126,22 @@ export class StatusLine {
   }
 
   private resetGeometry(): void {
-    // Invariant: capturing `lastPaintedRow` into `preResizePaintedRow` BEFORE
-    // nulling it is critical to preserve the stale-row-clear capability of
-    // onResize() while also preventing mid-window repaint() calls from
-    // corrupting the stale-row reference.
+    // Invariant: the snapshot of lastPaintedRow → preResizePaintedRow is
+    // performed by ghostRowTracker's subscribeImmediate handler (registered in
+    // start() BEFORE this handler). This second immediate subscriber handles
+    // the extra work StatusLine needs beyond the snapshot:
     //
-    // The race this method prevents:
-    //   SIGWINCH fires → stream.rows changes to newRows.
-    //   A repaint(fields) call arrives in the 150ms debounce window (e.g. from a
-    //   streaming token event).  repaint() writes to paintRow(newRows) and sets
-    //   lastPaintedRow = paintRow(newRows).
-    //   When onResize() finally fires, it reads lastPaintedRow = paintRow(newRows)
-    //   and (correctly) sees that lastPaintedRow === paintRow(newRows), so it
-    //   emits NO clear for the old row.  The pre-SIGWINCH content at
-    //   paintRow(oldRows) is never erased — a visible stale-row artifact remains.
+    //   1. null lastPaintedRow — prevents mid-window repaint() calls from
+    //      updating lastPaintedRow to the new paintRow, which would cause
+    //      onResize() to see old===new and skip the stale-row clear.
+    //   2. reset lastRepaint — opens the throttle gate so the mid-window
+    //      repaint() fires immediately (unconditionally) and seeds
+    //      lastPaintedRow with the new-geometry row address that onResize()
+    //      then uses as the reference for "old !== new" skipping.
     //
-    // By snapshotting lastPaintedRow → preResizePaintedRow here and nulling
-    // lastPaintedRow synchronously, we achieve two goals simultaneously:
-    //   1. onResize() reads preResizePaintedRow (the true pre-SIGWINCH row)
-    //      for the old-row clear, immune to any mid-window repaint() mutation
-    //      of lastPaintedRow.
-    //   2. Mid-window repaint() writes to the new paintRow and seeds
-    //      lastPaintedRow = paintRow(newRows).  Because lastPaintedRow was
-    //      nulled, the mid-window repaint runs unconditionally (throttle gate
-    //      open via lastRepaint=0) and does not attempt to clear a stale row
-    //      on its own — onResize() will handle that.
-    //
-    // This must execute on the IMMEDIATE channel (ResizeBus.subscribeImmediate)
-    // so the snapshot is taken synchronously inside the 'resize' event, before
-    // any macrotask (streaming event, spinner tick) can mutate lastPaintedRow.
-    this.preResizePaintedRow = this.lastPaintedRow;
+    // Both immediate handlers fire synchronously in the same resize event
+    // (ResizeBus uses a Set with insertion-order iteration), so the snapshot
+    // is always taken before lastPaintedRow is nulled here.
     this.lastPaintedRow = null;
     this.lastRepaint = 0;
   }
@@ -146,12 +150,13 @@ export class StatusLine {
   private onResize(): void {
     if (!this.started || !this.enabled) return;
     const rows = this.currentRows();
-    // Use preResizePaintedRow (set by resetGeometry() on the immediate channel)
-    // as the authoritative old-row reference.  lastPaintedRow may have been
-    // updated by a mid-window repaint() call and therefore already reflects the
-    // new geometry — using it here would skip the necessary old-row clear.
-    const rowToErase = this.preResizePaintedRow ?? this.lastPaintedRow;
-    this.preResizePaintedRow = null;
+    // consumeGhostRow() returns the pre-SIGWINCH row captured by ghostRowTracker's
+    // immediate handler (registered before resetGeometry() in start(), fires first).
+    // Fall back to lastPaintedRow if the snapshot was null (no paint had occurred).
+    // lastPaintedRow may have been updated by a mid-window repaint() call and
+    // therefore already reflects the new geometry — the snapshot is the authoritative
+    // old-row reference; lastPaintedRow is the defensive fallback.
+    const rowToErase = this.ghostRowTracker.consumeGhostRow() ?? this.lastPaintedRow;
     this.stream.write('\x1b[s');
     if (rowToErase !== null && rowToErase !== this.paintRow(rows)) {
       this.stream.write(`\x1b[${rowToErase};1H`);
@@ -337,16 +342,21 @@ export class StatusLine {
       this.resizeImmediateUnsub();
       this.resizeImmediateUnsub = null;
     }
+    // Unsubscribe the ghost-row tracker and clear its snapshot (unsubscribe()
+    // also nulls the internal preResizePaintedRow, so the consumeGhostRow()
+    // call below sees null and the ?? fallback kicks in).
+    const pendingGhostRow = this.ghostRowTracker.consumeGhostRow();
+    this.ghostRowTracker.unsubscribe();
     if (!this.started || !this.enabled) {
       this.started = false;
       return;
     }
     const rows = this.currentRows();
     this.stream.write('\x1b[s');
-    // Symmetric with onResize(): prefer preResizePaintedRow so a mid-debounce
-    // repaint() that re-seeded lastPaintedRow to the new geometry doesn't cause
-    // stop() to erase the wrong (new-geometry) row.
-    const rowToErase = this.preResizePaintedRow ?? this.lastPaintedRow ?? this.paintRow(rows);
+    // Symmetric with onResize(): prefer the ghost-row snapshot so a
+    // mid-debounce repaint() that re-seeded lastPaintedRow to the new geometry
+    // doesn't cause stop() to erase the wrong (new-geometry) row.
+    const rowToErase = pendingGhostRow ?? this.lastPaintedRow ?? this.paintRow(rows);
     this.stream.write(`\x1b[${rowToErase};1H`);
     this.stream.write('\x1b[2K');
     // Reset scroll region to full.
@@ -355,7 +365,6 @@ export class StatusLine {
     this.started = false;
     this.lastRepaint = 0;
     this.lastPaintedRow = null;
-    this.preResizePaintedRow = null;
   }
 
   private formatLine(f: StatusLineFields): string {

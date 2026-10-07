@@ -45,6 +45,7 @@
 
 import type { OutputEvent } from '../../../agent/types.js';
 import { ResizeBus } from '../../terminal-size.js';
+import { ResizeGhostRow } from '../../resize-ghost-row.js';
 import { palette } from '../../palette.js';
 import { isPlainOutputRequested } from '../../../config/env.js';
 import { contentMargin } from '../../render/measure.js';
@@ -242,7 +243,6 @@ export class LoopStageBar {
   private started = false;
   private currentStage: LoopStage = 'observing';
   private resizeUnsub: (() => void) | null = null;
-  private resizeImmediateUnsub: (() => void) | null = null;
   private onRowCountChange?: (rows: number) => void;
   /**
    * The absolute row at which the rail was most recently painted. Updated on
@@ -252,13 +252,13 @@ export class LoopStageBar {
    */
   private lastPaintedRow: number | null = null;
   /**
-   * Snapshot of `lastPaintedRow` captured synchronously by the
-   * ResizeBus.subscribeImmediate callback — the only moment the pre-SIGWINCH
-   * address is still available. Consumed by the next repaint() to erase the
-   * ghost row left behind when the pane grows and the rail moves down. Mirrors
-   * StatusLine.preResizePaintedRow / BackgroundStatusBar.preResizeStartRow.
+   * Tracks the pre-SIGWINCH painted row so the next repaint() can erase the
+   * ghost left behind when the pane grows. Owned by ResizeGhostRow; accessed
+   * here only through subscribe/consumeGhostRow/unsubscribe. Mirrors the
+   * StatusLine.preResizePaintedRow / BackgroundStatusBar.preResizeStartRow
+   * pattern extracted into the shared helper.
    */
-  private preResizePaintedRow: number | null = null;
+  private readonly ghostRowTracker = new ResizeGhostRow(() => this.lastPaintedRow);
 
   /**
    * @param opts.getExtraRows - Returns the current total extra-rows reservation
@@ -288,13 +288,10 @@ export class LoopStageBar {
     this.onRowCountChange?.(1);
     // Immediate channel: snapshot lastPaintedRow BEFORE the debounce window
     // opens so the debounced repaint() can erase the old ghost row on GROW.
-    // This mirrors StatusLine.resetGeometry() / BackgroundStatusBar.resetGeometry():
-    // by the time the debounced subscriber fires, stream.rows has already changed
-    // and lastPaintedRow may have been updated by a mid-window tick, so the
-    // immediate snapshot is the only reliable source of the true pre-SIGWINCH row.
-    this.resizeImmediateUnsub = ResizeBus.subscribeImmediate(() => {
-      this.preResizePaintedRow = this.lastPaintedRow;
-    });
+    // ResizeGhostRow.subscribe() registers the ResizeBus.subscribeImmediate
+    // handler that captures the pre-SIGWINCH row address synchronously inside
+    // the 'resize' event — before any debounced repaint can mutate lastPaintedRow.
+    this.ghostRowTracker.subscribe();
     this.resizeUnsub = ResizeBus.subscribe(() => this.repaint(this.currentStage));
     this.repaint(this.currentStage);
   }
@@ -306,11 +303,7 @@ export class LoopStageBar {
       this.resizeUnsub();
       this.resizeUnsub = null;
     }
-    if (this.resizeImmediateUnsub) {
-      this.resizeImmediateUnsub();
-      this.resizeImmediateUnsub = null;
-    }
-    this.preResizePaintedRow = null;
+    this.ghostRowTracker.unsubscribe();
     this.clearRow();
     // Release our 1-row reservation.
     this.onRowCountChange?.(0);
@@ -332,14 +325,13 @@ export class LoopStageBar {
     // bg bar is empty).
     const paintRow = Math.max(1, totalRows - extraRows);
     this.stream.write('\x1b[s');
-    // Erase the ghost left by a pane GROW: `preResizePaintedRow` holds the
-    // pre-SIGWINCH row captured by the immediate channel before `stream.rows`
+    // Erase the ghost left by a pane GROW: consumeGhostRow() returns the
+    // pre-SIGWINCH row captured on the immediate channel before stream.rows
     // changed. When the pane grows, the rail moves DOWN so the old row sits
     // above the new position — clear it before painting the new row. Only
     // erase when the old row differs from the new paint row AND is inside the
     // current viewport; addressing a row outside [1, totalRows] would scroll.
-    const ghostRow = this.preResizePaintedRow;
-    this.preResizePaintedRow = null;
+    const ghostRow = this.ghostRowTracker.consumeGhostRow();
     if (ghostRow !== null && ghostRow !== paintRow && ghostRow >= 1 && ghostRow <= totalRows) {
       this.stream.write(`\x1b[${ghostRow};1H`);
       this.stream.write('\x1b[2K');
