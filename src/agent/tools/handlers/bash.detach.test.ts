@@ -19,7 +19,7 @@
 import { describe, expect, it } from 'vitest';
 import { createBashHandler } from './bash.js';
 import { DetachableToolRegistry, type DetachedToolResult } from '../detach-registry.js';
-import { buildBashDelivery, SETTLE_AFTER_KILL_MS } from '../detach-bash.js';
+import { buildBashDelivery } from '../detach-bash.js';
 import type { ToolHandlerContext } from '../types.js';
 
 function makeContext(
@@ -222,23 +222,25 @@ describe('post-detach session abort kills process (Fix #1)', () => {
   });
 
   it(
-    'POSIX-utility child (sleep): deliver() fires via kill or settle-fallback (#2742)',
+    'POSIX-utility child (sleep): kill-path regression test (#2742)',
     async () => {
-      // Regression test for #2742: on Windows, `taskkill /F /T` may not reach
-      // MSYS2 (Git Bash) grandchildren such as sleep.exe, leaving the pipe open
-      // so `close` never fires. The settle-fallback in execOnDetach must then
-      // fire deliver() after SETTLE_AFTER_KILL_MS.
+      // Invariant: kill-path regression test for the POSIX SIGKILL delivery path
+      // when the detached child is a POSIX-utility (sleep).
+      //
+      // Scope: this test covers only the SIGKILL path. On POSIX, SIGKILL closes
+      // the process group well before the 5 s settle-fallback timer, so the
+      // fallback never fires here. The settle-fallback (BASH_SETTLE_TIMEOUT_SENTINEL)
+      // is covered deterministically by detach-bash.settle.test.ts via a mock proc.
       //
       // On POSIX: process.kill(-pid, SIGKILL) kills the whole process group;
-      // `close` fires quickly (<200 ms in practice); test completes well
-      // within the timeout window.
+      // the 'close' event fires in <200 ms; deliver() is called via the normal
+      // kill path (not the fallback), well within the 10 s race window.
       //
-      // On Windows (Git Bash): sleep.exe may survive taskkill /T; the settle
-      // fallback fires after SETTLE_AFTER_KILL_MS (5 s) and delivers with
-      // status 'failed'. The test budget is SETTLE_AFTER_KILL_MS + 10 s.
-      //
-      // In both cases deliver() must have been called before the race window
-      // closes — that is the invariant being tested.
+      // On Windows (Git Bash): taskkill /F /T may or may not reach sleep.exe.
+      // If it does, deliver() fires via the kill path. If it does not, the
+      // settle-fallback fires after SETTLE_AFTER_KILL_MS (5 s). Either way
+      // status is 'failed' and the assertion holds — see the note on mechanism
+      // detection below.
       const handler = createBashHandler('default');
       const registry = new DetachableToolRegistry();
       const sessionAbort = new AbortController();
@@ -253,9 +255,8 @@ describe('post-detach session abort kills process (Fix #1)', () => {
       });
 
       // `sleep 30` is a POSIX-utility (or MSYS2 sleep.exe on Windows via Git
-      // Bash). On POSIX the process group kill reaches it; on Windows it is the
-      // exact process class that may survive taskkill /T (the #2742 scenario).
-      // The 30 s duration ensures it never exits naturally during the test.
+      // Bash). On POSIX the process group kill reaches it reliably. The 30 s
+      // duration ensures it never exits naturally during the test window.
       const handlerPromise = handler(
         { command: 'sleep 30', timeout_ms: 60000 },
         sessionAbort.signal,
@@ -272,31 +273,32 @@ describe('post-detach session abort kills process (Fix #1)', () => {
       const parsed = JSON.parse(placeholderResult.content as string) as { status: string };
       expect(parsed.status).toBe('detached');
 
-      // Session abort: triggers killProcessGroup (taskkill on Windows) and arms
-      // the settle-fallback timer in execOnDetach (SETTLE_AFTER_KILL_MS = 5 s).
+      // Session abort: triggers killProcessGroup (SIGKILL on POSIX, taskkill on
+      // Windows) and arms the settle-fallback timer in execOnDetach.
       sessionAbort.abort();
 
-      // Race window:
-      //   POSIX  — close fires in < 200 ms after SIGKILL
-      //   Windows — either close fires after taskkill, OR the settle-fallback
-      //             fires after SETTLE_AFTER_KILL_MS (5 s)
-      // Budget: SETTLE_AFTER_KILL_MS + 10 s headroom.
-      const raceMs = SETTLE_AFTER_KILL_MS + 10_000;
+      // Race window: 10 s, matching the adjacent kill-path test.
+      // On POSIX the 'close' event fires in <200 ms after SIGKILL — well within
+      // budget. On Windows the fallback may legitimately fire at SETTLE_AFTER_KILL_MS
+      // (5 s); the 10 s window covers that too.
+      //
+      // Mechanism detection: DetachedToolResult does not expose closeSignal, so
+      // we cannot distinguish SIGKILL vs BASH_SETTLE_TIMEOUT_SENTINEL from the
+      // result object alone. Both paths yield status='failed', which is the
+      // property this regression test asserts. The sentinel-path behaviour is
+      // verified in detail in detach-bash.settle.test.ts.
       const settled = await Promise.race([
         settledPromise,
-        new Promise<null>((r) => setTimeout(() => r(null), raceMs)),
+        new Promise<null>((r) => setTimeout(() => r(null), 10_000)),
       ]);
 
       // deliver() must have been called — process killed or fallback fired.
       expect(settled).not.toBeNull();
       expect(deliveredResults).toHaveLength(1);
-      // Killed or fallback → status must be 'failed'.
+      // Kill or fallback → status must be 'failed'.
       expect(deliveredResults[0]!.status).toBe('failed');
     },
-    // Vitest timeout: SETTLE_AFTER_KILL_MS + 15 s so the test body's race
-    // (SETTLE_AFTER_KILL_MS + 10 s) always has a 5 s margin before Vitest
-    // kills the test itself.
-    SETTLE_AFTER_KILL_MS + 15_000,
+    15_000,
   );
 
   it('normal-close deregisters token so hasDetachable() becomes false', async () => {
