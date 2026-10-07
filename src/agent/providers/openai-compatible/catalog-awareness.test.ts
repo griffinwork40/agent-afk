@@ -17,7 +17,7 @@ it('filters, orders and exposes subscription windows and retirement notes', () =
 });
 it('emits successor trace and returns one line without substitution', async () => {
   const events: unknown[] = [];
-  expect(catalogUpgradeNotice('old', { write: async event => { events.push(event); } }, deps)).toContain('new');
+  expect(catalogUpgradeNotice('old', { write: async event => { events.push(event); }, getTracePath: () => 'in-memory://trace' }, deps)).toContain('new');
   await Promise.resolve();
   expect(events).toEqual([expect.objectContaining({ payload: expect.objectContaining({ phase: 'catalog_model_upgrade' }) })]);
   expect(catalogUpgradeNotice('missing', undefined, deps)).toBeUndefined();

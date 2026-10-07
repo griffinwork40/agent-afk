@@ -95,13 +95,13 @@ describe('contextGuardFraction', () => {
 
 describe('traceContextPressure', () => {
   it('trace failure cannot change guard behavior', async () => {
-    traceContextPressure({ write: async () => { throw new Error('offline'); } }, 100, 120);
+    traceContextPressure({ write: async () => { throw new Error('offline'); }, getTracePath: () => 'in-memory://trace' }, 100, 120);
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(contextPressure(100, 0, 120)).toBe(false);
   });
   it('emits the actual fraction in the trace, not a hardcoded value', async () => {
     const events: unknown[] = [];
-    const sink = { write: async (ev: unknown) => { events.push(ev); } };
+    const sink = { write: async (ev: unknown) => { events.push(ev); }, getTracePath: () => 'in-memory://trace' };
     traceContextPressure(sink, 245_000, 258_400, 0.95);
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(events.length).toBeGreaterThan(0);
