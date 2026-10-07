@@ -600,6 +600,35 @@ describe('registerEvalGenSubcommand — EvalGenError', () => {
 });
 
 // ---------------------------------------------------------------------------
+// registerEvalGenSubcommand — plain Error fallback to handleCommandError
+// ---------------------------------------------------------------------------
+
+describe('registerEvalGenSubcommand — plain Error fallback', () => {
+  function makeCard(slug: string) {
+    return {
+      slug,
+      evidence: [
+        { sessionId: 's0', tracePath: '/t/0.jsonl', eventIndices: [0], excerpt: 'ex', detectedAt: '2026-01-01T00:00:00.000Z' },
+      ],
+    };
+  }
+
+  it('calls handleCommandError when buildEvalCase throws a plain Error', async () => {
+    mocks.getCard.mockReturnValue(makeCard('my-card'));
+    mocks.buildEvalCase.mockImplementation(() => {
+      throw new Error('unexpected disk failure');
+    });
+    const program = buildProgram();
+    await program.parseAsync([
+      'node', 'afk', 'improve', 'eval-gen', 'my-card',
+    ]);
+    expect(mocks.handleCommandError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'unexpected disk failure' }),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // registerEvalCasesSubcommand — list
 // ---------------------------------------------------------------------------
 

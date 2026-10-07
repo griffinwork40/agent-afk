@@ -339,8 +339,8 @@ describe('installSystemdService — live install', () => {
     if (result.kind === 'failed') {
       expect(result.reason).toMatch(/systemctl enable failed/);
     }
-    // rollbackWrittenUnits should have removed the written unit.
-    expect(mockRmSyncCalls.length).toBeGreaterThan(0);
+    // rollbackWrittenUnits should have removed the exact service unit.
+    expect(mockRmSyncCalls).toContain(unitPath('telegram'));
   });
 
   it('returns installed with noWatch=true without writing a .path unit', () => {
@@ -404,8 +404,10 @@ describe('installSystemdService — .path unit', () => {
     spy.mockRestore();
 
     expect(result.kind).toBe('failed');
-    // Rollback must have been triggered.
-    expect(mockRmSyncCalls.length).toBeGreaterThan(0);
+    // Rollback must have removed the service unit written before the failure.
+    expect(mockRmSyncCalls).toContain(unitPath('telegram'));
+    // The restart unit write failed, so restartUnitPath should NOT appear in rollback.
+    expect(mockRmSyncCalls).not.toContain(restartUnitPath('telegram'));
   });
 });
 
@@ -458,6 +460,8 @@ describe('uninstallSystemdService', () => {
     const result = uninstallSystemdService('telegram');
     // disable failure is non-fatal — file still removed.
     expect(result.kind).toBe('uninstalled');
+    // rmSync must have been called on the unit path despite the disable error.
+    expect(mockRmSyncCalls).toContain(unitPath('telegram'));
   });
 
   it('removes companion restart oneshot when present', () => {
