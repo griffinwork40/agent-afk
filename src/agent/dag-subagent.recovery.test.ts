@@ -203,6 +203,41 @@ describe('compose node recovery', () => {
     expect(isComposeReplaySafe(['read_file', 'grep', 'web_scrape'])).toBe(true);
   });
 
+  // Cross-reference: workspace_publish is a write tool excluded from replay safety.
+  // This pin ensures isComposeReplaySafe stays fail-closed for workspace tools.
+  it('isComposeReplaySafe rejects workspace_publish', () => {
+    expect(isComposeReplaySafe(['workspace_publish'])).toBe(false);
+  });
+
+  it('refuses replay for a workspace-backed node with read-only trace', async () => {
+    // Simulates the security finding: a compose node gets CHILD_ALLOWED_TOOLS
+    // (write surface) from the workspace-backed provider (nesting.ts:391), so
+    // replaySafe must be false regardless of the named agent's frontmatter.
+    // With replaySafe:false AND canUseTool set, the sideEffectFree param is
+    // false, so even a pure read-only trace does not qualify for replay.
+    const failure = cut();
+    failure.trace!.toolCalls.push({ id: 'tool', name: 'read_file' });
+    const m = manager(async () => failure);
+    const trace: TraceSink = { write: vi.fn(async () => {}), getTracePath: () => 'in-memory://trace' };
+    // replaySafe:false mirrors what compose-executor now sets for workspace-backed nodes.
+    const result = await runSubagentDAG({
+      manager: m.instance,
+      parentSession: { abortSignal: new AbortController().signal },
+      nodes: [{ ...node('a'), replaySafe: false, canUseTool: buildAllowlistCanUseTool(['read_file', 'grep']) }],
+      edges: [],
+      traceWriter: trace,
+    });
+    expect(result.failed).toHaveLength(1);
+    expect(m.fork).toHaveBeenCalledTimes(1);
+    // The node is refused because sideEffectFree is false (replaySafe:false),
+    // and it had tool activity so noToolActivity is also false.
+    expect(trace.write).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({
+        metadata: expect.objectContaining({ eligible: false, reason: 'unsafe_tool_surface' }),
+      }),
+    }));
+  });
+
   it('measures an injected seven-node wave before and after recovery', async () => {
     vi.useFakeTimers();
     async function wave(recovery: boolean) {

@@ -538,7 +538,7 @@ export class ComposeExecutor {
 
         return {
           id: n.id,
-          replaySafe: resolvedAgent.replaySafe === true,
+          replaySafe: false, // workspace-backed: effective provider is CHILD_ALLOWED_TOOLS, not frontmatter
           // agentType render label: use agent_type name (or node id for unnamed
           // nodes) with a [k/N] progress suffix so users can track which node
           // is running. Mirrors the original namedAgent.name label convention.

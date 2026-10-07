@@ -125,6 +125,11 @@ export function resolveComposeNodeAgent(
   // additional restriction beyond the normal compose-node surface.
   if (resolvedAccess.allowedTools !== undefined) {
     result.canUseTool = buildAllowlistCanUseTool(resolvedAccess.allowedTools);
+    // Contract: this value reflects the DECLARED frontmatter surface, not the
+    // effective provider surface. Compose nodes get a workspace-backed provider
+    // (nesting.ts:391, CHILD_ALLOWED_TOOLS) that grants write tools beyond the
+    // declared allowlist. compose-executor.ts overrides replaySafe to false for
+    // all workspace-backed nodes to close this gap.
     result.replaySafe = isComposeReplaySafe(resolvedAccess.allowedTools);
   }
 
