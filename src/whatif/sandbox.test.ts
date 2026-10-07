@@ -789,6 +789,81 @@ describe('materializeSandboxes: git worktrees', () => {
 });
 
 // ---------------------------------------------------------------------------
+// SEC-011: execFileSync array-arg call (no shell interpolation)
+// ---------------------------------------------------------------------------
+
+describe('SEC-011: worktree add/remove use execFileSync array args, not shell interpolation', () => {
+  let root: string;
+  let realHome: string;
+  let runDir: string;
+  let gitRepo: string;
+
+  beforeEach(() => {
+    root = tmpDir();
+    realHome = buildFakeHome(root);
+    runDir = join(root, 'run');
+
+    gitRepo = join(root, 'repo');
+    mkdirSync(gitRepo, { recursive: true });
+    writeFileSync(join(gitRepo, 'README.md'), '# test\n', 'utf8');
+    execSync('git init', { cwd: gitRepo, stdio: 'ignore' });
+    execSync('git config user.email "test@test.com"', { cwd: gitRepo, stdio: 'ignore' });
+    execSync('git config user.name "Test"', { cwd: gitRepo, stdio: 'ignore' });
+    execSync('git add .', { cwd: gitRepo, stdio: 'ignore' });
+    execSync('git commit -m "init"', { cwd: gitRepo, stdio: 'ignore' });
+  });
+
+  afterEach(async () => {
+    rmSyncRetry(root);
+  });
+
+  it('source code for addWorktree/removeWorktree calls execFileSync, not execSync with template string', async () => {
+    // Static assertion: read the sandbox source and verify the worktree helpers
+    // use execFileSync with array args, not execSync with template-interpolated strings.
+    // This is the SEC-011 guard: shell injection is impossible with array-arg execFileSync.
+    const { readFileSync: readFile } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const { dirname, join: pathJoin } = await import('node:path');
+    const thisDir = dirname(fileURLToPath(import.meta.url));
+    const src = readFile(pathJoin(thisDir, 'sandbox.ts'), 'utf8');
+
+    // addWorktree and removeWorktree must use execFileSync
+    expect(src).toContain("execFileSync('git', ['worktree', 'add'");
+    expect(src).toContain("execFileSync('git', ['worktree', 'remove'");
+
+    // Neither helper should use execSync with a template literal containing 'worktree'
+    // (the old shell-interpolated form was: execSync(`git worktree add --detach "${path}" HEAD`))
+    expect(src).not.toMatch(/execSync\(`git worktree/);
+  });
+
+  it('worktree integration: materializes successfully using execFileSync array args', async () => {
+    // Integration smoke: if execFileSync were still shell-interpolated, a path
+    // with a trailing space in the mkdtemp prefix would silently break — this
+    // confirms the real call path works end-to-end without shell quoting tricks.
+    const spec: ChangeSpec = {
+      title: 'sec-011-integration',
+      changes: [{ kind: 'file', path: 'project:SEC011.md', content: 'array-arg verified' }],
+    };
+    const { baseline, candidate, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: gitRepo,
+      runDir,
+      spec,
+      baseLaunch: BASE_LAUNCH,
+    });
+    try {
+      expect(baseline.cwd).not.toBe(gitRepo);
+      expect(candidate.cwd).not.toBe(gitRepo);
+      expect(existsSync(join(candidate.cwd, 'SEC011.md'))).toBe(true);
+      expect(existsSync(join(baseline.cwd, 'SEC011.md'))).toBe(false);
+      expect(existsSync(join(gitRepo, 'SEC011.md'))).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // memory-add (SQLite-backed) — runs if better-sqlite3 is available
 // ---------------------------------------------------------------------------
 
