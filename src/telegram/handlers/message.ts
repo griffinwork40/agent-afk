@@ -15,13 +15,14 @@ import { type TelegramRoute, routeFromCtx, routeKey } from '../route.js';
 import { senderPrefix } from '../sender-attribution.js';
 import { replyContextPrefix, type RepliedMessage } from '../reply-context.js';
 import { forwardProvenancePrefix } from '../forward-provenance.js';
-import type { ContentBlockParam, DocumentBlockParam } from '@anthropic-ai/sdk/resources';
+import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { handleDocumentMessage } from './document.js';
 import { drainBgInjections, prependToContent } from '../bg-injection.js';
 import { addressedToBot } from './message.addressed-to-bot.js';
 import { reactionMap } from '../reaction-map.js';
 import { handlePhotoImpl } from './message.photo-handler.js';
 import { processCompactDirectImpl } from './message.compact-handler.js';
+import { dispatchTelegramUserPromptSubmit } from './message.ups-dispatch.js';
 
 export { addressedToBot };
 
@@ -572,15 +573,11 @@ export class MessageHandler {
     let reEnqueued = false;
     try {
       const session = await this.sessionManager.getSession(route);
-      // User text for the stored turn record: joined text blocks (caption) for
-      // content-block (photo) messages, the raw string otherwise.
-      const userText = typeof content === 'string'
-        ? content
-        : content.map((b) => {
-            if (b.type === 'text') return b.text;
-            if (b.type === 'document') return `[document: ${(b as DocumentBlockParam).title ?? 'file'}]`;
-            return '[image]';
-          }).join(' ');
+      // Pre-turn UserPromptSubmit hook — mirrors REPL's dispatchUserPromptSubmit.
+      // Also extracts userText for the session-turn record (DocumentBlockParam labels).
+      const ups = await dispatchTelegramUserPromptSubmit(content, session.hookRegistry, session.getSessionMetadata?.().sessionId);
+      if (ups.shouldSkip) { if (ups.blockNotice) await ctx.reply(ups.blockNotice).catch(() => {}); return; }
+      content = ups.content;
       // Keep the "typing..." indicator alive for the whole (often multi-minute)
       // streamed turn; a one-shot chat action would expire after ~5s.
       await withTypingIndicator(ctx, () =>
@@ -589,7 +586,7 @@ export class MessageHandler {
           // Record the completed turn into the shared session store so the CLI
           // can `--resume <name>` this Telegram conversation. Best-effort inside.
           onComplete: (assistantText, metadata) => {
-            this.sessionManager.recordTelegramTurn(route, userText, assistantText, metadata);
+            this.sessionManager.recordTelegramTurn(route, ups.userText, assistantText, metadata);
           },
           // Map bot message ids -> session id for thumbs-reaction feedback.
           onBotMessage: (cid, mid) => { const sid = this.sessionManager.getSessionId(route); if (sid) reactionMap.set(cid, mid, sid); },

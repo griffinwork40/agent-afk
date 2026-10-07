@@ -312,6 +312,11 @@ export async function runDAG(
           try {
             const result = await node.run(inputs, nodeController.signal);
             return { id, result };
+          } catch (error) {
+            // Invariant: fail-fast cancels siblings as soon as a node fails,
+            // not after allSettled, so a sibling cannot replay during the gap.
+            if (failFast) dagController.abort('fail-fast');
+            throw error;
           } finally {
             // Clear the timer before any other cleanup so a fire-after-resolve
             // race can't leak into the next layer's controllers. Synchronous

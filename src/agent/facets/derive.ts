@@ -30,6 +30,8 @@ import {
 import { computeParallelDispatch } from './parallel-dispatch.js';
 import { parseTerminalState } from '../outcomes/terminal-state.js';
 import { detectPrUrlFromEvents } from './derive.pr-detect.js';
+import type { TraceSignals } from './derive.trace.js';
+import { checkDowngradeSignals } from './derive.downgrade.js';
 
 export interface DeriveOptions {
   /** Absolute path of the source session sidecar (recorded for provenance). */
@@ -51,6 +53,13 @@ export interface DeriveOptions {
    * parent's `tool_counts`. (#2461)
    */
   subagentBreakdown?: SubagentToolSummary[];
+  /**
+   * Signals extracted from the session's witness trace by the store layer.
+   * When absent (no trace available, or tracing disabled) all trace-backed
+   * downgrade signals are suppressed — absence is never treated as a
+   * downgrade. Populated by `store.ts` via `derive.trace.ts`. (#2798 cont.)
+   */
+  traceSignals?: TraceSignals;
 }
 
 const SUBAGENT_TOOLS = new Set(['agent', 'compose', 'skill']);
@@ -149,58 +158,6 @@ function deriveOutcome(
   }
 
   return { outcome, outcomeSource, primarySuccess, parsedDeferred, parsedEvidence };
-}
-
-/**
- * Check whether a self-reported `fully_achieved` should be downgraded to
- * `partially_achieved` based on corroborating signals (#2798). Returns the
- * first matching downgrade reason, or `undefined` when no signal fires.
- *
- * Evaluated in priority order (most reliable signal first):
- *   1. `deferred_items` — Done block has a non-empty "Deferred / pending"
- *      bullet. The agent itself declared pending work.
- *   2. `no_corroborating_evidence` — Done with zero world mutations (no file
- *      writes, edits, or commits) and no evidence bullet in the Done block.
- *      A pure-text Done with no observable side-effects is suspect.
- *   3. `compose_partial_nodes` — at least one compose call wound down partial
- *      (soft-deadline or tool-use-iteration cap) during the session.
- *
- * Signals that require external data (trace closure reasons) are deferred
- * and not implemented here.
- */
-function checkDowngradeSignals({
-  parsedDeferred,
-  parsedEvidence,
-  filesWritten,
-  filesEdited,
-  commits,
-  composePartialNodes,
-}: {
-  parsedDeferred: string | undefined;
-  parsedEvidence: string | undefined;
-  filesWritten: number;
-  filesEdited: number;
-  commits: number;
-  composePartialNodes: number;
-}): FacetOutcomeDowngradeReason | undefined {
-  // Signal 1: explicit deferred/pending items in the Done block.
-  if (parsedDeferred !== undefined && parsedDeferred.trim().length > 0) {
-    return 'deferred_items';
-  }
-
-  // Signal 2: no corroborating world mutations and no evidence bullet.
-  const hasMutation = filesWritten > 0 || filesEdited > 0 || commits > 0;
-  const hasEvidenceBullet = parsedEvidence !== undefined && parsedEvidence.trim().length > 0;
-  if (!hasMutation && !hasEvidenceBullet) {
-    return 'no_corroborating_evidence';
-  }
-
-  // Signal 3: compose partial nodes — some parallel work was cut short.
-  if (composePartialNodes > 0) {
-    return 'compose_partial_nodes';
-  }
-
-  return undefined;
 }
 
 /** Parse a stringified tool input to an object, swallowing malformed JSON. */
@@ -421,6 +378,7 @@ export function deriveSessionFacet(
       filesEdited,
       commits,
       composePartialNodes,
+      traceSignals: options.traceSignals,
     });
     if (outcomeDowngradeReason !== undefined) {
       outcome = 'partially_achieved';

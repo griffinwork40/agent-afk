@@ -42,7 +42,8 @@ import { anthropicLimitErrorEvent } from '../usage-limit.error.js';
  * advertised. The probe rate is low enough (~1/min) that it does not
  * constitute meaningful API abuse. A future optimisation could back off
  * exponentially after the first few failed probes, but that is not
- * warranted until measured as a real cost concern.
+ * warranted until measured as a real cost concern. Tracked in #3170 for
+ * re-evaluation when probe rate shows up in billing or latency profiles.
  */
 async function* runHotSwapParkLoop(
   ctx: RetryTierContext,

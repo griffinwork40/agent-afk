@@ -33,8 +33,14 @@ export type LedgerPayload =
       surface?: string;
       traceLabel?: string | null;
     }
-  /** A user turn entering the session (summary text, never raw blocks). */
-  | { kind: 'user'; text: string }
+  /**
+   * A user turn entering the session (summary text, never raw blocks).
+   * `text` is what the model saw, including any framework context prepended
+   * on the first turn (SessionStart hook output, bridge/memory/rules blocks).
+   * `input` is what the caller actually sent, recorded only when it differs
+   * from `text`, so list views can title a session without parsing preambles.
+   */
+  | { kind: 'user'; text: string; input?: string }
   /** A complete assistant message. */
   | { kind: 'assistant'; text: string }
   /** Extended-thinking block (clipped). */

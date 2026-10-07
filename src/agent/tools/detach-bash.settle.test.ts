@@ -17,9 +17,9 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DetachableToolRegistry, type DetachedToolResult } from './detach-registry.js';
-import { execOnDetach, SETTLE_AFTER_KILL_MS, BASH_SETTLE_TIMEOUT_SENTINEL } from './detach-bash.js';
+import { execOnDetach, SETTLE_AFTER_KILL_MS, BASH_SETTLE_TIMEOUT_SENTINEL, buildBashDelivery } from './detach-bash.js';
 import type { OnDetachParams } from './detach-bash.js';
 import type { DetachToken } from './detach-registry.js';
 
@@ -54,6 +54,11 @@ function makeStubbornProc(): {
 }
 
 describe('settle-after-kill fallback (Fix #2742)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  it('classifies the settle timeout sentinel as failed even with exit code zero', () => {
+    expect(buildBashDelivery('call-sentinel', 'bash', '', 0,
+      BASH_SETTLE_TIMEOUT_SENTINEL, Date.now()).status).toBe('failed');
+  });
   it(
     'deliver() fires within SETTLE_AFTER_KILL_MS when close never arrives',
     async () => {
@@ -209,6 +214,7 @@ describe('settle-after-kill fallback (Fix #2742)', () => {
   );
 
   it('close arriving before fallback timer cancels the timer (clearTimeout branch)', async () => {
+    vi.useFakeTimers();
     // Exercises the path: abort fires → startSettleFallback arms the timer →
     // proc.close() arrives before SETTLE_AFTER_KILL_MS → deliverOnce runs,
     // clears the timer, removes the stale startSettleFallback listener, and
@@ -250,11 +256,11 @@ describe('settle-after-kill fallback (Fix #2742)', () => {
     // Immediately emit close (exit 0) before the 5s timer fires.
     proc.emit('close', 0, null);
 
-    // Wait for settle to propagate.
-    const result = await Promise.race([
-      deliveredPromise,
-      new Promise<null>((r) => setTimeout(() => r(null), 500)),
-    ]);
+    // Verify cancellation itself, not just idempotent delivery: without
+    // clearTimeout the timer would remain pending despite deliverOnce's guard.
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(SETTLE_AFTER_KILL_MS + 1);
+    const result = await deliveredPromise;
 
     expect(result).not.toBeNull();
     // Delivered exactly once via the close path (not the fallback).

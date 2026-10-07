@@ -85,9 +85,8 @@ export const inboxCmd: SlashCommand = {
     const [verb, ...rest] = trimmed === '' ? ['list'] : trimmed.split(/\s+/);
     const arg = rest.join(' ').trim();
 
-    const modeCfg = getPeerInboundModeConfig();
-
     if (verb === 'list' || verb === undefined) {
+      const modeCfg = getPeerInboundModeConfig();
       const held = await listHeld(sessionId);
       if (held.length === 0) {
         ctx.out.info('No held messages.');

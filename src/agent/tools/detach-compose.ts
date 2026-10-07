@@ -206,10 +206,8 @@ export async function raceComposeDetach(
   // this second one resolves the race leg without coupling to that callback.
   const detachPromise = new Promise<ToolResult>((resolve) => {
     token.detachSignal.addEventListener('abort', () => {
-      // Defensive shouldDetach() guard — mirrors applyComposeDetach's listener.
-      // Prevents resolve() from firing if the token was already settled by the
-      // normal (DAG-finished-first) path and its abort was never triggered.
-      if (!token.shouldDetach()) return;
+      // The abort event itself establishes detachment; shouldDetach() would
+      // only recheck this signal's already-true aborted flag.
       resolve(token.detachResult(label));
     }, { once: true });
   });

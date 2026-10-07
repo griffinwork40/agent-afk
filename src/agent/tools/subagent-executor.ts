@@ -20,8 +20,11 @@ import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from 
 import { parseAgentInput, type AgentInput, type AgentExecutionMode } from './subagent/input-parse.js';
 import { emitTelemetry, truncate } from './subagent/failure-payload.js';
 import { buildChildConfig, type BuildChildConfigArgs } from './subagent/child-config.js';
-import { runBackgroundBranch } from './subagent/background-branch.js'; import { backgroundTarget } from './subagent/background-delivery.js'; import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
-import { sendMessageToAgent as executeSendMessage } from './subagent/send-message.js'; import { getBackgroundJobHealth as executeBackgroundHealth } from './subagent/background-health.js';
+import { runBackgroundBranch } from './subagent/background-branch.js';
+import { backgroundTarget } from './subagent/background-delivery.js';
+import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
+import { sendMessageToAgent as executeSendMessage } from './subagent/send-message.js';
+import { getBackgroundJobHealth as executeBackgroundHealth } from './subagent/background-health.js';
 import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
 import { createIsolatedWorktree } from './handlers/worktree-managed.js';
 import { lockWorktreeForBackground, teardownBackgroundWorktree } from './handlers/worktree-managed.background.js';
@@ -29,14 +32,13 @@ import { runWithStreamCutRetry, type StreamCutProbe } from '../subagent/stream-c
 import { debugLog } from '../../utils/debug.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { appendImageBlocks } from '../content/image-blocks.js';
-import { supportsVision } from '../model-capabilities.js';
+import { addForegroundNotices, withCatalogNotice } from './subagent-executor.notices.js';
 import { resolveSubagentAttachments } from './subagent/attachment-resolve.js';
 import { inboundAttachmentRegistry } from '../content/attachment-registry.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { buildAgentMaxDepthRefusal } from './skill-depth-message.js';
 import { buildBudgetRefusalMessage, type SpawnReceipt } from './delegation-budget.js';
-import { evaluateDispatchUsageForModel, prependUsageNotice } from './usage-notice.js';
-import { collectPostRunWarnings } from './subagent-executor.write-intent.js';
+import { evaluateDispatchUsageForModel } from './usage-notice.js';
 import { buildSubagentsLite } from './subagent-executor.lite-snapshot.js';
 import { updateWaveUnit } from '../manifest/write.js';
 import { WaveManifestTracker } from './subagent-executor.wave-manifest.js';
@@ -650,7 +652,7 @@ export class SubagentExecutor implements SubagentControl {
       // job finishes, preventing false resumption offers for completed work.
       const capturedWaveId = this.waveTracker.waveId;
       const capturedCallId = call.id;
-      return runBackgroundBranch({
+      return withCatalogNotice(runBackgroundBranch({
         handle,
         ...backgroundTarget(this.ctx),
         prompt: parsed.prompt,
@@ -676,7 +678,7 @@ export class SubagentExecutor implements SubagentControl {
               debugLog(`background worktree teardown: ${JSON.stringify(result)}`);
             } : undefined,
         isolationTeardown,
-      });
+      }), childConfig.model, this.ctx.traceWriter);
     }
 
     // Invariant: assemble multimodal content only after every label, promptHead,
@@ -750,9 +752,7 @@ export class SubagentExecutor implements SubagentControl {
     // Budget: foreground child finished — release the slot, unless the
     // promotion path deferred it to the registry's onSettled hook (Item 4).
     if (!promotionTookBudget.value) budgetRelease?.();
-    const warn = collectPostRunWarnings(childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, supportsVision);
-    if (warn && !result.isError) result.content = warn + result.content;
-    result.content = prependUsageNotice(usageNotice, result.content);
+    addForegroundNotices(result, childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, usageNotice, this.ctx.traceWriter);
     // Wave manifest: update unit to 'done' or 'failed' after the foreground run.
     if (result.isError === true) {
       this.updateCurrentWaveUnit(call.id, 'failed', typeof result.content === 'string' ? result.content.slice(0, 500) : undefined);

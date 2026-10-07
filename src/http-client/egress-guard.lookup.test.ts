@@ -37,6 +37,13 @@ function makeBlockError(hostname: string, blockedAddress: string): Error {
   );
 }
 
+/** Build the standard non-IP-error factory (mirrors egress-guard.ts production). */
+function makeNonIpError(hostname: string, record: string): Error {
+  return new EgressBlockedError(
+    `DNS lookup for ${hostname} returned a non-IP record: "${record}"`,
+  );
+}
+
 /** Call the lookup hook and await its callback result. */
 function callLookup(
   hookFn: (hostname: string, options: LookupOptions, callback: LookupCallback) => void,
@@ -87,6 +94,7 @@ describe('createGuardedLookup', () => {
         lookupFn: fixedLookup('93.184.216.34', '2606:2800:21f:cb07:6820:80da:af6b:8b2c'),
         isBlocked: () => false,
         makeBlockError,
+        makeNonIpError,
       });
 
       const result = await callLookup(hook, 'example.com', { all: true });
@@ -102,6 +110,7 @@ describe('createGuardedLookup', () => {
         lookupFn: fixedLookup('93.184.216.34', '::1'), // mixed public + private
         isBlocked: (ip) => ip === '::1',
         makeBlockError,
+        makeNonIpError,
       });
 
       const result = await callLookup(hook, 'example.com', { all: true });
@@ -118,6 +127,7 @@ describe('createGuardedLookup', () => {
         lookupFn: fixedLookup('93.184.216.34'),
         isBlocked: () => false,
         makeBlockError,
+        makeNonIpError,
       });
 
       const result = await callLookup(hook, 'example.com', { all: false });
@@ -132,6 +142,7 @@ describe('createGuardedLookup', () => {
         lookupFn: fixedLookup('127.0.0.1'),
         isBlocked: (ip) => ip === '127.0.0.1',
         makeBlockError,
+        makeNonIpError,
       });
 
       const result = await callLookup(hook, 'internal.example', { all: false });
@@ -150,6 +161,7 @@ describe('createGuardedLookup', () => {
       lookupFn: fixedLookup('93.184.216.34', '::1'),
       isBlocked: (ip) => ip === '::1',
       makeBlockError,
+      makeNonIpError,
     });
 
     const result = await callLookup(hook, 'example.com', { all: true, family: 4 });
@@ -164,6 +176,7 @@ describe('createGuardedLookup', () => {
       lookupFn: fixedLookup('93.184.216.34', '2606:2800:21f:cb07:6820:80da:af6b:8b2c'),
       isBlocked: () => false,
       makeBlockError,
+      makeNonIpError,
     });
 
     const result = await callLookup(hook, 'example.com', { all: true, family: 4 });
@@ -178,6 +191,7 @@ describe('createGuardedLookup', () => {
       lookupFn: fixedLookup('93.184.216.34', '2606:2800:21f:cb07:6820:80da:af6b:8b2c'),
       isBlocked: () => false,
       makeBlockError,
+      makeNonIpError,
     });
 
     const result = await callLookup(hook, 'example.com', { all: true, family: 6 });
@@ -192,6 +206,7 @@ describe('createGuardedLookup', () => {
       lookupFn: fixedLookup('93.184.216.34'), // only v4
       isBlocked: () => false,
       makeBlockError,
+      makeNonIpError,
     });
 
     // Request family:6 — no v6 records → should error, not return []
@@ -209,6 +224,7 @@ describe('createGuardedLookup', () => {
       lookupFn: vi.fn(async () => { throw dnsError; }),
       isBlocked: () => false,
       makeBlockError,
+      makeNonIpError,
     });
 
     const result = await callLookup(hook, 'example.com', { all: true });
@@ -221,6 +237,7 @@ describe('createGuardedLookup', () => {
       lookupFn: vi.fn(async () => { throw 'string rejection'; }),
       isBlocked: () => false,
       makeBlockError,
+      makeNonIpError,
     });
 
     const result = await callLookup(hook, 'example.com', { all: true });
@@ -238,6 +255,7 @@ describe('non-IP record handling', () => {
       lookupFn: vi.fn(async () => [{ address: 'not-an-ip' }]),
       isBlocked: () => false, // isBlocked is never reached — non-IP is caught first
       makeBlockError,
+      makeNonIpError,
     });
 
     const result = await callLookup(hook, 'example.com', { all: true });
@@ -252,12 +270,37 @@ describe('non-IP record handling', () => {
       lookupFn: vi.fn(async () => [{ address: '93.184.216.34' }, { address: 'cname.example.com' }]),
       isBlocked: () => false,
       makeBlockError,
+      makeNonIpError,
     });
 
     const result = await callLookup(hook, 'example.com', { all: true });
 
     expect(result.err).toBeInstanceOf(Error);
     expect(result.err?.message).toMatch(/non-IP record/);
+  });
+
+  it('non-IP record path rejects with EgressBlockedError (via makeNonIpError) — consistent error type, still fail-closed', async () => {
+    // Regression guard for #3181: before this fix the non-IP path used `new Error`
+    // directly. A caller pattern-matching the error type would classify it as a
+    // DNS failure rather than an SSRF block, even though the request is still
+    // blocked. Now the error comes from deps.makeNonIpError, which the production
+    // wiring (egress-guard.ts) implements as EgressBlockedError — consistent with
+    // the blocked-IP path that uses deps.makeBlockError.
+    const hook = createGuardedLookup({
+      lookupFn: vi.fn(async () => [{ address: 'cname.example.com' }]),
+      isBlocked: () => false,
+      makeBlockError,
+      makeNonIpError, // production-equivalent: returns EgressBlockedError
+    });
+
+    const result = await callLookup(hook, 'example.com', { all: true });
+
+    // Must be EgressBlockedError (not a plain Error) so callers can pattern-match
+    // the type correctly and classify it as an SSRF block, not a DNS failure.
+    expect(result.err).toBeInstanceOf(EgressBlockedError);
+    expect(result.err?.message).toMatch(/non-IP record/);
+    // The request must still be blocked (err is non-null → fail-closed invariant holds).
+    expect(result.err).not.toBeNull();
   });
 });
 
@@ -277,6 +320,7 @@ describe('callback throw recovery', () => {
       lookupFn: vi.fn(async () => [{ address: '93.184.216.34' }]),
       isBlocked: () => false,
       makeBlockError,
+      makeNonIpError,
     });
 
     // Build a callback that throws once then records subsequent calls.
@@ -311,6 +355,7 @@ describe('callback throw recovery', () => {
       lookupFn: vi.fn(async () => [{ address: '93.184.216.34' }]),
       isBlocked: () => false,
       makeBlockError,
+      makeNonIpError,
     });
 
     hook('example.com', { all: false }, ((..._args: unknown[]) => {
@@ -352,6 +397,7 @@ describe('real-undici contract', () => {
         lookupFn: async () => [{ address: '127.0.0.1' }],
         isBlocked: () => false, // allow loopback for this test only
         makeBlockError,
+        makeNonIpError,
       });
       const spyHook: typeof rawHook = (hostname, options, callback) => {
         if (options.all === true) receivedAllTrue = true;
@@ -388,6 +434,7 @@ describe('real-undici contract', () => {
             lookupFn: async () => [{ address: '127.0.0.1' }],
             isBlocked: () => true, // always block
             makeBlockError,
+            makeNonIpError,
           }),
         },
       });

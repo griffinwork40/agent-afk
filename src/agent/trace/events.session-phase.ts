@@ -103,6 +103,21 @@ export const SessionPhaseNameSchema = z.enum([
   // types.session-phase.ts for the full contract.
   'background_process_started',
   'background_process_settled',
+  // Compose node transport-failure recovery decision (dag-subagent.recovery.ts).
+  // Must mirror the SessionPhaseName union in types.session-phase.ts;
+  // session-phase.test.ts parity enforces it.
+  'compose_recovery_decision',
+  // Streaming connection opener diagnostics (opt-in AFK_CONNECT_RETRY_BUDGET_MS).
+  // Must mirror the SessionPhaseName union in types.session-phase.ts;
+  // session-phase.test.ts parity enforces it.
+  'connection_failure',
+  'connection_recovered',
+  'connection_budget_exhausted',
+  // In-turn context guard and catalog model awareness. Must mirror the
+  // SessionPhaseName union in types.session-phase.ts; session-phase.test.ts
+  // parity enforces it.
+  'context_pressure_wind_down',
+  'catalog_model_upgrade',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

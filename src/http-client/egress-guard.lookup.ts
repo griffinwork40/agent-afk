@@ -72,6 +72,14 @@ export interface GuardedLookupDeps {
   isBlocked: (ip: string) => boolean;
   /** Construct a block error with the appropriate message. */
   makeBlockError: (hostname: string, blockedAddress: string) => Error;
+  /**
+   * Construct an error for the case where a DNS record contains a non-IP
+   * address string. Kept on the deps interface (rather than using `new Error`
+   * inline) so callers can return a consistent error type (e.g.
+   * `EgressBlockedError`) without this module importing from `egress-guard.ts`
+   * and introducing an import cycle.
+   */
+  makeNonIpError: (hostname: string, record: string) => Error;
 }
 
 // ---------------------------------------------------------------------------
@@ -137,9 +145,7 @@ export function createGuardedLookup(
           if (isIP(record.address) === NOT_IP) {
             callOnce(
               callback,
-              new Error(
-                `DNS lookup for ${hostname} returned a non-IP record: "${record.address}"`,
-              ),
+              deps.makeNonIpError(hostname, record.address),
               '',
               0,
             );

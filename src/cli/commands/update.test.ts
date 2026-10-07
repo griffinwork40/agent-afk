@@ -179,7 +179,7 @@ describe('afk update', () => {
 
       expect(mockSpawn).toHaveBeenCalledWith(
         'npm',
-        ['install', '-g', 'agent-afk@1.11.0'],
+        ['install', '-g', '--allow-scripts=agent-afk', 'agent-afk@1.11.0'],
         expect.objectContaining({ stdio: 'inherit' }),
       );
       expect(mockWritePendingUpdateMarker).toHaveBeenCalledWith('1.11.0');
@@ -232,7 +232,7 @@ describe('afk update', () => {
       expect(mockFetchLatestVersion).toHaveBeenCalled();
       expect(mockSpawn).toHaveBeenCalledWith(
         'npm',
-        ['install', '-g', 'agent-afk@1.12.0'],
+        ['install', '-g', '--allow-scripts=agent-afk', 'agent-afk@1.12.0'],
         expect.objectContaining({ stdio: 'inherit' }),
       );
       expect(mockWritePendingUpdateMarker).toHaveBeenCalledWith('1.12.0');

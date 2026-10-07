@@ -183,6 +183,11 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     // A position update here is not safe without a repaint (the band is still on
     // screen at the old rows), so the correct fix is to note the stale state rather
     // than update it prematurely.
+    // Note: `bandGeometryStale` does NOT apply here. That flag is set by the
+    // SIGWINCH-immediate handler to signal that a resize event has invalidated
+    // the band geometry before the debounced repaint fires. This early-return
+    // path is a no-resize growth scenario where geometry is already consistent
+    // with the live screen; only the tracked row positions are behind.
     // #540 axis-2: archive the oldest `growOverflow` rows to scrollback as
     // SOFT-WRAPPABLE logical lines, then re-place the survivors at
     // [1, growRoom] — already hugging the new frame top (growRoom ===
