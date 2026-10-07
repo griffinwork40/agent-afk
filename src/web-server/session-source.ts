@@ -78,14 +78,14 @@ async function readLedgerHead(
         if (rec.cwd !== undefined) out.cwd = rec.cwd;
         if (rec.surface !== undefined) out.surface = rec.surface;
       } else if (rec.kind === 'user' && out.title === undefined) {
-        // Invariant: plugin-dispatched sessions concatenate the plugin
-        // preamble, bridge context, and the real user message into a single
-        // `user` record. Skipping the whole record (the pre-2026-09 behavior)
-        // left every plugin session untitled. Instead, peel the preamble and
-        // extract whatever the user actually typed.
-        const content = isPreamble(rec.text)
-          ? extractUserContent(rec.text)
-          : rec.text;
+        // Prefer `input` (the caller's own message, recorded when framework
+        // context was prepended). Older ledgers lack it, so fall back to
+        // `text`, which concatenates the plugin preamble, bridge context,
+        // and the real user message. Skipping the whole record (the
+        // pre-2026-09 behavior) left every plugin session untitled; instead,
+        // peel the preamble and extract whatever the user actually typed.
+        const source = rec.input ?? rec.text;
+        const content = isPreamble(source) ? extractUserContent(source) : source;
         if (content) out.title = truncateTitle(content);
         // If extraction returned nothing (pure-boilerplate record), fall
         // through and let a subsequent user record supply the title.
@@ -143,11 +143,24 @@ async function readAliveIds(): Promise<Set<string> | null> {
   }
 }
 
-/** Newest-first comparator. Sessions with no `updatedAt` sort last, stably. */
+/**
+ * Rank for a session with no `updatedAt`. An owned (`live`) session without a
+ * ledger was created moments ago and has not run its first turn, so it is the
+ * NEWEST thing in the list and sorts first; anything else without a timestamp
+ * is unknown-age and sorts last.
+ */
+function undatedRank(s: WebSessionSummary): number {
+  return s.mode === 'live' ? -1 : 1;
+}
+
+/**
+ * Newest-first comparator. Brand-new owned sessions (no ledger yet) sort
+ * first; other sessions with no `updatedAt` sort last, stably.
+ */
 function compareByUpdatedAtDesc(a: WebSessionSummary, b: WebSessionSummary): number {
-  if (a.updatedAt === undefined && b.updatedAt === undefined) return 0;
-  if (a.updatedAt === undefined) return 1;
-  if (b.updatedAt === undefined) return -1;
+  if (a.updatedAt === undefined && b.updatedAt === undefined) return undatedRank(a) - undatedRank(b);
+  if (a.updatedAt === undefined) return undatedRank(a);
+  if (b.updatedAt === undefined) return -undatedRank(b);
   if (a.updatedAt > b.updatedAt) return -1;
   if (a.updatedAt < b.updatedAt) return 1;
   return 0;
