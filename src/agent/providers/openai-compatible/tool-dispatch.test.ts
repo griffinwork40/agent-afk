@@ -783,6 +783,33 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
     ],
   });
 
+  it('winds a child down after context pressure, returning partial text within the window', async () => {
+    // Pin the operational threshold: this fixture exercises the wind-down mechanism at 85%;
+    // the default (95%) is covered by context-pressure.test.ts / context-pressure.guard.test.ts.
+    vi.stubEnv('AFK_CONTEXT_GUARD_PCT', '85');
+    const fixture = makeDispatcher();
+    const tool = toolCallTurn('pressure');
+    tool.chunks[0]!.choices![0]!.delta!.tool_calls![0]!.function!.arguments = JSON.stringify({ msg: 'x'.repeat(12000) });
+    tool.chunks[1]!.usage = { prompt_tokens: 108000, completion_tokens: 1000, total_tokens: 109000 };
+    scriptedTurns = [tool, { chunks: [
+      { choices: [{ delta: { content: 'Partial findings preserved.' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 110000, completion_tokens: 10, total_tokens: 110010 } },
+    ] }];
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk', source: 'config' }, model: 'gpt-4o-mini', synthesizedSessionId: 'sid',
+      promptStream: singleInput('go'), config: baseConfig({ depth: 1, subagentId: 'child' }), toolDispatcher: fixture.dispatcher,
+    });
+    const events = await collect(q);
+    expect(createCalls).toHaveLength(2);
+    expect(createCalls[1]!.args.tools).toBeUndefined();
+    const toolMessages = (createCalls[1]!.args.messages as Array<{ role: string; content: string }>).filter(m => m.role === 'tool');
+    expect(109000 + Buffer.byteLength(JSON.stringify(toolMessages)) / 3 + 4096).toBeLessThan(128000);
+    expect(events.some(e => e.type === 'assistant.message' && e.text.includes('Partial findings'))).toBe(true);
+    const completed = events.at(-1);
+    expect(completed?.type === 'turn.completed' && completed.usage.stopReason).toBe('context_pressure_wind_down');
+    vi.unstubAllEnvs();
+  });
+
   it('caps tool rounds at an explicit maxToolUseIterations, then runs a tools-stripped wind-down round', async () => {
     // Explicit cap of 3 → 3 tool rounds, then ONE tools-stripped wind-down round
     // where the model answers in text (no silent stop). Mirrors anthropic-direct's

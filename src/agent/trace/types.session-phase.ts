@@ -44,6 +44,8 @@ export type SessionPhaseName =
   | 'loop_start'
   | 'loop_end'
   | 'model_ttfb'
+  | 'context_pressure_wind_down'
+  | 'catalog_model_upgrade'
   // Interrupt→halt latency. A SINGLE event (no paired start) emitted on the
   // turn's abort path when an ESC soft-stop (`interrupt()`) is what ended the
   // stream, carrying in `durationMs` the wall-clock from the abort signal firing
@@ -271,7 +273,9 @@ export type SessionPhaseName =
   //   `status`, `exitCode` (string), `signal` (string|''), `durationMs`, and
   //   `bytes`. PURE OBSERVABILITY — never alters control flow.
   | 'background_process_started'
-  | 'background_process_settled';
+  | 'background_process_settled'
+  // Bounded compose node replay eligibility and actual redispatch. No control-flow effects.
+  | 'compose_recovery_decision';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

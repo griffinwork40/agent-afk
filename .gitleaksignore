@@ -14,13 +14,13 @@
 # ── (A) Public PKCE OAuth client IDs ─────────────────────────────────────────
 
 # SEC-001: Anthropic Claude Code OAuth PKCE client ID
-# src/agent/auth/keychain.ts:12  — OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
+# src/agent/auth/keychain.ts:12  — OAUTH_CLIENT_ID (public PKCE client ID, value in source)
 # Public client ID shipped in the open-source binary; no client secret exists for PKCE.
 f38600332a988fd7fa8599fc8fd3436641a43c97:src/agent/auth/keychain.ts:generic-api-key:12
 0a23cff444e6f878df2fd3b5cb47943edf8754f6:src/agent/auth/keychain.ts:generic-api-key:12
 
 # SEC-002: xAI (Grok) OAuth PKCE client ID
-# src/agent/providers/xai/oauth-constants.ts:11 — XAI_OAUTH_CLIENT_ID = 'b1a00492-073a-47ea-816f-4c329264a828'
+# src/agent/providers/xai/oauth-constants.ts:11 — XAI_OAUTH_CLIENT_ID (public PKCE client ID, value in source)
 # Public PKCE client ID for xAI's OAuth flow; listed in xAI's public developer docs.
 f38600332a988fd7fa8599fc8fd3436641a43c97:src/agent/providers/xai/oauth-constants.ts:generic-api-key:11
 efd78cf7b1bcf0cffd29ce73313e1c7087fbd735:src/agent/providers/xai/oauth-constants.ts:generic-api-key:11

@@ -24,6 +24,16 @@ export const MODEL_ENV_REGISTRY = [
     category: 'model',
   },
   {
+    name: 'AFK_CONTEXT_GUARD_PCT',
+    description: 'Temporary within-turn context guard operational threshold as percent of the effective provider-route limit (catalog metadata for subscription routes; contextLimitFor() for API-key routes). Default 95. Not a documented model capacity or guaranteed server cutoff. Valid range 1–99.',
+    type: 'number', required: false, default: '95', example: '90', category: 'model',
+  },
+  {
+    name: 'AFK_CONTEXT_GUARD_DISABLE',
+    description: 'Disable the temporary within-turn context pressure guard (1/true/yes/on). Restores unguarded tool-loop behavior; ordinary compaction and round caps remain enabled.',
+    type: 'boolean', required: false, default: '0', example: '1', category: 'model',
+  },
+  {
     name: 'AFK_COMPACT_KEEP_LAST_TURNS',
     description: 'Number of recent turns the compactor keeps verbatim during /compact. Default tuned in compact-handler.ts.',
     type: 'number',
