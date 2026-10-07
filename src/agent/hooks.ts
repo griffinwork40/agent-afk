@@ -54,8 +54,8 @@
  * scoped to the top-level (parent) session: subagent forks run the same init
  * path with the bubbled registry, so `AgentSession` skips the queue when
  * `parentSessionId` is set rather than prepending priming context to every
- * subagent's first prompt. The remaining hook events ignore `injectContext`
- * entirely.
+ * subagent's first prompt. PreToolUse context is appended to the final tool
+ * result (including non-blocking decisions). The remaining events ignore it.
  *
  * @module agent/hooks
  */
@@ -84,7 +84,7 @@ export interface HookDecision {
   /** Human-readable rationale for blocking or approving. */
   reason?: string;
   /**
-   * (PreToolUse block-path, SessionStart, SubagentStop, UserPromptSubmit, Stop) Framework-generated context to inject. For **PreToolUse**: appended to the `isError` tool_result so a blocking handler can explain what to do instead.
+   * (PreToolUse, SessionStart, SubagentStop, UserPromptSubmit, Stop) Framework-generated context to inject. For **PreToolUse**: appended to the final tool_result, including non-blocking decisions and later gate denials. Non-blocking context is appended after output capping and counted in a separate delivery hook_decision event only then; abandoned calls are not counted.
    *
    * For **SubagentStop**: queued to the parent session's input stream after
    * dispatch completes; dropped if the parent is aborting. DAG/compose and

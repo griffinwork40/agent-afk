@@ -121,6 +121,8 @@ export interface PreDispatchGateDeps {
   traceWriter: TraceSink | undefined;
   /** Returns whether this session has an implementation for `toolName`. */
   isRegisteredTool: (toolName: string) => boolean;
+  /** Capture non-blocking context for additive delivery on the final result. */
+  capturePreToolContext?: (call: ToolCall, context: string) => void;
   /** Generates the model-visible message for an allowlist denial. */
   denialReason: (toolName: string, permissionReason: string | undefined) => string;
 }
@@ -538,6 +540,7 @@ export async function runPreDispatchGates(
         signal: call.signal,
         ...(deps.traceWriter ? { traceWriter: deps.traceWriter } : {}),
       });
+      if (preDecision.injectContext) deps.capturePreToolContext?.(call, preDecision.injectContext);
       // Apply input rewrite from the hook chain. The registry dispatches all
       // handlers against the original context; last-writer-wins — the final
       // non-blocking hook's updatedInput is used. Hooks do NOT see each
