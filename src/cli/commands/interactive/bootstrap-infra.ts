@@ -136,6 +136,7 @@ export function createBootstrapInfra(a: {
         registry: backgroundRegistry,
         apiKey,
         maxCallsPerSession: a.cliConfig.maxSummaryCallsPerSession ?? 200,
+        ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
       })
     : undefined;
   bgSummarizer?.start();

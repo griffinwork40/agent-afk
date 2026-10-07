@@ -99,6 +99,8 @@ export interface ProviderProgress {
   taskId: string;
   description: string;
   summary?: string;
+  roundsUsed?: number;
+  budget?: number;
   lastToolName?: string;
   totalTokens: number;
   toolUses: number;

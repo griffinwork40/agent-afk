@@ -18,7 +18,7 @@ import { dequeueNext } from './queue-store.js';
 import { completeTask } from './lease-store.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import type { ScheduledTask } from './triggers.js';
-import type { TelemetryRecord, TelemetryTrigger, TaskCompletionDetails } from './scheduler.js';
+import type { TelemetryRecord, TaskCompletionDetails } from './scheduler.js';
 import { errorMessage } from '../../utils/errors.js';
 
 // ─── Context interface ────────────────────────────────────────────────────────
@@ -184,5 +184,3 @@ export function fireOnTaskComplete(
   }
 }
 
-// Re-export trigger type for consumers that import from this module.
-export type { TelemetryTrigger };

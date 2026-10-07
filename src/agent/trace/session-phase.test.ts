@@ -340,6 +340,7 @@ describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
     many_image_degraded: true,
     stream_accepted_after_drop: true,
     connection_retry: true,
+    connection_retry_exhausted: true,
     usage_notice: true,
     tool_degraded: true,
     strategy_nudge_fired: true,
@@ -349,6 +350,12 @@ describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
     orphan_repair: true,
     background_process_started: true,
     background_process_settled: true,
+    compose_recovery_decision: true,
+    connection_failure: true,
+    connection_recovered: true,
+    connection_budget_exhausted: true,
+    context_pressure_wind_down: true,
+    catalog_model_upgrade: true,
   };
 
   it('the Zod enum contains exactly the union members (no drift either way)', () => {

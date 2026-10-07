@@ -32,6 +32,13 @@ export function autoResumeDirective(bgResultPending: boolean): string {
     : '[auto-resume] A message from another afk session arrived above. Handle it per the peer-message rules; reply with send_to_session only if a reply is useful.';
 }
 
+/**
+ * Prefix shared by every auto-resume directive. Used to guard `promptHead` so
+ * synthetic wakeup text never masquerades as operator-typed content in the
+ * presence file.
+ */
+export const AUTO_RESUME_PREFIX = '[auto-resume]';
+
 /** Anything exposing a one-shot `drainInjections()`. */
 export interface InjectionSource {
   drainInjections(): string;
@@ -63,12 +70,19 @@ export function prependTurnInjections(runText: string, sources: readonly Injecti
  * `activity.promptHead` so peers can see what this session is working on.
  * This parameter MUST be the pre-injection text; passing the composited
  * `runText` would leak peer message bodies into the presence file.
+ * Auto-resume directives (text starting with `[auto-resume]`) are skipped:
+ * they are synthetic wakeup text, not operator-typed content, so they must
+ * never appear in `activity.promptHead`.
  *
  * When state is `'idle'`, `totalTurns` is `ctx.stats.totalTurns` after the
  * turn is counted — stored directly so resumed sessions start from the
- * correct historical total rather than resetting to 1. `rawUserText` is also
- * forwarded for first-turn fallback (see setPresenceActivityTurnEnd JSDoc).
+ * correct historical total rather than resetting to 1. `rawUserText` is
+ * forwarded for first-turn fallback (see setPresenceActivityTurnEnd JSDoc),
+ * but `setPresenceActivityTurnEnd` will silently discard it when it is a
+ * synthetic auto-resume directive — those must never appear as promptHead.
  */
+export function markPresenceTurn(sessionId: string | undefined, state: 'busy', rawUserText?: string): void;
+export function markPresenceTurn(sessionId: string | undefined, state: 'idle', rawUserText: string | undefined, totalTurns: number): void;
 export function markPresenceTurn(
   sessionId: string | undefined,
   state: 'idle' | 'busy',
@@ -78,8 +92,13 @@ export function markPresenceTurn(
   if (!sessionId) return;
   void setPresenceTurnState(sessionId, state);
   if (state === 'busy' && rawUserText !== undefined) {
+    // Skip auto-resume directives: they are synthetic wakeup text seeded into
+    // seedBuffer by tryAutoResume, not operator-typed content. Storing them
+    // in activity.promptHead would give peers a misleading "[auto-resume] …"
+    // presence snippet rather than the actual work the session was doing.
+    if (rawUserText.startsWith(AUTO_RESUME_PREFIX)) return;
     void setPresenceActivityPromptHead(sessionId, rawUserText);
   } else if (state === 'idle') {
-    void setPresenceActivityTurnEnd(sessionId, totalTurns ?? 0, rawUserText);
+    void setPresenceActivityTurnEnd(sessionId, totalTurns!, rawUserText);
   }
 }

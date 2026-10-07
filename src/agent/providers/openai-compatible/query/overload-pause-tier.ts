@@ -43,7 +43,7 @@ import { sleepWithAbort } from '../../shared/sleep-with-abort.js';
 import {
   resolveOverloadPauseCeilingMs,
   nextProbeDelayMs,
-} from '../../anthropic-direct/overload-pause.js';
+} from '../../shared/overload-pause-shared.js';
 import { OVERLOAD_EXHAUSTED } from '../../shared/overload-sentinel.js';
 import { getErrorStatus, isOpenAIOverloadError } from './retry.js';
 import type { IterationResult } from './stream-drive.js';

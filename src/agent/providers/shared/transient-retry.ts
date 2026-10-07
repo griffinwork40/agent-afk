@@ -10,8 +10,10 @@
  * Retryable errors:
  *   - Connection-phase network errors (ECONNRESET, DNS, socket) via
  *     `isConnectionPhaseNetworkError`.
- *   - Retryable connection-phase HTTP statuses (408/409/500/502/504) via
- *     `isRetryableConnectionStatus`.
+ *   - Retryable connection-phase HTTP statuses (408/500/502/504) via
+ *     `isRetryableConnectionStatus` — 409 Conflict is excluded here even
+ *     though the shared set includes it, because retrying a POST after a
+ *     409 is semantically wrong for one-shot calls (the conflict persists).
  *   - 429 Too Many Requests (transient rate-limit with a short retry-after).
  *   - 503 Service Unavailable / 529 Overloaded.
  *
@@ -86,6 +88,15 @@ export interface TransientRetryOpts {
    */
   onRetry?: (info: RetryInfo) => void;
   /**
+   * Called once when the retry budget is fully exhausted (all `maxRetries`
+   * attempts have been made and the last error is about to be rethrown). Lets
+   * callers emit a trace event for the terminal outcome without polling
+   * `onRetry` attempt counts. Fire-and-forget — errors here are not caught.
+   * Not called when the loop exits early due to abort, shouldStop, or a
+   * non-transient error.
+   */
+  onExhausted?: (info: RetryInfo) => void;
+  /**
    * Injected sleep function for tests. Defaults to `sleepWithAbort` (signal
    * propagates the abort) or plain `setTimeout` when no signal is given.
    */
@@ -102,17 +113,26 @@ function isAbortError(err: unknown): boolean {
  * Contract: true when `err` should be retried by this module.
  *
  * Retryable: connection-phase network errors (ECONNRESET etc.), retryable
- * connection-phase HTTP statuses (408/409/500/502/504), and transient server
+ * connection-phase HTTP statuses (408/500/502/504), and transient server
  * errors with statuses 429/503/529.
  *
  * NOT retryable: AbortError, APIConnectionTimeoutError (excluded by
- * `isConnectionPhaseNetworkError`), or any other status.
+ * `isConnectionPhaseNetworkError`), 409 Conflict (included in the shared
+ * `CONNECTION_PHASE_RETRYABLE_STATUSES` for streaming turn paths but excluded
+ * here — retrying a POST after a 409 is semantically wrong for one-shot calls
+ * because the conflict condition persists across attempts), or any other status.
  */
 function isTransientError(err: unknown): boolean {
   if (isAbortError(err)) return false;
   if (isConnectionPhaseNetworkError(err)) return true;
-  if (isRetryableConnectionStatus(err)) return true;
+  // Invariant: 409 Conflict is excluded from the one-shot retry path even
+  // though `isRetryableConnectionStatus` (shared with streaming turn paths)
+  // includes it. A POST 409 is not a transient condition — the conflict
+  // persists on retry. LLM APIs do not return 409 in practice, but the
+  // exclusion removes a latent semantic error.
   const status = (err as { status?: unknown }).status;
+  if (typeof status === 'number' && status === 409) return false;
+  if (isRetryableConnectionStatus(err)) return true;
   if (typeof status === 'number') {
     return status === 429 || status === 503 || status === 529;
   }
@@ -144,9 +164,12 @@ function codeOf(err: unknown): string | undefined {
  * Invariant: the first call to `attempt` is not counted as a retry; `maxRetries`
  * caps how many ADDITIONAL attempts are made after the first failure.
  *
- * A plain `AbortSignal` is synthesised when none is given so `sleepWithAbort`
- * always has a signal to race against (it resolves immediately on an already-
- * aborted signal, so this is always safe).
+ * Contract: when `opts.signal` is omitted a dummy `AbortController().signal` is
+ * synthesised so `sleepWithAbort` always has a signal to race against (it
+ * resolves immediately on an already-aborted signal, making this safe). The
+ * dummy signal never fires, so abort propagation is silently disabled in that
+ * case. All known production callers supply a real signal — if you add a new
+ * caller, pass `signal` explicitly to preserve abort semantics.
  */
 export async function withTransientRetry<T>(
   attempt: () => Promise<T>,
@@ -189,8 +212,17 @@ export async function withTransientRetry<T>(
       // Not a transient error: do not retry.
       if (!isTransientError(err)) throw err;
 
-      // Budget exhausted: do not retry.
-      if (n >= maxRetries) throw err;
+      // Budget exhausted: notify caller and rethrow.
+      if (n >= maxRetries) {
+        opts.onExhausted?.({
+          attempt: n + 1,
+          delayMs: 0,
+          error: err,
+          status: statusOf(err),
+          code: codeOf(err),
+        });
+        throw err;
+      }
 
       // Retry-after ceiling check: if the server mandated a long wait, refuse.
       const hint = parseRetryAfterMs(err);

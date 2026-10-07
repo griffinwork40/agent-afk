@@ -4,10 +4,23 @@
  * Tests the pure helpers (getCurrentBranch, queryPrState) and the top-level
  * writeFacetYield integration. No real git/gh processes are spawned.
  */
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { debugLog } from '../../utils/debug.js';
+vi.mock('../../utils/debug.js', () => ({ debugLog: vi.fn() }));
+
+const cacheDirs: string[] = [];
+let isolatedCacheDir: string;
+beforeEach(() => {
+  isolatedCacheDir = mkdtempSync(join(tmpdir(), 'yield-probe-'));
+  cacheDirs.push(isolatedCacheDir);
+  vi.mocked(debugLog).mockClear();
+});
+afterEach(() => {
+  for (const dir of cacheDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 import { getCurrentBranch, queryPrState, queryPrStateByUrl, writeFacetYield, patchYieldFields } from './yield-probe.js';
 import type { ExecFnYield } from './yield-probe.js';
 
@@ -145,16 +158,9 @@ describe('queryPrStateByUrl', () => {
 
 describe('writeFacetYield', () => {
   it('does nothing when getCurrentBranch returns null', async () => {
-    const patchSpy = vi.fn();
-    vi.doMock('./yield-probe.js', () => ({
-      getCurrentBranch: vi.fn().mockResolvedValue(null),
-      queryPrState: vi.fn(),
-      patchYieldFields: patchSpy,
-      writeFacetYield,
-    }));
     const exec: ExecFnYield = vi.fn().mockRejectedValue(new Error('no git'));
     // Should not throw even with no git
-    await expect(writeFacetYield('sess-xyz', exec)).resolves.toBeUndefined();
+    await expect(writeFacetYield('sess-xyz', exec, undefined, isolatedCacheDir)).resolves.toBeUndefined();
   });
 
   it('calls patchYieldFields with produced_pr=false when no PR found', async () => {
@@ -167,9 +173,8 @@ describe('writeFacetYield', () => {
       return { stdout: '[]', stderr: '' }; // no PR
     });
 
-    // patchYieldFields writes to disk; mock the cache path by passing a non-existent dir.
-    // The function reads from the cache and no-ops if the file doesn't exist — so no disk I/O.
-    await writeFacetYield('sess-xyz', exec, undefined);
+    // The isolated cache contains no entry, so patchYieldFields is a no-op.
+    await writeFacetYield('sess-xyz', exec, undefined, isolatedCacheDir);
     expect(callCount).toBe(2); // git + gh
   });
 
@@ -181,7 +186,7 @@ describe('writeFacetYield', () => {
       return { stdout: JSON.stringify([{ state: 'MERGED' }]), stderr: '' };
     });
 
-    await writeFacetYield('sess-abc', exec, undefined);
+    await writeFacetYield('sess-abc', exec, undefined, isolatedCacheDir);
 
     expect(calls[0]).toMatchObject({ file: 'git', args: ['symbolic-ref', '--short', 'HEAD'] });
     expect(calls[1]).toMatchObject({
@@ -244,12 +249,66 @@ function buildCachedFacet(
   }, null, 2) + '\n';
 }
 
-describe('writeFacetYield — pr_url cache paths (item 4, #2781)', () => {
+describe('writeFacetYield — cached yield integration (#2796)', () => {
+  it.each([
+    ['[]', false, null],
+    ['[{"state":"MERGED"}]', true, true],
+    ['[{"state":"OPEN"}]', true, false],
+  ])('patches the injected cache after branch response %s', async (stdout, produced_pr, pr_merged) => {
+    const sessionId = 'sess-branch-patch';
+    const file = join(isolatedCacheDir, `${sessionId}.json`);
+    writeFileSync(file, buildCachedFacet(sessionId, {
+      is_scheduled_session: false, produced_pr: null, pr_merged: null, pr_url: null,
+    }));
+    const exec: ExecFnYield = vi.fn().mockImplementation(async (command: string) => ({
+      stdout: command === 'git' ? 'afk/feature\n' : stdout, stderr: '',
+    }));
+    await writeFacetYield(sessionId, exec, undefined, isolatedCacheDir);
+    expect(JSON.parse(readFileSync(file, 'utf8')).yield_tracking).toMatchObject({
+      produced_pr, pr_merged, pr_url: null,
+    });
+    expect(debugLog).not.toHaveBeenCalled();
+  });
+
+  it('preserves produced_pr=true without a URL when branch lookup finds no PR', async () => {
+    const sessionId = 'sess-produced';
+    const file = join(isolatedCacheDir, `${sessionId}.json`);
+    const before = buildCachedFacet(sessionId, {
+      is_scheduled_session: false, produced_pr: true, pr_merged: true, pr_url: null,
+    });
+    writeFileSync(file, before);
+    const exec: ExecFnYield = vi.fn().mockImplementation(async (command: string) => ({
+      stdout: command === 'git' ? 'afk/feature\n' : '[]', stderr: '',
+    }));
+    await writeFacetYield(sessionId, exec, undefined, isolatedCacheDir);
+    expect(exec).toHaveBeenCalledTimes(2);
+    expect(readFileSync(file, 'utf8')).toBe(before);
+    expect(debugLog).not.toHaveBeenCalled();
+  });
+
+  it('logs the session and error class on branch gh failure without patching', async () => {
+    const sessionId = 'sess-branch-fail';
+    const file = join(isolatedCacheDir, `${sessionId}.json`);
+    const before = buildCachedFacet(sessionId, {
+      is_scheduled_session: false, produced_pr: null, pr_merged: null, pr_url: null,
+    });
+    writeFileSync(file, before);
+    const exec: ExecFnYield = vi.fn().mockImplementation(async (command: string) => {
+      if (command === 'git') return { stdout: 'afk/feature\n', stderr: '' };
+      throw new RangeError('private stderr must not be logged');
+    });
+    await writeFacetYield(sessionId, exec, undefined, isolatedCacheDir);
+    expect(readFileSync(file, 'utf8')).toBe(before);
+    expect(debugLog).toHaveBeenCalledExactlyOnceWith('[yield-probe] gh probe inconclusive', {
+      sessionId, path: 'branch', errorClass: 'RangeError',
+    });
+  });
+
   const prUrl = 'https://github.com/owner/repo/pull/42';
 
   it('uses gh pr view <url> (not branch lookup) when cache has pr_url', async () => {
     const sessionId = 'sess-cache-url';
-    const cacheDir = mkdtempSync(join(tmpdir(), 'yield-probe-url-'));
+    const cacheDir = isolatedCacheDir;
     writeFileSync(
       join(cacheDir, `${sessionId}.json`),
       buildCachedFacet(sessionId, { is_scheduled_session: false, produced_pr: true, pr_merged: null, pr_url: prUrl }),
@@ -261,10 +320,7 @@ describe('writeFacetYield — pr_url cache paths (item 4, #2781)', () => {
       return { stdout: JSON.stringify({ state: 'OPEN' }), stderr: '' };
     });
 
-    // Call the inner helpers directly with our cacheDir — this mirrors what
-    // writeFacetYield's URL path does (queryPrStateByUrl + patchYieldFields).
-    const state = await queryPrStateByUrl(exec, prUrl);
-    expect(state).toBe('open');
+    await writeFacetYield(sessionId, exec, undefined, cacheDir);
     // Confirm it called gh pr view with the URL, not git symbolic-ref
     expect(calls[0]).toMatchObject({
       file: 'gh',
@@ -272,7 +328,6 @@ describe('writeFacetYield — pr_url cache paths (item 4, #2781)', () => {
     });
     expect(calls.every((c) => c.file !== 'git')).toBe(true);
 
-    patchYieldFields(sessionId, true, false, cacheDir, prUrl);
     const written = JSON.parse(
       require('node:fs').readFileSync(join(cacheDir, `${sessionId}.json`), 'utf8'),
     ) as { yield_tracking: { produced_pr: unknown; pr_merged: unknown; pr_url: unknown } };
@@ -283,17 +338,19 @@ describe('writeFacetYield — pr_url cache paths (item 4, #2781)', () => {
 
   it('gh failure does NOT downgrade produced_pr=true when cache has pr_url', async () => {
     const sessionId = 'sess-gh-fail';
-    const cacheDir = mkdtempSync(join(tmpdir(), 'yield-probe-fail-'));
+    const cacheDir = isolatedCacheDir;
     writeFileSync(
       join(cacheDir, `${sessionId}.json`),
       buildCachedFacet(sessionId, { is_scheduled_session: false, produced_pr: true, pr_merged: null, pr_url: prUrl }),
     );
 
-    const exec: ExecFnYield = vi.fn().mockRejectedValue(new Error('gh auth error'));
-    // queryPrStateByUrl is already imported at the top of this file
-    const state = await queryPrStateByUrl(exec, prUrl);
-    // gh error → state is 'error' → writeFacetYield returns early, no patch
-    expect(state).toBe('error');
+    const before = readFileSync(join(cacheDir, `${sessionId}.json`), 'utf8');
+    const exec: ExecFnYield = vi.fn().mockRejectedValue(new TypeError('gh auth error'));
+    await writeFacetYield(sessionId, exec, undefined, cacheDir);
+    expect(readFileSync(join(cacheDir, `${sessionId}.json`), 'utf8')).toBe(before);
+    expect(debugLog).toHaveBeenCalledWith('[yield-probe] gh probe inconclusive', {
+      sessionId, path: 'url', errorClass: 'TypeError',
+    });
     // No patch fires — cached facet is unchanged — produced_pr stays true
     const still = JSON.parse(
       require('node:fs').readFileSync(join(cacheDir, `${sessionId}.json`), 'utf8'),

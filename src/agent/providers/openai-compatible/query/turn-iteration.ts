@@ -15,6 +15,8 @@
  */
 
 import OpenAI from 'openai';
+import { CONTEXT_PRESSURE_WIND_DOWN, CONTEXT_PRESSURE_NOTE } from '../../shared/context-pressure.js';
+import { WIND_DOWN_MAX_OUTPUT_TOKENS } from './context-pressure.js';
 import type { AgentConfig } from '../../../types/config-types.js';
 import type { ProviderEvent, ProviderUsage } from '../../../provider.js';
 import { buildMessages, buildUserContent, type OpenAIMessage } from '../messages.js';
@@ -135,7 +137,7 @@ export async function* runIteration(
   ctx: IterationContext,
   controller: AbortController,
   vision: boolean,
-  windDown: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null,
+  windDown: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | typeof CONTEXT_PRESSURE_WIND_DOWN | null,
 ): AsyncGenerator<ProviderEvent, IterationResult | null> {
   ctx.journal.sync(ctx.priorTurns); // commit point: what is about to be sent
   const messages = buildMessages({
@@ -161,7 +163,8 @@ export async function* runIteration(
 
   // Wind-down round: strip tools and append budget note to THIS request only.
   if (windDown !== null) {
-    const note = windDown === TOOL_USE_LOOP_CAPPED ? WIND_DOWN_NOTE : SOFT_DEADLINE_NOTE;
+    const note = windDown === TOOL_USE_LOOP_CAPPED ? WIND_DOWN_NOTE
+      : windDown === CONTEXT_PRESSURE_WIND_DOWN ? CONTEXT_PRESSURE_NOTE : SOFT_DEADLINE_NOTE;
     messages.push({ role: 'user', content: note });
   }
   const activeTools = windDown !== null ? undefined : ctx.activeOpenAITools();
@@ -172,6 +175,7 @@ export async function* runIteration(
     traceWriter: ctx.traceWriter,
     initSessionId: ctx.initSessionId,
     currentModel: ctx.currentModel,
+    endpoint: ctx.client.baseURL,
     isClosed: () => ctx.closed,
   };
 
@@ -187,7 +191,7 @@ export async function* runIteration(
       model: ctx.currentModel,
       messages,
       activeTools,
-      maxOutputTokens: ctx.opts.config.maxOutputTokens,
+      maxOutputTokens: windDown === CONTEXT_PRESSURE_WIND_DOWN ? WIND_DOWN_MAX_OUTPUT_TOKENS : ctx.opts.config.maxOutputTokens,
       effort: ctx.opts.config.effort, temperature: ctx.opts.config.temperature,
       isChatGptBackend,
     });
@@ -209,7 +213,7 @@ export async function* runIteration(
       model: ctx.currentModel,
       messages,
       activeTools,
-      maxOutputTokens: ctx.opts.config.maxOutputTokens,
+      maxOutputTokens: windDown === CONTEXT_PRESSURE_WIND_DOWN ? WIND_DOWN_MAX_OUTPUT_TOKENS : ctx.opts.config.maxOutputTokens,
       effort: ctx.opts.config.effort, temperature: ctx.opts.config.temperature,
     });
 
