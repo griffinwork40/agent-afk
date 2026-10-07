@@ -257,7 +257,7 @@ describe('LoopStageBar', () => {
     resizeUnsub = vi.fn();
     vi.spyOn(ResizeBus, 'subscribe').mockImplementation((fn: () => void) => {
       resizeCb = fn;
-      return resizeUnsub;
+      return resizeUnsub as unknown as () => void;
     });
   });
 
@@ -468,11 +468,11 @@ describe('LoopStageBar — idle GROW footer ghost erase', () => {
     resizeImmUnsub = vi.fn();
     vi.spyOn(ResizeBus, 'subscribe').mockImplementation((fn: () => void) => {
       resizeCb = fn;
-      return resizeUnsub;
+      return resizeUnsub as unknown as () => void;
     });
     vi.spyOn(ResizeBus, 'subscribeImmediate').mockImplementation((fn: () => void) => {
       resizeImmCb = fn;
-      return resizeImmUnsub;
+      return resizeImmUnsub as unknown as () => void;
     });
   });
 

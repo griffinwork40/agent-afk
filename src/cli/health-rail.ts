@@ -181,6 +181,7 @@ export class HealthRail {
       this.tickInterval = null;
     }
     this.preResizePaintedRow = null;
+    this.lastPaintedRow = null;
     this.clearRow();
     this.onRowCountChange?.(0);
   }

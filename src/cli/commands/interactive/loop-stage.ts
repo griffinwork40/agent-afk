@@ -311,6 +311,7 @@ export class LoopStageBar {
       this.resizeImmediateUnsub = null;
     }
     this.preResizePaintedRow = null;
+    this.lastPaintedRow = null;
     this.clearRow();
     // Release our 1-row reservation.
     this.onRowCountChange?.(0);

@@ -261,9 +261,9 @@ describe('T4: CPR data-listener intercepts reply before readline emits keypress'
         pendingResizeErase: null,
         logUpdate: { topRow: 20 },
         anchorRow: 1 as number | undefined,
-        repaintCalls: 0,
-        repaint() { this.repaintCalls++; },
-      } as unknown as CprHost & { repaintCalls: number };
+        pendingEvictionRows: 0,
+        repaint: vi.fn(),
+      } as unknown as CprHost;
     })();
 
     const dataBefore = host.stdin.listenerCount('data');
@@ -279,7 +279,49 @@ describe('T4: CPR data-listener intercepts reply before readline emits keypress'
     expect(host.stdin.listenerCount('data')).toBe(dataBefore);
     expect(host.cprPending).toBe(false);
     expect(host.lastMeasuredFrameTop).toBe(35); // 20+15
-    expect(host.repaintCalls).toBe(1);
+    expect(host.repaint).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-emits non-CPR bytes surrounding the reply', async () => {
+    const host = (() => {
+      const stdin = new PassThrough() as unknown as NodeJS.ReadStream & { isTTY: boolean };
+      stdin.isTTY = true;
+      const stdout = new PassThrough() as unknown as NodeJS.WriteStream;
+      return {
+        stdout,
+        stdin,
+        armed: true,
+        cprPending: false,
+        cprBurst: null,
+        lastMeasuredFrameTop: 20,
+        lastMeasuredFrameBottom: 23,
+        committedBandTopRow: 15,
+        committedBandBottomRow: 19,
+        pendingResizeErase: null,
+        logUpdate: { topRow: 20 },
+        anchorRow: 1 as number | undefined,
+        pendingEvictionRows: 0,
+        repaint: vi.fn(),
+      } as unknown as CprHost;
+    })();
+
+    requestCprAndApplyDelta(host, 20, 50, 50);
+
+    // Mixed chunk: keystrokes + CPR reply + keystrokes
+    const unshifted: Buffer[] = [];
+    const origUnshift = host.stdin.unshift.bind(host.stdin);
+    host.stdin.unshift = ((chunk: Buffer) => {
+      unshifted.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as unknown as string));
+      origUnshift(chunk);
+    }) as typeof host.stdin.unshift;
+
+    host.stdin.emit('data', Buffer.from('ab\x1b[24;1Rcd'));
+    await Promise.resolve();
+
+    expect(host.stdin.listenerCount('data')).toBe(0); // listener removed
+    // The non-CPR bytes 'ab' and 'cd' must be re-emitted
+    const combined = Buffer.concat(unshifted).toString();
+    expect(combined).toBe('abcd');
   });
 });
 
@@ -327,7 +369,7 @@ describe('T5: dispatchKey silently drops CPR reply sequences', () => {
 
   it('does not call repaint for a CPR-shaped sequence', () => {
     const host = makeMinimalDispatchHost();
-    const cprKey: KeyInfo = { sequence: '\x1b[25;1R', name: undefined, ctrl: false, meta: false, shift: false, code: '' };
+    const cprKey: KeyInfo = { sequence: '\x1b[25;1R', name: undefined, ctrl: false, meta: false, shift: false };
     dispatchKey(host, undefined, cprKey);
     expect(host.repaint).not.toHaveBeenCalled();
     expect(host.scheduleRepaint).not.toHaveBeenCalled();
@@ -336,7 +378,7 @@ describe('T5: dispatchKey silently drops CPR reply sequences', () => {
   it('does not call repaint for various CPR formats', () => {
     const host = makeMinimalDispatchHost();
     for (const seq of ['\x1b[1;1R', '\x1b[50;80R', '\x1b[999;1R']) {
-      const key: KeyInfo = { sequence: seq, name: undefined, ctrl: false, meta: false, shift: false, code: '' };
+      const key: KeyInfo = { sequence: seq, name: undefined, ctrl: false, meta: false, shift: false };
       dispatchKey(host, undefined, key);
     }
     expect(host.repaint).not.toHaveBeenCalled();
@@ -346,7 +388,7 @@ describe('T5: dispatchKey silently drops CPR reply sequences', () => {
     const host = makeMinimalDispatchHost();
     // 'a' key — should reach handlePrintable → applyEdit (which would call
     // scheduleRepaint on the real compositor; here we just verify applyEdit fires).
-    const aKey: KeyInfo = { sequence: 'a', name: 'a', ctrl: false, meta: false, shift: false, code: '' };
+    const aKey: KeyInfo = { sequence: 'a', name: 'a', ctrl: false, meta: false, shift: false };
     dispatchKey(host, 'a', aKey);
     expect(host.applyEdit).toHaveBeenCalled();
   });

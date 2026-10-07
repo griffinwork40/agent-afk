@@ -259,6 +259,14 @@ function _requestCpr(self: CprHost): void {
   const onData = (chunk: Buffer | string): void => {
     buf += typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
 
+    // Runaway-buffer guard: a CPR reply is ~12 bytes; anything over 64
+    // means junk is accumulating — abandon and let the timeout clean up.
+    if (buf.length > 64) {
+      cleanup(onData);
+      if (self.armed) { self.cprBurst = null; self.repaint(); }
+      return;
+    }
+
     // A CPR reply is always terminated by 'R'. Scan forward; we may have
     // received an ESC[nn;nnR embedded among other bytes emitted simultaneously
     // (rare but possible on a remote PTY with buffered keystrokes).
@@ -274,11 +282,21 @@ function _requestCpr(self: CprHost): void {
     const parsed = parseCprReply(candidate);
     if (!parsed) {
       // Not a well-formed CPR — discard this candidate and keep looking.
-      buf = buf.slice(escIdx + candidate.length);
+      // Advance past only the ESC character to preserve remaining bytes.
+      buf = buf.slice(escIdx + 1);
       return;
     }
 
     cleanup(onData);
+
+    // ── Re-emit unconsumed bytes so keystrokes are not swallowed ──────────
+    const consumedEnd = escIdx + candidate.length;
+    const before = buf.slice(0, escIdx);
+    const after = buf.slice(consumedEnd);
+    const unconsumed = before + after;
+    if (unconsumed.length > 0) {
+      self.stdin.unshift(Buffer.from(unconsumed));
+    }
 
     if (!self.armed) {
       // Disarmed between request and reply — discard and clear burst.
