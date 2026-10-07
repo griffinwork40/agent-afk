@@ -9,11 +9,11 @@
  * still painted at the OLD rows while the real content (including the frozen
  * pre-resize copy) now sits `delta` rows lower, causing the visible duplicate.
  *
- * Fix: on a row-count-increasing SIGWINCH, emit ESC[6n (Device Status Report
+ * Fix: on a row-count-changing SIGWINCH, emit ESC[6n (Device Status Report
  * — Report Cursor Position). The terminal (and tmux) echoes back ESC[row;colR
- * with the REAL cursor row, which has moved DOWN by exactly `delta` rows along
- * with the content. delta = reportedRow - expectedRow. We then shift every
- * tracked absolute row by delta before the next repaint.
+ * with the REAL cursor row, which has moved by exactly `delta` rows along
+ * with the content. delta = reportedRow − originalExpectedRow. We then shift
+ * every tracked absolute row by delta before the next repaint.
  *
  * Safety contracts:
  *   1. The CPR reply MUST be consumed before readline's `keypress` listener
@@ -22,12 +22,50 @@
  *      can emit the bytes as a keypress. The listener is removed once the reply
  *      arrives or the timeout fires.
  *   2. A short timeout (~120ms) falls back to the existing behaviour when the
- *      terminal does not answer (non-answering terminals, pipes, tests).
+ *      terminal does not answer (non-answering terminals, pipes, tests). On
+ *      timeout we ALWAYS repaint so the frame reflows to the new geometry.
  *   3. Repaints are suppressed while the CPR is pending so the old stale-row
  *      repaint cannot race the delta correction.
  *   4. A stray/late CPR reply that arrives after the timeout already cleared
  *      the `armed` flag is silently discarded by the data listener guard.
+ *
+ * Burst correctness — "measure until quiescent" (Tasks 1 & 2):
+ *   When a SIGWINCH arrives while a CPR is already in-flight:
+ *     • `dirty` is set on the in-flight burst context.
+ *     • grow/shrink totals are accumulated (for the plausibility range).
+ *     • `currentRows` is updated to the latest terminal row count.
+ *     • `originalExpectedRow` is NEVER changed — no render has happened since
+ *       the first CPR was requested, so the cursor has only been shifted by
+ *       the terminal and `originalExpectedRow` still identifies the pre-burst
+ *       cursor position in content-space.
+ *   When a CPR reply arrives:
+ *     • If `dirty` (a newer SIGWINCH arrived): clear dirty, emit a FRESH CPR
+ *       (keeping originalExpectedRow and accumulators), do NOT apply/repaint.
+ *       Re-queries are capped at CPR_MAX_REQUERY (8); on cap, fall back + repaint.
+ *     • If not dirty (terminal is quiescent): compute
+ *       delta = reportedRow − originalExpectedRow, validate plausibility, apply
+ *       (if non-zero), then ALWAYS repaint so the frame reflows to the new
+ *       geometry (the debounced resize repaint may have been suppressed while
+ *       cprPending was true).
+ *
+ * This eliminates three defects from the earlier "requeue geometry" design:
+ *   ✗ Double-shift: old design applied first-reply delta then re-applied the
+ *     cumulative second delta on top. New: single apply from originalExpectedRow.
+ *   ✗ Mid-burst paint: old design repainted after each reply. New: repaint
+ *     only after the quiescent reply.
+ *   ✗ Lost repaint: old design skipped repaint when delta==0. New: always
+ *     repaint after the final reply so the frame reflows to the new row count.
+ *
+ * Plausibility guard (Task 2):
+ *   tmux can shift content by at most the sum of all GROW steps or sum of all
+ *   SHRINK steps in the burst since the last render. Plausible range:
+ *     delta ∈ [−shrinkTotal, +growTotal]
+ *   If the measured delta falls outside this range the cursor was not where we
+ *   assumed — discard the delta, fall back, repaint. Under AFK_DEBUG_COMPOSITOR
+ *   a one-line stderr diagnostic is written.
  */
+
+import { env } from '../config/env.js';
 
 /** Regex that matches a complete CPR response: ESC [ row ; col R */
 export const CPR_REPLY_RE = /^\x1b\[(\d+);(\d+)R$/;
@@ -53,8 +91,14 @@ export const CPR_REQUEST = '\x1b[6n';
 export const CPR_TIMEOUT_MS = 120;
 
 /**
+ * Maximum number of re-queries issued within one burst before giving up.
+ * Guards against a pathological burst that never quiesces.
+ */
+export const CPR_MAX_REQUERY = 8;
+
+/**
  * Narrowest host slice needed by the CPR sub-system.
- * All absolute-row fields that must be shifted on a tmux EXPAND.
+ * All absolute-row fields that must be shifted on a tmux EXPAND or SHRINK.
  */
 export interface CprHost {
   readonly stdout: NodeJS.WriteStream;
@@ -63,6 +107,34 @@ export interface CprHost {
 
   /** Whether a CPR is in-flight; suppresses repaints while true. */
   cprPending: boolean;
+
+  /**
+   * Burst-tracking context for the "measure until quiescent" algorithm.
+   *
+   * Created by `requestCprOrMarkDirty` when the first CPR of a burst is
+   * requested, and cleared once the burst resolves (quiescent reply, cap
+   * reached, or timeout). While a CPR is in-flight, subsequent SIGWINCHes
+   * update this context (dirty=true, accumulate totals, update currentRows)
+   * instead of emitting a second CPR.
+   *
+   * Fields:
+   *   dirty              — true when a SIGWINCH arrived since the last CPR emit.
+   *   originalExpectedRow — cursor row at the START of this burst; never changes.
+   *   currentRows        — latest terminal row count.
+   *   growTotal          — sum of all positive row-count deltas since last render.
+   *   shrinkTotal        — sum of absolute negative row-count deltas since last render.
+   *   requeryCt          — number of mid-burst re-queries issued (cap: CPR_MAX_REQUERY).
+   *
+   * `null` when no burst is in progress.
+   */
+  cprBurst: {
+    dirty: boolean;
+    originalExpectedRow: number;
+    currentRows: number;
+    growTotal: number;
+    shrinkTotal: number;
+    requeryCt: number;
+  } | null;
 
   // Absolute rows to translate on CPR reply.
   lastMeasuredFrameTop: number;
@@ -77,24 +149,98 @@ export interface CprHost {
   repaint(): void;
 }
 
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 /**
- * Emit a CPR request and install a one-shot stdin `data` listener that
- * intercepts the reply BEFORE readline emits it as a keypress.
+ * Called by handleResizeImmediate on every SIGWINCH that changes row count.
  *
- * @param self           The compositor host (must be armed when called).
- * @param expectedRow    The compositor's expected cursor row = `lastMeasuredFrameBottom`
- *                       at the time handleResizeImmediate fired. CupFrameRenderer parks
- *                       the cursor at the LAST content row (frame bottom = targetBottomRow)
- *                       after each render — NOT at the frame top. tmux shifts this cursor
- *                       downward together with the on-screen content by `delta` rows.
- * @param newRows        The new terminal row count (post-SIGWINCH stdout.rows).
+ * If no CPR is in-flight: starts a fresh measurement burst.
+ * If a CPR is in-flight: marks the burst dirty and accumulates the geometry
+ *   change — a fresh CPR will be emitted once the in-flight one resolves.
+ *
+ * @param expectedRow  lastMeasuredFrameBottom at the time this SIGWINCH fired.
+ *                     Used as `originalExpectedRow` only when seeding a new
+ *                     burst (no CPR in-flight).
+ * @param newRows      stdout.rows after this SIGWINCH.
+ * @param rowDelta     newRows − prevRows for this specific step: positive for
+ *                     GROW, negative for SHRINK.
+ */
+export function requestCprOrMarkDirty(
+  self: CprHost,
+  expectedRow: number,
+  newRows: number,
+  rowDelta: number,
+): void {
+  if (!self.cprPending) {
+    // No CPR in-flight — seed a fresh burst and start measuring.
+    self.cprBurst = {
+      dirty: false,
+      originalExpectedRow: expectedRow,
+      currentRows: newRows,
+      growTotal: rowDelta > 0 ? rowDelta : 0,
+      shrinkTotal: rowDelta < 0 ? -rowDelta : 0,
+      requeryCt: 0,
+    };
+    _requestCpr(self);
+    return;
+  }
+
+  // CPR in-flight — update burst context, do NOT emit a second CPR now.
+  if (self.cprBurst === null) {
+    // Defensive: pending but no context (e.g. direct test call). Create one.
+    self.cprBurst = {
+      dirty: true,
+      originalExpectedRow: expectedRow,
+      currentRows: newRows,
+      growTotal: rowDelta > 0 ? rowDelta : 0,
+      shrinkTotal: rowDelta < 0 ? -rowDelta : 0,
+      requeryCt: 0,
+    };
+  } else {
+    self.cprBurst.dirty = true;
+    self.cprBurst.currentRows = newRows;
+    if (rowDelta > 0) self.cprBurst.growTotal += rowDelta;
+    else if (rowDelta < 0) self.cprBurst.shrinkTotal += -rowDelta;
+  }
+}
+
+/**
+ * Legacy entry point for direct test usage. Seeds a burst context with a
+ * single-step rowDelta and calls _requestCpr. New callers should use
+ * requestCprOrMarkDirty.
  */
 export function requestCprAndApplyDelta(
   self: CprHost,
   expectedRow: number,
   newRows: number,
+  rowDelta: number,
 ): void {
-  if (self.cprPending) return; // already in-flight — skip
+  if (self.cprPending) return;
+  self.cprBurst = {
+    dirty: false,
+    originalExpectedRow: expectedRow,
+    currentRows: newRows,
+    growTotal: rowDelta > 0 ? rowDelta : 0,
+    shrinkTotal: rowDelta < 0 ? -rowDelta : 0,
+    requeryCt: 0,
+  };
+  _requestCpr(self);
+}
+
+// ---------------------------------------------------------------------------
+// Internal implementation
+// ---------------------------------------------------------------------------
+
+/**
+ * Emit a CPR request and install a one-shot stdin `data` listener that
+ * intercepts the reply BEFORE readline emits it as a keypress.
+ *
+ * Reads self.cprBurst for all burst context (originalExpectedRow, dirty, etc.).
+ * Must be called with self.cprPending === false.
+ */
+function _requestCpr(self: CprHost): void {
   self.cprPending = true;
 
   // Accumulation buffer: the CPR reply is usually a single chunk but may
@@ -134,13 +280,71 @@ export function requestCprAndApplyDelta(
 
     cleanup(onData);
 
-    if (!self.armed) return; // disarmed between request and reply — discard
+    if (!self.armed) {
+      // Disarmed between request and reply — discard and clear burst.
+      self.cprBurst = null;
+      return;
+    }
+
+    const burst = self.cprBurst;
+
+    // ── Burst check: re-query if terminal is not yet quiescent ────────────
+    if (burst?.dirty) {
+      if (burst.requeryCt >= CPR_MAX_REQUERY) {
+        // Hit the cap — give up, fall back, ALWAYS repaint.
+        if (env.AFK_DEBUG_COMPOSITOR) {
+          process.stderr.write(
+            `[afk/cpr] re-query cap (${CPR_MAX_REQUERY}) reached — falling back + repainting\n`,
+          );
+        }
+        self.cprBurst = null;
+        self.repaint();
+        return;
+      }
+      // More SIGWINCHes arrived — re-query, keeping originalExpectedRow and accumulators.
+      burst.dirty = false;
+      burst.requeryCt += 1;
+      _requestCpr(self);
+      return;
+    }
+
+    // ── Quiescent reply — compute delta from originalExpectedRow ──────────
+    const expectedRow = burst?.originalExpectedRow ?? parsed.row; // fallback: delta=0
+    const currentRows = burst?.currentRows ?? (self.stdout.rows ?? 24);
+    const growTotal = burst?.growTotal ?? 0;
+    const shrinkTotal = burst?.shrinkTotal ?? 0;
 
     const delta = parsed.row - expectedRow;
-    if (delta !== 0) {
-      applyScrollDelta(self, delta, newRows);
-      self.repaint();
+
+    // ── Plausibility guard ────────────────────────────────────────────────
+    // Accumulated range since the last render: delta ∈ [−shrinkTotal, +growTotal].
+    // Any measured delta outside this range indicates the cursor moved for
+    // reasons we don't model — discard the delta, fall back, repaint.
+    const lo = -shrinkTotal;
+    const hi = growTotal;
+    if (delta < lo || delta > hi) {
+      if (env.AFK_DEBUG_COMPOSITOR) {
+        process.stderr.write(
+          `[afk/cpr] plausibility guard: delta=${delta} outside [${lo},${hi}]` +
+          ` (growTotal=${growTotal}, shrinkTotal=${shrinkTotal},` +
+          ` originalExpectedRow=${expectedRow}, reportedRow=${parsed.row})` +
+          ` — discarding CPR delta, falling back + repainting\n`,
+        );
+      }
+      self.cprBurst = null;
+      self.repaint(); // ALWAYS repaint even when discarding
+      return;
     }
+
+    // Apply the delta (may be 0 on a net-zero burst — still repaint below).
+    if (delta !== 0) {
+      applyScrollDelta(self, delta, currentRows);
+    }
+    self.cprBurst = null;
+    // ALWAYS repaint after the quiescent reply so the frame reflows to the
+    // new geometry — even when delta==0, because the debounced resize repaint
+    // may have been suppressed while cprPending was true.
+    self.repaint();
   };
 
   // Contract (interception ordering): readline's `emitKeypressEvents` installs
@@ -155,10 +359,13 @@ export function requestCprAndApplyDelta(
 
   timer = setTimeout(() => {
     cleanup(onData);
-    // Timeout: terminal did not answer — fall back to existing behaviour.
-    // The pendingResizeErase snapshot (if any) is already set; the next
-    // repaint will proceed without a delta correction (correct for terminals
-    // that do not shift history on grow).
+    // Timeout: terminal did not answer — fall back to existing behaviour AND
+    // ALWAYS repaint so the frame reflows to the new geometry. The
+    // pendingResizeErase snapshot (if any) is already set; the repaint will
+    // proceed without a delta correction (correct for terminals that do not
+    // shift history on resize).
+    self.cprBurst = null;
+    self.repaint();
   }, CPR_TIMEOUT_MS);
 
   // Emit the CPR request AFTER installing the listener so we cannot miss a
@@ -168,6 +375,7 @@ export function requestCprAndApplyDelta(
   } catch {
     // stdout closed — clean up immediately.
     cleanup(onData);
+    self.cprBurst = null;
   }
 }
 

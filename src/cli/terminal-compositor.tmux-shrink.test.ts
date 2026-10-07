@@ -55,6 +55,7 @@ function makeCprHost(opts: {
     stdin,
     armed: true,
     cprPending: false,
+    cprBurst: null,
     lastMeasuredFrameTop: opts.frameTop ?? 0,
     lastMeasuredFrameBottom: opts.frameBottom ?? 0,
     committedBandTopRow: opts.bandTop ?? 0,
@@ -150,8 +151,8 @@ describe('S2: negative delta applied correctly to all tracked rows', () => {
       anchorRow: 10,
     });
 
-    // Use expectedRow=45 (frameBottom), newRows=29.
-    requestCprAndApplyDelta(host, /* expectedRow= */ 45, /* newRows= */ 29);
+    // Use expectedRow=45 (frameBottom), newRows=29, rowDelta=−21 (shrink).
+    requestCprAndApplyDelta(host, /* expectedRow= */ 45, /* newRows= */ 29, /* rowDelta= */ -21);
     expect(host.cprPending).toBe(true);
 
     // CPR reply: cursor moved to row 24 (delta = 24 - 45 = -21).
@@ -169,14 +170,16 @@ describe('S2: negative delta applied correctly to all tracked rows', () => {
     expect(host.anchorRow).toBe(1); // 10 - 21 = -11 → clamped to 1
   });
 
-  it('handles delta=0 (no history pushed on shrink): no rows shift, no repaint', async () => {
+  it('handles delta=0 (no history pushed on shrink): no rows shift; ALWAYS repaints', async () => {
+    // New contract: even when delta=0, we repaint so the frame reflows to the
+    // new geometry (the debounced resize repaint may have been suppressed).
     const host = makeCprHost({ frameTop: 10, frameBottom: 20, bandTop: 5, bandBottom: 9 });
-    requestCprAndApplyDelta(host, /* expectedRow= */ 20, /* newRows= */ 25);
+    requestCprAndApplyDelta(host, /* expectedRow= */ 20, /* newRows= */ 25, /* rowDelta= */ -5);
     // CPR reply: cursor still at row 20 (delta=0 — blank rows trimmed, no push).
     host.stdin.emit('data', Buffer.from('\x1b[20;1R'));
     await Promise.resolve();
-    expect(host.repaintCalls).toBe(0);
-    expect(host.lastMeasuredFrameTop).toBe(10); // unchanged
+    expect(host.repaintCalls).toBe(1); // ALWAYS repaint
+    expect(host.lastMeasuredFrameTop).toBe(10); // unchanged (delta=0 → no applyScrollDelta)
     expect(host.committedBandTopRow).toBe(5);   // unchanged
   });
 });
@@ -224,16 +227,17 @@ describe('S4: CPR timeout on SHRINK — fallback preserves existing behaviour', 
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
-  it('rows unchanged after CPR timeout on shrink', async () => {
+  it('rows unchanged after CPR timeout on shrink; ALWAYS repaints', async () => {
+    // New contract: timeout falls back AND repaints (lost repaint fix).
     const host = makeCprHost({ frameTop: 30, frameBottom: 45 });
-    requestCprAndApplyDelta(host, /* expectedRow= */ 45, /* newRows= */ 29);
+    requestCprAndApplyDelta(host, /* expectedRow= */ 45, /* newRows= */ 29, /* rowDelta= */ -21);
     expect(host.cprPending).toBe(true);
 
     vi.advanceTimersByTime(CPR_TIMEOUT_MS + 20);
 
     expect(host.cprPending).toBe(false);
-    expect(host.repaintCalls).toBe(0);
-    expect(host.lastMeasuredFrameTop).toBe(30);    // unchanged
+    expect(host.repaintCalls).toBe(1); // ALWAYS repaint on timeout (new contract)
+    expect(host.lastMeasuredFrameTop).toBe(30);    // unchanged (no delta applied)
     expect(host.lastMeasuredFrameBottom).toBe(45); // unchanged
   });
 });

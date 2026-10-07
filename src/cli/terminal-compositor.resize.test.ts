@@ -210,10 +210,16 @@ describe('TerminalCompositor — resize handling', () => {
     it('does not double-subscribe to ResizeBus on a second arm() after disarm()', async () => {
       // Behavioral proxy for the ResizeBus subscriber-count invariant: if a
       // re-arm path leaked a second subscription (forgot to clear in disarm,
-      // or subscribed twice on rearm), a single resize event would fire two
-      // repaint() calls, doubling the visible frame output. Verify by counting
-      // CURSOR_HIDE sequences (\x1b[?25l) — CupFrameRenderer emits exactly
-      // one per render() call. A single resize → single repaint → count=1.
+      // or subscribed twice on rearm), a single resize event would fire double
+      // the expected repaint() calls. Verify by counting CURSOR_HIDE sequences
+      // (\x1b[?25l) — CupFrameRenderer emits exactly one per render() call.
+      //
+      // With "measure until quiescent" (burst fix), a single TTY GROW resize
+      // produces TWO renders: (a) the CPR timeout at 120ms fires repaint() so
+      // the frame reflows to the new geometry, and (b) the 150ms debounced
+      // subscriber fires a second repaint(). A correctly-subscribed compositor
+      // therefore emits exactly 2 × \x1b[?25l — a double-subscribed one would
+      // emit 4 (the CPR-timeout repaint fires twice, the debounce fires twice).
       vi.useFakeTimers();
       let c: TerminalCompositor | null = null;
       try {
@@ -229,12 +235,12 @@ describe('TerminalCompositor — resize handling', () => {
         vi.advanceTimersByTime(150);
 
         const out = writes.all();
-        // CupFrameRenderer.render() emits exactly one \x1b[?25l per call.
-        // One resize → one subscriber callback → one render() → count=1.
         // eslint-disable-next-line no-control-regex
         const hideCursorMatches = out.match(/\x1b\[\?25l/g);
         expect(hideCursorMatches).not.toBeNull();
-        expect(hideCursorMatches?.length).toBe(1);
+        // 2 renders: CPR-timeout repaint (120ms) + debounced repaint (150ms).
+        // A double-subscribed compositor would produce 4.
+        expect(hideCursorMatches?.length).toBe(2);
       } finally {
         c?.disarm();
         vi.useRealTimers();
@@ -288,9 +294,13 @@ describe('TerminalCompositor — resize handling', () => {
         // Sync check: resetGeometry has fired, repaint (render) has NOT.
         expect(callOrder).toEqual(['resetGeometry']);
 
-        // After the debounce, the repaint fires — order: reset, then render.
+        // After 150ms: CPR timeout fires at 120ms (always-repaint → 'render'),
+        // then the debounce fires at 150ms (another 'render'). With cprPending
+        // suppressing the debounce repaint: the debounce fires after cprPending
+        // clears (CPR timeout clears it), so debounce IS allowed to render.
         vi.advanceTimersByTime(150);
-        expect(callOrder).toEqual(['resetGeometry', 'render']);
+        // Two renders: one from CPR timeout, one from debounce (both correct).
+        expect(callOrder).toEqual(['resetGeometry', 'render', 'render']);
       } finally {
         c?.disarm();
         vi.useRealTimers();
@@ -346,9 +356,12 @@ describe('TerminalCompositor — resize handling', () => {
 
         vi.advanceTimersByTime(150);
 
-        // Debounced render fires exactly once after the burst settles.
+        // Two renders after the burst: CPR timeout at 120ms fires repaint()
+        // (always-repaint contract), then the 150ms debounce fires another.
+        // A correctly-subscribed compositor emits exactly 2 — not 1 (old
+        // pre-fix contract) and not 10 (double-subscribed with burst).
         expect(counts.reset).toBe(5);
-        expect(counts.render).toBe(1);
+        expect(counts.render).toBe(2);
       } finally {
         c?.disarm();
         vi.useRealTimers();

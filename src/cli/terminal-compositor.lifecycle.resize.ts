@@ -15,7 +15,7 @@
 
 import { resetArchivedReveal } from './terminal-compositor.archived-reveal.js';
 import type { LifecycleHost } from './terminal-compositor.lifecycle.js';
-import { requestCprAndApplyDelta } from './terminal-compositor.lifecycle.cpr.js';
+import { requestCprOrMarkDirty } from './terminal-compositor.lifecycle.cpr.js';
 
 /**
  * Synchronous SIGWINCH handler fired by ResizeBus.subscribeImmediate().
@@ -56,12 +56,18 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     // parks the cursor at the LAST content row — `targetBottomRow` = frame
     // bottom = `lastMeasuredFrameBottom`. tmux shifts the cursor downward by
     // the number of history lines it pulls back onto screen (delta). The CPR
-    // reply reports the REAL cursor row after the shift; delta = reported -
-    // lastMeasuredFrameBottom. We use frameBottom as expectedRow; skip when no
-    // frame has been rendered yet (frameBottom===0) — nothing to correct.
+    // reply reports the REAL cursor row after the shift; delta = reported −
+    // originalExpectedRow (from the first CPR of the burst). We use frameBottom
+    // as expectedRow; skip when no frame has been rendered yet (frameBottom===0).
+    //
+    // requestCprOrMarkDirty implements "measure until quiescent": if a CPR is
+    // already in-flight, it marks the burst dirty and accumulates grow/shrink
+    // totals rather than emitting a second CPR. When the in-flight CPR resolves
+    // and dirty is set, a fresh CPR is emitted (up to CPR_MAX_REQUERY times)
+    // until the terminal is quiescent, then the cumulative delta is applied once.
     const frameBottom = self.lastMeasuredFrameBottom;
     if (frameBottom > 0 && self.stdin.isTTY) {
-      requestCprAndApplyDelta(self, frameBottom, newRows);
+      requestCprOrMarkDirty(self, frameBottom, newRows, /* rowDelta= */ newRows - self.lastKnownRows);
     }
   } else if (newRows < self.lastKnownRows) {
     // SHRINK: drop any stale EXPAND snapshot (existing contract), then emit a
@@ -69,15 +75,14 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     // When the pane shrinks, tmux first trims blank rows below the cursor, then
     // pushes top rows into history — shifting the cursor UP by delta rows
     // (0 ≤ |delta| ≤ shrink amount). The CPR reply reports the real cursor row;
-    // delta = reported - lastMeasuredFrameBottom (negative on a push). We apply
+    // delta = reported − originalExpectedRow (negative on a push). We apply
     // applyScrollDelta with the negative delta so tracked rows shift UP with the
-    // content, preventing the stale high-row frame ghost that appears below the
-    // live frame after a shrink. The CPR suppress guard (cprPending) is the same
-    // as on EXPAND so no stale-row repaint races the correction.
+    // content, preventing the stale high-row frame ghost below the live frame
+    // after a shrink. Bursts handled by requestCprOrMarkDirty (same as EXPAND).
     self.pendingResizeErase = null;
     const frameBottom = self.lastMeasuredFrameBottom;
     if (frameBottom > 0 && self.stdin.isTTY) {
-      requestCprAndApplyDelta(self, frameBottom, newRows);
+      requestCprOrMarkDirty(self, frameBottom, newRows, /* rowDelta= */ newRows - self.lastKnownRows);
     }
   } else {
     // Net-zero (same row count): drop any stale EXPAND snapshot.

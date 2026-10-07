@@ -586,6 +586,20 @@ export class TerminalCompositor {
    * @internal Relaxed from `private` for the lifecycle module (LifecycleHost).
    */
   cprPending = false;
+  /**
+   * Burst-tracking context for the "measure until quiescent" CPR algorithm.
+   * Created when the first CPR of a burst is requested; cleared once the burst
+   * resolves (quiescent reply, re-query cap, or timeout). See CprHost.cprBurst.
+   * @internal Relaxed from `private` for the lifecycle module (LifecycleHost).
+   */
+  cprBurst: {
+    dirty: boolean;
+    originalExpectedRow: number;
+    currentRows: number;
+    growTotal: number;
+    shrinkTotal: number;
+    requeryCt: number;
+  } | null = null;
   // Invariant (F2 — fail-safe commit mode on stale geometry): set by the
   // SIGWINCH-immediate handler alongside logUpdate.resetGeometry() and cleared
   // only once the debounced post-resize repaint has re-established real
