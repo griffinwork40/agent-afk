@@ -156,6 +156,10 @@ const guardedDispatcher = new Agent({
             `${blockedAddress} (loopback, link-local, cloud metadata, or RFC1918 space). ` +
             'Set AFK_WEB_ALLOW_PRIVATE_HOSTS=1 to allow private-host access.',
         ),
+      makeNonIpError: (hostname, record) =>
+        new EgressBlockedError(
+          `DNS lookup for ${hostname} returned a non-IP record: "${record}"`,
+        ),
     }),
   },
 });
