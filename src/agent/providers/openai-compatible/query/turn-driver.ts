@@ -24,6 +24,7 @@ import {
   TOOL_USE_LOOP_CAPPED,
   resolveMaxToolIterations,
   shouldWindDown,
+  roundDeliveryNotice,
 } from '../../shared/tool-loop-cap.js';
 import {
   SOFT_DEADLINE_WIND_DOWN,
@@ -330,6 +331,8 @@ export async function* runTurnInner(
         return;
       }
 
+      const notice = roundDeliveryNotice(round, maxIterations);
+      if (notice) ctx.priorTurns.push({ role: 'user', content: notice });
       const roundsSpent = shouldWindDown(round, maxIterations);
       const timeSpent = softDeadlineExpired(turnStartTime, softDeadlineMs);
       if (roundsSpent || timeSpent) {

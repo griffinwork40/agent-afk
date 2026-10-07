@@ -46,6 +46,8 @@ export function buildRoundProgressEvent(
       taskId,
       description: 'Working',
       summary: `${formatRoundLabel(round, maxIterations)}: ${lastToolHeadline}`,
+      roundsUsed: round,
+      budget: maxIterations,
       lastToolName,
       totalTokens: accumulatedUsage.totalTokens ?? 0,
       // Contract: `toolUses` is the cumulative COUNT OF TOOL CALLS so far

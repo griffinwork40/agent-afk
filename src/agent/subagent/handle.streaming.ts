@@ -30,6 +30,7 @@ import {
 } from './result.js';
 import { buildEmptyBufferError, synthesizeEmptyBufferPartial, synthesizeTimeoutPartial } from './empty-buffer-partial.js';
 import type { SubagentHandleImpl } from './handle.js';
+import { CappedHandoffAccumulator } from './capped-handoff.js';
 
 /**
  * Consume the streaming message iterator, forward events to progressSink,
@@ -48,6 +49,7 @@ export async function streamToFinalMessage<T>(
 ): Promise<Message> {
   let finalMessage: Message | undefined;
   let streamError: Error | undefined;
+  const handoff = new CappedHandoffAccumulator();
 
   // Reset partial-content accumulator before each run. Surviving across the
   // throw boundary is the whole point — the local `streamedContent` of the
@@ -112,6 +114,7 @@ export async function streamToFinalMessage<T>(
       // activity cannot move the ceiling — see PauseAwareCeiling.
       handle._pauseCeiling?.onEvent(event);
 
+      handoff.onEvent(event);
       if (event.type === 'chunk') {
         const chunk = event.chunk;
         if (chunk.type === 'content') {
@@ -183,6 +186,9 @@ export async function streamToFinalMessage<T>(
   }
 
   if (streamError) throw streamError;
+  if (handle._lastStopReason === TOOL_USE_LOOP_CAPPED) {
+    return handoff.finish(finalMessage, handle.session);
+  }
   if (finalMessage) return finalMessage;
   if (handle._lastStreamedContent.length > 0) {
     // The stream ended with partial assistant text but no terminal `message`
@@ -196,30 +202,11 @@ export async function streamToFinalMessage<T>(
     handle._lastStopReason ??= STREAM_INCOMPLETE;
     return { role: 'assistant', content: handle._lastStreamedContent, timestamp: new Date() };
   }
-  // Anti-hang fallback (see SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS in
-  // subagent.ts): a child that winds down normally returns a real summary —
-  // the provider runs a tools-stripped wind-down round (see loop.ts) whose
-  // text lands as `finalMessage`/`lastStreamedContent` above. This branch is
-  // the RARE fallback for when that wind-down produced no text at all:
-  // surface the wind-down as a terminal message instead of throwing, so
-  // `runToResult` reports a *partial* result (status 'succeeded') rather than
-  // an opaque subagent failure.
-  //
-  // Invariant: both wind-down triggers must land here, never just the
-  // round-budget one. `TOOL_USE_LOOP_CAPPED` (rounds spent) and
-  // `SOFT_DEADLINE_WIND_DOWN` (wall-clock nearly spent) run the identical
-  // tools-stripped round, so a textless outcome has to be salvaged
-  // identically — matching only the former would send a soft-deadline child
-  // down the StreamIncompleteError path and fail the fork loudly for the one
-  // condition this feature exists to handle gracefully.
-  if (
-    handle._lastStopReason === TOOL_USE_LOOP_CAPPED ||
-    handle._lastStopReason === SOFT_DEADLINE_WIND_DOWN
-  ) {
-    const budget =
-      handle._lastStopReason === TOOL_USE_LOOP_CAPPED
-        ? 'tool-use iteration cap'
-        : 'wall-clock budget';
+  // Invariant: both wind-down triggers return incomplete partials, never opaque
+  // failures. Round caps use the salvage branch above; the textless wall-clock
+  // wind-down retains its existing synthetic marker here.
+  if (handle._lastStopReason === SOFT_DEADLINE_WIND_DOWN) {
+    const budget = 'wall-clock budget';
     return {
       role: 'assistant',
       content:

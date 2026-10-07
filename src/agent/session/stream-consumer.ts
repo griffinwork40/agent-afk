@@ -383,17 +383,7 @@ export function transformProviderEvent(
     case 'progress':
       return {
         type: 'progress',
-        progress: {
-          taskId: event.progress.taskId,
-          description: event.progress.description,
-          ...(event.progress.summary !== undefined ? { summary: event.progress.summary } : {}),
-          ...(event.progress.lastToolName !== undefined
-            ? { lastToolName: event.progress.lastToolName }
-            : {}),
-          totalTokens: event.progress.totalTokens,
-          toolUses: event.progress.toolUses,
-          durationMs: event.progress.durationMs,
-        },
+        progress: { ...event.progress },
       };
 
     case 'suggestion':
