@@ -100,7 +100,7 @@ describe('windDownForContextPressure — codex subscription route', () => {
     });
     windDownForContextPressure(ctx, 0);
     // The slot in priorTurns should have a new object with truncated content.
-    const slotAfter = (ctx.priorTurns as Array<{ role: string; content: string }>)[0];
+    const slotAfter = (ctx.priorTurns as Array<{ role: string; content: string }>)[0]!;
     expect(Buffer.byteLength(slotAfter.content)).toBeLessThan(Buffer.byteLength(veryBigContent));
     expect(slotAfter.content).toContain('[Context pressure: result truncated for final synthesis');
     // The ORIGINAL object must NOT have been mutated.
@@ -123,10 +123,10 @@ describe('windDownForContextPressure — codex subscription route', () => {
     });
     windDownForContextPressure(ctx, 0);
     // User message slot: content must be unchanged (user messages are never truncated).
-    const userSlot = (ctx.priorTurns as Array<{ role: string; content: string }>)[0];
+    const userSlot = (ctx.priorTurns as Array<{ role: string; content: string }>)[0]!;
     expect(userSlot.content).toBe(bigUserContent);
     // Tool message slot: should be truncated with a new object.
-    const toolSlot = (ctx.priorTurns as Array<{ role: string; content: string }>)[1];
+    const toolSlot = (ctx.priorTurns as Array<{ role: string; content: string }>)[1]!;
     expect(Buffer.byteLength(toolSlot.content)).toBeLessThan(Buffer.byteLength(bigToolContent));
     expect(toolSlot.content).toContain('[Context pressure: result truncated for final synthesis');
     expect(toolSlot).not.toBe(toolMsg); // new object, not mutated in place
@@ -158,7 +158,7 @@ describe('windDownForContextPressure — codex subscription route', () => {
       priorTurns: [toolMsg],
     });
     windDownForContextPressure(ctx, 0);
-    const slot = (ctx.priorTurns as Array<{ role: string; content: string }>)[0];
+    const slot = (ctx.priorTurns as Array<{ role: string; content: string }>)[0]!;
     // Truncated content must end with the sentinel suffix (not the raw 500KB payload).
     expect(slot.content).toContain('[Context pressure: result truncated for final synthesis');
     expect(Buffer.byteLength(slot.content)).toBeLessThan(Buffer.byteLength(largePayload(500_000)));
