@@ -663,6 +663,47 @@ describe('searchFacts — access tracking', () => {
     expect(store.getFact(idA)!.access_count).toBe(0);
     expect(store.getFact(idB)!.access_count).toBe(1);
   });
+
+  it('a failed access-tracking UPDATE does not break the search (non-fatal)', () => {
+    // The access-tracking UPDATE inside searchFacts is wrapped in a try/catch.
+    // If the UPDATE throws (e.g. disk-full or a transient write error), the
+    // search results must still be returned to the caller.
+    store.storeFact({
+      category: 'preference',
+      content: 'uses vitest for testing',
+      source_surface: 'test',
+    });
+
+    // Force the next `prepare().run()` to throw when it matches the UPDATE
+    // access tracking query, simulating a transient write failure.
+    const originalPrepare = Database.prototype.prepare;
+    vi.spyOn(Database.prototype, 'prepare').mockImplementation(function (
+      this: BetterSqlite3.Database,
+      sql: string,
+    ) {
+      const stmt = originalPrepare.call(this, sql);
+      if (/UPDATE facts\s+SET access_count/.test(sql)) {
+        return {
+          ...stmt,
+          run: (..._args: unknown[]) => {
+            throw new Error('simulated disk-full error');
+          },
+        } as unknown as BetterSqlite3.Statement;
+      }
+      return stmt;
+    } as BetterSqlite3.Database['prepare']);
+
+    let results: ReturnType<typeof store.searchFacts> = [];
+    expect(() => {
+      results = store.searchFacts('vitest');
+    }).not.toThrow();
+
+    // Results must still be returned despite the UPDATE failure.
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]!.content).toContain('vitest');
+
+    vi.restoreAllMocks();
+  });
 });
 
 // ---------------------------------------------------------------------------
