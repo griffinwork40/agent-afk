@@ -41,7 +41,19 @@ import {
 } from './retry.js';
 import { runConnectionPhase } from './stream-drive.connection.js';
 import { emitAndSleepRetry } from './stream-drive.retry.js';
-import { classifyStreamError } from './stream-drive.stream-error.js';
+import { classifyStreamError, type RetryAction } from './stream-drive.stream-error.js';
+
+/** Build the metadata record attached to a stream.retry trace event. */
+function buildRetryMeta(action: RetryAction): Record<string, string | number | boolean> {
+  const meta: Record<string, string | number | boolean> = {
+    source: action.source,
+    reason: action.reason,
+    attempt: action.attempt,
+  };
+  if (action.errorCode !== undefined) meta['errorCode'] = action.errorCode;
+  if (action.awaitingUsage) meta['awaitingUsage'] = true;
+  return meta;
+}
 
 /** Result of a single model round-trip, consumed by the tool-loop orchestrator. */
 export interface IterationResult {
@@ -209,17 +221,10 @@ export async function* driveStream<TEvent>(
 
         if (action.kind === 'retry') {
           yield { type: 'stream.retry', sessionId: ctx.initSessionId };
-          const retryMeta: Record<string, string | number | boolean> = {
-            source: action.source,
-            reason: action.reason,
-            attempt: action.attempt,
-          };
-          if (action.errorCode !== undefined) retryMeta['errorCode'] = action.errorCode;
-          if (action.awaitingUsage) retryMeta['awaitingUsage'] = true;
           const userAborted = await emitAndSleepRetry(
             ctx.traceWriter, ctx.currentModel, action.delay,
             ctx.controller.signal, ctx.controller.signal,
-            retryMeta,
+            buildRetryMeta(action),
           );
           if (userAborted) return null;
           continue;

@@ -192,9 +192,10 @@ export function classifyStreamError(
         !(err instanceof Error && err.name === 'AbortError')) {
       return { action: { kind: 'fall-through', error: err }, newStreamRetries: streamRetries };
     }
-    // Budget exhausted: surface a proper TTFB error rather than falling through
-    // as a raw TypeError('terminated') — reuse err when it already carries the
-    // TTFB message, otherwise construct a canonical one.
+    // Budget exhausted: convert the error to a canonical TTFB error — reuse err
+    // when it already carries the TTFB message, otherwise construct a canonical
+    // one. Unrelated errors fall through above; only TTFB errors, mid-stream
+    // terminations, and raced AbortErrors reach this path.
     const ttfbErr =
       err instanceof Error && err.message === TTFB_TIMEOUT_MESSAGE
         ? err

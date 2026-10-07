@@ -899,6 +899,39 @@ describe('stream termination follow-ups (#2792)', () => {
     expect((action as RetryAction).awaitingUsage).toBeUndefined();
   });
 
+  // P2b: finish_reason present + usage missing + budget available => retry with awaitingUsage: true.
+  it('P2b: finish_reason + no usage + budget available => retry with awaitingUsage: true', () => {
+    const { action, newStreamRetries } = classifyStreamError(
+      undiciTerminated(),
+      true,
+      0,            // budget available
+      60_000,
+      false,
+      false,
+      'stop',       // terminalFinishReason present
+      false,        // usageReceived: false
+    );
+    expect(action.kind).toBe('retry');
+    expect((action as RetryAction).reason).toBe('network_termination');
+    expect((action as RetryAction).awaitingUsage).toBe(true);
+    expect(newStreamRetries).toBe(1);
+  });
+
+  // Fatal-TTFB path for termination errors (finding #3):
+  // ttfbTimedOut=true + budget exhausted + ECONNRESET => fatal TTFB error.
+  it('ttfbTimedOut=true + exhausted budget + ECONNRESET => fatal TTFB error', () => {
+    const { action } = classifyStreamError(
+      econnreset(),
+      false,
+      MAX_STREAM_RETRIES, // budget exhausted
+      0,
+      false,
+      true,               // ttfbTimedOut
+    );
+    expect(action.kind).toBe('fatal');
+    expect((action as FatalAction).error.message).toBe(TTFB_TIMEOUT_MESSAGE);
+  });
+
   it('applies wire clarification to a fatal watchdog error', async () => {
     const clarified = new Error('clarified stall');
     const clarifyError = vi.fn(() => clarified);
@@ -911,6 +944,12 @@ describe('stream termination follow-ups (#2792)', () => {
       clarifyError,
     });
     expect(clarifyError).toHaveBeenCalledOnce();
+    // The fatal error passed to clarifyError is the expanded stall message
+    // produced by stallTimeoutError(), not the raw STALL_TIMEOUT_MESSAGE marker.
+    // Verify it is an Error that mentions the stall (catching any wrong-error regressions).
+    const callArg = clarifyError.mock.calls[0]?.[0];
+    expect(callArg).toBeInstanceOf(Error);
+    expect((callArg as Error).message).toMatch(/stall/i);
     expect(events).toContainEqual({ type: 'error', error: clarified });
   });
 });
