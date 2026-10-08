@@ -24,6 +24,7 @@ import {
 import { trySyncToDaemon, SYNC_FAILED_NOTE, parsePortFile } from '../agent/daemon/http-client.js';
 import { getTelemetryPath, getDaemonStateDir } from '../paths.js';
 import { sendJson } from './routes.js';
+import { readTelemetryHistory } from '../agent/daemon/telemetry-reader.js';
 import { parseCwdCreate, parseCwdUpdate } from './routes.schedules.cwd.js';
 import { join } from 'node:path';
 
@@ -326,37 +327,8 @@ export async function handleScheduleHistory(
     return;
   }
   const telemetryPath = getTelemetryPath();
-  if (!existsSync(telemetryPath)) {
-    sendJson(res, 200, { history: [] });
-    return;
-  }
-
-  let content: string;
-  try {
-    const buf = await readFile(telemetryPath);
-    const tailBuf = buf.length > 1_048_576 ? buf.subarray(buf.length - 1_048_576) : buf;
-    content = tailBuf.toString('utf-8');
-  } catch {
-    sendJson(res, 200, { history: [] });
-    return;
-  }
-
-  const lines = content.split('\n');
-  const matching: unknown[] = [];
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i];
-    if (!line) continue;
-    try {
-      const record = JSON.parse(line) as { taskId?: string };
-      if (record.taskId !== id) continue;
-      matching.push(record);
-      if (matching.length >= 20) break;
-    } catch {
-      continue;
-    }
-  }
-
-  sendJson(res, 200, { history: matching.reverse() });
+  const history = await readTelemetryHistory(telemetryPath, { taskId: id, limit: 20 });
+  sendJson(res, 200, { history });
 }
 
 /** `GET /api/daemon/status` — probe whether the daemon is reachable. */
