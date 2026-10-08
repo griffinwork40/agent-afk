@@ -18,7 +18,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PassThrough } from 'node:stream';
-import { parseCprReply, requestCprAndApplyDelta, requestCprOrMarkDirty, CPR_REQUEST, CPR_TIMEOUT_MS, CPR_MAX_REQUERY } from './terminal-compositor.lifecycle.cpr.js';
+import { parseCprReply, requestCprAndApplyDelta, requestCprOrMarkDirty, CPR_REQUEST, CPR_TIMEOUT_MS, CPR_MAX_REQUERY, __resetCprRttForTests } from './terminal-compositor.lifecycle.cpr.js';
 import { dispatchKey } from './terminal-compositor.input-dispatch.js';
 import { TerminalCompositor } from './terminal-compositor.js';
 import { makeMockStdout, makeMockStdin, collectWrites } from './terminal-compositor.test-helpers.js';
@@ -59,7 +59,7 @@ describe('T1: parseCprReply — well-formed and malformed sequences', () => {
 // ---------------------------------------------------------------------------
 
 describe('T2: requestCprAndApplyDelta applies delta to tracked rows', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
+  beforeEach(() => { __resetCprRttForTests(); vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   function makeHost(opts: {
@@ -207,7 +207,7 @@ describe('T2: requestCprAndApplyDelta applies delta to tracked rows', () => {
 // ---------------------------------------------------------------------------
 
 describe('T3: cprPending suppresses compositor repaint while CPR is in-flight', () => {
-  beforeEach(() => { __resetStdinClaimForTests(); vi.useFakeTimers(); });
+  beforeEach(() => { __resetStdinClaimForTests(); __resetCprRttForTests(); vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   it('repaint is suppressed while cprPending, then fires after CPR reply', async () => {
@@ -240,7 +240,7 @@ describe('T3: cprPending suppresses compositor repaint while CPR is in-flight', 
 // ---------------------------------------------------------------------------
 
 describe('T4: CPR data-listener intercepts reply before readline emits keypress', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
+  beforeEach(() => { __resetCprRttForTests(); vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   it('data listener fires and removes itself; stdin has no cprPending after reply', async () => {
@@ -399,7 +399,7 @@ describe('T5: dispatchKey silently drops CPR reply sequences', () => {
 // ---------------------------------------------------------------------------
 
 describe('T6: CPR timeout fallback — existing behaviour preserved when no reply arrives', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
+  beforeEach(() => { __resetCprRttForTests(); vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   it('cprPending clears after timeout; rows do not shift; ALWAYS repaints', async () => {
@@ -446,7 +446,7 @@ describe('T6: CPR timeout fallback — existing behaviour preserved when no repl
 // ---------------------------------------------------------------------------
 
 describe('T7: regression — tmux pane growth + CPR shift → no frame duplication', () => {
-  beforeEach(() => { __resetStdinClaimForTests(); vi.useFakeTimers(); });
+  beforeEach(() => { __resetStdinClaimForTests(); __resetCprRttForTests(); vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   /**
@@ -575,7 +575,7 @@ describe('T7: regression — tmux pane growth + CPR shift → no frame duplicati
 // ---------------------------------------------------------------------------
 
 describe('T8: burst correctness — measure until quiescent', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
+  beforeEach(() => { __resetCprRttForTests(); vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   function makeBurstHost(opts: {
