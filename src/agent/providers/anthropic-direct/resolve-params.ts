@@ -32,16 +32,6 @@ export const isFable51 = (model: string): boolean => /(claude-)?fable-5[-.]1(?:[
 const requiresAdaptiveThinking = (model: string): boolean =>
   isOpus47Plus(model) || /(claude-)?(opus|sonnet)-5/.test(model) || isFable51(model);
 
-/**
- * Models that still accept manual `{type:'enabled'}` but for which the SDK
- * `console.warn`s on every request that it is deprecated in favour of
- * adaptive (`MODELS_TO_WARN_WITH_THINKING_ENABLED` in
- * `@anthropic-ai/sdk/resources/messages`). An unbudgeted `enabled` (the
- * `enabled:max` CLI default) is promoted to adaptive for these; an explicit
- * finite budget is a deliberate choice and is sent as-is.
- */
-const prefersAdaptiveThinking = (model: string): boolean => /(claude-)?(opus-4-6|mythos-preview)/.test(model);
-
 // resolveAutoCompactThreshold moved to shared/auto-compact.ts (both providers
 // auto-compact now). Re-exported here so existing importers (index.ts) resolve
 // unchanged.
@@ -449,15 +439,6 @@ export function resolveThinkingParam(
     case 'enabled': {
       if (typeof model === 'string' && requiresAdaptiveThinking(model)) {
         // These models reject {type:'enabled'}; silently promote to adaptive.
-        return { type: 'adaptive', display: 'summarized' } as ThinkingConfigParam;
-      }
-      if (
-        typeof model === 'string' &&
-        prefersAdaptiveThinking(model) &&
-        !(tc.budgetTokens !== undefined && Number.isFinite(tc.budgetTokens))
-      ) {
-        // Unbudgeted `enabled` on a model where it is deprecated: promote to
-        // adaptive so the SDK does not print a deprecation warning per request.
         return { type: 'adaptive', display: 'summarized' } as ThinkingConfigParam;
       }
       // Contract: the Messages API requires `1024 <= budget_tokens < max_tokens`
