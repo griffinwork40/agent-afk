@@ -1,0 +1,19 @@
+fix(sweep-policy): correct age-limit precedence and reject non-positive values (#3272)
+
+Three fixes for worktree prune age-limit resolution:
+
+1. parseDaemonBlock no longer materializes default 14/30 for absent
+   maxAgeDaysClean/maxAgeDaysDirty keys — absent keys stay undefined
+   so resolveSweepPolicy falls through to env vars and engine defaults.
+
+2. worktree-prune-task.ts now uses resolveSweepPolicy instead of
+   inlining parseInt(…) || 14/30, so all three call sites (CLI, REPL
+   slash command, daemon task) share the same resolver.
+
+3. resolveSweepPolicy rejects 0 and negative values at every layer
+   via a positiveOrUndefined guard — AGE=0 would make every clean
+   worktree immediately sweepable (data-loss risk).
+
+Updated CliConfig type to make age fields optional. Added tests for
+non-positive rejection (0, -5), absent-key passthrough in
+parseDaemonBlock, and daemon task resolveSweepPolicy wiring.

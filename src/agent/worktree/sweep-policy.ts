@@ -56,6 +56,18 @@ export interface SweepPolicyResult {
 }
 
 /**
+ * Return `value` when it is a positive integer, otherwise `undefined`.
+ * Guards every layer so 0 and negative ages never reach the sweep engine
+ * (AGE=0 would make every clean worktree immediately sweepable — data-loss
+ * risk, #3272).
+ */
+function positiveOrUndefined(value: number | undefined): number | undefined {
+  return value !== undefined && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+/**
  * Resolve sweep age-limit policy using flag > config > env > default precedence.
  *
  * @param inputs - Already-read values from each source layer.
@@ -68,14 +80,16 @@ export function resolveSweepPolicy(inputs: SweepPolicyInputs): SweepPolicyResult
   const envDirty = parseInt(env?.maxAgeDaysDirty ?? '', 10);
 
   const maxAgeDaysClean =
-    overrides?.maxAgeDaysClean ??
-    config?.maxAgeDaysClean ??
-    (Number.isNaN(envClean) ? SWEEP_POLICY_DEFAULTS.maxAgeDaysClean : envClean);
+    positiveOrUndefined(overrides?.maxAgeDaysClean) ??
+    positiveOrUndefined(config?.maxAgeDaysClean) ??
+    positiveOrUndefined(Number.isNaN(envClean) ? undefined : envClean) ??
+    SWEEP_POLICY_DEFAULTS.maxAgeDaysClean;
 
   const maxAgeDaysDirty =
-    overrides?.maxAgeDaysDirty ??
-    config?.maxAgeDaysDirty ??
-    (Number.isNaN(envDirty) ? SWEEP_POLICY_DEFAULTS.maxAgeDaysDirty : envDirty);
+    positiveOrUndefined(overrides?.maxAgeDaysDirty) ??
+    positiveOrUndefined(config?.maxAgeDaysDirty) ??
+    positiveOrUndefined(Number.isNaN(envDirty) ? undefined : envDirty) ??
+    SWEEP_POLICY_DEFAULTS.maxAgeDaysDirty;
 
   return { maxAgeDaysClean, maxAgeDaysDirty };
 }

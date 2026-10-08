@@ -94,8 +94,10 @@ export interface CliConfig {
     worktreePrune?: {
       enabled: boolean;
       cron: string;
-      maxAgeDaysClean: number;
-      maxAgeDaysDirty: number;
+      /** Optional — absent means the user did not set it; `resolveSweepPolicy` falls through. */
+      maxAgeDaysClean?: number;
+      /** Optional — absent means the user did not set it; `resolveSweepPolicy` falls through. */
+      maxAgeDaysDirty?: number;
       scope: string;
     };
     /** Tool-health builtin configuration. Mirrors worktreePrune shape. */

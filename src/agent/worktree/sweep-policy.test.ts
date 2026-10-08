@@ -126,6 +126,50 @@ describe('resolveSweepPolicy', () => {
     });
   });
 
+  describe('non-positive value rejection (#3272)', () => {
+    it('rejects 0 in config and falls back to default', () => {
+      const result = resolveSweepPolicy({
+        config: { maxAgeDaysClean: 0, maxAgeDaysDirty: 0 },
+      });
+      expect(result.maxAgeDaysClean).toBe(SWEEP_POLICY_DEFAULTS.maxAgeDaysClean);
+      expect(result.maxAgeDaysDirty).toBe(SWEEP_POLICY_DEFAULTS.maxAgeDaysDirty);
+    });
+
+    it('rejects negative values in config and falls back to env', () => {
+      const result = resolveSweepPolicy({
+        config: { maxAgeDaysClean: -5, maxAgeDaysDirty: -10 },
+        env: { maxAgeDaysClean: '7', maxAgeDaysDirty: '21' },
+      });
+      expect(result.maxAgeDaysClean).toBe(7);
+      expect(result.maxAgeDaysDirty).toBe(21);
+    });
+
+    it('rejects 0 in env and falls back to default', () => {
+      const result = resolveSweepPolicy({
+        env: { maxAgeDaysClean: '0', maxAgeDaysDirty: '0' },
+      });
+      expect(result.maxAgeDaysClean).toBe(SWEEP_POLICY_DEFAULTS.maxAgeDaysClean);
+      expect(result.maxAgeDaysDirty).toBe(SWEEP_POLICY_DEFAULTS.maxAgeDaysDirty);
+    });
+
+    it('rejects negative values in env and falls back to default', () => {
+      const result = resolveSweepPolicy({
+        env: { maxAgeDaysClean: '-5', maxAgeDaysDirty: '-10' },
+      });
+      expect(result.maxAgeDaysClean).toBe(SWEEP_POLICY_DEFAULTS.maxAgeDaysClean);
+      expect(result.maxAgeDaysDirty).toBe(SWEEP_POLICY_DEFAULTS.maxAgeDaysDirty);
+    });
+
+    it('rejects 0 in overrides and falls back to config', () => {
+      const result = resolveSweepPolicy({
+        overrides: { maxAgeDaysClean: 0, maxAgeDaysDirty: 0 },
+        config: { maxAgeDaysClean: 5, maxAgeDaysDirty: 10 },
+      });
+      expect(result.maxAgeDaysClean).toBe(5);
+      expect(result.maxAgeDaysDirty).toBe(10);
+    });
+  });
+
   describe('full precedence chain', () => {
     it('flag wins over all other layers', () => {
       const result = resolveSweepPolicy({
