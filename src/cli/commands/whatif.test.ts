@@ -53,19 +53,24 @@ vi.mock('../../whatif/report.js', () => ({
   standardLimits: vi.fn().mockReturnValue([]),
 }));
 
-vi.mock('../../whatif/surface.js', () => ({
-  resolveSpec: vi.fn().mockResolvedValue({
-    title: 'Append note',
-    changes: [{ kind: 'append', target: 'user-afk-md', text: 'Always ask.' }],
-  }),
-  buildWhatifDeps: vi.fn().mockReturnValue({
-    runner: {},
-    complete: vi.fn(),
-    makeJudge: vi.fn(),
-    makeCrossCheckJudge: vi.fn(),
-  }),
-  readDirNames: vi.fn().mockReturnValue([]),
-}));
+vi.mock('../../whatif/surface.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../whatif/surface.js')>();
+  return {
+    ...actual,
+    resolveSpec: vi.fn().mockResolvedValue({
+      title: 'Append note',
+      changes: [{ kind: 'append', target: 'user-afk-md', text: 'Always ask.' }],
+    }),
+    buildWhatifDeps: vi.fn().mockReturnValue({
+      runner: {},
+      complete: vi.fn(),
+      makeJudge: vi.fn(),
+      makeCrossCheckJudge: vi.fn(),
+    }),
+    readDirNames: vi.fn().mockReturnValue([]),
+    // buildWhatifRunOptions: use real implementation so forwarding is verified.
+  };
+});
 
 vi.mock('../../whatif/operators/index.js', () => ({
   describeChange: vi.fn().mockReturnValue('Append to AFK.md'),
