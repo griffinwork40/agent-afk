@@ -10,7 +10,7 @@ import {
   writeUpdateCache,
 } from '../update-checker.js';
 import { isNewerVersion } from '../update-version.js';
-import { serviceManagerFor } from '../../service/index.js';
+import { serviceManagerFor, SERVICE_NAMES } from '../../service/index.js';
 import type { ServiceName } from '../../service/index.js';
 
 const SEMVER_RE = /^\d+\.\d+\.\d+(-[\da-z.]+)?$/i;
@@ -178,7 +178,7 @@ function restartServices(): void {
     return;
   }
 
-  const services: ServiceName[] = ['daemon', 'telegram'];
+  const services: ReadonlyArray<ServiceName> = SERVICE_NAMES;
   let anyRestartFailed = false;
 
   for (const name of services) {

@@ -2,9 +2,8 @@
  * Tests for normalizeBrewCellarExecPath (fix C).
  *
  * All cases are pure (no I/O): existsFn and realpathFn are injected stubs.
- *
- * Mirrors the skipIf(darwin) guard used throughout launchd.test.ts — these
- * functions are consumed by macOS-specific install paths.
+ * The function itself has no platform dependency — the skipIf(darwin) guard
+ * was removed because pure-function tests must not be platform-gated (R4).
  */
 
 import { describe, expect, it } from 'vitest';
@@ -12,7 +11,7 @@ import { normalizeBrewCellarExecPath } from './brew-cellar.js';
 
 // ── normalizeBrewCellarExecPath ───────────────────────────────────────────
 
-describe.skipIf(process.platform !== 'darwin')('normalizeBrewCellarExecPath', () => {
+describe('normalizeBrewCellarExecPath', () => {
   const neverExists = () => false;
 
   /**

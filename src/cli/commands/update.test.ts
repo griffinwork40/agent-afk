@@ -72,6 +72,7 @@ vi.mock('../../service/index.js', () => ({
   SERVICE_NAMES: ['telegram', 'daemon'],
 }));
 
+import path from 'path';
 import { spawn } from 'child_process';
 import { fetchLatestVersion, writePendingUpdateMarker, writeUpdateCache } from '../update-checker.js';
 import { registerUpdateCommand, resolveNpmBinary } from './update.js';
@@ -212,8 +213,10 @@ describe('afk update', () => {
       mockSpawn.mockImplementation(spawnExiting(0) as unknown as typeof spawn);
       await runUpdate('--pin', '1.11.0');
 
+      // resolveNpmBinary falls back to the platform npm name (existsSync is mocked false)
+      const expectedNpm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
       expect(mockSpawn).toHaveBeenCalledWith(
-        'npm',
+        expectedNpm,
         ['install', '-g', '--allow-scripts=agent-afk', 'agent-afk@1.11.0'],
         expect.objectContaining({ stdio: 'inherit' }),
       );
@@ -264,9 +267,11 @@ describe('afk update', () => {
 
       await runUpdate();
 
+      // resolveNpmBinary falls back to the platform npm name (existsSync is mocked false)
+      const expectedNpm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
       expect(mockFetchLatestVersion).toHaveBeenCalled();
       expect(mockSpawn).toHaveBeenCalledWith(
-        'npm',
+        expectedNpm,
         ['install', '-g', '--allow-scripts=agent-afk', 'agent-afk@1.12.0'],
         expect.objectContaining({ stdio: 'inherit' }),
       );
@@ -304,33 +309,43 @@ describe('afk update', () => {
 
   describe('resolveNpmBinary (fix A)', () => {
     it('returns sibling npm when it exists next to the node binary', () => {
-      const execPath = '/opt/homebrew/bin/node';
-      const existsFn = (p: string) => p === '/opt/homebrew/bin/npm';
+      // Use path.join/dirname — same functions the implementation uses — so the
+      // expected sibling path is platform-correct on every OS (R4: no platform gates).
+      const execPath = path.join(path.sep, 'opt', 'homebrew', 'bin', 'node');
+      const siblingNpm = path.join(path.dirname(execPath), 'npm');
+      const existsFn = (p: string) => p === siblingNpm;
       const result = resolveNpmBinary(execPath, 'linux', existsFn);
-      expect(result).toBe('/opt/homebrew/bin/npm');
+      expect(result).toBe(siblingNpm);
     });
 
     it('falls back to bare "npm" when no sibling exists', () => {
-      const result = resolveNpmBinary('/some/custom/bin/node', 'linux', () => false);
+      const execPath = path.join(path.sep, 'some', 'custom', 'bin', 'node');
+      const result = resolveNpmBinary(execPath, 'linux', () => false);
       expect(result).toBe('npm');
     });
 
-    it('uses npm.cmd on Windows when sibling exists (POSIX-path variant)', () => {
-      const execPath = '/c/nodejs/node.exe';
-      const existsFn = (p: string) => p === '/c/nodejs/npm.cmd';
+    it('uses npm.cmd on Windows when sibling exists (platform-neutral paths)', () => {
+      // Build paths with path.join so they match what the implementation computes
+      // regardless of whether the host is POSIX or Windows.
+      const execPath = path.join(path.sep, 'c', 'nodejs', 'node.exe');
+      const siblingNpmCmd = path.join(path.dirname(execPath), 'npm.cmd');
+      const existsFn = (p: string) => p === siblingNpmCmd;
       const result = resolveNpmBinary(execPath, 'win32', existsFn);
-      expect(result).toBe('/c/nodejs/npm.cmd');
+      expect(result).toBe(siblingNpmCmd);
     });
 
     it('falls back to "npm.cmd" on Windows when sibling missing', () => {
-      expect(resolveNpmBinary('/c/nodejs/node.exe', 'win32', () => false)).toBe('npm.cmd');
+      const execPath = path.join(path.sep, 'c', 'nodejs', 'node.exe');
+      expect(resolveNpmBinary(execPath, 'win32', () => false)).toBe('npm.cmd');
     });
 
     it('uses nvm-local npm when node lives under nvm', () => {
-      const execPath = '/Users/me/.nvm/versions/node/v24.11.0/bin/node';
-      const existsFn = (p: string) => p === '/Users/me/.nvm/versions/node/v24.11.0/bin/npm';
-      expect(resolveNpmBinary(execPath, 'linux', existsFn))
-        .toBe('/Users/me/.nvm/versions/node/v24.11.0/bin/npm');
+      const execPath = path.join(
+        path.sep, 'Users', 'me', '.nvm', 'versions', 'node', 'v24.11.0', 'bin', 'node',
+      );
+      const siblingNpm = path.join(path.dirname(execPath), 'npm');
+      const existsFn = (p: string) => p === siblingNpm;
+      expect(resolveNpmBinary(execPath, 'linux', existsFn)).toBe(siblingNpm);
     });
   });
 
