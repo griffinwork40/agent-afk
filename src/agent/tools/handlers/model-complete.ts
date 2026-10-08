@@ -151,7 +151,8 @@ async function modelCompleteImpl(
   }
 
   const target = resolveOneShotTarget(input.model);
-  const callSignal = AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]);
+  const timeoutSignal = AbortSignal.timeout(TIMEOUT_MS);
+  const callSignal = AbortSignal.any([signal, timeoutSignal]);
   let reply: string;
   let stopReason: OneShotStopReason;
   try {
@@ -164,9 +165,11 @@ async function modelCompleteImpl(
       signal: callSignal,
     }));
   } catch (err) {
+    // Check timeoutSignal first: if the 300 s timer fired, report "timed out"
+    // regardless of whether the caller's turn signal also aborted concurrently.
+    if (timeoutSignal.aborted) return fail(`timed out after ${TIMEOUT_MS / 1000}s.`);
     if (signal.aborted) return fail('aborted.');
-    const timedOut = callSignal.aborted;
-    const detail = timedOut ? `timed out after ${TIMEOUT_MS / 1000}s.` : errorMessage(err);
+    const detail = errorMessage(err);
     return fail(`${target.model} (${target.provider}) failed: ${redactSecrets(detail)}`);
   }
 
