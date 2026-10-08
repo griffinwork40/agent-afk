@@ -75,8 +75,8 @@ describe('operator permission gate', () => {
 
 describe('config mutation operator gate', () => {
   it.each(['tools.disabled', 'tools.disabled.0', 'tools'])('refuses setting and unsetting %s', (key) => {
-    expect(() => setConfigValue(key, [])).toThrow('A human must edit afk.config.json');
-    expect(() => unsetConfigValue(key)).toThrow('A human must edit afk.config.json');
+    expect(() => setConfigValue(key, [])).toThrow('/config → Tools');
+    expect(() => unsetConfigValue(key)).toThrow('/config → Tools');
   });
 });
 

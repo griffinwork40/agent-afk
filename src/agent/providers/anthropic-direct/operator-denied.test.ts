@@ -87,6 +87,7 @@ describe('operator denies after provider unions', () => {
   it('config_set surfaces the operator-only refusal', async () => {
     const result = await configSetHandler({ target: 'config', key: 'tools.disabled', value: [] }, {} as never);
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('A human must edit afk.config.json');
+    expect(result.content).toContain('/config → Tools');
+    expect(result.content).toContain('the agent cannot change it');
   });
 });

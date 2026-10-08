@@ -1,6 +1,14 @@
 # Operator tool visibility
 
-Edit `afk.config.json` manually:
+## In the REPL: `/config` → Tools
+
+Run `/config` and choose **Tools** to get a checklist: ◉ on, ◯ off. Space toggles a row, Enter saves, Esc cancels. The rows are the groups below, every non-core built-in tool, one `mcp__<server>__*` row per configured MCP server, and any other entry already present in a config file, so nothing you wrote by hand is hidden or dropped on save.
+
+The menu writes only your user config (the user-tier `afk.config.json` under `$AFK_HOME`). A tool disabled by a project or legacy config file shows as `← off in <file>` and cannot be turned on from the menu; the save tells you which file to edit. Changes apply to the next session (restart the REPL). Telegram and other non-TTY surfaces show the current list read-only in `/config`.
+
+## By hand
+
+Edit `afk.config.json`:
 
 ```json
 {
@@ -30,6 +38,6 @@ MCP entries accept exact wire names (`mcp__<server>__<tool>`) or a server wildca
 
 Locked core entries are ignored with a warning: `agent`, `skill`, `compose`, `exit_plan_mode`, `get_runtime_state`, `read_file`, `write_file`, `edit_file`, `grep`, `glob`, `list_directory`. This does not override existing read-only fork allowlists.
 
-The agent's `config_set` cannot change this setting. Humans must edit the JSON file.
+The agent's `config_set` cannot change this setting, and neither can `/config set` or `afk config set`. Humans use the `/config` → Tools checklist or edit the JSON file.
 
 This is prompt/token hygiene, **not a security boundary while `bash` is enabled**. Shell commands can access equivalent capabilities directly. File writing and other enabled tools can also bypass visibility settings. Use independent sandboxing and permission controls for security.

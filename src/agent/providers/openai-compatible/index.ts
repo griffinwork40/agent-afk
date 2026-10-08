@@ -23,10 +23,9 @@ import { resolveSessionHookRegistry } from '../../hooks.js';
 import type { SubagentExecutor } from '../../tools/subagent-executor.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import type { ComposeExecutor } from '../../tools/compose-executor.js';
-// Single import line on purpose: this file is over the 350-code-line ceiling
-// and baselined, so it may not grow. operator-denied-dispatcher re-exports the
-// permission helpers alongside the operator-deny composition helpers.
-import { withMcpToolsAllowed, withCustomToolsAllowed, withOperatorDenied, snapshotOperatorOptions, type ToolPermissionConfig } from '../../tools/operator-denied-dispatcher.js';
+import type { ToolPermissionConfig } from '../../tools/permissions.js';
+import { composeDispatcherPermissions } from '../../tools/permissions-compose.js';
+import { snapshotOperatorOptions } from '../../tools/operator-denied-dispatcher.js';
 import type { CanUseTool } from '../../types/sdk-types.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
@@ -490,20 +489,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
       // makes a silent drop (c6892c6) a compile error.
       hookRegistry: resolveSessionHookRegistry(opts.hookRegistry, this.providerOpts.hookRegistry),
     };
-    // Union live MCP wire-names AND consumer-registered custom-tool names into
-    // the (statically-snapshotted) allowlist so neither is rejected by the gate
-    // while present in `schemas`/`handlers`. No-op when there is no allowlist
-    // (undefined => all allowed) or nothing to union. Mirrors
-    // AnthropicDirectProvider; restricted sub-agents carry no customTools.
-    const effectivePermissions = withOperatorDenied(withCustomToolsAllowed(
-      this.providerOpts.mcpManager
-        ? withMcpToolsAllowed(
-            this.providerOpts.permissions,
-            this.providerOpts.mcpManager.getMcpToolWireNames(),
-          )
-        : this.providerOpts.permissions,
+    // MCP + custom-tool unions, then operator denies LAST (shared with
+    // AnthropicDirectProvider; invariant in tools/permissions-compose.ts).
+    const effectivePermissions = composeDispatcherPermissions(
+      this.providerOpts.permissions,
+      this.providerOpts.mcpManager?.getMcpToolWireNames(),
       (this.providerOpts.customTools ?? []).map((t) => t.schema.name),
-    ));
+    );
     if (effectivePermissions !== undefined) dispatcherOpts.permissions = effectivePermissions;
     if (this.providerOpts.subagentExecutor !== undefined) dispatcherOpts.subagentExecutor = this.providerOpts.subagentExecutor;
     if (this.providerOpts.skillExecutor !== undefined) dispatcherOpts.skillExecutor = this.providerOpts.skillExecutor;

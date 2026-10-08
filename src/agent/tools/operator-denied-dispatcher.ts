@@ -4,11 +4,6 @@ import { SessionToolDispatcher } from './dispatcher.js';
 import type { ToolPermissionConfig } from './permissions.js';
 import type { AnthropicToolDef, ToolCall, ToolDispatcher, ToolResult } from '../providers/anthropic-direct/types.js';
 
-// Re-exported so the baselined openai-compatible provider can take every
-// permission-composition helper from one import line (file-size ratchet).
-export { withOperatorDenied } from './operator-denied.js';
-export { withMcpToolsAllowed, withCustomToolsAllowed, type ToolPermissionConfig } from './permissions.js';
-
 /** A consumer-owned dispatcher wrapped so operator denies still apply. */
 type GuardedDispatcher = ToolDispatcher & { readonly operatorDenied: readonly string[] };
 
