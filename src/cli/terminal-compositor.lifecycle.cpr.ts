@@ -67,9 +67,15 @@
 
 import { env } from '../config/env.js';
 import { armCprKeypressGuard, CPR_KEYPRESS_GRACE_MS } from './input/emit-keypress.js';
+import { CPR_REPLY_RE as _CPR_REPLY_RE_LEAF } from './input/cpr-reply-re.js';
 
-/** Regex that matches a complete CPR response: ESC [ row ; col R */
-export const CPR_REPLY_RE = /^\x1b\[(\d+);(\d+)R$/;
+/**
+ * Regex that matches a complete CPR response: ESC [ row ; col R
+ *
+ * Re-exported from the shared leaf module `src/cli/input/cpr-reply-re.ts`
+ * so callers that import from this public API continue to work unchanged.
+ */
+export const CPR_REPLY_RE: RegExp = _CPR_REPLY_RE_LEAF;
 
 /**
  * Parse a CPR reply and return { row, col } (1-based), or null when the
@@ -130,6 +136,9 @@ let _measuredRttMs: number | null = null;
 
 function _computeTimeout(): number {
   if (_measuredRttMs === null) return CPR_TIMEOUT_MS;
+  // Intentionally retain the 120 ms baseline floor even for fast local PTYs:
+  // a tiny RTT sample must not eliminate slack for scheduling jitter. Slow
+  // links can expand the timeout up to CPR_TIMEOUT_CEILING_MS.
   const adaptive = Math.round(_measuredRttMs * CPR_RTT_SCALE);
   return Math.min(Math.max(adaptive, CPR_TIMEOUT_MS), CPR_TIMEOUT_CEILING_MS);
 }
@@ -286,6 +295,38 @@ export function requestCprAndApplyDelta(
 // ---------------------------------------------------------------------------
 // Internal implementation
 // ---------------------------------------------------------------------------
+
+/**
+ * Contract: called when a CPR request times out (no reply within `timeoutMs`).
+ *
+ * 1. Seeds the RTT sample with `timeoutMs` as a floor estimate so the next
+ *    request uses an adaptive timeout (timeoutMs × CPR_RTT_SCALE) instead of
+ *    the 120 ms baseline.  On slow SSH/mosh links the first reply always
+ *    arrives after the baseline, keeping _measuredRttMs null forever.  Treating
+ *    the timeout itself as an observed lower-bound RTT (real RTT ≥ timeoutMs)
+ *    lets the adaptive path engage on the very next request.  No delta is
+ *    applied — any stale reply is discarded by the keypress guard.
+ * 2. Re-arms the keypress guard for the grace window so a reply that slips
+ *    past after the data listener is removed cannot leak into the idle-prompt
+ *    reader.
+ * 3. Falls back to the existing paint so the frame reflows to the new geometry.
+ *
+ * CPR_TIMEOUT_MS (120 ms) is a conservative floor calibrated for local PTY
+ * round-trips (same machine, sub-millisecond actual latency).  On slow links
+ * the adaptive sample quickly grows past this floor.  See _computeTimeout().
+ */
+function _onCprTimeout(self: CprHost, timeoutMs: number): void {
+  _updateRtt(timeoutMs);
+  armCprKeypressGuard(self.stdin, CPR_KEYPRESS_GRACE_MS);
+  if (env.AFK_DEBUG_COMPOSITOR) {
+    process.stderr.write(
+      `[afk/cpr] timeout after ${timeoutMs}ms — falling back + repainting` +
+      ` (rtt bootstrapped to ${timeoutMs}ms; keypress guard extended by ${CPR_KEYPRESS_GRACE_MS}ms)\n`,
+    );
+  }
+  self.cprBurst = null;
+  self.repaint();
+}
 
 /**
  * Emit a CPR request and install a one-shot stdin `data` listener that
@@ -465,24 +506,7 @@ function _requestCpr(self: CprHost): void {
 
   timer = setTimeout(() => {
     cleanup(onData);
-    // Timeout: terminal did not answer — fall back to existing behaviour AND
-    // ALWAYS repaint so the frame reflows to the new geometry. The
-    // pendingResizeErase snapshot (if any) is already set; the repaint will
-    // proceed without a delta correction (correct for terminals that do not
-    // shift history on resize).
-    //
-    // Re-arm the keypress guard for the grace window alone so a reply that
-    // arrives just after the timeout is still dropped at the keypress layer
-    // and does not leak into the idle-prompt reader.
-    armCprKeypressGuard(self.stdin, CPR_KEYPRESS_GRACE_MS);
-    if (env.AFK_DEBUG_COMPOSITOR) {
-      process.stderr.write(
-        `[afk/cpr] timeout after ${timeoutMs}ms — falling back + repainting` +
-        ` (keypress guard extended by ${CPR_KEYPRESS_GRACE_MS}ms)\n`,
-      );
-    }
-    self.cprBurst = null;
-    self.repaint();
+    _onCprTimeout(self, timeoutMs);
   }, timeoutMs);
 
   // Emit the CPR request AFTER installing the listener so we cannot miss a

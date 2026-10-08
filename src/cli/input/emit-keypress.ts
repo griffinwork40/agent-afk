@@ -1,14 +1,5 @@
 import { emitKeypressEvents, type Interface } from 'readline';
-
-/**
- * Regex that matches a complete CPR (Cursor Position Report) response.
- *
- * Duplicated from `terminal-compositor.lifecycle.cpr.ts` to break the
- * circular dependency that would arise from importing it there (cpr.ts imports
- * armCprKeypressGuard from this module). Kept in sync with the canonical
- * definition in cpr.ts; both must match `ESC [ row ; col R`.
- */
-const _CPR_REPLY_RE = /^\x1b\[(\d+);(\d+)R$/;
+import { CPR_REPLY_RE as _CPR_REPLY_RE } from './cpr-reply-re.js';
 
 /**
  * Sets `escapeCodeTimeout` to 50ms (see {@link LONE_ESC_TIMEOUT_MS}) for

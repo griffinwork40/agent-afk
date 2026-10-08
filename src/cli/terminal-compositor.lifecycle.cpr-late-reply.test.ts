@@ -25,6 +25,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PassThrough } from 'node:stream';
 import {
   armCprKeypressGuard,
+  emitKeypressEventsImmediateEscape,
   isCprKeypressGuardActive,
   isCprSequence,
   CPR_KEYPRESS_GRACE_MS,
@@ -442,65 +443,103 @@ describe('G6: adaptive timeout ceiling — never exceeds CPR_TIMEOUT_CEILING_MS'
 // ---------------------------------------------------------------------------
 // G7: integration — late reply after disarm does not reach prompt buffer
 // ---------------------------------------------------------------------------
+//
+// Integration contract: `requestCprAndApplyDelta` is called with `process.stdin`
+// as the host stdin (the real production path).  The CPR guard is automatically
+// armed on `process.stdin` by _requestCpr.  After the timeout, the guard is
+// re-armed on `process.stdin` for the grace window.  handleKeypress, which
+// unconditionally queries `isCprSequence(process.stdin, ...)`, therefore drops
+// a late CPR reply delivered via the keypress path without any extra manual arming.
+//
+// This test does NOT use a synthetic PassThrough stdin for the host — the host
+// stdin IS process.stdin, so the data listener, the keypress guard, and the
+// handleKeypress check are all scoped to the same stream object.
 
 describe('G7: late CPR reply after compositor disarm does not reach prompt buffer', () => {
   beforeEach(() => { vi.useFakeTimers(); __resetCprKeypressGuardForTests(); __resetCprRttForTests(); });
-  afterEach(() => { vi.useRealTimers(); __resetCprKeypressGuardForTests(); });
+  afterEach(() => {
+    vi.useRealTimers();
+    __resetCprKeypressGuardForTests();
+  });
 
-  it('CPR reply arriving after timeout (simulated as keypress) is dropped by handleKeypress', async () => {
+  it('CPR reply arriving after timeout is dropped through production request and keypress decoding', () => {
     // Scenario:
-    //   1. CPR is requested (compositor arms guard on process.stdin).
-    //   2. Timeout fires (reply did not arrive in time) — guard is re-armed for grace window.
-    //   3. Terminal replies LATE — the data listener is gone; readline decodes the
-    //      reply as a keypress and delivers it to handleKeypress.
-    //   4. handleKeypress should DROP the CPR keypress (guard still active).
-    //   5. Buffer must remain empty.
+    //   1. CPR is requested with process.stdin as the host stdin.
+    //      _requestCpr arms the keypress guard on process.stdin for
+    //      (CPR_TIMEOUT_MS + CPR_KEYPRESS_GRACE_MS) and installs a data
+    //      listener on process.stdin.
+    //   2. Timeout fires — data listener removed, guard re-armed for the
+    //      grace window on process.stdin, fallback repaint triggered.
+    //   3. Terminal replies LATE — the data listener is gone; readline would
+    //      decode the reply as a keypress and deliver it to handleKeypress.
+    //   4. handleKeypress calls isCprSequence(process.stdin, seq).  Because
+    //      the guard is still active on process.stdin (grace window) and the
+    //      sequence matches CPR_REPLY_RE, the call returns early.
+    //   5. Buffer must remain empty; no repaint must fire from handleKeypress.
 
-    const stdin = makeStdin();
     const stdout = makeStdout();
 
-    // Use stdin directly (handleKeypress uses process.stdin; we simulate by arming stdin).
-    // For the integration test we arm the guard on the test stdin stream, which is what
-    // requestCprAndApplyDelta uses.
-    const host = makeCprHost(stdin, stdout);
+    // Build host with process.stdin as the stdin reference — same stream that
+    // _requestCpr will prependListener on and armCprKeypressGuard will guard.
+    const processStdinAsReadStream = process.stdin as unknown as NodeJS.ReadStream & { isTTY: boolean };
+    const host = makeCprHost(processStdinAsReadStream, stdout);
+
     requestCprAndApplyDelta(host, 10, 50, /* rowDelta= */ 10);
 
-    // Timeout fires — guard re-armed for grace window.
+    // Verify the guard is now active on process.stdin.
+    expect(isCprKeypressGuardActive(process.stdin)).toBe(true);
+    expect(host.cprPending).toBe(true);
+
+    // Advance past the baseline timeout — the data listener is removed, guard
+    // re-armed for the grace window, fallback repaint fires.
     vi.advanceTimersByTime(CPR_TIMEOUT_MS + 10);
     expect(host.cprPending).toBe(false);
     expect(host.repaintCalls).toBe(1); // fallback repaint
 
-    // Guard must still be active in the grace window.
-    expect(isCprKeypressGuardActive(stdin)).toBe(true);
+    // Guard must still be active in the grace window on process.stdin.
+    expect(isCprKeypressGuardActive(process.stdin)).toBe(true);
 
-    // Simulate the late CPR reply arriving as a keypress event on stdin.
+    // Simulate the late CPR reply arriving as a keypress to handleKeypress.
+    // In production this path is: readline's keypress emitter decodes the
+    // reply bytes (no data listener to intercept them) and fires the 'keypress'
+    // event; the active reader calls handleKeypress with the decoded key.
     const st = makeReaderState();
     const repaintFn = vi.fn();
     const schedulePaintFn = vi.fn();
     const applySelectionFn = vi.fn();
-    const ctx = makeKeypressCtx(stdin);
+    const ctx = makeKeypressCtx(process.stdin as unknown as NodeJS.ReadStream);
 
-    const lateReplyKey: KeyInfo = {
-      sequence: '\x1b[21;1R',
-      name: undefined,
-      ctrl: false,
-      meta: false,
-      shift: false,
+    const priorDataListeners = new Set(process.stdin.listeners('data'));
+    const decodedKeys: KeyInfo[] = [];
+    const onKeypress = (char: string | undefined, key: KeyInfo): void => {
+      decodedKeys.push(key);
+      handleKeypress(char, key, st, ctx, repaintFn, schedulePaintFn, applySelectionFn);
     };
+    // Invariant: request timeout must remove its data listener before readline
+    // decodes the late bytes; the reader guard must then suppress the keypress.
+    emitKeypressEventsImmediateEscape(process.stdin);
+    process.stdin.on('keypress', onKeypress);
+    try {
+      host.armed = false;
+      process.stdin.emit('data', Buffer.from('\x1b[21;1R'));
+      expect(decodedKeys).toHaveLength(1);
+      expect(decodedKeys[0]?.sequence).toBe('\x1b[21;1R');
+      expect(host.repaintCalls).toBe(1);
+      expect(host.lastMeasuredFrameBottom).toBe(20);
+    } finally {
+      process.stdin.removeListener('keypress', onKeypress);
+      for (const listener of process.stdin.listeners('data')) {
+        if (!priorDataListeners.has(listener)) process.stdin.removeListener('data', listener);
+      }
+    }
 
-    // handleKeypress checks isCprSequence(process.stdin, ...).
-    // Our guard was armed on `stdin` (not process.stdin) — for this unit test
-    // we verify the logic by arming on process.stdin explicitly to mirror the
-    // production code path where requestCprAndApplyDelta uses process.stdin
-    // (via TerminalCompositor.stdin which is process.stdin in production).
-    // Arm on process.stdin for the handleKeypress path.
-    armCprKeypressGuard(process.stdin, CPR_KEYPRESS_GRACE_MS);
-
-    handleKeypress(undefined, lateReplyKey, st, ctx, repaintFn, schedulePaintFn, applySelectionFn);
-
-    // Buffer must be empty — the late CPR reply was dropped.
+    // Buffer must be empty — the late CPR reply was dropped by the guard.
     expect(st.input.buffer).toBe('');
     expect(repaintFn).not.toHaveBeenCalled();
+
+    // Advance past the full grace window so timers are cleaned up.
+    vi.advanceTimersByTime(CPR_KEYPRESS_GRACE_MS + 50);
+    expect(isCprKeypressGuardActive(process.stdin)).toBe(false);
   });
 
   it('a CPR-shaped keypress AFTER the grace window passes through normally', () => {
@@ -534,5 +573,111 @@ describe('G7: late CPR reply after compositor disarm does not reach prompt buffe
     // is not a printable grapheme.  The important invariant: no throw, no
     // unexpected state mutation, and the guard was not invoked (it's inactive).
     expect(st.input.buffer).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G5-regression: timeout seeds RTT floor → next request uses floor * scale
+// ---------------------------------------------------------------------------
+//
+// Regression guard for the bootstrap fix (item 1): when the first CPR times
+// out at the 120 ms baseline, _updateRtt(120) is called, seeding the RTT
+// sample.  The second request must therefore use 120 * CPR_RTT_SCALE (480 ms)
+// as its timeout, NOT the 120 ms baseline.  Without the bootstrap, both
+// requests would use 120 ms and slow links would never benefit from the
+// adaptive timeout.
+
+describe('G5-regression: timeout seeds RTT floor; next request uses floor * scale not baseline', () => {
+  beforeEach(() => { vi.useFakeTimers(); __resetCprKeypressGuardForTests(); __resetCprRttForTests(); });
+  afterEach(() => { vi.useRealTimers(); __resetCprKeypressGuardForTests(); });
+
+  it('after first CPR times out at baseline, second request uses floor*scale timeout not baseline', () => {
+    const stdin = makeStdin();
+    const stdout = makeStdout();
+    const host = makeCprHost(stdin, stdout);
+
+    // First request: reply never arrives — baseline (120 ms) fires.
+    requestCprAndApplyDelta(host, 10, 50, /* rowDelta= */ 10);
+    expect(host.cprPending).toBe(true);
+
+    // Advance exactly to baseline timeout; first CPR times out.
+    // The timeout handler seeds RTT = CPR_TIMEOUT_MS = 120 ms.
+    vi.advanceTimersByTime(CPR_TIMEOUT_MS + 1);
+    expect(host.cprPending).toBe(false);
+    expect(host.repaintCalls).toBe(1);
+
+    // Second request — now RTT sample = 120 ms is set, so timeout =
+    // min(max(120 * CPR_RTT_SCALE, CPR_TIMEOUT_MS), CPR_TIMEOUT_CEILING_MS)
+    // = min(max(480, 120), 1500) = 480 ms.
+    const expectedSecondTimeout = Math.min(
+      Math.max(CPR_TIMEOUT_MS * CPR_RTT_SCALE, CPR_TIMEOUT_MS),
+      CPR_TIMEOUT_CEILING_MS,
+    );
+    expect(expectedSecondTimeout).toBeGreaterThan(CPR_TIMEOUT_MS); // sanity: 480 > 120
+
+    host.cprPending = false;
+    let repaintCalls2 = 0;
+    host.repaint = () => { repaintCalls2++; };
+
+    requestCprAndApplyDelta(host, 10, 50, /* rowDelta= */ 10);
+    expect(host.cprPending).toBe(true);
+
+    // Advance to just past the baseline (120 ms) — second request must NOT
+    // have timed out yet (adaptive timeout is 480 ms).
+    vi.advanceTimersByTime(CPR_TIMEOUT_MS + 5);
+    expect(host.cprPending).toBe(true);  // adaptive timeout hasn't fired
+    expect(repaintCalls2).toBe(0);
+
+    // Advance to just past the adaptive timeout — second request now fires.
+    vi.advanceTimersByTime(expectedSecondTimeout + 50);
+    expect(host.cprPending).toBe(false);
+    expect(repaintCalls2).toBe(1);
+  });
+
+  it('first reply at 200ms is stale; next request uses timeout floor * scale, not baseline', async () => {
+    // Scenario: first CPR times out at baseline (120 ms), seeding RTT=120.
+    // Then a late reply arrives at 200 ms — it is discarded by the keypress
+    // guard (not by the data listener, which is already gone).  The RTT from
+    // the TIMEOUT bootstrap is 120 ms, so the second request uses 480 ms.
+    // This confirms the stale delta is NOT applied (no double correction).
+    const stdin = makeStdin();
+    const stdout = makeStdout();
+    const host = makeCprHost(stdin, stdout);
+
+    // First request: timeout at 120 ms seeds RTT=120.
+    requestCprAndApplyDelta(host, 10, 50, /* rowDelta= */ 10);
+    vi.advanceTimersByTime(CPR_TIMEOUT_MS + 1);
+    expect(host.cprPending).toBe(false);
+    expect(host.repaintCalls).toBe(1);
+
+    // Late CPR reply arrives at 200 ms (within grace window but data listener gone).
+    // Emit on the stdin data channel — the listener is already removed, so this
+    // bytes just hit readline's keypress decoder (not captured here).
+    // The guard is still active; no new RTT update should be applied.
+    vi.advanceTimersByTime(79); // total: ~200 ms from emit
+    stdin.emit('data', Buffer.from('\x1b[21;1R')); // data listener gone — no effect
+    await Promise.resolve();
+    // No extra repaint from the stale reply.
+    expect(host.repaintCalls).toBe(1);
+
+    // Second request uses RTT=120 (timeout bootstrap only, no late update).
+    host.cprPending = false;
+    let repaintCalls2 = 0;
+    host.repaint = () => { repaintCalls2++; };
+
+    requestCprAndApplyDelta(host, 10, 50, /* rowDelta= */ 10);
+
+    // Baseline (120 ms) must not fire the second request.
+    vi.advanceTimersByTime(CPR_TIMEOUT_MS + 5);
+    expect(host.cprPending).toBe(true); // adaptive keeps it alive
+
+    // Advance to adaptive ceiling.
+    const floor = Math.min(
+      Math.max(CPR_TIMEOUT_MS * CPR_RTT_SCALE, CPR_TIMEOUT_MS),
+      CPR_TIMEOUT_CEILING_MS,
+    );
+    vi.advanceTimersByTime(floor + 50);
+    expect(host.cprPending).toBe(false);
+    expect(repaintCalls2).toBe(1);
   });
 });
