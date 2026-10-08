@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.305.5] - 2026-10-08
+
+### Fixed
+- enforce named-agent tool and bash restrictions on compose nodes; block peer tools for children at dispatch (#3270) (d9fdf69b)
+
 ## [5.305.4] - 2026-10-08
 
 ### Added

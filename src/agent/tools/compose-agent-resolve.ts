@@ -48,6 +48,12 @@ export interface ResolvedComposeAgent {
    * normal compose-node surface.
    */
   canUseTool?: CanUseTool;
+  /**
+   * Named agent's `bashReadOnly` contract (e.g. git-investigator). Threaded
+   * into the node provider's constructor so the dispatcher blocks mutating
+   * bash. Set only when true.
+   */
+  readOnlyBash?: true;
 }
 
 /**
@@ -120,16 +126,19 @@ export function resolveComposeNodeAgent(
     result.namedAgentModel = defModel;
   }
 
+  // Bash restriction: forwarded independently of the allowlist (a
+  // `bashReadOnly` agent may inherit-all tools and still be shell-read-only).
+  if (resolvedAccess.bashReadOnly) result.readOnlyBash = true;
+
   // Tool restriction: build canUseTool from the effective allowlist.
   // When allowedTools is undefined (inherit-all definition), skip — no
   // additional restriction beyond the normal compose-node surface.
   if (resolvedAccess.allowedTools !== undefined) {
     result.canUseTool = buildAllowlistCanUseTool(resolvedAccess.allowedTools);
-    // Contract: this value reflects the DECLARED frontmatter surface, not the
-    // effective provider surface. Compose nodes get a workspace-backed provider
-    // (nesting.ts:391, CHILD_ALLOWED_TOOLS) that grants write tools beyond the
-    // declared allowlist. compose-executor.ts overrides replaySafe to false for
-    // all workspace-backed nodes to close this gap.
+    // Contract: this value reflects the DECLARED frontmatter surface. The
+    // node provider (buildComposeNodeProvider) enforces it via canUseTool on
+    // top of CHILD_ALLOWED_TOOLS; compose-executor.ts still pins replaySafe to
+    // false for compose nodes (conservative; unchanged).
     result.replaySafe = isComposeReplaySafe(resolvedAccess.allowedTools);
   }
 
