@@ -48,9 +48,9 @@
  *    filtering (#2302), because no human is present to approve. The block
  *    message on headless does not offer an interactive escape hatch.
  *
- * Headless is `context.nonInteractive === true` (the session's
- * `AgentConfig.isNonInteractive`, threaded by the dispatcher: `afk chat`, the
- * daemon's non-pull tasks, and every fork unless it opts back in) OR no grant
+ * Headless is `context.nonInteractive === true` (`isHeadlessSession(config)`,
+ * threaded by the dispatcher: `afk chat`, every daemon task including pull,
+ * and every fork unless it opts back in) OR no grant
  * manager on the context. Grant-manager ABSENCE alone is NOT a usable headless
  * signal in production: both providers inject themselves as the session grant
  * manager on every surface, so keying on absence left the #2302 floor dead.
@@ -58,7 +58,8 @@
  * The restricted roots are the typed-tool read denylist (`read-denylist.ts`)
  * plus a few bash-only extras — one shared list, so a credential path floored
  * for `read_file` is floored for `cat` too, and its exact-file carve-outs
- * (`~/.afk/config/mcp.json`) stay readable on both surfaces. See
+ * (`~/.afk/config/mcp.json`) stay readable in interactive bash. Headless bash
+ * skips the carve-outs (deny by default), since it cannot tell read from write. See
  * {@link builtinBashSensitiveRoots} for what each half contributes,
  * {@link deriveRestrictedSubstrings} for the interactive (grant-filtered) path,
  * and {@link headlessRestrictedSubstrings} for the headless (unfiltered) floor.
@@ -214,10 +215,11 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     // Precompute the sensitive-path view ONCE — both checks below consume it.
     // `scanned` resolves the obvious `~` / `$HOME` shell idioms to the real home
     // dir (NOT a parser — variable-assembled paths are out of scope; see module
-    // header), then blanks out the read denylist's exact-file carve-outs so a
-    // legitimate `cat ~/.afk/config/mcp.json` does not trip the enclosing
-    // `~/.afk/config` root. Both checks scan this same string, so the carve-out
-    // cannot apply to one and not the other.
+    // header), then, on interactive surfaces only, blanks out the read
+    // denylist's exact-file carve-outs so a legitimate
+    // `cat ~/.afk/config/mcp.json` does not trip the enclosing `~/.afk/config`
+    // root. Both checks scan this same string, so the carve-out cannot apply to
+    // one and not the other.
     //
     // `restrictedSubstrings` is:
     //   - On interactive surfaces (not headless): the grant-filtered set, so
@@ -227,11 +229,15 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     //     injected payload on an unattended daemon could write to ~/.afk/config
     //     or read ~/.ssh via plain bash. The write-denylist protects the TYPED
     //     tools unconditionally; this makes the bash surface consistent.
-    //     The exact-file carve-outs (mcp.json) still apply via scrubAllowlistedRefs
-    //     above, so `cat ~/.afk/config/mcp.json` remains allowed on headless too.
+    //     The exact-file READ carve-outs (mcp.json, schedules.json) are NOT
+    //     scrubbed on headless: a bash reference cannot be told apart as read
+    //     or write, and writing either file plants an MCP server or a cron
+    //     task the bypassPermissions daemon runs. Deny by default there; the
+    //     typed write denylist floors all of ~/.afk/config the same way.
     const home = homedir();
     const afkHome = configuredAfkHome();
-    const scanned = scrubAllowlistedRefs(normalizeHomeRefs(command, home, afkHome), home, afkHome);
+    const normalized = normalizeHomeRefs(command, home, afkHome);
+    const scanned = headless ? normalized : scrubAllowlistedRefs(normalized, home, afkHome);
     const restrictedSubstrings =
       grantManager !== undefined && !headless
         ? deriveRestrictedSubstrings(grantManager.getGrants())
@@ -719,7 +725,7 @@ export function deriveRestrictedSubstrings(grants: {
 
 /**
  * The restricted-path floor used on **headless surfaces** (#2302): any bash
- * PreToolUse context with `nonInteractive === true` (daemon non-pull tasks,
+ * PreToolUse context with `nonInteractive === true` (every daemon task,
  * `afk chat`, forks unless they opt back in) or with no grant manager at all.
  * A wired grant manager does NOT make a context interactive: every production
  * provider wires itself, so the explicit `nonInteractive` signal is what makes
@@ -746,9 +752,11 @@ export function deriveRestrictedSubstrings(grants: {
  * agent-afk inside an OS-level sandbox (macOS `sandbox-exec`, Linux Landlock /
  * bubblewrap, Docker with dropped capabilities).
  *
- * The exact-file carve-outs (`~/.afk/config/mcp.json`, etc.) are already
- * blanked by {@link scrubAllowlistedRefs} before this list is scanned, so
- * `cat ~/.afk/config/mcp.json` remains allowed on headless surfaces.
+ * The exact-file READ carve-outs (`~/.afk/config/mcp.json`,
+ * `~/.afk/config/schedules.json`, ...) are NOT blanked on headless surfaces:
+ * the factory skips {@link scrubAllowlistedRefs} there, because bash cannot
+ * distinguish a read from a write and `echo x > ~/.afk/config/mcp.json` would
+ * plant an MCP server. Those files are therefore blocked in headless bash.
  */
 function headlessRestrictedSubstrings(): string[] {
   return [

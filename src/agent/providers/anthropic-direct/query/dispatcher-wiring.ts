@@ -56,6 +56,7 @@ import { registerPresenceLifecycle, resolveTopLevelSessionId } from './presence-
 import type { BuildDispatcherOptions } from '../build-dispatcher.js';
 import type { RuntimeSubagents } from '../../../awareness/index.js';
 import { isWhatifEpisode } from '../../../whatif-episode-gate.js';
+import { isHeadlessSession } from '../../shared/headless-session.js';
 
 export interface DispatcherWiringArgs {
   config: AgentConfig;
@@ -209,7 +210,9 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
         hookRegistry: config.hookRegistry,
         planExitControls: config.planExitControls,
         // #2302: headless bash floor keys on this, not grant-manager absence.
-        ...(config.isNonInteractive === true ? { isNonInteractive: true } : {}),
+        // isHeadlessSession (not bare isNonInteractive) so daemon pull tasks,
+        // which keep ask_question, still get the unattended floor.
+        ...(isHeadlessSession(config) ? { isNonInteractive: true } : {}),
       });
 
   // External-dispatcher branch: the caller owns routing for whatever tools

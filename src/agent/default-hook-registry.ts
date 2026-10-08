@@ -303,8 +303,8 @@ export function createDefaultHookRegistry(
   // #527; the global ref was retired in #528). Both production providers wire
   // THEMSELVES as the grant manager on EVERY surface (REPL, Telegram, afk chat,
   // daemon, forks), so its presence is NOT an interactivity signal; the
-  // explicit one is `context.nonInteractive` (AgentConfig.isNonInteractive,
-  // threaded by the dispatcher, #2302):
+  // explicit one is `context.nonInteractive` (isHeadlessSession(config):
+  // isNonInteractive OR surface 'daemon', threaded by the dispatcher, #2302):
   //   - bash restricted-root check: nonInteractive (or no grant manager) uses
   //     the UNFILTERED builtin floor, else the `/allow-dir`-filtered set;
   //   - bash interpreter denylist: gated on a wired grant manager, NOT on
@@ -355,10 +355,10 @@ export function createDefaultHookRegistry(
         // circuits the whole `if (!disabled)` block above):
         //   - disableInterpreterGuard: force the denylist OFF even on
         //     interactive surfaces (wins over force).
-        //   - forceInterpreterGuard: force the denylist ON even on headless
-        //     surfaces, where it otherwise fails open (the denylist is gated on
-        //     a wired grant manager so headless automation running `python -c`
-        //     / `sh -c` isn't hard-blocked with no recourse).
+        //   - forceInterpreterGuard: force the denylist ON even for contexts
+        //     with no grant manager, where it otherwise fails open (the
+        //     denylist is gated on a wired grant manager, so non-dispatcher
+        //     callers running `python -c` / `sh -c` aren't hard-blocked).
         disableInterpreterGuard: env.AFK_DISABLE_BASH_INTERPRETER_GUARD === '1',
         forceInterpreterGuard: env.AFK_FORCE_BASH_INTERPRETER_GUARD === '1',
       }),

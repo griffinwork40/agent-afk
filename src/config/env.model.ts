@@ -81,7 +81,8 @@ export const MODEL_ENV_REGISTRY = [
       'leaving the rest of path-approval intact. Applies on interactive surfaces (REPL/Telegram), ' +
       'where the denylist is active but your workflow legitimately runs interpreter one-liners. ' +
       'The restricted-root substring check is unaffected. Default: denylist active on interactive ' +
-      'surfaces; headless already fails open (opt in with AFK_FORCE_BASH_INTERPRETER_GUARD=1). To ' +
+      'surfaces; contexts with no grant manager already fail open (opt in with ' +
+      'AFK_FORCE_BASH_INTERPRETER_GUARD=1). To ' +
       'disable all of path-approval + bash restriction instead, use AFK_DISABLE_PATH_APPROVAL=1.',
     type: 'boolean',
     required: false,

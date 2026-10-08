@@ -541,7 +541,8 @@ describe('OpenAICompatibleProvider — config.isNonInteractive reaches the PreTo
       // Block so the harmless command never actually spawns.
       return { decision: 'block', reason: 'captured' };
     });
-    const provider = new OpenAICompatibleProvider({ permissions: { allowedTools: ['bash'] } });
+    // ask_question allowed too so the daemon-pull case can prove it survives.
+    const provider = new OpenAICompatibleProvider({ permissions: { allowedTools: ['bash', 'ask_question'] } });
     await collect(provider.query({ prompt: singleInput('run it'), config: baseConfig({ hookRegistry: registry, ...over }) }));
     return seen;
   }
@@ -556,6 +557,14 @@ describe('OpenAICompatibleProvider — config.isNonInteractive reaches the PreTo
     const seen = await captureCtx({});
     expect(seen.grantManagerWired).toBe(true);
     expect(seen.nonInteractive).toBeUndefined();
+  });
+
+  it('daemon pull shape (surface daemon, isNonInteractive false): headless floor ON, ask_question KEPT', async () => {
+    const seen = await captureCtx({ surface: 'daemon', isNonInteractive: false });
+    expect(seen.grantManagerWired).toBe(true);
+    expect(seen.nonInteractive).toBe(true);
+    const tools = (createCalls[0]!.args as { tools?: Array<{ function?: { name?: string } }> }).tools ?? [];
+    expect(tools.map((t) => t.function?.name)).toContain('ask_question');
   });
 });
 

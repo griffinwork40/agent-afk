@@ -117,7 +117,7 @@ export interface PreDispatchGateDeps {
   /** Session grant manager injected into PreToolUse context. */
   sessionGrantManager: GrantManager | undefined;
   /**
-   * Session is non-interactive (`AgentConfig.isNonInteractive`). Injected into
+   * Session is headless (`isHeadlessSession(config)`). Injected into
    * the PreToolUse context as `nonInteractive: true` when set — the explicit
    * headless signal, since a grant manager is wired on every production surface.
    */

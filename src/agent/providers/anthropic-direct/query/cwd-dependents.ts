@@ -16,6 +16,7 @@ import type { ComposeExecutor } from '../../../tools/compose-executor.js';
 import type { ToolDispatcher } from '../tool-dispatcher.js';
 import type { RuntimeStateSource } from '../../../awareness/index.js';
 import { assembleSystemPrompt, type StableSystemParts } from './system-prompt.js';
+import { isHeadlessSession } from '../../shared/headless-session.js';
 
 export type CwdDependentsFactory = (newCwd: string) => {
   userSystem: string;
@@ -137,7 +138,7 @@ export function createCwdDependentsFactory(args: CwdDependentsFactoryArgs): CwdD
       // this previously dropped `exit_plan_mode` after a cwd re-anchor while planning.
       planExitControls: args.config.planExitControls,
       // #2302: a cwd re-anchor must not drop the headless bash floor.
-      ...(args.config.isNonInteractive === true ? { isNonInteractive: true } : {}),
+      ...(isHeadlessSession(args.config) ? { isNonInteractive: true } : {}),
     });
     return { userSystem: newUserSystem, dispatcher: newDispatcher };
   };

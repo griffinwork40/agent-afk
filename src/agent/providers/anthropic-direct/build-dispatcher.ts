@@ -131,7 +131,8 @@ export interface BuildDispatcherOptions {
   /** Background process registry (`bash run_in_background`); root REPL sessions only. */
   processJobs?: import('../../shell-jobs/process-jobs.js').ProcessJobRegistry;
   /**
-   * `AgentConfig.isNonInteractive`, forwarded to the dispatcher so every
+   * `isHeadlessSession(config)` (NOT bare `AgentConfig.isNonInteractive`, so
+   * daemon pull tasks count), forwarded to the dispatcher so every
    * PreToolUse context carries the explicit headless signal (#2302). The
    * provider is wired as the grant manager on every surface, so grant-manager
    * presence cannot tell the bash-restriction hook it is unattended.

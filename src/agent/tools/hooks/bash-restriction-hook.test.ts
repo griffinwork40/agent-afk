@@ -58,7 +58,13 @@ function ctx(command: unknown, grantManager: GrantManager | undefined = mockGran
   };
 }
 
-/** Like ctx() but never injects a grantManager — simulates a headless surface. */
+/**
+ * Like ctx() but never injects a grantManager. Exercises ONLY the
+ * no-grant-manager fallback path of the headless check; production headless
+ * sessions carry a real grant manager plus `nonInteractive: true`, which the
+ * suite 'nonInteractive drives the headless floor in production shape' covers
+ * via prodCtx().
+ */
 function headlessCtx(command: unknown): PreToolUseContext {
   return { event: 'PreToolUse', toolName: 'bash', input: { command } };
 }
@@ -1139,9 +1145,28 @@ describe('createBashRestrictionHook — nonInteractive drives the headless floor
     expect(hook(prodCtx('echo AFK_SYSTEM_PROMPT=evil >> ~/.afk/config/afk.env', true)).decision).toBe('block');
   });
 
-  it('keeps the exact-file carve-out readable on a nonInteractive session', () => {
+  it('blocks even the exact-file read carve-out on a nonInteractive session (deny by default)', () => {
     const hook = createBashRestrictionHook({});
-    expect(hook(prodCtx(`cat ${join(home, '.afk', 'config', 'mcp.json')}`, true)).decision).not.toBe('block');
+    expect(hook(prodCtx(`cat ${join(home, '.afk', 'config', 'mcp.json')}`, true)).decision).toBe('block');
+  });
+
+  it('blocks writing the mcp.json carve-out on a nonInteractive session (plants an MCP server)', () => {
+    const hook = createBashRestrictionHook({});
+    const decision = hook(prodCtx('echo x > ~/.afk/config/mcp.json', true));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('headless surface');
+  });
+
+  it('blocks appending to the schedules.json carve-out on a nonInteractive session (plants a cron task)', () => {
+    const hook = createBashRestrictionHook({});
+    const decision = hook(prodCtx('echo x >> ~/.afk/config/schedules.json', true));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('headless surface');
+  });
+
+  it('keeps the exact-file carve-out readable on an interactive session', () => {
+    const hook = createBashRestrictionHook({});
+    expect(hook(ctx('cat ~/.afk/config/mcp.json')).decision).not.toBe('block');
   });
 
   it('WITHOUT nonInteractive the same grant manager keeps the grant-filtered (interactive) behaviour', () => {

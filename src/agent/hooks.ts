@@ -256,8 +256,8 @@ export interface PreToolUseContext {
   grantManager?: GrantManager;
   /**
    * True when the session executing this call cannot reach a human to approve
-   * anything (`AgentConfig.isNonInteractive`: `afk chat`, daemon non-pull
-   * tasks, forks unless they opt back in). Injected per-call by
+   * anything (`isHeadlessSession(config)`: `afk chat`, every daemon task
+   * including pull, forks unless they opt back in). Injected per-call by
    * {@link SessionToolDispatcher} from its `isNonInteractive` option; absent
    * (never `false`) on interactive sessions. This is the explicit headless
    * signal: {@link grantManager} presence is NOT, because every production

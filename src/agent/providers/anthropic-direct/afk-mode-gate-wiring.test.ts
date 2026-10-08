@@ -269,9 +269,13 @@ describe('AnthropicDirectProvider — config.isNonInteractive reaches the PreToo
   // `context.nonInteractive`, because this provider wires itself as the grant
   // manager on every surface. Pin that the session flag survives the
   // query() → dispatcher-wiring → buildDispatcher → dispatcher → preCtx path.
-  async function captureCtx(isNonInteractive: boolean | undefined): Promise<{
+  async function captureCtx(
+    isNonInteractive: boolean | undefined,
+    surface?: 'daemon',
+  ): Promise<{
     nonInteractive: unknown;
     grantManagerWired: boolean;
+    toolNames: string[];
   }> {
     messagesCreateMock.mockReset();
     __setAnthropicClientFactory(null);
@@ -284,7 +288,7 @@ describe('AnthropicDirectProvider — config.isNonInteractive reaches the PreToo
       }
       return fromArray(makeTextStream('done'));
     });
-    const seen = { nonInteractive: 'unset' as unknown, grantManagerWired: false };
+    const seen = { nonInteractive: 'unset' as unknown, grantManagerWired: false, toolNames: [] as string[] };
     const registry = createHookRegistry();
     registry.register('PreToolUse', (ctx) => {
       if (ctx.event === 'PreToolUse' && ctx.toolName === 'bash') {
@@ -294,7 +298,8 @@ describe('AnthropicDirectProvider — config.isNonInteractive reaches the PreToo
       // Block so the harmless command never actually spawns.
       return { decision: 'block', reason: 'captured' };
     });
-    const provider = new AnthropicDirectProvider({ permissions: { allowedTools: ['bash'] } });
+    // ask_question allowed too so the daemon-pull case can prove it survives.
+    const provider = new AnthropicDirectProvider({ permissions: { allowedTools: ['bash', 'ask_question'] } });
     await collect(
       provider.query({
         prompt: singleInput('run it'),
@@ -303,9 +308,12 @@ describe('AnthropicDirectProvider — config.isNonInteractive reaches the PreToo
           apiKey: 'sk-ant-oat01-test',
           hookRegistry: registry,
           ...(isNonInteractive !== undefined ? { isNonInteractive } : {}),
+          ...(surface !== undefined ? { surface } : {}),
         },
       }),
     );
+    const firstReq = messagesCreateMock.mock.calls[0]?.[0] as { tools?: Array<{ name: string }> } | undefined;
+    seen.toolNames = (firstReq?.tools ?? []).map((t) => t.name);
     return seen;
   }
 
@@ -319,5 +327,12 @@ describe('AnthropicDirectProvider — config.isNonInteractive reaches the PreToo
     const seen = await captureCtx(undefined);
     expect(seen.grantManagerWired).toBe(true);
     expect(seen.nonInteractive).toBeUndefined();
+  });
+
+  it('daemon pull shape (surface daemon, isNonInteractive false): headless floor ON, ask_question KEPT', async () => {
+    const seen = await captureCtx(false, 'daemon');
+    expect(seen.grantManagerWired).toBe(true);
+    expect(seen.nonInteractive).toBe(true);
+    expect(seen.toolNames).toContain('ask_question');
   });
 });

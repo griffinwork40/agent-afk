@@ -203,8 +203,8 @@ export interface SessionToolDispatcherOptions {
    */
   sessionGrantManager?: GrantManager;
   /**
-   * `AgentConfig.isNonInteractive` of the owning session: no human can approve
-   * a prompt (`afk chat`, daemon non-pull tasks, forks by default). Injected
+   * `isHeadlessSession(config)` of the owning session: no human can approve
+   * a prompt (`afk chat`, every daemon task including pull, forks by default). Injected
    * onto every PreToolUse context as `context.nonInteractive` (only when true)
    * so the bash-restriction hook applies its unfiltered headless floor even
    * though a grant manager is wired (#2302). Default false.
