@@ -26,8 +26,10 @@ export const NULL_DEFERRED_VALUES = new Set([
   'nothing',
   'nil',
   '-',
-  '—',   // em-dash
+  '—',   // em-dash (U+2014)
+  '–',   // en-dash (U+2013)
   'n.a.',
+  'n.a',  // normalized form after trailing-punctuation strip
   '(none)',
   '(n/a)',
 ]);
@@ -38,8 +40,8 @@ export const NULL_DEFERRED_VALUES = new Set([
  * common null-equivalent marker. Handles optional trailing punctuation.
  */
 function isNullDeferredValue(value: string): boolean {
-  // Strip optional trailing punctuation before matching
-  const normalized = value.trim().replace(/[.!?,]+$/, '').toLowerCase();
+  // Strip optional trailing punctuation before matching (including ; and :)
+  const normalized = value.trim().replace(/[.!?,;:]+$/, '').toLowerCase();
   return normalized.length === 0 || NULL_DEFERRED_VALUES.has(normalized);
 }
 

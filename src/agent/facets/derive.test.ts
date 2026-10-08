@@ -1606,6 +1606,59 @@ describe('deriveSessionFacet', () => {
       expect(facet.outcome_downgrade_reason).toBeUndefined();
     });
 
+    it('no downgrade: Deferred: n.a. (with trailing period) is a null-equivalent marker (#2798)', () => {
+      // "n.a." ends with a period; the trailing-punctuation strip yields "n.a",
+      // which must also be recognised as a null-equivalent so the downgrade is
+      // not triggered (regression guard for the codex-connector finding).
+      const text = '**Done**\n- What was done: fixed it.\n- Deferred: n.a.';
+      const facet = deriveSessionFacet(doneSession({
+        doneText: text,
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade: Deferred: n.a (without trailing period) is a null-equivalent marker (#2798)', () => {
+      const text = '**Done**\n- What was done: fixed it.\n- Deferred: n.a';
+      const facet = deriveSessionFacet(doneSession({
+        doneText: text,
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade: Deferred: \u2013 (en-dash U+2013) is a null-equivalent marker (#2798)', () => {
+      const text = '**Done**\n- What was done: fixed it.\n- Deferred: \u2013';
+      const facet = deriveSessionFacet(doneSession({
+        doneText: text,
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade: Deferred: none; (trailing semicolon) is a null-equivalent marker (#2798)', () => {
+      const text = '**Done**\n- What was done: fixed it.\n- Deferred: none;';
+      const facet = deriveSessionFacet(doneSession({
+        doneText: text,
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
+    it('no downgrade: Deferred: none: (trailing colon) is a null-equivalent marker (#2798)', () => {
+      const text = '**Done**\n- What was done: fixed it.\n- Deferred: none:';
+      const facet = deriveSessionFacet(doneSession({
+        doneText: text,
+        toolEvents: [{ toolName: 'write_file', toolUseId: 'wf1', inputRaw: JSON.stringify({ file_path: '/a.ts', content: 'x' }) }],
+      }));
+      expect(facet.outcome).toBe('fully_achieved');
+      expect(facet.outcome_downgrade_reason).toBeUndefined();
+    });
+
     it('downgrade fires for a real Deferred value even with null-like prefix (#2798)', () => {
       // "Deferred: none of the items were completed" — not a null-equivalent marker
       // because it has real content after stripping the trailing punctuation.
