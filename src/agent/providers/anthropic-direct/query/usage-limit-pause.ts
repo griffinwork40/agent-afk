@@ -99,6 +99,11 @@ async function* runHotSwapParkLoop(
     let reLimited: ProviderEvent | null = null;
     let reLimitedResetsAt: Date | undefined;
     for await (const event of next(ctx, runInput, isClosed)) {
+      // A probe that re-hits the limit emits the live throttle signal for
+      // its own 429 (tracing-fetch → throttle-signals) BEFORE the error.
+      // That is not evidence the limit lifted; treating it as such emitted a
+      // false `resumed` and leaked the raw 429. Drop it while still paused.
+      if (!resumeEmitted && event.type === 'rate_limit') continue;
       if (!resumeEmitted && event.type === 'error') {
         const c = classifyUsageLimitError(event.error);
         if (c && (c.kind === 'oauth-limit' || c.kind === 'oauth-limit-no-ts')) {

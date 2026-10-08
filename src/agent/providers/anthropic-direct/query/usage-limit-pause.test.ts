@@ -213,6 +213,37 @@ describe('usageLimitNoTimestampPause', () => {
     expect(events[2]?.type).toBe('turn.completed');
   });
 
+  it('does not falsely resume when the re-limited probe emits its throttle signal first', async () => {
+    // Regression (witness bda55f9e, 2026-10-08): the probe's own 429 pushes a
+    // live `rate_limit` event (tracing-fetch → throttle-signals) BEFORE the
+    // `error`. The peek treated it as "limit lifted", emitted `resumed`, and
+    // leaked the raw 429 instead of staying parked.
+    vi.useFakeTimers();
+    waitForHotSwapMock.mockResolvedValue('timer');
+    const ctx = makeCtx(true);
+    const input = makeInput();
+    const pending: ProviderEvent = { type: 'error', error: makeError() };
+    let calls = 0;
+    const throttleThenLimited: TierGenerator = async function* () {
+      calls++;
+      if (calls === 1) {
+        yield { type: 'rate_limit', sessionId: 's1', status: 429, attempt: 1, retryAfterMs: 219_324_000 };
+        yield { type: 'error', error: makeReLimitedError() };
+        return;
+      }
+      yield cleanDone;
+    };
+
+    const promise = drain(
+      usageLimitNoTimestampPause(ctx, input, () => false, throttleThenLimited, pending),
+    );
+    await vi.advanceTimersByTimeAsync(200);
+    const events = await promise;
+
+    expect(calls).toBe(2);
+    expect(events.map((e) => e.type)).toEqual(['paused', 'resumed', 'turn.completed']);
+  });
+
   it('surfaces error after cap with no hot-swap', async () => {
     vi.useFakeTimers();
     // Always timer result (no hot-swap, limit never lifts)

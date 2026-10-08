@@ -211,6 +211,7 @@ export class RetryLayer {
         return layer.tokenRefresher;
       },
       getClient: () => layer._client,
+      getClientToken: () => layer._clientToken,
       rotateHeaders: (runInput) => layer.rotateHeaders(runInput),
       forceClientRefresh: () => layer.forceClientRefresh(),
       getUsageLimitWait: () => layer.usageLimitWaitPromise,
