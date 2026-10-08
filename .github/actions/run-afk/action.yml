@@ -1,0 +1,122 @@
+name: Run AFK
+description: |
+  Composite action that installs Node.js + pnpm, installs agent-afk from npm
+  (or a local path), then runs a single `afk chat` prompt.  Credentials are
+  accepted as inputs and mapped to the expected env vars so they are never
+  hard-coded in a caller workflow.
+
+inputs:
+  # --- required ---
+  anthropic-api-key:
+    description: >
+      Anthropic API key (ANTHROPIC_API_KEY).  Pass via a repository or
+      environment secret: `${{ secrets.ANTHROPIC_API_KEY }}`.
+    required: true
+
+  prompt:
+    description: >
+      The prompt to send to `afk chat`.  Supports multi-line strings via
+      the YAML literal-block scalar (|).
+    required: true
+
+  # --- optional / tuning ---
+  afk-version:
+    description: >
+      npm version of agent-afk to install, e.g. `latest`, `5.0.0`, or a
+      dist-tag.  Use `local` to skip the install step and run from the
+      checked-out repo (requires pnpm install to have been called earlier).
+    required: false
+    default: latest
+
+  node-version:
+    description: Node.js version to use (must satisfy agent-afk's engines field).
+    required: false
+    default: '22'
+
+  model:
+    description: >
+      Model slug or id forwarded to `afk chat --model`.  Defaults to the
+      repository's configured default when empty.
+    required: false
+    default: ''
+
+  working-directory:
+    description: >
+      Directory to run `afk chat` from.  Defaults to the repository root.
+      A per-project `AFK.md` placed here is picked up automatically as the
+      operator overlay.
+    required: false
+    default: '.'
+
+  # --- optional / output ---
+  output-file:
+    description: >
+      When set, the afk response is also written to this path (relative to
+      `working-directory`) so downstream steps can consume it as an artifact.
+    required: false
+    default: ''
+
+outputs:
+  response:
+    description: The text response returned by `afk chat`.
+    value: ${{ steps.run.outputs.response }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      # pinned to SHA for supply-chain safety; tag: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Setup pnpm (only when installing from npm)
+      # pinned to SHA for supply-chain safety; tag: pnpm/action-setup@v4
+      if: inputs.afk-version != 'local'
+      uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+      with:
+        version: latest
+        dest: ${{ runner.temp }}/setup-pnpm
+
+    - name: Install agent-afk from npm
+      if: inputs.afk-version != 'local'
+      shell: bash
+      run: npm install --global "agent-afk@${{ inputs.afk-version }}"
+
+    - name: Run afk chat
+      id: run
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        # Non-interactive: disable TUI chrome that is meaningless in CI logs.
+        AFK_NO_TUI: '1'
+        # Prevent afk from trying to load Telegram or browser state in CI.
+        AFK_TELEGRAM_BOT_TOKEN: ''
+      run: |
+        MODEL_FLAG=""
+        if [ -n "${{ inputs.model }}" ]; then
+          MODEL_FLAG="--model ${{ inputs.model }}"
+        fi
+
+        # Capture the response; tee to stdout so it appears in CI logs.
+        RESPONSE=$(afk chat $MODEL_FLAG "${{ inputs.prompt }}" 2>&1 | tee /dev/stderr; exit ${PIPESTATUS[0]})
+        EXIT_CODE=$?
+
+        if [ $EXIT_CODE -ne 0 ]; then
+          echo "::error::afk chat exited with code $EXIT_CODE"
+          exit $EXIT_CODE
+        fi
+
+        # Write to the output file when requested.
+        if [ -n "${{ inputs.output-file }}" ]; then
+          printf '%s' "$RESPONSE" > "${{ inputs.output-file }}"
+          echo "Response written to ${{ inputs.output-file }}"
+        fi
+
+        # Expose as a step output.  Multiline values must use the delimiter form.
+        {
+          echo "response<<__AFK_EOF__"
+          printf '%s' "$RESPONSE"
+          echo "__AFK_EOF__"
+        } >> "$GITHUB_OUTPUT"
