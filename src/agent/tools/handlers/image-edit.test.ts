@@ -112,6 +112,31 @@ describe('image_edit handler', () => {
     expect(result.content).toContain('expired');
   });
 
+  it('rejects chatgpt-oauth source without calling the Images Edit API', async () => {
+    // The Images Edit endpoint does not accept ChatGPT OAuth tokens (wrong
+    // OAuth scopes). The handler must reject with a clear error naming the
+    // supported credential sources and never reach the fetch call.
+    vi.stubEnv('AFK_IMAGE_API_KEY', '');
+    mockResolveAuth.mockReturnValue({
+      apiKey: 'chatgpt-oauth-token',
+      source: 'chatgpt-oauth',
+      accountId: 'acct-123',
+    });
+    const fetchFn = vi.fn();
+    const handler = createImageEditHandler(fetchFn);
+    const result = await handler(
+      { prompt: 'test', image_paths: [refImagePath] },
+      signal,
+      { resolveBase: tmpDir, sessionId: 'oauth-reject-test' },
+    );
+    expect(result.isError).toBe(true);
+    // Must name the supported credentials.
+    expect(result.content).toContain('AFK_IMAGE_API_KEY');
+    expect(result.content).toContain('OPENAI_API_KEY');
+    // Must NOT have forwarded the OAuth token to the Images Edit endpoint.
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
   // ── Daemon gate ─────────────────────────────────────────────────────────
 
   it('blocks in daemon mode when AFK_IMAGE_ALLOW_DAEMON is not set', async () => {
