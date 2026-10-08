@@ -330,3 +330,27 @@ describe('handleStream — lifecycle', () => {
     await streaming.catch(() => {});
   });
 });
+
+describe('handleStream — headers are committed immediately', () => {
+  it('resolves fetch() for a brand-new session that has no ledger yet', async () => {
+    // Regression: `writeHead` alone buffers the head until the first body
+    // write. A new owned session writes nothing until its first prompt (or the
+    // 15s heartbeat), so the dashboard's fetch never resolved and it sat on
+    // "Connecting to session...". `flushHeaders()` commits the 200 at once.
+    handle = await startWebServer({ port: 0 });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2000);
+    try {
+      const res = await fetch(`http://127.0.0.1:${handle.port}/api/sessions/brand-new-session/stream`, {
+        headers: { authorization: `Bearer ${handle.token}` },
+        signal: controller.signal,
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('text/event-stream');
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+    }
+  });
+});
+

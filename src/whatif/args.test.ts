@@ -617,3 +617,122 @@ describe('parseWhatifArgs — --max-predictions flag', () => {
     expect(r.options.maxPredictions).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// --predict flag (#2861)
+// ---------------------------------------------------------------------------
+
+describe('parseWhatifArgs — --predict flag', () => {
+  it('defaults operatorPredictions to undefined when not provided', () => {
+    const r = parseWhatifArgs(['--append', 'text']) as ParsedWhatifArgs;
+    expect(r.options.operatorPredictions).toBeUndefined();
+  });
+
+  it('parses a single --predict', () => {
+    const r = parseWhatifArgs(['--append', 'text', '--predict', 'asks a clarifying question']) as ParsedWhatifArgs;
+    expect(r.options.operatorPredictions).toHaveLength(1);
+    expect(r.options.operatorPredictions![0]!.behavior).toBe('asks a clarifying question');
+    expect(r.options.operatorPredictions![0]!.testQuestion).toContain('asks a clarifying question');
+  });
+
+  it('accumulates multiple --predict flags in order', () => {
+    const r = parseWhatifArgs([
+      '--append', 'text',
+      '--predict', 'first behavior',
+      '--predict', 'second behavior',
+    ]) as ParsedWhatifArgs;
+    expect(r.options.operatorPredictions).toHaveLength(2);
+    expect(r.options.operatorPredictions![0]!.behavior).toBe('first behavior');
+    expect(r.options.operatorPredictions![1]!.behavior).toBe('second behavior');
+  });
+
+  it('returns error when --predict has no value', () => {
+    const r = parseWhatifArgs(['--append', 'text', '--predict']);
+    expect(typeof r).toBe('string');
+    expect(r as string).toContain('requires');
+  });
+
+  it('strips a leading "should" from the testQuestion but preserves it in behavior', () => {
+    // --predict "should greet the user" must produce
+    // testQuestion "Does the response greet the user" (not "…should greet…").
+    const r = parseWhatifArgs(['--append', 'text', '--predict', 'should greet the user']) as ParsedWhatifArgs;
+    expect(r.options.operatorPredictions![0]!.behavior).toBe('should greet the user');
+    expect(r.options.operatorPredictions![0]!.testQuestion).toBe('Does the response greet the user');
+  });
+
+  it('strips a leading "will" from the testQuestion', () => {
+    const r = parseWhatifArgs(['--append', 'text', '--predict', 'will include a code block']) as ParsedWhatifArgs;
+    expect(r.options.operatorPredictions![0]!.testQuestion).toBe('Does the response include a code block');
+  });
+
+  it('--predict can be combined with --verify and --yes', () => {
+    const r = parseWhatifArgs([
+      '--append', 'text', '--predict', 'behavior x', '--verify', '--yes',
+    ]) as ParsedWhatifArgs;
+    expect(r.options.operatorPredictions).toHaveLength(1);
+    expect(r.options.verify).toBe(true);
+    expect(r.yes).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// loadSpecFile — predictions field (#2861)
+// ---------------------------------------------------------------------------
+
+describe('loadSpecFile — predictions field', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'whatif-loadspecfile-predictions-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('loads predictions from spec file when present', () => {
+    const p = join(dir, 'spec-preds.json');
+    writeFileSync(p, JSON.stringify({
+      title: 'With predictions',
+      changes: [{ kind: 'model', model: 'claude-haiku-4-5' }],
+      predictions: [
+        { behavior: 'Asks a clarifying question', testQuestion: 'Does the response ask a clarifying question?' },
+      ],
+    }));
+    const spec = loadSpecFile(p);
+    expect(spec.predictions).toHaveLength(1);
+    expect(spec.predictions![0]!.behavior).toBe('Asks a clarifying question');
+    expect(spec.predictions![0]!.testQuestion).toBe('Does the response ask a clarifying question?');
+  });
+
+  it('returns undefined predictions when not in spec file', () => {
+    const p = join(dir, 'no-preds.json');
+    writeFileSync(p, JSON.stringify({
+      title: 'No predictions',
+      changes: [{ kind: 'model', model: 'claude-haiku-4-5' }],
+    }));
+    const spec = loadSpecFile(p);
+    expect(spec.predictions).toBeUndefined();
+  });
+
+  it('warns and drops invalid prediction entries, returns valid ones', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const p = join(dir, 'mixed-preds.json');
+      writeFileSync(p, JSON.stringify({
+        title: 'Mixed predictions',
+        changes: [{ kind: 'model', model: 'claude-haiku-4-5' }],
+        predictions: [
+          { behavior: 'Valid prediction', testQuestion: 'Does the response do the thing?' },
+          { notABehavior: true }, // invalid — missing behavior and testQuestion
+        ],
+      }));
+      const spec = loadSpecFile(p);
+      expect(spec.predictions).toHaveLength(1);
+      expect(spec.predictions![0]!.behavior).toBe('Valid prediction');
+      expect(warnSpy).toHaveBeenCalledOnce();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});

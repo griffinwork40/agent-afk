@@ -17,13 +17,35 @@
  */
 
 import { z } from 'zod';
-import { TOOL_FAILURE_CLASSES } from './types.js';
-import { BackgroundAgentCancelledPayloadSchema } from './background-agent-schema.js';
+import {
+  BackgroundAgentCancelledPayloadSchema,
+  BackgroundAgentCompletedPayloadSchema,
+  BackgroundAgentDeliveredPayloadSchema,
+  BackgroundAgentFailedPayloadSchema,
+  BackgroundAgentJoinedPayloadSchema,
+  BackgroundAgentStartedPayloadSchema,
+} from './background-agent-schema.js';
 import { BrowserEventPayloadSchema } from './events.browser.js';
 import { CompactionPayloadInputSchema, CompactionPayloadPersistedSchema } from './events.compaction.js';
 import { SessionPhasePayloadSchema } from './events.session-phase.js';
+import { ToolFailureClassSchema, SubagentLifecyclePayloadSchema } from './events.subagent-lifecycle.js';
 
-export { BackgroundAgentCancelledPayloadSchema } from './background-agent-schema.js';
+export {
+  BackgroundAgentCancelledPayloadSchema,
+  BackgroundAgentCompletedPayloadSchema,
+  BackgroundAgentDeliveredPayloadSchema,
+  BackgroundAgentFailedPayloadSchema,
+  BackgroundAgentJoinedPayloadSchema,
+  BackgroundAgentStartedPayloadSchema,
+} from './background-agent-schema.js';
+export {
+  ToolFailureClassSchema,
+  SubagentStartedPayloadSchema,
+  SubagentSucceededPayloadSchema,
+  SubagentFailedPayloadSchema,
+  SubagentCancelledPayloadSchema,
+  SubagentLifecyclePayloadSchema,
+} from './events.subagent-lifecycle.js';
 export {
   BrowserEventToolSchema,
   BrowserActActionSchema,
@@ -54,11 +76,6 @@ export const ToolCallStartedPayloadSchema = z.object({
   resourceFingerprint: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   subagentId: z.string().optional(),
 });
-
-/** Mirrors {@link import('./types.js').ToolFailureClass}. The literal tuple is
- *  imported from `types.ts` (the canonical source) so the validator and the TS
- *  type cannot drift. */
-export const ToolFailureClassSchema = z.enum(TOOL_FAILURE_CLASSES);
 
 export const ToolCallCompletedPayloadSchema = z.object({
   phase: z.literal('completed'),
@@ -107,6 +124,7 @@ export const HookEventNameSchema = z.enum([
   'PostToolUseFailure',
   'SessionStart',
   'SessionEnd',
+  'Stop',
   'SubagentStart',
   'SubagentStop',
 ]);
@@ -134,96 +152,8 @@ export const HookDecisionPayloadSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// subagent_lifecycle
-// ---------------------------------------------------------------------------
-
-export const SubagentStartedPayloadSchema = z.object({
-  transition: z.literal('started'),
-  subagentId: z.string(),
-  parentId: z.string(),
-  model: z.string(),
-  allowedTools: z.array(z.string()).readonly().optional(),
-  systemPromptHash: z.string().optional(),
-  promptHead: z.string().optional(),
-  agentType: z.string().optional(),
-  resolvedAgentType: z.string().optional(),
-});
-
-export const SubagentSucceededPayloadSchema = z.object({
-  transition: z.literal('succeeded'),
-  subagentId: z.string(),
-  durationMs: z.number().nonnegative(),
-  turnCount: z.number().int().nonnegative(),
-  totalCostUsd: z.number().nonnegative().optional(),
-  outputBytes: z.number().int().nonnegative(),
-  stopReason: z.string().optional(),
-});
-
-export const SubagentFailedPayloadSchema = z.object({
-  transition: z.literal('failed'),
-  subagentId: z.string(),
-  errorClass: z.string(),
-  errorMessage: z.string(),
-  partialOutputBytes: z.number().int().nonnegative(),
-  failureClass: ToolFailureClassSchema.optional(),
-});
-
-export const SubagentCancelledPayloadSchema = z.object({
-  transition: z.literal('cancelled'),
-  subagentId: z.string(),
-  source: z.enum(['cascade', 'explicit']),
-  timeout: z.boolean().optional(),
-});
-
-export const SubagentLifecyclePayloadSchema = z.discriminatedUnion('transition', [
-  SubagentStartedPayloadSchema,
-  SubagentSucceededPayloadSchema,
-  SubagentFailedPayloadSchema,
-  SubagentCancelledPayloadSchema,
-]);
-
-// ---------------------------------------------------------------------------
 // background_agent
 // ---------------------------------------------------------------------------
-
-export const BackgroundAgentStartedPayloadSchema = z.object({
-  transition: z.literal('started'),
-  jobId: z.string(),
-  subagentId: z.string(),
-  label: z.string(),
-  model: z.string(),
-});
-
-export const BackgroundAgentCompletedPayloadSchema = z.object({
-  transition: z.literal('completed'),
-  jobId: z.string(),
-  subagentId: z.string(),
-  durationMs: z.number().nonnegative(),
-  outputBytes: z.number().int().nonnegative(),
-});
-
-export const BackgroundAgentFailedPayloadSchema = z.object({
-  transition: z.literal('failed'),
-  jobId: z.string(),
-  subagentId: z.string(),
-  durationMs: z.number().nonnegative(),
-  errorClass: z.string(),
-  errorMessage: z.string(),
-});
-
-export const BackgroundAgentJoinedPayloadSchema = z.object({
-  transition: z.literal('joined'),
-  jobId: z.string(),
-  subagentId: z.string(),
-  jobStatus: z.enum(['completed', 'failed', 'cancelled']),
-});
-
-export const BackgroundAgentDeliveredPayloadSchema = z.object({
-  transition: z.literal('delivered'),
-  jobId: z.string(),
-  subagentId: z.string(),
-  jobStatus: z.enum(['completed', 'failed', 'cancelled']),
-});
 
 export const BackgroundAgentPayloadSchema = z.discriminatedUnion('transition', [
   BackgroundAgentStartedPayloadSchema,
@@ -318,6 +248,22 @@ export const QueuedUserMessagePayloadSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// peer_message
+// ---------------------------------------------------------------------------
+
+export const PeerMessagePayloadSchema = z.object({
+  // 'delivered' is a legacy value (pre-#2810); retained for backward-compatible deserialization of historical traces.
+  action: z.enum(['sent', 'claimed', 'injected', 'delivered', 'held', 'refused', 'dropped', 'reclaimed']),
+  messageId: z.string().optional(),
+  peer: z.string(),
+  bytes: z.number().int().nonnegative(),
+  reason: z.string().optional(),
+  // Present only for action:'held' + reason:'corrupt'; allows correlation of
+  // repeated quarantine events by filename when no parseable envelope exists.
+  file: z.string().optional(),
+});
+
+// ---------------------------------------------------------------------------
 // session_sealed
 // ---------------------------------------------------------------------------
 
@@ -363,6 +309,7 @@ export const TraceEventInputSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('claim'), payload: ClaimPayloadSchema }),
   z.object({ kind: z.literal('browser_event'), payload: BrowserEventPayloadSchema }),
   z.object({ kind: z.literal('queued_user_message'), payload: QueuedUserMessagePayloadSchema }),
+  z.object({ kind: z.literal('peer_message'), payload: PeerMessagePayloadSchema }),
   z.object({ kind: z.literal('session_phase'), payload: SessionPhasePayloadSchema }),
 ]);
 
@@ -433,6 +380,12 @@ export const TraceEventSchema = z.discriminatedUnion('kind', [
     seq: z.number().int().nonnegative(),
     kind: z.literal('queued_user_message'),
     payload: QueuedUserMessagePayloadSchema,
+  }),
+  z.object({
+    ts: z.string().datetime(),
+    seq: z.number().int().nonnegative(),
+    kind: z.literal('peer_message'),
+    payload: PeerMessagePayloadSchema,
   }),
   z.object({
     ts: z.string().datetime(),

@@ -61,6 +61,7 @@ import { emitSessionPhase } from '../../trace/emit.js';
 import { resolveTtfbTimeoutMs } from '../shared/first-byte-timeout.js';
 import { resolveStallTimeoutMs } from '../shared/stream-stall-timeout.js';
 import { resolveMaxToolIterations } from '../shared/tool-loop-cap.js';
+import { isTruncationStopReason } from '../shared/truncation.js';
 import { OVERLOAD_EXHAUSTED, OVERLOAD_EXHAUSTED_NOTICE } from './overload-pause.js';
 import {
   OVERLOAD_MAX_RETRIES,
@@ -75,6 +76,57 @@ import { emitNonToolUseTerminal } from './loop/turn-terminal.js';
 import { TurnAccumulator } from './loop/turn-accumulator.js';
 import { TurnTrace } from '../shared/turn-trace.js';
 import { applyBeforeNextRound } from './loop/inter-round.js';
+// ---------------------------------------------------------------------------
+// Stop-hook seam (issue #2714): extracted helper to keep runTurn under 200 lines
+// ---------------------------------------------------------------------------
+
+/**
+ * Apply the provider-side stop-hook seam on natural turn ends.
+ *
+ * Returns:
+ *  - `'continue'`  — a blocking Stop hook fired; messages already updated;
+ *                    caller should `continue` the outer model loop.
+ *  - `'done'`      — non-blocking (or absent); terminal events already yielded;
+ *                    caller should `return`.
+ *  - `undefined`   — `beforeTurnEnd` not wired or end was not natural;
+ *                    caller should fall through to `emitNonToolUseTerminal`.
+ *
+ * All parameters are explicit — no closures over loop-local variables.
+ */
+async function* applyStopHookSeam(
+  input: RunTurnInput,
+  turnResult: import('./types.js').TurnResult,
+  turn: TurnAccumulator,
+  stopHookContinuation: number,
+): AsyncGenerator<ProviderEvent, 'continue' | 'done' | undefined, void> {
+  const isNaturalEnd = !input.signal.aborted
+    && turnResult.stopReason !== 'refusal'
+    && !isTruncationStopReason(turnResult.stopReason)
+    && turn.windDownReason === null;
+
+  if (!isNaturalEnd || input.beforeTurnEnd === undefined) return undefined;
+
+  // Push assistant content BEFORE the seam so Stop hooks can read the turn's
+  // final text. Strip tool_use blocks first (orphaned ones would 400 the next
+  // API call — same invariant as emitNonToolUseTerminal).
+  const safeBlocks = turnResult.assistantBlocks.filter((b) => b.type !== 'tool_use');
+  if (safeBlocks.length > 0) {
+    input.messages.push({ role: 'assistant', content: safeBlocks });
+  }
+  // Finding 3: extract the assistant text directly from the turn result so
+  // buildStopContext receives fresh data without scanning history.
+  const assistantTextForSeam = turnResult.text.length > 0 ? turnResult.text : undefined;
+  const seamResult = await input.beforeTurnEnd(stopHookContinuation, assistantTextForSeam);
+  if (seamResult?.continueWith) {
+    input.messages.push({ role: 'user', content: seamResult.continueWith });
+    input.journalSync?.sync(input.messages);
+    return 'continue';
+  }
+  // Non-blocking: emit terminal events with empty assistantBlocks (already pushed above).
+  const terminalResult = { ...turnResult, assistantBlocks: [] };
+  yield* emitNonToolUseTerminal(terminalResult, input, turn);
+  return 'done';
+}
 
 /**
  * Run one user turn through the model + tool dispatcher loop. Yields
@@ -96,6 +148,12 @@ import { applyBeforeNextRound } from './loop/inter-round.js';
 export async function* runTurn(
   input: RunTurnInput,
 ): AsyncGenerator<ProviderEvent, void, void> {
+  // stop-hook-continuation rule: track the 0-based continuation counter for
+  // this turn. Incremented each time a blocking Stop hook causes a same-turn
+  // re-entry (PR #2714). Persists across the outer while-true so the cap
+  // is evaluated per-turn, not per-round.
+  let stopHookContinuation = 0;
+
   const maxIterations = resolveMaxToolIterations(input.maxToolUseIterations);
   // TIME sibling of the round cap: `0`/unset means no soft deadline (the
   // top-level default, where a human owns the turn). Taken RAW, deliberately —
@@ -324,6 +382,12 @@ export async function* runTurn(
     input.onUsageProgress?.(turn.usage);
 
     if (turnResult.stopReason !== 'tool_use') {
+      // stop-hook-continuation rule: delegate to the extracted seam helper so
+      // runTurn stays under the 200-line ceiling. See applyStopHookSeam above.
+      const seamOutcome = yield* applyStopHookSeam(input, turnResult, turn, stopHookContinuation);
+      if (seamOutcome === 'continue') { stopHookContinuation += 1; continue; }
+      if (seamOutcome === 'done') return;
+      // undefined → seam was not active; fall through to normal terminal path.
       yield* emitNonToolUseTerminal(turnResult, input, turn);
       return;
     }
@@ -331,7 +395,7 @@ export async function* runTurn(
     // stopReason === 'tool_use' — dispatch the tools, commit the results, and
     // decide whether the turn keeps going. The whole history mutation contract
     // (assistant push, rollback on throw, tool_result commit) lives inside.
-    const round = yield* runToolRound(turnResult, input, turn, maxIterations, softDeadlineMs, turn);
+    const round = yield* runToolRound(turnResult, input, turn, maxIterations, softDeadlineMs);
     if (round === 'terminated') return;
     applyBeforeNextRound(input, input.beforeNextRound?.());
   }

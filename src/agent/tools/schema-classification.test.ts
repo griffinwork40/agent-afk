@@ -57,7 +57,7 @@ describe('schema-as-source-of-truth: category field', () => {
 
   it('every builtin schema category is a valid ToolCategory', () => {
     const valid: ToolCategory[] = [
-      'read', 'write', 'shell', 'subagent', 'skill', 'dag',
+      'read', 'write', 'shell', 'subagent', 'peer', 'skill', 'dag',
       'mcp', 'web', 'browser', 'planning', 'schedule', 'other',
     ];
     for (const schema of ALL_BUILTIN_SCHEMAS) {

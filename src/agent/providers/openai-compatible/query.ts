@@ -145,6 +145,9 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   /** Inter-round steering callback; set via setBeforeNextRound(). */
   private _beforeNextRound: BeforeNextRoundCallback = undefined;
   get beforeNextRound(): BeforeNextRoundCallback { return this._beforeNextRound; }
+  /** Provider-side stop-hook seam (issue #2714); set via setBeforeTurnEnd(). */
+  private _beforeTurnEnd: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined = undefined;
+  get beforeTurnEnd(): ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined { return this._beforeTurnEnd; }
   /** Pre-computed tool catalog — recomputed only if dispatcher.toolDefs changes (it doesn't today). */
   private readonly openAITools: OpenAIFunctionTool[] | undefined;
   /** @internal Which wire this session speaks: Chat Completions (default) or Responses. */
@@ -257,7 +260,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
       (wire.baseURL === undefined && opts.baseURL === undefined) ||
       (isGrokModelId(opts.model) && opts.config.forceXaiOAuth !== true);
 
-    this.journal = new OpenAIJournalWiring(opts.config);
+    this.journal = new OpenAIJournalWiring(opts.config, wire.baseURL ?? opts.baseURL);
     this.lastUsage = this.journal.resumedUsage();
     this.priorTurns = this.journal.initialTurns();
 
@@ -330,7 +333,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
         // Auto-compaction fires at the natural turn boundary.
         if (this.autoCompactThreshold !== undefined && !this.closed) {
           const usage = this.lastUsage;
-          const compactionLimit = autoCompactLimitFor(this.currentModel);
+          const compactionLimit = autoCompactLimitFor(this.currentModel, this.opts.auth.source === 'chatgpt-oauth');
           if (usage !== null && compactionLimit > 0) {
             const usedTokens = contextWindowTokensUsed(usage);
             if (shouldAutoCompact(usedTokens, compactionLimit, this.autoCompactThreshold)) {
@@ -430,6 +433,10 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     this._beforeNextRound = cb;
   }
 
+  setBeforeTurnEnd(cb: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined): void {
+    this._beforeTurnEnd = cb;
+  }
+
   listRewindTargets(): import('../../provider.js').RewindTarget[] {
     return listOpenAIUserTurns(this.priorTurns);
   }
@@ -462,7 +469,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
 
   async getContextUsage(): Promise<ProviderContextUsage> {
     const last = this.lastUsage;
-    const contextLimit = contextLimitFor(this.currentModel);
+    const contextLimit = contextLimitFor(this.currentModel, this.opts.auth.source === 'chatgpt-oauth');
     let percentage: number | undefined;
     if (last && contextLimit > 0) {
       const used = contextWindowTokensUsed(last);
@@ -506,6 +513,10 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   journalSnapshot(): ReturnType<OpenAIJournalWiring['snapshot']> { return this.journal.snapshot(this.priorTurns); }
 
   close(): void {
+    // Invariant: the `closed` flag and the close promise must be updated
+    // together — sub-generators poll the flag each loop iteration while the
+    // outer loop is parked on the promise, so resolving one without the
+    // other leaves a reader stuck.
     this._closed = true;
     this.abort.requestAbort('closed');
     this.abort.markClosed();

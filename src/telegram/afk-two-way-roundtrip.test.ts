@@ -106,9 +106,14 @@ describe('two-way AFK round-trip (real daemon ↔ real REPL over one ledger)', (
     const answerP = handler(request, { signal: new AbortController().signal });
 
     // The daemon tail should observe the elicitation and install the resolver.
-    await sleep(300);
-    const resolver = pendingElicitations.get(String(chatId));
-    expect(resolver).toBeDefined();
+    // Poll instead of a fixed sleep so slow Windows CI runners don't flake.
+    let resolver: ((text: string) => void) | undefined;
+    await vi.waitFor(() => {
+      const r = pendingElicitations.get(String(chatId));
+      if (!r) throw new Error('daemon failed to install resolver');
+      resolver = r;
+    }, { timeout: 5000, interval: 50 });
+    expect(resolver, 'daemon failed to install resolver').toBeDefined();
 
     // Operator answers on the phone. The daemon signs + writes back the response;
     // the REPL handler verifies the HMAC and resolves.
@@ -146,8 +151,10 @@ describe('two-way AFK round-trip (real daemon ↔ real REPL over one ledger)', (
     const hmac = signAbortRequest(key!, id, nonce);
     new SessionLedgerWriter(id).record({ kind: 'abort_request', nonce, hmac });
 
-    await sleep(300);
-    expect(reasons).toHaveLength(1);
+    // Poll instead of a fixed sleep so slow Windows CI runners don't flake.
+    await vi.waitFor(() => {
+      expect(reasons).toHaveLength(1);
+    }, { timeout: 5000, interval: 50 });
     expect(reasons[0]).toContain('abort');
 
     watcher.stop();

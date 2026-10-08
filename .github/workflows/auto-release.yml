@@ -73,7 +73,7 @@ jobs:
       id-token: write # npm provenance attestation (OIDC)
     steps:
       - name: Checkout tip of main (full history + tags)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # Operate on the branch TIP, not the triggering SHA: under the
           # concurrency lock this guarantees a second release run sees the first
@@ -87,7 +87,7 @@ jobs:
         uses: pnpm/action-setup@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -111,16 +111,33 @@ jobs:
           if [ -n "$LAST_TAG" ]; then RANGE="${LAST_TAG}..HEAD"; else RANGE="HEAD"; fi
           LOG=$(git log --format='%s%n%b' "$RANGE")
 
-          # Conventional Commits → SemVer. `!:` suffix or a "BREAKING CHANGE"
-          # footer ⇒ major; `feat:` ⇒ minor; `fix|perf|refactor:` ⇒ patch.
+          # Conventional Commits → SemVer. `!:` suffix or a breaking-change
+          # footer (a line starting with `BREAKING CHANGE:` or
+          # `BREAKING-CHANGE:`) ⇒ major; `feat:` ⇒ minor;
+          # `fix|perf|refactor:` ⇒ patch.
           # Anything else (docs/chore/test/ci/style only) ⇒ no release.
+          #
+          # NOTE: the breaking-change check is anchored to line-start (^) so
+          # that prose mentions mid-line do not trip the major gate.
           BUMP=none
-          if grep -qE '^[a-z]+(\([^)]*\))?!:' <<<"$LOG" || grep -q 'BREAKING CHANGE' <<<"$LOG"; then
+          if grep -qE '^[a-z]+(\([^)]*\))?!:' <<<"$LOG" || grep -qE '^BREAKING[ -]CHANGE: ' <<<"$LOG"; then
             BUMP=major
           elif grep -qE '^feat(\([^)]*\))?:' <<<"$LOG"; then
             BUMP=minor
           elif grep -qE '^(fix|perf|refactor)(\([^)]*\))?:' <<<"$LOG"; then
             BUMP=patch
+          fi
+
+          # engines.node floor gate: a raised minimum Node.js version is a
+          # compatibility-breaking change and must trip the major gate even when
+          # no commit uses `!:` or `BREAKING CHANGE`.  The script exits 1 when
+          # the floor is higher at HEAD than at LAST_TAG.  On workflow_dispatch
+          # with an explicit bump input the gate is skipped (operator decided).
+          if [ "$EVENT_NAME" != workflow_dispatch ] || [ "$BUMP_INPUT" = auto ]; then
+            if ! node_modules/.bin/tsx scripts/check-engines-node-floor.ts "$LAST_TAG"; then
+              BUMP=major
+              echo "::warning::engines.node minimum raised since ${LAST_TAG:-repo start}; promoting to BUMP=major (see major gate below)."
+            fi
           fi
 
           # Major gate (see the Invariant on `on:` above).
@@ -138,7 +155,7 @@ jobs:
             echo "::error::$MSG"
             echo "$MSG" >> "$GITHUB_STEP_SUMMARY"
             echo "Matching commits:" >> "$GITHUB_STEP_SUMMARY"
-            git log --format='- %h %s' "$RANGE" --grep='BREAKING CHANGE' >> "$GITHUB_STEP_SUMMARY" || true
+            git log --format='- %h %s' "$RANGE" -E --grep='^BREAKING[ -]CHANGE: ' >> "$GITHUB_STEP_SUMMARY" || true
             git log --format='- %h %s' "$RANGE" -E --grep='^[a-z]+(\([^)]*\))?!:' >> "$GITHUB_STEP_SUMMARY" || true
             exit 1
           fi
@@ -229,7 +246,7 @@ jobs:
       # explicitly. The tag already exists on the remote from the push above.
       - name: Create GitHub Release
         if: steps.bump.outputs.release == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.bump.outputs.next }}
           generate_release_notes: true

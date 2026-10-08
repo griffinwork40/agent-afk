@@ -11,12 +11,13 @@
 import { env } from '../../config/env.js';
 import type { IAgentSession } from '../types.js';
 import type { ModelProvider } from '../provider.js';
-import type { AgentModelInput } from '../types.js';
+import type { AgentModelInput, CanUseTool } from '../types.js';
 import type { Surface } from '../awareness/types.js';
 import type { ReadScopeInputs } from '../subagent-read-scope.js';
 import type { JournalParent } from '../subagent/fork-types.js';
 import { AnthropicDirectProvider } from '../providers/anthropic-direct/index.js';
 import { OpenAICompatibleProvider } from '../providers/openai-compatible/index.js';
+import { XaiProvider } from '../providers/xai/index.js';
 import type { WorkspaceStore } from '../workspace/workspace-store.js';
 import { WORKSPACE_CHILD_TOOL_NAMES } from '../workspace/index.js';
 import { providerForModel } from '../providers/index.js';
@@ -372,39 +373,71 @@ export function buildReadOnlyReconProvider(
  * already absent from that set, so no additional stripping is needed.
  *
  * @param model      Effective model for this node. Drives provider routing so
- *                   OpenAI-routed nodes get `OpenAICompatibleProvider` and
- *                   Anthropic-routed nodes get `AnthropicDirectProvider`.
+ *                   OpenAI-routed nodes get `OpenAICompatibleProvider`,
+ *                   Grok-routed nodes get `XaiProvider`, and Anthropic-routed
+ *                   nodes get `AnthropicDirectProvider`.
  * @param workspaceStore  Parent session's workspace store, shared with every node.
- * @param openaiBaseUrl   Local-shim endpoint (e.g. mlx_lm / vLLM). Forwarded as
- *                        `baseURL` when the node routes to `openai-compatible`.
- * @param readOnlyBash    When true, the node's dispatcher blocks mutating bash
- *                        commands. Forwarded for read-only skill leaf nodes.
+ * @param opts            Optional per-node configuration:
+ *   - `openaiBaseUrl`  Local-shim endpoint (e.g. mlx_lm / vLLM). Forwarded
+ *                      as `baseURL` when the node routes to `openai-compatible`.
+ *   - `readOnlyBash`   When `true`, the node's dispatcher blocks mutating bash
+ *                      commands (named agents declaring `bashReadOnly`, e.g.
+ *                      git-investigator). `true | undefined` — never `false`.
+ *   - `canUseTool`     Named-agent allowlist callback for this node.
+ *
+ * Invariant: `canUseTool` / `readOnlyBash` MUST arrive here, at construction.
+ * A preset `AgentConfig.provider` is queried directly (provider-lifecycle.ts),
+ * and both providers read these only from constructor options — a callback
+ * left on the fork config alone never reaches the dispatcher and fails open.
+ * `workspaceStore` is undefined on the AFK_WORKSPACE_DISABLED fallback.
+ *
+ * Routing: mirrors `resolveProvider()` in providers/index.ts — xAI/Grok
+ * models (`grok-*`) route to `XaiProvider` (which composes
+ * `OpenAICompatibleProvider` internally), not to `AnthropicDirectProvider`.
+ * Without this branch a node declared with `model: 'grok-3'` would silently
+ * POST to api.anthropic.com and receive a 400/404, bypassing auth and tool
+ * restrictions that only land on the correctly-routed provider constructor.
+ * `subagentExecutor` / `skillExecutor` are intentionally absent — compose
+ * nodes are leaves and must not spawn nested DAGs or invoke skills.
  */
+export interface BuildComposeNodeProviderOpts {
+  openaiBaseUrl?: string;
+  /** `true` blocks mutating bash for read-only named agents (e.g. git-investigator). */
+  readOnlyBash?: true;
+  canUseTool?: CanUseTool;
+}
+
 export function buildComposeNodeProvider(
   model: AgentModelInput | undefined,
-  workspaceStore: WorkspaceStore,
-  openaiBaseUrl?: string,
-  readOnlyBash?: boolean,
+  workspaceStore: WorkspaceStore | undefined,
+  opts: BuildComposeNodeProviderOpts = {},
 ): ModelProvider {
+  const { openaiBaseUrl, readOnlyBash, canUseTool } = opts;
   // Materialize the allowlist per call so runtime array mutations don't bleed
   // across sibling nodes (mirrors buildPhaseRestrictedProvider / buildReadOnlyReconProvider).
-  const permissions = { allowedTools: [...CHILD_ALLOWED_TOOLS] };
+  const common = {
+    permissions: { allowedTools: [...CHILD_ALLOWED_TOOLS] },
+    readOnlyMemory: true,
+    ...(workspaceStore !== undefined ? { workspaceStore } : {}),
+    ...(readOnlyBash === true ? { readOnlyBash: true } : {}),
+    ...(canUseTool !== undefined ? { canUseTool } : {}),
+  };
   const route = providerForModel(typeof model === 'string' ? model : undefined);
   if (route === 'openai-compatible') {
     return new OpenAICompatibleProvider({
-      permissions,
-      workspaceStore,
-      readOnlyMemory: true,
+      ...common,
       ...(openaiBaseUrl !== undefined ? { baseURL: openaiBaseUrl } : {}),
-      ...(readOnlyBash === true ? { readOnlyBash: true } : {}),
     });
   }
-  return new AnthropicDirectProvider({
-    permissions,
-    workspaceStore,
-    readOnlyMemory: true,
-    ...(readOnlyBash === true ? { readOnlyBash: true } : {}),
-  });
+  // xAI/Grok models route to XaiProvider, which wraps OpenAICompatibleProvider
+  // for the Chat Completions wire path while adding xAI-specific auth logic.
+  // Without this branch, grok-* nodes silently fall through to AnthropicDirectProvider,
+  // misrouting requests to api.anthropic.com and bypassing restrictions.
+  // No subagentExecutor / skillExecutor — compose nodes are leaves.
+  if (route === 'xai' || route === 'xai-oauth') {
+    return new XaiProvider(common);
+  }
+  return new AnthropicDirectProvider(common);
 }
 
 /**
@@ -464,6 +497,7 @@ export function createChildSkillExecutorFactory(
   inheritedReadScope?: ReadScopeInputs,
   skillDispatchName?: string,
   journalParent?: JournalParent,
+  rootSessionId?: string,
 ) => SkillExecutor {
   const factory: (
     depth: number,
@@ -473,7 +507,8 @@ export function createChildSkillExecutorFactory(
     inheritedReadScope?: ReadScopeInputs,
     skillDispatchName?: string,
     journalParent?: JournalParent,
-  ) => SkillExecutor = (depth, maxDepth, signal, inheritedCwd, inheritedReadScope, skillDispatchName, journalParent) => {
+    rootSessionId?: string,
+  ) => SkillExecutor = (depth, maxDepth, signal, inheritedCwd, inheritedReadScope, skillDispatchName, journalParent, rootSessionId) => {
     // Invariant: the closure-captured `cwd` is frozen at bootstrap. For
     // born-named `afk -w` worktrees it is `undefined` (the worktree is
     // created on turn 1 via worktree-autoname, after bootstrap). A later
@@ -482,13 +517,22 @@ export function createChildSkillExecutorFactory(
     // depth-1 caller) carries the live value so grandchild SkillExecutors
     // anchor to the worktree, not the host's process.cwd().
     const effectiveCwd = inheritedCwd ?? cwd;
-    // Journal view is read LAZILY: the forking child's journal is backfilled
-    // only after its fork returns (subagent-executor / fork-dispatch).
+    // Journal view AND session id are read LAZILY: the forking child's journal
+    // and id are backfilled only after its fork returns (subagent-executor /
+    // fork-dispatch). The live id gives nested skill forks a real
+    // `parentSessionId`, without which child-attribution drops them (#2442).
     const stub = createStubParentSession(signal);
     return new SkillExecutor({
       parentSession: journalParent === undefined
         ? stub
-        : { ...stub, get messageJournal() { return journalParent.messageJournal; } },
+        : {
+            ...stub,
+            get sessionId() { return journalParent.sessionId; },
+            get messageJournal() { return journalParent.messageJournal; },
+          },
+      // Root (depth-0) session id (#2442): the nested executor's skill forks
+      // and their `agent` grandchildren credit artifacts to the root record.
+      ...(rootSessionId !== undefined ? { parentRootSessionId: rootSessionId } : {}),
       defaultModel,
       // Resolved default-subagent policy threaded through every depth so a
       // nested skill child (and the SubagentExecutor it builds) defaults to the

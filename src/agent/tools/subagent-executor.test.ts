@@ -1196,11 +1196,11 @@ describe('SubagentExecutor', () => {
       // Spy on SubagentManager.prototype.teardownAll to verify it's called
       const teardownSpy = vi.fn().mockResolvedValue(undefined);
       const origSubagentManager = await import('../subagent.js');
-      const ctorSpy = vi.spyOn(origSubagentManager, 'SubagentManager').mockImplementation((() => ({
+      const ctorSpy = vi.spyOn(origSubagentManager, 'SubagentManager').mockImplementation((function () { return {
         teardownAll: teardownSpy,
         list: () => [],
         killAll: vi.fn(),
-      })) as any);
+      }; }) as any);
 
       try {
         await nestingExec.execute(makeCall());
@@ -1215,11 +1215,11 @@ describe('SubagentExecutor', () => {
       const factory = vi.fn().mockReturnValue(mockProvider());
       const teardownSpy = vi.fn().mockResolvedValue(undefined);
       const origSubagentManager = await import('../subagent.js');
-      const ctorSpy = vi.spyOn(origSubagentManager, 'SubagentManager').mockImplementation((() => ({
+      const ctorSpy = vi.spyOn(origSubagentManager, 'SubagentManager').mockImplementation((function () { return {
         teardownAll: teardownSpy,
         list: () => [],
         killAll: vi.fn(),
-      })) as any);
+      }; }) as any);
 
       const nestingExec = new SubagentExecutor({
         subagentManager: manager as any,
@@ -1852,34 +1852,49 @@ describe('SubagentExecutor', () => {
       };
       const bgExecutor = new SubagentExecutor(ctxWithBg);
 
-      // Time the call — must return promptly even though terminal never fires.
-      const before = Date.now();
       const result = await bgExecutor.execute(
         makeCall({ input: { prompt: 'long investigation', mode: 'background' } }),
       );
-      const elapsed = Date.now() - before;
-      expect(elapsed).toBeLessThan(200);
 
-      expect(result.isError).toBeUndefined();
       const payload = JSON.parse(result.content as string);
-      expect(payload.status).toBe('running');
-      expect(payload.jobId).toMatch(/^bg-/);
-      expect(payload.subagentId).toBe('sub-1');
-      expect(payload.label).toBe('long investigation');
-      expect(payload.message).toMatch(/delivered into this context/);
 
-      // Sanity: the job is observable via the registry; status still running.
-      const observed = registry.get(payload.jobId);
-      expect(observed?.status).toBe('running');
-      expect(observed?.provenance).toBe('model');
+      try {
+        // Ordering probe: execute() must return without blocking on terminal state.
+        // We verify this deterministically — without any wall-clock budget — by
+        // racing registry.join(jobId) (pending; no terminal event has fired yet)
+        // against an already-resolved microtask sentinel.  If execute() had driven
+        // the job to a terminal state before returning, join()'s .then() would be a
+        // queued microtask that fires before the sentinel resolves, so 'join' would
+        // win.  On correct code join() is still pending and 'sentinel' wins.
+        const SENTINEL = 'sentinel';
+        const winner = await Promise.race([
+          registry.join(payload.jobId).then(() => 'join'),
+          Promise.resolve(SENTINEL),
+        ]);
+        expect(winner).toBe(SENTINEL);
 
-      // Terminal callback was wired correctly: firing it transitions the
-      // registry without touching the executor.
-      fireTerminal({
-        id: 'sub-1',
-        status: 'succeeded' as SubagentResult['status'],
-        message: { content: 'final', role: 'assistant' } as any,
-      });
+        expect(result.isError).toBeUndefined();
+        expect(payload.status).toBe('running');
+        expect(payload.jobId).toMatch(/^bg-/);
+        expect(payload.subagentId).toBe('sub-1');
+        expect(payload.label).toBe('long investigation');
+        expect(payload.message).toMatch(/delivered into this context/);
+
+        // Sanity: the job is observable via the registry; status still running.
+        const observed = registry.get(payload.jobId);
+        expect(observed?.status).toBe('running');
+        expect(observed?.provenance).toBe('model');
+      } finally {
+        // Terminal callback was wired correctly: firing it transitions the
+        // registry without touching the executor.  Placed in finally so the
+        // join() promise always settles and does not leak on expect failures.
+        fireTerminal({
+          id: 'sub-1',
+          status: 'succeeded' as SubagentResult['status'],
+          message: { content: 'final', role: 'assistant' } as any,
+        });
+        await registry.join(payload.jobId);
+      }
       expect(registry.get(payload.jobId)?.status).toBe('completed');
     });
 

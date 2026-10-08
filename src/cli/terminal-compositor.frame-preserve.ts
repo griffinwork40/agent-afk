@@ -33,6 +33,11 @@
 import type { FrameHost } from './terminal-compositor.frame.js';
 import { archiveBandPrefixAndRepaintSurvivors } from './terminal-compositor.frame-preserve-archive.js';
 import { contentHugFrameSettled } from './terminal-compositor.content-hug.js';
+import {
+  archivedPrefix,
+  dropScrollingArchivedRows,
+  nonArchivedPendingRows,
+} from './terminal-compositor.band-archived-prefix.js';
 
 /**
  * Whether pending band rows may be archived on this repaint. Content-hug: as
@@ -45,9 +50,12 @@ import { contentHugFrameSettled } from './terminal-compositor.content-hug.js';
  * rest of a turn opens a visible hole at the scrollback/viewport seam (operator
  * report: a verdict card's bottom border, the next prompt echo and a tool
  * header vanished from tmux history until the turn ended). Archiving early is
- * safe there because content-hug puts unused rows BELOW the prompt. The same
- * rule makes content-hug archive covered rows on frame GROWTH instead of hiding
- * them. Bottom-pinned keeps the overlay-empty gate: archiving early there
+ * safe there because content-hug puts unused rows BELOW the prompt, and the
+ * archived rows stay in the band as the archived prefix (hidden, re-shown when
+ * the frame shrinks, never archived twice; band-archived-prefix.ts), so the
+ * screen still refills after the collapse. The same rule makes content-hug
+ * archive covered rows on frame GROWTH as well as hiding them. Bottom-pinned
+ * keeps the overlay-empty gate: archiving early there
  * leaves blank rows ABOVE the band that later scroll into history as a
  * permanent gap (collapse-void.test.ts). Either mode still holds rows while a
  * dropdown/picker is open (contentHugFrameSettled), since that growth is brief
@@ -132,12 +140,17 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     // Then evict the oldest `overflow = bandLen - room` rows. Survivors remain
     // at [1, room] hugging the forthcoming frame top, all materialized.
     const room = Math.max(0, desiredTopRow - 1);
-    const hasPending = self.committedBandPaintedRows < bandLen;
+    // Content-hug archive-and-retain: rows already in scrollback (the archived
+    // prefix, always 0 in bottom-pinned) never count as pending or as overflow,
+    // so they cannot re-trigger an archive. `overflow` below stays an absolute
+    // band index (> skip whenever this fires).
+    const skip = archivedPrefix(self);
+    const hasPending = nonArchivedPendingRows(self) > 0;
     const frameSettled = contentHugFrameSettled(self);
     if (
       !self.commitInFlight &&
       hasPending &&
-      bandLen > room &&
+      bandLen - skip > room &&
       pendingEvictionAllowed(self, frameSettled) &&
       room > 0
     ) {
@@ -160,7 +173,21 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     if (!grew || bandLen === 0 || !frameSettled) return; // content-hug archives on growth too (no-history-hole)
     const growRoom = Math.max(0, desiredTopRow - 1);
     const growOverflow = bandLen - growRoom;
-    if (growOverflow <= 0) return; // whole band fits above the new frame — no scroll
+    if (growOverflow <= skip) return; // every non-archived row fits above the new frame — no scroll
+    // Advisory note (#2871.4): this early return does not update committedBandTopRow /
+    // committedBandBottomRow to reflect the frame's new position. The positions
+    // therefore drift whenever the frame grows but all non-archived rows still fit.
+    // There is no visible effect today — re-pin happens at the next repaint that
+    // actually moves the band — but if a future path reads the tracked positions
+    // between this return and the next repaint it would see stale coordinates.
+    // A position update here is not safe without a repaint (the band is still on
+    // screen at the old rows), so the correct fix is to note the stale state rather
+    // than update it prematurely.
+    // Note: `bandGeometryStale` does NOT apply here. That flag is set by the
+    // SIGWINCH-immediate handler to signal that a resize event has invalidated
+    // the band geometry before the debounced repaint fires. This early-return
+    // path is a no-resize growth scenario where geometry is already consistent
+    // with the live screen; only the tracked row positions are behind.
     // #540 axis-2: archive the oldest `growOverflow` rows to scrollback as
     // SOFT-WRAPPABLE logical lines, then re-place the survivors at
     // [1, growRoom] — already hugging the new frame top (growRoom ===
@@ -208,12 +235,13 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
   const bandLenBanner = self.committedBand.length;
   const floorBanner = Math.max(self.anchorRow ?? 1, 1);
   const roomBanner = Math.max(0, desiredTopRow - floorBanner);
-  const hasPendingBanner = self.committedBandPaintedRows < bandLenBanner;
+  const skipBanner = archivedPrefix(self);
+  const hasPendingBanner = nonArchivedPendingRows(self) > 0;
   const overlayCollapsedBanner = pendingEvictionAllowed(self, contentHugFrameSettled(self));
   if (
     !self.commitInFlight &&
     hasPendingBanner &&
-    bandLenBanner > roomBanner &&
+    bandLenBanner - skipBanner > roomBanner &&
     overlayCollapsedBanner &&
     roomBanner > 0
   ) {
@@ -238,40 +266,52 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
   const anchorDeficit =
     desiredTopRow < self.anchorRow! ? self.anchorRow! - desiredTopRow : 0;
   const deficit = Math.max(growthDeficit, anchorDeficit);
-  if (deficit > 0) {
-    evictRowsToScrollback(self, deficit);
-    // Everything (including pre-arm content) scrolled up by `deficit`, so the
-    // safe ceiling moves up the same amount. Clamp at 1; once the banner has
-    // fully scrolled into scrollback there is nothing left to protect.
-    if (self.anchorRow !== undefined && self.anchorRow > 1) {
-      self.anchorRow = Math.max(1, self.anchorRow - deficit);
+  if (deficit > 0) scrollBannerDeficit(self, deficit);
+}
+
+/**
+ * Banner path: scroll `deficit` rows (everything, including pre-arm content,
+ * moves up) and shift the anchor floor and the tracked committed band to match.
+ * Extracted from preserveRowsBeforeFrameRender (one whole step, explicit params).
+ */
+function scrollBannerDeficit(self: FrameHost, deficit: number): void {
+  // Archived-prefix rows painted at the top must not scroll into history a
+  // second time: drop them by repaint BEFORE the scroll (band-archived-prefix.ts),
+  // then scroll only the rest. Survivor positions match the full scroll's.
+  const droppedArchived = dropScrollingArchivedRows(self, deficit);
+  evictRowsToScrollback(self, deficit - droppedArchived);
+  // Everything (including pre-arm content) scrolled up by `deficit`, so the
+  // safe ceiling moves up the same amount. Clamp at 1; once the banner has
+  // fully scrolled into scrollback there is nothing left to protect.
+  if (self.anchorRow !== undefined && self.anchorRow > 1) {
+    self.anchorRow = Math.max(1, self.anchorRow - deficit);
+  }
+  // The committed band scrolled up by the same `deficit` (a small growth —
+  // e.g. the spinner appearing — does NOT push it off-screen; it stays in
+  // the viewport, one row higher). Shift its tracked rows so a later shrink
+  // re-pins at the right screen position. Drop only the lines that crossed
+  // ABOVE the anchor floor into terminal scrollback, so the re-pin never
+  // paints scrolled-away content back into the viewport (which would
+  // duplicate what the terminal already holds in scrollback).
+  if (self.committedBand.length > 0) {
+    self.committedBandTopRow -= deficit; // as-if coordinates (dropScrollingArchivedRows)
+    self.committedBandBottomRow -= deficit;
+    const floor = Math.max(self.anchorRow ?? 1, 1);
+    if (self.committedBandTopRow < floor) {
+      const lost = floor - self.committedBandTopRow;
+      self.committedBand = self.committedBand.slice(lost);
+      self.committedBandMeta = self.committedBandMeta.slice(lost); // #540: keep 1:1
+      self.committedBandArchivedPrefix = Math.max(0, self.committedBandArchivedPrefix - lost);
+      self.committedBandTopRow = floor;
     }
-    // The committed band scrolled up by the same `deficit` (a small growth —
-    // e.g. the spinner appearing — does NOT push it off-screen; it stays in
-    // the viewport, one row higher). Shift its tracked rows so a later shrink
-    // re-pins at the right screen position. Drop only the lines that crossed
-    // ABOVE the anchor floor into terminal scrollback, so the re-pin never
-    // paints scrolled-away content back into the viewport (which would
-    // duplicate what the terminal already holds in scrollback).
-    if (self.committedBand.length > 0) {
-      self.committedBandTopRow -= deficit;
-      self.committedBandBottomRow -= deficit;
-      const floor = Math.max(self.anchorRow ?? 1, 1);
-      if (self.committedBandTopRow < floor) {
-        const lost = floor - self.committedBandTopRow;
-        self.committedBand = self.committedBand.slice(lost);
-        self.committedBandMeta = self.committedBandMeta.slice(lost); // #540: keep 1:1
-        self.committedBandTopRow = floor;
-      }
-      if (self.committedBand.length === 0 || self.committedBandBottomRow < floor) {
-        self.clearCommittedBand();
-      } else {
-        // Survivors were scrolled by the terminal as real on-screen rows.
-        // The collapse-time pending-overflow eviction above (lines 158-227)
-        // handles partially-pending bands before this deficit path runs, so
-        // any survivors reaching here are fully materialized — none pending.
-        self.committedBandPaintedRows = self.committedBand.length;
-      }
+    if (self.committedBand.length === 0 || self.committedBandBottomRow < floor) {
+      self.clearCommittedBand();
+    } else {
+      // Survivors were scrolled by the terminal as real on-screen rows.
+      // The collapse-time pending-overflow eviction above (lines 158-227)
+      // handles partially-pending bands before this deficit path runs, so
+      // any survivors reaching here are fully materialized — none pending.
+      self.committedBandPaintedRows = self.committedBand.length;
     }
   }
 }

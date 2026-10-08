@@ -95,6 +95,9 @@ export interface SubagentExecutorContext {
     // Forking child's journal view (read lazily): nested skill forks journal
     // via its `forSubagent(id)`. Absent → nested skill forks run unjournaled.
     journalParent?: JournalParent,
+    // Root (depth-0) session id for child-attribution (#2442); becomes the
+    // nested executor's `parentRootSessionId`.
+    rootSessionId?: string,
   ) => SkillExecutor;
   /**
    * Nesting depth this executor sits at. **Required** — pass explicit `0`
@@ -123,6 +126,23 @@ export interface SubagentExecutorContext {
    * (e.g. one-shot CLI, daemon turn).
    */
   backgroundRegistry?: BackgroundAgentRegistry;
+  /**
+   * Live probe: does this surface wake an idle prompt when a background result
+   * lands? Only the TTY REPL wires it (depth 0). Read at dispatch time by
+   * `resolveBackgroundDelivery` to pick a truthful model-facing note. Never
+   * forwarded to nested executors: depth >= 1 results go to the root session.
+   */
+  backgroundAutoWake?: () => boolean;
+  /**
+   * Live probe: will BgResultNotifier buffer the result for the next user
+   * message? Returns false when AFK_BG_AUTO_DELIVER=0 — the notifier's
+   * `onSettled` guard returns early, so no injection is queued. When false at
+   * depth 0, `resolveBackgroundDelivery` returns `manual-join` instead of
+   * `next-message`, so the model is told to use /bgsub:join rather than
+   * promised an automatic delivery that never arrives. Never forwarded to
+   * nested executors (same rationale as backgroundAutoWake).
+   */
+  backgroundAutoDeliver?: () => boolean;
   /**
    * Worktree cwd inherited from the parent session. Forwarded to the
    * per-depth child {@link SubagentManager} and to the recursive child
@@ -238,6 +258,22 @@ export interface SubagentExecutorContext {
    * them. When unset, `inherit` falls back to the policy default chain.
    */
   parentModel?: AgentModelInput;
+  /**
+   * Root (depth-0) session id, forwarded from the root session and threaded
+   * unchanged through every depth. Always undefined at depth-0 (the root
+   * session has no ancestor to inherit from). Threaded into
+   * {@link BuildChildConfigArgs.parentRootSessionId} so the grandchild manager
+   * can seed depth-2+ forks with the real root id for child-attribution.
+   *
+   * Future-proofing note: compose executors run exclusively at depth 0 today
+   * (compose is excluded from {@link CHILD_ALLOWED_TOOLS}), so this field is
+   * never set on a compose-owned executor context — compose DAG nodes are
+   * depth-1 forks whose attribution falls back to `parentSessionId` via
+   * `resolveRootSessionId`. If compose is ever permitted at depth > 0, this
+   * field should be threaded into the compose {@link SubagentManager}
+   * alongside the other inherited parent fields.
+   */
+  parentRootSessionId?: string;
 }
 
 /**

@@ -221,6 +221,86 @@ describe('post-detach session abort kills process (Fix #1)', () => {
     expect(deliveredResults[0]!.output).not.toContain('afterwait');
   });
 
+  it(
+    'POSIX-utility child (sleep): kill-path regression test (#2742)',
+    async () => {
+      // Invariant: kill-path regression test for the POSIX SIGKILL delivery path
+      // when the detached child is a POSIX-utility (sleep).
+      //
+      // Scope: this test covers only the SIGKILL path. On POSIX, SIGKILL closes
+      // the process group well before the 5 s settle-fallback timer, so the
+      // fallback never fires here. The settle-fallback (BASH_SETTLE_TIMEOUT_SENTINEL)
+      // is covered deterministically by detach-bash.settle.test.ts via a mock proc.
+      //
+      // On POSIX: process.kill(-pid, SIGKILL) kills the whole process group;
+      // the 'close' event fires in <200 ms; deliver() is called via the normal
+      // kill path (not the fallback), well within the 10 s race window.
+      //
+      // On Windows (Git Bash): taskkill /F /T may or may not reach sleep.exe.
+      // If it does, deliver() fires via the kill path. If it does not, the
+      // settle-fallback fires after SETTLE_AFTER_KILL_MS (5 s). Either way
+      // status is 'failed' and the assertion holds — see the note on mechanism
+      // detection below.
+      const handler = createBashHandler('default');
+      const registry = new DetachableToolRegistry();
+      const sessionAbort = new AbortController();
+      const context = makeContext(registry, 'call-posix-child');
+
+      const deliveredResults: DetachedToolResult[] = [];
+      const settledPromise = new Promise<DetachedToolResult>((resolve) => {
+        registry.on('settled', (r: DetachedToolResult) => {
+          deliveredResults.push(r);
+          resolve(r);
+        });
+      });
+
+      // `sleep 30` is a POSIX-utility (or MSYS2 sleep.exe on Windows via Git
+      // Bash). On POSIX the process group kill reaches it reliably. The 30 s
+      // duration ensures it never exits naturally during the test window.
+      const handlerPromise = handler(
+        { command: 'sleep 30', timeout_ms: 60000 },
+        sessionAbort.signal,
+        context,
+      );
+
+      // Generous spawn wait — 200 ms is enough even on slow Windows CI runners.
+      await new Promise<void>((r) => setTimeout(r, 200));
+
+      // Ctrl+B: detach all tokens.
+      registry.detachAll();
+      const placeholderResult = await handlerPromise;
+
+      const parsed = JSON.parse(placeholderResult.content as string) as { status: string };
+      expect(parsed.status).toBe('detached');
+
+      // Session abort: triggers killProcessGroup (SIGKILL on POSIX, taskkill on
+      // Windows) and arms the settle-fallback timer in execOnDetach.
+      sessionAbort.abort();
+
+      // Race window: 10 s, matching the adjacent kill-path test.
+      // On POSIX the 'close' event fires in <200 ms after SIGKILL — well within
+      // budget. On Windows the fallback may legitimately fire at SETTLE_AFTER_KILL_MS
+      // (5 s); the 10 s window covers that too.
+      //
+      // Mechanism detection: DetachedToolResult does not expose closeSignal, so
+      // we cannot distinguish SIGKILL vs BASH_SETTLE_TIMEOUT_SENTINEL from the
+      // result object alone. Both paths yield status='failed', which is the
+      // property this regression test asserts. The sentinel-path behaviour is
+      // verified in detail in detach-bash.settle.test.ts.
+      const settled = await Promise.race([
+        settledPromise,
+        new Promise<null>((r) => setTimeout(() => r(null), 10_000)),
+      ]);
+
+      // deliver() must have been called — process killed or fallback fired.
+      expect(settled).not.toBeNull();
+      expect(deliveredResults).toHaveLength(1);
+      // Kill or fallback → status must be 'failed'.
+      expect(deliveredResults[0]!.status).toBe('failed');
+    },
+    15_000,
+  );
+
   it('normal-close deregisters token so hasDetachable() becomes false', async () => {
     const handler = createBashHandler('default');
     const registry = new DetachableToolRegistry();

@@ -24,6 +24,7 @@ import type { RegisteredAgent, AgentRegistry } from '../agents/index.js';
 import type { CanUseTool } from '../types.js';
 import type { PermissionResult } from '../types/sdk-types.js';
 import { CHILD_ALLOWED_TOOLS } from './nesting.js';
+import { isComposeReplaySafe } from '../dag-subagent.recovery.js';
 
 /**
  * Result of resolving a named agent for a compose node.
@@ -31,6 +32,8 @@ import { CHILD_ALLOWED_TOOLS } from './nesting.js';
  * `SubagentDAGNode` without conditional spreading on each property.
  */
 export interface ResolvedComposeAgent {
+  /** Proven pure read surface; omitted for inherit-all definitions. */
+  replaySafe?: boolean;
   /** Named agent's system prompt (definition body). */
   systemPrompt?: string;
   /** Named agent's model default (undefined = inherit compose default). */
@@ -45,6 +48,12 @@ export interface ResolvedComposeAgent {
    * normal compose-node surface.
    */
   canUseTool?: CanUseTool;
+  /**
+   * Named agent's `bashReadOnly` contract (e.g. git-investigator). Threaded
+   * into the node provider's constructor so the dispatcher blocks mutating
+   * bash. Set only when true.
+   */
+  readOnlyBash?: true;
 }
 
 /**
@@ -117,11 +126,20 @@ export function resolveComposeNodeAgent(
     result.namedAgentModel = defModel;
   }
 
+  // Bash restriction: forwarded independently of the allowlist (a
+  // `bashReadOnly` agent may inherit-all tools and still be shell-read-only).
+  if (resolvedAccess.bashReadOnly) result.readOnlyBash = true;
+
   // Tool restriction: build canUseTool from the effective allowlist.
   // When allowedTools is undefined (inherit-all definition), skip — no
   // additional restriction beyond the normal compose-node surface.
   if (resolvedAccess.allowedTools !== undefined) {
     result.canUseTool = buildAllowlistCanUseTool(resolvedAccess.allowedTools);
+    // Contract: this value reflects the DECLARED frontmatter surface. The
+    // node provider (buildComposeNodeProvider) enforces it via canUseTool on
+    // top of CHILD_ALLOWED_TOOLS; compose-executor.ts still pins replaySafe to
+    // false for compose nodes (conservative; unchanged).
+    result.replaySafe = isComposeReplaySafe(resolvedAccess.allowedTools);
   }
 
   return result;

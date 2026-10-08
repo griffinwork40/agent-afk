@@ -23,7 +23,9 @@ import { resolveSessionHookRegistry } from '../../hooks.js';
 import type { SubagentExecutor } from '../../tools/subagent-executor.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import type { ComposeExecutor } from '../../tools/compose-executor.js';
-import { withMcpToolsAllowed, withCustomToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
+import type { ToolPermissionConfig } from '../../tools/permissions.js';
+import { composeDispatcherPermissions } from '../../tools/permissions-compose.js';
+import { snapshotOperatorOptions, operatorDispatcherToolDefs } from '../../tools/operator-denied-dispatcher.js';
 import type { CanUseTool } from '../../types/sdk-types.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
@@ -36,7 +38,6 @@ import {
   createExitPlanModeHandler,
   EXIT_PLAN_MODE_TOOL_NAME,
 } from '../../tools/handlers/exit-plan-mode.js';
-import type { PlanExitControls } from '../../types/config-types.js';
 import {
   builtinToolSchemas,
   agentTool,
@@ -47,14 +48,13 @@ import { MemoryStore, createMemoryHandlers, guardChildHotWrites, isForkedChildSe
 import { WorkspaceStore, createWorkspaceHandlers, workspacePublishTool, workspaceQueryTool } from '../../workspace/index.js';
 import { StateStore } from '../../state/state-store.js';
 import { createStateHandlers } from '../../state/state-tools.js';
-
-import { getStateDatabasePath } from '../../../paths.js';
+import { makeDefaultMemoryStore, makeDefaultStateStore } from '../shared/provider-stores.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { selectBaseSchemas } from './base-schemas.js';
 import { userAttentionFrom } from '../../tools/user-yield.js';
 import { buildQueryFromConfig } from './query.js';
 import { isCustomOpenAIEndpoint } from './query/fast-tier-session.js';
-import { oneShotChatCompletion, type OpenAIOneShotInput } from './oneshot.js';
+import { completeWithWire, type OpenAIOneShotInput } from './complete-wire.js';
 import {
   getRuntimeStateTool,
   createGetRuntimeStateHandler,
@@ -65,6 +65,7 @@ import {
 import { resolveSessionId, registerSessionPresence } from './session-wiring.js';
 import { buildSystemPromptWiring } from './system-prompt-wiring.js';
 import { type ChildSessionOptions, isStateRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
+import { sessionRegistryOpts, type BuildDispatcherOpts } from './index.dispatcher-opts.js';
 
 const PROVIDER_NAME = 'openai-compatible';
 
@@ -142,9 +143,9 @@ export interface OpenAICompatibleProviderOptions extends ChildSessionOptions {
 export class OpenAICompatibleProvider implements ModelProvider {
   readonly name = PROVIDER_NAME;
   private readonly providerOpts: OpenAICompatibleProviderOptions;
-  private readonly memoryStore: MemoryStore;
+  private _memoryStore: MemoryStore | undefined;
   private readonly workspaceStore: WorkspaceStore | undefined;
-  private readonly stateStore: StateStore;
+  private _stateStore: StateStore | undefined;
   private readonly schemas: AnthropicToolDef[];
   /**
    * Mutable per-session endpoint headers (xAI CLI proxy). Construction-time
@@ -189,11 +190,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
   private readonly _spawnedPidRegistry = new SpawnedPidRegistry();
 
   constructor(opts: OpenAICompatibleProviderOptions = {}) {
-    this.providerOpts = opts;
+    this.providerOpts = snapshotOperatorOptions(opts);
     this._defaultHeaders = opts.defaultHeaders;
-    this.memoryStore = opts.memoryStore ?? new MemoryStore();
+    this._memoryStore = opts.memoryStore;
     this.workspaceStore = opts.workspaceStore;
-    this.stateStore = opts.stateStore ?? new StateStore(getStateDatabasePath());
+    this._stateStore = opts.stateStore;
 
     const schemas: AnthropicToolDef[] = [...builtinToolSchemas];
     // Executor-supplied `agent` def advertises named agent types when a
@@ -317,15 +318,20 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // intercepted by the awareness handler. Otherwise the inner dispatcher
     // would return `Unknown tool` for a tool the model legitimately sees in
     // its schema list. See wrapDispatcherWithRuntimeState for the invariant.
+    // Stamp toolDefs on the external-dispatcher wrapper so query.ts:246 picks
+    // up the schema list — mirrors dispatcher-wiring.ts:219 (Anthropic path).
     dispatcher = this.providerOpts.tools
-      ? wrapDispatcherWithRuntimeState(this.providerOpts.tools, runtimeStateSource)
+      ? Object.assign(wrapDispatcherWithRuntimeState(this.providerOpts.tools, runtimeStateSource),
+          { toolDefs: operatorDispatcherToolDefs(this.providerOpts.tools, selectBaseSchemas(this.schemas, { isSkillDispatch: config.isSkillDispatch, isNonInteractive: config.isNonInteractive })) })
       : this.buildDispatcher(permissionMode, {
           ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
           ...(this._sharedReadRoots !== undefined ? { readRoots: this._sharedReadRoots } : {}),
           ...(this._sharedWriteRoots !== undefined ? { writeRoots: this._sharedWriteRoots } : {}),
           ...(resolvedSession.id !== undefined ? { sessionId: resolvedSession.id } : {}),
           ...(config.parentSessionId !== undefined ? { parentSessionId: config.parentSessionId } : {}),
+          ...(config.rootSessionId !== undefined ? { rootSessionId: config.rootSessionId } : {}),
           ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
+          ...(config.env !== undefined ? { env: config.env } : {}), // PLUGIN_ROOT, session TMPDIR
           // Fork-scoped central output cap (#661): forwarded from the child
           // config that forkSubagent stamped, arming maxOutputBytes for forks
           // only (top-level leaves it unset). Parity with anthropic-direct.
@@ -336,6 +342,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
           ...(config.bashOutputTailReporter !== undefined
             ? { bashOutputTailReporter: config.bashOutputTailReporter }
             : {}),
+          // #2542/#2735 detach registry + background process registry,
+          // forwarded from AgentConfig (root REPL sessions only).
+          ...sessionRegistryOpts(config),
           runtimeStateSource,
           ...(config.isSkillDispatch ? { isSkillDispatch: true } : {}),
           ...(config.isNonInteractive ? { isNonInteractive: true } : {}),
@@ -413,66 +422,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
    */
   private buildDispatcher(
     permissionMode: string,
-    opts: {
-      cwd?: string;
-      readRoots?: string[];
-      writeRoots?: string[];
-      sessionId?: string;
-      parentSessionId?: string;
-      /**
-       * This fork's own subagent id — parity with
-       * `anthropic-direct/index.ts:buildDispatcher`. Stamped onto every
-       * `hook_decision` the dispatcher emits so a policy block is attributable
-       * to the child that provoked it. Undefined on a top-level session.
-       */
-      subagentId?: string;
-      /**
-       * Explicit "this session is a forked subagent" signal carrying the
-       * per-result output-cap budget (#661) — parity with
-       * `anthropic-direct/index.ts:buildDispatcher`. Set to MODEL_CAP_BYTES by
-       * `SubagentManager.forkSubagent` for EVERY fork; undefined on a top-level
-       * session. Arms the dispatcher's `maxOutputBytes` backstop declaratively.
-       */
-      subagentToolOutputCapBytes?: number;
-      traceWriter?: import('../../trace/index.js').TraceSink;
-      /** Factory for the REPL-only live bash output tail callback. */
-      bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
-      /**
-       * Live source for the `get_runtime_state` tool — see the matching
-       * comment in `anthropic-direct/index.ts:buildDispatcher`.
-       */
-      runtimeStateSource?: RuntimeStateSource;
-      /**
-       * When true, this is a skill-dispatch sub-agent: strip the `ask_question`
-       * escape-hatch tool so it cannot ask the operator "which skill?". Parity
-       * with the `config.isSkillDispatch` toolDefs filter in
-       * AnthropicDirectProvider.
-       */
-      isSkillDispatch?: boolean;
-      /**
-       * When true, this is a non-interactive surface (daemon, scheduler/cron,
-       * one-shot chat) where no human answers elicitations. Strip `ask_question`
-       * only (not `terminal_font_size`). Parity with the `config.isNonInteractive`
-       * toolDefs filter in AnthropicDirectProvider.
-       */
-      isNonInteractive?: boolean;
-      /**
-       * Session-scoped hook registry from `AgentConfig.hookRegistry`. Threaded
-       * here so `PreToolUse`/`PostToolUse` hooks (notably the plan-mode gate)
-       * fire on the per-query dispatcher. Falls back to the constructor-time
-       * `providerOpts.hookRegistry` when unset. Mirrors AnthropicDirectProvider.
-       */
-      hookRegistry?: import('../../hooks.js').HookRegistry;
-      /**
-       * Session-control bridge for `exit_plan_mode`, forwarded from the query
-       * config (top-level sessions only). When set AND `permissionMode ===
-       * 'plan'`, the handler + schema are registered. Mirrors AnthropicDirectProvider.
-       */
-      planExitControls?: PlanExitControls;
-    },
+    opts: BuildDispatcherOpts,
   ): SessionToolDispatcher {
     const handlers = createBuiltinHandlers(permissionMode, opts.cwd);
-    const memoryHandlers = guardChildHotWrites(createMemoryHandlers(this.memoryStore, undefined, this.providerOpts.surface ?? 'cli'), isForkedChildSession(this.providerOpts.readOnlyState, opts));
+    const memoryHandlers = guardChildHotWrites(createMemoryHandlers((this._memoryStore ??= makeDefaultMemoryStore()), undefined, this.providerOpts.surface ?? 'cli'), isForkedChildSession(this.providerOpts.readOnlyState, opts));
     for (const [name, handler] of memoryHandlers) {
       if (this.providerOpts.readOnlyMemory === true && name !== 'memory_search') continue;
       handlers.set(name, handler);
@@ -484,7 +437,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     }
     // State store tools: state_get, state_put, state_cas, state_delete, state_query.
     // Read-only sessions get only state_get and state_query.
-    for (const [name, handler] of createStateHandlers(this.stateStore, opts.sessionId)) {
+    for (const [name, handler] of createStateHandlers((this._stateStore ??= makeDefaultStateStore()), opts.sessionId)) {
       if (isStateRestricted(this.providerOpts.readOnlyMemory, this.providerOpts.readOnlyState) && name !== 'state_get' && name !== 'state_query') continue;
       handlers.set(name, handler);
     }
@@ -539,35 +492,27 @@ export class OpenAICompatibleProvider implements ModelProvider {
       // makes a silent drop (c6892c6) a compile error.
       hookRegistry: resolveSessionHookRegistry(opts.hookRegistry, this.providerOpts.hookRegistry),
     };
-    // Union live MCP wire-names AND consumer-registered custom-tool names into
-    // the (statically-snapshotted) allowlist so neither is rejected by the gate
-    // while present in `schemas`/`handlers`. No-op when there is no allowlist
-    // (undefined => all allowed) or nothing to union. Mirrors
-    // AnthropicDirectProvider; restricted sub-agents carry no customTools.
-    const effectivePermissions = withCustomToolsAllowed(
-      this.providerOpts.mcpManager
-        ? withMcpToolsAllowed(
-            this.providerOpts.permissions,
-            this.providerOpts.mcpManager.getMcpToolWireNames(),
-          )
-        : this.providerOpts.permissions,
+    // MCP + custom-tool unions, then operator denies LAST (shared with
+    // AnthropicDirectProvider; invariant in tools/permissions-compose.ts).
+    const effectivePermissions = composeDispatcherPermissions(
+      this.providerOpts.permissions,
+      this.providerOpts.mcpManager?.getMcpToolWireNames(),
       (this.providerOpts.customTools ?? []).map((t) => t.schema.name),
     );
     if (effectivePermissions !== undefined) dispatcherOpts.permissions = effectivePermissions;
     if (this.providerOpts.subagentExecutor !== undefined) dispatcherOpts.subagentExecutor = this.providerOpts.subagentExecutor;
-    if (this.providerOpts.skillExecutor !== undefined)
-      dispatcherOpts.skillExecutor = this.providerOpts.skillExecutor;
-    if (this.providerOpts.composeExecutor !== undefined)
-      dispatcherOpts.composeExecutor = this.providerOpts.composeExecutor;
+    if (this.providerOpts.skillExecutor !== undefined) dispatcherOpts.skillExecutor = this.providerOpts.skillExecutor;
+    if (this.providerOpts.composeExecutor !== undefined) dispatcherOpts.composeExecutor = this.providerOpts.composeExecutor;
     // In-process permission callback (Dim 8) — parity with anthropic-direct.
-    if (this.providerOpts.canUseTool !== undefined)
-      dispatcherOpts.canUseTool = this.providerOpts.canUseTool;
+    if (this.providerOpts.canUseTool !== undefined) dispatcherOpts.canUseTool = this.providerOpts.canUseTool;
     if (opts.cwd !== undefined) dispatcherOpts.cwd = opts.cwd;
     if (opts.readRoots !== undefined) dispatcherOpts.readRoots = opts.readRoots;
     if (opts.writeRoots !== undefined) dispatcherOpts.writeRoots = opts.writeRoots;
     if (opts.sessionId !== undefined) dispatcherOpts.sessionId = opts.sessionId;
     if (opts.parentSessionId !== undefined) dispatcherOpts.parentSessionId = opts.parentSessionId;
+    if (opts.rootSessionId !== undefined) dispatcherOpts.rootSessionId = opts.rootSessionId;
     if (opts.subagentId !== undefined) dispatcherOpts.subagentId = opts.subagentId;
+    if (opts.env !== undefined) dispatcherOpts.env = opts.env;
     // Central output-cap backstop (#661), FORK-SCOPED — parity with
     // AnthropicDirectProvider.buildDispatcher. Armed from the explicit
     // `subagentToolOutputCapBytes` signal that `SubagentManager.forkSubagent`
@@ -600,6 +545,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
     dispatcherOpts.spawnedPidRegistry = this._spawnedPidRegistry;
     // Yield contract: queued-message probe, late-bound off planExitControls (top-level only).
     if (planExitControls) dispatcherOpts.userAttention = userAttentionFrom(planExitControls);
+    // #2542/#2735 detach registry + background process registry — parity with
+    // AnthropicDirectProvider.buildDispatcher. Top-level REPL sessions only.
+    Object.assign(dispatcherOpts, sessionRegistryOpts(opts));
 
     return new SessionToolDispatcher(dispatcherOpts);
   }
@@ -658,17 +606,19 @@ export class OpenAICompatibleProvider implements ModelProvider {
   }
 
   close(): void {
-    this.memoryStore.close();
+    this._memoryStore?.close();
     this.workspaceStore?.close();
-    this.stateStore.close();
+    this._stateStore?.close();
   }
 
   /**
    * Single-shot completion (see {@link ModelProvider.complete}). Resolves auth
    * via {@link resolveOpenAIAuth} (the standard `OPENAI_API_KEY` →
-   * `CODEX_API_KEY` → `~/.codex/auth.json` chain) and honours the
-   * provider's construction-time `baseURL` so local MLX / llama.cpp / vLLM
-   * shims are reached transparently.
+   * `CODEX_API_KEY` → `~/.codex/auth.json` chain) and picks the wire from it
+   * (`./complete-wire`): ChatGPT-subscription OAuth goes to the ChatGPT
+   * backend over Responses, everything else over Chat Completions honouring
+   * the provider's construction-time `baseURL` (local MLX / llama.cpp / vLLM
+   * shims).
    * `args.baseUrl` overrides the construction option when both are present.
    */
   async complete(args: ProviderCompleteArgs): Promise<string> {
@@ -685,7 +635,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // setEndpointDefaults) so complete() matches query() credentials.
     if (this._defaultHeaders !== undefined) input.defaultHeaders = this._defaultHeaders;
     if (args.signal) input.signal = args.signal;
-    return oneShotChatCompletion(input);
+    return completeWithWire(input);
   }
 }
 

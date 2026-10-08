@@ -33,6 +33,20 @@ function toolResultBlock(toolUseId: string, text: string, isError?: boolean) {
 }
 
 describe('journalRecordsToToolEvents', () => {
+  it('reads incomplete + partialNodeCount from tool_result blocks (#2978)', () => {
+    const partial = { ...toolResultBlock('c1', 'dag'), incomplete: true, incompleteReason: 'compose_partial_nodes', partialNodeCount: 2 };
+    const records: JournalRecord[] = [
+      appendRecord(0, [toolUseBlock('c1', 'compose'), toolUseBlock('c2', 'compose')]),
+      { v: V, ts: TS, kind: 'append', index: 1, message: { role: 'user', content: [partial, toolResultBlock('c2', 'ok')] } },
+      // Re-append without the flag (e.g. a cloned native) keeps the recorded partial.
+      { v: V, ts: TS, kind: 'append', index: 2, message: { role: 'user', content: [toolResultBlock('c1', 'dag')] } },
+    ];
+    const events = journalRecordsToToolEvents(records);
+    expect(events[0]).toMatchObject({ toolUseId: 'c1', incomplete: true, partialNodeCount: 2 });
+    expect(events[1]!.incomplete).toBeUndefined();
+    expect(events[1]!.partialNodeCount).toBeUndefined();
+  });
+
   it('pairs tool_use with tool_result by id', () => {
     const records: JournalRecord[] = [
       appendRecord(0, [toolUseBlock('id1', 'bash', { command: 'ls' })]),
@@ -171,5 +185,31 @@ describe('summarizeSubagentJournal', () => {
     expect(summary.tool_calls).toBe(0);
     expect(summary.tool_errors).toBe(0);
     expect(summary.tool_counts).toEqual({});
+  });
+
+  // #2795 gap 6: PRs opened by subagents
+  it('detects gh pr create in subagent journal and populates detected_pr_url (#2795 gap 6)', () => {
+    const prUrl = 'https://github.com/owner/repo/pull/55';
+    const records: JournalRecord[] = [
+      appendRecord(0, [toolUseBlock('b1', 'bash', { command: 'gh pr create --fill' })]),
+      {
+        v: V, ts: TS, kind: 'append', index: 1,
+        message: { role: 'user', content: [toolResultBlock('b1', `${prUrl}\n`)] },
+      },
+    ];
+    const summary = summarizeSubagentJournal('sub-ship', records);
+    expect(summary.detected_pr_url).toBe(prUrl);
+  });
+
+  it('no detected_pr_url when subagent has no gh pr create (#2795 gap 6)', () => {
+    const records: JournalRecord[] = [
+      appendRecord(0, [toolUseBlock('b2', 'bash', { command: 'git push -u origin HEAD' })]),
+      {
+        v: V, ts: TS, kind: 'append', index: 1,
+        message: { role: 'user', content: [toolResultBlock('b2', 'Branch pushed.')] },
+      },
+    ];
+    const summary = summarizeSubagentJournal('sub-push', records);
+    expect(summary.detected_pr_url).toBeUndefined();
   });
 });

@@ -139,9 +139,47 @@ describe('bashHandler', () => {
       );
 
       expect(result.isError).toBe(true);
-      expect(result.content).toBe('Command aborted');
+      expect(result.content).toMatch(/^Command aborted after \d+\.\ds; no output was captured/);
       expect(result.content).not.toMatch(/exited with code/);
     });
+
+    // Mid-run kills (abort / timeout) keep the output produced before the kill
+    // so the model can tell how far a non-rolled-back command got.
+    // See bash-interrupted.ts.
+    it('abort mid-run returns the output produced before the kill', async () => {
+      const signal = createAbortableSignal(1500);
+      const result = await bashHandler(
+        { command: "printf 'step-1-done\\n'; sleep 60" },
+        signal,
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(
+        /^Command aborted after \d+\.\ds; the process was killed\. Output before the kill:\n/,
+      );
+      expect(result.content).toContain('step-1-done');
+    }, 15_000);
+
+    it('timeout returns the output produced before the kill', async () => {
+      const result = await bashHandler(
+        { command: "printf 'before-timeout\\n'; sleep 60", timeout_ms: 1500 },
+        createSignal(),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/^Command timed out after 1500ms; the process was killed\./);
+      expect(result.content).toContain('before-timeout');
+    }, 15_000);
+
+    it('timeout with no output keeps the bare historical message', async () => {
+      const result = await bashHandler(
+        { command: 'sleep 60', timeout_ms: 300 },
+        createSignal(),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toBe('Command timed out after 300ms');
+    }, 15_000);
   });
 
   describe('input validation', () => {
@@ -271,7 +309,7 @@ describe('bashHandler', () => {
       const elapsed = Date.now() - start;
 
       expect(result.isError).toBe(true);
-      expect(result.content).toBe('Command aborted');
+      expect(result.content).toMatch(/^Command aborted/);
       // The fix kills the child immediately; without it, the result would only
       // arrive after `sleep 5` exits on its own (~5s) via the close handler.
       expect(elapsed).toBeLessThan(3000);
@@ -584,8 +622,8 @@ describe('bashHandler', () => {
   });
 
   // Windows: genuinely POSIX-only — uses `pwd` POSIX-only shell command (#703)
-  describe.skipIf(isWin32)('context.cwd enforcement', () => {
-    it('runs command in context.cwd when set', async () => {
+  describe.skipIf(isWin32)('resolveBase enforcement', () => {
+    it('runs command in resolveBase when set', async () => {
       const handler = createBashHandler('default');
       const dir = mkdtempSync(path.join(os.tmpdir(), 'afk-bash-cwd-'));
       // On macOS /var is a symlink to /private/var — resolve to the real path
@@ -595,7 +633,7 @@ describe('bashHandler', () => {
       const result = await handler(
         { command: 'pwd' },
         new AbortController().signal,
-        { cwd: dir },
+        { resolveBase: dir },
       );
 
       expect(result.isError).toBeFalsy();
@@ -722,7 +760,7 @@ describe.skipIf(isWin32)('createBashHandler — cwd parameter', () => {
     try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
-  it('without cwd: spawns in process.cwd() (legacy behavior)', async () => {
+  it('without resolveBase: spawns in process.cwd() (default behavior)', async () => {
     const handler = createBashHandler('default');
     const result = await handler({ command: 'pwd' }, createSignal());
     // No cwd opt → bash runs in process.cwd(), which is the test runner cwd.
@@ -730,7 +768,7 @@ describe.skipIf(isWin32)('createBashHandler — cwd parameter', () => {
     expect(realpathSync(result.content.trim())).toBe(realpathSync(process.cwd()));
   });
 
-  it('with cwd: spawns in the configured directory', async () => {
+  it('with factory cwd: spawns in the configured directory', async () => {
     // Drop a sentinel file inside tmpDir so we can distinguish from process.cwd()
     await fs.writeFile(join(tmpDir, 'sentinel.txt'), 'hello', 'utf8');
     const handler = createBashHandler('default', tmpDir);
@@ -791,7 +829,7 @@ describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
     // Must complete quickly — SIGKILL terminates the process immediately;
     // SIGTERM would leave it running for up to 60s.
     expect(elapsed).toBeLessThan(2000);
-  }, { timeout: 5000 });
+  }, 5000);
 
   it('[abort path] terminates a SIGTERM-immune process when AbortSignal fires', async () => {
     const controller = new AbortController();
@@ -809,7 +847,7 @@ describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
     expect(result.content).toContain('aborted');
     // Same reasoning: SIGKILL terminates promptly; SIGTERM would not.
     expect(elapsed).toBeLessThan(2000);
-  }, { timeout: 5000 });
+  }, 5000);
 
   it(
     '[process-group kill] reaps descendant processes, not just the direct child',
@@ -881,8 +919,8 @@ describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
 //
 // NB: appendRoutingDecision is a no-op under vitest (env.VITEST guard), so we
 // spy on console.warn — the reliable, synchronous signal that the escape path
-// was taken. `warnIfBypassPermissions` also writes a `[security]` line, so we
-// match specifically on the path-escape substring to disambiguate.
+// was taken. We match specifically on the path-escape substring so unrelated
+// `[security]` lines can never satisfy these assertions.
 // ---------------------------------------------------------------------------
 describe('bash path-containment scan — C4 (#354)', () => {
   function createSignal(): AbortSignal {
@@ -1034,6 +1072,43 @@ describe('bash path-containment scan — C4 (#354)', () => {
     // Only the genuine escape is named — the exempt sink is not listed.
     expect(warnings[0]).toContain('/etc/hosts');
     expect(warnings[0]).not.toContain('/dev/null');
+  });
+});
+
+// bypassPermissions mode must behave identically to 'default' after #2716 removed
+// the stale warnIfBypassPermissions branch.  These tests mirror the most important
+// 'default' behaviours to confirm no special-case survives the removal.
+describe("createBashHandler('bypassPermissions') — behaves identically to 'default'", () => {
+  function createSignal(): AbortSignal {
+    return new AbortController().signal;
+  }
+
+  it('executes commands and returns output', async () => {
+    const handler = createBashHandler('bypassPermissions');
+    const result = await handler({ command: 'echo bypass-ok' }, createSignal());
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('bypass-ok');
+  });
+
+  it('does not emit a path-escape warning for out-of-root paths (warning removed in #2716)', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'bypass-test-'));
+    try {
+      const warned: string[] = [];
+      const origWarn = console.warn.bind(console);
+      vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+        warned.push(String(args[0]));
+        origWarn(...args);
+      });
+      const handler = createBashHandler('bypassPermissions', root);
+      const ctx = { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: false };
+      await handler({ command: 'echo hi /etc/hosts' }, createSignal(), ctx);
+      vi.restoreAllMocks();
+      // No bypass-specific warning; advisory path-escape warns the same as 'default'.
+      const bypassWarnings = warned.filter((w) => w.includes('bypass'));
+      expect(bypassWarnings).toHaveLength(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

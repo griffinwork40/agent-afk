@@ -13,6 +13,8 @@
  * borrows them through the host interface.
  */
 
+import { resetArchivedReveal } from './terminal-compositor.archived-reveal.js';
+import { retainedArchivedPrefix } from './terminal-compositor.band-archived-prefix.js';
 import type { LogUpdateFn, CompositorScrollRegionGuard, BandRowMeta, FramePlacementMode } from './terminal-compositor.types.js';
 import type { BandReflowCache } from './terminal-compositor.band-reflow.js';
 import {
@@ -51,6 +53,8 @@ export interface CommittedBandHost {
   lastMeasuredFrameTop: number;
   /** How many of committedBand's rows (its bottom suffix) are painted on screen. */
   committedBandPaintedRows: number;
+  /** Leading band rows already in scrollback (terminal-compositor.band-archived-prefix.ts). */
+  committedBandArchivedPrefix: number;
   /** Memoization for reflowCommittedBandToWidth — see the field doc on the class. */
   bandReflowCache: BandReflowCache | null;
   /** Re-entrancy guard: suppresses a repaint during the clear→write window. */
@@ -309,6 +313,12 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   // below the rows Phase 3 will paint — content-hug.ts, in-flight commit).
   self.debugLog('commitAbove:phase2:repaint');
   self.pendingContentRows = phase2PendingContentRows(self, geo, route);
+  const projectedMerged = !route.useBandHold && geo.fitsAboveFrame &&
+    (self.committedBandBottomRow === geo.frameTop - 1 || self.committedBandBottomRow === geo.phase1EffectiveFrameTop - 1);
+  const projectedPrefix = route.useBandHold
+    ? retainedArchivedPrefix(self, route.overflowPriorContiguous, route.archiveCount)
+    : retainedArchivedPrefix(self, projectedMerged, 0);
+  resetArchivedReveal(self, projectedPrefix);
   self.repaint();
   self.debugLog('commitAbove:phase2:done', { newTopRow: self.logUpdate.topRow ?? null });
 
@@ -358,11 +368,13 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
 }
 
 export function clearCommittedBand(self: CommittedBandHost): void {
+  resetArchivedReveal(self);
   self.committedBand = [];
   self.committedBandMeta = [];
   self.committedBandTopRow = 0;
   self.committedBandBottomRow = 0;
   self.committedBandPaintedRows = 0;
+  self.committedBandArchivedPrefix = 0;
   // Explicit reset (also self-invalidates via reflowCommittedBandToWidth's
   // reference check once committedBand is reassigned above, but an empty band
   // never needs a cache entry either way).
@@ -388,11 +400,13 @@ export function clearCommittedBand(self: CommittedBandHost): void {
  * must stay on screen and must NOT be re-emitted or re-tracked.
  */
 export function forgetCommittedBand(self: CommittedBandHost): void {
+  resetArchivedReveal(self);
   self.committedBand = [];
   self.committedBandMeta = [];
   self.committedBandTopRow = 0;
   self.committedBandBottomRow = 0;
   self.committedBandPaintedRows = 0;
+  self.committedBandArchivedPrefix = 0;
   self.bandReflowCache = null;
   // Keep lifecycleStateDirty unchanged: it tracks whether a commit has landed
   // since the last flush. Forgetting the model does not reset that semantic.

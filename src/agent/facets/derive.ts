@@ -18,17 +18,22 @@ import {
   FACET_VERSION,
   SessionFacetSchema,
   type FacetOutcome,
+  type FacetOutcomeDowngradeReason,
   type FacetOutcomeSource,
   type SessionFacet,
   type StoredSessionInput,
-  type SubagentInvocation,
   type SubagentToolSummary,
   type ToolEventInput,
   type YieldTracking,
 } from './schema.js';
 import { computeParallelDispatch } from './parallel-dispatch.js';
 import { parseTerminalState } from '../outcomes/terminal-state.js';
-import { BARE_PR_URL_RESULT, PR_QUERY_INPUT } from '../outcomes/artifacts.js';
+import type { TraceSignals } from './derive.trace.js';
+import { checkDowngradeSignals } from './derive.downgrade.js';
+import { aggregateToolEvents, dedupeToolEvents } from './derive.aggregate.js';
+
+// Re-export dedupeToolEvents so external callers (parallel-dispatch, store) keep working.
+export { dedupeToolEvents } from './derive.aggregate.js';
 
 export interface DeriveOptions {
   /** Absolute path of the source session sidecar (recorded for provenance). */
@@ -50,37 +55,18 @@ export interface DeriveOptions {
    * parent's `tool_counts`. (#2461)
    */
   subagentBreakdown?: SubagentToolSummary[];
+  /**
+   * Signals extracted from the session's witness trace by the store layer.
+   * When absent (no trace available, or tracing disabled) all trace-backed
+   * downgrade signals are suppressed — absence is never treated as a
+   * downgrade. Populated by `store.ts` via `derive.trace.ts`. (#2798 cont.)
+   */
+  traceSignals?: TraceSignals;
 }
 
-const SUBAGENT_TOOLS = new Set(['agent', 'compose', 'skill']);
-const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file']);
 const GOAL_CAP = 1000;
 const SUMMARY_CAP = 240;
-const EVIDENCE_CAP = 50;
-// `(?![\w-])` rejects `git commit-tree` / `git commits` (a trailing word char or
-// hyphen) while still matching `git commit`, `git commit -m …`, `git commit;`.
-const COMMIT_RE = /\bgit\s+commit(?![\w-])/;
-const SLASH_CMD_RE = /^\s*\/([a-zA-Z][\w-]*)/;
-
-// Invariant: a GitHub PR URL that is the whole of one output line. gh pr create
-// prints the URL on its own line; a URL embedded in grep/rg output or prose is
-// on a line with other text and does not match.
-const GH_PR_URL_LINE_RE = /^[ \t]*(https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+)[ \t]*$/gm;
-
-// Invariant: `gh pr create` counts as an invocation only at the start of a
-// line or right after a shell separator (`;`, `&&`, `||`, `|`), optionally
-// after env assignments (`GH_TOKEN=x gh pr create`). This rejects the phrase
-// as an argument (rg -n "gh pr create" src). It is an approximation: a
-// separator inside a quoted string can still match.
-const GH_PR_CREATE_INVOCATION_RE =
-  /(?:^|[;|&])[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=\S*[ \t]+)*gh[ \t]+pr[ \t]+create(?:[ \t]|$)/m;
-
-/** Last GitHub PR URL that sits alone on an output line, or null. */
-function lastOwnLinePrUrl(result: string): string | null {
-  let url: string | null = null;
-  for (const m of result.matchAll(GH_PR_URL_LINE_RE)) url = m[1] ?? url;
-  return url;
-}
+const SLASH_CMD_RE = /^\s*\/([a-zA-Z][\w-]*)/
 
 /**
  * Map a parsed TerminalKind to a FacetOutcome.
@@ -95,19 +81,79 @@ function terminalKindToOutcome(kind: string): FacetOutcome {
   return 'unknown';
 }
 
-/** Parse a stringified tool input to an object, swallowing malformed JSON. */
-function parseInput(input: string | undefined): Record<string, unknown> | undefined {
-  if (!input) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(input);
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : undefined;
-  } catch {
-    return undefined;
-  }
+interface OutcomeResult {
+  outcome: FacetOutcome;
+  outcomeSource: FacetOutcomeSource;
+  primarySuccess: string;
+  /** Non-empty when the Done block had a deferred/pending bullet (#2798). */
+  parsedDeferred: string | undefined;
+  /** Non-empty when the Done block had an evidence bullet (#2798). */
+  parsedEvidence: string | undefined;
 }
 
-function asString(v: unknown): string | undefined {
-  return typeof v === 'string' ? v : undefined;
+/**
+ * Derive outcome, outcome_source, and primary_success from the turns array.
+ * Extracted to keep deriveSessionFacet under the 200-line function ceiling.
+ */
+function deriveOutcome(
+  turns: StoredSessionInput['turns'],
+  sessionType: string,
+): OutcomeResult {
+  const lastAssistant =
+    [...(turns ?? [])].reverse().find((t) => (t.assistant ?? '').trim().length > 0)?.assistant ?? '';
+  // Determine outcome and outcome_source (#2777):
+  //   - zero turns → 'aborted' (structural)
+  //   - empty last assistant → 'partially_achieved' (structural)
+  //   - terminal-state heading found → mapped kind (terminal_state)
+  //   - non-empty assistant, no heading → 'unknown' (none)
+  let outcome: FacetOutcome;
+  let outcomeSource: FacetOutcomeSource;
+  let whatWasDone: string | undefined;
+
+  const tArr = turns ?? [];
+  let parsedDeferred: string | undefined;
+  let parsedEvidence: string | undefined;
+  if (tArr.length === 0) {
+    outcome = 'aborted';
+    outcomeSource = 'structural';
+  } else if (lastAssistant.trim().length === 0) {
+    outcome = 'partially_achieved';
+    outcomeSource = 'structural';
+  } else {
+    const parsed = parseTerminalState(lastAssistant);
+    if (parsed !== null) {
+      outcome = terminalKindToOutcome(parsed.kind);
+      outcomeSource = 'terminal_state';
+      whatWasDone = parsed.whatWasDone;
+      // Capture deferred and evidence bullets for downgrade signals (#2798).
+      // Only meaningful when kind is 'done'; other kinds are ignored downstream.
+      parsedDeferred = parsed.deferred;
+      parsedEvidence = parsed.evidence;
+    } else {
+      outcome = 'unknown';
+      outcomeSource = 'none';
+    }
+  }
+
+  // primary_success (#2777):
+  //   - Done + whatWasDone parsed → oneLine(whatWasDone, 160)
+  //   - Done, no whatWasDone → existing behavior (lastAssistant fallback)
+  //   - partially_achieved (empty/structural) → firstPrompt or sessionType
+  //   - not_achieved / aborted → 'none'
+  //   - unknown → existing last-assistant fallback (not 'none')
+  const firstPrompt = tArr[0]?.user ?? '';
+  let primarySuccess: string;
+  if (outcome === 'not_achieved' || outcome === 'aborted') {
+    primarySuccess = 'none';
+  } else if (outcome === 'fully_achieved') {
+    primarySuccess = whatWasDone
+      ? oneLine(whatWasDone, 160) || sessionType
+      : oneLine(lastAssistant || firstPrompt || sessionType, 160) || sessionType;
+  } else {
+    primarySuccess = oneLine(lastAssistant || firstPrompt || sessionType, 160) || sessionType;
+  }
+
+  return { outcome, outcomeSource, primarySuccess, parsedDeferred, parsedEvidence };
 }
 
 /** Collapse whitespace and cap length for single-line summary fields. */
@@ -120,133 +166,23 @@ function humanizeName(name: string): string {
   return name.replace(/[-_]+/g, ' ').trim();
 }
 
+/**
+ * Build yield-tracking fields for the facet (#2016, #2777, #2795).
+ * Extracted to keep deriveSessionFacet under the 200-line function ceiling.
+ */
+function buildYieldTracking(source: string, effectivePrUrl: string | null): YieldTracking {
+  return {
+    is_scheduled_session: source === 'daemon',
+    produced_pr: effectivePrUrl !== null ? true : null,
+    pr_merged: null,
+    ...(effectivePrUrl !== null ? { pr_url: effectivePrUrl } : { pr_url: null }),
+  };
+}
+
 function classifySessionType(firstPrompt: string, source: string): string {
   if (SLASH_CMD_RE.test(firstPrompt)) return 'slash_command';
   if (source === 'telegram') return 'chat';
   return 'task';
-}
-
-/**
- * Invariant: the recorder persists TWO ToolEvent entries per tool call under one
- * toolUseId — an early placeholder emitted at content_block_start (translate.ts:
- * input ' …', no inputRaw, no result) and the real entry emitted post-stream
- * (loop.ts: summarized input + result). Both are pushed to the turn's toolEvents
- * array (turn-handler.ts / background.ts), so counting raw events double-counts
- * every tool. The real entry is always emitted AFTER its placeholder, so a
- * last-write-wins Map keyed by toolUseId keeps the real one; Map iteration order
- * preserves each id's first-seen position (call order). Events without a
- * toolUseId cannot be paired and are kept individually.
- */
-export function dedupeToolEvents(events: ToolEventInput[]): ToolEventInput[] {
-  const byId = new Map<string, ToolEventInput>();
-  const noId: ToolEventInput[] = [];
-  for (const ev of events) {
-    if (ev.toolUseId === undefined) noId.push(ev);
-    else byId.set(ev.toolUseId, ev); // last write wins → real entry supersedes placeholder
-  }
-  return [...byId.values(), ...noId];
-}
-
-interface AggregateToolEventsResult {
-  toolCounts: Record<string, number>;
-  toolErrorCategories: Record<string, number>;
-  subagents: SubagentInvocation[];
-  skills: string[];
-  evidencePaths: string[];
-  toolErrors: number;
-  filesWritten: number;
-  filesEdited: number;
-  bashCommands: number;
-  commits: number;
-  /** GitHub PR URL from a gh pr create result, if found. */
-  detectedPrUrl: string | null;
-}
-
-function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolEventsResult {
-  const toolCounts: Record<string, number> = {};
-  const toolErrorCategories: Record<string, number> = {};
-  const subagents: SubagentInvocation[] = [];
-  const skills: string[] = [];
-  const evidencePaths: string[] = [];
-  let toolErrors = 0;
-  let filesWritten = 0;
-  let filesEdited = 0;
-  let bashCommands = 0;
-  let commits = 0;
-  let detectedPrUrl: string | null = null;
-
-  for (const ev of allEvents) {
-    const name = ev.toolName;
-    toolCounts[name] = (toolCounts[name] ?? 0) + 1;
-
-    if (ev.isError === true) {
-      toolErrors += 1;
-      toolErrorCategories[name] = (toolErrorCategories[name] ?? 0) + 1;
-    }
-
-    // Prefer inputRaw (full JSON, populated for sessions recorded after this fix) over
-    // input (summarized string). For older sidecars without inputRaw, parseInput falls
-    // back to input — which will still return undefined for summarized strings, preserving
-    // the pre-fix behaviour rather than crashing.
-    const parsed = parseInput(ev.inputRaw ?? ev.input);
-
-    if (name === 'write_file') filesWritten += 1;
-    if (name === 'edit_file') filesEdited += 1;
-    if (name === 'bash') {
-      bashCommands += 1;
-      // Commit detection reads the parsed `command` when present (older sidecars
-      // written before the secret-at-rest fix) and otherwise falls back to the
-      // summarized `input` (a flattened, ≤160-char one-line summary — newlines
-      // collapsed to spaces; see summarizeToolInput). The raw `command` is no
-      // longer persisted to inputRaw — it can carry inline secrets verbatim — so
-      // for current sidecars detection runs against that summary, which catches a
-      // `git commit` anywhere in the flattened command (not just line 1). See
-      // raw-input.ts.
-      const cmd = asString(parsed?.['command']) ?? ev.input;
-      if (cmd && COMMIT_RE.test(cmd)) commits += 1;
-
-      // PR detection (#2777): when a bash event whose input looks like a real
-      // `gh pr create` invocation has a result containing a GitHub PR URL on
-      // its own line, record the URL. The LAST URL wins (in case of multiple).
-      // We never set produced_pr=false here — that is left to the async yield probe.
-      // Truncated-input path: if the stored input ends in '…', the command may
-      // have been cut before `gh pr create`; treat a bare-PR-URL result with a
-      // non-query truncated input the same as artifacts.ts does.
-      if (ev.isError !== true && ev.result) {
-        const inputStr = asString(parsed?.['command']) ?? ev.input ?? '';
-        const truncated = inputStr.trimEnd().endsWith('\u2026');
-        // The truncated path requires the WHOLE result to be a bare PR URL
-        // (gh pr create's stdout shape), same as artifacts.ts isPRCreateEvent.
-        const isTruncatedCreate =
-          truncated && BARE_PR_URL_RESULT.test(ev.result) && !PR_QUERY_INPUT.test(inputStr);
-        if (GH_PR_CREATE_INVOCATION_RE.test(inputStr) || isTruncatedCreate) {
-          detectedPrUrl = lastOwnLinePrUrl(ev.result) ?? detectedPrUrl;
-        }
-      }
-    }
-
-    if (FILE_TOOLS.has(name)) {
-      const fp = asString(parsed?.['file_path']);
-      if (fp && !evidencePaths.includes(fp) && evidencePaths.length < EVIDENCE_CAP) {
-        evidencePaths.push(fp);
-      }
-    }
-
-    if (SUBAGENT_TOOLS.has(name)) {
-      let label: string | undefined;
-      if (name === 'skill') {
-        label = asString(parsed?.['name']);
-        if (label && !skills.includes(label)) skills.push(label);
-      } else if (name === 'agent') {
-        label = asString(parsed?.['id_prefix']);
-      } else {
-        label = 'compose';
-      }
-      subagents.push(label ? { tool: name, label } : { tool: name });
-    }
-  }
-
-  return { toolCounts, toolErrorCategories, subagents, skills, evidencePaths, toolErrors, filesWritten, filesEdited, bashCommands, commits, detectedPrUrl };
 }
 
 export function deriveSessionFacet(
@@ -263,12 +199,25 @@ export function deriveSessionFacet(
     : dedupeToolEvents(turns.flatMap((t) => t.toolEvents ?? []));
 
   // --- mechanical: tool + error aggregation ---
-  const { toolCounts, toolErrorCategories, subagents, skills, evidencePaths, toolErrors, filesWritten, filesEdited, bashCommands, commits, detectedPrUrl } = aggregateToolEvents(allEvents);
+  const {
+    toolCounts, toolErrorCategories, subagents, skills, evidencePaths,
+    toolErrors, filesWritten, filesEdited, bashCommands, commits,
+    bashExternalEffects, detectedPrUrl, composePartialNodes, composePartialNodeCount,
+  } = aggregateToolEvents(allEvents);
 
   // tool_errors_total = parent tool_errors + sum of per-subagent tool_errors (#2777)
   const subagentToolErrorsTotal = (options.subagentBreakdown ?? [])
     .reduce((acc, s) => acc + s.tool_errors, 0);
   const toolErrorsTotal = toolErrors + subagentToolErrorsTotal;
+
+  // Subagent PR detection (#2795 gap 6): if a subagent opened a PR that the
+  // parent did not detect, promote the subagent URL. Last non-null wins —
+  // same policy as the parent path. Parent URL takes precedence (already set).
+  const effectivePrUrl: string | null = detectedPrUrl ??
+    (options.subagentBreakdown ?? []).reduce<string | null>(
+      (acc, s) => s.detected_pr_url ?? acc,
+      null,
+    );
 
   // --- semantic (heuristic) ---
   const firstPrompt = turns[0]?.user ?? '';
@@ -284,55 +233,34 @@ export function deriveSessionFacet(
 
   const userMessageCount = turns.filter((t) => (t.user ?? '').trim().length > 0).length;
   const assistantMessageCount = turns.filter((t) => (t.assistant ?? '').trim().length > 0).length;
-
   const lastAssistant = [...turns].reverse().find((t) => (t.assistant ?? '').trim().length > 0)?.assistant ?? '';
 
-  // Determine outcome and outcome_source (#2777):
-  //   - zero turns → 'aborted' (structural)
-  //   - empty last assistant → 'partially_achieved' (structural)
-  //   - terminal-state heading found → mapped kind (terminal_state)
-  //   - non-empty assistant, no heading → 'unknown' (none)
-  let outcome: FacetOutcome;
-  let outcomeSource: FacetOutcomeSource;
-  let whatWasDone: string | undefined;
+  const { outcome: rawOutcome, outcomeSource, primarySuccess: rawPrimarySuccess, parsedDeferred, parsedEvidence } = deriveOutcome(turns, sessionType);
 
-  if (turns.length === 0) {
-    outcome = 'aborted';
-    outcomeSource = 'structural';
-  } else if (lastAssistant.trim().length === 0) {
-    outcome = 'partially_achieved';
-    outcomeSource = 'structural';
-  } else {
-    const parsed = parseTerminalState(lastAssistant);
-    if (parsed !== null) {
-      outcome = terminalKindToOutcome(parsed.kind);
-      outcomeSource = 'terminal_state';
-      whatWasDone = parsed.whatWasDone;
-    } else {
-      outcome = 'unknown';
-      outcomeSource = 'none';
+  // Downgrade self-reported Done to partially_achieved when corroborating
+  // signals indicate the session did not fully complete (#2798). The check
+  // only applies when the initial outcome is fully_achieved; other outcomes
+  // are not modified. primarySuccess is preserved as-is — it still describes
+  // what the agent reported doing.
+  let outcome = rawOutcome;
+  let primarySuccess = rawPrimarySuccess;
+  let outcomeDowngradeReason: FacetOutcomeDowngradeReason | undefined;
+  if (rawOutcome === 'fully_achieved') {
+    outcomeDowngradeReason = checkDowngradeSignals({
+      parsedDeferred,
+      parsedEvidence,
+      filesWritten,
+      filesEdited,
+      commits,
+      bashExternalEffects,
+      composePartialNodes,
+      traceSignals: options.traceSignals,
+    });
+    if (outcomeDowngradeReason !== undefined) {
+      outcome = 'partially_achieved';
+      // Keep primarySuccess from the Done block — it still describes what the
+      // agent reported. Only the outcome label changes to reflect the doubt.
     }
-  }
-
-  // primary_success (#2777):
-  //   - Done + whatWasDone parsed → oneLine(whatWasDone, 160)
-  //   - Done, no whatWasDone → existing behavior (lastAssistant fallback)
-  //   - partially_achieved (empty/structural) → firstPrompt or sessionType
-  //   - not_achieved / aborted → 'none'
-  //   - unknown → existing last-assistant fallback (not 'none')
-  let primarySuccess: string;
-  if (outcome === 'not_achieved' || outcome === 'aborted') {
-    primarySuccess = 'none';
-  } else if (outcome === 'fully_achieved') {
-    // Prefer the Done block's "What was done" bullet, parsed once above.
-    if (whatWasDone) {
-      primarySuccess = oneLine(whatWasDone, 160) || sessionType;
-    } else {
-      primarySuccess = oneLine(lastAssistant || firstPrompt || sessionType, 160) || sessionType;
-    }
-  } else {
-    // partially_achieved or unknown — use existing fallback
-    primarySuccess = oneLine(lastAssistant || firstPrompt || sessionType, 160) || sessionType;
   }
 
   const frictionDetail =
@@ -359,17 +287,8 @@ export function deriveSessionFacet(
     ? [...evidencePaths, options.sourceSessionPath]
     : evidencePaths;
 
-  // Yield tracking: is_scheduled_session is mechanical (from source); produced_pr
-  // and pr_merged require async git/gh probes run by the session-end hook after
-  // teardown, so they start as null here and are written back by that hook.
-  // Exception: when derive detects a `gh pr create` URL in bash output (#2777),
-  // set produced_pr=true and record the URL immediately. Never set false here.
-  const yieldTracking: YieldTracking = {
-    is_scheduled_session: source === 'daemon',
-    produced_pr: detectedPrUrl !== null ? true : null,
-    pr_merged: null,
-    ...(detectedPrUrl !== null ? { pr_url: detectedPrUrl } : { pr_url: null }),
-  };
+  // session yield tracking (#2016) — pr fields enriched asynchronously by session-end hook
+  const yieldTracking = buildYieldTracking(source, effectivePrUrl);
 
   const facet: SessionFacet = {
     facet_version: FACET_VERSION,
@@ -405,15 +324,26 @@ export function deriveSessionFacet(
     tool_error_categories: toolErrorCategories,
     friction_counts: { ...toolErrorCategories },
     friction_detail: frictionDetail,
+    // Compose calls with >=1 partial node (#2970); omitted when zero.
+    ...(composePartialNodes > 0 ? { compose_partial_nodes: composePartialNodes } : {}),
+    // Partial compose nodes summed across calls (#2978); omitted when zero.
+    ...(composePartialNodeCount > 0 ? { compose_partial_node_count: composePartialNodeCount } : {}),
 
     outcome,
     outcome_source: outcomeSource,
+    // outcome_downgrade_reason: present only when a downgrade fired (#2798).
+    ...(outcomeDowngradeReason !== undefined ? { outcome_downgrade_reason: outcomeDowngradeReason } : {}),
     primary_success: primarySuccess,
     world_changes: {
       files_written: filesWritten,
       files_edited: filesEdited,
       bash_commands: bashCommands,
       commits,
+      // Invariant: `mutated` reflects local-file-only mutations (write_file,
+      // edit_file, patch_apply, git commit). Remote side-effects tracked by
+      // bashExternalEffects (git push, gh pr create/merge, npm/pnpm publish)
+      // are deliberately excluded — they corroborate Done (via
+      // checkDowngradeSignals) but do not count as local file mutations.
       mutated: filesWritten > 0 || filesEdited > 0 || commits > 0,
     },
 

@@ -12,8 +12,10 @@ import { env, getMissingRequiredEnvVars } from '../../config/env.js';
 import { getConcurrencyStatuses } from '../../config/concurrency.js';
 import { access, constants, mkdir, readFile } from 'fs/promises';
 import { execSync } from 'child_process';
-import { getApiKey, getCodexApiKey } from '../shared-helpers.js';
+import nodePath from 'path';
+import { getApiKey } from '../shared-helpers.js';
 import { preloadClaudeKeychainOAuth } from '../../agent/auth/credential-resolver.js';
+import { resolveOpenAIAuth } from '../../agent/providers/openai-compatible/auth.js';
 import {
   getAfkConfigDir,
   getAfkStateDir,
@@ -55,19 +57,63 @@ export async function checkAnthropicKey(): Promise<Check> {
 }
 
 export async function checkCodexKey(): Promise<Check> {
-  const key = getCodexApiKey();
-  if (key) {
-    return {
-      name: 'Codex/OpenAI API Key',
-      state: 'pass',
-      detail: 'OPENAI_API_KEY or CODEX_API_KEY set',
-    };
+  // Use the full auth-resolution chain so that ~/.codex/auth.json (API-key
+  // mode or ChatGPT-subscription OAuth) is recognised as valid auth, not just
+  // the OPENAI_API_KEY / CODEX_API_KEY env vars.  Without this, users who
+  // authenticate via `codex login` (either path) see a spurious warn even
+  // though their OpenAI models work fine.
+  const r = resolveOpenAIAuth(undefined);
+  switch (r.source) {
+    case 'config':
+    case 'env':
+    case 'codex-cli':
+      return {
+        name: 'Codex/OpenAI API Key',
+        state: 'pass',
+        detail:
+          r.source === 'env'
+            ? `${r.envVar ?? 'OPENAI_API_KEY'} set (…${r.last4 ?? '????'})`
+            : r.source === 'codex-cli'
+              ? `Codex CLI auth (…${r.last4 ?? '????'})`
+              : `explicit config key (…${r.last4 ?? '????'})`,
+      };
+    case 'chatgpt-oauth':
+      return {
+        name: 'Codex/OpenAI API Key',
+        state: 'pass',
+        detail: `ChatGPT subscription OAuth (account …${
+          r.accountId ? r.accountId.slice(-4) : '????'
+        })`,
+      };
+    case 'chatgpt-oauth-expired':
+      return {
+        name: 'Codex/OpenAI API Key',
+        state: 'warn',
+        detail: 'ChatGPT subscription token is expired',
+        fix: 'Re-run `codex` to refresh the token (AFK does not refresh it automatically)',
+      };
+    case 'no-usable-auth-codex-oauth':
+      return {
+        name: 'Codex/OpenAI API Key',
+        state: 'warn',
+        detail: 'ChatGPT/OAuth credentials found in ~/.codex/auth.json but unused',
+        fix: 'Set AFK_OPENAI_CHATGPT_OAUTH=1 to use your ChatGPT subscription, or set OPENAI_API_KEY',
+      };
+    case 'no-usable-auth-forced-chatgpt-oauth':
+      return {
+        name: 'Codex/OpenAI API Key',
+        state: 'warn',
+        detail: 'Forced ChatGPT OAuth mode (AFK_OPENAI_CHATGPT_OAUTH=1) but no usable OAuth token found',
+        fix: 'Run `codex` once to authenticate, or remove AFK_OPENAI_CHATGPT_OAUTH=1 and set OPENAI_API_KEY',
+      };
+    case 'no-usable-auth':
+    default:
+      return {
+        name: 'Codex/OpenAI API Key',
+        state: 'warn',
+        fix: 'Set OPENAI_API_KEY or CODEX_API_KEY to use OpenAI/Codex models',
+      };
   }
-  return {
-    name: 'Codex/OpenAI API Key',
-    state: 'warn',
-    fix: 'Set OPENAI_API_KEY or CODEX_API_KEY to use Codex models',
-  };
 }
 
 export async function checkXaiAuth(): Promise<Check> {
@@ -97,17 +143,30 @@ export async function checkXaiAuth(): Promise<Check> {
   };
 }
 
-export async function checkNpmBinOnPath(): Promise<Check> {
+/** Injectable deps — real defaults use the host platform; tests override for cross-platform coverage. */
+export interface NpmBinOnPathDeps {
+  platform?: NodeJS.Platform;
+  pathDelimiter?: string;
+  execSync?: typeof import('child_process').execSync;
+}
+
+export async function checkNpmBinOnPath(deps: NpmBinOnPathDeps = {}): Promise<Check> {
+  const platform = deps.platform ?? process.platform;
+  const pathDelimiter = deps.pathDelimiter ?? nodePath.delimiter;
+  const _execSync = deps.execSync ?? execSync;
   try {
-    const prefix = execSync('npm config get prefix', {
+    const prefix = _execSync('npm config get prefix', {
       timeout: 2000,
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
     })
       .trim()
-      .replace(/\/$/, '');
-    const binDir = `${prefix}/bin`;
-    const pathParts = (env.PATH ?? '').split(':').map((p) => p.replace(/\/$/, ''));
+      .replace(/[/\\]$/, '');
+    // On Windows, `npm config get prefix` already points to the directory that
+    // holds global binaries (e.g. C:\Users\Alice\AppData\Roaming\npm).
+    // On POSIX it returns the install prefix and binaries live in <prefix>/bin.
+    const binDir = platform === 'win32' ? prefix : `${prefix}/bin`;
+    const pathParts = (env.PATH ?? '').split(pathDelimiter).map((p) => p.replace(/[/\\]$/, ''));
     if (pathParts.includes(binDir)) {
       return { name: 'npm bin on PATH', state: 'pass', detail: binDir };
     }

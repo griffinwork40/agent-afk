@@ -262,8 +262,8 @@ describe('listDirectoryHandler cwd containment', () => {
     }
   });
 
-  it('rejects absolute path outside context.cwd', async () => {
-    const context: ToolHandlerContext = { cwd: tempDir };
+  it('rejects absolute path outside context.resolveBase', async () => {
+    const context: ToolHandlerContext = { resolveBase: tempDir };
     const result = await listDirectoryHandler(
       { path: '/etc' },
       new AbortController().signal,
@@ -273,8 +273,8 @@ describe('listDirectoryHandler cwd containment', () => {
     expect(result.content).toMatch(/outside the allowed/);
   });
 
-  it('resolves relative path against context.cwd', async () => {
-    const context: ToolHandlerContext = { cwd: tempDir };
+  it('resolves relative path against context.resolveBase', async () => {
+    const context: ToolHandlerContext = { resolveBase: tempDir };
     const result = await listDirectoryHandler(
       { path: 'subdir' },
       new AbortController().signal,
@@ -284,8 +284,8 @@ describe('listDirectoryHandler cwd containment', () => {
     expect(result.content).toContain('file.txt');
   });
 
-  it('allows absolute path within context.cwd', async () => {
-    const context: ToolHandlerContext = { cwd: tempDir };
+  it('allows absolute path within context.resolveBase', async () => {
+    const context: ToolHandlerContext = { resolveBase: tempDir };
     const result = await listDirectoryHandler(
       { path: join(tempDir, 'subdir') },
       new AbortController().signal,

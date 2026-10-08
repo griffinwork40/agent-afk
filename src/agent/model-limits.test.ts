@@ -14,12 +14,15 @@
  * src/agent/model-limits.ts.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { autoCompactLimitFor, contextLimitFor, maxOutputTokensFor } from './model-limits.js';
 import { resolveEffectiveMaxOutputTokens } from './providers/openai-compatible/query/model-params.js';
 import { resolveMaxTokens } from './providers/anthropic-direct/resolve-params.js';
 import { guardContextOverflow } from './providers/shared/auto-compact.js';
 import type { AgentConfig } from './types/config-types.js';
+import { resetCatalogCache } from './providers/openai-compatible/models-catalog.js';
+import { useCodexCatalog } from '../__test-utils__/codex-catalog.js';
+import { OPENAI_COMPAT_THIRD_PARTY_PREFIXES } from './model-capabilities.js';
 
 describe('autoCompactLimitFor', () => {
   it('caps the default sonnet alias at the 200k working budget (not its 1M window)', () => {
@@ -53,12 +56,19 @@ describe('autoCompactLimitFor', () => {
     expect(autoCompactLimitFor('opus_1m')).toBe(1_000_000);
   });
 
-  it('leaves haiku / fable at their full window (no budget entry)', () => {
-    // haiku's 200k is its ACTUAL context window, not a reduced budget.
-    expect(contextLimitFor('haiku')).toBe(200_000);
+  it('caps the haiku alias (Haiku 5.5) at the 200k working budget on its 1M window', () => {
+    expect(contextLimitFor('haiku')).toBe(1_000_000);
     expect(autoCompactLimitFor('haiku')).toBe(200_000);
+    expect(autoCompactLimitFor('claude-haiku-5-5')).toBe(200_000);
+  });
+
+  it('leaves raw Haiku 4.5 / fable at their full window (no budget entry)', () => {
+    // Haiku 4.5's 200k is its ACTUAL context window, not a reduced budget.
+    expect(contextLimitFor('claude-haiku-4-5-20251001')).toBe(200_000);
+    expect(autoCompactLimitFor('claude-haiku-4-5-20251001')).toBe(200_000);
     expect(autoCompactLimitFor('fable')).toBe(1_000_000);
     expect(autoCompactLimitFor('claude-fable-5')).toBe(1_000_000);
+    expect(autoCompactLimitFor('claude-fable-5-1')).toBe(1_000_000);
   });
 
   it('falls back to the model window for unknown / openai-compatible models', () => {
@@ -306,5 +316,53 @@ describe('claude-sonnet-4-6 — explicit limit pins (A/B baseline vs claude-sonn
     // `sonnet_1m` short-circuits on the literal suffix BEFORE wire-id resolution,
     // so the opt-out survives regardless of which id the sonnet family points at.
     expect(autoCompactLimitFor('sonnet_1m')).toBe(1_000_000);
+  });
+});
+
+describe('routesToOpenAICompatible fallback — third-party OpenAI-shim prefix families', () => {
+  // These prefixes are routed to openai-compatible by providers/index.ts Tier 3.
+  // routesToOpenAICompatible in model-limits.ts must match so unknown ids in
+  // these families get the 262k openai-compatible default, not the 200k
+  // Anthropic default (#2789 advisory).
+  //
+  // Test cases are generated from OPENAI_COMPAT_THIRD_PARTY_PREFIXES so a new
+  // prefix family in the shared constant automatically produces a regression
+  // test here — no manual sync required.
+  const OPENAI_COMPAT_TEST_IDS = OPENAI_COMPAT_THIRD_PARTY_PREFIXES.flatMap((p) => [
+    `${p}-unknown-variant-99`,
+    `${p}_unknown_variant_99`,
+  ]);
+
+  for (const id of OPENAI_COMPAT_TEST_IDS) {
+    it(`${id} — falls back to 262k openai-compatible default (not 200k Anthropic)`, () => {
+      // Unknown ids in these families have no MODEL_CONTEXT_LIMITS entry.
+      // They must resolve to the 262k openai-compatible fallback, not 200k.
+      expect(contextLimitFor(id)).toBe(262_144);
+    });
+  }
+});
+
+describe('contextLimitFor — Codex catalog fallback', () => {
+  beforeEach(() =>
+    useCodexCatalog([
+      { slug: 'gpt-6-sol', context_window: 272000 },
+      { slug: 'gpt-5.5', context_window: 272000 },
+    ]),
+  );
+  afterAll(() => resetCatalogCache());
+
+  it('uses the catalog window for ids the table does not list', () => {
+    expect(contextLimitFor('gpt-6-sol')).toBe(272_000);
+  });
+
+  it('keeps the hand-table value when both know the model', () => {
+    // gpt-5.5 is 1M on the API tier; the Codex-plan figure must not shrink it.
+    expect(contextLimitFor('gpt-5.5')).toBe(1_000_000);
+  });
+
+  it('falls back to the per-provider default when the catalog has no entry', () => {
+    expect(contextLimitFor('gpt-6-unlisted')).toBe(262_144);
+    useCodexCatalog(null);
+    expect(contextLimitFor('gpt-6-sol')).toBe(262_144);
   });
 });

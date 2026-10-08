@@ -38,10 +38,33 @@ export type Change =
 
 export type ChangeKind = Change['kind'];
 
+/**
+ * Operator-supplied prediction injected directly, bypassing the analyst model.
+ * Only `behavior` and `testQuestion` are required; the engine fills in the
+ * remaining fields so the prediction participates in the standard verify flow.
+ */
+export interface OperatorPrediction {
+  /** Plain English, e.g. "Asks a clarifying question before using tools". */
+  behavior: string;
+  direction?: PredictionDirection;
+  confidence?: Confidence;
+  /** Positively framed yes/no question, e.g. "Does the response ask a clarifying question?" */
+  testQuestion: string;
+  /** Optional synthetic probes; if absent the engine generates default ones. */
+  probes?: string[];
+}
+
 export interface ChangeSpec {
   /** One-line human description, e.g. "Append an always-ask rule to AFK.md". */
   title: string;
   changes: Change[];
+  /**
+   * Operator-supplied predictions (#2861), merged after any CLI `--predict`
+   * values. When the merged list is non-empty it replaces analyst-generated
+   * predictions: the analyst call is skipped entirely, with or without
+   * `--verify`, so the run is deterministic.
+   */
+  predictions?: OperatorPrediction[];
 }
 
 /** Launch settings for an episode subprocess (model, effort, extra env). */
@@ -413,6 +436,17 @@ export interface WhatifReport {
   /** Plain-English caveats that always accompany the report. */
   limits: string[];
   headline: string;
+  /**
+   * Question-fit level assessed before the verify phase.
+   *
+   * Captures whether the experiment's predictions are measurable by the
+   * decision-only runner (`'supported'`), only partially measurable
+   * (`'partially-supported'`), or not measurable at all (`'unsupported'`).
+   *
+   * Absent when the question-fit preflight did not run (e.g. when predictions
+   * is empty and the preflight short-circuits before classification).
+   */
+  questionFit?: import('./question-fit.js').QuestionFitLevel;
   /** Probes dropped by probe-grounding because they reference non-existent paths. */
   droppedProbes?: import('./probe-grounding.js').DroppedProbe[];
   /**

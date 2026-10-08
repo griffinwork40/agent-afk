@@ -7,7 +7,9 @@
  *
  * Auth resolution (same chain as image_generate, highest wins):
  *   1. `AFK_IMAGE_API_KEY`   — dedicated billing key
- *   2. `resolveOpenAIAuth()` — OPENAI_API_KEY / Codex / ChatGPT OAuth
+ *   2. `resolveOpenAIAuth()` — OPENAI_API_KEY / Codex auth.json
+ *   Note: ChatGPT subscription OAuth is explicitly rejected — the Images Edit
+ *   endpoint does not accept those tokens (wrong OAuth scope).
  *
  * Safety layers (identical to image_generate):
  *   - Registered in the effect ledger as ALWAYS_EXTERNAL (classifier.ts).
@@ -31,8 +33,9 @@ import { env } from '../../../config/env.js';
 import { resolveOpenAIAuth } from '../../providers/openai-compatible/auth.js';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { ToolResult } from '../../providers/shared/tool-result.js';
-import { resolveAndContain } from './_cwd-utils.js';
+import { resolveAndContain, assertWriteTargetContained } from './_cwd-utils.js';
 import { assertNotDenylisted } from './write-denylist.js';
+import { makeSessionCounter } from './_image-operation.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -55,24 +58,7 @@ const DEFAULT_SESSION_LIMIT = 10;
 // Both are billed to the same API key, but the cap semantics are per-tool.
 // ---------------------------------------------------------------------------
 
-const sessionCounters = new Map<string, number>();
-
-function getSessionCount(sessionId: string): number {
-  return sessionCounters.get(sessionId) ?? 0;
-}
-
-function incrementSessionCount(sessionId: string): number {
-  const next = getSessionCount(sessionId) + 1;
-  sessionCounters.set(sessionId, next);
-  return next;
-}
-
-function decrementSessionCount(sessionId: string): void {
-  const current = getSessionCount(sessionId);
-  if (current > 0) {
-    sessionCounters.set(sessionId, current - 1);
-  }
-}
+const editCounter = makeSessionCounter();
 
 // ---------------------------------------------------------------------------
 // Input parsing
@@ -83,6 +69,7 @@ interface ParsedInput {
   image_paths: string[];
   model: string;
   size: string;
+  quality: string;
   output_format: string;
   output_path?: string;
 }
@@ -91,6 +78,7 @@ const VALID_EDIT_MODELS = new Set(['gpt-image-1', 'gpt-image-1-mini', 'gpt-image
 const DEFAULT_EDIT_MODEL = 'gpt-image-1';
 
 const VALID_EDIT_SIZES = new Set(['1024x1024', '1024x1536', '1536x1024', 'auto']);
+const VALID_EDIT_QUALITIES = new Set(['low', 'medium', 'high', 'auto']);
 const VALID_EDIT_FORMATS = new Set(['png', 'webp', 'jpeg']);
 
 function parseInput(input: unknown): ParsedInput | { error: string } {
@@ -135,6 +123,14 @@ function parseInput(input: unknown): ParsedInput | { error: string } {
     };
   }
 
+  const quality =
+    typeof obj['quality'] === 'string' ? obj['quality'] : 'auto';
+  if (!VALID_EDIT_QUALITIES.has(quality)) {
+    return {
+      error: `Invalid quality "${quality}". Valid values: ${[...VALID_EDIT_QUALITIES].join(', ')}.`,
+    };
+  }
+
   const output_format =
     typeof obj['output_format'] === 'string' ? obj['output_format'] : 'png';
   if (!VALID_EDIT_FORMATS.has(output_format)) {
@@ -146,7 +142,7 @@ function parseInput(input: unknown): ParsedInput | { error: string } {
   const output_path =
     typeof obj['output_path'] === 'string' ? obj['output_path'] : undefined;
 
-  return { prompt, image_paths, model, size, output_format, output_path };
+  return { prompt, image_paths, model, size, quality, output_format, output_path };
 }
 
 // ---------------------------------------------------------------------------
@@ -238,9 +234,12 @@ async function saveEditedImage(
 
   let savePath: string;
   if (outputPath) {
+    // F-2823: Also re-validate the symlink target — a dangling link inside the
+    // write root can point outside it, bypassing containment and denylist checks.
     try {
       savePath = resolveAndContain(outputPath, context, 'write', cwd);
       assertNotDenylisted(savePath, 'image_edit');
+      assertWriteTargetContained(savePath, context, 'image_edit', cwd);
     } catch (err: unknown) {
       return { error: err instanceof Error ? err.message : String(err) };
     }
@@ -283,7 +282,23 @@ export function createImageEditHandler(
       authSource = 'AFK_IMAGE_API_KEY';
     } else {
       const resolved = resolveOpenAIAuth(undefined);
-      if (resolved.apiKey) {
+      if (resolved.source === 'chatgpt-oauth') {
+        // The standard Images Edit endpoint does not accept ChatGPT OAuth tokens
+        // (their OAuth scopes exclude api.model.images.request). Unlike
+        // image_generate, there is no ChatGPT backend path for image editing.
+        // Reject early with actionable guidance rather than sending an invalid
+        // token to the API.
+        return {
+          content:
+            'image_edit does not support ChatGPT subscription OAuth credentials. ' +
+            'The Images Edit endpoint requires an API key. ' +
+            'Use one of the supported credential sources:\n' +
+            '  1. AFK_IMAGE_API_KEY in ~/.afk/config/afk.env (dedicated image billing)\n' +
+            '  2. OPENAI_API_KEY env var\n' +
+            '  3. `codex login --api-key` (writes ~/.codex/auth.json)',
+          isError: true,
+        };
+      } else if (resolved.apiKey) {
         apiKey = resolved.apiKey;
         authSource = resolved.source;
       } else if (resolved.source === 'chatgpt-oauth-expired') {
@@ -330,9 +345,9 @@ export function createImageEditHandler(
     const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : DEFAULT_SESSION_LIMIT;
 
     // Optimistic increment before the API call (closes the TOCTOU race).
-    incrementSessionCount(sessionId);
-    if (getSessionCount(sessionId) > limit) {
-      decrementSessionCount(sessionId);
+    editCounter.increment(sessionId);
+    if (editCounter.get(sessionId) > limit) {
+      editCounter.decrement(sessionId);
       return {
         content:
           `Image edit limit reached (${limit} per session). ` +
@@ -344,22 +359,22 @@ export function createImageEditHandler(
     // 5. Parse input.
     const parsed = parseInput(input);
     if ('error' in parsed) {
-      decrementSessionCount(sessionId);
+      editCounter.decrement(sessionId);
       return { content: parsed.error, isError: true };
     }
 
     // 6. Load reference images.
-    const cwd = context?.cwd ?? process.cwd();
+    const cwd = context?.resolveBase ?? process.cwd();
     const loadResult = await loadRefImages(parsed.image_paths, context, cwd);
     if ('error' in loadResult) {
-      decrementSessionCount(sessionId);
+      editCounter.decrement(sessionId);
       return { content: loadResult.error, isError: true };
     }
 
     // 7. Call the OpenAI Images Edit API.
     const apiResult = await callImagesEditApi(fetchFn, apiKey, parsed, loadResult, signal);
     if ('error' in apiResult) {
-      decrementSessionCount(sessionId);
+      editCounter.decrement(sessionId);
       return { content: apiResult.error, isError: true };
     }
 
@@ -368,12 +383,12 @@ export function createImageEditHandler(
       apiResult.b64_json, parsed.output_format, parsed.output_path, context, cwd,
     );
     if ('error' in saveResult) {
-      decrementSessionCount(sessionId);
+      editCounter.decrement(sessionId);
       return { content: saveResult.error, isError: true };
     }
 
     const { savePath, imageBuffer } = saveResult;
-    const newCount = getSessionCount(sessionId);
+    const newCount = editCounter.get(sessionId);
 
     return {
       content: JSON.stringify({
@@ -429,6 +444,7 @@ async function callImagesEditApi(
   form.append('prompt', parsed.prompt);
   form.append('model', parsed.model);
   form.append('size', parsed.size);
+  form.append('quality', parsed.quality);
   form.append('response_format', 'b64_json');
   form.append('n', '1');
 

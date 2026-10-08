@@ -23,7 +23,7 @@ import type { AutocompleteState } from './input/autocomplete-state.js';
 import type { IHistoryRing } from './input/types.js';
 import type { ImageAttachment } from './input/attachments.js';
 import { SpinnerController } from './input/spinner.js';
-import { verbForToolName } from './input/work-derived-verb.js';
+import { waitHintText } from './input/work-derived-verb.js';
 import { CaretBlinkController, DEFAULT_CARET_BLINK_INTERVAL_MS } from './input/caret-blink.js';
 import type { StdinClaimHandle } from './input/stdin-claim.js';
 import {
@@ -50,6 +50,7 @@ import * as Lifecycle from './terminal-compositor.lifecycle.js';
 import * as Reset from './terminal-compositor.reset.js';
 import * as QueuedAccess from './terminal-compositor.queued-access.js';
 import * as Api from './terminal-compositor.api.js';
+import * as ModeNotice from './terminal-compositor.mode-notice.js';
 import type { BandReflowCache } from './terminal-compositor.band-reflow.js';
 
 // Re-export public types so existing importers of './terminal-compositor.js'
@@ -270,6 +271,12 @@ export class TerminalCompositor {
    */
   clipboardFailureMsg: string | null = null;
   /**
+   * Transient Shift+Tab permission-mode notice, rendered in the live frame
+   * instead of scrollback; see terminal-compositor.mode-notice.ts.
+   * @internal Relaxed from `private` for the frame/input-dispatch/reset modules.
+   */
+  modeNotice: string | null = null;
+  /**
    * Input mode — see {@link CompositorInputMode}. Default `'streaming'`
    * matches the historical single-mode behavior all existing callers
    * (turn-handler, tests) rely on; only the persistent InputSurface
@@ -381,12 +388,15 @@ export class TerminalCompositor {
   /** @internal Relaxed from `private` for the frame module (FrameHost). */
   readonly spinnerController: SpinnerController;
   /**
-   * Name of the tool currently in flight, or `undefined` when idle. Written only
-   * by {@link setActiveToolName} and read only by the spinner's `workVerb`
-   * provider, so it carries no layout or geometry consequences — the spinner row
-   * already has a variable-width verb.
+   * Pre-resolved work verb for the current in-flight tool wave, or `undefined`
+   * when idle. Written only by {@link setActiveToolName} (which receives the
+   * verb already resolved by {@link InFlightToolTracker.currentVerb}) and read
+   * only by the spinner's `workVerb` provider, so it carries no layout or
+   * geometry consequences — the spinner row already has a variable-width verb.
    */
   private activeToolName: string | undefined;
+  /** Root-session wait_for in flight; read only by the spinner's contextTip. */
+  private rootWaitActive = false;
   /**
    * Owns the input caret's blink phase + timer. Started in arm() / resumeInput(),
    * stopped in disarm() / suspendInput(), reset-to-solid on each non-paste
@@ -540,6 +550,12 @@ export class TerminalCompositor {
   // clearCommittedBand() and (transitively) resetState().
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   committedBandPaintedRows = 0;
+  // Content-hug archive-and-retain: count of LEADING committedBand rows already
+  // in native scrollback (kept so a shrink can re-show them). Always 0 in
+  // bottom-pinned mode; 0 <= value <= committedBand.length. Reset with the band.
+  // Invariant + helpers: terminal-compositor.band-archived-prefix.ts.
+  /** @internal Relaxed from `private` for the committed-band + frame + lifecycle modules. */
+  committedBandArchivedPrefix = 0;
   // Memoization for terminal-compositor.band-reflow.ts's reflowCommittedBandToWidth:
   // records the (band-reference, paintedRows, width) triple the LAST reflow call
   // produced, so a steady-width repeat repaint (no commit, no resize since) skips
@@ -562,6 +578,28 @@ export class TerminalCompositor {
   lastKnownRows = 0;
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   pendingResizeErase: { top: number; bottom: number } | null = null;
+  /**
+   * True while a CPR (Cursor Position Report, ESC[6n) reply is in-flight
+   * after a tmux EXPAND SIGWINCH. Frame.repaint() skips the physical write
+   * while this flag is set so the stale-row repaint cannot race the delta
+   * correction applied once the CPR reply arrives.
+   * @internal Relaxed from `private` for the lifecycle module (LifecycleHost).
+   */
+  cprPending = false;
+  /**
+   * Burst-tracking context for the "measure until quiescent" CPR algorithm.
+   * Created when the first CPR of a burst is requested; cleared once the burst
+   * resolves (quiescent reply, re-query cap, or timeout). See CprHost.cprBurst.
+   * @internal Relaxed from `private` for the lifecycle module (LifecycleHost).
+   */
+  cprBurst: {
+    dirty: boolean;
+    originalExpectedRow: number;
+    currentRows: number;
+    growTotal: number;
+    shrinkTotal: number;
+    requeryCt: number;
+  } | null = null;
   // Invariant (F2 — fail-safe commit mode on stale geometry): set by the
   // SIGWINCH-immediate handler alongside logUpdate.resetGeometry() and cleared
   // only once the debounced post-resize repaint has re-established real
@@ -661,10 +699,13 @@ export class TerminalCompositor {
       captureMode: opts.captureMode ?? false,
       goblin: opts.goblinSpinner ?? false,
       onTick: () => this.repaint(),
-      // Pull-based so the spinner reads the live tool during its existing 80ms
+      // Pull-based so the spinner reads the live verb during its existing frame
       // tick — no extra timer, no extra repaint path. Returns undefined when no
       // tool is in flight, which routes the spinner back to its flavour pool.
-      workVerb: () => verbForToolName(this.activeToolName),
+      // The verb is pre-resolved by InFlightToolTracker.currentVerb() so no
+      // per-frame tool-name lookup is needed here.
+      workVerb: () => this.activeToolName,
+      contextTip: () => waitHintText({ waiting: this.rootWaitActive, queued: this.hasPendingSubmission() }),
     });
     // Caret blink defaults OFF: enablement (incl. reduced-motion) is resolved
     // by the interactive caller and passed as `caretBlink`, mirroring how the
@@ -917,9 +958,9 @@ export class TerminalCompositor {
 
   // ora's imperative cursor + linesToClear tracking collides with log-update's
   // region tracking when both run concurrently. The SpinnerController owns the
-  // spinner state + 80ms ticker; the compositor owns the frame and pulls the
-  // spinner/tip rows from it at repaint time, so the spinner row lives inside
-  // the same render frame and the race is eliminated. The TTY guard stays here
+  // spinner state + frame ticker (80ms warm, 250ms idle); the compositor owns
+  // the frame and pulls the spinner/tip rows from it at repaint time, so the
+  // spinner row lives inside the same render frame and the race is eliminated. The TTY guard stays here
   // — the controller is terminal-agnostic and assumes an interactive surface.
   setSpinner(config: { enabled: boolean; rotateVerbEveryMs?: number }): void {
     if (!this.stdout.isTTY) return;
@@ -930,7 +971,7 @@ export class TerminalCompositor {
    * Record the tool currently in flight so the spinner's verb can describe real
    * work instead of rotating random flavour words.
    *
-   * Deliberately does NOT repaint: the spinner's existing 80ms tick picks the new
+   * Deliberately does NOT repaint: the spinner's existing frame tick picks the new
    * verb up on its next frame, and the caller (StreamRenderer) is already firing
    * a repaint for the same transition. Painting here too would add a second
    * frame write per tool event for no visible gain.
@@ -939,6 +980,11 @@ export class TerminalCompositor {
    */
   setActiveToolName(toolName: string | undefined): void {
     this.activeToolName = toolName;
+  }
+
+  /** Root wait_for in-flight flag for the queue-to-stop hint. No repaint (same rationale as above). */
+  setRootWaitActive(active: boolean): void {
+    this.rootWaitActive = active;
   }
 
   // Committed-band lifecycle extracted to terminal-compositor.committed-band.ts
@@ -1127,6 +1173,12 @@ export class TerminalCompositor {
    * @internal Relaxed from `private` for the frame module (FrameHost).
    */
   renderHintRow(): string | null { return Api.renderHintRow(this); }
+
+  /**
+   * Show/replace (or clear, with `null`) the transient mode notice row.
+   * Returns false when disarmed so the caller can fall back to scrollback.
+   */
+  setModeNotice(text: string | null): boolean { return ModeNotice.setModeNotice(this, text); }
 
   /** @internal Public for sibling free-function modules (via Host interfaces) and test casts. */
   repaint(): void {

@@ -68,6 +68,61 @@ export const SessionPhaseNameSchema = z.enum([
   // Mid-stream transport drop accepted as clean completion (#2780).
   // See SessionPhaseName JSDoc in types.ts for the full contract.
   'stream_accepted_after_drop',
+  // Connection-phase network retry. See SessionPhaseName JSDoc in types.ts.
+  'connection_retry',
+  // One-shot retry budget exhausted. See SessionPhaseName JSDoc in types.ts.
+  'connection_retry_exhausted',
+  'usage_notice',
+  // Per-session tool-degradation signal (#2774). Emitted at most once per
+  // (tool, errorHead) per session. See SessionPhaseName JSDoc in types.ts.
+  // metadata: { tool, errorHead, errorCount, callCount }
+  'tool_degraded',
+  // Advisory same-error strategy nudge. See SessionPhaseName JSDoc in
+  // types.session-phase.ts. metadata: { tool, errorHead, occurrences, distinctCalls }
+  'strategy_nudge_fired',
+  // Stop-hook injectContext dropped on one-shot surfaces (no next user turn).
+  // See SessionPhaseName JSDoc in types.session-phase.ts for the full rationale.
+  'stop_inject_dropped',
+  // A blocking Stop hook triggered a same-turn continuation round. Emitted
+  // once per continuation. `metadata` carries `continuation` (1-based count)
+  // and `reasonHead` (first ≤200 chars of the blocking reason, passed through
+  // redactSecrets). See SessionPhaseName JSDoc in types.ts.
+  'stop_hook_continuation',
+  // The per-turn same-turn continuation cap was reached; the turn ends
+  // normally. `metadata` carries `cap` (the configured ceiling). See
+  // SessionPhaseName JSDoc in types.ts.
+  'stop_hook_cap_reached',
+  // Last-resort orphan repair fired (single event, no paired start). Emitted
+  // from openRound only when repairOrphanToolUses actually changed history —
+  // i.e. a corruption path evaded both the tool-round rollback (tool-round.ts)
+  // and the turn-driver repair (query-turn-driver.ts:132). metadata carries
+  // hoistedIndices, orphanIds, assistantIndices, bridgedIndices, messageCount,
+  // and shapeBefore (structural summary, never message content). See #2136.
+  'orphan_repair',
+  // Server dropped thinking blocks via `input_transformations` (drop_block beta).
+  // Emitted per drop-bearing frame (message_start and message_delta paths).
+  // metadata: { droppedCount, source }. See SessionPhaseName JSDoc in
+  // types.session-phase.ts.
+  'thinking_block_dropped',
+  // Background process lifecycle. See SessionPhaseName JSDoc in
+  // types.session-phase.ts for the full contract.
+  'background_process_started',
+  'background_process_settled',
+  // Compose node transport-failure recovery decision (dag-subagent.recovery.ts).
+  // Must mirror the SessionPhaseName union in types.session-phase.ts;
+  // session-phase.test.ts parity enforces it.
+  'compose_recovery_decision',
+  // Streaming connection opener diagnostics (opt-in AFK_CONNECT_RETRY_BUDGET_MS).
+  // Must mirror the SessionPhaseName union in types.session-phase.ts;
+  // session-phase.test.ts parity enforces it.
+  'connection_failure',
+  'connection_recovered',
+  'connection_budget_exhausted',
+  // In-turn context guard and catalog model awareness. Must mirror the
+  // SessionPhaseName union in types.session-phase.ts; session-phase.test.ts
+  // parity enforces it.
+  'context_pressure_wind_down',
+  'catalog_model_upgrade',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

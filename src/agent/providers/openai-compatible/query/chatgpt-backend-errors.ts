@@ -45,9 +45,10 @@ export function clarifyResponsesError(err: unknown, isChatGptBackend: boolean, m
     else if (typeof d.message === 'string') detail = d.message;
   }
   return new Error(
-    `ChatGPT/Codex backend rejected model "${model}" (HTTP 400). A ChatGPT ` +
-      `subscription only serves certain OpenAI models on this backend (gpt-5.6 and gpt-5.5 ` +
-      `work; gpt-5, gpt-5.1, gpt-5.2 and *-codex do not). ` +
+    `ChatGPT/Codex backend rejected model "${model}" (HTTP 400). ` +
+      `This is a ChatGPT-subscription backend restriction, not an API-key error. ` +
+      `To use models your ChatGPT plan does not serve, set an API key (OPENAI_API_KEY) and ` +
+      `route to the standard OpenAI API instead, or pick a model your ChatGPT plan supports. ` +
       (detail ? `Backend said: ${detail}` : `No error body was returned.`),
   );
 }

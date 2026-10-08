@@ -16,6 +16,7 @@ import {
   buildBgResultInjection,
   isAutoDeliverEnabled,
   MAX_INJECTION_BYTES,
+  replCanAutoWake,
 } from './bg-result-notifier.js';
 
 // Silence routing telemetry writes (background-registry emits them on settle).
@@ -325,5 +326,44 @@ describe('buildBgResultInjection', () => {
     const out = buildBgResultInjection(job);
     expect(out).toContain('block');
     expect(out).toContain('duration="1s"');
+  });
+});
+
+describe('replCanAutoWake', () => {
+  const stdinTTY = process.stdin.isTTY;
+  const stdoutTTY = process.stdout.isTTY;
+  const setTTY = (inTTY: boolean, outTTY: boolean): void => {
+    Object.defineProperty(process.stdin, 'isTTY', { value: inTTY, configurable: true, writable: true });
+    Object.defineProperty(process.stdout, 'isTTY', { value: outTTY, configurable: true, writable: true });
+  };
+  afterEach(() => {
+    Object.defineProperty(process.stdin, 'isTTY', { value: stdinTTY, configurable: true, writable: true });
+    Object.defineProperty(process.stdout, 'isTTY', { value: stdoutTTY, configurable: true, writable: true });
+    delete process.env['AFK_BG_AUTO_DELIVER'];
+    delete process.env['AFK_PLAIN_OUTPUT'];
+  });
+
+  it('is true only when both stdio streams are TTYs, plain output is off, and auto-deliver is on', () => {
+    setTTY(true, true);
+    expect(replCanAutoWake()).toBe(true);
+  });
+
+  it('is false when either stream is not a TTY (no compositor, so no idle wake)', () => {
+    setTTY(false, true);
+    expect(replCanAutoWake()).toBe(false);
+    setTTY(true, false);
+    expect(replCanAutoWake()).toBe(false);
+  });
+
+  it('is false when AFK_BG_AUTO_DELIVER=0', () => {
+    setTTY(true, true);
+    process.env['AFK_BG_AUTO_DELIVER'] = '0';
+    expect(replCanAutoWake()).toBe(false);
+  });
+
+  it('is false when plain output is requested', () => {
+    setTTY(true, true);
+    process.env['AFK_PLAIN_OUTPUT'] = '1';
+    expect(replCanAutoWake()).toBe(false);
   });
 });

@@ -16,8 +16,8 @@ import {
   getSchedule,
   loadSchedules,
   removeSchedule,
-  saveSchedules,
   toScheduledTask,
+  toggleScheduleEnabled,
   updateSchedule,
   type ScheduledTaskConfig,
 } from '../agent/daemon/schedule-store.js';
@@ -26,6 +26,7 @@ import { getTelemetryPath, getDaemonStateDir } from '../paths.js';
 import { sendJson } from './routes.js';
 import { parseCwdCreate, parseCwdUpdate } from './routes.schedules.cwd.js';
 import { join } from 'node:path';
+import { isRecord } from '../utils/type-guards.js';
 
 const VALID_TRIGGERS = new Set(['cron', 'sessionstart', 'both']);
 const VALID_NOTIFY_ON = new Set(['failure', 'always', 'never']);
@@ -38,10 +39,6 @@ function isValidId(id: string): boolean {
 }
 
 // ---- helpers ---------------------------------------------------------------
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null;
-}
 
 function str(body: unknown, field: string): string | undefined {
   if (!isRecord(body)) return undefined;
@@ -290,18 +287,18 @@ export async function handleToggleSchedule(
   }
 
   const newEnabled = !existing.enabled;
-  const schedules = loadSchedules();
-  const updated = schedules.map((s) =>
-    s.id === id ? { ...s, enabled: newEnabled, updatedAt: new Date().toISOString() } : s,
-  );
-  saveSchedules(updated);
+  const updated = toggleScheduleEnabled(id, newEnabled);
+  if (!updated) {
+    sendJson(res, 404, { error: 'not_found', message: `schedule ${id} not found` });
+    return;
+  }
 
   let sync;
   if (newEnabled) {
     sync = await trySyncToDaemon(
       'POST',
       '/tasks',
-      toScheduledTask({ ...existing, enabled: true }),
+      toScheduledTask(updated),
     );
   } else {
     sync = await trySyncToDaemon('DELETE', `/tasks/${id}`);

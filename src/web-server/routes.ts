@@ -17,6 +17,7 @@ import { SECURITY_HEADERS } from './static-assets.js';
 import type { WebElicitationBridge } from './elicitation-web.js';
 import type { CreateSessionRequest, OwnedSessionInfo } from './session-owner.js';
 import { errorMessage } from '../utils/errors.js';
+import { isRecord } from '../utils/type-guards.js';
 
 export { SECURITY_HEADERS };
 
@@ -395,10 +396,6 @@ async function dispatchSlashForWeb(
 export function header(req: IncomingMessage, name: string): string | undefined {
   const raw = req.headers[name];
   return Array.isArray(raw) ? raw[0] : raw;
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null;
 }
 
 function readStringField(body: unknown, field: string): string | undefined {

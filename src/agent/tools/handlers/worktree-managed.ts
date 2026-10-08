@@ -25,6 +25,8 @@ import { registerWorktreeRoot } from '../../worktree/worktree-root-registry.js';
 import { probeNonRebuildableIgnoredFiles } from '../../worktree/worktree-ignored-probe.js';
 import { env } from '../../../config/env.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { debugLog } from '../../../utils/debug.js';
+import { sleep } from '../../../utils/sleep.js';
 
 /** Default git runner. Exported so callers without their own can reuse it. */
 export const defaultExecFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
@@ -63,6 +65,52 @@ export function sanitizeSlug(name: string): string {
 }
 
 /**
+ * Probe for the remote's default branch ref (e.g. `origin/main`) at `repoRoot`
+ * without hitting the network. Tries `refs/remotes/origin/HEAD` first (set by
+ * `git clone`), then the conventional `origin/main` / `origin/master` tracking
+ * refs. Returns `undefined` when no remote default is discoverable (local-only
+ * repo, or no `origin` remote configured).
+ *
+ * All calls are local ref reads — no fetch. The returned value is a short
+ * tracking-ref name (e.g. `"origin/main"`), not a SHA — callers resolve it.
+ *
+ * **Limitations (acceptable for current use-cases):**
+ * - Only the `origin` remote is probed; repos with a differently-named upstream
+ *   (e.g. `upstream`, `github`) will return `undefined` even when a default branch
+ *   is otherwise discoverable.
+ * - The conventional-name fallback only checks `origin/main` and `origin/master`;
+ *   other default-branch names (e.g. `origin/trunk`, `origin/develop`) are not
+ *   tried and will also yield `undefined`.
+ *
+ * Exported only for testing.
+ * @internal
+ */
+export async function detectRemoteDefaultRef(
+  execFile: ExecFileFn,
+  repoRoot: string,
+): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFile('git', [
+      '-C', repoRoot, 'symbolic-ref', '--short', '--quiet', 'refs/remotes/origin/HEAD',
+    ]);
+    const ref = stdout.trim();
+    if (ref.length > 0) return ref; // e.g. "origin/main"
+  } catch (err) {
+    debugLog('[worktree-managed] detectRemoteDefaultRef: refs/remotes/origin/HEAD not set, trying conventional names:', errorMessage(err));
+  }
+
+  for (const candidate of ['origin/main', 'origin/master']) {
+    try {
+      const { stdout } = await execFile('git', [
+        '-C', repoRoot, 'rev-parse', '--verify', '--quiet', `${candidate}^{commit}`,
+      ]);
+      if (stdout.trim().length > 0) return candidate;
+    } catch { /* tracking ref not present locally */ }
+  }
+  return undefined;
+}
+
+/**
  * Contract: resolve the DEFAULT base ref at `anchor` — the calling session's own
  * checkout — returning a concrete SHA.
  *
@@ -79,11 +127,31 @@ export function sanitizeSlug(name: string): string {
  * Documented fallback: when the anchor has no resolvable HEAD (not a git repo, or
  * an unborn branch) this returns the literal `'HEAD'` — the pre-#760 behaviour —
  * so the change can never turn a previously working create into a failure.
+ *
+ * #2749: prefer the remote's default branch over the mutable local `HEAD`. When
+ * multiple concurrent sessions share the same main checkout, `HEAD` is a live
+ * pointer that changes under each git checkout/merge/rebase, causing different
+ * sessions to silently receive different bases. `origin/HEAD` (or the conventional
+ * `origin/main` / `origin/master` fallback) is only updated by `git fetch`, which
+ * is far less frequent and never triggered by local workspace operations — making
+ * it a stable, session-safe default. The fallback to local `HEAD` is preserved so
+ * local-only repos (no remote) continue to work unchanged.
  */
 export async function resolveAnchorBaseRef(
   execFile: ExecFileFn,
   anchor: string,
 ): Promise<string> {
+  // #2749: try the remote default branch first (stable across concurrent sessions).
+  try {
+    const remoteRef = await detectRemoteDefaultRef(execFile, anchor);
+    if (remoteRef !== undefined) {
+      const out = await execFile('git', ['-C', anchor, 'rev-parse', remoteRef]);
+      const sha = out.stdout.trim();
+      if (sha) return sha;
+    }
+  } catch { /* fall through to local HEAD */ }
+
+  // Fall back to the local HEAD (backward-compat for repos with no remote).
   try {
     const out = await execFile('git', ['-C', anchor, 'rev-parse', 'HEAD']);
     const sha = out.stdout.trim();
@@ -313,7 +381,7 @@ export async function createIsolatedWorktree(args: {
   } catch (err) {
     const message = errorMessage(err);
     if (!LOCK_CONTENTION.test(message)) throw err; // non-lock → propagate, no retry
-    await new Promise((r) => setTimeout(r, 100)); // brief backoff, then retry once
+    await sleep(100); // brief backoff, then retry once
     info = await create();
   }
   return { repoRoot: ctx.repoRoot, ...info };

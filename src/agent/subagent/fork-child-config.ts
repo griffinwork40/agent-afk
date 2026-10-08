@@ -33,6 +33,8 @@ import { injectWorkspacePreamble } from '../workspace/index.js';
 import type { WorkspaceStore } from '../workspace/workspace-store.js';
 import { DENY_ELICITATION, SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS } from './constants.js';
 import { resolveSoftDeadlineMs } from '../providers/shared/soft-deadline.js';
+import { childTmpEnvPatch } from '../session/session-tmpdir.js';
+import { resolveChildAutoResume } from './usage-limit-park-policy.js';
 
 export interface AssembleChildConfigArgs<T> {
   options: ForkSubagentOptions<T>;
@@ -56,7 +58,38 @@ export interface AssembleChildConfigArgs<T> {
   parentTraceWriter: TraceSink | undefined;
   parentSurface: Surface | undefined;
   parentCanUseTool: CanUseTool | undefined;
+  /**
+   * The forking manager's own root session id (from the parent session's
+   * {@link AgentConfig.rootSessionId}). Passed through so grandchild
+   * `inheritedParentFields` can inherit the REAL root id rather than the
+   * intermediate parent's id.
+   *
+   * Undefined at depth 1: the depth-0 parent session carries no
+   * `rootSessionId` of its own, so this field is undefined for depth-1 forks.
+   * `resolveRootSessionId` compensates by falling back to `parentSessionId`
+   * (the root's own id), so depth-1 children are always stamped correctly.
+   * Also undefined when the parent has no session id at all.
+   */
+  parentRootSessionId: string | undefined;
+  /**
+   * The nested-dispatch allowlist for the CHILD being assembled. Derived from
+   * `resolvedAccess.nestedAgentTypes` in `buildChildConfig` (child-config.ts)
+   * and threaded here via `ForkSubagentOptions.nestedAgentAllowlist` so the
+   * identity preamble can name the allowed types — the same value the child's
+   * executor will enforce at every nested dispatch attempt.
+   *
+   * Undefined = unscoped child (no restriction emitted in the preamble).
+   * Empty array = deny-all (preamble says dispatch is forbidden).
+   */
+  nestedAgentAllowlist?: readonly string[];
 }
+
+/** The manager-owned parent fields every fork passes (`SubagentManager.parentForkFields`). */
+export type ParentForkFields = Pick<
+  AssembleChildConfigArgs<unknown>,
+  | 'parentCwd' | 'parentApiKey' | 'parentBaseUrl' | 'parentProvider'
+  | 'parentTraceWriter' | 'parentSurface' | 'parentCanUseTool' | 'parentRootSessionId'
+>;
 
 /**
  * Append the model-facing fork preambles to a fully resolved child config.
@@ -70,15 +103,36 @@ export interface AssembleChildConfigArgs<T> {
  * the last of the fork-injected sections, not the final section of the assembled
  * system prompt. It likewise
  * reads the final resolved `maxToolUseIterations`.
+ *
+ * @param nestedAgentAllowlist - Forwarded from {@link AssembleChildConfigArgs}
+ *   to {@link injectSubagentIdentityPreamble} so the child's preamble names
+ *   the types it may dispatch. Single source: same value the executor enforces.
  */
-function applyForkPreambles(config: AgentConfig): AgentConfig {
-  return injectToolBudgetPreamble(injectSubagentIdentityPreamble(config));
+function applyForkPreambles(config: AgentConfig, nestedAgentAllowlist?: readonly string[]): AgentConfig {
+  return injectToolBudgetPreamble(injectSubagentIdentityPreamble(config, nestedAgentAllowlist));
+}
+
+/**
+ * Resolve the `rootSessionId` to stamp on a forked child.
+ *
+ * For depth-1 children, `parentRootSessionId` is undefined (the manager's
+ * parent is a top-level session with no `rootSessionId`), so we fall back to
+ * `parentSessionId` — the root's own id. For depth-2+ children,
+ * `parentRootSessionId` is already the root's id, so we return it unchanged.
+ * Returns `{}` when neither value is defined (parent had no session id).
+ */
+function resolveRootSessionId(
+  parentRootSessionId: string | undefined,
+  parentSessionId: string | undefined,
+): { rootSessionId: string } | Record<never, never> {
+  const id = parentRootSessionId ?? parentSessionId;
+  return id !== undefined ? { rootSessionId: id } : {};
 }
 
 /**
  * Parent-derived fields the child inherits only when the caller's
  * `options.config` left them unset (awareness topology, cwd, read/write scope,
- * trace writer, surface). Extracted from {@link assembleChildConfig} verbatim;
+ * trace writer, surface, private temp dir). Extracted from {@link assembleChildConfig} verbatim;
  * spread AFTER `...options.config` there, so explicit caller values still win.
  */
 function inheritedParentFields<T>(args: AssembleChildConfigArgs<T>): Partial<AgentConfig> {
@@ -92,6 +146,17 @@ function inheritedParentFields<T>(args: AssembleChildConfigArgs<T>): Partial<Age
     // manager, so we leave them to the caller here.
     ...(args.options.config.parentSessionId === undefined && args.options.parent.sessionId !== undefined
       ? { parentSessionId: args.options.parent.sessionId }
+      : {}),
+    // Root session id: set once on depth-1 children (to the parent's sessionId),
+    // then inherited unchanged by all deeper descendants so grandchildren always
+    // point back to the depth-0 root — not their immediate parent. For depth-1
+    // children, args.parentRootSessionId is undefined, so we fall back to
+    // parent.sessionId. For depth-2+ children, args.parentRootSessionId is the
+    // root's id (threaded through the manager). Child-attribution credits
+    // commits/PRs to the root outcome record rather than to an intermediate
+    // session id that never writes a sidecar.
+    ...(args.options.config.rootSessionId === undefined
+      ? resolveRootSessionId(args.parentRootSessionId, args.options.parent.sessionId)
       : {}),
     ...(args.options.config.phaseRole === undefined && args.options.phaseRole !== undefined
       ? { phaseRole: args.options.phaseRole }
@@ -126,6 +191,12 @@ function inheritedParentFields<T>(args: AssembleChildConfigArgs<T>): Partial<Age
     ...(args.options.config.surface === undefined && args.parentSurface !== undefined
       ? { surface: args.parentSurface }
       : {}),
+    // Private temp dir (session-tmpdir.ts): a fresh TMPDIR/TMP/TEMP nested
+    // under the dispatching session's dir, merged over the caller's env so
+    // `PLUGIN_ROOT` (skill forks) survives. Never the parent's or a sibling's
+    // dir, so a child's `rm -rf "$TMPDIR"/tmp.*` cannot reach theirs. A
+    // caller-chosen (unregistered) TMPDIR wins, like the fields above.
+    ...childTmpEnvPatch(args.options.config.env, args.id),
   };
 }
 
@@ -288,17 +359,15 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     // too short to split. An explicit caller `softDeadlineMs` wins via `??`,
     // including `0` to opt out.
     softDeadlineMs: options.config.softDeadlineMs ?? resolveSoftDeadlineMs(effectiveTimeoutMs),
-    // External constraint (anti-hang, sibling of the cap above): a fork that
-    // hits an OAuth usage-limit 429 otherwise auto-pauses and silently polls
-    // for reset — up to two hours (retry-layer.ts) — with no subagent-level
-    // pause UI, so the parent just looks frozen. A fork has no human to wait
-    // for: fail fast with the classified usage-limit error (the provider
-    // still emits the `paused` event first, then surfaces the error), and
-    // let the PARENT decide whether to retry, reroute to another model, or
-    // surface the pause to its own operator. Callers may opt a child back
-    // into auto-resume with an explicit `autoResumeOnUsageLimit: true`
-    // (e.g. unattended daemon flows that prefer waiting over failing).
-    autoResumeOnUsageLimit: options.config.autoResumeOnUsageLimit ?? false,
+    // Opt-in park-and-wait on OAuth usage-limit 429 (see usage-limit-park-policy.ts
+    // for precedence rules). Precedence: explicit caller value > env var
+    // AFK_SUBAGENT_AUTO_RESUME_ON_USAGE_LIMIT (ignored on the daemon surface,
+    // where no human can switch accounts) > false. When false a fork fails fast
+    // so the parent can decide: retry, reroute, or surface the pause itself.
+    autoResumeOnUsageLimit: resolveChildAutoResume(
+      options.config.autoResumeOnUsageLimit,
+      options.config.surface ?? args.parentSurface,
+    ),
     ...inheritedParentFields(args),
     // Invariant (message journal): a fork resumes the PARENT's session id, so
     // a journal keyed by session id would write the parent's `journal.jsonl`.
@@ -341,7 +410,7 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     ...(options.phaseRole === 'read-only'
       ? { provider: buildPhaseRestrictedProvider('read-only', effectiveChildModel) }
       : {}),
-  });
+  }, args.nestedAgentAllowlist);
 
   return args.workspaceStore
     ? injectWorkspacePreamble(assembled, workspaceEntries)

@@ -69,16 +69,6 @@ export class TurnAccumulator {
    */
   windDownReason: WindDownReason | null = null;
 
-  /**
-   * Tracks the last-fired advance round-warning threshold (see
-   * `pickRoundWarning` in `shared/tool-loop-cap.ts`). Stored here so each
-   * threshold fires exactly once per turn across all rounds, without adding a
-   * local variable to `runTurn`'s already-large function body.
-   *
-   * `undefined` = no warning has fired yet this turn.
-   */
-  lastWarnedThreshold: number | undefined = undefined;
-
   /** Correlation id for this turn's trace events. */
   readonly taskId: string = randomUUID();
 

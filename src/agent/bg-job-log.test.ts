@@ -10,6 +10,8 @@ import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
+import { reconcileOrphanedMeta } from './bg-job-log.js';
+import { isProcessAlive } from './process-liveness.js';
 
 // We need to control the AFK_HOME before importing paths/bg-job-log.
 // Use a unique temp dir per test suite run.
@@ -310,5 +312,341 @@ describe('BgJobLogWriter + BgJobLogReader integration', () => {
     expect(events).toHaveLength(2);
     expect(events[0]?.type).toBe('chunk');
     expect(events[1]?.type).toBe('done');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isProcessAlive (from process-liveness.ts, used by reconcileOrphanedMeta)
+// ---------------------------------------------------------------------------
+
+describe('isProcessAlive', () => {
+  it('returns true for the current process PID', () => {
+    expect(isProcessAlive(process.pid)).toBe(true);
+  });
+
+  it('returns false when kill throws ESRCH (no such process)', () => {
+    const spy = vi.spyOn(process, 'kill').mockImplementation(() => {
+      const err = new Error('ESRCH') as NodeJS.ErrnoException;
+      err.code = 'ESRCH';
+      throw err;
+    });
+    try {
+      const result = isProcessAlive(999999999);
+      expect(result).toBe(false);
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('returns true when kill throws EPERM (process exists, no permission)', () => {
+    const spy = vi.spyOn(process, 'kill').mockImplementation(() => {
+      const err = new Error('EPERM') as NodeJS.ErrnoException;
+      err.code = 'EPERM';
+      throw err;
+    });
+    try {
+      expect(isProcessAlive(1)).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('returns false when kill throws EINVAL (invalid signal)', () => {
+    // EINVAL can occur with invalid pid or signal arguments. The canonical
+    // isProcessAlive (process-liveness.ts) returns false for any error except
+    // EPERM — including EINVAL — so orphan detection is safe against it.
+    const spy = vi.spyOn(process, 'kill').mockImplementation(() => {
+      const err = new Error('EINVAL') as NodeJS.ErrnoException;
+      err.code = 'EINVAL';
+      throw err;
+    });
+    try {
+      expect(isProcessAlive(0)).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// reconcileOrphanedMeta
+// ---------------------------------------------------------------------------
+
+describe('reconcileOrphanedMeta', () => {
+  it('returns meta unchanged when status is already terminal', async () => {
+    const meta = makeMeta('orphan-completed', { status: 'completed', ownerPid: 99999 });
+    expect(await reconcileOrphanedMeta(meta)).toBe(meta);
+  });
+
+  it('returns meta unchanged when ownerPid is absent (legacy meta)', async () => {
+    const meta = makeMeta('orphan-legacy', { status: 'running' });
+    // No ownerPid set — should not promote
+    const result = await reconcileOrphanedMeta(meta);
+    expect(result.status).toBe('running');
+    expect(result).toBe(meta);
+  });
+
+  it('returns meta unchanged when ownerPid is the current process (alive) and no ownerStartTime', async () => {
+    // ownerStartTime absent → no pid-reuse probe → relies on kill(pid,0) only
+    const meta = makeMeta('orphan-alive-no-starttime', { status: 'running', ownerPid: process.pid });
+    const result = await reconcileOrphanedMeta(meta);
+    expect(result.status).toBe('running');
+  });
+
+  it('returns meta unchanged when ownerPid is a non-integer (malformed — classifyPidLiveness returns unknown)', async () => {
+    // A corrupted or hand-edited ownerPid of 1.5 must NOT be treated as dead.
+    const meta = makeMeta('orphan-float', { status: 'running', ownerPid: 1.5 as any });
+    const result = await reconcileOrphanedMeta(meta);
+    expect(result.status).toBe('running');
+    expect(result).toBe(meta);
+  });
+
+  it('promotes running meta to failed when ownerPid is a dead process', async () => {
+    const spy = vi.spyOn(process, 'kill').mockImplementation(() => {
+      const err = new Error('ESRCH') as NodeJS.ErrnoException;
+      err.code = 'ESRCH';
+      throw err;
+    });
+    try {
+      const meta = makeMeta('orphan-dead', { status: 'running', ownerPid: 999999999 });
+      const result = await reconcileOrphanedMeta(meta);
+      expect(result.status).toBe('failed');
+      expect(result.stopReason).toBe('owner-process-exited');
+      expect(result.endedAt).toBeUndefined(); // not stamped — exit time is unknown
+      // Other fields preserved
+      expect(result.jobId).toBe(meta.jobId);
+      expect(result.ownerPid).toBe(999999999);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('promotes to failed when pid is alive but start-time shows reuse (ms comparison, own-pid path)', async () => {
+    // own-pid path: compare meta.ownerStartTime against ownMs() — probe is skipped.
+    // Recorded ownerStartTime is 100 s in the past; ownMs returns "now"
+    // (simulating a recycled pid where the new process just started).
+    const ownerStartTime = Date.now() - 100_000; // recorded by the prior process
+    const meta = makeMeta('orphan-reuse-ms', {
+      status: 'running',
+      ownerPid: process.pid,
+      ownerStartTime,
+    });
+    const result = await reconcileOrphanedMeta(meta, {
+      ownMs: () => Date.now(), // current process "just started" — far from recorded
+    });
+    expect(result.status).toBe('failed');
+    expect(result.stopReason).toBe('owner-process-exited');
+  });
+
+  it('does NOT promote when pid is alive and start-time matches within tolerance (own-pid path)', async () => {
+    // own-pid path: ownMs returns a time within 5 s of ownerStartTime.
+    const ownerStartTime = Date.now() - 1000;
+    const meta = makeMeta('orphan-alive-match', {
+      status: 'running',
+      ownerPid: process.pid,
+      ownerStartTime,
+    });
+    const result = await reconcileOrphanedMeta(meta, {
+      ownMs: () => ownerStartTime + 2000, // 2 s offset — within the 5 s tolerance
+    });
+    expect(result.status).toBe('running');
+    expect(result).toBe(meta);
+  });
+
+  it('does NOT promote when probe returns undefined (start time unavailable — fail safe, foreign pid)', async () => {
+    // Foreign-pid path: probe returns undefined → fail safe, keep meta as-is.
+    // Use a fake kill that makes an arbitrary high pid appear alive.
+    const foreignPid = 88_888;
+    const fakeProbe = vi.fn(async () => new Map([[foreignPid, undefined]]));
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true as any);
+    try {
+      const meta = makeMeta('orphan-probe-unknown', {
+        status: 'running',
+        ownerPid: foreignPid,
+        ownerStartTime: Date.now(),
+      });
+      const result = await reconcileOrphanedMeta(meta, { probe: fakeProbe });
+      expect(result.status).toBe('running');
+      expect(result).toBe(meta);
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it('promotes via ms mismatch when pid is own process and ownerStartTime is stale (own-pid path)', async () => {
+    // own-pid path uses ownMs(), not ticks — probe is skipped entirely.
+    // Recorded ownerStartTime is 30 s in the past; ownMs returns now → mismatch.
+    const ownerStartTime = Date.now() - 30_000;
+    const meta = makeMeta('orphan-reuse-ticks', {
+      status: 'running',
+      ownerPid: process.pid,
+      ownerStartTime,
+    });
+    const result = await reconcileOrphanedMeta(meta, { ownMs: () => Date.now() });
+    expect(result.status).toBe('failed');
+    expect(result.stopReason).toBe('owner-process-exited');
+  });
+
+  it('does NOT promote via own-pid path when ownerStartTime matches within tolerance', async () => {
+    // own-pid path: ownMs() is within 5 s of ownerStartTime → same process.
+    const ownerStartTime = Date.now() - 500;
+    const meta = makeMeta('orphan-ticks-match', {
+      status: 'running',
+      ownerPid: process.pid,
+      ownerStartTime,
+    });
+    const result = await reconcileOrphanedMeta(meta, { ownMs: () => ownerStartTime + 1_000 });
+    expect(result.status).toBe('running');
+    expect(result).toBe(meta);
+  });
+
+  it('promotes running meta when ownerPid is our own pid but ownerStartTime is stale (pid recycled)', async () => {
+    const staleStartTime = Date.now() - 120_000; // 2 minutes ago — clearly different process
+    const meta = makeMeta('orphan-own-pid-stale', {
+      status: 'running',
+      ownerPid: process.pid,
+      ownerStartTime: staleStartTime,
+    });
+    // No probe needed — own-pid path compares ownerStartTime against ownProcessStartedAt().
+    const result = await reconcileOrphanedMeta(meta, {
+      ownMs: () => Date.now(), // current process start is "now", recorded was 2 min ago
+    });
+    expect(result.status).toBe('failed');
+    expect((result as any).stopReason).toBe('owner-process-exited');
+  });
+
+  it('keeps running meta when ownerPid is our own pid and ownerStartTime matches (same process)', async () => {
+    const ownStart = Date.now() - 1000;
+    const meta = makeMeta('orphan-own-pid-match', {
+      status: 'running',
+      ownerPid: process.pid,
+      ownerStartTime: ownStart,
+    });
+    const result = await reconcileOrphanedMeta(meta, {
+      ownMs: () => ownStart + 500, // within 5s tolerance
+    });
+    expect(result.status).toBe('running');
+  });
+
+  it('does NOT promote for Linux foreign pid with startTicks available (btime-derived ms is unreliable)', async () => {
+    // Finding 2: foreign pid on Linux returns startTicks but no ownTicks context.
+    // isPidReused must skip the ms fallback and return false (fail safe).
+    const foreignPid = 77_777;
+    const fakeProbe = vi.fn(async () =>
+      new Map([[foreignPid, { startTicks: 42_000, startedAtMs: Date.now() - 999_999 }]]),
+    );
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true as any);
+    try {
+      const meta = makeMeta('orphan-linux-foreign-ticks', {
+        status: 'running',
+        ownerPid: foreignPid,
+        ownerStartTime: Date.now(),
+      });
+      // startedAtMs differs by 999 s but startTicks is present → ms fallback
+      // skipped → meta kept as running (fail safe).
+      const result = await reconcileOrphanedMeta(meta, { probe: fakeProbe });
+      expect(result.status).toBe('running');
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readMeta integrates orphan reconciliation
+// ---------------------------------------------------------------------------
+
+describe('BgJobLogReader.readMeta — orphan reconciliation', () => {
+  it('promotes a running meta with a dead ownerPid to failed on read', async () => {
+    const jobId = `orphan-read-${Date.now()}`;
+    const w = new BgJobLogWriter(jobId);
+    // Write a meta claiming a PID that will appear dead (mocked via kill)
+    await w.writeMeta(makeMeta(jobId, { status: 'running', ownerPid: 999999999 }));
+    await w.close();
+
+    const spy = vi.spyOn(process, 'kill').mockImplementation(() => {
+      const err = new Error('ESRCH') as NodeJS.ErrnoException;
+      err.code = 'ESRCH';
+      throw err;
+    });
+    try {
+      const read = await BgJobLogReader.readMeta(jobId);
+      expect(read).not.toBeNull();
+      expect(read!.status).toBe('failed');
+      expect(read!.stopReason).toBe('owner-process-exited');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('leaves a running meta untouched when ownerPid is alive (current process)', async () => {
+    const jobId = `orphan-alive-read-${Date.now()}`;
+    const w = new BgJobLogWriter(jobId);
+    await w.writeMeta(makeMeta(jobId, { status: 'running', ownerPid: process.pid }));
+    await w.close();
+
+    const read = await BgJobLogReader.readMeta(jobId);
+    expect(read).not.toBeNull();
+    expect(read!.status).toBe('running');
+  });
+
+  it('leaves a running meta untouched when ownerPid is absent (legacy meta)', async () => {
+    const jobId = `orphan-legacy-read-${Date.now()}`;
+    const w = new BgJobLogWriter(jobId);
+    // No ownerPid — simulates a meta.json written before this fix
+    await w.writeMeta(makeMeta(jobId, { status: 'running' }));
+    await w.close();
+
+    const read = await BgJobLogReader.readMeta(jobId);
+    expect(read).not.toBeNull();
+    expect(read!.status).toBe('running');
+  });
+
+  it('leaves a running meta untouched when ownerPid is a non-integer (malformed/corrupted)', async () => {
+    // classifyPidLiveness returns 'unknown' for non-integer pids, so the meta
+    // must not be promoted to 'failed' — a corrupted file is not a dead owner.
+    const jobId = `orphan-float-read-${Date.now()}`;
+    const w = new BgJobLogWriter(jobId);
+    // Write a syntactically valid ownerPid, then corrupt it on disk.
+    await w.writeMeta(makeMeta(jobId, { status: 'running', ownerPid: process.pid }));
+    await w.close();
+
+    // Overwrite with a non-integer ownerPid to simulate disk corruption.
+    const { getBgJobMeta } = await import('../paths.js');
+    const metaPath = getBgJobMeta(jobId);
+    const raw = JSON.parse(fs.readFileSync(metaPath, 'utf8')) as BgJobMeta;
+    fs.writeFileSync(metaPath, JSON.stringify({ ...raw, ownerPid: 1.5 }, null, 2));
+
+    const read = await BgJobLogReader.readMeta(jobId);
+    expect(read).not.toBeNull();
+    expect(read!.status).toBe('running');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ownerStartTime field
+// ---------------------------------------------------------------------------
+
+describe('BgJobLogWriter — ownerStartTime', () => {
+  let writer: BgJobLogWriter;
+  const jobId = `owner-start-time-${Date.now()}`;
+
+  beforeEach(() => {
+    writer = new BgJobLogWriter(jobId);
+  });
+  afterEach(async () => {
+    await writer.close();
+  });
+
+  it('round-trips ownerStartTime through writeMeta', async () => {
+    const ownerStartTime = Date.now() - 5000;
+    const meta = makeMeta(jobId, { ownerPid: process.pid, ownerStartTime });
+    await writer.writeMeta(meta);
+
+    const { getBgJobMeta } = await import('../paths.js');
+    const metaPath = getBgJobMeta(jobId);
+    const raw = JSON.parse(fs.readFileSync(metaPath, 'utf8')) as BgJobMeta;
+    expect(raw.ownerStartTime).toBe(ownerStartTime);
   });
 });

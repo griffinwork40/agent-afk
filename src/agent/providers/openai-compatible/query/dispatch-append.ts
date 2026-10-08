@@ -16,6 +16,7 @@ import type { StreamState } from '../translate.js';
 import { finalizedToolCalls } from '../translate.js';
 import {
   accumulatedToolCallsToToolCalls,
+  requiredArgToolsOf,
   assistantMessageWithToolCalls,
   toolImageFollowupMessage,
   toolResultsToMessages,
@@ -83,7 +84,7 @@ export async function* dispatchAndAppendToolCalls({
   for (const c of accumulated) {
     if (c.id.length === 0) c.id = randomUUID();
   }
-  const { calls, parseErrors } = accumulatedToolCallsToToolCalls(accumulated, signal);
+  const { calls, parseErrors } = accumulatedToolCallsToToolCalls(accumulated, signal, requiredArgToolsOf(toolDispatcher));
 
   // Witness layer: per-call start timestamps keyed by toolUseId so the
   // completed trace event carries an accurate durationMs. Mirrors

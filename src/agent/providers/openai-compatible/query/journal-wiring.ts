@@ -23,7 +23,7 @@ import { JournalSync } from '../../../journal/index.js';
 import type { AgentConfig, ResumeHistoryTurn } from '../../../types/config-types.js';
 import type { ProviderCompactResult, ProviderUsage } from '../../../provider.js';
 import type { OpenAIMessage } from '../messages.js';
-import { openAIJournalAdapter } from '../journal-adapter.js';
+import { openAIJournalAdapterForEndpoint } from '../journal-adapter.js';
 import { resumeSeedInputTokens } from '../../shared/resume-usage-seed.js';
 import type { JournalMessage } from '../../../journal/index.js';
 import { resolveMicrocompactOptions } from '../../shared/compaction.js';
@@ -33,8 +33,11 @@ import { microcompactToolResults } from '../compact.js';
 export class OpenAIJournalWiring {
   private readonly journalSync: JournalSync<OpenAIMessage>;
 
-  constructor(private readonly config: AgentConfig) {
-    this.journalSync = new JournalSync(config.messageJournal, openAIJournalAdapter);
+  private readonly adapter;
+
+  constructor(private readonly config: AgentConfig, baseURL?: string) {
+    this.adapter = openAIJournalAdapterForEndpoint(baseURL);
+    this.journalSync = new JournalSync(config.messageJournal, this.adapter);
   }
 
   /**
@@ -45,7 +48,7 @@ export class OpenAIJournalWiring {
   initialTurns(): OpenAIMessage[] {
     const resumed = this.config.resumeMessages;
     if (resumed === undefined) return [];
-    const turns = openAIJournalAdapter.fromJournalMessages(resumed);
+    const turns = this.adapter.fromJournalMessages(resumed);
     this.journalSync.seed(turns);
     return turns;
   }

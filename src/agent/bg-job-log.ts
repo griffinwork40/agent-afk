@@ -26,9 +26,12 @@
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as readline from 'node:readline';
-import { getBgJobsRoot, getBgJobDir, getBgJobLog, getBgJobMeta } from '../paths.js';
+import { getBgJobsRoot, getBgJobDir, getBgJobLog, getBgJobMeta, getBgJobResult } from '../paths.js';
 import { atomicWriteFileAsync } from '../utils/atomic-write.js';
+import { persistReconciled, reconcileOrphanedMeta } from './bg-job-log.orphan.js';
 import type { OutputEvent } from './types/session-types.js';
+
+export { reconcileOrphanedMeta };
 
 // ---------------------------------------------------------------------------
 // Public schema
@@ -52,8 +55,60 @@ export interface BgJobMeta {
    * `isIncompleteStopReason` / `annotateIfIncomplete` partial-result labeling
    * the in-memory replay applies. Optional and additive: old logs written
    * before this field existed simply lack it (schemaVersion stays 1).
+   *
+   * Synthetic sentinel values (not emitted by the subagent runtime):
+   * - `'owner-process-exited'` — set by `reconcileOrphanedMeta` when the job
+   *   was still `running` on disk but its owner PID has since died. The job
+   *   was never explicitly stopped; this value signals post-hoc detection.
    */
   stopReason?: string;
+  /**
+   * PID of the process that created this job. Written at registration time so
+   * that if the owner crashes or is killed, readers can detect the orphan and
+   * promote it from `running` to `failed` with `reason: 'owner-process-exited'`
+   * instead of leaving it stuck in `running` forever. Optional and additive —
+   * old meta.json files that predate this field are treated as if the owner is
+   * alive (no promotion), preserving backward compatibility.
+   */
+  ownerPid?: number;
+  /**
+   * Epoch ms at which the owner process started, captured at registration time
+   * via `ownProcessStartedAt()`. Complements `ownerPid` for future pid-reuse
+   * detection: if a new process inherits the recorded pid, its start time will
+   * differ from this value. Optional and additive — old meta.json files that
+   * predate this field simply lack it.
+   */
+  ownerStartTime?: number;
+  schemaVersion: 1;
+}
+
+/**
+ * Persisted result body for a completed or failed background job.
+ *
+ * Written atomically to `result.json` next to `meta.json` by
+ * `BgJobLogWriter.writeResult()`, which `markTerminal()` calls for completed
+ * and failed jobs. The `/bgsub:join` cross-session fallback path reads this via
+ * `BgJobLogReader.readResult()` so the synthesized output text survives after
+ * the in-memory registry entry is TTL-evicted.
+ *
+ * `outputText` is the human-readable output as extracted by `extractOutput()`
+ * in `bg-result-notifier.ts` — the same string the model would receive via
+ * auto-delivery. The cross-session join replays this text rather than rebuilding
+ * it from raw events, so the two paths are always byte-identical.
+ *
+ * Cancelled jobs are NOT written here — cancellation carries no meaningful
+ * output and the operator-facing result is already communicated via the witness
+ * trace and the terminal-state notice.
+ */
+export interface BgJobResult {
+  jobId: string;
+  status: 'completed' | 'failed';
+  /**
+   * The synthesized output text (same string surfaced to the model on
+   * auto-delivery). Never undefined for completed/failed jobs — set to '' when
+   * the subagent produced no extractable content.
+   */
+  outputText: string;
   schemaVersion: 1;
 }
 
@@ -209,6 +264,31 @@ export class BgJobLogWriter {
       process.stderr.write(`[afk] bg-job-log: writeMeta failed for ${this.jobId}: ${String(e)}\n`);
     }
   }
+
+  /**
+   * Persist the synthesized result body for a completed or failed job.
+   *
+   * Called by `markTerminal()` in `BackgroundAgentRegistry` after status is
+   * committed. Writes atomically to `result.json` next to `meta.json`. The
+   * `/bgsub:join` cross-session fallback path reads this file so the operator
+   * can recover the exact output text even after the in-memory entry is
+   * TTL-evicted. Best-effort — errors are logged and never thrown.
+   */
+  async writeResult(result: BgJobResult): Promise<void> {
+    const resultPath = getBgJobResult(this.jobId);
+    try {
+      // Invariant: use mkdirp: true so the result is never silently lost when
+      // the job directory was not created (constructor mkdirSync failed and
+      // set `this.errored`, or the directory was swept between open and close).
+      await atomicWriteFileAsync(resultPath, JSON.stringify(result, null, 2), {
+        encoding: 'utf8',
+        mode: 0o600,
+        mkdirp: true,
+      });
+    } catch (e) {
+      process.stderr.write(`[afk] bg-job-log: writeResult failed for ${this.jobId}: ${String(e)}\n`);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -261,11 +341,43 @@ export class BgJobLogReader {
       const parsed = JSON.parse(raw) as BgJobMeta;
       // Reject files with an unexpected schema version (stale v0, future v2, etc.)
       if (parsed.schemaVersion !== 1) return null;
-      return parsed;
+      // Lazily promote orphaned running entries whose owner PID has died or
+      // whose pid has been recycled by a different process.
+      const reconciled = await reconcileOrphanedMeta(parsed);
+      if (reconciled !== parsed) persistReconciled(metaPath, reconciled);
+      return reconciled;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
       // Corrupted meta — log and return null
       process.stderr.write(`[afk] bg-job-log: readMeta parse error for ${jobId}: ${String(e)}\n`);
+      return null;
+    }
+  }
+
+  /**
+   * Read the persisted result body for a completed or failed job.
+   *
+   * Returns `null` when the file does not exist (job predates result
+   * persistence, was cancelled, or write failed) or on any parse error.
+   * Callers treat `null` as "fall back to event-log replay".
+   */
+  static async readResult(jobId: string): Promise<BgJobResult | null> {
+    let resultPath: string;
+    try {
+      resultPath = getBgJobResult(jobId);
+    } catch {
+      return null;
+    }
+    try {
+      const raw = await fsp.readFile(resultPath, 'utf8');
+      const parsed = JSON.parse(raw) as BgJobResult;
+      if (parsed.schemaVersion !== 1) return null;
+      // Guard against corrupted files where outputText is missing or wrong type.
+      if (typeof parsed.outputText !== 'string') return null;
+      return parsed;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      process.stderr.write(`[afk] bg-job-log: readResult parse error for ${jobId}: ${String(e)}\n`);
       return null;
     }
   }

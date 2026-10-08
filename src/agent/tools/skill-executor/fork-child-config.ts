@@ -32,7 +32,51 @@ import type { MessageJournal } from '../../journal/types.js';
  * `messageJournal` with the fork's OWN journal once the handle exists, so
  * grandchildren journal via `forSubagent(grandchildId)` (never the parent's).
  */
-export interface JournalParentHolder { messageJournal?: MessageJournal }
+export interface JournalParentHolder {
+  messageJournal?: MessageJournal;
+  /**
+   * The fork's own id, backfilled by the caller alongside `messageJournal`
+   * (#2442) so the child's `agent` / `skill` forks carry a real
+   * `parentSessionId`. Mirrors the `childParentSession.sessionId = handle.id`
+   * backfill on the agent-tool path (subagent-executor.ts).
+   */
+  sessionId?: string | undefined;
+}
+
+/**
+ * Build the grandchild {@link SubagentManager} a forked skill child uses for
+ * its own `agent` dispatches. Extracted from {@link buildForkedChildConfig}
+ * (function-size ceiling); takes every input explicitly.
+ *
+ * `rootSessionId` (#2442) seeds the manager's `parentRootSessionId` so a
+ * grandchild fork is stamped with the depth-0 root id, not the skill child's.
+ */
+function buildSkillChildManager(
+  ctx: SkillExecutorInternals['ctx'],
+  signal: AbortSignal,
+  currentCwd: string | undefined,
+  childInheritedReadRoots: string[] | undefined,
+  rootSessionId: string | undefined,
+): SubagentManager {
+  return new SubagentManager({
+    parentAbortSignal: signal,
+    ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
+    // Trace origin (#469): inherit the owning surface like traceWriter/cwd so
+    // grandchild forks made directly off this manager report the real origin.
+    // The recursive SubagentExecutor ctx already carries surface; this keeps
+    // the manager itself consistent, mirroring subagent/child-config.ts.
+    ...(ctx.surface !== undefined ? { surface: ctx.surface } : {}),
+    // Worktree isolation: forward cwd so when the skill-forked child
+    // dispatches its own `agent` calls (grandchild forks), the manager's
+    // forkSubagent injects cwd into the grandchild's config.
+    ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
+    // Read-scope inheritance (#547): see childInheritedReadRoots in the caller.
+    ...(childInheritedReadRoots !== undefined ? { parentReadRoots: childInheritedReadRoots } : {}),
+    // Workspace READ channel for grandchild `agent` forks.
+    ...(ctx.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
+    ...(rootSessionId !== undefined ? { parentRootSessionId: rootSessionId } : {}),
+  });
+}
 
 /**
  * Wire a forked skill child for nested dispatch.
@@ -134,28 +178,18 @@ export function buildForkedChildConfig(
     ctx.getReadScopeInputs?.(),
     currentCwd,
   );
-  const childManager = new SubagentManager({
-    parentAbortSignal: signal,
-    ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
-    // Trace origin (#469): inherit the owning surface like traceWriter/cwd so
-    // grandchild forks made directly off this manager report the real origin.
-    // The recursive SubagentExecutor ctx below already carries surface (:157);
-    // this keeps the manager itself consistent, mirroring subagent/child-config.ts.
-    ...(ctx.surface !== undefined ? { surface: ctx.surface } : {}),
-    // Worktree isolation: forward cwd so when the skill-forked child
-    // dispatches its own `agent` calls (grandchild forks), the manager's
-    // forkSubagent injects cwd into the grandchild's config. Mirrors
-    // subagent-executor.ts:294.
-    ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
-    // Read-scope inheritance (#547): see childInheritedReadRoots above.
-    // 2nd spread = workspace READ channel for grandchild `agent` forks.
-    ...(childInheritedReadRoots !== undefined
-      ? { parentReadRoots: childInheritedReadRoots }
-      : {}), ...(ctx.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
-  });
+  // Root (depth-0) session id (#2442): this executor's inherited root, or its
+  // own parent's id when it sits at depth 0. Seeds the grandchild manager, the
+  // child executor, and the nested skill executor so every descendant credits
+  // artifacts to the root record (child-attribution.ts).
+  const rootSessionId = ctx.parentRootSessionId ?? ctx.parentSession.sessionId;
+  const childManager = buildSkillChildManager(ctx, signal, currentCwd, childInheritedReadRoots, rootSessionId);
+  // `journalView` IS the executor's parent: the caller backfills its
+  // `sessionId` + `messageJournal` after the fork returns (fork-dispatch.ts).
   const childExecutor = new SubagentExecutor({
     subagentManager: childManager,
     parentSession: Object.assign(journalView, createStubParentSession(signal)),
+    ...(rootSessionId !== undefined ? { parentRootSessionId: rootSessionId } : {}),
     defaultConfig: {
       model: childConfig.model,
       apiKey: ctx.apiKey,
@@ -235,6 +269,7 @@ export function buildForkedChildConfig(
         depth + 1, maxDepth, signal, currentCwd,
         childReadScope,
         baseConfig.skillDispatchName, journalView, // Fix A (#skill-recursion); journal view
+        rootSessionId, // #2442
       )
     : undefined;
   // Pass `model` so the factory routes between AnthropicDirect /

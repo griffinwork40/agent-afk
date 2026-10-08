@@ -101,7 +101,7 @@ const DEFAULT_APPROVAL_TIMEOUT_MS = 300_000;
  * string alone — to avoid spoofing by an external MCP server that happens to
  * use the same name.
  */
-export const AFK_HARNESS_SERVER_NAME = 'agent-afk';
+const AFK_HARNESS_SERVER_NAME = 'agent-afk';
 
 export interface AfkModeGateOptions {
   /**

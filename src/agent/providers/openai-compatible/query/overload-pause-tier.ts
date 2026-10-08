@@ -43,9 +43,9 @@ import { sleepWithAbort } from '../../shared/sleep-with-abort.js';
 import {
   resolveOverloadPauseCeilingMs,
   nextProbeDelayMs,
-} from '../../anthropic-direct/overload-pause.js';
+} from '../../shared/overload-pause-shared.js';
 import { OVERLOAD_EXHAUSTED } from '../../shared/overload-sentinel.js';
-import { getErrorStatus } from './retry.js';
+import { getErrorStatus, isOpenAIOverloadError } from './retry.js';
 import type { IterationResult } from './stream-drive.js';
 import { createStreamState } from '../translate.js';
 
@@ -60,8 +60,8 @@ const OVERLOAD_STATUS_CODES = new Set([529, 503]);
  * into `conversationHistory`.
  */
 export const OPENAI_COMPAT_OVERLOAD_EXHAUSTED_NOTICE =
-  'The provider returned HTTP 529/503 (server overloaded) and did not recover within ' +
-  "this turn's retry budget. This is an upstream capacity event, not an afk error. " +
+  'The provider reported it is overloaded (HTTP 529/503 or an overload error event) and ' +
+  "did not recover within this turn's retry budget. This is an upstream capacity event, not an afk error. " +
   'The turn was committed, so the conversation so far is preserved — resume with ' +
   '`afk --resume <sessionId>` to continue from saved state once capacity frees up.';
 
@@ -81,12 +81,36 @@ function exhaustedIterationResult(): IterationResult {
 
 /**
  * True when `event` is an error event whose underlying status indicates server
- * overload (529 = Anthropic overloaded, 503 = service unavailable).
+ * overload (529 = Anthropic overloaded, 503 = service unavailable), or a
+ * status-less SDK overload throw ({@link isOpenAIOverloadError}). Must accept
+ * every error `isRetryableStreamError` retries as an overload, otherwise an
+ * overload that exhausts the inline budget would skip this pause tier.
  */
 export function isOverloadErrorEvent(event: ProviderEvent): boolean {
   if (event.type !== 'error') return false;
+  if (isOpenAIOverloadError(event.error)) return true;
   const status = getErrorStatus(event.error);
   return status !== undefined && OVERLOAD_STATUS_CODES.has(status);
+}
+
+/**
+ * Classify how a detected overload error event was triggered — useful for trace
+ * metadata so observers can distinguish HTTP-status overloads (529/503) from
+ * body-detected overloads (status-less SSE `error` payload).
+ *
+ * Returns `'body'` when the error carries no HTTP status and is identified by
+ * its `code` / `type` / `message` fields (e.g. the SDK mid-stream overload
+ * throw). Returns `'status'` when a numeric HTTP status code (529 or 503) is
+ * present.
+ *
+ * Precondition: `isOverloadErrorEvent(event)` is true — callers only invoke this
+ * after that predicate confirms `event.type === 'error'`, so the `!== 'error'`
+ * guard below is structurally unreachable in practice (#2860, waived: dead guard
+ * retained as a defensive fallback, not a live branch).
+ */
+export function overloadTrigger(event: ProviderEvent): 'status' | 'body' {
+  if (event.type !== 'error') return 'status'; // unreachable: precondition enforced by isOverloadErrorEvent
+  return isOpenAIOverloadError(event.error) ? 'body' : 'status';
 }
 
 /** Context threaded through from `OpenAICompatibleQuery` to the tier. */
@@ -128,6 +152,9 @@ export async function* runIterationWithOverloadPause(
   // must not silently consume the operator's pause budget before any probe fires.
   let pauseStartedAt: number | null = null;
   let pauseEmitted = false;
+  // Classify how the first overload was detected — set once and reused for the
+  // trace so HTTP-status overloads and body-detected overloads are distinguishable.
+  let firstTrigger: 'status' | 'body' | null = null;
 
   for (;;) {
     // ── Manual generator protocol: preserves the typed return value ──────────
@@ -151,6 +178,8 @@ export async function* runIterationWithOverloadPause(
         const terminal = await gen.next();
         returnValue = terminal.done ? terminal.value : null;
         overloadEvent = event;
+        // Record trigger on the first overload; subsequent replays reuse it.
+        firstTrigger ??= overloadTrigger(event);
         // Generator is exhausted (done step consumed); `return(null)` signals
         // intent to close it and satisfies the gen.return() cleanup contract.
         await gen.return(null);
@@ -222,6 +251,12 @@ export async function* runIterationWithOverloadPause(
         metadata: {
           reason: 'overloaded',
           source: 'openai-compat',
+          // 'status' = HTTP 529/503 triggered the pause; 'body' = status-less
+          // SSE error payload identified by code/type/message fields.
+          // `firstTrigger` is always set before `pauseEmitted` turns true
+          // (it is assigned at line 179, before the early-exit checks), so the
+          // `?? 'status'` fallback is structurally unreachable (#2860, waived).
+          trigger: firstTrigger ?? 'status',
           hasResetTimestamp: false,
           ceilingMs,
           surface: ctx.surface ?? 'unknown',

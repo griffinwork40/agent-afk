@@ -54,8 +54,8 @@
  * scoped to the top-level (parent) session: subagent forks run the same init
  * path with the bubbled registry, so `AgentSession` skips the queue when
  * `parentSessionId` is set rather than prepending priming context to every
- * subagent's first prompt. The remaining hook events ignore `injectContext`
- * entirely.
+ * subagent's first prompt. PreToolUse context is appended to the final tool
+ * result (including non-blocking decisions). The remaining events ignore it.
  *
  * @module agent/hooks
  */
@@ -84,7 +84,7 @@ export interface HookDecision {
   /** Human-readable rationale for blocking or approving. */
   reason?: string;
   /**
-   * (PreToolUse block-path, SessionStart, SubagentStop, UserPromptSubmit, Stop) Framework-generated context to inject. For **PreToolUse**: appended to the `isError` tool_result so a blocking handler can explain what to do instead.
+   * (PreToolUse, SessionStart, SubagentStop, UserPromptSubmit, Stop) Framework-generated context to inject. For **PreToolUse**: appended to the final tool_result, including non-blocking decisions and later gate denials. Non-blocking context is appended after output capping and counted in a separate delivery hook_decision event only then; abandoned calls are not counted.
    *
    * For **SubagentStop**: queued to the parent session's input stream after
    * dispatch completes; dropped if the parent is aborting. DAG/compose and
@@ -273,6 +273,14 @@ export interface PostToolUseContext {
    * authors can treat both events uniformly for subagent correlation.
    */
   parentSessionId?: string;
+  /**
+   * Root (depth-0) session id, threaded from {@link AgentConfig.rootSessionId}.
+   * For depth-1 children this equals `parentSessionId`; for deeper descendants
+   * it points past the immediate parent to the original root. Child-attribution
+   * hooks use this so grandchild artifacts are credited to the root record
+   * rather than to an intermediate session that never writes a sidecar.
+   */
+  rootSessionId?: string;
   toolName: string;
   /**
    * Tool-call input passed through from {@link PreToolUseContext}. Carried
@@ -379,6 +387,42 @@ export interface StopContext {
    * "Done (unverified)" label.
    */
   doneEvidenceClassification?: 'no-code-changes' | 'verified' | 'unverified';
+  /**
+   * True when this Stop is firing during a same-turn continuation round
+   * (issue #2714). A blocking hook that already triggered a continuation in
+   * this turn receives this flag so it can decide not to block again —
+   * mirroring Claude Code's `stop_hook_active` field in the shell stdin payload.
+   *
+   * Absent (undefined / falsy) on the first Stop dispatch for a turn.
+   * True from the second dispatch onward (i.e. once at least one continuation
+   * has already run). Shell hook stdin receives a matching `stop_hook_active`
+   * boolean (see hook-executor.ts).
+   */
+  stopHookActive?: boolean;
+  /**
+   * 0-based index of the current continuation round within this turn.
+   * 0 on the first Stop dispatch (no continuation has run yet).
+   * Increments by 1 for every continuation round that fires.
+   *
+   * Shell hook stdin receives a matching `continuation` number so CC-style
+   * hooks can count how many times they have already blocked this turn.
+   */
+  continuation?: number;
+  /**
+   * The final assistant text of the completed turn. Populated by
+   * `buildStopContext` from the provider-side `assistantText` (or by scanning
+   * message history when the direct value is absent). Available so Stop hook
+   * handlers can inspect the turn's prose without access to the provider layer.
+   * Absent on surfaces that do not compute it.
+   */
+  assistantText?: string;
+  /**
+   * Names of tools that executed successfully (no error) in this turn. Lets
+   * Stop hook handlers check for instrumentation evidence (hash checks, counter
+   * insertions, bypass reruns) without accessing the raw tool-event stream.
+   * Absent on surfaces that do not compute it.
+   */
+  successfulToolNames?: readonly string[];
 }
 
 export interface UserPromptSubmitContext {

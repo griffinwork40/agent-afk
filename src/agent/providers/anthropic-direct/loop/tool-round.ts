@@ -31,7 +31,7 @@ import {
   WIND_DOWN_NOTE,
   formatRoundLabel,
   shouldWindDown,
-  pickRoundWarning,
+  roundDeliveryNotice,
 } from '../../shared/tool-loop-cap.js';
 import { dispatchToolCalls } from './tool-dispatch.js';
 import { emitAndCommitToolResults } from './tool-results.js';
@@ -55,13 +55,6 @@ export async function* runToolRound(
   turn: TurnAccumulator,
   maxIterations: number,
   softDeadlineMs: number,
-  /**
-   * Mutable state for advance round warnings — shares the same per-turn
-   * lifetime as `turn` itself. Accepts `TurnAccumulator` directly since it
-   * now carries `lastWarnedThreshold`; the parameter type is minimal so tests
-   * can pass a plain object without importing the accumulator.
-   */
-  warnState: { lastWarnedThreshold: number | undefined },
 ): AsyncGenerator<ProviderEvent, ToolRoundOutcome, void> {
   // Rollback contract: capture the pre-push length so any throw between here
   // and the `tool_result` commit can splice the orphaned assistant message back
@@ -122,6 +115,8 @@ export async function* runToolRound(
       taskId: turn.taskId,
       description: 'Working',
       summary: `${formatRoundLabel(turn.iterations, maxIterations)}: ${lastToolHeadline}`,
+      roundsUsed: turn.iterations,
+      budget: maxIterations,
       lastToolName: lastTool?.name,
       totalTokens: turn.usage.totalTokens ?? 0,
       // Contract: `toolUses` is the cumulative COUNT OF TOOL CALLS so far in
@@ -148,24 +143,6 @@ export async function* runToolRound(
     return 'terminated';
   }
 
-  // Advance remaining-round warning: inject once per threshold crossing so the
-  // model can reprioritize before the budget is fully spent. Only fires when a
-  // cap is in effect; never fires on the same threshold twice per turn (warnState
-  // is shared across rounds). The wind-down note at cap=0 covers the terminal
-  // case — this fills the gap for rounds well before the cap fires.
-  const [warnText, newThreshold] = pickRoundWarning(
-    turn.iterations,
-    maxIterations,
-    warnState.lastWarnedThreshold,
-  );
-  if (warnText !== null) {
-    warnState.lastWarnedThreshold = newThreshold;
-    const lastMsg = input.messages[input.messages.length - 1];
-    if (lastMsg !== undefined && lastMsg.role === 'user' && Array.isArray(lastMsg.content)) {
-      lastMsg.content.push({ type: 'text', text: warnText });
-    }
-  }
-
   // Two independent budgets trip the SAME wind-down mechanism: the tool-round
   // cap and the soft wall-clock deadline. Round-cap wins a tie — it is the more
   // specific budget, and its note is the more accurate diagnosis when both are
@@ -174,6 +151,11 @@ export async function* runToolRound(
   // which would end it with no final assistant message and read as a silent
   // hang. `windDownReason` guarantees this fires at most once; the guard above
   // hard-stops if the wind-down round pathologically emits another tool_use.
+  const notice = roundDeliveryNotice(turn.iterations, maxIterations);
+  const lastResult = input.messages[input.messages.length - 1];
+  if (notice && lastResult?.role === 'user' && Array.isArray(lastResult.content)) {
+    lastResult.content.push({ type: 'text', text: notice });
+  }
   const roundsSpent = shouldWindDown(turn.iterations, maxIterations);
   const timeSpent = softDeadlineExpired(turn.startedAt, softDeadlineMs);
   if (roundsSpent || timeSpent) {

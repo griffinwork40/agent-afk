@@ -49,8 +49,10 @@ export const DEFAULT_MAX_TOOL_USE_ITERATIONS = 0;
  */
 export const WIND_DOWN_NOTE =
   'You have reached your tool-use budget for this turn. Do not request ' +
-  'any more tools — give your final answer now using only the ' +
-  'information already gathered.';
+  'any more tools. Tools are unavailable. This reply IS the deliverable: ' +
+  'return concrete findings, evidence, completed work, and remaining uncertainty ' +
+  'using only information already gathered. Do not narrate future actions or ' +
+  'promise to write a file. If nothing was established, explicitly say so.';
 
 /**
  * Resolve the effective per-turn tool-round cap from the configured value.
@@ -90,70 +92,14 @@ export function formatRoundLabel(round: number, maxIterations: number): string {
   return maxIterations > 0 ? `round ${round}/${maxIterations}` : `round ${round}`;
 }
 
-/**
- * Warning thresholds for advance remaining-round notifications.
- *
- * Each value is the number of REMAINING rounds (not completed rounds) at which
- * the shared policy emits a single warning text to the in-flight model turn.
- * Thresholds are relative so they scale with any cap size — a 12-round
- * probe and a 120-round flagship both get a "10 remaining" and a "5 remaining"
- * warning at proportionally the same moment. Smallest-cap coverage: the
- * minimum useful thresholds only fire when remaining > 0 AND remaining < cap,
- * so a 3-round cap gets a ≤2-remaining warning (but not a redundant 10 one).
- *
- * Design: one-shot per threshold (callers track last-warned via
- * {@link pickRoundWarning}). Emitting at ROUND boundaries (not between API
- * calls) keeps parity between both provider loops.
+/** A single advance delivery checkpoint, inspired by PR #2811's round-warning policy.
+ * Small caps still retain one usable tool round for persistence; unlimited turns never warn.
  */
-export const ROUND_WARNING_THRESHOLDS = [10, 5, 2] as const;
-
-/**
- * Return a warning string when `completedRounds` has just crossed a
- * {@link ROUND_WARNING_THRESHOLDS} boundary, or `null` when no new warning
- * applies. The caller must pass the previously-warned threshold (`lastWarned`,
- * initially `undefined`) so each threshold fires at most ONCE per turn.
- *
- * Contract:
- *  - Only fires when a positive cap is in effect (`maxIterations > 0`).
- *  - Only fires when remaining rounds are positive (> 0) — the wind-down note
- *    covers the "zero remaining" moment.
- *  - Thresholds are tested in descending order; the first unseen hit is returned.
- *  - A budget too small to reach a threshold (e.g. cap=3) only gets the
- *    thresholds that fit within it (remaining=2 fires the ≤2 warning).
- *  - Unlimited budgets (maxIterations ≤ 0) never warn.
- *
- * Usage pattern (both provider loops):
- * ```
- * const [warnText, newLastWarned] = pickRoundWarning(round, maxIterations, lastWarnedThreshold);
- * if (warnText !== null) { ... inject warnText into the next model turn; lastWarnedThreshold = newLastWarned; }
- * ```
- */
-export function pickRoundWarning(
-  completedRounds: number,
-  maxIterations: number,
-  lastWarned: number | undefined,
-): [string, number] | [null, undefined] {
-  if (maxIterations <= 0) return [null, undefined];
-  const remaining = maxIterations - completedRounds;
-  if (remaining <= 0) return [null, undefined]; // wind-down fires instead
-
-  // Find the smallest threshold that `remaining` fits under and that has not
-  // been warned yet. Thresholds are tested in descending order; we scan all
-  // of them and pick the tightest match (the one with the smallest value
-  // where remaining <= threshold AND lastWarned > threshold or is undefined).
-  // Example: remaining=2 → fits ≤10, ≤5, AND ≤2; tightest is 2.
-  let tightest: (typeof ROUND_WARNING_THRESHOLDS)[number] | undefined;
-  for (const threshold of ROUND_WARNING_THRESHOLDS) {
-    if (remaining <= threshold && (lastWarned === undefined || lastWarned > threshold)) {
-      tightest = threshold;
-    }
-  }
-  if (tightest === undefined) return [null, undefined];
-  const plural = remaining === 1 ? 'round' : 'rounds';
-  return [
-    `[Budget notice: ${remaining} tool-use ${plural} remaining of ${maxIterations}. ` +
-      `Prioritize the highest-value remaining work and prepare to summarize findings ` +
-      `if more rounds are needed than remain.]`,
-    tightest,
-  ];
+export function roundDeliveryNotice(completedRounds: number, budget: number): string | null {
+  if (budget <= 1 || completedRounds !== Math.max(1, budget - 3)) return null;
+  const remaining = budget - completedRounds;
+  const roundWord = remaining === 1 ? 'round remains' : 'rounds remain';
+  return `[Budget notice: ${remaining} tool-use ${roundWord} of ${budget}. ` +
+    'Deliver useful findings now. Persist any requested artifact while tools are still available; ' +
+    'stop expanding scope. Your final reply must contain findings and remaining work, not future actions.]';
 }

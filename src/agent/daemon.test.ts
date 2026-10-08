@@ -12,14 +12,14 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentConfig, Message } from './types.js';
 import { validateScheduledTask, type ScheduledTask } from './daemon/triggers.js';
 import { CronScheduler } from './daemon/scheduler.js';
 import { startDaemon, type DaemonHandle } from './daemon.js';
-import { getDaemonStateDir } from '../paths.js';
+import { getDaemonStateDir, getAfkHome } from '../paths.js';
 
 // node-cron schedules tasks against real wall-clock time. We never let them
 // fire — every test uses scheduler.tick(taskId) directly to invoke the
@@ -361,10 +361,11 @@ describe('CronScheduler onTaskComplete callback', () => {
     expect(callback).toHaveBeenCalledTimes(1);
   });
 
-  it('onTaskComplete is NOT fired when appendFileSync throws', async () => {
+  it('onTaskComplete IS fired even when appendFileSync throws (#2305)', async () => {
     // Point telemetryPath at a location that will fail to write (a directory
     // path masquerading as a file path — writing to a directory errors on all
-    // platforms).
+    // platforms). The new contract: telemetry failure must never suppress the
+    // completion push; fireOnTaskComplete runs after the catch block.
     const badTelemetryPath = mkdtempSync(join(tmpdir(), 'agent-afk-badtel-'));
     const callback = vi.fn();
     scheduler = new CronScheduler({
@@ -382,8 +383,8 @@ describe('CronScheduler onTaskComplete callback', () => {
 
     // tick still resolves (telemetry failure is swallowed)
     await expect(scheduler.tick('t')).resolves.toMatchObject({ status: 'success' });
-    // callback must NOT have been called because the write threw before it was reached
-    expect(callback).not.toHaveBeenCalled();
+    // callback MUST have been called exactly once despite the write throwing
+    expect(callback).toHaveBeenCalledTimes(1);
 
     rmSync(badTelemetryPath, { recursive: true, force: true });
   });
@@ -782,7 +783,12 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
     expect(task?.notifyChat).toBeUndefined();
   });
 
-  it('POST /tasks preserves executor: "shell" through GET /tasks', async () => {
+  it('POST /tasks rejects executor: "shell" with 400 (security: shell blocked over HTTP)', async () => {
+    // Security fix (#2300): executor:"shell" is not accepted over the
+    // unauthenticated HTTP control surface. Any local process could otherwise
+    // register a persistent shell cron job without going through the CLI or
+    // create_schedule tool. Shell tasks must be created via the schedule store
+    // or CLI where operator intent is explicit.
     const h = await spinDaemon();
     const res = await fetch(`http://localhost:${h.port}/tasks`, {
       method: 'POST',
@@ -794,19 +800,42 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
         executor: 'shell',
       }),
     });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/executor "shell"/);
+
+    // The task must NOT have been registered.
+    const listRes = await fetch(`http://localhost:${h.port}/tasks`);
+    const tasks = (await listRes.json()) as Array<{ taskId: string }>;
+    expect(tasks.some((t) => t.taskId === 'shell-task')).toBe(false);
+  });
+
+  it('POST /tasks still accepts executor: "agent" over HTTP', async () => {
+    // Regression guard: the shell block must not break agent-executor live-sync
+    // (the create_schedule tool path).
+    const h = await spinDaemon();
+    const res = await fetch(`http://localhost:${h.port}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        taskId: 'agent-task',
+        command: '/forge-friction --auto',
+        cron: '* * * * *',
+        executor: 'agent',
+      }),
+    });
     expect(res.status).toBe(201);
 
     const listRes = await fetch(`http://localhost:${h.port}/tasks`);
     const tasks = (await listRes.json()) as Array<{ taskId: string; executor?: string }>;
-    const task = tasks.find((t) => t.taskId === 'shell-task');
-    expect(task?.executor).toBe('shell');
+    const task = tasks.find((t) => t.taskId === 'agent-task');
+    expect(task?.executor).toBe('agent');
   });
 
-  it('POST /tasks does not propagate executor: "builtin" — body guard drops it', async () => {
-    // Regression guard: the body guard previously accepted 'builtin' while the
-    // tool handler and CLI both explicitly rejected it. Tightened to 'agent'|'shell' only.
-    // The guard silently drops unrecognised executor values; the task is still
-    // registered, but without an executor field (it must not be 'builtin').
+  it('POST /tasks rejects executor: "builtin" with 400 (unknown executor guard)', async () => {
+    // Regression guard: unknown executor values must not silently fall back to agent.
+    // "builtin" tasks are internally registered via startDaemon(tasks:[...]), never
+    // via the HTTP control surface.
     const h = await spinDaemon();
     const res = await fetch(`http://localhost:${h.port}/tasks`, {
       method: 'POST',
@@ -818,11 +847,13 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
         executor: 'builtin',
       }),
     });
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/executor "builtin"/);
+
     const listRes = await fetch(`http://localhost:${h.port}/tasks`);
-    const tasks = (await listRes.json()) as Array<{ taskId: string; executor?: string }>;
-    const task = tasks.find((t) => t.taskId === 'builtin-task');
-    expect(task?.executor).not.toBe('builtin');
+    const tasks = (await listRes.json()) as Array<{ taskId: string }>;
+    expect(tasks.some((t) => t.taskId === 'builtin-task')).toBe(false);
   });
 
   it('POST /tasks carries cwd through to GET /tasks', async () => {
@@ -928,6 +959,202 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
     const h = await spinDaemon();
     const res = await fetch(`http://localhost:${h.port}/tasks/ghost`, { method: 'DELETE' });
     expect(res.status).toBe(404);
+  });
+
+  it('POST /tasks shell: accepts matching enabled store entry for trusted live-sync', async () => {
+    const tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-shell-'));
+    vi.stubEnv('AFK_HOME', tmpHome);
+    mkdirSync(join(tmpHome, 'config'), { recursive: true });
+    writeFileSync(
+      join(tmpHome, 'config', 'schedules.json'),
+      JSON.stringify([
+        {
+          id: 'shell-live',
+          name: 'Shell Live',
+          command: 'echo hello',
+          cron: '0 2 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+          enabled: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ]),
+    );
+    try {
+      // Isolation assertion: getAfkHome() must resolve to tmpHome so the store
+      // module reads from our temp dir, not ~/.afk.  Verifies that vi.stubEnv
+      // is active before the daemon is spun up and getSchedule() is called.
+      expect(getAfkHome()).toBe(tmpHome);
+      const h = await spinDaemon();
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: 'shell-live',
+          command: 'echo hello',
+          cron: '0 2 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+        }),
+      });
+      expect(res.status).toBe(201);
+      const task = h.scheduler.list().find((t) => t.taskId === 'shell-live');
+      expect(task?.executor).toBe('shell');
+    } finally {
+      vi.unstubAllEnvs();
+      // Isolation assertion: after unstub the store path must no longer resolve
+      // to tmpHome, so a subsequent test in any order cannot inherit this dir.
+      expect(getAfkHome()).not.toBe(tmpHome);
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /tasks shell: rejects command mismatch for an existing store id', async () => {
+    const tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-shell-'));
+    vi.stubEnv('AFK_HOME', tmpHome);
+    mkdirSync(join(tmpHome, 'config'), { recursive: true });
+    writeFileSync(
+      join(tmpHome, 'config', 'schedules.json'),
+      JSON.stringify([
+        {
+          id: 'shell-live',
+          name: 'Shell Live',
+          command: 'echo safe',
+          cron: '0 2 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+          enabled: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ]),
+    );
+    try {
+      // Isolation assertion: getAfkHome() must resolve to tmpHome so the store
+      // module reads from our temp dir, not ~/.afk.  Verifies that vi.stubEnv
+      // is active before the daemon is spun up and getSchedule() is called.
+      expect(getAfkHome()).toBe(tmpHome);
+      const h = await spinDaemon();
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: 'shell-live',
+          command: 'rm -rf /',
+          cron: '0 2 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+        }),
+      });
+      expect(res.status).toBe(400);
+      expect(h.scheduler.list().some((t) => t.taskId === 'shell-live')).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+      // Isolation assertion: after unstub the store path must no longer resolve
+      // to tmpHome, so a subsequent test in any order cannot inherit this dir.
+      expect(getAfkHome()).not.toBe(tmpHome);
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /tasks shell: store entry without notifyOn matches request with explicit notifyOn: "failure" (normalization)', async () => {
+    // Regression for #3117 advisory finding: the `notifyOn` normalization fix
+    // must treat an omitted store-side notifyOn as equivalent to an explicit
+    // request-side 'failure', because 'failure' is the effective default.
+    // A bare === comparison between undefined (store) and 'failure' (request)
+    // would reject a valid sync; the normalization guard should not.
+    const tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-notify-'));
+    vi.stubEnv('AFK_HOME', tmpHome);
+    mkdirSync(join(tmpHome, 'config'), { recursive: true });
+    writeFileSync(
+      join(tmpHome, 'config', 'schedules.json'),
+      JSON.stringify([
+        {
+          id: 'shell-notify',
+          name: 'Shell Notify',
+          command: 'echo notify',
+          cron: '0 3 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+          enabled: true,
+          // notifyOn intentionally omitted → effective default is 'failure'
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ]),
+    );
+    try {
+      expect(getAfkHome()).toBe(tmpHome);
+      const h = await spinDaemon();
+      // Request carries explicit notifyOn: 'failure' — must match the omitted store value.
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: 'shell-notify',
+          command: 'echo notify',
+          cron: '0 3 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+          notifyOn: 'failure',
+        }),
+      });
+      expect(res.status).toBe(201);
+      const task = h.scheduler.list().find((t) => t.taskId === 'shell-notify');
+      expect(task?.executor).toBe('shell');
+    } finally {
+      vi.unstubAllEnvs();
+      expect(getAfkHome()).not.toBe(tmpHome);
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /tasks shell: an unrecognized request notifyOn is rejected, never coerced to the default', async () => {
+    // Validation of the request-side notifyOn must only narrow trust. A bogus
+    // value must not be normalized to 'failure' and then match a store entry
+    // whose notifyOn is omitted (effective default 'failure').
+    const tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-notify-bad-'));
+    vi.stubEnv('AFK_HOME', tmpHome);
+    mkdirSync(join(tmpHome, 'config'), { recursive: true });
+    writeFileSync(
+      join(tmpHome, 'config', 'schedules.json'),
+      JSON.stringify([
+        {
+          id: 'shell-notify-bad',
+          name: 'Shell Notify Bad',
+          command: 'echo notify',
+          cron: '0 3 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+          enabled: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ]),
+    );
+    try {
+      expect(getAfkHome()).toBe(tmpHome);
+      const h = await spinDaemon();
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: 'shell-notify-bad',
+          command: 'echo notify',
+          cron: '0 3 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+          notifyOn: 'bogus',
+        }),
+      });
+      expect(res.status).toBe(400);
+      expect(h.scheduler.list().find((t) => t.taskId === 'shell-notify-bad')).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+      expect(getAfkHome()).not.toBe(tmpHome);
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
   });
 });
 

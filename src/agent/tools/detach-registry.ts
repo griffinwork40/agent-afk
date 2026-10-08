@@ -2,8 +2,7 @@
  * Generic detach contract for in-flight tool calls.
  *
  * Mirrors the foreground-subagent promotion contract (Ctrl+B backgrounding)
- * but for non-subagent tools — initially bash only; compose is a follow-up
- * (tracked in #2542).
+ * but for non-subagent tools — bash and compose are both wired (#2542/#2746).
  *
  * A tool handler that opts in to detachability:
  *  1. Calls {@link DetachableToolRegistry.register} early in its execution,
@@ -68,6 +67,16 @@ export interface DetachedToolResult {
   readonly exitCode?: number;
   /** Wall-clock duration of the underlying operation in milliseconds. */
   readonly durationMs: number;
+  /**
+   * `true` when the operation finished but delivered a partial result
+   * (compose: at least one node wound down at its soft deadline, #2970).
+   * Mirrors `ToolResult.incomplete`; absent for clean completions.
+   */
+  readonly incomplete?: boolean;
+  /** Reason code paired with `incomplete` (compose: `'compose_partial_nodes'`). */
+  readonly incompleteReason?: string;
+  /** Compose only: number of partial DAG nodes (#2978). Present only alongside `incomplete`. */
+  readonly partialNodeCount?: number;
 }
 
 /**

@@ -543,6 +543,25 @@ export interface AgentConfig {
   bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
 
   /**
+   * Session-scoped detach registry for the Ctrl+B bash-backgrounding contract
+   * (#2542, #2735). When present, each per-query dispatcher injects it into the
+   * context of every tool in DETACHABLE_TOOLS (currently bash only) so the REPL
+   * Ctrl+B handler and the dispatcher share the same instance. Absent for
+   * headless surfaces, subagent children, and one-shot CLI runs that have no
+   * REPL to inject the result into. The registry must be cancelled by session
+   * teardown via cancelAll() (Invariant:D3 — see detach-registry.ts).
+   */
+  detachRegistry?: import('../tools/detach-registry.js').DetachableToolRegistry;
+
+  /**
+   * Session-scoped registry for model-started background processes (`bash`
+   * with `run_in_background: true`). Root interactive REPL sessions only;
+   * never copied into forked child configs, so subagents get an explicit
+   * "unavailable" refusal. Teardown must call `killAll()`.
+   */
+  processJobs?: import('../shell-jobs/process-jobs.js').ProcessJobRegistry;
+
+  /**
    * Cascade-abort and drain in-flight subagents before the trace writer is
    * sealed.
    *
@@ -708,6 +727,21 @@ export interface AgentConfig {
 
   /** Parent session ID when this session was forked as a subagent. */
   parentSessionId?: string;
+
+  /**
+   * Root session ID — the depth-0 session that owns the outcome record.
+   *
+   * Set once on a depth-1 child (to the root's sessionId) and inherited
+   * unchanged by all deeper descendants. A depth-1 child with no grandchildren
+   * sets this equal to `parentSessionId`; a grandchild's `rootSessionId` is
+   * its grandparent's id, not its immediate parent's. Child-attribution uses
+   * this to credit commit SHAs and PR URLs to the root record rather than to
+   * an intermediate session id that never writes a sidecar.
+   *
+   * Undefined on top-level (depth-0) sessions — `parentSessionId` is also
+   * undefined there, so hooks can treat both as the "no attribution" signal.
+   */
+  rootSessionId?: string;
 
   /**
    * This session's own subagent id when it was forked as a subagent — the

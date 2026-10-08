@@ -24,13 +24,16 @@ import { describeSpawnCwdError, isSpawnEnoent } from '../../../utils/spawn-cwd-e
 import { HARD_CAP_BYTES, MODEL_CAP_BYTES, headAndTail, capForModel, HARD_CAP_KILL_NOTE } from './_output-cap.js';
 import { wouldBeRestricted } from './_cwd-utils.js';
 import { scanCandidatePaths } from './bash-scan-exempt.js';
-import { killProcessGroup } from '../../../utils/kill-process-group.js';
+import { killBashProcess } from './bash-kill.js';
 import { writeBashCapture } from './_bash-capture.js';
 import { resolveShell } from '../../../utils/resolve-shell.js';
 import { RollingTailBuffer } from './_rolling-tail.js';
-import { scrubBashEnv } from './bash-env-scrub.js';
+import { buildChildEnv } from './bash-env-scrub.js';
+import { interruptedBashResult } from './bash-interrupted.js';
 import { applyBashDetach, execOnDetach } from '../detach-bash.js';
 import type { OnDetachParams } from '../detach-bash.js';
+import { startBackgroundBash } from './bash.background.js';
+import { MAX_PROCESS_MAX_RUNTIME_MS } from '../../shell-jobs/process-jobs.js';
 
 /**
  * Input shape for the bash tool (validated at runtime).
@@ -38,13 +41,19 @@ import type { OnDetachParams } from '../detach-bash.js';
 interface BashInput {
   command?: unknown;
   timeout_ms?: unknown;
+  run_in_background?: unknown;
 }
 
 /**
  * Validate and parse bash tool input.
  * @throws if `command` is not a string
  */
-function parseBashInput(input: unknown): { command: string; timeout_ms: number } {
+function parseBashInput(input: unknown): {
+  command: string;
+  timeout_ms: number;
+  background: boolean;
+  explicitTimeout: boolean;
+} {
   if (typeof input !== 'object' || input === null) {
     throw new Error('Input must be an object');
   }
@@ -55,26 +64,59 @@ function parseBashInput(input: unknown): { command: string; timeout_ms: number }
     throw new Error('Input must have a "command" field of type string');
   }
 
+  if (bashInput.run_in_background !== undefined && typeof bashInput.run_in_background !== 'boolean') {
+    throw new Error('run_in_background must be a boolean');
+  }
+  const background = bashInput.run_in_background === true;
+  // Background runs use timeout_ms as their max runtime, so the ceiling is
+  // the process-job maximum (24 h) instead of the foreground 10 minutes.
+  const maxTimeout = background ? MAX_PROCESS_MAX_RUNTIME_MS : 600000;
+
   let timeout_ms = 120000; // default 2 minutes
   if (bashInput.timeout_ms !== undefined) {
     if (typeof bashInput.timeout_ms !== 'number') {
       throw new Error('timeout_ms must be a number');
     }
-    if (bashInput.timeout_ms < 0 || bashInput.timeout_ms > 600000) {
-      throw new Error('timeout_ms must be between 0 and 600000');
+    if (bashInput.timeout_ms < 0 || bashInput.timeout_ms > maxTimeout) {
+      throw new Error(`timeout_ms must be between 0 and ${maxTimeout}`);
     }
     timeout_ms = bashInput.timeout_ms;
+  }
+  if (background && bashInput.timeout_ms !== undefined && timeout_ms < 1000) {
+    throw new Error('timeout_ms must be at least 1000 with run_in_background');
   }
 
   return {
     command: bashInput.command,
     timeout_ms,
+    background,
+    explicitTimeout: bashInput.timeout_ms !== undefined,
   };
 }
 
 /**
- * Create a bash handler closed over the session's `permissionMode` and
- * optional working directory.
+ * Live rolling tail buffer for the TUI, or undefined when the context has no
+ * `onBashOutputTail` callback. The callback must not throw; it is guarded
+ * defensively anyway so a renderer bug can never fail the command.
+ */
+function makeTailBuffer(context: ToolHandlerContext | undefined): RollingTailBuffer | undefined {
+  const report = context?.onBashOutputTail;
+  if (report === undefined) return undefined;
+  return new RollingTailBuffer((tail) => {
+    try {
+      report(tail);
+    } catch {
+      // Contract: callback must not throw, but we swallow defensively.
+    }
+  });
+}
+
+/**
+ * Create a bash handler closed over the session's `_permissionMode` and
+ * optional working directory. The mode parameter is unused by the handler
+ * body (bypass/default differ only via hooks and `context.allowAll`); it is
+ * kept in the signature so callers stay positionally stable and mode-specific
+ * behaviour can be reintroduced without touching every call site.
  *
  * Using a factory (rather than reading `process.env`) eliminates the
  * process-global race when multiple concurrent sessions run in the same
@@ -91,11 +133,13 @@ function parseBashInput(input: unknown): { command: string; timeout_ms: number }
  *
  * Security note: commands are passed to the OS shell via `shell: true`.
  * This means shell metacharacters (pipes, redirects, subshell expansions)
- * are interpreted. When the session runs in `bypassPermissions` mode the
- * agent can execute arbitrary shell commands without confirmation — a
- * full `execFile`-based refactor that disables the shell is tracked as a
- * separate work item. For now we emit a one-time warning at startup so the
- * risk surface is explicit in logs.
+ * are interpreted. When the session runs in `bypassPermissions` mode (the
+ * CLI default, see `DEFAULT_CLI_PERMISSION_MODE`) the agent can execute
+ * arbitrary shell commands without confirmation. That is the documented
+ * contract of bypass mode, so no per-session warning is emitted. Switching
+ * to `execFile` would NOT narrow this: agent commands need pipes/redirects,
+ * so any execFile form still ends up as `sh -c <command>`. Real containment
+ * would need an OS sandbox; see `docs/scoping/bash-execfile-migration.md`.
  *
  * Path containment (advisory-only): unlike the typed filesystem handlers,
  * which route every path through `resolveAndContain` and hard-reject writes
@@ -117,23 +161,10 @@ function parseBashInput(input: unknown): { command: string; timeout_ms: number }
  * are documented in `docs/decisions/0001-bash-tool-path-containment.md`.
  */
 export function createBashHandler(
-  permissionMode: string,
+  _permissionMode: string,
   cwd?: string,
 ): ToolHandler {
-  let _shellModeWarned = false;
   let _pathEscapeWarned = false;
-
-  function warnIfBypassPermissions(): void {
-    if (_shellModeWarned) return;
-    if (permissionMode === 'bypassPermissions') {
-      _shellModeWarned = true;
-      console.warn(
-        '[security] bash handler: shell=true with bypassPermissions — ' +
-          'all shell metacharacters are interpreted without confirmation. ' +
-          'Migrate to execFile to eliminate this risk (tracked: C4).',
-      );
-    }
-  }
 
   /**
    * Best-effort, ADVISORY-ONLY containment scan (never blocks execution).
@@ -158,7 +189,7 @@ export function createBashHandler(
    */
   function scanPathsBestEffort(command: string, context: ToolHandlerContext): void {
     if (_pathEscapeWarned) return; // one-time per handler instance
-    const fallbackBase = context.resolveBase ?? context.cwd ?? cwd;
+    const fallbackBase = context.resolveBase ?? cwd;
     const escaping: string[] = [];
     for (const expanded of scanCandidatePaths(command, os.homedir())) {
       const verdict = wouldBeRestricted(expanded, context, 'write', fallbackBase);
@@ -182,13 +213,11 @@ export function createBashHandler(
   }
 
   return async (input: unknown, signal: AbortSignal, context?: ToolHandlerContext) => {
-    let { command, timeout_ms } = parseBashInput(input);
+    let { command, timeout_ms, background, explicitTimeout } = parseBashInput(input);
 
     if (signal.aborted) {
       return { content: 'Command aborted', isError: true };
     }
-
-    warnIfBypassPermissions();
 
     // Advisory-only containment scan (warn + telemetry, never blocks). Only
     // runs when a context is present — inline/back-compat calls without one
@@ -203,6 +232,12 @@ export function createBashHandler(
       }
     }
 
+    // Background launch: supervised by the session's ProcessJobRegistry and
+    // returned immediately. timeout_ms is the max runtime (default 2 h).
+    if (background) {
+      return startBackgroundBash(command, explicitTimeout ? timeout_ms : undefined, context, cwd);
+    }
+
     const startedAt = Date.now();
     return new Promise((resolve) => {
       let resolved = false;
@@ -211,16 +246,7 @@ export function createBashHandler(
       // Created only when the context supplies an onBashOutputTail callback.
       // Cleared (and a final `undefined` sent) in every settle path so the TUI
       // always erases the tail row regardless of how the command ends.
-      const tailBuffer =
-        context?.onBashOutputTail !== undefined
-          ? new RollingTailBuffer((tail) => {
-              try {
-                context.onBashOutputTail!(tail);
-              } catch {
-                // Contract: callback must not throw, but we swallow defensively.
-              }
-            })
-          : undefined;
+      const tailBuffer = makeTailBuffer(context);
   
       function settle(result: { content: string; isError?: boolean; truncated?: boolean; capturePath?: string; durationMs?: number; exitCode?: number; testResult?: import('./test-runner-detector.js').TestResult }) {
         if (resolved) return;
@@ -264,18 +290,16 @@ export function createBashHandler(
         stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
         // Effective cwd priority:
         // 1. context?.resolveBase — permission-system anchor (from dispatcher)
-        // 2. context?.cwd — per-call override (back-compat)
-        // 3. factory-level cwd — session worktree isolation (from createBashHandler)
-        // Falls back to process.cwd() implicitly when all three are undefined.
-        ...((context?.resolveBase ?? context?.cwd ?? cwd) !== undefined
-          ? { cwd: context?.resolveBase ?? context?.cwd ?? cwd }
+        // 2. factory-level cwd — session worktree isolation (from createBashHandler)
+        // Falls back to process.cwd() implicitly when both are undefined.
+        ...((context?.resolveBase ?? cwd) !== undefined
+          ? { cwd: context?.resolveBase ?? cwd }
           : {}),
         // Always scrub episode-revealing vars (issue #2425) regardless of
         // whether context.env is set — both the inherit-process.env path
         // (context.env undefined) and the explicit merge path must be clean.
-        env: scrubBashEnv(
-          context?.env !== undefined ? { ...process.env, ...context.env } : undefined,
-        ),
+        // buildChildEnv also materializes the session's private TMPDIR.
+        env: buildChildEnv(context?.env),
       };
       const proc =
         shellResolution.shell === true
@@ -307,11 +331,9 @@ export function createBashHandler(
       // to the entire process group — killing the shell and all its descendants,
       // including backgrounded grandchildren, atomically (S10).
       const timeoutHandle = setTimeout(() => {
-        if (proc.pid !== undefined) {
-          killProcessGroup(proc.pid);
-        }
+        killBashProcess(proc);
         deregisterOnClose?.(); // Fix #2: free registry slot on timeout kill path
-        settle({ content: `Command timed out after ${timeout_ms}ms`, isError: true, durationMs: Date.now() - startedAt });
+        settle(interruptedBashResult({ kind: 'timeout', stdout, stderr, startedAt, timeoutMs: timeout_ms, context }));
       }, timeout_ms);
   
       let stdout = '';
@@ -415,11 +437,9 @@ export function createBashHandler(
       // S10: same process-group SIGKILL rationale as timeout path above.
       // Fix #2: calls deregisterOnClose?.() to clean up the registry slot.
       const abortHandler = () => {
-        if (proc.pid !== undefined) {
-          killProcessGroup(proc.pid);
-        }
+        killBashProcess(proc);
         deregisterOnClose?.();
-        settle({ content: 'Command aborted', isError: true, durationMs: Date.now() - startedAt });
+        settle(interruptedBashResult({ kind: 'aborted', stdout, stderr, startedAt, timeoutMs: timeout_ms, context }));
       };
       signal.addEventListener('abort', abortHandler);
       // Close the TOCTOU window between the pre-flight `signal.aborted` check (top
@@ -478,7 +498,7 @@ export function createBashHandler(
         // ran (resolved=true) so this call is a no-op. Check anyway so the
         // branch is explicit: abort beats close.
         if (signal.aborted) {
-          settle({ content: 'Command aborted', isError: true, durationMs: Date.now() - startedAt });
+          settle(interruptedBashResult({ kind: 'aborted', stdout, stderr, startedAt, timeoutMs: timeout_ms, context }));
           return;
         }
   
@@ -541,7 +561,7 @@ export function createBashHandler(
         // When no explicit cwd was passed, spawn inherited the process cwd;
         // process.cwd() itself throws when that directory has been deleted,
         // which is the same masquerade — report it as such.
-        const effectiveCwd = context?.resolveBase ?? context?.cwd ?? cwd;
+        const effectiveCwd = context?.resolveBase ?? cwd;
         let message: string;
         if (effectiveCwd === undefined && isSpawnEnoent(err)) {
           try {

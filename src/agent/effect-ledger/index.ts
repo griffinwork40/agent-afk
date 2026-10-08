@@ -12,19 +12,25 @@
  * // In default-hook-registry.ts:
  * import { createEffectLedgerPostHook } from './effect-ledger/index.js';
  * registry.register('PostToolUse', createEffectLedgerPostHook());
- *
- * // Query the ledger:
- * import { EffectStore } from './effect-ledger/index.js';
- * const store = new EffectStore();
- * const records = await store.query({ sessionId: 'abc123', status: 'ambiguous' });
  * ```
+ *
+ * ## Injectable seam (not re-exported from this barrel)
+ *
+ * `EffectStore` is accepted as an injectable parameter by both hook factories
+ * above (e.g. for testing with a custom store), but it is not re-exported
+ * from this barrel.  Import it directly from `./store.js` when injecting a
+ * custom store or writing tests.
+ *
+ * ## Truly internal helpers (not re-exported)
+ *
+ * `classifyToolCall` and `computeIdempotencyKey` are implementation details
+ * consumed by the hook factories and are intentionally NOT part of any public
+ * surface.  Import them directly from `./classifier.js` and `./idempotency.js`
+ * only if you are extending the ledger internals.
  *
  * @module agent/effect-ledger
  */
 
-export { EffectStore } from './store.js';
-export { classifyToolCall } from './classifier.js';
-export { computeIdempotencyKey } from './idempotency.js';
 export { createEffectLedgerPostHook, createEffectLedgerPreHook } from './hook.js';
 export type {
   EffectRecord,

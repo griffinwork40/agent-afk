@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { resolveClientFactory, __setOpenAIClientFactory } from './client.js';
+import { resolveClientFactory, __setOpenAIClientFactory, ledgerAccountForBaseUrl } from './client.js';
 
 /** Capture constructor args from `new OpenAI(opts)`. */
 vi.mock('openai', () => {
@@ -19,6 +19,49 @@ vi.mock('openai', () => {
 afterEach(() => {
   __setOpenAIClientFactory(null);
   vi.clearAllMocks();
+});
+
+// ---------------------------------------------------------------------------
+// ledgerAccountForBaseUrl — #2872
+// ---------------------------------------------------------------------------
+
+describe('ledgerAccountForBaseUrl — distinct keys for unparseable baseURLs (#2872)', () => {
+  it('returns the hostname for a parseable URL', () => {
+    expect(ledgerAccountForBaseUrl('https://api.openai.com/v1')).toBe('api.openai.com');
+    expect(ledgerAccountForBaseUrl('http://my-proxy.example.com:8080/api')).toBe('my-proxy.example.com');
+  });
+
+  it('returns api.openai.com when baseURL is undefined', () => {
+    expect(ledgerAccountForBaseUrl(undefined)).toBe('api.openai.com');
+  });
+
+  it('two different malformed baseURLs produce different keys', () => {
+    const a = ledgerAccountForBaseUrl('not-a-url-alpha');
+    const b = ledgerAccountForBaseUrl('not-a-url-beta');
+    expect(a).not.toBe(b);
+    // Both must start with 'custom-' prefix
+    expect(a).toMatch(/^custom-[0-9a-f]{12}$/);
+    expect(b).toMatch(/^custom-[0-9a-f]{12}$/);
+  });
+
+  it('the same unparseable baseURL is stable across calls', () => {
+    // 'garbage://...' is parsed successfully by WHATWG URL (hostname='endpoint'),
+    // so use a string that is truly unparseable — no scheme, no valid host.
+    const url = 'not-a-url-with-secret-token-67890';
+    const first = ledgerAccountForBaseUrl(url);
+    const second = ledgerAccountForBaseUrl(url);
+    expect(first).toBe(second);
+    // Must be in the hashed custom- form, not the raw URL
+    expect(first).toMatch(/^custom-[0-9a-f]{12}$/);
+  });
+
+  it('never exposes the raw URL in the key (hashed, not embedded)', () => {
+    const sensitive = 'not-a-url-with-secret-token-12345';
+    const key = ledgerAccountForBaseUrl(sensitive);
+    expect(key).not.toContain(sensitive);
+    expect(key).not.toContain('secret');
+    expect(key).toMatch(/^custom-[0-9a-f]{12}$/);
+  });
 });
 
 describe('defaultClientFactory — maxRetries: 0 (#2422)', () => {

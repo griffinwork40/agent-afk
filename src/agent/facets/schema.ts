@@ -26,12 +26,54 @@ import { z } from 'zod';
 /**
  * Bump when the facet shape or derivation changes — invalidates caches.
  *
- * v7 (#2777): added `outcome_source`, `tool_errors_total`, `yield_tracking.pr_url`;
- * added `'unknown'` to FacetOutcomeSchema; replaced inline TERMINAL_STATE_RE in
- * derive.ts with the shared parseTerminalState() parser; yield_tracking carry-
- * forward on re-derive in store.ts.
+ * v7 (#2777): added `outcome_source`, `tool_errors_total`, and required
+ * nullable `yield_tracking.pr_url`; added `'unknown'` to FacetOutcomeSchema;
+ * replaced inline TERMINAL_STATE_RE in derive.ts with the shared
+ * parseTerminalState() parser; yield_tracking carry-forward on re-derive in
+ * store.ts. Public consumers should filter on `facet_version >= 7` and inspect
+ * `outcome_source`; headingless sessions now derive `outcome: 'unknown'`, and
+ * single-line `**Done** — text` is no longer a terminal-state heading.
+ *
+ * v8 (#2970): added `compose_partial_nodes`, the number of compose CALLS in
+ * which at least one node succeeded with a partial result (soft-deadline
+ * wind-down, tool-use cap). Omitted when zero. Also added
+ * `incomplete?: boolean` to `ToolEventInputSchema` so the sidecar path
+ * carries the signal. On `facet_version >= 8` an absent field means zero.
+ *
+ * v9 (#2978): added `compose_partial_node_count`, the number of partial NODES
+ * summed across compose calls (`compose_partial_nodes` keeps counting calls).
+ * Omitted when zero. Also added `partialNodeCount?: number` to
+ * `ToolEventInputSchema`; journal `tool_result` blocks now persist
+ * `incomplete`, so journal-derived facets see the partial signal too.
+ *
+ * v10 (#2798): added `outcome_downgrade_reason` — when a self-reported
+ * `fully_achieved` (Done) is downgraded to `partially_achieved`, this field
+ * records the first matching signal that triggered the downgrade:
+ * `'deferred_items'` (Done block has a non-empty Deferred bullet),
+ * `'no_corroborating_evidence'` (Done with no world mutations and no evidence
+ * bullet), or `'compose_partial_nodes'` (at least one compose call wound down
+ * partial). Omitted when no downgrade occurred. Consumers on
+ * `facet_version >= 10` can use `outcome_downgrade_reason` to distinguish a
+ * genuine Done from a self-report that was downgraded.
+ *
+ * v11 (#2798 cont.): added two trace-backed downgrade reasons:
+ * `'budget_exceeded_closure'` (session ended because a monetary budget ceiling
+ * was reached), `'iteration_cap_closure'` (session ended because the tool-use
+ * round cap fired), `'truncated_closure'` (last model turn was cut off by the
+ * output-token ceiling), and `'subagent_budget_exhaustion'` (at least one
+ * forked subagent hit its tool-round budget and wound down before finishing
+ * naturally). All four require trace data; absence of trace means no signal.
+ * Stores plumb these signals through `DeriveOptions.traceSignals`.
+ *
+ * v12 (#3182): `patch_apply` counted as a file write in world_changes /
+ * no_corroborating_evidence check (skip on isError or dry_run); common
+ * external-effects bash commands (`git push`, `gh pr create`, `gh pr merge`,
+ * `npm publish`, `pnpm publish`) now count as corroboration (skip on
+ * isError). `extractRawToolInput` persists a bounded `changes_paths`
+ * projection for `patch_apply` so evidence-path collection works in
+ * production.
  */
-export const FACET_VERSION = 7;
+export const FACET_VERSION = 12;
 
 // ---------------------------------------------------------------------------
 // Input: the subset of StoredSession the deriver reads (local, layering-safe)
@@ -46,6 +88,17 @@ export const ToolEventInputSchema = z
     inputRaw: z.string().optional(),
     result: z.string().optional(),
     isError: z.boolean().optional(),
+    /**
+     * `true` when this tool result is a subagent's partial answer (e.g.
+     * soft-deadline wind-down or tool-use cap on a compose node). Written since
+     * #2970; absent on older session records.
+     */
+    incomplete: z.boolean().optional(),
+    /**
+     * Compose only: number of DAG nodes that wound down partial in this call.
+     * Present only alongside `incomplete: true`. Written since #2978.
+     */
+    partialNodeCount: z.number().int().nonnegative().optional(),
   })
   .passthrough();
 
@@ -67,6 +120,8 @@ export const StoredSessionInputSchema = z
     model: z.string(),
     startedAt: z.number(),
     savedAt: z.number(),
+    endedAt: z.number().optional(),
+    exitReason: z.enum(['sigint', 'sigterm', 'sighup', 'exit-command', 'eof']).optional(),
     totalTurns: z.number(),
     totalCostUsd: z.number().optional(),
     totalTokens: z.number().optional(),
@@ -93,6 +148,8 @@ export const FacetOutcomeSchema = z.enum([
    * 'unknown': the last assistant message is non-empty but carries no
    * recognizable terminal-state heading. Added in v7 (#2777) — replaces the
    * prior implicit fall-through to 'fully_achieved' for headingless sessions.
+   * Note: the single-line `**Done** — text` form is also not a valid heading
+   * and resolves to 'unknown' (#2797).
    */
   'unknown',
 ]);
@@ -112,6 +169,54 @@ export type FacetOutcome = z.infer<typeof FacetOutcomeSchema>;
  */
 export const FacetOutcomeSourceSchema = z.enum(['terminal_state', 'structural', 'none']);
 export type FacetOutcomeSource = z.infer<typeof FacetOutcomeSourceSchema>;
+
+/**
+ * Why a self-reported `fully_achieved` (Done heading) was downgraded to
+ * `partially_achieved`. Added in v10 (#2798); extended in v11 with four
+ * trace-backed reasons.
+ *
+ * Sidecar-derived (always available, v10+):
+ * - `'deferred_items'`: the Done block's "Deferred / pending" bullet was
+ *   non-empty — the agent admitted leaving work behind.
+ * - `'no_corroborating_evidence'`: Done with no world mutations (no file
+ *   writes, edits, or commits) and no evidence bullet in the Done block —
+ *   the agent claimed success but the session has no observable side-effects.
+ * - `'compose_partial_nodes'`: at least one compose call wound down partial
+ *   (soft-deadline or tool-use-iteration cap) and the session still declared
+ *   Done — some parallel work may be incomplete.
+ *
+ * Trace-backed (v11+; absent when no trace is available):
+ * - `'budget_exceeded_closure'`: the session's trace `closure` event carries
+ *   `reason: 'budget_exceeded'` — the monetary budget ceiling was hit before
+ *   natural completion.
+ * - `'iteration_cap_closure'`: `closure.reason === 'iteration_cap'` — the
+ *   top-level tool-use round cap fired; the agent was wound down before
+ *   finishing.
+ * - `'truncated_closure'`: `closure.reason === 'truncated'` — the last model
+ *   turn was cut off by the output-token ceiling, so the final message may be
+ *   incomplete.
+ * - `'subagent_budget_exhaustion'`: at least one forked subagent's
+ *   `subagent_lifecycle.succeeded` trace event carried
+ *   `stopReason === 'tool_use_loop_capped'`, meaning a child was wound down
+ *   before it could finish naturally.
+ *
+ * Priority order (checked in derive.ts): deferred_items >
+ * no_corroborating_evidence > compose_partial_nodes > budget_exceeded_closure >
+ * iteration_cap_closure > truncated_closure > subagent_budget_exhaustion.
+ *
+ * Omitted when the outcome was not downgraded (i.e. the session did not
+ * start as `fully_achieved`, or no downgrade signal fired).
+ */
+export const FacetOutcomeDowngradeReasonSchema = z.enum([
+  'deferred_items',
+  'no_corroborating_evidence',
+  'compose_partial_nodes',
+  'budget_exceeded_closure',
+  'iteration_cap_closure',
+  'truncated_closure',
+  'subagent_budget_exhaustion',
+]);
+export type FacetOutcomeDowngradeReason = z.infer<typeof FacetOutcomeDowngradeReasonSchema>;
 
 /**
  * Whether the transcripts of any subagents this session spawned are separately
@@ -244,7 +349,7 @@ export const YieldTrackingSchema = z.object({
    * a `gh pr create` bash result. Null when URL not available.
    * Added v7 (#2777).
    */
-  pr_url: z.string().nullable().optional(),
+  pr_url: z.string().nullable().default(null),
 });
 export type YieldTracking = z.infer<typeof YieldTrackingSchema>;
 
@@ -259,6 +364,11 @@ export const SubagentToolSummarySchema = z.object({
   tool_calls: z.number().int(),
   tool_errors: z.number().int(),
   tool_counts: z.record(z.string(), z.number()),
+  /**
+   * GitHub PR URL detected from a `gh pr create` bash result in this subagent's
+   * journal. Set only when the subagent itself opened a PR. (#2795 gap 6)
+   */
+  detected_pr_url: z.string().nullable().optional(),
 });
 export type SubagentToolSummary = z.infer<typeof SubagentToolSummarySchema>;
 
@@ -307,6 +417,23 @@ export const SessionFacetSchema = z
     tool_error_categories: z.record(z.string(), z.number()),
     friction_counts: z.record(z.string(), z.number()),
     friction_detail: z.string(),
+    /**
+     * Number of compose CALLS in which at least one node succeeded with a
+     * partial result: soft-deadline wind-down, tool-use-iteration cap, or
+     * another incomplete stop reason (#2970). Such calls stay `isError: false`.
+     * It counts calls, not nodes; see `compose_partial_node_count`. Added in v8
+     * and omitted when zero, so on `facet_version >= 8` absence means zero,
+     * while on older facets it means "not measured". Optional so old cached
+     * facets still validate.
+     */
+    compose_partial_nodes: z.number().int().nonnegative().optional(),
+    /**
+     * Number of partial compose NODES, summed across compose calls (#2978).
+     * A partial call recorded without a node count (sessions written before
+     * #2978) contributes 1, so this is never below `compose_partial_nodes`.
+     * Added in v9 and omitted when zero.
+     */
+    compose_partial_node_count: z.number().int().nonnegative().optional(),
 
     // outcome / world changes
     outcome: FacetOutcomeSchema,
@@ -323,6 +450,16 @@ export const SessionFacetSchema = z
      * Added v7 (#2777).
      */
     outcome_source: FacetOutcomeSourceSchema,
+    /**
+     * Why a self-reported `fully_achieved` (Done heading) was downgraded to
+     * `partially_achieved`. Present only when a downgrade occurred. Added v10
+     * (#2798). Consumers on `facet_version >= 10` may inspect this to
+     * distinguish a genuine Done from a downgraded self-report.
+     *
+     * Values: `'deferred_items'` | `'no_corroborating_evidence'` |
+     * `'compose_partial_nodes'`. See FacetOutcomeDowngradeReasonSchema.
+     */
+    outcome_downgrade_reason: FacetOutcomeDowngradeReasonSchema.optional(),
     primary_success: z.string(),
     world_changes: WorldChangesSchema,
 

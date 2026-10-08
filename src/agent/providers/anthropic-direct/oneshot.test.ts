@@ -13,7 +13,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
-import { oneShotCompletion } from './oneshot.js';
+import { oneShotCompletion, oneShotCompletionWithStop } from './oneshot.js';
 import { BILLING_HEADER_TEXT } from './auth.js';
 
 // ---------------------------------------------------------------------------
@@ -23,7 +23,7 @@ import { BILLING_HEADER_TEXT } from './auth.js';
 type MessagesCreateFn = (
   params: { model: string; system: string | Array<{ type: 'text'; text: string }>; max_tokens: number; messages: unknown[] },
   options?: { signal?: AbortSignal },
-) => Promise<{ content: Array<{ type: string; text?: string }> }>;
+) => Promise<{ stop_reason?: string | null; content: Array<{ type: string; text?: string }> }>;
 
 function makeClient(createFn: MessagesCreateFn): Anthropic {
   return {
@@ -31,8 +31,9 @@ function makeClient(createFn: MessagesCreateFn): Anthropic {
   } as unknown as Anthropic;
 }
 
-function happyClient(text: string): Anthropic {
+function happyClient(text: string, stopReason = 'end_turn'): Anthropic {
   return makeClient(async () => ({
+    stop_reason: stopReason,
     content: [{ type: 'text', text }],
   }));
 }
@@ -249,14 +250,14 @@ describe('oneShotCompletion (T21 + T22)', () => {
         return { content: [{ type: 'text', text: 'ok' }] };
       }),
     });
-    expect(captured).toBe('claude-haiku-4-5-20251001');
+    expect(captured).toBe('claude-haiku-5-5');
   });
 
   it('(T22b) resolves all canonical short aliases (opus/sonnet/haiku)', async () => {
     const cases: Array<[string, string]> = [
       ['opus', 'claude-opus-5-5'],
       ['sonnet', 'claude-sonnet-4-6'],
-      ['haiku', 'claude-haiku-4-5-20251001'],
+      ['haiku', 'claude-haiku-5-5'],
     ];
     for (const [alias, fullId] of cases) {
       let captured: string | undefined;
@@ -302,5 +303,81 @@ describe('oneShotCompletion (T21 + T22)', () => {
         clientFactory: () => happyClient('ok'),
       }),
     ).rejects.toThrow('token required');
+  });
+});
+
+// ── oneShotCompletionWithStop: stop-reason mapping ─────────────────────────
+
+describe('oneShotCompletionWithStop (stop-reason mapping)', () => {
+  it('maps stop_reason max_tokens → stopReason max_tokens', async () => {
+    const result = await oneShotCompletionWithStop({
+      token: 'sk-ant-oat01-test',
+      model: 'haiku',
+      system: 'sys',
+      user: 'msg',
+      clientFactory: () => makeClient(async () => ({
+        stop_reason: 'max_tokens',
+        content: [{ type: 'text', text: 'cut off' }],
+      })),
+    });
+    expect(result.stopReason).toBe('max_tokens');
+    expect(result.text).toBe('cut off');
+  });
+
+  it('maps stop_reason end_turn → stopReason end', async () => {
+    const result = await oneShotCompletionWithStop({
+      token: 'sk-ant-oat01-test',
+      model: 'haiku',
+      system: 'sys',
+      user: 'msg',
+      clientFactory: () => makeClient(async () => ({
+        stop_reason: 'end_turn',
+        content: [{ type: 'text', text: 'done' }],
+      })),
+    });
+    expect(result.stopReason).toBe('end');
+  });
+
+  it('maps stop_reason stop_sequence → stopReason end', async () => {
+    const result = await oneShotCompletionWithStop({
+      token: 'sk-ant-oat01-test',
+      model: 'haiku',
+      system: 'sys',
+      user: 'msg',
+      clientFactory: () => makeClient(async () => ({
+        stop_reason: 'stop_sequence',
+        content: [{ type: 'text', text: 'done' }],
+      })),
+    });
+    expect(result.stopReason).toBe('end');
+  });
+
+  it('maps an unknown stop_reason → stopReason other', async () => {
+    const result = await oneShotCompletionWithStop({
+      token: 'sk-ant-oat01-test',
+      model: 'haiku',
+      system: 'sys',
+      user: 'msg',
+      clientFactory: () => makeClient(async () => ({
+        stop_reason: 'tool_use',
+        content: [{ type: 'text', text: 'other' }],
+      })),
+    });
+    expect(result.stopReason).toBe('other');
+  });
+
+  it('oneShotCompletion wrapper still returns a plain string (backward compat)', async () => {
+    const result = await oneShotCompletion({
+      token: 'sk-ant-oat01-test',
+      model: 'haiku',
+      system: 'sys',
+      user: 'msg',
+      clientFactory: () => makeClient(async () => ({
+        stop_reason: 'max_tokens',
+        content: [{ type: 'text', text: 'partial' }],
+      })),
+    });
+    expect(typeof result).toBe('string');
+    expect(result).toBe('partial');
   });
 });

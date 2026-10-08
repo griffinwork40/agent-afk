@@ -34,8 +34,9 @@ import { resolveOpenAIAuth } from '../../providers/openai-compatible/auth.js';
 import { generateImageViaChatGpt } from './image-generate.chatgpt.js';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { ToolResult } from '../../providers/shared/tool-result.js';
-import { resolveAndContain } from './_cwd-utils.js';
+import { resolveAndContain, assertWriteTargetContained } from './_cwd-utils.js';
 import { assertNotDenylisted } from './write-denylist.js';
+import { makeSessionCounter } from './_image-operation.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -77,24 +78,7 @@ const DEFAULT_SESSION_LIMIT = 10;
 // Per-session generation counter (module-scope, keyed by session id)
 // ---------------------------------------------------------------------------
 
-const sessionCounters = new Map<string, number>();
-
-function getSessionCount(sessionId: string): number {
-  return sessionCounters.get(sessionId) ?? 0;
-}
-
-function incrementSessionCount(sessionId: string): number {
-  const next = getSessionCount(sessionId) + 1;
-  sessionCounters.set(sessionId, next);
-  return next;
-}
-
-function decrementSessionCount(sessionId: string): void {
-  const current = getSessionCount(sessionId);
-  if (current > 0) {
-    sessionCounters.set(sessionId, current - 1);
-  }
-}
+const generateCounter = makeSessionCounter();
 
 // ---------------------------------------------------------------------------
 // Input parsing
@@ -169,6 +153,39 @@ function parseInput(
 // dimension guard below; re-exported so all existing importers keep working.
 import { readImageDimensions } from './_image-dimensions.js';
 export { readImageDimensions };
+
+// ---------------------------------------------------------------------------
+// Output path resolution (extracted to keep createImageGenerateHandler under
+// the function-size gate; mirrors the saveEditedImage helper in image-edit.ts)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve (and validate) the output path for a generated image.
+ * For a custom path: enforces write-root containment, denylist, and
+ * symlink-target re-validation (fix #2823).
+ * For the default path: creates the generated-images dir and returns a
+ * unique filename.
+ * Returns `{ savePath }` on success, `{ error }` on any validation failure.
+ */
+async function resolveGenSavePath(
+  outputPath: string | undefined,
+  context: ToolHandlerContext | undefined,
+  cwd: string, imageId: string, ext: string,
+): Promise<{ savePath: string } | { error: string }> {
+  if (outputPath) {
+    try {
+      const savePath = resolveAndContain(outputPath, context, 'write', cwd);
+      assertNotDenylisted(savePath, 'image_generate');
+      assertWriteTargetContained(savePath, context, 'image_generate', cwd);
+      return { savePath };
+    } catch (err: unknown) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+  const dir = path.join(cwd, '.afk', 'generated-images');
+  await fs.mkdir(dir, { recursive: true });
+  return { savePath: path.join(dir, `${imageId}.${ext}`) };
+}
 
 // ---------------------------------------------------------------------------
 // Handler
@@ -255,9 +272,9 @@ export function createImageGenerateHandler(
 
     // 4. Optimistically increment before the API call to close the TOCTOU race
     //    (F-4); decrement on any failure path so the counter stays accurate.
-    incrementSessionCount(sessionId);
-    if (getSessionCount(sessionId) > limit) {
-      decrementSessionCount(sessionId);
+    generateCounter.increment(sessionId);
+    if (generateCounter.get(sessionId) > limit) {
+      generateCounter.decrement(sessionId);
       return {
         content:
           `Image generation limit reached (${limit} per session). ` +
@@ -270,7 +287,7 @@ export function createImageGenerateHandler(
     // 5. Parse input
     const parsed = parseInput(input);
     if ('error' in parsed) {
-      decrementSessionCount(sessionId);
+      generateCounter.decrement(sessionId);
       return { content: parsed.error, isError: true };
     }
 
@@ -292,7 +309,7 @@ export function createImageGenerateHandler(
         fetchFn,
       });
       if ('error' in chatgptResult) {
-        decrementSessionCount(sessionId);
+        generateCounter.decrement(sessionId);
         return { content: chatgptResult.error, isError: true };
       }
       imageData = chatgptResult.b64_json;
@@ -302,7 +319,7 @@ export function createImageGenerateHandler(
         fetchFn, apiKey!, parsed, extraHeaders, signal,
       );
       if ('error' in result) {
-        decrementSessionCount(sessionId);
+        generateCounter.decrement(sessionId);
         return { content: result.error, isError: true };
       }
       imageData = result.b64_json;
@@ -312,32 +329,20 @@ export function createImageGenerateHandler(
     // 7. Save to disk
     const imageId = crypto.randomUUID().slice(0, 8);
     const ext = parsed.output_format;
-    const cwd = context?.cwd ?? process.cwd();
-
-    let savePath: string;
-    if (parsed.output_path) {
-      // F-1: Apply the same path containment + denylist guards as write_file
-      // to prevent path traversal (e.g. ../../.ssh/authorized_keys).
-      try {
-        savePath = resolveAndContain(parsed.output_path, context, 'write', cwd);
-        assertNotDenylisted(savePath, 'image_generate');
-      } catch (err: unknown) {
-        decrementSessionCount(sessionId);
-        const msg = err instanceof Error ? err.message : String(err);
-        return { content: msg, isError: true };
-      }
-    } else {
-      const dir = path.join(cwd, '.afk', 'generated-images');
-      await fs.mkdir(dir, { recursive: true });
-      savePath = path.join(dir, `${imageId}.${ext}`);
+    const cwd = context?.resolveBase ?? process.cwd();
+    const savePathResult = await resolveGenSavePath(parsed.output_path, context, cwd, imageId, ext);
+    if ('error' in savePathResult) {
+      generateCounter.decrement(sessionId);
+      return { content: savePathResult.error, isError: true };
     }
+    const { savePath } = savePathResult;
 
     const imageBuffer = Buffer.from(imageData, 'base64');
     try {
       await fs.mkdir(path.dirname(savePath), { recursive: true });
       await fs.writeFile(savePath, imageBuffer);
     } catch (err: unknown) {
-      decrementSessionCount(sessionId);
+      generateCounter.decrement(sessionId);
       const msg = err instanceof Error ? err.message : String(err);
       return {
         content: `Image generated successfully but failed to save to disk: ${msg}`,
@@ -346,7 +351,7 @@ export function createImageGenerateHandler(
     }
 
     // 8. Session counter was incremented optimistically before the API call (F-4).
-    const newCount = getSessionCount(sessionId);
+    const newCount = generateCounter.get(sessionId);
 
     // 9. Build metadata (always returned in content regardless of inspect flag)
     const meta: Record<string, unknown> = {

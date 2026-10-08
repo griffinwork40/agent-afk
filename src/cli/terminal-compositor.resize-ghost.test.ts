@@ -25,6 +25,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { PassThrough } from 'node:stream';
 import { TerminalCompositor } from './terminal-compositor.js';
 import { VirtualScreen } from './_lib/testing/virtual-screen.js';
+import { __resetCprRttForTests } from './terminal-compositor.lifecycle.cpr.js';
 
 type MockStdout = NodeJS.WriteStream & {
   isTTY: boolean;
@@ -93,6 +94,13 @@ describe('TerminalCompositor — resize ghost erase', () => {
     stdout = makeMockStdout();
     stdin = makeMockStdin();
     writes = collectWrites(stdout);
+    // Reset the adaptive CPR RTT sample: a CPR timeout in one test seeds the
+    // RTT singleton (bootstrap fix — item 1 of PR #3240 review), causing
+    // subsequent tests to use adaptive timeouts (480 ms) instead of the
+    // baseline (120 ms).  Tests here advance by ~150 ms expecting the 120 ms
+    // CPR timeout to have already fired — without this reset, the CPR timer
+    // outlives the advance and the expected repaint never occurs.
+    __resetCprRttForTests();
   });
 
   afterEach(() => {

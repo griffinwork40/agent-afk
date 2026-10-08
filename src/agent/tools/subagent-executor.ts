@@ -19,9 +19,12 @@ import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
 import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from '../session/session-identity.js';
 import { parseAgentInput, type AgentInput, type AgentExecutionMode } from './subagent/input-parse.js';
 import { emitTelemetry, truncate } from './subagent/failure-payload.js';
-import { buildChildConfig } from './subagent/child-config.js';
-import { runBackgroundBranch } from './subagent/background-branch.js'; import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
-import { sendMessageToAgent as executeSendMessage } from './subagent/send-message.js'; import { getBackgroundJobHealth as executeBackgroundHealth } from './subagent/background-health.js';
+import { buildChildConfig, type BuildChildConfigArgs } from './subagent/child-config.js';
+import { runBackgroundBranch } from './subagent/background-branch.js';
+import { backgroundTarget } from './subagent/background-delivery.js';
+import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
+import { sendMessageToAgent as executeSendMessage } from './subagent/send-message.js';
+import { getBackgroundJobHealth as executeBackgroundHealth } from './subagent/background-health.js';
 import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
 import { createIsolatedWorktree } from './handlers/worktree-managed.js';
 import { lockWorktreeForBackground, teardownBackgroundWorktree } from './handlers/worktree-managed.background.js';
@@ -29,20 +32,16 @@ import { runWithStreamCutRetry, type StreamCutProbe } from '../subagent/stream-c
 import { debugLog } from '../../utils/debug.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { appendImageBlocks } from '../content/image-blocks.js';
-import { supportsVision } from '../model-capabilities.js';
+import { addForegroundNotices, withCatalogNotice } from './subagent-executor.notices.js';
 import { resolveSubagentAttachments } from './subagent/attachment-resolve.js';
 import { inboundAttachmentRegistry } from '../content/attachment-registry.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { buildAgentMaxDepthRefusal } from './skill-depth-message.js';
 import { checkBudgetGates, type BudgetHandle } from './subagent/budget-gate.js';
-import { collectPostRunWarnings } from './subagent-executor.write-intent.js';
+import { evaluateDispatchUsageForModel } from './usage-notice.js';
 import { buildSubagentsLite } from './subagent-executor.lite-snapshot.js';
-import {
-  buildWaveUnit,
-  createManifest,
-  updateWaveUnit,
-} from '../manifest/write.js';
-import { env } from '../../config/env.js';
+import { updateWaveUnit } from '../manifest/write.js';
+import { WaveManifestTracker } from './subagent-executor.wave-manifest.js';
 import { errorMessage } from '../../utils/errors.js';
 import type { SubagentExecutorContext, SubagentControl } from './subagent-executor/types.js';
 import type { QueuedNoteClaim, PromotedSubagentInfo } from './subagent-executor/types.js';
@@ -125,52 +124,21 @@ export class SubagentExecutor implements SubagentControl {
   // trigger in execute()'s foreground branch and cleared in the same finally.
   private readonly activeForegroundHandles = new Map<string, { cancel: () => Promise<void> }>();
 
-  // Wave manifest tracking. Set by notifyWaveStart() before a parallel batch
-  // runs; cleared (set to undefined) after all units in the batch settle.
-  // Maps tool-call id → unit id so executeOnce can update the right unit.
-  private currentWaveId: string | undefined = undefined;
-  private currentWaveCallIds: Set<string> = new Set();
+  // Wave-manifest tracking delegated to WaveManifestTracker
+  // (./subagent-executor.wave-manifest.ts). Public surface is unchanged.
+  private readonly waveTracker = new WaveManifestTracker();
 
   /**
    * Called by the dispatcher BEFORE a parallel batch of ≥2 agent tool calls
-   * starts. Creates a wave manifest with all units in 'pending' status using
-   * the tool call ids as unit ids. Fire-and-forget: never throws.
+   * starts. Creates a wave manifest with all units in 'pending' status.
+   * Fire-and-forget: never throws.
    */
   notifyWaveStart(
     calls: ReadonlyArray<ToolCall>,
     sessionId: string,
     traceLabel: string | null,
   ): void {
-    if (env.AFK_WAVE_MANIFEST_DISABLED === '1') return;
-    if (calls.length < 2) return;
-    // Only root-level sessions write manifests (depth === 0).
-    if (this.ctx.depth !== 0) return;
-    try {
-      const units = calls.map((call) => {
-        let parsed: { prompt: string; model?: string; cwd?: string } | undefined;
-        try {
-          parsed = parseAgentInput(call.input);
-        } catch {
-          parsed = undefined;
-        }
-        const prompt = parsed?.prompt ?? '';
-        const model = parsed?.model ?? 'sonnet';
-        const cwd = parsed?.cwd ?? this.currentCwd;
-        return buildWaveUnit({ id: call.id, prompt, cwd, model });
-      });
-      const waveId = createManifest({
-        source: 'agent-tool',
-        parentSessionId: sessionId,
-        traceLabel,
-        units,
-      });
-      if (waveId !== undefined) {
-        this.currentWaveId = waveId;
-        this.currentWaveCallIds = new Set(calls.map((c) => c.id));
-      }
-    } catch {
-      // Fire-and-forget: manifest errors must never abort a wave.
-    }
+    this.waveTracker.notifyWaveStart(calls, sessionId, traceLabel, this.ctx.depth, this.currentCwd);
   }
 
   /**
@@ -178,29 +146,38 @@ export class SubagentExecutor implements SubagentControl {
    * Clears the wave state.
    */
   notifyWaveEnd(): void {
-    this.currentWaveId = undefined;
-    this.currentWaveCallIds = new Set();
+    this.waveTracker.notifyWaveEnd();
   }
 
-  /**
-   * Update a unit's status in the current wave manifest. No-op when no wave
-   * is active or the call is not part of the current wave.
-   * Fire-and-forget: never throws.
-   */
   private updateCurrentWaveUnit(
     callId: string,
     status: 'running' | 'done' | 'failed',
     error?: string,
     cwd?: string,
   ): void {
-    const waveId = this.currentWaveId;
-    if (waveId === undefined) return;
-    if (!this.currentWaveCallIds.has(callId)) return;
-    const extra: { errorMessage?: string; cwd?: string } | undefined =
-      error !== undefined || cwd !== undefined
-        ? { ...(error !== undefined ? { errorMessage: error } : {}), ...(cwd !== undefined ? { cwd } : {}) }
-        : undefined;
-    updateWaveUnit(waveId, callId, status, extra);
+    this.waveTracker.updateUnit(callId, status, error, cwd);
+  }
+
+  /**
+   * Executor-context fields `buildChildConfig` inherits unchanged. Extracted
+   * from `executeOnce` (function-size ceiling). `parentRootSessionId` (#2442)
+   * falls back to this executor's live parent id, which IS the root at depth 0,
+   * so depth-1 forks seed the root id their own descendants inherit.
+   */
+  private inheritedChildConfigArgs(): Partial<BuildChildConfigArgs> {
+    const c = this.ctx;
+    const rootSessionId = c.parentRootSessionId ?? c.parentSession.sessionId;
+    return {
+      ...(c.surface !== undefined ? { surface: c.surface } : {}),
+      ...(c.allowedTools !== undefined ? { allowedTools: c.allowedTools } : {}),
+      ...(c.readOnlyBash !== undefined ? { readOnlyBash: c.readOnlyBash } : {}),
+      ...(c.agentRegistry !== undefined ? { agentRegistry: c.agentRegistry } : {}),
+      ...(c.parentModel !== undefined ? { parentModel: c.parentModel } : {}),
+      ...(c.traceWriter !== undefined ? { traceWriter: c.traceWriter } : {}),
+      ...(c.workspaceStore !== undefined ? { workspaceStore: c.workspaceStore } : {}),
+      ...(c.delegationBudget !== undefined ? { delegationBudget: c.delegationBudget } : {}),
+      ...(rootSessionId !== undefined ? { parentRootSessionId: rootSessionId } : {}),
+    };
   }
 
   supportsBackgroundJobs(): boolean { return this.ctx.backgroundRegistry !== undefined; }
@@ -432,6 +409,9 @@ export class SubagentExecutor implements SubagentControl {
     if (gate.refusal !== null) return gate.refusal;
     let budgetHandle: BudgetHandle | null = gate.handle;
 
+    // Usage notice: evaluate quota at dispatch start (observer-only, no blocking).
+    const usageNotice = await evaluateDispatchUsageForModel(this.ctx.parentModel, this.ctx.traceWriter);
+
     // Transitive read-scope propagation (see ../subagent-read-scope): compute
     // THIS child's inherited read roots from the manager that will fork it, so
     // the nested manager the child builds for its OWN grandchildren starts from
@@ -456,7 +436,7 @@ export class SubagentExecutor implements SubagentControl {
     // Build the child config + nested-dispatch wiring. All context this needs
     // is passed explicitly; the recursive child executor is injected as a
     // factory so child-config.ts never imports this class at runtime.
-    const { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree } = buildChildConfig({
+    const { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist } = buildChildConfig({
       parsed,
       namedAgent,
       depth,
@@ -475,13 +455,7 @@ export class SubagentExecutor implements SubagentControl {
       ...(this.ctx.childSkillExecutorFactory !== undefined
         ? { childSkillExecutorFactory: this.ctx.childSkillExecutorFactory }
         : {}),
-      ...(this.ctx.surface !== undefined ? { surface: this.ctx.surface } : {}),
-      ...(this.ctx.allowedTools !== undefined ? { allowedTools: this.ctx.allowedTools } : {}),
-      ...(this.ctx.readOnlyBash !== undefined ? { readOnlyBash: this.ctx.readOnlyBash } : {}),
-      ...(this.ctx.agentRegistry !== undefined ? { agentRegistry: this.ctx.agentRegistry } : {}),
-      ...(this.ctx.parentModel !== undefined ? { parentModel: this.ctx.parentModel } : {}),
-      ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}), ...(this.ctx.workspaceStore !== undefined ? { workspaceStore: this.ctx.workspaceStore } : {}),
-      ...(this.ctx.delegationBudget !== undefined ? { delegationBudget: this.ctx.delegationBudget } : {}),
+      ...this.inheritedChildConfigArgs(),
       createChildExecutor: (childCtx) => new SubagentExecutor(childCtx),
     });
 
@@ -585,7 +559,7 @@ export class SubagentExecutor implements SubagentControl {
         // subagent.ts this makes every sub-agent uniformly non-interactive.
         // (Previously only background denied; foreground leaked elicitations to
         // the REPL/Telegram human via the process-wide elicitation router.)
-        denyElicitations: true, progressEvents: parsed.progress_events,
+        denyElicitations: true, progressEvents: parsed.progress_events, ...(nestedAgentAllowlist !== undefined ? { nestedAgentAllowlist } : {}),
       });
       // Backfill: give the depth-1 child executor a real parentId (handle.id) and the
       // child's OWN journal, so depth-2 forks journal via its forSubagent (never ours).
@@ -668,11 +642,11 @@ export class SubagentExecutor implements SubagentControl {
       // notifyWaveEnd() can clear this.currentWaveId. The onSettled closure
       // outlives the wave and writes the terminal status when the background
       // job finishes, preventing false resumption offers for completed work.
-      const capturedWaveId = this.currentWaveId;
+      const capturedWaveId = this.waveTracker.waveId;
       const capturedCallId = call.id;
-      return runBackgroundBranch({
+      return withCatalogNotice(runBackgroundBranch({
         handle,
-        registry: this.ctx.backgroundRegistry,
+        ...backgroundTarget(this.ctx),
         prompt: parsed.prompt,
         model: childConfig.model,
         parentSessionId: this.ctx.parentSession.sessionId,
@@ -696,7 +670,7 @@ export class SubagentExecutor implements SubagentControl {
               debugLog(`background worktree teardown: ${JSON.stringify(result)}`);
             } : undefined,
         isolationTeardown,
-      });
+      }), childConfig.model, this.ctx.traceWriter);
     }
 
     // Invariant: assemble multimodal content only after every label, promptHead,
@@ -761,7 +735,7 @@ export class SubagentExecutor implements SubagentControl {
       ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
       depth,
       parentSessionId: this.ctx.parentSession.sessionId,
-      registry: this.ctx.backgroundRegistry,
+      ...backgroundTarget(this.ctx),
       promotionTriggers: this.promotionTriggers,
       activeForegroundHandles: this.activeForegroundHandles,
       ...(isolationTeardown !== undefined ? { isolationTeardown } : {}),
@@ -770,8 +744,7 @@ export class SubagentExecutor implements SubagentControl {
     // Budget: foreground child finished — release the slot, unless the
     // promotion path deferred it to the registry's onSettled hook (Item 4).
     if (!promotionTookBudget.value) budgetHandle?.release();
-    const warn = collectPostRunWarnings(childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, supportsVision);
-    if (warn && !result.isError) result.content = warn + result.content;
+    addForegroundNotices(result, childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, usageNotice, this.ctx.traceWriter);
     // Wave manifest: update unit to 'done' or 'failed' after the foreground run.
     if (result.isError === true) {
       this.updateCurrentWaveUnit(call.id, 'failed', typeof result.content === 'string' ? result.content.slice(0, 500) : undefined);

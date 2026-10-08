@@ -670,7 +670,7 @@ describe('discoverPluginHooksConfigs', () => {
   it('finds <plugin>/hooks/hooks.json in flat layout with pluginRoot', () => {
     const pluginDir = makePlugin(root, 'my-plugin', true);
     expect(discoverPluginHooksConfigs(root)).toEqual([
-      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir, pluginName: null },
+      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir, pluginName: null, pluginKey: 'my-plugin' },
     ]);
   });
 
@@ -680,7 +680,7 @@ describe('discoverPluginHooksConfigs', () => {
     const pluginDir = makePlugin(join(root, 'cache', 'mp1'), 'plugin-a', true);
     writeIndex(root, { 'mp1:plugin-a': { enabled: true } });
     expect(discoverPluginHooksConfigs(root)).toEqual([
-      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir, pluginName: null },
+      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir, pluginName: null, pluginKey: 'mp1:plugin-a' },
     ]);
   });
 
@@ -724,6 +724,7 @@ describe('discoverPluginHooksConfigs', () => {
       expect(found).toHaveLength(1);
       expect(found[0]!.path).toBe(join(linkPath, 'hooks', 'hooks.json'));
       expect(found[0]!.pluginRoot).toBe(linkPath);
+      expect(found[0]!.pluginKey).toBe('linked-plugin');
     } finally {
       rmSync(realBase, { recursive: true, force: true });
     }
@@ -838,7 +839,7 @@ describe('loadHooksConfig — plugin hooks gate', () => {
   // pluginName threading: plugin hooks carry the manifest name (#2459)
   // -----------------------------------------------------------------------
 
-  it('plugin hook carries pluginName from the manifest when the manifest has a name', () => {
+  it('plugin hook carries manifest pluginName and install pluginKey', () => {
     const pluginDir = join(pluginsDir, 'demo-plugin');
     // Overwrite the blank manifest written by beforeEach with a named one.
     writeFileSync(
@@ -851,6 +852,7 @@ describe('loadHooksConfig — plugin hooks gate', () => {
     const hook = result.hooks.SessionStart?.[0]?.hooks[0];
     expect(hook).toBeDefined();
     expect(hook!.pluginName).toBe('claude-jev-afk');
+    expect(hook!.pluginKey).toBe('demo-plugin');
   });
 
   it('plugin hook has pluginName=undefined when manifest has no name field', () => {
@@ -861,6 +863,7 @@ describe('loadHooksConfig — plugin hooks gate', () => {
     expect(hook).toBeDefined();
     // readPluginManifest returns null for a missing name → not set on the hook.
     expect(hook!.pluginName).toBeUndefined();
+    expect(hook!.pluginKey).toBe('demo-plugin');
   });
 });
 
@@ -929,5 +932,139 @@ describe('loadHooksConfig — pluginHookEnv parsing', () => {
     expect(result.pluginHookEnv['good-plugin']).toEqual(['MY_KEY']);
     expect(result.pluginHookEnv['bad-plugin']).toBeUndefined();
     expect(result.warnings.some((w) => w.includes('pluginHookEnv["bad-plugin"]'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// disabledPluginHooks parsing (issue #2816)
+// ---------------------------------------------------------------------------
+
+describe('loadHooksConfig — disabledPluginHooks parsing', () => {
+  let afkHome: string;
+  let projectCwd: string;
+  let originalAfkHome: string | undefined;
+
+  beforeEach(() => {
+    afkHome = join(tmp, 'afk-home-dph');
+    projectCwd = join(tmp, 'project-dph');
+    mkdirSync(join(afkHome, 'config'), { recursive: true });
+    mkdirSync(projectCwd, { recursive: true });
+    originalAfkHome = process.env['AFK_HOME'];
+    process.env['AFK_HOME'] = afkHome;
+  });
+
+  afterEach(() => {
+    if (originalAfkHome === undefined) delete process.env['AFK_HOME'];
+    else process.env['AFK_HOME'] = originalAfkHome;
+  });
+
+  function writeUserGlobalConfig(body: unknown): void {
+    writeFileSync(join(afkHome, 'config', 'afk.config.json'), JSON.stringify(body), 'utf-8');
+  }
+
+  it('disabledPluginHooks defaults to {} when not set', () => {
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.disabledPluginHooks).toEqual({});
+  });
+
+  it('disabledPluginHooks is parsed from user-global afk.config.json', () => {
+    writeUserGlobalConfig({
+      disabledPluginHooks: { 'claude-jev-afk': ['PreToolUse:/^agent$/'] },
+    });
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.disabledPluginHooks['claude-jev-afk']).toEqual(['PreToolUse:/^agent$/']);
+  });
+
+  it('disabledPluginHooks from project-local file is ignored (security gate)', () => {
+    writeFileSync(
+      join(projectCwd, 'afk.config.json'),
+      JSON.stringify({ disabledPluginHooks: { 'evil-plugin': ['PreToolUse'] } }),
+      'utf-8',
+    );
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.disabledPluginHooks).toEqual({});
+  });
+
+  it('malformed disabledPluginHooks (not an object) emits a warning and uses {}', () => {
+    writeUserGlobalConfig({ disabledPluginHooks: ['not', 'an', 'object'] });
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.disabledPluginHooks).toEqual({});
+    expect(result.warnings.some((w) => w.includes('"disabledPluginHooks" must be an object'))).toBe(true);
+  });
+
+  it('malformed per-plugin entry (not an array) emits a warning and skips that entry', () => {
+    writeUserGlobalConfig({
+      disabledPluginHooks: { 'good-plugin': ['PreToolUse'], 'bad-plugin': 'not-an-array' },
+    });
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.disabledPluginHooks['good-plugin']).toEqual(['PreToolUse']);
+    expect(result.disabledPluginHooks['bad-plugin']).toBeUndefined();
+    expect(result.warnings.some((w) => w.includes('disabledPluginHooks["bad-plugin"]'))).toBe(true);
+  });
+
+  it('multiple user-global layers union their specifiers (no duplicates)', () => {
+    // Layer 0: afk.config.json
+    writeUserGlobalConfig({
+      disabledPluginHooks: { 'my-plugin': ['PreToolUse', 'SessionStart'] },
+    });
+    // Layer 1: settings.json — adds another specifier for the same plugin
+    writeFileSync(
+      join(afkHome, 'config', 'settings.json'),
+      JSON.stringify({ disabledPluginHooks: { 'my-plugin': ['PreToolUse', 'PostToolUse'] } }),
+      'utf-8',
+    );
+    const result = loadHooksConfig({ cwd: projectCwd });
+    // Union: PreToolUse appears in both layers but should appear only once.
+    expect(result.disabledPluginHooks['my-plugin']?.sort()).toEqual(
+      ['PostToolUse', 'PreToolUse', 'SessionStart'].sort(),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isPluginHookDisabled helper (issue #2816)
+// ---------------------------------------------------------------------------
+
+import { isPluginHookDisabled } from './config-loader.js';
+
+describe('isPluginHookDisabled', () => {
+  it('returns false when the plugin has no disabled specs', () => {
+    expect(isPluginHookDisabled({}, 'my-plugin', 'PreToolUse', undefined)).toBe(false);
+  });
+
+  it('returns false when specifiers are for a different plugin', () => {
+    const map = { 'other-plugin': ['PreToolUse'] };
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PreToolUse', undefined)).toBe(false);
+  });
+
+  it('"<Event>" form suppresses all groups for that event', () => {
+    const map = { 'my-plugin': ['PreToolUse'] };
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PreToolUse', undefined)).toBe(true);
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PreToolUse', '/^agent$/')).toBe(true);
+    expect(isPluginHookDisabled(map, 'my-plugin', 'SessionStart', undefined)).toBe(false);
+  });
+
+  it('"<Event>:<matcher>" form suppresses only the matching group', () => {
+    const map = { 'my-plugin': ['PreToolUse:/^agent$/'] };
+    // Exact matcher match
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PreToolUse', '/^agent$/')).toBe(true);
+    // Different matcher → not suppressed
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PreToolUse', '*')).toBe(false);
+    // No matcher (undefined) → not suppressed
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PreToolUse', undefined)).toBe(false);
+    // Different event → not suppressed
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PostToolUse', '/^agent$/')).toBe(false);
+  });
+
+  it('undefined matcher matches the specifier "<Event>:undefined"', () => {
+    const map = { 'my-plugin': ['PreToolUse:undefined'] };
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PreToolUse', undefined)).toBe(true);
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PreToolUse', 'bash')).toBe(false);
+  });
+
+  it('returns true for the first matching specifier in a list', () => {
+    const map = { 'my-plugin': ['SessionStart', 'PreToolUse:/^agent$/'] };
+    expect(isPluginHookDisabled(map, 'my-plugin', 'SessionStart', undefined)).toBe(true);
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PreToolUse', '/^agent$/')).toBe(true);
   });
 });

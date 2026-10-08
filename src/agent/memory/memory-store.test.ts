@@ -410,7 +410,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 
     const check = new Database(dbPath, { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(4);
+      expect(check.pragma('user_version', { simple: true })).toBe(5);
       const cols = (check.pragma('table_info(sessions)') as Array<{ name: string }>).map(
         (c) => c.name,
       );
@@ -437,7 +437,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     }
   });
 
-  it('stamps a fresh DB at v4 with the actor column present', () => {
+  it('stamps a fresh DB at v5 with the actor column present', () => {
     const freshStore = new MemoryStore(migDir);
     freshStore.startSession({ session_id: 's', surface: 'cli', actor: 'main' });
     // Close before opening a readonly copy; also prevents EBUSY on Windows rmSync.
@@ -445,7 +445,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 
     const check = new Database(join(migDir, 'memory.db'), { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(4);
+      expect(check.pragma('user_version', { simple: true })).toBe(5);
       const row = check
         .prepare('SELECT actor FROM sessions WHERE session_id = ?')
         .get('s') as { actor: string | null };
@@ -455,7 +455,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     }
   });
 
-  it('handles concurrent racer adding the actor column via pre-check (no try/catch) and still reaches v4', () => {
+  it('handles concurrent racer adding the actor column via pre-check (no try/catch) and still reaches v5', () => {
     const dbPath = join(migDir, 'memory.db');
     // Simulate a cross-process race: another opener has already added the actor
     // column to the DB (user_version still 2 — the racer ran the ALTER but was
@@ -469,7 +469,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 
     const check = new Database(dbPath, { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(4);
+      expect(check.pragma('user_version', { simple: true })).toBe(5);
       const cols = (check.pragma('table_info(sessions)') as Array<{ name: string }>).map(
         (c) => c.name,
       );
@@ -520,7 +520,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 
     const check = new Database(dbPath, { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(4);
+      expect(check.pragma('user_version', { simple: true })).toBe(5);
     } finally {
       check.close();
       interrupted.close();
@@ -584,8 +584,8 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     try {
       expect(
         check2.pragma('user_version', { simple: true }),
-        'user_version must be 4 after self-heal',
-      ).toBe(4);
+        'user_version must be 5 after self-heal',
+      ).toBe(5);
       const cols = (check2.pragma('table_info(sessions)') as Array<{ name: string }>).map(
         (c) => c.name,
       );
@@ -662,6 +662,47 @@ describe('searchFacts — access tracking', () => {
 
     expect(store.getFact(idA)!.access_count).toBe(0);
     expect(store.getFact(idB)!.access_count).toBe(1);
+  });
+
+  it('a failed access-tracking UPDATE does not break the search (non-fatal)', () => {
+    // The access-tracking UPDATE inside searchFacts is wrapped in a try/catch.
+    // If the UPDATE throws (e.g. disk-full or a transient write error), the
+    // search results must still be returned to the caller.
+    store.storeFact({
+      category: 'preference',
+      content: 'uses vitest for testing',
+      source_surface: 'test',
+    });
+
+    // Force the next `prepare().run()` to throw when it matches the UPDATE
+    // access tracking query, simulating a transient write failure.
+    const originalPrepare = Database.prototype.prepare;
+    vi.spyOn(Database.prototype, 'prepare').mockImplementation(function (
+      this: BetterSqlite3.Database,
+      sql: string,
+    ) {
+      const stmt = originalPrepare.call(this, sql);
+      if (/UPDATE facts\s+SET access_count/.test(sql)) {
+        return {
+          ...stmt,
+          run: (..._args: unknown[]) => {
+            throw new Error('simulated disk-full error');
+          },
+        } as unknown as BetterSqlite3.Statement;
+      }
+      return stmt;
+    } as BetterSqlite3.Database['prepare']);
+
+    let results: ReturnType<typeof store.searchFacts> = [];
+    expect(() => {
+      results = store.searchFacts('vitest');
+    }).not.toThrow();
+
+    // Results must still be returned despite the UPDATE failure.
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]!.content).toContain('vitest');
+
+    vi.restoreAllMocks();
   });
 });
 

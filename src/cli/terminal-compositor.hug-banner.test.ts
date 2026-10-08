@@ -24,6 +24,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { PassThrough } from 'node:stream';
 import { Terminal as HeadlessTerminal } from '@xterm/headless';
 import { TerminalCompositor } from './terminal-compositor.js';
+import { mergeSeamBuffer, reshownArchivedRows } from './_lib/testing/scrollback-seam.js';
 import { createAutocompleteState } from './input/autocomplete-state.js';
 
 type MockStdout = NodeJS.WriteStream & { isTTY: boolean; columns: number; rows: number };
@@ -129,6 +130,11 @@ async function makeBannerRig(rows: number, extraOpts: { autocompleteState?: Retu
       return out;
     },
     viewportTop: () => term.buffer.active.baseY,
+    /** Buffer with the sanctioned seam overlap (re-shown archived rows) removed; see scrollback-seam.ts. */
+    async seamLines() {
+      const all = await this.lines();
+      return mergeSeamBuffer(all, term.buffer.active.baseY, reshownArchivedRows(c), dumpOf(all));
+    },
     dispose() {
       term.dispose();
       c.disarm();
@@ -255,7 +261,7 @@ describe.each([24, 62])('hug-banner: content-hug with anchorRow > 1 (%i rows)', 
     rig.c.setSpinner({ enabled: false });
     rig.repaint();
 
-    const lines = await rig.lines();
+    const lines = await rig.seamLines(); // seam overlap discounted: scrollback-seam.ts
     const dump = dumpOf(lines);
 
     // Every banner row must appear exactly once across the full buffer.

@@ -15,7 +15,8 @@ export const getBackgroundJobHealthTool: AnthropicToolDef = {
   category: 'subagent',
   concurrencySafe: true,
   description:
-    'Inspect the health and activity state of a running background subagent job. ' +
+    'Inspect the health and activity state of a running background subagent job, or of a background process (a proc- id from bash run_in_background). ' +
+    'For a process it returns status, exit code, elapsed time, bytes written, the log path and recent output. ' +
     'Returns status, elapsed time, time since last activity, pending steering message count, ' +
     'and recent progress events. Only works for jobs created by this session. ' +
     'Use before send_message_to_agent to understand what the child is doing, ' +
@@ -25,7 +26,7 @@ export const getBackgroundJobHealthTool: AnthropicToolDef = {
     properties: {
       jobId: {
         type: 'string',
-        description: 'The background job id returned by an earlier agent call in background mode.',
+        description: 'The background job id returned by an earlier agent call in background mode, or a proc- id from bash run_in_background.',
       },
     },
     required: ['jobId'],

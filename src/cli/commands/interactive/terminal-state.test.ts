@@ -374,3 +374,136 @@ describe('findTerminalStateHeadingOffset — fence-aware, agrees with parseTermi
     expect(parseTerminalState(text)).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// CommonMark fidelity for fencedLines (#2794)
+//
+// The three confirmed broken inputs from the issue table, plus the 4-backtick
+// fence variant. Each case asserts that BOTH parseTerminalState AND
+// findTerminalStateHeadingOffset agree (invariant from #2781).
+// ---------------------------------------------------------------------------
+
+describe('parseTerminalState — CommonMark fidelity (#2794)', () => {
+  // Issue table row 1: a BALANCED ```sh block ending in `done` is prose
+  // code, not a heading. Already covered by #2781 tests; re-verified here
+  // alongside the new cases to document the full table.
+  it('balanced ```sh block ending in `done` is correctly skipped (baseline)', () => {
+    const text = [
+      'Here is the loop:',
+      '```sh',
+      'for i in 1 2; do echo $i; done',
+      '```',
+      '',
+      '**Done**',
+      '- What was done: ran the loop',
+    ].join('\n');
+    expect(parseTerminalState(text)?.kind).toBe('done');
+    expect(findTerminalStateHeadingOffset(text)).toBe(text.indexOf('**Done**'));
+  });
+
+  // Issue table row 2: a line that LOOKS like a fence opener but has a
+  // backtick in the info string — e.g. "`ts foo`" — is inline code,
+  // not a fence. It must not open a block and must not hide the heading.
+  it('inline-triple-backtick line (backtick in info string) does NOT open a fence', () => {
+    const text = [
+      'See ```ts foo``` is inline code, not a fence.',
+      '',
+      '**Done**',
+      '- What was done: explained inline code',
+    ].join('\n');
+    expect(parseTerminalState(text)?.kind).toBe('done');
+    expect(findTerminalStateHeadingOffset(text)).toBe(text.indexOf('**Done**'));
+  });
+
+  // Issue table row 3: a lone ``` indented 4+ spaces is a literal indented
+  // code block in CommonMark — it is NOT a fence opener.
+  it('lone ``` indented 4 spaces is literal text, NOT a fence opener', () => {
+    const text = [
+      'Normal prose here.',
+      '    ```',
+      '',
+      '**Done**',
+      '- What was done: finished',
+    ].join('\n');
+    expect(parseTerminalState(text)?.kind).toBe('done');
+    expect(findTerminalStateHeadingOffset(text)).toBe(text.indexOf('**Done**'));
+  });
+
+  // Extra: a 4-backtick fence (````) with an inner ``` is balanced only
+  // when closed by ````; the inner ``` must not prematurely close it.
+  it('4-backtick fence with inner ``` does NOT close prematurely', () => {
+    const text = [
+      'Here is a nested example:',
+      '````md',
+      '```',
+      'inner code',
+      '```',
+      '````',
+      '',
+      '**Done**',
+      '- What was done: showed nesting',
+    ].join('\n');
+    expect(parseTerminalState(text)?.kind).toBe('done');
+    expect(findTerminalStateHeadingOffset(text)).toBe(text.indexOf('**Done**'));
+  });
+
+  // Lone ``` indented exactly 3 spaces IS a valid fence opener (edge of
+  // the 0–3 space window).
+  it('lone ``` indented 3 spaces IS a fence opener (hides Done inside)', () => {
+    const text = [
+      'Some prose.',
+      '   ```',
+      'done',
+      '   ```',
+      '',
+      '**Done**',
+      '- What was done: confirmed',
+    ].join('\n');
+    // The 3-space-indented ``` opens a fence; "done" inside is fenced; the
+    // real **Done** heading after the closing fence is visible.
+    expect(parseTerminalState(text)?.kind).toBe('done');
+    expect(findTerminalStateHeadingOffset(text)).toBe(text.indexOf('**Done**'));
+  });
+
+  // Invariant: a line indented 4+ spaces is a CommonMark indented code block,
+  // NOT a heading. lineToKind trims before matching, so the indent guard in
+  // parseTerminalState (and findTerminalStateHeadingOffset) must reject these
+  // lines before lineToKind is called.
+  it('4-space-indented bare keyword is NOT a terminal-state heading', () => {
+    // "    Blocked" with 4 leading spaces — indented code block, not a heading.
+    expect(parseTerminalState('    Blocked')).toBeNull();
+    expect(parseTerminalState('    Done')).toBeNull();
+    expect(findTerminalStateHeadingOffset('    Blocked')).toBe(-1);
+    expect(findTerminalStateHeadingOffset('    Done')).toBe(-1);
+    // 3-space indent IS still a valid heading (the 0–3 space window).
+    expect(parseTerminalState('   Blocked')?.kind).toBe('blocked');
+    expect(findTerminalStateHeadingOffset('   Blocked')).toBe(0);
+  });
+});
+
+describe('findTerminalStateHeadingOffset — CommonMark fidelity, agrees with parseTerminalState (#2794)', () => {
+  it('inline-triple-backtick line: both return the heading position', () => {
+    const text = [
+      '```ts foo``` is inline code.',
+      '',
+      '**Done**',
+      '- What was done: checked',
+    ].join('\n');
+    const offset = findTerminalStateHeadingOffset(text);
+    expect(offset).toBe(text.indexOf('**Done**'));
+    expect(parseTerminalState(text)?.kind).toBe('done');
+  });
+
+  it('4-space-indented lone ```: both return the heading position', () => {
+    const text = [
+      'Normal prose.',
+      '    ```',
+      '',
+      '**Done**',
+      '- What was done: checked',
+    ].join('\n');
+    const offset = findTerminalStateHeadingOffset(text);
+    expect(offset).toBe(text.indexOf('**Done**'));
+    expect(parseTerminalState(text)?.kind).toBe('done');
+  });
+});

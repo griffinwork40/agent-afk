@@ -18,6 +18,7 @@
 
 import { existsSync } from 'node:fs';
 import { win32 } from 'node:path';
+import { env } from '../config/env.js';
 
 /** Return type for {@link resolveShell}. */
 export interface ShellResolution {
@@ -34,20 +35,113 @@ const GIT_BASH_PATHS: readonly string[] = [
 ];
 
 /**
+ * Build the list of path segment prefixes that identify WSL / Windows-App-Execution-Alias
+ * bash.exe copies that are NOT Git Bash.  Comparisons are case-insensitive
+ * because Windows paths are case-insensitive.
+ *
+ * - `%SystemRoot%\System32` holds the old WSL 1 bash.exe shim.
+ * - `%LOCALAPPDATA%\Microsoft\WindowsApps` holds the WSL App Execution Alias
+ *   (an exe placeholder that redirects into WSL).
+ *
+ * We derive these from env vars at call time rather than hard-coding
+ * `C:\Windows` so they work on machines with non-default Windows roots and
+ * so tests can inject arbitrary values.
+ *
+ * Callers compute this once per PATH scan and pass the result into
+ * {@link isWslBash} — avoiding repeated env reads inside the scan loop while
+ * also keeping test isolation clean (tests stub env between cases; a
+ * module-level lazy cache would freeze the first test's env for all
+ * subsequent cases).
+ */
+function buildWslPrefixes(): readonly string[] {
+  const sysroot = (env.SystemRoot ?? 'C:\\Windows').toLowerCase();
+  const localAppData = (env.LOCALAPPDATA ?? '').toLowerCase();
+  const prefixes = [`${sysroot}\\system32`];
+  if (localAppData) {
+    prefixes.push(`${localAppData}\\microsoft\\windowsapps`);
+  }
+  return prefixes;
+}
+
+/**
+ * Return true when `candidate` is a WSL-owned bash.exe that should be skipped.
+ * Matching is prefix-based and case-insensitive.
+ *
+ * Invariant: each prefix is compared with a trailing backslash so that a
+ * sibling directory sharing the same base (e.g. System32Git) is NOT
+ * misclassified.  The trailing separator is appended inside this function so
+ * callers never need to think about it.
+ *
+ * @param prefixes - Pre-built prefix list from {@link buildWslPrefixes}.
+ *   Callers hoist this outside the scan loop so env is read only once per scan.
+ */
+function isWslBash(candidate: string, prefixes: readonly string[]): boolean {
+  const lower = candidate.toLowerCase();
+  return prefixes.some((prefix) => lower.startsWith(prefix + '\\'));
+}
+
+/**
+ * Try to locate bash.exe by finding `git.exe` on PATH and resolving the
+ * sibling `bin\bash.exe`.  Git for Windows always ships bash.exe alongside
+ * git.exe, so `<git-root>\cmd\git.exe` → `<git-root>\bin\bash.exe`.
+ *
+ * Assumption: git.exe is exactly two path segments deep inside the Git install
+ * root (i.e. `<root>\cmd\git.exe`), so two `dirname` calls reach the root.
+ * Shallow PATH entries where git.exe sits directly in the install root would
+ * resolve one level too high; that edge-case is uncommon in practice (Git for
+ * Windows always uses the `cmd\` sub-directory) and is guarded by the
+ * subsequent `existsSync` call on the derived bash.exe path.
+ *
+ * This catches non-standard Git installs (e.g. bundled under %LOCALAPPDATA%)
+ * that are not covered by the hard-coded Program Files paths.
+ *
+ * Runs after the known-path check (`GIT_BASH_PATHS`) but before the generic
+ * PATH scan: it is more targeted than a raw PATH scan (only paths that also
+ * contain git.exe are considered) while still covering non-standard install
+ * locations that the hard-coded list misses.
+ *
+ * @param prefixes - Pre-built WSL prefix list; passed in to avoid re-reading
+ *   env on every iteration of the outer PATH scan.
+ * @returns Absolute path to bash.exe derived from git.exe, or `undefined`.
+ */
+function findGitBashViaGitExe(prefixes: readonly string[]): string | undefined {
+  const pathDirs = (env.PATH ?? '').split(';');
+  for (const dir of pathDirs) {
+    const gitExe = win32.join(dir, 'git.exe');
+    if (!existsSync(gitExe)) continue;
+    // Git for Windows layout: <root>\cmd\git.exe  →  <root>\bin\bash.exe
+    const gitRoot = win32.dirname(win32.dirname(gitExe));
+    const candidate = win32.join(gitRoot, 'bin', 'bash.exe');
+    if (!isWslBash(candidate, prefixes) && existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+/**
  * Locate `bash.exe` on Windows by checking `MSYSTEM`, known install paths,
- * and then every directory in `%PATH%`.
+ * a `git.exe`-derived path, and then every directory in `%PATH%` (excluding
+ * WSL-owned bash.exe copies).
+ *
+ * Candidates under `%SystemRoot%\System32` and
+ * `%LOCALAPPDATA%\Microsoft\WindowsApps` are always skipped because those
+ * paths host the WSL bash shim / App Execution Alias, not Git Bash.
  *
  * @returns Absolute path to bash.exe, or `undefined` if not found.
  */
 function findGitBashOnWindows(): string | undefined {
+  // Build WSL prefix list once for this entire PATH scan, not on every call
+  // to isWslBash — env reads are cheap, but hoisting keeps the loop tight
+  // and makes the intent clear.
+  const prefixes = buildWslPrefixes();
+
   // MSYSTEM is set by Git Bash environments — if it is present we are almost
   // certainly running inside Git Bash already, so `bash.exe` is on PATH.
   // Use win32.join so path construction is correct even when tests run on macOS.
-  if (process.env['MSYSTEM'] !== undefined) {
-    const pathDirs = (process.env['PATH'] ?? '').split(';');
+  if (env.MSYSTEM !== undefined) {
+    const pathDirs = (env.PATH ?? '').split(';');
     for (const dir of pathDirs) {
       const candidate = win32.join(dir, 'bash.exe');
-      if (existsSync(candidate)) return candidate;
+      if (!isWslBash(candidate, prefixes) && existsSync(candidate)) return candidate;
     }
   }
 
@@ -56,11 +150,16 @@ function findGitBashOnWindows(): string | undefined {
     if (existsSync(p)) return p;
   }
 
-  // Last resort: scan PATH.
-  const pathDirs = (process.env['PATH'] ?? '').split(';');
+  // Derive from git.exe on PATH — catches non-standard install locations
+  // (e.g. %LOCALAPPDATA%\Programs\Git) before falling back to a raw PATH scan.
+  const viaGit = findGitBashViaGitExe(prefixes);
+  if (viaGit !== undefined) return viaGit;
+
+  // Last resort: scan PATH, skipping WSL-owned bash.exe copies.
+  const pathDirs = (env.PATH ?? '').split(';');
   for (const dir of pathDirs) {
     const candidate = win32.join(dir, 'bash.exe');
-    if (existsSync(candidate)) return candidate;
+    if (!isWslBash(candidate, prefixes) && existsSync(candidate)) return candidate;
   }
 
   return undefined;

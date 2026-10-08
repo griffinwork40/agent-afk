@@ -566,6 +566,71 @@ describe('CronScheduler — "Done" verification (doneUnverified)', () => {
 type TaskCompletionDetails = import('./scheduler.js').TaskCompletionDetails;
 type TelemetryRecord = import('./scheduler.js').TelemetryRecord;
 
+describe('CronScheduler — onTaskTurnComplete (session sidecar persistence)', () => {
+  let dir: string;
+  let telemetryPath: string;
+  beforeEach(() => {
+    dir = makeTmpDir();
+    telemetryPath = join(dir, 'forge-telemetry.jsonl');
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function sessionWithId(response: string): AgentSession {
+    const s = makeSession({ response, metadata: { sessionId: 'meta-id' } });
+    Object.defineProperty(s, 'sessionId', { value: 'live-id' });
+    Object.defineProperty(s, 'cwd', { value: '/task/cwd' });
+    return s;
+  }
+
+  it('hands the completed run (redacted) to the hook with session id and cwd', async () => {
+    const onTaskTurnComplete = vi.fn();
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => sessionWithId('all good'),
+      onTaskTurnComplete,
+    });
+    scheduler.register({ taskId: 'job', command: 'run it', trigger: 'cron', cronExpression: '* * * * *' });
+    await scheduler.tick('job');
+    await scheduler.stop();
+    expect(onTaskTurnComplete).toHaveBeenCalledTimes(1);
+    const args = onTaskTurnComplete.mock.calls[0]?.[0] as { task: { taskId: string }; sessionId: string; cwd: string; userInput: string; response: { content: string } };
+    expect(args.task.taskId).toBe('job');
+    expect(args.sessionId).toBe('live-id');
+    expect(args.cwd).toBe('/task/cwd');
+    expect(args.userInput).toBe('run it');
+    expect(args.response.content).toBe('all good');
+  });
+
+  it('is not called when the run fails', async () => {
+    const onTaskTurnComplete = vi.fn();
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => makeSession({ throws: new Error('boom') }),
+      onTaskTurnComplete,
+    });
+    scheduler.register({ taskId: 'job', command: 'run it', trigger: 'cron', cronExpression: '* * * * *' });
+    await scheduler.tick('job');
+    await scheduler.stop();
+    expect(onTaskTurnComplete).not.toHaveBeenCalled();
+  });
+
+  it('a throwing hook never fails a successful tick', async () => {
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => sessionWithId('ok'),
+      onTaskTurnComplete: () => {
+        throw new Error('disk full');
+      },
+    });
+    scheduler.register({ taskId: 'job', command: 'run it', trigger: 'cron', cronExpression: '* * * * *' });
+    const record = await scheduler.tick('job');
+    await scheduler.stop();
+    expect(record.status).toBe('success');
+  });
+});
+
 describe('CronScheduler — witness trace-writer wiring', () => {
   let dir: string;
   let telemetryPath: string;
@@ -740,7 +805,7 @@ describe('CronScheduler — MCP fixture wiring', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     },
-    { timeout: 15_000 },
+    15_000,
   );
 });
 
@@ -818,7 +883,7 @@ describe('CronScheduler — spawnSession error-path cleanup (#247)', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     },
-    { timeout: 15_000 },
+    15_000,
   );
 
   it(
@@ -887,7 +952,7 @@ describe('CronScheduler — spawnSession error-path cleanup (#247)', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     },
-    { timeout: 15_000 },
+    15_000,
   );
 });
 
@@ -962,7 +1027,7 @@ describe('CronScheduler — mcp_connect_* trace phases', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     },
-    { timeout: 15_000 },
+    15_000,
   );
 });
 
@@ -1310,6 +1375,7 @@ describe('CronScheduler — overlap guard (#2299)', () => {
     let sessionCallCount = 0;
     const scheduler = new CronScheduler({
       telemetryPath,
+      budgetGate: async () => ({ skip: false }),
       sessionFactory: () => {
         sessionCallCount += 1;
         return {

@@ -19,6 +19,9 @@ import {
   retryAfterDelayMs,
 } from './retry.js';
 import { emitAndSleepRetry } from './stream-drive.retry.js';
+import { isConnectionTimeoutError, isConnectionPhaseNetworkError, isRetryableConnectionStatus } from '../../shared/connection-error.js';
+import { ConnectionRetryBudget, connectionFailureMetadata } from '../../shared/connection-retry-budget.js';
+import { emitSessionPhase } from '../../../trace/emit.js';
 
 /** Outcome returned by {@link runConnectionPhase}. */
 export type ConnectionOutcome<TEvent> =
@@ -43,18 +46,45 @@ export async function runConnectionPhase<TEvent>(
   userSignal: AbortSignal,
   traceWriter: TraceSink | undefined,
   resolvedModel: string,
+  endpoint?: string,
 ): Promise<ConnectionOutcome<TEvent>> {
-  for (let attempt = 0; ; attempt++) {
+  const budget = new ConnectionRetryBudget();
+  const trace = (phase: 'connection_failure' | 'connection_recovered' | 'connection_budget_exhausted', metadata: Record<string, string | number | boolean>): void => {
+    void emitSessionPhase(traceWriter, { phase, resolvedModel, metadata });
+  };
+  let networkAttempts = 0;
+  let overloadAttempts = 0;
+  for (;;) {
     try {
+      // Invariant: turn-driver dispatches tools only after driveStream returns a
+      // completed iteration. A failed opener has no tool effects to duplicate.
       const stream = await createStream(streamSignal);
+      if (networkAttempts) trace('connection_recovered', { attempts: networkAttempts + 1, outageMs: budget.elapsedMs() });
       return { ok: true, stream };
     } catch (err) {
       // A watchdog abort during connection is NOT a user interrupt. Check the
-      // USER signal explicitly so TTFB/stall timeouts are not swallowed.
+      // userSignal explicitly so TTFB/stall timeouts are not swallowed.
       if (userSignal.aborted) return { ok: false, error: 'aborted' };
-      if (isRetryableConnectionError(err) && attempt < MAX_CONNECTION_RETRIES) {
+      // An `APIConnectionTimeoutError` while `streamSignal` is NOT aborted is the
+      // SDK's own connect timeout (an AFK watchdog abort surfaces as
+      // APIUserAbortError), so it is a transient blip, not the TTFB window.
+      // See isConnectionTimeoutError. Kept out of isRetryableConnectionError
+      // because that predicate has no signal to gate on.
+      const sdkTimeout = isConnectionTimeoutError(err) && !streamSignal.aborted;
+      const retryable = sdkTimeout || isRetryableConnectionError(err);
+      // Invariant: network errors (DNS, socket, connection-phase status codes)
+      // and non-network retryable errors (429 rate-limit, 503 overload) use
+      // independent attempt counters so exhausting one budget does not starve
+      // the other. Mirrors anthropic-direct's connectionAttempts/overloadAttempts.
+      const network = sdkTimeout || isConnectionPhaseNetworkError(err) || isRetryableConnectionStatus(err);
+      if (network && !streamSignal.aborted) trace('connection_failure', connectionFailureMetadata(err, budget, endpoint));
+      const attempt = network ? networkAttempts : overloadAttempts;
+      const allowed = network ? budget.canRetry(attempt, MAX_CONNECTION_RETRIES) : attempt < MAX_CONNECTION_RETRIES;
+      if (retryable && (budget.budgetMs === undefined || !streamSignal.aborted) && allowed) {
+        if (network) networkAttempts++; else overloadAttempts++;
         const hinted = retryAfterDelayMs(err);
-        const delay = hinted ?? computeBackoffDelay(attempt);
+        const legacyDelay = hinted ?? computeBackoffDelay(attempt);
+        const delay = network ? budget.delay(legacyDelay, 2_000, attempt) : legacyDelay;
         // Item 2: sleep on streamSignal so the TTFB watchdog can abort a long
         // retry-after sleep and trigger the retryable TTFB path. Check the user
         // signal after the sleep to distinguish watchdog abort from user interrupt.
@@ -71,8 +101,14 @@ export async function runConnectionPhase<TEvent>(
           },
         );
         if (userAborted) return { ok: false, error: 'aborted' };
+        if (budget.budgetMs !== undefined && streamSignal.aborted) return { ok: false, error: err };
+        if (network && budget.budgetMs !== undefined && !budget.canRetry(networkAttempts, MAX_CONNECTION_RETRIES)) {
+          trace('connection_budget_exhausted', connectionFailureMetadata(err, budget, endpoint));
+          return { ok: false, error: err };
+        }
         continue;
       }
+      if (network && !streamSignal.aborted) trace('connection_budget_exhausted', connectionFailureMetadata(err, budget, endpoint));
       return { ok: false, error: err };
     }
   }

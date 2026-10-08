@@ -48,12 +48,14 @@ import { patchApplyHandler, createPatchApplyHandler } from './patch-apply.js';
 import { testRunHandler } from './test-run.js';
 import { getFacetHandler } from './get-facet.js';
 import { jsonQueryHandler, createJsonQueryHandler } from './json-query.js';
+import { modelCompleteHandler, createModelCompleteHandler } from './model-complete.js';
 import {
   clipboardWriteHandler,
   clipboardReadHandler,
   createClipboardWriteHandler,
   createClipboardReadHandler,
 } from './clipboard.js';
+import { listSessionsHandler, sendToSessionHandler } from './peer.js';
 
 /**
  * Build the built-in tool handler map for a session.
@@ -95,6 +97,7 @@ export function createBuiltinHandlers(
   const worktree = createWorktreeHandler(cwd);
   const patchApply = cwd !== undefined ? createPatchApplyHandler(cwd) : patchApplyHandler;
   const jsonQuery = cwd !== undefined ? createJsonQueryHandler(cwd) : jsonQueryHandler;
+  const modelComplete = cwd !== undefined ? createModelCompleteHandler(cwd) : modelCompleteHandler;
   return new Map<string, ToolHandler>([
     ['bash', bash],
     ['read_file', readFile],
@@ -132,8 +135,11 @@ export function createBuiltinHandlers(
     ['test_run', testRunHandler],
     ['get_facet', getFacetHandler],
     ['json_query', jsonQuery],
+    ['model_complete', modelComplete],
     ['clipboard_write', clipboardWriteHandler],
     ['clipboard_read', clipboardReadHandler],
+    ['list_sessions', listSessionsHandler],
+    ['send_to_session', sendToSessionHandler],
   ]);
 }
 
@@ -174,9 +180,12 @@ export {
   testRunHandler,
   getFacetHandler,
   jsonQueryHandler,
+  modelCompleteHandler,
   createJsonQueryHandler,
   clipboardWriteHandler,
   clipboardReadHandler,
   createClipboardWriteHandler,
   createClipboardReadHandler,
+  listSessionsHandler,
+  sendToSessionHandler,
 };

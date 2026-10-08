@@ -62,6 +62,8 @@ export function renderBudgetPreamble(maxRounds: number): string {
     `${maxRounds} is a hard ceiling, not a target. Aim to finish well under it. When the budget is`,
     'spent you get one final reply with tools removed and must answer from what you already',
     'gathered, so a partial answer delivered early beats a complete one you never get to give.',
+    'Persist requested artifacts early, then update them as you go. Near the cap, stop adding scope.',
+    'Your final reply IS the deliverable: findings, evidence, and remaining work, never future actions.',
     'If new evidence has stopped changing your conclusion, stop gathering and answer now.',
     'When writing code, a partial result should be an internally consistent checkpoint --',
     'not knowingly broken, unverified, or incoherent code returned merely to finish early.',

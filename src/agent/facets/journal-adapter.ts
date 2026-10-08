@@ -24,6 +24,7 @@
 import { extractRawToolInput } from './raw-input.js';
 import type { SubagentToolSummary, ToolEventInput } from './schema.js';
 import type { JournalBlock, JournalRecord, JournalResultPart } from '../journal/types.js';
+import { detectPrUrlFromEvents } from './derive.pr-detect.js';
 
 export interface JournalAdapterOptions {
   /**
@@ -97,6 +98,8 @@ export function journalRecordsToToolEvents(
   const toolUseCommand = new Map<string, string | undefined>(); // id → bash command summary
   const toolResultText = new Map<string, string>(); // id → result text
   const toolResultError = new Map<string, boolean>(); // id → isError
+  const toolResultIncomplete = new Map<string, true>(); // id → incomplete (#2970)
+  const toolResultPartialCount = new Map<string, number>(); // id → partial node count (#2978)
 
   for (const rec of records) {
     if (rec.kind !== 'append') continue;
@@ -121,6 +124,17 @@ export function journalRecordsToToolEvents(
         if (block.isError !== undefined) {
           toolResultError.set(block.toolUseId, block.isError);
         }
+        // #2970/#2978: incomplete (+ compose partialNodeCount) is written by
+        // the provider journal adapters. Old journal records that lack it are
+        // read as absent (= not incomplete), the correct conservative default.
+        // Sticky, unlike the text above: a later re-append that lost the flag
+        // (a cloned native has no tag) must not erase a recorded partial.
+        if (block.incomplete === true) {
+          toolResultIncomplete.set(block.toolUseId, true);
+          if (typeof block.partialNodeCount === 'number') {
+            toolResultPartialCount.set(block.toolUseId, block.partialNodeCount);
+          }
+        }
       }
     }
   }
@@ -134,6 +148,8 @@ export function journalRecordsToToolEvents(
     const input = toolUseCommand.get(id);
     const result = toolResultText.get(id);
     const isError = toolResultError.get(id);
+    const incomplete = toolResultIncomplete.get(id);
+    const partialNodeCount = toolResultPartialCount.get(id);
     const ev: ToolEventInput = {
       toolName,
       toolUseId: id,
@@ -141,6 +157,8 @@ export function journalRecordsToToolEvents(
       ...(inputRaw !== undefined ? { inputRaw } : {}),
       ...(result !== undefined ? { result } : {}),
       ...(isError !== undefined ? { isError } : {}),
+      ...(incomplete === true ? { incomplete: true } : {}),
+      ...(partialNodeCount !== undefined ? { partialNodeCount } : {}),
     };
     events.push(ev);
   }
@@ -152,6 +170,10 @@ export function journalRecordsToToolEvents(
  * Build a SubagentToolSummary from one subagent's journal records.
  * Only tool_use blocks contribute (not results) — we count calls, not
  * round trips. Uses first-seen dedup by toolUseId (same as parent path).
+ *
+ * Also detects PRs opened by the subagent (#2795 gap 6): converts the
+ * records to ToolEventInput[] (same path as the parent journal) and runs
+ * detectPrUrlFromEvents so the parent session can pick up the URL.
  */
 export function summarizeSubagentJournal(
   subagentId: string,
@@ -185,5 +207,16 @@ export function summarizeSubagentJournal(
     }
   }
 
-  return { subagent_id: subagentId, tool_calls: toolCalls, tool_errors: toolErrors, tool_counts: toolCounts };
+  // PR detection: convert records to ToolEventInput so detectPrUrlFromEvents
+  // can apply the same invocation rules as the parent path. (#2795 gap 6)
+  const events = journalRecordsToToolEvents(records);
+  const detectedPrUrl = detectPrUrlFromEvents(events);
+
+  return {
+    subagent_id: subagentId,
+    tool_calls: toolCalls,
+    tool_errors: toolErrors,
+    tool_counts: toolCounts,
+    ...(detectedPrUrl !== null ? { detected_pr_url: detectedPrUrl } : {}),
+  };
 }

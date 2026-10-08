@@ -19,7 +19,8 @@
  *   1. custom name    — a user-assigned `name` on a binding      (tier; {@link slotForInput})
  *   2. neutral name   — `local` | `small` | `medium` | `large`   (tier; {@link slotForInput})
  *   3. identity alias — haiku/sonnet/opus/fable/*_1m/grok → fixed id   ({@link resolveBinding})
- *   4. otherwise      — raw concrete id or the `auto` sentinel (passthrough)
+ *   4. slot id match  — a raw id equal to a configured slot's `id` carries that slot's creds
+ *   5. otherwise      — raw concrete id or the `auto` sentinel (passthrough)
  *
  * Bindings are process-global config (one afk.config.json + env per process),
  * read threadlessly by `providerForModel`/`resolveModelId` via
@@ -103,7 +104,13 @@ export type ModelSlots = Record<SlotName, ModelSlotBinding>;
  * DEFAULTS) and {@link DIRECT_MODEL_ALIASES} (the stable `haiku`/`sonnet`/`opus`
  * identity handles) so a tier default and its namesake alias can never drift.
  */
-export const CLAUDE_HAIKU_ID = 'claude-haiku-4-5-20251001';
+// Claude Haiku 5.5 (released 2026-10-07) — dateless wire id, itself a pinned
+// snapshot ("a fixed model ID with no date suffix and no separate alias", per
+// the Haiku 5.5 migration guide). Bumped from claude-haiku-4-5-20251001; the
+// `haiku` alias and the `small` tier default follow this constant. To roll
+// back, revert this one line: model-limits.ts / pricing.ts keep entries for
+// both wire ids, and Haiku 4.5 stays reachable by its raw id either way.
+export const CLAUDE_HAIKU_ID = 'claude-haiku-5-5';
 // Claude Sonnet 4.6 — the `sonnet`/`sonnet_1m` aliases and the `medium` tier
 // default all follow this constant. Deliberately NOT Sonnet 5: 4.6 is the better
 // fit for this harness's agentic + subagent workloads, and its tokenizer packs
@@ -129,8 +136,10 @@ export const CLAUDE_OPUS_ID = 'claude-opus-5-5';
  * exact model even if {@link CLAUDE_OPUS_ID} is later bumped to Opus 6+.
  */
 export const CLAUDE_OPUS_55_ID = 'claude-opus-5-5';
-/** Claude Fable 5 wire id — Anthropic's most-capable widely-released model. */
+/** Claude Fable 5 wire id — preserved for explicit raw-id back-compat. */
 export const CLAUDE_FABLE_5_ID = 'claude-fable-5';
+/** Claude Fable 5.1 wire id — current target for the stable `fable` alias. */
+export const CLAUDE_FABLE_5_1_ID = 'claude-fable-5-1';
 /**
  * Current xAI Grok flagship wire id — the concrete target for the `grok`
  * short alias. Update this constant when a new flagship ships; the alias
@@ -185,7 +194,7 @@ export const DIRECT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   sonnet: CLAUDE_SONNET_ID,
   sonnet_1m: CLAUDE_SONNET_ID,
   haiku: CLAUDE_HAIKU_ID,
-  fable: CLAUDE_FABLE_5_ID,
+  fable: CLAUDE_FABLE_5_1_ID,
   // xAI Grok flagship alias — a stable short handle that tracks
   // GROK_FLAGSHIP_ID so upgrading the default Grok model is a one-line
   // change. Not a capability tier: `grok` always resolves to one pinned id.
@@ -358,9 +367,10 @@ export function slotForInput(input: string, bindings: ModelSlots = getSlotBindin
  * neutral name) resolve to the configured `bindings[slot]` (id + any per-slot
  * provider/baseUrl/apiKey); fixed-identity aliases ({@link DIRECT_MODEL_ALIASES}
  * — `sonnet`/`opus`/`haiku`/`fable`/`*_1m`) resolve to a bare `{ id }` pinned to
- * their canonical wire id; raw ids and the `auto` sentinel also resolve to a bare
- * `{ id }` with no credentials. The returned object may be the live binding —
- * treat it as read-only.
+ * their canonical wire id; a raw id that matches a configured slot's `id`
+ * (case-insensitive) carries that slot's provider/baseUrl/apiKey; unbound raw
+ * ids and the `auto` sentinel resolve to a bare `{ id }` with no credentials.
+ * The returned object may be the live binding — treat it as read-only.
  */
 export function resolveBinding(
   input: string | undefined,
@@ -369,10 +379,16 @@ export function resolveBinding(
   if (input === undefined) return { id: '' };
   const slot = slotForInput(input, bindings);
   if (slot) return bindings[slot];
+  const trimmed = input.trim().toLowerCase();
   // Fixed-id aliases (e.g. `fable` → claude-fable-5) are not tiers, so they
   // bypass slot bindings and resolve straight to their pinned wire id.
-  const directId = DIRECT_MODEL_ALIASES[input.trim().toLowerCase()];
+  const directId = DIRECT_MODEL_ALIASES[trimmed];
   if (directId) return { id: directId };
+  // A raw id that matches a configured slot's own id carries that slot's
+  // provider/baseUrl/apiKey. Prefer the first match in SLOT_NAMES order.
+  for (const s of SLOT_NAMES) {
+    if (bindings[s].id.trim().toLowerCase() === trimmed && trimmed) return bindings[s];
+  }
   return { id: input };
 }
 
@@ -495,6 +511,12 @@ function parseContextWindow(value: unknown): number | undefined {
  * a matching `contextWindow`. Used by `contextLimitFor` in `model-limits.ts` to
  * honour per-slot overrides on the real provider path (the provider passes the
  * resolved concrete id, not the tier alias).
+ *
+ * Tie-breaking: when two slots bind the SAME id but different `contextWindow`
+ * values, the first slot in `SLOT_NAMES` order (`local → small → medium → large`)
+ * wins. This is deterministic and intentional — the lower-tier slot is more
+ * user-configured and more specific. Add `contextWindow` only to the tier you
+ * intend to raise; a second binding with a different value will silently lose.
  */
 export function contextWindowOverrideFor(
   concreteId: string,

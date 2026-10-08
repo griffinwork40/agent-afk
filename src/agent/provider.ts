@@ -22,6 +22,7 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AgentConfig } from './types/config-types.js';
 import type { ToolFailureClass } from './trace/types.js';
+import type { UsageLimitProvider } from '../utils/errors.js';
 
 /**
  * Normalized session identity emitted on the synthetic `session.init` event.
@@ -98,6 +99,8 @@ export interface ProviderProgress {
   taskId: string;
   description: string;
   summary?: string;
+  roundsUsed?: number;
+  budget?: number;
   lastToolName?: string;
   totalTokens: number;
   toolUses: number;
@@ -227,6 +230,12 @@ export type ProviderEvent =
        * `incomplete: true`; absent otherwise.
        */
       incompleteReason?: string;
+      /**
+       * Compose only: number of partial DAG nodes, plumbed from
+       * `ToolResult.partialNodeCount`. Present only alongside
+       * `incomplete: true` (#2978).
+       */
+      partialNodeCount?: number;
       /**
        * Plumbed from `ToolResult.failureClass` — WHY this call returned
        * `isError: true`. Present only alongside `isError: true`; an absent
@@ -369,6 +378,26 @@ export type ProviderEvent =
        * (auto-resume → "no need to retype"; manual → "send the message again").
        */
       autoResume?: boolean;
+      /**
+       * Absolute wall-clock deadline by which this park will end (either by
+       * resuming or by surfacing the error). Present when the provider has
+       * bounded the park (e.g. the hot-swap wait loop capped at TWO_HOURS_MS).
+       * Absent for unbounded parks. The watchdog and pause-ceiling prefer this
+       * over `resetsAt` when present, because `resetsAt` may be days away (a
+       * far-reset park) while `waitDeadline` is always the actual exit time.
+       * MUST NOT be used by UI layers to show "resumes at X" copy — that role
+       * belongs to `resetsAt`. Use only for timeout arithmetic.
+       */
+      waitDeadline?: Date;
+      /**
+       * Which subscription hit its limit. `'anthropic'` = Claude, `'codex'` =
+       * the ChatGPT/Codex subscription backend. Absent means unknown (a
+       * generic OpenAI-compatible quota 429); UI layers treat absent as the
+       * legacy Claude copy for backward compatibility.
+       */
+      provider?: UsageLimitProvider;
+      /** Subscription plan label when the provider reports one (e.g. `plus`). */
+      plan?: string;
     }
   | {
       type: 'resumed';
@@ -506,6 +535,17 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
    * `AgentSession.setBeforeNextRound()` calls this only when present.
    */
   setBeforeNextRound?(cb: (() => string | undefined) | undefined): void;
+  /**
+   * Optional. Wire the provider-side stop-hook seam (issue #2714).
+   * When wired, the provider calls this callback before emitting `turn.completed`
+   * on natural turn ends. A return value of `{ continueWith: string }` causes
+   * the provider to push a framework user message and re-enter the model loop
+   * in the same turn. `undefined` / `{}` ends the turn normally.
+   *
+   * Wired by `AgentSession.wireStopHook()` via the session layer, so the same
+   * mechanism that delivers Stop on every surface also enables continuation.
+   */
+  setBeforeTurnEnd?(cb: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined): void;
   /**
    * Optional. Force a fresh SDK client by re-reading whatever credential
    * source the provider uses (e.g. the macOS Keychain for OAuth tokens).

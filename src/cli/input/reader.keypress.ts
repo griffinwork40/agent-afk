@@ -24,6 +24,7 @@ import {
   handleReverseSearchKey,
 } from './reader.reverse-search.js';
 import { InputCore } from '../input-core.js';
+import { isCprSequence } from './emit-keypress.js';
 import type { ReaderState } from './reader.state.js';
 import type { RepaintCtx, repaint as _repaint, schedulePaint as _schedulePaint } from './reader.repaint.js';
 import type { applySelection as _applySelection } from './reader.selection.js';
@@ -60,6 +61,14 @@ export function handleKeypress(
   applySelectionFn: typeof _applySelection,
 ): void {
   const { opts, stdout, repaintCtx, callbacks, pasteWindowMs } = kCtx;
+
+  // CPR keypress guard (Gap 2 — #3206): drop a late CPR reply that slipped
+  // through after the compositor's per-request data listener timed out.
+  // isCprSequence returns true only while the guard is armed (a CPR was
+  // recently expected or just timed out) AND the sequence matches the CPR
+  // reply pattern — so ordinary F3/Ctrl+F3 keypresses are unaffected outside
+  // that narrow window.  See emit-keypress.ts for the F3 disambiguation note.
+  if (isCprSequence(process.stdin, key?.sequence ?? '')) return;
 
   // Track timing for burst detection (for fallback when bracketed paste is unavailable).
   const now = Date.now();

@@ -15,10 +15,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import chalk from 'chalk';
 import { colorizeInputBuffer, type SlashRegistryView } from './input-highlight.js';
 import { palette } from './palette.js';
+import { stripAnsi } from './display.js';
 
-// Inline ANSI strip — avoids adding a new dependency.
+// SGR-only pattern used as a direct matcher in a few expect().toMatch() assertions.
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
-const stripAnsi = (s: string): string => s.replace(ANSI_RE, '');
 
 const knownReg = (knownNames: readonly string[]): SlashRegistryView => ({
   has: (n) => knownNames.includes(n),

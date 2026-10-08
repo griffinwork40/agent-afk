@@ -127,6 +127,7 @@ export async function processStreamEvent(
     };
     pendingTools.set(c.toolUseId, te);
     toolEvents.push(te);
+    h.onToolEvent?.(te);
     turnTtfb.plainHooks?.onToolStart(c);
   } else if (event.type === 'chunk' && event.chunk.type === 'tool_result') {
     const c = event.chunk;
@@ -136,6 +137,9 @@ export async function processStreamEvent(
     if (pending) {
       pending.result = c.content;
       pending.isError = c.isError;
+      if (c.incomplete === true) pending.incomplete = true;
+      if (c.incompleteReason !== undefined) pending.incompleteReason = c.incompleteReason;
+      if (c.partialNodeCount !== undefined) pending.partialNodeCount = c.partialNodeCount;
       // Capture resultTail for verification commands so lfVerification can
       // parse pass/fail even when the command was piped and isError reflects
       // only the pipe's last stage. Use tailPreview (last N non-empty lines
@@ -153,6 +157,7 @@ export async function processStreamEvent(
           : rawForTail;
         pending.resultTail = redactSecrets(tail);
       }
+      h.onToolEvent?.(pending);
       pendingTools.delete(c.toolUseId);
     }
     turnTtfb.plainHooks?.onToolResult(c, pending?.toolName);

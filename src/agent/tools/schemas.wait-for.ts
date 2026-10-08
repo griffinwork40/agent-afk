@@ -19,14 +19,19 @@ export const waitForTool: AnthropicToolDef = {
     'Condition types: ' +
     '"url" — polls an HTTP/HTTPS endpoint until it returns the expected status (default: any 2xx). ' +
     '"file" — waits until a file exists (and optionally contains a substring). ' +
-    '"process" — waits until a PID has exited (process.kill(pid, 0) → ESRCH). ' +
+    '"process" — waits until a PID has exited (process.kill(pid, 0) → ESRCH). Only PIDs this session\'s bash tool spawned ' +
+    '(the shell it launched, including the pid returned by bash run_in_background) are accepted; grandchildren and other PIDs are refused. ' +
     '"command" — runs a shell command repeatedly; exit 0 signals the condition is met. ' +
     'The tool returns when the condition is met, the timeout elapses (status: timed_out), or ' +
     'the session is cancelled (status: cancelled). Timeout is NOT an error — the model can retry. ' +
+    'Each call waits at most 600000ms (10 min; default 120000ms = 2 min). Larger timeout_ms ' +
+    'values are capped and the result says so; to wait longer, call wait_for again. ' +
     'In interactive sessions the wait also ends early when the user types a message ' +
     '(status: yielded_to_user, not an error): end your turn so the user is heard, then re-issue ' +
     'the wait if still needed. ' +
     'URL waits are SSRF-guarded: private/loopback/link-local/cloud-metadata targets are rejected. ' +
+    'Not for background subagent jobs (bg-* ids): their results are delivered automatically, so ' +
+    'end your turn instead of waiting on a proxy signal. Never use a never-true command as a sleep. ' +
     'Use timeout_ms and poll_interval_ms to tune wait duration and check frequency.',
   input_schema: {
     type: 'object',
@@ -65,7 +70,7 @@ export const waitForTool: AnthropicToolDef = {
       },
       pid: {
         type: 'number',
-        description: 'For process type: PID to wait on. Condition is met when the process exits.',
+        description: 'For process type: PID to wait on (must be one this session\'s bash tool spawned). Condition is met when the process exits.',
       },
       command: {
         type: 'string',

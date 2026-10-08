@@ -19,10 +19,11 @@
 
 import type { HookRegistry, HookContext, HookDecision, HarnessHookEvent } from '../hooks.js';
 import type { LoadedHooksConfig } from './config-loader.js';
-import { compileMatcher } from './config-loader.js';
+import { compileMatcher, isPluginHookDisabled } from './config-loader.js';
 import { executeCommand } from './command-executor.js';
 import { isWhatifEpisode, keepContextHooksInEpisode } from '../whatif-episode-gate.js';
 import { resolveContextSessionId } from './hook-utils.js';
+import { readIndex } from '../plugins/index-store.js';
 
 export interface AgentConfigForBridge {
   cwd?: string;
@@ -44,6 +45,35 @@ export interface AgentConfigForBridge {
    * possible follow-up.
    */
   getTranscriptPath?: () => string | null;
+}
+
+/**
+ * Warn about non-plugin hooks skipped because `enableShellHooks` is unset.
+ * Extracted as a named helper (explicit params, no closure) to keep
+ * `loadAndRegisterConfigHooks` under the 200-line function ceiling.
+ */
+function warnSkippedShellHooks(
+  hookConfig: LoadedHooksConfig,
+  validEvents: readonly HarnessHookEvent[],
+): void {
+  const skipped: string[] = [];
+  for (const event of validEvents) {
+    const groups = hookConfig.hooks[event];
+    if (groups === undefined) continue;
+    for (const group of groups) {
+      if (group.tier === 'plugin') continue;
+      for (const hook of group.hooks) {
+        skipped.push(`${event}: ${hook.command}`);
+      }
+    }
+  }
+  if (skipped.length > 0) {
+    console.warn(
+      `[hooks] shell hooks are disabled (enableShellHooks not set in user-global config).\n` +
+        `Skipped ${skipped.length} hook(s):\n` +
+        skipped.map((s) => `  - ${s}`).join('\n'),
+    );
+  }
 }
 
 /**
@@ -109,24 +139,7 @@ export function loadAndRegisterConfigHooks(
   // Plugin hooks (tier 'plugin') still register below and are never "skipped"
   // here — they cleared their own enablePluginHooks gate in the loader.
   if (!userGlobalEnabled) {
-    const skipped: string[] = [];
-    for (const event of validEvents) {
-      const groups = hookConfig.hooks[event];
-      if (groups === undefined) continue;
-      for (const group of groups) {
-        if (group.tier === 'plugin') continue;
-        for (const hook of group.hooks) {
-          skipped.push(`${event}: ${hook.command}`);
-        }
-      }
-    }
-    if (skipped.length > 0) {
-      console.warn(
-        `[hooks] shell hooks are disabled (enableShellHooks not set in user-global config).\n` +
-          `Skipped ${skipped.length} hook(s):\n` +
-          skipped.map((s) => `  - ${s}`).join('\n'),
-      );
-    }
+    warnSkippedShellHooks(hookConfig, validEvents);
   }
 
   // In episode mode (without opt-in), skip the context-injecting events only
@@ -168,6 +181,25 @@ export function loadAndRegisterConfigHooks(
       // loader, which only emits plugin-tier groups when it is set.
       if (group.tier !== 'plugin' && !userGlobalEnabled) continue;
 
+      // Per-hook disable: skip plugin groups that the user has listed in
+      // `disabledPluginHooks`. The check is at group level (event+matcher)
+      // so a single specifier can suppress an entire matcher group at once.
+      // Non-plugin groups are never subject to this gate (it applies only to
+      // plugin hooks; shell hooks have the enableShellHooks gate instead).
+      if (group.tier === 'plugin') {
+        const firstHook = group.hooks[0];
+        const pName = firstHook?.pluginName;
+        if (pName !== undefined &&
+            isPluginHookDisabled(hookConfig.disabledPluginHooks, pName, event, group.matcher)) {
+          console.warn(
+            `[hooks] plugin hook suppressed by disabledPluginHooks: plugin="${pName}" ` +
+              `event="${event}"` +
+              (group.matcher !== undefined ? ` matcher="${group.matcher}"` : ''),
+          );
+          continue;
+        }
+      }
+
       // Compile the matcher once per group — not per dispatch.
       // Pass a warn sink so invalid regex patterns are surfaced via console.warn
       // instead of silently falling back without any signal to the operator.
@@ -178,6 +210,7 @@ export function loadAndRegisterConfigHooks(
         const hookTimeoutMs = hook.timeoutMs;
         const hookPluginRoot = hook.pluginRoot;
         const hookPluginName = hook.pluginName;
+        const hookPluginKey = hook.pluginKey;
 
         const handler = async (context: HookContext): Promise<HookDecision> => {
           // For tool-scoped events, check the matcher against the tool name.
@@ -202,6 +235,24 @@ export function loadAndRegisterConfigHooks(
           // time) so rotations from /clear are captured automatically.
           const transcriptPath = getTranscriptPath?.() ?? null;
 
+          // Resolve plugin options and key from the index for user-scope
+          // plugins so CLAUDE_PLUGIN_OPTION_* and CLAUDE_PLUGIN_DATA are
+          // available in the hook subprocess.
+          let resolvedPluginKey: string | undefined;
+          let resolvedPluginOptions: Record<string, string> | undefined;
+          if (hookPluginKey !== undefined) {
+            // The index key is the install key, not the manifest name. Marketplace
+            // installs use `<marketplace>:<plugin>` and aliased flat installs use
+            // the directory/alias key, so manifest-name lookup can miss or leak a
+            // same-named plugin's options and data directory.
+            const idx = readIndex();
+            const idxEntry = idx.plugins[hookPluginKey];
+            if (idxEntry !== undefined) {
+              resolvedPluginKey = hookPluginKey;
+              resolvedPluginOptions = idxEntry.options;
+            }
+          }
+
           const result = await executeCommand({
             command: hookCommand,
             context,
@@ -212,6 +263,8 @@ export function loadAndRegisterConfigHooks(
             ...(hookPluginRoot !== undefined ? { pluginRoot: hookPluginRoot } : {}),
             ...(hookPluginName !== undefined ? { pluginName: hookPluginName } : {}),
             ...(hookPluginName !== undefined ? { pluginHookEnv: hookConfig.pluginHookEnv } : {}),
+            ...(resolvedPluginKey !== undefined ? { pluginKey: resolvedPluginKey } : {}),
+            ...(resolvedPluginOptions !== undefined ? { pluginOptions: resolvedPluginOptions } : {}),
           });
 
           return result.decision;

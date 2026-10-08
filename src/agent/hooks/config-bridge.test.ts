@@ -36,6 +36,7 @@ function makeEnabledConfig(overrides: Partial<LoadedHooksConfig> = {}): LoadedHo
     allowProjectHooks: false,
     pluginHooksEnabled: false,
     pluginHookEnv: {},
+    disabledPluginHooks: {},
     sources: [],
     warnings: [],
     ...overrides,
@@ -49,6 +50,7 @@ function makeDisabledConfig(overrides: Partial<LoadedHooksConfig> = {}): LoadedH
     allowProjectHooks: false,
     pluginHooksEnabled: false,
     pluginHookEnv: {},
+    disabledPluginHooks: {},
     sources: [],
     warnings: [],
     ...overrides,
@@ -862,5 +864,211 @@ describe('getTranscriptPath threading (issue #2372)', () => {
 
     const decision = await registry.dispatch({ event: 'Stop', sessionId: 'test-sid' });
     expect(decision).toEqual({});
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Plugin userConfig lookup uses install/index key, not manifest name (#2732)
+// ---------------------------------------------------------------------------
+
+describe('plugin option lookup — install key', () => {
+  it('uses pluginKey for options and data while keeping pluginName for pluginHookEnv', async () => {
+    const afkHome = join(tmp, 'afk-home');
+    const pluginsDir = join(afkHome, 'plugins');
+    const indexPath = join(pluginsDir, '.index.json');
+    mkdirSync(pluginsDir, { recursive: true });
+    writeFileSync(
+      indexPath,
+      JSON.stringify({
+        version: 2,
+        plugins: {
+          'alias-key': {
+            source: 'x',
+            sourceType: 'local',
+            ref: null,
+            commit: null,
+            enabled: true,
+            installedAt: '2026-01-01T00:00:00Z',
+            updatedAt: '2026-01-01T00:00:00Z',
+            options: { provider: 'openai' },
+          },
+          'manifest-name': {
+            source: 'other',
+            sourceType: 'local',
+            ref: null,
+            commit: null,
+            enabled: true,
+            installedAt: '2026-01-01T00:00:00Z',
+            updatedAt: '2026-01-01T00:00:00Z',
+            options: { provider: 'wrong' },
+          },
+        },
+        marketplaces: {},
+      }),
+      'utf-8',
+    );
+
+    mkdirSync(join(tmp, '.claude-plugin'), { recursive: true });
+    writeFileSync(
+      join(tmp, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({
+        name: 'manifest-name',
+        userConfig: { provider: { type: 'string' } },
+      }),
+      'utf-8',
+    );
+
+    const scriptPath = join(tmp, 'check-plugin-key.js');
+    writeFileSync(
+      scriptPath,
+      `const fs = require('fs');
+const out = JSON.parse(fs.readFileSync(0, 'utf8'));
+if (process.env.CLAUDE_PLUGIN_OPTION_PROVIDER !== 'openai') process.exit(2);
+if (!process.env.CLAUDE_PLUGIN_DATA || !process.env.CLAUDE_PLUGIN_DATA.includes('p-alias-key')) process.exit(3);
+if (process.env.PLUGIN_FLAG !== 'ok') process.exit(4);
+console.log(JSON.stringify({ decision: 'approve' }));
+`,
+      'utf-8',
+    );
+    const registry = createHookRegistry();
+    const config = makeEnabledConfig({
+      pluginHookEnv: { 'manifest-name': ['PLUGIN_FLAG'] },
+      hooks: {
+        SessionStart: [
+          makeGroup([
+            {
+              type: 'command',
+              command: `"${process.execPath}" "${scriptPath}"`,
+              timeoutMs: 5000,
+              pluginRoot: tmp,
+              pluginName: 'manifest-name',
+              pluginKey: 'alias-key',
+            },
+          ], { tier: 'plugin' }),
+        ],
+      },
+    });
+    const oldHome = process.env['AFK_HOME'];
+    const oldSecret = process.env['PLUGIN_FLAG'];
+    process.env['AFK_HOME'] = afkHome;
+    process.env['PLUGIN_FLAG'] = 'ok';
+    try {
+      loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+      const decision = await registry.dispatch({ event: 'SessionStart', sessionId: 'sid' });
+      expect(decision).toEqual({ decision: 'approve' });
+    } finally {
+      if (oldHome === undefined) delete process.env['AFK_HOME'];
+      else process.env['AFK_HOME'] = oldHome;
+      if (oldSecret === undefined) delete process.env['PLUGIN_FLAG'];
+      else process.env['PLUGIN_FLAG'] = oldSecret;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// disabledPluginHooks gate (issue #2816)
+// ---------------------------------------------------------------------------
+
+describe('disabledPluginHooks — per-hook disable', () => {
+  it('suppresses a plugin hook group by event when listed in disabledPluginHooks', async () => {
+    const script = writeScript('should-not-run.sh', '#!/bin/sh\nexit 0\n');
+    const registry = createHookRegistry();
+
+    // Plugin hook for SessionStart, plugin name "my-plugin"
+    const config = makeEnabledConfig({
+      disabledPluginHooks: { 'my-plugin': ['SessionStart'] },
+      hooks: {
+        SessionStart: [
+          makeGroup([{ type: 'command', command: script, timeoutMs: 5000, pluginRoot: tmp }], {
+            tier: 'plugin',
+          }),
+        ],
+      },
+    });
+    // Manually attach pluginName to hooks (normally done by the loader)
+    const group = config.hooks.SessionStart?.[0];
+    if (group) group.hooks.forEach((h) => { (h as Record<string, unknown>)['pluginName'] = 'my-plugin'; });
+
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+
+    // No handler should have been registered — the event fires but no action.
+    // We can verify by checking the dispatch returns {} immediately (no hook ran).
+    const decision = await registry.dispatch({ event: 'SessionStart', sessionId: 'sid' });
+    expect(decision).toEqual({});
+  });
+
+  it('suppresses only the matching matcher group, not other matchers', async () => {
+    const hitPath = join(tmp, 'hit.txt');
+    // Cross-platform: write a .js helper that creates the marker file, then
+    // invoke it with the current node binary so the test works on Windows too.
+    const hitJsPath = join(tmp, 'record-hit.js');
+    writeFileSync(hitJsPath, `require('fs').writeFileSync(${JSON.stringify(hitPath)}, '');\n`);
+    // Quote both paths to survive spaces in the node binary path (Windows: C:\Program Files\…).
+    const hitScript = `"${process.execPath}" "${hitJsPath}"`;
+    const misScript = writeScript('should-not-run.sh', '#!/bin/sh\nexit 0\n');
+    const registry = createHookRegistry();
+
+    // Two plugin groups for PreToolUse on "my-plugin":
+    //   group 1: matcher="/^agent$/" → suppressed
+    //   group 2: no matcher → should still run
+    const config = makeEnabledConfig({
+      disabledPluginHooks: { 'my-plugin': ['PreToolUse:/^agent$/'] },
+      hooks: {
+        PreToolUse: [
+          makeGroup([{ type: 'command', command: misScript, timeoutMs: 5000, pluginRoot: tmp }], {
+            tier: 'plugin',
+            matcher: '/^agent$/',
+          }),
+          makeGroup([{ type: 'command', command: hitScript, timeoutMs: 5000, pluginRoot: tmp }], {
+            tier: 'plugin',
+          }),
+        ],
+      },
+    });
+    // Attach pluginName to both groups' hooks
+    for (const group of config.hooks.PreToolUse ?? []) {
+      group.hooks.forEach((h) => { (h as Record<string, unknown>)['pluginName'] = 'my-plugin'; });
+    }
+
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+
+    // Dispatch PreToolUse with tool name "agent" — the suppressed group must
+    // NOT run (misScript); the wildcard group MUST run (hitScript).
+    await registry.dispatch({ event: 'PreToolUse', toolName: 'agent', sessionId: 'sid' });
+
+    const { existsSync } = await import('node:fs');
+    expect(existsSync(hitPath)).toBe(true);
+  });
+
+  it('does not suppress a plugin hook from a different plugin', async () => {
+    const hitPath = join(tmp, 'different-plugin-hit.txt');
+    // Cross-platform: write a .js helper that creates the marker file, then
+    // invoke it with the current node binary so the test works on Windows too.
+    const hitJsPath = join(tmp, 'different-plugin-hook.js');
+    writeFileSync(hitJsPath, `require('fs').writeFileSync(${JSON.stringify(hitPath)}, '');\n`);
+    // Quote both paths to survive spaces in the node binary path (Windows: C:\Program Files\…).
+    const hitScript = `"${process.execPath}" "${hitJsPath}"`;
+    const registry = createHookRegistry();
+
+    const config = makeEnabledConfig({
+      // "other-plugin" is disabled, but "my-plugin" should still run
+      disabledPluginHooks: { 'other-plugin': ['SessionStart'] },
+      hooks: {
+        SessionStart: [
+          makeGroup([{ type: 'command', command: hitScript, timeoutMs: 5000, pluginRoot: tmp }], {
+            tier: 'plugin',
+          }),
+        ],
+      },
+    });
+    const group = config.hooks.SessionStart?.[0];
+    if (group) group.hooks.forEach((h) => { (h as Record<string, unknown>)['pluginName'] = 'my-plugin'; });
+
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+    await registry.dispatch({ event: 'SessionStart', sessionId: 'sid' });
+
+    const { existsSync } = await import('node:fs');
+    expect(existsSync(hitPath)).toBe(true);
   });
 });

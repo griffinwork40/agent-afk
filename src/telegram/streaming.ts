@@ -33,7 +33,7 @@ import { handleProgressEvent, makeSubagentSink } from './streaming.progress.js';
 
 // Backward-compat re-exports: extracted to sibling modules but callers still
 // import from this file. StreamTimeoutError is in its own module so
-// `instanceof` survives `vi.mock('./streaming.js')` in tests.
+// `instanceof` survives a `vi.mock` of './streaming.js' in tests.
 export { formatTelegramActivity, formatTelegramAgentLabel, renderSubagentFooter };
 export { replyWithFloodRetry } from './streaming.retry.js';
 export { renderProgressRegion, renderInterleavedPreview } from './streaming.preview.js';
@@ -64,6 +64,53 @@ export function renderActivityReceipt(toolRounds: number, elapsedMs: number): st
 
 
 /**
+ * Wrap `ctx.reply` to fire `onBotMessage(chatId, messageId)` each time a NEW
+ * Telegram message is sent (not edits, which reuse an existing message_id).
+ * Returns a shallow-prototype-delegating copy of `ctx` with an intercepted
+ * reply method; leaves the original context object unmodified.
+ */
+function withReplyTracking(
+  ctx: Context,
+  chatId: number,
+  onBotMessage: (chatId: number, messageId: number) => void,
+): Context {
+  const orig = ctx.reply.bind(ctx) as typeof ctx.reply;
+  return Object.create(ctx, {
+    reply: {
+      value: async (...args: Parameters<typeof ctx.reply>) => {
+        const msg = await orig(...args);
+        try { onBotMessage(chatId, (msg as { message_id?: number }).message_id ?? 0); } catch { /* non-fatal */ }
+        return msg;
+      },
+      configurable: true, writable: true,
+    },
+  }) as Context;
+}
+
+/**
+ * Options bag for {@link streamResponse}.
+ *
+ * `onComplete` — fired once when the turn finishes successfully (`done` event)
+ * with the assistant text and turn metadata. Used to persist the turn to the
+ * shared session store. Never fires on error / timeout paths.
+ *
+ * `progressDelayMs` — how long before `◦` progress lines start rendering.
+ * Defaults to PROGRESS_START_DELAY_MS. Pass 0 to render immediately.
+ *
+ * `onBotMessage` — fired each time the bot sends a FRESH Telegram message
+ * (preview placeholder and each cleanFinal chunk). Receives (chatId, messageId).
+ * Used to map bot message ids → session ids for thumbs-reaction feedback.
+ * Not called for edits (those reuse an existing message_id). Non-fatal: errors
+ * in the callback are silently swallowed so delivery is never disrupted.
+ */
+export interface StreamResponseOptions {
+  cleanFinal?: boolean;
+  onComplete?: (assistantText: string, metadata?: ResponseMetadata) => void | Promise<void>;
+  progressDelayMs?: number;
+  onBotMessage?: (chatId: number, messageId: number) => void;
+}
+
+/**
  * Stream agent response back to Telegram by consuming getOutputStream() / sendMessageStream.
  * Sends an initial placeholder, then edits it with accumulated content as chunks arrive.
  * Splits into multiple messages if the response exceeds Telegram's length limit.
@@ -79,23 +126,7 @@ export async function streamResponse(
   session: IAgentSession,
   content: string | ContentBlockParam[],
   logger?: (...args: unknown[]) => void,
-  options: {
-    cleanFinal?: boolean;
-    /**
-     * Fired once when the turn completes successfully (the `done` event),
-     * with the assistant's answer text and the turn metadata. Used by the
-     * Telegram bot to record the turn into the shared session store. Never
-     * fires on error/timeout paths (those throw before `done`). Failures in
-     * the callback are caught and logged — they never disrupt delivery.
-     */
-    onComplete?: (assistantText: string, metadata?: ResponseMetadata) => void | Promise<void>;
-    /**
-     * How long the turn must run before `◦` tool-progress lines start rendering.
-     * Defaults to PROGRESS_START_DELAY_MS. Pass 0 to render immediately (tests
-     * assert progress output without depending on wall-clock timing).
-     */
-    progressDelayMs?: number;
-  } = {}
+  options: StreamResponseOptions = {}
 ): Promise<void> {
   if (!ctx.chat?.id) {
     logger?.('streamResponse: ctx.chat is undefined (non-chat context); skipping');
@@ -104,6 +135,10 @@ export async function streamResponse(
   const chatId = ctx.chat.id;
   const cleanFinal = options.cleanFinal ?? false;
   const progressDelayMs = options.progressDelayMs ?? PROGRESS_START_DELAY_MS;
+
+  // When onBotMessage is set, wrap ctx.reply to fire the hook on every new
+  // send (edits reuse an existing message_id and are NOT intercepted).
+  if (options.onBotMessage) ctx = withReplyTracking(ctx, chatId, options.onBotMessage);
 
   // Invariant: `accumulated` is NEVER mutated to carry `◦` progress lines — they
   // live only in `progressEntries` and are composed in at render time. An earlier

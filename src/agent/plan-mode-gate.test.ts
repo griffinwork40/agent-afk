@@ -51,6 +51,17 @@ describe('createPlanModeGate', () => {
     expect(result.reason).toContain('state-mutating');
   });
 
+  it('blocks a background launch in plan mode even for a read-only command', () => {
+    const { gate } = makeGate('plan');
+    const result = gate({
+      event: 'PreToolUse',
+      toolName: 'bash',
+      input: { command: 'cat README.md', run_in_background: true },
+    });
+    expect(result.decision).toBe('block');
+    expect(result.reason).toContain('run_in_background');
+  });
+
   it('blocks state-mutating bash (git commit) in plan mode', () => {
     const { gate } = makeGate('plan');
     const result = gate({

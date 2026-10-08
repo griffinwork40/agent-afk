@@ -74,7 +74,7 @@ function dispatcher(): SessionToolDispatcher {
   });
 }
 
-async function run(config: Partial<AgentConfig>, prompt: string, withTools = false): Promise<ProviderEvent[]> {
+async function run(config: Partial<AgentConfig>, prompt: string, withTools = false, baseURL?: string): Promise<ProviderEvent[]> {
   async function* input(): AsyncIterable<ProviderUserTurn> { yield { content: prompt }; }
   const q = new OpenAICompatibleQuery({
     auth: { apiKey: 'sk-test', source: 'config', last4: 'test' },
@@ -83,6 +83,7 @@ async function run(config: Partial<AgentConfig>, prompt: string, withTools = fal
     promptStream: input(),
     config: { model: 'gpt-4o-mini', apiKey: 'sk-test', ...config } as AgentConfig,
     ...(withTools ? { toolDispatcher: dispatcher() } : {}),
+    ...(baseURL !== undefined ? { baseURL } : {}),
   });
   const events: ProviderEvent[] = [];
   for await (const ev of q) events.push(ev);
@@ -90,6 +91,50 @@ async function run(config: Partial<AgentConfig>, prompt: string, withTools = fal
 }
 
 describe('OpenAICompatibleQuery message journal', () => {
+  it.each([
+    ['reasoning', 'https://api.deepseek.com/v1', 'reasoning_content'],
+    ['reasoning_content', 'https://api.cerebras.ai/v1', 'reasoning'],
+    ['reasoning', 'https://api.cerebras.ai/v1', 'reasoning'],
+    ['reasoning_content', 'https://api.deepseek.com', 'reasoning_content'],
+    ['reasoning', undefined, null],
+    ['reasoning_content', 'https://strict.example/v1', null],
+    ['reasoning', 'https://api.deepseek.com.evil.example/v1', null],
+  ] as const)('replays %s at %s using only destination field %s', async (sourceField, baseURL, targetField) => {
+    const resumeMessages: JournalMessage[] = [
+      { role: 'assistant', content: [
+        { type: 'thinking', thinking: 'source thought', origin: `openai-compatible:${sourceField}` },
+        { type: 'tool_use', id: 'old', name: 'big', input: {} },
+      ] },
+      { role: 'user', content: [{ type: 'tool_result', toolUseId: 'old', content: [{ type: 'text', text: 'old result' }] }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'no reasoning' }] },
+    ];
+    const journal = new FakeJournal();
+    journal.arr = [...resumeMessages];
+    const liveField = targetField ?? 'reasoning';
+    scripted = [
+      [{ choices: [{ delta: { [liveField]: 'destination thought' } }] }, ...toolTurn],
+      textTurn('done'),
+    ];
+    const events = await run({ messageJournal: journal, resumeMessages }, 'next', true, baseURL);
+    expect(events.filter((e) => e.type === 'error')).toEqual([]);
+    const first = createCalls[0]!.messages as Array<Record<string, unknown>>;
+    const imported = first.find((m) => m['role'] === 'assistant')!;
+    expect(imported['tool_calls']).toMatchObject([{ id: 'old' }]);
+    expect(first.find((m) => m['role'] === 'tool')?.['content']).toBe('old result');
+    for (const field of ['reasoning', 'reasoning_content']) {
+      if (field === targetField) expect(imported[field]).toBe('source thought');
+      else expect(imported).not.toHaveProperty(field);
+    }
+    if (targetField === 'reasoning_content') {
+      expect(first.find((m) => m['content'] === 'no reasoning')).toHaveProperty('reasoning_content', '');
+    }
+    const second = createCalls[1]!.messages as Array<Record<string, unknown>>;
+    expect(second.find((m) => m[liveField] === 'destination thought')).toBeDefined();
+    // Replaying for a different wire must not destroy source thinking provenance.
+    expect(journal.arr.slice(0, resumeMessages.length)).toEqual(resumeMessages);
+    expect(journal.truncates).toEqual([]);
+  });
+
   it('journals the full tool round and final answer', async () => {
     scripted = [toolTurn, textTurn('done')];
     const journal = new FakeJournal();

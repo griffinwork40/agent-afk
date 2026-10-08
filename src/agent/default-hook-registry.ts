@@ -17,7 +17,7 @@ import { createReleaseBoundaryDetect } from './release-boundary-detect.js';
 import { MemoryStore, createMemorySessionEndHook, createChildMemoryHotBlockHook } from './memory/index.js';
 import { createPlanModeGate } from './plan-mode-gate.js';
 import { createAfkModeGate } from './afk-mode-gate.js';
-import { cleanupComposeSpills } from './tools/compose-executor.js';
+import { cleanupComposeSpills } from './tools/compose-executor.format.js';
 import { runReceiptSessionEndHook } from './trace/receipt.js';
 import { createFacetSessionEndHook } from './facets/session-end-hook.js';
 import { createPreexistingLedgerHook } from './preexisting-ledger/session-end-hook.js';
@@ -37,6 +37,7 @@ import type { TraceSink } from './trace/index.js';
 import type { LoadedHooksConfig } from './hooks/config-loader.js';
 import { loadAndRegisterConfigHooks } from './hooks/config-bridge.js';
 import { createWhatifEpisodeGate } from './whatif-episode-gate.js';
+import { createUnprovenDiagnosisDetectHook } from './unproven-diagnosis-detect.js';
 
 export interface SubagentCompleteInfo {
   subagentId: string;
@@ -166,6 +167,29 @@ function registerWhatifEpisodeGate(registry: HookRegistry): void {
 }
 
 /**
+ * Register the two-layer placeholder defense and the unproven-diagnosis gate.
+ *
+ * Layer 1 (Prevention): `SessionStart` `injectContext` — proactively instructs
+ * the model to resolve placeholder values from context before presenting shell
+ * commands. Fires for top-level sessions only. See `placeholder-prevent.ts`.
+ *
+ * Layer 2 (Correction): `Stop` hook — scans shellable code blocks for
+ * unresolved placeholder tokens and injects a correction. Bounded per session
+ * (fails open after 2 corrections). No-op on non-REPL surfaces. See
+ * `placeholder-detect.ts`.
+ *
+ * Unproven-diagnosis gate (issue #2987): `Stop` hook — injects the elimination
+ * ladder when the turn closes on an external / cause-unknown diagnosis with no
+ * instrumentation evidence. Opt-in via `AFK_UNPROVEN_DIAGNOSIS_GATE=1`. See
+ * `unproven-diagnosis-detect.ts`.
+ */
+function registerPlaceholderAndDiagnosisHooks(registry: HookRegistry): void {
+  registry.register('SessionStart', createPlaceholderPreventHook());
+  registry.register('Stop', createPlaceholderDetectHook());
+  registry.register('Stop', createUnprovenDiagnosisDetectHook());
+}
+
+/**
  * Register the pre-existing-defect ledger SessionEnd hook. Scans assistant
  * turns for pre-existing-defect flags and appends JSONL entries to
  * ~/.afk/agent-framework/preexisting-ledger.jsonl. Best-effort; never throws;
@@ -191,26 +215,9 @@ export function createDefaultHookRegistry(
   const shadowVerifyNudge = createShadowVerifyNudge();
   registry.register('SubagentStop', shadowVerifyNudge);
   registry.register('Stop', shadowVerifyNudge);
-  // ── Two-layer placeholder defense (#2125) ──────────────────────────────
-  // Layer 1 (Prevention): SessionStart injectContext — proactively instructs
-  // the model to resolve placeholder values from context before presenting
-  // shell commands, and to flag unresolvable values prominently. Works on
-  // all surfaces. Non-deterministic (the model may still generate placeholders
-  // despite the instruction), so Layer 2 below provides the backstop.
-  // Fires for top-level sessions only; subagent forks are skipped both by
-  // AgentSession.pullInitialization and by the handler's own parentSessionId
-  // guard (defence-in-depth). See placeholder-prevent.ts.
-  registry.register('SessionStart', createPlaceholderPreventHook());
-  // Layer 2 (Correction): Stop hook — scans shellable code blocks in the
-  // turn's code-block register for unresolved placeholder tokens (e.g.
-  // `your-user@mac-mini-ip`, `<YOUR_API_KEY>`) that the user would
-  // copy-paste and run literally. Injects a correction into the next turn
-  // asking the model to resolve or prominently mark them. Bounded per
-  // session (fails open after 2 corrections). Reads from the code-block
-  // register (src/cli/code-block-register.ts) which is only populated in
-  // the REPL loop, so the hook is automatically a no-op on non-REPL
-  // surfaces and subagents without any guard code. See placeholder-detect.ts.
-  registry.register('Stop', createPlaceholderDetectHook());
+  // Two-layer placeholder defense (#2125) + unproven-diagnosis gate (#2987).
+  // See registerPlaceholderAndDiagnosisHooks for details of each layer.
+  registerPlaceholderAndDiagnosisHooks(registry);
   // Ask-question gate: on surfaces with no elicitation handler (daemon,
   // scheduler, one-shot chat) a question can never be answered — block it
   // pre-flight with proceed-on-assumption guidance instead of letting the

@@ -50,6 +50,8 @@ import type { ToolCall, ToolResult } from '../providers/anthropic-direct/types.j
 import type { CanUseTool, PermissionResult } from '../types/sdk-types.js';
 import type { TraceSink } from '../trace/index.js';
 import type { GrantManager } from './grant-manager.js';
+import { isBackgroundBashLaunch } from './bash-background-flag.js';
+import { isPeerToolBlocked, peerToolChildDenial } from './peer-tool-gate.js';
 
 // ---------------------------------------------------------------------------
 // Mutable state
@@ -120,6 +122,8 @@ export interface PreDispatchGateDeps {
   traceWriter: TraceSink | undefined;
   /** Returns whether this session has an implementation for `toolName`. */
   isRegisteredTool: (toolName: string) => boolean;
+  /** Capture non-blocking context for additive delivery on the final result. */
+  capturePreToolContext?: (call: ToolCall, context: string) => void;
   /** Generates the model-visible message for an allowlist denial. */
   denialReason: (toolName: string, permissionReason: string | undefined) => string;
 }
@@ -266,6 +270,15 @@ async function checkReadOnlyBash(
       ? (input as Record<string, unknown>)['command']
       : undefined;
   if (typeof command !== 'string') return null;
+  // A background launch outlives the call and is never read-only recon,
+  // whatever the command text says.
+  if (isBackgroundBashLaunch(call.name, input)) {
+    const bgReason =
+      'Bash command blocked: read-only agents may not start background processes ' +
+      '(run_in_background). Run read-only commands in the foreground instead.';
+    await emitPreToolUseBlock(call.name, bgReason, deps);
+    return { content: bgReason, isError: true, failureClass: 'permission-denied' };
+  }
   const verdict = classifyBashCommand(command);
   if (!verdict.mutating) return null;
   // Reason text is shared by the model-visible result and the trace event so
@@ -528,6 +541,7 @@ export async function runPreDispatchGates(
         signal: call.signal,
         ...(deps.traceWriter ? { traceWriter: deps.traceWriter } : {}),
       });
+      if (preDecision.injectContext) deps.capturePreToolContext?.(call, preDecision.injectContext);
       // Apply input rewrite from the hook chain. The registry dispatches all
       // handlers against the original context; last-writer-wins — the final
       // non-blocking hook's updatedInput is used. Hooks do NOT see each
@@ -565,6 +579,16 @@ export async function runPreDispatchGates(
       }
       throw err;
     }
+  }
+
+  // 2-pre. Top-level-only peer tools (list_sessions / send_to_session).
+  // Structural: a forked child is refused regardless of its allowlist, which
+  // (CHILD_ALLOWED_TOOLS) contains every builtin name. Shares its predicate
+  // with the toolDefs filter so visibility and execution never diverge.
+  if (isPeerToolBlocked(call.name, deps)) {
+    const reason = peerToolChildDenial(call.name);
+    await emitPreToolUseBlock(call.name, reason, deps);
+    return { content: reason, isError: true, failureClass: 'permission-denied' };
   }
 
   // 2. Permission check

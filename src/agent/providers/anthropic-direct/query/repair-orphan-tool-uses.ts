@@ -36,7 +36,106 @@
  * @module agent/providers/anthropic-direct/query/repair-orphan-tool-uses
  */
 
-import type { ContentBlockParam, MessageParam } from '@anthropic-ai/sdk/resources';
+import type { ContentBlock, ContentBlockParam, MessageParam } from '@anthropic-ai/sdk/resources';
+
+/**
+ * Report describing what `repairOrphanToolUses` changed.
+ *
+ * Returned as the function value when a repair was performed; `null` is
+ * returned when history is healthy and no mutation occurred.
+ *
+ * Index semantics: all index fields refer to positions in the ORIGINAL
+ * (pre-repair) message array. Exception: `bridgedIndices` is measured against
+ * the array as it stood AFTER Pass 1 (orphan repair) and names the FIRST message
+ * of each same-role pair (the bridge lands at index + 1). It equals the original
+ * index only when Pass 1 inserted nothing.
+ *
+ * The `shapeBefore` string is computed lazily — only when a repair is
+ * detected — from a snapshot of each message's role + content refs captured
+ * before any pass runs. The expensive buildShape walk is deferred to the
+ * repair path; on healthy histories only the O(N) snapshot (reference copies,
+ * no block scanning) runs. It is a compact
+ * structural summary of each message: `<idx>:<role>[<blockType>*<N>, ...]`.
+ * Example: `0:u[text] 1:a[text,tool_use*2] 2:u[tool_result*2] 3:a[text]`.
+ * It NEVER contains message text, tool inputs, or tool result content.
+ * Capped at 2000 characters; if truncated a `…` marker is appended.
+ */
+export interface OrphanRepairReport {
+  /** Original indices of user messages where tool_result blocks were hoisted
+   *  to the front (Pass 0 fix). */
+  hoistedMessageIndices: number[];
+  /** tool_use ids that had no paired tool_result (Pass 1 orphan fix). */
+  orphanToolUseIds: string[];
+  /** Original indices of assistant messages that owned orphaned tool_use blocks. */
+  orphanAssistantIndices: number[];
+  /** Indices (relative to the post-Pass-1 array) of the first message in each
+   *  same-role pair where a bridging message was inserted (Pass 2 fix). */
+  bridgedIndices: number[];
+  /** Length of the message array before any repair. */
+  messageCountBefore: number;
+  /** Compact structural shape of the array before repair (roles + block types +
+   *  counts only — never content). Computed lazily, capped at 2000 chars. */
+  shapeBefore: string;
+}
+
+const SHAPE_CAP = 2000;
+
+/**
+ * Narrows `MessageParam.content` to the block-array form.
+ *
+ * The SDK type for `content` is `string | ContentBlockParam[]` (user) or
+ * `string | ContentBlock[]` (assistant). Both union arms that are not strings
+ * are arrays, so `Array.isArray` is the correct discriminant. This guard
+ * makes the narrowing explicit and keeps `buildShape` total against any
+ * future SDK shape drift.
+ */
+function isContentBlockArray(
+  content: MessageParam['content'],
+): content is ContentBlockParam[] | ContentBlock[] {
+  return Array.isArray(content);
+}
+
+/**
+ * Build a compact structural summary of a message array.
+ * Roles: `u` = user, `a` = assistant. Block types are abbreviated by `type`.
+ * Repeated block types in one message are collapsed into `type*N`.
+ * Never includes text content, tool inputs, or tool result content.
+ *
+ * Accepts the structural subset (`Pick<MessageParam, 'role' | 'content'>`) so
+ * the pre-mutation snapshot can be passed directly without a cast.
+ */
+function buildShape(messages: ReadonlyArray<Pick<MessageParam, 'role' | 'content'>>): string {
+  const parts: string[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]!;
+    const role = msg.role === 'user' ? 'u' : 'a';
+    let blockSummary: string;
+    if (!isContentBlockArray(msg.content)) {
+      // String content (or any non-array fallback) → treated as plain text.
+      blockSummary = 'text';
+    } else {
+      // Count occurrences of each block type in order.
+      const counts = new Map<string, number>();
+      const order: string[] = [];
+      for (const b of msg.content) {
+        const t = b.type;
+        if (!counts.has(t)) { counts.set(t, 0); order.push(t); }
+        counts.set(t, counts.get(t)! + 1);
+      }
+      blockSummary = order.map((t) => {
+        const n = counts.get(t)!;
+        return n === 1 ? t : `${t}*${n}`;
+      }).join(',');
+      if (blockSummary === '') blockSummary = 'empty';
+    }
+    parts.push(`${i}:${role}[${blockSummary}]`);
+  }
+  let shape = parts.join(' ');
+  if (shape.length > SHAPE_CAP) {
+    shape = shape.slice(0, SHAPE_CAP) + '…';
+  }
+  return shape;
+}
 
 /**
  * Collect all `tool_result` IDs from a user message's content, or return an
@@ -65,9 +164,13 @@ function coveredToolResultIds(msg: MessageParam | undefined): Set<string> {
  * builds whose `buildUserContentBlocks` emitted text first carry exactly that
  * shape on disk, so this pass heals them on resume. It must run before the
  * orphan pass, whose coverage check only tests presence, not position.
+ *
+ * Returns the original (pre-mutation) indices of messages that were modified.
  */
-function hoistToolResultsPass(messages: MessageParam[]): void {
-  for (const msg of messages) {
+function hoistToolResultsPass(messages: MessageParam[]): number[] {
+  const hoisted: number[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]!;
     if (msg.role !== 'user' || typeof msg.content === 'string') continue;
     const blocks = msg.content as ContentBlockParam[];
     const firstOther = blocks.findIndex((b) => b.type !== 'tool_result');
@@ -78,14 +181,30 @@ function hoistToolResultsPass(messages: MessageParam[]): void {
       ...blocks.filter((b) => b.type === 'tool_result'),
       ...blocks.filter((b) => b.type !== 'tool_result'),
     ];
+    hoisted.push(i);
   }
+  return hoisted;
 }
 
 // Invariant: repairOrphanToolUses runs BEFORE repairRoleAlternation so that
 // synthetic tool_result user messages resolve some alternation violations for
 // free. repairRoleAlternation is the catch-all for any remaining gaps.
 
-function repairOrphanToolUsesPass(messages: MessageParam[]): void {
+/**
+ * Returns { orphanIds, assistantIndices } describing what was repaired.
+ * `assistantIndices` are positions in the ORIGINAL array.
+ *
+ * Index semantics: we scan backward and splice at i+1 (always above the
+ * current scan cursor), so messages at positions 0..i are never shifted by
+ * an insertion at i+1. The original index of the message at current position
+ * i is therefore exactly i throughout the scan.
+ */
+function repairOrphanToolUsesPass(messages: MessageParam[]): {
+  orphanIds: string[];
+  assistantIndices: number[];
+} {
+  const orphanIds: string[] = [];
+  const assistantIndices: number[] = [];
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (!msg || msg.role !== 'assistant' || typeof msg.content === 'string') {
@@ -102,12 +221,17 @@ function repairOrphanToolUsesPass(messages: MessageParam[]): void {
     if (toolUseIds.length === 0) continue;
 
     const covered = coveredToolResultIds(messages[i + 1]);
-    const orphanIds = toolUseIds.filter((id) => !covered.has(id));
-    if (orphanIds.length === 0) continue;
+    const localOrphans = toolUseIds.filter((id) => !covered.has(id));
+    if (localOrphans.length === 0) continue;
+
+    // Original index: because all prior insertions were at positions > i
+    // (splice at i+1), the messages at 0..i are unshifted — original index = i.
+    orphanIds.push(...localOrphans);
+    assistantIndices.push(i);
 
     const repair: MessageParam = {
       role: 'user',
-      content: orphanIds.map((id) => ({
+      content: localOrphans.map((id) => ({
         type: 'tool_result' as const,
         tool_use_id: id,
         content: 'Tool call interrupted before completing — no result recorded.',
@@ -116,6 +240,7 @@ function repairOrphanToolUsesPass(messages: MessageParam[]): void {
     };
     messages.splice(i + 1, 0, repair);
   }
+  return { orphanIds, assistantIndices };
 }
 
 /**
@@ -130,8 +255,14 @@ function repairOrphanToolUsesPass(messages: MessageParam[]): void {
  * A forward scan is used (not reverse) because bridging messages do not
  * interact with each other and the splice offset is adjusted by incrementing
  * the loop index past the insertion.
+ *
+ * Returns, for each inserted bridge, the index of the first message of the
+ * same-role pair in the array as passed in (i.e. after Pass 1), not counting
+ * bridges inserted earlier in this scan.
  */
-function repairRoleAlternation(messages: MessageParam[]): void {
+function repairRoleAlternation(messages: MessageParam[], originalLength: number): number[] {
+  const bridged: number[] = [];
+  let insertedCount = 0;
   for (let i = 0; i < messages.length - 1; i++) {
     const curr = messages[i];
     const next = messages[i + 1];
@@ -144,22 +275,63 @@ function repairRoleAlternation(messages: MessageParam[]): void {
       content: '[resumed]',
     };
     messages.splice(i + 1, 0, bridge);
+    // Original index of `curr` in the pre-repair array.
+    const originalIndex = i - insertedCount;
+    if (originalIndex < originalLength) {
+      bridged.push(originalIndex);
+    }
+    insertedCount++;
     // Skip past the inserted bridge so we do not re-examine it.
     i++;
   }
+  return bridged;
 }
 
-export function repairOrphanToolUses(messages: MessageParam[]): void {
-  if (messages.length === 0) return;
+/**
+ * Repair the message array in place and return a report describing what was
+ * changed, or `null` if nothing was changed (healthy history).
+ *
+ * Existing callers that ignore the return value continue to work unchanged.
+ */
+export function repairOrphanToolUses(messages: MessageParam[]): OrphanRepairReport | null {
+  if (messages.length === 0) return null;
+
+  const messageCountBefore = messages.length;
+
+  // Invariant: shapeBefore must reflect the array BEFORE any pass mutates it.
+  // Pass 0 reassigns `msg.content` in place (line-order rewrite), so a mere
+  // shallow-copy of MessageParam references would observe the post-mutation
+  // content. We snapshot each message's { role, content } cheaply (O(N)
+  // reference copies, no block scanning) and defer the expensive buildShape
+  // string construction until a repair is actually detected.
+  const snapshot: ReadonlyArray<Pick<MessageParam, 'role' | 'content'>> =
+    messages.map((m) => ({ role: m.role, content: m.content }));
 
   // Pass 0: put tool_result blocks first in each user message (heals sidecars
   // persisted with text-before-tool_result ordering).
-  hoistToolResultsPass(messages);
+  const hoistedMessageIndices = hoistToolResultsPass(messages);
 
   // Pass 1: fix orphaned tool_use blocks (may insert user messages that also
   // resolve some alternation violations).
-  repairOrphanToolUsesPass(messages);
+  const { orphanIds: orphanToolUseIds, assistantIndices: orphanAssistantIndices } =
+    repairOrphanToolUsesPass(messages);
 
   // Pass 2: fix any remaining consecutive same-role messages.
-  repairRoleAlternation(messages);
+  const bridgedIndices = repairRoleAlternation(messages, messageCountBefore);
+
+  const repaired =
+    hoistedMessageIndices.length > 0 ||
+    orphanToolUseIds.length > 0 ||
+    bridgedIndices.length > 0;
+
+  if (!repaired) return null;
+
+  return {
+    hoistedMessageIndices,
+    orphanToolUseIds,
+    orphanAssistantIndices,
+    bridgedIndices,
+    messageCountBefore,
+    shapeBefore: buildShape(snapshot),
+  };
 }

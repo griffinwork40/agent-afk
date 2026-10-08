@@ -32,6 +32,7 @@
  * Phase 3 is about to paint (Phase 3 paints relative to that frame top).
  */
 
+import { hiddenArchivedRows } from './terminal-compositor.archived-reveal.js';
 import type { FramePlacementMode } from './terminal-compositor.types.js';
 
 /** State slice the content-hug helpers read. */
@@ -39,6 +40,8 @@ export interface ContentHugHost {
   placementMode: FramePlacementMode;
   anchorRow: number | undefined;
   committedBand: string[];
+  committedBandArchivedPrefix?: number;
+  stdout?: NodeJS.WriteStream;
   pendingContentRows: number | null;
   lastMeasuredFrameBottom: number;
   bandGeometryStale: boolean;
@@ -50,11 +53,14 @@ export interface ContentHugHost {
  * the post-commit band length (see module Contract).
  */
 export function contentHugAnchor(
-  self: Pick<ContentHugHost, 'anchorRow' | 'committedBand' | 'pendingContentRows'>,
+  self: Pick<ContentHugHost, 'anchorRow' | 'committedBand' | 'pendingContentRows' | 'placementMode' | 'committedBandArchivedPrefix' | 'stdout'>,
+  physicalRows?: number,
+  absoluteBottom?: number,
 ): number {
   const floor = Math.max(self.anchorRow ?? 1, 1);
   const contentRows = self.pendingContentRows ?? self.committedBand.length;
-  return floor + contentRows;
+  const geometry = physicalRows !== undefined && absoluteBottom !== undefined ? { physicalRows, absoluteBottom } : undefined;
+  return floor + contentRows - hiddenArchivedRows(self, geometry);
 }
 
 /**
@@ -112,17 +118,22 @@ export function projectedBandLength(
 }
 
 /**
- * Invariant (archive-on-cover, 2026-10-02): when a hugging frame grows upward
+ * Invariant (archive-and-retain, 2026-10-03): when a hugging frame grows upward
  * over the band (a full viewport), the covered rows are archived to scrollback
  * on that repaint, and rows committed while the overlay is tall are archived
- * on the next one (preserveRowsBeforeFrameRender / pendingEvictionAllowed).
- * History: they used to stay PENDING ("hide-on-growth") so a later shrink
- * could re-show them and the prompt would not jump up mid-screen. But a
- * pending row is on neither the screen nor in scrollback, which opened a hole
- * at the scrollback seam for the rest of the turn (operator report, tmux
- * copy-mode). The trade accepted: after a tall overlay collapses the prompt
- * may sit mid-screen with blank rows BELOW it; history is always contiguous.
- * Repro: terminal-compositor.history-hole.repro.test.ts.
+ * on the next one (preserveRowsBeforeFrameRender / pendingEvictionAllowed), so
+ * history never has a hole. They are ALSO retained in the band model as the
+ * archived prefix (terminal-compositor.band-archived-prefix.ts), hidden while
+ * covered and on small shrinks; large collapses reveal them (archived-reveal.ts),
+ * so the screen refills instead
+ * of leaving a blank gap below the prompt. They are never written to
+ * scrollback twice; while re-shown they exist at the scrollback tail and on
+ * screen (the seam overlap, docs/scrollback.md).
+ * History: pre-#2804 they stayed PENDING only (a hole at the scrollback seam
+ * for the rest of the turn); #2804 archived and DROPPED them (a blank gap
+ * below the prompt after the collapse). Repros:
+ * terminal-compositor.history-hole.repro.test.ts and
+ * terminal-compositor.shrink-gap-ghost.repro.test.ts.
  *
  * Settled means the frame's room is a capacity worth archiving against. An
  * open autocomplete dropdown or picker is a brief, user-initiated input-region
@@ -188,11 +199,11 @@ export function phase2PendingContentRows(
  * Returns 0 outside content-hug (no-op for all other placement modes).
  */
 export function contentHugBandReserve(
-  self: Pick<ContentHugHost, 'placementMode' | 'committedBand'>,
+  self: Pick<ContentHugHost, 'placementMode' | 'committedBand' | 'committedBandArchivedPrefix' | 'stdout'>,
   rows: number,
 ): number {
   if (self.placementMode !== 'content-hug') return 0;
-  const bandLen = self.committedBand.length;
+  const bandLen = self.committedBand.length - hiddenArchivedRows(self);
   if (bandLen === 0) return 0;
   return Math.min(bandLen, Math.max(3, Math.floor(rows / 4)));
 }

@@ -17,15 +17,16 @@
  * @module scripts/measure-read-dedup
  */
 
-import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { analyze, validate } from './workspace-ab/analyze-read-dedup.js';
 import type { ToolCallStarted } from './workspace-ab/types.js';
 import type { DedupReport } from './workspace-ab/types.js';
+import { resolveTraceFile as resolveTrace, type TraceArgs } from './lib/resolve-trace-file.js';
 
 // ─── AFK_HOME resolution ─────────────────────────────────────────────────────
 const AFK_HOME = process.env['AFK_HOME'] || join(homedir(), '.afk');
@@ -79,43 +80,10 @@ function parseArgs(): CliArgs {
 // ─── Trace resolution ────────────────────────────────────────────────────────
 
 function resolveTraceFile(args: CliArgs): string {
-  if (args.file) {
-    const p = isAbsolute(args.file) ? args.file : join(process.cwd(), args.file);
-    if (!existsSync(p)) { console.error(`File not found: ${p}`); process.exit(2); }
-    return p;
-  }
-
-  if (!existsSync(WITNESS_DIR)) {
-    console.error(`Witness directory not found: ${WITNESS_DIR}`);
-    process.exit(2);
-  }
-
-  const sessions = readdirSync(WITNESS_DIR)
-    .filter(d => existsSync(join(WITNESS_DIR, d, 'trace.jsonl')))
-    .map(d => ({
-      name: d,
-      tracePath: join(WITNESS_DIR, d, 'trace.jsonl'),
-      mtime: statSync(join(WITNESS_DIR, d, 'trace.jsonl')).mtime.getTime(),
-    }))
-    .sort((a, b) => b.mtime - a.mtime);
-
-  if (sessions.length === 0) {
-    console.error('No sessions with traces found.');
-    process.exit(2);
-  }
-
-  if (args.latest) return sessions[0]!.tracePath;
-
-  const match = sessions.filter(s => s.name.startsWith(args.session!));
-  if (match.length === 0) {
-    console.error(`No session matching prefix: ${args.session}`);
-    process.exit(2);
-  }
-  if (match.length > 1) {
-    console.error(`Ambiguous session prefix "${args.session}" -- matches: ${match.map(m => m.name).join(', ')}`);
-    process.exit(2);
-  }
-  return match[0]!.tracePath;
+  const traceArgs: TraceArgs = { file: args.file, session: args.session, latest: args.latest };
+  const result = resolveTrace(WITNESS_DIR, traceArgs);
+  if ('error' in result) { console.error(result.error); process.exit(2); }
+  return result.path;
 }
 
 // ─── Trace parsing ──────────────────────────────────────────────────────────

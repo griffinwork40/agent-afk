@@ -46,11 +46,8 @@ import {
 import { createMemoryHandlers, guardChildHotWrites, isForkedChildSession } from '../../memory/index.js';
 import { createGetRuntimeStateHandler } from '../../awareness/index.js';
 import { resolveSessionHookRegistry } from '../../hooks.js';
-import {
-  withMcpToolsAllowed,
-  withCustomToolsAllowed,
-  type ToolPermissionConfig,
-} from '../../tools/permissions.js';
+import type { ToolPermissionConfig } from '../../tools/permissions.js';
+import { composeDispatcherPermissions } from '../../tools/permissions-compose.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
 import { userAttentionFrom } from '../../tools/user-yield.js';
 
@@ -62,6 +59,12 @@ export interface BuildDispatcherOptions {
   env?: Record<string, string>;
   sessionId?: string;
   parentSessionId?: string;
+  /**
+   * Root (depth-0) session id, forwarded from {@link AgentConfig.rootSessionId}.
+   * Undefined on top-level sessions. Threaded into the dispatcher so every
+   * PostToolUse context carries it for deep child attribution.
+   */
+  rootSessionId?: string;
   /**
    * This fork's own subagent id. Stamped onto every `hook_decision` the
    * dispatcher emits so a policy block is attributable to the child that
@@ -118,6 +121,15 @@ export interface BuildDispatcherOptions {
    * non-TTY surfaces and forked children (no overlay to repaint).
    */
   bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
+  /**
+   * Session-scoped detach registry for the Ctrl+B bash-backgrounding contract
+   * (#2542, #2735). Forwarded from AgentConfig so the REPL Ctrl+B handler and
+   * the per-query dispatcher share the same instance. Absent for headless
+   * surfaces and forked children.
+   */
+  detachRegistry?: import('../../tools/detach-registry.js').DetachableToolRegistry;
+  /** Background process registry (`bash run_in_background`); root REPL sessions only. */
+  processJobs?: import('../../shell-jobs/process-jobs.js').ProcessJobRegistry;
 }
 
 /**
@@ -296,16 +308,12 @@ export function buildDispatcher(
     // the plan-mode gate (the sole built-in PreToolUse hook) never reached
     // the dispatcher and write tools ran unblocked in plan mode (c6892c6).
     hookRegistry: resolveSessionHookRegistry(opts?.hookRegistry, deps.hookRegistry),
-    // Union live MCP wire-names AND consumer-registered custom-tool names into
-    // the (statically-snapshotted) allowlist so neither is rejected by the
-    // gate while present in `schemas`/`handlers`. No-op when there is no
-    // allowlist (undefined => all allowed) or nothing to union. Registering a
-    // custom tool is the grant (same as connecting an MCP server); restricted
-    // sub-agents carry no customTools, so this never widens their allowlist.
-    permissions: withCustomToolsAllowed(
-      deps.mcpManager
-        ? withMcpToolsAllowed(deps.permissions, deps.mcpManager.getMcpToolWireNames())
-        : deps.permissions,
+    // MCP + custom-tool unions, then operator denies LAST. Ordering invariant
+    // and rationale live in tools/permissions-compose.ts (shared with the
+    // openai-compatible provider so the two cannot drift).
+    permissions: composeDispatcherPermissions(
+      deps.permissions,
+      deps.mcpManager?.getMcpToolWireNames(),
       deps.customTools.map((t) => t.schema.name),
     ),
     subagentExecutor: deps.subagentExecutor,
@@ -320,6 +328,7 @@ export function buildDispatcher(
     ...(opts?.env !== undefined ? { env: opts.env } : {}),
     sessionId: opts?.sessionId,
     parentSessionId: opts?.parentSessionId,
+    ...(opts?.rootSessionId !== undefined ? { rootSessionId: opts.rootSessionId } : {}),
     ...(opts?.subagentId !== undefined ? { subagentId: opts.subagentId } : {}),
     // Central output-cap backstop (#661), FORK-SCOPED. Armed from the
     // explicit `subagentToolOutputCapBytes` signal that
@@ -350,5 +359,11 @@ export function buildDispatcher(
     ...(opts?.bashOutputTailReporter !== undefined
       ? { bashOutputTailReporter: opts.bashOutputTailReporter }
       : {}),
+    // #2542/#2735: Detach registry for Ctrl+B bash backgrounding. Top-level
+    // REPL sessions only — absent for forks (no surface to inject results into).
+    ...(opts?.detachRegistry !== undefined
+      ? { detachRegistry: opts.detachRegistry }
+      : {}),
+    ...(opts?.processJobs !== undefined ? { processJobs: opts.processJobs } : {}),
   });
 }

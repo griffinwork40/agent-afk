@@ -38,7 +38,7 @@ import type {
   JournalMessage,
   JournalResultPart,
 } from '../../journal/index.js';
-import { JournalProvenance } from '../../journal/index.js';
+import { JournalProvenance, readResultFlags, tagResultFlags } from '../../journal/index.js';
 import { filterContentBlocks } from './resolve-params.js';
 
 /** Provider family stamped on thinking blocks this adapter writes. */
@@ -55,8 +55,9 @@ function fallbackText(block: { type: string }): { type: 'text'; text: string } {
   return { type: 'text', text: `[${type}] ${JSON.stringify(rest)}` };
 }
 
-function imageToJournal(block: ImageBlockParam): JournalBlock & { type: 'image' } {
+function imageToJournal(block: ImageBlockParam): JournalBlock & { type: 'image' } | { type: 'text'; text: string } {
   const s = block.source;
+  if (s.type === 'file') return { type: 'text', text: `[image file_id=${s.file_id}]` };
   const source: JournalBinary =
     s.type === 'base64' ? { kind: 'base64', mediaType: s.media_type, data: s.data } : { kind: 'url', url: s.url };
   return { type: 'image', source };
@@ -74,6 +75,7 @@ function documentToJournal(block: DocumentBlockParam): JournalResultPart {
       : s.content.map((c) => (c.type === 'text' ? c.text : '[image]')).join('\n');
     return { type: 'text', text: withTitle(text) };
   }
+  if (s.type === 'file') return { type: 'text', text: withTitle(`[document file_id=${s.file_id}]`) };
   const source: JournalBinary =
     s.type === 'base64' ? { kind: 'base64', mediaType: s.media_type, data: s.data } : { kind: 'url', url: s.url };
   return { type: 'document', source, ...(title ? { title } : {}) };
@@ -94,6 +96,9 @@ function toolResultToJournal(block: ToolResultBlockParam): JournalBlock {
     type: 'tool_result',
     toolUseId: block.tool_use_id,
     ...(block.is_error !== undefined ? { isError: block.is_error } : {}),
+    // Harness-only partial flags (#2978): tagged beside the native block by
+    // loop/tool-results.ts, since the API rejects unknown block keys.
+    ...readResultFlags(block),
     content,
   };
 }
@@ -174,12 +179,15 @@ function blockFromJournal(block: JournalBlock): ContentBlockParam | null {
     case 'tool_use': return { type: 'tool_use', id: block.id, name: block.name, input: block.input };
     case 'tool_result': {
       const content = resultContentFromJournal(block.content);
-      return {
+      const native: ToolResultBlockParam = {
         type: 'tool_result',
         tool_use_id: block.toolUseId,
         ...(block.isError !== undefined ? { is_error: block.isError } : {}),
         ...(content.length > 0 ? { content } : {}),
       };
+      // Keep the partial flags across resume so a later resync re-writes them (#2978).
+      tagResultFlags(native, block);
+      return native;
     }
     case 'image': return imageFromJournal(block.source);
     case 'document': return documentFromJournal(block.source, block.title);
@@ -218,7 +226,11 @@ export const anthropicJournalAdapter: JournalAdapter<MessageParam> = {
     const content: JournalBlock[] = typeof message.content === 'string'
       ? [{ type: 'text', text: message.content }]
       : message.content.map(blockToJournal);
-    return { role: message.role, content };
+    // The SDK's MessageParam.role now includes 'system'; the journal schema
+    // only accepts 'user' | 'assistant'. Map system messages to 'user' — they
+    // carry instructional content that replays correctly in the user role.
+    const role: 'user' | 'assistant' = message.role === 'system' ? 'user' : message.role;
+    return { role, content };
   },
 
   fromJournalMessages(messages: readonly JournalMessage[]): MessageParam[] {

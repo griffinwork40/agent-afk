@@ -17,12 +17,15 @@ import type {
   RuntimeTools,
   RuntimeSubagents,
   RuntimeWorkspace,
+  RuntimeUsageEntry,
   Surface,
   PhaseRole,
   McpServerSummary,
   McpFailedServer,
 } from './types.js';
 import { gatherWorkspace } from './workspace-source.js';
+import { readUsageRecords } from '../usage/usage-snapshot.js';
+import { compactUsageEntries } from '../usage/usage-formatter.js';
 
 export interface RuntimeSourceDeps {
   /** Stable session UUID (may be undefined for pre-init sessions). */
@@ -142,6 +145,11 @@ export function buildRuntimeStateSource(deps: RuntimeSourceDeps): RuntimeStateSo
       // agent's own writes AND concurrent external writers).
       // Cost: 4 spawnSync git calls per call (see gatherWorkspace).
       return gatherWorkspace(deps.getCwd());
+    },
+    getUsage(): RuntimeUsageEntry[] {
+      // Shared reader + formatter (agent/usage/*): ledger + in-process cache,
+      // no network, safe on every get_runtime_state call.
+      return compactUsageEntries(readUsageRecords());
     },
   };
 }

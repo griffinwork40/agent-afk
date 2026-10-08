@@ -104,6 +104,9 @@ export function findTerminalStateHeadingOffset(text: string): number {
   for (let i = tail.length - 1; i >= 0; i--) {
     if (isFenced[tailStart + i]) continue;
     const line = tail[i] ?? '';
+    // Invariant: mirror the indent guard in parseTerminalState — a line
+    // indented 4+ spaces is a CommonMark indented code block, not a heading.
+    if (line.length - line.trimStart().length >= 4) continue;
     if (lineToKind(line)) {
       // Compute the character offset in the original text. Sum lengths of
       // all lines before `tailStart + i`, plus `tailStart + i` newlines.
@@ -123,20 +126,58 @@ export function findTerminalStateHeadingOffset(text: string): number {
  * lines included. A forward pass over the WHOLE text, so a fence opened
  * before the tail window is still tracked. A fence closes only on its own
  * marker (CommonMark); an unclosed fence runs to the end of the text.
+ *
+ * CommonMark rules enforced (#2794):
+ *   - Opener: indented 0–3 spaces, followed by a run of 3+ backticks (with no
+ *     backtick in the info string) OR 3+ tildes. A line indented 4+ spaces is
+ *     a literal indented code block in CommonMark and is NOT a fence opener.
+ *   - Closer: same character family as the opener, run length ≥ opener's run,
+ *     and bare (no info string — only optional trailing spaces).
+ *   - The two character families (backtick, tilde) are independent; a ~~~
+ *     line never closes a ``` fence and vice versa.
  */
 function fencedLines(lines: string[]): boolean[] {
   const isFenced: boolean[] = new Array(lines.length).fill(false);
-  let fenceMarker = '';
+  // When inside a fence: the character (`` ` `` or `~`) and minimum run
+  // length required to close it.
+  let fenceChar = '';
+  let fenceLen = 0;
   for (let i = 0; i < lines.length; i++) {
-    const trimmed = (lines[i] ?? '').trimStart();
-    if (!fenceMarker) {
-      if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
-        fenceMarker = trimmed.slice(0, 3);
-        isFenced[i] = true;
-      }
+    const line = lines[i] ?? '';
+    const indent = line.length - line.trimStart().length;
+    const rest = line.trimStart();
+
+    if (!fenceChar) {
+      // CommonMark §4.5: opener must be indented 0–3 spaces.
+      if (indent > 3) continue;
+
+      const ch = rest[0];
+      if (ch !== '`' && ch !== '~') continue;
+
+      // Count the run of the opening character.
+      let run = 0;
+      while (rest[run] === ch) run++;
+      if (run < 3) continue;
+
+      // For backtick fences the info string must not contain a backtick.
+      // (Tilde fences have no such restriction.)
+      const info = rest.slice(run);
+      if (ch === '`' && info.includes('`')) continue;
+
+      fenceChar = ch;
+      fenceLen = run;
+      isFenced[i] = true;
     } else {
       isFenced[i] = true;
-      if (trimmed.startsWith(fenceMarker)) fenceMarker = '';
+      // Closer: same char, run ≥ opener, bare (only trailing spaces/tabs).
+      if (indent <= 3 && rest[0] === fenceChar) {
+        let run = 0;
+        while (rest[run] === fenceChar) run++;
+        if (run >= fenceLen && rest.slice(run).trim() === '') {
+          fenceChar = '';
+          fenceLen = 0;
+        }
+      }
     }
   }
   return isFenced;
@@ -175,6 +216,12 @@ export function parseTerminalState(text: string): TerminalState | null {
   for (let i = tail.length - 1; i >= 0; i--) {
     if (isFenced[tailOffset + i]) continue;
     const line = tail[i] ?? '';
+    // CommonMark §4.6: a line indented 4+ spaces is a literal indented code
+    // block, not a heading. lineToKind trims before matching, so without this
+    // guard "    Blocked" (4 spaces) would be treated as the Done/Blocked/…
+    // heading. fencedLines only tracks fenced (backtick/tilde) blocks, not
+    // indented code blocks, so we must guard here.
+    if (line.length - line.trimStart().length >= 4) continue;
     const k = lineToKind(line);
     if (k) {
       headingIdx = i;

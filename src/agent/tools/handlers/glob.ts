@@ -177,6 +177,11 @@ async function collectMatches(dir: string, pattern: string, signal?: AbortSignal
 
       const entryPath = path.join(currentPath, entry.name);
       const entryReal = path.join(realPath, entry.name);
+      // '/' is intentional here: entryRel lives in pattern-space (not OS
+      // path-space). Glob patterns are always normalized to '/' separators
+      // (see globToRegExp / literalPatternSegments above) so entryRel must
+      // also use '/' for matcher.test(entryRel) to work correctly on all
+      // platforms. It is never passed to fs APIs.
       const entryRel = relPath ? `${relPath}/${entry.name}` : entry.name;
 
       // The requested root has already passed resolveAndContain, but a
@@ -295,11 +300,10 @@ export function createGlobHandler(cwd?: string): ToolHandler {
   const rawPattern = obj.pattern;
   // Effective cwd priority:
   // 1. context?.resolveBase — permission-system anchor (from dispatcher)
-  // 2. context?.cwd — per-call back-compat alias
-  // 3. factory-level cwd — session worktree isolation
-  // 4. process.cwd() fallback
+  // 2. factory-level cwd — session worktree isolation
+  // 3. process.cwd() fallback
   const explicitPath = obj.path !== undefined && obj.path !== null;
-  let rawPath = obj.path ?? context?.resolveBase ?? context?.cwd ?? cwd ?? process.cwd();
+  let rawPath = obj.path ?? context?.resolveBase ?? cwd ?? process.cwd();
 
   // Validate required field
   if (typeof rawPattern !== 'string') {

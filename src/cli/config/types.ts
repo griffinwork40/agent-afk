@@ -25,10 +25,10 @@ export interface AutoRoutingConfig {
   interactive?: boolean;
   chat?: boolean;
   telegram?: boolean;
-  daemon?: boolean;
 }
 
 export interface CliConfig {
+  tools?: { disabled?: string[] };
   apiKey?: string;
   /**
    * Base URL for the Anthropic Messages API. When set, traffic is routed to
@@ -95,9 +95,18 @@ export interface CliConfig {
     worktreePrune?: {
       enabled: boolean;
       cron: string;
-      maxAgeDaysClean: number;
-      maxAgeDaysDirty: number;
+      /** Optional — absent means the user did not set it; `resolveSweepPolicy` falls through. */
+      maxAgeDaysClean?: number;
+      /** Optional — absent means the user did not set it; `resolveSweepPolicy` falls through. */
+      maxAgeDaysDirty?: number;
       scope: string;
+    };
+    /** Tool-health builtin configuration. Mirrors worktreePrune shape. */
+    toolHealth?: {
+      /** When false, the builtin is not registered. Defaults to enabled. */
+      enabled: boolean;
+      /** Cron expression. Defaults to '17 * * * *' (hourly). */
+      cron: string;
     };
     /**
      * Daemon-surface "Done" verification gate (**default: true** — the daemon
@@ -332,6 +341,7 @@ export interface ModelSlotConfigEntry {
 }
 
 export interface ConfigFileSchema {
+  tools?: { disabled?: string[] };
   model?: string;
   /**
    * Per-tier model bindings. Each slot accepts a bare id string
@@ -355,7 +365,6 @@ export interface ConfigFileSchema {
     interactive?: boolean;
     chat?: boolean;
     telegram?: boolean;
-    daemon?: boolean;
   };
   daemon?: {
     task?: string;
@@ -366,6 +375,10 @@ export interface ConfigFileSchema {
       maxAgeDaysClean?: number;
       maxAgeDaysDirty?: number;
       scope?: string;
+    };
+    toolHealth?: {
+      enabled?: boolean;
+      cron?: string;
     };
     verifyDone?: boolean;
   };

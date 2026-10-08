@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   _resetJsonStringSlotWarnings,
   CLAUDE_FABLE_5_ID,
+  CLAUDE_FABLE_5_1_ID,
   CLAUDE_HAIKU_ID,
   CLAUDE_OPUS_ID,
   CLAUDE_SONNET_ID,
@@ -129,17 +130,18 @@ describe('resolveModelInput', () => {
   });
 });
 
-describe('Claude Fable 5 fixed-id alias', () => {
+describe('Claude Fable fixed-id alias', () => {
   it('exposes the canonical wire id via the direct-alias table', () => {
     expect(CLAUDE_FABLE_5_ID).toBe('claude-fable-5');
-    expect(DIRECT_MODEL_ALIASES['fable']).toBe('claude-fable-5');
+    expect(CLAUDE_FABLE_5_1_ID).toBe('claude-fable-5-1');
+    expect(DIRECT_MODEL_ALIASES['fable']).toBe('claude-fable-5-1');
   });
 
-  it('resolves the `fable` alias straight to claude-fable-5 (case-insensitive)', () => {
-    expect(resolveModelInput('fable')).toBe('claude-fable-5');
-    expect(resolveModelInput('FABLE')).toBe('claude-fable-5');
-    expect(resolveModelInput('  Fable  ')).toBe('claude-fable-5');
-    expect(resolveBinding('fable')).toEqual({ id: 'claude-fable-5' });
+  it('resolves the `fable` alias straight to claude-fable-5-1 (case-insensitive)', () => {
+    expect(resolveModelInput('fable')).toBe('claude-fable-5-1');
+    expect(resolveModelInput('FABLE')).toBe('claude-fable-5-1');
+    expect(resolveModelInput('  Fable  ')).toBe('claude-fable-5-1');
+    expect(resolveBinding('fable')).toEqual({ id: 'claude-fable-5-1' });
   });
 
   it('is NOT a capability tier — slotForInput never matches it', () => {
@@ -147,18 +149,20 @@ describe('Claude Fable 5 fixed-id alias', () => {
     expect(slotForInput('fable')).toBeUndefined();
   });
 
-  it('stays pinned to claude-fable-5 regardless of slot rebindings', () => {
+  it('stays pinned to claude-fable-5-1 regardless of slot rebindings', () => {
     // The direct alias bypasses slot bindings entirely: rebinding every tier to
-    // an OpenAI id must not drag `fable` off claude-fable-5.
+    // an OpenAI id must not drag `fable` off claude-fable-5-1.
     const rebound = makeSlots({ small: 'gpt-4o-mini', medium: 'gpt-4o', large: 'gpt-4o' });
-    expect(resolveModelInput('fable', rebound)).toBe('claude-fable-5');
+    expect(resolveModelInput('fable', rebound)).toBe('claude-fable-5-1');
   });
 
   it('reports the 1M context window and 128k max output', () => {
     expect(contextLimitFor('fable')).toBe(1_000_000);
     expect(contextLimitFor('claude-fable-5')).toBe(1_000_000);
+    expect(contextLimitFor('claude-fable-5-1')).toBe(1_000_000);
     expect(maxOutputTokensFor('fable')).toBe(128_000);
     expect(maxOutputTokensFor('claude-fable-5')).toBe(128_000);
+    expect(maxOutputTokensFor('claude-fable-5-1')).toBe(128_000);
   });
 });
 
@@ -353,8 +357,9 @@ describe('parseModelsConfig', () => {
 
 describe('model-limits resolves through slot bindings', () => {
   it('uses default tier limits when unconfigured', () => {
-    expect(contextLimitFor('small')).toBe(200_000);
-    expect(maxOutputTokensFor('small')).toBe(64_000);
+    // small → CLAUDE_HAIKU_ID (Claude Haiku 5.5): 1M window, 128k output.
+    expect(contextLimitFor('small')).toBe(1_000_000);
+    expect(maxOutputTokensFor('small')).toBe(128_000);
   });
 
   it('preserves the explicit *_1m context-window choice', () => {
@@ -422,6 +427,55 @@ describe('Stage 2: per-slot provider credentials', () => {
       baseUrl: 'http://env/v1',
       apiKey: 'env-key',
     });
+  });
+});
+
+// ── #2985: resolveBinding raw-id slot-id match ────────────────────────────────
+
+describe('resolveBinding — raw slot id match (#2985)', () => {
+  it('returns the full slot binding (including baseUrl/apiKey) when input equals a slot id', () => {
+    // The exact repro from #2985: model: "qwen-3.8-27b" must carry the local
+    // slot's endpoint and key, not fall through to the ambient credential.
+    const bindings = computeSlotBindings({
+      local: { id: 'qwen-3.8-27b', name: 'cerebras', provider: 'openai',
+               baseUrl: 'https://api.cerebras.ai/v1', apiKey: 'csk-secret' },
+    });
+    expect(resolveBinding('qwen-3.8-27b', bindings)).toEqual({
+      id: 'qwen-3.8-27b', name: 'cerebras', provider: 'openai',
+      baseUrl: 'https://api.cerebras.ai/v1', apiKey: 'csk-secret',
+    });
+  });
+
+  it('is case-insensitive for the slot id comparison', () => {
+    const bindings = computeSlotBindings({
+      small: { id: 'Qwen-3.8-27b', provider: 'openai', baseUrl: 'http://h/v1', apiKey: 'k' },
+    });
+    expect(resolveBinding('qwen-3.8-27b', bindings)).toMatchObject({ baseUrl: 'http://h/v1', apiKey: 'k' });
+    expect(resolveBinding('QWEN-3.8-27B', bindings)).toMatchObject({ baseUrl: 'http://h/v1', apiKey: 'k' });
+  });
+
+  it('prefers the first SLOT_NAMES match when multiple slots share the same id', () => {
+    // local is first in SLOT_NAMES order — it wins.
+    const bindings: ModelSlots = {
+      local: { id: 'shared-model', provider: 'anthropic', baseUrl: 'http://local/v1' },
+      small: { id: 'shared-model', provider: 'openai', baseUrl: 'http://small/v1' },
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    };
+    expect(resolveBinding('shared-model', bindings)).toMatchObject({ provider: 'anthropic', baseUrl: 'http://local/v1' });
+  });
+
+  it('still returns bare {id} for an id that matches no slot', () => {
+    const bindings = computeSlotBindings({
+      local: { id: 'qwen-3.8-27b', provider: 'openai', baseUrl: 'http://h/v1', apiKey: 'k' },
+    });
+    expect(resolveBinding('unrecognized-model-xyz', bindings)).toEqual({ id: 'unrecognized-model-xyz' });
+  });
+
+  it('does not match an empty slot id (unconfigured local default)', () => {
+    // The default local slot has id '' — an empty string must never match.
+    expect(resolveBinding('', getSlotBindings())).toEqual({ id: '' });
+    expect(resolveBinding('  ', getSlotBindings())).toEqual({ id: '  ' });
   });
 });
 
@@ -716,6 +770,18 @@ describe('contextWindowOverrideFor', () => {
       large: DEFAULT_SLOT_BINDINGS.large,
     });
     expect(contextWindowOverrideFor('gpt-4o')).toBeUndefined();
+  });
+
+  it('first slot in SLOT_NAMES order wins when two slots bind the same id with different contextWindow', () => {
+    // local is first in SLOT_NAMES (local → small → medium → large), so its
+    // 128_000 wins over small's 64_000 — deterministic, documented behaviour.
+    setSlotBindings({
+      local: { id: 'shared-model', contextWindow: 128_000 },
+      small: { id: 'shared-model', contextWindow: 64_000 },
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    expect(contextWindowOverrideFor('shared-model')).toBe(128_000);
   });
 });
 

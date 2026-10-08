@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs/promises';
+import * as fsSync from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createImageEditHandler } from './image-edit.js';
+import { _resetWriteDenylistCacheForTests } from './write-denylist.js';
+import { _resetRootRealpathCacheForTests } from './_cwd-utils.js';
 
 // Mock resolveOpenAIAuth so tests control auth resolution without touching disk.
 vi.mock('../../providers/openai-compatible/auth.js', () => ({
@@ -75,7 +78,7 @@ describe('image_edit handler', () => {
     mockResolveAuth.mockReturnValue({ apiKey: 'sk-resolved', source: 'env', envVar: 'OPENAI_API_KEY' });
     const handler = createImageEditHandler();
     // Proceeds past auth to input validation — no auth error.
-    const result = await handler({}, signal, { cwd: tmpDir, sessionId: 'fallback-auth-test' });
+    const result = await handler({}, signal, { resolveBase: tmpDir, sessionId: 'fallback-auth-test' });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('prompt');
     expect(result.content).not.toContain('auth');
@@ -90,7 +93,7 @@ describe('image_edit handler', () => {
     await handler(
       { prompt: 'test', image_paths: [refImagePath] },
       signal,
-      { cwd: tmpDir, sessionId: 'pref-key-test' },
+      { resolveBase: tmpDir, sessionId: 'pref-key-test' },
     );
     const [, opts] = fetchFn.mock.calls[0]!;
     expect(opts.headers['Authorization']).toBe('Bearer dedicated-key');
@@ -107,6 +110,55 @@ describe('image_edit handler', () => {
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('expired');
+  });
+
+  it('rejects chatgpt-oauth source without calling the Images Edit API', async () => {
+    // The Images Edit endpoint does not accept ChatGPT OAuth tokens (wrong
+    // OAuth scopes). The handler must reject with a clear error naming the
+    // supported credential sources and never reach the fetch call.
+    vi.stubEnv('AFK_IMAGE_API_KEY', '');
+    mockResolveAuth.mockReturnValue({
+      apiKey: 'chatgpt-oauth-token',
+      source: 'chatgpt-oauth',
+      accountId: 'acct-123',
+    });
+    const fetchFn = vi.fn();
+    const handler = createImageEditHandler(fetchFn);
+    const result = await handler(
+      { prompt: 'test', image_paths: [refImagePath] },
+      signal,
+      { resolveBase: tmpDir, sessionId: 'oauth-reject-test' },
+    );
+    expect(result.isError).toBe(true);
+    // Must name the supported credentials.
+    expect(result.content).toContain('AFK_IMAGE_API_KEY');
+    expect(result.content).toContain('OPENAI_API_KEY');
+    // Must NOT have forwarded the OAuth token to the Images Edit endpoint.
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('returns no-usable-auth error when OAuth token exists but AFK_OPENAI_CHATGPT_OAUTH flag is off', async () => {
+    // When a Codex auth.json token is present but the global opt-in flag is
+    // unset, resolveOpenAIAuth returns source:'no-usable-auth-codex-oauth'.
+    // The handler must surface an actionable error — not forward the token —
+    // because AFK_OPENAI_CHATGPT_OAUTH was deliberately NOT set.
+    vi.stubEnv('AFK_IMAGE_API_KEY', '');
+    mockResolveAuth.mockReturnValue({
+      apiKey: null,
+      source: 'no-usable-auth-codex-oauth',
+    });
+    const fetchFn = vi.fn();
+    const handler = createImageEditHandler(fetchFn);
+    const result = await handler(
+      { prompt: 'test', image_paths: [refImagePath] },
+      signal,
+      { resolveBase: tmpDir, sessionId: 'flag-off-test' },
+    );
+    expect(result.isError).toBe(true);
+    // The no-usable-auth path must name at least one actionable credential source.
+    expect(result.content).toContain('AFK_IMAGE_API_KEY');
+    // Must never have called the Images Edit endpoint.
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 
   // ── Daemon gate ─────────────────────────────────────────────────────────
@@ -129,7 +181,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [refImagePath] },
       signal,
-      { cwd: tmpDir, sessionId: 'daemon-allow-test' },
+      { resolveBase: tmpDir, sessionId: 'daemon-allow-test' },
     );
     expect(result.isError).toBeUndefined();
   });
@@ -142,7 +194,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { image_paths: [refImagePath] },
       signal,
-      { cwd: tmpDir, sessionId: 'val-prompt-test' },
+      { resolveBase: tmpDir, sessionId: 'val-prompt-test' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('prompt');
@@ -154,7 +206,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test' },
       signal,
-      { cwd: tmpDir, sessionId: 'val-paths-test' },
+      { resolveBase: tmpDir, sessionId: 'val-paths-test' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('image_paths');
@@ -166,7 +218,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [] },
       signal,
-      { cwd: tmpDir, sessionId: 'val-empty-paths-test' },
+      { resolveBase: tmpDir, sessionId: 'val-empty-paths-test' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('image_paths');
@@ -179,7 +231,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: paths },
       signal,
-      { cwd: tmpDir, sessionId: 'val-too-many-paths' },
+      { resolveBase: tmpDir, sessionId: 'val-too-many-paths' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('16');
@@ -191,7 +243,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [refImagePath], model: 'dall-e-3' },
       signal,
-      { cwd: tmpDir, sessionId: 'val-model-test' },
+      { resolveBase: tmpDir, sessionId: 'val-model-test' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('Invalid model');
@@ -205,7 +257,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [gifPath] },
       signal,
-      { cwd: tmpDir, sessionId: 'val-ext-test' },
+      { resolveBase: tmpDir, sessionId: 'val-ext-test' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('unsupported extension');
@@ -217,7 +269,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [path.join(tmpDir!, 'nonexistent.png')] },
       signal,
-      { cwd: tmpDir, sessionId: 'val-missing-file-test' },
+      { resolveBase: tmpDir, sessionId: 'val-missing-file-test' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('Cannot stat');
@@ -233,7 +285,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [largePath] },
       signal,
-      { cwd: tmpDir, sessionId: 'val-size-test' },
+      { resolveBase: tmpDir, sessionId: 'val-size-test' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('25 MiB');
@@ -250,7 +302,7 @@ describe('image_edit handler', () => {
       .mockResolvedValueOnce(makeOkResponse(TINY_PNG_B64));
     const handler = createImageEditHandler(fetchFn);
     const sid = `limit-test-${Date.now()}`;
-    const ctx = { cwd: tmpDir, sessionId: sid };
+    const ctx = { resolveBase: tmpDir, sessionId: sid };
     const args = { prompt: 'test', image_paths: [refImagePath] };
 
     const r1 = await handler(args, signal, ctx);
@@ -274,7 +326,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'make it blue', image_paths: [refImagePath] },
       signal,
-      { cwd: tmpDir, sessionId: 'gen-test-session' },
+      { resolveBase: tmpDir, sessionId: 'gen-test-session' },
     );
 
     expect(result.isError).toBeUndefined();
@@ -309,7 +361,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [jpgPath] },
       signal,
-      { cwd: tmpDir, sessionId: `ext-test-jpg-${Date.now()}` },
+      { resolveBase: tmpDir, sessionId: `ext-test-jpg-${Date.now()}` },
     );
     expect(result.isError).toBeUndefined();
   });
@@ -323,7 +375,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [webpPath] },
       signal,
-      { cwd: tmpDir, sessionId: `ext-test-webp-${Date.now()}-b` },
+      { resolveBase: tmpDir, sessionId: `ext-test-webp-${Date.now()}-b` },
     );
     expect(result.isError).toBeUndefined();
   });
@@ -336,7 +388,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [refImagePath], output_path: customPath },
       signal,
-      { cwd: tmpDir, sessionId: 'custom-path-session' },
+      { resolveBase: tmpDir, sessionId: 'custom-path-session' },
     );
 
     expect(result.isError).toBeUndefined();
@@ -355,7 +407,7 @@ describe('image_edit handler', () => {
     await handler(
       { prompt: 'blend', image_paths: [refImagePath, ref2Path] },
       signal,
-      { cwd: tmpDir, sessionId: 'multi-img-session' },
+      { resolveBase: tmpDir, sessionId: 'multi-img-session' },
     );
     expect(fetchFn).toHaveBeenCalledOnce();
     const [, opts] = fetchFn.mock.calls[0]!;
@@ -373,7 +425,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [refImagePath] },
       signal,
-      { cwd: tmpDir, sessionId: 'err-session' },
+      { resolveBase: tmpDir, sessionId: 'err-session' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('429');
@@ -386,7 +438,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [refImagePath] },
       signal,
-      { cwd: tmpDir, sessionId: 'net-err-session' },
+      { resolveBase: tmpDir, sessionId: 'net-err-session' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('ECONNREFUSED');
@@ -401,7 +453,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [refImagePath] },
       signal,
-      { cwd: tmpDir, sessionId: 'no-data-session' },
+      { resolveBase: tmpDir, sessionId: 'no-data-session' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('no image data');
@@ -416,7 +468,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [refImagePath] },
       signal,
-      { cwd: tmpDir, sessionId: 'defaults-session' },
+      { resolveBase: tmpDir, sessionId: 'defaults-session' },
     );
     expect(result.isError).toBeUndefined();
     const meta = JSON.parse(result.content);
@@ -434,10 +486,126 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [refImagePath] },
       signal,
-      { cwd: tmpDir, sessionId: sid },
+      { resolveBase: tmpDir, sessionId: sid },
     );
     const meta = JSON.parse(result.content);
     expect(meta.session_edits_used).toBe(1);
     expect(meta.session_edits_limit).toBe(10);
+  });
+
+  // ── Dangling symlink security (#2823) ────────────────────────────────────
+
+  it('refuses a dangling symlink output_path whose target is outside the write root', async () => {
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    _resetRootRealpathCacheForTests();
+    _resetWriteDenylistCacheForTests();
+
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-edit-outside-'));
+    const outsideFile = path.join(outsideDir, 'escaped.png');
+    const linkPath = path.join(tmpDir!, 'evil.png');
+    fsSync.symlinkSync(outsideFile, linkPath); // dangling: target parent exists, file doesn't
+
+    const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
+    const handler = createImageEditHandler(fetchFn);
+    const result = await handler(
+      { prompt: 'test', image_paths: [refImagePath], output_path: linkPath },
+      signal,
+      { cwd: tmpDir, sessionId: 'edit-symlink-escape', resolveBase: tmpDir, writeRoots: [tmpDir!] },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/outside.*write roots|write roots/i);
+    await expect(fs.access(outsideFile)).rejects.toThrow();
+
+    await fs.rm(outsideDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+    _resetRootRealpathCacheForTests();
+  });
+
+  it('refuses a dangling symlink output_path pointing at a denylisted path', async () => {
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    _resetRootRealpathCacheForTests();
+    _resetWriteDenylistCacheForTests();
+
+    const homeDir = os.homedir();
+    const denyTarget = path.join(homeDir, '.ssh', 'injected.png');
+    const linkPath = path.join(tmpDir!, 'denylink.png');
+    fsSync.symlinkSync(denyTarget, linkPath);
+
+    const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
+    const handler = createImageEditHandler(fetchFn);
+    const result = await handler(
+      { prompt: 'test', image_paths: [refImagePath], output_path: linkPath },
+      signal,
+      { cwd: tmpDir, sessionId: 'edit-symlink-deny', resolveBase: tmpDir, writeRoots: [tmpDir!, homeDir] },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/protected path|denylist/i);
+    vi.unstubAllEnvs();
+    _resetRootRealpathCacheForTests();
+    _resetWriteDenylistCacheForTests();
+  });
+
+  // ── Intermediate symlinked-directory escape (#2836 Item 1) ───────────────
+
+  it('refuses output_path via intermediate symlinked dir whose relative target escapes root', async () => {
+    // Scenario:
+    //   root/subdir/         (real directory)
+    //   root/dirLink -> root/subdir/  (directory symlink)
+    //   root/subdir/hop.png -> ../../outside/escaped.png  (relative escape)
+    //   Access via: root/dirLink/hop.png
+    //
+    // The physical-parent fix resolves the relative symlink against the real
+    // parent (root/subdir), so ../../ correctly escapes root.
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    _resetRootRealpathCacheForTests();
+    _resetWriteDenylistCacheForTests();
+
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-edit-outside-'));
+    try {
+      // Create outside destination.
+      await fs.mkdir(path.join(outsideDir, 'outside'), { recursive: true });
+      const escapedFile = path.join(outsideDir, 'outside', 'escaped.png');
+      await fs.writeFile(escapedFile, 'sensitive');
+
+      // Create subdir inside root.
+      const subdir = path.join(tmpDir!, 'subdir');
+      await fs.mkdir(subdir);
+
+      // Create directory symlink: root/dirLink -> root/subdir.
+      const dirLink = path.join(tmpDir!, 'dirLink');
+      fsSync.symlinkSync(subdir, dirLink);
+
+      // Create relative escape symlink inside subdir.
+      const relEscape = path.join(
+        path.relative(subdir, path.dirname(outsideDir)),
+        'outside',
+        'escaped.png',
+      );
+      fsSync.symlinkSync(relEscape, path.join(subdir, 'hop.png'));
+
+      // Access via the directory symlink path.
+      const accessPath = path.join(dirLink, 'hop.png');
+
+      const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
+      const handler = createImageEditHandler(fetchFn);
+      const result = await handler(
+        { prompt: 'test', image_paths: [refImagePath], output_path: accessPath },
+        signal,
+        { cwd: tmpDir, sessionId: 'edit-dirlink-escape', resolveBase: tmpDir, writeRoots: [tmpDir!] },
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/outside.*write roots|write roots/i);
+      // Verify the outside file was not modified.
+      const stat = await fs.stat(escapedFile);
+      expect(stat.size).toBe('sensitive'.length);
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true });
+      vi.unstubAllEnvs();
+      _resetRootRealpathCacheForTests();
+      _resetWriteDenylistCacheForTests();
+    }
   });
 });

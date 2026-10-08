@@ -28,10 +28,50 @@
  * @module agent/providers/shared/presence-signals
  */
 
-import { removePresenceFileSync } from '../../awareness/index.js';
+import { removePresenceFileSync, touchPresenceHeartbeat } from '../../awareness/index.js';
 
 /** Live presence session ids awaiting cleanup on process exit/signal. */
 const liveSessionIds = new Set<string>();
+
+/**
+ * How often every tracked session's `heartbeatAt` is refreshed. Before this
+ * timer existed nothing in production called `touchPresenceHeartbeat`, so a
+ * record's heartbeat was frozen at session start and readers could not use it
+ * as a freshness signal. 60s keeps the write cost at one small file rewrite per
+ * session per minute.
+ */
+export const PRESENCE_HEARTBEAT_INTERVAL_MS = 60_000;
+
+/**
+ * The single heartbeat interval for this process — owned here, beside
+ * `liveSessionIds`, so one timer serves every session the process hosts.
+ * `.unref()`'d so it never keeps a finished process alive; started on the first
+ * registration, stopped when the set empties, on exit/signal, and on test reset.
+ */
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+function startHeartbeat(): void {
+  if (heartbeatTimer !== null) return;
+  heartbeatTimer = setInterval(() => {
+    // `stillOwned` closes the retire race: an id unregistered (and its file
+    // removed) while this refresh is queued must not be written back to disk.
+    for (const id of liveSessionIds) {
+      void touchPresenceHeartbeat(id, { stillOwned: () => liveSessionIds.has(id) });
+    }
+  }, PRESENCE_HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref?.();
+}
+
+function stopHeartbeat(): void {
+  if (heartbeatTimer === null) return;
+  clearInterval(heartbeatTimer);
+  heartbeatTimer = null;
+}
+
+/** Test-only: the live heartbeat timer handle, or null when stopped. */
+export function _getPresenceHeartbeatTimerForTest(): ReturnType<typeof setInterval> | null {
+  return heartbeatTimer;
+}
 
 /** Whether the process-level listeners have been installed (idempotent gate). */
 let installed = false;
@@ -43,6 +83,7 @@ let onSigint: (() => void) | null = null;
 let onSigterm: (() => void) | null = null;
 
 function removeAllTracked(): void {
+  stopHeartbeat();
   for (const id of liveSessionIds) removePresenceFileSync(id);
 }
 
@@ -66,6 +107,15 @@ function removeAllTracked(): void {
  * that shutdown (defect (a) above). Removing the presence file(s) is safe
  * either way and always runs first — it is synchronous and idempotent.
  */
+// Ordering constraint: `sigintOwnedElsewhere` / `sigtermOwnedElsewhere` are
+// captured at `ensureInstalled()` time (i.e. the first `registerPresenceCleanup`
+// call, which happens during session construction). Any future surface that
+// installs SIGINT/SIGTERM handlers AFTER that point will have its "owned"
+// status misreported as false here — this module would then call
+// `process.exit()` on those signals, truncating the surface's async shutdown.
+// Invariant: every surface that owns its own graceful shutdown (bot.ts,
+// daemon.ts, interactive.ts) MUST install its signal handlers BEFORE calling
+// `registerPresenceCleanup`. Validated by the presence-signals test suite.
 function ensureInstalled(): void {
   if (installed) return;
   installed = true;
@@ -95,6 +145,7 @@ function ensureInstalled(): void {
 export function registerPresenceCleanup(sessionId: string): void {
   ensureInstalled();
   liveSessionIds.add(sessionId);
+  startHeartbeat();
 }
 
 /**
@@ -105,6 +156,7 @@ export function registerPresenceCleanup(sessionId: string): void {
  */
 export function unregisterPresenceCleanup(sessionId: string): void {
   liveSessionIds.delete(sessionId);
+  if (liveSessionIds.size === 0) stopHeartbeat();
 }
 
 /**
@@ -122,4 +174,5 @@ export function _resetPresenceSignalsForTest(): void {
   onSigterm = null;
   installed = false;
   liveSessionIds.clear();
+  stopHeartbeat();
 }

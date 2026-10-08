@@ -43,6 +43,7 @@ import type { AgentConfig } from '../../../types/config-types.js';
 import type { AnthropicToolDef } from '../../../tools/types.js';
 import type { ToolDispatcher } from '../tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../../tools/dispatcher.js';
+import { operatorDispatcherToolDefs } from '../../../tools/operator-denied-dispatcher.js';
 import {
   buildRuntimeStateSource,
   getRuntimeStateTool,
@@ -186,6 +187,7 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
         ...(config.env !== undefined ? { env: config.env } : {}),
         sessionId: resolvedSession.id,
         parentSessionId: config.parentSessionId,
+        ...(config.rootSessionId !== undefined ? { rootSessionId: config.rootSessionId } : {}),
         ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
         // Fork-scoped central output cap (#661): forwarded from the child
         // config that forkSubagent stamped, arming maxOutputBytes for forks
@@ -197,6 +199,12 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
         ...(config.bashOutputTailReporter !== undefined
           ? { bashOutputTailReporter: config.bashOutputTailReporter }
           : {}),
+        // #2542/#2735: Detach registry forwarded from AgentConfig so REPL
+        // Ctrl+B handler and this dispatcher share the same instance.
+        ...(config.detachRegistry !== undefined
+          ? { detachRegistry: config.detachRegistry }
+          : {}),
+        ...(config.processJobs !== undefined ? { processJobs: config.processJobs } : {}),
         runtimeStateSource,
         hookRegistry: config.hookRegistry,
         planExitControls: config.planExitControls,
@@ -208,9 +216,7 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
   // Without adding the schema here the model has no way to know the tool
   // exists — leaving the awareness layer reachable only via the
   // `SessionToolDispatcher` path.
-  const baseToolDefs = queryDispatcher instanceof SessionToolDispatcher
-    ? [...queryDispatcher.toolDefs]
-    : [...builtinToolSchemas, getRuntimeStateTool];
+  const baseToolDefs = [...operatorDispatcherToolDefs(queryDispatcher, [...builtinToolSchemas, getRuntimeStateTool])];
   // Invariant: skill-dispatch sub-agents are dispatched AS a specific skill, so
   // they must neither (a) pause to ask the operator "which skill?" nor (b) mutate
   // the operator's environment. Strip `ask_question` (the operator-prompt escape

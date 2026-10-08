@@ -22,10 +22,13 @@ Open source. Runs locally. Works with any model provider, including local models
 ## Quick Start
 
 ```bash
-npm install -g agent-afk    # Node ≥ 22.13 required
+npm install -g agent-afk    # Node 22.22.2+, 24.15+, or 26+
 afk login                   # authenticate (auto-detects Claude Code / Codex creds)
 afk doctor                  # verify everything works
 afk chat "hello"             # first real conversation
+
+# Preview a behaviour change before applying it
+afk whatif --append "Always ask a clarifying question before using tools." --verify
 ```
 
 That's it. You're in.
@@ -49,6 +52,12 @@ Codex imports use `CODEX_HOME` when set (otherwise `~/.codex`) and also discover
 - **Built-in orchestrators** — `/mint`, `/diagnose`, `/spec`, `/research`, `/ship`, `/review` dispatch subagent waves. `/mint` takes a feature idea and runs spec → research → plan → parallelize → build → verify → ship. `/diagnose` forks parallel root-cause hypotheses for failing tests and bugs.
 - **Cross-session memory** — Claude remembers preferences, decisions, and procedures across runs. See [Memory](#memory) below.
 - **Background subagent jobs** — dispatch a subagent with `mode:'background'`; results auto-deliver into the model's context when they finish. `/bgsub` lists running and completed jobs, `/bgsub:join <id>` replays a result manually.
+
+## What only afk does
+
+**`/whatif` behavioural impact predictor.** Before changing a prompt, model, skill, or memory rule, predict how the agent's behaviour will shift without touching your real config. Run `afk whatif --append "Always ask first." --verify` and the engine diffs the system prompts, predicts labelled behaviour shifts, then optionally verifies empirically by running sandboxed episodes and measuring rates. No real writes happen during the run. Source: `src/whatif/`, `docs/whatif.md`.
+
+**Jev calibrated judgment.** Jev is an external cross-family judge you configure as an MCP server in `~/.afk/config/mcp.json`. When present, `afk whatif --judge auto` selects Jev to grade verification episodes; it returns calibrated probabilities and removes Anthropic self-preference bias in verdicts. Falls back to Claude when Jev is not configured. Use `--judge claude` to keep all episode data within Anthropic. Source: `src/whatif/judge/jev-connect.ts`, `docs/whatif.md`.
 
 ## How it compares
 
@@ -143,7 +152,7 @@ afk chat "refactor this" --model gpt-5.5
 | Slot | Default | Notes |
 |---|---|---|
 | `local` | *(empty — you configure)* | Point at Ollama, LM Studio, or any OpenAI-compatible shim via `AFK_MODEL_LOCAL` + `AFK_MODEL_LOCAL_BASE_URL` |
-| `small` | `claude-haiku-4-5-20251001` | Cheapest/fastest Anthropic tier |
+| `small` | `claude-haiku-5-5` | Cheapest/fastest Anthropic tier |
 | `medium` | `claude-sonnet-4-6` | General-use default |
 | `large` | `claude-opus-5` | Most capable |
 

@@ -130,6 +130,31 @@ describe('hook_decision — emitted from dispatch helpers', () => {
     expect(d.payload.injectedContextBytes).toBe(Buffer.byteLength(injected, 'utf8'));
   });
 
+  // Regression test for #2778: PreToolUse injectContext was counted at
+  // dispatch time but dropped before delivery, so injectedContextBytes was
+  // emitted even when the context never reached the model.  The fix defers
+  // the byte count to the actual delivery step inside PreToolContext.deliver()
+  // and suppresses it at the dispatch-helper level.
+  it('PreToolUse injectContext dispatch does NOT emit injectedContextBytes (#2778)', async () => {
+    const writer = new InMemoryTraceWriter();
+    const registry = makeRegistry();
+    registry.register('PreToolUse', async () => ({
+      injectContext: 'rule violation: check before Done',
+    }));
+    await dispatchPreToolUse(
+      registry,
+      { event: 'PreToolUse', toolName: 'write_file', input: {} },
+      { traceWriter: writer },
+    );
+    const decisions = writer.events.filter((e) => e.kind === 'hook_decision');
+    // One event is emitted (the dispatch outcome), but it must NOT carry
+    // injectedContextBytes — delivery hasn't happened yet.
+    expect(decisions).toHaveLength(1);
+    const d = decisions[0];
+    if (d?.kind !== 'hook_decision') throw new Error('unreachable');
+    expect(d.payload.injectedContextBytes).toBeUndefined();
+  });
+
   it('SessionStart, SessionEnd, SubagentStart each emit', async () => {
     const writer = new InMemoryTraceWriter();
     const registry = makeRegistry();
@@ -271,5 +296,43 @@ describe('tool_call — emitted from SessionToolDispatcher', () => {
     if (d?.kind !== 'hook_decision') throw new Error('unreachable');
     expect(d.payload.decision).toBe('block');
     expect(d.payload.blockedTool).toBe('fake_tool');
+  });
+
+  // Regression test for #2778: a non-blocking PreToolUse hook returning
+  // injectContext must produce a delivery hook_decision event (with
+  // injectedContextBytes) AFTER the tool result is appended — not a spurious
+  // count at dispatch time, and not dropped entirely.
+  it('non-blocking PreToolUse injectContext emits delivery event with injectedContextBytes (#2778)', async () => {
+    const writer = new InMemoryTraceWriter();
+    const registry = createHookRegistry();
+    const context = 'check before Done — uncertain rule match';
+    registry.register('PreToolUse', async () => ({ injectContext: context }));
+    const handlers = new Map<string, ToolHandler>();
+    handlers.set('fake_tool', async () => ({ content: 'result', isError: false }));
+    const dispatcher = new SessionToolDispatcher({
+      handlers,
+      schemas: [],
+      hookRegistry: registry,
+      traceWriter: writer,
+    });
+    const ac = new AbortController();
+    const result = await dispatcher.execute({
+      id: 't1',
+      name: 'fake_tool',
+      input: {},
+      signal: ac.signal,
+    });
+    // Context must appear in the tool result.
+    expect(result.content).toContain('[PreToolUse context]');
+    expect(result.content).toContain(context);
+    // Three hook_decision events: PreToolUse dispatch, delivery, PostToolUse.
+    const decisions = writer.events.filter((e) => e.kind === 'hook_decision');
+    expect(decisions).toHaveLength(3);
+    const delivery = decisions.find(
+      (e) => e.kind === 'hook_decision' && e.payload.injectedContextBytes !== undefined,
+    );
+    if (delivery?.kind !== 'hook_decision') throw new Error('no delivery event');
+    expect(delivery.payload.hookEvent).toBe('PreToolUse');
+    expect(delivery.payload.injectedContextBytes).toBe(Buffer.byteLength(context, 'utf8'));
   });
 });

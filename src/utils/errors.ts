@@ -221,3 +221,55 @@ export class UnsupportedProviderConfigError extends Error {
   }
 }
 
+
+/**
+ * Which subscription hit its usage limit: `'anthropic'` is Claude (OAuth
+ * subscription or API credit), `'codex'` is the ChatGPT/Codex subscription
+ * backend.
+ */
+export type UsageLimitProvider = 'anthropic' | 'codex';
+
+/** Provider-neutral facts about a usage limit, shared by every surface. */
+export interface UsageLimitInfo {
+  provider: UsageLimitProvider;
+  /** `'subscription'` = a rolling subscription window; `'credit'` = an empty API credit balance. */
+  kind: 'subscription' | 'credit';
+  /** When the limit resets, when the provider reported it. */
+  resetsAt?: Date;
+  /** Subscription plan label, when the provider reported it (e.g. `plus`). */
+  plan?: string;
+}
+
+/**
+ * Contract: the terminal error a provider surfaces when a usage limit ends a
+ * turn (fail-fast, a reset beyond the wait budget, or the wait budget spent).
+ * `message` is the friendly provider-labeled sentence from
+ * `describeUsageLimit` (agent/usage/usage-formatter.ts), so the REPL, Telegram
+ * and subagent-failure paths all show it without parsing the raw body.
+ *
+ * Compatibility with the raw SDK error it replaces: `status` stays 429 (400
+ * for an empty credit balance) so status-keyed classifiers still work, the
+ * original error is kept on `cause`, and `name` is `'UsageLimitError'` (the
+ * value `errorClass` telemetry records). No SDK import: this is a leaf module.
+ */
+export class UsageLimitError extends Error {
+  /**
+   * HTTP status code for this error: `400` when `info.kind === 'credit'`
+   * (empty API credit balance), `429` for all other usage-limit kinds
+   * (subscription window exhausted). Matches the raw SDK error it replaces so
+   * status-keyed classifiers continue to work.
+   */
+  public readonly status: number;
+  public override readonly cause?: unknown;
+
+  constructor(
+    message: string,
+    public readonly info: UsageLimitInfo,
+    options?: { cause?: unknown },
+  ) {
+    super(message);
+    this.name = "UsageLimitError";
+    this.status = info.kind === 'credit' ? 400 : 429;
+    if (options?.cause !== undefined) this.cause = options.cause;
+  }
+}

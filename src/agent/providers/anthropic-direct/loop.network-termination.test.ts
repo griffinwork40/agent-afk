@@ -189,6 +189,88 @@ describe('runTurn mid-stream network termination re-drive (#2776)', () => {
   });
 });
 
+// P2 fix (#2787): transport drop after message_delta (stop_reason set) but before
+// message_stop must be accepted as complete, not re-driven.
+describe('runTurn transport drop after stop_reason accepted as complete (#2787)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  /** Streams a full text response (stop_reason delivered via message_delta), then drops
+   * the transport before message_stop can arrive.
+   * @param err - The error to throw after the last yielded event. Defaults to
+   *   `undiciTerminated()` (the TypeError: terminated path). Pass a code-based
+   *   error (e.g. ECONNRESET) to exercise the alternative termination path. */
+  function completedThenDroppedStream(err: Error = undiciTerminated()): AsyncIterable<RawMessageStreamEvent> {
+    // makeTextStream produces: [message_start, content_block_start, content_block_delta,
+    // content_block_stop, message_delta (stop_reason), message_stop].
+    // We take all but the last (message_stop) and then throw.
+    const full = makeTextStream('complete answer');
+    const withoutStop = full.slice(0, -1); // drop message_stop
+    return (async function* () {
+      for (const evt of withoutStop) yield evt;
+      // Transport drops here — AFTER message_delta carried stop_reason='end_turn'.
+      throw err;
+    })();
+  }
+
+  it('single create call, no stream.retry, no error, turn.completed emitted', async () => {
+    // Revert proof: remove the `isMidStreamNetworkTermination(err) && stopReason !== null`
+    // guard from translate.ts's catch block. The catch then yields an error event instead
+    // of falling through, stream-consumer classifies it as isMidStreamCut and sets
+    // retryStreamIncomplete=true — so messages.create is called twice and stream.retry
+    // is emitted once. With the fix, translate.ts accepts the drop, yields a turn-result,
+    // and stream-consumer returns {kind:'streamed'} — one create call, no retry, no error.
+    const client: AnthropicClientLike = {
+      messages: { create: vi.fn(() => completedThenDroppedStream()) },
+    };
+    const events = await run(client);
+
+    // Must NOT have retried.
+    expect(client.messages.create).toHaveBeenCalledTimes(1);
+    expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(0);
+    // Must NOT emit an error event.
+    expect(events.find((e) => e.type === 'error')).toBeUndefined();
+    // Turn must have completed normally.
+    expect(events.find((e) => e.type === 'turn.completed')).toBeDefined();
+  });
+
+  it('ECONNRESET (code-based) after stop_reason also accepted as complete', async () => {
+    // Covers the code-based termination path alongside the TypeError: terminated path.
+    const reset = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    const client: AnthropicClientLike = {
+      messages: { create: vi.fn(() => completedThenDroppedStream(reset)) },
+    };
+    const events = await run(client);
+
+    expect(client.messages.create).toHaveBeenCalledTimes(1);
+    expect(events.find((e) => e.type === 'error')).toBeUndefined();
+    expect(events.find((e) => e.type === 'turn.completed')).toBeDefined();
+  });
+
+  it('transport drop before stop_reason still retried (regression guard)', async () => {
+    // Sanity check that the fix does not break the existing re-drive path: a drop
+    // that arrives BEFORE message_delta (no stop_reason) must still be retried.
+    let callCount = 0;
+    const client: AnthropicClientLike = {
+      messages: {
+        create: vi.fn(() => {
+          callCount++;
+          return callCount === 1
+            ? midStreamTerminatedStream() // drop before stop_reason
+            : fromArray(makeTextStream('recovered'));
+        }),
+      },
+    };
+    const resultPromise = run(client);
+    await vi.advanceTimersByTimeAsync(3_000);
+    const events = await resultPromise;
+
+    expect(callCount).toBe(2);
+    expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(1);
+    expect(events.find((e) => e.type === 'turn.completed')).toBeDefined();
+  });
+});
+
 // The stall watchdog tears the socket down itself; undici can then surface
 // that as `TypeError: terminated`. The stall branch runs first and must win:
 // a mid-stream stall is deliberately NOT retried (#762).
@@ -246,5 +328,18 @@ describe('runTurn stall-caused termination stays fatal (#2776 x #762)', () => {
     const errorEvent = events.find((e) => e.type === 'error');
     expect(errorEvent).toBeDefined();
     expect(String((errorEvent as { error: Error }).error.message)).toMatch(/stalled/i);
+  });
+
+  // (#2835, waived): stall fires AFTER stop_reason arrives — translate.ts's
+  // catch accepts the TypeError as complete (stopReason !== null), so the stall
+  // watchdog error is silently swallowed and turn.completed is emitted. The race
+  // requires the watchdog to fire in the sub-millisecond window between
+  // message_delta (stop_reason) and message_stop (~20 min stall to land there).
+  // Waived: the window is too narrow to warrant complicating the hot path.
+  it.skip('stall after stop_reason: stall swallowed, turn accepted (documented edge case)', async () => {
+    // This test documents the known edge case and would need to simulate the race
+    // precisely. Waived per #2835 review — the 20-min stall required makes it
+    // effectively unreachable in practice.
+    expect(true).toBe(true);
   });
 });

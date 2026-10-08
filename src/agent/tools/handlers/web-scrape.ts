@@ -31,6 +31,8 @@
 
 import type { ToolHandler } from '../types.js';
 import { scrapeToMarkdown } from '../../../http-client/scrape.js';
+import { emptyScrapeMessage } from '../../../http-client/scrape-diagnostics.js';
+import { rateLimitMessage } from '../../../http-client/retryFetch.js';
 import { resolveSearchBackend, formatSearchResults } from '../../../http-client/search.js';
 import { checkEgressTarget, guardedFetch } from '../../../http-client/egress-guard.js';
 import type { EgressGuardOptions as GuardOpts } from '../../../http-client/egress-guard.js';
@@ -259,7 +261,8 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
         if (!res.ok) {
           return {
             content:
-              `web_scrape HTTP ${res.status} ${res.statusText || ''}`.trimEnd() + ` for ${parsed.url}`,
+              res.status === 429 ? rateLimitMessage(res, parsed.url!) :
+                `web_scrape HTTP ${res.status} ${res.statusText || ''}`.trimEnd() + ` for ${parsed.url}`,
             isError: true,
           };
         }
@@ -287,10 +290,8 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
             ...(opts.lookupFn !== undefined ? { lookupFn: opts.lookupFn } : {}),
           });
           if (result.markdown.trim().length === 0) {
-            return {
-              content: `web_scrape extracted no readable content from ${parsed.url}.`,
-              isError: true,
-            };
+            const capped = capBody(emptyScrapeMessage(parsed.url!, result), parsed.maxBytes);
+            return { content: capped.content, isError: true, ...(capped.truncated ? { truncated: true } : {}) };
           }
           // Cap the combined output. headAndTail preserves the advisory at the
           // tail without violating the caller's max_bytes contract.
@@ -307,6 +308,7 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
             return { content: `web_scrape blocked: ${blocked.message}`, isError: true };
           }
           const base = fetchFailedMessage(err);
+          if (base.startsWith('web_scrape HTTP 429')) return { content: base, isError: true };
           // A chromium-missing LAUNCH failure is already decorated by
           // BrowserLauncher, so `base` may carry the remediation. Only add it
           // here for the cases the launcher never sees — chiefly a missing

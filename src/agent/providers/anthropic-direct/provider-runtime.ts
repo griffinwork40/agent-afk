@@ -56,11 +56,13 @@ export {
   type AnthropicDirectProviderOptions,
 } from './provider-options.js';
 import type { ToolPermissionConfig } from '../../tools/permissions.js';
+import { snapshotOperatorPermissions } from '../../tools/operator-denied.js';
+import { withOperatorDeniedDispatcher } from '../../tools/operator-denied-dispatcher.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import { MemoryStore } from '../../memory/index.js';
 import { WorkspaceStore } from '../../workspace/workspace-store.js';
 import { StateStore } from '../../state/state-store.js';
-import { getStateDatabasePath } from '../../../paths.js';
+import { makeDefaultMemoryStore, makeDefaultStateStore } from '../shared/provider-stores.js';
 import { SpawnedPidRegistry } from '../../tools/handlers/pid-registry.js';
 import { env } from '../../../config/env.js';
 import { buildProviderSchemas } from './provider-schemas.js';
@@ -87,7 +89,8 @@ export class AnthropicDirectProvider implements ModelProvider {
   readonly name = PROVIDER_NAME;
   /** Non-null only when the caller provides an explicit `opts.tools` override. */
   private readonly externalTools: ToolDispatcher | undefined;
-  private readonly memoryStore: MemoryStore;
+  /** Lazy-initialized default memory store. `undefined` until first use (opened on first query). */
+  private _memoryStore: MemoryStore | undefined;
   private readonly workspaceStore: WorkspaceStore | undefined;
   /**
    * Optional workspace_subscribe handler wired at fork time by workspace-subscription-wiring.ts.
@@ -96,7 +99,8 @@ export class AnthropicDirectProvider implements ModelProvider {
    * createChildProviderFactory before the handle exists.
    */
   private subscribeHandler: import('../../tools/types.js').ToolHandler | undefined;
-  private readonly stateStore: StateStore;
+  /** Lazy-initialized default state store. `undefined` until first use (opened on first query). */
+  private _stateStore: StateStore | undefined;
   private readonly providerFactory?: AnthropicClientFactory;
   private readonly skillExecutor?: SkillExecutor;
   // Fields retained for per-query dispatcher construction (fixes C2 env race).
@@ -173,16 +177,19 @@ export class AnthropicDirectProvider implements ModelProvider {
    */
   private readonly _spawnedPidRegistry = new SpawnedPidRegistry();
 
+  private get memoryStore(): MemoryStore { return (this._memoryStore ??= makeDefaultMemoryStore()); }
+  private get stateStore(): StateStore { return (this._stateStore ??= makeDefaultStateStore()); }
+
   constructor(opts: AnthropicDirectProviderOptions = {}) {
-    this.memoryStore = opts.memoryStore ?? new MemoryStore();
+    this._memoryStore = opts.memoryStore;
     this.workspaceStore = opts.workspaceStore;
     this.subscribeHandler = opts.subscribeHandler;
-    this.stateStore = opts.stateStore ?? new StateStore(getStateDatabasePath());
-    this.externalTools = opts.tools;
+    this._stateStore = opts.stateStore;
+    this.permissions = snapshotOperatorPermissions(opts.permissions, opts.customTools?.map((t) => t.schema.name));
+    this.externalTools = withOperatorDeniedDispatcher(opts.tools, this.permissions);
     this.skillExecutor = opts.skillExecutor;
     this.schemas = buildProviderSchemas(opts);
     this.hookRegistry = opts.hookRegistry;
-    this.permissions = opts.permissions;
     this.canUseTool = opts.canUseTool;
     this.subagentExecutor = opts.subagentExecutor;
     this.composeExecutor = opts.composeExecutor;
@@ -273,9 +280,9 @@ export class AnthropicDirectProvider implements ModelProvider {
   }
 
   close(): void {
-    this.memoryStore.close();
+    this._memoryStore?.close();
     this.workspaceStore?.close();
-    this.stateStore.close();
+    this._stateStore?.close();
   }
 
   /**

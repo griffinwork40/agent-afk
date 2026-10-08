@@ -36,12 +36,13 @@ export function checkContextOverflow(
   currentModel: string,
   maxOutputTokens: number | undefined,
   configuredModel: string,
+  subscriptionPath = false,
 ): Error | null {
   try {
     guardContextOverflow(
       contextWindowTokensUsed(lastUsage ?? {}),
       resolveEffectiveMaxOutputTokens(currentModel, maxOutputTokens),
-      contextLimitFor(currentModel),
+      contextLimitFor(currentModel, subscriptionPath),
       configuredModel,
     );
     return null;

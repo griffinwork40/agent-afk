@@ -52,7 +52,7 @@ function parseServiceName(input: string): ServiceName {
 export function registerServiceCommand(program: Command): void {
   const service = program
     .command('service')
-    .description('Manage AFK background services (launchd on macOS, systemd --user on Linux) — always-on, auto-restart');
+    .description('Manage AFK background services (launchd on macOS, systemd --user on Linux, Task Scheduler on Windows) — always-on, auto-restart');
 
   service
     .command('install <name>')
@@ -217,8 +217,8 @@ function printStatus(s: ServiceStatus, configKind: string): void {
     console.log(palette.meta(`  Install: afk service install ${s.name}`));
     return;
   }
-  if (s.pid !== undefined) {
-    console.log(`  ${palette.success('●')} Running  (PID ${s.pid})`);
+  if (s.pid !== undefined || s.running === true) {
+    console.log(`  ${palette.success('●')} Running${s.pid !== undefined ? `  (PID ${s.pid})` : ''}`);
   } else {
     console.log(`  ${palette.warning('●')} Installed but not running`);
     if (s.lastExitStatus !== undefined && s.lastExitStatus !== 0) {

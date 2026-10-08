@@ -25,22 +25,18 @@ import { annotateFastError } from '../query/turn-request.js';
 import { getCacheTtl, isCacheEnabled, withMessagesBreakpoint } from '../cache-policy.js';
 import { repairOrphanToolUses } from '../query/repair-orphan-tool-uses.js';
 import { emitSessionPhase } from '../../../trace/emit.js';
-import { sleepWithAbort } from '../../shared/sleep-with-abort.js';
 import {
   armFirstByteTimeout,
   throttleExtensionMs,
   type FirstByteTimeoutHandle,
 } from '../../shared/first-byte-timeout.js';
 import { armStreamStallWatchdog, type StreamStallHandle } from '../../shared/stream-stall-timeout.js';
-import { jitterBackoff } from '../overload-pause.js';
-import {
-  OVERLOAD_BASE_DELAY_MS,
-  OVERLOAD_MAX_RETRIES,
-  type RoundRetryBudget,
-  isTransientServerError,
-} from './retry-budget.js';
+import type { RoundRetryBudget } from './retry-budget.js';
+import { connectionRetryMetadata } from './connection-error.js';
+import { createWithRetry, ConnectionOverloadExhaustedError, type ConnectionRetryInfo, type ConnectionLifecycleInfo } from './connection-create.js';
 import { awaitCreateWithThrottleSignals } from './throttle-signals.js';
 import { dumpThinkingDiagnostic } from './thinking-diagnostic.js';
+import { isNonDefaultSamplingForbiddenModel } from '../resolve-params.js';
 import { buildSignatureRetryMessages, isInvalidSignatureError } from './signature-retry.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
 import { enforceManyImageLimit, MANY_IMAGE_THRESHOLD, MAX_DIMENSION_MANY_IMAGES } from './_many-image-guard.js';
@@ -66,56 +62,22 @@ export function toWireTool(tool: AnthropicToolDef): WireToolDef {
   };
 }
 
-/**
- * Sentinel thrown by `createWithRetry` (only) when the connection-phase 529/503
- * budget is exhausted. Distinct from the generic Error so `openRound`'s catch
- * block can route exhausted transient errors to the `overload-exhausted` outcome
- * instead of the fatal error path (M6 — the same gap that #762 fixed for the
- * mid-stream phase).
- */
-class ConnectionOverloadExhaustedError extends Error {
-  constructor() {
-    super('Connection-phase overload budget exhausted');
-    this.name = 'ConnectionOverloadExhaustedError';
-  }
+export { createWithRetry, type ConnectionRetryInfo } from './connection-create.js';
+
+function traceConnectionLifecycle(input: RunTurnInput): (info: ConnectionLifecycleInfo) => void {
+  return (info) => { void emitSessionPhase(input.traceWriter, { ...info, resolvedModel: input.model }); };
 }
 
-// `requestSignal` is passed to `messages.create` — it is the caller's turn
-// signal chained with the per-request TTFB stall timer (see armFirstByteTimeout),
-// so aborting it covers BOTH a user interrupt and a first-byte timeout. The
-// 529/503 connection-phase backoff sleeps still gate on the caller's `turnSignal`
-// so a persistent overload wakes on interrupt but not on the TTFB timer alone.
-async function createWithRetry(
-  client: { messages: { create(params: unknown, opts: unknown): unknown } },
-  params: AnthropicMessagesCreateParams,
-  headers: Record<string, string>,
-  requestSignal: AbortSignal,
-  turnSignal: AbortSignal,
-): Promise<AsyncIterable<unknown>> {
-  for (let attempt = 0; ; attempt++) {
-    if (attempt > 0) {
-      // Jittered (#762): concurrent sessions hitting the same 529 must not
-      // retry in lockstep. Additive, so the documented minimum still holds.
-      const delay = jitterBackoff(OVERLOAD_BASE_DELAY_MS * Math.pow(2, attempt - 1));
-      await sleepWithAbort(delay, turnSignal);
-      if (turnSignal.aborted) throw new Error('aborted');
-    }
-    try {
-      return (await Promise.resolve(
-        client.messages.create(params, { headers, signal: requestSignal }),
-      )) as AsyncIterable<unknown>;
-    } catch (err) {
-      if (requestSignal.aborted) throw err;
-      const e = err instanceof Error ? err : new Error(String(err));
-      if (isTransientServerError(e)) {
-        if (attempt < OVERLOAD_MAX_RETRIES) continue;
-        // Budget exhausted: signal the caller with a typed sentinel so it can
-        // route to the CLEAN overload terminal instead of the fatal error path.
-        throw new ConnectionOverloadExhaustedError();
-      }
-      throw e;
-    }
-  }
+/** Trace callback for connection-phase network retries. Fire-and-forget. */
+function traceConnectionRetry(input: RunTurnInput): (info: ConnectionRetryInfo) => void {
+  return (info) => {
+    void emitSessionPhase(input.traceWriter, {
+      phase: 'connection_retry',
+      durationMs: info.delayMs,
+      resolvedModel: input.model,
+      metadata: connectionRetryMetadata(info),
+    });
+  };
 }
 
 
@@ -216,7 +178,7 @@ async function* attemptSignatureRetry(
   const retryStall = armStreamStallWatchdog(retryTtfb.signal, stallTimeoutMs, traceStreamStall(input));
   try {
     const retryEvents = yield* awaitCreateWithThrottleSignals(
-      createWithRetry(input.client, retryParams, input.headers, retryStall.signal, input.signal),
+      createWithRetry(input.client, retryParams, input.headers, retryStall.signal, input.signal, traceConnectionRetry(input), traceConnectionLifecycle(input)),
       input,
       extendOnThrottle(retryTtfb),
     );
@@ -241,14 +203,20 @@ export interface OpenRoundContext {
   stallTimeoutMs: number;
 }
 
-export function buildRoundParams(input: Pick<RunTurnInput, 'model' | 'maxTokens' | 'messages' | 'system' | 'tools' | 'thinking' | 'effort' | 'temperature' | 'fastMode'>): AnthropicMessagesCreateParams {
+export function buildRoundParams(input: Pick<RunTurnInput, 'model' | 'maxTokens' | 'messages' | 'system' | 'tools' | 'thinking' | 'effort' | 'temperature' | 'thinkingBlockBinding' | 'fastMode'>): AnthropicMessagesCreateParams {
   return {
     model: input.model, max_tokens: input.maxTokens, messages: input.messages, stream: true,
     ...(input.system !== null ? { system: input.system } : {}),
     ...(input.tools !== null && input.tools.length > 0 ? { tools: input.tools.map(toWireTool) } : {}),
-    ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
+    ...(input.thinking !== undefined || input.thinkingBlockBinding !== undefined
+      ? {
+          thinking: input.thinkingBlockBinding !== undefined
+            ? { ...(input.thinking ?? { type: 'adaptive' as const }), block_binding: input.thinkingBlockBinding }
+            : input.thinking!,
+        }
+      : {}),
     ...(input.effort !== undefined ? { output_config: { effort: input.effort } } : {}),
-    ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+    ...(input.temperature !== undefined && !isNonDefaultSamplingForbiddenModel(input.model) ? { temperature: input.temperature } : {}),
     ...(input.fastMode === true ? { speed: 'fast' as const } : {}),
   };
 }
@@ -276,7 +244,27 @@ export async function* openRound({
   // the only site that surfaces the 400 — so catching it here eliminates the
   // entire class of orphan-induced request failures. The function is a no-op
   // when history is healthy (single linear scan), so the overhead is negligible.
-  repairOrphanToolUses(input.messages);
+  //
+  // Diagnostic (#2136): when repair fires here it means corruption evaded BOTH
+  // prior defenses — high-signal event. Capture the report and emit an
+  // `orphan_repair` session_phase trace event so the shape of the corruption
+  // is preserved for analysis. The emit is fire-and-forget (consistent with
+  // other phase events in this file) and never delays the request.
+  const orphanRepairReport = repairOrphanToolUses(input.messages);
+  if (orphanRepairReport !== null) {
+    void emitSessionPhase(input.traceWriter, {
+      phase: 'orphan_repair',
+      resolvedModel: input.model,
+      metadata: {
+        hoistedIndices: orphanRepairReport.hoistedMessageIndices.join(','),
+        orphanIds: orphanRepairReport.orphanToolUseIds.join(','),
+        assistantIndices: orphanRepairReport.orphanAssistantIndices.join(','),
+        bridgedIndices: orphanRepairReport.bridgedIndices.join(','),
+        messageCount: orphanRepairReport.messageCountBefore,
+        shapeBefore: orphanRepairReport.shapeBefore,
+      },
+    });
+  }
 
   // Many-image dimension guard: Anthropic drops the per-image pixel ceiling
   // from 8 000 px to 2 000 px when a request carries >20 image blocks. Images
@@ -356,6 +344,8 @@ export async function* openRound({
         // arm() returns the base signal unchanged, so this degrades cleanly.
         stall.signal,
         input.signal,
+        traceConnectionRetry(input),
+        traceConnectionLifecycle(input),
       ),
       input,
       // Invariant: the TTFB bound is armed ABOVE this call, so its window spans

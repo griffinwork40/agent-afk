@@ -26,9 +26,11 @@ import type { ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import type { ScheduledTask } from '../../agent/daemon/triggers.js';
 import { parseThinking, parseEffort, getApiKey, getModel, getThinking, getEffort, activateDumpPrompt } from '../shared-helpers.js';
 import { loadSchedules, toScheduledTask } from '../../agent/daemon/schedule-store.js';
+import { appendBuiltinTasks } from './daemon-builtin-tasks.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
 import { providerForModel } from '../../agent/providers/index.js';
 import { buildDaemonSessionFactory } from './daemon-session-factory.js';
+import { daemonTurnHooks } from './daemon-session-persist.js';
 import { errorMessage } from '../../utils/errors.js';
 export type { BuildDaemonSessionFactoryOpts } from './daemon-session-factory.js';
 export { buildDaemonSessionFactory } from './daemon-session-factory.js';
@@ -274,22 +276,10 @@ export function registerDaemonCommand(program: Command): void {
         handleCommandError(err);
       }
 
-      const worktreePruneConfig = config.daemon?.worktreePrune;
-      const worktreePruneDisabled = env.AFK_WORKTREE_PRUNE_DISABLE === '1';
-      const WORKTREE_PRUNE_CRON = worktreePruneConfig?.cron ?? '0 4 * * *';
-
-      const worktreePruneTask: ScheduledTask = {
-        taskId: 'worktree-prune',
-        executor: 'builtin',
-        command: 'worktree-prune',
-        trigger: 'cron',
-        cronExpression: WORKTREE_PRUNE_CRON,
-      };
-
       // In pull mode, the task queue is file-driven — no ScheduledTask registered.
       // For other trigger modes, register the default task only when one is
       // actually configured: with an empty command the daemon runs just its
-      // persisted schedules + worktree-prune rather than fabricating a task.
+      // persisted schedules + builtins rather than fabricating a task.
       // (cron/both with an empty task already errored above.)
       const tasks: ScheduledTask[] = (trigger === 'pull' || command.trim() === '')
         ? []
@@ -299,9 +289,7 @@ export function registerDaemonCommand(program: Command): void {
             trigger,
             ...(options.cron !== undefined ? { cronExpression: options.cron } : {}),
           }];
-      if (!worktreePruneDisabled && worktreePruneConfig?.enabled !== false) {
-        tasks.push(worktreePruneTask);
-      }
+      const builtinInfo = appendBuiltinTasks(tasks, config, env);
 
       // Load persisted schedules from ~/.afk/config/schedules.json
       const persistedSchedules = loadSchedules();
@@ -369,8 +357,8 @@ export function registerDaemonCommand(program: Command): void {
           tasks,
           // Proactive OAuth refresh (#1296) — only for OAuth-routed sessions.
           ...(providerForModel(String(daemonModel)) === 'anthropic-direct' && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN ? { oauthRefresher: async () => { const { refreshClaudeCodeOauthToken } = await import('../../agent/auth/keychain.js'); await refreshClaudeCodeOauthToken(); } } : {}),
-          // "Done"-verification probe — see `isDoneUnverified` above.
-          doneUnverifiedProbe: isDoneUnverified,
+          // Turn-completion hooks: the "Done"-verification probe (`isDoneUnverified` above) + sidecar save.
+          ...daemonTurnHooks(daemonModel, isDoneUnverified),
           onTaskComplete: (record: TelemetryRecord, details?: TaskCompletionDetails) => {
             // markdown:true — task output is agent-authored markdown; render it
             // to Telegram HTML so **bold**/`code`/headers format instead of
@@ -431,8 +419,11 @@ export function registerDaemonCommand(program: Command): void {
         } else {
           console.log(palette.dim(`  task='${taskId}' command='${command}' trigger='${trigger}'${options.cron ? ` cron='${options.cron}'` : ''}`));
         }
-        if (tasks.length > 1) {
-          console.log(palette.meta(`  + built-in: worktree-prune (cron: ${WORKTREE_PRUNE_CRON})`));
+        if (builtinInfo.worktreePruneEnabled) {
+          console.log(palette.meta(`  + built-in: worktree-prune (cron: ${builtinInfo.worktreePruneCron})`));
+        }
+        if (builtinInfo.toolHealthEnabled) {
+          console.log(palette.meta(`  + built-in: tool-health (cron: ${builtinInfo.toolHealthCron})`));
         }
         console.log(palette.dim('  Press Ctrl+C to stop.'));
 

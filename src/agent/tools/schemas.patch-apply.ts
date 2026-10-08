@@ -45,7 +45,10 @@ export const patchApplyTool: AnthropicToolDef = {
               type: 'string',
               description:
                 'SHA-256 hash to verify the file has not changed (format: "sha256:<hex>"). ' +
-                'If the file\'s current hash does not match, the entire patch is rejected.',
+                'If the file\'s current hash does not match, the entire patch is rejected. ' +
+                'Only set this to a hash copied verbatim from a prior tool result ' +
+                '(e.g. a previous patch_apply `after_hash`); never compute or guess one. ' +
+                'Otherwise omit it or pass an empty string (treated as no hash check).',
             },
             edits: {
               type: 'array',
@@ -62,9 +65,15 @@ export const patchApplyTool: AnthropicToolDef = {
               },
             },
             content: {
-              type: 'string',
+              type: ['string', 'null'],
               description:
-                'Full replacement content for the file. Mutually exclusive with `edits`.',
+                'Full replacement content for the file. Mutually exclusive with `edits`: ' +
+                'when using `edits`, omit this field or pass `""` or `null` as a placeholder. ' +
+                'A standalone `null` (no `edits` key) is treated as absent and triggers the ' +
+                '`no_change_specified` validator error. ' +
+                'Note: whitespace-only content alongside `edits` is treated as a real payload ' +
+                'and will trigger a `mutually_exclusive` error — only `""` and `null` qualify ' +
+                'as placeholder values.',
             },
           },
           required: ['path'],

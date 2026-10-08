@@ -11,6 +11,887 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.306.3] - 2026-10-08
+
+### Changed
+- shared type-guards, sleep, truncate, truncateTelegramLabel, stripAnsi in tests (#3318) (eb6a5650)
+
+## [5.306.2] - 2026-10-08
+
+### Fixed
+- apply advisory findings from 2026-10-07 pr-triage (#3316) (24c952c5)
+
+### Changed
+- surface /whatif and Jev as differentiators in README (#3315) (e04095c8)
+- shared walker + resolveTraceFile + groupViolationsByFile; fix --reason drift in check-test-typecheck (#3319) (495196f4)
+- extract checkout-lifecycle helpers; plugin update warns before discarding edits (#3317) (d7eb6282)
+
+## [5.306.1] - 2026-10-08
+
+### Fixed
+- share normalizeSystemPromptOverlay; fix OpenAI preset {append} drop (#3305) (29241d8c)
+
+## [5.306.0] - 2026-10-08
+
+### Added
+- add preexisting-defect ledger reader and afk insights section (#3307) (1dbc57c5)
+- operator tool deny list (tools.disabled) with /config → Tools toggles (#3297) (abbd92bb)
+
+## [5.305.8] - 2026-10-08
+
+### Fixed
+- add mid-session endpoint switch tests for reasoning replay (#3309) (6827c08e)
+- apply advisory findings from 2026-10-08 pr-triage (#3296) (08175418)
+
+### Changed
+- add wiring regression tests for PreToolUse injectContext delivery (#3308) (b78b8c69)
+- add router anthropic/xai branches and model_complete path-approval once/subagent cases (#3294) (ebedf10c)
+
+## [5.305.7] - 2026-10-08
+
+### Fixed
+- address advisory findings from 2026-10-08 /pr-triage (#3295) (b7bda6f0)
+
+### Changed
+- openai-compatible compaction defaults to gpt-6-luna on real OpenAI endpoints (#3288) (481340df)
+
+## [5.305.6] - 2026-10-08
+
+### Fixed
+- tidy three comment nits in mascot.ts and mascot-mini.ts (#3115) (8cd25714)
+- replace fixed sleep with vi.waitFor in heartbeat test (#3285) (eafc8118)
+- accept collapsed-frame marker as Python traceback predecessor (#3287) (8883a81a)
+- guard CPR late-reply leak + adaptive timeout (#3240) (a25d355b)
+- prefer timeoutSignal.aborted over caller signal when both fire (#3286) (2d66cbc2)
+
+## [5.305.5] - 2026-10-08
+
+### Fixed
+- enforce named-agent tool and bash restrictions on compose nodes; block peer tools for children at dispatch (#3270) (d9fdf69b)
+
+## [5.305.4] - 2026-10-08
+
+### Added
+- support Claude Haiku 5.5 and point haiku alias at it (#3280) (a776f1c2)
+
+### Fixed
+- report prompt counts in /compact, not inflated raw message counts (#3132) (9bfd8411)
+- apply advisory findings from 2026-09-30 pr-triage (#3137) (e127727b)
+- wire ownerStartTime pid-reuse check and unify parentSessionId spread (#3118) (6f1f2f6f)
+- document TOCTOU window, normalize notifyOn comparison, assert store isolation in shell tests (#3117) (5d12437a)
+- keep enabled thinking on opus-4-6, mute SDK deprecation warning (#3279) (b949763d)
+
+### Changed
+- bump typescript from 5.9.3 to 6.0.3 (#3236) (ff81872e)
+
+## [5.305.3] - 2026-10-08
+
+### Fixed
+- share sweep-policy resolver; /worktree prune now honors config and env age limits (#3272) (e2d8f13f)
+- advisory findings from Cerebras support PRs (#2788, #2789, #2790, #2793) (#3138) (9e09cc86)
+- validate text minLength/maxLength in Telegram elicitation handler (#3275) (3d9cf10e)
+
+## [5.305.2] - 2026-10-08
+
+### Fixed
+- move isNewerVersion to update-version.ts; fix prerelease compare in afk update (#3271) (4aaa2ea5)
+- share buildWhatifRunOptions between CLI and slash; forward operatorPredictions (#3274) (46537334)
+- reject chatgpt-oauth in image_edit; extract makeSessionCounter (#3273) (251ff682)
+- treat null-equivalent Deferred values as empty (none/n/a/-) (#3237) (8d7e5064)
+
+## [5.305.1] - 2026-10-08
+
+### Fixed
+- erase ghost spinner and CPR-reanchor on width-only tmux resize (#3228) (0e46a05d)
+- tighten strategy-nudge error-line detection (#3223) (55d06547)
+- cap earlySettled and sanitize toolUseId in detached-tool-notifier (#3222) (fac366f4)
+
+## [5.305.0] - 2026-10-08
+
+### Added
+- add model_complete, a one-shot completion against any configured model (#3254) (1dcf8f26)
+
+### Changed
+- bump @types/node from 26.6.3 to 26.6.4 in /website (#3230) (cfdd9539)
+- bump ora from 8.2.0 to 9.4.1 (#3239) (fb500b1d)
+
+## [5.304.1] - 2026-10-08
+
+### Fixed
+- regenerate pnpm-lock.yaml broken by sequential dependabot merges (#3253) (bb91c807)
+
+## [5.304.0] - 2026-10-08
+
+### Added
+- make fact tracking and soft-delete GC safe per archive (#3211) (5ffb7f4f)
+
+### Fixed
+- address advisory findings from #2854 (Fable 5.1 support) (#3148) (4ad89fee)
+
+### Changed
+- bump the fumadocs group in /website with 3 updates (#3229) (ab12fef1)
+- bump @testing-library/jest-dom in /dashboard (#3231) (904d8a6f)
+- bump lucide-react from 0.468.0 to 1.52.0 in /dashboard (#3233) (44fe7df7)
+- bump jsdom from 26.1.0 to 30.1.2 in /dashboard (#3234) (0b916557)
+- bump jsdom (#3232) (f6b82938)
+- bump commander from 12.1.0 to 15.0.0 (#3235) (c5f7c4ff)
+- bump undici from 7.30.0 to 8.11.2 (#3238) (c4dae640)
+- bump softprops/action-gh-release from 2 to 3 (#3225) (e01e6735)
+- bump actions/upload-artifact from 4 to 6 (#3226) (da3c889d)
+- bump actions/setup-node from 4 to 7 (#3227) (a029e391)
+- bump actions/checkout from 4 to 7 (#3224) (94534ea2)
+
+## [5.303.10] - 2026-10-07
+
+### Fixed
+- deliver non-blocking PreToolUse additionalContext (#3157) (e80d1327)
+
+## [5.303.9] - 2026-10-07
+
+### Fixed
+- reference RAW_VALUE_CAP in inbound-mode boundary tests (#3219) (1ec88e05)
+- tighten EgressBlockedError assertions in egress lookup tests (#3221) (47b48886)
+- address advisory review findings for tool-health monitor and daemon builtin (#3135) (f1057945)
+- remove duplicate ToolFailureClassSchema, tighten isContentBlockArray return type (#3133) (d00f99f6)
+- advisory findings from #2770, #2879, #2824 (#3134) (7274f3ae)
+- document internal-only helpers in effect-ledger barrel (#3209) (15ee4fbe)
+- raise engines.node to jsdom 30's floor (#3150) (825d7761)
+- address advisory findings from #2810 peer boundary delivery (#3136) (19c7e3da)
+- address advisory findings from review of #3063 (#3116) (f76fdba2)
+- address advisory findings from review of #3077 (#3097) (ba46e740)
+- remove dead applyPostRunNotices (#3220) (f6e86014)
+- replay reasoning for destination endpoints (#3156) (387daa69)
+- bound Windows bash kill cleanup without blocking (#3210) (e7e07b30)
+- add _renameFn/_platform injectables to atomicWriteFileAsync for portable EPERM retry testing (#3153) (26021cbc)
+- add maxRetries to rm in temp git repo teardowns to avoid ENOTEMPTY (#3208) (53152e90)
+
+## [5.303.8] - 2026-10-07
+
+### Fixed
+- re-anchor live frame after tmux pane resize (no more duplicated frame on kill-pane/split) (#3204) (6f07459d)
+
+## [5.303.7] - 2026-10-07
+
+### Added
+- add opt-in Stop hook that blocks closing on unproven external diagnosis (#3190) (22ca5a25)
+
+### Fixed
+- harden stream termination and retry observability (#3159) (3d9008fa)
+
+## [5.303.6] - 2026-10-07
+
+### Fixed
+- read vision/reasoning/context from the Codex catalog so gpt-6 models see pasted images (#3188) (c240ca37)
+- count patch_apply as file write, bash external effects corroboration, move version history (#3191) (edc66634)
+
+## [5.303.5] - 2026-10-07
+
+### Fixed
+- complete advisory review follow-ups (#3158) (e4db9d85)
+
+## [5.303.4] - 2026-10-07
+
+### Fixed
+- strategy-nudge keys on the real error line, not boilerplate (#3160) (343c2503)
+- add RAW_VALUE_CAP boundary tests and move getPeerInboundModeConfig into list branch (#3186) (00b7acfe)
+- address advisory findings from detached-tool-notifier review (#3189) (688ec803)
+- use makeNonIpError on deps so non-IP records reject with EgressBlockedError (#3187) (14d60a55)
+
+## [5.303.3] - 2026-10-07
+
+### Added
+- trace-backed downgrade signals — closure reason + subagent budget exhaustion (#3195) (b3f82314)
+
+### Changed
+- add unit tests for three worst-coverage CLI/service modules (COV-007..009) (#3203) (a5903f52)
+- remove buildPromptAsync internal deprecated shim (#3196) (80b8167e)
+
+## [5.303.2] - 2026-10-07
+
+### Added
+- add UPDATE-failure-resilience test for access tracking (#3192) (358c8669)
+
+### Fixed
+- migrate task-view describe blocks to task-view-mode.test.ts (#3200) (1308f538)
+- execFileSync for findGitRoot; shell-metachar tests; gitleaksignore cleanup (#3199) (ee2f4181)
+- add { unref? } option to sleepWithAbort; tighten test; cover sleep() unref paths (#3198) (b551e708)
+
+### Changed
+- Web dashboard: session titles, new-session hang, and sidecars for daemon/web/skill sessions (#3197) (91e2d6d5)
+- DEAD-033 incremental — remove 72 unused exports from src/agent/trace/index.ts (#3202) (3a725829)
+- patch picomatch ReDoS, bump openai+@types/node, fix website/ baseline-browser-mapping (#3193) (d7ba5ea7)
+
+## [5.303.1] - 2026-10-07
+
+### Added
+- catalog-backed route limits, configurable in-turn context guard, model awareness (#3177) (5f9e91bf)
+
+### Fixed
+- re-fork zero-output transport failures once, fail closed on any tool activity (#3172) (2bcae018)
+
+## [5.303.0] - 2026-10-07
+
+### Added
+- opt-in elapsed-time connection retry budget + connect-failure diagnostics (#3173) (c605e2b2)
+- explicit incomplete handoff and findings salvage at the tool-round cap (#3176) (5e15142c)
+
+### Fixed
+- address advisory review findings from 2026-10-06 pr-triage (#3175) (22971afa)
+
+### Changed
+- add unit tests for three worst-coverage CLI/service modules (#3178) (92e7f89b)
+
+## [5.302.13] - 2026-10-07
+
+### Fixed
+- observe yield probe failures and cover cached PR paths (#3154) (130d8ed4)
+- add maxRetries to rm in peer wake teardown to avoid Windows ENOTEMPTY (#3179) (0daf2a5b)
+- keep the event loop alive during retry backoff sleeps (#3171) (72991e20)
+- replace shell execSync with execFileSync for worktree ops; add .gitleaksignore (#3180) (69c38902)
+
+### Changed
+- delete task-view.ts, remove @types/node-cron, prune 25 unused exports (#3174) (4a9def34)
+
+## [5.302.12] - 2026-10-07
+
+### Fixed
+- pass --allow-scripts=agent-afk to npm install so postinstall runs on npm >=11.19 (#3152) (9005022b)
+
+## [5.302.11] - 2026-10-07
+
+### Added
+- add --predict flag and spec predictions field for deterministic operator-supplied predictions (#3162) (9cfccc5f)
+
+### Fixed
+- add portable POSIX-utility regression test for settle-after-kill fallback (#3167) (7833d6f9)
+- dispatch UserPromptSubmit in Telegram per-turn path (#3163) (f3853eb6)
+
+## [5.302.10] - 2026-10-07
+
+### Changed
+- note dropped `**Done** — text` single-line form next to `'unknown'` in `FacetOutcomeSchema` JSDoc (#2797)
+
+### Added
+- downgrade self-reported Done using corroborating signals (#3168) (4b1b07a5)
+
+### Fixed
+- note dropped single-line Done form next to 'unknown' in schema JSDoc (#3165) (a4d78b4b)
+- wire DetachableToolRegistry.settled subscriber (#3164) (644bf907)
+- peer hardening — typo visibility, bare-filename guard, corrupt-orphan rescan test (#3161) (649073cb)
+- harden createGuardedLookup — catch callback throw, block non-IP, prove all=true (#3166) (ad9dfea9)
+
+## [5.302.9] - 2026-10-07
+
+### Fixed
+- session sidecar exitReason/eof advisory findings (#3145) (7402bddf)
+
+## [5.302.8] - 2026-10-07
+
+### Fixed
+- extract shared sleepSync util, strengthen backoff ceiling test, add retry log (#3146) (561f230d)
+- address advisory findings from traced retry layer (#2851) (#3144) (73b10717)
+- address advisory findings from 2026-09-29 /pr-triage (#3142) (ae9d977b)
+- document far-reset probe tradeoff and provider scope for autoResume env var (#3140) (e75ddf2d)
+- advisory findings from #2850 — peer activity presence fixes (#3139) (b09ae05d)
+
+## [5.302.7] - 2026-10-06
+
+### Fixed
+- address advisory review findings from #2857 (#3147) (be9c4ba9)
+- advisory findings from #2835, #2860, #2862 (#3143) (50042fd7)
+- address advisory findings from #2852 presence review (#3141) (3314dc73)
+
+## [5.302.6] - 2026-10-06
+
+### Fixed
+- guard history.push for silent auto-resume; add held size hint (#3122) (8d7749ce)
+- harden process-jobs — escapeXmlAttr apos, sweep tests, quota-rotation guard, trace observability, docs (#3123) (73d850d6)
+- truthful background-result delivery note so agents stop busy-polling (#3125) (68c7d0b3)
+- add containment and uid checks to EXDEV cleanup fallback (#3131) (a62bf115)
+
+## [5.302.5] - 2026-10-06
+
+### Fixed
+- address advisory findings from review of #3075 (#3121) (8578aecb)
+- shorten regression test title, justify realistic variant, inline JSDoc (#3120) (1881a64f)
+- reject {content: null, edits: []} as no_change_specified (#3130) (0355ed77)
+- bash-detach stale listener, unref timer, sentinel + compose JSDoc/guard fixes (#3124) (0d2b846f)
+- address combined advisory findings from 2026-10-06 triage (#3119) (45c1993c)
+
+## [5.302.4] - 2026-10-06
+
+### Fixed
+- treat standalone content: null as absent, not a parse error (#3100) (2df47ac1)
+
+### Changed
+- unit-test applyDeferPeers branches and processJobNotifier ordering (#3099) (ac4303e7)
+
+## [5.302.3] - 2026-10-06
+
+### Fixed
+- add test-typecheck error-count ratchet and document tsconfig.test.json include scope (#3114) (5676f002)
+
+## [5.302.2] - 2026-10-06
+
+### Fixed
+- report rewound prompts, not raw API message counts (#3109) (29a0d8d7)
+- complete truncated SPINE.md citations and trim SKILL.md descriptions (#3112) (3ff0fa7b)
+- complete schema extraction, add type guards (#3113) (919afeec)
+- document onTaskComplete disk-durability contract and add afterEach flag-leak guard (#3110) (9d52188f)
+- close lingering .rm sibling, add EXDEV fallback, add .rm-linger test assertion (#3101) (5a8c68b0)
+- fix cwd precedence comment, restore tilde JSDoc, add EXDEV lock-degrade test (#3111) (7e8845ef)
+- poll groupAlive assertions to avoid zombie-window flake (#3098) (2f4c5695)
+
+## [5.302.1] - 2026-10-06
+
+### Fixed
+- record ownerPid in bg meta.json and reconcile dead-owner jobs on read (#2319) (d2387bcb)
+
+## [5.302.0] - 2026-10-06
+
+### Added
+- fold forge SALVAGE candidates into shadow-verify and automate (#3094) (4b652616)
+
+### Fixed
+- guard schedule read-modify-write with O_EXCL advisory lock (#2318) (ae6b8696)
+- decouple fireOnTaskComplete from telemetry append try-catch (#2317) (2a30f2e2)
+- reject executor:"shell" on POST /tasks HTTP control surface (#2316) (b2ecd991)
+
+### Changed
+- unknown corruption path that orphans tool_use blocks past two defenses (#2344) (62c18815)
+- add non-blocking test-file typecheck gate (#3054) (124e2184)
+
+## [5.301.3] - 2026-10-06
+
+### Changed
+- inject execSync via deps, extract mockPrefix helper, share win32 invariant helper (#3055) (41062f4b)
+- replace wall-clock budget, fix EBUSY teardown, harden watch timing (#3056) (67ef042b)
+
+## [5.301.2] - 2026-10-06
+
+### Fixed
+- wire Stop on afk web, forward beforeTurnEnd, honor cap=0 (#3057) (9a918d6c)
+
+## [5.301.1] - 2026-10-06
+
+### Fixed
+- persist compose partial flags in the journal and count partial nodes (#3058) (f0dc157a)
+- explicit case + tests for no-usable-auth-forced-chatgpt-oauth and source:config (#3059) (c37ef0d9)
+- harden gate-liveness test assertions — URL check, module reset scope, neutral token, catch comment (#3092) (146b93e9)
+- drop unused flushed var, move comment, add isDirty rationale (#3091) (f736859a)
+- bind resolver inside vi.waitFor to eliminate post-poll non-null assertion (#3090) (b03df02d)
+- add curl -si allowlist comment; pin execSync arg in gh run list test; fix double-space nit (#3089) (fd608e90)
+- de-flake windows tests (rm retries; sync process-jobs cancel test on registry leader-exit) (#3093) (b11580ae)
+
+## [5.301.0] - 2026-10-06
+
+### Added
+- perfect the goblin — v17 banner portrait + sharper mini sprite (#3064) (23c6001d)
+
+### Fixed
+- correct curl -si comment; add gh run list wait_for test (#3060) (ef678e0d)
+- advisory findings from #2895 — security, perf, nit cleanup (#3061) (6aa297d8)
+- close lstat-to-rm TOCTOU window in session-tmpdir cleanup (#3076) (c31f825e)
+- address advisory findings from #2883 review (#3063) (bf4383e4)
+
+### Changed
+- replace fixed sleeps with vi.waitFor polling in afk-two-way-roundtrip (#3073) (f65a3fe3)
+- harden gate-liveness tests — fake token, fail-open coverage, real workspace dir (#3062) (939d49b1)
+- direct _mergeVotes ordering tests + accurate ordering docs (#3074) (a5ee46fa)
+- cover cappedHistory and falling-start/rising-tail burn-rate paths (#3075) (2b1173bf)
+- assert pendingWindowCap via test hook in S2 (#3077) (caaa28ef)
+
+## [5.300.0] - 2026-10-06
+
+### Added
+- run_in_background for managed long-running processes (#3037) (254fb1cc)
+
+## [5.299.9] - 2026-10-06
+
+### Fixed
+- harden per-session TMPDIR (TOCTOU, registry leak, hook shells, cache, docs) (#3052) (e5faf816)
+- restore pendingWindowCap invariant on all-sentinel displacement, document sync guarantee, add compact+sentinel tests (#3014) (6c06fbb0)
+- treat blank optional args as absent in edit_file and patch_apply (#3051) (359fbcca)
+- suppress burn-rate ETA when latest sample pair is non-increasing (#3048) (d068b217)
+- real candidates count + debugLog in memory GC sweep (#3049) (a0e22e77)
+- delete-then-set in _mergeVotes to preserve Map arrival order (#3047) (c5bc6887)
+- use path.relative-based containment in sandbox-guard (#3033) (a4cb15fd)
+
+### Changed
+- unit-test queuedSubmission + restore runInputLoop funcsize headroom (#3050) (88c290df)
+
+## [5.299.8] - 2026-10-06
+
+### Fixed
+- widen drift-test job regex to include digits/uppercase; annotate heredoc (#3042) (2a7676d8)
+
+## [5.299.7] - 2026-10-06
+
+### Fixed
+- replace `as OutputEvent[]` casts with `satisfies` in stream tests (#3041) (2742fbdd)
+- head+tail signature cap, remove dead nudged field, reword invariant comment (#3043) (be05492c)
+- parentRootSessionId JSDoc and microtask test drain (#3035) (fcf63c7a)
+- consolidate safeAnswer into farm-callbacks.helpers.ts (#3044) (7992ff73)
+- update is_current_session description, fix TOCTOU, document 2048-byte bound (#3045) (47eb5f2e)
+- locale-neutral schtasks CSV parsing, CR/LF/NUL guard, restart upgrade, dedup (#3034) (f29b7d75)
+
+### Changed
+- strengthen spy assertions in telemetry-write-guard tests (#3036) (988d38a7)
+
+## [5.299.6] - 2026-10-06
+
+### Fixed
+- override proxy-addr >=2.0.8 and source-map-js >=1.2.2 (GHSA-jqcg-44mw-7w3h, GHSA-68fv-2mgg-jv7q) (#3046) (d627aedd)
+- exhaustive switch in closureFromTrace and inline comment in normalClosure (#3031) (2e6349e7)
+
+## [5.299.5] - 2026-10-06
+
+### Added
+- Windows Task Scheduler backend for `afk service` (install/uninstall/status/restart/upgrade via `schtasks`, user-level, no elevation) (#1602)
+
+### Added
+- advisory same-error strategy nudge + surprise rule in system prompt (#3016) (6bfe6196)
+- add orchestrator-owned pre-push re-check to /ship (#3023) (c1134ebc)
+
+### Fixed
+- restore handleEnter invariants and narrow CsiHost width (#3025) (6cdbd0d9)
+- don't re-show archived rows on small content-hug shrinks (#3018) (b207b50e)
+- Shift+Tab mode switch toggles one live notice instead of stacking scrollback lines (#3021) (856931eb)
+- harden dead-letter quarantine — unique suffix, orphan dead-letter, benign race doc (#3024) (8d64c73c)
+- address advisory findings from pre-push hook review (#3019) (74661760)
+- tighten isExecError guard, add response-output tests, fix farm.ts arrows (#3022) (e44c2c2c)
+- readSidecarCwdSlice prefix read, is_current_session self-alias only, additive contract doc (#3017) (5def1400)
+- import renderReceiptMarkdown before re-exporting in receipt.ts (#3020) (a5e0edfc)
+
+### Changed
+- no service/auto-start support (daemon, Telegram bot) (#2347) (2e16379c)
+- audit production code for POSIX path assumptions (#2345) (585a17ae)
+- add hook-level dedup test and root-only contract comment (#3011) (8e2c1ce8)
+
+## [5.299.4] - 2026-10-06
+
+### Fixed
+- bare-filename guard, corrupt trace file field, races test coverage (#3009) (1b0177cb)
+- outcomes combiner v2 advisory findings (#3012) (9201818c)
+
+## [5.299.3] - 2026-10-05
+
+### Fixed
+- fix misleading JSDoc comments and deflake attribution tests (#3005) (27951e02)
+- address advisory findings from #2974 review (#3010) (cfa71b5e)
+
+## [5.299.2] - 2026-10-05
+
+### Fixed
+- tighten replay-renderer test assertions per advisory review (#3013) (5eb61262)
+- harden /history test hygiene — 4 advisory findings from #3000 review (#3015) (96147112)
+
+## [5.299.1] - 2026-10-05
+
+### Fixed
+- resolveBinding promotes a raw slot id to the full slot binding (#3001) (1f211c21)
+- protect worktrees pinned by scheduled task cwd fields (#2996) (737f34b9)
+- close stale pending window after compact→preamble→provider_switch; add soft-truncate tests (#3002) (64da2894)
+- three small journal replay renderer defects (blank paragraph, overcount, TTY echo) (#2999) (1769b0b2)
+- drop stale hardcoded model list from ChatGPT backend 400 error (#2998) (20bbddd6)
+
+### Changed
+- cover /history journal-first path and flush-before-read (#3000) (70c9f939)
+
+## [5.299.0] - 2026-10-05
+
+### Added
+- combiner v2 with severity tiers and good-by-default (#2997) (db76e12a)
+
+## [5.298.2] - 2026-10-05
+
+### Fixed
+- skip sessionstart agent tasks and alert when telemetry file is not writable (#2974) (22f4fbc5)
+
+## [5.298.1] - 2026-10-05
+
+### Fixed
+- remove stale bypass-mode execFile warning (#2716) (a73ac02c)
+- stop SessionEnd hook classifying its own SPINE.md edits and the main checkout's stale diff (#2641) (6fbb9d98)
+- credit nested sub-agent commits to the root session (#2710) (698bdf4f)
+- get_facet cwd-aware 'latest'; add 'current'/'self'; add resolution fields (#2975) (1bd93f34)
+- quarantine unparseable pending/ peer envelopes to held/ (#2976) (8eb6408b)
+
+## [5.298.0] - 2026-10-05
+
+### Added
+- self-installing pre-push hook running CI audit gates (#2686) (9686172f)
+
+## [5.297.0] - 2026-10-05
+
+### Added
+- re-render resumed and forked sessions from the message journal (#2715) (fefcf386)
+
+## [5.296.9] - 2026-10-05
+
+### Fixed
+- dead-letter malformed handoff records instead of silently skipping forever (#2973) (403ef1a9)
+- address remaining advisory findings from 2026-09-29 pr-triage (#2731) (217ef7f5)
+
+## [5.296.8] - 2026-10-05
+
+### Changed
+- split memory-store and memory-tools under the 350-line ceiling (#832) (#2959) (e75edd2e)
+
+## [5.296.7] - 2026-10-05
+
+### Fixed
+- make dynamic .mjs import tests portable to Windows (#2730) (3ee6bc78)
+
+## [5.296.6] - 2026-10-05
+
+### Fixed
+- surface soft-deadline partial compose nodes in the facet (#2977) (d852cbb7)
+
+### Changed
+- split 4 files under the 350-line ceiling (#832) (#2962) (46a8b1a8)
+
+## [5.296.5] - 2026-10-05
+
+### Changed
+- split worktree-sweep, readonly-bash, receipt, path-approval-hook under the 350-line ceiling (#832) (#2965) (10818c08)
+
+## [5.296.4] - 2026-10-05
+
+### Fixed
+- add in-process cooldown fallback when alert state write fails (#2972) (ee31fa7d)
+
+### Changed
+- split chat.ts, farm.ts, interactive/worktree.ts under the 350-line ceiling (#832) (#2963) (5831eb62)
+
+## [5.296.3] - 2026-10-05
+
+### Changed
+- split message handler, session manager and farm callbacks under the 350-line ceiling (#832) (#2964) (e0c0087f)
+
+## [5.296.2] - 2026-10-05
+
+### Changed
+- split audit-sdk-dependency and audit-fit under the 350-line ceiling (#832) (#2960) (babec7ad)
+- regenerate env-registry var count after concurrent merges (#2969) (d2c7b1b7)
+
+## [5.296.1] - 2026-10-05
+
+### Changed
+- split eval-run/contracts, runner, and propose/template-engine under the 350-line ceiling (#832) (#2961) (6f01d6d2)
+
+## [5.296.0] - 2026-10-05
+
+### Added
+- export plugin userConfig options and data dir to plugin hooks (#2732) (2ddcab6d)
+- add soft-delete GC sweep for stale fact archive entries (#2733) (78d51225)
+- burn-rate projection for subscription-quota indicator (#2951) (ceaeda9c)
+
+### Fixed
+- restore context.cwd as deprecated alias of context.resolveBase (#2948) (f9963c36)
+- hoist wslPrefixes, document dirname assumption, add ordering comment (#2949) (caa6088d)
+- peer-messaging docs/schema polish (#2950) (6e807701)
+
+## [5.295.9] - 2026-10-05
+
+### Fixed
+- enforce domain policy independently of unrelated browser config fields (#2919) (5a4ee000)
+
+## [5.295.8] - 2026-10-05
+
+### Fixed
+- replace wall-clock budget with ordering probe in 'returns immediately' test (#2947) (6dfbe3ae)
+
+## [5.295.7] - 2026-10-05
+
+### Fixed
+- deliver queued user messages at end of turn, not between tool rounds (#2956) (66f8e7da)
+
+## [5.295.6] - 2026-10-05
+
+### Added
+- record thumbs reactions as /good and /bad feedback (#2646) (90c9bb06)
+
+### Fixed
+- explicit truncation notice with line count on both Telegram and REPL (#2642) (0fb04855)
+- render the skill identity preview once per dispatch (#2915) (9bc80faa)
+
+## [5.295.5] - 2026-10-05
+
+### Changed
+- drop the spinner to 4 Hz after a 2 s warm-up and skip identical frames (#2946) (1e43fa75)
+
+## [5.295.4] - 2026-10-05
+
+### Fixed
+- recover claimed-but-uninjected peer envelopes after crash (#2924) (4c199481)
+
+## [5.295.3] - 2026-10-05
+
+### Added
+- blocking Stop hook continues the turn with a hard cap (#2740) (082b7609)
+
+### Fixed
+- introduce parentCredential to atomically pair key+sourceModel (#2928) (86ebeab6)
+- preserve body text when annotating; strip dangling label fragments (#2921) (cec37cf8)
+
+### Changed
+- rebuild parseSelfReport on parseTerminalState (#2922) (23b9194e)
+
+## [5.295.2] - 2026-10-05
+
+### Fixed
+- anchor breaking-change footer grep to line start (#2918) (598406db)
+- unref poller and exit on stdin close in test-server-dynamic fixture (#2917) (68e536a7)
+- pick most-representative verb for mixed parallel tool waves (#2920) (2a87e812)
+
+## [5.295.1] - 2026-10-04
+
+### Fixed
+- root session dirs at /tmp on darwin to fix sun_path EINVAL (#2942) (aa759578)
+- patch prod-path SSRF advisories (fast-uri, MCP SDK stack) (#2943) (92e65c4c)
+
+## [5.295.0] - 2026-10-04
+
+### Added
+- fire Stop on every top-level surface from the session layer (#2713) (ab6a3bc7)
+
+## [5.294.0] - 2026-10-04
+
+### Added
+- hint that a queued message stops a running wait_for (#2926) (58d369d6)
+
+### Fixed
+- add subagent PR detection (gap 6) and refactor detection to shared module (#2925) (634be66d)
+- surface Responses-API overload shapes as retryable errors (#2923) (aa724051)
+- tell the model its timeout limit and when a value was clamped (#2927) (d8c08dc1)
+
+### Changed
+- make the dynamic MCP fixture exit on stdin EOF (removes 10s vitest teardown stall) (#2930) (9c899d20)
+
+## [5.293.1] - 2026-10-04
+
+### Added
+- detach in-flight compose with Ctrl+B (#2746) (5b6e5510)
+
+### Fixed
+- skip WSL bash.exe in findGitBashOnWindows; derive from git.exe (#2763) (4deddfe0)
+- correct stale delivery-timing text and add sender rules (#2907) (616a9a05)
+
+### Changed
+- remove internal @deprecated items (#2748) (9d2cf2f3)
+
+## [5.293.0] - 2026-10-04
+
+### Fixed
+- SIGTERM tracked stdio servers at process exit so stubborn servers are never orphaned (#2931) (7f904dff)
+- wire DetachableToolRegistry at REPL bootstrap so Ctrl+B works on bash (#2753) (26064ba9)
+
+### Changed
+- regenerate env-registry after per-session TMPDIR change (#2929) (a57839af)
+- regenerate env-registry after #2747 merge (212 vars) (#2916) (8c1ab0ea)
+
+## [5.292.3] - 2026-10-04
+
+### Added
+- per-session and per-subagent private TMPDIR for spawned shells (#2747) (824f383d)
+
+### Fixed
+- settle post-detach deliver() on bounded timer when close never arrives (#2743) (7366139d)
+- newest explicit feedback vote wins (#2751) (00ccaa24)
+
+## [5.292.2] - 2026-10-04
+
+### Fixed
+- fix npm bin PATH check for Windows (delimiter and /bin suffix) (#2768) (d08d77c6)
+- silence Ajv unknown-format warnings for gRPC integer formats (#2767) (2696e63a)
+
+### Changed
+- bump the prod-minor-patch group across 1 directory with 7 updates (#2890) (46c634f0)
+
+## [5.292.1] - 2026-10-04
+
+### Fixed
+- emit PowerShell-compatible env-var syntax in Playwright install hint on win32 (#2765) (5a13c15e)
+- allowlist gh/curl read-only CI polls; fail fast on classifier block (#2769) (a034b5ff)
+- doctor: use resolveOpenAIAuth to cover ChatGPT/Codex OAuth (#2766) (85f9c2e8)
+
+### Changed
+- gate-liveness coverage for safety-gate wiring (#2882) (c78dcfb0)
+
+## [5.292.0] - 2026-10-04
+
+### Added
+- integrate skill previews with live dispatch activity (#2895) (0d2b4bc8)
+- improve peer-arrival UX — sanitized identity, silent auto-resume echo (#2896) (f68305fd)
+
+### Fixed
+- consistent, provider-labeled usage-limit errors for Claude and Codex (#2883) (5d3c2cb5)
+
+### Changed
+- redirect HOME in every test worker so tests can never hit the real home (#2905) (4f0d82d0)
+
+## [5.291.1] - 2026-10-04
+
+### Fixed
+- read tool arguments from Responses *.done events (#2904) (45a3a0fc)
+
+### Changed
+- bump openai from 6.38.0 to 7.25.0 (#2893) (ff5379c3)
+- bump shiki (#2898) (077d20f3)
+- bump vitest from 3.2.7 to 5.0.3 in /dashboard (#2889) (fcfe9576)
+- bump @vitejs/plugin-react in /dashboard (#2888) (524c13df)
+- bump @types/node from 26.6.2 to 26.6.3 in /website (#2885) (de8d70f5)
+- bump jsdom and @types/jsdom (#2892) (ddd4991e)
+- bump @types/node from 22.19.11 to 26.6.3 (#2897) (fdd13ba7)
+- bump the fumadocs group across 1 directory with 3 updates (#2884) (df8022ff)
+
+## [5.291.0] - 2026-10-04
+
+### Fixed
+- keep facet schema backward-compatible with v7 caches missing `pr_url` (#2863)
+
+### Changed
+- document SessionFacet v7 outcome semantics for public consumers (#2797)
+
+### Added
+- cooperative mid-turn boundary delivery for both providers (#2810) (fa17faaa)
+- tool-health builtin alerts on cross-session tool degradation (#2774 3/3) (#2785) (14c7fc9f)
+- per-session ToolHealthMonitor + tool_degraded trace event (#2774 2/3) (#2784) (fd77b367)
+- Claude Fable 5.1 support with drop_block prefix-binding observable (#2854) (b9dddee3)
+- one traced retry layer for compaction and one-shot calls (#2851) (baad7c6a)
+- opt-in usage-limit park for subagents so an account switch rescues in-flight children (#2826) (464fdac3)
+- cross-process usage awareness (per-provider buckets, afk usage, daemon budget gate) (#2853) (b90e9112)
+
+### Fixed
+- unify spinner verbs onto humanVerbForTool and prune flavour pools (#2878) (17b30f66)
+- key unparseable baseURLs distinctly in rate-limit/ledger (#2872) (#2879) (f0d82a2b)
+- add endedAt + exitReason to session sidecar on all exit paths (#2771) (aafff031)
+- prefer remote default branch over mutable local HEAD in resolveAnchorBaseRef (#2770) (e08b023c)
+- polish v7 public schema notes (#2863) (8f447b64)
+- fix gh pr create detection gaps (quoted separators, $(), flattened multi-line) (#2834) (71aceb7f)
+- resolve ghost-text credential per suggest model; route ChatGPT OAuth over Responses (#2864) (884a2da4)
+- accept completed response when transport drops after stop_reason (#2835) (68f14880)
+- advisory follow-ups from #2845 review (#2855) (#2860) (93b90799)
+- address allowlist wiring test and fork-site audit (#2848) (#2859) (a60783f9)
+- treat raised engines.node floor as major in auto-release (#2839) (c4db34e1)
+
+### Changed
+- remove @types/jest, refresh lockfile to clear prod advisories (#2825) (afd64a82)
+- bump the dashboard-minor-patch group (#2886) (6b1d592e)
+- bump chalk from 5.6.2 to 6.0.1 (#2894) (297013ea)
+- bump the dev-minor-patch group with 2 updates (#2891) (a305976e)
+- bump next from 16.3.6 to 16.3.8 in /website (#2887) (260f51f5)
+- point Dependabot at the root package and dashboard (#2824) (77cf1bd7)
+- remove stale autoRouting daemon refs (#2862) (03469197)
+- regression tests for redactSecrets at Telegram push boundary (#2849) (#2866) (e25238dd)
+
+## [5.290.4] - 2026-10-03
+
+### Fixed
+- refuse dangling symlinks in image_generate and image_edit output paths (#2836) (a6e67f59)
+
+## [5.290.3] - 2026-10-03
+
+### Fixed
+- retry SDK connect timeouts; redact connection_retry trace text (#2856) (f4332787)
+
+## [5.290.2] - 2026-10-03
+
+### Fixed
+- refill the screen after a tall overlay collapses (content-hug blank gap) (#2857) (eed966f0)
+
+## [5.290.1] - 2026-10-03
+
+### Fixed
+- invariant comment + redactSecrets at Telegram delivery boundary (#2849) (#2858) (e17db879)
+- address advisory findings from #2805 atomic-write review (#2837) (9e1b9b10)
+
+## [5.290.0] - 2026-10-03
+
+### Added
+- show peer session activity in list_sessions (#2850) (4e7e64d9)
+
+### Fixed
+- defeat pid reuse in presence liveness, refresh heartbeat, reap dead presence files (#2852) (e39708f8)
+
+## [5.289.1] - 2026-10-03
+
+### Fixed
+- do not retry egress-blocked requests in retryFetch (#2832) (1c7d48ba)
+
+## [5.289.0] - 2026-10-03
+
+### Added
+- disabledPluginHooks config key; warn before marketplace update discards local edits (#2841) (f8c0c4fe)
+
+## [5.288.3] - 2026-10-03
+
+### Fixed
+- retry and pause on status-less mid-stream overload errors (#2845) (42457e6f)
+- per-file retention for inbox delivered/ receipts (#2840) (7cd2d35b)
+- never forward an Anthropic credential to OpenAI-routed compose nodes (#2846) (f831dffc)
+
+## [5.288.2] - 2026-10-03
+
+### Fixed
+- enforce CommonMark fence rules in fencedLines() so unbalanced fence-like lines no longer hide the end-of-turn heading (#2833) (16bb8711)
+- retry connection-phase network errors (regression from #2422) (#2838) (fe5c90aa)
+- make default provider stores lazy so importing a provider opens no SQLite files (#2842) (2096f82e)
+
+## [5.288.1] - 2026-10-03
+
+### Fixed
+- exclude subagent tool events from toolDurationsMs; document trace interleaving (#2831) (cd682695)
+- persist result bodies and fix mislabeled delivered witness events (#2830) (5afd055d)
+
+## [5.288.0] - 2026-10-03
+
+### Added
+- tell scoped children which agent_type values they may dispatch (#2829) (23633647)
+
+## [5.287.2] - 2026-10-03
+
+### Fixed
+- keep bash output on abort/timeout; make write_file atomic (#2814) (936a6f27)
+
+### Changed
+- remove dead autoRouting.daemon key (#2827) (b8a0b1e1)
+- upgrade vitest + @vitest/coverage-v8 2.1.9 -> 4.1.11 (#2828) (88914f3c)
+
+## [5.287.1] - 2026-10-03
+
+### Fixed
+- diagnostic detail on no readable content errors (#2808) (42a5be5e)
+
+## [5.287.0] - 2026-10-03
+
+### Added
+- cross-session peer messaging (list_sessions / send_to_session) (#2806) (dff4418f)
+
+## [5.286.2] - 2026-10-03
+
+### Fixed
+- retry rename on Windows EPERM/EACCES/EBUSY (#2805) (1d3ef5ca)
+- right-size /review budgets, fix compose guidance, trace the effective budget (#2815) (c90e1303)
+
+## [5.286.1] - 2026-10-03
+
+### Fixed
+- address advisory findings from 2026-09-30 pr-triage (#2745) (da8899f6)
+
+### Changed
+- unskip clipboard and tildifyHome tests on Windows (#2744) (f1c022f4)
+- exercise real undici + egress-guard fetch path (#2774) (#2783) (510a003c)
+
+## [5.286.0] - 2026-10-03
+
+### Added
+- warn when agent-afk was upgraded under a running session (#2809) (5e4eeea6)
+
+### Fixed
+- back off harder on HTTP 429 and guide retries (#2807) (b6e0a6ad)
+
 ## [5.285.0] - 2026-10-03
 
 ### Added

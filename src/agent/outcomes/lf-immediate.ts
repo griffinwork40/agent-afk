@@ -18,6 +18,7 @@ import {
   isVerificationCommand,
   parseVerificationSummary,
 } from './verification-patterns.js';
+import { parseTerminalState } from './terminal-state.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -65,6 +66,92 @@ function exitStatusTrustworthy(ev: ToolEvent): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Machine-injected content stripping
+// ---------------------------------------------------------------------------
+
+/**
+ * Known machine-injected block tag names. Strip full blocks for each of these
+ * explicitly named tags so nested sub-tags (like <task>, <output>) don't
+ * cause the outer block to survive.
+ *
+ * Invariant: this list covers the harness tags visible in real session turns.
+ * False negatives (new injected tag not listed) are safer than false positives
+ * (stripping human text with a too-broad regex).
+ */
+const MACHINE_TAG_NAMES = [
+  'peer-session-message',
+  'background-subagent-result',
+  'background-process-result',
+  'command-name',
+  'command-message',
+  'command-args',
+  'bash-passthrough',
+];
+
+/**
+ * Build a regex that strips the outermost block for a given tag name.
+ * Uses greedy [\s\S]* to consume everything up to the LAST closing tag on
+ * same line or across lines — correct for non-nested harness blocks.
+ */
+function makeTagPattern(tagName: string): RegExp {
+  const escaped = tagName.replace(/-/g, String.raw`\-`);
+  return new RegExp(
+    `<${escaped}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${escaped}>`,
+    'gi',
+  );
+}
+
+const MACHINE_TAG_PATTERNS: RegExp[] = MACHINE_TAG_NAMES.map(makeTagPattern);
+
+/**
+ * Patterns that match machine-injected blocks in user turns. These are harness
+ * preambles, relay messages, and structured outputs injected by the runtime —
+ * NOT human-typed text. They must be stripped before correction-keyword
+ * detection to avoid false positives on automated content.
+ *
+ * Invariant: strip only well-delimited blocks (opening angle-bracket tag or
+ * bracket prefix); never strip arbitrary text. False negatives (missed injected
+ * content) are safer than false positives (stripping human text).
+ */
+const MACHINE_BLOCK_PATTERNS: RegExp[] = [
+  ...MACHINE_TAG_PATTERNS,
+  // Bracketed harness preambles: [memory: ...], [bridge: ...], [afk: ...],
+  // [placeholder-prevent], [jev rules]: etc. Match the whole line.
+  //
+  // Three sub-patterns, joined by alternation:
+  //   A) \[[a-z][a-z0-9 _-]*:[a-z0-9 _:-]*\]    — bracket contains a colon
+  //      (e.g. [memory: user name], [bridge: id], [afk: note])
+  //   B) \[[a-z][a-z0-9 _-]*\]:                  — label followed by external ':'
+  //      (e.g. [jev rules]: ..., [afk]:)
+  //   C) \[[a-z][a-z0-9]*(?:-[a-z0-9]+)+\]       — kebab-case single label
+  //      (e.g. [placeholder-prevent]) — must have at least one hyphen, so
+  //      `[please]` is NOT matched but `[placeholder-prevent]` is.
+  //
+  // This deliberately excludes plain human-readable phrases like `[please fix]`
+  // or `[note]` (no colon, no hyphen, no external colon) which are valid human
+  // text and must NOT be stripped. False negatives (a new harness tag without
+  // colon or hyphen) are safer than false positives (stripping human text).
+  //
+  // The `m` flag makes `^` match the start of each line (multiline).
+  /^(?:\[[a-z][a-z0-9 _-]*:[a-z0-9 _:-]*\]|\[[a-z][a-z0-9 _-]*\]:|\[[a-z][a-z0-9]*(?:-[a-z0-9]+)+\])[^\n]*/gim,
+];
+
+/**
+ * Strip machine-injected content from a user turn text.
+ * Returns the cleaned text with surrounding whitespace trimmed.
+ * Pure function — suitable for unit testing.
+ */
+export function stripMachineContent(text: string): string {
+  let cleaned = text;
+  for (const pattern of MACHINE_BLOCK_PATTERNS) {
+    // Reset lastIndex since patterns use /g flag
+    pattern.lastIndex = 0;
+    cleaned = cleaned.replace(pattern, '');
+  }
+  return cleaned.trim();
+}
+
+// ---------------------------------------------------------------------------
 // Correction keyword heuristic
 // ---------------------------------------------------------------------------
 
@@ -85,17 +172,50 @@ function hasCorrectionLanguage(text: string): boolean {
 // Self-report parser
 // ---------------------------------------------------------------------------
 
-const SELF_REPORT_PATTERN =
+/**
+ * Legacy inline-bold pattern for the backfill path.
+ *
+ * Invariant: this is used ONLY as a fallback in parseSelfReport when
+ * parseTerminalState returns null. Historical transcripts (pre-heading-format
+ * prompt) used inline bold markers anywhere in the text (e.g. "Task complete.
+ * **Done**" or "**Blocked** — needs credentials."). The backfill path must
+ * recognize those transcripts; the live REPL/daemon path should not.
+ */
+const LEGACY_SELF_REPORT_PATTERN =
   /\*\*(Done|Blocked|Asking|Interrupted)\*\*/i;
 
+/**
+ * Parse the assistant's final text for a Done/Blocked/Asking/Interrupted
+ * heading and return the matching SelfReport value, or 'none'.
+ *
+ * Strategy: try parseTerminalState first (gets fenced-code-block skipping,
+ * tail-anchoring, and heading-format tolerance). If that returns null, fall
+ * back to the legacy inline-bold pattern so historical transcripts in the
+ * backfill path are still recognized. The fallback is intentionally not
+ * added to parseTerminalState itself — that parser is conservative by design
+ * and must not change semantics for the live REPL/daemon verdict surface.
+ *
+ * History: parseSelfReport previously used only the legacy regex; #2799
+ * rebuilt it on parseTerminalState to prevent drift. The fallback preserves
+ * backward compatibility for the backfill path without reopening the drift
+ * risk for new sessions.
+ */
 export function parseSelfReport(assistantText: string): SelfReport {
-  const m = SELF_REPORT_PATTERN.exec(assistantText);
-  if (m === null || m[1] === undefined) return 'none';
-  const word = m[1].toLowerCase();
-  if (word === 'done') return 'done';
-  if (word === 'blocked') return 'blocked';
-  if (word === 'asking') return 'asking';
-  if (word === 'interrupted') return 'interrupted';
+  const state = parseTerminalState(assistantText);
+  if (state !== null) return state.kind;
+
+  // Backfill fallback: recognize legacy inline-bold markers from historical
+  // transcripts where the keyword was embedded in prose rather than on its
+  // own heading line.
+  const m = LEGACY_SELF_REPORT_PATTERN.exec(assistantText);
+  if (m) {
+    const kw = m[1]!.toLowerCase();
+    if (kw === 'done') return 'done';
+    if (kw === 'blocked') return 'blocked';
+    if (kw === 'asking') return 'asking';
+    if (kw === 'interrupted') return 'interrupted';
+  }
+
   return 'none';
 }
 
@@ -130,6 +250,7 @@ export function lfClosure(
       lf: 'closure',
       vote: -1,
       strength: 'strong',
+      severity: 'major',
       evidence: `trace closure.reason=abort`,
       observed_at: now,
     });
@@ -138,6 +259,7 @@ export function lfClosure(
       lf: 'budget_cap',
       vote: -1,
       strength: 'weak',
+      severity: 'minor',
       evidence: `trace closure.reason=iteration_cap`,
       observed_at: now,
     });
@@ -174,6 +296,7 @@ export function lfErrorTail(turns: Turn[], now: string): Vote | null {
       lf: 'error_tail',
       vote: -1,
       strength: 'strong',
+      severity: 'major',
       evidence: `${consecutiveErrors} consecutive isError tool events at session end`,
       observed_at: now,
     };
@@ -243,6 +366,7 @@ export function lfVerification(turns: Turn[], now: string): Vote | null {
       lf: 'verification',
       vote: parsed === 'pass' ? 1 : -1,
       strength: 'strong',
+      severity: parsed === 'pass' ? undefined : 'major',
       evidence: `verification summary from resultTail: ${parsed}`,
       observed_at: now,
     };
@@ -257,6 +381,7 @@ export function lfVerification(turns: Turn[], now: string): Vote | null {
     lf: 'verification',
     vote: passed ? 1 : -1,
     strength: 'strong',
+    severity: passed ? undefined : 'major',
     evidence: `verification command after last write: isError=${String(!passed)}`,
     observed_at: now,
   };
@@ -269,17 +394,24 @@ export function lfVerification(turns: Turn[], now: string): Vote | null {
 /**
  * Returns a weak -1 if a user turn after turn 0 opens with correction language.
  * First turn is excluded (that's the original task, not a correction).
+ *
+ * Machine-injected content (harness preambles, relay blocks, bracketed prefixes)
+ * is stripped before checking so automated content does not produce false positives.
  */
 export function lfInSessionCorrection(turns: Turn[], now: string): Vote | null {
   for (let i = 1; i < turns.length; i++) {
     const turn = turns[i];
     if (turn === undefined) continue;
-    const user = turn.user ?? '';
+    const raw = turn.user ?? '';
+    // Strip machine-injected blocks before correction-keyword detection
+    const user = stripMachineContent(raw);
+    if (user.length === 0) continue; // entire turn was machine content
     if (hasCorrectionLanguage(user)) {
       return {
         lf: 'in_session_correction',
         vote: -1,
         strength: 'weak',
+        severity: 'minor',
         evidence: `user turn ${i} correction keywords`,
         observed_at: now,
       };

@@ -49,21 +49,26 @@ vi.mock('../../../paths.js', () => ({
   getPluginsDir: vi.fn().mockReturnValue('/fake/afk-home/plugins'),
 }));
 
-vi.mock('../../../whatif/surface.js', () => ({
-  resolveSpec: vi.fn().mockResolvedValue({
-    title: 'Append note to AFK.md',
-    changes: [{ kind: 'append', target: 'user-afk-md', text: 'Always ask.' }],
-  }),
-  buildWhatifDeps: vi.fn().mockReturnValue({
-    runner: {},
-    complete: vi.fn(),
-    makeJudge: vi.fn(),
-    makeCrossCheckJudge: vi.fn(),
-    onProgress: undefined,
-    signal: undefined,
-  }),
-  readDirNames: vi.fn().mockReturnValue([]),
-}));
+vi.mock('../../../whatif/surface.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../whatif/surface.js')>();
+  return {
+    ...actual,
+    resolveSpec: vi.fn().mockResolvedValue({
+      title: 'Append note to AFK.md',
+      changes: [{ kind: 'append', target: 'user-afk-md', text: 'Always ask.' }],
+    }),
+    buildWhatifDeps: vi.fn().mockReturnValue({
+      runner: {},
+      complete: vi.fn(),
+      makeJudge: vi.fn(),
+      makeCrossCheckJudge: vi.fn(),
+      onProgress: undefined,
+      signal: undefined,
+    }),
+    readDirNames: vi.fn().mockReturnValue([]),
+    // buildWhatifRunOptions: use real implementation so forwarding is verified.
+  };
+});
 
 vi.mock('../../../whatif/operators/index.js', () => ({
   describeChange: vi.fn().mockReturnValue('Append to AFK.md'),
@@ -166,6 +171,20 @@ describe('/whatif slash command', () => {
     await whatifCmd.handler(ctx, '--append "Always ask." --yes');
     // noBaselineSample should be absent (not spread in) when flag not given
     expect(vi.mocked(runWhatif).mock.calls[0]?.[0]).not.toMatchObject({ noBaselineSample: true });
+  });
+
+  it('forwards --predict operatorPredictions to runWhatif (regression: #3255)', async () => {
+    const { ctx } = makeCtx();
+    await whatifCmd.handler(
+      ctx,
+      '--append "Always ask." --predict "should greet the user" --yes',
+    );
+    const firstCallOpts = vi.mocked(runWhatif).mock.calls[0]?.[0];
+    expect(firstCallOpts).toMatchObject({
+      operatorPredictions: [
+        expect.objectContaining({ behavior: 'should greet the user' }),
+      ],
+    });
   });
 
   it('prints compiled spec and asks for --yes when text is given without --yes', async () => {

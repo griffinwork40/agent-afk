@@ -157,7 +157,15 @@ async function runPredictPhase(
   // Check added paragraphs against the baseline system prompt using
   // deterministic token-set Jaccard similarity.  Warnings are surfaced via
   // onProgress BEFORE the model call so a user can abort a paid run early.
+  // Elapsed time is reported so operators know when a large system prompt
+  // (many paragraphs × many added paragraphs) is driving the O(n×m) pass.
+  const redundancyStart = performance.now();
   const redundancyWarnings = checkRedundancy(structural.baseline.system, structural.systemDiff);
+  const redundancyElapsedMs = performance.now() - redundancyStart;
+  deps.onProgress?.({
+    stage: 'predict',
+    message: `[redundancy] Jaccard pass complete (${redundancyElapsedMs.toFixed(2)}ms)`,
+  });
   for (const w of redundancyWarnings) {
     const sectionNote = w.sourceSection ? ` (§ ${w.sourceSection})` : '';
     const scoreNote = ` [${(w.similarity * 100).toFixed(0)}% similar]`;
@@ -186,11 +194,18 @@ async function runPredictPhase(
   const probesPerPrediction = options.probes ?? DEFAULT_PROBES;
   const maxPredictions = resolveMaxPredictions(probesPerPrediction, options.maxPredictions);
 
+  // Collect operator predictions from options and from the spec file (#2861).
+  const specPredictions = options.spec.predictions ?? [];
+  const cliPredictions = options.operatorPredictions ?? [];
+  const allOperatorPredictions = [...cliPredictions, ...specPredictions];
+
   const rawPredictions = await predictChanges(
     {
       spec, changeDescriptions, structural, trackRecord, repoManifest,
       probesPerPrediction, maxPredictions,
       ...(redundancySection !== undefined ? { redundancySection } : {}),
+      ...(allOperatorPredictions.length > 0 ? { operatorPredictions: allOperatorPredictions } : {}),
+      ...(options.verify ? { verify: true } : {}),
     },
     wrappedComplete,
     options.analystModel,
@@ -343,6 +358,7 @@ export async function runWhatif(
         spec,
         structural,
         predictions,
+        questionFit: fitResult.level,
         costUsd: analystCostUsd,
         runDir,
         limits,
@@ -443,7 +459,7 @@ export async function runWhatif(
     if (!verifyJudgeResults) throw new Error('verifyRun did not return judgeResults');
 
     pendingReport = await buildAndPersistVerifiedReport({
-      spec, structural, predictions, verifyResult, droppedProbes,
+      spec, structural, predictions, questionFit: fitResult.level, verifyResult, droppedProbes,
       corpusExclusions, verifyTraces, analystCostUsd, runDir,
       resolvedJudge, autoKeepContextHooks,
       judgeResults: verifyJudgeResults,

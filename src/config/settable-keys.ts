@@ -46,6 +46,14 @@ export const INHERITED_ENV_KEYS: ReadonlySet<string> = new Set([
   'NO_UPDATE_NOTIFIER',
   'SCRIPT',
   'ASCIINEMA_REC',
+  // Windows OS-owned vars that feed the security-sensitive WSL prefix check in
+  // resolve-shell.ts (buildWslPrefixes / isWslBash). Persisting any of these
+  // would let an agent corrupt the WSL-shim filter or force the MSYSTEM
+  // fast-path, both of which are attacker-controlled outcomes.  Must remain
+  // non-config.
+  'SystemRoot',
+  'MSYSTEM',
+  'LOCALAPPDATA',
 ]);
 
 /**
@@ -251,7 +259,6 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'autoRouting.interactive', tier: 'agent', type: 'boolean', description: 'Auto-route model in the REPL.' },
   { path: 'autoRouting.chat', tier: 'agent', type: 'boolean', description: 'Auto-route model for chat.' },
   { path: 'autoRouting.telegram', tier: 'agent', type: 'boolean', description: 'Auto-route model for Telegram.' },
-  { path: 'autoRouting.daemon', tier: 'agent', type: 'boolean', description: 'Auto-route model for the daemon.' },
   { path: 'telegram.notify.mode', tier: 'human', type: 'enum', enumValues: ['primary', 'broadcast', 'custom'], description: 'Telegram notify routing mode (human-tier: notification-redirect vector).' },
   { path: 'telegram.notify.primaryChatId', tier: 'human', type: 'number', clamp: { min: -1e15, max: 1e15, integer: true }, description: 'Primary Telegram chat id (human-tier: notification-redirect vector).' },
   { path: 'telegram.notify.targets', tier: 'human', type: 'number-array', description: 'Custom Telegram target chat ids (human-tier: notification-redirect vector).' },
@@ -297,6 +304,12 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   // because that would let an agent expand its own hook subprocesses\' env access.
   // Value shape: Record<pluginName, string[]> — see issue #2459.
   { path: 'pluginHookEnv', tier: 'human', type: 'object', description: 'Per-plugin hook env allowlist: maps plugin name → array of env-var names forwarded to that plugin\'s hook subprocesses. Human-tier: only the user controls which secrets reach plugin hooks.' },
+  // Human-tier: disabling a plugin hook is an operator decision — mirroring
+  // pluginHookEnv which is also human-tier. The agent must not be able to
+  // silence third-party hooks on its own config.
+  // Value shape: Record<pluginName, string[]> where each string is
+  // "<Event>" or "<Event>:<matcher>" — see issue #2816.
+  { path: 'disabledPluginHooks', tier: 'human', type: 'object', description: 'Per-plugin hook disable list: maps plugin name (from plugin.json) → array of "<Event>" or "<Event>:<matcher>" specifiers to suppress. Human-tier: disabling a hook is an operator decision the agent must not reverse.' },
   // Human-tier: hiding a skill from the model is an operator decision the agent
   // must not be able to reverse on its own config. Accepts bare skill names
   // (e.g. "forge") and plugin-qualified names (e.g. "awa-dev:qualify"). Each

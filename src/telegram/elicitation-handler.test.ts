@@ -1128,6 +1128,133 @@ describe('text type — :cancel and allow_skip', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Text type — minLength / maxLength validation (issue #3256)
+// ---------------------------------------------------------------------------
+
+describe('text type — minLength / maxLength validation', () => {
+  it('accepts text that meets minLength', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+
+    const ac = makeAbort();
+    const resultPromise = handler(textRequest({ minLength: 3 }), { signal: ac.signal });
+    await Promise.resolve();
+
+    simulateTextReply(messageHandler, CHAT_ID, 'hello');
+    const result = await resultPromise;
+    expect(result).toEqual({ action: 'accept', content: { value: 'hello' } });
+  });
+
+  it('re-prompts when text is shorter than minLength', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+
+    const ac = makeAbort();
+    const resultPromise = handler(textRequest({ minLength: 5 }), { signal: ac.signal });
+    await Promise.resolve();
+
+    simulateTextReply(messageHandler, CHAT_ID, 'hi');
+    await Promise.resolve();
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      CHAT_ID,
+      expect.stringMatching(/at least 5/i),
+      {},
+    );
+    expect(messageHandler.pendingElicitations.has(ROUTE_KEY)).toBe(true);
+
+    simulateTextReply(messageHandler, CHAT_ID, ':cancel');
+    const result = await resultPromise;
+    expect(result.action).toBe('cancel');
+  });
+
+  it('accepts text that exactly meets minLength', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+
+    const ac = makeAbort();
+    const resultPromise = handler(textRequest({ minLength: 3 }), { signal: ac.signal });
+    await Promise.resolve();
+
+    simulateTextReply(messageHandler, CHAT_ID, 'abc');
+    const result = await resultPromise;
+    expect(result).toEqual({ action: 'accept', content: { value: 'abc' } });
+  });
+
+  it('accepts text within maxLength', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+
+    const ac = makeAbort();
+    const resultPromise = handler(textRequest({ maxLength: 10 }), { signal: ac.signal });
+    await Promise.resolve();
+
+    simulateTextReply(messageHandler, CHAT_ID, 'hello');
+    const result = await resultPromise;
+    expect(result).toEqual({ action: 'accept', content: { value: 'hello' } });
+  });
+
+  it('re-prompts when text exceeds maxLength', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+
+    const ac = makeAbort();
+    const resultPromise = handler(textRequest({ maxLength: 5 }), { signal: ac.signal });
+    await Promise.resolve();
+
+    simulateTextReply(messageHandler, CHAT_ID, 'toolongtext');
+    await Promise.resolve();
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      CHAT_ID,
+      expect.stringMatching(/at most 5/i),
+      {},
+    );
+    expect(messageHandler.pendingElicitations.has(ROUTE_KEY)).toBe(true);
+
+    simulateTextReply(messageHandler, CHAT_ID, ':cancel');
+    const result = await resultPromise;
+    expect(result.action).toBe('cancel');
+  });
+
+  it('accepts valid text on second attempt after minLength re-prompt', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+
+    const ac = makeAbort();
+    const resultPromise = handler(textRequest({ minLength: 4 }), { signal: ac.signal });
+    await Promise.resolve();
+
+    simulateTextReply(messageHandler, CHAT_ID, 'hi');
+    await Promise.resolve();
+
+    simulateTextReply(messageHandler, CHAT_ID, 'hello');
+    const result = await resultPromise;
+    expect(result).toEqual({ action: 'accept', content: { value: 'hello' } });
+  });
+
+  it('skip is still allowed for short text when allowSkip=true', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+
+    const ac = makeAbort();
+    const resultPromise = handler(textRequest({ allowSkip: true }), { signal: ac.signal });
+    await Promise.resolve();
+
+    simulateTextReply(messageHandler, CHAT_ID, '');
+    const result = await resultPromise;
+    expect(result).toEqual({ action: 'skip' });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Confirm type — abort cleans up dispatch table
 // ---------------------------------------------------------------------------
 

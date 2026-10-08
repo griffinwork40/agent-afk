@@ -344,12 +344,19 @@ export function checkPauseAnnotations(ctx: LifecycleContext): boolean {
   // geometry and produce phantom blank rows in scrollback). Does NOT call
   // flush() itself; the block below owns the single flush. Mutates
   // ctx.lastTtfbAnnotation in place when the displayed second advances.
-  const ttfbDirtied = checkTtfbAnnotation(ctx, now);
+  checkTtfbAnnotation(ctx, now);
 
-  if ((changed || ttfbDirtied) && ctx.isTTY && ctx.overlayComposer) {
+  if (ctx.isTTY && ctx.overlayComposer) {
     if (changed) ctx.overlayComposer.markDirty('tool-lane');
-    // progress-banner already marked dirty by checkTtfbAnnotation when ttfbDirtied.
-    ctx.overlayComposer.flush();
+    // The progress banner is already marked dirty by checkTtfbAnnotation.
+    // Also drain resize invalidations on quiet preparation frames. Gate on
+    // isDirty() so the full compose-and-setOverlay path is skipped entirely
+    // on ticks where neither the tool lane nor any other slot changed.
+    // Rationale: setOverlay() triggers a terminal write + compositor geometry
+    // recalculation on every call; skipping it on clean ticks avoids one full
+    // escape-sequence write per tick and prevents the double-setOverlay desync
+    // that produces phantom blank rows in scrollback (see c862d2b3).
+    if (changed || ctx.overlayComposer.isDirty()) ctx.overlayComposer.flush();
   }
 
   return changed;

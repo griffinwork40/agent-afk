@@ -82,6 +82,8 @@ export interface FrameHost {
   readonly spinnerController: SpinnerController;
   attachments: ImageAttachment[];
   clipboardFailureMsg: string | null;
+  /** Transient Shift+Tab mode notice (terminal-compositor.mode-notice.ts). */
+  modeNotice: string | null;
   // ── committed-band tracking (mutated by preserveRowsBeforeFrameRender) ──
   committedBand: string[];
   /** #540: per-physical-row logical provenance, index-aligned 1:1 with committedBand. */
@@ -96,6 +98,8 @@ export interface FrameHost {
   /** content-hug: post-commit band length during an in-flight commit, else null. */
   pendingContentRows: number | null;
   committedBandPaintedRows: number;
+  /** Leading band rows already in scrollback (terminal-compositor.band-archived-prefix.ts). */
+  committedBandArchivedPrefix: number;
   /** Memoization for reflowCommittedBandToWidth — see the field doc on the class. */
   bandReflowCache: BandReflowCache | null;
   hasCommitted: boolean;
@@ -107,6 +111,13 @@ export interface FrameHost {
    *  repaints from applying content-following, which would misplace the frame
    *  and cause Phase 3 to write into the banner zone. */
   commitInFlight: boolean;
+  /**
+   * True while a CPR reply is in-flight (tmux EXPAND delta correction).
+   * repaint() skips the physical write while this is set so the stale-row
+   * repaint cannot race the delta-translated fresh repaint that fires once
+   * the CPR reply arrives and applyScrollDelta runs.
+   */
+  cprPending: boolean;
   // ── collaborators ──
   readonly scrollRegion?: CompositorScrollRegionGuard;
   readonly stdout: NodeJS.WriteStream;
@@ -119,6 +130,11 @@ export function repaint(self: FrameHost): void {
   // callers will otherwise clobber the user's prompt and typed characters.
   // Restored by `resumeInput()` which itself calls `repaint()` once.
   if (!self.armed || !self.logUpdate || self.committing || self.suspended) return;
+  // CPR-pending guard: while waiting for a Cursor Position Report reply
+  // (ESC[6n → ESC[row;colR) after a tmux EXPAND, suppress the physical write.
+  // The delta-corrected repaint fires once requestCprAndApplyDelta receives the
+  // reply and calls self.repaint() with fresh, shifted row coordinates.
+  if (self.cprPending) return;
   // Resize ghost-erase: physically clear the pre-resize on-screen footprint
   // captured by the SIGWINCH immediate handler BEFORE painting the new
   // geometry, so an expand does not leave the old frame/band frozen as
@@ -158,6 +174,7 @@ export function repaint(self: FrameHost): void {
     self.attachments,
     clipboardRef,
     self.stdout.columns ?? 80,
+    self.modeNotice,
   );
   self.clipboardFailureMsg = clipboardRef.value;
   const dropdownRows = self.renderDropdownRows();
@@ -191,7 +208,7 @@ export function repaint(self: FrameHost): void {
     self.placementMode,
     self.anchorRow,
     self.logUpdate,
-    hug ? contentHugAnchor(self) : undefined,
+    hug ? (physicalRows) => contentHugAnchor(self, physicalRows, absoluteBottom) : undefined,
   );
   // Record the real (unpadded) frame top for commitAbove's routing. This is the
   // value Phase-2 will re-establish; logUpdate.topRow (shrink-padded) is not.
@@ -255,6 +272,7 @@ function repaintPickerFrame(self: FrameHost): void {
     self.attachments,
     clipboardRef,
     self.stdout.columns ?? 80,
+    self.modeNotice,
   );
   self.clipboardFailureMsg = clipboardRef.value;
   const layout = computePickerViewportLayout(
@@ -283,7 +301,7 @@ function repaintPickerFrame(self: FrameHost): void {
     ? self.logUpdate.measure(frame, absoluteBottom).lineCount
     : frameLines.length;
   const bottomRow = self.placementMode === 'content-hug'
-    ? contentHugTargetBottom(contentHugAnchor(self), physicalRows, absoluteBottom)
+    ? contentHugTargetBottom(contentHugAnchor(self, physicalRows, absoluteBottom), physicalRows, absoluteBottom)
     : absoluteBottom;
   const desiredTopRow = Math.max(1, bottomRow - physicalRows + 1);
   // Record the real (unpadded) frame top for commitAbove's routing, exactly as
