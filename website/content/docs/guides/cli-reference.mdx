@@ -530,7 +530,7 @@ Supported service names: `telegram`, `daemon`.
 
 Shortcut for `afk service restart`. Restarts AFK's OS-supervised background services.
 
-On macOS the latest service config (LaunchAgent plist) is re-applied automatically before restarting. On Linux, `afk restart` only issues `systemctl --user restart` — to pick up config changes after an AFK upgrade, run `afk service upgrade <name>` first, then `afk restart`.
+On macOS the latest service config (LaunchAgent plist) is re-applied automatically before restarting. On Linux, `afk restart` only issues `systemctl --user restart`, and in-place `afk service upgrade` is not yet supported for systemd. To pick up config changes after an AFK upgrade, reinstall the unit with `afk service uninstall <name>` then `afk service install <name>`.
 
 ```bash
 afk restart            # restart every installed service (telegram, daemon)
