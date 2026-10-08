@@ -49,8 +49,12 @@ function isLedgerRecord(x: unknown): x is LedgerRecord {
   return (
     typeof r['ts'] === 'string' &&
     typeof r['sessionId'] === 'string' &&
+    typeof r['turn'] === 'number' &&
+    typeof r['repo'] === 'string' &&
     typeof r['signal'] === 'string' &&
-    Array.isArray(r['loci'])
+    typeof r['category'] === 'string' &&
+    Array.isArray(r['loci']) &&
+    (r['loci'] as unknown[]).every((l) => typeof l === 'string')
   );
 }
 
@@ -59,16 +63,19 @@ function isLedgerRecord(x: unknown): x is LedgerRecord {
 // ---------------------------------------------------------------------------
 
 /**
- * Read the preexisting ledger at the default path and return all valid
- * records. Malformed lines are silently skipped.
+ * Read the preexisting ledger and return all valid records.
+ * Malformed lines are silently skipped.
  * Returns an empty array when the ledger is missing or unreadable.
+ *
+ * @param ledgerPath - Optional explicit path; defaults to the standard ledger
+ *   location derived from `$AFK_HOME` / `$AFK_FRAMEWORK_DIR`.
  */
-export function readLedgerRecords(): LedgerRecord[] {
-  const ledgerPath = getPreexistingLedgerPath();
-  if (!existsSync(ledgerPath)) return [];
+export function readLedgerRecords(ledgerPath?: string): LedgerRecord[] {
+  const resolvedPath = ledgerPath ?? getPreexistingLedgerPath();
+  if (!existsSync(resolvedPath)) return [];
   let raw: string;
   try {
-    raw = readFileSync(ledgerPath, 'utf8');
+    raw = readFileSync(resolvedPath, 'utf8');
   } catch {
     return [];
   }

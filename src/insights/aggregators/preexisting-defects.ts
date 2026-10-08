@@ -13,9 +13,11 @@
  * @module insights/aggregators/preexisting-defects
  */
 
+import { join } from 'node:path';
 import type { InsightsOptions } from '../types.js';
 import type { DefectCluster } from '../../agent/preexisting-ledger/reader.js';
 import { readLedgerRecords, clusterLedgerRecords } from '../../agent/preexisting-ledger/reader.js';
+import { getPreexistingLedgerPath } from '../../agent/preexisting-ledger/paths.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -55,7 +57,10 @@ const MAX_CLUSTERS = 20;
 export function aggregatePreexistingDefects(
   options: InsightsOptions,
 ): PreexistingDefectAggregates {
-  const records = readLedgerRecords();
+  const ledgerPath = options.afkHome
+    ? join(options.afkHome, 'agent-framework', 'preexisting-ledger.jsonl')
+    : getPreexistingLedgerPath();
+  const records = readLedgerRecords(ledgerPath);
   if (records.length === 0) return zeroPreexistingDefectAggregates();
 
   const cutoffMs = Date.now() - options.days * 24 * 60 * 60 * 1000;

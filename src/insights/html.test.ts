@@ -238,12 +238,21 @@ describe('generateHtml', () => {
     expect(html).toContain('</html>');
   });
 
-  it('all 8 section headings present in output', () => {
+  it('all 8 always-present section headings appear in zero-aggregate output', () => {
     const html = generateHtml(makeZeroAgg(), NO_RECS, OPTS);
     const headings = ['Sessions', 'Cost', 'Tool Usage', 'Daemon Tasks', 'Traces', 'Routing', 'Recommendations', 'About'];
     for (const heading of headings) {
       expect(html).toContain(`<h2>${heading}</h2>`);
     }
+  });
+
+  it('9th section heading (Most-Acknowledged Pre-existing Defects) appears when data is non-zero', () => {
+    // renderPreexistingDefects returns '' when topClusters is empty (by design —
+    // avoids an empty heading cluttering reports before the ledger accumulates).
+    // Verify it DOES render when data is present.
+    const html = generateHtml(makeNonZeroAgg(), NO_RECS, OPTS);
+    expect(html).toContain('<h2>Most-Acknowledged Pre-existing Defects</h2>');
+    expect(html).toContain('src/agent/session.test.ts'); // fixture locus
   });
 
   it('zero aggregates: each section renders a no-data placeholder', () => {

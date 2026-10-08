@@ -38,6 +38,7 @@ export function renderPreexistingDefects(agg: InsightAggregates): string {
   const rows = pd.topClusters
     .map((c) => {
       const locus = htmlEscape(c.locus.length > 60 ? c.locus.slice(0, 57) + '...' : c.locus);
+      const repo = htmlEscape(c.repo.length > 40 ? '...' + c.repo.slice(-37) : c.repo);
       const category = htmlEscape(c.category);
       const signal = htmlEscape(c.signal);
       const count = htmlEscape(safeNum(c.recurrenceCount));
@@ -45,6 +46,7 @@ export function renderPreexistingDefects(agg: InsightAggregates): string {
       const first = htmlEscape(c.firstSeen ? c.firstSeen.slice(0, 10) : '—');
       return `<tr>
         <td><code>${locus}</code></td>
+        <td><code>${repo}</code></td>
         <td>${category}</td>
         <td>${signal}</td>
         <td style="text-align:right">${count}</td>
@@ -69,6 +71,7 @@ export function renderPreexistingDefects(agg: InsightAggregates): string {
       <thead>
         <tr>
           <th>Locus</th>
+          <th>Repo</th>
           <th>Category</th>
           <th>Signal</th>
           <th style="text-align:right">Sessions</th>
