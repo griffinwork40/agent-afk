@@ -35,7 +35,7 @@ jobs:
 |-------|----------|---------|-------------|
 | `anthropic-api-key` | **yes** | — | Anthropic API key. Pass via a repository secret (`${{ secrets.ANTHROPIC_API_KEY }}`). Never hard-code it in the workflow. |
 | `prompt` | **yes** | — | Prompt forwarded to `afk chat`. Supports YAML multi-line literals (`\|`). |
-| `afk-version` | no | `latest` | npm version of agent-afk to install (e.g. `5.0.0`, `latest`, or any dist-tag). Use `local` to skip the install step and run from a previously checked-out repo where `pnpm install` has already been called. |
+| `afk-version` | no | `latest` | npm version of agent-afk to install (e.g. `5.0.0`, `latest`, or any dist-tag). Use `local` to run from the checked-out repo (see [Local mode](#advanced-run-from-the-local-repo-checkout)). |
 | `node-version` | no | `22` | Node.js version. Must satisfy the `engines.node` field in agent-afk's `package.json` (`^22.22.2 \|\| ^24.15.0 \|\| >=26.0.0`). |
 | `model` | no | *(repo default)* | Model slug forwarded to `afk chat --model`. When empty the repo's configured default is used. |
 | `working-directory` | no | `.` | Directory to run `afk chat` from. A project-local `AFK.md` in this directory is picked up as the operator overlay. |
@@ -45,22 +45,46 @@ jobs:
 
 | Output | Description |
 |--------|-------------|
-| `response` | The text response returned by `afk chat`. |
+| `response` | The assistant's text response, extracted from `afk chat --format json`. Contains only the message content, with no spinner output, headings, or cost metadata. |
 
 ## Security
 
-- The `anthropic-api-key` input is mapped to `ANTHROPIC_API_KEY` in the env block
-  of the run step — it is **never echoed** to logs or passed as a shell argument.
+- The `anthropic-api-key` input is mapped to `ANTHROPIC_API_KEY` in the `env:`
+  block of the run step. It is **never echoed** to logs or passed as a shell
+  argument.
+- All other inputs that appear in `run:` scripts (`prompt`, `model`,
+  `output-file`, `afk-version`) are also routed through `env:` variables
+  (`AFK_PROMPT`, `INPUT_MODEL`, `INPUT_OUTPUT_FILE`, `INPUT_AFK_VERSION`). No
+  `${{ inputs.* }}` expression appears inside any `run:` body, which prevents
+  shell injection when a prompt contains command-substitution characters such as
+  `$(...)` or backticks.
 - Third-party actions inside the composite action are pinned to their full commit
   SHA, not a mutable tag, to prevent supply-chain attacks.
 - No other secrets or tokens are required. The action deliberately unsets
   `AFK_TELEGRAM_BOT_TOKEN` so the Telegram subsystem is never initialised in CI.
+- The `GITHUB_OUTPUT` multiline delimiter is generated at runtime using
+  `openssl rand -hex 16` (with a `/dev/urandom` fallback) so a crafted prompt
+  cannot inject a delimiter and truncate or overwrite subsequent outputs.
+
+## Response output
+
+The action runs `afk chat --format json`, which writes a structured JSON object
+to stdout (spinner and cost metadata go to stderr and appear in the CI log, not
+in the captured output). The `response` output and `output-file` contain only the
+plain-text assistant message extracted from the `message` field of that JSON
+object, with no terminal formatting, headings, or cost lines.
 
 ## Advanced: run from the local repo checkout
 
-When you want to test a change to agent-afk itself (e.g. in CI for this repo),
-pass `afk-version: local` and call `pnpm install --frozen-lockfile` before
-invoking the action:
+When you want to test a change to agent-afk itself (for example, in the CI
+workflow for this repo), pass `afk-version: local`. In local mode the action:
+
+1. Resolves the repository root from its own location inside the checkout.
+2. Builds the CLI from source with `pnpm run build:dist`.
+3. Invokes `node dist/cli.mjs` directly instead of the global `afk` binary.
+
+The caller must run `pnpm install --frozen-lockfile` before invoking the action
+so that all build dependencies are present.
 
 ```yaml
 steps:

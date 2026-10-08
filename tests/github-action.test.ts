@@ -27,13 +27,72 @@ const validationWorkflowPath = join(
   'validate-action.yml',
 );
 
-/** Read the action.yml as text (cached per test run). */
+/**
+ * Read the action.yml as text, normalizing CRLF line endings so that regex
+ * tests using \n anchors pass on Windows checkouts.
+ */
 function readAction(): string {
-  return readFileSync(actionPath, 'utf8');
+  return readFileSync(actionPath, 'utf8').replace(/\r\n/g, '\n');
 }
 
+/**
+ * Read the validation workflow as text, normalizing CRLF line endings so that
+ * regex tests using \n anchors pass on Windows checkouts.
+ */
 function readValidationWorkflow(): string {
-  return readFileSync(validationWorkflowPath, 'utf8');
+  return readFileSync(validationWorkflowPath, 'utf8').replace(/\r\n/g, '\n');
+}
+
+/**
+ * Extract all `run:` block bodies from a composite action YAML source.
+ *
+ * A run block starts with a line matching /^\s+run:\s*(|)$/ and continues
+ * with lines that are more deeply indented than the `run:` line itself (or
+ * blank lines within the block).  Returns each block body as a single string.
+ */
+function extractRunBlocks(src: string): string[] {
+  const lines = src.split('\n');
+  const blocks: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i]!;
+    // Match a `run:` key at any indentation level (composite action steps).
+    // Single-line form (`run: npm install ...`) is an injection vector too.
+    const inlineMatch = /^\s+run:\s*([^|>\s].*)$/.exec(line);
+    if (inlineMatch) {
+      blocks.push(inlineMatch[1]!);
+      i++;
+      continue;
+    }
+    const runMatch = /^(\s+)run:\s*[|>]?\s*$/.exec(line);
+    if (runMatch) {
+      const baseIndent = runMatch[1]!.length;
+      const bodyLines: string[] = [];
+      i++;
+      // Collect continuation lines: more indented than `run:`, or blank.
+      while (i < lines.length) {
+        const bodyLine = lines[i]!;
+        if (bodyLine.trim() === '') {
+          bodyLines.push(bodyLine);
+          i++;
+          continue;
+        }
+        const bodyIndent = bodyLine.match(/^(\s*)/)?.[1]?.length ?? 0;
+        if (bodyIndent > baseIndent) {
+          bodyLines.push(bodyLine);
+          i++;
+        } else {
+          break;
+        }
+      }
+      if (bodyLines.length > 0) {
+        blocks.push(bodyLines.join('\n'));
+      }
+    } else {
+      i++;
+    }
+  }
+  return blocks;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +195,56 @@ describe('run-afk action — action.yml structure', () => {
   it('sets AFK_NO_TUI to suppress interactive chrome in CI', () => {
     const src = readAction();
     expect(src).toMatch(/AFK_NO_TUI/);
+  });
+
+  // Injection-safety invariants -----------------------------------------------
+
+  it('has no ${{ inputs.* }} expressions inside any run: block', () => {
+    const src = readAction();
+    const runBlocks = extractRunBlocks(src);
+    expect(runBlocks.length).toBeGreaterThan(0);
+    for (const block of runBlocks) {
+      // ${{ inputs.<anything> }} inside a run: body is a script injection vector.
+      expect(block).not.toMatch(
+        /\$\{\{\s*inputs\./,
+        `Found $\{{ inputs.* }} inside a run: block — route it through env: instead:\n${block}`,
+      );
+    }
+  });
+
+  it('uses --format json when invoking afk chat', () => {
+    const src = readAction();
+    const runBlocks = extractRunBlocks(src);
+    // At least one run block must contain the --format json flag.
+    const hasFormatJson = runBlocks.some((b) => /--format\s+json/.test(b));
+    expect(hasFormatJson).toBe(
+      true,
+      'No run block calls afk chat with --format json. ' +
+        'The action must use JSON output mode to capture a clean response.',
+    );
+  });
+
+  it('uses a generated random delimiter for GITHUB_OUTPUT, not the fixed literal __AFK_EOF__', () => {
+    const src = readAction();
+    const runBlocks = extractRunBlocks(src);
+    // The fixed literal __AFK_EOF__ must not appear in any run block.
+    for (const block of runBlocks) {
+      expect(block).not.toMatch(
+        /__AFK_EOF__/,
+        'Found the fixed literal __AFK_EOF__ as a GITHUB_OUTPUT delimiter. ' +
+          'Use a generated random delimiter (e.g. AFK_EOF_$(openssl rand -hex 16)) ' +
+          'to prevent delimiter collision attacks.',
+      );
+    }
+    // At least one run block must contain a dynamically generated delimiter.
+    const hasGeneratedDelim = runBlocks.some(
+      (b) => /delim\s*=/.test(b) || /AFK_EOF_\$/.test(b),
+    );
+    expect(hasGeneratedDelim).toBe(
+      true,
+      'No run block generates a random GITHUB_OUTPUT delimiter. ' +
+        'Use e.g. delim="AFK_EOF_$(openssl rand -hex 16 ...)" to avoid collision.',
+    );
   });
 });
 
