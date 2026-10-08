@@ -67,7 +67,10 @@ export function prepareTurnRequest(input: TurnRequestInput): {
       maxTokens: input.maxTokens,
       headers,
       signal: input.signal,
-      ctx: { sessionId: input.sessionId },
+      ctx: {
+        sessionId: input.sessionId,
+        ...(input.traceWriter ? { traceWriter: input.traceWriter } : {}),
+      },
       ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
       ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),

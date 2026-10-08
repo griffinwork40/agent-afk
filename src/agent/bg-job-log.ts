@@ -341,8 +341,9 @@ export class BgJobLogReader {
       const parsed = JSON.parse(raw) as BgJobMeta;
       // Reject files with an unexpected schema version (stale v0, future v2, etc.)
       if (parsed.schemaVersion !== 1) return null;
-      // Lazily promote orphaned running entries whose owner PID has died.
-      const reconciled = reconcileOrphanedMeta(parsed);
+      // Lazily promote orphaned running entries whose owner PID has died or
+      // whose pid has been recycled by a different process.
+      const reconciled = await reconcileOrphanedMeta(parsed);
       if (reconciled !== parsed) persistReconciled(metaPath, reconciled);
       return reconciled;
     } catch (e) {

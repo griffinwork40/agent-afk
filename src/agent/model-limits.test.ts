@@ -55,10 +55,16 @@ describe('autoCompactLimitFor', () => {
     expect(autoCompactLimitFor('opus_1m')).toBe(1_000_000);
   });
 
-  it('leaves haiku / fable at their full window (no budget entry)', () => {
-    // haiku's 200k is its ACTUAL context window, not a reduced budget.
-    expect(contextLimitFor('haiku')).toBe(200_000);
+  it('caps the haiku alias (Haiku 5.5) at the 200k working budget on its 1M window', () => {
+    expect(contextLimitFor('haiku')).toBe(1_000_000);
     expect(autoCompactLimitFor('haiku')).toBe(200_000);
+    expect(autoCompactLimitFor('claude-haiku-5-5')).toBe(200_000);
+  });
+
+  it('leaves raw Haiku 4.5 / fable at their full window (no budget entry)', () => {
+    // Haiku 4.5's 200k is its ACTUAL context window, not a reduced budget.
+    expect(contextLimitFor('claude-haiku-4-5-20251001')).toBe(200_000);
+    expect(autoCompactLimitFor('claude-haiku-4-5-20251001')).toBe(200_000);
     expect(autoCompactLimitFor('fable')).toBe(1_000_000);
     expect(autoCompactLimitFor('claude-fable-5')).toBe(1_000_000);
     expect(autoCompactLimitFor('claude-fable-5-1')).toBe(1_000_000);
@@ -310,6 +316,33 @@ describe('claude-sonnet-4-6 — explicit limit pins (A/B baseline vs claude-sonn
     // so the opt-out survives regardless of which id the sonnet family points at.
     expect(autoCompactLimitFor('sonnet_1m')).toBe(1_000_000);
   });
+});
+
+describe('routesToOpenAICompatible fallback — third-party OpenAI-shim prefix families', () => {
+  // These prefixes are routed to openai-compatible by providers/index.ts Tier 3.
+  // routesToOpenAICompatible in model-limits.ts must match so unknown ids in
+  // these families get the 262k openai-compatible default, not the 200k
+  // Anthropic default (#2789 advisory).
+  const OPENAI_COMPAT_PREFIXES = [
+    'deepseek-v4-pro',
+    'deepseek_v4-pro',
+    'mistral-large-2407',
+    'mistral_large',
+    'mixtral-8x7b',
+    'mixtral_8x7b',
+    'llama-3.3-70b',
+    'llama_3.3-70b',
+    'qwen-2.5-72b',
+    'qwen_2.5-72b',
+  ];
+
+  for (const id of OPENAI_COMPAT_PREFIXES) {
+    it(`${id} — falls back to 262k openai-compatible default (not 200k Anthropic)`, () => {
+      // Unknown ids in these families have no MODEL_CONTEXT_LIMITS entry.
+      // They must resolve to the 262k openai-compatible fallback, not 200k.
+      expect(contextLimitFor(id)).toBe(262_144);
+    });
+  }
 });
 
 describe('contextLimitFor — Codex catalog fallback', () => {

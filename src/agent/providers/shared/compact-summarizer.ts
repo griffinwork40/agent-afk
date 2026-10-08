@@ -7,7 +7,8 @@
  * chat-completions). When the model is on a DIFFERENT provider, this module
  * builds a foreign one-shot call and wraps it as a summarize closure.
  *
- * Supported foreign paths:
+ * Supported foreign paths (implemented in `./one-shot-router.ts`, shared with
+ * the `model_complete` tool):
  *   - anthropic → the Anthropic one-shot helper (oneShotCompletion).
  *   - openai (api-key mode) → Chat Completions via oneShotChatCompletion.
  *   - openai (chatgpt-oauth mode) → Responses wire via a purpose-built client
@@ -28,25 +29,13 @@
  * @module agent/providers/shared/compact-summarizer
  */
 
-import OpenAI from 'openai';
-import { oneShotCompletion } from '../anthropic-direct/oneshot.js';
-import {
-  oneShotChatCompletion,
-  oneShotResponses,
-} from '../openai-compatible/oneshot.js';
 import { redactSecrets } from '../../redact-secrets.js';
-import { resolveOpenAIAuth } from '../openai-compatible/auth.js';
 import {
-  buildChatGptOAuthHeaders,
-  CHATGPT_BACKEND_BASE_URL,
-} from '../openai-compatible/responses-config.js';
-import { resolveXaiAuth } from '../xai/auth.js';
-import { resolveXaiEndpoint } from '../xai/endpoints.js';
-import { ensureFreshAccessToken } from '../xai/oauth.js';
-import { isAccessTokenExpired } from '../xai/query-helpers.js';
-import { loadAnthropicCredential } from '../../auth/credential-resolver.js';
-import { providerForModel } from '../index.js';
-import { resolveBinding } from '../../session/model-slots.js';
+  resolveOneShotTarget,
+  routedOneShot,
+  type OneShotBinding,
+  type OneShotLabel,
+} from './one-shot-router.js';
 import { COMPACT_SYSTEM_PROMPT, wrapTranscriptForSummary } from './compaction.js';
 import type { BundledProviderName } from '../index.js';
 
@@ -115,12 +104,11 @@ export function resolveCrossProviderSummarize(
 
   // Resolve slot aliases / custom names to the concrete binding so we can
   // inspect the provider family without instantiating a full AgentSession.
-  const binding = resolveBinding(compactModelRaw.trim());
-  const targetModel = binding.id || compactModelRaw.trim();
-  const targetProvider = providerForModel(targetModel, {
-    ...(binding.provider ? { explicit: binding.provider } : {}),
-    ...(binding.baseUrl ? { openaiBaseUrl: binding.baseUrl } : {}),
-  });
+  const {
+    model: targetModel,
+    provider: targetProvider,
+    binding,
+  } = resolveOneShotTarget(compactModelRaw);
 
   // Normalize the session family so both `anthropic` and `anthropic-direct`
   // compare equal (providerForModel returns `'anthropic-direct'` but callers
@@ -146,12 +134,12 @@ export function resolveCrossProviderSummarize(
   return buildForeignSummarize(targetModel, targetProvider, binding, sessionKey);
 }
 
-/** Inputs captured from the resolved binding for one foreign summarize closure. */
-interface ForeignBinding {
-  apiKey?: string;
-  baseUrl?: string;
-  provider?: string;
-}
+/** Error vocabulary for compaction's routed one-shot calls. */
+const COMPACT_LABEL: OneShotLabel = {
+  tag: '[afk/compact]',
+  purpose: 'cross-provider compaction',
+  unsupportedHint: 'Set AFK_COMPACT_MODEL to a model on anthropic, openai, or xai.',
+};
 
 /**
  * Build a cross-provider summarize closure for `targetModel` on `targetProvider`.
@@ -160,7 +148,7 @@ interface ForeignBinding {
 function buildForeignSummarize(
   targetModel: string,
   targetProvider: BundledProviderName,
-  binding: ForeignBinding,
+  binding: OneShotBinding,
   sessionKey: object,
 ): SummarizeFn {
   return async (transcript: string, signal?: AbortSignal): Promise<string> => {
@@ -177,24 +165,16 @@ function buildForeignSummarize(
     }
 
     try {
-      const system = COMPACT_SYSTEM_PROMPT;
-      const user = wrapTranscriptForSummary(transcript);
-
-      if (targetProvider === 'anthropic-direct' || targetProvider === 'anthropic') {
-        return await summarizeViaAnthropic(targetModel, binding, system, user, signal);
-      }
-      if (targetProvider === 'openai-compatible' || targetProvider === 'openai-codex') {
-        return await summarizeViaOpenAI(targetModel, binding, system, user, signal);
-      }
-      if (targetProvider === 'xai' || targetProvider === 'xai-oauth') {
-        return await summarizeViaXai(targetModel, targetProvider, binding, system, user, signal);
-      }
-      // Unknown provider family: let it fall through as an error rather than
-      // silently billing the session model.
-      throw new Error(
-        `[afk/compact] Unsupported cross-provider target: ${targetProvider}. ` +
-        `Set AFK_COMPACT_MODEL to a model on anthropic, openai, or xai.`,
-      );
+      return await routedOneShot({
+        model: targetModel,
+        provider: targetProvider,
+        binding,
+        system: COMPACT_SYSTEM_PROMPT,
+        user: wrapTranscriptForSummary(transcript),
+        maxTokens: COMPACT_MAX_TOKENS,
+        label: COMPACT_LABEL,
+        ...(signal ? { signal } : {}),
+      });
     } catch (err) {
       // Aborts must propagate as-is so the compaction core records 'aborted'.
       // Contract: check signal.aborted first (most reliable), then accept any
@@ -231,213 +211,3 @@ function buildForeignSummarize(
 // so no reset is needed. The export is kept as a no-op so existing test imports
 // don't break. See PR #2474.
 export function __resetCrossProviderWarnState(): void {}
-
-// ---------------------------------------------------------------------------
-// Per-provider one-shot helpers
-// ---------------------------------------------------------------------------
-
-/** True when `url` routes to Anthropic's own API host. */
-function isAnthropicApiHost(url: string): boolean {
-  try {
-    // Normalize a trailing-dot FQDN (e.g. 'api.anthropic.com.') — Node's URL
-    // parser keeps the dot in `hostname`, so without this strip the canonical
-    // host would be misidentified as a custom host and the ambient-credential
-    // guard would throw erroneously.
-    const { hostname } = new URL(url);
-    return hostname.replace(/\.$/, '') === 'api.anthropic.com';
-  } catch {
-    return false;
-  }
-}
-
-async function summarizeViaAnthropic(
-  model: string,
-  binding: ForeignBinding,
-  system: string,
-  user: string,
-  signal?: AbortSignal,
-): Promise<string> {
-  // Security: when a custom baseUrl is set and it does NOT point to
-  // api.anthropic.com, require an explicit binding.apiKey rather than falling
-  // back to the ambient credential. Sending the ambient Anthropic key to a
-  // user-configurable endpoint would allow a misconfigured (or malicious) URL
-  // to exfiltrate the credential. An explicit apiKey in the binding opts in
-  // knowingly; the ambient fallback is only safe for the canonical host.
-  const hasCustomHost = !!binding.baseUrl && !isAnthropicApiHost(binding.baseUrl);
-  let token: string | undefined;
-  if (hasCustomHost) {
-    token = binding.apiKey;
-    if (!token) {
-      throw new Error(
-        `[afk/compact] A custom Anthropic baseUrl (${binding.baseUrl}) was set but no ` +
-        `explicit apiKey was provided. Set an explicit apiKey in the binding to prevent ` +
-        `the ambient Anthropic credential from being sent to a non-Anthropic host.`,
-      );
-    }
-  } else {
-    token = binding.apiKey ?? loadAnthropicCredential();
-    if (!token) {
-      throw new Error(
-        `[afk/compact] No Anthropic credential for cross-provider compaction. ` +
-        `Set ANTHROPIC_API_KEY or authenticate via Claude Code.`,
-      );
-    }
-  }
-  return oneShotCompletion({
-    token,
-    model,
-    system,
-    user,
-    maxTokens: COMPACT_MAX_TOKENS,
-    // Contract: forward baseUrl when the binding specifies a custom Anthropic
-    // endpoint (e.g. a local Anthropic-compatible server). Without this the
-    // API key is sent to the default api.anthropic.com instead of the intended
-    // server. Passed via the clientFactory hook so oneShotCompletion stays
-    // additive (new field; ignored when undefined).
-    ...(binding.baseUrl ? { baseUrl: binding.baseUrl } : {}),
-    signal,
-  });
-}
-
-async function summarizeViaOpenAI(
-  model: string,
-  binding: ForeignBinding,
-  system: string,
-  user: string,
-  signal?: AbortSignal,
-): Promise<string> {
-  // Resolve OpenAI auth from the binding's explicit key, or via the standard
-  // chain (OPENAI_API_KEY → CODEX_API_KEY → ~/.codex/auth.json including
-  // ChatGPT-subscription OAuth when AFK_OPENAI_CHATGPT_OAUTH is set).
-  const auth = resolveOpenAIAuth(
-    binding.apiKey,
-    {},
-    binding.provider === 'chatgpt-oauth',
-  );
-
-  if (auth.apiKey === null) {
-    throw new Error(
-      `[afk/compact] No OpenAI credential for cross-provider compaction (source: ${auth.source}). ` +
-      `Set OPENAI_API_KEY or authenticate via ChatGPT OAuth.`,
-    );
-  }
-
-  // ChatGPT-subscription OAuth requires the Responses wire (the private
-  // ChatGPT backend rejects Chat Completions requests). Build the client the
-  // same way the session does — same base URL and account-id header — and
-  // delegate to oneShotResponses with isChatGptBackend: true.
-  if (auth.source === 'chatgpt-oauth') {
-    return summarizeViaChatGptOAuth(model, auth.apiKey, auth.accountId, system, user, signal);
-  }
-
-  // Standard API-key path: Chat Completions.
-  return oneShotChatCompletion({
-    apiKey: auth.apiKey,
-    baseURL: binding.baseUrl,
-    model,
-    system,
-    user,
-    maxTokens: COMPACT_MAX_TOKENS,
-    signal,
-  });
-}
-
-/**
- * Summarize via the ChatGPT-subscription Responses wire.
- *
- * Contract: constructs the OpenAI client exactly as the session does
- * (CHATGPT_BACKEND_BASE_URL + buildChatGptOAuthHeaders) and delegates to
- * oneShotResponses with isChatGptBackend:true. This mirrors
- * OpenAICompatibleQuery.summarizeViaResponses without requiring a live session.
- */
-async function summarizeViaChatGptOAuth(
-  model: string,
-  apiKey: string,
-  accountId: string | undefined,
-  system: string,
-  user: string,
-  signal?: AbortSignal,
-): Promise<string> {
-  const headers = buildChatGptOAuthHeaders(accountId);
-  // Contract: maxRetries: 0 — AFK owns retries via withTransientRetry.
-  const client = new OpenAI({
-    apiKey,
-    baseURL: CHATGPT_BACKEND_BASE_URL,
-    defaultHeaders: headers,
-    maxRetries: 0,
-  });
-  return oneShotResponses({
-    client,
-    model,
-    system,
-    user,
-    isChatGptBackend: true,
-    maxTokens: COMPACT_MAX_TOKENS,
-    signal,
-  });
-}
-
-async function summarizeViaXai(
-  model: string,
-  targetProvider: BundledProviderName,
-  binding: ForeignBinding,
-  system: string,
-  user: string,
-  signal?: AbortSignal,
-): Promise<string> {
-  // Resolve force mode:
-  //   - binding.provider === 'xai-oauth' (explicit slot) → force oauth
-  //   - targetProvider === 'xai-oauth' (inferred from explicit slot-routed) → force oauth
-  //   - binding.provider === 'xai' (explicit slot) → force apikey
-  //   - otherwise (raw grok-* model, no explicit slot provider) → undefined
-  //     (let resolveXaiAuth auto-detect, so SuperGrok OAuth-only sessions work)
-  let forceMode: 'apikey' | 'oauth' | undefined;
-  if (binding.provider === 'xai-oauth' || targetProvider === 'xai-oauth') {
-    forceMode = 'oauth';
-  } else if (binding.provider === 'xai') {
-    forceMode = 'apikey';
-  } else {
-    forceMode = undefined;
-  }
-
-  // Contract: for OAuth mode, run the standard refresh flow before resolving
-  // credentials so an expiring token is refreshed proactively, mirroring
-  // XaiProvider.complete() / XaiProvider.query(). This prevents "expired token"
-  // errors on compaction without requiring a full provider instantiation.
-  if (forceMode === 'oauth' || forceMode === undefined) {
-    // ensureFreshAccessToken returns null when no tokens are stored; that is
-    // handled below by resolveXaiAuth returning apiKey: null.
-    await ensureFreshAccessToken({});
-  }
-
-  const resolution = resolveXaiAuth(binding.apiKey, forceMode);
-  if (!resolution.apiKey || !resolution.mode) {
-    throw new Error(
-      `[afk/compact] No xAI credential for cross-provider compaction. ` +
-      `Set XAI_API_KEY or authenticate via SuperGrok OAuth.`,
-    );
-  }
-  // Contract: mirror XaiProvider.complete(): never send an OAuth access token
-  // that is still expired after the refresh attempt above.
-  if (resolution.mode === 'oauth' && isAccessTokenExpired(resolution.expiresAt)) {
-    throw new Error(
-      '[afk/compact] SuperGrok OAuth access token expired and refresh failed. ' +
-      'Re-run `afk provider auth xai login`.',
-    );
-  }
-
-  const endpoint = resolveXaiEndpoint(resolution.mode, {
-    ...(binding.baseUrl ? { baseUrlOverride: binding.baseUrl } : {}),
-  });
-
-  return oneShotChatCompletion({
-    apiKey: resolution.apiKey,
-    baseURL: endpoint.baseURL,
-    defaultHeaders: endpoint.defaultHeaders,
-    model,
-    system,
-    user,
-    maxTokens: COMPACT_MAX_TOKENS,
-    signal,
-  });
-}

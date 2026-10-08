@@ -43,6 +43,10 @@ function stripTrailingPartialEntity(s: string): string {
  * Escape before capping so adversarial `<` output does not expand past the budget.
  */
 export function buildDetachedToolInjection(result: DetachedToolResult): string {
+  // Strip control chars from toolUseId before it reaches XML attributes
+  // (defence in depth — SDK-generated, but sanitise at the boundary).
+  // eslint-disable-next-line no-control-regex
+  const safeToolUseId = result.toolUseId.replace(/[^\x20-\x7e]/g, '');
   const escaped = escapeXmlAttr(result.output);
   let output: string;
   if (Buffer.byteLength(escaped) > MAX_OUTPUT_BYTES) {
@@ -52,7 +56,7 @@ export function buildDetachedToolInjection(result: DetachedToolResult): string {
     output = escaped;
   }
   const attrs: Array<[string, string]> = [
-    ['toolUseId', result.toolUseId], ['status', result.status],
+    ['toolUseId', safeToolUseId], ['status', result.status],
     ['duration_ms', String(result.durationMs)],
   ];
   if (result.exitCode !== undefined) attrs.push(['exit_code', String(result.exitCode)]);
@@ -104,6 +108,8 @@ export class DetachedToolNotifier {
       // observe() can pick it up when the placeholder chunk arrives later.
       // Unknown ids (outgoing-session calls after /resume) will never get an
       // observe() call and are evicted by reset()/dispose().
+      // Guard against unbounded growth (mirrors the tracked guard below).
+      if (this.earlySettled.size >= MAX_TRACKED) return;
       this.earlySettled.set(result.toolUseId, result);
       return;
     }

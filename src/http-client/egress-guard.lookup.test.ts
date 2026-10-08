@@ -260,7 +260,7 @@ describe('non-IP record handling', () => {
 
     const result = await callLookup(hook, 'example.com', { all: true });
 
-    expect(result.err).toBeInstanceOf(Error);
+    expect(result.err).toBeInstanceOf(EgressBlockedError);
     expect(result.err?.message).toMatch(/non-IP record/);
   });
 
@@ -275,7 +275,7 @@ describe('non-IP record handling', () => {
 
     const result = await callLookup(hook, 'example.com', { all: true });
 
-    expect(result.err).toBeInstanceOf(Error);
+    expect(result.err).toBeInstanceOf(EgressBlockedError);
     expect(result.err?.message).toMatch(/non-IP record/);
   });
 
@@ -301,6 +301,22 @@ describe('non-IP record handling', () => {
     expect(result.err?.message).toMatch(/non-IP record/);
     // The request must still be blocked (err is non-null → fail-closed invariant holds).
     expect(result.err).not.toBeNull();
+  });
+
+  it('non-IP record path rejects with EgressBlockedError in all=false mode (companion)', async () => {
+    // Companion to the all=true regression test above — confirms the EgressBlockedError
+    // type contract holds regardless of the options.all flag.
+    const hook = createGuardedLookup({
+      lookupFn: vi.fn(async () => [{ address: 'cname.example.com' }]),
+      isBlocked: () => false,
+      makeBlockError,
+      makeNonIpError, // production-equivalent: returns EgressBlockedError
+    });
+
+    const result = await callLookup(hook, 'example.com', { all: false });
+
+    expect(result.err).toBeInstanceOf(EgressBlockedError);
+    expect(result.err?.message).toMatch(/non-IP record/);
   });
 });
 

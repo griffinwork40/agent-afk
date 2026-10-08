@@ -99,6 +99,11 @@ export const SessionPhaseNameSchema = z.enum([
   // hoistedIndices, orphanIds, assistantIndices, bridgedIndices, messageCount,
   // and shapeBefore (structural summary, never message content). See #2136.
   'orphan_repair',
+  // Server dropped thinking blocks via `input_transformations` (drop_block beta).
+  // Emitted per drop-bearing frame (message_start and message_delta paths).
+  // metadata: { droppedCount, source }. See SessionPhaseName JSDoc in
+  // types.session-phase.ts.
+  'thinking_block_dropped',
   // Background process lifecycle. See SessionPhaseName JSDoc in
   // types.session-phase.ts for the full contract.
   'background_process_started',

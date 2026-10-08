@@ -11,7 +11,7 @@ describe('model-limits', () => {
     expect(MODEL_CONTEXT_LIMITS['opus_1m']).toBe(1_000_000);
     expect(MODEL_CONTEXT_LIMITS['sonnet']).toBe(1_000_000);
     expect(MODEL_CONTEXT_LIMITS['sonnet_1m']).toBe(1_000_000);
-    expect(MODEL_CONTEXT_LIMITS['haiku']).toBe(200_000);
+    expect(MODEL_CONTEXT_LIMITS['haiku']).toBe(1_000_000);
   });
 
   it('contextLimitFor returns the declared limit for known models', () => {

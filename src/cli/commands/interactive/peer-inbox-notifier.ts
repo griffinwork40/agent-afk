@@ -174,6 +174,16 @@ export class PeerInboxNotifier {
    * remain in the buffer for the next boundary turn or next-turn fallback.
    *
    * Returns the rendered text of the consumed envelopes joined by '\n'.
+   *
+   * Generation-guard note: `consumeEnvelopes` does NOT check `isCurrent()`.
+   * This is intentional. The REPL boundary callback that calls
+   * `peekEnvelopes()` + `consumeEnvelopes()` is synchronous — the session
+   * generation cannot advance between the peek and the consume (there is no
+   * await). A generation mismatch therefore cannot occur on this path:
+   * `resetForNewSession()` is only called from the resume-swap commit point,
+   * which is serialized against the callback by the REPL event loop.
+   * The async paths (`scan`, `forceAccept`) do check `isCurrent()` after
+   * every await because a swap CAN fire while those are in flight.
    */
   consumeEnvelopes(count: number): string {
     if (count <= 0 || this.buffer.length === 0) return '';
@@ -212,6 +222,15 @@ export class PeerInboxNotifier {
    * are swallowed so a partial reclaim doesn't block the swap.
    *
    * Returns the number of envelopes successfully reclaimed.
+   *
+   * Generation-guard note: `reclaim` does NOT check `isCurrent()` and does
+   * not use `this.generation`. It is called exclusively from
+   * `resetForNewSession()`, which holds a lock on the swap sequence: at the
+   * call site, `this.generation` has already been incremented and the buffer
+   * has been spliced out atomically (in JavaScript's single-threaded sense).
+   * Any concurrently in-flight `scan` or `forceAccept` that returns after
+   * this point will find a stale generation and discard its results — so
+   * reclaim owns the spliced claims exclusively and needs no generation check.
    */
   async reclaim(): Promise<number> {
     if (this.buffer.length === 0) return 0;

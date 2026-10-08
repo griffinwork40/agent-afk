@@ -38,14 +38,20 @@ vi.mock('node-cron', () => ({
 
 vi.mock('../worktree/worktree-sweep.js', () => ({ runSweep: vi.fn() }));
 vi.mock('../worktree/worktree-root-registry.js', () => ({ sweepRootSet: vi.fn() }));
+vi.mock('../worktree/sweep-policy.js', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../worktree/sweep-policy.js')>();
+  return { ...orig, resolveSweepPolicy: vi.fn(orig.resolveSweepPolicy) };
+});
 
 import { CronScheduler } from './scheduler.js';
 import { runSweep } from '../worktree/worktree-sweep.js';
 import { sweepRootSet } from '../worktree/worktree-root-registry.js';
+import { resolveSweepPolicy } from '../worktree/sweep-policy.js';
 import type { SweepResult } from '../worktree/worktree-sweep.js';
 
 const mockRunSweep = vi.mocked(runSweep);
 const mockSweepRootSet = vi.mocked(sweepRootSet);
+const mockResolveSweepPolicy = vi.mocked(resolveSweepPolicy);
 
 const PRUNE_COMMAND = '__BUILTIN_WORKTREE_PRUNE__';
 
@@ -220,5 +226,22 @@ describe('builtin worktree-prune across multiple roots', () => {
     expect(mockRunSweep).not.toHaveBeenCalled();
     expect(excerpt).toContain('not inside a git repository');
     expect(excerpt).toContain('no managed worktree roots are registered');
+  });
+
+  it('uses resolveSweepPolicy to determine age limits (#3272)', async () => {
+    mockSweepRootSet.mockResolvedValue(['/repo/a']);
+    mockRunSweep.mockResolvedValue(sweepResult());
+
+    await tickPrune();
+
+    expect(mockResolveSweepPolicy).toHaveBeenCalledTimes(1);
+    // The daemon task should pass env values through to resolveSweepPolicy
+    expect(mockResolveSweepPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ env: expect.any(Object) }),
+    );
+    // And the resolved values should flow into runSweep
+    const sweepCall = mockRunSweep.mock.calls[0]?.[0];
+    expect(sweepCall?.maxAgeDaysClean).toBe(14); // default
+    expect(sweepCall?.maxAgeDaysDirty).toBe(30); // default
   });
 });

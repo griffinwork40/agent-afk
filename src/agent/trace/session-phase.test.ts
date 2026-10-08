@@ -348,6 +348,7 @@ describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
     stop_hook_continuation: true,
     stop_hook_cap_reached: true,
     orphan_repair: true,
+    thinking_block_dropped: true,
     background_process_started: true,
     background_process_settled: true,
     compose_recovery_decision: true,

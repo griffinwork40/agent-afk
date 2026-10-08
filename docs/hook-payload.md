@@ -301,7 +301,7 @@ A hook command may write a JSON object to stdout. Recognised fields:
 | `decision: "approve"` | Explicitly approve (skips remaining handlers in the chain). |
 | `continue: false` | Alias for `decision: "block"`. |
 | `reason: "…"` | Human-readable explanation emitted when blocking. |
-| `hookSpecificOutput.additionalContext` | For `Stop` hooks: a string prepended to the next turn's prompt. |
+| `hookSpecificOutput.additionalContext` | For `Stop` hooks: a string prepended to the next turn's prompt. For `PreToolUse`: appended to the final tool result even when the hook allows execution, including later gate denials and handler errors. Non-blocking notes use a `[PreToolUse context]` banner, survive tool-output capping, and are counted in a separate delivery `hook_decision` event only when attached to a returned result. |
 | `hookSpecificOutput.updatedInput` | **`PreToolUse` only.** A plain JSON object that replaces the tool's input before execution. The rewritten input still goes through the same permission gates and tool-schema validation. Multiple hooks chain in registration order; the last non-blocking hook's value wins. Arrays, primitives, and `null` are ignored. |
 
 Exit code semantics:

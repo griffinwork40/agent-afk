@@ -104,7 +104,13 @@ export type ModelSlots = Record<SlotName, ModelSlotBinding>;
  * DEFAULTS) and {@link DIRECT_MODEL_ALIASES} (the stable `haiku`/`sonnet`/`opus`
  * identity handles) so a tier default and its namesake alias can never drift.
  */
-export const CLAUDE_HAIKU_ID = 'claude-haiku-4-5-20251001';
+// Claude Haiku 5.5 (released 2026-10-07) — dateless wire id, itself a pinned
+// snapshot ("a fixed model ID with no date suffix and no separate alias", per
+// the Haiku 5.5 migration guide). Bumped from claude-haiku-4-5-20251001; the
+// `haiku` alias and the `small` tier default follow this constant. To roll
+// back, revert this one line: model-limits.ts / pricing.ts keep entries for
+// both wire ids, and Haiku 4.5 stays reachable by its raw id either way.
+export const CLAUDE_HAIKU_ID = 'claude-haiku-5-5';
 // Claude Sonnet 4.6 — the `sonnet`/`sonnet_1m` aliases and the `medium` tier
 // default all follow this constant. Deliberately NOT Sonnet 5: 4.6 is the better
 // fit for this harness's agentic + subagent workloads, and its tokenizer packs
@@ -505,6 +511,12 @@ function parseContextWindow(value: unknown): number | undefined {
  * a matching `contextWindow`. Used by `contextLimitFor` in `model-limits.ts` to
  * honour per-slot overrides on the real provider path (the provider passes the
  * resolved concrete id, not the tier alias).
+ *
+ * Tie-breaking: when two slots bind the SAME id but different `contextWindow`
+ * values, the first slot in `SLOT_NAMES` order (`local → small → medium → large`)
+ * wins. This is deterministic and intentional — the lower-tier slot is more
+ * user-configured and more specific. Add `contextWindow` only to the tier you
+ * intend to raise; a second binding with a different value will silently lose.
  */
 export function contextWindowOverrideFor(
   concreteId: string,

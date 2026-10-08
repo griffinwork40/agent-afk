@@ -231,7 +231,11 @@ export class ToolHealthMonitor {
     }
 
     if (!shouldNotify && !shouldEmitTrace) {
-      // Already handled this degradation episode: no new trace, no new notice.
+      // Thresholds are met but both the model notice and the trace event have
+      // already been emitted for this degradation episode (notice is suppressed
+      // until the window recovers; trace is deduped per errorHead). The caller
+      // needs no further action for this call, so semantics intentionally
+      // collapse to { degraded: false } — "nothing new to surface right now".
       return { degraded: false };
     }
 

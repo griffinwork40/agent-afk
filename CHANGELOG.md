@@ -11,6 +11,87 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.305.3] - 2026-10-08
+
+### Fixed
+- share sweep-policy resolver; /worktree prune now honors config and env age limits (#3272) (e2d8f13f)
+- advisory findings from Cerebras support PRs (#2788, #2789, #2790, #2793) (#3138) (9e09cc86)
+- validate text minLength/maxLength in Telegram elicitation handler (#3275) (3d9cf10e)
+
+## [5.305.2] - 2026-10-08
+
+### Fixed
+- move isNewerVersion to update-version.ts; fix prerelease compare in afk update (#3271) (4aaa2ea5)
+- share buildWhatifRunOptions between CLI and slash; forward operatorPredictions (#3274) (46537334)
+- reject chatgpt-oauth in image_edit; extract makeSessionCounter (#3273) (251ff682)
+- treat null-equivalent Deferred values as empty (none/n/a/-) (#3237) (8d7e5064)
+
+## [5.305.1] - 2026-10-08
+
+### Fixed
+- erase ghost spinner and CPR-reanchor on width-only tmux resize (#3228) (0e46a05d)
+- tighten strategy-nudge error-line detection (#3223) (55d06547)
+- cap earlySettled and sanitize toolUseId in detached-tool-notifier (#3222) (fac366f4)
+
+## [5.305.0] - 2026-10-08
+
+### Added
+- add model_complete, a one-shot completion against any configured model (#3254) (1dcf8f26)
+
+### Changed
+- bump @types/node from 26.6.3 to 26.6.4 in /website (#3230) (cfdd9539)
+- bump ora from 8.2.0 to 9.4.1 (#3239) (fb500b1d)
+
+## [5.304.1] - 2026-10-08
+
+### Fixed
+- regenerate pnpm-lock.yaml broken by sequential dependabot merges (#3253) (bb91c807)
+
+## [5.304.0] - 2026-10-08
+
+### Added
+- make fact tracking and soft-delete GC safe per archive (#3211) (5ffb7f4f)
+
+### Fixed
+- address advisory findings from #2854 (Fable 5.1 support) (#3148) (4ad89fee)
+
+### Changed
+- bump the fumadocs group in /website with 3 updates (#3229) (ab12fef1)
+- bump @testing-library/jest-dom in /dashboard (#3231) (904d8a6f)
+- bump lucide-react from 0.468.0 to 1.52.0 in /dashboard (#3233) (44fe7df7)
+- bump jsdom from 26.1.0 to 30.1.2 in /dashboard (#3234) (0b916557)
+- bump jsdom (#3232) (f6b82938)
+- bump commander from 12.1.0 to 15.0.0 (#3235) (c5f7c4ff)
+- bump undici from 7.30.0 to 8.11.2 (#3238) (c4dae640)
+- bump softprops/action-gh-release from 2 to 3 (#3225) (e01e6735)
+- bump actions/upload-artifact from 4 to 6 (#3226) (da3c889d)
+- bump actions/setup-node from 4 to 7 (#3227) (a029e391)
+- bump actions/checkout from 4 to 7 (#3224) (94534ea2)
+
+## [5.303.10] - 2026-10-07
+
+### Fixed
+- deliver non-blocking PreToolUse additionalContext (#3157) (e80d1327)
+
+## [5.303.9] - 2026-10-07
+
+### Fixed
+- reference RAW_VALUE_CAP in inbound-mode boundary tests (#3219) (1ec88e05)
+- tighten EgressBlockedError assertions in egress lookup tests (#3221) (47b48886)
+- address advisory review findings for tool-health monitor and daemon builtin (#3135) (f1057945)
+- remove duplicate ToolFailureClassSchema, tighten isContentBlockArray return type (#3133) (d00f99f6)
+- advisory findings from #2770, #2879, #2824 (#3134) (7274f3ae)
+- document internal-only helpers in effect-ledger barrel (#3209) (15ee4fbe)
+- raise engines.node to jsdom 30's floor (#3150) (825d7761)
+- address advisory findings from #2810 peer boundary delivery (#3136) (19c7e3da)
+- address advisory findings from review of #3063 (#3116) (f76fdba2)
+- address advisory findings from review of #3077 (#3097) (ba46e740)
+- remove dead applyPostRunNotices (#3220) (f6e86014)
+- replay reasoning for destination endpoints (#3156) (387daa69)
+- bound Windows bash kill cleanup without blocking (#3210) (e7e07b30)
+- add _renameFn/_platform injectables to atomicWriteFileAsync for portable EPERM retry testing (#3153) (26021cbc)
+- add maxRetries to rm in temp git repo teardowns to avoid ENOTEMPTY (#3208) (53152e90)
+
 ## [5.303.8] - 2026-10-07
 
 ### Fixed

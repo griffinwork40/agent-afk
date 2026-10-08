@@ -1,10 +1,12 @@
 /**
  * Surface-agnostic glue for `afk whatif` and `/whatif`.
  *
- * Exports two functions consumed by both surfaces:
+ * Exports three functions consumed by both surfaces:
  *
  *   - {@link resolveSpec} — turn parsed args into a `ChangeSpec`.
  *   - {@link buildWhatifDeps} — wire `WhatifDeps` from a token + options.
+ *   - {@link buildWhatifRunOptions} — build the `WhatifOptions` object from
+ *     parsed args and surface-specific inputs (spec, home, cwd, models).
  *
  * The recursion guard (`isWhatifEpisode()`) is enforced here so neither
  * surface needs to know about it.
@@ -23,7 +25,7 @@ import { compileChangeSpec } from './compile.js';
 import { describeChange } from './operators/index.js';
 import { loadSpecFile } from './args.js';
 import type { ParsedWhatifArgs } from './args.js';
-import type { ChangeSpec, CompleteFn, WhatifDeps, WhatifProgress } from './types.js';
+import type { ChangeSpec, CompleteFn, WhatifDeps, WhatifOptions, WhatifProgress } from './types.js';
 
 // ---------------------------------------------------------------------------
 // resolveSpec
@@ -129,6 +131,59 @@ export function buildWhatifDeps(opts: BuildWhatifDepsOptions): WhatifDeps {
     createClaudeJudge(complete, analystModel);
 
   return { runner, complete, makeJudge, makeCrossCheckJudge, onProgress, signal };
+}
+
+// ---------------------------------------------------------------------------
+// buildWhatifRunOptions
+// ---------------------------------------------------------------------------
+
+export interface BuildWhatifRunOptionsInputs {
+  spec: ChangeSpec;
+  realHome: string;
+  realCwd: string;
+  agentModel: string;
+  analystModel: string;
+}
+
+/**
+ * Build a `WhatifOptions` object from parsed args and surface-specific inputs.
+ *
+ * Both `afk whatif` (CLI) and `/whatif` (slash command) call this so that run
+ * options — including `operatorPredictions` — are assembled in one place and
+ * cannot drift between surfaces.
+ *
+ * Surface-specific concerns (spinner, exit codes, confirmation UX, model
+ * default resolution) remain in the surface adapters as explicit inputs.
+ */
+export function buildWhatifRunOptions(
+  parsed: ParsedWhatifArgs,
+  inputs: BuildWhatifRunOptionsInputs,
+): WhatifOptions {
+  const { spec, realHome, realCwd, agentModel, analystModel } = inputs;
+  const o = parsed.options;
+  return {
+    spec,
+    realHome,
+    realCwd,
+    agentModel,
+    analystModel,
+    verify: o.verify,
+    turns: o.turns,
+    samples: o.samples,
+    maxUsd: o.maxUsd,
+    judge: o.judge,
+    concurrency: o.concurrency,
+    maxTurns: o.maxTurns,
+    episodeTimeoutMs: o.episodeTimeoutMs,
+    keepSandboxes: o.keepSandboxes,
+    force: parsed.force,
+    ...(o.probes !== undefined ? { probes: o.probes } : {}),
+    ...(o.maxPredictions !== undefined ? { maxPredictions: o.maxPredictions } : {}),
+    ...(o.noBaselineSample ? { noBaselineSample: true } : {}),
+    ...(o.operatorPredictions && o.operatorPredictions.length > 0
+      ? { operatorPredictions: o.operatorPredictions }
+      : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------

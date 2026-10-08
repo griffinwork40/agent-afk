@@ -262,6 +262,16 @@ export type SessionPhaseName =
   // turn-driver repair. metadata carries hoistedIndices, orphanIds,
   // assistantIndices, bridgedIndices, messageCount, shapeBefore. See #2136.
   | 'orphan_repair'
+  // Server dropped one or more thinking blocks via `input_transformations`
+  // (thinking-binding-controls-2026-08-01 beta, `drop_block` policy). Emitted
+  // per drop-bearing frame (both message_start and message_delta paths) so the
+  // witness layer records each frame's droppedCount and source independently.
+  // Distinct from the process-global warn cap — the trace event fires on
+  // every drop-bearing frame so operators can correlate per-session without
+  // depending on the bounded console output.
+  // metadata: { droppedCount, source ('message_start'|'message_delta') }
+  // No path values, thinking text, or signatures are recorded.
+  | 'thinking_block_dropped'
   // Background process lifecycle — emitted by `bash run_in_background` so
   // `afk trace show` can reconstruct which background jobs ran in a session
   // (analogous to `background_agent` for subagent jobs).

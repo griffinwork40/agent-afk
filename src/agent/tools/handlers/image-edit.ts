@@ -33,6 +33,7 @@ import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { ToolResult } from '../../providers/shared/tool-result.js';
 import { resolveAndContain, assertWriteTargetContained } from './_cwd-utils.js';
 import { assertNotDenylisted } from './write-denylist.js';
+import { makeSessionCounter } from './_image-operation.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -55,24 +56,7 @@ const DEFAULT_SESSION_LIMIT = 10;
 // Both are billed to the same API key, but the cap semantics are per-tool.
 // ---------------------------------------------------------------------------
 
-const sessionCounters = new Map<string, number>();
-
-function getSessionCount(sessionId: string): number {
-  return sessionCounters.get(sessionId) ?? 0;
-}
-
-function incrementSessionCount(sessionId: string): number {
-  const next = getSessionCount(sessionId) + 1;
-  sessionCounters.set(sessionId, next);
-  return next;
-}
-
-function decrementSessionCount(sessionId: string): void {
-  const current = getSessionCount(sessionId);
-  if (current > 0) {
-    sessionCounters.set(sessionId, current - 1);
-  }
-}
+const editCounter = makeSessionCounter();
 
 // ---------------------------------------------------------------------------
 // Input parsing
@@ -296,7 +280,23 @@ export function createImageEditHandler(
       authSource = 'AFK_IMAGE_API_KEY';
     } else {
       const resolved = resolveOpenAIAuth(undefined);
-      if (resolved.apiKey) {
+      if (resolved.apiKey && resolved.source === 'chatgpt-oauth') {
+        // The standard Images Edit endpoint does not accept ChatGPT OAuth tokens
+        // (their OAuth scopes exclude api.model.images.request). Unlike
+        // image_generate, there is no ChatGPT backend path for image editing.
+        // Reject early with actionable guidance rather than sending an invalid
+        // token to the API.
+        return {
+          content:
+            'image_edit does not support ChatGPT subscription OAuth credentials. ' +
+            'The Images Edit endpoint requires an API key. ' +
+            'Use one of the supported credential sources:\n' +
+            '  1. AFK_IMAGE_API_KEY in ~/.afk/config/afk.env (dedicated image billing)\n' +
+            '  2. OPENAI_API_KEY env var\n' +
+            '  3. `codex login --api-key` (writes ~/.codex/auth.json)',
+          isError: true,
+        };
+      } else if (resolved.apiKey) {
         apiKey = resolved.apiKey;
         authSource = resolved.source;
       } else if (resolved.source === 'chatgpt-oauth-expired') {
@@ -343,9 +343,9 @@ export function createImageEditHandler(
     const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : DEFAULT_SESSION_LIMIT;
 
     // Optimistic increment before the API call (closes the TOCTOU race).
-    incrementSessionCount(sessionId);
-    if (getSessionCount(sessionId) > limit) {
-      decrementSessionCount(sessionId);
+    editCounter.increment(sessionId);
+    if (editCounter.get(sessionId) > limit) {
+      editCounter.decrement(sessionId);
       return {
         content:
           `Image edit limit reached (${limit} per session). ` +
@@ -357,7 +357,7 @@ export function createImageEditHandler(
     // 5. Parse input.
     const parsed = parseInput(input);
     if ('error' in parsed) {
-      decrementSessionCount(sessionId);
+      editCounter.decrement(sessionId);
       return { content: parsed.error, isError: true };
     }
 
@@ -365,14 +365,14 @@ export function createImageEditHandler(
     const cwd = context?.resolveBase ?? process.cwd();
     const loadResult = await loadRefImages(parsed.image_paths, context, cwd);
     if ('error' in loadResult) {
-      decrementSessionCount(sessionId);
+      editCounter.decrement(sessionId);
       return { content: loadResult.error, isError: true };
     }
 
     // 7. Call the OpenAI Images Edit API.
     const apiResult = await callImagesEditApi(fetchFn, apiKey, parsed, loadResult, signal);
     if ('error' in apiResult) {
-      decrementSessionCount(sessionId);
+      editCounter.decrement(sessionId);
       return { content: apiResult.error, isError: true };
     }
 
@@ -381,12 +381,12 @@ export function createImageEditHandler(
       apiResult.b64_json, parsed.output_format, parsed.output_path, context, cwd,
     );
     if ('error' in saveResult) {
-      decrementSessionCount(sessionId);
+      editCounter.decrement(sessionId);
       return { content: saveResult.error, isError: true };
     }
 
     const { savePath, imageBuffer } = saveResult;
-    const newCount = getSessionCount(sessionId);
+    const newCount = editCounter.get(sessionId);
 
     return {
       content: JSON.stringify({

@@ -132,7 +132,7 @@ describe('T2: same-family compact model', () => {
 describe('T3: Claude session + gpt id + api key', () => {
   it('calls oneShotChatCompletion with the gpt model id', async () => {
     const key = makeSessionKey();
-    const oneShotChat = vi.spyOn(openaiOneshot, 'oneShotChatCompletion').mockResolvedValue(FOREIGN_RESULT);
+    const oneShotChat = vi.spyOn(openaiOneshot, 'oneShotChatCompletionWithStop').mockResolvedValue({ text: FOREIGN_RESULT, stopReason: 'end' as const });
     vi.spyOn(openaiAuth, 'resolveOpenAIAuth').mockReturnValue({
       apiKey: 'sk-test-key',
       source: 'env',
@@ -215,8 +215,8 @@ describe('T5: OpenAI session + claude id', () => {
   it('calls oneShotCompletion with the anthropic token', async () => {
     const key = makeSessionKey();
     const oneShotAnthropic = vi
-      .spyOn(anthropicOneshot, 'oneShotCompletion')
-      .mockResolvedValue(FOREIGN_RESULT);
+      .spyOn(anthropicOneshot, 'oneShotCompletionWithStop')
+      .mockResolvedValue({ text: FOREIGN_RESULT, stopReason: 'end' as const });
     vi.spyOn(credentialResolver, 'loadAnthropicCredential').mockReturnValue('sk-ant-test');
 
     const sessionFn = makeSessionFn();
@@ -249,8 +249,8 @@ describe('T6: slot alias with binding credentials', () => {
   it('uses binding apiKey when the slot provides one', async () => {
     const key = makeSessionKey();
     const oneShotAnthropic = vi
-      .spyOn(anthropicOneshot, 'oneShotCompletion')
-      .mockResolvedValue(FOREIGN_RESULT);
+      .spyOn(anthropicOneshot, 'oneShotCompletionWithStop')
+      .mockResolvedValue({ text: FOREIGN_RESULT, stopReason: 'end' as const });
     // Make sure loadAnthropicCredential is NOT called when the binding has an
     // explicit apiKey (we verify the spy is called with the binding key).
     vi.spyOn(credentialResolver, 'loadAnthropicCredential').mockReturnValue('fallback-token');
@@ -281,7 +281,7 @@ describe('T7: failure handling', () => {
   it('emits a one-time failure warning and re-throws on network error', async () => {
     const key = makeSessionKey();
     const networkError = new Error('network error from openai');
-    vi.spyOn(openaiOneshot, 'oneShotChatCompletion').mockRejectedValue(networkError);
+    vi.spyOn(openaiOneshot, 'oneShotChatCompletionWithStop').mockRejectedValue(networkError);
     vi.spyOn(openaiAuth, 'resolveOpenAIAuth').mockReturnValue({
       apiKey: 'sk-key',
       source: 'env',
@@ -311,7 +311,7 @@ describe('T7: failure handling', () => {
 
   it('does not emit failure warning for the same model on success', async () => {
     const key = makeSessionKey();
-    vi.spyOn(openaiOneshot, 'oneShotChatCompletion').mockResolvedValue(FOREIGN_RESULT);
+    vi.spyOn(openaiOneshot, 'oneShotChatCompletionWithStop').mockResolvedValue({ text: FOREIGN_RESULT, stopReason: 'end' as const });
     vi.spyOn(openaiAuth, 'resolveOpenAIAuth').mockReturnValue({
       apiKey: 'sk-key',
       source: 'env',
@@ -335,7 +335,7 @@ describe('T8: abort propagation', () => {
   it('re-throws AbortError without emitting failure warning', async () => {
     const key = makeSessionKey();
     const abortErr = Object.assign(new Error('aborted'), { name: 'AbortError' });
-    vi.spyOn(openaiOneshot, 'oneShotChatCompletion').mockRejectedValue(abortErr);
+    vi.spyOn(openaiOneshot, 'oneShotChatCompletionWithStop').mockRejectedValue(abortErr);
     vi.spyOn(openaiAuth, 'resolveOpenAIAuth').mockReturnValue({
       apiKey: 'sk-key',
       source: 'env',
@@ -364,7 +364,7 @@ describe('T8: abort propagation', () => {
 describe('T9: xAI cross-provider', () => {
   it('calls oneShotChatCompletion with xAI endpoint on claude session', async () => {
     const key = makeSessionKey();
-    const oneShotChat = vi.spyOn(openaiOneshot, 'oneShotChatCompletion').mockResolvedValue(FOREIGN_RESULT);
+    const oneShotChat = vi.spyOn(openaiOneshot, 'oneShotChatCompletionWithStop').mockResolvedValue({ text: FOREIGN_RESULT, stopReason: 'end' as const });
     vi.spyOn(xaiAuth, 'resolveXaiAuth').mockReturnValue({
       apiKey: 'xai-key',
       source: 'env',
@@ -407,7 +407,7 @@ describe('T9: xAI cross-provider', () => {
 
 describe('T10: per-session warning isolation', () => {
   it('two separate session keys each emit their own privacy warning', async () => {
-    vi.spyOn(openaiOneshot, 'oneShotChatCompletion').mockResolvedValue(FOREIGN_RESULT);
+    vi.spyOn(openaiOneshot, 'oneShotChatCompletionWithStop').mockResolvedValue({ text: FOREIGN_RESULT, stopReason: 'end' as const });
     vi.spyOn(openaiAuth, 'resolveOpenAIAuth').mockReturnValue({
       apiKey: 'sk-key',
       source: 'env',
@@ -439,7 +439,7 @@ describe('T11: DOMException abort without signal', () => {
     const key = makeSessionKey();
     // Simulate a DOMException: has name AbortError but NOT instanceof Error in some envs.
     const domAbort = { name: 'AbortError', message: 'aborted', code: 20 };
-    vi.spyOn(openaiOneshot, 'oneShotChatCompletion').mockRejectedValue(domAbort);
+    vi.spyOn(openaiOneshot, 'oneShotChatCompletionWithStop').mockRejectedValue(domAbort);
     vi.spyOn(openaiAuth, 'resolveOpenAIAuth').mockReturnValue({
       apiKey: 'sk-key',
       source: 'env',
@@ -487,7 +487,7 @@ describe('T12: xai-oauth treated as same family as xai', () => {
 describe('T13: same-session dedup across multiple compaction passes', () => {
   it('emits privacy warning only once for 3 compaction calls with the same sessionKey', async () => {
     const key = makeSessionKey();
-    vi.spyOn(openaiOneshot, 'oneShotChatCompletion').mockResolvedValue(FOREIGN_RESULT);
+    vi.spyOn(openaiOneshot, 'oneShotChatCompletionWithStop').mockResolvedValue({ text: FOREIGN_RESULT, stopReason: 'end' as const });
     vi.spyOn(openaiAuth, 'resolveOpenAIAuth').mockReturnValue({
       apiKey: 'sk-key',
       source: 'env',
@@ -518,7 +518,7 @@ describe('T13: same-session dedup across multiple compaction passes', () => {
 
 describe('T14: two sessions with distinct sessionKey → 2 warnings', () => {
   it('each session gets its own independent warning even in same process', async () => {
-    vi.spyOn(openaiOneshot, 'oneShotChatCompletion').mockResolvedValue(FOREIGN_RESULT);
+    vi.spyOn(openaiOneshot, 'oneShotChatCompletionWithStop').mockResolvedValue({ text: FOREIGN_RESULT, stopReason: 'end' as const });
     vi.spyOn(openaiAuth, 'resolveOpenAIAuth').mockReturnValue({
       apiKey: 'sk-key',
       source: 'env',
@@ -552,8 +552,8 @@ describe('T15: Anthropic binding with baseUrl forwarded to oneShotCompletion', (
   it('passes binding.baseUrl to oneShotCompletion when set', async () => {
     const key = makeSessionKey();
     const oneShotAnthropic = vi
-      .spyOn(anthropicOneshot, 'oneShotCompletion')
-      .mockResolvedValue(FOREIGN_RESULT);
+      .spyOn(anthropicOneshot, 'oneShotCompletionWithStop')
+      .mockResolvedValue({ text: FOREIGN_RESULT, stopReason: 'end' as const });
     vi.spyOn(credentialResolver, 'loadAnthropicCredential').mockReturnValue('sk-ant-local');
 
     // We need resolveBinding to return a baseUrl. Since resolveBinding passes
@@ -630,7 +630,7 @@ describe('T16: raw grok-* model does not force apikey mode', () => {
       mode: 'oauth',
       proxyHeadersApplied: false,
     });
-    vi.spyOn(openaiOneshot, 'oneShotChatCompletion').mockResolvedValue(FOREIGN_RESULT);
+    vi.spyOn(openaiOneshot, 'oneShotChatCompletionWithStop').mockResolvedValue({ text: FOREIGN_RESULT, stopReason: 'end' as const });
     vi.spyOn(xaiOauth, 'ensureFreshAccessToken').mockResolvedValue(null);
 
     const sessionFn = makeSessionFn();
@@ -669,7 +669,7 @@ describe('T16: raw grok-* model does not force apikey mode', () => {
       mode: 'oauth',
       proxyHeadersApplied: false,
     });
-    vi.spyOn(openaiOneshot, 'oneShotChatCompletion').mockResolvedValue(FOREIGN_RESULT);
+    vi.spyOn(openaiOneshot, 'oneShotChatCompletionWithStop').mockResolvedValue({ text: FOREIGN_RESULT, stopReason: 'end' as const });
     vi.spyOn(xaiOauth, 'ensureFreshAccessToken').mockResolvedValue(null);
 
     // sessionFamily=anthropic-direct + grok-* (resolves to xai) → foreign path
@@ -710,7 +710,7 @@ describe('T17: xai-oauth target runs OAuth refresh before resolveXaiAuth', () =>
       mode: 'oauth',
       proxyHeadersApplied: false,
     });
-    vi.spyOn(openaiOneshot, 'oneShotChatCompletion').mockResolvedValue(FOREIGN_RESULT);
+    vi.spyOn(openaiOneshot, 'oneShotChatCompletionWithStop').mockResolvedValue({ text: FOREIGN_RESULT, stopReason: 'end' as const });
 
     const sessionFn = makeSessionFn();
     const summarize = resolveCrossProviderSummarize(
@@ -754,7 +754,7 @@ describe('T17: xai-oauth target runs OAuth refresh before resolveXaiAuth', () =>
       mode: 'oauth',
       expiresAt: Math.floor(Date.now() / 1000) - 60,
     });
-    const oneShot = vi.spyOn(openaiOneshot, 'oneShotChatCompletion').mockResolvedValue(FOREIGN_RESULT);
+    const oneShot = vi.spyOn(openaiOneshot, 'oneShotChatCompletionWithStop').mockResolvedValue({ text: FOREIGN_RESULT, stopReason: 'end' as const });
 
     const summarize = resolveCrossProviderSummarize(
       'anthropic-direct',
@@ -802,8 +802,8 @@ describe('T19: ambient Anthropic credential is used when no custom baseUrl is co
     // credential path must run cleanly — the guard must NOT block the common case.
     const key = makeSessionKey();
     const oneShotAnthropic = vi
-      .spyOn(anthropicOneshot, 'oneShotCompletion')
-      .mockResolvedValue(FOREIGN_RESULT);
+      .spyOn(anthropicOneshot, 'oneShotCompletionWithStop')
+      .mockResolvedValue({ text: FOREIGN_RESULT, stopReason: 'end' as const });
     vi.spyOn(credentialResolver, 'loadAnthropicCredential').mockReturnValue('sk-ant-ambient');
 
     const sessionFn = makeSessionFn();
@@ -829,7 +829,7 @@ describe('T19: ambient Anthropic credential is used when no custom baseUrl is co
     // is provided, summarizeViaAnthropic must throw rather than forwarding the
     // ambient Anthropic credential to an untrusted endpoint.
     const key = makeSessionKey();
-    vi.spyOn(anthropicOneshot, 'oneShotCompletion').mockResolvedValue(FOREIGN_RESULT);
+    vi.spyOn(anthropicOneshot, 'oneShotCompletionWithStop').mockResolvedValue({ text: FOREIGN_RESULT, stopReason: 'end' as const });
     vi.spyOn(credentialResolver, 'loadAnthropicCredential').mockReturnValue('sk-ant-ambient');
     // Inject a custom non-Anthropic baseUrl into the binding without an apiKey.
     vi.spyOn(modelSlots, 'resolveBinding').mockReturnValue({
@@ -847,7 +847,7 @@ describe('T19: ambient Anthropic credential is used when no custom baseUrl is co
 
     await expect(summarize('transcript')).rejects.toThrow(/explicit apiKey/);
     // The ambient credential must never have been used.
-    expect(anthropicOneshot.oneShotCompletion).not.toHaveBeenCalled();
+    expect(anthropicOneshot.oneShotCompletionWithStop).not.toHaveBeenCalled();
   });
 
   it('succeeds when the baseUrl is the canonical Anthropic host with a trailing dot', async () => {
@@ -857,8 +857,8 @@ describe('T19: ambient Anthropic credential is used when no custom baseUrl is co
     // would throw. Verify the strip-trailing-dot normalisation works.
     const key = makeSessionKey();
     const oneShotAnthropic = vi
-      .spyOn(anthropicOneshot, 'oneShotCompletion')
-      .mockResolvedValue(FOREIGN_RESULT);
+      .spyOn(anthropicOneshot, 'oneShotCompletionWithStop')
+      .mockResolvedValue({ text: FOREIGN_RESULT, stopReason: 'end' as const });
     vi.spyOn(credentialResolver, 'loadAnthropicCredential').mockReturnValue('sk-ant-ambient');
     vi.spyOn(modelSlots, 'resolveBinding').mockReturnValue({
       id: 'claude-haiku-4-5-20251001',
@@ -895,7 +895,7 @@ describe('T20: failure warning redacts secrets in err.message', () => {
       'Incorrect API key provided: sk-ant-api03-AAABBBCCCDDDEEE. ' +
       'You can find your API key at https://platform.anthropic.com.',
     );
-    vi.spyOn(openaiOneshot, 'oneShotChatCompletion').mockRejectedValue(leakyError);
+    vi.spyOn(openaiOneshot, 'oneShotChatCompletionWithStop').mockRejectedValue(leakyError);
     vi.spyOn(openaiAuth, 'resolveOpenAIAuth').mockReturnValue({
       apiKey: 'sk-key',
       source: 'env',
@@ -925,7 +925,7 @@ describe('T20: failure warning redacts secrets in err.message', () => {
     const phrase = 'network error: ';
     const longMsg = phrase.repeat(40); // 600 chars, but broken into short runs
     const longError = new Error(longMsg);
-    vi.spyOn(openaiOneshot, 'oneShotChatCompletion').mockRejectedValue(longError);
+    vi.spyOn(openaiOneshot, 'oneShotChatCompletionWithStop').mockRejectedValue(longError);
     vi.spyOn(openaiAuth, 'resolveOpenAIAuth').mockReturnValue({
       apiKey: 'sk-key',
       source: 'env',

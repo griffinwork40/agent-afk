@@ -96,10 +96,11 @@ export function validateTextField(
     if (opts.allowSkip) return { ok: true, skip: true };
     return { ok: false, error: opts.emptyError };
   }
-  if (opts.minLength !== undefined && input.length < opts.minLength) {
+  const codePoints = Array.from(input).length;
+  if (opts.minLength !== undefined && codePoints < opts.minLength) {
     return { ok: false, error: `Response must be at least ${opts.minLength} characters.` };
   }
-  if (opts.maxLength !== undefined && input.length > opts.maxLength) {
+  if (opts.maxLength !== undefined && codePoints > opts.maxLength) {
     return { ok: false, error: `Response must be at most ${opts.maxLength} characters.` };
   }
   return { ok: true, skip: false };

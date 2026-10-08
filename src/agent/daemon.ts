@@ -382,9 +382,25 @@ async function handleRequestAsync(
     // already present and up-to-date.  An untrusted caller can therefore only
     // (re-)register a shell job the operator already persisted, i.e. exactly
     // what the next daemon restart would load anyway; no new command can enter.
+    //
+    // TOCTOU window: getSchedule() reads the on-disk store and scheduler.register()
+    // runs after this guard.  A concurrent store write (e.g. CLI updateSchedule)
+    // could change the entry between the two operations.  This race is accepted for
+    // a localhost-only control surface — the worst outcome is that a command that
+    // was valid at guard-time is registered with the daemon, which is equivalent to
+    // what the next daemon restart would do anyway.  No new untrusted command can
+    // enter via this window.
     if (executorRaw === 'shell') {
       const storedConfig = getSchedule(taskIdRaw);
       const canonical = storedConfig ? toScheduledTask(storedConfig) : undefined;
+      // Normalize notifyOn to the effective default ('failure') on both sides so
+      // that an omitted field in the store entry and an omitted field in the
+      // request body are treated as equal.  A bare === between two optional
+      // values would silently reject a valid sync when one side is undefined and
+      // the other is 'failure' (the canonical default).
+      const canonicalNotifyOn: ScheduledTask['notifyOn'] = canonical?.notifyOn ?? 'failure';
+      const requestNotifyOn: ScheduledTask['notifyOn'] =
+        (obj['notifyOn'] as ScheduledTask['notifyOn'] | undefined) ?? 'failure';
       const trusted =
         storedConfig !== undefined &&
         storedConfig.enabled === true &&
@@ -393,7 +409,7 @@ async function handleRequestAsync(
         canonical.command === (obj['command'] as string) &&
         canonical.cronExpression === cronValue &&
         (canonical.trigger ?? 'cron') === ((obj['trigger'] as TriggerMode | undefined) ?? 'cron') &&
-        canonical.notifyOn === (obj['notifyOn'] as ScheduledTask['notifyOn'] | undefined) &&
+        canonicalNotifyOn === requestNotifyOn &&
         canonical.notifyChat ===
           (typeof notifyChatRaw === 'number' || typeof notifyChatRaw === 'string'
             ? notifyChatRaw

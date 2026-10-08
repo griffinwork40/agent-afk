@@ -68,6 +68,14 @@ export function extractCandidatePath(
     }
     return undefined;
   }
+  // model_complete has an optional `input_path` parameter. When absent, the
+  // handler reads no file and needs no approval prompt — return undefined so
+  // the hook skips the containment check. When present, the file is subject to
+  // the same read-root policy as read_file; extract it as the candidate path.
+  if (toolName === 'model_complete') {
+    const p = input['input_path'];
+    return typeof p === 'string' ? p : undefined;
+  }
   return undefined;
 }
 

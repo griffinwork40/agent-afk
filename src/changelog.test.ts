@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { rmSyncRetry } from './__test-utils__/rm-sync-retry.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -369,7 +370,10 @@ describe('parseCommits', () => {
 
   afterEach(() => {
     process.chdir(origCwd);
-    rmSync(tmpDir, { recursive: true, force: true });
+    // rmSyncRetry: git may still write loose objects into .git/objects after
+    // the test finishes. maxRetries/retryDelay give in-flight writes time to
+    // settle before each rmdir attempt, avoiding ENOTEMPTY on CI.
+    rmSyncRetry(tmpDir);
   });
 
   it('returns commits since the last tag', () => {

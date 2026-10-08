@@ -260,7 +260,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
       (wire.baseURL === undefined && opts.baseURL === undefined) ||
       (isGrokModelId(opts.model) && opts.config.forceXaiOAuth !== true);
 
-    this.journal = new OpenAIJournalWiring(opts.config);
+    this.journal = new OpenAIJournalWiring(opts.config, wire.baseURL ?? opts.baseURL);
     this.lastUsage = this.journal.resumedUsage();
     this.priorTurns = this.journal.initialTurns();
 

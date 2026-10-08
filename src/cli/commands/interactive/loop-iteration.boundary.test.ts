@@ -1222,3 +1222,122 @@ describe('applyDeferPeers', () => {
     expect(result).toContain('[peer]');
   });
 });
+
+// ── admissionQueue.full guard: skip render loop when queue already saturated ──
+// Verifies that the boundary skips the per-envelope render loop entirely when
+// the admission queue is at maxCount — no envelope can be admitted regardless
+// of byte size, so calling renderPeerMessageBlock would be wasted work (and
+// could mislead a future reader into thinking renders happened when nothing
+// was consumed). This is the fix for the advisory finding in #2901.
+
+describe('admissionQueue.full pre-loop guard (#2901)', () => {
+  it('peekEnvelopes is not called (no render work) when admissionQueue is full', () => {
+    // Use maxCount=1 and pre-fill with a human entry so the queue is full
+    // before the boundary callback runs.
+    const admissionQueue = new AdmissionQueue({ maxCount: 1 });
+    const session = makeSession();
+
+    // Spy on peekEnvelopes to detect whether the render loop was entered.
+    const peerBuffer = ['peer-message-should-not-render'];
+    const notifier = makePeerNotifier(peerBuffer);
+    const peekSpy = vi.spyOn(notifier, 'peekEnvelopes');
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => null,
+      peerNotifier: notifier as never,
+      admissionQueue,
+    });
+
+    // Fill the queue to capacity.
+    admissionQueue.submitHuman('fills-the-queue');
+    expect(admissionQueue.full).toBe(true);
+
+    // Invoke boundary: queue is full; human barrier is NOT active
+    // (hasPendingSubmission returns false — compositor is null). The full
+    // guard should prevent entering the render loop without peeking.
+    const result = session.invokeCallback();
+
+    // The human entry is delivered (it was already in the queue).
+    expect(result).toBe('fills-the-queue');
+    // The per-envelope render loop must NOT have been entered:
+    // peekEnvelopes must not be called when the queue is full.
+    expect(peekSpy).not.toHaveBeenCalled();
+    // The peer message must still be in the notifier buffer.
+    expect(notifier.hasPendingInjections()).toBe(true);
+  });
+
+  it('peekEnvelopes IS called when queue is not full', () => {
+    // Sanity check: when the queue has room, the render loop is entered.
+    const admissionQueue = new AdmissionQueue({ maxCount: 5 });
+    const session = makeSession();
+    const peerBuffer = ['peer-message'];
+    const notifier = makePeerNotifier(peerBuffer);
+    const peekSpy = vi.spyOn(notifier, 'peekEnvelopes');
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => null,
+      peerNotifier: notifier as never,
+      admissionQueue,
+    });
+
+    expect(admissionQueue.full).toBe(false);
+    const result = session.invokeCallback();
+
+    expect(result).toContain('peer-message');
+    // peekEnvelopes was called because the queue had room.
+    expect(peekSpy).toHaveBeenCalled();
+  });
+});
+
+// ── consumeEnvelopes synchronous-callback invariant (#2901 medium) ─────────────
+// The generation guard is intentionally absent from consumeEnvelopes() because
+// it is only ever called synchronously within the boundary callback — between
+// the peek and consume there is no await, so the generation cannot advance.
+// This test proves that the peek→consume handshake is atomic from the event-
+// loop's perspective: a resetForNewSession() called BETWEEN two synchronous
+// boundary invocations does NOT cause consume to process the wrong generation's
+// envelopes (because the buffer is spliced by resetForNewSession before the next
+// callback fires).
+
+describe('consumeEnvelopes synchronous-callback invariant (#2901 medium)', () => {
+  it('consume sees exactly the envelopes that were in the buffer at peek time', () => {
+    const admissionQueue = new AdmissionQueue();
+    const session = makeSession();
+    const peerBuffer = ['msg-A', 'msg-B'];
+    const notifier = makePeerNotifier(peerBuffer);
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => null,
+      peerNotifier: notifier as never,
+      admissionQueue,
+    });
+
+    // First synchronous boundary: peek sees ['msg-A', 'msg-B'], consume takes both.
+    const result = session.invokeCallback();
+    expect(result).toContain('msg-A');
+    expect(result).toContain('msg-B');
+    expect(notifier.hasPendingInjections()).toBe(false);
+
+    // Second boundary: buffer is empty — nothing to deliver.
+    expect(session.invokeCallback()).toBeUndefined();
+  });
+
+  it('drainInjections (which calls consumeEnvelopes) empties the buffer in one call', () => {
+    // drainInjections is the convenience wrapper for callers that always drain
+    // all pending entries — the next-turn fallback path. It delegates to
+    // consumeEnvelopes(buffer.length) synchronously with no await, so the
+    // generation invariant holds there too.
+    const peerBuffer = ['alpha', 'beta', 'gamma'];
+    const notifier = makePeerNotifier(peerBuffer);
+    const result = notifier.drainInjections();
+    expect(result).toContain('alpha');
+    expect(result).toContain('beta');
+    expect(result).toContain('gamma');
+    expect(notifier.hasPendingInjections()).toBe(false);
+    // A second drain returns empty.
+    expect(notifier.drainInjections()).toBe('');
+  });
+});

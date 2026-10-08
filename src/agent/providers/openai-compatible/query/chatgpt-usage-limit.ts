@@ -94,10 +94,10 @@ function sanitizePlan(v: unknown): string | undefined {
 /**
  * Best-effort window length from the `x-codex-primary-window-minutes` header.
  *
- * The header name is hardcoded — the server-controlled `x-codex-active-limit`
- * value is intentionally not used to construct it, because doing so would
- * allow a hostile server to select an arbitrary response header as the source
- * for this field.
+ * The header name (`x-codex-primary-window-minutes`) is hardcoded — the
+ * server-controlled `x-codex-active-limit` value is intentionally not used to
+ * construct it, because doing so would allow a hostile server to select an
+ * arbitrary response header as the source for this field.
  */
 function windowMinutesFromHeaders(err: unknown): number | undefined {
   const raw = getHeader(err, 'x-codex-primary-window-minutes');

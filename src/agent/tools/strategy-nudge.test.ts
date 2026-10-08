@@ -457,4 +457,45 @@ describe('findErrorLine: boilerplate that must not become the signature', () => 
       'Error: layout overflow at 375px',
     );
   });
+
+  // Issue #3216 finding 1: traceback-context check
+  it('ignores an exception-shaped line in mixed output that follows the real traceback', () => {
+    // A real traceback followed by unrelated output that happens to contain an
+    // exception-shaped identifier (e.g. a log line or test-output label).
+    // lastPythonException must return the real exception, not the bogus one below.
+    const mixed =
+      'Traceback (most recent call last):\n' +
+      '  File "/repo/app.py", line 5, in main\n' +
+      '    do_work()\n' +
+      'ValueError: bad value\n' +
+      '\nsome log output\n' +
+      'RuntimeError: this line looks like an exception but has no traceback context\n';
+    expect(findErrorLine(mixed)).toBe('ValueError: bad value');
+  });
+
+  // Issue #3216 finding 2: additional failure-glyph coverage
+  it('skips per-test status lines with ✘ (U+2718) and ✖ (U+2716) glyphs', () => {
+    // ✘ and ✖ were previously missing from the GENERIC_LINES filter.
+    expect(findErrorLine('✘ throws on bad input 3ms\nAssertionError: expected 1 to be 2')).toBe(
+      'AssertionError: expected 1 to be 2',
+    );
+    expect(findErrorLine('✖ fails with error 5ms\nTypeError: x is not defined')).toBe(
+      'TypeError: x is not defined',
+    );
+  });
+
+  // Issue #3216 finding 3: MAX_LINES_SCANNED truncation
+  it('returns null when MAX_LINES_SCANNED (400) truncates a Python traceback before its exception line', () => {
+    // Build output where the Traceback header is in the first 400 lines, but the
+    // exception line sits beyond line 400 so split() never reaches it.
+    // findErrorLine uses split('\n', MAX_LINES_SCANNED) which keeps at most 400
+    // elements, so the exception line at position 401 is safely degraded to null.
+    const filler = Array.from({ length: 398 }, (_, i) => `output line ${i}`).join('\n');
+    const content =
+      filler +
+      '\nTraceback (most recent call last):\n' + // line 399
+      '  File "/repo/app.py", line 1, in main\n' + // line 400 — split limit hit here
+      'RuntimeError: never reached\n'; // line 401 — beyond the scan window
+    expect(findErrorLine(content)).toBeNull();
+  });
 });

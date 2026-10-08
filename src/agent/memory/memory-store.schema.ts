@@ -30,8 +30,20 @@ import { sleepSync } from '../../utils/sleep-sync.js';
  *          column is additive and populated/consulted only when the gate is
  *          enabled, but the SCHEMA_VERSION guard still rejects a v4 DB from
  *          older builds — enabling the prototype migrates the DB forward.
+ * v4 → v5: Added per-database tracking metadata and restricted the FTS update
+ *          trigger to content/category changes (access accounting is cheap).
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
+
+/** v5: per-database observation epoch; metadata writes must not rebuild FTS. */
+const TRACKING_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS memory_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+DROP TRIGGER IF EXISTS facts_au;
+CREATE TRIGGER facts_au AFTER UPDATE OF content, category ON facts BEGIN
+  INSERT INTO facts_fts(facts_fts, rowid, content, category) VALUES ('delete', old.id, old.content, old.category);
+  INSERT INTO facts_fts(rowid, content, category) VALUES (new.id, new.content, new.category);
+END;
+`;
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -84,7 +96,9 @@ CREATE TRIGGER IF NOT EXISTS facts_ad AFTER DELETE ON facts BEGIN
   INSERT INTO facts_fts(facts_fts, rowid, content, category) VALUES ('delete', old.id, old.content, old.category);
 END;
 
-CREATE TRIGGER IF NOT EXISTS facts_au AFTER UPDATE ON facts BEGIN
+CREATE TABLE IF NOT EXISTS memory_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+CREATE TRIGGER IF NOT EXISTS facts_au AFTER UPDATE OF content, category ON facts BEGIN
   INSERT INTO facts_fts(facts_fts, rowid, content, category) VALUES ('delete', old.id, old.content, old.category);
   INSERT INTO facts_fts(rowid, content, category) VALUES (new.id, new.content, new.category);
 END;
@@ -184,6 +198,20 @@ export function runMigrations(db: BetterSqlite3.Database, existingVersion: numbe
       db.pragma(`user_version = 4`);
     })();
     debugLog('memory-store: migrated schema v3 → v4 (added facts.evidence column)');
+  }
+  if (existingVersion < 5) {
+    // Invariant: persist the canonical ISO observation epoch before stamping v5,
+    // in the same transaction. INSERT OR IGNORE preserves the first opener's
+    // epoch, using the same timestamp format as the constructor.
+    const seedTs = new Date().toISOString();
+    db.transaction((ts: string) => {
+      db.exec(TRACKING_SCHEMA_SQL);
+      db.prepare(
+        `INSERT OR IGNORE INTO memory_metadata (key, value) VALUES ('tracking_started_at', ?)`,
+      ).run(ts);
+      db.pragma('user_version = 5');
+    }).immediate(seedTs);
+    debugLog('memory-store: migrated schema v4 → v5 (tracking epoch and metadata-only updates)');
   }
 }
 

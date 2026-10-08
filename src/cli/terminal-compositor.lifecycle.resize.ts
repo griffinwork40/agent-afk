@@ -33,6 +33,10 @@ import { requestCprOrMarkDirty } from './terminal-compositor.lifecycle.cpr.js';
  *
  * On SHRINK: drops any stale EXPAND snapshot.
  *
+ * On WIDTH-ONLY (net-zero rows): snapshots the footprint for ghost-row erase
+ * (same as EXPAND) and emits a CPR to trigger a clean repaint after tmux
+ * reflows any soft-wrapped lines in the changed-width pane.
+ *
  * Contract: no I/O beyond the CPR emit. Must not call repaint() synchronously —
  * the subscribeImmediate channel fires inside the 'resize' event; a repaint()
  * here would race the debounced subscriber and double-paint.
@@ -85,8 +89,36 @@ export function handleResizeImmediate(self: LifecycleHost): void {
       requestCprOrMarkDirty(self, frameBottom, newRows, /* rowDelta= */ newRows - self.lastKnownRows);
     }
   } else {
-    // Net-zero (same row count): drop any stale EXPAND snapshot.
-    self.pendingResizeErase = null;
+    // Net-zero (same row count) — width-only SIGWINCH (e.g. tmux side-by-side
+    // split). A width-only change can reflow tmux's soft-wrapped lines, pushing
+    // content into scrollback and leaving a ghost copy of the spinner row at the
+    // old position. Two steps fix this:
+    //
+    //   1. Snapshot the pre-resize footprint for erase (same shape as EXPAND),
+    //      so the ghost rows are cleared on the next repaint().
+    //
+    //   2. Issue a CPR request — even though rowDelta=0 (no row change), the CPR
+    //      fires a repaint() once the reply arrives (or the timeout elapses),
+    //      which is the only repaint path that runs while cprPending suppresses
+    //      the debounced SIGWINCH repaint. Without the CPR, the debounced repaint
+    //      fires immediately (no suppression) but BEFORE the erase snapshot is
+    //      consumed, so the ghost can survive.  The plausibility range is [0, 0];
+    //      a non-zero measured delta is discarded and the repaint still proceeds,
+    //      which is safe: the worst case is a frame that did not shift at all.
+    const extraRows = self.scrollRegion?.getExtraRows() ?? 0;
+    const frameTop = self.logUpdate?.topRow ?? 0;
+    const bandTop = self.committedBand.length > 0 ? self.committedBandTopRow : 0;
+    const tops = [frameTop, bandTop].filter((r) => r > 0);
+    const top = tops.length > 0 ? Math.min(...tops) : 0;
+    const bottom = Math.max(1, self.lastKnownRows - 1 - extraRows);
+    if (top > 0 && top <= bottom) {
+      self.pendingResizeErase = { top, bottom };
+    }
+
+    const frameBottom = self.lastMeasuredFrameBottom;
+    if (frameBottom > 0 && self.stdin.isTTY) {
+      requestCprOrMarkDirty(self, frameBottom, newRows, /* rowDelta= */ 0);
+    }
   }
   self.logUpdate?.resetGeometry?.();
   self.bandGeometryStale = true;

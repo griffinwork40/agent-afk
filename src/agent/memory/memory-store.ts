@@ -134,6 +134,10 @@ export class MemoryStore {
       );
     }
 
+    // INSERT OR IGNORE preserves the first observed tracking time across
+    // concurrent opens and restarts; never infer it from a release date.
+    this.db.prepare(`INSERT OR IGNORE INTO memory_metadata (key, value)
+      VALUES ('tracking_started_at', ?)`).run(new Date().toISOString());
     this.replayWAL();
   }
 
@@ -257,6 +261,9 @@ export class MemoryStore {
     return result.changes > 0;
   }
 
+  /** Administrative inspection, not recall: does not count as an access.
+   * HOT.md injection is a separate flat file, not a retrieval of archive facts.
+   */
   getFact(factId: number): Fact | null {
     const row = this.db.prepare('SELECT * FROM facts WHERE id = ?').get(factId);
     return (row as Fact) ?? null;

@@ -36,6 +36,7 @@ import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { ToolResult } from '../../providers/shared/tool-result.js';
 import { resolveAndContain, assertWriteTargetContained } from './_cwd-utils.js';
 import { assertNotDenylisted } from './write-denylist.js';
+import { makeSessionCounter } from './_image-operation.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -77,24 +78,7 @@ const DEFAULT_SESSION_LIMIT = 10;
 // Per-session generation counter (module-scope, keyed by session id)
 // ---------------------------------------------------------------------------
 
-const sessionCounters = new Map<string, number>();
-
-function getSessionCount(sessionId: string): number {
-  return sessionCounters.get(sessionId) ?? 0;
-}
-
-function incrementSessionCount(sessionId: string): number {
-  const next = getSessionCount(sessionId) + 1;
-  sessionCounters.set(sessionId, next);
-  return next;
-}
-
-function decrementSessionCount(sessionId: string): void {
-  const current = getSessionCount(sessionId);
-  if (current > 0) {
-    sessionCounters.set(sessionId, current - 1);
-  }
-}
+const generateCounter = makeSessionCounter();
 
 // ---------------------------------------------------------------------------
 // Input parsing
@@ -288,9 +272,9 @@ export function createImageGenerateHandler(
 
     // 4. Optimistically increment before the API call to close the TOCTOU race
     //    (F-4); decrement on any failure path so the counter stays accurate.
-    incrementSessionCount(sessionId);
-    if (getSessionCount(sessionId) > limit) {
-      decrementSessionCount(sessionId);
+    generateCounter.increment(sessionId);
+    if (generateCounter.get(sessionId) > limit) {
+      generateCounter.decrement(sessionId);
       return {
         content:
           `Image generation limit reached (${limit} per session). ` +
@@ -303,7 +287,7 @@ export function createImageGenerateHandler(
     // 5. Parse input
     const parsed = parseInput(input);
     if ('error' in parsed) {
-      decrementSessionCount(sessionId);
+      generateCounter.decrement(sessionId);
       return { content: parsed.error, isError: true };
     }
 
@@ -325,7 +309,7 @@ export function createImageGenerateHandler(
         fetchFn,
       });
       if ('error' in chatgptResult) {
-        decrementSessionCount(sessionId);
+        generateCounter.decrement(sessionId);
         return { content: chatgptResult.error, isError: true };
       }
       imageData = chatgptResult.b64_json;
@@ -335,7 +319,7 @@ export function createImageGenerateHandler(
         fetchFn, apiKey!, parsed, extraHeaders, signal,
       );
       if ('error' in result) {
-        decrementSessionCount(sessionId);
+        generateCounter.decrement(sessionId);
         return { content: result.error, isError: true };
       }
       imageData = result.b64_json;
@@ -348,7 +332,7 @@ export function createImageGenerateHandler(
     const cwd = context?.resolveBase ?? process.cwd();
     const savePathResult = await resolveGenSavePath(parsed.output_path, context, cwd, imageId, ext);
     if ('error' in savePathResult) {
-      decrementSessionCount(sessionId);
+      generateCounter.decrement(sessionId);
       return { content: savePathResult.error, isError: true };
     }
     const { savePath } = savePathResult;
@@ -358,7 +342,7 @@ export function createImageGenerateHandler(
       await fs.mkdir(path.dirname(savePath), { recursive: true });
       await fs.writeFile(savePath, imageBuffer);
     } catch (err: unknown) {
-      decrementSessionCount(sessionId);
+      generateCounter.decrement(sessionId);
       const msg = err instanceof Error ? err.message : String(err);
       return {
         content: `Image generated successfully but failed to save to disk: ${msg}`,
@@ -367,7 +351,7 @@ export function createImageGenerateHandler(
     }
 
     // 8. Session counter was incremented optimistically before the API call (F-4).
-    const newCount = getSessionCount(sessionId);
+    const newCount = generateCounter.get(sessionId);
 
     // 9. Build metadata (always returned in content regardless of inspect flag)
     const meta: Record<string, unknown> = {

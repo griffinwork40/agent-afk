@@ -114,7 +114,8 @@ const GENERIC_LINES: readonly RegExp[] = [
   /^❯\s+\S+\s+\(\d+ tests?\b/,
   // vitest/jest per-test status lines: they name the TEST, not the error, and
   // a test named "throws an error ..." would otherwise match ERROR_CUE.
-  /^[×✗✕]\s/,
+  // U+00D7 ×, U+2717 ✗, U+2715 ✕, U+2718 ✘, U+2716 ✖
+  /^[×✗✕✘✖]\s/,
   /^FAIL\s+\S+\.(?:test|spec)\.[cm]?[jt]sx?\b/,
   // Success lines that merely mention errors ("PASS desktop: no console errors").
   /^(?:pass\b|✓|✔)/i,
@@ -138,17 +139,45 @@ const CARET_LINE = /^\^+$/;
 const PY_EXCEPTION_LINE = /^[A-Za-z_][\w.]*(?:Error|Exception|Exit|Interrupt|Warning)(?::|$)/;
 
 /**
+ * Matches a line that can immediately precede a Python exception line in a
+ * real traceback:
+ *   - `  File "…", line N, in <function>` (frame line, indented)
+ *   - an indented source echo line (4-space-indented code, starts with "    ")
+ *   - a caret line (e.g. `    ^^^^`) printed by Python 3.11+ under the source
+ *   - `Traceback (most recent call last):` (minimal one-frame traceback)
+ *   - chained-exception connector lines printed between tracebacks
+ *
+ * This guard prevents `lastPythonException` from matching an unrelated
+ * exception-shaped identifier in mixed output (e.g. log lines, test names)
+ * that happens to appear after the real traceback.
+ */
+const PY_TRACEBACK_PREDECESSOR =
+  /^(?:\s+File\s+"[^"]*"|    |\s*\^+\s*$|Traceback\s*\(most recent call last\)|During handling of the above exception|The above exception was the direct cause)/i;
+
+/**
  * When `lines` hold a Python traceback, the LAST exception line in them.
  * Python prints the raised exception at the bottom, and for chained
  * exceptions ("During handling of the above exception ...") the last one is
  * the exception that actually escaped. Taking the first cue line instead keys
  * every Python failure on the identical traceback header.
+ *
+ * To avoid matching an exception-shaped identifier in mixed output below the
+ * real traceback, we require that the preceding non-empty line is a valid
+ * traceback predecessor (a frame line, indented source echo, caret marker,
+ * the Traceback header, or a chained-exception connector).
  */
 function lastPythonException(lines: readonly string[]): string | null {
   if (!lines.some((l) => /^traceback \(most recent call last\):?$/i.test(l.trim()))) return null;
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const line = (lines[i] ?? '').trim();
-    if (PY_EXCEPTION_LINE.test(line)) return line;
+    if (!PY_EXCEPTION_LINE.test(line)) continue;
+    // Verify the preceding non-empty line is valid traceback context.
+    for (let j = i - 1; j >= 0; j -= 1) {
+      const prev = lines[j] ?? '';
+      if (prev.trim().length === 0) continue;
+      if (PY_TRACEBACK_PREDECESSOR.test(prev)) return line;
+      break; // preceding non-empty line is not traceback context
+    }
   }
   return null;
 }

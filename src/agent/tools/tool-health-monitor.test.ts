@@ -109,7 +109,7 @@ describe('min-sample gate (7 vs 8)', () => {
 // ---------------------------------------------------------------------------
 
 describe('error-rate boundary (below vs at 90%)', () => {
-  it('does NOT trigger at exactly 89% error rate (8 errors + 1 success in 9 calls = 88.8%, then 9 errors + 1 success in 10 = 90%, so test 8/9)', () => {
+  it('triggers at exactly 90% error rate in a 10-call window (9 errors + 1 success)', () => {
     // 8 errors + 1 success = 8/9 ≈ 88.9% < 90% → should NOT trigger
     const mon = new ToolHealthMonitor();
     runErrors(mon, 8); // 8 errors in window
@@ -147,7 +147,7 @@ describe('error-rate boundary (below vs at 90%)', () => {
     expect(verdict.degraded).toBe(true);
   });
 
-  it('does NOT trigger at 8/9 error rate (89% — below threshold)', () => {
+  it('does NOT trigger when success prevents crossing 90% in a 9-call window (7/9 ≈ 78%)', () => {
     // We need exactly 8 errors and 1 success in the window (8 calls total, or more)
     // Window of 9: 8 errors + 1 success = 88.9% → no trigger
     // But note: if window.length < HEALTH_MIN_SAMPLE (8), we also don't trigger

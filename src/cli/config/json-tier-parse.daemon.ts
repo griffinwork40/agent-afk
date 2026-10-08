@@ -27,8 +27,11 @@ export function parseDaemonBlock(raw: unknown): NonNullable<CliConfig['daemon']>
     daemon.worktreePrune = {
       enabled: typeof w['enabled'] === 'boolean' ? w['enabled'] : true,
       cron: typeof w['cron'] === 'string' ? w['cron'] : '0 4 * * *',
-      maxAgeDaysClean: typeof w['maxAgeDaysClean'] === 'number' ? w['maxAgeDaysClean'] : 14,
-      maxAgeDaysDirty: typeof w['maxAgeDaysDirty'] === 'number' ? w['maxAgeDaysDirty'] : 30,
+      // Age keys are only set when explicitly present in the JSON — omitting
+      // them preserves `undefined` so that `resolveSweepPolicy` correctly
+      // falls through to the env-var and engine-default layers (#3272).
+      ...(typeof w['maxAgeDaysClean'] === 'number' ? { maxAgeDaysClean: w['maxAgeDaysClean'] } : {}),
+      ...(typeof w['maxAgeDaysDirty'] === 'number' ? { maxAgeDaysDirty: w['maxAgeDaysDirty'] } : {}),
       scope: typeof w['scope'] === 'string' ? w['scope'] : 'all',
     };
   }

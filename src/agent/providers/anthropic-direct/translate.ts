@@ -19,6 +19,7 @@ import { env } from '../../../config/env.js';
 import { incompleteStreamError, isStreamComplete } from './stream-completeness.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { warnOnDroppedThinkingBlocks } from './input-transformations.js';
+import { emitSessionPhase } from '../../trace/emit.js';
 import { isMidStreamNetworkTermination } from './loop/network-termination.js';
 
 /**
@@ -50,22 +51,57 @@ function hasDroppedBlocks(transformations: unknown): boolean {
 }
 
 /**
- * Emit the drop-block warning at most once per stream (per-stream dedup).
+ * Emit the drop-block warning at most once per stream (console-warn dedup),
+ * but always emit the `thinking_block_dropped` trace event for every frame
+ * that carries drops — including `message_delta` frames on the server-side
+ * fallback path.
  *
  * Returns the new value of the `warnedThisStream` flag. Pass the current flag
- * value in; when it is already `true`, both the check and the warn are skipped
- * (this frame duplicates what message_start already warned). Returns `true`
- * when a warn was emitted or was already emitted before.
+ * value in; when this frame carries no drops, `alreadyWarned` is returned
+ * unchanged. Returns `true` when drops were found in this frame.
+ *
+ * `frame` is the SDK object carrying `input_transformations` (the
+ * `message_start` message, or the `message_delta` event itself); the field is
+ * read here so call sites stay one line.
+ *
+ * Dedup contract:
+ * - Console-warn: emitted once per stream via `alreadyWarned` guard (preserved).
+ * - Trace event: emitted independently for every drop-bearing frame so the
+ *   witness layer records each frame's `droppedCount` and `source`. When
+ *   `alreadyWarned` is true, the trace is emitted directly via
+ *   `emitSessionPhase` (skipping the console path) to avoid duplicate
+ *   console lines while keeping the trace complete.
  */
 function warnDropsDeduped(
-  transformations: unknown,
+  frame: unknown,
   source: 'message_start' | 'message_delta',
   alreadyWarned: boolean,
+  traceWriter: TranslateCtx['traceWriter'],
 ): boolean {
-  if (alreadyWarned) return true;
+  const transformations = (frame as Record<string, unknown> | undefined)?.['input_transformations'];
   const fired = hasDroppedBlocks(transformations);
-  warnOnDroppedThinkingBlocks(transformations, source);
-  return fired;
+  if (!fired) return alreadyWarned;
+
+  if (alreadyWarned) {
+    // Console-warn already emitted for this stream — emit only the trace event
+    // so the witness layer records the delta-frame droppedCount without adding
+    // a duplicate console line or consuming a process-global warnCount slot.
+    if (traceWriter) {
+      const dropped = (Array.isArray(transformations) ? transformations : []).filter(
+        (t): t is Record<string, unknown> =>
+          typeof t === 'object' && t !== null && t['type'] === 'thinking_dropped',
+      );
+      void emitSessionPhase(traceWriter, {
+        phase: 'thinking_block_dropped',
+        metadata: { droppedCount: dropped.length, source },
+      });
+    }
+    return true;
+  }
+
+  // First drop-bearing frame: emit both the console-warn and the trace event.
+  warnOnDroppedThinkingBlocks(transformations, source, traceWriter);
+  return true;
 }
 
 /**
@@ -228,11 +264,7 @@ export async function* translateMessageStream(
       switch (evt.type) {
         case 'message_start': {
           if (evt.message?.usage) usage = { ...evt.message.usage };
-          warnedThisStream = warnDropsDeduped(
-            (evt.message as unknown as Record<string, unknown>)?.['input_transformations'],
-            'message_start',
-            warnedThisStream,
-          );
+          warnedThisStream = warnDropsDeduped(evt.message, 'message_start', warnedThisStream, ctx.traceWriter);
           break;
         }
 
@@ -355,11 +387,7 @@ export async function* translateMessageStream(
           // the serving model's input_transformations entries (docs: preserved-thinking).
           // warnDropsDeduped skips when message_start already warned (same drops,
           // both frames carry them) but fires normally when only delta has drops.
-          warnedThisStream = warnDropsDeduped(
-            (evt as unknown as Record<string, unknown>)?.['input_transformations'],
-            'message_delta',
-            warnedThisStream,
-          );
+          warnedThisStream = warnDropsDeduped(evt, 'message_delta', warnedThisStream, ctx.traceWriter);
           if (evt.usage) {
             usage = applyDeltaUsage(usage, evt.usage);
           }

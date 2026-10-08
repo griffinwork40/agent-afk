@@ -169,6 +169,43 @@ describe('DetachedToolNotifier', () => {
     const injected = notifier.drainInjections();
     expect(injected).toContain('call-1');
     expect(injected).toContain('completed');
+
+    // Notice queuing on the early-settle path must also fire (previously unasserted).
+    expect(notifier.drainNotices()).toHaveLength(1);
+  });
+
+  it('earlySettled cap: does not grow beyond MAX_TRACKED unseen ids', () => {
+    // Fill earlySettled to capacity without ever calling observe().
+    // Each delivered result for an untracked id goes into earlySettled.
+    // After MAX_TRACKED (1000) entries the cap kicks in and subsequent results
+    // are silently discarded rather than growing the map without bound.
+    const registry = new DetachableToolRegistry();
+    const notifier = new DetachedToolNotifier(registry);
+
+    const MAX_TRACKED = 1000;
+    // Fill to the cap.
+    for (let i = 0; i < MAX_TRACKED; i++) {
+      const id = `cap-test-${i}`;
+      const token = registry.register(id);
+      token.notifyDetached();
+      token.deliver(makeResult({ toolUseId: id }));
+    }
+
+    // The next result should be silently dropped (cap enforced).
+    const overflowId = 'cap-overflow';
+    const overflowToken = registry.register(overflowId);
+    overflowToken.notifyDetached();
+    overflowToken.deliver(makeResult({ toolUseId: overflowId }));
+
+    // Calling observe() for the overflow id should NOT produce an injection
+    // because the result was dropped.
+    const ev = makeEvent('bash', overflowId);
+    ev.result = JSON.stringify({ status: 'detached' });
+    notifier.observe(ev);
+
+    // No injection should have been queued for the overflow id.
+    const injected = notifier.drainInjections();
+    expect(injected).not.toContain(overflowId);
   });
 
   it('reset() clears all state', () => {
@@ -234,6 +271,19 @@ describe('buildDetachedToolInjection', () => {
     const xml = buildDetachedToolInjection(result);
     expect(xml).not.toContain('<script>');
     expect(xml).toContain('&lt;script&gt;');
+  });
+
+  it('strips control chars from toolUseId before inserting into XML attributes', () => {
+    // A toolUseId with embedded control characters must not reach the XML envelope.
+    const result = makeResult({ toolUseId: 'call\x00-\x1f-bad\x7f' });
+    const xml = buildDetachedToolInjection(result);
+    // Extract only the opening tag (attribute line) — the body may have newlines.
+    const openingTag = xml.slice(0, xml.indexOf('>') + 1);
+    // Control bytes must not appear in the attribute values.
+    // eslint-disable-next-line no-control-regex
+    expect(openingTag).not.toMatch(/[\x00-\x1f\x7f]/);
+    // The printable portion of the id must still be present.
+    expect(openingTag).toContain('call--bad');
   });
 
   it('does not leave a partial XML entity after truncation', () => {

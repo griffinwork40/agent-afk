@@ -12,13 +12,48 @@ import type { FacetOutcomeDowngradeReason } from './schema.js';
 import type { TraceSignals } from './derive.trace.js';
 
 /**
+ * Null-equivalent values for the Deferred / Pending bullet in a Done block.
+ * Agents commonly write "none", "n/a", "-", "nothing", etc. to indicate there
+ * is truly nothing deferred. These must NOT trigger the `deferred_items`
+ * downgrade signal. Matching is case-insensitive on the trimmed bullet value.
+ *
+ * Exported for tests.
+ */
+export const NULL_DEFERRED_VALUES = new Set([
+  'none',
+  'n/a',
+  'na',
+  'nothing',
+  'nil',
+  '-',
+  '—',   // em-dash (U+2014)
+  '–',   // en-dash (U+2013)
+  'n.a.',
+  'n.a',  // normalized form after trailing-punctuation strip
+  '(none)',
+  '(n/a)',
+]);
+
+/**
+ * Return true when a parsed "Deferred / pending" bullet value is semantically
+ * empty — i.e. the agent explicitly stated there is nothing deferred using a
+ * common null-equivalent marker. Handles optional trailing punctuation.
+ */
+function isNullDeferredValue(value: string): boolean {
+  // Strip optional trailing punctuation before matching (including ; and :)
+  const normalized = value.trim().replace(/[.!?,;:]+$/, '').toLowerCase();
+  return normalized.length === 0 || NULL_DEFERRED_VALUES.has(normalized);
+}
+
+/**
  * Check whether a self-reported `fully_achieved` should be downgraded to
  * `partially_achieved` based on corroborating signals (#2798). Returns the
  * first matching downgrade reason, or `undefined` when no signal fires.
  *
  * Evaluated in priority order (most reliable signal first):
  *   1. `deferred_items` — Done block has a non-empty "Deferred / pending"
- *      bullet. The agent itself declared pending work.
+ *      bullet that is not a null-equivalent marker ("none", "n/a", "-", etc.).
+ *      The agent itself declared pending work.
  *   2. `no_corroborating_evidence` — Done with zero world mutations (no file
  *      writes, edits, commits, patch_apply calls, or external-effects bash)
  *      and no evidence bullet in the Done block. A pure-text Done with no
@@ -55,7 +90,13 @@ export function checkDowngradeSignals({
   traceSignals: TraceSignals | undefined;
 }): FacetOutcomeDowngradeReason | undefined {
   // Signal 1: explicit deferred/pending items in the Done block.
-  if (parsedDeferred !== undefined && parsedDeferred.trim().length > 0) {
+  // "Deferred: none", "Deferred: n/a", "Deferred: -", etc. are null-equivalent
+  // markers that must NOT fire the downgrade (#2798).
+  if (
+    parsedDeferred !== undefined &&
+    parsedDeferred.trim().length > 0 &&
+    !isNullDeferredValue(parsedDeferred)
+  ) {
     return 'deferred_items';
   }
 

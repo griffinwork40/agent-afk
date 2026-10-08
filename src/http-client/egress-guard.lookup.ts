@@ -60,6 +60,8 @@ export interface LookupOptions {
 /**
  * Dependency surface injected by the caller — both real implementations live
  * in `egress-guard.ts` so this file has no upward import cycle.
+ *
+ * @internal
  */
 export interface GuardedLookupDeps {
   /**
@@ -170,6 +172,12 @@ export function createGuardedLookup(
             : records;
 
         if (filtered.length === 0) {
+          // Resolution failure, not a policy block: DNS returned valid IPs but
+          // none matched the caller's address-family preference. This is
+          // analogous to receiving an empty record set from the resolver — the
+          // guard did not intervene; the network simply has no usable record.
+          // Plain Error is correct here; EgressBlockedError is reserved for
+          // guard-originated blocks (non-IP records, CIDR-blocked addresses).
           callOnce(
             callback,
             new Error(

@@ -30,6 +30,7 @@ import { decideMdeAction } from './whatif.mde-handler.js';
 import {
   resolveSpec,
   buildWhatifDeps,
+  buildWhatifRunOptions,
   readDirNames,
 } from '../../whatif/surface.js';
 import type { WhatifReport } from '../../whatif/types.js';
@@ -202,28 +203,13 @@ async function runWhatifCommand(
     },
   };
 
-  const runOpts = {
+  const runOpts = buildWhatifRunOptions(parsed, {
     spec,
     realHome,
     realCwd,
     agentModel,
     analystModel,
-    verify: parsed.options.verify,
-    turns: parsed.options.turns,
-    samples: parsed.options.samples,
-    maxUsd: parsed.options.maxUsd,
-    judge: parsed.options.judge,
-    concurrency: parsed.options.concurrency,
-    maxTurns: parsed.options.maxTurns,
-    episodeTimeoutMs: parsed.options.episodeTimeoutMs,
-    keepSandboxes: parsed.options.keepSandboxes,
-    force: parsed.force,
-    ...(parsed.options.probes !== undefined ? { probes: parsed.options.probes } : {}),
-    ...(parsed.options.maxPredictions !== undefined ? { maxPredictions: parsed.options.maxPredictions } : {}),
-    ...(parsed.options.noBaselineSample ? { noBaselineSample: true } : {}),
-    ...(parsed.options.operatorPredictions && parsed.options.operatorPredictions.length > 0
-      ? { operatorPredictions: parsed.options.operatorPredictions } : {}),
-  };
+  });
 
   try {
     // Dynamic import tolerates run.ts not existing during type-check if this

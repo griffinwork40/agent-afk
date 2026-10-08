@@ -22,7 +22,7 @@ Open source. Runs locally. Works with any model provider, including local models
 ## Quick Start
 
 ```bash
-npm install -g agent-afk    # Node ≥ 22.13 required
+npm install -g agent-afk    # Node 22.22.2+, 24.15+, or 26+
 afk login                   # authenticate (auto-detects Claude Code / Codex creds)
 afk doctor                  # verify everything works
 afk chat "hello"             # first real conversation
@@ -143,7 +143,7 @@ afk chat "refactor this" --model gpt-5.5
 | Slot | Default | Notes |
 |---|---|---|
 | `local` | *(empty — you configure)* | Point at Ollama, LM Studio, or any OpenAI-compatible shim via `AFK_MODEL_LOCAL` + `AFK_MODEL_LOCAL_BASE_URL` |
-| `small` | `claude-haiku-4-5-20251001` | Cheapest/fastest Anthropic tier |
+| `small` | `claude-haiku-5-5` | Cheapest/fastest Anthropic tier |
 | `medium` | `claude-sonnet-4-6` | General-use default |
 | `large` | `claude-opus-5` | Most capable |
 

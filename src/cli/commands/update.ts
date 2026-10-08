@@ -7,22 +7,9 @@ import {
   writePendingUpdateMarker,
   writeUpdateCache,
 } from '../update-checker.js';
+import { isNewerVersion } from '../update-version.js';
 
 const SEMVER_RE = /^\d+\.\d+\.\d+(-[\da-z.]+)?$/i;
-
-/** True when `latest` is strictly newer than `current`. */
-function isNewer(current: string, latest: string): boolean {
-  const c = current.split('.').map(Number);
-  const l = latest.split('.').map(Number);
-  const len = Math.max(c.length, l.length);
-  for (let i = 0; i < len; i++) {
-    const cv = c[i] ?? 0;
-    const lv = l[i] ?? 0;
-    if (lv > cv) return true;
-    if (lv < cv) return false;
-  }
-  return false;
-}
 
 /**
  * `afk update` runs an in-foreground `npm install -g agent-afk@<latest>` so the
@@ -59,7 +46,7 @@ export function registerUpdateCommand(program: Command): void {
         // from the registry, so the startup banner doesn't render from a stale
         // latestVersion after the user has explicitly checked.
         writeUpdateCache(latest);
-        if (isNewer(current, latest)) {
+        if (isNewerVersion(current, latest)) {
           console.log(`${palette.bold('Update available:')} ${palette.dim(current)} → ${palette.bold(latest)}`);
           console.log(palette.dim('  Run `afk update` to install.'));
           return;

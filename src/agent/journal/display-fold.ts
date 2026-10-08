@@ -199,9 +199,9 @@ class DisplayFoldState {
     return this.rows.filter((m): m is JournalMessage => m !== null);
   }
 
-  /** Test hook: exposes the internal cap so tests can assert the invariant directly. */
-  getPendingWindowCap(): number {
-    return this.pendingWindowCap;
+  /** @internal Test hook: snapshot of internal state for assertion in _testFoldForDisplay. */
+  _snapshot(): { pendingWindowCap: number } {
+    return { pendingWindowCap: this.pendingWindowCap };
   }
 }
 
@@ -220,10 +220,14 @@ export function foldForDisplay(segments: readonly (readonly JournalRecord[])[]):
 }
 
 /**
- * Test-only: fold records and return both the display messages and the
- * internal `pendingWindowCap` at the end of the fold. Exported under a
- * `_test` prefix so linters can flag accidental use in production code.
+ * Test-only: fold a **single segment** of records (no inter-segment soft-truncates)
+ * and return both the display messages and the internal `pendingWindowCap` at the
+ * end of the fold. Use `foldForDisplay` for multi-segment (fork-chain) scenarios.
+ *
+ * Exported under a `_test` prefix so linters can flag accidental use in
+ * production code.
  * @internal
+ * @singleSegment
  */
 export function _testFoldForDisplay(records: readonly JournalRecord[]): {
   messages: JournalMessage[];
@@ -231,7 +235,8 @@ export function _testFoldForDisplay(records: readonly JournalRecord[]): {
 } {
   const state = new DisplayFoldState();
   for (const rec of records) state.apply(rec);
-  return { messages: state.messages(), pendingWindowCap: state.getPendingWindowCap() };
+  const { pendingWindowCap } = state._snapshot();
+  return { messages: state.messages(), pendingWindowCap };
 }
 
 type ReadRecords = (sessionId: string) => JournalRecord[];

@@ -357,8 +357,9 @@ describe('parseModelsConfig', () => {
 
 describe('model-limits resolves through slot bindings', () => {
   it('uses default tier limits when unconfigured', () => {
-    expect(contextLimitFor('small')).toBe(200_000);
-    expect(maxOutputTokensFor('small')).toBe(64_000);
+    // small → CLAUDE_HAIKU_ID (Claude Haiku 5.5): 1M window, 128k output.
+    expect(contextLimitFor('small')).toBe(1_000_000);
+    expect(maxOutputTokensFor('small')).toBe(128_000);
   });
 
   it('preserves the explicit *_1m context-window choice', () => {
@@ -769,6 +770,18 @@ describe('contextWindowOverrideFor', () => {
       large: DEFAULT_SLOT_BINDINGS.large,
     });
     expect(contextWindowOverrideFor('gpt-4o')).toBeUndefined();
+  });
+
+  it('first slot in SLOT_NAMES order wins when two slots bind the same id with different contextWindow', () => {
+    // local is first in SLOT_NAMES (local → small → medium → large), so its
+    // 128_000 wins over small's 64_000 — deterministic, documented behaviour.
+    setSlotBindings({
+      local: { id: 'shared-model', contextWindow: 128_000 },
+      small: { id: 'shared-model', contextWindow: 64_000 },
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    expect(contextWindowOverrideFor('shared-model')).toBe(128_000);
   });
 });
 
