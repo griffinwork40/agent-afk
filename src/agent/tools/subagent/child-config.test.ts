@@ -12,7 +12,7 @@
  * propagation are already covered transitively in `subagent-executor.test.ts`):
  *   1. turn-budget resolution (explicit vs. named-agent frontmatter vs. default)
  *   2. depth wiring (`depth + 1`, `maxDepth`) into the child config
- *   3. systemPrompt selection (named-agent body vs. parent base prompt)
+ *   3. systemPrompt selection (named-agent body vs. scoped worker prompt)
  *   4. named-agent tool-access intersection (fail-closed narrowing against a cage)
  *   5. cwd threading + omission
  *   6. model resolution legs (named fixed / named `inherit` / unnamed fallback)
@@ -27,7 +27,9 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { buildChildConfig, type BuildChildConfigArgs } from './child-config.js';
+import { UNNAMED_SUBAGENT_WORKER_PROMPT } from '../system-prompt.js';
 import { SUBAGENT_HANDOFF_CONTRACT } from '../../subagent-contract.js';
+import { TOOL_SYSTEM_PROMPT_BASE } from '../system-prompt.js';
 import { InMemoryTraceWriter } from '../../trace/writer.js';
 import type { AgentInput } from './input-parse.js';
 import { buildInitialState } from '../../session/session-setup.js';
@@ -316,16 +318,20 @@ describe('buildChildConfig', () => {
   });
 
   describe('systemPrompt selection', () => {
-    it('appends the handoff contract to the parent base prompt for an unnamed dispatch', () => {
+    it('uses the scoped worker prompt (not the parent base) for an unnamed dispatch', () => {
       const { childConfig } = buildChildConfig(baseArgs({ namedAgent: undefined }));
-      // Unnamed dispatch inherits the parent base prompt, then has the default
-      // handoff contract appended (see SUBAGENT_HANDOFF_CONTRACT) so the child
-      // itself is told to keep its reply short / offload bulk output to files.
-      expect(childConfig.systemPrompt).toMatch(/^parent base prompt/);
+      // Unnamed dispatch receives the lean worker prompt — TOOL_SYSTEM_PROMPT_BASE
+      // + SUBAGENT_HANDOFF_CONTRACT — regardless of what the parent base prompt
+      // contains. The coordinator-framed parent base (~54 KB) is not forwarded
+      // to worker children (see UNNAMED_SUBAGENT_WORKER_PROMPT in system-prompt.ts).
+      expect(childConfig.systemPrompt).toBe(UNNAMED_SUBAGENT_WORKER_PROMPT);
+      expect(childConfig.systemPrompt).toContain(TOOL_SYSTEM_PROMPT_BASE);
       expect(childConfig.systemPrompt).toContain(SUBAGENT_HANDOFF_CONTRACT);
+      // Must NOT contain the parent base prompt text.
+      expect(childConfig.systemPrompt).not.toMatch(/^parent base prompt/);
     });
 
-    it('falls back to the handoff contract alone when there is no parent base prompt', () => {
+    it('uses the same worker prompt even when there is no parent base prompt', () => {
       const { childConfig } = buildChildConfig(
         baseArgs({
           namedAgent: undefined,
@@ -338,7 +344,9 @@ describe('buildChildConfig', () => {
           },
         }),
       );
-      expect(childConfig.systemPrompt).toBe(SUBAGENT_HANDOFF_CONTRACT);
+      // No parent base prompt → still uses UNNAMED_SUBAGENT_WORKER_PROMPT,
+      // not the old fallback of SUBAGENT_HANDOFF_CONTRACT alone.
+      expect(childConfig.systemPrompt).toBe(UNNAMED_SUBAGENT_WORKER_PROMPT);
     });
 
     it("uses the named agent's definition prompt (markdown body) for a named dispatch", () => {

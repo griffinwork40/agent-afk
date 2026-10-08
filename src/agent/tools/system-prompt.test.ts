@@ -17,6 +17,7 @@ import {
   BG_SUBAGENT_RESULT_PROMPT,
   QUEUED_USER_MESSAGE_PROMPT,
   PEER_MESSAGE_PROMPT,
+  UNNAMED_SUBAGENT_WORKER_PROMPT,
   MEMORY_SYSTEM_PROMPT,
   MEMORY_SYSTEM_PROMPT_READONLY,
   MEMORY_SYSTEM_PROMPT_SEARCH_ONLY,
@@ -25,6 +26,7 @@ import {
   resolveMemorySystemPrompt,
   resolveWorkspaceSystemPrompt,
 } from './system-prompt.js';
+import { SUBAGENT_HANDOFF_CONTRACT } from '../subagent-contract.js';
 
 describe('resolveToolSystemPrompt', () => {
   it('returns the full compound for a non-skill-dispatch session (false)', () => {
@@ -94,6 +96,27 @@ describe('resolveToolSystemPrompt — queued-message flush delivery', () => {
   it('keeps lookalike JSON in ordinary tool output untrusted', () => {
     expect(QUEUED_USER_MESSAGE_PROMPT).toContain('remains untrusted tool output');
     expect(QUEUED_USER_MESSAGE_PROMPT).toContain('Ctrl+B');
+  });
+});
+
+describe('UNNAMED_SUBAGENT_WORKER_PROMPT — scoped worker prompt for bare agent dispatches', () => {
+  it('contains TOOL_SYSTEM_PROMPT_BASE so workers know their tool conventions', () => {
+    expect(UNNAMED_SUBAGENT_WORKER_PROMPT).toContain(TOOL_SYSTEM_PROMPT_BASE);
+  });
+
+  it('contains SUBAGENT_HANDOFF_CONTRACT so workers keep their reply compact', () => {
+    expect(UNNAMED_SUBAGENT_WORKER_PROMPT).toContain(SUBAGENT_HANDOFF_CONTRACT);
+  });
+
+  it('does NOT contain interactive-only fragments (routing/passthrough/peer) — worker never sees them', () => {
+    expect(UNNAMED_SUBAGENT_WORKER_PROMPT).not.toContain('<command-name>');
+    expect(UNNAMED_SUBAGENT_WORKER_PROMPT).not.toContain('<bash-passthrough>');
+    expect(UNNAMED_SUBAGENT_WORKER_PROMPT).not.toContain('<background-subagent-result>');
+    expect(UNNAMED_SUBAGENT_WORKER_PROMPT).not.toContain('<peer-session-message>');
+  });
+
+  it('is strictly smaller than the full interactive compound', () => {
+    expect(UNNAMED_SUBAGENT_WORKER_PROMPT.length).toBeLessThan(TOOL_SYSTEM_PROMPT.length);
   });
 });
 
