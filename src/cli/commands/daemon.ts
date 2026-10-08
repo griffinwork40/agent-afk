@@ -32,6 +32,18 @@ import { providerForModel } from '../../agent/providers/index.js';
 import { buildDaemonSessionFactory } from './daemon-session-factory.js';
 import { daemonTurnHooks } from './daemon-session-persist.js';
 import { errorMessage } from '../../utils/errors.js';
+import { writeServiceStartupSidecar } from '../../service/version-skew.js';
+import { getVersion } from '../version.js';
+
+/**
+ * Record the running daemon version in the service startup sidecar so that
+ * `afk service status` can compare it against the installed CLI version and
+ * warn on skew. Skipped for transient `--once` ticks which are not a
+ * long-running service instance.
+ */
+function writeDaemonStartupSidecar(once: boolean): void {
+  if (!once) writeServiceStartupSidecar('daemon', getVersion());
+}
 export type { BuildDaemonSessionFactoryOpts } from './daemon-session-factory.js';
 export { buildDaemonSessionFactory } from './daemon-session-factory.js';
 
@@ -380,7 +392,7 @@ export function registerDaemonCommand(program: Command): void {
             ).catch(() => undefined);
           },
         });
-
+        writeDaemonStartupSidecar(Boolean(options.once)); // record version for `afk service status`
         // Wave-manifest reconciliation at daemon startup: surface resumption
         // offers for unfinished work. Non-interactive — requires
         // AFK_WAVE_RESUME_UNATTENDED=1. Fire-and-forget.
