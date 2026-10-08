@@ -42,6 +42,7 @@ import type { PreDispatchGateDeps } from './dispatcher.pre-dispatch-gates.js';
 import type { DetachableToolRegistry } from './detach-registry.js';
 import type { ProcessJobRegistry } from '../shell-jobs/process-jobs.js';
 import { errorMessage } from '../../utils/errors.js';
+import { OPERATOR_DENIED_MARKER } from './operator-denied.match.js';
 
 // ---------------------------------------------------------------------------
 // Dependency surface
@@ -170,7 +171,7 @@ export function denialReason(
   permissionReason: string | undefined,
   deps: CoreExecDeps,
 ): string {
-  if (permissionReason?.includes('disabled by operator settings') || isRegisteredTool(toolName, deps)) {
+  if (permissionReason?.includes(OPERATOR_DENIED_MARKER) || isRegisteredTool(toolName, deps)) {
     return permissionReason ?? `Tool "${toolName}" is not permitted`;
   }
   return unknownToolMessage(toolName, deps);

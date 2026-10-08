@@ -8,12 +8,12 @@ const defs = [
 ];
 
 describe('external dispatcher operator guard', () => {
-  it('filters its catalog, rejects denied calls and preserves allowed routing', async () => {
+  it('filters the fallback catalog, rejects denied calls and preserves allowed routing', async () => {
     const execute = vi.fn(async () => ({ content: 'ok' }));
     const setResolveBase = vi.fn();
     const setAllowAll = vi.fn();
-    const wrapped = withOperatorDeniedDispatcher({ execute, setResolveBase, setAllowAll, toolDefs: defs } as never, { deniedTools: ['bash'] })!;
-    expect(operatorDispatcherToolDefs(wrapped, [])).toEqual([defs[1]]);
+    const wrapped = withOperatorDeniedDispatcher({ execute, setResolveBase, setAllowAll } as never, { deniedTools: ['bash'] })!;
+    expect(operatorDispatcherToolDefs(wrapped, defs)).toEqual([defs[1]]);
     expect((await wrapped.execute({ id: '1', name: 'bash', input: {}, signal: new AbortController().signal })).content).toContain('disabled by operator settings');
     expect(execute).not.toHaveBeenCalled();
     expect((await wrapped.execute({ id: '2', name: 'read_file', input: {}, signal: new AbortController().signal })).content).toBe('ok');
@@ -22,10 +22,14 @@ describe('external dispatcher operator guard', () => {
     expect(setResolveBase).toHaveBeenCalledWith('/new');
     expect(setAllowAll).toHaveBeenCalledWith(true);
   });
-  it('uses the builtin fallback when the inner has no catalog', () => {
+  it('keeps every non-denied fallback entry, including get_runtime_state (regression)', () => {
+    const fallback = [...defs, { name: 'get_runtime_state', input_schema: { type: 'object' as const } }];
     const wrapped = withOperatorDeniedDispatcher({ execute: async () => ({ content: 'ok' }) }, { deniedTools: ['bash'] })!;
-    expect(operatorDispatcherToolDefs(wrapped, []).map((s) => s.name)).not.toContain('bash');
-    expect(operatorDispatcherToolDefs(wrapped, []).map((s) => s.name)).toContain('read_file');
+    expect(operatorDispatcherToolDefs(wrapped, fallback).map((s) => s.name)).toEqual(['read_file', 'get_runtime_state']);
+  });
+  it('returns the fallback unchanged for an unguarded external dispatcher (pre-deny behaviour)', () => {
+    const inner = { execute: async () => ({ content: 'ok' }) };
+    expect(operatorDispatcherToolDefs(inner, defs)).toBe(defs);
   });
   it('does not wrap when no operator denies exist', () => {
     const inner = { execute: async () => ({ content: 'ok' }) };

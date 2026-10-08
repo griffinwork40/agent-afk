@@ -8,7 +8,7 @@
  * @module agent/tools/permissions
  */
 
-import { isToolDenied } from './operator-denied.js';
+import { isToolDenied, operatorDeniedReason } from './operator-denied.match.js';
 
 export interface ToolPermissionConfig {
   deniedTools?: string[];
@@ -26,7 +26,7 @@ export function checkToolPermission(
   config?: ToolPermissionConfig,
 ): PermissionCheckResult {
   if (isToolDenied(toolName, config?.deniedTools)) {
-    return { allowed: false, reason: `Tool "${toolName}" is disabled by operator settings (tools.disabled in afk.config.json).` };
+    return { allowed: false, reason: operatorDeniedReason(toolName) };
   }
   if (!config?.allowedTools) {
     return { allowed: true };

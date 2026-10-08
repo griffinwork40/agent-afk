@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { jsonConfigTierPaths } from '../../cli/config/json-tier-paths.js';
-import { parseDisabledTools, resolveOperatorDeniedTools, TOOL_GROUPS } from './operator-denied.js';
+import { parseDisabledTools, resolveOperatorDeniedTools, toolGroups } from './operator-denied.js';
 import { checkToolPermission } from './permissions.js';
 import { setConfigValue, unsetConfigValue } from '../../config/mutate.js';
 
@@ -25,8 +25,8 @@ function tier(index: number, content: unknown): void {
 
 describe('operator deny resolver', () => {
   it('expands every fixed group to real tools', () => {
-    expect(TOOL_GROUPS['browser']).toEqual(['browser_open', 'browser_observe', 'browser_act', 'browser_screenshot', 'browser_close']);
-    for (const [group, names] of Object.entries(TOOL_GROUPS)) expect(parseDisabledTools([group], root)).toEqual(names);
+    expect(toolGroups()['browser']).toEqual(['browser_open', 'browser_observe', 'browser_act', 'browser_screenshot', 'browser_close']);
+    for (const [group, names] of Object.entries(toolGroups())) expect(parseDisabledTools([group], root)).toEqual(names);
   });
   it('ignores locked tools and warns once', () => {
     expect(parseDisabledTools(['read_file'], root)).toEqual([]);
@@ -44,7 +44,7 @@ describe('operator deny resolver', () => {
     tier(0, { tools: { disabled: ['browser', 'bash'] } });
     tier(1, { tools: { disabled: ['image', 'bash'] } });
     tier(2, { tools: { disabled: ['peer'] } });
-    expect(new Set(resolveOperatorDeniedTools())).toEqual(new Set([...TOOL_GROUPS['browser']!, 'bash', ...TOOL_GROUPS['image']!, ...TOOL_GROUPS['peer']!]));
+    expect(new Set(resolveOperatorDeniedTools())).toEqual(new Set([...toolGroups()['browser']!, 'bash', ...toolGroups()['image']!, ...toolGroups()['peer']!]));
   });
   it('retains other tiers on JSON parse errors and malformed values', () => {
     tier(0, '{bad json');
@@ -77,5 +77,16 @@ describe('config mutation operator gate', () => {
   it.each(['tools.disabled', 'tools.disabled.0', 'tools'])('refuses setting and unsetting %s', (key) => {
     expect(() => setConfigValue(key, [])).toThrow('A human must edit afk.config.json');
     expect(() => unsetConfigValue(key)).toThrow('A human must edit afk.config.json');
+  });
+});
+
+describe('built-in name coverage', () => {
+  it('recognizes every non-locked top-level tool name without an unknown-entry warning', async () => {
+    const { topLevelSurfaceAllowedTools } = await import('./top-level-allowlist.js');
+    const { LOCKED_TOOLS } = await import('./operator-denied.js');
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const names = topLevelSurfaceAllowedTools().filter((n) => !LOCKED_TOOLS.has(n));
+    expect(parseDisabledTools(names, 'coverage')).toEqual(names);
+    expect(spy.mock.calls.flat().join('\n')).not.toContain('unknown tool entry');
   });
 });

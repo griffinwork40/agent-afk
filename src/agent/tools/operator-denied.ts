@@ -4,6 +4,9 @@ import { ALL_TOOL_SCHEMAS } from './schemas.js';
 import { memoryToolSchemas } from '../memory/memory-tools.js';
 import { stateToolSchemas } from '../state/state-schemas.js';
 import type { ToolPermissionConfig } from './permissions.js';
+import { isMcpDenyEntry } from './operator-denied.match.js';
+
+export { isMcpDenyEntry, isToolDenied } from './operator-denied.match.js';
 
 /** Core tools remain available regardless of operator visibility settings. */
 export const LOCKED_TOOLS: ReadonlySet<string> = new Set([
@@ -11,35 +14,38 @@ export const LOCKED_TOOLS: ReadonlySet<string> = new Set([
   'read_file', 'write_file', 'edit_file', 'grep', 'glob', 'list_directory',
 ]);
 
-/** Fixed groups, intentionally not a general glob language. */
-export const TOOL_GROUPS: Readonly<Record<string, readonly string[]>> = {
-  browser: ALL_TOOL_SCHEMAS.filter((s) => s.name.startsWith('browser_')).map((s) => s.name),
-  image: ['image_generate', 'image_edit'],
-  clipboard: ['clipboard_read', 'clipboard_write'],
-  peer: ['list_sessions', 'send_to_session'],
-  schedules: ['create_schedule', 'update_schedule', 'list_schedules', 'get_schedule_history', 'cancel_schedule'],
-};
-const builtinNames = new Set([
-  ...ALL_TOOL_SCHEMAS, ...memoryToolSchemas, ...stateToolSchemas,
-].map((s) => s.name).concat([...LOCKED_TOOLS], ['workspace_publish', 'workspace_query', 'workspace_subscribe']));
+/** Fixed group names, intentionally not a general glob language. */
+export const TOOL_GROUP_NAMES = ['browser', 'image', 'clipboard', 'peer', 'schedules'] as const;
+
+// Contract: computed lazily (first call, then memoized) so loading this module
+// never dereferences schema arrays during import-cycle evaluation.
+let groupsCache: Readonly<Record<string, readonly string[]>> | undefined;
+let builtinCache: ReadonlySet<string> | undefined;
+
+/** Group name -> member tool names. */
+export function toolGroups(): Readonly<Record<string, readonly string[]>> {
+  groupsCache ??= {
+    browser: ALL_TOOL_SCHEMAS.filter((s) => s.name.startsWith('browser_')).map((s) => s.name),
+    image: ['image_generate', 'image_edit'],
+    clipboard: ['clipboard_read', 'clipboard_write'],
+    peer: ['list_sessions', 'send_to_session'],
+    schedules: ['create_schedule', 'update_schedule', 'list_schedules', 'get_schedule_history', 'cancel_schedule'],
+  };
+  return groupsCache;
+}
+
+function builtinNames(): ReadonlySet<string> {
+  builtinCache ??= new Set([
+    ...ALL_TOOL_SCHEMAS, ...memoryToolSchemas, ...stateToolSchemas,
+  ].map((s) => s.name).concat([...LOCKED_TOOLS], ['workspace_publish', 'workspace_query', 'workspace_subscribe']));
+  return builtinCache;
+}
 const warned = new Set<string>();
 
 function warn(message: string): void {
   if (warned.has(message)) return;
   warned.add(message);
   console.error(`[tools.disabled] ${message}`);
-}
-
-/** Validate the only wildcard syntax supported by operator settings. */
-export function isMcpDenyEntry(entry: string): boolean {
-  return /^mcp__[^*]+__[^*]+$/.test(entry) || /^mcp__[^*]+__\*$/.test(entry);
-}
-
-/** Match exact names or an MCP server wildcard, never arbitrary globs. */
-export function isToolDenied(name: string, denied: readonly string[] = []): boolean {
-  return denied.some((entry) => entry === name || (
-    isMcpDenyEntry(entry) && entry.endsWith('__*') && name.startsWith(entry.slice(0, -1))
-  ));
 }
 
 /** Parse one tier without dropping valid entries beside malformed values. */
@@ -57,9 +63,9 @@ export function parseDisabledTools(value: unknown, source: string, customNames: 
     }
     if (LOCKED_TOOLS.has(entry)) {
       warn(`Ignoring locked core tool "${entry}".`);
-    } else if (Object.hasOwn(TOOL_GROUPS, entry)) {
-      for (const name of TOOL_GROUPS[entry]!) names.add(name);
-    } else if (builtinNames.has(entry) || customNames.includes(entry) || isMcpDenyEntry(entry)) {
+    } else if (Object.hasOwn(toolGroups(), entry)) {
+      for (const name of toolGroups()[entry]!) names.add(name);
+    } else if (builtinNames().has(entry) || customNames.includes(entry) || isMcpDenyEntry(entry)) {
       names.add(entry);
     } else {
       warn(`Ignoring unknown tool entry "${entry}".`);

@@ -23,6 +23,9 @@ import { resolveSessionHookRegistry } from '../../hooks.js';
 import type { SubagentExecutor } from '../../tools/subagent-executor.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import type { ComposeExecutor } from '../../tools/compose-executor.js';
+// Single import line on purpose: this file is over the 350-code-line ceiling
+// and baselined, so it may not grow. operator-denied-dispatcher re-exports the
+// permission helpers alongside the operator-deny composition helpers.
 import { withMcpToolsAllowed, withCustomToolsAllowed, withOperatorDenied, snapshotOperatorOptions, type ToolPermissionConfig } from '../../tools/operator-denied-dispatcher.js';
 import type { CanUseTool } from '../../types/sdk-types.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
