@@ -1584,3 +1584,80 @@ describe('SessionManager — elicitation route registry cleanup (#1662)', () => 
     expect(elicitationRegistrySize()).toBeLessThanOrEqual(before);
   });
 });
+
+/**
+ * Regression guard for #3249 item 1: SessionManager must thread `thinking` and
+ * `effort` options into every spawned session's AgentConfig so AFK_THINKING /
+ * AFK_EFFORT are honoured on the Telegram surface just like chat, daemon, REPL.
+ */
+describe('SessionManager — thinking/effort wiring (#3249)', () => {
+  const testDataDir2 = './test-data/sessions-thinking';
+
+  afterEach(async () => {
+    try {
+      await fs.rm(testDataDir2, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  test('threads thinking config into every spawned session AgentConfig', async () => {
+    const capturedConfigs: AgentConfig[] = [];
+    const thinkingManager = new SessionManager({
+      dataDir: testDataDir2,
+      apiKey: 'test-key',
+      defaultModel: 'sonnet',
+      thinking: { type: 'adaptive' },
+      createSession: async (config: AgentConfig) => {
+        capturedConfigs.push(config);
+        return new MockAgentSession();
+      },
+    });
+
+    await thinkingManager.getSession(11001);
+    await thinkingManager.closeAll();
+
+    expect(capturedConfigs).toHaveLength(1);
+    expect(capturedConfigs[0]!.thinking).toMatchObject({ type: 'adaptive' });
+  });
+
+  test('threads effort level into every spawned session AgentConfig', async () => {
+    const capturedConfigs: AgentConfig[] = [];
+    const effortManager = new SessionManager({
+      dataDir: testDataDir2,
+      apiKey: 'test-key',
+      defaultModel: 'sonnet',
+      effort: 'high',
+      createSession: async (config: AgentConfig) => {
+        capturedConfigs.push(config);
+        return new MockAgentSession();
+      },
+    });
+
+    await effortManager.getSession(11002);
+    await effortManager.closeAll();
+
+    expect(capturedConfigs).toHaveLength(1);
+    expect(capturedConfigs[0]!.effort).toBe('high');
+  });
+
+  test('omits thinking and effort from AgentConfig when not set', async () => {
+    const capturedConfigs: AgentConfig[] = [];
+    const baseManager = new SessionManager({
+      dataDir: testDataDir2,
+      apiKey: 'test-key',
+      defaultModel: 'sonnet',
+      createSession: async (config: AgentConfig) => {
+        capturedConfigs.push(config);
+        return new MockAgentSession();
+      },
+    });
+
+    await baseManager.getSession(11003);
+    await baseManager.closeAll();
+
+    expect(capturedConfigs).toHaveLength(1);
+    expect(capturedConfigs[0]!.thinking).toBeUndefined();
+    expect(capturedConfigs[0]!.effort).toBeUndefined();
+  });
+});
