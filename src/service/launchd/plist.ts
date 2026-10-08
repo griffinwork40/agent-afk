@@ -4,6 +4,7 @@ import { homedir } from 'os';
 import { delimiter, dirname, resolve } from 'path';
 import { resolveEntrypoint as resolveTelegramEntrypoint } from '../../telegram/manager.js';
 import { type ServiceName } from './paths.js';
+import { normalizeBrewCellarExecPath } from './brew-cellar.js';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Plist generation (pure)
@@ -157,10 +158,15 @@ const BASE_SERVICE_PATH_DIRS: readonly string[] = [
  * // resolve too. Dedup keeps first-wins order so a node living in a base
  * // dir (e.g. Homebrew's) is listed exactly once, at the front.
  *
+ * Cellar normalization: when `execPath` is a versioned Homebrew Cellar
+ * path, it is first normalized to the stable opt-symlink via
+ * `normalizeBrewCellarExecPath` so the plist PATH survives `brew upgrade`.
+ *
  * Pure: `execPath` is injectable for tests.
  */
 export function resolveServicePath(execPath: string = process.execPath): string {
-  const nodeDir = dirname(execPath);
+  const normalized = normalizeBrewCellarExecPath(execPath);
+  const nodeDir = dirname(normalized);
   const seen = new Set<string>();
   const dirs: string[] = [];
   for (const d of [nodeDir, ...BASE_SERVICE_PATH_DIRS]) {
@@ -330,7 +336,9 @@ export function resolveProgramArguments(
           `Run 'pnpm build' to compile it, or install agent-afk globally.`,
       );
     }
-    return [process.execPath, entry];
+    // Normalize a versioned Homebrew Cellar execPath to its stable opt-symlink
+    // so the plist argv[0] survives `brew upgrade node` + cellar cleanup.
+    return [normalizeBrewCellarExecPath(process.execPath), entry];
   }
   // daemon: invoke the installed afk CLI in foreground mode. No flags —
   // bare `afk daemon` loads persisted schedules from
