@@ -25,17 +25,19 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
-  rmSync,
   symlinkSync,
-  lstatSync,
-  unlinkSync,
 } from 'fs';
 import { basename, dirname, isAbsolute, join, resolve, relative } from 'path';
 import { getPluginsDir, getPluginsIndexPath } from '../../paths.js';
 import { parseSource, assertHttpsUrl, type ParsedSource } from './source.js';
 import * as git from './git.js';
 import { readIndex, upsertPlugin, type PluginIndexEntry } from './index-store.js';
-import { pickLatestSemverTag } from './versions.js';
+import {
+  isLink,
+  removeDest,
+  defaultGitName,
+  prepareCachedCheckout,
+} from './checkout-lifecycle.js';
 // Invalidate the process-lifetime scan cache after any successful install so
 // the running session sees the new plugin without a restart. (Audit F2)
 import { _resetPluginScanCache } from '../plugins-scanner.js';
@@ -193,20 +195,7 @@ async function installGit(
   await git.clone(parsed.url, dest, gitOpts);
 
   try {
-    // Decide which ref to checkout.
-    let ref: string;
-    if (options.ref) {
-      ref = options.ref;
-    } else {
-      const tags = await git.listTags(dest, gitOpts);
-      const latest = pickLatestSemverTag(tags);
-      ref = latest ?? (await git.getDefaultBranch(dest, gitOpts));
-    }
-
-    if (options.ref || (await hasNonDefaultRef(dest, ref, gitOpts))) {
-      await git.checkout(dest, ref, gitOpts);
-    }
-    const commit = await git.getCommitSha(dest, gitOpts);
+    const { ref, commit } = await prepareCachedCheckout(dest, options.ref, gitOpts);
 
     assertNotMarketplace(dest);
     const manifestName = readManifestName(dest);
@@ -254,25 +243,6 @@ async function installGit(
     }
     throw err;
   }
-}
-
-async function hasNonDefaultRef(
-  dest: string,
-  ref: string,
-  gitOpts: git.GitOptions,
-): Promise<boolean> {
-  const current = await git.getDefaultBranch(dest, gitOpts);
-  return ref !== current;
-}
-
-function defaultGitName(parsed: Extract<ParsedSource, { type: 'git' | 'github' }>): string {
-  if (parsed.type === 'github') return parsed.repo;
-  // Strip trailing `.git` and take the last path segment.
-  const cleaned = parsed.url.replace(/\.git$/, '');
-  const lastSlash = cleaned.lastIndexOf('/');
-  const lastColon = cleaned.lastIndexOf(':');
-  const idx = Math.max(lastSlash, lastColon);
-  return idx >= 0 ? cleaned.slice(idx + 1) : cleaned;
 }
 
 /**
@@ -456,19 +426,4 @@ function assertDestAvailable(
   );
 }
 
-function isLink(path: string): boolean {
-  try {
-    return lstatSync(path).isSymbolicLink();
-  } catch {
-    return false;
-  }
-}
-
-function removeDest(dest: string): void {
-  if (isLink(dest)) {
-    unlinkSync(dest);
-    return;
-  }
-  rmSync(dest, { recursive: true, force: true });
-}
 
