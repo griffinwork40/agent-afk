@@ -26,6 +26,7 @@ import {
   resolveWorkspaceSystemPrompt,
 } from '../../tools/system-prompt.js';
 import { buildSkillManifest } from '../../tools/skill-bridge.js';
+import { normalizeSystemPromptOverlay } from '../shared/system-prompt.js';
 
 /**
  * Parameters forwarded from `query()` — all explicit, no closure over locals.
@@ -111,7 +112,10 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
     : '';
   const hotMemory = typeof config.hotMemory === 'string' ? config.hotMemory : '';
   const goalPrompt = typeof config.goalPrompt === 'string' ? config.goalPrompt : '';
-  const existingSys = typeof config.systemPrompt === 'string' ? config.systemPrompt : undefined;
+  // Fix #3261: use the shared normalizer so a preset { append } is forwarded,
+  // not silently dropped. Previously `typeof ... === 'string'` discarded the
+  // `append` text of preset objects.
+  const existingSys = normalizeSystemPromptOverlay(config.systemPrompt) ?? undefined;
 
   // Mutable cell shared between rebuildAfterCwdChange and systemPromptRebuildFactory.
   // Invariant (#2420 P1): `setSystemPrompt(base)` on the query stores `base`
