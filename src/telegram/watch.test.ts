@@ -374,19 +374,24 @@ describe('SessionWatchManager — elicitation intercept + signed write-back (cri
     // first poll fires and installs the pending resolver.
     await vi.waitFor(() => {
       expect(pendingElicitations.get(String(chatId))).toBeDefined();
-    }, { timeout: 2000 });
+    }, { timeout: 1000 });
 
     // Answer the pending resolver.
     const resolver = pendingElicitations.get(String(chatId));
     resolver!('any answer');
 
     // The skip path writes nothing to disk: readSessionKey returns null so
-    // watch.ts logs and continues.  Drain microtasks plus a short grace
-    // period to let the async continuation in watch.ts settle.
-    await sleep(100);
+    // watch.ts logs and continues.  Wait for the ledger to stabilise (two
+    // consecutive reads with the same line count) instead of a fixed sleep.
+    const ledgerPath = path.join(tmpDir, 'state', 'sessions', id, 'events.jsonl');
+    let prevLineCount = -1;
+    await vi.waitFor(() => {
+      const raw = fs.readFileSync(ledgerPath, 'utf8').trim();
+      const count = raw.split('\n').length;
+      if (count !== prevLineCount) { prevLineCount = count; throw new Error('still settling'); }
+    }, { timeout: 1000, interval: 50 });
 
     // No elicitation_response should be in the ledger.
-    const ledgerPath = path.join(tmpDir, 'state', 'sessions', id, 'events.jsonl');
     const lines = fs.readFileSync(ledgerPath, 'utf8').trim().split('\n');
     const responseRecord = lines
       .map((l) => { try { return JSON.parse(l); } catch { return null; } })

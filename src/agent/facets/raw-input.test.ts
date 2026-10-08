@@ -17,7 +17,7 @@ describe('extractRawToolInput', () => {
       id_prefix: 'verify',
     });
     // The whitelist is the documented contract — `command` is not in it.
-    expect([...RAW_INPUT_FIELDS]).toEqual(['file_path', 'name', 'id_prefix']);
+    expect([...RAW_INPUT_FIELDS]).toEqual(['file_path', 'name', 'id_prefix', 'dry_run']);
   });
 
   it('drops large/sensitive fields (command, content, new_string, old_string, value)', () => {
@@ -54,5 +54,39 @@ describe('extractRawToolInput', () => {
     expect(extractRawToolInput(null)).toBeUndefined();
     expect(extractRawToolInput(undefined)).toBeUndefined();
     expect(extractRawToolInput(42)).toBeUndefined();
+  });
+
+  it('persists dry_run for patch_apply (#3182)', () => {
+    const raw = extractRawToolInput({ dry_run: true, changes: [{ path: '/a.ts' }] });
+    const parsed = JSON.parse(raw as string);
+    expect(parsed.dry_run).toBe(true);
+    expect(parsed.changes_paths).toEqual(['/a.ts']);
+  });
+
+  it('persists bounded changes_paths for patch_apply (#3182)', () => {
+    const changes = [
+      { path: '/src/a.ts', edits: [{ old: 'x', new: 'y' }] },
+      { path: '/src/b.ts', content: 'new content' },
+    ];
+    const raw = extractRawToolInput({ changes });
+    const parsed = JSON.parse(raw as string);
+    // Only paths are persisted; edits/content are dropped.
+    expect(parsed.changes_paths).toEqual(['/src/a.ts', '/src/b.ts']);
+    expect(parsed).not.toHaveProperty('changes');
+    expect(raw).not.toContain('new content');
+  });
+
+  it('does not persist changes_paths when changes is absent or empty (#3182)', () => {
+    expect(extractRawToolInput({ changes: [] })).toBeUndefined();
+    expect(extractRawToolInput({ changes: 'not-an-array' })).toBeUndefined();
+  });
+
+  it('evidence-path collection through real extractRawToolInput round-trip (#3182)', () => {
+    // Simulate the real production path: extractRawToolInput -> JSON -> derive.aggregate
+    const input = { changes: [{ path: '/src/foo.ts', edits: [] }, { path: '/src/bar.ts', content: 'x' }] };
+    const rawStr = extractRawToolInput(input);
+    expect(rawStr).toBeDefined();
+    const parsed = JSON.parse(rawStr as string);
+    expect(parsed.changes_paths).toEqual(['/src/foo.ts', '/src/bar.ts']);
   });
 });

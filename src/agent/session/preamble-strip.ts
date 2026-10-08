@@ -6,8 +6,7 @@
  * before replaying them as episode inputs — without depending on the web-server
  * module from within the agent layer.
  *
- * Behavior is byte-identical to the original private functions in session-source.ts.
- * session-source.ts now imports and re-uses these instead of duplicating them.
+ * session-source.ts imports and re-uses these instead of duplicating them.
  *
  * ## What is a preamble?
  *
@@ -36,7 +35,27 @@
  * `<preflight-context ...>` or `<command-name>` from skill dispatch.
  */
 export function isPreamble(text: string): boolean {
-  return /^\s*(\[[\w-]+[:\s]|<(preflight-context|command-name)\b)/.test(text);
+  // The kebab-case `[label]` arm covers bare tags with no colon or space,
+  // e.g. `[placeholder-prevent]`, which leads every first turn since the
+  // placeholder-prevent SessionStart hook landed. It requires a hyphen so a
+  // human-typed `[note]` is not mistaken for a preamble.
+  return /^\s*(\[[\w-]+[:\s]|\[[a-z][a-z0-9]*(?:-[a-z0-9]+)+\]|<(preflight-context|command-name)\b)/.test(
+    text,
+  );
+}
+
+/**
+ * Peel a jev rules digest that leads `text`. The jev plugin's SessionStart
+ * digest is drained AFTER the bridge block, so it sits between the bridge-tail
+ * marker and the user's message. Its body is arbitrary rule prose, so the only
+ * reliable boundary is its fixed footer: either the "rule(s) loaded" sentence
+ * or, when the digest was capped, the "... (truncated)" line.
+ */
+function stripLeadingRulesDigest(text: string): string {
+  return text.replace(
+    /^\s*\[jev rules\][\s\S]*?(?:rule\(s\) loaded\.[^\n]*?will be blocked\.|\n[ \t]*\.\.\. \(truncated\))/,
+    '',
+  );
 }
 
 /**
@@ -86,7 +105,10 @@ export function extractUserContent(text: string): string | undefined {
       /^[^.]*\.\s*/,
       '',
     );
-    const result = cleaned.trim();
+    const result = stripLeadingRulesDigest(cleaned).trim();
+    // A skill dispatch typed after the preamble surfaces as raw XML tags;
+    // render it as "/<skill> <args>" rather than tag soup.
+    if (result.startsWith('<command-name>')) return extractSkillTitle(result) ?? result;
     // When the bridge-tail extraction yields user content, return it.
     // When it yields nothing, the bridge marker was present but no user text
     // followed — fall through to the XML-tag strategy only, since the bridge

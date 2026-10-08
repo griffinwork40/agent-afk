@@ -32,6 +32,7 @@ import { getSchedulesPath } from '../../paths.js';
 import { expandCwd } from './cwd-validator.js';
 import type { ScheduledTask, TaskExecutor } from './triggers.js';
 import { errorMessage } from '../../utils/errors.js';
+import { sleepSync } from '../../utils/sleep-sync.js';
 
 // ---------------------------------------------------------------------------
 // Advisory file lock (O_EXCL)
@@ -102,15 +103,6 @@ function tryReclaimDeadLock(lockPath: string, owner: LockOwner): void {
   } finally {
     try { unlinkSync(claimPath); } catch { /* best effort */ }
   }
-}
-
-// Invariant: SharedArrayBuffer + Atomics.wait is intentional here — it is the only
-// way to block the current thread synchronously without a spin-loop or busy-wait.
-// Available on Node >=12; safe in non-worker contexts since Node >=22 (no
-// --experimental-shared-memory flag required). We need synchronous blocking
-// because withFileLock must be callable from synchronous code paths.
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /**

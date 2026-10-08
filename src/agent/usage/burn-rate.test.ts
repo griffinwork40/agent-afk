@@ -61,6 +61,8 @@ describe('computeBurnRate — suppression: plateau-then-cool (rule 5)', () => {
   });
 });
 
+// Behavioral regression for computeBurnRate's deltaUtilization <= 0 guard.
+// No source-line pin: moving the guard must not invalidate this test.
 describe('computeBurnRate — suppression: falling-start / rising-tail (deltaUtilization guard)', () => {
   it('returns null when Rule 5 passes but net oldest-to-newest delta is zero', () => {
     // Series [0.70, 0.80, 0.60, 0.70]:

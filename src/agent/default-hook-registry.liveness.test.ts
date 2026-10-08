@@ -69,9 +69,9 @@ afterEach(() => {
   try {
     rmSync(workspace, { recursive: true, force: true });
   } catch {
-    // Expected: ENOENT when the test itself removed the directory, or when the
-    // mkdtempSync in beforeEach was never reached (e.g. an error before it ran).
-    // Either way the workspace is gone; nothing to clean up.
+    // force:true already suppresses ENOENT (directory already removed or never
+    // created when mkdtempSync in beforeEach failed).  This catch guards against
+    // non-ENOENT failures such as permission errors or OS-level locks.
   }
 });
 

@@ -905,3 +905,55 @@ describe('path-approval hook ↔ handler parity (the divergence six PRs kept re-
     });
   }
 });
+
+describe('createPathApprovalHook — model_complete input_path', () => {
+  // model_complete is in TYPED_FILE_TOOLS and extractCandidatePath returns the
+  // `input_path` field. An outside-root input_path must trigger the approval
+  // prompt just like read_file would. A model_complete call without input_path
+  // must be a no-op (no candidate path → hook returns {} immediately).
+
+  it('prompts for approval when input_path is outside the session read roots', async () => {
+    // The elicitation handler grants session access — we care that it WAS called
+    // (i.e. the hook forwarded model_complete + input_path to the prompt flow).
+    const handler = vi.fn(async () => ({ action: 'accept' as const, content: { choice: 'session' } }));
+    elicitationRouter.install(handler);
+    const mgr = makeMockGrantManager(); // roots: [BASE]
+    const { preToolUse } = createPathApprovalHook({
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    const decision = await preToolUse(
+      preCtx('model_complete', { prompt: 'summarise', input_path: '/etc/passwd' }, mgr),
+    );
+
+    // The hook must have routed the prompt and granted access (session choice).
+    expect(decision).toEqual({});
+    expect(handler).toHaveBeenCalledTimes(1);
+    // Grant was added to the read roots.
+    expect(mgr._readRoots).toContain('/etc/passwd');
+    expect(mgr._writeRoots).not.toContain('/etc/passwd');
+  });
+
+  it('does NOT prompt when input_path is absent (no-file model_complete call)', async () => {
+    // A model_complete call without input_path reads no file; extractCandidatePath
+    // returns undefined, so the hook short-circuits before any containment check.
+    const handler = vi.fn(async () => ({ action: 'accept' as const, content: { choice: 'session' } }));
+    elicitationRouter.install(handler);
+    const mgr = makeMockGrantManager();
+    const { preToolUse } = createPathApprovalHook({
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    const decision = await preToolUse(
+      preCtx('model_complete', { prompt: 'what is 2+2?' }, mgr),
+    );
+
+    // Hook must pass through without any grant mutation or prompt.
+    expect(decision).toEqual({});
+    expect(handler).not.toHaveBeenCalled();
+    expect(mgr._events).toHaveLength(0);
+  });
+
+});

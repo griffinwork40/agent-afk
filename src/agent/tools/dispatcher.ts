@@ -38,6 +38,7 @@ import { RepeatFailureGuard } from './repeat-failure-guard.js';
 import { ToolHealthMonitor, applyToolHealth } from './tool-health-monitor.js';
 import { StrategyNudger, applyStrategyNudge } from './strategy-nudge.js';
 import { executeBatchImpl } from './dispatcher.execute-batch.js';
+import { PreToolContext } from './pre-tool-context.js';
 import {
   runPreDispatchGates as _runPreDispatchGates,
   resetDenialBreaker as _resetDenialBreaker,
@@ -692,10 +693,13 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * Called inline in `execute()` and `executeBatch()` so both paths always
    * observe the current `resolveBase` and grant-manager reference.
    */
+  private readonly preToolContext = new PreToolContext();
+
   private gateDeps(): PreDispatchGateDeps {
     const cDeps = this.coreExecDeps();
     return {
       state: this.gateState,
+      capturePreToolContext: (call, context) => this.preToolContext.capture(call, context),
       hookRegistry: this.hookRegistry,
       permissions: this.permissions,
       canUseTool: this.canUseTool,
@@ -776,7 +780,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     }
 
     const gateResult = await this.runPreDispatchGates(call);
-    if (gateResult) return gateResult;
+    if (gateResult) return this.preToolContext.deliver(call, gateResult, this.traceWriter);
 
     // 3. Agent routing + handler dispatch + PostToolUse. Hoisting coreExecDeps()
     // here avoids the duplicate allocation that occurred when executeCore() called
@@ -795,7 +799,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // Fire-and-forget: applyToolHealth → emitToolDegraded swallows errors;
     // never alters isError. Shared helper used by both execute() and batch paths.
     const healthChecked = applyToolHealth(this.toolHealthMonitor, this.traceWriter, call, coreResult);
-    return applyStrategyNudge(this.strategyNudger, this.traceWriter, call, healthChecked);
+    return this.preToolContext.deliver(call,
+      applyStrategyNudge(this.strategyNudger, this.traceWriter, call, healthChecked), this.traceWriter);
   }
 
   // History: executeBatch's Phase 1 gate loop, Phase 2 batch-partition loop, and
@@ -804,7 +809,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
   // ceiling. The class delegates via executeBatchImpl imported from that module,
   // threaded through an ExecuteBatchDeps bundle wired here.
   async executeBatch(calls: ToolCall[], onActivity?: ToolActivityReporter): Promise<ToolResult[]> {
-    return executeBatchImpl(calls, {
+    const results = await executeBatchImpl(calls, {
       execute: (call) => this.execute(call),
       classifier: this.classifier,
       runPreDispatchGates: (call, opts) => this.runPreDispatchGates(call, opts),
@@ -820,6 +825,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       toolHealthMonitor: this.toolHealthMonitor,
       strategyNudger: this.strategyNudger,
     }, onActivity);
+    return Promise.all(results.map((result, i) => this.preToolContext.deliver(calls[i]!, result, this.traceWriter)));
   }
 
   /**

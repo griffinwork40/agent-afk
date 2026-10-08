@@ -17,13 +17,12 @@
  * • SOFT-DELETE only. Eligible rows have their superseded_by set to their
  *   own id (self-reference sentinel). The rows stay in the database and are
  *   excluded from search results by the existing `superseded_by IS NULL`
- *   filter. A future hard-delete pass can target `superseded_by = id` when
- *   recovery is no longer needed.
+ *   filter. No hard-delete pass is performed.
  *
  * • Conservative eligibility. A fact must clear ALL four gates:
  *     1. access_count = 0  (never retrieved since tracking started)
- *     2. created_at  older than AFK_MEMORY_GC_MIN_AGE_DAYS (default 90)
- *     3. created_at  on/after MEMORY_ACCESS_TRACKING_STARTED_AT
+ *     2. created_at  older than AFK_MEMORY_GC_MIN_AGE_DAYS (default 30)
+ *     3. created_at  on/after this database's tracking-start marker
  *     4. category NOT IN the excluded set (preference is always excluded)
  *
  * • Self-throttled by a stamp file (same pattern as witness-sweep.ts).
@@ -50,9 +49,9 @@ import type { FactCategory } from './types.js';
 
 /**
  * Default minimum fact age (days) before a never-accessed fact becomes a
- * GC candidate. Deliberately conservative — 3× the witness-sweep default.
+ * GC candidate. Only facts created since this database started tracking qualify.
  */
-export const MEMORY_GC_MIN_AGE_DAYS_DEFAULT = 90;
+export const MEMORY_GC_MIN_AGE_DAYS_DEFAULT = 30;
 
 /**
  * Minimum wall-clock gap between two GC sweeps. A stamp file in the memory
@@ -69,14 +68,6 @@ export const MEMORY_GC_SWEEP_MIN_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
  * timer so a short-lived process never waits for it.
  */
 export const MEMORY_GC_SWEEP_START_DELAY_MS = 7_000;
-
-/**
- * Access counts were added to the schema earlier, but reads only started
- * updating access_count/last_accessed on 2026-09-23. Older rows with
- * access_count = 0 are therefore unknown, not proven unused, so the GC age
- * window is floored at this tracking epoch.
- */
-export const MEMORY_ACCESS_TRACKING_STARTED_AT = '2026-09-23T00:00:00.000Z';
 
 /**
  * Soft-delete strategy: each archived row receives `superseded_by = id`
@@ -128,7 +119,7 @@ export interface MemoryGcSweepOptions {
   memoryDir?: string;
   /**
    * Minimum fact age in days before eligibility. Defaults to
-   * MEMORY_GC_MIN_AGE_DAYS_DEFAULT (90).
+   * MEMORY_GC_MIN_AGE_DAYS_DEFAULT (30).
    */
   minAgeDays?: number;
   /**
@@ -141,7 +132,7 @@ export interface MemoryGcSweepResult {
   /** True when disabled flag or stamp short-circuited the run. */
   skipped: boolean;
   /** Reason for skipping (set when skipped=true). */
-  skipReason?: 'disabled' | 'too-soon' | 'no-db';
+  skipReason?: 'disabled' | 'too-soon' | 'no-db' | 'tracking-unknown';
   /**
    * Number of facts that matched the GC eligibility predicate (examined as
    * candidates). Always >= `archived`. A value greater than `archived` means
@@ -242,8 +233,27 @@ export async function sweepMemoryGc(
     try {
       db.pragma('busy_timeout = 5000');
 
-      // Shared eligibility predicate parameters.
-      const predicateParams = [MEMORY_ACCESS_TRACKING_STARTED_AT, cutoff, ...excludedValues];
+      // Old installations have no trustworthy observation epoch. A sweep
+      // must never initialize/migrate one itself, nor assume a release date.
+      const hasMetadata = db.prepare(`SELECT 1 FROM sqlite_master
+        WHERE type = 'table' AND name = 'memory_metadata'`).get();
+      if (!hasMetadata) return noop('tracking-unknown');
+      const marker = db.prepare(`SELECT value FROM memory_metadata
+        WHERE key = 'tracking_started_at'`).get() as { value: string } | undefined;
+      // Strict canonical ISO guard: the stored value must be present, parse to
+      // a finite epoch, AND survive a round-trip through toISOString() unchanged.
+      // Date.parse('0') is year-2000 (finite!) but '0' !== its toISOString(),
+      // so that and all other non-canonical formats fall into tracking-unknown.
+      if (!marker) return noop('tracking-unknown');
+      const parsedEpoch = Date.parse(marker.value);
+      if (
+        !Number.isFinite(parsedEpoch) ||
+        new Date(parsedEpoch).toISOString() !== marker.value
+      ) {
+        return noop('tracking-unknown');
+      }
+      const trackingStart = marker.value;
+      const predicateParams = [trackingStart, cutoff, ...excludedValues];
 
       // Count candidates first so that `candidates` reflects how many facts
       // matched the predicate — not just how many were changed.  The two

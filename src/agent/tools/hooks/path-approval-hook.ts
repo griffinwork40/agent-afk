@@ -84,6 +84,10 @@ const TYPED_FILE_TOOLS = new Set([
   'grep',
   'patch_apply',
   'json_query',
+  // model_complete may read a file via its optional `input_path` parameter.
+  // The path is subject to the same resolveAndContain policy as read_file and
+  // must go through the approval prompt when outside the session's read roots.
+  'model_complete',
 ]);
 
 /** Tools that write — used to pick read-vs-write containment + grant mode. */

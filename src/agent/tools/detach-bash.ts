@@ -29,6 +29,7 @@
  */
 
 import type { DetachableToolRegistry, DetachToken, DetachedToolResult } from './detach-registry.js';
+import { debugLog } from '../../utils/debug.js';
 
 /**
  * Milliseconds to wait for `proc.once('close')` after a kill before
@@ -65,15 +66,26 @@ export function bashDetachLabel(command: string): string {
 }
 
 /**
+ * Sentinel value passed as `closeSignal` when the fallback timer fires and
+ * we force-deliver without a real Node `close` event. This is NOT a POSIX
+ * signal name — it is a diagnostic marker meaning "settled by timeout after
+ * pipe-destroy, not by an actual observed kill". Callers that inspect
+ * `closeSignal` for routing (e.g. {@link buildBashDelivery}) treat any
+ * non-null value as "process did not exit cleanly", which is correct here.
+ */
+export const BASH_SETTLE_TIMEOUT_SENTINEL = 'SETTLE_TIMEOUT';
+
+/**
  * Build the {@link DetachedToolResult} delivered to the registry's 'settled'
  * notifier once the detached process actually finishes.
  *
  * Fix #3: accepts raw Node close-event args so signal-killed processes are
  * correctly classified as 'failed'. When closeSignal is non-null (e.g.
- * 'SIGKILL'), the process was killed — status must be 'failed' regardless of
- * closeCode. closeCode=null && closeSignal=null would mean 'exited normally with
- * no code', which we treat as 'completed'; that combination never occurs for
- * SIGKILL'd processes.
+ * 'SIGKILL' for a real kill, or {@link BASH_SETTLE_TIMEOUT_SENTINEL} for
+ * the fallback-timer path), the process did not exit cleanly — status must be
+ * 'failed' regardless of closeCode. closeCode=null && closeSignal=null means
+ * 'exited normally with no code', which we treat as 'completed'; that
+ * combination never occurs for killed processes.
  */
 export function buildBashDelivery(
   toolUseId: string,
@@ -190,10 +202,14 @@ export function execOnDetach(
     if (deliverSettled) return;
     deliverSettled = true;
     clearTimeout(fallbackHandle);
+    // Remove startSettleFallback abort listener — if close fired first, the
+    // fallback was never armed and this is a no-op; if the fallback fired first,
+    // deliverSettled=true guards re-entry. Either way, stale listener removed.
+    p.signal.removeEventListener('abort', startSettleFallback);
     // Fix #1: process exited — clean up the re-registered abort listener.
     p.signal.removeEventListener('abort', p.abortHandler);
     const output = p.getOutput();
-    // Fix #3: pass closeSignal so SIGKILL → 'failed'.
+    // Fix #3: pass closeSignal so signal-killed → 'failed'.
     token.deliver(buildBashDelivery(toolUseId, label, output, closeCode, closeSignal, p.startedAt));
   }
 
@@ -206,12 +222,18 @@ export function execOnDetach(
   // we deliver immediately and let the orphan die on its own.
   function startSettleFallback(): void {
     if (deliverSettled) return; // proc already closed before abort fired
+    // .unref() so the timer does not hold the event loop open after exit on
+    // the Windows orphan path (fix for issue #2932 / bash detach item #2).
     fallbackHandle = setTimeout(() => {
       // Destroy stdio to release the pipe held by surviving grandchildren.
       try { p.proc.stdout?.destroy(); } catch { /* best-effort */ }
       try { p.proc.stderr?.destroy(); } catch { /* best-effort */ }
-      deliverOnce(null, 'SIGKILL'); // synthesize as killed → status 'failed'
-    }, SETTLE_AFTER_KILL_MS);
+      // Use sentinel rather than 'SIGKILL' — we have not confirmed a kill;
+      // the process may have died of its own accord or the pipe was released
+      // by some other means (fix for issue #2932 / bash detach item #3).
+      debugLog('[detach-bash] settle fallback fired — close did not arrive within', SETTLE_AFTER_KILL_MS, 'ms');
+      deliverOnce(null, BASH_SETTLE_TIMEOUT_SENTINEL);
+    }, SETTLE_AFTER_KILL_MS).unref();
   }
 
   // Start the fallback when the session abort signal fires (which triggers the

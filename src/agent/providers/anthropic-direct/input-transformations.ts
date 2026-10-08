@@ -30,6 +30,9 @@
  * @module agent/providers/anthropic-direct/input-transformations
  */
 
+import { emitSessionPhase } from '../../trace/emit.js';
+import type { TraceSink } from '../../trace/index.js';
+
 /** Known `thinking_dropped` reason values. Future-proof: unknown reasons are counted but not named. */
 export const KNOWN_DROP_REASONS = new Set([
   'prefix_binding_mismatch',
@@ -60,13 +63,22 @@ let warnCount = 0;
  *   NOT dropped and the model still read it.
  * - Unknown `type` or `reason` values are counted but not named (forward-compat).
  * - Capped at {@link MAX_WARN_COUNT} total warnings per process.
+ * - Emits a `thinking_block_dropped` session_phase trace event (once per
+ *   stream, caller-gated via the per-stream dedup in translate.ts) when
+ *   `traceWriter` is supplied. The trace event fires on EVERY stream with
+ *   drops regardless of the console-warn process-global cap, so operators
+ *   can correlate per-session in the witness layer without depending on the
+ *   bounded console output.
  *
  * @param transformations - The raw `input_transformations` array from the API.
  * @param source - Label for the stream position (`message_start` or `message_delta`).
+ * @param traceWriter - Optional trace sink; when supplied, emits a
+ *   `thinking_block_dropped` session_phase event for this stream.
  */
 export function warnOnDroppedThinkingBlocks(
   transformations: unknown,
   source: 'message_start' | 'message_delta',
+  traceWriter?: TraceSink,
 ): void {
   if (!Array.isArray(transformations) || transformations.length === 0) return;
 
@@ -90,6 +102,17 @@ export function warnOnDroppedThinkingBlocks(
     } else {
       unknownReasonCount++;
     }
+  }
+
+  // Emit a trace event for every stream with drops — independent of the
+  // process-global console-warn cap. The caller (translate.ts warnDropsDeduped)
+  // gates this to at most once per stream via the per-stream alreadyWarned flag,
+  // so we do not need a separate cap here.
+  if (traceWriter) {
+    void emitSessionPhase(traceWriter, {
+      phase: 'thinking_block_dropped',
+      metadata: { droppedCount: dropped.length, source },
+    });
   }
 
   if (warnCount >= MAX_WARN_COUNT) return;

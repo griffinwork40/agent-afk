@@ -14,6 +14,9 @@ allowBuilds:
   esbuild: true
   node-pty: true
 
+minimumReleaseAgeExclude:
+  - openai@7.30.0
+
 # Security overrides: pin transitive vulnerabilities to first patched release.
 # These come in via @modelcontextprotocol/sdk and ajv; direct bumps to those
 # packages do not pull in a new enough transitive version on their own because
@@ -59,3 +62,8 @@ overrides:
 
   # source-map-js: GHSA-68fv-2mgg-jv7q (high) — via jsdom > css-tree
   source-map-js: ">=1.2.2"
+
+  # picomatch: ReDoS via extglob quantifiers (high) + method injection in POSIX
+  # character classes (moderate); arrives via vitest/coverage-v8 (dev-only).
+  # GHSA-c2c7-rcm5-vvqj, GHSA-3v7f-55p6-f55p — first fully-clean release 4.0.4
+  picomatch: ">=4.0.4"

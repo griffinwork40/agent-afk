@@ -1,6 +1,6 @@
 {
   "name": "agent-afk",
-  "version": "5.302.4",
+  "version": "5.305.1",
   "description": "Open-source coding-agent harness you can actually change — own the loop (prompts, gates, routing, skills, terminal states), use any model, run long tasks while you're away.",
   "main": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -125,7 +125,7 @@
     "url": "https://github.com/griffinwork40/agent-afk/issues"
   },
   "engines": {
-    "node": ">=22.13.0"
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
   "packageManager": "pnpm@11.28.2",
   "dependencies": {
@@ -138,28 +138,27 @@
     "ansi-escapes": "^7.3.0",
     "better-sqlite3": "^13.0.0",
     "chalk": "^6.0.1",
-    "commander": "^12.1.0",
+    "commander": "^15.0.0",
     "dotenv": "^16.4.7",
     "emphasize": "^7.0.0",
     "jsdom": "^30.1.1",
     "log-update": "^8.0.0",
     "marked": "^17.0.5",
     "node-cron": "^4.2.1",
-    "openai": "^7.25.0",
-    "ora": "^8.1.1",
+    "openai": "^7.30.0",
+    "ora": "^9.4.1",
     "playwright": "^1.49.0",
     "string-width": "^8.2.0",
     "telegraf": "^4.16.3",
     "turndown": "^7.2.4",
-    "undici": "^7.27.1",
+    "undici": "^8.11.2",
     "wrap-ansi": "^10.0.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/jsdom": "^30.0.0",
-    "@types/node": "^26.6.3",
-    "@types/node-cron": "^3.0.11",
+    "@types/node": "^26.6.4",
     "@types/turndown": "^5.0.6",
     "@vitest/coverage-v8": "^4.1.11",
     "@xterm/headless": "^6.0.0",

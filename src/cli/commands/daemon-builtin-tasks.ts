@@ -11,6 +11,7 @@
 
 import type { ScheduledTask } from '../../agent/daemon/triggers.js';
 import type { CliConfig } from '../config/types.js';
+import type { EnvObject } from '../../config/env.js';
 
 // ---------------------------------------------------------------------------
 // worktree-prune
@@ -73,7 +74,7 @@ export function buildToolHealthTask(cron: string): ScheduledTask {
 export function appendBuiltinTasks(
   tasks: ScheduledTask[],
   config: { daemon?: CliConfig['daemon'] },
-  env: { AFK_WORKTREE_PRUNE_DISABLE?: string; AFK_TOOL_HEALTH_DISABLE?: string },
+  env: Pick<EnvObject, 'AFK_WORKTREE_PRUNE_DISABLE' | 'AFK_TOOL_HEALTH_DISABLE'>,
 ): { worktreePruneCron: string; toolHealthCron: string; worktreePruneEnabled: boolean; toolHealthEnabled: boolean } {
   const worktreePruneConfig = config.daemon?.worktreePrune;
   const worktreePruneEnabled =

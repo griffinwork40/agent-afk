@@ -24,7 +24,7 @@ import { describeSpawnCwdError, isSpawnEnoent } from '../../../utils/spawn-cwd-e
 import { HARD_CAP_BYTES, MODEL_CAP_BYTES, headAndTail, capForModel, HARD_CAP_KILL_NOTE } from './_output-cap.js';
 import { wouldBeRestricted } from './_cwd-utils.js';
 import { scanCandidatePaths } from './bash-scan-exempt.js';
-import { killProcessGroup } from '../../../utils/kill-process-group.js';
+import { killBashProcess } from './bash-kill.js';
 import { writeBashCapture } from './_bash-capture.js';
 import { resolveShell } from '../../../utils/resolve-shell.js';
 import { RollingTailBuffer } from './_rolling-tail.js';
@@ -331,9 +331,7 @@ export function createBashHandler(
       // to the entire process group — killing the shell and all its descendants,
       // including backgrounded grandchildren, atomically (S10).
       const timeoutHandle = setTimeout(() => {
-        if (proc.pid !== undefined) {
-          killProcessGroup(proc.pid);
-        }
+        killBashProcess(proc);
         deregisterOnClose?.(); // Fix #2: free registry slot on timeout kill path
         settle(interruptedBashResult({ kind: 'timeout', stdout, stderr, startedAt, timeoutMs: timeout_ms, context }));
       }, timeout_ms);
@@ -439,9 +437,7 @@ export function createBashHandler(
       // S10: same process-group SIGKILL rationale as timeout path above.
       // Fix #2: calls deregisterOnClose?.() to clean up the registry slot.
       const abortHandler = () => {
-        if (proc.pid !== undefined) {
-          killProcessGroup(proc.pid);
-        }
+        killBashProcess(proc);
         deregisterOnClose?.();
         settle(interruptedBashResult({ kind: 'aborted', stdout, stderr, startedAt, timeoutMs: timeout_ms, context }));
       };

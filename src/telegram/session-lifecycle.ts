@@ -24,6 +24,7 @@
  * @module telegram/session-lifecycle
  */
 
+
 import { seedPersistedGrants } from '../agent/permissions-store.js';
 import { assembleSystemPrompt } from '../agent/routing-directive.js';
 import { createTelegramAfkHookBundle } from './afk-hook-bundle.js';

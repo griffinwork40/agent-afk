@@ -36,11 +36,14 @@ export interface RetryAction {
   attempt: number;
   /**
    * Sanitized error code from the transport error, set only when `err.code` or
-   * `err.cause.code` matches /^[A-Z][A-Z0-9_]*$/ (never message text). Used by
+   * `err.cause.code` is at most 64 characters and matches /^[A-Z][A-Z0-9_]*$/
+   * (never message text). Used by
    * the caller to thread a safe code into retry-trace metadata without re-reading
    * the original error. Absent when no matching code exists.
    */
   errorCode?: string;
+  /** Retry solely to recover Chat Completions' trailing usage chunk. */
+  awaitingUsage?: true;
 }
 
 /** The outer generator must yield an `error` event and return null. */
@@ -80,10 +83,8 @@ export type StreamErrorAction = RetryAction | FatalAction | AcceptAction | FallT
  *      network_termination that races the TTFB abort signal.
  *   2. TTFB timeout (by error message or watchdog flag):
  *      a. Retried if budget allows.
- *      b. When budget is exhausted, returns a fatal action with a TTFB timeout
- *         error (reusing err when it already carries the TTFB message, or
- *         constructing one from TTFB_TIMEOUT_MESSAGE) so the caller sees a
- *         proper TTFB error rather than a raw TypeError('terminated') fall-through.
+ *      b. With exhausted budget, preserve unrelated errors; only timeout,
+ *         termination and abort errors become fatal TTFB errors.
  *   3. Status-bearing retryable error (429 / 5xx) — retried if budget allows.
  *   4. Mid-stream network termination (TypeError: terminated / ECONNRESET /
  *      UND_ERR_SOCKET / UND_ERR_CLOSED):
@@ -126,6 +127,8 @@ export type StreamErrorAction = RetryAction | FatalAction | AcceptAction | FallT
  *   retry (the usage may arrive on the next attempt); once the budget is
  *   exhausted we accept anyway with degraded (missing) usage rather than fail
  *   the turn. Ignored when `terminalFinishReason` is null.
+ * @param expectsTrailingUsage      - False for Responses, whose terminal event
+ *   carries usage itself; a later usage chunk is not expected on that wire.
  * @returns A {@link StreamErrorAction} describing what the caller must do, and
  *   the updated `streamRetries` count (already incremented for retry actions).
  */
@@ -138,6 +141,7 @@ export function classifyStreamError(
   ttfbTimedOut = false,
   terminalFinishReason: string | null = null,
   usageReceived = false,
+  expectsTrailingUsage = true,
 ): { action: StreamErrorAction; newStreamRetries: number } {
   // Branch 1: stall timeout — must win over network_termination.
   //
@@ -184,9 +188,14 @@ export function classifyStreamError(
         newStreamRetries: next,
       };
     }
-    // Budget exhausted: surface a proper TTFB error rather than falling through
-    // as a raw TypeError('terminated') — reuse err when it already carries the
-    // TTFB message, otherwise construct a canonical one.
+    if (!isTtfbTimeoutError(err) && !isMidStreamNetworkTermination(err) &&
+        !(err instanceof Error && err.name === 'AbortError')) {
+      return { action: { kind: 'fall-through', error: err }, newStreamRetries: streamRetries };
+    }
+    // Budget exhausted: convert the error to a canonical TTFB error — reuse err
+    // when it already carries the TTFB message, otherwise construct a canonical
+    // one. Unrelated errors fall through above; only TTFB errors, mid-stream
+    // terminations, and raced AbortErrors reach this path.
     const ttfbErr =
       err instanceof Error && err.message === TTFB_TIMEOUT_MESSAGE
         ? err
@@ -224,12 +233,12 @@ export function classifyStreamError(
       (err as Record<string, unknown>)['code'] ??
       ((err as { cause?: Record<string, unknown> }).cause?.['code']);
     const errorCode =
-      typeof rawCode === 'string' && safeCodeRe.test(rawCode) ? rawCode : undefined;
+      typeof rawCode === 'string' && rawCode.length <= 64 && safeCodeRe.test(rawCode) ? rawCode : undefined;
 
     if (terminalFinishReason !== null) {
-      if (usageReceived) {
-        // P2a: finish_reason AND usage arrived — the response is fully complete.
-        // The transport reset happened after the payload was delivered. Accept.
+      if (usageReceived || !expectsTrailingUsage) {
+        // Terminal payload is complete: usage arrived, or this wire has no
+        // trailing usage event (Responses). A drop cannot recover more usage.
         return {
           action: { kind: 'accept' },
           newStreamRetries: streamRetries,
@@ -247,6 +256,7 @@ export function classifyStreamError(
             reason: 'network_termination',
             attempt: next,
             errorCode,
+            awaitingUsage: true,
           },
           newStreamRetries: next,
         };

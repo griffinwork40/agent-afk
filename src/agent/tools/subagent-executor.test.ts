@@ -1856,43 +1856,45 @@ describe('SubagentExecutor', () => {
         makeCall({ input: { prompt: 'long investigation', mode: 'background' } }),
       );
 
-      // Ordering probe: execute() must return without blocking on terminal state.
-      // We verify this deterministically — without any wall-clock budget — by
-      // racing registry.join(jobId) (pending; no terminal event has fired yet)
-      // against a macrotask sentinel.  setImmediate fires in the event-loop's
-      // check phase, AFTER all microtasks.  If execute() had driven the job to a
-      // terminal state before returning, join()'s .then() would queue a microtask
-      // that fires BEFORE the setImmediate, so 'join' would win.  On correct code
-      // join() is still pending and 'sentinel' wins.
       const payload = JSON.parse(result.content as string);
-      const SENTINEL = 'sentinel';
-      const winner = await Promise.race([
-        registry.join(payload.jobId).then(() => 'join'),
-        new Promise<string>((resolve) => setImmediate(resolve, SENTINEL)),
-      ]);
-      expect(winner).toBe(SENTINEL);
 
-      expect(result.isError).toBeUndefined();
-      expect(payload.status).toBe('running');
-      expect(payload.jobId).toMatch(/^bg-/);
-      expect(payload.subagentId).toBe('sub-1');
-      expect(payload.label).toBe('long investigation');
-      expect(payload.message).toMatch(/delivered into this context/);
+      try {
+        // Ordering probe: execute() must return without blocking on terminal state.
+        // We verify this deterministically — without any wall-clock budget — by
+        // racing registry.join(jobId) (pending; no terminal event has fired yet)
+        // against an already-resolved microtask sentinel.  If execute() had driven
+        // the job to a terminal state before returning, join()'s .then() would be a
+        // queued microtask that fires before the sentinel resolves, so 'join' would
+        // win.  On correct code join() is still pending and 'sentinel' wins.
+        const SENTINEL = 'sentinel';
+        const winner = await Promise.race([
+          registry.join(payload.jobId).then(() => 'join'),
+          Promise.resolve(SENTINEL),
+        ]);
+        expect(winner).toBe(SENTINEL);
 
-      // Sanity: the job is observable via the registry; status still running.
-      const observed = registry.get(payload.jobId);
-      expect(observed?.status).toBe('running');
-      expect(observed?.provenance).toBe('model');
+        expect(result.isError).toBeUndefined();
+        expect(payload.status).toBe('running');
+        expect(payload.jobId).toMatch(/^bg-/);
+        expect(payload.subagentId).toBe('sub-1');
+        expect(payload.label).toBe('long investigation');
+        expect(payload.message).toMatch(/delivered into this context/);
 
-      // Terminal callback was wired correctly: firing it transitions the
-      // registry without touching the executor.  Also settles the dangling
-      // join() from the ordering-probe race so it doesn't leak.
-      fireTerminal({
-        id: 'sub-1',
-        status: 'succeeded' as SubagentResult['status'],
-        message: { content: 'final', role: 'assistant' } as any,
-      });
-      await registry.join(payload.jobId);
+        // Sanity: the job is observable via the registry; status still running.
+        const observed = registry.get(payload.jobId);
+        expect(observed?.status).toBe('running');
+        expect(observed?.provenance).toBe('model');
+      } finally {
+        // Terminal callback was wired correctly: firing it transitions the
+        // registry without touching the executor.  Placed in finally so the
+        // join() promise always settles and does not leak on expect failures.
+        fireTerminal({
+          id: 'sub-1',
+          status: 'succeeded' as SubagentResult['status'],
+          message: { content: 'final', role: 'assistant' } as any,
+        });
+        await registry.join(payload.jobId);
+      }
       expect(registry.get(payload.jobId)?.status).toBe('completed');
     });
 

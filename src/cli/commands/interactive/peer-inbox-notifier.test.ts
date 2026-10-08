@@ -195,6 +195,61 @@ describe('PeerInboxNotifier — accept path', () => {
     expect(stripAnsi(lines[0]!)).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
   });
 
+  it('held path appends size hint when message body >= 1024 bytes', async () => {
+    const sessionId = randomUUID();
+    const largeBody = 'x'.repeat(1024);
+    await writeEnvelope(makeEnvelope(sessionId, { body: largeBody }));
+
+    const { notifier, lines } = makeNotifier(sessionId, { mode: () => 'hold' });
+    await notifier.scan();
+
+    const plain = stripAnsi(lines[0]!);
+    expect(plain).toContain('held (AFK_PEER_INBOUND=hold)');
+    expect(plain).toMatch(/\d+\.\d+ kB/);
+    expect(plain).toContain('/inbox to review');
+  });
+
+  it('held path omits size hint when message body < 1024 bytes', async () => {
+    const sessionId = randomUUID();
+    await writeEnvelope(makeEnvelope(sessionId, { body: 'short' }));
+
+    const { notifier, lines } = makeNotifier(sessionId, { mode: () => 'hold' });
+    await notifier.scan();
+
+    const plain = stripAnsi(lines[0]!);
+    expect(plain).toContain('held (AFK_PEER_INBOUND=hold) · /inbox to review');
+    expect(plain).not.toMatch(/\d+\.\d+ kB/);
+  });
+
+  it('wake-budget held reason appends kB size hint when body >= 1024 bytes', async () => {
+    // Exhaust the default 20-wake-per-sender budget by scanning 20 accepted
+    // messages from the same sender, then write a 21st with a large body.
+    // Time is frozen so no credit refreshes during the loop.
+    const sessionId = randomUUID();
+    const sender = 'wake-budget-sender-' + randomUUID().slice(0, 8);
+    const { notifier, lines } = makeNotifier(sessionId, { now: () => 0 });
+
+    // Consume all 20 wake credits for this sender.
+    for (let i = 0; i < 20; i++) {
+      await writeEnvelope(makeEnvelope(sessionId, { from: { id: sender }, messageId: `wb-msg-${i}`, body: 'x' }));
+      await notifier.scan();
+      notifier.drainInjections(); // flush so the buffer stays below capacity
+    }
+
+    // 21st message: large body, same sender → wake budget exhausted → held.
+    const largeBody = 'y'.repeat(1024);
+    await writeEnvelope(makeEnvelope(sessionId, { from: { id: sender }, messageId: 'wb-msg-20', body: largeBody }));
+    lines.length = 0; // clear previous arrival lines
+    await notifier.scan();
+
+    const heldLine = lines.find((l) => stripAnsi(l).includes('held (wake budget reached)'));
+    expect(heldLine).toBeDefined();
+    const plain = stripAnsi(heldLine!);
+    expect(plain).toMatch(/\d+\.\d+ kB/);
+    expect(plain).toContain('/inbox to review');
+    expect(notifier.hasPendingInjections()).toBe(false);
+  });
+
   it('two notifiers on the same inbox deliver each message exactly once total', async () => {
     const sessionId = randomUUID();
     await writeEnvelope(makeEnvelope(sessionId));

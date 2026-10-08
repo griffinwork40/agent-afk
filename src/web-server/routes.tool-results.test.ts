@@ -10,12 +10,12 @@ type ToolResultBlock = Extract<JournalBlock, { type: 'tool_result' }>;
 type Found = { block: ToolResultBlock; subagentId?: string } | null;
 
 const mockFind = vi.fn<(sessionId: string, toolUseId: string) => Promise<Found>>();
-const mockExists = vi.fn<(sessionId: string) => boolean>();
+const mockExists = vi.fn<(sessionId: string) => Promise<boolean>>();
 
 vi.mock('../agent/journal/index.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../agent/journal/index.js')>()),
   findToolResultAsync: (s: string, t: string) => mockFind(s, t),
-  journalExists: (s: string) => mockExists(s),
+  journalExistsAsync: (s: string) => mockExists(s),
 }));
 
 import { handleGetToolResult, isSafeToolUseId, MAX_TOOL_RESULT_CHARS } from './routes.tool-results.js';
@@ -93,7 +93,7 @@ describe('handleGetToolResult', () => {
 
   it('404s with journal_not_found when the session has no journal', async () => {
     mockFind.mockResolvedValue(null);
-    mockExists.mockReturnValue(false);
+    mockExists.mockResolvedValue(false);
     const { res, json } = makeRes();
     await handleGetToolResult(res, 'sess-1', 'toolu_1');
     expect(json()).toMatchObject({ status: 404, body: { error: 'journal_not_found' } });
@@ -101,7 +101,7 @@ describe('handleGetToolResult', () => {
 
   it('404s with tool_result_not_found when the journal lacks that call', async () => {
     mockFind.mockResolvedValue(null);
-    mockExists.mockReturnValue(true);
+    mockExists.mockResolvedValue(true);
     const { res, json } = makeRes();
     await handleGetToolResult(res, 'sess-1', 'toolu_1');
     expect(json()).toMatchObject({ status: 404, body: { error: 'tool_result_not_found' } });

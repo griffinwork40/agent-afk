@@ -50,7 +50,7 @@ import type { IAgentSession, Message, OutputEvent } from '../types.js';
 import { SubagentHandleImpl } from '../subagent/handle.js';
 import { AbortGraph } from '../abort-graph.js';
 import { NdjsonTraceWriter } from './writer.js';
-import type { TraceWriter } from './index.js';
+import type { TraceWriter } from './writer.js';
 import type { SessionSealedPayload, TraceEventInput } from './types.js';
 
 /**

@@ -7,22 +7,9 @@ import {
   writePendingUpdateMarker,
   writeUpdateCache,
 } from '../update-checker.js';
+import { isNewerVersion } from '../update-version.js';
 
 const SEMVER_RE = /^\d+\.\d+\.\d+(-[\da-z.]+)?$/i;
-
-/** True when `latest` is strictly newer than `current`. */
-function isNewer(current: string, latest: string): boolean {
-  const c = current.split('.').map(Number);
-  const l = latest.split('.').map(Number);
-  const len = Math.max(c.length, l.length);
-  for (let i = 0; i < len; i++) {
-    const cv = c[i] ?? 0;
-    const lv = l[i] ?? 0;
-    if (lv > cv) return true;
-    if (lv < cv) return false;
-  }
-  return false;
-}
 
 /**
  * `afk update` runs an in-foreground `npm install -g agent-afk@<latest>` so the
@@ -59,7 +46,7 @@ export function registerUpdateCommand(program: Command): void {
         // from the registry, so the startup banner doesn't render from a stale
         // latestVersion after the user has explicitly checked.
         writeUpdateCache(latest);
-        if (isNewer(current, latest)) {
+        if (isNewerVersion(current, latest)) {
           console.log(`${palette.bold('Update available:')} ${palette.dim(current)} → ${palette.bold(latest)}`);
           console.log(palette.dim('  Run `afk update` to install.'));
           return;
@@ -96,7 +83,7 @@ export function registerUpdateCommand(program: Command): void {
       }
 
       console.log(`Updating agent-afk: ${palette.dim(current)} → ${palette.bold(target)}`);
-      console.log(palette.dim(`  npm install -g agent-afk@${target}`));
+      console.log(palette.dim(`  npm install -g --allow-scripts=agent-afk agent-afk@${target}`));
 
       const { code, signal } = await runNpmInstall(target);
       if (code === 0) {
@@ -118,10 +105,17 @@ interface ExitResult { code: number | null; signal: NodeJS.Signals | null }
 
 function runNpmInstall(version: string): Promise<ExitResult> {
   return new Promise((resolve) => {
+    // --allow-scripts=agent-afk is required on npm >=11.19 (bundled with
+    // Node 24.21.0+), which began enforcing the allow-scripts gate and
+    // silently skipping postinstall when the package is not explicitly
+    // allowed. The flag was introduced in npm 7 and agent-afk requires
+    // Node >=22.13 (npm >=10), so the flag is always safe to pass.
     // Inherit stdio so the user sees npm's progress, prompts, and errors.
-    const child = spawn('npm', ['install', '-g', `agent-afk@${version}`], {
-      stdio: 'inherit',
-    });
+    const child = spawn(
+      'npm',
+      ['install', '-g', '--allow-scripts=agent-afk', `agent-afk@${version}`],
+      { stdio: 'inherit' },
+    );
     child.on('error', () => resolve({ code: 1, signal: null }));
     child.on('exit', (code, signal) => resolve({ code, signal }));
   });

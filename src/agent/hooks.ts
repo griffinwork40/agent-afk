@@ -54,8 +54,8 @@
  * scoped to the top-level (parent) session: subagent forks run the same init
  * path with the bubbled registry, so `AgentSession` skips the queue when
  * `parentSessionId` is set rather than prepending priming context to every
- * subagent's first prompt. The remaining hook events ignore `injectContext`
- * entirely.
+ * subagent's first prompt. PreToolUse context is appended to the final tool
+ * result (including non-blocking decisions). The remaining events ignore it.
  *
  * @module agent/hooks
  */
@@ -84,7 +84,7 @@ export interface HookDecision {
   /** Human-readable rationale for blocking or approving. */
   reason?: string;
   /**
-   * (PreToolUse block-path, SessionStart, SubagentStop, UserPromptSubmit, Stop) Framework-generated context to inject. For **PreToolUse**: appended to the `isError` tool_result so a blocking handler can explain what to do instead.
+   * (PreToolUse, SessionStart, SubagentStop, UserPromptSubmit, Stop) Framework-generated context to inject. For **PreToolUse**: appended to the final tool_result, including non-blocking decisions and later gate denials. Non-blocking context is appended after output capping and counted in a separate delivery hook_decision event only then; abandoned calls are not counted.
    *
    * For **SubagentStop**: queued to the parent session's input stream after
    * dispatch completes; dropped if the parent is aborting. DAG/compose and
@@ -408,6 +408,21 @@ export interface StopContext {
    * hooks can count how many times they have already blocked this turn.
    */
   continuation?: number;
+  /**
+   * The final assistant text of the completed turn. Populated by
+   * `buildStopContext` from the provider-side `assistantText` (or by scanning
+   * message history when the direct value is absent). Available so Stop hook
+   * handlers can inspect the turn's prose without access to the provider layer.
+   * Absent on surfaces that do not compute it.
+   */
+  assistantText?: string;
+  /**
+   * Names of tools that executed successfully (no error) in this turn. Lets
+   * Stop hook handlers check for instrumentation evidence (hash checks, counter
+   * insertions, bypass reruns) without accessing the raw tool-event stream.
+   * Absent on surfaces that do not compute it.
+   */
+  successfulToolNames?: readonly string[];
 }
 
 export interface UserPromptSubmitContext {

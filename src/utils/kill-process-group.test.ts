@@ -1,72 +1,56 @@
+import { EventEmitter } from 'node:events';
+import type { spawn, ChildProcess } from 'node:child_process';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { killProcessGroup } from './kill-process-group.js';
-import * as cp from 'node:child_process';
 
-vi.mock('node:child_process', async () => {
-  const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
-  return { ...actual, execFileSync: vi.fn() };
-});
+afterEach(() => vi.restoreAllMocks());
 
 describe('killProcessGroup', () => {
-  const originalPlatform = process.platform;
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    Object.defineProperty(process, 'platform', { value: originalPlatform });
-  });
-
   it('sends negative-PID SIGKILL on POSIX', () => {
-    Object.defineProperty(process, 'platform', { value: 'darwin' });
     const spy = vi.spyOn(process, 'kill').mockImplementation(() => true);
-    killProcessGroup(12345);
+    killProcessGroup(12345, 'SIGKILL', { platform: 'darwin' });
     expect(spy).toHaveBeenCalledWith(-12345, 'SIGKILL');
   });
 
   it('accepts a custom signal on POSIX', () => {
-    Object.defineProperty(process, 'platform', { value: 'linux' });
     const spy = vi.spyOn(process, 'kill').mockImplementation(() => true);
-    killProcessGroup(42, 'SIGTERM');
+    killProcessGroup(42, 'SIGTERM', { platform: 'linux' });
     expect(spy).toHaveBeenCalledWith(-42, 'SIGTERM');
   });
 
-  it('uses taskkill on win32', () => {
-    Object.defineProperty(process, 'platform', { value: 'win32' });
-    killProcessGroup(99);
-    expect(cp.execFileSync).toHaveBeenCalledWith(
-      'taskkill',
-      ['/F', '/T', '/PID', '99'],
-      expect.objectContaining({ stdio: 'ignore', timeout: 5_000 }),
+  it('launches bounded taskkill asynchronously on win32 and ignores async errors', () => {
+    const killer = new EventEmitter() as ChildProcess;
+    killer.unref = vi.fn();
+    const launch = vi.fn(() => killer);
+    const kill = vi.spyOn(process, 'kill');
+    killProcessGroup(99, 'SIGKILL', { platform: 'win32', spawn: launch as typeof spawn });
+    expect(launch).toHaveBeenCalledWith(
+      'taskkill', ['/F', '/T', '/PID', '99'],
+      { stdio: 'ignore', timeout: 5_000, windowsHide: true },
     );
+    expect(killer.unref).toHaveBeenCalledOnce();
+    expect(kill).not.toHaveBeenCalled();
+    expect(() => killer.emit('error', new Error('taskkill unavailable'))).not.toThrow();
   });
 
-  it('does nothing when pid is 0', () => {
-    const spy = vi.spyOn(process, 'kill').mockImplementation(() => true);
-    killProcessGroup(0);
-    expect(spy).not.toHaveBeenCalled();
-  });
-
-  it('does nothing when pid is negative', () => {
-    const spy = vi.spyOn(process, 'kill').mockImplementation(() => true);
-    killProcessGroup(-5);
-    expect(spy).not.toHaveBeenCalled();
+  it.each([0, -5])('does nothing when pid is %s', (pid) => {
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const launch = vi.fn();
+    killProcessGroup(pid, 'SIGKILL', { platform: 'win32', spawn: launch as typeof spawn });
+    killProcessGroup(pid, 'SIGKILL', { platform: 'linux' });
+    expect(kill).not.toHaveBeenCalled();
+    expect(launch).not.toHaveBeenCalled();
   });
 
   it('swallows ESRCH (already dead) on POSIX', () => {
-    Object.defineProperty(process, 'platform', { value: 'darwin' });
-    vi.spyOn(process, 'kill').mockImplementation(() => {
-      const err = new Error('kill ESRCH') as NodeJS.ErrnoException;
-      err.code = 'ESRCH';
-      throw err;
-    });
-    // Should not throw
-    expect(() => killProcessGroup(123)).not.toThrow();
+    vi.spyOn(process, 'kill').mockImplementation(() => { throw new Error('kill ESRCH'); });
+    expect(() => killProcessGroup(123, 'SIGKILL', { platform: 'darwin' })).not.toThrow();
   });
 
-  it('swallows taskkill failure on win32', () => {
-    Object.defineProperty(process, 'platform', { value: 'win32' });
-    vi.mocked(cp.execFileSync).mockImplementation(() => {
-      throw new Error('taskkill: process not found');
-    });
-    expect(() => killProcessGroup(123)).not.toThrow();
+  it('swallows synchronous taskkill launch failure on win32', () => {
+    const launch = vi.fn(() => { throw new Error('taskkill: process not found'); });
+    expect(() => killProcessGroup(123, 'SIGKILL', {
+      platform: 'win32', spawn: launch as typeof spawn,
+    })).not.toThrow();
   });
 });

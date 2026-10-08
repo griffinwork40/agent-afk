@@ -30,6 +30,7 @@ import { appendBuiltinTasks } from './daemon-builtin-tasks.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
 import { providerForModel } from '../../agent/providers/index.js';
 import { buildDaemonSessionFactory } from './daemon-session-factory.js';
+import { daemonTurnHooks } from './daemon-session-persist.js';
 import { errorMessage } from '../../utils/errors.js';
 export type { BuildDaemonSessionFactoryOpts } from './daemon-session-factory.js';
 export { buildDaemonSessionFactory } from './daemon-session-factory.js';
@@ -356,8 +357,8 @@ export function registerDaemonCommand(program: Command): void {
           tasks,
           // Proactive OAuth refresh (#1296) — only for OAuth-routed sessions.
           ...(providerForModel(String(daemonModel)) === 'anthropic-direct' && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN ? { oauthRefresher: async () => { const { refreshClaudeCodeOauthToken } = await import('../../agent/auth/keychain.js'); await refreshClaudeCodeOauthToken(); } } : {}),
-          // "Done"-verification probe — see `isDoneUnverified` above.
-          doneUnverifiedProbe: isDoneUnverified,
+          // Turn-completion hooks: the "Done"-verification probe (`isDoneUnverified` above) + sidecar save.
+          ...daemonTurnHooks(daemonModel, isDoneUnverified),
           onTaskComplete: (record: TelemetryRecord, details?: TaskCompletionDetails) => {
             // markdown:true — task output is agent-authored markdown; render it
             // to Telegram HTML so **bold**/`code`/headers format instead of

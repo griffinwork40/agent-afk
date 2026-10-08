@@ -436,13 +436,12 @@ describe('#3072 TOCTOU closure: cleanup renames before rm to close lstat-to-rm r
     const sessionDir = e['TMPDIR']!;
     fs.writeFileSync(path.join(sessionDir, 'data.txt'), 'content');
 
-    // Intercept the rename call and simulate a cross-device failure.
+    // Intercept ALL rename calls and simulate a cross-device failure so that
+    // any accidental retry also goes through the mock (not the real rename).
     const exdevErr = Object.assign(new Error('EXDEV: cross-device link not permitted'), {
       code: 'EXDEV',
     }) as NodeJS.ErrnoException;
-    const renameSpy = vi
-      .spyOn(fs.promises, 'rename')
-      .mockRejectedValueOnce(exdevErr);
+    const renameSpy = vi.spyOn(fs.promises, 'rename').mockRejectedValue(exdevErr);
     try {
       await cleanupSessionTmpdir(e);
     } finally {
@@ -473,13 +472,11 @@ describe('#3072 TOCTOU closure: cleanup renames before rm to close lstat-to-rm r
     fs.rmSync(sessionDir, { recursive: true });
     fs.symlinkSync(target, sessionDir, 'dir');
 
-    // Intercept rename to simulate EXDEV so the fallback path runs.
+    // Intercept ALL rename calls to simulate EXDEV so the fallback path runs.
     const exdevErr = Object.assign(new Error('EXDEV: cross-device link not permitted'), {
       code: 'EXDEV',
     }) as NodeJS.ErrnoException;
-    const renameSpy = vi
-      .spyOn(fs.promises, 'rename')
-      .mockRejectedValueOnce(exdevErr);
+    const renameSpy = vi.spyOn(fs.promises, 'rename').mockRejectedValue(exdevErr);
     try {
       await cleanupSessionTmpdir(e);
     } finally {
@@ -489,6 +486,103 @@ describe('#3072 TOCTOU closure: cleanup renames before rm to close lstat-to-rm r
     // The symlink target must be intact; the fallback lstat must have caught
     // the symlink and bailed before calling rm.
     expect(fs.existsSync(path.join(target, 'keep.txt'))).toBe(true);
+  });
+
+  it('EXDEV fallback bails when realpath containment check fails', async () => {
+    const e = topLevel();
+    expect(ensureSessionTmpdir(e)).toBe(true);
+    const sessionDir = e['TMPDIR']!;
+    // Write a sentinel into the session dir so we can detect whether rm ran.
+    fs.writeFileSync(path.join(sessionDir, 'sentinel.txt'), 'keep');
+
+    const exdevErr = Object.assign(new Error('EXDEV: cross-device link not permitted'), {
+      code: 'EXDEV',
+    }) as NodeJS.ErrnoException;
+
+    // cleanup() makes exactly 4 realpath calls in this flow:
+    //   call 1: realpath(this.root) — step 2 happy path
+    //   call 2: realpath(this.dir)  — step 2 happy path (must pass → rename is tried)
+    //   call 3: realpath(this.root) — EXDEV fallback containment re-check
+    //   call 4: realpath(this.dir)  — EXDEV fallback containment re-check
+    //
+    // We return a path outside the root only on call 4 so that:
+    //   - calls 1-2 pass step 2 (cleanup continues to rename)
+    //   - rename throws EXDEV → enters fallback
+    //   - calls 3-4 run in the fallback; call 4 returns outside → guard bails
+    //   - rm(sessionDir) is NEVER called, so sentinel.txt survives
+    //
+    // If the guard is deleted from the production code, rm runs on sessionDir
+    // and sentinel.txt disappears, causing the assertion below to FAIL — which
+    // proves the test is not inert.
+    const origRealpath = fs.promises.realpath.bind(fs.promises);
+    let totalRealpathCalls = 0;
+    // Track whether rename was called via a closure flag — mockRestore() clears
+    // spy.mock.calls before the post-finally assertion can read them.
+    let renameWasCalled = false;
+    const renameSpy = vi.spyOn(fs.promises, 'rename').mockImplementation(async () => {
+      renameWasCalled = true;
+      throw exdevErr;
+    });
+    const outsidePath = path.join(base, 'exdev-outside-root-rp');
+    const realpathSpy = vi.spyOn(fs.promises, 'realpath').mockImplementation(async (p) => {
+      totalRealpathCalls++;
+      // Call 4 = EXDEV fallback realpath(this.dir): return a path outside root.
+      if (totalRealpathCalls === 4) return outsidePath;
+      return origRealpath(p as string);
+    });
+    try {
+      await cleanupSessionTmpdir(e);
+    } finally {
+      renameSpy.mockRestore();
+      realpathSpy.mockRestore();
+    }
+
+    // rename must have been attempted (proves we entered the EXDEV path, not step 2).
+    expect(renameWasCalled).toBe(true);
+    // sentinel.txt must still exist: the containment check must have bailed before rm.
+    // If the EXDEV-fallback guard is deleted, rm(sessionDir) runs and this assertion fails.
+    expect(fs.existsSync(path.join(sessionDir, 'sentinel.txt'))).toBe(true);
+  });
+
+  it('EXDEV fallback bails when uid ownership check fails', async () => {
+    if (typeof process.getuid !== 'function') return; // uid check skipped on Windows
+
+    const e = topLevel();
+    expect(ensureSessionTmpdir(e)).toBe(true);
+    const sessionDir = e['TMPDIR']!;
+    fs.writeFileSync(path.join(sessionDir, 'data.txt'), 'keep');
+
+    const exdevErr = Object.assign(new Error('EXDEV: cross-device link not permitted'), {
+      code: 'EXDEV',
+    }) as NodeJS.ErrnoException;
+
+    // Override lstat so the second call (inside the EXDEV fallback) returns a
+    // mismatched uid, as if the directory was replaced by one owned by root.
+    let lstatCallCount = 0;
+    const origLstat = fs.promises.lstat.bind(fs.promises);
+    const lstatSpy = vi.spyOn(fs.promises, 'lstat').mockImplementation(async (p) => {
+      const st = await origLstat(p as string);
+      lstatCallCount++;
+      if (lstatCallCount === 2) {
+        // Return a stat-like object with a uid that differs from the current
+        // process uid, triggering the ownership bail. Avoid hard-coding 0 (root)
+        // because a CI runner executing as root would produce uid===currentUid(),
+        // making the check a no-op and causing the assertion below to fail.
+        const foreignUid = (process.getuid?.() ?? 0) + 1;
+        return Object.create(st, { uid: { value: foreignUid, enumerable: true } }) as typeof st;
+      }
+      return st;
+    });
+    const renameSpy = vi.spyOn(fs.promises, 'rename').mockRejectedValue(exdevErr);
+    try {
+      await cleanupSessionTmpdir(e);
+    } finally {
+      renameSpy.mockRestore();
+      lstatSpy.mockRestore();
+    }
+
+    // The session dir must still exist — uid check must have bailed before rm.
+    expect(fs.existsSync(path.join(sessionDir, 'data.txt'))).toBe(true);
   });
 
   it('cleans up a lingering .rm sibling when step-4 lstat detects it is not a real dir', async () => {

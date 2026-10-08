@@ -358,8 +358,6 @@ describe('Gate 4b — WEB_REQUEST_DOMAIN_POLICY_FAIL_OPEN', () => {
     vi.doMock('../../browser/config.js', () => {
       throw new Error('simulated browser/config.js load failure — fail-open gate test');
     });
-    // vi.resetModules() is scoped here (not in afterEach) to avoid resetting the
-    // entire module registry for all other tests in this file.
     vi.resetModules();
 
     // Re-import createWebRequestHandler so it uses the fresh module graph where
@@ -394,7 +392,7 @@ describe('Gate 4b — WEB_REQUEST_DOMAIN_POLICY_FAIL_OPEN', () => {
     // before fetch, so fetchSpy would not be called at all, making this assertion fail.
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(fetchSpy).toHaveBeenCalledWith(
-      expect.stringContaining('blocked-gate-liveness-failopen.example.com'),
+      expect.stringContaining(new URL(FAILOPEN_URL).hostname),
       expect.anything(),
     );
 

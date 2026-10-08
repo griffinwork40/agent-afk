@@ -61,8 +61,14 @@ export function enforceSessionQuota(dir: string, quotaBytes: number, liveLogPath
 }
 
 /** Remove stale session directories (newest content older than `maxAgeMs`). */
-export function sweepProcessJobDirs(currentLabel: string, now = Date.now(), maxAgeMs = SWEEP_MAX_AGE_MS): void {
-  const root = getProcessJobsRoot();
+export function sweepProcessJobDirs(
+  currentLabel: string,
+  now = Date.now(),
+  maxAgeMs = SWEEP_MAX_AGE_MS,
+  /** Override the sweep root (for tests). Defaults to `getProcessJobsRoot()`. */
+  rootOverride?: string,
+): void {
+  const root = rootOverride ?? getProcessJobsRoot();
   let entries: string[];
   try { entries = fs.readdirSync(root); } catch { return; }
   for (const entry of entries) {

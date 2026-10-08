@@ -30,6 +30,20 @@ import { anthropicLimitErrorEvent } from '../usage-limit.error.js';
  * Contract: the caller emits `paused` BEFORE calling this helper so the UI
  * can render the pause panel immediately. The helper assumes that has happened
  * and does NOT emit `paused` itself.
+ *
+ * @remarks The far-reset + autoResume=true path enters this loop instead of
+ * sleeping until the distant reset. Each iteration waits up to
+ * {@link NO_TS_RETRY_INTERVAL_MS} (60 s) before replaying a probe, so over
+ * a 2 h cap the loop can issue up to ~120 API probes on the same account.
+ * That is intentional: the primary purpose of this path is to resume
+ * immediately on an account hot-swap, and a pure hot-swap-only wait (no timer
+ * probes) would require a separate code path, increase complexity, and prevent
+ * same-account recovery if the far reset happens to lift earlier than
+ * advertised. The probe rate is low enough (~1/min) that it does not
+ * constitute meaningful API abuse. A future optimisation could back off
+ * exponentially after the first few failed probes, but that is not
+ * warranted until measured as a real cost concern. Tracked in #3170 for
+ * re-evaluation when probe rate shows up in billing or latency profiles.
  */
 async function* runHotSwapParkLoop(
   ctx: RetryTierContext,

@@ -39,6 +39,7 @@ import { getCurrentSink } from '../_lib/skill-sink-channel.js';
 import { resolveMaxNestingDepth } from './nesting.js';
 import { resolveComposeNodeProvider } from './compose-node-provider.js';
 import { resolveComposeNodeAgent } from './compose-agent-resolve.js';
+import { splitComposeNodeResults } from './compose-node-results.js';
 import { buildComposeMaxDepthRefusal } from './skill-depth-message.js';
 import {
   formatDAGResult,
@@ -537,6 +538,7 @@ export class ComposeExecutor {
 
         return {
           id: n.id,
+          replaySafe: false, // workspace-backed: effective provider is CHILD_ALLOWED_TOOLS, not frontmatter
           // agentType render label: use agent_type name (or node id for unnamed
           // nodes) with a [k/N] progress suffix so users can track which node
           // is running. Mirrors the original namedAgent.name label convention.
@@ -620,15 +622,7 @@ export class ComposeExecutor {
       // Split build results into runnable DAG nodes and pre-failed attachment errors.
       // Nodes with attachment errors are injected into result.failed so they appear
       // in the formatted output alongside runtime failures — siblings still run.
-      const dagNodes: SubagentDAGNode[] = [];
-      const attachmentErrors: Array<{ id: string; error: Error }> = [];
-      for (const r of nodeBuildResults) {
-        if ('attachmentError' in r) {
-          attachmentErrors.push({ id: r.nodeId, error: r.error });
-        } else {
-          dagNodes.push(r);
-        }
-      }
+      const { dagNodes, attachmentErrors } = splitComposeNodeResults(nodeBuildResults);
 
       // Wave manifest: create before the DAG starts so a crash mid-run leaves
       // a recoverable record. Only for ≥2 nodes (no manifest for solo dispatch).
@@ -657,6 +651,7 @@ export class ComposeExecutor {
         nodes: dagNodes,
         edges: dagEdges,
         failFast: parsed.fail_fast,
+        ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
         nodeTimeoutMs: parsed.node_timeout_ms,
         ...(this.ctx.delegationBudget !== undefined ? { delegationBudget: this.ctx.delegationBudget } : {}),
         ...(this.currentCwd !== undefined ? { anchorCwd: this.currentCwd } : {}),
@@ -666,7 +661,7 @@ export class ComposeExecutor {
       // When detachRegistry is absent it returns { kind: 'normal', dagResult } immediately.
       const nodeIds = dagNodes.map((n) => n.id);
       const spillSessionId = this.ctx.parentSession.sessionId ?? 'unknown-session';
-      const outcome = detachRegistry !== undefined && call.id
+      const outcome = detachRegistry !== undefined && call.id.length > 0 // guard empty string (defensive)
         ? await raceComposeDetach({
             dagPromise, nodeIds, toolUseId: call.id, attachmentErrors, startedAt,
             formatResult: (r) => formatDAGResult(r, { sessionId: spillSessionId, callId: call.id }).content,
@@ -740,7 +735,7 @@ export class ComposeExecutor {
     } catch (err) {
       // On any throw in the normal (non-detach) path, also deregister so
       // hasDetachable() returns false — parallel to Fix #2 for bash.
-      if (detachRegistry !== undefined && call.id) detachRegistry.deregister(call.id);
+      if (detachRegistry !== undefined && call.id.length > 0) detachRegistry.deregister(call.id);
       const message = errorMessage(err);
       void appendRoutingDecision({
         ...identity,

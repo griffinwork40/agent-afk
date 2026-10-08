@@ -229,7 +229,7 @@ function userFromJournal(msg: JournalMessage, out: OpenAIMessage[]): void {
   out.push({ role: 'user', content: partsToContent(parts) });
 }
 
-function assistantFromJournal(msg: JournalMessage): OpenAIMessage {
+function assistantFromJournal(msg: JournalMessage, replayField?: 'reasoning_content' | 'reasoning' | null): OpenAIMessage {
   const texts: string[] = [];
   // reasoning blocks may arrive from different providers, each encoded with
   // its origin field name (e.g. 'openai-compatible:reasoning' for Cerebras).
@@ -240,7 +240,8 @@ function assistantFromJournal(msg: JournalMessage): OpenAIMessage {
     if (block.type === 'text') texts.push(block.text);
     else if (block.type === 'text_ref') texts.push(block.preview);
     else if (block.type === 'thinking') {
-      const field = decodeReasoningField(block.origin);
+      if (replayField === null) continue;
+      const field = replayField ?? decodeReasoningField(block.origin);
       const bucket = reasoningByField.get(field) ?? [];
       bucket.push(block.thinking);
       reasoningByField.set(field, bucket);
@@ -252,8 +253,9 @@ function assistantFromJournal(msg: JournalMessage): OpenAIMessage {
   const text = texts.join('\n');
   const out: Record<string, unknown> = { role: 'assistant', content: toolCalls.length > 0 && text.length === 0 ? null : text };
   if (toolCalls.length > 0) out['tool_calls'] = toolCalls;
-  // Echo each reasoning bucket under its original wire field to avoid HTTP 400
-  // from providers that reject foreign field names in history.
+  // Runtime replay uses the destination's field, never the source's. DeepSeek
+  // requires the key on all assistant turns with tools, even without thinking.
+  if (replayField === 'reasoning_content') out['reasoning_content'] = '';
   for (const [field, chunks] of reasoningByField) {
     if (chunks.length > 0) out[field] = chunks.join('\n');
   }
@@ -294,12 +296,12 @@ function repairUnansweredToolCalls(msgs: OpenAIMessage[]): OpenAIMessage[] {
 
 const provenance = new JournalProvenance<OpenAIMessage>();
 
-function fromJournalMessages(messages: readonly JournalMessage[]): OpenAIMessage[] {
+function fromJournalMessages(messages: readonly JournalMessage[], replayField?: 'reasoning_content' | 'reasoning' | null): OpenAIMessage[] {
   const out: OpenAIMessage[] = [];
   const spans: Array<{ source: JournalMessage; members: OpenAIMessage[] }> = [];
   for (const msg of messages) {
     const start = out.length;
-    if (msg.role === 'assistant') out.push(assistantFromJournal(msg));
+    if (msg.role === 'assistant') out.push(assistantFromJournal(msg, replayField));
     else userFromJournal(msg, out);
     spans.push({ source: msg, members: out.slice(start) });
   }
@@ -314,3 +316,17 @@ function adopt(messages: readonly OpenAIMessage[], at: number): ReturnType<typeo
 }
 
 export const openAIJournalAdapter: JournalAdapter<OpenAIMessage> = { toJournal, fromJournalMessages, adopt };
+
+/** Destination policy is deliberately host-based, not inferred from a model id.
+ * Unknown endpoints omit imported reasoning; live turns still echo their deltas.
+ * Original journal messages survive via provenance, including omitted thinking.
+ */
+export function openAIJournalAdapterForEndpoint(baseURL?: string): JournalAdapter<OpenAIMessage> {
+  let field: 'reasoning_content' | 'reasoning' | null = null;
+  try {
+    const host = new URL(baseURL ?? 'https://api.openai.com/v1').hostname;
+    if (host === 'api.deepseek.com') field = 'reasoning_content';
+    else if (host === 'api.cerebras.ai') field = 'reasoning';
+  } catch { /* Invalid/custom endpoints must not inherit a source wire field. */ }
+  return { toJournal, adopt, fromJournalMessages: (messages) => fromJournalMessages(messages, field) };
+}

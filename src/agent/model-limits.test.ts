@@ -14,12 +14,14 @@
  * src/agent/model-limits.ts.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { autoCompactLimitFor, contextLimitFor, maxOutputTokensFor } from './model-limits.js';
 import { resolveEffectiveMaxOutputTokens } from './providers/openai-compatible/query/model-params.js';
 import { resolveMaxTokens } from './providers/anthropic-direct/resolve-params.js';
 import { guardContextOverflow } from './providers/shared/auto-compact.js';
 import type { AgentConfig } from './types/config-types.js';
+import { resetCatalogCache } from './providers/openai-compatible/models-catalog.js';
+import { useCodexCatalog } from '../__test-utils__/codex-catalog.js';
 
 describe('autoCompactLimitFor', () => {
   it('caps the default sonnet alias at the 200k working budget (not its 1M window)', () => {
@@ -335,4 +337,29 @@ describe('routesToOpenAICompatible fallback — third-party OpenAI-shim prefix f
       expect(contextLimitFor(id)).toBe(262_144);
     });
   }
+});
+
+describe('contextLimitFor — Codex catalog fallback', () => {
+  beforeEach(() =>
+    useCodexCatalog([
+      { slug: 'gpt-6-sol', context_window: 272000 },
+      { slug: 'gpt-5.5', context_window: 272000 },
+    ]),
+  );
+  afterAll(() => resetCatalogCache());
+
+  it('uses the catalog window for ids the table does not list', () => {
+    expect(contextLimitFor('gpt-6-sol')).toBe(272_000);
+  });
+
+  it('keeps the hand-table value when both know the model', () => {
+    // gpt-5.5 is 1M on the API tier; the Codex-plan figure must not shrink it.
+    expect(contextLimitFor('gpt-5.5')).toBe(1_000_000);
+  });
+
+  it('falls back to the per-provider default when the catalog has no entry', () => {
+    expect(contextLimitFor('gpt-6-unlisted')).toBe(262_144);
+    useCodexCatalog(null);
+    expect(contextLimitFor('gpt-6-sol')).toBe(262_144);
+  });
 });

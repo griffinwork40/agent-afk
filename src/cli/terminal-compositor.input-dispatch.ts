@@ -34,6 +34,7 @@ import {
 } from './terminal-compositor.input-dispatch.enter.js';
 import { handleCursorAndEdit } from './terminal-compositor.input-dispatch.cursor.js';
 import { clearModeNoticeOnKey } from './terminal-compositor.mode-notice.js';
+import { parseCprReply } from './terminal-compositor.lifecycle.cpr.js';
 
 /**
  * Max gap (ms) between the two Escapes of a double-Esc rewind trigger at an
@@ -161,6 +162,14 @@ export interface KeyDispatchHost {
   readonly onOpenEditor?: () => void;
   readonly onOpenOutputViewer?: () => void;
   readonly onSubmit?: (payload: SubmissionPayload) => void;
+  /**
+   * True while a CPR reply is in-flight (tmux EXPAND delta correction).
+   * dispatchKey() drops any keypress whose sequence matches the CPR reply
+   * pattern (ESC[row;colR) as a belt-and-suspenders guard against readline
+   * surfacing the CPR bytes as a keypress after the data-listener consumed
+   * them too late.
+   */
+  readonly cprPending: boolean;
 }
 
 /**
@@ -202,6 +211,16 @@ export function applyEdit(self: KeyDispatchHost, next: InputCoreState): boolean 
 
 export function dispatchKey(self: KeyDispatchHost, char: string | undefined, key: KeyInfo): void {
   if (!self.armed) return;
+
+  // CPR-reply guard (belt-and-suspenders): drop any keypress that looks like
+  // a Cursor Position Report reply (ESC[row;colR). The primary interception
+  // happens in the `data` listener installed by requestCprAndApplyDelta, but
+  // readline may have already buffered and parsed the bytes before that
+  // listener could consume them — especially when cprPending is false (the
+  // reply arrived after the timeout cleared the flag). Either way, a CPR
+  // sequence must never reach the prompt as literal text.
+  if (parseCprReply(key?.sequence ?? '')) return;
+
   // Any keystroke but Shift+Tab dismisses the mode notice (Shift+Tab replaces
   // it). Runs first so every handler below repaints without it.
   clearModeNoticeOnKey(self, key);

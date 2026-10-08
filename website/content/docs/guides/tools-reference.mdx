@@ -269,6 +269,18 @@ Invoke a registered skill by name. A skill either forks an isolated subagent or 
 | `name` | string | ✓ | Skill name (e.g. `"mint"`, `"diagnose"`). |
 | `arguments` | string | | Arguments to pass to the skill. |
 
+### `model_complete`
+
+Send one prompt to any configured model and return its text reply: no tools, no conversation, no subagent fork. Use it to offload bounded text work (summarize, classify, extract, rewrite, second opinion) to a cheaper or local model; use `agent` when the work needs tools. `model` resolves through your model slots, so the slot's provider, endpoint, and API key apply. An unconfigured slot is an error, never a silent fallback to a cloud model.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `prompt` | string | ✓ | The instruction sent to the model. |
+| `system` | string | | Optional system prompt. |
+| `model` | string | | Slot (`local`, `small`, `medium`, `large`), custom slot name, alias (`haiku`, `opus`, `grok`), or raw id. Default: your configured default model (`AFK_MODEL`, else `medium`). |
+| `max_tokens` | number | | Output token cap (default 4096, max 32000). |
+| `input_path` | string | | Text file (≤ 1 MB, read_file policy) appended to the prompt; its contents never enter your context, but are sent to the model's provider. |
+
 ### `cancel_background_job`
 
 Cancel a running background subagent job that the model created with `agent` in `mode="background"`. Refuses to cancel user-backgrounded jobs (those are user-owned).

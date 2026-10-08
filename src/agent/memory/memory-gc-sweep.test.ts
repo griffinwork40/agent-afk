@@ -19,7 +19,6 @@ import { MemoryStore } from './memory-store.js';
 import {
   sweepMemoryGc,
   MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
-  MEMORY_ACCESS_TRACKING_STARTED_AT,
   GC_EXCLUDED_CATEGORIES,
 } from './memory-gc-sweep.js';
 
@@ -29,6 +28,7 @@ import {
 
 let tmpDir: string;
 let store: MemoryStore;
+const MEMORY_ACCESS_TRACKING_STARTED_AT = '2026-09-23T00:00:00.000Z';
 
 /** Backdated ISO timestamp, `days` days ago. */
 function daysAgo(days: number): string {
@@ -78,6 +78,11 @@ beforeEach(() => {
   );
   mkdirSync(tmpDir, { recursive: true });
   store = new MemoryStore(tmpDir);
+  // Simulate an archive that has actually been tracking since September.
+  const db = new BetterSqlite3(join(tmpDir, 'memory.db'));
+  db.prepare('UPDATE memory_metadata SET value = ? WHERE key = ?')
+    .run(MEMORY_ACCESS_TRACKING_STARTED_AT, 'tracking_started_at');
+  db.close();
   // Enable the GC sweep for most tests.
   vi.stubEnv('AFK_MEMORY_GC_SWEEP_ENABLE', '1');
 });

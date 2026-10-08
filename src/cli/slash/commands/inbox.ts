@@ -18,7 +18,7 @@ import { palette } from '../../palette.js';
 import type { SlashCommand } from '../types.js';
 import type { PeerInboxNotifier } from '../../commands/interactive/peer-inbox-notifier.js';
 import { listHeld, dropHeld, type HeldEntry } from '../../../agent/peer/inbox-store.js';
-import { resolvePeerInboundMode } from '../../../agent/peer/inbound-mode.js';
+import { getPeerInboundModeConfig } from '../../../agent/peer/inbound-mode.js';
 
 let notifierRef: PeerInboxNotifier | undefined;
 let sessionIdGetter: (() => string | undefined) | undefined;
@@ -85,9 +85,8 @@ export const inboxCmd: SlashCommand = {
     const [verb, ...rest] = trimmed === '' ? ['list'] : trimmed.split(/\s+/);
     const arg = rest.join(' ').trim();
 
-    const mode = resolvePeerInboundMode();
-
     if (verb === 'list' || verb === undefined) {
+      const modeCfg = getPeerInboundModeConfig();
       const held = await listHeld(sessionId);
       if (held.length === 0) {
         ctx.out.info('No held messages.');
@@ -117,7 +116,16 @@ export const inboxCmd: SlashCommand = {
           );
         }
       }
-      ctx.out.line(palette.dim(`  mode: AFK_PEER_INBOUND=${mode}`));
+      ctx.out.line(palette.dim(`  mode: AFK_PEER_INBOUND=${modeCfg.mode}`));
+      if (modeCfg.invalid) {
+        // Surface the typo in a TUI-safe warning so the operator notices without
+        // needing AFK_DEBUG=1. The raw value is already capped (≤20 chars + "…")
+        // by getPeerInboundModeConfig to prevent display corruption.
+        ctx.out.warn(
+          `AFK_PEER_INBOUND=${JSON.stringify(modeCfg.rawTruncated)} is not recognised ` +
+          `(expected 'accept', 'hold', or 'off'); falling back to 'accept'.`,
+        );
+      }
       return 'continue';
     }
 

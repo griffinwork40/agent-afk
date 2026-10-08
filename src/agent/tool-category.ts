@@ -108,7 +108,13 @@ const SHELL_TOOLS = new Set([
 export const SUBAGENT_TOOLS = new Set([
   'Agent', 'Task',
   'agent', 'cancel_background_job', 'send_message_to_agent', 'get_background_job_health',
-  // Peer-session tools — top-level only; same subagent bucket as send_message_to_agent.
+]);
+/**
+ * Peer-session messaging tools. Top-level only (enforced by the dispatcher
+ * gate). Distinct from `SUBAGENT_TOOLS` so callers can distinguish
+ * "dispatching a child agent" from "sending a message to a sibling session".
+ */
+export const PEER_TOOLS = new Set([
   'list_sessions', 'send_to_session',
 ]);
 export const SKILL_TOOLS = new Set([
@@ -152,6 +158,8 @@ const WEB_TOOLS = new Set([
   // same conceptual shape as web_request (billing + network side effect).
   'image_generate',
   'image_edit',
+  // model_complete: one billed chat completion to a model provider.
+  'model_complete',
 ]);
 const BROWSER_TOOLS = new Set([
   // agent-afk native browser-control tools (src/browser/, src/agent/tools/handlers/browser-*.ts).
@@ -312,6 +320,7 @@ export function categorizeTool(name: string): ToolCategory {
   if (hasCI(WRITE_TOOLS, name)) return 'write';
   if (hasCI(SHELL_TOOLS, name)) return 'shell';
   if (hasCI(SUBAGENT_TOOLS, name)) return 'subagent';
+  if (hasCI(PEER_TOOLS, name)) return 'peer';
   if (hasCI(SKILL_TOOLS, name)) return 'skill';
   if (hasCI(DAG_TOOLS, name)) return 'dag';
   if (hasCI(WEB_TOOLS, name)) return 'web';

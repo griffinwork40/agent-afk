@@ -7,6 +7,9 @@
 #   /dashboard  the `afk web` UI bundle (pnpm, its own pnpm-lock.yaml + workspace)
 #   /website    the Fumadocs/Next.js docs site (npm, package-lock.json)
 #
+# A github-actions entry is also included so workflow action pins receive
+# version-bump PRs (without it, actions references never get updates).
+#
 # History: until this entry existed only /website was watched, so the root
 # package drifted with no update PRs (e.g. @anthropic-ai/sdk frozen
 # at 0.74.x by a caret-on-0.x range, vitest two majors behind with a critical
@@ -52,7 +55,13 @@ updates:
       prefix: "chore(deps)"
       prefix-development: "chore(dev-deps)"
     groups:
-      dashboard-minor-patch:
+      dashboard-prod-minor-patch:
+        dependency-type: "production"
+        update-types:
+          - "minor"
+          - "patch"
+      dashboard-dev-minor-patch:
+        dependency-type: "development"
         update-types:
           - "minor"
           - "patch"
@@ -70,3 +79,19 @@ updates:
       fumadocs:
         patterns:
           - "fumadocs-*"
+
+  # GitHub Actions — version-bump PRs for workflow action pins.
+  # Without this entry, uses: references in .github/workflows/ never receive
+  # automated update PRs and drift silently behind upstream releases.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(actions)"
+    groups:
+      actions-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"

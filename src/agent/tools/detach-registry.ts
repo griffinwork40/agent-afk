@@ -2,8 +2,7 @@
  * Generic detach contract for in-flight tool calls.
  *
  * Mirrors the foreground-subagent promotion contract (Ctrl+B backgrounding)
- * but for non-subagent tools — initially bash only; compose is a follow-up
- * (tracked in #2542).
+ * but for non-subagent tools — bash and compose are both wired (#2542/#2746).
  *
  * A tool handler that opts in to detachability:
  *  1. Calls {@link DetachableToolRegistry.register} early in its execution,

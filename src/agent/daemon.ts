@@ -63,6 +63,8 @@ export interface DaemonOptions {
    * `CronScheduler`. See `SchedulerOptions.doneUnverifiedProbe`.
    */
   doneUnverifiedProbe?: SchedulerOptions['doneUnverifiedProbe'];
+  /** Persist each completed agent-task run as a session sidecar. See `SchedulerOptions.onTaskTurnComplete`. */
+  onTaskTurnComplete?: SchedulerOptions['onTaskTurnComplete'];
   /**
    * Poll interval (ms) for pull-trigger mode. When set and > 0, the daemon
    * will call `scheduler.startPullLoop()` after construction and dequeue one
@@ -151,6 +153,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
     ...(options.now !== undefined ? { now: options.now } : {}),
     ...(options.onTaskComplete !== undefined ? { onTaskComplete: options.onTaskComplete } : {}),
     ...(options.doneUnverifiedProbe !== undefined ? { doneUnverifiedProbe: options.doneUnverifiedProbe } : {}),
+    ...(options.onTaskTurnComplete !== undefined ? { onTaskTurnComplete: options.onTaskTurnComplete } : {}),
     ...(options.pullPollIntervalMs !== undefined ? { pullPollIntervalMs: options.pullPollIntervalMs } : {}),
     ...(options.queueDir !== undefined ? { queueDir: options.queueDir } : {}),
     ...(options.bot !== undefined ? { bot: options.bot } : {}),

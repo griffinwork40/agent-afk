@@ -25,6 +25,7 @@ import { registerWorktreeRoot } from '../../worktree/worktree-root-registry.js';
 import { probeNonRebuildableIgnoredFiles } from '../../worktree/worktree-ignored-probe.js';
 import { env } from '../../../config/env.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { debugLog } from '../../../utils/debug.js';
 
 /** Default git runner. Exported so callers without their own can reuse it. */
 export const defaultExecFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
@@ -72,6 +73,14 @@ export function sanitizeSlug(name: string): string {
  * All calls are local ref reads — no fetch. The returned value is a short
  * tracking-ref name (e.g. `"origin/main"`), not a SHA — callers resolve it.
  *
+ * **Limitations (acceptable for current use-cases):**
+ * - Only the `origin` remote is probed; repos with a differently-named upstream
+ *   (e.g. `upstream`, `github`) will return `undefined` even when a default branch
+ *   is otherwise discoverable.
+ * - The conventional-name fallback only checks `origin/main` and `origin/master`;
+ *   other default-branch names (e.g. `origin/trunk`, `origin/develop`) are not
+ *   tried and will also yield `undefined`.
+ *
  * Exported only for testing.
  * @internal
  */
@@ -85,7 +94,9 @@ export async function detectRemoteDefaultRef(
     ]);
     const ref = stdout.trim();
     if (ref.length > 0) return ref; // e.g. "origin/main"
-  } catch { /* origin/HEAD not set — try conventional names */ }
+  } catch (err) {
+    debugLog('[worktree-managed] detectRemoteDefaultRef: refs/remotes/origin/HEAD not set, trying conventional names:', errorMessage(err));
+  }
 
   for (const candidate of ['origin/main', 'origin/master']) {
     try {

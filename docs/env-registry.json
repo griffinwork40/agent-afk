@@ -151,6 +151,32 @@
       "category": "paths"
     },
     {
+      "name": "AFK_CONNECT_RETRY_BUDGET_MS",
+      "description": "Experimental streaming connection retry wall budget in milliseconds. Positive finite value enables capped jittered backoff before the stream opens; unset or invalid preserves legacy retry counts. In-flight attempts retain existing timeouts.",
+      "type": "number",
+      "required": false,
+      "example": "120000",
+      "category": "model"
+    },
+    {
+      "name": "AFK_CONTEXT_GUARD_DISABLE",
+      "description": "Disable the temporary within-turn context pressure guard (1/true/yes/on). Restores unguarded tool-loop behavior; ordinary compaction and round caps remain enabled.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_CONTEXT_GUARD_PCT",
+      "description": "Temporary within-turn context guard operational threshold as percent of the effective provider-route limit (catalog metadata for subscription routes; contextLimitFor() for API-key routes). Default 95. Not a documented model capacity or guaranteed server cutoff. Valid range 1–99.",
+      "type": "number",
+      "required": false,
+      "default": "95",
+      "example": "90",
+      "category": "model"
+    },
+    {
       "name": "AFK_DAEMON_BUDGET_GATE_DISABLED",
       "description": "Set to 1 to disable the subscription-usage budget gate for daemon/cron agent tasks. When unset (default) the daemon checks Claude subscription utilization before starting each agent task and skips the run if any window is at or above AFK_DAEMON_BUDGET_SKIP_PCT. Shell and builtin tasks are never gated regardless of this setting.",
       "type": "boolean",
@@ -528,16 +554,16 @@
     },
     {
       "name": "AFK_MEMORY_GC_MIN_AGE_DAYS",
-      "description": "Minimum age in days for a never-accessed fact to become a GC candidate. Only meaningful when AFK_MEMORY_GC_SWEEP_ENABLE=1. Default 90 (three months). Must be a positive number; invalid values fall back to the default.",
+      "description": "Minimum age in days for a never-accessed fact to become a GC candidate. Only meaningful when AFK_MEMORY_GC_SWEEP_ENABLE=1. Default 30. Age is counted only for facts created since tracking began. Must be a positive number; invalid values fall back to the default.",
       "type": "number",
       "required": false,
-      "default": "90",
+      "default": "30",
       "example": "60",
       "category": "misc"
     },
     {
       "name": "AFK_MEMORY_GC_SWEEP_ENABLE",
-      "description": "Enable the periodic soft-delete GC sweep for the fact archive. When set to 1, never-accessed facts older than AFK_MEMORY_GC_MIN_AGE_DAYS are marked superseded (soft-deleted) at most once every 24 hours at session start. Off by default — enable only when archive noise becomes measurable. \"preference\" facts are always excluded regardless of this setting.",
+      "description": "Enable the periodic soft-delete GC sweep for the fact archive. When set to 1, never-accessed facts older than AFK_MEMORY_GC_MIN_AGE_DAYS are marked superseded (soft-deleted) at most once every 24 hours at session start. Off by default — enable only when archive noise becomes measurable. \"preference\" facts and facts predating this database's tracking-start marker are always excluded regardless of this setting.",
       "type": "boolean",
       "required": false,
       "default": "0",
@@ -1204,6 +1230,15 @@
       "type": "boolean",
       "required": false,
       "example": "0",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_UNPROVEN_DIAGNOSIS_GATE",
+      "description": "Opt-in Stop hook that prevents a turn from closing with an unproven \"external / root cause unknown\" diagnosis. When set to 1, the hook scans the final assistant text for cause-unknown language (\"root cause\" near \"not found|unknown\", \"something else in\", \"likely upstream\") AND checks for the absence of instrumentation tool calls (hash/manifest checks, bypass reruns, counter/log insertions). When both conditions are met it injects a correction asking the agent to run the elimination ladder (byte-verify installs, bypass wrapper, clean-env repeat, instrument the path) before closing. Fires at most once per turn. Does not fire when instrumentation evidence is already present, or on subagent turns. Default: 0 (off).",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
       "category": "misc"
     },
     {

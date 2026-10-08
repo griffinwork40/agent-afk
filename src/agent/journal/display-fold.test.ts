@@ -167,22 +167,13 @@ describe('foldForDisplay', () => {
     expect(texts(foldForDisplay([recs]))).toEqual(['q1', 'a1', 'q2', 'a2', 'q3']);
   });
 
-  // S2: all-sentinel displacement — when every displaced row is a preamble
-  // sentinel (-1), pending stays empty and pendingWindowCap must reset to -1.
-  //
-  // No behavioral path distinguishes stale-cap from correct-cap when pending is
-  // empty: any fingerprint miss pushes a new row regardless of the cap value, so
-  // the output is identical in both cases. The invariant is therefore asserted
-  // directly via the _testFoldForDisplay hook, which returns pendingWindowCap
-  // alongside the display messages. This is the only reliable witness of the bug
-  // #3014 fixed: without the post-loop guard "if (pending.size === 0)
-  // pendingWindowCap = -1", the cap is left at live.length-1 (1 here) instead of -1.
+  // S2: all-sentinel displacement — when every displaced row is a preamble sentinel (-1),
+  // pending stays empty and pendingWindowCap must reset to -1 (invariant: cap === -1 iff
+  // pending is empty). The output is identical with or without the guard, so we assert the
+  // internal cap directly via _testFoldForDisplay. History: PR #3077.
   it('S2: pendingWindowCap resets to -1 when all displaced rows are preamble sentinels', () => {
-    // Setup: summary(-1) + ack(-1) are the only rows (both sentinels).
-    // Soft-truncate to 0 displaces them; the loop skips both (sentinel rows).
-    // After the loop: pending is empty, so the post-loop guard must reset cap to -1.
-    // Without the guard the cap stays at live.length-1 = 1, violating the invariant
-    // "pendingWindowCap is -1 when pending is empty".
+    // summary(-1) + ack(-1) are displaced by the compact soft-truncate to 0.
+    // Both are sentinels so pending stays empty; the post-loop guard resets cap to -1.
     const recs = [ap(0, summary()), ap(1, ack()), tr(0, 'compact')];
     const { messages, pendingWindowCap } = _testFoldForDisplay(recs);
     expect(messages).toEqual([]);

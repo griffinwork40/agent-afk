@@ -162,6 +162,8 @@ export type JournalRecordInput =
  * (spilled blobs are written before the record that references them).
  */
 export interface MessageJournal {
+  /** Actual resolved journal location; absent while identity is unknown or journaling is disabled. */
+  readonly path?: string;
   /** Folded array length the journal currently represents (in-memory, not re-read). */
   readonly length: number;
   append(index: number, message: JournalMessage): void;

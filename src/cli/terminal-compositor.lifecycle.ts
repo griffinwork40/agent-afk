@@ -47,6 +47,15 @@ export { endTurnFlush } from './terminal-compositor.lifecycle.teardown.js';
  * in terminal-compositor.ts; this interface is a structural mirror (same
  * minimal style as RenderHost). `repaint`/`resetState` are class methods the
  * functions call back into.
+ *
+ * @internal — this is a host-protocol interface, not a public API. Fields that
+ * were previously `readonly` (committedBand, committedBandMeta,
+ * committedBandTopRow, committedBandBottomRow, committedBandPaintedRows,
+ * committedBandArchivedPrefix, bandGeometryStale) are intentionally mutable
+ * here because the lifecycle functions (`arm`, `disarm`,
+ * `dropScrollingArchivedRows`, `flushPendingCommittedBand`) own them during
+ * teardown. They remain `readonly` on the class declaration in
+ * terminal-compositor.ts because external code must not mutate them directly.
  */
 export interface LifecycleHost {
   repaint(): void;
@@ -96,6 +105,26 @@ export interface LifecycleHost {
   // SIGWINCH subscriber to snapshot the pre-resize footprint for erase.
   lastKnownRows: number;
   pendingResizeErase: { top: number; bottom: number } | null;
+  /**
+   * Set to `true` while a CPR (Cursor Position Report) reply is in-flight
+   * after a tmux EXPAND SIGWINCH. Frame.repaint() checks this flag and skips
+   * the physical write to prevent a stale-row repaint from racing the
+   * delta correction applied once the reply arrives.
+   */
+  cprPending: boolean;
+  /**
+   * Burst-tracking context for the "measure until quiescent" CPR algorithm.
+   * Created when the first CPR of a burst is requested; cleared once the burst
+   * resolves (quiescent reply, re-query cap, or timeout). See CprHost.cprBurst.
+   */
+  cprBurst: {
+    dirty: boolean;
+    originalExpectedRow: number;
+    currentRows: number;
+    growTotal: number;
+    shrinkTotal: number;
+    requeryCt: number;
+  } | null;
   committedBand: string[];
   // #540: per-physical-row logical provenance, index-aligned 1:1 with
   // committedBand. Read by flushPendingCommittedBand to archive the pending
@@ -564,6 +593,16 @@ export function disarm(self: LifecycleHost): void {
   // screen is plain terminal content that later output scrolls into history,
   // so re-shown archived-prefix rows (content-hug; already in scrollback) are
   // dropped by repaint here, BEFORE the flush and the frame clear.
+  // Note: the repaint escapes written by dropScrollingArchivedRows shift
+  // surviving band rows up to avoid a second scrollback copy, but the
+  // immediately-following logUpdate.clear() erases the frame rows that may
+  // overlap the band's new position. That is harmless: the repaint's purpose
+  // is to update on-screen positions so a subsequent scroll or flush writes
+  // real content (not already-archived rows) into history, and logUpdate.clear()
+  // only erases from the previously-rendered frame top — both operations
+  // target different areas unless the band extended into the frame, which
+  // cannot happen under the compositor's layout constraints. A dedicated
+  // `repaint: false` path at disarm is not worth the API complexity today.
   dropScrollingArchivedRows(self, Number.POSITIVE_INFINITY);
   flushPendingCommittedBand(self);
 
