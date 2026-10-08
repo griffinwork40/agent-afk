@@ -612,8 +612,8 @@ export class ComposeExecutor {
           // forwarded when present and not "none" — "none" is the default and
           // forwarding it would be a no-op at the cost of a property on every node.
           ...(n.isolation === 'worktree' ? { isolation: 'worktree' as const } : {}),
-          // Workspace-enabled provider (see compose-node-provider.ts).
-          ...resolveComposeNodeProvider(nodeModel, this.ctx.workspaceStore, this.ctx.openaiBaseUrl),
+          // Node provider carries workspace + named-agent gates (compose-node-provider.ts).
+          ...resolveComposeNodeProvider(nodeModel, this.ctx.workspaceStore, this.ctx.openaiBaseUrl, resolvedAgent),
           // Per-node resolved attachments; depth+1/maxDepth for preamble (#2266).
           ...(resolvedAttachments !== undefined ? { resolvedAttachments } : {}), depth: depth + 1, maxDepth,
         };

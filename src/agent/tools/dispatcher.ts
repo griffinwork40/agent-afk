@@ -58,6 +58,7 @@ import { isYieldableTool, type UserAttention } from './user-yield.js';
 import { isDetachableTool, type DetachableToolRegistry } from './detach-bash.js';
 import type { ProcessJobRegistry } from '../shell-jobs/process-jobs.js';
 import { filterBackgroundToolDefs } from './process-job-tools.js';
+import { isPeerToolBlocked } from './peer-tool-gate.js';
 
 // Re-exported for backward compatibility: external importers (dispatcher.test.ts,
 // schema-classification.test.ts) historically import this from './dispatcher.js'.
@@ -649,11 +650,11 @@ export class SessionToolDispatcher implements ToolDispatcher {
       this.subagentExecutor?.supportsBackgroundJobs?.() === true,
       this.processJobs !== undefined,
     );
-    // Peer-messaging tools are top-level only: subagents (parentSessionId set)
-    // cannot use list_sessions or send_to_session.
-    const available = this.parentSessionId === undefined
-      ? withBg
-      : withBg.filter((s) => s.name !== 'list_sessions' && s.name !== 'send_to_session');
+    // Peer-messaging tools are top-level only. Same predicate as the
+    // execution-time gate in runPreDispatchGates (peer-tool-gate.ts), so the
+    // advertised schema and the enforced surface cannot drift.
+    const signals = { parentSessionId: this.parentSessionId, subagentId: this.subagentId };
+    const available = withBg.filter((s) => !isPeerToolBlocked(s.name, signals));
     const allowed = this.permissions?.allowedTools;
     if (!allowed) return available;
     const set = new Set(allowed);

@@ -11,7 +11,7 @@
 import { env } from '../../config/env.js';
 import type { IAgentSession } from '../types.js';
 import type { ModelProvider } from '../provider.js';
-import type { AgentModelInput } from '../types.js';
+import type { AgentModelInput, CanUseTool } from '../types.js';
 import type { Surface } from '../awareness/types.js';
 import type { ReadScopeInputs } from '../subagent-read-scope.js';
 import type { JournalParent } from '../subagent/fork-types.js';
@@ -378,33 +378,40 @@ export function buildReadOnlyReconProvider(
  * @param openaiBaseUrl   Local-shim endpoint (e.g. mlx_lm / vLLM). Forwarded as
  *                        `baseURL` when the node routes to `openai-compatible`.
  * @param readOnlyBash    When true, the node's dispatcher blocks mutating bash
- *                        commands. Forwarded for read-only skill leaf nodes.
+ *                        commands (named agents declaring `bashReadOnly`, e.g.
+ *                        git-investigator).
+ * @param canUseTool      Named-agent allowlist callback for this node.
+ *
+ * Invariant: `canUseTool` / `readOnlyBash` MUST arrive here, at construction.
+ * A preset `AgentConfig.provider` is queried directly (provider-lifecycle.ts),
+ * and both providers read these only from constructor options — a callback
+ * left on the fork config alone never reaches the dispatcher and fails open.
+ * `workspaceStore` is undefined on the AFK_WORKSPACE_DISABLED fallback.
  */
 export function buildComposeNodeProvider(
   model: AgentModelInput | undefined,
-  workspaceStore: WorkspaceStore,
+  workspaceStore: WorkspaceStore | undefined,
   openaiBaseUrl?: string,
   readOnlyBash?: boolean,
+  canUseTool?: CanUseTool,
 ): ModelProvider {
   // Materialize the allowlist per call so runtime array mutations don't bleed
   // across sibling nodes (mirrors buildPhaseRestrictedProvider / buildReadOnlyReconProvider).
-  const permissions = { allowedTools: [...CHILD_ALLOWED_TOOLS] };
+  const common = {
+    permissions: { allowedTools: [...CHILD_ALLOWED_TOOLS] },
+    readOnlyMemory: true,
+    ...(workspaceStore !== undefined ? { workspaceStore } : {}),
+    ...(readOnlyBash === true ? { readOnlyBash: true } : {}),
+    ...(canUseTool !== undefined ? { canUseTool } : {}),
+  };
   const route = providerForModel(typeof model === 'string' ? model : undefined);
   if (route === 'openai-compatible') {
     return new OpenAICompatibleProvider({
-      permissions,
-      workspaceStore,
-      readOnlyMemory: true,
+      ...common,
       ...(openaiBaseUrl !== undefined ? { baseURL: openaiBaseUrl } : {}),
-      ...(readOnlyBash === true ? { readOnlyBash: true } : {}),
     });
   }
-  return new AnthropicDirectProvider({
-    permissions,
-    workspaceStore,
-    readOnlyMemory: true,
-    ...(readOnlyBash === true ? { readOnlyBash: true } : {}),
-  });
+  return new AnthropicDirectProvider(common);
 }
 
 /**
