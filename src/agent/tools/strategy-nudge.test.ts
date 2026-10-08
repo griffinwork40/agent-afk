@@ -489,13 +489,73 @@ describe('findErrorLine: boilerplate that must not become the signature', () => 
     // Build output where the Traceback header is in the first 400 lines, but the
     // exception line sits beyond line 400 so split() never reaches it.
     // findErrorLine uses split('\n', MAX_LINES_SCANNED) which keeps at most 400
-    // elements, so the exception line at position 401 is safely degraded to null.
+    // elements (indices 0-399), so the exception line at index 400 is safely
+    // degraded to null.
+    //
+    // Explicit assertion: the Traceback header MUST be inside the 400-element
+    // window so the test exercises the "header visible, exception cut off"
+    // scenario; if filler-length changes push the header past index 399, the test
+    // would pass for the wrong reason (nothing was ever found).
+    //
+    // Layout (0-based indices into the split array):
+    //   0..397  filler (398 lines)
+    //   398     Traceback header        ← inside the 400-element window
+    //   399     frame line              ← last element returned by split(…, 400)
+    //   400     RuntimeError            ← beyond the limit, never seen
     const filler = Array.from({ length: 398 }, (_, i) => `output line ${i}`).join('\n');
     const content =
-      filler +
-      '\nTraceback (most recent call last):\n' + // line 399
-      '  File "/repo/app.py", line 1, in main\n' + // line 400 — split limit hit here
-      'RuntimeError: never reached\n'; // line 401 — beyond the scan window
+      filler + '\n' +
+      'Traceback (most recent call last):\n' + // index 398 — inside the window
+      '  File "/repo/app.py", line 1, in main\n' + // index 399 — last visible
+      'RuntimeError: never reached\n'; // index 400 — beyond the scan window
+    // Sanity: the Traceback header is within the first 400 elements.
+    const scanned = content.split('\n', 400);
+    expect(scanned.some((l) => /^traceback \(most recent call last\)/i.test(l.trim()))).toBe(true);
+    // The exception line itself must be absent from the scanned window.
+    expect(scanned.some((l) => /^RuntimeError/.test(l.trim()))).toBe(false);
     expect(findErrorLine(content)).toBeNull();
+  });
+
+  // Issue #3281: collapsed-frame marker preceding RecursionError must be accepted
+  it('extracts RecursionError from a real recursive traceback (collapsed-frame marker)', () => {
+    // Python condenses deep stacks to:
+    //   File "x.py", line N, in f
+    //     return f()
+    //   [Previous line repeated 996 more times]
+    // RecursionError: maximum recursion depth exceeded
+    // The marker has 2-space indent; without the new PY_TRACEBACK_PREDECESSOR
+    // branch it did not match and lastPythonException returned null.
+    const content =
+      'Traceback (most recent call last):\n' +
+      '  File "x.py", line 2, in f\n' +
+      '    return f()\n' +
+      '  [Previous line repeated 996 more times]\n' +
+      'RecursionError: maximum recursion depth exceeded';
+    expect(findErrorLine(content)).toBe('RecursionError: maximum recursion depth exceeded');
+  });
+
+  it('fires the nudge for a recurring RecursionError from a recursive traceback', () => {
+    const recursionTraceback = (filename: string) =>
+      'Traceback (most recent call last):\n' +
+      `  File "${filename}", line 2, in f\n` +
+      '    return f()\n' +
+      '  [Previous line repeated 996 more times]\n' +
+      'RecursionError: maximum recursion depth exceeded';
+    const n = new StrategyNudger();
+    expect(n.observe(call('bash', 'python a.py'), bashFail(recursionTraceback('a.py')))).toBeNull();
+    const v = n.observe(call('bash', 'python b.py'), bashFail(recursionTraceback('b.py')));
+    expect(v).not.toBeNull();
+    expect(v!.line).toBe('RecursionError: maximum recursion depth exceeded');
+  });
+
+  it('handles singular "time" variant of the collapsed-frame marker', () => {
+    // Python can print "repeated 1 more time" (singular) — the regex must match both.
+    const content =
+      'Traceback (most recent call last):\n' +
+      '  File "x.py", line 2, in f\n' +
+      '    return f()\n' +
+      '  [Previous line repeated 1 more time]\n' +
+      'RecursionError: maximum recursion depth exceeded';
+    expect(findErrorLine(content)).toBe('RecursionError: maximum recursion depth exceeded');
   });
 });

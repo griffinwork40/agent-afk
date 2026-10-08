@@ -146,13 +146,15 @@ const PY_EXCEPTION_LINE = /^[A-Za-z_][\w.]*(?:Error|Exception|Exit|Interrupt|War
  *   - a caret line (e.g. `    ^^^^`) printed by Python 3.11+ under the source
  *   - `Traceback (most recent call last):` (minimal one-frame traceback)
  *   - chained-exception connector lines printed between tracebacks
+ *   - `  [Previous line repeated N more times]` (Python's collapsed-frame
+ *     marker for recursive tracebacks, e.g. RecursionError)
  *
  * This guard prevents `lastPythonException` from matching an unrelated
  * exception-shaped identifier in mixed output (e.g. log lines, test names)
  * that happens to appear after the real traceback.
  */
 const PY_TRACEBACK_PREDECESSOR =
-  /^(?:\s+File\s+"[^"]*"|    |\s*\^+\s*$|Traceback\s*\(most recent call last\)|During handling of the above exception|The above exception was the direct cause)/i;
+  /^(?:\s+File\s+"[^"]*"|    |\s*\^+\s*$|Traceback\s*\(most recent call last\)|During handling of the above exception|The above exception was the direct cause|\s*\[Previous line repeated \d+ more times?\])/i;
 
 /**
  * When `lines` hold a Python traceback, the LAST exception line in them.
