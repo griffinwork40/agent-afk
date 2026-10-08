@@ -83,7 +83,7 @@ export async function downloadTelegramFile(
     // redirect error from redirect:'error'. SI-6: strip the URL entirely.
     const raw = err instanceof Error ? err.message : String(err);
     // Replace any path-like token reference in thrown error text just in case.
-    const safeMessage = raw.replace(/\/bot[^/\s]+\//g, '/bot[REDACTED]/');
+    const safeMessage = raw.replace(/\/bot[^/\s]+(?:\/|$)/g, '/bot[REDACTED]/');
     return { status: 'network-error', safeMessage };
   }
 
@@ -91,7 +91,15 @@ export async function downloadTelegramFile(
     return { status: 'fetch-failed', httpStatus: response.status };
   }
 
-  const readResult = await readResponseBytesWithLimit(response, maxBytes);
+  let readResult;
+  try {
+    readResult = await readResponseBytesWithLimit(response, maxBytes);
+  } catch (err) {
+    // Mid-stream body read failure (ECONNRESET, abort after headers).
+    const raw = err instanceof Error ? err.message : String(err);
+    const safeMessage = raw.replace(/\/bot[^/\s]+(?:\/|$)/g, '/bot[REDACTED]/');
+    return { status: 'network-error', safeMessage };
+  }
   // readResult discriminant matches DownloadResult directly for these two cases.
   if (readResult.status === 'too-large' || readResult.status === 'missing-body') {
     return readResult;

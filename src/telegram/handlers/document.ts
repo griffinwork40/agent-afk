@@ -109,7 +109,14 @@ export async function handleDocumentMessage(
   }
 
   // Download via the shared bounded pipeline (SSRF guard, timeout, size cap).
-  const fileUrlRaw = await ctx.telegram.getFileLink(document.file_id);
+  let fileUrlRaw: URL | string;
+  try {
+    fileUrlRaw = await ctx.telegram.getFileLink(document.file_id);
+  } catch (err) {
+    log('Document handling: getFileLink failed:', err instanceof Error ? err.message : String(err));
+    await ctx.reply("❌ Couldn't download the document. Please try resending.");
+    return null;
+  }
   const dlResult = await downloadTelegramFile(fileUrlRaw, { maxBytes: MAX_DOCUMENT_BYTES });
 
   switch (dlResult.status) {

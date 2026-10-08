@@ -120,7 +120,14 @@ export async function fetchAndClassifyPhoto(
 ): Promise<FetchPhotoResult> {
   const MAX_PHOTO_BYTES = 5 * 1024 * 1024; // 5 MB
 
-  const fileUrlRaw = await ctx.telegram.getFileLink(fileId);
+  let fileUrlRaw: URL | string;
+  try {
+    fileUrlRaw = await ctx.telegram.getFileLink(fileId);
+  } catch (err) {
+    log(`Photo handling: getFileLink failed for chat ${chatId}:`, err instanceof Error ? err.message : String(err));
+    await ctx.reply('❌ Couldn\'t download the image. Please try resending.');
+    return { ok: false };
+  }
   const dlResult = await downloadTelegramFile(fileUrlRaw, { maxBytes: MAX_PHOTO_BYTES });
 
   switch (dlResult.status) {
@@ -159,9 +166,9 @@ export async function fetchAndClassifyPhoto(
   // H1: derive MIME type from the response Content-Type header instead of
   // hardcoding image/jpeg -- Telegram can serve PNG, GIF, and WebP as well.
   // Note: we no longer have direct access to the response object here, so we
-  // derive the MIME type from magic bytes (sniffMimeType), which is the more
-  // reliable path anyway (Content-Type sniffing was the fallback in the old
-  // code when Content-Type was absent or unrecognised).
+  // fall back to magic-bytes sniffing (sniffMimeType). Pre-refactor, the
+  // primary path was Content-Type with magic-bytes as fallback; since the
+  // response is no longer available here, magic bytes are the sole source.
   const sniffed = sniffMimeType(bytes);
   if (sniffed !== null) {
     return { ok: true, bytes, media_type: sniffed };

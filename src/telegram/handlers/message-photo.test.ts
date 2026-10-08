@@ -397,6 +397,38 @@ describe('handlePhoto: SSRF hostname mismatch', () => {
   });
 });
 
+describe('handlePhoto: getFileLink rejection', () => {
+  it('replies with error when getFileLink throws (e.g. Telegram 429)', async () => {
+    const session = makeSession('idle');
+    const handler = makeHandler(session);
+    const { ctx, replies } = makePhotoCtx();
+    (ctx.telegram.getFileLink as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('429: Too Many Requests'),
+    );
+
+    await handler.handlePhoto(ctx);
+
+    expect(mockStreamResponse).not.toHaveBeenCalled();
+    // The outer catch in handlePhotoImpl catches getFileLink errors
+    expect(replies.some(r => r.includes("Couldn't") || r.includes('error'))).toBe(true);
+  });
+
+  it('does not call fetch when getFileLink throws', async () => {
+    const session = makeSession('idle');
+    const handler = makeHandler(session);
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { ctx } = makePhotoCtx();
+    (ctx.telegram.getFileLink as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('400: Bad Request'),
+    );
+
+    await handler.handlePhoto(ctx);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe('drainQueue with photo item', () => {
   it('replays queued photo content blocks via streamResponse after in-flight turn', async () => {
     // Strategy: make the session idle from the start. Send a text message

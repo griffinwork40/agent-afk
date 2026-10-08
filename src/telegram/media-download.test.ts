@@ -256,3 +256,63 @@ describe('downloadTelegramFile: success', () => {
     expect((opts as RequestInit).signal).toBeDefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Mid-stream body read failure
+// ---------------------------------------------------------------------------
+
+describe('downloadTelegramFile: mid-stream body read failure', () => {
+  it('returns network-error when the response body stream throws (ECONNRESET)', async () => {
+    // Simulate a response whose body reader throws mid-stream
+    const errorStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('partial'));
+      },
+      pull() {
+        throw new Error('read ECONNRESET');
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(errorStream)));
+
+    const result = await downloadTelegramFile(VALID_URL, { maxBytes: 5_000_000 });
+    expect(result.status).toBe('network-error');
+    if (result.status === 'network-error') {
+      expect(result.safeMessage).toContain('ECONNRESET');
+      expect(result.safeMessage).not.toContain(TOKEN);
+    }
+  });
+
+  it('redacts token from mid-stream error messages', async () => {
+    const errorStream = new ReadableStream<Uint8Array>({
+      pull() {
+        throw new Error(`stream error for /bot${TOKEN}/file`);
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(errorStream)));
+
+    const result = await downloadTelegramFile(VALID_URL, { maxBytes: 5_000_000 });
+    expect(result.status).toBe('network-error');
+    if (result.status === 'network-error') {
+      expect(result.safeMessage).not.toContain(TOKEN);
+      expect(result.safeMessage).toContain('[REDACTED]');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Token redaction edge case: truncated URL without trailing slash
+// ---------------------------------------------------------------------------
+
+describe('downloadTelegramFile: token redaction in truncated URLs', () => {
+  it('redacts token even when the URL has no trailing slash', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      // Error message with token at end-of-string (no trailing /)
+      throw new Error(`connect failed for /bot${TOKEN}`);
+    }));
+    const result = await downloadTelegramFile(VALID_URL, { maxBytes: 5_000_000 });
+    expect(result.status).toBe('network-error');
+    if (result.status === 'network-error') {
+      expect(result.safeMessage).not.toContain(TOKEN);
+    }
+  });
+});
