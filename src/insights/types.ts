@@ -7,6 +7,10 @@
  *   - No `telegramChatId` field anywhere in output aggregates.
  *   - No `responseExcerpt` field anywhere in output aggregates.
  *   - No prompt content, no file paths in Recommendation fields.
+ *   - EXCEPTION: `preexistingDefects.topClusters[].locus` contains file paths
+ *     (and `.repo` contains repo root paths). These are intentional — the
+ *     defect report is a developer-local report and path visibility is the
+ *     point. Do not forward these fields to remote telemetry or public logs.
  *
  * @module insights/types
  */

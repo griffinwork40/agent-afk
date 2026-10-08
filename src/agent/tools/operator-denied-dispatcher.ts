@@ -4,11 +4,19 @@ import { SessionToolDispatcher } from './dispatcher.js';
 import type { ToolPermissionConfig } from './permissions.js';
 import type { AnthropicToolDef, ToolCall, ToolDispatcher, ToolResult } from '../providers/anthropic-direct/types.js';
 
+/** Symbol brand used to identify operator-denied wrapper dispatchers.
+ * Avoids false-positive duck-type matches from coincidental `operatorDenied`
+ * properties on unrelated dispatchers. */
+const OPERATOR_DENIED_BRAND = Symbol('operatorDenied');
+
 /** A consumer-owned dispatcher wrapped so operator denies still apply. */
-type GuardedDispatcher = ToolDispatcher & { readonly operatorDenied: readonly string[] };
+type GuardedDispatcher = ToolDispatcher & {
+  readonly [OPERATOR_DENIED_BRAND]: true;
+  readonly operatorDenied: readonly string[];
+};
 
 function isGuarded(d: ToolDispatcher): d is GuardedDispatcher {
-  return Array.isArray((d as Partial<GuardedDispatcher>).operatorDenied);
+  return (d as Partial<GuardedDispatcher>)[OPERATOR_DENIED_BRAND] === true;
 }
 
 /**
@@ -22,10 +30,20 @@ export function withOperatorDeniedDispatcher(
   permissions: ToolPermissionConfig | undefined,
 ): ToolDispatcher | undefined {
   if (!inner || !permissions?.deniedTools?.length) return inner;
-  // Idempotent: if the inner is already guarded with the same deny set, return it unchanged.
-  if (isGuarded(inner)) return inner;
   const denied = permissions.deniedTools;
+  // Idempotent: if the inner is already guarded with the SAME deny set, return
+  // it unchanged to avoid double-wrapping.  Compare sets explicitly so a second
+  // call with a different deny list produces a new wrapper rather than silently
+  // retaining the original (which could under-deny when the set expands).
+  if (
+    isGuarded(inner) &&
+    inner.operatorDenied.length === denied.length &&
+    inner.operatorDenied.every((name, i) => name === denied[i])
+  ) {
+    return inner;
+  }
   const wrapped: GuardedDispatcher = {
+    [OPERATOR_DENIED_BRAND]: true,
     operatorDenied: denied,
     async execute(call: ToolCall): Promise<ToolResult> {
       if (isToolDenied(call.name, denied)) return { isError: true, content: operatorDeniedReason(call.name) };
