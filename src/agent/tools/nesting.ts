@@ -17,6 +17,7 @@ import type { ReadScopeInputs } from '../subagent-read-scope.js';
 import type { JournalParent } from '../subagent/fork-types.js';
 import { AnthropicDirectProvider } from '../providers/anthropic-direct/index.js';
 import { OpenAICompatibleProvider } from '../providers/openai-compatible/index.js';
+import { XaiProvider } from '../providers/xai/index.js';
 import type { WorkspaceStore } from '../workspace/workspace-store.js';
 import { WORKSPACE_CHILD_TOOL_NAMES } from '../workspace/index.js';
 import { providerForModel } from '../providers/index.js';
@@ -372,8 +373,9 @@ export function buildReadOnlyReconProvider(
  * already absent from that set, so no additional stripping is needed.
  *
  * @param model      Effective model for this node. Drives provider routing so
- *                   OpenAI-routed nodes get `OpenAICompatibleProvider` and
- *                   Anthropic-routed nodes get `AnthropicDirectProvider`.
+ *                   OpenAI-routed nodes get `OpenAICompatibleProvider`,
+ *                   Grok-routed nodes get `XaiProvider`, and Anthropic-routed
+ *                   nodes get `AnthropicDirectProvider`.
  * @param workspaceStore  Parent session's workspace store, shared with every node.
  * @param openaiBaseUrl   Local-shim endpoint (e.g. mlx_lm / vLLM). Forwarded as
  *                        `baseURL` when the node routes to `openai-compatible`.
@@ -387,6 +389,15 @@ export function buildReadOnlyReconProvider(
  * and both providers read these only from constructor options — a callback
  * left on the fork config alone never reaches the dispatcher and fails open.
  * `workspaceStore` is undefined on the AFK_WORKSPACE_DISABLED fallback.
+ *
+ * Routing: mirrors `resolveProvider()` in providers/index.ts — xAI/Grok
+ * models (`grok-*`) route to `XaiProvider` (which composes
+ * `OpenAICompatibleProvider` internally), not to `AnthropicDirectProvider`.
+ * Without this branch a node declared with `model: 'grok-3'` would silently
+ * POST to api.anthropic.com and receive a 400/404, bypassing auth and tool
+ * restrictions that only land on the correctly-routed provider constructor.
+ * `subagentExecutor` / `skillExecutor` are intentionally absent — compose
+ * nodes are leaves and must not spawn nested DAGs or invoke skills.
  */
 export function buildComposeNodeProvider(
   model: AgentModelInput | undefined,
@@ -410,6 +421,14 @@ export function buildComposeNodeProvider(
       ...common,
       ...(openaiBaseUrl !== undefined ? { baseURL: openaiBaseUrl } : {}),
     });
+  }
+  // xAI/Grok models route to XaiProvider, which wraps OpenAICompatibleProvider
+  // for the Chat Completions wire path while adding xAI-specific auth logic.
+  // Without this branch, grok-* nodes silently fall through to AnthropicDirectProvider,
+  // misrouting requests to api.anthropic.com and bypassing restrictions.
+  // No subagentExecutor / skillExecutor — compose nodes are leaves.
+  if (route === 'xai' || route === 'xai-oauth') {
+    return new XaiProvider(common);
   }
   return new AnthropicDirectProvider(common);
 }

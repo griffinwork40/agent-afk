@@ -55,6 +55,14 @@ const agentRegistry = builtinAgents();
 
 let tmp: string;
 let origAfkHome: string | undefined;
+/**
+ * Tracks all WorkspaceStore instances created by the current test so afterEach
+ * can close them before rmSync. Required on Windows: better-sqlite3 holds an
+ * open file handle on the WAL-mode database, and rmSync throws EBUSY while
+ * the handle remains open. Closing explicitly avoids this even when the test
+ * itself throws (afterEach always runs).
+ */
+const openStores: WorkspaceStore[] = [];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -65,6 +73,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Close all WorkspaceStore handles opened during this test before removing
+  // the temp directory. On Windows, the SQLite WAL-mode handle stays open
+  // until explicitly closed, causing rmSync to throw EBUSY.
+  for (const store of openStores.splice(0)) {
+    try { store.close(); } catch { /* ignore: store may already be closed */ }
+  }
   if (origAfkHome === undefined) delete process.env['AFK_HOME'];
   else process.env['AFK_HOME'] = origAfkHome;
   rmSync(tmp, { recursive: true, force: true });
@@ -87,7 +101,9 @@ async function nodeProvider(
   node: Record<string, unknown>,
   workspace: 'store' | 'disabled' = 'store',
 ): Promise<ModelProvider | undefined> {
-  const executor = new ComposeExecutor(makeContext(workspace === 'store' ? new WorkspaceStore() : undefined));
+  const store = workspace === 'store' ? new WorkspaceStore() : undefined;
+  if (store !== undefined) openStores.push(store);
+  const executor = new ComposeExecutor(makeContext(store));
   await executor.execute({
     id: 'compose-call',
     name: 'compose',
@@ -120,6 +136,14 @@ async function run(provider: ModelProvider, name: string, input: Record<string, 
   return childDispatcher(provider).execute(call(name, input));
 }
 
+// xai is intentionally omitted from this provider-parametrised matrix.
+// XaiProvider wraps OpenAICompatibleProvider for the Chat Completions wire path
+// but does not expose buildDispatcher directly (it delegates to an inner
+// OpenAICompatibleProvider). Restriction enforcement is therefore already
+// exercised by the openai-compatible row above. A separate focused test below
+// proves that buildComposeNodeProvider routes grok-* models to XaiProvider
+// (not AnthropicDirectProvider) — the correctness bug identified in PR #3270
+// review discussion r4213677334.
 const MODELS = [
   ['anthropic-direct', 'sonnet'],
   ['openai-compatible', 'gpt-4o'],
@@ -186,5 +210,111 @@ describe.each(MODELS)('compose node enforcement — %s', (providerName, model) =
     const send = await run(provider!, 'send_to_session', { to: 'someone', message: 'hi' });
     expect(send.isError).toBe(true);
     expect(String(send.content)).toContain('top-level');
+  });
+});
+
+/**
+ * Regression for PR #3270 reviewer finding (discussion r4213677334):
+ * `buildComposeNodeProvider` previously branched only on `openai-compatible`
+ * and fell through to `AnthropicDirectProvider` for all other routes —
+ * including `xai`. A Grok node (`grok-3`, `grok-2`, …) would silently POST
+ * to api.anthropic.com, bypassing xAI auth and receiving a 404/400.
+ *
+ * This suite proves `grok-*` models route to `XaiProvider` (name === 'xai'),
+ * that named-agent restrictions (canUseTool, readOnlyBash) are threaded into
+ * XaiProvider's inner OpenAICompatibleProvider, and that the inner dispatcher
+ * actually enforces those restrictions at execution time.
+ *
+ * XaiProvider does not expose `buildDispatcher` directly — it delegates to
+ * `this.inner` (an `OpenAICompatibleProvider`). `inner` and `buildDispatcher`
+ * are both private but runtime-accessible via an `any` cast, which is the same
+ * technique the `childDispatcher` helper above already uses.
+ */
+
+/**
+ * Build the per-query dispatcher through XaiProvider's private inner
+ * OpenAICompatibleProvider so restriction enforcement is exercised end-to-end.
+ */
+function xaiChildDispatcher(provider: ModelProvider): SessionToolDispatcher {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const inner = (provider as any).inner;
+  if (inner === undefined) throw new Error('XaiProvider.inner is undefined — structure has changed');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (inner as any).buildDispatcher('default', {
+    cwd: tmp,
+    readRoots: [tmp],
+    writeRoots: [tmp],
+    sessionId: 'parent-session',
+    parentSessionId: 'parent-session',
+    subagentId: 'compose-a-1',
+  }) as SessionToolDispatcher;
+}
+
+async function runXai(provider: ModelProvider, name: string, input: Record<string, unknown>): Promise<ToolResult> {
+  return xaiChildDispatcher(provider).execute(call(name, input));
+}
+
+describe('compose node enforcement — xai routing regression (PR #3270 r4213677334)', () => {
+  it('grok-* model routes to XaiProvider, not AnthropicDirectProvider', async () => {
+    const provider = await nodeProvider({ model: 'grok-3' });
+    expect(provider?.name, 'grok-3 must route to XaiProvider (name=xai), not anthropic-direct').toBe(
+      'xai',
+    );
+  });
+
+  it('grok-2 also routes to XaiProvider (not only grok-3)', async () => {
+    const provider = await nodeProvider({ model: 'grok-2' });
+    expect(provider?.name).toBe('xai');
+  });
+
+  it('grok-* research-agent node: write_file is rejected at execution time (canUseTool wired into inner)', async () => {
+    const provider = await nodeProvider({ agent_type: 'research-agent', model: 'grok-3' });
+    expect(provider?.name).toBe('xai');
+    const target = join(tmp, 'xai-research-wrote.txt');
+    const r = await runXai(provider!, 'write_file', { file_path: target, content: 'x' });
+    expect(r.isError).toBe(true);
+    expect(String(r.content)).toContain('write_file');
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it('grok-* git-investigator node: mutating bash and write_file are both rejected (readOnlyBash + canUseTool wired into inner)', async () => {
+    const provider = await nodeProvider({ agent_type: 'git-investigator', model: 'grok-3' });
+    expect(provider?.name).toBe('xai');
+
+    const touched = join(tmp, 'xai-gi-touched');
+    const bash = await runXai(provider!, 'bash', { command: `touch ${touched}` });
+    expect(bash.isError).toBe(true);
+    expect(String(bash.content)).toContain('read-only');
+    expect(existsSync(touched)).toBe(false);
+
+    const target = join(tmp, 'xai-gi-wrote.txt');
+    const w = await runXai(provider!, 'write_file', { file_path: target, content: 'x' });
+    expect(w.isError).toBe(true);
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it('grok-* unnamed node: write_file succeeds (no spurious restrictions on the Grok path)', async () => {
+    const provider = await nodeProvider({ model: 'grok-3' });
+    expect(provider?.name).toBe('xai');
+    const target = join(tmp, 'xai-unnamed-wrote.txt');
+    const r = await runXai(provider!, 'write_file', { file_path: target, content: 'x' });
+    expect(r.isError).toBeFalsy();
+    expect(existsSync(target)).toBe(true);
+  });
+
+  it('AFK_WORKSPACE_DISABLED fallback (Grok path): git-investigator still gets a restricted inner dispatcher', async () => {
+    const provider = await nodeProvider({ agent_type: 'git-investigator', model: 'grok-3' }, 'disabled');
+    expect(provider, 'restricted named Grok node must be constructed even without WorkspaceStore').toBeDefined();
+    expect(provider!.name).toBe('xai');
+
+    const touched = join(tmp, 'xai-fallback-touched');
+    const bash = await runXai(provider!, 'bash', { command: `touch ${touched}` });
+    expect(bash.isError).toBe(true);
+    expect(existsSync(touched)).toBe(false);
+
+    const target = join(tmp, 'xai-fallback-wrote.txt');
+    const w = await runXai(provider!, 'write_file', { file_path: target, content: 'x' });
+    expect(w.isError).toBe(true);
+    expect(existsSync(target)).toBe(false);
   });
 });
