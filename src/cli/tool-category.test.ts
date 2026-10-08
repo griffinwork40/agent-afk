@@ -35,6 +35,7 @@ const ALL_CATEGORIES: ToolCategory[] = [
   'write',
   'shell',
   'subagent',
+  'peer',
   'skill',
   'dag',
   'mcp',
@@ -110,6 +111,9 @@ describe('categorizeTool', () => {
     ['cancel_schedule', 'schedule'],
     // editor settings tool — mutates settings.json on disk.
     ['terminal_font_size', 'write'],
+    // peer-messaging tools — distinct from subagent (child-agent dispatch).
+    ['list_sessions', 'peer'],
+    ['send_to_session', 'peer'],
   ] as Array<[string, ToolCategory]>)('categorizes %s as %s', (name, expected) => {
     expect(categorizeTool(name)).toBe(expected);
   });

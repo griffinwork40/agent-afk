@@ -32,8 +32,13 @@ import type { ProcessJobRegistry, ProcessJobSnapshot } from '../../../agent/shel
 const MAX_PENDING = 25;
 
 /** Attribute escaping: the command-derived log path must not break framing. */
-function escapeXmlAttr(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+export function escapeXmlAttr(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
 }
 
 /** Build the metadata-only `<background-process-result>` envelope. */

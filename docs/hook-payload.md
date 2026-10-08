@@ -9,6 +9,38 @@ every field in that object, which events carry which fields, and the contract fo
 
 ---
 
+## Per-surface event support
+
+Not every event fires on every AFK surface. The table below is the authoritative
+reference (#2817):
+
+| Event | REPL | Telegram | `afk chat` | Daemon |
+|---|---|---|---|---|
+| `SessionStart` | ✓ | ✓ | ✓ | ✓ |
+| `SessionEnd` | ✓ | ✓ | ✓ | ✓ |
+| `SubagentStart` | ✓ | ✓ | ✓ | ✓ |
+| `SubagentStop` | ✓ | ✓ | ✓ | ✓ |
+| `PreToolUse` | ✓ | ✓ | ✓ | ✓ |
+| `PostToolUse` | ✓ | ✓ | ✓ | ✓ |
+| `PostToolUseFailure` | ✓ | ✓ | ✓ | ✓ |
+| `PreCompact` | ✓ | ✓ | – | – |
+| `Stop` | ✓ | ✓ | ✓¹ | ✓² |
+| `UserPromptSubmit` | ✓ | ✓ | – | – |
+
+¹ `Stop` fires on `afk chat`, but `injectContext` is dropped — one-shot surfaces
+  have no next turn to prepend it to.
+
+² `Stop` fires in the daemon, but `injectContext` is dropped for the same reason.
+
+**`UserPromptSubmit` on `afk chat` / daemon**: these surfaces are headless or
+one-shot (no interactive human on the other end per turn), so there is no natural
+"prompt submission" event — the content is a scheduled task body or a CLI argument.
+Wiring `UserPromptSubmit` there would require surfacing a block as an error exit,
+with no recourse for the operator. Kept scoped to human-facing interactive surfaces
+for now; file a feature request if your use case needs it.
+
+---
+
 ## Always-present fields
 
 | Field | Type | Description |
@@ -269,7 +301,7 @@ A hook command may write a JSON object to stdout. Recognised fields:
 | `decision: "approve"` | Explicitly approve (skips remaining handlers in the chain). |
 | `continue: false` | Alias for `decision: "block"`. |
 | `reason: "…"` | Human-readable explanation emitted when blocking. |
-| `hookSpecificOutput.additionalContext` | For `Stop` hooks: a string prepended to the next turn's prompt. |
+| `hookSpecificOutput.additionalContext` | For `Stop` hooks: a string prepended to the next turn's prompt. For `PreToolUse`: appended to the final tool result even when the hook allows execution, including later gate denials and handler errors. Non-blocking notes use a `[PreToolUse context]` banner, survive tool-output capping, and are counted in a separate delivery `hook_decision` event only when attached to a returned result. |
 | `hookSpecificOutput.updatedInput` | **`PreToolUse` only.** A plain JSON object that replaces the tool's input before execution. The rewritten input still goes through the same permission gates and tool-schema validation. Multiple hooks chain in registration order; the last non-blocking hook's value wins. Arrays, primitives, and `null` are ignored. |
 
 Exit code semantics:
@@ -279,3 +311,51 @@ Exit code semantics:
 | `0` | Success; parse stdout for optional decision fields. |
 | `2` | Block; stderr (first 500 chars) becomes the `reason`. |
 | other | Non-blocking error; a `console.warn` is emitted and the hook is treated as a no-op. |
+
+---
+
+## Built-in Stop hooks
+
+The harness registers several built-in `Stop` handlers in
+`src/agent/default-hook-registry.ts`. These run as programmatic hook handlers
+(not shell commands) and inject context into the next turn rather than blocking.
+
+### `AFK_UNPROVEN_DIAGNOSIS_GATE` — unproven-diagnosis gate (#2987)
+
+**Opt-in.** Set `AFK_UNPROVEN_DIAGNOSIS_GATE=1` to enable.
+
+When enabled, this Stop hook fires when the completed turn:
+
+1. Contains a cause-unknown phrase in the assistant text — e.g. *"root cause
+   is unknown"*, *"the cause is something else in …"*, *"likely upstream"*, or
+   *"I couldn't determine the root cause"*.
+2. Has **no** successful instrumentation tool calls this turn — none of
+   `bash`, `grep`, `read_file`, `glob`, `list_directory`, `web_scrape`,
+   or `web_request`.
+
+When both conditions hold, the hook injects the **elimination ladder** into the
+next turn, asking the agent to:
+
+- Hash-check installed packages against published manifests.
+- Bypass the wrapper and rerun the failing path.
+- Reproduce in a clean environment.
+- Review upstream config flags.
+- Instrument the suspected path with a call counter or log.
+
+The agent must cite the step that confirms or contradicts the external
+hypothesis before closing.
+
+**Does not fire when:**
+- The flag is off (default).
+- The turn is a subagent turn (`parentSessionId` is set).
+- The turn is already a continuation round (`stopHookActive` is true).
+- Any instrumentation tool executed successfully this turn.
+- The text contains no cause-unknown phrase.
+
+**Design notes:**
+- Uses pure regex matching + tool-name list. Deterministic, no network call.
+  A Jev-based LLM check is a possible future upgrade.
+- Injects context (`injectContext`), not a hard block — the agent gets one
+  continuation round to run the ladder.
+- Fires at most once per turn.
+- Source: `src/agent/unproven-diagnosis-detect.ts`.

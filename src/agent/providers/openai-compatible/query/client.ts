@@ -119,6 +119,9 @@ export function buildOpenAIAdmissionFetch(baseURL: string | undefined): typeof f
  * URLs get a short SHA-256 hash prefix so each distinct endpoint gets its own
  * rate-limit bucket and ledger row. The raw URL is never stored: it may contain
  * credentials or query-string tokens.
+ *
+ * Exported only for tests.
+ * @internal
  */
 export function ledgerAccountForBaseUrl(baseURL: string | undefined): string {
   if (baseURL === undefined) return 'api.openai.com';

@@ -291,6 +291,8 @@ function SessionContent({
               <div className="size-5 animate-spin rounded-full border-2 border-current border-t-transparent" />
               <span className="text-sm">Connecting to session...</span>
             </>
+          ) : selectedSession.mode === 'live' ? (
+            <span className="text-sm">New session. Send a message to start.</span>
           ) : (
             <span className="text-sm">No transcript data</span>
           )}

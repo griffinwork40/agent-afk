@@ -127,6 +127,23 @@ export interface SubagentExecutorContext {
    */
   backgroundRegistry?: BackgroundAgentRegistry;
   /**
+   * Live probe: does this surface wake an idle prompt when a background result
+   * lands? Only the TTY REPL wires it (depth 0). Read at dispatch time by
+   * `resolveBackgroundDelivery` to pick a truthful model-facing note. Never
+   * forwarded to nested executors: depth >= 1 results go to the root session.
+   */
+  backgroundAutoWake?: () => boolean;
+  /**
+   * Live probe: will BgResultNotifier buffer the result for the next user
+   * message? Returns false when AFK_BG_AUTO_DELIVER=0 — the notifier's
+   * `onSettled` guard returns early, so no injection is queued. When false at
+   * depth 0, `resolveBackgroundDelivery` returns `manual-join` instead of
+   * `next-message`, so the model is told to use /bgsub:join rather than
+   * promised an automatic delivery that never arrives. Never forwarded to
+   * nested executors (same rationale as backgroundAutoWake).
+   */
+  backgroundAutoDeliver?: () => boolean;
+  /**
    * Worktree cwd inherited from the parent session. Forwarded to the
    * per-depth child {@link SubagentManager} and to the recursive child
    * {@link SubagentExecutor} so depth ≥ 2 forks (a depth-1 subagent calling

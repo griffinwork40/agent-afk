@@ -24,6 +24,8 @@ import { getProcessJobSessionDir } from '../../paths.js';
 import { ProcessLogSink } from './process-log-sink.js';
 import { launchProcess, terminateWithGrace, type LaunchedProcess, type ProcessExit } from './process-launcher.js';
 import { enforceSessionQuota, scheduleProcessJobSweep } from './process-jobs.sweep.js';
+import { emitSessionPhase } from '../trace/emit.js';
+import type { TraceSink } from '../trace/index.js';
 
 export type ProcessJobStatus = 'running' | 'completed' | 'failed' | 'timed_out' | 'cancelled';
 export type ProcessCancelSource = 'model' | 'user' | 'teardown';
@@ -90,6 +92,12 @@ export interface ProcessJobRegistryOptions {
   reapGraceMs?: number;
   /** Run the 7-day directory sweep on construction. Default true unless `logDir` is set. */
   sweep?: boolean;
+  /**
+   * Witness trace writer. When supplied, emits `background_process_settled`
+   * on each job completion so `afk trace show` can reconstruct background
+   * jobs. Optional — tests and surfaces without a trace writer pass undefined.
+   */
+  traceWriter?: TraceSink;
 }
 
 export interface StartProcessJobArgs {
@@ -123,6 +131,8 @@ export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
   readonly logDir: string;
   readonly maxConcurrent: number;
   private readonly opts: ProcessJobRegistryOptions;
+  /** Mutable trace writer; updated by setTraceWriter() without mutating opts. */
+  private traceWriter: TraceSink | undefined;
   private readonly jobs = new Map<string, InternalJob>();
   private counter = 0;
   /** Set by killAll(): a registry being torn down accepts no new jobs. */
@@ -141,6 +151,7 @@ export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
   constructor(opts: ProcessJobRegistryOptions = {}) {
     super();
     this.opts = opts;
+    this.traceWriter = opts.traceWriter;
     this.maxConcurrent = opts.maxConcurrent ?? DEFAULT_MAX_CONCURRENT_PROCESS_JOBS;
     this.sessionLabel = opts.sessionLabel ?? `${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`;
     this.logDir = opts.logDir ?? getProcessJobSessionDir(this.sessionLabel);
@@ -208,6 +219,8 @@ export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
    * unknown id. Used by tests that need to synchronise on the same signal as
    * the cancel() guard — the Node 'exit' event — rather than an OS PID probe,
    * which can report the PID gone before Node has delivered the event.
+   *
+   * @internal Not a stable consumer contract; exposed for test synchronisation only.
    */
   leaderExited(id: string): boolean {
     return this.jobs.get(id)?.launched.leaderExited() ?? false;
@@ -262,6 +275,15 @@ export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
     return running.map((j) => this.snapshot(j));
   }
 
+  /**
+   * Replace the trace writer used for settlement events. Called by the resume
+   * rebind cascade (`bootstrap-resume.ts`) so events after a `/resume` go to
+   * the new session's writer instead of the sealed pre-resume writer.
+   */
+  setTraceWriter(writer: TraceSink | undefined): void {
+    this.traceWriter = writer;
+  }
+
   /** Remove the process exit hook. Running jobs are NOT stopped. */
   dispose(): void {
     if (!this.exitHookInstalled) return;
@@ -275,8 +297,30 @@ export class ProcessJobRegistry extends EventEmitter<ProcessJobRegistryEvents> {
     job.status = statusFor(job, exit);
     if (this.runningCount() === 0) this.dispose();
     this.pruneHistory();
+    // Witness trace: background_process_settled so afk trace show can
+    // reconstruct background job outcomes. Fire-and-forget — trace errors are
+    // swallowed inside emitSessionPhase and must never break settlement.
+    const snap = this.snapshot(job);
+    void emitSessionPhase(this.traceWriter, {
+      phase: 'background_process_settled',
+      metadata: {
+        jobId: snap.id,
+        status: snap.status,
+        // exitCode is a number (like durationMs/bytes) so trace consumers can
+        // compare without coercing; omit when the process ended by signal only.
+        ...(snap.exitCode !== undefined && snap.exitCode !== null
+          ? { exitCode: snap.exitCode }
+          : {}),
+        signal: snap.signal ?? '',
+        // snap.endedAt is always set by onSettled() before this runs; the
+        // ?? Date.now() fallback is unreachable in practice but kept as a
+        // defensive guard against future refactoring that separates the two.
+        durationMs: (snap.endedAt ?? Date.now()) - snap.startedAt,
+        bytes: snap.bytes,
+      },
+    });
     try {
-      this.emit('settled', this.snapshot(job));
+      this.emit('settled', snap);
     } catch (err) {
       // A listener failure must not break settlement bookkeeping.
       process.stderr.write(`[afk] process-jobs: settled listener threw: ${String(err)}\n`);

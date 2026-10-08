@@ -70,6 +70,8 @@ export const SessionPhaseNameSchema = z.enum([
   'stream_accepted_after_drop',
   // Connection-phase network retry. See SessionPhaseName JSDoc in types.ts.
   'connection_retry',
+  // One-shot retry budget exhausted. See SessionPhaseName JSDoc in types.ts.
+  'connection_retry_exhausted',
   'usage_notice',
   // Per-session tool-degradation signal (#2774). Emitted at most once per
   // (tool, errorHead) per session. See SessionPhaseName JSDoc in types.ts.
@@ -98,9 +100,29 @@ export const SessionPhaseNameSchema = z.enum([
   // and shapeBefore (structural summary, never message content). See #2136.
   'orphan_repair',
   // Server dropped thinking blocks via `input_transformations` (drop_block beta).
-  // Emitted at most once per stream. metadata: { droppedCount, source }. See
-  // SessionPhaseName JSDoc in types.session-phase.ts.
+  // Emitted per drop-bearing frame (message_start and message_delta paths).
+  // metadata: { droppedCount, source }. See SessionPhaseName JSDoc in
+  // types.session-phase.ts.
   'thinking_block_dropped',
+  // Background process lifecycle. See SessionPhaseName JSDoc in
+  // types.session-phase.ts for the full contract.
+  'background_process_started',
+  'background_process_settled',
+  // Compose node transport-failure recovery decision (dag-subagent.recovery.ts).
+  // Must mirror the SessionPhaseName union in types.session-phase.ts;
+  // session-phase.test.ts parity enforces it.
+  'compose_recovery_decision',
+  // Streaming connection opener diagnostics (opt-in AFK_CONNECT_RETRY_BUDGET_MS).
+  // Must mirror the SessionPhaseName union in types.session-phase.ts;
+  // session-phase.test.ts parity enforces it.
+  'connection_failure',
+  'connection_recovered',
+  'connection_budget_exhausted',
+  // In-turn context guard and catalog model awareness. Must mirror the
+  // SessionPhaseName union in types.session-phase.ts; session-phase.test.ts
+  // parity enforces it.
+  'context_pressure_wind_down',
+  'catalog_model_upgrade',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

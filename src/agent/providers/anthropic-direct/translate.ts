@@ -20,7 +20,7 @@ import { incompleteStreamError, isStreamComplete } from './stream-completeness.j
 import { errorMessage } from '../../../utils/errors.js';
 import { warnOnDroppedThinkingBlocks } from './input-transformations.js';
 import { emitSessionPhase } from '../../trace/emit.js';
-import { isMidStreamNetworkTermination } from '../shared/network-termination.js';
+import { isMidStreamNetworkTermination } from './loop/network-termination.js';
 
 /**
  * Per-block accumulator. The block kind dictates which fields are populated
@@ -414,6 +414,7 @@ export async function* translateMessageStream(
       yield { kind: 'event', event: { type: 'error', error: err instanceof Error ? err : new Error(String(err)) } };
       return;
     }
+    if (traceEnabled) console.log('[translate] (#2787) transport drop after stop_reason, accepting as complete');
   }
 
   // Incomplete stream (no message_stop AND no stop_reason): report, never

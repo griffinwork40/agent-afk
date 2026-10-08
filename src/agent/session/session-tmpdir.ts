@@ -276,6 +276,17 @@ export class SessionTmpdir {
         // (see EXDEV comment in the docblock above).
         const st3 = await fs.promises.lstat(this.dir);
         if (!st3.isDirectory() || st3.isSymbolicLink()) return;
+        // Containment check: re-verify the directory still sits inside our
+        // root (mirrors step 2 of the happy path, closing the gap for the
+        // EXDEV fallback where realDir/realRoot were computed before rename
+        // was attempted).
+        const realRootFb = await fs.promises.realpath(this.root);
+        const realDirFb = await fs.promises.realpath(this.dir);
+        if (!realDirFb.startsWith(realRootFb + path.sep)) return;
+        // Uid check: ensure the directory is still owned by this process
+        // (mirrors the isPrivateDir uid check on the happy path).
+        const uid = currentUid();
+        if (uid !== undefined && st3.uid !== uid) return;
         await fs.promises.rm(this.dir, { recursive: true, force: true });
         return;
       }

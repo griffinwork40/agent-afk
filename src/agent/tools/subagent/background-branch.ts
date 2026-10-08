@@ -19,6 +19,7 @@ import { debugLog } from '../../../utils/debug.js';
 import type { ToolResult } from '../types.js';
 import { teardownBackgroundWorktree } from '../handlers/worktree-managed.background.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { backgroundDeliveryNote, type BackgroundDelivery } from './background-delivery.js';
 
 type ForkedHandle = Awaited<ReturnType<SubagentManager['forkSubagent']>>;
 
@@ -62,6 +63,8 @@ export interface RunBackgroundBranchArgs {
   onCleanup?: () => Promise<void>;
   /** Worktree lock to release when registration fails before onCleanup owns it. */
   isolationTeardown?: { repoRoot: string; worktreePath: string };
+  /** How the result reaches the dispatcher; selects the model-facing note. See background-delivery.ts. */
+  delivery?: BackgroundDelivery;
 }
 
 /**
@@ -83,7 +86,7 @@ export interface RunBackgroundBranchArgs {
  * installs the SubagentManager root abort wiring independently.
  */
 export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promise<ToolResult> {
-  const { handle, registry, prompt, model, parentSessionId, onSettled, budgetRelease, onCleanup, isolationTeardown } = args;
+  const { handle, registry, prompt, model, parentSessionId, onSettled, budgetRelease, onCleanup, isolationTeardown, delivery } = args;
   if (!registry) {
     // Tear down the orphaned handle so the fork isn't leaked.
     // teardown() is the safe no-op when the handle hasn't started.
@@ -177,10 +180,9 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
     subagentId: job.subagentId,
     label: job.label,
     message:
-      `Background subagent started (jobId=${job.jobId}). ` +
-      `It is running detached; its result will be delivered into this context ` +
-      `automatically with the next user message once it finishes. ` +
-      `/bgsub:join ${job.jobId} remains available for manual replay.`,
+      `Background subagent started (jobId=${job.jobId}). It is running detached. ` +
+      `${backgroundDeliveryNote(delivery, job.jobId).trimEnd()}` +
+      ` /bgsub:join ${job.jobId} remains available for manual replay.`,
   };
   return { content: JSON.stringify(payload) };
 }

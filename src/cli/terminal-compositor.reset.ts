@@ -48,6 +48,7 @@ export interface ResetStateHost {
   pendingResizeErase: { top: number; bottom: number } | null;
   bandGeometryStale: boolean;
   lastKnownRows: number;
+  cprPending: boolean;
   pickerController: PickerController | null;
   inputMode: CompositorInputMode;
   attachments: ImageAttachment[];
@@ -116,6 +117,9 @@ export function resetState(self: ResetStateHost): void {
   // the previous arm cycle must not leak into the next one (the first repaint
   // of a fresh arm re-seeds lastKnownRows before any resize can be detected).
   self.pendingResizeErase = null;
+  // Clear the CPR-pending flag so a stale in-flight CPR from the previous
+  // arm cycle cannot suppress repaints in the next one.
+  self.cprPending = false;
   // F2: a stale-geometry flag from the previous arm cycle must not leak into
   // the next one either — a fresh arm has no geometry yet (rather than WRONG
   // geometry), which is the same "genuinely unknown" case BLOCKER-1 already

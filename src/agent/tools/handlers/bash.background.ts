@@ -20,6 +20,7 @@ import type { ToolResult } from '../../providers/shared/tool-result.js';
 import { buildChildEnv } from './bash-env-scrub.js';
 import { ProcessJobCapError } from '../../shell-jobs/process-jobs.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { emitSessionPhase } from '../../trace/emit.js';
 
 export const BACKGROUND_UNAVAILABLE_MESSAGE =
   'run_in_background is not available in this session. Background processes are supported only in the ' +
@@ -49,6 +50,19 @@ export function startBackgroundBash(
   }
   // Lets `wait_for {type:"process", pid}` wait on the job's leader.
   if (job.pid !== undefined) context?.spawnedPidRegistry?.register(job.pid);
+  // Witness trace: background_process_started so afk trace show can reconstruct
+  // which background jobs ran, analogous to background_agent for subagent jobs.
+  void emitSessionPhase(context?.traceWriter, {
+    phase: 'background_process_started',
+    metadata: {
+      jobId: job.id,
+      // Omit pid when it is not yet known (process launch in flight) rather
+      // than emitting the literal string 'undefined' into the trace record.
+      ...(job.pid !== undefined ? { pid: job.pid } : {}),
+      command: command.slice(0, 200),
+      maxRuntimeMs: job.maxRuntimeMs,
+    },
+  });
   return {
     content: JSON.stringify({
       job_id: job.id,

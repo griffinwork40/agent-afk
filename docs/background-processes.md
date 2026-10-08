@@ -27,7 +27,7 @@ no exit status, no completion notice, no way to stop the exact run.
 | Availability | Root interactive REPL only. Subagents, Telegram, daemon and one-shot runs get an explicit refusal. At most 3 running jobs. |
 | Read-only gates | Every gate that admits "read-only" bash refuses a background launch whatever the command text: read-only skills, plan mode, what-if episodes (`src/agent/tools/bash-background-flag.ts`). |
 | Risk | `classifyRisk` rates a background launch at least `medium`, so a `safe` substring (`cat `, `pnpm test`) cannot make it look read-only. AFK mode still prompts only for `high`, exactly as for other `medium` commands such as `npm install`. |
-| Disk | Logs live in `$AFK_STATE_DIR/proc-jobs/<session>/`. Each job is bounded at about 64 MB (32 MB + one rotation), so running jobs total at most about 192 MB. Before a job starts, a 128 MB per-session quota deletes the oldest SETTLED logs first; session dirs untouched for 7 days are swept. |
+| Disk | Logs live in `$AFK_STATE_DIR/proc-jobs/<session>/`. Each job is bounded at about 64 MB (32 MB + one rotation), so 3 running jobs total at most ~192 MB. The 128 MB per-session quota for settled logs is enforced before each new start; the transient peak including that settled-log quota is therefore ~320 MB. Session dirs untouched for 7 days are swept. |
 | Windows | No process groups: stop uses `taskkill /T` on the leader while it is alive. After the leader exits, Windows never signals (the PID may be reused) and only releases the pipes, so survivors, including ones that redirected their output, are not reaped (#2742). |
 
 ## Why the envelope carries no output

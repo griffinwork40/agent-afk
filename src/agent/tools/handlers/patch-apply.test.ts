@@ -635,4 +635,25 @@ describe('patch_apply — blank optional fields', () => {
     // File untouched.
     expect(await readFile(filePath, 'utf-8')).toBe('unchanged\n');
   });
+
+  // Issue #3126: { content: null, edits: [] } was silently passing as a no-op
+  // rewrite. The empty edits array bypassed the no_change_specified guard
+  // because edits !== undefined. Now treated as absent → no_change_specified.
+  it('content: null with empty edits fires no_change_specified, not a silent no-op (#3126)', async () => {
+    const filePath = await writeTemp('null-empty-edits.txt', 'untouched\n');
+    const handler = createPatchApplyHandler(tempDir);
+    const result = await handler(
+      { changes: [{ path: filePath, content: null, edits: [] }] },
+      signal,
+      makeCtx(),
+    );
+    expect(result.isError).toBe(true);
+    const parsed = JSON.parse(result.content as string);
+    // Must reach the structured validator and fire no_change_specified.
+    expect(parsed.status).toBe('validation_failed');
+    expect(parsed.errors).toHaveLength(1);
+    expect(parsed.errors[0].error).toBe('no_change_specified');
+    // File must be untouched.
+    expect(await readFile(filePath, 'utf-8')).toBe('untouched\n');
+  });
 });

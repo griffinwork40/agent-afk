@@ -11,6 +11,7 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { fileURLToPath } from 'node:url';
+import { rmSyncRetry } from '../src/__test-utils__/rm-sync-retry.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -72,11 +73,10 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // Best-effort cleanup.
-    }
+    // rmSyncRetry: git may still be writing objects into .git/ when the test
+    // finishes, causing ENOTEMPTY on CI. force:true already suppresses
+    // ENOENT; maxRetries/retryDelay (inside rmSyncRetry) handle ENOTEMPTY.
+    rmSyncRetry(dir);
   }
 });
 

@@ -293,6 +293,50 @@ describe('scanPeerInbox — orphan detection', () => {
     expect(pendingAfter).toHaveLength(0);
   });
 
+  it('corrupt-receipt orphan rescanned twice: second scan is a no-op and held file content is intact', async () => {
+    // Regression: a corrupt-receipt orphan was previously invisible (no held/
+    // entry, no trace). Now it moves to held/ on first scan; the second scan
+    // must find pending/ empty (the file is in held/, not recycled) and return
+    // no new claimed/held entries. The file content must also be preserved.
+    const sessionId = randomUUID();
+    const env = makeEnvelope(sessionId);
+    await writeEnvelope(env);
+
+    const { getPeerInboxDir } = await import('../../../paths.js');
+    const base = getPeerInboxDir(sessionId);
+    const files = await listPending(sessionId);
+    const file = files[0]!;
+    // Create a corrupt delivered receipt to trigger the corrupt-orphan path.
+    await mkdir(join(base, 'delivered'), { recursive: true, mode: 0o700 });
+    await writeFile(join(base, 'delivered', file), 'CORRUPT DATA', { mode: 0o600 });
+
+    const scanArgs = {
+      sessionId,
+      mode: 'accept' as const,
+      wakeBudget: unlimitedBudget(),
+      capacity: 10,
+    };
+
+    // First scan: orphan=corrupt → file is moved to held/ (not dropped, content preserved).
+    const first = await scanPeerInbox(scanArgs);
+    expect(first.claimed).toHaveLength(0);
+    expect(first.held).toHaveLength(1);
+    expect(first.held[0]?.reason).toBe('corrupt');
+
+    // Second scan: pending/ is empty — the file must NOT re-appear as another held entry.
+    const second = await scanPeerInbox(scanArgs);
+    expect(second.claimed).toHaveLength(0);
+    expect(second.held).toHaveLength(0);
+
+    // The file is still in held/ with its content intact (not destroyed).
+    const { readFile: fsReadFile } = await import('fs/promises');
+    const heldContent = await fsReadFile(join(base, 'held', file), 'utf8');
+    expect(heldContent).toContain(env.messageId);
+
+    // pending/ remains empty after both scans.
+    expect(await listPending(sessionId)).toHaveLength(0);
+  });
+
   it('orphan corrupt receipt is removed before holdPending so accept succeeds after two scans', async () => {
     const sessionId = randomUUID();
     const env = makeEnvelope(sessionId);

@@ -60,6 +60,13 @@ describe('checkAnthropicKey', () => {
 });
 
 describe('checkCodexKey — uses full resolveOpenAIAuth chain', () => {
+  beforeEach(async () => {
+    const { resolveOpenAIAuth } = await import(
+      '../../agent/providers/openai-compatible/auth.js'
+    );
+    vi.mocked(resolveOpenAIAuth).mockReset();
+  });
+
   async function mockResolve(resolution: OpenAIAuthResolution) {
     const { resolveOpenAIAuth } = await import(
       '../../agent/providers/openai-compatible/auth.js'
@@ -71,7 +78,7 @@ describe('checkCodexKey — uses full resolveOpenAIAuth chain', () => {
     await mockResolve({ apiKey: 'sk-x', source: 'config', last4: 'xxxx' });
     const result = await checkCodexKey();
     expect(result.state).toBe('pass');
-    expect(result.detail).toContain('config');
+    expect(result.detail).toContain('explicit config key');
     expect(result.detail).toContain('xxxx');
   });
 

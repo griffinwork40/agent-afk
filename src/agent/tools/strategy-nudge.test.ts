@@ -358,3 +358,103 @@ describe('applyStrategyNudge', () => {
     expect(applyStrategyNudge(n, undefined, call(), ok)).toBe(ok);
   });
 });
+
+// Field-observed misfires (witness traces, first day after #3016): the first
+// error-cue line was often boilerplate shared by unrelated failures, so two
+// different errors collapsed into one signature and fired the nudge.
+describe('findErrorLine: boilerplate that must not become the signature', () => {
+  const pyTraceback = (frame: string, exception: string) =>
+    'Traceback (most recent call last):\n' +
+    `  File "/repo/${frame}.py", line 3, in <module>\n` +
+    `    run_${frame}()\n` +
+    exception;
+
+  it('takes the final exception line of a Python traceback, not its header', () => {
+    expect(findErrorLine(pyTraceback('a', "KeyError: 'config'"))).toBe("KeyError: 'config'");
+    expect(findErrorLine(pyTraceback('b', 'requests.exceptions.ConnectionError: refused'))).toBe(
+      'requests.exceptions.ConnectionError: refused',
+    );
+  });
+
+  it('takes the exception that escaped from a chained traceback', () => {
+    const chained =
+      pyTraceback('a', "KeyError: 'config'") +
+      '\n\nDuring handling of the above exception, another exception occurred:\n\n' +
+      pyTraceback('b', 'RuntimeError: config missing');
+    expect(findErrorLine(chained)).toBe('RuntimeError: config missing');
+  });
+
+  it('does not fall back to the traceback header when the exception line is cut off', () => {
+    expect(findErrorLine('Traceback (most recent call last):\n  File "/repo/a.py", line 3')).toBeNull();
+  });
+
+  it('two unrelated Python exceptions do not fire the nudge', () => {
+    const n = new StrategyNudger();
+    expect(n.observe(call('bash', 'python a.py'), bashFail(pyTraceback('a', "KeyError: 'k'")))).toBeNull();
+    const other = bashFail(pyTraceback('b', "ModuleNotFoundError: No module named 'numpy'"));
+    expect(n.observe(call('bash', 'python b.py'), other)).toBeNull();
+  });
+
+  it('the same Python exception from different frames still fires', () => {
+    const n = new StrategyNudger();
+    n.observe(call('bash', 'python a.py'), bashFail(pyTraceback('a', "ModuleNotFoundError: No module named 'numpy'")));
+    const v = n.observe(
+      call('bash', 'python b.py'),
+      bashFail(pyTraceback('b', "ModuleNotFoundError: No module named 'numpy'")),
+    );
+    expect(v?.line).toBe("ModuleNotFoundError: No module named 'numpy'");
+  });
+
+  // Verbatim vitest 4 default-reporter output (ANSI stripped), including a test
+  // whose NAME contains "error", which the per-test lines would otherwise match.
+  const vitestRaw = (assertion: string) =>
+    ' ❯ src/zz-probe.test.ts (2 tests | 1 failed) 5ms\n' +
+    '   × throws an error on bad input 3ms\n' +
+    '   ✓ ok 0ms\n\n' +
+    '⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\n\n' +
+    ' FAIL  src/zz-probe.test.ts > throws an error on bad input\n' +
+    `${assertion}\n\n` +
+    ' ❯ src/zz-probe.test.ts:2:54\n' +
+    '⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n\n' +
+    ' Test Files  1 failed (1)\n' +
+    '      Tests  1 failed | 1 passed (2)';
+
+  it('skips vitest file summaries, test-name lines, banners, and FAIL headers', () => {
+    expect(findErrorLine(vitestRaw('AssertionError: expected 1 to be 2 // Object.is equality'))).toBe(
+      'AssertionError: expected 1 to be 2 // Object.is equality',
+    );
+  });
+
+  it('two different assertion failures in the same test file do not fire the nudge', () => {
+    const n = new StrategyNudger();
+    n.observe(call('bash', 'pnpm test a'), bashFail(vitestRaw('AssertionError: expected 1 to be 2')));
+    expect(
+      n.observe(call('bash', 'pnpm test b'), bashFail(vitestRaw("TypeError: Cannot read properties of undefined (reading 'x')"))),
+    ).toBeNull();
+  });
+
+  it('keeps a FAIL line that is not a test-file header', () => {
+    expect(findErrorLine('FAIL a/Makefile not created: wasNew capture failed')).toBe(
+      'FAIL a/Makefile not created: wasNew capture failed',
+    );
+  });
+
+  it('skips node source echo above a caret and unhandled-rejection internals', () => {
+    const rejection =
+      'node:internal/process/promises:391\n' +
+      '    triggerUncaughtException(err, true /* fromPromise */);\n' +
+      '    ^\n\n' +
+      "Error: ENOENT: no such file or directory, open '/x/a.json'";
+    expect(findErrorLine(rejection)).toBe("Error: ENOENT: no such file or directory, open '/x/a.json'");
+    const thrown =
+      '/private/tmp/t.js:2\nthrow new TypeError("bad input " + x);\n^\n\nTypeError: bad input 1\n    at Object.<anonymous> (/private/tmp/t.js:2:7)';
+    expect(findErrorLine(thrown)).toBe('TypeError: bad input 1');
+  });
+
+  it('skips success lines that merely mention errors', () => {
+    expect(findErrorLine('PASS desktop: no console errors/warnings\nFAIL mobile: layout overflow at 375px')).toBeNull();
+    expect(findErrorLine('✓ no errors on load\nError: layout overflow at 375px')).toBe(
+      'Error: layout overflow at 375px',
+    );
+  });
+});

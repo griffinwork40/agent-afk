@@ -29,6 +29,7 @@ import type { RuntimeWorkspace } from './types.js';
 import type { TraceActor } from '../session/session-identity.js';
 import { classifyPidLiveness, type ProcessLiveness } from '../process-liveness.js';
 import { filterVerifiedLive, type StartTimeProbe } from './presence.liveness.js';
+import type { PresenceActivity } from './presence.activity.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -187,11 +188,7 @@ export interface PresenceFileInfo {
    * most recent turn finished. Both update at turn end; `promptHead` updates at
    * turn start so a busy session shows what it is working on RIGHT NOW.
    */
-  activity?: {
-    promptHead?: string;
-    turns: number;
-    lastTurnEndedAt?: string;
-  };
+  activity?: PresenceActivity;
 }
 
 /**
@@ -445,6 +442,15 @@ export async function patchPresenceFile(
       const filePath = presenceFilePath(sessionId);
       const parsed = JSON.parse(await readFile(filePath, 'utf8')) as PresenceFileInfo;
       patch(parsed);
+      // Non-atomic writeFile is deliberate here. The PR that introduced this
+      // function (#2869) intentionally limited atomic writes to updatePresenceCwd,
+      // where the worktree-sweep guard requires crash-safety. All patchPresenceFile
+      // callers — setPresenceAfk, setPresenceBlocked (presence.ts),
+      // setPresenceName, setPresenceNameIfUnset, setPresenceTurnState,
+      // setPresencePeerInbox (presence.peer.ts), setPresenceActivityPromptHead,
+      // setPresenceActivityTurnEnd (presence.activity.ts) — are best-effort
+      // markers where a partial write is equally harmless — if the process dies
+      // mid-write the presence file is removed at cleanup anyway.
       await writeFile(filePath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
     } catch {
       // Best-effort — presence is non-critical.
@@ -528,7 +534,14 @@ export async function updatePresenceCwd(sessionId: string, cwd: string): Promise
       const raw = await readFile(filePath, 'utf8');
       const parsed = JSON.parse(raw) as PresenceFileInfo;
       parsed.cwd = cwd;
-      await writeFile(filePath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
+      // mkdirp:false — the presence directory is always created by writePresenceFile
+      // before any cwd update can be queued. updatePresenceCwd is only called from
+      // setCwd (session-config.ts), which runs AFTER presence has been written
+      // with the launch dir, so the parent directory is guaranteed to exist.
+      await atomicWriteFileAsync(filePath, JSON.stringify(parsed, null, 2), {
+        mode: 0o600,
+        mkdirp: false,
+      });
     } catch {
       // Best-effort — presence is non-critical.
     }
@@ -677,16 +690,10 @@ export async function readLivePresenceFiles(
   options: ReadLivePresenceOptions = {},
 ): Promise<PresenceRecord[]> {
   const { maxHeartbeatAgeMs, startTimeProbe } = options;
+  // filterVerifiedLive already excludes 'dead' records; no post-filter needed here.
   const records = await filterVerifiedLive(await readPresenceFiles(), startTimeProbe);
-  return records.filter((r) => {
-    if (r.liveness === 'dead') return false;
-    if (
-      maxHeartbeatAgeMs !== undefined &&
-      r.heartbeatAgeMs !== null &&
-      r.heartbeatAgeMs > maxHeartbeatAgeMs
-    ) {
-      return false;
-    }
-    return true;
-  });
+  if (maxHeartbeatAgeMs === undefined) return records;
+  return records.filter(
+    (r) => r.heartbeatAgeMs === null || r.heartbeatAgeMs <= maxHeartbeatAgeMs,
+  );
 }

@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { InMemoryTraceWriter } from '../trace/writer.js';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { ProcessJobCapError, ProcessJobRegistry, isProcessJobId } from './process-jobs.js';
-import { enforceSessionQuota } from './process-jobs.sweep.js';
+import { enforceSessionQuota, sweepProcessJobDirs } from './process-jobs.sweep.js';
 import { ProcessLogSink } from './process-log-sink.js';
 
 // Real processes: these tests exercise process groups, signals and pipes.
@@ -217,6 +218,30 @@ describe('ProcessJobRegistry', () => {
   });
 });
 
+describe('ProcessJobRegistry.setTraceWriter (resume rebind)', () => {
+  it('events after a rebind go to the new writer, not the original writer', async () => {
+    const writer1 = new InMemoryTraceWriter();
+    const writer2 = new InMemoryTraceWriter();
+    const r = new ProcessJobRegistry({ logDir: dir, sweep: false, cancelGraceMs: 300, traceWriter: writer1 });
+    // Rebind to writer2 before any job runs.
+    r.setTraceWriter(writer2);
+    const job = r.start({ command: 'echo settled-test', env: process.env });
+    await r.waitFor(job.id);
+    const isSettled = (e: { kind: string; payload: unknown }): boolean =>
+      e.kind === 'session_phase' &&
+      typeof e.payload === 'object' && e.payload !== null &&
+      (e.payload as Record<string, unknown>)['phase'] === 'background_process_settled';
+    const settled1 = writer1.events.filter(isSettled);
+    const settled2 = writer2.events.filter(isSettled);
+    expect(settled1).toHaveLength(0);
+    expect(settled2).toHaveLength(1);
+    const payload = settled2[0]!.payload as { metadata: Record<string, unknown> };
+    expect(payload.metadata['exitCode']).toBe(0);
+    expect(typeof payload.metadata['durationMs']).toBe('number');
+    await r.killAll();
+  });
+});
+
 describe('ProcessLogSink', () => {
   it('rotates at the cap without losing the process and bounds disk use', () => {
     const logPath = path.join(dir, 'x.log');
@@ -266,5 +291,66 @@ describe('enforceSessionQuota', () => {
     expect(fs.existsSync(old)).toBe(false);
     expect(fs.existsSync(live)).toBe(true);
     expect(fs.existsSync(newer)).toBe(true);
+  });
+
+  it('protects the .1 rotation file alongside the live log', () => {
+    // Arrange: a live log, its rotation (.1), and an old settled log.
+    const live = path.join(dir, 'proc-1.log');
+    const liveRot = `${live}.1`;
+    const settled = path.join(dir, 'proc-2.log');
+    fs.writeFileSync(live, Buffer.alloc(400));
+    fs.writeFileSync(liveRot, Buffer.alloc(400));
+    fs.writeFileSync(settled, Buffer.alloc(400));
+    const t = Date.now() / 1000;
+    fs.utimesSync(settled, t - 300, t - 300);
+    fs.utimesSync(liveRot, t - 400, t - 400); // older but should be protected
+    // Quota tight enough to require deletion but liveLogPaths only names `live`.
+    enforceSessionQuota(dir, 500, new Set([live]));
+    // The rotation (.1) is protected because it shares the base path with the
+    // live log. The settled log is the oldest deletable candidate.
+    expect(fs.existsSync(live)).toBe(true);
+    expect(fs.existsSync(liveRot)).toBe(true);
+    expect(fs.existsSync(settled)).toBe(false);
+  });
+});
+
+describe('sweepProcessJobDirs', () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-sweep-root-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('removes stale session dirs and preserves the current session dir', () => {
+    const current = path.join(root, 'current-session');
+    const stale = path.join(root, 'old-session');
+    fs.mkdirSync(current);
+    fs.mkdirSync(stale);
+    // Write a log file into stale and backdate it by 8 days.
+    const staleFile = path.join(stale, 'proc-1.log');
+    fs.writeFileSync(staleFile, 'x');
+    const oldSecs = (Date.now() - 8 * 24 * 60 * 60 * 1000) / 1000;
+    fs.utimesSync(staleFile, oldSecs, oldSecs);
+    sweepProcessJobDirs('current-session', Date.now(), undefined, root);
+    expect(fs.existsSync(current)).toBe(true);
+    expect(fs.existsSync(stale)).toBe(false);
+  });
+
+  it('preserves dirs whose newest content is within the max age', () => {
+    const recent = path.join(root, 'recent-session');
+    fs.mkdirSync(recent);
+    fs.writeFileSync(path.join(recent, 'proc-1.log'), 'x');
+    // Default maxAgeMs is 7 days; a just-written file is well within that.
+    sweepProcessJobDirs('other-session', Date.now(), undefined, root);
+    expect(fs.existsSync(recent)).toBe(true);
+  });
+
+  it('does not throw when the root does not exist', () => {
+    const nonExistent = path.join(root, 'no-such-root');
+    expect(() => sweepProcessJobDirs('any-session', Date.now(), undefined, nonExistent)).not.toThrow();
   });
 });

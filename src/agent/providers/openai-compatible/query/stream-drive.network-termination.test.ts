@@ -44,6 +44,17 @@ import type { ProviderEvent } from '../../../provider.js';
 import type { StreamState } from '../translate.js';
 import { TTFB_TIMEOUT_MESSAGE } from '../../shared/first-byte-timeout.js';
 import { STALL_TIMEOUT_MESSAGE } from '../../shared/stream-stall-timeout.js';
+import type { TraceEventInput, TraceSink } from '../../../trace/index.js';
+import { translateResponsesEvent, type ResponsesStreamEvent } from '../responses-translate.js';
+
+function capturingTrace() {
+  const writes: TraceEventInput[] = [];
+  const traceWriter: TraceSink = {
+    write: async (event) => { writes.push(event); },
+    getTracePath: () => 'in-memory://trace',
+  };
+  return { writes, traceWriter };
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -269,7 +280,7 @@ describe('driveStream — network-termination re-drive (#2780)', () => {
       translate: (event, state: StreamState) => {
         state.assistantText += event.text;
         if (event.text !== 'partial') state.finishReason = 'stop';
-        return [{ type: 'text', text: event.text } as ProviderEvent];
+        return [{ type: 'text', text: event.text } as unknown as ProviderEvent];
       },
       clarifyError: (e) => (e instanceof Error ? e : new Error(String(e))),
     };
@@ -746,7 +757,8 @@ describe('driveStream with real translateChunk — Chat Completions scenarios', 
       clarifyError: (e) => (e instanceof Error ? e : new Error(String(e))),
     };
 
-    const ctx = makeCtx();
+    const { writes, traceWriter } = capturingTrace();
+    const ctx = makeCtx({ traceWriter });
     // Use a fresh createStreamState-compatible context per attempt — driveStream
     // already calls createStreamState() internally, so state is fresh each retry.
     ctx.controller = new AbortController();
@@ -758,6 +770,15 @@ describe('driveStream with real translateChunk — Chat Completions scenarios', 
     expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(1);
     expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
     expect(result).not.toBeNull();
+    expect(writes).toContainEqual(expect.objectContaining({
+      kind: 'session_phase',
+      payload: expect.objectContaining({
+        phase: 'rate_limit',
+        metadata: expect.objectContaining({
+          reason: 'network_termination', errorCode: 'UND_ERR_SOCKET', awaitingUsage: true,
+        }),
+      }),
+    }));
     // Second attempt's state has usage.
     expect(result?.state.usage).not.toBeNull();
   });
@@ -780,9 +801,17 @@ describe('driveStream with real translateChunk — Chat Completions scenarios', 
       clarifyError: (e) => (e instanceof Error ? e : new Error(String(e))),
     };
 
-    const ctx = makeCtx();
+    const { writes, traceWriter } = capturingTrace();
+    const ctx = makeCtx({ traceWriter });
     const { events, result } = await drive(ctx, strategy);
 
+    expect(writes).toContainEqual(expect.objectContaining({
+      kind: 'session_phase',
+      payload: expect.objectContaining({
+        phase: 'stream_accepted_after_drop', resolvedModel: 'test-model',
+        metadata: { usageReceived: true },
+      }),
+    }));
     expect(callCount).toBe(1);
     expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(0);
     expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
@@ -818,6 +847,110 @@ describe('driveStream with real translateChunk — Chat Completions scenarios', 
     expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(MAX_STREAM_RETRIES);
     expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
     expect(result).not.toBeNull(); // accepted, not null
+  });
+});
+
+describe('stream termination follow-ups (#2792)', () => {
+  it.each(['response.completed', 'response.incomplete', 'response.failed'])(
+    'accepts Responses %s without usage after a drop, without re-billing', async (type) => {
+      const { writes, traceWriter } = capturingTrace();
+      const createStream = vi.fn(async () => (async function* (): AsyncIterable<ResponsesStreamEvent> {
+        yield { type: 'response.output_text.delta', delta: 'answer' };
+        yield { type, response: {} };
+        throw undiciTerminated();
+      })());
+      const { events, result } = await drive(makeCtx({ traceWriter }), {
+        createStream,
+        translate: (event, state) => translateResponsesEvent(event, state, 'sess-test'),
+        clarifyError: (e) => e as Error,
+        expectsTrailingUsage: false,
+      });
+      expect(createStream).toHaveBeenCalledTimes(1);
+      expect(result?.text).toBe('answer');
+      expect(result?.state.usage).toBeNull();
+      expect(events.some((e) => e.type === 'stream.retry' || e.type === 'error')).toBe(false);
+      expect(writes).toContainEqual(expect.objectContaining({
+        kind: 'session_phase', payload: expect.objectContaining({
+          phase: 'stream_accepted_after_drop', metadata: { usageReceived: false },
+        }),
+      }));
+    },
+  );
+
+  it.each([new Error('unrelated'), Object.assign(new Error('unauthorized'), { status: 401 })])(
+    'preserves unrelated errors when the TTFB budget is exhausted', (error) => {
+      const { action } = classifyStreamError(error, false, MAX_STREAM_RETRIES, 0, false, true);
+      expect(action).toEqual({ kind: 'fall-through', error });
+    },
+  );
+
+  it('converts a raced AbortError to a TTFB error on exhausted budget', () => {
+    const error = Object.assign(new Error('aborted'), { name: 'AbortError' });
+    const { action } = classifyStreamError(error, false, MAX_STREAM_RETRIES, 0, false, true);
+    expect(action.kind).toBe('fatal');
+    expect((action as FatalAction).error.message).toBe(TTFB_TIMEOUT_MESSAGE);
+  });
+
+  it.each(['A'.repeat(64), 'A'.repeat(65), 'contains secret text'])('bounds sanitized errorCode: %s', (code) => {
+    const err = new TypeError('terminated', { cause: Object.assign(new Error('socket'), { code }) });
+    const { action } = classifyStreamError(err, true, 0, 0);
+    expect(action.kind).toBe('retry');
+    expect((action as RetryAction).errorCode).toBe(code.length === 64 ? code : undefined);
+    expect((action as RetryAction).awaitingUsage).toBeUndefined();
+  });
+
+  // P2b: finish_reason present + usage missing + budget available => retry with awaitingUsage: true.
+  it('P2b: finish_reason + no usage + budget available => retry with awaitingUsage: true', () => {
+    const { action, newStreamRetries } = classifyStreamError(
+      undiciTerminated(),
+      true,
+      0,            // budget available
+      60_000,
+      false,
+      false,
+      'stop',       // terminalFinishReason present
+      false,        // usageReceived: false
+    );
+    expect(action.kind).toBe('retry');
+    expect((action as RetryAction).reason).toBe('network_termination');
+    expect((action as RetryAction).awaitingUsage).toBe(true);
+    expect(newStreamRetries).toBe(1);
+  });
+
+  // Fatal-TTFB path for termination errors (finding #3):
+  // ttfbTimedOut=true + budget exhausted + ECONNRESET => fatal TTFB error.
+  it('ttfbTimedOut=true + exhausted budget + ECONNRESET => fatal TTFB error', () => {
+    const { action } = classifyStreamError(
+      econnreset(),
+      false,
+      MAX_STREAM_RETRIES, // budget exhausted
+      0,
+      false,
+      true,               // ttfbTimedOut
+    );
+    expect(action.kind).toBe('fatal');
+    expect((action as FatalAction).error.message).toBe(TTFB_TIMEOUT_MESSAGE);
+  });
+
+  it('applies wire clarification to a fatal watchdog error', async () => {
+    const clarified = new Error('clarified stall');
+    const clarifyError = vi.fn(() => clarified);
+    const { events } = await drive(makeCtx(), {
+      createStream: async () => (async function* () {
+        yield 'partial';
+        throw stallTimeout();
+      })(),
+      translate: (text) => [{ type: 'delta.text', text, sessionId: 'sess-test' }],
+      clarifyError,
+    });
+    expect(clarifyError).toHaveBeenCalledOnce();
+    // The fatal error passed to clarifyError is the expanded stall message
+    // produced by stallTimeoutError(), not the raw STALL_TIMEOUT_MESSAGE marker.
+    // Verify it is an Error that mentions the stall (catching any wrong-error regressions).
+    const callArg = (clarifyError.mock.calls as unknown as [unknown[]])[0]?.[0];
+    expect(callArg).toBeInstanceOf(Error);
+    expect((callArg as unknown as Error).message).toMatch(/stall/i);
+    expect(events).toContainEqual({ type: 'error', error: clarified });
   });
 });
 

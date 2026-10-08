@@ -11,6 +11,183 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.303.10] - 2026-10-07
+
+### Fixed
+- deliver non-blocking PreToolUse additionalContext (#3157) (e80d1327)
+
+## [5.303.9] - 2026-10-07
+
+### Fixed
+- reference RAW_VALUE_CAP in inbound-mode boundary tests (#3219) (1ec88e05)
+- tighten EgressBlockedError assertions in egress lookup tests (#3221) (47b48886)
+- address advisory review findings for tool-health monitor and daemon builtin (#3135) (f1057945)
+- remove duplicate ToolFailureClassSchema, tighten isContentBlockArray return type (#3133) (d00f99f6)
+- advisory findings from #2770, #2879, #2824 (#3134) (7274f3ae)
+- document internal-only helpers in effect-ledger barrel (#3209) (15ee4fbe)
+- raise engines.node to jsdom 30's floor (#3150) (825d7761)
+- address advisory findings from #2810 peer boundary delivery (#3136) (19c7e3da)
+- address advisory findings from review of #3063 (#3116) (f76fdba2)
+- address advisory findings from review of #3077 (#3097) (ba46e740)
+- remove dead applyPostRunNotices (#3220) (f6e86014)
+- replay reasoning for destination endpoints (#3156) (387daa69)
+- bound Windows bash kill cleanup without blocking (#3210) (e7e07b30)
+- add _renameFn/_platform injectables to atomicWriteFileAsync for portable EPERM retry testing (#3153) (26021cbc)
+- add maxRetries to rm in temp git repo teardowns to avoid ENOTEMPTY (#3208) (53152e90)
+
+## [5.303.8] - 2026-10-07
+
+### Fixed
+- re-anchor live frame after tmux pane resize (no more duplicated frame on kill-pane/split) (#3204) (6f07459d)
+
+## [5.303.7] - 2026-10-07
+
+### Added
+- add opt-in Stop hook that blocks closing on unproven external diagnosis (#3190) (22ca5a25)
+
+### Fixed
+- harden stream termination and retry observability (#3159) (3d9008fa)
+
+## [5.303.6] - 2026-10-07
+
+### Fixed
+- read vision/reasoning/context from the Codex catalog so gpt-6 models see pasted images (#3188) (c240ca37)
+- count patch_apply as file write, bash external effects corroboration, move version history (#3191) (edc66634)
+
+## [5.303.5] - 2026-10-07
+
+### Fixed
+- complete advisory review follow-ups (#3158) (e4db9d85)
+
+## [5.303.4] - 2026-10-07
+
+### Fixed
+- strategy-nudge keys on the real error line, not boilerplate (#3160) (343c2503)
+- add RAW_VALUE_CAP boundary tests and move getPeerInboundModeConfig into list branch (#3186) (00b7acfe)
+- address advisory findings from detached-tool-notifier review (#3189) (688ec803)
+- use makeNonIpError on deps so non-IP records reject with EgressBlockedError (#3187) (14d60a55)
+
+## [5.303.3] - 2026-10-07
+
+### Added
+- trace-backed downgrade signals — closure reason + subagent budget exhaustion (#3195) (b3f82314)
+
+### Changed
+- add unit tests for three worst-coverage CLI/service modules (COV-007..009) (#3203) (a5903f52)
+- remove buildPromptAsync internal deprecated shim (#3196) (80b8167e)
+
+## [5.303.2] - 2026-10-07
+
+### Added
+- add UPDATE-failure-resilience test for access tracking (#3192) (358c8669)
+
+### Fixed
+- migrate task-view describe blocks to task-view-mode.test.ts (#3200) (1308f538)
+- execFileSync for findGitRoot; shell-metachar tests; gitleaksignore cleanup (#3199) (ee2f4181)
+- add { unref? } option to sleepWithAbort; tighten test; cover sleep() unref paths (#3198) (b551e708)
+
+### Changed
+- Web dashboard: session titles, new-session hang, and sidecars for daemon/web/skill sessions (#3197) (91e2d6d5)
+- DEAD-033 incremental — remove 72 unused exports from src/agent/trace/index.ts (#3202) (3a725829)
+- patch picomatch ReDoS, bump openai+@types/node, fix website/ baseline-browser-mapping (#3193) (d7ba5ea7)
+
+## [5.303.1] - 2026-10-07
+
+### Added
+- catalog-backed route limits, configurable in-turn context guard, model awareness (#3177) (5f9e91bf)
+
+### Fixed
+- re-fork zero-output transport failures once, fail closed on any tool activity (#3172) (2bcae018)
+
+## [5.303.0] - 2026-10-07
+
+### Added
+- opt-in elapsed-time connection retry budget + connect-failure diagnostics (#3173) (c605e2b2)
+- explicit incomplete handoff and findings salvage at the tool-round cap (#3176) (5e15142c)
+
+### Fixed
+- address advisory review findings from 2026-10-06 pr-triage (#3175) (22971afa)
+
+### Changed
+- add unit tests for three worst-coverage CLI/service modules (#3178) (92e7f89b)
+
+## [5.302.13] - 2026-10-07
+
+### Fixed
+- observe yield probe failures and cover cached PR paths (#3154) (130d8ed4)
+- add maxRetries to rm in peer wake teardown to avoid Windows ENOTEMPTY (#3179) (0daf2a5b)
+- keep the event loop alive during retry backoff sleeps (#3171) (72991e20)
+- replace shell execSync with execFileSync for worktree ops; add .gitleaksignore (#3180) (69c38902)
+
+### Changed
+- delete task-view.ts, remove @types/node-cron, prune 25 unused exports (#3174) (4a9def34)
+
+## [5.302.12] - 2026-10-07
+
+### Fixed
+- pass --allow-scripts=agent-afk to npm install so postinstall runs on npm >=11.19 (#3152) (9005022b)
+
+## [5.302.11] - 2026-10-07
+
+### Added
+- add --predict flag and spec predictions field for deterministic operator-supplied predictions (#3162) (9cfccc5f)
+
+### Fixed
+- add portable POSIX-utility regression test for settle-after-kill fallback (#3167) (7833d6f9)
+- dispatch UserPromptSubmit in Telegram per-turn path (#3163) (f3853eb6)
+
+## [5.302.10] - 2026-10-07
+
+### Changed
+- note dropped `**Done** — text` single-line form next to `'unknown'` in `FacetOutcomeSchema` JSDoc (#2797)
+
+### Added
+- downgrade self-reported Done using corroborating signals (#3168) (4b1b07a5)
+
+### Fixed
+- note dropped single-line Done form next to 'unknown' in schema JSDoc (#3165) (a4d78b4b)
+- wire DetachableToolRegistry.settled subscriber (#3164) (644bf907)
+- peer hardening — typo visibility, bare-filename guard, corrupt-orphan rescan test (#3161) (649073cb)
+- harden createGuardedLookup — catch callback throw, block non-IP, prove all=true (#3166) (ad9dfea9)
+
+## [5.302.9] - 2026-10-07
+
+### Fixed
+- session sidecar exitReason/eof advisory findings (#3145) (7402bddf)
+
+## [5.302.8] - 2026-10-07
+
+### Fixed
+- extract shared sleepSync util, strengthen backoff ceiling test, add retry log (#3146) (561f230d)
+- address advisory findings from traced retry layer (#2851) (#3144) (73b10717)
+- address advisory findings from 2026-09-29 /pr-triage (#3142) (ae9d977b)
+- document far-reset probe tradeoff and provider scope for autoResume env var (#3140) (e75ddf2d)
+- advisory findings from #2850 — peer activity presence fixes (#3139) (b09ae05d)
+
+## [5.302.7] - 2026-10-06
+
+### Fixed
+- address advisory review findings from #2857 (#3147) (be9c4ba9)
+- advisory findings from #2835, #2860, #2862 (#3143) (50042fd7)
+- address advisory findings from #2852 presence review (#3141) (3314dc73)
+
+## [5.302.6] - 2026-10-06
+
+### Fixed
+- guard history.push for silent auto-resume; add held size hint (#3122) (8d7749ce)
+- harden process-jobs — escapeXmlAttr apos, sweep tests, quota-rotation guard, trace observability, docs (#3123) (73d850d6)
+- truthful background-result delivery note so agents stop busy-polling (#3125) (68c7d0b3)
+- add containment and uid checks to EXDEV cleanup fallback (#3131) (a62bf115)
+
+## [5.302.5] - 2026-10-06
+
+### Fixed
+- address advisory findings from review of #3075 (#3121) (8578aecb)
+- shorten regression test title, justify realistic variant, inline JSDoc (#3120) (1881a64f)
+- reject {content: null, edits: []} as no_change_specified (#3130) (0355ed77)
+- bash-detach stale listener, unref timer, sentinel + compose JSDoc/guard fixes (#3124) (0d2b846f)
+- address combined advisory findings from 2026-10-06 triage (#3119) (45c1993c)
+
 ## [5.302.4] - 2026-10-06
 
 ### Fixed

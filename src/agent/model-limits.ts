@@ -17,6 +17,8 @@
 import type { ClaudeModel } from './types.js';
 import { resolveModelInput, contextWindowOverrideFor } from './session/model-slots.js';
 import { isOSeriesModel } from './model-capabilities.js';
+import { catalogContextWindow } from './providers/openai-compatible/models-catalog.capabilities.js';
+import { loadModelsCatalog } from './providers/openai-compatible/models-catalog.js';
 
 /**
  * Keys cover both short aliases (`opus`, `sonnet`, `haiku`, `*_1m`) and the
@@ -302,11 +304,16 @@ function routesToOpenAICompatible(model: string): boolean {
  * Look up the context-window limit for a given model identifier.
  *
  * Accepts both the short ClaudeModel aliases and arbitrary model strings.
+ * Precedence: per-slot `contextWindow` override → {@link MODEL_CONTEXT_LIMITS}
+ * → the Codex models catalog's `context_window` (covers OpenAI ids the table
+ * has not caught up with, e.g. the gpt-6 line) → per-provider default. The
+ * table wins over the catalog on purpose: its entries are deliberate API-tier
+ * values (gpt-5.5 → 1M) that a Codex-plan catalog figure must not shrink.
  * Unknown models fall back per-provider:
  *   - openai-compatible-routed (HF-style or gpt/o/codex prefix): 256k
  *   - everything else (Anthropic): 200k
  */
-export function contextLimitFor(model: ClaudeModel | string): number {
+export function contextLimitFor(model: ClaudeModel | string, subscriptionPath = false): number {
   const lowered = String(model).trim().toLowerCase();
   // Preserve explicit *_1m aliases (1M context window) before resolution.
   const oneM = MODEL_CONTEXT_LIMITS[lowered];
@@ -322,8 +329,18 @@ export function contextLimitFor(model: ClaudeModel | string): number {
   // real provider path (providers call contextLimitFor with the resolved wire id).
   const slotOverride = contextWindowOverrideFor(id);
   if (slotOverride !== undefined) return slotOverride;
+  // The Codex catalog governs only the ChatGPT OAuth wire, never API-key paths.
+  if (subscriptionPath) {
+    const entry = loadModelsCatalog().get(id);
+    if (entry?.context_window && entry.effective_context_window_percent
+      && entry.effective_context_window_percent <= 100) {
+      return Math.floor(entry.context_window * entry.effective_context_window_percent / 100);
+    }
+  }
   const known = MODEL_CONTEXT_LIMITS[id] ?? MODEL_CONTEXT_LIMITS[id.toLowerCase()];
   if (known !== undefined) return known;
+  const fromCatalog = catalogContextWindow(id);
+  if (fromCatalog !== undefined) return fromCatalog;
   return routesToOpenAICompatible(id)
     ? DEFAULT_CONTEXT_LIMIT_OPENAI_COMPATIBLE
     : DEFAULT_CONTEXT_LIMIT;
@@ -382,8 +399,8 @@ const MODEL_AUTOCOMPACT_BUDGET: Record<string, number> = {
  * full window, never the reduced budget. Models with no budget entry return
  * their full window (identical to the pre-budget behavior).
  */
-export function autoCompactLimitFor(model: ClaudeModel | string): number {
-  const window = contextLimitFor(model);
+export function autoCompactLimitFor(model: ClaudeModel | string, subscriptionPath = false): number {
+  const window = contextLimitFor(model, subscriptionPath);
   const lowered = String(model).trim().toLowerCase();
   // Explicit *_1m opt-in → full window, never the reduced default budget.
   if (lowered.endsWith('_1m')) return window;

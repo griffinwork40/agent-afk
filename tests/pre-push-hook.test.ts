@@ -5,6 +5,7 @@ import { execFileSync, spawnSync, type SpawnSyncReturns } from 'node:child_proce
 import { describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { resolveShell } from '../src/utils/resolve-shell.js';
+import { rmSyncRetry } from '../src/__test-utils__/rm-sync-retry.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const hook = path.join(repoRoot, 'scripts', 'git-hooks', 'pre-push');
@@ -91,13 +92,16 @@ function runHook(
     });
     return Object.assign(result, { dir, pnpmLog });
   } catch (err) {
-    fs.rmSync(dir, { recursive: true, force: true });
+    // rmSyncRetry: git may still be writing objects when the hook process exits.
+    rmSyncRetry(dir);
     throw err;
   }
 }
 
 function cleanup(result: { dir: string }): void {
-  fs.rmSync(result.dir, { recursive: true, force: true });
+  // rmSyncRetry: git may still be writing objects into .git/ when the test
+  // finishes, causing ENOTEMPTY on CI. Retries let in-flight writes settle.
+  rmSyncRetry(result.dir);
 }
 
 describe('scripts/git-hooks/pre-push', () => {

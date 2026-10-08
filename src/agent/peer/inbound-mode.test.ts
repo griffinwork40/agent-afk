@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
+import { RAW_VALUE_CAP } from './inbound-mode.js';
 
 beforeEach(() => {
   vi.resetModules();
@@ -67,5 +68,54 @@ describe('resolvePeerInboundMode', () => {
       String(args[0]).includes('AFK_PEER_INBOUND'),
     );
     expect(called).toBe(true);
+  });
+});
+
+describe('getPeerInboundModeConfig', () => {
+  it('returns mode=accept, invalid=false when AFK_PEER_INBOUND is unset', async () => {
+    vi.stubEnv('AFK_PEER_INBOUND', undefined as unknown as string);
+    const { getPeerInboundModeConfig } = await freshMode();
+    const cfg = getPeerInboundModeConfig();
+    expect(cfg.mode).toBe('accept');
+    expect(cfg.invalid).toBe(false);
+    expect(cfg.rawTruncated).toBeUndefined();
+  });
+
+  it('returns mode=hold, invalid=false when AFK_PEER_INBOUND=hold', async () => {
+    vi.stubEnv('AFK_PEER_INBOUND', 'hold');
+    const { getPeerInboundModeConfig } = await freshMode();
+    const cfg = getPeerInboundModeConfig();
+    expect(cfg.mode).toBe('hold');
+    expect(cfg.invalid).toBe(false);
+    expect(cfg.rawTruncated).toBeUndefined();
+  });
+
+  it('returns mode=accept, invalid=true and rawTruncated for a typo like "hol"', async () => {
+    vi.stubEnv('AFK_PEER_INBOUND', 'hol');
+    const { getPeerInboundModeConfig } = await freshMode();
+    const cfg = getPeerInboundModeConfig();
+    expect(cfg.mode).toBe('accept');
+    expect(cfg.invalid).toBe(true);
+    expect(cfg.rawTruncated).toBe('hol');
+  });
+
+  it('does NOT truncate rawTruncated when the invalid value is exactly RAW_VALUE_CAP chars (boundary)', async () => {
+    const atCap = 'x'.repeat(RAW_VALUE_CAP);
+    vi.stubEnv('AFK_PEER_INBOUND', atCap);
+    const { getPeerInboundModeConfig } = await freshMode();
+    const cfg = getPeerInboundModeConfig();
+    expect(cfg.mode).toBe('accept');
+    expect(cfg.invalid).toBe(true);
+    expect(cfg.rawTruncated).toBe(atCap); // no "…" appended
+  });
+
+  it('truncates rawTruncated when the invalid value is RAW_VALUE_CAP + 1 chars (one over cap)', async () => {
+    const overCap = 'x'.repeat(RAW_VALUE_CAP + 1);
+    vi.stubEnv('AFK_PEER_INBOUND', overCap);
+    const { getPeerInboundModeConfig } = await freshMode();
+    const cfg = getPeerInboundModeConfig();
+    expect(cfg.mode).toBe('accept');
+    expect(cfg.invalid).toBe(true);
+    expect(cfg.rawTruncated).toBe('x'.repeat(RAW_VALUE_CAP) + '…');
   });
 });

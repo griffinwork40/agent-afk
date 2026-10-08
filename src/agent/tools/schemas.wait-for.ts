@@ -30,6 +30,8 @@ export const waitForTool: AnthropicToolDef = {
     '(status: yielded_to_user, not an error): end your turn so the user is heard, then re-issue ' +
     'the wait if still needed. ' +
     'URL waits are SSRF-guarded: private/loopback/link-local/cloud-metadata targets are rejected. ' +
+    'Not for background subagent jobs (bg-* ids): their results are delivered automatically, so ' +
+    'end your turn instead of waiting on a proxy signal. Never use a never-true command as a sleep. ' +
     'Use timeout_ms and poll_interval_ms to tune wait duration and check frequency.',
   input_schema: {
     type: 'object',

@@ -378,6 +378,8 @@ describe('runIterationWithQuotaLimitPause — auto-resume=true', () => {
     // Budget set to the same value as the wait, so elapsed === budget exactly
     // at the post-sleep re-check. With strict >, this probe would re-fire;
     // with >=, the error is surfaced without an extra iteration.
+    // Relies on the describe-level afterEach to restore __setQuotaTwoHoursMs /
+    // __setQuotaFallbackWaitMs to their defaults after this test.
     const BUDGET = 1000;
     __setQuotaTwoHoursMs(BUDGET);
     __setQuotaFallbackWaitMs(BUDGET); // sleep exactly 1000ms = budget

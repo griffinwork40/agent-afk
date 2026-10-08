@@ -146,7 +146,10 @@ export function installPeerBoundary(opts: PeerBoundaryOpts): () => void {
       // Five 64 KiB messages must each be admitted across successive turns:
       // the per-envelope loop + retain-on-reject guarantee ensures every
       // message is eventually injected once capacity exists, never dropped.
-      if (peerNotifier.hasPendingInjections()) {
+      // Skip rendering entirely when the queue is already at maxCount — no
+      // envelope can be admitted regardless of byte size, so there is no
+      // point paying the renderPeerMessageBlock cost for each one.
+      if (peerNotifier.hasPendingInjections() && !admissionQueue.full) {
         const pending = peerNotifier.peekEnvelopes();
         let admitCount = 0;
         for (const { envelope } of pending) {
