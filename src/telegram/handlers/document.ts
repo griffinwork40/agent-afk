@@ -14,7 +14,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { senderPrefix } from '../sender-attribution.js';
 import { replyContextPrefix, type RepliedMessage } from '../reply-context.js';
 import { forwardProvenancePrefix } from '../forward-provenance.js';
-import { errorMessage } from '../../utils/errors.js';
+import { downloadTelegramFile } from '../media-download.js';
 
 // History: extracted from message.ts in PR #687 (document handler).
 // message.ts was already at its baselined ceiling, so all document
@@ -42,16 +42,6 @@ const SUPPORTED_FORMATS =
   'text/code files (.txt, .md, .py, .js, .ts, .json, .yaml, etc.) or PDF';
 
 /**
- * Sanitize the bot token from an error message string.
- * Telegram file URLs embed the token:
- *   https://api.telegram.org/file/bot<TOKEN>/<path>
- * Same pattern as handlePhoto's catch block and runDetached in bot.ts.
- */
-function sanitizeBotToken(raw: string): string {
-  return raw.replace(/\/bot[^/]+\//g, '/bot[REDACTED]/');
-}
-
-/**
  * Determine whether a document is text-like from its MIME type or extension.
  * Returns 'text', 'pdf', or 'unsupported'.
  */
@@ -71,48 +61,6 @@ function classifyDocument(
   return 'unsupported';
 }
 
-type LimitedReadResult =
-  | { status: 'ok'; bytes: Buffer }
-  | { status: 'too-large'; bytesRead: number }
-  | { status: 'missing-body' };
-
-async function readResponseBytesWithLimit(
-  response: Response,
-  maxBytes: number,
-): Promise<LimitedReadResult> {
-  const contentLength = response.headers.get('content-length');
-  if (contentLength != null) {
-    const expected = Number(contentLength);
-    if (Number.isFinite(expected) && expected > maxBytes) {
-      return { status: 'too-large', bytesRead: expected };
-    }
-  }
-
-  const body = response.body;
-  if (!body) return { status: 'missing-body' };
-
-  const reader = body.getReader();
-  const chunks: Buffer[] = [];
-  let total = 0;
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel().catch(() => {});
-        return { status: 'too-large', bytesRead: total };
-      }
-      chunks.push(Buffer.from(value));
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  return { status: 'ok', bytes: Buffer.concat(chunks, total) };
-}
-
 /**
  * Process an inbound Telegram document message and return the content blocks
  * to pass to the agent, or null if the document was rejected or failed.
@@ -124,7 +72,8 @@ async function readResponseBytesWithLimit(
  *   - Returns a ContentBlockParam[] when the document was successfully decoded;
  *     the caller enqueues or forwards these to processOne.
  *   - Caption, if present, is prepended as an additional text block.
- *   - Bot token is redacted from any error string before logging.
+ *   - Bot token is redacted from any error string before logging (via
+ *     downloadTelegramFile's token-safe diagnostics).
  */
 export async function handleDocumentMessage(
   ctx: Context,
@@ -159,53 +108,41 @@ export async function handleDocumentMessage(
     return null;
   }
 
-  // Download.
-  let bytes: Buffer;
-  try {
-    const fileUrlRaw = await ctx.telegram.getFileLink(document.file_id);
-    // Coerce to URL — some Telegraf forks return a plain string.
-    const url = fileUrlRaw instanceof URL ? fileUrlRaw : new URL(String(fileUrlRaw));
+  // Download via the shared bounded pipeline (SSRF guard, timeout, size cap).
+  const fileUrlRaw = await ctx.telegram.getFileLink(document.file_id);
+  const dlResult = await downloadTelegramFile(fileUrlRaw, { maxBytes: MAX_DOCUMENT_BYTES });
 
-    // Validate CDN URL (SSRF guard — mirrors photo handler M1/M4).
-    if (
-      url.protocol !== 'https:' ||
-      url.hostname !== 'api.telegram.org' ||
-      (url.port !== '' && url.port !== '443')
-    ) {
-      log(`Document handling: unexpected file URL (protocol=${url.protocol} hostname=${url.hostname}) for chat ${chatId ?? '(unknown)'}`);
+  switch (dlResult.status) {
+    case 'ssrf-rejected':
+      log(`Document handling: unexpected file URL (protocol=${dlResult.protocol} hostname=${dlResult.hostname}) for chat ${chatId ?? '(unknown)'}`);
       await ctx.reply("❌ Couldn't download the document. Please try resending.");
       return null;
-    }
 
-    const response = await globalThis.fetch(url.href, {
-      signal: AbortSignal.timeout(15_000),
-      redirect: 'error',
-    });
-
-    if (!response.ok) {
-      log(`Document handling: fetch failed status=${response.status} for chat ${chatId ?? '(unknown)'}`);
+    case 'fetch-failed':
+      log(`Document handling: fetch failed status=${dlResult.httpStatus} for chat ${chatId ?? '(unknown)'}`);
       await ctx.reply("❌ Couldn't download the document. Please try resending.");
       return null;
-    }
 
-    const readResult = await readResponseBytesWithLimit(response, MAX_DOCUMENT_BYTES);
-    if (readResult.status === 'too-large') {
-      log(`Document handling: downloaded file (${readResult.bytesRead} bytes) exceeds limit for chat ${chatId ?? '(unknown)'}`);
+    case 'too-large':
+      log(`Document handling: downloaded file (${dlResult.bytesRead} bytes) exceeds limit for chat ${chatId ?? '(unknown)'}`);
       await ctx.reply('❌ Document is too large (max 5 MB). Please send a smaller file.');
       return null;
-    }
-    if (readResult.status === 'missing-body') {
+
+    case 'missing-body':
       log(`Document handling: fetch response had no body for chat ${chatId ?? '(unknown)'}`);
       await ctx.reply("❌ Couldn't download the document. Please try resending.");
       return null;
-    }
-    bytes = readResult.bytes;
-  } catch (err) {
-    const raw = errorMessage(err);
-    log('Document handling download error:', sanitizeBotToken(raw));
-    await ctx.reply("❌ Couldn't download the document. Please try resending.");
-    return null;
+
+    case 'network-error':
+      log('Document handling download error:', dlResult.safeMessage);
+      await ctx.reply("❌ Couldn't download the document. Please try resending.");
+      return null;
+
+    case 'ok':
+      break;
   }
+
+  const bytes = dlResult.bytes;
 
   // Build content blocks.
   const contentBlocks: ContentBlockParam[] = [];
