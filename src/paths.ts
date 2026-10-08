@@ -353,6 +353,21 @@ export function getDaemonStateDir(instanceId: string = 'default'): string {
   return join(getAfkStateDir(), 'daemon', `agent-afk@${instanceId}`);
 }
 
+/**
+ * Path to the startup sidecar JSON written by a service at launch.
+ *
+ * Each service (`telegram`, `daemon`) writes `<name>.json` here immediately
+ * after it is ready. The sidecar records the running version and PID so that
+ * `afk service status` can surface version-skew warnings without a live
+ * health endpoint. Lives under `state/service-startup/` alongside other
+ * runtime stores.
+ *
+ * Never hand-join paths to this directory — always call this helper.
+ */
+export function getServiceStartupSidecarPath(name: string): string {
+  return join(getAfkStateDir(), 'service-startup', `${name}.json`);
+}
+
 export function getWorktreeSweepLockPath(): string {
   return join(getAfkStateDir(), 'worktree-sweep.lock');
 }
