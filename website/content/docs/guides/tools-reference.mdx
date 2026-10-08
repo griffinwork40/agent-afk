@@ -277,7 +277,7 @@ Send one prompt to any configured model and return its text reply: no tools, no 
 |-----------|------|----------|-------------|
 | `prompt` | string | ✓ | The instruction sent to the model. |
 | `system` | string | | Optional system prompt. |
-| `model` | string | | Slot (`local`, `small`, `medium`, `large`), custom slot name, alias (`haiku`, `opus`, `grok`), or raw id. Default `local`. |
+| `model` | string | | Slot (`local`, `small`, `medium`, `large`), custom slot name, alias (`haiku`, `opus`, `grok`), or raw id. Default: your configured default model (`AFK_MODEL`, else `medium`). |
 | `max_tokens` | number | | Output token cap (default 4096, max 32000). |
 | `input_path` | string | | Text file (≤ 1 MB, read_file policy) appended to the prompt; its contents never enter your context, but are sent to the model's provider. |
 

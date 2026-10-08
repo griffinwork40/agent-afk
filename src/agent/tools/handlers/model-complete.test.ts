@@ -11,6 +11,7 @@ vi.mock('../../providers/shared/one-shot-router.js', async (importOriginal) => {
 
 import {
   createModelCompleteHandler,
+  defaultModelCompleteModel,
   MAX_INPUT_BYTES,
   MAX_REPLY_CHARS,
   parseModelCompleteInput,
@@ -42,9 +43,14 @@ beforeEach(() => {
   routedOneShot.mockReset();
   routedOneShot.mockResolvedValue('the reply');
   setSlotBindings(LOCAL_SLOTS);
+  // The handler defaults `model` to AFK_MODEL; pin it so routing tests are
+  // independent of the developer's environment.
+  vi.stubEnv('AFK_MODEL', 'local');
+  vi.stubEnv('CLAUDE_MODEL', undefined);
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   resetSlotBindings();
   rmSync(tmp, { recursive: true, force: true });
 });
@@ -55,7 +61,7 @@ describe('parseModelCompleteInput', () => {
     expect(parseModelCompleteInput({ prompt: '   ' })).toMatchObject({ isError: true });
   });
 
-  it('defaults model to local and max_tokens to 4096', () => {
+  it('defaults model to AFK_MODEL and max_tokens to 4096', () => {
     expect(parseModelCompleteInput({ prompt: 'hi' })).toEqual({
       prompt: 'hi',
       model: 'local',
@@ -73,8 +79,39 @@ describe('parseModelCompleteInput', () => {
   });
 });
 
+describe('defaultModelCompleteModel', () => {
+  it('uses AFK_MODEL, trimmed', () => {
+    vi.stubEnv('AFK_MODEL', '  opus ');
+    expect(defaultModelCompleteModel()).toBe('opus');
+  });
+
+  it('falls back to legacy CLAUDE_MODEL, then the medium tier', () => {
+    vi.stubEnv('AFK_MODEL', undefined);
+    vi.stubEnv('CLAUDE_MODEL', 'haiku');
+    expect(defaultModelCompleteModel()).toBe('haiku');
+    vi.stubEnv('CLAUDE_MODEL', undefined);
+    expect(defaultModelCompleteModel()).toBe('medium');
+  });
+
+  it('maps the auto routing sentinel and a blank value to medium', () => {
+    vi.stubEnv('AFK_MODEL', 'auto');
+    expect(defaultModelCompleteModel()).toBe('medium');
+    vi.stubEnv('AFK_MODEL', '   ');
+    expect(defaultModelCompleteModel()).toBe('medium');
+  });
+
+  it('routes an omitted model to the AFK_MODEL target', async () => {
+    vi.stubEnv('AFK_MODEL', 'haiku');
+    await createModelCompleteHandler(tmp)({ prompt: 'x' }, signal());
+    expect(routedOneShot.mock.calls[0]?.[0]).toMatchObject({
+      model: CLAUDE_HAIKU_ID,
+      provider: 'anthropic-direct',
+    });
+  });
+});
+
 describe('model_complete handler', () => {
-  it('routes the default local slot with its provider, endpoint, and key', async () => {
+  it('routes the local slot (via AFK_MODEL) with its provider, endpoint, and key', async () => {
     const res = await createModelCompleteHandler(tmp)({ prompt: 'summarize' }, signal());
     expect(res.isError).toBeUndefined();
     expect(res.content).toContain('the reply');

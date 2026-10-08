@@ -3,6 +3,9 @@
  * any configured model.
  *
  * Contract:
+ *   - `model` defaults to the operator's configured default model
+ *     (`AFK_MODEL` → legacy `CLAUDE_MODEL` → `medium`; see
+ *     {@link defaultModelCompleteModel}).
  *   - `model` resolves through the slot table (`resolveOneShotTarget`), so a
  *     slot / custom name / identity alias / raw id gets the same provider,
  *     endpoint, and per-slot API key a session on that model would use.
@@ -22,6 +25,7 @@ import type { ToolHandler, ToolHandlerContext, ToolResult } from '../types.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { fsErrorToToolResult } from './_fs-error.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { env } from '../../../config/env.js';
 import { redactSecrets } from '../../redact-secrets.js';
 import { unconfiguredSlotError } from '../../session/model-slots.js';
 import {
@@ -30,8 +34,19 @@ import {
   type OneShotLabel,
 } from '../../providers/shared/one-shot-router.js';
 
-/** Slot used when the caller names no model. */
-export const DEFAULT_MODEL_COMPLETE_MODEL = 'local';
+/** Tier used when no default model is configured (matches `AFK_MODEL`'s own default). */
+const FALLBACK_MODEL = 'medium';
+
+/**
+ * Model used when the caller names none: the operator's configured default,
+ * `AFK_MODEL` (legacy `CLAUDE_MODEL`), else the `medium` tier. The `auto`
+ * routing sentinel is not a model, so it maps to the fallback tier too.
+ * Read per call so a changed env is honoured without a restart.
+ */
+export function defaultModelCompleteModel(): string {
+  const raw = (env.AFK_MODEL ?? env.CLAUDE_MODEL ?? '').trim();
+  return raw === '' || raw.toLowerCase() === 'auto' ? FALLBACK_MODEL : raw;
+}
 const DEFAULT_MAX_TOKENS = 4096;
 const MAX_MAX_TOKENS = 32_000;
 /** Largest `input_path` file accepted (1 MB). */
@@ -69,7 +84,7 @@ export function parseModelCompleteInput(raw: unknown): ModelCompleteInput | Tool
   }
   const model = typeof obj['model'] === 'string' && obj['model'].trim() !== ''
     ? obj['model'].trim()
-    : DEFAULT_MODEL_COMPLETE_MODEL;
+    : defaultModelCompleteModel();
   if (model.toLowerCase() === 'auto') {
     return fail('`model: "auto"` is a session routing sentinel, not a model. Name a slot or id.');
   }

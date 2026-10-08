@@ -23,7 +23,9 @@ export const modelCompleteTool: AnthropicToolDef = {
     '`model` accepts a slot name (`local`, `small`, `medium`, `large`), a custom slot ' +
     'name from afk.config.json, an identity alias (`haiku`, `sonnet`, `opus`, `grok`), or ' +
     'a raw model id; the slot\'s provider, endpoint, and API key are applied. Defaults to ' +
-    '`local`. An unconfigured slot is an error, never a silent fallback.\n\n' +
+    'the operator\'s configured default model (AFK_MODEL); pass `local` or `small` ' +
+    'explicitly for cheap offloads. An unconfigured slot is an error, never a silent ' +
+    'fallback.\n\n' +
     '`input_path` is read by the tool and appended to the prompt, so a large file can be ' +
     'processed without its contents entering your context; only the reply comes back. ' +
     'Note that the file contents ARE sent to the chosen model\'s provider.',
@@ -42,7 +44,7 @@ export const modelCompleteTool: AnthropicToolDef = {
         type: 'string',
         description:
           'Model to call: slot name, custom slot name, identity alias, or raw model id. ' +
-          'Default: `local`.',
+          'Default: the configured default model (AFK_MODEL, else `medium`).',
       },
       max_tokens: {
         type: 'number',
