@@ -124,6 +124,7 @@ export interface LifecycleHost {
     growTotal: number;
     shrinkTotal: number;
     requeryCt: number;
+    widthOnlyOrigin: boolean;
   } | null;
   committedBand: string[];
   // #540: per-physical-row logical provenance, index-aligned 1:1 with

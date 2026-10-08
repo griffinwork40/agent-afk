@@ -9,13 +9,13 @@
  * erase did NOT fire because the snapshot was gone.
  *
  * Fix (terminal-compositor.lifecycle.resize.ts): when a CPR is already in-flight
- * (`cprPending === true`), the SHRINK branch merges the footprints
- * (min top / max bottom) instead of unconditionally nulling the snapshot, so
- * the CPR's repaint always has an erase footprint to work with.
+ * from a WIDTH-ONLY event (`widthOnlyOrigin === true`), the SHRINK branch keeps
+ * the existing snapshot rather than nulling it, so the CPR's repaint always has
+ * an erase footprint to work with.
  *
  * Covers:
  *   B1 — WIDTH-ONLY → SHRINK (CPR in-flight): pendingResizeErase is NOT nulled.
- *   B2 — WIDTH-ONLY → SHRINK (CPR in-flight): merged erase footprint covers both events.
+ *   B2 — WIDTH-ONLY → SHRINK (CPR in-flight): erase snapshot preserved across both events.
  *   B3 — WIDTH-ONLY → SHRINK (CPR in-flight): ghost-erase CUP+EL is emitted after CPR resolves.
  *   B4 — SHRINK with NO prior CPR (cprPending=false): existing null contract preserved.
  *   B5 — WIDTH-ONLY → SHRINK (CPR in-flight, no prior snapshot): still nulls (no snapshot to merge).
@@ -102,17 +102,19 @@ describe('B2: Merged erase footprint covers both WIDTH-ONLY and SHRINK events', 
     process.stdout.emit('resize');
     const afterWidth = internals.pendingResizeErase;
     expect(afterWidth).not.toBeNull();
+    // Clone the snapshot before step 2 so the comparison is not same-reference.
+    const afterWidthClone = afterWidth ? { ...afterWidth } : null;
 
     // Step 2: SHRINK (while CPR in-flight from step 1).
     stdout.rows = 35;
     process.stdout.emit('resize');
 
-    // The merged footprint must encompass the width-only snapshot.
-    const merged = internals.pendingResizeErase;
-    expect(merged, 'merged snapshot must exist').not.toBeNull();
-    if (afterWidth !== null && merged !== null) {
-      expect(merged.top).toBeLessThanOrEqual(afterWidth.top);
-      expect(merged.bottom).toBeGreaterThanOrEqual(afterWidth.bottom);
+    // The preserved snapshot must still cover the width-only erase footprint.
+    const after = internals.pendingResizeErase;
+    expect(after, 'snapshot must exist after SHRINK').not.toBeNull();
+    if (afterWidthClone !== null && after !== null) {
+      expect(after.top).toBeLessThanOrEqual(afterWidthClone.top);
+      expect(after.bottom).toBeGreaterThanOrEqual(afterWidthClone.bottom);
     }
 
     vi.advanceTimersByTime(CPR_TIMEOUT_MS + 50);
@@ -269,6 +271,60 @@ describe('B5: WIDTH-ONLY → SHRINK (CPR in-flight) with no snapshot: stays null
 
     expect(internals.pendingResizeErase, 'snapshot must remain null').toBeNull();
 
+    vi.advanceTimersByTime(CPR_TIMEOUT_MS + 50);
+    c.disarm();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B6: WIDTH-ONLY → SHRINK → second SHRINK inside one burst: snapshot survives
+// ---------------------------------------------------------------------------
+
+describe('B6: WIDTH-ONLY → SHRINK → second SHRINK in same burst: snapshot NOT nulled', () => {
+  beforeEach(() => { __resetStdinClaimForTests(); vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('pendingResizeErase survives a second SHRINK that arrives while CPR is in-flight', async () => {
+    const stdout = makeMockStdout();
+    const stdin = makeMockStdin();
+    stdout.rows = 40;
+    stdout.columns = 99;
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+    await c.arm();
+    // Allow the initial frame to render (establishes lastMeasuredFrameBottom > 0).
+    vi.advanceTimersByTime(20);
+
+    const internals = c as unknown as {
+      pendingResizeErase: { top: number; bottom: number } | null;
+      cprPending: boolean;
+      cprBurst: { shrinkTotal: number } | null;
+    };
+    expect(internals.cprPending).toBe(false);
+
+    // Step 1: WIDTH-ONLY SIGWINCH — sets pendingResizeErase + starts CPR.
+    stdout.columns = 49;
+    process.stdout.emit('resize');
+
+    expect(internals.cprPending, 'CPR must be in-flight after WIDTH-ONLY').toBe(true);
+    expect(internals.pendingResizeErase, 'snapshot must be set after WIDTH-ONLY').not.toBeNull();
+
+    // Step 2: First SHRINK while CPR is in-flight.
+    stdout.rows = 35;
+    process.stdout.emit('resize');
+
+    expect(internals.pendingResizeErase, 'snapshot must survive first SHRINK').not.toBeNull();
+    // After the first SHRINK, shrinkTotal > 0 in the burst context.
+    expect(internals.cprBurst?.shrinkTotal).toBeGreaterThan(0);
+
+    // Step 3: Second SHRINK — the bug: shrinkTotal > 0, so the old guard
+    // (shrinkTotal === 0) fails, and pendingResizeErase is nulled.
+    stdout.rows = 30;
+    process.stdout.emit('resize');
+
+    // KEY assertion: snapshot must STILL survive the second SHRINK.
+    expect(internals.pendingResizeErase, 'snapshot must survive second SHRINK in width-only burst').not.toBeNull();
+
+    // Cleanup.
     vi.advanceTimersByTime(CPR_TIMEOUT_MS + 50);
     c.disarm();
   });

@@ -31,8 +31,8 @@ import { requestCprOrMarkDirty } from './terminal-compositor.lifecycle.cpr.js';
  * called. While the CPR is pending, Frame.repaint() suppresses its write so
  * the stale-row repaint cannot race the delta correction.
  *
- * On SHRINK: if a CPR is already in-flight (cprPending), the existing
- * snapshot is merged (min top / max bottom) rather than discarded — the
+ * On SHRINK: if a CPR is already in-flight from a WIDTH-ONLY event
+ * (widthOnlyOrigin), the existing snapshot is kept rather than discarded — the
  * pending CPR still needs it to drive the ghost-row erase on repaint.
  * When no CPR is pending, any stale EXPAND snapshot is dropped as before.
  *
@@ -94,8 +94,9 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     // spinner row that #3205/#3228 fixed would survive.
     //
     // Distinction:
-    //   • CPR started by a WIDTH-ONLY (growTotal===0, shrinkTotal===0): the
-    //     snapshot records ghost rows from a soft-wrap reflow; preserve it.
+    //   • CPR started by a WIDTH-ONLY (widthOnlyOrigin===true): the snapshot
+    //     records ghost rows from a soft-wrap reflow; preserve it regardless
+    //     of how many SHRINKs accumulate in the burst (#3283).
     //   • CPR started by an EXPAND (growTotal > 0): the snapshot records the
     //     pre-expand footprint; a following SHRINK makes those rows stale —
     //     drop the snapshot (existing contract, prevents erasing reflowed rows).
@@ -103,8 +104,7 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     const burstFromWidthOnly =
       self.cprPending &&
       self.cprBurst !== null &&
-      self.cprBurst.growTotal === 0 &&
-      self.cprBurst.shrinkTotal === 0;
+      self.cprBurst.widthOnlyOrigin;
     if (!burstFromWidthOnly) {
       // Drop stale snapshot: no CPR in-flight, or CPR was started by an EXPAND.
       self.pendingResizeErase = null;
