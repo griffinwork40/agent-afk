@@ -159,6 +159,11 @@ export interface InsightAggregates {
   outcomes: OutcomeAggregates;
   /** Recurring pre-existing defects acknowledged by the agent across sessions. */
   preexistingDefects: import('./aggregators/preexisting-defects.js').PreexistingDefectAggregates;
+  /**
+   * Subagent outcome statistics bucketed by model × agentType × depth.
+   * Derived by joining dispatch + outcome rows in routing-decisions.jsonl.
+   */
+  subagentOutcomes: import('./aggregators/subagent-outcomes.js').SubagentOutcomeAggregates;
 }
 
 // ---------------------------------------------------------------------------
