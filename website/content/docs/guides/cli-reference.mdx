@@ -518,13 +518,24 @@ Supported service names: `telegram`, `daemon`.
 
 **`afk service list`** — List all recognised service names and whether each is installed.
 
-**`afk service restart <name>`** — Restart the service.
+**`afk service restart [name]`** — Restart one service. With no name, restarts every installed service and skips the rest. Same as `afk restart`.
 
 **`afk service upgrade <name>`** — Re-render the service config and atomically replace it if it has drifted (e.g. after a version upgrade).
 
 | Flag | Description |
 |------|-------------|
 | `--no-watch` | Disable auto-restart on rebuild. |
+
+### `afk restart`
+
+Shortcut for `afk service restart`. Restarts AFK's OS-supervised background services, re-applying the latest service config first.
+
+```bash
+afk restart            # restart every installed service (telegram, daemon)
+afk restart daemon     # restart just the daemon
+```
+
+Exits non-zero if a named service is not installed, if no services are installed at all, or if any restart fails. When restarting everything, a failure in one service does not stop the others from being attempted. A Telegram bot started by hand with `afk telegram start` is not an OS service; use `afk telegram restart` for that.
 
 ---
 

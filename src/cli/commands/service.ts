@@ -10,7 +10,7 @@
  *   afk service uninstall <name>   — deregister + remove config
  *   afk service status [name]      — show running PID + last exit + log path
  *   afk service list               — show all services and whether installed
- *   afk service restart <name>     — restart the service
+ *   afk service restart [name]     — restart one service, or all installed ones
  *
  * `<name>` ∈ { telegram, daemon }. See `src/service/types.ts` for the
  * backend-neutral contract and `src/service/{launchd,systemd}/` for the
@@ -23,12 +23,12 @@
 import { Command } from 'commander';
 import { palette } from '../palette.js';
 import { handleCommandError } from '../errors/index.js';
+import { parseServiceName, runRestart } from './restart.js';
 import {
   SERVICE_NAMES,
   SUPPORTED_SERVICE_PLATFORMS,
   serviceManagerFor,
   type ServiceManager,
-  type ServiceName,
   type ServiceStatus,
 } from '../../service/index.js';
 
@@ -41,12 +41,6 @@ function resolveManager(): ServiceManager {
     );
   }
   return mgr;
-}
-
-function parseServiceName(input: string): ServiceName {
-  const lower = input.toLowerCase();
-  if ((SERVICE_NAMES as readonly string[]).includes(lower)) return lower as ServiceName;
-  throw new Error(`Unknown service '${input}'. Supported: ${SERVICE_NAMES.join(', ')}.`);
 }
 
 export function registerServiceCommand(program: Command): void {
@@ -184,28 +178,10 @@ export function registerServiceCommand(program: Command): void {
     });
 
   service
-    .command('restart <name>')
-    .description('Restart the service (launchctl kickstart -k / systemctl --user restart)')
-    .action((nameArg: string) => {
-      try {
-        const mgr = resolveManager();
-        const name = parseServiceName(nameArg);
-        const result = mgr.restart(name);
-        if (result.kind === 'not-installed') {
-          console.error(palette.error(`✗ ${mgr.label(name)} is not installed. Run 'afk service install ${name}' first.`));
-          process.exit(1);
-        }
-        if (result.kind === 'failed') {
-          console.error(palette.error(`✗ Restart failed: ${result.reason}`));
-          process.exit(1);
-        }
-        console.log(palette.success(`✓ Restarted ${result.label}`));
-        for (const note of result.notes ?? []) {
-          console.log(palette.warning(`  ⚠ ${note}`));
-        }
-      } catch (err) {
-        handleCommandError(err);
-      }
+    .command('restart [name]')
+    .description('Restart one service, or every installed service when no name is given (launchctl kickstart -k / systemctl --user restart)')
+    .action((nameArg: string | undefined) => {
+      runRestart(nameArg);
     });
 }
 
