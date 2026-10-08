@@ -157,6 +157,8 @@ export interface InsightAggregates {
   routing: RoutingAggregates;
   /** Per-week outcome label counts (good-proven / good-presumed / bad / blocked / unknown). */
   outcomes: OutcomeAggregates;
+  /** Recurring pre-existing defects acknowledged by the agent across sessions. */
+  preexistingDefects: import('./aggregators/preexisting-defects.js').PreexistingDefectAggregates;
 }
 
 // ---------------------------------------------------------------------------

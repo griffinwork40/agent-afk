@@ -1,0 +1,146 @@
+/**
+ * Reader and dedupe module for the pre-existing-defect ledger.
+ *
+ * Reads `preexisting-ledger.jsonl`, groups records by (repo, locus, signal),
+ * counts recurrences, and tracks first/last seen timestamps.
+ *
+ * Design:
+ *   - Tolerant: malformed lines are silently skipped (never throws).
+ *   - Sync: all I/O via `existsSync` / `readFileSync`.
+ *   - No side effects — pure data transformation after the single read.
+ *
+ * @module agent/preexisting-ledger/reader
+ */
+
+import { existsSync, readFileSync } from 'node:fs';
+import { getPreexistingLedgerPath } from './paths.js';
+import { parseJsonlLines } from '../../utils/jsonl.js';
+import type { LedgerRecord } from './session-end-hook.js';
+
+// ---------------------------------------------------------------------------
+// Public types
+// ---------------------------------------------------------------------------
+
+/** A deduplicated cluster of recurrences for one (repo, locus, signal) key. */
+export interface DefectCluster {
+  /** Repo path (cwd at recording time). */
+  repo: string;
+  /** The affected locus (file path, gate name, test name). */
+  locus: string;
+  /** Which detection signal fired. */
+  signal: string;
+  /** Coarse defect category from the detector. */
+  category: string;
+  /** Number of distinct sessions in which this cluster recurred. */
+  recurrenceCount: number;
+  /** ISO timestamp of the first recorded occurrence. */
+  firstSeen: string;
+  /** ISO timestamp of the most recent occurrence. */
+  lastSeen: string;
+}
+
+// ---------------------------------------------------------------------------
+// Type guard for raw JSONL records
+// ---------------------------------------------------------------------------
+
+function isLedgerRecord(x: unknown): x is LedgerRecord {
+  if (x === null || typeof x !== 'object' || Array.isArray(x)) return false;
+  const r = x as Record<string, unknown>;
+  return (
+    typeof r['ts'] === 'string' &&
+    typeof r['sessionId'] === 'string' &&
+    typeof r['signal'] === 'string' &&
+    Array.isArray(r['loci'])
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Reader
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the preexisting ledger at the default path and return all valid
+ * records. Malformed lines are silently skipped.
+ * Returns an empty array when the ledger is missing or unreadable.
+ */
+export function readLedgerRecords(): LedgerRecord[] {
+  const ledgerPath = getPreexistingLedgerPath();
+  if (!existsSync(ledgerPath)) return [];
+  let raw: string;
+  try {
+    raw = readFileSync(ledgerPath, 'utf8');
+  } catch {
+    return [];
+  }
+  return parseJsonlLines<LedgerRecord>(raw, { guard: isLedgerRecord });
+}
+
+// ---------------------------------------------------------------------------
+// Deduplication / clustering
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a composite cluster key: repo + locus + signal.
+ * Each (repo, locus, signal) combination is its own cluster.
+ */
+function clusterKey(repo: string, locus: string, signal: string): string {
+  return `${repo}\x00${locus}\x00${signal}`;
+}
+
+/**
+ * Group ledger records by (repo, locus, signal), count distinct sessions,
+ * and track first/last seen timestamps.
+ *
+ * One ledger record may carry multiple loci — each locus expands into its
+ * own cluster entry.
+ *
+ * Clusters are ranked by descending recurrence count, then descending lastSeen.
+ */
+export function clusterLedgerRecords(records: LedgerRecord[]): DefectCluster[] {
+  type ClusterAccum = {
+    repo: string;
+    locus: string;
+    signal: string;
+    category: string;
+    sessions: Set<string>;
+    timestamps: string[];
+  };
+
+  const map = new Map<string, ClusterAccum>();
+
+  for (const record of records) {
+    const { ts, sessionId, repo, signal, category, loci } = record;
+    if (!Array.isArray(loci)) continue;
+    for (const locus of loci) {
+      if (typeof locus !== 'string' || !locus) continue;
+      const key = clusterKey(repo, locus, signal);
+      if (!map.has(key)) {
+        map.set(key, { repo, locus, signal, category, sessions: new Set(), timestamps: [] });
+      }
+      const accum = map.get(key)!;
+      accum.sessions.add(sessionId);
+      if (ts) accum.timestamps.push(ts);
+    }
+  }
+
+  const clusters: DefectCluster[] = [];
+  for (const accum of map.values()) {
+    const sorted = [...accum.timestamps].sort();
+    clusters.push({
+      repo: accum.repo,
+      locus: accum.locus,
+      signal: accum.signal,
+      category: accum.category,
+      recurrenceCount: accum.sessions.size,
+      firstSeen: sorted[0] ?? '',
+      lastSeen: sorted[sorted.length - 1] ?? '',
+    });
+  }
+
+  clusters.sort((a, b) => {
+    if (b.recurrenceCount !== a.recurrenceCount) return b.recurrenceCount - a.recurrenceCount;
+    return b.lastSeen.localeCompare(a.lastSeen);
+  });
+
+  return clusters;
+}

@@ -71,6 +71,11 @@ function makeZeroAgg(): InsightAggregates {
       totalRecords: 0,
       parseErrors: 0,
     },
+    preexistingDefects: {
+      totalRecords: 0,
+      skippedOutOfWindow: 0,
+      topClusters: [],
+    },
   };
 }
 
@@ -151,6 +156,21 @@ function makeNonZeroAgg(): InsightAggregates {
       },
       totalRecords: 11,
       parseErrors: 0,
+    },
+    preexistingDefects: {
+      totalRecords: 3,
+      skippedOutOfWindow: 0,
+      topClusters: [
+        {
+          repo: '/home/user/myrepo',
+          locus: 'src/agent/session.test.ts',
+          signal: 'preexisting-sentence',
+          category: 'failing-test',
+          recurrenceCount: 3,
+          firstSeen: '2025-01-01T00:00:00.000Z',
+          lastSeen: '2025-01-15T00:00:00.000Z',
+        },
+      ],
     },
   };
 }
