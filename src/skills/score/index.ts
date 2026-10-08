@@ -35,6 +35,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import { promises as fs } from 'fs';
 import { join, dirname } from 'path';
 import { errorMessage } from '../../utils/errors.js';
+import { pathExists } from '../../utils/fs.js';
 
 export const SCORE_SCHEMA_VERSION = 1 as const;
 export const DEFAULT_TIMEOUT_MS = 120_000;
@@ -378,14 +379,7 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-async function fileExists(path: string): Promise<boolean> {
-  try {
-    await fs.access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
+const fileExists = pathExists;
 
 // Unused import guard (dirname kept for future score-file-derived helpers).
 void dirname;
