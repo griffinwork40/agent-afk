@@ -125,8 +125,11 @@ function resolveQuotaFallbackWaitMs(): number {
 
 /**
  * Convenience test-injection helper that sets any combination of the three
- * quota override knobs in a single call. Pass `null` for any field to restore
- * its production default. Call with an empty object (`{}`) to reset all three.
+ * quota override knobs in a single call. Pass `null` for a field to restore
+ * its production default; omit a field to leave it unchanged. Call with an
+ * empty object (`{}`) to leave all three unchanged (NOT a reset — use
+ * `{ transientThresholdMs: null, twoHoursMs: null, fallbackWaitMs: null }`
+ * to reset all three to production defaults).
  *
  * @internal Test injection only — never call in production code.
  */

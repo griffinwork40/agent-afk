@@ -296,6 +296,46 @@ function handleRequest(req: IncomingMessage, res: ServerResponse, scheduler: Cro
   });
 }
 
+/** Type guard: returns true only for the three valid `notifyOn` literal values. */
+function isValidNotifyOn(v: unknown): v is ScheduledTask['notifyOn'] {
+  return v === 'failure' || v === 'always' || v === 'never';
+}
+
+/** Parameters for {@link isShellExecutorTrusted}. */
+interface ShellTrustParams {
+  taskId: string;
+  command: string;
+  cronExpression: string;
+  trigger: TriggerMode | undefined;
+  notifyOn: ScheduledTask['notifyOn'];
+  notifyChat: number | string | undefined;
+  cwd: string | undefined;
+}
+
+/**
+ * Returns true when a shell-executor POST /tasks request can be trusted —
+ * i.e. the payload matches an enabled shell entry already persisted in the
+ * schedule store. Extracted to keep handleRequestAsync under the 200-line ceiling.
+ */
+function isShellExecutorTrusted(params: ShellTrustParams): boolean {
+  const storedConfig = getSchedule(params.taskId);
+  if (!storedConfig || !storedConfig.enabled || storedConfig.executor !== 'shell') return false;
+  const canonical = toScheduledTask(storedConfig);
+  // Normalize notifyOn to the effective default ('failure') so an omitted field
+  // in the store entry and an omitted field in the request compare equal. A bare
+  // === between two optional values would reject a valid sync when one side is
+  // undefined and the other is 'failure' (the canonical default).
+  const canonicalNotifyOn: ScheduledTask['notifyOn'] = canonical.notifyOn ?? 'failure';
+  return (
+    canonical.command === params.command &&
+    canonical.cronExpression === params.cronExpression &&
+    (canonical.trigger ?? 'cron') === (params.trigger ?? 'cron') &&
+    canonicalNotifyOn === params.notifyOn &&
+    canonical.notifyChat === params.notifyChat &&
+    canonical.cwd === params.cwd
+  );
+}
+
 async function handleRequestAsync(
   req: IncomingMessage,
   res: ServerResponse,
@@ -391,30 +431,24 @@ async function handleRequestAsync(
     // what the next daemon restart would do anyway.  No new untrusted command can
     // enter via this window.
     if (executorRaw === 'shell') {
-      const storedConfig = getSchedule(taskIdRaw);
-      const canonical = storedConfig ? toScheduledTask(storedConfig) : undefined;
-      // Normalize notifyOn to the effective default ('failure') on both sides so
-      // that an omitted field in the store entry and an omitted field in the
-      // request body are treated as equal.  A bare === between two optional
-      // values would silently reject a valid sync when one side is undefined and
-      // the other is 'failure' (the canonical default).
-      const canonicalNotifyOn: ScheduledTask['notifyOn'] = canonical?.notifyOn ?? 'failure';
-      const requestNotifyOn: ScheduledTask['notifyOn'] =
-        (obj['notifyOn'] as ScheduledTask['notifyOn'] | undefined) ?? 'failure';
+      // Validate the request-side notifyOn against the literal union instead of
+      // an unchecked cast. An absent value means the default ('failure'); a
+      // present but unrecognized value is rejected outright, never coerced to
+      // the default, so validation can only narrow trust, not widen it.
+      const rawNotifyOn = obj['notifyOn'];
+      const notifyOnValid = rawNotifyOn === undefined || rawNotifyOn === null || isValidNotifyOn(rawNotifyOn);
       const trusted =
-        storedConfig !== undefined &&
-        storedConfig.enabled === true &&
-        storedConfig.executor === 'shell' &&
-        canonical !== undefined &&
-        canonical.command === (obj['command'] as string) &&
-        canonical.cronExpression === cronValue &&
-        (canonical.trigger ?? 'cron') === ((obj['trigger'] as TriggerMode | undefined) ?? 'cron') &&
-        canonicalNotifyOn === requestNotifyOn &&
-        canonical.notifyChat ===
-          (typeof notifyChatRaw === 'number' || typeof notifyChatRaw === 'string'
-            ? notifyChatRaw
-            : undefined) &&
-        canonical.cwd === cwd;
+        notifyOnValid &&
+        isShellExecutorTrusted({
+          taskId: taskIdRaw,
+          command: obj['command'] as string,
+          cronExpression: cronValue,
+          trigger: obj['trigger'] as TriggerMode | undefined,
+          notifyOn: isValidNotifyOn(rawNotifyOn) ? rawNotifyOn : 'failure',
+          notifyChat:
+            typeof notifyChatRaw === 'number' || typeof notifyChatRaw === 'string' ? notifyChatRaw : undefined,
+          cwd,
+        });
       if (!trusted) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(

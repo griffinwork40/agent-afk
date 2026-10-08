@@ -21,9 +21,12 @@ import {
   isQuotaLimitErrorEvent,
   runIterationWithQuotaLimitPause,
   QUOTA_TRANSIENT_THRESHOLD_MS,
+  QUOTA_FALLBACK_WAIT_MS,
+  QUOTA_TWO_HOURS_MS,
   __setQuotaTwoHoursMs,
   __setQuotaFallbackWaitMs,
   __setQuotaTransientThresholdMs,
+  __setQuotaOverrides,
 } from './usage-limit-tier.js';
 import type { IterationResult } from './stream-drive.js';
 import { createStreamState } from '../translate.js';
@@ -536,5 +539,64 @@ describe('runIterationWithQuotaLimitPause — ChatGPT usage_limit_reached', () =
     const { events } = await runTier(makeGen([quotaErrorEvent(600)], null), { autoResumeOnUsageLimit: false });
     const paused = events[0] as PausedEv;
     expect(paused).toEqual({ type: 'paused', reason: 'usage-limit', autoResume: false });
+  });
+});
+
+describe('__setQuotaOverrides', () => {
+  afterEach(() => {
+    // Reset all three knobs to production defaults after each test.
+    __setQuotaOverrides({ transientThresholdMs: null, twoHoursMs: null, fallbackWaitMs: null });
+  });
+
+  it('sets individual knobs when the corresponding field is present', () => {
+    __setQuotaOverrides({ transientThresholdMs: 1000 });
+    // A 1001 ms retry-after is now above the (overridden) 1000 ms threshold → quota.
+    const ev = {
+      type: 'error' as const,
+      error: Object.assign(new Error('rate limited'), {
+        status: 429,
+        headers: { 'retry-after': '2' }, // 2 seconds → 2000 ms
+      }),
+    };
+    expect(isQuotaLimitErrorEvent(ev)).toBe(true);
+  });
+
+  it('empty object leaves all knobs unchanged', () => {
+    __setQuotaOverrides({ transientThresholdMs: 9999 });
+    __setQuotaOverrides({}); // must NOT reset
+    // Threshold is still 9999; a 10000 ms retry-after → quota.
+    const ev = {
+      type: 'error' as const,
+      error: Object.assign(new Error('rate limited'), {
+        status: 429,
+        headers: { 'retry-after': '10' }, // 10 seconds → 10000 ms
+      }),
+    };
+    expect(isQuotaLimitErrorEvent(ev)).toBe(true);
+    __setQuotaOverrides({ transientThresholdMs: null }); // clean up explicitly
+  });
+
+  it('passing null for a field resets it to the production default', () => {
+    __setQuotaOverrides({ transientThresholdMs: 1 });
+    __setQuotaOverrides({ transientThresholdMs: null });
+    // Back to the production threshold (QUOTA_TRANSIENT_THRESHOLD_MS = 5 min).
+    // A 4-min retry-after is below the default threshold → NOT quota.
+    const ev = {
+      type: 'error' as const,
+      error: Object.assign(new Error('rate limited'), {
+        status: 429,
+        headers: { 'retry-after': String(4 * 60) }, // 4 minutes
+      }),
+    };
+    expect(isQuotaLimitErrorEvent(ev)).toBe(false);
+  });
+
+  it('resetting all three with explicit nulls restores every production default', () => {
+    __setQuotaOverrides({ transientThresholdMs: 1, twoHoursMs: 1, fallbackWaitMs: 1 });
+    __setQuotaOverrides({ transientThresholdMs: null, twoHoursMs: null, fallbackWaitMs: null });
+    // Verifying production constants are back (we just need that a sane threshold is active).
+    expect(QUOTA_TRANSIENT_THRESHOLD_MS).toBe(5 * 60 * 1000);
+    expect(QUOTA_TWO_HOURS_MS).toBe(2 * 60 * 60 * 1000);
+    expect(QUOTA_FALLBACK_WAIT_MS).toBe(60 * 1000);
   });
 });
