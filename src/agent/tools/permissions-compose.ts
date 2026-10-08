@@ -21,5 +21,6 @@ export function composeDispatcherPermissions(
   customToolNames: readonly string[],
 ): ToolPermissionConfig | undefined {
   const withMcp = mcpWireNames ? withMcpToolsAllowed(base, mcpWireNames) : base;
-  return withOperatorDenied(withCustomToolsAllowed(withMcp, customToolNames));
+  const withCustom = withCustomToolsAllowed(withMcp, customToolNames);
+  return withOperatorDenied(withCustom, withCustom?.deniedTools ?? []);
 }

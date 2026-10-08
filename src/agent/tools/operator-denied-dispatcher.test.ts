@@ -35,6 +35,25 @@ describe('external dispatcher operator guard', () => {
     const inner = { execute: async () => ({ content: 'ok' }) };
     expect(withOperatorDeniedDispatcher(inner, undefined)).toBe(inner);
   });
+  it('double-wrapping is idempotent (returns inner unchanged when already guarded)', () => {
+    const inner = { execute: async () => ({ content: 'ok' }) };
+    const first = withOperatorDeniedDispatcher(inner, { deniedTools: ['bash'] })!;
+    const second = withOperatorDeniedDispatcher(first, { deniedTools: ['bash'] });
+    expect(second).toBe(first);
+  });
+});
+
+describe('OpenAI external-dispatcher schema filtering', () => {
+  it('operatorDispatcherToolDefs filters denied tools from fallback for guarded dispatcher', () => {
+    const inner = { execute: async () => ({ content: 'ok' }) };
+    const guarded = withOperatorDeniedDispatcher(inner, { deniedTools: ['bash'] })!;
+    const filtered = operatorDispatcherToolDefs(guarded, defs);
+    expect(filtered.map((s) => s.name)).toEqual(['read_file']);
+  });
+  it('operatorDispatcherToolDefs returns fallback unchanged for unguarded dispatcher', () => {
+    const inner = { execute: async () => ({ content: 'ok' }) };
+    expect(operatorDispatcherToolDefs(inner, defs)).toBe(defs);
+  });
 });
 
 describe('CLI tools config view', () => {

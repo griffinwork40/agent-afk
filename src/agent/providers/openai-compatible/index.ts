@@ -25,7 +25,7 @@ import type { SkillExecutor } from '../../tools/skill-executor.js';
 import type { ComposeExecutor } from '../../tools/compose-executor.js';
 import type { ToolPermissionConfig } from '../../tools/permissions.js';
 import { composeDispatcherPermissions } from '../../tools/permissions-compose.js';
-import { snapshotOperatorOptions } from '../../tools/operator-denied-dispatcher.js';
+import { snapshotOperatorOptions, operatorDispatcherToolDefs } from '../../tools/operator-denied-dispatcher.js';
 import type { CanUseTool } from '../../types/sdk-types.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
@@ -318,8 +318,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // intercepted by the awareness handler. Otherwise the inner dispatcher
     // would return `Unknown tool` for a tool the model legitimately sees in
     // its schema list. See wrapDispatcherWithRuntimeState for the invariant.
+    // Stamp toolDefs on the external-dispatcher wrapper so query.ts:246 picks
+    // up the schema list — mirrors dispatcher-wiring.ts:219 (Anthropic path).
     dispatcher = this.providerOpts.tools
-      ? wrapDispatcherWithRuntimeState(this.providerOpts.tools, runtimeStateSource)
+      ? Object.assign(wrapDispatcherWithRuntimeState(this.providerOpts.tools, runtimeStateSource),
+          { toolDefs: operatorDispatcherToolDefs(this.providerOpts.tools, selectBaseSchemas(this.schemas, { isSkillDispatch: config.isSkillDispatch, isNonInteractive: config.isNonInteractive })) })
       : this.buildDispatcher(permissionMode, {
           ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
           ...(this._sharedReadRoots !== undefined ? { readRoots: this._sharedReadRoots } : {}),

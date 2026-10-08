@@ -48,6 +48,11 @@ function warn(message: string): void {
   console.error(`[tools.disabled] ${message}`);
 }
 
+/** Reset per-session warning dedup so daemon processes warn on each new session. */
+export function resetWarnings(): void {
+  warned.clear();
+}
+
 /** Parse one tier without dropping valid entries beside malformed values. */
 export function parseDisabledTools(value: unknown, source: string, customNames: readonly string[] = []): string[] {
   if (value === undefined) return [];
@@ -58,7 +63,7 @@ export function parseDisabledTools(value: unknown, source: string, customNames: 
   const names = new Set<string>();
   for (const entry of value) {
     if (typeof entry !== 'string') {
-      warn(`${source}: tools.disabled contains a non-string entry.`);
+      warn(`${source}: tools.disabled contains a non-string entry (got ${typeof entry}).`);
       continue;
     }
     if (LOCKED_TOOLS.has(entry)) {
@@ -76,6 +81,8 @@ export function parseDisabledTools(value: unknown, source: string, customNames: 
 
 /** Snapshot the union of ALL config tiers at provider construction, not per query. */
 export function resolveOperatorDeniedTools(customNames: readonly string[] = []): string[] {
+  // Reset warning dedup so daemon processes warn once per session, not once ever.
+  warned.clear();
   const denied = new Set<string>();
   for (const { path } of jsonConfigTierPaths()) {
     if (!existsSync(path)) continue;
@@ -94,9 +101,15 @@ export function resolveOperatorDeniedTools(customNames: readonly string[] = []):
 /** Apply operator denies last without mutating the allowlist or losing prior denies. */
 export function withOperatorDenied(
   base: ToolPermissionConfig | undefined,
-  denied: readonly string[] = base?.deniedTools ?? [],
+  denied: readonly string[],
 ): ToolPermissionConfig | undefined {
   if (denied.length === 0) return base;
+  // Identity short-circuit: when the deny list is exactly what base already carries, skip allocation.
+  if (
+    base?.deniedTools &&
+    denied.length === base.deniedTools.length &&
+    denied.every((d, i) => d === base.deniedTools![i])
+  ) return base;
   return { ...base, deniedTools: [...new Set([...(base?.deniedTools ?? []), ...denied])] };
 }
 

@@ -22,6 +22,8 @@ export function withOperatorDeniedDispatcher(
   permissions: ToolPermissionConfig | undefined,
 ): ToolDispatcher | undefined {
   if (!inner || !permissions?.deniedTools?.length) return inner;
+  // Idempotent: if the inner is already guarded with the same deny set, return it unchanged.
+  if (isGuarded(inner)) return inner;
   const denied = permissions.deniedTools;
   const wrapped: GuardedDispatcher = {
     operatorDenied: denied,
