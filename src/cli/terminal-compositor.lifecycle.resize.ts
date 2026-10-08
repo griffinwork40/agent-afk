@@ -31,7 +31,10 @@ import { requestCprOrMarkDirty } from './terminal-compositor.lifecycle.cpr.js';
  * called. While the CPR is pending, Frame.repaint() suppresses its write so
  * the stale-row repaint cannot race the delta correction.
  *
- * On SHRINK: drops any stale EXPAND snapshot.
+ * On SHRINK: if a CPR is already in-flight (cprPending), the existing
+ * snapshot is merged (min top / max bottom) rather than discarded — the
+ * pending CPR still needs it to drive the ghost-row erase on repaint.
+ * When no CPR is pending, any stale EXPAND snapshot is dropped as before.
  *
  * On WIDTH-ONLY (net-zero rows): snapshots the footprint for ghost-row erase
  * (same as EXPAND) and emits a CPR to trigger a clean repaint after tmux
@@ -74,16 +77,40 @@ export function handleResizeImmediate(self: LifecycleHost): void {
       requestCprOrMarkDirty(self, frameBottom, newRows, /* rowDelta= */ newRows - self.lastKnownRows);
     }
   } else if (newRows < self.lastKnownRows) {
-    // SHRINK: drop any stale EXPAND snapshot (existing contract), then emit a
-    // CPR request to measure how many rows tmux pushed into scrollback history.
-    // When the pane shrinks, tmux first trims blank rows below the cursor, then
-    // pushes top rows into history — shifting the cursor UP by delta rows
-    // (0 ≤ |delta| ≤ shrink amount). The CPR reply reports the real cursor row;
-    // delta = reported − originalExpectedRow (negative on a push). We apply
-    // applyScrollDelta with the negative delta so tracked rows shift UP with the
-    // content, preventing the stale high-row frame ghost below the live frame
-    // after a shrink. Bursts handled by requestCprOrMarkDirty (same as EXPAND).
-    self.pendingResizeErase = null;
+    // SHRINK: emit a CPR request to measure how many rows tmux pushed into
+    // scrollback history.  When the pane shrinks, tmux first trims blank rows
+    // below the cursor, then pushes top rows into history — shifting the cursor
+    // UP by delta rows (0 ≤ |delta| ≤ shrink amount).  The CPR reply reports
+    // the real cursor row; delta = reported − originalExpectedRow (negative on
+    // a push).  We apply applyScrollDelta with the negative delta so tracked
+    // rows shift UP with the content, preventing the stale high-row frame ghost
+    // below the live frame after a shrink.  Bursts handled by
+    // requestCprOrMarkDirty (same as EXPAND).
+    //
+    // Snapshot rule (burst safety, #3283): a WIDTH-ONLY event that precedes
+    // this SHRINK in the same burst has already set pendingResizeErase AND
+    // started a CPR.  Unconditionally nulling the snapshot here would discard
+    // the erase footprint before the in-flight CPR calls repaint() — the ghost
+    // spinner row that #3205/#3228 fixed would survive.
+    //
+    // Distinction:
+    //   • CPR started by a WIDTH-ONLY (growTotal===0, shrinkTotal===0): the
+    //     snapshot records ghost rows from a soft-wrap reflow; preserve it.
+    //   • CPR started by an EXPAND (growTotal > 0): the snapshot records the
+    //     pre-expand footprint; a following SHRINK makes those rows stale —
+    //     drop the snapshot (existing contract, prevents erasing reflowed rows).
+    //   • No CPR in-flight: drop any stale snapshot (existing contract).
+    const burstFromWidthOnly =
+      self.cprPending &&
+      self.cprBurst !== null &&
+      self.cprBurst.growTotal === 0 &&
+      self.cprBurst.shrinkTotal === 0;
+    if (!burstFromWidthOnly) {
+      // Drop stale snapshot: no CPR in-flight, or CPR was started by an EXPAND.
+      self.pendingResizeErase = null;
+    }
+    // burstFromWidthOnly === true: preserve the snapshot so the pending
+    // CPR repaint can erase the ghost spinner row left by the soft-wrap reflow.
     const frameBottom = self.lastMeasuredFrameBottom;
     if (frameBottom > 0 && self.stdin.isTTY) {
       requestCprOrMarkDirty(self, frameBottom, newRows, /* rowDelta= */ newRows - self.lastKnownRows);
