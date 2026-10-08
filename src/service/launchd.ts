@@ -10,6 +10,7 @@
  *   - `./launchd/install.ts` — installService / uninstallService / readPlistFile
  */
 export * from './launchd/paths.js';
+export * from './launchd/brew-cellar.js';
 export * from './launchd/plist.js';
 export * from './launchd/status.js';
 export * from './launchd/install.js';

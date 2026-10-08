@@ -200,15 +200,16 @@ function restartServices(): void {
       console.warn(palette.warning(`  ⚠ ${name} service not found during restart — skipped.`));
     } else {
       // Restart failed. Warn loudly; do NOT mark the update as failed.
-      // History: this code path mirrors the ETIMEDOUT incident where
-      // `afk service restart daemon` printed a failure and left the service
-      // stopped; recovery was manual uninstall + reinstall.
+      // History: this code path mirrors the ETIMEDOUT incident (#3298) where
+      // launchctl bootout timed out and left the service STOPPED rather than
+      // running on old code — the service may be stopped OR still on the old
+      // version depending on where in the restart sequence the failure occurred.
       const reason = result.reason;
       console.error(
         palette.warning(
           `\n⚠ WARNING: ${name} service restart failed: ${reason}\n` +
-          `  The update installed successfully, but the ${name} service is still running\n` +
-          `  the old code. To apply the update manually, run:\n` +
+          `  The update installed successfully, but the ${name} service may be stopped\n` +
+          `  or still running the old version. To apply the update manually, run:\n` +
           `    afk service restart ${name}\n` +
           `  If restart continues to fail, try:\n` +
           `    afk service uninstall ${name} && afk service install ${name}\n`,
