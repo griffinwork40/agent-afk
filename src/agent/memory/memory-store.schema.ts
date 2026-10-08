@@ -200,10 +200,17 @@ export function runMigrations(db: BetterSqlite3.Database, existingVersion: numbe
     debugLog('memory-store: migrated schema v3 → v4 (added facts.evidence column)');
   }
   if (existingVersion < 5) {
-    db.transaction(() => {
+    // Invariant: persist the canonical ISO observation epoch before stamping v5,
+    // in the same transaction. INSERT OR IGNORE preserves the first opener's
+    // epoch, using the same timestamp format as the constructor.
+    const seedTs = new Date().toISOString();
+    db.transaction((ts: string) => {
       db.exec(TRACKING_SCHEMA_SQL);
+      db.prepare(
+        `INSERT OR IGNORE INTO memory_metadata (key, value) VALUES ('tracking_started_at', ?)`,
+      ).run(ts);
       db.pragma('user_version = 5');
-    }).immediate();
+    }).immediate(seedTs);
     debugLog('memory-store: migrated schema v4 → v5 (tracking epoch and metadata-only updates)');
   }
 }

@@ -240,8 +240,19 @@ export async function sweepMemoryGc(
       if (!hasMetadata) return noop('tracking-unknown');
       const marker = db.prepare(`SELECT value FROM memory_metadata
         WHERE key = 'tracking_started_at'`).get() as { value: string } | undefined;
-      if (!marker || !Number.isFinite(Date.parse(marker.value))) return noop('tracking-unknown');
-      const trackingStart = new Date(marker.value).toISOString();
+      // Strict canonical ISO guard: the stored value must be present, parse to
+      // a finite epoch, AND survive a round-trip through toISOString() unchanged.
+      // Date.parse('0') is year-2000 (finite!) but '0' !== its toISOString(),
+      // so that and all other non-canonical formats fall into tracking-unknown.
+      if (!marker) return noop('tracking-unknown');
+      const parsedEpoch = Date.parse(marker.value);
+      if (
+        !Number.isFinite(parsedEpoch) ||
+        new Date(parsedEpoch).toISOString() !== marker.value
+      ) {
+        return noop('tracking-unknown');
+      }
+      const trackingStart = marker.value;
       const predicateParams = [trackingStart, cutoff, ...excludedValues];
 
       // Count candidates first so that `candidates` reflects how many facts

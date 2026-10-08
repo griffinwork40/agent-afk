@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { MemoryStore } from './memory-store.js';
 import { sweepMemoryGc } from './memory-gc-sweep.js';
+import { runMigrations, SCHEMA_SQL } from './memory-store.schema.js';
 
 let dir: string;
 let store: MemoryStore;
@@ -143,4 +144,113 @@ describe('recall access accounting', () => {
     expect(store.getFact(id)?.access_count).toBe(30);
     expect(store.getFact(id)?.last_accessed).not.toBeNull();
   }, 15000);
+});
+
+// ---------------------------------------------------------------------------
+// Scope 1: canonical ISO guard in GC sweep
+// ---------------------------------------------------------------------------
+
+describe('GC sweep — canonical ISO guard rejects non-canonical tracking markers', () => {
+  // Reject both unparseable values and parseable values that fail the
+  // canonical ISO round trip, including normalized invalid calendar dates.
+  it.each([
+    ['parseable zero string (year-2000 in local TZ)', '0'],
+    ['non-zero-padded date', '2027-1-1'],
+    ['locale-style date string', '01 Jan 2027'],
+    ['normalized invalid calendar date', '2027-02-30T00:00:00.000Z'],
+    ['unix timestamp as string', '1735689600000'],
+  ])('returns tracking-unknown for %s', async (_label, value) => {
+    db.prepare('UPDATE memory_metadata SET value = ? WHERE key = ?')
+      .run(value, 'tracking_started_at');
+    const result = await sweepMemoryGc({ memoryDir: dir, force: true });
+    expect(result).toMatchObject({ skipped: true, skipReason: 'tracking-unknown', archived: 0 });
+  });
+
+  it('does NOT archive an aged never-tracked row when marker is non-canonical', async () => {
+    const id = fact();
+    // Backdate so it would be eligible if the marker were canonical.
+    db.prepare('UPDATE facts SET created_at = ? WHERE id = ?')
+      .run('2026-01-01T00:00:00.000Z', id);
+    // Corrupt the marker to a parseable but non-canonical value.
+    db.prepare('UPDATE memory_metadata SET value = ? WHERE key = ?')
+      .run('0', 'tracking_started_at');
+    const result = await sweepMemoryGc({ memoryDir: dir, force: true });
+    expect(result).toMatchObject({ skipped: true, skipReason: 'tracking-unknown', archived: 0 });
+    // Fact must be untouched — superseded_by stays NULL.
+    const row = db.prepare('SELECT superseded_by FROM facts WHERE id = ?')
+      .get(id) as { superseded_by: number | null };
+    expect(row.superseded_by).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scope 2: migration seeds marker without relying on constructor
+// ---------------------------------------------------------------------------
+
+describe('runMigrations(db, 4) — v4→v5 seeds tracking_started_at', () => {
+  it('seeds the marker inside the migration transaction (no constructor)', () => {
+    // Build a v4 DB from scratch (fresh SCHEMA_SQL at v4 state — no metadata table).
+    const migDir = mkdtempSync(join(tmpdir(), 'afk-migrate-v4-'));
+    const migDb = new Database(join(migDir, 'memory.db'));
+    try {
+      migDb.exec(SCHEMA_SQL);
+      // Drop the v5 additions to simulate a genuine v4 database.
+      migDb.exec('DROP TABLE IF EXISTS memory_metadata');
+      migDb.exec('DROP TRIGGER IF EXISTS facts_au');
+      // Restore the v4-era trigger (fires on all UPDATE, not just content/category).
+      migDb.exec(`CREATE TRIGGER facts_au AFTER UPDATE ON facts BEGIN
+        INSERT INTO facts_fts(facts_fts, rowid, content, category) VALUES ('delete', old.id, old.content, old.category);
+        INSERT INTO facts_fts(rowid, content, category) VALUES (new.id, new.content, new.category);
+      END;`);
+      migDb.pragma('user_version = 4');
+
+      // Fake timers are active from beforeEach — the seeded value must be epoch.
+      runMigrations(migDb, 4);
+
+      expect(migDb.pragma('user_version', { simple: true })).toBe(5);
+      const row = migDb.prepare('SELECT value FROM memory_metadata WHERE key = ?')
+        .get('tracking_started_at') as { value: string } | undefined;
+      expect(row).toBeDefined();
+      // Fake timer is set to epoch ('2027-01-01T00:00:00.000Z').
+      expect(row!.value).toBe(epoch);
+    } finally {
+      migDb.close();
+      rmSync(migDir, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves an existing marker on repeated stale-version migration (idempotent)', () => {
+    // Simulate a v4 database that has already been migrated once (metadata table
+    // exists with a value) but user_version was not bumped (e.g. crash mid-write).
+    // Re-running runMigrations(db, 4) must not overwrite the existing marker.
+    const migDir = mkdtempSync(join(tmpdir(), 'afk-migrate-idem-'));
+    const migDb = new Database(join(migDir, 'memory.db'));
+    try {
+      migDb.exec(SCHEMA_SQL);
+      // Simulate already-created metadata table with an existing marker (the
+      // table was created by a prior partial run) but user_version still at 4.
+      migDb.exec(`DELETE FROM memory_metadata`);
+      migDb.prepare('INSERT INTO memory_metadata (key, value) VALUES (?, ?)')
+        .run('tracking_started_at', epoch);
+      migDb.exec('DROP TRIGGER IF EXISTS facts_au');
+      migDb.exec(`CREATE TRIGGER facts_au AFTER UPDATE ON facts BEGIN
+        INSERT INTO facts_fts(facts_fts, rowid, content, category) VALUES ('delete', old.id, old.content, old.category);
+        INSERT INTO facts_fts(rowid, content, category) VALUES (new.id, new.content, new.category);
+      END;`);
+      migDb.pragma('user_version = 4');
+
+      // Advance fake time — migration must not overwrite the existing marker.
+      vi.setSystemTime(new Date('2027-06-01T00:00:00.000Z'));
+      runMigrations(migDb, 4);
+
+      const row = migDb.prepare('SELECT value FROM memory_metadata WHERE key = ?')
+        .get('tracking_started_at') as { value: string } | undefined;
+      expect(row).toBeDefined();
+      // INSERT OR IGNORE: the pre-existing epoch value must survive.
+      expect(row!.value).toBe(epoch);
+    } finally {
+      migDb.close();
+      rmSync(migDir, { recursive: true, force: true });
+    }
+  });
 });
