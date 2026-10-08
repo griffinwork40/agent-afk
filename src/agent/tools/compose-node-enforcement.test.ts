@@ -63,6 +63,15 @@ let origAfkHome: string | undefined;
  * itself throws (afterEach always runs).
  */
 const openStores: WorkspaceStore[] = [];
+/**
+ * Tracks ModelProvider instances built internally by ComposeExecutor /
+ * buildComposeNodeProvider. Each provider lazily opens its own StateStore
+ * (better-sqlite3 handle on state/kv/kv.db) when `buildDispatcher` is first
+ * called. On Windows these handles block rmSync with EBUSY unless explicitly
+ * closed. `openStores` only covers WorkspaceStores the test creates directly;
+ * this array covers the providers the executor creates internally.
+ */
+const openProviders: ModelProvider[] = [];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -73,9 +82,14 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // Close all WorkspaceStore handles opened during this test before removing
-  // the temp directory. On Windows, the SQLite WAL-mode handle stays open
-  // until explicitly closed, causing rmSync to throw EBUSY.
+  // Close all provider and WorkspaceStore handles opened during this test
+  // before removing the temp directory. On Windows, better-sqlite3 WAL-mode
+  // handles stay open until explicitly closed, causing rmSync to throw EBUSY.
+  // Providers first: their close() releases the internal StateStore /
+  // MemoryStore / WorkspaceStore they lazily opened via buildDispatcher.
+  for (const provider of openProviders.splice(0)) {
+    try { provider.close(); } catch { /* ignore: provider may already be closed */ }
+  }
   for (const store of openStores.splice(0)) {
     try { store.close(); } catch { /* ignore: store may already be closed */ }
   }
@@ -112,7 +126,9 @@ async function nodeProvider(
   });
   expect(mockRunSubagentDAG).toHaveBeenCalledTimes(1);
   const dagOpts = mockRunSubagentDAG.mock.calls[0]?.[0] as { nodes: Array<{ provider?: ModelProvider }> };
-  return dagOpts.nodes[0]?.provider;
+  const provider = dagOpts.nodes[0]?.provider;
+  if (provider !== undefined) openProviders.push(provider);
+  return provider;
 }
 
 /** Build the per-query dispatcher a forked child session would get. */
