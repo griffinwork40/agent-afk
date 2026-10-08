@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**221 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**222 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -74,6 +74,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_XAI_GROK_CLIENT_VERSION` | string |  |  | `1.0.6` | Override the semver sent as x-grok-client-version to the xAI OAuth CLI chat proxy. Use only if the proxy raises its required Grok CLI version before agent-afk is updated; invalid values fall back to the official Grok Build version file or built-in compatible default. |
 | `AFK_XAI_OAUTH_BASE_URL` | string |  |  | `https://cli-chat-proxy.grok.com/v1` | Base URL for xAI SuperGrok / SuperGrok Heavy / X Premium+ OAuth inference. Default https://cli-chat-proxy.grok.com/v1 (subscription path). Some accounts work on https://api.x.ai/v1 with OAuth — override if needed. Distinct from AFK_XAI_BASE_URL (API-key mode). |
 | `CLAUDE_MODEL` | string |  |  | `sonnet` | Legacy alias for AFK_MODEL — supported for back-compat with pre-AFK_* deployments. |
+| `OPENAI_BASE_URL` | string |  |  | `http://127.0.0.1:8000/v1` | Standard OpenAI SDK base URL override. When set without AFK_OPENAI_BASE_URL, the OpenAI SDK routes the client to this endpoint while AFK's own baseURL option remains undefined. AFK reads this variable to correctly classify the effective endpoint for decisions such as compaction model selection — without it, AFK would see an undefined baseURL and incorrectly treat the session as targeting api.openai.com. |
 
 ## Auth
 

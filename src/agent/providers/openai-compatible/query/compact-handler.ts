@@ -151,6 +151,7 @@ export async function runCompactHistory(
   const compactModel = resolveOpenAICompactModel(
     env.AFK_COMPACT_MODEL,
     ctx.opts.baseURL,
+    env.OPENAI_BASE_URL,
     ctx.opts.auth.source,
     ctx.currentModel,
   );

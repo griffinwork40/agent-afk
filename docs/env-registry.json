@@ -1682,6 +1682,14 @@
       "secret": true
     },
     {
+      "name": "OPENAI_BASE_URL",
+      "description": "Standard OpenAI SDK base URL override. When set without AFK_OPENAI_BASE_URL, the OpenAI SDK routes the client to this endpoint while AFK's own baseURL option remains undefined. AFK reads this variable to correctly classify the effective endpoint for decisions such as compaction model selection — without it, AFK would see an undefined baseURL and incorrectly treat the session as targeting api.openai.com.",
+      "type": "string",
+      "required": false,
+      "example": "http://127.0.0.1:8000/v1",
+      "category": "model"
+    },
+    {
       "name": "PAGER",
       "description": "Standard POSIX env var naming the user's preferred pager (with optional flags). Used by /transcript to render the full session in a scrollable viewer; falls back to `less -R` when unset.",
       "type": "string",
