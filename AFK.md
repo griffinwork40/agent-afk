@@ -83,6 +83,8 @@ The unit of the budget cap is **tool-use rounds**, not tool calls — 5 parallel
 
 ## Architecture
 
+Operator tool visibility settings (`tools.disabled`): see [docs/tool-toggles.md](docs/tool-toggles.md).
+
 Key layers under `src/`:
 
 | Path | Purpose |

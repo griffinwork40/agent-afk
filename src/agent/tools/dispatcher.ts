@@ -26,7 +26,7 @@ import type { ComposeExecutor } from './compose-executor.js';
 import type { ToolHandler, ToolHandlerContext, ConcurrencyClassifier } from './types.js';
 import type { ToolActivityReporter } from '../providers/shared/tool-activity.js';
 import type { SpawnedPidRegistry } from './handlers/pid-registry.js';
-import type { ToolPermissionConfig } from './permissions.js';
+import { checkToolPermission, type ToolPermissionConfig } from './permissions.js';
 import type { CanUseTool } from '../types/sdk-types.js';
 import { PathGrantManager, type GrantSnapshot, type GrantManager } from './grant-manager.js';
 
@@ -655,10 +655,9 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // advertised schema and the enforced surface cannot drift.
     const signals = { parentSessionId: this.parentSessionId, subagentId: this.subagentId };
     const available = withBg.filter((s) => !isPeerToolBlocked(s.name, signals));
-    const allowed = this.permissions?.allowedTools;
-    if (!allowed) return available;
-    const set = new Set(allowed);
-    return available.filter((s) => set.has(s.name));
+    // Same predicate as the execution-time permission gate (allowlist plus
+    // operator denies), so advertised and enforced surfaces cannot drift.
+    return available.filter((s) => checkToolPermission(s.name, this.permissions).allowed);
   }
 
   /**

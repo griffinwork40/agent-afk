@@ -33,6 +33,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { parseGrowthArgs } from './lib/growth-args.js';
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const BASELINE_REL = '.test-typecheck-baseline.json';
@@ -102,30 +104,34 @@ function measureErrors(): number {
 
 // ── CLI parsing (no process.env reads — all state from argv) ─────────────────
 
+/**
+ * All flags recognised by this script. Passed to `parseGrowthArgs` so that a
+ * flag used as a `--reason` value is rejected rather than silently accepted.
+ * Previously the local `parseArgs` did not guard this case, causing drift from
+ * the contract enforced by `parseGrowthArgs` in the size-ceiling scripts.
+ */
+const KNOWN_FLAGS = ['--check', '--update', '--allow-growth', '--reason'] as const;
+
 interface ParsedArgs {
   mode: 'check' | 'update';
   allowGrowth: boolean;
-  reason: string | undefined;
+  reason: string;
 }
 
 function parseArgs(argv: string[]): ParsedArgs | { error: string } {
   const args = argv.slice(2);
   const isUpdate = args.includes('--update');
-  const allowGrowth = args.includes('--allow-growth');
-  const reasonIdx = args.indexOf('--reason');
-  const reason = reasonIdx !== -1 ? args[reasonIdx + 1] : undefined;
 
-  if (allowGrowth && !isUpdate) {
+  // --allow-growth is only meaningful with --update; check before parseGrowthArgs
+  // so the error message is script-specific.
+  if (args.includes('--allow-growth') && !isUpdate) {
     return { error: '--allow-growth is only valid with --update' };
   }
-  if (allowGrowth && !reason) {
-    return { error: '--allow-growth requires --reason "<text>"' };
-  }
-  if (reason && !allowGrowth) {
-    return { error: '--reason requires --allow-growth' };
-  }
 
-  return { mode: isUpdate ? 'update' : 'check', allowGrowth, reason };
+  const growth = parseGrowthArgs(args, KNOWN_FLAGS);
+  if ('error' in growth) return growth;
+
+  return { mode: isUpdate ? 'update' : 'check', allowGrowth: growth.allowGrowth, reason: growth.reason };
 }
 
 // ── Mode: check ───────────────────────────────────────────────────────────────
@@ -167,7 +173,7 @@ function runCheck(): void {
 
 // ── Mode: update ──────────────────────────────────────────────────────────────
 
-function runUpdate(allowGrowth: boolean, reason: string | undefined): void {
+function runUpdate(allowGrowth: boolean, reason: string): void {
   const previous = readBaseline();
   const current = measureErrors();
 
@@ -192,7 +198,7 @@ function runUpdate(allowGrowth: boolean, reason: string | undefined): void {
     `\u2713 ${BASELINE_REL} updated: ${current} errors${changeStr}.\n`,
   );
   if (allowGrowth) {
-    process.stdout.write(`  Growth allowed — reason: ${reason ?? '(none)'}\n`);
+    process.stdout.write(`  Growth allowed — reason: ${reason || '(none)'}\n`);
     process.stdout.write(`  Include this reason in the commit message.\n`);
   }
   process.exit(0);

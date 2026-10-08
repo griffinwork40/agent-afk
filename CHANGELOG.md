@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.306.1] - 2026-10-08
+
+### Fixed
+- share normalizeSystemPromptOverlay; fix OpenAI preset {append} drop (#3305) (29241d8c)
+
+## [5.306.0] - 2026-10-08
+
+### Added
+- add preexisting-defect ledger reader and afk insights section (#3307) (1dbc57c5)
+- operator tool deny list (tools.disabled) with /config → Tools toggles (#3297) (abbd92bb)
+
 ## [5.305.8] - 2026-10-08
 
 ### Fixed

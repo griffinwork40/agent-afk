@@ -46,11 +46,8 @@ import {
 import { createMemoryHandlers, guardChildHotWrites, isForkedChildSession } from '../../memory/index.js';
 import { createGetRuntimeStateHandler } from '../../awareness/index.js';
 import { resolveSessionHookRegistry } from '../../hooks.js';
-import {
-  withMcpToolsAllowed,
-  withCustomToolsAllowed,
-  type ToolPermissionConfig,
-} from '../../tools/permissions.js';
+import type { ToolPermissionConfig } from '../../tools/permissions.js';
+import { composeDispatcherPermissions } from '../../tools/permissions-compose.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
 import { userAttentionFrom } from '../../tools/user-yield.js';
 
@@ -311,16 +308,12 @@ export function buildDispatcher(
     // the plan-mode gate (the sole built-in PreToolUse hook) never reached
     // the dispatcher and write tools ran unblocked in plan mode (c6892c6).
     hookRegistry: resolveSessionHookRegistry(opts?.hookRegistry, deps.hookRegistry),
-    // Union live MCP wire-names AND consumer-registered custom-tool names into
-    // the (statically-snapshotted) allowlist so neither is rejected by the
-    // gate while present in `schemas`/`handlers`. No-op when there is no
-    // allowlist (undefined => all allowed) or nothing to union. Registering a
-    // custom tool is the grant (same as connecting an MCP server); restricted
-    // sub-agents carry no customTools, so this never widens their allowlist.
-    permissions: withCustomToolsAllowed(
-      deps.mcpManager
-        ? withMcpToolsAllowed(deps.permissions, deps.mcpManager.getMcpToolWireNames())
-        : deps.permissions,
+    // MCP + custom-tool unions, then operator denies LAST. Ordering invariant
+    // and rationale live in tools/permissions-compose.ts (shared with the
+    // openai-compatible provider so the two cannot drift).
+    permissions: composeDispatcherPermissions(
+      deps.permissions,
+      deps.mcpManager?.getMcpToolWireNames(),
       deps.customTools.map((t) => t.schema.name),
     ),
     subagentExecutor: deps.subagentExecutor,

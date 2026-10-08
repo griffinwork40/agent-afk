@@ -15,6 +15,10 @@ import { aggregateTraces, zeroTraceAggregates } from './traces.js';
 import { aggregateDaemonTelemetry, zeroDaemonAggregates } from './daemon.js';
 import { aggregateRoutingDecisions, zeroRoutingAggregates } from './routing.js';
 import { aggregateOutcomes, zeroOutcomeAggregates } from './outcomes.js';
+import {
+  aggregatePreexistingDefects,
+  zeroPreexistingDefectAggregates,
+} from './preexisting-defects.js';
 import type { InsightsOptions, InsightAggregates } from '../types.js';
 import { errorMessage } from '../../utils/errors.js';
 
@@ -24,6 +28,7 @@ export {
   aggregateDaemonTelemetry,
   aggregateRoutingDecisions,
   aggregateOutcomes,
+  aggregatePreexistingDefects,
 };
 
 /**
@@ -60,5 +65,10 @@ export async function aggregateAll(options: InsightsOptions): Promise<InsightAgg
     daemon: safeAggregate('daemon', () => aggregateDaemonTelemetry(options), zeroDaemonAggregates),
     routing: safeAggregate('routing', () => aggregateRoutingDecisions(options), zeroRoutingAggregates),
     outcomes: safeAggregate('outcomes', () => aggregateOutcomes(options), zeroOutcomeAggregates),
+    preexistingDefects: safeAggregate(
+      'preexisting-defects',
+      () => aggregatePreexistingDefects(options),
+      zeroPreexistingDefectAggregates,
+    ),
   };
 }
