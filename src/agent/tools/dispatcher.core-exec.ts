@@ -170,7 +170,7 @@ export function denialReason(
   permissionReason: string | undefined,
   deps: CoreExecDeps,
 ): string {
-  if (isRegisteredTool(toolName, deps)) {
+  if (permissionReason?.includes('disabled by operator settings') || isRegisteredTool(toolName, deps)) {
     return permissionReason ?? `Tool "${toolName}" is not permitted`;
   }
   return unknownToolMessage(toolName, deps);

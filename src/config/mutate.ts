@@ -48,7 +48,9 @@ export const RESTART_NOTE =
 
 export class UnknownKeyError extends Error {
   constructor(key: string) {
-    super(`unknown config key: ${key}`);
+    super(key === 'tools.disabled' || key.startsWith('tools.disabled.') || key === 'tools'
+      ? 'tools.disabled is operator-only; the agent cannot change it. A human must edit afk.config.json.'
+      : `unknown config key: ${key}`);
     this.name = 'UnknownKeyError';
   }
 }

@@ -51,6 +51,7 @@ import {
   withCustomToolsAllowed,
   type ToolPermissionConfig,
 } from '../../tools/permissions.js';
+import { withOperatorDenied } from '../../tools/operator-denied.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
 import { userAttentionFrom } from '../../tools/user-yield.js';
 
@@ -317,12 +318,12 @@ export function buildDispatcher(
     // allowlist (undefined => all allowed) or nothing to union. Registering a
     // custom tool is the grant (same as connecting an MCP server); restricted
     // sub-agents carry no customTools, so this never widens their allowlist.
-    permissions: withCustomToolsAllowed(
+    permissions: withOperatorDenied(withCustomToolsAllowed(
       deps.mcpManager
         ? withMcpToolsAllowed(deps.permissions, deps.mcpManager.getMcpToolWireNames())
         : deps.permissions,
       deps.customTools.map((t) => t.schema.name),
-    ),
+    )),
     subagentExecutor: deps.subagentExecutor,
     skillExecutor: deps.skillExecutor,
     composeExecutor: deps.composeExecutor,

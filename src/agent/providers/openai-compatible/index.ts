@@ -23,7 +23,7 @@ import { resolveSessionHookRegistry } from '../../hooks.js';
 import type { SubagentExecutor } from '../../tools/subagent-executor.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import type { ComposeExecutor } from '../../tools/compose-executor.js';
-import { withMcpToolsAllowed, withCustomToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
+import { withMcpToolsAllowed, withCustomToolsAllowed, withOperatorDenied, snapshotOperatorOptions, type ToolPermissionConfig } from '../../tools/operator-denied-dispatcher.js';
 import type { CanUseTool } from '../../types/sdk-types.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
@@ -188,7 +188,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
   private readonly _spawnedPidRegistry = new SpawnedPidRegistry();
 
   constructor(opts: OpenAICompatibleProviderOptions = {}) {
-    this.providerOpts = opts;
+    this.providerOpts = snapshotOperatorOptions(opts);
     this._defaultHeaders = opts.defaultHeaders;
     this._memoryStore = opts.memoryStore;
     this.workspaceStore = opts.workspaceStore;
@@ -492,7 +492,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // while present in `schemas`/`handlers`. No-op when there is no allowlist
     // (undefined => all allowed) or nothing to union. Mirrors
     // AnthropicDirectProvider; restricted sub-agents carry no customTools.
-    const effectivePermissions = withCustomToolsAllowed(
+    const effectivePermissions = withOperatorDenied(withCustomToolsAllowed(
       this.providerOpts.mcpManager
         ? withMcpToolsAllowed(
             this.providerOpts.permissions,
@@ -500,7 +500,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
           )
         : this.providerOpts.permissions,
       (this.providerOpts.customTools ?? []).map((t) => t.schema.name),
-    );
+    ));
     if (effectivePermissions !== undefined) dispatcherOpts.permissions = effectivePermissions;
     if (this.providerOpts.subagentExecutor !== undefined) dispatcherOpts.subagentExecutor = this.providerOpts.subagentExecutor;
     if (this.providerOpts.skillExecutor !== undefined) dispatcherOpts.skillExecutor = this.providerOpts.skillExecutor;
