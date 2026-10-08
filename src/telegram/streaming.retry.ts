@@ -7,7 +7,7 @@
  */
 
 import { TelegramError } from 'telegraf';
-import { sleep } from '../agent/providers/shared/sleep-with-abort.js';
+import { sleep } from '../utils/sleep.js';
 
 /** Max flood-control (429) retries per outbound message before giving up. */
 export const MAX_FLOOD_RETRIES = 2;

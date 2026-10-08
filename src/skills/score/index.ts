@@ -36,6 +36,7 @@ import { promises as fs } from 'fs';
 import { join, dirname } from 'path';
 import { errorMessage } from '../../utils/errors.js';
 import { isPlainObject } from '../../utils/type-guards.js';
+import { truncate } from '../../utils/truncate.js';
 
 export const SCORE_SCHEMA_VERSION = 1 as const;
 export const DEFAULT_TIMEOUT_MS = 120_000;
@@ -369,10 +370,6 @@ function lintRank(v: boolean | null): number {
   if (v === true) return 2;
   if (v === false) return 1;
   return 0;
-}
-
-function truncate(s: string, n: number): string {
-  return s.length <= n ? s : s.slice(0, n) + '…';
 }
 
 const isObject = isPlainObject;
