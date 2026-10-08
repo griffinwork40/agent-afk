@@ -31,9 +31,12 @@
  *   --judge auto|jev|claude → judge selector (default auto)
  *   --concurrency <n>  → parallel episodes (default 4)
  *   --max-turns <n>    → turns per episode (default 3)
- *   --timeout <sec>    → episode timeout in seconds (default 180)
- *   --keep-sandboxes   → retain sandbox dirs after run
- *   --yes              → skip confirmation of compiled spec
+ *   --timeout <sec>            → episode timeout in seconds (default 180)
+ *   --probes <n>               → synthetic probe episodes per prediction (1–12, default 6)
+ *   --max-predictions <n>      → max predictions to retain (1–8, default resolved from --probes)
+ *   --keep-sandboxes           → retain sandbox dirs after run
+ *   --no-baseline-sample       → skip the baseline-sample preflight (#2511)
+ *   --yes                      → skip confirmation of compiled spec
  *   --json             → print JSON to stdout instead of terminal output
  *
  * Repeated flag-changes accumulate in order (e.g. multiple --memory-add).
@@ -42,7 +45,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import type { Change, ChangeSpec } from './types.js';
+import type { Change, OperatorPrediction } from './types.js';
 export { WHATIF_USAGE } from './args.usage.js';
 
 // ---------------------------------------------------------------------------
@@ -121,6 +124,14 @@ export interface WhatifFlagOptions {
   maxTurns: number;
   episodeTimeoutMs: number;
   keepSandboxes: boolean;
+  /** Number of synthetic probe episodes per prediction (1–12; default 6). */
+  probes?: number;
+  /** Maximum number of predictions to retain (1–8; default resolved from probes). */
+  maxPredictions?: number;
+  /** Skip the baseline-sample preflight; use analyst-estimate check instead (#2511). */
+  noBaselineSample?: boolean;
+  /** Operator-supplied predictions (#2861); accumulated in order. */
+  operatorPredictions?: OperatorPrediction[];
 }
 
 export interface ParsedWhatifArgs {
@@ -136,6 +147,8 @@ export interface ParsedWhatifArgs {
   yes: boolean;
   /** Emit JSON output. */
   json: boolean;
+  /** Bypass the MDE underpowered hard gate. */
+  force: boolean;
 }
 
 // WHATIF_USAGE is re-exported from args.usage.ts (extracted for the 350-line ceiling).
@@ -166,7 +179,12 @@ interface RunState {
   keepSandboxes: boolean;
   yes: boolean;
   json: boolean;
+  force: boolean;
   specFile?: string;
+  probes?: number;
+  maxPredictions?: number;
+  noBaselineSample: boolean;
+  operatorPredictions: OperatorPrediction[];
 }
 
 /**
@@ -188,8 +206,18 @@ function parseRunOptionFlag(token: string, nextVal: string | undefined, state: R
     case '--verify': state.verify = true; return 1;
     case '--quick': state.maxTurns = 1; return 1;
     case '--yes': state.yes = true; return 1;
+    case '--force': state.force = true; return 1;
     case '--json': state.json = true; return 1;
     case '--keep-sandboxes': state.keepSandboxes = true; return 1;
+    case '--no-baseline-sample': state.noBaselineSample = true; return 1;
+    case '--predict': {
+      if (!nextVal) return `--predict requires a prediction text\n\n${WHATIF_USAGE}`;
+      // Strip a leading auxiliary verb so "should greet the user" becomes
+      // "Does the response greet the user?" not "Does the response should…".
+      const stripped = nextVal.replace(/^(should|will|would|can|must|may)\s+/i, '');
+      state.operatorPredictions.push({ behavior: nextVal, testQuestion: `Does the response ${stripped}` });
+      return 2;
+    }
     case '--turns': {
       if (!nextVal) return `--turns requires a number\n\n${WHATIF_USAGE}`;
       const n = parseInt(nextVal, 10);
@@ -232,6 +260,18 @@ function parseRunOptionFlag(token: string, nextVal: string | undefined, state: R
       if (isNaN(n) || n < 1) return `--timeout: must be a positive integer, got: ${nextVal}`;
       state.episodeTimeoutMs = n * 1000; return 2;
     }
+    case '--probes': {
+      if (!nextVal) return `--probes requires a number\n\n${WHATIF_USAGE}`;
+      const n = parseInt(nextVal, 10);
+      if (isNaN(n) || n < 1 || n > 12) return `--probes: must be an integer 1–12, got: ${nextVal}`;
+      state.probes = n; return 2;
+    }
+    case '--max-predictions': {
+      if (!nextVal) return `--max-predictions requires a number\n\n${WHATIF_USAGE}`;
+      const n = parseInt(nextVal, 10);
+      if (isNaN(n) || n < 1 || n > 8) return `--max-predictions: must be an integer 1–8, got: ${nextVal}`;
+      state.maxPredictions = n; return 2;
+    }
     default: return 0; // not a run-option flag
   }
 }
@@ -260,6 +300,9 @@ export function parseWhatifArgs(argv: string[]): ParseResult {
     keepSandboxes: false,
     yes: false,
     json: false,
+    force: false,
+    noBaselineSample: false,
+    operatorPredictions: [],
   };
 
   let i = 0;
@@ -317,9 +360,14 @@ export function parseWhatifArgs(argv: string[]): ParseResult {
       maxTurns: state.maxTurns,
       episodeTimeoutMs: state.episodeTimeoutMs,
       keepSandboxes: state.keepSandboxes,
+      ...(state.probes !== undefined ? { probes: state.probes } : {}),
+      ...(state.maxPredictions !== undefined ? { maxPredictions: state.maxPredictions } : {}),
+      ...(state.noBaselineSample ? { noBaselineSample: true } : {}),
+      ...(state.operatorPredictions.length > 0 ? { operatorPredictions: state.operatorPredictions } : {}),
     },
     yes: state.yes,
     json: state.json,
+    force: state.force,
   };
 }
 
@@ -420,27 +468,6 @@ function parseChangeFlagToken(
   }
 }
 
-/**
- * Build a ChangeSpec title from the flag changes, falling back to the
- * plain-text description.
- */
-export function buildFlagSpecTitle(flagChanges: Change[], text?: string): string {
-  if (flagChanges.length === 0 && text) return text.slice(0, 80);
-  if (flagChanges.length === 1) {
-    // A one-line title suffices; describeChange is called in surface.ts
-    return `${flagChanges.length} change`;
-  }
-  return `${flagChanges.length} changes`;
-}
-
-/**
- * Parse a ChangeSpec JSON file from disk.
- * Throws on I/O or JSON parse error.
- */
-export function loadSpecFile(filePath: string): ChangeSpec {
-  let raw: string;
-  try { raw = readFileSync(filePath, 'utf8'); }
-  catch { throw new Error(`whatif: cannot read spec file: ${filePath}`); }
-  try { return JSON.parse(raw) as ChangeSpec; }
-  catch { throw new Error(`whatif: spec file is not valid JSON: ${filePath}`); }
-}
+// buildFlagSpecTitle and loadSpecFile are extracted to args.spec-loader.ts to
+// keep this file under the 350-code-line ceiling. Public surface is unchanged.
+export { buildFlagSpecTitle, loadSpecFile } from './args.spec-loader.js';

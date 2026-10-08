@@ -38,10 +38,33 @@ export type Change =
 
 export type ChangeKind = Change['kind'];
 
+/**
+ * Operator-supplied prediction injected directly, bypassing the analyst model.
+ * Only `behavior` and `testQuestion` are required; the engine fills in the
+ * remaining fields so the prediction participates in the standard verify flow.
+ */
+export interface OperatorPrediction {
+  /** Plain English, e.g. "Asks a clarifying question before using tools". */
+  behavior: string;
+  direction?: PredictionDirection;
+  confidence?: Confidence;
+  /** Positively framed yes/no question, e.g. "Does the response ask a clarifying question?" */
+  testQuestion: string;
+  /** Optional synthetic probes; if absent the engine generates default ones. */
+  probes?: string[];
+}
+
 export interface ChangeSpec {
   /** One-line human description, e.g. "Append an always-ask rule to AFK.md". */
   title: string;
   changes: Change[];
+  /**
+   * Operator-supplied predictions (#2861), merged after any CLI `--predict`
+   * values. When the merged list is non-empty it replaces analyst-generated
+   * predictions: the analyst call is skipped entirely, with or without
+   * `--verify`, so the run is deterministic.
+   */
+  predictions?: OperatorPrediction[];
 }
 
 /** Launch settings for an episode subprocess (model, effort, extra env). */
@@ -134,6 +157,19 @@ export interface StructuralImpact {
 export type PredictionDirection = 'added' | 'removed' | 'strengthened' | 'weakened';
 export type Confidence = 'high' | 'medium' | 'low';
 
+/**
+ * Whether a prediction can be measured by a decision-only episode (#2409),
+ * decided at predict time, before any data exists.
+ *
+ * - `'decision'`: what the agent chooses, says, requests or proposes in its
+ *   turn, up to and including its first side-effecting request (which the
+ *   episode gate records as intent). Scored normally.
+ * - `'downstream'`: needs an intercepted action to COMPLETE, or its results
+ *   (tests pass, file content is correct, a subagent finds the bug, total task
+ *   cost, behavior after verification). Always verdict `'unobservable'`.
+ */
+export type PredictionObservable = 'decision' | 'downstream';
+
 export interface Prediction {
   /** Stable id within a run, e.g. "p1". */
   id: string;
@@ -145,11 +181,27 @@ export interface Prediction {
   /**
    * Positively framed yes/no question answerable from ONE episode output, e.g.
    * "Does the response ask the user a clarifying question before using any tool?"
-   * The measured rate is P(yes) across episodes.
+   * The measured rate is P(yes) across this prediction's own probes (#2403).
    */
   testQuestion: string;
   /** 1-2 synthetic user requests likely to exercise this behavior. */
   probes: string[];
+  /**
+   * Predict-time observability tag (#2409). `predictChanges` always sets it;
+   * absent (older results, hand-built fixtures) means `'decision'`.
+   */
+  observable?: PredictionObservable;
+  /** One short line on why the behavior is `'downstream'`. Optional. */
+  observabilityReason?: string;
+  /**
+   * Analyst's honest estimate of the baseline P(yes) on these probes, in
+   * [0, 1].  Optional — absent means no headroom check is applied (#2504).
+   *
+   * For `added`/`strengthened` predictions, low values (near 0) mean good
+   * headroom for an increase.  For `removed`/`weakened`, high values (near 1)
+   * mean good headroom for a decrease.
+   */
+  baselineEstimate?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -260,12 +312,73 @@ export interface RateComparison {
   n: { baseline: number; candidate: number };
 }
 
-export type Verdict = 'confirmed' | 'refuted' | 'unclear';
+export type Verdict = 'confirmed' | 'refuted' | 'unclear' | 'unobservable';
+
+/**
+ * Which episodes back one prediction's verdict (issue #2403). A prediction is
+ * scored only on its own synthetic probes (`Episode.targets`); every other
+ * episode is reported as `background`, never pooled into the verdict.
+ */
+export interface PredictionScope {
+  /** Episode ids with at least one graded output in each arm, in run order. */
+  episodes: { baseline: string[]; candidate: string[] };
+  /** Episodes written to target this prediction (before failures/judging). */
+  targetedEpisodes: number;
+  /**
+   * Total graded sample observations across both arms (#2404).
+   * `rates.n` reports unique episodes; this shows how many individual
+   * samples fed into those episode means. Absent in pre-#2404 results.
+   */
+  totalSamples?: number;
+  /**
+   * The same question graded on every non-targeted episode. Context only:
+   * shows whether the behavior shifted outside its probes. Absent when an
+   * arm had no graded non-targeted output.
+   */
+  background?: RateComparison;
+}
 
 export interface VerifiedPrediction {
   prediction: Prediction;
+  /** Rates over the prediction's targeted episodes only; drives `verdict`. */
   rates: RateComparison;
   verdict: Verdict;
+  /** Absent in results written before #2403 (those pooled every episode). */
+  scope?: PredictionScope;
+  /**
+   * Why the verdict is `'unobservable'`: the prediction was tagged
+   * `observable: 'downstream'` at predict time. Optional, additive.
+   */
+  unobservableReason?: string;
+  /**
+   * Per-prediction cross-check agreement rate (#2413): fraction of cross-checked
+   * items where the primary and cross-check judge agree on this prediction's
+   * question. Absent when no cross-check judge was configured or when fewer than
+   * {@link CROSS_CHECK_MIN_ITEMS} items were sampled for this prediction.
+   */
+  crossCheckAgreement?: number;
+  /**
+   * True when this prediction had cross-check data but fewer than
+   * {@link CROSS_CHECK_MIN_ITEMS} items — agreement is unknown and cannot
+   * be used to downgrade the verdict. The verdict is left unchanged, but
+   * the flag is surfaced in the report.
+   */
+  crossCheckTooFew?: boolean;
+  /**
+   * Set to 'judges disagree' when the verdict was downgraded from confirmed/
+   * refuted to unclear because per-prediction cross-check agreement was below
+   * {@link CROSS_CHECK_MIN_AGREEMENT} (#2413).
+   */
+  verdictReason?: 'judges disagree';
+  /**
+   * Paired per-probe sign-flip analysis (#2477 step 3). ADDITIVE secondary
+   * analysis — never affects `verdict`, `rates`, or any existing field.
+   *
+   * Present when the verify phase ran and the prediction had at least one
+   * targeted episode. Absent on pre-#2477 results and `unobservable`
+   * predictions.
+   */
+  probeSignFlip?: import('./probe-signflip.js').ProbeSignFlipResult;
 }
 
 export interface DiscoveredDifference {
@@ -288,12 +401,29 @@ export interface VerifyResult {
   episodes: number;
   samples: number;
   judge: { name: 'jev' | 'claude'; external: boolean; crossCheckAgreement?: number };
-  /** Share of predictions confirmed, among those not 'unclear'. */
+  /** Share of predictions confirmed, among confirmed + refuted (excludes 'unclear' and 'unobservable'). */
   predictionAccuracy?: number;
   truncatedByBudget: boolean;
   failedEpisodes: number;
   /** Outputs the judge could not grade; excluded from every rate. */
   judgeFailures?: number;
+  /**
+   * Per-failure records: arm, probe, error class, message, duration.
+   * Empty when there were no failures; always present when verify ran (#2411).
+   */
+  failedEpisodeRecords?: import('./run.failures.js').FailedEpisodeRecord[];
+  /**
+   * Arm-imbalance flag: set when failures are significantly concentrated in
+   * one arm, which biases verdicts toward "no change" (#2411).
+   * Absent when the run had no failures or the imbalance was within threshold.
+   */
+  armImbalance?: import('./run.failures.js').ArmImbalance;
+  /**
+   * Per-prediction baseline-sample preflight results (#2511).
+   * Present when the baseline-sample preflight ran; absent when
+   * --no-baseline-sample was passed or sampling was skipped.
+   */
+  baselineSample?: import('./baseline-sample.js').PredictionBaselineSample[];
 }
 
 export interface WhatifReport {
@@ -306,70 +436,46 @@ export interface WhatifReport {
   /** Plain-English caveats that always accompany the report. */
   limits: string[];
   headline: string;
+  /**
+   * Question-fit level assessed before the verify phase.
+   *
+   * Captures whether the experiment's predictions are measurable by the
+   * decision-only runner (`'supported'`), only partially measurable
+   * (`'partially-supported'`), or not measurable at all (`'unsupported'`).
+   *
+   * Absent when the question-fit preflight did not run (e.g. when predictions
+   * is empty and the preflight short-circuits before classification).
+   */
+  questionFit?: import('./question-fit.js').QuestionFitLevel;
+  /** Probes dropped by probe-grounding because they reference non-existent paths. */
+  droppedProbes?: import('./probe-grounding.js').DroppedProbe[];
+  /**
+   * Counts of real turns/sessions excluded during corpus collection.
+   * Covers only real-turn exclusions (whatif sessions, excluded session IDs,
+   * non-standalone turns, and whatif-topic turns); synthetic episodes and
+   * suite-file episodes are not counted here.
+   * Present when the verify phase ran; lets callers see corpus shrinkage.
+   */
+  corpusExclusions?: import('./episodes.js').CorpusExclusions;
+  /**
+   * When --keep-sandboxes is set, the filesystem roots of the two arm sandboxes.
+   * Also written to <runDir>/sandboxes.json for durable reference.
+   * Absent when sandboxes were cleaned up normally.
+   */
+  keptSandboxes?: { baseline: string; candidate: string };
 }
 
 // ---------------------------------------------------------------------------
 // Orchestration
 // ---------------------------------------------------------------------------
 
-export type WhatifStage =
-  | 'compile'
-  | 'sandbox'
-  | 'snapshot'
-  | 'predict'
-  | 'episodes'
-  | 'run'
-  | 'judge'
-  | 'discover'
-  | 'report';
-
-export interface WhatifProgress {
-  stage: WhatifStage;
-  message: string;
-  /** Optional completed/total for the current stage. */
-  done?: number;
-  total?: number;
-}
-
-/** Text-in/text-out model call used for predict, compile, judge, discover. */
-export type CompleteFn = (req: {
-  system: string;
-  user: string;
-  maxTokens: number;
-  model: string;
-  signal?: AbortSignal;
-}) => Promise<{ text: string; costUsd: number }>;
-
-export interface WhatifOptions {
-  spec: ChangeSpec;
-  realHome: string;
-  realCwd: string;
-  /** Model the agent under test uses (default: session / config model). */
-  agentModel: string;
-  /** Model for predict / compile / discover / Claude judge. */
-  analystModel: string;
-  verify: boolean;
-  /** Real turns to replay. */
-  turns: number;
-  /** Samples per episode per environment. */
-  samples: number;
-  maxUsd: number;
-  judge: 'auto' | 'jev' | 'claude';
-  concurrency: number;
-  maxTurns: number;
-  episodeTimeoutMs: number;
-  /** Keep sandboxes on disk after the run (debugging). */
-  keepSandboxes: boolean;
-}
-
-export interface WhatifDeps {
-  runner: AgentRunner;
-  complete: CompleteFn;
-  /** Resolves the judge for `options.judge`. */
-  makeJudge(choice: WhatifOptions['judge']): Promise<Judge>;
-  /** Claude judge used for the cross-check sample (may equal the main judge). */
-  makeCrossCheckJudge(): Promise<Judge | undefined>;
-  onProgress?: (p: WhatifProgress) => void;
-  signal?: AbortSignal;
-  now?: () => Date;
-}
+// Orchestration types (stages, progress, options, deps) live in their own
+// module and are re-exported here so every consumer keeps importing from
+// `./types.js`.
+export type {
+  WhatifStage,
+  WhatifProgress,
+  CompleteFn,
+  WhatifOptions,
+  WhatifDeps,
+} from './types.orchestration.js';

@@ -1,9 +1,7 @@
 /**
  * Shell-string escaping utility.
  *
- * Previously duplicated verbatim across six sites:
- *   - `agent/session/subagent-output-capture.ts`
- *   - `agent/session/subagent-prompt-capture.ts`
+ * Previously duplicated verbatim across four sites:
  *   - `cli/input/clipboard-image.ts`
  *   - `cli/terminal-spawn/spawners.ts`
  *   - `browser/agent-browser/actions.ts`
@@ -22,9 +20,8 @@
  *
  * The result is the INTERIOR of a double-quoted string — wrap it yourself
  * if you need the surrounding quotes (e.g. `'"' + escapeShellString(s) + '"'`).
- * Some callers (clipboard-image.ts, subagent-output/prompt-capture.ts) add
- * the surrounding quotes; spawners.ts and actions.ts use the raw result inside
- * an already-quoted context.
+ * Some callers (clipboard-image.ts) add the surrounding quotes; spawners.ts
+ * and actions.ts use the raw result inside an already-quoted context.
  */
 export function escapeShellString(s: string): string {
   return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');

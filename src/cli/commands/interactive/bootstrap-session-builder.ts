@@ -42,6 +42,14 @@ export interface BuildAgentSessionDeps {
   drainSubagents?: ((reason: string) => Promise<unknown>) | undefined;
   /** Live bash output tail reporter factory (REPL-only, issue #1506). */
   bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
+  /**
+   * Session-scoped detach registry for Ctrl+B bash backgrounding (#2542, #2735).
+   * Flows through AgentConfig so providers inject it into every per-query
+   * dispatcher. Absent for subagent forks and headless surfaces.
+   */
+  detachRegistry?: import('../../../agent/tools/detach-registry.js').DetachableToolRegistry;
+  /** Background process registry (`bash run_in_background`); root REPL only. */
+  processJobs?: import('../../../agent/shell-jobs/process-jobs.js').ProcessJobRegistry;
   cwd: string | undefined;
   maxTurns: number;
   autoResumeOnUsageLimit: boolean | undefined;
@@ -90,6 +98,12 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
     ...(deps.bashOutputTailReporter !== undefined
       ? { bashOutputTailReporter: deps.bashOutputTailReporter }
       : {}),
+    // #2542/#2735: Detach registry — flows to AgentConfig so providers can
+    // inject it into every per-query dispatcher. Absent for forks.
+    ...(deps.detachRegistry !== undefined
+      ? { detachRegistry: deps.detachRegistry }
+      : {}),
+    ...(deps.processJobs !== undefined ? { processJobs: deps.processJobs } : {}),
     ...(deps.drainSubagents !== undefined ? { drainSubagents: deps.drainSubagents } : {}),
     ...(deps.autoResumeOnUsageLimit !== undefined
       ? { autoResumeOnUsageLimit: deps.autoResumeOnUsageLimit }
@@ -120,6 +134,8 @@ export function buildSharedDeps(a: {
   traceWriter: TraceWriter | undefined;
   drainSubagents?: ((reason: string) => Promise<unknown>) | undefined;
   bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
+  detachRegistry?: import('../../../agent/tools/detach-registry.js').DetachableToolRegistry;
+  processJobs?: import('../../../agent/shell-jobs/process-jobs.js').ProcessJobRegistry;
   effectiveCwd: string | undefined;
   maxTurns: string;
   initialPermissionMode: PermissionMode | undefined;
@@ -143,6 +159,10 @@ export function buildSharedDeps(a: {
     ...(a.bashOutputTailReporter !== undefined
       ? { bashOutputTailReporter: a.bashOutputTailReporter }
       : {}),
+    ...(a.detachRegistry !== undefined
+      ? { detachRegistry: a.detachRegistry }
+      : {}),
+    ...(a.processJobs !== undefined ? { processJobs: a.processJobs } : {}),
     cwd: a.effectiveCwd,
     maxTurns: parseInt(a.maxTurns, 10),
     autoResumeOnUsageLimit: a.cliConfig.autoResumeOnUsageLimit,

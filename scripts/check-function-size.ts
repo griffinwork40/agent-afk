@@ -34,11 +34,11 @@
  * naming invariant in `lib/function-extents.ts`.
  */
 
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { functionKey, measureFile, parseFunctionKey } from './lib/function-extents.js';
+import { parseGrowthArgs } from './lib/growth-args.js';
 import {
   changedSince,
   collectViolations,
@@ -49,6 +49,7 @@ import {
   type RatchetConfig,
   type Violation,
 } from './lib/size-ratchet.js';
+import { walkSourceFiles } from './lib/walk-source-files.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -110,17 +111,15 @@ export function isScannable(relPath: string): boolean {
 }
 
 function walk(dir: string, out: string[]): void {
-  if (!fs.existsSync(dir)) return;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (EXCLUDED_DIRS.includes(entry.name as never)) continue;
-      walk(full, out);
-    } else if (entry.isFile()) {
-      const rel = path.relative(repoRoot, full);
-      if (isScannable(rel)) out.push(rel);
-    }
-  }
+  const extraExclude = new Set(EXCLUDED_DIRS.filter(d => d !== 'node_modules' && d !== 'dist'));
+  const absPaths: string[] = [];
+  walkSourceFiles(
+    dir,
+    (absPath) => isScannable(path.relative(repoRoot, absPath)),
+    absPaths,
+    extraExclude,
+  );
+  for (const abs of absPaths) out.push(path.relative(repoRoot, abs));
 }
 
 interface Measured {
@@ -207,19 +206,16 @@ function main(): void {
   const argv = process.argv.slice(2);
   const measured = scanAll();
 
-  if (argv.includes('--update-baseline')) {
-    const allowGrowth = argv.includes('--allow-growth');
-    const reasonIdx = argv.indexOf('--reason');
-    const reason = reasonIdx >= 0 ? (argv[reasonIdx + 1] ?? '') : '';
+  /** All flag tokens this script recognises — used by parseGrowthArgs to detect missing --reason values. */
+  const KNOWN_FLAGS = ['--check', '--update-baseline', '--changed-vs', '--list', '--allow-growth', '--reason'];
 
-    if (allowGrowth && !reason) {
-      console.error('✗ check-function-size: --allow-growth requires --reason "<text>" (non-empty).');
+  if (argv.includes('--update-baseline')) {
+    const parsed = parseGrowthArgs(argv, KNOWN_FLAGS);
+    if ('error' in parsed) {
+      console.error(`✗ check-function-size: ${parsed.error}`);
       process.exit(1);
     }
-    if (reason.startsWith('--')) {
-      console.error('✗ check-function-size: --reason value looks like a flag. Did you mean: --reason "..." --allow-growth?');
-      process.exit(1);
-    }
+    const { allowGrowth, reason } = parsed;
 
     const { kept, dropped, blocked } = updateBaseline(RATCHET, measured.sizes, { allowGrowth, reason });
 

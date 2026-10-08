@@ -34,9 +34,13 @@ import type {
   BackgroundAgentRegistry,
   BackgroundJob,
 } from '../../../agent/background-registry.js';
-import { annotateIfIncomplete } from '../../../agent/subagent/result.js';
-import { env } from '../../../config/env.js';
+import { extractOutputText } from '../../../agent/background-registry.result.js';
+import { redactSecrets } from '../../../agent/redact-secrets.js';
+import { env, isPlainOutputRequested } from '../../../config/env.js';
 import { formatDuration } from '../../format-utils.js';
+import { DetachedToolNotifier } from './detached-tool-notifier.js';
+import type { DetachableToolRegistry } from '../../../agent/tools/detach-registry.js';
+import type { ToolEvent } from '../../slash/types.js';
 
 /**
  * Maximum byte length of one job's injected output. Results beyond this are
@@ -73,24 +77,8 @@ function escapeXml(text: string): string {
 
 /** Extract the model-facing output text from a settled job's result. */
 function extractOutput(job: BackgroundJob): string {
-  const result = job.result;
-  if (!result) return '';
-  if (job.status === 'failed') {
-    const errText = result.error
-      ? `${result.error.name}: ${result.error.message}`
-      : 'unknown error';
-    const partial =
-      typeof result.partialOutput === 'string' && result.partialOutput.length > 0
-        ? `\n\nPartial output before failure:\n${result.partialOutput}`
-        : '';
-    return `Subagent failed — ${errText}${partial}`;
-  }
-  const raw = result.message?.content;
-  // A `completed` background job can still carry an incomplete partial (capped
-  // or stream-truncated); mark it so the injected result isn't read as final.
-  if (typeof raw === 'string') return annotateIfIncomplete(raw, result.stopReason);
-  if (raw !== undefined) return JSON.stringify(raw);
-  return '';
+  // Single source with the persisted result.json body (see background-registry.result.ts).
+  return job.result ? extractOutputText(job.result, job.status) : '';
 }
 
 /**
@@ -98,12 +86,15 @@ function extractOutput(job: BackgroundJob): string {
  * job so the model knows how to retrieve the full result. Byte-accurate
  * (not char-accurate) so multi-byte content can't overshoot the cap.
  *
- * Invariant: called on ALREADY-ESCAPED text so the cap bounds the final
- * injected size. Escape-then-truncate matters: escaping expands `<` to
- * `&lt;` (4×), so truncating pre-escape text would let adversarial output
- * (e.g. 16KB of `<`) balloon to ~64KB post-escape and bypass the cap.
- * Truncation may cut an entity mid-sequence (`&am`); harmless in model
- * context.
+ * Escaping is the CALLER's responsibility. When embedding in an XML envelope
+ * (model-injection context), pass already-escaped text so the byte cap bounds
+ * the final injected size — escaping expands `<` to `&lt;` (4×), so truncating
+ * pre-escape text would let adversarial output (e.g. 16KB of `<`) balloon to
+ * ~64KB post-escape and bypass the cap. Plain-text surfaces (e.g. Telegram push
+ * via {@link formatBgResultBody}) intentionally skip escaping and call this on
+ * raw output — that is correct, not an omission.
+ * Truncation may cut a multi-byte codepoint or XML entity mid-sequence; harmless
+ * in the respective contexts.
  */
 function truncateBytes(text: string, maxBytes: number, jobId: string): string {
   if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
@@ -114,6 +105,22 @@ function truncateBytes(text: string, maxBytes: number, jobId: string): string {
     buf.toString('utf8') +
     `\n… [truncated at ${maxBytes} bytes — full result via /bgsub:join ${jobId}]`
   );
+}
+
+/**
+ * Human-readable result body for one settled job (no XML envelope, no
+ * escaping), capped at {@link MAX_INJECTION_BYTES} with the same
+ * `/bgsub:join <jobId>` marker. Used by push surfaces (Telegram) that show
+ * the result to the operator rather than the model.
+ *
+ * Secret redaction is applied here because this is the off-device delivery
+ * boundary: the returned string is forwarded verbatim to Telegram (and any
+ * future push surface). The persisted `result.json` body is intentionally
+ * left unredacted — local consumers (REPL replay via `/bgsub:join`,
+ * `buildBgResultInjection`) read the full text from disk without this filter.
+ */
+export function formatBgResultBody(job: BackgroundJob): string {
+  return truncateBytes(redactSecrets(extractOutput(job)), MAX_INJECTION_BYTES, job.jobId);
 }
 
 /**
@@ -130,7 +137,7 @@ export function buildBgResultInjection(job: BackgroundJob): string {
   const output = truncateBytes(escapeXml(extractOutput(job)), MAX_INJECTION_BYTES, job.jobId);
   const lines: string[] = [];
   lines.push(
-    `<background-subagent-result jobId="${job.jobId}" status="${job.status}" ` +
+    `<background-subagent-result jobId="${escapeXml(job.jobId)}" status="${escapeXml(job.status)}" ` +
       `model="${escapeXml(job.model)}" duration="${duration}">`,
   );
   lines.push(`<task>${escapeXml(job.label)}</task>`);
@@ -148,6 +155,25 @@ export function buildBgResultInjection(job: BackgroundJob): string {
 export function isAutoDeliverEnabled(raw: string | undefined): boolean {
   if (raw === undefined) return true;
   return !/^(0|false|off|no)$/i.test(raw);
+}
+
+/**
+ * Can this REPL wake an idle prompt when a background result lands?
+ *
+ * Invariant: mirrors the conditions under which the wake path can fire.
+ * `tryAutoResume` (loop-iteration.ts) needs `surface.isAwaitingInput()`, which
+ * is only ever true on the compositor path, and the compositor arms only when
+ * both stdio streams are TTYs and plain output was not requested
+ * (input-surface.ts armCompositor). Auto-deliver must also be on, or nothing
+ * is buffered to wake for. Read live at each dispatch so the agent tool's
+ * delivery note stays truthful (agent/tools/subagent/background-delivery.ts).
+ */
+export function replCanAutoWake(): boolean {
+  return (
+    Boolean(process.stdin.isTTY && process.stdout.isTTY) &&
+    !isPlainOutputRequested() &&
+    isAutoDeliverEnabled(env.AFK_BG_AUTO_DELIVER)
+  );
 }
 
 /**
@@ -191,9 +217,21 @@ export class BgResultNotifier {
     this.onInjectable?.();
   };
 
-  constructor(private readonly registry: BackgroundAgentRegistry) {
+  private readonly detachedTools: DetachedToolNotifier | undefined;
+
+  constructor(private readonly registry: BackgroundAgentRegistry, detachRegistry?: DetachableToolRegistry) {
     registry.on('settled', this.onSettled);
+    if (detachRegistry) {
+      this.detachedTools = new DetachedToolNotifier(detachRegistry);
+      // Explicit Ctrl+B promises delivery even when background-subagent auto-delivery is off.
+      this.detachedTools.onInjectable = () => this.onInjectable?.();
+    }
   }
+
+  /** Forward tool events so settled detach results can patch back partial metadata. */
+  observeToolEvent(event: ToolEvent): void { this.detachedTools?.observe(event); }
+  /** One-line completion notices for settled Ctrl+B tools (rendered by the drain loop). */
+  drainToolNotices(): string[] { return this.detachedTools?.drainNotices() ?? []; }
 
   /**
    * Drain and return the concatenated injection envelopes to prepend to the
@@ -203,11 +241,12 @@ export class BgResultNotifier {
    * joins.
    */
   drainInjections(): string {
-    if (this.pendingInjections.length === 0) return '';
+    const detached = this.detachedTools?.drainInjections() ?? '';
+    if (this.pendingInjections.length === 0) return detached;
     const jobs = this.pendingInjections;
     this.pendingInjections = [];
     for (const job of jobs) this.registry.markDelivered(job.jobId);
-    return jobs.map((j) => buildBgResultInjection(j)).join('\n') + '\n';
+    return detached + jobs.map((j) => buildBgResultInjection(j)).join('\n') + '\n';
   }
 
   /**
@@ -228,6 +267,7 @@ export class BgResultNotifier {
    * session's first turn (mirrors the verdict-ledger reset semantics).
    */
   reset(): void {
+    this.detachedTools?.reset();
     this.pendingInjections = [];
     this.pendingNotifications = [];
   }
@@ -240,11 +280,34 @@ export class BgResultNotifier {
    * fired but `isAwaitingInput()` was false.
    */
   hasPendingInjections(): boolean {
-    return this.pendingInjections.length > 0;
+    return this.pendingInjections.length > 0 || this.detachedTools?.hasPendingInjections() === true;
   }
 
-  /** Unsubscribe from the registry. Idempotent. */
+  /**
+   * Unsubscribe from the registry. Idempotent.
+   *
+   * Any jobs buffered in `pendingInjections` at this point have COMPLETED but
+   * were never drained into a turn (the user exited before the next message).
+   * They are NOT marked delivered — that would mislabel them in the witness
+   * trace. Instead, we print a one-line notice naming the job ids so the
+   * operator can recover them via `/bgsub:join` in the next session.
+   *
+   * The notice goes to `process.stderr` (not `console.log`) so it does not
+   * corrupt any piped stdout stream and survives surfaces where the compositor
+   * has already been torn down.
+   */
   dispose(): void {
+    this.detachedTools?.dispose();
     this.registry.off('settled', this.onSettled);
+    if (this.pendingInjections.length > 0) {
+      const ids = this.pendingInjections.map((j) => j.jobId).join(', ');
+      process.stderr.write(
+        `[afk] ${this.pendingInjections.length} background job(s) completed but were never delivered ` +
+        `(session ended before next user message). Recover with: /bgsub:join <id>\n` +
+        `  Job IDs: ${ids}\n`,
+      );
+    }
+    this.pendingInjections = [];
+    this.pendingNotifications = [];
   }
 }

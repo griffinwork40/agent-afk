@@ -31,15 +31,13 @@ jobs:
       id-token: write    # npm provenance attestation (OIDC)
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -67,12 +65,20 @@ jobs:
       # published tarball is built fresh here. --provenance emits a signed
       # attestation linking this exact tarball to the public source commit +
       # this workflow run (visible as a "Provenance" badge on npmjs.com).
+      #
+      # Invariant: publish with the npm CLI, not `pnpm publish`. pnpm 11
+      # replaced its npm-CLI delegation with a native publish whose
+      # token/OIDC/provenance handling regressed across early 11.x releases
+      # (pnpm/pnpm#11513, #11495). The package has no workspace:/catalog:
+      # specifiers for pnpm to rewrite, so the npm CLI publishes an identical
+      # tarball. Do not switch to `pnpm pack && npm publish *.tgz`: publishing
+      # a tarball skips prepublishOnly, so dist/ would not be rebuilt.
       - name: Publish to npm (with provenance)
-        run: pnpm publish --no-git-checks --provenance
+        run: npm publish --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true

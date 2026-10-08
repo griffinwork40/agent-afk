@@ -94,6 +94,12 @@ export const askQuestionHandler: ToolHandler = async (input, signal, context) =>
       isError: true,
     };
   }
+  if (minLength !== undefined && maxLength !== undefined && (minLength as number) > (maxLength as number)) {
+    return {
+      content: `Invalid input: min_length (${minLength}) must be \u2264 max_length (${maxLength})`,
+      isError: true,
+    };
+  }
 
   if (obj['allow_custom'] !== undefined && qType !== 'choice' && qType !== 'multi_choice') {
     return {

@@ -11,6 +11,1955 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.306.3] - 2026-10-08
+
+### Changed
+- shared type-guards, sleep, truncate, truncateTelegramLabel, stripAnsi in tests (#3318) (eb6a5650)
+
+## [5.306.2] - 2026-10-08
+
+### Fixed
+- apply advisory findings from 2026-10-07 pr-triage (#3316) (24c952c5)
+
+### Changed
+- surface /whatif and Jev as differentiators in README (#3315) (e04095c8)
+- shared walker + resolveTraceFile + groupViolationsByFile; fix --reason drift in check-test-typecheck (#3319) (495196f4)
+- extract checkout-lifecycle helpers; plugin update warns before discarding edits (#3317) (d7eb6282)
+
+## [5.306.1] - 2026-10-08
+
+### Fixed
+- share normalizeSystemPromptOverlay; fix OpenAI preset {append} drop (#3305) (29241d8c)
+
+## [5.306.0] - 2026-10-08
+
+### Added
+- add preexisting-defect ledger reader and afk insights section (#3307) (1dbc57c5)
+- operator tool deny list (tools.disabled) with /config → Tools toggles (#3297) (abbd92bb)
+
+## [5.305.8] - 2026-10-08
+
+### Fixed
+- add mid-session endpoint switch tests for reasoning replay (#3309) (6827c08e)
+- apply advisory findings from 2026-10-08 pr-triage (#3296) (08175418)
+
+### Changed
+- add wiring regression tests for PreToolUse injectContext delivery (#3308) (b78b8c69)
+- add router anthropic/xai branches and model_complete path-approval once/subagent cases (#3294) (ebedf10c)
+
+## [5.305.7] - 2026-10-08
+
+### Fixed
+- address advisory findings from 2026-10-08 /pr-triage (#3295) (b7bda6f0)
+
+### Changed
+- openai-compatible compaction defaults to gpt-6-luna on real OpenAI endpoints (#3288) (481340df)
+
+## [5.305.6] - 2026-10-08
+
+### Fixed
+- tidy three comment nits in mascot.ts and mascot-mini.ts (#3115) (8cd25714)
+- replace fixed sleep with vi.waitFor in heartbeat test (#3285) (eafc8118)
+- accept collapsed-frame marker as Python traceback predecessor (#3287) (8883a81a)
+- guard CPR late-reply leak + adaptive timeout (#3240) (a25d355b)
+- prefer timeoutSignal.aborted over caller signal when both fire (#3286) (2d66cbc2)
+
+## [5.305.5] - 2026-10-08
+
+### Fixed
+- enforce named-agent tool and bash restrictions on compose nodes; block peer tools for children at dispatch (#3270) (d9fdf69b)
+
+## [5.305.4] - 2026-10-08
+
+### Added
+- support Claude Haiku 5.5 and point haiku alias at it (#3280) (a776f1c2)
+
+### Fixed
+- report prompt counts in /compact, not inflated raw message counts (#3132) (9bfd8411)
+- apply advisory findings from 2026-09-30 pr-triage (#3137) (e127727b)
+- wire ownerStartTime pid-reuse check and unify parentSessionId spread (#3118) (6f1f2f6f)
+- document TOCTOU window, normalize notifyOn comparison, assert store isolation in shell tests (#3117) (5d12437a)
+- keep enabled thinking on opus-4-6, mute SDK deprecation warning (#3279) (b949763d)
+
+### Changed
+- bump typescript from 5.9.3 to 6.0.3 (#3236) (ff81872e)
+
+## [5.305.3] - 2026-10-08
+
+### Fixed
+- share sweep-policy resolver; /worktree prune now honors config and env age limits (#3272) (e2d8f13f)
+- advisory findings from Cerebras support PRs (#2788, #2789, #2790, #2793) (#3138) (9e09cc86)
+- validate text minLength/maxLength in Telegram elicitation handler (#3275) (3d9cf10e)
+
+## [5.305.2] - 2026-10-08
+
+### Fixed
+- move isNewerVersion to update-version.ts; fix prerelease compare in afk update (#3271) (4aaa2ea5)
+- share buildWhatifRunOptions between CLI and slash; forward operatorPredictions (#3274) (46537334)
+- reject chatgpt-oauth in image_edit; extract makeSessionCounter (#3273) (251ff682)
+- treat null-equivalent Deferred values as empty (none/n/a/-) (#3237) (8d7e5064)
+
+## [5.305.1] - 2026-10-08
+
+### Fixed
+- erase ghost spinner and CPR-reanchor on width-only tmux resize (#3228) (0e46a05d)
+- tighten strategy-nudge error-line detection (#3223) (55d06547)
+- cap earlySettled and sanitize toolUseId in detached-tool-notifier (#3222) (fac366f4)
+
+## [5.305.0] - 2026-10-08
+
+### Added
+- add model_complete, a one-shot completion against any configured model (#3254) (1dcf8f26)
+
+### Changed
+- bump @types/node from 26.6.3 to 26.6.4 in /website (#3230) (cfdd9539)
+- bump ora from 8.2.0 to 9.4.1 (#3239) (fb500b1d)
+
+## [5.304.1] - 2026-10-08
+
+### Fixed
+- regenerate pnpm-lock.yaml broken by sequential dependabot merges (#3253) (bb91c807)
+
+## [5.304.0] - 2026-10-08
+
+### Added
+- make fact tracking and soft-delete GC safe per archive (#3211) (5ffb7f4f)
+
+### Fixed
+- address advisory findings from #2854 (Fable 5.1 support) (#3148) (4ad89fee)
+
+### Changed
+- bump the fumadocs group in /website with 3 updates (#3229) (ab12fef1)
+- bump @testing-library/jest-dom in /dashboard (#3231) (904d8a6f)
+- bump lucide-react from 0.468.0 to 1.52.0 in /dashboard (#3233) (44fe7df7)
+- bump jsdom from 26.1.0 to 30.1.2 in /dashboard (#3234) (0b916557)
+- bump jsdom (#3232) (f6b82938)
+- bump commander from 12.1.0 to 15.0.0 (#3235) (c5f7c4ff)
+- bump undici from 7.30.0 to 8.11.2 (#3238) (c4dae640)
+- bump softprops/action-gh-release from 2 to 3 (#3225) (e01e6735)
+- bump actions/upload-artifact from 4 to 6 (#3226) (da3c889d)
+- bump actions/setup-node from 4 to 7 (#3227) (a029e391)
+- bump actions/checkout from 4 to 7 (#3224) (94534ea2)
+
+## [5.303.10] - 2026-10-07
+
+### Fixed
+- deliver non-blocking PreToolUse additionalContext (#3157) (e80d1327)
+
+## [5.303.9] - 2026-10-07
+
+### Fixed
+- reference RAW_VALUE_CAP in inbound-mode boundary tests (#3219) (1ec88e05)
+- tighten EgressBlockedError assertions in egress lookup tests (#3221) (47b48886)
+- address advisory review findings for tool-health monitor and daemon builtin (#3135) (f1057945)
+- remove duplicate ToolFailureClassSchema, tighten isContentBlockArray return type (#3133) (d00f99f6)
+- advisory findings from #2770, #2879, #2824 (#3134) (7274f3ae)
+- document internal-only helpers in effect-ledger barrel (#3209) (15ee4fbe)
+- raise engines.node to jsdom 30's floor (#3150) (825d7761)
+- address advisory findings from #2810 peer boundary delivery (#3136) (19c7e3da)
+- address advisory findings from review of #3063 (#3116) (f76fdba2)
+- address advisory findings from review of #3077 (#3097) (ba46e740)
+- remove dead applyPostRunNotices (#3220) (f6e86014)
+- replay reasoning for destination endpoints (#3156) (387daa69)
+- bound Windows bash kill cleanup without blocking (#3210) (e7e07b30)
+- add _renameFn/_platform injectables to atomicWriteFileAsync for portable EPERM retry testing (#3153) (26021cbc)
+- add maxRetries to rm in temp git repo teardowns to avoid ENOTEMPTY (#3208) (53152e90)
+
+## [5.303.8] - 2026-10-07
+
+### Fixed
+- re-anchor live frame after tmux pane resize (no more duplicated frame on kill-pane/split) (#3204) (6f07459d)
+
+## [5.303.7] - 2026-10-07
+
+### Added
+- add opt-in Stop hook that blocks closing on unproven external diagnosis (#3190) (22ca5a25)
+
+### Fixed
+- harden stream termination and retry observability (#3159) (3d9008fa)
+
+## [5.303.6] - 2026-10-07
+
+### Fixed
+- read vision/reasoning/context from the Codex catalog so gpt-6 models see pasted images (#3188) (c240ca37)
+- count patch_apply as file write, bash external effects corroboration, move version history (#3191) (edc66634)
+
+## [5.303.5] - 2026-10-07
+
+### Fixed
+- complete advisory review follow-ups (#3158) (e4db9d85)
+
+## [5.303.4] - 2026-10-07
+
+### Fixed
+- strategy-nudge keys on the real error line, not boilerplate (#3160) (343c2503)
+- add RAW_VALUE_CAP boundary tests and move getPeerInboundModeConfig into list branch (#3186) (00b7acfe)
+- address advisory findings from detached-tool-notifier review (#3189) (688ec803)
+- use makeNonIpError on deps so non-IP records reject with EgressBlockedError (#3187) (14d60a55)
+
+## [5.303.3] - 2026-10-07
+
+### Added
+- trace-backed downgrade signals — closure reason + subagent budget exhaustion (#3195) (b3f82314)
+
+### Changed
+- add unit tests for three worst-coverage CLI/service modules (COV-007..009) (#3203) (a5903f52)
+- remove buildPromptAsync internal deprecated shim (#3196) (80b8167e)
+
+## [5.303.2] - 2026-10-07
+
+### Added
+- add UPDATE-failure-resilience test for access tracking (#3192) (358c8669)
+
+### Fixed
+- migrate task-view describe blocks to task-view-mode.test.ts (#3200) (1308f538)
+- execFileSync for findGitRoot; shell-metachar tests; gitleaksignore cleanup (#3199) (ee2f4181)
+- add { unref? } option to sleepWithAbort; tighten test; cover sleep() unref paths (#3198) (b551e708)
+
+### Changed
+- Web dashboard: session titles, new-session hang, and sidecars for daemon/web/skill sessions (#3197) (91e2d6d5)
+- DEAD-033 incremental — remove 72 unused exports from src/agent/trace/index.ts (#3202) (3a725829)
+- patch picomatch ReDoS, bump openai+@types/node, fix website/ baseline-browser-mapping (#3193) (d7ba5ea7)
+
+## [5.303.1] - 2026-10-07
+
+### Added
+- catalog-backed route limits, configurable in-turn context guard, model awareness (#3177) (5f9e91bf)
+
+### Fixed
+- re-fork zero-output transport failures once, fail closed on any tool activity (#3172) (2bcae018)
+
+## [5.303.0] - 2026-10-07
+
+### Added
+- opt-in elapsed-time connection retry budget + connect-failure diagnostics (#3173) (c605e2b2)
+- explicit incomplete handoff and findings salvage at the tool-round cap (#3176) (5e15142c)
+
+### Fixed
+- address advisory review findings from 2026-10-06 pr-triage (#3175) (22971afa)
+
+### Changed
+- add unit tests for three worst-coverage CLI/service modules (#3178) (92e7f89b)
+
+## [5.302.13] - 2026-10-07
+
+### Fixed
+- observe yield probe failures and cover cached PR paths (#3154) (130d8ed4)
+- add maxRetries to rm in peer wake teardown to avoid Windows ENOTEMPTY (#3179) (0daf2a5b)
+- keep the event loop alive during retry backoff sleeps (#3171) (72991e20)
+- replace shell execSync with execFileSync for worktree ops; add .gitleaksignore (#3180) (69c38902)
+
+### Changed
+- delete task-view.ts, remove @types/node-cron, prune 25 unused exports (#3174) (4a9def34)
+
+## [5.302.12] - 2026-10-07
+
+### Fixed
+- pass --allow-scripts=agent-afk to npm install so postinstall runs on npm >=11.19 (#3152) (9005022b)
+
+## [5.302.11] - 2026-10-07
+
+### Added
+- add --predict flag and spec predictions field for deterministic operator-supplied predictions (#3162) (9cfccc5f)
+
+### Fixed
+- add portable POSIX-utility regression test for settle-after-kill fallback (#3167) (7833d6f9)
+- dispatch UserPromptSubmit in Telegram per-turn path (#3163) (f3853eb6)
+
+## [5.302.10] - 2026-10-07
+
+### Changed
+- note dropped `**Done** — text` single-line form next to `'unknown'` in `FacetOutcomeSchema` JSDoc (#2797)
+
+### Added
+- downgrade self-reported Done using corroborating signals (#3168) (4b1b07a5)
+
+### Fixed
+- note dropped single-line Done form next to 'unknown' in schema JSDoc (#3165) (a4d78b4b)
+- wire DetachableToolRegistry.settled subscriber (#3164) (644bf907)
+- peer hardening — typo visibility, bare-filename guard, corrupt-orphan rescan test (#3161) (649073cb)
+- harden createGuardedLookup — catch callback throw, block non-IP, prove all=true (#3166) (ad9dfea9)
+
+## [5.302.9] - 2026-10-07
+
+### Fixed
+- session sidecar exitReason/eof advisory findings (#3145) (7402bddf)
+
+## [5.302.8] - 2026-10-07
+
+### Fixed
+- extract shared sleepSync util, strengthen backoff ceiling test, add retry log (#3146) (561f230d)
+- address advisory findings from traced retry layer (#2851) (#3144) (73b10717)
+- address advisory findings from 2026-09-29 /pr-triage (#3142) (ae9d977b)
+- document far-reset probe tradeoff and provider scope for autoResume env var (#3140) (e75ddf2d)
+- advisory findings from #2850 — peer activity presence fixes (#3139) (b09ae05d)
+
+## [5.302.7] - 2026-10-06
+
+### Fixed
+- address advisory review findings from #2857 (#3147) (be9c4ba9)
+- advisory findings from #2835, #2860, #2862 (#3143) (50042fd7)
+- address advisory findings from #2852 presence review (#3141) (3314dc73)
+
+## [5.302.6] - 2026-10-06
+
+### Fixed
+- guard history.push for silent auto-resume; add held size hint (#3122) (8d7749ce)
+- harden process-jobs — escapeXmlAttr apos, sweep tests, quota-rotation guard, trace observability, docs (#3123) (73d850d6)
+- truthful background-result delivery note so agents stop busy-polling (#3125) (68c7d0b3)
+- add containment and uid checks to EXDEV cleanup fallback (#3131) (a62bf115)
+
+## [5.302.5] - 2026-10-06
+
+### Fixed
+- address advisory findings from review of #3075 (#3121) (8578aecb)
+- shorten regression test title, justify realistic variant, inline JSDoc (#3120) (1881a64f)
+- reject {content: null, edits: []} as no_change_specified (#3130) (0355ed77)
+- bash-detach stale listener, unref timer, sentinel + compose JSDoc/guard fixes (#3124) (0d2b846f)
+- address combined advisory findings from 2026-10-06 triage (#3119) (45c1993c)
+
+## [5.302.4] - 2026-10-06
+
+### Fixed
+- treat standalone content: null as absent, not a parse error (#3100) (2df47ac1)
+
+### Changed
+- unit-test applyDeferPeers branches and processJobNotifier ordering (#3099) (ac4303e7)
+
+## [5.302.3] - 2026-10-06
+
+### Fixed
+- add test-typecheck error-count ratchet and document tsconfig.test.json include scope (#3114) (5676f002)
+
+## [5.302.2] - 2026-10-06
+
+### Fixed
+- report rewound prompts, not raw API message counts (#3109) (29a0d8d7)
+- complete truncated SPINE.md citations and trim SKILL.md descriptions (#3112) (3ff0fa7b)
+- complete schema extraction, add type guards (#3113) (919afeec)
+- document onTaskComplete disk-durability contract and add afterEach flag-leak guard (#3110) (9d52188f)
+- close lingering .rm sibling, add EXDEV fallback, add .rm-linger test assertion (#3101) (5a8c68b0)
+- fix cwd precedence comment, restore tilde JSDoc, add EXDEV lock-degrade test (#3111) (7e8845ef)
+- poll groupAlive assertions to avoid zombie-window flake (#3098) (2f4c5695)
+
+## [5.302.1] - 2026-10-06
+
+### Fixed
+- record ownerPid in bg meta.json and reconcile dead-owner jobs on read (#2319) (d2387bcb)
+
+## [5.302.0] - 2026-10-06
+
+### Added
+- fold forge SALVAGE candidates into shadow-verify and automate (#3094) (4b652616)
+
+### Fixed
+- guard schedule read-modify-write with O_EXCL advisory lock (#2318) (ae6b8696)
+- decouple fireOnTaskComplete from telemetry append try-catch (#2317) (2a30f2e2)
+- reject executor:"shell" on POST /tasks HTTP control surface (#2316) (b2ecd991)
+
+### Changed
+- unknown corruption path that orphans tool_use blocks past two defenses (#2344) (62c18815)
+- add non-blocking test-file typecheck gate (#3054) (124e2184)
+
+## [5.301.3] - 2026-10-06
+
+### Changed
+- inject execSync via deps, extract mockPrefix helper, share win32 invariant helper (#3055) (41062f4b)
+- replace wall-clock budget, fix EBUSY teardown, harden watch timing (#3056) (67ef042b)
+
+## [5.301.2] - 2026-10-06
+
+### Fixed
+- wire Stop on afk web, forward beforeTurnEnd, honor cap=0 (#3057) (9a918d6c)
+
+## [5.301.1] - 2026-10-06
+
+### Fixed
+- persist compose partial flags in the journal and count partial nodes (#3058) (f0dc157a)
+- explicit case + tests for no-usable-auth-forced-chatgpt-oauth and source:config (#3059) (c37ef0d9)
+- harden gate-liveness test assertions — URL check, module reset scope, neutral token, catch comment (#3092) (146b93e9)
+- drop unused flushed var, move comment, add isDirty rationale (#3091) (f736859a)
+- bind resolver inside vi.waitFor to eliminate post-poll non-null assertion (#3090) (b03df02d)
+- add curl -si allowlist comment; pin execSync arg in gh run list test; fix double-space nit (#3089) (fd608e90)
+- de-flake windows tests (rm retries; sync process-jobs cancel test on registry leader-exit) (#3093) (b11580ae)
+
+## [5.301.0] - 2026-10-06
+
+### Added
+- perfect the goblin — v17 banner portrait + sharper mini sprite (#3064) (23c6001d)
+
+### Fixed
+- correct curl -si comment; add gh run list wait_for test (#3060) (ef678e0d)
+- advisory findings from #2895 — security, perf, nit cleanup (#3061) (6aa297d8)
+- close lstat-to-rm TOCTOU window in session-tmpdir cleanup (#3076) (c31f825e)
+- address advisory findings from #2883 review (#3063) (bf4383e4)
+
+### Changed
+- replace fixed sleeps with vi.waitFor polling in afk-two-way-roundtrip (#3073) (f65a3fe3)
+- harden gate-liveness tests — fake token, fail-open coverage, real workspace dir (#3062) (939d49b1)
+- direct _mergeVotes ordering tests + accurate ordering docs (#3074) (a5ee46fa)
+- cover cappedHistory and falling-start/rising-tail burn-rate paths (#3075) (2b1173bf)
+- assert pendingWindowCap via test hook in S2 (#3077) (caaa28ef)
+
+## [5.300.0] - 2026-10-06
+
+### Added
+- run_in_background for managed long-running processes (#3037) (254fb1cc)
+
+## [5.299.9] - 2026-10-06
+
+### Fixed
+- harden per-session TMPDIR (TOCTOU, registry leak, hook shells, cache, docs) (#3052) (e5faf816)
+- restore pendingWindowCap invariant on all-sentinel displacement, document sync guarantee, add compact+sentinel tests (#3014) (6c06fbb0)
+- treat blank optional args as absent in edit_file and patch_apply (#3051) (359fbcca)
+- suppress burn-rate ETA when latest sample pair is non-increasing (#3048) (d068b217)
+- real candidates count + debugLog in memory GC sweep (#3049) (a0e22e77)
+- delete-then-set in _mergeVotes to preserve Map arrival order (#3047) (c5bc6887)
+- use path.relative-based containment in sandbox-guard (#3033) (a4cb15fd)
+
+### Changed
+- unit-test queuedSubmission + restore runInputLoop funcsize headroom (#3050) (88c290df)
+
+## [5.299.8] - 2026-10-06
+
+### Fixed
+- widen drift-test job regex to include digits/uppercase; annotate heredoc (#3042) (2a7676d8)
+
+## [5.299.7] - 2026-10-06
+
+### Fixed
+- replace `as OutputEvent[]` casts with `satisfies` in stream tests (#3041) (2742fbdd)
+- head+tail signature cap, remove dead nudged field, reword invariant comment (#3043) (be05492c)
+- parentRootSessionId JSDoc and microtask test drain (#3035) (fcf63c7a)
+- consolidate safeAnswer into farm-callbacks.helpers.ts (#3044) (7992ff73)
+- update is_current_session description, fix TOCTOU, document 2048-byte bound (#3045) (47eb5f2e)
+- locale-neutral schtasks CSV parsing, CR/LF/NUL guard, restart upgrade, dedup (#3034) (f29b7d75)
+
+### Changed
+- strengthen spy assertions in telemetry-write-guard tests (#3036) (988d38a7)
+
+## [5.299.6] - 2026-10-06
+
+### Fixed
+- override proxy-addr >=2.0.8 and source-map-js >=1.2.2 (GHSA-jqcg-44mw-7w3h, GHSA-68fv-2mgg-jv7q) (#3046) (d627aedd)
+- exhaustive switch in closureFromTrace and inline comment in normalClosure (#3031) (2e6349e7)
+
+## [5.299.5] - 2026-10-06
+
+### Added
+- Windows Task Scheduler backend for `afk service` (install/uninstall/status/restart/upgrade via `schtasks`, user-level, no elevation) (#1602)
+
+### Added
+- advisory same-error strategy nudge + surprise rule in system prompt (#3016) (6bfe6196)
+- add orchestrator-owned pre-push re-check to /ship (#3023) (c1134ebc)
+
+### Fixed
+- restore handleEnter invariants and narrow CsiHost width (#3025) (6cdbd0d9)
+- don't re-show archived rows on small content-hug shrinks (#3018) (b207b50e)
+- Shift+Tab mode switch toggles one live notice instead of stacking scrollback lines (#3021) (856931eb)
+- harden dead-letter quarantine — unique suffix, orphan dead-letter, benign race doc (#3024) (8d64c73c)
+- address advisory findings from pre-push hook review (#3019) (74661760)
+- tighten isExecError guard, add response-output tests, fix farm.ts arrows (#3022) (e44c2c2c)
+- readSidecarCwdSlice prefix read, is_current_session self-alias only, additive contract doc (#3017) (5def1400)
+- import renderReceiptMarkdown before re-exporting in receipt.ts (#3020) (a5e0edfc)
+
+### Changed
+- no service/auto-start support (daemon, Telegram bot) (#2347) (2e16379c)
+- audit production code for POSIX path assumptions (#2345) (585a17ae)
+- add hook-level dedup test and root-only contract comment (#3011) (8e2c1ce8)
+
+## [5.299.4] - 2026-10-06
+
+### Fixed
+- bare-filename guard, corrupt trace file field, races test coverage (#3009) (1b0177cb)
+- outcomes combiner v2 advisory findings (#3012) (9201818c)
+
+## [5.299.3] - 2026-10-05
+
+### Fixed
+- fix misleading JSDoc comments and deflake attribution tests (#3005) (27951e02)
+- address advisory findings from #2974 review (#3010) (cfa71b5e)
+
+## [5.299.2] - 2026-10-05
+
+### Fixed
+- tighten replay-renderer test assertions per advisory review (#3013) (5eb61262)
+- harden /history test hygiene — 4 advisory findings from #3000 review (#3015) (96147112)
+
+## [5.299.1] - 2026-10-05
+
+### Fixed
+- resolveBinding promotes a raw slot id to the full slot binding (#3001) (1f211c21)
+- protect worktrees pinned by scheduled task cwd fields (#2996) (737f34b9)
+- close stale pending window after compact→preamble→provider_switch; add soft-truncate tests (#3002) (64da2894)
+- three small journal replay renderer defects (blank paragraph, overcount, TTY echo) (#2999) (1769b0b2)
+- drop stale hardcoded model list from ChatGPT backend 400 error (#2998) (20bbddd6)
+
+### Changed
+- cover /history journal-first path and flush-before-read (#3000) (70c9f939)
+
+## [5.299.0] - 2026-10-05
+
+### Added
+- combiner v2 with severity tiers and good-by-default (#2997) (db76e12a)
+
+## [5.298.2] - 2026-10-05
+
+### Fixed
+- skip sessionstart agent tasks and alert when telemetry file is not writable (#2974) (22f4fbc5)
+
+## [5.298.1] - 2026-10-05
+
+### Fixed
+- remove stale bypass-mode execFile warning (#2716) (a73ac02c)
+- stop SessionEnd hook classifying its own SPINE.md edits and the main checkout's stale diff (#2641) (6fbb9d98)
+- credit nested sub-agent commits to the root session (#2710) (698bdf4f)
+- get_facet cwd-aware 'latest'; add 'current'/'self'; add resolution fields (#2975) (1bd93f34)
+- quarantine unparseable pending/ peer envelopes to held/ (#2976) (8eb6408b)
+
+## [5.298.0] - 2026-10-05
+
+### Added
+- self-installing pre-push hook running CI audit gates (#2686) (9686172f)
+
+## [5.297.0] - 2026-10-05
+
+### Added
+- re-render resumed and forked sessions from the message journal (#2715) (fefcf386)
+
+## [5.296.9] - 2026-10-05
+
+### Fixed
+- dead-letter malformed handoff records instead of silently skipping forever (#2973) (403ef1a9)
+- address remaining advisory findings from 2026-09-29 pr-triage (#2731) (217ef7f5)
+
+## [5.296.8] - 2026-10-05
+
+### Changed
+- split memory-store and memory-tools under the 350-line ceiling (#832) (#2959) (e75edd2e)
+
+## [5.296.7] - 2026-10-05
+
+### Fixed
+- make dynamic .mjs import tests portable to Windows (#2730) (3ee6bc78)
+
+## [5.296.6] - 2026-10-05
+
+### Fixed
+- surface soft-deadline partial compose nodes in the facet (#2977) (d852cbb7)
+
+### Changed
+- split 4 files under the 350-line ceiling (#832) (#2962) (46a8b1a8)
+
+## [5.296.5] - 2026-10-05
+
+### Changed
+- split worktree-sweep, readonly-bash, receipt, path-approval-hook under the 350-line ceiling (#832) (#2965) (10818c08)
+
+## [5.296.4] - 2026-10-05
+
+### Fixed
+- add in-process cooldown fallback when alert state write fails (#2972) (ee31fa7d)
+
+### Changed
+- split chat.ts, farm.ts, interactive/worktree.ts under the 350-line ceiling (#832) (#2963) (5831eb62)
+
+## [5.296.3] - 2026-10-05
+
+### Changed
+- split message handler, session manager and farm callbacks under the 350-line ceiling (#832) (#2964) (e0c0087f)
+
+## [5.296.2] - 2026-10-05
+
+### Changed
+- split audit-sdk-dependency and audit-fit under the 350-line ceiling (#832) (#2960) (babec7ad)
+- regenerate env-registry var count after concurrent merges (#2969) (d2c7b1b7)
+
+## [5.296.1] - 2026-10-05
+
+### Changed
+- split eval-run/contracts, runner, and propose/template-engine under the 350-line ceiling (#832) (#2961) (6f01d6d2)
+
+## [5.296.0] - 2026-10-05
+
+### Added
+- export plugin userConfig options and data dir to plugin hooks (#2732) (2ddcab6d)
+- add soft-delete GC sweep for stale fact archive entries (#2733) (78d51225)
+- burn-rate projection for subscription-quota indicator (#2951) (ceaeda9c)
+
+### Fixed
+- restore context.cwd as deprecated alias of context.resolveBase (#2948) (f9963c36)
+- hoist wslPrefixes, document dirname assumption, add ordering comment (#2949) (caa6088d)
+- peer-messaging docs/schema polish (#2950) (6e807701)
+
+## [5.295.9] - 2026-10-05
+
+### Fixed
+- enforce domain policy independently of unrelated browser config fields (#2919) (5a4ee000)
+
+## [5.295.8] - 2026-10-05
+
+### Fixed
+- replace wall-clock budget with ordering probe in 'returns immediately' test (#2947) (6dfbe3ae)
+
+## [5.295.7] - 2026-10-05
+
+### Fixed
+- deliver queued user messages at end of turn, not between tool rounds (#2956) (66f8e7da)
+
+## [5.295.6] - 2026-10-05
+
+### Added
+- record thumbs reactions as /good and /bad feedback (#2646) (90c9bb06)
+
+### Fixed
+- explicit truncation notice with line count on both Telegram and REPL (#2642) (0fb04855)
+- render the skill identity preview once per dispatch (#2915) (9bc80faa)
+
+## [5.295.5] - 2026-10-05
+
+### Changed
+- drop the spinner to 4 Hz after a 2 s warm-up and skip identical frames (#2946) (1e43fa75)
+
+## [5.295.4] - 2026-10-05
+
+### Fixed
+- recover claimed-but-uninjected peer envelopes after crash (#2924) (4c199481)
+
+## [5.295.3] - 2026-10-05
+
+### Added
+- blocking Stop hook continues the turn with a hard cap (#2740) (082b7609)
+
+### Fixed
+- introduce parentCredential to atomically pair key+sourceModel (#2928) (86ebeab6)
+- preserve body text when annotating; strip dangling label fragments (#2921) (cec37cf8)
+
+### Changed
+- rebuild parseSelfReport on parseTerminalState (#2922) (23b9194e)
+
+## [5.295.2] - 2026-10-05
+
+### Fixed
+- anchor breaking-change footer grep to line start (#2918) (598406db)
+- unref poller and exit on stdin close in test-server-dynamic fixture (#2917) (68e536a7)
+- pick most-representative verb for mixed parallel tool waves (#2920) (2a87e812)
+
+## [5.295.1] - 2026-10-04
+
+### Fixed
+- root session dirs at /tmp on darwin to fix sun_path EINVAL (#2942) (aa759578)
+- patch prod-path SSRF advisories (fast-uri, MCP SDK stack) (#2943) (92e65c4c)
+
+## [5.295.0] - 2026-10-04
+
+### Added
+- fire Stop on every top-level surface from the session layer (#2713) (ab6a3bc7)
+
+## [5.294.0] - 2026-10-04
+
+### Added
+- hint that a queued message stops a running wait_for (#2926) (58d369d6)
+
+### Fixed
+- add subagent PR detection (gap 6) and refactor detection to shared module (#2925) (634be66d)
+- surface Responses-API overload shapes as retryable errors (#2923) (aa724051)
+- tell the model its timeout limit and when a value was clamped (#2927) (d8c08dc1)
+
+### Changed
+- make the dynamic MCP fixture exit on stdin EOF (removes 10s vitest teardown stall) (#2930) (9c899d20)
+
+## [5.293.1] - 2026-10-04
+
+### Added
+- detach in-flight compose with Ctrl+B (#2746) (5b6e5510)
+
+### Fixed
+- skip WSL bash.exe in findGitBashOnWindows; derive from git.exe (#2763) (4deddfe0)
+- correct stale delivery-timing text and add sender rules (#2907) (616a9a05)
+
+### Changed
+- remove internal @deprecated items (#2748) (9d2cf2f3)
+
+## [5.293.0] - 2026-10-04
+
+### Fixed
+- SIGTERM tracked stdio servers at process exit so stubborn servers are never orphaned (#2931) (7f904dff)
+- wire DetachableToolRegistry at REPL bootstrap so Ctrl+B works on bash (#2753) (26064ba9)
+
+### Changed
+- regenerate env-registry after per-session TMPDIR change (#2929) (a57839af)
+- regenerate env-registry after #2747 merge (212 vars) (#2916) (8c1ab0ea)
+
+## [5.292.3] - 2026-10-04
+
+### Added
+- per-session and per-subagent private TMPDIR for spawned shells (#2747) (824f383d)
+
+### Fixed
+- settle post-detach deliver() on bounded timer when close never arrives (#2743) (7366139d)
+- newest explicit feedback vote wins (#2751) (00ccaa24)
+
+## [5.292.2] - 2026-10-04
+
+### Fixed
+- fix npm bin PATH check for Windows (delimiter and /bin suffix) (#2768) (d08d77c6)
+- silence Ajv unknown-format warnings for gRPC integer formats (#2767) (2696e63a)
+
+### Changed
+- bump the prod-minor-patch group across 1 directory with 7 updates (#2890) (46c634f0)
+
+## [5.292.1] - 2026-10-04
+
+### Fixed
+- emit PowerShell-compatible env-var syntax in Playwright install hint on win32 (#2765) (5a13c15e)
+- allowlist gh/curl read-only CI polls; fail fast on classifier block (#2769) (a034b5ff)
+- doctor: use resolveOpenAIAuth to cover ChatGPT/Codex OAuth (#2766) (85f9c2e8)
+
+### Changed
+- gate-liveness coverage for safety-gate wiring (#2882) (c78dcfb0)
+
+## [5.292.0] - 2026-10-04
+
+### Added
+- integrate skill previews with live dispatch activity (#2895) (0d2b4bc8)
+- improve peer-arrival UX — sanitized identity, silent auto-resume echo (#2896) (f68305fd)
+
+### Fixed
+- consistent, provider-labeled usage-limit errors for Claude and Codex (#2883) (5d3c2cb5)
+
+### Changed
+- redirect HOME in every test worker so tests can never hit the real home (#2905) (4f0d82d0)
+
+## [5.291.1] - 2026-10-04
+
+### Fixed
+- read tool arguments from Responses *.done events (#2904) (45a3a0fc)
+
+### Changed
+- bump openai from 6.38.0 to 7.25.0 (#2893) (ff5379c3)
+- bump shiki (#2898) (077d20f3)
+- bump vitest from 3.2.7 to 5.0.3 in /dashboard (#2889) (fcfe9576)
+- bump @vitejs/plugin-react in /dashboard (#2888) (524c13df)
+- bump @types/node from 26.6.2 to 26.6.3 in /website (#2885) (de8d70f5)
+- bump jsdom and @types/jsdom (#2892) (ddd4991e)
+- bump @types/node from 22.19.11 to 26.6.3 (#2897) (fdd13ba7)
+- bump the fumadocs group across 1 directory with 3 updates (#2884) (df8022ff)
+
+## [5.291.0] - 2026-10-04
+
+### Fixed
+- keep facet schema backward-compatible with v7 caches missing `pr_url` (#2863)
+
+### Changed
+- document SessionFacet v7 outcome semantics for public consumers (#2797)
+
+### Added
+- cooperative mid-turn boundary delivery for both providers (#2810) (fa17faaa)
+- tool-health builtin alerts on cross-session tool degradation (#2774 3/3) (#2785) (14c7fc9f)
+- per-session ToolHealthMonitor + tool_degraded trace event (#2774 2/3) (#2784) (fd77b367)
+- Claude Fable 5.1 support with drop_block prefix-binding observable (#2854) (b9dddee3)
+- one traced retry layer for compaction and one-shot calls (#2851) (baad7c6a)
+- opt-in usage-limit park for subagents so an account switch rescues in-flight children (#2826) (464fdac3)
+- cross-process usage awareness (per-provider buckets, afk usage, daemon budget gate) (#2853) (b90e9112)
+
+### Fixed
+- unify spinner verbs onto humanVerbForTool and prune flavour pools (#2878) (17b30f66)
+- key unparseable baseURLs distinctly in rate-limit/ledger (#2872) (#2879) (f0d82a2b)
+- add endedAt + exitReason to session sidecar on all exit paths (#2771) (aafff031)
+- prefer remote default branch over mutable local HEAD in resolveAnchorBaseRef (#2770) (e08b023c)
+- polish v7 public schema notes (#2863) (8f447b64)
+- fix gh pr create detection gaps (quoted separators, $(), flattened multi-line) (#2834) (71aceb7f)
+- resolve ghost-text credential per suggest model; route ChatGPT OAuth over Responses (#2864) (884a2da4)
+- accept completed response when transport drops after stop_reason (#2835) (68f14880)
+- advisory follow-ups from #2845 review (#2855) (#2860) (93b90799)
+- address allowlist wiring test and fork-site audit (#2848) (#2859) (a60783f9)
+- treat raised engines.node floor as major in auto-release (#2839) (c4db34e1)
+
+### Changed
+- remove @types/jest, refresh lockfile to clear prod advisories (#2825) (afd64a82)
+- bump the dashboard-minor-patch group (#2886) (6b1d592e)
+- bump chalk from 5.6.2 to 6.0.1 (#2894) (297013ea)
+- bump the dev-minor-patch group with 2 updates (#2891) (a305976e)
+- bump next from 16.3.6 to 16.3.8 in /website (#2887) (260f51f5)
+- point Dependabot at the root package and dashboard (#2824) (77cf1bd7)
+- remove stale autoRouting daemon refs (#2862) (03469197)
+- regression tests for redactSecrets at Telegram push boundary (#2849) (#2866) (e25238dd)
+
+## [5.290.4] - 2026-10-03
+
+### Fixed
+- refuse dangling symlinks in image_generate and image_edit output paths (#2836) (a6e67f59)
+
+## [5.290.3] - 2026-10-03
+
+### Fixed
+- retry SDK connect timeouts; redact connection_retry trace text (#2856) (f4332787)
+
+## [5.290.2] - 2026-10-03
+
+### Fixed
+- refill the screen after a tall overlay collapses (content-hug blank gap) (#2857) (eed966f0)
+
+## [5.290.1] - 2026-10-03
+
+### Fixed
+- invariant comment + redactSecrets at Telegram delivery boundary (#2849) (#2858) (e17db879)
+- address advisory findings from #2805 atomic-write review (#2837) (9e1b9b10)
+
+## [5.290.0] - 2026-10-03
+
+### Added
+- show peer session activity in list_sessions (#2850) (4e7e64d9)
+
+### Fixed
+- defeat pid reuse in presence liveness, refresh heartbeat, reap dead presence files (#2852) (e39708f8)
+
+## [5.289.1] - 2026-10-03
+
+### Fixed
+- do not retry egress-blocked requests in retryFetch (#2832) (1c7d48ba)
+
+## [5.289.0] - 2026-10-03
+
+### Added
+- disabledPluginHooks config key; warn before marketplace update discards local edits (#2841) (f8c0c4fe)
+
+## [5.288.3] - 2026-10-03
+
+### Fixed
+- retry and pause on status-less mid-stream overload errors (#2845) (42457e6f)
+- per-file retention for inbox delivered/ receipts (#2840) (7cd2d35b)
+- never forward an Anthropic credential to OpenAI-routed compose nodes (#2846) (f831dffc)
+
+## [5.288.2] - 2026-10-03
+
+### Fixed
+- enforce CommonMark fence rules in fencedLines() so unbalanced fence-like lines no longer hide the end-of-turn heading (#2833) (16bb8711)
+- retry connection-phase network errors (regression from #2422) (#2838) (fe5c90aa)
+- make default provider stores lazy so importing a provider opens no SQLite files (#2842) (2096f82e)
+
+## [5.288.1] - 2026-10-03
+
+### Fixed
+- exclude subagent tool events from toolDurationsMs; document trace interleaving (#2831) (cd682695)
+- persist result bodies and fix mislabeled delivered witness events (#2830) (5afd055d)
+
+## [5.288.0] - 2026-10-03
+
+### Added
+- tell scoped children which agent_type values they may dispatch (#2829) (23633647)
+
+## [5.287.2] - 2026-10-03
+
+### Fixed
+- keep bash output on abort/timeout; make write_file atomic (#2814) (936a6f27)
+
+### Changed
+- remove dead autoRouting.daemon key (#2827) (b8a0b1e1)
+- upgrade vitest + @vitest/coverage-v8 2.1.9 -> 4.1.11 (#2828) (88914f3c)
+
+## [5.287.1] - 2026-10-03
+
+### Fixed
+- diagnostic detail on no readable content errors (#2808) (42a5be5e)
+
+## [5.287.0] - 2026-10-03
+
+### Added
+- cross-session peer messaging (list_sessions / send_to_session) (#2806) (dff4418f)
+
+## [5.286.2] - 2026-10-03
+
+### Fixed
+- retry rename on Windows EPERM/EACCES/EBUSY (#2805) (1d3ef5ca)
+- right-size /review budgets, fix compose guidance, trace the effective budget (#2815) (c90e1303)
+
+## [5.286.1] - 2026-10-03
+
+### Fixed
+- address advisory findings from 2026-09-30 pr-triage (#2745) (da8899f6)
+
+### Changed
+- unskip clipboard and tildifyHome tests on Windows (#2744) (f1c022f4)
+- exercise real undici + egress-guard fetch path (#2774) (#2783) (510a003c)
+
+## [5.286.0] - 2026-10-03
+
+### Added
+- warn when agent-afk was upgraded under a running session (#2809) (5e4eeea6)
+
+### Fixed
+- back off harder on HTTP 429 and guide retries (#2807) (b6e0a6ad)
+
+## [5.285.0] - 2026-10-03
+
+### Added
+- context_window kwarg for the Harbor afk adapter (#2802) (9e1a92af)
+- run it, don't relay it; stop handing safe commands to the user (#2803) (2efa268e)
+
+### Fixed
+- no history hole while a tall overlay covers committed rows (content-hug) (#2804) (f17c7e46)
+
+### Changed
+- harden 30-day boundary coverage for session-sidecar and session-dir sweep (#2800) (54d208c8)
+
+## [5.284.0] - 2026-10-02
+
+### Added
+- per-slot contextWindow override (#2793) (6ced67c5)
+
+## [5.283.0] - 2026-10-02
+
+### Added
+- add Cerebras gpt-oss-120b and qwen-3.8-27b context windows (#2789) (11a5e1b8)
+
+## [5.282.9] - 2026-10-02
+
+### Fixed
+- reject/recover JSON-string model-slot values instead of treating them as a model id (#2790) (ce285210)
+
+## [5.282.8] - 2026-10-02
+
+### Fixed
+- echo reasoning under its origin field (Cerebras 400) (#2788) (ae814b46)
+
+## [5.282.7] - 2026-10-02
+
+### Fixed
+- trustworthy outcome, primary_success, produced_pr, tool_errors_total (#2777) (#2781) (bd054244)
+
+## [5.282.6] - 2026-10-02
+
+### Fixed
+- re-drive mid-stream network termination (TypeError: terminated) (#2780) (#2786) (677d09a5)
+
+## [5.282.5] - 2026-10-02
+
+### Fixed
+- clear disconnect timeout timer when disconnect succeeds (#2764) (e0749da6)
+
+## [5.282.4] - 2026-10-02
+
+### Fixed
+- re-drive mid-stream network termination (TypeError: terminated) (#2776) (#2779) (28e4f60b)
+
+## [5.282.3] - 2026-10-02
+
+### Fixed
+- read Claude Code OAuth credentials on Windows (#2755) (9a4b20b8)
+
+### Changed
+- use --ak for Harbor agent kwargs (#2775) (dd1fbcbf)
+
+## [5.282.2] - 2026-10-02
+
+### Fixed
+- honor undici lookup all:true contract in egress guard (web_scrape fetch failed) (#2754) (86f77d75)
+
+## [5.282.1] - 2026-10-01
+
+### Fixed
+- add fake-timer comment and extract rmSyncRetry test helper (#2673) (2d76fda3)
+
+### Changed
+- remove retired capture-flag deprecation notice (#2668) (ab2bbd75)
+
+## [5.282.0] - 2026-10-01
+
+### Added
+- detach contract with Ctrl+B backgrounding for in-flight bash (#2735) (74c74b10)
+
+## [5.281.0] - 2026-10-01
+
+### Added
+- add scrollable in-TUI viewer for captured bash output (#2739) (5da98b86)
+
+## [5.280.0] - 2026-10-01
+
+### Added
+- Harbor installed-agent adapter and eval program (#2741) (dbabc71b)
+
+### Changed
+- classify Windows-skipped tests (#2738) (25c43d0b)
+
+## [5.279.2] - 2026-10-01
+
+### Fixed
+- forward MCP image content blocks to the model (#2734) (f785c05a)
+
+## [5.279.1] - 2026-10-01
+
+### Fixed
+- address advisory findings from pr-triage pass 2 (#2737) (4b0b84d0)
+
+## [5.279.0] - 2026-10-01
+
+### Added
+- add image_edit tool via OpenAI Images Edit API (#2725) (50e4d361)
+
+### Fixed
+- address advisory findings from 2026-09-30 pr-triage (#2720) (a6549920)
+
+## [5.278.2] - 2026-10-01
+
+### Fixed
+- restore funcsize/filesize ratchets on openai-compatible query() after #2711/#2721 collision (#2729) (a3010b28)
+
+## [5.278.1] - 2026-09-30
+
+### Added
+- openai-compatible waits out usage/quota limits (#2721) (f66156a3)
+- add access-pattern reporting for the fact archive (#2724) (91739adb)
+- whatif preflight checks whether the experiment can answer the question (#2722) (556a53f8)
+
+### Fixed
+- address remaining advisory findings from 2026-09-30 pr-triage (#2719) (93a31b65)
+- address advisory findings from #2661 review (#2717) (4f2d08e0)
+
+### Changed
+- read outcome tool results from the message journal (#2718) (bad8a911)
+- provider accounting parity audit and fixes (#2723) (523d9761)
+
+## [5.278.0] - 2026-09-30
+
+### Added
+- hide skills from the model manifest via disable-model-invocation / skills.hidden (#2707) (2d988efe)
+- add setSystemPrompt, setBeforeNextRound, and rewind to openai-compatible (#2711) (ee7af094)
+
+### Fixed
+- contain AFK_FRAMEWORK_PROMPT_FILE throw at mid-lifecycle sites (#2704) (c3e7395d)
+- set maxRetries: 0 on SDK clients so AFK owns the retry loop (#2702) (ef707371)
+
+## [5.277.0] - 2026-09-30
+
+### Added
+- PreToolUse hook updatedInput support (tool input rewrite) (#2706) (2d09ce1a)
+
+### Fixed
+- address advisory findings from 2026-09-30 pr-triage (#2703) (8d7d23d9)
+
+### Changed
+- cross-provider conformance suite for resilience-feature drift (#2709) (27b3351f)
+- record why openai-compatible needs no many-image guard (#2705) (be4f787a)
+
+## [5.276.23] - 2026-09-30
+
+### Fixed
+- stable session id for non-CLI surfaces + correct id in get_runtime_state (#2708) (4dcfb31d)
+- update resolver cache and use live getter for parentApiKey after /reauth (#2699) (1f0ec2a4)
+- address advisory findings from 2026-09-30 pr-triage (#2693) (ea594f57)
+
+## [5.276.22] - 2026-09-30
+
+### Fixed
+- close frozen Playwright context safely in renderHtml (#2698) (c6573703)
+
+## [5.276.21] - 2026-09-30
+
+### Added
+- per-plugin hook env allowlist (#2700) (4c3db5ee)
+
+### Fixed
+- use undici's own fetch+Agent instead of globalThis.fetch+foreign dispatcher (#2697) (77e4fce9)
+- sort-then-slice fingerprint, drop unused barrel exports, clarify docs (#2696) (31d61c0a)
+- exitCode guarantee, module-scope const, beforeEach fake timers (#2690) (2f2dc903)
+- plumb tailWidth into grouped-root suffix; sum fixed-part widths directly (#2692) (be879a9d)
+- address advisory test-hygiene findings from #2671 + #2672 (#2691) (1e921566)
+
+## [5.276.20] - 2026-09-30
+
+### Fixed
+- reorder realpathSync before manifestName, validate CODEX_HOME absolute, use realPath for asset path (#2678) (51a97242)
+- address advisory findings from 2026-09-29 pr-triage (#2684) (9c9355af)
+
+## [5.276.19] - 2026-09-30
+
+### Fixed
+- address advisory test-quality findings from Windows-compat PR batch (#2677) (0ce311df)
+- lift textContainsQuestion to module scope, tighten regex, improve tests (#2676) (13c357e4)
+- tighten comment precision, add prefix-boundary test cases, fix unresolvable @link (#2680) (826d881d)
+- harden pack check with jq and clarify postinstall docs (#2681) (5009c6e7)
+- extract clusterHits to cluster.ts; tighten detector test; fix doc order (#2682) (72698c27)
+- sanitize FTS5 queries with hyphens/colons before retrying (#2674) (448d3722)
+- count foreground subagents in health rail N/M subs (#2685) (c0b47588)
+- document latch/ask invariant, add selectBaseSchemas tests, annotate dead ternary (#2683) (57c7f6ae)
+
+## [5.276.18] - 2026-09-30
+
+### Fixed
+- add avail=1 degenerate-terminal unit test for band reserve clamp (#2671) (e5128b7d)
+- sync message description, add test comment, clarify mock comment (#2675) (97fb0ffa)
+
+## [5.276.17] - 2026-09-30
+
+### Changed
+- remove redundant subagent-status overlay slot (#2661) (3732b866)
+
+## [5.276.16] - 2026-09-30
+
+### Fixed
+- stop clipping failed-tool error lines to 20 columns (#2667) (6a0681dd)
+- add updated and missing-dir stdout assertions to single-plugin update tests (#2672) (469f98bb)
+- add multi-byte elision test, explicit utf8 arg, fix JSDoc phrase (#2670) (b1447315)
+- epoch guard, over-cap fallback test, and clarifying comments (#2652) (e8a33963)
+- memoize daemonDefaultCwd, improve fallback warning, add EACCES test (#2655) (f9324b9a)
+- redact err.message, guard ambient credential on custom baseUrl, add missing tests (#2659) (2cb16e2e)
+- symlink guard, GlobAbortedError message, foldsOverlap predicate, hardlink test (#2658) (40a2f0ae)
+
+## [5.276.15] - 2026-09-30
+
+### Fixed
+- apply contentMargin() padding in appendLinesAtCursor (#2660) (3b9b1c4b)
+- stabilize tests that flake under local load (#2650) (2a0a457c)
+- tighten DATE_TEMPLATE, type label as union, expand boundary tests (#2654) (b5dada27)
+- print single-plugin update outcome to stdout (#2649) (600efab1)
+- fix bytes/chars mismatch, extract TurndownLike, tighten MIME cap (#2651) (83df6550)
+- fix AFK_SUBAGENT_LOG parenthesis, stale shell-escape doc, raw-input trailing blank (#2657) (3fe4fb8a)
+- guard queueMicrotask push against post-dispose settled events (#2656) (f3ebbdad)
+- address advisory findings from RetryLayer swapped detection review (#2653) (971e9908)
+
+## [5.276.14] - 2026-09-30
+
+### Fixed
+- populate transcript_path in hook payloads from REPL transcript (#2647) (39e88574)
+- reserve viewport rows for the committed band under content-hug (#2648) (e8afd50b)
+
+## [5.276.13] - 2026-09-30
+
+### Fixed
+- fix --yes --force prompt bug and add measured-refusal handling (#2645) (1e695814)
+
+## [5.276.12] - 2026-09-30
+
+### Fixed
+- fix JSON credential source label, tier order, and xAI auth branch (#2634) (2aebb10d)
+- track client-built token in RetryLayer to fix swapped detection (#2636) (141ed326)
+
+## [5.276.11] - 2026-09-30
+
+### Fixed
+- openai-compatible has no first-byte or stream-stall timeout (also affects xAI and local runners) (#2431) (5fff9fa7)
+- strip truncated annotation fragments before re-appending (#2635) (63cfee41)
+- resolve confirmSpec promise before closing readline (#2633) (128284a1)
+
+## [5.276.10] - 2026-09-30
+
+### Fixed
+- discover installed Claude plugins and native Codex plugins (#2524) (1336213e)
+
+## [5.276.9] - 2026-09-30
+
+### Fixed
+- render Markdown in send_telegram messages (#2521) (db2dc20e)
+- default daemon session cwd to daemon-state-dir, not process.cwd() (#2613) (f3a7baff)
+
+## [5.276.8] - 2026-09-30
+
+### Changed
+- make Windows a required test leg (closes #703) (#2630) (64532d99)
+- order-preserving parallel readdir in glob walker (#2614) (cbf614ec)
+
+## [5.276.7] - 2026-09-30
+
+### Fixed
+- give oauthRefresher and port-file-lifecycle startDaemon calls an isolated telemetryPath (#2616) (25067360)
+
+## [5.276.6] - 2026-09-30
+
+### Fixed
+- bash credential floor failed open on Windows (#2625) (138b7636)
+- unconfined sessions no longer denied with 'write roots []' (#2624) (abbff067)
+- L7+L8 postinstall import and three misc Windows test failures (#703) (#2623) (493d044e)
+- use resolveShell() in shell-task instead of hardcoded /bin/sh (#2622) (1b57dc2b)
+- close provider SQLite handles before test tmpdir removal (#2621) (30867b8d)
+- fix Windows path separator and 8.3 short-name bugs in sandbox containment (#703) (#2620) (e6c8d532)
+- fix POSIX path literals in util/tool tests and glob pattern separator bug (#2619) (6e2301ad)
+
+### Changed
+- add ratcheted POSIX-assumption guard enforced in pnpm test (#2626) (0487ad6e)
+- replace hardcoded /tmp with os.tmpdir() (#2618) (d9784900)
+
+## [5.276.5] - 2026-09-30
+
+### Fixed
+- reset denylist cache and use vi.stubEnv in symlink test block (#2615) (44477480)
+- wait (bounded) for killed ripgrep to exit before resolving (#2631) (c9aaf2e1)
+
+### Changed
+- fix POSIX path literals in daemon tests for Windows compat (#2617) (b0f1515f)
+
+## [5.276.4] - 2026-09-29
+
+### Fixed
+- askedBeforeActing now detects prose questions after read-only tools (#2606) (adf452be)
+- wire --no-baseline-sample into the afk whatif CLI command (#2608) (607306b6)
+- preserve ask_question in whatif episodes so asking behavior is measurable (#2612) (24a94ce8)
+- keep POSIX semantics for /-rooted scan candidates on win32 (#2605) (887c0aed)
+
+## [5.276.3] - 2026-09-29
+
+### Fixed
+- session.init reports session cwd instead of process.cwd() (#2611) (d1d68320)
+- include prediction text in refused.json (#2607) (6b6329dd)
+
+## [5.276.2] - 2026-09-29
+
+### Fixed
+- forward --force from the /whatif REPL slash command (6df2ecf3)
+- extract describeIgnoredRefusal helper; add ignored meta fields to teardown (a5dc7415)
+- drop unfounded ._build/ pattern; pass ignored detail to isolation debug log (5f213188)
+- classify SwiftPM .build/ as rebuildable and name the real path in ignored-local-state lock reasons (218a8e0f)
+- probe grounding buffer cap, async git, warning on unexpected failure, grounding clause hygiene, all-dropped test (9fdf32bc)
+
+### Changed
+- Merge pull request #2603 from griffinwork40/afk/whatif-slash-force (cf640033)
+- Merge pull request #2483 from griffinwork40/afk/issue-2402-b545 (6aad35f4)
+- Merge pull request #2532 from griffinwork40/afk/iso-agent-tool-3-fgt9ns (11983933)
+- Merge branch 'main' into afk/issue-2402-b545 (a8543b48)
+
+## [5.276.1] - 2026-09-29
+
+### Added
+- local, prose-free record of deferred "pre-existing" defects (89cd5eb3)
+
+### Fixed
+- address Codex review (sidecar-less surfaces, ambiguous loci, deferred size category) (c610875e)
+- stop path-escape advisory firing on /dev/null and /tmp (509d7e57)
+- shut down lazily-launched browser after afk chat completes (89539544)
+- address console-bridge advisory findings from #2517 review (34ecda0f)
+
+### Changed
+- Merge pull request #2589 from griffinwork40/afk/preexisting-ledger (b68b6e53)
+- Merge pull request #2588 from griffinwork40/afk/bash-scan-sink-exempt (17797dfc)
+- Merge pull request #2587 from griffinwork40/afk/iso-agent-tool-4-u026vb (e2546a82)
+- Merge pull request #2570 from griffinwork40/afk/iso-agent-tool-5-hdypjv (2f095fd4)
+
+## [5.276.0] - 2026-09-29
+
+### Added
+- add overload pause tier to openai-compatible provider (70a30f0d)
+
+### Fixed
+- pin SHARED_CONTEXT_DIRECTIVE in ordering test and tighten separator count (9136739b)
+
+### Changed
+- Merge pull request #2569 from griffinwork40/afk/iso-agent-tool-4-xon4bj (b24066b6)
+- Merge pull request #2574 from griffinwork40/afk/iso-agent-tool-4-mh9o62 (262fa048)
+- Merge remote-tracking branch 'origin/main' into afk/fix-2574-conflict (f43e7208)
+- Merge origin/main into afk/iso-agent-tool-4-mh9o62 (#2574) (785a9ed3)
+- merge origin/main + apply review findings (#2574) (6039e638)
+
+## [5.275.6] - 2026-09-29
+
+### Fixed
+- elide data: URI payloads in web_scrape extracted markdown (ba6e5d07)
+- retire AFK_CAPTURE_SUBAGENT_OUTPUT and AFK_CAPTURE_SUBAGENT_PROMPTS (8a0bbac2)
+
+### Changed
+- Merge pull request #2584 from griffinwork40/afk/iso-agent-tool-3-ez4uwm (55b1611e)
+- Merge pull request #2583 from griffinwork40/afk/drop-dist-postinstall (b6969ee5)
+- Merge pull request #2582 from griffinwork40/afk/glob-rg-2543 (bcb9d260)
+- Merge pull request #2581 from griffinwork40/afk/iso-agent-tool-3-k7xlsp (387dca76)
+- stop copying postinstall into dist/ (0201388b)
+- stop per-entry sync stat probes in the read-denylist check (#2543) (e4183e66)
+
+## [5.275.5] - 2026-09-29
+
+### Added
+- add redundancy preflight check to /whatif (c45dfd4e)
+
+### Fixed
+- fix over-stemming, heading false-match, progress excerpt, and weak tests (cc91d375)
+
+### Changed
+- Merge pull request #2571 from griffinwork40/afk/iso-agent-tool-5-hvsx44 (42ea0bc3)
+- Merge pull request #2523 from 0x7067/fix/pnpm-11-install (5422b42d)
+
+## [5.275.4] - 2026-09-29
+
+### Fixed
+- bound tool-lane preview formatting so huge tool results cannot starve the REPL (#2578) (247a06f6)
+- make query.ts mutable fields private with live getters (81261a07)
+- fd leak, tie-break parity, typeof guard (9a51b6aa)
+- async non-blocking tool-result lookup for web route (b94fad6e)
+
+### Changed
+- Merge pull request #2572 from griffinwork40/afk/iso-agent-tool-2-86ybes (9441ccc7)
+- Merge pull request #2575 from griffinwork40/afk/iso-agent-tool-3-qdnucb (706c42af)
+- decompose openai-compatible/query.ts under the 350-line ceiling (e1589a52)
+
+## [5.275.3] - 2026-09-29
+
+### Fixed
+- advisory findings from 2026-09-29 pr-triage review (fa3647e1)
+
+### Changed
+- Merge pull request #2573 from griffinwork40/afk/iso-agent-tool-2-xnqdzl (4fb3854c)
+
+## [5.275.2] - 2026-09-29
+
+### Fixed
+- unref deferred exit timers and use fake timers in crash-handler tests (95d325db)
+- record kept sandbox roots in <runDir>/sandboxes.json (cb19fa3a)
+- defer crash-notification exit and guard against duplicate handler registration (def2b0ad)
+- address advisory findings from #2518 and #2512 (whatif) (adbd876b)
+
+### Changed
+- Merge pull request #2544 from griffinwork40/afk/iso-agent-tool-15-x0ud5c (7d8775f1)
+- Merge pull request #2537 from griffinwork40/afk/iso-agent-tool-6-2xmiio (6542bb2b)
+- Merge pull request #2547 from griffinwork40/afk/whatif-2478-consolidate (35f55f43)
+- merge remote afk/iso-agent-tool-6-2xmiio (already-resolved conflict) (e139b662)
+- resolve conflict with origin/main in src/whatif/run.ts (188bd348)
+- merge origin/main into afk/iso-agent-tool-6-2xmiio (54974335)
+- Merge remote-tracking branch 'origin/main' into afk/fix-2547-conflict (d9346ac9)
+- Merge branch 'main' into afk/iso-agent-tool-15-x0ud5c (1d6b44a8)
+- Merge branch 'main' into afk/iso-agent-tool-6-2xmiio (1fac705f)
+- Merge branch 'main' into afk/whatif-2478-consolidate (eba47b60)
+
+## [5.275.1] - 2026-09-29
+
+### Fixed
+- log stale-source overwrites in bg-injection; defer push body formatting (efffc209)
+- address advisory findings from overlap guard review (08d50bc1)
+
+### Changed
+- Merge pull request #2545 from griffinwork40/afk/iso-agent-tool-13-6nh80t (a4acbbb7)
+- Merge pull request #2538 from griffinwork40/afk/iso-agent-tool-7-aol66x (3ac45ad5)
+- Merge branch 'main' into afk/iso-agent-tool-13-6nh80t (fb3ea471)
+- Merge branch 'main' into afk/iso-agent-tool-7-aol66x (f6f77b22)
+
+## [5.275.0] - 2026-09-29
+
+### Added
+- yield-to-user contract; wait_for ends early when the user types (174bedd4)
+
+### Fixed
+- image-bearing queued messages also wake a yielding tool (aa516af0)
+- advance turn index only after a turn passes its gate, add ordinal-list and anaphora test coverage, scope corpusExclusions JSDoc (850d9a32)
+
+### Changed
+- Merge pull request #2540 from griffinwork40/afk/iso-agent-tool-12-oia21r (fb0fc39f)
+- Merge pull request #2541 from griffinwork40/afk/tool-user-yield (a9bc7668)
+- Merge branch 'main' into afk/tool-user-yield (4837051e)
+- Merge branch 'main' into afk/iso-agent-tool-12-oia21r (a98bc831)
+
+## [5.274.8] - 2026-09-29
+
+### Fixed
+- address advisory findings from PR #2385 review (#2539) (6d476bf2)
+- document regex matcher alias asymmetry in hook config docs (#2533) (80694d78)
+- replace non-null assertions with explicit guards, drop redundant cast, move test hooks inside describe (#2534) (9a73762d)
+- add --probes/--max-predictions to flags, Set-based dedupe, Map-based syntheticPerArm (#2536) (01fd7342)
+- advisory findings from journal provenance adapters review (61008718)
+
+### Changed
+- Merge pull request #2546 from griffinwork40/afk/iso-agent-tool-11-sd0rtt (85a9dcd4)
+- Merge branch 'main' into afk/iso-agent-tool-11-sd0rtt (9d92842c)
+
+## [5.274.7] - 2026-09-29
+
+### Fixed
+- address advisory findings from #2494 review (9ba5a742)
+
+### Changed
+- Merge pull request #2566 from griffinwork40/afk/pnpm-11-migration (0446aec3)
+- Merge pull request #2548 from griffinwork40/afk/iso-agent-tool-16-sw8jmm (deeea47a)
+- raise Node floor to 22.13 to match pnpm 11 (4066f2f0)
+- migrate to pnpm 11 (531c8031)
+
+## [5.274.6] - 2026-09-29
+
+### Fixed
+- improve thinking-chunk exclusion test coverage (fccdf961)
+
+### Changed
+- Merge pull request #2549 from griffinwork40/afk/iso-agent-tool-20-qclu1t (966ca8a7)
+
+## [5.274.5] - 2026-09-29
+
+### Fixed
+- address advisory findings from /pr-triage 2026-09-27 (693ced57)
+- advisory findings from #2507 — turn budgets across retry-tier replays (7f7360b5)
+- document above/below contract, defensive rail sets, and add missing tests (42bac34e)
+- advisory findings from #2476 (MDE preflight and gate) (7e2372d9)
+- betaSample degenerate guard + ICC clamp comment (9d607d24)
+
+### Changed
+- Merge pull request #2550 from griffinwork40/afk/iso-agent-tool-17-7rv2wh (8dcf3b67)
+- Merge pull request #2555 from griffinwork40/afk/iso-agent-tool-24-p6atnz (9a7d8d23)
+- Merge pull request #2552 from griffinwork40/afk/iso-agent-tool-18-jtnfy4 (e1babded)
+- Merge pull request #2558 from griffinwork40/afk/iso-agent-tool-25-ya41kq (32e8a39c)
+- Merge pull request #2564 from griffinwork40/afk/iso-agent-tool-27-nx7lh8 (77a0057d)
+
+## [5.274.4] - 2026-09-29
+
+### Fixed
+- address advisory review findings from #2469 reauth fix (19a0346f)
+- advisory findings from #2370 — preview budget, type narrowing, Telegram spoofing guard (5450732e)
+- advisory findings from #2438 — tool_calls cast removal, interleaved repair order, fast path, type tightening (4cb2a525)
+- plan-text-tracker advisory findings — comments, zero-width strip, test (f00e617c)
+- use CROSS_CHECK_MIN_* constants, drop redundant guard, strengthen test (64119b14)
+
+### Changed
+- Merge pull request #2556 from griffinwork40/afk/iso-agent-tool-21-b7yd2v (165718b3)
+- Merge pull request #2559 from griffinwork40/afk/iso-agent-tool-26-3jc9h1 (08257bc5)
+- Merge pull request #2553 from griffinwork40/afk/iso-agent-tool-22-0mzqmg (94ffb408)
+- Merge pull request #2551 from griffinwork40/afk/iso-agent-tool-19-3gz36h (b78b5625)
+- Merge pull request #2557 from griffinwork40/afk/iso-agent-tool-23-7kkz12 (85a9d461)
+
+## [5.274.3] - 2026-09-29
+
+### Fixed
+- address review feedback on outcome journal fallback (f7703b47)
+- fall back to the session journal when the sidecar is absent (05929cf6)
+
+### Changed
+- Merge pull request #2510 from griffinwork40/afk/outcome-journal-fallback (ea54deff)
+- Merge remote-tracking branch 'origin/main' into afk/pr-2510-rebaseline (f50f078e)
+- Merge remote-tracking branch 'origin/main' into afk/pr2510-push (8c711f8f)
+
+## [5.274.2] - 2026-09-29
+
+### Fixed
+- extract compact summarize wiring to restore the filesize ratchet (b5aba032)
+
+### Changed
+- Merge pull request #2554 from griffinwork40/afk/fix-query-filesize-ratchet (84be5439)
+
+## [5.274.1] - 2026-09-29
+
+### Fixed
+- raise undici floor to ^7.27.1; add Node 26 CI leg (issue #2525) (#2535) (edb8ed42)
+- move JEV_DISREGARD_NOTE to leading grading-instructions preamble (#2531) (9f56ada4)
+- correct postinstall docs — Linux Telegram notice, bot.pid wording, bold emphasis (#2527) (ed8218c8)
+- pin geometryStale+anchorRow invariant; add suspended to makeHost defaults (#2530) (aaa8c90a)
+
+### Changed
+- Merge pull request #2529 from griffinwork40/afk/iso-agent-tool-2-fzg8lh (19a7b263)
+
+## [5.274.0] - 2026-09-29
+
+### Added
+- add shared-context directive for interactive surfaces (f64ea156)
+
+### Changed
+- Merge pull request #2522 from griffinwork40/afk/shared-context-directive (225534b6)
+
+## [5.273.0] - 2026-09-29
+
+### Added
+- AFK_COMPACT_MODEL works across providers (7aaf663a)
+
+### Fixed
+- route console.warn/error through the compositor while armed (5575382e)
+- reject still-expired xAI OAuth token in compaction (89531f3e)
+- address review feedback (c8ba85a5)
+- scope privacy warns per-instance, fix DOMException abort, normalize xai-oauth family (617b34f0)
+- stop persisting raw first prompts in the outcome store (d6bc5738)
+
+### Changed
+- Merge pull request #2517 from griffinwork40/afk/diagnose-error-wrapping (a1ebe921)
+- Merge pull request #2451 from griffinwork40/afk/issue-2449-plr9 (d881b7b3)
+- Merge pull request #2474 from griffinwork40/afk/compact-model-cross-provider (b5afc0e9)
+- drop stale personal claude-jev path from fixture comment (36a9886a)
+- Merge remote-tracking branch 'origin/main' into afk/pr2474-fix (726e9e2d)
+
+## [5.272.1] - 2026-09-29
+
+### Fixed
+- render tiny sign-flip p-value as <0.001 instead of 0.000 (5e985d2d)
+- REPL progress throttle shows every preflight milestone line (b164eb80)
+
+### Changed
+- Merge pull request #2512 from griffinwork40/afk/whatif-repl-throttle-pdisplay (b99155d1)
+
+## [5.272.0] - 2026-09-29
+
+### Added
+- measure baseline headroom with a small baseline-only sample (#2511) (15516608)
+
+### Fixed
+- baseline sample cost estimate includes its cold-cache start (92b9e8ed)
+- a refused baseline sample writes refused.json with its evidence and spend (13cebc97)
+- baseline sample gates on the full run's MDE and is not bypassed by --force (9fdd170e)
+
+### Changed
+- Merge pull request #2518 from griffinwork40/afk/whatif-baseline-sample (144d578c)
+
+## [5.271.3] - 2026-09-29
+
+### Fixed
+- show the real Anthropic credential source in `afk status` (#2458) (38046fab)
+
+## [5.271.2] - 2026-09-29
+
+### Fixed
+- record --ref on update when the checkout is already at it (#2457) (663e1f56)
+
+## [5.271.1] - 2026-09-29
+
+### Fixed
+- load plugins nested under a marketplace root plugin (#2456) (8b57cb81)
+
+## [5.271.0] - 2026-09-29
+
+### Added
+- persist doneUnverified in schedule telemetry (1eabf0ea)
+
+### Fixed
+- address review feedback — JSDoc, record assertion, baseline (1fb0a6bb)
+
+### Changed
+- Merge pull request #2322 from griffinwork40/afk/iso-agent-tool-4-foq9u1 (fbd08d2f)
+- merge main; drop scheduler.ts filesize grandfather (fits at 350 after #2320) (2348c891)
+- Merge remote-tracking branch 'origin/main' into afk/pr2322-rebase-main (b92756e7)
+- Merge remote-tracking branch 'origin/main' into afk/pr2322-fix (6eaefd5a)
+
+## [5.270.3] - 2026-09-29
+
+### Fixed
+- use real-length sk- token in redaction test (7fdc7913)
+- redact secrets in makeSessionStartSkipRecord; add test; merge main; add JSDoc notes (9383e9f5)
+- add per-task in-flight overlap guard to CronScheduler (391861a2)
+
+### Changed
+- Merge pull request #2320 from griffinwork40/afk/iso-agent-tool-7-p3r1o7 (653858b5)
+
+## [5.270.2] - 2026-09-29
+
+### Added
+- derive session facets from the message journal (27e9d8cf)
+
+### Fixed
+- address review feedback on repair-orphan-tool-calls (e49a0d8f)
+- address review feedback (d4bd47fd)
+- extract aggregateToolEvents, clean journal-adapter, unify dedup (de4f8c96)
+- strip leading newlines from append change.text; add content-ops tests (bada0594)
+- keep journal commit detection and home isolation (3a851063)
+- headroom warning also prints under --force; rates render as % (8b554574)
+- probe headroom check (#2504) (a3a8de71)
+- append operator inserts an extra blank line (2b04e7fd)
+- openai-compatible never repairs orphaned tool calls before sending history (643e9be6)
+
+### Changed
+- Merge pull request #2438 from griffinwork40/afk/issue-2417-4d60 (3b625eab)
+- Merge pull request #2496 from griffinwork40/afk/issue-2412-dok6 (16ea924b)
+- Merge pull request #2506 from griffinwork40/afk/issue-2461-q7r3 (0f7d533a)
+- Merge pull request #2505 from griffinwork40/afk/whatif-headroom-2504 (6c106678)
+- fix postinstall docs — platform split, silent-skip wording, hook duties, isGlobalInstall, marker file (#2280) (d4c11229)
+- restore #2412 regression tests dropped by prior fix commit (51eeed80)
+- remove pr-body.md (76677951)
+- remove pr-body.md (leftover) (ba4e181c)
+
+## [5.270.1] - 2026-09-29
+
+### Fixed
+- keep turn budgets across retry-tier replays; report hard-timeout partials (#2507) (32513ed5)
+- add crash notification handlers to standalone telegram bot (#2311) (e3f01b70)
+- hidden-lines gutter follows the active glyph set (8bc30f47)
+- keep tree spine intact on "N earlier lines hidden" row (9c7d3c97)
+
+### Changed
+- Merge pull request #2497 from griffinwork40/afk/fix-hidden-lines-spine (90843dcf)
+
+## [5.270.0] - 2026-09-28
+
+### Added
+- support Claude Sonnet 5.5 (claude-sonnet-5-5) (#2495) (774930c6)
+
+## [5.269.0] - 2026-09-28
+
+### Added
+- paired per-probe sign-flip analysis (#2477 step 3) (#2498) (2a9d4503)
+
+## [5.268.1] - 2026-09-28
+
+### Fixed
+- correct estimateVerifyCost 1.92x overestimate (#2489) (78317b05)
+- simulate calibration harness ICC presets and endpoint base rates correctly (633f3ac8)
+
+### Changed
+- Merge pull request #2494 from griffinwork40/afk/iso-compose-fix-2411-2-ryvk37 (75c9dcb5)
+- Merge pull request #2493 from griffinwork40/afk/iso-compose-judge-grades-1-gez9da (e2340f0b)
+- Merge pull request #2490 from griffinwork40/afk/issue-2479-q3x8 (0cb54a34)
+- Merge pull request #2492 from griffinwork40/afk/iso-compose-fix-2489-3-ewvk4x (717dae9f)
+- report failed episodes per arm and flag arm-imbalance (#2411) (09bf99b8)
+- persist per-output judge grades to grades.jsonl (#2491) (0945fafc)
+
+## [5.268.0] - 2026-09-28
+
+### Added
+- --probes N, probe dedupe, predictions cap, probes before replay (#2477 step 1) (c0326ab1)
+- provenance-carrying adapters keep provider switches lossless (#2464) (693337c8)
+
+### Fixed
+- subagents ignore /reauth account switch (stale boot-token cache) (019efea1)
+
+### Changed
+- Merge pull request #2463 from 0x7067/docs/plugin-hook-contract (8e5c7f28)
+- Merge pull request #2482 from griffinwork40/afk/whatif-probes-2477 (59663207)
+- Merge pull request #2468 from griffinwork40/afk/journal-provenance (8e25b580)
+- Merge pull request #2469 from griffinwork40/afk/20260928-131257-4d5c6b (07bad547)
+- record live A→B→A signature result (#2464) (0aec3759)
+- bring the command-hook contract up to date (770d9de9)
+
+## [5.267.0] - 2026-09-28
+
+### Added
+- minimum-detectable-effect preflight, gate, and report limit (#2410) (3c9e04e3)
+- per-prediction judge agreement downgrades verdicts when judges disagree (#2413) (64dd1196)
+
+### Fixed
+- correct power convention and use per-prediction probe count (d5b0c8bd)
+
+### Changed
+- Merge pull request #2476 from griffinwork40/afk/iso-compose-mde-2-plh7j1 (c7aeada0)
+- Merge pull request #2475 from griffinwork40/afk/iso-compose-crosscheck-3-2azvpb (7493ff53)
+- remove stray commit-message files (ae01c313)
+- Merge remote-tracking branch 'origin/afk/iso-compose-stats-1-e7z5zf' into afk/iso-compose-mde-2-plh7j1 (134ea19b)
+
+## [5.266.2] - 2026-09-28
+
+### Fixed
+- per-episode analysis and real equivalence test for verdicts (#2404, #2405) (16345281)
+
+### Changed
+- Merge pull request #2473 from griffinwork40/afk/iso-compose-stats-1-e7z5zf (292422fe)
+- remove stray commit-message files (d2f20703)
+- extend calibration harness — Beta latent, tau dimension, updated thresholds (e500f913)
+
+## [5.266.1] - 2026-09-28
+
+### Fixed
+- isolate arm sandboxes so episodes cannot reach the other arm (#2466) (05b263ac)
+
+### Changed
+- Merge pull request #2467 from griffinwork40/afk/iso-agent-tool-1-aafzkj (3a3e203e)
+- Merge pull request #2465 from griffinwork40/afk/iso-compose-harness-1-oxi4or (43cbeab3)
+- calibration harness: add ICC dimension, regenerate docs (beb2e90c)
+- model-free calibration harness for verify verdicts (#2404, #2405) (5ca9806e)
+
+## [5.266.0] - 2026-09-28
+
+### Added
+- per-session message journal (full tool results, resume/fork source) (#2452) (416a11d1)
+
+## [5.265.3] - 2026-09-28
+
+### Fixed
+- F1/F2/F3/F6 re-review findings for disarm-while-suspended owner-wrote path (5f15ef41)
+- B1 CSI tracking, L1 idempotent remove, L2 resetState, L3 live dims, B2 pending archive (346d2d21)
+- remove debugLog from disarm (not in LifecycleHost interface) (72704a52)
+- counted-handoff suspend/resume + prior-band archive fix (69fc5465)
+- settle+queue design for suspend-commit (issue #2382, PR #2390) (a105362d)
+
+### Changed
+- Merge pull request #2400 from griffinwork40/afk/issue-2382-suspend-commit (2573e900)
+- drop agent report file from repo root (d743a658)
+- add 2400-fixes-report.md with per-finding evidence and gate results (6844dfee)
+- extract processChunk + helpers to suspend-observer.process.ts (funcsize gate) (1c327415)
+- restore strict oracles + add counted-handoff tests (3675208d)
+- Merge remote-tracking branch 'origin/main' into afk/issue-2382-suspend-commit (dff035d7)
+
+## [5.265.2] - 2026-09-28
+
+### Fixed
+- address PR #2448 review findings (F1/F2/F3/F5) (0a026366)
+- strip escape sequences from task-view header and error events (#2445) (11137394)
+
+### Changed
+- Merge pull request #2448 from griffinwork40/afk/issue-2445-escape-sanitize (48807429)
+
+## [5.265.1] - 2026-09-28
+
+### Fixed
+- ground synthetic probes in real repo paths (#2407) (#2430) (fb3bea51)
+
+## [5.265.0] - 2026-09-28
+
+### Added
+- capture resultTail on verification events; parse pass/fail from tail (e0d90c2a)
+
+### Changed
+- intercepted actions are scored as 'did not happen', so unobservable predictions show as refuted (#2436) (3f6bd6cb)
+- Merge pull request #2437 from griffinwork40/afk/verified-outcome-capture (c433b43c)
+- Merge remote-tracking branch 'origin/main' into afk/sync-capture (fe274377)
+
+## [5.264.0] - 2026-09-28
+
+### Added
+- M2 nightly delayed-relabel job (c1b7350c)
+
+### Fixed
+- relabel job caps provisional records, not the directory scan (726e69b3)
+
+### Changed
+- Merge pull request #2439 from griffinwork40/afk/verified-outcome-relabel (13a1da72)
+- Merge remote-tracking branch 'origin/main' into afk/sync-relabel (2e27e6f5)
+- Merge remote-tracking branch 'origin/afk/verified-outcome-m2' into afk/relabel-conflict-fix (b9b52919)
+
+## [5.263.0] - 2026-09-28
+
+### Added
+- M2 part 2 — session-end hook, child attribution, closure LF, cross_session_reask (762b7fb6)
+- outcome store, /good and /bad feedback, get_facet join (5d3391a1)
+
+### Changed
+- episodes are not blind; the agent can detect the experiment and read which change was applied (#2447) (ebc4ac4f)
+- Merge pull request #2441 from griffinwork40/afk/verified-outcome-m2 (dec21498)
+- Merge remote-tracking branch 'origin/main' into afk/sync-m2 (1da2fef8)
+- Merge remote-tracking branch 'origin/main' into afk/sync-m2 (a9cb26ad)
+
+## [5.262.1] - 2026-09-28
+
+### Added
+- events.jsonl reader extends backfill to 16k older sessions (4abb48dd)
+
+### Fixed
+- exclude whatif sessions and context-dependent follow-ups from replay corpus (#2435) (3c3a92a9)
+- F1/F2/F3 review findings (session 5) (de82082f)
+- guarantee alt-screen teardown on SIGINT and all process.exit paths (#2393) (946703cb)
+- mid-turn task view uses the alternate screen (9ef02e46)
+
+### Changed
+- Merge pull request #2440 from griffinwork40/afk/verified-outcome-history (988faf4b)
+- Merge pull request #2393 from griffinwork40/afk/taskview-alt-screen (4e9b388f)
+- Merge remote-tracking branch 'origin/main' into afk/sync-history (84be5da0)
+- Merge remote-tracking branch 'origin/main' into afk/taskview-alt-screen (7e53d264)
+
+## [5.262.0] - 2026-09-28
+
+### Added
+- M0 backfill — verified_outcome labeling functions and distribution report (1aec6259)
+
+### Fixed
+- M0 precision fixes; exit check now honestly FAILS (887b194d)
+
+### Changed
+- Merge pull request #2429 from griffinwork40/afk/verified-outcome-m0 (cd192e9c)
+
+## [5.261.7] - 2026-09-28
+
+### Fixed
+- score predictions on their relevant episodes (#2403) (#2427) (b9a5cc96)
+
+### Changed
+- hook-injected context differs between arms (path- and recency-sensitive hooks confound deltas) (#2434) (9fbe8314)
+
+## [5.261.6] - 2026-09-28
+
+### Fixed
+- gate report headline on significance, scale adverb, name total predictions (#2433) (4ff87436)
+
+## [5.261.5] - 2026-09-28
+
+### Fixed
+- address advisory findings from #2213 — plugin hook registration (#2337) (56081762)
+
+### Changed
+- Merge pull request #2432 from griffinwork40/afk/issue-2428-q8w3 (e068f969)
+
+## [5.261.4] - 2026-09-27
+
+### Fixed
+- prefer context.sessionId over registration-time id in command hooks (#2392) (12eaee43)
+- dispose() marks buffered jobs delivered; clarify truncateBytes JSDoc (f355f975)
+- trim query() invariant comment to pass funcsize ratchet (65d9999b)
+- clear resetArmed in stream.retry branch of PlanTextTracker (9c20a166)
+- deliver background subagent results to chat and next turn (68c9a1d0)
+- refuse exit_plan_mode when the plan was never written as visible text (e3fb66bc)
+- pass the resolved session id to the tool dispatcher (d4692df5)
+
+### Changed
+- Merge pull request #2380 from griffinwork40/afk/issue-2364-opk9 (f6ec52e4)
+- Merge pull request #2362 from griffinwork40/afk/debug-advocate-output (210910d7)
+- Merge pull request #2354 from griffinwork40/afk/oai-dispatcher-sessionid (836507df)
+- Merge branch 'main' into afk/oai-dispatcher-sessionid (c019a80d)
+
+## [5.261.3] - 2026-09-27
+
+### Fixed
+- regenerate env-registry docs after AFK_WHATIF_ALLOW_MCP description update (9c1aa0b1)
+
+### Changed
+- Merge pull request #2356 from griffinwork40/afk/issue-2349-q8x3 (919975c8)
+- fix stale comments and tighten tests from #2324–#2333 triage batch (d237819c)
+
+## [5.261.2] - 2026-09-27
+
+### Fixed
+- correct overlayTallEnoughToStrand analysis after adversarial review (d64cce8c)
+
+### Changed
+- Merge pull request #2384 from griffinwork40/afk/issue-2369-correction (4965ae74)
+
+## [5.261.1] - 2026-09-27
+
+### Fixed
+- two follow-up defects from #2382 suspend-commit review (e0c69603)
+- treat a suspended frame as top-unknown so suspended commits survive (#2382) (3ade1cba)
+
+### Changed
+- Merge pull request #2390 from griffinwork40/afk/issue-2382-suspend-commit (3058fe66)
+- Merge pull request #2391 from griffinwork40/afk/issue-2389-q7t3 (4ae9896f)
+- pin accumulateStreamJson's deliberate exclusion of thinking chunks (a0da2998)
+
+## [5.261.0] - 2026-09-27
+
+### Added
+- gate major versions behind a manual dispatch; auto-update never crosses a major (2b54bd1c)
+
+### Changed
+- Merge pull request #2385 from griffinwork40/afk/major-release-gate (bb9e16c3)
+- Merge pull request #2370 from griffinwork40/afk/issue-2363-l7jj (a26af363)
+- show the full high-risk command in approval prompts (head+tail preview, no 256-char form cap) (554513af)
+
+## [5.260.0] - 2026-09-27
+
+### Added
+- A/B framework prompt edits and capture inter-tool narration (c7614ff8)
+
+### Fixed
+- address review feedback (36ba1f07)
+
+### Changed
+- Merge pull request #2374 from griffinwork40/afk/whatif-framework-prompt (0bd4e4be)
+
+## [5.259.2] - 2026-09-27
+
+### Fixed
+- wire AFK risk gate for daemon ticks and afk chat (#2315) (9ee45429)
+
+## [5.259.1] - 2026-09-27
+
+### Fixed
+- flag empty-output success and mark truncated response excerpt (#2383) (69b2f986)
+
+## [5.259.0] - 2026-09-27
+
+### Added
+- light narration on interactive surfaces (#2375) (a497294f)
+
+### Changed
+- compositor-level regression for tall-overlay strand gap (#2369) (#2381) (52d00e30)
+
+## [5.258.2] - 2026-09-27
+
+### Added
+- Claude Code matcher and timeout compatibility (#2377) (#2379) (7ec0269f)
+
+### Fixed
+- include tool_input in PostToolUse and PostToolUseFailure command-hook payloads (#2378) (506125c0)
+
+## [5.258.1] - 2026-09-27
+
+### Fixed
+- surface active shell in tool description; PowerShell syntax guidance on Windows fallback (#2346) (b13ab6b4)
+
+## [5.258.0] - 2026-09-27
+
+### Added
+- content-hug+banner — first reply flows under banner (#2229) (27342ddb)
+
+### Fixed
+- scope the content-hug strand exclusion to frames with slack (#2229) (45b775de)
+
+### Changed
+- Merge pull request #2368 from griffinwork40/afk/issue-2229-hug-banner (9c1748f0)
+- assert the kept banner is painted exactly once (#2229) (f39e4133)
+- content-hug boot-warning scenario expects warnings in the viewport (#2229) (b86c788f)
+- note preCommitBannerSync's caller precondition (0627abe7)
+- Merge remote-tracking branch 'origin/main' into afk/issue-2229-hug-banner (c738fe16)
+
+## [5.257.9] - 2026-09-27
+
+### Fixed
+- honour pinnedRef pin when repo has semver tags (#2358) (#2360) (922f0e3d)
+
+### Changed
+- advisory findings from #2333 — many-image guard hardening (#2352) (3fdaf63f)
+
+## [5.257.8] - 2026-09-27
+
+### Fixed
+- resolve remote-only branch names before git checkout --detach (#2361) (645af141)
+- size the diff preview box from the tool-lane row budget (#1619) (0fd9d2bd)
+
+### Changed
+- Merge pull request #2359 from griffinwork40/afk/issue-1619-diff-width (639a84ec)
+
+## [5.257.7] - 2026-09-27
+
+### Added
+- dev/test geometry consistency guard at compositor entry points (1361e151)
+
+### Fixed
+- geometry guard reports instead of throwing under AFK_DEBUG_COMPOSITOR (8b336c8e)
+
+### Changed
+- Merge pull request #2336 from griffinwork40/afk/tui-geometry-guard (63cd3db8)
+- remove no-op identity spreads and clarify fork-preamble docs (#2321) (56fc1f62)
+- drop dead SETTLED constant and unused imports in OSC test (#2339) (ba1f7265)
+- bump next from 16.3.5 to 16.3.6 in /website (#2343) (d678c2aa)
+- bump @types/node from 26.6.1 to 26.6.2 in /website (#2342) (98f1124e)
+- seed #2290 content-hug band at a reachable bottom row (e48e0e40)
+- Merge remote-tracking branch 'origin/main' into afk/tui-geometry-guard (82f92b9c)
+- TUI research brief and architecture map (f0611d5c)
+
+## [5.257.6] - 2026-09-27
+
+### Fixed
+- show child-failure badge on completed nested agent rows (cfb66840)
+
+### Changed
+- Merge pull request #2335 from griffinwork40/afk/issue-2239-ekdo (61bdc5a6)
+
+## [5.257.5] - 2026-09-27
+
+### Fixed
+- move builtin-cwd warning to cwd-validator to satisfy filesize gate (175323e4)
+- prevent double SIGKILL timer and extra/unset bypass; document empty-changes behavior (f5514f6a)
+- align update_schedule cwd schema, null-on-create, error messages (2bf7a94a)
+- remove dead firstCompletedAt, widen timing margin (06ad6ec1)
+- per-call durationMs for parallel tool batches (e9cd3280)
+- advisory review findings — daemon per-task cwd (40cfa944)
+- address advisory findings from #2274 whatif prediction engine (fbb710d9)
+
+### Changed
+- Merge pull request #2330 from griffinwork40/afk/iso-agent-tool-10-grctv3 (bcede334)
+- Merge pull request #2328 from griffinwork40/afk/iso-agent-tool-6-dns1ai (a40d99ea)
+- Merge pull request #2332 from griffinwork40/afk/issue-2249-m4k9 (8ada5643)
+- consolidate shared makeResult/makeError helpers into tool-lane-render.fixtures.ts (#2323) (3737deb2)
+- bump the fumadocs group in /website with 3 updates (#2341) (814ce249)
+- extract emitDispatchedToolOutputs to fix funcsize gate (06049024)
+
+## [5.257.4] - 2026-09-27
+
+### Fixed
+- tighten --allow-growth/--reason arg guards and fix bootstrap JSDoc (#2279) (f3ca1a61)
+- child hot-write guard follow-ups from #2093 review (#2338) (8b92fc85)
+- address #2245 advisory findings for session_id_assigned (#2340) (a2da7450)
+
+## [5.257.3] - 2026-09-27
+
+### Fixed
+- enforce 2000px many-image limit at request-build time (7f142a65)
+- tighten fast-mode service_tier error latch, add catalog deps injection, trailing-slash normalisation, NoticeKind export, and staleness doc (688b9a99)
+- widen C1 regex, fix truncate code-point safety, update docs/comments (2c3467eb)
+- advisory nits from #2272/#2273 — unref guard, flatMap dead filter, stub type, export, shared helper, trailing blank, mid-file import (a9b34acf)
+
+### Changed
+- Merge pull request #2333 from griffinwork40/afk/fix-many-image-2000px (0617e7b9)
+- Merge pull request #2325 from griffinwork40/afk/iso-agent-tool-5-ykvy1a (b4a5609a)
+- Merge pull request #2326 from griffinwork40/afk/iso-agent-tool-7-avd1is (63d84e43)
+- Merge pull request #2327 from griffinwork40/afk/iso-agent-tool-9-brrvpd (af5b05ee)
+- Merge pull request #2329 from griffinwork40/afk/iso-agent-tool-8-c25noy (6e505c75)
+- Merge pull request #2324 from griffinwork40/afk/iso-agent-tool-3-2ouwtw (ad599bf1)
+- cover web-ui-assets exclusion; merge redundant CI scan step (#2334) (afdbf17c)
+- add content-hug guard test and update banner-path trigger comment (6df2a2d4)
+- correct five doc/help strings that contradicted runtime behavior (3bcbc122)
+
 ## [5.257.2] - 2026-09-26
 
 ### Added

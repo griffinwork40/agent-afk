@@ -23,6 +23,7 @@ import type { ToolCall, ToolResult } from '../anthropic-direct/types.js';
 import type { AccumulatedToolCall } from './translate.js';
 import type { OpenAIContentPart, OpenAIMessage } from './messages.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { tagResultFlags } from '../../journal/index.js';
 
 /**
  * OpenAI function-tool shape. We keep this structurally typed (not pulled
@@ -50,15 +51,55 @@ export function toolDefsToOpenAIFunctions(defs: readonly AnthropicToolDef[]): Op
 }
 
 /**
+ * Names of tools whose input schema declares at least one required field.
+ * Feeds the empty-arguments guard in {@link accumulatedToolCallsToToolCalls}:
+ * an empty argument stream is legitimate for a no-arg tool (some local
+ * OpenAI shims send "" rather than "{}"), but for these tools it can only
+ * mean the arguments were lost in transit.
+ */
+export function toolsRequiringArgs(defs: readonly AnthropicToolDef[]): Set<string> {
+  const names = new Set<string>();
+  for (const def of defs) {
+    if ((def.input_schema.required?.length ?? 0) > 0) names.add(def.name);
+  }
+  return names;
+}
+
+/**
+ * {@link toolsRequiringArgs} for a dispatcher's catalog. `toolDefs` is not on
+ * the ToolDispatcher interface; query.ts reads it the same structural way.
+ * Returns `undefined` (empty-args guard off) when the dispatcher has no defs.
+ */
+export function requiredArgToolsOf(dispatcher: unknown): Set<string> | undefined {
+  const defs = (dispatcher as { toolDefs?: readonly AnthropicToolDef[] } | undefined)?.toolDefs;
+  return Array.isArray(defs) ? toolsRequiringArgs(defs) : undefined;
+}
+
+/** Diagnostic for a tool call that needs arguments but received none. */
+export function noArgumentsReceivedMessage(name: string): string {
+  return (
+    `No arguments received from the API for tool "${name}": the argument stream was empty. ` +
+    'This is a provider/wire delivery failure, not malformed model output.'
+  );
+}
+
+/**
  * Translate accumulated stream-side tool calls into harness `ToolCall`s
  * the dispatcher consumes. JSON.parse failures are surfaced as a synthetic
  * error result rather than silently treated as `{}` — a malformed argument
  * payload from the model almost always means a real problem that should
  * land in the model's next-turn input verbatim.
+ *
+ * Contract: when `requiredArgTools` contains a call's name and its
+ * `argumentsRaw` is empty, a "no arguments received" diagnostic is recorded
+ * in `parseErrors` so the failure reads as a delivery problem instead of the
+ * tool's own "<field> must be a string" validation error. Omitting the set
+ * disables the guard (prior behaviour).
  */
 export function accumulatedToolCallsToToolCalls(
   calls: readonly AccumulatedToolCall[],
   signal: AbortSignal,
+  requiredArgTools?: ReadonlySet<string>,
 ): { calls: ToolCall[]; parseErrors: Map<string, string> } {
   const parsed: ToolCall[] = [];
   const parseErrors = new Map<string, string>();
@@ -72,6 +113,8 @@ export function accumulatedToolCallsToToolCalls(
         parseErrors.set(c.id, `Failed to parse tool arguments as JSON: ${msg}`);
         input = {};
       }
+    } else if (requiredArgTools?.has(c.name)) {
+      parseErrors.set(c.id, noArgumentsReceivedMessage(c.name));
     }
     parsed.push({ id: c.id, name: c.name, input, signal });
   }
@@ -96,29 +139,38 @@ export interface OpenAIAssistantToolCallMessage {
     type: 'function';
     function: { name: string; arguments: string };
   }>;
-  /** See `OpenAIMessage.reasoning_content` for the protocol detail. */
+  /**
+   * DeepSeek-R1 convention: echo reasoning under the same field it arrived in.
+   * See `OpenAIMessage.reasoning_content` for the DeepSeek protocol detail.
+   */
   reasoning_content?: string;
+  /**
+   * Cerebras convention: Cerebras streams reasoning as `delta.reasoning` and
+   * rejects `reasoning_content` in history (HTTP 400). Echo under `reasoning`
+   * when the stream delivered it via that field.
+   */
+  reasoning?: string;
 }
 
 /**
  * Build the assistant turn that wraps the model's tool_calls for the next
  * request's history.
  *
- * `reasoningText` is the accumulated `delta.reasoning` / `reasoning_content`
- * trace captured during the iteration (from `translate.ts:StreamState`). It's
- * echoed back on the assistant message because DeepSeek-R1 (and other
- * thinking-mode OpenAI-compatible providers like some Qwen variants on
- * OpenRouter) require it — calling their API without echoing the reasoning
- * trace from a thinking-mode response yields a 400 ("The `reasoning_content`
- * in the thinking mode must be passed back to the API"). Real OpenAI's
- * o-series doesn't expose its reasoning trace, so this field stays empty
- * for those calls and is omitted from the request body, leaving the wire
- * format unchanged for non-thinking providers.
+ * `reasoningText` is the accumulated reasoning trace from `translate.ts:StreamState`.
+ * `reasoningField` controls which wire key it is echoed under — must match the
+ * field the provider delivered it in:
+ *   - `'reasoning_content'` (default): DeepSeek-R1 and compatible providers.
+ *     Their API rejects subsequent requests with 400 unless echoed under this key.
+ *   - `'reasoning'`: Cerebras and providers that stream `delta.reasoning`.
+ *     Cerebras rejects `reasoning_content` with 400 ("property is unsupported").
+ * Real OpenAI o-series doesn't expose its reasoning trace, so `reasoningText`
+ * is empty and neither field is set, leaving the wire format unchanged.
  */
 export function assistantMessageWithToolCalls(
   accumulatedText: string,
   toolCalls: readonly AccumulatedToolCall[],
   reasoningText: string = '',
+  reasoningField: 'reasoning_content' | 'reasoning' = 'reasoning_content',
 ): OpenAIAssistantToolCallMessage {
   const msg: OpenAIAssistantToolCallMessage = {
     role: 'assistant',
@@ -130,7 +182,7 @@ export function assistantMessageWithToolCalls(
     })),
   };
   if (reasoningText.length > 0) {
-    msg.reasoning_content = reasoningText;
+    msg[reasoningField] = reasoningText;
   }
   return msg;
 }
@@ -155,15 +207,21 @@ export function toolResultsToMessages(
   // rides the tool message, and on vision-capable models the actual pixels ride
   // a separate follow-up `role:'user'` message built by
   // `toolImageFollowupMessage`. See query.ts:dispatchAndAppend.
-  return results.map(({ call, result }) => ({
-    role: 'tool',
-    tool_call_id: call.id,
-    // OpenAI tolerates an `is_error` field on tool messages on some
-    // versions, but the canonical contract is "content carries the error
-    // text and the model decides." Mirror that — embed a clear prefix when
-    // isError so the model can spot failures in its context.
-    content: result.isError ? `[error] ${result.content}` : result.content,
-  }));
+  return results.map(({ call, result }) => {
+    const msg: OpenAIToolResultMessage = {
+      role: 'tool',
+      tool_call_id: call.id,
+      // OpenAI tolerates an `is_error` field on tool messages on some
+      // versions, but the canonical contract is "content carries the error
+      // text and the model decides." Mirror that — embed a clear prefix when
+      // isError so the model can spot failures in its context.
+      content: result.isError ? `[error] ${result.content}` : result.content,
+    };
+    // Partial-answer flags ride beside the message (never sent on the wire)
+    // so the journal adapter can persist them (#2978).
+    tagResultFlags(msg, result);
+    return msg;
+  });
 }
 
 /**

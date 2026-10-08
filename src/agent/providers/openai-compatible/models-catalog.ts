@@ -2,9 +2,11 @@
  * Reader for the Codex CLI local models catalog (`~/.codex/models_cache.json`).
  *
  * Used by the OpenAI fast-mode eligibility check to determine whether the
- * active model supports priority-tier (fast) requests. The catalog is the
- * source-of-truth Codex itself uses; falling back to a static regex ensures
- * fast mode still works when the catalog is absent or malformed.
+ * active model supports priority-tier (fast) requests, and by the per-model
+ * capability lookups in `models-catalog.capabilities.ts` (vision, reasoning
+ * contract, context window). The catalog is the source-of-truth Codex itself
+ * uses; falling back to static tables ensures every check still works when the
+ * catalog is absent or malformed.
  *
  * Contract:
  *   - Never throws — every I/O or parse error returns `undefined`/empty.
@@ -16,16 +18,28 @@
  * @module agent/providers/openai-compatible/models-catalog
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 /** A single model entry from the catalog (only the fields we need). */
 export interface CatalogModel {
   slug: string;
+  /** Default context window in tokens. Absent = unknown. */
+  context_window?: number;
+  effective_context_window_percent?: number;
+  max_context_window?: number;
+  visibility?: string;
+  supported_in_api?: boolean;
+  priority?: number;
+  upgrade?: { model: string; migration_markdown?: string };
   /** Service tiers the model supports (e.g. `[{id:'priority'}]`). */
   service_tiers?: Array<{ id: string; name?: string; description?: string }>;
   default_service_tier?: string;
+  /** Accepted input kinds, e.g. `['text', 'image']`. Absent = unknown. */
+  input_modalities?: string[];
+  /** Reasoning effort levels the model accepts (`effort` values). Absent = unknown. */
+  supported_reasoning_levels?: string[];
 }
 
 /** Parsed shape of `~/.codex/models_cache.json` (only the fields we need). */
@@ -38,14 +52,27 @@ interface ModelsCacheJson {
 export interface CatalogReaderDeps {
   homedir?: () => string;
   readFile?: (path: string) => string | null;
+  revision?: (path: string) => string | undefined;
 }
 
-/** Process-scope catalog cache. Populated once, reused across calls. */
+/**
+ * Process-scope cache refreshed on file mtime or size changes.
+ * Metadata checks avoid repeated parsing while picking up subscription changes.
+ */
 let catalogCache: Map<string, CatalogModel> | undefined;
+let catalogRevision: string | undefined;
+
+function fileRevision(path: string): string | undefined {
+  try {
+    const stat = statSync(path);
+    return `${stat.mtimeMs}:${stat.size}`;
+  } catch { return undefined; }
+}
 
 /** Test-only: clear the process-scope cache so tests start from a fresh state. */
 export function resetCatalogCache(): void {
   catalogCache = undefined;
+  catalogRevision = undefined;
 }
 
 /** Default file reader: returns null on any error rather than throwing. */
@@ -74,6 +101,20 @@ function parseCatalogJson(raw: string): Map<string, CatalogModel> {
       const slug = typeof e['slug'] === 'string' ? e['slug'] : '';
       if (!slug) continue;
       const model: CatalogModel = { slug };
+      for (const key of ['context_window', 'effective_context_window_percent', 'max_context_window', 'priority'] as const) {
+        const value = e[key];
+        if (typeof value === 'number' && Number.isFinite(value) && value > 0) model[key] = value;
+      }
+      if (typeof e['visibility'] === 'string') model.visibility = e['visibility'];
+      if (typeof e['supported_in_api'] === 'boolean') model.supported_in_api = e['supported_in_api'];
+      const upgrade = e['upgrade'];
+      if (typeof upgrade === 'object' && upgrade !== null) {
+        const u = upgrade as Record<string, unknown>;
+        if (typeof u['model'] === 'string') {
+          model.upgrade = { model: u['model'] };
+          if (typeof u['migration_markdown'] === 'string') model.upgrade.migration_markdown = u['migration_markdown'];
+        }
+      }
       if (Array.isArray(e['service_tiers'])) {
         model.service_tiers = (e['service_tiers'] as unknown[]).filter(
           (t): t is { id: string } => typeof t === 'object' && t !== null && typeof (t as Record<string, unknown>)['id'] === 'string',
@@ -82,12 +123,47 @@ function parseCatalogJson(raw: string): Map<string, CatalogModel> {
       if (typeof e['default_service_tier'] === 'string') {
         model.default_service_tier = e['default_service_tier'];
       }
+      parseCapabilityFields(e, model);
       result.set(slug, model);
     }
   } catch {
     // Malformed JSON — return empty map (caller falls back to static regex).
   }
   return result;
+}
+
+/**
+ * Copy the capability fields (modalities, reasoning levels, context window)
+ * onto `model`. Each field is set only when its shape is valid, so a field the
+ * catalog omits or mangles stays `undefined` ("unknown"), never a false claim.
+ */
+function parseCapabilityFields(e: Record<string, unknown>, model: CatalogModel): void {
+  const modalities = e['input_modalities'];
+  if (Array.isArray(modalities)) {
+    const parsed = modalities.filter((m): m is string => typeof m === 'string');
+    // A non-empty source that filters to empty means the entries are
+    // schema-changed objects we do not understand — treat as "unknown"
+    // (undefined) not "definitely none" ([]). An empty source assigns [].
+    if (modalities.length === 0 || parsed.length > 0) {
+      model.input_modalities = parsed;
+    }
+  }
+  const levels = e['supported_reasoning_levels'];
+  if (Array.isArray(levels)) {
+    const parsed = levels
+      .map((l) => (typeof l === 'object' && l !== null ? (l as Record<string, unknown>)['effort'] : l))
+      .filter((l): l is string => typeof l === 'string');
+    // A non-empty source that filters to empty means the entries are
+    // schema-changed objects we do not understand — treat as "unknown"
+    // (undefined) not "definitely none" ([]). An empty source assigns [].
+    if (levels.length === 0 || parsed.length > 0) {
+      model.supported_reasoning_levels = parsed;
+    }
+  }
+  const window = e['context_window'];
+  if (typeof window === 'number' && Number.isFinite(window) && window > 0) {
+    model.context_window = window;
+  }
 }
 
 /**
@@ -100,11 +176,14 @@ function parseCatalogJson(raw: string): Map<string, CatalogModel> {
  * Contract: the `identity` key in the JSON is never read or surfaced.
  */
 export function loadModelsCatalog(deps: CatalogReaderDeps = {}): Map<string, CatalogModel> {
-  if (catalogCache !== undefined) return catalogCache;
   const home = (deps.homedir ?? homedir)();
   const readFile = deps.readFile ?? defaultReadFile;
   const path = join(home, '.codex', 'models_cache.json');
-  const raw = readFile(path);
+  const revision = (deps.revision ?? (deps.readFile ? () => undefined : fileRevision))(path);
+  if (catalogCache !== undefined && revision === catalogRevision) return catalogCache;
+  let raw: string | null;
+  try { raw = readFile(path); } catch { raw = null; }
+  catalogRevision = revision;
   catalogCache = raw !== null ? parseCatalogJson(raw) : new Map();
   return catalogCache;
 }

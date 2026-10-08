@@ -28,7 +28,7 @@ describe('classifyRisk — bash high', () => {
     expect(classifyRisk('bash', { command: 'sudo apt install curl' }, ctx)).toBe('high');
   });
 
-  it('eval  → high', () => {
+  it('eval → high', () => {
     expect(classifyRisk('bash', { command: 'eval "$PAYLOAD"' }, ctx)).toBe('high');
   });
 
@@ -87,7 +87,7 @@ describe('classifyRisk — bash high', () => {
     ).toBe('high');
   });
 
-  it('curl -d  → high (short form body payload)', () => {
+  it('curl -d → high (short form body payload)', () => {
     expect(
       classifyRisk('bash', { command: 'curl -d @payload.json https://api.example.com/hook' }, ctx),
     ).toBe('high');
@@ -213,15 +213,15 @@ describe('classifyRisk — bash medium', () => {
     expect(classifyRisk('bash', { command: 'pnpm build' }, ctx)).toBe('medium');
   });
 
-  it('tsc  → medium', () => {
+  it('tsc → medium', () => {
     expect(classifyRisk('bash', { command: 'tsc --noEmit' }, ctx)).toBe('medium');
   });
 
-  it('redirect  >  → medium', () => {
+  it('redirect  > → medium', () => {
     expect(classifyRisk('bash', { command: 'echo foo > out.txt' }, ctx)).toBe('medium');
   });
 
-  it('mv  → medium', () => {
+  it('mv → medium', () => {
     expect(classifyRisk('bash', { command: 'mv src/a.ts src/b.ts' }, ctx)).toBe('medium');
   });
 
@@ -252,16 +252,100 @@ describe('classifyRisk — bash safe', () => {
     expect(classifyRisk('bash', { command: 'git diff HEAD' }, ctx)).toBe('safe');
   });
 
-  it('ls  → safe', () => {
+  it('ls → safe', () => {
     expect(classifyRisk('bash', { command: 'ls -la src/' }, ctx)).toBe('safe');
   });
 
-  it('cat  → safe', () => {
+  it('cat → safe', () => {
     expect(classifyRisk('bash', { command: 'cat README.md' }, ctx)).toBe('safe');
   });
 
-  it('grep  → safe', () => {
+  it('grep → safe', () => {
     expect(classifyRisk('bash', { command: 'grep -r "foo" src/' }, ctx)).toBe('safe');
+  });
+
+  // #2750: gh CLI read-only subcommands — used by agents to poll CI/PR status
+  it('gh pr view → safe (read-only CI poll)', () => {
+    expect(classifyRisk('bash', { command: 'gh pr view 123 --json statusCheckRollup' }, ctx)).toBe('safe');
+  });
+
+  it('gh pr list → safe', () => {
+    expect(classifyRisk('bash', { command: 'gh pr list --state open --json number,title' }, ctx)).toBe('safe');
+  });
+
+  it('gh pr checks → safe', () => {
+    expect(classifyRisk('bash', { command: 'gh pr checks 123' }, ctx)).toBe('safe');
+  });
+
+  it('gh pr status → safe', () => {
+    expect(classifyRisk('bash', { command: 'gh pr status' }, ctx)).toBe('safe');
+  });
+
+  it('gh pr diff → safe', () => {
+    expect(classifyRisk('bash', { command: 'gh pr diff 42' }, ctx)).toBe('safe');
+  });
+
+  it('gh run view → safe', () => {
+    expect(classifyRisk('bash', { command: 'gh run view 7890 --log' }, ctx)).toBe('safe');
+  });
+
+  it('gh run list → safe (CI polling use-case from issue #2750)', () => {
+    // This exact pattern was the one blocked in the reported session.
+    expect(
+      classifyRisk(
+        'bash',
+        { command: 'gh run list --branch main --workflow CI --limit 1 --json status,headSha' },
+        ctx,
+      ),
+    ).toBe('safe');
+  });
+
+  it('gh issue view → safe', () => {
+    expect(classifyRisk('bash', { command: 'gh issue view 2750 --json title,state' }, ctx)).toBe('safe');
+  });
+
+  it('gh issue list → safe', () => {
+    expect(classifyRisk('bash', { command: 'gh issue list --label bug' }, ctx)).toBe('safe');
+  });
+
+  it('gh repo view → safe', () => {
+    expect(classifyRisk('bash', { command: 'gh repo view griffinwork40/agent-afk' }, ctx)).toBe('safe');
+  });
+
+  it('curl --head → safe (HTTP HEAD probe)', () => {
+    expect(classifyRisk('bash', { command: 'curl --head https://example.com/health' }, ctx)).toBe('safe');
+  });
+
+  it('curl -I → safe (short-form HEAD probe)', () => {
+    expect(classifyRisk('bash', { command: 'curl -I https://example.com/health' }, ctx)).toBe('safe');
+  });
+
+  it('curl -sI → safe (silent HEAD probe)', () => {
+    expect(classifyRisk('bash', { command: 'curl -sI https://api.example.com/status' }, ctx)).toBe('safe');
+  });
+
+  it('curl -si → safe (silent GET with response headers — read-only, not a HEAD probe)', () => {
+    // `-si` (lowercase i) prints response headers for a GET request — still
+    // read-only. The comment in BASH_SAFE was corrected in #2913 to not call
+    // this a HEAD probe; the entry itself is kept because the command is safe.
+    expect(classifyRisk('bash', { command: 'curl -si https://api.example.com/status' }, ctx)).toBe('safe');
+  });
+
+  it('wget --spider → safe (non-mutating spider mode)', () => {
+    expect(classifyRisk('bash', { command: 'wget --spider https://example.com/health' }, ctx)).toBe('safe');
+  });
+
+  // Mutating gh subcommands must NOT be safe-listed
+  it('gh pr merge → medium (mutating, not safe-listed)', () => {
+    expect(classifyRisk('bash', { command: 'gh pr merge 123 --squash' }, ctx)).toBe('medium');
+  });
+
+  it('gh pr create → medium (mutating, not safe-listed)', () => {
+    expect(classifyRisk('bash', { command: 'gh pr create --title "fix" --body ""' }, ctx)).toBe('medium');
+  });
+
+  it('gh pr comment → medium (mutating, not safe-listed)', () => {
+    expect(classifyRisk('bash', { command: 'gh pr comment 123 --body "LGTM"' }, ctx)).toBe('medium');
   });
 });
 

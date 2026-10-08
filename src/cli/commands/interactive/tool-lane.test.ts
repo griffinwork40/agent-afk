@@ -17,15 +17,7 @@ import { palette } from '../../palette.js';
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import type { OutputEvent, SubagentProgressMeta } from '../../../agent/types.js';
 import type { DiffPayload } from '../../../utils/diff.js';
-
-function makeResult(content: string, isError = false): ToolResultChunk {
-  return {
-    type: 'tool_result',
-    toolUseId: 'unused',
-    content,
-    isError,
-  };
-}
+import { makeResult } from './__fixtures__/tool-lane-render.fixtures.js';
 
 describe('ToolLane — batch (parallel-wave) badge on root rows', () => {
   const batchResult = (content: string, batchIndex: number, batchSize: number): ToolResultChunk => ({
@@ -2109,6 +2101,23 @@ describe('ToolLane.mergeAgentLabel', () => {
     expect(overlayAfterSecond).toBe(overlayAfterFirst);
     expect(overlayAfterSecond).toContain('first');
     expect(overlayAfterSecond).not.toContain('second');
+  });
+
+  it('strips 8-bit C1 control 0x9C (ST) from LLM-emitted label before storage', () => {
+    // 0x9C is the 8-bit String Terminator — stripAnsi misses it; sanitizeForDisplay
+    // covers it via CONTROL_RE which replaces [\x80-\x9F] with spaces.
+    const lane = new ToolLane();
+    lane.addStart('dispatch-1', 'agent', '(task)');
+    const merged = lane.mergeAgentLabel('dispatch-1', 'critic\x9Cpragmatist');
+    expect(merged).toBe(true);
+    const overlay = lane.getOverlay();
+    // The raw C1 byte must not appear in either the overlay or flushed scrollback.
+    expect(overlay).not.toContain('\x9C');
+    lane.flush(); // advance to post-start state before adding result
+    lane.addResult('dispatch-1', makeResult('done'));
+    // After result, check scrollback too
+    const scrollback = lane.flush().join('\n');
+    expect(scrollback).not.toContain('\x9C');
   });
 });
 

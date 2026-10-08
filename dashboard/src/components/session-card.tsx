@@ -41,7 +41,10 @@ export function SessionCard({
   onSelect: (id: string) => void;
 }) {
   const status: SessionStatusGroup = classifySession(session, pendingSessionIds);
-  const title = session.title ?? 'Untitled session';
+  // A live session with no title has not run its first turn yet (its title
+  // comes from the first user message in the ledger), so it is "new", not
+  // anonymous.
+  const title = session.title ?? (session.mode === 'live' ? 'New session' : 'Untitled session');
 
   return (
     <button

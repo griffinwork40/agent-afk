@@ -2,8 +2,8 @@ You are installing an AFK background process (telegram bot or daemon) as an OS-s
 
 ## Hard rules
 
-1. **macOS or Linux only.** Before doing anything, run `uname` and confirm output is `Darwin` (macOS → launchd) or `Linux` (→ systemd `--user`). On anything else (e.g. Windows), tell the user `afk service` supports only macOS and Linux and stop. Do not attempt a workaround.
-2. **Use only the sanctioned subcommands.** Never invoke `launchctl`/`systemctl` directly, never write to `~/Library/LaunchAgents/` or `~/.config/systemd/user/` yourself, never read `~/.afk/config/afk.env`. The sanctioned surface:
+1. **macOS, Linux, or Windows only.** Before doing anything, detect the platform. Run `node -p process.platform` (works on all OSes unlike `uname`, which is absent on Windows). `darwin` → macOS (launchd); `linux` → Linux (systemd `--user`); `win32` → Windows (Task Scheduler). On anything else (e.g. `freebsd`), tell the user `afk service` supports only macOS, Linux, and Windows and stop. Do not attempt a workaround.
+2. **Use only the sanctioned subcommands.** Never invoke `launchctl`/`systemctl`/`schtasks` directly, never write to `~/Library/LaunchAgents/`, `~/.config/systemd/user/`, or `~/.afk/service/` yourself, never read `~/.afk/config/afk.env`. The sanctioned surface:
    - `afk service install <telegram|daemon> [--no-watch] [--dry-run]`
    - `afk service uninstall <name>`
    - `afk service status [name]`
@@ -11,7 +11,7 @@ You are installing an AFK background process (telegram bot or daemon) as an OS-s
    - `afk service list`
    - `afk telegram check-token` — JSON `{set, valid, username?, botId?, reason?}` (only used during pre-flight for the telegram service)
 3. **Never install the telegram service if the token isn't valid.** `KeepAlive=true` + invalid token = infinite crash loop with the log file growing unbounded. If `check-token` doesn't return `valid: true`, route the user to `/telegram-setup` and stop.
-4. **`afk service status` and `afk service list` emit human-formatted text, not JSON.** Parse by looking for substrings: `Not installed`, `Running  (PID <n>)`, `Installed but not running`. Do not invent fields.
+4. **`afk service status` and `afk service list` emit human-formatted text, not JSON.** Parse by looking for substrings: `Not installed`, `Running` (with or without a following `(PID <n>)` — on Windows the PID is not available), `Installed but not running`. Do not invent fields.
 
 ## The flow
 
@@ -30,9 +30,18 @@ Wait for their answer. Anything outside the two values: re-ask once, then bail w
 
 ### Step 2 — Platform check
 
-Run `uname`. If the trimmed stdout is `Darwin` (macOS → launchd) or `Linux` (→ systemd `--user`), continue. Otherwise tell the user:
+Run `node -p process.platform`. Map the trimmed output:
 
-> `afk service` supports only macOS (launchd) and Linux (systemd `--user`). Detected platform: `<output>`.
+| Output  | Supervisor                    | Continue? |
+|---------|-------------------------------|-----------|
+| `darwin`| launchd (macOS)               | ✓         |
+| `linux` | systemd `--user` (Linux)      | ✓         |
+| `win32` | Task Scheduler (Windows)      | ✓         |
+| other   | unsupported                   | ✗ stop    |
+
+If unsupported, tell the user:
+
+> `afk service` supports macOS (launchd), Linux (systemd `--user`), and Windows (Task Scheduler). Detected platform: `<output>`.
 
 Then stop.
 
@@ -40,14 +49,18 @@ On **Linux**, also note once (systemd `--user` services stop at logout without l
 
 > Heads up — on Linux, a systemd `--user` service only survives logout/reboot if user lingering is enabled. After install I'll remind you to run `loginctl enable-linger` (the install output includes the exact command).
 
+On **Windows**, note once:
+
+> On Windows, `afk service` registers a Task Scheduler logon-trigger task (user-level, no elevation required). The task label is `AFK-<name>` (e.g. `AFK-telegram`). There is no lingering step — Task Scheduler runs the task at every logon automatically.
+
 ### Step 3 — Check current install state
 
 Run `afk service status <name>`. Three branches based on the human-formatted output:
 
 - Contains `Not installed` → not installed yet. Continue to Step 4.
-- Contains `Running  (PID <n>)` → already installed and running. Tell the user:
+- Contains `Running` (optionally followed by `(PID <n>)` — PID is absent on Windows) → already installed and running. Tell the user:
 
-  > ✓ `<name>` is already installed and running (PID <n>). Manage it with:
+  > ✓ `<name>` is already installed and running. Manage it with:
   > - `afk service status <name>` — running state + log path
   > - `afk service restart <name>` — bounce the process
   > - `afk service uninstall <name>` — stop + remove plist
@@ -94,9 +107,11 @@ Run `afk service install <name>`. Read the human-formatted output:
 
 ### Step 6 — Verify
 
-Run `afk service status <name>` again. If the output shows `Running  (PID <n>)`:
+Run `afk service status <name>` again. If the output contains `Running`:
 
-> ✓ `<name>` is now running as an OS service (PID <n>). It will auto-start on login and relaunch if it crashes.
+> ✓ `<name>` is now running as an OS service. It will auto-start on login and relaunch if it crashes.
+
+On macOS/Linux the status line includes the PID: `Running  (PID <n>)`. On Windows, PID is not reported by Task Scheduler.
 
 If it still shows `Installed but not running` after install:
 
@@ -118,8 +133,9 @@ End with the management commands the user will need later:
 > - `afk service uninstall <name>` — stop and remove the service config
 > - Logs: `~/.afk/logs/service-<name>.log`
 > - **Linux only:** for always-on across logout/reboot, run `loginctl enable-linger` once.
+> - **Windows:** no extra step — Task Scheduler auto-starts at every logon. Task label is `AFK-<name>`.
 >
-> Note: `afk telegram status` reports "stopped" when the OS supervisor (launchd/systemd) runs the bot — that's expected, because the PID file isn't written in that mode. Use `afk service status telegram` to introspect the supervised instance.
+> Note: `afk telegram status` reports "stopped" when the OS supervisor (launchd/systemd/Task Scheduler) runs the bot — that's expected, because the PID file isn't written in that mode. Use `afk service status telegram` to introspect the supervised instance.
 
 Then stop.
 

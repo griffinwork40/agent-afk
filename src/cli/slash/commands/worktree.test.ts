@@ -269,4 +269,24 @@ describe('/worktree slash command', () => {
     await worktreeCmd.handler(ctx, 'list --bogus-flag');
     expect(lines.some((l) => l.startsWith('WARN:') && l.includes('--bogus-flag'))).toBe(true);
   });
+
+  it('prune passes resolved maxAgeDaysClean and maxAgeDaysDirty to runSweep', async () => {
+    // The slash's handlePrune path must forward the ages resolved by
+    // resolveSweepPolicy — not hard-coded defaults — to runSweep. This test
+    // stubs the env vars that resolveSweepPolicy reads and asserts the swept
+    // ages match what the policy resolves to.
+    vi.stubEnv('AFK_WORKTREE_MAX_AGE_CLEAN', '7');
+    vi.stubEnv('AFK_WORKTREE_MAX_AGE_DIRTY', '3');
+    mockRunSweep.mockResolvedValue({
+      candidates: [],
+      removed: [],
+      warnings: [],
+      dryRun: true,
+    });
+    const { ctx } = makeCtx();
+    await worktreeCmd.handler(ctx, 'prune');
+    const sweepOpts = mockRunSweep.mock.calls[0]?.[0];
+    expect(sweepOpts?.maxAgeDaysClean).toBe(7);
+    expect(sweepOpts?.maxAgeDaysDirty).toBe(3);
+  });
 });

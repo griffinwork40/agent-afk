@@ -34,3 +34,14 @@
 # LF content; without this rule `git autocrlf` on Windows converts to CRLF
 # at checkout and causes 23+ hash pin mismatches. See PR #703.
 *.md text eol=lf
+
+# Force .mjs files to LF on checkout (Windows / CRLF defense).
+# scripts/postinstall.mjs starts with a shebang (#!) which vitest's vite-node
+# transform pipeline strips correctly only when the line ending is LF.  With
+# CRLF checkout the shebang becomes "#!/usr/bin/env node\r" and esbuild/tsx
+# fails to strip it, leaving "#!" in the transformed output.  Node then throws
+# "SyntaxError: Invalid or unexpected token" when vitest dynamically imports
+# the file — the symptom reported in #703 (L7).  LF enforcement here mirrors
+# the .md rule above and keeps postinstall.mjs byte-identical to its authored
+# form on every platform.  See PR #703.
+*.mjs text eol=lf

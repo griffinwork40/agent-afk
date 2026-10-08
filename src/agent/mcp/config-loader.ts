@@ -396,7 +396,7 @@ export function loadMcpConfig(opts: LoadMcpConfigOptions = {}): LoadedMcpConfig 
   // or connecting to external HTTP servers would introduce side effects that
   // corrupt the sandbox's isolation guarantee. The allow-MCP flag exists only
   // for changes that specifically concern MCP server behaviour.
-  if (isWhatifEpisode() && !(env.AFK_WHATIF_ALLOW_MCP === '1' || env.AFK_WHATIF_ALLOW_MCP === 'true')) {
+  if (isWhatifEpisode() && !projectMcpOptIn(env.AFK_WHATIF_ALLOW_MCP)) {
     return {
       mcpServers: {},
       sources: [],

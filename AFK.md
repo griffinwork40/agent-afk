@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Standalone TypeScript CLI + daemon + Telegram bot built on `@anthropic-ai/sdk`. Runs **outside** Claude Code as its own process. Binary: `afk`. Node ≥22, pnpm-only (lockfile is pnpm-specific).
+Standalone TypeScript CLI + daemon + Telegram bot built on `@anthropic-ai/sdk`. Runs **outside** Claude Code as its own process. Binary: `afk`. Node `^22.22.2 || ^24.15.0 || >=26.0.0` (jsdom 30's floor; keep `engines.node` in sync with it), pnpm 11 only (pinned via `package.json#packageManager`; lockfile is pnpm-specific; dependency build scripts must be allowlisted under `allowBuilds` in `pnpm-workspace.yaml`, and `dashboard/` has its own copy). CI publishes with `npm publish`/`npm version`, not the pnpm equivalents; see the Invariant in `.github/workflows/publish.yml`.
 
 ## Commands
 
@@ -10,13 +10,16 @@ Standalone TypeScript CLI + daemon + Telegram bot built on `@anthropic-ai/sdk`. 
 pnpm install                                       # pnpm exclusively
 pnpm build                                         # tsc + copy *.md prompts → dist/
 pnpm test                                          # vitest run (all)
-pnpm test src/agent/session.test.ts                # single file (NO --; pnpm 10 drops args after -- and runs ALL files)
+pnpm test src/agent/session.test.ts                # single file (NO --; pnpm 10+ drops args after -- and runs ALL files)
 pnpm test src/agent/session.test.ts -t "sends a message"   # single test by name (scope to a file, then filter by -t)
 pnpm test:file src/agent/session.test.ts           # --proof alias for a scoped run (script: vitest run)
 pnpm test:watch                                    # vitest watch
 pnpm test:coverage                                 # CI gate: has coverage floors that `pnpm test` does not enforce
 pnpm test:pty                                      # PTY suite — separate config (vitest.pty.config.ts), own CI job
 pnpm lint                                          # tsc --noEmit (strict)
+pnpm lint:tests                                    # type-check test files (non-blocking, #3053)
+pnpm lint:tests:check                             # CI gate: error-count ratchet (fails if count > .test-typecheck-baseline.json)
+pnpm lint:tests:update                            # lower the baseline after fixing a batch (add --allow-growth --reason for deliberate raises)
 
 pnpm audit:sdk:check                               # CI gate: fail on unlocked SDK symbols (audit:sdk regenerates the doc)
 pnpm audit:sdk:update-lock                         # add new symbols → .sdk-dependency.lock.json (edit `reason` before commit)
@@ -30,6 +33,7 @@ pnpm audit:funcsize:update                         # regenerate the function bas
 pnpm audit:module-state:check                      # CI gate: no module-scope singleton/process.on duplicated across a sibling family
 pnpm fix:pins:check                                # CI gate: SHA-256 pins for vendored agents + bundled skills (pnpm fix:pins to rewrite)
 pnpm audit:deps                                    # CI gate: pnpm audit --audit-level=critical --prod
+pnpm check:audits                                  # run all deterministic CI audit gates locally (full-scan; exit 0=pass, 1=some failed, 2=all failed→broken env)
 pnpm release                                       # release pipeline (scripts/release.mjs; --dry via release:dry)
 ```
 
@@ -42,6 +46,10 @@ pnpm dev                                     # tsx watch — live-reloads CLI
 afk chat "hi" / afk interactive / afk daemon # one-shot / REPL (alias: afk i) / cron headless runner
 pnpm telegram:start                          # Telegram bot
 ```
+
+### Pre-push hook
+
+`pnpm install` (via the `prepare` lifecycle script) installs a launcher at `.git/hooks/pre-push` (the git common dir, covering all worktrees). Before every push it runs `pnpm check:audits` — the same deterministic audit gates CI runs in the lint-build job. If the environment looks broken (node_modules missing or pnpm not on PATH) the hook exits 0 (fail-open). Bypass with `git push --no-verify`.
 
 ### Observability / tracing
 
@@ -57,11 +65,13 @@ Traces live at `$AFK_HOME/state/witness/<sessionLabel>/trace.jsonl`. Writer + re
 
 **Trace self-identification.** Every trace now records a `session_id_assigned` event (a `session_phase` kind) the moment the provider-issued session id first becomes known — which may be after the first model turn on an interactive session. The event shape is `{ kind: 'session_phase', payload: { phase: 'session_id_assigned', sessionId: '<id>', priorSessionId?: '<prev>' } }`. Consumers (friction analyzer, `afk insights`, harvest) use this to join a trace file (named by its random `sessionLabel` directory) to the corresponding SessionFacet (`~/.afk/agent-framework/facets/<sessionId>.json`) and session ledger without any side channel. Old traces that predate this event simply lack it — consumers must treat absence as "id unknown from trace alone" and fall back to the ledger `traceLabel` bridge for those older files. Emitter: `src/agent/session/session-id-trace.ts`; wired via `SessionStateManager`'s `onSessionIdAssigned` callback in `buildProviderLifecycle`.
 
-One slice of the args gap is now closable on demand: **subagent dispatch prompts**. Set `AFK_CAPTURE_SUBAGENT_PROMPTS=1` and every prompt a parent sends a child is written as a redacted markdown file (frontmatter + verbatim body) to `~/.afk/state/witness/<sessionLabel>/prompts/`. Because a fork resumes its parent's sessionId, one directory holds every prompt that session dispatched — across all six dispatch paths (agent fg/bg, worktree-isolated, compose/DAG, skill forks, in-process callers like mint phases), and across multi-turn children. **Off by default**, deliberately: nothing prunes the witness tree (12,596 dirs / 461 MB on this machine 2026-08-01) and redaction is regex-based, so connection strings, PEM blocks, and PII are *not* caught. Writer: `src/agent/session/subagent-prompt-capture.ts`; capture point is the child's own `sendMessageStreamInternal`, beside the ledger call that forks are gated out of. The trace itself still carries only `promptHead` (80 chars) on `subagent_lifecycle.started` — these files are not referenced by any trace event, so the directory is the index.
+**Descendant events interleave.** A single `trace.jsonl` belongs to one top-level session but contains events from every descendant subagent as well, interleaved in wall-clock order. `tool_call` events carry `payload.subagentId` when they were emitted by a forked child (absent = root session made the call). `subagent_lifecycle` `started` events carry `subagentId` and `parentId`; a `parentId` that does not appear as a `subagentId` anywhere in the trace identifies the root actor (its value is either the provider-assigned session id or a synthetic `manager-root-*` token, depending on whether the provider session was initialized before the first fork). `session_phase` events (e.g. phase: `model_ttfb`) do **not** carry `subagentId` — they cannot be attributed to a specific actor. Consequence: **never derive per-actor sequencing or parallelism from whole-file event order** — concurrent children appear interleaved, not sequential. To attribute events to a specific actor, filter on `subagentId`.
 
-The other half of that gap — **what a child actually SAID** — is closable with `AFK_CAPTURE_SUBAGENT_OUTPUT=1`. This appends a redacted markdown transcript per child to `~/.afk/state/witness/<sessionLabel>/outputs/<subagentId>.md`, recording assistant prose interleaved with **each tool call and its arguments** (the args the trace omits entirely). Same fork/session-label semantics and same off-by-default rationale as the prompts flag above. Writer: `src/agent/session/subagent-output-capture.ts`; same capture point (the child's own `sendMessageStreamInternal`), recorder is session-scoped so a multi-turn child yields one transcript.
+**Many-image degradation trace.** When `enforceManyImageLimit` runs in `openRound` and replaces one or more image blocks with `imageOmitted` text blocks (because the request has >20 images and some exceed the 2 000 px many-image ceiling), it emits a `many_image_degraded` `session_phase` event. Payload: `{ phase: 'many_image_degraded', metadata: { degradedCount, threshold, maxDimension } }`. PURE OBSERVABILITY — the mutation already happened to the messages array; this event makes it visible in the trace so operators can diagnose sessions that silently hit the many-image ceiling. Emitter: `src/agent/providers/anthropic-direct/loop/round-request.ts`.
 
-Capture is **incremental — flushed at every tool-call boundary — and that is the whole point**, not an optimization. The failure this exists to debug is a child that runs to its timeout and produces zero final output; at that moment every aggregate source is empty *by construction*: `conversationHistory` only gains an entry on `assistant.message` (once per completed `run()`), `SubagentStop.lastMessage` is `undefined`, and the trace's `partialOutputBytes` is `0`. Any capture pinned to an end-of-run boundary records nothing in exactly the case it is needed. Flushing per tool call means a killed child still leaves one record per call it made.
+Both gaps — the dispatch prompt and the child's full conversation — are covered by **subagent journals** (introduced in #2452). Every fork writes `~/.afk/state/sessions/<id>/subagents/<subagentId>.jsonl`, recording the dispatch prompt (the child's first user message), every tool call with full arguments, every tool result, and the child's assistant text. Journal writer: `src/agent/session/journal/`; paths: `src/paths.journal.ts`. The journal syncs via `journalSync.sync(messages)` before each model request and after each tool round (`anthropic-direct/loop/round-request.ts`, `loop/tool-round.ts`; `openai-compatible/query.ts` commits at turn end and at each tool round), with `journal.flush()` called on abort. **View with `afk trace show --results`** or read the JSONL files directly.
+
+Journal writes go through an async `SerialQueue`, so a SIGKILL can lose queued records. A graceful abort calls `journal.flush()` before exit (`src/agent/session/agent-session.ts`), bounding the loss window.
 
 One residual bug, worth recognizing: a parent ending mid-wave seals over live children and silently drops their terminal rows (`write()` throws on a sealed writer; `emitSubagentLifecycle` swallows it), so ~3% of dispatched subagents have no recorded fate — ~8% in daemon/cron parallel waves vs ~1% interactive. Detector: an **unmatched `started` in a trace that contains `session_sealed`** — not "a `started` is the last line", which misses it because the seal is written afterward.
 
@@ -72,6 +82,8 @@ One residual bug, worth recognizing: a parent ending mid-wave seals over live ch
 The unit of the budget cap is **tool-use rounds**, not tool calls — 5 parallel calls in one reply consume 1 round, not 5. Default ceiling: **50 rounds per fork**; `0` = unbounded. Hitting the cap triggers a wind-down round (tools stripped from the next reply) rather than a kill, so the child returns partial work instead of dying mid-sentence. Each child is told its own budget at dispatch via the preamble injected by `src/agent/subagent/budget-preamble.ts`, and is told it IS a subagent (reply goes to the dispatching agent, no human reachable, whether it may nest further) by `src/agent/subagent/identity-preamble.ts`; both are applied at `assembleChildConfig`, and every identity line is derived from the child's resolved config so it is never false for that child. Full history and rationale: `docs/subagent-tool-budget.md`.
 
 ## Architecture
+
+Operator tool visibility settings (`tools.disabled`): see [docs/tool-toggles.md](docs/tool-toggles.md).
 
 Key layers under `src/`:
 
@@ -102,10 +114,31 @@ Both providers emit a normalized `ProviderEvent` stream consumed by `src/agent/s
 
 - **Hooks** (`src/agent/hooks.ts`, `hook-registry.ts`) — SessionStart/End, SubagentStart/Stop, PreToolUse/PostToolUse. Sequential; `decision: 'block'` short-circuits. SubagentStop supports `injectContext` for parent-session context injection.
 - **SubagentManager** (`src/agent/subagent.ts`) — Forks child `AgentSession`s with permission bubbling, transitive abort via `AbortGraph`, optional Zod output schemas.
+- **Background processes** (`src/agent/shell-jobs/process-jobs.ts`) — `bash` with `run_in_background: true` starts a supervised process (`proc-N`, own process group, capped log under `$AFK_STATE_DIR/proc-jobs/`), returns at once, and delivers a metadata-only `<background-process-result>` on exit via the REPL injection + idle-wake path. Inspect/stop through `get_background_job_health` / `cancel_background_job`; `/sh` lists and kills them. Root interactive REPL only (children, Telegram, daemon get an explicit refusal); jobs end with the session. Separate from the user `!&` `ShellJobRegistry` on purpose. Spec: `docs/background-processes.md`.
 - **AbortGraph** (`src/agent/abort-graph.ts`) — Tree of `AbortController`s. Parent abort cascades down; child abort notifies up (never auto-aborts parent). Abort beats hook decisions.
 - **Elicitation Router** (`src/agent/elicitation-router.ts`) — Module-scope handler bridging SDK elicitations to REPL/Telegram/iMessage surfaces.
 - **Plugins** (`src/agent/plugins-scanner.ts`, `src/agent/plugins/`) — Scans `~/.afk/plugins/` at session construction; install/remove/update + git-based sources.
 - **MCP client** (`src/agent/mcp/`) — Wraps `@modelcontextprotocol/sdk`. `McpManager.fromConfig()` connects every server resolved by `loadMcpConfig()`. Config layers (lowest → highest priority): plugin-contributed `<plugin>/.claude-plugin/mcp.json` → `~/.afk/config/mcp.json` → `<cwd>/.mcp.json` → `--mcp-config <path>`. Per-name conflicts: higher layer wins, displaced source surfaced as a warning. Transports: stdio + streamable-HTTP + SSE fallback + OAuth. Tools are bridged as `mcp__<server>__<tool>` and read fresh per-query in the dispatcher so `notifications/tools/list_changed` refreshes are picked up without restarting the session. Per-surface manager (REPL); subagents share parent by reference. Sampling capability deliberately not advertised — eliminates the "stub or hang" footgun. `/mcp` lists servers; `/mcp auth` surfaces pending OAuth URLs from `~/.afk/state/mcp/server-status.json`.
+
+### Usage awareness
+
+Rate-limit and subscription-window state is shared by every AFK process on the machine. See [`docs/usage-awareness.md`](docs/usage-awareness.md).
+
+- **One store, one reader, one evaluator, one formatter** under `src/agent/usage/` (`usage-ledger.ts` over the SQLite state store, namespace `usage`; `usage-snapshot.ts`; `usage-budget.ts`; `usage-formatter.ts`). New consumers must reuse them, not re-read headers or the quota cache.
+- **Admission is per provider+account** (`providers/shared/rate-limit-bucket.registry.ts`): each bucket adopts a peer process's 429 freeze from the ledger. `globalRateLimitBucket` remains only for legacy importers.
+- **Consumers**: `afk usage [--json]`, the `usage` field of `get_runtime_state`, a one-line fan-out notice on `agent`/`compose` results at warn/over (observer only), and a daemon gate that skips `agent` tasks when the subscription the daemon's model uses (Claude or Codex) is at `AFK_DAEMON_BUDGET_SKIP_PCT` (default 90), with one Telegram alert per episode.
+- **Endpoints**: Claude windows from `api/oauth/usage`, Codex windows from `chatgpt.com/backend-api/wham/usage` (`usage/codex-usage.ts`), both over `usage/usage-http.ts` and both undocumented. Codex is refreshed on demand only; the fan-out notice grades Claude only. The Claude endpoint's `utilization` is a 0..100 percentage.
+
+### Peer (cross-session) messaging
+
+Replaces ad-hoc `tmux send-keys` relays (which split multi-line text into many turns, had no delivery receipts, and raced with busy REPLs) with a durable filesystem mailbox per session. See [`docs/peer-messaging.md`](docs/peer-messaging.md) for the full spec.
+
+- **Discovery**: live sessions enumerated via `$AFK_STATE_DIR/presence/`; presence fields `name`, `turnState`, and `peerInbox=true` are set once a REPL session's first turn runs (`src/agent/awareness/presence.peer.ts`).
+- **Tools**: `list_sessions` (show live peers) + `send_to_session` (write to inbox, idle receiver wakes immediately, busy receiver gets it at next turn boundary) — top-level sessions only (`src/agent/tools/schemas.peer.ts`).
+- **Mailbox**: `$AFK_STATE_DIR/inbox/<id>/{pending,delivered,held}/`; atomic tmp+rename writes; an exclusive-create claim receipt (hardlink, `copyFile(COPYFILE_EXCL)` fallback) guarantees exactly one claimer wins (`src/agent/peer/inbox-store.ts`).
+- **Wake path**: idle + empty-buffer receiver is woken via the existing `tryAutoResume` / `surface.abortPendingRead()` path; half-typed input is never touched; busy turns deliver at the next boundary (`src/cli/commands/interactive/loop-iteration.ts:91-103`).
+- **Guards**: rate ~10/min, 60 s dedup, hop cap 6, 64 KB body, wake budget ~20/hour/sender; over-budget → `held/` not `pending/` (`src/agent/peer/guards.ts`). `AFK_PEER_INBOUND=accept|hold|off`; `/inbox` to review held messages.
+- **Security**: peer messages carry no user authority; the system prompt frames them explicitly as coming from another agent (`system-prompt.ts:81`). Accepted risk: autonomous/bypass receivers accept by default (operator decision 2026-10-02).
 
 ### User-scope state
 
@@ -116,7 +149,8 @@ All AFK state under `~/.afk/` (never `~/.claude/`), resolved exclusively through
   config/    afk.env, afk.config.json, mcp.json
   state/     sessions/  todos/  transcripts/  daemon/  witness/   ($AFK_STATE_DIR overrides this tier)
   plugins/   logs/  cache/
-  agent-framework/   # AFK telemetry + briefs
+  agent-framework/   # AFK telemetry + briefs (forge-telemetry.jsonl, routing-decisions.jsonl,
+                   #   preexisting-ledger.jsonl — see docs/preexisting-ledger.md)
 <cwd>/.afk/                      # project-scope: per-project skills + plugins, auto-discovered
 ```
 
@@ -207,6 +241,26 @@ Both gates measure logic density, not documentation volume.
 At the ceiling, extract a **named helper taking explicit parameters** — not a
 closure over the enclosing locals, which relocates lines without reducing what you
 must hold in mind. `pnpm audit:funcsize:list` ranks the current worst.
+
+### The POSIX-assumption guard
+
+The Windows CI leg runs only on main pushes and `windows-compat`-labelled PRs, so
+`tests/posix-guard.test.ts` enforces a static Windows guard inside **`pnpm test`**
+(ubuntu CI and auto-release) on every PR (#703). AST rules in
+`scripts/lib/posix-guard-rules.ts`: **R1** a literal `/bin/sh`/`sh`/`bash` as the
+command of `execFile`/`spawn`/`exec` or as `shell:` in product code (use
+`resolveShell()` from `src/utils/resolve-shell.ts`); **R2** `mkdtemp` on a
+`/`-rooted literal anywhere (use `path.join(os.tmpdir(), 'afk-<name>-')`); **R3**
+host `path.resolve`/`path.normalize` on a `/`-rooted literal in product code (the
+#2588 shape; use `path.posix.*` for POSIX-shaped paths); **R4** any test gated on
+platform (`skipIf`/`runIf`, `cond ? it : it.skip`, or a bare `if (win32) return;`).
+Never skip on win32; make the test portable. Existing sites are grandfathered in
+`.posix-guard-baseline.json` as per-file, per-rule **counts** (never line
+numbers). Unlike the size ratchets it is **growth-only**: a count above baseline
+fails, and a count below it (or a deleted file) passes with a hint, so lanes
+removing violations never have to touch the baseline. Regenerate with
+`pnpm audit:posix:update` (refuses growth without `--allow-growth --reason "<why>"`);
+`pnpm audit:posix:list` prints every current site.
 
 ### Long-comment prefix convention
 

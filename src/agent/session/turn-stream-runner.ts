@@ -18,17 +18,11 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { AbortError } from '../../utils/errors.js';
 import { debugLog } from '../../utils/debug.js';
-import { captureSubagentPrompt } from './subagent-prompt-capture.js';
-import {
-  createSubagentOutputRecorder,
-  type SubagentOutputRecorder,
-} from './subagent-output-capture.js';
 import { transformProviderEvent, type TransformDeps } from './stream-consumer.js';
 import type { AccountingAccumulator } from './accounting-accumulator.js';
 import type { LedgerLifecycle } from './ledger-lifecycle.js';
 import type { OutputBroadcast } from './output-broadcast.js';
 import type { SessionStateManager } from './session-state.js';
-import { sessionLabelFromTracePath } from '../../paths.js';
 import type {
   AgentConfig,
   OutputEvent,
@@ -37,6 +31,9 @@ import type {
 } from '../types.js';
 import type { ProviderQuery, ProviderEvent } from '../provider.js';
 import type { Message } from '../types.js';
+import type { ToolEventMin } from '../done-evidence.js';
+import { dispatchTurnStop } from './turn-stream-runner.stop.js';
+import type { StopWiring } from '../types/session-types.js';
 
 /**
  * Context bag passed to {@link TurnStreamRunner} at construction.
@@ -67,24 +64,51 @@ export interface TurnRunnerDeps {
   incInboundMessageCount: () => number;
   getTurnCount: () => number;
   incTurnCount: () => void;
-  getSubagentOutputRecorder: () => SubagentOutputRecorder | null | undefined;
-  setSubagentOutputRecorder: (r: SubagentOutputRecorder | null) => void;
   getProviderQuery: () => ProviderQuery;
   getLedgerMetadata: () => ReturnType<SessionStateManager['getSessionMetadata']>;
+  /**
+   * Optional raw provider-event observer, called in stream order BEFORE the
+   * event is transformed. Feeds the `exit_plan_mode` visible-text gate
+   * (`PlanTextTracker.observe`); must be synchronous and must not throw.
+   */
+  observeProviderEvent?: (event: ProviderEvent) => void;
+  /**
+   * The surface's CURRENT Stop wiring, read at every turn end (surfaces wire
+   * after construction). `undefined` means the surface has not opted in and
+   * Stop is not dispatched.
+   */
+  getStopWiring?: () => StopWiring | undefined;
 }
 
 /**
- * Runs a single provider-turn stream, accumulates output events, and
- * manages the subagent output recorder lifecycle.
- *
- * Constructed once per session; `deps.getProviderIterator()` is re-read on
- * every call so the runner works across resets.
+ * Runs a single provider-turn stream, accumulates output events, and yields
+ * each {@link OutputEvent}. Constructed once per session; `deps.getProviderIterator()`
+ * is re-read on every call so the runner works across resets.
  */
 export class TurnStreamRunner {
   private readonly deps: TurnRunnerDeps;
+  /**
+   * Mutable ref to the active turn's `TransformDeps`. Set when a turn starts,
+   * cleared when it ends. Exposed via `getActiveTurnToolEvents()` so the
+   * `beforeTurnEnd` provider seam (issue #2714) can read the tool events the
+   * session has already accumulated for the in-flight turn.
+   *
+   * Ordering invariant: the provider calls `beforeTurnEnd` AFTER all tool
+   * output events for the turn have been yielded (tool rounds complete before
+   * the model emits its final `end_turn`). The session processes those tool
+   * events via `transformProviderEvent` before the provider yields
+   * `turn.completed`, so `_activeDeps._turnToolEvents` is fully populated by
+   * the time the provider calls this seam.
+   */
+  private _activeDeps: TransformDeps | null = null;
 
   constructor(deps: TurnRunnerDeps) {
     this.deps = deps;
+  }
+
+  /** Return the current turn's accumulated tool events, or [] when no turn is active. */
+  getActiveTurnToolEvents(): readonly ToolEventMin[] {
+    return (this._activeDeps as { _turnToolEvents?: ToolEventMin[] } | null)?._turnToolEvents ?? [];
   }
 
   /** Pre-turn guard: throws when the session cannot accept a new message. */
@@ -228,68 +252,67 @@ export class TurnStreamRunner {
     inputStream.pushUserMessage(effectiveContent);
 
     this.ensureLedger();
-    this.deps.ledger.recordUser(historySummary);
+    // `content` is the caller's own message; `effectiveContent` may carry
+    // drained framework context in front of it. Record both so the web
+    // session list can title the session from what the user actually typed.
+    const inputSummary = typeof content === 'string' ? content : this.summarize(content);
+    this.deps.ledger.recordUser(historySummary, inputSummary);
 
-    const inboundMessageIndex = this.deps.incInboundMessageCount();
-    const config = this.deps.getConfig();
-    const sessionId = this.deps.getSessionId();
-    void captureSubagentPrompt({
-      sessionId:
-        sessionLabelFromTracePath(config.traceWriter?.getTracePath()) ?? sessionId,
-      subagentId: config.subagentId,
-      isSubagentFork: config.isSubagentFork === true,
-      model: config.model === undefined ? undefined : String(config.model),
-      turn: inboundMessageIndex,
-      prompt: historySummary,
-    });
+    this.deps.incInboundMessageCount();
 
     const deps = this.buildTransformDeps();
+    // Expose this turn's deps via _activeDeps so the beforeTurnEnd provider
+    // seam can read _turnToolEvents (stop-hook-continuation rule, issue #2714).
+    this._activeDeps = deps;
 
-    // Invariant: SESSION-scoped recorder — one transcript per multi-turn child.
-    // `undefined` = not yet attempted; `null` = capture disabled (checked once).
-    if (this.deps.getSubagentOutputRecorder() === undefined) {
-      this.deps.setSubagentOutputRecorder(
-        createSubagentOutputRecorder({
-          sessionId:
-            sessionLabelFromTracePath(config.traceWriter?.getTracePath()) ?? sessionId,
-          subagentId: config.subagentId,
-          isSubagentFork: config.isSubagentFork === true,
-          model: config.model === undefined ? undefined : String(config.model),
-        }),
-      );
-    }
-    const outputRecorder = this.deps.getSubagentOutputRecorder();
+    // Finding 2: reset the per-turn runtime flag so the guard below
+    // correctly distinguishes "seam fired this turn" from a prior turn.
+    const wiring = this.deps.getStopWiring?.();
+    if (wiring) wiring.stopDispatchedBySeam = false;
 
-    // Contract: `endStatus` is set to 'stream_complete' only when the loop exits
-    // normally (break on done/error, or iterator exhausted). The finally block
-    // calls end() exactly once with the correct status — no double-call, no
-    // overwrite. Fixes #1952: the prior pattern called end('stream_complete')
-    // at the end of the try block AND end('aborted_or_incomplete') in finally
-    // (because state is still 'streaming' at that point), always tagging normal
-    // completions with the wrong marker.
-    let endStatus: string = 'aborted_or_incomplete';
     try {
       while (true) {
         const result = await this.deps.getProviderIterator().next();
         if (result.done) break;
         const event = result.value;
+        this.deps.observeProviderEvent?.(event);
         const output = transformProviderEvent(event, deps);
 
         if (output) {
-          outputRecorder?.observe(output);
           if (output.type === 'done') {
             this.deps.incTurnCount();
             // A completed turn clears a prior error so the seal status
             // reflects the FINAL turn's outcome, not any earlier error.
             this.deps.accounting.clearProviderError();
-            // Contract: mark normal completion BEFORE yielding the done event.
-            // An async generator's finally block fires when the consumer's
-            // for-await loop breaks after seeing 'done' — at that point the
-            // code after `yield` never runs, so endStatus must be set here,
-            // not after the loop exits (where it would be unreachable). The
-            // same applies to 'error': we do NOT flip endStatus there because
-            // a provider error is a real failure, not a clean completion.
-            endStatus = 'stream_complete';
+
+            // Contract: Stop fires exactly once per top-level turn, from the
+            // session layer, so every surface (REPL, Telegram, daemon/cron,
+            // chat) gets it. It runs BEFORE `done` is yielded, so a surface
+            // never finalizes a turn whose Stop hooks are still running; the
+            // wait is bounded by STOP_HOOK_HANDLER_TIMEOUT_MS. Forks and
+            // un-wired surfaces are no-ops inside dispatchTurnStop.
+            //
+            // Finding 2: when the provider exposes setBeforeTurnEnd AND stop
+            // wiring is active, the provider seam (stop-hook-continuation.ts)
+            // already dispatched Stop BEFORE turn.completed was yielded —
+            // dispatching it again here would fire Stop twice per turn.
+            // Skip dispatchTurnStop in that case.
+            // Finding 2: use the runtime flag set by buildBeforeTurnEnd
+            // when the seam actually fired this turn. The old static check
+            // (`setBeforeTurnEnd !== undefined`) wrongly suppressed dispatch
+            // when the provider exposed the seam but it never ran.
+            const seamAlreadyDispatched =
+              this.deps.getStopWiring?.()?.stopDispatchedBySeam === true;
+            if (!seamAlreadyDispatched) {
+              await dispatchTurnStop({
+                config: this.deps.getConfig(),
+                wiring: this.deps.getStopWiring?.(),
+                sessionId: this.deps.getSessionId(),
+                signal: this.deps.getAbortController().signal,
+                conversationHistory: this.deps.conversationHistory,
+                toolEvents: deps._turnToolEvents ?? [],
+              });
+            }
           } else if (output.type === 'error') {
             // Terminal-cause flag: a per-turn provider error must flip the
             // eventual clean close from `succeeded` to `failed`.
@@ -301,15 +324,12 @@ export class TurnStreamRunner {
           if (output.type === 'done' || output.type === 'error') break;
         }
       }
-      // Fallback for providers that exhaust the iterator without emitting a
-      // 'done' event (e.g. iterator.done = true). Also unreachable in practice
-      // for normal turns but keeps the logic complete.
-      endStatus = 'stream_complete';
     } finally {
+      // Clear the active deps ref when the turn ends (clean, abort, or error).
+      this._activeDeps = null;
       // Invariant: `finally` is the ONLY path an aborted or timed-out child
       // takes — closing the generator runs it while `break` does not reach it.
       if (this.deps.getState() === 'streaming') {
-        outputRecorder?.end(endStatus);
         this.deps.setState('idle');
       }
     }

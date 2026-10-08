@@ -6,8 +6,7 @@ on:
     types: [opened, synchronize, reopened, labeled]
   push:
     branches: [main]
-  # Manual runs from the Actions tab. Primary use: firing the advisory
-  # `test-windows` leg on demand while grinding Windows compat (issue #703).
+  # Manual runs from the Actions tab.
   workflow_dispatch:
 
 concurrency:
@@ -30,16 +29,15 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 9
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -52,6 +50,19 @@ jobs:
 
       - name: Lint (tsc --noEmit)
         run: pnpm lint
+
+      - name: Lint test files (informational — full tsc output, burn-down #3053)
+        # Informational step: prints the full tsc error list without failing CI.
+        # The ratchet step below is what actually blocks regressions.
+        run: pnpm lint:tests || true
+
+      - name: Lint test files — error-count ratchet (CI-blocking, #3105)
+        # One-way ratchet: fails when the `error TS` count EXCEEDS the committed
+        # baseline in `.test-typecheck-baseline.json`. Regressions are caught
+        # immediately; the burn-down (#3053) continues unimpeded because the gate
+        # only blocks growth, never requires zero errors. Lower the baseline after
+        # fixing a batch: `pnpm lint:tests:update`.
+        run: pnpm lint:tests:check
 
       - name: Audit env-var access (no scattered process.env reads outside src/config/env.ts)
         run: pnpm audit:env:check
@@ -73,7 +84,7 @@ jobs:
         # a bug ~7 times in 300 commits (fixed one call site at a time).
         run: pnpm audit:width:check
 
-      - name: Audit the 350-line source-file ceiling (one-way ratchet)
+      - name: Audit the 350-line source-file ceiling (one-way ratchet + touch-trigger)
         # `.filesize-baseline.json` grandfathers the files that already exceeded
         # the ceiling when this gate landed. The ratchet fails four ways — a
         # non-baselined file over the ceiling, a baselined file that GREW, a
@@ -83,19 +94,15 @@ jobs:
         # `pnpm audit:filesize:update`; never hand-edit it.
         # CI-blocking — the advisory `|| true` was dropped in #2206 after main
         # silently regressed past its own ratchet while the gate could not fail.
-        run: pnpm audit:filesize:check
-
-      - name: Audit the 350-line ceiling on files this PR touches
-        # Touch-trigger: a change that modifies a still-oversized baselined file
-        # must bring it under the ceiling. The grandfathered set is whatever
-        # `.filesize-baseline.json` holds today (count it there, don't cache it
-        # here); touching any of them forces the split, so the backlog retires
-        # through ordinary feature work even if no dedicated refactor wave runs.
-        # `|| true` dropped in #2206 (it was advisory while the god-object waves
-        # landed). Caveat: the default shallow checkout has no `origin/<base>`
-        # ref, so `changedSince` falls back to an empty touch-set and this step
-        # currently enforces only what the full-scan step above already does.
-        # Activating TOUCHED needs a deeper fetch — a separate policy call.
+        #
+        # One step, not two (#2235): `--changed-vs` runs the full-scan ratchet
+        # above AND adds the TOUCHED check (a change that modifies a
+        # still-oversized baselined file must bring it under the ceiling), so a
+        # separate plain `--check` step only repeated the same scan.
+        # Caveat: the default shallow checkout has no `origin/<base>` ref, so
+        # `changedSince` falls back to an empty touch-set and TOUCHED is
+        # currently inert — only the full-scan checks enforce. Activating
+        # TOUCHED needs a deeper fetch — a separate policy call.
         # See docs/file-size-ceiling.md.
         run: pnpm audit:filesize:check --changed-vs origin/${{ github.base_ref || 'main' }}
 
@@ -156,33 +163,50 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Cross-platform matrix (see issue #703 for the Windows-compat effort).
-    # Both ubuntu-latest and macos-latest are REQUIRED gates (issue #2209).
-    # macos-latest was advisory under `continue-on-error` while compat was
-    # validated; it passed 13/14 completed runs on main (the one failure was a
-    # general Lint & Build failure, not macOS-specific), so it is promoted here.
-    # `fail-fast: false` so one OS failing never cancels the other. Public repos
-    # get unlimited free GitHub-hosted minutes on both runners.
-    # windows-latest is NOT in this matrix — it runs in `test-windows` below,
-    # which is trigger-scoped because it is uniformly red today. See that job's
-    # comment.
+    # Cross-platform matrix (closes issue #703).
+    # All three legs are REQUIRED gates with no continue-on-error.
+    # fail-fast: false so one OS failing never cancels another. Public repos
+    # get unlimited free GitHub-hosted minutes on all runners.
+    #
+    # Coverage policy: ubuntu runs `pnpm test:coverage` (enforces the stmts 84 /
+    # branch 78 floors). macOS also runs coverage. Windows gates on assertions
+    # only (`pnpm test`, no coverage floor) because ~110 platform-gated tests
+    # leave win32-skipped branches uncovered; requiring coverage floors on Windows
+    # would mask assertion failures behind coverage noise. The ubuntu leg is the
+    # authoritative coverage gate.
+    #
+    # Windows is pinned to windows-2022 because node-gyp <=10.3.1 does not
+    # recognise VS 2025 (version "18"), which is the only VS on windows-latest
+    # since the 2026-09 image refresh. windows-2022 ships VS 2022 natively, so
+    # no msvs_version pin is needed. Track upstream fix:
+    #   https://github.com/nodejs/node-gyp/issues/2911
+    # Once node-gyp ships a release that handles VS 18, switch the include entry
+    # to windows-latest and drop this comment.
+    #
+    # Windows gates on assertions only; coverage floors are enforced on ubuntu
+    # because ~110 platform-gated tests leave win32-skipped branches uncovered.
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-    timeout-minutes: 15
+        test-cmd: [pnpm test:coverage]
+        include:
+          - os: windows-2022
+            test-cmd: pnpm test
+    # Windows setup (~4-6 min) + test run (~9 min) fits comfortably in 30 min.
+    # ubuntu/macos keep 15 min (unchanged).
+    timeout-minutes: ${{ matrix.os == 'windows-2022' && 30 || 15 }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 9
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -190,82 +214,62 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Test (with coverage gate)
-        run: pnpm test:coverage
+      - name: Test
+        run: ${{ matrix.test-cmd }}
 
       - name: Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@v4
+        if: always() && matrix.os != 'windows-2022'
+        uses: actions/upload-artifact@v6
         with:
           # Per-OS name — a matrix can't upload multiple artifacts under one name (v4 immutable).
           name: coverage-report-${{ matrix.os }}
           path: coverage/
           retention-days: 14
 
-  # Windows compat leg (issue #703). Trigger-scoped, NOT part of the `test` matrix.
+  # Node 26 compatibility leg (issue #2525).
   #
-  # Why: Windows is not a supported platform yet — 85 of 699 test files fail, ~90% of
-  # them because tests hardcode POSIX `/tmp` rather than because product code is broken.
-  # A uniformly-red advisory check on every PR carries zero marginal information: you
-  # cannot distinguish a newly-introduced POSIX-ism from the known-red baseline, so the
-  # red X on unrelated PRs (dependabot bumps, feature work) trains reviewers to ignore
-  # CI. Scoping the trigger keeps the signal where it is actionable and drops it where
-  # it is noise:
-  #   - push to main      → the authoritative post-merge scoreboard #703 tracks
-  #   - `windows-compat`  → opt in per-PR while grinding a compat fix, to get the
-  #     PR label            per-PR falsifier back on exactly the PR that needs it
-  #   - workflow_dispatch → on-demand run from the Actions tab (see `on:` above)
-  # On every other PR the job is SKIPPED (grey), not failed (red).
+  # Why a separate job rather than adding node-version to the `test` matrix:
+  # the `test` job uploads a coverage artifact named coverage-report-${{ matrix.os }}.
+  # Artifacts in actions/upload-artifact@v4 are immutable-named; adding a second
+  # dimension to the matrix would require changing the artifact name (to include
+  # node-version) in every branch of the matrix, touching the existing required gate.
+  # A standalone job keeps the `test` matrix and its artifacts unchanged, Node 22
+  # remains the primary, and this job is the dedicated Node 26 falsifier.
   #
-  # Runs `pnpm test` rather than `pnpm test:coverage`: the coverage floors
-  # (stmts 74 / branch 79) can red this leg on coverage alone once win32-skipped
-  # branches go uncovered, which would mask the assertion signal this job exists to
-  # collect. The required ubuntu leg still enforces the coverage gate.
+  # Runs `pnpm test` (no coverage gate) for the same reason the Windows leg does:
+  # coverage floors could mask assertion failures on a new Node version, and the
+  # ubuntu `test` leg already enforces the gate.
   #
-  # Closing condition (issue #703): once the suite is green here, DELETE this job and
-  # add `windows-latest` back to the `test` matrix above — that restores both the
-  # coverage gate and required-gate status in one move.
-  test-windows:
-    name: Test (windows-latest)
-    if: >-
-      github.event_name == 'push'
-      || github.event_name == 'workflow_dispatch'
-      || contains(github.event.pull_request.labels.*.name, 'windows-compat')
-    # Pinned to windows-2022 because node-gyp ≤10.3.1 doesn't recognise
-    # VS 2025 (version "18"), which is the only VS on windows-latest since
-    # the 2026-09 image refresh. windows-2022 ships VS 2022 natively, so
-    # the msvs_version pin is no longer needed. Track upstream fix:
-    #   https://github.com/nodejs/node-gyp/issues/2911
-    # Once node-gyp ships a release that handles VS 18, switch back to
-    # windows-latest and drop this comment.
-    runs-on: windows-2022
-    # Advisory until the compat grind lands — never blocks a merge.
-    continue-on-error: true
-    timeout-minutes: 20
+  # Closing condition (issue #2525): if Node 26 is promoted to an LTS and the suite
+  # is green, fold this into the `test` matrix by adding node-version: [22, 26] and
+  # updating the artifact name to include node-version.
+  test-node26:
+    name: Test (ubuntu-latest, Node 26)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 9
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 26
           cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Test (no coverage gate — see job comment)
+      - name: Test (Node 26 — includes undici gzip-bridge regression, issue #2525)
         run: pnpm test
 
-  # A required Windows integration check, kept separate from the known-red,
-  # advisory compatibility suite above so those failures cannot skip or mask it.
+  # A required Windows integration check, kept separate from the main test matrix
+  # so a unit-suite failure cannot skip or mask it.
   smoke-windows:
     name: Smoke test (Windows CLI)
     runs-on: windows-2022
@@ -276,16 +280,15 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 9
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -365,7 +368,7 @@ jobs:
 
   # Real-PTY scrollback harness (issue #541). Isolated from the main `test` job
   # because it depends on the native `node-pty` module (compiled from source on
-  # Linux via pnpm.onlyBuiltDependencies — the same path better-sqlite3 already
+  # Linux via pnpm-workspace.yaml allowBuilds — the same path better-sqlite3 already
   # uses) and drives a real pseudo-terminal, which is slower and timing-
   # sensitive. It is a real gate (not continue-on-error) but runs serially with
   # in-suite retries (vitest.pty.config.ts). If PTY flakiness ever destabilises
@@ -377,23 +380,22 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 9
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
 
       - name: Install dependencies
         # Builds node-pty from source (no Linux prebuild ships) via
-        # pnpm.onlyBuiltDependencies; ubuntu-latest has the C++/python toolchain.
+        # pnpm-workspace.yaml allowBuilds; ubuntu-latest has the C++/python toolchain.
         run: pnpm install --frozen-lockfile
 
       - name: Test (real PTY scrollback harness)
@@ -409,10 +411,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -437,16 +439,15 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 9
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -472,16 +473,15 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 9
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -498,7 +498,7 @@ jobs:
       - name: Assert bundle entry points exist and are executable
         run: |
           set -e
-          for entry in cli.mjs telegram.mjs index.mjs index.d.ts postinstall.mjs; do
+          for entry in cli.mjs telegram.mjs index.mjs index.d.ts; do
             if [ ! -f "dist/$entry" ]; then
               echo "::error::dist/$entry missing after build:dist" >&2
               exit 1
@@ -512,6 +512,22 @@ jobs:
             fi
           done
           echo "All bundle entry points present and executable."
+
+      - name: Assert postinstall script ships in the npm tarball
+        # package.json#scripts.postinstall runs scripts/postinstall.mjs directly
+        # (#2523). .npmignore excludes scripts/, so the file ships ONLY because
+        # package.json#files whitelists it. Dropping that entry would silently
+        # turn the hook into a no-op (`|| true` swallows the missing module).
+        run: |
+          set -e
+          PACK_JSON="$(npm pack --dry-run --ignore-scripts --json)"
+          if ! echo "$PACK_JSON" | jq -e '.[0].files[] | select(.path == "scripts/postinstall.mjs")' > /dev/null; then
+            echo "::error::scripts/postinstall.mjs is not in the npm tarball; the postinstall hook would be a silent no-op" >&2
+            echo "Tarball file list:" >&2
+            echo "$PACK_JSON" | jq -r '.[0].files[].path' >&2
+            exit 1
+          fi
+          echo "scripts/postinstall.mjs ships in the tarball."
 
       - name: Assert bundled-plugins shipped in the publish bundle
         # Guards the exact regression this job exists to catch: build:dist

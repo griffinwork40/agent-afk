@@ -22,6 +22,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type OpenAI from 'openai';
 import {
   oneShotChatCompletion,
+  oneShotChatCompletionWithStop,
   oneShotResponses,
   ResponsesSummaryIncompleteError,
   __setOpenAIOneShotClientFactory,
@@ -47,7 +48,7 @@ interface ChatCreateParams {
 type ChatCreateFn = (
   params: ChatCreateParams,
   options?: { signal?: AbortSignal },
-) => Promise<{ choices?: Array<{ message?: { content?: string | null } }> }>;
+) => Promise<{ choices?: Array<{ finish_reason?: string | null; message?: { content?: string | null } }> }>;
 
 function makeClient(createFn: ChatCreateFn): OpenAI {
   return { chat: { completions: { create: createFn } } } as unknown as OpenAI;
@@ -238,6 +239,24 @@ describe('oneShotChatCompletion', () => {
     expect(capturedSignal).toBe(controller.signal);
   });
 
+  it('forwards maxRetries: 0 to the client factory (SDK-level retries disabled)', async () => {
+    // PR #2702: AFK owns all retry logic; the SDK must never retry on its own.
+    // Verify that maxRetries: 0 is always forwarded to the clientFactory so the
+    // OpenAI SDK cannot introduce silent duplicate requests.
+    let capturedOpts: { apiKey: string; maxRetries?: number } | undefined;
+    await oneShotChatCompletion({
+      apiKey: 'sk-test',
+      model: 'gpt-4o-mini',
+      system: 'sys',
+      user: 'msg',
+      clientFactory: (opts) => {
+        capturedOpts = opts as typeof capturedOpts;
+        return makeClient(async () => ({ choices: [{ message: { content: 'ok' } }] }));
+      },
+    });
+    expect(capturedOpts?.maxRetries).toBe(0);
+  });
+
   it('forwards baseURL to the client factory', async () => {
     let capturedOpts: { apiKey: string; baseURL?: string } | undefined;
     await oneShotChatCompletion({
@@ -344,6 +363,75 @@ describe('oneShotChatCompletion', () => {
       user: 'msg',
     });
     expect(result).toBe('from-hook');
+  });
+});
+
+// ── oneShotChatCompletionWithStop: stop-reason mapping ───────────────────────
+
+describe('oneShotChatCompletionWithStop (stop-reason mapping)', () => {
+  beforeEach(() => {
+    mockResolveAuth.mockImplementation((explicit?: string) =>
+      okAuth(explicit && explicit.length > 0 ? explicit : 'env-test-key'),
+    );
+  });
+
+  afterEach(() => {
+    __setOpenAIOneShotClientFactory(null);
+    vi.clearAllMocks();
+  });
+
+  it('maps finish_reason length → stopReason max_tokens', async () => {
+    const result = await oneShotChatCompletionWithStop({
+      apiKey: 'sk-test',
+      model: 'gpt-4o-mini',
+      system: 'sys',
+      user: 'msg',
+      clientFactory: () => makeClient(async () => ({
+        choices: [{ finish_reason: 'length', message: { content: 'cut off mid' } }],
+      })),
+    });
+    expect(result.stopReason).toBe('max_tokens');
+    expect(result.text).toBe('cut off mid');
+  });
+
+  it('maps finish_reason stop → stopReason end', async () => {
+    const result = await oneShotChatCompletionWithStop({
+      apiKey: 'sk-test',
+      model: 'gpt-4o-mini',
+      system: 'sys',
+      user: 'msg',
+      clientFactory: () => makeClient(async () => ({
+        choices: [{ finish_reason: 'stop', message: { content: 'complete' } }],
+      })),
+    });
+    expect(result.stopReason).toBe('end');
+  });
+
+  it('maps an unknown finish_reason → stopReason other', async () => {
+    const result = await oneShotChatCompletionWithStop({
+      apiKey: 'sk-test',
+      model: 'gpt-4o-mini',
+      system: 'sys',
+      user: 'msg',
+      clientFactory: () => makeClient(async () => ({
+        choices: [{ finish_reason: 'content_filter', message: { content: 'filtered' } }],
+      })),
+    });
+    expect(result.stopReason).toBe('other');
+  });
+
+  it('oneShotChatCompletion wrapper still returns a plain string (backward compat)', async () => {
+    const result = await oneShotChatCompletion({
+      apiKey: 'sk-test',
+      model: 'gpt-4o-mini',
+      system: 'sys',
+      user: 'msg',
+      clientFactory: () => makeClient(async () => ({
+        choices: [{ finish_reason: 'length', message: { content: 'partial' } }],
+      })),
+    });
+    expect(typeof result).toBe('string');
+    expect(result).toBe('partial');
   });
 });
 

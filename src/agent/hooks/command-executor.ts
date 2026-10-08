@@ -26,10 +26,38 @@
 
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
+import { mkdirSync } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import type { HookContext, HookDecision } from '../hooks.js';
 import { killProcessGroup } from '../../utils/kill-process-group.js';
 import { resolveShell } from '../../utils/resolve-shell.js';
+import { readEnvFile } from '../../utils/envFile.js';
+import { getEnvConfigPath, getPluginDataDir } from '../../paths.js';
+import { buildOptionEnv, readUserConfigSchema } from '../plugins/plugin-user-config.js';
+
+// ---------------------------------------------------------------------------
+// Per-plugin env allowlist — denylist
+// ---------------------------------------------------------------------------
+
+/**
+ * Env-var names that are NEVER forwarded to a plugin hook subprocess even if
+ * the user lists them in `pluginHookEnv`. These are AFK's own primary
+ * credentials; forwarding them to a third-party plugin hook is a secret-leak
+ * regardless of user intent.
+ */
+const PLUGIN_ENV_DENIED_NAMES: ReadonlySet<string> = new Set([
+  'ANTHROPIC_API_KEY',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'OPENAI_API_KEY',
+  'TELEGRAM_BOT_TOKEN',
+]);
+
+/**
+ * Suffix pattern for AFK-prefixed credential aliases. Any env-var whose name
+ * matches this regex is refused from the plugin allowlist even if the bare
+ * credential name is not in PLUGIN_ENV_DENIED_NAMES.
+ */
+const PLUGIN_ENV_DENIED_SUFFIX = /_(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|CREDENTIALS)$/i;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -49,10 +77,110 @@ export interface ExecuteCommandOptions {
    * hooks (they use AFK's own `AFK_PROJECT_DIR`).
    */
   pluginRoot?: string;
+  /**
+   * Canonical plugin name (from `.claude-plugin/plugin.json`). Used to look up
+   * the per-plugin env allowlist in `pluginHookEnv` below. Undefined for
+   * user-global / project-local config hooks.
+   */
+  pluginName?: string;
+  /**
+   * Per-plugin env allowlist from `afk.config.json → pluginHookEnv`. Maps
+   * plugin name → array of env-var names the user has explicitly approved for
+   * forwarding to that plugin's hook subprocesses. Only the allowlist for
+   * `pluginName` is consulted; hooks from other plugins do not benefit.
+   *
+   * Resolution order: process.env first, then afk.env (so a shell-profile
+   * override always wins). AFK's own credentials are refused even if listed —
+   * see {@link PLUGIN_ENV_DENIED_NAMES} and {@link PLUGIN_ENV_DENIED_SUFFIX}.
+   */
+  pluginHookEnv?: Record<string, string[]>;
+  /**
+   * Absolute path to the current session's autosaved markdown transcript file
+   * (`~/.afk/state/transcripts/<isoStamp>.md`). Contains prior conversation
+   * turns in chronological order. Written continuously during the REPL session
+   * so it always contains at least the turns preceding the hook event.
+   *
+   * `null` when no transcript is available (daemon, `afk chat`, web, or REPL
+   * before the first turn). Emitted as `transcript_path` in the stdin payload.
+   */
+  transcriptPath?: string | null;
+  /**
+   * User-configured option values for this plugin, from the index-store entry.
+   * Combined with the manifest `userConfig` schema to produce
+   * `CLAUDE_PLUGIN_OPTION_*` env vars.  Sensitive keys are suppressed by
+   * `buildOptionEnv`; only user-scope plugins supply this.
+   */
+  pluginOptions?: Record<string, string>;
+  /**
+   * Index key for this plugin (e.g. `"my-plugin"` or `"marketplace:my-plugin"`).
+   * Used to resolve `CLAUDE_PLUGIN_DATA` — the per-plugin writable data
+   * directory.  When set, the directory is created lazily (0700) before the
+   * subprocess is spawned and exported as `CLAUDE_PLUGIN_DATA`.
+   */
+  pluginKey?: string;
 }
 
 export interface CommandExecutorResult {
   decision: HookDecision;
+}
+
+/**
+ * Serialize the JSON payload written to a hook command's stdin.
+ *
+ * Invariant: PostToolUse and PostToolUseFailure carry the same `tool_input`
+ * PreToolUse saw. The same input already reaches the same hook scripts on
+ * PreToolUse, so omitting it afterward adds no protection; it only breaks
+ * post-hoc hooks that need to know which file was edited or which command ran.
+ */
+function buildStdinPayload(
+  context: HookContext,
+  sessionId: string | undefined,
+  agentCwd: string,
+  transcriptPath: string | null | undefined,
+): string {
+  const payload: Record<string, unknown> = {
+    session_id: sessionId,
+    hook_event_name: context.event,
+    cwd: agentCwd,
+  };
+
+  if (
+    context.event === 'PreToolUse' ||
+    context.event === 'PostToolUse' ||
+    context.event === 'PostToolUseFailure'
+  ) {
+    payload['tool_name'] = context.toolName;
+    payload['tool_input'] = context.input;
+  }
+  if (context.event === 'PostToolUse') {
+    // Serialize tool output so hook scripts can inspect it.
+    // Omit when output is undefined to avoid confusing hooks with a null key.
+    if (context.output !== undefined) {
+      payload['tool_output'] =
+        typeof context.output === 'string' ? context.output : JSON.stringify(context.output);
+    }
+  }
+  if (context.event === 'PostToolUseFailure') {
+    payload['error'] = context.error;
+  }
+  if (context.event === 'PreCompact') {
+    payload['trigger'] = context.trigger ?? null;
+  }
+  if (context.event === 'UserPromptSubmit') {
+    payload['prompt'] = context.prompt;
+  }
+  if (context.event === 'Stop') {
+    payload['stop_hook_active'] = context.continuation !== undefined && context.continuation > 0;
+    payload['continuation'] = context.continuation ?? 0;
+  }
+  // transcript_path: always emit the key so hook scripts can detect its absence.
+  // Use the supplied path when provided and non-empty; fall back to null so
+  // JSON.stringify always includes the key (undefined would drop it).
+  payload['transcript_path'] =
+    typeof transcriptPath === 'string' && transcriptPath.length > 0
+      ? transcriptPath
+      : null;
+  return JSON.stringify(payload);
 }
 
 /**
@@ -71,107 +199,9 @@ export async function executeCommand(
   // Tilde-expand the command path before spawning.
   const command = opts.command.replace(/^~\//, homedir() + '/');
 
-  // Build the stdin JSON payload.
-  const payload: Record<string, unknown> = {
-    session_id: sessionId,
-    hook_event_name: context.event,
-    cwd: agentCwd,
-  };
+  const stdinPayload = buildStdinPayload(context, sessionId, agentCwd, opts.transcriptPath);
 
-  if (
-    context.event === 'PreToolUse' ||
-    context.event === 'PostToolUse' ||
-    context.event === 'PostToolUseFailure'
-  ) {
-    payload['tool_name'] = context.toolName;
-  }
-  if (context.event === 'PreToolUse') {
-    payload['tool_input'] = context.input;
-  }
-  if (context.event === 'PostToolUse') {
-    // Serialize tool output so hook scripts can inspect it.
-    // Omit when output is undefined to avoid confusing hooks with a null key.
-    if (context.output !== undefined) {
-      payload['tool_output'] =
-        typeof context.output === 'string' ? context.output : JSON.stringify(context.output);
-    }
-  }
-  if (context.event === 'PostToolUseFailure') {
-    payload['error'] = context.error;
-    // Deliberate omission: tool_input is not forwarded to shell hooks for
-    // PostToolUseFailure. The originating input is available in-process via
-    // context.input, but injecting it into the shell environment or stdin
-    // payload risks forwarding untrusted, potentially large, or sensitive
-    // tool inputs to arbitrary shell scripts. Add tool_input here if a
-    // future use-case justifies it, with appropriate size/content guards.
-  }
-  if (context.event === 'PreCompact') {
-    payload['trigger'] = context.trigger ?? null;
-  }
-  if (context.event === 'UserPromptSubmit') {
-    payload['prompt'] = context.prompt;
-  }
-  // transcript_path: always emit the key so hook scripts can detect it.
-  // When unknown, emit null (not undefined — JSON.stringify drops undefined).
-  payload['transcript_path'] = null;
-  const stdinPayload = JSON.stringify(payload);
-
-  // Env vars injected into the child process.
-  //
-  // Security: we deliberately do NOT spread process.env. Forwarding the full
-  // environment to an arbitrary user-configured shell command would expose
-  // secrets like ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN, and OPENAI_API_KEY
-  // to potentially untrusted hook commands. Instead we forward only a minimal
-  // set of runtime-safe variables. If a hook command genuinely needs additional
-  // vars, the user can set them in their shell profile or via the hook command
-  // itself.
-  //
-  // Allowed passthrough: PATH, HOME, SHELL, LANG, TERM (needed for basic shell
-  // operation), TMPDIR / TMP / TEMP (needed for temp-file operations), plus all
-  // AFK_* variables that communicate hook context.
-  const toolName =
-    context.event === 'PreToolUse' ||
-    context.event === 'PostToolUse' ||
-    context.event === 'PostToolUseFailure'
-      ? context.toolName
-      : '';
-
-  const ENV_PASSTHROUGH = ['PATH', 'HOME', 'SHELL', 'LANG', 'TERM', 'TMPDIR', 'TMP', 'TEMP', 'USER', 'LOGNAME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA'] as const;
-  const childEnv: NodeJS.ProcessEnv = {};
-  for (const key of ENV_PASSTHROUGH) {
-    const val = process.env[key];
-    if (val !== undefined) childEnv[key] = val;
-  }
-  // Forward AFK_* vars already in the environment (e.g. AFK_HOME set by the
-  // user's shell profile) so hook scripts can reference them — EXCEPT
-  // AFK_-prefixed credentials. The bare secret names (ANTHROPIC_API_KEY,
-  // TELEGRAM_BOT_TOKEN, OPENAI_API_KEY) are already excluded because they are
-  // not in ENV_PASSTHROUGH, but AFK also exposes secret-bearing aliases under
-  // the AFK_ prefix (AFK_TELEGRAM_BOT_TOKEN, AFK_LOCAL_API_KEY,
-  // AFK_OPENAI_API_KEY). A blanket AFK_* passthrough would re-leak exactly the
-  // secrets this allowlist exists to contain, so skip any AFK_ var whose name
-  // ends in a credential suffix. The suffix anchor avoids false positives on
-  // count-style knobs like AFK_MAX_TOKENS / AFK_MAX_OUTPUT_TOKENS.
-  // Invariant: never forward an AFK_-prefixed secret to a hook subprocess.
-  const AFK_SECRET_SUFFIX = /_(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|CREDENTIALS)$/i;
-  for (const [key, val] of Object.entries(process.env)) {
-    if (!key.startsWith('AFK_') || val === undefined) continue;
-    if (AFK_SECRET_SUFFIX.test(key)) continue;
-    childEnv[key] = val;
-  }
-  // Hook-context vars — always set explicitly so hook scripts can rely on them.
-  childEnv['AFK_PROJECT_DIR'] = agentCwd;
-  childEnv['AFK_SESSION_ID'] = sessionId ?? '';
-  childEnv['AFK_HOOK_EVENT'] = context.event;
-  childEnv['AFK_TOOL_NAME'] = toolName;
-  // Claude Code plugin-hook compatibility: when this hook was contributed by a
-  // plugin, export the documented plugin path vars so `${CLAUDE_PLUGIN_ROOT}`
-  // (and `${CLAUDE_PROJECT_DIR}`) in the command resolve. These are non-secret
-  // paths, safe to forward, and set only for plugin-sourced hooks.
-  if (opts.pluginRoot !== undefined) {
-    childEnv['CLAUDE_PLUGIN_ROOT'] = opts.pluginRoot;
-    childEnv['CLAUDE_PROJECT_DIR'] = agentCwd;
-  }
+  const childEnv = buildChildEnv(opts, agentCwd, sessionId, context);
   // Deliberate omission: no AFK_TOOL_ERROR env var for PostToolUseFailure.
   // The error string is available in the stdin JSON payload under the 'error'
   // key. Injecting it as an env var risks shell-injection if the error message
@@ -183,11 +213,11 @@ export async function executeCommand(
     let settled = false;
 
     function settle(result: CommandExecutorResult): void {
+      // unref() is idempotent — calling it again after a prior settle() is
+      // harmless and ensures the event loop is never pinned by the child process.
+      proc.unref();
       if (settled) return;
       settled = true;
-      // unref only once settled: an unref'd child whose stdio already hit EOF leaves no ref'd
-      // handle while its 'exit' is pending, so with no other handles the loop drained mid-hook.
-      proc.unref();
       resolve(result);
     }
 
@@ -316,6 +346,60 @@ export async function executeCommand(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Apply the per-plugin env allowlist from `pluginHookEnv[pluginName]` onto
+ * `childEnv`. Each listed var is resolved from `process.env` first, then
+ * `afk.env`. AFK's own credentials are silently refused with a console.warn.
+ *
+ * Asymmetry: the deny-list only covers `AFK_*` vars that match
+ * `PLUGIN_ENV_DENIED_SUFFIX` (plus the explicit `PLUGIN_ENV_DENIED_NAMES` set).
+ * A non-AFK credential (e.g. `OPENROUTER_API_KEY`) that the user explicitly
+ * lists in `pluginHookEnv` **will** be forwarded — this is intentional: the
+ * user opted in via their config, which is human-tier gated. The asymmetry is
+ * by design; only AFK's own internal secrets are unconditionally refused.
+ *
+ * Extracted from {@link executeCommand} to keep that function within the 200-
+ * line ceiling (pnpm audit:funcsize:check).
+ */
+function applyPluginHookEnv(
+  childEnv: NodeJS.ProcessEnv,
+  pluginName: string,
+  pluginHookEnv: Record<string, string[]>,
+): void {
+  const allowedVarNames = pluginHookEnv[pluginName];
+  if (allowedVarNames === undefined || allowedVarNames.length === 0) return;
+  // Lazy-read afk.env so it is parsed at most once and only when needed.
+  let afkEnvCache: Record<string, string> | undefined;
+  const getAfkEnv = (): Record<string, string> => {
+    if (afkEnvCache === undefined) {
+      afkEnvCache = readEnvFile(getEnvConfigPath());
+    }
+    return afkEnvCache;
+  };
+  for (const varName of allowedVarNames) {
+    // Refuse AFK's own credentials regardless of user intent.
+    if (
+      PLUGIN_ENV_DENIED_NAMES.has(varName) ||
+      (varName.startsWith('AFK_') && PLUGIN_ENV_DENIED_SUFFIX.test(varName))
+    ) {
+      console.warn(
+        `[hooks] pluginHookEnv: refusing to forward protected credential "${varName}" to plugin "${pluginName}" hook — remove it from pluginHookEnv to suppress this warning`,
+      );
+      continue;
+    }
+    // Resolve: process.env wins over afk.env (shell profile takes precedence).
+    const fromProcess = process.env[varName];
+    if (fromProcess !== undefined && fromProcess !== '') {
+      childEnv[varName] = fromProcess;
+      continue;
+    }
+    const fromFile = getAfkEnv()[varName];
+    if (fromFile !== undefined && fromFile !== '') {
+      childEnv[varName] = fromFile;
+    }
+  }
+}
+
 function parseStdoutDecision(stdout: string): HookDecision {
   const trimmed = stdout.trim();
   if (!trimmed) return {};
@@ -352,13 +436,121 @@ function parseStdoutDecision(stdout: string): HookDecision {
   }
 
   // `hookSpecificOutput.additionalContext` → injectContext
+  // `hookSpecificOutput.updatedInput`       → updatedInput (PreToolUse only)
   const hso = obj['hookSpecificOutput'];
   if (hso !== null && typeof hso === 'object' && !Array.isArray(hso)) {
     const hsoObj = hso as Record<string, unknown>;
     if (typeof hsoObj['additionalContext'] === 'string') {
       decision.injectContext = hsoObj['additionalContext'];
     }
+    // Accept only a plain object; ignore arrays, primitives, null.
+    const ui = hsoObj['updatedInput'];
+    if (ui !== null && typeof ui === 'object' && !Array.isArray(ui)) {
+      decision.updatedInput = ui as Record<string, unknown>;
+    }
   }
 
   return decision;
+}
+
+/**
+ * Build the child-process environment for a hook subprocess.
+ *
+ * Security contract: only a minimal allowlist of runtime-safe vars is forwarded.
+ * Extracted from {@link executeCommand} to keep that function within the 200-
+ * line ceiling (pnpm audit:funcsize:check).
+ */
+function buildChildEnv(
+  opts: ExecuteCommandOptions,
+  agentCwd: string,
+  sessionId: string | undefined,
+  context: HookContext,
+): NodeJS.ProcessEnv {
+  const toolName =
+    context.event === 'PreToolUse' ||
+    context.event === 'PostToolUse' ||
+    context.event === 'PostToolUseFailure'
+      ? context.toolName
+      : '';
+
+  // Allowed passthrough: PATH, HOME, SHELL, LANG, TERM (basic shell operation),
+  // TMPDIR / TMP / TEMP (temp-file ops), USER / LOGNAME (some hooks probe them).
+  //
+  // Note (#2933): TMPDIR/TMP/TEMP are sourced from process.env here, NOT from
+  // the session's private per-session TMPDIR (session-tmpdir.ts). Hook-spawned
+  // shells therefore share the inherited process TMPDIR rather than the session's
+  // isolated directory. Threading the session env through to buildChildEnv would
+  // require touching many call sites. The risk is bounded: hooks run short
+  // user-supplied scripts whose TMPDIR usage is outside the agent's control, and
+  // the per-session isolation invariant applies only to bash/test_run tools.
+  const ENV_PASSTHROUGH = ['PATH', 'HOME', 'SHELL', 'LANG', 'TERM', 'TMPDIR', 'TMP', 'TEMP', 'USER', 'LOGNAME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA'] as const;
+  const childEnv: NodeJS.ProcessEnv = {};
+  for (const key of ENV_PASSTHROUGH) {
+    const val = process.env[key];
+    if (val !== undefined) childEnv[key] = val;
+  }
+  // Forward non-secret AFK_* vars (e.g. AFK_HOME) but NEVER AFK_-prefixed
+  // credential aliases. Suffix pattern avoids false positives on count-style
+  // knobs like AFK_MAX_TOKENS.
+  const AFK_SECRET_SUFFIX = /_(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|CREDENTIALS)$/i;
+  for (const [key, val] of Object.entries(process.env)) {
+    if (!key.startsWith('AFK_') || val === undefined) continue;
+    if (AFK_SECRET_SUFFIX.test(key)) continue;
+    childEnv[key] = val;
+  }
+  childEnv['AFK_PROJECT_DIR'] = agentCwd;
+  childEnv['AFK_SESSION_ID'] = sessionId ?? '';
+  childEnv['AFK_HOOK_EVENT'] = context.event;
+  childEnv['AFK_TOOL_NAME'] = toolName;
+  // Plugin path vars (non-secret); only for plugin-sourced hooks.
+  if (opts.pluginRoot !== undefined) {
+    childEnv['CLAUDE_PLUGIN_ROOT'] = opts.pluginRoot;
+    childEnv['CLAUDE_PROJECT_DIR'] = agentCwd;
+  }
+  // Per-plugin env allowlist (#2459) — see applyPluginHookEnv.
+  if (opts.pluginName !== undefined && opts.pluginHookEnv !== undefined) {
+    applyPluginHookEnv(childEnv, opts.pluginName, opts.pluginHookEnv);
+  }
+  // CLAUDE_PLUGIN_OPTION_* — export declared, non-sensitive userConfig options.
+  if (opts.pluginRoot !== undefined) {
+    applyPluginOptionEnv(childEnv, opts.pluginRoot, opts.pluginOptions);
+  }
+  // CLAUDE_PLUGIN_DATA — per-plugin writable data dir (created lazily, 0700).
+  if (opts.pluginKey !== undefined) {
+    const dataDir = getPluginDataDir(opts.pluginKey);
+    try {
+      mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    } catch {
+      // Best-effort: if mkdir fails (e.g. permissions) we still set the var
+      // so the hook knows the intended path.
+    }
+    childEnv['CLAUDE_PLUGIN_DATA'] = dataDir;
+  }
+  return childEnv;
+}
+
+/**
+ * Inject `CLAUDE_PLUGIN_OPTION_*` env vars derived from the plugin's
+ * `userConfig` manifest block and the user's stored option values.
+ *
+ * Extracted from {@link buildChildEnv} to keep that function within the
+ * 200-line ceiling (pnpm audit:funcsize:check).
+ */
+function applyPluginOptionEnv(
+  childEnv: NodeJS.ProcessEnv,
+  pluginRoot: string,
+  storedOptions: Record<string, string> | undefined,
+): void {
+  let schema;
+  try {
+    schema = readUserConfigSchema(pluginRoot);
+  } catch (err) {
+    // Collision in manifest — warn and skip rather than crashing the hook run.
+    console.warn(`[hooks] plugin userConfig schema error at ${pluginRoot}: ${String(err)}`);
+    return;
+  }
+  const optEnv = buildOptionEnv(schema, storedOptions);
+  for (const [key, val] of Object.entries(optEnv)) {
+    childEnv[key] = val;
+  }
 }

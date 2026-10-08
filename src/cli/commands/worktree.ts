@@ -16,6 +16,7 @@ import { handleCommandError } from '../errors/index.js';
 import { promisify } from 'node:util';
 import { runSweep } from '../../agent/worktree/worktree-sweep.js';
 import type { SweepOptions } from '../../agent/worktree/worktree-sweep.js';
+import { resolveSweepPolicy } from '../../agent/worktree/sweep-policy.js';
 import { loadConfig } from '../config.js';
 import type { ExecFileFn } from '../../agent/worktree/worktree-sweep.js';
 import { errorMessage } from '../../utils/errors.js';
@@ -113,20 +114,21 @@ export function registerWorktreeCommand(program: Command): void {
       }
 
       const config = loadConfig();
-      const pruneConfig = config.daemon?.worktreePrune;
-
-      const envClean = parseInt(env.AFK_WORKTREE_MAX_AGE_CLEAN ?? '', 10);
-      const envDirty = parseInt(env.AFK_WORKTREE_MAX_AGE_DIRTY ?? '', 10);
-
-      const maxAgeDaysClean =
-        options.maxAgeDaysClean !== undefined
-          ? parseInt(options.maxAgeDaysClean, 10)
-          : (pruneConfig?.maxAgeDaysClean ?? (Number.isNaN(envClean) ? 14 : envClean));
-
-      const maxAgeDaysDirty =
-        options.maxAgeDaysDirty !== undefined
-          ? parseInt(options.maxAgeDaysDirty, 10)
-          : (pruneConfig?.maxAgeDaysDirty ?? (Number.isNaN(envDirty) ? 30 : envDirty));
+      const { maxAgeDaysClean, maxAgeDaysDirty } = resolveSweepPolicy({
+        overrides: {
+          ...(options.maxAgeDaysClean !== undefined
+            ? { maxAgeDaysClean: parseInt(options.maxAgeDaysClean, 10) }
+            : {}),
+          ...(options.maxAgeDaysDirty !== undefined
+            ? { maxAgeDaysDirty: parseInt(options.maxAgeDaysDirty, 10) }
+            : {}),
+        },
+        config: config.daemon?.worktreePrune,
+        env: {
+          maxAgeDaysClean: env.AFK_WORKTREE_MAX_AGE_CLEAN,
+          maxAgeDaysDirty: env.AFK_WORKTREE_MAX_AGE_DIRTY,
+        },
+      });
 
       let scopeVal: Scope;
       try {

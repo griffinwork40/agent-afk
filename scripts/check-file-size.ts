@@ -50,6 +50,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { parseGrowthArgs } from './lib/growth-args.js';
 import {
   changedSince,
   collectViolations,
@@ -60,6 +61,8 @@ import {
   type RatchetConfig,
   type Violation,
 } from './lib/size-ratchet.js';
+import { EXCLUDED_DIRS, isScannable } from './lib/file-size-scope.js';
+import { walkSourceFiles } from './lib/walk-source-files.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -77,22 +80,6 @@ const BASELINE_REL = '.filesize-baseline.json';
  * agent must read whole to establish edit safety.
  */
 const SCAN_ROOTS = ['src', 'scripts'] as const;
-
-/**
- * Contract: excluded paths are those where a line count does not measure
- * context cost. Test files are a flat list of independent cases an agent greps
- * into, never read start-to-finish (223 exceed the ceiling; including them would
- * triple the baseline for no edit-safety benefit). Fixtures and generated
- * declarations are not authored prose or logic.
- */
-const EXCLUDED_SUFFIXES = ['.test.ts', '.spec.ts', '.d.ts'] as const;
-/**
- * `web-ui-assets` is the gitignored Vite bundle output (`src/web-ui-assets/`,
- * see .gitignore) — generated, never authored, and never seen by CI. Excluding
- * it keeps a local run clean after `pnpm build` (#2206).
- */
-const EXCLUDED_DIRS = ['__fixtures__', '__test-utils__', 'node_modules', 'dist', 'web-ui-assets'] as const;
-const INCLUDED_EXTENSIONS = ['.ts', '.tsx', '.mjs', '.js'] as const;
 
 const RATCHET: RatchetConfig = {
   limit: LIMIT,
@@ -145,25 +132,16 @@ function countCodeLines(absPath: string): number {
   return codeLines;
 }
 
-function isScannable(relPath: string): boolean {
-  const base = path.basename(relPath);
-  if (!INCLUDED_EXTENSIONS.some((e) => base.endsWith(e))) return false;
-  if (EXCLUDED_SUFFIXES.some((s) => base.endsWith(s))) return false;
-  return !relPath.replaceAll('\\', '/').split('/').some((seg) => EXCLUDED_DIRS.includes(seg as never));
-}
-
 function walk(dir: string, out: string[]): void {
-  if (!fs.existsSync(dir)) return;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (EXCLUDED_DIRS.includes(entry.name as never)) continue;
-      walk(full, out);
-    } else if (entry.isFile()) {
-      const rel = path.relative(repoRoot, full);
-      if (isScannable(rel)) out.push(rel);
-    }
-  }
+  const extraExclude = new Set(EXCLUDED_DIRS.filter(d => d !== 'node_modules' && d !== 'dist'));
+  const absPaths: string[] = [];
+  walkSourceFiles(
+    dir,
+    (absPath) => isScannable(path.relative(repoRoot, absPath)),
+    absPaths,
+    extraExclude,
+  );
+  for (const abs of absPaths) out.push(path.relative(repoRoot, abs));
 }
 
 function scanAll(): Map<string, number> {
@@ -211,19 +189,16 @@ function reportAndExit(sizes: Map<string, number>, baseline: Baseline, violation
 function main(): void {
   const argv = process.argv.slice(2);
 
-  if (argv.includes('--update-baseline')) {
-    const allowGrowth = argv.includes('--allow-growth');
-    const reasonIdx = argv.indexOf('--reason');
-    const reason = reasonIdx >= 0 ? (argv[reasonIdx + 1] ?? '') : '';
+  /** All flag tokens this script recognises — used by parseGrowthArgs to detect missing --reason values. */
+  const KNOWN_FLAGS = ['--check', '--update-baseline', '--changed-vs', '--list', '--allow-growth', '--reason'];
 
-    if (allowGrowth && !reason) {
-      console.error('✗ check-file-size: --allow-growth requires --reason "<text>" (non-empty).');
+  if (argv.includes('--update-baseline')) {
+    const parsed = parseGrowthArgs(argv, KNOWN_FLAGS);
+    if ('error' in parsed) {
+      console.error(`✗ check-file-size: ${parsed.error}`);
       process.exit(1);
     }
-    if (reason.startsWith('--')) {
-      console.error('✗ check-file-size: --reason value looks like a flag. Did you mean: --reason "..." --allow-growth?');
-      process.exit(1);
-    }
+    const { allowGrowth, reason } = parsed;
 
     const { kept, dropped, blocked } = updateBaseline(RATCHET, scanAll(), { allowGrowth, reason });
 

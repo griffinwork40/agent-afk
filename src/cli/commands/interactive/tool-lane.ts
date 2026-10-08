@@ -1,16 +1,16 @@
+import { mergeAgentLabel } from './tool-lane.labels.js';
+import { formatSkillIdentity, type SkillIdentity } from '../../_lib/skill-identity-format.js';
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import { SUBAGENT_TOOLS, NESTING_TOOLS, SKILL_TOOLS } from '../../tool-category.js';
 import { formatToolLine, formatToolResultLine } from './tool-lane-format.js';
 import type { DiffPayload } from '../../../utils/diff.js';
 import { stripAnsi } from '../../display.js';
-import { ELAPSED_GRACE_MS } from '../../terminal-compositor.scrollback.js';
 import {
-  formatAgentSummary,
-  formatAgentHeader,
-  formatAgentChildren,
   renderGroupedRootTools,
   buildChildMap,
   freshToolEntry,
+  formatAgentSummary,
+  formatAgentChildren,
   type ToolEntry,
   type TextEntry,
   type Entry,
@@ -19,11 +19,12 @@ import type { ToolLaneFlash } from './tool-lane-flash.js';
 import type { ElementFade } from '../../smoke-fade.js';
 import { trailingCompletedRootToolName } from './tool-lane.queries.js';
 import { renderToolLaneOverlay } from './tool-lane-overlay.js';
+import { propagateChildFailure as propagateChildFailureIn } from './tool-lane.ancestry.js';
+import { elapsedDisplayNeedsUpdate } from './tool-lane.elapsed-check.js';
 import {
-  ancestorDepthOf as ancestorDepthIn,
-  propagateChildFailure as propagateChildFailureIn,
-} from './tool-lane.ancestry.js';
-import { scrollbackSeparator } from './tool-lane.scrollback-separator.js';
+  flushSource as flushSourceImpl,
+  flushCompletedRoots as flushCompletedRootsImpl,
+} from './tool-lane.flush.js';
 
 // Re-export types from render module for consumers
 export type { ToolEntry, TextEntry, Entry };
@@ -86,6 +87,17 @@ export class ToolLane {
    * `null` on non-TTY surfaces (no overlay to repaint) and in tests.
    */
   flash: ToolLaneFlash | null = null;
+
+  /**
+   * The most recent `capturePath` from any bash tool result with a captured
+   * output file. Updated in {@link addResult} when `chunk.capturePath` is
+   * present. Used by the Ctrl+G viewer to open the last capture without
+   * requiring the user to know the exact file path.
+   */
+  private lastCapturePath: string | undefined = undefined;
+
+  /** Return the most recent bash capture path, or `undefined` if none. */
+  getLastCapturePath(): string | undefined { return this.lastCapturePath; }
 
   /**
    * Optional AFK_SMOKE_TEXT whole-element fade for live rows. Set by
@@ -159,36 +171,19 @@ export class ToolLane {
     this.order.push(toolUseId);
   }
 
-  /**
-   * Mutate an existing `agent`/`Task` ToolEntry to display as `Agent(<label>)`.
-   * Returns `true` if the entry was found, is a tool entry, belongs to
-   * SUBAGENT_TOOLS, and has NOT already been merged (toolName !== 'Agent').
-   * Returns `false` otherwise. Callers use the return value as a merge-happened
-   * guard to decide whether to create a synthetic child entry.
-   *
-   * Invariants: toolUseId key, agentContext, and agentIdStack are all
-   * unchanged. Only toolName, toolInput, and prefix are mutated.
-   */
   mergeAgentLabel(parentToolUseId: string, label: string, maxWidth?: number): boolean {
-    const entry = this.entries.get(parentToolUseId);
-    if (entry?.kind !== 'tool') return false;
-    if (!SUBAGENT_TOOLS.has(entry.toolName)) return false;
-    if (entry.toolName === 'Agent') return false; // already merged — prevent grandchild overwrite
-    // Same rationale as addStart / addStartWithAgentContext: strip ANSI at
-    // storage time so LLM-emitted escapes in the subagent label can't reach
-    // palette.dim() on any downstream render surface (overlay or flush).
-    const safeLabel = stripAnsi(label);
-    const input = `(${safeLabel})`;
-    entry.toolName = 'Agent';
-    entry.toolInput = input;
-    entry.prefix = formatToolLine('Agent' + input, maxWidth);
-    return true;
+    return mergeAgentLabel(this.entries, parentToolUseId, label, maxWidth);
   }
 
-  /**
-   * Update an existing tool entry's `agentContext`. No-op if the entry
-   * doesn't exist or is a text entry.
-   */
+  /** Update display only; never mutate the actual tool invocation. */
+  setSkillIdentity(toolUseId: string, identity: SkillIdentity): void {
+    const entry = this.entries.get(toolUseId);
+    if (entry?.kind !== 'tool' || !SKILL_TOOLS.has(entry.toolName)) return;
+    entry.toolInput = `(${formatSkillIdentity(identity, 240)})`;
+    entry.prefix = formatToolLine(entry.toolName + entry.toolInput);
+  }
+
+  /** Update an existing entry's nesting, without changing its identity. */
   setAgentContext(toolUseId: string, agentContext: string | undefined): void {
     const entry = this.entries.get(toolUseId);
     if (entry?.kind === 'tool') {
@@ -280,6 +275,8 @@ export class ToolLane {
     if (this.agentIdStack.at(-1) === toolUseId) {
       this.agentIdStack.pop();
     }
+    // Track the most recent bash capture path for the Ctrl+G viewer (#1505).
+    if (chunk.capturePath !== undefined) this.lastCapturePath = chunk.capturePath;
     // Deliberately does NOT touch `activeTools`. The dispatcher is the only
     // observer of what is actually running and pushes a fresh snapshot on every
     // start and settle (see notifyToolActivity), so inferring the live set from
@@ -405,28 +402,7 @@ export class ToolLane {
    * nothing to repaint until the grace period expires.
    */
   checkElapsedDisplayNeedsUpdate(): boolean {
-    const now = Date.now();
-    let changed = false;
-    // Prune tracking entries for IDs that are no longer in-flight.
-    for (const id of this.lastElapsedSecond.keys()) {
-      const entry = this.entries.get(id);
-      if (!entry || entry.kind !== 'tool' || entry.result !== undefined) {
-        this.lastElapsedSecond.delete(id);
-      }
-    }
-    for (const id of this.order) {
-      const entry = this.entries.get(id);
-      if (!entry || entry.kind !== 'tool' || entry.result !== undefined) continue;
-      const elapsedMs = now - entry.startedAt;
-      if (elapsedMs < ELAPSED_GRACE_MS) continue; // within grace period — display is ''
-      const currentSec = Math.floor(elapsedMs / 1000);
-      const lastSec = this.lastElapsedSecond.get(id);
-      if (lastSec === undefined || currentSec !== lastSec) {
-        this.lastElapsedSecond.set(id, currentSec);
-        changed = true;
-      }
-    }
-    return changed;
+    return elapsedDisplayNeedsUpdate(this.entries, this.order, this.lastElapsedSecond);
   }
 
   hasPending(): boolean {
@@ -495,24 +471,6 @@ export class ToolLane {
   }
 
   /**
-   * Walk the `agentContext` chain upward from `id`, counting how many ancestor
-   * tool entries are still alive in the lane. Returns 0 for entries at root
-   * (no agentContext) or whose ancestor chain leads to a missing entry.
-   *
-   * Used by {@link flushSource} to compute the indent depth at which a
-   * subagent's committed scrollback block should land, so it visually nests
-   * under its still-in-flight ancestor (e.g. a `skill` parent that hasn't
-   * yet completed) instead of unparenting itself on the Done transition.
-   *
-   * Defensive cycle guard: caps the walk at a generous depth so a corrupted
-   * graph can't spin forever. In normal operation depth is bounded by
-   * MAX_NESTING_DEPTH (currently small single-digit), well under the cap.
-   */
-  private ancestorDepthOf(id: string): number {
-    return ancestorDepthIn(this.entries, id);
-  }
-
-  /**
    * Flush only the entries belonging to a single source — identified by
    * `parentId` (the synthetic Agent tool-use ID). Collects the parent entry
    * and all descendants (children + grandchildren via `agentContext`), removes
@@ -542,140 +500,10 @@ export class ToolLane {
    * append-only scrollback, regardless of when the ancestor resolves.
    */
   flushSource(parentId: string, homeDir?: string): string[] {
-    const parentEntry = this.entries.get(parentId);
-    if (!parentEntry || parentEntry.kind !== 'tool') return [];
-
-    // Resolve the in-lane ancestor depth BEFORE we delete any entries —
-    // the walk depends on the parent (skill, compose, etc.) still being
-    // present in `this.entries`. Capturing it post-delete would always return
-    // 0 (the parent's agentContext would still be set but the lookup-by-id
-    // would miss the now-deleted ancestor, falsely flattening the indent).
-    //
-    // Invariant: in the flushSource path the ancestor (skill/compose) is BY
-    // DEFINITION still live — it survives this flush as an ancestor of the
-    // target. A live ancestor's last-child is therefore UNKNOWABLE at commit
-    // time: it may spawn another wave, or its last-INSERTED child may complete
-    // first. Committing a CLOSED (`  `) ancestor column into append-only
-    // scrollback bakes a guess that the live overlay (and the ancestor's own
-    // later closer / next-wave anchor) then contradicts — re-opening col-0
-    // below the closed rows and severing the spine (the "fragmentation" the
-    // prior ancestorIsLastOf approach produced). So every live-ancestor column
-    // stays OPEN here; the column only legitimately closes when the ancestor
-    // itself settles, which the dispose-time flush() path handles via the
-    // normal recursive connector assignment (it already passes []).
-    const ancestorIsLast: readonly boolean[] = Array.from(
-      { length: this.ancestorDepthOf(parentId) },
-      () => false,
-    );
-
-    // ── Eager ancestor-header emission ────────────────────────────────────
-    //
-    // Walk from parentId upward through agentContext links, collecting all
-    // live ancestor entries. Emit header lines for those whose header has
-    // not yet been committed (headerEmitted !== true), outermost first.
-    // Mark each emitted ancestor with headerEmitted = true so sibling
-    // flushSource calls and dispose-time flush() do not re-emit them.
-    //
-    // The chain is collected child→parent, then reversed to emit outermost-
-    // first (so the outermost frame header always precedes its descendants
-    // in scrollback, matching natural reading order).
-    const ancestorLines: string[] = [];
-    {
-      const chain: Array<{ entry: ToolEntry; depth: number }> = [];
-      const seen = new Set<string>([parentId]);
-      let cur: string | undefined = parentEntry.agentContext;
-      while (cur !== undefined) {
-        if (seen.has(cur)) break;           // cycle guard
-        seen.add(cur);
-        const anc = this.entries.get(cur);
-        if (!anc || anc.kind !== 'tool') break; // missing or text entry
-        chain.push({ entry: anc, depth: this.ancestorDepthOf(anc.toolUseId) });
-        cur = anc.agentContext;
-      }
-      // Reverse to get outermost ancestor first.
-      chain.reverse();
-      for (const { entry: anc, depth } of chain) {
-        if (anc.headerEmitted) continue;   // already in scrollback — skip
-        ancestorLines.push(formatAgentHeader(anc, Array.from({ length: depth }, () => false)));
-        anc.headerEmitted = true;
-      }
-    }
-
-    // Collect all descendants: walk the agentContext tree breadth-first.
-    const collected = new Set<string>([parentId]);
-    const queue = [parentId];
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      for (const [id, entry] of this.entries) {
-        if (collected.has(id)) continue;
-        const ctx = entry.kind === 'tool' ? entry.agentContext : entry.agentContext;
-        if (ctx === current) {
-          collected.add(id);
-          if (entry.kind === 'tool') queue.push(id);
-        }
-      }
-    }
-
-    // Build a child map scoped to collected entries only.
-    const childMap = new Map<string, Entry[]>();
-    for (const id of this.order) {
-      if (!collected.has(id)) continue;
-      const entry = this.entries.get(id);
-      if (!entry) continue;
-      const ctx = entry.kind === 'tool' ? entry.agentContext : entry.agentContext;
-      if (!ctx) continue;
-      let children = childMap.get(ctx);
-      if (!children) {
-        children = [];
-        childMap.set(ctx, children);
-      }
-      children.push(entry);
-    }
-
-    // Render via the same path as flush(), shifted by the ancestor depth so
-    // nested completes don't visually escape their still-in-flight parent.
-    //
-    // External constraint (append-only scrollback, mirror of flush()'s
-    // headerEmitted guard at line ~540): if parentEntry itself was already
-    // promoted to headerEmitted by an earlier sibling's flushSource (e.g.
-    // paranoid completes first, walks up the chain marking devils-advocate
-    // headerEmitted=true; pragmatist completes second and is the next
-    // flushSource target — its parentEntry chain stops at devils-advocate
-    // which is already in scrollback), emit ONLY the children + closer via
-    // `formatAgentChildren`, NOT the full block with re-emitted header.
-    // Without this guard, formatAgentSummary unconditionally re-emits the
-    // header line and a duplicate appears under the eagerly-committed copy.
-    //
-    // Note: this guard targets a different case from the ancestor-walk above
-    // (which handles ancestors OF parentEntry). Here we're handling
-    // parentEntry itself being headerEmitted — possible when parentEntry is
-    // a NESTING_TOOL ancestor whose own descendant earlier triggered an
-    // eager emission that included parentEntry, and now parentEntry itself
-    // is completing (e.g., devils-advocate finishes after all its children).
-    const children = childMap.get(parentEntry.toolUseId) ?? [];
-    const childBlock = parentEntry.headerEmitted
-      ? formatAgentChildren(parentEntry, children, childMap, homeDir, ancestorIsLast, this.compactScrollback).join('\n')
-      : formatAgentSummary(parentEntry, children, childMap, homeDir, ancestorIsLast, this.compactScrollback);
-
-    // Remove collected entries from the lane.
-    for (const id of collected) {
-      this.entries.delete(id);
-    }
-    this.order = this.order.filter((id) => !collected.has(id));
-
-    // Contract: returns [ancestorHeaders..., childBlock, separator].
-    //
-    // Spine-continuation separator: when this entry sits under a live
-    // ancestor (compose/skill), the trailing element is a non-empty dim `│`
-    // spine string so the column stays continuous between sibling bands in
-    // scrollback. At root depth (0 ancestors), the separator is `''`.
-    //
-    // Root-depth caller contract: the trailing `''` must be committed as a
-    // dedicated blank row, not inside the joined block — see
-    // `commitSubagentBlock` (src/cli/_lib/commit-block.ts).
-    const blockLines = childBlock === '' ? [] : [childBlock];
-    const separator = scrollbackSeparator(ancestorIsLast.length);
-    return [...ancestorLines, ...blockLines, separator];
+    // Cast: ToolLane satisfies ToolLaneFlushHost structurally; private modifiers
+    // prevent the direct assignment. The cast is safe: the flush helpers only
+    // access the declared fields (entries, order, compactScrollback), all present.
+    return flushSourceImpl(this as unknown as import('./tool-lane.flush.js').ToolLaneFlushHost, parentId, homeDir);
   }
 
   /**
@@ -711,79 +539,7 @@ export class ToolLane {
    *   to {@link getOverlay} so in-flight rows persist visually.
    */
   flushCompletedRoots(homeDir?: string): string[] {
-    if (this.entries.size === 0) return [];
-
-    const childMap = buildChildMap(this.entries, this.order);
-    const rootOrder: string[] = [];
-
-    for (const id of this.order) {
-      const entry = this.entries.get(id);
-      if (!entry || entry.kind !== 'tool') continue;
-      if (entry.agentContext) continue;          // not a root
-      if (entry.result === undefined) continue;  // in-flight — keep in lane
-      rootOrder.push(id);
-    }
-
-    if (rootOrder.length === 0) return [];
-
-    // Render exactly as flush() does for these roots. Code is duplicated
-    // (not extracted) because the bodies diverge on the removal step at
-    // the end — flush() nukes everything, flushCompletedRoots() removes
-    // only collected IDs. Extracting would require threading a "what to
-    // collect" predicate that obscures the intent at the call sites.
-    const lines: string[] = [];
-    const groups = new Map<string, ToolEntry[]>();
-    const groupOrder: string[] = [];
-
-    for (const id of rootOrder) {
-      const entry = this.entries.get(id);
-      if (!entry || entry.kind !== 'tool') continue;
-      const children = childMap.get(entry.toolUseId);
-
-      if (NESTING_TOOLS.has(entry.toolName)) {
-        lines.push(...renderGroupedRootTools(groups, groupOrder, homeDir));
-        groups.clear();
-        groupOrder.length = 0;
-        if (entry.headerEmitted) {
-          const closerLines = formatAgentChildren(entry, children ?? [], childMap, homeDir, [], this.compactScrollback);
-          lines.push(...closerLines);
-        } else {
-          lines.push(formatAgentSummary(entry, children ?? [], childMap, homeDir, undefined, this.compactScrollback));
-        }
-      } else {
-        if (!groups.has(entry.toolName)) {
-          groups.set(entry.toolName, []);
-          groupOrder.push(entry.toolName);
-        }
-        groups.get(entry.toolName)!.push(entry);
-      }
-    }
-
-    lines.push(...renderGroupedRootTools(groups, groupOrder, homeDir));
-
-    // BFS-collect each flushed root + its descendants (same traversal as
-    // flushSource at tool-lane.ts:467-479). Only collected IDs are removed;
-    // in-flight roots and their subtrees remain untouched in the lane.
-    const collected = new Set<string>(rootOrder);
-    const queue = [...rootOrder];
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      for (const [id, entry] of this.entries) {
-        if (collected.has(id)) continue;
-        const ctx = entry.kind === 'tool' ? entry.agentContext : entry.agentContext;
-        if (ctx === current) {
-          collected.add(id);
-          if (entry.kind === 'tool') queue.push(id);
-        }
-      }
-    }
-
-    for (const id of collected) {
-      this.entries.delete(id);
-    }
-    this.order = this.order.filter((id) => !collected.has(id));
-
-    return lines;
+    return flushCompletedRootsImpl(this as unknown as import('./tool-lane.flush.js').ToolLaneFlushHost, homeDir);
   }
 
   flush(homeDir?: string): string[] {

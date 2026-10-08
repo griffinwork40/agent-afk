@@ -36,6 +36,8 @@ import {
 import { randomBytes } from 'node:crypto';
 import { escapeHtml } from './formatter.js';
 import { escapeRegExp } from '../utils/regexp.js';
+import { validateTextAnswer, validateNumberAnswer } from '../agent/elicitation/answer-validation.js';
+import { truncateTelegramLabel } from '../utils/truncate-telegram-label.js';
 
 function nextElicitationId(): string {
   return `elic-${randomBytes(8).toString('hex')}`;
@@ -45,20 +47,8 @@ function nextElicitationId(): string {
 /** Sentinel returned by the custom-entry wildcard handler to the dispatch table. */
 const CUSTOM_ENTRY_SENTINEL_INDEX = -1;
 
-/**
- * Truncate a button label to Telegram's ~64-byte UTF-8 limit.
- * Uses Buffer to count bytes correctly for multi-byte codepoints
- * and slices without splitting a multi-byte sequence mid-codepoint.
- *
- * M2: choice labels are agent-controlled and can exceed 64 bytes;
- * overflowing Telegram's limit causes sendMessage to return a 400
- * that the `.catch` swallows, silently resolving `decline`.
- */
-function truncateLabel(label: string, maxBytes = 64): string {
-  if (Buffer.byteLength(label, 'utf8') <= maxBytes) return label;
-  const buf = Buffer.from(label, 'utf8').subarray(0, maxBytes);
-  return new TextDecoder('utf-8', { fatal: false }).decode(buf).replace(/\uFFFD$/, '');
-}
+/** Alias for the shared helper (kept for local call-site readability). */
+const truncateLabel = truncateTelegramLabel;
 
 /**
  * Build a Telegram elicitation handler.
@@ -347,12 +337,11 @@ export function makeTelegramElicitationHandler(
             options.signal.addEventListener('abort', onAbort, { once: true });
             return;
           }
-          const n = Number(trimmed);
-          if (!isFinite(n)) {
-            // Re-prompt: re-register and ask again
+          const numResult = validateNumberAnswer(trimmed, request);
+          if (!numResult.ok) {
             resolved = false;
             isFirstPrompt = false;
-            bot.telegram.sendMessage(chatId, '❌ Please enter a valid number.', threadOpts).catch(() => {});
+            bot.telegram.sendMessage(chatId, `❌ ${numResult.message}`, threadOpts).catch(() => {});
             // H1: abort guard before re-registration.
             if (options.signal.aborted) return;
             setPending(handleText);
@@ -360,29 +349,7 @@ export function makeTelegramElicitationHandler(
             options.signal.addEventListener('abort', onAbort, { once: true });
             return;
           }
-          if (request.min !== undefined && n < request.min) {
-            resolved = false;
-            isFirstPrompt = false;
-            bot.telegram.sendMessage(chatId, `❌ Value must be ≥ ${request.min}.`, threadOpts).catch(() => {});
-            // H1: abort guard before re-registration.
-            if (options.signal.aborted) return;
-            setPending(handleText);
-            // H1: re-attach abort listener for the next wait.
-            options.signal.addEventListener('abort', onAbort, { once: true });
-            return;
-          }
-          if (request.max !== undefined && n > request.max) {
-            resolved = false;
-            isFirstPrompt = false;
-            bot.telegram.sendMessage(chatId, `❌ Value must be ≤ ${request.max}.`, threadOpts).catch(() => {});
-            // H1: abort guard before re-registration.
-            if (options.signal.aborted) return;
-            setPending(handleText);
-            // H1: re-attach abort listener for the next wait.
-            options.signal.addEventListener('abort', onAbort, { once: true });
-            return;
-          }
-          resolve({ action: 'accept', content: { value: n } });
+          resolve({ action: 'accept', content: { value: numResult.value } });
           return;
         }
 
@@ -436,6 +403,21 @@ export function makeTelegramElicitationHandler(
           // H1: re-attach abort listener for the next wait.
           options.signal.addEventListener('abort', onAbort, { once: true });
           return;
+        }
+        // Validate minLength / maxLength constraints (shared with CLI path).
+        if (trimmed !== '') {
+          const textResult = validateTextAnswer(trimmed, request);
+          if (!textResult.ok) {
+            resolved = false;
+            isFirstPrompt = false;
+            bot.telegram.sendMessage(chatId, `❌ ${textResult.message}`, threadOpts).catch(() => {});
+            // H1: abort guard before re-registration.
+            if (options.signal.aborted) return;
+            setPending(handleText);
+            // H1: re-attach abort listener for the next wait.
+            options.signal.addEventListener('abort', onAbort, { once: true });
+            return;
+          }
         }
         resolve({ action: 'accept', content: { value: trimmed } });
       }

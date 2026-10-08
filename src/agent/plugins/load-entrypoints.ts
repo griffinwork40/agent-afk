@@ -100,8 +100,8 @@ const pluginHooks = new Set<{
  * invariant at :10-11. Unknown future options are forwarded unless explicitly
  * listed here.
  */
-const PLUGIN_REGISTER_OPTION_ALLOWLIST = ['longRunning'] as const satisfies ReadonlyArray<keyof RegisterOptions>;
-type PluginRegisterOptions = Omit<RegisterOptions, (typeof PLUGIN_REGISTER_OPTION_ALLOWLIST)[number]>;
+const PLUGIN_REGISTER_OPTION_DENYLIST = ['longRunning'] as const satisfies ReadonlyArray<keyof RegisterOptions>;
+type PluginRegisterOptions = Omit<RegisterOptions, (typeof PLUGIN_REGISTER_OPTION_DENYLIST)[number]>;
 
 /**
  * Filter plugin-supplied {@link RegisterOptions} to the allowed subset.

@@ -295,7 +295,7 @@ describe('Concurrent open', () => {
 });
 
 describe('Schema versioning', () => {
-  it('stamps the current schema version (4) on a fresh database', () => {
+  it('stamps the current schema version (5) on a fresh database', () => {
     // The store created in beforeEach is a fresh DB.
     // Re-open the same dir with better-sqlite3 directly to read the pragma.
     // Bumped to v3 in Stage D (nullable sessions.actor column), then to v4 by
@@ -305,7 +305,7 @@ describe('Schema versioning', () => {
     const db = new Database(join(tmpMemDir, 'memory.db'));
     const version = db.pragma('user_version', { simple: true });
     db.close();
-    expect(version).toBe(4);
+    expect(version).toBe(5);
   });
 
   it('opens cleanly when user_version matches SCHEMA_VERSION', () => {

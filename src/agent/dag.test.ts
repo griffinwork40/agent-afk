@@ -128,7 +128,7 @@ describe('validateDAG', () => {
 describe('runDAG', () => {
   it('returns empty result for empty graph', async () => {
     const result = await runDAG({ nodes: [], edges: [] }, new AbortController().signal);
-    expect(result).toEqual({ outputs: {}, failed: [], skipped: [] });
+    expect(result).toEqual({ outputs: {}, failed: [], skipped: [], partial: [] });
   });
 
   it('executes single root node', async () => {
@@ -258,8 +258,8 @@ describe('runDAG — fail-fast', () => {
       { failFast: true },
     );
 
-    expect(result.failed).toHaveLength(1);
-    expect(result.failed[0]!.id).toBe('B');
+    expect(result.failed.map((entry) => entry.id)).toEqual(['B', 'C']);
+    expect(cRun).not.toHaveBeenCalled();
     expect(result.skipped).toContain('D');
     expect(result.outputs['A']).toBe(1);
     expect(result.outputs['D']).toBeUndefined();

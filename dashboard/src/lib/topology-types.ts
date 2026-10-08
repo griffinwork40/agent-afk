@@ -36,6 +36,12 @@ export interface SpineNode {
   preview?: string;
   /** Elapsed milliseconds. */
   durationMs?: number;
+  /** Tool nodes only: ledger preview of the result (possibly clipped). */
+  output?: string;
+  /** Tool nodes only: `output` is clipped; full text is lazy-loadable. */
+  outputClipped?: boolean;
+  /** Tool nodes only: the ledger carried no result for this call. */
+  outputUnavailable?: boolean;
   /** USD cost (agent nodes only). */
   costUsd?: number;
   /** Model used (agent nodes only). */

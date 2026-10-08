@@ -46,6 +46,14 @@ export const INHERITED_ENV_KEYS: ReadonlySet<string> = new Set([
   'NO_UPDATE_NOTIFIER',
   'SCRIPT',
   'ASCIINEMA_REC',
+  // Windows OS-owned vars that feed the security-sensitive WSL prefix check in
+  // resolve-shell.ts (buildWslPrefixes / isWslBash). Persisting any of these
+  // would let an agent corrupt the WSL-shim filter or force the MSYSTEM
+  // fast-path, both of which are attacker-controlled outcomes.  Must remain
+  // non-config.
+  'SystemRoot',
+  'MSYSTEM',
+  'LOCALAPPDATA',
 ]);
 
 /**
@@ -215,7 +223,7 @@ export function coerceEnvValue(meta: EnvVarMeta, raw: string): CoerceResult {
 // ── Config-key (afk.config.json) classification + validation ──────────────────
 
 export type ConfigKeyTier = 'agent' | 'human';
-export type ConfigKeyType = 'string' | 'number' | 'boolean' | 'enum' | 'number-array' | 'model-slot';
+export type ConfigKeyType = 'string' | 'number' | 'boolean' | 'enum' | 'number-array' | 'string-array' | 'model-slot' | 'object';
 
 export interface ConfigKeySpec {
   /** Dotted path, e.g. `models.large` or `telegram.notify.mode`. */
@@ -251,7 +259,6 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'autoRouting.interactive', tier: 'agent', type: 'boolean', description: 'Auto-route model in the REPL.' },
   { path: 'autoRouting.chat', tier: 'agent', type: 'boolean', description: 'Auto-route model for chat.' },
   { path: 'autoRouting.telegram', tier: 'agent', type: 'boolean', description: 'Auto-route model for Telegram.' },
-  { path: 'autoRouting.daemon', tier: 'agent', type: 'boolean', description: 'Auto-route model for the daemon.' },
   { path: 'telegram.notify.mode', tier: 'human', type: 'enum', enumValues: ['primary', 'broadcast', 'custom'], description: 'Telegram notify routing mode (human-tier: notification-redirect vector).' },
   { path: 'telegram.notify.primaryChatId', tier: 'human', type: 'number', clamp: { min: -1e15, max: 1e15, integer: true }, description: 'Primary Telegram chat id (human-tier: notification-redirect vector).' },
   { path: 'telegram.notify.targets', tier: 'human', type: 'number-array', description: 'Custom Telegram target chat ids (human-tier: notification-redirect vector).' },
@@ -290,7 +297,25 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'interactive.worktreeOnExit', tier: 'human', type: 'enum', enumValues: ['ask', 'keep', 'remove'], description: 'Clean-worktree quit policy (ask | keep | remove).' },
   { path: 'daemon.task', tier: 'human', type: 'string', description: 'Daemon task prompt.' },
   { path: 'daemon.taskId', tier: 'human', type: 'string', description: 'Daemon task id.' },
-  { path: 'daemon.verifyDone', tier: 'human', type: 'boolean', description: 'Opt-in daemon-surface "Done" verification gate: a cron-tick completion push whose response self-certifies "Done" with no corroborating evidence (a successful file write/edit or executed command) is relabelled "⚠️ Done (unverified)" with a caveat line. The daemon analog of telegram.verifyDone (which is REPL-only); the daemon is single-turn-per-tick, so the only honest enforcement is relabelling the outgoing push rather than bouncing a next turn. Human-tier: a self-honesty check on the agent\'s own completion reporting — the agent must not be able to disable it on its own config, same rationale as telegram.verifyDone.' },
+  { path: 'daemon.verifyDone', tier: 'human', type: 'boolean', description: 'Daemon-surface "Done" verification gate (default: true): a cron-tick completion push whose response self-certifies "Done" with no corroborating evidence (a successful file write/edit or executed command) is relabelled "⚠️ Done (unverified)" with a caveat line. Set to false to disable. The daemon analog of telegram.verifyDone (which is REPL-only); the daemon is single-turn-per-tick, so the only honest enforcement is relabelling the outgoing push rather than bouncing a next turn. Human-tier: a self-honesty check on the agent\'s own completion reporting — the agent must not be able to disable it on its own config, same rationale as telegram.verifyDone.' },
+  // Human-tier: only the user may grant a plugin access to additional env vars.
+  // A plugin manifest must never be able to grant itself access — only the
+  // user\'s config counts. The agent tool must not be able to set this key either,
+  // because that would let an agent expand its own hook subprocesses\' env access.
+  // Value shape: Record<pluginName, string[]> — see issue #2459.
+  { path: 'pluginHookEnv', tier: 'human', type: 'object', description: 'Per-plugin hook env allowlist: maps plugin name → array of env-var names forwarded to that plugin\'s hook subprocesses. Human-tier: only the user controls which secrets reach plugin hooks.' },
+  // Human-tier: disabling a plugin hook is an operator decision — mirroring
+  // pluginHookEnv which is also human-tier. The agent must not be able to
+  // silence third-party hooks on its own config.
+  // Value shape: Record<pluginName, string[]> where each string is
+  // "<Event>" or "<Event>:<matcher>" — see issue #2816.
+  { path: 'disabledPluginHooks', tier: 'human', type: 'object', description: 'Per-plugin hook disable list: maps plugin name (from plugin.json) → array of "<Event>" or "<Event>:<matcher>" specifiers to suppress. Human-tier: disabling a hook is an operator decision the agent must not reverse.' },
+  // Human-tier: hiding a skill from the model is an operator decision the agent
+  // must not be able to reverse on its own config. Accepts bare skill names
+  // (e.g. "forge") and plugin-qualified names (e.g. "awa-dev:qualify"). Each
+  // entry is matched the same way `excludeName` suffix-matches — bare "name"
+  // matches both "name" and "<plugin>:name".
+  { path: 'skills.hidden', tier: 'human', type: 'string-array', description: 'Skill names to hide from the model-facing manifest while keeping them slash-invocable (human-tier: an operator configuration the agent must not reverse). Accepts bare names (e.g. "forge") and plugin-qualified names (e.g. "awa-dev:qualify"). Matches both exact name and any "<plugin>:<name>" suffix.' },
 ];
 
 const CONFIG_KEY_BY_PATH = new Map(CONFIG_KEY_SPECS.map((s) => [s.path, s]));
@@ -307,7 +332,7 @@ export function classifyConfigKey(path: string): ConfigKeyClass {
 }
 
 export type ConfigCoerceResult =
-  | { ok: true; value: string | number | boolean | number[] | ModelSlotBinding }
+  | { ok: true; value: string | number | boolean | number[] | string[] | ModelSlotBinding | Record<string, unknown> }
   | { ok: false; error: string };
 
 /**
@@ -363,14 +388,58 @@ export function coerceConfigValue(spec: ConfigKeySpec, raw: unknown): ConfigCoer
       }
       return { ok: true, value: nums };
     }
+    case 'string-array': {
+      let arr: unknown[];
+      if (Array.isArray(raw)) arr = raw;
+      else if (typeof raw === 'string') {
+        arr = raw
+          .split(',')
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
+      } else {
+        return { ok: false, error: `${spec.path} expects an array of strings` };
+      }
+      const strs: string[] = [];
+      for (const el of arr) {
+        if (typeof el !== 'string') return { ok: false, error: `${spec.path} contains a non-string` };
+        strs.push(el);
+      }
+      return { ok: true, value: strs };
+    }
     case 'model-slot': {
       if (typeof raw === 'string') {
-        if (raw.trim().length === 0) return { ok: false, error: `${spec.path} must not be empty` };
-        return { ok: true, value: raw.trim() };
+        const trimmed = raw.trim();
+        if (trimmed.length === 0) return { ok: false, error: `${spec.path} must not be empty` };
+        // A string that looks like a JSON object (starts with '{') was likely
+        // produced by a caller that serialized the binding object to a string
+        // instead of passing it as an object. Parse it and validate through the
+        // same coerceSlotBindingInput path as a real object value — this ensures
+        // the human-gated baseUrl/apiKey restrictions still apply.
+        if (trimmed.startsWith('{')) {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(trimmed);
+          } catch {
+            return {
+              ok: false,
+              error: `${spec.path}: value looks like a JSON object but could not be parsed — pass a bare model id string or a real object, not a JSON-encoded string`,
+            };
+          }
+          const res = coerceSlotBindingInput(parsed);
+          if (!res.ok) return { ok: false, error: `${spec.path}: ${res.error}` };
+          return { ok: true, value: res.value };
+        }
+        return { ok: true, value: trimmed };
       }
       const res = coerceSlotBindingInput(raw);
       if (!res.ok) return { ok: false, error: `${spec.path}: ${res.error}` };
       return { ok: true, value: res.value };
+    }
+    case 'object': {
+      if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+        return { ok: false, error: `${spec.path} expects an object (Record<string, …>)` };
+      }
+      return { ok: true, value: raw as Record<string, unknown> };
     }
     case 'string':
     default: {

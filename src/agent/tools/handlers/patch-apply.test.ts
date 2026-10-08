@@ -462,3 +462,198 @@ describe('patch_apply — _reread_warning on partial_failure (#2065)', () => {
     applyPatchSpy.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Regression: patch_apply with NO cwd context (unconfined subagent scenario)
+//
+// Root cause: before the fix, `patch_apply` computed its fallback resolveBase
+// as `process.cwd()`, which made `computeContainment` treat the session as
+// CONFINED (resolveBase !== undefined). Then `context.writeRoots ?? [resolveBase]`
+// resolved to `[]` (an empty but DEFINED writeRoots from an
+// `ensureInitialized(undefined)` call), denying every path.
+//
+// `write_file` and `edit_file` never had this fallback, so a session with
+// `context.writeRoots = []` AND `context.resolveBase = undefined` would hit
+// the `resolveBase === undefined` → unconfined early return in
+// `computeContainment` and succeed. The fix aligns patch_apply: drop the
+// `process.cwd()` fallback so the unconfined path fires correctly.
+// ---------------------------------------------------------------------------
+describe('patch_apply handler — unconfined session (no cwd, empty writeRoots)', () => {
+  // Context that mimics an unconfined subagent dispatched before the parent
+  // session's provider-assigned id is known: resolveBase is undefined,
+  // but writeRoots is an EXPLICIT empty array (the result of
+  // `ensureInitialized(undefined)` in the provider's grant state).
+  const unconfinedCtx = () => ({
+    resolveBase: undefined as string | undefined,
+    writeRoots: [] as string[],
+    readRoots: [] as string[],
+  });
+
+  it('applies an absolute-path content change without a cwd context (regression: write roots [])', async () => {
+    const filePath = await writeTemp('unconf-abs.txt', 'old\n');
+    // No factory cwd — simulates bare patchApplyHandler (no session anchor).
+    const handler = createPatchApplyHandler();
+    const result = await handler(
+      { changes: [{ path: filePath, content: 'new\n' }] },
+      signal,
+      unconfinedCtx(),
+    );
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse(result.content as string);
+    expect(parsed.status).toBe('applied');
+    const actual = await readFile(filePath, 'utf-8');
+    expect(actual).toBe('new\n');
+  });
+
+  it('applies an absolute-path edit without a cwd context (regression: write roots [])', async () => {
+    const filePath = await writeTemp('unconf-edit.txt', 'hello world\n');
+    const handler = createPatchApplyHandler();
+    const result = await handler(
+      { changes: [{ path: filePath, edits: [{ old: 'world', new: 'universe' }] }] },
+      signal,
+      unconfinedCtx(),
+    );
+    expect(result.isError).toBeFalsy();
+    const actual = await readFile(filePath, 'utf-8');
+    expect(actual).toBe('hello universe\n');
+  });
+
+  it('previously returned validation_failed with path_containment when writeRoots is [] and process.cwd() was the fallback resolveBase', async () => {
+    // This test documents the PRE-FIX failure shape so a future regression is
+    // immediately obvious. After the fix the handler must succeed (not return
+    // path_containment).
+    const filePath = await writeTemp('unconf-regress.txt', 'before\n');
+    const handler = createPatchApplyHandler();
+    const result = await handler(
+      { changes: [{ path: filePath, content: 'after\n' }] },
+      signal,
+      unconfinedCtx(),
+    );
+    // Post-fix: succeeds.
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse(result.content as string);
+    expect(parsed.status).toBe('applied');
+    // Pre-fix shape for documentation:
+    //   expect(parsed.status).toBe('validation_failed');
+    //   expect(parsed.errors[0].error).toBe('path_containment');
+    //   expect(parsed.errors[0].detail).toContain('write roots []');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Blank optional fields (strict-mode callers must emit every param)
+// ---------------------------------------------------------------------------
+
+describe('patch_apply — blank optional fields', () => {
+  it.each([
+    ['empty string', ''],
+    ['whitespace', '  '],
+    ['null', null],
+  ])('treats a blank expected_hash (%s) as omitted', async (_label, blank) => {
+    const filePath = await writeTemp(`bh-${randomBytes(3).toString('hex')}.txt`, 'one two\n');
+    const handler = createPatchApplyHandler(tempDir);
+    const result = await handler(
+      { changes: [{ path: filePath, expected_hash: blank, edits: [{ old: 'two', new: 'TWO' }] }] },
+      signal,
+      makeCtx(),
+    );
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content as string).status).toBe('applied');
+    expect(await readFile(filePath, 'utf-8')).toBe('one TWO\n');
+  });
+
+  it.each([
+    ['empty string', ''],
+    ['null', null],
+  ])('treats content %s alongside non-empty edits as omitted and applies the edits', async (_label, placeholder) => {
+    const filePath = await writeTemp(`pc-${randomBytes(3).toString('hex')}.txt`, 'alpha beta\n');
+    const handler = createPatchApplyHandler(tempDir);
+    const result = await handler(
+      { changes: [{ path: filePath, content: placeholder, edits: [{ old: 'beta', new: 'BETA' }] }] },
+      signal,
+      makeCtx(),
+    );
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content as string).status).toBe('applied');
+    expect(await readFile(filePath, 'utf-8')).toBe('alpha BETA\n');
+  });
+
+  it('still rejects whitespace-only content alongside edits (whitespace is a real payload)', async () => {
+    const filePath = await writeTemp('ws.txt', 'alpha beta\n');
+    const handler = createPatchApplyHandler(tempDir);
+    const result = await handler(
+      { changes: [{ path: filePath, content: '  ', edits: [{ old: 'beta', new: 'BETA' }] }] },
+      signal,
+      makeCtx(),
+    );
+    const parsed = JSON.parse(result.content as string);
+    expect(parsed.status).toBe('validation_failed');
+    expect(parsed.errors[0].error).toBe('mutually_exclusive');
+    expect(await readFile(filePath, 'utf-8')).toBe('alpha beta\n');
+  });
+
+  it('still rejects empty content alongside an EMPTY edits array (ambiguous intent)', async () => {
+    const filePath = await writeTemp('ee.txt', 'keep me\n');
+    const handler = createPatchApplyHandler(tempDir);
+    const result = await handler(
+      { changes: [{ path: filePath, content: '', edits: [] }] },
+      signal,
+      makeCtx(),
+    );
+    const parsed = JSON.parse(result.content as string);
+    expect(parsed.status).toBe('validation_failed');
+    expect(parsed.errors[0].error).toBe('mutually_exclusive');
+    expect(await readFile(filePath, 'utf-8')).toBe('keep me\n');
+  });
+
+  it('empty content on its own still truncates the file', async () => {
+    const filePath = await writeTemp('trunc.txt', 'to be emptied\n');
+    const handler = createPatchApplyHandler(tempDir);
+    const result = await handler({ changes: [{ path: filePath, content: '' }] }, signal, makeCtx());
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content as string).status).toBe('applied');
+    expect(await readFile(filePath, 'utf-8')).toBe('');
+  });
+
+  // Issue #3067: standalone content: null (no edits key) must reach the
+  // structured validator and fire no_change_specified, not a parse-layer type
+  // error ("content must be a string").
+  it('standalone content: null fires no_change_specified, not a parse error (#3067)', async () => {
+    const filePath = await writeTemp('null-content.txt', 'unchanged\n');
+    const handler = createPatchApplyHandler(tempDir);
+    const result = await handler(
+      { changes: [{ path: filePath, content: null }] },
+      signal,
+      makeCtx(),
+    );
+    expect(result.isError).toBe(true);
+    const parsed = JSON.parse(result.content as string);
+    // Must reach the structured validator — not a parse-layer error.
+    expect(parsed.status).toBe('validation_failed');
+    expect(parsed.errors).toHaveLength(1);
+    expect(parsed.errors[0].error).toBe('no_change_specified');
+    // File untouched.
+    expect(await readFile(filePath, 'utf-8')).toBe('unchanged\n');
+  });
+
+  // Issue #3126: { content: null, edits: [] } was silently passing as a no-op
+  // rewrite. The empty edits array bypassed the no_change_specified guard
+  // because edits !== undefined. Now treated as absent → no_change_specified.
+  it('content: null with empty edits fires no_change_specified, not a silent no-op (#3126)', async () => {
+    const filePath = await writeTemp('null-empty-edits.txt', 'untouched\n');
+    const handler = createPatchApplyHandler(tempDir);
+    const result = await handler(
+      { changes: [{ path: filePath, content: null, edits: [] }] },
+      signal,
+      makeCtx(),
+    );
+    expect(result.isError).toBe(true);
+    const parsed = JSON.parse(result.content as string);
+    // Must reach the structured validator and fire no_change_specified.
+    expect(parsed.status).toBe('validation_failed');
+    expect(parsed.errors).toHaveLength(1);
+    expect(parsed.errors[0].error).toBe('no_change_specified');
+    // File must be untouched.
+    expect(await readFile(filePath, 'utf-8')).toBe('untouched\n');
+  });
+});

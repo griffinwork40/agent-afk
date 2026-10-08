@@ -23,11 +23,15 @@ import { removePlugin } from '../../agent/plugins/remove.js';
 import {
   readIndex,
   setEnabled,
+  setPluginOption,
+  unsetPluginOption,
   type PluginIndex,
 } from '../../agent/plugins/index-store.js';
 import { parseSource } from '../../agent/plugins/source.js';
 import { installFromMarketplace } from '../../agent/marketplaces/resolve.js';
 import { getPluginsDir, getPluginsIndexPath } from '../../paths.js';
+import { readUserConfigSchema, validateOptionKey, type UserConfigSchema } from '../../agent/plugins/plugin-user-config.js';
+import { resolvePluginSourceDir } from '../../agent/marketplaces/resolve.js';
 
 /**
  * Injection points for tests. Defaults to real implementations calling into
@@ -134,7 +138,8 @@ export function registerPluginCommand(program: Command, deps: PluginCommandDeps 
             cmdOpts.ref ? { ref: cmdOpts.ref } : {},
             moduleDeps,
           );
-          printOutcome(outcome, spinner);
+          spinner.stop();
+          logger.log(formatOutcome(outcome));
         } else {
           logger.log(palette.info('Updating all plugins…'));
           const outcomes = await updateAll(moduleDeps);
@@ -209,6 +214,134 @@ export function registerPluginCommand(program: Command, deps: PluginCommandDeps 
         handleCommandError(err);
       }
     });
+
+  plugin
+    .command('config <name> [key] [value]')
+    .description(
+      'Get or set userConfig options for a plugin.\n' +
+        '  afk plugin config <name>           — list current option values\n' +
+        '  afk plugin config <name> <key>     — show one option value\n' +
+        '  afk plugin config <name> <key> <value>  — set an option\n' +
+        '  afk plugin config <name> <key> --unset  — remove a stored value',
+    )
+    .option('--unset', 'Remove the stored value for the given key')
+    .action((name: string, key: string | undefined, value: string | undefined, cmdOpts: { unset?: boolean }) => {
+      runPluginConfig({ name, key, value, unset: cmdOpts.unset ?? false, pluginsDir, indexPath, logger });
+    });
+}
+
+interface PluginConfigRunOpts {
+  name: string;
+  key: string | undefined;
+  value: string | undefined;
+  unset: boolean;
+  pluginsDir: string;
+  indexPath: string;
+  logger: Pick<Console, 'log' | 'error'>;
+}
+
+/**
+ * Implements the `afk plugin config` subcommand action.
+ *
+ * Extracted from {@link registerPluginCommand} to keep that function within
+ * the 200-line ceiling (`pnpm audit:funcsize:check`).
+ */
+function runPluginConfig(opts: PluginConfigRunOpts): void {
+  const { name, key, value, unset, pluginsDir, indexPath, logger } = opts;
+  try {
+    const index = readIndex(indexPath);
+    const entry = index.plugins[name];
+    if (!entry) {
+      logger.error(palette.error(`No plugin named "${name}" is installed.`));
+      process.exitCode = 1;
+      return;
+    }
+    const pluginDir = resolvePluginConfigDir(name, entry, pluginsDir);
+    let schema;
+    try {
+      schema = readUserConfigSchema(pluginDir);
+    } catch (err) {
+      logger.error(palette.error(`Cannot read plugin manifest: ${String(err)}`));
+      process.exitCode = 1;
+      return;
+    }
+    if (key === undefined) {
+      renderPluginConfig(name, schema, entry.options ?? {}, logger);
+      return;
+    }
+    if (!unset && value === undefined) {
+      const result = validateOptionKey(key, schema);
+      if (result !== 'ok') { logger.error(palette.error(result)); process.exitCode = 1; return; }
+      const stored = entry.options?.[key];
+      const field = schema[key];
+      const effective = stored ?? field?.default;
+      if (effective !== undefined) {
+        logger.log(`${key}: ${effective}${stored === undefined ? palette.meta(' (default)') : ''}`);
+      } else {
+        logger.log(`${key}: ${palette.meta('(not set)')}`);
+      }
+      return;
+    }
+    if (unset) {
+      const validResult = validateOptionKey(key, schema);
+      if (validResult !== 'ok') { logger.error(palette.error(validResult)); process.exitCode = 1; return; }
+      unsetPluginOption(name, key, indexPath);
+      logger.log(palette.success(`Unset ${name}.${key}`));
+      return;
+    }
+    const validResult = validateOptionKey(key, schema);
+    if (validResult !== 'ok') { logger.error(palette.error(validResult)); process.exitCode = 1; return; }
+    if (value === undefined) {
+      logger.error(palette.error('A value is required. Use --unset to remove a stored value.'));
+      process.exitCode = 1;
+      return;
+    }
+    setPluginOption(name, key, value, indexPath);
+    logger.log(palette.success(`Set ${name}.${key} = ${value}`));
+  } catch (err) {
+    handleCommandError(err);
+  }
+}
+
+
+function resolvePluginConfigDir(name: string, entry: PluginIndex['plugins'][string], pluginsDir: string): string {
+  if (entry.sourceType === 'marketplace' && entry.marketplace !== undefined) {
+    const pluginName = name.startsWith(`${entry.marketplace}:`)
+      ? name.slice(entry.marketplace.length + 1)
+      : name;
+    return resolvePluginSourceDir(`${pluginsDir}/cache/${entry.marketplace}`, `./plugins/${pluginName}`);
+  }
+  return `${pluginsDir}/${name}`;
+}
+
+function renderPluginConfig(
+  name: string,
+  schema: UserConfigSchema,
+  stored: Record<string, string>,
+  logger: Pick<Console, 'log'>,
+): void {
+  const keys = Object.keys(schema);
+  if (keys.length === 0) {
+    logger.log(palette.meta(`Plugin "${name}" declares no userConfig options.`));
+    return;
+  }
+  logger.log(palette.heading(`\nOptions for ${name}:`));
+  for (const key of keys.sort()) {
+    const field = schema[key];
+    const storedVal = stored[key];
+    const effective = storedVal ?? field?.default;
+    const isSensitive = field?.sensitive === true;
+    const desc = field?.description ? palette.meta(` — ${field.description}`) : '';
+    if (isSensitive) {
+      logger.log(`  ${palette.bold(key.padEnd(24))} ${palette.warning('[sensitive — use pluginHookEnv]')}${desc}`);
+    } else if (effective !== undefined) {
+      const suffix = storedVal === undefined ? palette.meta(' (default)') : '';
+      logger.log(`  ${palette.bold(key.padEnd(24))} ${effective}${suffix}${desc}`);
+    } else {
+      logger.log(`  ${palette.bold(key.padEnd(24))} ${palette.meta('(not set)')}${desc}`);
+    }
+  }
+  logger.log('');
 }
 
 function renderList(index: PluginIndex, logger: Pick<Console, 'log'>): void {
@@ -255,12 +388,4 @@ function formatOutcome(o: UpdateOutcome): string {
     case 'removed-by-marketplace':
       return `${palette.warning('!')} ${palette.bold(o.name)}: removed by marketplace "${o.marketplace}" — run "afk plugin remove ${o.name}" to clean up`;
   }
-}
-
-function printOutcome(o: UpdateOutcome, spinner: ReturnType<typeof ora>): void {
-  const line = formatOutcome(o);
-  if (o.status === 'updated') spinner.succeed(line);
-  else if (o.status === 'up-to-date') spinner.info(line);
-  else if (o.status === 'skipped-local' || o.status === 'skipped-marketplace') spinner.info(line);
-  else spinner.warn(line);
 }

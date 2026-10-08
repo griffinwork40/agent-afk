@@ -17,11 +17,12 @@ import * as git from '../plugins/git.js';
 import {
   readIndex,
   upsertMarketplace,
+  isMarketplacePinnedRef,
   type MarketplaceIndexEntry,
   type PluginIndex,
 } from '../plugins/index-store.js';
-import { pickLatestSemverTag } from '../plugins/versions.js';
 import { readPluginManifest } from '../plugins/plugin-manifest.js';
+import { advanceCachedCheckout } from '../plugins/checkout-lifecycle.js';
 import {
   readManifest,
   tryReadManifest,
@@ -91,63 +92,34 @@ export async function updateMarketplace(
   );
 
   await git.fetch(dir, gitOpts);
-  let targetRef: string;
-  // `pickedSemverTag` records PROVENANCE: true only when the updater itself
-  // selected `targetRef` as the latest semver tag — the one case where the
-  // target is known-immutable. An explicit pin, a tracked `entry.ref`, or the
-  // default branch could each be a branch, so they must keep following the
-  // remote-tracking branch.
-  let pickedSemverTag = false;
-  if (options.ref) {
-    targetRef = options.ref;
-  } else {
-    const tags = await git.listTags(dir, gitOpts);
-    const latest = pickLatestSemverTag(tags);
-    if (latest !== null) {
-      targetRef = latest;
-      pickedSemverTag = true;
-    } else {
-      targetRef = entry.ref ?? (await git.getDefaultBranch(dir, gitOpts));
+
+  const result = await advanceCachedCheckout(
+    dir,
+    {
+      explicitRef: options.ref,
+      storedRef: entry.ref,
+      pinnedRef: entry.pinnedRef,
+      isPinned: (defaultBranch) => isMarketplacePinnedRef(entry, defaultBranch),
+    },
+    gitOpts,
+    'marketplace',
+    name,
+  );
+
+  if (!result.changed) {
+    if (options.ref !== undefined) {
+      upsertMarketplace(name, { ...entry, ref: result.targetRef, commit: result.commit, pinnedRef: true, updatedAt: now().toISOString() }, indexPath);
     }
+    return { name, status: 'up-to-date', ref: result.targetRef, commit: result.commit };
   }
 
-  // Invariant: a tag/SHA is immutable, so ref-name equality means nothing
-  // moved. A branch is mutable — `git fetch` advanced
-  // refs/remotes/origin/<branch> but left local HEAD untouched — so we must
-  // compare commits and check out the fetched remote tip. Checking out the
-  // bare branch name would `--detach` at the STALE local branch (git.checkout
-  // always passes --detach), re-freezing the marketplace.
-  //
-  // Tag vs branch is decided by SELECTION PROVENANCE, not by which refs exist:
-  // git permits refs/tags/<x> and refs/heads/<x> to coexist, so a name alone
-  // is ambiguous. Only a target the updater picked as the latest semver tag is
-  // known-immutable — it wins and is checked out via its explicit refs/tags/
-  // ref (never the bare name, which is ambiguous when both exist). Every other
-  // target (explicit pin, tracked entry.ref, default branch) keeps following
-  // the remote-tracking branch, so a branch-tracked install still advances even
-  // when a same-named tag exists.
-  const remoteRef = `refs/remotes/origin/${targetRef}`;
-  const remoteSha = pickedSemverTag ? null : await git.tryRevParse(dir, remoteRef, gitOpts);
-  const isBranch = remoteSha !== null;
-  const localSha = await git.getCommitSha(dir, gitOpts);
-  const upToDate = isBranch ? remoteSha === localSha : targetRef === entry.ref;
-
-  if (upToDate) {
-    return { name, status: 'up-to-date', ref: targetRef, commit: localSha };
-  }
-
-  // force: the cache under ~/.afk/plugins/cache/ is a disposable mirror of the
-  // remote, not a user workspace. Discard any tracked-file drift so a dirty
-  // cache (partial prior update, stray edit) can't wedge the checkout. Untracked
-  // files survive --force, so locally-added content is preserved.
-  await git.checkout(dir, isBranch ? remoteRef : pickedSemverTag ? `refs/tags/${targetRef}` : targetRef, { ...gitOpts, force: true });
-  const commit = await git.getCommitSha(dir, gitOpts);
   const ts = now().toISOString();
   const updated: MarketplaceIndexEntry = {
     ...entry,
-    ref: targetRef,
-    commit,
+    ref: result.targetRef,
+    commit: result.commit,
     updatedAt: ts,
+    ...(options.ref !== undefined ? { pinnedRef: true } : {}),
   };
   upsertMarketplace(name, updated, indexPath);
 
@@ -160,8 +132,8 @@ export async function updateMarketplace(
     name,
     status: 'updated',
     fromRef: entry.ref,
-    toRef: targetRef,
-    commit,
+    toRef: result.targetRef,
+    commit: result.commit,
     addedPlugins,
     removedPlugins,
     pluginVersions: resolvePluginVersions(dir, afterManifest),

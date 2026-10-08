@@ -11,6 +11,11 @@ describe('isCustomOpenAIEndpoint', () => {
     expect(isCustomOpenAIEndpoint(undefined)).toBe(false);
     expect(isCustomOpenAIEndpoint(CHATGPT_BACKEND_BASE_URL)).toBe(false);
   });
+  it('treats a trailing-slash variant of the ChatGPT backend as first-party', () => {
+    // A trailing slash must not cause the ChatGPT backend to be classified as custom.
+    expect(isCustomOpenAIEndpoint(CHATGPT_BACKEND_BASE_URL + '/')).toBe(false);
+    expect(isCustomOpenAIEndpoint(CHATGPT_BACKEND_BASE_URL + '//')).toBe(false);
+  });
   it('treats a user-set base URL as custom', () => {
     expect(isCustomOpenAIEndpoint('http://localhost:8080/v1')).toBe(true);
   });

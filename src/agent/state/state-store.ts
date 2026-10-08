@@ -13,6 +13,7 @@ import Database from 'better-sqlite3';
 import type BetterSqlite3 from 'better-sqlite3';
 import { chmodSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
+import { sleepSync } from '../../utils/sleep-sync.js';
 
 const SCHEMA_VERSION = 1;
 const NS_KEY_PATTERN = /^[A-Za-z0-9_.-]+$/;
@@ -74,10 +75,6 @@ function validateJson(v: unknown): void {
   } catch {
     throw new Error(`StateStore: value is not JSON-serializable`);
   }
-}
-
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /**
@@ -335,6 +332,39 @@ export class StateStore {
         .run(serialized, newVersion, now, expires_at, producer ?? null, metadata, namespace, key);
 
       return { matched: true, newVersion };
+    });
+
+    return txn.immediate();
+  }
+
+  /**
+   * Create a document only when none exists (an expired row counts as absent).
+   * Returns `{created: false}` without writing when a live row is present, so
+   * two racing first-writers cannot clobber each other the way two `put`s can.
+   * Pair with `get` + `cas` for a lossless read-modify-write loop.
+   */
+  insertIfAbsent(namespace: string, key: string, value: unknown, opts?: PutOpts): PutResult {
+    validateNamespaceOrKey(namespace, 'namespace');
+    validateNamespaceOrKey(key, 'key');
+    validateJson(value);
+
+    const txn = this.db.transaction((): PutResult => {
+      const now = Date.now();
+      this.db
+        .prepare(`DELETE FROM state_documents WHERE namespace = ? AND key = ?
+          AND expires_at IS NOT NULL AND expires_at < ?`)
+        .run(namespace, key, now);
+      const expires_at = opts?.ttl_ms !== undefined ? now + opts.ttl_ms : null;
+      const metadata = opts?.metadata !== undefined ? JSON.stringify(opts.metadata) : null;
+      const res = this.db
+        .prepare(`
+          INSERT INTO state_documents
+            (namespace, key, value, version, created_at, updated_at, expires_at, producer, metadata)
+          VALUES (?, ?, ?, 1, ?, ?, ?, NULL, ?)
+          ON CONFLICT(namespace, key) DO NOTHING
+        `)
+        .run(namespace, key, JSON.stringify(value), now, now, expires_at, metadata);
+      return { version: 1, created: res.changes > 0 };
     });
 
     return txn.immediate();

@@ -70,10 +70,17 @@ export interface OpenAIChunk {
  *   - final `finish_reason` (drives stop-reason translation)
  *   - final `usage` block (sent on the last chunk when `stream_options.include_usage`
  *     is set)
+ *   - `reasoningField`: which delta field delivered reasoning (`reasoning_content`
+ *     for DeepSeek-R1 style or `reasoning` for Cerebras style). Recorded on the
+ *     first reasoning delta so all echo sites can replay under the same key.
+ *     Defaults to `'reasoning_content'` when no reasoning arrives (preserves the
+ *     pre-existing DeepSeek echo behaviour for empty-reasoning turns).
  */
 export interface StreamState {
   assistantText: string;
   reasoningText: string;
+  /** Which wire field delivered the reasoning trace this turn. */
+  reasoningField: 'reasoning_content' | 'reasoning';
   toolCallsByIndex: Map<number, AccumulatedToolCall>;
   finishReason: string | null;
   usage: OpenAIChunk['usage'] | null;
@@ -94,6 +101,7 @@ export function createStreamState(): StreamState {
   return {
     assistantText: '',
     reasoningText: '',
+    reasoningField: 'reasoning_content',
     toolCallsByIndex: new Map(),
     finishReason: null,
     usage: null,
@@ -139,11 +147,17 @@ export function* translateChunk(
   const delta = choice.delta;
   if (!delta) return;
 
-  // Reasoning content (DeepSeek-R1 style and some o-series surfaces).
-  const reasoningDelta = delta.reasoning_content ?? delta.reasoning;
-  if (typeof reasoningDelta === 'string' && reasoningDelta.length > 0) {
-    state.reasoningText += reasoningDelta;
-    yield { type: 'delta.reasoning', text: reasoningDelta, sessionId };
+  // Reasoning content (DeepSeek-R1 uses `reasoning_content`; Cerebras uses `reasoning`).
+  // Record which field delivered the trace on the first delta so echo sites can
+  // replay under the same key — Cerebras rejects `reasoning_content` with HTTP 400.
+  if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
+    if (state.reasoningText.length === 0) state.reasoningField = 'reasoning_content';
+    state.reasoningText += delta.reasoning_content;
+    yield { type: 'delta.reasoning', text: delta.reasoning_content, sessionId };
+  } else if (typeof delta.reasoning === 'string' && delta.reasoning.length > 0) {
+    if (state.reasoningText.length === 0) state.reasoningField = 'reasoning';
+    state.reasoningText += delta.reasoning;
+    yield { type: 'delta.reasoning', text: delta.reasoning, sessionId };
   }
 
   // Visible assistant text.

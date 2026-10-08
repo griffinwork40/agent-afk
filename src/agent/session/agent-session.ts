@@ -25,7 +25,6 @@ import type {
   ProviderRewindConversationResult,
   RewindTarget,
 } from '../provider.js';
-import { RESET_DRAIN_TIMEOUT_MS } from '../timeout.js';
 import type {
   AccountInfo,
   AgentConfig,
@@ -52,28 +51,26 @@ import { QueryInputStream } from './input-iterable.js';
 import { LedgerLifecycle } from './ledger-lifecycle.js';
 import { PlanExitBridge } from './plan-exit-bridge.js';
 import type { ElicitationRequest } from '../types/sdk-types.js';
+import type { StopWiring } from '../types/session-types.js';
 import { resolveModelId } from './model-resolution.js';
 import { deriveOrigin, deriveActor } from './session-identity.js';
-import { wireAbortSignal } from './session-setup.js';
+import { scheduleTopLevelHousekeeping, wireAbortSignal } from './session-setup.js';
+import { sessionLabelFromTracePath } from '../../paths.js';
+import { JournalLifecycle } from './journal-lifecycle.js';
+import type { MessageJournal } from '../journal/index.js';
 import { SessionStateManager } from './session-state.js';
-import { getSessionGrantsPath, sessionLabelFromTracePath } from '../../paths.js';
-import {
-  capJsonlBySize,
-  SESSION_GRANTS_MAX_BYTES,
-  SESSION_GRANTS_KEEP_TAIL_LINES,
-} from '../log-retention.js';
-import { sweepWitnessTree, WITNESS_SWEEP_START_DELAY_MS } from '../witness-sweep.js';
-import { sweepSessionSidecars, SESSION_SIDECAR_SWEEP_START_DELAY_MS } from '../session-sidecar-sweep.js';
 import { AccountingAccumulator } from './accounting-accumulator.js';
-import type { SubagentOutputRecorder } from './subagent-output-capture.js';
 import { buildProviderLifecycle, ProviderInitializer } from './provider-lifecycle.js';
 import { TurnStreamRunner } from './turn-stream-runner.js';
 import { SessionShutdown } from './session-shutdown.js';
+import { withSessionTmpdir } from './session-tmpdir.js';
+import { drainAndFinalizeClose } from './agent-session.close.js';
 import { resetSession } from './session-reset.js';
 import * as compact from './session-compact.js';
 import * as ss from './session-send.js';
 import * as sc from './session-config.js';
 import { toModelInfo, toAgentInfo, toContextUsageResponse, toMcpServerStatus } from './provider-type-mappers.js';
+import { applyStopHookWiring } from './agent-session.stop-hook-wiring.js';
 
 
 export class AgentSession implements IAgentSession {
@@ -84,6 +81,7 @@ export class AgentSession implements IAgentSession {
    */
   private readonly ownedTraceWriter: TraceWriter | undefined;
   private config: AgentConfig;
+  private stopWiring: StopWiring | undefined;
   /**
    * Plan-mode-exit state machine: the pending implement-turn seed, the captured
    * pre-plan mode to restore, and the transient Shift+Tab ring-gesture memory.
@@ -100,12 +98,6 @@ export class AgentSession implements IAgentSession {
   /** Number of inbound messages submitted, including attempts that end in a
    * provider error and therefore never increment `turnCount`. */
   private inboundMessageCount = 0;
-  /**
-   * Opt-in subagent output recorder, created lazily on the first turn and
-   * reused for the life of the session so a multi-turn child produces ONE
-   * transcript. `undefined` = not yet attempted; `null` = capture disabled.
-   */
-  private subagentOutputRecorder: SubagentOutputRecorder | null | undefined;
   /**
    * Hook-generated context (e.g. SubagentStop `injectContext`) waiting to be
    * prepended to the next outbound user message. Never delivered as its own
@@ -134,6 +126,8 @@ export class AgentSession implements IAgentSession {
    * after close. Lifecycle glue lives in {@link LedgerLifecycle}.
    */
   private readonly ledger = new LedgerLifecycle();
+  /** Durable message journal (docs/message-journal.md); glue in {@link JournalLifecycle}. */
+  private readonly journal = new JournalLifecycle(() => this.stateManager.getSessionId());
   private readonly outputBroadcast = new OutputBroadcast();
   private readonly shutdown: SessionShutdown;
   private runner!: TurnStreamRunner;
@@ -162,6 +156,7 @@ export class AgentSession implements IAgentSession {
               requestImplementSeed: (message, mode) =>
                 this.planExit.requestImplementSeed(message, mode),
               getPrePlanMode: () => this.planExit.getPrePlanMode(),
+              checkPlanText: () => this.planExit.planText.check(),
             },
           }
         : config;
@@ -181,6 +176,7 @@ export class AgentSession implements IAgentSession {
       getSessionId: () => this.sessionId,
       ownedTraceWriter: this.ownedTraceWriter,
       ownsTraceSeal: this.ownsTraceSeal,
+      getAssistantTexts: () => this.conversationHistory.filter((m) => m.role === 'assistant').map((m) => m.content),
     });
 
     // Witness layer: mark the start of provider/SDK initialization so
@@ -194,37 +190,18 @@ export class AgentSession implements IAgentSession {
       actor: deriveActor(config.parentSessionId),
     });
 
+    // Private per-session TMPDIR (session-tmpdir.ts); a no-op for forks.
+    this.config = withSessionTmpdir(this.journal.open(this.config));
     this.initSdkLifecycle();
+    this.journal.arm(this.config);
 
-    // Bound the write-only session-grants audit log at session start. Top-level
-    // sessions only: subagents share the parent's path, so re-running per fork
-    // is redundant and widens the rewrite-collision window. Fire-and-forget +
-    // silent-fail — best-effort housekeeping that must never delay or break
-    // construction.
+    // Top-level housekeeping (grants-log cap, witness + sidecar sweeps). See
+    // scheduleTopLevelHousekeeping for the deferral / unref invariants.
     if (this.config.parentSessionId === undefined) {
-      void capJsonlBySize(getSessionGrantsPath(), {
-        maxBytes: SESSION_GRANTS_MAX_BYTES,
-        keepTailLines: SESSION_GRANTS_KEEP_TAIL_LINES,
-      });
-      // Bound the witness tree the same way. Self-throttled by a stamp file,
-      // so this is a no-op on all but one session start every few hours (#849).
-      //
-      // Invariant: deferred off the construction path and `.unref()`ed, exactly
-      // as BackgroundAgentRegistry's eviction sweep is. The walk is O(files in
-      // the witness tree), so running it inline competes with the session's own
-      // first-turn I/O. The unref also means a short-lived process exits without
-      // ever paying for it.
-      const witnessSweepTimer = setTimeout(() => {
-        void sweepWitnessTree({
-          activeLabel:
-            sessionLabelFromTracePath(this.config.traceWriter?.getTracePath()) ?? undefined,
-        });
-      }, WITNESS_SWEEP_START_DELAY_MS);
-      witnessSweepTimer.unref();
-      const sidecarSweepTimer = setTimeout(() => {
-        void sweepSessionSidecars({ activeSessionId: this.sessionId });
-      }, SESSION_SIDECAR_SWEEP_START_DELAY_MS);
-      sidecarSweepTimer.unref();
+      scheduleTopLevelHousekeeping(
+        () => sessionLabelFromTracePath(this.config.traceWriter?.getTracePath()) ?? undefined,
+        () => this.sessionId,
+      );
     }
   }
 
@@ -276,10 +253,11 @@ export class AgentSession implements IAgentSession {
       incInboundMessageCount: () => ++this.inboundMessageCount,
       getTurnCount: () => this.turnCount,
       incTurnCount: () => { this.turnCount++; },
-      getSubagentOutputRecorder: () => this.subagentOutputRecorder,
-      setSubagentOutputRecorder: (r) => { this.subagentOutputRecorder = r; },
       getProviderQuery: () => this.providerQuery,
       getLedgerMetadata: () => this.stateManager.getSessionMetadata(),
+      observeProviderEvent: (e) => this.planExit.planText.observe(e),
+      // Read lazily: surfaces call wireStopHook() after construction.
+      getStopWiring: () => this.stopWiring,
     });
 
     const initializer = new ProviderInitializer(
@@ -302,6 +280,8 @@ export class AgentSession implements IAgentSession {
   get cwd(): string | undefined { return this.config.cwd; }
   get abortSignal(): AbortSignal { return this.abortController.signal; }
   get hookRegistry(): HookRegistry | undefined { return this._hookRegistry; }
+  /** This session's message journal (forks fork from it via `forSubagent`). */
+  get messageJournal(): MessageJournal | undefined { return this.journal.current; }
 
   /**
    * Abort the session with a caller-supplied reason BEFORE calling close().
@@ -356,6 +336,20 @@ export class AgentSession implements IAgentSession {
   }
 
   /**
+   * Wire (or re-wire) this surface's Stop-hook delivery callbacks. Until a
+   * surface calls this, the session layer does not dispatch Stop at all.
+   * Read on every turn end, so calling it after construction is safe.
+   *
+   * Also wires the provider-side stop-hook seam (issue #2714) so blocking Stop
+   * hooks can trigger same-turn continuations. Body extracted to
+   * {@link agent-session.stop-hook-wiring} to keep this file under the ceiling.
+   */
+  wireStopHook(wiring: StopWiring): void {
+    this.stopWiring = wiring;
+    applyStopHookWiring(this.stopWiring, () => this.config, () => this.stateManager.getSessionId(), () => this.abortController.signal, () => this.conversationHistory, () => this.runner.getActiveTurnToolEvents(), this.providerQuery);
+  }
+
+  /**
    * Tear down the SDK lifecycle and rebuild it from the same `AgentConfig`,
    * yielding a session whose conversation context is empty. Forwarding the
    * literal string `/clear` to a provider does NOT clear context (the model
@@ -371,16 +365,19 @@ export class AgentSession implements IAgentSession {
       getInitPromise: () => this.initPromise,
       getShutdown: () => this.shutdown,
       getLedger: () => this.ledger,
+      getJournal: () => this.journal,
       getStateManager: () => this.stateManager,
       reinitialize: (patch) => {
-        this.config = patch(this.config);
+        this.config = this.journal.open(patch(this.config));
         this.initSdkLifecycle();
+        this.journal.arm(this.config);
       },
     });
   }
 
   private async onAbort(): Promise<void> {
     void this.ledger.seal('abort');
+    this.journal.flush();
     try {
       await this.providerQuery.interrupt(providerAbortReason(this.abortController.signal.reason));
     } catch {
@@ -396,6 +393,7 @@ export class AgentSession implements IAgentSession {
       getStateManager: () => this.stateManager,
       getPlanExit: () => this.planExit,
       pushSidebandEvent: (event) => this.pushSidebandEvent(event),
+      getJournal: () => this.journal,
     };
   }
 
@@ -403,7 +401,7 @@ export class AgentSession implements IAgentSession {
   async setPermissionMode(mode: PermissionMode): Promise<void> { return sc.setPermissionMode(mode, this.makeConfigDeps()); }
   setSystemPrompt(basePrompt: string | undefined): boolean { return sc.setSystemPrompt(basePrompt, this.makeConfigDeps()); }
   setCwd(cwd: string): void { return sc.setCwd(cwd, this.makeConfigDeps()); }
-  async reauth(): Promise<{ accountId: string; swapped: boolean } | null> { return sc.reauth(this.makeConfigDeps()); }
+  async reauth(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null> { return sc.reauth(this.makeConfigDeps()); }
 
   getPrePlanMode(): PermissionMode | undefined { return this.planExit.getPrePlanMode(); }
   // Invariant: called by the REPL after construction to wire a queue-check
@@ -467,22 +465,13 @@ export class AgentSession implements IAgentSession {
     this.currentState = 'closed';
     this.outputBroadcast.close();
     await this.ledger.seal('close');
-    if (!this.abortController.signal.aborted) this.abortController.abort('closed');
-    this.stateManager.resolveInitializationIfNeeded();
-    try {
-      await this.providerQuery.close();
-    } catch {
-      // ignore
-    }
-    await this.providerIterator.return?.();
-    if (this.initPromise) {
-      try {
-        await Promise.race([this.initPromise, new Promise((resolve) => setTimeout(resolve, RESET_DRAIN_TIMEOUT_MS))]);
-      } catch {
-        // ignore
-      }
-    }
-    await this.shutdown.dispatchOnce('close');
+    // Invariant: provider abort+drain precedes journal close (see agent-session.close.ts).
+    await drainAndFinalizeClose({
+      abortController: this.abortController, stateManager: this.stateManager,
+      providerQuery: this.providerQuery, providerIterator: this.providerIterator,
+      initPromise: this.initPromise, journal: this.journal, shutdown: this.shutdown,
+      env: this.config.env,
+    });
   }
 
   /**

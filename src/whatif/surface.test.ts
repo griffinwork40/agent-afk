@@ -3,16 +3,20 @@
  */
 
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import type { CompleteFn, ChangeSpec } from './types.js';
+import type { CompleteFn, ChangeSpec, OperatorPrediction } from './types.js';
 import type { ParsedWhatifArgs } from './args.js';
 
 // ---------------------------------------------------------------------------
 // Mocks — must be hoisted before the imports under test
 // ---------------------------------------------------------------------------
 
-vi.mock('./compile.js', () => ({
-  compileChangeSpec: vi.fn(),
-}));
+vi.mock('./compile.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./compile.js')>();
+  return {
+    ...actual,
+    compileChangeSpec: vi.fn(),
+  };
+});
 
 vi.mock('./complete.js', () => ({
   createAnthropicComplete: vi.fn().mockReturnValue(() =>
@@ -40,7 +44,7 @@ vi.mock('../agent/whatif-episode-gate.js', () => ({
   isWhatifEpisode: vi.fn().mockReturnValue(false),
 }));
 
-import { resolveSpec, buildWhatifDeps, readDirNames } from './surface.js';
+import { resolveSpec, buildWhatifDeps, readDirNames, buildWhatifRunOptions } from './surface.js';
 import { compileChangeSpec } from './compile.js';
 import { isWhatifEpisode } from '../agent/whatif-episode-gate.js';
 
@@ -253,5 +257,57 @@ describe('readDirNames', () => {
     const names = readDirNames(dir);
     expect(names).toContain('skill-a');
     expect(names).toContain('skill-b');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildWhatifRunOptions
+// ---------------------------------------------------------------------------
+
+/** Minimal BuildWhatifRunOptionsInputs for tests. */
+function makeRunInputs(overrides: Partial<{ spec: ChangeSpec; realHome: string; realCwd: string; agentModel: string; analystModel: string }> = {}) {
+  return {
+    spec: { changes: [], title: 'test', source: 'flag' } as ChangeSpec,
+    realHome: '/home/test',
+    realCwd: '/cwd/test',
+    agentModel: 'claude-sonnet-4-5',
+    analystModel: 'claude-sonnet-4-5',
+    ...overrides,
+  };
+}
+
+describe('buildWhatifRunOptions — operatorPredictions', () => {
+  it('omits operatorPredictions from the result when no --predict flags were passed', () => {
+    // When operatorPredictions is empty the returned WhatifOptions must NOT
+    // include the key at all — callers that spread the result into API calls
+    // rely on key absence to skip prediction-related work.
+    const parsed = makeParsed(); // no operatorPredictions
+    const result = buildWhatifRunOptions(parsed, makeRunInputs());
+    expect(result).not.toHaveProperty('operatorPredictions');
+  });
+
+  it('includes operatorPredictions in the result when at least one --predict flag was given', () => {
+    const prediction: OperatorPrediction = {
+      behavior: 'greet the user',
+      testQuestion: 'Does the response greet the user',
+    };
+    const parsed = makeParsed({
+      options: {
+        agentModel: undefined,
+        analystModel: undefined,
+        verify: false,
+        turns: 12,
+        samples: 3,
+        maxUsd: 5,
+        judge: 'auto',
+        concurrency: 4,
+        maxTurns: 3,
+        episodeTimeoutMs: 180_000,
+        keepSandboxes: false,
+        operatorPredictions: [prediction],
+      },
+    });
+    const result = buildWhatifRunOptions(parsed, makeRunInputs());
+    expect(result.operatorPredictions).toEqual([prediction]);
   });
 });

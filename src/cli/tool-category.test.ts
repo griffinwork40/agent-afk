@@ -35,6 +35,7 @@ const ALL_CATEGORIES: ToolCategory[] = [
   'write',
   'shell',
   'subagent',
+  'peer',
   'skill',
   'dag',
   'mcp',
@@ -110,6 +111,9 @@ describe('categorizeTool', () => {
     ['cancel_schedule', 'schedule'],
     // editor settings tool — mutates settings.json on disk.
     ['terminal_font_size', 'write'],
+    // peer-messaging tools — distinct from subagent (child-agent dispatch).
+    ['list_sessions', 'peer'],
+    ['send_to_session', 'peer'],
   ] as Array<[string, ToolCategory]>)('categorizes %s as %s', (name, expected) => {
     expect(categorizeTool(name)).toBe(expected);
   });
@@ -292,6 +296,23 @@ describe('humanVerbForTool', () => {
     expect(humanVerbForTool('list_schedules')).toBe('Reading…');
     expect(humanVerbForTool('get_schedule_history')).toBe('Reading…');
     expect(humanVerbForTool('cancel_schedule')).toBe('Cancelling…');
+  });
+
+  it.each([
+    ['wait_for', 'Waiting…'],
+    ['test_run', 'Testing…'],
+    ['send_telegram', 'Notifying…'],
+    ['image_generate', 'Generating…'],
+    ['image_edit', 'Generating…'],
+    ['ask_question', 'Asking…'],
+    ['grep', 'Searching…'],
+    ['glob', 'Searching…'],
+    ['memory_search', 'Recalling…'],
+    ['memory_update', 'Remembering…'],
+    ['patch_apply', 'Patching…'],
+    ['config_set', 'Configuring…'],
+  ])('describes %s with the precise action %s', (name, expected) => {
+    expect(humanVerbForTool(name)).toBe(expected);
   });
 
   it('falls through to category for unknown tools', () => {

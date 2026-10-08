@@ -33,6 +33,7 @@ import {
 import {
   resolveSpec,
   buildWhatifDeps,
+  buildWhatifRunOptions,
   readDirNames,
 } from '../../../whatif/surface.js';
 import type { SlashCommand, SlashContext } from '../types.js';
@@ -41,7 +42,11 @@ import type { WhatifReport } from '../../../whatif/types.js';
 // ---------------------------------------------------------------------------
 // Budget error guard
 // ---------------------------------------------------------------------------
-import type { WhatifBudgetError as WhatifBudgetErrorType } from '../../../whatif/run.js';
+import type {
+  WhatifBudgetError as WhatifBudgetErrorType,
+  WhatifMdeError as WhatifMdeErrorType,
+} from '../../../whatif/run.js';
+import { decideMdeAction } from '../../commands/whatif.mde-handler.js';
 
 function isBudgetError(err: unknown): err is WhatifBudgetErrorType {
   return (
@@ -51,12 +56,16 @@ function isBudgetError(err: unknown): err is WhatifBudgetErrorType {
   );
 }
 
+function isMdeError(err: unknown): err is WhatifMdeErrorType {
+  return err instanceof Error && err.name === 'WhatifMdeError';
+}
+
 // ---------------------------------------------------------------------------
 // Progress throttling
 // ---------------------------------------------------------------------------
 
 /** Emit a progress line at most once every ~10 episodes within the same stage. */
-function makeProgressThrottle(ctx: SlashContext): (stage: string, message: string, done?: number) => void {
+export function makeProgressThrottle(ctx: SlashContext): (stage: string, message: string, done?: number) => void {
   let lastStage = '';
   let episodeCount = 0;
 
@@ -67,9 +76,14 @@ function makeProgressThrottle(ctx: SlashContext): (stage: string, message: strin
       ctx.out.info(`[whatif] ${stage}: ${message}`);
       return;
     }
+    // Milestone lines (no done counter, e.g. the preflight MDE note) always show.
+    if (done === undefined) {
+      ctx.out.info(`[whatif] ${stage}: ${message}`);
+      return;
+    }
     if (stage === 'episodes' || stage === 'run') {
       episodeCount++;
-      if (done !== undefined && episodeCount % 10 === 0) {
+      if (episodeCount % 10 === 0) {
         ctx.out.info(`[whatif] ${stage}: ${message}`);
       }
     }
@@ -162,28 +176,18 @@ async function handleWhatif(ctx: SlashContext, args: string): Promise<void> {
   // Register stop handler for the run phase.
   ctx.setSoftStopHandler?.(() => ac.abort());
 
+  const runOpts = buildWhatifRunOptions(parsed, {
+    spec,
+    realHome,
+    realCwd,
+    agentModel,
+    analystModel,
+  });
+
   let report: WhatifReport;
   try {
     const { runWhatif } = await import('../../../whatif/run.js');
-    report = await runWhatif(
-      {
-        spec,
-        realHome,
-        realCwd,
-        agentModel,
-        analystModel,
-        verify: parsed.options.verify,
-        turns: parsed.options.turns,
-        samples: parsed.options.samples,
-        maxUsd: parsed.options.maxUsd,
-        judge: parsed.options.judge,
-        concurrency: parsed.options.concurrency,
-        maxTurns: parsed.options.maxTurns,
-        episodeTimeoutMs: parsed.options.episodeTimeoutMs,
-        keepSandboxes: parsed.options.keepSandboxes,
-      },
-      deps,
-    );
+    report = await runWhatif(runOpts, deps);
   } catch (err) {
     ctx.setSoftStopHandler?.(null);
 
@@ -194,6 +198,15 @@ async function handleWhatif(ctx: SlashContext, args: string): Promise<void> {
           `limit $${be.maxUsd.toFixed(2)}. ` +
           `Raise the cap with --max-usd ${Math.ceil(be.estimateUsd * 1.5)}.`,
       );
+      return;
+    }
+
+    if (isMdeError(err)) {
+      const me = err as WhatifMdeErrorType;
+      // The REPL has no TTY readline elicitation — always treat as non-interactive.
+      // The slash handler cannot prompt; it must refuse with advice.
+      const action = decideMdeAction(me, parsed.yes, false /* not interactive */);
+      ctx.out.error(action.kind === 'refuse' ? action.message : action.detail);
       return;
     }
 
@@ -214,6 +227,11 @@ async function handleWhatif(ctx: SlashContext, args: string): Promise<void> {
   for (const line of lines) ctx.out.line(line);
   ctx.out.line('');
   ctx.out.info(`Full report: ${report.runDir}/report.md`);
+  if (report.keptSandboxes) {
+    ctx.out.info(`Sandboxes kept — baseline: ${report.keptSandboxes.baseline}`);
+    ctx.out.info(`              candidate: ${report.keptSandboxes.candidate}`);
+    ctx.out.info(`(mapping written to ${report.runDir}/sandboxes.json)`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -253,7 +271,12 @@ export const whatifCmd: SlashCommand = {
     '--max-turns',
     '--timeout',
     '--keep-sandboxes',
+    '--predict',
+    '--probes',
+    '--max-predictions',
+    '--no-baseline-sample',
     '--yes',
+    '--force',
     '--json',
   ],
   async handler(ctx: SlashContext, args: string): Promise<'continue'> {

@@ -26,7 +26,7 @@ import { XaiProvider } from './xai/index.js';
 import { resolveXaiConstructionAuthMode } from './xai/force-mode.js';
 import { MODEL_MAP } from '../session/model-resolution.js';
 import { resolveBinding, type ModelSlots } from '../session/model-slots.js';
-import { isOSeriesModel } from '../model-capabilities.js';
+import { isOSeriesModel, OPENAI_COMPAT_THIRD_PARTY_PREFIXES } from '../model-capabilities.js';
 import { env } from '../../config/env.js';
 
 /**
@@ -219,16 +219,11 @@ export function providerForModel(
       // Completions-shaped endpoint. Without these prefixes, an operator
       // running `AFK_MODEL=deepseek-v4-pro afk` (no AFK_OPENAI_BASE_URL set
       // → no Tier 4 fallback) silently 404s against api.anthropic.com.
-      lowered.startsWith('deepseek-') ||
-      lowered.startsWith('deepseek_') ||
-      lowered.startsWith('mistral-') ||
-      lowered.startsWith('mistral_') ||
-      lowered.startsWith('mixtral-') ||
-      lowered.startsWith('mixtral_') ||
-      lowered.startsWith('llama-') ||
-      lowered.startsWith('llama_') ||
-      lowered.startsWith('qwen-') ||
-      lowered.startsWith('qwen_')
+      // Derived from OPENAI_COMPAT_THIRD_PARTY_PREFIXES (model-capabilities.ts)
+      // — the single source of truth shared with model-limits.ts.
+      OPENAI_COMPAT_THIRD_PARTY_PREFIXES.some(
+        (p) => lowered.startsWith(`${p}-`) || lowered.startsWith(`${p}_`),
+      )
     ) {
       return 'openai-compatible';
     }

@@ -31,7 +31,7 @@
  * # Cleanup
  *
  * The temp file is cleaned up in a `finally` block using best-effort
- * semantics — the unlink error is suppressed because the rename may already
+ * semantics — the rm error is suppressed because the rename may already
  * have succeeded and the target path no longer exists, or another process may
  * have removed it concurrently.  The original error from the write/rename is
  * always re-thrown.
@@ -40,9 +40,11 @@
  */
 
 import { mkdirSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
-import { mkdir, writeFile, rename, rm } from 'node:fs/promises';
+import { mkdir, writeFile, rename, rm, chmod } from 'node:fs/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { sleepSync } from './sleep-sync.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,6 +78,35 @@ export interface AtomicWriteOptions {
    * Defaults to `false`.
    */
   secure?: boolean;
+  /**
+   * Async variant only. Aborts the write: forwarded to the temp-file
+   * `writeFile`, and re-checked immediately before the `rename` commit point,
+   * so an abort at any moment leaves `dest` untouched (old content or absent)
+   * and the temp file removed. The abort reason is re-thrown.
+   */
+  signal?: AbortSignal;
+  /**
+   * Async variant only. When true, `chmod` the temp file to exactly `mode`
+   * before the rename. The `mode` given to file creation is masked by the
+   * process umask, so callers preserving an existing file's permission bits
+   * (e.g. an editor-style overwrite of a 0o775 script) need this to land the
+   * original mode verbatim. Defaults to `false`.
+   */
+  exactMode?: boolean;
+  /**
+   * Async variant only. Evaluated immediately before the commit; when it
+   * returns `false` the temp file is removed, `dest` is left untouched, and the
+   * call resolves `false` instead of `true`.
+   *
+   * Invariant: when set, the guard and the rename run SYNCHRONOUSLY in one
+   * event-loop tick (`renameSync`, no Windows retry loop). An async rename is
+   * dispatched to the threadpool, so other JS on this thread (e.g. a
+   * synchronous unlink of `dest`) could run between the guard and the syscall
+   * and the rename would resurrect a file the guard just saw. With the sync
+   * pair no same-process code can interleave; only another PROCESS can act in
+   * the microseconds between the check and the rename.
+   */
+  commitGuard?: () => boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +125,105 @@ function makeTmpPath(dest: string): string {
   return join(dir, `.tmp-${hex}`);
 }
 
+/**
+ * Transient error codes emitted by Windows when a concurrent rename targets
+ * the same destination file.  On POSIX, `rename(2)` is guaranteed atomic and
+ * these codes never appear; on POSIX these codes signal permanent conditions
+ * (unwritable directory, mount boundary) and must NOT be retried.
+ *
+ * - `EPERM`  (-4048): most common; destination briefly locked by the winner.
+ * - `EACCES` (-4092): alternative Windows access-denied code.
+ * - `EBUSY`  (-4082): file in use by another process during the rename window.
+ */
+const WIN_RENAME_TRANSIENT = new Set(['EPERM', 'EACCES', 'EBUSY']);
+
+/**
+ * Attempt `rename(tmp, dest)` synchronously, retrying up to `maxRetries`
+ * times on transient Windows errors (EPERM / EACCES / EBUSY).  Each retry
+ * waits an exponentially increasing, clamped delay so callers converge quickly.
+ *
+ * Contract: the retry path is ONLY activated on Windows (`_platform === 'win32'`).
+ * On POSIX, EPERM/EACCES/EBUSY indicate permanent error conditions and are
+ * re-thrown immediately without retry.
+ *
+ * @internal Test-only injectable params (`_platform`, `_renameFn`) are
+ *   intentionally excluded from the public signature; the overload below
+ *   accepts them only when the caller explicitly opts in for test purposes.
+ */
+export function renameWithRetrySync(
+  tmp: string,
+  dest: string,
+  maxRetries?: number,
+  /** @internal */ _platform?: string,
+  /** @internal */ _renameFn?: (from: string, to: string) => void,
+): void {
+  const retries = maxRetries ?? 5;
+  const platform = _platform ?? process.platform;
+  const renameFn = _renameFn ?? renameSync;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      renameFn(tmp, dest);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (platform !== 'win32' || !WIN_RENAME_TRANSIENT.has(code ?? '')) throw err;
+      lastErr = err;
+      // Emit on entry to the retry path so Windows transient rename races are
+      // visible to operators rather than silently absorbed (finding #2870-3).
+      if (attempt === 0) {
+        process.stderr.write(`[atomic-write] rename retry: ${code} on attempt 0 of ${retries} (${dest})\n`);
+      }
+      if (attempt < retries) sleepSync(Math.min(10 * 2 ** attempt, 5000));
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * Attempt `rename(tmp, dest)`, retrying up to `maxRetries` times on transient
+ * Windows errors (EPERM / EACCES / EBUSY).  Each retry waits an exponentially
+ * increasing, clamped delay (max 5 s) so callers converge quickly.
+ *
+ * Contract: the retry path is ONLY activated on Windows (`_platform === 'win32'`).
+ * On POSIX, EPERM/EACCES/EBUSY indicate permanent error conditions and are
+ * re-thrown immediately without retry.
+ *
+ * @internal Test-only injectable params (`_platform`, `_renameFn`) allow
+ *   portable testing of both branches without `vi.spyOn` on a non-configurable
+ *   ES module export and without skipping by host OS (repo rule R4).
+ */
+export async function renameWithRetry(
+  tmp: string,
+  dest: string,
+  maxRetries = 5,
+  /** @internal */ _platform: string = process.platform,
+  /** @internal */ _renameFn: (from: string, to: string) => Promise<void> = rename,
+  /** @internal */ _sleepFn: (ms: number) => Promise<void> = sleep,
+): Promise<void> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      await _renameFn(tmp, dest);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      // Invariant: only retry transient Windows rename races; on POSIX these
+      // codes are permanent and must propagate immediately.
+      if (_platform !== 'win32' || !WIN_RENAME_TRANSIENT.has(code ?? '')) throw err;
+      lastErr = err;
+      // Emit on entry to the retry path so Windows transient rename races are
+      // visible to operators rather than silently absorbed (finding #2870-3).
+      if (attempt === 0) {
+        process.stderr.write(`[atomic-write] rename retry: ${code} on attempt 0 of ${maxRetries} (${dest})\n`);
+      }
+      // Skip the sleep on the final attempt — we are about to throw anyway.
+      if (attempt < maxRetries) await _sleepFn(Math.min(10 * 2 ** attempt, 5000));
+    }
+  }
+  throw lastErr;
+}
+
 // ---------------------------------------------------------------------------
 // Synchronous variant
 // ---------------------------------------------------------------------------
@@ -102,6 +232,9 @@ function makeTmpPath(dest: string): string {
  * Write `content` to `dest` atomically: write to a sibling temp file, then
  * `rename` it over the target.  The rename is atomic on POSIX and NTFS within
  * a single filesystem — a crash mid-write never leaves a half-written file.
+ *
+ * On Windows, the rename step uses a retry wrapper (EPERM/EACCES/EBUSY) to
+ * tolerate transient concurrent-access races.
  *
  * @param dest    - Absolute path of the destination file.
  * @param content - String (or Buffer) to write.
@@ -128,9 +261,9 @@ export function atomicWriteFile(
   const tmp = makeTmpPath(dest);
   try {
     writeFileSync(tmp, content, { mode, encoding, flag });
-    renameSync(tmp, dest);
+    renameWithRetrySync(tmp, dest);
   } catch (err) {
-    // Best-effort cleanup — suppress unlink errors.
+    // Best-effort cleanup — suppress rm errors.
     try { unlinkSync(tmp); } catch { /* ignore */ }
     throw err;
   }
@@ -141,18 +274,36 @@ export function atomicWriteFile(
 // ---------------------------------------------------------------------------
 
 /**
+ * Test-only injectables for {@link atomicWriteFileAsync}.
+ * Collapsed into a single object so the public positional signature stays
+ * narrow (finding #3153).  Production callers must not pass this.
+ * @internal
+ */
+export interface _AtomicWriteAsyncTestInternals {
+  renameFn?: (from: string, to: string) => Promise<void>;
+  platform?: string;
+}
+
+/**
  * Async version of {@link atomicWriteFile}.  Write `content` to `dest`
  * atomically via a sibling temp file and `rename`.
  *
  * @param dest    - Absolute path of the destination file.
  * @param content - String (or Buffer) to write.
  * @param opts    - Optional mode, encoding, and mkdirp flag.
+ * @internal `_testInternals` — test-only injectable overrides (renameFn,
+ *   platform) forwarded to {@link renameWithRetry}.  Production callers must
+ *   not pass this.
  */
 export async function atomicWriteFileAsync(
   dest: string,
   content: string | Buffer,
   opts: AtomicWriteOptions = {},
-): Promise<void> {
+  /** @internal */ _testInternals?: _AtomicWriteAsyncTestInternals,
+): Promise<boolean> {
+  // Unpack internal overrides (undefined in production).
+  const _renameFn = _testInternals?.renameFn;
+  const _platform = _testInternals?.platform;
   const mode = opts.mode ?? 0o600;
   const encoding = opts.encoding ?? 'utf-8';
   const mkdirp = opts.mkdirp ?? true;
@@ -164,10 +315,23 @@ export async function atomicWriteFileAsync(
 
   const tmp = makeTmpPath(dest);
   try {
-    await writeFile(tmp, content, { mode, encoding, flag });
-    await rename(tmp, dest);
+    await writeFile(tmp, content, { mode, encoding, flag, ...(opts.signal ? { signal: opts.signal } : {}) });
+    if (opts.exactMode) await chmod(tmp, mode);
+    // Commit point: an abort that landed after the temp write must not rename.
+    opts.signal?.throwIfAborted();
+    if (opts.commitGuard !== undefined) {
+      // Same tick: see the `commitGuard` invariant.
+      if (!opts.commitGuard()) {
+        await rm(tmp, { force: true });
+        return false;
+      }
+      renameSync(tmp, dest);
+      return true;
+    }
+    await renameWithRetry(tmp, dest, undefined, _platform, _renameFn);
+    return true;
   } catch (err) {
-    // Best-effort cleanup — suppress unlink errors.
+    // Best-effort cleanup — suppress rm errors.
     try { await rm(tmp, { force: true }); } catch { /* ignore */ }
     throw err;
   }

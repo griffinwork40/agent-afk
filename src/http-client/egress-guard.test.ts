@@ -5,9 +5,26 @@
  * into `guardedFetch` so no real socket is opened. The behaviours under test are
  * the per-range classification, the DNS-rebinding guard (hostname resolving to
  * internal space), per-redirect-hop re-validation, and the env opt-out.
+ *
+ * The `undici` module is partially mocked (fetch only; Agent is kept real) so
+ * that the dispatcher positive-path test can intercept the call that
+ * guardedFetch makes to undiciFetch and assert `dispatcher` is present in the
+ * RequestInit — without opening a real socket.
  */
 
+// vi.mock is hoisted by vitest so this must precede the import block.
+vi.mock('undici', async (importOriginal) => {
+  const original = await importOriginal<typeof import('undici')>();
+  return {
+    ...original,
+    // Replace only `fetch`; keep Agent (and everything else) real so the
+    // guardedDispatcher constructed in egress-guard.ts continues to work.
+    fetch: vi.fn(async () => new Response('ok', { status: 200 })),
+  };
+});
+
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import * as undiciFetchModule from 'undici';
 import {
   assertEgressAllowed,
   checkEgressTarget,
@@ -355,5 +372,66 @@ describe('guardedFetch — per-redirect-hop re-validation', () => {
         lookupFn: publicLookup,
       }),
     ).rejects.toThrow(/too many redirects/);
+  });
+});
+
+describe('guardedFetch — undici vs globalThis.fetch selection', () => {
+  // Verify that guardedFetch selects undici's own fetch (not globalThis.fetch)
+  // when no custom fetchFn is injected and private hosts are not allowed.
+  // The observable signal is that a non-injected call passes a `dispatcher`
+  // property in RequestInit — which only undici honours — while an injected
+  // fetchFn receives no dispatcher (the useUndici branch is skipped).
+
+  it('injected fetchFn (non-globalThis) is called directly with no dispatcher', async () => {
+    // When fetchFn !== globalThis.fetch, useUndici is false and the injected fn
+    // is used as-is. The RequestInit must NOT contain a `dispatcher` field.
+    const fetchFn = vi.fn(async () => new Response('ok', { status: 200 }));
+    await guardedFetch(fetchFn as unknown as typeof fetch, 'https://public.example/', {}, {
+      lookupFn: publicLookup,
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    const init = fetchFn.mock.calls[0]?.[1] as Record<string, unknown>;
+    // No dispatcher injected — the injected-fetch path is taken, not the undici path.
+    expect(init).not.toHaveProperty('dispatcher');
+  });
+
+  it('passes a dispatcher when globalThis.fetch is used (undici selected)', async () => {
+    // When fetchFn === globalThis.fetch and allowPrivateHosts is false (the
+    // default), guardedFetch takes the useUndici=true branch and calls
+    // undici's own fetch (the `undiciFetch` binding inside egress-guard.ts)
+    // with `{ dispatcher: guardedDispatcher }` in the RequestInit.
+    //
+    // We assert this POSITIVELY: the undici fetch mock (wired by vi.mock at the
+    // top of this file) should have been called with a `dispatcher` property in
+    // the second argument, which is the RequestInit object.
+    //
+    // No real socket is opened — the vi.mock replaces undici's fetch with a
+    // no-op stub, so the call returns immediately.
+    const undiciMockedFetch = vi.mocked(undiciFetchModule.fetch);
+    undiciMockedFetch.mockClear();
+
+    await guardedFetch(globalThis.fetch, 'https://public.example/', {}, {
+      lookupFn: publicLookup,
+    });
+
+    // The mocked undici fetch must have been called (useUndici=true path taken).
+    expect(undiciMockedFetch).toHaveBeenCalledTimes(1);
+    // And the RequestInit passed to it must contain a `dispatcher` instance
+    // (the guardedDispatcher Agent built inside egress-guard.ts).
+    const init = undiciMockedFetch.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(init).toHaveProperty('dispatcher');
+  });
+
+  it('allowPrivateHosts:true bypasses undici selection even for globalThis.fetch', async () => {
+    // When allowPrivateHosts is true, useUndici is false regardless of the fetchFn.
+    // The injected fetchFn is called directly, confirming the bypass.
+    const fetchFn = vi.fn(async () => new Response('ok', { status: 200 }));
+    await guardedFetch(fetchFn as unknown as typeof fetch, 'https://public.example/', {}, {
+      lookupFn: publicLookup,
+      allowPrivateHosts: true,
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    const init = fetchFn.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(init).not.toHaveProperty('dispatcher');
   });
 });

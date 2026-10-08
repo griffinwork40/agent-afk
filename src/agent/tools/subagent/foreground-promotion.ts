@@ -19,6 +19,7 @@
 
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { BackgroundAgentRegistry } from '../../background-registry.js';
+import { backgroundDeliveryNote, type BackgroundDelivery } from './background-delivery.js';
 import type { SubagentManager } from '../../subagent.js';
 import { annotateIfIncomplete, incompleteToolResultFields } from '../../subagent/result.js';
 import { debugLog } from '../../../utils/debug.js';
@@ -92,6 +93,8 @@ export interface RunForegroundArgs {
   parentSessionId: string | undefined;
   /** May be undefined — promotion then falls through to a normal foreground await. */
   registry: BackgroundAgentRegistry | undefined;
+  /** How a promoted job's result reaches the dispatcher. See background-delivery.ts. */
+  delivery?: BackgroundDelivery;
   /** The executor's live promotion-trigger map (keyed by handle.id). */
   promotionTriggers: Map<string, PromotionTrigger>;
   /** The executor's live cancellable-handle map (keyed by handle.id). */
@@ -272,10 +275,9 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
             subagentId: job.subagentId,
             label: job.label,
             message:
-              `Subagent backgrounded by user (jobId=${job.jobId}). ` +
-              `It keeps running detached; its result will be delivered into ` +
-              `this context automatically with the next user message once it ` +
-              `finishes. /bgsub:join ${job.jobId} remains available for manual replay.`,
+              `Subagent backgrounded by user (jobId=${job.jobId}). It keeps running detached. ` +
+              `${backgroundDeliveryNote(args.delivery, job.jobId)} ` +
+              `/bgsub:join ${job.jobId} remains available for manual replay.`,
           };
           // Ordering: claim the queued note only AFTER `adoptRunning` succeeded
           // and `promoted` is set. The cap-hit / registry-refusal path below
@@ -496,7 +498,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
         if (outcome.preserved) {
           debugLog(
             `[isolation] preserved worktree ${worktreePath} ` +
-              `(${outcome.reason ? describePreserveReason(outcome.reason) : 'unknown'}) — ` +
+              `(${outcome.reason ? describePreserveReason(outcome.reason, outcome.ignoredDetail, outcome.ignoredBecause) : 'unknown'}) — ` +
               `locked so the sweep will not reap it; recover via the worktree tool`,
           );
         }

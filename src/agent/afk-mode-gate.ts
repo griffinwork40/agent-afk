@@ -90,11 +90,18 @@ import { worktreeRootFor } from './worktree/worktree-occupancy.js';
 import { isSafeInWorkspaceRm } from './afk-mode-rm-allowlist.js';
 import { isSubagentContext } from './hooks/hook-utils.js';
 import { forwardAbortSignal } from '../utils/abort.js';
+import { buildInputPreview } from './afk-gate-preview.js';
 
 /** Default deny-on-timeout window for a high-risk approval (ms). */
 const DEFAULT_APPROVAL_TIMEOUT_MS = 300_000;
-/** Cap the tool-input preview shown to the operator in the approval prompt. */
-const MAX_INPUT_PREVIEW = 300;
+
+/**
+ * The serverName stamped on every harness-originated elicitation request.
+ * Renderers key on {@link ElicitationRequest._harnessInternal} — not on this
+ * string alone — to avoid spoofing by an external MCP server that happens to
+ * use the same name.
+ */
+const AFK_HARNESS_SERVER_NAME = 'agent-afk';
 
 export interface AfkModeGateOptions {
   /**
@@ -138,6 +145,137 @@ export interface AfkModeGateOptions {
   traceWriter?: TraceSink;
 }
 
+/** Wiring bundle for {@link requestApproval} — all closed-over construction
+ *  values in one explicit object so the helper is module-level (not a closure). */
+interface ApprovalCtx {
+  route: (
+    request: ElicitationRequest,
+    options: { signal: AbortSignal; onActive?: () => void; sessionId?: string },
+  ) => Promise<ElicitationResult>;
+  approvalTimeoutMs: number;
+  traceWriter: TraceSink | undefined;
+  sessionId: string | undefined;
+}
+
+/**
+ * Route an approve/deny elicitation to the operator and await their answer.
+ *
+ * Extracted from `createAfkModeGate` so the outer factory stays within the
+ * 200-line function-size ceiling. All construction-time state is passed via
+ * {@link ApprovalCtx}; per-call state comes from the remaining parameters.
+ */
+async function requestApproval(
+  ctx: ApprovalCtx,
+  toolName: string,
+  input: unknown,
+  signal?: AbortSignal,
+  callSessionId?: string,
+): Promise<HookDecision> {
+  const start = Date.now();
+  const request = buildApprovalRequest(toolName, input);
+
+  // A child controller so a deny-on-timeout (or a parent turn abort) cancels
+  // the pending elicitation prompt — the real router resolves to a decline on
+  // abort, so the phone prompt does not linger past the decision.
+  const ac = new AbortController();
+  const cleanupAbort = signal ? forwardAbortSignal(signal, ac) : () => undefined;
+
+  const TIMEOUT = Symbol('afk-approval-timeout');
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let armTimer!: () => void;
+  // Contract: timeoutP resolves only after armTimer() is called (i.e. once
+  // this request leaves the elicitation queue and is shown to the operator).
+  // If onActive never fires (no handler / pre-aborted / aborted-in-queue),
+  // the timer is never armed and timeoutP never resolves — that's correct,
+  // because route() resolves DECLINE and wins the race. This ensures a prior
+  // queued prompt's open time is never charged against this op's window.
+  const timeoutP = new Promise<typeof TIMEOUT>((resolve) => {
+    armTimer = () => {
+      if (timer) return; // idempotent
+      timer = setTimeout(() => {
+        ac.abort();
+        resolve(TIMEOUT);
+      }, ctx.approvalTimeoutMs);
+      timer.unref?.();
+    };
+  });
+
+  function decide(
+    decision: HookDecision,
+    approvalOutcome: 'approved' | 'denied' | 'unrecognised' | 'timeout' | 'decline' | 'cancel',
+  ): HookDecision {
+    const durationMs = Date.now() - start;
+    const isBlock = decision.decision === 'block';
+    void emitHookDecision(ctx.traceWriter, {
+      hookEvent: 'PreToolUse',
+      ...(isBlock ? { decision: 'block' as const } : {}),
+      ...(isBlock && decision.reason !== undefined ? { reason: decision.reason } : {}),
+      ...(isBlock ? { blockedTool: toolName } : {}),
+      durationMs,
+      approvalOutcome,
+    });
+    return decision;
+  }
+
+  let outcome: ElicitationResult | typeof TIMEOUT;
+  try {
+    // Race the operator's answer against the deny-on-timeout. Racing (rather
+    // than relying on the handler to observe the abort) guarantees progress
+    // even for a handler that ignores its signal. The timer is armed via
+    // onActive so it starts only when the prompt is actually shown.
+    // Contract: the per-call id from the hook context wins over the one
+    // captured at construction. The REPL builds ONE hook registry that is
+    // deliberately stable across session swaps and is constructed before the
+    // provider exists (interactive/bootstrap.ts), so there is no session id to
+    // pass at construction time and the captured value is permanently
+    // undefined there — a high-risk approval would prompt with no marker at
+    // all. The dispatcher populates `PreToolUseContext.sessionId` per call,
+    // which is the same source the path-approval hook already uses
+    // (tools/hooks/path-approval-hook.ts). The construction-time value stays
+    // as the fallback for surfaces that supply it and do not route through a
+    // dispatcher-populated context (the daemon scheduler).
+    const markSessionId = callSessionId ?? ctx.sessionId;
+    outcome = await Promise.race([
+      ctx.route(request, {
+        signal: ac.signal,
+        onActive: armTimer,
+        ...(markSessionId !== undefined ? { sessionId: markSessionId } : {}),
+      }),
+      timeoutP,
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    cleanupAbort();
+  }
+
+  if (outcome === TIMEOUT) {
+    return decide(
+      blockDecision(toolName, `no approval arrived within ${Math.round(ctx.approvalTimeoutMs / 1000)}s`),
+      'timeout',
+    );
+  }
+  if (outcome.action !== 'accept') {
+    return decide(
+      blockDecision(
+        toolName,
+        outcome.action === 'cancel'
+          ? 'the operator cancelled the approval prompt'
+          : 'no operator approval was available',
+      ),
+      outcome.action === 'cancel' ? 'cancel' : 'decline',
+    );
+  }
+  const choice = String(outcome.content?.['choice'] ?? '').toLowerCase();
+  if (choice === 'approve') return decide({}, 'approved');
+  if (choice === 'deny') return decide(blockDecision(toolName, 'the operator denied it'), 'denied');
+  // action was 'accept' but choice ∉ {approve,deny} — a handler regression
+  // (dropped/garbled choice), not a deliberate deny. Fail closed.
+  return decide(
+    blockDecision(toolName, 'the approval prompt returned an unrecognised choice'),
+    'unrecognised',
+  );
+}
+
 export function createAfkModeGate(
   getMode: () => PermissionMode,
   cwd?: string,
@@ -148,130 +286,17 @@ export function createAfkModeGate(
   const promptForApproval = opts?.promptForApproval ?? true;
   const traceWriter = opts?.traceWriter;
   const sessionId = opts?.sessionId;
-  const route =
-    opts?.route ??
-    ((
-      request: ElicitationRequest,
-      options: { signal: AbortSignal; onActive?: () => void; sessionId?: string },
-    ) => elicitationRouter.route(request, options));
-
-  async function requestApproval(
-    toolName: string,
-    input: unknown,
-    signal?: AbortSignal,
-    callSessionId?: string,
-  ): Promise<HookDecision> {
-    const start = Date.now();
-    const request = buildApprovalRequest(toolName, input);
-
-    // A child controller so a deny-on-timeout (or a parent turn abort) cancels
-    // the pending elicitation prompt — the real router resolves to a decline on
-    // abort, so the phone prompt does not linger past the decision.
-    const ac = new AbortController();
-    const cleanupAbort = signal ? forwardAbortSignal(signal, ac) : () => undefined;
-
-    const TIMEOUT = Symbol('afk-approval-timeout');
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let armTimer!: () => void;
-    // Contract: timeoutP resolves only after armTimer() is called (i.e. once
-    // this request leaves the elicitation queue and is shown to the operator).
-    // If onActive never fires (no handler / pre-aborted / aborted-in-queue),
-    // the timer is never armed and timeoutP never resolves — that's correct,
-    // because route() resolves DECLINE and wins the race. This ensures a prior
-    // queued prompt's open time is never charged against this op's window.
-    const timeoutP = new Promise<typeof TIMEOUT>((resolve) => {
-      armTimer = () => {
-        if (timer) return; // idempotent
-        // Start the deny-on-timeout window only once this request leaves the
-        // elicitation queue and is shown to the operator, so a prior queued
-        // prompt's open time is not charged against this op's window.
-        timer = setTimeout(() => {
-          ac.abort();
-          resolve(TIMEOUT);
-        }, approvalTimeoutMs);
-        timer.unref?.();
-      };
-    });
-
-    // Helper to emit the structured audit trace and return the hook decision.
-    // Called on every exit path from requestApproval — centralises the emit so
-    // no path accidentally skips it, and keeps the mapping explicit.
-    function decide(
-      decision: HookDecision,
-      approvalOutcome: 'approved' | 'denied' | 'unrecognised' | 'timeout' | 'decline' | 'cancel',
-    ): HookDecision {
-      const durationMs = Date.now() - start;
-      const isBlock = decision.decision === 'block';
-      void emitHookDecision(traceWriter, {
-        hookEvent: 'PreToolUse',
-        ...(isBlock ? { decision: 'block' as const } : {}),
-        ...(isBlock && decision.reason !== undefined ? { reason: decision.reason } : {}),
-        ...(isBlock ? { blockedTool: toolName } : {}),
-        durationMs,
-        approvalOutcome,
-      });
-      return decision;
-    }
-
-    let outcome: ElicitationResult | typeof TIMEOUT;
-    try {
-      // Race the operator's answer against the deny-on-timeout. Racing (rather
-      // than relying on the handler to observe the abort) guarantees progress
-      // even for a handler that ignores its signal. The timer is armed via
-      // onActive so it starts only when the prompt is actually shown.
-      // Contract: the per-call id from the hook context wins over the one
-      // captured at construction. The REPL builds ONE hook registry that is
-      // deliberately stable across session swaps and is constructed before the
-      // provider exists (interactive/bootstrap.ts), so there is no session id to
-      // pass at construction time and the captured value is permanently
-      // undefined there — a high-risk approval would prompt with no marker at
-      // all. The dispatcher populates `PreToolUseContext.sessionId` per call,
-      // which is the same source the path-approval hook already uses
-      // (tools/hooks/path-approval-hook.ts). The construction-time value stays
-      // as the fallback for surfaces that supply it and do not route through a
-      // dispatcher-populated context (the daemon scheduler).
-      const markSessionId = callSessionId ?? sessionId;
-      outcome = await Promise.race([
-        route(request, {
-          signal: ac.signal,
-          onActive: armTimer,
-          ...(markSessionId !== undefined ? { sessionId: markSessionId } : {}),
-        }),
-        timeoutP,
-      ]);
-    } finally {
-      if (timer) clearTimeout(timer);
-      cleanupAbort();
-    }
-
-    if (outcome === TIMEOUT) {
-      return decide(
-        blockDecision(toolName, `no approval arrived within ${Math.round(approvalTimeoutMs / 1000)}s`),
-        'timeout',
-      );
-    }
-    if (outcome.action !== 'accept') {
-      return decide(
-        blockDecision(
-          toolName,
-          outcome.action === 'cancel'
-            ? 'the operator cancelled the approval prompt'
-            : 'no operator approval was available',
-        ),
-        outcome.action === 'cancel' ? 'cancel' : 'decline',
-      );
-    }
-    const choice = String(outcome.content?.['choice'] ?? '').toLowerCase();
-    if (choice === 'approve') return decide({}, 'approved'); // operator approved this single call
-    if (choice === 'deny') return decide(blockDecision(toolName, 'the operator denied it'), 'denied');
-    // action was 'accept' but choice ∉ {approve,deny} — a handler regression
-    // (dropped/garbled choice), not a deliberate deny. Fail closed with a distinct,
-    // diagnosable reason instead of masquerading as a deny.
-    return decide(
-      blockDecision(toolName, 'the approval prompt returned an unrecognised choice'),
-      'unrecognised',
-    );
-  }
+  const approvalCtx: ApprovalCtx = {
+    route:
+      opts?.route ??
+      ((
+        request: ElicitationRequest,
+        options: { signal: AbortSignal; onActive?: () => void; sessionId?: string },
+      ) => elicitationRouter.route(request, options)),
+    approvalTimeoutMs,
+    traceWriter,
+    sessionId,
+  };
 
   return function afkModeGate(
     context: HookContext,
@@ -384,7 +409,7 @@ export function createAfkModeGate(
 
     // Main session: ask the operator to approve/deny (deny-on-timeout). Returns
     // a Promise<HookDecision>; the gate is registered `longRunning: true`.
-    return requestApproval(toolName, context.input, signal, context.sessionId);
+    return requestApproval(approvalCtx, toolName, context.input, signal, context.sessionId);
   };
 }
 
@@ -392,13 +417,23 @@ export function createAfkModeGate(
  *  uses, so it renders via the proven REPL numbered-prompt / Telegram inline-
  *  keyboard path). */
 function buildApprovalRequest(toolName: string, input: unknown): ElicitationRequest {
-  const preview = clipInput(input);
+  // Redact secrets before any truncation so a credential straddling the preview
+  // boundary cannot leak a partial value to the operator's phone. Same redaction
+  // the AFK push path applies (cli/commands/interactive/afk-push.ts).
+  let s: string;
+  try {
+    s = typeof input === 'string' ? input : (JSON.stringify(input) ?? '');
+  } catch {
+    s = String(input);
+  }
+  const preview = buildInputPreview(redactInlineSecrets(s));
   const message =
     `AFK: \`${toolName}\` is high-risk / irreversible and AFK mode runs ` +
     `unattended. Approve this single call?` +
     (preview ? `\n\nInput: ${preview}` : '');
   return {
-    serverName: 'agent-afk',
+    serverName: AFK_HARNESS_SERVER_NAME,
+    _harnessInternal: true,
     message,
     mode: 'form',
     title: 'AFK high-risk approval',
@@ -417,28 +452,6 @@ function buildApprovalRequest(toolName: string, input: unknown): ElicitationRequ
       required: ['choice'],
     },
   };
-}
-
-/**
- * Compact, bounded, secret-redacted preview of a tool input for the approval
- * prompt. Secrets are scrubbed via {@link redactInlineSecrets} BEFORE truncation
- * so a credential straddling the {@link MAX_INPUT_PREVIEW} boundary cannot leak a
- * partial value. This preview renders on the operator's phone in AFK mode, so it
- * gets the same redaction the AFK push path applies (see
- * cli/commands/interactive/afk-push.ts).
- */
-function clipInput(input: unknown): string {
-  let s: string;
-  try {
-    s = typeof input === 'string' ? input : JSON.stringify(input);
-  } catch {
-    s = String(input);
-  }
-  if (!s) return '';
-  // Redact secrets before any truncation — a credential split across the
-  // MAX_INPUT_PREVIEW boundary must not leak a partial value to the phone.
-  s = redactInlineSecrets(s);
-  return s.length > MAX_INPUT_PREVIEW ? `${s.slice(0, MAX_INPUT_PREVIEW)}… [truncated]` : s;
 }
 
 /** The refusal decision surfaced to the model, with a cause-specific tail. */

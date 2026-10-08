@@ -119,7 +119,7 @@ export interface UpdateOptions {
  * at the CLI to record a deliberate increase; shrinks and removals are always
  * unrestricted.
  *
- * Bootstrap exception: when the baseline file is missing or empty, the write
+ * Bootstrap exception: when the baseline file is absent, the write
  * is always allowed (no prior sizes to compare against).
  */
 export function updateBaseline(

@@ -700,6 +700,30 @@ describe('buildToolCallCompletedPayload — errorHead field', () => {
     expect(payload.errorHead).toBe('line1 line2 line3');
   });
 
+  it('collapses C1 control characters (\\x80–\\x9F) in the stored errorHead', () => {
+    // \x9B is CSI (a C1 control character). buildErrorHead must replace it with
+    // a space, matching the [\x00-\x1F\x7F-\x9F] regex — identical coverage to
+    // sanitizeForDisplay in terminal-sanitize.ts.
+    const payload = buildToolCallCompletedPayload({
+      toolUseId: 'tu_eh_c1',
+      name: 'bash',
+      result: { content: 'before\x9Bafter', isError: true },
+      truncated: false,
+      durationMs: 1,
+    });
+    expect(payload.errorHead).toBe('before after');
+    // Verify every C1 byte in the range is replaced.
+    const c1Only = '\x80\x9F'; // lowest and highest C1 code points
+    const payload2 = buildToolCallCompletedPayload({
+      toolUseId: 'tu_eh_c1b',
+      name: 'bash',
+      result: { content: `a${c1Only}b`, isError: true },
+      truncated: false,
+      durationMs: 1,
+    });
+    expect(payload2.errorHead).toBe('a b');
+  });
+
   it('slices at the code-point boundary — no lone surrogate when an emoji straddles char 199', () => {
     // "error ".repeat(33) + "x" gives 199 chars with spaces — redactSecrets
     // leaves it untouched (not a long homogeneous blob). Appending "😀tail"
@@ -720,7 +744,7 @@ describe('buildToolCallCompletedPayload — errorHead field', () => {
     // The head should end with the truncation marker.
     expect(head.endsWith('… (truncated)')).toBe(true);
     const withoutMarker = head.slice(0, head.lastIndexOf('…'));
-    // Must be exactly 199 'a's + one complete emoji — no lone surrogate.
+    // Must be exactly 199 chars ('error '.repeat(33) + 'x') + one complete emoji — no lone surrogate.
     expect(Array.from(withoutMarker)).toHaveLength(200);
     // Verify no lone surrogate: JSON round-trip must not produce \uFFFD
     // replacement (Node 20+ strict mode rejects lone surrogates in JSON.stringify).

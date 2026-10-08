@@ -19,11 +19,13 @@ interface CapturedManagerOpts {
   apiKey?: string;
   parentAbortSignal?: AbortSignal;
   cwd?: string;
+  parentModel?: unknown;
+  parentCredential?: { key: unknown; sourceModel: unknown };
 }
 let lastManagerOpts: CapturedManagerOpts | undefined;
 
 vi.mock('../subagent.js', () => ({
-  SubagentManager: vi.fn((opts: CapturedManagerOpts = {}) => {
+  SubagentManager: vi.fn(function (opts: CapturedManagerOpts = {}) {
     lastManagerOpts = opts;
     return {
       forkSubagent: mockForkSubagent,
@@ -330,6 +332,71 @@ describe('ComposeExecutor', () => {
       expect(result.content).toContain('boom');
       expect(result.content).toContain('Skipped');
       expect(result.content).toContain('c');
+    });
+
+    // --- partial nodes (#2970) ---
+    it('marks compose result incomplete when at least one node wind-down partial', async () => {
+      // A compose call where one node wound down (soft-deadline) should:
+      //   - return isError: false (the output is still usable)
+      //   - return incomplete: true (the facet deriver uses this to count compose_partial_nodes)
+      //   - return incompleteReason: 'compose_partial_nodes'
+      mockRunSubagentDAG.mockResolvedValue({
+        outputs: { a: 'partial result from a' },
+        failed: [],
+        skipped: [],
+        partial: [{ id: 'a', stopReason: 'SOFT_DEADLINE_WIND_DOWN' }],
+      });
+
+      const executor = new ComposeExecutor(makeContext());
+      const result = await executor.execute(makeCall({
+        nodes: [{ id: 'a', prompt: 'task a' }],
+      }));
+
+      expect(result.isError).toBe(false);
+      expect(result.incomplete).toBe(true);
+      expect(result.incompleteReason).toBe('compose_partial_nodes');
+      expect(result.partialNodeCount).toBe(1); // per-node count (#2978)
+    });
+
+    it('does NOT mark compose result incomplete when no partial nodes', async () => {
+      // A clean compose run (all nodes succeeded cleanly) must not carry incomplete.
+      mockRunSubagentDAG.mockResolvedValue({
+        outputs: { a: 'done' },
+        failed: [],
+        skipped: [],
+        partial: [],
+      });
+
+      const executor = new ComposeExecutor(makeContext());
+      const result = await executor.execute(makeCall({
+        nodes: [{ id: 'a', prompt: 'task a' }],
+      }));
+
+      expect(result.isError).toBe(false);
+      expect(result.incomplete).toBeUndefined();
+      expect(result.partialNodeCount).toBeUndefined();
+    });
+
+    it('isError stays true even when both failed and partial nodes exist', async () => {
+      // Hard failure dominates: isError must still be true when a node failed,
+      // even if another node wound down partially.
+      mockRunSubagentDAG.mockResolvedValue({
+        outputs: {},
+        failed: [{ id: 'b', error: new Error('hard failure') }],
+        skipped: [],
+        partial: [{ id: 'a', stopReason: 'SOFT_DEADLINE_WIND_DOWN' }],
+      });
+
+      const executor = new ComposeExecutor(makeContext());
+      const result = await executor.execute(makeCall({
+        nodes: [
+          { id: 'a', prompt: 'task a' },
+          { id: 'b', prompt: 'task b' },
+        ],
+      }));
+
+      expect(result.isError).toBe(true);
+      expect(result.incomplete).toBe(true);
     });
 
     /**
@@ -1810,7 +1877,7 @@ describe('ComposeExecutor', () => {
 
       await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'task a' }] }));
 
-      // First argument to buildComposeNodeProvider is the node model; second is the store.
+      // Second argument to buildComposeNodeProvider is the store (first is model).
       const [, passedStore] = mockBuildComposeNodeProvider.mock.calls[0];
       expect(passedStore).toBe(store);
     });
@@ -1824,9 +1891,9 @@ describe('ComposeExecutor', () => {
 
       await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'task a' }] }));
 
-      // Third argument to buildComposeNodeProvider is openaiBaseUrl.
-      const [, , passedUrl] = mockBuildComposeNodeProvider.mock.calls[0];
-      expect(passedUrl).toBe('http://localhost:11434/v1');
+      // Third argument to buildComposeNodeProvider is the opts object; openaiBaseUrl is inside it.
+      const [, , passedOpts] = mockBuildComposeNodeProvider.mock.calls[0];
+      expect((passedOpts as { openaiBaseUrl?: string }).openaiBaseUrl).toBe('http://localhost:11434/v1');
     });
 
     it('does NOT set provider on DAG nodes when ctx.workspaceStore is absent', async () => {
@@ -2036,6 +2103,11 @@ describe('ComposeExecutor', () => {
       const dagOpts = mockRunSubagentDAG.mock.calls[0]?.[0];
       // Named agent's definition prompt replaces the generic system prompt
       expect(dagOpts.nodes[0].systemPrompt).toBe('You are a research specialist.');
+      // Workspace-backed compose nodes always get replaySafe:false because
+      // the provider grants CHILD_ALLOWED_TOOLS (write surface) regardless
+      // of the named agent's declared frontmatter tools.
+      expect(dagOpts.nodes[0].replaySafe).toBe(false);
+      expect(dagOpts.nodes[0].canUseTool).toBeTypeOf('function');
     });
 
     it('sets agentType render label from the named agent', async () => {
@@ -2057,6 +2129,7 @@ describe('ComposeExecutor', () => {
       const dagOpts = mockRunSubagentDAG.mock.calls[0]?.[0];
       expect(dagOpts.nodes[0].agentType).toBe('a [1/1]');
       expect(dagOpts.nodes[0].systemPrompt).toBe('You are a helpful assistant.');
+      expect(dagOpts.nodes[0].replaySafe).toBe(false);
     });
 
     it('returns error when agent_type set but no registry wired', async () => {
@@ -2226,5 +2299,49 @@ describe('ComposeExecutor', () => {
       expect(withImgNode?.resolvedAttachments).toEqual([fakeAttachment]);
       expect('resolvedAttachments' in (noImgNode ?? {})).toBe(false);
     });
+  });
+});
+
+// Credential-backstop: credentialModel threading.
+// When AFK_MODEL=claude-opus-5-5 + --model gpt-6.1-sol, the compose
+// SubagentManager used to receive parentModel=gpt-6.1-sol (the routing model),
+// causing applyManagerApiKeyFallback to derive parentProvider='openai-compatible'
+// and forward the sk-ant-… token to OpenAI nodes (401). The fix: pass
+// credentialModel (the model the apiKey was resolved FROM) via parentCredential.sourceModel.
+describe('ComposeExecutor — credentialModel threading', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    lastManagerOpts = undefined;
+    mockCreateManifest.mockReturnValue('fake-wave-id');
+    mockRunSubagentDAG.mockResolvedValue({
+      outputs: { n1: 'done' },
+      failed: [],
+      skipped: [],
+    });
+  });
+
+  it('uses credentialModel as the SubagentManager parentCredential.sourceModel when set', async () => {
+    const executor = new ComposeExecutor(
+      makeContext({
+        defaultModel: 'gpt-6.1-sol',
+        credentialModel: 'claude-opus-5-5',
+        apiKey: 'sk-ant-oat01-CREDENTIAL-SOURCE',
+      }),
+    );
+    await executor.execute(makeCall({ nodes: [{ id: 'n1', prompt: 'task' }] }));
+    // The manager must receive the credential source model, not the routing model.
+    expect(lastManagerOpts?.parentCredential?.sourceModel).toBe('claude-opus-5-5');
+  });
+
+  it('falls back to defaultModel as parentCredential.sourceModel when credentialModel is absent', async () => {
+    const executor = new ComposeExecutor(
+      makeContext({
+        defaultModel: 'gpt-6.1-sol',
+        // credentialModel intentionally omitted — back-compat path.
+        apiKey: 'sk-openai-key',
+      }),
+    );
+    await executor.execute(makeCall({ nodes: [{ id: 'n1', prompt: 'task' }] }));
+    expect(lastManagerOpts?.parentCredential?.sourceModel).toBe('gpt-6.1-sol');
   });
 });

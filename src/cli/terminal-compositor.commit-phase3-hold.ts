@@ -1,9 +1,11 @@
+import { hiddenArchivedRows } from './terminal-compositor.archived-reveal.js';
 import type { CommittedBandHost } from './terminal-compositor.committed-band-commit.js';
 import type { CommitGeometry } from './terminal-compositor.commit-geometry.js';
 import type { CommitRoute } from './terminal-compositor.commit-route.js';
 import { eraseAndPaintRow } from './terminal-compositor.scrollback.js';
 import { writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
 import { contentMargin } from './render/measure.js';
+import { retainedArchivedPrefix } from './terminal-compositor.band-archived-prefix.js';
 
 /**
  * Band-hold Phase 3 for newTopRow > 1: track the committed run's RETAINED
@@ -34,7 +36,9 @@ export function commitPhase3Hold(
   const model = overflowRun.slice(archiveCount);
   // #540: slice the provenance at the SAME index so it stays 1:1 with `model`.
   const modelMeta = overflowRunMeta.slice(archiveCount);
-  const paintedCount = Math.min(model.length, maxRun);
+  const prefix = retainedArchivedPrefix(self, route.overflowPriorContiguous, archiveCount);
+  const hidden = hiddenArchivedRows(self, undefined, { length: model.length, prefix });
+  const paintedCount = Math.min(model.length - hidden, maxRun);
   const bandTop = newTopRow - paintedCount;
   // Content centering (AFK_CENTER_CONTENT): derive the margin from the CURRENT
   // terminal width so painted rows adapt on resize. The band stores raw (unpadded)
@@ -53,6 +57,7 @@ export function commitPhase3Hold(
       self.stdout.write(out);
     });
   }
+  self.committedBandArchivedPrefix = retainedArchivedPrefix(self, route.overflowPriorContiguous, archiveCount);
   self.committedBand = model;
   self.committedBandMeta = modelMeta;
   self.committedBandBottomRow = newTopRow - 1;
@@ -85,6 +90,7 @@ export function commitPhase3HoldStore(
   const model = overflowRun.slice(archiveCount);
   const modelMeta = overflowRunMeta.slice(archiveCount);
   const collapsedFrameTop = Math.max(1, rows - 1 - extraRows);
+  self.committedBandArchivedPrefix = retainedArchivedPrefix(self, route.overflowPriorContiguous, archiveCount);
   self.committedBand = model;
   self.committedBandMeta = modelMeta;
   self.committedBandBottomRow = Math.max(0, collapsedFrameTop - 1);

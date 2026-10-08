@@ -19,9 +19,10 @@ import {
   readdirSync,
   rmSync,
 } from 'node:fs';
+import { rmSyncRetry } from '../__test-utils__/rm-sync-retry.js';
 import { join, resolve, tmpdir } from 'node:path';
 import os from 'node:os';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 
 import { materializeSandboxes } from './sandbox.js';
 import {
@@ -43,7 +44,10 @@ function tmpDir(): string {
 
 /**
  * Build a fake AFK_HOME tree with:
- *   - config/afk.env  (has ANTHROPIC_API_KEY + AFK_MODEL)
+ *   - config/afk.env  (has ANTHROPIC_API_KEY + AFK_MODEL + sandbox-owned keys
+ *                       AFK_HOME/AFK_STATE_DIR/AFK_FRAMEWORK_DIR to simulate
+ *                       the issue-2428 scenario where the operator's afk.env
+ *                       sets these to real paths)
  *   - AFK.md
  *   - skills/a, skills/b  (directories, simulating skill entries)
  *   - plugins/p1  (directory)
@@ -60,6 +64,10 @@ function buildFakeHome(dir: string): string {
       'ANTHROPIC_API_KEY=sk-ant-secret123',
       'AFK_MODEL=claude-sonnet-4-5',
       'AFK_EFFORT=high',
+      // Issue #2428: operator afk.env may set these to real paths
+      'AFK_HOME=/real/afk/home',
+      'AFK_STATE_DIR=/real/afk/state',
+      'AFK_FRAMEWORK_DIR=/real/afk/framework',
     ].join('\n'),
     'utf8',
   );
@@ -98,6 +106,26 @@ describe('materializeSandboxes: home layout', () => {
 
   afterEach(async () => {
     rmSync(root, { recursive: true, force: true });
+  });
+
+  // Issue #2425: sandbox paths must not reveal arm names ('baseline'/'candidate').
+  it('sandbox home paths do not contain the strings "baseline" or "candidate"', async () => {
+    const spec: ChangeSpec = { title: 'noop', changes: [] };
+    const { baseline, candidate, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: root,
+      runDir,
+      spec,
+      baseLaunch: BASE_LAUNCH,
+    });
+    try {
+      expect(baseline.home).not.toMatch(/baseline/i);
+      expect(baseline.home).not.toMatch(/candidate/i);
+      expect(candidate.home).not.toMatch(/baseline/i);
+      expect(candidate.home).not.toMatch(/candidate/i);
+    } finally {
+      await cleanup();
+    }
   });
 
   it('creates baseline and candidate home directories', async () => {
@@ -143,6 +171,53 @@ describe('materializeSandboxes: home layout', () => {
     expect(baseline.launch.unset).toContain('AFK_MODEL');
     expect(candidate.launch.unset).toContain('AFK_MODEL');
     expect(candidate.launch.unset).not.toContain('ANTHROPIC_API_KEY');
+    await cleanup();
+  });
+
+  // Issue #2428: sandbox-owned keys must NOT appear in launch.unset and must
+  // be stripped from the sandbox afk.env copy (so dotenv can't fill them back).
+  it('does not include AFK_FRAMEWORK_DIR in launch.unset (issue #2428)', async () => {
+    const { baseline, candidate, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: root,
+      runDir,
+      spec: { title: 'noop', changes: [] },
+      baseLaunch: BASE_LAUNCH,
+    });
+    expect(baseline.launch.unset ?? []).not.toContain('AFK_FRAMEWORK_DIR');
+    expect(candidate.launch.unset ?? []).not.toContain('AFK_FRAMEWORK_DIR');
+    await cleanup();
+  });
+
+  it('does not include AFK_HOME or AFK_STATE_DIR in launch.unset (issue #2428)', async () => {
+    const { baseline, candidate, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: root,
+      runDir,
+      spec: { title: 'noop', changes: [] },
+      baseLaunch: BASE_LAUNCH,
+    });
+    for (const env of [baseline, candidate]) {
+      expect(env.launch.unset ?? []).not.toContain('AFK_HOME');
+      expect(env.launch.unset ?? []).not.toContain('AFK_STATE_DIR');
+    }
+    await cleanup();
+  });
+
+  it('strips AFK_HOME/AFK_STATE_DIR/AFK_FRAMEWORK_DIR from the sandbox afk.env copy (issue #2428)', async () => {
+    const { candidate, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: root,
+      runDir,
+      spec: { title: 'noop', changes: [] },
+      baseLaunch: BASE_LAUNCH,
+    });
+    const envContent = readFileSync(join(candidate.home, 'config', 'afk.env'), 'utf8');
+    expect(envContent).not.toContain('AFK_HOME');
+    expect(envContent).not.toContain('AFK_STATE_DIR');
+    expect(envContent).not.toContain('AFK_FRAMEWORK_DIR');
+    // Ordinary non-credential keys are still present
+    expect(envContent).toContain('AFK_MODEL');
     await cleanup();
   });
 
@@ -231,17 +306,80 @@ describe('materializeSandboxes: home layout', () => {
     await cleanup();
   });
 
-  it('cleanup removes sandboxes directory', async () => {
+  // Issue #2466: each arm now gets its own root under os.tmpdir(), so there
+  // is no shared sandboxes/ dir under runDir. The arm roots are cleaned up
+  // independently; we verify the homes are gone after cleanup.
+  it('cleanup removes both arm home directories', async () => {
     const spec: ChangeSpec = { title: 'noop', changes: [] };
-    const { cleanup } = await materializeSandboxes({
+    const { baseline, candidate, cleanup } = await materializeSandboxes({
       realHome,
       realCwd: root,
       runDir,
       spec,
       baseLaunch: BASE_LAUNCH,
     });
+    // Record arm roots (parent of home)
+    const baselineRoot = resolve(join(baseline.home, '..'));
+    const candidateRoot = resolve(join(candidate.home, '..'));
     await cleanup();
-    expect(existsSync(join(runDir, 'sandboxes'))).toBe(false);
+    expect(existsSync(baselineRoot)).toBe(false);
+    expect(existsSync(candidateRoot)).toBe(false);
+  });
+
+  // Issue #2466: arm sandboxes must be isolated — neither arm's home nor
+  // project should be reachable by walking up from the other arm's paths
+  // within 4 levels (excluding os.tmpdir() itself and filesystem root).
+  it('arm sandbox roots share no whatif-owned ancestor within 4 levels', async () => {
+    const spec: ChangeSpec = { title: 'noop', changes: [] };
+    const { baseline, candidate, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: root,
+      runDir,
+      spec,
+      baseLaunch: BASE_LAUNCH,
+    });
+    try {
+      const sysTmpdir = resolve(os.tmpdir());
+
+      function ancestorsWithin(p: string, levels: number): string[] {
+        const acc: string[] = [];
+        let cur = resolve(p);
+        for (let i = 0; i < levels; i++) {
+          const parent = resolve(join(cur, '..'));
+          if (parent === cur) break; // filesystem root
+          if (resolve(parent) === sysTmpdir) break; // stop at os.tmpdir()
+          acc.push(parent);
+          cur = parent;
+        }
+        return acc;
+      }
+
+      const baselineHome = resolve(baseline.home);
+      const candidateHome = resolve(candidate.home);
+      const baselineRoot = resolve(join(baselineHome, '..'));
+      const candidateRoot = resolve(join(candidateHome, '..'));
+
+      // Ancestors of baseline's home (up to 4 levels, stopping at tmpdir)
+      const baselineAncestors = ancestorsWithin(baselineHome, 4);
+      // Ancestors of candidate's home (up to 4 levels, stopping at tmpdir)
+      const candidateAncestors = ancestorsWithin(candidateHome, 4);
+
+      // candidate root must NOT appear among baseline's ancestors
+      for (const anc of baselineAncestors) {
+        expect(resolve(anc)).not.toBe(candidateRoot);
+      }
+      // baseline root must NOT appear among candidate's ancestors
+      for (const anc of candidateAncestors) {
+        expect(resolve(anc)).not.toBe(baselineRoot);
+      }
+
+      // Also assert: baseline home is not a descendant of candidate root
+      expect(baselineHome.startsWith(candidateRoot + '/')).toBe(false);
+      // And candidate home is not a descendant of baseline root
+      expect(candidateHome.startsWith(baselineRoot + '/')).toBe(false);
+    } finally {
+      await cleanup();
+    }
   });
 });
 
@@ -465,6 +603,21 @@ describe('env operator', () => {
     ).rejects.toThrow();
   });
 
+  // Issue #2428: AFK_FRAMEWORK_DIR must be reserved alongside AFK_HOME/AFK_STATE_DIR
+  it('rejects AFK_FRAMEWORK_DIR (issue #2428)', async () => {
+    const op = getOperator('env');
+    await expect(
+      op.apply({ kind: 'env', key: 'AFK_FRAMEWORK_DIR', value: '/evil' }, makeCandidateEnv(), ctx),
+    ).rejects.toThrow();
+  });
+
+  it('rejects AFK_STATE_DIR', async () => {
+    const op = getOperator('env');
+    await expect(
+      op.apply({ kind: 'env', key: 'AFK_STATE_DIR', value: '/evil' }, makeCandidateEnv(), ctx),
+    ).rejects.toThrow();
+  });
+
   it('accepts non-secret env vars', async () => {
     const op = getOperator('env');
     const env = makeCandidateEnv();
@@ -571,15 +724,15 @@ describe('materializeSandboxes: git worktrees', () => {
     gitRepo = join(root, 'repo');
     mkdirSync(gitRepo, { recursive: true });
     writeFileSync(join(gitRepo, 'README.md'), '# test\n', 'utf8');
-    execSync('git init', { cwd: gitRepo, stdio: 'ignore' });
-    execSync('git config user.email "test@test.com"', { cwd: gitRepo, stdio: 'ignore' });
-    execSync('git config user.name "Test"', { cwd: gitRepo, stdio: 'ignore' });
-    execSync('git add .', { cwd: gitRepo, stdio: 'ignore' });
-    execSync('git commit -m "init"', { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['init'], { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['add', '.'], { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: gitRepo, stdio: 'ignore' });
   });
 
   afterEach(async () => {
-    rmSync(root, { recursive: true, force: true });
+    rmSyncRetry(root);
   });
 
   it('creates project worktrees for both envs; cleanup removes sandboxes', async () => {
@@ -607,8 +760,13 @@ describe('materializeSandboxes: git worktrees', () => {
     // Real repo untouched
     expect(existsSync(join(gitRepo, 'NEW.md'))).toBe(false);
 
+    // Record arm roots (parent of home) before cleanup
+    const baselineRoot = resolve(join(baseline.home, '..'));
+    const candidateRoot = resolve(join(candidate.home, '..'));
     await cleanup();
-    expect(existsSync(join(runDir, 'sandboxes'))).toBe(false);
+    // Both per-arm roots should be removed (issue #2466: no shared sandboxes/ dir)
+    expect(existsSync(baselineRoot)).toBe(false);
+    expect(existsSync(candidateRoot)).toBe(false);
   });
 
   it('throws when specTouchesProject but cwd is not a git repo', async () => {
@@ -627,6 +785,158 @@ describe('materializeSandboxes: git worktrees', () => {
         baseLaunch: BASE_LAUNCH,
       }),
     ).rejects.toThrow(/git/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SEC-011: execFileSync array-arg call (no shell interpolation)
+// ---------------------------------------------------------------------------
+
+describe('SEC-011: worktree add/remove use execFileSync array args, not shell interpolation', () => {
+  let root: string;
+  let realHome: string;
+  let runDir: string;
+  let gitRepo: string;
+
+  beforeEach(() => {
+    root = tmpDir();
+    realHome = buildFakeHome(root);
+    runDir = join(root, 'run');
+
+    gitRepo = join(root, 'repo');
+    mkdirSync(gitRepo, { recursive: true });
+    writeFileSync(join(gitRepo, 'README.md'), '# test\n', 'utf8');
+    execFileSync('git', ['init'], { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['add', '.'], { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: gitRepo, stdio: 'ignore' });
+  });
+
+  afterEach(async () => {
+    rmSyncRetry(root);
+  });
+
+  it('source code for addWorktree/removeWorktree calls execFileSync, not execSync with template string', async () => {
+    // Static assertion: read the sandbox source and verify the worktree helpers
+    // use execFileSync with array args, not execSync with template-interpolated strings.
+    // This is the SEC-011 guard: shell injection is impossible with array-arg execFileSync.
+    const { readFileSync: readFile, existsSync: fileExists } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const { dirname, join: pathJoin } = await import('node:path');
+    const thisDir = dirname(fileURLToPath(import.meta.url));
+    const sandboxPath = pathJoin(thisDir, 'sandbox.ts');
+    if (!fileExists(sandboxPath)) {
+      throw new Error(
+        `[SEC-011] sandbox.ts not found at ${sandboxPath}. ` +
+          `If the file moved, update this test to match the new location.`,
+      );
+    }
+    const src = readFile(sandboxPath, 'utf8');
+
+    // addWorktree and removeWorktree must use execFileSync
+    expect(src).toContain("execFileSync('git', ['worktree', 'add'");
+    expect(src).toContain("execFileSync('git', ['worktree', 'remove'");
+
+    // findGitRoot must also use execFileSync (not execSync) — low: SEC-011 extension
+    expect(src).toContain("execFileSync('git', ['rev-parse', '--show-toplevel']");
+
+    // Neither helper should use execSync with a template literal containing 'worktree'
+    // (the old shell-interpolated form was: execSync(`git worktree add --detach "${path}" HEAD`))
+    expect(src).not.toMatch(/execSync\(`git worktree/);
+    // findGitRoot must not use execSync with a shell string
+    expect(src).not.toMatch(/execSync\(['"`]git rev-parse/);
+  });
+
+  it('worktree integration: materializes successfully using execFileSync array args', async () => {
+    // Integration smoke: if execFileSync were still shell-interpolated, a path
+    // with a trailing space in the mkdtemp prefix would silently break — this
+    // confirms the real call path works end-to-end without shell quoting tricks.
+    const spec: ChangeSpec = {
+      title: 'sec-011-integration',
+      changes: [{ kind: 'file', path: 'project:SEC011.md', content: 'array-arg verified' }],
+    };
+    const { baseline, candidate, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: gitRepo,
+      runDir,
+      spec,
+      baseLaunch: BASE_LAUNCH,
+    });
+    try {
+      expect(baseline.cwd).not.toBe(gitRepo);
+      expect(candidate.cwd).not.toBe(gitRepo);
+      expect(existsSync(join(candidate.cwd, 'SEC011.md'))).toBe(true);
+      expect(existsSync(join(baseline.cwd, 'SEC011.md'))).toBe(false);
+      expect(existsSync(join(gitRepo, 'SEC011.md'))).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // Shell-metacharacter injection guard: a realCwd path containing a space
+  // and the $(...) subshell sequence must not cause git invocations to fail
+  // or split into unintended arguments.  With execSync and a shell string this
+  // would require careful quoting; with execFileSync array-args it is a non-issue.
+  it('worktree: realCwd with shell metacharacters (space, $(...)) does not cause injection', async () => {
+    // Create a subdirectory whose name contains a space and a dollar-paren sequence.
+    // On all POSIX filesystems these are legal characters; git itself handles them fine.
+    const metaSubdir = join(gitRepo, 'sub dir $(echo hi)');
+    mkdirSync(metaSubdir, { recursive: true });
+    writeFileSync(join(metaSubdir, 'marker.md'), 'meta\n', 'utf8');
+    execFileSync('git', ['add', '.'], { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'add meta subdir'], { cwd: gitRepo, stdio: 'ignore' });
+
+    const spec: ChangeSpec = {
+      title: 'metachar-injection-guard',
+      changes: [{ kind: 'file', path: 'project:INJECTED.md', content: 'injection-safe' }],
+    };
+    // If findGitRoot used execSync with a shell string the path with $(...) could be
+    // interpreted as a subshell and the root detection would fail or produce garbage.
+    const result = await materializeSandboxes({
+      realHome,
+      realCwd: metaSubdir,
+      runDir,
+      spec,
+      baseLaunch: BASE_LAUNCH,
+    });
+    try {
+      expect(existsSync(result.baseline.cwd)).toBe(true);
+      expect(existsSync(result.candidate.cwd)).toBe(true);
+    } finally {
+      await result.cleanup();
+    }
+  });
+
+  // removeWorktree failure path: cleanup continues and removes the arm root even
+  // when the git worktree remove command fails (e.g. worktree already deleted).
+  it('cleanup: partial teardown — removeWorktree failure does not prevent arm root removal', async () => {
+    const spec: ChangeSpec = {
+      title: 'partial-teardown',
+      changes: [{ kind: 'file', path: 'project:PARTIAL.md', content: 'partial' }],
+    };
+    const { baseline, candidate, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: gitRepo,
+      runDir,
+      spec,
+      baseLaunch: BASE_LAUNCH,
+    });
+
+    const baselineRoot = resolve(join(baseline.home, '..'));
+    const candidateRoot = resolve(join(candidate.home, '..'));
+
+    // Simulate a partial failure by manually deleting one worktree's directory
+    // before cleanup runs.  removeWorktree will fail on the missing path, but
+    // cleanup() must be best-effort and still remove both arm roots.
+    rmSync(baseline.cwd, { recursive: true, force: true });
+
+    // cleanup must not throw even though the baseline worktree is already gone
+    await expect(cleanup()).resolves.toBeUndefined();
+
+    // Both arm roots should be gone regardless of the removeWorktree error
+    expect(existsSync(baselineRoot)).toBe(false);
+    expect(existsSync(candidateRoot)).toBe(false);
   });
 });
 

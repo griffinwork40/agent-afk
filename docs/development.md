@@ -4,10 +4,11 @@ Internal reference for working on `agent-afk` itself — building, testing, rele
 
 ## Prerequisites
 
-- **Node.js ≥ 22.0.0** (enforced by `package.json#engines`). Node 20 is EOL and `better-sqlite3` ≥ 12.10 ships no prebuilt binaries for it — installs on Node 20 fall back to a node-gyp source build, which fails on machines without Python/build tools.
-- **pnpm** — the lockfile is pnpm-specific. `npm install` will desync it.
-  - Fast path: `corepack enable` (bundled with Node ≥ 16.9), then use `pnpm` directly.
-  - Or globally: `npm install -g pnpm@latest`.
+- **Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`** (enforced by `package.json#engines`). The floor is set by `jsdom` 30 (used by the `web_scrape` markdown extractor), which declares exactly this range; keep `engines.node` matching it so `npm install -g agent-afk` never warns `EBADENGINE` on a Node version we claim to support. pnpm 11 itself requires ≥ 22.13. Node 20 is EOL and `better-sqlite3` ≥ 12.10 ships no prebuilt binaries for it — installs on Node 20 fall back to a node-gyp source build, which fails on machines without Python/build tools.
+- **pnpm 11** — pinned by `package.json#packageManager`; the lockfile is pnpm-specific, so `npm install` will desync it.
+  - Fast path: `corepack enable` (bundled with Node ≥ 16.9), then use `pnpm` directly; corepack runs the pinned version.
+  - An existing global pnpm ≥ 10 also works: it switches to the pinned version automatically (`manage-package-manager-versions`).
+  - Dependency build scripts are allowlisted in `pnpm-workspace.yaml` (`allowBuilds`; `dashboard/` has its own). pnpm 11 fails the install on any unlisted build script, so a new native dependency must be added there.
 - A valid Anthropic API key, or an OpenAI key for the Codex provider.
 
 ## Setup
@@ -212,9 +213,10 @@ Under the hood:
    - `src/telegram.ts` → `dist/telegram.mjs`
    - `src/index.ts` → `dist/index.mjs`
 3. Post-process: shebang injection + chmod +x on `cli.mjs` and `telegram.mjs`.
-4. `scripts/postinstall.mjs` is copied into `dist/` so it ships in the tarball.
+4. `scripts/postinstall.mjs` is **not** copied into `dist/` — the `postinstall` lifecycle script runs it in place from the source tree.
+   It ships to npm consumers via its own `package.json#files` entry (not as part of `dist/`).
 5. `package.json#bin.afk` → `dist/cli.mjs` matches the esbuild output.
-6. `files: ["dist/"]` means only `dist/` ships. Source, tests, scripts, and prompts are excluded by `.npmignore`.
+6. `package.json#files` whitelists what ships: `dist/`, `scripts/postinstall.mjs`, `NOTICE`, and the demo asset. The whitelist overrides `.npmignore`, which otherwise excludes `scripts/`; everything else under source, tests, scripts, and prompts stays out.
 
 **Two parallel build pipelines, by design:**
 
@@ -233,21 +235,22 @@ pnpm lint                   # type-check without emitting
 
 For more on the architecture (providers, hooks, subagents, abort graph), see [`architecture.md`](architecture.md). For the full env-var reference and slash-command taxonomy, see [`reference.md`](reference.md).
 
-## postinstall and pnpm 10
+## postinstall and pnpm 10+
 
 `scripts/postinstall.mjs` ships in the tarball and runs as a lifecycle hook. It:
 
 1. Detects whether the npm bin directory is on `PATH` and prints a remediation hint if not.
-2. Restarts any running `afk daemon` launchd service so it picks up the new code — **only** on macOS and **only** when `npm_config_global === "true"` (genuine global install, not a local `pnpm install` inside a source checkout).
+2. **macOS only:** restarts the `afk daemon` launchd service so it picks up the new code — only when `npm_config_global === "true"` AND the package root has no `.git` marker (i.e. `isGlobalInstall()` is true, ruling out a local source checkout or worktree). On Linux/systemd, the hook never restarts any service.
+3. If a manually-started Telegram bot (`afk telegram start`) is still running the old version, prints a notice and suggests `afk telegram restart`.
 
-**pnpm 10 blocks build scripts by default.** Running `pnpm add -g agent-afk` will print:
+**pnpm 10 and later block build scripts by default.** Running `pnpm add -g agent-afk` will print:
 
 ```
 ! Ignored build scripts: agent-afk@<version>.
   Run "pnpm approve-builds -g" to pick which dependencies should be allowed to run scripts.
 ```
 
-The postinstall hook is **silently skipped** — no PATH hint, no daemon restart.
+The postinstall hook is **skipped (with an easy-to-miss warning)** — no PATH hint, no daemon restart, no Telegram notice.
 
 **Remedies for end-users:**
 
@@ -257,14 +260,16 @@ The postinstall hook is **silently skipped** — no PATH hint, no daemon restart
 | Per-install flag | `pnpm add -g --allow-build=agent-afk agent-afk` |
 | Use npm instead | `npm install -g agent-afk` (npm does not block build scripts) |
 
-If a launchd/systemd-supervised daemon is already running and pnpm skipped the hook, restart it manually:
+If a daemon is already running and pnpm skipped the hook, restart it manually:
 
 ```bash
 afk service restart daemon
 ```
 
+> **Platform note:** on macOS, the hook restarts the launchd-supervised daemon automatically when it runs (i.e. when pnpm did **not** skip it). On Linux/systemd, the hook never restarts the daemon — you must run `afk service restart daemon` after every upgrade, even when the hook ran.
+
 **Evidence** (pnpm 10.32.1, 2026-09-25, issue [#2199](https://github.com/griffinwork40/agent-afk/issues/2199)):
 
-- `pnpm add -g <tarball>` — postinstall **skipped** (warning printed, marker file absent).
-- `pnpm add -g --allow-build=agent-afk <tarball>` — postinstall **runs**; `npm_config_global=true` confirmed in env.
-- `npm_config_global` is set to `"true"` whenever postinstall does run, so `isGlobalInstall()` correctly gates daemon restarts.
+- `pnpm add -g <tarball>` — postinstall **skipped** (warning printed; `~/.afk/state/telegram/bot.pid` not checked (no Telegram notice printed), daemon not restarted).
+- `pnpm add -g --allow-build=agent-afk <tarball>` — postinstall **runs**; `npm_config_global=true` confirmed in env; daemon restarted on macOS.
+- `npm_config_global` is set to `"true"` whenever postinstall does run, so `isGlobalInstall()` correctly gates daemon restarts on macOS.

@@ -30,6 +30,20 @@ name: Auto Release
 on:
   push:
     branches: [main]
+  # Invariant: a MAJOR is never published by a plain merge. Parallel agent
+  # sessions merge several PRs a day, and one stray `!:` subject or the words
+  # BREAKING CHANGE in a squash body would otherwise cut and publish a major on
+  # its own. A detected major fails the push-triggered run (loudly, and every
+  # later merge stays blocked) until a human dispatches this workflow with an
+  # explicit bump: `major` to cut it on purpose, or `minor`/`patch` when the
+  # detection was a false positive.
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'auto = derive from commits (a detected major is refused); major/minor/patch = release exactly this bump'
+        type: choice
+        options: [auto, major, minor, patch]
+        default: auto
 
 # Serialize releases so two quick merges cannot race on the version bump / tag
 # push. cancel-in-progress: false ⇒ the second merge waits, then computes its
@@ -50,13 +64,16 @@ jobs:
     timeout-minutes: 20
     # Loop guard: skip the `chore(release):` commit this job itself pushes,
     # otherwise that push-to-main would recurse into another release.
+    # On `workflow_dispatch` `github.event.head_commit` is null (the event
+    # object has no commit payload), so `startsWith(null, ...)` evaluates to
+    # false — the guard passes and the dispatch runs. This is intentional.
     if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
     permissions:
       contents: write # push the release commit + tag, create the GitHub Release
       id-token: write # npm provenance attestation (OIDC)
     steps:
       - name: Checkout tip of main (full history + tags)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # Operate on the branch TIP, not the triggering SHA: under the
           # concurrency lock this guarantees a second release run sees the first
@@ -67,12 +84,10 @@ jobs:
           fetch-depth: 0
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -86,6 +101,9 @@ jobs:
 
       - name: Compute next version from Conventional Commits
         id: bump
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BUMP_INPUT: ${{ inputs.bump || 'auto' }}
         run: |
           set -euo pipefail
           CURRENT=$(jq -r .version package.json)
@@ -93,16 +111,53 @@ jobs:
           if [ -n "$LAST_TAG" ]; then RANGE="${LAST_TAG}..HEAD"; else RANGE="HEAD"; fi
           LOG=$(git log --format='%s%n%b' "$RANGE")
 
-          # Conventional Commits → SemVer. `!:` suffix or a "BREAKING CHANGE"
-          # footer ⇒ major; `feat:` ⇒ minor; `fix|perf|refactor:` ⇒ patch.
+          # Conventional Commits → SemVer. `!:` suffix or a breaking-change
+          # footer (a line starting with `BREAKING CHANGE:` or
+          # `BREAKING-CHANGE:`) ⇒ major; `feat:` ⇒ minor;
+          # `fix|perf|refactor:` ⇒ patch.
           # Anything else (docs/chore/test/ci/style only) ⇒ no release.
+          #
+          # NOTE: the breaking-change check is anchored to line-start (^) so
+          # that prose mentions mid-line do not trip the major gate.
           BUMP=none
-          if grep -qE '^[a-z]+(\([^)]*\))?!:' <<<"$LOG" || grep -q 'BREAKING CHANGE' <<<"$LOG"; then
+          if grep -qE '^[a-z]+(\([^)]*\))?!:' <<<"$LOG" || grep -qE '^BREAKING[ -]CHANGE: ' <<<"$LOG"; then
             BUMP=major
           elif grep -qE '^feat(\([^)]*\))?:' <<<"$LOG"; then
             BUMP=minor
           elif grep -qE '^(fix|perf|refactor)(\([^)]*\))?:' <<<"$LOG"; then
             BUMP=patch
+          fi
+
+          # engines.node floor gate: a raised minimum Node.js version is a
+          # compatibility-breaking change and must trip the major gate even when
+          # no commit uses `!:` or `BREAKING CHANGE`.  The script exits 1 when
+          # the floor is higher at HEAD than at LAST_TAG.  On workflow_dispatch
+          # with an explicit bump input the gate is skipped (operator decided).
+          if [ "$EVENT_NAME" != workflow_dispatch ] || [ "$BUMP_INPUT" = auto ]; then
+            if ! node_modules/.bin/tsx scripts/check-engines-node-floor.ts "$LAST_TAG"; then
+              BUMP=major
+              echo "::warning::engines.node minimum raised since ${LAST_TAG:-repo start}; promoting to BUMP=major (see major gate below)."
+            fi
+          fi
+
+          # Major gate (see the Invariant on `on:` above).
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$BUMP_INPUT" != auto ]; then
+            # Warn when the manual bump input overrides a detected 'none' so the
+            # operator has an on-screen signal that no releasable commits were
+            # found, yet a release is being cut intentionally.
+            if [ "$BUMP" = none ]; then
+              echo "::warning::workflow_dispatch with bump=$BUMP_INPUT overrides detected BUMP=none (no releasable commits). Releasing as $BUMP_INPUT by operator request."
+            fi
+            echo "Manual bump: detected=$BUMP, releasing as $BUMP_INPUT"
+            BUMP="$BUMP_INPUT"
+          elif [ "$BUMP" = major ]; then
+            MSG="Breaking change detected since ${LAST_TAG:-repo start}; majors are never auto-published. Run the Auto Release workflow manually with bump=major to cut it, or bump=minor/patch if the detection is a false positive. Releases stay blocked until then."
+            echo "::error::$MSG"
+            echo "$MSG" >> "$GITHUB_STEP_SUMMARY"
+            echo "Matching commits:" >> "$GITHUB_STEP_SUMMARY"
+            git log --format='- %h %s' "$RANGE" -E --grep='^BREAKING[ -]CHANGE: ' >> "$GITHUB_STEP_SUMMARY" || true
+            git log --format='- %h %s' "$RANGE" -E --grep='^[a-z]+(\([^)]*\))?!:' >> "$GITHUB_STEP_SUMMARY" || true
+            exit 1
           fi
 
           if [ "$BUMP" = none ]; then
@@ -139,7 +194,7 @@ jobs:
         if: steps.bump.outputs.release == 'true'
         run: |
           set -euo pipefail
-          pnpm version "${{ steps.bump.outputs.next }}" --no-git-tag-version
+          npm version "${{ steps.bump.outputs.next }}" --no-git-tag-version
           node scripts/generate-changelog.mjs "${{ steps.bump.outputs.next }}"
 
       - name: Commit, tag, and push (atomic + rebase-retry)
@@ -170,7 +225,7 @@ jobs:
             git tag -d "v${NEXT}"
             git fetch origin main
             git reset --hard origin/main
-            pnpm version "${NEXT}" --no-git-tag-version
+            npm version "${NEXT}" --no-git-tag-version
             node scripts/generate-changelog.mjs "${NEXT}"
           done
           echo "::error::Release push failed after 3 attempts — persistent contention on main. Re-run this job once main settles."
@@ -179,10 +234,11 @@ jobs:
       # Inline publish: the working tree already holds the bumped package.json +
       # fresh dist, and prepublishOnly rebuilds the tarball, so publish directly.
       # --provenance emits a signed attestation (needs id-token: write + a public
-      # repo + GitHub-hosted Actions — all true here).
+      # repo + GitHub-hosted Actions — all true here). npm CLI, not
+      # `pnpm publish`: see the Invariant on the publish step in publish.yml.
       - name: Publish to npm (with provenance)
         if: steps.bump.outputs.release == 'true'
-        run: pnpm publish --no-git-checks --provenance
+        run: npm publish --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -190,7 +246,7 @@ jobs:
       # explicitly. The tag already exists on the remote from the push above.
       - name: Create GitHub Release
         if: steps.bump.outputs.release == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.bump.outputs.next }}
           generate_release_notes: true

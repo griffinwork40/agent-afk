@@ -18,7 +18,7 @@ import { dequeueNext } from './queue-store.js';
 import { completeTask } from './lease-store.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import type { ScheduledTask } from './triggers.js';
-import type { TelemetryRecord, TelemetryTrigger, TaskCompletionDetails } from './scheduler.js';
+import type { TelemetryRecord, TaskCompletionDetails } from './scheduler.js';
 import { errorMessage } from '../../utils/errors.js';
 
 // ─── Context interface ────────────────────────────────────────────────────────
@@ -124,6 +124,12 @@ export async function executePullTick(ctx: PullTickContext): Promise<void> {
 // ─── Task-completion notification funnel ──────────────────────────────────────
 
 export interface FireOnTaskCompleteOptions {
+  /**
+   * Contract: the `record` argument reflects the in-memory TelemetryRecord that
+   * was *attempted* to be written to disk. When the telemetry append throws, the
+   * callback still fires with that record — the record may not be on disk.
+   * Callers that require durability guarantees must verify the write independently.
+   */
   onTaskComplete?: (record: TelemetryRecord, details?: TaskCompletionDetails) => void | Promise<void>;
 }
 
@@ -178,5 +184,3 @@ export function fireOnTaskComplete(
   }
 }
 
-// Re-export trigger type for consumers that import from this module.
-export type { TelemetryTrigger };

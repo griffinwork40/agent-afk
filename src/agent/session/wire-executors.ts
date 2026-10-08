@@ -129,6 +129,19 @@ export interface WireExecutorsOptions {
    */
   backgroundRegistry?: BackgroundAgentRegistry;
   /**
+   * Surface wakes an idle prompt when a background result lands (TTY REPL
+   * only). Forwarded to the root `agent` executor; see
+   * SubagentExecutorContext.backgroundAutoWake.
+   */
+  backgroundAutoWake?: () => boolean;
+  /**
+   * Live probe: will BgResultNotifier buffer the result for the next user
+   * message? Forwarded alongside backgroundAutoWake so `resolveBackgroundDelivery`
+   * can distinguish `next-message` (deliver enabled) from `manual-join`
+   * (AFK_BG_AUTO_DELIVER=0, notifier disabled). See SubagentExecutorContext.backgroundAutoDeliver.
+   */
+  backgroundAutoDeliver?: () => boolean;
+  /**
    * Sink for named-agent scan warnings (e.g. a user agent file shadowing a
    * tool-restricted builtin). When omitted, `loadAgentRegistry` uses its
    * default writer.
@@ -154,6 +167,22 @@ export interface WiredExecutors {
   subagentExecutor: SubagentExecutor;
   skillExecutor: SkillExecutor;
   composeExecutor: ComposeExecutor;
+}
+
+/**
+ * Background-dispatch fields for the root `agent` executor: the registry plus
+ * the surface probes that drive `resolveBackgroundDelivery`. Only the `agent`
+ * tool reads the probes (to pick a truthful delivery note), so skill/compose
+ * keep the bare registry.
+ */
+function agentBackgroundOpts(
+  opts: Pick<WireExecutorsOptions, 'backgroundRegistry' | 'backgroundAutoWake' | 'backgroundAutoDeliver'>,
+): Pick<WireExecutorsOptions, 'backgroundRegistry' | 'backgroundAutoWake' | 'backgroundAutoDeliver'> {
+  return {
+    ...(opts.backgroundRegistry !== undefined ? { backgroundRegistry: opts.backgroundRegistry } : {}),
+    ...(opts.backgroundAutoWake !== undefined ? { backgroundAutoWake: opts.backgroundAutoWake } : {}),
+    ...(opts.backgroundAutoDeliver !== undefined ? { backgroundAutoDeliver: opts.backgroundAutoDeliver } : {}),
+  };
 }
 
 /**
@@ -193,12 +222,12 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
   const nestedCwdOpt = nestedCwd !== undefined ? { cwd: nestedCwd } : {};
   const traceOpt = traceWriter !== undefined ? { traceWriter } : {};
   const skillTraceOpt = skillTraceWriter !== undefined ? { traceWriter: skillTraceWriter } : {};
-  const apiKeyOpt = apiKey !== undefined ? { apiKey } : {};
+  const apiKeyOpt = apiKey !== undefined ? { apiKey } : {}; // used by skill/compose/agent executors below
+  const credentialOpt = apiKey !== undefined ? { parentCredential: { key: apiKey, sourceModel: managerParentModel } } : {}; // #2844 paired for rootManager
   const bgRegistryOpt = backgroundRegistry !== undefined ? { backgroundRegistry } : {};
   // Match loadAgentRegistry's default sink so plugin discovery remains audible
   // on non-interactive surfaces that do not provide a boot-warning collector.
-  const registryWarn =
-    agentRegistryWarn ?? ((message: string) => process.stderr.write(message + '\n'));
+  const registryWarn = agentRegistryWarn ?? ((message: string) => process.stderr.write(message + '\n'));
   // Session-static snapshot shared by all root executors and inherited by
   // descendants. Do not resolve inside execute(): sibling calls must not see
   // different caps if the process environment changes during the session.
@@ -226,8 +255,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
   //    every depth-1 `agent`/`skill` fork on every surface able to publish but
   //    blind to what its siblings had already published.
   const rootManager = new SubagentManager({
-    ...apiKeyOpt,
-    parentModel: managerParentModel,
+    ...credentialOpt,
     ...baseUrlOpt,
     ...cwdOpt,
     ...traceOpt,
@@ -291,7 +319,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     defaultSubagentModel,
     childProviderFactory,
     childSkillExecutorFactory,
-    ...bgRegistryOpt,
+    ...agentBackgroundOpts(opts),
     resolveApiKeyForModel,
     // Top-level wiring → explicit depth 0. See SubagentExecutorContext.depth
     // for why this is required rather than defaulted.
@@ -346,6 +374,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     defaultModel: model,
     defaultSubagentModel,
     ...apiKeyOpt,
+    credentialModel: managerParentModel, // key's source model, not session routing model
     resolveApiKeyForModel,
     getReadScopeInputs: () => rootManager.getReadScopeInputs(),
     ...baseUrlOpt,

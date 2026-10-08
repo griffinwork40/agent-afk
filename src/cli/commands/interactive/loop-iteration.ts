@@ -1,15 +1,8 @@
 import type { ReadWithAutocompleteResult } from '../../input-box.js';
-import type { UserPromptSubmitContext } from '../../../agent/hooks.js';
 import { formatSubmittedEcho } from '../../input/echo.js';
 import { describeAttachmentSummary, type ImageAttachment } from '../../input/attachments.js';
-import { dispatch as dispatchSlash, parse as parseSlash } from '../../slash/registry.js';
-import { runPreflight, getPreflight, getSkillPreflightDir, stitchForwardManifest, type SkillInvocation } from '../../slash/preflight/index.js';
 import { renderDebugBanner } from '../../debug-banner.js';
-import { isDebugEnabled, debugLog } from '../../../utils/debug.js';
-import { sanitizeForDisplay } from '../../../utils/terminal-sanitize.js';
-import { env } from '../../../config/env.js';
-import { palette } from '../../palette.js';
-import { truncateDisplayWidth } from '../../display.js';
+import { isDebugEnabled } from '../../../utils/debug.js';
 import { ringBellIfEnabled } from '../../_lib/capture-mode.js';
 import { cyclePermissionMode } from '../../permission-mode-cycle.js';
 import {
@@ -17,25 +10,21 @@ import {
   getPluginShadowingNoticeLines,
 } from '../../slash/plugin-skills.js';
 import type { InteractiveCtx } from './shared.js';
-import { formatStatusFields } from './shared.js';
-import { AbortError, HookBlockedError, errorMessage } from '../../../utils/errors.js';
-import { HookHandlerTimeoutError } from '../../../agent/hook-registry.js';
-
 import type { TranscriptHandle } from './transcript.js';
-import { runTurn } from './turn-handler.js';
-import { saveSession } from '../../session-store.js';
 import type { InputSurface } from '../../input/input-surface.js';
 import type { ReplHistory } from '../../input/history.js';
 import { buildPrompt, type TurnState } from './repl-loop-shared.js';
 import type { FooterSubsystems } from './footer-subsystems.js';
-import { enableCodeBlockRegister, resetCodeBlockRegister } from '../../code-block-register.js';
-import { MomentumTicker } from './momentum-ticker.js';
 import { runFirstTurnHookIfNeeded } from './loop-iteration.first-turn.js';
-
-/** Per-handler timeout for the post-turn Stop notification. Tighter than the
- *  registry default (HOOK_HANDLER_TIMEOUT_MS = 30s) because Stop fires every
- *  REPL turn — a notification hook must not stall the prompt for 30s × N handlers. */
-const STOP_HOOK_HANDLER_TIMEOUT_MS = 5_000;
+import { autoResumeDirective } from './loop-iteration.injections.js';
+import { drainLoopNotifications } from './loop-iteration.drain.js';
+import { handleShellPassthrough } from './loop-iteration.shell-branch.js';
+import { handleSlashCommand, runPluginPreflight } from './loop-iteration.slash-branch.js';
+import { dispatchUserPromptSubmit } from './loop-iteration.hooks.js';
+import { wireReplStopHook } from './loop-iteration.stop-wiring.js';
+import { runOneTurn } from './loop-iteration.turn-run.js';
+import { createVersionNotice } from './version-notice.js';
+import { setupPeerBoundary, applyDeferPeers } from './loop-iteration.boundary.js';
 
 /**
  * Per-turn cap on autonomous auto-resumes — an idle REPL woken by a settled
@@ -48,14 +37,26 @@ const STOP_HOOK_HANDLER_TIMEOUT_MS = 5_000;
 const MAX_AUTO_RESUMES_PER_TURN = 3;
 
 /**
- * User-message text seeded when a background result auto-resumes an idle REPL.
- * The settled-result envelope is prepended at drain time (`runText = envelope +
- * this`), so the model sees the finished result followed by an explicit, honest
- * continue instruction — never a spoofed empty turn. The `[auto-resume]` tag
- * also makes the woken turn legible when scrolling back through history.
+ * Render and write the submitted-echo line for a non-silent seed-buffer entry.
+ *
+ * Contract: only called when `queued.echo !== 'silent'`; the caller is
+ * responsible for the guard. Takes explicit parameters rather than closing over
+ * loop locals so the function is extractable without behavioural change.
  */
-const AUTO_RESUME_DIRECTIVE =
-  '[auto-resume] The background task above has finished. Continue the work it was dispatched for.';
+function renderSeedEcho(
+  replRenderer: InteractiveCtx['replRenderer'],
+  permissionMode: InteractiveCtx['stats']['permissionMode'],
+  queued: { text: string; attachments: readonly ImageAttachment[] },
+): void {
+  const prompt = buildPrompt(permissionMode, queued.text);
+  const echo = formatSubmittedEcho({
+    buffer: queued.text,
+    promptText: prompt,
+    isTTY: Boolean(process.stdout.isTTY),
+    attachmentSummary: describeAttachmentSummary([...queued.attachments]),
+  });
+  replRenderer.writeLine(echo);
+}
 
 /**
  * Phase 3 of the REPL loop — the main input loop.
@@ -80,782 +81,187 @@ export async function runInputLoop(
   footer: FooterSubsystems,
   history: ReplHistory,
 ): Promise<void> {
-  const { contextPane, loopStageBar, mascotBar, healthRail, verdictLedger, shellPassthrough, bgResultNotifier } =
-    footer;
+  const { verdictLedger, bgResultNotifier, peerNotifier, processJobNotifier } = footer;
+  const maxTurnsNum = (() => { const mt = parseInt(ctx.options.maxTurns, 10); return mt > 0 ? mt : undefined; })();
 
-  // Init metadata (tools/MCP/SDK version) only resolves once the SDK
-  // receives the first user message. Logging it inline from the `.then`
-  // would interleave with the turn-1 spinner. Capture and defer to the
-  // top of the REPL loop so it prints cleanly between turns.
-  // Gated on isDebugEnabled() — the banner's tool count is SDK-advertised,
-  // not the whitelisted subset, so it's misleading and noisy by default.
+  // Init metadata deferred to loop top so it prints cleanly between turns.
   let pendingInitMeta: string | null = null;
   let pendingShadowingNotices: string[] = [];
   ctx.session.current.waitForInitialization().then(async (meta) => {
-    if (isDebugEnabled()) {
-      pendingInitMeta = renderDebugBanner(meta);
-    }
-    // Hot-swap the placeholder /skills and /agents commands with the live
-    // SDK-discovered lists, and install passthrough handlers for every
-    // plugin skill so `/mint`, `/forge`, etc. forward straight to the SDK
-    // turn loop. Without this, the slash dispatcher treats every plugin
-    // skill as an unknown command until the user manually runs
-    // `/reload-plugins`. Inner registrars log + swallow their own errors,
-    // so this never throws in practice.
+    if (isDebugEnabled()) pendingInitMeta = renderDebugBanner(meta);
     await autoRegisterPluginPassthroughs(ctx.session.current);
-    // Vendored or user skills win bare-name collisions with plugin skills —
-    // surface a one-time dim notice telling the user where the shadowed
-    // plugin form is still reachable (e.g. `/example-plugin:mint`).
-    //
-    // Gated on isDebugEnabled() (AFK_DEBUG=1) — when the full plugin set
-    // shadows 100+ vendored skills the per-skill listing is pure noise on
-    // a default run. Users who need to audit collisions enable debug mode;
-    // everyone else discovers shadowed forms via `/skills`.
-    if (isDebugEnabled()) {
-      pendingShadowingNotices = getPluginShadowingNoticeLines();
-    }
+    if (isDebugEnabled()) pendingShadowingNotices = getPluginShadowingNoticeLines();
   }).catch(() => { /* init / plugin discovery non-critical */ });
 
-  // Slash-command submit queue: a slash handler may return
-  // `{ kind: 'submit', message: '...' }` to follow itself up with a
-  // user-text turn. We stash that as `seedBuffer` and fire it on the
-  // next iteration via the fast-path below — the mid-stream-queue use
-  // (user types + Enters mid-turn) was retired in Stage 3e because the
-  // persistent compositor now handles that natively (queued buffer →
-  // setInputMode('idle') flush via the surface's onSubmit handler).
-  //
-  // Pre-seeded from `ctx.initialInput` when the session was launched with a
-  // first-message argument (`afk "prompt"` / `afk /review`): the first loop
-  // iteration takes the same fast-path, so the launch arg is echoed and
-  // dispatched (slash command or model turn) exactly as if the user had typed
-  // it and pressed Enter.
-  let seedBuffer: { text: string; attachments: readonly ImageAttachment[] } | undefined =
-    ctx.initialInput !== undefined
-      ? { text: ctx.initialInput, attachments: [] }
-      : undefined;
+  // Slash-command submit queue: pre-seeded from ctx.initialInput when the
+  // session was launched with a first-message argument. See original docs.
+  let seedBuffer: { text: string; attachments: readonly ImageAttachment[]; echo?: 'normal' | 'silent'; queuedSubmission?: boolean } | undefined =
+    ctx.initialInput !== undefined ? { text: ctx.initialInput, attachments: [] } : undefined;
 
-  // Rewind reload-for-edit: `/rewind` (or double-Esc) returns
-  // `{ kind: 'prefill', message }` — the discarded message's text. Unlike
-  // `seedBuffer` (auto-submit), this pre-fills the NEXT readLine's editable
-  // input buffer so the user edits and presses Enter to resend. Consumed once.
+  // Rewind reload-for-edit: `/rewind` returns a prefill payload; unlike
+  // seedBuffer (auto-submit) this pre-fills the next readLine for editing.
   let prefillBuffer: string | undefined;
 
-  // First-use notice for ! shell passthrough: shown once per session on the
-  // first `!cmd` dispatch so users who relied on `!literal text` as model
-  // input are informed of the behavior change and the opt-out flag.
   let shellPassthroughNoticePrinted = false;
+  // Single-element array so runOneTurn can mutate it via reference.
+  const autosaveState: [boolean] = [false];
 
-  // Session-autosave failure notice. Per-turn autosave is best-effort (it must
-  // never break the loop), but a PERSISTENT failure (EACCES, ENOSPC, read-only
-  // FS) would silently drop ALL session persistence while the user assumes the
-  // conversation is resumable. Surface the FIRST failure per session; stay
-  // quiet afterwards so a broken disk doesn't spam the transcript every turn.
-  let autosaveFailureLogged = false;
-
-  // Post-turn Stop-hook injection. When a Stop handler returns injectContext
-  // (e.g. the terminal-state gate bouncing a self-certified `Done` with no
-  // corroborating evidence — see terminal-state-gate.ts), we stash it here and
-  // prepend it to the NEXT turn's prompt at the top of the loop — the same
-  // next-turn delivery contract as the shell/bg-result injections below.
-  // Cross-turn state is exactly what the v1 Stop wiring deferred (see the Stop
-  // dispatch site at the bottom of the loop).
+  // Post-turn Stop-hook correction stashed for next-turn delivery.
   let pendingStopInjection: string | undefined;
-  // Expose a clear-setter on ctx so the /resume swap path (onSwapped callback
-  // in bootstrap.ts) can drop a stale Stop-hook injection from the outgoing
-  // session before the resumed session's first turn. Mirrors clearVerdictLedger
-  // and clearBgResultBuffer (which serve the same role for the ledger and the
-  // bg-result buffer). Optional on ctx — early /resume calls before runInputLoop
-  // runs are a safe no-op.
   ctx.clearPendingStopInjection = () => { pendingStopInjection = undefined; };
-  // Parsed terminal-state kind + corroborating-evidence flag of the current
-  // turn, captured from onTerminalState (which fires during runTurn) so the
-  // post-turn Stop dispatch can carry them on StopContext for policy handlers.
-  // Reset before every runTurn so a verdict-less turn never reuses a stale kind.
-  let currentTerminalKind: 'done' | 'blocked' | 'asking' | 'interrupted' | undefined;
-  let currentDoneHasEvidence: boolean | undefined;
-  let currentDoneClassification: 'no-code-changes' | 'verified' | 'unverified' | undefined;
 
-  // Auto-resume: wake an idle prompt when a background subagent result lands so
-  // the session continues its work without waiting for a keystroke. Fires only
-  // for injectable results (the notifier gates on AFK_BG_AUTO_DELIVER + skips
-  // cancels before invoking this), and only when the prompt is genuinely idle —
-  // blocked on readLine (isAwaitingInput) with an empty input buffer, so a
-  // half-typed line is never clobbered and a result that lands mid-turn just
-  // delivers on the next drain. Bounded by MAX_AUTO_RESUMES_PER_TURN as a
-  // circuit breaker. TTY-only: isAwaitingInput() is false on the non-TTY reader.
-  const maxTurnsNum = (() => { const mt = parseInt(ctx.options.maxTurns, 10); return mt > 0 ? mt : undefined; })();
+  // Wire session-layer Stop dispatch — see loop-iteration.stop-wiring.ts.
+  // Re-applied before EVERY turn (below) so /resume session swaps are covered.
+  const stopWiring = wireReplStopHook(
+    ctx, (text) => { pendingStopInjection = text; },
+  );
 
+  // Peer inter-round boundary delivery — see loop-iteration.boundary.ts.
+  let queuedHumanTurn = false;
+  const { admissionQueue, reinstall: reinstallBoundary } = setupPeerBoundary(ctx, surface, peerNotifier, () => queuedHumanTurn);
+  ctx.reinstallPeerBoundary = reinstallBoundary; // wired to onSwapped in bootstrap.ts
+
+  const versionNotice = createVersionNotice();
+  // Auto-resume: wake an idle prompt when bg results or peer messages land.
   let autoResumeCount = 0;
-  // Extracted wake logic so both the settled-event path (onInjectable) and
-  // the prompt-became-receptive path (onAwaitingInput) share the same gate
-  // check and wake sequence. Without this, a result that settles mid-turn
-  // fires onInjectable into a closed gate (isAwaitingInput=false), buffers
-  // silently, and the user must type to drain it.
   const tryAutoResume = (): void => {
     if (autoResumeCount >= MAX_AUTO_RESUMES_PER_TURN) return;
     if (!surface.isAwaitingInput() || !surface.bufferIsEmpty()) return;
-    if (!bgResultNotifier.hasPendingInjections()) return;
-
+    const bgPending = bgResultNotifier.hasPendingInjections() || processJobNotifier?.hasPendingInjections() === true;
+    if (!bgPending && !peerNotifier.hasPendingInjections()) return;
     autoResumeCount++;
-    // Audible cue (no-op unless AFK_BELL=1 + TTY) before the seeded turn takes
-    // over the prompt — the human-facing "your background work resumed" signal.
     ringBellIfEnabled(process.stdout);
-    // Set the function-scope seed FIRST, then wake. abortPendingRead resolves
-    // the in-flight readLine with an empty payload, tripping the empty-input
-    // `continue` below; the next iteration's seed fast-path fires the directive
-    // and the drain prepends the result envelope (runText = envelope + directive).
-    seedBuffer = { text: AUTO_RESUME_DIRECTIVE, attachments: [] };
+    seedBuffer = { text: autoResumeDirective(bgPending), attachments: [], echo: 'silent' };
     surface.abortPendingRead();
   };
-
-  // Settled-event path: a background result just landed — try to wake.
-  bgResultNotifier.onInjectable = tryAutoResume;
-
-  // Prompt-became-receptive path: the REPL just returned to its idle
-  // readline after a turn completed. Re-check for results that settled
-  // mid-turn (when isAwaitingInput was false and onInjectable was a no-op).
-  // input-surface.ts only invokes this when primePromptSuggestion=true, so
-  // sub-prompts (elicitation, form fields) never trigger tryAutoResume —
-  // preventing an auto-resume from aborting a sub-prompt with an empty answer.
+  for (const n of [bgResultNotifier, peerNotifier, processJobNotifier]) if (n) n.onInjectable = tryAutoResume;
   surface.onAwaitingInput = tryAutoResume;
 
   while (true) {
-      // Reset the auto-resume counter each iteration so the circuit breaker
-      // bounds wakes *per turn*, not per session. The session-wide cap caused
-      // false suppression after 3 batches of background results -- further
-      // batches would deliver but never wake the idle prompt. Per-turn reset
-      // preserves the original invariant (a woken turn cannot chain-wake
-      // itself indefinitely) while allowing auto-resume across arbitrarily
-      // many turn boundaries.
-      autoResumeCount = 0;
+    autoResumeCount = 0;
+    queuedHumanTurn = false;
 
-      if (pendingInitMeta) {
-        ctx.replRenderer.writeLine(pendingInitMeta);
-        ctx.replRenderer.writeLine('');
-        pendingInitMeta = null;
-      }
-      if (pendingShadowingNotices.length > 0) {
-        for (const line of pendingShadowingNotices) ctx.replRenderer.writeLine(line);
-        ctx.replRenderer.writeLine('');
-        pendingShadowingNotices = [];
-      }
-      // Shell-passthrough completion notifications — one-line summary per
-      // backgrounded `!&cmd` that finished since the last prompt. Kept
-      // single-line (instead of `card({...})`) because shell jobs typically
-      // produce dense output and a multi-line card adds vertical noise.
-      // The injected output reaches the model via `pendingShellInjection`
-      // below, so the human-visible notice is summary-only.
-      const shellNotifications = shellPassthrough.drainNotifications();
-      for (const { job, result } of shellNotifications) {
-        const glyph = result.errorReason === undefined ? '✓' : '✗';
-        const exitPart = result.errorReason === 'abort'
-          ? 'killed'
-          : result.errorReason === 'timeout'
-            ? 'timed out'
-            : result.errorReason === 'signal-killed'
-              ? 'killed by signal'
-              : `exit ${result.exitCode ?? 0}`;
-        const seconds = Math.max(0, Math.round(result.durationMs / 100) / 10);
-        ctx.replRenderer.writeLine(
-          palette.dim(`  ${glyph} [${job.id}] ${exitPart} · ${seconds}s · `) + job.command,
-        );
-      }
-      // Background-subagent completion notifications — one line per settled
-      // `agent`-tool background job (mode:"background" or Ctrl+B promotion)
-      // since the last prompt. The result itself reaches the model via
-      // `bgResultNotifier.drainInjections()` below; this notice is
-      // human-summary-only, matching the shell-job style above.
-      const bgAgentNotifications = bgResultNotifier.drainNotifications();
-      for (const { job } of bgAgentNotifications) {
-        const glyph = job.status === 'completed' ? '✓' : job.status === 'failed' ? '✗' : '⊘';
-        const seconds = job.endedAt !== undefined
-          ? Math.max(0, Math.round((job.endedAt - job.startedAt) / 100) / 10)
-          : 0;
-        // Display-width truncation, not code-unit — see the same fix in
-        // slash/commands/bgsub.ts: `slice(0, 60) + '…'` measured 61 cells.
-        const label = truncateDisplayWidth(job.label, 60);
-        ctx.replRenderer.writeLine(
-          palette.dim(`  ${glyph} [${job.jobId}] subagent ${job.status} · ${seconds}s · `) + label,
-        );
-      }
-      const paneLines = contextPane.renderIfChanged(ctx.stats.sessionId);
-      if (paneLines.length > 0) {
-        for (const l of paneLines) ctx.replRenderer.writeLine(l);
-        ctx.replRenderer.writeLine('');
-      }
-      // Verdict trajectory rail — rendered as a pinned DECSTBM-reserved footer
-      // row by verdictLedger itself (started above). No inline writeLine here.
-      let text: string;
-      let attachments: ReadWithAutocompleteResult['attachments'];
+    if (pendingInitMeta) {
+      ctx.replRenderer.writeLine(pendingInitMeta);
+      ctx.replRenderer.writeLine('');
+      pendingInitMeta = null;
+    }
+    if (pendingShadowingNotices.length > 0) {
+      for (const line of pendingShadowingNotices) ctx.replRenderer.writeLine(line);
+      ctx.replRenderer.writeLine('');
+      pendingShadowingNotices = [];
+    }
+    drainLoopNotifications(ctx, footer);
 
-      // Drain any implement-turn queued by an approved `exit_plan_mode` tool
-      // call during the previous turn. The session held it (the per-turn tool
-      // dispatcher can't reach this REPL loop), so we promote it to the seed
-      // buffer here, post-turn — the model-proposed counterpart to `/plan off`'s
-      // seeded save-and-implement handoff. A `/plan off` seed (set directly,
-      // same turn) takes precedence if both are somehow present.
-      if (seedBuffer === undefined) {
-        const planExit = await ctx.session.current.takePendingPlanExitSeed();
-        if (planExit !== undefined) {
-          // #495: takePendingPlanExitSeed already applied the deferred flip to
-          // the SESSION's mode, but the plan-mode gate and this loop's prompt
-          // read `stats.permissionMode` (bootstrap wires the gate to
-          // `() => stats.permissionMode`). Mirror the applied mode here — exactly
-          // as `togglePlanMode` does for `/plan off` — or the gate stays
-          // plan-locked and the operator's prompt indicator never flips.
-          ctx.stats.permissionMode = planExit.mode;
-          seedBuffer = { text: planExit.message, attachments: [] };
-        }
-      }
+    let text: string;
+    let attachments: ReadWithAutocompleteResult['attachments'];
+    let silentSeed = false;
 
-      if (seedBuffer !== undefined) {
-        // Slash-command follow-up: a previous handler returned
-        // { kind: 'submit', message } to chain itself with a user-text
-        // turn. We auto-submit without a second Enter press — the user
-        // already expressed intent by running the slash command.
-        //
-        // Echo routes through `ctx.replRenderer.writeLine` which, when
-        // the persistent compositor is armed, commits above the live
-        // overlay via compositor.commitAbove (matching the surface's
-        // readLine echo path so scrollback parity holds).
-        const queued = seedBuffer;
-        seedBuffer = undefined;
-        const prompt = buildPrompt(ctx.stats.permissionMode, queued.text);
-        const echo = formatSubmittedEcho({
-          buffer: queued.text,
-          promptText: prompt,
-          isTTY: Boolean(process.stdout.isTTY),
-          attachmentSummary: describeAttachmentSummary([...queued.attachments]),
-        });
-        ctx.replRenderer.writeLine(echo);
-        text = queued.text.trim();
-        attachments = queued.attachments as ReadWithAutocompleteResult['attachments'];
-      } else {
-        // Stage 3e: surface.readLine uses the persistent compositor's
-        // onSubmit path when armed (TTY); falls back to readWithAutocomplete
-        // on non-TTY surfaces. Shift+Tab and onSigint are wired ONCE at
-        // armCompositor time (above) — no need to re-pass per-call.
-        // Consume a one-shot rewind prefill (editable, not auto-submitted).
-        const initialBuffer = prefillBuffer;
-        prefillBuffer = undefined;
-        const result = await surface.readLine({
-          promptFn: (buffer) => buildPrompt(ctx.stats.permissionMode, buffer),
-          ...(initialBuffer !== undefined ? { initialBuffer } : {}),
-          // This is THE turn-boundary prompt — the one "what should I do next"
-          // moment in the loop, and the only read that opts into an
-          // empty-prompt ghost. Borrowed sub-prompts (elicitation confirms,
-          // form fields) call readLine() too and deliberately leave it off.
-          primePromptSuggestion: true,
-          onSigint: sigintHandler,
-          onShiftTab: () => {
-            // Shift+Tab is the keyboard speed lane: it advances the permission-
-            // mode ring default → plan → bypass → default (AFK is excluded —
-            // it stays on /afk; if already in AFK, Shift+Tab exits it to
-            // default). No seeded turn. (`/plan off`, by contrast, exits plan
-            // and seeds a save-and-implement turn.)
-            cyclePermissionMode(ctx.slashCtx).catch(() => {});
-            ctx.statusLine.rearm();
-          },
-        });
-        text = result.text.trim();
-        attachments = result.attachments;
-      }
-      if (!text && attachments.length === 0) continue;
-
-      // Shell-passthrough branch — `!cmd` foreground / `!&cmd` background.
-      // Runs BEFORE the slash check so `!ls /tmp` (which contains a `/`)
-      // is unambiguously a shell command, not a slash dispatch. The
-      // handler awaits FG to completion before returning so the next
-      // prompt appears AFTER the command finishes; BG returns
-      // immediately and the completion notification surfaces at the top
-      // of the next loop iteration.
-      if (text.startsWith('!')) {
-        // Respect --no-shell-passthrough (or AFK_SHELL_PASSTHROUGH): skip
-        // dispatch entirely and fall through so the model receives the literal
-        // `!text` input instead of shelling it out. The env opt-out accepts any
-        // common falsy spelling (0 / false / off / no, case-insensitive) so
-        // env-based lockdown policies don't silently leave the feature on when
-        // they set e.g. AFK_SHELL_PASSTHROUGH=false. (PR #565 review: L1.)
-        const shellPassthroughEnvOptOut = /^(0|false|off|no)$/i.test(
-          env.AFK_SHELL_PASSTHROUGH ?? '',
-        );
-        const shellPassthroughEnabled =
-          ctx.options.shellPassthrough !== false && !shellPassthroughEnvOptOut;
-
-        if (shellPassthroughEnabled) {
-          // First-use notice: inform users of the behavior change on the first
-          // `!cmd` dispatch in this session so those who relied on `!literal`
-          // as model input discover the opt-out flag promptly.
-          if (!shellPassthroughNoticePrinted) {
-            shellPassthroughNoticePrinted = true;
-            ctx.replRenderer.writeLine(
-              palette.dim(
-                '  ℹ  ! prefix shells out. Pass --no-shell-passthrough (or set AFK_SHELL_PASSTHROUGH=0) to send ! text to the model instead.',
-              ),
-            );
-          }
-          const handled = await shellPassthrough.dispatch(text);
-          if (handled) {
-            ctx.statusLine.rearm();
-            continue;
-          }
-        }
-        // Fall through — either shell passthrough is disabled (literal text
-        // sent to the model) or the dispatcher returned false (empty `!`
-        // with no body; usage hint already emitted inside the dispatcher).
-      }
-
-      // C01: track whether this turn was handled by a native slash command so
-      // the preflight block below only fires on the plugin-forward path.
-      let isPluginForward = false;
-      if (text.startsWith('/')) {
-        const res = await dispatchSlash(text, ctx.slashCtx, attachments);
-        if (res.handled) {
-          if (res.result === 'exit') {
-            // Readline/compositor teardown makes prompting impossible, so the
-            // external input-lifecycle constraint requires disposition first.
-            await ctx.resolveWorktreeDisposition?.(true);
-            ctx.rl.close();
-            return;
-          }
-          if (text === '/clear' || text.startsWith('/clear ')) {
-            await transcript.rotateOnClear();
-            ctx.replRenderer.writeLine(palette.dim(`  transcript: ${transcript.path()}`));
-            // The conversation has been wiped — its verdict trajectory is
-            // no longer meaningful. Drop the ledger so the next prompt
-            // doesn't carry stale state into a fresh session. Same reasoning
-            // clears any pending post-turn Stop correction from the old
-            // conversation so it can't leak into the fresh one.
-            verdictLedger.reset();
-            pendingStopInjection = undefined;
-          }
-          if (
-            res.result !== null &&
-            typeof res.result === 'object' &&
-            'kind' in res.result &&
-            res.result.kind === 'submit'
-          ) {
-            seedBuffer = { text: res.result.message, attachments: attachments ?? [] };
-            ctx.statusLine.rearm();
-            continue;
-          }
-          if (
-            res.result !== null &&
-            typeof res.result === 'object' &&
-            'kind' in res.result &&
-            res.result.kind === 'prefill'
-          ) {
-            // Rewind: load the discarded message's text into the next prompt,
-            // editable. No auto-submit — the user edits and presses Enter.
-            prefillBuffer = res.result.message;
-            ctx.statusLine.rearm();
-            continue;
-          }
-          ctx.statusLine.rearm();
-          continue;
-        }
-        // dispatchSlash returned handled: false. This happens for two reasons:
-        //   (a) `forward` — the plugin-skill passthrough: we should run the preflight.
-        //   (b) Unrecognized command — falls through to the agent as plain text.
-        // In both cases we are in the plugin-forward branch, not a native handler.
-        isPluginForward = true;
-      }
-
-
-      // Persist to history ring (slash commands excluded — they're meta, not prompts).
-      history.push(text);
-
-      await runFirstTurnHookIfNeeded(ctx, text);
-
-      // SkillPreflight — plugin-forward path only (C01).
-      // When a slash command falls through `dispatchSlash` as `forward` —
-      // the plugin-skill passthrough — we don't get a chance to mutate the
-      // message via buildSkillInvocationMessage. Instead, run any
-      // registered preflight here and *prepend* the manifest to the user
-      // text. The plugin-skill body still expands from the `/<skill>` line
-      // at the tail, so the manifest reads as preceding context that the
-      // model has already seen by the time it dispatches the skill.
-      //
-      // Failure isolation: no preflight registered, or preflight returns
-      // null/throws → text passes through verbatim, identical to today.
-      // No working-tree mutation, no model round-trip.
-      //
-      // NOTE: native commands that `dispatchSlash` handles fully always
-      // `continue` above and never reach this block — the `isPluginForward`
-      // guard is belt-and-suspenders to make the constraint machine-checkable.
-      let runText = text;
-      if (isPluginForward) {
-        const parsed = parseSlash(text);
-        if (parsed) {
-          // Strip leading '/' and any '<plugin>:' namespace → bare name.
-          const bare = parsed.name.replace(/^\//, '').split(':').pop() ?? '';
-          // M5: only create the artifact dir (mkdirSync) when a preflight is
-          // actually registered for this skill — avoids filesystem noise on the
-          // dominant no-preflight path.
-          if (bare && getPreflight(bare)) {
-            const inv: SkillInvocation = {
-              skillName: bare,
-              rawArgs: parsed.args,
-              // Forward path is plugin-only today — user/project slash commands
-              // are handled before this block and never reach the preflight path.
-              // If user/project sources are ever forwarded here, derive source
-              // from the skill registry origin (cf. builtin-skills.ts#originToSource).
-              source: 'plugin',
-              capabilities: { compose: true, subagents: true },
-            };
-            const sessionIdMaybe = ctx.session.current.sessionId;
-            const artifactDir = getSkillPreflightDir(sessionIdMaybe);
-            // P04: emit a structured debug trace event before/after runPreflight
-            // so hot-path duration and success/failure are observable without a
-            // full trace writer. Gated on isDebugEnabled() — no overhead in prod.
-            // External constraint: debugLog is a no-op unless AFK_DEBUG=1.
-            const preflightStart = Date.now();
-            debugLog(`[afk trace] preflight.start commandName=${bare}`);
-            let preflightSuccess = false;
-            const pre = await runPreflight(
-              inv,
-              // Honor the session's effective cwd so preflights that shell
-              // out to `git status` / file globs operate on the worktree,
-              // not the Node host's process.cwd() (the parent repo when
-              // launched with `afk i --worktree`). `stats.cwd` is stamped
-              // at bootstrap.ts:328 with the same `process.cwd()` fallback.
-              { cwd: ctx.stats.cwd ?? process.cwd(), artifactDir },
-              (err) => {
-                // Surface preflight errors in debug mode; swallow in production
-                // so a failing context-gather never blocks the skill from running.
-                if (isDebugEnabled()) {
-                  ctx.replRenderer.writeLine(
-                    palette.warning(`⚠ preflight(${bare}) failed: `) +
-                      (errorMessage(err)),
-                  );
-                }
-              },
-            );
-            preflightSuccess = pre !== null;
-            debugLog(
-              `[afk trace] preflight.end commandName=${bare} durationMs=${Date.now() - preflightStart} success=${preflightSuccess}`,
-            );
-            // C03: `pre?.manifestBlock` may be undefined (preflight returned null or
-            // didn't produce a manifest). stitchForwardManifest is a no-op on
-            // undefined/empty — it returns `text` unchanged in that case.
-            // Manifest precedes the slash line at the tail so the
-            // plugin-skill body expansion still fires. See
-            // stitchForwardManifest for the <system-reminder> wrap
-            // rationale — this path concatenates into a single user-text
-            // payload so it needs an explicit structural marker.
-            runText = stitchForwardManifest(pre?.manifestBlock, text);
-          }
-        }
-      }
-
-      // Prepend any pending shell-passthrough output blocks so the model
-      // sees `!cmd` output as context for the next user message. Matches
-      // Claude Code's transcript-injection semantics: shell output sits
-      // between user messages, model reads it on the next turn. The
-      // drain clears the buffer atomically — a single message carries
-      // every output accumulated since the previous user turn.
-      const shellInjection = shellPassthrough.drainInjections();
-      if (shellInjection.length > 0) {
-        runText = shellInjection + runText;
-      }
-
-      // Prepend any settled background-subagent results so the model sees
-      // them as context for the next user message — same next-turn delivery
-      // contract as shell passthrough above. Drain also emits a `delivered`
-      // witness event per job; /bgsub:join remains available for replay.
-      const bgAgentInjection = bgResultNotifier.drainInjections();
-      if (bgAgentInjection.length > 0) {
-        runText = bgAgentInjection + runText;
-      }
-
-      // Prepend a pending post-turn Stop-hook correction stashed after the
-      // previous turn's Stop dispatch (e.g. the terminal-state gate bouncing a
-      // self-certified `Done` with no evidence). Same next-turn delivery as the
-      // shell/bg injections above; consumed exactly once (cleared on drain).
-      // Drained AFTER shell/bg so the framework correction sits at the top of
-      // the prompt, directly below any UserPromptSubmit injection added below.
-      if (pendingStopInjection !== undefined) {
-        runText = pendingStopInjection + '\n\n' + runText;
-        pendingStopInjection = undefined;
-      }
-
-      // UserPromptSubmit hook — fires before every turn submission.
-      // Handlers may block the turn (HookBlockedError → continue loop),
-      // inject additional context (prepended to runText), or approve silently.
-      // A handler timeout (HookHandlerTimeoutError) fails closed like a block;
-      // AbortError and any other throw propagate out of the loop unchanged.
-      if (ctx.hookRegistry) {
-        try {
-          const upsCtx: UserPromptSubmitContext = {
-            event: 'UserPromptSubmit',
-            prompt: runText,
-            sessionId: ctx.stats.sessionId,
-          };
-          const upsDecision = await ctx.hookRegistry.dispatch(upsCtx);
-          if (upsDecision.injectContext) {
-            runText = upsDecision.injectContext + runText;
-          }
-        } catch (err) {
-          if (err instanceof HookBlockedError) {
-            ctx.replRenderer.writeLine(
-              palette.warning('⊘ Turn blocked by hook') +
-                (err.reason ? palette.dim(`: ${sanitizeForDisplay(err.reason)}`) : ''),
-            );
-            ctx.statusLine.rearm();
-            continue;
-          }
-          // A handler that exceeds HOOK_HANDLER_TIMEOUT_MS fails closed exactly
-          // like a deliberate block. hook-registry re-throws
-          // HookHandlerTimeoutError raw (so dispatchSubagentStop can distinguish
-          // a timeout from a block); here we drop the turn with a notice rather
-          // than letting the timeout unwind and crash the REPL loop.
-          if (err instanceof HookHandlerTimeoutError) {
-            ctx.replRenderer.writeLine(
-              palette.warning('⊘ Turn blocked by hook') +
-                palette.dim(`: handler timed out after ${err.timeoutMs}ms`),
-            );
-            ctx.statusLine.rearm();
-            continue;
-          }
-          // AbortError (Ctrl-C teardown) and every other non-block, non-timeout
-          // throw propagate out of the REPL loop unchanged.
-          throw err;
-        }
-      }
-
-      // Reset the per-turn verdict capture so a turn that emits no terminal
-      // state never carries the previous turn's kind into the Stop dispatch.
-      // onTerminalState re-sets these during runTurn when a verdict parses.
-      currentTerminalKind = currentDoneHasEvidence = currentDoneClassification = undefined;
-      // Enable and clear the code-block register so `/copy N` indices match
-      // the blocks rendered in THIS turn, not a prior one.  enableCodeBlockRegister()
-      // is idempotent after the first turn; calling it here ensures it is set
-      // before the first runTurn and stays set for every subsequent turn.
-      enableCodeBlockRegister();
-      resetCodeBlockRegister();
-      // Per-turn momentum ticker: computes a smoothed tok/s rate from streaming
-      // text deltas. The repaint callback is invoked internally by the ticker
-      // at a throttled cadence so the status line updates smoothly.
-      const momentumTicker = new MomentumTicker((rate) => {
-        ctx.statusLine.repaint({
-          ...formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler, maxTurnsNum),
-          tokPerSec: rate ?? undefined,
-        });
-      });
-      momentumTicker.start();
-      await runTurn({ text: runText, attachments }, ctx.session.current, ctx.stats, {
-        setInFlight(v: boolean) { turnState.turnInFlight = v; },
-        // Forward the promotion seam so Ctrl+B can background a running
-        // foreground subagent (else fall back to whole-turn backgrounding).
-        ...(ctx.subagentControl ? { subagentControl: ctx.subagentControl } : {}),
-        async onUserMessage(userInput) {
-          // Write the user's message to the transcript immediately — the
-          // appendTurn below then closes the turn with the assistant block.
-          await transcript.appendUser(userInput);
-        },
-        async onQueuedUserMessage(userInput) {
-          // Ctrl+B flush: lands INSIDE the open turn, so it must not open or
-          // close one (appendUser would do both).
-          await transcript.appendQueuedUser(userInput);
-        },
-        async onTurnComplete(userInput, assistantText) {
-          await transcript.appendTurn(userInput, assistantText);
-          // Per-turn session autosave → ~/.afk/state/sessions/<sessionId>.json.
-          // recordTurn (turn-handler) already folded this turn into ctx.stats
-          // and set the auto-name, so persist the live snapshot now. Keyed by
-          // sessionId (no override) → one file updated in place, never a
-          // duplicate. Crash-safe: a non-graceful exit no longer loses the
-          // resumable session — only the markdown transcript was per-turn before.
-          //
-          // Guard on sessionId: saveSession falls back to a fresh
-          // session-<now>.json filename when it's absent, which would spawn a
-          // NEW file every turn. The provider sets sessionId by the first
-          // turn's recordTurn in the common case; rare providers that emit none
-          // fall back to the single on-exit save instead of forking sidecars.
-          if (ctx.stats.sessionId) {
-            try {
-              saveSession(ctx.stats);
-            } catch (err) {
-              // Best-effort — autosave must never break the REPL loop. But
-              // surface the FIRST failure per session (autosaveFailureLogged)
-              // so a persistent EACCES/ENOSPC isn't silently swallowed every
-              // turn while the user assumes the conversation is resumable.
-              if (!autosaveFailureLogged) {
-                autosaveFailureLogged = true;
-                ctx.replRenderer.writeLine(
-                  palette.warning('⚠ ') +
-                    'session autosave failed — this conversation may not be resumable: ' +
-                    (errorMessage(err)),
-                );
-              }
-            }
-          }
-        },
-        async onAfterTurn() {
-          // Stop the momentum ticker first so tokPerSec clears to undefined and
-          // the status line repaints without the streaming segment.
-          momentumTicker.stop();
-          await ctx.contextSampler.onTurn(ctx.stats.totalTurns);
-          // Re-sample the git branch each turn (cheap, local). The PR lookup
-          // (network) is detached inside refresh() and lands on a later repaint.
-          await ctx.gitStatusSampler.refresh();
-          ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler, maxTurnsNum));
-          ctx.statusLine.rearm();
-          // Reset the loop-stage bar to 'observing' so the footer rail shows
-          // a clean "waiting" state between turns rather than the last active
-          // stage from the completed turn (which could be any of the five).
-          loopStageBar?.repaint('observing');
-          // Refresh the health rail with the post-turn snapshot — turn count,
-          // elapsed time, and accumulated tool calls are now fully updated.
-          healthRail?.update(ctx.stats);
-        },
-        rearmStatus: () => ctx.statusLine.rearm(),
-        onTerminalState: (state, meta) => {
-          verdictLedger?.push(state);
-          // Capture for the post-turn Stop dispatch (StopContext). Fires during
-          // runTurn, so these are set by the time Stop dispatches at loop tail.
-          currentTerminalKind = state.kind;
-          currentDoneHasEvidence = meta?.doneHasCorroboratingEvidence;
-          currentDoneClassification = meta?.doneEvidenceClassification;
-        },
-        setActiveCompositor: (c) => {
-          // Publish the active compositor for the SIGINT handler (which
-          // routes the interrupt notice through `commitAbove` when an
-          // overlay is live). Do NOT call `ctx.replRenderer.setCompositor(c)`
-          // here — the persistent compositor was already wired onto
-          // `replRenderer` once at `armCompositor` time above, and
-          // toggling it to `null` in turn-handler's finally would re-
-          // expose the original Stage-3e bug: top-of-loop `writeLine`
-          // calls would fall through to raw stdout.write while the
-          // persistent compositor stays armed, corrupting log-update's
-          // line tracker.
-          turnState.activeCompositor = c;
-          // Dismiss the interrupt picker when the compositor clears at turn end.
-          if (c === null && turnState.interruptPickerAbort) {
-            turnState.interruptPickerAbort.abort();
-            turnState.interruptPickerAbort = null;
-          }
-        },
-        setInterruptNotifier: (fn) => {
-          turnState.notifyInterrupting = fn;
-        },
-        // The StatusLine doubles as a DECSTBM scroll-region guard so that
-        // mid-turn `commitAbove` writes (tool labels, agent banners, etc.)
-        // enter terminal scrollback instead of being silently clipped by
-        // the persistent sub-region scroll.
-        scrollRegion: ctx.statusLine,
-        // Stage 3e: expose the surface's persistent compositor + per-turn
-        // background/soft-stop handler swaps to the turn handler. All are
-        // no-ops on non-TTY surfaces (surface.getCompositor() returns null;
-        // set*Handler calls are benign mutations of null refs).
-        getCompositor: () => surface.getCompositor(),
-        setBackgroundHandler: (handler) => surface.setBackgroundHandler(handler),
-        setTaskViewHandler: (handler) => surface.setTaskViewHandler(handler),
-        setSoftStopHandler: installSoftStop,
-        setPausedState: (paused) => surface.setPausedState(paused),
-        setPauseInterruptHandler: (handler) => surface.setPauseInterruptHandler(handler),
-        async onContextProgress() {
-          await ctx.contextSampler.refresh();
-          ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler, maxTurnsNum));
-          // Pass the live context ratio from contextSampler so the health rail
-          // reflects mid-turn context usage. Without the override, update()
-          // falls back to stats.turnTokens which is only populated by
-          // recordTurn (end-of-turn), showing 0% during the first turn and a
-          // stale value during subsequent turns.
-          healthRail?.update(ctx.stats, ctx.contextSampler.getRatio());
-        },
-        // Repaint the LoopStageBar footer row whenever the agent's loop stage
-        // transitions.  The bar is a per-session singleton; the callback is
-        // safe to call on non-TTY (LoopStageBar.repaint() TTY-gates itself).
-        // The mascot band rides the same transition (issue #336): it maps the
-        // stage onto idle/working itself and is inert unless opted in, so this
-        // stays a single call regardless of whether the sprite is enabled.
-        ...(loopStageBar
-          ? {
-              onStageChange: (stage, signals) => {
-                loopStageBar!.repaint(stage);
-                mascotBar?.onStage(stage, signals);
-              },
-            }
-          : {}),
-        // Thread the edit-preview ref so the StreamRenderer can wire the hook
-        // callback into the tool lane during arm(). Absent on non-REPL callers.
-        ...(ctx.addPreviewDiffRef ? { addPreviewDiffRef: ctx.addPreviewDiffRef } : {}),
-        bashTailSetter: ctx.bashTailSetter,
-        // Live tok/s: delegate to the momentum ticker, which handles EMA
-        // smoothing and throttled repaint internally.
-        onTextDelta: (charCount) => momentumTicker.update(charCount),
-      }, ctx.stats.thinkingUi ?? ctx.options.thinkingUi, ctx.completionWriter,
-        // Surface refs threaded into the per-turn StreamRenderer for the
-        // legacy non-borrow path (non-TTY, when surface.getCompositor()
-        // is null and the renderer constructs its own compositor). In
-        // the persistent-compositor path, these refs are already wired
-        // by armCompositor and the renderer's borrow skips this branch
-        // — passing them anyway is a defensive belt-and-suspenders for
-        // surfaces that haven't armed (e.g. a future test path).
-        surface.toRunTurnRefs(buildPrompt(ctx.stats.permissionMode)),
-      );
-
-      // Contract: Stop fires post-turn. A Stop handler may return injectContext
-      // to bounce a correction into the NEXT turn — stashed in
-      // pendingStopInjection and drained at the top of the loop (the terminal-
-      // state gate uses this). AbortError propagates (abort precedence is
-      // non-negotiable). HookBlockedError surfaces a brief notice and continues
-      // -- block still does NOT force REPL continuation (block-to-force-
-      // continuation remains deferred; only injectContext-into-next-turn, which
-      // needed the cross-turn state now declared above, is wired here).
-      //
-      // Invariant: Stop fires only on non-throwing runTurn completions. Any
-      // throw from runTurn (including model errors and abort) bypasses this
-      // block entirely -- error and abort paths skip Stop by design. The
-      // sequential placement (not finally) is intentional: Stop signals
-      // successful turn completion, not turn exit.
-      //
-      // Invariant: slash-command-only iterations (res.handled paths above)
-      // end in `continue` before reaching this block, so Stop does not fire
-      // for slash-command-only turns. Only turns that invoke runTurn trigger
-      // Stop.
-      //
-      // Contract: Stop dispatch uses STOP_HOOK_HANDLER_TIMEOUT_MS (5s) rather
-      // than the registry default (30s) because Stop fires every REPL turn —
-      // a notification hook must not stall the prompt for 30s × N handlers.
-      if (ctx.hookRegistry) {
-        try {
-          const stopDecision = await ctx.hookRegistry.dispatch(
-            {
-              event: 'Stop',
-              sessionId: ctx.stats.sessionId,
-              // Carry the just-completed turn's parsed verdict (captured via
-              // onTerminalState during runTurn) so post-turn policy handlers —
-              // the terminal-state gate — can read it. Omitted when the turn
-              // emitted no recognizable terminal state.
-              ...(currentTerminalKind !== undefined ? { terminalState: currentTerminalKind } : {}),
-              ...(currentDoneHasEvidence !== undefined ? { doneHasCorroboratingEvidence: currentDoneHasEvidence } : {}),
-              ...(currentDoneClassification !== undefined ? { doneEvidenceClassification: currentDoneClassification } : {}),
-            },
-            undefined,
-            STOP_HOOK_HANDLER_TIMEOUT_MS,
-          );
-          // Stash any handler-returned correction for delivery on the next turn
-          // (drained at the top of the loop). dispatch() already merges
-          // injectContext across non-blocking handlers (#345), so this is the
-          // single merged string; a whitespace-only value is ignored.
-          if (stopDecision.injectContext && stopDecision.injectContext.trim().length > 0) {
-            pendingStopInjection = stopDecision.injectContext;
-          }
-        } catch (err) {
-          if (err instanceof AbortError) throw err;
-          if (err instanceof HookHandlerTimeoutError) {
-            debugLog('[stop hook] handler timed out');
-            ctx.completionWriter.fn(palette.dim('  [stop hook] timed out'));
-          } else if (err instanceof HookBlockedError) {
-            ctx.completionWriter.fn(
-              palette.dim(`  [stop hook] blocked: ${sanitizeForDisplay(err.reason ?? 'no reason given')}`),
-            );
-          } else {
-            debugLog('[stop hook] unexpected error: ' + String(err));
-          }
-        }
+    // Plan-exit seed: promote a queued exit_plan_mode seed to seedBuffer.
+    if (seedBuffer === undefined) {
+      const planExit = await ctx.session.current.takePendingPlanExitSeed();
+      if (planExit !== undefined) {
+        ctx.stats.permissionMode = planExit.mode;
+        seedBuffer = { text: planExit.message, attachments: [] };
       }
     }
+
+    if (seedBuffer !== undefined) {
+      const queued = seedBuffer;
+      seedBuffer = undefined;
+      silentSeed = queued.echo === 'silent';
+      if (queued.echo !== 'silent') {
+        renderSeedEcho(ctx.replRenderer, ctx.stats.permissionMode, queued);
+      }
+      queuedHumanTurn = queued.queuedSubmission === true;
+      text = queued.text.trim();
+      attachments = queued.attachments as ReadWithAutocompleteResult['attachments'];
+    } else {
+      const initialBuffer = prefillBuffer;
+      prefillBuffer = undefined;
+      const result = await surface.readLine({
+        promptFn: (buffer) => buildPrompt(ctx.stats.permissionMode, buffer),
+        ...(initialBuffer !== undefined ? { initialBuffer } : {}),
+        primePromptSuggestion: true,
+        onSigint: sigintHandler,
+        onShiftTab: () => {
+          cyclePermissionMode(ctx.slashCtx).catch(() => {});
+          ctx.statusLine.rearm();
+        },
+      });
+      queuedHumanTurn = result.queuedSubmission === true;
+      text = result.text.trim();
+      attachments = result.attachments;
+    }
+    // Invariant: await readLine first so idle upgrades are checked before
+    // dispatch. writeLine commits above the persistent compositor, never raw
+    // stdout while the input overlay owns the cursor. No timer can interrupt it.
+    const notice = versionNotice();
+    if (notice) ctx.replRenderer.writeLine(notice);
+    if (!text && attachments.length === 0) continue;
+
+    // Shell-passthrough branch — `!cmd` foreground / `!&cmd` background.
+    if (text.startsWith('!')) {
+      const sh = await handleShellPassthrough(text, ctx, footer, shellPassthroughNoticePrinted);
+      shellPassthroughNoticePrinted = shellPassthroughNoticePrinted || sh.noticeNowPrinted;
+      if (sh.handled) continue;
+    }
+
+    // Slash-command branch.
+    let isPluginForward = false;
+    if (text.startsWith('/')) {
+      const slashResult = await handleSlashCommand(
+        text, attachments ?? [], ctx, transcript, verdictLedger,
+        () => { pendingStopInjection = undefined; },
+      );
+      if (slashResult.action === 'exit') return;
+      if (slashResult.action === 'continue') continue;
+      if (slashResult.action === 'submit') {
+        seedBuffer = { text: slashResult.message, attachments: attachments ?? [], queuedSubmission: queuedHumanTurn };
+        ctx.statusLine.rearm(); continue;
+      }
+      if (slashResult.action === 'prefill') {
+        prefillBuffer = slashResult.message;
+        ctx.statusLine.rearm(); continue;
+      }
+      // fall-through → plugin-forward path
+      isPluginForward = true;
+    }
+
+    if (!silentSeed) history.push(text);
+    await runFirstTurnHookIfNeeded(ctx, text);
+
+    // Plugin preflight — only on the plugin-forward path.
+    let runText = text;
+    if (isPluginForward) runText = await runPluginPreflight(text, ctx);
+
+    // Prepend shell/bg/peer injections (human barrier + admission-queue drain).
+    // processJobNotifier is passed as the optional extra source so background
+    // process job results are injected between bg-subagent and peer messages.
+    runText = applyDeferPeers(runText, queuedHumanTurn, surface, footer.shellPassthrough, bgResultNotifier, peerNotifier, admissionQueue, processJobNotifier);
+    if (pendingStopInjection !== undefined) {
+      runText = pendingStopInjection + '\n\n' + runText;
+      pendingStopInjection = undefined;
+    }
+    // Idempotent: covers a session swapped in since the last turn.
+    ctx.session.current.wireStopHook?.(stopWiring);
+
+    // Pre-turn UserPromptSubmit hook.
+    const ups = await dispatchUserPromptSubmit(runText, ctx);
+    if (ups.shouldContinue) continue;
+    runText = ups.runText;
+
+    // Execute the model turn.
+    // Contract: pass `text` (raw, pre-injection) as rawUserText so the presence
+    // activity.promptHead records what the operator typed, never peer message
+    // bodies or bg-subagent-result content that are prepended into `runText`.
+    await runOneTurn(
+      runText, attachments ?? [], ctx, turnState, footer,
+      transcript, surface, installSoftStop, maxTurnsNum, autosaveState, text,
+    );
+
+    // Stop is dispatched by the session layer (turn-stream-runner.ts) via
+    // wireStopHook(). The REPL no longer dispatches Stop itself. injectContext
+    // is routed into pendingStopInjection by the stopWiring callbacks above.
   }
+}

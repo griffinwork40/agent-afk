@@ -82,11 +82,19 @@ export function isCaseInsensitiveFs(protectedPath = homedir()): boolean {
  */
 export function pathIsWithin(real: string, blocked: string, protectedPath = blocked): boolean {
   if (real === blocked || real.startsWith(blocked + '/') || real.startsWith(blocked + '\\')) return true;
-  if (!isCaseInsensitiveFs(protectedPath)) return false;
 
+  // Invariant (#2543): run the case-folded STRING comparison before the
+  // filesystem probe. If the folded strings don't overlap, the answer is false
+  // whatever the volume's case semantics, so the probe is skipped. The truth
+  // table is unchanged. `isCaseInsensitiveFs` costs two synchronous statSync
+  // calls, and callers like the glob walker check every denylist root for
+  // every entry, so probing first made a $HOME walk take minutes and blocked
+  // the event loop.
   const r = real.toLowerCase();
   const b = blocked.toLowerCase();
-  return r === b || r.startsWith(b + '/') || r.startsWith(b + '\\');
+  const foldsOverlap = r === b || r.startsWith(b + '/') || r.startsWith(b + '\\');
+  if (!foldsOverlap) return false;
+  return isCaseInsensitiveFs(protectedPath);
 }
 
 /** Whether a normalized bash command line mentions a protected path. */

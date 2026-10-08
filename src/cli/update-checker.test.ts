@@ -87,6 +87,7 @@ import {
   hasUpdateCache,
   printUpdateBanner,
   triggerAutoUpdate,
+  isMajorUpgrade,
   checkPendingUpdate,
   writePendingUpdateMarker,
   writeUpdateCache,
@@ -262,7 +263,34 @@ describe('update-checker', () => {
       const output = stderrSpy.mock.calls.map((c) => c[0]).join('');
       expect(output).toContain('1.10.1');
       expect(output).toContain('1.11.0');
-      expect(output).toContain('npm install -g agent-afk');
+      expect(output).toContain('npm install -g --allow-scripts=agent-afk agent-afk');
+      expect(output).not.toContain('Major release');
+    });
+
+    it('flags a major upgrade and gives the exact manual install command', () => {
+      printUpdateBanner({ currentVersion: '5.259.1', latestVersion: '6.0.0' });
+      const output = stderrSpy.mock.calls.map((c) => c[0]).join('');
+      expect(output).toContain('Major release');
+      expect(output).toContain('not installed automatically');
+      expect(output).toContain('releases/tag/v6.0.0');
+      expect(output).toContain('npm install -g --allow-scripts=agent-afk agent-afk@6.0.0');
+    });
+  });
+
+  describe('isMajorUpgrade', () => {
+    it('is false within the same major line', () => {
+      expect(isMajorUpgrade('5.259.1', '5.260.0')).toBe(false);
+      expect(isMajorUpgrade('5.0.0', '5.0.1-beta.1')).toBe(false);
+    });
+
+    it('is true across a major line, in either direction', () => {
+      expect(isMajorUpgrade('5.259.1', '6.0.0')).toBe(true);
+      expect(isMajorUpgrade('5.259.1', '6.0.0-beta.1')).toBe(true);
+      expect(isMajorUpgrade('6.0.0', '5.259.1')).toBe(true);
+    });
+
+    it('fails closed (true) on an unparseable version', () => {
+      expect(isMajorUpgrade('5.259.1', 'garbage')).toBe(true);
     });
   });
 
@@ -277,7 +305,7 @@ describe('update-checker', () => {
       );
       expect(mockSpawn).toHaveBeenCalledWith(
         'npm',
-        ['install', '-g', 'agent-afk@1.11.0'],
+        ['install', '-g', '--allow-scripts=agent-afk', 'agent-afk@1.11.0'],
         expect.objectContaining({ detached: true, stdio: 'ignore' }),
       );
     });
@@ -288,10 +316,19 @@ describe('update-checker', () => {
       expect(mockWriteFileSync).not.toHaveBeenCalled();
     });
 
-    it('accepts pre-release versions', () => {
+    it('accepts same-major pre-release versions', () => {
       mockExistsSync.mockReturnValue(false); // no in-flight marker
-      triggerAutoUpdate('2.0.0-beta.1');
+      triggerAutoUpdate('1.11.0-beta.1');
       expect(mockSpawn).toHaveBeenCalled();
+    });
+
+    it('never auto-installs across a major version', () => {
+      mockExistsSync.mockReturnValue(false); // no in-flight marker
+      mockGetVersion.mockReturnValue('5.259.1');
+      triggerAutoUpdate('6.0.0');
+      triggerAutoUpdate('6.0.0-beta.1');
+      expect(mockSpawn).not.toHaveBeenCalled();
+      expect(mockWriteFileSync).not.toHaveBeenCalled();
     });
 
     it('does not re-trigger when a pending marker already exists (install in flight)', () => {

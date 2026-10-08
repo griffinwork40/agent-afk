@@ -12,6 +12,7 @@ import { InputCore, type InputCoreState } from './input-core.js';
 import type { AutocompleteState } from './input/autocomplete-state.js';
 import type { ImageAttachment } from './input/attachments.js';
 import type { CompositorInputMode, FramePlacementMode, PickerController, SubmissionPayload } from './terminal-compositor.types.js';
+import type { SuspendObserverHandle } from './terminal-compositor.lifecycle.suspend-observer.js';
 
 /**
  * Narrowest TerminalCompositor state slice {@link resetState} clears. Spans the
@@ -47,6 +48,7 @@ export interface ResetStateHost {
   pendingResizeErase: { top: number; bottom: number } | null;
   bandGeometryStale: boolean;
   lastKnownRows: number;
+  cprPending: boolean;
   pickerController: PickerController | null;
   inputMode: CompositorInputMode;
   attachments: ImageAttachment[];
@@ -55,10 +57,15 @@ export interface ResetStateHost {
   pasteStartCursor: number;
   readonly pasteRegistry: Map<string, string>;
   clipboardFailureMsg: string | null;
+  modeNotice: string | null;
   readonly autocompleteState?: AutocompleteState;
   resizeUnsub: (() => void) | null;
   resizeImmediateUnsub: (() => void) | null;
   disarmRows: number;
+  /** Queue-and-replay buffer for commitAbove calls deferred while suspended. */
+  suspendCommitQueue: string[];
+  /** Write observer installed by suspendInput; nulled by resetState on disarm. */
+  suspendObserver: SuspendObserverHandle | null;
 }
 
 export function resetState(self: ResetStateHost): void {
@@ -110,6 +117,9 @@ export function resetState(self: ResetStateHost): void {
   // the previous arm cycle must not leak into the next one (the first repaint
   // of a fresh arm re-seeds lastKnownRows before any resize can be detected).
   self.pendingResizeErase = null;
+  // Clear the CPR-pending flag so a stale in-flight CPR from the previous
+  // arm cycle cannot suppress repaints in the next one.
+  self.cprPending = false;
   // F2: a stale-geometry flag from the previous arm cycle must not leak into
   // the next one either — a fresh arm has no geometry yet (rather than WRONG
   // geometry), which is the same "genuinely unknown" case BLOCKER-1 already
@@ -136,6 +146,7 @@ export function resetState(self: ResetStateHost): void {
   self.pasteStartCursor = 0;
   self.pasteRegistry.clear();
   self.clipboardFailureMsg = null;
+  self.modeNotice = null;
   // clipboardInFlight is NOT reset — an in-flight osascript probe is
   // tied to a Promise that will resolve/reject independently. Setting
   // the flag to false here would allow a new probe to spawn while the
@@ -143,6 +154,14 @@ export function resetState(self: ResetStateHost): void {
   // Reset shared autocomplete state so stale dropdown chrome from this
   // agent turn does not leak into the next user-turn read.
   self.autocompleteState?.reset();
+  // Clear any uncommitted queued blocks — they were deferred during suspension
+  // and must not outlive the arm cycle. resumeInput() and disarm() drain them
+  // first; this is defence-in-depth for any path that bypasses that drain.
+  self.suspendCommitQueue.length = 0;
+  // L2: null the observer handle so a disarmed compositor never holds a stale
+  // stream.write patch reference. disarm() removes the observer before calling
+  // resetState(); this is defence-in-depth for any path that bypasses removal.
+  self.suspendObserver = null;
   if (self.resizeUnsub) {
     self.resizeUnsub();
     self.resizeUnsub = null;

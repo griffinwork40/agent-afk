@@ -25,7 +25,7 @@ import {
 } from '../../../agent/session/model-slots.js';
 import { isValidModelArg } from '../../../agent/session/model-validate.js';
 import { runPicker } from '../../render/picker.js';
-import { replayTurns } from '../../commands/interactive/turn-record-renderer.replay.js';
+import { historyCmd } from './info.history.js';
 import type { SlashCommand, SlashContext } from '../types.js';
 import type { AgentModelInput } from '../../../agent/types.js';
 import { errorMessage } from '../../../utils/errors.js';
@@ -238,25 +238,6 @@ const tokensCmd: SlashCommand = {
       // stats so the user still sees something useful.
       renderLocalFallback(ctx.out, ctx.stats);
     }
-    return 'continue';
-  },
-};
-
-const historyCmd: SlashCommand = {
-  name: '/history',
-  usage: '/history [N]',
-  summary: 'Show conversation history (full replay; optionally limit to last N turns)',
-  hint: 'When you want to review recent conversation turns with full content. Pass a number to limit output: `/history 10` shows the last 10 turns.',
-  async handler(ctx, args) {
-    const { stats, out } = ctx;
-    if (stats.turns.length === 0) {
-      out.info('No conversation history yet.');
-      return 'continue';
-    }
-    // Parse an optional numeric argument: `/history 20` shows last 20 turns.
-    const parsed = parseInt((args ?? '').trim(), 10);
-    const maxTurns = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-    replayTurns(stats.turns, (line) => out.line(line), { maxTurns });
     return 'continue';
   },
 };

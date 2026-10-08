@@ -19,7 +19,7 @@ import { resolveOpenAIAuth } from '../providers/openai-compatible/auth.js';
 import { resolveXaiAuth } from '../providers/xai/auth.js';
 
 /** What kind of credential a model would need, for the hint message. */
-export type AvailabilityNeed =
+type AvailabilityNeed =
   | 'anthropic'
   | 'openai'
   | 'chatgpt-oauth'

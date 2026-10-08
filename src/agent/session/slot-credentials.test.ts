@@ -95,6 +95,28 @@ describe('applySlotCredentials', () => {
     expect(config.openaiBaseUrl).toBeUndefined();
   });
 
+  it('applies baseUrl and apiKey when model is a raw slot id (not a tier name)', () => {
+    // Regression guard: providerForModel now uses resolveBinding (raw-id scan),
+    // but applySlotCredentials previously used slotForInput which only matches
+    // tier/custom names — so a raw id like 'qwen-3.8-27b' returned undefined and
+    // the credential path returned early without applying the slot's credentials.
+    const config: SlotCredentialTarget = { model: 'qwen-3.8-27b' };
+    applySlotCredentials(
+      config,
+      slots({
+        small: {
+          id: 'qwen-3.8-27b',
+          provider: 'openai',
+          baseUrl: 'http://localhost:11434/v1',
+          apiKey: 'qwen-key',
+        },
+      }),
+    );
+    expect(config.apiKey).toBe('qwen-key');
+    expect(config.openaiBaseUrl).toBe('http://localhost:11434/v1');
+    expect(config.baseUrl).toBeUndefined();
+  });
+
   it('credential isolation: a child at the OpenAI tier does not inherit the Anthropic tier key', () => {
     // large = Anthropic (its own key); small = OpenAI (its own key). A session
     // running `small` must end up with the OpenAI key + endpoint only.

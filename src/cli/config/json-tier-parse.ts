@@ -17,6 +17,8 @@
 // @module cli/config/json-tier-parse
 
 import { readFileSync, existsSync } from 'fs';
+import { parseToolsConfig } from './json-tier-parse.tools.js';
+import { parseDaemonBlock } from './json-tier-parse.daemon.js';
 import { isValidModel } from '../../agent/session/model-resolution.js';
 import {
   parseModelsConfig,
@@ -62,7 +64,7 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
   const content = readFileSync(configPath, 'utf-8');
   const json: ConfigFileSchema = JSON.parse(content);
 
-  const config: Partial<CliConfig> = {};
+  const config: Partial<CliConfig> = parseToolsConfig(json);
   const modelsPartial = parseModelsConfig(json.models);
 
   if (typeof json.model === 'string' && json.model.length > 0) {
@@ -96,32 +98,12 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
     if (typeof json.autoRouting.interactive === 'boolean') ar.interactive = json.autoRouting.interactive;
     if (typeof json.autoRouting.chat === 'boolean') ar.chat = json.autoRouting.chat;
     if (typeof json.autoRouting.telegram === 'boolean') ar.telegram = json.autoRouting.telegram;
-    if (typeof json.autoRouting.daemon === 'boolean') ar.daemon = json.autoRouting.daemon;
+    // autoRouting.daemon removed (dead key); silently ignored for back-compat.
     config.autoRouting = ar;
   }
 
   if (json.daemon && typeof json.daemon === 'object') {
-    const daemon: NonNullable<CliConfig['daemon']> = {};
-    if (typeof json.daemon.task === 'string') {
-      daemon.task = json.daemon.task;
-    }
-    if (typeof json.daemon.taskId === 'string') {
-      daemon.taskId = json.daemon.taskId;
-    }
-    const wp = json.daemon.worktreePrune;
-    if (wp && typeof wp === 'object') {
-      daemon.worktreePrune = {
-        enabled: typeof wp.enabled === 'boolean' ? wp.enabled : true,
-        cron: typeof wp.cron === 'string' ? wp.cron : '0 4 * * *',
-        maxAgeDaysClean: typeof wp.maxAgeDaysClean === 'number' ? wp.maxAgeDaysClean : 14,
-        maxAgeDaysDirty: typeof wp.maxAgeDaysDirty === 'number' ? wp.maxAgeDaysDirty : 30,
-        scope: typeof wp.scope === 'string' ? wp.scope : 'all',
-      };
-    }
-    if (typeof json.daemon.verifyDone === 'boolean') {
-      daemon.verifyDone = json.daemon.verifyDone;
-    }
-    config.daemon = daemon;
+    config.daemon = parseDaemonBlock(json.daemon);
   }
 
   if (json.telegram && typeof json.telegram === 'object') {
@@ -285,6 +267,18 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
     }
     if (Object.keys(interactive).length > 0) {
       config.interactive = interactive;
+    }
+  }
+
+  // skills.hidden: string array of skill names to hide from the model-facing
+  // manifest. Accepts bare names and plugin-qualified names. Validated
+  // defensively: non-array values are ignored; non-string elements are skipped.
+  if (json.skills !== undefined && Array.isArray(json.skills.hidden)) {
+    const hidden = (json.skills.hidden as unknown[]).filter(
+      (v): v is string => typeof v === 'string' && v.length > 0,
+    );
+    if (hidden.length > 0) {
+      config.skills = { hidden };
     }
   }
 

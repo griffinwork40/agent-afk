@@ -37,7 +37,7 @@ const PINNED_HASHES = {
   // automate: afk-native scheduled-run skill (create_schedule + send_telegram +
   // `afk service install daemon`). Vendored byte-equal from the upstream
   // framework plugin at the time it was bundled.
-  automate: '93380f58316e607f6b95b27a9c2375f0a5403f3a42eb695d0490b50225d8838c',
+  automate: '95645aa07d28ea69384f81ff3e694d7899ee153ede53fda8a8c8790e628437e9',
   contract: '0ea822d8124f5fc55103a3e5e6d0fcb43889bf3f089bc722350da02ecf4f960f',
   // Hash re-bumped during PR #187 review: the Merge section now routes the
   // second convergence condition (≥2 critics agree on the same alternative) to
@@ -128,13 +128,13 @@ const PINNED_HASHES = {
 
 
 
-  review: 'd370edb1f95a8837964cddd864868c423709ed3b551d6740bd27f693027eabde',
+  review: '9ba6d2f1d7b2307e7fa33d921ba842e7603d2b463b0e66698a56236fedf6a722',
   // History: /shadow-verify gained the confidence-trigger + composition-axis
   // verdicts (#52, #187).
   // Hash re-bumped: search-surface sharing + explicit verifier budgets (#995).
   // Full rationale: docs/bundled-plugins.md#shadow-verify-52
   'shadow-verify':
-    'd38252df942bc87978fe051f81bb3a02114f80e7dee46e120cb1d0d58c91f06f',
+    '23526494dffc575b6202a99920b4e57763764f81d6adff0c98b2f174d63c0bc3',
   // Hash bumped 2026-06: Phase 4 (commit) + Phase 8 (PR) switched from the
   // `--body "$(cat <<'EOF' … EOF)"` heredoc-in-command-substitution antipattern
   // to the file-based form (`git commit -F` / `gh pr create --body-file`). The
@@ -143,7 +143,7 @@ const PINNED_HASHES = {
   // git/gh ran, failing the call or recording a mangled/truncated body. The
   // file-based form matches the safe convention already used in src/agent/gh.ts.
   // BACK-PORT GAP: the same fix should still land in the upstream /ship skill.
-  ship: '65cd01d2ebc3db399483ce2a583d62ecbf85d87bb9b6ae6b71dbfe348dbf0368',
+  ship: '6b8d1504f825c98c00e3c5b96c131e43113eeafd7cc5fe1b082fd6dd6160bfe2',
   // simplify is bundled-only (no upstream counterpart).
   simplify:
     'a984a507872949e17c87ab72979cb089524ba1da899f38af80fd0e725ebff667',

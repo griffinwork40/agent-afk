@@ -20,7 +20,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { clone, checkout, fetch, withHardening, type GitRunner } from './git.js';
-import { hasFlagPair } from './git-test-helpers.js';
+import { hasFlagPair, subcommandOf } from './git-test-helpers.js';
 
 interface CapturedCall {
   args: readonly string[];
@@ -113,32 +113,37 @@ describe('git.checkout — hardening (critical: post-checkout hook bypass)', () 
   it('passes -c core.hooksPath=/dev/null on checkout (blocks post-checkout hook)', async () => {
     const { runner, calls } = makeCapturingRunner();
     await checkout('/tmp/repo', 'v1.0.0', { runner });
-    expectFlagPair(calls[0]!.args, 'core.hooksPath=/dev/null');
+    const checkoutCall = calls.find((c) => subcommandOf(c.args) === 'checkout')!;
+    expectFlagPair(checkoutCall.args, 'core.hooksPath=/dev/null');
   });
 
   it('passes -c filter.process= on checkout', async () => {
     const { runner, calls } = makeCapturingRunner();
     await checkout('/tmp/repo', 'v1.0.0', { runner });
-    expectFlagPair(calls[0]!.args, 'filter.process=');
+    const checkoutCall = calls.find((c) => subcommandOf(c.args) === 'checkout')!;
+    expectFlagPair(checkoutCall.args, 'filter.process=');
   });
 
   it('passes -c filter.smudge= on checkout (filter runs on every checkout)', async () => {
     const { runner, calls } = makeCapturingRunner();
     await checkout('/tmp/repo', 'v1.0.0', { runner });
-    expectFlagPair(calls[0]!.args, 'filter.smudge=');
+    const checkoutCall = calls.find((c) => subcommandOf(c.args) === 'checkout')!;
+    expectFlagPair(checkoutCall.args, 'filter.smudge=');
   });
 
   it('still issues `checkout --detach <ref>` after the hardening prefix', async () => {
     const { runner, calls } = makeCapturingRunner();
     await checkout('/tmp/repo', 'main', { runner });
-    const args = calls[0]!.args;
+    const checkoutCall = calls.find((c) => subcommandOf(c.args) === 'checkout')!;
+    const args = checkoutCall.args;
     expect(args.slice(-3)).toEqual(['checkout', '--detach', 'main']);
   });
 
   it('runs checkout inside the supplied repo dir (cwd)', async () => {
     const { runner, calls } = makeCapturingRunner();
     await checkout('/tmp/some-repo', 'v1.0.0', { runner });
-    expect(calls[0]!.cwd).toBe('/tmp/some-repo');
+    const checkoutCall = calls.find((c) => subcommandOf(c.args) === 'checkout')!;
+    expect(checkoutCall.cwd).toBe('/tmp/some-repo');
   });
 });
 
@@ -205,8 +210,9 @@ describe('CLI-flag hardening is git ≥ 2.8 compatible (no env-var dependency)',
   it('checkout does not require GIT_CONFIG_COUNT either', async () => {
     const { runner, calls } = makeCapturingRunner();
     await checkout('/tmp/repo', 'v1', { runner, env: { PATH: '/usr/bin' } });
-    const env = calls[0]!.env ?? {};
+    const checkoutCall = calls.find((c) => subcommandOf(c.args) === 'checkout')!;
+    const env = checkoutCall.env ?? {};
     expect(env['GIT_CONFIG_COUNT']).toBeUndefined();
-    expectFlagPair(calls[0]!.args, 'core.hooksPath=/dev/null');
+    expectFlagPair(checkoutCall.args, 'core.hooksPath=/dev/null');
   });
 });

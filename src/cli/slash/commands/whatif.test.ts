@@ -49,28 +49,33 @@ vi.mock('../../../paths.js', () => ({
   getPluginsDir: vi.fn().mockReturnValue('/fake/afk-home/plugins'),
 }));
 
-vi.mock('../../../whatif/surface.js', () => ({
-  resolveSpec: vi.fn().mockResolvedValue({
-    title: 'Append note to AFK.md',
-    changes: [{ kind: 'append', target: 'user-afk-md', text: 'Always ask.' }],
-  }),
-  buildWhatifDeps: vi.fn().mockReturnValue({
-    runner: {},
-    complete: vi.fn(),
-    makeJudge: vi.fn(),
-    makeCrossCheckJudge: vi.fn(),
-    onProgress: undefined,
-    signal: undefined,
-  }),
-  readDirNames: vi.fn().mockReturnValue([]),
-}));
+vi.mock('../../../whatif/surface.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../whatif/surface.js')>();
+  return {
+    ...actual,
+    resolveSpec: vi.fn().mockResolvedValue({
+      title: 'Append note to AFK.md',
+      changes: [{ kind: 'append', target: 'user-afk-md', text: 'Always ask.' }],
+    }),
+    buildWhatifDeps: vi.fn().mockReturnValue({
+      runner: {},
+      complete: vi.fn(),
+      makeJudge: vi.fn(),
+      makeCrossCheckJudge: vi.fn(),
+      onProgress: undefined,
+      signal: undefined,
+    }),
+    readDirNames: vi.fn().mockReturnValue([]),
+    // buildWhatifRunOptions: use real implementation so forwarding is verified.
+  };
+});
 
 vi.mock('../../../whatif/operators/index.js', () => ({
   describeChange: vi.fn().mockReturnValue('Append to AFK.md'),
 }));
 
 // Import under test AFTER mocks are declared.
-import { whatifCmd } from './whatif.js';
+import { whatifCmd, makeProgressThrottle } from './whatif.js';
 import { runWhatif } from '../../../whatif/run.js';
 
 // ---------------------------------------------------------------------------
@@ -136,11 +141,50 @@ describe('/whatif slash command', () => {
     expect(lines.some((l) => l.includes('USAGE') || l.includes('afk whatif'))).toBe(true);
   });
 
+  it('forwards --force to runWhatif so the MDE gate can be bypassed', async () => {
+    const { ctx } = makeCtx();
+    await whatifCmd.handler(ctx, '--append "Always ask." --verify --yes --force');
+    expect(vi.mocked(runWhatif).mock.calls[0]?.[0]).toMatchObject({ force: true });
+  });
+
+  it('passes force: false when --force is absent', async () => {
+    const { ctx } = makeCtx();
+    await whatifCmd.handler(ctx, '--append "Always ask." --verify --yes');
+    expect(vi.mocked(runWhatif).mock.calls[0]?.[0]).toMatchObject({ force: false });
+  });
+
   it('runs whatif for a flag-based change with --yes', async () => {
     const { ctx, lines } = makeCtx();
     await whatifCmd.handler(ctx, '--append "Always ask." --yes');
     expect(runWhatif).toHaveBeenCalled();
     expect(lines.some((l) => l.includes('report.md') || l.includes('report'))).toBe(true);
+  });
+
+  it('forwards --no-baseline-sample to runWhatif (regression: #2599)', async () => {
+    const { ctx } = makeCtx();
+    await whatifCmd.handler(ctx, '--append "Always ask." --no-baseline-sample --yes');
+    expect(vi.mocked(runWhatif).mock.calls[0]?.[0]).toMatchObject({ noBaselineSample: true });
+  });
+
+  it('does not set noBaselineSample when flag is absent', async () => {
+    const { ctx } = makeCtx();
+    await whatifCmd.handler(ctx, '--append "Always ask." --yes');
+    // noBaselineSample should be absent (not spread in) when flag not given
+    expect(vi.mocked(runWhatif).mock.calls[0]?.[0]).not.toMatchObject({ noBaselineSample: true });
+  });
+
+  it('forwards --predict operatorPredictions to runWhatif (regression: #3255)', async () => {
+    const { ctx } = makeCtx();
+    await whatifCmd.handler(
+      ctx,
+      '--append "Always ask." --predict "should greet the user" --yes',
+    );
+    const firstCallOpts = vi.mocked(runWhatif).mock.calls[0]?.[0];
+    expect(firstCallOpts).toMatchObject({
+      operatorPredictions: [
+        expect.objectContaining({ behavior: 'should greet the user' }),
+      ],
+    });
   });
 
   it('prints compiled spec and asks for --yes when text is given without --yes', async () => {
@@ -205,5 +249,121 @@ describe('/whatif slash command', () => {
     const { ctx } = makeCtx();
     const result = await whatifCmd.handler(ctx, '--append "Always ask." --yes');
     expect(result).toBe('continue');
+  });
+
+  // -------------------------------------------------------------------------
+  // MDE error handling — issue #2610
+  // -------------------------------------------------------------------------
+
+  /**
+   * Build a minimal WhatifMdeError-shaped error without importing run.ts.
+   */
+  function makeMdeErr(opts: { measured?: boolean; kind?: 'mde' | 'headroom'; msg?: string }) {
+    const err = new Error(opts.msg ?? 'whatif: run is underpowered — headroom too small');
+    err.name = 'WhatifMdeError';
+    Object.assign(err, {
+      episodesPerArm: 6,
+      kind: opts.kind ?? 'mde',
+      measured: opts.measured ?? false,
+    });
+    return err;
+  }
+
+  it('emits error for a headroom MDE refusal with --yes --force (never prompts)', async () => {
+    vi.mocked(runWhatif).mockRejectedValueOnce(makeMdeErr({ measured: false, kind: 'headroom' }));
+    const { ctx, errors } = makeCtx();
+    await whatifCmd.handler(ctx, '--append "x" --verify --yes --force');
+    // Must have emitted an error (not silently passed)
+    expect(errors.length).toBeGreaterThan(0);
+    // runWhatif called exactly once — no retry with force
+    expect(vi.mocked(runWhatif)).toHaveBeenCalledTimes(1);
+  });
+
+  it('emits error for a measured refusal with --no-baseline-sample advice', async () => {
+    vi.mocked(runWhatif).mockRejectedValueOnce(
+      makeMdeErr({
+        measured: true,
+        kind: 'headroom',
+        msg: 'Prediction p1 headroom 5pp < MDE 15pp',
+      }),
+    );
+    const { ctx, errors } = makeCtx();
+    await whatifCmd.handler(ctx, '--append "x" --verify --yes');
+    expect(errors.some((e) => e.includes('--no-baseline-sample'))).toBe(true);
+  });
+
+  it('never retries with force for a measured refusal', async () => {
+    vi.mocked(runWhatif).mockRejectedValueOnce(makeMdeErr({ measured: true, kind: 'headroom' }));
+    const { ctx } = makeCtx();
+    await whatifCmd.handler(ctx, '--append "x" --verify --yes');
+    expect(vi.mocked(runWhatif)).toHaveBeenCalledTimes(1);
+  });
+
+  it('emits error message for non-measured MDE refusal without --yes (non-interactive slash)', async () => {
+    vi.mocked(runWhatif).mockRejectedValueOnce(makeMdeErr({ measured: false, kind: 'mde' }));
+    const { ctx, errors } = makeCtx();
+    // No --yes, no TTY in slash context — should refuse (non-interactive path)
+    await whatifCmd.handler(ctx, '--append "x" --verify');
+    expect(errors.length).toBeGreaterThan(0);
+    expect(vi.mocked(runWhatif)).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// makeProgressThrottle — preflight milestone lines always print
+// ---------------------------------------------------------------------------
+
+describe('makeProgressThrottle', () => {
+  function makeInfoCtx() {
+    const infoLines: string[] = [];
+    const ctx = {
+      out: {
+        info: (t: string) => infoLines.push(t),
+        line: () => undefined,
+        raw: () => undefined,
+        success: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+      },
+      ui: { clearScreen: () => undefined, repaintStatusLine: () => undefined },
+      setSoftStopHandler: () => undefined,
+      session: {} as never,
+      stats: {} as never,
+    };
+    return { ctx: ctx as never, infoLines };
+  }
+
+  it('prints the first message of a new stage regardless of done', () => {
+    const { ctx, infoLines } = makeInfoCtx();
+    const throttle = makeProgressThrottle(ctx);
+    throttle('preflight', 'Checking cost…', 10);
+    expect(infoLines).toHaveLength(1);
+    expect(infoLines[0]).toContain('Checking cost');
+  });
+
+  it('prints consecutive preflight messages with no done counter (milestone lines)', () => {
+    const { ctx, infoLines } = makeInfoCtx();
+    const throttle = makeProgressThrottle(ctx);
+    // First message initialises the stage.
+    throttle('preflight', 'Cost estimate: $0.04', undefined);
+    // Second preflight message, no done counter — must not be silently dropped.
+    throttle('preflight', 'Headroom warning: only 12% left', undefined);
+    expect(infoLines).toHaveLength(2);
+    expect(infoLines[1]).toContain('Headroom warning');
+  });
+
+  it('throttles per-episode messages with a done counter (every 10th)', () => {
+    const { ctx, infoLines } = makeInfoCtx();
+    const throttle = makeProgressThrottle(ctx);
+    // First episodes call initialises the stage (stage-change path always prints).
+    throttle('episodes', 'episode 1/30', 1);
+    const afterFirst = infoLines.length; // = 1
+    // Episodes 2–10: episodeCount increments to 1–9 inside the branch → none are % 10 → suppressed.
+    for (let i = 2; i <= 10; i++) throttle('episodes', `episode ${i}/30`, i);
+    expect(infoLines).toHaveLength(afterFirst); // none printed
+    // Episode 11: episodeCount reaches 10 → prints.
+    throttle('episodes', 'episode 11/30', 11);
+    expect(infoLines).toHaveLength(afterFirst + 1);
+    expect(infoLines[afterFirst]).toContain('episode 11/30');
   });
 });

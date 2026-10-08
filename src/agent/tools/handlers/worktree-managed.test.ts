@@ -5,18 +5,28 @@
  * Uses a mocked ExecFileFn (same pattern as worktree.test.ts) so no real git
  * runs. Focus: the git argv emitted (parity with the pre-extraction handler)
  * and the create/teardown decision logic for isolated worktrees.
+ *
+ * Integration tests for #2749 (concurrent-session base contamination) use
+ * real git repos under path.join(os.tmpdir(), 'afk-...') and never touch the
+ * real checkout.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execFile as execFileNode } from 'node:child_process';
 import { promises as fs, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { promisify } from 'node:util';
 import {
   createManagedWorktree,
   removeManagedWorktreeGuarded,
   createIsolatedWorktree,
   teardownIsolatedWorktree,
+  detectRemoteDefaultRef,
+  resolveAnchorBaseRef,
 } from './worktree-managed.js';
 import type { ExecFileFn } from '../../worktree/worktree-sweep.js';
+
+const execFileAsync = promisify(execFileNode) as ExecFileFn;
 
 interface Call { file: string; args: string[] }
 
@@ -133,7 +143,7 @@ describe('removeManagedWorktreeGuarded — guards + argv', () => {
       return { stdout: '', stderr: '' };
     });
     const outcome = await removeManagedWorktreeGuarded({ execFile: mock, repoRoot, worktreePath: wtPath });
-    expect(outcome).toEqual({ removed: false, reason: 'ignored-local-state' });
+    expect(outcome).toEqual({ removed: false, reason: 'ignored-local-state', detail: '.env', because: 'non-rebuildable-entry' });
     expect(mock.calls.some((c) => c.args.includes('remove'))).toBe(false);
   });
 
@@ -288,12 +298,12 @@ describe('teardownIsolatedWorktree', () => {
       return { stdout: '', stderr: '' };
     });
     const result = await teardownIsolatedWorktree({ execFile: mock, repoRoot, worktreePath: wtPath });
-    expect(result).toEqual({ removed: false, preserved: true, reason: 'ignored-local-state' });
+    expect(result).toEqual({ removed: false, preserved: true, reason: 'ignored-local-state', ignoredDetail: '.env', ignoredBecause: 'non-rebuildable-entry' });
     expect(mock.calls.some((c) => c.args.includes('remove'))).toBe(false);
     const lock = mock.calls.find((c) => c.args.includes('lock'));
     expect(lock?.args.join(' ')).toContain('afk: isolated-worktree preserved (ignored-local-state');
-    // Legible without needing to already know the reason code.
-    expect(lock?.args.join(' ')).toMatch(/non-rebuildable ignored files/);
+    // Lock reason names the real file that triggered the refusal.
+    expect(lock?.args.join(' ')).toContain('.env');
   });
 });
 
@@ -400,5 +410,200 @@ describe('teardownIsolatedWorktree — self-healing re-probe (Layer 3)', () => {
     const result = await teardownIsolatedWorktree({ execFile: mock, repoRoot, worktreePath: wtPath });
     expect(result).toEqual({ removed: false, preserved: true, reason: 'commits-ahead' });
     expect(mock.calls.some((c) => c.args.includes('lock'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2749: detectRemoteDefaultRef + resolveAnchorBaseRef (mocked)
+// ---------------------------------------------------------------------------
+
+describe('detectRemoteDefaultRef — mocked', () => {
+  it('returns the symbolic-ref result when refs/remotes/origin/HEAD is configured', async () => {
+    const mock = makeMock((call) => {
+      if (call.args.includes('symbolic-ref')) return { stdout: 'origin/main\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+    const ref = await detectRemoteDefaultRef(mock, repoRoot);
+    expect(ref).toBe('origin/main');
+    // Only one call: the symbolic-ref probe — no need to check convention refs.
+    expect(mock.calls).toHaveLength(1);
+    expect(mock.calls[0]!.args).toContain('refs/remotes/origin/HEAD');
+  });
+
+  it('falls back to origin/main when symbolic-ref is missing but origin/main exists', async () => {
+    const mock = makeMock((call) => {
+      if (call.args.includes('symbolic-ref')) throw new Error('not set');
+      if (call.args.includes('--verify') && call.args.some((a) => a.includes('origin/main'))) {
+        return { stdout: 'deadbeef\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const ref = await detectRemoteDefaultRef(mock, repoRoot);
+    expect(ref).toBe('origin/main');
+  });
+
+  it('falls back to origin/master when symbolic-ref and origin/main are absent', async () => {
+    const mock = makeMock((call) => {
+      if (call.args.includes('symbolic-ref')) throw new Error('not set');
+      if (call.args.includes('--verify') && call.args.some((a) => a.includes('origin/master'))) {
+        return { stdout: 'cafebabe\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const ref = await detectRemoteDefaultRef(mock, repoRoot);
+    expect(ref).toBe('origin/master');
+  });
+
+  it('returns undefined when no remote default is discoverable', async () => {
+    const mock = makeMock(() => ({ stdout: '', stderr: '' }));
+    const ref = await detectRemoteDefaultRef(mock, repoRoot);
+    expect(ref).toBeUndefined();
+  });
+});
+
+describe('resolveAnchorBaseRef — mocked (#2749)', () => {
+  it('prefers the remote default branch SHA over local HEAD', async () => {
+    const mock = makeMock((call) => {
+      // symbolic-ref: origin/HEAD is configured → origin/main
+      if (call.args.includes('symbolic-ref')) return { stdout: 'origin/main\n', stderr: '' };
+      // rev-parse origin/main → remote SHA
+      if (call.args.includes('rev-parse') && call.args.includes('origin/main')) {
+        return { stdout: 'remote-sha-abc\n', stderr: '' };
+      }
+      // rev-parse HEAD → local SHA (should NOT be chosen)
+      if (call.args.includes('rev-parse') && call.args.includes('HEAD')) {
+        return { stdout: 'local-sha-xyz\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const sha = await resolveAnchorBaseRef(mock, repoRoot);
+    // Remote SHA is returned; local HEAD is not consulted.
+    expect(sha).toBe('remote-sha-abc');
+    expect(mock.calls.some((c) => c.args.includes('HEAD'))).toBe(false);
+  });
+
+  it('falls back to local HEAD when no remote default exists', async () => {
+    const mock = makeMock((call) => {
+      if (call.args.includes('symbolic-ref')) throw new Error('not set');
+      if (call.args.includes('--verify')) return { stdout: '', stderr: '' }; // no origin/main or /master
+      if (call.args.includes('rev-parse') && call.args.includes('HEAD')) {
+        return { stdout: 'local-head-sha\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+    const sha = await resolveAnchorBaseRef(mock, repoRoot);
+    expect(sha).toBe('local-head-sha');
+  });
+
+  it('falls back to "HEAD" literal when both remote and local HEAD are unresolvable', async () => {
+    const mock = makeMock(() => { throw new Error('git not available'); });
+    const sha = await resolveAnchorBaseRef(mock, repoRoot);
+    expect(sha).toBe('HEAD');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2749: real-git integration — concurrent creates get same stable base
+// ---------------------------------------------------------------------------
+
+/**
+ * Helper: run a real git command in `cwd`, throwing on non-zero exit.
+ * Uses the real execFile (not the mock) so this runs actual git processes.
+ * Kept local to the integration section — never imported into the mock tests.
+ */
+async function realGit(cwd: string, args: string[]): Promise<string> {
+  try {
+    const r = await execFileAsync('git', args, { cwd });
+    return r.stdout.trim();
+  } catch (err) {
+    const e = err as { stderr?: string; message?: string };
+    throw new Error(`git ${args.join(' ')} failed: ${e.stderr ?? e.message ?? ''}`);
+  }
+}
+
+describe('#2749: concurrent worktree creates — real git repos in tmpdir', () => {
+  let upstreamDir: string;
+  let cloneDir: string;
+
+  beforeEach(async () => {
+    // Upstream bare-style repo (the "remote").
+    upstreamDir = mkdtempSync(join(tmpdir(), 'afk-upstream-'));
+    await realGit(upstreamDir, ['init', '-b', 'main']);
+    await realGit(upstreamDir, ['config', 'user.email', 'test@afk.test']);
+    await realGit(upstreamDir, ['config', 'user.name', 'AFK Test']);
+    await fs.writeFile(join(upstreamDir, 'README.md'), 'hello');
+    await realGit(upstreamDir, ['add', 'README.md']);
+    await realGit(upstreamDir, ['commit', '-m', 'init']);
+
+    // Clone (the session's working directory).
+    cloneDir = mkdtempSync(join(tmpdir(), 'afk-clone-'));
+    await realGit(cloneDir, ['clone', upstreamDir, '.']);
+    // Set local git identity so `git commit` works on CI runners that have no
+    // global user.email / user.name configured (GitHub Actions bare runners).
+    await realGit(cloneDir, ['config', 'user.email', 'test@afk.test']);
+    await realGit(cloneDir, ['config', 'user.name', 'AFK Test']);
+  });
+
+  afterEach(() => {
+    rmSync(upstreamDir, { recursive: true, force: true });
+    rmSync(cloneDir, { recursive: true, force: true });
+  });
+
+  it('both concurrent creates use the remote default SHA, not the mutable local HEAD', async () => {
+    // Capture the remote tracking SHA before we touch anything.
+    const remoteSha = await realGit(cloneDir, ['rev-parse', 'origin/main']);
+
+    // Simulate a local checkout operation that changes HEAD (the contamination
+    // vector in #2749). After this, local HEAD !== origin/main.
+    await fs.writeFile(join(cloneDir, 'local-only.txt'), 'local change');
+    await realGit(cloneDir, ['add', 'local-only.txt']);
+    await realGit(cloneDir, ['commit', '-m', 'local commit diverging from remote']);
+    const localHead = await realGit(cloneDir, ['rev-parse', 'HEAD']);
+    expect(localHead).not.toBe(remoteSha); // confirm divergence
+
+    // Both resolveAnchorBaseRef calls should return the REMOTE SHA (stable),
+    // not the local HEAD (contaminated by the local commit above).
+    const [sha1, sha2] = await Promise.all([
+      resolveAnchorBaseRef(execFileAsync as ExecFileFn, cloneDir),
+      resolveAnchorBaseRef(execFileAsync as ExecFileFn, cloneDir),
+    ]);
+
+    expect(sha1).toBe(remoteSha);
+    expect(sha2).toBe(remoteSha);
+    // Neither session received the mutable local HEAD.
+    expect(sha1).not.toBe(localHead);
+    expect(sha2).not.toBe(localHead);
+  });
+
+  it('explicit base caller override is passed through unchanged (backward-compat)', async () => {
+    // The #2749 fix is in the DEFAULT path — explicit `base` bypasses
+    // resolveAnchorBaseRef entirely. Verify that createIsolatedWorktree
+    // honours the caller-supplied baseRef even when it differs from origin/main.
+
+    // Make a local commit so localHead !== origin/main.
+    await fs.writeFile(join(cloneDir, 'explicit-base.txt'), 'explicit base test');
+    await realGit(cloneDir, ['add', 'explicit-base.txt']);
+    await realGit(cloneDir, ['commit', '-m', 'diverge for explicit-base test']);
+    const localHead = await realGit(cloneDir, ['rev-parse', 'HEAD']);
+    const remoteSha = await realGit(cloneDir, ['rev-parse', 'origin/main']);
+    expect(localHead).not.toBe(remoteSha); // sanity: we actually diverged
+
+    // Ask createIsolatedWorktree to use the local HEAD SHA as the explicit base.
+    // The DEFAULT path would have returned remoteSha; the explicit path must
+    // return localHead instead.
+    const iso = await createIsolatedWorktree({
+      execFile: execFileAsync,
+      cwd: cloneDir,
+      slugHint: 'iso-explicit-base-test',
+      baseRef: localHead,
+    });
+    try {
+      expect(iso.baseRef).toBe(localHead);
+      expect(iso.baseSha).toBe(localHead);
+      expect(iso.baseSha).not.toBe(remoteSha);
+    } finally {
+      // Best-effort cleanup — ignore errors (rmSync clears the cloneDir anyway).
+      rmSync(iso.path, { recursive: true, force: true });
+    }
   });
 });

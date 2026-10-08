@@ -67,7 +67,14 @@ function makeFakeGit(
       return { stdout: '', stderr: '' };
     }
     if (sub === 'tag') return { stdout: tags.join('\n') + '\n', stderr: '' };
-    if (sub === 'rev-parse') return { stdout: sha + '\n', stderr: '' };
+    if (sub === 'rev-parse') {
+      // Return sha only for `rev-parse HEAD` (getCommitSha); return empty for
+      // remote-branch probe calls (`rev-parse --verify --quiet refs/remotes/origin/...`)
+      // so the DWIM fix treats tags/unknown-branches as unresolved.
+      const lastArg = args[args.length - 1] as string;
+      if (lastArg === 'HEAD') return { stdout: sha + '\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    }
     if (sub === 'checkout') return { stdout: '', stderr: '' };
     if (sub === 'symbolic-ref') return { stdout: 'origin/main\n', stderr: '' };
     if (sub === 'fetch') return { stdout: '', stderr: '' };
@@ -348,5 +355,169 @@ describe('installPlugin — cache invalidation (F2)', () => {
       installPlugin('owner/fail-repo', {}, { pluginsDir, indexPath, gitRunner: runner, now: () => new Date() }),
     ).rejects.toThrow(/checkout-boom/);
     expect(resetScanCache).not.toHaveBeenCalled();
+  });
+});
+
+describe('installPlugin — remote-only branch ref (fix #2357)', () => {
+  it('installs with --ref when the branch exists only on the remote', async () => {
+    const calls: FakeGitCall[] = [];
+    const gitRunner: GitRunner = async (args, cwd) => {
+      calls.push({ args, cwd });
+      const sub = subcommandOf(args);
+      if (sub === 'clone') {
+        const dest = args[args.length - 1] as string;
+        mkdirSync(dest, { recursive: true });
+        writeManifest(dest, 'remote-branch-plugin');
+        return { stdout: '', stderr: '' };
+      }
+      if (sub === 'symbolic-ref') return { stdout: 'origin/main\n', stderr: '' };
+      if (sub === 'rev-parse') {
+        const lastArg = args[args.length - 1] as string;
+        if (lastArg === 'HEAD') return { stdout: 'cafef00d\n', stderr: '' };
+        if (lastArg === 'refs/remotes/origin/afk') return { stdout: 'deadbeef\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      }
+      if (sub === 'checkout') return { stdout: '', stderr: '' };
+      return { stdout: '', stderr: '' };
+    };
+
+    const result = await installPlugin(
+      'owner/remote-branch-plugin',
+      { ref: 'afk' },
+      { pluginsDir, indexPath, gitRunner, now: () => new Date('2026-09-27T00:00:00Z'), confirm: false },
+    );
+
+    const checkoutCall = calls.find((c) => subcommandOf(c.args) === 'checkout');
+    expect(checkoutCall, 'checkout should have been called').toBeDefined();
+    const checkoutTail = checkoutCall!.args.slice(checkoutCall!.args.indexOf('checkout'));
+    expect(checkoutTail).toEqual(['checkout', '--detach', 'refs/remotes/origin/afk']);
+
+    expect(result.entry.ref).toBe('afk');
+    expect(result.entry.commit).toBe('cafef00d');
+  });
+
+  it('entry.ref stays the user-supplied branch name (not resolved form)', async () => {
+    const gitRunner: GitRunner = async (args) => {
+      const sub = subcommandOf(args);
+      if (sub === 'clone') {
+        const dest = args[args.length - 1] as string;
+        mkdirSync(dest, { recursive: true });
+        writeManifest(dest, 'my-plugin');
+        return { stdout: '', stderr: '' };
+      }
+      if (sub === 'symbolic-ref') return { stdout: 'origin/main\n', stderr: '' };
+      if (sub === 'rev-parse') {
+        const lastArg = args[args.length - 1] as string;
+        if (lastArg === 'HEAD') return { stdout: 'aabbccdd\n', stderr: '' };
+        if (lastArg === 'refs/remotes/origin/feature-x') return { stdout: 'deadbeef\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      }
+      if (sub === 'checkout') return { stdout: '', stderr: '' };
+      return { stdout: '', stderr: '' };
+    };
+
+    const result = await installPlugin(
+      'owner/my-plugin',
+      { ref: 'feature-x' },
+      { pluginsDir, indexPath, gitRunner, now: () => new Date(), confirm: false },
+    );
+
+    const idx = readIndex(indexPath);
+    expect(idx.plugins['my-plugin']!.ref).toBe('feature-x');
+    expect(result.entry.ref).toBe('feature-x');
+  });
+
+  it('cleans up on checkout failure for remote-only branch ref', async () => {
+    const gitRunner: GitRunner = async (args) => {
+      const sub = subcommandOf(args);
+      if (sub === 'clone') {
+        const dest = args[args.length - 1] as string;
+        mkdirSync(dest, { recursive: true });
+        writeManifest(dest, 'cleanup-plugin');
+        return { stdout: '', stderr: '' };
+      }
+      if (sub === 'symbolic-ref') return { stdout: 'origin/main\n', stderr: '' };
+      if (sub === 'rev-parse') {
+        const lastArg = args[args.length - 1] as string;
+        if (lastArg === 'refs/remotes/origin/afk') return { stdout: 'deadbeef\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      }
+      if (sub === 'checkout') throw new Error('fatal: bad ref');
+      return { stdout: '', stderr: '' };
+    };
+
+    await expect(
+      installPlugin(
+        'owner/cleanup-plugin',
+        { ref: 'afk' },
+        { pluginsDir, indexPath, gitRunner, now: () => new Date(), confirm: false },
+      ),
+    ).rejects.toThrow(/fatal: bad ref/);
+
+    expect(existsSync(join(pluginsDir, 'cleanup-plugin'))).toBe(false);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// pinnedRef tests (fix #2358)
+// ---------------------------------------------------------------------------
+
+describe('installPlugin — pinnedRef recorded in index', () => {
+  it('sets pinnedRef: true when --ref is supplied', async () => {
+    const { runner } = makeFakeGit(['v1.0.0', 'v2.0.0'], 'sha1', 'my-plugin');
+    const result = await installPlugin(
+      'anthropics/my-plugin',
+      { ref: 'my-branch' },
+      { pluginsDir, indexPath, gitRunner: runner, now: () => new Date(), confirm: false },
+    );
+    expect(result.entry.pinnedRef).toBe(true);
+    const stored = readIndex(indexPath).plugins[result.name];
+    expect(stored.pinnedRef).toBe(true);
+    expect(stored.ref).toBe('my-branch');
+  });
+
+  it('sets pinnedRef: false when no --ref is supplied', async () => {
+    const { runner } = makeFakeGit(['v2.0.0'], 'sha2', 'auto-plugin');
+    const result = await installPlugin(
+      'anthropics/auto-plugin',
+      {},
+      { pluginsDir, indexPath, gitRunner: runner, now: () => new Date(), confirm: false },
+    );
+    expect(result.entry.pinnedRef).toBe(false);
+    const stored = readIndex(indexPath).plugins[result.name];
+    expect(stored.pinnedRef).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reinstall carries forward user-configured options (fix #2373)
+// ---------------------------------------------------------------------------
+
+import { setPluginOption, readIndex as readIdx } from './index-store.js';
+
+describe('installPlugin — options carried forward on reinstall', () => {
+  it('preserves options when a local plugin is reinstalled with --force', async () => {
+    writeManifest(sourceDir, 'options-plugin');
+    await installPlugin(sourceDir, {}, { pluginsDir, indexPath, now: () => new Date() });
+    // Simulate the user having set an option.
+    setPluginOption('options-plugin', 'provider', 'openai', indexPath);
+    // Reinstall.
+    await installPlugin(sourceDir, { force: true }, { pluginsDir, indexPath, now: () => new Date() });
+    const stored = readIdx(indexPath).plugins['options-plugin']?.options;
+    expect(stored).toEqual({ provider: 'openai' });
+  });
+
+  it('preserves options when a git plugin is reinstalled with --force', async () => {
+    const { runner } = makeFakeGit(['v1.0.0'], 'sha1', 'git-options-plugin');
+    await installPlugin('owner/git-options-plugin', {}, {
+      pluginsDir, indexPath, gitRunner: runner, now: () => new Date(), confirm: false,
+    });
+    setPluginOption('git-options-plugin', 'region', 'eu', indexPath);
+    await installPlugin('owner/git-options-plugin', { force: true }, {
+      pluginsDir, indexPath, gitRunner: runner, now: () => new Date(), confirm: false,
+    });
+    const stored = readIdx(indexPath).plugins['git-options-plugin']?.options;
+    expect(stored).toEqual({ region: 'eu' });
   });
 });

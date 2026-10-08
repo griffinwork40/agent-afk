@@ -23,10 +23,13 @@ import { createDefaultHookRegistry } from '../agent/default-hook-registry.js';
 import { seedPersistedGrants } from '../agent/permissions-store.js';
 import { getApiKeyForModel, resolveBaseSystemPrompt } from '../cli/shared-helpers.js';
 import { wireWebSession, type WebSessionWiringInternal } from './session-owner.wiring.js';
+
 import type { AgentConfig } from '../agent/types.js';
 import type { PermissionMode } from '../agent/types/sdk-types.js';
 import type { McpManager } from '../agent/mcp/index.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
+import { createSessionAutosaver, type SessionAutosaver } from '../cli/session-autosave.js';
+import { drainAndPersistTurn } from './session-owner.autosave.js';
 
 export interface CreateSessionRequest {
   /** Working directory. Ignored unless `allowArbitraryCwd` — see the guard. */
@@ -87,6 +90,8 @@ export class SessionOwner {
    * was still queued behind it.
    */
   private readonly pending = new Map<string, number>();
+  /** Per-session sidecar autosave, so web sessions show up in `/resume`. */
+  private readonly autosavers = new Map<string, SessionAutosaver>();
 
   constructor(private readonly options: SessionOwnerOptions) {}
 
@@ -100,7 +105,21 @@ export class SessionOwner {
     const model = request.model ?? this.options.model;
     const apiKey = getApiKeyForModel(model);
 
-    const { prompt: rawPrompt, source: rawPromptSource } = resolveBaseSystemPrompt(cwd);
+    // `resolveBaseSystemPrompt()` calls `loadSystemPrompt()` which throws when
+    // AFK_FRAMEWORK_PROMPT_FILE is set to a bad path. Catch here so a stale
+    // value in afk.env cannot crash a mid-server session-create request while
+    // other sessions stay alive. No bundled-prompt fallback is performed.
+    let rawPrompt: string | undefined;
+    let rawPromptSource: string | undefined;
+    try {
+      ({ prompt: rawPrompt, source: rawPromptSource } = resolveBaseSystemPrompt(cwd));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Session creation failed: AFK_FRAMEWORK_PROMPT_FILE error: ${message}. ` +
+          'Unset or fix AFK_FRAMEWORK_PROMPT_FILE to create new sessions.',
+      );
+    }
 
     // Full executor + trace + MCP wiring (mirrors REPL/Telegram Anthropic).
     const wiring = await wireWebSession({
@@ -135,6 +154,22 @@ export class SessionOwner {
     wiring.__bindSession(session);
     seedPersistedGrants(wiring.provider);
 
+    // Wire session-layer Stop dispatch (#2957) — every other surface (REPL,
+    // chat, Telegram, daemon) does, and until a surface calls this the session
+    // never fires Stop. Web sessions are persistent and take further prompts,
+    // so injectContext rides the next user turn. Block/timeout outcomes are
+    // already recorded in the trace; the browser has no notice channel for them.
+    //
+    // Limitation: `getHasNextTurn: () => true` queues hook context optimistically,
+    // assuming the browser tab is still open. If the tab closes before the next
+    // prompt arrives, the queued context prepends to a much-later turn instead of
+    // being discarded. This is a known trade-off for web sessions; the daemon
+    // surface avoids it by returning `() => false` (drop context).
+    session.wireStopHook({
+      getHasNextTurn: () => true,
+      onStopInjectContext: (text) => { session.queueFrameworkContext(text); },
+    });
+
     // Invariant: the id is provider-issued and undefined until initialization
     // resolves. Registering as owned before this point would make prompt and
     // approve 409 against an id the caller was just handed.
@@ -154,6 +189,10 @@ export class SessionOwner {
     this.sessions.set(id, session);
     this.info.set(id, record);
     this.owned.add(id);
+    this.autosavers.set(id, createSessionAutosaver({
+      model, cwd, source: 'web', sessionId: id,
+      onError: (err) => { console.error(`[afk web] session ${id} autosave failed; it may not be resumable:`, err); },
+    }));
     if (wiring.mcpManager !== undefined) this.mcpManagers.set(id, wiring.mcpManager);
     return record;
   }
@@ -181,10 +220,9 @@ export class SessionOwner {
       .then(async () => {
         try {
           // The ledger is written as a side effect of the turn; the SSE route
-          // tails it. Draining just runs the turn to completion.
-          for await (const _event of session.sendMessageStream(text)) {
-            void _event;
-          }
+          // tails it. Draining runs the turn to completion, then the completed
+          // turn is saved to the session sidecar.
+          await drainAndPersistTurn(session, text, this.autosavers.get(sessionId));
         } finally {
           const remaining = (this.pending.get(sessionId) ?? 1) - 1;
           if (remaining > 0) this.pending.set(sessionId, remaining);
@@ -218,9 +256,7 @@ export class SessionOwner {
       .catch(() => {})
       .then(async () => {
         try {
-          for await (const _event of session.sendMessageStream(message)) {
-            void _event;
-          }
+          await drainAndPersistTurn(session, message, this.autosavers.get(sessionId));
         } finally {
           const remaining = (this.pending.get(sessionId) ?? 1) - 1;
           if (remaining > 0) this.pending.set(sessionId, remaining);
@@ -310,6 +346,7 @@ export class SessionOwner {
     this.pending.clear();
     this.turns.clear();
     this.mcpManagers.clear();
+    this.autosavers.clear();
     // Sessions close BEFORE MCP disconnect: a closing session may raise a final
     // tool call that needs the MCP transport alive.
     await Promise.all(all.map((s) => s.close().catch(() => {})));

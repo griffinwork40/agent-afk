@@ -7,8 +7,9 @@
  *
  * On Windows: `process.kill(-pid, …)` throws `EINVAL` because Win32 has no
  * POSIX process groups. Instead, we spawn `taskkill /F /T /PID <pid>` which
- * kills the process tree (the `/T` flag terminates child processes). This is
- * the documented Windows equivalent of a POSIX PGID kill.
+ * requests a best-effort process-tree kill without blocking the event loop.
+ * MSYS2 children may not be recorded as Windows descendants, so callers must
+ * not rely on pipe EOF as proof that every child was killed.
  *
  * Guards: pid must be a positive integer (never 0 — `process.kill(-0, …)`
  * would signal THIS process's own group on POSIX). Errors from already-dead
@@ -17,7 +18,17 @@
  * @module utils/kill-process-group
  */
 
-import { execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
+
+/**
+ * Injectable Windows launcher so this branch can be tested on any host.
+ * Exported so tests can reference the shape via structural typing explicitly
+ * rather than relying on implicit structural compatibility (finding #3210-low).
+ */
+export interface KillProcessGroupDeps {
+  platform?: NodeJS.Platform;
+  spawn?: typeof spawn;
+}
 
 /**
  * Kill an entire process group (POSIX) or process tree (Windows).
@@ -29,16 +40,28 @@ import { execFileSync } from 'node:child_process';
 export function killProcessGroup(
   pid: number,
   signal: NodeJS.Signals = 'SIGKILL',
+  deps: KillProcessGroupDeps = {},
 ): void {
   if (pid <= 0) return;
   try {
-    if (process.platform === 'win32') {
-      // /F = force, /T = tree kill (children + grandchildren).
-      // Synchronous so the caller can settle immediately after.
-      execFileSync('taskkill', ['/F', '/T', '/PID', String(pid)], {
+    if ((deps.platform ?? process.platform) === 'win32') {
+      // /T is best-effort: MSYS2 children may be absent from the Windows tree.
+      // Never block the event loop (or abort/settle timers) waiting for taskkill.
+      const killer = (deps.spawn ?? spawn)('taskkill', ['/F', '/T', '/PID', String(pid)], {
         stdio: 'ignore',
         timeout: 5_000,
+        windowsHide: true,
       });
+      killer.on('error', (err) => {
+        // ESRCH: process already dead — expected and silent.
+        // Anything else (taskkill timeout, binary unavailable, etc.) gets a
+        // diagnostic so operators can observe unexpected kill failures rather
+        // than absorbing them silently (finding #3210).
+        if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+          console.warn(`[kill-process-group] taskkill error (pid=${pid}):`, err.message);
+        }
+      });
+      killer.unref();
     } else {
       process.kill(-pid, signal);
     }

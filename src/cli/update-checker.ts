@@ -6,6 +6,10 @@ import { getAfkCacheDir } from '../paths.js';
 import { getVersion } from './version.js';
 import { palette } from './palette.js';
 import { env } from '../config/env.js';
+// isNewerVersion is imported for internal use and re-exported so callers that
+// already import it from this module do not need to change their import path.
+export { isNewerVersion } from './update-version.js';
+import { isNewerVersion } from './update-version.js';
 
 /** Maximum response body size accepted from the registry (64 KB). */
 const MAX_RESPONSE_BYTES = 64 * 1024;
@@ -64,30 +68,26 @@ function ensureCacheDir(): void {
   }
 }
 
-function isNewerVersion(current: string, latest: string): boolean {
-  // Compare only the numeric "core" (major.minor.patch). A prerelease
-  // (`-beta.1`) or build-metadata (`+sha`) suffix would otherwise produce
-  // NaN segments via Number(), and NaN comparisons are always false — so a
-  // running prerelease never saw its own final release as "newer".
-  const core = (v: string): string => v.split(/[-+]/, 1)[0] ?? v;
-  // Prerelease is denoted by a `-` suffix per semver; build metadata (`+`)
-  // does NOT lower precedence, so it must not count here.
-  const isPrerelease = (v: string): boolean => v.includes('-');
+/** Leading numeric segment of a semver string (`6.0.0-beta.1` → 6), or NaN. */
+function majorOf(version: string): number {
+  return Number(version.split('.', 1)[0]);
+}
 
-  const c = core(current).split('.').map(Number);
-  const l = core(latest).split('.').map(Number);
-  const len = Math.max(c.length, l.length);
-  for (let i = 0; i < len; i++) {
-    const cv = c[i] ?? 0;
-    const lv = l[i] ?? 0;
-    if (lv > cv) return true;
-    if (lv < cv) return false;
-  }
-  // Equal numeric cores: a final release outranks its own prerelease
-  // (so the running 4.7.5-beta.1 treats 4.7.5 as an available update).
-  // Prerelease-to-prerelease ordering is intentionally not handled — npm's
-  // `latest` dist-tag does not serve prereleases.
-  return isPrerelease(current) && !isPrerelease(latest);
+/**
+ * True when `latest` lives on a different major line than `current`.
+ *
+ * Invariant: a major version is where breaking changes ship, so the silent
+ * `auto` policy must never cross one — `triggerAutoUpdate()` refuses, and the
+ * banner tells the user to upgrade by hand. An unparseable major counts as a
+ * crossing (NaN !== anything), which fails closed toward "do not install".
+ *
+ * @precondition Callers MUST establish that `latest` is newer than `current`
+ * (e.g. via `isNewerVersion(current, latest)`) before calling this function.
+ * The comparison is symmetric — it returns `true` for a downgrade too — so
+ * skipping that guard would misclassify a downgrade as a major-upgrade block.
+ */
+export function isMajorUpgrade(current: string, latest: string): boolean {
+  return majorOf(current) !== majorOf(latest);
 }
 
 function readCache(): UpdateCache | null {
@@ -199,10 +199,15 @@ export function printUpdateBanner(info: UpdateInfo): void {
   // Invariant: style through the palette, never hand-rolled SGR literals. Raw
   // escapes bypass chalk's level gate, so they printed color even under
   // NO_COLOR / CI / a piped stderr, and they were invisible to `applyTheme()`.
+  const hint = isMajorUpgrade(info.currentVersion, info.latestVersion)
+    ? `Major release (may include breaking changes), not installed automatically.\n` +
+      `See https://github.com/griffinwork40/agent-afk/releases/tag/v${info.latestVersion} ` +
+      `then run \`npm install -g --allow-scripts=agent-afk agent-afk@${info.latestVersion}\` to update`
+    : 'Run `npm install -g --allow-scripts=agent-afk agent-afk` to update';
   process.stderr.write(
     `\n${palette.warning(palette.bold('Update available:'))} ` +
     `${palette.dim(info.currentVersion)} → ${palette.bold(info.latestVersion)}\n` +
-    `${palette.dim('Run `npm install -g agent-afk` to update')}\n`,
+    `${palette.dim(hint)}\n`,
   );
 }
 
@@ -343,6 +348,10 @@ export function fetchLatestVersion(
 
 export function triggerAutoUpdate(latestVersion: string): void {
   if (!SEMVER_RE.test(latestVersion)) return;
+  // Never silently cross a major line (see isMajorUpgrade). Enforced here, at
+  // the only function that spawns the background install, so no caller can
+  // bypass it. The banner already told the user how to upgrade by hand.
+  if (isMajorUpgrade(getVersion(), latestVersion)) return;
   // Debounce: a marker on disk means a prior install is still in flight (or
   // finished but not yet announced). Spawning a second `npm install -g` over
   // it races two installs against the same global package. checkPendingUpdate()
@@ -351,10 +360,14 @@ export function triggerAutoUpdate(latestVersion: string): void {
   if (existsSync(pendingPath())) return;
   try {
     writePendingUpdateMarker(latestVersion);
-    const child = spawn('npm', ['install', '-g', `agent-afk@${latestVersion}`], {
-      detached: true,
-      stdio: 'ignore',
-    });
+    // --allow-scripts=agent-afk is required on npm >=11.19, which began
+    // silently skipping postinstall for packages not in allow-scripts.
+    // The flag is safe on all npm versions agent-afk supports (npm >=10).
+    const child = spawn(
+      'npm',
+      ['install', '-g', '--allow-scripts=agent-afk', `agent-afk@${latestVersion}`],
+      { detached: true, stdio: 'ignore' },
+    );
     child.unref();
   } catch {
     // silent — auto-update is best-effort

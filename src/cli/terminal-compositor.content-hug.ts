@@ -32,6 +32,7 @@
  * Phase 3 is about to paint (Phase 3 paints relative to that frame top).
  */
 
+import { hiddenArchivedRows } from './terminal-compositor.archived-reveal.js';
 import type { FramePlacementMode } from './terminal-compositor.types.js';
 
 /** State slice the content-hug helpers read. */
@@ -39,6 +40,8 @@ export interface ContentHugHost {
   placementMode: FramePlacementMode;
   anchorRow: number | undefined;
   committedBand: string[];
+  committedBandArchivedPrefix?: number;
+  stdout?: NodeJS.WriteStream;
   pendingContentRows: number | null;
   lastMeasuredFrameBottom: number;
   bandGeometryStale: boolean;
@@ -50,11 +53,14 @@ export interface ContentHugHost {
  * the post-commit band length (see module Contract).
  */
 export function contentHugAnchor(
-  self: Pick<ContentHugHost, 'anchorRow' | 'committedBand' | 'pendingContentRows'>,
+  self: Pick<ContentHugHost, 'anchorRow' | 'committedBand' | 'pendingContentRows' | 'placementMode' | 'committedBandArchivedPrefix' | 'stdout'>,
+  physicalRows?: number,
+  absoluteBottom?: number,
 ): number {
   const floor = Math.max(self.anchorRow ?? 1, 1);
   const contentRows = self.pendingContentRows ?? self.committedBand.length;
-  return floor + contentRows;
+  const geometry = physicalRows !== undefined && absoluteBottom !== undefined ? { physicalRows, absoluteBottom } : undefined;
+  return floor + contentRows - hiddenArchivedRows(self, geometry);
 }
 
 /**
@@ -112,18 +118,22 @@ export function projectedBandLength(
 }
 
 /**
- * Invariant (hide-on-growth, not archive): when a hugging frame grows upward
- * over the band (a full viewport), the covered rows stay in the band model as
- * PENDING instead of being archived to scrollback — exactly like band-hold's
- * commit-time pending rows. Archiving would make them unrecoverable on screen,
- * so the next frame shrink would leave the band short and the prompt would jump
- * up mid-screen on every thinking-preview / tool-card cycle.
- * repositionCommittedBand re-pins the model bottom-aligned (newest rows hug the
- * grown frame, oldest hidden) and repaints them as the frame shrinks. The model
- * stays bounded: band-hold archives beyond maxBandModel on the next commit, the
- * collapse branch of preserveRowsBeforeFrameRender archives genuine overflow
- * once the frame is SETTLED (below), and disarm flushes any remainder
- * (flushPendingCommittedBand).
+ * Invariant (archive-and-retain, 2026-10-03): when a hugging frame grows upward
+ * over the band (a full viewport), the covered rows are archived to scrollback
+ * on that repaint, and rows committed while the overlay is tall are archived
+ * on the next one (preserveRowsBeforeFrameRender / pendingEvictionAllowed), so
+ * history never has a hole. They are ALSO retained in the band model as the
+ * archived prefix (terminal-compositor.band-archived-prefix.ts), hidden while
+ * covered and on small shrinks; large collapses reveal them (archived-reveal.ts),
+ * so the screen refills instead
+ * of leaving a blank gap below the prompt. They are never written to
+ * scrollback twice; while re-shown they exist at the scrollback tail and on
+ * screen (the seam overlap, docs/scrollback.md).
+ * History: pre-#2804 they stayed PENDING only (a hole at the scrollback seam
+ * for the rest of the turn); #2804 archived and DROPPED them (a blank gap
+ * below the prompt after the collapse). Repros:
+ * terminal-compositor.history-hole.repro.test.ts and
+ * terminal-compositor.shrink-gap-ghost.repro.test.ts.
  *
  * Settled means the frame's room is a capacity worth archiving against. An
  * open autocomplete dropdown or picker is a brief, user-initiated input-region
@@ -133,8 +143,9 @@ export function projectedBandLength(
  * keeping rows pending for a whole turn hides them from BOTH screen and
  * scrollback (a hole in history — the PTY scenario multi-commit-gap caught
  * exactly this), which is worse than the prompt ending 1–2 rows short of the
- * bottom when the spinner stops. The overlay-empty half of the rule stays with
- * the caller. Returns true outside content-hug (no extra condition).
+ * bottom when the spinner stops. The overlay-empty half of the rule applies to
+ * bottom-pinned only and lives in the caller (frame-preserve.ts
+ * pendingEvictionAllowed). Returns true outside content-hug (no extra condition).
  */
 export function contentHugFrameSettled(self: {
   placementMode: FramePlacementMode;
@@ -154,4 +165,45 @@ export function phase2PendingContentRows(
   route: Parameters<typeof projectedBandLength>[2],
 ): number | null {
   return self.placementMode === 'content-hug' ? projectedBandLength(self, geo, route) : null;
+}
+
+/**
+ * Invariant (band reserve): in content-hug mode, when a large overlay causes
+ * the hugging frame to rise over the committed band, the covered rows go PENDING
+ * (hidden from both screen and scrollback) rather than being archived. The
+ * newest committed output — including the user's prompt echo — therefore
+ * disappears for the whole duration of a fan-out. Reducing the overlay budget
+ * by this reserve shortens trimmedOverlay and therefore the frame, keeping the
+ * newest band rows on screen. The existing pending/re-pin machinery adapts
+ * without further changes.
+ *
+ * The reserve is `Math.min(committedBand.length, Math.max(3, Math.floor(rows / 4)))`:
+ * - `Math.floor(rows / 4)` gives roughly a quarter of the terminal height, which
+ *   is enough to keep the prompt echo plus surrounding context visible.
+ * - The floor of 3 ensures at least 3 rows are reserved on very small terminals.
+ * - The cap at `committedBand.length` prevents reserving more rows than exist in
+ *   the band (no-op when the band is empty).
+ *
+ * Decision — pendingContentRows vs committedBand.length: `pendingContentRows` is
+ * the projected post-commit band length during an in-flight commit (Phase 2); it
+ * is non-null only inside commitAbove and captures rows about to be painted, not
+ * yet visible. Using it here would over-reserve during the Phase 2 repaint and
+ * under-reserve between commits (null → 0). committedBand.length is the already-
+ * painted, always-available band length, which is exactly the set of rows at risk
+ * of going pending — the correct basis for this reserve.
+ *
+ * Known limit: band rows older than the reserve can still go pending during a
+ * fan-out whose overlay exceeds (avail - reserve). Only the newest `reserve` rows
+ * are guaranteed to stay visible.
+ *
+ * Returns 0 outside content-hug (no-op for all other placement modes).
+ */
+export function contentHugBandReserve(
+  self: Pick<ContentHugHost, 'placementMode' | 'committedBand' | 'committedBandArchivedPrefix' | 'stdout'>,
+  rows: number,
+): number {
+  if (self.placementMode !== 'content-hug') return 0;
+  const bandLen = self.committedBand.length - hiddenArchivedRows(self);
+  if (bandLen === 0) return 0;
+  return Math.min(bandLen, Math.max(3, Math.floor(rows / 4)));
 }

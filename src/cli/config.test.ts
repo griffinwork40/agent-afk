@@ -107,8 +107,8 @@ describe('Config Loader', () => {
       expect(getModelId('opus_1m')).toBe('claude-opus-5-5');
       expect(getModelId('sonnet')).toBe('claude-sonnet-4-6');
       expect(getModelId('sonnet_1m')).toBe('claude-sonnet-4-6');
-      expect(getModelId('haiku')).toBe('claude-haiku-4-5-20251001');
-      expect(getModelId('fable')).toBe('claude-fable-5');
+      expect(getModelId('haiku')).toBe('claude-haiku-5-5');
+      expect(getModelId('fable')).toBe('claude-fable-5-1');
     });
   });
 
@@ -323,8 +323,10 @@ describe('Config Loader', () => {
         process.env.AFK_PROVIDER = 'openai-compatible';
         process.env.AFK_MODEL = 'qwen3.5-plus';
 
-        // Override the keychain mock for just this test.
-        const keychainMod = await import('./keychain.js');
+        // Override the keychain mock for just this test. Target the canonical
+        // module (the one credential-resolver.ts imports); the old
+        // `./keychain.js` re-export shim no longer exists.
+        const keychainMod = await import('../agent/auth/keychain.js');
         const original = keychainMod.loadClaudeCodeOauthToken;
         (keychainMod as { loadClaudeCodeOauthToken: () => string | undefined }).loadClaudeCodeOauthToken =
           () => 'sk-ant-oat01-stale-keychain-token';

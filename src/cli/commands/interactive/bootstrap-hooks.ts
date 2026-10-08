@@ -39,14 +39,25 @@ export function createReplHookRegistry(a: {
 }): {
   hookRegistry: HookRegistry;
   addPreviewDiffRef: PreviewDiffRef;
+  /**
+   * Arm the hook-payload `transcript_path` after the transcript file is
+   * initialised. Pass `() => transcript.path()` from the REPL bootstrap so
+   * hooks fired on every event carry the live path (including after `/clear`
+   * rotations). Absent on non-REPL surfaces — payloads emit `null` until set.
+   */
+  setTranscriptPathGetter: (fn: (() => string | null) | null) => void;
 } {
+  // Mutable ref: null until interactive.ts calls setTranscriptPathGetter()
+  // after initTranscript() resolves. The getter is read at dispatch time so
+  // /clear rotations are reflected without re-registering any hook handler.
+  const transcriptPathRef: { fn: (() => string | null) | null } = { fn: null };
   const hookRegistryBundle = createDefaultHookRegistry(
     (info) => { emitSubagentCompletion(a.completionWriter, info); },
     'cli',
     a.memoryStore,
     () => a.stats.permissionMode,
     loadHooksConfig({ cwd: a.effectiveCwd }),
-    { cwd: a.effectiveCwd, ...(a.traceWriter !== undefined ? { traceWriter: a.traceWriter } : {}) },
+    { cwd: a.effectiveCwd, ...(a.traceWriter !== undefined ? { traceWriter: a.traceWriter } : {}), getTranscriptPath: () => transcriptPathRef.fn?.() ?? null },
     () => a.effectiveCwd ?? process.cwd(),
   );
   const hookRegistry = hookRegistryBundle.registry;
@@ -60,5 +71,5 @@ export function createReplHookRegistry(a: {
     }),
   );
 
-  return { hookRegistry, addPreviewDiffRef };
+  return { hookRegistry, addPreviewDiffRef, setTranscriptPathGetter: (fn) => { transcriptPathRef.fn = fn; } };
 }

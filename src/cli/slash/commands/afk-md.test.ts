@@ -60,10 +60,10 @@ vi.mock('../../config.js', () => ({
 }));
 
 vi.mock('../../shared-helpers.js', () => ({
-  resolveBaseSystemPrompt: (): { prompt: string; source: string } => {
+  resolveBaseSystemPrompt: vi.fn((): { prompt: string; source: string } => {
     callLog.push('compose');
     return { prompt: COMPOSED_SENTINEL, source: promptSource };
-  },
+  }),
 }));
 
 const spawnMock = vi.fn();
@@ -73,6 +73,8 @@ vi.mock('./editor-spawn.js', () => ({
 }));
 
 const { afkMdCmd } = await import('./afk-md.js');
+import { resolveBaseSystemPrompt as _rsp } from '../../shared-helpers.js';
+const resolveBaseSystemPromptMock = vi.mocked(_rsp);
 import type { SlashContext } from '../types.js';
 
 function plain(s: string): string {
@@ -120,6 +122,7 @@ beforeEach(() => {
   overlayContent = 'OVERLAY-TEXT';
   promptSource = 'framework+afk-md:/fixture/AFK.md';
   spawnMock.mockReset();
+  resolveBaseSystemPromptMock.mockClear();
 });
 
 afterEach(() => {
@@ -168,6 +171,32 @@ describe('/afk-md show', () => {
     const h = makeCtx();
     await afkMdCmd.handler(h.ctx, 'show');
     expect(h.text()).toContain('No AFK.md overlay is active');
+  });
+});
+
+describe('/afk-md error containment — bad AFK_FRAMEWORK_PROMPT_FILE', () => {
+  it('overview: emits error and returns continue instead of crashing when resolveBaseSystemPrompt throws', async () => {
+    resolveBaseSystemPromptMock.mockImplementationOnce(() => {
+      throw new Error('ENOENT: no such file /bad-path/system-prompt.md');
+    });
+    const h = makeCtx();
+    const result = await afkMdCmd.handler(h.ctx, '');
+    expect(result).toBe('continue');
+    expect(h.text()).toContain('AFK_FRAMEWORK_PROMPT_FILE error');
+    expect(h.text()).toContain('ENOENT');
+    expect(h.setSystemPrompt).not.toHaveBeenCalled();
+  });
+
+  it('show: emits error and returns continue instead of crashing when resolveBaseSystemPrompt throws', async () => {
+    resolveBaseSystemPromptMock.mockImplementationOnce(() => {
+      throw new Error('ENOENT: no such file /bad-path/system-prompt.md');
+    });
+    const h = makeCtx();
+    const result = await afkMdCmd.handler(h.ctx, 'show');
+    expect(result).toBe('continue');
+    expect(h.text()).toContain('AFK_FRAMEWORK_PROMPT_FILE error');
+    expect(h.text()).toContain('ENOENT');
+    expect(h.setSystemPrompt).not.toHaveBeenCalled();
   });
 });
 

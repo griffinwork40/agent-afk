@@ -46,6 +46,9 @@ import { registerStaticPluginAgentCommands } from './plugin-agents.js';
 import { registerBuiltinSkillCommands } from './builtin-skills.js';
 import { registerMarketplaceCommands } from './marketplace-browse.js';
 import { whatifCmd } from './commands/whatif.js';
+import { goodCmd, badCmd } from './commands/feedback.js';
+import { inboxCmd } from './commands/inbox.js';
+import { peersCmd } from './commands/peers.js';
 import '../trusted-skills-registered.js';
 
 export function registerAll(): void {
@@ -84,6 +87,10 @@ export function registerAll(): void {
   register(suggestionsCmd);
   register(spineCmd);
   register(whatifCmd);
+  register(goodCmd);
+  register(badCmd);
+  register(inboxCmd);
+  register(peersCmd);
   // Placeholders for plugin-backed commands. The real lists get registered
   // after `session.waitForInitialization()` resolves, via
   // `registerPluginSkills(session)` / `registerPluginAgents(session)` in

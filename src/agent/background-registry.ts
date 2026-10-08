@@ -53,8 +53,8 @@ import { buildResultFromError, createEmptyTrace } from './subagent/result.js';
 import { debugLog } from '../utils/debug.js';
 import { emitBackgroundAgent } from './trace/emit.js';
 import type { TraceSink } from './trace/index.js';
-import { BgJobLogWriter } from './bg-job-log.js';
-import type { BgJobMeta } from './bg-job-log.js';
+import { BgJobLogWriter, type BgJobMeta } from './bg-job-log.js';
+import { ownProcessStartedAt } from './process-liveness.start-time.js';
 import { emitBackgroundRoutingTelemetry } from './background-registry.telemetry.js';
 import { boundedStopReason } from './tools/subagent/failure-payload.js';
 import { sweepOldBgJobs } from './background-registry.sweep.js';
@@ -62,6 +62,7 @@ import { BackgroundJobCapError, resolveBackgroundJobCap } from './background-reg
 import { appendTranscriptTail } from './background-registry.transcript.js';
 import { recordTouchedFile } from './background-registry.touched-files.js';
 import type { BackgroundJob, BackgroundJobProvenance, BackgroundJobStatus } from './background-registry.types.js';
+import { persistResultBody } from './background-registry.result.js';
 
 export { BackgroundJobCapError } from './background-registry.cap.js';
 export { MAX_TRANSCRIPT_TAIL_BYTES } from './background-registry.transcript.js';
@@ -392,7 +393,9 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
       model: args.model,
       startedAt,
       status: 'running',
-      ...(args.parentSessionId !== undefined ? { parentSessionId: args.parentSessionId } : {}),
+      ownerPid: process.pid,
+      ownerStartTime: ownProcessStartedAt(),
+      ...(args.parentSessionId !== undefined && { parentSessionId: args.parentSessionId }),
       schemaVersion: 1,
     };
     void writer.writeMeta(metaRecord);
@@ -501,9 +504,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
     // Issue all cancellations concurrently, then wait for each job's
     // terminal callback to settle before returning. This guarantees trace
     // events are flushed even if the trace writer closes immediately after.
-    for (const j of running) {
-      j.cancelSource = 'cascade';
-    }
+    for (const j of running) j.cancelSource = 'cascade';
     await Promise.allSettled(running.map((j) => j.handle.cancel()));
     await Promise.allSettled(
       running.map((j) => {
@@ -569,8 +570,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
   // -------------------------------------------------------------------------
 
   private nextJobId(): string {
-    this.counter += 1;
-    return `bg-${Date.now().toString(36)}-${this.counter}`;
+    return `bg-${Date.now().toString(36)}-${++this.counter}`;
   }
 
   /**
@@ -703,14 +703,14 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
     job.settle(result);
 
     // Finalize the persistent log: update meta with terminal status + endedAt,
-    // then close the writer. Fire-and-forget — writer errors are logged inside.
+    // persist the result body, then close the writer. Fire-and-forget — writer
+    // errors are logged inside.
     if (writer && openMeta) {
-      const finalStatus = job.status;
-      const endedAt = job.endedAt;
+      persistResultBody(writer, jobId, job.status, result); // completed/failed only
       void writer.writeMeta({
         ...openMeta,
-        status: finalStatus,
-        ...(endedAt !== undefined ? { endedAt } : {}),
+        status: job.status,
+        ...(job.endedAt !== undefined ? { endedAt: job.endedAt } : {}),
         // Persist stopReason so the /bgsub:join disk-fallback path (reached
         // after this job's in-memory entry is TTL-evicted) can reconstruct
         // the same partial-result labeling the in-memory replay applies —
@@ -803,7 +803,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
       status: job.status,
       ...(job.result !== undefined ? { result: job.result } : {}),
       ...(job.endedAt !== undefined ? { endedAt: job.endedAt } : {}),
-      ...(job.parentSessionId !== undefined ? { parentSessionId: job.parentSessionId } : {}),
+      ...(job.parentSessionId !== undefined && { parentSessionId: job.parentSessionId }),
       ...(job.lastActivityAt !== undefined ? { lastActivityAt: job.lastActivityAt } : {}),
     };
     return snap;

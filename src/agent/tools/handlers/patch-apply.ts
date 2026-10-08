@@ -13,15 +13,23 @@
  * @module agent/tools/handlers/patch-apply
  */
 
-import { resolve } from 'path';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { validatePatchChanges, type PatchFileChange } from './patch-validate.js';
 import { applyPatch } from './patch-apply-engine.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { isBlankInput } from '../subagent/optional-input.js';
 
 // ---------------------------------------------------------------------------
 // Input parsing
 // ---------------------------------------------------------------------------
+
+/**
+ * True when `content` is an unused placeholder: exactly `''` or `null` while
+ * `edits` is a non-empty array.
+ */
+function isPlaceholderContent(content: unknown, edits: unknown): boolean {
+  return (content === '' || content === null) && Array.isArray(edits) && edits.length > 0;
+}
 
 /**
  * Parse and coerce the raw tool input into a typed PatchApplyInput.
@@ -56,14 +64,30 @@ function parsePatchApplyInput(input: unknown): {
 
     const change: PatchFileChange = { path: rawItem['path'] };
 
-    if (rawItem['expected_hash'] !== undefined) {
+    // Contract: a blank expected_hash ("", whitespace, null) is treated as
+    // absent: no hash precondition. See edit-file.ts for the rationale.
+    if (!isBlankInput(rawItem['expected_hash'])) {
       if (typeof rawItem['expected_hash'] !== 'string') {
         throw new Error(`changes[${i}].expected_hash must be a string.`);
       }
       change.expected_hash = rawItem['expected_hash'];
     }
 
-    if (rawItem['content'] !== undefined) {
+    // Contract: `content` is skipped (treated as absent) when:
+    //   (a) it is a filled-in placeholder — exactly `""` or `null` alongside a
+    //       NON-EMPTY `edits` array — so the edits take effect; or
+    //   (b) it is `null` with no `edits` key (or an empty `edits` array) —
+    //       `null` carries no caller intent and should reach the structured
+    //       `no_change_specified` validator rather than a parse-layer type error.
+    // Deliberately NOT isBlankInput for `""`: whitespace-only content is a real
+    // payload, and `""` alone (no edits) means "truncate the file", which still
+    // reaches the validator correctly.
+    const contentIsAbsent =
+      rawItem['content'] === undefined ||
+      rawItem['content'] === null ||
+      isPlaceholderContent(rawItem['content'], rawItem['edits']);
+
+    if (!contentIsAbsent) {
       if (typeof rawItem['content'] !== 'string') {
         throw new Error(`changes[${i}].content must be a string.`);
       }
@@ -121,10 +145,22 @@ export function createPatchApplyHandler(cwd?: string): ToolHandler {
     _signal: AbortSignal,
     context?: ToolHandlerContext,
   ) => {
-    // Determine the resolve base: context takes priority, then factory cwd,
-    // then process.cwd() as last resort.
+    // Determine the resolve base: context takes priority, then factory cwd.
+    // Intentionally omit the `process.cwd()` fallback that was here before —
+    // a handler invoked without any cwd anchor (no context.resolveBase,
+    // no factory cwd) should behave as UNCONFINED (matching write_file /
+    // edit_file), not as anchored to the process launch dir.
+    //
+    // The old `?? resolve(process.cwd())` fallback silently produced a
+    // non-undefined resolveBase even for unconfined sessions, which then hit
+    // the `context.writeRoots ?? [resolveBase]` branch in computeContainment
+    // with an empty writeRoots from ensureInitialized(undefined) — denying
+    // all paths with "write roots []" for sessions without a cwd.  write_file
+    // and edit_file never had this fallback, so they correctly fell through to
+    // the `resolveBase === undefined` unconfined early-return.  The fix aligns
+    // patch_apply with that behavior: undefined resolveBase → unconfined.
     const resolveBase =
-      context?.resolveBase ?? context?.cwd ?? cwd ?? resolve(process.cwd());
+      context?.resolveBase ?? cwd;
 
     // Parse input.
     let parsed: ReturnType<typeof parsePatchApplyInput>;
