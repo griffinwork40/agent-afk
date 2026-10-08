@@ -6,6 +6,8 @@
  *   - `afk update --pin <version>`: semver validation, happy path, install-failure
  *   - `afk update` (latest): fetches and installs
  *   - `runNpmInstall` signal-kill path (via exit event)
+ *   - Fix A: resolveNpmBinary — uses npm sibling to the running Node, not PATH npm
+ *   - Fix B: service restart after successful install; --no-restart; loud warning on failure
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -39,9 +41,40 @@ vi.mock('../palette.js', () => ({
   },
 }));
 
+// Mock fs.existsSync so resolveNpmBinary's sibling-lookup falls back to
+// bare 'npm' in existing tests (preserves pre-existing spawn assertions).
+const { mockExistsSync } = vi.hoisted(() => ({ mockExistsSync: vi.fn(() => false) }));
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>();
+  return { ...actual, existsSync: mockExistsSync };
+});
+
+// Mock service manager — fix B tests
+const { mockServiceManager } = vi.hoisted(() => {
+  const mgr = {
+    backend: 'launchd' as const,
+    configKind: 'LaunchAgent plist',
+    isInstalled: vi.fn(() => false),
+    restart: vi.fn(() => ({ kind: 'restarted' as const, label: 'com.afk.daemon' })),
+    install: vi.fn(),
+    uninstall: vi.fn(),
+    status: vi.fn(),
+    upgrade: vi.fn(),
+    configPath: vi.fn((name: string) => `/fake/${name}.plist`),
+    logPath: vi.fn(),
+    label: vi.fn(),
+    readConfigFile: vi.fn(),
+  };
+  return { mockServiceManager: mgr };
+});
+vi.mock('../../service/index.js', () => ({
+  serviceManagerFor: () => mockServiceManager,
+  SERVICE_NAMES: ['telegram', 'daemon'],
+}));
+
 import { spawn } from 'child_process';
 import { fetchLatestVersion, writePendingUpdateMarker, writeUpdateCache } from '../update-checker.js';
-import { registerUpdateCommand } from './update.js';
+import { registerUpdateCommand, resolveNpmBinary } from './update.js';
 import { EventEmitter } from 'events';
 
 const mockFetchLatestVersion = vi.mocked(fetchLatestVersion);
@@ -86,6 +119,8 @@ describe('afk update', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // existsSync: default false so resolveNpmBinary falls back to 'npm'
+    mockExistsSync.mockReturnValue(false);
     consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     consoleErrSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
@@ -259,6 +294,101 @@ describe('afk update', () => {
       await runUpdate();
 
       expect(mockSpawn).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Fix A: resolveNpmBinary
+  // -------------------------------------------------------------------------
+
+  describe('resolveNpmBinary (fix A)', () => {
+    it('returns sibling npm when it exists next to the node binary', () => {
+      const execPath = '/opt/homebrew/bin/node';
+      const existsFn = (p: string) => p === '/opt/homebrew/bin/npm';
+      const result = resolveNpmBinary(execPath, 'linux', existsFn);
+      expect(result).toBe('/opt/homebrew/bin/npm');
+    });
+
+    it('falls back to bare "npm" when no sibling exists', () => {
+      const result = resolveNpmBinary('/some/custom/bin/node', 'linux', () => false);
+      expect(result).toBe('npm');
+    });
+
+    it('uses npm.cmd on Windows when sibling exists (POSIX-path variant)', () => {
+      const execPath = '/c/nodejs/node.exe';
+      const existsFn = (p: string) => p === '/c/nodejs/npm.cmd';
+      const result = resolveNpmBinary(execPath, 'win32', existsFn);
+      expect(result).toBe('/c/nodejs/npm.cmd');
+    });
+
+    it('falls back to "npm.cmd" on Windows when sibling missing', () => {
+      expect(resolveNpmBinary('/c/nodejs/node.exe', 'win32', () => false)).toBe('npm.cmd');
+    });
+
+    it('uses nvm-local npm when node lives under nvm', () => {
+      const execPath = '/Users/me/.nvm/versions/node/v24.11.0/bin/node';
+      const existsFn = (p: string) => p === '/Users/me/.nvm/versions/node/v24.11.0/bin/npm';
+      expect(resolveNpmBinary(execPath, 'linux', existsFn))
+        .toBe('/Users/me/.nvm/versions/node/v24.11.0/bin/npm');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Fix B: restart services after successful install
+  // -------------------------------------------------------------------------
+
+  describe('service restart after install (fix B)', () => {
+    it('restarts installed services after a successful install', async () => {
+      mockFetchLatestVersion.mockResolvedValue('1.12.0');
+      mockSpawn.mockImplementation(spawnExiting(0) as unknown as typeof spawn);
+      mockServiceManager.isInstalled.mockImplementation((name: string) => name === 'daemon');
+      mockServiceManager.restart.mockReturnValue({ kind: 'restarted', label: 'com.afk.daemon' });
+
+      await runUpdate();
+
+      expect(mockServiceManager.restart).toHaveBeenCalledTimes(1);
+      expect(mockServiceManager.restart).toHaveBeenCalledWith('daemon');
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it('warns and sets exitCode=2 on restart failure without failing the update', async () => {
+      mockFetchLatestVersion.mockResolvedValue('1.12.0');
+      mockSpawn.mockImplementation(spawnExiting(0) as unknown as typeof spawn);
+      mockServiceManager.isInstalled.mockImplementation((name: string) => name === 'daemon');
+      mockServiceManager.restart.mockReturnValue({
+        kind: 'failed',
+        reason: 'spawnSync launchctl ETIMEDOUT',
+      });
+
+      await runUpdate();
+
+      const errCalls = consoleErrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(errCalls).toMatch(/daemon/);
+      expect(errCalls).toMatch(/ETIMEDOUT/);
+      expect(errCalls).toMatch(/afk service restart daemon/);
+      // exitCode = 2 (restart failed) not 1 (install failed)
+      expect(process.exitCode).toBe(2);
+    });
+
+    it('skips service restart when --no-restart is passed', async () => {
+      mockFetchLatestVersion.mockResolvedValue('1.12.0');
+      mockSpawn.mockImplementation(spawnExiting(0) as unknown as typeof spawn);
+      mockServiceManager.isInstalled.mockReturnValue(true);
+
+      await runUpdate('--no-restart');
+
+      expect(mockServiceManager.restart).not.toHaveBeenCalled();
+    });
+
+    it('does not restart services when npm install fails', async () => {
+      mockFetchLatestVersion.mockResolvedValue('1.12.0');
+      mockSpawn.mockImplementation(spawnExiting(1) as unknown as typeof spawn);
+      mockServiceManager.isInstalled.mockReturnValue(true);
+
+      await runUpdate();
+
+      expect(mockServiceManager.restart).not.toHaveBeenCalled();
       expect(process.exitCode).toBe(1);
     });
   });

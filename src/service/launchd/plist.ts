@@ -1,7 +1,7 @@
 import { execFileSync } from 'child_process';
 import { existsSync, realpathSync } from 'fs';
 import { homedir } from 'os';
-import { delimiter, dirname, resolve } from 'path';
+import { delimiter, dirname, join, resolve } from 'path';
 import { resolveEntrypoint as resolveTelegramEntrypoint } from '../../telegram/manager.js';
 import { type ServiceName } from './paths.js';
 
@@ -142,6 +142,66 @@ const BASE_SERVICE_PATH_DIRS: readonly string[] = [
   '/sbin',
 ];
 
+// ─────────────────────────────────────────────────────────────────────────
+// Homebrew Cellar execPath normalization (fix C)
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Homebrew versioned Cellar regex.
+ *
+ * Homebrew stores the concrete binary under a versioned Cellar path:
+ *   /opt/homebrew/Cellar/<formula>/<ver>/bin/node    (Apple Silicon)
+ *   /usr/local/Cellar/<formula>/<ver>/bin/node       (Intel macOS)
+ *
+ * The formula name is typically `node` but can be a versioned tap like
+ * `node@22`. After `brew upgrade node` Homebrew cleans the old versioned
+ * path, but any LaunchAgent plist that baked in the old path keeps trying
+ * to exec a now-deleted binary — the service crash-loops under KeepAlive.
+ *
+ * The stable opt-symlink lives at:
+ *   <prefix>/opt/<formula>/bin/node
+ *
+ * and is kept alive across minor upgrades by Homebrew's link step.
+ */
+const BREW_CELLAR_RE =
+  /^((?:\/opt\/homebrew|\/usr\/local)\/Cellar\/)([^/]+)\/[^/]+(\/.+)$/;
+
+/**
+ * Normalize a Homebrew Cellar-versioned `node` path to its stable
+ * `opt/<formula>` symlink — only when the symlink exists AND resolves to
+ * the same real binary, preventing stale plist paths after `brew upgrade`.
+ *
+ * Pure and injectable for tests. Applies to both `resolveServicePath`
+ * (PATH prepend) and the telegram `ProgramArguments` argv[0].
+ *
+ * @param execPath  - Candidate node binary path (often `process.execPath`).
+ * @param existsFn  - Injectable existence check (defaults to `existsSync`).
+ * @param realpathFn - Injectable realpath resolver (defaults to `realpathSync`).
+ * @returns The stable opt-symlink path when safe to use; `execPath` otherwise.
+ */
+export function normalizeBrewCellarExecPath(
+  execPath: string,
+  existsFn: (p: string) => boolean = existsSync,
+  realpathFn: (p: string) => string = realpathSync,
+): string {
+  const m = BREW_CELLAR_RE.exec(execPath);
+  if (!m) return execPath;
+  // prefix is e.g. /opt/homebrew or /usr/local
+  const prefix = m[1]!.replace(/\/Cellar\/$/, '');
+  const formula = m[2]!;
+  const suffix = m[3]!; // e.g. /bin/node
+  const optPath = join(prefix, 'opt', formula, suffix);
+  if (!existsFn(optPath)) return execPath;
+  try {
+    const optReal = realpathFn(optPath);
+    const srcReal = realpathFn(execPath);
+    if (optReal !== srcReal) return execPath;
+    return optPath;
+  } catch {
+    return execPath;
+  }
+}
+
 /**
  * Build the `PATH` value a launchd service must run with.
  *
@@ -157,10 +217,15 @@ const BASE_SERVICE_PATH_DIRS: readonly string[] = [
  * // resolve too. Dedup keeps first-wins order so a node living in a base
  * // dir (e.g. Homebrew's) is listed exactly once, at the front.
  *
+ * Cellar normalization: when `execPath` is a versioned Homebrew Cellar
+ * path, it is first normalized to the stable opt-symlink via
+ * `normalizeBrewCellarExecPath` so the plist PATH survives `brew upgrade`.
+ *
  * Pure: `execPath` is injectable for tests.
  */
 export function resolveServicePath(execPath: string = process.execPath): string {
-  const nodeDir = dirname(execPath);
+  const normalized = normalizeBrewCellarExecPath(execPath);
+  const nodeDir = dirname(normalized);
   const seen = new Set<string>();
   const dirs: string[] = [];
   for (const d of [nodeDir, ...BASE_SERVICE_PATH_DIRS]) {
@@ -330,7 +395,9 @@ export function resolveProgramArguments(
           `Run 'pnpm build' to compile it, or install agent-afk globally.`,
       );
     }
-    return [process.execPath, entry];
+    // Normalize a versioned Homebrew Cellar execPath to its stable opt-symlink
+    // so the plist argv[0] survives `brew upgrade node` + cellar cleanup.
+    return [normalizeBrewCellarExecPath(process.execPath), entry];
   }
   // daemon: invoke the installed afk CLI in foreground mode. No flags —
   // bare `afk daemon` loads persisted schedules from
