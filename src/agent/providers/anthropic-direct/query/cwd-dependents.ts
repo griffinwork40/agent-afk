@@ -47,6 +47,7 @@ export interface CwdDependentsFactoryArgs {
     runtimeStateSource?: RuntimeStateSource;
     hookRegistry?: AgentConfig['hookRegistry'];
     planExitControls?: AgentConfig['planExitControls'];
+    isNonInteractive?: boolean;
   }) => ToolDispatcher;
 }
 
@@ -135,6 +136,8 @@ export function createCwdDependentsFactory(args: CwdDependentsFactoryArgs): CwdD
       // Carry the resident plan-exit handler across a cwd rebuild — omitting
       // this previously dropped `exit_plan_mode` after a cwd re-anchor while planning.
       planExitControls: args.config.planExitControls,
+      // #2302: a cwd re-anchor must not drop the headless bash floor.
+      ...(args.config.isNonInteractive === true ? { isNonInteractive: true } : {}),
     });
     return { userSystem: newUserSystem, dispatcher: newDispatcher };
   };

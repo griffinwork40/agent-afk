@@ -255,6 +255,17 @@ export interface PreToolUseContext {
    */
   grantManager?: GrantManager;
   /**
+   * True when the session executing this call cannot reach a human to approve
+   * anything (`AgentConfig.isNonInteractive`: `afk chat`, daemon non-pull
+   * tasks, forks unless they opt back in). Injected per-call by
+   * {@link SessionToolDispatcher} from its `isNonInteractive` option; absent
+   * (never `false`) on interactive sessions. This is the explicit headless
+   * signal: {@link grantManager} presence is NOT, because every production
+   * provider wires itself as the grant manager on every surface. Consumed by
+   * the bash-restriction hook to select the unfiltered headless floor (#2302).
+   */
+  nonInteractive?: boolean;
+  /**
    * The tool-call id from the model's request. Injected by
    * {@link SessionToolDispatcher.runPreDispatchGates} so hooks can correlate
    * the PreToolUse event with an in-flight tool-lane entry.

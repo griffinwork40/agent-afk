@@ -208,6 +208,8 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
         runtimeStateSource,
         hookRegistry: config.hookRegistry,
         planExitControls: config.planExitControls,
+        // #2302: headless bash floor keys on this, not grant-manager absence.
+        ...(config.isNonInteractive === true ? { isNonInteractive: true } : {}),
       });
 
   // External-dispatcher branch: the caller owns routing for whatever tools

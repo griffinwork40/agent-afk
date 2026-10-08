@@ -116,6 +116,12 @@ export interface PreDispatchGateDeps {
   subagentId: string | undefined;
   /** Session grant manager injected into PreToolUse context. */
   sessionGrantManager: GrantManager | undefined;
+  /**
+   * Session is non-interactive (`AgentConfig.isNonInteractive`). Injected into
+   * the PreToolUse context as `nonInteractive: true` when set — the explicit
+   * headless signal, since a grant manager is wired on every production surface.
+   */
+  nonInteractive: boolean;
   /** Current working directory injected into PreToolUse context. */
   resolveBase: string | undefined;
   /** Witness trace writer; used by emitHookDecision and emitSessionPhase. */
@@ -532,6 +538,9 @@ export async function runPreDispatchGates(
       ...(deps.sessionGrantManager !== undefined
         ? { grantManager: deps.sessionGrantManager }
         : {}),
+      // Explicit headless signal (#2302): grant-manager presence cannot carry
+      // it, because every production provider wires one on every surface.
+      ...(deps.nonInteractive ? { nonInteractive: true } : {}),
       // Inject the tool-call id so hooks (e.g. edit-preview-hook) can
       // correlate this PreToolUse event with an in-flight tool-lane entry.
       ...(call.id !== undefined ? { toolUseId: call.id } : {}),

@@ -263,3 +263,61 @@ describe('AnthropicDirectProvider — AFK-mode gate reaches the dispatcher via c
     expect(out.content).not.toContain('blocked by PreToolUse hook');
   });
 });
+
+describe('AnthropicDirectProvider — config.isNonInteractive reaches the PreToolUse context (#2302)', () => {
+  // The bash-restriction hook keys its unfiltered headless floor on
+  // `context.nonInteractive`, because this provider wires itself as the grant
+  // manager on every surface. Pin that the session flag survives the
+  // query() → dispatcher-wiring → buildDispatcher → dispatcher → preCtx path.
+  async function captureCtx(isNonInteractive: boolean | undefined): Promise<{
+    nonInteractive: unknown;
+    grantManagerWired: boolean;
+  }> {
+    messagesCreateMock.mockReset();
+    __setAnthropicClientFactory(null);
+    installFactory();
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      if (callIdx === 1) {
+        return fromArray(makeToolUseStream('toolu_bash', 'bash', JSON.stringify({ command: 'true' })));
+      }
+      return fromArray(makeTextStream('done'));
+    });
+    const seen = { nonInteractive: 'unset' as unknown, grantManagerWired: false };
+    const registry = createHookRegistry();
+    registry.register('PreToolUse', (ctx) => {
+      if (ctx.event === 'PreToolUse' && ctx.toolName === 'bash') {
+        seen.nonInteractive = ctx.nonInteractive;
+        seen.grantManagerWired = ctx.grantManager !== undefined;
+      }
+      // Block so the harmless command never actually spawns.
+      return { decision: 'block', reason: 'captured' };
+    });
+    const provider = new AnthropicDirectProvider({ permissions: { allowedTools: ['bash'] } });
+    await collect(
+      provider.query({
+        prompt: singleInput('run it'),
+        config: {
+          model: 'claude-sonnet-5',
+          apiKey: 'sk-ant-oat01-test',
+          hookRegistry: registry,
+          ...(isNonInteractive !== undefined ? { isNonInteractive } : {}),
+        },
+      }),
+    );
+    return seen;
+  }
+
+  it('injects nonInteractive: true alongside the provider-wired grant manager', async () => {
+    const seen = await captureCtx(true);
+    expect(seen.grantManagerWired).toBe(true);
+    expect(seen.nonInteractive).toBe(true);
+  });
+
+  it('leaves nonInteractive undefined on an interactive session', async () => {
+    const seen = await captureCtx(undefined);
+    expect(seen.grantManagerWired).toBe(true);
+    expect(seen.nonInteractive).toBeUndefined();
+  });
+});

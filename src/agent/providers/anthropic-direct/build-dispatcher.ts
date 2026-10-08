@@ -130,6 +130,13 @@ export interface BuildDispatcherOptions {
   detachRegistry?: import('../../tools/detach-registry.js').DetachableToolRegistry;
   /** Background process registry (`bash run_in_background`); root REPL sessions only. */
   processJobs?: import('../../shell-jobs/process-jobs.js').ProcessJobRegistry;
+  /**
+   * `AgentConfig.isNonInteractive`, forwarded to the dispatcher so every
+   * PreToolUse context carries the explicit headless signal (#2302). The
+   * provider is wired as the grant manager on every surface, so grant-manager
+   * presence cannot tell the bash-restriction hook it is unattended.
+   */
+  isNonInteractive?: boolean;
 }
 
 /**
@@ -288,6 +295,9 @@ export function buildDispatcher(
     // same _sharedReadRoots/_sharedWriteRoots the dispatcher shares by
     // reference, so hook and handler stay in lockstep.
     sessionGrantManager: deps.sessionGrantManager,
+    // Explicit headless signal for the bash-restriction floor (#2302); the
+    // grant manager above is wired on every surface, so it cannot carry this.
+    ...(opts?.isNonInteractive === true ? { isNonInteractive: true } : {}),
     // Path-containment bypass: bypassPermissions (explicit) AND autonomous
     // (AFK) both carry allowAll:true so path containment + the path-approval
     // prompt are disabled per-call. In AFK the afk-mode-gate is the safety

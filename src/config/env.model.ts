@@ -94,9 +94,10 @@ export const MODEL_ENV_REGISTRY = [
     description:
       'Skip the path-approval + bash-restriction hooks entirely when set to 1. Use for headless ' +
       'flows that need wide-open file access (CI scripts, batch jobs). Default: hooks enabled. ' +
-      'Note: on headless surfaces (afk chat, daemon) no grant manager is wired, so the interpreter ' +
-      'denylist (python -c, node -e, sh -c, ...) fails OPEN by default — opt headless flows into it ' +
-      'with AFK_FORCE_BASH_INTERPRETER_GUARD=1, or set this var to 1 to disable all of path-approval.',
+      'Note: the interpreter denylist (python -c, node -e, sh -c, ...) fires wherever the session ' +
+      'provider is wired as the grant manager (every production surface) and fails OPEN only for ' +
+      'contexts with none; opt those into it with AFK_FORCE_BASH_INTERPRETER_GUARD=1, or set this ' +
+      'var to 1 to disable all of path-approval.',
     type: 'boolean',
     required: false,
     default: '0',
@@ -118,11 +119,11 @@ export const MODEL_ENV_REGISTRY = [
   {
     name: 'AFK_FORCE_BASH_INTERPRETER_GUARD',
     description:
-      'Apply the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) even on headless ' +
-      'surfaces (afk chat, daemon) where no grant manager is wired. By default the denylist ' +
-      'fires only on interactive surfaces (REPL/Telegram), failing open on headless so legitimate ' +
-      'automation is not hard-blocked with no recourse. Set to 1 to opt headless flows back into the ' +
-      'guard. Overridden by AFK_DISABLE_BASH_INTERPRETER_GUARD=1. Default: off (headless fails open).',
+      'Apply the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) even to tool ' +
+      'calls whose context carries no grant manager. Every production provider wires itself as ' +
+      'the grant manager on every surface (REPL, Telegram, afk chat, daemon, subagents), so there ' +
+      'the denylist is already active; without one it fails open. Set to 1 to force it on for ' +
+      'those contexts too. Overridden by AFK_DISABLE_BASH_INTERPRETER_GUARD=1. Default: off.',
     type: 'boolean',
     required: false,
     default: '0',

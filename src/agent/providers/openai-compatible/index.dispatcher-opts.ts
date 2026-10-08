@@ -69,7 +69,9 @@ export interface BuildDispatcherOpts {
    * When true, this is a non-interactive surface (daemon, scheduler/cron,
    * one-shot chat) where no human answers elicitations. Strip `ask_question`
    * only (not `terminal_font_size`). Parity with the `config.isNonInteractive`
-   * toolDefs filter in AnthropicDirectProvider.
+   * toolDefs filter in AnthropicDirectProvider. Also forwarded to the
+   * dispatcher via {@link headlessSignalOpts} as the explicit headless signal
+   * for the bash-restriction floor (#2302).
    */
   isNonInteractive?: boolean;
   /**
@@ -101,4 +103,18 @@ export function sessionRegistryOpts(src: {
     ...(src.detachRegistry !== undefined ? { detachRegistry: src.detachRegistry } : {}),
     ...(src.processJobs !== undefined ? { processJobs: src.processJobs } : {}),
   };
+}
+
+/**
+ * The explicit headless signal forwarded to the per-query dispatcher, which
+ * injects it onto every PreToolUse context as `nonInteractive` (#2302). Parity
+ * with `anthropic-direct/build-dispatcher.ts`. Needed because this provider
+ * wires itself as the session grant manager on EVERY surface, so grant-manager
+ * absence can never tell the bash-restriction hook a session is unattended.
+ * Extracted so `index.ts` (file-size baselined) forwards it without growing.
+ */
+export function headlessSignalOpts(src: Pick<BuildDispatcherOpts, 'isNonInteractive'>): {
+  isNonInteractive?: true;
+} {
+  return src.isNonInteractive === true ? { isNonInteractive: true } : {};
 }

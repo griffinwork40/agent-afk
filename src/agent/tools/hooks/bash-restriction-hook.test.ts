@@ -185,11 +185,10 @@ describe('createBashRestrictionHook — interpreter guard opt-out (AFK_DISABLE_B
 });
 
 describe('createBashRestrictionHook — interpreter guard interactivity gate (H2)', () => {
-  // The interpreter guard hard-blocks credential-adjacent one-liners only on
-  // INTERACTIVE surfaces (a wired grant manager), where the model can be
-  // redirected to the prompt-able typed file tools. On HEADLESS surfaces (no
-  // grant manager) it fails open by default so legitimate automation is not
-  // hard-blocked with no recourse — the day-one regression this gate fixes.
+  // The interpreter guard hard-blocks credential-adjacent one-liners only when
+  // a grant manager is wired (every production dispatch). Contexts with NO
+  // grant manager fail open by default. The `nonInteractive` signal does not
+  // move this gate; see the PR #2312 regression block at the end of the file.
   //
   // `cred` is credential-adjacent (matches SENSITIVE_PATH_SIGNAL) AND uses a
   // quote-prefixed `~` that check 2's literal scan does NOT normalize, so the
@@ -401,6 +400,13 @@ describe('createBashRestrictionHook — wiring failsafes', () => {
   it('blocks ~/.afk/config writes on headless (closes the afk.env injection bypass)', () => {
     const hook = createBashRestrictionHook({});
     const decision = hook(headlessCtx(`echo AFK_SYSTEM_PROMPT=evil >> ${homedir()}/.afk/config/afk.env`));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('headless surface');
+  });
+
+  it('nonInteractive with no grant manager is headless too (signal is additive)', () => {
+    const hook = createBashRestrictionHook({});
+    const decision = hook({ ...headlessCtx(`cat ${join(homedir(), '.ssh', 'id_rsa')}`), nonInteractive: true });
     expect(decision.decision).toBe('block');
     expect(decision.reason).toContain('headless surface');
   });
@@ -1076,5 +1082,91 @@ describe('createBashRestrictionHook — AFK_READ_DENYLIST extras reach the bash 
     process.env['AFK_READ_DENYLIST'] = '~/.afk/config/mcp.json';
     _resetReadDenylistCacheForTests();
     expect(hook(ctx(`cat ${home}/.afk/config/mcp.json`)).decision).toBe('block');
+  });
+});
+
+describe('createBashRestrictionHook — nonInteractive drives the headless floor in production shape (PR #2312 review)', () => {
+  // Every production provider injects ITSELF as the session grant manager
+  // (anthropic-direct provider-runtime.ts, openai-compatible index.ts), so a
+  // daemon / `afk chat` / fork dispatch carries a REAL grant manager. When that
+  // session's resolveBase is $HOME (`afk chat` run from ~, a daemon task with
+  // cwd ~), the grant-filtered set drops every home-dir credential root and
+  // ~/.afk/config. The headless floor must therefore key on the explicit
+  // `nonInteractive` signal, not on grant-manager absence.
+  const home = homedir();
+  const afkEnv = join(home, '.afk', 'config', 'afk.env');
+  const sshKey = join(home, '.ssh', 'id_rsa');
+  const credEval = `python -c "open('~/.ssh/id_rsa').read()"`;
+
+  function homeAnchoredGrants(): GrantManager {
+    return {
+      addReadRoot: () => {},
+      addWriteRoot: () => {},
+      revokeRoot: () => {},
+      getGrants() {
+        return { resolveBase: home, readRoots: [home], writeRoots: [home] };
+      },
+    };
+  }
+
+  function prodCtx(command: string, nonInteractive: boolean): PreToolUseContext {
+    return {
+      event: 'PreToolUse',
+      toolName: 'bash',
+      input: { command },
+      grantManager: homeAnchoredGrants(),
+      ...(nonInteractive ? { nonInteractive: true } : {}),
+    };
+  }
+
+  it('blocks the #2302 afk.env append payload on a nonInteractive session with a home-anchored grant manager', () => {
+    const hook = createBashRestrictionHook({});
+    const decision = hook(prodCtx(`echo x >> ${afkEnv}`, true));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('headless surface');
+    expect(decision.reason).not.toContain('/allow-dir');
+  });
+
+  it('blocks reading the SSH key on a nonInteractive session with a home-anchored grant manager', () => {
+    const hook = createBashRestrictionHook({});
+    const decision = hook(prodCtx(`cat ${sshKey}`, true));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('headless surface');
+  });
+
+  it('blocks the ~ spelling too (normalized before the floor is scanned)', () => {
+    const hook = createBashRestrictionHook({});
+    expect(hook(prodCtx('echo AFK_SYSTEM_PROMPT=evil >> ~/.afk/config/afk.env', true)).decision).toBe('block');
+  });
+
+  it('keeps the exact-file carve-out readable on a nonInteractive session', () => {
+    const hook = createBashRestrictionHook({});
+    expect(hook(prodCtx(`cat ${join(home, '.afk', 'config', 'mcp.json')}`, true)).decision).not.toBe('block');
+  });
+
+  it('WITHOUT nonInteractive the same grant manager keeps the grant-filtered (interactive) behaviour', () => {
+    const hook = createBashRestrictionHook({});
+    // resolveBase/readRoots = $HOME cover every home-dir root (Option A, #740),
+    // so the interactive set drops them: unchanged pre-#2312 behaviour.
+    expect(hook(prodCtx(`echo x >> ${afkEnv}`, false)).decision).not.toBe('block');
+    expect(hook(prodCtx(`cat ${sshKey}`, false)).decision).not.toBe('block');
+    // A root OUTSIDE the grants still blocks, with the interactive advice.
+    const etc = hook(prodCtx('cat /etc/shadow', false));
+    expect(etc.decision).toBe('block');
+    expect(etc.reason).toContain('/allow-dir');
+    expect(etc.reason).not.toContain('headless surface');
+  });
+
+  it('does NOT weaken the interpreter guard: still active on a nonInteractive session with a grant manager', () => {
+    const hook = createBashRestrictionHook({});
+    // Quote-prefixed `~` is not normalized, so check 1 alone decides.
+    const decision = hook(prodCtx(credEval, true));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('Interpreter');
+  });
+
+  it('disableInterpreterGuard still lifts check 1 on a nonInteractive session', () => {
+    const hook = createBashRestrictionHook({ disableInterpreterGuard: true });
+    expect(hook(prodCtx(credEval, true)).decision).not.toBe('block');
   });
 });

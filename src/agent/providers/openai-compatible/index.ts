@@ -65,7 +65,7 @@ import {
 import { resolveSessionId, registerSessionPresence } from './session-wiring.js';
 import { buildSystemPromptWiring } from './system-prompt-wiring.js';
 import { type ChildSessionOptions, isStateRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
-import { sessionRegistryOpts, type BuildDispatcherOpts } from './index.dispatcher-opts.js';
+import { headlessSignalOpts, sessionRegistryOpts, type BuildDispatcherOpts } from './index.dispatcher-opts.js';
 
 const PROVIDER_NAME = 'openai-compatible';
 
@@ -547,7 +547,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     if (planExitControls) dispatcherOpts.userAttention = userAttentionFrom(planExitControls);
     // #2542/#2735 detach registry + background process registry — parity with
     // AnthropicDirectProvider.buildDispatcher. Top-level REPL sessions only.
-    Object.assign(dispatcherOpts, sessionRegistryOpts(opts));
+    Object.assign(dispatcherOpts, sessionRegistryOpts(opts), headlessSignalOpts(opts));
 
     return new SessionToolDispatcher(dispatcherOpts);
   }

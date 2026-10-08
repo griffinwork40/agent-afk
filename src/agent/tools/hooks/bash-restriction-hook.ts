@@ -29,24 +29,31 @@
  *    payload references a sensitive path — a grant-filtered restricted root, or
  *    a credential fragment like `.ssh` / `id_rsa` / `.aws` / `/etc/shadow` that
  *    an interpreter can assemble at runtime (see `SENSITIVE_PATH_SIGNAL`) — AND
- *    an interactive approval path exists (a grant manager is wired — REPL or
- *    Telegram), block with redirect guidance. This is deliberately NARROW:
+ *    a grant manager is wired (every production provider wires itself, so in
+ *    practice this is every dispatcher-originated call), block with redirect
+ *    guidance. This is deliberately NARROW:
  *    pure-computation one-liners (`python -c 'print(2**64)'`, `node -e
  *    'console.log(1)'`) are NOT blocked — they touch no sensitive path, so the
  *    block was pure friction with no safety value. The guard exists to close
  *    the one thing check 2's literal-substring scan cannot see: an interpreter
  *    building a credential path at runtime (`open(expanduser('~/.ssh/id_rsa'))`).
- *    Headless surfaces (afk chat, daemon, threads, subagents of headless
- *    sessions) fail OPEN by default, because the "use typed file tools" advice
- *    is only actionable where a human can approve the prompt; opt back in with
- *    AFK_FORCE_BASH_INTERPRETER_GUARD=1, or lift it entirely with
- *    AFK_DISABLE_BASH_INTERPRETER_GUARD=1.
+ *    Contexts with no grant manager at all (non-dispatcher callers, tests)
+ *    fail OPEN by default; opt back in with AFK_FORCE_BASH_INTERPRETER_GUARD=1,
+ *    or lift it entirely with AFK_DISABLE_BASH_INTERPRETER_GUARD=1. The
+ *    `nonInteractive` signal (below) deliberately does NOT gate this check.
  * 3. RESTRICTED-ROOT SUBSTRING GUARD (check 2): if the command contains a
  *    literal substring referencing a restricted root, block. On interactive
  *    surfaces the root set is grant-filtered (so `/allow-dir` can reopen a
  *    path); on headless surfaces the full builtin floor is used with NO grant
  *    filtering (#2302), because no human is present to approve. The block
  *    message on headless does not offer an interactive escape hatch.
+ *
+ * Headless is `context.nonInteractive === true` (the session's
+ * `AgentConfig.isNonInteractive`, threaded by the dispatcher: `afk chat`, the
+ * daemon's non-pull tasks, and every fork unless it opts back in) OR no grant
+ * manager on the context. Grant-manager ABSENCE alone is NOT a usable headless
+ * signal in production: both providers inject themselves as the session grant
+ * manager on every surface, so keying on absence left the #2302 floor dead.
  *
  * The restricted roots are the typed-tool read denylist (`read-denylist.ts`)
  * plus a few bash-only extras — one shared list, so a credential path floored
@@ -148,13 +155,12 @@ export interface BashRestrictionHookOptions {
    */
   disableInterpreterGuard?: boolean;
   /**
-   * When true, apply the interpreter-eval denylist even on headless surfaces
-   * where no grant manager is wired. By default the denylist fires ONLY on
-   * interactive surfaces (a wired grant manager signals an approval path the
-   * model can be redirected to); on headless surfaces it fails open so
-   * legitimate automation (`python -c`, `sh -c`, …) is not hard-blocked with
-   * no recourse. Wired from `AFK_FORCE_BASH_INTERPRETER_GUARD=1` for operators
-   * who want the guard active in headless flows too. Overridden by
+   * When true, apply the interpreter-eval denylist even on contexts where no
+   * grant manager is wired. By default the denylist fires ONLY when a grant
+   * manager is wired (every production provider wires itself, so this covers
+   * dispatcher-originated calls on every surface); contexts without one fail
+   * open. The per-session `nonInteractive` signal does NOT affect this gate.
+   * Wired from `AFK_FORCE_BASH_INTERPRETER_GUARD=1`. Overridden by
    * `disableInterpreterGuard`. Default false.
    */
   forceInterpreterGuard?: boolean;
@@ -177,19 +183,33 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     const command = typeof input?.['command'] === 'string' ? input['command'] : '';
     if (!command) return {};
 
-    // Fetch the grant manager once. Its presence doubles as the "interactive
-    // surface" signal: only the REPL and Telegram bootstraps wire it (see
-    // default-hook-registry.ts), so a wired manager means an interactive
-    // approval path exists that the model can be redirected to. Headless
-    // surfaces (afk chat, daemon, threads, subagents of headless sessions)
-    // never wire it.
+    // Invariant: two DIFFERENT signals, never conflated.
+    //   - `grantManagerWired` gates check 1 (interpreter guard) exactly as it
+    //     did before #2302. Every production provider injects itself as the
+    //     session grant manager (anthropic-direct provider-runtime.ts
+    //     `sessionGrantManager: this`; openai-compatible index.ts), so this is
+    //     true on daemon / chat / fork dispatches too. Do not swap it for
+    //     `!headless`: that would turn the interpreter guard OFF on exactly the
+    //     unattended surfaces #2302 hardens.
+    //   - `headless` gates check 2's root set and its block message. It is the
+    //     explicit per-session `nonInteractive` signal, falling back to grant-
+    //     manager absence only for contexts with no grant manager at all.
+    //     Grant-manager presence must NOT be read as "interactive": that made
+    //     the headless floor unreachable in production (PR #2312 review).
+    // Design decision: forks default `isNonInteractive` to true
+    // (fork-child-config.ts), so a forked child gets the UNFILTERED floor in
+    // bash even when its parent passed it `readRoots` covering a bash-only
+    // sensitive root (e.g. a subtree of ~/Library/Application Support). A
+    // fork cannot prompt, so it cannot be granted a root mid-run either; the
+    // typed tools remain the path for such reads.
     //
-    // Use the dispatcher-injected grant manager (this session's provider) so a
-    // forked child's restricted-root view is derived from ITS own grants, not
-    // the top-level session's (#435/#514). The process-global ref has been
-    // retired (#528); `context.grantManager` is the primary source.
+    // The grant manager is the dispatcher-injected one (this session's
+    // provider), so a forked child's restricted-root view is derived from ITS
+    // own grants, not the top-level session's (#435/#514; global ref retired
+    // in #528).
     const grantManager = context.grantManager;
-    const interactiveSurface = grantManager !== undefined;
+    const grantManagerWired = grantManager !== undefined;
+    const headless = context.nonInteractive === true || grantManager === undefined;
 
     // Precompute the sensitive-path view ONCE — both checks below consume it.
     // `scanned` resolves the obvious `~` / `$HOME` shell idioms to the real home
@@ -200,9 +220,9 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     // cannot apply to one and not the other.
     //
     // `restrictedSubstrings` is:
-    //   - On interactive surfaces (grant manager wired): the grant-filtered set,
-    //     so `/allow-dir <path>` can open a root for a session.
-    //   - On headless surfaces (no grant manager): the BUILTIN sensitive roots
+    //   - On interactive surfaces (not headless): the grant-filtered set, so
+    //     `/allow-dir <path>` can open a root for a session.
+    //   - On headless surfaces (`headless` above): the BUILTIN sensitive roots
     //     with no grant filtering (#2302). This closes the bypass where a prompt-
     //     injected payload on an unattended daemon could write to ~/.afk/config
     //     or read ~/.ssh via plain bash. The write-denylist protects the TYPED
@@ -212,30 +232,31 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     const home = homedir();
     const afkHome = configuredAfkHome();
     const scanned = scrubAllowlistedRefs(normalizeHomeRefs(command, home, afkHome), home, afkHome);
-    const restrictedSubstrings = grantManager
-      ? deriveRestrictedSubstrings(grantManager.getGrants())
-      : headlessRestrictedSubstrings();
+    const restrictedSubstrings =
+      grantManager !== undefined && !headless
+        ? deriveRestrictedSubstrings(grantManager.getGrants())
+        : headlessRestrictedSubstrings();
 
     // 1. Interpreter-eval guard — hard block, SCOPED to credential-adjacent
     // one-liners.
     //
-    // Invariant: the interpreter guard fires ONLY where (a) redirection is
-    // actionable and (b) the eval payload actually references a sensitive path.
-    // (a) The block reason tells the model to "use typed file tools, which
-    // support per-call approval" — advice that only works on an interactive
-    // surface (a wired grant manager), so we require `interactiveSurface`.
-    // (Check 2, by contrast, blocks on headless too since #2302.)
+    // Invariant: the interpreter guard fires ONLY where (a) a grant manager is
+    // wired and (b) the eval payload actually references a sensitive path.
+    // (a) is `grantManagerWired`, NOT `!headless` — see the signal invariant
+    // above; activation is unchanged by #2302 and by the `nonInteractive`
+    // signal. (Check 2, by contrast, blocks on headless too since #2302.)
     // (b) `referencesSensitivePath` scopes the block so pure-computation
     // one-liners pass — that scoping is the calibration; see the module header
     // History note. Overrides:
     //   - AFK_DISABLE_BASH_INTERPRETER_GUARD=1 (`disableInterpreterGuard`)
     //     forces it OFF even on interactive surfaces — and wins over force;
     //   - AFK_FORCE_BASH_INTERPRETER_GUARD=1 (`forceInterpreterGuard`) forces
-    //     it ON even on headless surfaces (where `restrictedSubstrings` is
-    //     the unfiltered headless floor, #2302).
+    //     it ON even with no grant manager wired.
+    // On headless contexts `restrictedSubstrings` is the unfiltered floor
+    // (#2302), so the guard scans the stricter set there.
     const interpreterGuardActive =
       !opts.disableInterpreterGuard &&
-      (interactiveSurface || opts.forceInterpreterGuard === true);
+      (grantManagerWired || opts.forceInterpreterGuard === true);
     if (
       interpreterGuardActive &&
       INTERPRETER_DENYLIST.test(command) &&
@@ -262,9 +283,9 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     // ~/.ssh/config") block the bash call, which is acceptable for the
     // accidental threat model.
     //
-    // On interactive surfaces (grant manager wired) the set is grant-filtered
-    // — `/allow-dir <path>` can reopen a root for a session. On headless
-    // surfaces (afk chat, daemon, threads) we use the builtin floor with no
+    // On interactive surfaces (not `headless`) the set is grant-filtered —
+    // `/allow-dir <path>` can reopen a root for a session. On headless
+    // surfaces (afk chat, daemon, forks, threads) we use the builtin floor with no
     // grant filtering (#2302): this closes the prompt-injection bypass where
     // a malicious MCP/web payload on an unattended daemon could read ~/.ssh or
     // write to ~/.afk/config via plain bash while the typed-tool denylist only
@@ -279,7 +300,7 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
 
     for (const sub of restrictedSubstrings) {
       if (mentionsRestrictedRoot(scanned, sub, home)) {
-        if (interactiveSurface) {
+        if (!headless) {
           return {
             decision: 'block',
             reason:
@@ -295,7 +316,7 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
           decision: 'block',
           reason:
             `Bash command references a restricted path (${sub}) on a headless surface ` +
-            '(daemon / afk chat / thread). Direct shell access to credential and config ' +
+            '(daemon / afk chat / subagent / thread). Direct shell access to credential and config ' +
             'paths is blocked to prevent prompt-injection bypass of the typed-tool ' +
             'write-denylist. Use the typed file tools (read_file, write_file, edit_file) ' +
             'or run the command interactively where a human can approve it.',
@@ -462,7 +483,7 @@ function scrubAllowlistedRefs(text: string, home: string, afkHome: string | unde
  * fragment that covers the default home install (`~/.afk/config`). When
  * `AFK_HOME` is relocated (e.g. `/opt/my-afk`), the config tree becomes
  * `/opt/my-afk/config` — a path that does NOT match `.afk/config`, so the
- * signal returns false. Before #2302, headless surfaces with
+ * signal returns false. Before #2302, contexts with no grant manager and
  * `forceInterpreterGuard=1` had `restrictedSubstrings === []`, making the
  * lexical signal the SOLE protection; the headless floor now includes the
  * relocated roots too, and the third check below stays as defense in depth. It
@@ -477,9 +498,10 @@ function referencesSensitivePath(
 ): boolean {
   if (restrictedSubstrings.some((sub) => mentionsRestrictedRoot(scanned, sub, home))) return true;
   if (SENSITIVE_PATH_SIGNAL.test(scanned)) return true;
-  // Relocated-AFK_HOME gap: when restrictedSubstrings is empty (headless, no
-  // grant manager) and the lexical signal misses a relocated config tree, fall
-  // back to a direct check against the runtime sensitive roots.
+  // Relocated-AFK_HOME gap: when restrictedSubstrings omits the relocated roots
+  // (e.g. a grant-filtered interactive set) and the lexical signal misses a
+  // relocated config tree, fall back to a direct check against the runtime
+  // sensitive roots.
   return relocatedAfkSensitiveRoots().some((root) => mentionsRestrictedRoot(scanned, root, home));
 }
 
@@ -696,17 +718,22 @@ export function deriveRestrictedSubstrings(grants: {
 }
 
 /**
- * The restricted-path floor used on **headless surfaces** (daemon, `afk chat`,
- * threads, subagents of headless sessions) where no grant manager is wired
- * (#2302).
+ * The restricted-path floor used on **headless surfaces** (#2302): any bash
+ * PreToolUse context with `nonInteractive === true` (daemon non-pull tasks,
+ * `afk chat`, forks unless they opt back in) or with no grant manager at all.
+ * A wired grant manager does NOT make a context interactive: every production
+ * provider wires itself, so the explicit `nonInteractive` signal is what makes
+ * this floor reachable in production (PR #2312 review).
  *
  * On interactive surfaces {@link deriveRestrictedSubstrings} grant-filters the
  * same builtin list, so an explicit `/allow-dir` can open a root for a session.
  * On headless surfaces no human is present to approve, so there is no grant
  * filter — the full builtin set is used unconditionally.
  *
- * This closes the bypass described in #2302: before this change, check 2
- * returned `{}` (fail-open) whenever `grantManager` was undefined, allowing
+ * This closes the bypass described in #2302: before this change, check 2 was
+ * either fail-open (no grant manager) or grant-filtered, and the grant filter
+ * seeds from `resolveBase` — so a session anchored at `$HOME` dropped every
+ * home-dir credential root and `~/.afk/config`, allowing
  * prompt-injected payloads on unattended daemon sessions to execute
  * `echo AFK_SYSTEM_PROMPT=... >> ~/.afk/config/afk.env` or
  * `cat ~/.afk/config/afk.env` freely via bash, bypassing the typed-tool
