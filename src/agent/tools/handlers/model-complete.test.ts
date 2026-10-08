@@ -158,7 +158,8 @@ describe('model_complete handler', () => {
       { resolveBase: tmp },
     );
     const user = routedOneShotWithStop.mock.calls[0]?.[0].user as string;
-    expect(user.startsWith('summarize this\n\n<input path="')).toBe(true);
+    expect(user.startsWith('summarize this\n\n<input path="notes.txt">')).toBe(true);
+    expect(user).not.toContain(tmp);
     expect(user).toContain('line one\nline two\n</input>');
   });
 
@@ -212,11 +213,23 @@ describe('model_complete handler', () => {
   it('flags an empty reply and truncates an oversized one', async () => {
     const handler = createModelCompleteHandler(tmp);
     routedOneShotWithStop.mockResolvedValueOnce({ text: '', stopReason: 'end' });
-    expect((await handler({ prompt: 'x' }, signal())).content).toMatch(/^\(empty reply/);
+    expect((await handler({ prompt: 'x' }, signal())).content).toBe(
+      '(empty reply; try a larger max_tokens if this is a reasoning model)\n\n[model_complete: qwen-test-27b via openai-compatible]',
+    );
     routedOneShotWithStop.mockResolvedValueOnce({ text: 'z'.repeat(MAX_REPLY_CHARS + 10), stopReason: 'end' });
     const res = await handler({ prompt: 'x' }, signal());
     expect(res.truncated).toBe(true);
     expect(res.content).toContain(`[truncated at ${MAX_REPLY_CHARS} chars]`);
+  });
+
+  it('preserves the max_tokens note for an empty reply', async () => {
+    routedOneShotWithStop.mockResolvedValueOnce({ text: '', stopReason: 'max_tokens' });
+    const res = await createModelCompleteHandler(tmp)({ prompt: 'x' }, signal());
+    expect(res.content).toBe(
+      '(empty reply; try a larger max_tokens if this is a reasoning model)' +
+      '\n\n[stopped at max_tokens: output may be incomplete; retry with a larger max_tokens]' +
+      '\n\n[model_complete: qwen-test-27b via openai-compatible]',
+    );
   });
 
   it('appends the max_tokens note when stopReason is max_tokens', async () => {

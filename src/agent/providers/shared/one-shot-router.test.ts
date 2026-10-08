@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const chat = vi.fn(async () => ({ text: 'chat reply', stopReason: 'end' as const }));
+import type { OneShotStopReason } from './one-shot-router.js';
+
+const chat = vi.fn(async (): Promise<{ text: string; stopReason: OneShotStopReason }> => ({
+  text: 'chat reply', stopReason: 'end',
+}));
 vi.mock('../openai-compatible/oneshot.js', () => ({
   oneShotChatCompletionWithStop: (...args: unknown[]) => chat(...(args as [])),
   oneShotResponses: vi.fn(),

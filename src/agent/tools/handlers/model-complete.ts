@@ -147,7 +147,7 @@ async function modelCompleteImpl(
   if (input.inputPath !== undefined) {
     const file = await readInputFile(input.inputPath, context, cwd);
     if (isToolResult(file)) return file;
-    user = `${input.prompt}\n\n<input path="${file.path}">\n${file.text}\n</input>`;
+    user = `${input.prompt}\n\n<input path="${input.inputPath}">\n${file.text}\n</input>`;
   }
 
   const target = resolveOneShotTarget(input.model);
@@ -171,14 +171,14 @@ async function modelCompleteImpl(
   }
 
   const footer = `\n\n[model_complete: ${target.model} via ${target.provider}]`;
-  if (reply.trim() === '') {
-    return { content: `(empty reply; try a larger max_tokens if this is a reasoning model)${footer}` };
-  }
   // Append a visible note when the model was cut off by the token limit so the
   // caller knows the output is partial and can retry with a larger max_tokens.
   const truncNote = stopReason === 'max_tokens'
     ? '\n\n[stopped at max_tokens: output may be incomplete; retry with a larger max_tokens]'
     : '';
+  if (reply.trim() === '') {
+    return { content: `(empty reply; try a larger max_tokens if this is a reasoning model)${truncNote}${footer}` };
+  }
   if (reply.length > MAX_REPLY_CHARS) {
     return {
       content: `${reply.slice(0, MAX_REPLY_CHARS)}\n… [truncated at ${MAX_REPLY_CHARS} chars]${truncNote}${footer}`,
