@@ -16,7 +16,7 @@
 
 import type { ClaudeModel } from './types.js';
 import { resolveModelInput, contextWindowOverrideFor } from './session/model-slots.js';
-import { isOSeriesModel } from './model-capabilities.js';
+import { isOSeriesModel, OPENAI_COMPAT_THIRD_PARTY_PREFIXES } from './model-capabilities.js';
 import { catalogContextWindow } from './providers/openai-compatible/models-catalog.capabilities.js';
 import { loadModelsCatalog } from './providers/openai-compatible/models-catalog.js';
 
@@ -307,14 +307,11 @@ function routesToOpenAICompatible(model: string): boolean {
   // Common third-party OpenAI-shim families that `providers/index.ts` Tier 3
   // also routes to openai-compatible. Without these, an unknown `deepseek-v4-pro`
   // or `qwen-3.8-27b` id falls through to the 200k Anthropic default instead of
-  // the 262k openai-compatible fallback. Keep in sync with providers/index.ts Tier 3.
-  if (
-    lowered.startsWith('deepseek-') || lowered.startsWith('deepseek_') ||
-    lowered.startsWith('mistral-') || lowered.startsWith('mistral_') ||
-    lowered.startsWith('mixtral-') || lowered.startsWith('mixtral_') ||
-    lowered.startsWith('llama-') || lowered.startsWith('llama_') ||
-    lowered.startsWith('qwen-') || lowered.startsWith('qwen_')
-  ) return true;
+  // the 262k openai-compatible fallback. Derived from OPENAI_COMPAT_THIRD_PARTY_PREFIXES
+  // (model-capabilities.ts) — the single source of truth shared with providers/index.ts.
+  if (OPENAI_COMPAT_THIRD_PARTY_PREFIXES.some(
+    (p) => lowered.startsWith(`${p}-`) || lowered.startsWith(`${p}_`),
+  )) return true;
   return false;
 }
 

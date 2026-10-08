@@ -137,6 +137,30 @@ describe('image_edit handler', () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
+  it('returns no-usable-auth error when OAuth token exists but AFK_OPENAI_CHATGPT_OAUTH flag is off', async () => {
+    // When a Codex auth.json token is present but the global opt-in flag is
+    // unset, resolveOpenAIAuth returns source:'no-usable-auth-codex-oauth'.
+    // The handler must surface an actionable error — not forward the token —
+    // because AFK_OPENAI_CHATGPT_OAUTH was deliberately NOT set.
+    vi.stubEnv('AFK_IMAGE_API_KEY', '');
+    mockResolveAuth.mockReturnValue({
+      apiKey: null,
+      source: 'no-usable-auth-codex-oauth',
+    });
+    const fetchFn = vi.fn();
+    const handler = createImageEditHandler(fetchFn);
+    const result = await handler(
+      { prompt: 'test', image_paths: [refImagePath] },
+      signal,
+      { resolveBase: tmpDir, sessionId: 'flag-off-test' },
+    );
+    expect(result.isError).toBe(true);
+    // The no-usable-auth path must name at least one actionable credential source.
+    expect(result.content).toContain('AFK_IMAGE_API_KEY');
+    // Must never have called the Images Edit endpoint.
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
   // ── Daemon gate ─────────────────────────────────────────────────────────
 
   it('blocks in daemon mode when AFK_IMAGE_ALLOW_DAEMON is not set', async () => {

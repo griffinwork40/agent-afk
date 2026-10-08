@@ -212,7 +212,10 @@ function parseRunOptionFlag(token: string, nextVal: string | undefined, state: R
     case '--no-baseline-sample': state.noBaselineSample = true; return 1;
     case '--predict': {
       if (!nextVal) return `--predict requires a prediction text\n\n${WHATIF_USAGE}`;
-      state.operatorPredictions.push({ behavior: nextVal, testQuestion: `Does the response ${nextVal}` });
+      // Strip a leading auxiliary verb so "should greet the user" becomes
+      // "Does the response greet the user?" not "Does the response should…".
+      const stripped = nextVal.replace(/^(should|will|would|can|must|may)\s+/i, '');
+      state.operatorPredictions.push({ behavior: nextVal, testQuestion: `Does the response ${stripped}` });
       return 2;
     }
     case '--turns': {

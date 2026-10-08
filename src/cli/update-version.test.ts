@@ -88,4 +88,22 @@ describe('isNewerVersion', () => {
     expect(isNewerVersion('5.259.1', '5.260.0')).toBe(true);
     expect(isNewerVersion('5.260.0', '5.259.1')).toBe(false);
   });
+
+  // --- build-metadata with hyphen in metadata segment ------------------------
+  // The pre-existing `v.includes('-')` implementation incorrectly treats a
+  // build-metadata suffix containing a hyphen (e.g. `1.2.3+build-sha`) as a
+  // prerelease, so a release that is truly newer never gets offered as an
+  // update. The hardened `/^\d+\.\d+\.\d+-/.test(v)` regex fixes this.
+
+  it('does NOT treat a hyphenated build-metadata suffix on current as a prerelease', () => {
+    // 1.2.3+build-sha is a release, not a prerelease — so 1.2.3 must NOT be
+    // offered as an update to it ("current is prerelease, latest is release" logic
+    // would incorrectly return true under v.includes('-')).
+    expect(isNewerVersion('1.2.3+build-sha', '1.2.3')).toBe(false);
+  });
+
+  it('does NOT treat a hyphenated build-metadata suffix on latest as a prerelease', () => {
+    // 1.2.4+build-sha is a release; running 1.2.3 should be offered this update.
+    expect(isNewerVersion('1.2.3', '1.2.4+build-sha')).toBe(true);
+  });
 });
