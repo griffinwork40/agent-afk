@@ -34,7 +34,7 @@ export function normalizeSystemPromptOverlay(
 ): string | null {
   if (sp === undefined) return null;
   if (typeof sp === 'string') return sp.length > 0 ? sp : null;
-  if (typeof sp === 'object' && sp !== null && 'append' in sp) {
+  if (typeof sp === 'object' && sp !== null && (sp as { type?: string }).type === 'preset' && 'append' in sp) {
     const append = (sp as { append?: string }).append;
     return typeof append === 'string' && append.length > 0 ? append : null;
   }
