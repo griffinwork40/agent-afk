@@ -45,7 +45,8 @@ export const modelCompleteTool: AnthropicToolDef = {
         description:
           'Model to call: slot name, custom slot name, identity alias, or raw model id. ' +
           'Default: the configured default model (AFK_MODEL, else `medium`). ' +
-          '"auto" is not accepted as an explicit value; an auto default resolves to the medium slot.',
+          'Passing "auto" explicitly is an error; only a configured default of "auto" ' +
+          '(e.g. AFK_MODEL=auto) is mapped to the medium slot.',
       },
       max_tokens: {
         type: 'number',
