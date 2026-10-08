@@ -22,11 +22,13 @@
  */
 
 import OpenAI from 'openai';
-import { oneShotCompletion } from '../anthropic-direct/oneshot.js';
+import { oneShotCompletionWithStop, type OneShotStopReason } from '../anthropic-direct/oneshot.js';
 import {
-  oneShotChatCompletion,
+  oneShotChatCompletionWithStop,
   oneShotResponses,
 } from '../openai-compatible/oneshot.js';
+
+export type { OneShotStopReason };
 import { resolveOpenAIAuth } from '../openai-compatible/auth.js';
 import {
   buildChatGptOAuthHeaders,
@@ -92,11 +94,19 @@ export function resolveOneShotTarget(raw: string): OneShotTarget {
 }
 
 /**
- * Run one completion against `input.provider`. Throws on missing credentials,
- * an unsupported provider, or any SDK error (including AbortError); there is
- * no fallback to another model.
+ * Run one completion against `input.provider`, returning the reply text paired
+ * with the mapped {@link OneShotStopReason}. Throws on missing credentials, an
+ * unsupported provider, or any SDK error (including AbortError); there is no
+ * fallback to another model.
+ *
+ * The Responses wire ({@link oneShotResponses}) already throws
+ * `ResponsesSummaryIncompleteError` when the response is not fully complete, so
+ * it never returns truncated text — the stop reason is always `'end'` on that
+ * path.
  */
-export async function routedOneShot(input: RoutedOneShotInput): Promise<string> {
+export async function routedOneShotWithStop(
+  input: RoutedOneShotInput,
+): Promise<{ text: string; stopReason: OneShotStopReason }> {
   const { provider } = input;
   if (provider === 'anthropic-direct' || provider === 'anthropic') {
     return viaAnthropic(input);
@@ -109,6 +119,17 @@ export async function routedOneShot(input: RoutedOneShotInput): Promise<string> 
   }
   const hint = input.label.unsupportedHint ? ` ${input.label.unsupportedHint}` : '';
   throw new Error(`${input.label.tag} Unsupported cross-provider target: ${provider}.${hint}`);
+}
+
+/**
+ * Thin wrapper around {@link routedOneShotWithStop} that discards the stop
+ * reason and returns only the reply text — preserving the original surface for
+ * the direct callers (e.g. compact-summarizer) that do not need stop-reason
+ * visibility.
+ */
+export async function routedOneShot(input: RoutedOneShotInput): Promise<string> {
+  const { text } = await routedOneShotWithStop(input);
+  return text;
 }
 
 /** True when `url` routes to Anthropic's own API host. */
@@ -125,7 +146,9 @@ function isAnthropicApiHost(url: string): boolean {
   }
 }
 
-async function viaAnthropic(input: RoutedOneShotInput): Promise<string> {
+async function viaAnthropic(
+  input: RoutedOneShotInput,
+): Promise<{ text: string; stopReason: OneShotStopReason }> {
   const { binding, label } = input;
   // Security: when a custom baseUrl is set and it does NOT point to
   // api.anthropic.com, require an explicit binding.apiKey rather than falling
@@ -153,7 +176,7 @@ async function viaAnthropic(input: RoutedOneShotInput): Promise<string> {
       );
     }
   }
-  return oneShotCompletion({
+  return oneShotCompletionWithStop({
     token,
     model: input.model,
     system: input.system,
@@ -168,7 +191,9 @@ async function viaAnthropic(input: RoutedOneShotInput): Promise<string> {
   });
 }
 
-async function viaOpenAI(input: RoutedOneShotInput): Promise<string> {
+async function viaOpenAI(
+  input: RoutedOneShotInput,
+): Promise<{ text: string; stopReason: OneShotStopReason }> {
   const { binding, label } = input;
   // Resolve OpenAI auth from the binding's explicit key, or via the standard
   // chain (OPENAI_API_KEY → CODEX_API_KEY → ~/.codex/auth.json including
@@ -185,6 +210,8 @@ async function viaOpenAI(input: RoutedOneShotInput): Promise<string> {
   // ChatGPT backend rejects Chat Completions requests). Build the client the
   // same way the session does — same base URL and account-id header — and
   // delegate to oneShotResponses with isChatGptBackend: true.
+  // oneShotResponses throws when incomplete, so a successful return is always
+  // 'end' — the Responses wire never exposes truncated text.
   if (auth.source === 'chatgpt-oauth') {
     const client = new OpenAI({
       apiKey: auth.apiKey,
@@ -193,7 +220,7 @@ async function viaOpenAI(input: RoutedOneShotInput): Promise<string> {
       // Contract: maxRetries: 0 — AFK owns retries via withTransientRetry.
       maxRetries: 0,
     });
-    return oneShotResponses({
+    const text = await oneShotResponses({
       client,
       model: input.model,
       system: input.system,
@@ -202,10 +229,11 @@ async function viaOpenAI(input: RoutedOneShotInput): Promise<string> {
       maxTokens: input.maxTokens,
       signal: input.signal,
     });
+    return { text, stopReason: 'end' };
   }
 
   // Standard API-key path: Chat Completions.
-  return oneShotChatCompletion({
+  return oneShotChatCompletionWithStop({
     apiKey: auth.apiKey,
     baseURL: binding.baseUrl,
     model: input.model,
@@ -216,7 +244,9 @@ async function viaOpenAI(input: RoutedOneShotInput): Promise<string> {
   });
 }
 
-async function viaXai(input: RoutedOneShotInput): Promise<string> {
+async function viaXai(
+  input: RoutedOneShotInput,
+): Promise<{ text: string; stopReason: OneShotStopReason }> {
   const { binding, label } = input;
   // Resolve force mode:
   //   - binding.provider === 'xai-oauth' (explicit slot) → force oauth
@@ -260,7 +290,7 @@ async function viaXai(input: RoutedOneShotInput): Promise<string> {
     ...(binding.baseUrl ? { baseUrlOverride: binding.baseUrl } : {}),
   });
 
-  return oneShotChatCompletion({
+  return oneShotChatCompletionWithStop({
     apiKey: resolution.apiKey,
     baseURL: endpoint.baseURL,
     defaultHeaders: endpoint.defaultHeaders,

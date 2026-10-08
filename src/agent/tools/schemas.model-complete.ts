@@ -50,7 +50,9 @@ export const modelCompleteTool: AnthropicToolDef = {
         type: 'number',
         description:
           'Maximum output tokens (default 4096, clamped to 1..32000). Reasoning models spend ' +
-          'part of this budget on hidden reasoning.',
+          'part of this budget on hidden reasoning. ' +
+          'Ignored on ChatGPT-subscription (chatgpt-oauth) models — that backend rejects ' +
+          'the output-cap parameter.',
       },
       input_path: {
         type: 'string',

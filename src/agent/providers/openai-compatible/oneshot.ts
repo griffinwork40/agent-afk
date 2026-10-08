@@ -24,6 +24,7 @@ import { buildResponsesRequestBody } from './query/request-body.js';
 import { createStreamState } from './translate.js';
 import { translateResponsesEvent, type ResponsesStreamEvent } from './responses-translate.js';
 import { abortableStream } from '../shared/abortable-stream.js';
+import type { OneShotStopReason } from '../anthropic-direct/oneshot.js';
 
 /**
  * Thrown by {@link oneShotResponses} when the summarize stream ends WITHOUT a
@@ -110,7 +111,10 @@ export interface OpenAIOneShotInput {
 
 /**
  * Single non-streaming `chat.completions.create` call. Returns the assistant
- * message text, trimmed.
+ * message text paired with the mapped {@link OneShotStopReason}:
+ *   - `'max_tokens'` when `finish_reason === 'length'`
+ *   - `'end'`        when `finish_reason === 'stop'`
+ *   - `'other'`      for any other finish reason
  *
  * Throws on auth resolution failure or SDK errors (rate limit, network,
  * abort). Callers are expected to catch and fall back — this helper has no
@@ -125,7 +129,9 @@ export interface OpenAIOneShotInput {
  * `AFK_SUGGEST_MODEL` override (or a reasoning session model inherited as the
  * suggest model) does not 400 on every keystroke.
  */
-export async function oneShotChatCompletion(input: OpenAIOneShotInput): Promise<string> {
+export async function oneShotChatCompletionWithStop(
+  input: OpenAIOneShotInput,
+): Promise<{ text: string; stopReason: OneShotStopReason }> {
   const {
     apiKey,
     baseURL,
@@ -183,7 +189,34 @@ export async function oneShotChatCompletion(input: OpenAIOneShotInput): Promise<
   );
 
   const content = response.choices?.[0]?.message?.content;
-  return typeof content === 'string' ? content.trim() : '';
+  const text = typeof content === 'string' ? content.trim() : '';
+
+  // Map the raw finish_reason to the canonical OneShotStopReason vocabulary.
+  const finishReason = response.choices?.[0]?.finish_reason;
+  let stopReason: OneShotStopReason;
+  if (finishReason === 'length') {
+    stopReason = 'max_tokens';
+  } else if (finishReason === 'stop') {
+    stopReason = 'end';
+  } else {
+    stopReason = 'other';
+  }
+
+  return { text, stopReason };
+}
+
+/**
+ * Thin wrapper around {@link oneShotChatCompletionWithStop} that discards the
+ * stop reason and returns only the reply text — preserving the original
+ * surface for the direct callers that do not need stop-reason visibility.
+ *
+ * Throws on auth resolution failure or SDK errors (rate limit, network,
+ * abort). Callers are expected to catch and fall back — this helper has no
+ * opinion about retry policy.
+ */
+export async function oneShotChatCompletion(input: OpenAIOneShotInput): Promise<string> {
+  const { text } = await oneShotChatCompletionWithStop(input);
+  return text;
 }
 
 export interface OpenAIResponsesOneShotInput {

@@ -3,10 +3,13 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import os from 'os';
 import path from 'path';
 
-const routedOneShot = vi.fn();
+const routedOneShotWithStop = vi.fn();
 vi.mock('../../providers/shared/one-shot-router.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../providers/shared/one-shot-router.js')>();
-  return { ...actual, routedOneShot: (...args: unknown[]) => routedOneShot(...args) };
+  return {
+    ...actual,
+    routedOneShotWithStop: (...args: unknown[]) => routedOneShotWithStop(...args),
+  };
 });
 
 import {
@@ -40,8 +43,8 @@ const signal = () => new AbortController().signal;
 
 beforeEach(() => {
   tmp = mkdtempSync(path.join(os.tmpdir(), 'afk-model-complete-'));
-  routedOneShot.mockReset();
-  routedOneShot.mockResolvedValue('the reply');
+  routedOneShotWithStop.mockReset();
+  routedOneShotWithStop.mockResolvedValue({ text: 'the reply', stopReason: 'end' });
   setSlotBindings(LOCAL_SLOTS);
   // The handler defaults `model` to AFK_MODEL; pin it so routing tests are
   // independent of the developer's environment.
@@ -103,7 +106,7 @@ describe('defaultModelCompleteModel', () => {
   it('routes an omitted model to the AFK_MODEL target', async () => {
     vi.stubEnv('AFK_MODEL', 'haiku');
     await createModelCompleteHandler(tmp)({ prompt: 'x' }, signal());
-    expect(routedOneShot.mock.calls[0]?.[0]).toMatchObject({
+    expect(routedOneShotWithStop.mock.calls[0]?.[0]).toMatchObject({
       model: CLAUDE_HAIKU_ID,
       provider: 'anthropic-direct',
     });
@@ -116,7 +119,7 @@ describe('model_complete handler', () => {
     expect(res.isError).toBeUndefined();
     expect(res.content).toContain('the reply');
     expect(res.content).toContain('[model_complete: qwen-test-27b via openai-compatible]');
-    const call = routedOneShot.mock.calls[0]?.[0];
+    const call = routedOneShotWithStop.mock.calls[0]?.[0];
     expect(call).toMatchObject({
       model: 'qwen-test-27b',
       provider: 'openai-compatible',
@@ -130,9 +133,9 @@ describe('model_complete handler', () => {
   it('resolves a custom slot name and an identity alias', async () => {
     const handler = createModelCompleteHandler(tmp);
     await handler({ prompt: 'a', model: 'cerebras' }, signal());
-    expect(routedOneShot.mock.calls[0]?.[0]).toMatchObject({ model: 'qwen-test-27b' });
+    expect(routedOneShotWithStop.mock.calls[0]?.[0]).toMatchObject({ model: 'qwen-test-27b' });
     await handler({ prompt: 'b', model: 'haiku', system: 'be terse' }, signal());
-    expect(routedOneShot.mock.calls[1]?.[0]).toMatchObject({
+    expect(routedOneShotWithStop.mock.calls[1]?.[0]).toMatchObject({
       model: CLAUDE_HAIKU_ID,
       provider: 'anthropic-direct',
       system: 'be terse',
@@ -144,7 +147,7 @@ describe('model_complete handler', () => {
     const res = await createModelCompleteHandler(tmp)({ prompt: 'x' }, signal());
     expect(res.isError).toBe(true);
     expect(res.content).toContain('AFK_MODEL_LOCAL');
-    expect(routedOneShot).not.toHaveBeenCalled();
+    expect(routedOneShotWithStop).not.toHaveBeenCalled();
   });
 
   it('appends a relative input_path inside an <input> block', async () => {
@@ -154,7 +157,7 @@ describe('model_complete handler', () => {
       signal(),
       { resolveBase: tmp },
     );
-    const user = routedOneShot.mock.calls[0]?.[0].user as string;
+    const user = routedOneShotWithStop.mock.calls[0]?.[0].user as string;
     expect(user.startsWith('summarize this\n\n<input path="')).toBe(true);
     expect(user).toContain('line one\nline two\n</input>');
   });
@@ -169,7 +172,7 @@ describe('model_complete handler', () => {
         { resolveBase: tmp },
       );
       expect(res.isError).toBe(true);
-      expect(routedOneShot).not.toHaveBeenCalled();
+      expect(routedOneShotWithStop).not.toHaveBeenCalled();
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
@@ -185,11 +188,11 @@ describe('model_complete handler', () => {
       const res = await handler({ prompt: 'x', input_path: p }, signal(), ctx);
       expect(res.isError, p).toBe(true);
     }
-    expect(routedOneShot).not.toHaveBeenCalled();
+    expect(routedOneShotWithStop).not.toHaveBeenCalled();
   });
 
   it('redacts secrets from provider errors', async () => {
-    routedOneShot.mockRejectedValue(new Error('401 bad key sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'));
+    routedOneShotWithStop.mockRejectedValue(new Error('401 bad key sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'));
     const res = await createModelCompleteHandler(tmp)({ prompt: 'x' }, signal());
     expect(res.isError).toBe(true);
     expect(res.content).toContain('qwen-test-27b (openai-compatible) failed');
@@ -198,7 +201,7 @@ describe('model_complete handler', () => {
 
   it('reports a caller abort as aborted', async () => {
     const ac = new AbortController();
-    routedOneShot.mockImplementation(async () => {
+    routedOneShotWithStop.mockImplementation(async () => {
       ac.abort();
       throw Object.assign(new Error('aborted'), { name: 'AbortError' });
     });
@@ -208,11 +211,34 @@ describe('model_complete handler', () => {
 
   it('flags an empty reply and truncates an oversized one', async () => {
     const handler = createModelCompleteHandler(tmp);
-    routedOneShot.mockResolvedValueOnce('');
+    routedOneShotWithStop.mockResolvedValueOnce({ text: '', stopReason: 'end' });
     expect((await handler({ prompt: 'x' }, signal())).content).toMatch(/^\(empty reply/);
-    routedOneShot.mockResolvedValueOnce('z'.repeat(MAX_REPLY_CHARS + 10));
+    routedOneShotWithStop.mockResolvedValueOnce({ text: 'z'.repeat(MAX_REPLY_CHARS + 10), stopReason: 'end' });
     const res = await handler({ prompt: 'x' }, signal());
     expect(res.truncated).toBe(true);
     expect(res.content).toContain(`[truncated at ${MAX_REPLY_CHARS} chars]`);
+  });
+
+  it('appends the max_tokens note when stopReason is max_tokens', async () => {
+    routedOneShotWithStop.mockResolvedValueOnce({ text: 'partial output cut mid', stopReason: 'max_tokens' });
+    const res = await createModelCompleteHandler(tmp)({ prompt: 'x' }, signal());
+    expect(res.isError).toBeUndefined();
+    expect(res.content).toContain('partial output cut mid');
+    expect(res.content).toContain('[stopped at max_tokens: output may be incomplete; retry with a larger max_tokens]');
+    expect(res.content).toContain('[model_complete:');
+  });
+
+  it('does NOT append the max_tokens note when stopReason is end', async () => {
+    routedOneShotWithStop.mockResolvedValueOnce({ text: 'complete answer', stopReason: 'end' });
+    const res = await createModelCompleteHandler(tmp)({ prompt: 'x' }, signal());
+    expect(res.content).not.toContain('stopped at max_tokens');
+    expect(res.content).toContain('complete answer');
+  });
+
+  it('appends the max_tokens note even when the reply is also char-truncated', async () => {
+    routedOneShotWithStop.mockResolvedValueOnce({ text: 'z'.repeat(MAX_REPLY_CHARS + 10), stopReason: 'max_tokens' });
+    const res = await createModelCompleteHandler(tmp)({ prompt: 'x' }, signal());
+    expect(res.truncated).toBe(true);
+    expect(res.content).toContain('[stopped at max_tokens: output may be incomplete; retry with a larger max_tokens]');
   });
 });

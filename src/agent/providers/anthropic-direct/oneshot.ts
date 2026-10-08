@@ -19,6 +19,18 @@ import { detectAuthMode, buildClientOptions, buildRequestHeaders, buildSystemPre
 import { resolveModelId } from '../../session/model-resolution.js';
 import { randomUUID } from 'node:crypto';
 
+/**
+ * The stop reason reported by {@link oneShotCompletionWithStop} and the
+ * corresponding OpenAI-compatible variant. Defined here (closest to the
+ * Anthropic implementation) and re-exported from the shared router so
+ * callers import from one place without an import cycle.
+ *
+ * - `'max_tokens'`  — the model was cut off by the token limit.
+ * - `'end'`         — the model finished naturally (end_turn / stop_sequence / stop).
+ * - `'other'`       — any other stop reason (e.g. content_filter).
+ */
+export type OneShotStopReason = 'max_tokens' | 'end' | 'other';
+
 export interface OneShotInput {
   /** API key or OAuth token (`sk-ant-oat01-...`). Required. */
   token: string;
@@ -49,14 +61,19 @@ export interface OneShotInput {
 
 /**
  * Single non-streaming `messages.create` call. Returns the concatenated text
- * of every text-shaped content block in the response, with leading/trailing
- * whitespace trimmed.
+ * of every text-shaped content block in the response paired with the mapped
+ * {@link OneShotStopReason}:
+ *   - `'max_tokens'` when `stop_reason === 'max_tokens'`
+ *   - `'end'`        when `stop_reason === 'end_turn' | 'stop_sequence'`
+ *   - `'other'`      for any other stop reason
  *
  * Throws on SDK errors (auth failure, rate limit, network, abort). Callers
  * are expected to catch and fall back — this helper has no opinion about
  * retry policy.
  */
-export async function oneShotCompletion(input: OneShotInput): Promise<string> {
+export async function oneShotCompletionWithStop(
+  input: OneShotInput,
+): Promise<{ text: string; stopReason: OneShotStopReason }> {
   const { token, model, system, user, maxTokens = 64, signal, baseUrl, clientFactory } = input;
 
   if (!token) {
@@ -118,12 +135,37 @@ export async function oneShotCompletion(input: OneShotInput): Promise<string> {
   for (const block of response.content) {
     if (block.type === 'text') parts.push(block.text);
   }
-  const result = parts.join('').trim();
-  if (result.length === 0) {
+  const text = parts.join('').trim();
+  if (text.length === 0) {
     // T21: warn when the model returns no usable text so callers can diagnose
     // silent failures without setting log level to debug.
     // eslint-disable-next-line no-console
     console.warn('oneShotCompletion: response contained no text blocks — returning empty string');
   }
-  return result;
+
+  // Map the raw stop_reason to the canonical OneShotStopReason vocabulary.
+  let stopReason: OneShotStopReason;
+  if (response.stop_reason === 'max_tokens') {
+    stopReason = 'max_tokens';
+  } else if (response.stop_reason === 'end_turn' || response.stop_reason === 'stop_sequence') {
+    stopReason = 'end';
+  } else {
+    stopReason = 'other';
+  }
+
+  return { text, stopReason };
+}
+
+/**
+ * Thin wrapper around {@link oneShotCompletionWithStop} that discards the
+ * stop reason and returns only the reply text — preserving the original
+ * surface for the ~9 direct callers that do not need stop-reason visibility.
+ *
+ * Throws on SDK errors (auth failure, rate limit, network, abort). Callers
+ * are expected to catch and fall back — this helper has no opinion about
+ * retry policy.
+ */
+export async function oneShotCompletion(input: OneShotInput): Promise<string> {
+  const { text } = await oneShotCompletionWithStop(input);
+  return text;
 }

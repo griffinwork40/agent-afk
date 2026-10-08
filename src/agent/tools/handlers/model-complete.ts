@@ -30,8 +30,9 @@ import { redactSecrets } from '../../redact-secrets.js';
 import { unconfiguredSlotError } from '../../session/model-slots.js';
 import {
   resolveOneShotTarget,
-  routedOneShot,
+  routedOneShotWithStop,
   type OneShotLabel,
+  type OneShotStopReason,
 } from '../../providers/shared/one-shot-router.js';
 
 /** Tier used when no default model is configured (matches `AFK_MODEL`'s own default). */
@@ -152,15 +153,16 @@ async function modelCompleteImpl(
   const target = resolveOneShotTarget(input.model);
   const callSignal = AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]);
   let reply: string;
+  let stopReason: OneShotStopReason;
   try {
-    reply = await routedOneShot({
+    ({ text: reply, stopReason } = await routedOneShotWithStop({
       ...target,
       system: input.system ?? DEFAULT_SYSTEM,
       user,
       maxTokens: input.maxTokens,
       label: LABEL,
       signal: callSignal,
-    });
+    }));
   } catch (err) {
     if (signal.aborted) return fail('aborted.');
     const timedOut = callSignal.aborted;
@@ -172,13 +174,18 @@ async function modelCompleteImpl(
   if (reply.trim() === '') {
     return { content: `(empty reply; try a larger max_tokens if this is a reasoning model)${footer}` };
   }
+  // Append a visible note when the model was cut off by the token limit so the
+  // caller knows the output is partial and can retry with a larger max_tokens.
+  const truncNote = stopReason === 'max_tokens'
+    ? '\n\n[stopped at max_tokens: output may be incomplete; retry with a larger max_tokens]'
+    : '';
   if (reply.length > MAX_REPLY_CHARS) {
     return {
-      content: `${reply.slice(0, MAX_REPLY_CHARS)}\n… [truncated at ${MAX_REPLY_CHARS} chars]${footer}`,
+      content: `${reply.slice(0, MAX_REPLY_CHARS)}\n… [truncated at ${MAX_REPLY_CHARS} chars]${truncNote}${footer}`,
       truncated: true,
     };
   }
-  return { content: `${reply}${footer}` };
+  return { content: `${reply}${truncNote}${footer}` };
 }
 
 /**
