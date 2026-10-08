@@ -24,7 +24,7 @@ import {
 import { env } from '../../../config/env.js';
 import type { SlashCommand, SlashContext, SlashResult } from '../types.js';
 import type { ImageAttachment } from '../../input/attachments.js';
-import { harvestPluginSkillMetadata, extractHintFromDescription } from './flags.js';
+import { harvestDiscoveredPluginSkillMetadata, extractHintFromDescription } from './flags.js';
 import { makeDynamicSkillsCmd } from './listing.js';
 import {
   state,
@@ -217,26 +217,12 @@ export async function registerPluginSkills(
     return null;
   }
 
-  // Harvest both flags and categories in a single unified pass.
-  const { flags: harvestedFlags, categories: harvestedCategories } = harvestPluginSkillMetadata();
-  // Also walk the bundled-plugins dir (harvestAllPluginSkillFlags already
-  // merges both dirs — replicate for the combined metadata walk).
-  const bundled = harvestPluginSkillMetadata(
-    await import('../../../paths.js').then((m) => m.getBundledPluginsDir()),
-  );
-  for (const [name, flags] of bundled.flags) {
-    const existing = harvestedFlags.get(name) ?? [];
-    harvestedFlags.set(name, Array.from(new Set([...existing, ...flags])).sort());
-  }
-  // Category merge: marketplace-first-wins (first-write-wins). If the marketplace
-  // cache already has a category for a skill name, the bundled-plugins dir does
-  // not overwrite it. This differs from flags, which use union-merge (both
-  // sources contribute). The asymmetry is intentional: a marketplace plugin's
-  // category annotation takes precedence over a bundled default, since the
-  // marketplace version is the actively-installed copy.
-  for (const [name, cat] of bundled.categories) {
-    if (!harvestedCategories.has(name)) harvestedCategories.set(name, cat);
-  }
+  // Harvest flags + categories from every root the skill bridge discovers
+  // skills from (cache, bundled, flat/project/imported plugins). Categories are
+  // first-write-wins with the marketplace cache walked first, so the
+  // actively-installed copy's category beats a bundled default; flags union.
+  const { flags: harvestedFlags, categories: harvestedCategories } =
+    harvestDiscoveredPluginSkillMetadata();
 
   // Cast to ProviderCommandInfo[] — session.supportedCommands() returns
   // SlashCommand[] for the REPL registry, but the underlying objects are
