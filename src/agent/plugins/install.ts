@@ -39,6 +39,7 @@ import { pickLatestSemverTag } from './versions.js';
 // Invalidate the process-lifetime scan cache after any successful install so
 // the running session sees the new plugin without a restart. (Audit F2)
 import { _resetPluginScanCache } from '../plugins-scanner.js';
+import { sleep } from '../../utils/sleep.js';
 
 export interface InstallOptions {
   /** Override the destination directory name. Defaults to manifest `name`, then fall-back to the source slug. */
@@ -316,7 +317,7 @@ async function printInstallWarning(url: string, delayMs: number): Promise<void> 
     const seconds = Math.ceil(delayMs / 1000);
     warn(`  Proceeding in ${seconds} second(s)… Press Ctrl-C to abort.`);
     warn('');
-    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    await sleep(delayMs);
   }
 
   warn(line);

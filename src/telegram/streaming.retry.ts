@@ -7,6 +7,7 @@
  */
 
 import { TelegramError } from 'telegraf';
+import { sleep } from '../agent/providers/shared/sleep-with-abort.js';
 
 /** Max flood-control (429) retries per outbound message before giving up. */
 export const MAX_FLOOD_RETRIES = 2;
@@ -15,8 +16,11 @@ export const MAX_RETRY_AFTER_MS = 30_000;
 /** Fallback backoff when a 429 carries no `retry_after`. */
 export const DEFAULT_FLOOD_BACKOFF_MS = 1_000;
 
-/** Real wall-clock sleep; injectable in tests via `replyWithFloodRetry` opts. */
-export const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+/**
+ * Real wall-clock sleep; injectable in tests via `replyWithFloodRetry` opts.
+ * Delegates to the shared `sleep` helper (ref'd timer — does not prevent process exit on its own).
+ */
+export const realSleep = (ms: number): Promise<void> => sleep(ms);
 
 /**
  * Telegram flood-control (429) retry-after in ms, or `null` when `e` is not a

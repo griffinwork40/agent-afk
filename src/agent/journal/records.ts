@@ -13,11 +13,10 @@
 
 import * as fs from 'node:fs';
 
+import { isPlainObject } from '../../utils/type-guards.js';
 import { JOURNAL_VERSION, type JournalRecord, type JournalRecordInput } from './types.js';
 
-function isObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
+const isObject = isPlainObject;
 
 function isIndex(v: unknown): v is number {
   return typeof v === 'number' && Number.isInteger(v) && v >= 0;
