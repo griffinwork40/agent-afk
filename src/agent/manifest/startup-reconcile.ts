@@ -15,6 +15,7 @@
  */
 
 import { reconcileWaveManifests, formatResumptionOffer, shouldSurfaceResumptionOffer, markManifestOffered } from './reconcile.js';
+import { pushIfConfigured } from '../../telegram/push.js';
 
 /**
  * Wire reconciliation for the interactive REPL surface.
@@ -83,6 +84,42 @@ export function runNonInteractiveReconcile(sessionId: string): void {
       for (const offer of result.offers) {
         process.stderr.write(formatResumptionOffer(offer) + '\n');
         markManifestOffered(offer.manifest);
+      }
+    } catch {
+      // Fire-and-forget: reconciler errors must never surface to the user.
+    }
+  });
+}
+
+/**
+ * Wire reconciliation for the daemon surface with confirmed Telegram delivery.
+ *
+ * Mirrors `runTelegramReconcile` — pushes each resumption offer via
+ * `pushIfConfigured` and only calls `markManifestOffered` when the push
+ * succeeds (at least one delivery returned `ok: true`). Falls back to stderr
+ * when Telegram is not configured so the offer is never silently lost.
+ *
+ * Gate: active when `AFK_WAVE_RESUME_UNATTENDED=1` (same as
+ * `runNonInteractiveReconcile`). Fire-and-forget: returns immediately; errors
+ * are swallowed.
+ */
+export function runDaemonReconcile(sessionId: string): void {
+  if (!shouldSurfaceResumptionOffer(false)) return;
+  void Promise.resolve().then(async () => {
+    try {
+      const result = reconcileWaveManifests({ sessionId });
+      for (const offer of result.offers) {
+        const text = formatResumptionOffer(offer);
+        const results = await pushIfConfigured(text).catch(() => null);
+        if (results === null) {
+          // Telegram not configured — fall back to stderr so the offer is visible.
+          process.stderr.write(text + '\n');
+          markManifestOffered(offer.manifest);
+        } else {
+          // Only stamp as offered when at least one delivery succeeded.
+          const delivered = results.some((r) => r.ok);
+          if (delivered) markManifestOffered(offer.manifest);
+        }
       }
     } catch {
       // Fire-and-forget: reconciler errors must never surface to the user.

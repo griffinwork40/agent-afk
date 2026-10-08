@@ -10,8 +10,15 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { runReplReconcile, runTelegramReconcile, runNonInteractiveReconcile } from './startup-reconcile.js';
+import { runReplReconcile, runTelegramReconcile, runNonInteractiveReconcile, runDaemonReconcile } from './startup-reconcile.js';
 import { createManifest, buildWaveUnit, readManifest } from './write.js';
+
+vi.mock('../../telegram/push.js', () => ({
+  pushIfConfigured: vi.fn(),
+}));
+
+import { pushIfConfigured } from '../../telegram/push.js';
+const mockPushIfConfigured = vi.mocked(pushIfConfigured);
 
 let stateDir: string;
 
@@ -20,6 +27,7 @@ beforeEach(() => {
   process.env['AFK_STATE_DIR'] = stateDir;
   delete process.env['AFK_WAVE_RESUME_UNATTENDED'];
   delete process.env['AFK_WAVE_MANIFEST_DISABLED'];
+  mockPushIfConfigured.mockReset();
 });
 
 afterEach(() => {
@@ -193,5 +201,109 @@ describe('runNonInteractiveReconcile', () => {
 
     const calls = stderrSpy.mock.calls.map((c) => String(c[0]));
     expect(calls.some((t) => t.includes('[wave-resume]'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runDaemonReconcile — #3248
+// ---------------------------------------------------------------------------
+
+describe('runDaemonReconcile', () => {
+  it('is a no-op without AFK_WAVE_RESUME_UNATTENDED=1', async () => {
+    mockPushIfConfigured.mockResolvedValue([{ ok: true, status: 200 }]);
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    seedManifest('dr-gated');
+
+    runDaemonReconcile('dr-gated');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mockPushIfConfigured).not.toHaveBeenCalled();
+    const calls = stderrSpy.mock.calls.map((c) => String(c[0]));
+    expect(calls.some((t) => t.includes('[wave-resume]'))).toBe(false);
+  });
+
+  it('pushes via Telegram when AFK_WAVE_RESUME_UNATTENDED=1 and manifests exist', async () => {
+    process.env['AFK_WAVE_RESUME_UNATTENDED'] = '1';
+    mockPushIfConfigured.mockResolvedValue([{ ok: true, status: 200 }]);
+    seedManifest('dr-push');
+
+    runDaemonReconcile('dr-push');
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mockPushIfConfigured).toHaveBeenCalledOnce();
+    const [text] = mockPushIfConfigured.mock.calls[0] as [string];
+    expect(text).toContain('[wave-resume]');
+  });
+
+  it('stamps offeredAt only when Telegram push reports ok:true', async () => {
+    process.env['AFK_WAVE_RESUME_UNATTENDED'] = '1';
+    mockPushIfConfigured.mockResolvedValue([{ ok: true, status: 200 }]);
+    const waveId = seedManifest('dr-stamp-ok');
+
+    runDaemonReconcile('dr-stamp-ok');
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const manifest = readManifest(waveId);
+    expect(manifest?.offeredAt).toBeDefined();
+  });
+
+  it('does NOT stamp offeredAt when all pushes fail (ok:false)', async () => {
+    process.env['AFK_WAVE_RESUME_UNATTENDED'] = '1';
+    mockPushIfConfigured.mockResolvedValue([{ ok: false, status: 429, errorMessage: 'Rate Limited' }]);
+    const waveId = seedManifest('dr-stamp-fail');
+
+    runDaemonReconcile('dr-stamp-fail');
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const manifest = readManifest(waveId);
+    // Delivery failed → offer must re-surface on next session.
+    expect(manifest?.offeredAt).toBeUndefined();
+  });
+
+  it('falls back to stderr and stamps when Telegram is not configured (null result)', async () => {
+    process.env['AFK_WAVE_RESUME_UNATTENDED'] = '1';
+    // pushIfConfigured returns null when no token/targets are configured.
+    mockPushIfConfigured.mockResolvedValue(null as unknown as ReturnType<typeof pushIfConfigured> extends Promise<infer R> ? R : never);
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const waveId = seedManifest('dr-fallback');
+
+    runDaemonReconcile('dr-fallback');
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // stderr receives the offer text.
+    const calls = stderrSpy.mock.calls.map((c) => String(c[0]));
+    expect(calls.some((t) => t.includes('[wave-resume]'))).toBe(true);
+    // Manifest is stamped (stderr delivery is "confirmed").
+    const manifest = readManifest(waveId);
+    expect(manifest?.offeredAt).toBeDefined();
+  });
+
+  it('does not re-send on second reconcile after a successful push', async () => {
+    process.env['AFK_WAVE_RESUME_UNATTENDED'] = '1';
+    mockPushIfConfigured.mockResolvedValue([{ ok: true, status: 200 }]);
+    seedManifest('dr-dedup');
+
+    runDaemonReconcile('dr-dedup');
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockPushIfConfigured).toHaveBeenCalledOnce();
+
+    // Second reconcile: manifest is stamped, should not push again.
+    mockPushIfConfigured.mockClear();
+    runDaemonReconcile('dr-dedup');
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockPushIfConfigured).not.toHaveBeenCalled();
   });
 });

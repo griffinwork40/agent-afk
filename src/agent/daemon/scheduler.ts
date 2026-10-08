@@ -202,8 +202,13 @@ export class CronScheduler {
   private pullPollTimer: ReturnType<typeof setInterval> | undefined;
   private isDequeuing = false;
   private readonly queueDir: string;
-  /** Per-task in-flight guard: IDs of tasks whose runOnce promise is still pending. Intra-process only — no cross-process coordination. */
-  private readonly inFlightTaskIds = new Set<string>();
+  /**
+   * Per-task in-flight guard: maps task id → start timestamp (ms) for tasks
+   * whose runOnce promise is still pending. Intra-process only — no
+   * cross-process coordination. The timestamp enables elapsed-time reporting
+   * in crash notices (#3248).
+   */
+  private readonly inFlightTasks = new Map<string, number>();
   /** One Telegram alert per usage-budget episode (see BudgetAlertLatch). */
   private readonly budgetAlerts = new BudgetAlertLatch();
   /** One Telegram alert per daemon process for a non-writable telemetry file. */
@@ -253,11 +258,30 @@ export class CronScheduler {
   }
 
   /**
+   * Returns a point-in-time snapshot of currently-running tasks. Each entry
+   * carries the task id, the head of its command, and the elapsed wall-clock
+   * time since the tick started. Used by crash-notice formatting (#3248) to
+   * give the operator context about what was running when the daemon died.
+   */
+  getInFlightTasks(): Array<{ taskId: string; commandHead: string; elapsedMs: number }> {
+    const now = this.now();
+    const result: Array<{ taskId: string; commandHead: string; elapsedMs: number }> = [];
+    for (const [taskId, startedAt] of this.inFlightTasks) {
+      const entry = this.registry.get(taskId);
+      const commandHead = entry !== undefined
+        ? entry.task.command.slice(0, 60)
+        : taskId;
+      result.push({ taskId, commandHead, elapsedMs: now - startedAt });
+    }
+    return result;
+  }
+
+  /**
    * Run one tick of `taskId` immediately, bypassing the cron timer and gates.
    * Used by `--once` CLI mode and by tests. Recorded as `trigger: 'cron'`.
    *
    * Note: subject to the per-task in-flight overlap guard
-   * ({@link CronScheduler.inFlightTaskIds}). If a cron run of the same task is
+   * ({@link CronScheduler.inFlightTasks}). If a cron run of the same task is
    * already in progress when `tick()` is called, it will be silently skipped
    * (a `status: 'skipped', skipReason: 'overlap'` telemetry record is written).
    * Operators running `--once` in the foreground while the daemon is live should
@@ -371,12 +395,12 @@ export class CronScheduler {
     // all executor branches including the agent path in executeAgentTask).
     // The guard is intentionally checked BEFORE the cwd and executor branches
     // so it applies uniformly to all executor types.
-    if (this.inFlightTaskIds.has(task.taskId)) {
+    if (this.inFlightTasks.has(task.taskId)) {
       const record = makeOverlapSkipRecord(task, trigger, this.now());
       this.writeTelemetry(record, task);
       return record;
     }
-    this.inFlightTaskIds.add(task.taskId);
+    this.inFlightTasks.set(task.taskId, this.now());
     try {
     // Resolve executor early so the cwd guard can skip builtin tasks (which
     // ignore cwd entirely and would produce spurious errors if the dir vanishes).
@@ -469,7 +493,7 @@ export class CronScheduler {
       trigger,
     );
     } finally {
-      this.inFlightTaskIds.delete(task.taskId);
+      this.inFlightTasks.delete(task.taskId);
     }
   }
 

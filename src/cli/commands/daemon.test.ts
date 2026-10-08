@@ -81,7 +81,7 @@ import { startDaemon } from '../../agent/daemon.js';
 import { pushIfConfigured } from '../../telegram/push.js';
 import { loadConfig, loadTelegramConfig } from '../config.js';
 import { getApiKey, getModel } from '../shared-helpers.js';
-import { formatTaskCompletion, registerDaemonCommand, resolveNotifyChatTarget } from './daemon.js';
+import { formatTaskCompletion, registerDaemonCommand, resolveNotifyChatTarget, registerDaemonCrashHandlers, _resetDaemonCrashHandlersForTest } from './daemon.js';
 import {
   resolveTriggerMode,
   resolveDefaultTask,
@@ -513,5 +513,87 @@ describe('resolveNotifyChatTarget', () => {
   it('returns undefined when the allowlist is empty (fail-closed)', () => {
     // no AFK_TELEGRAM_ALLOWED_CHAT_IDS set
     expect(resolveNotifyChatTarget(123, 't')).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// registerDaemonCrashHandlers — in-flight task context (#3248)
+// ---------------------------------------------------------------------------
+
+describe('registerDaemonCrashHandlers', () => {
+  beforeEach(() => {
+    // Remove any listeners left over from prior runDaemon() calls in this file,
+    // then reset the guard so registerDaemonCrashHandlers can re-register fresh.
+    process.removeAllListeners('uncaughtException');
+    process.removeAllListeners('unhandledRejection');
+    _resetDaemonCrashHandlersForTest();
+    vi.clearAllMocks();
+    mockPushIfConfigured.mockResolvedValue([{ ok: true, status: 200 }]);
+  });
+
+  afterEach(() => {
+    // Remove listeners added by registerDaemonCrashHandlers to keep process clean.
+    process.removeAllListeners('uncaughtException');
+    process.removeAllListeners('unhandledRejection');
+    _resetDaemonCrashHandlersForTest();
+  });
+
+  it('push includes error text without in-flight tasks when none provided', () => {
+    registerDaemonCrashHandlers();
+    process.emit('uncaughtException', new Error('boom'), 'uncaughtException');
+
+    expect(mockPushIfConfigured).toHaveBeenCalledOnce();
+    const [msg] = mockPushIfConfigured.mock.calls[0] as [string];
+    expect(msg).toContain('uncaughtException');
+    expect(msg).toContain('boom');
+    expect(msg).not.toContain('in-flight');
+  });
+
+  it('push includes in-flight task ids when tasks are running', () => {
+    const getInFlightTasks = vi.fn(() => [
+      { taskId: 'nightly-forge', commandHead: '/forge-friction --auto', elapsedMs: 12_500 },
+    ]);
+    registerDaemonCrashHandlers(getInFlightTasks);
+    process.emit('uncaughtException', new Error('OOM'), 'uncaughtException');
+
+    expect(mockPushIfConfigured).toHaveBeenCalledOnce();
+    const [msg] = mockPushIfConfigured.mock.calls[0] as [string];
+    expect(msg).toContain('in-flight (1)');
+    expect(msg).toContain('nightly-forge');
+    expect(msg).toContain('/forge-friction --auto');
+    expect(msg).toContain('12.5s');
+  });
+
+  it('push includes multiple in-flight tasks', () => {
+    const getInFlightTasks = vi.fn(() => [
+      { taskId: 'task-a', commandHead: '/cmd-a', elapsedMs: 5_000 },
+      { taskId: 'task-b', commandHead: '/cmd-b', elapsedMs: 90_000 },
+    ]);
+    registerDaemonCrashHandlers(getInFlightTasks);
+    process.emit('uncaughtException', new Error('SIGSEGV'), 'uncaughtException');
+
+    const [msg] = mockPushIfConfigured.mock.calls[0] as [string];
+    expect(msg).toContain('in-flight (2)');
+    expect(msg).toContain('task-a');
+    expect(msg).toContain('task-b');
+  });
+
+  it('omits in-flight section when no tasks are running', () => {
+    const getInFlightTasks = vi.fn(() => []);
+    registerDaemonCrashHandlers(getInFlightTasks);
+    process.emit('uncaughtException', new Error('timeout'), 'uncaughtException');
+
+    const [msg] = mockPushIfConfigured.mock.calls[0] as [string];
+    expect(msg).not.toContain('in-flight');
+  });
+
+  it('is re-entry safe — duplicate calls are no-ops', () => {
+    const getInFlightTasks = vi.fn(() => []);
+    registerDaemonCrashHandlers(getInFlightTasks);
+    registerDaemonCrashHandlers(getInFlightTasks); // second call must be ignored
+
+    process.emit('uncaughtException', new Error('dupe'), 'uncaughtException');
+    // If duplicate listeners were registered, push would be called multiple times.
+    expect(mockPushIfConfigured).toHaveBeenCalledOnce();
   });
 });
