@@ -30,24 +30,24 @@
  *
  * ## Choice of default
  *
- * `gpt-4.1-nano` is the cheapest model in the repo's pricing table
- * (`openai-compatible/pricing.ts`, $0.10/$0.40 per MTok), present in
- * `model-capabilities.ts`, and capable of producing a compact session summary
- * (the output is capped at 1,024 tokens, well within any model's ability).
+ * `gpt-6-luna` is the luna (cheap) tier of the current gpt-6 line
+ * (`openai-compatible/pricing.ts`, $0.10/$0.50 per MTok), covered by the
+ * `^gpt-6` capability patterns in `model-capabilities.ts`, and capable of
+ * producing a compact session summary (output is capped at 1,024 tokens).
+ * Operator decision (#3244): prefer the current-generation luna tier over
+ * the older gpt-4.1-nano.
  *
  * @module agent/providers/openai-compatible/query/compact-model-resolver
  */
 
 /**
- * Cheapest-available OpenAI API model for compaction.
+ * Default OpenAI API model for compaction when `AFK_COMPACT_MODEL` is unset.
  *
- * Chosen from the repo's pricing table (openai-compatible/pricing.ts):
- * `gpt-4.1-nano` at $0.10/$0.40 per MTok is the lowest-cost entry —
- * cheaper than `gpt-4o-mini` ($0.15/$0.60) and `gpt-4.1-mini` ($0.40/$1.60).
- * It is also present in `model-capabilities.ts` (confirmed in the repo catalog)
- * and adequate for generating a 1,024-token session summary.
+ * `gpt-6-luna` ($0.10/$0.50 per MTok in openai-compatible/pricing.ts) is the
+ * luna tier of the gpt-6 line: roughly an order of magnitude cheaper than
+ * flagship session models and adequate for a 1,024-token session summary.
  */
-export const OPENAI_CHEAP_COMPACT_DEFAULT = 'gpt-4.1-nano';
+export const OPENAI_CHEAP_COMPACT_DEFAULT = 'gpt-6-luna';
 
 /**
  * Resolve the model to use for openai-compatible compaction.

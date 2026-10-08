@@ -136,9 +136,9 @@ describe('resolveOpenAICompactModel', () => {
       ).toBe(OPENAI_CHEAP_COMPACT_DEFAULT);
     });
 
-    it('OPENAI_CHEAP_COMPACT_DEFAULT is gpt-4.1-nano', () => {
+    it('OPENAI_CHEAP_COMPACT_DEFAULT is gpt-6-luna', () => {
       // Pin the constant so a rename is a test failure (not a silent drift).
-      expect(OPENAI_CHEAP_COMPACT_DEFAULT).toBe('gpt-4.1-nano');
+      expect(OPENAI_CHEAP_COMPACT_DEFAULT).toBe('gpt-6-luna');
     });
   });
 });
