@@ -57,6 +57,19 @@ describe('validateTextAnswer', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.message).toMatch(/at most 10/i);
   });
+
+  it('counts emoji as one character (Unicode code-point length)', () => {
+    // '😀' is one code point but two UTF-16 code units (.length === 2)
+    const result = validateTextAnswer('😀', { minLength: 1, maxLength: 1 });
+    expect(result).toEqual({ ok: true, value: '😀' });
+  });
+
+  it('rejects input whose code-point length exceeds maxLength even with multi-code-unit chars', () => {
+    // '😀😀' = 2 code points, raw .length === 4 — maxLength: 1 must reject it
+    const result = validateTextAnswer('😀😀', { maxLength: 1 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toMatch(/at most 1/i);
+  });
 });
 
 // ---------------------------------------------------------------------------

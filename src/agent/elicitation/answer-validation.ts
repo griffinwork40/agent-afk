@@ -45,10 +45,11 @@ export function validateTextAnswer(
   raw: string,
   request: Pick<ElicitationRequest, 'minLength' | 'maxLength'>,
 ): AnswerValidationResult {
-  if (request.minLength !== undefined && raw.length < request.minLength) {
+  const codePoints = Array.from(raw).length;
+  if (request.minLength !== undefined && codePoints < request.minLength) {
     return { ok: false, message: `Response must be at least ${request.minLength} characters.` };
   }
-  if (request.maxLength !== undefined && raw.length > request.maxLength) {
+  if (request.maxLength !== undefined && codePoints > request.maxLength) {
     return { ok: false, message: `Response must be at most ${request.maxLength} characters.` };
   }
   return { ok: true, value: raw };
