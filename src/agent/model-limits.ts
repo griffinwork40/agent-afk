@@ -33,7 +33,7 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   'opus-5.5_1m': 128_000,
   sonnet: 128_000,
   sonnet_1m: 128_000,
-  haiku: 64_000,
+  haiku: 128_000,
   fable: 128_000,
   // Claude Opus 5 (GA 2026-07-24): 128k max output.
   'claude-opus-5': 128_000,
@@ -42,6 +42,9 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // Claude Sonnet 5.5 (released 2026-09-28): 128k max output, per the models
   // overview table (verified 2026-09-28).
   'claude-sonnet-5-5': 128_000,
+  // Claude Haiku 5.5 (released 2026-10-07): 128k max output (was 64k on Haiku
+  // 4.5), per the Haiku 5.5 overview (verified 2026-10-08).
+  'claude-haiku-5-5': 128_000,
   // 'claude-opus-4-8' is no longer a first-class alias (MODEL_MAP.opus now
   // resolves to claude-opus-5) but remains Active per Anthropic's deprecation
   // table and reachable by its raw wire id (`--model claude-opus-4-8`, a config
@@ -164,10 +167,14 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   // autoCompactLimitFor below) — that is a compaction policy, NOT a smaller window.
   sonnet: 1_000_000,
   sonnet_1m: 1_000_000,
-  haiku: 200_000,
-  // Native 1M-context models (no `_1m` opt-in needed — unlike haiku, whose base
-  // window is 200k). Keyed by both the short alias (where one exists) and the
-  // wire id so lookups hit either side of the alias boundary.
+  // `haiku` now resolves to Claude Haiku 5.5, which has a native 1M window
+  // (Haiku 4.5 was 200k; its raw wire id keeps the 200k fallback).
+  haiku: 1_000_000,
+  // Claude Haiku 5.5 (released 2026-10-07): native 1M window, no beta header.
+  'claude-haiku-5-5': 1_000_000,
+  // Native 1M-context models (no `_1m` opt-in needed). Keyed by both the short
+  // alias (where one exists) and the wire id so lookups hit either side of the
+  // alias boundary.
   fable: 1_000_000,
   'claude-fable-5': 1_000_000,
   'claude-fable-5-1': 1_000_000,
@@ -388,6 +395,11 @@ const MODEL_AUTOCOMPACT_BUDGET: Record<string, number> = {
   'claude-opus-5-5': 200_000,
   // Sonnet 5.5 (released 2026-09-28): same cost/latency policy as Sonnet 5.
   'claude-sonnet-5-5': 200_000,
+  // Haiku 5.5 (released 2026-10-07): native 1M window, but keep the 200k
+  // working budget Haiku 4.5 effectively had (its whole window), so the alias
+  // bump does not silently 5x long-session prompt size. Note Haiku 5.5 bills
+  // prompts over 100k at 5x the base rate (see pricing.ts).
+  'claude-haiku-5-5': 200_000,
   // Sonnet 4.6 also ships a native 1M window (see MODEL_CONTEXT_LIMITS), so it
   // takes the same 200k working budget as its Sonnet 5 sibling: a raw
   // `claude-sonnet-4-6` session reports the truthful 1M window on the status line

@@ -23,7 +23,7 @@ optional `contextWindow` override (see below):
 {
   "models": {
     // Stage 1: just rebind the id (provider inferred, global creds).
-    "small":  "claude-haiku-4-5-20251001",
+    "small":  "claude-haiku-5-5",
     // Stage 2: a local OpenAI-compatible shim with its own endpoint.
     "medium": {
       "id": "mlx-community/Qwen3-32B-4bit",
@@ -121,7 +121,7 @@ An unconfigured install behaves exactly as before this feature:
 | Tier     | Default id                      | Identity alias (fixed)    |
 | -------- | ------------------------------- | ------------------------- |
 | `local`  | `` (empty — user-configured)    | —                         |
-| `small`  | `claude-haiku-4-5-20251001`     | `haiku`                   |
+| `small`  | `claude-haiku-5-5`              | `haiku`                   |
 | `medium` | `claude-sonnet-4-6`          | `sonnet`, `sonnet_1m`     |
 | `large`  | `claude-opus-5-5`               | `opus`, `opus_1m`         |
 

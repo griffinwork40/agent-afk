@@ -55,10 +55,16 @@ describe('autoCompactLimitFor', () => {
     expect(autoCompactLimitFor('opus_1m')).toBe(1_000_000);
   });
 
-  it('leaves haiku / fable at their full window (no budget entry)', () => {
-    // haiku's 200k is its ACTUAL context window, not a reduced budget.
-    expect(contextLimitFor('haiku')).toBe(200_000);
+  it('caps the haiku alias (Haiku 5.5) at the 200k working budget on its 1M window', () => {
+    expect(contextLimitFor('haiku')).toBe(1_000_000);
     expect(autoCompactLimitFor('haiku')).toBe(200_000);
+    expect(autoCompactLimitFor('claude-haiku-5-5')).toBe(200_000);
+  });
+
+  it('leaves raw Haiku 4.5 / fable at their full window (no budget entry)', () => {
+    // Haiku 4.5's 200k is its ACTUAL context window, not a reduced budget.
+    expect(contextLimitFor('claude-haiku-4-5-20251001')).toBe(200_000);
+    expect(autoCompactLimitFor('claude-haiku-4-5-20251001')).toBe(200_000);
     expect(autoCompactLimitFor('fable')).toBe(1_000_000);
     expect(autoCompactLimitFor('claude-fable-5')).toBe(1_000_000);
     expect(autoCompactLimitFor('claude-fable-5-1')).toBe(1_000_000);

@@ -357,8 +357,9 @@ describe('parseModelsConfig', () => {
 
 describe('model-limits resolves through slot bindings', () => {
   it('uses default tier limits when unconfigured', () => {
-    expect(contextLimitFor('small')).toBe(200_000);
-    expect(maxOutputTokensFor('small')).toBe(64_000);
+    // small → CLAUDE_HAIKU_ID (Claude Haiku 5.5): 1M window, 128k output.
+    expect(contextLimitFor('small')).toBe(1_000_000);
+    expect(maxOutputTokensFor('small')).toBe(128_000);
   });
 
   it('preserves the explicit *_1m context-window choice', () => {

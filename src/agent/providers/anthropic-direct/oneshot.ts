@@ -17,6 +17,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { detectAuthMode, buildClientOptions, buildRequestHeaders, buildSystemPrefix } from './auth.js';
 import { resolveModelId } from '../../session/model-resolution.js';
+import { isHaiku55 } from './resolve-params.js';
 import { randomUUID } from 'node:crypto';
 
 /**
@@ -34,7 +35,7 @@ export type OneShotStopReason = 'max_tokens' | 'end' | 'other';
 export interface OneShotInput {
   /** API key or OAuth token (`sk-ant-oat01-...`). Required. */
   token: string;
-  /** Model id — accepts full ids (`claude-haiku-4-5-...`) or short aliases (`haiku`). */
+  /** Model id — accepts full ids (`claude-haiku-5-5`) or short aliases (`haiku`). */
   model: string;
   /** System prompt. Sent as a single text block. */
   system: string;
@@ -119,12 +120,24 @@ export async function oneShotCompletionWithStop(
     ? ([...prefix, { type: 'text' as const, text: system }] as Anthropic.Messages.TextBlockParam[])
     : system;
 
+  // Invariant: one-shot calls carry slug/classifier-sized budgets (default 64)
+  // and read only text blocks. Claude Haiku 5.5 runs adaptive thinking when no
+  // `thinking` field is sent, and thinking tokens count toward `max_tokens`,
+  // so a small budget can stop at `max_tokens` after a thinking block with no
+  // text at all. Haiku 5.5 accepts `{type:'disabled'}` at its default effort
+  // (`medium`; only xhigh/max reject it, and this helper sends no effort), so
+  // turn thinking off to keep the Haiku 4.5 contract every caller was built
+  // on. Source: platform.claude.com/docs/en/build-with-claude/thinking
+  // ("Turning thinking off", verified 2026-10-08).
+  const thinkingParam = isHaiku55(resolvedModel) ? { thinking: { type: 'disabled' as const } } : {};
+
   const response = await client.messages.create(
     {
       model: resolvedModel,
       max_tokens: maxTokens,
       system: systemParam,
       messages: [{ role: 'user', content: user }],
+      ...thinkingParam,
     },
     Object.keys(requestOptions).length > 0 ? requestOptions : undefined,
   );
