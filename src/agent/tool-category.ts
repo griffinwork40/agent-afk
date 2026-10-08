@@ -158,6 +158,8 @@ const WEB_TOOLS = new Set([
   // same conceptual shape as web_request (billing + network side effect).
   'image_generate',
   'image_edit',
+  // model_complete: one billed chat completion to a model provider.
+  'model_complete',
 ]);
 const BROWSER_TOOLS = new Set([
   // agent-afk native browser-control tools (src/browser/, src/agent/tools/handlers/browser-*.ts).

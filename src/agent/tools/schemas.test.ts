@@ -12,7 +12,7 @@ import { cancelBackgroundJobTool, sendMessageToAgentTool, getBackgroundJobHealth
 
 describe('builtinToolSchemas', () => {
   it('contains exactly 43 tools', () => {
-    expect(builtinToolSchemas).toHaveLength(43);
+    expect(builtinToolSchemas).toHaveLength(44);
   });
 
   it('exports the expected tool names', () => {
@@ -56,6 +56,7 @@ describe('builtinToolSchemas', () => {
       'test_run',
       'get_facet',
       'json_query',
+      'model_complete',
       'clipboard_write',
       'clipboard_read',
       'list_sessions',
