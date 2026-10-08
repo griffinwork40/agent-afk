@@ -1,5 +1,6 @@
 import { emitKeypressEvents, type Interface } from 'readline';
 import { CPR_REPLY_RE as _CPR_REPLY_RE } from './cpr-reply-re.js';
+import { env } from '../../config/env.js';
 
 /**
  * Sets `escapeCodeTimeout` to 50ms (see {@link LONE_ESC_TIMEOUT_MS}) for
@@ -104,6 +105,14 @@ export function armCprKeypressGuard(stdin: NodeJS.ReadableStream, durationMs: nu
 
   if (_guardedStdin !== null && _guardedStdin !== stdin) {
     // Different stream — disarm the old guard before installing a new one.
+    // Log a diagnostic under AFK_DEBUG_COMPOSITOR so stream-swap surprises
+    // are visible without polluting normal output.
+    if (env.AFK_DEBUG_COMPOSITOR) {
+      process.stderr.write(
+        '[afk/cpr] armCprKeypressGuard: stream swap detected while guard is active —' +
+        ' disarming previous guard and arming on new stream\n',
+      );
+    }
     _disarm();
   }
 
@@ -114,12 +123,29 @@ export function armCprKeypressGuard(stdin: NodeJS.ReadableStream, durationMs: nu
   _guardDeadline = newDeadline;
   if (_guardTimer !== null) { clearTimeout(_guardTimer); _guardTimer = null; }
   _guardTimer = setTimeout(_disarm, durationMs);
+  // Unref so the guard timer does not keep the event loop alive past process
+  // exit.  The guard is a safety net — if it fires during shutdown, there is
+  // no meaningful work left to do.  Without unref the timer can hold the loop
+  // for up to CPR_KEYPRESS_GRACE_MS (~500ms) beyond the last real task.
+  _guardTimer.unref();
 }
 
 function _disarm(): void {
   if (_guardTimer !== null) { clearTimeout(_guardTimer); _guardTimer = null; }
   _guardDeadline = 0;
   _guardedStdin = null;
+}
+
+/**
+ * Immediately disarm the CPR keypress guard.
+ *
+ * Call this after successfully consuming a CPR reply so the guard does not
+ * persist for the full `timeoutMs + CPR_KEYPRESS_GRACE_MS` window when the
+ * reply arrived promptly.  Calling when the guard is already inactive is a
+ * no-op.
+ */
+export function disarmCprKeypressGuard(): void {
+  _disarm();
 }
 
 /**

@@ -66,7 +66,7 @@
  */
 
 import { env } from '../config/env.js';
-import { armCprKeypressGuard, CPR_KEYPRESS_GRACE_MS } from './input/emit-keypress.js';
+import { armCprKeypressGuard, disarmCprKeypressGuard, CPR_KEYPRESS_GRACE_MS } from './input/emit-keypress.js';
 import { CPR_REPLY_RE as _CPR_REPLY_RE_LEAF } from './input/cpr-reply-re.js';
 
 /**
@@ -157,6 +157,15 @@ function _updateRtt(sampleMs: number): void {
  */
 export function __resetCprRttForTests(): void {
   _measuredRttMs = null;
+}
+
+/**
+ * Test helper: read the current smoothed RTT sample.
+ * Returns null when no sample has been recorded yet.
+ * Must only be called from tests.
+ */
+export function __getCprRttForTests(): number | null {
+  return _measuredRttMs;
 }
 
 /**
@@ -410,6 +419,11 @@ function _requestCpr(self: CprHost): void {
     if (emitAt > 0) _updateRtt(Date.now() - emitAt);
 
     cleanup(onData);
+    // Disarm the keypress guard immediately: the reply was consumed by the
+    // data listener, so no late-keypress leak can occur.  Without this the
+    // guard would persist for the full timeoutMs + CPR_KEYPRESS_GRACE_MS
+    // window even though the CPR is already resolved.
+    disarmCprKeypressGuard();
 
     // ── Re-emit unconsumed bytes so keystrokes are not swallowed ──────────
     const consumedEnd = escIdx + candidate.length;
@@ -508,6 +522,14 @@ function _requestCpr(self: CprHost): void {
     cleanup(onData);
     _onCprTimeout(self, timeoutMs);
   }, timeoutMs);
+  // Unref the CPR timeout so it does not keep the event loop alive after
+  // process exit.  The timeout handler calls repaint() / fallback; if the
+  // process is already shutting down there is nothing to repaint into.
+  // Without unref the timer can hold the loop for up to CPR_TIMEOUT_CEILING_MS
+  // (~1500ms) past the last real task.  The timer handle is cancelled by
+  // cleanup(onData) when a reply arrives, so unref only matters on the
+  // timeout path and only when the process exits mid-flight.
+  timer.unref();
 
   // Emit the CPR request AFTER installing the listener so we cannot miss a
   // same-tick synchronous reply (pathological but safe).
