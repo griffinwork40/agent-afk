@@ -5,9 +5,9 @@
  * job is ever touched (see the 2026-09-26 postinstall incident, PR #2233).
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Command } from 'commander';
-import { parseServiceName, registerRestartCommand, restartServices } from './restart.js';
+import { parseServiceName, registerRestartCommand, restartServices, runRestart } from './restart.js';
 import type { ServiceManager, ServiceName, ServiceRestartOutcome } from '../../service/index.js';
 
 function fakeManager(
@@ -110,6 +110,33 @@ describe('parseServiceName', () => {
   });
   it('rejects unknown names', () => {
     expect(() => parseServiceName('web')).toThrow(/Unknown service 'web'/);
+  });
+});
+
+describe('runRestart — process.exit paths', () => {
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let logSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation((_code?: string | number | null | undefined) => {
+      throw new Error(`process.exit(${_code})`);
+    });
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    exitSpy.mockRestore();
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it('calls process.exit(1) when an unknown service name is supplied', () => {
+    // parseServiceName throws for unknown names; runRestart catches via
+    // handleCommandError which calls process.exit(1).
+    expect(() => runRestart('bogus-service')).toThrow(/process\.exit\(1\)/);
+    expect(exitSpy).toHaveBeenCalledWith(1);
   });
 });
 
