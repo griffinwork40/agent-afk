@@ -460,6 +460,7 @@ async function callImagesEditApi(
   form.append('model', parsed.model);
   form.append('size', parsed.size);
   form.append('quality', parsed.quality);
+  form.append('output_format', parsed.output_format);
   form.append('response_format', 'b64_json');
   form.append('n', '1');
 
