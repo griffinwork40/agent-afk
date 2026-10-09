@@ -33,6 +33,28 @@ function isIndex(v: unknown): v is number {
  * blocks make isMessage return false, which makes isValidRecord return false,
  * which returns null rather than throwing.
  */
+/**
+ * Validate one JournalResultPart element inside a tool_result's content array.
+ * Each element must be a plain object with a recognized type and its required
+ * fields. Null, primitive, and unknown-type elements are rejected so they never
+ * reach hydratePart, which unconditionally reads `.type`.
+ */
+function isResultPart(p: unknown): boolean {
+  if (!isObject(p)) return false;
+  switch (p['type']) {
+    case 'text':
+      return typeof p['text'] === 'string';
+    case 'text_ref':
+      return isObject(p['ref']) && typeof p['preview'] === 'string';
+    case 'image':
+      return isObject(p['source']);
+    case 'document':
+      return isObject(p['source']);
+    default:
+      return false;
+  }
+}
+
 function isBlock(b: unknown): boolean {
   if (!isObject(b)) return false;
   switch (b['type']) {
@@ -49,7 +71,13 @@ function isBlock(b: unknown): boolean {
     case 'tool_result':
       // content is always JournalResultPart[] in this codebase (the adapter
       // converts Anthropic's string shorthand to [{ type:'text', text }]).
-      return typeof b['toolUseId'] === 'string' && Array.isArray(b['content']);
+      // Each element is validated so malformed parts (e.g. null, missing type)
+      // are caught here rather than throwing in hydratePart later.
+      return (
+        typeof b['toolUseId'] === 'string' &&
+        Array.isArray(b['content']) &&
+        (b['content'] as unknown[]).every(isResultPart)
+      );
     case 'image':
       return isObject(b['source']);
     case 'document':

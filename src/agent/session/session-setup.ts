@@ -98,9 +98,9 @@ export function buildInitialState(
  *   - When the journal is absent or empty, the config is returned unchanged so
  *     the caller falls through to the existing `resumeHistory` path.
  *   - When the journal is corrupt in a way the reader does not tolerate (e.g. a
- *     well-formed append record whose `tool_result.content` holds `null`, which
- *     passes `isBlock` but throws in `hydratePart`), the load error is logged and
- *     the config is returned unchanged. This runs inside the `AgentSession`
+ *     well-formed append record whose `tool_result.content` is `[null]`, which
+ *     throws in `hydratePart`), the load error is reported to stderr and the
+ *     config is returned unchanged. This runs inside the `AgentSession`
  *     constructor, so an escaped throw would fail construction before any
  *     provider exists; a corrupt journal must degrade to "no prior context".
  *
@@ -127,7 +127,13 @@ export function seedResumeMessages(config: AgentConfig): AgentConfig {
   try {
     messages = loadJournalMessages(targetId);
   } catch (err) {
-    debugLog(`[session-setup] resume journal load failed for ${targetId}; continuing without prior context: ${errorMessage(err)}`);
+    try {
+      process.stderr.write(
+        `[afk] journal: resume load failed for session ${targetId}; continuing without prior context: ${errorMessage(err)}\n`,
+      );
+    } catch {
+      // stderr closed — nothing left to tell.
+    }
     return config;
   }
   if (!messages) return config;
