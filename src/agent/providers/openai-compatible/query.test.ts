@@ -1421,7 +1421,7 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
 
     const rewind = await q.rewindFiles('fake-id');
     expect(rewind.canRewind).toBe(false);
-    expect(rewind.error).toContain('does not support');
+    expect(rewind.error).toContain('File checkpointing is not enabled');
 
     // NOTE: the in-loop `this.lastUsage = accumulatedUsage` write (query.ts:316)
     // is behaviorally tested in the 'in-loop lastUsage refresh (PR 527)' describe

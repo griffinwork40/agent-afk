@@ -162,9 +162,9 @@ function beginTurnCheckpoint(ctx: TurnDriverContext): FileCheckpointRegistry | u
   const turnId = randomUUID();
   const registry = createFileCheckpointRegistry(ctx.initSessionId, turnId);
   ctx.state.currentTurnId = turnId;
-  if ('setFileCheckpoint' in ctx.state.toolDispatcher) {
-    (ctx.state.toolDispatcher as { setFileCheckpoint: (r: FileCheckpointRegistry | undefined) => void })
-      .setFileCheckpoint(registry);
+  if ('fileCheckpointWiring' in ctx.state.toolDispatcher) {
+    (ctx.state.toolDispatcher as { fileCheckpointWiring: { set: (r: FileCheckpointRegistry | undefined) => void } })
+      .fileCheckpointWiring.set(registry);
   }
   return registry;
 }
@@ -173,9 +173,9 @@ function beginTurnCheckpoint(ctx: TurnDriverContext): FileCheckpointRegistry | u
 function endTurnCheckpoint(ctx: TurnDriverContext): void {
   if (!ctx.state.enableFileCheckpointing) return;
   ctx.state.currentTurnId = undefined;
-  if ('setFileCheckpoint' in ctx.state.toolDispatcher) {
-    (ctx.state.toolDispatcher as { setFileCheckpoint: (r: undefined) => void })
-      .setFileCheckpoint(undefined);
+  if ('fileCheckpointWiring' in ctx.state.toolDispatcher) {
+    (ctx.state.toolDispatcher as { fileCheckpointWiring: { set: (r: undefined) => void } })
+      .fileCheckpointWiring.set(undefined);
   }
 }
 

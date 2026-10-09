@@ -77,7 +77,7 @@ import {
   resolveAutoCompactThreshold,
 } from '../shared/auto-compact.js';
 import { AbortCoordinator, CLOSED_SENTINEL } from '../shared/abort-coordinator.js';
-import { createFileCheckpointRegistry } from '../../file-checkpoint/file-checkpoint.js';
+import { beginTurnFileCheckpoint, endTurnFileCheckpoint } from './query.file-checkpoint.js';
 import { rewindFiles as rewindFilesImpl } from '../../file-checkpoint/rewind-files.js';
 import { HookBlockedError } from '../../../utils/errors.js';
 
@@ -384,14 +384,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
 
     // File-checkpoint: assign a stable turn id and wire a fresh registry onto
     // the dispatcher so write-class tool handlers snapshot files before mutation.
-    if (this.enableFileCheckpointing && this.toolDispatcher) {
-      const turnId = randomUUID();
-      const registry = createFileCheckpointRegistry(this.initSessionId, turnId);
-      if ('setFileCheckpoint' in this.toolDispatcher) {
-        (this.toolDispatcher as { setFileCheckpoint: (r: typeof registry | undefined) => void })
-          .setFileCheckpoint(registry);
-      }
-    }
+    beginTurnFileCheckpoint(this.enableFileCheckpointing, this.toolDispatcher, this.initSessionId);
 
     const trace = new TurnTrace(controller.signal, this.traceWriter, 'openai-compatible');
     this.fastTier.beginTurn(this.currentModel);
@@ -402,12 +395,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     } finally {
       trace.finish(Date.now() - turnStartTime);
       // Clear the per-turn checkpoint registry at turn end.
-      if (this.enableFileCheckpointing && this.toolDispatcher) {
-        if ('setFileCheckpoint' in this.toolDispatcher) {
-          (this.toolDispatcher as { setFileCheckpoint: (r: undefined) => void })
-            .setFileCheckpoint(undefined);
-        }
-      }
+      endTurnFileCheckpoint(this.enableFileCheckpointing, this.toolDispatcher);
     }
   }
 
