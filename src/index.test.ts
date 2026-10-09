@@ -39,4 +39,12 @@ describe('library entry point', () => {
     expect(typeof mod.getAgentFrameworkDir).toBe('function');
   });
 
+  it('exports journal helpers for SDK consumers (sdk-resume-rehydrates-journal)', async () => {
+    const mod = await import('./index.js');
+    expect(typeof mod.loadJournalMessages).toBe('function');
+    expect(typeof mod.loadJournalFold).toBe('function');
+    expect(typeof mod.journalExists).toBe('function');
+    expect(typeof mod.foldJournal).toBe('function');
+    expect(typeof mod.hydrateMessages).toBe('function');
+  });
 });
