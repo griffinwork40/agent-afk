@@ -172,6 +172,8 @@ const CRASH_EXIT_DELAY_MS = 200;
 /** Shape of a single in-flight task snapshot for crash-notice inclusion (#3248). */
 export interface InFlightTaskSnapshot {
   taskId: string;
+  /** Redacted form of taskId, safe to include verbatim in Telegram crash notices. */
+  displayId: string;
   commandHead: string;
   elapsedMs: number;
 }
@@ -213,7 +215,7 @@ export function registerDaemonCrashHandlers(
           lines.push(`in-flight (${tasks.length}):`);
           for (const t of tasks) {
             const elapsedSec = (t.elapsedMs / 1000).toFixed(1);
-            lines.push(`  • ${t.taskId}: ${t.commandHead} (${elapsedSec}s)`);
+            lines.push(`  • ${t.displayId}: ${t.commandHead} (${elapsedSec}s)`);
           }
         }
       } catch {

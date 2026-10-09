@@ -269,15 +269,16 @@ export class CronScheduler {
    * to Telegram verbatim (pushIfConfigured does not redact), and truncating
    * first could slice a secret below the redactor's minimum-length match.
    */
-  getInFlightTasks(): Array<{ taskId: string; commandHead: string; elapsedMs: number }> {
+  getInFlightTasks(): Array<{ taskId: string; displayId: string; commandHead: string; elapsedMs: number }> {
     const now = this.now();
-    const result: Array<{ taskId: string; commandHead: string; elapsedMs: number }> = [];
+    const result: Array<{ taskId: string; displayId: string; commandHead: string; elapsedMs: number }> = [];
     for (const [taskId, startedAt] of this.inFlightTasks) {
       const entry = this.registry.get(taskId);
       const commandHead = entry !== undefined
         ? redactInlineSecrets(entry.task.command).slice(0, 60)
         : redactInlineSecrets(taskId).slice(0, 60);
-      result.push({ taskId, commandHead, elapsedMs: now - startedAt });
+      const displayId = redactInlineSecrets(taskId);
+      result.push({ taskId, displayId, commandHead, elapsedMs: now - startedAt });
     }
     return result;
   }

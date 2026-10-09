@@ -142,6 +142,9 @@ describe('CronScheduler.getInFlightTasks', () => {
     const [entry] = tasks;
     // The taskId field is the raw id (not redacted — it is the identifier, not a crash notice body).
     expect(entry?.taskId).toBe(secretTaskId);
+    // displayId MUST be redacted — it is what crash notices send to Telegram.
+    expect(entry?.displayId).not.toContain(secretTaskId);
+    expect(entry?.displayId).toContain('REDACTED');
     // The commandHead fallback MUST be redacted and within the 60-char cap.
     expect(entry?.commandHead.length).toBeLessThanOrEqual(60);
     expect(entry?.commandHead).not.toContain(secretTaskId);

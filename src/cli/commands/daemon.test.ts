@@ -551,7 +551,7 @@ describe('registerDaemonCrashHandlers', () => {
 
   it('push includes in-flight task ids when tasks are running', () => {
     const getInFlightTasks = vi.fn(() => [
-      { taskId: 'nightly-forge', commandHead: '/forge-friction --auto', elapsedMs: 12_500 },
+      { taskId: 'nightly-forge', displayId: 'nightly-forge', commandHead: '/forge-friction --auto', elapsedMs: 12_500 },
     ]);
     registerDaemonCrashHandlers(getInFlightTasks);
     process.emit('uncaughtException', new Error('OOM'), 'uncaughtException');
@@ -566,8 +566,8 @@ describe('registerDaemonCrashHandlers', () => {
 
   it('push includes multiple in-flight tasks', () => {
     const getInFlightTasks = vi.fn(() => [
-      { taskId: 'task-a', commandHead: '/cmd-a', elapsedMs: 5_000 },
-      { taskId: 'task-b', commandHead: '/cmd-b', elapsedMs: 90_000 },
+      { taskId: 'task-a', displayId: 'task-a', commandHead: '/cmd-a', elapsedMs: 5_000 },
+      { taskId: 'task-b', displayId: 'task-b', commandHead: '/cmd-b', elapsedMs: 90_000 },
     ]);
     registerDaemonCrashHandlers(getInFlightTasks);
     process.emit('uncaughtException', new Error('SIGSEGV'), 'uncaughtException');
@@ -632,7 +632,7 @@ describe('registerDaemonCrashHandlers', () => {
   it('daemon command binds the live scheduler snapshot once startup completes', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const getInFlightTasks = vi.fn(() => [
-      { taskId: 'live-task', commandHead: '/live-cmd', elapsedMs: 3_000 },
+      { taskId: 'live-task', displayId: 'live-task', commandHead: '/live-cmd', elapsedMs: 3_000 },
     ]);
     mockStartDaemon.mockImplementationOnce(async () => ({
       port: 7777,
@@ -661,7 +661,7 @@ describe('registerDaemonCrashHandlers', () => {
   it('registerEarlyDaemonCrashHandlers: second call after reset yields a working binder', () => {
     // First registration (simulates normal startup).
     const bind1 = registerEarlyDaemonCrashHandlers();
-    bind1(() => [{ taskId: 'first', commandHead: '/first-cmd', elapsedMs: 1_000 }]);
+    bind1(() => [{ taskId: 'first', displayId: 'first', commandHead: '/first-cmd', elapsedMs: 1_000 }]);
     process.emit('uncaughtException', new Error('first-crash'), 'uncaughtException');
     expect((mockPushIfConfigured.mock.calls[0] as [string])[0]).toContain('first');
     vi.clearAllMocks();
@@ -674,7 +674,7 @@ describe('registerDaemonCrashHandlers', () => {
     const bind2 = registerEarlyDaemonCrashHandlers();
     // The second binder must update the live source; without the module-scoped
     // earlyInFlightSource fix it would write to a stale closure var.
-    bind2(() => [{ taskId: 'second', commandHead: '/second-cmd', elapsedMs: 2_000 }]);
+    bind2(() => [{ taskId: 'second', displayId: 'second', commandHead: '/second-cmd', elapsedMs: 2_000 }]);
     process.emit('uncaughtException', new Error('second-crash'), 'uncaughtException');
 
     expect(mockPushIfConfigured).toHaveBeenCalledOnce();
@@ -682,5 +682,29 @@ describe('registerDaemonCrashHandlers', () => {
     expect(msg).toContain('second');
     expect(msg).toContain('/second-cmd');
     expect(msg).not.toContain('first');
+  });
+
+  // #3375: crash notice must use displayId (redacted), not raw taskId, so a
+  // secret-bearing taskId (e.g. sk-proj-...) is never leaked via Telegram.
+  it('crash notice does NOT contain raw secret when taskId is secret-bearing', () => {
+    const secretTaskId = 'sk-proj-SECRET';
+    const getInFlightTasks = vi.fn(() => [
+      {
+        taskId: secretTaskId,
+        displayId: '[REDACTED]',
+        commandHead: '/safe-cmd',
+        elapsedMs: 5_000,
+      },
+    ]);
+    registerDaemonCrashHandlers(getInFlightTasks);
+    process.emit('uncaughtException', new Error('secret-leak-test'), 'uncaughtException');
+
+    expect(mockPushIfConfigured).toHaveBeenCalledOnce();
+    const [msg] = mockPushIfConfigured.mock.calls[0] as [string];
+    // The raw secret must not appear in the Telegram message.
+    expect(msg).not.toContain(secretTaskId);
+    // The safe display form must appear instead.
+    expect(msg).toContain('[REDACTED]');
+    expect(msg).toContain('/safe-cmd');
   });
 });
