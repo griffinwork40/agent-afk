@@ -1267,6 +1267,15 @@
       "category": "model"
     },
     {
+      "name": "AFK_VITALS",
+      "description": "Per-round \"[vitals]\" harness note appended to each tool-result turn so the model stays aware of fast-changing state: local wall-clock time and elapsed turn time every round, time left before the soft deadline when one is set, context-window fill once it reaches 50%, and (root Anthropic sessions only) Claude subscription usage once it reaches 80%. Set to 0 to disable. Default: on.",
+      "type": "boolean",
+      "required": false,
+      "default": "1",
+      "example": "0",
+      "category": "misc"
+    },
+    {
       "name": "AFK_WAVE_MANIFEST_DISABLED",
       "description": "Disable the wave manifest system entirely. When set to 1, no manifest is written for parallel subagent waves, and no resumption offer is made at session start.",
       "type": "boolean",

@@ -10,6 +10,8 @@ import {
   buildRuntimeSnapshot,
   parseView,
   formatEnvironmentFragment,
+  formatClock,
+  snapshotClock,
 } from './runtime-snapshot.js';
 import type {
   RuntimeStateSource,
@@ -91,6 +93,13 @@ describe('parseView', () => {
 // --- buildRuntimeSnapshot ----------------------------------------------------
 
 describe('buildRuntimeSnapshot', () => {
+  it('view=all carries the wall clock (pull counterpart of the [vitals] note)', () => {
+    const snap = buildRuntimeSnapshot(mkSource(), 'all');
+    expect(snap.clock?.iso).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(typeof snap.clock?.local).toBe('string');
+    expect(buildRuntimeSnapshot(mkSource(), 'self')).not.toHaveProperty('clock');
+  });
+
   it('view=self returns only self', () => {
     const source = mkSource();
     const snap = buildRuntimeSnapshot(source, 'self');
@@ -398,5 +407,28 @@ describe('formatEnvironmentFragment', () => {
     });
     expect(out).toContain('- Working directory: /tmp/x malicious');
     expect(out).not.toContain('\r');
+  });
+});
+
+// --- clock -------------------------------------------------------------------
+
+describe('formatClock / snapshotClock', () => {
+  const NOW = Date.UTC(2026, 9, 9, 18, 32, 0);
+
+  it('renders weekday, date, 24h time, and zone abbreviation', () => {
+    expect(formatClock(NOW, 'America/New_York')).toBe('Fri 2026-10-09 14:32 EDT');
+    expect(formatClock(NOW, 'UTC')).toBe('Fri 2026-10-09 18:32 UTC');
+  });
+
+  it('renders midnight as 00, not 24', () => {
+    expect(formatClock(Date.UTC(2026, 9, 10, 4, 5, 0), 'America/New_York')).toBe('Sat 2026-10-10 00:05 EDT');
+  });
+
+  it('falls back to an ISO UTC minute on an invalid zone', () => {
+    expect(formatClock(NOW, 'Not/AZone')).toBe('2026-10-09 18:32 UTC');
+  });
+
+  it('snapshotClock pairs the ISO instant with the local form', () => {
+    expect(snapshotClock(NOW).iso).toBe('2026-10-09T18:32:00.000Z');
   });
 });

@@ -156,6 +156,9 @@ function makeDispatcher(opts?: {
 }
 
 beforeEach(() => {
+  // Exact-shape transcript assertions: keep the per-round [vitals] note out
+  // (covered by vitals-delivery.test.ts).
+  vi.stubEnv('AFK_VITALS', '0');
   scriptedTurns = [];
   turnIndex = 0;
   createCalls = [];

@@ -44,6 +44,7 @@ export async function* emitAndCommitToolResults(
   results: ToolResult[],
   startTimes: Map<string, number>,
   input: RunTurnInput,
+  vitalsNote?: string,
 ): AsyncGenerator<ProviderEvent, ToolResultsOutcome, void> {
   // Yield results and build tool_result blocks in original order.
   const toolResultBlocks: ToolResultBlockParam[] = [];
@@ -164,9 +165,13 @@ export async function* emitAndCommitToolResults(
       ? [{ type: 'text' as const, text: result.harnessUserMessage.text }]
       : [],
   );
+  // The per-round vitals note (shared/vitals.ts) rides LAST, after any harness
+  // notes, on the same structural path: a sibling text block in this turn, so it
+  // is neither tool output nor a fresh user turn for compaction.
+  const vitalsBlocks = vitalsNote ? [{ type: 'text' as const, text: vitalsNote }] : [];
   const toolResultTurn: MessageParam = {
     role: 'user',
-    content: [...toolResultBlocks, ...harnessNotes] as ContentBlockParam[],
+    content: [...toolResultBlocks, ...harnessNotes, ...vitalsBlocks] as ContentBlockParam[],
   };
   input.messages.push(toolResultTurn);
 

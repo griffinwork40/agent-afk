@@ -3,7 +3,7 @@
  * FULL tool round (assistant tool_use + full tool_result), and a
  * `resumeMessages` seed replays tool calls/results on the wire.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type OpenAI from 'openai';
 import type { ProviderEvent, ProviderUserTurn } from '../../provider.js';
 import type { AgentConfig } from '../../types/config-types.js';
@@ -36,6 +36,9 @@ let scripted: OpenAIChunk[][] = [];
 let createCalls: Array<{ messages: unknown[] }> = [];
 
 beforeEach(() => {
+  // Exact-shape transcript assertions: keep the per-round [vitals] note out
+  // (covered by vitals-delivery.test.ts).
+  vi.stubEnv('AFK_VITALS', '0');
   scripted = [];
   createCalls = [];
   const factory: OpenAIClientFactory = () =>

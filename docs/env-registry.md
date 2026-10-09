@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**222 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**223 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -282,6 +282,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_TURN_SEPARATOR` | boolean |  |  | `0` | Render a dim horizontal rule between conversation turns in the REPL. 0 = off, unset/1 = on (default). TTY-only: piped/one-shot output (afk chat) never emits the rule. |
 | `AFK_UNPROVEN_DIAGNOSIS_GATE` | boolean |  | `0` | `1` | Opt-in Stop hook that prevents a turn from closing with an unproven "external / root cause unknown" diagnosis. When set to 1, the hook scans the final assistant text for cause-unknown language ("root cause" near "not found\|unknown", "something else in", "likely upstream") AND checks for the absence of instrumentation tool calls (hash/manifest checks, bypass reruns, counter/log insertions). When both conditions are met it injects a correction asking the agent to run the elimination ladder (byte-verify installs, bypass wrapper, clean-env repeat, instrument the path) before closing. Fires at most once per turn. Does not fire when instrumentation evidence is already present, or on subagent turns. Default: 0 (off). |
 | `AFK_USER_CARD_MAX_ROWS` | number |  |  | `24` | Maximum number of visual rows emitted by renderUserCard before collapsing the remainder into a dim "…(N lines collapsed)" summary row. Defaults to 24. Non-integer or non-positive values are silently ignored and the default applies. |
+| `AFK_VITALS` | boolean |  | `1` | `0` | Per-round "[vitals]" harness note appended to each tool-result turn so the model stays aware of fast-changing state: local wall-clock time and elapsed turn time every round, time left before the soft deadline when one is set, context-window fill once it reaches 50%, and (root Anthropic sessions only) Claude subscription usage once it reaches 80%. Set to 0 to disable. Default: on. |
 | `AFK_WAVE_MANIFEST_DISABLED` | boolean |  | `0` | `1` | Disable the wave manifest system entirely. When set to 1, no manifest is written for parallel subagent waves, and no resumption offer is made at session start. |
 | `AFK_WAVE_MANIFEST_TTL_HOURS` | number |  | `48` | `24` | Time-to-live for wave manifests in hours. Manifests older than this are deleted on reconciliation and by the witness sweep. Default 48 (two days). |
 | `AFK_WAVE_RESUME_UNATTENDED` | boolean |  | `0` | `1` | When set to 1, surface wave resumption offers even on non-interactive surfaces (daemon, one-shot chat). By default, offers are only made on interactive surfaces (REPL, Telegram). |
