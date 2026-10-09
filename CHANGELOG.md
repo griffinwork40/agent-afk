@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.307.8] - 2026-10-09
+
+### Changed
+- dedupe TOOL_SYSTEM_PROMPT_BASE for unnamed workers (#3364) (e744caf1)
+
 ## [5.307.7] - 2026-10-09
 
 ### Fixed
