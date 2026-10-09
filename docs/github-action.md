@@ -90,7 +90,7 @@ so that all build dependencies are present.
 steps:
   - uses: actions/checkout@v4
 
-  - uses: pnpm/action-setup@v4
+  - uses: pnpm/action-setup@v6
 
   - uses: actions/setup-node@v4
     with:
