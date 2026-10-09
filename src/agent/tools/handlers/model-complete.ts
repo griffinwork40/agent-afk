@@ -79,9 +79,10 @@ function fail(message: string): ToolResult {
 /** Validate raw tool input. Returns the parsed input or an error result. */
 export function parseModelCompleteInput(raw: unknown): ModelCompleteInput | ToolResult {
   const obj = (raw ?? {}) as Record<string, unknown>;
-  const prompt = obj['prompt'];
-  if (typeof prompt !== 'string' || prompt.trim() === '') {
-    return fail('`prompt` must be a non-empty string.');
+  const prompt = typeof obj['prompt'] === 'string' ? obj['prompt'] : '';
+  const hasInputPath = typeof obj['input_path'] === 'string' && obj['input_path'].trim() !== '';
+  if (prompt.trim() === '' && !hasInputPath) {
+    return fail('`prompt` must be a non-empty string when `input_path` is not set.');
   }
   const model = typeof obj['model'] === 'string' && obj['model'].trim() !== ''
     ? obj['model'].trim()
@@ -147,7 +148,10 @@ async function modelCompleteImpl(
   if (input.inputPath !== undefined) {
     const file = await readInputFile(input.inputPath, context, cwd);
     if (isToolResult(file)) return file;
-    user = `${input.prompt}\n\n<input path="${input.inputPath}">\n${file.text}\n</input>`;
+    const inputBlock = `<input path="${input.inputPath}">\n${file.text}\n</input>`;
+    user = input.prompt.trim() !== ''
+      ? `${input.prompt}\n\n${inputBlock}`
+      : inputBlock;
   }
 
   const target = resolveOneShotTarget(input.model);

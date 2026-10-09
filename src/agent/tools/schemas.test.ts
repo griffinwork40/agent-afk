@@ -84,6 +84,8 @@ describe('builtinToolSchemas', () => {
     //   `browser_close`     — no inputs at all.
     //   `test_run`          — all 4 fields (file, name, timeout_ms, coverage)
     //                         are optional; required is [].
+    //   `model_complete`    — `prompt` is optional when `input_path` is set;
+    //                         handler enforces the conditional requirement.
     // All other built-ins have non-empty required arrays.
     const noRequired = new Set([
       'web_scrape',
@@ -96,6 +98,7 @@ describe('builtinToolSchemas', () => {
       'get_facet',
       'clipboard_read',
       'list_sessions',
+      'model_complete',
     ]);
     for (const tool of builtinToolSchemas) {
       expect(tool.input_schema.required).toBeDefined();
