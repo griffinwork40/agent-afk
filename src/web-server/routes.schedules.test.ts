@@ -180,6 +180,32 @@ describe('routes.schedules', () => {
     });
   });
 
+  describe('retry fields (#3243)', () => {
+    it('create threads valid maxAttempts / retryDelayMs into addSchedule', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, { name: 'R', command: '/r', cron: '0 * * * *', maxAttempts: 2, retryDelayMs: 1000 });
+      expect(json().status).toBe(201);
+      expect(vi.mocked(addSchedule)).toHaveBeenCalledWith(expect.objectContaining({ maxAttempts: 2, retryDelayMs: 1000 }));
+    });
+
+    it('create rejects out-of-bounds maxAttempts with 400', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, { name: 'R', command: '/r', cron: '0 * * * *', maxAttempts: 9 });
+      expect(json().status).toBe(400);
+      expect(vi.mocked(addSchedule)).not.toHaveBeenCalled();
+    });
+
+    it('update patches valid fields and rejects bad retryDelayMs', async () => {
+      const ok = makeRes();
+      await handleUpdateSchedule(ok.res, 'nightly-forge', { maxAttempts: 3 });
+      expect(ok.json().status).toBe(200);
+      expect(vi.mocked(updateSchedule)).toHaveBeenCalledWith('nightly-forge', expect.objectContaining({ maxAttempts: 3 }));
+      const bad = makeRes();
+      await handleUpdateSchedule(bad.res, 'nightly-forge', { retryDelayMs: 5 });
+      expect(bad.json().status).toBe(400);
+    });
+  });
+
   describe('handleUpdateSchedule', () => {
     it('updates an existing schedule', async () => {
       const { res, json } = makeRes();

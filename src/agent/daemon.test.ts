@@ -713,6 +713,24 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
     expect(res2.status).toBe(409);
   });
 
+  it('POST /tasks threads maxAttempts / retryDelayMs and rejects out-of-bounds values (#3243)', async () => {
+    const h = await spinDaemon();
+    const ok = await fetch(`http://localhost:${h.port}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId: 'retry-task', command: '/cmd', cron: '* * * * *', maxAttempts: 3, retryDelayMs: 2000 }),
+    });
+    expect(ok.status).toBe(201);
+    const tasks = (await (await fetch(`http://localhost:${h.port}/tasks`)).json()) as Array<Record<string, unknown>>;
+    expect(tasks.find((t) => t['taskId'] === 'retry-task')).toMatchObject({ maxAttempts: 3, retryDelayMs: 2000 });
+    const bad = await fetch(`http://localhost:${h.port}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId: 'bad-retry', command: '/cmd', cron: '* * * * *', maxAttempts: 50 }),
+    });
+    expect(bad.status).toBe(400);
+  });
+
   it('POST /tasks with missing command → 400', async () => {
     const h = await spinDaemon();
     const res = await fetch(`http://localhost:${h.port}/tasks`, {

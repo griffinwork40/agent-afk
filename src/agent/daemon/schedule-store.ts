@@ -192,6 +192,13 @@ export interface ScheduledTaskConfig {
    * completion-push time. Omitting it preserves default routing.
    */
   notifyChat?: number | string;
+  /**
+   * Total attempts per run for agent tasks (default 1 = no retry); threaded to
+   * `ScheduledTask.maxAttempts`. Only classified-transient failures retry.
+   */
+  maxAttempts?: number;
+  /** Backoff base (ms) between retry attempts; threaded to `ScheduledTask.retryDelayMs`. */
+  retryDelayMs?: number;
   /** ISO 8601 creation timestamp. */
   createdAt: string;
   /** ISO 8601 last-update timestamp. */
@@ -339,6 +346,8 @@ export function updateSchedule(
       ...(patch.trigger !== undefined ? { trigger: patch.trigger } : {}),
       ...(patch.notifyOn !== undefined ? { notifyOn: patch.notifyOn } : {}),
       ...(patch.notifyChat !== undefined ? { notifyChat: patch.notifyChat } : {}),
+      ...(patch.maxAttempts !== undefined ? { maxAttempts: patch.maxAttempts } : {}),
+      ...(patch.retryDelayMs !== undefined ? { retryDelayMs: patch.retryDelayMs } : {}),
       ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
       ...(patch.cwd !== undefined && patch.cwd !== null ? { cwd: patch.cwd } : {}),
       updatedAt: new Date().toISOString(),
@@ -410,6 +419,8 @@ export function toScheduledTask(config: ScheduledTaskConfig): ScheduledTask {
     ...(config.cron !== undefined ? { cronExpression: config.cron } : {}),
     ...(config.notifyOn !== undefined ? { notifyOn: config.notifyOn } : {}),
     ...(config.notifyChat !== undefined ? { notifyChat: config.notifyChat } : {}),
+    ...(config.maxAttempts !== undefined ? { maxAttempts: config.maxAttempts } : {}),
+    ...(config.retryDelayMs !== undefined ? { retryDelayMs: config.retryDelayMs } : {}),
     ...(config.cwd !== undefined ? { cwd: expandCwd(config.cwd) } : {}),
   };
 }

@@ -28,6 +28,7 @@ import { readTelemetryHistory } from '../agent/daemon/telemetry-reader.js';
 import { parseCwdCreate, parseCwdUpdate } from './routes.schedules.cwd.js';
 import { join } from 'node:path';
 import { isRecord } from '../utils/type-guards.js';
+import { parseTaskRetryFields } from '../agent/daemon/task-retry.js';
 
 const VALID_TRIGGERS = new Set(['cron', 'sessionstart', 'both']);
 const VALID_NOTIFY_ON = new Set(['failure', 'always', 'never']);
@@ -115,6 +116,11 @@ export async function handleCreateSchedule(
     return;
   }
   const resolvedCwd = cwdCreate.resolved;
+  const retry = parseTaskRetryFields(isRecord(body) ? body : {});
+  if (!retry.ok) {
+    sendJson(res, 400, { error: 'bad_request', message: retry.error });
+    return;
+  }
 
   const config = addSchedule({
     name,
@@ -123,6 +129,7 @@ export async function handleCreateSchedule(
     trigger: trigger as ScheduledTaskConfig['trigger'],
     notifyOn: notifyOn as ScheduledTaskConfig['notifyOn'],
     ...(resolvedCwd !== undefined ? { cwd: resolvedCwd } : {}),
+    ...retry.value,
     enabled,
   });
 
@@ -208,6 +215,11 @@ export async function handleUpdateSchedule(
     return;
   }
   const resolvedCwd = cwdUpdate.resolved;
+  const retry = parseTaskRetryFields(isRecord(body) ? body : {});
+  if (!retry.ok) {
+    sendJson(res, 400, { error: 'bad_request', message: retry.error });
+    return;
+  }
 
   const updated = updateSchedule(id, {
     ...(name !== undefined ? { name } : {}),
@@ -219,6 +231,7 @@ export async function handleUpdateSchedule(
     ...(notifyChat !== undefined ? { notifyChat } : {}),
     ...(enabled !== undefined ? { enabled } : {}),
     ...(resolvedCwd !== undefined ? { cwd: resolvedCwd } : {}),
+    ...retry.value,
   });
   if (!updated) {
     sendJson(res, 404, { error: 'not_found', message: `schedule ${id} not found` });

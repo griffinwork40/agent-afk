@@ -84,6 +84,17 @@ export interface ScheduledTask {
    * Shell tasks honor this too: execFile receives it as the `cwd` option.
    */
   cwd?: string;
+  /**
+   * Total attempts per run (including the first) for `executor: 'agent'`
+   * tasks. Default 1 = no retry. When > 1, a run that fails with a
+   * classified-transient error (429, network blip, provider 5xx) is retried
+   * in-process with exponential backoff while still holding the overlap
+   * guard. Non-transient failures never retry. Bounds are enforced at the
+   * input surfaces — see `parseTaskRetryFields` in `./task-retry.ts`.
+   */
+  maxAttempts?: number;
+  /** Backoff base (ms) between retry attempts; doubles per attempt. See `maxAttempts`. */
+  retryDelayMs?: number;
 }
 
 /**

@@ -23,6 +23,7 @@ import { listenWithRecovery, closeServer } from './daemon.listen.js';
 import { errorMessage } from '../utils/errors.js';
 import { validateScheduleCwd } from './daemon/cwd-validator.js';
 import { getSchedule, toScheduledTask } from './daemon/schedule-store.js';
+import { parseTaskRetryFields, type TaskRetryFields } from './daemon/task-retry.js';
 
 export interface DaemonOptions {
   /** Port for the HTTP control surface. Defaults to 7777. */
@@ -336,6 +337,18 @@ function isShellExecutorTrusted(params: ShellTrustParams): boolean {
   );
 }
 
+/**
+ * Validate the optional retry fields (#3243) with the same bounds as the
+ * tool/web surfaces. Writes a 400 and returns null on rejection.
+ */
+function parseRetryOr400(obj: Record<string, unknown>, res: ServerResponse): TaskRetryFields | null {
+  const retry = parseTaskRetryFields(obj);
+  if (retry.ok) return retry.value;
+  res.writeHead(400, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: retry.error }));
+  return null;
+}
+
 async function handleRequestAsync(
   req: IncomingMessage,
   res: ServerResponse,
@@ -403,6 +416,8 @@ async function handleRequestAsync(
       }
       cwd = cwdResult.resolved;
     }
+    const retry = parseRetryOr400(obj, res);
+    if (retry === null) return;
     const notifyChatRaw = obj['notifyChat'];
     const executorRaw = obj['executor'];
     const taskIdRaw = obj['taskId'] as string;
@@ -491,6 +506,7 @@ async function handleRequestAsync(
         ? { executor: executorRaw as TaskExecutor }
         : {}),
       ...(cwd !== undefined ? { cwd } : {}),
+      ...retry,
     };
     try {
       scheduler.register(task);
