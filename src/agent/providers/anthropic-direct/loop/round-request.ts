@@ -22,7 +22,7 @@ import type {
   WireToolDef,
 } from '../types.js';
 import { annotateFastError } from '../query/turn-request.js';
-import { getCacheTtl, isCacheEnabled, withMessagesBreakpoint } from '../cache-policy.js';
+import { clampBreakpoints, getCacheTtl, isCacheEnabled, withMessagesBreakpoint } from '../cache-policy.js';
 import { repairOrphanToolUses } from '../query/repair-orphan-tool-uses.js';
 import { emitSessionPhase } from '../../../trace/emit.js';
 import {
@@ -204,10 +204,40 @@ export interface OpenRoundContext {
 }
 
 export function buildRoundParams(input: Pick<RunTurnInput, 'model' | 'maxTokens' | 'messages' | 'system' | 'tools' | 'thinking' | 'effort' | 'temperature' | 'thinkingBlockBinding' | 'fastMode'>): AnthropicMessagesCreateParams {
+  const wireTools = input.tools !== null && input.tools.length > 0
+    ? input.tools.map(toWireTool)
+    : undefined;
+
+  // Guard the Anthropic 4-breakpoint limit across the full request before
+  // sending. Strips lowest-value breakpoints deterministically when the
+  // assembled payload exceeds the limit — never throws. See clampBreakpoints
+  // in cache-policy.ts for the removal priority (tools → older messages →
+  // earlier system blocks; end-of-system and end-of-messages are kept last).
+  // String system prompts carry no cache_control and will not trigger a clamp.
+  const systemBlocks = Array.isArray(input.system) ? input.system : undefined;
+  const clamped = clampBreakpoints({
+    system: systemBlocks,
+    // WireToolDef is structurally compatible with CacheableToolLike (name +
+    // optional cache_control + index signature). The cast is safe: the
+    // function only reads/drops cache_control, which WireToolDef never carries
+    // today — so the output type is identical to the input.
+    tools: wireTools as import('../cache-policy.js').CacheableToolLike[] | undefined,
+    messages: input.messages,
+  });
+  // Use the clamped system array when the original was an array; fall back to
+  // the original (string or null) for the other cases so the type contract
+  // of AnthropicMessagesCreateParams.system is preserved exactly.
+  const resolvedSystem: typeof input.system = Array.isArray(input.system)
+    ? (clamped.system ?? input.system)
+    : input.system;
+  // Re-cast tools back to WireToolDef[]: clampBreakpoints only removes
+  // cache_control; the rest of each tool object is identity-preserved.
+  const resolvedTools = clamped.tools as WireToolDef[] | undefined;
+
   return {
-    model: input.model, max_tokens: input.maxTokens, messages: input.messages, stream: true,
-    ...(input.system !== null ? { system: input.system } : {}),
-    ...(input.tools !== null && input.tools.length > 0 ? { tools: input.tools.map(toWireTool) } : {}),
+    model: input.model, max_tokens: input.maxTokens, messages: clamped.messages, stream: true,
+    ...(resolvedSystem !== null ? { system: resolvedSystem } : {}),
+    ...(resolvedTools !== undefined && resolvedTools.length > 0 ? { tools: resolvedTools } : {}),
     ...(input.thinking !== undefined || input.thinkingBlockBinding !== undefined
       ? {
           thinking: input.thinkingBlockBinding !== undefined
