@@ -233,9 +233,33 @@ describe('resolveOpenAIAuth — ChatGPT-subscription OAuth (last-resort tier, re
     expect(r.apiKey).toBe(ACCESS);
   });
 
-  it.each(['0', 'false', 'off', '1'])('ignores a leftover AFK_OPENAI_CHATGPT_OAUTH=%j (the flag was removed)', (v) => {
-    const leftover = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? v : undefined);
-    const r = resolveOpenAIAuth(undefined, deps({ readEnv: leftover, readFile: () => chatgptAuthJson() }));
+  // AFK_OPENAI_CHATGPT_OAUTH opt-out: fail-closed on unrecognized values
+  it('AFK_OPENAI_CHATGPT_OAUTH unset → tier-4 chatgpt-oauth active (default-ON)', () => {
+    const r = resolveOpenAIAuth(undefined, deps({ readFile: () => chatgptAuthJson() }));
+    expect(r.source).toBe('chatgpt-oauth');
+  });
+
+  it.each(['1', 'true', 'yes', 'on', 'YES', ' 1 '])('AFK_OPENAI_CHATGPT_OAUTH=%j → tier-4 active (explicit truthy)', (v) => {
+    const e = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? v : undefined);
+    const r = resolveOpenAIAuth(undefined, deps({ readEnv: e, readFile: () => chatgptAuthJson() }));
+    expect(r.source).toBe('chatgpt-oauth');
+  });
+
+  it.each(['0', 'false', 'off'])('AFK_OPENAI_CHATGPT_OAUTH=%j → tier-4 skipped (explicit falsy)', (v) => {
+    const e = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? v : undefined);
+    const r = resolveOpenAIAuth(undefined, deps({ readEnv: e, readFile: () => chatgptAuthJson() }));
+    expect(r.source).toBe('no-usable-auth');
+  });
+
+  it.each(['fasle', 'disabled', 'no', 'nope', '2'])('AFK_OPENAI_CHATGPT_OAUTH=%j → fail-closed (unrecognized value → OFF)', (v) => {
+    const e = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? v : undefined);
+    const r = resolveOpenAIAuth(undefined, deps({ readEnv: e, readFile: () => chatgptAuthJson() }));
+    expect(r.source).toBe('no-usable-auth');
+  });
+
+  it('AFK_OPENAI_CHATGPT_OAUTH="   " (whitespace-only) → treated as unset → tier-4 active', () => {
+    const e = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? '   ' : undefined);
+    const r = resolveOpenAIAuth(undefined, deps({ readEnv: e, readFile: () => chatgptAuthJson() }));
     expect(r.source).toBe('chatgpt-oauth');
   });
 

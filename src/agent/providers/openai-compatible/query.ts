@@ -66,7 +66,7 @@ import {
   toolDefsToOpenAIFunctions,
   type OpenAIFunctionTool,
 } from './loop.js';
-import { resolveWireMode, envFlagEnabled, type WireMode } from './responses-config.js';
+import { resolveWireMode, envFlagEnabled, CHATGPT_BACKEND_BASE_URL, type WireMode } from './responses-config.js';
 import { env } from '../../../config/env.js';
 import { isGrokModelId } from '../xai/pricing.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
@@ -116,6 +116,13 @@ export { isOSeriesModel, mapEffortForOpenAI } from './query/model-params.js';
 export { resolveReasoningEffort };
 
 const PROVIDER_NAME = 'openai-compatible';
+
+/**
+ * Module-scope latch: emit the ChatGPT-subscription notice at most once per
+ * accountId per process lifetime. Prevents repeating the same informational
+ * line across multiple sessions in a long-running daemon.
+ */
+const warnedChatGptOAuth = new Set<string>();
 
 
 
@@ -253,10 +260,24 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     }
 
     // Resolve the wire (Chat Completions vs Responses) once.
+    // Pass opts.baseURL so resolveWireMode can suppress the chatgpt-oauth
+    // forced redirect when the caller configured a different endpoint.
     const responsesOptIn =
       (opts.useResponsesApi ?? false) || envFlagEnabled(env.AFK_OPENAI_USE_RESPONSES);
-    const wire = resolveWireMode(opts.auth, responsesOptIn);
+    const wire = resolveWireMode(opts.auth, responsesOptIn, opts.baseURL);
     this.wireMode = wire.mode;
+
+    // Inform the operator once per account that ChatGPT subscription OAuth is
+    // active, so they know their requests are routing to chatgpt.com.
+    if (opts.auth.source === 'chatgpt-oauth' && wire.baseURL === CHATGPT_BACKEND_BASE_URL) {
+      const key = opts.auth.accountId ?? 'unknown';
+      if (!warnedChatGptOAuth.has(key)) {
+        warnedChatGptOAuth.add(key);
+        process.stderr.write(
+          '[AFK] Using ChatGPT subscription OAuth for OpenAI-compatible requests (chatgpt.com backend).\n',
+        );
+      }
+    }
     this.useOpenAIPricing =
       (wire.baseURL === undefined && opts.baseURL === undefined) ||
       (isGrokModelId(opts.model) && opts.config.forceXaiOAuth !== true);

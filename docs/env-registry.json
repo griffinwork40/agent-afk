@@ -745,6 +745,14 @@
       "category": "model"
     },
     {
+      "name": "AFK_OPENAI_CHATGPT_OAUTH",
+      "description": "Controls the tier-4 ChatGPT-subscription OAuth fallback in the openai-compatible auth chain. Unset or empty/whitespace = enabled (default). Truthy (1, true, yes, on) = explicitly enabled. Any other non-empty value (0, false, off, disabled, or a typo like \"fasle\") = disabled (fail-closed). Set to 0 or false to prevent AFK from automatically using a ~/.codex/auth.json ChatGPT-subscription token when no API key is configured.",
+      "type": "string",
+      "required": false,
+      "example": "0",
+      "category": "auth"
+    },
+    {
       "name": "AFK_OPENAI_USE_RESPONSES",
       "description": "Opt the OpenAI-compatible provider into the OpenAI Responses API instead of Chat Completions for API-key sessions. Truthy values: 1, true, yes, on. The ChatGPT-subscription OAuth path uses Responses automatically regardless of this flag.",
       "type": "boolean",

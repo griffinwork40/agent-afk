@@ -29,9 +29,10 @@
  * When `auth_mode === 'chatgpt'` (the ChatGPT-account OAuth path):
  *   - The resolver returns the `access_token` tagged `'chatgpt-oauth'` plus
  *     the decoded `accountId`/`expiresAt`. This tier is only reached when no
- *     API key resolved, so it never overrides a key. There is no flag: a user
- *     who wants API billing instead sets OPENAI_API_KEY (which wins) or runs
- *     `codex login --api-key`.
+ *     API key resolved, so it never overrides a key. The tier is controlled by
+ *     `AFK_OPENAI_CHATGPT_OAUTH` (unset/empty/whitespace = ON; any non-truthy
+ *     non-empty value = OFF, fail-closed). A user who wants API billing sets
+ *     OPENAI_API_KEY (which wins at Tier 2) or runs `codex login --api-key`.
  *   - A ChatGPT-mode file with no `access_token` yields
  *     `'no-usable-auth-codex-oauth'`. The OAuth path is READ-ONLY: AFK never refreshes
  *     these tokens (refresh stays with the `codex` binary, whose single-use
@@ -180,8 +181,8 @@ export function resolveOpenAIAuth(
     };
   }
 
-  // Tier 4: ~/.codex/auth.json (API-key mode only — ChatGPT OAuth is rejected
-  // here because AFK cannot safely refresh those tokens). See module docstring.
+  // Tier 4: ~/.codex/auth.json — API-key mode always resolves; ChatGPT OAuth
+  // resolves unless AFK_OPENAI_CHATGPT_OAUTH opts out (see module docstring).
   const codexAuthPath = join(home, '.codex', 'auth.json');
   const codexRaw = readFile(codexAuthPath);
   if (codexRaw !== null) {
@@ -189,7 +190,7 @@ export function resolveOpenAIAuth(
     if (parsed.kind === 'apikey') {
       return { apiKey: parsed.apiKey, source: 'codex-cli', last4: last4Of(parsed.apiKey) };
     }
-    if (parsed.kind === 'chatgpt') {
+    if (parsed.kind === 'chatgpt' && isChatGptOAuthEnabled(readEnv)) {
       // ChatGPT-subscription OAuth: the last-resort tier (it only runs when no
       // API key resolved above, so it never displaces a key). AFK does NOT
       // refresh these tokens (read-only — refresh stays with `codex`). A
@@ -212,7 +213,7 @@ export function resolveOpenAIAuth(
       }
       return { apiKey: null, source: 'no-usable-auth-codex-oauth' };
     }
-    // `parsed.kind === 'invalid' | 'no-key'` falls through to no-usable-auth.
+    // `parsed.kind === 'invalid' | 'no-key'`, or chatgpt opt-out, falls through.
   }
 
   return { apiKey: null, source: 'no-usable-auth' };
@@ -270,6 +271,26 @@ export function parseCodexAuthJson(raw: string): CodexAuthParse {
 
 function last4Of(s: string): string {
   return s.length <= 4 ? s : s.slice(-4);
+}
+
+/**
+ * Whether the tier-4 ChatGPT-subscription OAuth fallback is enabled.
+ *
+ * Default (unset or whitespace-only): ON.
+ * Explicit truthy (1 / true / yes / on, case-insensitive): ON.
+ * Any other non-empty, non-whitespace value: OFF (fail-closed).
+ *
+ * This fail-closed semantics means a typo like "fasle" or "disabled"
+ * disables the fallback rather than silently leaving it enabled.
+ */
+function isChatGptOAuthEnabled(readEnv: (key: string) => string | undefined): boolean {
+  const raw = readEnv('AFK_OPENAI_CHATGPT_OAUTH');
+  if (raw === undefined) return true; // unset → ON
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return true; // whitespace-only → treat as unset → ON
+  const n = trimmed.toLowerCase();
+  // Explicit truthy → ON; anything else (including typos) → OFF.
+  return n === '1' || n === 'true' || n === 'yes' || n === 'on';
 }
 
 /**

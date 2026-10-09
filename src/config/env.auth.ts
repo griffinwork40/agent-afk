@@ -141,6 +141,14 @@ export const AUTH_ENV_REGISTRY = [
     category: 'model',
   },
   {
+    name: 'AFK_OPENAI_CHATGPT_OAUTH',
+    description: 'Controls the tier-4 ChatGPT-subscription OAuth fallback in the openai-compatible auth chain. Unset or empty/whitespace = enabled (default). Truthy (1, true, yes, on) = explicitly enabled. Any other non-empty value (0, false, off, disabled, or a typo like "fasle") = disabled (fail-closed). Set to 0 or false to prevent AFK from automatically using a ~/.codex/auth.json ChatGPT-subscription token when no API key is configured.',
+    type: 'string',
+    required: false,
+    example: '0',
+    category: 'auth',
+  },
+  {
     name: 'AFK_PROVIDER',
     description: 'Force provider selection (anthropic | anthropic-direct | openai | openai-compatible | openai-codex | xai | xai-oauth). Overrides the model-name heuristic. Same surface as the --provider CLI flag; CLI flag wins when both are set.',
     type: 'string',
