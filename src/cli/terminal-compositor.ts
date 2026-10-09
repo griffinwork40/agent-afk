@@ -599,6 +599,7 @@ export class TerminalCompositor {
     growTotal: number;
     shrinkTotal: number;
     requeryCt: number;
+    widthOnlyOrigin: boolean;
   } | null = null;
   // Invariant (F2 — fail-safe commit mode on stale geometry): set by the
   // SIGWINCH-immediate handler alongside logUpdate.resetGeometry() and cleared
