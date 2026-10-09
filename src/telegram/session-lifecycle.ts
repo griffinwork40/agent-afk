@@ -149,6 +149,8 @@ export function finalizeTelegramSession(
     ...(providerConfig.xaiBaseUrl !== undefined
       ? { xaiBaseUrl: providerConfig.xaiBaseUrl }
       : {}),
+    ...(sessionConfig.thinking !== undefined ? { thinking: sessionConfig.thinking } : {}),
+    ...(sessionConfig.effort !== undefined ? { effort: sessionConfig.effort } : {}),
     ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
     provider,
     hookRegistry: hookBundle.registry,

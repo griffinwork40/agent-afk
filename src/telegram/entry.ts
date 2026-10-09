@@ -28,7 +28,7 @@ import { StateStore } from '../agent/state/state-store.js';
 import { providerForModel } from '../agent/providers/index.js';
 import { loadConfig, loadTelegramConfig } from '../cli/config.js';
 import { getEnvConfigPath, getStateDatabasePath } from '../paths.js';
-import { loadSystemPrompt } from '../cli/shared-helpers.js';
+import { loadSystemPrompt, getThinking, getEffort } from '../cli/shared-helpers.js';
 import type { AgentModelInput } from '../agent/types.js';
 import { applyTelegramFileOverrides } from './env-file-overrides.js';
 import { planTelegramCredential, applyTelegramCredentialPlan } from './credentials.js';
@@ -225,6 +225,10 @@ export async function main(): Promise<void> {
     // Only meaningful for the Anthropic provider — the Codex adapter
     // ignores settingSources at construction time.
     settingSources: ['user', 'project'],
+    // Thread AFK_THINKING / AFK_EFFORT into every bot-spawned session so the
+    // Telegram surface honours these env vars just like chat, daemon, and REPL.
+    thinking: getThinking(),
+    effort: getEffort(),
     // Bot-global cwd fallback used by SessionManager when no per-chat
     // override is set via /cd. Per-session `data.cwd` takes precedence.
     ...(telegramCwd !== undefined && telegramCwd.length > 0 ? { botCwd: telegramCwd } : {}),
