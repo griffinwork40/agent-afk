@@ -1205,7 +1205,7 @@ describe('OpenAICompatibleQuery — auth failure path', () => {
   it('emits session.init then error when no auth is resolvable', async () => {
     // Use hermetic auth deps so this test is isolated from the host machine's
     // real credentials. Without this, a developer whose ~/.codex/auth.json
-    // contains a ChatGPT OAuth bundle (and AFK_OPENAI_CHATGPT_OAUTH=1) will
+    // contains a ChatGPT OAuth bundle (the OAuth fallback is on by default) will
     // resolve a real access_token — bypassing the no-auth path entirely and
     // sending the request on the Responses API wire. The mock only stubs
     // chat.completions.create, so this.client.responses.create would crash

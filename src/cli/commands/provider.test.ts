@@ -43,13 +43,13 @@ describe('buildProviderAuthDiagnose', () => {
   it('returns nonzero exit code with actionable message when no auth resolves', () => {
     // Inject hermetic deps so this test is isolated from the host machine's
     // real credentials. Without this, a developer whose ~/.codex/auth.json
-    // contains a ChatGPT OAuth bundle (and AFK_OPENAI_CHATGPT_OAUTH=1) would
+    // contains a ChatGPT OAuth bundle (the OAuth fallback is on by default) would
     // cause resolveOpenAIAuth to return source:'chatgpt-oauth' with a real
     // access_token — making exitCode 0 and source outside the allowlist below.
     const hermeticDeps = {
       readEnv: (key: string) => {
         // Expose only the env vars already cleared by beforeEach (OPENAI_API_KEY,
-        // CODEX_API_KEY) as absent, and explicitly suppress the OAuth opt-in flag.
+        // CODEX_API_KEY) as absent; readFile below hides ~/.codex/auth.json.
         if (key === 'OPENAI_API_KEY' || key === 'CODEX_API_KEY' || key === 'AFK_OPENAI_CHATGPT_OAUTH') {
           return undefined;
         }
@@ -159,10 +159,20 @@ describe('buildProviderAuthDiagnose — slot-aware (forceChatgptOAuth)', () => {
     expect(r.message).toMatch(/codex/i);
   });
 
-  it('rejects ChatGPT OAuth when flag is unset (off by default — opt-in)', () => {
-    // With the flag defaulting to off, the ChatGPT token is NOT picked up
-    // without an explicit opt-in (hermeticDeps readEnv returns undefined).
+  it('uses ChatGPT OAuth when flag is unset (on by default)', () => {
+    // hermeticDeps readEnv returns undefined and no API key is present, so the
+    // default-on ChatGPT fallback picks up the token.
     const r = buildProviderAuthDiagnose(undefined, hermeticDepsWithChatGptToken, false);
+    expect(r.source).toBe('chatgpt-oauth');
+    expect(r.exitCode).toBe(0);
+  });
+
+  it('rejects ChatGPT OAuth when AFK_OPENAI_CHATGPT_OAUTH=0 opts out', () => {
+    const optedOut = {
+      ...hermeticDepsWithChatGptToken,
+      readEnv: (key: string) => (key === 'AFK_OPENAI_CHATGPT_OAUTH' ? '0' : undefined),
+    };
+    const r = buildProviderAuthDiagnose(undefined, optedOut, false);
     expect(r.source).toBe('no-usable-auth-codex-oauth');
     expect(r.exitCode).toBe(1);
   });

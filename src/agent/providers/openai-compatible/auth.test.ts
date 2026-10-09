@@ -91,7 +91,7 @@ describe('resolveOpenAIAuth — precedence', () => {
     expect(r.last4).toBe('5555');
   });
 
-  it('uses ChatGPT OAuth when present and flag is explicitly ON (off by default — opt-in)', () => {
+  it('uses ChatGPT OAuth when present and flag is explicitly ON', () => {
     const r = resolveOpenAIAuth(undefined, deps({
       readEnv: (k) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? '1' : undefined),
       readFile: () =>
@@ -189,9 +189,9 @@ describe('formatAuthDiagnostic', () => {
     const msg = formatAuthDiagnostic({ apiKey: null, source: 'no-usable-auth-codex-oauth' });
     expect(msg).toContain('codex login --api-key');
     expect(msg).toContain('OPENAI_API_KEY');
-    // Critical: must explain WHY ChatGPT OAuth isn't usable AND how to opt in.
+    // Critical: must explain WHY ChatGPT OAuth isn't usable AND how to re-enable it.
     expect(msg).toContain('API-key mode');
-    expect(msg).toContain('AFK_OPENAI_CHATGPT_OAUTH');
+    expect(msg).toContain('unset AFK_OPENAI_CHATGPT_OAUTH');
   });
 
   it('renders no-usable-auth with all 3 next steps', () => {
@@ -237,10 +237,23 @@ describe('resolveOpenAIAuth — ChatGPT-subscription OAuth (flag-gated, read-onl
     expect(r.apiKey).toBeNull();
   });
 
-  it('stays rejected when the flag is unset (off by default — opt-in)', () => {
+  it('uses the ChatGPT token when the flag is unset (on by default)', () => {
     const r = resolveOpenAIAuth(undefined, deps({ readFile: () => chatgptAuthJson() }));
-    expect(r.source).toBe('no-usable-auth-codex-oauth');
-    expect(r.apiKey).toBeNull();
+    expect(r.source).toBe('chatgpt-oauth');
+    expect(r.apiKey).toBe(ACCESS);
+  });
+
+  it('uses the ChatGPT token when the flag is empty (on by default)', () => {
+    const emptyEnv = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? '' : undefined);
+    const r = resolveOpenAIAuth(undefined, deps({ readEnv: emptyEnv, readFile: () => chatgptAuthJson() }));
+    expect(r.source).toBe('chatgpt-oauth');
+  });
+
+  it('lets OPENAI_API_KEY win over the default-on OAuth fallback', () => {
+    const keyEnv = (k: string) => (k === 'OPENAI_API_KEY' ? 'sk-env-5678' : undefined);
+    const r = resolveOpenAIAuth(undefined, deps({ readEnv: keyEnv, readFile: () => chatgptAuthJson() }));
+    expect(r.source).toBe('env');
+    expect(r.apiKey).toBe('sk-env-5678');
   });
 
   it('returns the access token tagged chatgpt-oauth when flag is explicitly ON', () => {
@@ -251,14 +264,13 @@ describe('resolveOpenAIAuth — ChatGPT-subscription OAuth (flag-gated, read-onl
     expect(r.expiresAt).toBe(9999999999);
   });
 
-  it('treats unrecognized env value as disabled (safe default)', () => {
+  it('treats an unrecognized env value as the default (enabled); only explicit falsy opts out', () => {
     const garbageEnv = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? 'garbage' : undefined);
     const r = resolveOpenAIAuth(undefined, deps({ readEnv: garbageEnv, readFile: () => chatgptAuthJson() }));
-    expect(r.source).toBe('no-usable-auth-codex-oauth');
-    expect(r.apiKey).toBeNull();
+    expect(r.source).toBe('chatgpt-oauth');
   });
 
-  it.each(['false', 'no', 'off', 'FALSE', 'NO', 'OFF'])('stays rejected when flag is %j (not in allowlist)', (flagVal) => {
+  it.each(['0', 'false', 'no', 'off', 'FALSE', 'NO', 'OFF', ' off '])('stays rejected when flag is %j (explicit opt-out)', (flagVal) => {
     const flagEnv = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? flagVal : undefined);
     const r = resolveOpenAIAuth(undefined, deps({ readEnv: flagEnv, readFile: () => chatgptAuthJson() }));
     expect(r.source).toBe('no-usable-auth-codex-oauth');

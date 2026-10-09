@@ -27,11 +27,12 @@
  * ```
  *
  * When `auth_mode === 'chatgpt'` (the ChatGPT-account OAuth path):
- *   - By default this resolver returns `'no-usable-auth-codex-oauth'` (the
- *     token is present but unused), preserving the historical safe behavior.
- *   - When the explicit opt-in flag `AFK_OPENAI_CHATGPT_OAUTH` is truthy, the
- *     resolver returns the `access_token` tagged `'chatgpt-oauth'` plus the
- *     decoded `accountId`/`expiresAt`. This is READ-ONLY: AFK never refreshes
+ *   - By default (flag unset) the resolver returns the `access_token` tagged
+ *     `'chatgpt-oauth'` plus the decoded `accountId`/`expiresAt`. This tier is
+ *     only reached when no API key resolved, so it never overrides a key.
+ *   - When `AFK_OPENAI_CHATGPT_OAUTH` is explicitly falsy (0/false/no/off) the
+ *     resolver returns `'no-usable-auth-codex-oauth'` (token present but
+ *     unused). This is the opt-out. The OAuth path is READ-ONLY: AFK never refreshes
  *     these tokens (refresh stays with the `codex` binary, whose single-use
  *     refresh tokens make concurrent AFK-owned refresh unsafe). On expiry the
  *     diagnostic asks the user to re-run `codex`.
@@ -109,7 +110,7 @@ function defaultReadFile(path: string): string | null {
  * @param deps - Optional env + fs injection point for tests.
  * @param forceChatgptOAuth - When true (a `provider: 'chatgpt-oauth'` slot),
  *   resolve the ChatGPT-subscription token from `~/.codex/auth.json` ahead of
- *   every other tier and without the global `AFK_OPENAI_CHATGPT_OAUTH` flag.
+ *   every other tier, regardless of the global `AFK_OPENAI_CHATGPT_OAUTH` opt-out.
  */
 export function resolveOpenAIAuth(
   explicitConfigKey: string | undefined,
@@ -123,7 +124,7 @@ export function resolveOpenAIAuth(
   // Tier 0: per-slot forced ChatGPT-subscription OAuth (a slot bound
   // `provider: 'chatgpt-oauth'`). Selects the ChatGPT token from
   // ~/.codex/auth.json REGARDLESS of an explicit key / OPENAI_API_KEY /
-  // CODEX_API_KEY, and WITHOUT the global AFK_OPENAI_CHATGPT_OAUTH flag — the
+  // CODEX_API_KEY, and regardless of the global AFK_OPENAI_CHATGPT_OAUTH opt-out — the
   // slot declaration IS the opt-in. This is what lets a ChatGPT-subscription
   // model and a custom keyed OpenAI model resolve independently in one session.
   if (forceChatgptOAuth) {
@@ -189,9 +190,10 @@ export function resolveOpenAIAuth(
       return { apiKey: parsed.apiKey, source: 'codex-cli', last4: last4Of(parsed.apiKey) };
     }
     if (parsed.kind === 'chatgpt') {
-      // ChatGPT-subscription OAuth. Gated behind an explicit opt-in flag (off
-      // by default): the backend is undocumented and AFK does NOT refresh
-      // these tokens (read-only — refresh stays with `codex`). When disabled,
+      // ChatGPT-subscription OAuth. On by default (this tier only runs when no
+      // API key resolved above, so it never displaces a key); the operator can
+      // opt out with AFK_OPENAI_CHATGPT_OAUTH=0. AFK does NOT refresh these
+      // tokens (read-only — refresh stays with `codex`). When opted out,
       // surface distinctly so the diagnostic can give a precise next step.
       if (chatGptOAuthEnabled(readEnv) && parsed.accessToken) {
         // Gate expiry: treat an expired token as unusable so the diagnostic fires
@@ -270,12 +272,16 @@ function last4Of(s: string): string {
   return s.length <= 4 ? s : s.slice(-4);
 }
 
-/** Truthy check for the ChatGPT-subscription OAuth flag (off by default; opt-in). */
+/**
+ * Whether the ChatGPT-subscription OAuth fallback is enabled. ON by default:
+ * only an explicit falsy value (0/false/no/off) opts out. Unset, empty, truthy,
+ * and unrecognized values all leave it enabled.
+ */
 function chatGptOAuthEnabled(readEnv: (key: string) => string | undefined): boolean {
   const v = readEnv('AFK_OPENAI_CHATGPT_OAUTH');
-  if (!v) return false;
+  if (!v) return true;
   const n = v.trim().toLowerCase();
-  return n === '1' || n === 'true' || n === 'yes' || n === 'on';
+  return !(n === '0' || n === 'false' || n === 'no' || n === 'off');
 }
 
 /**
@@ -364,9 +370,10 @@ export function formatAuthDiagnostic(resolution: OpenAIAuthResolution): string {
       );
     case 'no-usable-auth-codex-oauth':
       return (
-        'Found ChatGPT/OAuth credentials in ~/.codex/auth.json but the OpenAI provider is in API-key mode. ' +
-        'To use your ChatGPT subscription, set AFK_OPENAI_CHATGPT_OAUTH=1 (read-only; AFK will not refresh the token — ' +
-        're-run `codex` when it expires). Otherwise run `codex login --api-key` or set OPENAI_API_KEY.'
+        'Found ChatGPT/OAuth credentials in ~/.codex/auth.json but they are disabled because ' +
+        'AFK_OPENAI_CHATGPT_OAUTH is set to a falsy value (API-key mode). To use your ChatGPT subscription, ' +
+        'unset AFK_OPENAI_CHATGPT_OAUTH (read-only; AFK will not refresh the token — re-run `codex` when it expires). ' +
+        'Otherwise run `codex login --api-key` or set OPENAI_API_KEY.'
       );
     case 'no-usable-auth-forced-chatgpt-oauth':
       return (

@@ -1,11 +1,12 @@
 # OpenAI Responses API & ChatGPT-subscription OAuth
 
 The `openai-compatible` provider speaks **Chat Completions** by default. This
-doc covers the two opt-in paths that route over the **OpenAI Responses API**
+doc covers the two paths that route over the **OpenAI Responses API**
 instead.
 
-Both are off by default and gated behind explicit env flags. Nothing changes
-for existing API-key / Chat Completions users.
+Path 1 is opt-in. Path 2 (ChatGPT-subscription OAuth) is on by default but is
+only a fallback: it is used only when no API key resolves. Nothing changes for
+existing API-key / Chat Completions users.
 
 ## 1. Public Responses API (API key)
 
@@ -30,11 +31,11 @@ credits, by reusing the OAuth token that `codex login` writes to
 
 ```bash
 codex login                            # establishes ~/.codex/auth.json (chatgpt mode)
-export AFK_OPENAI_CHATGPT_OAUTH=1      # opt in (off by default)
-afk chat -m gpt-5 "hello"
+afk chat -m gpt-5 "hello"              # no flag needed; on by default
+# export AFK_OPENAI_CHATGPT_OAUTH=0    # opt out (ignore the ChatGPT token)
 ```
 
-When enabled and a ChatGPT OAuth bundle is present, AFK:
+When no API key resolves and a ChatGPT OAuth bundle is present, AFK:
 
 - reads the `access_token` + decodes the `chatgpt_account_id` / `exp` from its JWT,
 - routes requests over the **Responses API** to the private ChatGPT backend
@@ -52,16 +53,16 @@ When enabled and a ChatGPT OAuth bundle is present, AFK:
   Phase 2E.)
 - **Undocumented / ToS-gray.** The ChatGPT backend, the `chatgpt-account-id`
   header, and the OAuth client are reverse-engineered and undocumented; they can
-  change or be blocked without notice. This path is opt-in precisely because of
-  that. If you only have API access, use path 1.
+  change or be blocked without notice. Set `AFK_OPENAI_CHATGPT_OAUTH=0` to opt
+  out. If you only have API access, use path 1.
 - An explicit `OPENAI_API_KEY` / `CODEX_API_KEY` / config key always wins over
-  the OAuth path, even with the flag on.
+  the OAuth path.
 
 ## Precedence summary
 
 `config.apiKey` → `OPENAI_API_KEY` → `CODEX_API_KEY` →
-`~/.codex/auth.json` (API-key mode) → `~/.codex/auth.json` (ChatGPT OAuth, only
-when `AFK_OPENAI_CHATGPT_OAUTH` is set) → none.
+`~/.codex/auth.json` (API-key mode) → `~/.codex/auth.json` (ChatGPT OAuth, unless
+`AFK_OPENAI_CHATGPT_OAUTH=0`) → none.
 
 The wire is Chat Completions unless (a) `auth.source === 'chatgpt-oauth'` or
 (b) `AFK_OPENAI_USE_RESPONSES` is truthy — then it is the Responses API.

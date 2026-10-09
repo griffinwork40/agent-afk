@@ -67,23 +67,25 @@ export OPENAI_API_KEY=sk-proj-...
 
 `OPENAI_API_KEY` is the preferred credential. `CODEX_API_KEY` is a deprecated alias for `OPENAI_API_KEY`. Use `OPENAI_API_KEY` for new setups.
 
-### ChatGPT-subscription OAuth (opt-in)
+### ChatGPT-subscription OAuth
 
 If you have a ChatGPT Plus/Pro subscription and the `codex` CLI installed, you
-can bill model usage against your subscription:
+can bill model usage against your subscription. No AFK setting is needed:
+when no OpenAI API key is configured, AFK uses the token `codex login` wrote.
 
 ```bash
 codex login                        # writes ~/.codex/auth.json (chatgpt mode)
-export AFK_OPENAI_CHATGPT_OAUTH=1  # opt in (off by default)
 afk chat -m gpt-5 "hello"
 ```
+
+To opt out, set `AFK_OPENAI_CHATGPT_OAUTH=0`.
 
 AFK reads the access token from `~/.codex/auth.json` but **never refreshes
 it** — refresh tokens are single-use and the `codex` binary owns the refresh
 lifecycle. When the token expires, re-run `codex` and restart `afk`.
 
 An explicit `OPENAI_API_KEY` or `CODEX_API_KEY` always wins over the OAuth
-path, even with `AFK_OPENAI_CHATGPT_OAUTH=1`.
+path.
 
 ## Per-slot API keys
 

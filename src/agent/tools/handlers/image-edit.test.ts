@@ -137,11 +137,11 @@ describe('image_edit handler', () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
-  it('returns no-usable-auth error when OAuth token exists but AFK_OPENAI_CHATGPT_OAUTH flag is off', async () => {
-    // When a Codex auth.json token is present but the global opt-in flag is
-    // unset, resolveOpenAIAuth returns source:'no-usable-auth-codex-oauth'.
-    // The handler must surface an actionable error — not forward the token —
-    // because AFK_OPENAI_CHATGPT_OAUTH was deliberately NOT set.
+  it('returns no-usable-auth error when OAuth token exists but AFK_OPENAI_CHATGPT_OAUTH opts out', async () => {
+    // When a Codex auth.json token is present but the operator opted out
+    // (AFK_OPENAI_CHATGPT_OAUTH=0), resolveOpenAIAuth returns
+    // source:'no-usable-auth-codex-oauth'. The handler must surface an
+    // actionable error — not forward the token.
     vi.stubEnv('AFK_IMAGE_API_KEY', '');
     mockResolveAuth.mockReturnValue({
       apiKey: null,

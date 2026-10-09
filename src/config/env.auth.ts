@@ -142,10 +142,11 @@ export const AUTH_ENV_REGISTRY = [
   },
   {
     name: 'AFK_OPENAI_CHATGPT_OAUTH',
-    description: 'Use ChatGPT-subscription OAuth credentials from ~/.codex/auth.json (auth_mode: chatgpt) as OpenAI provider auth. Off by default. Set to 1/true/yes/on to enable. READ-ONLY: AFK never refreshes these tokens — re-run codex when the access token expires. Routes requests over the Responses API to the private ChatGPT backend (chatgpt.com/backend-api).',
+    description: 'ChatGPT-subscription OAuth fallback. When no OpenAI API key resolves (config key, OPENAI_API_KEY, CODEX_API_KEY, or an API key in ~/.codex/auth.json), AFK uses the ChatGPT OAuth token from ~/.codex/auth.json (auth_mode: chatgpt, written by `codex login`). ON by default; set to 0/false/no/off to opt out. Never overrides an API key. READ-ONLY: AFK never refreshes these tokens — re-run codex when the access token expires. Routes requests over the Responses API to the private ChatGPT backend (chatgpt.com/backend-api).',
     type: 'boolean',
     required: false,
-    example: '1',
+    default: '1',
+    example: '0',
     category: 'model',
   },
   {
