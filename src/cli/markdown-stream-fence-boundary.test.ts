@@ -1,11 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { StreamingMarkdownRenderer } from './markdown-stream.js';
 import { findBlockBoundary, isInOpenCodeFence } from './markdown-stream-format.js';
-
-// Strip ANSI for readable assertions.
-const stripAnsi = (s: string): string =>
-  // eslint-disable-next-line no-control-regex
-  s.replace(/\u001b\[[0-9;]*m/g, '');
+import { stripAnsi } from './display.js';
 
 function renderNonTTY(chunks: string[]): string {
   const r = new StreamingMarkdownRenderer({ indent: '' });

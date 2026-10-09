@@ -20,8 +20,12 @@
 
 import { spawn } from 'node:child_process';
 
-/** Injectable Windows launcher so this branch can be tested on any host. */
-interface KillProcessGroupDeps {
+/**
+ * Injectable Windows launcher so this branch can be tested on any host.
+ * Exported so tests can reference the shape via structural typing explicitly
+ * rather than relying on implicit structural compatibility (finding #3210-low).
+ */
+export interface KillProcessGroupDeps {
   platform?: NodeJS.Platform;
   spawn?: typeof spawn;
 }
@@ -48,7 +52,15 @@ export function killProcessGroup(
         timeout: 5_000,
         windowsHide: true,
       });
-      killer.on('error', () => { /* already dead or taskkill unavailable */ });
+      killer.on('error', (err) => {
+        // ESRCH: process already dead — expected and silent.
+        // Anything else (taskkill timeout, binary unavailable, etc.) gets a
+        // diagnostic so operators can observe unexpected kill failures rather
+        // than absorbing them silently (finding #3210).
+        if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+          console.warn(`[kill-process-group] taskkill error (pid=${pid}):`, err.message);
+        }
+      });
       killer.unref();
     } else {
       process.kill(-pid, signal);

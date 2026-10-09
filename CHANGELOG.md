@@ -11,6 +11,31 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.306.4] - 2026-10-09
+
+### Fixed
+- block restricted paths in bash on headless surfaces (#2312) (9becef0b)
+
+## [5.306.3] - 2026-10-08
+
+### Changed
+- shared type-guards, sleep, truncate, truncateTelegramLabel, stripAnsi in tests (#3318) (eb6a5650)
+
+## [5.306.2] - 2026-10-08
+
+### Fixed
+- apply advisory findings from 2026-10-07 pr-triage (#3316) (24c952c5)
+
+### Changed
+- surface /whatif and Jev as differentiators in README (#3315) (e04095c8)
+- shared walker + resolveTraceFile + groupViolationsByFile; fix --reason drift in check-test-typecheck (#3319) (495196f4)
+- extract checkout-lifecycle helpers; plugin update warns before discarding edits (#3317) (d7eb6282)
+
+## [5.306.1] - 2026-10-08
+
+### Fixed
+- share normalizeSystemPromptOverlay; fix OpenAI preset {append} drop (#3305) (29241d8c)
+
 ## [5.306.0] - 2026-10-08
 
 ### Added

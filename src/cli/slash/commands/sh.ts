@@ -25,6 +25,7 @@ import type { ShellPassthrough } from '../../commands/interactive/shell-passthro
 import { formatDuration } from '../../format-utils.js';
 import { isProcessJobId } from '../../../agent/shell-jobs/process-jobs.js';
 import { killProcessJob, listProcessJobs, showProcessJob } from './sh.process-jobs.js';
+import { truncate } from '../../../utils/truncate.js';
 
 let passthroughRef: ShellPassthrough | undefined;
 
@@ -96,7 +97,7 @@ export const shCmd: SlashCommand = {
             ? formatDuration(job.result.durationMs).padEnd(12)
             : formatDuration(Date.now() - job.startedAt).padEnd(12);
           const mode = job.mode === 'background' ? 'bg' : 'fg';
-          const cmd = job.command.length > 60 ? job.command.slice(0, 57) + '...' : job.command;
+          const cmd = truncate(job.command, 60);
           ctx.out.line(`  ${glyph} ${job.id.padEnd(5)} ${status} ${dur} ${mode.padEnd(4)} ${cmd}`);
         }
         listProcessJobs(ctx.out);

@@ -36,6 +36,7 @@ import type { Telegraf } from 'telegraf';
 import { sendHandoffQuestion, clearPendingTextHandoff } from '../../telegram/handoff-answer.js';
 import { buildHandoffCallback } from '../../telegram/handoff-callback-data.js';
 import { errorMessage } from '../../utils/errors.js';
+import { truncateTelegramLabel } from '../../utils/truncate-telegram-label.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -365,12 +366,8 @@ export async function cleanupHandoff(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/** Truncate a button label to Telegram's ~64-byte UTF-8 limit. */
-function truncateLabel(label: string, maxBytes = 64): string {
-  if (Buffer.byteLength(label, 'utf8') <= maxBytes) return label;
-  const buf = Buffer.from(label, 'utf8').subarray(0, maxBytes);
-  return new TextDecoder('utf-8', { fatal: false }).decode(buf).replace(/\uFFFD$/, '');
-}
+/** Alias for the shared helper (kept for local call-site readability). */
+const truncateLabel = truncateTelegramLabel;
 
 /**
  * Build Telegram InlineKeyboardMarkup for confirm/choice question types.

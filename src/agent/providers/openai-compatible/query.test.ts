@@ -487,6 +487,87 @@ describe('OpenAICompatibleProvider — plan-mode gate via config.hookRegistry', 
   });
 });
 
+describe('OpenAICompatibleProvider — config.isNonInteractive reaches the PreToolUse context (#2302)', () => {
+  // Parity with anthropic-direct: this provider wires itself as the session
+  // grant manager on every surface, so the bash-restriction hook's headless
+  // floor keys on `context.nonInteractive`. Pin the full query() path.
+  function scriptBashThenDone(): void {
+    installScriptedClient();
+    scriptedTurns = [
+      {
+        chunks: [
+          {
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: 'call_bash',
+                      type: 'function',
+                      function: { name: 'bash', arguments: JSON.stringify({ command: 'true' }) },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+            usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
+          },
+        ],
+      },
+      {
+        chunks: [
+          {
+            choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
+          },
+        ],
+      },
+    ];
+  }
+
+  async function captureCtx(over: Partial<AgentConfig>): Promise<{ nonInteractive: unknown; grantManagerWired: boolean }> {
+    scriptBashThenDone();
+    const seen = { nonInteractive: 'unset' as unknown, grantManagerWired: false };
+    const registry = createHookRegistry();
+    registry.register('PreToolUse', (ctx) => {
+      if (ctx.event === 'PreToolUse' && ctx.toolName === 'bash') {
+        seen.nonInteractive = ctx.nonInteractive;
+        seen.grantManagerWired = ctx.grantManager !== undefined;
+      }
+      // Block so the harmless command never actually spawns.
+      return { decision: 'block', reason: 'captured' };
+    });
+    // ask_question allowed too so the daemon-pull case can prove it survives.
+    const provider = new OpenAICompatibleProvider({ permissions: { allowedTools: ['bash', 'ask_question'] } });
+    await collect(provider.query({ prompt: singleInput('run it'), config: baseConfig({ hookRegistry: registry, ...over }) }));
+    return seen;
+  }
+
+  it('injects nonInteractive: true alongside the provider-wired grant manager', async () => {
+    const seen = await captureCtx({ isNonInteractive: true });
+    expect(seen.grantManagerWired).toBe(true);
+    expect(seen.nonInteractive).toBe(true);
+  });
+
+  it('leaves nonInteractive undefined on an interactive session', async () => {
+    const seen = await captureCtx({});
+    expect(seen.grantManagerWired).toBe(true);
+    expect(seen.nonInteractive).toBeUndefined();
+  });
+
+  it('daemon pull shape (surface daemon, isNonInteractive false): headless floor ON, ask_question KEPT', async () => {
+    const seen = await captureCtx({ surface: 'daemon', isNonInteractive: false });
+    expect(seen.grantManagerWired).toBe(true);
+    expect(seen.nonInteractive).toBe(true);
+    const tools = (createCalls[0]!.args as { tools?: Array<{ function?: { name?: string } }> }).tools ?? [];
+    expect(tools.map((t) => t.function?.name)).toContain('ask_question');
+  });
+});
+
 describe('OpenAICompatibleProvider — central output cap armed from config.subagentToolOutputCapBytes (#661)', () => {
   // Parity with anthropic-direct/output-cap-wiring.test.ts. Proves the openai
   // provider's buildDispatcher arms the dispatcher's maxOutputBytes from the

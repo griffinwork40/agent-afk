@@ -274,24 +274,36 @@ export function atomicWriteFile(
 // ---------------------------------------------------------------------------
 
 /**
+ * Test-only injectables for {@link atomicWriteFileAsync}.
+ * Collapsed into a single object so the public positional signature stays
+ * narrow (finding #3153).  Production callers must not pass this.
+ * @internal
+ */
+export interface _AtomicWriteAsyncTestInternals {
+  renameFn?: (from: string, to: string) => Promise<void>;
+  platform?: string;
+}
+
+/**
  * Async version of {@link atomicWriteFile}.  Write `content` to `dest`
  * atomically via a sibling temp file and `rename`.
  *
  * @param dest    - Absolute path of the destination file.
  * @param content - String (or Buffer) to write.
  * @param opts    - Optional mode, encoding, and mkdirp flag.
- * @internal `_renameFn` — test-only injectable rename function forwarded to
- *   {@link renameWithRetry}.  Production callers must not pass this.
- * @internal `_platform` — test-only platform override forwarded to
- *   {@link renameWithRetry}.  Production callers must not pass this.
+ * @internal `_testInternals` — test-only injectable overrides (renameFn,
+ *   platform) forwarded to {@link renameWithRetry}.  Production callers must
+ *   not pass this.
  */
 export async function atomicWriteFileAsync(
   dest: string,
   content: string | Buffer,
   opts: AtomicWriteOptions = {},
-  /** @internal */ _renameFn?: (from: string, to: string) => Promise<void>,
-  /** @internal */ _platform?: string,
+  /** @internal */ _testInternals?: _AtomicWriteAsyncTestInternals,
 ): Promise<boolean> {
+  // Unpack internal overrides (undefined in production).
+  const _renameFn = _testInternals?.renameFn;
+  const _platform = _testInternals?.platform;
   const mode = opts.mode ?? 0o600;
   const encoding = opts.encoding ?? 'utf-8';
   const mkdirp = opts.mkdirp ?? true;
