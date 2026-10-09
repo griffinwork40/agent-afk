@@ -120,4 +120,35 @@ describe('CronScheduler.getInFlightTasks', () => {
     releaseRun();
     await pending;
   });
+
+  it('redacts a secret in the taskId fallback (registry entry missing mid-flight)', async () => {
+    // sk- pattern needs ≥20 chars after "sk-" (prompt-dump.ts INLINE_SECRET_PATTERNS).
+    const secretTaskId = 'sk-proj-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456789';
+    scheduler.register({
+      taskId: secretTaskId,
+      command: '/safe-command --no-secrets',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+      executor: 'shell',
+    });
+
+    // Start the tick (adds to inFlightTasks), then unregister (removes from registry).
+    // getInFlightTasks() must hit the taskId fallback branch — and redact it.
+    const { pending } = await startTick(secretTaskId);
+    scheduler.unregister(secretTaskId);
+
+    const tasks = scheduler.getInFlightTasks();
+    expect(tasks).toHaveLength(1);
+    const [entry] = tasks;
+    // The taskId field is the raw id (not redacted — it is the identifier, not a crash notice body).
+    expect(entry?.taskId).toBe(secretTaskId);
+    // The commandHead fallback MUST be redacted and within the 60-char cap.
+    expect(entry?.commandHead.length).toBeLessThanOrEqual(60);
+    expect(entry?.commandHead).not.toContain(secretTaskId);
+    expect(entry?.commandHead).not.toMatch(/sk-proj-[A-Za-z0-9]{8,}/);
+    expect(entry?.commandHead).toContain('REDACTED');
+
+    releaseRun();
+    await pending;
+  });
 });

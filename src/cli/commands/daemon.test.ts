@@ -81,7 +81,7 @@ import { startDaemon } from '../../agent/daemon.js';
 import { pushIfConfigured } from '../../telegram/push.js';
 import { loadConfig, loadTelegramConfig } from '../config.js';
 import { getApiKey, getModel } from '../shared-helpers.js';
-import { formatTaskCompletion, registerDaemonCommand, resolveNotifyChatTarget, registerDaemonCrashHandlers, _resetDaemonCrashHandlersForTest } from './daemon.js';
+import { formatTaskCompletion, registerDaemonCommand, resolveNotifyChatTarget, registerDaemonCrashHandlers, registerEarlyDaemonCrashHandlers, _resetDaemonCrashHandlersForTest } from './daemon.js';
 import {
   resolveTriggerMode,
   resolveDefaultTask,
@@ -653,5 +653,34 @@ describe('registerDaemonCrashHandlers', () => {
     const [msg] = mockPushIfConfigured.mock.calls[0] as [string];
     expect(msg).toContain('in-flight (1)');
     expect(msg).toContain('live-task');
+  });
+
+  // #3368: double registration after _resetDaemonCrashHandlersForTest must
+  // still produce a working binder — the second bindInFlightSource call must
+  // update the getter the crash handler actually reads.
+  it('registerEarlyDaemonCrashHandlers: second call after reset yields a working binder', () => {
+    // First registration (simulates normal startup).
+    const bind1 = registerEarlyDaemonCrashHandlers();
+    bind1(() => [{ taskId: 'first', commandHead: '/first-cmd', elapsedMs: 1_000 }]);
+    process.emit('uncaughtException', new Error('first-crash'), 'uncaughtException');
+    expect((mockPushIfConfigured.mock.calls[0] as [string])[0]).toContain('first');
+    vi.clearAllMocks();
+
+    // Reset (simulates test teardown) and second registration.
+    process.removeAllListeners('uncaughtException');
+    process.removeAllListeners('unhandledRejection');
+    _resetDaemonCrashHandlersForTest();
+
+    const bind2 = registerEarlyDaemonCrashHandlers();
+    // The second binder must update the live source; without the module-scoped
+    // earlyInFlightSource fix it would write to a stale closure var.
+    bind2(() => [{ taskId: 'second', commandHead: '/second-cmd', elapsedMs: 2_000 }]);
+    process.emit('uncaughtException', new Error('second-crash'), 'uncaughtException');
+
+    expect(mockPushIfConfigured).toHaveBeenCalledOnce();
+    const [msg] = mockPushIfConfigured.mock.calls[0] as [string];
+    expect(msg).toContain('second');
+    expect(msg).toContain('/second-cmd');
+    expect(msg).not.toContain('first');
   });
 });

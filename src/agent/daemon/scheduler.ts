@@ -276,7 +276,7 @@ export class CronScheduler {
       const entry = this.registry.get(taskId);
       const commandHead = entry !== undefined
         ? redactInlineSecrets(entry.task.command).slice(0, 60)
-        : taskId;
+        : redactInlineSecrets(taskId).slice(0, 60);
       result.push({ taskId, commandHead, elapsedMs: now - startedAt });
     }
     return result;
