@@ -11,6 +11,59 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.307.4] - 2026-10-09
+
+### Added
+- add `afk defects` CLI subcommand for recurring defect ledger (#3350) (3ef3c90d)
+
+### Fixed
+- tighten heartbeat test assertions and waitFor options (#3310) (1dadb52a)
+- redact in-flight command heads in crash notices; register crash handlers before startup (#3358) (5b8751f9)
+- union re-wrapped operator deny lists; surface ledger tail-cap truncation (#3357) (d9284998)
+- suppress legacy deficit eviction while resize burst is in flight (#3361) (45d44cd2)
+- add end-to-end regression test for preset {append} in system message (#3351) (219d0d71)
+
+### Changed
+- add solo-timeout test and explicit spy restore in model-complete (#3311) (f1b560f2)
+- note that model_complete max_tokens is ignored on ChatGPT-subscription models (#3292) (79b9be8a)
+- extract appendSystemPromptBlock, formatDuration, detectMediaType, brace scanners, printWarnings, chatLabel helpers (#3349) (d7514c7e)
+
+## [5.307.3] - 2026-10-09
+
+### Changed
+- give unnamed subagents a scoped worker prompt instead of the full parent base (~54 KB) (#3324) (09ca83dd)
+
+## [5.307.2] - 2026-10-09
+
+### Added
+- push wave-resume offers to Telegram from daemon; include in-flight tasks in crash notices (#3323) (50ed2aa7)
+
+### Changed
+- add json-file + pathExists helpers, migrate 13 call sites (#3329) (1c7cb9e7)
+
+## [5.307.1] - 2026-10-09
+
+### Added
+- ship a reusable GitHub Action for running afk in CI (#3321) (82e44ca7)
+
+### Fixed
+- force HTTP/1.1 for all model API calls to prevent nghttp2 DATA-frame freeze on Node 26 (#3336) (0ce406ba)
+
+## [5.307.0] - 2026-10-09
+
+### Added
+- add OverlapAlertLatch — one Telegram alert per overlap episode (#3326) (7b90c16b)
+- aggregate subagent outcomes by model, type and depth and surface in get_runtime_state (#3328) (43540bc2)
+
+### Fixed
+- address CPR late-reply advisory findings from #3240 review (#3314) (6a932100)
+- harvest flags from flat-installed plugin roots (#3333) (849c625a)
+- address advisory findings from 2026-10-08 /pr-triage (#3294–#3309) (#3325) (3b3ab7b5)
+
+### Changed
+- split system prompt into stable cached prefix and volatile env tail (#3322) (a7202c80)
+- shared JSONL helpers and bounded schedule-telemetry reader (#3327) (2edd291f)
+
 ## [5.306.4] - 2026-10-09
 
 ### Fixed

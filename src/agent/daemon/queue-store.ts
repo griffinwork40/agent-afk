@@ -27,11 +27,7 @@ export { recoverExpiredLeases };
 
 /** Returns true if err is a Node.js ENOENT filesystem error. */
 function isEnoent(err: unknown): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    isErrnoCode(err, 'ENOENT')
-  );
+  return isErrnoCode(err, 'ENOENT');
 }
 
 export interface QueuedTask {

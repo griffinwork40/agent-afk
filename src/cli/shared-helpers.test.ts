@@ -151,6 +151,18 @@ describe('resolveBaseSystemPrompt', () => {
     expect(source).toBe('framework+afk-md:/repo/AFK.md');
   });
 
+  it('exposes the bare overlay (no framework, no header) for unnamed subagents (#3324)', () => {
+    vi.mocked(loadConfig).mockReturnValue(fakeConfig('Operator says hi', 'afk-md:/repo/AFK.md'));
+    expect(resolveBaseSystemPrompt().overlay).toBe('Operator says hi');
+  });
+
+  it('omits overlay when none (or only whitespace) is configured', () => {
+    vi.mocked(loadConfig).mockReturnValue(fakeConfig(undefined, undefined));
+    expect(resolveBaseSystemPrompt()).not.toHaveProperty('overlay');
+    vi.mocked(loadConfig).mockReturnValue(fakeConfig('   ', 'afk-md:/repo/AFK.md'));
+    expect(resolveBaseSystemPrompt()).not.toHaveProperty('overlay');
+  });
+
   it('reports source "framework" when no overlay is configured', () => {
     vi.mocked(loadConfig).mockReturnValue(fakeConfig(undefined, undefined));
     const { prompt, source } = resolveBaseSystemPrompt();

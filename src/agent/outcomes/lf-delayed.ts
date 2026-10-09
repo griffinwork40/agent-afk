@@ -167,7 +167,6 @@ export function lfFixOfFix(): Vote[] {
 // Real exec implementations (used by the backfill script, not by unit tests)
 // ---------------------------------------------------------------------------
 
-;
 import { execFileAsync } from '../../utils/exec-file.js';
 
 export const realFetchPrState: FetchPrState = async (

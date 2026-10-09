@@ -174,7 +174,6 @@ async function _findFixOfFixRefs(
 // Real exec implementation
 // ---------------------------------------------------------------------------
 
-;
 import { execFileAsync } from '../../utils/exec-file.js';
 
 const FOF_EXEC_TIMEOUT_MS = 20_000;

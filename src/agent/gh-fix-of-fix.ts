@@ -27,7 +27,6 @@
  */
 
 import type { ExecFn } from './gh.js';
-;
 import { execFileAsync } from '../utils/exec-file.js';
 
 // ---------------------------------------------------------------------------

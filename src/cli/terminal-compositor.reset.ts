@@ -47,6 +47,7 @@ export interface ResetStateHost {
   pendingContentRows: number | null;
   pendingResizeErase: { top: number; bottom: number } | null;
   bandGeometryStale: boolean;
+  resizeGeometryStale: boolean;
   lastKnownRows: number;
   cprPending: boolean;
   pickerController: PickerController | null;
@@ -127,6 +128,7 @@ export function resetState(self: ResetStateHost): void {
   // but resetting it keeps the field's meaning exact: "stale since the last
   // resize", not "stale forever until any resize happens to occur".
   self.bandGeometryStale = false;
+  self.resizeGeometryStale = false; // mirrors bandGeometryStale reset (#3212)
   self.lastKnownRows = 0;
   // Drop the between-turn resize snapshot — a fresh arm cycle has no
   // geometry yet (same as the bandGeometryStale reset above).

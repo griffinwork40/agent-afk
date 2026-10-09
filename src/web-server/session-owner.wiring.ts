@@ -55,6 +55,8 @@ export interface WireWebSessionOptions {
   cwd: string;
   rawPrompt: string | undefined;
   rawPromptSource: string | undefined;
+  /** Bare operator overlay (no framework); reaches unnamed `agent` children (#3324). */
+  operatorOverlay?: string | undefined;
 }
 
 /**
@@ -66,7 +68,7 @@ export interface WireWebSessionOptions {
 export async function wireWebSession(
   opts: WireWebSessionOptions,
 ): Promise<WebSessionWiring> {
-  const { model, apiKey, cwd, rawPrompt, rawPromptSource } = opts;
+  const { model, apiKey, cwd, rawPrompt, rawPromptSource, operatorOverlay } = opts;
 
   // -- 1. Trace writer (session-scoped UUID) ----------------------------------
   const created: CreatedTraceWriter | null = createDefaultTraceWriter();
@@ -107,6 +109,7 @@ export async function wireWebSession(
     defaultSubagentModel: getDefaultSubagentModel(model),
     resolveApiKeyForModel: getApiKeyForModel,
     ...(rawPrompt !== undefined ? { systemPrompt: rawPrompt } : {}),
+    ...(operatorOverlay !== undefined ? { operatorOverlay } : {}),
     cwd,
     // Web uses uniform cwd anchoring (same as REPL, unlike Telegram).
     nestedCwd: cwd,

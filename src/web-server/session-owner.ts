@@ -112,8 +112,9 @@ export class SessionOwner {
     // other sessions stay alive. No bundled-prompt fallback is performed.
     let rawPrompt: string | undefined;
     let rawPromptSource: string | undefined;
+    let operatorOverlay: string | undefined;
     try {
-      ({ prompt: rawPrompt, source: rawPromptSource } = resolveBaseSystemPrompt(cwd));
+      ({ prompt: rawPrompt, source: rawPromptSource, overlay: operatorOverlay } = resolveBaseSystemPrompt(cwd));
     } catch (err) {
       throw new Error(
         `Session creation failed: AFK_FRAMEWORK_PROMPT_FILE error: ${errorMessage(err)}. ` +
@@ -123,7 +124,7 @@ export class SessionOwner {
 
     // Full executor + trace + MCP wiring (mirrors REPL/Telegram Anthropic).
     const wiring = await wireWebSession({
-      model, apiKey, cwd, rawPrompt, rawPromptSource,
+      model, apiKey, cwd, rawPrompt, rawPromptSource, operatorOverlay,
     }) as WebSessionWiringInternal;
 
     // Hook registry with the shared memory store so session-end writes land in

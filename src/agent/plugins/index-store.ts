@@ -18,15 +18,11 @@
 
 import {
   existsSync,
-  mkdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
-  unlinkSync,
 } from 'fs';
-import { dirname, join } from 'path';
-import { randomBytes } from 'crypto';
+
 import { getPluginsIndexPath } from '../../paths.js';
+import { writeJsonFile } from '../../utils/json-file.js';
 
 export type SourceType = 'git' | 'github' | 'local' | 'marketplace';
 
@@ -145,23 +141,8 @@ export function readIndex(path: string = getPluginsIndexPath()): PluginIndex {
  * Atomically write `index` to `path`. Creates parent dirs if needed.
  */
 export function writeIndex(index: PluginIndex, path: string = getPluginsIndexPath()): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = join(
-    dirname(path),
-    `.index.json.${process.pid}.${randomBytes(4).toString('hex')}.tmp`,
-  );
-  const payload = JSON.stringify(index, null, 2);
-  try {
-    writeFileSync(tmp, payload, 'utf8');
-    renameSync(tmp, path);
-  } catch (err) {
-    try {
-      if (existsSync(tmp)) unlinkSync(tmp);
-    } catch {
-      /* best effort */
-    }
-    throw err;
-  }
+  // atomicWriteFile (via writeJsonFile) creates parent dirs (mkdirp: true by default).
+  writeJsonFile(path, index, { mode: 0o600 });
 }
 
 /**

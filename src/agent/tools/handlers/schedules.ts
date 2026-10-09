@@ -14,8 +14,6 @@
  * @module agent/tools/handlers/schedules
  */
 
-import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import type { ToolHandler } from '../types.js';
 import {
   loadSchedules,
@@ -33,6 +31,7 @@ import {
   trySyncToDaemon,
   SYNC_FAILED_NOTE,
 } from '../../daemon/http-client.js';
+import { readTelemetryHistory } from '../../daemon/telemetry-reader.js';
 
 export type { DaemonSyncResult };
 
@@ -287,40 +286,8 @@ export const getScheduleHistoryHandler: ToolHandler = async (input, _signal) => 
     typeof obj['limit'] === 'number' ? Math.min(Math.max(1, obj['limit']), 50) : 10;
 
   const telemetryPath = getTelemetryPath();
-  if (!existsSync(telemetryPath)) {
-    return { content: JSON.stringify([]) };
-  }
-
-  let content: string;
-  try {
-    // 1MB tail cap to avoid reading huge files.
-    // Async read keeps the event loop responsive — telemetry files can be
-    // multi-MB on long-running daemons.
-    const buf = await readFile(telemetryPath);
-    const tailBuf = buf.length > 1_048_576 ? buf.subarray(buf.length - 1_048_576) : buf;
-    content = tailBuf.toString('utf-8');
-  } catch {
-    return { content: JSON.stringify([]) };
-  }
-
-  const lines = content.split('\n');
-  const matching: unknown[] = [];
-  // Reverse scan (newest first) — mirror gates.ts pattern exactly
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i];
-    if (!line) continue; // noUncheckedIndexedAccess guard
-    try {
-      const record = JSON.parse(line) as { taskId?: string };
-      if (record.taskId !== taskId) continue;
-      matching.push(record);
-      if (matching.length >= limit) break;
-    } catch {
-      continue;
-    }
-  }
-
-  // Return in chronological order (oldest first)
-  return { content: JSON.stringify(matching.reverse()) };
+  const matching = await readTelemetryHistory(telemetryPath, { taskId, limit });
+  return { content: JSON.stringify(matching) };
 };
 
 export const cancelScheduleHandler: ToolHandler = async (input, _signal) => {

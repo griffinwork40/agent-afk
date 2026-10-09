@@ -77,7 +77,8 @@ import {
   resolveAutoCompactThreshold,
 } from '../shared/auto-compact.js';
 import { AbortCoordinator, CLOSED_SENTINEL } from '../shared/abort-coordinator.js';
-import { HookBlockedError, ensureError} from '../../../utils/errors.js';
+import { h1ModelFetch } from '../shared/h1-fetch.js';
+import { HookBlockedError, ensureError } from '../../../utils/errors.js';
 
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
 import { OpenAIJournalWiring } from './query/journal-wiring.js';
@@ -276,7 +277,11 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
       if (wire.headers !== undefined) clientOpts.defaultHeaders = wire.headers;
       else if (opts.defaultHeaders !== undefined) clientOpts.defaultHeaders = opts.defaultHeaders;
       const admissionFetch = buildOpenAIAdmissionFetch(baseURL);
-      if (admissionFetch !== undefined) clientOpts.fetch = admissionFetch;
+      // Invariant: always inject a fetch that forces HTTP/1.1.  For remote
+      // endpoints, admissionFetch wraps h1ModelFetch with rate-limit logic.
+      // For local shims, fall back to bare h1ModelFetch so we still bypass
+      // the global undici dispatcher (which may have allowH2: true).
+      clientOpts.fetch = admissionFetch ?? h1ModelFetch;
       this.client = ctor(clientOpts);
     }
   }

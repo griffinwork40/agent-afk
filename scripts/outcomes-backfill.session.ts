@@ -5,7 +5,6 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-;
 
 import { StoredSessionInputSchema } from '../src/agent/facets/schema.js';
 import {

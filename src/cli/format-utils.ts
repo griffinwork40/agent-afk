@@ -13,7 +13,8 @@ export function formatDuration(ms: number): string {
 
   if (d > 0) return `${d}d ${h}h`;
   if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m ${s}s`;
+  // Suppress a trailing "0s" so "5m 0s" renders as "5m".
+  if (m > 0) return s === 0 ? `${m}m` : `${m}m ${s}s`;
   return `${s}s`;
 }
 

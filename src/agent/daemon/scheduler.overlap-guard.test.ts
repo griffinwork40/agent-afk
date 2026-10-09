@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { makeOverlapSkipRecord, makeSessionStartSkipRecord } from './scheduler.overlap-guard.js';
+import { makeOverlapSkipRecord, makeSessionStartSkipRecord, OverlapAlertLatch, formatOverlapAlertMessage } from './scheduler.overlap-guard.js';
 import type { ScheduledTask } from './triggers.js';
 import type { GateDecision } from './gates.js';
 
@@ -167,5 +167,73 @@ describe('makeOverlapSkipRecord', () => {
     const record = makeOverlapSkipRecord(task, 'cron', fixedMs);
 
     expect(record.triggeredAt).toBe(new Date(fixedMs).toISOString());
+  });
+});
+
+describe('OverlapAlertLatch', () => {
+  it('returns true for the first overlap of a task (new episode)', () => {
+    const latch = new OverlapAlertLatch();
+    expect(latch.shouldAlert('task-a')).toBe(true);
+  });
+
+  it('returns false for subsequent overlaps of the same task (same episode)', () => {
+    const latch = new OverlapAlertLatch();
+    latch.shouldAlert('task-a'); // first — alerts
+    expect(latch.shouldAlert('task-a')).toBe(false);
+    expect(latch.shouldAlert('task-a')).toBe(false);
+  });
+
+  it('tracks episodes independently per task id', () => {
+    const latch = new OverlapAlertLatch();
+    expect(latch.shouldAlert('task-a')).toBe(true);
+    expect(latch.shouldAlert('task-b')).toBe(true); // separate episode
+    expect(latch.shouldAlert('task-a')).toBe(false);
+    expect(latch.shouldAlert('task-b')).toBe(false);
+  });
+
+  it('alerts again after clear() ends the episode', () => {
+    const latch = new OverlapAlertLatch();
+    latch.shouldAlert('task-a'); // opens episode
+    latch.clear('task-a');       // task completed — episode over
+    expect(latch.shouldAlert('task-a')).toBe(true); // new episode
+  });
+
+  it('clear() for an unknown task is a no-op', () => {
+    const latch = new OverlapAlertLatch();
+    expect(() => latch.clear('not-seen')).not.toThrow();
+    // Still alerts normally afterwards
+    expect(latch.shouldAlert('not-seen')).toBe(true);
+  });
+
+  it('_reset() clears all episodes so every task alerts again', () => {
+    const latch = new OverlapAlertLatch();
+    latch.shouldAlert('task-a');
+    latch.shouldAlert('task-b');
+    latch._reset();
+    expect(latch.shouldAlert('task-a')).toBe(true);
+    expect(latch.shouldAlert('task-b')).toBe(true);
+  });
+});
+
+describe('formatOverlapAlertMessage', () => {
+  it('includes the task id and command in the message', () => {
+    const msg = formatOverlapAlertMessage('daily-report', 'run-report', '0 9 * * *');
+    expect(msg).toContain('daily-report');
+    expect(msg).toContain('run-report');
+  });
+
+  it('includes the cron expression when provided', () => {
+    const msg = formatOverlapAlertMessage('t', 'cmd', '0 9 * * *');
+    expect(msg).toContain('cron: 0 9 * * *');
+  });
+
+  it('omits the cron note when cron is undefined', () => {
+    const msg = formatOverlapAlertMessage('t', 'cmd', undefined);
+    expect(msg).not.toContain('cron:');
+  });
+
+  it('mentions that further overlaps will not alert', () => {
+    const msg = formatOverlapAlertMessage('t', 'cmd', undefined);
+    expect(msg).toMatch(/without alerts/i);
   });
 });

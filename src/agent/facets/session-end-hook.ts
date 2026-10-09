@@ -27,7 +27,6 @@
  * @module agent/facets/session-end-hook
  */
 
-;
 import type { HookHandler } from '../hooks.js';
 import { getOrDeriveFacet } from './store.js';
 import { writeFacetYield } from './yield-probe.js';

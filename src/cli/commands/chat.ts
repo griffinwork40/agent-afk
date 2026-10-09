@@ -207,7 +207,7 @@ export function registerChatCommand(program: Command): void {
 
         const providerHints = explicitProviderHints(options.provider);
         const apiKey = getApiKeyForModel(getModel(), providerHints);
-        const { prompt: basePrompt, source: systemPromptSource } = resolveBaseSystemPrompt();
+        const { prompt: basePrompt, source: systemPromptSource, overlay: operatorOverlay } = resolveBaseSystemPrompt();
         const cliConfig = loadConfig();
         applyTheme(resolveTheme(resolveThemeMode(options.theme, cliConfig.theme)));
         const autoRouting = cliConfig.autoRouting?.chat ?? false;
@@ -278,7 +278,7 @@ export function registerChatCommand(program: Command): void {
           apiKey,
           systemPrompt,
           systemPromptSource,
-          basePrompt,
+          basePrompt, operatorOverlay,
           providerHints,
           providerRaw: options.provider,
           thinking,

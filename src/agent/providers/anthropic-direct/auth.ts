@@ -11,6 +11,7 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AuthMode } from './types.js';
 import { composeBetaHeader } from './beta-headers.js';
+import { h1ModelFetch } from '../shared/h1-fetch.js';
 
 /**
  * Beta that activates the 1-hour prompt-cache TTL. Required in BOTH auth modes
@@ -82,6 +83,12 @@ export function detectAuthMode(token: string): AuthMode {
  * through it. Used to inject an observability wrapper (see
  * {@link makeTracingFetch}) that records 429/503/529 throttling into the
  * witness trace — otherwise the SDK's silent retry-after backoff is invisible.
+ * Defaults to {@link h1ModelFetch} so that EVERY Anthropic client — including
+ * the one-shot client in `oneshot.ts` — forces HTTP/1.1, regardless of what
+ * jsdom or any other importer has written into the global undici dispatcher.
+ * Callers that supply a tracing wrapper already chain it on top of
+ * `h1ModelFetch` (see `makeTracingFetch` default in `tracing-fetch.ts`), so
+ * this default is never overridden back to the global dispatcher by accident.
  *
  * `maxRetries` is always 0: AFK's own retry layers (loop/round-retry.ts,
  * loop/retry-budget.ts, query/retry-layer.ts) are the single, traced retry
@@ -96,18 +103,15 @@ export function buildClientOptions(
   token: string,
   mode: AuthMode,
   baseUrl?: string,
-  fetchImpl?: typeof fetch,
-): ({ authToken: string } | { apiKey: string }) & { baseURL?: string; fetch?: typeof fetch; maxRetries: 0 } {
+  fetchImpl: typeof fetch = h1ModelFetch,
+): ({ authToken: string } | { apiKey: string }) & { baseURL?: string; fetch: typeof fetch; maxRetries: 0 } {
   const base = mode === 'oauth'
     ? { authToken: token, maxRetries: 0 as const }
     : { apiKey: token, maxRetries: 0 as const };
   const withBase = typeof baseUrl === 'string' && baseUrl.length > 0
     ? { ...base, baseURL: baseUrl }
     : base;
-  if (fetchImpl) {
-    return { ...withBase, fetch: fetchImpl };
-  }
-  return withBase;
+  return { ...withBase, fetch: fetchImpl };
 }
 
 /**

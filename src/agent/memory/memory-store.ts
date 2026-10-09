@@ -24,10 +24,9 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  writeFileSync,
   copyFileSync,
-  renameSync,
 } from 'fs';
+import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { join } from 'path';
 import { getMemoryDir } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
@@ -57,7 +56,7 @@ import type {
 const HOT_FILE = 'HOT.md';
 const HOT_BACKUP = 'HOT.md.bak';
 const DB_FILE = 'memory.db';
-const HOT_TMP = 'HOT.md.tmp';
+
 const MAX_HOT_CHARS = 5250; // ~1,500 tokens at 3.5 chars/token
 const HOT_TOKEN_CAP = Math.ceil(MAX_HOT_CHARS / 3.5); // 1500 — surfaced in usage reports
 
@@ -193,12 +192,10 @@ export class MemoryStore {
     if (existsSync(path)) {
       copyFileSync(path, join(this.dir, HOT_BACKUP));
     }
-    // Atomic write: write a temp file in the same directory, then rename it
-    // over HOT.md. renameSync is atomic on POSIX, so a concurrent reader (or a
-    // crash) never observes a partially-written file.
-    const tmp = join(this.dir, HOT_TMP);
-    writeFileSync(tmp, toWrite, 'utf-8');
-    renameSync(tmp, path);
+    // Atomic write via atomicWriteFile (tmp+rename, randomBytes suffix, mkdirp).
+    // A crash mid-write never leaves a partially-written HOT.md; rename is
+    // atomic on POSIX so a concurrent reader always sees a complete file.
+    atomicWriteFile(path, toWrite, { mode: 0o600, encoding: 'utf-8' });
 
     return this.computeHotUsage(toWrite, truncated);
   }

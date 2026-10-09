@@ -210,7 +210,7 @@ export async function readWithAutocompleteTty(
       keypressListener = (char: string | undefined, key: KeyInfo) => {
         handleKeypress(char, key, st, {
           opts,
-          stdout,
+          stdout, stdin,
           repaintCtx,
           callbacks: { onSubmit, onAbort, onEof },
           pasteWindowMs: PASTE_WINDOW_MS,

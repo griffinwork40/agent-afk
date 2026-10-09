@@ -19,7 +19,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { isErrnoCode } from '../utils/errors.js';
+import { isErrnoCode } from './errors.js';
 
 /**
  * Injectable Windows launcher so this branch can be tested on any host.

@@ -35,6 +35,7 @@ import { parseRetryAfterMs } from './usage-limit.js';
 import { estimateInputTokens } from '../shared/rate-limit-bucket.js';
 import { THROTTLE_STATUSES } from '../shared/tracing-fetch-utils.js';
 import type { ThrottleInfo, RateLimitGate } from '../shared/tracing-fetch-utils.js';
+import { h1ModelFetch } from '../shared/h1-fetch.js';
 
 // Re-export shared types so existing importers of this module's public surface
 // (e.g. openai-compatible/tracing-fetch, tests) continue to compile unchanged.
@@ -54,7 +55,7 @@ export type { ThrottleInfo, RateLimitGate };
  */
 export function makeTracingFetch(
   writer: TraceSink | undefined,
-  baseFetch: typeof fetch = fetch,
+  baseFetch: typeof fetch = h1ModelFetch,
   onThrottle?: (info: ThrottleInfo) => void,
   onQuota?: (headers: Headers) => void,
   onRateLimit?: (headers: Headers) => void,
