@@ -12,10 +12,42 @@
  * @module agent/preexisting-ledger/reader
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, openSync, readSync } from 'node:fs';
 import { getPreexistingLedgerPath } from './paths.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
 import type { LedgerRecord } from './session-end-hook.js';
+
+// ---------------------------------------------------------------------------
+// Bounded reader (1 MB tail cap — mirrors insights/aggregators/daemon.ts)
+// ---------------------------------------------------------------------------
+
+/** Maximum bytes read from the ledger in a single pass. */
+const LEDGER_READ_LIMIT = 1_048_576; // 1 MB
+
+/**
+ * Read up to the last 1 MB of a JSONL file as a UTF-8 string.
+ * Drops the partial first line when the file exceeds the cap, so every
+ * returned line is a complete JSONL record.
+ */
+function readLedgerFileContent(filePath: string): string {
+  const fd = openSync(filePath, 'r');
+  try {
+    const stat = fstatSync(fd);
+    const fileSize = stat.size;
+    const readOffset = Math.max(0, fileSize - LEDGER_READ_LIMIT);
+    const readLength = fileSize - readOffset;
+    const buf = Buffer.alloc(readLength);
+    readSync(fd, buf, 0, readLength, readOffset);
+    const content = buf.toString('utf-8');
+    if (readOffset > 0) {
+      const firstNewline = content.indexOf('\n');
+      return firstNewline >= 0 ? content.slice(firstNewline + 1) : '';
+    }
+    return content;
+  } finally {
+    try { closeSync(fd); } catch { /* ignore */ }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -75,7 +107,10 @@ export function readLedgerRecords(ledgerPath?: string): LedgerRecord[] {
   if (!existsSync(resolvedPath)) return [];
   let raw: string;
   try {
-    raw = readFileSync(resolvedPath, 'utf8');
+    // Bounded read: cap at 1 MB (last N bytes) so a runaway ledger never
+    // causes an OOM in the insights aggregator. Mirrors readTailMb() from
+    // insights/aggregators/daemon.ts, kept local to avoid cross-layer imports.
+    raw = readLedgerFileContent(resolvedPath);
   } catch {
     return [];
   }

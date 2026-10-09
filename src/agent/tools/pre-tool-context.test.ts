@@ -125,3 +125,31 @@ describe('non-blocking PreToolUse context delivery', () => {
     expect(deliveries(trace)).toHaveLength(0);
   });
 });
+
+describe('PreToolContext unit', () => {
+  it('capture("") does not store and deliver returns the original result unchanged', async () => {
+    const { PreToolContext } = await import('./pre-tool-context.js');
+    const ctx = new PreToolContext();
+    const c = call();
+    const result = { content: 'base', isError: false as const };
+    ctx.capture(c, ''); // empty string: guard inside capture must skip set()
+    const out = await ctx.deliver(c, result);
+    // No context stored → no banner appended; original result returned as-is
+    expect(out).toBe(result);
+    expect(out.content).toBe('base');
+  });
+
+  it('capture(non-empty) then deliver returns a NEW object with the banner', async () => {
+    const { PreToolContext } = await import('./pre-tool-context.js');
+    const ctx = new PreToolContext();
+    const c = call();
+    const result = { content: 'output', isError: false as const };
+    ctx.capture(c, 'injected note');
+    const out = await ctx.deliver(c, result);
+    // Must be a new object — not the same reference
+    expect(out).not.toBe(result);
+    expect(out.content).toBe('output\n\n[PreToolUse context]\ninjected note');
+    // Original must be untouched
+    expect(result.content).toBe('output');
+  });
+});

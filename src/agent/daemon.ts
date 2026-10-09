@@ -436,6 +436,10 @@ async function handleRequestAsync(
       // present but unrecognized value is rejected outright, never coerced to
       // the default, so validation can only narrow trust, not widen it.
       const rawNotifyOn = obj['notifyOn'];
+      // null is intentionally treated as absent (i.e. the request carries no
+      // notifyOn preference) and normalizes to the effective default 'failure'
+      // below. This mirrors the JSON convention used for optional fields on
+      // POST bodies — null signals "caller does not care, use the default".
       const notifyOnValid = rawNotifyOn === undefined || rawNotifyOn === null || isValidNotifyOn(rawNotifyOn);
       const trusted =
         notifyOnValid &&

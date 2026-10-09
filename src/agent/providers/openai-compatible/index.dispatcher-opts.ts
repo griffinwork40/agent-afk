@@ -10,7 +10,8 @@
  * @module agent/providers/openai-compatible/index.dispatcher-opts
  */
 
-import type { PlanExitControls } from '../../types/config-types.js';
+import type { AgentConfig, PlanExitControls } from '../../types/config-types.js';
+import { isHeadlessSession } from '../shared/headless-session.js';
 import type { RuntimeStateSource } from '../../awareness/index.js';
 
 export interface BuildDispatcherOpts {
@@ -69,9 +70,19 @@ export interface BuildDispatcherOpts {
    * When true, this is a non-interactive surface (daemon, scheduler/cron,
    * one-shot chat) where no human answers elicitations. Strip `ask_question`
    * only (not `terminal_font_size`). Parity with the `config.isNonInteractive`
-   * toolDefs filter in AnthropicDirectProvider.
+   * toolDefs filter in AnthropicDirectProvider. Also forwarded to the
+   * Drives the ask_question strip ONLY; the bash-restriction floor reads
+   * {@link headless} instead (#2302).
    */
   isNonInteractive?: boolean;
+  /**
+   * No human can approve a tool call (`isHeadlessSession(config)`). Forwarded
+   * to the dispatcher via {@link headlessSignalOpts} as the explicit headless
+   * signal for the bash-restriction floor (#2302). Distinct from
+   * {@link isNonInteractive} so daemon pull tasks keep ask_question yet still
+   * get the unattended floor.
+   */
+  headless?: boolean;
   /**
    * Session-scoped hook registry from `AgentConfig.hookRegistry`. Threaded
    * here so `PreToolUse`/`PostToolUse` hooks (notably the plan-mode gate)
@@ -100,5 +111,34 @@ export function sessionRegistryOpts(src: {
   return {
     ...(src.detachRegistry !== undefined ? { detachRegistry: src.detachRegistry } : {}),
     ...(src.processJobs !== undefined ? { processJobs: src.processJobs } : {}),
+  };
+}
+
+/**
+ * The explicit headless signal forwarded to the per-query dispatcher, which
+ * injects it onto every PreToolUse context as `nonInteractive` (#2302). Parity
+ * with `anthropic-direct/build-dispatcher.ts`. Needed because this provider
+ * wires itself as the session grant manager on EVERY surface, so grant-manager
+ * absence can never tell the bash-restriction hook a session is unattended.
+ * Extracted so `index.ts` (file-size baselined) forwards it without growing.
+ */
+export function headlessSignalOpts(src: Pick<BuildDispatcherOpts, 'headless'>): {
+  isNonInteractive?: true;
+} {
+  return src.headless === true ? { isNonInteractive: true } : {};
+}
+
+/**
+ * The two interactivity opts derived from one AgentConfig: `isNonInteractive`
+ * (ask_question strip, unchanged) and `headless` (bash floor, via
+ * {@link isHeadlessSession}). Extracted so `index.ts` (file-size baselined)
+ * forwards both in the one line that used to forward `isNonInteractive`.
+ */
+export function interactivityOpts(
+  config: Pick<AgentConfig, 'isNonInteractive' | 'surface'>,
+): Pick<BuildDispatcherOpts, 'isNonInteractive' | 'headless'> {
+  return {
+    ...(config.isNonInteractive ? { isNonInteractive: true } : {}),
+    ...(isHeadlessSession(config) ? { headless: true } : {}),
   };
 }

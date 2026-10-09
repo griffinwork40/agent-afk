@@ -39,6 +39,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { RAW_SGR_RE, isStylingSgr } from './audit-chalk-sgr.js';
+import { groupViolationsByFile, isProdTs, walkSourceFiles } from './lib/walk-source-files.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -101,16 +102,7 @@ const CHALK_STYLE_RE = /\bchalk\s*\.\s*(?!level\b)([A-Za-z][A-Za-z0-9]*)/g;
 
 
 function walk(dir: string, out: string[]): void {
-  if (!fs.existsSync(dir)) return;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name.startsWith('.')) continue;
-      walk(full, out);
-    } else if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) {
-      out.push(full);
-    }
-  }
+  walkSourceFiles(dir, (absPath) => isProdTs(absPath), out);
 }
 
 function isAllowedFile(relPath: string): boolean {
@@ -184,13 +176,7 @@ function main(): void {
   }
 
   console.error(`\n✗ audit-chalk-usage: ${allViolations.length} raw styling site(s) outside the palette:\n`);
-  const byFile = new Map<string, Violation[]>();
-  for (const v of allViolations) {
-    const existing = byFile.get(v.file);
-    if (existing) existing.push(v);
-    else byFile.set(v.file, [v]);
-  }
-  for (const [file, vs] of [...byFile.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [file, vs] of groupViolationsByFile(allViolations)) {
     console.error(`  ${file}`);
     for (const v of vs) {
       console.error(`    L${v.line}: ${v.method}`);

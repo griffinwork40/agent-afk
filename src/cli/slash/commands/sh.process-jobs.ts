@@ -15,6 +15,7 @@ import { palette } from '../../palette.js';
 import { formatDuration } from '../../format-utils.js';
 import type { SlashContext } from '../types.js';
 import type { ProcessJobRegistry } from '../../../agent/shell-jobs/process-jobs.js';
+import { truncate } from '../../../utils/truncate.js';
 
 let processJobsRef: ProcessJobRegistry | undefined;
 
@@ -30,7 +31,7 @@ export function listProcessJobs(out: SlashContext['out']): void {
   out.line(palette.dim('  model background processes (bash run_in_background):'));
   for (const job of jobs) {
     const dur = formatDuration((job.endedAt ?? Date.now()) - job.startedAt).padEnd(12);
-    const cmd = job.command.length > 60 ? job.command.slice(0, 57) + '...' : job.command;
+    const cmd = truncate(job.command, 60);
     const glyph = job.status === 'running' ? '▶' : job.status === 'completed' ? '✓' : '✗';
     out.line(`  ${glyph} ${job.id.padEnd(7)} ${job.status.padEnd(10)} ${dur} ${cmd}`);
   }

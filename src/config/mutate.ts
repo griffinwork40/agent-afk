@@ -48,6 +48,10 @@ export const RESTART_NOTE =
 
 export class UnknownKeyError extends Error {
   constructor(key: string) {
+    // NOTE: keys under `tools` / `tools.disabled` produce a bespoke message
+    // that does NOT match `"unknown config key:"`. Any caller that pattern-matches
+    // on that literal string (e.g. error-boundary logging) must also handle the
+    // tools.disabled message variant, or check `instanceof UnknownKeyError` instead.
     super(key === 'tools.disabled' || key.startsWith('tools.disabled.') || key === 'tools'
       ? 'tools.disabled is operator-only and is not a `config set` key (the agent cannot change it). Toggle tools in the REPL with /config → Tools, or edit afk.config.json.'
       : `unknown config key: ${key}`);

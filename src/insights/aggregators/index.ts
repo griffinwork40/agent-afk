@@ -19,6 +19,10 @@ import {
   aggregatePreexistingDefects,
   zeroPreexistingDefectAggregates,
 } from './preexisting-defects.js';
+import {
+  aggregateSubagentOutcomes,
+  zeroSubagentOutcomeAggregates,
+} from './subagent-outcomes.js';
 import type { InsightsOptions, InsightAggregates } from '../types.js';
 import { errorMessage } from '../../utils/errors.js';
 
@@ -29,6 +33,7 @@ export {
   aggregateRoutingDecisions,
   aggregateOutcomes,
   aggregatePreexistingDefects,
+  aggregateSubagentOutcomes,
 };
 
 /**
@@ -69,6 +74,11 @@ export async function aggregateAll(options: InsightsOptions): Promise<InsightAgg
       'preexisting-defects',
       () => aggregatePreexistingDefects(options),
       zeroPreexistingDefectAggregates,
+    ),
+    subagentOutcomes: safeAggregate(
+      'subagent-outcomes',
+      () => aggregateSubagentOutcomes(options),
+      zeroSubagentOutcomeAggregates,
     ),
   };
 }

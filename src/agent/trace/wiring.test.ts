@@ -36,6 +36,17 @@ import { SessionToolDispatcher } from '../tools/dispatcher.js';
 import type { ToolHandler } from '../tools/types.js';
 
 // ---------------------------------------------------------------------------
+// Shared assertion helpers
+// ---------------------------------------------------------------------------
+
+/** Narrow a trace event to hook_decision; throws an assertion error otherwise. */
+function assertHookDecision(
+  e: { kind: string } | undefined,
+): asserts e is { kind: 'hook_decision'; payload: Record<string, unknown> } {
+  if (e?.kind !== 'hook_decision') throw new Error('unreachable: expected hook_decision event');
+}
+
+// ---------------------------------------------------------------------------
 // hook_decision via dispatch helpers
 // ---------------------------------------------------------------------------
 
@@ -203,6 +214,7 @@ describe('tool_call — emitted from SessionToolDispatcher', () => {
     writer: InMemoryTraceWriter,
     handler: ToolHandler,
     handlerName = 'fake_tool',
+    registry?: ReturnType<typeof createHookRegistry>,
   ): SessionToolDispatcher {
     const handlers = new Map<string, ToolHandler>();
     handlers.set(handlerName, handler);
@@ -210,6 +222,7 @@ describe('tool_call — emitted from SessionToolDispatcher', () => {
       handlers,
       schemas: [],
       traceWriter: writer,
+      ...(registry !== undefined ? { hookRegistry: registry } : {}),
     });
   }
 
@@ -238,14 +251,7 @@ describe('tool_call — emitted from SessionToolDispatcher', () => {
   it('emits hook_decision for PreToolUse and PostToolUse around dispatch', async () => {
     const writer = new InMemoryTraceWriter();
     const registry = createHookRegistry();
-    const handlers = new Map<string, ToolHandler>();
-    handlers.set('fake_tool', async () => ({ content: 'result', isError: false }));
-    const dispatcher = new SessionToolDispatcher({
-      handlers,
-      schemas: [],
-      hookRegistry: registry,
-      traceWriter: writer,
-    });
+    const dispatcher = makeDispatcher(writer, async () => ({ content: 'result', isError: false }), 'fake_tool', registry);
     const ac = new AbortController();
     await dispatcher.execute({
       id: 't1',
@@ -270,17 +276,12 @@ describe('tool_call — emitted from SessionToolDispatcher', () => {
       reason: 'denied',
     }));
     let handlerCalled = false;
-    const handlers = new Map<string, ToolHandler>();
-    handlers.set('fake_tool', async () => {
-      handlerCalled = true;
-      return { content: 'ran', isError: false };
-    });
-    const dispatcher = new SessionToolDispatcher({
-      handlers,
-      schemas: [],
-      hookRegistry: registry,
-      traceWriter: writer,
-    });
+    const dispatcher = makeDispatcher(
+      writer,
+      async () => { handlerCalled = true; return { content: 'ran', isError: false }; },
+      'fake_tool',
+      registry,
+    );
     const ac = new AbortController();
     const result = await dispatcher.execute({
       id: 't1',
@@ -307,14 +308,12 @@ describe('tool_call — emitted from SessionToolDispatcher', () => {
     const registry = createHookRegistry();
     const context = 'check before Done — uncertain rule match';
     registry.register('PreToolUse', async () => ({ injectContext: context }));
-    const handlers = new Map<string, ToolHandler>();
-    handlers.set('fake_tool', async () => ({ content: 'result', isError: false }));
-    const dispatcher = new SessionToolDispatcher({
-      handlers,
-      schemas: [],
-      hookRegistry: registry,
-      traceWriter: writer,
-    });
+    const dispatcher = makeDispatcher(
+      writer,
+      async () => ({ content: 'result', isError: false }),
+      'fake_tool',
+      registry,
+    );
     const ac = new AbortController();
     const result = await dispatcher.execute({
       id: 't1',

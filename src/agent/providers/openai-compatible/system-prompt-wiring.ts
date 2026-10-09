@@ -26,6 +26,7 @@ import {
   resolveWorkspaceSystemPrompt,
 } from '../../tools/system-prompt.js';
 import { buildSkillManifest } from '../../tools/skill-bridge.js';
+import { normalizeSystemPromptOverlay } from '../shared/system-prompt.js';
 
 /**
  * Parameters forwarded from `query()` — all explicit, no closure over locals.
@@ -111,7 +112,10 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
     : '';
   const hotMemory = typeof config.hotMemory === 'string' ? config.hotMemory : '';
   const goalPrompt = typeof config.goalPrompt === 'string' ? config.goalPrompt : '';
-  const existingSys = typeof config.systemPrompt === 'string' ? config.systemPrompt : undefined;
+  // Fix #3261: use the shared normalizer so a preset { append } is forwarded,
+  // not silently dropped. Previously `typeof ... === 'string'` discarded the
+  // `append` text of preset objects.
+  const existingSys = normalizeSystemPromptOverlay(config.systemPrompt) ?? undefined;
 
   // Mutable cell shared between rebuildAfterCwdChange and systemPromptRebuildFactory.
   // Invariant (#2420 P1): `setSystemPrompt(base)` on the query stores `base`
@@ -119,7 +123,15 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
   // rebuild uses the REPLACEMENT base prompt — not the construction-time default.
   // Without this shared ref, `setSystemPrompt(newBase)` works only until the
   // next `setCwd()`, which would silently resurrect the old base prompt.
-  const _currentBaseRef: { current: string | undefined } = { current: undefined };
+  //
+  // `set` tracks whether systemPromptRebuildFactory has ever been called (#3305).
+  // We cannot use `current === undefined` as that sentinel because the factory
+  // may be called with `undefined` (explicit clear), leaving both the
+  // never-called and cleared states looking identical.
+  const _currentBaseRef: { set: boolean; current: string | undefined } = {
+    set: false,
+    current: undefined,
+  };
 
   /** Build the cwd-dependent `# Environment` fragment. */
   const buildEnvFragment = (): string =>
@@ -134,13 +146,16 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
 
   /**
    * Join all fragments into the full system prompt.
-   * `baseSys` defaults to the construction-time `existingSys`; pass
-   * `_currentBaseRef.current` after `setSystemPrompt()` so a subsequent
-   * `setCwd()` rebuild uses the REPLACEMENT base prompt (#2420 P1).
+   *
+   * `resolvedBase` is the already-resolved base overlay (string or undefined
+   * for "cleared"). The caller is responsible for deciding which base to pass:
+   * construction-time `existingSys`, the stored `_currentBaseRef.current`,
+   * or a new value. There is no default parameter — this function does not
+   * distinguish "no arg" from "explicit undefined".
    */
-  const assemble = (envFragment: string, baseSys = existingSys): string => {
+  const assemble = (envFragment: string, resolvedBase: string | undefined): string => {
     const parts = [toolBase];
-    if (baseSys !== undefined && baseSys.length > 0) parts.push(baseSys);
+    if (resolvedBase !== undefined && resolvedBase.length > 0) parts.push(resolvedBase);
     parts.push(memoryPrompt);
     const workspacePrompt = resolveWorkspaceSystemPrompt(hasWorkspaceStore);
     if (workspacePrompt) parts.push(workspacePrompt);
@@ -151,9 +166,18 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
   };
 
   return {
-    initialSystemPrompt: assemble(buildEnvFragment()),
-    rebuildAfterCwdChange: (): string => assemble(buildEnvFragment(), _currentBaseRef.current),
+    initialSystemPrompt: assemble(buildEnvFragment(), existingSys),
+    rebuildAfterCwdChange: (): string => {
+      // Contract: when systemPromptRebuildFactory was never called (`set` is
+      // false), fall back to the construction-time `existingSys` so the preset
+      // append is preserved. When it WAS called (even with `undefined` to
+      // clear), use the stored value — which may be `undefined`, meaning
+      // "cleared". This is the fix for #3305.
+      const base = _currentBaseRef.set ? _currentBaseRef.current : existingSys;
+      return assemble(buildEnvFragment(), base);
+    },
     systemPromptRebuildFactory: (base: string | undefined): string => {
+      _currentBaseRef.set = true;
       _currentBaseRef.current = base;
       return assemble(buildEnvFragment(), base);
     },

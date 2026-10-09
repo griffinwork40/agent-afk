@@ -62,6 +62,7 @@ function mkSource(overrides: {
     getSubagents: () => overrides.subagents ?? mkSubs(),
     getWorkspace: () => ({ branch: null, headSha: null, dirty: null, dirtyCount: null, remoteUrl: null }),
     getUsage: () => [],
+    getSubagentOutcomeSummary: () => [],
   };
 }
 
@@ -208,6 +209,7 @@ describe('buildRuntimeSnapshot', () => {
       },
       getWorkspace: () => ({ branch: null, headSha: null, dirty: null, dirtyCount: null, remoteUrl: null }),
       getUsage: () => [],
+      getSubagentOutcomeSummary: () => [],
     };
     const snap1 = buildRuntimeSnapshot(source, 'subagents');
     expect(snap1.subagents?.active).toHaveLength(1);

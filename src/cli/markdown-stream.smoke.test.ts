@@ -14,8 +14,7 @@ import { PassThrough } from 'node:stream';
 import { StreamingMarkdownRenderer } from './markdown-stream.js';
 import { SMOKE_GLYPHS, LIFETIME_MS, MAX_LAG_MS } from './smoke-reveal.js';
 import { resetSmokeToneCache } from './smoke-reveal.tones.js';
-
-const stripAnsi = (s: string): string => s.replace(/\u001b\[[0-9;]*m/g, '');
+import { stripAnsi } from './display.js';
 const hasSmoke = (s: string): boolean => SMOKE_GLYPHS.some((g) => stripAnsi(s).includes(g));
 
 function makeRenderer(opts: { reducedMotion?: boolean } = {}): { r: StreamingMarkdownRenderer; overlays: string[]; commits: string[] } {
