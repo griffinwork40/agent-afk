@@ -26,7 +26,7 @@ import { resolveProvider, providerForModel } from '../providers/index.js';
 import { ProviderRouter } from '../providers/router/provider-router.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import { dispatchSessionStart } from './hooks-dispatch.js';
-import { HookBlockedError } from '../../utils/errors.js';
+import { HookBlockedError, ensureError} from '../../utils/errors.js';
 import { transformProviderEvent } from './stream-consumer.js';
 import { buildInitialState } from './session-setup.js';
 import { SessionStateManager } from './session-state.js';
@@ -212,7 +212,7 @@ export class ProviderInitializer {
         }
       }
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
+      const error = ensureError(err);
       if (error instanceof HookBlockedError) {
         this.accounting.markHookBlocked();
       }

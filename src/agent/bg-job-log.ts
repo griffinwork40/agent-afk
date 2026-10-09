@@ -30,6 +30,7 @@ import { getBgJobsRoot, getBgJobDir, getBgJobLog, getBgJobMeta, getBgJobResult }
 import { atomicWriteFileAsync } from '../utils/atomic-write.js';
 import { persistReconciled, reconcileOrphanedMeta } from './bg-job-log.orphan.js';
 import type { OutputEvent } from './types/session-types.js';
+import { isErrnoCode } from '../utils/errors.js';
 
 export { reconcileOrphanedMeta };
 
@@ -347,7 +348,7 @@ export class BgJobLogReader {
       if (reconciled !== parsed) persistReconciled(metaPath, reconciled);
       return reconciled;
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      if (isErrnoCode(e, 'ENOENT')) return null;
       // Corrupted meta — log and return null
       process.stderr.write(`[afk] bg-job-log: readMeta parse error for ${jobId}: ${String(e)}\n`);
       return null;
@@ -376,7 +377,7 @@ export class BgJobLogReader {
       if (typeof parsed.outputText !== 'string') return null;
       return parsed;
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      if (isErrnoCode(e, 'ENOENT')) return null;
       process.stderr.write(`[afk] bg-job-log: readResult parse error for ${jobId}: ${String(e)}\n`);
       return null;
     }
@@ -392,7 +393,7 @@ export class BgJobLogReader {
     try {
       fd = await fsp.open(logPath, 'r');
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
+      if (isErrnoCode(e, 'ENOENT')) return;
       throw e;
     }
     try {
@@ -469,7 +470,7 @@ export class BgJobLogReader {
           }
         }
       } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+        if (!isErrnoCode(e, 'ENOENT')) {
           process.stderr.write(`[afk] bg-job-log: tailEvents read error for ${jobId}: ${String(e)}\n`);
         }
       } finally {

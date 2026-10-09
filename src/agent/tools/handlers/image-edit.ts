@@ -38,6 +38,7 @@ import { resolveAndContain, assertWriteTargetContained } from './_cwd-utils.js';
 import { assertNotDenylisted } from './write-denylist.js';
 import { makeSessionCounter } from './_image-operation.js';
 import { h1ModelFetch } from '../../providers/shared/h1-fetch.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -174,7 +175,7 @@ async function loadRefImages(
     try {
       resolvedPath = resolveAndContain(rawPath, context, 'read', cwd);
     } catch (err: unknown) {
-      return { error: err instanceof Error ? err.message : String(err) };
+      return { error: errorMessage(err) };
     }
 
     // Extension check.
@@ -192,7 +193,7 @@ async function loadRefImages(
     try {
       statResult = await fs.stat(resolvedPath);
     } catch (err: unknown) {
-      return { error: `Cannot stat reference image "${rawPath}": ${err instanceof Error ? err.message : String(err)}` };
+      return { error: `Cannot stat reference image "${rawPath}": ${errorMessage(err)}` };
     }
 
     if (statResult.size > MAX_REF_IMAGE_BYTES) {
@@ -208,7 +209,7 @@ async function loadRefImages(
     try {
       buf = Buffer.from(await fs.readFile(resolvedPath));
     } catch (err: unknown) {
-      return { error: `Failed to read reference image "${rawPath}": ${err instanceof Error ? err.message : String(err)}` };
+      return { error: `Failed to read reference image "${rawPath}": ${errorMessage(err)}` };
     }
 
     images.push({ name: path.basename(resolvedPath), buf, ext });
@@ -243,7 +244,7 @@ async function saveEditedImage(
       assertNotDenylisted(savePath, 'image_edit');
       assertWriteTargetContained(savePath, context, 'image_edit', cwd);
     } catch (err: unknown) {
-      return { error: err instanceof Error ? err.message : String(err) };
+      return { error: errorMessage(err) };
     }
   } else {
     const dir = path.join(cwd, '.afk', 'generated-images');
@@ -256,7 +257,7 @@ async function saveEditedImage(
     await fs.mkdir(path.dirname(savePath), { recursive: true });
     await fs.writeFile(savePath, imageBuffer);
   } catch (err: unknown) {
-    return { error: `Image edited successfully but failed to save to disk: ${err instanceof Error ? err.message : String(err)}` };
+    return { error: `Image edited successfully but failed to save to disk: ${errorMessage(err)}` };
   }
 
   return { savePath, imageBuffer };
@@ -481,8 +482,7 @@ async function callImagesEditApi(
       signal,
     });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { error: `OpenAI Images Edit API request failed: ${msg}` };
+    return { error: `OpenAI Images Edit API request failed: ${errorMessage(err)}` };
   }
 
   if (!response.ok) {

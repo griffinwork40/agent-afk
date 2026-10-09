@@ -27,6 +27,7 @@ import { getWorktreeRootsRegistryPath } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
 import { classifyRootLiveness } from './worktree-root-registry-liveness.js';
 import { normalizeRootPath } from './worktree-root-path.js';
+import { isErrnoCode } from '../../utils/errors.js';
 
 /** Current on-disk schema version. Bump only on a breaking shape change. */
 const REGISTRY_VERSION = 1;
@@ -157,7 +158,7 @@ async function acquireRegistryLock(lockPath: string): Promise<(() => Promise<voi
       await handle.close();
       return async () => { await fs.unlink(lockPath).catch(() => undefined); };
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return null;
+      if (!isErrnoCode(err, 'EEXIST')) return null;
       if (Date.now() >= deadline) return null;
       await clearStaleLock(lockPath);
       await sleep(LOCK_POLL_MS);

@@ -39,6 +39,7 @@
 
 import type { AgentConfig } from '../types/config-types.js';
 import { resolveMaxNestingDepth } from '../tools/nesting.js';
+import { appendSystemPromptBlock } from './append-system-prompt-block.js';
 
 /** The resolved facts the preamble is derived from. */
 export interface SubagentIdentityFacts {
@@ -168,24 +169,5 @@ export function injectSubagentIdentityPreamble(
     maxDepth: config.maxDepth,
     nestedAgentAllowlist,
   });
-  const sp = config.systemPrompt;
-
-  if (typeof sp === 'string') {
-    return sp.length > 0
-      ? { ...config, systemPrompt: `${sp}\n\n${block}` }
-      : { ...config, systemPrompt: block };
-  }
-
-  if (sp && typeof sp === 'object' && 'type' in sp && sp.type === 'preset') {
-    const existingAppend = sp.append ?? '';
-    return {
-      ...config,
-      systemPrompt: {
-        ...sp,
-        append: existingAppend.length > 0 ? `${existingAppend}\n\n${block}` : block,
-      },
-    };
-  }
-
-  return { ...config, systemPrompt: block };
+  return appendSystemPromptBlock(config, block);
 }

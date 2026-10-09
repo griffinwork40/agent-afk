@@ -11,6 +11,7 @@
  */
 
 import { isIP } from 'node:net';
+import { ensureError } from '../utils/errors.js';
 
 // Alias to signal intent: isIP returns 0 for non-IP strings.
 const NOT_IP = 0;
@@ -209,7 +210,7 @@ export function createGuardedLookup(
           // becoming an unhandled rejection on the void promise chain.
           callOnce(
             callback,
-            cbErr instanceof Error ? cbErr : new Error(String(cbErr)),
+            ensureError(cbErr),
             '',
             0,
           );
@@ -219,7 +220,7 @@ export function createGuardedLookup(
         // DNS resolution failure — pass through unchanged.
         callOnce(
           callback,
-          err instanceof Error ? err : new Error(String(err)),
+          ensureError(err),
           '',
           0,
         );
@@ -233,7 +234,7 @@ export function createGuardedLookup(
         try {
           callOnce(
             callback,
-            err instanceof Error ? err : new Error(String(err)),
+            ensureError(err),
             '',
             0,
           );

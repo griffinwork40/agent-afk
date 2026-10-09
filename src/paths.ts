@@ -39,6 +39,7 @@ import { join, dirname, isAbsolute } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
 import { env } from './config/env.js';
+import { isErrnoCode } from './utils/errors.js';
 
 export function getAfkHome(): string {
   const envVal = env.AFK_HOME;
@@ -452,7 +453,7 @@ function migrateDirOnce(oldPath: string, newPath: string): void {
       // External constraint: renameSync throws EXDEV when src and dst are on
       // different filesystems (cross-device rename). Fall back to copy+remove
       // so the migration succeeds even when AFK_HOME is on a different mount.
-      if ((renameErr as NodeJS.ErrnoException).code === 'EXDEV') {
+      if (isErrnoCode(renameErr, 'EXDEV')) {
         try {
           cpSync(oldPath, newPath, { recursive: true });
           rmSync(oldPath, { recursive: true, force: true });

@@ -78,7 +78,7 @@ import {
 } from '../shared/auto-compact.js';
 import { AbortCoordinator, CLOSED_SENTINEL } from '../shared/abort-coordinator.js';
 import { h1ModelFetch } from '../shared/h1-fetch.js';
-import { HookBlockedError } from '../../../utils/errors.js';
+import { HookBlockedError, ensureError } from '../../../utils/errors.js';
 
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
 import { OpenAIJournalWiring } from './query/journal-wiring.js';
@@ -358,7 +358,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
         }
       }
     } catch (iterErr) {
-      const e = iterErr instanceof Error ? iterErr : new Error(String(iterErr));
+      const e = ensureError(iterErr);
       yield { type: 'error', error: e };
     } finally {
       try {

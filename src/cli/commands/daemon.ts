@@ -226,6 +226,22 @@ export function registerDaemonCrashHandlers(
   });
 }
 
+/**
+ * Install the daemon crash handlers up front — before any async startup work
+ * (plugin loading, `startDaemon`) — so a crash DURING startup still pushes a
+ * notice (#3323 review). The in-flight getter is late-bound: it yields `[]`
+ * until the caller binds the live scheduler snapshot via the returned setter.
+ * Idempotency is unchanged: `registerDaemonCrashHandlers` still installs at
+ * most one listener pair per process.
+ */
+export function registerEarlyDaemonCrashHandlers(): (source: () => InFlightTaskSnapshot[]) => void {
+  let inFlightSource: (() => InFlightTaskSnapshot[]) | undefined;
+  registerDaemonCrashHandlers(() => inFlightSource?.() ?? []);
+  return (source) => {
+    inFlightSource = source;
+  };
+}
+
 export function registerDaemonCommand(program: Command): void {
   program
     .command('daemon')
@@ -336,6 +352,7 @@ export function registerDaemonCommand(program: Command): void {
         }
       }
 
+      const bindInFlightSource = registerEarlyDaemonCrashHandlers(); // before async startup (#3323)
       activateDumpPrompt(options.dumpPrompt);
 
       // Optional working-directory override for daemon-spawned sessions.
@@ -416,8 +433,7 @@ export function registerDaemonCommand(program: Command): void {
           },
         });
 
-        // Register crash handlers after startup so in-flight snapshot is live (#3248).
-        registerDaemonCrashHandlers(() => handle.scheduler.getInFlightTasks());
+        bindInFlightSource(() => handle.scheduler.getInFlightTasks()); // live crash-notice snapshot (#3248)
         // Wave-manifest reconciliation: pushes resumption offers via Telegram (#3248).
         runDaemonReconcile('');
 

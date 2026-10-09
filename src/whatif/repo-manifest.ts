@@ -11,6 +11,7 @@ import * as path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { statSync } from 'node:fs';
+import { errorMessage } from '../utils/errors.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -141,7 +142,7 @@ export async function buildRepoManifest(cwd: string): Promise<RepoManifest> {
       console.warn(
         '[whatif] buildRepoManifest: git ls-files failed unexpectedly; ' +
           'probe grounding is disabled for this run.',
-        err instanceof Error ? err.message : String(err),
+        errorMessage(err),
       );
     }
     // Both "not a git repo" and unexpected errors fall back to an empty

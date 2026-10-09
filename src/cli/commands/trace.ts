@@ -38,6 +38,7 @@ import {
   resolveLatestSession,
 } from '../../agent/trace/listing.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
+import { isErrnoCode } from '../../utils/errors.js';
 
 // Re-export for consumers that imported these from this module before the
 // refactor. Maintains backward compatibility with existing CLI code paths.
@@ -158,7 +159,7 @@ async function readTraceFile(tracePath: string): Promise<string | null> {
   try {
     return await readFile(tracePath, 'utf8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    if (isErrnoCode(err, 'ENOENT')) return null;
     throw err;
   }
 }

@@ -41,6 +41,7 @@ import { join } from 'node:path';
 import { env } from '../../config/env.js';
 import { getMemoryDir } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
+import { errorMessage } from '../../utils/errors.js';
 import type { FactCategory } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -302,7 +303,7 @@ export async function sweepMemoryGc(
     }
   } catch (err) {
     // Swallow all errors — GC must never fail session construction.
-    const error = err instanceof Error ? err.message : String(err);
+    const error = errorMessage(err);
     debugLog(`[memory-gc-sweep] sweep error (swallowed): ${error}`);
     return {
       skipped: false,

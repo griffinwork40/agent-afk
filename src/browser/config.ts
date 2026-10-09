@@ -14,6 +14,7 @@ import { join } from 'path';
 import { env as defaultEnv } from '../config/env.js';
 import { getAfkConfigDir, assertSafeBrowserProfile } from '../paths.js';
 import type { BrowserConfig } from './types.js';
+import { isErrnoCode } from '../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Public option types
@@ -176,7 +177,7 @@ function defaultReadFileSync(path: string): string | undefined {
   try {
     return readFileSync(path, 'utf8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    if (isErrnoCode(err, 'ENOENT')) return undefined;
     throw err;
   }
 }

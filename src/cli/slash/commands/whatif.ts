@@ -47,6 +47,7 @@ import type {
   WhatifMdeError as WhatifMdeErrorType,
 } from '../../../whatif/run.js';
 import { decideMdeAction } from '../../commands/whatif.mde-handler.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 function isBudgetError(err: unknown): err is WhatifBudgetErrorType {
   return (
@@ -151,7 +152,7 @@ async function handleWhatif(ctx: SlashContext, args: string): Promise<void> {
       plugins,
     });
   } catch (err) {
-    ctx.out.error(err instanceof Error ? err.message : String(err));
+    ctx.out.error(errorMessage(err));
     return;
   } finally {
     ctx.setSoftStopHandler?.(null);
@@ -210,7 +211,7 @@ async function handleWhatif(ctx: SlashContext, args: string): Promise<void> {
       return;
     }
 
-    ctx.out.error(err instanceof Error ? err.message : String(err));
+    ctx.out.error(errorMessage(err));
     return;
   }
 
