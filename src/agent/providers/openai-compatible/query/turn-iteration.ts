@@ -48,6 +48,7 @@ import type { OpenAIJournalWiring } from './journal-wiring.js';
 import { chatGptClaudeModelError, clarifyResponsesError } from './chatgpt-backend-errors.js';
 import type { TraceSink } from '../../../trace/index.js';
 import type { OpenAIAuthResolution } from '../auth.js';
+import { ensureError } from '../../../../utils/errors.js';
 
 /** Live accessors the iteration driver needs from the owning query instance. */
 export interface IterationContext {
@@ -224,7 +225,7 @@ export async function* runIteration(
         ctx.fastTier.observeChatChunk(event);
         return translateChunk(event, state, ctx.initSessionId);
       },
-      clarifyError: (err) => (err instanceof Error ? err : new Error(String(err))),
+      clarifyError: (err) => (ensureError(err)),
     });
     yield* ctx.fastTier.drainNotice(ctx.initSessionId);
     return result;

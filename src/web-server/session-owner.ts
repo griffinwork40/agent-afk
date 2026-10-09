@@ -30,6 +30,7 @@ import type { McpManager } from '../agent/mcp/index.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { createSessionAutosaver, type SessionAutosaver } from '../cli/session-autosave.js';
 import { drainAndPersistTurn } from './session-owner.autosave.js';
+import { errorMessage } from '../utils/errors.js';
 
 export interface CreateSessionRequest {
   /** Working directory. Ignored unless `allowArbitraryCwd` — see the guard. */
@@ -115,9 +116,8 @@ export class SessionOwner {
     try {
       ({ prompt: rawPrompt, source: rawPromptSource, overlay: operatorOverlay } = resolveBaseSystemPrompt(cwd));
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
       throw new Error(
-        `Session creation failed: AFK_FRAMEWORK_PROMPT_FILE error: ${message}. ` +
+        `Session creation failed: AFK_FRAMEWORK_PROMPT_FILE error: ${errorMessage(err)}. ` +
           'Unset or fix AFK_FRAMEWORK_PROMPT_FILE to create new sessions.',
       );
     }

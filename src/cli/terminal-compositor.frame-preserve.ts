@@ -171,6 +171,24 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
 
     const grew = self.hasCommitted && prevTopRow > 1 && desiredTopRow < prevTopRow;
     if (!grew || bandLen === 0 || !frameSettled) return; // content-hug archives on growth too (no-history-hole)
+    // Burst-safety gate (#3212): while `resizeGeometryStale` is set, absolute
+    // row coordinates (prevTopRow = logUpdate.topRow) reflect the pre-resize
+    // layout. A CPR-resolved repaint that fires mid-burst sees the old renderer
+    // top as `prevTopRow` and the fresh `desiredTopRow`; their difference looks
+    // like upward growth even though no net grow has occurred yet (the burst is
+    // still in flight). Evicting committed rows to scrollback on stale geometry
+    // causes tmux to pull them back as a frozen duplicate on the next GROW step.
+    //
+    // `resizeGeometryStale` is set ONLY by the SIGWINCH immediate handler (not
+    // by resumeInput, which sets `bandGeometryStale` for legitimate suspend
+    // purposes). It is cleared by repositionCommittedBand once a full repaint
+    // establishes fresh geometry — deferred to the next steady-state repaint
+    // where coordinates are reliable, identical to `commit-geometry.ts` line 108.
+    //
+    // Terminal-protocol ordering constraint (DECSTBM): CUP writes must precede
+    // the \n scroll so evicted rows carry real content. Deferring eviction when
+    // geometry is stale ensures the scroll never fires against wrong absolute rows.
+    if (self.resizeGeometryStale) return;
     const growRoom = Math.max(0, desiredTopRow - 1);
     const growOverflow = bandLen - growRoom;
     if (growOverflow <= skip) return; // every non-archived row fits above the new frame — no scroll
@@ -183,11 +201,6 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     // A position update here is not safe without a repaint (the band is still on
     // screen at the old rows), so the correct fix is to note the stale state rather
     // than update it prematurely.
-    // Note: `bandGeometryStale` does NOT apply here. That flag is set by the
-    // SIGWINCH-immediate handler to signal that a resize event has invalidated
-    // the band geometry before the debounced repaint fires. This early-return
-    // path is a no-resize growth scenario where geometry is already consistent
-    // with the live screen; only the tracked row positions are behind.
     // #540 axis-2: archive the oldest `growOverflow` rows to scrollback as
     // SOFT-WRAPPABLE logical lines, then re-place the survivors at
     // [1, growRoom] — already hugging the new frame top (growRoom ===
@@ -258,7 +271,28 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     return;
   }
 
-  // Legacy deficit-based eviction (unchanged).
+  // Legacy deficit-based eviction.
+  //
+  // Burst-safety gate (#3212): while `resizeGeometryStale` is set, both
+  // `prevTopRow` (= logUpdate.topRow, reset to 0 by resetGeometry on SIGWINCH)
+  // and `anchorRow` (shifted by applyScrollDelta mid-burst) may not reflect
+  // the actual screen layout.  The reported symptom — every failing burst shows
+  // `evict:enter` with anchorRow between CPR cycles — traces to `anchorDeficit`
+  // firing on a stale anchor coordinate: applyScrollDelta shifts anchorRow UP
+  // after a SHRINK step, and the next CPR-resolved repaint sees
+  // desiredTopRow < anchorRow (stale), producing a non-zero anchorDeficit that
+  // scrolls committed rows into native scrollback.  On the following GROW tmux
+  // pulls those rows back as frozen ghost duplicates.
+  //
+  // `resizeGeometryStale` is set ONLY by the SIGWINCH handler, not by
+  // resumeInput() — so legitimate suspend/resume anchor evictions are not
+  // blocked.  The eviction deferred here retries on the next steady-state
+  // repaint once repositionCommittedBand clears resizeGeometryStale.
+  //
+  // Terminal-protocol ordering constraint (DECSTBM): CUP writes must precede
+  // the \n scroll so evicted rows carry real content.  Deferring eviction when
+  // geometry is stale ensures the \n never fires against wrong absolute rows.
+  if (self.resizeGeometryStale) return;
   const growthDeficit = (self.hasCommitted && prevTopRow > 1) ? Math.max(0, prevTopRow - desiredTopRow) : 0;
   // Anchor-row enforcement (legacy ceiling): never let the frame top climb
   // above a supplied pre-arm ceiling (welcome banner / update notice)

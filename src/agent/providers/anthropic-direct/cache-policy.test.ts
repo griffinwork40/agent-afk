@@ -14,8 +14,11 @@ import type {
   MessageParam,
 } from '@anthropic-ai/sdk/resources';
 import {
+  clampBreakpoints,
+  countBreakpoints,
   getCacheTtl,
   isCacheEnabled,
+  MAX_CACHE_BREAKPOINTS,
   withMessagesBreakpoint,
   withSystemBreakpoint,
 } from './cache-policy.js';
@@ -209,6 +212,200 @@ describe('cache-policy', () => {
       // Stored history shows zero cache_control markers.
       const stored = msgs[0]?.content;
       expect(typeof stored).toBe('string');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // clampBreakpoints / countBreakpoints  (#3340)
+  // ---------------------------------------------------------------------------
+
+  /** Build a text ContentBlockParam with an optional cache_control breakpoint. */
+  function textBlock(text: string, marked = false): ContentBlockParam {
+    return marked
+      ? { type: 'text', text, cache_control: { type: 'ephemeral', ttl: '1h' } }
+      : { type: 'text', text };
+  }
+
+  /** Build a MessageParam where the last content block may carry a breakpoint. */
+  function userMsg(text: string, marked = false): MessageParam {
+    return {
+      role: 'user',
+      content: marked
+        ? [{ type: 'text', text, cache_control: { type: 'ephemeral', ttl: '1h' } }]
+        : [{ type: 'text', text }],
+    };
+  }
+
+  describe('countBreakpoints', () => {
+    it('returns 0 when no cache_control is present', () => {
+      expect(countBreakpoints({
+        system: [textBlock('s')],
+        messages: [userMsg('m')],
+      })).toBe(0);
+    });
+
+    it('counts system breakpoints', () => {
+      expect(countBreakpoints({
+        system: [textBlock('a', true), textBlock('b', false), textBlock('c', true)],
+        messages: [],
+      })).toBe(2);
+    });
+
+    it('counts tool breakpoints', () => {
+      expect(countBreakpoints({
+        tools: [
+          { name: 't1', cache_control: { type: 'ephemeral', ttl: '1h' } },
+          { name: 't2' },
+        ],
+        messages: [],
+      })).toBe(1);
+    });
+
+    it('counts message content breakpoints across multiple turns', () => {
+      expect(countBreakpoints({
+        messages: [
+          userMsg('first', true),
+          userMsg('second', true),
+          userMsg('third', false),
+        ],
+      })).toBe(2);
+    });
+
+    it('skips thinking blocks in the system array (no cache_control field)', () => {
+      const blocks: ContentBlockParam[] = [
+        textBlock('text', true),
+        { type: 'thinking', thinking: 'reasoning', signature: 'sig' },
+      ];
+      expect(countBreakpoints({ system: blocks, messages: [] })).toBe(1);
+    });
+
+    it('counts the exact MAX_CACHE_BREAKPOINTS scenario correctly', () => {
+      // The normal production layout: 2 system + 1 messages = 3 total.
+      expect(countBreakpoints({
+        system: [textBlock('stable', true), textBlock('volatile', true)],
+        messages: [userMsg('turn', true)],
+      })).toBe(3);
+    });
+  });
+
+  describe('clampBreakpoints', () => {
+    it('returns the input unchanged when at or below the limit', () => {
+      const params = {
+        system: [textBlock('s1', true), textBlock('s2', true)],
+        messages: [userMsg('m', true)],
+      };
+      // 3 breakpoints — under the 4-limit, should be identity-equal.
+      const out = clampBreakpoints(params);
+      expect(out).toBe(params);
+    });
+
+    it('at-limit (4): returns input unchanged', () => {
+      const params = {
+        system: [textBlock('s1', true), textBlock('s2', true)],
+        messages: [userMsg('m1', true), userMsg('m2', true)],
+      };
+      expect(countBreakpoints(params)).toBe(MAX_CACHE_BREAKPOINTS);
+      const out = clampBreakpoints(params);
+      expect(out).toBe(params);
+    });
+
+    it('over-limit: drops tool breakpoints first (lowest value)', () => {
+      const params = {
+        system: [textBlock('stable', true), textBlock('volatile', true)],
+        tools: [
+          { name: 't1', cache_control: { type: 'ephemeral', ttl: '1h' } as const },
+          { name: 't2', cache_control: { type: 'ephemeral', ttl: '1h' } as const },
+          { name: 't3' },
+        ],
+        // 2 sys + 2 tool + 1 msg = 5 breakpoints → 1 over limit
+        messages: [userMsg('turn', true)],
+      };
+      expect(countBreakpoints(params)).toBe(5);
+      const out = clampBreakpoints(params);
+      expect(countBreakpoints(out)).toBe(MAX_CACHE_BREAKPOINTS);
+      // One tool breakpoint should have been dropped.
+      const toolBreakpoints = (out.tools ?? []).filter((t) => t.cache_control != null);
+      expect(toolBreakpoints).toHaveLength(1);
+      // System breakpoints are untouched.
+      const sysBreakpoints = (out.system ?? []).filter((b) => 'cache_control' in b && (b as { cache_control?: unknown }).cache_control != null);
+      expect(sysBreakpoints).toHaveLength(2);
+      // Message breakpoint is untouched.
+      expect(countBreakpoints({ messages: out.messages })).toBe(1);
+    });
+
+    it('over-limit: drops older message breakpoints before system (keeping the last msg breakpoint)', () => {
+      const params = {
+        // 2 system breakpoints (stable + volatile)
+        system: [textBlock('stable', true), textBlock('volatile', true)],
+        // 3 message breakpoints → total = 5, need to drop 1
+        messages: [userMsg('old1', true), userMsg('old2', true), userMsg('newest', true)],
+      };
+      expect(countBreakpoints(params)).toBe(5);
+      const out = clampBreakpoints(params);
+      expect(countBreakpoints(out)).toBe(MAX_CACHE_BREAKPOINTS);
+      // The LAST message breakpoint must be preserved.
+      const lastMsg = out.messages[out.messages.length - 1]!;
+      const lastContent = lastMsg.content;
+      const lastBlock = Array.isArray(lastContent) ? lastContent[lastContent.length - 1] : null;
+      expect(lastBlock).toMatchObject({ cache_control: { type: 'ephemeral' } });
+      // System breakpoints are untouched.
+      const sysMarked = (out.system ?? []).filter((b) => 'cache_control' in b && (b as { cache_control?: unknown }).cache_control != null);
+      expect(sysMarked).toHaveLength(2);
+    });
+
+    it('over-limit (2 over): drops tools first, then older message breakpoints', () => {
+      const params = {
+        system: [textBlock('stable', true), textBlock('volatile', true)],
+        // 1 tool breakpoint
+        tools: [{ name: 't1', cache_control: { type: 'ephemeral', ttl: '1h' } as const }],
+        // 3 message breakpoints → 2 + 1 + 3 = 6 total, need to drop 2
+        messages: [userMsg('old', true), userMsg('mid', true), userMsg('new', true)],
+      };
+      expect(countBreakpoints(params)).toBe(6);
+      const out = clampBreakpoints(params);
+      expect(countBreakpoints(out)).toBe(MAX_CACHE_BREAKPOINTS);
+      // No tool breakpoints remain (1 removed in step 1).
+      expect((out.tools ?? []).filter((t) => t.cache_control != null)).toHaveLength(0);
+      // 1 older message breakpoint removed (step 2), newest kept.
+      expect(countBreakpoints({ messages: out.messages })).toBe(2);
+    });
+
+    it('over-limit: drops earlier system breakpoints last, protecting the last one', () => {
+      const params = {
+        // 4 system breakpoints — over the limit on their own
+        system: [
+          textBlock('blk0', true),
+          textBlock('blk1', true),
+          textBlock('blk2', true),
+          textBlock('blk3', true),
+          textBlock('blk4', true),
+        ],
+        messages: [userMsg('m', false)],
+      };
+      expect(countBreakpoints(params)).toBe(5);
+      const out = clampBreakpoints(params);
+      expect(countBreakpoints(out)).toBe(MAX_CACHE_BREAKPOINTS);
+      // The last system block's breakpoint must be preserved.
+      const lastSys = out.system![out.system!.length - 1]!;
+      expect((lastSys as { cache_control?: unknown }).cache_control).not.toBeNull();
+      expect((lastSys as { cache_control?: unknown }).cache_control).not.toBeUndefined();
+    });
+
+    it('is non-mutating: original arrays are unchanged after clamping', () => {
+      const system: ContentBlockParam[] = [textBlock('stable', true), textBlock('volatile', true)];
+      const tools = [
+        { name: 't1', cache_control: { type: 'ephemeral', ttl: '1h' } as const },
+        { name: 't2', cache_control: { type: 'ephemeral', ttl: '1h' } as const },
+      ];
+      const messages: MessageParam[] = [userMsg('turn', true)];
+      // 5 breakpoints → clamped to 4.
+      const out = clampBreakpoints({ system, tools, messages });
+      expect(countBreakpoints(out)).toBe(MAX_CACHE_BREAKPOINTS);
+      // Original arrays must be byte-identical (no mutation).
+      expect(system.every((b) => 'cache_control' in b)).toBe(true);
+      expect(tools).toHaveLength(2);
+      expect(tools[0]!.cache_control).toBeDefined();
+      expect(tools[1]!.cache_control).toBeDefined();
     });
   });
 });

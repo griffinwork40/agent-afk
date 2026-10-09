@@ -6,6 +6,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   errorMessage,
+  ensureError,
+  isErrnoCode,
   isEgressBlocked,
   extractEgressBlockedError,
   fetchFailedMessage,
@@ -68,6 +70,91 @@ describe('errorMessage', () => {
     const sym = Symbol('oops');
     // Symbol cannot be implicitly coerced — String() handles it explicitly.
     expect(errorMessage(sym)).toBe('Symbol(oops)');
+  });
+});
+
+// ── ensureError() ─────────────────────────────────────────────────────────────
+
+describe('ensureError', () => {
+  it('returns an Error instance unchanged', () => {
+    const e = new Error('original');
+    expect(ensureError(e)).toBe(e);
+  });
+
+  it('returns a subclass of Error unchanged', () => {
+    class MyError extends Error {}
+    const e = new MyError('subclass');
+    expect(ensureError(e)).toBe(e);
+  });
+
+  it('wraps a string in a new Error', () => {
+    const result = ensureError('something went wrong');
+    expect(result).toBeInstanceOf(Error);
+    expect(result.message).toBe('something went wrong');
+  });
+
+  it('wraps a number', () => {
+    const result = ensureError(42);
+    expect(result).toBeInstanceOf(Error);
+    expect(result.message).toBe('42');
+  });
+
+  it('wraps null', () => {
+    const result = ensureError(null);
+    expect(result).toBeInstanceOf(Error);
+    expect(result.message).toBe('null');
+  });
+
+  it('wraps undefined', () => {
+    const result = ensureError(undefined);
+    expect(result).toBeInstanceOf(Error);
+    expect(result.message).toBe('undefined');
+  });
+
+  it('wraps a plain object', () => {
+    const result = ensureError({ code: 500 });
+    expect(result).toBeInstanceOf(Error);
+    expect(result.message).toBe('[object Object]');
+  });
+});
+
+// ── isErrnoCode() ─────────────────────────────────────────────────────────────
+
+describe('isErrnoCode', () => {
+  it('returns true when err has matching .code', () => {
+    const err = Object.assign(new Error('not found'), { code: 'ENOENT' });
+    expect(isErrnoCode(err, 'ENOENT')).toBe(true);
+  });
+
+  it('returns false when .code does not match', () => {
+    const err = Object.assign(new Error('exists'), { code: 'EEXIST' });
+    expect(isErrnoCode(err, 'ENOENT')).toBe(false);
+  });
+
+  it('returns false for an Error without .code', () => {
+    expect(isErrnoCode(new Error('plain'), 'ENOENT')).toBe(false);
+  });
+
+  it('returns false for a string', () => {
+    expect(isErrnoCode('ENOENT', 'ENOENT')).toBe(false);
+  });
+
+  it('returns false for null', () => {
+    expect(isErrnoCode(null, 'ENOENT')).toBe(false);
+  });
+
+  it('returns false for undefined', () => {
+    expect(isErrnoCode(undefined, 'ENOENT')).toBe(false);
+  });
+
+  it('matches EEXIST correctly', () => {
+    const err = Object.assign(new Error('file exists'), { code: 'EEXIST' });
+    expect(isErrnoCode(err, 'EEXIST')).toBe(true);
+    expect(isErrnoCode(err, 'ENOENT')).toBe(false);
+  });
+
+  it('works with a plain object carrying .code', () => {
+    expect(isErrnoCode({ code: 'ESRCH' }, 'ESRCH')).toBe(true);
   });
 });
 

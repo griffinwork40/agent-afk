@@ -17,6 +17,7 @@ import { resolveBaseSystemPrompt } from '../../../shared-helpers.js';
 import { assembleSystemPrompt } from '../../../../agent/routing-directive.js';
 import { estimateTokens } from '../../../../agent/memory/index.js';
 import type { SlashContext } from '../../types.js';
+import { errorMessage } from '../../../../utils/errors.js';
 
 export interface ReloadOutcome {
   /** True when the live session's prompt was actually swapped. */
@@ -98,14 +99,13 @@ export function applyReload(ctx: SlashContext, baselineTokens: number): ReloadOu
   try {
     ({ prompt: basePrompt, source } = resolveBaseSystemPrompt(cwd));
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
     return {
       applied: false,
       tokens: 0,
       delta: 0,
       source: 'error',
       shadowed: false,
-      frameworkPromptError: message,
+      frameworkPromptError: errorMessage(err),
     };
   }
   const config = loadConfig(undefined, cwd);

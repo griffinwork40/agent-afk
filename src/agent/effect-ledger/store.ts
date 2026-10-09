@@ -24,6 +24,7 @@ import * as fsp from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getEffectLedgerPath } from '../../paths.js';
+import { isErrnoCode } from '../../utils/errors.js';
 import type {
   EffectRecord,
   EffectQuery,
@@ -47,7 +48,7 @@ async function readAllRecords(path: string): Promise<EffectRecord[]> {
   try {
     raw = await fsp.readFile(path, 'utf8');
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    if (isErrnoCode(e, 'ENOENT')) return [];
     throw e;
   }
   const records: EffectRecord[] = [];

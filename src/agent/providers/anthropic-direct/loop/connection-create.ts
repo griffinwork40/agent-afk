@@ -5,6 +5,7 @@ import { OVERLOAD_BASE_DELAY_MS, OVERLOAD_MAX_RETRIES, isTransientServerError } 
 import { CONNECTION_ERROR_BASE_DELAY_MS, CONNECTION_ERROR_MAX_RETRIES, isConnectionPhaseNetworkError, isConnectionTimeoutError, isRetryableConnectionStatus } from './connection-error.js';
 import { ConnectionRetryBudget, connectionFailureMetadata } from '../../shared/connection-retry-budget.js';
 import { withoutSdkThinkingDeprecationWarning } from './sdk-thinking-warning.js';
+import { ensureError } from '../../../../utils/errors.js';
 
 export class ConnectionOverloadExhaustedError extends Error {
   constructor() { super('Connection-phase overload budget exhausted'); this.name = 'ConnectionOverloadExhaustedError'; }
@@ -52,7 +53,7 @@ export async function createWithRetry(
       return stream;
     } catch (err) {
       if (requestSignal.aborted || turnSignal.aborted) throw err;
-      const e = err instanceof Error ? err : new Error(String(err));
+      const e = ensureError(err);
       if (isTransientServerError(e)) {
         lastConnectionError = undefined;
         if (overloadAttempts >= OVERLOAD_MAX_RETRIES) throw new ConnectionOverloadExhaustedError();

@@ -113,6 +113,7 @@ export function repositionCommittedBand(
     // `committedBandBottomRow > 0` alongside a non-empty band), so this
     // repaint cycle's geometry is safe to trust again.
     self.bandGeometryStale = false;
+    self.resizeGeometryStale = false; // also clear SIGWINCH-specific flag (#3212)
     return;
   }
   // On upward growth (targetBottom < committedBandBottomRow) the band must be
@@ -131,6 +132,7 @@ export function repositionCommittedBand(
   // (a real re-pin below, or "already correct, nothing moved") reflects
   // CURRENT geometry — safe to trust committedBandBottomRow again from here.
   self.bandGeometryStale = false;
+  self.resizeGeometryStale = false; // also clear SIGWINCH-specific flag (#3212)
   const maxFit = Math.max(0, targetBottom - floor + 1);
   const fit = Math.min(self.committedBand.length - hiddenArchivedRows(self), maxFit);
   // Invariant (bottom-aligned band): the band is pinned at

@@ -8,6 +8,44 @@ export function errorMessage(err: unknown): string {
 }
 
 /**
+ * Coerces an unknown caught value to an `Error` instance.
+ *
+ * If `err` is already an `Error` (or subclass) it is returned unchanged.
+ * Otherwise a new `Error` is created whose `message` is `String(err)` —
+ * the same coercion `errorMessage` applies.
+ *
+ * Use in `catch (err)` blocks where an `Error` object is required, e.g.
+ * when setting `cause`, passing to an `onError` callback, or yielding to
+ * an error-typed event stream.
+ *
+ * Replaces the inline ternary
+ * `err instanceof Error ? err : new Error(String(err))`.
+ */
+export function ensureError(err: unknown): Error {
+  return err instanceof Error ? err : new Error(String(err));
+}
+
+/**
+ * Returns `true` when `err` is a `NodeJS.ErrnoException` whose `.code`
+ * property equals `code`.
+ *
+ * Replaces the verbose cast-and-compare pattern:
+ * `(err as NodeJS.ErrnoException).code === 'ENOENT'`
+ *
+ * The check is intentionally defensive — it returns `false` for any value
+ * that is not an object, lacks a `.code` property, or has a `.code` that
+ * does not match.
+ */
+export function isErrnoCode(err: unknown, code: string): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code: unknown }).code === code
+  );
+}
+
+/**
  * True when `err` is an `EgressBlockedError` — either directly or as the
  * `cause` of a wrapping `TypeError('fetch failed', { cause })`.
  *

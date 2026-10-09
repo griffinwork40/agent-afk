@@ -24,6 +24,11 @@ function isGuarded(d: ToolDispatcher): d is GuardedDispatcher {
  * bypassed: denied calls are rejected before reaching `inner`, and the denied
  * names are exposed for {@link operatorDispatcherToolDefs} to filter the
  * advertised catalog. Returns `inner` unchanged when nothing is denied.
+ *
+ * When `inner` is already a guarded dispatcher:
+ *   - Same deny set (order-independent): returns `inner` unchanged (idempotent).
+ *   - Different deny set: stores the UNION of both deny sets in the new wrapper
+ *     so the advertised catalog and execution gate are always consistent.
  */
 export function withOperatorDeniedDispatcher(
   inner: ToolDispatcher | undefined,
@@ -31,17 +36,31 @@ export function withOperatorDeniedDispatcher(
 ): ToolDispatcher | undefined {
   if (!inner || !permissions?.deniedTools?.length) return inner;
   const denied = permissions.deniedTools;
-  // Idempotent: if the inner is already guarded with the SAME deny set, return
-  // it unchanged to avoid double-wrapping.  Compare sets explicitly so a second
-  // call with a different deny list produces a new wrapper rather than silently
-  // retaining the original (which could under-deny when the set expands).
-  if (
-    isGuarded(inner) &&
-    inner.operatorDenied.length === denied.length &&
-    inner.operatorDenied.every((name, i) => name === denied[i])
-  ) {
-    return inner;
+
+  if (isGuarded(inner)) {
+    // Order-independent set equality: same set → idempotent return.
+    const incomingSet = new Set(denied);
+    const existingSet = new Set(inner.operatorDenied);
+    const sameSet =
+      incomingSet.size === existingSet.size &&
+      inner.operatorDenied.every((name) => incomingSet.has(name));
+    if (sameSet) return inner;
+
+    // Different sets: build the union so catalog and execution agree.
+    const union = [...new Set([...existingSet, ...incomingSet])];
+    const wrapped: GuardedDispatcher = {
+      [OPERATOR_DENIED_BRAND]: true,
+      operatorDenied: union,
+      async execute(call: ToolCall): Promise<ToolResult> {
+        if (isToolDenied(call.name, union)) return { isError: true, content: operatorDeniedReason(call.name) };
+        return inner.execute(call);
+      },
+      setResolveBase: (cwd: string) => inner.setResolveBase?.(cwd),
+      setAllowAll: (allow: boolean) => inner.setAllowAll?.(allow),
+    };
+    return wrapped;
   }
+
   const wrapped: GuardedDispatcher = {
     [OPERATOR_DENIED_BRAND]: true,
     operatorDenied: denied,
