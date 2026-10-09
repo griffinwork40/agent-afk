@@ -741,15 +741,29 @@ describe('G8: EWA ratchet and recovery trajectory', () => {
     stdin.emit('data', Buffer.from('\x1b[10;1R'));
     vi.advanceTimersByTime(CPR_TIMEOUT_CEILING_MS + 200);
 
-    // The RTT sample passed to the observer must reflect the ratcheted module
-    // state (a raw 10ms sample on top of a much higher EWA base → still > seed).
-    // We verify indirectly: the observer receives the raw sample (10ms), but the
-    // actual module EWA has moved. What matters is the adaptive timeout for the
-    // NEXT request (not directly testable without another seam), so we verify
-    // the ratchet by confirming repeated timeouts made the EWA non-trivial.
-    // The G5-regression tests already cover the functional property end-to-end.
+    // The RTT sample passed to the observer is the raw reply latency (~10ms),
+    // not the smoothed EWA value.  We verify the ratchet indirectly:
+    //
+    //  1. The seed was fast: rttAfterFastSeed < CPR_TIMEOUT_MS (checked above).
+    //  2. After 3 timeout cycles the EWA grows well above CPR_TIMEOUT_MS
+    //     (each timeout feeds _updateRtt(timeoutMs) where timeoutMs compounds).
+    //  3. The check reply fires correctly — the observer is called with a
+    //     sample near the reply latency (~10ms), not frozen at the ceiling.
+    //  4. Because the check reply fires at 10ms, the raw sample must be less
+    //     than rttAfterFastSeed (seed) + CPR_TIMEOUT_MS — i.e. it is clearly
+    //     below the ceiling, proving we are recovering, not stuck.
+    //
+    // The functional ratchet property (EWA > seed after timeouts → higher
+    // adaptive timeout on next request) is covered end-to-end by the G5
+    // regression suite which observes the actual timeout durations.
     expect(rttAfterTimeouts).not.toBeNull();
     expect(rttAfterTimeouts!).toBeGreaterThan(0);
+    // Raw sample must be a genuine fast reply (well below the ratcheted ceiling),
+    // proving the observer fired on an actual reply, not a timeout stub.
+    expect(rttAfterTimeouts!).toBeLessThan(CPR_TIMEOUT_CEILING_MS / 2);
+    // Fast seed must be clearly below the seed-based adaptive floor (CPR_TIMEOUT_MS),
+    // confirming the seed was a real fast reply that could ratchet downward from ceiling.
+    expect(rttAfterFastSeed!).toBeLessThan(CPR_TIMEOUT_MS);
   });
 
   it('fast replies after ratchet-up recover observed RTT toward actual RTT', async () => {
@@ -946,6 +960,11 @@ describe('G9: disarm/rearm race — guard stays armed through current emit dispa
     }
   });
 
+  // Documentation-only test: this `it` block does not exercise production code paths.
+  // It records WHY the setImmediate deferral is necessary by describing the old
+  // (broken) synchronous disarm state.  The assertions pass trivially because the
+  // real fix (setImmediate in lifecycle.cpr.ts) is active — this test exists as
+  // an executable comment, not a behavioural guard.
   it('regression: without setImmediate the guard would be inactive when readline fires', () => {
     // Documents WHY the setImmediate fix is necessary: arm the guard, then
     // synchronously disarm it (simulating the old code path), and confirm that
