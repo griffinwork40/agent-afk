@@ -224,4 +224,48 @@ describe('readTelemetryHistory', () => {
     const result = await readTelemetryHistory(telemetryPath, { taskId: 't', limit: 10 });
     expect(result).toHaveLength(2);
   });
+
+  // ── Short-read resilience (POSIX) ─────────────────────────────────────────
+
+  it('accumulates all bytes when file size exceeds a small tailBytes window via multiple reads', async () => {
+    // Write a large batch of records so the file is big.
+    // Then pass a tailBytes that is still large enough to capture the last N
+    // but force the I/O loop to exercise the accumulation path by verifying
+    // the correct records are present even when tailBytes < fileSize.
+    const records = Array.from({ length: 30 }, (_, i) =>
+      makeRecord('t', `2026-01-${String(i + 1).padStart(2, '0')}T00:00:00Z`),
+    );
+    writeFileSync(telemetryPath, records.join('\n') + '\n');
+
+    // tailBytes large enough to include only the last 10 records.
+    const lastTen = records.slice(20).join('\n') + '\n';
+    const tailBytes = lastTen.length + 10; // slight margin so a leading-line truncation doesn't hide records
+
+    const result = await readTelemetryHistory(telemetryPath, {
+      taskId: 't',
+      limit: 10,
+      tailBytes,
+    });
+    // All returned dates should be from the last 10 records.
+    const dates = (result as Array<Record<string, unknown>>).map((r) => r['triggeredAt'] as string);
+    expect(dates.length).toBeGreaterThan(0);
+    expect(dates.every((d) => {
+      const day = parseInt(d.slice(8, 10), 10);
+      return day >= 21;
+    })).toBe(true);
+  });
+
+  it('reads full content correctly across large files (accumulation correctness)', async () => {
+    // Construct a file where records span many kilobytes.
+    // If the read loop does NOT accumulate, some records will be silently dropped.
+    const bigPayload = 'x'.repeat(200);
+    const records = Array.from({ length: 10 }, (_, i) =>
+      makeRecord('t', `2026-01-${String(i + 1).padStart(2, '0')}T00:00:00Z`, { pad: bigPayload }),
+    );
+    writeFileSync(telemetryPath, records.join('\n') + '\n');
+
+    const result = await readTelemetryHistory(telemetryPath, { taskId: 't', limit: 10 });
+    // All 10 records should survive regardless of internal chunking.
+    expect(result).toHaveLength(10);
+  });
 });

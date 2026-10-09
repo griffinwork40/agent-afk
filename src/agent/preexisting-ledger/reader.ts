@@ -6,8 +6,10 @@
  *
  * Design:
  *   - Tolerant: malformed lines are silently skipped (never throws).
- *   - Sync: all I/O via `existsSync` / `readFileSync`.
+ *   - Sync: all I/O via low-level `fs` primitives (no readFileSync).
  *   - No side effects — pure data transformation after the single read.
+ *   - Truncation-aware: when the ledger exceeds 1 MB, a `ledgerTruncated`
+ *     flag is surfaced so callers can warn that older records were discarded.
  *
  * @module agent/preexisting-ledger/reader
  */
@@ -25,25 +27,37 @@ import type { LedgerRecord } from './session-end-hook.js';
 const LEDGER_READ_LIMIT = 1_048_576; // 1 MB
 
 /**
+ * Result of a bounded ledger file read.
+ * `truncated` is true when the file exceeded the 1 MB cap and older records
+ * were silently discarded.
+ */
+interface LedgerFileReadResult {
+  content: string;
+  truncated: boolean;
+}
+
+/**
  * Read up to the last 1 MB of a JSONL file as a UTF-8 string.
  * Drops the partial first line when the file exceeds the cap, so every
  * returned line is a complete JSONL record.
+ * Returns `{ content, truncated }` where `truncated` signals data loss.
  */
-function readLedgerFileContent(filePath: string): string {
+function readLedgerFileContent(filePath: string): LedgerFileReadResult {
   const fd = openSync(filePath, 'r');
   try {
     const stat = fstatSync(fd);
     const fileSize = stat.size;
     const readOffset = Math.max(0, fileSize - LEDGER_READ_LIMIT);
+    const truncated = readOffset > 0;
     const readLength = fileSize - readOffset;
     const buf = Buffer.alloc(readLength);
     readSync(fd, buf, 0, readLength, readOffset);
     const content = buf.toString('utf-8');
-    if (readOffset > 0) {
+    if (truncated) {
       const firstNewline = content.indexOf('\n');
-      return firstNewline >= 0 ? content.slice(firstNewline + 1) : '';
+      return { content: firstNewline >= 0 ? content.slice(firstNewline + 1) : '', truncated };
     }
-    return content;
+    return { content, truncated: false };
   } finally {
     try { closeSync(fd); } catch { /* ignore */ }
   }
@@ -52,6 +66,18 @@ function readLedgerFileContent(filePath: string): string {
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
+
+/**
+ * Result of {@link readLedgerRecords}.
+ * `ledgerTruncated` is true when the ledger exceeded the 1 MB tail-cap and
+ * older records were discarded — callers should surface this as a warning so
+ * aggregates are not mistaken for complete history.
+ */
+export interface LedgerReadResult {
+  records: LedgerRecord[];
+  /** True when the ledger file was larger than 1 MB and was tail-capped. */
+  ledgerTruncated: boolean;
+}
 
 /** A deduplicated cluster of recurrences for one (repo, locus, signal) key. */
 export interface DefectCluster {
@@ -95,26 +121,31 @@ function isLedgerRecord(x: unknown): x is LedgerRecord {
 // ---------------------------------------------------------------------------
 
 /**
- * Read the preexisting ledger and return all valid records.
+ * Read the preexisting ledger and return all valid records plus a truncation flag.
  * Malformed lines are silently skipped.
- * Returns an empty array when the ledger is missing or unreadable.
+ * Returns `{ records: [], ledgerTruncated: false }` when the ledger is missing or unreadable.
+ *
+ * `ledgerTruncated` is `true` when the ledger file exceeded the 1 MB tail-cap;
+ * callers should surface this as a warning because totals and cluster rankings
+ * reflect only the tail of the file, not complete history.
  *
  * @param ledgerPath - Optional explicit path; defaults to the standard ledger
  *   location derived from `$AFK_HOME` / `$AFK_FRAMEWORK_DIR`.
  */
-export function readLedgerRecords(ledgerPath?: string): LedgerRecord[] {
+export function readLedgerRecords(ledgerPath?: string): LedgerReadResult {
   const resolvedPath = ledgerPath ?? getPreexistingLedgerPath();
-  if (!existsSync(resolvedPath)) return [];
-  let raw: string;
+  if (!existsSync(resolvedPath)) return { records: [], ledgerTruncated: false };
+  let readResult: LedgerFileReadResult;
   try {
     // Bounded read: cap at 1 MB (last N bytes) so a runaway ledger never
     // causes an OOM in the insights aggregator. Mirrors readTailMb() from
     // insights/aggregators/daemon.ts, kept local to avoid cross-layer imports.
-    raw = readLedgerFileContent(resolvedPath);
+    readResult = readLedgerFileContent(resolvedPath);
   } catch {
-    return [];
+    return { records: [], ledgerTruncated: false };
   }
-  return parseJsonlLines<LedgerRecord>(raw, { guard: isLedgerRecord });
+  const records = parseJsonlLines<LedgerRecord>(readResult.content, { guard: isLedgerRecord });
+  return { records, ledgerTruncated: readResult.truncated };
 }
 
 // ---------------------------------------------------------------------------

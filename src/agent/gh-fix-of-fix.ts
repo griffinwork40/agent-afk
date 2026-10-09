@@ -27,10 +27,7 @@
  */
 
 import type { ExecFn } from './gh.js';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
+import { execFileAsync } from '../utils/exec-file.js';
 
 // ---------------------------------------------------------------------------
 // Constants

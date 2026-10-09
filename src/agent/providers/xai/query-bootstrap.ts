@@ -14,6 +14,7 @@ import {
 import type { XaiAuthMode } from './endpoints.js';
 import { ensureFreshAccessToken } from './oauth.js';
 import type { XaiAuthStoreDeps } from './auth-store.js';
+import { ensureError } from '../../../utils/errors.js';
 import {
   isAccessTokenExpired,
   rewriteXaiHttpError,
@@ -87,7 +88,7 @@ export function buildOAuthRefreshQuery(opts: XaiQueryBootstrapArgs): ProviderQue
           );
         return innerQuery;
       } catch (e) {
-        initError = e instanceof Error ? e : new Error(String(e));
+        initError = ensureError(e);
         throw initError;
       } finally {
         initPromise = undefined;
@@ -111,7 +112,7 @@ export function buildOAuthRefreshQuery(opts: XaiQueryBootstrapArgs): ProviderQue
           }
         }
       } catch (e) {
-        const err = e instanceof Error ? e : new Error(String(e));
+        const err = ensureError(e);
         yield {
           type: 'error',
           error: rewriteXaiHttpError(err, diagnosticMode(forceMode, getLastMode)),

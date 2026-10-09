@@ -87,7 +87,7 @@ export function assembleQueryPrompt(args: PromptAssemblyArgs): AssembledPrompt {
   // that tag) would push them to ask "which skill?" instead of engaging with
   // their SKILL.md body. The ask_question strip in the dispatcher wiring is
   // the structural backstop for the same failure mode.
-  const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
+  const toolBase = resolveToolSystemPrompt(config.isSkillDispatch, config.isUnnamedWorker);
   // Read-only memory child sessions get a slimmed prompt that omits write
   // instructions for memory_update / procedure_write — keeps the model from
   // being told about tools it does not have.

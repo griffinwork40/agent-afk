@@ -22,7 +22,7 @@ import * as nodeConstants from 'node:constants';
 import { getReplHistoryPath } from '../../paths.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
 import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
-import { errorMessage } from '../../utils/errors.js';
+import { errorMessage, isErrnoCode} from '../../utils/errors.js';
 
 // O_NOFOLLOW is POSIX-only; node:constants does not export it on Windows.
 // Fall back to 0 (no-op flag) so the open() calls work on all platforms.
@@ -293,7 +293,7 @@ for (const entry of historyEntries) {
     return new ReplHistory(entries);
   } catch (err) {
     // PERF-5: surface unexpected errors; ENOENT is normal (first run).
-    if (err && (err as NodeJS.ErrnoException).code !== 'ENOENT') {
+    if (err && !isErrnoCode(err, 'ENOENT')) {
       process.stderr.write(`[afk] history load failed: ${errorMessage(err)}\n`);
     }
     return new ReplHistory([]);

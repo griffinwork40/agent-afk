@@ -45,6 +45,7 @@ import { verifyRun } from './run.verify.js';
 import { runVerifyPreflight, runBaselineSamplePhase } from './run.preflight.js';
 import { checkRedundancy, formatRedundancySection } from './redundancy.js';
 import { classifyQuestionFit } from './question-fit.js';
+import { errorMessage } from '../utils/errors.js';
 import type {
   EpisodeTrace,
   RunnerOptions,
@@ -380,7 +381,7 @@ export async function runWhatif(
     // Resolve judge BEFORE preflight estimate (so we know if it's external)
     const resolvedJudge = await deps.makeJudge(options.judge);
     const crossCheckJudge = await deps.makeCrossCheckJudge().catch((err: unknown) => {
-      console.warn(`[whatif/run] cross-check judge unavailable: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`[whatif/run] cross-check judge unavailable: ${errorMessage(err)}`);
       return undefined;
     });
 

@@ -16,6 +16,7 @@ import nodePath from 'path';
 import { getApiKey } from '../shared-helpers.js';
 import { preloadClaudeKeychainOAuth } from '../../agent/auth/credential-resolver.js';
 import { resolveOpenAIAuth } from '../../agent/providers/openai-compatible/auth.js';
+import { isErrnoCode } from '../../utils/errors.js';
 import {
   getAfkConfigDir,
   getAfkStateDir,
@@ -203,7 +204,7 @@ export async function checkConfigFile(): Promise<Check> {
     JSON.parse(content);
     return { name: 'Config File', state: 'pass', detail: `${path} (valid JSON)` };
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+    if (isErrnoCode(err, 'ENOENT')) {
       return { name: 'Config File', state: 'pass', detail: 'no config file (using defaults)' };
     }
     return {

@@ -13,6 +13,7 @@ import * as fsp from 'node:fs/promises';
 import * as readline from 'node:readline';
 import { getSessionLedgerDir, getSessionLedgerPath, isSafeLedgerSessionId } from '../paths.js';
 import type { LedgerRecord } from './session-ledger.js';
+import { isErrnoCode } from '../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Reader
@@ -51,7 +52,7 @@ export async function* readLedger(sessionId: string): AsyncGenerator<LedgerRecor
   try {
     fd = await fsp.open(getSessionLedgerPath(sessionId), 'r');
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
+    if (isErrnoCode(e, 'ENOENT')) return;
     throw e;
   }
   try {
@@ -115,7 +116,7 @@ export async function* tailLedger(
         if (sawClosed) return;
       }
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+      if (!isErrnoCode(e, 'ENOENT')) {
         process.stderr.write(`[afk] session-ledger: tail read error for ${sessionId}: ${String(e)}\n`);
       }
     } finally {

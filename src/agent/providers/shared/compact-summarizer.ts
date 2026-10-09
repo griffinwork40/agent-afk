@@ -30,6 +30,7 @@
  */
 
 import { redactSecrets } from '../../redact-secrets.js';
+import { errorMessage } from '../../../utils/errors.js';
 import {
   resolveOneShotTarget,
   routedOneShot,
@@ -189,7 +190,7 @@ function buildForeignSummarize(
       const warnedFailure = getOrCreateSet(warnedFailureBySession, sessionKey);
       if (!warnedFailure.has(targetModel)) {
         warnedFailure.add(targetModel);
-        const rawMsg = err instanceof Error ? err.message : String(err);
+        const rawMsg = errorMessage(err);
         // Redact before logging: provider SDK errors (e.g. OpenAI 401) can
         // echo partial API keys in the message body. Redact the full string
         // first so a secret straddling the 200-char boundary is never logged

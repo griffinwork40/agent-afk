@@ -129,17 +129,16 @@ describe('startWorktreeOccupancyHeartbeat', () => {
           const m = JSON.parse(await fs.readFile(metaPath, 'utf-8')) as Record<string, unknown>;
           expect(Date.now() - new Date(String(m['createdAt'])).getTime()).toBeLessThan(3_600_000);
         },
-        { timeout: 2000 },
+        { timeout: 2000, interval: 10 },
       );
+      const meta = JSON.parse(await fs.readFile(metaPath, 'utf-8')) as Record<string, unknown>;
+      const ageMs = Date.now() - new Date(String(meta['createdAt'])).getTime();
+      expect(ageMs).toBeLessThan(5_000);
+      expect(meta['pid']).toBe(process.pid);
+      expect(meta['owner']).toBe('agent'); // unrelated fields preserved
     } finally {
       stop();
     }
-
-    const meta = JSON.parse(await fs.readFile(metaPath, 'utf-8')) as Record<string, unknown>;
-    const ageMs = Date.now() - new Date(String(meta['createdAt'])).getTime();
-    expect(ageMs).toBeLessThan(3_600_000);
-    expect(meta['pid']).toBe(process.pid);
-    expect(meta['owner']).toBe('agent'); // unrelated fields preserved
   });
 
   it('stops touching after stop() is called', async () => {

@@ -128,7 +128,8 @@ describe('h1ModelFetch — always negotiates HTTP/1.1', () => {
     // side effects). Instead, it mimics the relevant part: importing undici,
     // which always installs its Agent (with allowH2 defaulting to enabled)
     // into the global dispatcher.
-    const { Agent: UndiciAgent, setGlobalDispatcher } = await import('undici');
+    const { Agent: UndiciAgent, setGlobalDispatcher, getGlobalDispatcher } = await import('undici');
+    const prevDispatcher = getGlobalDispatcher();
     const poisonAgent = new UndiciAgent({ allowH2: true });
     setGlobalDispatcher(poisonAgent);
 
@@ -147,6 +148,8 @@ describe('h1ModelFetch — always negotiates HTTP/1.1', () => {
       } else {
         process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = prev;
       }
+      setGlobalDispatcher(prevDispatcher);
+      await poisonAgent.close();
     }
   });
 });

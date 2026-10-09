@@ -12,6 +12,7 @@ import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { getWhatifDir } from '../paths.js';
 import type { Prediction, Verdict } from './types.js';
+import { isErrnoCode } from '../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -80,7 +81,7 @@ export async function trackRecordSummary(
   try {
     raw = await fsp.readFile(ledgerPath, 'utf8');
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    if (isErrnoCode(e, 'ENOENT')) return undefined;
     throw e;
   }
 

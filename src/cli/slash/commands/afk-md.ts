@@ -16,6 +16,7 @@ import { resolveBaseSystemPrompt } from '../../shared-helpers.js';
 import { palette } from '../../palette.js';
 import type { SlashCommand, SlashContext, SlashResult } from '../types.js';
 import { resolveEditor } from './editor-spawn.js';
+import { errorMessage } from '../../../utils/errors.js';
 import { appendToTarget, editTarget } from './afk-md/edit.js';
 import { applyReload, currentOverlayTokens, formatDelta } from './afk-md/reload.js';
 import {
@@ -62,8 +63,7 @@ function tryResolveSource(ctx: SlashContext, cwd: string): string | null {
   try {
     return resolveBaseSystemPrompt(cwd).source;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    ctx.out.error(`AFK_FRAMEWORK_PROMPT_FILE error: ${message}`);
+    ctx.out.error(`AFK_FRAMEWORK_PROMPT_FILE error: ${errorMessage(err)}`);
     ctx.out.error('Unset or fix AFK_FRAMEWORK_PROMPT_FILE and try again.');
     return null;
   }

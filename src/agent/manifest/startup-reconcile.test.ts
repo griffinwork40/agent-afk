@@ -267,6 +267,43 @@ describe('runDaemonReconcile', () => {
     expect(manifest?.offeredAt).toBeUndefined();
   });
 
+  it('does NOT stamp offeredAt on partial delivery (one chunk/target ok, another failed)', async () => {
+    process.env['AFK_WAVE_RESUME_UNATTENDED'] = '1';
+    mockPushIfConfigured.mockResolvedValue([
+      { ok: true, status: 200 },
+      { ok: false, status: 429, errorMessage: 'Rate Limited' },
+    ]);
+    const waveId = seedManifest('dr-stamp-partial');
+
+    runDaemonReconcile('dr-stamp-partial');
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mockPushIfConfigured).toHaveBeenCalledOnce();
+    // Partial delivery → offer must re-surface on next start rather than be
+    // silently marked offered with a truncated/missing message.
+    const manifest = readManifest(waveId);
+    expect(manifest?.offeredAt).toBeUndefined();
+  });
+
+  it('stamps offeredAt when every chunk/target delivery succeeded', async () => {
+    process.env['AFK_WAVE_RESUME_UNATTENDED'] = '1';
+    mockPushIfConfigured.mockResolvedValue([
+      { ok: true, status: 200 },
+      { ok: true, status: 200 },
+    ]);
+    const waveId = seedManifest('dr-stamp-all');
+
+    runDaemonReconcile('dr-stamp-all');
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const manifest = readManifest(waveId);
+    expect(manifest?.offeredAt).toBeDefined();
+  });
+
   it('falls back to stderr and stamps when Telegram is not configured (null result)', async () => {
     process.env['AFK_WAVE_RESUME_UNATTENDED'] = '1';
     // pushIfConfigured returns null when no token/targets are configured.

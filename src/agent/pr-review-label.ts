@@ -22,11 +22,8 @@
  * @module agent/pr-review-label
  */
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import type { ExecFn } from './gh.js';
-
-const execFileAsync = promisify(execFile);
+import { execFileAsync } from '../utils/exec-file.js';
 
 // ---------------------------------------------------------------------------
 // Constants
