@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as fsSync from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { FormData as UndiciFormData } from 'undici';
 import { createImageEditHandler } from './image-edit.js';
 import { _resetWriteDenylistCacheForTests } from './write-denylist.js';
 import { _resetRootRealpathCacheForTests } from './_cwd-utils.js';
@@ -348,8 +349,9 @@ describe('image_edit handler', () => {
     expect(opts.headers['Authorization']).toBe('Bearer test-key');
     // Content-Type should NOT be set manually (fetch sets it with the boundary).
     expect(opts.headers['Content-Type']).toBeUndefined();
-    // Body should be FormData.
-    expect(opts.body).toBeInstanceOf(FormData);
+    // Body should be undici's FormData (not globalThis.FormData, which would
+    // fail undici's brand-check when h1ModelFetch serializes the multipart body).
+    expect(opts.body).toBeInstanceOf(UndiciFormData);
   });
 
   it('accepts .jpg reference images', async () => {
@@ -411,7 +413,7 @@ describe('image_edit handler', () => {
     );
     expect(fetchFn).toHaveBeenCalledOnce();
     const [, opts] = fetchFn.mock.calls[0]!;
-    const form: FormData = opts.body;
+    const form: UndiciFormData = opts.body as UndiciFormData;
     // getAll returns all values for the key
     expect(form.getAll('image[]').length).toBe(2);
   });

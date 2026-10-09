@@ -29,6 +29,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
+import { FormData as UndiciFormData } from 'undici';
 import { env } from '../../../config/env.js';
 import { resolveOpenAIAuth } from '../../providers/openai-compatible/auth.js';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
@@ -36,6 +37,7 @@ import type { ToolResult } from '../../providers/shared/tool-result.js';
 import { resolveAndContain, assertWriteTargetContained } from './_cwd-utils.js';
 import { assertNotDenylisted } from './write-denylist.js';
 import { makeSessionCounter } from './_image-operation.js';
+import { h1ModelFetch } from '../../providers/shared/h1-fetch.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -265,7 +267,7 @@ async function saveEditedImage(
 // ---------------------------------------------------------------------------
 
 export function createImageEditHandler(
-  fetchFn: typeof globalThis.fetch = globalThis.fetch,
+  fetchFn: typeof globalThis.fetch = h1ModelFetch,
 ): ToolHandler {
   return async (
     input: unknown,
@@ -423,8 +425,14 @@ async function callImagesEditApi(
   imageBuffers: Array<{ name: string; buf: Buffer; ext: string }>,
   signal: AbortSignal,
 ): Promise<ImagesEditApiResult | { error: string }> {
-  // Build multipart/form-data payload using the Web FormData API.
-  const form = new FormData();
+  // Build multipart/form-data payload using undici's FormData (not
+  // globalThis.FormData). npm undici 8 brand-checks the body object via
+  // webidl.is.FormData before serializing it; passing globalThis.FormData
+  // fails that check when the body is processed by h1ModelFetch (which uses
+  // undici's own fetch internally). globalThis.Blob is accepted as file parts
+  // — undici uses webidl.is.Blob which resolves to the same built-in Blob
+  // class on Node 22+. See issue #3345.
+  const form = new UndiciFormData();
 
   // image field: single file or first file (API accepts one primary image).
   // Additional images are passed as extra `image[]` fields.
@@ -450,6 +458,12 @@ async function callImagesEditApi(
 
   let response: Response;
   try {
+    // Cast required: undici's FormData and globalThis.FormData are nominally
+    // distinct types. At runtime h1ModelFetch (undici's own fetch) deserializes
+    // the body correctly because it accepts its own FormData instance. For an
+    // injectable fetchFn the same cast is safe: any fetch implementation that
+    // handles multipart MUST accept a FormData-like body — the brand-check issue
+    // only affects undici's body extraction, not the wire format.
     response = await fetchFn('https://api.openai.com/v1/images/edits', {
       method: 'POST',
       headers: {
@@ -457,7 +471,7 @@ async function callImagesEditApi(
         // Do NOT set Content-Type — fetch sets it automatically with the
         // correct multipart boundary when the body is FormData.
       },
-      body: form,
+      body: form as unknown as BodyInit,
       signal,
     });
   } catch (err: unknown) {

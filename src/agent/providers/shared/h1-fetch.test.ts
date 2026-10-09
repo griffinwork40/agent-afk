@@ -25,6 +25,7 @@ import { readFile as readFileCb } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { FormData as UndiciFormData } from 'undici';
 import { h1ModelFetch } from './h1-fetch.js';
 import { buildClientOptions } from '../anthropic-direct/auth.js';
 import {
@@ -66,9 +67,28 @@ beforeAll(async () => {
   const { key, cert } = await generateSelfSignedCert(certDir);
 
   // Invariant: createSecureServer with allowHTTP1:true accepts both h2 (ALPN
-  // 'h2') and h1.1 (ALPN 'http/1.1') clients. The server reports the
-  // negotiated httpVersion in its response so the test can assert it.
+  // 'h2') and h1.1 (ALPN 'http/1.1') clients.
+  //
+  //   GET /         — returns { httpVersion } so tests can assert ALPN outcome.
+  //   POST /multipart — accumulates the raw request body, then echoes back a
+  //                  JSON object with { httpVersion, contentType, bodyText }
+  //                  so multipart interop tests can inspect what the server
+  //                  actually received (boundary, file part, field names).
   server = http2.createSecureServer({ key, cert, allowHTTP1: true }, (req, res) => {
+    if (req.method === 'POST' && req.url === '/multipart') {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        const bodyText = Buffer.concat(chunks).toString('utf8');
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          httpVersion: req.httpVersion,
+          contentType: req.headers['content-type'] ?? '',
+          bodyText,
+        }));
+      });
+      return;
+    }
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ httpVersion: req.httpVersion }));
   });
@@ -259,5 +279,83 @@ describe('completeWithWire — Responses-wire client factory receives h1ModelFet
     responsesFactory(opts);
     expect(capturedFetch).toBe(h1ModelFetch);
     void asyncIterable;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Coverage: h1ModelFetch + undici FormData multipart interop (issue #3345)
+//
+// Verifies that h1ModelFetch correctly serializes an undici FormData body
+// over a real TLS connection. The test confirms three things the server
+// actually receives:
+//   1. HTTP/1.1 was negotiated (not HTTP/2).
+//   2. Content-Type header contains "multipart/form-data; boundary=..." with
+//      a real boundary string.
+//   3. The raw body contains the expected field name ("prompt"), the expected
+//      field value, the expected file part name ("image[]"), and a non-empty
+//      binary-like payload for the file.
+//
+// This is an empirical serialization test — not just "a request was made".
+// ---------------------------------------------------------------------------
+
+describe('h1ModelFetch + undici FormData — multipart interop (issue #3345)', () => {
+  it('serializes undici FormData correctly over HTTP/1.1 TLS: server sees fields and file part', async () => {
+    // Build the multipart body the same way image-edit.ts does: undici's
+    // FormData with globalThis.Blob for file parts.
+    const form = new UndiciFormData();
+    const fakeImageData = new Uint8Array([0x89, 0x50, 0x4e, 0x47]); // PNG magic bytes
+    form.append(
+      'image[]',
+      new Blob([fakeImageData], { type: 'image/png' }),
+      'ref.png',
+    );
+    form.append('prompt', 'a test prompt');
+    form.append('model', 'gpt-image-1');
+
+    const prev = process.env['NODE_TLS_REJECT_UNAUTHORIZED'];
+    process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = '0';
+    let result: { httpVersion: string; contentType: string; bodyText: string };
+    try {
+      const resp = await h1ModelFetch(
+        `https://127.0.0.1:${serverPort}/multipart`,
+        {
+          method: 'POST',
+          // No Content-Type header — fetch must set it with the boundary.
+          body: form as unknown as BodyInit,
+        },
+      );
+      result = (await resp.json()) as typeof result;
+    } finally {
+      if (prev === undefined) {
+        delete process.env['NODE_TLS_REJECT_UNAUTHORIZED'];
+      } else {
+        process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = prev;
+      }
+    }
+
+    // 1. HTTP/1.1 was negotiated (not HTTP/2).
+    expect(result.httpVersion).toBe('1.1');
+
+    // 2. Content-Type header has the multipart/form-data media type and a
+    //    non-empty boundary parameter.
+    expect(result.contentType).toMatch(/^multipart\/form-data;\s*boundary=/);
+    const boundaryMatch = result.contentType.match(/boundary=([^\s;]+)/);
+    expect(boundaryMatch).not.toBeNull();
+    const boundary = boundaryMatch![1]!;
+    expect(boundary.length).toBeGreaterThan(0);
+
+    // 3. The raw body contains all expected parts.
+    //    - The boundary delimiter.
+    //    - The field name "prompt" and its value.
+    //    - The file part name "image[]" with filename "ref.png".
+    //    - At least one byte of binary data (the PNG magic bytes).
+    expect(result.bodyText).toContain(`--${boundary}`);
+    expect(result.bodyText).toContain('name="prompt"');
+    expect(result.bodyText).toContain('a test prompt');
+    expect(result.bodyText).toContain('name="model"');
+    expect(result.bodyText).toContain('gpt-image-1');
+    expect(result.bodyText).toContain('name="image[]"');
+    expect(result.bodyText).toContain('filename="ref.png"');
+    expect(result.bodyText).toContain('image/png');
   });
 });
