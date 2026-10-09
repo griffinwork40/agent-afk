@@ -13,6 +13,8 @@ const OPERATOR_DENIED_BRAND = Symbol('operatorDenied');
 type GuardedDispatcher = ToolDispatcher & {
   readonly [OPERATOR_DENIED_BRAND]: true;
   readonly operatorDenied: readonly string[];
+  /** The innermost (unguarded) raw dispatcher, stored to avoid double-gating. */
+  readonly _rawInner: ToolDispatcher;
 };
 
 function isGuarded(d: ToolDispatcher): d is GuardedDispatcher {
@@ -47,16 +49,20 @@ export function withOperatorDeniedDispatcher(
     if (sameSet) return inner;
 
     // Different sets: build the union so catalog and execution agree.
+    // Delegate to `inner._rawInner` (the raw, unguarded dispatcher) so allowed
+    // calls are not gated twice — the union check above is the only guard needed.
     const union = [...new Set([...existingSet, ...incomingSet])];
+    const rawInner = inner._rawInner;
     const wrapped: GuardedDispatcher = {
       [OPERATOR_DENIED_BRAND]: true,
       operatorDenied: union,
+      _rawInner: rawInner,
       async execute(call: ToolCall): Promise<ToolResult> {
         if (isToolDenied(call.name, union)) return { isError: true, content: operatorDeniedReason(call.name) };
-        return inner.execute(call);
+        return rawInner.execute(call);
       },
-      setResolveBase: (cwd: string) => inner.setResolveBase?.(cwd),
-      setAllowAll: (allow: boolean) => inner.setAllowAll?.(allow),
+      setResolveBase: (cwd: string) => rawInner.setResolveBase?.(cwd),
+      setAllowAll: (allow: boolean) => rawInner.setAllowAll?.(allow),
     };
     return wrapped;
   }
@@ -64,6 +70,7 @@ export function withOperatorDeniedDispatcher(
   const wrapped: GuardedDispatcher = {
     [OPERATOR_DENIED_BRAND]: true,
     operatorDenied: denied,
+    _rawInner: inner,
     async execute(call: ToolCall): Promise<ToolResult> {
       if (isToolDenied(call.name, denied)) return { isError: true, content: operatorDeniedReason(call.name) };
       return inner.execute(call);

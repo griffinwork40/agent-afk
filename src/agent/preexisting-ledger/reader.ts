@@ -24,7 +24,7 @@ import type { LedgerRecord } from './session-end-hook.js';
 // ---------------------------------------------------------------------------
 
 /** Maximum bytes read from the ledger in a single pass. */
-const LEDGER_READ_LIMIT = 1_048_576; // 1 MB
+export const LEDGER_READ_LIMIT = 1_048_576; // 1 MB
 
 /**
  * Result of a bounded ledger file read.
