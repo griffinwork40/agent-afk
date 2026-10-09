@@ -119,14 +119,44 @@ export function isServiceLoadedViaList(
 }
 
 /**
+ * Returns true when `err` is an ETIMEDOUT error — the class of launchctl
+ * timeout where the spawn timed out before the XPC handshake completed.
+ * In this case launchd may have actually completed the bootstrap on its
+ * side even though the client side received an error, so the service
+ * might already be loaded.
+ *
+ * A genuine "already bootstrapped" (double-bootstrap) error is NOT
+ * ETIMEDOUT — it carries the domain-specific "already bootstrapped"
+ * message. An ETIMEDOUT means launchd silently completed the load but
+ * the client timed out waiting for the reply.
+ *
+ * @internal — Not exported; used only by {@link bootstrapWithRetry}.
+ */
+function isEtimedout(err: unknown): boolean {
+  return err instanceof Error && err.message.includes('ETIMEDOUT');
+}
+
+/**
  * Attempt to bootstrap the service, with one retry after a short delay if
- * the first attempt fails. Before retrying, check whether the timed-out
- * bootstrap actually succeeded (the service may be loaded despite the error)
- * to avoid a "already bootstrapped" double-bootstrap error.
+ * the first attempt fails.
+ *
+ * The `isServiceLoadedViaList` check is only trusted when the first error
+ * is ETIMEDOUT — the case where launchd may have completed the load on its
+ * side despite the client-side timeout. For any other error class, calling
+ * `isServiceLoadedViaList` could return `true` because a stale OLD job is
+ * still loaded (when a prior `bootout` silently failed and swallowed its
+ * error), not because the new bootstrap succeeded. In that case trusting
+ * the list would cause `restart()` to report success while the NEW plist
+ * was never actually loaded. Instead, fall straight through to the retry.
+ *
+ * For the retry attempt, the same ETIMEDOUT guard applies: if the retry
+ * itself timed out AND the service appears in the list, the XPC handshake
+ * likely completed on launchd's side — return `already-loaded` rather
+ * than `failed`.
  *
  * Returns `{ kind: 'ok' }` when bootstrap succeeds (first try or retry),
- * `{ kind: 'already-loaded' }` when the first attempt failed but the
- * service is already loaded (timed-out-but-actually-loaded case), or
+ * `{ kind: 'already-loaded' }` when an ETIMEDOUT bootstrap actually
+ * loaded the service (detectable via `launchctl list`), or
  * `{ kind: 'failed'; reason: string }` when bootstrap fails after the retry.
  *
  * @param name   - Service name, used only in the recovery-hint message.
@@ -150,18 +180,23 @@ export function bootstrapWithRetry(
     });
     return { kind: 'ok' };
   } catch (firstErr) {
-    // First attempt failed. Before retrying, check whether the bootstrap
-    // actually succeeded despite the error (e.g. ETIMEDOUT from a slow XPC
-    // handshake where launchd completed the load on its side). If the label
-    // is already visible in `launchctl list`, treat it as success to avoid
-    // a double-bootstrap "already bootstrapped" collision on retry.
-    if (isServiceLoadedViaList(label, deps)) {
+    // Bug 1 fix: only trust `isServiceLoadedViaList` for ETIMEDOUT errors.
+    //
+    // A real "already bootstrapped" double-bootstrap error is NOT ETIMEDOUT
+    // — it carries the domain-specific error message. ETIMEDOUT means the
+    // XPC handshake timed out on the client side but launchd may have
+    // completed the load. Any other error class (permission error, bad plist,
+    // etc.) cannot safely assume the service is newly loaded — it might be a
+    // stale OLD job from a prior bootout that silently failed. In that case,
+    // trusting the list would incorrectly return 'already-loaded' when the
+    // old job is still loaded and the new plist was never applied.
+    if (isEtimedout(firstErr) && isServiceLoadedViaList(label, deps)) {
       return { kind: 'already-loaded' };
     }
 
-    // Service is NOT loaded — the bootstrap genuinely failed. Wait briefly
-    // to let the gui/<uid> domain settle after the bootout→bootstrap cycle,
-    // then retry once.
+    // Service is NOT loaded (or error was not ETIMEDOUT) — the bootstrap
+    // genuinely failed. Wait briefly to let the gui/<uid> domain settle
+    // after the bootout→bootstrap cycle, then retry once.
     deps.sleepSync(deps.bootstrapRetryDelayMs);
 
     try {
@@ -171,8 +206,19 @@ export function bootstrapWithRetry(
       });
       return { kind: 'ok' };
     } catch (retryErr) {
-      // Both attempts failed. Return a clear message naming the stopped
-      // state and the exact recovery command.
+      // Bug 2 fix: mirror the ETIMEDOUT guard for the retry attempt.
+      //
+      // If the retry itself timed out AND the service appears in the list,
+      // the XPC handshake likely completed on launchd's side before the
+      // client-side timeout fired — treat as success to avoid a spurious
+      // 'failed' result when the service is actually running.
+      if (isEtimedout(retryErr) && isServiceLoadedViaList(label, deps)) {
+        return { kind: 'already-loaded' };
+      }
+
+      // Both attempts failed with no evidence of the service loading.
+      // Return a clear message naming the stopped state and the exact
+      // recovery command.
       const firstMsg = errorMessage(firstErr);
       const retryMsg = errorMessage(retryErr);
       const reason =

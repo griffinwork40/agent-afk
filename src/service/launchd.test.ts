@@ -1354,6 +1354,128 @@ describe.skipIf(process.platform !== 'darwin')('install/uninstall/status I/O', (
       // Recovery command uses the actual service name 'telegram', not hardcoded 'daemon'.
       expect(result.reason).toMatch(/afk service uninstall telegram && afk service install telegram/);
     });
+
+    // ── Bug 1 fix: non-ETIMEDOUT first error ──────────────────────────────
+    // When the first bootstrap error is NOT an ETIMEDOUT, we must NOT call
+    // isServiceLoadedViaList (the "true" result might be a stale old job).
+    // Instead, fall straight through to retry.
+
+    it('retries (does not return already-loaded) when first error is non-ETIMEDOUT and service appears in list', () => {
+      // Non-ETIMEDOUT first error + service in list. Without the Bug 1 fix this
+      // would return 'already-loaded' (false positive for a stale old job). With
+      // the fix the code skips the list check and retries; retry succeeds here.
+      const { execFileSyncCalls, sleepCalls, deps } = makeDeps({
+        bootstrapResponses: [
+          () => { throw new Error('bootstrap error: domain load failed'); }, // NOT ETIMEDOUT
+          () => '', // retry succeeds
+        ],
+        listResponse: '99\t0\tcom.afk.daemon\n', // daemon IS in list — stale old job
+      });
+
+      const result = bootstrapWithRetry('daemon', 'gui/501', '/tmp/com.afk.daemon.plist', deps);
+      // Should NOT have returned already-loaded on the stale list result.
+      // Retry succeeded, so result should be 'ok'.
+      expect(result.kind).toBe('ok');
+      // Both bootstrap calls must have fired (no early-exit on the list check).
+      const bootstrapCalls = execFileSyncCalls.filter((a) => a[0] === 'bootstrap');
+      expect(bootstrapCalls).toHaveLength(2);
+      // Must have slept once between attempts.
+      expect(sleepCalls).toHaveLength(1);
+      // Must NOT have called list (Bug 1: non-ETIMEDOUT → skip the check).
+      const listCalls = execFileSyncCalls.filter((a) => a[0] === 'list');
+      expect(listCalls).toHaveLength(0);
+    });
+
+    it('retries (does not return already-loaded) when first error is non-ETIMEDOUT and retry fails', () => {
+      // Non-ETIMEDOUT first error + service in list, but retry also fails.
+      // Should return 'failed', not 'already-loaded'.
+      const { deps } = makeDeps({
+        bootstrapResponses: [
+          () => { throw new Error('bootstrap error: domain unavailable'); }, // NOT ETIMEDOUT
+          () => { throw new Error('bootstrap error: still unavailable'); }, // NOT ETIMEDOUT
+        ],
+        listResponse: '99\t0\tcom.afk.daemon\n', // daemon IS in list — stale old job
+      });
+
+      const result = bootstrapWithRetry('daemon', 'gui/501', '/tmp/com.afk.daemon.plist', deps);
+      expect(result.kind).toBe('failed');
+    });
+
+    // ── Bug 2 fix: retry ETIMEDOUT ────────────────────────────────────────
+    // When the RETRY bootstrap also times out and the service appears in the
+    // list afterwards, the XPC handshake likely completed on launchd's side.
+    // Return 'already-loaded' rather than 'failed'.
+
+    it('returns already-loaded when retry bootstrap times out and service is in list (Bug 2 fix)', () => {
+      // First attempt: non-ETIMEDOUT failure (Bug 1: skip list check, fall to retry).
+      // Retry: ETIMEDOUT, service IS in list → Bug 2 fix → already-loaded.
+      const { execFileSyncCalls, sleepCalls, deps } = makeDeps({
+        bootstrapResponses: [
+          () => { throw new Error('bootstrap error: temporary failure'); }, // NOT ETIMEDOUT
+          () => { throw new Error('spawnSync launchctl ETIMEDOUT'); }, // retry ETIMEDOUT
+        ],
+        listResponse: '99\t0\tcom.afk.daemon\n', // daemon IS in list after retry timeout
+      });
+
+      const result = bootstrapWithRetry('daemon', 'gui/501', '/tmp/com.afk.daemon.plist', deps);
+      expect(result.kind).toBe('already-loaded');
+
+      const bootstrapCalls = execFileSyncCalls.filter((a) => a[0] === 'bootstrap');
+      expect(bootstrapCalls).toHaveLength(2);
+      expect(sleepCalls).toHaveLength(1);
+      // list should have been called ONCE — only for the retry ETIMEDOUT check
+      // (Bug 1 skipped the first check; Bug 2 added the second check).
+      const listCalls = execFileSyncCalls.filter((a) => a[0] === 'list');
+      expect(listCalls).toHaveLength(1);
+    });
+
+    it('returns already-loaded when first+retry both ETIMEDOUT and service is in list', () => {
+      // First attempt: ETIMEDOUT, service NOT in list → retry.
+      // Retry: ETIMEDOUT, service IS in list → Bug 2 fix → already-loaded.
+      const { execFileSyncCalls, deps } = makeDeps({
+        bootstrapResponses: [
+          () => { throw new Error('spawnSync launchctl ETIMEDOUT'); },
+          () => { throw new Error('spawnSync launchctl ETIMEDOUT'); },
+        ],
+        listResponse: '', // will be overridden per call below
+      });
+      // Override: first list call (after first ETIMEDOUT) returns NOT loaded;
+      // second list call (after retry ETIMEDOUT) returns IS loaded.
+      let listCallCount = 0;
+      const baseExecFileSync = deps.execFileSync;
+      deps.execFileSync = ((cmd: string, argv?: readonly string[], opts?: unknown) => {
+        if (Array.isArray(argv) && argv[0] === 'list') {
+          listCallCount++;
+          if (listCallCount === 1) return '99\t0\tcom.apple.other\n' as never; // NOT loaded
+          return '99\t0\tcom.afk.daemon\n' as never; // IS loaded
+        }
+        return (baseExecFileSync as Function)(cmd, argv, opts) as never;
+      }) as typeof execFileSync;
+
+      const result = bootstrapWithRetry('daemon', 'gui/501', '/tmp/com.afk.daemon.plist', deps);
+      expect(result.kind).toBe('already-loaded');
+
+      const bootstrapCalls = execFileSyncCalls.filter((a) => a[0] === 'bootstrap');
+      expect(bootstrapCalls).toHaveLength(2);
+    });
+
+    it('returns failed when retry ETIMEDOUT but service is NOT in list (Bug 2: not loaded)', () => {
+      // Retry is ETIMEDOUT but `launchctl list` confirms the service is not loaded.
+      // Should return 'failed', not 'already-loaded'.
+      const { deps } = makeDeps({
+        bootstrapResponses: [
+          () => { throw new Error('bootstrap error: temporary failure'); }, // NOT ETIMEDOUT → skip list
+          () => { throw new Error('spawnSync launchctl ETIMEDOUT'); }, // retry ETIMEDOUT
+        ],
+        listResponse: '99\t0\tcom.apple.other\n', // daemon NOT in list
+      });
+
+      const result = bootstrapWithRetry('daemon', 'gui/501', '/tmp/com.afk.daemon.plist', deps);
+      expect(result.kind).toBe('failed');
+      if (result.kind !== 'failed') return;
+      expect(result.reason).toMatch(/Service was stopped but could not be restarted/);
+      expect(result.reason).toMatch(/afk service uninstall daemon && afk service install daemon/);
+    });
   });
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1364,14 +1486,37 @@ describe.skipIf(process.platform !== 'darwin')('install/uninstall/status I/O', (
   // Uses the _deps injection parameter so real launchctl is never invoked.
   // ─────────────────────────────────────────────────────────────────────────
   describe('restart — bootstrap-retry integration (#3298)', () => {
-    it('returns restarted when first bootstrap fails but retry succeeds (upgraded path)', () => {
-      // Seed a stale daemon plist so upgradeService detects a change and
-      // takes the upgraded → bootout → bootstrapWithRetry path.
+    /**
+     * Helper: seed a stale daemon plist in tmpHome so upgradeService detects
+     * a change and takes the upgraded → bootout → bootstrapWithRetry path.
+     * Also sets up mockExecFileSync to handle `which afk` by returning a
+     * universally-available binary (`/usr/bin/env`) in a trusted prefix, so
+     * resolveAfkBinary() resolves without requiring a real `afk` binary on disk.
+     */
+    function seedStalePlist(content: string): void {
       const launchAgentsDir = join(tmpHome, 'Library', 'LaunchAgents');
       const fsModule = require('fs') as typeof import('fs');
       fsModule.mkdirSync(launchAgentsDir, { recursive: true });
       const path = plistPath('daemon', tmpHome);
-      writeFileSync(path, '<stale-plist-for-retry-test/>');
+      writeFileSync(path, content);
+      // Mock `which afk` (via the global execFileSync mock) to return /usr/bin/env —
+      // a real file in a trusted prefix that always exists on macOS. This lets
+      // resolveAfkBinary() succeed without a real afk binary installed, so the
+      // plist can be built, upgradeService can detect the stale content, and the
+      // test exercises the bootstrapWithRetry path unconditionally.
+      mockExecFileSync.mockImplementation((cmd: string, argv?: readonly string[]) => {
+        // which afk → return /usr/bin/env (always exists; /usr/bin/ is trusted).
+        if (cmd === 'which' && Array.isArray(argv) && argv[0] === 'afk') {
+          return '/usr/bin/env\n' as never;
+        }
+        return '' as never;
+      });
+    }
+
+    it('returns restarted when first bootstrap fails but retry succeeds (upgraded path)', () => {
+      // Seed a stale daemon plist so upgradeService detects a change and
+      // takes the upgraded → bootout → bootstrapWithRetry path.
+      seedStalePlist('<stale-plist-for-retry-test/>');
 
       const calls: string[][] = [];
       let bootstrapCallIdx = 0;
@@ -1391,18 +1536,11 @@ describe.skipIf(process.platform !== 'darwin')('install/uninstall/status I/O', (
             const response = bootstrapResponses[bootstrapCallIdx++];
             if (response) return response() as never;
           }
-          return '' as never; // bootout, which, etc.
+          return '' as never; // bootout, etc.
         }) as unknown as typeof execFileSync,
         sleepSync: () => { /* instant in tests */ },
         bootstrapRetryDelayMs: 0,
       };
-
-      // upgradeService for 'daemon' calls `which afk` via execFileSync.
-      // That will hit our spy above and return '' — then resolveAfkBinary
-      // falls through to candidates. If no candidate exists (CI), skip.
-      const { existsSync: realExists } = require('fs') as typeof import('fs');
-      const afkOnDisk = ['/opt/homebrew/bin/afk', '/usr/local/bin/afk'].some((p) => realExists(p));
-      if (!afkOnDisk) return; // No globally-installed afk — skip gracefully.
 
       const result = launchdManager.restart('daemon', undefined, deps);
       expect(result.kind).toBe('restarted');
@@ -1413,11 +1551,7 @@ describe.skipIf(process.platform !== 'darwin')('install/uninstall/status I/O', (
 
     it('returns restarted when first bootstrap times out but service is already loaded (upgraded path)', () => {
       // Seed a stale plist so upgradeService reports 'upgraded'.
-      const launchAgentsDir = join(tmpHome, 'Library', 'LaunchAgents');
-      const fsModule = require('fs') as typeof import('fs');
-      fsModule.mkdirSync(launchAgentsDir, { recursive: true });
-      const path = plistPath('daemon', tmpHome);
-      writeFileSync(path, '<stale-plist-for-already-loaded-test/>');
+      seedStalePlist('<stale-plist-for-already-loaded-test/>');
 
       const calls: string[][] = [];
 
@@ -1425,7 +1559,7 @@ describe.skipIf(process.platform !== 'darwin')('install/uninstall/status I/O', (
         execFileSync: ((cmd: string, argv?: readonly string[], _opts?: unknown) => {
           if (Array.isArray(argv)) calls.push([...argv]);
           if (Array.isArray(argv) && argv[0] === 'list') {
-            // After timeout: daemon IS in the list → already-loaded.
+            // After ETIMEDOUT: daemon IS in the list → already-loaded (Bug 1 fix path).
             return '999\t0\tcom.afk.daemon\n' as never;
           }
           if (Array.isArray(argv) && argv[0] === 'bootstrap') {
@@ -1437,24 +1571,17 @@ describe.skipIf(process.platform !== 'darwin')('install/uninstall/status I/O', (
         bootstrapRetryDelayMs: 0,
       };
 
-      const { existsSync: realExists } = require('fs') as typeof import('fs');
-      const afkOnDisk = ['/opt/homebrew/bin/afk', '/usr/local/bin/afk'].some((p) => realExists(p));
-      if (!afkOnDisk) return;
-
       const result = launchdManager.restart('daemon', undefined, deps);
       expect(result.kind).toBe('restarted');
 
       const bootstrapCalls = calls.filter((a) => a[0] === 'bootstrap');
-      // Only one bootstrap attempt — no retry after detecting already-loaded.
+      // Only one bootstrap attempt — no retry after detecting already-loaded via
+      // the Bug 1 ETIMEDOUT guard (first error is ETIMEDOUT, service in list).
       expect(bootstrapCalls).toHaveLength(1);
     });
 
     it('returns failed with clear recovery message when both bootstrap attempts fail (upgraded path)', () => {
-      const launchAgentsDir = join(tmpHome, 'Library', 'LaunchAgents');
-      const fsModule = require('fs') as typeof import('fs');
-      fsModule.mkdirSync(launchAgentsDir, { recursive: true });
-      const path = plistPath('daemon', tmpHome);
-      writeFileSync(path, '<stale-plist-for-double-fail-test/>');
+      seedStalePlist('<stale-plist-for-double-fail-test/>');
 
       const deps: Parameters<typeof launchdManager.restart>[2] = {
         execFileSync: ((cmd: string, argv?: readonly string[], _opts?: unknown) => {
@@ -1469,10 +1596,6 @@ describe.skipIf(process.platform !== 'darwin')('install/uninstall/status I/O', (
         sleepSync: () => { /* instant in tests */ },
         bootstrapRetryDelayMs: 0,
       };
-
-      const { existsSync: realExists } = require('fs') as typeof import('fs');
-      const afkOnDisk = ['/opt/homebrew/bin/afk', '/usr/local/bin/afk'].some((p) => realExists(p));
-      if (!afkOnDisk) return;
 
       const result = launchdManager.restart('daemon', undefined, deps);
       expect(result.kind).toBe('failed');
