@@ -251,13 +251,13 @@ export interface CacheableToolLike {
  * Non-mutating: returns the input unchanged when no clamping is needed.
  */
 export function clampBreakpoints(params: {
-  system?: ContentBlockParam[];
-  tools?: CacheableToolLike[];
-  messages: MessageParam[];
+  system?: readonly ContentBlockParam[];
+  tools?: readonly CacheableToolLike[];
+  messages: readonly MessageParam[];
 }): {
-  system?: ContentBlockParam[];
-  tools?: CacheableToolLike[];
-  messages: MessageParam[];
+  system?: readonly ContentBlockParam[];
+  tools?: readonly CacheableToolLike[];
+  messages: readonly MessageParam[];
 } {
   const total = countBreakpoints(params);
   if (total <= MAX_CACHE_BREAKPOINTS) return params;

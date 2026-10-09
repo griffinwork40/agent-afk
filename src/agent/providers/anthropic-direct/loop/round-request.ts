@@ -228,14 +228,14 @@ export function buildRoundParams(input: Pick<RunTurnInput, 'model' | 'maxTokens'
   // the original (string or null) for the other cases so the type contract
   // of AnthropicMessagesCreateParams.system is preserved exactly.
   const resolvedSystem: typeof input.system = Array.isArray(input.system)
-    ? (clamped.system ?? input.system)
+    ? ((clamped.system != null ? [...clamped.system] : undefined) ?? input.system)
     : input.system;
   // Re-cast tools back to WireToolDef[]: clampBreakpoints only removes
   // cache_control; the rest of each tool object is identity-preserved.
   const resolvedTools = clamped.tools as WireToolDef[] | undefined;
 
   return {
-    model: input.model, max_tokens: input.maxTokens, messages: clamped.messages, stream: true,
+    model: input.model, max_tokens: input.maxTokens, messages: [...clamped.messages], stream: true,
     ...(resolvedSystem !== null ? { system: resolvedSystem } : {}),
     ...(resolvedTools !== undefined && resolvedTools.length > 0 ? { tools: resolvedTools } : {}),
     ...(input.thinking !== undefined || input.thinkingBlockBinding !== undefined
