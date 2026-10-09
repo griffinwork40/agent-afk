@@ -56,9 +56,13 @@ export function renderPreexistingDefects(agg: InsightAggregates): string {
     })
     .join('\n');
 
+  const truncatedBanner = pd.ledgerTruncated
+    ? `<p style="color:#f0883e;margin-bottom:12px">⚠ Ledger exceeded the 1 MB read cap — oldest records were discarded. Cluster rankings and totals reflect only the tail of the ledger.</p>`
+    : '';
+
   const totalNote =
     pd.totalRecords > 0
-      ? `<p class="caption">${htmlEscape(safeNum(pd.totalRecords))} total ledger records; ` +
+      ? `<p class="caption">${htmlEscape(safeNum(pd.totalRecords))} total ledger records${pd.ledgerTruncated ? ' (tail only — ledger truncated)' : ''}; ` +
         `${htmlEscape(safeNum(pd.skippedOutOfWindow))} outside the ${htmlEscape(safeNum(agg.windowDays))}-day window; ` +
         `showing top ${htmlEscape(safeNum(pd.topClusters.length))} clusters by recurrence count.</p>`
       : '';
@@ -67,7 +71,7 @@ export function renderPreexistingDefects(agg: InsightAggregates): string {
   <section id="preexisting-defects">
     <h2>Most-Acknowledged Pre-existing Defects</h2>
     <p style="color:#8b949e;margin-bottom:12px">Defects the agent acknowledged as pre-existing across sessions, ranked by recurrence count.</p>
-    <table class="data-table">
+    ${truncatedBanner}<table class="data-table">
       <thead>
         <tr>
           <th>Locus</th>
