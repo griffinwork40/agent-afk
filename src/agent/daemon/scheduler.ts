@@ -346,7 +346,7 @@ export class CronScheduler {
         fireOnTaskComplete(skipRecord, { onTaskComplete: this.options.onTaskComplete }, task);
         continue;
       }
-      const decision = evaluateSessionStartGates({
+      const decision = await evaluateSessionStartGates({
         taskId: task.taskId,
         cooldownMs,
         nowMs: this.now(),

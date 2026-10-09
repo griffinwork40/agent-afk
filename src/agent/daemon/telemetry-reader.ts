@@ -13,10 +13,8 @@
  *   2. Scans backwards through the tail lines for records matching `taskId`.
  *   3. Returns at most `limit` records in chronological order (oldest first).
  *
- * All three history sites (gates.ts `readLastTickTime` stays sync and is
- * deliberately excluded — it already reads the whole file by design for a
- * single-record lookup, but is covered by #3266's first acceptance criterion
- * which only lists history queries) now call this shared implementation.
+ * All four schedule-history sites — including `gates.ts` `readLastTickTime`
+ * (#3266 scope (a)) — now delegate to this shared implementation.
  *
  * @module agent/daemon/telemetry-reader
  */
