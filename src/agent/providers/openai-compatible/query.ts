@@ -27,7 +27,7 @@
  * once the context-window footprint crosses it (mirrors anthropic-direct/query.ts).
  *
  * Things deliberately deferred:
- *   - File checkpointing / rewindFiles (deferred — `canRewind: false`)
+ *   - File checkpointing / rewindFiles
  *
  * @module agent/providers/openai-compatible/query
  */
@@ -77,6 +77,8 @@ import {
   resolveAutoCompactThreshold,
 } from '../shared/auto-compact.js';
 import { AbortCoordinator, CLOSED_SENTINEL } from '../shared/abort-coordinator.js';
+import { beginTurnFileCheckpoint, endTurnFileCheckpoint } from './query.file-checkpoint.js';
+import { rewindFiles as rewindFilesImpl } from '../../file-checkpoint/rewind-files.js';
 import { h1ModelFetch } from '../shared/h1-fetch.js';
 import { HookBlockedError } from '../../../utils/errors.js';
 
@@ -229,6 +231,11 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
    */
   private readonly autoCompactThreshold: number | undefined;
 
+  /** When true, write-class tool calls snapshot pre-edit content for rewindFiles(). */
+  private readonly enableFileCheckpointing: boolean;
+  /** The turnId registered for the current in-flight turn; cleared at turn end. */
+  private currentTurnId: string | undefined;
+
   constructor(opts: OpenAICompatibleQueryOptions) {
     this.opts = opts;
     this.initSessionId = opts.synthesizedSessionId;
@@ -241,6 +248,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     this.traceWriter = opts.traceWriter;
     this.fastTier = new FastTierSession(opts.fastTier);
     this.autoCompactThreshold = resolveAutoCompactThreshold(opts.config.autoCompact, opts.model);
+    this.enableFileCheckpointing = opts.config.enableFileCheckpointing ?? false;
 
     // Pre-compute the OpenAI tool catalog once.
     if (this.toolDispatcher) {
@@ -381,6 +389,10 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     const turnStartTime = Date.now();
     const taskId = randomUUID();
 
+    // File-checkpoint: assign a stable turn id and wire a fresh registry onto
+    // the dispatcher so write-class tool handlers snapshot files before mutation.
+    this.currentTurnId = beginTurnFileCheckpoint(this.enableFileCheckpointing, this.toolDispatcher, this.initSessionId);
+
     const trace = new TurnTrace(controller.signal, this.traceWriter, 'openai-compatible');
     this.fastTier.beginTurn(this.currentModel);
     try {
@@ -389,6 +401,9 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
       yield* runTurnInner(this, content, controller, turnStartTime, taskId);
     } finally {
       trace.finish(Date.now() - turnStartTime);
+      // Clear the per-turn checkpoint registry at turn end.
+      endTurnFileCheckpoint(this.enableFileCheckpointing, this.toolDispatcher);
+      this.currentTurnId = undefined;
     }
   }
 
@@ -505,13 +520,17 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   }
 
   async rewindFiles(
-    _userMessageId: string,
-    _options?: { dryRun?: boolean },
+    userMessageId: string,
+    options?: { dryRun?: boolean },
   ): Promise<ProviderRewindResult> {
-    return {
-      canRewind: false,
-      error: `${PROVIDER_NAME} provider does not support file checkpoint rewind yet.`,
-    };
+    return rewindFilesImpl(
+      {
+        sessionId: this.initSessionId,
+        enableFileCheckpointing: this.enableFileCheckpointing,
+      },
+      this.currentTurnId ?? userMessageId,
+      options,
+    );
   }
 
   /** Live conversation in journal form (router `/model` swap carry); undefined without a journal. */

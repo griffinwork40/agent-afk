@@ -74,6 +74,7 @@ import {
   queryRewindTargets,
   rewindQueryConversation,
 } from './query-maintenance.js';
+import { rewindFiles as rewindFilesImpl } from '../../file-checkpoint/rewind-files.js';
 
 // Re-exported so the historical `from './query-runtime.js'` (and thence
 // `query.js` / `index.js`) import paths stay valid after the #824 split.
@@ -215,6 +216,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       ...(opts.messageJournal ? { messageJournal: opts.messageJournal } : {}),
       ...(opts.autoCompactThreshold !== undefined ? { autoCompactThreshold: opts.autoCompactThreshold } : {}),
       ...(opts.initialUsageInputTokens !== undefined ? { initialUsageInputTokens: opts.initialUsageInputTokens } : {}),
+      ...(opts.enableFileCheckpointing ? { enableFileCheckpointing: true } : {}),
     });
     this.abort = new AbortCoordinator();
   }
@@ -397,14 +399,17 @@ export class AnthropicDirectQuery implements ProviderQuery {
   }
 
   async rewindFiles(
-    _userMessageId: string,
-    _options?: { dryRun?: boolean },
+    userMessageId: string,
+    options?: { dryRun?: boolean },
   ): Promise<ProviderRewindResult> {
-    return {
-      canRewind: false,
-      error:
-        'anthropic-direct provider does not support file checkpoint rewind',
-    };
+    return rewindFilesImpl(
+      {
+        sessionId: this.initSessionId,
+        enableFileCheckpointing: this.state.enableFileCheckpointing,
+      },
+      userMessageId,
+      options,
+    );
   }
 
   async compact(): Promise<ProviderCompactResult> {

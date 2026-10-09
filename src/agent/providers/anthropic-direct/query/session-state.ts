@@ -124,6 +124,20 @@ export interface SessionState {
 
   /** The raw journal behind {@link journalSync}, for `mark` annotations. */
   readonly messageJournal: MessageJournal | undefined;
+
+  /**
+   * When true, the turn loop creates a {@link FileCheckpointRegistry} before
+   * each user turn and sets it on the dispatcher so write-class tool handlers
+   * snapshot pre-edit file content. Enabled via `AgentConfig.enableFileCheckpointing`.
+   */
+  enableFileCheckpointing: boolean;
+
+  /**
+   * Stable id for the CURRENT user turn; set by the turn loop before the first
+   * tool round so `rewindFiles(turnId)` can look up the correct checkpoint dir.
+   * Cleared (set to `undefined`) when no turn is active.
+   */
+  currentTurnId: string | undefined;
 }
 
 /**
@@ -159,6 +173,8 @@ export function createSessionState(opts: {
   initialUsageInputTokens?: number;
   /** Durable journal sink (`AgentConfig.messageJournal`). Absent = journaling off. */
   messageJournal?: MessageJournal;
+  /** Mirror of `AgentConfig.enableFileCheckpointing`. */
+  enableFileCheckpointing?: boolean;
 }): SessionState {
   const initialLastUsage: ProviderUsage | null =
     opts.initialUsageInputTokens !== undefined && opts.initialUsageInputTokens > 0
@@ -179,5 +195,7 @@ export function createSessionState(opts: {
     lastUsage: initialLastUsage,
     closed: false,
     autoCompactThreshold: opts.autoCompactThreshold,
+    enableFileCheckpointing: opts.enableFileCheckpointing ?? false,
+    currentTurnId: undefined,
   };
 }

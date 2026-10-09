@@ -139,6 +139,11 @@ const editFileImpl = async (
     // protected path (mirrors the write_file guard exactly).
     assertNotDenylisted(file_path, 'edit_file');
 
+    // Snapshot the file BEFORE any mutation so rewindFiles can restore it.
+    if (context?.fileCheckpoint) {
+      await context.fileCheckpoint.snapshotFile(file_path);
+    }
+
     // TOCTOU guard: record mtime before read; re-check before write so a
     // concurrent external edit is caught rather than silently clobbered.
     // Contract: both stat calls target the same resolved path so they measure

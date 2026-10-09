@@ -18,6 +18,7 @@ import { validatePatchChanges, type PatchFileChange } from './patch-validate.js'
 import { applyPatch } from './patch-apply-engine.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { isBlankInput } from '../subagent/optional-input.js';
+import { resolve } from 'path';
 
 // ---------------------------------------------------------------------------
 // Input parsing
@@ -189,6 +190,18 @@ export function createPatchApplyHandler(cwd?: string): ToolHandler {
         ),
         isError: false,
       };
+    }
+
+    // Snapshot all target paths BEFORE any mutation so rewindFiles can restore them.
+    if (context?.fileCheckpoint && !dry_run) {
+      const base = resolveBase ?? process.cwd();
+      await Promise.all(
+        changes.map((c) =>
+          context.fileCheckpoint!.snapshotFile(
+            resolve(base, c.path),
+          ),
+        ),
+      );
     }
 
     // Validate.

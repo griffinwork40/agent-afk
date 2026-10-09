@@ -19,6 +19,7 @@ import type { SpawnedPidRegistry } from './handlers/pid-registry.js';
 import type { UserAttention } from './user-yield.js';
 import type { DetachableToolRegistry } from './detach-registry.js';
 import type { ProcessJobRegistry } from '../shell-jobs/process-jobs.js';
+import type { FileCheckpointRegistry } from '../file-checkpoint/file-checkpoint.js';
 
 /**
  * Per-invocation context forwarded to every tool handler.
@@ -177,6 +178,21 @@ export interface ToolHandlerContext {
    * refuses background launches with an explicit "unavailable" error.
    */
   processJobs?: ProcessJobRegistry;
+  /**
+   * File-checkpoint registry for the current user turn.
+   *
+   * When present (i.e. when `enableFileCheckpointing` is true), write-class
+   * tool handlers (`write_file`, `edit_file`, `patch_apply`) call
+   * `registry.snapshotFile(absPath)` BEFORE mutating the file so that
+   * `rewindFiles(turnId)` can restore the pre-turn state later.
+   *
+   * Absent when file checkpointing is disabled or when no sessionId is
+   * available (headless one-shot runs). The first snapshot of a path in a
+   * given turn wins; subsequent calls for the same path are no-ops.
+   *
+   * Bash-made file mutations are NOT tracked (out of scope).
+   */
+  fileCheckpoint?: FileCheckpointRegistry;
 }
 
 /**

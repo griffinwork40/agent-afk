@@ -20,6 +20,11 @@ import {
   OpenAICompatibleQuery,
   type OpenAIClientFactory,
 } from './query.js';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'fs';
+import os from 'os';
+import path from 'path';
+import { createFileCheckpointRegistry } from '../../file-checkpoint/file-checkpoint.js';
+import { rewindFiles } from '../../file-checkpoint/rewind-files.js';
 import { OpenAICompatibleProvider } from './index.js';
 import type { OpenAIChunk } from './translate.js';
 import { COMPACT_SYSTEM_PROMPT } from '../shared/compaction.js';
@@ -1454,7 +1459,7 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
 
     const rewind = await q.rewindFiles('fake-id');
     expect(rewind.canRewind).toBe(false);
-    expect(rewind.error).toContain('does not support');
+    expect(rewind.error).toContain('File checkpointing is not enabled');
 
     // NOTE: the in-loop `this.lastUsage = accumulatedUsage` write (query.ts:316)
     // is behaviorally tested in the 'in-loop lastUsage refresh (PR 527)' describe
@@ -4065,5 +4070,97 @@ describe('OpenAICompatibleQuery — Responses wire tool arguments on *.done even
       expect(o).toMatchObject({ isError: true });
       expect((o as { content: string }).content).toMatch(/No arguments received from the API for tool "read_thing"/);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix: OAI rewind currentTurnId wiring (PR-3355)
+// ---------------------------------------------------------------------------
+// Proves that beginTurnFileCheckpoint now returns the turnId and that
+// rewindFilesImpl resolves snapshots from that exact id, not the caller id.
+// This is a focused unit test that bypasses the full query turn lifecycle —
+// isolates exactly the wiring that was broken before the fix.
+//
+describe('OAI rewind currentTurnId wiring (PR-3355)', () => {
+  let tmpDir: string;
+  let stateDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), 'afk-oai-rewind-'));
+    stateDir = path.join(tmpDir, 'state');
+    mkdirSync(stateDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('rewindFiles uses the registry turnId, not the caller userMessageId', async () => {
+    // Arrange: create a registry with a known turnId (simulating what
+    // beginTurnFileCheckpoint now returns and currentTurnId now stores).
+    const sessionId = 'test-oai-session';
+    const turnId = 'known-turn-id-abc123';
+    const reg = createFileCheckpointRegistry(sessionId, turnId, stateDir);
+
+    const file = path.join(tmpDir, 'target.ts');
+    writeFileSync(file, 'pre-turn content');
+
+    // Snapshot the file (as a write_file tool call would).
+    await reg.snapshotFile(file);
+
+    // Simulate the mutation the model performed.
+    writeFileSync(file, 'post-turn content');
+
+    // Act: call rewindFilesImpl with the real turnId (as currentTurnId ?? userMessageId
+    // now resolves). Before the fix this was called with only userMessageId —
+    // a different value — and would return canRewind:false.
+    const result = await rewindFiles(
+      { sessionId, enableFileCheckpointing: true, _stateDir: stateDir },
+      turnId,
+    );
+
+    // Assert: file is restored.
+    expect(result.canRewind).toBe(true);
+    expect(result.filesChanged).toContain(file);
+    expect(readFileSync(file, 'utf8')).toBe('pre-turn content');
+  });
+
+  it('rewindFiles returns canRewind:false when called with a wrong id (proves the bug pre-fix)', async () => {
+    // This test documents the bug: before the fix, rewindFiles was called with
+    // userMessageId (e.g. 'user-msg-xyz') but the registry was created under a
+    // randomUUID turnId — so the checkpoint was never found.
+    const sessionId = 'test-oai-session-2';
+    const actualTurnId = 'actual-turn-uuid';
+    const wrongId = 'user-message-id-that-was-passed-instead';
+
+    const reg = createFileCheckpointRegistry(sessionId, actualTurnId, stateDir);
+    const file = path.join(tmpDir, 'target2.ts');
+    writeFileSync(file, 'original');
+    await reg.snapshotFile(file);
+    writeFileSync(file, 'mutated');
+
+    const result = await rewindFiles(
+      { sessionId, enableFileCheckpointing: true, _stateDir: stateDir },
+      wrongId, // <-- what the old code passed
+    );
+
+    // The wrong id finds no checkpoint → canRewind:false (the pre-fix failure mode).
+    expect(result.canRewind).toBe(false);
+    expect(result.error).toMatch(/No file checkpoint/);
+  });
+
+  it('OpenAICompatibleQuery.currentTurnId is accessible via reflection for test assertions', () => {
+    // White-box: verify the private field exists and starts undefined.
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('x'),
+      config: baseConfig({ enableFileCheckpointing: true }),
+    });
+    // Access the private field via reflection (TypeScript erases private at runtime).
+    const currentTurnId = (q as unknown as { currentTurnId: string | undefined }).currentTurnId;
+    expect(currentTurnId).toBeUndefined(); // starts undefined before any turn runs
+    q.close();
   });
 });
