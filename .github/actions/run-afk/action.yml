@@ -6,14 +6,17 @@ description: |
   hard-coded in a caller workflow.
 
 inputs:
-  # --- required ---
+  # --- required (at least one of the provider keys must be set) ---
   anthropic-api-key:
     description: >
       Anthropic API key (ANTHROPIC_API_KEY).  Pass via a repository or
       environment secret: `${{ secrets.ANTHROPIC_API_KEY }}`.
       Required unless you are routing to a non-Anthropic provider via
-      `openai-api-key` or `xai-api-key`.
-    required: true
+      `openai-api-key` or `xai-api-key`.  At least one of
+      `anthropic-api-key`, `openai-api-key`, or `xai-api-key` must be
+      provided; the action exits with an error if all three are empty.
+    required: false
+    default: ''
 
   prompt:
     description: >
@@ -143,6 +146,18 @@ runs:
         INPUT_AFK_VERSION: ${{ inputs.afk-version }}
         AFK_ACTION_PATH: ${{ github.action_path }}
       run: |
+        # Guard: at least one provider API key must be set.
+        if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${OPENAI_API_KEY:-}" ] && [ -z "${XAI_API_KEY:-}" ]; then
+          echo "::error::At least one of anthropic-api-key, openai-api-key, or xai-api-key must be provided"
+          exit 1
+        fi
+
+        # Unset optional provider keys when empty so they do not appear as
+        # empty strings in the process environment (some SDKs treat an empty
+        # env var as an invalid key rather than absent).
+        [ -z "${OPENAI_API_KEY:-}" ] && unset OPENAI_API_KEY
+        [ -z "${XAI_API_KEY:-}" ] && unset XAI_API_KEY
+
         # Determine the afk invocation: use the installed global when afk-version
         # is not 'local', otherwise invoke node directly from the built checkout.
         # An array (not a string) so a checkout path containing spaces is never

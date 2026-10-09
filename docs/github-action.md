@@ -40,7 +40,7 @@ jobs:
 
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `anthropic-api-key` | **yes*** | — | Anthropic API key. Pass via a repository secret (`${{ secrets.ANTHROPIC_API_KEY }}`). Never hard-code it in the workflow. *Required when routing to Anthropic models; may be omitted when using an OpenAI or xAI provider exclusively. |
+| `anthropic-api-key` | no | *(empty)* | Anthropic API key. Pass via a repository secret (`${{ secrets.ANTHROPIC_API_KEY }}`). Never hard-code it in the workflow. Required when routing to Anthropic models. At least one of `anthropic-api-key`, `openai-api-key`, or `xai-api-key` must be provided — the action exits with an error if all three are empty. |
 | `prompt` | **yes** | — | Prompt forwarded to `afk chat`. Supports YAML multi-line literals (`\|`). |
 | `openai-api-key` | no | *(empty)* | OpenAI API key (`OPENAI_API_KEY`). Required when routing to OpenAI or OpenAI-compatible models (e.g. `gpt-4o`, `o3`). Pass via a repository secret. |
 | `xai-api-key` | no | *(empty)* | xAI API key (`XAI_API_KEY`). Required when routing to xAI Grok models in API-key mode. Pass via a repository secret. |
@@ -58,9 +58,12 @@ jobs:
 
 ## Security
 
-- The `anthropic-api-key` input is mapped to `ANTHROPIC_API_KEY` in the `env:`
-  block of the run step. It is **never echoed** to logs or passed as a shell
-  argument.
+- The provider API key inputs (`anthropic-api-key`, `openai-api-key`,
+  `xai-api-key`) are mapped to `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and
+  `XAI_API_KEY` respectively in the `env:` block of the run step. They are
+  **never echoed** to logs or passed as shell arguments. Keys that are empty
+  are automatically unset from the process environment by the run script so
+  they are never presented to provider SDKs as invalid empty strings.
 - All other inputs that appear in `run:` scripts (`prompt`, `model`,
   `output-file`, `afk-version`) are also routed through `env:` variables
   (`AFK_PROMPT`, `INPUT_MODEL`, `INPUT_OUTPUT_FILE`, `INPUT_AFK_VERSION`). No
@@ -69,8 +72,10 @@ jobs:
   `$(...)` or backticks.
 - Third-party actions inside the composite action are pinned to their full commit
   SHA, not a mutable tag, to prevent supply-chain attacks.
-- No other secrets or tokens are required. The action deliberately unsets
-  `AFK_TELEGRAM_BOT_TOKEN` so the Telegram subsystem is never initialised in CI.
+- The action requires at least one of `anthropic-api-key`, `openai-api-key`, or
+  `xai-api-key` to be set; it exits immediately with a clear error message if all
+  three are empty. The `AFK_TELEGRAM_BOT_TOKEN` is deliberately unset so the
+  Telegram subsystem is never initialised in CI.
 - The `GITHUB_OUTPUT` multiline delimiter is generated at runtime using
   `openssl rand -hex 16` (with a `/dev/urandom` fallback) so a crafted prompt
   cannot inject a delimiter and truncate or overwrite subsequent outputs.

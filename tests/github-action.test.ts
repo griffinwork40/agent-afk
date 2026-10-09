@@ -131,7 +131,7 @@ describe('run-afk action — action.yml structure', () => {
     expect(src).toMatch(/^description:/m);
   });
 
-  it('declares the anthropic-api-key input as required', () => {
+  it('declares the anthropic-api-key input as optional (required: false)', () => {
     const src = readAction();
     // Extract the block between `  anthropic-api-key:` and the next
     // same-level key (another `  <name>:` line).  Each line of a YAML
@@ -141,7 +141,27 @@ describe('run-afk action — action.yml structure', () => {
     const blockRe = /^  anthropic-api-key:((?:\n(?:    .*|\s*))*)/m;
     const match = blockRe.exec(src);
     expect(match).not.toBeNull();
-    expect(match![0]).toMatch(/required:\s*true/);
+    // F1: anthropic-api-key is now optional; at least one provider key required.
+    expect(match![0]).toMatch(/required:\s*false/);
+    expect(match![0]).toMatch(/default:\s*''/);
+  });
+
+  it('declares openai-api-key as optional with an empty default', () => {
+    const src = readAction();
+    const blockRe = /^  openai-api-key:((?:\n(?:    .*|\s*))*)/m;
+    const match = blockRe.exec(src);
+    expect(match).not.toBeNull();
+    expect(match![0]).toMatch(/required:\s*false/);
+    expect(match![0]).toMatch(/default:\s*''/);
+  });
+
+  it('declares xai-api-key as optional with an empty default', () => {
+    const src = readAction();
+    const blockRe = /^  xai-api-key:((?:\n(?:    .*|\s*))*)/m;
+    const match = blockRe.exec(src);
+    expect(match).not.toBeNull();
+    expect(match![0]).toMatch(/required:\s*false/);
+    expect(match![0]).toMatch(/default:\s*''/);
   });
 
   it('declares the prompt input as required', () => {
@@ -274,10 +294,51 @@ describe('run-afk action — action.yml structure', () => {
     const pnpmSetupBlock = src.match(
       /Setup pnpm[\s\S]*?(?=\n    - name:|\n\s*runs:|$)/,
     )?.[0] ?? '';
-    // Must contain `version: 11` (or an exact patch like `11.28.2`).
-    expect(pnpmSetupBlock).toMatch(/version:\s*1[1-9]/);
+    // Must contain exactly `version: 11` (major-pinned; not 12+ by accident).
+    expect(pnpmSetupBlock).toMatch(/version:\s*11\b/);
     // Must NOT contain `version: latest`.
     expect(pnpmSetupBlock).not.toMatch(/version:\s*latest/);
+  });
+
+  it('all-keys-empty guard exists in run script', () => {
+    const src = readAction();
+    const runBlocks = extractRunBlocks(src);
+    // F1: the main run block must contain the guard that rejects a call where
+    // all three provider keys are empty.
+    const hasGuard = runBlocks.some((b) =>
+      /At least one of/.test(b) &&
+      /anthropic-api-key/.test(b) &&
+      /openai-api-key/.test(b) &&
+      /xai-api-key/.test(b),
+    );
+    expect(hasGuard).toBe(
+      true,
+      'No run block contains the all-keys-empty guard. ' +
+        'The action must emit ::error:: and exit 1 when all three provider keys are empty.',
+    );
+  });
+
+  it('OPENAI_API_KEY and XAI_API_KEY are unset when empty (run script guard)', () => {
+    const src = readAction();
+    const runBlocks = extractRunBlocks(src);
+    // F2: the main run block must unset empty optional keys so SDKs do not
+    // receive an empty string as a credential.
+    const hasOpenAiUnset = runBlocks.some((b) =>
+      /\[\s*-z\s+"\$\{OPENAI_API_KEY:-\}"\s*\]\s*&&\s*unset\s+OPENAI_API_KEY/.test(b),
+    );
+    const hasXaiUnset = runBlocks.some((b) =>
+      /\[\s*-z\s+"\$\{XAI_API_KEY:-\}"\s*\]\s*&&\s*unset\s+XAI_API_KEY/.test(b),
+    );
+    expect(hasOpenAiUnset).toBe(
+      true,
+      'No run block unsets OPENAI_API_KEY when empty. ' +
+        'Add: [ -z "${OPENAI_API_KEY:-}" ] && unset OPENAI_API_KEY',
+    );
+    expect(hasXaiUnset).toBe(
+      true,
+      'No run block unsets XAI_API_KEY when empty. ' +
+        'Add: [ -z "${XAI_API_KEY:-}" ] && unset XAI_API_KEY',
+    );
   });
 
   it('sets package_json_file to /dev/null on the pnpm setup step to avoid consumer packageManager conflicts', () => {
