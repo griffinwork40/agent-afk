@@ -44,9 +44,9 @@
  * @module agent/worktree-occupancy
  */
 
-import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
+import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
 
 const META_FILENAME = '.afk-worktree-meta.json';
 const AFK_WORKTREES_SEGMENT = `${sep}.afk-worktrees${sep}`;
@@ -107,12 +107,6 @@ export async function touchWorktreeOccupancy(
   if (root === undefined) return;
   if (isCancelled?.() === true) return;
   const metaPath = join(root, META_FILENAME);
-  // Invariant: the temp name must be unique per CALL, not per process. Subagents
-  // run in-process and inherit the parent cwd verbatim, so a worktree-isolated
-  // parent fanning out N children arms N heartbeats against the same root — a
-  // pid-only name gives all of them one temp path, and their write/rename pairs
-  // interleave on a single file.
-  const tmpPath = `${metaPath}.${process.pid}.${randomUUID()}.tmp`;
   try {
     let meta: Record<string, unknown> = {};
     try {
@@ -122,20 +116,22 @@ export async function touchWorktreeOccupancy(
     }
     meta['pid'] = process.pid;
     meta['createdAt'] = new Date().toISOString();
-    await fs.writeFile(tmpPath, JSON.stringify(meta, null, 2), 'utf-8');
     // Ordering constraint (Node event loop): the caller's cancel signal can flip
-    // during either await above, and `rename` is the only irreversible step. Re-check
-    // immediately before it — never between read and write — so a cancelled touch
-    // leaves the meta file byte-identical and takes its temp file with it.
-    if (isCancelled?.() === true) {
-      await fs.rm(tmpPath, { force: true }).catch(() => {});
-      return;
-    }
-    await fs.rename(tmpPath, metaPath);
+    // during either await above, and the rename commit is the only irreversible
+    // step. `commitGuard` re-checks immediately before the rename — in the same
+    // event-loop tick — so a cancelled touch leaves the meta file byte-identical.
+    // atomicWriteFileAsync handles temp-file cleanup on any error or guard abort.
+    //
+    // Invariant: atomicWriteFileAsync uses crypto.randomBytes for the temp name,
+    // so concurrent heartbeat calls for the same root (N in-process children,
+    // same pid) each get a unique temp path — no write/rename interleaving.
+    await atomicWriteFileAsync(metaPath, JSON.stringify(meta, null, 2), {
+      mode: 0o600,
+      mkdirp: false,
+      commitGuard: () => isCancelled?.() !== true,
+    });
   } catch {
-    // Best-effort — never block dispatch. Drop the temp file if the rename
-    // never happened, so a failed touch cannot litter the worktree.
-    await fs.rm(tmpPath, { force: true }).catch(() => {});
+    // Best-effort — never block dispatch.
   }
 }
 
