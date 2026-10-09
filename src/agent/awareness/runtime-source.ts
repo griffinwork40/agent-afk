@@ -26,6 +26,10 @@ import type {
 import { gatherWorkspace } from './workspace-source.js';
 import { readUsageRecords } from '../usage/usage-snapshot.js';
 import { compactUsageEntries } from '../usage/usage-formatter.js';
+import {
+  aggregateSubagentOutcomes,
+  buildSubagentOutcomeSummary,
+} from '../../insights/aggregators/subagent-outcomes.js';
 
 export interface RuntimeSourceDeps {
   /** Stable session UUID (may be undefined for pre-init sessions). */
@@ -150,6 +154,18 @@ export function buildRuntimeStateSource(deps: RuntimeSourceDeps): RuntimeStateSo
       // Shared reader + formatter (agent/usage/*): ledger + in-process cache,
       // no network, safe on every get_runtime_state call.
       return compactUsageEntries(readUsageRecords());
+    },
+    getSubagentOutcomeSummary() {
+      // Reads the last 1 MB tail of routing-decisions.jsonl. Safe to call on
+      // every get_runtime_state invocation — synchronous, bounded, never throws
+      // (the aggregator swallows all errors and returns zero aggregates).
+      // 30-day window matches the default insights window.
+      try {
+        const agg = aggregateSubagentOutcomes({ days: 30 });
+        return buildSubagentOutcomeSummary(agg);
+      } catch {
+        return [];
+      }
     },
   };
 }

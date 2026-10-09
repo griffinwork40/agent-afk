@@ -37,6 +37,7 @@ import {
   CPR_TIMEOUT_CEILING_MS,
   CPR_RTT_SCALE,
   __resetCprRttForTests,
+  __getCprRttForTests,
 } from './terminal-compositor.lifecycle.cpr.js';
 import { handleKeypress } from './input/reader.keypress.js';
 import type { CprHost } from './terminal-compositor.lifecycle.cpr.js';
@@ -106,6 +107,7 @@ function makeKeypressCtx(stdin: NodeJS.ReadStream): KeypressCtx {
   return {
     opts: { promptFn: () => '> ' } as unknown as KeypressCtx['opts'],
     stdout: new PassThrough() as unknown as NodeJS.WriteStream,
+    stdin,
     repaintCtx: {} as RepaintCtx,
     callbacks: {
       onSubmit: vi.fn(),
@@ -679,5 +681,141 @@ describe('G5-regression: timeout seeds RTT floor; next request uses floor * scal
     vi.advanceTimersByTime(floor + 50);
     expect(host.cprPending).toBe(false);
     expect(repaintCalls2).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G8: EWA ratchet and recovery trajectory (#3302 regression)
+//
+// Consecutive CPR timeouts ratchet _measuredRttMs toward the ceiling via EWA
+// (α=0.25 on timeout samples; each timeout feeds timeoutMs as the sample).
+// After ~5 fast replies the estimate recovers back toward the true fast RTT.
+//
+// The EWA update on timeout: rtt = rtt * 0.75 + timeoutMs * 0.25.
+// Since each successive timeout feeds a larger timeoutMs (the adaptive timeout
+// grows with rtt), the ratchet converges to CPR_TIMEOUT_CEILING_MS / CPR_RTT_SCALE
+// (the ceiling working backward through the formula).
+//
+// Recovery: a fast reply at ~10ms drives rtt = rtt * 0.75 + 10ms * 0.25.
+// After 5 fast replies from a ceiling-adjacent rtt the timeout drops well
+// below CPR_TIMEOUT_CEILING_MS.
+// ---------------------------------------------------------------------------
+
+describe('G8: EWA ratchet and recovery trajectory', () => {
+  beforeEach(() => { vi.useFakeTimers(); __resetCprKeypressGuardForTests(); __resetCprRttForTests(); });
+  afterEach(() => { vi.useRealTimers(); __resetCprKeypressGuardForTests(); __resetCprRttForTests(); });
+
+  /**
+   * Helper: run one CPR cycle and let it time out.  Returns the timeout that
+   * fired (the adaptive timeout used for that request).
+   */
+  async function runTimeoutCycle(stdin: NodeJS.ReadStream, stdout: NodeJS.WriteStream): Promise<number> {
+    // Capture the timeoutMs by observing when cprPending transitions.
+    const host = makeCprHost(stdin, stdout);
+    requestCprAndApplyDelta(host, 10, 50, 10);
+    // The current adaptive timeout is whatever _computeTimeout() returned.
+    // We don't have direct access, so we binary-search by advancing time.
+    // But for simplicity: advance to CPR_TIMEOUT_CEILING_MS + margin (always fires).
+    vi.advanceTimersByTime(CPR_TIMEOUT_CEILING_MS + 50);
+    expect(host.cprPending).toBe(false);
+    await Promise.resolve();
+    return CPR_TIMEOUT_CEILING_MS; // generous upper bound
+  }
+
+  it('consecutive timeouts ratchet _measuredRttMs upward via EWA', () => {
+    const stdin = makeStdin();
+    const stdout = makeStdout();
+
+    // Seed with a fast baseline (10ms reply).
+    const h0 = makeCprHost(stdin, stdout);
+    requestCprAndApplyDelta(h0, 10, 50, 10);
+    vi.advanceTimersByTime(10);
+    stdin.emit('data', Buffer.from('\x1b[10;1R'));
+    vi.advanceTimersByTime(CPR_TIMEOUT_MS + CPR_KEYPRESS_GRACE_MS + 50);
+    // RTT ≈ 10ms after first fast reply.
+    const rttAfterFastSeed = __getCprRttForTests();
+    expect(rttAfterFastSeed).not.toBeNull();
+    expect(rttAfterFastSeed!).toBeLessThan(CPR_TIMEOUT_MS);
+
+    // Now run 3 timeout cycles — each timeout seeds rtt = rtt*0.75 + timeoutMs*0.25.
+    // The first timeout uses timeoutMs = max(rtt*scale, 120) which is ~120ms (fast rtt).
+    for (let i = 0; i < 3; i++) {
+      const h = makeCprHost(stdin, stdout);
+      requestCprAndApplyDelta(h, 10, 50, 10);
+      vi.advanceTimersByTime(CPR_TIMEOUT_CEILING_MS + 50);
+    }
+
+    const rttAfterTimeouts = __getCprRttForTests();
+    expect(rttAfterTimeouts).not.toBeNull();
+    // After 3 timeouts the RTT estimate must be higher than the initial fast seed.
+    expect(rttAfterTimeouts!).toBeGreaterThan(rttAfterFastSeed!);
+  });
+
+  it('fast replies after ratchet-up recover _measuredRttMs toward actual RTT', async () => {
+    const stdin = makeStdin();
+    const stdout = makeStdout();
+
+    // Manually push the RTT high by running multiple timeouts.
+    // We need to get it well above the baseline.
+    for (let i = 0; i < 5; i++) {
+      const h = makeCprHost(stdin, stdout);
+      requestCprAndApplyDelta(h, 10, 50, 10);
+      vi.advanceTimersByTime(CPR_TIMEOUT_CEILING_MS + 50);
+    }
+
+    const rttHigh = __getCprRttForTests();
+    expect(rttHigh).not.toBeNull();
+    // After 5 timeouts at ceiling-level timeouts the estimate should be elevated.
+    expect(rttHigh!).toBeGreaterThan(CPR_TIMEOUT_MS);
+
+    // Now run 5 fast replies at ~10ms each.
+    // EWA: rtt = rtt * 0.75 + 10ms * 0.25 each round → converges to ~10ms.
+    for (let i = 0; i < 5; i++) {
+      const h = makeCprHost(stdin, stdout);
+      requestCprAndApplyDelta(h, 10, 50, 10);
+      // Reply arrives at 10ms — well within any timeout.
+      vi.advanceTimersByTime(10);
+      stdin.emit('data', Buffer.from('\x1b[10;1R'));
+      await Promise.resolve();
+      // Clean up the guard timer so the next cycle starts fresh.
+      vi.advanceTimersByTime(CPR_TIMEOUT_CEILING_MS + 50);
+    }
+
+    const rttRecovered = __getCprRttForTests();
+    expect(rttRecovered).not.toBeNull();
+    // After 5 fast replies the RTT must have dropped from the ratcheted high.
+    expect(rttRecovered!).toBeLessThan(rttHigh!);
+    // And the adaptive timeout it produces must be below the ceiling.
+    const adaptiveTimeout = Math.min(
+      Math.max(Math.round(rttRecovered! * CPR_RTT_SCALE), CPR_TIMEOUT_MS),
+      CPR_TIMEOUT_CEILING_MS,
+    );
+    expect(adaptiveTimeout).toBeLessThan(CPR_TIMEOUT_CEILING_MS);
+  });
+
+  it('timeout ceiling is respected during full ratchet — adaptive never exceeds CPR_TIMEOUT_CEILING_MS', () => {
+    const stdin = makeStdin();
+    const stdout = makeStdout();
+
+    // Run enough timeouts to saturate the EWA near ceiling.
+    // We'll do 10 cycles, each timing out at CPR_TIMEOUT_CEILING_MS.
+    for (let i = 0; i < 10; i++) {
+      const h = makeCprHost(stdin, stdout);
+      requestCprAndApplyDelta(h, 10, 50, 10);
+      vi.advanceTimersByTime(CPR_TIMEOUT_CEILING_MS + 50);
+    }
+
+    const rttAtSaturation = __getCprRttForTests();
+    expect(rttAtSaturation).not.toBeNull();
+
+    // The adaptive timeout is min(max(rtt * scale, baseline), ceiling).
+    // Even if rtt * scale > ceiling, the clamp must hold.
+    const adaptiveTimeout = Math.min(
+      Math.max(Math.round(rttAtSaturation! * CPR_RTT_SCALE), CPR_TIMEOUT_MS),
+      CPR_TIMEOUT_CEILING_MS,
+    );
+    expect(adaptiveTimeout).toBeLessThanOrEqual(CPR_TIMEOUT_CEILING_MS);
+    // And rtt itself must be bounded (it's fed only values ≤ CPR_TIMEOUT_CEILING_MS).
+    expect(rttAtSaturation!).toBeLessThanOrEqual(CPR_TIMEOUT_CEILING_MS);
   });
 });

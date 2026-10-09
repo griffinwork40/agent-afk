@@ -46,7 +46,7 @@ import {
   type FireOnTaskCompleteOptions,
 } from './scheduler.pull-tick.js';
 import { errorMessage } from '../../utils/errors.js';
-import { makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord, makeTelemetryUnwritableSkipRecord } from './scheduler.overlap-guard.js';
+import { makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord, makeTelemetryUnwritableSkipRecord, OverlapAlertLatch, formatOverlapAlertMessage } from './scheduler.overlap-guard.js';
 import { BudgetAlertLatch, evaluateBudgetGate, formatBudgetSkipMessage, resolveDaemonUsageTarget } from './budget-gate.js';
 import { probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
 
@@ -206,6 +206,8 @@ export class CronScheduler {
   private readonly inFlightTaskIds = new Set<string>();
   /** One Telegram alert per usage-budget episode (see BudgetAlertLatch). */
   private readonly budgetAlerts = new BudgetAlertLatch();
+  /** One Telegram alert per overlap episode per task (see OverlapAlertLatch). */
+  private readonly overlapAlerts = new OverlapAlertLatch();
   /** One Telegram alert per daemon process for a non-writable telemetry file. */
   private readonly telemetryAlerts = new TelemetryAlertLatch();
   // TODO(#337-hook): hook-driven dequeue path will share isDequeuing mutex
@@ -373,7 +375,15 @@ export class CronScheduler {
     // so it applies uniformly to all executor types.
     if (this.inFlightTaskIds.has(task.taskId)) {
       const record = makeOverlapSkipRecord(task, trigger, this.now());
-      this.writeTelemetry(record, task);
+      // Alert once per overlap episode (OverlapAlertLatch), overriding the
+      // task's notifyOn: 'always' for the first overlap so the operator hears
+      // about the stacking, 'never' for subsequent ticks in the same episode
+      // so a slow task does not spam once per cron interval.
+      const shouldAlert = this.overlapAlerts.shouldAlert(task.taskId);
+      const notifyTask = { ...task, notifyOn: shouldAlert ? ('always' as const) : ('never' as const) };
+      this.writeTelemetry(record, notifyTask, shouldAlert
+        ? { responseText: formatOverlapAlertMessage(task.taskId, record.command, task.cronExpression) }
+        : undefined);
       return record;
     }
     this.inFlightTaskIds.add(task.taskId);
@@ -470,6 +480,9 @@ export class CronScheduler {
     );
     } finally {
       this.inFlightTaskIds.delete(task.taskId);
+      // Any non-overlap run (success or error) ends the overlap episode for
+      // this task, so the next overlap will alert again.
+      this.overlapAlerts.clear(task.taskId);
     }
   }
 

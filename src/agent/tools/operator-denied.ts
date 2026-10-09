@@ -48,8 +48,10 @@ function warn(message: string): void {
   console.error(`[tools.disabled] ${message}`);
 }
 
-/** Reset per-session warning dedup so daemon processes warn on each new session. */
-export function resetWarnings(): void {
+/** Reset per-session warning dedup so daemon processes warn on each new session.
+ * @internal Called by resolveOperatorDeniedTools at the start of each snapshot.
+ */
+function resetWarnings(): void {
   warned.clear();
 }
 
@@ -82,7 +84,7 @@ export function parseDisabledTools(value: unknown, source: string, customNames: 
 /** Snapshot the union of ALL config tiers at provider construction, not per query. */
 export function resolveOperatorDeniedTools(customNames: readonly string[] = []): string[] {
   // Reset warning dedup so daemon processes warn once per session, not once ever.
-  warned.clear();
+  resetWarnings();
   const denied = new Set<string>();
   for (const { path } of jsonConfigTierPaths()) {
     if (!existsSync(path)) continue;

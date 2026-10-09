@@ -263,3 +263,76 @@ describe('AnthropicDirectProvider — AFK-mode gate reaches the dispatcher via c
     expect(out.content).not.toContain('blocked by PreToolUse hook');
   });
 });
+
+describe('AnthropicDirectProvider — config.isNonInteractive reaches the PreToolUse context (#2302)', () => {
+  // The bash-restriction hook keys its unfiltered headless floor on
+  // `context.nonInteractive`, because this provider wires itself as the grant
+  // manager on every surface. Pin that the session flag survives the
+  // query() → dispatcher-wiring → buildDispatcher → dispatcher → preCtx path.
+  async function captureCtx(
+    isNonInteractive: boolean | undefined,
+    surface?: 'daemon',
+  ): Promise<{
+    nonInteractive: unknown;
+    grantManagerWired: boolean;
+    toolNames: string[];
+  }> {
+    messagesCreateMock.mockReset();
+    __setAnthropicClientFactory(null);
+    installFactory();
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      if (callIdx === 1) {
+        return fromArray(makeToolUseStream('toolu_bash', 'bash', JSON.stringify({ command: 'true' })));
+      }
+      return fromArray(makeTextStream('done'));
+    });
+    const seen = { nonInteractive: 'unset' as unknown, grantManagerWired: false, toolNames: [] as string[] };
+    const registry = createHookRegistry();
+    registry.register('PreToolUse', (ctx) => {
+      if (ctx.event === 'PreToolUse' && ctx.toolName === 'bash') {
+        seen.nonInteractive = ctx.nonInteractive;
+        seen.grantManagerWired = ctx.grantManager !== undefined;
+      }
+      // Block so the harmless command never actually spawns.
+      return { decision: 'block', reason: 'captured' };
+    });
+    // ask_question allowed too so the daemon-pull case can prove it survives.
+    const provider = new AnthropicDirectProvider({ permissions: { allowedTools: ['bash', 'ask_question'] } });
+    await collect(
+      provider.query({
+        prompt: singleInput('run it'),
+        config: {
+          model: 'claude-sonnet-5',
+          apiKey: 'sk-ant-oat01-test',
+          hookRegistry: registry,
+          ...(isNonInteractive !== undefined ? { isNonInteractive } : {}),
+          ...(surface !== undefined ? { surface } : {}),
+        },
+      }),
+    );
+    const firstReq = messagesCreateMock.mock.calls[0]?.[0] as { tools?: Array<{ name: string }> } | undefined;
+    seen.toolNames = (firstReq?.tools ?? []).map((t) => t.name);
+    return seen;
+  }
+
+  it('injects nonInteractive: true alongside the provider-wired grant manager', async () => {
+    const seen = await captureCtx(true);
+    expect(seen.grantManagerWired).toBe(true);
+    expect(seen.nonInteractive).toBe(true);
+  });
+
+  it('leaves nonInteractive undefined on an interactive session', async () => {
+    const seen = await captureCtx(undefined);
+    expect(seen.grantManagerWired).toBe(true);
+    expect(seen.nonInteractive).toBeUndefined();
+  });
+
+  it('daemon pull shape (surface daemon, isNonInteractive false): headless floor ON, ask_question KEPT', async () => {
+    const seen = await captureCtx(false, 'daemon');
+    expect(seen.grantManagerWired).toBe(true);
+    expect(seen.nonInteractive).toBe(true);
+    expect(seen.toolNames).toContain('ask_question');
+  });
+});

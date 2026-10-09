@@ -5,6 +5,7 @@ import { readWithAutocomplete } from './input-box.js';
 import { TerminalCompositor } from './terminal-compositor.js';
 import { registerAll } from './slash/index.js';
 import { resetRegistry } from './slash/registry.js';
+import { stripAnsi } from './display.js';
 
 type MockStdout = NodeJS.WriteStream & {
   isTTY: boolean;
@@ -51,10 +52,6 @@ function collectWrites(stream: MockStdout): { all: () => string; clear: () => vo
       chunks.length = 0;
     },
   };
-}
-
-function stripAnsi(text: string): string {
-  return text.replace(/\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
 }
 
 function keypress(

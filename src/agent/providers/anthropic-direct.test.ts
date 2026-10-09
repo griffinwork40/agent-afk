@@ -1670,10 +1670,21 @@ describe('AnthropicDirectProvider', () => {
       expect(Array.isArray(sys)).toBe(true);
       const last = sys[sys.length - 1] as { cache_control?: { type?: string; ttl?: string } };
       expect(last.cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
-      // Earlier blocks (if any) carry no cache_control.
-      for (const b of sys.slice(0, -1)) {
+      // #3241: the assembled prompt is split at `# Environment`, and the
+      // stable-prefix block immediately before the env block carries its own
+      // breakpoint. Every other earlier block carries no cache_control, so at
+      // most 2 system breakpoints are spent (of the 4 allowed).
+      const envIdx = sys.findIndex(
+        (b) => typeof b['text'] === 'string' && (b['text'] as string).startsWith('# Environment\n'),
+      );
+      expect(envIdx).toBeGreaterThan(0);
+      const stablePrefixIdx = envIdx - 1;
+      expect(sys[stablePrefixIdx]!['cache_control']).toEqual({ type: 'ephemeral', ttl: '1h' });
+      sys.slice(0, -1).forEach((b, i) => {
+        if (i === stablePrefixIdx) return;
         expect((b as { cache_control?: unknown }).cache_control).toBeUndefined();
-      }
+      });
+      expect(sys.filter((b) => b['cache_control'] !== undefined)).toHaveLength(2);
     });
 
     it('stamps cache_control on the last messages tail block by default', async () => {

@@ -193,10 +193,23 @@ export interface SessionToolDispatcherOptions {
    * onto every PreToolUse/PostToolUse context as `context.grantManager` so
    * path-scoped hooks resolve THIS session's live grants rather than a stale
    * process-global ref (#435/#514, retired in #528). Optional: test dispatchers
-   * that construct directly leave it unset and the hooks fail open (no grant
-   * manager → no containment prompt, handler resolveAndContain still enforces).
+   * that construct directly leave it unset; path-approval then fails open (no
+   * containment prompt, handler resolveAndContain still enforces) and the bash
+   * restriction hook treats the context as headless (unfiltered floor, #2302).
+   *
+   * Presence of a grant manager is NOT an "interactive surface" signal: both
+   * production providers wire it on every surface (daemon, `afk chat`, forks
+   * included). Use {@link isNonInteractive} for that.
    */
   sessionGrantManager?: GrantManager;
+  /**
+   * `isHeadlessSession(config)` of the owning session: no human can approve
+   * a prompt (`afk chat`, every daemon task including pull, forks by default). Injected
+   * onto every PreToolUse context as `context.nonInteractive` (only when true)
+   * so the bash-restriction hook applies its unfiltered headless floor even
+   * though a grant manager is wired (#2302). Default false.
+   */
+  isNonInteractive?: boolean;
   /** Witness-layer trace writer. When provided, every PreToolUse and
    *  PostToolUse dispatch records a `hook_decision` event. */
   traceWriter?: TraceSink;
@@ -325,6 +338,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * live grants. See {@link SessionToolDispatcherOptions.sessionGrantManager}.
    */
   private readonly sessionGrantManager: GrantManager | undefined;
+  /** See {@link SessionToolDispatcherOptions.isNonInteractive}. */
+  private readonly isNonInteractive: boolean;
   private readonly traceWriter: TraceSink | undefined;
   /** When true, mutating `bash` commands are blocked (read-only skill child). */
   private readonly readOnlyBash: boolean;
@@ -414,6 +429,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this.rootSessionId = opts.rootSessionId;
     this.subagentId = opts.subagentId;
     this.sessionGrantManager = opts.sessionGrantManager;
+    this.isNonInteractive = opts.isNonInteractive === true;
     this.traceWriter = opts.traceWriter;
     this.readOnlyBash = opts.readOnlyBash === true;
     // Central output cap: only a positive finite number arms the backstop; any
@@ -709,6 +725,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       parentSessionId: this.parentSessionId,
       subagentId: this.subagentId,
       sessionGrantManager: this.sessionGrantManager,
+      nonInteractive: this.isNonInteractive,
       resolveBase: this.resolveBase,
       traceWriter: this.traceWriter,
       isRegisteredTool: (name) => _isRegisteredTool(name, cDeps),

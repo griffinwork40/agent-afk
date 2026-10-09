@@ -16,6 +16,7 @@ import type { ComposeExecutor } from '../../../tools/compose-executor.js';
 import type { ToolDispatcher } from '../tool-dispatcher.js';
 import type { RuntimeStateSource } from '../../../awareness/index.js';
 import { assembleSystemPrompt, type StableSystemParts } from './system-prompt.js';
+import { isHeadlessSession } from '../../shared/headless-session.js';
 
 export type CwdDependentsFactory = (newCwd: string) => {
   userSystem: string;
@@ -47,6 +48,7 @@ export interface CwdDependentsFactoryArgs {
     runtimeStateSource?: RuntimeStateSource;
     hookRegistry?: AgentConfig['hookRegistry'];
     planExitControls?: AgentConfig['planExitControls'];
+    isNonInteractive?: boolean;
   }) => ToolDispatcher;
 }
 
@@ -135,6 +137,8 @@ export function createCwdDependentsFactory(args: CwdDependentsFactoryArgs): CwdD
       // Carry the resident plan-exit handler across a cwd rebuild — omitting
       // this previously dropped `exit_plan_mode` after a cwd re-anchor while planning.
       planExitControls: args.config.planExitControls,
+      // #2302: a cwd re-anchor must not drop the headless bash floor.
+      ...(isHeadlessSession(args.config) ? { isNonInteractive: true } : {}),
     });
     return { userSystem: newUserSystem, dispatcher: newDispatcher };
   };

@@ -1,0 +1,50 @@
+fix(#3320): address advisory findings from 2026-10-08 /pr-triage (#3294–#3309)
+
+Addresses all applicable advisory findings from issue #3320. Findings
+targeting code not on main are listed as skipped below.
+
+## #3296 daemon.ts
+- Add inline comment explaining null notifyOn is intentionally treated as
+  absent (normalizes to 'failure').
+- Add test: POST /tasks shell with notifyOn: null against a store entry
+  omitting notifyOn expects 201 (shell trust path).
+
+## #3294 one-shot-router.test.ts
+- Strengthen "runs OAuth refresh" test: ensureFreshAccessToken mock sets a
+  flag; resolveXaiAuth returns 'xai-oauth-token-fresh' only when refresh has
+  run. chat assertion on the post-refresh token detects call-order violations.
+
+## #3309 journal-replay.test.ts
+- Add text-only turn scenario using the textTurn() helper: verifies content
+  preserved, DeepSeek injects empty reasoning_content (API requirement),
+  Cerebras emits no reasoning field.
+
+## #3308 wiring.test.ts
+- Add optional registry param to makeDispatcher helper.
+- Refactor "emits hook_decision for PreToolUse/PostToolUse", "blocked
+  PreToolUse", and "injectContext" tests to use makeDispatcher instead of
+  inline SessionToolDispatcher construction.
+- Add assertHookDecision() shared narrowing helper.
+
+## #3297 operator-denied* / mutate.ts
+- Remove export from resetWarnings(); make it a private function called by
+  resolveOperatorDeniedTools() (sole reset path).
+- Add Symbol brand (OPERATOR_DENIED_BRAND) to isGuarded() to avoid false
+  positives from coincidental operatorDenied properties.
+- Fix isGuarded() idempotency check to compare deny sets element-by-element;
+  a second wrap with a different deny list now produces a new wrapper.
+- Add comment to UnknownKeyError explaining tools.disabled keys produce a
+  bespoke message that does not match "unknown config key:".
+
+## #3307 insights
+- Add tests asserting the Repo column header and cluster repo path render,
+  and that long repo paths are truncated with a leading ellipsis.
+- Replace unbounded readFileSync in preexisting-ledger/reader.ts with a 1 MB
+  tail-cap reader (mirrors readTailMb in insights/aggregators/daemon.ts).
+- Add privacy invariant comment to insights/types.ts noting that
+  preexistingDefects.topClusters[].locus and .repo contain file paths by
+  design (developer-local report).
+
+## Skipped
+- #3297 nit openai-compatible/index.ts:324 long line: file is already above
+  the 350-code-line ceiling; adding lines would fail audit:filesize:check.

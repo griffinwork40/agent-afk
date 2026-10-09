@@ -10,8 +10,8 @@
  */
 
 import { Command } from 'commander';
-import { existsSync, readFileSync } from 'node:fs';
 import { handleCommandError } from '../errors/index.js';
+import { readTelemetryHistory } from '../../agent/daemon/telemetry-reader.js';
 import {
   loadSchedules,
   addSchedule,
@@ -189,33 +189,11 @@ export function registerScheduleCommand(program: Command): void {
     .command('logs <id>')
     .description('Show recent execution history for a task')
     .option('-n, --limit <n>', 'Number of records to show', '10')
-    .action((id: string, opts: { limit: string }) => {
+    .action(async (id: string, opts: { limit: string }) => {
       try {
         const limit = Math.min(Math.max(1, parseInt(opts.limit, 10) || 10), 50);
         const telemetryPath = getTelemetryPath();
-        if (!existsSync(telemetryPath)) {
-          console.log(`No telemetry found for task: ${id}`);
-          return;
-        }
-        // 1MB tail cap, reverse scan — same logic as getScheduleHistoryHandler
-        const buf = readFileSync(telemetryPath);
-        const tailBuf = buf.length > 1_048_576 ? buf.subarray(buf.length - 1_048_576) : buf;
-        const content = tailBuf.toString('utf-8');
-        const lines = content.split('\n');
-        const matching: unknown[] = [];
-        for (let i = lines.length - 1; i >= 0; i -= 1) {
-          const line = lines[i];
-          if (!line) continue;
-          try {
-            const record = JSON.parse(line) as { taskId?: string };
-            if (record.taskId !== id) continue;
-            matching.push(record);
-            if (matching.length >= limit) break;
-          } catch {
-            continue;
-          }
-        }
-        const results = matching.reverse(); // chronological order
+        const results = await readTelemetryHistory(telemetryPath, { taskId: id, limit });
         if (results.length === 0) {
           console.log(`No history found for task: ${id}`);
           return;

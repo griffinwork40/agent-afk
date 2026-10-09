@@ -40,14 +40,17 @@ export function buildRuntimeSnapshot(
     case 'workspace':
       return { workspace: source.getWorkspace() };
     case 'all':
-    default:
+    default: {
+      const summary = source.getSubagentOutcomeSummary();
       return {
         self: source.getSelf(),
         tools: source.getTools(),
         subagents: source.getSubagents(),
         workspace: source.getWorkspace(),
         usage: source.getUsage(),
+        ...(summary.length > 0 ? { subagentOutcomeSummary: summary } : {}),
       };
+    }
   }
 }
 

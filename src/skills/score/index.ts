@@ -36,6 +36,8 @@ import { promises as fs } from 'fs';
 import { join, dirname } from 'path';
 import { errorMessage } from '../../utils/errors.js';
 import { pathExists } from '../../utils/fs.js';
+import { isPlainObject } from '../../utils/type-guards.js';
+import { truncate } from '../../utils/truncate.js';
 
 export const SCORE_SCHEMA_VERSION = 1 as const;
 export const DEFAULT_TIMEOUT_MS = 120_000;
@@ -371,13 +373,7 @@ function lintRank(v: boolean | null): number {
   return 0;
 }
 
-function truncate(s: string, n: number): string {
-  return s.length <= n ? s : s.slice(0, n) + '…';
-}
-
-function isObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
+const isObject = isPlainObject;
 
 const fileExists = pathExists;
 

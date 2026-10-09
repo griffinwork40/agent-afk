@@ -1156,6 +1156,58 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
       rmSync(tmpHome, { recursive: true, force: true });
     }
   });
+
+  it('POST /tasks shell: notifyOn: null is treated as absent and matches a store entry without notifyOn', async () => {
+    // Regression for advisory finding #3320: null on the POST body should be
+    // treated identically to an absent field (both normalize to the effective
+    // default 'failure'), so it must pass notifyOnValid and match a store entry
+    // whose notifyOn is also omitted.
+    const tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-notify-null-'));
+    vi.stubEnv('AFK_HOME', tmpHome);
+    mkdirSync(join(tmpHome, 'config'), { recursive: true });
+    writeFileSync(
+      join(tmpHome, 'config', 'schedules.json'),
+      JSON.stringify([
+        {
+          id: 'shell-null-notify',
+          name: 'Shell Null Notify',
+          command: 'echo null-notify',
+          cron: '0 4 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+          enabled: true,
+          // notifyOn intentionally omitted → effective default is 'failure'
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ]),
+    );
+    try {
+      expect(getAfkHome()).toBe(tmpHome);
+      const h = await spinDaemon();
+      // Request carries explicit notifyOn: null — must be treated as absent
+      // and match the store entry whose notifyOn is also omitted.
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: 'shell-null-notify',
+          command: 'echo null-notify',
+          cron: '0 4 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+          notifyOn: null,
+        }),
+      });
+      expect(res.status).toBe(201);
+      const task = h.scheduler.list().find((t) => t.taskId === 'shell-null-notify');
+      expect(task?.executor).toBe('shell');
+    } finally {
+      vi.unstubAllEnvs();
+      expect(getAfkHome()).not.toBe(tmpHome);
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('notifyOn filter in CronScheduler', () => {

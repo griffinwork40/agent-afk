@@ -11,6 +11,46 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.307.0] - 2026-10-09
+
+### Added
+- add OverlapAlertLatch — one Telegram alert per overlap episode (#3326) (7b90c16b)
+- aggregate subagent outcomes by model, type and depth and surface in get_runtime_state (#3328) (43540bc2)
+
+### Fixed
+- address CPR late-reply advisory findings from #3240 review (#3314) (6a932100)
+- harvest flags from flat-installed plugin roots (#3333) (849c625a)
+- address advisory findings from 2026-10-08 /pr-triage (#3294–#3309) (#3325) (3b3ab7b5)
+
+### Changed
+- split system prompt into stable cached prefix and volatile env tail (#3322) (a7202c80)
+- shared JSONL helpers and bounded schedule-telemetry reader (#3327) (2edd291f)
+
+## [5.306.4] - 2026-10-09
+
+### Fixed
+- block restricted paths in bash on headless surfaces (#2312) (9becef0b)
+
+## [5.306.3] - 2026-10-08
+
+### Changed
+- shared type-guards, sleep, truncate, truncateTelegramLabel, stripAnsi in tests (#3318) (eb6a5650)
+
+## [5.306.2] - 2026-10-08
+
+### Fixed
+- apply advisory findings from 2026-10-07 pr-triage (#3316) (24c952c5)
+
+### Changed
+- surface /whatif and Jev as differentiators in README (#3315) (e04095c8)
+- shared walker + resolveTraceFile + groupViolationsByFile; fix --reason drift in check-test-typecheck (#3319) (495196f4)
+- extract checkout-lifecycle helpers; plugin update warns before discarding edits (#3317) (d7eb6282)
+
+## [5.306.1] - 2026-10-08
+
+### Fixed
+- share normalizeSystemPromptOverlay; fix OpenAI preset {append} drop (#3305) (29241d8c)
+
 ## [5.306.0] - 2026-10-08
 
 ### Added

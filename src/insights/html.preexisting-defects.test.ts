@@ -142,4 +142,26 @@ describe('renderPreexistingDefects', () => {
     const html = renderPreexistingDefects(agg);
     expect(html).toContain('id="preexisting-defects"');
   });
+
+  it('renders Repo column header and cluster repo path in a table row', () => {
+    // Advisory finding #3320: no test previously asserted the Repo column renders.
+    const agg = makeAgg([CLUSTER_FIXTURE], 1, 0);
+    const html = renderPreexistingDefects(agg);
+    // The thead must have a "Repo" column.
+    expect(html).toContain('<th>Repo</th>');
+    // The cluster's repo field must appear in the row (possibly truncated with ellipsis).
+    // CLUSTER_FIXTURE.repo is '/home/user/myrepo' — short enough to render without truncation.
+    expect(html).toContain(CLUSTER_FIXTURE.repo);
+  });
+
+  it('truncates very long repo paths with a leading ellipsis', () => {
+    const longRepo = '/home/user/' + 'x'.repeat(60) + '/myrepo';
+    const cluster = { ...CLUSTER_FIXTURE, repo: longRepo };
+    const agg = makeAgg([cluster], 1, 0);
+    const html = renderPreexistingDefects(agg);
+    // Renderer caps at 40 chars with a leading '...' for long paths.
+    expect(html).toContain('...');
+    // The raw long path should not appear verbatim in the output.
+    expect(html).not.toContain(longRepo);
+  });
 });
