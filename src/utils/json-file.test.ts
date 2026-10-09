@@ -77,8 +77,14 @@ describe('json-file utilities', () => {
       const p = join(dir, 'mode.json');
       writeJsonFile(p, {}, { mode: 0o644 });
       const mode = statSync(p).mode & 0o777;
-      // On some platforms the umask may restrict 0o644 to 0o600; accept either.
-      expect([0o600, 0o644]).toContain(mode);
+      // NTFS ignores POSIX permission bits and always reports 0o666; on POSIX
+      // the umask may restrict 0o644 to 0o600. Use a value branch (not a skip)
+      // so the test runs on all platforms and R4 is satisfied.
+      if (process.platform === 'win32') {
+        expect(mode).toBe(0o666);
+      } else {
+        expect([0o600, 0o644]).toContain(mode);
+      }
     });
   });
 
@@ -96,7 +102,12 @@ describe('json-file utilities', () => {
       const p = join(dir, 'async-mode.json');
       await writeJsonFileAsync(p, { x: 1 }, { mode: 0o644 });
       const mode = statSync(p).mode & 0o777;
-      expect([0o600, 0o644]).toContain(mode);
+      // NTFS always reports 0o666; POSIX may restrict 0o644 to 0o600 via umask.
+      if (process.platform === 'win32') {
+        expect(mode).toBe(0o666);
+      } else {
+        expect([0o600, 0o644]).toContain(mode);
+      }
     });
   });
 
