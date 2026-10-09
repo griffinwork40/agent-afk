@@ -187,10 +187,25 @@ describe('run-afk action — action.yml structure', () => {
     expect(src).not.toMatch(/sk-[A-Za-z0-9]{20,}/);
   });
 
-  it('maps anthropic-api-key to ANTHROPIC_API_KEY env var, not a shell arg', () => {
+  it('maps anthropic-api-key to INPUT_ANTHROPIC_API_KEY in the step env: block (not the canonical name)', () => {
     const src = readAction();
-    // The key must appear in an `env:` block, not directly in `run:` args.
-    expect(src).toMatch(/ANTHROPIC_API_KEY:\s*\$\{\{\s*inputs\.anthropic-api-key\s*\}\}/);
+    // Contract: the step env: block must map the input to the INPUT_* name.
+    // Mapping directly to ANTHROPIC_API_KEY would overwrite any inherited env value.
+    expect(src).toMatch(/INPUT_ANTHROPIC_API_KEY:\s*\$\{\{\s*inputs\.anthropic-api-key\s*\}\}/);
+  });
+
+  it('does not assign any canonical key name from an input in the step env: block', () => {
+    const src = readAction();
+    // Contract: ANTHROPIC_API_KEY, OPENAI_API_KEY, XAI_API_KEY must NOT appear
+    // as env: assignments (lines starting with whitespace then the key name and
+    // a colon) that reference ${{ inputs.* }}. Those assignments would silently
+    // replace an inherited env value with the empty input default.
+    // The regex anchors to the start of a line with leading whitespace so it
+    // does not false-match the canonical name appearing inside a description
+    // string like "Anthropic API key (ANTHROPIC_API_KEY)".
+    expect(src).not.toMatch(/^\s+ANTHROPIC_API_KEY:\s*\$\{\{\s*inputs\./m);
+    expect(src).not.toMatch(/^\s+OPENAI_API_KEY:\s*\$\{\{\s*inputs\./m);
+    expect(src).not.toMatch(/^\s+XAI_API_KEY:\s*\$\{\{\s*inputs\./m);
   });
 
   it('pins third-party actions to full commit SHAs (no bare tag references)', () => {
@@ -277,14 +292,14 @@ describe('run-afk action — action.yml structure', () => {
     expect(src).toMatch(/xai-api-key:/);
   });
 
-  it('maps openai-api-key to OPENAI_API_KEY env var, not a shell arg', () => {
+  it('maps openai-api-key to INPUT_OPENAI_API_KEY in the step env: block', () => {
     const src = readAction();
-    expect(src).toMatch(/OPENAI_API_KEY:\s*\$\{\{\s*inputs\.openai-api-key\s*\}\}/);
+    expect(src).toMatch(/INPUT_OPENAI_API_KEY:\s*\$\{\{\s*inputs\.openai-api-key\s*\}\}/);
   });
 
-  it('maps xai-api-key to XAI_API_KEY env var, not a shell arg', () => {
+  it('maps xai-api-key to INPUT_XAI_API_KEY in the step env: block', () => {
     const src = readAction();
-    expect(src).toMatch(/XAI_API_KEY:\s*\$\{\{\s*inputs\.xai-api-key\s*\}\}/);
+    expect(src).toMatch(/INPUT_XAI_API_KEY:\s*\$\{\{\s*inputs\.xai-api-key\s*\}\}/);
   });
 
   it('pins pnpm to version 11, not "latest"', () => {
@@ -318,16 +333,52 @@ describe('run-afk action — action.yml structure', () => {
     );
   });
 
-  it('OPENAI_API_KEY and XAI_API_KEY are unset when empty (run script guard)', () => {
+  it('run script conditionally exports all three canonical keys from INPUT_* (non-empty input wins)', () => {
     const src = readAction();
     const runBlocks = extractRunBlocks(src);
-    // F2: the main run block must unset empty optional keys so SDKs do not
-    // receive an empty string as a credential.
+    // Contract: each INPUT_* var is conditionally exported to the canonical
+    // name only when non-empty, preserving any inherited env value otherwise.
+    const hasAnthropicExport = runBlocks.some((b) =>
+      /\[\s*-n\s+"\$\{INPUT_ANTHROPIC_API_KEY:-\}"\s*\]\s*&&\s*export\s+ANTHROPIC_API_KEY/.test(b),
+    );
+    const hasOpenAiExport = runBlocks.some((b) =>
+      /\[\s*-n\s+"\$\{INPUT_OPENAI_API_KEY:-\}"\s*\]\s*&&\s*export\s+OPENAI_API_KEY/.test(b),
+    );
+    const hasXaiExport = runBlocks.some((b) =>
+      /\[\s*-n\s+"\$\{INPUT_XAI_API_KEY:-\}"\s*\]\s*&&\s*export\s+XAI_API_KEY/.test(b),
+    );
+    expect(hasAnthropicExport).toBe(
+      true,
+      'No run block conditionally exports ANTHROPIC_API_KEY from INPUT_ANTHROPIC_API_KEY.',
+    );
+    expect(hasOpenAiExport).toBe(
+      true,
+      'No run block conditionally exports OPENAI_API_KEY from INPUT_OPENAI_API_KEY.',
+    );
+    expect(hasXaiExport).toBe(
+      true,
+      'No run block conditionally exports XAI_API_KEY from INPUT_XAI_API_KEY.',
+    );
+  });
+
+  it('all three canonical provider keys are unset when empty (run script guard)', () => {
+    const src = readAction();
+    const runBlocks = extractRunBlocks(src);
+    // Contract: all three keys must be unset when empty after the conditional
+    // exports, so SDKs never receive an empty string as a credential.
+    const hasAnthropicUnset = runBlocks.some((b) =>
+      /\[\s*-z\s+"\$\{ANTHROPIC_API_KEY:-\}"\s*\]\s*&&\s*unset\s+ANTHROPIC_API_KEY/.test(b),
+    );
     const hasOpenAiUnset = runBlocks.some((b) =>
       /\[\s*-z\s+"\$\{OPENAI_API_KEY:-\}"\s*\]\s*&&\s*unset\s+OPENAI_API_KEY/.test(b),
     );
     const hasXaiUnset = runBlocks.some((b) =>
       /\[\s*-z\s+"\$\{XAI_API_KEY:-\}"\s*\]\s*&&\s*unset\s+XAI_API_KEY/.test(b),
+    );
+    expect(hasAnthropicUnset).toBe(
+      true,
+      'No run block unsets ANTHROPIC_API_KEY when empty. ' +
+        'Add: [ -z "${ANTHROPIC_API_KEY:-}" ] && unset ANTHROPIC_API_KEY',
     );
     expect(hasOpenAiUnset).toBe(
       true,
@@ -338,6 +389,20 @@ describe('run-afk action — action.yml structure', () => {
       true,
       'No run block unsets XAI_API_KEY when empty. ' +
         'Add: [ -z "${XAI_API_KEY:-}" ] && unset XAI_API_KEY',
+    );
+  });
+
+  it('all-keys-empty guard error message mentions inputs or inherited env', () => {
+    const src = readAction();
+    const runBlocks = extractRunBlocks(src);
+    // Contract: the guard message must tell the caller that keys may come from
+    // inputs OR from inherited env, not only from inputs.
+    const hasUpdatedGuardMessage = runBlocks.some((b) =>
+      /via inputs or inherited env/.test(b),
+    );
+    expect(hasUpdatedGuardMessage).toBe(
+      true,
+      'Guard error message should mention that keys may come from inputs or inherited env.',
     );
   });
 

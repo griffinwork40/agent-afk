@@ -58,12 +58,20 @@ jobs:
 
 ## Security
 
-- The provider API key inputs (`anthropic-api-key`, `openai-api-key`,
-  `xai-api-key`) are mapped to `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and
-  `XAI_API_KEY` respectively in the `env:` block of the run step. They are
-  **never echoed** to logs or passed as shell arguments. Keys that are empty
-  are automatically unset from the process environment by the run script so
-  they are never presented to provider SDKs as invalid empty strings.
+- Provider API key **precedence**: an input value wins when it is non-empty;
+  otherwise, any value already present in the caller's job or workflow `env:`
+  is preserved unchanged. This means you can supply a key via a repository
+  secret passed as an input *or* via an inherited environment variable —
+  neither path silently overwrites the other.
+- Internally, the inputs are mapped to `INPUT_ANTHROPIC_API_KEY`,
+  `INPUT_OPENAI_API_KEY`, and `INPUT_XAI_API_KEY` in the step's `env:` block
+  (never to the canonical `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` /
+  `XAI_API_KEY` names, which would overwrite an inherited value with the empty
+  default). The run script then exports each canonical name only when the
+  corresponding input is non-empty, leaving any inherited value untouched
+  otherwise. Keys that are still empty after this are automatically unset so
+  provider SDKs never receive an empty string as a credential.
+- Inputs are **never echoed** to logs or passed as shell arguments.
 - All other inputs that appear in `run:` scripts (`prompt`, `model`,
   `output-file`, `afk-version`) are also routed through `env:` variables
   (`AFK_PROMPT`, `INPUT_MODEL`, `INPUT_OUTPUT_FILE`, `INPUT_AFK_VERSION`). No

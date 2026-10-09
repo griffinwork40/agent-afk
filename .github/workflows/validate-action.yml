@@ -35,6 +35,8 @@ jobs:
         # pinned to SHA for supply-chain safety; tag: pnpm/action-setup@v6
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
         with:
+          # Pin to pnpm v11 (the major used by this repo) for reproducibility.
+          version: 11
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
