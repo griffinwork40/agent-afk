@@ -209,6 +209,20 @@ function buildNestedChildManager(
   });
 }
 
+/**
+ * Resolve `systemPrompt` and the companion `isUnnamedWorker` flag together.
+ * Named agents supply their own prompt; unnamed workers embed
+ * `TOOL_SYSTEM_PROMPT_BASE` via `UNNAMED_SUBAGENT_WORKER_PROMPT` and signal
+ * this so providers skip the duplicate `toolBase` prepend (#3359).
+ */
+function resolveChildSystemPrompt(
+  namedAgent: RegisteredAgent | undefined,
+  operatorOverlay: string | undefined,
+): { systemPrompt: string; isUnnamedWorker?: true } {
+  if (namedAgent !== undefined) return { systemPrompt: namedAgent.definition.prompt };
+  return { systemPrompt: composeUnnamedWorkerPrompt(operatorOverlay), isUnnamedWorker: true };
+}
+
 export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigResult {
   const {
     parsed,
@@ -379,15 +393,10 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     apiKey: childIsOpenAI ? undefined : resolvedChildApiKey,
     // Named-agent body IS the prompt (Claude Code parity; general-purpose
     // bakes in SUBAGENT_HANDOFF_CONTRACT; read-only vendored agents compact).
-    // Unnamed dispatch uses a lean scoped worker prompt instead of the full
-    // coordinator-framed parent base (~54 KB), plus the BARE operator overlay
-    // so AFK.md instructions still reach the child (#3324) — see
-    // composeUnnamedWorkerPrompt in system-prompt.ts. Identity/workspace
-    // preambles are injected later by assembleChildConfig / injectWorkspacePreamble.
-    systemPrompt:
-      namedAgent !== undefined
-        ? namedAgent.definition.prompt
-        : composeUnnamedWorkerPrompt(defaultConfig.operatorOverlay),
+    // Unnamed dispatch: lean worker prompt + bare overlay (#3324); isUnnamedWorker
+    // prevents providers from prepending toolBase a second time (#3359).
+    // Identity/workspace preambles injected later by assembleChildConfig.
+    ...resolveChildSystemPrompt(namedAgent, defaultConfig.operatorOverlay),
     baseUrl: childIsOpenAI ? undefined : defaultConfig.baseUrl,
     ...(defaultConfig.xaiBaseUrl !== undefined ? { xaiBaseUrl: defaultConfig.xaiBaseUrl } : {}),
     maxTurns: effectiveMaxTurns,
