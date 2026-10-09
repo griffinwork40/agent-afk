@@ -29,7 +29,42 @@ import { compactUsageEntries } from '../usage/usage-formatter.js';
 import {
   aggregateSubagentOutcomes,
   buildSubagentOutcomeSummary,
+  type SubagentOutcomeSummaryEntry,
 } from '../../insights/aggregators/subagent-outcomes.js';
+
+// ---------------------------------------------------------------------------
+// Module-level TTL cache for getSubagentOutcomeSummary
+//
+// The aggregator does a synchronous 1 MB tail-read of routing-decisions.jsonl
+// on every call. Most get_runtime_state invocations within a short window will
+// see the same data, so a 60-second TTL avoids the repeated I/O at negligible
+// staleness cost. The cache is keyed per-file path so different afkHome values
+// (common in tests) do not collide.
+// ---------------------------------------------------------------------------
+
+interface OutcomeSummaryCache {
+  entries: SubagentOutcomeSummaryEntry[];
+  expiresAt: number;
+}
+
+const OUTCOME_SUMMARY_TTL_MS = 60_000; // 60 s
+const outcomeSummaryCache = new Map<string, OutcomeSummaryCache>();
+
+function getCachedOutcomeSummary(afkHome: string | undefined): SubagentOutcomeSummaryEntry[] {
+  const key = afkHome ?? '__default__';
+  const cached = outcomeSummaryCache.get(key);
+  if (cached !== undefined && Date.now() < cached.expiresAt) {
+    return cached.entries;
+  }
+  try {
+    const agg = aggregateSubagentOutcomes({ days: 30, ...(afkHome ? { afkHome } : {}) });
+    const entries = buildSubagentOutcomeSummary(agg);
+    outcomeSummaryCache.set(key, { entries, expiresAt: Date.now() + OUTCOME_SUMMARY_TTL_MS });
+    return entries;
+  } catch {
+    return [];
+  }
+}
 
 export interface RuntimeSourceDeps {
   /** Stable session UUID (may be undefined for pre-init sessions). */
@@ -156,16 +191,12 @@ export function buildRuntimeStateSource(deps: RuntimeSourceDeps): RuntimeStateSo
       return compactUsageEntries(readUsageRecords());
     },
     getSubagentOutcomeSummary() {
-      // Reads the last 1 MB tail of routing-decisions.jsonl. Safe to call on
-      // every get_runtime_state invocation — synchronous, bounded, never throws
-      // (the aggregator swallows all errors and returns zero aggregates).
-      // 30-day window matches the default insights window.
-      try {
-        const agg = aggregateSubagentOutcomes({ days: 30 });
-        return buildSubagentOutcomeSummary(agg);
-      } catch {
-        return [];
-      }
+      // Reads the last 1 MB tail of routing-decisions.jsonl (synchronous,
+      // bounded). Results are cached for 60 s so repeated get_runtime_state
+      // calls within a session window avoid redundant I/O. The aggregator
+      // never throws; getCachedOutcomeSummary adds a belt-and-suspenders
+      // catch for unexpected errors.
+      return getCachedOutcomeSummary(undefined);
     },
   };
 }

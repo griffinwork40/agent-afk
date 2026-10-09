@@ -184,7 +184,8 @@ export interface RuntimeSnapshot {
   /** Compact usage summary — present in view='all' and the future view='usage'. */
   usage?: RuntimeUsageEntry[];
   /**
-   * Historical subagent outcome summary — present in view='all'.
+   * Historical subagent outcome summary — present in view='all' and
+   * view='subagents' (omitted when empty).
    *
    * Flat list of outcome statistics bucketed by model × agentType × depth,
    * sorted by count descending (most-run buckets first). Only buckets with
@@ -192,9 +193,10 @@ export interface RuntimeSnapshot {
    * actionable. Empty when no sufficient history is available.
    *
    * Each entry carries: model, agentType, depth, count, successRate,
-   * capHitRate (fraction whose stop_reason was `tool_use_loop_capped`), and
-   * p50Ms latency. A high capHitRate (e.g. > 0.3) signals that the budget
-   * `maxToolUseIterations` is too tight for the workload at that model+type.
+   * capHitRate (fraction whose stop_reason was `tool_use_loop_capped`),
+   * timeoutRate, p50Ms, and p95Ms latency. A high capHitRate (e.g. > 0.3)
+   * signals that the budget `maxToolUseIterations` is too tight for the
+   * workload at that model+type.
    */
   subagentOutcomeSummary?: SubagentOutcomeSummaryEntry[];
 }

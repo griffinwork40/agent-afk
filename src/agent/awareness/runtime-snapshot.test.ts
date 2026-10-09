@@ -107,12 +107,29 @@ describe('buildRuntimeSnapshot', () => {
     expect(snap).not.toHaveProperty('subagents');
   });
 
-  it('view=subagents returns only subagents', () => {
+  it('view=subagents returns subagents (and omits subagentOutcomeSummary when empty)', () => {
     const source = mkSource();
     const snap = buildRuntimeSnapshot(source, 'subagents');
     expect(snap).not.toHaveProperty('self');
     expect(snap).not.toHaveProperty('tools');
     expect(snap).toHaveProperty('subagents');
+    // summary is omitted when empty (default mock returns [])
+    expect(snap).not.toHaveProperty('subagentOutcomeSummary');
+  });
+
+  it('view=subagents includes subagentOutcomeSummary when non-empty', () => {
+    const mockSummary = [{ model: 'haiku', agentType: 'Explore', depth: 1, count: 5, successRate: 1, capHitRate: 0, timeoutRate: 0, p50Ms: 500, p95Ms: 1000 }];
+    const source: RuntimeStateSource = {
+      ...mkSource(),
+      getSubagentOutcomeSummary: () => mockSummary,
+    };
+    const snap = buildRuntimeSnapshot(source, 'subagents');
+    expect(snap).toHaveProperty('subagents');
+    expect(snap).toHaveProperty('subagentOutcomeSummary');
+    expect(snap.subagentOutcomeSummary).toEqual(mockSummary);
+    // should NOT include other views
+    expect(snap).not.toHaveProperty('self');
+    expect(snap).not.toHaveProperty('tools');
   });
 
   it('view=all returns all four slices plus usage', () => {
