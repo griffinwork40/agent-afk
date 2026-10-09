@@ -54,11 +54,12 @@ import { buildRequestHeaders } from '../auth.js';
 import { isExtendedCacheTtlActive } from '../cache-policy.js';
 import { loadClaudeCodeOauthToken, parseAccountIdentifier } from '../../../auth/keychain.js';
 import { setRefreshedClaudeCodeOauthToken } from '../../../auth/credential-resolver.js';
-import type { AnthropicClientLike, AuthMode, RunTurnInput } from '../types.js';
+import type { AuthMode, RunTurnInput } from '../types.js';
 import type { RetryTierContext, UsageLimitWaitResult } from './retry-context.js';
 import { turnWithAuthRetry } from './auth-retry-tier.js';
 import { turnWithUsageLimitRetry } from './usage-limit-tier.js';
 import { turnWithOverloadPause } from './overload-pause-tier.js';
+import { adoptFreshClient } from './live-client.js';
 
 // Re-exported so the historical `from './retry-layer.js'` import paths stay
 // valid after the #824 split. `cli/quota-footer.ts` drift-tests against
@@ -334,11 +335,7 @@ export class RetryLayer {
     isClosed: () => boolean,
   ): AsyncGenerator<ProviderEvent, void, void> {
     if (this.credentialSnapshotStale) {
-      const refreshed = await this.forceClientRefresh();
-      if (refreshed) {
-        runInput.client = this._client as unknown as AnthropicClientLike;
-        runInput.headers = this.rotateHeaders(runInput);
-      }
+      await adoptFreshClient(this.tierContext(), runInput);
       this.credentialSnapshotStale = false;
     }
     // Tier composition, outermost first: overload pause → usage limit → auth.

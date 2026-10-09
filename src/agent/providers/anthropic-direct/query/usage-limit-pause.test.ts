@@ -46,7 +46,7 @@ vi.mock('../../../trace/emit.js', () => ({
   emitSessionPhase: emitSessionPhaseMock,
 }));
 
-const { usageLimitNoTimestampPause, usageLimitResetPause } = await import('./usage-limit-pause.js');
+const { usageLimitNoTimestampPause, usageLimitResetPause, joinUsageLimitWait } = await import('./usage-limit-pause.js');
 const { TWO_HOURS_MS } = await import('./retry-constants.js');
 
 // ---------------------------------------------------------------------------
@@ -66,7 +66,7 @@ function makeReLimitedError(): Error & { __reLimited: boolean } {
   return e;
 }
 
-function makeCtx(autoResume: boolean): RetryTierContext {
+function makeCtx(autoResume: boolean, clientToken: string | null = 'tok-a'): RetryTierContext {
   const markStale = vi.fn();
   const forceRefresh = vi.fn<[], Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null>>();
   let waitPromise: Promise<'aborted' | 'timer' | 'hot-swap'> | null = null;
@@ -76,6 +76,7 @@ function makeCtx(autoResume: boolean): RetryTierContext {
     autoResumeOnUsageLimit: autoResume,
     tokenRefresher: undefined,
     getClient: () => ({}) as never,
+    getClientToken: () => clientToken ?? undefined,
     rotateHeaders: () => ({}),
     forceClientRefresh: forceRefresh as never,
     getUsageLimitWait: () => waitPromise,
@@ -142,6 +143,163 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
 });
+
+// ---------------------------------------------------------------------------
+// joinUsageLimitWait
+// ---------------------------------------------------------------------------
+
+describe('joinUsageLimitWait', () => {
+  it('passes through the owner result', async () => {
+    const signal = new AbortController().signal;
+    await expect(joinUsageLimitWait(Promise.resolve('hot-swap'), signal)).resolves.toBe('hot-swap');
+    await expect(joinUsageLimitWait(Promise.resolve('timer'), signal)).resolves.toBe('timer');
+  });
+
+  it('preserves terminal owner abort while our signal is live', async () => {
+    const signal = new AbortController().signal;
+    await expect(joinUsageLimitWait(Promise.resolve('aborted'), signal)).resolves.toBe('aborted');
+  });
+
+  it('resolves aborted immediately on OUR abort, without waiting for the owner', async () => {
+    const ac = new AbortController();
+    const never = new Promise<'timer'>(() => {});
+    const joined = joinUsageLimitWait(never, ac.signal);
+    ac.abort();
+    await expect(joined).resolves.toBe('aborted');
+  });
+
+  it('resolves aborted when our signal is already aborted', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    await expect(joinUsageLimitWait(Promise.resolve('timer'), ac.signal)).resolves.toBe('aborted');
+  });
+});
+
+type WaitResult = 'timer' | 'hot-swap' | 'aborted';
+function deferred() {
+  let resolve!: (value: WaitResult) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<WaitResult>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+for (const family of ['no-ts', 'far-reset', 'timestamped'] as const) {
+  describe(`${family} shared wait contract`, () => {
+    function park(ctx: RetryTierContext, input: RunTurnInput, next = nextOk()) {
+      const pending: ProviderEvent = { type: 'error', error: makeError() };
+      return family === 'no-ts'
+        ? usageLimitNoTimestampPause(ctx, input, () => false, next, pending)
+        : usageLimitResetPause(ctx, input, () => false, next, pending,
+          new Date(Date.now() + (family === 'far-reset' ? TWO_HOURS_MS + 1 : 60_000)));
+    }
+    function mockWait(promise: Promise<WaitResult>) {
+      (family === 'timestamped' ? waitForResetMock : waitForHotSwapMock).mockReturnValue(promise);
+    }
+
+    it.each(['timer', 'hot-swap', 'aborted'] as const)('joins pending %s without clearing the owner', async (result) => {
+      const ctx = makeCtx(true);
+      const wait = deferred();
+      ctx.setUsageLimitWait(wait.promise);
+      const refresh = vi.spyOn(ctx, 'forceClientRefresh').mockResolvedValue({ accountId: 'acct:new', oldAccountId: 'acct:old', swapped: true });
+      let calls = 0;
+      const next: TierGenerator = async function* () { calls++; yield cleanDone; };
+      const gen = park(ctx, makeInput(), next);
+      expect((await gen.next()).value).toMatchObject({ type: 'paused' });
+      let settled = false;
+      const pending = drain(gen).then((events) => { settled = true; return events; });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(calls).toBe(0);
+      wait.resolve(result);
+      const events = await pending;
+      expect(ctx.getUsageLimitWait()).toBe(wait.promise);
+      expect(waitForHotSwapMock).not.toHaveBeenCalled();
+      expect(waitForResetMock).not.toHaveBeenCalled();
+      expect(calls).toBe(result === 'aborted' ? 0 : 1);
+      expect(refresh).toHaveBeenCalledTimes(result === 'hot-swap' ? 1 : 0);
+      expect(events.map((e) => e.type)).toEqual(result === 'aborted' ? [] : ['resumed', 'turn.completed']);
+      if (result === 'aborted') expect(emitSessionPhaseMock.mock.calls.some((c) => c[1]?.phase === 'usage_limit_resume')).toBe(false);
+    });
+
+    it.each([false, true])('owner cleanup preserves replacement=%s', async (replace) => {
+      const ctx = makeCtx(true);
+      const wait = deferred();
+      const replacement = deferred().promise;
+      mockWait(wait.promise);
+      const gen = park(ctx, makeInput());
+      await gen.next();
+      const pending = drain(gen);
+      await Promise.resolve();
+      expect(ctx.getUsageLimitWait()).toBe(wait.promise);
+      if (replace) ctx.setUsageLimitWait(replacement);
+      wait.resolve('aborted');
+      expect(await pending).toEqual([]);
+      expect(ctx.getUsageLimitWait()).toBe(replace ? replacement : null);
+    });
+
+    it.each([false, true])('propagates rejected wait (joined=%s)', async (joined) => {
+      const ctx = makeCtx(true);
+      const wait = deferred();
+      if (joined) ctx.setUsageLimitWait(wait.promise);
+      else mockWait(wait.promise);
+      const gen = park(ctx, makeInput());
+      await gen.next();
+      const failure = new Error('wait failed');
+      const pending = expect(drain(gen)).rejects.toBe(failure);
+      wait.reject(failure);
+      await pending;
+      expect(ctx.getUsageLimitWait()).toBe(joined ? wait.promise : null);
+    });
+
+    it.each(['timer', 'success', 'null', 'rejected'] as const)('preserves header rotation for %s refresh', async (mode) => {
+      const ctx = makeCtx(true);
+      const fresh = { id: 'fresh' } as never;
+      ctx.getClient = () => fresh;
+      const input = makeInput();
+      const old = input.client;
+      const rotation = vi.spyOn(ctx, 'rotateHeaders').mockImplementation((adopted) => {
+        expect(adopted.client).toBe(mode === 'success' ? fresh : old);
+        return { 'x-request-id': 'rotated' };
+      });
+      const failure = new Error('refresh failed');
+      const refresh = vi.spyOn(ctx, 'forceClientRefresh');
+      if (mode === 'rejected') refresh.mockRejectedValue(failure);
+      else refresh.mockResolvedValue(mode === 'success' ? { accountId: 'acct:new', oldAccountId: 'acct:old', swapped: true } : null);
+      mockWait(Promise.resolve(mode === 'timer' ? 'timer' : 'hot-swap'));
+      if (mode === 'rejected') {
+        await expect(drain(park(ctx, input))).rejects.toBe(failure);
+        expect(rotation).not.toHaveBeenCalled();
+      } else {
+        await drain(park(ctx, input));
+        expect(rotation).toHaveBeenCalledTimes(1);
+        expect(input.headers).toEqual({ 'x-request-id': 'rotated' });
+        expect(refresh).toHaveBeenCalledTimes(mode === 'timer' ? 0 : 1);
+      }
+    });
+
+    it('labels pause and same-account resume from the active token without exposing credentials', async () => {
+      const active = 'synthetic-active-secret';
+      const stored = 'synthetic-store-secret';
+      loadClaudeCodeOauthTokenMock.mockReturnValue(stored);
+      parseAccountIdentifierMock.mockImplementation((token) => token === active ? 'account-A' : 'account-B');
+      mockWait(Promise.resolve('timer'));
+      const events = await drain(park(makeCtx(true, active), makeInput()));
+      expect(events[0]).toMatchObject({ type: 'paused', accountId: 'account-A' });
+      expect(events[1]).toMatchObject({ type: 'resumed', accountId: 'account-A' });
+      expect(loadClaudeCodeOauthTokenMock).not.toHaveBeenCalled();
+      const payload = JSON.stringify([events, emitSessionPhaseMock.mock.calls]);
+      expect(payload).not.toContain(active);
+      expect(payload).not.toContain(stored);
+    });
+
+    if (family !== 'timestamped') it('does not look up omitted account identity on fail-fast', async () => {
+      await drain(park(makeCtx(false, null), makeInput()));
+      expect(loadClaudeCodeOauthTokenMock).not.toHaveBeenCalled();
+      expect(parseAccountIdentifierMock).not.toHaveBeenCalled();
+    });
+  });
+}
 
 // ---------------------------------------------------------------------------
 // usageLimitNoTimestampPause
@@ -211,6 +369,55 @@ describe('usageLimitNoTimestampPause', () => {
     expect(events[0]?.type).toBe('paused');
     expect(events[1]?.type).toBe('resumed');
     expect(events[2]?.type).toBe('turn.completed');
+  });
+
+  it('names the account the LIVE CLIENT uses, not the store, in the paused event', async () => {
+    // The operator ran `claude login` (store = tok-b) but the session's client
+    // still holds tok-a: the panel must say which account is actually limited.
+    loadClaudeCodeOauthTokenMock.mockReturnValue('tok-b');
+    waitForHotSwapMock.mockResolvedValue('aborted');
+    const ctx = makeCtx(true, 'tok-a');
+    const events = await drain(
+      usageLimitNoTimestampPause(ctx, makeInput(), () => false, nextOk(), { type: 'error', error: makeError() }),
+    );
+    expect(events[0]).toMatchObject({ type: 'paused', accountId: 'acct:tok-a' });
+  });
+
+  it('falls back to the store account when the client token is unknown', async () => {
+    loadClaudeCodeOauthTokenMock.mockReturnValue('tok-b');
+    waitForHotSwapMock.mockResolvedValue('aborted');
+    const ctx = makeCtx(true, null);
+    const events = await drain(
+      usageLimitNoTimestampPause(ctx, makeInput(), () => false, nextOk(), { type: 'error', error: makeError() }),
+    );
+    expect(events[0]).toMatchObject({ type: 'paused', accountId: 'acct:tok-b' });
+  });
+
+  it('joins a concurrent in-flight wait and probes, instead of ending the turn silently', async () => {
+    // Regression: an in-flight wait used to map to 'aborted', so the park
+    // loop returned with NO event: no resume, no error, no output.
+    const ctx = makeCtx(true);
+    ctx.setUsageLimitWait(Promise.resolve('timer'));
+    let calls = 0;
+    const next: TierGenerator = async function* () { calls++; yield cleanDone; };
+    const events = await drain(
+      usageLimitNoTimestampPause(ctx, makeInput(), () => false, next, { type: 'error', error: makeError() }),
+    );
+    expect(waitForHotSwapMock).not.toHaveBeenCalled();
+    expect(calls).toBe(1);
+    expect(events.map((e) => e.type)).toEqual(['paused', 'resumed', 'turn.completed']);
+  });
+
+  it('treats the wait OWNER being aborted as terminal', async () => {
+    const ctx = makeCtx(true);
+    ctx.setUsageLimitWait(Promise.resolve('aborted'));
+    let calls = 0;
+    const next: TierGenerator = async function* () { calls++; yield cleanDone; };
+    const events = await drain(
+      usageLimitNoTimestampPause(ctx, makeInput(), () => false, next, { type: 'error', error: makeError() }),
+    );
+    expect(calls).toBe(0);
+    expect(events.map((e) => e.type)).toEqual(['paused']);
   });
 
   it('does not falsely resume when the re-limited probe emits its throttle signal first', async () => {

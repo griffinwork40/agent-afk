@@ -32,8 +32,9 @@
 
 import { loadClaudeCodeOauthToken } from '../../../auth/keychain.js';
 import { emitSessionPhase } from '../../../trace/emit.js';
-import type { AnthropicClientLike, RunTurnInput } from '../types.js';
+import type { RunTurnInput } from '../types.js';
 import type { RetryTierContext } from './retry-context.js';
+import { adoptFreshClient } from './live-client.js';
 
 export async function catchUpStaleCredential(
   ctx: RetryTierContext,
@@ -43,13 +44,8 @@ export async function catchUpStaleCredential(
   const storeToken = loadClaudeCodeOauthToken();
   if (storeToken === undefined || storeToken === ctx.getClientToken()) return false;
 
-  const refreshed = await ctx.forceClientRefresh();
+  const refreshed = await adoptFreshClient(ctx, runInput);
   if (!refreshed || !refreshed.swapped) return false;
-
-  // Same SDK-caches-authToken constraint as the hot-swap parks: the replay
-  // must carry the REBUILT client, not just fresh headers.
-  runInput.client = ctx.getClient() as unknown as AnthropicClientLike;
-  runInput.headers = ctx.rotateHeaders(runInput);
   // Witness layer: a resume with no matching pause, because the turn never
   // parked. `source` distinguishes it from the park-loop resumes.
   void emitSessionPhase(runInput.traceWriter, {
