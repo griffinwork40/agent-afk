@@ -15,6 +15,7 @@ import { join } from 'path';
 import { BUILTIN_TOOL_NAMES } from '../tools/schemas.js';
 import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
 import { _registerScanCacheResetHook } from '../plugins-scanner.js';
+import { parseFlagsField, resolveSkillFlags } from '../../utils/skill-md.js';
 
 /** Depth cap — cycle/runaway guard. Matches `command-files.ts`. */
 const MAX_DEPTH = 10;
@@ -47,6 +48,14 @@ export interface PluginSkillMetadata {
    * `when_to_use` field. Surfaced as `When to use:` in the skill manifest.
    */
   whenToUse?: string;
+  /**
+   * Long-form CLI flags for REPL/web `--` completion (#3332). Resolved once at
+   * discovery: an explicit frontmatter `flags:` list (inline or block form)
+   * wins; otherwise flags scanned from `argument-hint` + the body.
+   */
+  flags?: string[];
+  /** Job-to-be-done category from `category:` frontmatter, passed through verbatim. */
+  category?: string;
   /**
    * Which plugin directory this artifact came from. `'command'` marks a
    * Claude Code `commands/*.md` file (see `command-files.ts`); absent means
@@ -343,6 +352,7 @@ export function parseSkillMetadata(
     const frontmatterText = afterFirstDashes.slice(0, endIdx);
     const bodyText = afterFirstDashes.slice(endIdx + 4).trim(); // Skip "\n---"
     const metadata: PluginSkillMetadata = {};
+    let frontmatterFlags: string[] | null = null;
 
     const lines = frontmatterText.split('\n');
     for (let i = 0; i < lines.length; i++) {
@@ -368,6 +378,11 @@ export function parseSkillMetadata(
         metadata.argumentHint = value.replace(/^["']|["']$/g, '');
       } else if (key === 'when-to-use' || key === 'whenToUse' || key === 'when_to_use') {
         metadata.whenToUse = value.replace(/^["']|["']$/g, '');
+      } else if (key === 'flags') {
+        frontmatterFlags = parseFlagsField(value, lines.slice(i + 1)) ?? frontmatterFlags;
+      } else if (key === 'category') {
+        const raw = value.replace(/^["']|["']$/g, '').trim();
+        if (raw.length > 0) metadata.category = raw;
       } else if (key === 'tools') {
         // Collect the lines after this one to handle YAML list form
         const remainingLines = lines.slice(i + 1);
@@ -434,6 +449,11 @@ export function parseSkillMetadata(
     if (bodyText.length > 0) {
       metadata.body = bodyText;
     }
+
+    // Single parse (#3332): flags ride along with discovery instead of a
+    // separate CLI-side disk walk. Same precedence as `harvestFlagsFromSkillMd`.
+    const flags = resolveSkillFlags(frontmatterFlags, metadata.argumentHint, bodyText);
+    if (flags.length > 0) metadata.flags = flags;
 
     return metadata;
   } catch {

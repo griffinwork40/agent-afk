@@ -117,7 +117,12 @@ export function renderSkillDetail(
     }
   }
 
-  const flags = registrySkill?.flags ?? harvestAllPluginSkillFlags().get(cleaned);
+  // Discovery-carried flags first (#3332). A discovered plugin skill's flags
+  // are authoritative (absent = none) — no re-walk. The disk walk stays only as
+  // a fallback for skills absent from this session's command list (e.g. the
+  // initial `/skills` card before plugin registration ran).
+  const flags =
+    registrySkill?.flags ?? (pluginSkill ? pluginSkill.flags : harvestAllPluginSkillFlags().get(cleaned));
   if (flags && flags.length > 0) {
     ctx.out.line();
     ctx.out.line(`  ${palette.bold('Flags')}  ${palette.dim(flags.join(', '))}`);
