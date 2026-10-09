@@ -26,18 +26,21 @@ function wiringOf(dispatcher: object | undefined): CheckpointWiringHost['fileChe
 }
 
 /**
- * Wire a fresh registry for a new turn. No-op when checkpointing is disabled
- * or the dispatcher does not carry file-checkpoint wiring.
+ * Wire a fresh registry for a new turn. Returns the generated turnId so the
+ * caller can store it for rewindFiles. Returns `undefined` when checkpointing
+ * is disabled or the dispatcher does not carry file-checkpoint wiring.
  */
 export function beginTurnFileCheckpoint(
   enabled: boolean,
   dispatcher: object | undefined,
   sessionId: string,
-): void {
-  if (!enabled) return;
+): string | undefined {
+  if (!enabled) return undefined;
   const wiring = wiringOf(dispatcher);
-  if (wiring === undefined) return;
-  wiring.set(createFileCheckpointRegistry(sessionId, randomUUID()));
+  if (wiring === undefined) return undefined;
+  const turnId = randomUUID();
+  wiring.set(createFileCheckpointRegistry(sessionId, turnId));
+  return turnId;
 }
 
 /** Clear the per-turn registry (called from the turn's finally block). */

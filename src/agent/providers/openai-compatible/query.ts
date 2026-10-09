@@ -27,7 +27,7 @@
  * once the context-window footprint crosses it (mirrors anthropic-direct/query.ts).
  *
  * Things deliberately deferred:
- *   - File checkpointing / rewindFiles (deferred — `canRewind: false`)
+ *   - File checkpointing / rewindFiles
  *
  * @module agent/providers/openai-compatible/query
  */
@@ -233,6 +233,8 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
 
   /** When true, write-class tool calls snapshot pre-edit content for rewindFiles(). */
   private readonly enableFileCheckpointing: boolean;
+  /** The turnId registered for the current in-flight turn; cleared at turn end. */
+  private currentTurnId: string | undefined;
 
   constructor(opts: OpenAICompatibleQueryOptions) {
     this.opts = opts;
@@ -389,7 +391,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
 
     // File-checkpoint: assign a stable turn id and wire a fresh registry onto
     // the dispatcher so write-class tool handlers snapshot files before mutation.
-    beginTurnFileCheckpoint(this.enableFileCheckpointing, this.toolDispatcher, this.initSessionId);
+    this.currentTurnId = beginTurnFileCheckpoint(this.enableFileCheckpointing, this.toolDispatcher, this.initSessionId);
 
     const trace = new TurnTrace(controller.signal, this.traceWriter, 'openai-compatible');
     this.fastTier.beginTurn(this.currentModel);
@@ -401,6 +403,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
       trace.finish(Date.now() - turnStartTime);
       // Clear the per-turn checkpoint registry at turn end.
       endTurnFileCheckpoint(this.enableFileCheckpointing, this.toolDispatcher);
+      this.currentTurnId = undefined;
     }
   }
 
@@ -525,7 +528,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
         sessionId: this.initSessionId,
         enableFileCheckpointing: this.enableFileCheckpointing,
       },
-      userMessageId,
+      this.currentTurnId ?? userMessageId,
       options,
     );
   }
