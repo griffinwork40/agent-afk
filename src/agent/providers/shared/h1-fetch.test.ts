@@ -25,13 +25,14 @@ import { readFile as readFileCb } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { FormData as UndiciFormData } from 'undici';
 import { h1ModelFetch } from './h1-fetch.js';
 import { buildClientOptions } from '../anthropic-direct/auth.js';
 import {
   oneShotChatCompletionWithStop,
   __setOpenAIOneShotClientFactory,
 } from '../openai-compatible/oneshot.js';
-import { completeWithWire } from '../openai-compatible/complete-wire.js';
+import { completeWithWire, type CompleteWireClientOptions } from '../openai-compatible/complete-wire.js';
 
 const execFile = promisify(execFileCb);
 const readFile = promisify(readFileCb);
@@ -66,9 +67,28 @@ beforeAll(async () => {
   const { key, cert } = await generateSelfSignedCert(certDir);
 
   // Invariant: createSecureServer with allowHTTP1:true accepts both h2 (ALPN
-  // 'h2') and h1.1 (ALPN 'http/1.1') clients. The server reports the
-  // negotiated httpVersion in its response so the test can assert it.
+  // 'h2') and h1.1 (ALPN 'http/1.1') clients.
+  //
+  //   GET /         — returns { httpVersion } so tests can assert ALPN outcome.
+  //   POST /multipart — accumulates the raw request body, then echoes back a
+  //                  JSON object with { httpVersion, contentType, bodyText }
+  //                  so multipart interop tests can inspect what the server
+  //                  actually received (boundary, file part, field names).
   server = http2.createSecureServer({ key, cert, allowHTTP1: true }, (req, res) => {
+    if (req.method === 'POST' && req.url === '/multipart') {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        const bodyText = Buffer.concat(chunks).toString('utf8');
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          httpVersion: req.httpVersion,
+          contentType: req.headers['content-type'] ?? '',
+          bodyText,
+        }));
+      });
+      return;
+    }
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ httpVersion: req.httpVersion }));
   });
@@ -215,13 +235,34 @@ describe('oneShotChatCompletionWithStop — OpenAI client receives h1ModelFetch'
 
 describe('completeWithWire — Responses-wire client factory receives h1ModelFetch', () => {
   it('passes h1ModelFetch to the client factory on the Responses path', async () => {
-    // completeWithWire calls its clientFactory ONLY on the Responses wire.
-    // Simulate the Responses path by providing an auth source that resolves to
-    // chatgpt-oauth. We do this by intercepting at the factory level: the
-    // factory is called with the opts completeWithWire would pass to new OpenAI.
-    // Contract: on the Responses path, opts.fetch must be h1ModelFetch.
-    let capturedFetch: typeof fetch | undefined;
-    const asyncIterable: AsyncIterable<unknown> = {
+    // Non-tautological proof: we exercise completeWithWire end-to-end by
+    // supplying injected auth deps that resolve to chatgpt-oauth — the only
+    // auth source that routes through the Responses wire.  The clientFactory
+    // seam captures whatever opts completeWithWire actually builds and passes
+    // to `new OpenAI(...)`.  Removing the `fetch: h1ModelFetch` line from
+    // complete-wire.ts will make capturedFetch undefined, failing this test.
+    //
+    // Auth injection: AuthResolverDeps.readFile returns a fake ~/.codex/auth.json
+    // with ChatGPT OAuth tokens so resolveOpenAIAuth resolves to 'chatgpt-oauth'
+    // without touching the real filesystem or process.env.
+    //
+    // We use forceChatgptOAuth:true (Tier 0 in resolveOpenAIAuth) so the auth
+    // resolver uses the injected readFile directly, without requiring the
+    // AFK_OPENAI_CHATGPT_OAUTH env flag that Tier 4 gates on.
+    const fakeToken = 'ey' + 'fakeoauthtoken'.repeat(3); // non-empty JWT-shaped string
+    const fakeCodexAuth = JSON.stringify({
+      auth_mode: 'chatgpt',
+      tokens: { access_token: fakeToken },
+    });
+    const authDeps = {
+      readFile: (_path: string) => fakeCodexAuth,
+      readEnv: (_key: string) => undefined,
+      homedir: () => '/fake-home',
+    };
+
+    // A minimal async iterable that emits response.completed so oneShotResponses
+    // resolves cleanly (it throws ResponsesSummaryIncompleteError otherwise).
+    const completedIterable: AsyncIterable<unknown> = {
       [Symbol.asyncIterator]() {
         let done = false;
         return {
@@ -233,34 +274,108 @@ describe('completeWithWire — Responses-wire client factory receives h1ModelFet
         };
       },
     };
-    const responsesFactory = (opts: { fetch?: typeof fetch }) => {
-      capturedFetch = opts.fetch;
+
+    let capturedOpts: CompleteWireClientOptions | undefined;
+    const responsesFactory = (opts: CompleteWireClientOptions) => {
+      capturedOpts = opts;
       return {
-        responses: { create: vi.fn().mockResolvedValue(asyncIterable) },
+        responses: { create: vi.fn().mockResolvedValue(completedIterable) },
       } as never;
     };
-    // To reach the Responses-wire branch inside completeWithWire we would need
-    // a real chatgpt-oauth credential. Instead, verify the invariant at the
-    // CompleteWireClientOptions level: the opts object built in that branch
-    // always includes fetch: h1ModelFetch. This is a structural invariant test —
-    // it checks the code under test, not a live network path.
-    //
-    // The Chat Completions path is the one we can exercise without a real
-    // credential. On that path completeWithWire delegates to
-    // oneShotChatCompletion (module-scope factory), which was verified in the
-    // preceding suite. The Responses-path factory assertion is therefore covered
-    // by the CompleteWireClientOptions type change (fetch required) plus the
-    // default init value `fetch: h1ModelFetch` in the source.
-    //
-    // Structural check: verify the defaultClientFactory would receive h1ModelFetch
-    // by checking the opts type includes fetch and the value is h1ModelFetch.
-    const opts = {
-      apiKey: 'sk-test',
-      maxRetries: 0 as const,
-      fetch: h1ModelFetch,
-    };
-    responsesFactory(opts);
-    expect(capturedFetch).toBe(h1ModelFetch);
-    void asyncIterable;
+
+    // Drive the full Responses-wire code path inside completeWithWire.
+    // forceChatgptOAuth:true activates Tier 0 in resolveOpenAIAuth which uses
+    // the injected readFile — no env flag required.
+    await completeWithWire(
+      { model: 'gpt-4o', system: 's', user: 'u', forceChatgptOAuth: true },
+      responsesFactory,
+      authDeps,
+    );
+
+    // The factory must have been called (proving the Responses path was taken).
+    expect(capturedOpts).toBeDefined();
+    // Core invariant: the production fetch injection must be h1ModelFetch.
+    expect(capturedOpts?.fetch).toBe(h1ModelFetch);
+    // maxRetries must be 0 — the one-shot side-channel owns no retry policy.
+    expect(capturedOpts?.maxRetries).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Coverage: h1ModelFetch + undici FormData multipart interop (issue #3345)
+//
+// Verifies that h1ModelFetch correctly serializes an undici FormData body
+// over a real TLS connection. The test confirms three things the server
+// actually receives:
+//   1. HTTP/1.1 was negotiated (not HTTP/2).
+//   2. Content-Type header contains "multipart/form-data; boundary=..." with
+//      a real boundary string.
+//   3. The raw body contains the expected field name ("prompt"), the expected
+//      field value, the expected file part name ("image[]"), and a non-empty
+//      binary-like payload for the file.
+//
+// This is an empirical serialization test — not just "a request was made".
+// ---------------------------------------------------------------------------
+
+describe('h1ModelFetch + undici FormData — multipart interop (issue #3345)', () => {
+  it('serializes undici FormData correctly over HTTP/1.1 TLS: server sees fields and file part', async () => {
+    // Build the multipart body the same way image-edit.ts does: undici's
+    // FormData with globalThis.Blob for file parts.
+    const form = new UndiciFormData();
+    const fakeImageData = new Uint8Array([0x89, 0x50, 0x4e, 0x47]); // PNG magic bytes
+    form.append(
+      'image[]',
+      new Blob([fakeImageData], { type: 'image/png' }),
+      'ref.png',
+    );
+    form.append('prompt', 'a test prompt');
+    form.append('model', 'gpt-image-1');
+
+    const prev = process.env['NODE_TLS_REJECT_UNAUTHORIZED'];
+    process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = '0';
+    let result: { httpVersion: string; contentType: string; bodyText: string };
+    try {
+      const resp = await h1ModelFetch(
+        `https://127.0.0.1:${serverPort}/multipart`,
+        {
+          method: 'POST',
+          // No Content-Type header — fetch must set it with the boundary.
+          body: form as unknown as BodyInit,
+        },
+      );
+      result = (await resp.json()) as typeof result;
+    } finally {
+      if (prev === undefined) {
+        delete process.env['NODE_TLS_REJECT_UNAUTHORIZED'];
+      } else {
+        process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = prev;
+      }
+    }
+
+    // 1. HTTP/1.1 was negotiated (not HTTP/2).
+    expect(result.httpVersion).toBe('1.1');
+
+    // 2. Content-Type header has the multipart/form-data media type and a
+    //    non-empty boundary parameter.
+    expect(result.contentType).toMatch(/^multipart\/form-data;\s*boundary=/);
+    const boundaryMatch = result.contentType.match(/boundary=([^\s;]+)/);
+    expect(boundaryMatch).not.toBeNull();
+    const boundary = boundaryMatch![1]!;
+    expect(boundary.length).toBeGreaterThan(0);
+
+    // 3. The raw body contains all expected parts.
+    //    - The boundary delimiter.
+    //    - The field name "prompt" and its value.
+    //    - The file part name "image[]" with filename "ref.png".
+    //    - At least one byte of binary data (the PNG magic bytes).
+    expect(result.bodyText).toContain(`--${boundary}`);
+    expect(result.bodyText).toContain(`--${boundary}--`);
+    expect(result.bodyText).toContain('name="prompt"');
+    expect(result.bodyText).toContain('a test prompt');
+    expect(result.bodyText).toContain('name="model"');
+    expect(result.bodyText).toContain('gpt-image-1');
+    expect(result.bodyText).toContain('name="image[]"');
+    expect(result.bodyText).toContain('filename="ref.png"');
+    expect(result.bodyText).toContain('image/png');
   });
 });

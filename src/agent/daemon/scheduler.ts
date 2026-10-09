@@ -50,6 +50,13 @@ import { makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord
 import { BudgetAlertLatch, evaluateBudgetGate, formatBudgetSkipMessage, resolveDaemonUsageTarget } from './budget-gate.js';
 import { probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
 
+/**
+ * Maximum length (chars) of the command preview included in crash-notice
+ * in-flight task snapshots. Redaction runs BEFORE truncation so a secret
+ * straddling the boundary is always fully masked (#3323 review).
+ */
+export const COMMAND_HEAD_MAX_LEN = 60;
+
 export interface SchedulerOptions {
   /** Per-tick session config; merged with defaults at spawn time. */
   sessionConfig?: Partial<AgentConfig>;
@@ -275,8 +282,8 @@ export class CronScheduler {
     for (const [taskId, startedAt] of this.inFlightTasks) {
       const entry = this.registry.get(taskId);
       const commandHead = entry !== undefined
-        ? redactInlineSecrets(entry.task.command).slice(0, 60)
-        : redactInlineSecrets(taskId).slice(0, 60);
+        ? redactInlineSecrets(entry.task.command).slice(0, COMMAND_HEAD_MAX_LEN)
+        : redactInlineSecrets(taskId).slice(0, COMMAND_HEAD_MAX_LEN);
       const displayId = redactInlineSecrets(taskId);
       result.push({ taskId, displayId, commandHead, elapsedMs: now - startedAt });
     }

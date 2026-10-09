@@ -54,7 +54,7 @@ import type { ElicitationRequest } from '../types/sdk-types.js';
 import type { StopWiring } from '../types/session-types.js';
 import { resolveModelId } from './model-resolution.js';
 import { deriveOrigin, deriveActor } from './session-identity.js';
-import { scheduleTopLevelHousekeeping, wireAbortSignal } from './session-setup.js';
+import { scheduleTopLevelHousekeeping, seedResumeMessages, wireAbortSignal } from './session-setup.js';
 import { sessionLabelFromTracePath } from '../../paths.js';
 import { JournalLifecycle } from './journal-lifecycle.js';
 import type { MessageJournal } from '../journal/index.js';
@@ -189,6 +189,13 @@ export class AgentSession implements IAgentSession {
       origin: deriveOrigin(config.surface),
       actor: deriveActor(config.parentSessionId),
     });
+
+    // SDK resume rehydration: when the caller passed `resume`/`sessionId` but
+    // omitted `resumeMessages`, load the on-disk journal so the conversation
+    // context is restored — matching the CLI's `resumeConfigFor()` behaviour.
+    // Must run before `journal.open()` so the `mark('resume')` stamp in
+    // `journal.arm()` sees the correct `resumeMessages` length.
+    this.config = seedResumeMessages(this.config);
 
     // Private per-session TMPDIR (session-tmpdir.ts); a no-op for forks.
     this.config = withSessionTmpdir(this.journal.open(this.config));

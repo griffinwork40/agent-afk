@@ -59,6 +59,10 @@ Codex imports use `CODEX_HOME` when set (otherwise `~/.codex`) and also discover
 
 **Jev calibrated judgment.** Jev is an external cross-family judge you configure as an MCP server in `~/.afk/config/mcp.json`. When present, `afk whatif --judge auto` selects Jev to grade verification episodes; it returns calibrated probabilities and removes Anthropic self-preference bias in verdicts. Falls back to Claude when Jev is not configured. Use `--judge claude` to keep all episode data within Anthropic. Source: `src/whatif/judge/jev-connect.ts`, `docs/whatif.md`.
 
+## What it has done
+
+**Constructed SW(25,16), a math case a 2025 paper listed as open.** Given a one-sentence goal ("settle one published open question"), agent-afk agents picked the target, designed a structured SAT search, found a symmetric 25x25 weighing matrix in 760 seconds of solver time, checked it with independent exact checkers and a prior-work search, and wrote up a short proof. The author of the paper that listed the case as open confirmed it passes his verifier. Check it yourself in under a second: [`docs/results/sw-25-16`](docs/results/sw-25-16/README.md).
+
 ## How it compares
 
 | | Claude Code | Agent AFK |

@@ -104,7 +104,11 @@ export function assembleSystemPrompt(
     ...(identity.maxDepth !== undefined ? { maxDepth: identity.maxDepth } : {}),
     workspace: identity.workspace,
   });
-  const ordered: string[] = [parts.toolBase];
+  // toolBase is '' for unnamed workers (TOOL_SYSTEM_PROMPT_BASE already embedded
+  // in their systemPrompt via UNNAMED_SUBAGENT_WORKER_PROMPT — #3359). Skip so
+  // the join does not produce a leading blank line.
+  const ordered: string[] = [];
+  if (parts.toolBase.length > 0) ordered.push(parts.toolBase);
   if (parts.userSystem) ordered.push(parts.userSystem);
   ordered.push(parts.memoryPrompt);
   if (parts.workspacePrompt.length > 0) ordered.push(parts.workspacePrompt);

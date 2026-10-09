@@ -35,8 +35,13 @@ export function buildRuntimeSnapshot(
       return { self: source.getSelf() };
     case 'tools':
       return { tools: source.getTools() };
-    case 'subagents':
-      return { subagents: source.getSubagents() };
+    case 'subagents': {
+      const subagentSummary = source.getSubagentOutcomeSummary();
+      return {
+        subagents: source.getSubagents(),
+        ...(subagentSummary.length > 0 ? { subagentOutcomeSummary: subagentSummary } : {}),
+      };
+    }
     case 'workspace':
       return { workspace: source.getWorkspace() };
     case 'all':

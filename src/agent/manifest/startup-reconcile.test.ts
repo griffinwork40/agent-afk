@@ -4,6 +4,10 @@
  * Verifies that runReplReconcile, runTelegramReconcile, and
  * runNonInteractiveReconcile fire the expected callbacks when wave manifests
  * with unsettled units exist, and that they are no-ops when the gate is off.
+ *
+ * Each helper now returns the inner Promise<void> so tests can await it
+ * directly — replacing the fragile chained `await Promise.resolve()` pattern
+ * that relied on the exact number of internal microtask checkpoints (#3353).
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -52,9 +56,7 @@ describe('runReplReconcile', () => {
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     seedManifest('repl-sess');
 
-    runReplReconcile('repl-sess');
-    // The helper schedules async via Promise.resolve().then() — flush it.
-    await Promise.resolve();
+    await runReplReconcile('repl-sess');
 
     const calls = stderrSpy.mock.calls.map((c) => String(c[0]));
     expect(calls.some((t) => t.includes('[wave-resume]'))).toBe(true);
@@ -63,8 +65,7 @@ describe('runReplReconcile', () => {
   it('is a no-op when no manifests exist', async () => {
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
 
-    runReplReconcile('no-manifests-sess');
-    await Promise.resolve();
+    await runReplReconcile('no-manifests-sess');
 
     const calls = stderrSpy.mock.calls.map((c) => String(c[0]));
     expect(calls.some((t) => t.includes('[wave-resume]'))).toBe(false);
@@ -77,11 +78,7 @@ describe('runTelegramReconcile', () => {
     seedManifest('tg-sess');
 
     const route = { chatId: 42, threadId: 7 };
-    runTelegramReconcile('tg-sess', route, sendText);
-    // The inner .then() callback is now async (awaits Promise.resolve(sendText(...)));
-    // two microtask ticks are needed: one to enter the then(), one to resume after await.
-    await Promise.resolve();
-    await Promise.resolve();
+    await runTelegramReconcile('tg-sess', route, sendText);
 
     expect(sendText).toHaveBeenCalledOnce();
     const [calledRoute, calledText] = sendText.mock.calls[0] as [typeof route, string];
@@ -92,9 +89,7 @@ describe('runTelegramReconcile', () => {
   it('is a no-op when no manifests exist', async () => {
     const sendText = vi.fn();
 
-    runTelegramReconcile('no-manifests-sess', { chatId: 99 }, sendText);
-    await Promise.resolve();
-    await Promise.resolve();
+    await runTelegramReconcile('no-manifests-sess', { chatId: 99 }, sendText);
 
     expect(sendText).not.toHaveBeenCalled();
   });
@@ -106,10 +101,7 @@ describe('runTelegramReconcile — offeredAt stamping', () => {
     const sendText = vi.fn();
     const waveId = seedManifest('tg-dedup');
 
-    runTelegramReconcile('tg-dedup', { chatId: 42 }, sendText);
-    // Two microtask ticks: enter the async then(), resume after await Promise.resolve().
-    await Promise.resolve();
-    await Promise.resolve();
+    await runTelegramReconcile('tg-dedup', { chatId: 42 }, sendText);
 
     expect(sendText).toHaveBeenCalledOnce();
     const manifest = readManifest(waveId);
@@ -120,12 +112,7 @@ describe('runTelegramReconcile — offeredAt stamping', () => {
     const sendText = vi.fn().mockResolvedValue(true);
     const waveId = seedManifest('tg-dedup-true');
 
-    runTelegramReconcile('tg-dedup-true', { chatId: 42 }, sendText);
-    // Three ticks: enter the async then(), resolve Promise.resolve(sendText(...)),
-    // resume after the awaited promise settles.
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await runTelegramReconcile('tg-dedup-true', { chatId: 42 }, sendText);
 
     expect(sendText).toHaveBeenCalledOnce();
     const manifest = readManifest(waveId);
@@ -137,10 +124,7 @@ describe('runTelegramReconcile — offeredAt stamping', () => {
     const sendText = vi.fn().mockResolvedValue(false);
     const waveId = seedManifest('tg-dedup-fail');
 
-    runTelegramReconcile('tg-dedup-fail', { chatId: 42 }, sendText);
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await runTelegramReconcile('tg-dedup-fail', { chatId: 42 }, sendText);
 
     expect(sendText).toHaveBeenCalledOnce();
     const manifest = readManifest(waveId);
@@ -152,16 +136,12 @@ describe('runTelegramReconcile — offeredAt stamping', () => {
     const sendText = vi.fn();
     seedManifest('tg-dedup2');
 
-    runTelegramReconcile('tg-dedup2', { chatId: 42 }, sendText);
-    await Promise.resolve();
-    await Promise.resolve();
+    await runTelegramReconcile('tg-dedup2', { chatId: 42 }, sendText);
     expect(sendText).toHaveBeenCalledOnce();
 
     // Second reconcile: manifest is marked, should not send again.
     sendText.mockClear();
-    runTelegramReconcile('tg-dedup2', { chatId: 42 }, sendText);
-    await Promise.resolve();
-    await Promise.resolve();
+    await runTelegramReconcile('tg-dedup2', { chatId: 42 }, sendText);
     expect(sendText).not.toHaveBeenCalled();
   });
 });
@@ -171,8 +151,7 @@ describe('runReplReconcile — offeredAt stamping', () => {
     vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const waveId = seedManifest('repl-dedup');
 
-    runReplReconcile('repl-dedup');
-    await Promise.resolve();
+    await runReplReconcile('repl-dedup');
 
     const manifest = readManifest(waveId);
     expect(manifest?.offeredAt).toBeDefined();
@@ -184,8 +163,7 @@ describe('runNonInteractiveReconcile', () => {
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     seedManifest('daemon-sess');
 
-    runNonInteractiveReconcile('daemon-sess');
-    await Promise.resolve();
+    await runNonInteractiveReconcile('daemon-sess');
 
     const calls = stderrSpy.mock.calls.map((c) => String(c[0]));
     expect(calls.some((t) => t.includes('[wave-resume]'))).toBe(false);
@@ -196,8 +174,7 @@ describe('runNonInteractiveReconcile', () => {
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     seedManifest('daemon-sess-2');
 
-    runNonInteractiveReconcile('daemon-sess-2');
-    await Promise.resolve();
+    await runNonInteractiveReconcile('daemon-sess-2');
 
     const calls = stderrSpy.mock.calls.map((c) => String(c[0]));
     expect(calls.some((t) => t.includes('[wave-resume]'))).toBe(true);
@@ -214,9 +191,7 @@ describe('runDaemonReconcile', () => {
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     seedManifest('dr-gated');
 
-    runDaemonReconcile('dr-gated');
-    await Promise.resolve();
-    await Promise.resolve();
+    await runDaemonReconcile('dr-gated');
 
     expect(mockPushIfConfigured).not.toHaveBeenCalled();
     const calls = stderrSpy.mock.calls.map((c) => String(c[0]));
@@ -228,10 +203,7 @@ describe('runDaemonReconcile', () => {
     mockPushIfConfigured.mockResolvedValue([{ ok: true, status: 200 }]);
     seedManifest('dr-push');
 
-    runDaemonReconcile('dr-push');
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await runDaemonReconcile('dr-push');
 
     expect(mockPushIfConfigured).toHaveBeenCalledOnce();
     const [text] = mockPushIfConfigured.mock.calls[0] as [string];
@@ -243,10 +215,7 @@ describe('runDaemonReconcile', () => {
     mockPushIfConfigured.mockResolvedValue([{ ok: true, status: 200 }]);
     const waveId = seedManifest('dr-stamp-ok');
 
-    runDaemonReconcile('dr-stamp-ok');
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await runDaemonReconcile('dr-stamp-ok');
 
     const manifest = readManifest(waveId);
     expect(manifest?.offeredAt).toBeDefined();
@@ -257,10 +226,7 @@ describe('runDaemonReconcile', () => {
     mockPushIfConfigured.mockResolvedValue([{ ok: false, status: 429, errorMessage: 'Rate Limited' }]);
     const waveId = seedManifest('dr-stamp-fail');
 
-    runDaemonReconcile('dr-stamp-fail');
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await runDaemonReconcile('dr-stamp-fail');
 
     const manifest = readManifest(waveId);
     // Delivery failed → offer must re-surface on next session.
@@ -275,10 +241,7 @@ describe('runDaemonReconcile', () => {
     ]);
     const waveId = seedManifest('dr-stamp-partial');
 
-    runDaemonReconcile('dr-stamp-partial');
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await runDaemonReconcile('dr-stamp-partial');
 
     expect(mockPushIfConfigured).toHaveBeenCalledOnce();
     // Partial delivery → offer must re-surface on next start rather than be
@@ -295,10 +258,7 @@ describe('runDaemonReconcile', () => {
     ]);
     const waveId = seedManifest('dr-stamp-all');
 
-    runDaemonReconcile('dr-stamp-all');
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await runDaemonReconcile('dr-stamp-all');
 
     const manifest = readManifest(waveId);
     expect(manifest?.offeredAt).toBeDefined();
@@ -311,10 +271,7 @@ describe('runDaemonReconcile', () => {
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const waveId = seedManifest('dr-fallback');
 
-    runDaemonReconcile('dr-fallback');
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await runDaemonReconcile('dr-fallback');
 
     // stderr receives the offer text.
     const calls = stderrSpy.mock.calls.map((c) => String(c[0]));
@@ -329,18 +286,31 @@ describe('runDaemonReconcile', () => {
     mockPushIfConfigured.mockResolvedValue([{ ok: true, status: 200 }]);
     seedManifest('dr-dedup');
 
-    runDaemonReconcile('dr-dedup');
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await runDaemonReconcile('dr-dedup');
     expect(mockPushIfConfigured).toHaveBeenCalledOnce();
 
     // Second reconcile: manifest is stamped, should not push again.
     mockPushIfConfigured.mockClear();
-    runDaemonReconcile('dr-dedup');
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await runDaemonReconcile('dr-dedup');
     expect(mockPushIfConfigured).not.toHaveBeenCalled();
+  });
+
+  it('logs a redacted error to stderr when the Telegram push throws', async () => {
+    process.env['AFK_WAVE_RESUME_UNATTENDED'] = '1';
+    mockPushIfConfigured.mockRejectedValue(new Error('network failure'));
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    seedManifest('dr-push-fail-log');
+
+    await runDaemonReconcile('dr-push-fail-log');
+
+    // The push error must be logged (redacted), not swallowed silently.
+    expect(consoleSpy).toHaveBeenCalledOnce();
+    const logged = consoleSpy.mock.calls[0]?.join(' ') ?? '';
+    expect(logged).toContain('[daemon] wave-resume push failed:');
+    expect(logged).toContain('network failure');
+
+    consoleSpy.mockRestore();
+    stderrSpy.mockRestore();
   });
 });

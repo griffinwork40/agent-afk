@@ -11,6 +11,43 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.307.11] - 2026-10-09
+
+### Fixed
+- clear resizeGeometryStale on repin early-return; fix stale prose (#3376) (9460ebf2)
+- bufferedLength units doc, explicit first-line discard, drop redundant existsSync (#3380) (e931b4de)
+- deliver mid-turn background-process results at the tool-round boundary (#3384) (a6d323cc)
+- surface timeoutRate/p95Ms in summary, add summary to subagents view, TTL cache, narrow non-null assertions, fake timers in tests (#3379) (6139b570)
+- narrow loose-reader error handling — rethrow EACCES/EISDIR (#3378) (550e4850)
+- correct h1ModelFetch docs and strengthen Responses-wire test (#3381) (712a1dc4)
+
+### Changed
+- daemon wave-resume push logging, named constants, explicit promise awaiting (#3377) (08e276ec)
+
+## [5.307.10] - 2026-10-09
+
+### Added
+- auto-load journal on resume so SDK consumers rehydrate conversation context (#3372) (9cd65ba9)
+
+### Fixed
+- route image-model tool handlers through HTTP/1.1 transport (#3363) (73d36148)
+
+## [5.307.9] - 2026-10-09
+
+### Changed
+- full-request cache-breakpoint guard (system + tools + messages) (#3366) (0844df6e)
+- SW(25,16) result write-up and README section (#3383) (91b8c2a6)
+
+## [5.307.8] - 2026-10-09
+
+### Changed
+- dedupe TOOL_SYSTEM_PROMPT_BASE for unnamed workers (#3364) (e744caf1)
+
+## [5.307.7] - 2026-10-09
+
+### Fixed
+- tighten collapsed-frame predecessor regex and add missing tests (#3312) (0277d318)
+
 ## [5.307.6] - 2026-10-09
 
 ### Fixed

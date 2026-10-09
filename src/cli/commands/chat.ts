@@ -309,7 +309,7 @@ export function registerChatCommand(program: Command): void {
           workspaceStore: built.workspaceStore,
         };
 
-        runNonInteractiveReconcile(session.sessionId ?? '');
+        void runNonInteractiveReconcile(session.sessionId ?? '');
         wireOneShotChatSession(session, [rootManagerRef, composeExecutorRef]);
 
         spinner.text = 'Sending message...';

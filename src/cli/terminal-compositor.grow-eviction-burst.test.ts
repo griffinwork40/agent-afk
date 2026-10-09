@@ -3,7 +3,7 @@
  * still duplicates the frame when grow-eviction runs between resizes.
  *
  * Root cause: in `preserveRowsBeforeFrameRender` (frame-preserve.ts), the
- * legacy deficit-based eviction path was not gated on `bandGeometryStale`.
+ * legacy deficit-based eviction path was not gated on `resizeGeometryStale`.
  *
  * During a rapid GROW → SHRINK → GROW burst, a CPR-resolved repaint fires
  * mid-burst.  `applyScrollDelta` shifts `anchorRow` upward (smaller row
@@ -17,16 +17,16 @@
  * The debug log from the issue shows:
  *   [compositor] evict:enter rows=3 anchorRow=28   ← spurious mid-burst eviction
  *
- * Fix: gate the entire legacy deficit block on `!self.bandGeometryStale`.
- * `bandGeometryStale` is set by the SIGWINCH immediate handler and cleared by
+ * Fix: gate the entire legacy deficit block on `!self.resizeGeometryStale`.
+ * `resizeGeometryStale` is set by the SIGWINCH immediate handler and cleared by
  * `repositionCommittedBand` once a full steady-state repaint establishes fresh
  * geometry.  While the burst is in flight the flag remains set, deferring the
  * anchor eviction until coordinates are reliable.
  *
  * Tests:
- *   GE-1 — burst repaint: no \n scrollback-push writes while bandGeometryStale.
- *   GE-2 — GROW SIGWINCH sets bandGeometryStale; it persists through SHRINK.
- *   GE-3 — bandGeometryStale cleared after burst quiesces (repositionCommittedBand).
+ *   GE-1 — burst repaint: no \n scrollback-push writes while resizeGeometryStale.
+ *   GE-2 — GROW SIGWINCH sets resizeGeometryStale; it persists through SHRINK.
+ *   GE-3 — resizeGeometryStale cleared after burst quiesces (repositionCommittedBand).
  *   GE-4 — anchorRow eviction still fires in steady state (not stale).
  */
 
@@ -93,11 +93,11 @@ afterEach(() => {
 // in the burst causes applyScrollDelta to shift anchorRow upward.  Without the
 // fix, the CPR-resolved repaint sees desiredTopRow < anchorRow (stale) →
 // anchorDeficit > 0 → evictRowsToScrollback fires → \n written to stdout.
-// With the fix, bandGeometryStale gates the deficit block and no \n fires.
+// With the fix, resizeGeometryStale gates the deficit block and no \n fires.
 // ---------------------------------------------------------------------------
 
 describe('GE-1: no scrollback-push \\n during GROW→SHRINK burst repaint (anchorRow scenario)', () => {
-  it('evictRowsToScrollback does NOT fire while bandGeometryStale is true', async () => {
+  it('evictRowsToScrollback does NOT fire while resizeGeometryStale is true', async () => {
     vi.useFakeTimers();
     const writes = collectWrites(stdout);
 
@@ -150,7 +150,7 @@ describe('GE-1: no scrollback-push \\n during GROW→SHRINK burst repaint (ancho
     // ── Let CPR timeout fire → calls repaint() with stale geometry.
     // Without the fix, that repaint runs preserveRowsBeforeFrameRender which
     // sees desiredTopRow < anchorRow (stale) → eviction fires.
-    // With the fix, bandGeometryStale=true gates the entire deficit block.
+    // With the fix, resizeGeometryStale=true gates the entire deficit block.
     //
     // Advance ONLY to just past the CPR timeout (120ms) — the ResizeBus
     // debounce fires at 150ms.  We stop at 125ms so the debounce has not
@@ -164,7 +164,7 @@ describe('GE-1: no scrollback-push \\n during GROW→SHRINK burst repaint (ancho
     // evictRowsToScrollback writes \x1b[<rows>;1H\n (CUP to bottom + newline).
     expect(
       hasScrollbackPush(burstOutput),
-      'evictRowsToScrollback must NOT fire mid-burst (bandGeometryStale=true must suppress it)',
+      'evictRowsToScrollback must NOT fire mid-burst (resizeGeometryStale=true must suppress it)',
     ).toBe(false);
 
     // Let remaining timeouts settle.
@@ -174,11 +174,11 @@ describe('GE-1: no scrollback-push \\n during GROW→SHRINK burst repaint (ancho
 });
 
 // ---------------------------------------------------------------------------
-// GE-2: bandGeometryStale is set by GROW and persists through SHRINK.
+// GE-2: resizeGeometryStale is set by GROW and persists through SHRINK.
 // ---------------------------------------------------------------------------
 
-describe('GE-2: bandGeometryStale is set by GROW and persists through SHRINK in burst', () => {
-  it('both resize steps keep bandGeometryStale=true while CPR is in-flight', async () => {
+describe('GE-2: resizeGeometryStale is set by GROW and persists through SHRINK in burst', () => {
+  it('both resize steps keep resizeGeometryStale=true while CPR is in-flight', async () => {
     vi.useFakeTimers();
 
     stdout.rows = 24;
@@ -210,11 +210,11 @@ describe('GE-2: bandGeometryStale is set by GROW and persists through SHRINK in 
 });
 
 // ---------------------------------------------------------------------------
-// GE-3: bandGeometryStale is cleared after burst quiesces.
+// GE-3: resizeGeometryStale is cleared after burst quiesces.
 // ---------------------------------------------------------------------------
 
-describe('GE-3: bandGeometryStale is false after burst fully quiesces', () => {
-  it('repositionCommittedBand clears bandGeometryStale once geometry settles', async () => {
+describe('GE-3: resizeGeometryStale is false after burst fully quiesces', () => {
+  it('repositionCommittedBand clears resizeGeometryStale once geometry settles', async () => {
     vi.useFakeTimers();
 
     stdout.rows = 24;
@@ -250,7 +250,7 @@ describe('GE-3: bandGeometryStale is false after burst fully quiesces', () => {
 // ---------------------------------------------------------------------------
 // GE-4: Steady-state: anchorRow check still gates the deficit path correctly.
 //
-// Verify the guard doesn't over-suppress: bandGeometryStale=false allows the
+// Verify the guard doesn't over-suppress: resizeGeometryStale=false allows the
 // legacy deficit path to run (it just does nothing visible in this test, which
 // is fine — we assert no TYPE errors and no crash).
 // ---------------------------------------------------------------------------
@@ -279,6 +279,74 @@ describe('GE-4: no regression in steady-state repaint with anchorRow', () => {
     expect(int.resizeGeometryStale, 'no resize → resizeGeometryStale must be false').toBe(false);
 
     // No throws = pass.
+    c.disarm();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GE-5: resizeGeometryStale is cleared even when repositionCommittedBand takes
+// the early-return path (band exists but no room above the floor).
+//
+// Regression guard for #3371 (medium finding): the early-return at
+// `targetBottom < floor && hiddenArchivedRows === 0` previously skipped the
+// `resizeGeometryStale = false` assignment, leaving deficit eviction
+// suppressed in preserveRowsBeforeFrameRender until a later repaint that took
+// the non-early path.
+//
+// Setup: a high anchorRow (row 18 on a 24-row terminal) with a committed band.
+// GROW sets resizeGeometryStale=true.  Then SHRINK to 4 rows so the frame
+// fills rows 1–4, desiredTopRow=1, targetBottom=0 < floor (anchorRow=18) →
+// the early-return path fires.  After all CPR timeouts settle,
+// resizeGeometryStale must be false (deficit eviction re-enabled) even though
+// bandGeometryStale may still be true (floor distrusted until re-pin).
+// ---------------------------------------------------------------------------
+
+describe('GE-5: resizeGeometryStale cleared on early-return (no-room) path in repositionCommittedBand', () => {
+  it('resizeGeometryStale is false after early-return due to targetBottom < floor', async () => {
+    vi.useFakeTimers();
+
+    // anchorRow high relative to terminal — committed band has no room once
+    // the terminal shrinks to 4 rows (desiredTopRow ≤ 1, floor = anchorRow = 18).
+    stdout.rows = 24;
+    stdout.columns = 80;
+
+    const c = new TerminalCompositor({
+      stdout,
+      stdin,
+      onCancel: vi.fn(),
+      anchorRow: 18,
+    });
+    await c.arm();
+    vi.advanceTimersByTime(20);
+
+    // Commit a band entry so committedBand.length > 0.
+    c.setOverlay('SPIN');
+    c.commitAbove('committed-row');
+    vi.advanceTimersByTime(20);
+
+    const int = internals(c);
+    expect(int.resizeGeometryStale, 'not stale before burst').toBe(false);
+
+    // GROW — sets resizeGeometryStale=true.
+    stdout.rows = 34;
+    process.stdout.emit('resize');
+    expect(int.resizeGeometryStale, 'stale after GROW').toBe(true);
+
+    // SHRINK to 4 rows: frame fills almost the whole viewport, targetBottom=0
+    // which is < floor (anchorRow ≈ 18) → early-return path fires.
+    stdout.rows = 4;
+    process.stdout.emit('resize');
+
+    // Let all CPR timeouts and debounce fire.
+    vi.advanceTimersByTime((CPR_TIMEOUT_MS + 150) * 10);
+
+    // KEY assertion: resizeGeometryStale must be cleared even via the early-
+    // return path so deficit eviction is not permanently suppressed.
+    expect(
+      int.resizeGeometryStale,
+      'resizeGeometryStale must be false after early-return path in repositionCommittedBand (#3371)',
+    ).toBe(false);
+
     c.disarm();
   });
 });

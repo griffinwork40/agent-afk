@@ -93,7 +93,7 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
   } = args;
 
   // --- Stable fragments (computed once; not cwd-dependent) ---
-  const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
+  const toolBase = resolveToolSystemPrompt(config.isSkillDispatch, config.isUnnamedWorker);
   const memoryPrompt = resolveMemorySystemPrompt(readOnlyMemory, readOnlyState);
   // Invariant: kept in lockstep with anthropic-direct's call site.
   // `excludeName` omits the executing skill's own entry for a skill-dispatch
@@ -154,7 +154,10 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
    * distinguish "no arg" from "explicit undefined".
    */
   const assemble = (envFragment: string, resolvedBase: string | undefined): string => {
-    const parts = [toolBase];
+    // toolBase is '' for unnamed workers (TOOL_SYSTEM_PROMPT_BASE already embedded
+    // in their systemPrompt via UNNAMED_SUBAGENT_WORKER_PROMPT — #3359). Skip so
+    // the join does not produce a leading blank line.
+    const parts: string[] = toolBase.length > 0 ? [toolBase] : [];
     if (resolvedBase !== undefined && resolvedBase.length > 0) parts.push(resolvedBase);
     parts.push(memoryPrompt);
     const workspacePrompt = resolveWorkspaceSystemPrompt(hasWorkspaceStore);

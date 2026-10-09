@@ -275,16 +275,27 @@ Use FTS5 syntax: "exact phrase", term1 AND term2, prefix*.`;
  * concatenation inline and fell behind when the compound gained the
  * background-subagent fragment.)
  *
- * - skill-dispatch sub-agents → base conventions only. The slash-command
- *   routing, bash-passthrough, and background-subagent guidance are all
- *   interactive-only and would mislead a dispatched skill (which receives a
- *   "Run the <name> skill" directive, not a `<command-name>` tag or any
+ * Three tiers:
+ * - unnamed-worker sub-agents (`isUnnamedWorker=true`) → empty string `''`.
+ *   The base conventions are already embedded in `UNNAMED_SUBAGENT_WORKER_PROMPT`
+ *   (which becomes `config.systemPrompt` via `composeUnnamedWorkerPrompt`).
+ *   Prepending `toolBase` again duplicates `TOOL_SYSTEM_PROMPT_BASE` in the
+ *   assembled system prompt (#3359). The empty string is still joined correctly
+ *   by the assembly paths, which skip empty fragments.
+ * - skill-dispatch sub-agents (`isSkillDispatch=true`) → base conventions only.
+ *   The slash-command routing, bash-passthrough, and background-subagent guidance
+ *   are all interactive-only and would mislead a dispatched skill (which receives
+ *   a "Run the <name> skill" directive, not a `<command-name>` tag or any
  *   REPL-delivered envelope).
  * - every other session → the full compound (base + slash-command routing +
  *   bash-passthrough + background-subagent result delivery + queued-message
  *   flush).
  */
-export function resolveToolSystemPrompt(isSkillDispatch: boolean | undefined): string {
+export function resolveToolSystemPrompt(
+  isSkillDispatch: boolean | undefined,
+  isUnnamedWorker?: boolean | undefined,
+): string {
+  if (isUnnamedWorker) return '';
   return isSkillDispatch ? TOOL_SYSTEM_PROMPT_BASE : TOOL_SYSTEM_PROMPT;
 }
 

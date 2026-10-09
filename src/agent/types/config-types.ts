@@ -428,7 +428,18 @@ export interface AgentConfig {
   /** Continue the most recent persisted session in the current working directory */
   continue?: boolean;
 
-  /** Resume a specific persisted session ID */
+  /**
+   * Resume a specific persisted session ID.
+   *
+   * When set (and {@link resumeMessages} and {@link resumeHistory} are absent
+   * and {@link persistSession} is not `false`), `AgentSession` automatically loads the on-disk message
+   * journal for this id and seeds `resumeMessages` — so SDK consumers get the
+   * same full-fidelity conversation rehydration the CLI achieves via
+   * `resumeConfigFor()`. The caller's explicit `resumeMessages` or
+   * `resumeHistory` always wins; passing either suppresses the auto-load.
+   * `sessionId` alone never triggers it. Journal-disabled environments
+   * (`AFK_MESSAGE_JOURNAL_DISABLED=1`) and subagent forks are excluded.
+   */
   resume?: string;
 
   /**
@@ -830,6 +841,21 @@ export interface AgentConfig {
    * Default: `undefined` (main sessions see the complete manifest).
    */
   skillDispatchName?: string;
+
+  /**
+   * When true, the session is an unnamed (bare `agent` tool) subagent dispatch
+   * — i.e. one built by `buildChildConfig` with `namedAgent === undefined`.
+   *
+   * Providers use this flag in `resolveToolSystemPrompt` to return an empty
+   * string rather than the full tool conventions block.  The conventions are
+   * already embedded in `UNNAMED_SUBAGENT_WORKER_PROMPT` (which becomes
+   * `config.systemPrompt` for these sessions via `composeUnnamedWorkerPrompt`),
+   * so prepending `toolBase` again would duplicate `TOOL_SYSTEM_PROMPT_BASE` in
+   * the assembled system prompt (#3359).
+   *
+   * Default: `undefined` / `false` (all other sessions get `toolBase`).
+   */
+  isUnnamedWorker?: boolean;
 
   /**
    * When true, the session runs on a non-interactive surface where no human is
