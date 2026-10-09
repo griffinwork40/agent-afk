@@ -35,8 +35,12 @@ jobs:
         # pinned to SHA for supply-chain safety; tag: pnpm/action-setup@v6
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
         with:
-          # Pin to pnpm v11 (the major used by this repo) for reproducibility.
-          version: 11
+          # No `version:` here: this workflow runs inside this repo, whose
+          # package.json#packageManager already pins pnpm exactly. Setting both
+          # makes pnpm/action-setup v6 fail with "Multiple versions of pnpm
+          # specified" (same convention as ci.yml). The run-afk action itself
+          # pins `version: 11` with package_json_file=/dev/null because it runs
+          # in consumer repos.
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
