@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.307.9] - 2026-10-09
+
+### Changed
+- full-request cache-breakpoint guard (system + tools + messages) (#3366) (0844df6e)
+- SW(25,16) result write-up and README section (#3383) (91b8c2a6)
+
 ## [5.307.8] - 2026-10-09
 
 ### Changed
