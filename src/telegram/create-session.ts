@@ -84,10 +84,10 @@ export function createTelegramSessionFactory(
     // top, never substituted for the base. Shared by both branches below, and
     // inherited by forked subagent / compose children so they carry the same base.
     const overlayPrompt = sessionConfig.systemPrompt ?? config.systemPrompt;
-    const layeredBasePrompt = composeSystemPrompt(
-      frameworkBase,
-      typeof overlayPrompt === 'string' ? overlayPrompt : undefined,
-    );
+    const operatorOverlay = typeof overlayPrompt === 'string' && overlayPrompt.trim().length > 0
+      ? overlayPrompt
+      : undefined;
+    const layeredBasePrompt = composeSystemPrompt(frameworkBase, operatorOverlay);
 
     const sessionCwd = sessionConfig.cwd ?? telegramCwd;
     // Invariant: the trace writer is created BEFORE loadTelegramMcpManager so
@@ -117,6 +117,7 @@ export function createTelegramSessionFactory(
       sessionConfig,
       config,
       layeredBasePrompt,
+      ...(operatorOverlay !== undefined ? { operatorOverlay } : {}),
       sessionCwd,
       maxOutputTokens,
       maxToolUseIterations,

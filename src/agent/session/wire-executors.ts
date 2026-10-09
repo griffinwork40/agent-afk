@@ -86,6 +86,14 @@ export interface WireExecutorsOptions {
    * `undefined` to `''`.
    */
   systemPrompt?: string;
+  /**
+   * The BARE operator overlay (AFK.md / afk.config.json `systemPrompt` /
+   * AFK_SYSTEM_PROMPT, or a per-chat override): no framework base, no header.
+   * Forwarded to the `agent` executor so unnamed children, which receive the
+   * lean worker prompt instead of {@link WireExecutorsOptions.systemPrompt},
+   * still carry the operator's instructions (#3324). Omit when none.
+   */
+  operatorOverlay?: string;
   /** Anthropic-compatible endpoint forwarded to children. */
   baseUrl?: string;
   /** OpenAI-compatible endpoint forwarded to OpenAI-routed children. */
@@ -182,6 +190,24 @@ function agentBackgroundOpts(
     ...(opts.backgroundRegistry !== undefined ? { backgroundRegistry: opts.backgroundRegistry } : {}),
     ...(opts.backgroundAutoWake !== undefined ? { backgroundAutoWake: opts.backgroundAutoWake } : {}),
     ...(opts.backgroundAutoDeliver !== undefined ? { backgroundAutoDeliver: opts.backgroundAutoDeliver } : {}),
+  };
+}
+
+/**
+ * `defaultConfig` for the root `agent` executor. Extracted from
+ * {@link wireExecutors} (function-size ceiling). Conditional spreads keep an
+ * absent option an absent key.
+ */
+function agentDefaultConfig(
+  opts: Pick<WireExecutorsOptions, 'apiKey' | 'systemPrompt' | 'operatorOverlay' | 'baseUrl' | 'openaiBaseUrl' | 'xaiBaseUrl'>,
+): SubagentExecutorContext['defaultConfig'] {
+  return {
+    ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
+    ...(opts.systemPrompt !== undefined ? { systemPrompt: opts.systemPrompt } : {}),
+    ...(opts.operatorOverlay !== undefined ? { operatorOverlay: opts.operatorOverlay } : {}),
+    ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
+    ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
+    ...(opts.xaiBaseUrl !== undefined ? { xaiBaseUrl: opts.xaiBaseUrl } : {}),
   };
 }
 
@@ -309,13 +335,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     subagentManager: rootManager,
     parentSession,
     surface,
-    defaultConfig: {
-      ...apiKeyOpt,
-      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
-      ...baseUrlOpt,
-      ...openaiBaseUrlOpt,
-      ...xaiBaseUrlOpt,
-    },
+    defaultConfig: agentDefaultConfig(opts),
     defaultSubagentModel,
     childProviderFactory,
     childSkillExecutorFactory,

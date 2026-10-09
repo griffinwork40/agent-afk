@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.307.3] - 2026-10-09
+
+### Changed
+- give unnamed subagents a scoped worker prompt instead of the full parent base (~54 KB) (#3324) (09ca83dd)
+
 ## [5.307.2] - 2026-10-09
 
 ### Added

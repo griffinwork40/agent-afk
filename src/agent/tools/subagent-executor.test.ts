@@ -33,6 +33,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { ModelProvider } from '../provider.js';
 import { SubagentExecutor, DEFAULT_MAX_NESTING_DEPTH, type SubagentExecutorContext } from './subagent-executor.js';
 import { SUBAGENT_HANDOFF_CONTRACT } from '../subagent-contract.js';
+import { UNNAMED_SUBAGENT_WORKER_PROMPT } from '../tools/system-prompt.js';
 import type { InboundAttachmentReader } from '../content/attachment-registry.js';
 import { SKILL_MAX_DEPTH_RECOVERY_HINT } from './skill-depth-message.js';
 import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
@@ -201,6 +202,10 @@ describe('SubagentExecutor', () => {
       // The mock returns 'resolved-test-credential' for Anthropic-routed models.
       // maxTurns / maxToolUseIterations both default to 0 = unlimited on the
       // agent-tool dispatch path (uncapped by default; opt into a cap).
+      //
+      // Unnamed dispatch uses the lean scoped worker prompt (TOOL_SYSTEM_PROMPT_BASE
+      // + SUBAGENT_HANDOFF_CONTRACT) — NOT the parent's 'test system prompt'.
+      // The coordinator-framed parent base is not forwarded to worker children.
       expect(mockSubagentMgr.forkSubagent).toHaveBeenCalledWith(
         expect.objectContaining({
           idPrefix: 'agent-tool',
@@ -209,8 +214,7 @@ describe('SubagentExecutor', () => {
             maxToolUseIterations: 0,
             model: 'sonnet',
             apiKey: 'resolved-test-credential',
-            // Unnamed dispatch: parent base prompt + appended handoff contract.
-            systemPrompt: expect.stringContaining('test system prompt'),
+            systemPrompt: UNNAMED_SUBAGENT_WORKER_PROMPT,
           }),
         }),
       );
@@ -218,6 +222,8 @@ describe('SubagentExecutor', () => {
         config: { systemPrompt: string };
       };
       expect(forkArg.config.systemPrompt).toContain(SUBAGENT_HANDOFF_CONTRACT);
+      // Must NOT contain the parent's 'test system prompt'.
+      expect(forkArg.config.systemPrompt).not.toContain('test system prompt');
     });
   });
 
