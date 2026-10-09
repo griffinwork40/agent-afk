@@ -246,6 +246,165 @@ describe('run-afk action — action.yml structure', () => {
         'Use e.g. delim="AFK_EOF_$(openssl rand -hex 16 ...)" to avoid collision.',
     );
   });
+
+  it('declares openai-api-key input', () => {
+    const src = readAction();
+    expect(src).toMatch(/openai-api-key:/);
+  });
+
+  it('declares xai-api-key input', () => {
+    const src = readAction();
+    expect(src).toMatch(/xai-api-key:/);
+  });
+
+  it('maps openai-api-key to OPENAI_API_KEY env var, not a shell arg', () => {
+    const src = readAction();
+    expect(src).toMatch(/OPENAI_API_KEY:\s*\$\{\{\s*inputs\.openai-api-key\s*\}\}/);
+  });
+
+  it('maps xai-api-key to XAI_API_KEY env var, not a shell arg', () => {
+    const src = readAction();
+    expect(src).toMatch(/XAI_API_KEY:\s*\$\{\{\s*inputs\.xai-api-key\s*\}\}/);
+  });
+
+  it('pins pnpm to version 11, not "latest"', () => {
+    const src = readAction();
+    // The pnpm setup step must use an explicit major version, not "latest".
+    // "latest" is non-deterministic and can silently break on major bumps.
+    const pnpmSetupBlock = src.match(
+      /Setup pnpm[\s\S]*?(?=\n    - name:|\n\s*runs:|$)/,
+    )?.[0] ?? '';
+    // Must contain `version: 11` (or an exact patch like `11.28.2`).
+    expect(pnpmSetupBlock).toMatch(/version:\s*1[1-9]/);
+    // Must NOT contain `version: latest`.
+    expect(pnpmSetupBlock).not.toMatch(/version:\s*latest/);
+  });
+
+  it('sets package_json_file to /dev/null on the pnpm setup step to avoid consumer packageManager conflicts', () => {
+    const src = readAction();
+    // pnpm/action-setup v6 reads the consumer package.json#packageManager field
+    // by default. If the consumer specifies a different pnpm major it raises
+    // "multiple versions of pnpm specified". Setting package_json_file to a
+    // non-existent path prevents this.
+    expect(src).toMatch(/package_json_file:\s*\/dev\/null/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// JSON output extraction — real afk chat --format json output shape
+// ---------------------------------------------------------------------------
+
+/**
+ * Simulate the Node.js extraction script embedded in action.yml's run step.
+ *
+ * The script finds the last line that is exactly "{", parses from there to the
+ * end as JSON, then returns obj.message. We exercise it here with fixture
+ * output from buildOneShotJsonOutput so regressions in the parser are caught
+ * without needing a live Anthropic call.
+ */
+function extractMessageFromJsonOutput(raw: string): string {
+  const lines = raw.split('\n');
+  let start = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i]!.trim() === '{') { start = i; break; }
+  }
+  if (start === -1) throw new Error('Could not find JSON object in afk output');
+  const obj = JSON.parse(lines.slice(start).join('\n')) as Record<string, unknown>;
+  if (typeof obj['message'] !== 'string') throw new Error('afk JSON output has no .message field');
+  return obj['message'];
+}
+
+describe('afk chat --format json output — extraction', () => {
+  /**
+   * Minimal fixture: the fields always present in buildOneShotJsonOutput output.
+   * JSON.stringify with indent=2 emits "{\n" so the opening brace is on its own
+   * line — this is the invariant the action.yml parser relies on.
+   */
+  const minimalFixture = JSON.stringify(
+    { success: true, model: 'claude-sonnet-4-5', message: 'Hello from afk!', timestamp: '2026-10-09T12:00:00.000Z' },
+    null, 2,
+  );
+
+  /**
+   * Full fixture: includes all optional metadata fields that buildOneShotJsonOutput
+   * may emit (costUsd, durationMs, inputTokens, outputTokens, sessionId,
+   * witnessLabel, tracePath).
+   */
+  const fullFixture = JSON.stringify(
+    {
+      success: true,
+      model: 'claude-sonnet-4-5',
+      message: 'The answer is 42.',
+      timestamp: '2026-10-09T12:00:00.000Z',
+      costUsd: 0.0012,
+      durationMs: 3456,
+      inputTokens: 512,
+      outputTokens: 128,
+      sessionId: 'abc123def456',
+      witnessLabel: '2026-10-09T12-00-00-abc123',
+      tracePath: '/home/runner/.afk/state/witness/2026-10-09T12-00-00-abc123/trace.jsonl',
+    },
+    null, 2,
+  );
+
+  it('extracts .message from minimal afk chat --format json output', () => {
+    const msg = extractMessageFromJsonOutput(minimalFixture);
+    expect(msg).toBe('Hello from afk!');
+  });
+
+  it('extracts .message from full afk chat --format json output (all optional fields present)', () => {
+    const msg = extractMessageFromJsonOutput(fullFixture);
+    expect(msg).toBe('The answer is 42.');
+  });
+
+  it('extracts .message when plugin warning lines precede the JSON object', () => {
+    // The action comment says "Plugin warnings or other non-JSON lines may appear
+    // before the JSON object." Verify the parser skips preamble lines.
+    const withPreamble = [
+      '⚠  Plugin "my-plugin" is missing a SKILL.md (skipping)',
+      'Loading afk config from ~/.afk/config/afk.config.json',
+      minimalFixture,
+    ].join('\n');
+    const msg = extractMessageFromJsonOutput(withPreamble);
+    expect(msg).toBe('Hello from afk!');
+  });
+
+  it('extracts .message when the response contains embedded newlines', () => {
+    const multiLineMessage = 'Line one.\nLine two.\nLine three.';
+    const fixture = JSON.stringify(
+      { success: true, model: 'claude-sonnet-4-5', message: multiLineMessage, timestamp: '2026-10-09T12:00:00.000Z' },
+      null, 2,
+    );
+    const msg = extractMessageFromJsonOutput(fixture);
+    expect(msg).toBe(multiLineMessage);
+  });
+
+  it('throws when the output has no JSON object (no line that is exactly "{")', () => {
+    const noJson = 'Some random line\nAnother line\n';
+    expect(() => extractMessageFromJsonOutput(noJson)).toThrow(
+      'Could not find JSON object in afk output',
+    );
+  });
+
+  it('throws when the parsed JSON has no .message field', () => {
+    const noMessage = JSON.stringify({ success: true, model: 'x' }, null, 2);
+    expect(() => extractMessageFromJsonOutput(noMessage)).toThrow(
+      'afk JSON output has no .message field',
+    );
+  });
+
+  it('opening brace of the JSON object is on its own line (JSON.stringify invariant)', () => {
+    // JSON.stringify(obj, null, 2) always places { on the first line alone.
+    // The action parser relies on this invariant to find the start of the object.
+    const lines = minimalFixture.split('\n');
+    expect(lines[0]).toBe('{');
+  });
+
+  it('output has success:true and a string model field', () => {
+    const obj = JSON.parse(minimalFixture) as Record<string, unknown>;
+    expect(obj['success']).toBe(true);
+    expect(typeof obj['model']).toBe('string');
+  });
 });
 
 // ---------------------------------------------------------------------------

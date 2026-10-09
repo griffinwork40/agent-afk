@@ -16,9 +16,11 @@ jobs:
   afk-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # pinned to SHA for supply-chain safety; tag: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - uses: griffinwork40/agent-afk/.github/actions/run-afk@main
+      # pinned to SHA for supply-chain safety; tag: griffinwork40/agent-afk/.github/actions/run-afk@v5
+      - uses: griffinwork40/agent-afk/.github/actions/run-afk@<pin-to-a-release-SHA>
         id: afk
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -29,12 +31,19 @@ jobs:
         run: echo "${{ steps.afk.outputs.response }}"
 ```
 
+> **Supply-chain note:** All third-party actions inside the composite action are
+> already pinned to full commit SHAs.  The examples above follow the same
+> convention — replace `<pin-to-a-release-SHA>` with the full 40-character commit
+> SHA of the agent-afk release you want to target.
+
 ## Inputs
 
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `anthropic-api-key` | **yes** | — | Anthropic API key. Pass via a repository secret (`${{ secrets.ANTHROPIC_API_KEY }}`). Never hard-code it in the workflow. |
+| `anthropic-api-key` | **yes*** | — | Anthropic API key. Pass via a repository secret (`${{ secrets.ANTHROPIC_API_KEY }}`). Never hard-code it in the workflow. *Required when routing to Anthropic models; may be omitted when using an OpenAI or xAI provider exclusively. |
 | `prompt` | **yes** | — | Prompt forwarded to `afk chat`. Supports YAML multi-line literals (`\|`). |
+| `openai-api-key` | no | *(empty)* | OpenAI API key (`OPENAI_API_KEY`). Required when routing to OpenAI or OpenAI-compatible models (e.g. `gpt-4o`, `o3`). Pass via a repository secret. |
+| `xai-api-key` | no | *(empty)* | xAI API key (`XAI_API_KEY`). Required when routing to xAI Grok models in API-key mode. Pass via a repository secret. |
 | `afk-version` | no | `latest` | npm version of agent-afk to install (e.g. `5.0.0`, `latest`, or any dist-tag). Use `local` to run from the checked-out repo (see [Local mode](#advanced-run-from-the-local-repo-checkout)). |
 | `node-version` | no | `22` | Node.js version. Must satisfy the `engines.node` field in agent-afk's `package.json` (`^22.22.2 \|\| ^24.15.0 \|\| >=26.0.0`). |
 | `model` | no | *(repo default)* | Model slug forwarded to `afk chat --model`. When empty the repo's configured default is used. |
@@ -88,11 +97,14 @@ so that all build dependencies are present.
 
 ```yaml
 steps:
-  - uses: actions/checkout@v4
+  # pinned to SHA for supply-chain safety; tag: actions/checkout@v4
+  - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-  - uses: pnpm/action-setup@v6
+  # pinned to SHA for supply-chain safety; tag: pnpm/action-setup@v6
+  - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
 
-  - uses: actions/setup-node@v4
+  # pinned to SHA for supply-chain safety; tag: actions/setup-node@v4
+  - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
     with:
       node-version: 22
       cache: pnpm
@@ -109,13 +121,15 @@ steps:
 ## Advanced: capture the response as an artifact
 
 ```yaml
-- uses: griffinwork40/agent-afk/.github/actions/run-afk@main
+# pinned to SHA for supply-chain safety; tag: griffinwork40/agent-afk/.github/actions/run-afk@v5
+- uses: griffinwork40/agent-afk/.github/actions/run-afk@<pin-to-a-release-SHA>
   with:
     anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
     prompt: Generate a release summary.
     output-file: release-notes.md
 
-- uses: actions/upload-artifact@v4
+# pinned to SHA for supply-chain safety; tag: actions/upload-artifact@v4
+- uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
   with:
     name: release-notes
     path: release-notes.md
