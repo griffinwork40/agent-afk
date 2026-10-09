@@ -17,6 +17,7 @@
 // @module cli/config/json-tier-parse
 
 import { readFileSync, existsSync } from 'fs';
+import { parseToolsConfig } from './json-tier-parse.tools.js';
 import { parseDaemonBlock } from './json-tier-parse.daemon.js';
 import { isValidModel } from '../../agent/session/model-resolution.js';
 import {
@@ -63,7 +64,7 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
   const content = readFileSync(configPath, 'utf-8');
   const json: ConfigFileSchema = JSON.parse(content);
 
-  const config: Partial<CliConfig> = {};
+  const config: Partial<CliConfig> = parseToolsConfig(json);
   const modelsPartial = parseModelsConfig(json.models);
 
   if (typeof json.model === 'string' && json.model.length > 0) {

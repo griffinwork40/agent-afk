@@ -1057,6 +1057,157 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
       rmSync(tmpHome, { recursive: true, force: true });
     }
   });
+
+  it('POST /tasks shell: store entry without notifyOn matches request with explicit notifyOn: "failure" (normalization)', async () => {
+    // Regression for #3117 advisory finding: the `notifyOn` normalization fix
+    // must treat an omitted store-side notifyOn as equivalent to an explicit
+    // request-side 'failure', because 'failure' is the effective default.
+    // A bare === comparison between undefined (store) and 'failure' (request)
+    // would reject a valid sync; the normalization guard should not.
+    const tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-notify-'));
+    vi.stubEnv('AFK_HOME', tmpHome);
+    mkdirSync(join(tmpHome, 'config'), { recursive: true });
+    writeFileSync(
+      join(tmpHome, 'config', 'schedules.json'),
+      JSON.stringify([
+        {
+          id: 'shell-notify',
+          name: 'Shell Notify',
+          command: 'echo notify',
+          cron: '0 3 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+          enabled: true,
+          // notifyOn intentionally omitted → effective default is 'failure'
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ]),
+    );
+    try {
+      expect(getAfkHome()).toBe(tmpHome);
+      const h = await spinDaemon();
+      // Request carries explicit notifyOn: 'failure' — must match the omitted store value.
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: 'shell-notify',
+          command: 'echo notify',
+          cron: '0 3 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+          notifyOn: 'failure',
+        }),
+      });
+      expect(res.status).toBe(201);
+      const task = h.scheduler.list().find((t) => t.taskId === 'shell-notify');
+      expect(task?.executor).toBe('shell');
+    } finally {
+      vi.unstubAllEnvs();
+      expect(getAfkHome()).not.toBe(tmpHome);
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /tasks shell: an unrecognized request notifyOn is rejected, never coerced to the default', async () => {
+    // Validation of the request-side notifyOn must only narrow trust. A bogus
+    // value must not be normalized to 'failure' and then match a store entry
+    // whose notifyOn is omitted (effective default 'failure').
+    const tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-notify-bad-'));
+    vi.stubEnv('AFK_HOME', tmpHome);
+    mkdirSync(join(tmpHome, 'config'), { recursive: true });
+    writeFileSync(
+      join(tmpHome, 'config', 'schedules.json'),
+      JSON.stringify([
+        {
+          id: 'shell-notify-bad',
+          name: 'Shell Notify Bad',
+          command: 'echo notify',
+          cron: '0 3 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+          enabled: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ]),
+    );
+    try {
+      expect(getAfkHome()).toBe(tmpHome);
+      const h = await spinDaemon();
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: 'shell-notify-bad',
+          command: 'echo notify',
+          cron: '0 3 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+          notifyOn: 'bogus',
+        }),
+      });
+      expect(res.status).toBe(400);
+      expect(h.scheduler.list().find((t) => t.taskId === 'shell-notify-bad')).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+      expect(getAfkHome()).not.toBe(tmpHome);
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /tasks shell: notifyOn: null is treated as absent and matches a store entry without notifyOn', async () => {
+    // Regression for advisory finding #3320: null on the POST body should be
+    // treated identically to an absent field (both normalize to the effective
+    // default 'failure'), so it must pass notifyOnValid and match a store entry
+    // whose notifyOn is also omitted.
+    const tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-notify-null-'));
+    vi.stubEnv('AFK_HOME', tmpHome);
+    mkdirSync(join(tmpHome, 'config'), { recursive: true });
+    writeFileSync(
+      join(tmpHome, 'config', 'schedules.json'),
+      JSON.stringify([
+        {
+          id: 'shell-null-notify',
+          name: 'Shell Null Notify',
+          command: 'echo null-notify',
+          cron: '0 4 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+          enabled: true,
+          // notifyOn intentionally omitted → effective default is 'failure'
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ]),
+    );
+    try {
+      expect(getAfkHome()).toBe(tmpHome);
+      const h = await spinDaemon();
+      // Request carries explicit notifyOn: null — must be treated as absent
+      // and match the store entry whose notifyOn is also omitted.
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: 'shell-null-notify',
+          command: 'echo null-notify',
+          cron: '0 4 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+          notifyOn: null,
+        }),
+      });
+      expect(res.status).toBe(201);
+      const task = h.scheduler.list().find((t) => t.taskId === 'shell-null-notify');
+      expect(task?.executor).toBe('shell');
+    } finally {
+      vi.unstubAllEnvs();
+      expect(getAfkHome()).not.toBe(tmpHome);
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('notifyOn filter in CronScheduler', () => {

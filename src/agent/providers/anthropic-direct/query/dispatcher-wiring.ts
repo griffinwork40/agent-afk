@@ -43,6 +43,7 @@ import type { AgentConfig } from '../../../types/config-types.js';
 import type { AnthropicToolDef } from '../../../tools/types.js';
 import type { ToolDispatcher } from '../tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../../tools/dispatcher.js';
+import { operatorDispatcherToolDefs } from '../../../tools/operator-denied-dispatcher.js';
 import {
   buildRuntimeStateSource,
   getRuntimeStateTool,
@@ -55,6 +56,7 @@ import { registerPresenceLifecycle, resolveTopLevelSessionId } from './presence-
 import type { BuildDispatcherOptions } from '../build-dispatcher.js';
 import type { RuntimeSubagents } from '../../../awareness/index.js';
 import { isWhatifEpisode } from '../../../whatif-episode-gate.js';
+import { isHeadlessSession } from '../../shared/headless-session.js';
 
 export interface DispatcherWiringArgs {
   config: AgentConfig;
@@ -207,6 +209,10 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
         runtimeStateSource,
         hookRegistry: config.hookRegistry,
         planExitControls: config.planExitControls,
+        // #2302: headless bash floor keys on this, not grant-manager absence.
+        // isHeadlessSession (not bare isNonInteractive) so daemon pull tasks,
+        // which keep ask_question, still get the unattended floor.
+        ...(isHeadlessSession(config) ? { isNonInteractive: true } : {}),
       });
 
   // External-dispatcher branch: the caller owns routing for whatever tools
@@ -215,9 +221,7 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
   // Without adding the schema here the model has no way to know the tool
   // exists — leaving the awareness layer reachable only via the
   // `SessionToolDispatcher` path.
-  const baseToolDefs = queryDispatcher instanceof SessionToolDispatcher
-    ? [...queryDispatcher.toolDefs]
-    : [...builtinToolSchemas, getRuntimeStateTool];
+  const baseToolDefs = [...operatorDispatcherToolDefs(queryDispatcher, [...builtinToolSchemas, getRuntimeStateTool])];
   // Invariant: skill-dispatch sub-agents are dispatched AS a specific skill, so
   // they must neither (a) pause to ask the operator "which skill?" nor (b) mutate
   // the operator's environment. Strip `ask_question` (the operator-prompt escape

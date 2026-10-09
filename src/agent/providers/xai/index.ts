@@ -157,6 +157,15 @@ export class XaiProvider implements ModelProvider {
     return this.inner.getGrants();
   }
 
+  /**
+   * @internal Test accessor — exposes the composed `OpenAICompatibleProvider`
+   * so tests can exercise restriction enforcement through the inner provider
+   * without reaching through `as any` casts. Never call in production code.
+   */
+  get _innerForTesting(): OpenAICompatibleProvider {
+    return this.inner;
+  }
+
   close(): void {
     this.inner.close();
   }

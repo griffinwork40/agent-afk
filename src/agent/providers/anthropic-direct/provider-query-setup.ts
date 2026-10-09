@@ -22,6 +22,7 @@ import { wireQueryDispatcher } from './query/dispatcher-wiring.js';
 import { assembleQueryPrompt } from './query/prompt-assembly.js';
 import { dumpIfEnabled } from '../../session/prompt-dump.js';
 import type { ProviderQueryContext } from './provider-context.js';
+import { normalizeSystemPromptOverlay } from '../shared/system-prompt.js';
 
 /** Everything the second half of `query()` needs from this one. */
 export interface QuerySetupResult {
@@ -45,6 +46,10 @@ export interface QuerySetupResult {
 /**
  * Resolve the user-supplied system prompt to a plain string.
  *
+ * Delegates to `normalizeSystemPromptOverlay` (shared/system-prompt.ts) so
+ * both providers use the same logic (#3261). Kept here for callers that
+ * import it by this name.
+ *
  * - `string` → returned as-is when non-empty.
  * - `{ type: 'preset', preset: 'claude_code', append?: string }` → the preset
  *   itself has no analog on the direct path, so we drop it and forward only
@@ -52,13 +57,7 @@ export interface QuerySetupResult {
  * - everything else → `null`.
  */
 export function resolveUserSystem(sp: AgentConfig['systemPrompt']): string | null {
-  if (sp === undefined) return null;
-  if (typeof sp === 'string') return sp.length > 0 ? sp : null;
-  if (typeof sp === 'object' && sp !== null && 'append' in sp) {
-    const append = (sp as { append?: string }).append;
-    return append && append.length > 0 ? append : null;
-  }
-  return null;
+  return normalizeSystemPromptOverlay(sp);
 }
 
 /** Run the credential/model/dispatcher/prompt half of `query()`. */

@@ -20,6 +20,7 @@ import {
   BILLING_HEADER_TEXT,
   THINKING_BINDING_CONTROLS_BETA_HEADER,
 } from './auth.js';
+import { h1ModelFetch } from '../shared/h1-fetch.js';
 
 describe('anthropic-direct auth', () => {
   it('detectAuthMode returns "oauth" for sk-ant-oat01-* tokens', () => {
@@ -36,13 +37,15 @@ describe('anthropic-direct auth', () => {
 
   it('buildClientOptions(token, "oauth") yields { authToken } and no apiKey', () => {
     const opts = buildClientOptions('tok', 'oauth');
-    expect(opts).toEqual({ authToken: 'tok', maxRetries: 0 });
+    // fetch: h1ModelFetch is always included to force HTTP/1.1 (issue #3335).
+    expect(opts).toEqual({ authToken: 'tok', maxRetries: 0, fetch: h1ModelFetch });
     expect((opts as Record<string, unknown>)['apiKey']).toBeUndefined();
   });
 
   it('buildClientOptions(token, "api-key") yields { apiKey } and no authToken', () => {
     const opts = buildClientOptions('tok', 'api-key');
-    expect(opts).toEqual({ apiKey: 'tok', maxRetries: 0 });
+    // fetch: h1ModelFetch is always included to force HTTP/1.1 (issue #3335).
+    expect(opts).toEqual({ apiKey: 'tok', maxRetries: 0, fetch: h1ModelFetch });
     expect((opts as Record<string, unknown>)['authToken']).toBeUndefined();
   });
 
@@ -63,17 +66,20 @@ describe('anthropic-direct auth', () => {
       apiKey: 'tok',
       baseURL: 'http://127.0.0.1:8080',
       maxRetries: 0,
+      fetch: h1ModelFetch,
     });
     expect(buildClientOptions('oauth-tok', 'oauth', 'http://127.0.0.1:9000')).toEqual({
       authToken: 'oauth-tok',
       baseURL: 'http://127.0.0.1:9000',
       maxRetries: 0,
+      fetch: h1ModelFetch,
     });
   });
 
   it('buildClientOptions omits baseURL when baseUrl is undefined or empty', () => {
-    expect(buildClientOptions('tok', 'api-key')).toEqual({ apiKey: 'tok', maxRetries: 0 });
-    expect(buildClientOptions('tok', 'api-key', '')).toEqual({ apiKey: 'tok', maxRetries: 0 });
+    // fetch is always present; baseURL is omitted when not supplied (issue #3335).
+    expect(buildClientOptions('tok', 'api-key')).toEqual({ apiKey: 'tok', maxRetries: 0, fetch: h1ModelFetch });
+    expect(buildClientOptions('tok', 'api-key', '')).toEqual({ apiKey: 'tok', maxRetries: 0, fetch: h1ModelFetch });
   });
 
   it('OAUTH_BETA_HEADER includes the interleaved-thinking beta', () => {

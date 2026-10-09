@@ -26,6 +26,7 @@ import {
   requestCprAndApplyDelta,
   CPR_REQUEST,
   CPR_TIMEOUT_MS,
+  __resetCprRttForTests,
   type CprHost,
 } from './terminal-compositor.lifecycle.cpr.js';
 import { TerminalCompositor } from './terminal-compositor.js';
@@ -75,7 +76,7 @@ function makeCprHost(opts: {
 // ---------------------------------------------------------------------------
 
 describe('S1: handleResizeImmediate emits CPR request on SHRINK', () => {
-  beforeEach(() => { __resetStdinClaimForTests(); vi.useFakeTimers(); });
+  beforeEach(() => { __resetStdinClaimForTests(); __resetCprRttForTests(); vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   it('emits CPR_REQUEST when a SHRINK SIGWINCH fires and a frame has been rendered', async () => {
@@ -136,7 +137,7 @@ describe('S1: handleResizeImmediate emits CPR request on SHRINK', () => {
 // ---------------------------------------------------------------------------
 
 describe('S2: negative delta applied correctly to all tracked rows', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
+  beforeEach(() => { __resetCprRttForTests(); vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   it('shifts all tracked rows up by |delta| when CPR reply indicates cursor moved up', async () => {
@@ -189,7 +190,7 @@ describe('S2: negative delta applied correctly to all tracked rows', () => {
 // ---------------------------------------------------------------------------
 
 describe('S3: SHRINK contract — pendingResizeErase nulled', () => {
-  beforeEach(() => { __resetStdinClaimForTests(); vi.useFakeTimers(); });
+  beforeEach(() => { __resetStdinClaimForTests(); __resetCprRttForTests(); vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   it('pendingResizeErase is null after SHRINK even if a prior EXPAND had set it', async () => {
@@ -224,7 +225,7 @@ describe('S3: SHRINK contract — pendingResizeErase nulled', () => {
 // ---------------------------------------------------------------------------
 
 describe('S4: CPR timeout on SHRINK — fallback preserves existing behaviour', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
+  beforeEach(() => { __resetCprRttForTests(); vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   it('rows unchanged after CPR timeout on shrink; ALWAYS repaints', async () => {
@@ -247,7 +248,7 @@ describe('S4: CPR timeout on SHRINK — fallback preserves existing behaviour', 
 // ---------------------------------------------------------------------------
 
 describe('S5: regression — GROW→SHRINK→GROW sequence yields one frame', () => {
-  beforeEach(() => { __resetStdinClaimForTests(); vi.useFakeTimers(); });
+  beforeEach(() => { __resetStdinClaimForTests(); __resetCprRttForTests(); vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   it('after GROW then SHRINK with CPR, frame paints at correct row (no stale ghost)', async () => {

@@ -66,9 +66,16 @@
  */
 
 import { env } from '../config/env.js';
+import { armCprKeypressGuard, disarmCprKeypressGuard, CPR_KEYPRESS_GRACE_MS } from './input/emit-keypress.js';
+import { CPR_REPLY_RE as _CPR_REPLY_RE_LEAF } from './input/cpr-reply-re.js';
 
-/** Regex that matches a complete CPR response: ESC [ row ; col R */
-export const CPR_REPLY_RE = /^\x1b\[(\d+);(\d+)R$/;
+/**
+ * Regex that matches a complete CPR response: ESC [ row ; col R
+ *
+ * Re-exported from the shared leaf module `src/cli/input/cpr-reply-re.ts`
+ * so callers that import from this public API continue to work unchanged.
+ */
+export const CPR_REPLY_RE: RegExp = _CPR_REPLY_RE_LEAF;
 
 /**
  * Parse a CPR reply and return { row, col } (1-based), or null when the
@@ -87,14 +94,79 @@ export function parseCprReply(s: string): { row: number; col: number } | null {
 /** CPR request sequence (ANSI DSR — Device Status Report). */
 export const CPR_REQUEST = '\x1b[6n';
 
-/** Milliseconds to wait for a CPR reply before falling back to legacy behaviour. */
+/**
+ * Baseline milliseconds to wait for a CPR reply on the first request.
+ * The adaptive timeout supersedes this once an RTT sample is available.
+ */
 export const CPR_TIMEOUT_MS = 120;
+
+/**
+ * Scale factor applied to the measured round-trip time to derive an adaptive
+ * timeout.  A factor of 4 gives the terminal three extra RTTs of slack (likely
+ * enough for jitter on most SSH/mosh links).
+ */
+export const CPR_RTT_SCALE = 4;
+
+/**
+ * Hard ceiling for the adaptive timeout in milliseconds.  Even on a very slow
+ * link we do not want to suppress repaints indefinitely.
+ */
+export const CPR_TIMEOUT_CEILING_MS = 1500;
 
 /**
  * Maximum number of re-queries issued within one burst before giving up.
  * Guards against a pathological burst that never quiesces.
  */
 export const CPR_MAX_REQUERY = 8;
+
+// ---------------------------------------------------------------------------
+// Adaptive timeout — module-level RTT sample
+// ---------------------------------------------------------------------------
+//
+// We keep one exponentially-smoothed RTT sample across all CPR requests in
+// the process lifetime.  When the first reply arrives, _measuredRttMs is set.
+// Each subsequent reply updates it with a simple EWA (α=0.25).  The timeout
+// for each new CPR request is min(max(sample * CPR_RTT_SCALE, CPR_TIMEOUT_MS),
+// CPR_TIMEOUT_CEILING_MS) — i.e. at least the baseline, at most the ceiling.
+//
+// This is process-global (not per-compositor) because the PTY round-trip time
+// is a property of the connection, not of the compositor instance.
+
+let _measuredRttMs: number | null = null;
+
+function _computeTimeout(): number {
+  if (_measuredRttMs === null) return CPR_TIMEOUT_MS;
+  // Intentionally retain the 120 ms baseline floor even for fast local PTYs:
+  // a tiny RTT sample must not eliminate slack for scheduling jitter. Slow
+  // links can expand the timeout up to CPR_TIMEOUT_CEILING_MS.
+  const adaptive = Math.round(_measuredRttMs * CPR_RTT_SCALE);
+  return Math.min(Math.max(adaptive, CPR_TIMEOUT_MS), CPR_TIMEOUT_CEILING_MS);
+}
+
+function _updateRtt(sampleMs: number): void {
+  if (_measuredRttMs === null) {
+    _measuredRttMs = sampleMs;
+  } else {
+    _measuredRttMs = _measuredRttMs * 0.75 + sampleMs * 0.25;
+  }
+}
+
+/**
+ * Test helper: reset the adaptive RTT sample.
+ * Must only be called from tests.
+ */
+export function __resetCprRttForTests(): void {
+  _measuredRttMs = null;
+}
+
+/**
+ * Test helper: read the current smoothed RTT sample.
+ * Returns null when no sample has been recorded yet.
+ * Must only be called from tests.
+ */
+export function __getCprRttForTests(): number | null {
+  return _measuredRttMs;
+}
 
 /**
  * Narrowest host slice needed by the CPR sub-system.
@@ -234,18 +306,73 @@ export function requestCprAndApplyDelta(
 // ---------------------------------------------------------------------------
 
 /**
+ * Contract: called when a CPR request times out (no reply within `timeoutMs`).
+ *
+ * 1. Seeds the RTT sample with `timeoutMs` as a floor estimate so the next
+ *    request uses an adaptive timeout (timeoutMs × CPR_RTT_SCALE) instead of
+ *    the 120 ms baseline.  On slow SSH/mosh links the first reply always
+ *    arrives after the baseline, keeping _measuredRttMs null forever.  Treating
+ *    the timeout itself as an observed lower-bound RTT (real RTT ≥ timeoutMs)
+ *    lets the adaptive path engage on the very next request.  No delta is
+ *    applied — any stale reply is discarded by the keypress guard.
+ * 2. Re-arms the keypress guard for the grace window so a reply that slips
+ *    past after the data listener is removed cannot leak into the idle-prompt
+ *    reader.
+ * 3. Falls back to the existing paint so the frame reflows to the new geometry.
+ *
+ * CPR_TIMEOUT_MS (120 ms) is a conservative floor calibrated for local PTY
+ * round-trips (same machine, sub-millisecond actual latency).  On slow links
+ * the adaptive sample quickly grows past this floor.  See _computeTimeout().
+ */
+function _onCprTimeout(self: CprHost, timeoutMs: number): void {
+  _updateRtt(timeoutMs);
+  armCprKeypressGuard(self.stdin, CPR_KEYPRESS_GRACE_MS);
+  if (env.AFK_DEBUG_COMPOSITOR) {
+    process.stderr.write(
+      `[afk/cpr] timeout after ${timeoutMs}ms — falling back + repainting` +
+      ` (rtt bootstrapped to ${timeoutMs}ms; keypress guard extended by ${CPR_KEYPRESS_GRACE_MS}ms)\n`,
+    );
+  }
+  self.cprBurst = null;
+  self.repaint();
+}
+
+/**
  * Emit a CPR request and install a one-shot stdin `data` listener that
  * intercepts the reply BEFORE readline emits it as a keypress.
  *
  * Reads self.cprBurst for all burst context (originalExpectedRow, dirty, etc.).
  * Must be called with self.cprPending === false.
+ *
+ * Adaptive timeout: the first request uses CPR_TIMEOUT_MS (120 ms).  Once a
+ * reply has been observed, subsequent requests use min(rtt * CPR_RTT_SCALE,
+ * CPR_TIMEOUT_CEILING_MS) so slow SSH/mosh links are handled without a blanket
+ * ceiling increase that would delay repaints on fast local terminals.
+ *
+ * CPR keypress guard (Gap 2): before emitting the request we arm the shared
+ * keypress guard for the full expected window (timeout + grace).  If the reply
+ * arrives after the data listener times out, the guard ensures the decoded
+ * keypress is dropped by any active keypress consumer (reader.ts, compositor)
+ * before it can insert stray characters into the prompt buffer.
  */
 function _requestCpr(self: CprHost): void {
   self.cprPending = true;
 
+  // Compute the adaptive timeout for this request.
+  const timeoutMs = _computeTimeout();
+
+  // Arm the shared keypress guard for the full window so a late reply that
+  // slips past the data listener (after timeout) is dropped at the keypress
+  // layer too.  We arm for timeout + grace; armCprKeypressGuard extends the
+  // deadline if already active (safe to call multiple times for a burst).
+  armCprKeypressGuard(self.stdin, timeoutMs + CPR_KEYPRESS_GRACE_MS);
+
   // Accumulation buffer: the CPR reply is usually a single chunk but may
   // arrive split across multiple data events on a slow/remote PTY.
   let buf = '';
+
+  // Timestamp of the CPR emit (for RTT measurement).
+  let emitAt = 0;
 
   // Timeout handle so we can cancel it when the reply arrives early.
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -287,7 +414,16 @@ function _requestCpr(self: CprHost): void {
       return;
     }
 
+    // ── RTT sample ────────────────────────────────────────────────────────
+    // Update the smoothed RTT so the next CPR uses an adaptive timeout.
+    if (emitAt > 0) _updateRtt(Date.now() - emitAt);
+
     cleanup(onData);
+    // Disarm the keypress guard immediately: the reply was consumed by the
+    // data listener, so no late-keypress leak can occur.  Without this the
+    // guard would persist for the full timeoutMs + CPR_KEYPRESS_GRACE_MS
+    // window even though the CPR is already resolved.
+    disarmCprKeypressGuard();
 
     // ── Re-emit unconsumed bytes so keystrokes are not swallowed ──────────
     const consumedEnd = escIdx + candidate.length;
@@ -357,7 +493,8 @@ function _requestCpr(self: CprHost): void {
     if (env.AFK_DEBUG_COMPOSITOR) {
       process.stderr.write(
         `[afk/cpr] apply delta=${delta} range=[${lo},${hi}] expectedRow=${expectedRow}` +
-        ` reportedRow=${parsed.row} rows=${currentRows} requeries=${burst?.requeryCt ?? 0}\n`,
+        ` reportedRow=${parsed.row} rows=${currentRows} requeries=${burst?.requeryCt ?? 0}` +
+        ` timeout=${timeoutMs}ms rtt=${_measuredRttMs !== null ? Math.round(_measuredRttMs) : 'n/a'}ms\n`,
       );
     }
     // Apply the delta (may be 0 on a net-zero burst — still repaint below).
@@ -383,21 +520,21 @@ function _requestCpr(self: CprHost): void {
 
   timer = setTimeout(() => {
     cleanup(onData);
-    // Timeout: terminal did not answer — fall back to existing behaviour AND
-    // ALWAYS repaint so the frame reflows to the new geometry. The
-    // pendingResizeErase snapshot (if any) is already set; the repaint will
-    // proceed without a delta correction (correct for terminals that do not
-    // shift history on resize).
-    if (env.AFK_DEBUG_COMPOSITOR) {
-      process.stderr.write(`[afk/cpr] timeout after ${CPR_TIMEOUT_MS}ms — falling back + repainting\n`);
-    }
-    self.cprBurst = null;
-    self.repaint();
-  }, CPR_TIMEOUT_MS);
+    _onCprTimeout(self, timeoutMs);
+  }, timeoutMs);
+  // Unref the CPR timeout so it does not keep the event loop alive after
+  // process exit.  The timeout handler calls repaint() / fallback; if the
+  // process is already shutting down there is nothing to repaint into.
+  // Without unref the timer can hold the loop for up to CPR_TIMEOUT_CEILING_MS
+  // (~1500ms) past the last real task.  The timer handle is cancelled by
+  // cleanup(onData) when a reply arrives, so unref only matters on the
+  // timeout path and only when the process exits mid-flight.
+  timer.unref();
 
   // Emit the CPR request AFTER installing the listener so we cannot miss a
   // same-tick synchronous reply (pathological but safe).
   try {
+    emitAt = Date.now();
     self.stdout.write(CPR_REQUEST);
   } catch {
     // stdout closed — clean up immediately.

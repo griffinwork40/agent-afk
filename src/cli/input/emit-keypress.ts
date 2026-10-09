@@ -1,4 +1,6 @@
 import { emitKeypressEvents, type Interface } from 'readline';
+import { CPR_REPLY_RE as _CPR_REPLY_RE } from './cpr-reply-re.js';
+import { env } from '../../config/env.js';
 
 /**
  * Sets `escapeCodeTimeout` to 50ms (see {@link LONE_ESC_TIMEOUT_MS}) for
@@ -42,4 +44,134 @@ const LONE_ESC_TIMEOUT_MS = 50;
 
 export function emitKeypressEventsImmediateEscape(stream: NodeJS.ReadableStream): void {
   emitKeypressEvents(stream, { escapeCodeTimeout: LONE_ESC_TIMEOUT_MS } as unknown as Interface);
+}
+
+// ---------------------------------------------------------------------------
+// CPR keypress guard — Gap 2 fix (#3206)
+// ---------------------------------------------------------------------------
+//
+// Problem: after the compositor's per-CPR `data` listener times out and is
+// removed, a late terminal reply (`ESC[row;colR`) is decoded by readline's
+// keypress emitter and surfaced to whatever keypress consumer is active at
+// that moment.  If the compositor is already disarmed (the turn ended and
+// the idle-prompt reader in `reader.ts` took over stdin), the reply reaches
+// `handleKeypress`, which has no CPR guard — the sequence is unknown to every
+// named key handler and falls through to the printable check.  Although
+// `isPrintableGrapheme` rejects it (the leading ESC is < space), readline may
+// also decode the reply with a non-empty `char` argument, causing characters
+// to be inserted into the prompt buffer.
+//
+// Fix: a shared, time-bounded guard flag.  When a CPR request is emitted,
+// `armCprKeypressGuard` sets a deadline.  Any keypress surface that wants
+// protection queries `isCprKeypressGuardActive` at the top of its handler
+// and drops events whose `key.sequence` matches CPR_REPLY_RE.
+//
+// F3 / Ctrl+F3 disambiguation:
+//   `ESC[1;5R` encodes Ctrl+F3 on some terminals.  AFK binds no action to
+//   F3 or its modifiers on either the compositor or the reader, so dropping
+//   any CPR-shaped sequence while the guard is active is safe today.  The
+//   guard is ONLY armed when a CPR is actually expected (request just emitted)
+//   or recently timed out (grace window, see CPR_KEYPRESS_GRACE_MS).  Outside
+//   that narrow window CPR-shaped sequences pass through normally, so a
+//   Ctrl+F3 press during ordinary editing is unaffected.  If AFK ever binds
+//   F3/Ctrl+F3, the guard should compare the expected {row,col} instead of
+//   pattern-matching, dropping only an exact CPR match.
+
+/** Additional ms to keep the guard active after a CPR timeout or reply. */
+export const CPR_KEYPRESS_GRACE_MS = 500;
+
+/** Epoch-ms deadline until which CPR-shaped keypresses are dropped on `_guardedStdin`. */
+let _guardDeadline = 0;
+
+/** The stdin stream the guard is associated with. */
+let _guardedStdin: NodeJS.ReadableStream | null = null;
+
+/** Cleanup timer (auto-disarm). */
+let _guardTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Arm (or extend) the CPR keypress guard on `stdin` for `durationMs` ms.
+ *
+ * While the guard is active, `isCprKeypressGuardActive(stdin)` returns true
+ * and every keypress consumer is expected to drop events whose sequence
+ * matches `CPR_REPLY_RE`.  Calling this again before the deadline extends it
+ * to the later of the two expirations.
+ *
+ * Called from `_requestCpr` (in `terminal-compositor.lifecycle.cpr.ts`) when
+ * a CPR request is emitted and again on timeout to cover the grace window.
+ */
+export function armCprKeypressGuard(stdin: NodeJS.ReadableStream, durationMs: number): void {
+  const newDeadline = Date.now() + durationMs;
+
+  if (_guardedStdin !== null && _guardedStdin !== stdin) {
+    // Different stream — disarm the old guard before installing a new one.
+    // Log a diagnostic under AFK_DEBUG_COMPOSITOR so stream-swap surprises
+    // are visible without polluting normal output.
+    if (env.AFK_DEBUG_COMPOSITOR) {
+      process.stderr.write(
+        '[afk/cpr] armCprKeypressGuard: stream swap detected while guard is active —' +
+        ' disarming previous guard and arming on new stream\n',
+      );
+    }
+    _disarm();
+  }
+
+  _guardedStdin = stdin;
+
+  if (newDeadline <= _guardDeadline) return; // already covered
+
+  _guardDeadline = newDeadline;
+  if (_guardTimer !== null) { clearTimeout(_guardTimer); _guardTimer = null; }
+  _guardTimer = setTimeout(_disarm, durationMs);
+  // Unref so the guard timer does not keep the event loop alive past process
+  // exit.  The guard is a safety net — if it fires during shutdown, there is
+  // no meaningful work left to do.  Without unref the timer can hold the loop
+  // for up to CPR_KEYPRESS_GRACE_MS (~500ms) beyond the last real task.
+  _guardTimer.unref();
+}
+
+function _disarm(): void {
+  if (_guardTimer !== null) { clearTimeout(_guardTimer); _guardTimer = null; }
+  _guardDeadline = 0;
+  _guardedStdin = null;
+}
+
+/**
+ * Immediately disarm the CPR keypress guard.
+ *
+ * Call this after successfully consuming a CPR reply so the guard does not
+ * persist for the full `timeoutMs + CPR_KEYPRESS_GRACE_MS` window when the
+ * reply arrived promptly.  Calling when the guard is already inactive is a
+ * no-op.
+ */
+export function disarmCprKeypressGuard(): void {
+  _disarm();
+}
+
+/**
+ * Returns true when any keypress event on `stdin` whose sequence matches
+ * `CPR_REPLY_RE` should be silently dropped.
+ *
+ * Consumers call this at the top of their keypress handler.  When it returns
+ * true the handler must check `CPR_REPLY_RE.test(key?.sequence ?? '')` and
+ * return early without processing the event.
+ */
+export function isCprKeypressGuardActive(stdin: NodeJS.ReadableStream): boolean {
+  return _guardedStdin === stdin && Date.now() <= _guardDeadline;
+}
+
+/**
+ * True when `sequence` looks like a CPR reply and the guard is armed.
+ * Convenience wrapper combining `isCprKeypressGuardActive` + the CPR pattern.
+ */
+export function isCprSequence(stdin: NodeJS.ReadableStream, sequence: string): boolean {
+  return isCprKeypressGuardActive(stdin) && _CPR_REPLY_RE.test(sequence);
+}
+
+/**
+ * Test helper: reset all CPR keypress guard state.
+ * Must only be called from tests.
+ */
+export function __resetCprKeypressGuardForTests(): void {
+  _disarm();
 }

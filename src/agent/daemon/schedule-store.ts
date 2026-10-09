@@ -20,19 +20,18 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  renameSync,
   statSync,
   unlinkSync,
-  writeFileSync,
   writeSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { getSchedulesPath } from '../../paths.js';
 import { expandCwd } from './cwd-validator.js';
 import type { ScheduledTask, TaskExecutor } from './triggers.js';
 import { errorMessage } from '../../utils/errors.js';
 import { sleepSync } from '../../utils/sleep-sync.js';
+import { writeJsonFile } from '../../utils/json-file.js';
 
 // ---------------------------------------------------------------------------
 // Advisory file lock (O_EXCL)
@@ -229,23 +228,9 @@ export function loadSchedules(path?: string): ScheduledTaskConfig[] {
  */
 export function saveSchedules(configs: ScheduledTaskConfig[], path?: string): void {
   const storePath = path ?? getSchedulesPath();
-  mkdirSync(dirname(storePath), { recursive: true });
-  const tmp = join(
-    dirname(storePath),
-    `.schedules.json.${process.pid}.${randomBytes(4).toString('hex')}.tmp`,
-  );
-  const payload = JSON.stringify(configs, null, 2);
-  try {
-    writeFileSync(tmp, payload, 'utf-8');
-    renameSync(tmp, storePath);
-  } catch (err) {
-    try {
-      if (existsSync(tmp)) unlinkSync(tmp);
-    } catch {
-      /* best effort cleanup */
-    }
-    throw err;
-  }
+  // atomicWriteFile (via writeJsonFile) creates parent dirs (mkdirp: true by default).
+  // Config files are not secret, but we keep 0o600 to match prior behaviour.
+  writeJsonFile(storePath, configs);
 }
 
 /**

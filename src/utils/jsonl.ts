@@ -19,6 +19,10 @@
  * @module utils/jsonl
  */
 
+import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
+import * as readline from 'node:readline';
+
 /** Options for {@link parseJsonlLines}. */
 export interface ParseJsonlOptions<T> {
   /**
@@ -85,4 +89,183 @@ export function parseJsonlLines<T = unknown>(
   }
 
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// readJsonlFile — streaming, fd-safe, ENOENT-aware async generator
+// ---------------------------------------------------------------------------
+
+/**
+ * Streaming JSONL reader — opens the file once with a readline interface and
+ * yields each successfully-parsed value. Handles ENOENT gracefully (zero
+ * values). Malformed lines are skipped (tolerant contract identical to
+ * `parseJsonlLines`).
+ *
+ * The file descriptor is always closed, even on early generator return.
+ *
+ * @typeParam T - Element type. Without a `guard`, every parsed value is
+ *   yielded as `unknown`.
+ * @param filePath - Absolute path to the `.jsonl` file.
+ * @param options  - Optional type guard and parse-error callback.
+ */
+export async function* readJsonlFile<T = unknown>(
+  filePath: string,
+  options: ParseJsonlOptions<T> = {},
+): AsyncGenerator<T> {
+  const { guard, onParseError } = options;
+
+  let fd: fsp.FileHandle;
+  try {
+    fd = await fsp.open(filePath, 'r');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw e;
+  }
+
+  try {
+    const rl = readline.createInterface({
+      input: fd.createReadStream({ encoding: 'utf8' }),
+      crlfDelay: Infinity,
+    });
+
+    for await (const line of rl) {
+      const trimmed = line.trim();
+      if (trimmed === '') continue;
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        onParseError?.(trimmed);
+        continue;
+      }
+
+      if (guard !== undefined) {
+        if (!guard(parsed)) continue;
+        yield parsed;
+      } else {
+        yield parsed as T;
+      }
+    }
+  } finally {
+    await fd.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// IncrementalLineReader — byte/framing state for incremental reads
+// ---------------------------------------------------------------------------
+
+/**
+ * Stateful reader that handles incremental byte reads from a growing JSONL
+ * file. Callers feed raw UTF-8 chunks; `IncrementalLineReader` buffers
+ * incomplete lines across reads and emits complete lines on each call.
+ *
+ * Design notes:
+ *   - `buffer` holds bytes that have not yet been terminated by `\n`.
+ *   - `lines()` returns only complete (newline-terminated) lines.
+ *   - `flush()` drains any remaining buffered content as a final line (use
+ *     at EOF if the file lacks a trailing newline).
+ *   - The caller tracks `fileOffset` and is responsible for advancing it —
+ *     this class owns only the framing state, not the I/O.
+ *
+ * Typical usage:
+ * ```ts
+ * const reader = new IncrementalLineReader();
+ * // … read new bytes into `chunk` …
+ * for (const line of reader.feed(chunk)) {
+ *   // process complete line
+ * }
+ * // at EOF:
+ * for (const line of reader.flush()) { … }
+ * ```
+ */
+export class IncrementalLineReader {
+  private buffer: string = '';
+
+  /**
+   * Feed a new UTF-8 chunk. Returns an iterable of complete lines (without
+   * the trailing `\n`). Incomplete lines are buffered for the next call.
+   */
+  feed(chunk: string): string[] {
+    this.buffer += chunk;
+    const parts = this.buffer.split('\n');
+    // The last element is either empty (trailing \n) or an incomplete line.
+    this.buffer = parts.pop() ?? '';
+    return parts;
+  }
+
+  /**
+   * Drain any remaining buffered content as a final line. Call once at EOF
+   * (when the file has no trailing newline). Safe to call even when the
+   * buffer is empty — returns an empty array in that case.
+   */
+  flush(): string[] {
+    if (this.buffer === '') return [];
+    const remaining = this.buffer;
+    this.buffer = '';
+    return [remaining];
+  }
+
+  /** Current length of the internal buffer (bytes awaiting a newline). */
+  get bufferedLength(): number {
+    return this.buffer.length;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// appendJsonl — explicit mode/error policy
+// ---------------------------------------------------------------------------
+
+/** Policy for how `appendJsonl` handles errors during the write. */
+export type AppendJsonlErrorPolicy =
+  /** Silently ignore write errors (fire-and-forget). Default. */
+  | 'ignore'
+  /** Re-throw the original error to the caller. */
+  | 'throw';
+
+/** Options for {@link appendJsonl}. */
+export interface AppendJsonlOptions {
+  /**
+   * Error policy on `appendFile` failure.
+   * - `'ignore'` (default): swallow the error silently.
+   * - `'throw'`:  re-throw to the caller.
+   */
+  errorPolicy?: AppendJsonlErrorPolicy;
+}
+
+/**
+ * Serialize `value` to JSON and append it as a single JSONL line (with a
+ * trailing newline) to `filePath`. The parent directory must already exist;
+ * this function does not call `mkdirSync` / `mkdirp`.
+ *
+ * Uses `fs.appendFileSync` — synchronous, atomic per-write on Linux/macOS
+ * for writes under 4 KB. For larger payloads or write-heavy paths, callers
+ * that already own an open write stream should continue using that stream
+ * directly.
+ *
+ * The `errorPolicy` option controls what happens when the underlying
+ * `appendFileSync` fails:
+ *   - `'ignore'` (default): the error is swallowed, matching the pre-existing
+ *     behavior of most call-sites that wrapped `appendFileSync` in a try/catch
+ *     with an empty catch block.
+ *   - `'throw'`: the error is re-thrown so the caller can log or propagate it.
+ *
+ * @param filePath    - Absolute path to the `.jsonl` file.
+ * @param value       - Any JSON-serializable value.
+ * @param options     - Optional error policy.
+ */
+export function appendJsonl(
+  filePath: string,
+  value: unknown,
+  options: AppendJsonlOptions = {},
+): void {
+  const { errorPolicy = 'ignore' } = options;
+  const line = `${JSON.stringify(value)}\n`;
+  try {
+    fs.appendFileSync(filePath, line, 'utf-8');
+  } catch (err) {
+    if (errorPolicy === 'throw') throw err;
+    // 'ignore': swallow silently
+  }
 }

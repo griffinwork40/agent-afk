@@ -42,12 +42,14 @@ vi.mock('../palette.js', () => ({
 import { spawn } from 'child_process';
 import { fetchLatestVersion, writePendingUpdateMarker, writeUpdateCache } from '../update-checker.js';
 import { registerUpdateCommand } from './update.js';
+import { getVersion } from '../version.js';
 import { EventEmitter } from 'events';
 
 const mockFetchLatestVersion = vi.mocked(fetchLatestVersion);
 const mockWritePendingUpdateMarker = vi.mocked(writePendingUpdateMarker);
 const mockWriteUpdateCache = vi.mocked(writeUpdateCache);
 const mockSpawn = vi.mocked(spawn);
+const mockGetVersion = vi.mocked(getVersion);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -149,6 +151,18 @@ describe('afk update', () => {
       mockFetchLatestVersion.mockResolvedValue('1.12.0');
       await runUpdate('--check');
       expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it('--check reports update available when running a prerelease of the same core as latest', async () => {
+      // isPrerelease hardening: a running 1.10.1-rc.1 should be offered 1.10.1.
+      // The earlier `v.includes('-')` logic handled this correctly but the new
+      // regex must too — this test guards both the old and new code path.
+      mockGetVersion.mockReturnValueOnce('1.10.1-rc.1');
+      mockFetchLatestVersion.mockResolvedValue('1.10.1');
+      await runUpdate('--check');
+      const output = consoleSpy.mock.calls.flat().join('\n');
+      expect(output).toContain('Update available');
+      expect(output).toContain('1.10.1');
     });
   });
 

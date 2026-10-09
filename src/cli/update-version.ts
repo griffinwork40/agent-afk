@@ -39,9 +39,12 @@
 export function isNewerVersion(current: string, latest: string): boolean {
   // Drop prerelease and build-metadata suffixes to get the numeric core.
   const core = (v: string): string => v.split(/[-+]/, 1)[0] ?? v;
-  // A `-` suffix denotes a prerelease; `+` is build metadata only and does
-  // NOT lower precedence per semver, so we only test for `-` here.
-  const isPrerelease = (v: string): boolean => v.includes('-');
+  // A `-` immediately after the numeric core denotes a prerelease per semver.
+  // `v.includes('-')` is overly broad: a build-metadata string like
+  // `1.2.3+build-sha` contains a hyphen in the metadata segment and must NOT
+  // be treated as a prerelease. The regex anchors the hyphen right after the
+  // three-part version core so only true pre-release markers match.
+  const isPrerelease = (v: string): boolean => /^\d+\.\d+\.\d+-/.test(v);
 
   const c = core(current).split('.').map(Number);
   const l = core(latest).split('.').map(Number);

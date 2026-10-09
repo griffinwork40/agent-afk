@@ -118,6 +118,15 @@ export interface FrameHost {
    * the CPR reply arrives and applyScrollDelta runs.
    */
   cprPending: boolean;
+  /**
+   * True after a SIGWINCH (and only a SIGWINCH) until the next successful
+   * `repositionCommittedBand` re-pin. Distinct from `bandGeometryStale`, which
+   * is also set by `resumeInput()` for legitimate suspend/resume purposes.
+   * While `resizeGeometryStale` is set, absolute row coordinates
+   * (anchorRow, logUpdate.topRow) reflect the pre-resize layout and must not be
+   * trusted for legacy deficit-eviction decisions (#3212).
+   */
+  resizeGeometryStale: boolean;
   // ── collaborators ──
   readonly scrollRegion?: CompositorScrollRegionGuard;
   readonly stdout: NodeJS.WriteStream;

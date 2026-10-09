@@ -11,6 +11,105 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.307.3] - 2026-10-09
+
+### Changed
+- give unnamed subagents a scoped worker prompt instead of the full parent base (~54 KB) (#3324) (09ca83dd)
+
+## [5.307.2] - 2026-10-09
+
+### Added
+- push wave-resume offers to Telegram from daemon; include in-flight tasks in crash notices (#3323) (50ed2aa7)
+
+### Changed
+- add json-file + pathExists helpers, migrate 13 call sites (#3329) (1c7cb9e7)
+
+## [5.307.1] - 2026-10-09
+
+### Added
+- ship a reusable GitHub Action for running afk in CI (#3321) (82e44ca7)
+
+### Fixed
+- force HTTP/1.1 for all model API calls to prevent nghttp2 DATA-frame freeze on Node 26 (#3336) (0ce406ba)
+
+## [5.307.0] - 2026-10-09
+
+### Added
+- add OverlapAlertLatch — one Telegram alert per overlap episode (#3326) (7b90c16b)
+- aggregate subagent outcomes by model, type and depth and surface in get_runtime_state (#3328) (43540bc2)
+
+### Fixed
+- address CPR late-reply advisory findings from #3240 review (#3314) (6a932100)
+- harvest flags from flat-installed plugin roots (#3333) (849c625a)
+- address advisory findings from 2026-10-08 /pr-triage (#3294–#3309) (#3325) (3b3ab7b5)
+
+### Changed
+- split system prompt into stable cached prefix and volatile env tail (#3322) (a7202c80)
+- shared JSONL helpers and bounded schedule-telemetry reader (#3327) (2edd291f)
+
+## [5.306.4] - 2026-10-09
+
+### Fixed
+- block restricted paths in bash on headless surfaces (#2312) (9becef0b)
+
+## [5.306.3] - 2026-10-08
+
+### Changed
+- shared type-guards, sleep, truncate, truncateTelegramLabel, stripAnsi in tests (#3318) (eb6a5650)
+
+## [5.306.2] - 2026-10-08
+
+### Fixed
+- apply advisory findings from 2026-10-07 pr-triage (#3316) (24c952c5)
+
+### Changed
+- surface /whatif and Jev as differentiators in README (#3315) (e04095c8)
+- shared walker + resolveTraceFile + groupViolationsByFile; fix --reason drift in check-test-typecheck (#3319) (495196f4)
+- extract checkout-lifecycle helpers; plugin update warns before discarding edits (#3317) (d7eb6282)
+
+## [5.306.1] - 2026-10-08
+
+### Fixed
+- share normalizeSystemPromptOverlay; fix OpenAI preset {append} drop (#3305) (29241d8c)
+
+## [5.306.0] - 2026-10-08
+
+### Added
+- add preexisting-defect ledger reader and afk insights section (#3307) (1dbc57c5)
+- operator tool deny list (tools.disabled) with /config → Tools toggles (#3297) (abbd92bb)
+
+## [5.305.8] - 2026-10-08
+
+### Fixed
+- add mid-session endpoint switch tests for reasoning replay (#3309) (6827c08e)
+- apply advisory findings from 2026-10-08 pr-triage (#3296) (08175418)
+
+### Changed
+- add wiring regression tests for PreToolUse injectContext delivery (#3308) (b78b8c69)
+- add router anthropic/xai branches and model_complete path-approval once/subagent cases (#3294) (ebedf10c)
+
+## [5.305.7] - 2026-10-08
+
+### Fixed
+- address advisory findings from 2026-10-08 /pr-triage (#3295) (b7bda6f0)
+
+### Changed
+- openai-compatible compaction defaults to gpt-6-luna on real OpenAI endpoints (#3288) (481340df)
+
+## [5.305.6] - 2026-10-08
+
+### Fixed
+- tidy three comment nits in mascot.ts and mascot-mini.ts (#3115) (8cd25714)
+- replace fixed sleep with vi.waitFor in heartbeat test (#3285) (eafc8118)
+- accept collapsed-frame marker as Python traceback predecessor (#3287) (8883a81a)
+- guard CPR late-reply leak + adaptive timeout (#3240) (a25d355b)
+- prefer timeoutSignal.aborted over caller signal when both fire (#3286) (2d66cbc2)
+
+## [5.305.5] - 2026-10-08
+
+### Fixed
+- enforce named-agent tool and bash restrictions on compose nodes; block peer tools for children at dispatch (#3270) (d9fdf69b)
+
 ## [5.305.4] - 2026-10-08
 
 ### Added

@@ -118,6 +118,11 @@ const compactCmd: SlashCommand = {
       // round), so a 12-prompt session reads as "Compacted 247 → 5 messages".
       // Snapshot the genuine user-prompt count before and after compaction the
       // same way /rewind does (fix #3109), so the two commands stay consistent.
+      // Coupling note: `listRewindTargets()` runs while the compaction spinner
+      // is already armed (inside the PreCompact guard window), so it sees the
+      // pre-compaction history — this is intentional. If `compact()` is ever
+      // refactored to call `listRewindTargets()` internally, the before/after
+      // snapshot split here will need revisiting.
       const promptsBefore = session.listRewindTargets().length;
       const result = await session.compact();
       const promptsAfter = session.listRewindTargets().length;

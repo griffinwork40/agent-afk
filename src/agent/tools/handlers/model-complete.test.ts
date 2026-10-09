@@ -210,6 +210,28 @@ describe('model_complete handler', () => {
     expect(res).toMatchObject({ isError: true, content: 'model_complete: aborted.' });
   });
 
+  it('reports timed out (not aborted) when both the timeout and caller signal fire', async () => {
+    // Simulate the race: the 300 s timeoutSignal fires first, then the caller
+    // signal also aborts before the catch block runs. The result should say
+    // "timed out" not "aborted" so slow-provider failures are diagnosable.
+    const ac = new AbortController();
+    routedOneShotWithStop.mockImplementation(async ({ signal: s }: { signal: AbortSignal }) => {
+      // Wait until callSignal is aborted (simulating a timeout firing)
+      await new Promise<void>((resolve) => {
+        if (s.aborted) { resolve(); return; }
+        s.addEventListener('abort', () => resolve(), { once: true });
+      });
+      // Also abort the caller signal to reproduce the race
+      ac.abort();
+      throw Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+    });
+    // Use a 0 ms timeout to trigger the timeout signal immediately
+    const origTimeout = AbortSignal.timeout;
+    vi.spyOn(AbortSignal, 'timeout').mockImplementationOnce((_ms: number) => origTimeout(0));
+    const res = await createModelCompleteHandler(tmp)({ prompt: 'x' }, ac.signal);
+    expect(res).toMatchObject({ isError: true, content: 'model_complete: timed out after 300s.' });
+  });
+
   it('flags an empty reply and truncates an oversized one', async () => {
     const handler = createModelCompleteHandler(tmp);
     routedOneShotWithStop.mockResolvedValueOnce({ text: '', stopReason: 'end' });

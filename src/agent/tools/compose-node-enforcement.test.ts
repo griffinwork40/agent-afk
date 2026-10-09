@@ -50,6 +50,7 @@ vi.mock('../routing-telemetry.js', () => ({
 import { ComposeExecutor, type ComposeExecutorContext } from './compose-executor.js';
 import { builtinAgents } from '../agents/builtins.js';
 import { WorkspaceStore } from '../workspace/workspace-store.js';
+import { XaiProvider } from '../providers/xai/index.js';
 
 const agentRegistry = builtinAgents();
 
@@ -248,13 +249,17 @@ describe.each(MODELS)('compose node enforcement — %s', (providerName, model) =
  */
 
 /**
- * Build the per-query dispatcher through XaiProvider's private inner
- * OpenAICompatibleProvider so restriction enforcement is exercised end-to-end.
+ * Build the per-query dispatcher through XaiProvider's typed test accessor
+ * (`_innerForTesting`) so restriction enforcement is exercised end-to-end
+ * without unsafe `as any` casts.
  */
 function xaiChildDispatcher(provider: ModelProvider): SessionToolDispatcher {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const inner = (provider as any).inner;
-  if (inner === undefined) throw new Error('XaiProvider.inner is undefined — structure has changed');
+  if (!(provider instanceof XaiProvider)) {
+    throw new Error(`Expected XaiProvider but got ${provider.name} — structure has changed`);
+  }
+  const inner = provider._innerForTesting;
+  // `buildDispatcher` is private on OpenAICompatibleProvider; reach it via
+  // the same pattern as the Anthropic-direct `childDispatcher` helper above.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (inner as any).buildDispatcher('default', {
     cwd: tmp,

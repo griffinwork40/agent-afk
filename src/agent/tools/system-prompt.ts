@@ -7,6 +7,8 @@
  * @module agent/tools/system-prompt
  */
 
+import { SUBAGENT_HANDOFF_CONTRACT } from '../subagent-contract.js';
+
 /**
  * Base tool-usage conventions — filesystem, shell, and investigation patterns.
  * Safe to include in every session (main sessions AND skill-dispatch sub-agents).
@@ -102,9 +104,71 @@ Attributes: \`from\` (sender session id), \`name\` (friendly label if set), \`id
  * Full tool system prompt — base conventions + slash-command routing +
  * bash-passthrough + background-subagent result delivery + queued-message
  * flush. Backwards-compat export; consumers that want only the base (e.g.
- * skill sub-agents) should use \`TOOL_SYSTEM_PROMPT_BASE\` directly.
+ * skill sub-agents) should use `TOOL_SYSTEM_PROMPT_BASE` directly.
  */
 export const TOOL_SYSTEM_PROMPT = `${TOOL_SYSTEM_PROMPT_BASE}\n\n${SLASH_COMMAND_ROUTING_PROMPT}\n\n${BASH_PASSTHROUGH_PROMPT}\n\n${BG_SUBAGENT_RESULT_PROMPT}\n\n${BG_PROCESS_RESULT_PROMPT}\n\n${QUEUED_USER_MESSAGE_PROMPT}\n\n${PEER_MESSAGE_PROMPT}`;
+
+/**
+ * Scoped worker prompt for unnamed (bare `agent` tool) subagent dispatches.
+ *
+ * An unnamed dispatch previously inherited the full coordinator base prompt
+ * (~54 KB from `system-prompt.md` + operator overlay), which is framed for
+ * the top-level coordinator and carries routing instructions, skill manifests,
+ * hot memory guidance, and orchestration posture that worker children neither
+ * need nor should act on. This lean replacement contains exactly two things:
+ *
+ * 1. {@link TOOL_SYSTEM_PROMPT_BASE} — the filesystem/shell conventions the
+ *    child needs to use its own tools correctly. Identical to what
+ *    skill-dispatch sub-agents already receive (via
+ *    `resolveToolSystemPrompt(isSkillDispatch)`).
+ * 2. {@link SUBAGENT_HANDOFF_CONTRACT} — tells the child to keep its final
+ *    reply compact and offload bulk output to files, preventing
+ *    `StreamIncompleteError` on large replies.
+ *
+ * Identity preamble (depth/budget/non-interactive) and the workspace preamble
+ * are injected separately by `assembleChildConfig` / `injectWorkspacePreamble`
+ * and are NOT part of this constant — those injection points already run for
+ * every fork path and appending them here would double-inject.
+ *
+ * Named agents keep their own definition prompts unchanged; this constant is
+ * used only for the bare (no `agent_type`) dispatch path.
+ *
+ * @see SUBAGENT_HANDOFF_CONTRACT
+ */
+export const UNNAMED_SUBAGENT_WORKER_PROMPT = `${TOOL_SYSTEM_PROMPT_BASE}\n\n${SUBAGENT_HANDOFF_CONTRACT}`;
+
+/**
+ * Header placed between {@link UNNAMED_SUBAGENT_WORKER_PROMPT} and the
+ * operator overlay. Same `# Operator configuration` heading the parent uses
+ * (`OPERATOR_CONFIG_HEADER` in `src/cli/system-prompt.ts`), but worker-framed:
+ * the parent header points at the framework's "Priorities or Constraints",
+ * which a worker child never receives, so reusing it verbatim would dangle.
+ */
+export const WORKER_OPERATOR_CONFIG_HEADER =
+  '# Operator configuration\n\n' +
+  "The instructions below come from this operator's configuration (AFK.md, " +
+  'afk.config.json, or AFK_SYSTEM_PROMPT). Treat them as refinements layered ' +
+  'on top of the conventions above. Guidance aimed at the top-level ' +
+  'coordinator (talking to the user, dispatching or coordinating subagents) ' +
+  'applies to you only where it fits your scoped task.';
+
+/**
+ * System prompt for an unnamed (bare `agent`) subagent dispatch: the lean
+ * {@link UNNAMED_SUBAGENT_WORKER_PROMPT}, plus the operator overlay appended
+ * under {@link WORKER_OPERATOR_CONFIG_HEADER} when one is configured.
+ *
+ * Contract: `operatorOverlay` is the BARE overlay (`loadConfig().systemPrompt`
+ * or a per-chat override), never the composed framework+overlay base, so the
+ * ~54 KB coordinator framework is still not forwarded (#3242) while the
+ * operator's instructions are (#3324). `undefined` / whitespace-only → exactly
+ * {@link UNNAMED_SUBAGENT_WORKER_PROMPT}, with no dangling header.
+ */
+export function composeUnnamedWorkerPrompt(operatorOverlay: string | undefined): string {
+  if (operatorOverlay === undefined || operatorOverlay.trim().length === 0) {
+    return UNNAMED_SUBAGENT_WORKER_PROMPT;
+  }
+  return `${UNNAMED_SUBAGENT_WORKER_PROMPT}\n\n${WORKER_OPERATOR_CONFIG_HEADER}\n\n${operatorOverlay}`;
+}
 
 /**
  * Workspace usage instructions — teaches the model when and why to use

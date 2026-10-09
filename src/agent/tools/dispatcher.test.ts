@@ -116,6 +116,43 @@ describe('SessionToolDispatcher', () => {
     });
   });
 
+  describe('isNonInteractive injection (#2302, PR #2312 review)', () => {
+    // The explicit headless signal: grant-manager presence cannot carry it,
+    // because production providers wire themselves on every surface.
+    const fakeGM = {
+      getGrants: () => ({ resolveBase: undefined, readRoots: [], writeRoots: [] }),
+      addReadRoot: () => {},
+      addWriteRoot: () => {},
+      revokeRoot: () => {},
+    };
+
+    async function capturedNonInteractive(
+      overrides: Partial<ConstructorParameters<typeof SessionToolDispatcher>[0]>,
+    ): Promise<unknown> {
+      let captured: unknown = 'unset';
+      const registry = createHookRegistry();
+      registry.register('PreToolUse', (ctx) => {
+        if (ctx.event === 'PreToolUse') captured = ctx.nonInteractive;
+        return {};
+      });
+      await makeDispatcher({ hookRegistry: registry, ...overrides }).execute(makeCall());
+      return captured;
+    }
+
+    it('sets context.nonInteractive alongside a wired grant manager', async () => {
+      expect(
+        await capturedNonInteractive({ sessionGrantManager: fakeGM, isNonInteractive: true }),
+      ).toBe(true);
+    });
+
+    it('leaves context.nonInteractive undefined on an interactive dispatcher', async () => {
+      expect(await capturedNonInteractive({ sessionGrantManager: fakeGM })).toBeUndefined();
+      expect(
+        await capturedNonInteractive({ sessionGrantManager: fakeGM, isNonInteractive: false }),
+      ).toBeUndefined();
+    });
+  });
+
   it('returns isError for unknown tool', async () => {
     const dispatcher = makeDispatcher({
       permissions: { allowedTools: ['echo', 'nonexistent'] },

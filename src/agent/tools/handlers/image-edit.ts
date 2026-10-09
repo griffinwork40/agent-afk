@@ -7,7 +7,9 @@
  *
  * Auth resolution (same chain as image_generate, highest wins):
  *   1. `AFK_IMAGE_API_KEY`   — dedicated billing key
- *   2. `resolveOpenAIAuth()` — OPENAI_API_KEY / Codex / ChatGPT OAuth
+ *   2. `resolveOpenAIAuth()` — OPENAI_API_KEY / Codex auth.json
+ *   Note: ChatGPT subscription OAuth is explicitly rejected — the Images Edit
+ *   endpoint does not accept those tokens (wrong OAuth scope).
  *
  * Safety layers (identical to image_generate):
  *   - Registered in the effect ledger as ALWAYS_EXTERNAL (classifier.ts).
@@ -280,7 +282,7 @@ export function createImageEditHandler(
       authSource = 'AFK_IMAGE_API_KEY';
     } else {
       const resolved = resolveOpenAIAuth(undefined);
-      if (resolved.apiKey && resolved.source === 'chatgpt-oauth') {
+      if (resolved.source === 'chatgpt-oauth') {
         // The standard Images Edit endpoint does not accept ChatGPT OAuth tokens
         // (their OAuth scopes exclude api.model.images.request). Unlike
         // image_generate, there is no ChatGPT backend path for image editing.

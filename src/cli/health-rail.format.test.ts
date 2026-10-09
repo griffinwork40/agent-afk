@@ -4,12 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { formatHealthRail } from './health-rail.format.js';
-
-/** Strip all ANSI escape codes for plain-text assertion. */
-function stripAnsi(s: string): string {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/\x1b\[[0-9;]*m/g, '');
-}
+import { stripAnsi } from './display.js';
 
 describe('formatHealthRail', () => {
   it('contains turn count with T prefix', () => {

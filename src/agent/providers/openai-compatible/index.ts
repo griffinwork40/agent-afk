@@ -23,7 +23,9 @@ import { resolveSessionHookRegistry } from '../../hooks.js';
 import type { SubagentExecutor } from '../../tools/subagent-executor.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import type { ComposeExecutor } from '../../tools/compose-executor.js';
-import { withMcpToolsAllowed, withCustomToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
+import type { ToolPermissionConfig } from '../../tools/permissions.js';
+import { composeDispatcherPermissions } from '../../tools/permissions-compose.js';
+import { snapshotOperatorOptions, operatorDispatcherToolDefs } from '../../tools/operator-denied-dispatcher.js';
 import type { CanUseTool } from '../../types/sdk-types.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
@@ -63,7 +65,7 @@ import {
 import { resolveSessionId, registerSessionPresence } from './session-wiring.js';
 import { buildSystemPromptWiring } from './system-prompt-wiring.js';
 import { type ChildSessionOptions, isStateRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
-import { sessionRegistryOpts, type BuildDispatcherOpts } from './index.dispatcher-opts.js';
+import { headlessSignalOpts, interactivityOpts, sessionRegistryOpts, type BuildDispatcherOpts } from './index.dispatcher-opts.js';
 
 const PROVIDER_NAME = 'openai-compatible';
 
@@ -188,7 +190,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
   private readonly _spawnedPidRegistry = new SpawnedPidRegistry();
 
   constructor(opts: OpenAICompatibleProviderOptions = {}) {
-    this.providerOpts = opts;
+    this.providerOpts = snapshotOperatorOptions(opts);
     this._defaultHeaders = opts.defaultHeaders;
     this._memoryStore = opts.memoryStore;
     this.workspaceStore = opts.workspaceStore;
@@ -316,8 +318,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // intercepted by the awareness handler. Otherwise the inner dispatcher
     // would return `Unknown tool` for a tool the model legitimately sees in
     // its schema list. See wrapDispatcherWithRuntimeState for the invariant.
+    // Stamp toolDefs on the external-dispatcher wrapper so query.ts:246 picks
+    // up the schema list — mirrors dispatcher-wiring.ts:219 (Anthropic path).
     dispatcher = this.providerOpts.tools
-      ? wrapDispatcherWithRuntimeState(this.providerOpts.tools, runtimeStateSource)
+      ? Object.assign(wrapDispatcherWithRuntimeState(this.providerOpts.tools, runtimeStateSource),
+          { toolDefs: operatorDispatcherToolDefs(this.providerOpts.tools, selectBaseSchemas(this.schemas, { isSkillDispatch: config.isSkillDispatch, isNonInteractive: config.isNonInteractive })) })
       : this.buildDispatcher(permissionMode, {
           ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
           ...(this._sharedReadRoots !== undefined ? { readRoots: this._sharedReadRoots } : {}),
@@ -342,7 +347,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
           ...sessionRegistryOpts(config),
           runtimeStateSource,
           ...(config.isSkillDispatch ? { isSkillDispatch: true } : {}),
-          ...(config.isNonInteractive ? { isNonInteractive: true } : {}),
+          ...interactivityOpts(config), // ask_question strip + #2302 headless bash floor
           ...(config.hookRegistry !== undefined ? { hookRegistry: config.hookRegistry } : {}),
           ...(config.planExitControls !== undefined ? { planExitControls: config.planExitControls } : {}),
         });
@@ -487,18 +492,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
       // makes a silent drop (c6892c6) a compile error.
       hookRegistry: resolveSessionHookRegistry(opts.hookRegistry, this.providerOpts.hookRegistry),
     };
-    // Union live MCP wire-names AND consumer-registered custom-tool names into
-    // the (statically-snapshotted) allowlist so neither is rejected by the gate
-    // while present in `schemas`/`handlers`. No-op when there is no allowlist
-    // (undefined => all allowed) or nothing to union. Mirrors
-    // AnthropicDirectProvider; restricted sub-agents carry no customTools.
-    const effectivePermissions = withCustomToolsAllowed(
-      this.providerOpts.mcpManager
-        ? withMcpToolsAllowed(
-            this.providerOpts.permissions,
-            this.providerOpts.mcpManager.getMcpToolWireNames(),
-          )
-        : this.providerOpts.permissions,
+    // MCP + custom-tool unions, then operator denies LAST (shared with
+    // AnthropicDirectProvider; invariant in tools/permissions-compose.ts).
+    const effectivePermissions = composeDispatcherPermissions(
+      this.providerOpts.permissions,
+      this.providerOpts.mcpManager?.getMcpToolWireNames(),
       (this.providerOpts.customTools ?? []).map((t) => t.schema.name),
     );
     if (effectivePermissions !== undefined) dispatcherOpts.permissions = effectivePermissions;
@@ -549,7 +547,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     if (planExitControls) dispatcherOpts.userAttention = userAttentionFrom(planExitControls);
     // #2542/#2735 detach registry + background process registry — parity with
     // AnthropicDirectProvider.buildDispatcher. Top-level REPL sessions only.
-    Object.assign(dispatcherOpts, sessionRegistryOpts(opts));
+    Object.assign(dispatcherOpts, sessionRegistryOpts(opts), headlessSignalOpts(opts));
 
     return new SessionToolDispatcher(dispatcherOpts);
   }

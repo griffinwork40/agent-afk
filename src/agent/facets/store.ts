@@ -14,8 +14,9 @@
  * touching $AFK_HOME.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'fs';
-import { basename, dirname, join, resolve } from 'path';
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { basename, join, resolve } from 'path';
+import { writeJsonFile } from '../../utils/json-file.js';
 import { getFacetCacheDir, getSessionJournalPath, getSessionLedgerPath, getSessionsDir, getSubagentJournalPath, getTraceDir, isSafeLedgerSessionId, validateSessionId } from '../../paths.js';
 import { journalExists, listSubagentJournals, readJournalRecords } from '../journal/reader.js';
 import { isMessageJournalDisabled } from '../journal/noop.js';
@@ -79,13 +80,11 @@ function readCachedFacet(cachePath: string): SessionFacet | undefined {
 }
 
 function writeFacet(cachePath: string, facet: SessionFacet): void {
-  mkdirSync(dirname(cachePath), { recursive: true });
-  // Atomic write: serialize to a sibling temp file then rename into place, so a
-  // crash mid-write can never leave a torn cache file (rename is atomic on the
-  // same filesystem). The .pid suffix avoids collisions between concurrent writers.
-  const tmpPath = `${cachePath}.${process.pid}.tmp`;
-  writeFileSync(tmpPath, `${JSON.stringify(facet, null, 2)}\n`, 'utf8');
-  renameSync(tmpPath, cachePath);
+  // Atomic write via writeJsonFile: serialises to a sibling temp file with a
+  // random suffix (crypto.randomBytes), then renames into place. A crash
+  // mid-write never leaves a torn cache file; rename is atomic on POSIX.
+  // writeJsonFile also creates parent dirs (mkdirp: true by default).
+  writeJsonFile(cachePath, facet);
 }
 
 /**

@@ -44,6 +44,7 @@ import type { WireMode } from '../responses-config.js';
 import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 import type { TraceSink } from '../../../trace/index.js';
 import { env } from '../../../../config/env.js';
+import { resolveOpenAICompactModel } from './compact-model-resolver.js';
 
 /** Live accessors the compaction handler needs from the owning query instance. */
 export interface CompactHandlerContext {
@@ -56,6 +57,8 @@ export interface CompactHandlerContext {
   readonly opts: {
     readonly auth: { readonly apiKey: string | null; readonly source: string };
     readonly config: { readonly subagentId?: string };
+    /** Optional baseURL override — `undefined` means the real OpenAI API. */
+    readonly baseURL?: string;
   };
   /** Mutable — must read live; changed by setModel(). */
   readonly currentModel: string;
@@ -145,7 +148,13 @@ export async function runCompactHistory(
       messagesAfter: messagesBefore,
     };
   }
-  const compactModel = env.AFK_COMPACT_MODEL ?? ctx.currentModel;
+  const compactModel = resolveOpenAICompactModel(
+    env.AFK_COMPACT_MODEL,
+    ctx.opts.baseURL,
+    env.OPENAI_BASE_URL,
+    ctx.opts.auth.source,
+    ctx.currentModel,
+  );
   const usedFraction = contextFullnessFraction(
     contextWindowTokensUsed(ctx.lastUsage ?? {}),
     autoCompactLimitFor(ctx.currentModel),

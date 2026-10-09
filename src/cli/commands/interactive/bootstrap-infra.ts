@@ -76,6 +76,8 @@ export function createBootstrapInfra(a: {
   cliConfig: CliConfig;
   sessionModel: string;
   basePrompt: string | undefined;
+  /** Bare operator overlay (no framework); reaches unnamed `agent` children (#3324). */
+  operatorOverlay?: string | undefined;
   effectiveCwd: string | undefined;
   resumeTarget: ResolvedResumeTarget | undefined;
   bootWarnings: string[];
@@ -188,6 +190,7 @@ export function createBootstrapInfra(a: {
     // Raw base prompt (pre-assembly): children and compose nodes stay task
     // workers, without ROUTING_DIRECTIVE / TOOL_SYSTEM_PROMPT.
     ...(a.basePrompt !== undefined ? { systemPrompt: a.basePrompt } : {}),
+    ...(a.operatorOverlay !== undefined ? { operatorOverlay: a.operatorOverlay } : {}),
     ...(a.cliConfig.baseUrl !== undefined ? { baseUrl: a.cliConfig.baseUrl } : {}),
     ...(a.cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: a.cliConfig.openaiBaseUrl } : {}),
     // Worktree cwd (`afk i --worktree`, or a resumed session's restored cwd)

@@ -22,6 +22,7 @@ import { guardContextOverflow } from './providers/shared/auto-compact.js';
 import type { AgentConfig } from './types/config-types.js';
 import { resetCatalogCache } from './providers/openai-compatible/models-catalog.js';
 import { useCodexCatalog } from '../__test-utils__/codex-catalog.js';
+import { OPENAI_COMPAT_THIRD_PARTY_PREFIXES } from './model-capabilities.js';
 
 describe('autoCompactLimitFor', () => {
   it('caps the default sonnet alias at the 200k working budget (not its 1M window)', () => {
@@ -323,20 +324,16 @@ describe('routesToOpenAICompatible fallback — third-party OpenAI-shim prefix f
   // routesToOpenAICompatible in model-limits.ts must match so unknown ids in
   // these families get the 262k openai-compatible default, not the 200k
   // Anthropic default (#2789 advisory).
-  const OPENAI_COMPAT_PREFIXES = [
-    'deepseek-v4-pro',
-    'deepseek_v4-pro',
-    'mistral-large-2407',
-    'mistral_large',
-    'mixtral-8x7b',
-    'mixtral_8x7b',
-    'llama-3.3-70b',
-    'llama_3.3-70b',
-    'qwen-2.5-72b',
-    'qwen_2.5-72b',
-  ];
+  //
+  // Test cases are generated from OPENAI_COMPAT_THIRD_PARTY_PREFIXES so a new
+  // prefix family in the shared constant automatically produces a regression
+  // test here — no manual sync required.
+  const OPENAI_COMPAT_TEST_IDS = OPENAI_COMPAT_THIRD_PARTY_PREFIXES.flatMap((p) => [
+    `${p}-unknown-variant-99`,
+    `${p}_unknown_variant_99`,
+  ]);
 
-  for (const id of OPENAI_COMPAT_PREFIXES) {
+  for (const id of OPENAI_COMPAT_TEST_IDS) {
     it(`${id} — falls back to 262k openai-compatible default (not 200k Anthropic)`, () => {
       // Unknown ids in these families have no MODEL_CONTEXT_LIMITS entry.
       // They must resolve to the 262k openai-compatible fallback, not 200k.
