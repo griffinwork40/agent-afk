@@ -123,10 +123,19 @@ export function repositionCommittedBand(
   // belong at [targetBottom - fit + 1, targetBottom], which the fit math below
   // computes. The paint is always above the frame top, so it never overwrites
   // the live frame.
-  if (targetBottom < floor && hiddenArchivedRows(self) === 0) return; // F2: band exists but has NO room above the
-  // current floor — do NOT clear bandGeometryStale here: committedBandBottomRow
-  // is left at its old (possibly stale) value below, so a later commit must
-  // keep distrusting it as a floor until a repaint actually re-establishes it.
+  if (targetBottom < floor && hiddenArchivedRows(self) === 0) {
+    // F2: band exists but has NO room above the current floor.
+    // Do NOT clear bandGeometryStale: committedBandBottomRow is left at its old
+    // (possibly stale) value, so a later commit must keep distrusting it as a
+    // floor until a repaint actually re-establishes it.
+    // DO clear resizeGeometryStale (#3371): unlike bandGeometryStale, this flag
+    // gates deficit eviction in preserveRowsBeforeFrameRender — leaving it set
+    // would suppress deficit eviction indefinitely after this early return (until
+    // a later repaint took the non-early path and cleared it).  The SIGWINCH
+    // geometry concern is distinct from the committedBandBottomRow floor concern.
+    self.resizeGeometryStale = false;
+    return;
+  }
   // F2: past this point `targetBottom`/`floor` are fresh values derived from
   // THIS repaint's real desiredTopRow/anchorRow, so whatever `fit` computes
   // (a real re-pin below, or "already correct, nothing moved") reflects
