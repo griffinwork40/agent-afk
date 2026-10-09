@@ -208,5 +208,6 @@ export function buildProviderQuery(
     // callback above, so the loop's consumer meets the fetch producer.
     ...(throttleQueue !== undefined ? { throttleQueue } : {}),
     ...(ctx.fastModeController !== undefined ? { fastModeController: ctx.fastModeController } : {}),
+    ...(config.enableFileCheckpointing ? { enableFileCheckpointing: true } : {}),
   });
 }

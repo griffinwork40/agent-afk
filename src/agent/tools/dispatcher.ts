@@ -58,6 +58,7 @@ import { isYieldableTool, type UserAttention } from './user-yield.js';
 import { isDetachableTool, type DetachableToolRegistry } from './detach-bash.js';
 import type { ProcessJobRegistry } from '../shell-jobs/process-jobs.js';
 import { filterBackgroundToolDefs } from './process-job-tools.js';
+import type { FileCheckpointRegistry } from '../file-checkpoint/file-checkpoint.js';
 import { isPeerToolBlocked } from './peer-tool-gate.js';
 
 // Re-exported for backward compatibility: external importers (dispatcher.test.ts,
@@ -358,6 +359,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly detachRegistry: DetachableToolRegistry | undefined;
   /** Background process registry; handed to `bash` and the background tools. */
   private readonly processJobs: ProcessJobRegistry | undefined;
+  /**
+   * File-checkpoint registry for the current user turn. Mutable so the
+   * provider can swap it in per-turn via {@link setFileCheckpoint}.
+   * `undefined` when file checkpointing is disabled for this session.
+   */
+  private _fileCheckpoint: FileCheckpointRegistry | undefined;
   /** Live bash output tail reporter factory (issue #1506). */
   private readonly bashOutputTailReporter:
     | ((toolUseId: string) => (tail: string | undefined) => void)
@@ -497,6 +504,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
       ...(this.sessionId !== undefined ? { sessionId: this.sessionId } : {}),
       // #1430: PID registry gates wait_for process condition to session-owned PIDs.
       ...(this.spawnedPidRegistry !== undefined ? { spawnedPidRegistry: this.spawnedPidRegistry } : {}),
+      // File-checkpoint registry for rewindFiles; swapped per-turn by the provider.
+      ...(this._fileCheckpoint !== undefined ? { fileCheckpoint: this._fileCheckpoint } : {}),
     };
   }
 
@@ -581,6 +590,17 @@ export class SessionToolDispatcher implements ToolDispatcher {
    */
   setAllowAll(allow: boolean): void {
     this._allowAll = allow;
+  }
+
+  /**
+   * Swap in a new {@link FileCheckpointRegistry} for the current user turn.
+   *
+   * Called by the provider before each tool-round so write-class handlers
+   * snapshot files under the correct turn id. Pass `undefined` to clear (no
+   * checkpointing for that turn).
+   */
+  setFileCheckpoint(registry: FileCheckpointRegistry | undefined): void {
+    this._fileCheckpoint = registry;
   }
 
   /**

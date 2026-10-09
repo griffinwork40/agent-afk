@@ -251,6 +251,13 @@ export interface AnthropicDirectQueryOptions {
    * can inject mid-run guidance without a new user turn.
    */
   beforeNextRound?: () => string | undefined;
+  /**
+   * When true, file-writing tool calls (write_file, edit_file, patch_apply)
+   * snapshot pre-edit file content before each user turn so rewindFiles() can
+   * restore the working tree to its pre-turn state. Disabled by default.
+   * Bash-made file mutations are NOT captured (out of scope).
+   */
+  enableFileCheckpointing?: boolean;
 }
 
 /** Snapshot of the starter list, freshly cloned per call (callers may mutate). */

@@ -102,6 +102,11 @@ const writeFileImpl = async (
   try {
     assertNotDenylisted(file_path, 'write_file');
 
+    // Snapshot the file BEFORE any mutation so rewindFiles can restore it.
+    if (context?.fileCheckpoint) {
+      await context.fileCheckpoint.snapshotFile(file_path);
+    }
+
     // Opt-out: AFK_WRITE_DIFF=0 (or "false"/"no"/"off") skips the pre-read
     // and diff computation entirely. Aligned with the AFK_SHOW_DIFFS render
     // opt-out in tool-lane-format.ts. Default is ON.
