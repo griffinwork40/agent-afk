@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -202,6 +202,31 @@ describe('json-file utilities', () => {
       writeFileSync(p, '{bad json}');
       expect(readJsonFileLoose(p)).toBeUndefined();
     });
+
+    it('re-throws EISDIR (path is a directory, not ENOENT)', () => {
+      // A directory path is not ENOENT — it should propagate, not be swallowed.
+      const d = join(dir, 'is-a-dir');
+      mkdirSync(d);
+      expect(() => readJsonFileLoose(d)).toThrow();
+    });
+
+    it('re-throws EACCES on a non-readable file (POSIX) or any I/O error (win32)', () => {
+      const p = join(dir, 'no-read.json');
+      writeFileSync(p, '{}');
+      // On Windows NTFS, chmod 0o000 does not prevent reads — the file remains
+      // readable and readJsonFileLoose should return the parsed value instead.
+      // On POSIX, 0o000 denies read access and the error should be re-thrown.
+      chmodSync(p, 0o000);
+      try {
+        if (process.platform === 'win32') {
+          expect(readJsonFileLoose(p)).toEqual({});
+        } else {
+          expect(() => readJsonFileLoose(p)).toThrow();
+        }
+      } finally {
+        chmodSync(p, 0o600);
+      }
+    });
   });
 
   // ── readJsonFileLooseAsync (async, tolerant) ──────────────────────────────
@@ -227,6 +252,27 @@ describe('json-file utilities', () => {
       const p = join(dir, 'async-loose-bad.json');
       writeFileSync(p, 'bad');
       expect(await readJsonFileLooseAsync(p, { onMissing: 'fallback' })).toBe('fallback');
+    });
+
+    it('re-throws EISDIR (path is a directory, not ENOENT)', async () => {
+      const d = join(dir, 'async-is-a-dir');
+      mkdirSync(d);
+      await expect(readJsonFileLooseAsync(d)).rejects.toThrow();
+    });
+
+    it('re-throws EACCES on a non-readable file (POSIX) or reads ok (win32)', async () => {
+      const p = join(dir, 'async-no-read.json');
+      writeFileSync(p, '{}');
+      chmodSync(p, 0o000);
+      try {
+        if (process.platform === 'win32') {
+          expect(await readJsonFileLooseAsync(p)).toEqual({});
+        } else {
+          await expect(readJsonFileLooseAsync(p)).rejects.toThrow();
+        }
+      } finally {
+        chmodSync(p, 0o600);
+      }
     });
   });
 });

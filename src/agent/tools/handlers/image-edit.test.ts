@@ -406,6 +406,53 @@ describe('image_edit handler', () => {
     expect(stat.size).toBeGreaterThan(0);
   });
 
+  // ── output_format forwarded to API (#3387) ──────────────────────────────
+
+  it('sends output_format field in the multipart body (default: png)', async () => {
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
+    const handler = createImageEditHandler(fetchFn);
+    await handler(
+      { prompt: 'test', image_paths: [refImagePath] },
+      signal,
+      { resolveBase: tmpDir, sessionId: `fmt-default-${Date.now()}` },
+    );
+    expect(fetchFn).toHaveBeenCalledOnce();
+    const [, opts] = fetchFn.mock.calls[0]!;
+    const form: UndiciFormData = opts.body as UndiciFormData;
+    expect(form.get('output_format')).toBe('png');
+  });
+
+  it('sends the requested output_format (jpeg) in the multipart body', async () => {
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
+    const handler = createImageEditHandler(fetchFn);
+    await handler(
+      { prompt: 'test', image_paths: [refImagePath], output_format: 'jpeg' },
+      signal,
+      { resolveBase: tmpDir, sessionId: `fmt-jpeg-${Date.now()}` },
+    );
+    expect(fetchFn).toHaveBeenCalledOnce();
+    const [, opts] = fetchFn.mock.calls[0]!;
+    const form: UndiciFormData = opts.body as UndiciFormData;
+    expect(form.get('output_format')).toBe('jpeg');
+  });
+
+  it('sends the requested output_format (webp) in the multipart body', async () => {
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
+    const handler = createImageEditHandler(fetchFn);
+    await handler(
+      { prompt: 'test', image_paths: [refImagePath], output_format: 'webp' },
+      signal,
+      { resolveBase: tmpDir, sessionId: `fmt-webp-${Date.now()}` },
+    );
+    expect(fetchFn).toHaveBeenCalledOnce();
+    const [, opts] = fetchFn.mock.calls[0]!;
+    const form: UndiciFormData = opts.body as UndiciFormData;
+    expect(form.get('output_format')).toBe('webp');
+  });
+
   it('sends multiple image paths as multiple form fields', async () => {
     vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
     const ref2Path = path.join(tmpDir!, 'ref2.png');

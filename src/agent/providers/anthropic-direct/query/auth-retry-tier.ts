@@ -10,8 +10,9 @@
 
 import type { ProviderEvent } from '../../../provider.js';
 import { runTurn } from '../loop.js';
-import type { AnthropicClientLike, RunTurnInput } from '../types.js';
+import type { RunTurnInput } from '../types.js';
 import type { RetryTierContext } from './retry-context.js';
+import { adoptFreshClient } from './live-client.js';
 
 /**
  * A 401 is retryable only in OAuth mode with a refresher wired.
@@ -55,13 +56,11 @@ export async function* turnWithAuthRetry(
   // Delegate to the shared refresh helper. Same dedup field
   // (`refreshPromise`) coalesces this call with any concurrent
   // `forceClientRefresh()` from `/reauth` or a hot-swap branch above.
-  const refreshed = await ctx.forceClientRefresh();
+  const refreshed = await adoptFreshClient(ctx, runInput);
   if (!refreshed) {
     yield authError;
     return;
   }
-  runInput.client = ctx.getClient() as unknown as AnthropicClientLike;
-  runInput.headers = ctx.rotateHeaders(runInput);
 
   yield* runTurn(runInput);
 }

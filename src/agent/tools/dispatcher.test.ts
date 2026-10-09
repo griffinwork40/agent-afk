@@ -1417,17 +1417,22 @@ describe('SessionToolDispatcher', () => {
 
     // Issue #2249: per-call completedAt in parallel batches
     it('stamps completedAt per-call so fast and slow parallel calls have distinct timestamps', async () => {
-      // Fast call resolves in ~5ms; slow call resolves in ~80ms.
+      // Fast call resolves in ~5ms; slow call resolves in ~200ms.
       // After executeBatch both results must have completedAt set and the
       // fast call's completedAt must be earlier than the slow call's by a
-      // meaningful margin (>30ms) — proving each call captured its OWN
+      // meaningful margin (>=100ms) — proving each call captured its OWN
       // settle time rather than the batch's end time.
+      //
+      // The slow delay is 200ms (not 80ms) and the required margin is 100ms
+      // (not 30ms) to stay well clear of Windows' ~15ms timer resolution,
+      // which can shrink a nominal 75ms gap to <30ms under load. See #3366
+      // for the same widening applied to loop.trace.test.ts.
       const fastHandler: ToolHandler = async () => {
         await new Promise((r) => setTimeout(r, 5));
         return { content: 'fast' };
       };
       const slowHandler: ToolHandler = async () => {
-        await new Promise((r) => setTimeout(r, 80));
+        await new Promise((r) => setTimeout(r, 200));
         return { content: 'slow' };
       };
       const dispatcher = makeDispatcher({
@@ -1448,7 +1453,7 @@ describe('SessionToolDispatcher', () => {
       expect(typeof fastResult.completedAt).toBe('number');
       expect(typeof slowResult.completedAt).toBe('number');
       // Fast call must have settled well before the slow call.
-      expect(slowResult.completedAt! - fastResult.completedAt!).toBeGreaterThan(30);
+      expect(slowResult.completedAt! - fastResult.completedAt!).toBeGreaterThanOrEqual(100);
     });
 
     it('stamps completedAt on sequential batch calls', async () => {

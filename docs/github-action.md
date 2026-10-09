@@ -16,9 +16,11 @@ jobs:
   afk-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # pinned to SHA for supply-chain safety; tag: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - uses: griffinwork40/agent-afk/.github/actions/run-afk@main
+      # pinned to SHA for supply-chain safety; tag: griffinwork40/agent-afk/.github/actions/run-afk@v5
+      - uses: griffinwork40/agent-afk/.github/actions/run-afk@<pin-to-a-release-SHA>
         id: afk
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -29,12 +31,19 @@ jobs:
         run: echo "${{ steps.afk.outputs.response }}"
 ```
 
+> **Supply-chain note:** All third-party actions inside the composite action are
+> already pinned to full commit SHAs.  The examples above follow the same
+> convention — replace `<pin-to-a-release-SHA>` with the full 40-character commit
+> SHA of the agent-afk release you want to target.
+
 ## Inputs
 
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `anthropic-api-key` | **yes** | — | Anthropic API key. Pass via a repository secret (`${{ secrets.ANTHROPIC_API_KEY }}`). Never hard-code it in the workflow. |
+| `anthropic-api-key` | no | *(empty)* | Anthropic API key. Pass via a repository secret (`${{ secrets.ANTHROPIC_API_KEY }}`). Never hard-code it in the workflow. Required when routing to Anthropic models. At least one of `anthropic-api-key`, `openai-api-key`, or `xai-api-key` must be provided — the action exits with an error if all three are empty. |
 | `prompt` | **yes** | — | Prompt forwarded to `afk chat`. Supports YAML multi-line literals (`\|`). |
+| `openai-api-key` | no | *(empty)* | OpenAI API key (`OPENAI_API_KEY`). Required when routing to OpenAI or OpenAI-compatible models (e.g. `gpt-4o`, `o3`). Pass via a repository secret. |
+| `xai-api-key` | no | *(empty)* | xAI API key (`XAI_API_KEY`). Required when routing to xAI Grok models in API-key mode. Pass via a repository secret. |
 | `afk-version` | no | `latest` | npm version of agent-afk to install (e.g. `5.0.0`, `latest`, or any dist-tag). Use `local` to run from the checked-out repo (see [Local mode](#advanced-run-from-the-local-repo-checkout)). |
 | `node-version` | no | `22` | Node.js version. Must satisfy the `engines.node` field in agent-afk's `package.json` (`^22.22.2 \|\| ^24.15.0 \|\| >=26.0.0`). |
 | `model` | no | *(repo default)* | Model slug forwarded to `afk chat --model`. When empty the repo's configured default is used. |
@@ -49,9 +58,20 @@ jobs:
 
 ## Security
 
-- The `anthropic-api-key` input is mapped to `ANTHROPIC_API_KEY` in the `env:`
-  block of the run step. It is **never echoed** to logs or passed as a shell
-  argument.
+- Provider API key **precedence**: an input value wins when it is non-empty;
+  otherwise, any value already present in the caller's job or workflow `env:`
+  is preserved unchanged. This means you can supply a key via a repository
+  secret passed as an input *or* via an inherited environment variable —
+  neither path silently overwrites the other.
+- Internally, the inputs are mapped to `INPUT_ANTHROPIC_API_KEY`,
+  `INPUT_OPENAI_API_KEY`, and `INPUT_XAI_API_KEY` in the step's `env:` block
+  (never to the canonical `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` /
+  `XAI_API_KEY` names, which would overwrite an inherited value with the empty
+  default). The run script then exports each canonical name only when the
+  corresponding input is non-empty, leaving any inherited value untouched
+  otherwise. Keys that are still empty after this are automatically unset so
+  provider SDKs never receive an empty string as a credential.
+- Inputs are **never echoed** to logs or passed as shell arguments.
 - All other inputs that appear in `run:` scripts (`prompt`, `model`,
   `output-file`, `afk-version`) are also routed through `env:` variables
   (`AFK_PROMPT`, `INPUT_MODEL`, `INPUT_OUTPUT_FILE`, `INPUT_AFK_VERSION`). No
@@ -60,8 +80,10 @@ jobs:
   `$(...)` or backticks.
 - Third-party actions inside the composite action are pinned to their full commit
   SHA, not a mutable tag, to prevent supply-chain attacks.
-- No other secrets or tokens are required. The action deliberately unsets
-  `AFK_TELEGRAM_BOT_TOKEN` so the Telegram subsystem is never initialised in CI.
+- The action requires at least one of `anthropic-api-key`, `openai-api-key`, or
+  `xai-api-key` to be set; it exits immediately with a clear error message if all
+  three are empty. The `AFK_TELEGRAM_BOT_TOKEN` is deliberately unset so the
+  Telegram subsystem is never initialised in CI.
 - The `GITHUB_OUTPUT` multiline delimiter is generated at runtime using
   `openssl rand -hex 16` (with a `/dev/urandom` fallback) so a crafted prompt
   cannot inject a delimiter and truncate or overwrite subsequent outputs.
@@ -88,11 +110,14 @@ so that all build dependencies are present.
 
 ```yaml
 steps:
-  - uses: actions/checkout@v4
+  # pinned to SHA for supply-chain safety; tag: actions/checkout@v4
+  - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-  - uses: pnpm/action-setup@v6
+  # pinned to SHA for supply-chain safety; tag: pnpm/action-setup@v6
+  - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
 
-  - uses: actions/setup-node@v4
+  # pinned to SHA for supply-chain safety; tag: actions/setup-node@v4
+  - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
     with:
       node-version: 22
       cache: pnpm
@@ -109,13 +134,15 @@ steps:
 ## Advanced: capture the response as an artifact
 
 ```yaml
-- uses: griffinwork40/agent-afk/.github/actions/run-afk@main
+# pinned to SHA for supply-chain safety; tag: griffinwork40/agent-afk/.github/actions/run-afk@v5
+- uses: griffinwork40/agent-afk/.github/actions/run-afk@<pin-to-a-release-SHA>
   with:
     anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
     prompt: Generate a release summary.
     output-file: release-notes.md
 
-- uses: actions/upload-artifact@v4
+# pinned to SHA for supply-chain safety; tag: actions/upload-artifact@v4
+- uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
   with:
     name: release-notes
     path: release-notes.md

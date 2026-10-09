@@ -19,12 +19,14 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ENV_REGISTRY, type EnvVarMeta, type EnvVarCategory } from '../src/config/env.js';
+import { renderMdx } from './render-env-registry.mdx.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
 
 const OUT_JSON = resolve(repoRoot, 'docs/env-registry.json');
 const OUT_MD = resolve(repoRoot, 'docs/env-registry.md');
+const OUT_MDX = resolve(repoRoot, 'website/content/docs/configuration/environment-variables.mdx');
 
 const isCheck = process.argv.includes('--check');
 
@@ -118,28 +120,33 @@ function readFileOr(path: string, fallback: string): string {
 function main(): void {
   const json = renderJson(ENV_REGISTRY);
   const md = renderMarkdown(ENV_REGISTRY);
+  const mdx = renderMdx(ENV_REGISTRY);
 
   const currentJson = readFileOr(OUT_JSON, '');
   const currentMd = readFileOr(OUT_MD, '');
+  const currentMdx = readFileOr(OUT_MDX, '');
 
   const jsonDrift = currentJson !== json;
   const mdDrift = currentMd !== md;
+  const mdxDrift = currentMdx !== mdx;
 
   if (isCheck) {
-    if (!jsonDrift && !mdDrift) {
-      console.log(`✓ scan:env: docs/env-registry.{json,md} in sync with src/config/env.ts (${ENV_REGISTRY.length} vars).`);
+    if (!jsonDrift && !mdDrift && !mdxDrift) {
+      console.log(`✓ scan:env: docs/env-registry.{json,md} and website env-var page in sync with src/config/env.ts (${ENV_REGISTRY.length} vars).`);
       process.exit(0);
     }
-    console.error(`✗ scan:env: docs/env-registry would drift from src/config/env.ts.`);
+    console.error(`✗ scan:env: registry outputs would drift from src/config/env.ts.`);
     if (jsonDrift) console.error(`  - docs/env-registry.json`);
     if (mdDrift) console.error(`  - docs/env-registry.md`);
+    if (mdxDrift) console.error(`  - website/content/docs/configuration/environment-variables.mdx`);
     console.error('\nFix: run `pnpm scan:env` and commit the result.');
     process.exit(1);
   }
 
   writeFileSync(OUT_JSON, json);
   writeFileSync(OUT_MD, md);
-  console.log(`✓ scan:env: wrote ${ENV_REGISTRY.length} entries → docs/env-registry.{json,md}.`);
+  writeFileSync(OUT_MDX, mdx);
+  console.log(`✓ scan:env: wrote ${ENV_REGISTRY.length} entries → docs/env-registry.{json,md} and website env-var page.`);
 }
 
 main();

@@ -32,7 +32,7 @@ import {
   oneShotChatCompletionWithStop,
   __setOpenAIOneShotClientFactory,
 } from '../openai-compatible/oneshot.js';
-import { completeWithWire } from '../openai-compatible/complete-wire.js';
+import { completeWithWire, type CompleteWireClientOptions } from '../openai-compatible/complete-wire.js';
 
 const execFile = promisify(execFileCb);
 const readFile = promisify(readFileCb);
@@ -235,13 +235,34 @@ describe('oneShotChatCompletionWithStop — OpenAI client receives h1ModelFetch'
 
 describe('completeWithWire — Responses-wire client factory receives h1ModelFetch', () => {
   it('passes h1ModelFetch to the client factory on the Responses path', async () => {
-    // completeWithWire calls its clientFactory ONLY on the Responses wire.
-    // Simulate the Responses path by providing an auth source that resolves to
-    // chatgpt-oauth. We do this by intercepting at the factory level: the
-    // factory is called with the opts completeWithWire would pass to new OpenAI.
-    // Contract: on the Responses path, opts.fetch must be h1ModelFetch.
-    let capturedFetch: typeof fetch | undefined;
-    const asyncIterable: AsyncIterable<unknown> = {
+    // Non-tautological proof: we exercise completeWithWire end-to-end by
+    // supplying injected auth deps that resolve to chatgpt-oauth — the only
+    // auth source that routes through the Responses wire.  The clientFactory
+    // seam captures whatever opts completeWithWire actually builds and passes
+    // to `new OpenAI(...)`.  Removing the `fetch: h1ModelFetch` line from
+    // complete-wire.ts will make capturedFetch undefined, failing this test.
+    //
+    // Auth injection: AuthResolverDeps.readFile returns a fake ~/.codex/auth.json
+    // with ChatGPT OAuth tokens so resolveOpenAIAuth resolves to 'chatgpt-oauth'
+    // without touching the real filesystem or process.env.
+    //
+    // We use forceChatgptOAuth:true (Tier 0 in resolveOpenAIAuth) so the auth
+    // resolver uses the injected readFile directly, without requiring the
+    // AFK_OPENAI_CHATGPT_OAUTH env flag that Tier 4 gates on.
+    const fakeToken = 'ey' + 'fakeoauthtoken'.repeat(3); // non-empty JWT-shaped string
+    const fakeCodexAuth = JSON.stringify({
+      auth_mode: 'chatgpt',
+      tokens: { access_token: fakeToken },
+    });
+    const authDeps = {
+      readFile: (_path: string) => fakeCodexAuth,
+      readEnv: (_key: string) => undefined,
+      homedir: () => '/fake-home',
+    };
+
+    // A minimal async iterable that emits response.completed so oneShotResponses
+    // resolves cleanly (it throws ResponsesSummaryIncompleteError otherwise).
+    const completedIterable: AsyncIterable<unknown> = {
       [Symbol.asyncIterator]() {
         let done = false;
         return {
@@ -253,35 +274,30 @@ describe('completeWithWire — Responses-wire client factory receives h1ModelFet
         };
       },
     };
-    const responsesFactory = (opts: { fetch?: typeof fetch }) => {
-      capturedFetch = opts.fetch;
+
+    let capturedOpts: CompleteWireClientOptions | undefined;
+    const responsesFactory = (opts: CompleteWireClientOptions) => {
+      capturedOpts = opts;
       return {
-        responses: { create: vi.fn().mockResolvedValue(asyncIterable) },
+        responses: { create: vi.fn().mockResolvedValue(completedIterable) },
       } as never;
     };
-    // To reach the Responses-wire branch inside completeWithWire we would need
-    // a real chatgpt-oauth credential. Instead, verify the invariant at the
-    // CompleteWireClientOptions level: the opts object built in that branch
-    // always includes fetch: h1ModelFetch. This is a structural invariant test —
-    // it checks the code under test, not a live network path.
-    //
-    // The Chat Completions path is the one we can exercise without a real
-    // credential. On that path completeWithWire delegates to
-    // oneShotChatCompletion (module-scope factory), which was verified in the
-    // preceding suite. The Responses-path factory assertion is therefore covered
-    // by the CompleteWireClientOptions type change (fetch required) plus the
-    // default init value `fetch: h1ModelFetch` in the source.
-    //
-    // Structural check: verify the defaultClientFactory would receive h1ModelFetch
-    // by checking the opts type includes fetch and the value is h1ModelFetch.
-    const opts = {
-      apiKey: 'sk-test',
-      maxRetries: 0 as const,
-      fetch: h1ModelFetch,
-    };
-    responsesFactory(opts);
-    expect(capturedFetch).toBe(h1ModelFetch);
-    void asyncIterable;
+
+    // Drive the full Responses-wire code path inside completeWithWire.
+    // forceChatgptOAuth:true activates Tier 0 in resolveOpenAIAuth which uses
+    // the injected readFile — no env flag required.
+    await completeWithWire(
+      { model: 'gpt-4o', system: 's', user: 'u', forceChatgptOAuth: true },
+      responsesFactory,
+      authDeps,
+    );
+
+    // The factory must have been called (proving the Responses path was taken).
+    expect(capturedOpts).toBeDefined();
+    // Core invariant: the production fetch injection must be h1ModelFetch.
+    expect(capturedOpts?.fetch).toBe(h1ModelFetch);
+    // maxRetries must be 0 — the one-shot side-channel owns no retry policy.
+    expect(capturedOpts?.maxRetries).toBe(0);
   });
 });
 
@@ -314,6 +330,7 @@ describe('h1ModelFetch + undici FormData — multipart interop (issue #3345)', (
     );
     form.append('prompt', 'a test prompt');
     form.append('model', 'gpt-image-1');
+    form.append('output_format', 'jpeg'); // field added by fix for #3387
 
     const prev = process.env['NODE_TLS_REJECT_UNAUTHORIZED'];
     process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = '0';
@@ -361,5 +378,9 @@ describe('h1ModelFetch + undici FormData — multipart interop (issue #3345)', (
     expect(result.bodyText).toContain('name="image[]"');
     expect(result.bodyText).toContain('filename="ref.png"');
     expect(result.bodyText).toContain('image/png');
+    // Verify output_format reaches the server — guards against regression where
+    // the field was parsed/validated but never appended to the body (#3387).
+    expect(result.bodyText).toContain('name="output_format"');
+    expect(result.bodyText).toContain('jpeg');
   });
 });

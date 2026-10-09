@@ -18,6 +18,11 @@ export interface DiscoveredSkill {
   source?: SkillManifestEntry['source'];
   /** Job-to-be-done category authored in SKILL.md frontmatter. */
   category?: string;
+  /**
+   * Long-form CLI flags, carried from discovery (`ProviderCommandInfo.flags`)
+   * so registration needs no second SKILL.md parse (#3332).
+   */
+  flags?: readonly string[];
   /** Job-to-be-done hint authored in SKILL.md frontmatter `when-to-use` field. */
   whenToUse?: string;
 }

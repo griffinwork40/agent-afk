@@ -16,7 +16,7 @@
  *   - buildSubagentOutcomeSummary minCount filter + sort
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -30,17 +30,28 @@ import {
 // Test helpers
 // ---------------------------------------------------------------------------
 
+// Fixed epoch so tests never depend on wall-clock time.
+// 2026-01-15T12:00:00Z — mid-day, well within a 30-day window.
+const FIXED_NOW_MS = 1_768_392_000_000; // 2026-01-15T12:00:00.000Z
+
 let tmpRoot: string;
 
 beforeEach(() => {
+  // Freeze time at FIXED_NOW_MS so `Date.now()` and `new Date()` are stable.
+  vi.useFakeTimers();
+  vi.setSystemTime(FIXED_NOW_MS);
+
+  // Use a counter-based name instead of Date.now() so the dir name is
+  // deterministic even with fake timers.
   tmpRoot = join(
     tmpdir(),
-    `afk-subagent-outcomes-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    `afk-subagent-outcomes-test-${Math.random().toString(36).slice(2)}`,
   );
   mkdirSync(join(tmpRoot, 'agent-framework'), { recursive: true });
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   rmSync(tmpRoot, { recursive: true, force: true });
 });
 
@@ -53,12 +64,13 @@ function writeRouting(lines: string[]): void {
 }
 
 function now(): string {
+  // Returns the fixed current time as ISO string.
   return new Date().toISOString();
 }
 
 function oldTs(): string {
-  // 45 days ago — outside the 30-day default window
-  return new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString();
+  // 45 days before the fixed epoch — outside the 30-day default window
+  return new Date(FIXED_NOW_MS - 45 * 24 * 60 * 60 * 1000).toISOString();
 }
 
 function dispatched(opts: {
@@ -334,7 +346,31 @@ describe('buildSubagentOutcomeSummary', () => {
     expect(summary[0]!.count).toBe(3);
     expect(summary[0]!.successRate).toBe(1);
     expect(summary[0]!.capHitRate).toBe(0);
+    expect(summary[0]!.timeoutRate).toBe(0);
     expect(summary[0]!.p50Ms).toBe(1000);
+    expect(summary[0]!.p95Ms).toBe(1000);
+  });
+
+  it('includes timeoutRate and p95Ms in summary entries', () => {
+    // 4 runs: 2 with timeout stop_reason, latencies 1000/2000/3000/4000 ms
+    const lines: string[] = [
+      dispatched({ id: 'sa-1', model: 'sonnet', agentType: 'general-purpose', depth: 1 }),
+      completed({ id: 'sa-1', status: 'succeeded', durationMs: 1000, stopReason: 'soft_timeout' }),
+      dispatched({ id: 'sa-2', model: 'sonnet', agentType: 'general-purpose', depth: 1 }),
+      completed({ id: 'sa-2', status: 'succeeded', durationMs: 2000, stopReason: 'soft_timeout' }),
+      dispatched({ id: 'sa-3', model: 'sonnet', agentType: 'general-purpose', depth: 1 }),
+      completed({ id: 'sa-3', status: 'succeeded', durationMs: 3000 }),
+      dispatched({ id: 'sa-4', model: 'sonnet', agentType: 'general-purpose', depth: 1 }),
+      completed({ id: 'sa-4', status: 'succeeded', durationMs: 4000 }),
+    ];
+    writeRouting(lines);
+    const agg = aggregateSubagentOutcomes({ days: 30, afkHome: tmpRoot });
+    const summary = buildSubagentOutcomeSummary(agg, 3);
+    expect(summary).toHaveLength(1);
+    const entry = summary[0]!;
+    expect(entry.timeoutRate).toBe(0.5); // 2/4
+    // p95 over [1000, 2000, 3000, 4000]: ceil(0.95*4)-1 = 3 → sorted[3] = 4000
+    expect(entry.p95Ms).toBe(4000);
   });
 
   it('sorts by count descending (busiest bucket first)', () => {

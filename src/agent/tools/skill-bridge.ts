@@ -62,6 +62,15 @@ export interface SkillManifestEntry {
   argumentHint?: string;
   whenToUse?: string;
   /**
+   * Long-form CLI flags for `--` completion, parsed once during discovery
+   * (#3332). Registry skills forward `SkillMetadata.flags`; plugin skills
+   * forward the flags resolved from their own SKILL.md (frontmatter `flags:`
+   * wins, else `argument-hint` + body scan).
+   */
+  flags?: readonly string[];
+  /** Job-to-be-done category authored in frontmatter / `registerSkill`. */
+  category?: string;
+  /**
    * When `true`, this entry is hidden from the model-facing manifest.
    * Set by: SKILL.md `disable-model-invocation: true` frontmatter (Claude Code
    * parity) or when the skill name matches an entry in `skills.hidden` from
@@ -322,6 +331,8 @@ export function collectSkillEntries(
       argumentHint: skill.argumentHint,
       whenToUse: skill.whenToUse,
     };
+    if (skill.flags && skill.flags.length > 0) entry.flags = skill.flags;
+    if (skill.category) entry.category = skill.category;
     if (dmi) entry.disableModelInvocation = true;
     entries.push(entry);
     seen.add(name);
@@ -353,6 +364,10 @@ export function collectSkillEntries(
         argumentHint: skill.argumentHint,
         whenToUse: skill.whenToUse,
       };
+      // Metadata comes from the SAME SKILL.md that won discovery (first-wins
+      // scan order) — no cross-copy merge with shadowed same-named skills.
+      if (skill.flags && skill.flags.length > 0) entry.flags = skill.flags;
+      if (skill.category) entry.category = skill.category;
       if (dmi) entry.disableModelInvocation = true;
       entries.push(entry);
       seen.add(skill.name);

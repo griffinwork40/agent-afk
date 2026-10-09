@@ -52,7 +52,7 @@ import type { RequestInfo as UndiciRequestInfo, RequestInit as UndiciRequestInit
  * A shared undici `Agent` with `allowH2: false`.  Module-scope singleton so
  * the connection pool is reused across all model API calls in a single
  * process, preserving HTTP/1.1 keep-alive benefits (TLS session reuse,
- * multiplexed pipelining within one connection) while ruling out HTTP/2.
+ * per-origin keep-alive connection reuse) while ruling out HTTP/2.
  *
  * Invariant: this Agent must never be passed to `globalThis.fetch` as a
  * `dispatcher` from within the egress-guard or web-scrape paths.  Those paths
@@ -84,10 +84,13 @@ export const h1ModelFetch: typeof fetch = (
   // SDK or a wrapping fetch may have injected.  Two casts are required here:
   //
   //   1. `input` is `RequestInfo | URL` (built-in) — cast to
-  //      `UndiciRequestInfo` (undici's `string | URL | Request`).  The
-  //      built-in `Request` and undici's `Request` are structurally compatible
-  //      for the properties undici reads (url, method, headers, body, signal),
-  //      so the cast is safe at runtime even though the nominal types diverge.
+  //      `UndiciRequestInfo` (undici's `string | URL | Request`).
+  //      IMPORTANT: in production both SDKs always pass a string URL (never a
+  //      built-in `Request` object).  Passing a built-in `Request` would be
+  //      unsafe: undici 8 brand-checks its private `#state` field, so a native
+  //      `Request` is NOT duck-type compatible — undici stringifies the object,
+  //      losing the original method, body, and signal.  The cast is therefore
+  //      safe only because callers stay within the `string | URL` subset.
   //
   //   2. `undiciFetch` returns `Promise<undici.Response>`.  undici's `Response`
   //      is structurally compatible with the built-in `Response` for every

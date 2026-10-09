@@ -214,14 +214,12 @@ export function buildRoundParams(input: Pick<RunTurnInput, 'model' | 'maxTokens'
   // in cache-policy.ts for the removal priority (tools → older messages →
   // earlier system blocks; end-of-system and end-of-messages are kept last).
   // String system prompts carry no cache_control and will not trigger a clamp.
+  // clampBreakpoints<WireToolDef> is generic: the output tools type matches the
+  // input exactly, so no re-cast is needed at the call site.
   const systemBlocks = Array.isArray(input.system) ? input.system : undefined;
   const clamped = clampBreakpoints({
     system: systemBlocks,
-    // WireToolDef is structurally compatible with CacheableToolLike (name +
-    // optional cache_control + index signature). The cast is safe: the
-    // function only reads/drops cache_control, which WireToolDef never carries
-    // today — so the output type is identical to the input.
-    tools: wireTools as import('../cache-policy.js').CacheableToolLike[] | undefined,
+    tools: wireTools,
     messages: input.messages,
   });
   // Use the clamped system array when the original was an array; fall back to
@@ -230,14 +228,12 @@ export function buildRoundParams(input: Pick<RunTurnInput, 'model' | 'maxTokens'
   const resolvedSystem: typeof input.system = Array.isArray(input.system)
     ? ((clamped.system != null ? [...clamped.system] : undefined) ?? input.system)
     : input.system;
-  // Re-cast tools back to WireToolDef[]: clampBreakpoints only removes
-  // cache_control; the rest of each tool object is identity-preserved.
-  const resolvedTools = clamped.tools as WireToolDef[] | undefined;
+  const resolvedTools = clamped.tools;
 
   return {
     model: input.model, max_tokens: input.maxTokens, messages: [...clamped.messages], stream: true,
     ...(resolvedSystem !== null ? { system: resolvedSystem } : {}),
-    ...(resolvedTools !== undefined && resolvedTools.length > 0 ? { tools: resolvedTools } : {}),
+    ...(resolvedTools !== undefined && resolvedTools.length > 0 ? { tools: [...resolvedTools] } : {}),
     ...(input.thinking !== undefined || input.thinkingBlockBinding !== undefined
       ? {
           thinking: input.thinkingBlockBinding !== undefined

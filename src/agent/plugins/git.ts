@@ -19,10 +19,8 @@
  * @module agent/plugins/git
  */
 
-import { execFile } from 'child_process';
-import { promisify } from 'util';
-
-const execFileAsync = promisify(execFile);
+import { execFileAsync } from '../../utils/exec-file.js';
+import { isErrnoCode } from '../../utils/errors.js';
 
 export interface GitRunner {
   (
@@ -41,16 +39,12 @@ const defaultRunner: GitRunner = async (args, cwd, env) => {
     });
     return { stdout, stderr };
   } catch (err: unknown) {
-    if (isErrnoException(err) && err.code === 'ENOENT') {
+    if (isErrnoCode(err, 'ENOENT')) {
       throw new Error('git not found on PATH — install git first');
     }
     throw err;
   }
 };
-
-function isErrnoException(err: unknown): err is NodeJS.ErrnoException {
-  return typeof err === 'object' && err !== null && 'code' in err;
-}
 
 export interface GitOptions {
   runner?: GitRunner;

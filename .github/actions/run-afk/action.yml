@@ -6,18 +6,38 @@ description: |
   hard-coded in a caller workflow.
 
 inputs:
-  # --- required ---
+  # --- required (at least one of the provider keys must be set) ---
   anthropic-api-key:
     description: >
       Anthropic API key (ANTHROPIC_API_KEY).  Pass via a repository or
       environment secret: `${{ secrets.ANTHROPIC_API_KEY }}`.
-    required: true
+      Required unless you are routing to a non-Anthropic provider via
+      `openai-api-key` or `xai-api-key`.  At least one of
+      `anthropic-api-key`, `openai-api-key`, or `xai-api-key` must be
+      provided; the action exits with an error if all three are empty.
+    required: false
+    default: ''
 
   prompt:
     description: >
       The prompt to send to `afk chat`.  Supports multi-line strings via
       the YAML literal-block scalar (|).
     required: true
+
+  openai-api-key:
+    description: >
+      OpenAI API key (OPENAI_API_KEY).  Required when routing to an OpenAI
+      or OpenAI-compatible provider (gpt-*, o1*, o3*, o4* models, or a local
+      shim via `AFK_OPENAI_BASE_URL`).  Pass via a repository secret.
+    required: false
+    default: ''
+
+  xai-api-key:
+    description: >
+      xAI API key (XAI_API_KEY).  Required when routing to the xAI provider
+      (Grok models) in API-key mode.  Pass via a repository secret.
+    required: false
+    default: ''
 
   # --- optional / tuning ---
   afk-version:
@@ -78,7 +98,14 @@ runs:
       if: inputs.afk-version != 'local'
       uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
       with:
-        version: latest
+        # Pin to pnpm v11 (the major used by this repo) for reproducibility.
+        # Avoid `latest` — it is non-deterministic and can break on major bumps.
+        # Use package_json_file=/dev/null so pnpm/action-setup v6 does not read
+        # the consumer repo's package.json#packageManager field; if it did, a
+        # consumer that specifies a different pnpm major would cause
+        # "multiple versions of pnpm specified" errors at action setup time.
+        version: 11
+        package_json_file: /dev/null
         dest: ${{ runner.temp }}/setup-pnpm
 
     - name: Install agent-afk from npm
@@ -105,7 +132,18 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        # Invariant: provider keys are mapped to INPUT_* names here, never to the
+        # canonical var names (ANTHROPIC_API_KEY / OPENAI_API_KEY / XAI_API_KEY).
+        # Assigning an input directly to the canonical name at the step level
+        # would silently replace any inherited env value (e.g. a key already set
+        # by the caller's job-level env:) with the input value — which defaults
+        # to '' — and the conditional-export logic below would then unset it.
+        # Mapping to INPUT_* preserves any inherited canonical value when the
+        # input is not supplied, and the run script exports the canonical name
+        # only when the input is non-empty.
+        INPUT_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        INPUT_OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        INPUT_XAI_API_KEY: ${{ inputs.xai-api-key }}
         # Non-interactive: disable TUI chrome that is meaningless in CI logs.
         AFK_NO_TUI: '1'
         # Prevent afk from trying to load Telegram or browser state in CI.
@@ -117,6 +155,29 @@ runs:
         INPUT_AFK_VERSION: ${{ inputs.afk-version }}
         AFK_ACTION_PATH: ${{ github.action_path }}
       run: |
+        # Conditionally export canonical provider key names from inputs.
+        # When an input is non-empty it wins (input takes precedence over
+        # any inherited env value). When the input is empty the canonical
+        # var is left untouched so any value the caller already placed in
+        # the job/workflow env: is preserved.
+        [ -n "${INPUT_ANTHROPIC_API_KEY:-}" ] && export ANTHROPIC_API_KEY="${INPUT_ANTHROPIC_API_KEY}"
+        [ -n "${INPUT_OPENAI_API_KEY:-}" ]    && export OPENAI_API_KEY="${INPUT_OPENAI_API_KEY}"
+        [ -n "${INPUT_XAI_API_KEY:-}" ]       && export XAI_API_KEY="${INPUT_XAI_API_KEY}"
+
+        # Guard: at least one provider API key must be set (check effective
+        # canonical vars after the conditional exports above, so a key that
+        # arrived via inherited env satisfies this guard).
+        if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${OPENAI_API_KEY:-}" ] && [ -z "${XAI_API_KEY:-}" ]; then
+          echo "::error::At least one of anthropic-api-key, openai-api-key, or xai-api-key must be provided (via inputs or inherited env)"
+          exit 1
+        fi
+
+        # Unset any provider key that is still empty after the conditional
+        # exports above so SDKs never receive an empty string as a credential.
+        [ -z "${ANTHROPIC_API_KEY:-}" ] && unset ANTHROPIC_API_KEY
+        [ -z "${OPENAI_API_KEY:-}" ]    && unset OPENAI_API_KEY
+        [ -z "${XAI_API_KEY:-}" ]       && unset XAI_API_KEY
+
         # Determine the afk invocation: use the installed global when afk-version
         # is not 'local', otherwise invoke node directly from the built checkout.
         # An array (not a string) so a checkout path containing spaces is never

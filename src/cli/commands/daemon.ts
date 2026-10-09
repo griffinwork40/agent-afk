@@ -140,13 +140,27 @@ const isDoneUnverified = ({ responseText, successfulToolNames }: { responseText:
 let daemonCrashHandlersInstalled = false;
 
 /**
- * Reset the re-entry guard. Exported for testing only — do not call in
+ * Module-scoped in-flight source shared between `registerEarlyDaemonCrashHandlers`
+ * calls. Lifting it out of the function means a second call (e.g. after
+ * `_resetDaemonCrashHandlersForTest` in tests) re-uses the same closure slot,
+ * so `bindInFlightSource` from the second call still updates the getter that
+ * the registered crash handler reads.
+ */
+let earlyInFlightSource: (() => InFlightTaskSnapshot[]) | undefined;
+
+/** Guards against duplicate early-handler registration. */
+let earlyHandlersInstalled = false;
+
+/**
+ * Reset the re-entry guards. Exported for testing only — do not call in
  * production code.
  *
  * @internal
  */
 export function _resetDaemonCrashHandlersForTest(): void {
   daemonCrashHandlersInstalled = false;
+  earlyHandlersInstalled = false;
+  earlyInFlightSource = undefined;
 }
 
 /** Milliseconds to wait after firing the crash notification before exiting,
@@ -155,9 +169,18 @@ export function _resetDaemonCrashHandlersForTest(): void {
  *  whole module rather than being buried inside registerDaemonCrashHandlers. */
 const CRASH_EXIT_DELAY_MS = 200;
 
+/**
+ * Maximum number of in-flight task entries appended to a crash notice. Caps
+ * Telegram message length when many tasks are simultaneously in-flight.
+ * Tasks beyond this limit are silently omitted (the count is still shown).
+ */
+const CRASH_NOTICE_IN_FLIGHT_LIMIT = 10;
+
 /** Shape of a single in-flight task snapshot for crash-notice inclusion (#3248). */
 export interface InFlightTaskSnapshot {
   taskId: string;
+  /** Redacted form of taskId, safe to include verbatim in Telegram crash notices. */
+  displayId: string;
   commandHead: string;
   elapsedMs: number;
 }
@@ -197,9 +220,13 @@ export function registerDaemonCrashHandlers(
         if (tasks.length > 0) {
           lines.push('');
           lines.push(`in-flight (${tasks.length}):`);
-          for (const t of tasks) {
+          const listed = tasks.slice(0, CRASH_NOTICE_IN_FLIGHT_LIMIT);
+          for (const t of listed) {
             const elapsedSec = (t.elapsedMs / 1000).toFixed(1);
-            lines.push(`  • ${t.taskId}: ${t.commandHead} (${elapsedSec}s)`);
+            lines.push(`  • ${t.displayId}: ${t.commandHead} (${elapsedSec}s)`);
+          }
+          if (tasks.length > CRASH_NOTICE_IN_FLIGHT_LIMIT) {
+            lines.push(`  … and ${tasks.length - CRASH_NOTICE_IN_FLIGHT_LIMIT} more`);
           }
         }
       } catch {
@@ -233,12 +260,20 @@ export function registerDaemonCrashHandlers(
  * until the caller binds the live scheduler snapshot via the returned setter.
  * Idempotency is unchanged: `registerDaemonCrashHandlers` still installs at
  * most one listener pair per process.
+ *
+ * Single-call contract: this function must be called at most once per process.
+ * If called again (e.g. after `_resetDaemonCrashHandlersForTest` in tests),
+ * the module-scoped `earlyInFlightSource` is reused by the same getter closure
+ * registered in `registerDaemonCrashHandlers`, so the returned binder still
+ * updates the live snapshot provider.
  */
 export function registerEarlyDaemonCrashHandlers(): (source: () => InFlightTaskSnapshot[]) => void {
-  let inFlightSource: (() => InFlightTaskSnapshot[]) | undefined;
-  registerDaemonCrashHandlers(() => inFlightSource?.() ?? []);
+  if (!earlyHandlersInstalled) {
+    earlyHandlersInstalled = true;
+    registerDaemonCrashHandlers(() => earlyInFlightSource?.() ?? []);
+  }
   return (source) => {
-    inFlightSource = source;
+    earlyInFlightSource = source;
   };
 }
 
@@ -435,7 +470,7 @@ export function registerDaemonCommand(program: Command): void {
 
         bindInFlightSource(() => handle.scheduler.getInFlightTasks()); // live crash-notice snapshot (#3248)
         // Wave-manifest reconciliation: pushes resumption offers via Telegram (#3248).
-        runDaemonReconcile('');
+        void runDaemonReconcile('');
 
         if (options.once) {
           console.log(palette.info(`▶ Firing task '${taskId}' once...`));

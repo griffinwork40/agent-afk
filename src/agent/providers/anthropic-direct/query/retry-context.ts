@@ -48,6 +48,12 @@ export interface RetryTierContext {
   readonly tokenRefresher: (() => Promise<Anthropic | null>) | undefined;
   /** Latest client reference, post-swap. */
   getClient(): Anthropic;
+  /**
+   * The OAuth token the CURRENT client was built with (undefined in api-key
+   * mode). Differs from the credential store when the operator switched
+   * accounts since the client was built; see `usage-limit-catch-up.ts`.
+   */
+  getClientToken(): string | undefined;
   /** Rebuild per-request headers for a replay (fresh request id, re-evaluated betas). */
   rotateHeaders(runInput: Pick<RunTurnInput, 'effort' | 'fastMode'>): Record<string, string>;
   /** Refresh the SDK client via `tokenRefresher`, deduplicated across callers. */

@@ -17,7 +17,8 @@
  *   readJsonFile(path, opts?)           — read JSON; throws on parse error;
  *                                         returns `onMissing` for ENOENT only.
  *   readJsonFileLoose(path, opts?)      — tolerant read; returns `onMissing`
- *                                         for ENOENT *and* parse errors.
+ *                                         for ENOENT and parse errors; re-throws
+ *                                         unexpected I/O errors (EACCES, EISDIR).
  *
  * Rule: **never convert a strict reader into catch-all**. Use `readJsonFile`
  * when a corrupt file should surface as an error; use `readJsonFileLoose`
@@ -41,6 +42,7 @@
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { atomicWriteFile, atomicWriteFileAsync } from './atomic-write.js';
+import { isEnoent, isErrnoCode } from './errors.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -136,7 +138,7 @@ export function readJsonFile<T>(path: string, opts?: ReadJsonOptions<T>): T {
   try {
     raw = readFileSync(path, 'utf-8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT' && opts !== undefined && 'onMissing' in opts) {
+    if (isEnoent(err) && opts !== undefined && 'onMissing' in opts) {
       return opts.onMissing as T;
     }
     throw err;
@@ -158,7 +160,7 @@ export async function readJsonFileAsync<T>(path: string, opts?: ReadJsonOptions<
   try {
     raw = await readFile(path, 'utf-8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT' && opts !== undefined && 'onMissing' in opts) {
+    if (isEnoent(err) && opts !== undefined && 'onMissing' in opts) {
       return opts.onMissing as T;
     }
     throw err;
@@ -175,9 +177,11 @@ export async function readJsonFileAsync<T>(path: string, opts?: ReadJsonOptions<
  * errors.
  *
  * Returns `opts.onMissing` (or `undefined`) for:
- *   - ENOENT (file not found)
- *   - SyntaxError / JSON parse failures
- *   - Any other I/O error
+ *   - ENOENT (file not found — expected missing-state)
+ *   - SyntaxError / JSON parse failures (corrupt state treated as empty)
+ *
+ * **Re-throws** unexpected I/O errors (e.g. EACCES, EISDIR) so permission
+ * problems and path-type mismatches are not silently swallowed.
  *
  * Use this **only** when corrupt and missing files should both degrade silently
  * to a default (e.g. bootstrap paths where a missing or corrupt state file is
@@ -188,8 +192,16 @@ export async function readJsonFileAsync<T>(path: string, opts?: ReadJsonOptions<
  * @param opts  - Optional `onMissing` default (defaults to `undefined`).
  */
 export function readJsonFileLoose<T>(path: string, opts?: ReadJsonOptions<T>): T | undefined {
+  let raw: string;
   try {
-    const raw = readFileSync(path, 'utf-8');
+    raw = readFileSync(path, 'utf-8');
+  } catch (err) {
+    if (isErrnoCode(err, 'ENOENT')) {
+      return opts !== undefined && 'onMissing' in opts ? opts.onMissing : undefined;
+    }
+    throw err;
+  }
+  try {
     return JSON.parse(raw) as T;
   } catch {
     return opts !== undefined && 'onMissing' in opts ? opts.onMissing : undefined;
@@ -204,14 +216,24 @@ export function readJsonFileLoose<T>(path: string, opts?: ReadJsonOptions<T>): T
  * Read and parse a JSON file asynchronously, tolerating missing files AND parse
  * errors.
  *
- * Identical semantics to `readJsonFileLoose` but async.
+ * Identical semantics to `readJsonFileLoose` but async — ENOENT and parse
+ * errors return `onMissing`; all other I/O errors (EACCES, EISDIR, …) are
+ * re-thrown.
  */
 export async function readJsonFileLooseAsync<T>(
   path: string,
   opts?: ReadJsonOptions<T>,
 ): Promise<T | undefined> {
+  let raw: string;
   try {
-    const raw = await readFile(path, 'utf-8');
+    raw = await readFile(path, 'utf-8');
+  } catch (err) {
+    if (isErrnoCode(err, 'ENOENT')) {
+      return opts !== undefined && 'onMissing' in opts ? opts.onMissing : undefined;
+    }
+    throw err;
+  }
+  try {
     return JSON.parse(raw) as T;
   } catch {
     return opts !== undefined && 'onMissing' in opts ? opts.onMissing : undefined;

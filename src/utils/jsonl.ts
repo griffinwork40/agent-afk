@@ -22,6 +22,7 @@
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as readline from 'node:readline';
+import { isEnoent } from './errors.js';
 
 /** Options for {@link parseJsonlLines}. */
 export interface ParseJsonlOptions<T> {
@@ -118,7 +119,7 @@ export async function* readJsonlFile<T = unknown>(
   try {
     fd = await fsp.open(filePath, 'r');
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
+    if (isEnoent(e)) return;
     throw e;
   }
 
@@ -207,7 +208,14 @@ export class IncrementalLineReader {
     return [remaining];
   }
 
-  /** Current length of the internal buffer (bytes awaiting a newline). */
+  /**
+   * Current length of the internal buffer in UTF-16 code units (i.e.
+   * `String.prototype.length` units), not bytes. For ASCII-only content the
+   * two are equivalent. If you need the byte count for a multi-byte payload,
+   * use `Buffer.byteLength(reader.bufferedLength.toString())` instead —
+   * though in practice this property is only used for diagnostic purposes
+   * where code-unit precision is sufficient.
+   */
   get bufferedLength(): number {
     return this.buffer.length;
   }
