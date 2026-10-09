@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as fsSync from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { FormData as UndiciFormData } from 'undici';
 import { createImageEditHandler } from './image-edit.js';
 import { _resetWriteDenylistCacheForTests } from './write-denylist.js';
 import { _resetRootRealpathCacheForTests } from './_cwd-utils.js';
@@ -12,7 +13,13 @@ vi.mock('../../providers/openai-compatible/auth.js', () => ({
   resolveOpenAIAuth: vi.fn(() => ({ apiKey: null, source: 'no-usable-auth' })),
 }));
 
+// Mock h1-fetch so we can spy on the default fetchFn without a real network call.
+vi.mock('../../providers/shared/h1-fetch.js', () => ({
+  h1ModelFetch: vi.fn(),
+}));
+
 import { resolveOpenAIAuth } from '../../providers/openai-compatible/auth.js';
+import * as h1FetchModule from '../../providers/shared/h1-fetch.js';
 const mockResolveAuth = vi.mocked(resolveOpenAIAuth);
 
 // ---------------------------------------------------------------------------
@@ -348,8 +355,9 @@ describe('image_edit handler', () => {
     expect(opts.headers['Authorization']).toBe('Bearer test-key');
     // Content-Type should NOT be set manually (fetch sets it with the boundary).
     expect(opts.headers['Content-Type']).toBeUndefined();
-    // Body should be FormData.
-    expect(opts.body).toBeInstanceOf(FormData);
+    // Body should be undici's FormData (not globalThis.FormData, which would
+    // fail undici's brand-check when h1ModelFetch serializes the multipart body).
+    expect(opts.body).toBeInstanceOf(UndiciFormData);
   });
 
   it('accepts .jpg reference images', async () => {
@@ -411,7 +419,7 @@ describe('image_edit handler', () => {
     );
     expect(fetchFn).toHaveBeenCalledOnce();
     const [, opts] = fetchFn.mock.calls[0]!;
-    const form: FormData = opts.body;
+    const form: UndiciFormData = opts.body as UndiciFormData;
     // getAll returns all values for the key
     expect(form.getAll('image[]').length).toBe(2);
   });
@@ -545,6 +553,24 @@ describe('image_edit handler', () => {
     vi.unstubAllEnvs();
     _resetRootRealpathCacheForTests();
     _resetWriteDenylistCacheForTests();
+  });
+
+  // ── Default fetchFn ─────────────────────────────────────────────────────
+
+  it('uses h1ModelFetch as the default fetchFn when createImageEditHandler is called with no arguments', async () => {
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    const mockH1 = vi.mocked(h1FetchModule.h1ModelFetch);
+    mockH1.mockResolvedValueOnce(makeOkResponse(TINY_PNG_B64));
+
+    // Create handler with NO fetchFn argument — must fall back to h1ModelFetch.
+    const handler = createImageEditHandler();
+    await handler(
+      { prompt: 'test default fetch', image_paths: [refImagePath] },
+      signal,
+      { resolveBase: tmpDir, sessionId: `default-fetch-${Date.now()}` },
+    );
+
+    expect(mockH1).toHaveBeenCalledOnce();
   });
 
   // ── Intermediate symlinked-directory escape (#2836 Item 1) ───────────────
