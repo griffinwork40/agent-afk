@@ -6,7 +6,19 @@
  * inter-round boundary (after the batch, before the next model request) instead
  * of waiting for the next turn.
  *
- * Peer messages ONLY. A human queued-user-message (typed + Enter while a turn
+ * Settled background-process envelopes (`<background-process-result>`) ride
+ * the same boundary. Invariant: an envelope for a job that settles mid-turn
+ * must reach the model INSIDE that turn when a later tool round exists;
+ * otherwise it sits in the notifier until the turn ends and the auto-resume
+ * wake starts a whole extra turn just to re-report an outcome the model
+ * usually already learned (via wait_for, a log tail, ...). Delivery is a
+ * positive fact, so no heuristic about "did the model see it" is needed: a
+ * job still pending at turn end was by definition not delivered, and the
+ * wake is correct. Process envelopes are metadata only (see
+ * process-job-notifier.ts) and bounded by its MAX_PENDING, so they bypass the
+ * peer AdmissionQueue byte accounting, but they obey the same human barrier.
+ *
+ * Peer messages and process envelopes ONLY. A human queued-user-message (typed + Enter while a turn
  * runs) is never injected here: it stays in the compositor queue and runs as
  * its own turn at end of turn, which the yield-to-user contract
  * (`agent/tools/user-yield.ts`) relies on. It still takes priority: while one
@@ -81,6 +93,11 @@ export interface PeerBoundaryOpts {
   admissionQueue: AdmissionQueue;
   /** Explicit active-turn barrier, including a human already removed from FIFO. */
   isQueuedHumanTurn?: () => boolean;
+  /**
+   * Settled background-process envelopes, drained at each boundary (behind
+   * the human barrier). Absent when the session has no process registry.
+   */
+  processJobNotifier?: InjectionSource;
 }
 
 /**
@@ -173,13 +190,23 @@ export function installPeerBoundary(opts: PeerBoundaryOpts): () => void {
     }
 
     // ── 3. Snapshot and drain ───────────────────────────────────────────────
-    // Under the human barrier nothing is injected, even a peer straggler: the
-    // user's queued turn must run first (next-turn fallback picks it up).
-    if (humanPending || !admissionQueue.pending) return undefined;
-    const snap = admissionQueue.snapshot();
-    if (snap.entries.length === 0) return undefined;
-    const text = admissionQueue.drain(snap);
-    return text.length > 0 ? text : undefined;
+    // Under the human barrier nothing is injected, even a peer straggler or a
+    // process envelope: the user's queued turn must run first (the next-turn
+    // fallback in applyDeferPeers drains both).
+    if (humanPending) return undefined;
+    // Process envelopes first, matching the next-turn prepend order
+    // (process results precede peer messages).
+    const parts: string[] = [];
+    const processText = opts.processJobNotifier?.drainInjections().trimEnd() ?? '';
+    if (processText.length > 0) parts.push(processText);
+    if (admissionQueue.pending) {
+      const snap = admissionQueue.snapshot();
+      if (snap.entries.length > 0) {
+        const peerText = admissionQueue.drain(snap);
+        if (peerText.length > 0) parts.push(peerText);
+      }
+    }
+    return parts.length > 0 ? parts.join('\n\n') : undefined;
   };
 
   // Capture the session at install time so the disposer clears the SAME
@@ -275,6 +302,7 @@ export function setupPeerBoundary(
   surface: InputSurface,
   peerNotifier: PeerInboxNotifier,
   isQueuedHumanTurn: () => boolean,
+  processJobNotifier?: InjectionSource,
 ): { admissionQueue: AdmissionQueue; reinstall: () => void } {
   const admissionQueue = new AdmissionQueue();
   const opts: PeerBoundaryOpts = {
@@ -283,6 +311,7 @@ export function setupPeerBoundary(
     peerNotifier,
     admissionQueue,
     isQueuedHumanTurn,
+    processJobNotifier,
   };
   let dispose = installPeerBoundary(opts);
   const reinstall = () => { dispose = reinstallPeerBoundary(opts, dispose); };

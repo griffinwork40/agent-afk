@@ -118,7 +118,7 @@ export async function runInputLoop(
 
   // Peer inter-round boundary delivery — see loop-iteration.boundary.ts.
   let queuedHumanTurn = false;
-  const { admissionQueue, reinstall: reinstallBoundary } = setupPeerBoundary(ctx, surface, peerNotifier, () => queuedHumanTurn);
+  const { admissionQueue, reinstall: reinstallBoundary } = setupPeerBoundary(ctx, surface, peerNotifier, () => queuedHumanTurn, processJobNotifier);
   ctx.reinstallPeerBoundary = reinstallBoundary; // wired to onSwapped in bootstrap.ts
 
   const versionNotice = createVersionNotice();
