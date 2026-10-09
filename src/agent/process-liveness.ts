@@ -19,6 +19,8 @@
  * @module agent/process-liveness
  */
 
+import { isErrnoCode } from '../utils/errors.js';
+
 /** Liveness verdict for a recorded pid. */
 export type ProcessLiveness =
   /** The pid is running (or exists but belongs to another user). */
@@ -40,8 +42,7 @@ export function isProcessAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === 'EPERM') return true;
+    if (isErrnoCode(err, 'EPERM')) return true;
     return false;
   }
 }

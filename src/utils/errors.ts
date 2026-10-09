@@ -46,6 +46,16 @@ export function isErrnoCode(err: unknown, code: string): boolean {
 }
 
 /**
+ * Returns `true` when `err` is a Node.js `ENOENT` filesystem error.
+ *
+ * Convenience alias for `isErrnoCode(err, 'ENOENT')` — the most common
+ * errno check, replacing private `isEnoent` wrappers in individual modules.
+ */
+export function isEnoent(err: unknown): boolean {
+  return isErrnoCode(err, 'ENOENT');
+}
+
+/**
  * True when `err` is an `EgressBlockedError` — either directly or as the
  * `cause` of a wrapping `TypeError('fetch failed', { cause })`.
  *

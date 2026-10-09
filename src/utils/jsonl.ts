@@ -22,6 +22,7 @@
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as readline from 'node:readline';
+import { isEnoent } from './errors.js';
 
 /** Options for {@link parseJsonlLines}. */
 export interface ParseJsonlOptions<T> {
@@ -118,7 +119,7 @@ export async function* readJsonlFile<T = unknown>(
   try {
     fd = await fsp.open(filePath, 'r');
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
+    if (isEnoent(e)) return;
     throw e;
   }
 

@@ -14,7 +14,7 @@ import { guardedFetch } from '../../../http-client/egress-guard.js';
 import { classifyRisk } from '../../risk-classifier.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import type { SpawnedPidRegistry } from './pid-registry.js';
-import { errorMessage, extractEgressBlockedError, fetchFailedMessage } from '../../../utils/errors.js';
+import { errorMessage, extractEgressBlockedError, fetchFailedMessage, isErrnoCode } from '../../../utils/errors.js';
 
 /** Union of all condition shapes. */
 export type WaitCondition =
@@ -226,10 +226,10 @@ export function evaluateProcess(
   } catch (err) {
     // ESRCH = no such process → it has exited (condition met).
     // EPERM = exists but we lack permission to signal it → still alive.
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === 'ESRCH') {
+    if (isErrnoCode(err, 'ESRCH')) {
       return { met: true, detail: `pid ${cond.pid} has exited`, data: { pid: cond.pid } };
     }
+    const code = (err as NodeJS.ErrnoException).code;
     return { met: false, detail: `pid ${cond.pid} is alive (${code ?? 'unknown'})`, data: { pid: cond.pid } };
   }
 }

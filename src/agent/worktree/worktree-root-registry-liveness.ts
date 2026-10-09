@@ -24,6 +24,7 @@
 import { promises as fs } from 'node:fs';
 import { resolve } from 'node:path';
 import { debugLog } from '../../utils/debug.js';
+import { isEnoent, isErrnoCode } from '../../utils/errors.js';
 
 export interface RootLivenessResult<T> {
   /** Confirmed-live entries, `path` normalized to absolute and de-duplicated. */
@@ -73,10 +74,10 @@ export async function classifyRootLiveness<T extends { path: string }>(
     try {
       isDir = (await fs.stat(absolute)).isDirectory();
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code ?? 'unknown errno';
-      if (code === 'ENOENT' || code === 'ENOTDIR') {
+      if (isEnoent(err) || isErrnoCode(err, 'ENOTDIR')) {
         dead.add(absolute);
       } else {
+        const code = (err as NodeJS.ErrnoException).code ?? 'unknown errno';
         unknown.set(absolute, code);
       }
       continue;

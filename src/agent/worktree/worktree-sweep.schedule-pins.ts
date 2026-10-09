@@ -20,6 +20,7 @@ import { promises as fs } from 'node:fs';
 import { getSchedulesPath } from '../../paths.js';
 import { expandCwd } from '../daemon/cwd-validator.js';
 import type { ScheduledTaskConfig } from '../daemon/schedule-store.js';
+import { isEnoent } from '../../utils/errors.js';
 import { isPathWithin } from './worktree-sweep.classify.js';
 
 // ---------------------------------------------------------------------------
@@ -55,9 +56,8 @@ async function loadRawSchedules(
   try {
     raw = await fs.readFile(schedulesPath, 'utf-8');
   } catch (err: unknown) {
-    const code = (err as NodeJS.ErrnoException).code;
     // ENOENT = file simply does not exist yet; not an error condition.
-    if (code === 'ENOENT') return null;
+    if (isEnoent(err)) return null;
     return undefined;
   }
   try {

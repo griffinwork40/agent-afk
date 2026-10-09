@@ -25,10 +25,6 @@ import { errorMessage, isErrnoCode} from '../../utils/errors.js';
 
 export { recoverExpiredLeases };
 
-/** Returns true if err is a Node.js ENOENT filesystem error. */
-function isEnoent(err: unknown): boolean {
-  return isErrnoCode(err, 'ENOENT');
-}
 
 export interface QueuedTask {
   /** Unique task identifier, e.g. `q-1716000000000-abc123`. */
@@ -214,7 +210,7 @@ export function dequeueNext(queueDir: string = getQueueDir()): QueuedTask | null
       // Race-loss (ENOENT): another process already claimed this file — skip.
       // Other errors: the lease was not acquired; clean up the queue file
       // (if it still exists) and skip to the next entry.
-      if (!isEnoent(err)) {
+      if (!isErrnoCode(err, 'ENOENT')) {
         try { unlinkSync(filePath); } catch { /* ignore */ }
       }
       continue;

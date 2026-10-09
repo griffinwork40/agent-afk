@@ -16,6 +16,7 @@ import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { createReadStream, existsSync } from 'node:fs';
+import { isErrnoCode } from '../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Soft-launch counter
@@ -80,8 +81,7 @@ export async function acquireLock(lockPath: string): Promise<() => Promise<void>
     try {
       return await fs.open(lockPath, 'wx');
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== 'EEXIST') throw err;
+      if (!isErrnoCode(err, 'EEXIST')) throw err;
 
       // Check if PID in existing lock is still alive
       let existingPid: number | null = null;
