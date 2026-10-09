@@ -298,3 +298,87 @@ describe('buildDetachedToolInjection', () => {
     expect(outputContent).not.toMatch(/&[^;]*$/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// capOutput (tested via ToolEvent.result patched by applyResult)
+// ---------------------------------------------------------------------------
+
+describe('capOutput — UTF-8-safe truncation of detached tool output', () => {
+  /**
+   * Helper: settle a detached tool with the given raw output and return the
+   * `ToolEvent.result` after `applyResult` has run.  Uses a real
+   * `DetachedToolNotifier` + `DetachableToolRegistry` pair so the full
+   * production code path executes.
+   */
+  function capVia(output: string): string {
+    const MAX_OUTPUT_BYTES = 16 * 1024;
+    const registry = new DetachableToolRegistry();
+    const notifier = new DetachedToolNotifier(registry);
+    const event = makeEvent();
+    notifier.observe(event);
+    const token = registry.register('call-1');
+    token.notifyDetached();
+    token.deliver(makeResult({ output }));
+    // event.result is set by applyResult → capOutput
+    if (Buffer.byteLength(output, 'utf8') <= MAX_OUTPUT_BYTES) {
+      // Under-budget: result must equal the original string unchanged.
+      return event.result as string;
+    }
+    return event.result as string;
+  }
+
+  it('under-budget input passes through unchanged (no truncation marker)', () => {
+    const input = 'hello world';
+    const result = capVia(input);
+    expect(result).toBe(input);
+    expect(result).not.toContain('[detached output truncated]');
+  });
+
+  it('exact-boundary input (exactly MAX_OUTPUT_BYTES) passes through unchanged', () => {
+    const MAX_OUTPUT_BYTES = 16 * 1024;
+    // Use pure ASCII so byte count equals char count.
+    const input = 'x'.repeat(MAX_OUTPUT_BYTES);
+    const result = capVia(input);
+    expect(result).toBe(input);
+    expect(result).not.toContain('[detached output truncated]');
+  });
+
+  it('over-budget input appends truncation marker', () => {
+    const MAX_OUTPUT_BYTES = 16 * 1024;
+    const input = 'x'.repeat(MAX_OUTPUT_BYTES + 1);
+    const result = capVia(input);
+    expect(result).toContain('[detached output truncated]');
+  });
+
+  it('multi-byte-straddling: cut at 4-byte code point boundary avoids U+FFFD', () => {
+    // Build a string that is exactly at the limit except the last character is
+    // a 4-byte UTF-8 code point (U+1F600, 😀) that straddles the boundary.
+    // With a naive subarray(0, maxBytes).toString('utf8') decode the last
+    // 1–3 bytes would decode to U+FFFD.  The fixed capOutput must walk back.
+    const MAX_OUTPUT_BYTES = 16 * 1024;
+    // Fill to (MAX - 1) ASCII bytes then append U+1F600 (4 bytes) so the
+    // total is (MAX + 3) bytes — the emoji straddles the cut at byte MAX.
+    const ascii = 'a'.repeat(MAX_OUTPUT_BYTES - 1);
+    const input = ascii + '\u{1F600}'; // total = MAX - 1 + 4 = MAX + 3 bytes
+    const result = capVia(input);
+    expect(result).toContain('[detached output truncated]');
+    // The result must NOT contain U+FFFD (replacement character).
+    expect(result).not.toContain('\uFFFD');
+    // The truncated body (before the marker) must be valid UTF-8
+    // (Buffer.from().toString() round-trip produces identical string).
+    const body = result.split('\n… [detached output truncated]')[0] ?? '';
+    expect(Buffer.from(body, 'utf8').toString('utf8')).toBe(body);
+  });
+
+  it('multi-byte-straddling: cut at 3-byte code point boundary avoids U+FFFD', () => {
+    // Same as above but with a 3-byte code point (U+2603, ☃).
+    const MAX_OUTPUT_BYTES = 16 * 1024;
+    const ascii = 'a'.repeat(MAX_OUTPUT_BYTES - 1);
+    const input = ascii + '\u2603'; // 1 + 3 = MAX + 2 bytes total
+    const result = capVia(input);
+    expect(result).toContain('[detached output truncated]');
+    expect(result).not.toContain('\uFFFD');
+    const body = result.split('\n… [detached output truncated]')[0] ?? '';
+    expect(Buffer.from(body, 'utf8').toString('utf8')).toBe(body);
+  });
+});

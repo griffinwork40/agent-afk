@@ -857,10 +857,8 @@ describe('updatePlugin — warns before discarding local edits (#3260)', () => {
       return base(args, cwd, env);
     };
 
-    const warnMessages: string[] = [];
-    const origWarn = console.warn;
-    console.warn = (...args: unknown[]) => { warnMessages.push(args.join(' ')); };
-
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let warnMessages: string[] = [];
     try {
       await updatePlugin(
         'my-plugin',
@@ -868,7 +866,9 @@ describe('updatePlugin — warns before discarding local edits (#3260)', () => {
         { pluginsDir, indexPath, gitRunner: statusRunner, now: () => new Date('2026-05-01T00:00:00Z') },
       );
     } finally {
-      console.warn = origWarn;
+      // Capture before mockRestore() clears mock.calls.
+      warnMessages = warnSpy.mock.calls.map((c) => c.join(' '));
+      warnSpy.mockRestore();
     }
 
     // The warning must name the modified files.
@@ -892,10 +892,8 @@ describe('updatePlugin — warns before discarding local edits (#3260)', () => {
       return base(args, cwd, env);
     };
 
-    const warnMessages: string[] = [];
-    const origWarn = console.warn;
-    console.warn = (...args: unknown[]) => { warnMessages.push(args.join(' ')); };
-
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let warnMessages: string[] = [];
     try {
       await updatePlugin(
         'my-plugin',
@@ -903,7 +901,8 @@ describe('updatePlugin — warns before discarding local edits (#3260)', () => {
         { pluginsDir, indexPath, gitRunner: cleanRunner, now: () => new Date() },
       );
     } finally {
-      console.warn = origWarn;
+      warnMessages = warnSpy.mock.calls.map((c) => c.join(' '));
+      warnSpy.mockRestore();
     }
 
     const warn = warnMessages.find((m) => m.includes('locally-edited'));
@@ -920,10 +919,8 @@ describe('updatePlugin — warns before discarding local edits (#3260)', () => {
       return base(args, cwd, env);
     };
 
-    const warnMessages: string[] = [];
-    const origWarn = console.warn;
-    console.warn = (...args: unknown[]) => { warnMessages.push(args.join(' ')); };
-
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let warnMessages: string[] = [];
     try {
       const outcome = await updatePlugin(
         'my-plugin',
@@ -933,7 +930,8 @@ describe('updatePlugin — warns before discarding local edits (#3260)', () => {
       // Update should still succeed.
       expect(outcome.status).toBe('updated');
     } finally {
-      console.warn = origWarn;
+      warnMessages = warnSpy.mock.calls.map((c) => c.join(' '));
+      warnSpy.mockRestore();
     }
 
     // No "locally-edited" warning — status errored so we skipped the probe.

@@ -65,6 +65,13 @@ export function defaultGitName(
   parsed: Extract<ParsedSource, { type: 'git' | 'github' }>,
 ): string {
   if (parsed.type === 'github') return parsed.repo;
+  // Strip the trailing `.git` suffix before extracting the segment so that
+  // "repo.git" and "repo" map to the same directory name.
+  // Real git URLs always contain a `/` or `:` delimiter, so the
+  // `basename(cleaned)` fallback is only reached for synthetic/local paths
+  // (e.g. bare dir names without separators) — documented here so future
+  // callers understand why `basename` is a fallback rather than the primary
+  // path (finding #3317-medium: normalization choice).
   const cleaned = parsed.url.replace(/\.git$/, '');
   const lastSlash = cleaned.lastIndexOf('/');
   const lastColon = cleaned.lastIndexOf(':');
@@ -156,6 +163,10 @@ export interface AdvanceCachedCheckoutOptions {
  * `marketplaces/update.ts` — ref-resolution provenance, remote-ref comparison,
  * branch-vs-tag discrimination, dirty-file warning, and the forced checkout.
  *
+ * **Precondition:** the caller must have already run `git fetch` (or equivalent)
+ * so that `refs/remotes/origin/*` is up-to-date before this function compares
+ * local HEAD against the remote tip (finding #3317-low).
+ *
  * Warn before discarding tracked edits (matches marketplace behaviour).
  * `git.trackedChanges` returns [] on error so a probe failure never blocks.
  *
@@ -172,8 +183,6 @@ export async function advanceCachedCheckout(
   label: string,
   name: string,
 ): Promise<CheckoutResult> {
-  const defaultBranch = await git.getDefaultBranch(dir, gitOpts);
-
   let targetRef: string;
   // `pickedSemverTag` records PROVENANCE: true only when the updater itself
   // selected `targetRef` as the latest semver tag — the one case where the
@@ -183,21 +192,28 @@ export async function advanceCachedCheckout(
   let pickedSemverTag = false;
 
   if (opts.explicitRef) {
-    // Caller explicitly re-pins — honour the new ref and mark it pinned.
+    // Caller explicitly re-pins — honour the new ref without querying the
+    // remote default branch (saves one git round-trip on the explicitRef path).
     targetRef = opts.explicitRef;
-  } else if (opts.isPinned(defaultBranch) && opts.storedRef) {
-    // Stored ref was user-pinned: advance a branch pin to the remote tip;
-    // a SHA/tag pin stays put (isBranch will be false → up-to-date or tag).
-    targetRef = opts.storedRef;
   } else {
-    // Auto-picked: run the semver-tag picker as before.
-    const tags = await git.listTags(dir, gitOpts);
-    const latest = pickLatestSemverTag(tags);
-    if (latest !== null) {
-      targetRef = latest;
-      pickedSemverTag = true;
+    // Only fetch the default branch when we actually need it for pin detection
+    // or auto-pick fallback (finding #3317-low: avoid redundant git round-trip
+    // when explicitRef is set).
+    const defaultBranch = await git.getDefaultBranch(dir, gitOpts);
+    if (opts.isPinned(defaultBranch) && opts.storedRef) {
+      // Stored ref was user-pinned: advance a branch pin to the remote tip;
+      // a SHA/tag pin stays put (isBranch will be false → up-to-date or tag).
+      targetRef = opts.storedRef;
     } else {
-      targetRef = opts.storedRef ?? defaultBranch;
+      // Auto-picked: run the semver-tag picker as before.
+      const tags = await git.listTags(dir, gitOpts);
+      const latest = pickLatestSemverTag(tags);
+      if (latest !== null) {
+        targetRef = latest;
+        pickedSemverTag = true;
+      } else {
+        targetRef = opts.storedRef ?? defaultBranch;
+      }
     }
   }
 
@@ -237,9 +253,14 @@ export async function advanceCachedCheckout(
   // checkout. Untracked files are excluded — they survive --force intact.
   const dirty = await git.trackedChanges(dir, gitOpts);
   if (dirty.length > 0) {
+    // Strip ANSI escape sequences from `git status --porcelain` paths before
+    // printing — adversarial or unusual filenames could embed sequences that
+    // confuse terminal output (finding #3317-low).
+    // eslint-disable-next-line no-control-regex
+    const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, '');
     console.warn(
       `[${label}] updating "${name}": the following locally-edited tracked file(s) will be reset to the upstream version:\n` +
-        dirty.map((f) => `  ${f}`).join('\n'),
+        dirty.map((f) => `  ${stripAnsi(f)}`).join('\n'),
     );
   }
 

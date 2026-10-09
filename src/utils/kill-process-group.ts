@@ -53,13 +53,14 @@ export function killProcessGroup(
         windowsHide: true,
       });
       killer.on('error', (err) => {
-        // ESRCH: process already dead — expected and silent.
-        // Anything else (taskkill timeout, binary unavailable, etc.) gets a
-        // diagnostic so operators can observe unexpected kill failures rather
-        // than absorbing them silently (finding #3210).
-        if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
-          console.warn(`[kill-process-group] taskkill error (pid=${pid}):`, err.message);
-        }
+        // Note: ESRCH is a POSIX errno that does not apply on Windows.
+        // `taskkill` signals a dead process through its exit code (error
+        // code 128), not through an 'error' event, so this handler only
+        // fires for launch failures (binary unavailable, permissions, etc.).
+        // All such failures are unexpected — warn unconditionally so
+        // operators can observe them rather than absorbing them silently
+        // (finding #3210).
+        console.warn(`[kill-process-group] taskkill error (pid=${pid}):`, err.message);
       });
       killer.unref();
     } else {
