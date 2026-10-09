@@ -19,7 +19,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ENV_REGISTRY, type EnvVarMeta, type EnvVarCategory } from '../src/config/env.js';
-import { renderMdx, assertCategoryOrderCompleteness } from './render-env-registry.mdx.js';
+import { renderMdx } from './render-env-registry.mdx.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');

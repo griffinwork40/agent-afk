@@ -6,11 +6,15 @@
  * plain-markdown renders. Not intended to be run standalone.
  *
  * Contract:
- *   - categoryLabels is an exhaustive Record<EnvVarCategory, string>, so a new
- *     category in env.ts that lacks a label here is a TypeScript compile error.
+ *   - categoryLabels is typed Record<EnvVarCategory, string>. scripts/ is NOT in
+ *     tsconfig.json's include, so that typing is editor-only; the runtime guard
+ *     assertCategoryOrderCompleteness is what actually fails `pnpm scan:env` when
+ *     a registry category lacks an order slot or a label.
  *   - categoryOrder determines section order; empty categories are skipped.
- *   - Descriptions are MDX-safe: < > become &lt; &gt;, { } become &#123; &#125;,
- *     | becomes \|. The escaping is applied once and never double-escaped.
+ *   - Text is MDX-safe: outside inline-code spans < > become &lt; &gt; and
+ *     { } become &#123; &#125;; inside spans the text is left literal (MDX does
+ *     not parse code, and entities there would render verbatim). | becomes \|
+ *     everywhere, since GFM splits table cells before parsing code spans.
  */
 
 import type { EnvVarCategory, EnvVarMeta } from '../src/config/env.js';
@@ -58,29 +62,35 @@ const categoryOrder: readonly EnvVarCategory[] = [
 // cannot silently drop vars from either rendered file.)
 export function assertCategoryOrderCompleteness(registry: readonly EnvVarMeta[]): void {
   const orderSet = new Set<EnvVarCategory>(categoryOrder);
-  const missing = [...new Set(registry.map((e) => e.category))].filter((c) => !orderSet.has(c));
+  const labels: Partial<Record<string, string>> = categoryLabels;
+  const missing = [...new Set(registry.map((e) => e.category))].filter(
+    (c) => !orderSet.has(c) || !labels[c],
+  );
   if (missing.length > 0) {
     throw new Error(
-      `render-env-registry.mdx: ENV_REGISTRY has categories missing from categoryOrder: ` +
-        `${missing.join(', ')}. Add them to categoryOrder in scripts/render-env-registry.mdx.ts.`,
+      `render-env-registry.mdx: ENV_REGISTRY has categories missing from categoryOrder or categoryLabels: ` +
+        `${missing.join(', ')}. Add them to both in scripts/render-env-registry.mdx.ts.`,
     );
   }
 }
 
 /** Escape a description string for use inside an MDX table cell. */
-function escapeMdx(text: string): string {
-  // Order matters: replace & first only if we were to use &amp;, but we do not
-  // introduce any new & here (we map < > { } | directly to named/numeric
-  // entities that already contain &). We therefore do NOT escape & itself —
-  // descriptions may already contain & in prose (e.g. "X & Y") and adding
-  // &amp; would double-encode any entity already present in the source text.
-  // The four substitutions below are single-pass (replaceAll is not chained on
-  // its own output) so there is no double-escaping risk.
+export function escapeMdx(text: string): string {
+  // & is deliberately not escaped: prose may contain a bare "X & Y", and no
+  // substitution below emits text that a later one rewrites. Odd-indexed parts
+  // of the backtick split are inline-code spans and stay literal except for |.
   return text
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('{', '&#123;')
-    .replaceAll('}', '&#125;')
+    .split('`')
+    .map((part, i) =>
+      i % 2 === 1
+        ? part
+        : part
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('{', '&#123;')
+            .replaceAll('}', '&#125;'),
+    )
+    .join('`')
     .replaceAll('|', '\\|');
 }
 

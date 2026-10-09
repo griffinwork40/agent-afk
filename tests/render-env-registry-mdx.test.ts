@@ -46,6 +46,20 @@ describe('renderMdx — MDX escaping', () => {
     expect(output).not.toContain('<cwd>');
   });
 
+  it('leaves < > { } literal inside inline-code spans but still escapes pipes', () => {
+    const registry: readonly EnvVarMeta[] = [
+      makeEntry({
+        name: 'TEST_CODE_SPAN',
+        description: 'Run `afk login --profile <name>` or `{"a":1|2}` for <cwd>.',
+      }),
+    ];
+    const output = renderMdx(registry);
+    expect(output).toContain('`afk login --profile <name>`');
+    expect(output).toContain('`{"a":1\\|2}`');
+    expect(output).toContain('for &lt;cwd&gt;.');
+    expect(output).not.toContain('&lt;name&gt;');
+  });
+
   it('escapes { and } in descriptions', () => {
     const registry: readonly EnvVarMeta[] = [
       makeEntry({ name: 'TEST_BRACES', description: 'State at {home}/state.' }),
@@ -171,7 +185,7 @@ describe('renderMdx — exhaustive category labels', () => {
       category: 'newcat' as EnvVarMeta['category'],
     });
     expect(() => assertCategoryOrderCompleteness([badEntry])).toThrow(
-      /categories missing from categoryOrder/,
+      /categories missing from categoryOrder or categoryLabels/,
     );
   });
 
