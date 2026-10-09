@@ -77,8 +77,14 @@ export function buildDetachedToolInjection(result: DetachedToolResult): string {
  */
 function capOutput(raw: string, maxBytes: number): string {
   if (Buffer.byteLength(raw, 'utf8') <= maxBytes) return raw;
-  const truncated = Buffer.from(raw, 'utf8').subarray(0, maxBytes).toString('utf8');
-  return truncated + '\n… [detached output truncated]';
+  const buf = Buffer.from(raw, 'utf8');
+  // Walk back from `maxBytes` to find a valid UTF-8 start byte so the
+  // decode never emits a U+FFFD replacement character mid-codepoint.
+  // UTF-8 continuation bytes are 0x80–0xBF; start bytes are 0x00–0x7F,
+  // 0xC0–0xFF.  Walking back at most 3 bytes covers the widest code point.
+  let end = maxBytes;
+  while (end > 0 && (buf[end]! & 0xc0) === 0x80) end--;
+  return buf.subarray(0, end).toString('utf8') + '\n… [detached output truncated]';
 }
 
 /** Patch partial-compose metadata from a settled result back onto a ToolEvent. */
