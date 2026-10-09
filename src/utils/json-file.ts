@@ -203,7 +203,11 @@ export function readJsonFileLoose<T>(path: string, opts?: ReadJsonOptions<T>): T
   }
   try {
     return JSON.parse(raw) as T;
-  } catch {
+  } catch (err) {
+    // JSON.parse only throws SyntaxError for string input — rethrow anything
+    // else so non-parse errors (e.g. unexpected engine bugs) are not silently
+    // swallowed.
+    if (!(err instanceof SyntaxError)) throw err;
     return opts !== undefined && 'onMissing' in opts ? opts.onMissing : undefined;
   }
 }
@@ -235,7 +239,11 @@ export async function readJsonFileLooseAsync<T>(
   }
   try {
     return JSON.parse(raw) as T;
-  } catch {
+  } catch (err) {
+    // JSON.parse only throws SyntaxError for string input — rethrow anything
+    // else so non-parse errors (e.g. unexpected engine bugs) are not silently
+    // swallowed.
+    if (!(err instanceof SyntaxError)) throw err;
     return opts !== undefined && 'onMissing' in opts ? opts.onMissing : undefined;
   }
 }
