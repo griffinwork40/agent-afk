@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.307.10] - 2026-10-09
+
+### Added
+- auto-load journal on resume so SDK consumers rehydrate conversation context (#3372) (9cd65ba9)
+
+### Fixed
+- route image-model tool handlers through HTTP/1.1 transport (#3363) (73d36148)
+
 ## [5.307.9] - 2026-10-09
 
 ### Changed
