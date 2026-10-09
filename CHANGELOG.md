@@ -11,6 +11,19 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.307.11] - 2026-10-09
+
+### Fixed
+- clear resizeGeometryStale on repin early-return; fix stale prose (#3376) (9460ebf2)
+- bufferedLength units doc, explicit first-line discard, drop redundant existsSync (#3380) (e931b4de)
+- deliver mid-turn background-process results at the tool-round boundary (#3384) (a6d323cc)
+- surface timeoutRate/p95Ms in summary, add summary to subagents view, TTL cache, narrow non-null assertions, fake timers in tests (#3379) (6139b570)
+- narrow loose-reader error handling — rethrow EACCES/EISDIR (#3378) (550e4850)
+- correct h1ModelFetch docs and strengthen Responses-wire test (#3381) (712a1dc4)
+
+### Changed
+- daemon wave-resume push logging, named constants, explicit promise awaiting (#3377) (08e276ec)
+
 ## [5.307.10] - 2026-10-09
 
 ### Added
