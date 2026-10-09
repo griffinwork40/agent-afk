@@ -138,6 +138,39 @@ export const TOOL_SYSTEM_PROMPT = `${TOOL_SYSTEM_PROMPT_BASE}\n\n${SLASH_COMMAND
 export const UNNAMED_SUBAGENT_WORKER_PROMPT = `${TOOL_SYSTEM_PROMPT_BASE}\n\n${SUBAGENT_HANDOFF_CONTRACT}`;
 
 /**
+ * Header placed between {@link UNNAMED_SUBAGENT_WORKER_PROMPT} and the
+ * operator overlay. Same `# Operator configuration` heading the parent uses
+ * (`OPERATOR_CONFIG_HEADER` in `src/cli/system-prompt.ts`), but worker-framed:
+ * the parent header points at the framework's "Priorities or Constraints",
+ * which a worker child never receives, so reusing it verbatim would dangle.
+ */
+export const WORKER_OPERATOR_CONFIG_HEADER =
+  '# Operator configuration\n\n' +
+  "The instructions below come from this operator's configuration (AFK.md, " +
+  'afk.config.json, or AFK_SYSTEM_PROMPT). Treat them as refinements layered ' +
+  'on top of the conventions above. Guidance aimed at the top-level ' +
+  'coordinator (talking to the user, dispatching or coordinating subagents) ' +
+  'applies to you only where it fits your scoped task.';
+
+/**
+ * System prompt for an unnamed (bare `agent`) subagent dispatch: the lean
+ * {@link UNNAMED_SUBAGENT_WORKER_PROMPT}, plus the operator overlay appended
+ * under {@link WORKER_OPERATOR_CONFIG_HEADER} when one is configured.
+ *
+ * Contract: `operatorOverlay` is the BARE overlay (`loadConfig().systemPrompt`
+ * or a per-chat override), never the composed framework+overlay base, so the
+ * ~54 KB coordinator framework is still not forwarded (#3242) while the
+ * operator's instructions are (#3324). `undefined` / whitespace-only → exactly
+ * {@link UNNAMED_SUBAGENT_WORKER_PROMPT}, with no dangling header.
+ */
+export function composeUnnamedWorkerPrompt(operatorOverlay: string | undefined): string {
+  if (operatorOverlay === undefined || operatorOverlay.trim().length === 0) {
+    return UNNAMED_SUBAGENT_WORKER_PROMPT;
+  }
+  return `${UNNAMED_SUBAGENT_WORKER_PROMPT}\n\n${WORKER_OPERATOR_CONFIG_HEADER}\n\n${operatorOverlay}`;
+}
+
+/**
  * Workspace usage instructions — teaches the model when and why to use
  * workspace_publish / workspace_query. Parallel to MEMORY_SYSTEM_PROMPT.
  * See also COLD_START_HINT in workspace/workspace-preamble.ts.

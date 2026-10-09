@@ -5,7 +5,6 @@
     "src/agent/providers/anthropic-direct/loop.ts::runTurn": { "loc": 258, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/providers/anthropic-direct/loop/stream-consumer.ts::consumeRoundStream": { "loc": 279, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/session/stream-consumer.ts::transformProviderEvent": { "loc": 240, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/agent/session/wire-executors.ts::wireExecutors": { "loc": 201, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/shell-jobs/streamer.ts::startShell": { "loc": 284, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/subagent.ts::SubagentManager.forkSubagent": { "loc": 304, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/subagent/handle.streaming.ts::streamToFinalMessage": { "loc": 231, "reason": "legacy: predates the function-size gate; pending helper extraction" },
@@ -17,7 +16,7 @@
     "src/agent/tools/handlers/patch-apply-engine.ts::applyPatch": { "loc": 208, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/handlers/worktree.ts::createWorktreeHandler": { "loc": 207, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/subagent-executor.ts::SubagentExecutor.executeOnce": { "loc": 474, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/agent/tools/subagent/child-config.ts::buildChildConfig": { "loc": 339, "reason": "legacy: predates the function-size gate; pending helper extraction" },
+    "src/agent/tools/subagent/child-config.ts::buildChildConfig": { "loc": 332, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/subagent/foreground-promotion.ts::runForegroundWithPromotion": { "loc": 376, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/subagent/input-parse.ts::parseAgentInput": { "loc": 406, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/worktree/worktree-sweep.ts::runSweep": { "loc": 420, "reason": "legacy: predates the function-size gate; pending helper extraction" },
@@ -41,7 +40,7 @@
     "src/cli/input/reader.ts::readWithAutocompleteTty": { "loc": 230, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/render/picker.ts::runPicker": { "loc": 262, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/terminal-compositor.input-dispatch.enter.ts::handleEnter": { "loc": 259, "reason": "handleEnter restored from pre-split terminal-compositor.input-dispatch.ts (fix #2981); inline invariant comments are non-negotiable documentation per #2981 advisory" },
-    "src/telegram/elicitation-handler.ts::makeTelegramElicitationHandler": { "loc": 406, "reason": "legacy: predates the function-size gate; pending helper extraction" },
+    "src/telegram/elicitation-handler.ts::makeTelegramElicitationHandler": { "loc": 398, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/telegram/streaming.ts::streamResponse": { "loc": 274, "reason": "legacy: predates the function-size gate; pending helper extraction" }
   }
 }

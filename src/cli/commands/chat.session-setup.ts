@@ -46,6 +46,8 @@ export interface ChatSessionSetupParams {
   systemPromptSource: string | undefined;
   /** Raw base prompt before routing-directive assembly (forwarded to child sessions). */
   basePrompt: string | undefined;
+  /** Bare operator overlay (no framework); reaches unnamed `agent` children (#3324). */
+  operatorOverlay?: string | undefined;
   /** Provider hints from --provider flag; forwarded to getApiKeyForModel. */
   providerHints: ProviderRouteHints | undefined;
   /** Raw --provider value for parseProvider (undefined = auto-route). */
@@ -99,6 +101,7 @@ export async function buildChatSession(
     systemPrompt,
     systemPromptSource,
     basePrompt,
+    operatorOverlay,
     providerHints,
     providerRaw,
     thinking,
@@ -149,6 +152,7 @@ export async function buildChatSession(
     defaultSubagentModel: getDefaultSubagentModel(model),
     resolveApiKeyForModel: getApiKeyForModel,
     ...(basePrompt !== undefined ? { systemPrompt: basePrompt } : {}),
+    ...(operatorOverlay !== undefined ? { operatorOverlay } : {}),
     ...(baseUrl !== undefined ? { baseUrl } : {}),
     ...(openaiBaseUrl !== undefined ? { openaiBaseUrl } : {}),
     ...(worktreeCwd !== undefined ? { cwd: worktreeCwd, nestedCwd: worktreeCwd } : {}),

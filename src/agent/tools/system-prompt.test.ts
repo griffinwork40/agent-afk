@@ -18,6 +18,8 @@ import {
   QUEUED_USER_MESSAGE_PROMPT,
   PEER_MESSAGE_PROMPT,
   UNNAMED_SUBAGENT_WORKER_PROMPT,
+  WORKER_OPERATOR_CONFIG_HEADER,
+  composeUnnamedWorkerPrompt,
   MEMORY_SYSTEM_PROMPT,
   MEMORY_SYSTEM_PROMPT_READONLY,
   MEMORY_SYSTEM_PROMPT_SEARCH_ONLY,
@@ -117,6 +119,24 @@ describe('UNNAMED_SUBAGENT_WORKER_PROMPT — scoped worker prompt for bare agent
 
   it('is strictly smaller than the full interactive compound', () => {
     expect(UNNAMED_SUBAGENT_WORKER_PROMPT.length).toBeLessThan(TOOL_SYSTEM_PROMPT.length);
+  });
+});
+
+describe('composeUnnamedWorkerPrompt (#3324)', () => {
+  it('returns exactly the worker prompt when no overlay is configured', () => {
+    expect(composeUnnamedWorkerPrompt(undefined)).toBe(UNNAMED_SUBAGENT_WORKER_PROMPT);
+    expect(composeUnnamedWorkerPrompt('')).toBe(UNNAMED_SUBAGENT_WORKER_PROMPT);
+    expect(composeUnnamedWorkerPrompt('  \n ')).toBe(UNNAMED_SUBAGENT_WORKER_PROMPT);
+  });
+
+  it('appends the overlay under a single # Operator configuration header', () => {
+    const out = composeUnnamedWorkerPrompt('Use pnpm only.');
+    expect(out).toBe(`${UNNAMED_SUBAGENT_WORKER_PROMPT}\n\n${WORKER_OPERATOR_CONFIG_HEADER}\n\nUse pnpm only.`);
+    expect(WORKER_OPERATOR_CONFIG_HEADER.startsWith('# Operator configuration\n\n')).toBe(true);
+  });
+
+  it('worker header does not reference framework sections the worker never receives', () => {
+    expect(WORKER_OPERATOR_CONFIG_HEADER).not.toContain('Priorities or Constraints');
   });
 });
 

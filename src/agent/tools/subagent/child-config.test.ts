@@ -29,7 +29,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildChildConfig, type BuildChildConfigArgs } from './child-config.js';
 import { UNNAMED_SUBAGENT_WORKER_PROMPT } from '../system-prompt.js';
 import { SUBAGENT_HANDOFF_CONTRACT } from '../../subagent-contract.js';
-import { TOOL_SYSTEM_PROMPT_BASE } from '../system-prompt.js';
+import { TOOL_SYSTEM_PROMPT_BASE, WORKER_OPERATOR_CONFIG_HEADER } from '../system-prompt.js';
 import { InMemoryTraceWriter } from '../../trace/writer.js';
 import type { AgentInput } from './input-parse.js';
 import { buildInitialState } from '../../session/session-setup.js';
@@ -347,6 +347,72 @@ describe('buildChildConfig', () => {
       // No parent base prompt → still uses UNNAMED_SUBAGENT_WORKER_PROMPT,
       // not the old fallback of SUBAGENT_HANDOFF_CONTRACT alone.
       expect(childConfig.systemPrompt).toBe(UNNAMED_SUBAGENT_WORKER_PROMPT);
+    });
+
+    // #3324: the lean worker prompt must still carry the operator overlay
+    // (AFK.md / afk.config.json / AFK_SYSTEM_PROMPT) that the full parent base
+    // used to deliver, without re-forwarding the framework base itself.
+    describe('operator overlay (#3324)', () => {
+      const FRAMEWORK = '# Agent AFK\n\nCOORDINATOR-FRAMEWORK-SENTINEL';
+      const OVERLAY = 'OPERATOR-OVERLAY-SENTINEL: never use dashes.';
+      const withOverlay = (operatorOverlay: string | undefined) =>
+        baseArgs({
+          namedAgent: undefined,
+          defaultConfig: {
+            ...baseArgs().defaultConfig,
+            // The composed parent base: framework + header + overlay.
+            systemPrompt: `${FRAMEWORK}\n\n# Operator configuration\n\n${OVERLAY}`,
+            ...(operatorOverlay !== undefined ? { operatorOverlay } : {}),
+          },
+        });
+
+      it('(a) appends the overlay under the Operator configuration header after the worker prompt', () => {
+        const { childConfig } = buildChildConfig(withOverlay(OVERLAY));
+        expect(childConfig.systemPrompt).toBe(
+          `${UNNAMED_SUBAGENT_WORKER_PROMPT}\n\n${WORKER_OPERATOR_CONFIG_HEADER}\n\n${OVERLAY}`,
+        );
+        const sp = childConfig.systemPrompt as string;
+        expect(sp.startsWith(UNNAMED_SUBAGENT_WORKER_PROMPT)).toBe(true);
+        expect(sp.indexOf('# Operator configuration')).toBeLessThan(sp.indexOf(OVERLAY));
+        // Exactly one copy of the overlay and of the header.
+        expect(sp.split(OVERLAY)).toHaveLength(2);
+        expect(sp.split('# Operator configuration')).toHaveLength(2);
+      });
+
+      it('(b) no overlay (absent or whitespace-only) yields exactly the worker prompt', () => {
+        expect(buildChildConfig(withOverlay(undefined)).childConfig.systemPrompt)
+          .toBe(UNNAMED_SUBAGENT_WORKER_PROMPT);
+        expect(buildChildConfig(withOverlay('   \n\t ')).childConfig.systemPrompt)
+          .toBe(UNNAMED_SUBAGENT_WORKER_PROMPT);
+      });
+
+      it('(c) never forwards the composed framework base, with or without an overlay', () => {
+        for (const ov of [OVERLAY, undefined]) {
+          const sp = buildChildConfig(withOverlay(ov)).childConfig.systemPrompt as string;
+          expect(sp).not.toContain('COORDINATOR-FRAMEWORK-SENTINEL');
+          expect(sp).not.toContain('# Agent AFK');
+        }
+      });
+
+      it('named dispatch is unchanged: definition prompt only, no overlay appended', () => {
+        const { childConfig } = buildChildConfig({
+          ...withOverlay(OVERLAY),
+          namedAgent: namedAgent({ prompt: 'You are the research agent.' }),
+        });
+        expect(childConfig.systemPrompt).toBe('You are the research agent.');
+      });
+
+      it('passes the overlay on to the nested child executor so depth-2 unnamed forks keep it', () => {
+        const args = withOverlay(OVERLAY);
+        buildChildConfig({ ...args, childProviderFactory: vi.fn(() => ({}) as never) });
+        const childCtx = vi.mocked(args.createChildExecutor).mock.calls[0]?.[0];
+        expect(childCtx?.defaultConfig.operatorOverlay).toBe(OVERLAY);
+      });
+
+      it('does not copy operatorOverlay onto the child AgentConfig', () => {
+        const { childConfig } = buildChildConfig(withOverlay(OVERLAY));
+        expect(childConfig).not.toHaveProperty('operatorOverlay');
+      });
     });
 
     it("uses the named agent's definition prompt (markdown body) for a named dispatch", () => {

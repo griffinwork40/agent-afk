@@ -20,7 +20,7 @@
  */
 
 import { SubagentManager } from '../../subagent.js';
-import { UNNAMED_SUBAGENT_WORKER_PROMPT } from '../system-prompt.js';
+import { composeUnnamedWorkerPrompt } from '../system-prompt.js';
 import type { ReadScopeInputs } from '../../subagent-read-scope.js';
 import type { ModelProvider } from '../../provider.js';
 import type { AgentModelInput, IAgentSession } from '../../types.js';
@@ -79,7 +79,8 @@ export interface BuildChildConfigArgs {
   childInheritedReadRoots?: string[];
   /** The dispatching tool-call's abort signal (owns the child manager lifetime). */
   signal: AbortSignal;
-  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'xaiBaseUrl' | 'skillDispatchName'>;
+  /** See SubagentExecutorContext.defaultConfig (incl. the bare `operatorOverlay`). */
+  defaultConfig: SubagentExecutorContext['defaultConfig'];
   resolveApiKeyForModel?: (model: string) => string | undefined;
   defaultSubagentModel: AgentModelInput;
   childProviderFactory?: (args: ChildProviderFactoryArgs) => ModelProvider;
@@ -379,13 +380,14 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     // Named-agent body IS the prompt (Claude Code parity; general-purpose
     // bakes in SUBAGENT_HANDOFF_CONTRACT; read-only vendored agents compact).
     // Unnamed dispatch uses a lean scoped worker prompt instead of the full
-    // coordinator-framed parent base (~54 KB) — see UNNAMED_SUBAGENT_WORKER_PROMPT
-    // in system-prompt.ts. Identity/workspace preambles are injected separately
-    // by assembleChildConfig / injectWorkspacePreamble and are NOT included here.
+    // coordinator-framed parent base (~54 KB), plus the BARE operator overlay
+    // so AFK.md instructions still reach the child (#3324) — see
+    // composeUnnamedWorkerPrompt in system-prompt.ts. Identity/workspace
+    // preambles are injected later by assembleChildConfig / injectWorkspacePreamble.
     systemPrompt:
       namedAgent !== undefined
         ? namedAgent.definition.prompt
-        : UNNAMED_SUBAGENT_WORKER_PROMPT,
+        : composeUnnamedWorkerPrompt(defaultConfig.operatorOverlay),
     baseUrl: childIsOpenAI ? undefined : defaultConfig.baseUrl,
     ...(defaultConfig.xaiBaseUrl !== undefined ? { xaiBaseUrl: defaultConfig.xaiBaseUrl } : {}),
     maxTurns: effectiveMaxTurns,
