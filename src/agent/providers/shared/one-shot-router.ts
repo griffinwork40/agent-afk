@@ -30,6 +30,7 @@ import {
 
 export type { OneShotStopReason };
 import { resolveOpenAIAuth } from '../openai-compatible/auth.js';
+import { h1ModelFetch } from './h1-fetch.js';
 import {
   buildChatGptOAuthHeaders,
   CHATGPT_BACKEND_BASE_URL,
@@ -219,6 +220,8 @@ async function viaOpenAI(
       defaultHeaders: buildChatGptOAuthHeaders(auth.accountId),
       // Contract: maxRetries: 0 — AFK owns retries via withTransientRetry.
       maxRetries: 0,
+      // Invariant: force HTTP/1.1 — see src/agent/providers/shared/h1-fetch.ts.
+      fetch: h1ModelFetch,
     });
     const text = await oneShotResponses({
       client,

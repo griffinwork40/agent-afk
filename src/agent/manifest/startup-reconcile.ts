@@ -15,6 +15,7 @@
  */
 
 import { reconcileWaveManifests, formatResumptionOffer, shouldSurfaceResumptionOffer, markManifestOffered } from './reconcile.js';
+import { pushIfConfigured } from '../../telegram/push.js';
 
 /**
  * Wire reconciliation for the interactive REPL surface.
@@ -83,6 +84,47 @@ export function runNonInteractiveReconcile(sessionId: string): void {
       for (const offer of result.offers) {
         process.stderr.write(formatResumptionOffer(offer) + '\n');
         markManifestOffered(offer.manifest);
+      }
+    } catch {
+      // Fire-and-forget: reconciler errors must never surface to the user.
+    }
+  });
+}
+
+/**
+ * Wire reconciliation for the daemon surface with confirmed Telegram delivery.
+ *
+ * Mirrors `runTelegramReconcile` — pushes each resumption offer via
+ * `pushIfConfigured` and only calls `markManifestOffered` when the push
+ * fully succeeds (EVERY chunk to every target returned `ok: true`). A partial
+ * delivery (e.g. chunk 1 ok, chunk 2 rate-limited, or one of several targets
+ * failing) leaves the manifest unstamped so the offer re-surfaces on the next
+ * start — a duplicate offer is preferable to a truncated/lost one, and
+ * resumption is idempotent on the operator side. Falls back to stderr
+ * when Telegram is not configured so the offer is never silently lost.
+ *
+ * Gate: active when `AFK_WAVE_RESUME_UNATTENDED=1` (same as
+ * `runNonInteractiveReconcile`). Fire-and-forget: returns immediately; errors
+ * are swallowed.
+ */
+export function runDaemonReconcile(sessionId: string): void {
+  if (!shouldSurfaceResumptionOffer(false)) return;
+  void Promise.resolve().then(async () => {
+    try {
+      const result = reconcileWaveManifests({ sessionId });
+      for (const offer of result.offers) {
+        const text = formatResumptionOffer(offer);
+        const results = await pushIfConfigured(text).catch(() => null);
+        if (results === null) {
+          // Telegram not configured — fall back to stderr so the offer is visible.
+          process.stderr.write(text + '\n');
+          markManifestOffered(offer.manifest);
+        } else {
+          // Only stamp as offered when every chunk/target delivery succeeded;
+          // an empty result array (nothing sent) never counts as delivered.
+          const delivered = results.length > 0 && results.every((r) => r.ok);
+          if (delivered) markManifestOffered(offer.manifest);
+        }
       }
     } catch {
       // Fire-and-forget: reconciler errors must never surface to the user.

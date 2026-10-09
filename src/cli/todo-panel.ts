@@ -6,8 +6,9 @@
  * non-empty; empty panels stay hidden.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { writeJsonFile } from '../utils/json-file.js';
 import { ensureTodosMigrated, getTodosDir } from '../paths.js';
 import { displayWidth } from './display.js';
 import { renderCardLine } from './formatter.js';
@@ -50,9 +51,8 @@ export function loadTodos(sessionId: string): TodoStore {
 }
 
 export function saveTodos(store: TodoStore): void {
-  const root = rootDir();
-  if (!existsSync(root)) mkdirSync(root, { recursive: true });
-  writeFileSync(pathFor(store.sessionId), JSON.stringify(store, null, 2));
+  // Atomic write: writeJsonFile uses tmp+rename (mkdirp by default).
+  writeJsonFile(pathFor(store.sessionId), store);
 }
 
 export function addTodo(store: TodoStore, text: string): TodoItem {

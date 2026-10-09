@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { env } from '../../config/env.js';
-import { runNonInteractiveReconcile } from '../../agent/manifest/startup-reconcile.js';
+import { runDaemonReconcile } from '../../agent/manifest/startup-reconcile.js';
 import { palette } from '../palette.js';
 import { handleCommandError } from '../errors/index.js';
 import { startDaemon } from '../../agent/daemon.js';
@@ -139,11 +139,28 @@ const isDoneUnverified = ({ responseText, successfulToolNames }: { responseText:
 /** Guards against duplicate listener registration if called more than once. */
 let daemonCrashHandlersInstalled = false;
 
+/**
+ * Reset the re-entry guard. Exported for testing only — do not call in
+ * production code.
+ *
+ * @internal
+ */
+export function _resetDaemonCrashHandlersForTest(): void {
+  daemonCrashHandlersInstalled = false;
+}
+
 /** Milliseconds to wait after firing the crash notification before exiting,
  *  giving the fire-and-forget HTTP push a chance to flush.
  *  Declared at module scope (mirrors entry.ts) so it is visible across the
  *  whole module rather than being buried inside registerDaemonCrashHandlers. */
 const CRASH_EXIT_DELAY_MS = 200;
+
+/** Shape of a single in-flight task snapshot for crash-notice inclusion (#3248). */
+export interface InFlightTaskSnapshot {
+  taskId: string;
+  commandHead: string;
+  elapsedMs: number;
+}
 
 /**
  * Register uncaughtException / unhandledRejection process handlers that push a
@@ -155,8 +172,14 @@ const CRASH_EXIT_DELAY_MS = 200;
  * Re-entry safe: a module-scoped flag prevents duplicate listener registration
  * if this function is called more than once, mirroring entry.ts's
  * crashHandlersInstalled pattern.
+ *
+ * @param getInFlightTasks - Optional provider of the current in-flight task
+ *   snapshot. When present, the crash notice includes task ids, command heads,
+ *   and elapsed time for every task that was running at crash time (#3248).
  */
-function registerDaemonCrashHandlers(): void {
+export function registerDaemonCrashHandlers(
+  getInFlightTasks?: () => InFlightTaskSnapshot[],
+): void {
   if (daemonCrashHandlersInstalled) return;
   daemonCrashHandlersInstalled = true;
 
@@ -167,9 +190,23 @@ function registerDaemonCrashHandlers(): void {
     if (nowMs - lastCrashPushAt < CRASH_PUSH_GUARD_MS) return;
     lastCrashPushAt = nowMs;
     const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-    void pushIfConfigured(
-      `🛑 agent-afk daemon ${kind}\n${msg.slice(0, 500)}`,
-    ).catch((pushErr: unknown) => {
+    const lines: string[] = [`🛑 agent-afk daemon ${kind}`, msg.slice(0, 500)];
+    if (getInFlightTasks !== undefined) {
+      try {
+        const tasks = getInFlightTasks();
+        if (tasks.length > 0) {
+          lines.push('');
+          lines.push(`in-flight (${tasks.length}):`);
+          for (const t of tasks) {
+            const elapsedSec = (t.elapsedMs / 1000).toFixed(1);
+            lines.push(`  • ${t.taskId}: ${t.commandHead} (${elapsedSec}s)`);
+          }
+        }
+      } catch {
+        // getInFlightTasks must never crash the crash handler.
+      }
+    }
+    void pushIfConfigured(lines.join('\n')).catch((pushErr: unknown) => {
       console.error('[daemon] crash notification push failed:', errorMessage(pushErr));
     });
   };
@@ -187,6 +224,22 @@ function registerDaemonCrashHandlers(): void {
     process.exitCode = 1;
     setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
   });
+}
+
+/**
+ * Install the daemon crash handlers up front — before any async startup work
+ * (plugin loading, `startDaemon`) — so a crash DURING startup still pushes a
+ * notice (#3323 review). The in-flight getter is late-bound: it yields `[]`
+ * until the caller binds the live scheduler snapshot via the returned setter.
+ * Idempotency is unchanged: `registerDaemonCrashHandlers` still installs at
+ * most one listener pair per process.
+ */
+export function registerEarlyDaemonCrashHandlers(): (source: () => InFlightTaskSnapshot[]) => void {
+  let inFlightSource: (() => InFlightTaskSnapshot[]) | undefined;
+  registerDaemonCrashHandlers(() => inFlightSource?.() ?? []);
+  return (source) => {
+    inFlightSource = source;
+  };
 }
 
 export function registerDaemonCommand(program: Command): void {
@@ -299,9 +352,8 @@ export function registerDaemonCommand(program: Command): void {
         }
       }
 
+      const bindInFlightSource = registerEarlyDaemonCrashHandlers(); // before async startup (#3323)
       activateDumpPrompt(options.dumpPrompt);
-
-      registerDaemonCrashHandlers();
 
       // Optional working-directory override for daemon-spawned sessions.
       // When set, every scheduled task's AgentSession (and its forked
@@ -381,10 +433,9 @@ export function registerDaemonCommand(program: Command): void {
           },
         });
 
-        // Wave-manifest reconciliation at daemon startup: surface resumption
-        // offers for unfinished work. Non-interactive — requires
-        // AFK_WAVE_RESUME_UNATTENDED=1. Fire-and-forget.
-        runNonInteractiveReconcile('');
+        bindInFlightSource(() => handle.scheduler.getInFlightTasks()); // live crash-notice snapshot (#3248)
+        // Wave-manifest reconciliation: pushes resumption offers via Telegram (#3248).
+        runDaemonReconcile('');
 
         if (options.once) {
           console.log(palette.info(`▶ Firing task '${taskId}' once...`));

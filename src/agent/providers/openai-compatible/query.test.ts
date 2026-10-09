@@ -386,6 +386,39 @@ describe('OpenAICompatibleProvider — system-prompt assembly order', () => {
     expect(iDoctrine).toBeLessThan(iHot); // before hot-memory project context
     expect(iDoctrine).toBeLessThan(iEnv); // before the # Environment reference block
   });
+
+  // Regression for #3261: a preset object { type:'preset', append } must forward
+  // the append text into the system message.  The pre-fix code used
+  //   `typeof config.systemPrompt === 'string' ? config.systemPrompt : undefined`
+  // which silently dropped the append text for non-string inputs.
+  it('preset {append} text reaches the system message (regression #3261)', async () => {
+    pendingChunks = [
+      {
+        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ];
+    const provider = new OpenAICompatibleProvider();
+    const q = provider.query({
+      prompt: singleInput('hi'),
+      config: {
+        model: 'gpt-4o-mini',
+        apiKey: 'sk-test-key',
+        systemPrompt: {
+          type: 'preset',
+          preset: 'claude_code',
+          append: 'PRESET_APPEND_SENTINEL',
+        },
+      } as AgentConfig,
+    });
+    await collect(q);
+
+    expect(createCalls).toHaveLength(1);
+    const args = createCalls[0]!.args as { messages: Array<{ role: string; content: string }> };
+    expect(args.messages[0]!.role).toBe('system');
+    // The append text must be present — it was silently dropped before #3261.
+    expect(args.messages[0]!.content).toContain('PRESET_APPEND_SENTINEL');
+  });
 });
 
 describe('OpenAICompatibleProvider — plan-mode gate via config.hookRegistry', () => {

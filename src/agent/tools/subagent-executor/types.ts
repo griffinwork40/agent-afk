@@ -42,8 +42,19 @@ export interface SubagentExecutorContext {
    * `systemPrompt` is the raw base prompt (pre-assembly), intentionally
    * excluding TOOL_SYSTEM_PROMPT and ROUTING_DIRECTIVE — subagents are task
    * workers that must not inherit routing directives. See ComposeExecutorContext.
+   *
+   * `operatorOverlay` is the BARE operator overlay (AFK.md / afk.config.json
+   * `systemPrompt` / AFK_SYSTEM_PROMPT, or a per-chat override) with no
+   * framework base and no header. Unnamed `agent` children do NOT inherit the
+   * composed `systemPrompt` (#3242); they get the lean worker prompt plus this
+   * overlay (`composeUnnamedWorkerPrompt`, #3324). Absent → no overlay. Not an
+   * AgentConfig field: it is consumed by `buildChildConfig` and never copied
+   * onto a child config. Inherited by nested child executors with the rest of
+   * `defaultConfig`.
    */
-  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'xaiBaseUrl' | 'skillDispatchName'>;
+  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'xaiBaseUrl' | 'skillDispatchName'> & {
+    operatorOverlay?: string;
+  };
   /**
    * User-facing surface of the session that owns this executor (cli/telegram/
    * daemon). Set at top-level wiring sites; inherited by nested child executors.

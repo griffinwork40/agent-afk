@@ -11,6 +11,27 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.307.3] - 2026-10-09
+
+### Changed
+- give unnamed subagents a scoped worker prompt instead of the full parent base (~54 KB) (#3324) (09ca83dd)
+
+## [5.307.2] - 2026-10-09
+
+### Added
+- push wave-resume offers to Telegram from daemon; include in-flight tasks in crash notices (#3323) (50ed2aa7)
+
+### Changed
+- add json-file + pathExists helpers, migrate 13 call sites (#3329) (1c7cb9e7)
+
+## [5.307.1] - 2026-10-09
+
+### Added
+- ship a reusable GitHub Action for running afk in CI (#3321) (82e44ca7)
+
+### Fixed
+- force HTTP/1.1 for all model API calls to prevent nghttp2 DATA-frame freeze on Node 26 (#3336) (0ce406ba)
+
 ## [5.307.0] - 2026-10-09
 
 ### Added

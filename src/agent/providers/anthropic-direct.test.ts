@@ -525,6 +525,9 @@ describe('AnthropicDirectProvider', () => {
         apiKey: 'local',
         baseURL: 'http://127.0.0.1:8080',
         maxRetries: 0,
+        // h1ModelFetch is always injected so SDK calls force HTTP/1.1,
+        // even in local-server mode (issue #2535 — HTTP/2 freeze fix).
+        fetch: expect.any(Function),
       });
     });
 

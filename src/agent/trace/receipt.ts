@@ -21,7 +21,9 @@
  * @module agent/trace/receipt
  */
 
-import { mkdir, readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
+import { writeJsonFileAsync } from '../../utils/json-file.js';
 import { renderReceiptMarkdown } from './receipt.render.js';
 import { basename, dirname, join } from 'path';
 import { getReceiptsDir } from '../../paths.js';
@@ -395,9 +397,9 @@ export async function writeRunReceipt(
     ...(opts.now !== undefined ? { now: opts.now } : {}),
   });
 
-  await mkdir(getReceiptsDir(), { recursive: true });
-  await writeFile(paths.jsonPath, JSON.stringify(receipt, null, 2) + '\n', 'utf8');
-  await writeFile(paths.mdPath, renderReceiptMarkdown(receipt), 'utf8');
+  // Both writes use atomic-write primitives (tmp+rename, mkdirp built in).
+  await writeJsonFileAsync(paths.jsonPath, receipt);
+  await atomicWriteFileAsync(paths.mdPath, renderReceiptMarkdown(receipt), { mode: 0o644, encoding: 'utf-8' });
   return paths;
 }
 

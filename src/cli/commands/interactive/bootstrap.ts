@@ -72,7 +72,7 @@ export async function bootstrapSession(
   const {
     resumeTarget, resumeConfig, effectiveCwd, sessionModel,
     thinking, effort, maxOutputTokens, maxToolUseIterations,
-    basePrompt, systemPrompt, systemPromptSource, cliConfig,
+    basePrompt, operatorOverlay, systemPrompt, systemPromptSource, cliConfig,
   } = resolveBootstrapConfig(options, extras);
 
   // Deferred parent proxy reads through sessionRef across mid-session swaps.
@@ -100,7 +100,7 @@ export async function bootstrapSession(
     trace, backgroundRegistry, detachRegistry, processJobs, bgSummarizer,
     rootManager, subagentExecutor, skillExecutor, composeExecutor,
   } = createBootstrapInfra({
-    sessionRef, options, cliConfig, sessionModel, basePrompt, effectiveCwd, resumeTarget, bootWarnings,
+    sessionRef, options, cliConfig, sessionModel, basePrompt, operatorOverlay, effectiveCwd, resumeTarget, bootWarnings,
     workspaceStore: sharedWorkspaceStore,
   });
   const { FastModeController } = await import('../../../agent/fast-mode.js');
