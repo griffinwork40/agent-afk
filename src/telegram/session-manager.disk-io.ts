@@ -16,6 +16,7 @@ import { promises as fs } from 'fs';
 import { join } from 'path';
 import { type TelegramRoute, routeKey } from './route.js';
 import type { SessionData } from './session-manager.js';
+import { isErrnoCode } from '../utils/errors.js';
 
 /**
  * The on-disk sidecar filename for a route's SessionData.
@@ -66,7 +67,7 @@ export async function loadSessionsFromDisk(
     }
   } catch (error) {
     // Ignore errors if directory doesn't exist
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+    if (!isErrnoCode(error, 'ENOENT')) {
       console.error('Failed to load sessions:', error);
     }
   }

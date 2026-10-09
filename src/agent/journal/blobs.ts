@@ -25,6 +25,7 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { getSessionBlobsDir, getSessionsDir } from '../../paths.js';
 import type { BlobRef } from './types.js';
+import { isErrnoCode } from '../../utils/errors.js';
 
 /** A payload waiting to be written before the record that references it. */
 export interface PendingBlob {
@@ -126,7 +127,7 @@ async function writeBlobExclusive(blob: PendingBlob): Promise<void> {
   try {
     await fsp.writeFile(tmp, blob.data, { mode: 0o600, flag: 'wx' });
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    if (!isErrnoCode(err, 'ENOENT')) throw err;
     // The dir was removed between mkdir and write: recreate it and retry once.
     await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
     await fsp.writeFile(tmp, blob.data, { mode: 0o600, flag: 'wx' });

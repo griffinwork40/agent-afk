@@ -35,6 +35,7 @@ import { promisify } from 'node:util';
 
 import { getFarmDir, getFarmsDir } from '../paths.js';
 import { resolveRepoRoot } from '../utils/git.js';
+import { isErrnoCode } from '../utils/errors.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -300,7 +301,7 @@ export async function createFarm(opts: CreateFarmOptions): Promise<FarmManifest>
     await fs.access(farmDir);
     throw new WorktreeError(`farm directory already exists: ${farmDir}`);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+    if (!isErrnoCode(err, 'ENOENT')) {
       if (err instanceof WorktreeError) throw err;
       // unexpected stat error — surface it
       throw new WorktreeError(`failed to check farm dir ${farmDir}`, err);
@@ -403,7 +404,7 @@ export async function loadFarm(taskSlug: string): Promise<FarmManifest | null> {
     // A1: migrate older manifests to have all v3 optional fields present
     return migrateFarmManifest(parsed);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    if (isErrnoCode(err, 'ENOENT')) return null;
     if (err instanceof WorktreeError) throw err;
     throw new WorktreeError(`failed to load farm manifest ${manifestPath}`, err, 'invalid');
   }
@@ -415,7 +416,7 @@ export async function listFarms(): Promise<string[]> {
     const entries = await fs.readdir(getFarmsDir(), { withFileTypes: true });
     return entries.filter((e) => e.isDirectory()).map((e) => e.name);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    if (isErrnoCode(err, 'ENOENT')) return [];
     throw new WorktreeError(`failed to list farms`, err);
   }
 }

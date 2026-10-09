@@ -19,6 +19,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { isErrnoCode } from '../utils/errors.js';
 
 /**
  * Injectable Windows launcher so this branch can be tested on any host.
@@ -57,7 +58,7 @@ export function killProcessGroup(
         // Anything else (taskkill timeout, binary unavailable, etc.) gets a
         // diagnostic so operators can observe unexpected kill failures rather
         // than absorbing them silently (finding #3210).
-        if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+        if (!isErrnoCode(err, 'ESRCH')) {
           console.warn(`[kill-process-group] taskkill error (pid=${pid}):`, err.message);
         }
       });

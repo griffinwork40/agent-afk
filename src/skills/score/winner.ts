@@ -29,6 +29,7 @@ import { join } from 'node:path';
 import type { BranchScore } from './index.js';
 import { rankBranches } from './index.js';
 import type { CreatedBranch, FarmManifest } from '../../agent/worktree.js';
+import { isErrnoCode } from '../../utils/errors.js';
 
 /**
  * Outcome of winner resolution. `source` tells callers WHY we picked this
@@ -95,7 +96,7 @@ async function defaultLoadScore(farmDir: string, index: number): Promise<BranchS
     const raw = await fs.readFile(path, 'utf8');
     return JSON.parse(raw) as BranchScore;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    if (isErrnoCode(err, 'ENOENT')) return null;
     // Malformed JSON or permission error — surface as "no score" rather than
     // crash the callback. The user-facing alternative (showing nothing at all)
     // is worse.
