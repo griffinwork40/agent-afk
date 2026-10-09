@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**222 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**221 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -81,7 +81,6 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 |------|------|----------|---------|---------|-------------|
 | `AFK_IMAGE_API_KEY` | string |  |  |  | Dedicated OpenAI API key for the image_generate tool. Checked before OPENAI_API_KEY to keep image billing separate from chat completions. When unset, OPENAI_API_KEY is used as a fallback. Get a key from https://platform.openai.com/api-keys. |
 | `AFK_LOCAL_API_KEY` | string |  | `local` | `local` | Placeholder API key for local Anthropic-compatible servers (vllm-mlx, etc.). Set when AFK_LOCAL_BASE_URL is configured. |
-| `AFK_OPENAI_CHATGPT_OAUTH` | string |  |  | `0` | Controls the tier-4 ChatGPT-subscription OAuth fallback in the openai-compatible auth chain. Unset or empty/whitespace = enabled (default). Truthy (1, true, yes, on) = explicitly enabled. Any other non-empty value (0, false, off, disabled, or a typo like "fasle") = disabled (fail-closed). Set to 0 or false to prevent AFK from automatically using a ~/.codex/auth.json ChatGPT-subscription token when no API key is configured. |
 | `ANTHROPIC_API_KEY` | string |  |  |  | Anthropic API key. Tier-1 credential — overrides keychain OAuth and CLAUDE_CODE_OAUTH_TOKEN. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | string |  |  |  | Claude Code OAuth token. Tier-2 credential — used when ANTHROPIC_API_KEY is unset; falls back to keychain. |
 | `CODEX_API_KEY` | string |  |  |  | Fallback OpenAI API key for the openai-compatible provider, read after OPENAI_API_KEY. Legacy name from the removed @openai/codex-sdk integration — prefer OPENAI_API_KEY. |
