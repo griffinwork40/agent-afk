@@ -330,6 +330,7 @@ describe('h1ModelFetch + undici FormData — multipart interop (issue #3345)', (
     );
     form.append('prompt', 'a test prompt');
     form.append('model', 'gpt-image-1');
+    form.append('output_format', 'jpeg'); // field added by fix for #3387
 
     const prev = process.env['NODE_TLS_REJECT_UNAUTHORIZED'];
     process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = '0';
@@ -377,5 +378,9 @@ describe('h1ModelFetch + undici FormData — multipart interop (issue #3345)', (
     expect(result.bodyText).toContain('name="image[]"');
     expect(result.bodyText).toContain('filename="ref.png"');
     expect(result.bodyText).toContain('image/png');
+    // Verify output_format reaches the server — guards against regression where
+    // the field was parsed/validated but never appended to the body (#3387).
+    expect(result.bodyText).toContain('name="output_format"');
+    expect(result.bodyText).toContain('jpeg');
   });
 });

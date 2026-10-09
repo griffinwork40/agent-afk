@@ -42,7 +42,7 @@
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { atomicWriteFile, atomicWriteFileAsync } from './atomic-write.js';
-import { isErrnoCode } from './errors.js';
+import { isEnoent, isErrnoCode } from './errors.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -138,7 +138,7 @@ export function readJsonFile<T>(path: string, opts?: ReadJsonOptions<T>): T {
   try {
     raw = readFileSync(path, 'utf-8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT' && opts !== undefined && 'onMissing' in opts) {
+    if (isEnoent(err) && opts !== undefined && 'onMissing' in opts) {
       return opts.onMissing as T;
     }
     throw err;
@@ -160,7 +160,7 @@ export async function readJsonFileAsync<T>(path: string, opts?: ReadJsonOptions<
   try {
     raw = await readFile(path, 'utf-8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT' && opts !== undefined && 'onMissing' in opts) {
+    if (isEnoent(err) && opts !== undefined && 'onMissing' in opts) {
       return opts.onMissing as T;
     }
     throw err;

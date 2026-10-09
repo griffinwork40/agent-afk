@@ -220,14 +220,15 @@ export function countBreakpoints(params: {
 }
 
 /**
- * Minimal shape shared by both `WireToolDef` and any future tool that may
- * carry a `cache_control` field. Using a local interface keeps
- * `clampBreakpoints` decoupled from the import of `WireToolDef`.
+ * Minimal shape required of any tool entry passed to `clampBreakpoints`.
+ * The function only reads and strips `cache_control`; all other fields are
+ * preserved verbatim via the generic `T` parameter, so callers with a
+ * concrete tool type (e.g. `WireToolDef`) receive the same type back without
+ * a re-cast.
  */
 export interface CacheableToolLike {
   name: string;
   cache_control?: { type: string } | null;
-  [k: string]: unknown;
 }
 
 /**
@@ -248,15 +249,19 @@ export interface CacheableToolLike {
  * 5. Earlier `messages` breakpoints — dropped next: older turns are least likely
  *    to produce a prefix-hash hit on subsequent calls.
  *
+ * The generic `T` preserves the caller's tool element type so callers with a
+ * concrete wire type (e.g. `WireToolDef`) receive `T[]` back and need no
+ * re-cast at the call site.
+ *
  * Non-mutating: returns the input unchanged when no clamping is needed.
  */
-export function clampBreakpoints(params: {
+export function clampBreakpoints<T extends CacheableToolLike>(params: {
   system?: readonly ContentBlockParam[];
-  tools?: readonly CacheableToolLike[];
+  tools?: readonly T[];
   messages: readonly MessageParam[];
 }): {
   system?: readonly ContentBlockParam[];
-  tools?: readonly CacheableToolLike[];
+  tools?: readonly T[];
   messages: readonly MessageParam[];
 } {
   const total = countBreakpoints(params);
@@ -267,11 +272,11 @@ export function clampBreakpoints(params: {
   // Step 1: strip tool breakpoints (lowest value — covered by system end).
   let tools = params.tools;
   if (toRemove > 0 && tools !== undefined) {
-    const stripped: CacheableToolLike[] = [];
+    const stripped: T[] = [];
     for (const t of tools) {
       if (toRemove > 0 && blockHasBreakpoint(t)) {
         const { cache_control: _cc, ...rest } = t;
-        stripped.push(rest as CacheableToolLike);
+        stripped.push(rest as T);
         toRemove--;
       } else {
         stripped.push(t);

@@ -29,7 +29,7 @@ import { randomBytes } from 'node:crypto';
 import { getSchedulesPath } from '../../paths.js';
 import { expandCwd } from './cwd-validator.js';
 import type { ScheduledTask, TaskExecutor } from './triggers.js';
-import { errorMessage } from '../../utils/errors.js';
+import { errorMessage, isErrnoCode } from '../../utils/errors.js';
 import { sleepSync } from '../../utils/sleep-sync.js';
 import { writeJsonFile } from '../../utils/json-file.js';
 
@@ -72,8 +72,7 @@ function isProcessAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    return code !== 'ESRCH';
+    return !isErrnoCode(err, 'ESRCH');
   }
 }
 
@@ -122,8 +121,7 @@ function withFileLock<T>(storePath: string, fn: () => T): T {
       writeLockFile(lp, owner);
       acquired = true;
     } catch (err) {
-      const e = err as NodeJS.ErrnoException;
-      if (e.code !== 'EEXIST') throw err;
+      if (!isErrnoCode(err, 'EEXIST')) throw err;
       const currentOwner = readLockOwner(lp);
       try {
         if (currentOwner && Date.now() - statSync(lp).mtimeMs > LOCK_STALE_MS) {

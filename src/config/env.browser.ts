@@ -97,6 +97,7 @@ export const BROWSER_ENV_REGISTRY = [
       'Allowed charset: [A-Za-z0-9_-], max 128 chars.',
     type: 'string',
     required: false,
+    default: 'default',
     example: 'work',
     category: 'browser',
   },

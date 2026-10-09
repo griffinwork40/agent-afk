@@ -320,6 +320,12 @@ export const openAIJournalAdapter: JournalAdapter<OpenAIMessage> = { toJournal, 
 /** Destination policy is deliberately host-based, not inferred from a model id.
  * Unknown endpoints omit imported reasoning; live turns still echo their deltas.
  * Original journal messages survive via provenance, including omitted thinking.
+ *
+ * Known limitation: Cerebras enables `clear_thinking: true` by default, so the
+ * provider strips the echoed `reasoning` field from resume requests. Replaying
+ * the `reasoning` block there is therefore wasted bytes — the field is sent but
+ * the endpoint silently clears it. This is harmless (round-trips remain
+ * lossless from the journal's perspective) but worth noting for future work.
  */
 export function openAIJournalAdapterForEndpoint(baseURL?: string): JournalAdapter<OpenAIMessage> {
   let field: 'reasoning_content' | 'reasoning' | null = null;

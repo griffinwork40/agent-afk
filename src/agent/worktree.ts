@@ -27,17 +27,14 @@
  * @module agent/worktree
  */
 
-import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 
 import { getFarmDir, getFarmsDir } from '../paths.js';
 import { resolveRepoRoot } from '../utils/git.js';
 import { isErrnoCode } from '../utils/errors.js';
-
-const execFileAsync = promisify(execFile);
+import { execFileAsync } from '../utils/exec-file.js';
 
 /** Sanity cap on concurrent speculative branches. */
 export const MAX_FARM_BRANCHES = 16;

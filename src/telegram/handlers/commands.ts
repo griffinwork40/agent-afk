@@ -4,7 +4,7 @@ import type { Message } from 'telegraf/types';
 import { promises as fs } from 'fs';
 import { homedir } from 'os';
 import { isAbsolute, resolve } from 'path';
-import { HookBlockedError } from '../../utils/errors.js';
+import { HookBlockedError, isEnoent, isErrnoCode } from '../../utils/errors.js';
 import { SessionManager } from '../session-manager.js';
 import { withTypingIndicator } from '../typing-indicator.js';
 import {
@@ -270,10 +270,9 @@ export async function handleCwd(
       return;
     }
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') {
+    if (isEnoent(error)) {
       await ctx.reply(formatSystemError('ENOENT', resolved));
-    } else if (code === 'EACCES') {
+    } else if (isErrnoCode(error, 'EACCES')) {
       await ctx.reply(formatSystemError('EACCES', resolved));
     } else {
       log('cwd stat error:', error);

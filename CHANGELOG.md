@@ -11,6 +11,20 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.307.13] - 2026-10-09
+
+### Fixed
+- retry bootstrap after bootout with ETIMEDOUT guard and clear recovery message (#3382) (3b93b9a0)
+
+## [5.307.12] - 2026-10-09
+
+### Fixed
+- redact taskId fallback in crash notices; early-handler single-call guard (#3375) (a260860d)
+
+### Changed
+- run-afk action reproducibility and doc follow-ups (#3362) (e00643d7)
+- race guard, RTT seam, assertion margins, dead helper (#3365) (56511127)
+
 ## [5.307.11] - 2026-10-09
 
 ### Fixed

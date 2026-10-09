@@ -22,15 +22,12 @@
  * block a skill from running.
  */
 
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 import type { PreflightContext, PreflightResult, SkillInvocation, SkillPreflight } from './types.js';
 import { env } from '../../../config/env.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
-
-const execFileAsync = promisify(execFile);
+import { execFileAsync } from '../../../utils/exec-file.js';
 
 /**
  * P03/F08: Reduced from 16 MiB — 4 MiB is sufficient for typical PR diffs

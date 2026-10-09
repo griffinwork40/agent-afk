@@ -76,7 +76,9 @@ afterEach(() => {
     // rmSyncRetry: git may still be writing objects into .git/ when the test
     // finishes, causing ENOTEMPTY on CI. force:true already suppresses
     // ENOENT; maxRetries/retryDelay (inside rmSyncRetry) handle ENOTEMPTY.
-    rmSyncRetry(dir);
+    // Best-effort: a permanently locked dir (e.g. Windows AV hold) must not
+    // abort cleanup of the remaining dirs (finding #3208).
+    try { rmSyncRetry(dir); } catch { /* best-effort — locked dir on CI */ }
   }
 });
 

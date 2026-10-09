@@ -136,10 +136,7 @@ async function _fetchChecks(
 // Real exec implementation
 // ---------------------------------------------------------------------------
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
+import { execFileAsync } from '../../utils/exec-file.js';
 
 const CI_EXEC_TIMEOUT_MS = 20_000;
 

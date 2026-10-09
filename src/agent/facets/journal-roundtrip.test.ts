@@ -15,7 +15,7 @@ import { createMessageJournal, JournalSync, readJournalRecords } from '../journa
 import { anthropicJournalAdapter } from '../providers/anthropic-direct/journal-adapter.js';
 import { emitAndCommitToolResults } from '../providers/anthropic-direct/loop/tool-results.js';
 import type { RunTurnInput, ToolCall, ToolResult } from '../providers/anthropic-direct/types.js';
-import { openAIJournalAdapter } from '../providers/openai-compatible/journal-adapter.js';
+import { openAIJournalAdapter, openAIJournalAdapterForEndpoint } from '../providers/openai-compatible/journal-adapter.js';
 import { toolResultsToMessages } from '../providers/openai-compatible/loop.js';
 import type { OpenAIMessage } from '../providers/openai-compatible/messages.js';
 import { partialNodeFlag } from '../tools/compose-executor.partial.js';
@@ -116,5 +116,52 @@ describe('journal round trip for compose partial nodes (#2978)', () => {
     const { facet } = await facetFromJournal('rt-openai');
     expect(facet.compose_partial_nodes).toBe(1);
     expect(facet.compose_partial_node_count).toBe(2);
+  });
+});
+
+/**
+ * Parameterised round-trip for endpoint-aware reasoning field routing
+ * (finding #3156). Verifies that `openAIJournalAdapterForEndpoint` routes the
+ * `reasoning` / `reasoning_content` field correctly for DeepSeek and Cerebras
+ * on the fromJournalMessages → toJournal round-trip path exercised during
+ * cross-session resume. The base `openAIJournalAdapter` defaults to
+ * `reasoning_content` (DeepSeek compatible); the endpoint adapters must
+ * restore to the destination wire field.
+ */
+describe('openAIJournalAdapterForEndpoint reasoning round-trip (#3156)', () => {
+  it.each([
+    {
+      label: 'DeepSeek (reasoning_content)',
+      baseURL: 'https://api.deepseek.com/v1',
+      msgField: 'reasoning_content' as const,
+      expectedRestoreField: 'reasoning_content',
+    },
+    {
+      label: 'Cerebras (reasoning)',
+      baseURL: 'https://api.cerebras.ai/v1',
+      msgField: 'reasoning' as const,
+      expectedRestoreField: 'reasoning',
+    },
+  ])('$label: thinking block round-trips through endpoint adapter', ({ baseURL, msgField, expectedRestoreField }) => {
+    const adapter = openAIJournalAdapterForEndpoint(baseURL);
+    const native = {
+      role: 'assistant',
+      content: 'reply',
+      [msgField]: 'deep thought',
+    } as unknown as OpenAIMessage;
+
+    // toJournal encodes the field into the thinking block origin.
+    const journal = openAIJournalAdapter.toJournal(native);
+    expect(journal).not.toBeNull();
+    const thinking = journal!.content.find((b) => b.type === 'thinking');
+    expect(thinking).toBeDefined();
+
+    // fromJournalMessages (endpoint-aware) must restore to the destination wire field.
+    const restored = adapter.fromJournalMessages([journal!]);
+    const restoredMsg = restored[0] as Record<string, unknown>;
+    expect(restoredMsg[expectedRestoreField]).toBe('deep thought');
+    // The opposite field must not leak onto the restored message.
+    const otherField = expectedRestoreField === 'reasoning_content' ? 'reasoning' : 'reasoning_content';
+    expect(restoredMsg[otherField]).toBeUndefined();
   });
 });

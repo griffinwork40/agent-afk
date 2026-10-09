@@ -6,12 +6,13 @@
       "description": "Opt-in to loading + spawning MCP servers declared in <cwd>/.mcp.json. Fail-closed: when unset (or 0), project-local servers are NOT spawned; set to a truthy value (1/true/yes/on) to load them. A project-local .mcp.json spawns arbitrary commands on session start, so it is off by default to prevent code execution when entering an untrusted repo (issue #571). Skipped servers are listed in a startup warning with the opt-in instruction.",
       "type": "boolean",
       "required": false,
+      "default": "0",
       "example": "1",
       "category": "mcp"
     },
     {
       "name": "AFK_AUTO_ROUTING",
-      "description": "Auto-route bare slash inputs to matching skills. Applies to interactive, chat, and telegram surfaces.",
+      "description": "Auto-route bare slash inputs to matching skills. Applies to interactive, chat, and telegram surfaces. The afk web surface also inherits the interactive value (autoRouting.interactive), so this setting covers web sessions too.",
       "type": "boolean",
       "required": false,
       "example": "true",
@@ -90,6 +91,7 @@
       "description": "Name of the persistent session-vault profile the agent reuses for browser sessions. The context restores its login from (and saves it back to) ~/.afk/state/browser/<profile>/storageState.json, so a human runs `afk browser login --profile <name>` once and the agent reuses that authenticated session across unattended runs. Unset defaults to `default` (a fresh, empty profile — identical to pre-vault behavior). Allowed charset: [A-Za-z0-9_-], max 128 chars.",
       "type": "string",
       "required": false,
+      "default": "default",
       "example": "work",
       "category": "browser"
     },
@@ -1306,6 +1308,7 @@
       "description": "Bind address for the `afk web` browser surface. Defaults to 127.0.0.1. Unlike the daemon control surface, a non-loopback bind is REFUSED unless AFK_WEB_TOKEN (or --token) is also set, because this surface can submit prompts and approve tool use. Overridden by --host.",
       "type": "string",
       "required": false,
+      "default": "127.0.0.1",
       "example": "127.0.0.1",
       "category": "daemon"
     },
@@ -1314,6 +1317,7 @@
       "description": "Port for the `afk web` browser surface. Defaults to 4141; falls back to an ephemeral port when taken. Overridden by --port.",
       "type": "number",
       "required": false,
+      "default": "4141",
       "example": "4141",
       "category": "daemon"
     },

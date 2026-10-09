@@ -22,7 +22,7 @@ Open source. Runs locally. Works with any model provider, including local models
 ## Quick Start
 
 ```bash
-npm install -g agent-afk    # Node 22.22.2+, 24.15+, or 26+
+npm install -g agent-afk    # Node 22.22.2–22.x, 24.15–24.x, or 26+ (23.x and 25.x excluded)
 afk login                   # authenticate (auto-detects Claude Code / Codex creds)
 afk doctor                  # verify everything works
 afk chat "hello"             # first real conversation

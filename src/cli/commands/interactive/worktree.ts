@@ -32,6 +32,7 @@ import {
 } from './worktree.refs.js';
 import { runWorktreeCleanup } from './worktree.cleanup.js';
 import { isExecError } from './worktree.errors.js';
+import { isEnoent } from '../../../utils/errors.js';
 
 const execFileDefault = promisify(execFileCallback);
 
@@ -229,8 +230,7 @@ async function ensureGitignoreEntry(repoRoot: string): Promise<void> {
   try {
     content = await fs.readFile(gitignorePath, 'utf8');
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== 'ENOENT') throw err;
+    if (!isEnoent(err)) throw err;
     content = '';
   }
 
