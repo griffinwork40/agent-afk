@@ -34,7 +34,9 @@ export const modelCompleteTool: AnthropicToolDef = {
     properties: {
       prompt: {
         type: 'string',
-        description: 'The user message / instruction sent to the model.',
+        description:
+          'The user message / instruction sent to the model. ' +
+          'Optional when `input_path` is set — the file content alone is sufficient input.',
       },
       system: {
         type: 'string',
@@ -63,6 +65,6 @@ export const modelCompleteTool: AnthropicToolDef = {
           '<input> block. Subject to the same read-root policy as read_file; max 1 MB.',
       },
     },
-    required: ['prompt'],
+    required: [],
   },
 };
