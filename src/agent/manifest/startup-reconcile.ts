@@ -5,6 +5,12 @@
  * surface's session startup without blocking the caller. Errors are swallowed
  * per the fire-and-forget contract of the reconciler.
  *
+ * Return value: each helper returns the inner `Promise<void>` so that tests can
+ * await it directly — avoiding the fragile multi-`await Promise.resolve()` flush
+ * pattern that depends on the exact number of microtask checkpoints inside the
+ * implementation. Production callers may ignore the return value (or `void`-cast
+ * it); the fire-and-forget behaviour is unchanged.
+ *
  * Surfaces:
  *  - REPL (`runReplReconcile`): always interactive; writes to stderr.
  *  - Telegram (`runTelegramReconcile`): always interactive; forwards via callback.
@@ -16,14 +22,17 @@
 
 import { reconcileWaveManifests, formatResumptionOffer, shouldSurfaceResumptionOffer, markManifestOffered } from './reconcile.js';
 import { pushIfConfigured } from '../../telegram/push.js';
+import { redactInlineSecrets } from '../session/prompt-dump.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /**
  * Wire reconciliation for the interactive REPL surface.
  * Fire-and-forget: returns immediately; errors are swallowed.
+ * Returns the inner promise so tests can await it directly.
  */
-export function runReplReconcile(sessionId: string): void {
-  if (!shouldSurfaceResumptionOffer(true)) return;
-  void Promise.resolve().then(() => {
+export function runReplReconcile(sessionId: string): Promise<void> {
+  if (!shouldSurfaceResumptionOffer(true)) return Promise.resolve();
+  return Promise.resolve().then(() => {
     try {
       const result = reconcileWaveManifests({ sessionId });
       for (const offer of result.offers) {
@@ -52,9 +61,9 @@ export function runTelegramReconcile<Route>(
   sessionId: string,
   route: Route,
   sendText: (route: Route, text: string) => void | Promise<boolean>,
-): void {
-  if (!shouldSurfaceResumptionOffer(true)) return;
-  void Promise.resolve().then(async () => {
+): Promise<void> {
+  if (!shouldSurfaceResumptionOffer(true)) return Promise.resolve();
+  return Promise.resolve().then(async () => {
     try {
       const result = reconcileWaveManifests({ sessionId });
       for (const offer of result.offers) {
@@ -75,10 +84,11 @@ export function runTelegramReconcile<Route>(
  * Wire reconciliation for non-interactive surfaces (daemon, one-shot chat).
  * Gated on `shouldSurfaceResumptionOffer(false)` — requires `AFK_WAVE_RESUME_UNATTENDED=1`.
  * Fire-and-forget: returns immediately; errors are swallowed.
+ * Returns the inner promise so tests can await it directly.
  */
-export function runNonInteractiveReconcile(sessionId: string): void {
-  if (!shouldSurfaceResumptionOffer(false)) return;
-  void Promise.resolve().then(() => {
+export function runNonInteractiveReconcile(sessionId: string): Promise<void> {
+  if (!shouldSurfaceResumptionOffer(false)) return Promise.resolve();
+  return Promise.resolve().then(() => {
     try {
       const result = reconcileWaveManifests({ sessionId });
       for (const offer of result.offers) {
@@ -105,16 +115,20 @@ export function runNonInteractiveReconcile(sessionId: string): void {
  *
  * Gate: active when `AFK_WAVE_RESUME_UNATTENDED=1` (same as
  * `runNonInteractiveReconcile`). Fire-and-forget: returns immediately; errors
- * are swallowed.
+ * are swallowed. Returns the inner promise so tests can await it directly.
  */
-export function runDaemonReconcile(sessionId: string): void {
-  if (!shouldSurfaceResumptionOffer(false)) return;
-  void Promise.resolve().then(async () => {
+export function runDaemonReconcile(sessionId: string): Promise<void> {
+  if (!shouldSurfaceResumptionOffer(false)) return Promise.resolve();
+  return Promise.resolve().then(async () => {
     try {
       const result = reconcileWaveManifests({ sessionId });
       for (const offer of result.offers) {
         const text = formatResumptionOffer(offer);
-        const results = await pushIfConfigured(text).catch(() => null);
+        const results = await pushIfConfigured(text).catch((pushErr: unknown) => {
+          // eslint-disable-next-line no-console
+          console.error('[daemon] wave-resume push failed:', redactInlineSecrets(errorMessage(pushErr)));
+          return null;
+        });
         if (results === null) {
           // Telegram not configured — fall back to stderr so the offer is visible.
           process.stderr.write(text + '\n');

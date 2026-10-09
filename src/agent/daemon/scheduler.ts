@@ -26,6 +26,13 @@ import type { Telegraf } from 'telegraf';
 
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { ScheduledTask, validateScheduledTask } from './triggers.js';
+
+/**
+ * Maximum length (chars) of the command preview included in crash-notice
+ * in-flight task snapshots. Redaction runs BEFORE truncation so a secret
+ * straddling the boundary is always fully masked (#3323 review).
+ */
+export const COMMAND_HEAD_MAX_LEN = 60;
 import { runBuiltinTask } from './builtin-task.js';
 import { runShellTask } from './shell-task.js';
 import { checkTaskCwdAtRuntime, warnIfBuiltinHasCwd } from './cwd-validator.js';
@@ -275,7 +282,7 @@ export class CronScheduler {
     for (const [taskId, startedAt] of this.inFlightTasks) {
       const entry = this.registry.get(taskId);
       const commandHead = entry !== undefined
-        ? redactInlineSecrets(entry.task.command).slice(0, 60)
+        ? redactInlineSecrets(entry.task.command).slice(0, COMMAND_HEAD_MAX_LEN)
         : taskId;
       result.push({ taskId, commandHead, elapsedMs: now - startedAt });
     }
