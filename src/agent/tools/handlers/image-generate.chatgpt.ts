@@ -27,6 +27,7 @@ import {
   CHATGPT_BACKEND_BASE_URL,
   buildChatGptOAuthHeaders,
 } from '../../providers/openai-compatible/responses-config.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -241,8 +242,7 @@ export async function generateImageViaChatGpt(
       signal: req.signal,
     });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { error: `ChatGPT image request failed: ${msg}` };
+    return { error: `ChatGPT image request failed: ${errorMessage(err)}` };
   }
 
   if (!response.ok) {

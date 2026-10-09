@@ -48,6 +48,7 @@ import { SubagentLogWriter } from './subagent/log.js';
 import { wireProgressEvents } from './subagent/fork-progress-events.js';
 import { wireWorkspaceSubscriptions } from './subagent/workspace-subscription-wiring.js';
 import { makeForkTerminalHook } from './subagent/fork-terminal-hook.js';
+import { errorMessage } from '../utils/errors.js';
 
 // Re-export types for public API
 export type { SubagentStatus, SubagentResult, SubagentTrace, SubagentHandle };
@@ -589,7 +590,7 @@ export class SubagentManager {
             event: 'SubagentStop',
             subagentId: id,
             status: 'failed',
-            reason: err instanceof Error ? err.message : String(err),
+            reason: errorMessage(err),
           },
           {
             signal: this.rootController.signal,

@@ -31,6 +31,7 @@ import { providerForModel } from '../providers/index.js';
 import { resolveOpenAIAuth } from '../providers/openai-compatible/auth.js';
 import { evaluateUsage, type BindingWindow } from '../usage/usage-budget.js';
 import { describeBindingWindow } from '../usage/usage-formatter.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /** Result when the gate allows the task to proceed. */
 interface BudgetGatePass {
@@ -133,7 +134,7 @@ export async function evaluateBudgetGate(options: BudgetGateOptions = {}): Promi
     }
   } catch (err) {
     // Fail-open (see module Invariant).
-    console.debug(`[daemon] budget-gate: collectUsage failed, passing task through (${err instanceof Error ? err.message : String(err)})`);
+    console.debug(`[daemon] budget-gate: collectUsage failed, passing task through (${errorMessage(err)})`);
   }
   return { skip: false };
 }
