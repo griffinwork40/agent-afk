@@ -70,6 +70,7 @@ export function buildTelegramSession(opts: {
   const {
     sessionConfig,
     layeredBasePrompt,
+    operatorOverlay,
     sessionCwd,
     traceWriter,
     chatId,
@@ -80,6 +81,7 @@ export function buildTelegramSession(opts: {
     apiKey: opts.apiKey ?? sessionConfig.apiKey,
     model: sessionConfig.model,
     layeredBasePrompt,
+    ...(operatorOverlay !== undefined ? { operatorOverlay } : {}),
     sessionCwd,
     traceWriter,
     chatId,

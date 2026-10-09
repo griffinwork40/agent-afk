@@ -16,6 +16,7 @@ import { promises as fs } from 'fs';
 import { join } from 'path';
 import { type TelegramRoute, routeKey } from './route.js';
 import type { SessionData } from './session-manager.js';
+import { writeJsonFileAsync } from '../utils/json-file.js';
 
 /**
  * The on-disk sidecar filename for a route's SessionData.
@@ -80,11 +81,10 @@ export async function saveSessionsToDisk(
   sessionData: Map<string, SessionData>,
 ): Promise<void> {
   try {
-    await fs.mkdir(dataDir, { recursive: true });
-
     for (const data of sessionData.values()) {
       const filePath = join(dataDir, sidecarFileName(data));
-      await fs.writeFile(filePath, JSON.stringify(data, null, 2));
+      // Atomic write: writeJsonFileAsync uses tmp+rename (mkdirp by default).
+      await writeJsonFileAsync(filePath, data);
     }
   } catch (error) {
     console.error('Failed to save sessions:', error);

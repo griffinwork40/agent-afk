@@ -35,6 +35,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import { promises as fs } from 'fs';
 import { join, dirname } from 'path';
 import { errorMessage } from '../../utils/errors.js';
+import { pathExists } from '../../utils/fs.js';
 import { isPlainObject } from '../../utils/type-guards.js';
 import { truncate } from '../../utils/truncate.js';
 
@@ -374,14 +375,7 @@ function lintRank(v: boolean | null): number {
 
 const isObject = isPlainObject;
 
-async function fileExists(path: string): Promise<boolean> {
-  try {
-    await fs.access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
+const fileExists = pathExists;
 
 // Unused import guard (dirname kept for future score-file-derived helpers).
 void dirname;

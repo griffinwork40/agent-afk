@@ -13,6 +13,7 @@ import { getRateLimitBucket } from '../../shared/rate-limit-bucket.registry.js';
 import { parseOpenAIRateLimitHeaders } from '../../shared/rate-limit-headers.js';
 import { perMinuteFromRateLimit, publishingGate, publishUsage } from '../../../usage/usage-ledger.js';
 import { makeOpenAITracingFetch } from '../tracing-fetch.js';
+import { h1ModelFetch } from '../../shared/h1-fetch.js';
 
 /**
  * Test injection hook for the OpenAI client. Set to a factory to swap in a
@@ -110,7 +111,10 @@ export function buildOpenAIAdmissionFetch(baseURL: string | undefined): typeof f
     publishUsage({ v: 1, provider: 'openai', account, perMinute: perMinuteFromRateLimit(snapshot, Date.now()) });
   };
   const gate = publishingGate(bucket, 'openai', account);
-  return makeOpenAITracingFetch(globalThis.fetch, undefined, rateLimitObserver, gate);
+  // Invariant: use h1ModelFetch, not globalThis.fetch — the global may route
+  // through an undici Agent with allowH2: true installed by jsdom, which can
+  // trigger the HTTP/2 spinning DATA-frame freeze on Node ≥ 26.
+  return makeOpenAITracingFetch(h1ModelFetch, undefined, rateLimitObserver, gate);
 }
 
 /**

@@ -1,0 +1,215 @@
+name: Run AFK
+description: |
+  Composite action that installs Node.js + pnpm, installs agent-afk from npm
+  (or a local path), then runs a single `afk chat` prompt.  Credentials are
+  accepted as inputs and mapped to the expected env vars so they are never
+  hard-coded in a caller workflow.
+
+inputs:
+  # --- required ---
+  anthropic-api-key:
+    description: >
+      Anthropic API key (ANTHROPIC_API_KEY).  Pass via a repository or
+      environment secret: `${{ secrets.ANTHROPIC_API_KEY }}`.
+    required: true
+
+  prompt:
+    description: >
+      The prompt to send to `afk chat`.  Supports multi-line strings via
+      the YAML literal-block scalar (|).
+    required: true
+
+  # --- optional / tuning ---
+  afk-version:
+    description: >
+      npm version of agent-afk to install, e.g. `latest`, `5.0.0`, or a
+      dist-tag.  Use `local` to skip the install step and run from the
+      checked-out repo.  In local mode the action builds the CLI from source
+      (`pnpm run build:dist`) and then invokes `node dist/cli.mjs` directly.
+      The caller must run `pnpm install --frozen-lockfile` before invoking
+      this action in local mode.
+    required: false
+    default: latest
+
+  node-version:
+    description: Node.js version to use (must satisfy agent-afk's engines field).
+    required: false
+    default: '22'
+
+  model:
+    description: >
+      Model slug or id forwarded to `afk chat --model`.  Defaults to the
+      repository's configured default when empty.
+    required: false
+    default: ''
+
+  working-directory:
+    description: >
+      Directory to run `afk chat` from.  Defaults to the repository root.
+      A per-project `AFK.md` placed here is picked up automatically as the
+      operator overlay.
+    required: false
+    default: '.'
+
+  # --- optional / output ---
+  output-file:
+    description: >
+      When set, the afk response is also written to this path (relative to
+      `working-directory`) so downstream steps can consume it as an artifact.
+    required: false
+    default: ''
+
+outputs:
+  response:
+    description: The text response returned by `afk chat`.
+    value: ${{ steps.run.outputs.response }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      # pinned to SHA for supply-chain safety; tag: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Setup pnpm (only when installing from npm)
+      # pinned to SHA for supply-chain safety; tag: pnpm/action-setup@v6
+      if: inputs.afk-version != 'local'
+      uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+      with:
+        version: latest
+        dest: ${{ runner.temp }}/setup-pnpm
+
+    - name: Install agent-afk from npm
+      if: inputs.afk-version != 'local'
+      shell: bash
+      env:
+        INPUT_AFK_VERSION: ${{ inputs.afk-version }}
+      run: npm install --global "agent-afk@${INPUT_AFK_VERSION}"
+
+    - name: Build agent-afk from local checkout
+      if: inputs.afk-version == 'local'
+      shell: bash
+      env:
+        AFK_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        # Resolve the repo root from the action path (action lives at
+        # .github/actions/run-afk inside the checkout).
+        REPO_ROOT="$(cd "${AFK_ACTION_PATH}/../../.." && pwd)"
+        echo "Building from local checkout at: ${REPO_ROOT}"
+        (cd "${REPO_ROOT}" && pnpm run build:dist)
+
+    - name: Run afk chat
+      id: run
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        # Non-interactive: disable TUI chrome that is meaningless in CI logs.
+        AFK_NO_TUI: '1'
+        # Prevent afk from trying to load Telegram or browser state in CI.
+        AFK_TELEGRAM_BOT_TOKEN: ''
+        # Inputs passed through env to prevent shell injection.
+        AFK_PROMPT: ${{ inputs.prompt }}
+        INPUT_MODEL: ${{ inputs.model }}
+        INPUT_OUTPUT_FILE: ${{ inputs.output-file }}
+        INPUT_AFK_VERSION: ${{ inputs.afk-version }}
+        AFK_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        # Determine the afk invocation: use the installed global when afk-version
+        # is not 'local', otherwise invoke node directly from the built checkout.
+        # An array (not a string) so a checkout path containing spaces is never
+        # word-split.
+        if [ "${INPUT_AFK_VERSION}" = "local" ]; then
+          REPO_ROOT="$(cd "${AFK_ACTION_PATH}/../../.." && pwd)"
+          afk_cmd=(node "${REPO_ROOT}/dist/cli.mjs")
+        else
+          afk_cmd=(afk)
+        fi
+
+        # Build the model flag array safely (no word-splitting on model name).
+        args=()
+        if [ -n "${INPUT_MODEL}" ]; then
+          args+=(--model "${INPUT_MODEL}")
+        fi
+
+        # Use a collision-safe random delimiter for GITHUB_OUTPUT multiline values.
+        delim="AFK_EOF_$(openssl rand -hex 16 2>/dev/null || od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
+
+        # Run afk chat with JSON output mode so we get clean structured output.
+        # stdout (JSON) is captured to a temp file; stderr (spinner, ora chrome)
+        # flows to the CI log unmodified.
+        # Invariant: composite `shell: bash` runs as `bash -eo pipefail`, so a
+        # bare failing command would abort the script before the ::error::
+        # annotation below. Capture the exit code with `|| EXIT_CODE=$?`.
+        STDOUT_FILE="$(mktemp)"
+        EXIT_CODE=0
+        "${afk_cmd[@]}" chat "${args[@]}" --format json "$AFK_PROMPT" \
+          >"${STDOUT_FILE}" || EXIT_CODE=$?
+
+        RAW_STDOUT="$(cat "${STDOUT_FILE}")"
+        rm -f "${STDOUT_FILE}"
+
+        if [ "${EXIT_CODE}" -ne 0 ]; then
+          echo "::error::afk chat exited with code ${EXIT_CODE}"
+          exit "${EXIT_CODE}"
+        fi
+
+        # Extract the .message field from the JSON output.  Plugin warnings or
+        # other non-JSON lines may appear before the JSON object, so parse from
+        # the last line that is exactly "{" to the end of output.
+        EXTRACT_CODE=0
+        RESPONSE="$(printf '%s' "${RAW_STDOUT}" | node -e "
+          const chunks = [];
+          process.stdin.on('data', c => chunks.push(c));
+          process.stdin.on('end', () => {
+            const raw = Buffer.concat(chunks).toString('utf8');
+            const lines = raw.split('\n');
+            // Find the last line that is exactly '{' (start of the JSON object).
+            let start = -1;
+            for (let i = lines.length - 1; i >= 0; i--) {
+              if (lines[i].trim() === '{') { start = i; break; }
+            }
+            if (start === -1) {
+              process.stderr.write('::error::Could not find JSON object in afk output\n');
+              process.stderr.write('Raw output was:\n' + raw + '\n');
+              process.exit(1);
+            }
+            let obj;
+            try {
+              obj = JSON.parse(lines.slice(start).join('\n'));
+            } catch (e) {
+              process.stderr.write('::error::Failed to parse afk JSON output: ' + e.message + '\n');
+              process.stderr.write('Raw output was:\n' + raw + '\n');
+              process.exit(1);
+            }
+            if (typeof obj.message !== 'string') {
+              process.stderr.write('::error::afk JSON output has no .message field\n');
+              process.stderr.write('Parsed object keys: ' + Object.keys(obj).join(', ') + '\n');
+              process.exit(1);
+            }
+            process.stdout.write(obj.message);
+          });
+        ")" || EXTRACT_CODE=$?
+        if [ "${EXTRACT_CODE}" -ne 0 ]; then
+          exit "${EXTRACT_CODE}"
+        fi
+
+        # Echo the response to the CI log so it is visible.
+        echo "Response:"
+        printf '%s\n' "${RESPONSE}"
+
+        # Write to the output file when requested.
+        if [ -n "${INPUT_OUTPUT_FILE}" ]; then
+          printf '%s' "${RESPONSE}" > "${INPUT_OUTPUT_FILE}"
+          echo "Response written to ${INPUT_OUTPUT_FILE}"
+        fi
+
+        # Expose as a step output.  Multiline values must use the delimiter form.
+        # A newline before the closing delimiter is required by the runner parser.
+        {
+          printf 'response<<%s\n' "${delim}"
+          printf '%s\n' "${RESPONSE}"
+          printf '%s\n' "${delim}"
+        } >> "$GITHUB_OUTPUT"

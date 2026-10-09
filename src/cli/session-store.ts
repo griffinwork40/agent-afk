@@ -19,7 +19,8 @@
  * journal exists for the session.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, realpathSync } from 'fs';
+import { readFileSync, existsSync, readdirSync, statSync, realpathSync } from 'fs';
+import { writeJsonFile } from '../utils/json-file.js';
 import { join, basename, resolve, sep, isAbsolute } from 'path';
 import { randomUUID } from 'node:crypto';
 import { ensureSessionsMigrated, getSessionsDir } from '../paths.js';
@@ -180,9 +181,7 @@ export function saveSession(
   overrideId?: string,
   opts?: { closeTime?: boolean; exitReason?: StoredSession['exitReason'] },
 ): string {
-  const dir = sessionsDir();
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-
+  // writeJsonFile (used below) creates parent dirs via atomicWriteFile mkdirp.
   const now = Date.now();
   const id = overrideId ?? stats.sessionId ?? `session-${now}`;
   const payload: StoredSession = {
@@ -208,7 +207,8 @@ export function saveSession(
   // NOT block traversal; `id = '../../evil'` would otherwise escape the
   // sessions dir. safeResolvePath rejects on prefix mismatch.
   const path = safeResolvePath(id, { write: true });
-  writeFileSync(path, JSON.stringify(payload, null, 2));
+  // Atomic write: writeJsonFile uses tmp+rename (mkdirp by default).
+  writeJsonFile(path, payload);
   return path;
 }
 
@@ -217,9 +217,7 @@ export function forkStoredSession(
   stats: SessionStats,
   opts: { newId?: string } = {},
 ): { id: string; path: string } {
-  const dir = sessionsDir();
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-
+  // writeJsonFile (used below) creates parent dirs via atomicWriteFile mkdirp.
   const newId = opts.newId ?? randomUUID();
 
   // Invariant: the fork MUST receive a fresh sessionId — never the parent's.
@@ -253,7 +251,8 @@ export function forkStoredSession(
     forkedAt: Date.now(),
   };
   const path = safeResolvePath(newId, { write: true });
-  writeFileSync(path, JSON.stringify(payload, null, 2));
+  // Atomic write: writeJsonFile uses tmp+rename (mkdirp by default).
+  writeJsonFile(path, payload);
   return { id: newId, path };
 }
 

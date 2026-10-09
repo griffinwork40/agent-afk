@@ -33,6 +33,8 @@ export interface TelegramExecutorWiringOptions {
   model: string;
   /** Raw base prompt (pre-assembly). Forwarded to children as their system prompt. */
   layeredBasePrompt: string | undefined;
+  /** Bare operator overlay (no framework); reaches unnamed `agent` children (#3324). */
+  operatorOverlay?: string;
   /** Session cwd (from `AFK_TELEGRAM_CWD` or `sessionConfig.cwd`). */
   sessionCwd: string | undefined;
   /** Trace writer for the session. */
@@ -73,6 +75,7 @@ export function wireTelegramExecutors(
     apiKey,
     model,
     layeredBasePrompt,
+    operatorOverlay,
     sessionCwd,
     traceWriter,
     chatId,
@@ -108,6 +111,7 @@ export function wireTelegramExecutors(
     defaultSubagentModel: getDefaultSubagentModel(model),
     resolveApiKeyForModel: getApiKeyForModel,
     ...(layeredBasePrompt !== undefined ? { systemPrompt: layeredBasePrompt } : {}),
+    ...(operatorOverlay !== undefined ? { operatorOverlay } : {}),
     ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
     ...(traceWriter !== null ? { traceWriter } : {}),
     backgroundRegistry,

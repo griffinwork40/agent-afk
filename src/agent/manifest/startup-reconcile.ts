@@ -96,7 +96,11 @@ export function runNonInteractiveReconcile(sessionId: string): void {
  *
  * Mirrors `runTelegramReconcile` — pushes each resumption offer via
  * `pushIfConfigured` and only calls `markManifestOffered` when the push
- * succeeds (at least one delivery returned `ok: true`). Falls back to stderr
+ * fully succeeds (EVERY chunk to every target returned `ok: true`). A partial
+ * delivery (e.g. chunk 1 ok, chunk 2 rate-limited, or one of several targets
+ * failing) leaves the manifest unstamped so the offer re-surfaces on the next
+ * start — a duplicate offer is preferable to a truncated/lost one, and
+ * resumption is idempotent on the operator side. Falls back to stderr
  * when Telegram is not configured so the offer is never silently lost.
  *
  * Gate: active when `AFK_WAVE_RESUME_UNATTENDED=1` (same as
@@ -116,8 +120,9 @@ export function runDaemonReconcile(sessionId: string): void {
           process.stderr.write(text + '\n');
           markManifestOffered(offer.manifest);
         } else {
-          // Only stamp as offered when at least one delivery succeeded.
-          const delivered = results.some((r) => r.ok);
+          // Only stamp as offered when every chunk/target delivery succeeded;
+          // an empty result array (nothing sent) never counts as delivered.
+          const delivered = results.length > 0 && results.every((r) => r.ok);
           if (delivered) markManifestOffered(offer.manifest);
         }
       }

@@ -20,7 +20,7 @@
  */
 
 import { SubagentManager } from '../../subagent.js';
-import { SUBAGENT_HANDOFF_CONTRACT } from '../../subagent-contract.js';
+import { composeUnnamedWorkerPrompt } from '../system-prompt.js';
 import type { ReadScopeInputs } from '../../subagent-read-scope.js';
 import type { ModelProvider } from '../../provider.js';
 import type { AgentModelInput, IAgentSession } from '../../types.js';
@@ -79,7 +79,8 @@ export interface BuildChildConfigArgs {
   childInheritedReadRoots?: string[];
   /** The dispatching tool-call's abort signal (owns the child manager lifetime). */
   signal: AbortSignal;
-  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'xaiBaseUrl' | 'skillDispatchName'>;
+  /** See SubagentExecutorContext.defaultConfig (incl. the bare `operatorOverlay`). */
+  defaultConfig: SubagentExecutorContext['defaultConfig'];
   resolveApiKeyForModel?: (model: string) => string | undefined;
   defaultSubagentModel: AgentModelInput;
   childProviderFactory?: (args: ChildProviderFactoryArgs) => ModelProvider;
@@ -376,24 +377,17 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
   const childConfig: AgentConfig = {
     model: childModel,
     apiKey: childIsOpenAI ? undefined : resolvedChildApiKey,
-    // A named agent's markdown body IS the child's system prompt (Claude
-    // Code parity: subagents receive the definition prompt, not the parent
-    // surface's full prompt) — a named agent owns its own handoff guidance
-    // (general-purpose bakes in SUBAGENT_HANDOFF_CONTRACT; read-only vendored
-    // agents are already compact), so it is passed through unchanged.
-    //
-    // An UNNAMED dispatch inherits the parent's full base prompt, which frames
-    // delegation from the DISPATCHER's side but never tells the child itself to
-    // keep its reply short / write bulk output to files. Append the handoff
-    // contract so the truly-default dispatch cannot emit an unbounded final
-    // message that gets truncated mid-stream (the StreamIncompleteError class
-    // this change also adds a bounded retry for in loop.ts).
+    // Named-agent body IS the prompt (Claude Code parity; general-purpose
+    // bakes in SUBAGENT_HANDOFF_CONTRACT; read-only vendored agents compact).
+    // Unnamed dispatch uses a lean scoped worker prompt instead of the full
+    // coordinator-framed parent base (~54 KB), plus the BARE operator overlay
+    // so AFK.md instructions still reach the child (#3324) — see
+    // composeUnnamedWorkerPrompt in system-prompt.ts. Identity/workspace
+    // preambles are injected later by assembleChildConfig / injectWorkspacePreamble.
     systemPrompt:
       namedAgent !== undefined
         ? namedAgent.definition.prompt
-        : defaultConfig.systemPrompt
-          ? `${defaultConfig.systemPrompt}\n\n${SUBAGENT_HANDOFF_CONTRACT}`
-          : SUBAGENT_HANDOFF_CONTRACT,
+        : composeUnnamedWorkerPrompt(defaultConfig.operatorOverlay),
     baseUrl: childIsOpenAI ? undefined : defaultConfig.baseUrl,
     ...(defaultConfig.xaiBaseUrl !== undefined ? { xaiBaseUrl: defaultConfig.xaiBaseUrl } : {}),
     maxTurns: effectiveMaxTurns,
