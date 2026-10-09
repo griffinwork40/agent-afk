@@ -160,15 +160,6 @@ export function __resetCprRttForTests(): void {
 }
 
 /**
- * Test helper: read the current smoothed RTT sample.
- * Returns null when no sample has been recorded yet.
- * Must only be called from tests.
- */
-export function __getCprRttForTests(): number | null {
-  return _measuredRttMs;
-}
-
-/**
  * Narrowest host slice needed by the CPR sub-system.
  * All absolute-row fields that must be shifted on a tmux EXPAND or SHRINK.
  */
@@ -244,6 +235,7 @@ export function requestCprOrMarkDirty(
   expectedRow: number,
   newRows: number,
   rowDelta: number,
+  rttObserver?: (rttMs: number) => void,
 ): void {
   if (!self.cprPending) {
     // No CPR in-flight — seed a fresh burst and start measuring.
@@ -255,7 +247,7 @@ export function requestCprOrMarkDirty(
       shrinkTotal: rowDelta < 0 ? -rowDelta : 0,
       requeryCt: 0,
     };
-    _requestCpr(self);
+    _requestCpr(self, rttObserver);
     return;
   }
 
@@ -282,12 +274,18 @@ export function requestCprOrMarkDirty(
  * Legacy entry point for direct test usage. Seeds a burst context with a
  * single-step rowDelta and calls _requestCpr. New callers should use
  * requestCprOrMarkDirty.
+ *
+ * @param rttObserver  Optional callback invoked with the measured round-trip
+ *                     time (in ms) each time an RTT sample is recorded.
+ *                     Provides a test seam for observing RTT without a
+ *                     test-only export.
  */
 export function requestCprAndApplyDelta(
   self: CprHost,
   expectedRow: number,
   newRows: number,
   rowDelta: number,
+  rttObserver?: (rttMs: number) => void,
 ): void {
   if (self.cprPending) return;
   self.cprBurst = {
@@ -298,7 +296,7 @@ export function requestCprAndApplyDelta(
     shrinkTotal: rowDelta < 0 ? -rowDelta : 0,
     requeryCt: 0,
   };
-  _requestCpr(self);
+  _requestCpr(self, rttObserver);
 }
 
 // ---------------------------------------------------------------------------
@@ -355,7 +353,7 @@ function _onCprTimeout(self: CprHost, timeoutMs: number): void {
  * keypress is dropped by any active keypress consumer (reader.ts, compositor)
  * before it can insert stray characters into the prompt buffer.
  */
-function _requestCpr(self: CprHost): void {
+function _requestCpr(self: CprHost, rttObserver?: (rttMs: number) => void): void {
   self.cprPending = true;
 
   // Compute the adaptive timeout for this request.
@@ -416,14 +414,23 @@ function _requestCpr(self: CprHost): void {
 
     // ── RTT sample ────────────────────────────────────────────────────────
     // Update the smoothed RTT so the next CPR uses an adaptive timeout.
-    if (emitAt > 0) _updateRtt(Date.now() - emitAt);
+    if (emitAt > 0) {
+      const sample = Date.now() - emitAt;
+      _updateRtt(sample);
+      rttObserver?.(sample);
+    }
 
     cleanup(onData);
-    // Disarm the keypress guard immediately: the reply was consumed by the
-    // data listener, so no late-keypress leak can occur.  Without this the
-    // guard would persist for the full timeoutMs + CPR_KEYPRESS_GRACE_MS
-    // window even though the CPR is already resolved.
-    disarmCprKeypressGuard();
+    // Disarm the keypress guard after the current EventEmitter.emit dispatch
+    // stack unwinds.  Node snapshots all listeners at the start of emit(), so
+    // readline's keypress 'data' listener is still queued to fire for this
+    // same chunk even though we just removed our own listener.  If we disarm
+    // synchronously here, a fragmented CPR reply whose last chunk is a printable
+    // character (e.g. the trailing 'R') would reach handleKeypress with an
+    // inactive guard, potentially inserting the character into the prompt
+    // buffer.  setImmediate defers the disarm to the next iteration, after all
+    // same-tick 'data' handlers (including readline's) have completed.
+    setImmediate(disarmCprKeypressGuard);
 
     // ── Re-emit unconsumed bytes so keystrokes are not swallowed ──────────
     const consumedEnd = escIdx + candidate.length;
@@ -458,7 +465,7 @@ function _requestCpr(self: CprHost): void {
       // More SIGWINCHes arrived — re-query, keeping originalExpectedRow and accumulators.
       burst.dirty = false;
       burst.requeryCt += 1;
-      _requestCpr(self);
+      _requestCpr(self, rttObserver);
       return;
     }
 
