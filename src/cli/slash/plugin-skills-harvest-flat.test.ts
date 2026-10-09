@@ -68,6 +68,27 @@ describe('harvestDiscoveredPluginSkillMetadata (flat plugin layout)', () => {
     expect(harvestAllPluginSkillFlags().get('pr-triage')).toEqual(['--auto-merge', '--prs', '--skip-fix']);
   });
 
+  it('does not contaminate a loaded skill with hidden same-named ghost metadata', async () => {
+    const plugin = join(tmpRoot, '.afk', 'plugins', 'software-factory');
+    // A loaded skill without a category must not inherit one from a hidden copy.
+    writeFileSync(join(plugin, 'skills', 'pr-triage', 'SKILL.md'), SKILL_MD.replace('category: "Build & ship"\n', ''));
+    mkdirSync(join(plugin, '.backup', 'skills', 'pr-triage'), { recursive: true });
+    writeFileSync(join(plugin, '.backup', 'skills', 'pr-triage', 'SKILL.md'), `---
+name: pr-triage
+description: "Hidden ghost copy."
+category: "Ghost category"
+flags: [--ghost-flag]
+---
+`);
+
+    const { extractPluginSkills } = await import('../../agent/plugins/tool-injector.js');
+    expect(extractPluginSkills(plugin).map((skill) => skill.name)).toEqual(['pr-triage']);
+    const { harvestDiscoveredPluginSkillMetadata } = await import('./plugin-skills/flags.js');
+    const { flags, categories } = harvestDiscoveredPluginSkillMetadata();
+    expect(flags.get('pr-triage')).toEqual(['--auto-merge', '--prs', '--skip-fix']);
+    expect(categories.has('pr-triage')).toBe(false);
+  });
+
   it('skips SKILL.md files inside .git', async () => {
     const { harvestDiscoveredPluginSkillMetadata } = await import('./plugin-skills/flags.js');
     expect(harvestDiscoveredPluginSkillMetadata().flags.has('ghost')).toBe(false);

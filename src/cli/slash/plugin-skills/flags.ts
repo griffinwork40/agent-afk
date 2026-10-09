@@ -12,9 +12,6 @@ import { getMarketplaceCacheDir, getBundledPluginsDir } from '../../../paths.js'
 import { scanAllPluginRoots } from '../../../agent/tools/skill-bridge.js';
 import { parseSkillMd, extractFlagsFromBody } from '../_lib/flag-harvest.js';
 
-/** Directories that never hold a SKILL.md; skipped so a plugin's git history is not walked. */
-const SKIP_DIRS = new Set(['.git', 'node_modules']);
-
 /** Result of a full SKILL.md harvest pass (flags + category). */
 export interface PluginSkillHarvest {
   flags: Map<string, string[]>;
@@ -70,6 +67,8 @@ export function harvestPluginSkillMetadata(cacheRoot?: string): PluginSkillHarve
     }
 
     for (const entry of entries) {
+      // Match the skill loader: hidden entries and dependencies are not skills.
+      if (entry.startsWith('.') || entry === 'node_modules') continue;
       const fullPath = join(dir, entry);
 
       let stat;
@@ -82,7 +81,6 @@ export function harvestPluginSkillMetadata(cacheRoot?: string): PluginSkillHarve
       }
 
       if (stat.isDirectory()) {
-        if (SKIP_DIRS.has(entry)) continue;
         walk(fullPath, depth + 1);
         continue;
       }
