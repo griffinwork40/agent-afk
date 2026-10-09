@@ -12,6 +12,7 @@
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { getBgJobsRoot, getBgJobDir } from '../paths.js';
+import { isEnoent } from '../utils/errors.js';
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -43,8 +44,7 @@ export async function sweepOldBgJobs(): Promise<void> {
       if (Date.now() - meta.endedAt < SEVEN_DAYS_MS) continue;
       await fsp.rm(jobDir, { recursive: true, force: true });
     } catch (e) {
-      const code = (e as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT') continue; // already gone
+      if (isEnoent(e)) continue; // already gone
       process.stderr.write(`[afk] bg sweep: error evicting ${entry}: ${String(e)}\n`);
     }
   }
