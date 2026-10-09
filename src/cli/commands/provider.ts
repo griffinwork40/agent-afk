@@ -35,8 +35,8 @@ import { errorMessage } from '../../utils/errors.js';
  * Build the human-readable result of `afk provider auth diagnose` (OpenAI).
  *
  * @param forceChatgptOAuth - When true (slot configured `provider: 'chatgpt-oauth'`),
- *   resolves the ChatGPT-subscription token ahead of every other tier, without
- *   the global `AFK_OPENAI_CHATGPT_OAUTH` flag. The slot declaration is the opt-in.
+ *   resolves the ChatGPT-subscription token ahead of every other tier,
+ *   including an explicit key. The slot declaration is authoritative.
  */
 export function buildProviderAuthDiagnose(
   explicitConfigKey: string | undefined,

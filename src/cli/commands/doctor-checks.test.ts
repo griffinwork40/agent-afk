@@ -132,15 +132,15 @@ describe('checkCodexKey — uses full resolveOpenAIAuth chain', () => {
     expect(result.fix).toContain('codex');
   });
 
-  it('warns (with opt-in hint) when ChatGPT OAuth is present but AFK_OPENAI_CHATGPT_OAUTH is not set', async () => {
+  it('warns (with re-login hint) when a ChatGPT login has no access token', async () => {
     await mockResolve({ apiKey: null, source: 'no-usable-auth-codex-oauth' });
     const result = await checkCodexKey();
     expect(result.state).toBe('warn');
     expect(result.detail).toContain('ChatGPT');
-    expect(result.fix).toContain('AFK_OPENAI_CHATGPT_OAUTH=1');
+    expect(result.fix).toContain('codex login');
   });
 
-  it('warns with forced-OAuth detail when AFK_OPENAI_CHATGPT_OAUTH=1 but no token found', async () => {
+  it('warns with forced-OAuth detail when a chatgpt-oauth slot has no token', async () => {
     await mockResolve({ apiKey: null, source: 'no-usable-auth-forced-chatgpt-oauth' });
     const result = await checkCodexKey();
     expect(result.state).toBe('warn');

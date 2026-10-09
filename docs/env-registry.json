@@ -128,7 +128,7 @@
     },
     {
       "name": "AFK_COMPACT_MODEL",
-      "description": "Model id or slot alias used by the /compact summarizer and auto-compaction. Accepts any model on any supported provider (anthropic, openai, xai). Cross-provider compaction is supported: set to a gpt-* id on a Claude session (or a claude-* id on an OpenAI session) and AFK will route the summarize call to that provider using its own credentials. The transcript is sent to the target provider — a one-time privacy warning is emitted on first cross-provider use. Requires that provider's credentials to be available (ANTHROPIC_API_KEY / OPENAI_API_KEY / XAI_API_KEY, or ChatGPT-subscription OAuth via AFK_OPENAI_CHATGPT_OAUTH). When unset: Anthropic sessions fall back to claude-haiku-class; OpenAI API-key sessions (api.openai.com) fall back to gpt-6-luna; ChatGPT-subscription (chatgpt-oauth) and custom-baseURL sessions (local runners, proxies) fall back to the session model. Also drives ghost-text suggestions on Claude sessions (see AFK_SUGGEST_MODEL to override that independently).",
+      "description": "Model id or slot alias used by the /compact summarizer and auto-compaction. Accepts any model on any supported provider (anthropic, openai, xai). Cross-provider compaction is supported: set to a gpt-* id on a Claude session (or a claude-* id on an OpenAI session) and AFK will route the summarize call to that provider using its own credentials. The transcript is sent to the target provider — a one-time privacy warning is emitted on first cross-provider use. Requires that provider's credentials to be available (ANTHROPIC_API_KEY / OPENAI_API_KEY / XAI_API_KEY, or ChatGPT-subscription OAuth from `codex login`). When unset: Anthropic sessions fall back to claude-haiku-class; OpenAI API-key sessions (api.openai.com) fall back to gpt-6-luna; ChatGPT-subscription (chatgpt-oauth) and custom-baseURL sessions (local runners, proxies) fall back to the session model. Also drives ghost-text suggestions on Claude sessions (see AFK_SUGGEST_MODEL to override that independently).",
       "type": "string",
       "required": false,
       "example": "gpt-6-luna",
@@ -742,14 +742,6 @@
       "type": "string",
       "required": false,
       "example": "http://127.0.0.1:8000/v1",
-      "category": "model"
-    },
-    {
-      "name": "AFK_OPENAI_CHATGPT_OAUTH",
-      "description": "Use ChatGPT-subscription OAuth credentials from ~/.codex/auth.json (auth_mode: chatgpt) as OpenAI provider auth. Off by default. Set to 1/true/yes/on to enable. READ-ONLY: AFK never refreshes these tokens — re-run codex when the access token expires. Routes requests over the Responses API to the private ChatGPT backend (chatgpt.com/backend-api).",
-      "type": "boolean",
-      "required": false,
-      "example": "1",
       "category": "model"
     },
     {
