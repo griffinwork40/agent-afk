@@ -78,7 +78,7 @@ codex login                        # writes ~/.codex/auth.json (chatgpt mode)
 afk chat -m gpt-5 "hello"
 ```
 
-To opt out, set `AFK_OPENAI_CHATGPT_OAUTH=0`.
+To bill API credits instead, set `OPENAI_API_KEY`; it always wins.
 
 AFK reads the access token from `~/.codex/auth.json` but **never refreshes
 it** — refresh tokens are single-use and the `codex` binary owns the refresh

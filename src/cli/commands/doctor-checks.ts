@@ -97,8 +97,8 @@ export async function checkCodexKey(): Promise<Check> {
       return {
         name: 'Codex/OpenAI API Key',
         state: 'warn',
-        detail: 'ChatGPT/OAuth credentials found in ~/.codex/auth.json but disabled by AFK_OPENAI_CHATGPT_OAUTH',
-        fix: 'Unset AFK_OPENAI_CHATGPT_OAUTH to use your ChatGPT subscription, or set OPENAI_API_KEY',
+        detail: 'ChatGPT login found in ~/.codex/auth.json but it has no access token',
+        fix: 'Re-run `codex login` to use your ChatGPT subscription, or set OPENAI_API_KEY',
       };
     case 'no-usable-auth-forced-chatgpt-oauth':
       return {

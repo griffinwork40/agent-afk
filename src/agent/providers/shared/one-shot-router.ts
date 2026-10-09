@@ -198,7 +198,7 @@ async function viaOpenAI(
   const { binding, label } = input;
   // Resolve OpenAI auth from the binding's explicit key, or via the standard
   // chain (OPENAI_API_KEY → CODEX_API_KEY → ~/.codex/auth.json including
-  // ChatGPT-subscription OAuth unless AFK_OPENAI_CHATGPT_OAUTH=0).
+  // ChatGPT-subscription OAuth as the last-resort tier).
   const auth = resolveOpenAIAuth(binding.apiKey, {}, binding.provider === 'chatgpt-oauth');
   if (auth.apiKey === null) {
     throw new Error(

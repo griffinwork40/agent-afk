@@ -137,11 +137,10 @@ describe('image_edit handler', () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
-  it('returns no-usable-auth error when OAuth token exists but AFK_OPENAI_CHATGPT_OAUTH opts out', async () => {
-    // When a Codex auth.json token is present but the operator opted out
-    // (AFK_OPENAI_CHATGPT_OAUTH=0), resolveOpenAIAuth returns
-    // source:'no-usable-auth-codex-oauth'. The handler must surface an
-    // actionable error — not forward the token.
+  it('returns no-usable-auth error when a ChatGPT login has no access token', async () => {
+    // A ChatGPT-mode ~/.codex/auth.json with no access token makes
+    // resolveOpenAIAuth return source:'no-usable-auth-codex-oauth'. The
+    // handler must surface an actionable error — not call the endpoint.
     vi.stubEnv('AFK_IMAGE_API_KEY', '');
     mockResolveAuth.mockReturnValue({
       apiKey: null,

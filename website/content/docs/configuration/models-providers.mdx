@@ -72,8 +72,7 @@ per-slot `provider` override set in `afk.config.json`'s `models` block (see
 `openai-compatible`, but additionally forces the ChatGPT-subscription OAuth
 credential (`~/.codex/auth.json`, written by `codex login` — see
 [ChatGPT-subscription OAuth](/configuration/api-keys#chatgpt-subscription-oauth))
-for **that tier only** — regardless of `OPENAI_API_KEY` / `CODEX_API_KEY`, and
-without setting the global `AFK_OPENAI_CHATGPT_OAUTH` flag.
+for **that tier only** — regardless of `OPENAI_API_KEY` / `CODEX_API_KEY`.
 
 This lets a ChatGPT-subscription model, a separately-keyed OpenAI model, and
 an Anthropic model coexist in the same session and `/model`-switch between
@@ -93,12 +92,10 @@ them cleanly:
 // /model-switch cleanly between them.
 ```
 
-Before this, ChatGPT-subscription OAuth was selectable only via the global
-`AFK_OPENAI_CHATGPT_OAUTH` flag, which sat at the lowest tier of a single
-global OpenAI auth chain — an ambient `OPENAI_API_KEY` blocked the OAuth
-fall-through entirely, so a subscription model and a custom-keyed OpenAI
-model could not be used side by side. That global fallback still works for a single-model setup, and is now on by
-default (set `AFK_OPENAI_CHATGPT_OAUTH=0` to opt out).
+Without a slot, ChatGPT-subscription OAuth is only the lowest tier of the
+global OpenAI auth chain: an ambient `OPENAI_API_KEY` wins, so a subscription
+model and a custom-keyed OpenAI model can't be used side by side. That global
+fallback needs no flag and still works for a single-model setup.
 
 ## Selecting a model
 

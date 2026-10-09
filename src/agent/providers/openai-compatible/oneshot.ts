@@ -104,8 +104,8 @@ export interface OpenAIOneShotInput {
   client?: OpenAI;
   /**
    * When true, resolve the ChatGPT-subscription OAuth token from
-   * `~/.codex/auth.json` ahead of every other auth tier and WITHOUT the global
-   * `AFK_OPENAI_CHATGPT_OAUTH` flag — mirrors the `provider: 'chatgpt-oauth'`
+   * `~/.codex/auth.json` ahead of every other auth tier (including an explicit
+   * key) — mirrors the `provider: 'chatgpt-oauth'`
    * slot semantics in `resolveOpenAIAuth`. Ignored when `client` is provided
    * (the pre-built client already carries the correct credentials).
    */

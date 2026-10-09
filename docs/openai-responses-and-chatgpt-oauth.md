@@ -4,7 +4,7 @@ The `openai-compatible` provider speaks **Chat Completions** by default. This
 doc covers the two paths that route over the **OpenAI Responses API**
 instead.
 
-Path 1 is opt-in. Path 2 (ChatGPT-subscription OAuth) is on by default but is
+Path 1 is opt-in. Path 2 (ChatGPT-subscription OAuth) needs no flag but is
 only a fallback: it is used only when no API key resolves. Nothing changes for
 existing API-key / Chat Completions users.
 
@@ -31,8 +31,7 @@ credits, by reusing the OAuth token that `codex login` writes to
 
 ```bash
 codex login                            # establishes ~/.codex/auth.json (chatgpt mode)
-afk chat -m gpt-5 "hello"              # no flag needed; on by default
-# export AFK_OPENAI_CHATGPT_OAUTH=0    # opt out (ignore the ChatGPT token)
+afk chat -m gpt-5 "hello"              # no flag needed
 ```
 
 When no API key resolves and a ChatGPT OAuth bundle is present, AFK:
@@ -53,16 +52,18 @@ When no API key resolves and a ChatGPT OAuth bundle is present, AFK:
   Phase 2E.)
 - **Undocumented / ToS-gray.** The ChatGPT backend, the `chatgpt-account-id`
   header, and the OAuth client are reverse-engineered and undocumented; they can
-  change or be blocked without notice. Set `AFK_OPENAI_CHATGPT_OAUTH=0` to opt
-  out. If you only have API access, use path 1.
+  change or be blocked without notice. To bill API credits instead, set
+  `OPENAI_API_KEY` (it always wins) or run `codex login --api-key`.
 - An explicit `OPENAI_API_KEY` / `CODEX_API_KEY` / config key always wins over
   the OAuth path.
 
 ## Precedence summary
 
 `config.apiKey` → `OPENAI_API_KEY` → `CODEX_API_KEY` →
-`~/.codex/auth.json` (API-key mode) → `~/.codex/auth.json` (ChatGPT OAuth, unless
-`AFK_OPENAI_CHATGPT_OAUTH=0`) → none.
+`~/.codex/auth.json` (API-key mode) → `~/.codex/auth.json` (ChatGPT OAuth) → none.
+
+`AFK_OPENAI_CHATGPT_OAUTH` used to gate the ChatGPT OAuth tier. It was removed;
+a leftover value in `afk.env` is ignored.
 
 The wire is Chat Completions unless (a) `auth.source === 'chatgpt-oauth'` or
 (b) `AFK_OPENAI_USE_RESPONSES` is truthy — then it is the Responses API.
