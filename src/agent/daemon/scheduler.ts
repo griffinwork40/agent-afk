@@ -26,13 +26,6 @@ import type { Telegraf } from 'telegraf';
 
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { ScheduledTask, validateScheduledTask } from './triggers.js';
-
-/**
- * Maximum length (chars) of the command preview included in crash-notice
- * in-flight task snapshots. Redaction runs BEFORE truncation so a secret
- * straddling the boundary is always fully masked (#3323 review).
- */
-export const COMMAND_HEAD_MAX_LEN = 60;
 import { runBuiltinTask } from './builtin-task.js';
 import { runShellTask } from './shell-task.js';
 import { checkTaskCwdAtRuntime, warnIfBuiltinHasCwd } from './cwd-validator.js';
@@ -56,6 +49,13 @@ import { errorMessage } from '../../utils/errors.js';
 import { makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord, makeTelemetryUnwritableSkipRecord, OverlapAlertLatch, formatOverlapAlertMessage } from './scheduler.overlap-guard.js';
 import { BudgetAlertLatch, evaluateBudgetGate, formatBudgetSkipMessage, resolveDaemonUsageTarget } from './budget-gate.js';
 import { probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
+
+/**
+ * Maximum length (chars) of the command preview included in crash-notice
+ * in-flight task snapshots. Redaction runs BEFORE truncation so a secret
+ * straddling the boundary is always fully masked (#3323 review).
+ */
+export const COMMAND_HEAD_MAX_LEN = 60;
 
 export interface SchedulerOptions {
   /** Per-tick session config; merged with defaults at spawn time. */
@@ -276,15 +276,16 @@ export class CronScheduler {
    * to Telegram verbatim (pushIfConfigured does not redact), and truncating
    * first could slice a secret below the redactor's minimum-length match.
    */
-  getInFlightTasks(): Array<{ taskId: string; commandHead: string; elapsedMs: number }> {
+  getInFlightTasks(): Array<{ taskId: string; displayId: string; commandHead: string; elapsedMs: number }> {
     const now = this.now();
-    const result: Array<{ taskId: string; commandHead: string; elapsedMs: number }> = [];
+    const result: Array<{ taskId: string; displayId: string; commandHead: string; elapsedMs: number }> = [];
     for (const [taskId, startedAt] of this.inFlightTasks) {
       const entry = this.registry.get(taskId);
       const commandHead = entry !== undefined
         ? redactInlineSecrets(entry.task.command).slice(0, COMMAND_HEAD_MAX_LEN)
-        : taskId;
-      result.push({ taskId, commandHead, elapsedMs: now - startedAt });
+        : redactInlineSecrets(taskId).slice(0, COMMAND_HEAD_MAX_LEN);
+      const displayId = redactInlineSecrets(taskId);
+      result.push({ taskId, displayId, commandHead, elapsedMs: now - startedAt });
     }
     return result;
   }
