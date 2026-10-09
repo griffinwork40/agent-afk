@@ -2,15 +2,15 @@
  * Workspace context preamble — formats shared workspace entries for injection
  * into a forked child's system prompt.
  *
- * Pattern mirrors `src/agent/subagent/budget-preamble.ts`: a pure renderer
- * and a config-mutating injector that handles the string / preset-object /
- * undefined system-prompt union.
+ * Renderer and injector for workspace entries. The injector delegates the
+ * system-prompt union handling to `appendSystemPromptBlock`.
  *
  * @module agent/workspace/workspace-preamble
  */
 
 import type { AgentConfig } from '../types/config-types.js';
 import type { WorkspaceEntry } from './workspace-store.js';
+import { appendSystemPromptBlock } from '../subagent/append-system-prompt-block.js';
 
 /**
  * Render workspace entries as a readable context block.
@@ -85,13 +85,9 @@ export function renderWorkspacePreamble(entries: WorkspaceEntry[]): string {
 /**
  * Append the workspace context preamble to a forked child's system prompt.
  *
- * Always returns a new config — injects a cold-start hint when entries is empty, otherwise the rendered preamble.
- * Handles the same system-prompt union as `injectToolBudgetPreamble`:
- *   - string → append with `\n\n`
- *   - preset object → append to `sp.append`
- *   - undefined → preamble becomes the system prompt
- *
- * Does not mutate the input — returns a shallow copy.
+ * Always returns a new config — injects a cold-start hint when entries is
+ * empty, otherwise the rendered preamble. System-prompt union handling
+ * delegated to `appendSystemPromptBlock`. Does not mutate the input.
  */
 export function injectWorkspacePreamble(
   config: AgentConfig,
@@ -103,27 +99,7 @@ export function injectWorkspacePreamble(
     entries.length === 0
       ? COLD_START_HINT
       : renderWorkspacePreamble(entries);
-  const sp = config.systemPrompt;
-
-  if (typeof sp === 'string') {
-    return sp.length > 0
-      ? { ...config, systemPrompt: `${sp}\n\n${block}` }
-      : { ...config, systemPrompt: block };
-  }
-
-  if (sp && typeof sp === 'object' && 'type' in sp && sp.type === 'preset') {
-    const existingAppend = sp.append ?? '';
-    return {
-      ...config,
-      systemPrompt: {
-        ...sp,
-        append: existingAppend.length > 0 ? `${existingAppend}\n\n${block}` : block,
-      },
-    };
-  }
-
-  // No system prompt set — preamble becomes the system prompt.
-  return { ...config, systemPrompt: block };
+  return appendSystemPromptBlock(config, block);
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
