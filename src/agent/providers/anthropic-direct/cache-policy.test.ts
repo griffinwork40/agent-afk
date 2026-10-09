@@ -333,6 +333,32 @@ describe('cache-policy', () => {
       expect(countBreakpoints({ messages: out.messages })).toBe(1);
     });
 
+    it('over-limit: drops tool breakpoints first — clamping is TTL-independent (5m variant)', () => {
+      // Same structure as the 1h variant above, but uses ttl: '5m' to document
+      // that the removal priority does not depend on the TTL value.
+      const params = {
+        system: [textBlock('stable', true), textBlock('volatile', true)],
+        tools: [
+          { name: 't1', cache_control: { type: 'ephemeral', ttl: '5m' } as const },
+          { name: 't2', cache_control: { type: 'ephemeral', ttl: '5m' } as const },
+          { name: 't3' },
+        ],
+        // 2 sys + 2 tool + 1 msg = 5 breakpoints → 1 over limit
+        messages: [userMsg('turn', true)],
+      };
+      expect(countBreakpoints(params)).toBe(5);
+      const out = clampBreakpoints(params);
+      expect(countBreakpoints(out)).toBe(MAX_CACHE_BREAKPOINTS);
+      // One tool breakpoint should have been dropped.
+      const toolBreakpoints = (out.tools ?? []).filter((t) => t.cache_control != null);
+      expect(toolBreakpoints).toHaveLength(1);
+      // System breakpoints are untouched.
+      const sysBreakpoints = (out.system ?? []).filter((b) => 'cache_control' in b && (b as { cache_control?: unknown }).cache_control != null);
+      expect(sysBreakpoints).toHaveLength(2);
+      // Message breakpoint is untouched.
+      expect(countBreakpoints({ messages: out.messages })).toBe(1);
+    });
+
     it('over-limit: drops older message breakpoints before system (keeping the last msg breakpoint)', () => {
       const params = {
         // 2 system breakpoints (stable + volatile)
