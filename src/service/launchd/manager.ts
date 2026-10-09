@@ -29,9 +29,160 @@ import type {
 } from '../types.js';
 import { guiDomain, LAUNCHCTL_TIMEOUT_MS, labelFor, plistPath, serviceLogPath } from './paths.js';
 import { installService, readPlistFile, uninstallService, upgradeService } from './install.js';
-import { serviceStatus } from './status.js';
+import { parseLaunchctlListRow, serviceStatus } from './status.js';
 import { env } from '../../config/env.js';
 import { errorMessage } from '../../utils/errors.js';
+
+/**
+ * Delay in milliseconds between the first failed bootstrap and the retry
+ * attempt. A short pause lets the launchd gui/<uid> domain finish its
+ * internal bookkeeping after a rapid bootout→bootstrap cycle.
+ *
+ * Kept as a named constant so unit tests can override it via
+ * {@link LaunchdManagerDeps.bootstrapRetryDelayMs}.
+ */
+export const BOOTSTRAP_RETRY_DELAY_MS = 2_000;
+
+/**
+ * Injectable dependencies for {@link bootstrapWithRetry}. Separates the
+ * side-effecting OS calls from the control-flow logic so unit tests can
+ * exercise the retry and fallback paths without invoking real launchctl or
+ * sleeping.
+ *
+ * Production code uses the defaults (real `execFileSync`,
+ * `Atomics.wait`-based sync sleep). Tests replace only the calls they care
+ * about.
+ */
+export interface LaunchdManagerDeps {
+  /**
+   * Replacement for `child_process.execFileSync`. Receives the same
+   * arguments: `(file, args, options)`. Return value is ignored by the
+   * caller; throw to simulate a launchctl failure.
+   */
+  execFileSync: typeof execFileSync;
+  /**
+   * Synchronous sleep used between bootstrap attempts. Receives the delay
+   * in milliseconds. Production implementation uses `Atomics.wait` (blocks
+   * the event loop for exactly `ms` ms without spawning a timer). Test
+   * implementations are no-ops so tests run instantly.
+   */
+  sleepSync: (ms: number) => void;
+  /**
+   * Delay (ms) to wait before retrying bootstrap after a transient failure.
+   * Defaults to {@link BOOTSTRAP_RETRY_DELAY_MS}. Set to 0 in tests.
+   */
+  bootstrapRetryDelayMs: number;
+}
+
+/**
+ * Synchronous sleep using `Atomics.wait` on a shared buffer.
+ * Blocks the calling thread for exactly `ms` milliseconds without
+ * allocating a timer or yielding to the event loop. Safe on the main
+ * thread when the blocking duration is bounded (a few seconds at most).
+ */
+function sleepSyncDefault(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** Production-default injectable deps — real OS calls, real sync sleep. */
+export function defaultLaunchdManagerDeps(): LaunchdManagerDeps {
+  return {
+    execFileSync,
+    sleepSync: sleepSyncDefault,
+    bootstrapRetryDelayMs: BOOTSTRAP_RETRY_DELAY_MS,
+  };
+}
+
+/**
+ * Check whether the named service is currently loaded in the launchd domain
+ * by running `launchctl list` and looking for its label. Returns `true` if
+ * the label appears in the list (the timed-out bootstrap may have actually
+ * succeeded), `false` if it does not appear or if `launchctl list` itself
+ * fails.
+ *
+ * Extracted as a named function so it can be tested independently.
+ */
+export function isServiceLoadedViaList(
+  label: string,
+  deps: Pick<LaunchdManagerDeps, 'execFileSync'>,
+): boolean {
+  try {
+    const table = deps.execFileSync('launchctl', ['list'], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: LAUNCHCTL_TIMEOUT_MS,
+    }) as string;
+    return parseLaunchctlListRow(table, label) !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Attempt to bootstrap the service, with one retry after a short delay if
+ * the first attempt fails. Before retrying, check whether the timed-out
+ * bootstrap actually succeeded (the service may be loaded despite the error)
+ * to avoid a "already bootstrapped" double-bootstrap error.
+ *
+ * Returns `{ kind: 'ok' }` when bootstrap succeeds (first try or retry),
+ * `{ kind: 'already-loaded' }` when the first attempt failed but the
+ * service is already loaded (timed-out-but-actually-loaded case), or
+ * `{ kind: 'failed'; reason: string }` when bootstrap fails after the retry.
+ *
+ * @param name   - Service name, used only in the recovery-hint message.
+ * @param domain - launchd gui/<uid> domain string.
+ * @param path   - Absolute path to the plist file.
+ * @param deps   - Injectable deps (execFileSync, sleepSync, bootstrapRetryDelayMs).
+ */
+export function bootstrapWithRetry(
+  name: ServiceName,
+  domain: string,
+  path: string,
+  deps: LaunchdManagerDeps,
+): { kind: 'ok' } | { kind: 'already-loaded' } | { kind: 'failed'; reason: string } {
+  const label = labelFor(name);
+
+  // ── First bootstrap attempt ────────────────────────────────────────────
+  try {
+    deps.execFileSync('launchctl', ['bootstrap', domain, path], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: LAUNCHCTL_TIMEOUT_MS,
+    });
+    return { kind: 'ok' };
+  } catch (firstErr) {
+    // First attempt failed. Before retrying, check whether the bootstrap
+    // actually succeeded despite the error (e.g. ETIMEDOUT from a slow XPC
+    // handshake where launchd completed the load on its side). If the label
+    // is already visible in `launchctl list`, treat it as success to avoid
+    // a double-bootstrap "already bootstrapped" collision on retry.
+    if (isServiceLoadedViaList(label, deps)) {
+      return { kind: 'already-loaded' };
+    }
+
+    // Service is NOT loaded — the bootstrap genuinely failed. Wait briefly
+    // to let the gui/<uid> domain settle after the bootout→bootstrap cycle,
+    // then retry once.
+    deps.sleepSync(deps.bootstrapRetryDelayMs);
+
+    try {
+      deps.execFileSync('launchctl', ['bootstrap', domain, path], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: LAUNCHCTL_TIMEOUT_MS,
+      });
+      return { kind: 'ok' };
+    } catch (retryErr) {
+      // Both attempts failed. Return a clear message naming the stopped
+      // state and the exact recovery command.
+      const firstMsg = errorMessage(firstErr);
+      const retryMsg = errorMessage(retryErr);
+      const reason =
+        `Service was stopped but could not be restarted ` +
+        `(bootstrap failed: ${retryMsg}; first attempt: ${firstMsg}). ` +
+        `Run: afk service uninstall ${name} && afk service install ${name}`;
+      return { kind: 'failed', reason };
+    }
+  }
+}
 
 export const launchdManager: ServiceManager = {
   backend: 'launchd',
@@ -102,7 +253,7 @@ export const launchdManager: ServiceManager = {
     return { kind: 'failed', reason: result.reason };
   },
 
-  restart(name: ServiceName, opts?: ServiceInstallOptions): ServiceRestartOutcome {
+  restart(name: ServiceName, opts?: ServiceInstallOptions, _deps?: LaunchdManagerDeps): ServiceRestartOutcome {
     if (!this.isInstalled(name)) {
       return { kind: 'not-installed', configPath: plistPath(name) };
     }
@@ -132,6 +283,8 @@ export const launchdManager: ServiceManager = {
       return { kind: 'failed', reason: 'process.getuid is unavailable — restart requires a POSIX system.' };
     }
 
+    const deps = _deps ?? defaultLaunchdManagerDeps();
+
     const upgradeStart = Date.now();
     const upgradeResult = upgradeService(name, opts ?? {});
     const upgradeElapsedMs = Date.now() - upgradeStart;
@@ -151,7 +304,7 @@ export const launchdManager: ServiceManager = {
       const domain = guiDomain();
       const path = plistPath(name);
       try {
-        execFileSync('launchctl', ['bootout', `${domain}/${label}`], {
+        deps.execFileSync('launchctl', ['bootout', `${domain}/${label}`], {
           stdio: ['ignore', 'pipe', 'pipe'],
           timeout: LAUNCHCTL_TIMEOUT_MS,
         });
@@ -159,15 +312,16 @@ export const launchdManager: ServiceManager = {
         // bootout may fail if the job was not loaded — non-fatal, proceed
         // to bootstrap so the updated plist is picked up regardless.
       }
-      try {
-        execFileSync('launchctl', ['bootstrap', domain, path], {
-          stdio: ['ignore', 'pipe', 'pipe'],
-          timeout: LAUNCHCTL_TIMEOUT_MS,
-        });
+
+      // Bootstrap with retry: if the first attempt fails (e.g. ETIMEDOUT
+      // during a rapid bootout→bootstrap cycle), check whether the service
+      // actually loaded (timed-out-but-actually-loaded), then retry once
+      // after a short delay before declaring failure.
+      const bootstrapResult = bootstrapWithRetry(name, domain, path, deps);
+      if (bootstrapResult.kind === 'ok' || bootstrapResult.kind === 'already-loaded') {
         return { kind: 'restarted', label };
-      } catch (e) {
-        return { kind: 'failed', reason: errorMessage(e) };
       }
+      return { kind: 'failed', reason: bootstrapResult.reason };
     }
 
     // Plist upgrade failed — collect the reason as a note so the caller can
@@ -182,7 +336,7 @@ export const launchdManager: ServiceManager = {
     // Plist unchanged (already-current), not installed, or upgrade failed —
     // fall back to kickstart -k for a lighter-weight process restart.
     try {
-      execFileSync('launchctl', ['kickstart', '-k', `${guiDomain()}/${labelFor(name)}`], {
+      deps.execFileSync('launchctl', ['kickstart', '-k', `${guiDomain()}/${labelFor(name)}`], {
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: LAUNCHCTL_TIMEOUT_MS,
       });
