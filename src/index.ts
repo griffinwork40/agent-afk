@@ -102,6 +102,19 @@ export type {
 export { describeFailure } from './agent/subagent/result.js';
 export { discoverPluginSkillBodies } from './agent/tools/skill-bridge.js';
 
+// Journal helpers: exported so SDK consumers can resolve a prior session's
+// messages without shelling out. `loadJournalMessages` is what the CLI calls
+// internally via `resumeConfigFor()`; exporting it lets callers use the same
+// path for out-of-band inspection or custom resume logic.
+export {
+  loadJournalMessages,
+  loadJournalFold,
+  journalExists,
+  foldJournal,
+  hydrateMessages,
+} from './agent/journal/index.js';
+export type { JournalMessage, JournalLocator, FoldResult } from './agent/journal/index.js';
+
 export { env } from './config/env.js';
 export { getSessionsDir, getSkillsDir, getAgentFrameworkDir } from './paths.js';
 
