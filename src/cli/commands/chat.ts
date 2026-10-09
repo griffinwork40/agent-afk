@@ -20,7 +20,7 @@ import { runReviewPostPublish, parsePostTargets, type PostTarget } from '../slas
 import type { Writer } from '../slash/types.js';
 import { createStderrWriter } from '../slash/writer.js';
 import { runNonInteractiveReconcile } from '../../agent/manifest/startup-reconcile.js';
-import { errorMessage } from '../../utils/errors.js';
+import { errorMessage, ensureError} from '../../utils/errors.js';
 import { closeLazyBrowser } from './chat.browser-teardown.js';
 import { createDefaultTraceWriter } from '../../agent/trace/factory.js';
 import { receiptPathsFor } from '../../agent/trace/receipt.js';
@@ -351,7 +351,7 @@ export function registerChatCommand(program: Command): void {
       } catch (error) {
         encounteredError = true;
         if (options.format === 'stream-json') {
-          const e = error instanceof Error ? error : new Error(String(error));
+          const e = ensureError(error);
           try {
             await writeAndDrain(
               process.stdout,
