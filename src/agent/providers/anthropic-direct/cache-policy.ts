@@ -15,6 +15,10 @@
  * across turns, and an accumulating set of `cache_control` markers would
  * break prefix-hash matching on subsequent calls.
  *
+ * `clampBreakpoints` enforces the Anthropic 4-breakpoint limit across the
+ * full request (system + tools + messages). See its doc comment for the
+ * removal priority that applies when the assembled params exceed the limit.
+ *
  * @module agent/providers/anthropic-direct/cache-policy
  */
 import type {
@@ -24,6 +28,12 @@ import type {
 import { env } from '../../../config/env.js';
 
 const TTL_DEFAULT: '5m' | '1h' = '1h';
+
+/**
+ * Anthropic's hard limit on `cache_control` breakpoints across the entire
+ * request (tools + system + messages combined). Exceeding this causes a 400.
+ */
+export const MAX_CACHE_BREAKPOINTS = 4;
 
 /**
  * Cache is on by default. Disable for the session by setting
@@ -156,4 +166,176 @@ function stampCacheControl(
     return block;
   }
   return { ...block, cache_control: { type: 'ephemeral', ttl } };
+}
+
+/**
+ * True when a content block carries an active `cache_control` breakpoint.
+ * The field can be `null` (API-level opt-out) or absent — only a non-null
+ * `{ type: 'ephemeral' }` value counts as a breakpoint.
+ */
+function blockHasBreakpoint(block: { cache_control?: { type: string } | null }): boolean {
+  return block.cache_control != null;
+}
+
+/** Strip `cache_control` from a single content block (non-mutating). */
+function stripBreakpoint(block: ContentBlockParam): ContentBlockParam {
+  if (!('cache_control' in block)) return block;
+  const { cache_control: _cc, ...rest } = block as ContentBlockParam & { cache_control?: unknown };
+  return rest as ContentBlockParam;
+}
+
+/**
+ * Count `cache_control` breakpoints across the full request payload
+ * (system blocks + tool definitions + message content blocks).
+ *
+ * Exported for unit tests; callers should use `clampBreakpoints` instead.
+ */
+export function countBreakpoints(params: {
+  system?: readonly ContentBlockParam[];
+  tools?: readonly CacheableToolLike[];
+  messages: readonly MessageParam[];
+}): number {
+  let count = 0;
+  for (const blk of params.system ?? []) {
+    // ThinkingBlockParam and redacted_thinking have no cache_control field.
+    if (blk.type !== 'thinking' && blk.type !== 'redacted_thinking' && blockHasBreakpoint(blk as { cache_control?: { type: string } | null })) {
+      count++;
+    }
+  }
+  for (const tool of params.tools ?? []) {
+    if (blockHasBreakpoint(tool)) count++;
+  }
+  for (const msg of params.messages) {
+    const content = msg.content;
+    if (typeof content === 'string') continue;
+    if (Array.isArray(content)) {
+      for (const blk of content) {
+        if (typeof blk === 'object' && blk !== null && blockHasBreakpoint(blk as { cache_control?: { type: string } | null })) {
+          count++;
+        }
+      }
+    }
+  }
+  return count;
+}
+
+/**
+ * Minimal shape shared by both `WireToolDef` and any future tool that may
+ * carry a `cache_control` field. Using a local interface keeps
+ * `clampBreakpoints` decoupled from the import of `WireToolDef`.
+ */
+export interface CacheableToolLike {
+  name: string;
+  cache_control?: { type: string } | null;
+  [k: string]: unknown;
+}
+
+/**
+ * Guard the Anthropic 4-breakpoint limit across the full request (tools +
+ * system + messages). If the assembled params would exceed `MAX_CACHE_BREAKPOINTS`,
+ * strips the lowest-value breakpoints deterministically — without throwing —
+ * so the request always succeeds.
+ *
+ * **Removal priority** (highest value → kept first, lowest value → dropped first):
+ *
+ * 1. `messages` end breakpoint — kept last: it floats to the newest context
+ *    every turn and drives prefix-hash matching within the tool-use loop.
+ * 2. `system` end breakpoint — kept second: implicitly covers all tool schemas
+ *    (Anthropic caches tools → system → messages in order).
+ * 3. Earlier `system` breakpoints — kept third: stable-prefix blocks reuse the
+ *    most tokens across sessions, subagent forks, and date rollovers.
+ * 4. `tools` breakpoints — dropped first: already covered by the system end.
+ * 5. Earlier `messages` breakpoints — dropped next: older turns are least likely
+ *    to produce a prefix-hash hit on subsequent calls.
+ *
+ * Non-mutating: returns the input unchanged when no clamping is needed.
+ */
+export function clampBreakpoints(params: {
+  system?: readonly ContentBlockParam[];
+  tools?: readonly CacheableToolLike[];
+  messages: readonly MessageParam[];
+}): {
+  system?: readonly ContentBlockParam[];
+  tools?: readonly CacheableToolLike[];
+  messages: readonly MessageParam[];
+} {
+  const total = countBreakpoints(params);
+  if (total <= MAX_CACHE_BREAKPOINTS) return params;
+
+  let toRemove = total - MAX_CACHE_BREAKPOINTS;
+
+  // Step 1: strip tool breakpoints (lowest value — covered by system end).
+  let tools = params.tools;
+  if (toRemove > 0 && tools !== undefined) {
+    const stripped: CacheableToolLike[] = [];
+    for (const t of tools) {
+      if (toRemove > 0 && blockHasBreakpoint(t)) {
+        const { cache_control: _cc, ...rest } = t;
+        stripped.push(rest as CacheableToolLike);
+        toRemove--;
+      } else {
+        stripped.push(t);
+      }
+    }
+    tools = stripped;
+  }
+
+  // Step 2: strip earlier message content breakpoints (keep only the last one).
+  let messages = params.messages;
+  if (toRemove > 0) {
+    // Collect all (msgIdx, blockIdx) pairs that carry a breakpoint, oldest first.
+    const msgMarkers: Array<{ msgIdx: number; blockIdx: number }> = [];
+    for (let mi = 0; mi < messages.length; mi++) {
+      const content = messages[mi]!.content;
+      if (!Array.isArray(content)) continue;
+      for (let bi = 0; bi < content.length; bi++) {
+        const blk = content[bi]!;
+        if (typeof blk === 'object' && blk !== null && blockHasBreakpoint(blk as { cache_control?: { type: string } | null })) {
+          msgMarkers.push({ msgIdx: mi, blockIdx: bi });
+        }
+      }
+    }
+    // Protect the LAST breakpoint (end-of-messages) — strip the rest oldest-first.
+    const toStrip = msgMarkers.slice(0, Math.min(toRemove, Math.max(0, msgMarkers.length - 1)));
+    if (toStrip.length > 0) {
+      const msgsCopy = messages.map((m) => ({ ...m }));
+      for (const { msgIdx, blockIdx } of toStrip) {
+        const content = msgsCopy[msgIdx]!.content;
+        if (!Array.isArray(content)) continue;
+        const blk = content[blockIdx];
+        if (blk === undefined || typeof blk !== 'object' || blk === null) continue;
+        const stripped = stripBreakpoint(blk as ContentBlockParam);
+        msgsCopy[msgIdx]!.content = [
+          ...content.slice(0, blockIdx),
+          stripped,
+          ...content.slice(blockIdx + 1),
+        ] as typeof content;
+        toRemove--;
+      }
+      messages = msgsCopy;
+    }
+  }
+
+  // Step 3: strip earlier system breakpoints (keep only the last one).
+  let system = params.system;
+  if (toRemove > 0 && system !== undefined && system.length > 0) {
+    // Find all indices with a breakpoint; protect the last one.
+    const sysMarkers: number[] = [];
+    for (let i = 0; i < system.length; i++) {
+      if (blockHasBreakpoint(system[i]! as { cache_control?: { type: string } | null })) {
+        sysMarkers.push(i);
+      }
+    }
+    const toStrip = sysMarkers.slice(0, Math.min(toRemove, Math.max(0, sysMarkers.length - 1)));
+    if (toStrip.length > 0) {
+      const sysCopy = [...system];
+      for (const idx of toStrip) {
+        sysCopy[idx] = stripBreakpoint(sysCopy[idx]!);
+        toRemove--;
+      }
+      system = sysCopy;
+    }
+  }
+
+  return { system, tools, messages };
 }
