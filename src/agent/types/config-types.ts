@@ -832,6 +832,21 @@ export interface AgentConfig {
   skillDispatchName?: string;
 
   /**
+   * When true, the session is an unnamed (bare `agent` tool) subagent dispatch
+   * — i.e. one built by `buildChildConfig` with `namedAgent === undefined`.
+   *
+   * Providers use this flag in `resolveToolSystemPrompt` to return an empty
+   * string rather than the full tool conventions block.  The conventions are
+   * already embedded in `UNNAMED_SUBAGENT_WORKER_PROMPT` (which becomes
+   * `config.systemPrompt` for these sessions via `composeUnnamedWorkerPrompt`),
+   * so prepending `toolBase` again would duplicate `TOOL_SYSTEM_PROMPT_BASE` in
+   * the assembled system prompt (#3359).
+   *
+   * Default: `undefined` / `false` (all other sessions get `toolBase`).
+   */
+  isUnnamedWorker?: boolean;
+
+  /**
    * When true, the session runs on a non-interactive surface where no human is
    * available to answer an `ask_question` elicitation — the daemon, a
    * scheduler/cron-launched task, or a one-shot `afk chat` invocation. On these

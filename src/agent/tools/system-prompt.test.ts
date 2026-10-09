@@ -176,3 +176,51 @@ describe('resolveMemorySystemPrompt', () => {
     expect(MEMORY_SYSTEM_PROMPT_SEARCH_ONLY).toContain('read-only');
   });
 });
+
+describe('resolveToolSystemPrompt — unnamed worker dedupe (#3359)', () => {
+  it('returns empty string for an unnamed worker (isUnnamedWorker=true)', () => {
+    // TOOL_SYSTEM_PROMPT_BASE is already embedded in UNNAMED_SUBAGENT_WORKER_PROMPT
+    // (via composeUnnamedWorkerPrompt → systemPrompt). Prepending toolBase again
+    // duplicates it. The provider skips the empty string so no leading blank line
+    // appears in the assembled prompt.
+    expect(resolveToolSystemPrompt(false, true)).toBe('');
+    expect(resolveToolSystemPrompt(undefined, true)).toBe('');
+  });
+
+  it('isUnnamedWorker takes priority over isSkillDispatch', () => {
+    // Defensive: the combination should not arise in production, but if it does
+    // the no-double-base rule wins over the skill-dispatch base-only rule.
+    expect(resolveToolSystemPrompt(true, true)).toBe('');
+  });
+
+  it('isUnnamedWorker=false/undefined does not change existing behaviour', () => {
+    expect(resolveToolSystemPrompt(false, false)).toBe(TOOL_SYSTEM_PROMPT);
+    expect(resolveToolSystemPrompt(false, undefined)).toBe(TOOL_SYSTEM_PROMPT);
+    expect(resolveToolSystemPrompt(true, false)).toBe(TOOL_SYSTEM_PROMPT_BASE);
+    expect(resolveToolSystemPrompt(true, undefined)).toBe(TOOL_SYSTEM_PROMPT_BASE);
+  });
+
+  it('TOOL_SYSTEM_PROMPT_BASE appears exactly once in an unnamed worker composed prompt', () => {
+    // This is the core regression guard: the assembled text the provider sends
+    // to the model must contain TOOL_SYSTEM_PROMPT_BASE exactly once — once from
+    // the embedded UNNAMED_SUBAGENT_WORKER_PROMPT (via composeUnnamedWorkerPrompt),
+    // and zero times from the provider's toolBase slot (which is now '').
+    const assembled = composeUnnamedWorkerPrompt(undefined);
+    const occurrences = assembled.split(TOOL_SYSTEM_PROMPT_BASE).length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it('TOOL_SYSTEM_PROMPT_BASE appears exactly once when an overlay is appended', () => {
+    const assembled = composeUnnamedWorkerPrompt('Use pnpm only.');
+    const occurrences = assembled.split(TOOL_SYSTEM_PROMPT_BASE).length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it('named agents and root sessions are unaffected: resolveToolSystemPrompt returns the full compound', () => {
+    // isUnnamedWorker is not set for named agents or top-level sessions.
+    expect(resolveToolSystemPrompt(false, undefined)).toBe(TOOL_SYSTEM_PROMPT);
+    expect(resolveToolSystemPrompt(undefined, undefined)).toBe(TOOL_SYSTEM_PROMPT);
+    // Skill-dispatch sub-agents return base-only (unchanged).
+    expect(resolveToolSystemPrompt(true, undefined)).toBe(TOOL_SYSTEM_PROMPT_BASE);
+  });
+});
