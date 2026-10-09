@@ -10,7 +10,8 @@
  *
  * ```ts
  * // In default-hook-registry.ts:
- * import { createEffectLedgerPostHook } from './effect-ledger/index.js';
+ * import { createEffectLedgerPreHook, createEffectLedgerPostHook } from './effect-ledger/index.js';
+ * registry.register('PreToolUse', createEffectLedgerPreHook());
  * registry.register('PostToolUse', createEffectLedgerPostHook());
  * ```
  *
