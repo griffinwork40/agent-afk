@@ -33,6 +33,7 @@ import {
   __setOpenAIOneShotClientFactory,
 } from '../openai-compatible/oneshot.js';
 import { completeWithWire, type CompleteWireClientOptions } from '../openai-compatible/complete-wire.js';
+import { type AuthResolverDeps } from '../openai-compatible/auth.js';
 
 const execFile = promisify(execFileCb);
 const readFile = promisify(readFileCb);
@@ -258,7 +259,7 @@ describe('completeWithWire — Responses-wire client factory receives h1ModelFet
       readFile: (_path: string) => fakeCodexAuth,
       readEnv: (_key: string) => undefined,
       homedir: () => '/fake-home',
-    };
+    } satisfies AuthResolverDeps;
 
     // A minimal async iterable that emits response.completed so oneShotResponses
     // resolves cleanly (it throws ResponsesSummaryIncompleteError otherwise).

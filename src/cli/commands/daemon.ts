@@ -136,20 +136,24 @@ const isDoneUnverified = ({ responseText, successfulToolNames }: { responseText:
   return v !== null && v.kind === 'done' && !successfulToolNames.some((n) => DONE_EVIDENCE_TOOLS.has(n));
 };
 
-/** Guards against duplicate listener registration if called more than once. */
-let daemonCrashHandlersInstalled = false;
-
 /**
- * Module-scoped in-flight source shared between `registerEarlyDaemonCrashHandlers`
- * calls. Lifting it out of the function means a second call (e.g. after
- * `_resetDaemonCrashHandlersForTest` in tests) re-uses the same closure slot,
- * so `bindInFlightSource` from the second call still updates the getter that
- * the registered crash handler reads.
+ * Module-scoped crash-handler guard state.  Grouping the three guards makes
+ * the reset surface explicit and keeps `_resetDaemonCrashHandlersForTest`
+ * the single place that clears all of them.
+ *
+ * - `handlersInstalled` — duplicate-listener guard for `registerDaemonCrashHandlers`.
+ * - `earlyHandlersInstalled` — duplicate-listener guard for `registerEarlyDaemonCrashHandlers`.
+ * - `earlyInFlightSource` — module-scoped in-flight snapshot provider shared
+ *   between `registerEarlyDaemonCrashHandlers` calls so a second call (e.g.
+ *   after `_resetDaemonCrashHandlersForTest` in tests) re-uses the same closure
+ *   slot and `bindInFlightSource` still updates the getter the registered crash
+ *   handler reads.
  */
-let earlyInFlightSource: (() => InFlightTaskSnapshot[]) | undefined;
-
-/** Guards against duplicate early-handler registration. */
-let earlyHandlersInstalled = false;
+const daemonCrashState = {
+  handlersInstalled: false,
+  earlyHandlersInstalled: false,
+  earlyInFlightSource: undefined as (() => InFlightTaskSnapshot[]) | undefined,
+};
 
 /**
  * Reset the re-entry guards. Exported for testing only — do not call in
@@ -158,9 +162,9 @@ let earlyHandlersInstalled = false;
  * @internal
  */
 export function _resetDaemonCrashHandlersForTest(): void {
-  daemonCrashHandlersInstalled = false;
-  earlyHandlersInstalled = false;
-  earlyInFlightSource = undefined;
+  daemonCrashState.handlersInstalled = false;
+  daemonCrashState.earlyHandlersInstalled = false;
+  daemonCrashState.earlyInFlightSource = undefined;
 }
 
 /** Milliseconds to wait after firing the crash notification before exiting,
@@ -203,8 +207,8 @@ export interface InFlightTaskSnapshot {
 export function registerDaemonCrashHandlers(
   getInFlightTasks?: () => InFlightTaskSnapshot[],
 ): void {
-  if (daemonCrashHandlersInstalled) return;
-  daemonCrashHandlersInstalled = true;
+  if (daemonCrashState.handlersInstalled) return;
+  daemonCrashState.handlersInstalled = true;
 
   let lastCrashPushAt = 0;
   const CRASH_PUSH_GUARD_MS = 60_000;
@@ -263,17 +267,17 @@ export function registerDaemonCrashHandlers(
  *
  * Single-call contract: this function must be called at most once per process.
  * If called again (e.g. after `_resetDaemonCrashHandlersForTest` in tests),
- * the module-scoped `earlyInFlightSource` is reused by the same getter closure
- * registered in `registerDaemonCrashHandlers`, so the returned binder still
- * updates the live snapshot provider.
+ * the `daemonCrashState.earlyInFlightSource` slot is reused by the same getter
+ * closure registered in `registerDaemonCrashHandlers`, so the returned binder
+ * still updates the live snapshot provider.
  */
 export function registerEarlyDaemonCrashHandlers(): (source: () => InFlightTaskSnapshot[]) => void {
-  if (!earlyHandlersInstalled) {
-    earlyHandlersInstalled = true;
-    registerDaemonCrashHandlers(() => earlyInFlightSource?.() ?? []);
+  if (!daemonCrashState.earlyHandlersInstalled) {
+    daemonCrashState.earlyHandlersInstalled = true;
+    registerDaemonCrashHandlers(() => daemonCrashState.earlyInFlightSource?.() ?? []);
   }
   return (source) => {
-    earlyInFlightSource = source;
+    daemonCrashState.earlyInFlightSource = source;
   };
 }
 
