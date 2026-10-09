@@ -85,7 +85,7 @@ async function run(args: string[]): Promise<string> {
 
 describe('afk defects', () => {
   beforeEach(() => {
-    mockRead.mockReturnValue([]);
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
     mockCluster.mockReturnValue([]);
   });
 
@@ -94,7 +94,7 @@ describe('afk defects', () => {
   });
 
   it('emits a "no records" message when the ledger is empty', async () => {
-    mockRead.mockReturnValue([]);
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
     mockCluster.mockReturnValue([]);
 
     const out = await run(['defects']);
@@ -103,7 +103,7 @@ describe('afk defects', () => {
 
   it('renders a table with header row when clusters are present', async () => {
     const clusters = [makeCluster({ recurrenceCount: 3 })];
-    mockRead.mockReturnValue([]);
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
     mockCluster.mockReturnValue(clusters);
 
     const out = await run(['defects']);
@@ -116,7 +116,7 @@ describe('afk defects', () => {
 
   it('renders the locus and date in table rows', async () => {
     const clusters = [makeCluster({ locus: 'src/foo.test.ts', lastSeen: '2025-06-01T00:00:00.000Z' })];
-    mockRead.mockReturnValue([]);
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
     mockCluster.mockReturnValue(clusters);
 
     const out = await run(['defects']);
@@ -132,7 +132,7 @@ describe('afk defects', () => {
       makeCluster({ locus: 'b.ts', recurrenceCount: 4 }),
       makeCluster({ locus: 'c.ts', recurrenceCount: 3 }),
     ];
-    mockRead.mockReturnValue([]);
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
     mockCluster.mockReturnValue(clusters);
 
     const out = await run(['defects', '--top', '2']);
@@ -144,7 +144,7 @@ describe('afk defects', () => {
 
   it('emits valid JSON when --json is passed', async () => {
     const clusters = [makeCluster({ recurrenceCount: 7 })];
-    mockRead.mockReturnValue([]);
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
     mockCluster.mockReturnValue(clusters);
 
     const out = await run(['defects', '--json']);
@@ -167,7 +167,7 @@ describe('afk defects', () => {
       category: 'other' as const,
       loci: ['old-locus'],
     };
-    mockRead.mockReturnValue([oldRecord]);
+    mockRead.mockReturnValue({ records: [oldRecord], ledgerTruncated: false });
     mockCluster.mockReturnValue([]);
 
     await run(['defects', '--days', '30']);
@@ -179,7 +179,7 @@ describe('afk defects', () => {
 
   it('includes a caption row with cluster count and lookback days', async () => {
     const clusters = [makeCluster()];
-    mockRead.mockReturnValue([]);
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
     mockCluster.mockReturnValue(clusters);
 
     const out = await run(['defects', '--days', '45']);
