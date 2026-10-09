@@ -113,7 +113,7 @@ export function registerDefectsCommand(program: Command): void {
         const topN = Math.max(1, parseInt(opts.top, 10) || 10);
 
         const ledgerPath = getPreexistingLedgerPath();
-        const allRecords = readLedgerRecords(ledgerPath);
+        const { records: allRecords } = readLedgerRecords(ledgerPath);
 
         // Apply time window filter
         const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;

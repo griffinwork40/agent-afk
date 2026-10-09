@@ -11,6 +11,23 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.307.4] - 2026-10-09
+
+### Added
+- add `afk defects` CLI subcommand for recurring defect ledger (#3350) (3ef3c90d)
+
+### Fixed
+- tighten heartbeat test assertions and waitFor options (#3310) (1dadb52a)
+- redact in-flight command heads in crash notices; register crash handlers before startup (#3358) (5b8751f9)
+- union re-wrapped operator deny lists; surface ledger tail-cap truncation (#3357) (d9284998)
+- suppress legacy deficit eviction while resize burst is in flight (#3361) (45d44cd2)
+- add end-to-end regression test for preset {append} in system message (#3351) (219d0d71)
+
+### Changed
+- add solo-timeout test and explicit spy restore in model-complete (#3311) (f1b560f2)
+- note that model_complete max_tokens is ignored on ChatGPT-subscription models (#3292) (79b9be8a)
+- extract appendSystemPromptBlock, formatDuration, detectMediaType, brace scanners, printWarnings, chatLabel helpers (#3349) (d7514c7e)
+
 ## [5.307.3] - 2026-10-09
 
 ### Changed
