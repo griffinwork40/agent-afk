@@ -155,6 +155,13 @@ export function _resetDaemonCrashHandlersForTest(): void {
  *  whole module rather than being buried inside registerDaemonCrashHandlers. */
 const CRASH_EXIT_DELAY_MS = 200;
 
+/**
+ * Maximum number of in-flight task entries appended to a crash notice. Caps
+ * Telegram message length when many tasks are simultaneously in-flight.
+ * Tasks beyond this limit are silently omitted (the count is still shown).
+ */
+const CRASH_NOTICE_IN_FLIGHT_LIMIT = 10;
+
 /** Shape of a single in-flight task snapshot for crash-notice inclusion (#3248). */
 export interface InFlightTaskSnapshot {
   taskId: string;
@@ -197,9 +204,13 @@ export function registerDaemonCrashHandlers(
         if (tasks.length > 0) {
           lines.push('');
           lines.push(`in-flight (${tasks.length}):`);
-          for (const t of tasks) {
+          const listed = tasks.slice(0, CRASH_NOTICE_IN_FLIGHT_LIMIT);
+          for (const t of listed) {
             const elapsedSec = (t.elapsedMs / 1000).toFixed(1);
             lines.push(`  • ${t.taskId}: ${t.commandHead} (${elapsedSec}s)`);
+          }
+          if (tasks.length > CRASH_NOTICE_IN_FLIGHT_LIMIT) {
+            lines.push(`  … and ${tasks.length - CRASH_NOTICE_IN_FLIGHT_LIMIT} more`);
           }
         }
       } catch {
@@ -435,7 +446,7 @@ export function registerDaemonCommand(program: Command): void {
 
         bindInFlightSource(() => handle.scheduler.getInFlightTasks()); // live crash-notice snapshot (#3248)
         // Wave-manifest reconciliation: pushes resumption offers via Telegram (#3248).
-        runDaemonReconcile('');
+        void runDaemonReconcile('');
 
         if (options.once) {
           console.log(palette.info(`▶ Firing task '${taskId}' once...`));

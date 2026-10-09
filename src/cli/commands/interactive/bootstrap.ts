@@ -175,7 +175,7 @@ export async function bootstrapSession(
 
   // Wave-manifest reconciliation: surface resumption offers for unfinished work
   // from prior sessions. Fire-and-forget — never blocks session startup.
-  runReplReconcile(session.sessionId ?? '');
+  void runReplReconcile(session.sessionId ?? '');
 
   registerReplSession(session, sharedDeps, resumeTarget?.stored?.sessionId);
 
