@@ -264,6 +264,10 @@ export class CronScheduler {
    * carries the task id, the head of its command, and the elapsed wall-clock
    * time since the tick started. Used by crash-notice formatting (#3248) to
    * give the operator context about what was running when the daemon died.
+   *
+   * The command head is redacted BEFORE truncation: crash notices are pushed
+   * to Telegram verbatim (pushIfConfigured does not redact), and truncating
+   * first could slice a secret below the redactor's minimum-length match.
    */
   getInFlightTasks(): Array<{ taskId: string; commandHead: string; elapsedMs: number }> {
     const now = this.now();
@@ -271,7 +275,7 @@ export class CronScheduler {
     for (const [taskId, startedAt] of this.inFlightTasks) {
       const entry = this.registry.get(taskId);
       const commandHead = entry !== undefined
-        ? entry.task.command.slice(0, 60)
+        ? redactInlineSecrets(entry.task.command).slice(0, 60)
         : taskId;
       result.push({ taskId, commandHead, elapsedMs: now - startedAt });
     }
