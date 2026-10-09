@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.307.7] - 2026-10-09
+
+### Fixed
+- tighten collapsed-frame predecessor regex and add missing tests (#3312) (0277d318)
+
 ## [5.307.6] - 2026-10-09
 
 ### Fixed
