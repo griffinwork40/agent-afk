@@ -1,5 +1,5 @@
 /**
- * HTTP/1.1-only fetch for model provider calls.
+ * HTTP/1.1-only fetch for model provider calls and subscription usage polling.
  *
  * History: On 2026-10-08 two REPL processes froze at ~100% CPU with their
  * main thread stuck in an infinite nghttp2 DATA-frame send loop
@@ -33,8 +33,10 @@
  * model API call.
  *
  * This module is the single authoritative source of that fetch.  Both
- * providers (anthropic-direct, openai-compatible) and the usage-polling path
- * import it.  The SSRF/egress-guard logic in egress-guard.ts is unaffected:
+ * providers (anthropic-direct, openai-compatible), Claude subscription usage,
+ * and the shared Claude/Codex usage HTTP transport import it. Usage fetchers
+ * default to it while retaining an injectable fetch for tests.
+ * The SSRF/egress-guard logic in egress-guard.ts is unaffected:
  * it uses its own dispatcher for the per-request DNS connect-time check.
  *
  * Invariant: this module must not read `process.env` directly.  All

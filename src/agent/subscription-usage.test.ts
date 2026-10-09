@@ -1,13 +1,14 @@
 /**
  * Tests for {@link fetchSubscriptionUsage} and {@link formatUsagePlain}.
  *
- * All network access goes through the injectable `fetchImpl` seam — no real
- * network calls are made.
+ * Network access uses an injected `fetchImpl` or a mocked `h1ModelFetch`;
+ * no real network calls are made.
  *
  * @module agent/subscription-usage.test
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { h1ModelFetch } from './providers/shared/h1-fetch.js';
 import {
   fetchSubscriptionUsage,
   formatUsagePlain,
@@ -22,6 +23,10 @@ import {
 vi.mock('./auth/keychain.js', () => ({
   loadClaudeCodeOauthToken: vi.fn(() => undefined),
 }));
+
+vi.mock('./providers/shared/h1-fetch.js', () => ({ h1ModelFetch: vi.fn() }));
+beforeEach(() => vi.mocked(h1ModelFetch).mockReset());
+afterEach(() => vi.restoreAllMocks());
 
 const SECRET_TOKEN = 'sk-ant-oat01-super-secret-token-value';
 
@@ -40,6 +45,27 @@ function fetchThrowing(err: unknown): typeof fetch {
 }
 
 describe('fetchSubscriptionUsage', () => {
+  it('defaults to HTTP/1.1 fetch without consulting global fetch', async () => {
+    const globalFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Unexpected global fetch'));
+    vi.mocked(h1ModelFetch).mockResolvedValue(jsonResponse(200, { five_hour: { utilization: 10 } }));
+
+    const result = await fetchSubscriptionUsage({ token: SECRET_TOKEN });
+
+    expect(result).toMatchObject({ kind: 'ok', fiveHour: { utilization: 0.1 } });
+    expect(h1ModelFetch).toHaveBeenCalledExactlyOnceWith(
+      'https://api.anthropic.com/api/oauth/usage',
+      { headers: { Authorization: `Bearer ${SECRET_TOKEN}`, 'anthropic-beta': 'oauth-2025-04-20' }, signal: expect.any(AbortSignal) },
+    );
+    expect(globalFetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps an injected fetch implementation instead of the HTTP/1.1 default', async () => {
+    const fetchImpl = fetchReturning(jsonResponse(200, { five_hour: { utilization: 10 } }));
+    const result = await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
+    expect(result.kind).toBe('ok');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(h1ModelFetch).not.toHaveBeenCalled();
+  });
   // Hermeticity: the global clean-config-env.ts setup file already deletes
   // CLAUDE_CODE_OAUTH_TOKEN from process.env before every test (it's an
   // ENV_REGISTRY 'auth'-category var), but tests asserting the no-token path
@@ -260,7 +286,7 @@ describe('fetchSubscriptionUsage', () => {
     // Passing an explicit empty-string token exercises the no-token branch
     // without touching the real keychain loader (covered above). This test
     // only asserts the options default wiring: omitting fetchImpl still
-    // type-checks and defaults to global fetch, which we don't invoke here
+    // type-checks and defaults to h1ModelFetch, which we don't invoke here
     // because we supply a token of '' to short-circuit before any request.
     // `??` treats '' as present, so this never reads CLAUDE_CODE_OAUTH_TOKEN —
     // stubbed anyway for an explicit, self-evident hermeticity guarantee.
