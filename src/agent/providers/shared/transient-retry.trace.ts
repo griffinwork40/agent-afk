@@ -22,6 +22,7 @@ import { emitSessionPhase } from '../../trace/emit.js';
 import { redactSecrets } from '../../redact-secrets.js';
 import type { TraceSink } from '../../trace/index.js';
 import type { RetryInfo } from './transient-retry.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /** Build a fire-and-forget `onRetry` that records each retry in the witness trace. */
 export function traceTransientRetry(
@@ -30,7 +31,7 @@ export function traceTransientRetry(
   maxRetries: number,
 ): (info: RetryInfo) => void {
   return (info) => {
-    const message = info.error instanceof Error ? info.error.message : String(info.error);
+    const message = errorMessage(info.error);
     void emitSessionPhase(traceWriter, {
       phase: 'connection_retry',
       // Contract: durationMs is the PLANNED backoff delay (set before the
@@ -64,7 +65,7 @@ export function traceExhaustedRetry(
   maxRetries: number,
 ): (info: RetryInfo) => void {
   return (info) => {
-    const message = info.error instanceof Error ? info.error.message : String(info.error);
+    const message = errorMessage(info.error);
     void emitSessionPhase(traceWriter, {
       phase: 'connection_retry_exhausted',
       durationMs: 0,

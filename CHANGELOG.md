@@ -11,6 +11,47 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.307.8] - 2026-10-09
+
+### Changed
+- dedupe TOOL_SYSTEM_PROMPT_BASE for unnamed workers (#3364) (e744caf1)
+
+## [5.307.7] - 2026-10-09
+
+### Fixed
+- tighten collapsed-frame predecessor regex and add missing tests (#3312) (0277d318)
+
+## [5.307.6] - 2026-10-09
+
+### Fixed
+- post-merge hardening for #3326 #3327 #3329 #3336 (budget-gate stub, short-read loop, json-file tests, dispatcher restore) (#3356) (a928fb93)
+
+### Changed
+- adopt errorMessage/ensureError/isErrnoCode and add execFileAsync helper (#3354) (ecd33f7e)
+- repro test suite for committed-band hole after pane resize (#3360) (77562805)
+
+## [5.307.5] - 2026-10-09
+
+### Fixed
+- adapt afk defects to LedgerReadResult (main tsc break) (#3367) (152a709c)
+
+## [5.307.4] - 2026-10-09
+
+### Added
+- add `afk defects` CLI subcommand for recurring defect ledger (#3350) (3ef3c90d)
+
+### Fixed
+- tighten heartbeat test assertions and waitFor options (#3310) (1dadb52a)
+- redact in-flight command heads in crash notices; register crash handlers before startup (#3358) (5b8751f9)
+- union re-wrapped operator deny lists; surface ledger tail-cap truncation (#3357) (d9284998)
+- suppress legacy deficit eviction while resize burst is in flight (#3361) (45d44cd2)
+- add end-to-end regression test for preset {append} in system message (#3351) (219d0d71)
+
+### Changed
+- add solo-timeout test and explicit spy restore in model-complete (#3311) (f1b560f2)
+- note that model_complete max_tokens is ignored on ChatGPT-subscription models (#3292) (79b9be8a)
+- extract appendSystemPromptBlock, formatDuration, detectMediaType, brace scanners, printWarnings, chatLabel helpers (#3349) (d7514c7e)
+
 ## [5.307.3] - 2026-10-09
 
 ### Changed

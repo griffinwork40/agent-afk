@@ -1,7 +1,7 @@
 /**
  * Bounded schedule-telemetry reader.
  *
- * The four previous schedule-history sites each re-implemented the same
+ * The three previous schedule-history sites each re-implemented the same
  * pattern: read the whole file (or a 1 MB tail), split on `\n`, scan
  * backwards for records matching `taskId`, and slice to a limit. The "tail"
  * bound did not bound I/O — a `readFileSync` of the full multi-MB file was
@@ -13,7 +13,7 @@
  *   2. Scans backwards through the tail lines for records matching `taskId`.
  *   3. Returns at most `limit` records in chronological order (oldest first).
  *
- * All four history sites (gates.ts `readLastTickTime` stays sync and is
+ * All three history sites (gates.ts `readLastTickTime` stays sync and is
  * deliberately excluded — it already reads the whole file by design for a
  * single-record lookup, but is covered by #3266's first acceptance criterion
  * which only lists history queries) now call this shared implementation.
@@ -74,13 +74,24 @@ export async function readTelemetryHistory(
     const readStart = fileSize > tailBytes ? fileSize - tailBytes : 0;
     const toRead = fileSize - readStart;
     const buf = Buffer.allocUnsafe(toRead);
-    const { bytesRead } = await fd.read(buf, 0, toRead, readStart);
-    const content = buf.toString('utf8', 0, bytesRead);
+
+    // POSIX allows short reads: a single fd.read() may return fewer bytes than
+    // requested. Loop until all requested bytes are accumulated or the kernel
+    // signals EOF (bytesRead === 0).
+    let totalRead = 0;
+    let readPos = readStart;
+    while (totalRead < toRead) {
+      const { bytesRead } = await fd.read(buf, totalRead, toRead - totalRead, readPos);
+      if (bytesRead === 0) break;
+      totalRead += bytesRead;
+      readPos += bytesRead;
+    }
+    const content = buf.toString('utf8', 0, totalRead);
 
     // Feed the content through IncrementalLineReader to handle any partial
     // leading line (when the tail cut mid-line, the first "line" may be
-    // truncated — we discard it by always calling flush() which drains the
-    // remainder; the split() call from feed() handles the bulk).
+    // truncated — we discard it by always calling flush() which drains any
+    // buffered remainder; the split() call from feed() handles the bulk).
     const reader = new IncrementalLineReader();
     const lines = reader.feed(content);
     // Drain any trailing fragment (no trailing \n in tail).

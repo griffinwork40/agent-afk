@@ -89,6 +89,7 @@ import { registerShellInitCommand } from './commands/shell-init.js';
 import { registerTranscriptCommand } from './commands/transcript.js';
 import { registerInsightsCommand } from './commands/insights.js';
 import { registerCapturesCommand } from './commands/captures.js';
+import { registerDefectsCommand } from './commands/defects.js';
 import { setInteractiveUpdateNotices } from './commands/interactive.js';
 import { loadConfig, loadCredential } from './config.js';
 import { providerForModel } from '../agent/providers/index.js';
@@ -157,6 +158,7 @@ registerShellInitCommand(program);
 registerTranscriptCommand(program);
 registerInsightsCommand(program);
 registerCapturesCommand(program);
+registerDefectsCommand(program);
 
 // Add aliases
 program.commands.find((c) => c.name() === 'chat')?.alias('c');

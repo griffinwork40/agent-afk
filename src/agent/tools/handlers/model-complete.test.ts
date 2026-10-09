@@ -227,9 +227,37 @@ describe('model_complete handler', () => {
     });
     // Use a 0 ms timeout to trigger the timeout signal immediately
     const origTimeout = AbortSignal.timeout;
-    vi.spyOn(AbortSignal, 'timeout').mockImplementationOnce((_ms: number) => origTimeout(0));
-    const res = await createModelCompleteHandler(tmp)({ prompt: 'x' }, ac.signal);
-    expect(res).toMatchObject({ isError: true, content: 'model_complete: timed out after 300s.' });
+    const spy = vi.spyOn(AbortSignal, 'timeout').mockImplementationOnce((_ms: number) => origTimeout(0));
+    try {
+      const res = await createModelCompleteHandler(tmp)({ prompt: 'x' }, ac.signal);
+      expect(res).toMatchObject({ isError: true, content: 'model_complete: timed out after 300s.' });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('reports timed out when only the timeout signal fires (caller signal NOT aborted)', async () => {
+    // Solo-timeout path: the 300 s timer fires alone; the caller controller is
+    // never aborted. The handler should still return "timed out after 300s."
+    // rather than falling through to the generic error branch.
+    const origTimeout = AbortSignal.timeout;
+    const spy = vi.spyOn(AbortSignal, 'timeout').mockImplementationOnce((_ms: number) => origTimeout(0));
+    try {
+      routedOneShotWithStop.mockImplementation(async ({ signal: s }: { signal: AbortSignal }) => {
+        // Wait until the (mocked 0 ms) timeout signal aborts the composed signal
+        await new Promise<void>((resolve) => {
+          if (s.aborted) { resolve(); return; }
+          s.addEventListener('abort', () => resolve(), { once: true });
+        });
+        throw Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+      });
+      // Use a fresh controller that is never aborted
+      const ac = new AbortController();
+      const res = await createModelCompleteHandler(tmp)({ prompt: 'x' }, ac.signal);
+      expect(res).toMatchObject({ isError: true, content: 'model_complete: timed out after 300s.' });
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('flags an empty reply and truncates an oversized one', async () => {

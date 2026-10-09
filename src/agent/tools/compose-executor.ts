@@ -49,7 +49,7 @@ import {
 // Re-export for callers that import cleanupComposeSpills from compose-executor.ts
 // (test files, and any surface that predates the format-module extraction).
 export { cleanupComposeSpills };
-import { errorMessage } from '../../utils/errors.js';
+import { errorMessage, ensureError} from '../../utils/errors.js';
 import { resolveSubagentAttachments } from './subagent/attachment-resolve.js';
 import { inboundAttachmentRegistry as defaultInboundAttachmentRegistry } from '../content/attachment-registry.js';
 import type { InboundAttachmentReader } from '../content/attachment-registry.js';
@@ -531,7 +531,7 @@ export class ComposeExecutor {
             return {
               attachmentError: true as const,
               nodeId: n.id,
-              error: attachErr instanceof Error ? attachErr : new Error(String(attachErr)),
+              error: ensureError(attachErr),
             };
           }
         }

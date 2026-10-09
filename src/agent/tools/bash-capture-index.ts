@@ -27,6 +27,7 @@ import { readdir, stat, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getWitnessRoot } from '../../paths.js';
 import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
+import { isErrnoCode } from '../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -152,7 +153,7 @@ export async function listCaptures(options: ListCapturesOptions = {}): Promise<C
   try {
     sessionDirs = await readdir(witnessRoot);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    if (isErrnoCode(err, 'ENOENT')) return [];
     throw err;
   }
 

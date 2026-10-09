@@ -83,6 +83,8 @@ export interface CommittedBandHost {
    * class (terminal-compositor.ts) for the full failure mode this guards.
    */
   bandGeometryStale: boolean;
+  /** SIGWINCH-only staleness flag — see field doc on TerminalCompositor (#3212). */
+  resizeGeometryStale: boolean;
   /** Pre-arm content ceiling — committed text never lands above this row. */
   anchorRow: number | undefined;
   /** Whether the compositor currently holds raw mode + the keypress listener. */

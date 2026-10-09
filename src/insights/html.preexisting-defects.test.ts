@@ -36,7 +36,7 @@ function makeAgg(
   return {
     generatedAt: Date.now(),
     windowDays: 30,
-    preexistingDefects: { totalRecords, skippedOutOfWindow, topClusters },
+    preexistingDefects: { totalRecords, skippedOutOfWindow, topClusters, ledgerTruncated: false },
     // Required fields — unused by this renderer, set to zero.
     sessions: { totalSessions: 0, totalCostUsd: 0, totalTokens: 0, byDay: {}, byModel: {}, bySurface: {} },
     traces: { totalTracedSessions: 0, toolCallCounts: {}, toolErrorCounts: {}, toolDurationsMs: {}, subagentForkDepths: {}, compactionCount: 0, closureReasons: {}, totalInputTokens: 0, totalOutputTokens: 0, totalCacheReadTokens: 0, totalCacheCreationTokens: 0, totalCostUsd: 0, sessionsWithCost: 0 },

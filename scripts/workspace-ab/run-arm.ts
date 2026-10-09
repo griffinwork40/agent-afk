@@ -15,6 +15,7 @@ import type { SpawnOptionsWithStdioTuple } from 'node:child_process';
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ensureError } from '../../src/utils/errors.js';
 
 // ─── Public types ──────────────────────────────────────────────────────────
 
@@ -165,7 +166,7 @@ export async function runArm(
         env: childEnv,
       } as SpawnOptionsWithStdioTuple<'pipe', 'pipe', 'pipe'>);
     } catch (err) {
-      reject(err instanceof Error ? err : new Error(String(err)));
+      reject(ensureError(err));
       return;
     }
 

@@ -27,6 +27,7 @@ import {
 import { XAI_OAUTH_REDIRECT_URI } from '../../agent/providers/xai/oauth-constants.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { URL } from 'node:url';
+import { ensureError } from '../../utils/errors.js';
 
 export interface XaiLoginResult {
   ok: boolean;
@@ -178,7 +179,7 @@ async function waitForLoopbackCode(opts: {
         resolve(code);
       } catch (e) {
         server.close();
-        reject(e instanceof Error ? e : new Error(String(e)));
+        reject(ensureError(e));
       }
     });
 

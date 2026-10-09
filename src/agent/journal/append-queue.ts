@@ -22,7 +22,7 @@
 import * as fsp from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { errorMessage } from '../../utils/errors.js';
+import { errorMessage, isErrnoCode} from '../../utils/errors.js';
 
 export type OnceReporter = (what: string, err?: unknown) => void;
 
@@ -73,7 +73,7 @@ export class JsonlFileAppender {
     try {
       await this.append(data);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      if (!isErrnoCode(err, 'ENOENT')) throw err;
       // The dir was removed under us: recreate it and retry once.
       this.dirReady = false;
       await this.ensureDir();

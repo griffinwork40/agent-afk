@@ -35,6 +35,7 @@ import { isMidStreamCut } from './network-termination.js';
 import type { RoundRetryBudget } from './retry-budget.js';
 import type { RoundOutcome } from './outcomes.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
+import { ensureError } from '../../../../utils/errors.js';
 
 /** Everything the stream phase needs from the round that opened the request. */
 export interface StreamConsumerContext {
@@ -294,7 +295,7 @@ export async function* consumeRoundStream({
         };
         return { kind: 'terminated' };
       }
-      const e = err instanceof Error ? err : new Error(String(err));
+      const e = ensureError(err);
       // Post-first-byte STALL (#762) reaching us as a THROW rather than an
       // in-band error event (abortableStream re-raises the linked signal's
       // abort reason, which for a stall is the STALL_TIMEOUT_MESSAGE marker).

@@ -596,4 +596,62 @@ describe('registerDaemonCrashHandlers', () => {
     // If duplicate listeners were registered, push would be called multiple times.
     expect(mockPushIfConfigured).toHaveBeenCalledOnce();
   });
+
+  // #3323 review: handlers used to be registered only AFTER `await startDaemon`,
+  // so a crash during async startup produced no notice at all.
+  it('daemon command registers crash handlers before startDaemon resolves', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    let listenersDuringStartup = -1;
+    mockStartDaemon.mockImplementationOnce(async () => {
+      listenersDuringStartup = process.listenerCount('uncaughtException');
+      // Simulate a crash while startup is still in progress.
+      process.emit('uncaughtException', new Error('startup-crash'), 'uncaughtException');
+      return {
+        port: 7777,
+        host: '127.0.0.1',
+        scheduler: { getInFlightTasks: () => [] },
+        registerTask: vi.fn(),
+        unregisterTask: vi.fn(),
+        tickOnce: vi.fn(),
+        fireOnStart: vi.fn(async () => []),
+        stop: vi.fn(async () => undefined),
+      } as unknown as Awaited<ReturnType<typeof startDaemon>>;
+    });
+
+    await runDaemon();
+    logSpy.mockRestore();
+
+    expect(listenersDuringStartup).toBe(1);
+    expect(mockPushIfConfigured).toHaveBeenCalledOnce();
+    const [msg] = mockPushIfConfigured.mock.calls[0] as [string];
+    expect(msg).toContain('startup-crash');
+    // No scheduler handle yet → late-bound getter yields no in-flight section.
+    expect(msg).not.toContain('in-flight');
+  });
+
+  it('daemon command binds the live scheduler snapshot once startup completes', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const getInFlightTasks = vi.fn(() => [
+      { taskId: 'live-task', commandHead: '/live-cmd', elapsedMs: 3_000 },
+    ]);
+    mockStartDaemon.mockImplementationOnce(async () => ({
+      port: 7777,
+      host: '127.0.0.1',
+      scheduler: { getInFlightTasks },
+      registerTask: vi.fn(),
+      unregisterTask: vi.fn(),
+      tickOnce: vi.fn(),
+      fireOnStart: vi.fn(async () => []),
+      stop: vi.fn(async () => undefined),
+    }) as unknown as Awaited<ReturnType<typeof startDaemon>>);
+
+    await runDaemon();
+    logSpy.mockRestore();
+    process.emit('uncaughtException', new Error('post-start'), 'uncaughtException');
+
+    expect(getInFlightTasks).toHaveBeenCalled();
+    const [msg] = mockPushIfConfigured.mock.calls[0] as [string];
+    expect(msg).toContain('in-flight (1)');
+    expect(msg).toContain('live-task');
+  });
 });

@@ -21,17 +21,13 @@ import { join } from 'node:path';
 import { getQueueDir } from '../../paths.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { leaseTask as _leaseTask, recoverExpiredLeases } from './lease-store.js';
-import { errorMessage } from '../../utils/errors.js';
+import { errorMessage, isErrnoCode} from '../../utils/errors.js';
 
 export { recoverExpiredLeases };
 
 /** Returns true if err is a Node.js ENOENT filesystem error. */
 function isEnoent(err: unknown): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    (err as NodeJS.ErrnoException).code === 'ENOENT'
-  );
+  return isErrnoCode(err, 'ENOENT');
 }
 
 export interface QueuedTask {

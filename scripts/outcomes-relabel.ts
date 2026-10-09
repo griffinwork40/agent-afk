@@ -34,6 +34,7 @@
  */
 
 import { runRelabelJob, rescoreSettledUnknown } from '../src/agent/outcomes/relabel-job.js';
+import { errorMessage } from '../src/utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Arg parsing
@@ -111,7 +112,7 @@ async function main(): Promise<void> {
 
 main().catch((err: unknown) => {
   process.stderr.write(
-    `outcomes-relabel: fatal error: ${err instanceof Error ? err.message : String(err)}\n`,
+    `outcomes-relabel: fatal error: ${errorMessage(err)}\n`,
   );
   process.exitCode = 1;
 });
