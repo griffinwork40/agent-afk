@@ -1,1 +1,1 @@
-{ "errors": 36 }
+{ "errors": 37, "reason": "tests/render-env-registry-mdx.test.ts: +1 is the structural TS6059 rootDir error every tests/ file carries (#3105); the file has no other type errors" }
