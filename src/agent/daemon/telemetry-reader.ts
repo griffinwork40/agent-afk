@@ -21,7 +21,6 @@
  * @module agent/daemon/telemetry-reader
  */
 
-import { existsSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import { IncrementalLineReader } from '../../utils/jsonl.js';
 
@@ -62,8 +61,10 @@ export async function readTelemetryHistory(
 ): Promise<unknown[]> {
   const { taskId, limit = DEFAULT_HISTORY_LIMIT, tailBytes = DEFAULT_TAIL_BYTES } = options;
 
-  if (!existsSync(telemetryPath)) return [];
-
+  // No existsSync guard: fsp.open on a missing file throws ENOENT, which is
+  // caught by the outer catch block below and turns into an empty return.
+  // A redundant existsSync check would introduce a TOCTOU window and is
+  // unnecessary.
   let fd: fsp.FileHandle | null = null;
   try {
     fd = await fsp.open(telemetryPath, 'r');
@@ -88,15 +89,31 @@ export async function readTelemetryHistory(
     }
     const content = buf.toString('utf8', 0, totalRead);
 
-    // Feed the content through IncrementalLineReader to handle any partial
-    // leading line (when the tail cut mid-line, the first "line" may be
-    // truncated — we discard it by always calling flush() which drains any
-    // buffered remainder; the split() call from feed() handles the bulk).
     const reader = new IncrementalLineReader();
     const lines = reader.feed(content);
-    // Drain any trailing fragment (no trailing \n in tail).
+    // Drain any trailing fragment (no trailing \n at end of tail window).
     const trailing = reader.flush();
     if (trailing.length > 0) lines.push(...trailing);
+
+    // Explicit first-line discard.
+    //
+    // When readStart > 0 the tail seek may land mid-line, making the first
+    // element of `lines` a truncated JSONL fragment that must be dropped.
+    // However, if the byte immediately before readStart is '\n', the seek
+    // landed exactly on a line boundary and the first element is a complete
+    // record — in that case we keep it.
+    //
+    // When readStart === 0 we read the whole file; every line is complete.
+    if (readStart > 0) {
+      const prevBuf = Buffer.allocUnsafe(1);
+      const { bytesRead: prevRead } = await fd.read(prevBuf, 0, 1, readStart - 1);
+      const prevByteIsNewline = prevRead === 1 && prevBuf[0] === 0x0a; // '\n'
+      if (!prevByteIsNewline && lines.length > 0) {
+        // Tail cut landed mid-line: first element is a truncated fragment.
+        lines.shift();
+      }
+      // prevByteIsNewline === true: seek landed on a line boundary; keep first.
+    }
 
     // Scan backwards for records matching taskId, stop at limit.
     const matching: unknown[] = [];
@@ -124,6 +141,9 @@ export async function readTelemetryHistory(
     // Return chronological order (oldest first).
     return matching.reverse();
   } catch {
+    // ENOENT (file not found) and all other I/O errors are treated the same:
+    // return an empty history. This is intentional — callers treat history as
+    // best-effort and must not crash on a missing or unreadable telemetry file.
     return [];
   } finally {
     await fd?.close().catch(() => undefined);
