@@ -418,6 +418,12 @@ interface ImagesEditApiResult {
   b64_json: string;
 }
 
+/**
+ * Call the OpenAI Images Edit API with a multipart/form-data body.
+ *
+ * Default fetchFn is h1ModelFetch; any override receiving an undici FormData
+ * body must be undici-compatible.
+ */
 async function callImagesEditApi(
   fetchFn: typeof globalThis.fetch,
   apiKey: string,

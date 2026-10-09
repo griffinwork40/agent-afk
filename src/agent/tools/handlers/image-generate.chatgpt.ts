@@ -180,6 +180,7 @@ export interface ChatGptImageRequest {
   apiKey: string;
   accountId: string;
   signal: AbortSignal;
+  /** Default is h1ModelFetch; overrides receiving undici FormData must be undici-compatible. */
   fetchFn?: typeof globalThis.fetch;
 }
 

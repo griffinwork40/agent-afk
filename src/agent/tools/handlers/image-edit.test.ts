@@ -13,7 +13,13 @@ vi.mock('../../providers/openai-compatible/auth.js', () => ({
   resolveOpenAIAuth: vi.fn(() => ({ apiKey: null, source: 'no-usable-auth' })),
 }));
 
+// Mock h1-fetch so we can spy on the default fetchFn without a real network call.
+vi.mock('../../providers/shared/h1-fetch.js', () => ({
+  h1ModelFetch: vi.fn(),
+}));
+
 import { resolveOpenAIAuth } from '../../providers/openai-compatible/auth.js';
+import * as h1FetchModule from '../../providers/shared/h1-fetch.js';
 const mockResolveAuth = vi.mocked(resolveOpenAIAuth);
 
 // ---------------------------------------------------------------------------
@@ -547,6 +553,24 @@ describe('image_edit handler', () => {
     vi.unstubAllEnvs();
     _resetRootRealpathCacheForTests();
     _resetWriteDenylistCacheForTests();
+  });
+
+  // ── Default fetchFn ─────────────────────────────────────────────────────
+
+  it('uses h1ModelFetch as the default fetchFn when createImageEditHandler is called with no arguments', async () => {
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    const mockH1 = vi.mocked(h1FetchModule.h1ModelFetch);
+    mockH1.mockResolvedValueOnce(makeOkResponse(TINY_PNG_B64));
+
+    // Create handler with NO fetchFn argument — must fall back to h1ModelFetch.
+    const handler = createImageEditHandler();
+    await handler(
+      { prompt: 'test default fetch', image_paths: [refImagePath] },
+      signal,
+      { resolveBase: tmpDir, sessionId: `default-fetch-${Date.now()}` },
+    );
+
+    expect(mockH1).toHaveBeenCalledOnce();
   });
 
   // ── Intermediate symlinked-directory escape (#2836 Item 1) ───────────────

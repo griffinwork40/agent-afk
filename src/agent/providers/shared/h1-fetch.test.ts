@@ -350,6 +350,7 @@ describe('h1ModelFetch + undici FormData — multipart interop (issue #3345)', (
     //    - The file part name "image[]" with filename "ref.png".
     //    - At least one byte of binary data (the PNG magic bytes).
     expect(result.bodyText).toContain(`--${boundary}`);
+    expect(result.bodyText).toContain(`--${boundary}--`);
     expect(result.bodyText).toContain('name="prompt"');
     expect(result.bodyText).toContain('a test prompt');
     expect(result.bodyText).toContain('name="model"');
