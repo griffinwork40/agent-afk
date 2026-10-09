@@ -27,14 +27,12 @@
  * @module agent/facets/session-end-hook
  */
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+;
 import type { HookHandler } from '../hooks.js';
 import { getOrDeriveFacet } from './store.js';
 import { writeFacetYield } from './yield-probe.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
-
-const execFileAsync = promisify(execFile);
+import { execFileAsync } from '../../utils/exec-file.js';
 
 export function createFacetSessionEndHook(): HookHandler {
   return (context) => {
