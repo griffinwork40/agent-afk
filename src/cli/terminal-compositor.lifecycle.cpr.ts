@@ -363,7 +363,10 @@ function _requestCpr(self: CprHost, rttObserver?: (rttMs: number) => void): void
   // slips past the data listener (after timeout) is dropped at the keypress
   // layer too.  We arm for timeout + grace; armCprKeypressGuard extends the
   // deadline if already active (safe to call multiple times for a burst).
-  armCprKeypressGuard(self.stdin, timeoutMs + CPR_KEYPRESS_GRACE_MS);
+  // The generation token is passed to the deferred disarm below; a dirty-burst
+  // re-query that calls _requestCpr synchronously bumps the generation so the
+  // stale setImmediate becomes a no-op (see disarmCprKeypressGuard JSDoc).
+  const guardGenAtArm = armCprKeypressGuard(self.stdin, timeoutMs + CPR_KEYPRESS_GRACE_MS);
 
   // Accumulation buffer: the CPR reply is usually a single chunk but may
   // arrive split across multiple data events on a slow/remote PTY.
@@ -421,16 +424,11 @@ function _requestCpr(self: CprHost, rttObserver?: (rttMs: number) => void): void
     }
 
     cleanup(onData);
-    // Disarm the keypress guard after the current EventEmitter.emit dispatch
-    // stack unwinds.  Node snapshots all listeners at the start of emit(), so
-    // readline's keypress 'data' listener is still queued to fire for this
-    // same chunk even though we just removed our own listener.  If we disarm
-    // synchronously here, a fragmented CPR reply whose last chunk is a printable
-    // character (e.g. the trailing 'R') would reach handleKeypress with an
-    // inactive guard, potentially inserting the character into the prompt
-    // buffer.  setImmediate defers the disarm to the next iteration, after all
-    // same-tick 'data' handlers (including readline's) have completed.
-    setImmediate(disarmCprKeypressGuard);
+    // Defer the disarm past this tick so readline's same-snapshot 'data'
+    // listener sees an active guard (trailing-'R' fragment safety).
+    // Pass guardGenAtArm: a dirty-burst _requestCpr that fires synchronously
+    // below bumps the generation, making this setImmediate a no-op.
+    setImmediate(() => { disarmCprKeypressGuard(guardGenAtArm); });
 
     // ── Re-emit unconsumed bytes so keystrokes are not swallowed ──────────
     const consumedEnd = escIdx + candidate.length;

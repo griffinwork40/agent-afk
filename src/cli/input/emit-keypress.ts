@@ -89,6 +89,17 @@ let _guardedStdin: NodeJS.ReadableStream | null = null;
 /** Cleanup timer (auto-disarm). */
 let _guardTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Invariant: _guardGeneration is a monotonically increasing counter bumped by
+// every armCprKeypressGuard call.  A deferred disarm (e.g. setImmediate) must
+// capture the generation at the time it was scheduled and pass it back as
+// `guardGen`; disarmCprKeypressGuard treats a stale generation as a no-op.
+// This prevents a re-arm that occurs BETWEEN the schedule and the deferral
+// firing from being silently cleared by the older deferred disarm — the exact
+// race in the dirty-burst re-query path: cleanup() → setImmediate(disarm)
+// scheduled, then _requestCpr() → armCprKeypressGuard() (generation bumps),
+// then the setImmediate fires and must NOT clear the freshly armed guard.
+let _guardGeneration = 0;
+
 /**
  * Arm (or extend) the CPR keypress guard on `stdin` for `durationMs` ms.
  *
@@ -97,10 +108,16 @@ let _guardTimer: ReturnType<typeof setTimeout> | null = null;
  * matches `CPR_REPLY_RE`.  Calling this again before the deadline extends it
  * to the later of the two expirations.
  *
+ * Returns the guard generation token after this arm.  Pass the token to
+ * `disarmCprKeypressGuard` when scheduling a deferred disarm (e.g.
+ * `setImmediate`) so that a re-arm that happens between the schedule and the
+ * deferred call does not get silently cleared — the disarm is a no-op when
+ * the generation token is stale.
+ *
  * Called from `_requestCpr` (in `terminal-compositor.lifecycle.cpr.ts`) when
  * a CPR request is emitted and again on timeout to cover the grace window.
  */
-export function armCprKeypressGuard(stdin: NodeJS.ReadableStream, durationMs: number): void {
+export function armCprKeypressGuard(stdin: NodeJS.ReadableStream, durationMs: number): number {
   const newDeadline = Date.now() + durationMs;
 
   if (_guardedStdin !== null && _guardedStdin !== stdin) {
@@ -117,17 +134,20 @@ export function armCprKeypressGuard(stdin: NodeJS.ReadableStream, durationMs: nu
   }
 
   _guardedStdin = stdin;
+  _guardGeneration += 1;
 
-  if (newDeadline <= _guardDeadline) return; // already covered
+  if (newDeadline > _guardDeadline) {
+    _guardDeadline = newDeadline;
+    if (_guardTimer !== null) { clearTimeout(_guardTimer); _guardTimer = null; }
+    _guardTimer = setTimeout(_disarm, durationMs);
+    // Unref so the guard timer does not keep the event loop alive past process
+    // exit.  The guard is a safety net — if it fires during shutdown, there is
+    // no meaningful work left to do.  Without unref the timer can hold the loop
+    // for up to CPR_KEYPRESS_GRACE_MS (~500ms) beyond the last real task.
+    _guardTimer.unref();
+  }
 
-  _guardDeadline = newDeadline;
-  if (_guardTimer !== null) { clearTimeout(_guardTimer); _guardTimer = null; }
-  _guardTimer = setTimeout(_disarm, durationMs);
-  // Unref so the guard timer does not keep the event loop alive past process
-  // exit.  The guard is a safety net — if it fires during shutdown, there is
-  // no meaningful work left to do.  Without unref the timer can hold the loop
-  // for up to CPR_KEYPRESS_GRACE_MS (~500ms) beyond the last real task.
-  _guardTimer.unref();
+  return _guardGeneration;
 }
 
 function _disarm(): void {
@@ -139,12 +159,27 @@ function _disarm(): void {
 /**
  * Immediately disarm the CPR keypress guard.
  *
+ * When called without arguments, always disarms (unconditional).
+ *
+ * When called with `guardGen` — the generation token returned by the
+ * `armCprKeypressGuard` call that scheduled this disarm — the disarm is
+ * skipped if a newer arm happened after the disarm was scheduled.  This
+ * prevents a `setImmediate`-deferred disarm from clearing a guard that was
+ * re-armed in the gap between the schedule and the deferred call (the
+ * dirty-burst re-query race: cleanup → setImmediate(disarm) → _requestCpr
+ * → armCprKeypressGuard → setImmediate fires → should be no-op).
+ *
  * Call this after successfully consuming a CPR reply so the guard does not
  * persist for the full `timeoutMs + CPR_KEYPRESS_GRACE_MS` window when the
  * reply arrived promptly.  Calling when the guard is already inactive is a
  * no-op.
  */
-export function disarmCprKeypressGuard(): void {
+export function disarmCprKeypressGuard(guardGen?: number): void {
+  if (guardGen !== undefined && guardGen !== _guardGeneration) {
+    // Stale deferred disarm — a newer arm was installed after this disarm was
+    // scheduled.  Leave the current guard intact.
+    return;
+  }
   _disarm();
 }
 
@@ -174,4 +209,5 @@ export function isCprSequence(stdin: NodeJS.ReadableStream, sequence: string): b
  */
 export function __resetCprKeypressGuardForTests(): void {
   _disarm();
+  _guardGeneration = 0;
 }

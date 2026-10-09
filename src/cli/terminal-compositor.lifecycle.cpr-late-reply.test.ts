@@ -27,6 +27,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PassThrough } from 'node:stream';
 import {
   armCprKeypressGuard,
+  disarmCprKeypressGuard,
   emitKeypressEventsImmediateEscape,
   isCprKeypressGuardActive,
   isCprSequence,
@@ -965,6 +966,8 @@ describe('G9: disarm/rearm race — guard stays armed through current emit dispa
   // (broken) synchronous disarm state.  The assertions pass trivially because the
   // real fix (setImmediate in lifecycle.cpr.ts) is active — this test exists as
   // an executable comment, not a behavioural guard.
+  // NOTE: the dirty-burst race (deferred disarm clearing a re-arm for re-query)
+  // is covered functionally by G10 below.
   it('regression: without setImmediate the guard would be inactive when readline fires', () => {
     // Documents WHY the setImmediate fix is necessary: arm the guard, then
     // synchronously disarm it (simulating the old code path), and confirm that
@@ -991,6 +994,135 @@ describe('G9: disarm/rearm race — guard stays armed through current emit dispa
     });
 
     // Guard is still active (the setImmediate in the new code has not fired).
+    expect(isCprKeypressGuardActive(stdin)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G10: dirty-burst re-query race — deferred disarm must not clear re-arm
+// ---------------------------------------------------------------------------
+//
+// Race sequence (SECOND CPR in a dirty burst):
+//
+//   1. CPR #1 reply arrives → cleanup(onData) → setImmediate(disarm, gen=1)
+//      scheduled.
+//   2. burst.dirty=true → _requestCpr called synchronously → armCprKeypressGuard
+//      bumps generation to 2 and arms the guard for the re-query window.
+//   3. setImmediate fires for the gen=1 disarm → because gen=1 ≠ current gen=2,
+//      disarm is a no-op → re-query guard stays active.
+//
+// Pre-fix behaviour: setImmediate called disarmCprKeypressGuard() with no
+// argument (unconditional disarm), clearing the re-query guard.  The second CPR
+// reply then reached readline's keypress path with an inactive guard.
+//
+// Test strategy: drive the arm→schedule→re-arm→flush-setImmediate path through
+// the real armCprKeypressGuard / disarmCprKeypressGuard functions (NOT via
+// production CPR handler, which is harder to instrument for the re-query path).
+// This directly exercises the contract that disarmCprKeypressGuard(stalegen) is
+// a no-op.  A second sub-test drives through requestCprAndApplyDelta to confirm
+// the integration path.
+//
+// Red→green: on the pre-fix code (unconditional disarmCprKeypressGuard in the
+// setImmediate), both tests fail because the guard is inactive after the
+// deferred disarm fires.  With the generation-token fix both pass.
+
+describe('G10: dirty-burst re-query race — deferred disarm must not clear re-arm', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    __resetCprKeypressGuardForTests();
+    __resetCprRttForTests();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    __resetCprKeypressGuardForTests();
+    __resetCprRttForTests();
+  });
+
+  it('stale generation: disarmCprKeypressGuard(staleGen) is a no-op when generation has advanced', async () => {
+    // Directly exercises the arm / stale-disarm / re-arm contract without
+    // going through the full CPR handler — the cleanest proof of the fix.
+    //
+    // Red→green: on the pre-fix code (disarmCprKeypressGuard takes no gen arg and
+    // always calls _disarm unconditionally), the deferred setImmediate clears the
+    // re-query guard and the final assertion fails.  With the generation-token fix
+    // the stale disarm is a no-op and the assertion passes.
+    const stdin = makeStdin();
+
+    // CPR #1 arm — returns generation token 1 (module-scope counter starts at 0).
+    const gen1 = armCprKeypressGuard(stdin, 60_000); // large duration — expires far away
+    expect(isCprKeypressGuardActive(stdin)).toBe(true);
+
+    // Simulate: cleanup() fires, schedules setImmediate(disarm, gen1).
+    // We schedule it here before re-arming so we can observe the race.
+    setImmediate(() => { disarmCprKeypressGuard(gen1); });
+
+    // Dirty burst: _requestCpr fires synchronously within the same tick,
+    // re-arming and bumping the generation to 2.
+    armCprKeypressGuard(stdin, 60_000);
+    expect(isCprKeypressGuardActive(stdin)).toBe(true);
+
+    // Flush only the setImmediate (advance 0ms so the guard timeout does not
+    // expire) — gen1 is stale → disarm must be a no-op.
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Guard must still be active for the re-query — the stale disarm did nothing.
+    expect(isCprKeypressGuardActive(stdin)).toBe(true);
+  });
+
+  it('non-stale generation: disarmCprKeypressGuard() without gen arg still disarms unconditionally', async () => {
+    // Confirm the unconditional (no-gen-arg) path still works — used by code
+    // that intentionally wants to clear the guard regardless of generation.
+    const stdin = makeStdin();
+
+    armCprKeypressGuard(stdin, 1000);
+    expect(isCprKeypressGuardActive(stdin)).toBe(true);
+
+    // Unconditional disarm — no generation arg.
+    disarmCprKeypressGuard();
+    expect(isCprKeypressGuardActive(stdin)).toBe(false);
+  });
+
+  it('integration: dirty-burst re-query via requestCprAndApplyDelta leaves guard active after setImmediate flush', async () => {
+    // End-to-end path: requestCprAndApplyDelta → _requestCpr → data listener.
+    // First CPR reply arrives with burst.dirty=true, triggering a re-query.
+    // After the setImmediate fires, the re-query guard must still be armed.
+    //
+    // Red→green: pre-fix code passes disarmCprKeypressGuard with no gen arg
+    // (unconditional disarm), so the re-query guard is cleared and the final
+    // assertion fails.  With the generation-token fix the stale setImmediate
+    // from the first reply is a no-op and the re-query guard survives.
+    const stdin = makeStdin();
+    const stdout = makeStdout();
+
+    // Use a host whose repaint has a large timeout headroom (50_000ms) so
+    // vi.advanceTimersByTimeAsync(0) does not fire the CPR auto-disarm timer.
+    // We override the host's CPR timeout by pre-seeding the guard with a
+    // large duration inside requestCprAndApplyDelta's _requestCpr call — that
+    // arm uses timeoutMs + CPR_KEYPRESS_GRACE_MS.  Fake timer starts at 0; as
+    // long as we only advance 0ms the guard timer stays live regardless of the
+    // CPR_TIMEOUT_MS value used by _requestCpr.
+    const host = makeCprHost(stdin, stdout);
+
+    // Start first CPR.
+    requestCprAndApplyDelta(host, 10, 50, 10);
+    expect(isCprKeypressGuardActive(stdin)).toBe(true);
+
+    // Mark the burst dirty (simulates a SIGWINCH arriving between request and reply).
+    host.cprBurst!.dirty = true;
+
+    // CPR #1 reply arrives: prependListener fires → cleanup → setImmediate(disarm, gen1)
+    // → burst.dirty=true → _requestCpr called synchronously → armCprKeypressGuard(gen2).
+    // All of this happens inside the single data emit synchronously.
+    stdin.emit('data', Buffer.from('\x1b[10;1R'));
+
+    // Immediately after the emit, guard must be active (re-query armed it).
+    expect(isCprKeypressGuardActive(stdin)).toBe(true);
+
+    // Flush only the setImmediate (0ms advance so the CPR guard timer stays
+    // live) — stale gen1 disarm must be a no-op.
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Guard still active for the re-query CPR.
     expect(isCprKeypressGuardActive(stdin)).toBe(true);
   });
 });
