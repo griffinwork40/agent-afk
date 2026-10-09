@@ -60,6 +60,13 @@ describe('renderMdx — MDX escaping', () => {
     expect(output).not.toContain('&lt;name&gt;');
   });
 
+  it('throws on a description with an unbalanced backtick', () => {
+    const registry: readonly EnvVarMeta[] = [
+      makeEntry({ name: 'TEST_ODD_TICK', description: 'Lone ` tick then <x>.' }),
+    ];
+    expect(() => renderMdx(registry)).toThrow(/TEST_ODD_TICK.*unbalanced backtick/);
+  });
+
   it('escapes { and } in descriptions', () => {
     const registry: readonly EnvVarMeta[] = [
       makeEntry({ name: 'TEST_BRACES', description: 'State at {home}/state.' }),

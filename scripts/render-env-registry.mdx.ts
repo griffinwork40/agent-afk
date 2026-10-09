@@ -148,6 +148,11 @@ export function renderMdx(registry: readonly EnvVarMeta[]): string {
     lines.push('| --- | --- | --- | --- |');
 
     for (const e of entries) {
+      // escapeMdx pairs backticks to find code spans; an odd count would flip
+      // prose/code parity and leave raw < { in prose, breaking the MDX build.
+      if ((e.description.match(/`/g) ?? []).length % 2 !== 0) {
+        throw new Error(`render-env-registry.mdx: ${e.name} description has an unbalanced backtick.`);
+      }
       const varCell = `\`${e.name}\``;
       const typeCell = e.type;
       const descCell = escapeMdx(e.description);
