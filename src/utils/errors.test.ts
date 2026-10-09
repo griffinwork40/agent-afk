@@ -8,6 +8,7 @@ import {
   errorMessage,
   ensureError,
   isErrnoCode,
+  isEnoent,
   isEgressBlocked,
   extractEgressBlockedError,
   fetchFailedMessage,
@@ -155,6 +156,32 @@ describe('isErrnoCode', () => {
 
   it('works with a plain object carrying .code', () => {
     expect(isErrnoCode({ code: 'ESRCH' }, 'ESRCH')).toBe(true);
+  });
+});
+
+// ── isEnoent() ───────────────────────────────────────────────────────────────
+
+describe('isEnoent', () => {
+  it('returns true for an ENOENT ErrnoException', () => {
+    const err = Object.assign(new Error('no such file'), { code: 'ENOENT' });
+    expect(isEnoent(err)).toBe(true);
+  });
+
+  it('returns false for a different errno code', () => {
+    const err = Object.assign(new Error('exists'), { code: 'EEXIST' });
+    expect(isEnoent(err)).toBe(false);
+  });
+
+  it('returns false for a plain Error with no code', () => {
+    expect(isEnoent(new Error('plain'))).toBe(false);
+  });
+
+  it('returns false for null', () => {
+    expect(isEnoent(null)).toBe(false);
+  });
+
+  it('returns false for undefined', () => {
+    expect(isEnoent(undefined)).toBe(false);
   });
 });
 

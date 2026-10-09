@@ -10,8 +10,6 @@
  * @module cli/commands/farm
  */
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { Command } from 'commander';
 import { palette } from '../palette.js';
 import { createFarm, setFarmMemoryFactId } from '../../agent/worktree.js';
@@ -31,6 +29,7 @@ import type { SubagentDAGNode } from '../../agent/dag-subagent.js';
 import type { FarmManifest } from '../../agent/worktree.js';
 import type { DAGRunResult } from '../../agent/dag.js';
 import { errorMessage } from '../../utils/errors.js';
+import { execFileAsync } from '../../utils/exec-file.js';
 import { printSummary, formatScore, type BranchResult } from './farm.summary.js';
 import { buildFarmRunRecord } from './farm.run-record.js';
 import { FarmIsolationViolation } from './farm.escape-check.js';
@@ -40,8 +39,6 @@ import { FarmIsolationViolation } from './farm.escape-check.js';
 export { FarmIsolationViolation } from './farm.escape-check.js';
 export type { BranchResult } from './farm.summary.js';
 export { formatScore, printSummary };
-
-const execFileAsync = promisify(execFile);
 
 // ---------------------------------------------------------------------------
 // Escape-check helpers
