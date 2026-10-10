@@ -9,12 +9,18 @@
  * ## Quick start
  *
  * ```ts
- * // In default-hook-registry.ts:
+ * // In default-hook-registry.ts (production registers PostToolUse only):
  * import { createEffectLedgerPostHook } from './effect-ledger/index.js';
- * registry.register('PostToolUse', createEffectLedgerPostHook());
+ * const ledgerHook = createEffectLedgerPostHook();
+ * registry.register('PostToolUse', ledgerHook);
+ * registry.register('PostToolUseFailure', ledgerHook);
  * ```
  *
- * ## Internal helpers (not re-exported from this barrel)
+ * `createEffectLedgerPreHook` is exported for opt-in use (e.g. pre-recording
+ * high-risk operations before they execute) but is **not** registered by
+ * default.
+ *
+ * ## Injectable seam (not re-exported from this barrel)
  *
  * `EffectStore`, `EffectRecord`, `EffectStatus`, `EffectQuery`,
  * `PendingEffectInput`, `ExecuteEffectInput`, `Classification`,
