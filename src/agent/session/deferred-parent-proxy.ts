@@ -22,7 +22,7 @@
  * `undefined`, and `getInputStreamRef()` → a no-op push channel.
  */
 
-import type { AgentSession } from './agent-session.js';
+import type { SessionExecutorsBindTarget } from './session-executors.js';
 import type { SubagentExecutorContext } from '../tools/subagent-executor.js';
 
 export interface DeferredParentProxy {
@@ -31,8 +31,12 @@ export interface DeferredParentProxy {
   /**
    * Call once after `new AgentSession(config)` to resolve the proxy.
    * Subsequent reads of any getter return the live session's value.
+   *
+   * Accepts {@link SessionExecutorsBindTarget} — the minimal structural
+   * interface the proxy actually reads — so both `AgentSession` callers
+   * and the SDK `createWiredExecutors` path can use the same helper.
    */
-  bind: (session: AgentSession) => void;
+  bind: (session: SessionExecutorsBindTarget) => void;
 }
 
 /**
@@ -42,7 +46,7 @@ export interface DeferredParentProxy {
  * variable; calling `bind` is the only way to populate it.
  */
 export function makeDeferredParentProxy(): DeferredParentProxy {
-  let boundSession: AgentSession | undefined;
+  let boundSession: SessionExecutorsBindTarget | undefined;
 
   const proxy: SubagentExecutorContext['parentSession'] = {
     get sessionId() { return boundSession?.sessionId; },
@@ -58,7 +62,7 @@ export function makeDeferredParentProxy(): DeferredParentProxy {
     get messageJournal() { return boundSession?.messageJournal; },
   };
 
-  const bind = (session: AgentSession): void => {
+  const bind = (session: SessionExecutorsBindTarget): void => {
     boundSession = session;
   };
 

@@ -26,11 +26,12 @@ import { wireExecutors, type WiredExecutors } from './wire-executors.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import { getDefaultSubagentModel } from './default-subagent-model.js';
 import { createSessionBindSlot, type SessionExecutors } from './session-executors.js';
+import { makeDeferredParentProxy } from './deferred-parent-proxy.js';
 import type { AgentConfig } from '../types.js';
 import type { HookRegistry } from '../hooks.js';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
 import type { TraceSink } from '../trace/writer.js';
-import type { SubagentExecutorContext } from '../tools/subagent-executor.js';
+
 
 /** Options for {@link createWiredExecutors}. */
 export interface CreateWiredExecutorsOptions {
@@ -166,14 +167,9 @@ export function createWiredExecutors(
   const slot = createSessionBindSlot();
   // Invariant: every member is read lazily (at execute time) — `bind` runs in
   // the AgentSession ctor before the session's provider lifecycle exists.
-  const parentSession: SubagentExecutorContext['parentSession'] = {
-    get sessionId() { return slot.get()?.sessionId; },
-    getInputStreamRef() { return slot.get()?.getInputStreamRef() ?? { pushUserMessage: () => {} }; },
-    get abortSignal() { return slot.get()?.abortSignal ?? new AbortController().signal; },
-    get hookRegistry() { return slot.get()?.hookRegistry ?? hookRegistry; },
-    // Forks journal to `messageJournal.forSubagent(id)`, never the parent file.
-    get messageJournal() { return slot.get()?.messageJournal; },
-  };
+  // The proxy is built by the shared helper; `slot` is kept solely to enforce
+  // the one-bundle-per-session double-bind throw (see SessionExecutors.bind).
+  const { proxy: parentSession, bind: bindParent } = makeDeferredParentProxy();
 
   const model = config.model;
   const wired: WiredExecutors = wireExecutors({
@@ -201,6 +197,7 @@ export function createWiredExecutors(
     ...(toggles.compose ? { composeExecutor: wired.composeExecutor } : {}),
     bind(session) {
       slot.bind(session); // throws on a second bind, before any rewiring
+      bindParent(session);
       const record = (usage?: Parameters<typeof session.recordSubagentCompletion>[0], costUsd?: number): void => {
         session.recordSubagentCompletion(usage, costUsd);
       };
