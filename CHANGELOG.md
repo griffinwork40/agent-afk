@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.308.4] - 2026-10-10
+
+### Fixed
+- address advisory findings from #3401 review (#3449) (f794878f)
+- fix advisory findings from pr-triage review #3398 (#3447) (beb2cafb)
+
+### Changed
+- upgrade vitest to v5 (#3455) (db92de18)
+
 ## [5.308.3] - 2026-10-10
 
 ### Fixed
