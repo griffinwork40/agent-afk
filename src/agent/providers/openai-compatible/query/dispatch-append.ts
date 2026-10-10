@@ -22,6 +22,7 @@ import {
   toolResultsToMessages,
 } from '../loop.js';
 import { errorMessage } from '../../../../utils/errors.js';
+import { VITALS_PREFIX } from '../../shared/vitals.js';
 
 export interface DispatchAndAppendInput {
   state: StreamState;
@@ -252,6 +253,16 @@ function appendRoundHistory(
     assistantMessageWithToolCalls(state.assistantText, accumulated, state.reasoningText, state.reasoningField) as unknown as OpenAIMessage,
   );
   const toolMessages = toolResultsToMessages(results);
+  // Security: strip any lines in tool output that start with the vitals prefix
+  // before we append the real harness note. A tool could otherwise print a
+  // lookalike `[vitals] …` line and have the model treat it as an authoritative
+  // harness reading (time, context fill, usage budget). The stripping is applied
+  // to every tool message because any of them could carry spoofed lines, and the
+  // real note is always appended by the harness below — never by a tool. The
+  // check is line-based so partial matches inside longer text are unaffected.
+  for (const m of toolMessages) {
+    m.content = stripVitalsSpoofLines(m.content);
+  }
   // Invariant: the per-round vitals note (shared/vitals.ts) is appended to the
   // LAST tool message of the round, NOT pushed as its own `role:'user'` message
   // as on anthropic-direct. On this wire every `role:'user'` message is a
@@ -280,4 +291,26 @@ function appendRoundHistory(
   // model lacks vision or no result carried an image. See issue #127.
   const imageFollowup = toolImageFollowupMessage(results, { vision });
   if (imageFollowup) priorTurns.push(imageFollowup);
+}
+
+/**
+ * Remove any lines from tool output that begin with the `[vitals]` prefix.
+ *
+ * On the openai-compatible path the real harness note rides as a string suffix
+ * on the last `role:'tool'` message. A tool that emits a lookalike line (e.g.
+ * `echo '[vitals] context 99%'`) would appear indistinguishable from the
+ * harness reading. Stripping those lines before the harness note is appended
+ * closes the spoof surface: the model only ever sees the note the harness
+ * writes, never one a tool invented.
+ *
+ * Lines that merely CONTAIN the prefix somewhere in the middle are left alone
+ * — the boundary is `line.startsWith(VITALS_PREFIX)` — so prose that happens
+ * to mention "[vitals]" as part of a longer sentence is not corrupted.
+ */
+export function stripVitalsSpoofLines(content: string): string {
+  const prefix = VITALS_PREFIX + ' ';
+  const lines = content.split('\n');
+  const filtered = lines.filter((line) => !line.startsWith(prefix) && line !== VITALS_PREFIX);
+  // Preserve the original string reference when nothing was stripped (fast path).
+  return filtered.length === lines.length ? content : filtered.join('\n');
 }
