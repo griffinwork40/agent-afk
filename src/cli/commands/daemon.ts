@@ -31,7 +31,7 @@ import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js
 import { providerForModel } from '../../agent/providers/index.js';
 import { buildDaemonSessionFactory } from './daemon-session-factory.js';
 import { daemonTurnHooks } from './daemon-session-persist.js';
-import { errorMessage } from '../../utils/errors.js';
+import { installCrashNotifier } from '../../utils/crash-notifier.js';
 export type { BuildDaemonSessionFactoryOpts } from './daemon-session-factory.js';
 export { buildDaemonSessionFactory } from './daemon-session-factory.js';
 
@@ -141,7 +141,8 @@ const isDoneUnverified = ({ responseText, successfulToolNames }: { responseText:
  * the reset surface explicit and keeps `_resetDaemonCrashHandlersForTest`
  * the single place that clears all of them.
  *
- * - `handlersInstalled` — duplicate-listener guard for `registerDaemonCrashHandlers`.
+ * - `handle` — CrashNotifierHandle returned by installCrashNotifier; undefined
+ *   until `registerDaemonCrashHandlers` is first called.
  * - `earlyHandlersInstalled` — duplicate-listener guard for `registerEarlyDaemonCrashHandlers`.
  * - `earlyInFlightSource` — module-scoped in-flight snapshot provider shared
  *   between `registerEarlyDaemonCrashHandlers` calls so a second call (e.g.
@@ -150,7 +151,7 @@ const isDoneUnverified = ({ responseText, successfulToolNames }: { responseText:
  *   handler reads.
  */
 const daemonCrashState = {
-  handlersInstalled: false,
+  handle: undefined as { reset: () => void } | undefined,
   earlyHandlersInstalled: false,
   earlyInFlightSource: undefined as (() => InFlightTaskSnapshot[]) | undefined,
 };
@@ -162,16 +163,11 @@ const daemonCrashState = {
  * @internal
  */
 export function _resetDaemonCrashHandlersForTest(): void {
-  daemonCrashState.handlersInstalled = false;
+  daemonCrashState.handle?.reset();
+  daemonCrashState.handle = undefined;
   daemonCrashState.earlyHandlersInstalled = false;
   daemonCrashState.earlyInFlightSource = undefined;
 }
-
-/** Milliseconds to wait after firing the crash notification before exiting,
- *  giving the fire-and-forget HTTP push a chance to flush.
- *  Declared at module scope (mirrors entry.ts) so it is visible across the
- *  whole module rather than being buried inside registerDaemonCrashHandlers. */
-const CRASH_EXIT_DELAY_MS = 200;
 
 /**
  * Maximum number of in-flight task entries appended to a crash notice. Caps
@@ -191,14 +187,9 @@ export interface InFlightTaskSnapshot {
 
 /**
  * Register uncaughtException / unhandledRejection process handlers that push a
- * best-effort Telegram crash notice before exiting. Rate-limited to one push
- * per 60 s to avoid crash-loop self-DOS. Exit is deferred by 200 ms so the
- * fire-and-forget HTTP request has a chance to flush before the process
- * terminates.
- *
- * Re-entry safe: a module-scoped flag prevents duplicate listener registration
- * if this function is called more than once, mirroring entry.ts's
- * crashHandlersInstalled pattern.
+ * best-effort Telegram crash notice before exiting. Delegates to the shared
+ * `installCrashNotifier` helper; see `src/utils/crash-notifier.ts` for the
+ * rate-limiting, exit-deferral, and re-entry-safety contracts.
  *
  * @param getInFlightTasks - Optional provider of the current in-flight task
  *   snapshot. When present, the crash notice includes task ids, command heads,
@@ -207,54 +198,26 @@ export interface InFlightTaskSnapshot {
 export function registerDaemonCrashHandlers(
   getInFlightTasks?: () => InFlightTaskSnapshot[],
 ): void {
-  if (daemonCrashState.handlersInstalled) return;
-  daemonCrashState.handlersInstalled = true;
+  if (daemonCrashState.handle !== undefined) return;
 
-  let lastCrashPushAt = 0;
-  const CRASH_PUSH_GUARD_MS = 60_000;
-  const notifyCrash = (kind: string, err: unknown): void => {
-    const nowMs = Date.now();
-    if (nowMs - lastCrashPushAt < CRASH_PUSH_GUARD_MS) return;
-    lastCrashPushAt = nowMs;
-    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-    const lines: string[] = [`🛑 agent-afk daemon ${kind}`, msg.slice(0, 500)];
-    if (getInFlightTasks !== undefined) {
-      try {
+  const extraLines = getInFlightTasks !== undefined
+    ? (): string[] => {
         const tasks = getInFlightTasks();
-        if (tasks.length > 0) {
-          lines.push('');
-          lines.push(`in-flight (${tasks.length}):`);
-          const listed = tasks.slice(0, CRASH_NOTICE_IN_FLIGHT_LIMIT);
-          for (const t of listed) {
-            const elapsedSec = (t.elapsedMs / 1000).toFixed(1);
-            lines.push(`  • ${t.displayId}: ${t.commandHead} (${elapsedSec}s)`);
-          }
-          if (tasks.length > CRASH_NOTICE_IN_FLIGHT_LIMIT) {
-            lines.push(`  … and ${tasks.length - CRASH_NOTICE_IN_FLIGHT_LIMIT} more`);
-          }
+        if (tasks.length === 0) return [];
+        const lines: string[] = ['', `in-flight (${tasks.length}):` ];
+        const listed = tasks.slice(0, CRASH_NOTICE_IN_FLIGHT_LIMIT);
+        for (const t of listed) {
+          const elapsedSec = (t.elapsedMs / 1000).toFixed(1);
+          lines.push(`  • ${t.displayId}: ${t.commandHead} (${elapsedSec}s)`);
         }
-      } catch {
-        // getInFlightTasks must never crash the crash handler.
+        if (tasks.length > CRASH_NOTICE_IN_FLIGHT_LIMIT) {
+          lines.push(`  … and ${tasks.length - CRASH_NOTICE_IN_FLIGHT_LIMIT} more`);
+        }
+        return lines;
       }
-    }
-    void pushIfConfigured(lines.join('\n')).catch((pushErr: unknown) => {
-      console.error('[daemon] crash notification push failed:', errorMessage(pushErr));
-    });
-  };
-  process.on('uncaughtException', (err) => {
-    notifyCrash('uncaughtException', err);
-    // exitCode is set first so a natural (early) exit — before the timer fires
-    // — still reports code 1 to the supervisor. The unref'd timer fires if the
-    // in-flight push keeps the event loop alive past CRASH_EXIT_DELAY_MS.
-    process.exitCode = 1;
-    setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
-  });
-  process.on('unhandledRejection', (err) => {
-    notifyCrash('unhandledRejection', err);
-    // Same rationale as uncaughtException above.
-    process.exitCode = 1;
-    setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
-  });
+    : undefined;
+
+  daemonCrashState.handle = installCrashNotifier('daemon', pushIfConfigured, { extraLines });
 }
 
 /**
