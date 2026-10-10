@@ -16,6 +16,22 @@
  * All four schedule-history sites — including `gates.ts` `readLastTickTime`
  * (#3266 scope (a)) — now delegate to this shared implementation.
  *
+ * ## Remaining ordinary JSONL parse loops (scope (b)) — audit complete
+ *
+ * The following sites were evaluated for `parseJsonlLines` adoption and
+ * intentionally left as-is (#3266 slice 7 audit):
+ *
+ * | File | Reason skipped |
+ * |------|---------------|
+ * | `src/whatif/runner/tool-log.ts` | `parseLine` maps `RawToolLogEntry → ToolRequest` (value transform, not a pure predicate guard). |
+ * | `src/agent/facets/derive.trace.ts` | Dual-accumulator with early-continue semantics; `parseJsonlLines` scans all lines. |
+ * | `src/agent/facets/store.ts` | Break-after-first-meta semantics in `tryReadTraceSignals`; `parseJsonlLines` always scans all lines. |
+ * | `src/agent/outcomes/session-end-hook.ts` | Return-after-first-closure semantics; same early-exit incompatibility. |
+ * | `src/improve/scan/reader.ts` | Tracks per-line `lineNumber` (i+1) and counts both JSON and schema validation failures in `invalidLineCount`; `parseJsonlLines` has neither. |
+ * | `src/whatif/episodes.ts` | Early-break on `isWhatifSession`; uses `parseRecord` domain transform, not raw `JSON.parse`. |
+ * | `src/whatif/sandbox.home.ts` | Parses an `.env` key=value file with regex — not JSONL. |
+ * | `src/improve/eval-gen/replay-fixture.ts` | Iterates byte-offset `lineRanges` by index; loop structure cannot be expressed as a guard predicate. |
+ *
  * @module agent/daemon/telemetry-reader
  */
 
