@@ -29,19 +29,19 @@ describe('readLastTickTime', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('returns null when file does not exist', () => {
-    expect(readLastTickTime('any', telemetryPath)).toBeNull();
+  it('returns null when file does not exist', async () => {
+    expect(await readLastTickTime('any', telemetryPath)).toBeNull();
   });
 
-  it('returns null when file has no matching taskId', () => {
+  it('returns null when file has no matching taskId', async () => {
     writeFileSync(
       telemetryPath,
       `${JSON.stringify({ taskId: 'other', triggeredAt: '2026-04-18T10:00:00Z' })}\n`,
     );
-    expect(readLastTickTime('missing', telemetryPath)).toBeNull();
+    expect(await readLastTickTime('missing', telemetryPath)).toBeNull();
   });
 
-  it('returns the most recent triggeredAt for the task', () => {
+  it('returns the most recent triggeredAt for the task', async () => {
     const earlier = '2026-04-18T08:00:00Z';
     const later = '2026-04-18T10:00:00Z';
     writeFileSync(
@@ -52,10 +52,10 @@ describe('readLastTickTime', () => {
         JSON.stringify({ taskId: 't', triggeredAt: later }),
       ].join('\n') + '\n',
     );
-    expect(readLastTickTime('t', telemetryPath)).toBe(Date.parse(later));
+    expect(await readLastTickTime('t', telemetryPath)).toBe(Date.parse(later));
   });
 
-  it('ignores malformed lines', () => {
+  it('ignores malformed lines', async () => {
     writeFileSync(
       telemetryPath,
       [
@@ -64,7 +64,7 @@ describe('readLastTickTime', () => {
         '{incomplete',
       ].join('\n') + '\n',
     );
-    expect(readLastTickTime('t', telemetryPath)).toBe(Date.parse('2026-04-18T09:00:00Z'));
+    expect(await readLastTickTime('t', telemetryPath)).toBe(Date.parse('2026-04-18T09:00:00Z'));
   });
 });
 
@@ -81,8 +81,8 @@ describe('evaluateSessionStartGates', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('fires when no prior telemetry', () => {
-    const decision = evaluateSessionStartGates({
+  it('fires when no prior telemetry', async () => {
+    const decision = await evaluateSessionStartGates({
       taskId: 't',
       cooldownMs: DEFAULT_SESSIONSTART_COOLDOWN_MS,
       nowMs: Date.now(),
@@ -92,14 +92,14 @@ describe('evaluateSessionStartGates', () => {
     expect(decision.skipReason).toBeUndefined();
   });
 
-  it('skips for cooldown when the last fire is within window', () => {
+  it('skips for cooldown when the last fire is within window', async () => {
     const nowMs = Date.parse('2026-04-18T12:00:00Z');
     const lastFiredAt = '2026-04-18T11:00:00Z'; // 1h ago
     writeFileSync(
       telemetryPath,
       `${JSON.stringify({ taskId: 't', triggeredAt: lastFiredAt })}\n`,
     );
-    const decision = evaluateSessionStartGates({
+    const decision = await evaluateSessionStartGates({
       taskId: 't',
       cooldownMs: 6 * 60 * 60 * 1000, // 6h
       nowMs,
@@ -111,14 +111,14 @@ describe('evaluateSessionStartGates', () => {
     expect(decision.cooldownRemainingMs).toBe(5 * 60 * 60 * 1000);
   });
 
-  it('fires when last fire is outside the cooldown window', () => {
+  it('fires when last fire is outside the cooldown window', async () => {
     const nowMs = Date.parse('2026-04-18T20:00:00Z');
     const lastFiredAt = '2026-04-18T11:00:00Z'; // 9h ago
     writeFileSync(
       telemetryPath,
       `${JSON.stringify({ taskId: 't', triggeredAt: lastFiredAt })}\n`,
     );
-    const decision = evaluateSessionStartGates({
+    const decision = await evaluateSessionStartGates({
       taskId: 't',
       cooldownMs: 6 * 60 * 60 * 1000,
       nowMs,
@@ -128,13 +128,13 @@ describe('evaluateSessionStartGates', () => {
     expect(decision.lastFiredAtMs).toBe(Date.parse(lastFiredAt));
   });
 
-  it('respects cooldownMs=0 as "no cooldown check"', () => {
+  it('respects cooldownMs=0 as "no cooldown check"', async () => {
     const nowMs = Date.parse('2026-04-18T12:00:00Z');
     writeFileSync(
       telemetryPath,
       `${JSON.stringify({ taskId: 't', triggeredAt: '2026-04-18T11:59:59Z' })}\n`,
     );
-    const decision = evaluateSessionStartGates({
+    const decision = await evaluateSessionStartGates({
       taskId: 't',
       cooldownMs: 0,
       nowMs,
