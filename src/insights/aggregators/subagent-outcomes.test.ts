@@ -65,11 +65,18 @@ function writeRouting(lines: string[]): void {
 
 function now(): string {
   // Returns the fixed current time as ISO string.
+  // NOTE: if any test advances the fake clock with vi.advanceTimersByTime() or
+  // vi.setSystemTime() mid-case, calls to now() in that case will return the
+  // *advanced* time rather than FIXED_NOW_MS, and oldTs() will shift by the
+  // same delta — potentially moving records inside/outside the window filter
+  // unexpectedly.  Keep each test case self-contained and do not mix clock
+  // manipulation with these helpers without explicitly re-anchoring the epoch.
   return new Date().toISOString();
 }
 
 function oldTs(): string {
-  // 45 days before the fixed epoch — outside the 30-day default window
+  // 45 days before the fixed epoch — outside the 30-day default window.
+  // See NOTE on now() above about mid-case clock manipulation.
   return new Date(FIXED_NOW_MS - 45 * 24 * 60 * 60 * 1000).toISOString();
 }
 

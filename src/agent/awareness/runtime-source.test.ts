@@ -4,17 +4,27 @@
  * MCP tools by server correctly.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { buildRuntimeStateSource } from './runtime-source.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { buildRuntimeStateSource, resetOutcomeSummaryCache } from './runtime-source.js';
 import { gatherWorkspace } from './workspace-source.js';
 import type { AnthropicToolDef } from '../tools/types.js';
 import type { RuntimeSubagents, RuntimeWorkspace } from './types.js';
 import {
-  getQuotaSnapshot,
   recordQuotaSnapshot,
   resetQuotaCacheForTests,
 } from '../quota-cache.js';
 import { STALE_AFTER_MS } from '../../cli/quota-indicator.js';
+
+// Mock the subagent-outcomes aggregator so TTL cache tests don't do real I/O.
+vi.mock('../../insights/aggregators/subagent-outcomes.js', () => ({
+  aggregateSubagentOutcomes: vi.fn(),
+  buildSubagentOutcomeSummary: vi.fn(),
+}));
+
+import {
+  aggregateSubagentOutcomes,
+  buildSubagentOutcomeSummary,
+} from '../../insights/aggregators/subagent-outcomes.js';
 
 // `getWorkspace()` delegates to the real `gatherWorkspace`, which spawns git
 // subprocesses against the test's cwd — nondeterministic and slow. Mock it so
@@ -407,5 +417,120 @@ describe('buildRuntimeStateSource.getUsage', () => {
     const usage = src.getUsage();
     expect(usage[0].fiveHourPct).toBeUndefined();
     expect(usage[0].sevenDayPct).toBe(30);
+  });
+});
+
+// ─── getSubagentOutcomeSummary (TTL cache) ───────────────────────────────────
+
+describe('buildRuntimeStateSource.getSubagentOutcomeSummary — TTL cache', () => {
+  const FAKE_ENTRIES = [
+    {
+      model: 'haiku',
+      agentType: 'Explore',
+      depth: 1,
+      count: 5,
+      successRate: 0.8,
+      capHitRate: 0.2,
+      timeoutRate: 0,
+      p50Ms: 1000,
+      p95Ms: 4000,
+    },
+  ];
+
+  const FAKE_AGG = { byModelTypeDepth: {}, dispatchedCount: 0, outcomeCount: 0, parseErrors: 0 };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resetOutcomeSummaryCache();
+    vi.mocked(aggregateSubagentOutcomes).mockReset();
+    vi.mocked(buildSubagentOutcomeSummary).mockReset();
+    vi.mocked(aggregateSubagentOutcomes).mockReturnValue(FAKE_AGG);
+    vi.mocked(buildSubagentOutcomeSummary).mockReturnValue(FAKE_ENTRIES);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    resetOutcomeSummaryCache();
+  });
+
+  it('cache hit: aggregator called only once for repeated reads within TTL', () => {
+    const src = buildRuntimeStateSource({ ...defaultDeps(), afkHome: '/fake/home' });
+
+    const r1 = src.getSubagentOutcomeSummary();
+    const r2 = src.getSubagentOutcomeSummary();
+
+    expect(r1).toEqual(FAKE_ENTRIES);
+    expect(r2).toEqual(FAKE_ENTRIES);
+    // Second call must be served from cache — aggregator fires only once.
+    expect(vi.mocked(aggregateSubagentOutcomes)).toHaveBeenCalledTimes(1);
+  });
+
+  it('expiry-miss: aggregator re-called after TTL of 60 s elapses', () => {
+    const src = buildRuntimeStateSource({ ...defaultDeps(), afkHome: '/fake/home' });
+
+    src.getSubagentOutcomeSummary(); // populates cache
+    expect(vi.mocked(aggregateSubagentOutcomes)).toHaveBeenCalledTimes(1);
+
+    // Advance fake clock by exactly 60 s — the cache entry has expired.
+    vi.advanceTimersByTime(60_000);
+
+    src.getSubagentOutcomeSummary(); // must re-call aggregator
+    expect(vi.mocked(aggregateSubagentOutcomes)).toHaveBeenCalledTimes(2);
+  });
+
+  it('cache is still valid just before TTL expires (59.9 s)', () => {
+    const src = buildRuntimeStateSource({ ...defaultDeps(), afkHome: '/fake/home' });
+
+    src.getSubagentOutcomeSummary();
+    vi.advanceTimersByTime(59_999);
+    src.getSubagentOutcomeSummary();
+
+    // Still within TTL — no second aggregator call.
+    expect(vi.mocked(aggregateSubagentOutcomes)).toHaveBeenCalledTimes(1);
+  });
+
+  it('error-suppression: aggregator throw returns [] and does not populate cache', () => {
+    vi.mocked(aggregateSubagentOutcomes).mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+
+    const src = buildRuntimeStateSource({ ...defaultDeps(), afkHome: '/fake/home' });
+    const result = src.getSubagentOutcomeSummary();
+
+    // Error must be swallowed and an empty array returned.
+    expect(result).toEqual([]);
+
+    // Since the error path skips caching, the next call must retry the aggregator.
+    vi.mocked(aggregateSubagentOutcomes).mockReturnValueOnce(FAKE_AGG);
+    src.getSubagentOutcomeSummary();
+    expect(vi.mocked(aggregateSubagentOutcomes)).toHaveBeenCalledTimes(2);
+  });
+
+  it('resetOutcomeSummaryCache() forces re-call on next read (cross-test isolation)', () => {
+    const src = buildRuntimeStateSource({ ...defaultDeps(), afkHome: '/fake/home' });
+
+    src.getSubagentOutcomeSummary();
+    expect(vi.mocked(aggregateSubagentOutcomes)).toHaveBeenCalledTimes(1);
+
+    resetOutcomeSummaryCache();
+
+    src.getSubagentOutcomeSummary();
+    expect(vi.mocked(aggregateSubagentOutcomes)).toHaveBeenCalledTimes(2);
+  });
+
+  it('different afkHome values use separate cache entries', () => {
+    const srcA = buildRuntimeStateSource({ ...defaultDeps(), afkHome: '/home/a' });
+    const srcB = buildRuntimeStateSource({ ...defaultDeps(), afkHome: '/home/b' });
+
+    srcA.getSubagentOutcomeSummary();
+    srcB.getSubagentOutcomeSummary();
+
+    // Each keyed independently — aggregator called once per distinct afkHome.
+    expect(vi.mocked(aggregateSubagentOutcomes)).toHaveBeenCalledTimes(2);
+
+    // Second call on each: cache hit — no extra aggregator calls.
+    srcA.getSubagentOutcomeSummary();
+    srcB.getSubagentOutcomeSummary();
+    expect(vi.mocked(aggregateSubagentOutcomes)).toHaveBeenCalledTimes(2);
   });
 });
