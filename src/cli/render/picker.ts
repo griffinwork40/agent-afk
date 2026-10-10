@@ -135,6 +135,288 @@ const HELP_SEARCH = '↑/↓ navigate · enter select · esc clear/cancel · typ
 /** Number of option rows shown in the viewport at once. */
 const WINDOW_SIZE = 20;
 
+// ---------------------------------------------------------------------------
+// Mutable picker state — passed by reference to extracted helpers so they
+// can read and update cursor / scroll / filter without closures.
+// ---------------------------------------------------------------------------
+
+/** All mutable state that drives picker rendering and key handling. */
+export interface PickerState {
+  cursor: number;
+  scrollOffset: number;
+  filterQuery: string;
+  filteredResults: ReturnType<typeof filterOptions>;
+  selected: Set<number>;
+}
+
+// ---------------------------------------------------------------------------
+// Extracted helper: renderPickerRows
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the full row list for one repaint of the picker UI.
+ *
+ * All arguments are explicit — no closures over `runPicker` locals — so
+ * this function can be unit-tested independently of the promise machinery.
+ *
+ * Side-effect: calls `clampPickerScroll` to keep `state.cursor` and
+ * `state.scrollOffset` consistent before computing visible rows. This
+ * matches the original `renderRows` behaviour (clampCursorAndScroll was
+ * called at the top of every render).
+ */
+export function renderPickerRows(
+  state: PickerState,
+  header: readonly string[],
+  options: readonly string[],
+  multi: boolean,
+  searchable: boolean,
+  terminalRowsFn: (() => number | undefined) | undefined,
+): readonly string[] {
+  const lines: string[] = [];
+  for (const h of header) lines.push(h);
+
+  // Filter input row (searchable mode).
+  if (searchable) {
+    lines.push(palette.dim('  Filter: ') + state.filterQuery + '█');
+  }
+
+  const ao = pickerActiveOptions(state, options, searchable);
+  const len = ao.length;
+  const windowSize = pickerViewportSize(terminalRowsFn, header.length, searchable, len);
+  clampPickerScroll(state, ao, windowSize);
+
+  // Virtual-scroll window.
+  const visStart = state.scrollOffset;
+  const visEnd = Math.min(state.scrollOffset + windowSize, len);
+
+  for (let vi = visStart; vi < visEnd; vi++) {
+    const label = ao[vi] ?? '';
+    const isCursor = vi === state.cursor;
+    const cursorGlyph = isCursor ? palette.brand(GLYPH_CURSOR) : GLYPH_GUTTER;
+    let row: string;
+    if (multi) {
+      // In searchable+multi we track selection by originalIndex.
+      const origIdx = searchable
+        ? (state.filteredResults[vi]?.originalIndex ?? vi)
+        : vi;
+      const isChecked = state.selected.has(origIdx);
+      const box = isChecked
+        ? palette.success(GLYPH_BOX_CHECKED)
+        : palette.dim(GLYPH_BOX_UNCHECKED);
+      const labelStyled =
+        isCursor && !isChecked ? palette.bold(label) : label;
+      row = `  ${cursorGlyph} ${box} ${labelStyled}`;
+    } else {
+      const labelStyled = isCursor ? palette.bold(label) : palette.dim(label);
+      row = `  ${cursorGlyph} ${labelStyled}`;
+    }
+    lines.push(row);
+  }
+
+  // Scroll indicator — shown when the list is longer than the window.
+  if (len > windowSize) {
+    const lo = visStart + 1;
+    const hi = visEnd;
+    lines.push(palette.dim(`  (${lo}–${hi} of ${len}  ↑/↓ scroll)`));
+  }
+
+  const helpText = searchable ? HELP_SEARCH : multi ? HELP_MULTI : HELP_SINGLE;
+  lines.push(palette.dim('  ' + helpText));
+  return lines;
+}
+
+// ---------------------------------------------------------------------------
+// Extracted helper: handlePickerKey
+// ---------------------------------------------------------------------------
+
+/**
+ * Dispatch one keystroke through the picker state machine.
+ *
+ * Returns a `PickerKeyAction` telling the caller what to do next.
+ * The caller (inside `runPicker`) owns `finish()` and `host.repaintPicker()`;
+ * this function only mutates `state` and returns an intent.
+ *
+ * All arguments are explicit — no closures over `runPicker` locals.
+ */
+export type PickerKeyAction =
+  | { kind: 'repaint' }
+  | { kind: 'finish'; result: readonly string[] | null }
+  | { kind: 'ctrlc' }    // call onCtrlC() then finish(null)
+  | { kind: 'noop' };
+
+export function handlePickerKey(
+  state: PickerState,
+  options: readonly string[],
+  multi: boolean,
+  searchable: boolean,
+  _char: string | undefined,
+  key: { name?: string; ctrl?: boolean; shift?: boolean; meta?: boolean; sequence?: string },
+): PickerKeyAction {
+  // Esc: clear filter if non-empty (searchable); otherwise dismiss.
+  if (key.name === 'escape') {
+    if (searchable && state.filterQuery.length > 0) {
+      state.filterQuery = '';
+      state.filteredResults = filterOptions(options, state.filterQuery);
+      state.cursor = 0;
+      state.scrollOffset = 0;
+      return { kind: 'repaint' };
+    }
+    return { kind: 'finish', result: null };
+  }
+
+  // Ctrl+C: hard-cancel safety hatch.
+  if (key.ctrl && key.name === 'c') {
+    return { kind: 'ctrlc' };
+  }
+
+  // Backspace in searchable mode removes last filter char.
+  if (searchable && (key.name === 'backspace' || key.name === 'delete')) {
+    if (state.filterQuery.length > 0) {
+      state.filterQuery = state.filterQuery.slice(0, -1);
+      state.filteredResults = filterOptions(options, state.filterQuery);
+      state.cursor = 0;
+      state.scrollOffset = 0;
+      return { kind: 'repaint' };
+    }
+    return { kind: 'noop' };
+  }
+
+  const ao = pickerActiveOptions(state, options, searchable);
+
+  if (key.name === 'up' || (key.ctrl && key.name === 'p')) {
+    const len = ao.length;
+    state.cursor = state.cursor === 0 ? len - 1 : state.cursor - 1;
+    const windowSize = pickerViewportSize(undefined, 0, searchable, len);
+    clampPickerScroll(state, ao, windowSize);
+    return { kind: 'repaint' };
+  }
+  if (key.name === 'down' || (key.ctrl && key.name === 'n')) {
+    const len = ao.length;
+    state.cursor = state.cursor === len - 1 ? 0 : state.cursor + 1;
+    const windowSize = pickerViewportSize(undefined, 0, searchable, len);
+    clampPickerScroll(state, ao, windowSize);
+    return { kind: 'repaint' };
+  }
+
+  if (key.name === 'return') {
+    // An empty filtered view has no highlighted option to confirm.
+    if (searchable && state.filteredResults.length === 0) return { kind: 'noop' };
+    if (multi) {
+      const out: string[] = [];
+      for (let i = 0; i < options.length; i++) {
+        if (state.selected.has(i)) {
+          const v = options[i];
+          if (v !== undefined) out.push(v);
+        }
+      }
+      return { kind: 'finish', result: out };
+    } else {
+      // Resolve with the ORIGINAL option label (not the filtered view label)
+      // so that resume.ts's `options.indexOf(choice)` lookup still works.
+      const origIdx = searchable
+        ? (state.filteredResults[state.cursor]?.originalIndex ?? state.cursor)
+        : state.cursor;
+      const v = options[origIdx];
+      return { kind: 'finish', result: v !== undefined ? [v] : [] };
+    }
+  }
+
+  if (multi && (key.name === 'space' || _char === ' ')) {
+    const origIdx = searchable
+      ? (state.filteredResults[state.cursor]?.originalIndex ?? state.cursor)
+      : state.cursor;
+    if (state.selected.has(origIdx)) state.selected.delete(origIdx);
+    else state.selected.add(origIdx);
+    return { kind: 'repaint' };
+  }
+
+  if (key.name === 'home') {
+    state.cursor = 0;
+    state.scrollOffset = 0;
+    return { kind: 'repaint' };
+  }
+  if (key.name === 'end') {
+    state.cursor = ao.length - 1;
+    const windowSize = pickerViewportSize(undefined, 0, searchable, ao.length);
+    clampPickerScroll(state, ao, windowSize);
+    return { kind: 'repaint' };
+  }
+
+  // Printable char in searchable mode: append to filter query.
+  if (searchable && _char !== undefined && _char.length === 1 && !key.ctrl && !key.meta) {
+    const code = _char.codePointAt(0) ?? 0;
+    if (code >= 0x20) {
+      state.filterQuery += _char;
+      state.filteredResults = filterOptions(options, state.filterQuery);
+      state.cursor = 0;
+      state.scrollOffset = 0;
+      return { kind: 'repaint' };
+    }
+  }
+
+  // All other keys are swallowed (printable chars when not searchable, Tab,
+  // etc.) so they don't leak into a buried input buffer. The compositor's
+  // picker-mode short-circuit (terminal-compositor.ts:dispatchKey) already
+  // ensures this, but ignoring here is defence-in-depth.
+  return { kind: 'noop' };
+}
+
+// ---------------------------------------------------------------------------
+// Internal pure helpers (not exported — used by both renderPickerRows and
+// handlePickerKey)
+// ---------------------------------------------------------------------------
+
+/** The live option set (filtered when searchable, full list otherwise). */
+function pickerActiveOptions(
+  state: PickerState,
+  options: readonly string[],
+  searchable: boolean,
+): readonly string[] {
+  return searchable
+    ? state.filteredResults.map((r) => options[r.originalIndex] ?? '')
+    : options;
+}
+
+/** Option rows that fit without crossing the compositor's bottom margin. */
+function pickerViewportSize(
+  terminalRowsFn: (() => number | undefined) | undefined,
+  headerLength: number,
+  searchable: boolean,
+  optionCount: number,
+): number {
+  const terminalRows = terminalRowsFn?.();
+  if (terminalRows === undefined) return WINDOW_SIZE;
+  const fixedRows = headerLength + (searchable ? 1 : 0) + 1;
+  const withoutIndicator = Math.max(0, terminalRows - 1 - fixedRows);
+  const indicatorRows = optionCount > Math.min(WINDOW_SIZE, withoutIndicator) ? 1 : 0;
+  return Math.min(WINDOW_SIZE, Math.max(0, withoutIndicator - indicatorRows));
+}
+
+/** Clamp cursor to the current active-option range and adjust scroll offset. */
+function clampPickerScroll(
+  state: PickerState,
+  ao: readonly string[],
+  windowSize: number,
+): void {
+  const len = ao.length;
+  if (len === 0) {
+    state.cursor = 0;
+    state.scrollOffset = 0;
+    return;
+  }
+  state.cursor = clamp(state.cursor, 0, len - 1);
+  // Keep cursor in the visible window.
+  if (state.cursor < state.scrollOffset) state.scrollOffset = state.cursor;
+  if (windowSize > 0 && state.cursor >= state.scrollOffset + windowSize) {
+    state.scrollOffset = state.cursor - windowSize + 1;
+  }
+  state.scrollOffset = clamp(state.scrollOffset, 0, Math.max(0, len - windowSize));
+}
+
+// ---------------------------------------------------------------------------
+// runPicker — public entry point
+// ---------------------------------------------------------------------------
+
 /**
  * Run an arrow-key picker against a `PickerHost` (typically a
  * `TerminalCompositor`). Resolves with the selected value(s), or
@@ -188,50 +470,14 @@ export function runPicker(
       return;
     }
 
-    // --- filter / search state (searchable mode only) ---
-    let filterQuery = '';
-    // filteredResults mirrors filterOptions() output; rebuilt on every query change.
-    let filteredResults = filterOptions(options, filterQuery);
-
-    /** The live option set (filtered when searchable, full list otherwise). */
-    const activeOptions = (): readonly string[] =>
-      searchable
-        ? filteredResults.map((r) => options[r.originalIndex] ?? '')
-        : options;
-
-    // --- virtual-scroll state ---
-    let cursor = clamp(initialIndex, 0, options.length - 1);
-    let scrollOffset = 0;
-
-    /** Option rows that fit without crossing the compositor's bottom margin. */
-    const viewportSize = (optionCount: number): number => {
-      const terminalRows = host.terminalRows?.();
-      if (terminalRows === undefined) return WINDOW_SIZE;
-      const fixedRows = header.length + (searchable ? 1 : 0) + 1;
-      const withoutIndicator = Math.max(0, terminalRows - 1 - fixedRows);
-      const indicatorRows = optionCount > Math.min(WINDOW_SIZE, withoutIndicator) ? 1 : 0;
-      return Math.min(WINDOW_SIZE, Math.max(0, withoutIndicator - indicatorRows));
+    const state: PickerState = {
+      cursor: clamp(initialIndex, 0, options.length - 1),
+      scrollOffset: 0,
+      filterQuery: '',
+      filteredResults: filterOptions(options, ''),
+      selected: new Set<number>(opts.initialSelected ?? []),
     };
 
-    /** Clamp cursor to the current active-option range and adjust scroll. */
-    const clampCursorAndScroll = (): void => {
-      const len = activeOptions().length;
-      if (len === 0) {
-        cursor = 0;
-        scrollOffset = 0;
-        return;
-      }
-      const windowSize = viewportSize(len);
-      cursor = clamp(cursor, 0, len - 1);
-      // Keep cursor in the visible window.
-      if (cursor < scrollOffset) scrollOffset = cursor;
-      if (windowSize > 0 && cursor >= scrollOffset + windowSize) {
-        scrollOffset = cursor - windowSize + 1;
-      }
-      scrollOffset = clamp(scrollOffset, 0, Math.max(0, len - windowSize));
-    };
-
-    const selected = new Set<number>(opts.initialSelected ?? []);
     let resolved = false;
 
     const finish = (result: readonly string[] | null): void => {
@@ -245,182 +491,30 @@ export function runPicker(
     const onAbort = (): void => finish(null);
     if (signal) signal.addEventListener('abort', onAbort, { once: true });
 
-    const renderRows = (): readonly string[] => {
-      const lines: string[] = [];
-      for (const h of header) lines.push(h);
-
-      // Filter input row (searchable mode).
-      if (searchable) {
-        lines.push(palette.dim('  Filter: ') + filterQuery + '█');
-      }
-
-      const ao = activeOptions();
-      const len = ao.length;
-      const windowSize = viewportSize(len);
-      clampCursorAndScroll();
-
-      // Virtual-scroll window.
-      const visStart = scrollOffset;
-      const visEnd = Math.min(scrollOffset + windowSize, len);
-
-      for (let vi = visStart; vi < visEnd; vi++) {
-        const label = ao[vi] ?? '';
-        const isCursor = vi === cursor;
-        const cursorGlyph = isCursor ? palette.brand(GLYPH_CURSOR) : GLYPH_GUTTER;
-        let row: string;
-        if (multi) {
-          // In searchable+multi we track selection by originalIndex.
-          const origIdx = searchable
-            ? (filteredResults[vi]?.originalIndex ?? vi)
-            : vi;
-          const isChecked = selected.has(origIdx);
-          const box = isChecked
-            ? palette.success(GLYPH_BOX_CHECKED)
-            : palette.dim(GLYPH_BOX_UNCHECKED);
-          const labelStyled =
-            isCursor && !isChecked ? palette.bold(label) : label;
-          row = `  ${cursorGlyph} ${box} ${labelStyled}`;
-        } else {
-          const labelStyled = isCursor ? palette.bold(label) : palette.dim(label);
-          row = `  ${cursorGlyph} ${labelStyled}`;
-        }
-        lines.push(row);
-      }
-
-      // Scroll indicator — shown when the list is longer than the window.
-      if (len > windowSize) {
-        const lo = visStart + 1;
-        const hi = visEnd;
-        lines.push(palette.dim(`  (${lo}–${hi} of ${len}  ↑/↓ scroll)`));
-      }
-
-      const helpText = searchable ? HELP_SEARCH : multi ? HELP_MULTI : HELP_SINGLE;
-      lines.push(palette.dim('  ' + helpText));
-      return lines;
-    };
+    const renderRows = (): readonly string[] =>
+      renderPickerRows(state, header, options, multi, searchable, host.terminalRows?.bind(host));
 
     const onKey = (
       _char: string | undefined,
       key: { name?: string; ctrl?: boolean; shift?: boolean; meta?: boolean; sequence?: string },
     ): void => {
       if (resolved) return;
-
-      // Esc: clear filter if non-empty (searchable); otherwise dismiss.
-      if (key.name === 'escape') {
-        if (searchable && filterQuery.length > 0) {
-          filterQuery = '';
-          filteredResults = filterOptions(options, filterQuery);
-          cursor = 0;
-          scrollOffset = 0;
-          host.repaintPicker();
-          return;
-        }
-        finish(null);
-        return;
-      }
-
-      // Ctrl+C: hard-cancel safety hatch.
-      if (key.ctrl && key.name === 'c') {
+      const action = handlePickerKey(state, options, multi, searchable, _char, key);
+      if (action.kind === 'repaint') {
+        host.repaintPicker();
+      } else if (action.kind === 'finish') {
+        finish(action.result);
+      } else if (action.kind === 'ctrlc') {
         onCtrlC?.();
         finish(null);
-        return;
       }
-
-      // Backspace in searchable mode removes last filter char.
-      if (searchable && (key.name === 'backspace' || key.name === 'delete')) {
-        if (filterQuery.length > 0) {
-          filterQuery = filterQuery.slice(0, -1);
-          filteredResults = filterOptions(options, filterQuery);
-          cursor = 0;
-          scrollOffset = 0;
-          host.repaintPicker();
-        }
-        return;
-      }
-
-      if (key.name === 'up' || (key.ctrl && key.name === 'p')) {
-        const len = activeOptions().length;
-        cursor = cursor === 0 ? len - 1 : cursor - 1;
-        clampCursorAndScroll();
-        host.repaintPicker();
-        return;
-      }
-      if (key.name === 'down' || (key.ctrl && key.name === 'n')) {
-        const len = activeOptions().length;
-        cursor = cursor === len - 1 ? 0 : cursor + 1;
-        clampCursorAndScroll();
-        host.repaintPicker();
-        return;
-      }
-
-      if (key.name === 'return') {
-        // An empty filtered view has no highlighted option to confirm.
-        if (searchable && filteredResults.length === 0) return;
-        if (multi) {
-          const out: string[] = [];
-          for (let i = 0; i < options.length; i++) {
-            if (selected.has(i)) {
-              const v = options[i];
-              if (v !== undefined) out.push(v);
-            }
-          }
-          finish(out);
-        } else {
-          // Resolve with the ORIGINAL option label (not the filtered view label)
-          // so that resume.ts's `options.indexOf(choice)` lookup still works.
-          const origIdx = searchable
-            ? (filteredResults[cursor]?.originalIndex ?? cursor)
-            : cursor;
-          const v = options[origIdx];
-          finish(v !== undefined ? [v] : []);
-        }
-        return;
-      }
-
-      if (multi && (key.name === 'space' || _char === ' ')) {
-        const origIdx = searchable
-          ? (filteredResults[cursor]?.originalIndex ?? cursor)
-          : cursor;
-        if (selected.has(origIdx)) selected.delete(origIdx);
-        else selected.add(origIdx);
-        host.repaintPicker();
-        return;
-      }
-
-      if (key.name === 'home') {
-        cursor = 0;
-        scrollOffset = 0;
-        host.repaintPicker();
-        return;
-      }
-      if (key.name === 'end') {
-        cursor = activeOptions().length - 1;
-        clampCursorAndScroll();
-        host.repaintPicker();
-        return;
-      }
-
-      // Printable char in searchable mode: append to filter query.
-      if (searchable && _char !== undefined && _char.length === 1 && !key.ctrl && !key.meta) {
-        const code = _char.codePointAt(0) ?? 0;
-        if (code >= 0x20) {
-          filterQuery += _char;
-          filteredResults = filterOptions(options, filterQuery);
-          cursor = 0;
-          scrollOffset = 0;
-          host.repaintPicker();
-          return;
-        }
-      }
-
-      // All other keys are swallowed (printable chars when not searchable, Tab,
-      // etc.) so they don't leak into a buried input buffer. The compositor's
-      // picker-mode short-circuit (terminal-compositor.ts:dispatchKey) already
-      // ensures this, but ignoring here is defence-in-depth.
+      // 'noop' → do nothing
     };
 
     // Initialise scroll after cursor is set.
-    clampCursorAndScroll();
+    const ao = pickerActiveOptions(state, options, searchable);
+    const windowSize = pickerViewportSize(host.terminalRows?.bind(host), header.length, searchable, ao.length);
+    clampPickerScroll(state, ao, windowSize);
 
     const controller: PickerController = { renderRows, onKey };
     host.enterPickerMode(controller);
