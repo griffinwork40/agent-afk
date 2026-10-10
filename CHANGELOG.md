@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.308.1] - 2026-10-10
+
+### Fixed
+- distinguish thrown push from unconfigured, add redaction+overflow tests (#3416) (a5c863c5)
+
+### Changed
+- upgrade dotenv to v18 (#3422) (ba8bdbd2)
+- adopt atomicWrite in daemon/worktree/session stores (#3420) (37dbd6fd)
+
 ## [5.308.0] - 2026-10-10
 
 ### Added
