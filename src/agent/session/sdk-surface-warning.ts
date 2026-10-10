@@ -7,6 +7,7 @@
  * skill-bridge discovers skills and `supportedCommands()` returns them.
  *
  * This module provides:
+ *  - {@link resolveSurfaceInputs} — derives real inputs (init metadata is empty).
  *  - {@link isReducedToolSurface} — detects the mismatch at init time.
  *  - {@link emitReducedSurfaceWarning} — emits a one-time warning to stderr
  *    when the gap is present. Silent on CLI/REPL/Telegram/web surfaces that
@@ -24,7 +25,68 @@
  */
 
 import { env } from '../../config/env.js';
+import { listSkills } from '../../skills/skill-registry.js';
+import type { AgentConfig } from '../types.js';
 import type { SessionMetadata } from '../types/session-types.js';
+
+/**
+ * Contract: build the `{ skills, tools }` input for {@link isReducedToolSurface}
+ * from what the session actually knows at init.
+ *
+ * Both providers emit `session.init` with `skills: []` and `tools: []`
+ * (anthropic-direct `query-turn-driver.ts`, openai-compatible `query.ts`), so
+ * feeding raw init metadata to the predicate never fires (#3442 follow-up).
+ * Instead:
+ *  - skills: the init list when non-empty, else the process skill registry
+ *    (built-ins register at import, so a bare SDK session has some).
+ *  - tools: the init list, plus `'skill'` when the session is known or assumed
+ *    to have a skill executor: `config.executors.skillExecutor` is wired, the
+ *    caller injected its own `provider`/`providerFactory` (every first-party
+ *    surface does, with executors), or the session is a forked child.
+ */
+export function resolveSurfaceInputs(
+  config: Pick<AgentConfig, 'executors' | 'provider' | 'providerFactory' | 'isSubagentFork' | 'parentSessionId'>,
+  metadata: Pick<SessionMetadata, 'skills' | 'tools'>,
+): { skills: string[]; tools: string[] } {
+  const skills =
+    metadata.skills !== undefined && metadata.skills.length > 0
+      ? [...metadata.skills]
+      : listSkills();
+  const tools = [...(metadata.tools ?? [])];
+  const skillWired =
+    config.executors?.skillExecutor !== undefined ||
+    config.provider !== undefined ||
+    config.providerFactory !== undefined ||
+    config.isSubagentFork === true ||
+    config.parentSessionId !== undefined;
+  if (skillWired && !tools.includes('skill')) tools.push('skill');
+  return { skills, tools };
+}
+
+// Invariant: one stderr line per PROCESS. Embedders that build a session per
+// request (Next.js routes, servers) must not get one line each.
+let reducedSurfaceWarned = false;
+
+/**
+ * First-turn hook: write the reduced-surface warning once per process, only
+ * when a session actually runs a model turn. Construction/init alone stays
+ * silent so probe sessions (e.g. `afk status`) never print it; the
+ * `SessionMetadata.reducedToolSurface` flag is still stamped at init.
+ */
+export function warnReducedSurfaceOnTurn(
+  config: Parameters<typeof resolveSurfaceInputs>[0],
+): void {
+  if (reducedSurfaceWarned) return;
+  const inputs = resolveSurfaceInputs(config, { skills: [], tools: [] });
+  if (!isReducedToolSurface(inputs)) return;
+  reducedSurfaceWarned = true;
+  emitReducedSurfaceWarning(inputs);
+}
+
+/** @internal Test-only reset of the once-per-process guard. */
+export function resetReducedSurfaceWarningForTests(): void {
+  reducedSurfaceWarned = false;
+}
 
 /**
  * Returns `true` when skills have been discovered for this session but the
@@ -68,7 +130,8 @@ export function emitReducedSurfaceWarning(
       `the "skill", "agent", and "compose" tools are NOT registered. ` +
       `Skills are listed by supportedCommands() but the model cannot invoke them. ` +
       `This is expected when using AgentSession / query() / queryText() directly ` +
-      `without executor wiring. See docs/sdk-surface.md for details. ` +
+      `without executor wiring. Opt in with AgentConfig.executors from createWiredExecutors(); ` +
+      `see docs/sdk-surface.md. ` +
       `Set AFK_SDK_SURFACE_WARN=0 to silence this warning.\n`,
   );
 }

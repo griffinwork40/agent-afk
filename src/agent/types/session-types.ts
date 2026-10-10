@@ -76,20 +76,14 @@ export interface SessionMetadata {
    * `compose` tools. This is the normal state for sessions created via the
    * public SDK (`AgentSession` / `query()` / `queryText()`) without executor
    * wiring. CLI/REPL/Telegram/web/daemon surfaces always wire executors, so
-   * this field is absent (or `false`) there.
+   * this field is absent (or `false`) there. SDK callers clear it by passing
+   * `executors` from `createWiredExecutors()` with the `skill` tool enabled.
    *
    * Embedders can inspect this field after `waitForInitialization()` to decide
    * whether to display their own warning or proxy to a fully-wired surface.
    * See `docs/sdk-surface.md` for the full explanation.
    */
   reducedToolSurface?: boolean;
-  /**
-   * Tools (`'agent' | 'skill' | 'compose'`) that are NOT wired on this session
-   * even though skills were discovered: set only when the session was built
-   * with neither `AgentConfig.executors` nor an injected `provider` /
-   * `providerFactory`. Absent when executors are wired or nothing is missing.
-   */
-  missingExecutors?: string[];
 }
 
 /**

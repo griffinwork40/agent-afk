@@ -618,7 +618,7 @@ export interface AgentConfig {
   /**
    * Opt-in tool executors for the `agent`, `skill`, and `compose` tools
    * (#3442). Default: none, so a bare `new AgentSession(config)` exposes no
-   * agent/skill/compose schemas (see `SessionMetadata.missingExecutors`).
+   * agent/skill/compose schemas (see `SessionMetadata.reducedToolSurface`).
    * Build the bundle with `createWiredExecutors`, one bundle per session.
    *
    * Contract: mutually exclusive with {@link provider} and

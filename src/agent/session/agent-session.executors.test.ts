@@ -2,7 +2,7 @@
  * #3442: SDK opt-in executors on `AgentSession` (`AgentConfig.executors`).
  *
  * Covers: default bare session exposes no agent/skill/compose schemas and
- * reports `missingExecutors`; executors expose schemas on anthropic-direct and
+ * reports `reducedToolSurface`; executors expose schemas on anthropic-direct and
  * openai-compatible, and survive a cross-family swap; executors + provider /
  * providerFactory throws; bind-once; close drains; tree budget abort.
  * Template: provider-switch.test.ts (both SDKs mocked at the client boundary).
@@ -17,8 +17,8 @@ import { __setOpenAIClientFactory } from '../providers/openai-compatible/query.j
 import { AnthropicDirectProvider } from '../providers/anthropic-direct/index.js';
 import { resetSlotBindings } from './model-slots.js';
 import { registerSkill, _resetRegistry } from '../../skills/skill-registry.js';
+import { resetReducedSurfaceWarningForTests } from './sdk-surface-warning.js';
 import { createSessionBindSlot, type SessionExecutors } from './session-executors.js';
-import { resetMissingExecutorsWarningForTests } from './session-setup.missing-executors.js';
 import { InMemoryTraceWriter } from '../trace/index.js';
 import { BudgetExceededError } from '../../utils/errors.js';
 import type { Surface } from '../awareness/types.js';
@@ -76,7 +76,6 @@ describe('AgentSession — opt-in executors (#3442)', () => {
   let savedKey: string | undefined;
   beforeEach(() => {
     resetSlotBindings();
-    resetMissingExecutorsWarningForTests();
     anthropicCreateMock.mockReset();
     openaiCreateMock.mockReset();
     anthropicCreateMock.mockImplementation(() => fromArray(anthropicTextStream('a')));
@@ -96,43 +95,40 @@ describe('AgentSession — opt-in executors (#3442)', () => {
     vi.restoreAllMocks();
   });
 
-  it('default session: no agent/skill/compose schemas and missingExecutors when skills exist', async () => {
+  it('default session: no agent/skill/compose schemas and reducedToolSurface when skills exist', async () => {
     registerSkill({ name: 'probe-3442', description: 'probe', handler: vi.fn() });
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    resetReducedSurfaceWarningForTests();
+    const lines = () => write.mock.calls.filter((c) => String(c[0]).includes('SDK session:')).length;
     const session = new AgentSession({ model: 'claude-haiku-4-5', apiKey: 'sk-ant-oat01-test' });
     const second = new AgentSession({ model: 'claude-haiku-4-5', apiKey: 'sk-ant-oat01-test' });
     try {
-      expect(session.getSessionMetadata().missingExecutors).toEqual(['agent', 'skill', 'compose']);
-      // Construction alone is silent (probe sessions such as `afk status` must not warn).
-      const warned = () => warn.mock.calls.filter((c) => String(c[0]).includes('without executors')).length;
-      expect(warned()).toBe(0);
+      await session.waitForInitialization();
+      expect(session.getSessionMetadata().reducedToolSurface).toBe(true);
+      expect(lines()).toBe(0); // init alone is silent (probe sessions like `afk status`)
       await session.sendMessage('hi');
-      expect(warned()).toBe(1);
       await second.sendMessage('again');
+      expect(lines()).toBe(1); // once per process, not per session
       const names = anthropicToolNames();
       expect(names.length).toBeGreaterThan(0); // non-vacuous: other tools present
       expect(names).not.toContain('agent');
       expect(names).not.toContain('skill');
       expect(names).not.toContain('compose');
-      // One-time process warning, not one per session.
-      expect(warn.mock.calls.filter((c) => String(c[0]).includes('without executors'))).toHaveLength(1);
     } finally {
+      write.mockRestore();
       await session.close();
       await second.close();
     }
   });
 
-  it('no missingExecutors when no skills are registered or a provider is injected', async () => {
+  it('no reducedToolSurface when no skills are registered', async () => {
     _resetRegistry();
     const bare = new AgentSession({ model: 'claude-haiku-4-5', apiKey: 'sk-ant-oat01-test' });
-    registerSkill({ name: 'probe-3442', description: 'probe', handler: vi.fn() });
-    const injected = new AgentSession({ model: 'claude-haiku-4-5', apiKey: 'k', provider: new AnthropicDirectProvider() });
     try {
-      expect(bare.getSessionMetadata().missingExecutors).toBeUndefined();
-      expect(injected.getSessionMetadata().missingExecutors).toBeUndefined();
+      await bare.sendMessage('hi');
+      expect(bare.getSessionMetadata().reducedToolSurface).toBeUndefined();
     } finally {
       await bare.close();
-      await injected.close();
     }
   });
 
@@ -142,9 +138,9 @@ describe('AgentSession — opt-in executors (#3442)', () => {
     try {
       expect(ex.bindSpy).toHaveBeenCalledTimes(1);
       expect(ex.bindSpy.mock.calls[0]?.[0]).toBe(session);
-      expect(session.getSessionMetadata().missingExecutors).toBeUndefined();
       await session.sendMessage('hi');
       expect(anthropicToolNames()).toEqual(expect.arrayContaining(['agent', 'skill', 'compose']));
+      expect(session.getSessionMetadata().reducedToolSurface).toBeUndefined();
     } finally {
       await session.close();
     }

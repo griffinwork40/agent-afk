@@ -29,7 +29,7 @@ import type { AgentConfig } from '../types.js';
 import type { TurnStreamRunner } from './turn-stream-runner.js';
 import type { QueryInputStream } from './input-iterable.js';
 import type { PlanExitBridge } from './plan-exit-bridge.js';
-import { warnMissingExecutorsOnTurn } from './session-setup.missing-executors.js';
+import { warnReducedSurfaceOnTurn } from './sdk-surface-warning.js';
 
 /** Context bag for the send-message functions. */
 export interface SendDeps {
@@ -176,8 +176,8 @@ export function sendMessageStreamInternal(
   // A new user turn starts a fresh visible-plan-text window and refusal budget
   // for the `exit_plan_mode` gate (see plan-text-tracker.ts).
   deps.planExit.planText.beginTurn();
-  // #3442: warn (once per process) at the first real turn, not at construction.
-  warnMissingExecutorsOnTurn(deps.getConfig());
+  // #3442: reduced-surface stderr warning, once per process, at the first real turn.
+  warnReducedSurfaceOnTurn(deps.getConfig());
   return deps.runner.runStream(content, deps.getInputStream());
 }
 
