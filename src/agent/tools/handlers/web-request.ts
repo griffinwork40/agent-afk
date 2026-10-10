@@ -38,7 +38,7 @@ import {
 import type { EgressGuardOptions } from '../../../http-client/egress-guard.js';
 import { redactSecrets } from '../../redact-secrets.js';
 import { extractEgressBlockedError, fetchFailedMessage } from '../../../utils/errors.js';
-import { forwardAbortSignal } from '../../../utils/abort.js';
+import { createRequestAbortScope } from '../../../utils/abort.js';
 
 type FetchFn = typeof fetch;
 
@@ -284,20 +284,18 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
     }
 
     // -- Abort controller with timeout ---------------------------------------
-    const ac = new AbortController();
-    const cleanupAbort = forwardAbortSignal(signal, ac);
-
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const scope = createRequestAbortScope({
+      parentSignal: signal,
+      timeoutMs: parsed.timeoutMs,
+      timeoutMessage: `web_request timeout after ${parsed.timeoutMs}ms`,
+    });
 
     const abortMessage = (): string => {
-      const reason = ac.signal.reason;
+      const reason = scope.signal.reason;
       return reason instanceof Error ? reason.message : String(reason ?? 'aborted');
     };
 
     try {
-      timer = setTimeout(() => {
-        ac.abort(new Error(`web_request timeout after ${parsed.timeoutMs}ms`));
-      }, parsed.timeoutMs);
 
       // -- Core request -------------------------------------------------------
       // Resolve domain policy lazily so env-var-driven domain restrictions
@@ -310,7 +308,7 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
         body: parsed.body,
         headers,
         maxResponseBytes: parsed.maxResponseBytes,
-        signal: ac.signal,
+        signal: scope.signal,
         fetchFn,
         lookupFn: opts.lookupFn,
         domainCheck,
@@ -321,7 +319,7 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
       try {
         result = await webRequest(requestOpts);
       } catch (err) {
-        if (ac.signal.aborted) {
+        if (scope.signal.aborted) {
           return { content: `web_request aborted: ${abortMessage()}`, isError: true };
         }
         // Also handles connect-time blocks: undici wraps EgressBlockedError
@@ -335,7 +333,7 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
         return { content: `web_request ${name}: ${msg}`, isError: true };
       }
 
-      if (ac.signal.aborted) {
+      if (scope.signal.aborted) {
         return { content: `web_request aborted: ${abortMessage()}`, isError: true };
       }
 
@@ -365,8 +363,7 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
         ...(result.truncated ? { truncated: true } : {}),
       };
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
-      cleanupAbort();
+      scope.dispose();
     }
   };
 }
