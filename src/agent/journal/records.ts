@@ -33,6 +33,7 @@ function isIndex(v: unknown): v is number {
  * blocks make isMessage return false, which makes isValidRecord return false,
  * which returns null rather than throwing.
  */
+
 /**
  * Validate one JournalResultPart element inside a tool_result's content array.
  * Each element must be a plain object with a recognized type and its required
@@ -47,7 +48,6 @@ function isResultPart(p: unknown): boolean {
     case 'text_ref':
       return isObject(p['ref']) && typeof p['preview'] === 'string';
     case 'image':
-      return isObject(p['source']);
     case 'document':
       return isObject(p['source']);
     default:
