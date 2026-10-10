@@ -134,7 +134,16 @@ function nextReLimited(): TierGenerator {
 // ---------------------------------------------------------------------------
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  // resetAllMocks (not clearAllMocks) so that mockResolvedValueOnce /
+  // mockReturnValueOnce queues from the previous test do not survive into
+  // the next one. clearAllMocks only resets call history; it leaves queued
+  // once-entries intact, so a test that sets
+  //   waitForHotSwapMock.mockResolvedValueOnce('timer')
+  // can poison the next test's waitForHotSwap call with an already-resolved
+  // promise, causing runHotSwapParkLoop's finally-block to clear the wait
+  // slot before the next test's synchronous assertions can observe it
+  // (issue #3463).
+  vi.resetAllMocks();
   loadClaudeCodeOauthTokenMock.mockReturnValue('tok-a');
   parseAccountIdentifierMock.mockImplementation((t) => `acct:${t}`);
   emitSessionPhaseMock.mockResolvedValue(undefined);
@@ -190,7 +199,7 @@ for (const family of ['no-ts', 'far-reset', 'timestamped'] as const) {
       return family === 'no-ts'
         ? usageLimitNoTimestampPause(ctx, input, () => false, next, pending)
         : usageLimitResetPause(ctx, input, () => false, next, pending,
-          new Date(Date.now() + (family === 'far-reset' ? TWO_HOURS_MS + 1 : 60_000)));
+          new Date(Date.now() + (family === 'far-reset' ? TWO_HOURS_MS + 60_000 : 60_000)));
     }
     function mockWait(promise: Promise<WaitResult>) {
       (family === 'timestamped' ? waitForResetMock : waitForHotSwapMock).mockReturnValue(promise);
