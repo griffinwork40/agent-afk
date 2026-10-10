@@ -14,7 +14,7 @@
  * @module whatif/judge/jev-connect
  */
 
-import { loadMcpConfig } from '../../agent/mcp/config-loader.js';
+import { loadMcpConfig } from '../../agent/mcp/index.js';
 import { McpManager } from '../../agent/mcp/manager.js';
 import { errorMessage } from '../../utils/errors.js';
 

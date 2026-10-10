@@ -37,7 +37,7 @@ import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { palette } from '../palette.js';
 import { handleCommandError } from '../errors/index.js';
 import { decoratePlaywrightLaunchError } from '../../browser/playwright-missing.js';
-import { getMcpConfigPath, type McpConfigFile } from '../../agent/mcp/config-loader.js';
+import { getMcpConfigPath, type McpConfigFile } from '../../agent/mcp/index.js';
 import type { McpServerConfig } from '../../agent/mcp/types.js';
 import { errorMessage } from '../../utils/errors.js';
 import {
