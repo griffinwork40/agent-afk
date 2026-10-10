@@ -283,7 +283,7 @@ export class SubagentExecutor implements SubagentControl {
       waveTracker: this.waveTracker,
       promotionTriggers: this.promotionTriggers,
       activeForegroundHandles: this.activeForegroundHandles,
-      cancelGeneration: this.cancelGeneration,
+      getCancelGeneration: () => this.cancelGeneration,
       inheritedChildConfigArgs: () => this.inheritedChildConfigArgs(),
       updateCurrentWaveUnit: (id, status, error, cwd) =>
         this.updateCurrentWaveUnit(id, status, error, cwd),
