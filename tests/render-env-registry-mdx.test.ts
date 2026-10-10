@@ -67,6 +67,13 @@ describe('renderMdx — MDX escaping', () => {
     expect(() => renderMdx(registry)).toThrow(/TEST_ODD_TICK.*unbalanced backtick/);
   });
 
+  it('throws on a default with an unbalanced backtick', () => {
+    const registry: readonly EnvVarMeta[] = [
+      makeEntry({ name: 'TEST_ODD_DEFAULT', default: 'val`broken' }),
+    ];
+    expect(() => renderMdx(registry)).toThrow(/TEST_ODD_DEFAULT.*default.*unbalanced backtick/);
+  });
+
   it('escapes { and } in descriptions', () => {
     const registry: readonly EnvVarMeta[] = [
       makeEntry({ name: 'TEST_BRACES', description: 'State at {home}/state.' }),
