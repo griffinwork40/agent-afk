@@ -89,6 +89,10 @@ export async function trackRecordSummary(
   // ── Aggregate per change kind ─────────────────────────────────────────────
   const stats = new Map<string, { confirmed: number; total: number }>();
 
+  // Discriminant pair: `ts` (ISO timestamp string) and `verdict` ('confirmed' |
+  // 'refuted') are the two fields that every CalibrationRecord must carry and
+  // that plain JSON objects (e.g. index lines, partial writes) will not have.
+  // Checking both gives stronger type narrowing than a single field would.
   const isCalibrationRecord = (x: unknown): x is CalibrationRecord =>
     x !== null &&
     typeof x === 'object' &&

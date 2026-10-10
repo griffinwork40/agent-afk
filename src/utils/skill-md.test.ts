@@ -73,13 +73,13 @@ describe('parseFlagsField — security: block-form items validated against FLAG_
 });
 
 describe('parseFlagsField — dedupe (#3460)', () => {
-  it('dedupes duplicate flags in inline form, preserving first-seen order before sort', () => {
+  it('dedupes duplicate flags in inline form; result is sorted alphabetically', () => {
     const result = parseFlagsField('[--beta, --alpha, --beta, --alpha]', []);
     // Duplicates removed; result is sorted alphabetically.
     expect(result).toEqual(['--alpha', '--beta']);
   });
 
-  it('dedupes duplicate flags in block form, preserving first-seen order before sort', () => {
+  it('dedupes duplicate flags in block form; result is sorted alphabetically', () => {
     const followingLines = [
       '  - --gamma',
       '  - --alpha',
