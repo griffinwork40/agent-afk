@@ -1,6 +1,6 @@
 /**
- * SQLite schema DDL, version constants, migration runner, and WAL-mode switch
- * for the cross-session memory store.
+ * SQLite schema DDL, version constants, and migration runner for the
+ * cross-session memory store.
  *
  * Extracted from memory-store.ts to keep that file under the 350-code-line
  * ceiling. The public surface here is used exclusively by MemoryStore.
@@ -10,7 +10,6 @@
 
 import type BetterSqlite3 from 'better-sqlite3';
 import { debugLog } from '../../utils/debug.js';
-import { configureSqliteConnection } from '../storage/sqlite.js';
 
 /**
  * Increment this constant whenever the schema changes in a backward-incompatible way.
@@ -213,18 +212,4 @@ export function runMigrations(db: BetterSqlite3.Database, existingVersion: numbe
     }).immediate(seedTs);
     debugLog('memory-store: migrated schema v4 → v5 (tracking epoch and metadata-only updates)');
   }
-}
-
-/**
- * Apply WAL mode and busy_timeout to the memory store's SQLite connection.
- *
- * Delegates to the shared configureSqliteConnection helper which encapsulates
- * the bounded WAL-switch retry loop needed to handle concurrent cold-open
- * races (see agent/storage/sqlite.ts for the full rationale).
- *
- * @deprecated Prefer calling configureSqliteConnection directly. This wrapper
- *   is retained so memory-store.ts keeps its existing call-site unchanged.
- */
-export function enableWalMode(db: BetterSqlite3.Database): void {
-  configureSqliteConnection(db);
 }

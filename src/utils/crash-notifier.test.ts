@@ -13,9 +13,10 @@
  *   - process.exitCode = 1 is set synchronously before the timer.
  *   - Re-entry guard: second installCrashNotifier call with the same handle is
  *     a no-op (no duplicate listeners).
- *   - reset() clears the guard so a fresh call registers new listeners.
+ *   - reset() clears the guard AND removes the registered process listeners
+ *     (process.off), so a fresh call registers one new pair — no stacking.
  *   - extraLines: supplementary lines are appended to the message.
- *   - extraLines throwing is silently swallowed.
+ *   - extraLines throwing is logged (breadcrumb) and swallowed.
  *   - Non-Error err values are stringified.
  */
 
@@ -298,6 +299,33 @@ describe('installCrashNotifier', () => {
     }
   });
 
+  it('reset() removes the registered listeners so reinstall does not stack a second pair', () => {
+    const { captured, restore } = captureProcessOn();
+    const offSpy = vi.spyOn(process, 'off');
+    try {
+      const handle = installCrashNotifier('telegram', pushFn);
+      const oldUncaught = captured['uncaughtException']?.[0];
+      const oldRejection = captured['unhandledRejection']?.[0];
+      expect(oldUncaught).toBeDefined();
+      expect(oldRejection).toBeDefined();
+
+      handle.reset();
+      // reset() must process.off() the exact registered refs.
+      expect(offSpy).toHaveBeenCalledWith('uncaughtException', oldUncaught);
+      expect(offSpy).toHaveBeenCalledWith('unhandledRejection', oldRejection);
+
+      // Reinstall registers ONE fresh pair (not stacked on the stale pair).
+      installCrashNotifier('telegram', pushFn);
+      expect(captured['uncaughtException']).toHaveLength(2);
+      expect(captured['unhandledRejection']).toHaveLength(2);
+      expect(captured['uncaughtException']?.[1]).not.toBe(oldUncaught);
+      expect(captured['unhandledRejection']?.[1]).not.toBe(oldRejection);
+    } finally {
+      offSpy.mockRestore();
+      restore();
+    }
+  });
+
   // -------------------------------------------------------------------------
   // extraLines option
   // -------------------------------------------------------------------------
@@ -319,8 +347,9 @@ describe('installCrashNotifier', () => {
     }
   });
 
-  it('swallows exceptions thrown by extraLines', async () => {
+  it('swallows exceptions thrown by extraLines (logs a breadcrumb)', async () => {
     const { captured, restore } = captureProcessOn();
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       installCrashNotifier('daemon', pushFn, {
         extraLines: () => { throw new Error('extraLines kaboom'); },
@@ -331,7 +360,11 @@ describe('installCrashNotifier', () => {
       await Promise.resolve();
       // Push still fired (base message, without extra lines).
       expect(pushFn).toHaveBeenCalledTimes(1);
+      // Breadcrumb logged, mirroring the push-failure path.
+      expect(consoleSpy).toHaveBeenCalledTimes(1);
+      expect(String(consoleSpy.mock.calls[0]?.[1] ?? '')).toContain('extraLines kaboom');
     } finally {
+      consoleSpy.mockRestore();
       restore();
     }
   });
