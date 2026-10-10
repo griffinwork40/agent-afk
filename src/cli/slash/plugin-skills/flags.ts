@@ -16,7 +16,20 @@ import { readdirSync, readFileSync, statSync } from 'fs';
 import { join, basename, dirname } from 'path';
 import { getMarketplaceCacheDir, getBundledPluginsDir } from '../../../paths.js';
 import { scanAllPluginRoots } from '../../../agent/tools/skill-bridge.js';
+import { _registerScanCacheResetHook } from '../../../agent/plugins-scanner.js';
 import { parseSkillMd, resolveSkillFlags } from '../_lib/flag-harvest.js';
+
+/**
+ * Module-level cache for the full discovered-metadata harvest.
+ * Populated lazily on first call to `harvestDiscoveredPluginSkillMetadata`
+ * and invalidated by `_resetPluginScanCache` via the hook registered below.
+ * This avoids a disk re-walk on every `/skills <name>` detail-card call.
+ */
+let _discoveredMetadataCache: PluginSkillHarvest | undefined;
+
+_registerScanCacheResetHook(() => {
+  _discoveredMetadataCache = undefined;
+});
 
 /** Result of a full SKILL.md harvest pass (flags + category). */
 export interface PluginSkillHarvest {
@@ -167,6 +180,8 @@ export function harvestAllPluginSkillFlags(): Map<string, string[]> {
  * walk order (cache, then bundled, then discovered roots).
  */
 export function harvestDiscoveredPluginSkillMetadata(): PluginSkillHarvest {
+  if (_discoveredMetadataCache) return _discoveredMetadataCache;
+
   const roots: string[] = [getMarketplaceCacheDir(), getBundledPluginsDir()];
   try {
     for (const plugin of scanAllPluginRoots()) roots.push(plugin.path);
@@ -186,7 +201,8 @@ export function harvestDiscoveredPluginSkillMetadata(): PluginSkillHarvest {
       if (!categories.has(name)) categories.set(name, cat);
     }
   }
-  return { flags, categories };
+  _discoveredMetadataCache = { flags, categories };
+  return _discoveredMetadataCache;
 }
 
 /**
