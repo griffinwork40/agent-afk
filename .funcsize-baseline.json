@@ -15,7 +15,6 @@
     "src/agent/tools/handlers/image-generate.ts::createImageGenerateHandler": { "loc": 212, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/handlers/patch-apply-engine.ts::applyPatch": { "loc": 208, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/handlers/worktree.ts::createWorktreeHandler": { "loc": 207, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/agent/tools/subagent-executor.ts::SubagentExecutor.executeOnce": { "loc": 474, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/subagent/child-config.ts::buildChildConfig": { "loc": 327, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/subagent/foreground-promotion.ts::runForegroundWithPromotion": { "loc": 376, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/subagent/input-parse.ts::parseAgentInput": { "loc": 406, "reason": "legacy: predates the function-size gate; pending helper extraction" },

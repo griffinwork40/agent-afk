@@ -49,6 +49,8 @@ import { wireProgressEvents } from './subagent/fork-progress-events.js';
 import { wireWorkspaceSubscriptions } from './subagent/workspace-subscription-wiring.js';
 import { makeForkTerminalHook } from './subagent/fork-terminal-hook.js';
 import { errorMessage } from '../utils/errors.js';
+import { abortAllAndDrainImpl } from './subagent.drain.js';
+import { wireParentAbortSignal } from './subagent.abort-wiring.js';
 
 // Re-export types for public API
 export type { SubagentStatus, SubagentResult, SubagentTrace, SubagentHandle };
@@ -172,20 +174,7 @@ export class SubagentManager {
     this.abortGraph.register(this.rootId, this.rootController);
 
     if (options.parentAbortSignal) {
-      const parentSignal = options.parentAbortSignal;
-      if (parentSignal.aborted) {
-        this.rootController.abort(parentSignal.reason);
-      } else {
-        parentSignal.addEventListener(
-          'abort',
-          () => {
-            if (!this.rootController.signal.aborted) {
-              this.rootController.abort(parentSignal.reason);
-            }
-          },
-          { once: true },
-        );
-      }
+      wireParentAbortSignal(options.parentAbortSignal, this.rootController);
     }
   }
 
@@ -661,42 +650,23 @@ export class SubagentManager {
     timeoutMs: number = SUBAGENT_DRAIN_TIMEOUT_MS,
     rearm: boolean = false,
   ): Promise<{ drained: number; timedOut: boolean }> {
-    const inFlight = [...this.active.values()];
-    if (inFlight.length === 0) {
-      if (rearm && this.rootController.signal.aborted) this.rearmRoot();
+    // Delegate to sibling module (subagent.drain.ts) — extracted for the
+    // file-size ceiling (#3481). The rearmRoot guard (signal.aborted) for the
+    // empty-map fast path lives here because it accesses rootController directly.
+    if (this.active.size === 0 && rearm && this.rootController.signal.aborted) {
+      this.rearmRoot();
       return { drained: 0, timedOut: false };
     }
-
-    // Cascade first so descendants see the abort while we await their parents.
-    this.abortGraph.abort(this.rootId, reason, origin);
-
-    // Invariant: `handle.cancel()` emits the child's `cancelled` lifecycle row
-    // synchronously before its own first await, so awaiting it here guarantees
-    // the row has ENTERED writer.write() — and is therefore queued ahead of the
-    // seal — even though the emit itself is fire-and-forget.
-    let timedOut = false;
-    const bound = new Promise<void>((resolve) =>
-      setTimeout(() => {
-        timedOut = true;
-        resolve();
-      }, timeoutMs).unref(),
+    return abortAllAndDrainImpl(
+      this.active,
+      this.abortGraph,
+      this.rootId,
+      reason,
+      origin,
+      timeoutMs,
+      rearm,
+      () => this.rearmRoot(),
     );
-    await Promise.race([
-      Promise.allSettled(inFlight.map((h) => h.cancel())),
-      bound,
-    ]);
-    if (timedOut) {
-      console.warn(
-        `[SubagentManager] abortAllAndDrain: ${inFlight.length} child(ren) did not settle ` +
-          `within ${timeoutMs}ms — sealing anyway; their terminal rows may be missing`,
-      );
-    }
-    // `/clear` ends one session lifecycle but the manager itself survives.
-    // AbortSignals are terminal, so replace the root controller before the
-    // rebuilt session can dispatch children. The graph node is retained to
-    // preserve manager-level listeners and child-link bookkeeping.
-    if (rearm) this.rearmRoot();
-    return { drained: inFlight.length, timedOut };
   }
 
   private rearmRoot(): void {
@@ -704,9 +674,7 @@ export class SubagentManager {
     this.abortGraph.rearm(this.rootId, this.rootController);
     // The constructor's listener follows `this.rootController`, but an
     // external parent may have aborted in the narrow interval before rearm.
-    if (this.parentAbortSignal?.aborted) {
-      this.rootController.abort(this.parentAbortSignal.reason);
-    }
+    if (this.parentAbortSignal) wireParentAbortSignal(this.parentAbortSignal, this.rootController);
   }
 
   /**
