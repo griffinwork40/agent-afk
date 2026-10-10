@@ -32,6 +32,7 @@ import {
   SYNC_FAILED_NOTE,
 } from '../../daemon/http-client.js';
 import { readTelemetryHistory } from '../../daemon/telemetry-reader.js';
+import { parseTaskRetryFields } from '../../daemon/task-retry.js';
 
 export type { DaemonSyncResult };
 
@@ -75,6 +76,9 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
     };
   }
 
+  const retry = parseTaskRetryFields(obj);
+  if (!retry.ok) return { content: `Invalid input: ${retry.error}`, isError: true };
+
   // Validate per-task cwd when supplied.
   const rawCwd = obj['cwd'];
   let resolvedCwd: string | undefined;
@@ -99,6 +103,7 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
     notifyOn: obj['notifyOn'] as 'failure' | 'always' | 'never' | undefined,
     ...(notifyChat !== undefined ? { notifyChat: notifyChat as number | string } : {}),
     ...(resolvedCwd !== undefined ? { cwd: resolvedCwd } : {}),
+    ...retry.value,
     enabled: typeof obj['enabled'] === 'boolean' ? obj['enabled'] : true,
   });
 
@@ -116,6 +121,8 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
         notifyOn: config.notifyOn,
         ...(config.notifyChat !== undefined ? { notifyChat: config.notifyChat } : {}),
         ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
+        ...(config.maxAttempts !== undefined ? { maxAttempts: config.maxAttempts } : {}),
+        ...(config.retryDelayMs !== undefined ? { retryDelayMs: config.retryDelayMs } : {}),
       })
     : await trySyncToDaemon('DELETE', `/tasks/${config.id}`);
 
@@ -194,6 +201,9 @@ export const updateScheduleHandler: ToolHandler = async (input, _signal) => {
     };
   }
 
+  const retry = parseTaskRetryFields(obj);
+  if (!retry.ok) return { content: `Invalid input: ${retry.error}`, isError: true };
+
   // Validate per-task cwd when supplied.
   // null or "" means "unset" — removes the per-task cwd so the task falls back
   // to the daemon-wide default. A non-empty string is validated as a directory.
@@ -226,6 +236,7 @@ export const updateScheduleHandler: ToolHandler = async (input, _signal) => {
   if (notifyChat !== undefined) patch.notifyChat = notifyChat as number | string;
   if (typeof obj['enabled'] === 'boolean') patch.enabled = obj['enabled'];
   if (resolvedCwd !== undefined) patch.cwd = resolvedCwd;
+  Object.assign(patch, retry.value);
 
   const updated = updateSchedule(taskId, patch);
   if (!updated) {
@@ -267,6 +278,8 @@ export const listSchedulesHandler: ToolHandler = async (_input, _signal) => {
         trigger: s.trigger,
         enabled: s.enabled,
         notifyOn: s.notifyOn,
+        ...(s.maxAttempts !== undefined ? { maxAttempts: s.maxAttempts } : {}),
+        ...(s.retryDelayMs !== undefined ? { retryDelayMs: s.retryDelayMs } : {}),
         ...(s.cwd !== undefined ? { cwd: s.cwd } : {}),
       })),
     ),

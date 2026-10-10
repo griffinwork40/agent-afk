@@ -14,6 +14,7 @@ import { makeDaemonElicitationHandler } from './handoff-wiring.js';
 import { elicitationRouter } from '../elicitation-router.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { errorMessage } from '../../utils/errors.js';
+import { resolveTaskRetryPolicy, runWithTaskRetry, TASK_RETRY_DELAY_MAX_MS } from './task-retry.js';
 import type { IdleDetector } from './idle-detector.js';
 import type { AgentSession } from '../session/agent-session.js';
 import type { MemoryStore } from '../memory/index.js';
@@ -60,15 +61,31 @@ export interface AgentTaskContext {
     dispose: () => void;
   }>;
   writeTelemetry: (record: TelemetryRecord, task: ScheduledTask, details?: TaskCompletionDetails) => void;
+  /** Scheduler shutdown signal; ends a retry backoff wait immediately (#3243). */
+  shutdownSignal?: AbortSignal;
+  /** True when the task was unregistered/replaced mid-run; stops further retries. */
+  isCancelled?: () => boolean;
+  /** Injected backoff sleep (tests). Defaults to `sleepWithAbort`. */
+  retrySleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+}
+
+/** What one successful attempt hands back to the telemetry writer. */
+interface AttemptResult {
+  responseText: string;
+  doneUnverified: boolean;
 }
 
 /**
- * Spawn a session, send the task command, and return the telemetry record.
+ * Run the task (with optional transient-failure retries) and return the
+ * telemetry record.
  *
  * Called by `CronScheduler.runOnce` for `executor: 'agent'` tasks (the
  * default). The caller holds the in-flight overlap guard for the full
- * duration of this call — guard release happens in the `runOnce` outer
- * `finally`, not here.
+ * duration of this call — including every retry attempt and backoff wait —
+ * and releases it in the `runOnce` outer `finally`, not here. The idle
+ * detector is likewise held across the whole loop so a pull-mode dequeue
+ * cannot slip into a retry backoff window. Exactly one telemetry record is
+ * written per run; `attempts` is recorded when the task opted into retries.
  */
 export async function executeAgentTask(
   ctx: AgentTaskContext,
@@ -87,14 +104,69 @@ export async function executeAgentTask(
     ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
     triggeredAt: triggeredAt.toISOString(),
   };
+  const policy = resolveTaskRetryPolicy(task);
+  ctx.idleDetector.increment();
+  try {
+    const outcome = await runWithTaskRetry(() => runAgentAttempt(ctx, task, trigger), {
+      ...policy,
+      signal: ctx.shutdownSignal ?? new AbortController().signal,
+      ...(ctx.isCancelled !== undefined ? { isCancelled: ctx.isCancelled } : {}),
+      ...(ctx.retrySleep !== undefined ? { sleep: ctx.retrySleep } : {}),
+      ...(policy.maxAttempts > 1 ? {
+        onRetry: ({ attempt, delayMs }) => {
+          const delaySec = (delayMs / 1_000).toFixed(1);
+          const capSec = (TASK_RETRY_DELAY_MAX_MS / 1_000).toFixed(0);
+          console.error(
+            `[daemon] task ${task.taskId}: attempt ${attempt}/${policy.maxAttempts} failed (transient), retrying in ${delaySec}s (cap ${capSec}s)`,
+          );
+        },
+      } : {}),
+    });
+    const attemptsField = policy.maxAttempts > 1 ? { attempts: outcome.attempts } : {};
+    if (!outcome.ok) {
+      const record: TelemetryRecord = {
+        ...baseRecord,
+        durationMs: ctx.now() - startTimeMs,
+        status: 'error',
+        errorMessage: redactInlineSecrets(errorMessage(outcome.error)),
+        ...attemptsField,
+      };
+      ctx.writeTelemetry(record, task);
+      return record;
+    }
+    const { responseText, doneUnverified } = outcome.value;
+    const record: TelemetryRecord = {
+      ...baseRecord,
+      durationMs: ctx.now() - startTimeMs,
+      status: 'success',
+      responseExcerpt: responseText.length > 280
+        ? `${responseText.slice(0, 280)}… [truncated]`
+        : responseText,
+      ...attemptsField,
+    };
+    ctx.writeTelemetry(record, task, { responseText, ...(doneUnverified ? { doneUnverified: true } : {}) });
+    return record;
+  } finally {
+    ctx.idleDetector.decrement();
+  }
+}
 
+/**
+ * One attempt: spawn a fresh session, send the task command, tear down.
+ * Throws on failure so `runWithTaskRetry` can classify the error. A fresh
+ * session per attempt means a retry never inherits a half-finished turn.
+ */
+async function runAgentAttempt(
+  ctx: AgentTaskContext,
+  task: ScheduledTask,
+  trigger: TelemetryTrigger,
+): Promise<AttemptResult> {
   let session: AgentSession | null = null;
   let memoryStore: MemoryStore | null = null;
   let stateStore: StateStore | null = null;
   let mcpManager: McpManager | null = null;
   let disposeRegistration: (() => void) | null = null;
   let handlerInstalled = false;
-  ctx.idleDetector.increment();
   try {
     const spawned = await ctx.spawnSession(task, trigger);
     session = spawned.session;
@@ -134,47 +206,9 @@ export async function executeAgentTask(
     } catch {
       // best-effort
     }
-    // "Done"-verification probe (opt-in via injected `doneUnverifiedProbe`,
-    // ultimately gated on `daemon.verifyDone` at the push layer). Fully
-    // guarded: a probe bug or a metadata surprise must NEVER crash a tick, so
-    // any throw is swallowed and treated as "not unverified" (push unchanged,
-    // fail-open). Feeds the probe the SAME text the notification sees (already
-    // secret-redacted) plus the raw successful-tool names the stream consumer
-    // recorded on the returned Message's metadata.
-    let doneUnverified = false;
-    try {
-      const probe = ctx.options.doneUnverifiedProbe;
-      if (probe !== undefined) {
-        const successfulToolNames = Array.isArray(response.metadata?.successfulToolNames)
-          ? response.metadata.successfulToolNames
-          : [];
-        doneUnverified = probe({ responseText, successfulToolNames });
-      }
-    } catch {
-      doneUnverified = false;
-    }
-    const record: TelemetryRecord = {
-      ...baseRecord,
-      durationMs: ctx.now() - startTimeMs,
-      status: 'success',
-      responseExcerpt: responseText.length > 280
-        ? `${responseText.slice(0, 280)}… [truncated]`
-        : responseText,
-    };
-    ctx.writeTelemetry(record, task, { responseText, ...(doneUnverified ? { doneUnverified: true } : {}) });
-    return record;
-  } catch (err) {
-    const record: TelemetryRecord = {
-      ...baseRecord,
-      durationMs: ctx.now() - startTimeMs,
-      status: 'error',
-      errorMessage: redactInlineSecrets(errorMessage(err)),
-    };
-    ctx.writeTelemetry(record, task);
-    return record;
+    return { responseText, doneUnverified: probeDoneUnverified(ctx, responseText, response) };
   } finally {
     if (handlerInstalled) elicitationRouter.uninstall();
-    ctx.idleDetector.decrement();
     if (session) {
       try {
         await session.close();
@@ -194,5 +228,27 @@ export async function executeAgentTask(
     }
     memoryStore?.close();
     stateStore?.close();
+  }
+}
+
+/**
+ * "Done"-verification probe (opt-in via injected `doneUnverifiedProbe`,
+ * ultimately gated on `daemon.verifyDone` at the push layer). Fully
+ * guarded: a probe bug or a metadata surprise must NEVER crash a tick, so
+ * any throw is swallowed and treated as "not unverified" (push unchanged,
+ * fail-open). Feeds the probe the SAME text the notification sees (already
+ * secret-redacted) plus the raw successful-tool names the stream consumer
+ * recorded on the returned Message's metadata.
+ */
+function probeDoneUnverified(ctx: AgentTaskContext, responseText: string, response: Message): boolean {
+  try {
+    const probe = ctx.options.doneUnverifiedProbe;
+    if (probe === undefined) return false;
+    const successfulToolNames = Array.isArray(response.metadata?.successfulToolNames)
+      ? response.metadata.successfulToolNames
+      : [];
+    return probe({ responseText, successfulToolNames });
+  } catch {
+    return false;
   }
 }

@@ -15,6 +15,12 @@
  * @module agent/daemon/triggers
  */
 
+import {
+  TASK_MAX_ATTEMPTS_LIMIT,
+  TASK_RETRY_DELAY_MIN_MS,
+  TASK_RETRY_DELAY_MAX_MS,
+} from './task-retry.js';
+
 export type TriggerMode = 'cron' | 'sessionstart' | 'both' | 'pull';
 
 /**
@@ -84,6 +90,17 @@ export interface ScheduledTask {
    * Shell tasks honor this too: execFile receives it as the `cwd` option.
    */
   cwd?: string;
+  /**
+   * Total attempts per run (including the first) for `executor: 'agent'`
+   * tasks. Default 1 = no retry. When > 1, a run that fails with a
+   * classified-transient error (429, network blip, provider 5xx) is retried
+   * in-process with exponential backoff while still holding the overlap
+   * guard. Non-transient failures never retry. Bounds are enforced at the
+   * input surfaces — see `parseTaskRetryFields` in `./task-retry.ts`.
+   */
+  maxAttempts?: number;
+  /** Backoff base (ms) between retry attempts; doubles per attempt. See `maxAttempts`. */
+  retryDelayMs?: number;
 }
 
 /**
@@ -111,5 +128,21 @@ export function validateScheduledTask(task: ScheduledTask): void {
   }
   if (task.cwd !== undefined && (typeof task.cwd !== 'string' || !task.cwd)) {
     throw new Error(`task ${task.taskId}: cwd must be a non-empty string when set`);
+  }
+  // Validate retry fields with the same bounds as the input surfaces so a
+  // hand-edited schedules.json is caught at registration, not silently clamped.
+  if (task.maxAttempts !== undefined) {
+    if (!Number.isInteger(task.maxAttempts) || task.maxAttempts < 1 || task.maxAttempts > TASK_MAX_ATTEMPTS_LIMIT) {
+      throw new Error(
+        `task ${task.taskId}: maxAttempts must be an integer between 1 and ${TASK_MAX_ATTEMPTS_LIMIT}`,
+      );
+    }
+  }
+  if (task.retryDelayMs !== undefined) {
+    if (!Number.isInteger(task.retryDelayMs) || task.retryDelayMs < TASK_RETRY_DELAY_MIN_MS || task.retryDelayMs > TASK_RETRY_DELAY_MAX_MS) {
+      throw new Error(
+        `task ${task.taskId}: retryDelayMs must be an integer between ${TASK_RETRY_DELAY_MIN_MS} and ${TASK_RETRY_DELAY_MAX_MS}`,
+      );
+    }
   }
 }

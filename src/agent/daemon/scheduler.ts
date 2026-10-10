@@ -139,6 +139,8 @@ export interface SchedulerOptions {
    * bypass the gate in tests that exercise other scheduler logic.
    */
   budgetGate?: () => Promise<import('./budget-gate.js').BudgetGateResult>;
+  /** Override the retry backoff sleep (tests). Defaults to `sleepWithAbort`. */
+  retrySleep?: (ms: number, signal: AbortSignal) => Promise<void>;
 }
 
 export type TelemetryTrigger = 'cron' | 'sessionstart' | 'pull';
@@ -166,6 +168,11 @@ export interface TelemetryRecord {
    * The `status` field remains `'success'` for backward compatibility.
    */
   doneUnverified?: boolean;
+  /**
+   * Attempts made for this run (#3243). Present only when the task opted
+   * into retries (`maxAttempts > 1`); absent = single attempt, as before.
+   */
+  attempts?: number;
 }
 
 export interface TaskCompletionDetails {
@@ -222,6 +229,8 @@ export class CronScheduler {
   private readonly overlapAlerts = new OverlapAlertLatch();
   /** One Telegram alert per daemon process for a non-writable telemetry file. */
   private readonly telemetryAlerts = new TelemetryAlertLatch();
+  /** Aborted by `stop()` so an in-progress retry backoff ends promptly (#3243). */
+  private shutdownController = new AbortController();
   // TODO(#337-hook): hook-driven dequeue path will share isDequeuing mutex
 
   constructor(options: SchedulerOptions = {}) {
@@ -364,6 +373,10 @@ export class CronScheduler {
   }
 
   async stop(): Promise<void> {
+    // In-flight runs captured the old signal; a fresh controller keeps a
+    // scheduler reused after stop() (tests) retry-capable.
+    this.shutdownController.abort();
+    this.shutdownController = new AbortController();
     if (this.pullPollTimer !== undefined) {
       clearInterval(this.pullPollTimer);
       this.pullPollTimer = undefined;
@@ -510,6 +523,11 @@ export class CronScheduler {
         now: this.now,
         spawnSession: (t, tr) => this.spawnSession(t, tr),
         writeTelemetry: (r, t, d) => this.writeTelemetry(r, t, d),
+        shutdownSignal: this.shutdownController.signal,
+        // Unregistered/replaced mid-run → no further retry attempts. Pull
+        // tasks are synthetic (never in the registry) and never retry.
+        isCancelled: () => trigger !== 'pull' && this.registry.get(task.taskId)?.task !== task,
+        ...(this.options.retrySleep !== undefined ? { retrySleep: this.options.retrySleep } : {}),
       },
       task,
       trigger,

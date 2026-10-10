@@ -121,8 +121,11 @@ function isAbortError(err: unknown): boolean {
  * `CONNECTION_PHASE_RETRYABLE_STATUSES` for streaming turn paths but excluded
  * here — retrying a POST after a 409 is semantically wrong for one-shot calls
  * because the conflict condition persists across attempts), or any other status.
+ *
+ * Exported so the daemon's cron-task retry (`agent/daemon/task-retry.ts`)
+ * classifies a failed run with the SAME predicate instead of a drifting copy.
  */
-function isTransientError(err: unknown): boolean {
+export function isTransientError(err: unknown): boolean {
   if (isAbortError(err)) return false;
   if (isConnectionPhaseNetworkError(err)) return true;
   // Invariant: 409 Conflict is excluded from the one-shot retry path even
