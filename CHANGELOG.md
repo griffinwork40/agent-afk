@@ -11,6 +11,20 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.307.14] - 2026-10-10
+
+### Fixed
+- send output_format in image_edit multipart body (#3392) (df524091)
+- triage advisory findings from 2026-10-07 /pr-triage (#3398) (93cf94ec)
+- narrow CacheableToolLike, add 5m TTL test, widen dispatcher timing (#3394) (0b3a82b9)
+- resume on account switch without /reauth; safely join paused waits (#3401) (ae932132)
+
+### Changed
+- add hermetic query()-level resume tests and journal-load benchmark (#3395) (2ebdfebb)
+- carry plugin-skill flags + category through discovery (#3400) (d7dd4feb)
+- adopt shared execFileAsync, add isEnoent, replace private helpers (#3399) (f5f8b265)
+- generate website env-var page from ENV_REGISTRY and gate drift (#3402) (039584e8)
+
 ## [5.307.13] - 2026-10-09
 
 ### Fixed
