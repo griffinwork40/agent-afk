@@ -143,6 +143,15 @@ export interface AfkModeGateOptions {
    * cancel, decline, or unrecognised choice). No-op when undefined.
    */
   traceWriter?: TraceSink;
+  /**
+   * The taskId of the currently-running daemon task. When set, the gate
+   * threads it into `classifyRisk` so the self-disable carve-out (issue
+   * #3464) can recognise `cancel_schedule` / `update_schedule` calls that
+   * target only this task's own id and downgrade them to `medium`.
+   * This value is injected by the scheduler — it is NEVER sourced from
+   * model-supplied input, so it cannot be spoofed by the agent.
+   */
+  daemonTaskId?: string;
 }
 
 /** Wiring bundle for {@link requestApproval} — all closed-over construction
@@ -286,6 +295,7 @@ export function createAfkModeGate(
   const promptForApproval = opts?.promptForApproval ?? true;
   const traceWriter = opts?.traceWriter;
   const sessionId = opts?.sessionId;
+  const daemonTaskId = opts?.daemonTaskId;
   const approvalCtx: ApprovalCtx = {
     route:
       opts?.route ??
@@ -353,6 +363,7 @@ export function createAfkModeGate(
     const risk = classifyRisk(toolName, context.input, {
       cwd: resolveBase,
       workspaceRoot,
+      ...(daemonTaskId !== undefined ? { daemonTaskId } : {}),
     });
 
     // Issue #579 O3 — a `rm -rf <leaf-dir>` inside the workspace is a routine

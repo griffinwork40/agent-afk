@@ -446,6 +446,63 @@ describe('classifyRisk — schedule tools', () => {
   });
 });
 
+// ---- schedule tools: self-disable carve-out (#3464) ----------------------
+// A daemon task must be able to disable its own schedule without approval.
+// The carve-out applies ONLY when ctx.daemonTaskId matches the input taskId,
+// and ONLY for plain disable (not permanent delete, not command/cron edits).
+describe('classifyRisk — schedule self-disable carve-out (#3464)', () => {
+  const daemonCtx: RiskContext = { cwd: WORKSPACE, workspaceRoot: WORKSPACE, daemonTaskId: 'my-task' };
+
+  // cancel_schedule own task → medium (plain disable)
+  it('cancel_schedule own taskId (no permanent) → medium', () => {
+    expect(classifyRisk('cancel_schedule', { taskId: 'my-task' }, daemonCtx)).toBe('medium');
+  });
+
+  // cancel_schedule own task with permanent:true → high (irreversible delete)
+  it('cancel_schedule own taskId with permanent:true → high', () => {
+    expect(classifyRisk('cancel_schedule', { taskId: 'my-task', permanent: true }, daemonCtx)).toBe('high');
+  });
+
+  // cancel_schedule DIFFERENT task → always high
+  it('cancel_schedule different taskId → high', () => {
+    expect(classifyRisk('cancel_schedule', { taskId: 'other-task' }, daemonCtx)).toBe('high');
+  });
+
+  // cancel_schedule with no daemonTaskId in context → high (non-daemon surface)
+  it('cancel_schedule without daemonTaskId in context → high', () => {
+    expect(classifyRisk('cancel_schedule', { taskId: 'my-task' }, ctx)).toBe('high');
+  });
+
+  // update_schedule own task, only enabled:false → medium
+  it('update_schedule own taskId enabled:false only → medium', () => {
+    expect(classifyRisk('update_schedule', { taskId: 'my-task', enabled: false }, daemonCtx)).toBe('medium');
+  });
+
+  // update_schedule own task but also edits command → high (not just a disable)
+  it('update_schedule own taskId with command change → high', () => {
+    expect(
+      classifyRisk('update_schedule', { taskId: 'my-task', enabled: false, command: 'new cmd' }, daemonCtx),
+    ).toBe('high');
+  });
+
+  // update_schedule own task but enabled:true → high (re-enabling is a mutation)
+  it('update_schedule own taskId enabled:true → high', () => {
+    expect(classifyRisk('update_schedule', { taskId: 'my-task', enabled: true }, daemonCtx)).toBe('high');
+  });
+
+  // update_schedule DIFFERENT task → always high
+  it('update_schedule different taskId → high', () => {
+    expect(classifyRisk('update_schedule', { taskId: 'other-task', enabled: false }, daemonCtx)).toBe('high');
+  });
+
+  // create_schedule is never carved out
+  it('create_schedule → high regardless of daemonTaskId', () => {
+    expect(
+      classifyRisk('create_schedule', { name: 'x', command: 'y', cron: '0 * * * *' }, daemonCtx),
+    ).toBe('high');
+  });
+});
+
 // ---- worktree lifecycle --------------------------------------------------
 // Regression guard for PR #390 review finding F1: the `worktree` tool had no
 // classifier branch, so every action (including `remove --force`, which can
