@@ -77,6 +77,10 @@ async function* runHotSwapParkLoop(
     let noTsResult: 'aborted' | 'hot-swap' | 'timer';
     const inFlight = ctx.getUsageLimitWait();
     if (inFlight) {
+      // Invariant: joining another session's wait does not confer ownership of
+      // the slot — this caller never calls setUsageLimitWait and must not clear
+      // it. The owner's finally block manages slot lifecycle; the join only
+      // propagates the outcome (or resolves 'aborted' early on our own signal).
       noTsResult = await joinUsageLimitWait(inFlight, runInput.signal);
     } else {
       const wait = waitForHotSwap({
@@ -340,6 +344,10 @@ export async function* usageLimitResetPause(
   let result: 'aborted' | 'timer' | 'hot-swap';
   const inFlight = ctx.getUsageLimitWait();
   if (inFlight) {
+    // Invariant: joining another session's wait does not confer ownership of
+    // the slot — this caller never calls setUsageLimitWait and must not clear
+    // it. The owner's finally block manages slot lifecycle; the join only
+    // propagates the outcome (or resolves 'aborted' early on our own signal).
     result = await joinUsageLimitWait(inFlight, runInput.signal);
   } else {
     const wait = waitForReset({ resetsAt, signal: runInput.signal });

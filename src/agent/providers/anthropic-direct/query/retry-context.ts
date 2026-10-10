@@ -55,7 +55,7 @@ export interface RetryTierContext {
    */
   getClientToken(): string | undefined;
   /** Rebuild per-request headers for a replay (fresh request id, re-evaluated betas). */
-  rotateHeaders(runInput: Pick<RunTurnInput, 'effort' | 'fastMode'>): Record<string, string>;
+  rotateHeaders(runInput: Pick<RunTurnInput, 'effort' | 'fastMode' | 'thinkingBlockBinding'>): Record<string, string>;
   /** Refresh the SDK client via `tokenRefresher`, deduplicated across callers. */
   forceClientRefresh(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null>;
   /** In-flight usage-limit wait, shared so concurrent sessions dedup. */

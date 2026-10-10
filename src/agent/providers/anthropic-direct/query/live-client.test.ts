@@ -101,13 +101,11 @@ describe('liveAccountId', () => {
     expect(loadClaudeCodeOauthTokenMock).not.toHaveBeenCalled();
   });
 
-  it('falls back to the store when the client token is unknown', () => {
+  it('returns the api-key sentinel when the client token is undefined (api-key mode)', () => {
+    // Should NOT read the store — the store may hold OAuth tokens belonging to
+    // a different account than the one the api-key was issued for.
     loadClaudeCodeOauthTokenMock.mockReturnValue('tok-b');
-    expect(liveAccountId({ getClientToken: () => undefined })).toBe('acct:tok-b');
-  });
-
-  it('returns the unknown sentinel when neither is available', () => {
-    loadClaudeCodeOauthTokenMock.mockReturnValue(undefined);
-    expect(liveAccountId({ getClientToken: () => undefined })).toBe('token:(unknown)');
+    expect(liveAccountId({ getClientToken: () => undefined })).toBe('api-key');
+    expect(loadClaudeCodeOauthTokenMock).not.toHaveBeenCalled();
   });
 });
