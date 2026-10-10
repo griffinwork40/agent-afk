@@ -19,6 +19,7 @@
 
 import type { AgentConfig } from '../../types/config-types.js';
 import type { RuntimeStateSource } from '../../awareness/index.js';
+import type { SkillExecutor } from '../../tools/skill-executor.js';
 import { formatEnvironmentFragment } from '../../awareness/index.js';
 import {
   resolveToolSystemPrompt,
@@ -33,8 +34,11 @@ import { normalizeSystemPromptOverlay } from '../shared/system-prompt.js';
  */
 export interface SystemPromptWiringArgs {
   config: AgentConfig;
-  /** Whether a skill executor is present (controls manifest inclusion). */
-  hasSkillExecutor: boolean;
+  /**
+   * The wired skill executor, when present. Controls manifest inclusion and
+   * provides `getManifestScope()` for plugin/allowlist scoping.
+   */
+  skillExecutor?: SkillExecutor;
   /** Whether a workspace store is present (controls workspace fragment). */
   hasWorkspaceStore: boolean;
   /** Whether the memory store is read-only. */
@@ -88,7 +92,7 @@ export interface SystemPromptWiringResult {
  */
 export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPromptWiringResult {
   const {
-    config, hasSkillExecutor, hasWorkspaceStore, readOnlyMemory, readOnlyState,
+    config, skillExecutor, hasWorkspaceStore, readOnlyMemory, readOnlyState,
     resolvedSessionId, surface, getCurrentCwd, runtimeStateSource,
   } = args;
 
@@ -99,7 +103,10 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
   // `excludeName` omits the executing skill's own entry for a skill-dispatch
   // fork (AgentConfig.skillDispatchName); `cwd` is forwarded so project skills
   // resolve against the session's dir, not the host process's (#876).
-  const manifest = hasSkillExecutor
+  // `pluginConfigs` and `skillAllowlist` from `getManifestScope()` scope the
+  // manifest to the executor's configured boundaries.
+  const manifestScope = skillExecutor?.getManifestScope?.();
+  const manifest = skillExecutor
     ? buildSkillManifest(undefined, {
         ...(typeof config.cwd === 'string' && config.cwd.length > 0
           ? { cwd: config.cwd }
@@ -107,6 +114,12 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
         ...(typeof config.skillDispatchName === 'string' &&
         config.skillDispatchName.length > 0
           ? { excludeName: config.skillDispatchName }
+          : {}),
+        ...(manifestScope?.pluginConfigs !== undefined
+          ? { pluginConfigs: manifestScope.pluginConfigs }
+          : {}),
+        ...(manifestScope?.skillAllowlist !== undefined
+          ? { skillAllowlist: manifestScope.skillAllowlist }
           : {}),
       })
     : '';

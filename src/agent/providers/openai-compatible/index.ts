@@ -388,7 +388,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // goalPrompt?, envFragment, manifest?] — mirrors AnthropicDirectProvider.query().
     const spw = buildSystemPromptWiring({
       config,
-      hasSkillExecutor: this.providerOpts.skillExecutor !== undefined,
+      skillExecutor: this.providerOpts.skillExecutor ?? undefined,
       hasWorkspaceStore: this.workspaceStore !== undefined,
       readOnlyMemory: this.providerOpts.readOnlyMemory,
       readOnlyState: this.providerOpts.readOnlyState,
