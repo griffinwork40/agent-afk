@@ -28,9 +28,9 @@
 // Types
 // ---------------------------------------------------------------------------
 
-export type SignalKind = 'preexisting-sentence' | 'deferred-bullet';
+type SignalKind = 'preexisting-sentence' | 'deferred-bullet';
 
-export type DefectCategory =
+type DefectCategory =
   | 'failing-test'
   | 'gate'
   | 'size-ceiling'
@@ -222,7 +222,7 @@ function splitSentences(text: string): string[] {
  *
  * Exported so the hook can document its bounding behaviour.
  */
-export const MAX_SCAN_CHARS = 500_000;
+const MAX_SCAN_CHARS = 500_000;
 
 /**
  * Analyse assistant text from ONE turn and return detected entries.
