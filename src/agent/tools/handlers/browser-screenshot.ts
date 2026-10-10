@@ -136,7 +136,7 @@ export function createBrowserScreenshotHandler(opts: BrowserHandlerOptions = {})
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_screenshot',
         toolUseId: context?.toolUseId ?? '',
-        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingBackend ? { backend: routingBackend } : {}),
         ...(routingReason ? { backendReason: routingReason } : {}),
         // screenshot is a non-navigating read — URL is unchanged; we don't
         // have a currentUrl() on the provider so we use null for both fields.
@@ -175,7 +175,7 @@ export function createBrowserScreenshotHandler(opts: BrowserHandlerOptions = {})
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_screenshot',
         toolUseId: context?.toolUseId ?? '',
-        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingBackend ? { backend: routingBackend } : {}),
         ...(routingReason ? { backendReason: routingReason } : {}),
         urlBefore: null,
         urlAfter: null,
