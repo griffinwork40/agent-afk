@@ -33,7 +33,23 @@ export const createScheduleTool: AnthropicToolDef = {
       },
       cron: {
         type: 'string',
-        description: '5-field cron expression, e.g. "0 2 * * *".',
+        description: '5-field cron expression, e.g. "0 2 * * *". Must be exactly 5 fields (no year field).',
+      },
+      runAt: {
+        type: 'string',
+        description:
+          'ISO 8601 datetime for a one-shot fire, e.g. "2026-11-01T09:00:00Z". ' +
+          'When set, the task fires once at or after this instant and is automatically disabled. ' +
+          'Mutually exclusive with a recurring cron expression — omit `cron` or leave it as a ' +
+          'polling cadence placeholder when using runAt.',
+      },
+      expiresAt: {
+        type: 'string',
+        description:
+          'ISO 8601 datetime after which the task is automatically disabled, ' +
+          'e.g. "2026-12-31T23:59:59Z". On expiry the scheduler skips the task, ' +
+          'writes a skipped/expired telemetry record, and disables the task in the store. ' +
+          'Works with both recurring cron tasks and runAt one-shots.',
       },
       executor: {
         type: 'string',
@@ -124,7 +140,17 @@ export const updateScheduleTool: AnthropicToolDef = {
       },
       cron: {
         type: 'string',
-        description: 'New 5-field cron expression, e.g. "0 2 * * *".',
+        description: 'New 5-field cron expression (no year), e.g. "0 2 * * *".',
+      },
+      runAt: {
+        type: ['string', 'null'],
+        description:
+          'ISO 8601 datetime for a one-shot fire. Pass null to clear a previously-set runAt.',
+      },
+      expiresAt: {
+        type: ['string', 'null'],
+        description:
+          'ISO 8601 expiry datetime. Pass null to clear a previously-set expiresAt.',
       },
       executor: {
         type: 'string',
