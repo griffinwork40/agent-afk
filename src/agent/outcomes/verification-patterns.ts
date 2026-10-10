@@ -9,17 +9,17 @@
  * @module agent/outcomes/verification-patterns
  */
 
+import { redactSecrets } from '../redact-secrets.js';
+
 // ---------------------------------------------------------------------------
 // resultTail constant
 // ---------------------------------------------------------------------------
 
 /**
  * Maximum characters to keep in the `resultTail` field on verification tool
- * events. Exported so journal-turns.ts (and any future consumer) can reuse
- * the same value without duplicating the magic number. The two CLI sites
- * (turn-handler.stream-events.ts and run-skill-dispatch-turn.ts) each define
- * a local RESULT_TAIL_CHARS = 240 from this same value, and may be updated
- * to import this export instead.
+ * events. All three production sites (turn-handler.stream-events.ts,
+ * run-skill-dispatch-turn.ts, journal-turns.ts) import this value and the
+ * shared {@link buildVerificationResultTail} helper so they cannot drift.
  */
 export const RESULT_TAIL_CHARS = 240;
 
@@ -48,6 +48,54 @@ export const VERIFICATION_PATTERNS: RegExp[] = [
 /** Returns true when `input` matches any verification-command pattern. */
 export function isVerificationCommand(input: string): boolean {
   return VERIFICATION_PATTERNS.some((p) => p.test(input));
+}
+
+// ---------------------------------------------------------------------------
+// resultTail builder
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the `resultTail` string for a verification-command tool event.
+ *
+ * **When to use:** call this whenever a tool result arrives for a tool whose
+ * name is `test_run` or whose bash input matches {@link isVerificationCommand}.
+ * The result should be stored on `ToolEvent.resultTail` so the outcome
+ * labeling functions can parse pass/fail even when the full output was
+ * truncated.
+ *
+ * @param toolName    - The tool's name (e.g. `'bash'`, `'test_run'`).
+ * @param input       - The tool's input summary (bash command string, or
+ *                      empty string for `test_run`).
+ * @param rawContent  - The flat result text. For stream events this is the
+ *                      chunk's `.content` field; for journal-derived events
+ *                      it is the already-flat concatenated result text.
+ * @param tailPreview - Optional pre-extracted tail lines from the stream
+ *                      chunk (`.tailPreview`). When present and non-empty,
+ *                      these lines are joined and used in place of slicing
+ *                      `rawContent` directly — they are already the last N
+ *                      non-empty lines, so they carry more signal per byte
+ *                      than a raw character slice. Omit (or pass `undefined`)
+ *                      when calling from a journal/flat-text path.
+ *
+ * @returns The redacted tail string, or `undefined` when the tool is not a
+ *          verification command or the result is empty.
+ */
+export function buildVerificationResultTail(
+  toolName: string,
+  input: string,
+  rawContent: string,
+  tailPreview?: string[],
+): string | undefined {
+  const isVerify = toolName === 'test_run' ||
+    (toolName === 'bash' && isVerificationCommand(input));
+  if (!isVerify || rawContent.length === 0) return undefined;
+  const base = tailPreview !== undefined && tailPreview.length > 0
+    ? tailPreview.join('\n')
+    : rawContent;
+  const tail = base.length > RESULT_TAIL_CHARS
+    ? base.slice(-RESULT_TAIL_CHARS)
+    : base;
+  return redactSecrets(tail);
 }
 
 // ---------------------------------------------------------------------------
