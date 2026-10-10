@@ -463,6 +463,11 @@ describe('classifyRisk — schedule self-disable carve-out (#3464)', () => {
     expect(classifyRisk('cancel_schedule', { taskId: 'my-task', permanent: true }, daemonCtx)).toBe('high');
   });
 
+  // cancel_schedule own task with enable:true → high (re-enabling is a mutation)
+  it('cancel_schedule own taskId enable:true → high', () => {
+    expect(classifyRisk('cancel_schedule', { taskId: 'my-task', enable: true }, daemonCtx)).toBe('high');
+  });
+
   // cancel_schedule DIFFERENT task → always high
   it('cancel_schedule different taskId → high', () => {
     expect(classifyRisk('cancel_schedule', { taskId: 'other-task' }, daemonCtx)).toBe('high');

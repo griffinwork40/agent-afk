@@ -370,6 +370,8 @@ function classifyScheduleMutation(tool: string, input: unknown, ctx: RiskContext
     if (tool === 'cancel_schedule') {
       // Permanent delete stays high — only plain disable is carved out.
       if (inputObj['permanent'] === true) return 'high';
+      // Re-enabling own schedule is a mutation, not a disable — keep it high.
+      if (inputObj['enable'] === true) return 'high';
       return 'medium';
     }
     // update_schedule: only allowed when the sole change is enabled:false.
