@@ -211,31 +211,9 @@ export class SessionOwner {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`session ${sessionId} is not owned by this process`);
 
-    // Marked busy here, synchronously, so the caller's 409 gate sees it the
-    // moment this returns — see the `pending` field comment.
-    this.pending.set(sessionId, (this.pending.get(sessionId) ?? 0) + 1);
-
-    const previous = this.turns.get(sessionId) ?? Promise.resolve();
-    const next = previous
-      .catch(() => {})
-      .then(async () => {
-        try {
-          // The ledger is written as a side effect of the turn; the SSE route
-          // tails it. Draining runs the turn to completion, then the completed
-          // turn is saved to the session sidecar.
-          await drainAndPersistTurn(session, text, this.autosavers.get(sessionId));
-        } finally {
-          const remaining = (this.pending.get(sessionId) ?? 1) - 1;
-          if (remaining > 0) this.pending.set(sessionId, remaining);
-          else this.pending.delete(sessionId);
-        }
-      });
-
-    this.turns.set(sessionId, next);
-    // Surface nothing to the caller beyond acceptance, but never leave an
-    // unhandled rejection: a failed turn records an `error` in the ledger,
-    // which is the browser's channel for it.
-    next.catch(() => {});
+    // Marked busy synchronously inside enqueueTurn, so the caller's 409 gate
+    // sees it the moment this returns — see the `pending` field comment.
+    this.enqueueTurn(sessionId, session, text);
   }
 
   /**
@@ -250,6 +228,22 @@ export class SessionOwner {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`session ${sessionId} is not owned by this process`);
 
+    this.enqueueTurn(sessionId, session, message);
+  }
+
+  /**
+   * Shared turn serialization for `submitPrompt` / `submitSkillMessage`.
+   *
+   * Invariant: the pending count is incremented synchronously, before any
+   * await, so a caller's 409 gate observes the session as busy the moment the
+   * submit method returns. Turns chain per session so rapid submits serialize
+   * instead of racing `assertCanSend`.
+   */
+  private enqueueTurn(
+    sessionId: string,
+    session: AgentSession,
+    message: string | ContentBlockParam[],
+  ): void {
     this.pending.set(sessionId, (this.pending.get(sessionId) ?? 0) + 1);
 
     const previous = this.turns.get(sessionId) ?? Promise.resolve();
@@ -257,6 +251,9 @@ export class SessionOwner {
       .catch(() => {})
       .then(async () => {
         try {
+          // The ledger is written as a side effect of the turn; the SSE route
+          // tails it. Draining runs the turn to completion, then the completed
+          // turn is saved to the session sidecar.
           await drainAndPersistTurn(session, message, this.autosavers.get(sessionId));
         } finally {
           const remaining = (this.pending.get(sessionId) ?? 1) - 1;
@@ -266,6 +263,9 @@ export class SessionOwner {
       });
 
     this.turns.set(sessionId, next);
+    // Surface nothing to the caller beyond acceptance, but never leave an
+    // unhandled rejection: a failed turn records an `error` in the ledger,
+    // which is the browser's channel for it.
     next.catch(() => {});
   }
 
