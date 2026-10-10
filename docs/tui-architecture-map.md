@@ -6,7 +6,7 @@
 
 ## 1. Rendering Approach
 
-**Stack:** Raw ANSI writes via a custom `CupFrameRenderer` + `log-update` (fallback only). No ink, no blessed, no readline rendering.
+**Stack:** Raw ANSI writes via a custom `CupFrameRenderer`. No ink, no blessed, no readline rendering.
 
 `TerminalCompositor` (`src/cli/terminal-compositor.ts`, 1 225 LOC) orchestrates all frame output. Its dependencies split cleanly:
 
@@ -19,7 +19,7 @@
 
 **Alt-screen:** None. The REPL preserves scrollback. `DECSTBM` reserves one row (status bar) and optionally additional rows (footer subsystems — verdict ledger, stage bar, mascot bar). Content committed above the live frame is archived to scrollback via `buildScrollbackArchiveEscape` (auto-wrap + `\n` at the bottom margin).
 
-**`log-update`:** Still a declared dependency (`log-update: ^8.0.0` in package.json) and used as a fallback path (`markdown-stream.ts:20`) for non-TTY surfaces (Telegram, daemon, tests). The live TTY path routes through `CupFrameRenderer` exclusively. `log-update`'s `initLogUpdateModule` is still called at start, but on TTY surfaces the compositor owns the stdout — `markdown-stream.ts:34-52` has a hard comment: "never construct this renderer without a compositor on a TTY surface" to prevent the stacked-prompt bug.
+**`log-update`:** Removed in #3479. The dependency was the last live `dynamic import('log-update')` inside `initLogUpdateModule()` (`markdown-stream-format.ts`) which was only reachable from a TTY path without a compositor — a path confirmed unreachable in production: `StreamRenderer.arm()` always resolves a compositor before any `StreamingMarkdownRenderer` is constructed, and `afk chat` never uses `StreamingMarkdownRenderer` at all. The fallback branch in `executeRepaint` / `clearOverlay` and the `logUpdate` field on `StreamingMarkdownRenderer` have been removed. Non-TTY surfaces (Telegram, daemon) skip overlay painting via the `!isTTY` guard already present.
 
 ---
 
@@ -222,7 +222,7 @@ The test files for the compositor remain much larger than the production source 
 
 4. **PTY suite coverage gaps.** The suite does not test input (paste, history, autocomplete), wide-char committed-content, multi-turn geometry, or teardown. Adding one scenario each for: (a) wide-char content in committed band, (b) a SIGTERM mid-stream (to validate teardown ordering), and (c) a two-turn script, would materially increase regression coverage without much harness complexity.
 
-5. **`log-update` removal — OPEN (#3479).** `log-update` is still a declared dependency and `initLogUpdateModule` is called at startup. The live TTY path is fully owned by `CupFrameRenderer`, but one live dynamic import on a compositor-less TTY path remains. Tracked in #3479; do not remove the dependency until that import is resolved.
+5. **`log-update` removal.** ✅ Resolved in #3479. `log-update` has been removed from `package.json`. The `initLogUpdateModule` dynamic import, `LogUpdateFunction` type, and all `logUpdate` branches in `StreamingMarkdownRenderer`, `executeRepaint`, and `clearOverlay` are deleted. Non-TTY output writes committed content directly via `out.write`.
 
 ---
 

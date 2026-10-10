@@ -1423,4 +1423,41 @@ describe('StreamingMarkdownRenderer', () => {
       vi.useRealTimers();
     });
   });
+
+  describe('log-update removal (#3479)', () => {
+    it('renderer has no logUpdate field — log-update dependency is gone', () => {
+      renderer = new StreamingMarkdownRenderer({ out: stream });
+      // The field must not exist at all — not null, not undefined, absent.
+      expect(Object.prototype.hasOwnProperty.call(renderer, 'logUpdate')).toBe(false);
+      expect('logUpdate' in renderer).toBe(false);
+    });
+
+    it('flush() with compositor writes nothing via logUpdate', async () => {
+      const overlayValues: string[] = [];
+      const mockCompositor = {
+        setOverlay: (s: string) => { overlayValues.push(s); },
+        commitAbove: (_s: string) => {},
+      };
+      (stream as any).isTTY = true;
+      renderer = new StreamingMarkdownRenderer({
+        out: stream,
+        compositor: mockCompositor as any,
+      });
+      renderer.push('hello\n\nworld\n\n');
+      await renderer.flush();
+      // All overlay traffic went through compositor, not logUpdate.
+      // The stream itself should be empty (compositor owns the output).
+      const written = stream.read();
+      expect(written).toBeNull();
+    });
+
+    it('flush() without compositor writes committed content directly to out (non-TTY)', async () => {
+      (stream as any).isTTY = false;
+      renderer = new StreamingMarkdownRenderer({ out: stream });
+      renderer.push('hello world\n\n');
+      await renderer.flush();
+      const output = stream.read()?.toString() ?? '';
+      expect(output).toContain('hello world');
+    });
+  });
 });
