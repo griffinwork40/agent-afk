@@ -14,7 +14,7 @@ import { makeDaemonElicitationHandler } from './handoff-wiring.js';
 import { elicitationRouter } from '../elicitation-router.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { errorMessage } from '../../utils/errors.js';
-import { resolveTaskRetryPolicy, runWithTaskRetry } from './task-retry.js';
+import { resolveTaskRetryPolicy, runWithTaskRetry, TASK_RETRY_DELAY_MAX_MS } from './task-retry.js';
 import type { IdleDetector } from './idle-detector.js';
 import type { AgentSession } from '../session/agent-session.js';
 import type { MemoryStore } from '../memory/index.js';
@@ -112,6 +112,15 @@ export async function executeAgentTask(
       signal: ctx.shutdownSignal ?? new AbortController().signal,
       ...(ctx.isCancelled !== undefined ? { isCancelled: ctx.isCancelled } : {}),
       ...(ctx.retrySleep !== undefined ? { sleep: ctx.retrySleep } : {}),
+      ...(policy.maxAttempts > 1 ? {
+        onRetry: ({ attempt, delayMs }) => {
+          const delaySec = (delayMs / 1_000).toFixed(1);
+          const capSec = (TASK_RETRY_DELAY_MAX_MS / 1_000).toFixed(0);
+          console.error(
+            `[daemon] task ${task.taskId}: attempt ${attempt}/${policy.maxAttempts} failed (transient), retrying in ${delaySec}s (cap ${capSec}s)`,
+          );
+        },
+      } : {}),
     });
     const attemptsField = policy.maxAttempts > 1 ? { attempts: outcome.attempts } : {};
     if (!outcome.ok) {

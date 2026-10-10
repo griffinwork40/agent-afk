@@ -121,6 +121,30 @@ describe('validateScheduledTask', () => {
       validateScheduledTask({ taskId: 'a', command: 'x', trigger: 'both' }),
     ).toThrow(/cronExpression required/);
   });
+
+  it('rejects out-of-bounds maxAttempts', () => {
+    expect(() =>
+      validateScheduledTask({ taskId: 'a', command: 'x', trigger: 'cron', cronExpression: '* * * * *', maxAttempts: 0 }),
+    ).toThrow(/maxAttempts/);
+    expect(() =>
+      validateScheduledTask({ taskId: 'a', command: 'x', trigger: 'cron', cronExpression: '* * * * *', maxAttempts: 99 }),
+    ).toThrow(/maxAttempts/);
+  });
+
+  it('rejects out-of-bounds retryDelayMs', () => {
+    expect(() =>
+      validateScheduledTask({ taskId: 'a', command: 'x', trigger: 'cron', cronExpression: '* * * * *', retryDelayMs: 500 }),
+    ).toThrow(/retryDelayMs/);
+    expect(() =>
+      validateScheduledTask({ taskId: 'a', command: 'x', trigger: 'cron', cronExpression: '* * * * *', retryDelayMs: 999_999_999 }),
+    ).toThrow(/retryDelayMs/);
+  });
+
+  it('accepts valid retry fields', () => {
+    expect(() =>
+      validateScheduledTask({ taskId: 'a', command: 'x', trigger: 'cron', cronExpression: '* * * * *', maxAttempts: 3, retryDelayMs: 5_000 }),
+    ).not.toThrow();
+  });
 });
 
 describe('CronScheduler', () => {

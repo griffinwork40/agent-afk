@@ -128,6 +128,16 @@ describe('runWithTaskRetry', () => {
     expect(out).toMatchObject({ ok: false, attempts: 1 });
   });
 
+  it('gives up when retry-after is exactly at the delay ceiling', async () => {
+    let calls = 0;
+    const err = httpError(429, { 'retry-after': String(TASK_RETRY_DELAY_MAX_MS / 1000) });
+    const out = await runWithTaskRetry(async () => { calls++; throw err; }, {
+      maxAttempts: 3, retryDelayMs: 1, signal, sleep: noSleep,
+    });
+    expect(calls).toBe(1);
+    expect(out).toMatchObject({ ok: false, attempts: 1 });
+  });
+
   it('abort during backoff stops promptly with no further attempt', async () => {
     const ac = new AbortController();
     let calls = 0;
@@ -140,6 +150,22 @@ describe('runWithTaskRetry', () => {
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(calls).toBe(1);
     expect(out).toMatchObject({ ok: false, attempts: 1 });
+  });
+
+  it('onRetry fires before each backoff sleep', async () => {
+    const retries: Array<{ attempt: number; delayMs: number }> = [];
+    const out = await runWithTaskRetry(async (n) => {
+      if (n <= 2) throw httpError(503);
+      return 'ok';
+    }, {
+      maxAttempts: 3, retryDelayMs: 10, signal, sleep: noSleep,
+      onRetry: ({ attempt, delayMs }) => { retries.push({ attempt, delayMs }); },
+    });
+    expect(out).toMatchObject({ ok: true, attempts: 3 });
+    expect(retries).toEqual([
+      { attempt: 1, delayMs: 10 },
+      { attempt: 2, delayMs: 20 },
+    ]);
   });
 
   it('isCancelled stops further attempts', async () => {

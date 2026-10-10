@@ -111,6 +111,8 @@ export interface TaskRetryRunOptions extends ResolvedTaskRetry {
   isCancelled?: () => boolean;
   /** Injected sleep (tests). Defaults to `sleepWithAbort`. */
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** Called after a failed attempt that will be retried, before the backoff sleep. */
+  onRetry?: (info: { attempt: number; error: unknown; delayMs: number }) => void;
 }
 
 export type TaskRetryOutcome<T> =
@@ -141,13 +143,15 @@ export async function runWithTaskRetry<T>(
       if (n >= policy.maxAttempts || !isTransientError(error) || stopped()) {
         return { ok: false, error, attempts: n };
       }
-      // A server-mandated wait longer than our ceiling (e.g. a usage-limit
+      // A server-mandated wait at or above our ceiling (e.g. a usage-limit
       // 429) cannot be served inside one run — give up instead of stalling.
       const hint = parseRetryAfterMs(error);
-      if (hint !== undefined && hint > TASK_RETRY_DELAY_MAX_MS) {
+      if (hint !== undefined && hint >= TASK_RETRY_DELAY_MAX_MS) {
         return { ok: false, error, attempts: n };
       }
-      await sleep(Math.max(computeBackoffMs(n, policy), hint ?? 0), opts.signal);
+      const delayMs = Math.max(computeBackoffMs(n, policy), hint ?? 0);
+      opts.onRetry?.({ attempt: n, error, delayMs });
+      await sleep(delayMs, opts.signal);
       if (stopped()) return { ok: false, error, attempts: n };
     }
   }

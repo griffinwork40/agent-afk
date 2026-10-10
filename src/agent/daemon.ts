@@ -311,6 +311,8 @@ interface ShellTrustParams {
   notifyOn: ScheduledTask['notifyOn'];
   notifyChat: number | string | undefined;
   cwd: string | undefined;
+  maxAttempts: number | undefined;
+  retryDelayMs: number | undefined;
 }
 
 /**
@@ -333,7 +335,9 @@ function isShellExecutorTrusted(params: ShellTrustParams): boolean {
     (canonical.trigger ?? 'cron') === (params.trigger ?? 'cron') &&
     canonicalNotifyOn === params.notifyOn &&
     canonical.notifyChat === params.notifyChat &&
-    canonical.cwd === params.cwd
+    canonical.cwd === params.cwd &&
+    canonical.maxAttempts === params.maxAttempts &&
+    canonical.retryDelayMs === params.retryDelayMs
   );
 }
 
@@ -467,6 +471,8 @@ async function handleRequestAsync(
           notifyChat:
             typeof notifyChatRaw === 'number' || typeof notifyChatRaw === 'string' ? notifyChatRaw : undefined,
           cwd,
+          maxAttempts: retry.maxAttempts,
+          retryDelayMs: retry.retryDelayMs,
         });
       if (!trusted) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
