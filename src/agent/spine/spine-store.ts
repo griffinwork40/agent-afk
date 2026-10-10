@@ -13,8 +13,9 @@
  * @module agent/spine/spine-store
  */
 
-import { readFileSync, writeFileSync, renameSync, existsSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { atomicWriteFile } from '../../utils/atomic-write.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -225,10 +226,8 @@ export function readSpine(repoRoot: string): SpineDocument | null {
  */
 export function writeSpine(repoRoot: string, doc: SpineDocument): void {
   const spineFile = join(repoRoot, SPINE_FILENAME);
-  const tmpFile = `${spineFile}.tmp.${process.pid}`;
   const content = serializeSpine(doc);
-  writeFileSync(tmpFile, content, 'utf-8');
-  renameSync(tmpFile, spineFile);
+  atomicWriteFile(spineFile, content);
 }
 
 /**
