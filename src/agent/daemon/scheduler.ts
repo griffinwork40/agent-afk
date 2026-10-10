@@ -144,7 +144,7 @@ export interface SchedulerOptions {
 }
 
 export type TelemetryTrigger = 'cron' | 'sessionstart' | 'pull';
-type TelemetryStatus = 'success' | 'error' | 'skipped';
+type TelemetryStatus = 'success' | 'error' | 'skipped' | 'blocked';
 
 export interface TelemetryRecord {
   taskId: string;
@@ -173,6 +173,13 @@ export interface TelemetryRecord {
    * into retries (`maxAttempts > 1`); absent = single attempt, as before.
    */
   attempts?: number;
+  /**
+   * Number of tool calls hard-blocked by the AFK gate during this run (#3466).
+   * Present only when > 0. A run with gateBlocks > 0 is recorded as
+   * `status: 'blocked'` and treated as a failure for `notifyOn: 'failure'`
+   * so the operator is alerted when work silently never happened.
+   */
+  gateBlocks?: number;
 }
 
 export interface TaskCompletionDetails {
@@ -521,7 +528,7 @@ export class CronScheduler {
         queueDir: this.queueDir,
         idleDetector: this.idleDetector,
         now: this.now,
-        spawnSession: (t, tr) => this.spawnSession(t, tr),
+        spawnSession: (t, tr, gbc) => this.spawnSession(t, tr, gbc),
         writeTelemetry: (r, t, d) => this.writeTelemetry(r, t, d),
         shutdownSignal: this.shutdownController.signal,
         // Unregistered/replaced mid-run → no further retry attempts. Pull
@@ -540,12 +547,17 @@ export class CronScheduler {
     }
   }
 
-  private async spawnSession(task: ScheduledTask, trigger: TelemetryTrigger = 'cron'): ReturnType<typeof spawnDaemonSession> {
+  private async spawnSession(
+    task: ScheduledTask,
+    trigger: TelemetryTrigger = 'cron',
+    gateBlockCounter?: { count: number },
+  ): ReturnType<typeof spawnDaemonSession> {
     return spawnDaemonSession(task.taskId, {
       ...this.options,
       trigger,
       // Per-task cwd takes precedence over the daemon-wide sessionConfig.cwd.
       ...(task.cwd !== undefined ? { taskCwd: task.cwd } : {}),
+      ...(gateBlockCounter !== undefined ? { gateBlockCounter } : {}),
     });
   }
 
