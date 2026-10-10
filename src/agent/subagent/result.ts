@@ -339,6 +339,103 @@ export function describeFailure(result: Pick<SubagentResult, 'status' | 'error'>
  * Mutates and returns the passed error so existing message / cause / stack
  * are preserved.
  */
+/**
+ * Structured partial handoff emitted by a capped or interrupted subagent.
+ *
+ * Extends the existing partial-result surface ({@link SubagentResult.partialOutput},
+ * {@link annotateIfIncomplete}) with machine-readable fields for continuation.
+ * Designed to be EXTENDED onto an existing incomplete result — not a duplicate
+ * of banner/stopReason, which already exist.
+ *
+ * Safety invariants:
+ *  - Model self-report (`completedWork`, `remainingWork`) is advisory only.
+ *    Callers MUST NOT treat self-reported completion as verified completion.
+ *  - `externalEffectsApplied` records effects the child reported; a coordinator
+ *    MUST NOT replay tool calls that were reported there — but absence of a
+ *    report does NOT mean no effects occurred (the child may not have reported).
+ *  - A missing or malformed handoff is treated as safely incomplete: callers
+ *    fall back to the existing banner path and must not assume work was done.
+ *  - `workspaceContext` is a snapshot hint, not a live reference. It may be
+ *    stale by the time a continuation child runs.
+ */
+export interface SubagentHandoff {
+  /**
+   * Human-readable summary of work the child completed before being cut off.
+   * Self-reported by the child model — treat as advisory, not verified.
+   * Absent when the child did not produce a parseable handoff.
+   */
+  completedWork?: string;
+  /**
+   * Human-readable description of work the child did NOT finish.
+   * Self-reported. Useful for seeding a continuation child's task description.
+   * Absent when the child did not produce a parseable handoff.
+   */
+  remainingWork?: string;
+  /**
+   * External effects the child reports having applied that must NOT be
+   * replayed in a continuation (e.g. file writes, git commits, API calls).
+   * Self-reported — absence does NOT guarantee no effects occurred.
+   * Format: free-form string describing the effect class and target.
+   */
+  externalEffectsApplied?: string[];
+  /**
+   * Snapshot of workspace/session identity at the time of handoff, for
+   * freshly revalidating in a continuation child before it proceeds.
+   * May include: git branch, HEAD SHA, dirty-file count, cwd.
+   * Stale by construction — revalidate before trusting.
+   */
+  workspaceContext?: {
+    cwd?: string;
+    gitBranch?: string;
+    headSha?: string;
+    dirtyCount?: number;
+  };
+  /**
+   * Round count the child consumed. Allows a coordinator to account for
+   * actual usage when budgeting a continuation.
+   */
+  roundsConsumed?: number;
+}
+
+/**
+ * Parse a structured {@link SubagentHandoff} from the final message of a
+ * capped subagent, if one is present and well-formed. Returns `undefined`
+ * when the message contains no parseable handoff block — a missing or
+ * malformed handoff is treated as safely incomplete.
+ *
+ * The handoff block is a JSON object delimited by `<!-- HANDOFF:` and `-->`.
+ * This is a BEST-EFFORT parse: malformed JSON, missing fields, and absent
+ * blocks all return `undefined` without throwing. Callers must handle absence.
+ */
+export function parseHandoff(content: string): SubagentHandoff | undefined {
+  const match = /<!--\s*HANDOFF:\s*(\{[\s\S]*?\})\s*-->/.exec(content);
+  if (!match || !match[1]) return undefined;
+  try {
+    const parsed = JSON.parse(match[1]);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
+    const h: SubagentHandoff = {};
+    if (typeof parsed.completedWork === 'string') h.completedWork = parsed.completedWork;
+    if (typeof parsed.remainingWork === 'string') h.remainingWork = parsed.remainingWork;
+    if (Array.isArray(parsed.externalEffectsApplied) &&
+      parsed.externalEffectsApplied.every((e: unknown) => typeof e === 'string')) {
+      h.externalEffectsApplied = parsed.externalEffectsApplied;
+    }
+    if (typeof parsed.workspaceContext === 'object' && parsed.workspaceContext !== null) {
+      const wc = parsed.workspaceContext;
+      h.workspaceContext = {
+        ...(typeof wc.cwd === 'string' ? { cwd: wc.cwd } : {}),
+        ...(typeof wc.gitBranch === 'string' ? { gitBranch: wc.gitBranch } : {}),
+        ...(typeof wc.headSha === 'string' ? { headSha: wc.headSha } : {}),
+        ...(typeof wc.dirtyCount === 'number' ? { dirtyCount: wc.dirtyCount } : {}),
+      };
+    }
+    if (typeof parsed.roundsConsumed === 'number') h.roundsConsumed = parsed.roundsConsumed;
+    return Object.keys(h).length > 0 ? h : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface SubagentExecutionError extends Error {
   partialOutput?: unknown;
   subagentId?: string;

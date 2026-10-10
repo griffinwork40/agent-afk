@@ -21,7 +21,7 @@ import type { SkillExecutor } from '../skill-executor.js';
 import type { Surface } from '../../awareness/types.js';
 import type { TraceSink } from '../../trace/index.js';
 import type { InboundAttachmentReader } from '../../content/attachment-registry.js';
-import type { DelegationBudget } from '../delegation-budget.js';
+import type { DelegationBudget, ContinuationBudget } from '../delegation-budget.js';
 import type { QueuedNoteClaim } from '../subagent/queued-note.js';
 import type { PromotedSubagentInfo } from '../subagent/foreground-promotion.js';
 
@@ -202,6 +202,19 @@ export interface SubagentExecutorContext {
   // Delegation budget: shared by reference across the entire session tree.
   // See delegation-budget.ts. Opt-in: undefined when no budget env vars are set.
   traceWriter?: TraceSink; workspaceStore?: import('../../workspace/index.js').WorkspaceStore; delegationBudget?: DelegationBudget;
+  /**
+   * Coordinator-controlled continuation budget. When set, each `agent` tool call
+   * whose `continuation_chain_id` matches an active chain is charged against this
+   * budget via `allocate()` before the fork — preventing unchecked round
+   * accumulation across multi-continuation chains. Fail-closed: `allocate()`
+   * returning `null` blocks the dispatch and surfaces a refusal.
+   *
+   * No permissions are expanded through the handoff: the continuation child
+   * receives exactly the same grants as a fresh child for the same coordinator.
+   * This tracks rounds only — concurrent/total agent counts are still governed
+   * by {@link delegationBudget}.
+   */
+  continuationBudget?: ContinuationBudget;
   /**
    * Tool allowlist to propagate to grandchild providers when this executor
    * is itself a read-only skill's child. Forwarded into `childProviderFactory`
