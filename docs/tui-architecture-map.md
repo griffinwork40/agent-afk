@@ -1,6 +1,6 @@
 # AFK TUI Architecture Map
 
-> Generated 2026-09-26 from source read. Read-only investigation; no files were modified.
+> Generated 2026-09-26 from source read. Updated 2026-10-10 to reflect shipped work and the decided geometry plan (closes #3480).
 
 ---
 
@@ -151,11 +151,11 @@
 
 | # | Title | Gist |
 |---|---|---|
-| **1619** | `fix(tui): derive tool-lane text wrap from row budget` | Tool-lane entries wrap at a fixed width, not the available overlay row budget — long entries can overflow or truncate incorrectly. |
-| **1505** | `feat(bash): expandable/scrollable output viewer in TUI` | Long bash output is truncated with no way to expand or scroll. |
 | **2143** | `feat(tui): inline terminal image rendering via Kitty graphics protocol` | No inline image support in the REPL surface. |
-| **2229** | `tui(content-hug): let the first reply flow under a visible banner` | First reply after boot still scrolls the banner off-screen in content-hug mode. |
 | **1609** | `feat(tui): status-line turn/budget indicator + parallel fan-out count` | Status line lacks live turn counter and parallel subagent count. |
+| **3479** | `chore(tui): decide fate of log-update — one live dynamic import` | One live dynamic import on a compositor-less TTY path; the rest of the TTY surface is fully owned by `CupFrameRenderer`. |
+
+**Closed:** #1619 (tool-lane row budget, `0fd9d2bd9`), #1505 (expandable bash output, `5da98b86b`), #2229 (content-hug banner overflow, `9c1748f09`).
 
 ### TODO/FIXME in src/cli
 
@@ -177,26 +177,24 @@ Only 2 non-test TODOs found (very low for the codebase size):
 
 ## 10. Size and Complexity Hotspots
 
-### Interactive subsystem (LOC, production sources only)
+### Interactive subsystem
 
-| File | LOC | Notes |
-|---|---|---|
-| `terminal-compositor.ts` | 1 225 | State hub; intentionally thin after decomposition into ~20 sibling modules |
-| `terminal-compositor.input-dispatch.ts` | 1 158 | Largest single file; all keypress routing |
-| `commands/interactive/tool-lane.ts` | 855 | ToolLane class; MAX_OVERLAY_ROOTS cap, parallel badge |
-| `_lib/stream-renderer.ts` | 708 | Per-subagent stream-renderer state machine |
-| `_lib/stream-renderer-orchestrator.ts` | 590 | Multi-subagent renderer fan-out |
-| `markdown-stream.ts` | 479 | Two-region streaming renderer |
-| `terminal-compositor.lifecycle.ts` | 402 | arm/disarm/resize coordinator |
-| `terminal-compositor.render.ts` | 367 | Frame composition (overlay + band + spinner + input) |
-| `commands/interactive/tool-lane-render-children.ts` | 547 | Nested agent tree renderer |
-| `commands/interactive/tool-lane-render.ts` | 536 | Top-level tool entry formatters |
-| `commands/interactive/loop-iteration.ts` | 861 | Turn orchestration |
-| `commands/interactive/shared.ts` | 827 | InteractiveCtx type + wiring |
-| `input/input-surface.ts` | 751 | Persistent cross-turn input state machine |
-| `input/history.ts` | 417 | Ring-buffer history + reverse search |
+Hard-coded LOC counts drift quickly as the file-size ceiling (`pnpm audit:filesize:check`) forces splits. Every `src/cli` file now passes the 350-code-line gate (tracked in #3478). For a current ranked list run:
 
-The test files for the compositor are much larger than the production source — `terminal-compositor.keypress.test.ts` (1 531 LOC), `terminal-compositor.ghost.test.ts` (921 LOC), `terminal-compositor.paste.test.ts` (888 LOC) — indicating that the regression surface for geometry edge cases is wide and actively maintained.
+```bash
+pnpm audit:filesize:check   # flags files approaching or over the ceiling
+pnpm audit:funcsize:check   # flags functions over the 200-line ceiling
+# or for a sorted list of the current worst offenders:
+npx tsx scripts/check-function-size.ts --list
+```
+
+Notable structural changes since the map was first generated (2026-09-26):
+
+- `terminal-compositor.input-dispatch.ts` was ~1 158 LOC; it has since been split into `.enter`, `.cursor`, `.editor-key`, and `.viewer-key` siblings.
+- `commands/interactive/loop-iteration.ts` was ~861 LOC; it is now 267 lines after extraction of turn-orchestration helpers.
+- `CommitGeometry` was extracted into `terminal-compositor.commit-geometry.ts`; the dev/test geometry guard lives in `terminal-compositor.geometry-assert.ts`.
+
+The test files for the compositor remain much larger than the production source — `terminal-compositor.keypress.test.ts`, `terminal-compositor.ghost.test.ts`, `terminal-compositor.paste.test.ts` — indicating that the regression surface for geometry edge cases is wide and actively maintained.
 
 ---
 
@@ -204,27 +202,27 @@ The test files for the compositor are much larger than the production source —
 
 1. **Blank-gap / void-row recurrence.** Four separate `fix(tui)` commits in 60 commits address blank rows appearing between committed content and the live frame. The root geometry is: content-hug places the frame immediately above the last committed line, but short terminals, widen events, and banner-scroll events each create new paths where that invariant breaks. The PTY suite tests it, but new paths keep emerging.
 
-2. **Tool-lane row budget not respected (#1619).** Tool entries wrap at a fixed content-width derived from `AFK_TEXT_MEASURE`, not from the rows available in the live overlay. On tall terminals with many concurrent tools this is tolerable; on short terminals or with deeply nested agents it causes overflow or truncation with no backpressure.
+2. **Tool-lane row budget not respected (#1619) — SHIPPED.** Fixed in `0fd9d2bd9`; tool entries now wrap from the compositor frame row budget.
 
-3. **No expandable output surface (#1505).** Bash tool output is hard-capped at `pendingRowCap` in the markdown renderer. There is no interactive "expand" affordance; the user must re-run or use `afk witness` to see full output.
+3. **No expandable output surface (#1505) — SHIPPED.** A scrollable in-TUI viewer for captured bash output landed in `5da98b86b` (PR #2739).
 
 4. **Overlay racing still possible at the scroll-region boundary.** `OverlayComposer` eliminated intra-turn racing, but the compositor's `withFullScrollRegion` (status-line boundary) is still called by separate code paths during `endTurnFlush` and `disarm`. On very fast exit sequences this ordering must be exact; the `setTimeout` removal commit (`b062de37`) addressed the most visible instance.
 
-5. **Content-hug first-reply banner overflow (#2229).** The boot banner occupies `anchorFloor` rows; on the first turn the content-hug frame cannot know the banner's final height before the turn starts, so the initial reply can still push the banner off-screen. Issue is open, low priority.
+5. **Content-hug first-reply banner overflow (#2229) — SHIPPED.** Fixed in `9c1748f09`; the content-hug strand exclusion is now scoped to frames with slack, preventing the banner scroll-off on first reply.
 
 ---
 
 ## Highest-Leverage Improvement Tracks
 
-1. **Geometry invariant encapsulation.** The blank-gap / ghost-row class keeps recurring because the geometry contract (`targetBottomRow`, `anchorFloor`, `hugSlack`, `committedBandTopRow`) is spread across `terminal-compositor.commit-geometry.ts`, `committed-band-repin.ts`, `content-hug.ts`, and `lifecycle.resize.ts`. Centralising the invariant into a single `CompositorGeometry` value type (validated on every mutation) would let the PTY suite assert the invariant rather than chasing specific symptoms.
+1. **Geometry invariant encapsulation — DONE (partial, per the decided plan).** `CommitGeometry` ships as a pure value object in `src/cli/terminal-compositor.commit-geometry.ts`; the dev/test guard lives in `terminal-compositor.geometry-assert.ts`. The research brief (`docs/tui-research-brief.md:81`) explicitly decided **not** to consolidate all compositor geometry in one pass: `geometryStale`, `prevTopRow`, `anchorFloor`, and `committedBandPaintedRows` carry reset and ordering invariants that make a single `CompositorGeometry` value type unsafe. Consolidation beyond `CommitGeometry` is a **deliberate non-goal** — do not reopen it.
 
-2. **Tool-lane row-budget wrapping (#1619).** Make `ToolLane.getOverlay()` receive the available row count from the compositor frame geometry and cap/truncate accordingly. Eliminates overflow on short terminals and makes the overlay reliably bounded.
+2. **Tool-lane row-budget wrapping (#1619) — SHIPPED.** `ToolLane.getOverlay()` now receives the available row count from the compositor frame geometry and caps/truncates accordingly. Fixed in commit `0fd9d2bd9`.
 
-3. **Expandable bash output (#1505).** Attach an inline scroll region or a "▼ expand" affordance to tool-call results that were truncated at `pendingRowCap`. Highest user-facing impact of all open TUI issues given how common long bash output is.
+3. **Expandable bash output (#1505) — SHIPPED.** An inline scrollable viewer for captured bash output landed in commit `5da98b86b` (PR #2739). The "▼ expand" affordance is live.
 
 4. **PTY suite coverage gaps.** The suite does not test input (paste, history, autocomplete), wide-char committed-content, multi-turn geometry, or teardown. Adding one scenario each for: (a) wide-char content in committed band, (b) a SIGTERM mid-stream (to validate teardown ordering), and (c) a two-turn script, would materially increase regression coverage without much harness complexity.
 
-5. **`log-update` removal.** `log-update` is still a declared dependency and `initLogUpdateModule` is called at startup, but it no longer owns any TTY frame. Removing it would cut one transitive dep and eliminate the confusing dual-code-path in `markdown-stream.ts`. The non-TTY path (Telegram/daemon) can be redirected to a simpler direct `process.stdout.write` with no frame tracking needed.
+5. **`log-update` removal — OPEN (#3479).** `log-update` is still a declared dependency and `initLogUpdateModule` is called at startup. The live TTY path is fully owned by `CupFrameRenderer`, but one live dynamic import on a compositor-less TTY path remains. Tracked in #3479; do not remove the dependency until that import is resolved.
 
 ---
 
