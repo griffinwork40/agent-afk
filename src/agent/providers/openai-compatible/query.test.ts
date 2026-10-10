@@ -210,6 +210,9 @@ function makeDispatcherForPR2(opts?: { withDiff?: boolean }): {
 }
 
 beforeEach(() => {
+  // Exact-shape transcript assertions: keep the per-round [vitals] note out
+  // (covered by vitals-delivery.test.ts).
+  vi.stubEnv('AFK_VITALS', '0');
   createCalls = [];
   pendingChunks = [];
   pendingError = null;

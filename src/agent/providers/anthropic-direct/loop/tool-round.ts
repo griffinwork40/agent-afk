@@ -35,6 +35,7 @@ import {
 } from '../../shared/tool-loop-cap.js';
 import { dispatchToolCalls } from './tool-dispatch.js';
 import { emitAndCommitToolResults } from './tool-results.js';
+import { buildVitalsNote } from '../../shared/vitals.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
 
 /**
@@ -83,6 +84,14 @@ export async function* runToolRound(
       dispatched.results,
       dispatched.startTimes,
       input,
+      buildVitalsNote({
+        turnStartedAt: turn.startedAt,
+        softDeadlineMs,
+        contextTokens: turn.usage.contextWindowTokens,
+        model: input.model,
+        subagentId: input.subagentId,
+        claudeUsage: !input.baseUrl,
+      }),
     );
     if (committed === 'denial-tripped') return 'terminated';
   } catch (err) {

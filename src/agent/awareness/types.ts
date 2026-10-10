@@ -184,6 +184,11 @@ export interface RuntimeSnapshot {
   /** Compact usage summary — present in view='all' and the future view='usage'. */
   usage?: RuntimeUsageEntry[];
   /**
+   * Wall clock at snapshot time — present in view='all'. The pull counterpart
+   * of the per-round `[vitals]` note (providers/shared/vitals.ts).
+   */
+  clock?: { iso: string; local: string };
+  /**
    * Historical subagent outcome summary — present in view='all' and
    * view='subagents' (omitted when empty).
    *

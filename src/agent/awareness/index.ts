@@ -30,6 +30,8 @@ export {
   parseView,
   formatEnvironmentFragment,
   formatEnvironmentDateLine,
+  formatClock,
+  snapshotClock,
 } from './runtime-snapshot.js';
 
 export {
