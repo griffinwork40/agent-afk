@@ -55,12 +55,11 @@
  */
 
 
-import { redactSecrets } from '../redact-secrets.js';
 import { extractUserContent } from '../session/preamble-strip.js';
 import { summarizeToolInput } from '../providers/shared/tool-input-summary.js';
 import type { JournalMessage, JournalBlock, JournalResultPart } from '../journal/types.js';
 import type { Turn, ToolEvent } from './artifacts.js';
-import { isVerificationCommand, RESULT_TAIL_CHARS } from './verification-patterns.js';
+import { buildVerificationResultTail } from './verification-patterns.js';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -95,21 +94,6 @@ function carriesToolResult(msg: JournalMessage): boolean {
 }
 
 /**
- * Build a resultTail for a verification-command tool event.
- * Reuses RESULT_TAIL_CHARS and redactSecrets from the same modules the
- * sidecar path uses, so the format is identical.
- */
-function buildResultTail(toolName: string, inputSummary: string, resultText: string): string | undefined {
-  const isVerify = toolName === 'test_run' ||
-    (toolName === 'bash' && isVerificationCommand(inputSummary));
-  if (!isVerify || resultText.length === 0) return undefined;
-  const tail = resultText.length > RESULT_TAIL_CHARS
-    ? resultText.slice(-RESULT_TAIL_CHARS)
-    : resultText;
-  return redactSecrets(tail);
-}
-
-/**
  * Attach every tool_result in `msg` to its pending ToolEvent (matched by
  * toolUseId). Unmatched results are ignored; matched events leave the map.
  */
@@ -125,7 +109,7 @@ function attachToolResults(msg: JournalMessage, pending: Map<string, ToolEvent>)
     // isError: the journal writer records isError ONLY when true (see module
     // comment), so absence means success and the mapping is a definite boolean.
     ev.isError = block.isError === true;
-    const rt = buildResultTail(ev.toolName, ev.input ?? '', resultText);
+    const rt = buildVerificationResultTail(ev.toolName, ev.input ?? '', resultText);
     if (rt !== undefined) ev.resultTail = rt;
   }
 }

@@ -21,8 +21,7 @@ import { joinAtRoundSeam } from './turn-text-seam.js';
 import { observeFirstContent, type TurnTtfbState } from './turn-handler.ttfb.js';
 import { tickContextProgress } from './turn-handler.context-progress.js';
 import { handlePausedEvent, type PausedPickerRef } from './turn-handler.paused.js';
-import { redactSecrets } from '../../../agent/redact-secrets.js';
-import { isVerificationCommand, RESULT_TAIL_CHARS } from '../../../agent/outcomes/verification-patterns.js';
+import { buildVerificationResultTail } from '../../../agent/outcomes/verification-patterns.js';
 
 // ─── Mutable state ───────────────────────────────────────────────────────────
 
@@ -142,21 +141,15 @@ export async function processStreamEvent(
       if (c.partialNodeCount !== undefined) pending.partialNodeCount = c.partialNodeCount;
       // Capture resultTail for verification commands so lfVerification can
       // parse pass/fail even when the command was piped and isError reflects
-      // only the pipe's last stage. Use tailPreview (last N non-empty lines
-      // already extracted by truncateContent) when available; otherwise slice
-      // the raw content to the last RESULT_TAIL_CHARS characters.
-      const isVerify = pending.toolName === 'test_run' ||
-        (pending.toolName === 'bash' && isVerificationCommand(pending.input));
-      if (isVerify) {
-        const tailLines = c.tailPreview;
-        const rawForTail = tailLines !== undefined && tailLines.length > 0
-          ? tailLines.join('\n')
-          : c.content;
-        const tail = rawForTail.length > RESULT_TAIL_CHARS
-          ? rawForTail.slice(-RESULT_TAIL_CHARS)
-          : rawForTail;
-        pending.resultTail = redactSecrets(tail);
-      }
+      // only the pipe's last stage. tailPreview (last N non-empty lines
+      // extracted by truncateContent) is preferred when available.
+      const resultTail = buildVerificationResultTail(
+        pending.toolName,
+        pending.input ?? '',
+        c.content,
+        c.tailPreview,
+      );
+      if (resultTail !== undefined) pending.resultTail = resultTail;
       h.onToolEvent?.(pending);
       pendingTools.delete(c.toolUseId);
     }
