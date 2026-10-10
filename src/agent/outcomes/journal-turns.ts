@@ -54,7 +54,6 @@
  * @module agent/outcomes/journal-turns
  */
 
-
 import { extractUserContent } from '../session/preamble-strip.js';
 import { summarizeToolInput } from '../providers/shared/tool-input-summary.js';
 import type { JournalMessage, JournalBlock, JournalResultPart } from '../journal/types.js';
