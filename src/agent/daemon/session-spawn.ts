@@ -173,6 +173,11 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
       // Hard-block posture: no operator is reachable on a daemon tick.
       // High-risk ops are refused immediately rather than queued for approval.
       afkPromptForApproval: false,
+      // Issue #3464: supply the running task's own id so the risk classifier
+      // can carve out self-disable (cancel_schedule / update_schedule with
+      // enabled:false) as 'medium'. This value comes from the scheduler, not
+      // from any model-supplied input — it cannot be spoofed by the agent.
+      daemonTaskId: taskId,
     },
   );
   const stateStore = new StateStore(getStateDatabasePath());

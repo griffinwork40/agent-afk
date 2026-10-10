@@ -1032,3 +1032,93 @@ describe('createAfkModeGate — command preview in approval request', () => {
     expect(captured!.serverName).toBe('agent-afk');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #3464: daemon self-disable carve-out in the gate
+// ---------------------------------------------------------------------------
+// The gate uses classifyRisk internally. These tests verify the gate-level
+// behaviour: own-task disable passes through; other-task cancel is blocked;
+// non-daemon surfaces are unchanged.
+describe('createAfkModeGate — daemon self-disable carve-out (#3464)', () => {
+  const DAEMON_CWD = P_USERS_DEV;
+
+  // Helper: gate wired as a daemon session (promptForApproval:false = hard-block)
+  // with daemonTaskId supplied. A route spy should NOT be called for carve-outs.
+  function makeDaemonGate(daemonTaskId: string) {
+    const route = vi.fn(async (): Promise<ElicitationResult> => ({ action: 'decline' }));
+    const gate = createAfkModeGate(
+      () => 'autonomous' as PermissionMode,
+      DAEMON_CWD,
+      () => DAEMON_CWD,
+      { promptForApproval: false, daemonTaskId, route },
+    );
+    return { gate, route };
+  }
+
+  it('cancel_schedule own taskId (plain disable) → allowed (no block)', async () => {
+    const { gate } = makeDaemonGate('my-task');
+    const result = await gate({
+      event: 'PreToolUse',
+      toolName: 'cancel_schedule',
+      input: { taskId: 'my-task' },
+    });
+    expect(result).toEqual({});
+  });
+
+  it('cancel_schedule own taskId permanent:true → blocked (permanent delete not carved out)', async () => {
+    const { gate } = makeDaemonGate('my-task');
+    const result = await gate({
+      event: 'PreToolUse',
+      toolName: 'cancel_schedule',
+      input: { taskId: 'my-task', permanent: true },
+    });
+    expect((result as { decision?: string }).decision).toBe('block');
+  });
+
+  it('cancel_schedule DIFFERENT taskId → blocked (cannot cancel other tasks)', async () => {
+    const { gate } = makeDaemonGate('my-task');
+    const result = await gate({
+      event: 'PreToolUse',
+      toolName: 'cancel_schedule',
+      input: { taskId: 'other-task' },
+    });
+    expect((result as { decision?: string }).decision).toBe('block');
+  });
+
+  it('update_schedule own taskId enabled:false only → allowed', async () => {
+    const { gate } = makeDaemonGate('my-task');
+    const result = await gate({
+      event: 'PreToolUse',
+      toolName: 'update_schedule',
+      input: { taskId: 'my-task', enabled: false },
+    });
+    expect(result).toEqual({});
+  });
+
+  it('update_schedule own taskId with extra fields → blocked', async () => {
+    const { gate } = makeDaemonGate('my-task');
+    const result = await gate({
+      event: 'PreToolUse',
+      toolName: 'update_schedule',
+      input: { taskId: 'my-task', enabled: false, command: 'new' },
+    });
+    expect((result as { decision?: string }).decision).toBe('block');
+  });
+
+  it('cancel_schedule without daemonTaskId (non-daemon surface) → blocked', async () => {
+    // No daemonTaskId supplied → no carve-out → standard high-risk block.
+    const route = vi.fn(async (): Promise<ElicitationResult> => ({ action: 'decline' }));
+    const gate = createAfkModeGate(
+      () => 'autonomous' as PermissionMode,
+      DAEMON_CWD,
+      () => DAEMON_CWD,
+      { promptForApproval: false, route },
+    );
+    const result = await gate({
+      event: 'PreToolUse',
+      toolName: 'cancel_schedule',
+      input: { taskId: 'my-task' },
+    });
+    expect((result as { decision?: string }).decision).toBe('block');
+  });
+});
