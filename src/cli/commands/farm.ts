@@ -24,15 +24,13 @@ import {
 import { writeFarmFact } from '../../skills/score/memory-write.js';
 import { sendFarmDigest } from '../../skills/score/digest.js';
 import { createDefaultTraceWriter } from '../../agent/trace/factory.js';
-import type { FarmRunRecord } from '../../skills/score/farm-run-record.js';
 import type { SubagentDAGNode } from '../../agent/dag-subagent.js';
 import type { FarmManifest } from '../../agent/worktree.js';
 import type { DAGRunResult } from '../../agent/dag.js';
 import { errorMessage } from '../../utils/errors.js';
 import { execFileAsync } from '../../utils/exec-file.js';
 import { printSummary, formatScore, type BranchResult } from './farm.summary.js';
-import { buildFarmRunRecord } from './farm.run-record.js';
-import { FarmIsolationViolation } from './farm.escape-check.js';
+import { runFarmPostRun } from './farm.post-run.js';
 
 // Re-export the public surface that callers (tests, other modules) expect
 // from this module directly — avoids forcing importers to know the sibling files.
@@ -269,84 +267,25 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
   // -- Source repo dirty check --
   const dirtyFiles = await getDirtyFn(sourceCwd);
 
-  // -- Score successful branches (Day 3) --
-  // Constraint: sequential (NOT parallel) — concurrent test runs across
-  // worktrees risk OOM on small projects and serialize disk I/O badly.
-  // Each branch's score writes through to <farmDir>/scores/branch-<n>.json
-  // BEFORE the next branch starts, so a crash mid-scoring still surfaces
-  // partial results.
-  if (scoringEnabled) {
-    for (const r of branchResults) {
-      if (!r.ok) {
-        r.score = null;
-        continue;
-      }
-      const branch = manifest.branches.find((b) => b.index === r.index)!;
-      console.log(`[branch-${r.index}] scoring…`);
-      const score = await scoreBranchFn({
-        branchPath: branch.path,
-        baseSha,
-        timeoutMs: scoreTimeoutMs,
-      });
-      r.score = score;
-      try {
-        await writeScoreFn(manifest.farmDir, r.index, score);
-      } catch (err) {
-        // Score persistence failure is non-fatal — the in-memory score still
-        // ranks the branch for printSummary. Surface for visibility.
-        console.error(
-          palette.warning(`[branch-${r.index}] score.json write failed: ${errorMessage(err)}`),
-        );
-      }
-    }
-  }
-
-  // -- Print summary --
-  printSummary(task, manifest.taskSlug, manifest.branches, branchResults);
-
-  // -- Build the FarmRunRecord and dispatch to memory + Telegram (Day 4) --
-  // Constraint: this MUST happen before process.exit. Memory write is
-  // synchronous (sqlite); digest is awaited. Both swallow their own failures
-  // (see writeFarmFact / sendFarmDigest) — farm exit code is unaffected by
-  // either bookkeeping channel.
-  if (memoryWriteEnabled || digestEnabled) {
-    const farmRecord: FarmRunRecord = buildFarmRunRecord(manifest, branchResults, startedAt);
-    if (memoryWriteEnabled) {
-      const memResult = writeFarmFactFn(farmRecord);
-      if ('skipped' in memResult) {
-        console.error(palette.warning(`[memory] write skipped: ${memResult.reason}`));
-      } else {
-        // Thread the returned factId back into the manifest so the Telegram
-        // Respawn handler can cross-reference this run in memory.
-        const { factId } = memResult;
-        try {
-          await setFarmMemoryFactIdFn(manifest.taskSlug, factId);
-        } catch (err) {
-          // Best-effort: manifest is not the source of truth for factId; log and continue.
-          console.error(palette.warning(`[memory] setFarmMemoryFactId failed: ${errorMessage(err)}`));
-        }
-      }
-    }
-    if (digestEnabled) {
-      const digestResult = await sendFarmDigestFn(farmRecord);
-      if (digestResult.sent) {
-        console.log(palette.dim(`[telegram] digest sent (${digestResult.chatCount} chat${digestResult.chatCount === 1 ? '' : 's'})`));
-      } else if (digestResult.reason && digestResult.reason !== 'telegram unconfigured') {
-        console.error(palette.warning(`[telegram] digest failed: ${digestResult.reason}`));
-      }
-    }
-  }
-
-  // -- Exit handling --
-  if (dirtyFiles.length > 0) {
-    const violation = new FarmIsolationViolation(dirtyFiles);
-    console.error(palette.error('\n⚠  ISOLATION VIOLATION'));
-    console.error(palette.error(violation.message));
-    process.exit(1);
-  }
-
-  const allOk = branchResults.every((r) => r.ok);
-  process.exit(allOk ? 0 : 1);
+  // -- Score, summarise, persist, and exit (delegated to farm.post-run.ts) --
+  await runFarmPostRun({
+    task,
+    sourceCwd,
+    manifest,
+    baseSha,
+    branchResults,
+    dirtyFiles,
+    startedAt,
+    scoringEnabled,
+    scoreTimeoutMs,
+    memoryWriteEnabled,
+    digestEnabled,
+    _scoreBranch: scoreBranchFn,
+    _writeScore: writeScoreFn,
+    _writeFarmFact: writeFarmFactFn,
+    _sendFarmDigest: sendFarmDigestFn,
+    _setFarmMemoryFactId: setFarmMemoryFactIdFn,
+  });
 }
 
 // ---------------------------------------------------------------------------

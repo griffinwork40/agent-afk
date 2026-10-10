@@ -26,8 +26,6 @@
     "src/cli/_lib/stream-renderer-subagent.ts::handleSubagentEvent": { "loc": 273, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/chat.ts::registerChatCommand": { "loc": 351, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/config-command.ts::registerConfigCommand": { "loc": 204, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/cli/commands/daemon.ts::registerDaemonCommand": { "loc": 248, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/cli/commands/farm.ts::runFarm": { "loc": 243, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive.ts::registerInteractiveCommand": { "loc": 315, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive/bootstrap.ts::bootstrapSession": { "loc": 201, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive/surface-setup.ts::setupSurface": { "loc": 319, "reason": "legacy: predates the function-size gate; pending helper extraction" },
