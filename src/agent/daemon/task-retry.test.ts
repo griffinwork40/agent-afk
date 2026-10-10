@@ -13,6 +13,7 @@ import {
   TASK_RETRY_DELAY_MAX_MS,
   DEFAULT_TASK_RETRY_DELAY_MS,
 } from './task-retry.js';
+import { isTransientOauthOrg403 } from '../providers/shared/transient-retry.js';
 
 function httpError(status: number, headers?: Record<string, string>): Error {
   return Object.assign(new Error(`HTTP ${status}`), { status, ...(headers ? { headers } : {}) });
@@ -175,5 +176,90 @@ describe('runWithTaskRetry', () => {
     });
     expect(calls).toBe(1);
     expect(out.ok).toBe(false);
+  });
+
+  it('oauth_not_allowed_for_organization 403 is retried (transient daemon race)', async () => {
+    // Regression guard for #3467: this specific 403 is a provider-side race
+    // during concurrent OAuth token refresh across daemon sessions. It must be
+    // retried; a subsequent attempt with the same credentials succeeds.
+    let calls = 0;
+    const oauthOrg403 = Object.assign(new Error('oauth_not_allowed_for_organization'), {
+      status: 403,
+      error: { type: 'permission_error', details: { error_code: 'oauth_not_allowed_for_organization' } },
+    });
+    const out = await runWithTaskRetry(async (n) => {
+      calls++;
+      if (n === 1) throw oauthOrg403;
+      return 'ok';
+    }, { maxAttempts: 2, retryDelayMs: 1, signal, sleep: noSleep });
+    expect(calls).toBe(2);
+    expect(out).toMatchObject({ ok: true, value: 'ok', attempts: 2 });
+  });
+
+  it('generic 403 (real auth denial) is NOT retried', async () => {
+    // A plain 403 with no error body (or a different error_code) must not be
+    // retried — genuine auth denials should surface immediately.
+    let calls = 0;
+    const out = await runWithTaskRetry(async () => { calls++; throw httpError(403); }, {
+      maxAttempts: 3, retryDelayMs: 1, signal, sleep: noSleep,
+    });
+    expect(calls).toBe(1);
+    expect(out).toMatchObject({ ok: false, attempts: 1 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isTransientOauthOrg403 unit tests (#3467)
+// ---------------------------------------------------------------------------
+
+/** Build a 403 error matching the exact shape the Anthropic SDK surfaces. */
+function makeOauthOrg403(): Error {
+  return Object.assign(new Error('OAuth authentication is currently not allowed for this organization.'), {
+    status: 403,
+    error: {
+      type: 'permission_error',
+      message: 'OAuth authentication is currently not allowed for this organization.',
+      details: { error_code: 'oauth_not_allowed_for_organization' },
+    },
+  });
+}
+
+describe('isTransientOauthOrg403', () => {
+  it('matches a 403 with the exact oauth_not_allowed_for_organization error_code', () => {
+    expect(isTransientOauthOrg403(makeOauthOrg403())).toBe(true);
+  });
+
+  it('does NOT match a plain 403 with no error body', () => {
+    expect(isTransientOauthOrg403(httpError(403))).toBe(false);
+  });
+
+  it('does NOT match a 403 with a different error_code', () => {
+    const err = Object.assign(new Error('permission denied'), {
+      status: 403,
+      error: { type: 'permission_error', details: { error_code: 'insufficient_permissions' } },
+    });
+    expect(isTransientOauthOrg403(err)).toBe(false);
+  });
+
+  it('does NOT match a 403 with no details field', () => {
+    const err = Object.assign(new Error('forbidden'), {
+      status: 403,
+      error: { type: 'permission_error' },
+    });
+    expect(isTransientOauthOrg403(err)).toBe(false);
+  });
+
+  it('does NOT match a non-403 status even with the matching error_code', () => {
+    const err = Object.assign(new Error('wrong status'), {
+      status: 401,
+      error: { type: 'permission_error', details: { error_code: 'oauth_not_allowed_for_organization' } },
+    });
+    expect(isTransientOauthOrg403(err)).toBe(false);
+  });
+
+  it('does NOT match null or non-object values', () => {
+    expect(isTransientOauthOrg403(null)).toBe(false);
+    expect(isTransientOauthOrg403('forbidden')).toBe(false);
+    expect(isTransientOauthOrg403(undefined)).toBe(false);
   });
 });
