@@ -14,13 +14,9 @@ import { palette } from '../../palette.js';
 import { registerPluginAgents } from '../plugin-agents.js';
 import { registerOrReplace } from '../registry.js';
 import { runSkillDispatchTurn } from '../_lib/run-skill-dispatch-turn.js';
+import { invokeSkillPreflight } from '../_lib/run-skill-preflight.js';
 import { parsePostFlag, runReviewPostPublish, type PostTarget } from '../_lib/review-post.js';
 import { parsePrRef } from '../preflight/review-pr.js';
-import {
-  runPreflight,
-  getSkillPreflightDir,
-  type SkillInvocation,
-} from '../preflight/index.js';
 import { env } from '../../../config/env.js';
 import type { SlashCommand, SlashContext, SlashResult } from '../types.js';
 import type { ImageAttachment } from '../../input/attachments.js';
@@ -139,33 +135,16 @@ export function makeForwardHandler(skill: DiscoveredSkill, flags?: readonly stri
           // Failure isolation: preflight throws or returns null → falls
           // through to the standard 2-block dispatch unchanged. A failing
           // context-gather must never block a skill from running.
-          preflight: async (): Promise<string | undefined> => {
+          preflight: () => {
             const bareSkillName = skill.name.includes(':')
               ? (skill.name.split(':').pop() ?? skill.name)
               : skill.name;
-            const inv: SkillInvocation = {
-              skillName: bareSkillName,
-              rawArgs: dispatchArgs,
-              source: skill.source ?? 'plugin',
-              capabilities: { compose: true, subagents: true },
-            };
-            const sessionIdMaybe = ctx.session.current.sessionId;
-            const artifactDir = getSkillPreflightDir(sessionIdMaybe);
-            const preflightResult = await runPreflight(
-              inv,
-              // Honor the session's effective cwd so preflights that shell
-              // out to `git status` / file globs operate on the worktree,
-              // not the Node host's process.cwd() (the parent repo when
-              // launched with `afk i --worktree`). `stats.cwd` is stamped
-              // at bootstrap.ts:328 with the same `process.cwd()` fallback.
-              { cwd: ctx.stats.cwd ?? process.cwd(), artifactDir },
-              (err) => {
-                if (env.AFK_SKILL_STREAM_VERBOSE === '1') {
-                  ctx.out.warn(`preflight(${bareSkillName}) failed: ${errorMessage(err)}`);
-                }
-              },
+            return invokeSkillPreflight(
+              bareSkillName,
+              dispatchArgs,
+              skill.source ?? 'plugin',
+              ctx,
             );
-            return preflightResult?.manifestBlock;
           },
         });
 
