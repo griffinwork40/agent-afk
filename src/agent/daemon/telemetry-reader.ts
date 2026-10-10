@@ -105,7 +105,7 @@ export async function readTelemetryHistory(
     if (readStart > 0) {
       const prevBuf = Buffer.allocUnsafe(1);
       const { bytesRead: prevRead } = await fd.read(prevBuf, 0, 1, readStart - 1);
-      const prevByteIsNewline = prevRead === 1 && prevBuf[0] === 0x0a; // '\n'
+      const prevByteIsNewline = prevRead === 1 && prevBuf[0] === 0x0a;
       if (!prevByteIsNewline && lines.length > 0) {
         // Tail cut landed mid-line: first element is a truncated fragment.
         lines.shift();
