@@ -150,8 +150,13 @@ export function renderMdx(registry: readonly EnvVarMeta[]): string {
     for (const e of entries) {
       // escapeMdx pairs backticks to find code spans; an odd count would flip
       // prose/code parity and leave raw < { in prose, breaking the MDX build.
+      // Both description and default are passed through escapeMdx, so both must
+      // have balanced backticks — check them independently for a clear error msg.
       if ((e.description.match(/`/g) ?? []).length % 2 !== 0) {
         throw new Error(`render-env-registry.mdx: ${e.name} description has an unbalanced backtick.`);
+      }
+      if (e.default != null && (e.default.match(/`/g) ?? []).length % 2 !== 0) {
+        throw new Error(`render-env-registry.mdx: ${e.name} default has an unbalanced backtick.`);
       }
       const varCell = `\`${e.name}\``;
       const typeCell = e.type;

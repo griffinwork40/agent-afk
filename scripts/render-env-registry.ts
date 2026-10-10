@@ -53,7 +53,6 @@ function renderMarkdown(registry: readonly EnvVarMeta[]): string {
     'paths',
     'daemon',
     'worktree',
-    'threads',
     'mcp',
     'routing',
     'browser',
