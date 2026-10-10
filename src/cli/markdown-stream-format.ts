@@ -296,40 +296,18 @@ export function findBlockBoundary(text: string): number {
 }
 
 /**
- * Initialize and wrap a log-update function for TTY output.
- * Returns a wrapped function with a clear() method, or null if import fails.
- *
- * Lazy-loaded to avoid unnecessary dependency on log-update module.
- */
-export async function initLogUpdateModule(): Promise<{ (str: string): void; clear: () => void } | null> {
-  try {
-    const mod = await import('log-update');
-    const logUpdateFn = (mod.default as unknown as { (str: string): void; clear: () => void });
-    // Create wrapper that preserves clear method
-    const wrapped: { (str: string): void; clear: () => void } = ((str: string) => {
-      logUpdateFn(str);
-    }) as any;
-    wrapped.clear = () => logUpdateFn.clear();
-    return wrapped;
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Parameters for routing overlay output to the appropriate sink.
  */
 export interface OverlayRoutingParams {
   indented: string;
   overlayComposer: { markDirty(slot: string): void; flush(): void } | null | undefined;
   compositor: { setOverlay(str: string): void } | null;
-  logUpdate: { (str: string): void; clear: () => void } | null;
 }
 
 /**
  * Route pending markdown output to the appropriate display channel.
- * Returns true if handled by composer/compositor, false if caller should
- * handle logUpdate path.
+ * Returns true if handled by composer/compositor, false otherwise (no-op
+ * on non-TTY surfaces that have no live overlay).
  */
 export function routeOverlayOutput(params: OverlayRoutingParams): boolean {
   if (params.overlayComposer) {
