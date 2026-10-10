@@ -22,7 +22,7 @@ import { getQueueDir } from '../../paths.js';
 import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { leaseTask as _leaseTask, recoverExpiredLeases } from './lease-store.js';
-import { errorMessage, isErrnoCode} from '../../utils/errors.js';
+import { errorMessage, isEnoent } from '../../utils/errors.js';
 
 export { recoverExpiredLeases };
 
@@ -204,7 +204,7 @@ export function dequeueNext(queueDir: string = getQueueDir()): QueuedTask | null
       // Race-loss (ENOENT): another process already claimed this file — skip.
       // Other errors: the lease was not acquired; clean up the queue file
       // (if it still exists) and skip to the next entry.
-      if (!isErrnoCode(err, 'ENOENT')) {
+      if (!isEnoent(err)) {
         try { unlinkSync(filePath); } catch { /* ignore */ }
       }
       continue;
