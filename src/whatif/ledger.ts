@@ -13,6 +13,7 @@ import * as path from 'node:path';
 import { getWhatifDir } from '../paths.js';
 import type { Prediction, Verdict } from './types.js';
 import { isErrnoCode } from '../utils/errors.js';
+import { parseJsonlLines } from '../utils/jsonl.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -88,17 +89,11 @@ export async function trackRecordSummary(
   // ── Aggregate per change kind ─────────────────────────────────────────────
   const stats = new Map<string, { confirmed: number; total: number }>();
 
-  for (const line of raw.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
+  const isCalibrationRecord = (x: unknown): x is CalibrationRecord =>
+    x !== null && typeof x === 'object';
+  const records = parseJsonlLines<CalibrationRecord>(raw, { guard: isCalibrationRecord });
 
-    let rec: CalibrationRecord;
-    try {
-      rec = JSON.parse(trimmed) as CalibrationRecord;
-    } catch {
-      continue;
-    }
-
+  for (const rec of records) {
     if (rec.verdict !== 'confirmed' && rec.verdict !== 'refuted') continue;
 
     for (const kind of rec.changeKinds) {

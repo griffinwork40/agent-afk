@@ -59,8 +59,11 @@ function makeEmptyPeerNotifier(buffered: string[] = []) {
   };
 }
 
+/** Minimal env: only PATH, which the shell needs to resolve built-ins. */
+const MINIMAL_ENV: NodeJS.ProcessEnv = { PATH: process.env['PATH'] };
+
 async function settledJob(command = 'exit 0') {
-  const job = reg.start({ command, env: process.env });
+  const job = reg.start({ command, env: MINIMAL_ENV });
   await reg.waitFor(job.id);
   return job;
 }
@@ -119,8 +122,18 @@ describe('process envelopes at the inter-round boundary', () => {
       admissionQueue: new AdmissionQueue(),
       processJobNotifier: notifier,
     });
-    const job = reg.start({ command: 'sleep 0.2', env: process.env });
+    // Sentinel-file handshake: the job polls until a file appears, so we
+    // guarantee it is still running when the first boundary check fires — no
+    // timing assumptions, no sleep-duration races on loaded runners.
+    const sentinel = path.join(dir, 'sentinel-running');
+    const job = reg.start({
+      command: `while [ ! -f "${sentinel}" ]; do sleep 0.05; done`,
+      env: MINIMAL_ENV,
+    });
+    // Job is still blocked → boundary delivers nothing.
     expect(session.invokeCallback()).toBeUndefined();
+    // Unblock the job and wait for it to settle.
+    fs.writeFileSync(sentinel, '');
     await reg.waitFor(job.id);
     expect(session.invokeCallback()).toContain(`job="${job.id}"`);
     expect(session.invokeCallback()).toBeUndefined();

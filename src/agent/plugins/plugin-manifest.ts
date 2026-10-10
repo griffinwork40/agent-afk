@@ -14,8 +14,8 @@
  * @module agent/plugins/plugin-manifest
  */
 
-import { existsSync, readFileSync } from 'fs';
 import { pluginManifestPath } from '../../config/plugin-discovery.js';
+import { readJsonFileLoose } from '../../utils/json-file.js';
 
 export interface PluginManifestFields {
   /** Manifest `name` when present and non-empty, else `null`. */
@@ -27,21 +27,18 @@ export interface PluginManifestFields {
 /**
  * Read `<dir>/.claude-plugin/plugin.json` and extract `name` + `version`.
  * Returns nulls for a missing file, unreadable file, or malformed JSON.
+ *
+ * Uses readJsonFileLoose: both ENOENT and parse errors return the default null
+ * record — the manifest is best-effort metadata for display purposes and a
+ * corrupt or absent file must never block the caller.
  */
 export function readPluginManifest(dir: string): PluginManifestFields {
   const path = pluginManifestPath(dir);
-  if (!existsSync(path)) return { name: null, version: null };
-  try {
-    const raw = JSON.parse(readFileSync(path, 'utf8')) as {
-      name?: unknown;
-      version?: unknown;
-    };
-    return {
-      name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : null,
-      version:
-        typeof raw.version === 'string' && raw.version.trim() ? raw.version.trim() : null,
-    };
-  } catch {
-    return { name: null, version: null };
-  }
+  const raw = readJsonFileLoose<{ name?: unknown; version?: unknown }>(path);
+  if (raw == null) return { name: null, version: null };
+  return {
+    name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : null,
+    version:
+      typeof raw.version === 'string' && raw.version.trim() ? raw.version.trim() : null,
+  };
 }

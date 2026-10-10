@@ -211,9 +211,7 @@ export class IncrementalLineReader {
   /**
    * Current length of the internal buffer in UTF-16 code units (i.e.
    * `String.prototype.length` units), not bytes. For ASCII-only content the
-   * two are equivalent. If you need the byte count for a multi-byte payload,
-   * use `Buffer.byteLength(reader.bufferedLength.toString())` instead —
-   * though in practice this property is only used for diagnostic purposes
+   * two are equivalent. This property is only used for diagnostic purposes
    * where code-unit precision is sufficient.
    */
   get bufferedLength(): number {

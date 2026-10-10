@@ -21,6 +21,7 @@
 
 import { debugLog } from '../../utils/debug.js';
 import { emitSessionPhase } from '../trace/emit.js';
+import { isReducedToolSurface, emitReducedSurfaceWarning } from './sdk-surface-warning.js';
 import { emitSessionIdAssigned } from './session-id-trace.js';
 import { resolveProvider, providerForModel } from '../providers/index.js';
 import { ProviderRouter } from '../providers/router/provider-router.js';
@@ -202,6 +203,19 @@ export class ProviderInitializer {
             phase: 'session_init_done',
             durationMs: Date.now() - this.accounting.sessionStartedAt,
           });
+          // Reduced-surface detection (issue #3442, option 3).
+          // After session.init the state manager holds the final skill list.
+          // Stamp the metadata flag and emit a one-time stderr warning when
+          // skills were discovered but no skillExecutor is wired. Silent for
+          // CLI/REPL/Telegram/web sessions — those always wire executors.
+          const initMetadata = stateManager.getSessionMetadata();
+          if (isReducedToolSurface(initMetadata)) {
+            stateManager.setSessionMetadata((prev) => ({
+              ...prev,
+              reducedToolSurface: true,
+            }));
+            emitReducedSurfaceWarning(initMetadata);
+          }
           return;
         }
         if (output && output.type === 'error') {

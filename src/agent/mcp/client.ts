@@ -18,7 +18,7 @@
  *     requests, if a server sends one anyway, are logged at debug and
  *     declined via the SDK's default behaviour.
  *   - We do NOT advertise `elicitation` capability in PR 2. The bridge to
- *     the existing `routeElicitation()` router is a follow-up once remote
+ *     the existing `elicitationRouter` (src/agent/elicitation-router.ts) is a follow-up once remote
  *     server integration is stable.
  *
  * Transport selection (PR 2+):

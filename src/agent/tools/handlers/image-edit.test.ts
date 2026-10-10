@@ -427,7 +427,7 @@ describe('image_edit handler', () => {
     vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
     const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
     const handler = createImageEditHandler(fetchFn);
-    await handler(
+    const result = await handler(
       { prompt: 'test', image_paths: [refImagePath], output_format: 'jpeg' },
       signal,
       { resolveBase: tmpDir, sessionId: `fmt-jpeg-${Date.now()}` },
@@ -436,13 +436,17 @@ describe('image_edit handler', () => {
     const [, opts] = fetchFn.mock.calls[0]!;
     const form: UndiciFormData = opts.body as UndiciFormData;
     expect(form.get('output_format')).toBe('jpeg');
+    // The saved file must also carry the matching extension (#3429).
+    expect(result.isError).toBeUndefined();
+    const meta = JSON.parse(result.content);
+    expect(meta.path).toMatch(/\.jpeg$/);
   });
 
   it('sends the requested output_format (webp) in the multipart body', async () => {
     vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
     const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
     const handler = createImageEditHandler(fetchFn);
-    await handler(
+    const result = await handler(
       { prompt: 'test', image_paths: [refImagePath], output_format: 'webp' },
       signal,
       { resolveBase: tmpDir, sessionId: `fmt-webp-${Date.now()}` },
@@ -451,6 +455,10 @@ describe('image_edit handler', () => {
     const [, opts] = fetchFn.mock.calls[0]!;
     const form: UndiciFormData = opts.body as UndiciFormData;
     expect(form.get('output_format')).toBe('webp');
+    // The saved file must also carry the matching extension (#3429).
+    expect(result.isError).toBeUndefined();
+    const meta = JSON.parse(result.content);
+    expect(meta.path).toMatch(/\.webp$/);
   });
 
   it('sends multiple image paths as multiple form fields', async () => {

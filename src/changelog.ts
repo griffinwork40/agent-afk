@@ -130,6 +130,33 @@ function parseExistingHashes(unreleasedBlock: string): Set<string> {
 }
 
 /**
+ * Merge `newEntries` into `existing` [Unreleased] content, deduplicating by
+ * trailing commit hash.
+ *
+ * Shared by `updateChangelog` and `updateAndStampChangelog` — both functions
+ * previously contained an identical copy of this logic. All behaviour (regex,
+ * join, trim, combined fallback) is preserved exactly.
+ *
+ * @returns The merged block string (may be empty when both inputs are empty).
+ */
+function assembleUnreleasedBlock(existing: string, newEntries: string): string {
+  const existingHashes = parseExistingHashes(existing);
+  const dedupedLines = newEntries
+    .split('\n')
+    .filter((line) => {
+      const m = line.match(/\(([0-9a-f]{7,})\)\s*$/);
+      if (m?.[1] && existingHashes.has(m[1])) return false;
+      return true;
+    })
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return existing && dedupedLines
+    ? existing + '\n\n' + dedupedLines
+    : existing || dedupedLines;
+}
+
+/**
  * Apply updateChangelog and stampRelease transformations in memory,
  * then perform a single write.
  *
@@ -150,23 +177,7 @@ export function updateAndStampChangelog(
 
   // Step 1: apply updateChangelog logic in memory
   const existing = getExistingUnreleased(changelog);
-  const existingHashes = parseExistingHashes(existing);
-
-  const dedupedLines = newEntries
-    .split('\n')
-    .filter((line) => {
-      const m = line.match(/\(([0-9a-f]{7,})\)\s*$/);
-      if (m?.[1] && existingHashes.has(m[1])) return false;
-      return true;
-    })
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-
-  const combined =
-    existing && dedupedLines
-      ? existing + '\n\n' + dedupedLines
-      : existing || dedupedLines;
+  const combined = assembleUnreleasedBlock(existing, newEntries);
 
   let updated = changelog.replace(
     /## \[Unreleased\][^\n]*\n[\s\S]*?(?=\n## \[|$)/,
@@ -198,23 +209,7 @@ export function updateChangelog(repoRoot: string, newEntries: string): void {
   const changelogPath = resolve(repoRoot, 'CHANGELOG.md');
   const changelog = readFileSync(changelogPath, 'utf8');
   const existing = getExistingUnreleased(changelog);
-  const existingHashes = parseExistingHashes(existing);
-
-  const dedupedLines = newEntries
-    .split('\n')
-    .filter((line) => {
-      const m = line.match(/\(([0-9a-f]{7,})\)\s*$/);
-      if (m?.[1] && existingHashes.has(m[1])) return false;
-      return true;
-    })
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-
-  const combined =
-    existing && dedupedLines
-      ? existing + '\n\n' + dedupedLines
-      : existing || dedupedLines;
+  const combined = assembleUnreleasedBlock(existing, newEntries);
 
   const updated = changelog.replace(
     /## \[Unreleased\][^\n]*\n[\s\S]*?(?=\n## \[|$)/,

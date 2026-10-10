@@ -63,11 +63,11 @@
     },
     {
       "name": "AFK_BROWSER_BACKEND",
-      "description": "Browser provider backend: auto (default, prefer Agent Browser, fall back to Playwright), agent-browser (require Agent Browser), or playwright (headless only).",
+      "description": "Browser provider backend: playwright (Playwright, the only supported backend) or auto (default, resolves to playwright). The legacy value agent-browser is accepted but deprecated — it resolves to playwright and emits a warning.",
       "type": "string",
       "required": false,
       "default": "auto",
-      "example": "agent-browser",
+      "example": "playwright",
       "category": "browser"
     },
     {
@@ -863,6 +863,14 @@
       "required": false,
       "example": "1",
       "category": "debug"
+    },
+    {
+      "name": "AFK_SDK_SURFACE_WARN",
+      "description": "Controls the one-time warning emitted when an SDK session (AgentSession / query() / queryText()) discovers skills but has no skillExecutor wired, meaning the model cannot invoke them. Set to 0 to silence the warning (useful when the reduced surface is intentional).",
+      "type": "string",
+      "required": false,
+      "example": "0",
+      "category": "misc"
     },
     {
       "name": "AFK_SESSION_ID",

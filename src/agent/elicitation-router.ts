@@ -225,14 +225,3 @@ class ElicitationRouter {
 
 export const elicitationRouter = new ElicitationRouter();
 
-/**
- * The shim {@link buildQueryOptions} installs as `options.onElicitation`.
- * Indirection lets surfaces (`src/cli/commands/interactive.ts`, telegram)
- * hot-swap handlers without reconstructing the session.
- */
-export async function routeElicitation(
-  request: ElicitationRequest,
-  options: { signal: AbortSignal; onActive?: () => void; sessionId?: string },
-): Promise<ElicitationResult> {
-  return elicitationRouter.route(request, options);
-}

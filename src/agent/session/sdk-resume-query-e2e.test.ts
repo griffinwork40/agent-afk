@@ -165,10 +165,7 @@ describe('query() resume end-to-end', () => {
 
     const { provider } = capturingProvider(sid);
     await drainQuery(query('hi', { provider, resume: sid }));
-
-    // Allow the journal write queue to flush (journal close is awaited in
-    // query() already, but allow an extra tick for test-ordering safety).
-    await new Promise<void>((r) => setTimeout(r, 50));
+    // query() awaits session.close(), which flushes the journal SerialQueue — no sleep needed.
 
     const raw = fs.readFileSync(getSessionJournalPath(sid), 'utf8');
     const records = raw

@@ -16,9 +16,6 @@
  * @module agent/peer/envelope
  */
 
-/** Current envelope schema version. */
-export const PEER_ENVELOPE_VERSION = 1;
-
 /** Maximum body size in bytes. Enforced by the sender before writing. */
 export const PEER_MAX_BODY_BYTES = 64 * 1024;
 

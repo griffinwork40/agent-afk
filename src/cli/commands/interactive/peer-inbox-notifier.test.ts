@@ -418,15 +418,15 @@ describe('PeerInboxNotifier — resetForNewSession (resume swap)', () => {
 });
 
 describe('PeerInboxNotifier — live trace writer', () => {
-  it('routes delivered AND held events after switching writers; getter beats static sink', async () => {
+  it('routes delivered AND held events after switching writers', async () => {
     const sessionId = randomUUID();
     const oldWriter = new InMemoryTraceWriter();
     const newWriter = new InMemoryTraceWriter();
-    let currentWriter = oldWriter;
+    let currentWriter: typeof oldWriter = oldWriter;
     let mode: 'accept' | 'hold' = 'accept';
     const notifier = new PeerInboxNotifier({
       getSessionId: () => sessionId, writeLine: () => undefined,
-      mode: () => mode, traceWriter: oldWriter,
+      mode: () => mode,
       getTraceWriter: () => currentWriter,
     });
     await writeEnvelope(makeEnvelope(sessionId));
@@ -447,16 +447,6 @@ describe('PeerInboxNotifier — live trace writer', () => {
     ]);
   });
 
-  it('retains static traceWriter support without a getter', async () => {
-    const sessionId = randomUUID();
-    const writer = new InMemoryTraceWriter();
-    const notifier = new PeerInboxNotifier({ getSessionId: () => sessionId, writeLine: () => undefined, mode: () => 'accept', traceWriter: writer });
-    await writeEnvelope(makeEnvelope(sessionId));
-    await notifier.scan();
-    expect(writer.events).toHaveLength(1);
-    expect(writer.events[0]).toMatchObject({ kind: 'peer_message', payload: { action: 'claimed' } });
-  });
-
   it('noteCorrupt trace event includes sanitized file field for correlation', async () => {
     // Write a corrupt (non-JSON) file directly into pending/ so the scan
     // cannot parse it and calls noteCorrupt → emitPeerMessage with file=safeFile.
@@ -475,7 +465,7 @@ describe('PeerInboxNotifier — live trace writer', () => {
       getSessionId: () => sessionId,
       writeLine: () => undefined,
       mode: () => 'accept',
-      traceWriter: writer,
+      getTraceWriter: () => writer,
     });
     await notifierWithWriter.scan();
     notifierWithWriter.dispose();

@@ -26,13 +26,27 @@ export function normalizeFlag(flag: string): string {
   return flag.startsWith('--') ? flag : `--${flag}`;
 }
 
-/** Scan a SKILL.md body for `--flag-name` patterns. Deduplicated and sorted. */
+/** Maximum number of flags collected from the body scan (cap prevents unbounded sets). */
+const BODY_FLAG_CAP = 64;
+
+/** Scan a SKILL.md body for `--flag-name` patterns. Deduplicated, sorted, and capped at 64. */
 export function extractFlagsFromBody(body: string): string[] {
   const flags = new Set<string>();
   for (const match of body.matchAll(FLAG_REGEX)) {
-    if (match[1]) flags.add(`--${match[1]}`);
+    if (match[1]) {
+      flags.add(`--${match[1]}`);
+      if (flags.size >= BODY_FLAG_CAP) break;
+    }
   }
   return Array.from(flags).sort();
+}
+
+/** Anchored regex for whole-string flag validation — `--word` with no extra characters. */
+const VALID_FLAG_EXACT = /^--[a-z][a-z0-9-]*$/;
+
+/** Validate that a normalised flag string is exactly `--<word>` with no extra payload. */
+function isValidFlag(flag: string): boolean {
+  return VALID_FLAG_EXACT.test(flag);
 }
 
 /**
@@ -41,7 +55,9 @@ export function extractFlagsFromBody(body: string): string[] {
  *
  * Accepts the inline form (`flags: [--x, y]`) and the block form
  * (`flags:` / `null` followed by `  - --x` items). Items are normalised to a
- * leading `--` and sorted. Returns `null` when no flags were declared.
+ * leading `--`, validated against FLAG_REGEX (dropping any item that does not
+ * match — e.g. `--foo; rm -rf /`), and sorted. Returns `null` when no valid
+ * flags were declared.
  */
 export function parseFlagsField(after: string, followingLines: readonly string[]): string[] | null {
   const value = after.trim();
@@ -50,24 +66,36 @@ export function parseFlagsField(after: string, followingLines: readonly string[]
     if (!m?.[1]) return null;
     const items = m[1]
       .split(',')
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
-    return items.length > 0 ? items.map(normalizeFlag).sort() : null;
+      .map((s) => normalizeFlag(s.trim()))
+      .filter((s) => s.length > 2 && isValidFlag(s));
+    return items.length > 0 ? items.sort() : null;
   }
   if (value !== '' && value !== 'null') return null;
   const arr: string[] = [];
   for (const next of followingLines) {
     if (!next || !next.match(/^\s+-\s/)) break;
     const im = next.match(/^\s+-\s+(.+)/);
-    if (im?.[1]) arr.push(im[1].trim());
+    if (im?.[1]) {
+      const flag = normalizeFlag(im[1].trim());
+      if (isValidFlag(flag)) arr.push(flag);
+    }
   }
-  return arr.length > 0 ? arr.map(normalizeFlag).sort() : null;
+  return arr.length > 0 ? arr.sort() : null;
 }
 
 /**
  * Apply the flag precedence rules shared by every SKILL.md surface:
  * an explicit frontmatter `flags:` list wins outright; otherwise the union of
  * flags scanned from `argument-hint` and the body. Empty array if none.
+ *
+ * Contract — `frontmatterFlags` vs the return value:
+ *   - `null`  → no `flags:` field was present in the frontmatter at all.
+ *              Fall through to the body/hint scan.
+ *   - `[]`    → `flags:` was present but listed nothing valid after
+ *              normalisation / validation. Treat as absent (same fallthrough).
+ *   - non-empty array → explicit author-declared flags; returned as-is.
+ * The return value is ALWAYS `string[]` (never `null`): callers can safely
+ * check `.length` or spread without a null guard.
  */
 export function resolveSkillFlags(
   frontmatterFlags: readonly string[] | null | undefined,

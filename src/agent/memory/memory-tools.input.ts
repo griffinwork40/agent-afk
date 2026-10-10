@@ -9,6 +9,30 @@
 
 import type { FactCategory, MemoryUpdateAction, MemoryUpdateTarget } from './types.js';
 
+/** The allowed FactCategory values — single source of truth for this module. */
+const VALID_FACT_CATEGORIES: FactCategory[] = ['preference', 'convention', 'decision', 'learning'];
+
+/**
+ * Parse and validate an optional `category` field from a raw input object.
+ *
+ * When `obj['category']` is absent, returns `undefined` (field is optional).
+ * When present but not a string, throws. When a string but not a valid
+ * {@link FactCategory}, throws with the canonical error message.
+ * When valid, returns the typed value.
+ *
+ * Shared by `parseMemorySearchInput` and `parseMemoryUpdateInput`.
+ */
+export function parseOptionalFactCategory(obj: Record<string, unknown>): FactCategory | undefined {
+  if (obj['category'] === undefined) return undefined;
+  if (typeof obj['category'] !== 'string') {
+    throw new Error('category must be a string');
+  }
+  if (!VALID_FACT_CATEGORIES.includes(obj['category'] as FactCategory)) {
+    throw new Error(`category must be one of: ${VALID_FACT_CATEGORIES.join(', ')}`);
+  }
+  return obj['category'] as FactCategory;
+}
+
 export interface MemorySearchInput {
   query: string;
   category?: FactCategory;
@@ -30,18 +54,8 @@ export function parseMemorySearchInput(input: unknown): MemorySearchInput {
     query: obj['query'],
   };
 
-  if (obj['category'] !== undefined) {
-    if (typeof obj['category'] !== 'string') {
-      throw new Error('category must be a string');
-    }
-    const validCategories: FactCategory[] = ['preference', 'convention', 'decision', 'learning'];
-    if (!validCategories.includes(obj['category'] as FactCategory)) {
-      throw new Error(
-        `category must be one of: ${validCategories.join(', ')}`,
-      );
-    }
-    parsed.category = obj['category'] as FactCategory;
-  }
+  const category = parseOptionalFactCategory(obj);
+  if (category !== undefined) parsed.category = category;
 
   if (obj['since'] !== undefined) {
     if (typeof obj['since'] !== 'string') {
@@ -98,18 +112,8 @@ export function parseMemoryUpdateInput(input: unknown): MemoryUpdateInput {
     parsed.content = obj['content'];
   }
 
-  if (obj['category'] !== undefined) {
-    if (typeof obj['category'] !== 'string') {
-      throw new Error('category must be a string');
-    }
-    const validCategories: FactCategory[] = ['preference', 'convention', 'decision', 'learning'];
-    if (!validCategories.includes(obj['category'] as FactCategory)) {
-      throw new Error(
-        `category must be one of: ${validCategories.join(', ')}`,
-      );
-    }
-    parsed.category = obj['category'] as FactCategory;
-  }
+  const category = parseOptionalFactCategory(obj);
+  if (category !== undefined) parsed.category = category;
 
   if (obj['evidence'] !== undefined) {
     if (typeof obj['evidence'] !== 'string') {

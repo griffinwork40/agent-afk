@@ -19,8 +19,8 @@
  * journal exists for the session.
  */
 
-import { readFileSync, existsSync, readdirSync, statSync, realpathSync } from 'fs';
-import { writeJsonFile } from '../utils/json-file.js';
+import { existsSync, readdirSync, statSync, realpathSync } from 'fs';
+import { writeJsonFile, readJsonFile } from '../utils/json-file.js';
 import { join, basename, resolve, sep, isAbsolute } from 'path';
 import { randomUUID } from 'node:crypto';
 import { ensureSessionsMigrated, getSessionsDir } from '../paths.js';
@@ -267,10 +267,13 @@ export function loadSession(idOrPath: string): StoredSession | undefined {
     console.warn(`loadSession: rejected unsafe session id ${JSON.stringify(idOrPath)}: ${errorMessage(err)}`);
     return undefined;
   }
-  if (!existsSync(path)) return undefined;
+  // readJsonFile (strict): ENOENT returns undefined via onMissing; parse errors
+  // re-throw so we can warn the caller about corruption rather than silently
+  // returning undefined. This preserves the original warn-on-parse-error
+  // behavior — treating ENOENT and SyntaxError as equivalent would lose the
+  // diagnostic signal that a sidecar is corrupt rather than merely absent.
   try {
-    const raw = readFileSync(path, 'utf-8');
-    return JSON.parse(raw) as StoredSession;
+    return readJsonFile<StoredSession>(path, { onMissing: undefined });
   } catch (err) {
     console.warn(`loadSession: failed to read/parse ${path}: ${errorMessage(err)}`);
     return undefined;

@@ -62,8 +62,8 @@ importers:
         specifier: ^8.0.0
         version: 8.0.0
       marked:
-        specifier: ^17.0.5
-        version: 17.0.5
+        specifier: ^18.1.0
+        version: 18.1.0
       node-cron:
         specifier: ^4.2.1
         version: 4.6.0
@@ -1140,8 +1140,8 @@ packages:
   magicast@0.5.5:
     resolution: {integrity: sha512-UicdXN8zQ3JHlxVq+28afMXPr1z7WNY6+7EJnzTdQWkTAlMLF5fNCCKxJHBQwGaNGR11581EiQmQzx73+MvszA==}
 
-  marked@17.0.5:
-    resolution: {integrity: sha512-6hLvc0/JEbRjRgzI6wnT2P1XuM1/RrrDEX0kPt0N7jGm1133g6X7DlxFasUIx+72aKAr904GTxhSLDrd5DIlZg==}
+  marked@18.1.0:
+    resolution: {integrity: sha512-PamYXWWWg2nboG3oX5Ffzpy3EFZROqZJK9hSlMmUnekp7TxPs5DcT95vwd46m73/exfKCRVMtgXoPMI4FEJL6w==}
     engines: {node: '>= 20'}
     hasBin: true
 
@@ -2505,7 +2505,7 @@ snapshots:
       '@babel/types': 7.29.8
       source-map-js: 1.2.2
 
-  marked@17.0.5: {}
+  marked@18.1.0: {}
 
   math-intrinsics@1.1.0: {}
 

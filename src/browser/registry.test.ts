@@ -2,7 +2,7 @@
  * Unit tests for src/browser/registry.ts
  *
  * Strategy: mock `./playwright/index.js` and `./routing.js` so no real
- * chromium is launched and no Agent Browser probing occurs.
+ * chromium is launched.
  * The fake PlaywrightProvider records calls to `shutdown()` so we can assert
  * on lifecycle behaviour. We also use `__resetBrowserRegistryForTests` in
  * beforeEach to guarantee a clean singleton between tests.
@@ -54,7 +54,7 @@ vi.mock('./playwright/index.js', () => {
 
 vi.mock('./routing.js', () => {
   return {
-    selectBackend: async () => ({
+    selectBackend: () => ({
       backend: 'playwright' as const,
       reason: 'test: mocked routing always selects playwright',
       probeMs: 0,
