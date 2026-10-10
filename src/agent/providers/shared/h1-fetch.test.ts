@@ -380,7 +380,8 @@ describe('h1ModelFetch + undici FormData — multipart interop (issue #3345)', (
     expect(result.bodyText).toContain('image/png');
     // Verify output_format reaches the server — guards against regression where
     // the field was parsed/validated but never appended to the body (#3387).
-    expect(result.bodyText).toContain('name="output_format"');
-    expect(result.bodyText).toContain('jpeg');
+    // Use a regex anchored to the part header so 'jpeg' in 'image/jpeg' (the
+    // MIME type of the image[] part) cannot produce a false-positive match (#3429).
+    expect(result.bodyText).toMatch(/name="output_format"[\s\S]*?jpeg/);
   });
 });
