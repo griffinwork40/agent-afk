@@ -16,6 +16,12 @@ import {
 import { STALE_AFTER_MS } from '../../cli/quota-indicator.js';
 
 // Mock the subagent-outcomes aggregator so TTL cache tests don't do real I/O.
+// Invariant: this mock MUST remain in place for the TTL cache tests
+// (buildRuntimeStateSource.getSubagentOutcomeSummary — TTL cache) to work
+// correctly. The cache calls `aggregateSubagentOutcomes` and
+// `buildSubagentOutcomeSummary` synchronously; without this mock the tests
+// would hit the real routing-decisions.jsonl file and produce non-deterministic
+// results. Both mocks are reset and re-configured in each test's beforeEach.
 vi.mock('../../insights/aggregators/subagent-outcomes.js', () => ({
   aggregateSubagentOutcomes: vi.fn(),
   buildSubagentOutcomeSummary: vi.fn(),

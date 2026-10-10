@@ -82,6 +82,19 @@ vi.mock('../_agents/to-definition.js', () => ({
   vendoredToolAllowlist: vi.fn(() => new Set(['read_file', 'grep', 'glob'])),
 }));
 
+// Mock loadSkillPrompts so tests control which prompts are returned.
+const mockLoadSkillPromptsImpl = vi.hoisted(() =>
+  vi.fn((_name: string) => ({
+    '01-skill-inspector.md': 'skill prompt',
+    '02-command-inspector.md': 'command prompt',
+    '03-agent-inspector.md': 'agent prompt',
+    '04-hook-inspector.md': 'hook prompt',
+  })),
+);
+vi.mock('../_lib/prompt-loader.js', () => ({
+  loadSkillPrompts: mockLoadSkillPromptsImpl,
+}));
+
 // ---------------------------------------------------------------------------
 // NOW import the modules under test (post-mock).
 // ---------------------------------------------------------------------------
@@ -235,6 +248,14 @@ describe('audit-fit handler', () => {
     mockRunWaveImpl.mockImplementation(async (tasks) =>
       tasks.map(() => ({ id: 'mock-run', status: 'succeeded' as const, output: [] })),
     );
+
+    // Default loadSkillPrompts: return all four required prompts.
+    mockLoadSkillPromptsImpl.mockReturnValue({
+      '01-skill-inspector.md': 'skill prompt',
+      '02-command-inspector.md': 'command prompt',
+      '03-agent-inspector.md': 'agent prompt',
+      '04-hook-inspector.md': 'hook prompt',
+    });
   });
 
   afterEach(() => {
@@ -263,15 +284,16 @@ describe('audit-fit handler', () => {
   });
 
   it('throws when a required inspector prompt is missing (stub prompt loader)', async () => {
-    // We can't easily remove a prompt file at runtime but we can verify the
-    // guard fires on missing prompts by mocking loadSkillPrompts on the handler
-    // module. Use dynamic import + vi.doMock is complex; test via direct check
-    // that ALL four prompts load (if they don't, the handler throws).
-    // This is tested implicitly in the happy-path — the handler loads prompts
-    // from disk. If the directory is intact the handler proceeds without error.
-    // The guard "audit-fit skill missing inspector prompt for X" only fires
-    // when the files are absent, which can't happen from this worktree.
-    expect(true).toBe(true); // placeholder: prompt load failures are tested indirectly
+    // Return a prompts map that is missing the hook prompt — handler must throw.
+    mockLoadSkillPromptsImpl.mockReturnValueOnce({
+      '01-skill-inspector.md': 'skill prompt',
+      '02-command-inspector.md': 'command prompt',
+      '03-agent-inspector.md': 'agent prompt',
+      // '04-hook-inspector.md' intentionally absent
+    });
+    await expect(handler({}, makeSession(), makeCtx())).rejects.toThrow(
+      'audit-fit skill missing inspector prompt for hook',
+    );
   });
 
   // -------------------------------------------------------------------------
