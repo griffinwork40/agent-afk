@@ -64,20 +64,25 @@ export function parseFlagsField(after: string, followingLines: readonly string[]
   if (value.startsWith('[')) {
     const m = value.match(/\[(.*?)\]/);
     if (!m?.[1]) return null;
+    const seen = new Set<string>();
     const items = m[1]
       .split(',')
       .map((s) => normalizeFlag(s.trim()))
-      .filter((s) => s.length > 2 && isValidFlag(s));
+      .filter((s) => s.length > 2 && isValidFlag(s) && !seen.has(s) && seen.add(s));
     return items.length > 0 ? items.sort() : null;
   }
   if (value !== '' && value !== 'null') return null;
+  const seen = new Set<string>();
   const arr: string[] = [];
   for (const next of followingLines) {
     if (!next || !next.match(/^\s+-\s/)) break;
     const im = next.match(/^\s+-\s+(.+)/);
     if (im?.[1]) {
       const flag = normalizeFlag(im[1].trim());
-      if (isValidFlag(flag)) arr.push(flag);
+      if (isValidFlag(flag) && !seen.has(flag)) {
+        seen.add(flag);
+        arr.push(flag);
+      }
     }
   }
   return arr.length > 0 ? arr.sort() : null;

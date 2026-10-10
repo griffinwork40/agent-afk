@@ -130,7 +130,9 @@ export function resolveStalenessThreshold(): number {
  */
 export function parseLatestTimestamp(raw: string): string | null {
   const isIndexLine = (x: unknown): x is IndexLine =>
-    x !== null && typeof x === 'object';
+    x !== null &&
+    typeof x === 'object' &&
+    ('timestamp' in (x as object) || 'event' in (x as object));
   const lines = parseJsonlLines<IndexLine>(raw, { guard: isIndexLine });
   let latest: string | null = null;
   for (const parsed of lines) {
