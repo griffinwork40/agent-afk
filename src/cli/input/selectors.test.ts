@@ -291,6 +291,22 @@ describe('renderSelector — TTY keypress', () => {
     const result = await p;
     expect(result).toBe(10);
   });
+
+  it('resolves :cancel when abortSignal fires mid-loop', async () => {
+    const ac = new AbortController();
+    const p = renderSelector(['alpha', 'beta'], ac.signal);
+    await Promise.resolve();
+    ac.abort();
+    const result = await p;
+    expect(result).toBe(':cancel');
+  });
+
+  it('resolves :cancel immediately when abortSignal is already aborted', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    const result = await renderSelector(['alpha', 'beta'], ac.signal);
+    expect(result).toBe(':cancel');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -427,5 +443,21 @@ describe('renderMultiSelector — TTY keypress', () => {
     await p;
     const combined = stdoutWrites.join('');
     expect(combined).toMatch(/\x1b\[\d+A/); // cursor-up escape = repaint
+  });
+
+  it('resolves :cancel when abortSignal fires mid-loop', async () => {
+    const ac = new AbortController();
+    const p = renderMultiSelector(['alpha', 'beta'], ac.signal);
+    await Promise.resolve();
+    ac.abort();
+    const result = await p;
+    expect(result).toBe(':cancel');
+  });
+
+  it('resolves :cancel immediately when abortSignal is already aborted', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    const result = await renderMultiSelector(['alpha', 'beta'], ac.signal);
+    expect(result).toBe(':cancel');
   });
 });
