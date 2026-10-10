@@ -17,13 +17,13 @@
 import type { AgentSession } from '../agent/session/agent-session.js';
 import type { AgentConfig } from '../agent/types.js';
 import { wireExecutors, type WiredExecutors, type WireExecutorsOptions } from '../agent/session/wire-executors.js';
+import { makeDeferredParentProxy } from '../agent/session/deferred-parent-proxy.js';
 import { BackgroundAgentRegistry } from '../agent/background-registry.js';
 import { TelegramBgResultNotifier } from './bg-result-notifier.js';
 import {
   getDefaultSubagentModel,
   getApiKeyForModel,
 } from '../cli/shared-helpers.js';
-import type { SubagentExecutorContext } from '../agent/tools/subagent-executor.js';
 import type { TelegramTraceWriter } from './session-context.js';
 
 export interface TelegramExecutorWiringOptions {
@@ -84,16 +84,7 @@ export function wireTelegramExecutors(
   } = opts;
 
   // -- Deferred parent proxy (session constructed after executors) -----------
-  let boundSession: AgentSession | undefined;
-  const deferredParent: SubagentExecutorContext['parentSession'] = {
-    get sessionId() { return boundSession?.sessionId; },
-    getInputStreamRef() { return boundSession?.getInputStreamRef?.() ?? { pushUserMessage: () => {} }; },
-    get abortSignal() { return boundSession?.abortSignal ?? new AbortController().signal; },
-    get hookRegistry() { return boundSession?.hookRegistry; },
-    // Journal parent view: forks journal to `messageJournal.forSubagent(id)`,
-    // never to the parent's own file (see fork-child-config.ts).
-    get messageJournal() { return boundSession?.messageJournal; },
-  };
+  const { proxy: deferredParent, bind: bindParent } = makeDeferredParentProxy();
 
   // -- Background registry + notifier ---------------------------------------
   const backgroundRegistry = new BackgroundAgentRegistry(
@@ -129,7 +120,7 @@ export function wireTelegramExecutors(
 
   // -- Late-bind helper -----------------------------------------------------
   const bindSession = (session: AgentSession): void => {
-    boundSession = session;
+    bindParent(session);
     executors.rootManager.setOnSubagentSucceeded((usage, costUsd) => {
       session.recordSubagentCompletion(usage, costUsd);
     });
