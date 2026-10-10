@@ -320,7 +320,7 @@ const { executors, dispose } = createWiredExecutors(
   { model: 'sonnet', apiKey: process.env.ANTHROPIC_API_KEY },
   {
     agent: true,                              // expose agent tool
-    skill: ['search', 'plugin:my-plugin'],   // expose skill tool, allowlisted names only
+    skill: ['search', 'my-plugin:review'],   // expose skill tool, allowlisted names only
     compose: true,                            // expose compose tool
     pluginConfigs: [],                        // no ~/.afk/plugins scan (the default)
     unattended: true,                         // run without SubagentStart/Stop hooks
@@ -364,8 +364,8 @@ With `unattended: true` and no registry, the bundle runs without `SubagentStart`
 
 Pass a `string[]` as `opts.skill` to enable the tool AND restrict it to the listed names. Each entry must match the skill name exactly as the model would call it:
 
-- A bare name like `'search'` authorizes only `search` -- not `plugin:search`.
-- A namespaced name like `'plugin:my-plugin'` must be listed verbatim.
+- A bare name like `'search'` authorizes only `search` -- not `my-plugin:search`.
+- A plugin skill is requested by its namespaced name (`<plugin>:<skill>`, e.g. `'my-plugin:review'`) and must be listed verbatim; there is no prefix or suffix matching.
 - The allowlist applies at every nesting depth -- a skill dispatched by another skill inherits the same gate.
 
 ### `pluginConfigs`: default `[]` (no home-directory discovery)
