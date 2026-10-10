@@ -31,12 +31,13 @@ function makeAgg(
   }> = [],
   totalRecords = 0,
   skippedOutOfWindow = 0,
+  ledgerTruncated = false,
 ): InsightAggregates {
   // Only the `preexistingDefects` and `windowDays` fields are used by this renderer.
   return {
     generatedAt: Date.now(),
     windowDays: 30,
-    preexistingDefects: { totalRecords, skippedOutOfWindow, topClusters, ledgerTruncated: false },
+    preexistingDefects: { totalRecords, skippedOutOfWindow, topClusters, ledgerTruncated },
     // Required fields — unused by this renderer, set to zero.
     sessions: { totalSessions: 0, totalCostUsd: 0, totalTokens: 0, byDay: {}, byModel: {}, bySurface: {} },
     traces: { totalTracedSessions: 0, toolCallCounts: {}, toolErrorCounts: {}, toolDurationsMs: {}, subagentForkDepths: {}, compactionCount: 0, closureReasons: {}, totalInputTokens: 0, totalOutputTokens: 0, totalCacheReadTokens: 0, totalCacheCreationTokens: 0, totalCostUsd: 0, sessionsWithCost: 0 },
@@ -163,5 +164,21 @@ describe('renderPreexistingDefects', () => {
     expect(html).toContain('...');
     // The raw long path should not appear verbatim in the output.
     expect(html).not.toContain(longRepo);
+  });
+
+  it('renders a truncation notice when ledgerTruncated is true', () => {
+    const agg = makeAgg([CLUSTER_FIXTURE], 5, 0, true);
+    const html = renderPreexistingDefects(agg);
+    expect(html).toContain('Ledger exceeded the 1 MB read cap');
+    expect(html).toContain('tail only — ledger truncated');
+  });
+
+  it('does not render a truncation notice when ledgerTruncated is false', () => {
+    const agg = makeAgg([CLUSTER_FIXTURE], 5, 0, false);
+    const html = renderPreexistingDefects(agg);
+    expect(html).not.toContain('Ledger exceeded the 1 MB read cap');
+    expect(html).not.toContain('tail only — ledger truncated');
+    // The ordinary caption should still appear.
+    expect(html).toContain('total ledger records');
   });
 });

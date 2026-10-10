@@ -56,9 +56,15 @@ export function renderPreexistingDefects(agg: InsightAggregates): string {
     })
     .join('\n');
 
+  const truncationNotice = pd.ledgerTruncated
+    ? `<p class="caption" style="color:#d29922">⚠ Ledger exceeded the 1 MB read cap — oldest records were discarded. ` +
+      `Counts and rankings reflect only the most recent portion of the ledger.</p>`
+    : '';
+
   const totalNote =
     pd.totalRecords > 0
-      ? `<p class="caption">${htmlEscape(safeNum(pd.totalRecords))} total ledger records; ` +
+      ? `<p class="caption">${htmlEscape(safeNum(pd.totalRecords))} total ledger records` +
+        `${pd.ledgerTruncated ? ' (tail only — ledger truncated)' : ''}; ` +
         `${htmlEscape(safeNum(pd.skippedOutOfWindow))} outside the ${htmlEscape(safeNum(agg.windowDays))}-day window; ` +
         `showing top ${htmlEscape(safeNum(pd.topClusters.length))} clusters by recurrence count.</p>`
       : '';
@@ -83,6 +89,7 @@ export function renderPreexistingDefects(agg: InsightAggregates): string {
         ${rows}
       </tbody>
     </table>
+    ${truncationNotice}
     ${totalNote}
   </section>`;
 }
