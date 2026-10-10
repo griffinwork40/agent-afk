@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.308.0] - 2026-10-10
+
+### Added
+- per-round [vitals] note for live clock, context, and usage awareness (#3419) (e56c1072)
+- optional retries for cron daemon tasks (#3403) (f4bc39d3)
+
+### Fixed
+- harden hydration against malformed nested parts; surface corrupt-journal resume degradation (#3393) (ee4560d7)
+
 ## [5.307.14] - 2026-10-10
 
 ### Fixed
