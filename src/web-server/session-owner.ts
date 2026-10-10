@@ -207,7 +207,7 @@ export class SessionOwner {
    * turn's output over SSE. Turns are chained per session so two rapid posts
    * serialize instead of racing `assertCanSend`.
    */
-  async submitPrompt(sessionId: string, text: string): Promise<void> {
+  submitPrompt(sessionId: string, text: string): void {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`session ${sessionId} is not owned by this process`);
 
@@ -224,7 +224,7 @@ export class SessionOwner {
    * produces. `sendMessageStream` accepts `string | ContentBlockParam[]`, so the
    * only difference is the input type.
    */
-  async submitSkillMessage(sessionId: string, message: ContentBlockParam[]): Promise<void> {
+  submitSkillMessage(sessionId: string, message: ContentBlockParam[]): void {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`session ${sessionId} is not owned by this process`);
 
