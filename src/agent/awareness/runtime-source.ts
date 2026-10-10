@@ -31,6 +31,7 @@ import {
   buildSubagentOutcomeSummary,
   type SubagentOutcomeSummaryEntry,
 } from '../../insights/aggregators/subagent-outcomes.js';
+import { debugLog } from '../../utils/debug.js';
 
 // ---------------------------------------------------------------------------
 // Module-level TTL cache for getSubagentOutcomeSummary
@@ -61,9 +62,20 @@ function getCachedOutcomeSummary(afkHome: string | undefined): SubagentOutcomeSu
     const entries = buildSubagentOutcomeSummary(agg);
     outcomeSummaryCache.set(key, { entries, expiresAt: Date.now() + OUTCOME_SUMMARY_TTL_MS });
     return entries;
-  } catch {
+  } catch (err) {
+    debugLog('[runtime-source] getCachedOutcomeSummary: aggregator threw, returning []:', String(err));
     return [];
   }
+}
+
+/**
+ * Reset the outcome summary cache. Exported for test isolation only — do not
+ * call in production code.
+ *
+ * @internal
+ */
+export function resetOutcomeSummaryCache(): void {
+  outcomeSummaryCache.clear();
 }
 
 export interface RuntimeSourceDeps {
@@ -126,6 +138,14 @@ export interface RuntimeSourceDeps {
    * Returns `{ active: [], backgroundJobs: [] }` when no executor is wired.
    */
   getSubagents: () => RuntimeSubagents;
+
+  /**
+   * AFK home directory used to locate routing-decisions.jsonl for the
+   * subagent outcome summary cache. When omitted the default path from
+   * `getRoutingDecisionsPath()` is used. Provided so different `afkHome`
+   * values (common in tests) do not collide in the module-level cache.
+   */
+  afkHome?: string | undefined;
 }
 
 /**
@@ -196,7 +216,7 @@ export function buildRuntimeStateSource(deps: RuntimeSourceDeps): RuntimeStateSo
       // calls within a session window avoid redundant I/O. The aggregator
       // never throws; getCachedOutcomeSummary adds a belt-and-suspenders
       // catch for unexpected errors.
-      return getCachedOutcomeSummary(undefined);
+      return getCachedOutcomeSummary(deps.afkHome);
     },
   };
 }

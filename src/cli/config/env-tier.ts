@@ -184,7 +184,8 @@ export function loadEnvConfig(): Partial<CliConfig> {
         // Must run BEFORE dotenvConfig: it mutates process.env so dotenv's
         // presence-based `override: false` check sees the blank as absent.
         const unshadowed = _clearBlankEnvShadows(envPath);
-        dotenvConfig({ path: envPath, override: false });
+        // quiet:true suppresses the "injecting env" log added in dotenv v17+.
+        dotenvConfig({ path: envPath, override: false, quiet: true });
         for (const key of unshadowed) {
           if (warnedBlankEnvShadow.has(key)) continue;
           warnedBlankEnvShadow.add(key);

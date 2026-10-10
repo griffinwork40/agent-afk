@@ -31,7 +31,6 @@ import {
   byteLengthOf,
   estimateTokensSaved as sharedEstimateTokensSaved,
   findCompactionBoundary as sharedFindCompactionBoundary,
-  findCompactionBoundaryAdaptive as sharedFindCompactionBoundaryAdaptive,
   isMicrocompactPlaceholder,
   microcompactToolResults as sharedMicrocompactToolResults,
   renderTranscript as sharedRenderTranscript,
@@ -179,7 +178,7 @@ function isToolResultPlaceholder(content: unknown): boolean {
  * `tool_use_id`, and its array position are all preserved, so the
  * tool_use/tool_result pairing the Messages API enforces is untouched.
  */
-export const anthropicMicrocompactOps: MicrocompactOps<MessageParam> = {
+const anthropicMicrocompactOps: MicrocompactOps<MessageParam> = {
   listToolResults(messages: ReadonlyArray<MessageParam>): ToolResultRef[] {
     // Build a map from tool_use_id -> tool name by scanning assistant messages.
     // This lets microcompaction apply a higher threshold to delegation tools
@@ -248,27 +247,6 @@ export function findCompactionBoundary(
   return sharedFindCompactionBoundary(messages, keepLastN, anthropicCompactionOps);
 }
 
-/**
- * Boundary selection with the token-fullness fallback. Thin adapter over the
- * shared {@link sharedFindCompactionBoundaryAdaptive} bound to
- * {@link anthropicCompactionOps}. See the shared docs: when the turn-count
- * keep-window is a no-op but `usedFraction >= shrinkAtFraction`, the keep-window
- * relaxes toward 1 turn so a short-but-full session can still be compacted.
- */
-export function findCompactionBoundaryAdaptive(
-  messages: ReadonlyArray<MessageParam>,
-  keepLastN: number,
-  usedFraction: number,
-  shrinkAtFraction: number,
-): number {
-  return sharedFindCompactionBoundaryAdaptive(
-    messages,
-    keepLastN,
-    anthropicCompactionOps,
-    usedFraction,
-    shrinkAtFraction,
-  );
-}
 
 /**
  * Build the summarization request body. The older messages travel as a rendered

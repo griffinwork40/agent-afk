@@ -67,12 +67,14 @@ export const BROWSER_ENV_REGISTRY = [
   {
     name: 'AFK_BROWSER_BACKEND',
     description:
-      'Browser provider backend: auto (default, prefer Agent Browser, fall back to Playwright), ' +
-      'agent-browser (require Agent Browser), or playwright (headless only).',
+      'Browser provider backend: playwright (Playwright, the only supported backend) or ' +
+      'auto (default, resolves to playwright). ' +
+      'The legacy value agent-browser is accepted but deprecated — it resolves to playwright ' +
+      'and emits a warning.',
     type: 'string',
     required: false,
     default: 'auto',
-    example: 'agent-browser',
+    example: 'playwright',
     category: 'browser',
   },
   {

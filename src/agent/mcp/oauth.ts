@@ -34,6 +34,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { readJsonFileLoose } from '../../utils/json-file.js';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { homedir, userInfo } from 'node:os';
@@ -167,16 +168,14 @@ export interface OauthPendingEntry {
  */
 export function readOauthPending(): Record<string, OauthPendingEntry> {
   const path = getOauthPendingPath();
-  if (!existsSync(path)) return {};
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(path, 'utf-8'));
-  } catch {
-    return {};
-  }
-  if (parsed === null || typeof parsed !== 'object') return {};
+  // readJsonFileLoose: ENOENT and parse errors both return undefined → empty
+  // record. The file is purely a status surface for /mcp auth; a missing or
+  // corrupt file must not crash the slash command. Unexpected I/O (EACCES)
+  // re-throws so permission problems are not silently swallowed.
+  const parsed = readJsonFileLoose<Record<string, unknown>>(path);
+  if (parsed == null || typeof parsed !== 'object') return {};
   const out: Record<string, OauthPendingEntry> = {};
-  for (const [name, raw] of Object.entries(parsed as Record<string, unknown>)) {
+  for (const [name, raw] of Object.entries(parsed)) {
     if (raw === null || typeof raw !== 'object') continue;
     const r = raw as Record<string, unknown>;
     if (
@@ -202,14 +201,10 @@ export function readOauthPending(): Record<string, OauthPendingEntry> {
  */
 export function clearOauthPending(serverName: string): void {
   const path = getOauthPendingPath();
-  if (!existsSync(path)) return;
-  let existing: Record<string, unknown>;
-  try {
-    existing = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
-  } catch {
-    return;
-  }
-  if (!(serverName in existing)) return;
+  // readJsonFileLoose: ENOENT and parse errors return undefined; we treat
+  // both as "nothing to clear" — same as the original try/catch logic.
+  const existing = readJsonFileLoose<Record<string, unknown>>(path);
+  if (existing == null || !(serverName in existing)) return;
   delete existing[serverName];
   writeFileSync(path, JSON.stringify(existing, null, 2), { encoding: 'utf-8', mode: 0o600 });
 }
@@ -218,14 +213,9 @@ export function clearOauthPending(serverName: string): void {
 function writeOauthPending(serverName: string, authUrl: string): void {
   const path = getOauthPendingPath();
   mkdirSync(dirname(path), { recursive: true });
-  let existing: Record<string, unknown> = {};
-  if (existsSync(path)) {
-    try {
-      existing = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
-    } catch {
-      // Start fresh on parse error.
-    }
-  }
+  // readJsonFileLoose: start fresh (empty object) on ENOENT or parse error.
+  const existing: Record<string, unknown> =
+    readJsonFileLoose<Record<string, unknown>>(path) ?? {};
   // Strip PKCE params (state, code_challenge, etc.) before persisting — only
   // the base URL is needed for display by /mcp auth. The full URL (with PKCE
   // params) is shown to the user separately via Telegram / stderr.

@@ -346,6 +346,13 @@ describe('GE-5: resizeGeometryStale cleared on early-return (no-room) path in re
       int.resizeGeometryStale,
       'resizeGeometryStale must be false after early-return path in repositionCommittedBand (#3371)',
     ).toBe(false);
+    // Intentional asymmetry: bandGeometryStale stays true on the early-return
+    // path because the band floor has not been re-pinned yet.  Both sides of
+    // the pair must be asserted to document the design.
+    expect(
+      int.bandGeometryStale,
+      'bandGeometryStale must stay true on early-return path (floor not yet re-pinned)',
+    ).toBe(true);
 
     c.disarm();
   });

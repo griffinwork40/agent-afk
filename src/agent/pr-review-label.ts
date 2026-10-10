@@ -39,16 +39,16 @@ export const LABEL_AGENT_REVIEWED = 'agent-reviewed';
 export const LABEL_AUTO_MERGED = 'auto-merged';
 
 /** All three possible review-coverage labels, for idempotent cleanup. */
-export const ALL_REVIEW_LABELS = [
+const ALL_REVIEW_LABELS = [
   LABEL_HUMAN_REVIEWED,
   LABEL_AGENT_REVIEWED,
   LABEL_AUTO_MERGED,
 ] as const;
 
-export type ReviewLabel = (typeof ALL_REVIEW_LABELS)[number];
+type ReviewLabel = (typeof ALL_REVIEW_LABELS)[number];
 
 /** Hard-coded bot login list (issue #2011). Logins ending in `[bot]` are also excluded. */
-export const BOT_LOGINS: ReadonlySet<string> = new Set([
+const BOT_LOGINS: ReadonlySet<string> = new Set([
   'chatgpt-codex-connector',
   'vercel[bot]',
   'dependabot[bot]',

@@ -10,7 +10,8 @@
  * @module agent/log-retention
  */
 
-import { stat, readFile, writeFile, rename, unlink } from 'node:fs/promises';
+import { stat, readFile } from 'node:fs/promises';
+import { atomicWriteFileAsync } from '../utils/atomic-write.js';
 
 /**
  * Size cap for the session-grants audit log (`session-grants.jsonl`) and how
@@ -60,7 +61,6 @@ export async function capJsonlBySize(
   { maxBytes, keepTailLines }: CapJsonlOptions,
 ): Promise<CapJsonlResult> {
   const noop: CapJsonlResult = { trimmed: false, removedLines: 0 };
-  let tmp: string | undefined;
   try {
     const st = await stat(path);
     if (st.size <= maxBytes) return noop;
@@ -78,21 +78,9 @@ export async function capJsonlBySize(
     const kept = lines.slice(lines.length - keepTailLines);
     const removedLines = lines.length - kept.length;
 
-    // Unique temp name (pid + random) so concurrent same-process trims of the
-    // same path never clobber each other's staging file.
-    tmp = `${path}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
-    await writeFile(tmp, kept.join('\n') + '\n', { mode: 0o600 });
-    await rename(tmp, path);
-    tmp = undefined; // renamed away — nothing to clean up
+    await atomicWriteFileAsync(path, kept.join('\n') + '\n', { mode: 0o600, mkdirp: false });
     return { trimmed: true, removedLines };
   } catch {
-    if (tmp !== undefined) {
-      try {
-        await unlink(tmp);
-      } catch {
-        /* temp already gone or unremovable — ignore */
-      }
-    }
     return noop;
   }
 }

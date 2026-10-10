@@ -1,13 +1,11 @@
 /**
  * Unit tests for the startup-reconcile helpers.
  *
- * Verifies that runReplReconcile, runTelegramReconcile, and
- * runNonInteractiveReconcile fire the expected callbacks when wave manifests
- * with unsettled units exist, and that they are no-ops when the gate is off.
+ * Verifies that runReplReconcile, runTelegramReconcile, runNonInteractiveReconcile,
+ * and runDaemonReconcile fire the expected callbacks when wave manifests with
+ * unsettled units exist, and that they are no-ops when the gate is off.
  *
- * Each helper now returns the inner Promise<void> so tests can await it
- * directly — replacing the fragile chained `await Promise.resolve()` pattern
- * that relied on the exact number of internal microtask checkpoints (#3353).
+ * Each helper returns the inner Promise<void> so tests can await it directly.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -297,10 +295,13 @@ describe('runDaemonReconcile', () => {
 
   it('logs a redacted error to stderr when the Telegram push throws', async () => {
     process.env['AFK_WAVE_RESUME_UNATTENDED'] = '1';
-    mockPushIfConfigured.mockRejectedValue(new Error('network failure'));
+    // Use a bot-token-shaped error so redactInlineSecrets is exercised.
+    // Telegram bot tokens match /\d{8,12}:[A-Za-z0-9_\-]{35}/.
+    const botToken = '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi';
+    mockPushIfConfigured.mockRejectedValue(new Error(`Telegram push failed: token=${botToken}`));
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    seedManifest('dr-push-fail-log');
+    const waveId = seedManifest('dr-push-fail-log');
 
     await runDaemonReconcile('dr-push-fail-log');
 
@@ -308,7 +309,19 @@ describe('runDaemonReconcile', () => {
     expect(consoleSpy).toHaveBeenCalledOnce();
     const logged = consoleSpy.mock.calls[0]?.join(' ') ?? '';
     expect(logged).toContain('[daemon] wave-resume push failed:');
-    expect(logged).toContain('network failure');
+    // The raw bot token must NOT appear — redactInlineSecrets must have run.
+    expect(logged).not.toContain(botToken);
+    // The redaction marker must be present.
+    expect(logged).toContain('<REDACTED Telegram token');
+
+    // stderr must NOT receive the offer (push threw — no fallback to stderr).
+    const stderrCalls = stderrSpy.mock.calls.map((c) => String(c[0]));
+    expect(stderrCalls.some((t) => t.includes('[wave-resume]'))).toBe(false);
+
+    // The manifest must NOT be stamped — a thrown push leaves it un-stamped so
+    // the offer is re-surfaced on the next startup.
+    const manifest = readManifest(waveId);
+    expect(manifest?.offeredAt).toBeUndefined();
 
     consoleSpy.mockRestore();
     stderrSpy.mockRestore();

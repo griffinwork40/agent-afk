@@ -33,6 +33,7 @@ import {
   __setOpenAIOneShotClientFactory,
 } from '../openai-compatible/oneshot.js';
 import { completeWithWire, type CompleteWireClientOptions } from '../openai-compatible/complete-wire.js';
+import { type AuthResolverDeps } from '../openai-compatible/auth.js';
 
 const execFile = promisify(execFileCb);
 const readFile = promisify(readFileCb);
@@ -258,7 +259,7 @@ describe('completeWithWire — Responses-wire client factory receives h1ModelFet
       readFile: (_path: string) => fakeCodexAuth,
       readEnv: (_key: string) => undefined,
       homedir: () => '/fake-home',
-    };
+    } satisfies AuthResolverDeps;
 
     // A minimal async iterable that emits response.completed so oneShotResponses
     // resolves cleanly (it throws ResponsesSummaryIncompleteError otherwise).
@@ -380,7 +381,8 @@ describe('h1ModelFetch + undici FormData — multipart interop (issue #3345)', (
     expect(result.bodyText).toContain('image/png');
     // Verify output_format reaches the server — guards against regression where
     // the field was parsed/validated but never appended to the body (#3387).
-    expect(result.bodyText).toContain('name="output_format"');
-    expect(result.bodyText).toContain('jpeg');
+    // Use a regex anchored to the part header so 'jpeg' in 'image/jpeg' (the
+    // MIME type of the image[] part) cannot produce a false-positive match (#3429).
+    expect(result.bodyText).toMatch(/name="output_format"[\s\S]*?jpeg/);
   });
 });

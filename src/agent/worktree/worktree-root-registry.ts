@@ -24,6 +24,7 @@ import { promises as fs } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { getWorktreeRootsRegistryPath } from '../../paths.js';
+import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
 import { debugLog } from '../../utils/debug.js';
 import { classifyRootLiveness } from './worktree-root-registry-liveness.js';
 import { normalizeRootPath } from './worktree-root-path.js';
@@ -169,26 +170,20 @@ async function acquireRegistryLock(lockPath: string): Promise<(() => Promise<voi
 /**
  * Replace the registry with `entries`, atomically.
  *
- * External constraint: `rename(2)` is atomic only within one filesystem, so the
- * temp file is written as a SIBLING of the target rather than in a tmpdir.
+ * Delegates to `atomicWriteFileAsync` which writes to a sibling temp file
+ * (with collision-resistant random naming) then renames it over the target —
+ * `rename(2)` is atomic on POSIX and NTFS within a single filesystem, so a
+ * crash mid-write never leaves a corrupt (partial or zero-length) registry.
  */
 async function writeRegistry(entries: RootEntry[]): Promise<void> {
   const target = getWorktreeRootsRegistryPath();
-  await fs.mkdir(dirname(target), { recursive: true, mode: DIR_MODE });
   const payload: RegistryFile = { version: REGISTRY_VERSION, roots: entries };
-  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
-  try {
-    // mode on the TEMP file, before the rename — writing the real path first
-    // and chmod-ing after would leave a world-readable window.
-    await fs.writeFile(tmp, JSON.stringify(payload, null, 2), {
-      encoding: 'utf-8',
-      mode: FILE_MODE,
-    });
-    await fs.rename(tmp, target);
-  } catch (err) {
-    await fs.rm(tmp, { force: true }).catch(() => undefined);
-    throw err;
-  }
+  // mkdirp:true (default) — atomicWriteFileAsync creates the parent directory.
+  // mode FILE_MODE (0o600) — applied to the temp file before rename so no
+  // world-readable window exists, matching the pre-refactor writeFile call.
+  await atomicWriteFileAsync(target, JSON.stringify(payload, null, 2), {
+    mode: FILE_MODE,
+  });
 }
 
 /** Apply `transform` to the current entries and persist the result. Never throws. */

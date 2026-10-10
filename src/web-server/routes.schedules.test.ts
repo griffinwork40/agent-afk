@@ -147,6 +147,32 @@ describe('routes.schedules', () => {
       expect(json().status).toBe(400);
     });
 
+    it('rejects an invalid trigger value', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, {
+        name: 'Test',
+        command: '/test',
+        cron: '0 * * * *',
+        trigger: 'daily',
+      });
+      const { status, body } = json();
+      expect(status).toBe(400);
+      expect((body as { message: string }).message).toMatch(/trigger must be one of/);
+    });
+
+    it('rejects an invalid notifyOn value', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, {
+        name: 'Test',
+        command: '/test',
+        cron: '0 * * * *',
+        notifyOn: 'always_and_never',
+      });
+      const { status, body } = json();
+      expect(status).toBe(400);
+      expect((body as { message: string }).message).toMatch(/notifyOn must be one of/);
+    });
+
     it('enabled:false skips daemon sync and returns daemonSynced:false without syncNote', async () => {
       const { res, json } = makeRes();
       await handleCreateSchedule(res, {

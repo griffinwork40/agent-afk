@@ -96,8 +96,11 @@ export interface PeerBoundaryOpts {
   /**
    * Settled background-process envelopes, drained at each boundary (behind
    * the human barrier). Absent when the session has no process registry.
+   *
+   * Requires `hasPendingInjections()` in addition to `drainInjections()` so
+   * the boundary can skip the allocation when nothing is ready.
    */
-  processJobNotifier?: InjectionSource;
+  processJobNotifier?: InjectionSource & { hasPendingInjections(): boolean };
 }
 
 /**
@@ -194,6 +197,11 @@ export function installPeerBoundary(opts: PeerBoundaryOpts): () => void {
     // process envelope: the user's queued turn must run first (the next-turn
     // fallback in applyDeferPeers drains both).
     if (humanPending) return undefined;
+    // Early-exit when neither source has anything ready: avoids allocating the
+    // parts array on every tool-round boundary for the common idle case.
+    if (!opts.processJobNotifier?.hasPendingInjections() && !admissionQueue.pending) {
+      return undefined;
+    }
     // Process envelopes first, matching the next-turn prepend order
     // (process results precede peer messages).
     const parts: string[] = [];
@@ -302,7 +310,7 @@ export function setupPeerBoundary(
   surface: InputSurface,
   peerNotifier: PeerInboxNotifier,
   isQueuedHumanTurn: () => boolean,
-  processJobNotifier?: InjectionSource,
+  processJobNotifier?: InjectionSource & { hasPendingInjections(): boolean },
 ): { admissionQueue: AdmissionQueue; reinstall: () => void } {
   const admissionQueue = new AdmissionQueue();
   const opts: PeerBoundaryOpts = {

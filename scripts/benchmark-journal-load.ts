@@ -31,10 +31,16 @@ import * as path from 'node:path';
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-bench-journal-'));
 process.env['AFK_HOME'] = tmpDir; // audit-env-access: allow — standalone benchmark script, not production src/
 
+function cleanupTmpDir(): void {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+}
+process.on('SIGTERM', () => { cleanupTmpDir(); process.exit(0); });
+process.on('SIGINT', () => { cleanupTmpDir(); process.exit(0); });
+
 try {
   await runBenchmark();
 } finally {
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  cleanupTmpDir();
 }
 
 async function runBenchmark(): Promise<void> {
@@ -106,22 +112,6 @@ async function runBenchmark(): Promise<void> {
     return { recordCount: lines.length, fileSizeBytes: Buffer.byteLength(content) };
   }
 
-  // ─── Measurement ───────────────────────────────────────────────────────────
-
-  function measureMedian(fn: () => void, n: number): number {
-    // Warm-up pass to populate OS file cache.
-    for (let i = 0; i < 5; i++) fn();
-
-    const times: number[] = [];
-    for (let i = 0; i < n; i++) {
-      const start = performance.now();
-      fn();
-      times.push(performance.now() - start);
-    }
-    times.sort((a, b) => a - b);
-    return times[Math.floor(times.length / 2)]!;
-  }
-
   // ─── Run scenarios ─────────────────────────────────────────────────────────
 
   console.log('\n── benchmark-journal-load (#3390) ──────────────────────────────────────────');
@@ -135,15 +125,9 @@ async function runBenchmark(): Promise<void> {
     const sid = `bench-${cycles}-cycles`;
     const { recordCount, fileSizeBytes } = buildJournal(sid, cycles);
 
-    // Warm-up.
-    loadJournalMessages(sid);
+    // Warm-up: populate OS file cache; results are discarded.
+    for (let i = 0; i < 20; i++) loadJournalMessages(sid);
 
-    const allTimes: number[] = [];
-    for (let i = 0; i < 20; i++) {
-      const t = performance.now();
-      loadJournalMessages(sid);
-      allTimes.push(performance.now() - t);
-    }
     const times: number[] = [];
     for (let i = 0; i < ITERATIONS; i++) {
       const t = performance.now();

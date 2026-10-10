@@ -36,7 +36,7 @@ export function createBrowserCloseHandler(opts: BrowserHandlerOptions = {}): Too
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_close',
         toolUseId: context?.toolUseId ?? '',
-        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingBackend ? { backend: routingBackend } : {}),
         ...(routingReason ? { backendReason: routingReason } : {}),
         urlBefore: null,
         urlAfter: null,
@@ -50,7 +50,7 @@ export function createBrowserCloseHandler(opts: BrowserHandlerOptions = {}): Too
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_close',
         toolUseId: context?.toolUseId ?? '',
-        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingBackend ? { backend: routingBackend } : {}),
         ...(routingReason ? { backendReason: routingReason } : {}),
         urlBefore: null,
         urlAfter: null,

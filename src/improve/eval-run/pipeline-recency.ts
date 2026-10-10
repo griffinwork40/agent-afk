@@ -32,6 +32,7 @@ import { existsSync, readFileSync } from 'fs';
 import { env } from '../../config/env.js';
 import { getEvalRunsIndexPath } from '../paths.js';
 import { errorMessage } from '../../utils/errors.js';
+import { parseJsonlLines } from '../../utils/jsonl.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -128,17 +129,11 @@ export function resolveStalenessThreshold(): number {
  * `checkEvalPipelineRecency` function.
  */
 export function parseLatestTimestamp(raw: string): string | null {
+  const isIndexLine = (x: unknown): x is IndexLine =>
+    x !== null && typeof x === 'object';
+  const lines = parseJsonlLines<IndexLine>(raw, { guard: isIndexLine });
   let latest: string | null = null;
-  for (const line of raw.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    let parsed: IndexLine;
-    try {
-      parsed = JSON.parse(trimmed) as IndexLine;
-    } catch {
-      // Corrupt line — skip rather than abort.
-      continue;
-    }
+  for (const parsed of lines) {
     const ts = parsed.timestamp;
     if (typeof ts !== 'string' || ts === '') continue;
     if (latest === null || ts > latest) latest = ts;

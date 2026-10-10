@@ -15,13 +15,14 @@
  * @module agent/daemon/queue-store
  */
 
-import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { getQueueDir } from '../../paths.js';
+import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { leaseTask as _leaseTask, recoverExpiredLeases } from './lease-store.js';
-import { errorMessage, isErrnoCode} from '../../utils/errors.js';
+import { errorMessage, isEnoent } from '../../utils/errors.js';
 
 export { recoverExpiredLeases };
 
@@ -98,17 +99,10 @@ export function enqueue(
   const seq = String(sequence).padStart(4, '0');
   const filename = `${seq}-${id}.json`;
   const filePath = join(queueDir, filename);
-  const tmpSuffix = randomBytes(4).toString('hex');
-  const tmpPath = join(queueDir, `.tmp-${tmpSuffix}.json`);
 
-  try {
-    writeFileSync(tmpPath, JSON.stringify(task), 'utf-8');
-    renameSync(tmpPath, filePath);
-  } catch (err) {
-    // Best-effort cleanup of the temp file on failure.
-    try { unlinkSync(tmpPath); } catch { /* ignore */ }
-    throw err;
-  }
+  // Atomic write: temp-file + rename so no partial file is ever visible.
+  // mode 0o600: queue entries may contain command secrets; restrict to owner.
+  atomicWriteFile(filePath, JSON.stringify(task), { mode: 0o600, mkdirp: false });
 
   return task;
 }
@@ -210,7 +204,7 @@ export function dequeueNext(queueDir: string = getQueueDir()): QueuedTask | null
       // Race-loss (ENOENT): another process already claimed this file — skip.
       // Other errors: the lease was not acquired; clean up the queue file
       // (if it still exists) and skip to the next entry.
-      if (!isErrnoCode(err, 'ENOENT')) {
+      if (!isEnoent(err)) {
         try { unlinkSync(filePath); } catch { /* ignore */ }
       }
       continue;

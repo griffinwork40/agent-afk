@@ -9,7 +9,7 @@
  * @module agent/daemon/gates
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { readTelemetryHistory } from './telemetry-reader.js';
 
 export const DEFAULT_SESSIONSTART_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 hours
 
@@ -30,38 +30,24 @@ export interface GateOptions {
 }
 
 /**
- * Scan the telemetry file for the most recent entry matching `taskId`.
- * Returns the `triggeredAt` timestamp in ms, or `null` if no prior fire.
- * Reads the entire file — fine at current scale (< 1 MB); revisit if the
- * file grows past tens of MB.
+ * Return the `triggeredAt` timestamp (ms) of the most recent telemetry entry
+ * for `taskId`, or `null` when no prior fire is recorded.
+ *
+ * Delegates to {@link readTelemetryHistory} with `limit: 1` so I/O is bounded
+ * to `tailBytes` (default 1 MiB) regardless of how large the telemetry file
+ * has grown.
  */
-export function readLastTickTime(taskId: string, telemetryPath: string): number | null {
-  if (!existsSync(telemetryPath)) return null;
-  let content: string;
-  try {
-    content = readFileSync(telemetryPath, 'utf-8');
-  } catch {
-    return null;
-  }
-  const lines = content.split('\n');
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i];
-    if (!line) continue;
-    try {
-      const record = JSON.parse(line) as { taskId?: string; triggeredAt?: string };
-      if (record.taskId !== taskId || typeof record.triggeredAt !== 'string') continue;
-      const ms = Date.parse(record.triggeredAt);
-      if (Number.isNaN(ms)) continue;
-      return ms;
-    } catch {
-      continue;
-    }
-  }
-  return null;
+export async function readLastTickTime(taskId: string, telemetryPath: string): Promise<number | null> {
+  const records = await readTelemetryHistory(telemetryPath, { taskId, limit: 1 });
+  if (records.length === 0) return null;
+  const rec = records[records.length - 1] as { triggeredAt?: string } | null;
+  if (!rec || typeof rec.triggeredAt !== 'string') return null;
+  const ms = Date.parse(rec.triggeredAt);
+  return Number.isNaN(ms) ? null : ms;
 }
 
-export function evaluateSessionStartGates(options: GateOptions): GateDecision {
-  const lastFiredMs = readLastTickTime(options.taskId, options.telemetryPath);
+export async function evaluateSessionStartGates(options: GateOptions): Promise<GateDecision> {
+  const lastFiredMs = await readLastTickTime(options.taskId, options.telemetryPath);
   if (lastFiredMs !== null && options.cooldownMs > 0) {
     const elapsed = options.nowMs - lastFiredMs;
     if (elapsed < options.cooldownMs) {

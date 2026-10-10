@@ -22,27 +22,15 @@
  *
  * ## Injectable seam (not re-exported from this barrel)
  *
- * `EffectStore` is accepted as an injectable parameter by both hook factories
- * above (e.g. for testing with a custom store), but it is not re-exported
- * from this barrel.  Import it directly from `./store.js` when injecting a
- * custom store or writing tests.
- *
- * ## Truly internal helpers (not re-exported)
- *
- * `classifyToolCall` and `computeIdempotencyKey` are implementation details
- * consumed by the hook factories and are intentionally NOT part of any public
- * surface.  Import them directly from `./classifier.js` and `./idempotency.js`
- * only if you are extending the ledger internals.
+ * `EffectStore`, `EffectRecord`, `EffectStatus`, `EffectQuery`,
+ * `PendingEffectInput`, `ExecuteEffectInput`, `Classification`,
+ * `classifyToolCall`, and `computeIdempotencyKey` are implementation details.
+ * Import them directly from `./store.js`, `./types.js`, `./classifier.js`, or
+ * `./idempotency.js` only if you are extending the ledger internals.
+ * `createEffectLedgerPreHook` is likewise internal — import directly from
+ * `./hook.js` when needed.
  *
  * @module agent/effect-ledger
  */
 
-export { createEffectLedgerPostHook, createEffectLedgerPreHook } from './hook.js';
-export type {
-  EffectRecord,
-  EffectStatus,
-  EffectQuery,
-  PendingEffectInput,
-  ExecuteEffectInput,
-} from './types.js';
-export type { Classification } from './classifier.js';
+export { createEffectLedgerPostHook } from './hook.js';
