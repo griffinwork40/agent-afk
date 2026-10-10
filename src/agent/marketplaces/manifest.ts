@@ -35,7 +35,7 @@ export interface MarketplaceManifest {
   plugins: MarketplacePluginEntry[];
 }
 
-export const MARKETPLACE_MANIFEST_RELPATH = '.claude-plugin/marketplace.json';
+const MARKETPLACE_MANIFEST_RELPATH = '.claude-plugin/marketplace.json';
 
 /** Absolute path to a marketplace's manifest given its install dir. */
 export function manifestPath(marketplaceDir: string): string {
