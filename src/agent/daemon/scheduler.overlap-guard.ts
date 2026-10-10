@@ -110,6 +110,50 @@ export function makeSessionStartSkipRecord(
   };
 }
 
+/**
+ * Build a `status: 'skipped', skipReason: 'expired'` telemetry record for a
+ * task whose `expiresAt` wall-clock deadline has passed.
+ */
+export function makeExpiredSkipRecord(
+  task: ScheduledTask,
+  trigger: TelemetryTrigger,
+  nowMs: number,
+): TelemetryRecord {
+  return {
+    taskId: task.taskId,
+    command: redactInlineSecrets(task.command),
+    trigger,
+    ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
+    triggeredAt: new Date(nowMs).toISOString(),
+    durationMs: 0,
+    status: 'skipped',
+    skipReason: 'expired',
+    errorMessage: `Task expired at ${task.expiresAt ?? '(unknown)'}`,
+  };
+}
+
+/**
+ * Build a `status: 'skipped', skipReason: 'not-yet'` telemetry record for a
+ * `runAt` one-shot whose scheduled time has not been reached yet.
+ */
+export function makeNotYetSkipRecord(
+  task: ScheduledTask,
+  trigger: TelemetryTrigger,
+  nowMs: number,
+): TelemetryRecord {
+  return {
+    taskId: task.taskId,
+    command: redactInlineSecrets(task.command),
+    trigger,
+    ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
+    triggeredAt: new Date(nowMs).toISOString(),
+    durationMs: 0,
+    status: 'skipped',
+    skipReason: 'not-yet',
+    errorMessage: `runAt ${task.runAt ?? '(unknown)'} not yet reached`,
+  };
+}
+
 // ─── Overlap alert latch ──────────────────────────────────────────────────────
 
 /**

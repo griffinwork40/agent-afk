@@ -49,6 +49,7 @@ import { errorMessage } from '../../utils/errors.js';
 import { makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord, makeTelemetryUnwritableSkipRecord, OverlapAlertLatch, formatOverlapAlertMessage } from './scheduler.overlap-guard.js';
 import { BudgetAlertLatch, evaluateBudgetGate, formatBudgetSkipMessage, resolveDaemonUsageTarget } from './budget-gate.js';
 import { probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
+import { evaluateRunAtGate, applyAutoDisable } from './scheduler.runat-gate.js';
 
 /**
  * Maximum length (chars) of the command preview included in crash-notice
@@ -255,8 +256,11 @@ export class CronScheduler {
     }
     let cronTask: CronTask | undefined;
     if (task.trigger === 'cron' || task.trigger === 'both') {
+      // runAt one-shots have no cronExpression; poll every minute so the
+      // scheduler can evaluate the wall-clock check on each tick.
+      const expr = task.cronExpression ?? '* * * * *';
       cronTask = cron.schedule(
-        task.cronExpression!,
+        expr,
         () => {
           // Fire-and-forget — the cron callback type doesn't await, but
           // catching here means a thrown promise can't leak as unhandled.
@@ -444,6 +448,20 @@ export class CronScheduler {
     }
     this.inFlightTasks.set(task.taskId, this.now());
     try {
+
+    // ── expiresAt / runAt gate ───────────────────────────────────────────────
+    // Delegates to scheduler.runat-gate.ts; see that module for the full spec.
+    const gateResult = evaluateRunAtGate(task, trigger, this.now());
+    if (gateResult.kind === 'expired') {
+      this.writeTelemetry(gateResult.record, task);
+      applyAutoDisable(task.taskId, (id) => this.unregister(id));
+      return gateResult.record;
+    }
+    if (gateResult.kind === 'not-yet') {
+      // Silent skip — no telemetry write; pre-fire polling is noise-free.
+      return gateResult.record;
+    }
+
     // Resolve executor early so the cwd guard can skip builtin tasks (which
     // ignore cwd entirely and would produce spurious errors if the dir vanishes).
     // TODO(#2350): remove __BUILTIN_WORKTREE_PRUNE__ sentinel once all stored
@@ -544,6 +562,12 @@ export class CronScheduler {
       // Any non-overlap run (success or error) ends the overlap episode for
       // this task, so the next overlap will alert again.
       this.overlapAlerts.clear(task.taskId);
+      // runAt one-shot: auto-disable + unregister after the run fires.
+      // The gate already confirmed runAt has been reached (kind:'pass'); just
+      // check presence of the field to identify this as a one-shot task.
+      if (task.runAt !== undefined) {
+        applyAutoDisable(task.taskId, (id) => this.unregister(id));
+      }
     }
   }
 
