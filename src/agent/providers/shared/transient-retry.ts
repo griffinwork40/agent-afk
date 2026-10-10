@@ -22,12 +22,22 @@
  *   - `APIConnectionTimeoutError` — the SDK's own request timeout; AFK's TTFB
  *     watchdog owns that window (`isConnectionPhaseNetworkError` already
  *     excludes it).
- *   - 400 Bad Request, 401 Unauthorized, 403 Forbidden, 404 Not Found, or any
- *     other 4xx status not in the retryable set — these are not transient.
+ *   - 400 Bad Request, 401 Unauthorized, 403 Forbidden (except the narrow
+ *     `oauth_not_allowed_for_organization` transient — see below), 404 Not
+ *     Found, or any other 4xx status not in the retryable set — these are not
+ *     transient.
  *   - Any error that carries a `retry-after` hint exceeding
  *     `retryAfterCeilingMs` — a long server-mandated wait (e.g. a usage-limit
  *     429) cannot be served inside a compaction budget, so we rethrow instead
  *     of blocking the caller for 60+ seconds.
+ *
+ * Special case — transient 403 `oauth_not_allowed_for_organization` (#3467):
+ *   The Anthropic API intermittently returns this 403 during concurrent OAuth
+ *   token refresh across multiple daemon sessions. The same credentials succeed
+ *   on adjacent runs, confirming this is a provider-side race, not a genuine
+ *   authorization failure. Classified via `isTransientOauthOrg403`, which
+ *   requires BOTH status 403 AND the exact `error_code` string — all other
+ *   403s remain non-retryable.
  *
  * Backoff: exponential with additive jitter — `baseDelayMs * 2^attempt + jitter`.
  * When the error carries a `retry-after` hint (at most `retryAfterCeilingMs`,
@@ -110,6 +120,38 @@ function isAbortError(err: unknown): boolean {
 }
 
 /**
+ * Contract: true when `err` is the specific transient 403 the Anthropic API
+ * returns during concurrent OAuth token refresh across daemon sessions (#3467).
+ *
+ * The response body shape is:
+ *   `{"type":"error","error":{"type":"permission_error",
+ *     "message":"...","details":{"error_code":"oauth_not_allowed_for_organization"}}}`
+ *
+ * The SDK surfaces this as an `APIError` (status 403) whose `.error` property
+ * carries the parsed body. We require BOTH the 403 status AND the exact
+ * `error_code` string so that genuine org-level OAuth denials — which also
+ * arrive as 403 but with a different or absent `error_code` — are never
+ * retried.
+ *
+ * Invariant: `(err as any).error` is the parsed response body object when the
+ * Anthropic SDK's `APIError` is thrown; it is absent on plain `Error` instances
+ * and non-SDK shapes. The nested access is intentionally optional-chained so
+ * any missing level safely returns `undefined` rather than throwing.
+ */
+export function isTransientOauthOrg403(err: unknown): boolean {
+  if (err == null || typeof err !== 'object') return false;
+  const status = (err as { status?: unknown }).status;
+  if (status !== 403) return false;
+  // Walk the parsed error body: err.error.details.error_code
+  const body = (err as { error?: unknown }).error;
+  if (body == null || typeof body !== 'object') return false;
+  const details = (body as { details?: unknown }).details;
+  if (details == null || typeof details !== 'object') return false;
+  const code = (details as { error_code?: unknown }).error_code;
+  return code === 'oauth_not_allowed_for_organization';
+}
+
+/**
  * Contract: true when `err` should be retried by this module.
  *
  * Retryable: connection-phase network errors (ECONNRESET etc.), retryable
@@ -137,7 +179,10 @@ export function isTransientError(err: unknown): boolean {
   if (typeof status === 'number' && status === 409) return false;
   if (isRetryableConnectionStatus(err)) return true;
   if (typeof status === 'number') {
-    return status === 429 || status === 503 || status === 529;
+    if (status === 429 || status === 503 || status === 529) return true;
+    // Invariant: only this one specific 403 error_code is transient (#3467).
+    // All other 403s are genuine auth denials and must NOT be retried.
+    if (status === 403) return isTransientOauthOrg403(err);
   }
   return false;
 }
