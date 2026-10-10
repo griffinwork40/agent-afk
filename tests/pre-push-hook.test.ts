@@ -93,7 +93,9 @@ function runHook(
     return Object.assign(result, { dir, pnpmLog });
   } catch (err) {
     // rmSyncRetry: git may still be writing objects when the hook process exits.
-    rmSyncRetry(dir);
+    // Best-effort: a permanently locked dir (e.g. Windows AV hold) must not
+    // swallow the original error (finding #3208).
+    try { rmSyncRetry(dir); } catch { /* best-effort — locked dir on CI */ }
     throw err;
   }
 }
@@ -101,7 +103,9 @@ function runHook(
 function cleanup(result: { dir: string }): void {
   // rmSyncRetry: git may still be writing objects into .git/ when the test
   // finishes, causing ENOTEMPTY on CI. Retries let in-flight writes settle.
-  rmSyncRetry(result.dir);
+  // Best-effort: a permanently locked dir (e.g. Windows AV hold) must not
+  // abort remaining cleanup (finding #3208).
+  try { rmSyncRetry(result.dir); } catch { /* best-effort — locked dir on CI */ }
 }
 
 describe('scripts/git-hooks/pre-push', () => {

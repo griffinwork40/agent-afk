@@ -164,4 +164,31 @@ describe('openAIJournalAdapterForEndpoint reasoning round-trip (#3156)', () => {
     const otherField = expectedRestoreField === 'reasoning_content' ? 'reasoning' : 'reasoning_content';
     expect(restoredMsg[otherField]).toBeUndefined();
   });
+
+  it('dual-field message: reasoning wins over reasoning_content (branch-order invariant)', () => {
+    // Contract: journal-adapter.ts:139-140 — when a message carries BOTH
+    // `reasoning` and `reasoning_content`, `reasoning` must be persisted
+    // because the Cerebras echo contract requires it.
+    const dualField = {
+      role: 'assistant',
+      content: 'reply',
+      reasoning: 'cerebras thought',
+      reasoning_content: 'deepseek thought',
+    } as unknown as OpenAIMessage;
+
+    // toJournal must pick `reasoning` (the first branch).
+    const journal = openAIJournalAdapter.toJournal(dualField);
+    expect(journal).not.toBeNull();
+    const thinking = journal!.content.find((b) => b.type === 'thinking');
+    expect(thinking).toBeDefined();
+    // The origin tag encodes which wire field was chosen.
+    expect((thinking as { origin?: string }).origin).toBe('openai-compatible:reasoning');
+
+    // fromJournalMessages with the Cerebras adapter restores under `reasoning`.
+    const cerebrasAdapter = openAIJournalAdapterForEndpoint('https://api.cerebras.ai/v1');
+    const restored = cerebrasAdapter.fromJournalMessages([journal!]);
+    const restoredMsg = restored[0] as Record<string, unknown>;
+    expect(restoredMsg['reasoning']).toBe('cerebras thought');
+    expect(restoredMsg['reasoning_content']).toBeUndefined();
+  });
 });
