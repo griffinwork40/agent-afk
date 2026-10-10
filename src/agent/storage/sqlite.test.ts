@@ -13,7 +13,7 @@ import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureSqliteConnection } from './sqlite.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -114,6 +114,27 @@ describe('configureSqliteConnection', () => {
       const db = openFileDb('err');
       db.close(); // closing before configure causes operations to throw
       expect(() => configureSqliteConnection(db)).toThrow();
+    });
+
+    it('re-throws a non-BUSY error from the WAL switch on the first attempt (no retry)', () => {
+      const db = openFileDb('wal-nobusy');
+      const pragmaNames: string[] = [];
+      const mockPragma = (name: string): unknown => {
+        pragmaNames.push(name);
+        if (name === 'journal_mode') return 'delete'; // not WAL → proceeds to switch
+        if (name === 'journal_mode = WAL') {
+          throw Object.assign(new Error('SQLITE_CORRUPT: file is not a database'), {
+            code: 'SQLITE_CORRUPT',
+          });
+        }
+        return []; // busy_timeout = 5000
+      };
+      vi.spyOn(db, 'pragma').mockImplementation(mockPragma as typeof db.pragma);
+      expect(() => configureSqliteConnection(db)).toThrowError('file is not a database');
+      // Exactly ONE WAL-switch attempt — a BUSY error would have looped up to
+      // walMaxAttempts; this proves the WAL non-BUSY branch re-throws at once.
+      expect(pragmaNames.filter((n) => n === 'journal_mode = WAL')).toHaveLength(1);
+      db.close();
     });
   });
 });

@@ -11,9 +11,10 @@
  * function as an explicit parameter so the caller controls the transport
  * without creating an upward import.
  *
- * Re-entry safety: the returned `reset` function clears the guard flag so
- * tests can call `installCrashNotifier` multiple times from a clean state
- * without leaking real `process.on` registrations.
+ * Re-entry safety: the returned `reset` function clears the guard flag AND
+ * removes the registered process listeners (`process.off`), so tests can call
+ * `installCrashNotifier` multiple times from a clean state without leaking
+ * real `process.on` registrations.
  */
 
 import { errorMessage } from './errors.js';
@@ -30,16 +31,17 @@ export interface CrashNotifierOptions {
   /**
    * Optional provider of supplementary lines appended to the crash notice
    * after the error message. Called synchronously inside the handler; MUST
-   * NOT throw (any thrown error is silently swallowed to protect the handler).
+   * NOT throw (a thrown error is logged and swallowed to protect the handler).
    */
   extraLines?: () => string[];
 }
 
 export interface CrashNotifierHandle {
   /**
-   * Clear the re-entry guard. Exported for testing only — do not call in
-   * production code. Allows a test to call `installCrashNotifier` again from
-   * a clean state without leaking real `process.on` registrations.
+   * Clear the re-entry guard and remove the registered process listeners.
+   * Exported for testing only — do not call in production code. Allows a
+   * test to call `installCrashNotifier` again from a clean state without
+   * leaking real `process.on` registrations.
    *
    * @internal
    */
@@ -64,6 +66,11 @@ export function installCrashNotifier(
 
   let lastCrashPushAt = 0;
 
+  // Invariant: reset() must process.off() the exact refs captured here.
+  // Re-installing after a reset stacks a second listener pair otherwise.
+  let uncaughtHandler: ((err: unknown) => void) | undefined;
+  let rejectionHandler: ((err: unknown) => void) | undefined;
+
   const notifyCrash = (kind: string, err: unknown): void => {
     const nowMs = Date.now();
     if (nowMs - lastCrashPushAt < CRASH_PUSH_GUARD_MS) return;
@@ -76,8 +83,10 @@ export function installCrashNotifier(
       try {
         const extra = opts.extraLines();
         if (extra.length > 0) lines.push(...extra);
-      } catch {
-        // extraLines must never crash the crash handler.
+      } catch (extraErr) {
+        // extraLines must never crash the crash handler — log a breadcrumb and go on.
+        // eslint-disable-next-line no-console
+        console.error(`[${label}] crash notifier extraLines threw:`, errorMessage(extraErr));
       }
     }
 
@@ -91,27 +100,33 @@ export function installCrashNotifier(
     if (installed) return;
     installed = true;
 
-    process.on('uncaughtException', (err) => {
+    uncaughtHandler = (err) => {
       notifyCrash('uncaughtException', err);
       // exitCode is set first so a natural (early) exit — before the timer fires
       // — still reports code 1 to the supervisor. The unref'd timer fires if the
       // in-flight push keeps the event loop alive past CRASH_EXIT_DELAY_MS.
       process.exitCode = 1;
       setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
-    });
+    };
+    process.on('uncaughtException', uncaughtHandler);
 
-    process.on('unhandledRejection', (err) => {
+    rejectionHandler = (err) => {
       notifyCrash('unhandledRejection', err);
       // Same rationale as uncaughtException above.
       process.exitCode = 1;
       setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
-    });
+    };
+    process.on('unhandledRejection', rejectionHandler);
   };
 
   register();
 
   return {
     reset: () => {
+      if (uncaughtHandler !== undefined) process.off('uncaughtException', uncaughtHandler);
+      if (rejectionHandler !== undefined) process.off('unhandledRejection', rejectionHandler);
+      uncaughtHandler = undefined;
+      rejectionHandler = undefined;
       installed = false;
       lastCrashPushAt = 0;
     },

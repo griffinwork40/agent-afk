@@ -71,6 +71,7 @@ import * as ss from './session-send.js';
 import * as sc from './session-config.js';
 import { toModelInfo, toAgentInfo, toContextUsageResponse, toMcpServerStatus } from './provider-type-mappers.js';
 import { applyStopHookWiring } from './agent-session.stop-hook-wiring.js';
+import { bindSessionExecutors, recordSubagentCompletionInTree } from './agent-session.executors.js';
 
 
 export class AgentSession implements IAgentSession {
@@ -133,6 +134,8 @@ export class AgentSession implements IAgentSession {
   private runner!: TurnStreamRunner;
 
   constructor(config: AgentConfig, ownedTraceWriter?: TraceWriter) {
+    // #3442: validate + bind opt-in executors before any provider exists.
+    bindSessionExecutors(config, this);
     // Invariant: seal ownership requires the caller to explicitly supply the
     // owner handle (second arg) AND it must be the same object as
     // config.traceWriter. The TraceSink/TraceWriter type split prevents forks
@@ -492,12 +495,17 @@ export class AgentSession implements IAgentSession {
    * @param usage   - Token breakdown from {@link SubagentTrace.usage}.
    * @param costUsd - Optional USD cost for this subagent (from
    *                  {@link SubagentSucceededPayload.totalCostUsd}).
+   *
+   * When `config.maxBudgetUsd` is set, the cost counts toward the same
+   * ceiling as this session's own turns (tree budget, checked at completion
+   * granularity); crossing it aborts with `BudgetExceededError`.
    */
   recordSubagentCompletion(
     usage?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheCreationTokens?: number },
     costUsd?: number,
   ): void {
-    this.accounting.recordSubagentCompletion(usage, costUsd);
+    // Tree budget: subagent cost shares config.maxBudgetUsd with this session.
+    recordSubagentCompletionInTree(this.accounting, this.config, this.abortController, usage, costUsd);
   }
 
   /**

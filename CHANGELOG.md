@@ -11,6 +11,24 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.308.5] - 2026-10-10
+
+### Added
+- opt-in agent/skill/compose executors for SDK sessions (#3442) (#3483) (3a2918c7)
+
+### Fixed
+- crash-notifier reset leak, double busy_timeout, shared deferred abort scope (#3482) (2ed4a8c3)
+- discriminant guards, parseFlagsField dedupe, audit-fit test, runtime-source comments (#3470) (ac88fdc9)
+
+### Changed
+- advisory cosmetic fixes from 2026-10-09 PR triage batch (#3471) (1696be99)
+- extract buildVerificationResultTail shared helper (#3472) (abcd0b75)
+- DEAD-033 incremental — src/agent/mcp/index.ts (15 unused exports) (#3474) (782f55ec)
+- same-file private helper extractions (#3477) (36cbd123)
+- extract makeDeferredParentProxy shared helper (#3475) (5f72a5d4)
+- extract invokeSkillPreflight shared helper (#3476) (6ed1083b)
+- extract runSelectorLoop skeleton shared by both selectors (#3473) (239b51fa)
+
 ## [5.308.4] - 2026-10-10
 
 ### Fixed

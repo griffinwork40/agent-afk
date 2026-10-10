@@ -89,7 +89,7 @@ import { redactInlineSecrets } from './session/prompt-dump.js';
 import { worktreeRootFor } from './worktree/worktree-occupancy.js';
 import { isSafeInWorkspaceRm } from './afk-mode-rm-allowlist.js';
 import { isSubagentContext } from './hooks/hook-utils.js';
-import { forwardAbortSignal } from '../utils/abort.js';
+import { createDeferredRequestAbortScope } from '../utils/abort.js';
 import { buildInputPreview } from './afk-gate-preview.js';
 
 /** Default deny-on-timeout window for a high-risk approval (ms). */
@@ -183,31 +183,32 @@ async function requestApproval(
   const start = Date.now();
   const request = buildApprovalRequest(toolName, input);
 
-  // A child controller so a deny-on-timeout (or a parent turn abort) cancels
+  // A child abort scope so a deny-on-timeout (or a parent turn abort) cancels
   // the pending elicitation prompt — the real router resolves to a decline on
-  // abort, so the phone prompt does not linger past the decision.
-  const ac = new AbortController();
-  const cleanupAbort = signal ? forwardAbortSignal(signal, ac) : () => undefined;
+  // abort, so the phone prompt does not linger past the decision. The timeout
+  // is DEFERRED (armed via onActive; Contract below) — see utils/abort.ts.
+  const scope = createDeferredRequestAbortScope({
+    parentSignal: signal,
+    timeoutMs: ctx.approvalTimeoutMs,
+    timeoutMessage: `approval timeout after ${Math.round(ctx.approvalTimeoutMs / 1000)}s`,
+  });
 
   const TIMEOUT = Symbol('afk-approval-timeout');
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let armTimer!: () => void;
-  // Contract: timeoutP resolves only after armTimer() is called (i.e. once
-  // this request leaves the elicitation queue and is shown to the operator).
-  // If onActive never fires (no handler / pre-aborted / aborted-in-queue),
-  // the timer is never armed and timeoutP never resolves — that's correct,
-  // because route() resolves DECLINE and wins the race. This ensures a prior
-  // queued prompt's open time is never charged against this op's window.
+  let resolveTimeout!: (value: typeof TIMEOUT) => void;
   const timeoutP = new Promise<typeof TIMEOUT>((resolve) => {
-    armTimer = () => {
-      if (timer) return; // idempotent
-      timer = setTimeout(() => {
-        ac.abort();
-        resolve(TIMEOUT);
-      }, ctx.approvalTimeoutMs);
-      timer.unref?.();
-    };
+    resolveTimeout = resolve;
   });
+  // Contract: timeoutP resolves only after the scope's timeout is armed (i.e.
+  // once this request leaves the elicitation queue and is shown to the
+  // operator). If onActive never fires (no handler / pre-aborted /
+  // aborted-in-queue), the timer is never armed and timeoutP never resolves —
+  // that's correct, because route() resolves DECLINE and wins the race. This
+  // ensures a prior queued prompt's open time is never charged against this
+  // op's window.
+  const armTimer = (): void => {
+    // Idempotent inside the scope: only the first onActive call arms the timer.
+    scope.armTimeout(() => resolveTimeout(TIMEOUT));
+  };
 
   function decide(
     decision: HookDecision,
@@ -246,15 +247,14 @@ async function requestApproval(
     const markSessionId = callSessionId ?? ctx.sessionId;
     outcome = await Promise.race([
       ctx.route(request, {
-        signal: ac.signal,
+        signal: scope.signal,
         onActive: armTimer,
         ...(markSessionId !== undefined ? { sessionId: markSessionId } : {}),
       }),
       timeoutP,
     ]);
   } finally {
-    if (timer) clearTimeout(timer);
-    cleanupAbort();
+    scope.dispose();
   }
 
   if (outcome === TIMEOUT) {

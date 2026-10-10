@@ -15,7 +15,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { isReducedToolSurface, emitReducedSurfaceWarning } from './sdk-surface-warning.js';
+import { isReducedToolSurface, emitReducedSurfaceWarning, resolveSurfaceInputs } from './sdk-surface-warning.js';
+import { registerSkill, _resetRegistry } from '../../skills/skill-registry.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -144,5 +145,34 @@ describe('emitReducedSurfaceWarning suppression via AFK_SDK_SURFACE_WARN', () =>
     vi.stubEnv('AFK_SDK_SURFACE_WARN', undefined as unknown as string);
     emitReducedSurfaceWarning(makeMetadata(['mint'], ['bash']));
     expect(stderrSpy).toHaveBeenCalledOnce();
+  });
+});
+
+describe('resolveSurfaceInputs (#3442: init metadata carries empty skills/tools)', () => {
+  afterEach(() => {
+    _resetRegistry();
+  });
+
+  it('falls back to the skill registry when init skills are empty, so a bare SDK session is detected', () => {
+    registerSkill({ name: 'probe-resolve', description: 'probe', handler: vi.fn() });
+    const inputs = resolveSurfaceInputs({}, { skills: [], tools: [] });
+    expect(inputs.skills).toContain('probe-resolve');
+    expect(isReducedToolSurface(inputs)).toBe(true);
+  });
+
+  it('treats a wired skill executor, an injected provider, or a forked child as having the skill tool', () => {
+    registerSkill({ name: 'probe-resolve', description: 'probe', handler: vi.fn() });
+    const empty = { skills: [], tools: [] };
+    const withExecutor = { executors: { skillExecutor: {} } } as unknown as Parameters<typeof resolveSurfaceInputs>[0];
+    expect(isReducedToolSurface(resolveSurfaceInputs(withExecutor, empty))).toBe(false);
+    const withProvider = { provider: {} } as unknown as Parameters<typeof resolveSurfaceInputs>[0];
+    expect(isReducedToolSurface(resolveSurfaceInputs(withProvider, empty))).toBe(false);
+    expect(isReducedToolSurface(resolveSurfaceInputs({ isSubagentFork: true }, empty))).toBe(false);
+  });
+
+  it('executors without a skill executor (skill: false) still count as reduced', () => {
+    registerSkill({ name: 'probe-resolve', description: 'probe', handler: vi.fn() });
+    const agentOnly = { executors: { subagentExecutor: {} } } as unknown as Parameters<typeof resolveSurfaceInputs>[0];
+    expect(isReducedToolSurface(resolveSurfaceInputs(agentOnly, { skills: [], tools: [] }))).toBe(true);
   });
 });

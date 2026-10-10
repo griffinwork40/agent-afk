@@ -1,11 +1,12 @@
 # SDK Tool Surface
 
-When you create sessions through the public `agent-afk` package
-(`AgentSession`, `query()`, `queryText()`), the session runs with a **reduced
-tool surface** compared with the CLI, REPL, Telegram bot, daemon, and
-`afk web` surfaces.
+By default, sessions created through the public `agent-afk` package
+(`AgentSession`, `query()`, `queryText()`) run with a **reduced tool surface**
+compared with the CLI, REPL, Telegram bot, daemon, and `afk web` surfaces.
+Opt in to `agent`, `skill`, and `compose` by passing `AgentConfig.executors`
+built with `createWiredExecutors()` (see "Opting in" below and the SDK docs page).
 
-## What is absent in SDK sessions
+## What is absent in default SDK sessions
 
 | Tool | Reason absent |
 |---|---|
@@ -27,13 +28,28 @@ and complete. However, **the model has no `skill` tool to call**, so a system
 prompt that says "use the `/mint` skill" gets an improvised answer from the
 model's base knowledge and MCP tools instead of running the actual skill flow.
 
-This is a structural gap, not a bug. The executors that back the `agent`,
-`skill`, and `compose` tools require depth/concurrency limits, wall-clock
-watchdogs, and budget-rollup accounting that have design trade-offs for
-long-lived embedder processes (e.g. a Next.js route with `maxDuration = 300`).
-Options 1 and 2 from issue [#3442](https://github.com/griffinwork40/agent-afk/issues/3442)
-(opt-in full runtime and exported executor factory) remain open for a future
-release.
+The executors that back the `agent`, `skill`, and `compose` tools carry
+depth/concurrency limits, watchdogs, plugin discovery, and budget accounting
+that have trade-offs for embedder processes (e.g. a Next.js route with
+`maxDuration = 300`), so they stay opt-in rather than default.
+
+## Opting in
+
+```ts
+import { AgentSession, createWiredExecutors } from 'agent-afk';
+
+const { executors } = createWiredExecutors(
+  { model: 'sonnet' },
+  { agent: true, skill: ['my-plugin:review'], compose: true, unattended: true },
+);
+const session = new AgentSession({ model: 'sonnet', executors });
+```
+
+`createWiredExecutors` fails closed unless you pass a hook registry or
+`unattended: true`, defaults `pluginConfigs` to `[]` (no `~/.afk` or imported
+plugin discovery), enforces the skill allowlist at every nesting depth, and
+counts subagent spend toward `maxBudgetUsd`. Background jobs stay unavailable.
+One bundle binds to exactly one session.
 
 ## Runtime signal
 
@@ -49,14 +65,16 @@ if (meta.reducedToolSurface) {
 }
 ```
 
-A one-time warning is also written to stderr automatically:
+The first time a session in the process runs a model turn with this gap, a
+one-time warning is also written to stderr (construction alone stays silent):
 
 ```
 [agent-afk] SDK session: 37 skills discovered but the "skill", "agent", and
 "compose" tools are NOT registered. Skills are listed by supportedCommands()
 but the model cannot invoke them. This is expected when using AgentSession /
-query() / queryText() directly without executor wiring. See docs/sdk-surface.md
-for details. Set AFK_SDK_SURFACE_WARN=0 to silence this warning.
+query() / queryText() directly without executor wiring. Opt in with
+AgentConfig.executors from createWiredExecutors(); see docs/sdk-surface.md.
+Set AFK_SDK_SURFACE_WARN=0 to silence this warning.
 ```
 
 Set `AFK_SDK_SURFACE_WARN=0` in your environment to suppress the warning
@@ -73,16 +91,16 @@ The following surfaces wire executors at startup and are **not** affected:
 
 `SessionMetadata.reducedToolSurface` is absent (or `false`) on all of these.
 
-## Workaround
+## Background jobs
 
-For a Next.js or other embedder that needs skill/subagent support today,
-proxy to `afk web` (`afk web --port 3001`) and point your HTTP client at it.
-`afk web` runs the full executor stack including background jobs.
+Background subagent jobs are not available through `createWiredExecutors`.
+An embedder that needs them can proxy to `afk web` (`afk web --port 3001`),
+which runs the full executor stack including background jobs.
 
 ## Related
 
-- Issue [#3442](https://github.com/griffinwork40/agent-afk/issues/3442) — full
-  discussion of options 1 (opt-in runtime) and 2 (exported executor factory).
+- Issue [#3442](https://github.com/griffinwork40/agent-afk/issues/3442).
+- `src/agent/session/create-wired-executors.ts` — the opt-in factory.
 - `src/agent/session/sdk-surface-warning.ts` — detection and warning logic.
 - `src/agent/types/session-types.ts` — `SessionMetadata.reducedToolSurface`.
 - `src/agent/providers/anthropic-direct/provider-schemas.ts` — where

@@ -90,6 +90,7 @@ function buildSkillForkManager(
     ...(childReadRoots !== undefined ? { parentReadRoots: childReadRoots } : {}),
     ...(ctx.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
     ...(ctx.parentRootSessionId !== undefined ? { parentRootSessionId: ctx.parentRootSessionId } : {}),
+    ...(ctx.hookRegistry !== undefined ? { hookRegistry: ctx.hookRegistry } : {}),
   });
 }
 

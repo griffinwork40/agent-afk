@@ -177,6 +177,21 @@ export function updateGhost(self: AutocompleteHost): void {
 }
 
 /**
+ * Shared accept precondition for {@link applyGhostAccept} and
+ * {@link applyGhostWordAccept}: returns the active ghost when it can be
+ * accepted (ghost set, dropdown closed, cursor at end-of-buffer, ghost strictly
+ * extends the buffer), else `null`.
+ */
+function acceptableGhost(self: AutocompleteHost): string | null {
+  const ghost = self.activeGhost;
+  if (ghost === null) return null;
+  if (self.autocompleteState?.dropdownOpen) return null;
+  if (self.input.cursor !== self.input.buffer.length) return null;
+  if (!ghost.startsWith(self.input.buffer) || ghost.length <= self.input.buffer.length) return null;
+  return ghost;
+}
+
+/**
  * Accept the current ghost text: replace the buffer with the full ghost
  * string, move the cursor to the end, clear the ghost, and repaint.
  *
@@ -191,12 +206,8 @@ export function updateGhost(self: AutocompleteHost): void {
  *   - the autocomplete dropdown is closed
  */
 export function applyGhostAccept(self: AutocompleteHost): boolean {
-  const ghost = self.activeGhost;
+  const ghost = acceptableGhost(self);
   if (ghost === null) return false;
-  const ac = self.autocompleteState;
-  if (ac?.dropdownOpen) return false;
-  if (self.input.cursor !== self.input.buffer.length) return false;
-  if (!ghost.startsWith(self.input.buffer) || ghost.length <= self.input.buffer.length) return false;
   // Replace buffer with the full ghost and position cursor at end. Sanitize
   // the suggested *remainder* before committing it (mirrors the render-path
   // strip in renderInputLine): the typed prefix is the user's own clean
@@ -232,12 +243,8 @@ export function applyGhostAccept(self: AutocompleteHost): boolean {
  * Same preconditions as {@link applyGhostAccept}.
  */
 export function applyGhostWordAccept(self: AutocompleteHost): boolean {
-  const ghost = self.activeGhost;
+  const ghost = acceptableGhost(self);
   if (ghost === null) return false;
-  const ac = self.autocompleteState;
-  if (ac?.dropdownOpen) return false;
-  if (self.input.cursor !== self.input.buffer.length) return false;
-  if (!ghost.startsWith(self.input.buffer) || ghost.length <= self.input.buffer.length) return false;
 
   const remainder = ghost.slice(self.input.buffer.length);
 
