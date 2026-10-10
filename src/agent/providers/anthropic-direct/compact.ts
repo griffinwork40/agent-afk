@@ -247,7 +247,6 @@ export function findCompactionBoundary(
   return sharedFindCompactionBoundary(messages, keepLastN, anthropicCompactionOps);
 }
 
-
 /**
  * Build the summarization request body. The older messages travel as a rendered
  * transcript, prefixed by a single user instruction. Non-streaming-safe,

@@ -42,7 +42,7 @@ let throwAsyncEacces = false;
 const eaccesErr = (): NodeJS.ErrnoException => {
   const e = Object.assign(new Error('EACCES: permission denied, open'), {
     code: 'EACCES',
-  }) as NodeJS.ErrnoException;
+  });
   return e;
 };
 
