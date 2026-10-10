@@ -124,12 +124,19 @@ export function runDaemonReconcile(sessionId: string): Promise<void> {
       const result = reconcileWaveManifests({ sessionId });
       for (const offer of result.offers) {
         const text = formatResumptionOffer(offer);
+        // Track whether the push threw. A thrown push leaves the manifest UN-stamped
+        // so the offer is re-surfaced on the next startup (distinguishes "threw" from
+        // "Telegram not configured", where pushIfConfigured returns null).
+        let pushThrew = false;
         const results = await pushIfConfigured(text).catch((pushErr: unknown) => {
+          pushThrew = true;
           // eslint-disable-next-line no-console
           console.error('[daemon] wave-resume push failed:', redactInlineSecrets(errorMessage(pushErr)));
           return null;
         });
-        if (results === null) {
+        if (pushThrew) {
+          // Push threw — leave the manifest unstamped so it re-surfaces next startup.
+        } else if (results === null) {
           // Telegram not configured — fall back to stderr so the offer is visible.
           process.stderr.write(text + '\n');
           markManifestOffered(offer.manifest);

@@ -55,7 +55,7 @@ import { probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-g
  * in-flight task snapshots. Redaction runs BEFORE truncation so a secret
  * straddling the boundary is always fully masked (#3323 review).
  */
-export const COMMAND_HEAD_MAX_LEN = 60;
+const COMMAND_HEAD_MAX_LEN = 60;
 
 export interface SchedulerOptions {
   /** Per-tick session config; merged with defaults at spawn time. */

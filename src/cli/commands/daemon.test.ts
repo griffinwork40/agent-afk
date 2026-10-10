@@ -684,6 +684,29 @@ describe('registerDaemonCrashHandlers', () => {
     expect(msg).not.toContain('first');
   });
 
+  it('truncates to 10 bullets and appends overflow line when > 10 tasks are in-flight', () => {
+    // 11 tasks → 10 bullets + "… and 1 more" overflow line (#3404).
+    const tasks = Array.from({ length: 11 }, (_, i) => ({
+      taskId: `task-${i}`,
+      displayId: `task-${i}`,
+      commandHead: `/cmd-${i}`,
+      elapsedMs: (i + 1) * 1_000,
+    }));
+    registerDaemonCrashHandlers(() => tasks);
+    process.emit('uncaughtException', new Error('overflow-test'), 'uncaughtException');
+
+    expect(mockPushIfConfigured).toHaveBeenCalledOnce();
+    const [msg] = mockPushIfConfigured.mock.calls[0] as [string];
+    expect(msg).toContain('in-flight (11)');
+    // Exactly 10 bullet lines must appear.
+    const bullets = msg.split('\n').filter((l) => l.startsWith('  •'));
+    expect(bullets).toHaveLength(10);
+    // The overflow line must be present.
+    expect(msg).toContain('  … and 1 more');
+    // task-10 (the 11th) must NOT appear as a bullet.
+    expect(bullets.some((l) => l.includes('task-10'))).toBe(false);
+  });
+
   // #3375: crash notice must use displayId (redacted), not raw taskId, so a
   // secret-bearing taskId (e.g. sk-proj-...) is never leaked via Telegram.
   it('crash notice does NOT contain raw secret when taskId is secret-bearing', () => {
