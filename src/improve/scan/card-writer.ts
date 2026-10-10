@@ -40,7 +40,8 @@
  * @module improve/scan/card-writer
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync } from 'fs';
+import { readJsonFileLoose } from '../../utils/json-file.js';
 import { join } from 'path';
 import {
   CardIndexEventSchema,
@@ -127,16 +128,13 @@ export function writeCard(detection: DetectorResult): WriteCardOutcome {
 
 /** Read a card from disk if present. Returns undefined on missing or invalid. */
 export function readCardIfExists(jsonPath: string): FailureCard | undefined {
-  if (!existsSync(jsonPath)) return undefined;
-  try {
-    const raw = readFileSync(jsonPath, 'utf-8');
-    const parsed = JSON.parse(raw);
-    const validated = FailureCardSchema.safeParse(parsed);
-    if (!validated.success) return undefined;
-    return validated.data;
-  } catch {
-    return undefined;
-  }
+  // readJsonFileLoose: ENOENT and parse errors both yield undefined — a missing
+  // or corrupt card is indistinguishable from absent for the merge/write path.
+  // Unexpected I/O errors (EACCES, EISDIR) re-throw. Zod validates the shape.
+  const raw = readJsonFileLoose<unknown>(jsonPath);
+  if (raw == null) return undefined;
+  const validated = FailureCardSchema.safeParse(raw);
+  return validated.success ? validated.data : undefined;
 }
 
 /**
