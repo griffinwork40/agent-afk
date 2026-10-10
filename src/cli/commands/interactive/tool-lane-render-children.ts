@@ -146,6 +146,112 @@ function siblingFadeKey(item: { kind: string; toolUseId?: string; entries?: Tool
   return null;
 }
 
+/**
+ * Render one NESTING_TOOLS child (skill / Agent / compose) that has live
+ * in-lane grandchildren into the overlay `lines` array, then recurse into
+ * those grandchildren.
+ *
+ * Extracted from `renderOverlayChildren` to keep that function under the
+ * 200-line ceiling (#3478). All arguments are explicit — no closures.
+ *
+ * Invariants preserved verbatim from the original inline block:
+ * - A NESTING dispatch head is anchored with a tree connector (`├─` / `╰─`).
+ * - `parentSlot = parentIsLast ?? isLast` threads the CURRENT PARENT's
+ *   last-ness (not the child's) into the ancestor vector so spine columns
+ *   close at the right depth.
+ * - When `headerEmitted` is true the head row is an anonymous anchor
+ *   (connector only, no label) because the labeled row already lives in
+ *   scrollback.
+ * - The thinking-tail is emitted AFTER the grandchildren (temporal order).
+ */
+function renderOverlayNestingChild(
+  child: ToolEntry,
+  grandchildren: Entry[],
+  childMap: Map<string, Entry[]>,
+  lines: string[],
+  indentColored: string,
+  connector: string,
+  cols: number,
+  ancestorIsLast: readonly boolean[],
+  g: Readonly<Glyphs>,
+  isLast: boolean,
+  parentIsLast: boolean | undefined,
+  fade: ElementFade | null,
+): void {
+  // Invariant: a NESTING dispatch head (skill / Agent / compose) with
+  // in-lane grandchildren is anchored with a tree CONNECTOR (`├─` / `╰─`),
+  // same as any sibling, and the recursion below threads the head's own
+  // `isLast` so a LAST-child head CLOSES its parent's column beneath it
+  // (`╰─` sits over a blank `  `, never over an open `│`).
+  //
+  // Why isLast (close-below), not always-open: the live overlay is
+  // EPHEMERAL — re-rendered from scratch every frame — so `isLast` always
+  // reflects the CURRENT sibling order. If the parent later spawns another
+  // child, the next frame redraws this head as `├─` and re-opens the
+  // column. There is no append-only commitment to contradict, so closing
+  // the column below a last-child `╰─` is just correct standard-tree
+  // geometry. Keeping it OPEN (the prior always-open attempt) left a `│`
+  // running beneath a `╰─` in the same column — a self-contradicting
+  // severed spine that made the nested tool-use loop read as floating,
+  // detached from the dispatch above it (the reported regression).
+  //
+  // Seam note (deliberate): the COMMITTED band anchors dispatch heads with
+  // the `◉` marker (formatAgentSummary) and keeps live-ancestor columns
+  // OPEN, because it is APPEND-ONLY — it cannot guess a live ancestor's
+  // last child without risking fragmentation when a later wave arrives
+  // (see ToolLane.flushSource). So the overlay (closes below a last child)
+  // and the band (stays open) intentionally differ at the scrollback↔
+  // overlay seam. Acceptable: the two surfaces are ephemeral vs append-only
+  // and essentially never adjacent on screen, whereas a severed spine
+  // WITHIN the live frame is always visible.
+  //
+  // headerEmitted (anonymous anchor): when flushSource() already committed
+  // this head's labeled row to scrollback, omit the label here — emit the
+  // connector glyph alone so grandchildren still have a real parent row to
+  // attach to (Bug A) and the recursive ancestor vector keeps a matching
+  // visual row per slot (Bug B / orphan │ columns), without restating the
+  // committed label. Use `indentColored` (not raw `indent`) so spine
+  // columns stay dim — a non-colored row at depth N leaves a visible gap.
+  if (child.headerEmitted) {
+    // Anonymous anchor: connector glyph only, no label body (the labeled
+    // header lives in scrollback above).
+    lines.push(clampLineToTerminal(indentColored + connector + childFailureBadge(child.failedChildCount), cols));
+  } else {
+    lines.push(clampLineToTerminal(indentColored + connector + child.prefix + childFailureBadge(child.failedChildCount), cols));
+  }
+  // Recurse: as we descend, the CURRENT parent (whose children we are
+  // rendering) becomes a tracked ancestor column. That column must reflect
+  // the CURRENT PARENT's own last-ness (`parentIsLast`), NOT `child.isLast`
+  // — otherwise a non-last parent whose last child has its own children
+  // gets its spine column closed one row too early (severing it from its
+  // next sibling). At a local-root entry (`parentIsLast === undefined`,
+  // i.e. a turn-root / Agent head) the parent's column is instead derived
+  // from which child-subtree we descend into (`isLast`), which is correct:
+  // the root spine closes only inside its last child's subtree. We thread
+  // `isLast` down as the NEW `parentIsLast` so `child` itself is tracked
+  // correctly one level deeper. `g` keeps one glyph set for the frame.
+  const parentSlot = parentIsLast ?? isLast;
+  renderOverlayChildren(grandchildren, childMap, lines, cols, [...ancestorIsLast, parentSlot], g, isLast, fade);
+  // Render the thinking-tail AFTER the grandchildren so the in-flight
+  // narration sits below the subagent's tool calls (mirrors text-child
+  // ordering below; matches the temporal order the model emitted them).
+  if (child.thinkingTail) {
+    // Clamp: thinkingTail is unbounded model narration — without clamp the
+    // assembled indent + tail overflows terminal width and the terminal
+    // hard-wraps to col 0 with no tree gutter (see clampLineToTerminal
+    // docstring above for the orphaned-continuation failure mode).
+    //
+    // Invariant: use the grandchild-frame indent ([...ancestorIsLast,
+    // parentSlot]) so the `⌇` glyph aligns with the `├` / `╰` connectors
+    // emitted on the grandchild rows — which recurse with the SAME
+    // `parentSlot` value above. Using the current frame's `indentColored`
+    // ([...ancestorIsLast]) was one slot too shallow. `clampLineToTerminal`
+    // → `truncateDisplayWidth` is ANSI-aware.
+    const tailIndentColored = colorizeIndent(buildIndent([...ancestorIsLast, parentSlot], g), g, ancestorIsLast.length + 1);
+    lines.push(clampLineToTerminal(tailIndentColored + palette.thinking('⌇ ' + sanitizeLabel(child.thinkingTail)), cols));
+  }
+}
+
 function renderOverlayChildren(
   children: Entry[],
   childMap: Map<string, Entry[]>,
@@ -222,78 +328,7 @@ function renderOverlayChildren(
       const child = item;
       const grandchildren = childMap.get(child.toolUseId);
       if (NESTING_TOOLS.has(child.toolName) && grandchildren && grandchildren.length > 0) {
-        // Invariant: a NESTING dispatch head (skill / Agent / compose) with
-        // in-lane grandchildren is anchored with a tree CONNECTOR (`├─` / `╰─`),
-        // same as any sibling, and the recursion below threads the head's own
-        // `isLast` so a LAST-child head CLOSES its parent's column beneath it
-        // (`╰─` sits over a blank `  `, never over an open `│`).
-        //
-        // Why isLast (close-below), not always-open: the live overlay is
-        // EPHEMERAL — re-rendered from scratch every frame — so `isLast` always
-        // reflects the CURRENT sibling order. If the parent later spawns another
-        // child, the next frame redraws this head as `├─` and re-opens the
-        // column. There is no append-only commitment to contradict, so closing
-        // the column below a last-child `╰─` is just correct standard-tree
-        // geometry. Keeping it OPEN (the prior always-open attempt) left a `│`
-        // running beneath a `╰─` in the same column — a self-contradicting
-        // severed spine that made the nested tool-use loop read as floating,
-        // detached from the dispatch above it (the reported regression).
-        //
-        // Seam note (deliberate): the COMMITTED band anchors dispatch heads with
-        // the `◉` marker (formatAgentSummary) and keeps live-ancestor columns
-        // OPEN, because it is APPEND-ONLY — it cannot guess a live ancestor's
-        // last child without risking fragmentation when a later wave arrives
-        // (see ToolLane.flushSource). So the overlay (closes below a last child)
-        // and the band (stays open) intentionally differ at the scrollback↔
-        // overlay seam. Acceptable: the two surfaces are ephemeral vs append-only
-        // and essentially never adjacent on screen, whereas a severed spine
-        // WITHIN the live frame is always visible.
-        //
-        // headerEmitted (anonymous anchor): when flushSource() already committed
-        // this head's labeled row to scrollback, omit the label here — emit the
-        // connector glyph alone so grandchildren still have a real parent row to
-        // attach to (Bug A) and the recursive ancestor vector keeps a matching
-        // visual row per slot (Bug B / orphan │ columns), without restating the
-        // committed label. Use `indentColored` (not raw `indent`) so spine
-        // columns stay dim — a non-colored row at depth N leaves a visible gap.
-        if (child.headerEmitted) {
-          // Anonymous anchor: connector glyph only, no label body (the labeled
-          // header lives in scrollback above).
-          lines.push(clampLineToTerminal(indentColored + connector + childFailureBadge(child.failedChildCount), cols));
-        } else {
-          lines.push(clampLineToTerminal(indentColored + connector + child.prefix + childFailureBadge(child.failedChildCount), cols));
-        }
-        // Recurse: as we descend, the CURRENT parent (whose children we are
-        // rendering) becomes a tracked ancestor column. That column must reflect
-        // the CURRENT PARENT's own last-ness (`parentIsLast`), NOT `child.isLast`
-        // — otherwise a non-last parent whose last child has its own children
-        // gets its spine column closed one row too early (severing it from its
-        // next sibling). At a local-root entry (`parentIsLast === undefined`,
-        // i.e. a turn-root / Agent head) the parent's column is instead derived
-        // from which child-subtree we descend into (`isLast`), which is correct:
-        // the root spine closes only inside its last child's subtree. We thread
-        // `isLast` down as the NEW `parentIsLast` so `child` itself is tracked
-        // correctly one level deeper. `g` keeps one glyph set for the frame.
-        const parentSlot = parentIsLast ?? isLast;
-        renderOverlayChildren(grandchildren, childMap, lines, cols, [...ancestorIsLast, parentSlot], g, isLast, fade);
-        // Render the thinking-tail AFTER the grandchildren so the in-flight
-        // narration sits below the subagent's tool calls (mirrors text-child
-        // ordering below; matches the temporal order the model emitted them).
-        if (child.thinkingTail) {
-          // Clamp: thinkingTail is unbounded model narration — without clamp the
-          // assembled indent + tail overflows terminal width and the terminal
-          // hard-wraps to col 0 with no tree gutter (see clampLineToTerminal
-          // docstring above for the orphaned-continuation failure mode).
-          //
-          // Invariant: use the grandchild-frame indent ([...ancestorIsLast,
-          // parentSlot]) so the `⌇` glyph aligns with the `├` / `╰` connectors
-          // emitted on the grandchild rows — which recurse with the SAME
-          // `parentSlot` value above. Using the current frame's `indentColored`
-          // ([...ancestorIsLast]) was one slot too shallow. `clampLineToTerminal`
-          // → `truncateDisplayWidth` is ANSI-aware.
-          const tailIndentColored = colorizeIndent(buildIndent([...ancestorIsLast, parentSlot], g), g, ancestorIsLast.length + 1);
-          lines.push(clampLineToTerminal(tailIndentColored + palette.thinking('⌇ ' + sanitizeLabel(child.thinkingTail)), cols));
-        }
+        renderOverlayNestingChild(child, grandchildren, childMap, lines, indentColored, connector, cols, ancestorIsLast, g, isLast, parentIsLast, fade);
       } else if (NESTING_TOOLS.has(child.toolName) && child.headerEmitted) {
         // Invariant: committed labels live in scrollback; live overlay must
         // render nothing for a NESTING_TOOLS child whose header has already
