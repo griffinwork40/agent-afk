@@ -164,6 +164,49 @@ describe('buildSkillManifest', () => {
     });
   });
 
+  describe('skillAllowlist — executor-scope filtering (#3442)', () => {
+    beforeEach(() => {
+      registerSkill({ name: 'allowed-skill', description: 'In allowlist', handler: vi.fn() });
+      registerSkill({ name: 'blocked-skill', description: 'Not in allowlist', handler: vi.fn() });
+    });
+
+    it('lists only allowlisted skills when allowlist is defined', () => {
+      const manifest = buildSkillManifest([], { skillAllowlist: ['allowed-skill'] });
+      expect(manifest).toContain('allowed-skill: In allowlist');
+      expect(manifest).not.toContain('blocked-skill');
+    });
+
+    it('returns empty string when allowlist is [] (nothing permitted)', () => {
+      const manifest = buildSkillManifest([], { skillAllowlist: [] });
+      expect(manifest).toBe('');
+    });
+
+    it('exact string match — plugin-qualified name does not satisfy bare allowlist entry', () => {
+      registerSkill({ name: 'myplugin:allowed-skill', description: 'Qualified', handler: vi.fn() });
+      const manifest = buildSkillManifest([], { skillAllowlist: ['allowed-skill'] });
+      expect(manifest).toContain('allowed-skill: In allowlist');
+      // Qualified variant is NOT covered by the bare allowlist entry.
+      expect(manifest).not.toContain('myplugin:allowed-skill');
+    });
+
+    it('undefined allowlist => unchanged output (no gate)', () => {
+      const withAllowlist = buildSkillManifest([], { skillAllowlist: undefined });
+      const withoutOpts = buildSkillManifest([]);
+      expect(withAllowlist).toBe(withoutOpts);
+      expect(withAllowlist).toContain('allowed-skill');
+      expect(withAllowlist).toContain('blocked-skill');
+    });
+
+    it('opts.pluginConfigs overrides positional pluginConfigs', () => {
+      // Passing [] as positional => no plugins, but opts.pluginConfigs: [] also fine.
+      // When both are [], collectSkillEntries sees [] either way.
+      const manifest = buildSkillManifest(undefined, { pluginConfigs: [] });
+      // Only registry skills (no plugin scan) — same as passing [] positionally.
+      expect(manifest).toContain('allowed-skill');
+      expect(manifest).toContain('blocked-skill');
+    });
+  });
+
   it('includes argumentHint in skill entry when present', () => {
     registerSkill({
       name: 'plan-skill',

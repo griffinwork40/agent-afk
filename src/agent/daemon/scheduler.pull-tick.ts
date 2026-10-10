@@ -153,7 +153,9 @@ export function fireOnTaskComplete(
   // notifyOn filter — only applies when the triggering task is known
   if (task !== undefined) {
     if (task.notifyOn === 'never') return;
-    if (task.notifyOn === 'failure' && record.status !== 'error') return;
+    // 'blocked' (gate hard-blocked ≥1 tool call, #3466) is treated as a failure
+    // for notification purposes — work silently never happened.
+    if (task.notifyOn === 'failure' && record.status !== 'error' && record.status !== 'blocked') return;
     // 'always' or undefined (legacy behavior) falls through
   }
   // Thread the task's explicit chat target (if any) onto the details so the

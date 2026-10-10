@@ -114,9 +114,15 @@ export async function handleCreateSchedule(
   const trigger = str(body, 'trigger');
   const notifyOn = str(body, 'notifyOn');
   const triggerErr = validateEnumField(trigger, VALID_TRIGGERS, 'trigger');
-  if (triggerErr) { sendJson(res, 400, { error: 'bad_request', message: triggerErr }); return; }
+  if (triggerErr) {
+    sendJson(res, 400, { error: 'bad_request', message: triggerErr });
+    return;
+  }
   const notifyOnErr = validateEnumField(notifyOn, VALID_NOTIFY_ON, 'notifyOn');
-  if (notifyOnErr) { sendJson(res, 400, { error: 'bad_request', message: notifyOnErr }); return; }
+  if (notifyOnErr) {
+    sendJson(res, 400, { error: 'bad_request', message: notifyOnErr });
+    return;
+  }
   const enabled = bool(body, 'enabled') ?? true;
 
   // Validate optional per-task cwd. 400 when the key is present but not a string.
@@ -178,9 +184,15 @@ export async function handleUpdateSchedule(
   const enabled = bool(body, 'enabled');
 
   const triggerErrU = validateEnumField(trigger, VALID_TRIGGERS, 'trigger');
-  if (triggerErrU) { sendJson(res, 400, { error: 'bad_request', message: triggerErrU }); return; }
+  if (triggerErrU) {
+    sendJson(res, 400, { error: 'bad_request', message: triggerErrU });
+    return;
+  }
   const notifyOnErrU = validateEnumField(notifyOn, VALID_NOTIFY_ON, 'notifyOn');
-  if (notifyOnErrU) { sendJson(res, 400, { error: 'bad_request', message: notifyOnErrU }); return; }
+  if (notifyOnErrU) {
+    sendJson(res, 400, { error: 'bad_request', message: notifyOnErrU });
+    return;
+  }
   if (executor !== undefined && executor !== 'agent' && executor !== 'shell') {
     sendJson(res, 400, {
       error: 'bad_request',

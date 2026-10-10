@@ -10,7 +10,11 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { forwardAbortSignal, createRequestAbortScope } from './abort.js';
+import {
+  forwardAbortSignal,
+  createRequestAbortScope,
+  createDeferredRequestAbortScope,
+} from './abort.js';
 
 // ---------------------------------------------------------------------------
 // forwardAbortSignal
@@ -174,5 +178,97 @@ describe('createRequestAbortScope', () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect((scope.signal.reason as Error).message).toBe(msg);
     scope.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createDeferredRequestAbortScope
+// ---------------------------------------------------------------------------
+
+describe('createDeferredRequestAbortScope', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('does not abort before armTimeout, even past timeoutMs', async () => {
+    const scope = createDeferredRequestAbortScope({ timeoutMs: 1_000, timeoutMessage: 't' });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(scope.signal.aborted).toBe(false);
+    scope.dispose();
+  });
+
+  it('aborts timeoutMs after arming, then calls onFired with the signal already aborted', async () => {
+    const scope = createDeferredRequestAbortScope({ timeoutMs: 1_000, timeoutMessage: 'approval timeout' });
+    let abortedAtFire: boolean | undefined;
+    await vi.advanceTimersByTimeAsync(5_000);
+    scope.armTimeout(() => {
+      abortedAtFire = scope.signal.aborted;
+    });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(scope.signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(scope.signal.aborted).toBe(true);
+    expect(abortedAtFire).toBe(true);
+    expect((scope.signal.reason as Error).message).toBe('approval timeout');
+    scope.dispose();
+  });
+
+  it('armTimeout is idempotent: the first arm wins', async () => {
+    const scope = createDeferredRequestAbortScope({ timeoutMs: 1_000, timeoutMessage: 't' });
+    const first = vi.fn();
+    const second = vi.fn();
+    scope.armTimeout(first);
+    await vi.advanceTimersByTimeAsync(500);
+    scope.armTimeout(second);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(scope.signal.aborted).toBe(true);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
+    scope.dispose();
+  });
+
+  it('forwards a parent abort before arming', () => {
+    const parent = new AbortController();
+    const scope = createDeferredRequestAbortScope({
+      parentSignal: parent.signal,
+      timeoutMs: 1_000,
+      timeoutMessage: 't',
+    });
+    parent.abort(new Error('turn aborted'));
+    expect(scope.signal.aborted).toBe(true);
+    scope.dispose();
+  });
+
+  it('is aborted immediately when the parent is already aborted', () => {
+    const parent = new AbortController();
+    parent.abort();
+    const scope = createDeferredRequestAbortScope({
+      parentSignal: parent.signal,
+      timeoutMs: 1_000,
+      timeoutMessage: 't',
+    });
+    expect(scope.signal.aborted).toBe(true);
+    scope.dispose();
+  });
+
+  it('dispose clears an armed timer and detaches the parent listener', async () => {
+    const parent = new AbortController();
+    const scope = createDeferredRequestAbortScope({
+      parentSignal: parent.signal,
+      timeoutMs: 1_000,
+      timeoutMessage: 't',
+    });
+    const fired = vi.fn();
+    scope.armTimeout(fired);
+    scope.dispose();
+    scope.dispose(); // idempotent
+    await vi.advanceTimersByTimeAsync(5_000);
+    parent.abort();
+    expect(fired).not.toHaveBeenCalled();
+    expect(scope.signal.aborted).toBe(false);
   });
 });

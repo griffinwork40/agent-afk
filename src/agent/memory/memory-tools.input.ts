@@ -10,7 +10,7 @@
 import type { FactCategory, MemoryUpdateAction, MemoryUpdateTarget } from './types.js';
 
 /** The allowed FactCategory values — single source of truth for this module. */
-const VALID_FACT_CATEGORIES: FactCategory[] = ['preference', 'convention', 'decision', 'learning'];
+const VALID_FACT_CATEGORIES: readonly FactCategory[] = ['preference', 'convention', 'decision', 'learning'];
 
 /**
  * Parse and validate an optional `category` field from a raw input object.

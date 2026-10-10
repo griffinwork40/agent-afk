@@ -21,18 +21,45 @@
  */
 
 import type { ProviderCommandInfo } from '../../provider.js';
+import type { SdkPluginConfig } from '../../types/sdk-types.js';
 import { collectSkillEntries } from '../../tools/skill-bridge.js';
+
+/**
+ * Scope returned by `SkillExecutor.getManifestScope()` — subset of the fields
+ * we care about here. Declared inline so this module does not import the full
+ * executor class (which carries heavy runtime deps).
+ */
+export interface SupportedCommandsScope {
+  /**
+   * Plugin source override. Defined => only these plugins are scanned.
+   * `[]` => no plugin skills. `undefined` => scan all plugin roots.
+   */
+  pluginConfigs?: SdkPluginConfig[];
+  /**
+   * Allowlist for the model-facing manifest. When defined, only listed skill
+   * names (exact match) are returned. `undefined` => no gate.
+   */
+  skillAllowlist?: readonly string[];
+}
 
 /**
  * Returns `ProviderCommandInfo` for every skill the skill-bridge can discover.
  * Discovery is best-effort — returns `[]` on any error so the REPL stays
  * usable without skill plugins installed.
+ *
+ * When `scope` is provided (from `SkillExecutor.getManifestScope()`), the
+ * result is restricted to the executor's configured plugin source and allowlist
+ * so the slash command list mirrors what the model sees in its manifest.
  */
-export function collectSupportedCommands(): Promise<ProviderCommandInfo[]> {
+export function collectSupportedCommands(scope?: SupportedCommandsScope): Promise<ProviderCommandInfo[]> {
   try {
-    const entries = collectSkillEntries();
+    const entries = collectSkillEntries(scope?.pluginConfigs);
+    const allowlist = scope?.skillAllowlist;
+    const filtered = allowlist !== undefined
+      ? entries.filter((e) => allowlist.includes(e.name))
+      : entries;
     return Promise.resolve(
-      entries.map((e) => {
+      filtered.map((e) => {
         const info: ProviderCommandInfo = {
           name: e.name,
           description: e.description,

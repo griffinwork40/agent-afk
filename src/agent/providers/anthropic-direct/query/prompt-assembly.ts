@@ -16,6 +16,7 @@
 
 import type { AgentConfig } from '../../../types/config-types.js';
 import type { RuntimeStateSource } from '../../../awareness/index.js';
+import type { SkillExecutor } from '../../../tools/skill-executor.js';
 import { buildSkillManifest } from '../../../tools/skill-bridge.js';
 import {
   resolveToolSystemPrompt,
@@ -44,8 +45,11 @@ export interface PromptAssemblyArgs {
   /** Whether workspace tools are enabled (store is wired). Gates inclusion of
    *  the workspace system prompt fragment. */
   workspaceEnabled: boolean;
-  /** Present only when a skill executor is wired; gates manifest construction. */
-  hasSkillExecutor: boolean;
+  /**
+   * The wired skill executor, when present. Gates manifest construction and
+   * provides `getManifestScope()` for plugin/allowlist scoping.
+   */
+  skillExecutor?: SkillExecutor;
   runtimeStateSource: RuntimeStateSource;
   /** User-supplied system prompt, already normalized to a string or null. */
   userSystem: string | null;
@@ -72,12 +76,20 @@ export function assembleQueryPrompt(args: PromptAssemblyArgs): AssembledPrompt {
   // fork (see AgentConfig.skillDispatchName). Must stay in lockstep with the
   // openai-compatible call site — a per-provider divergence here is how a
   // fork on one provider silently keeps the self-entry.
-  const manifest = args.hasSkillExecutor
+  const { skillExecutor } = args;
+  const manifestScope = skillExecutor?.getManifestScope?.();
+  const manifest = skillExecutor
     ? buildSkillManifest(undefined, {
         cwd,
         ...(typeof config.skillDispatchName === 'string' &&
         config.skillDispatchName.length > 0
           ? { excludeName: config.skillDispatchName }
+          : {}),
+        ...(manifestScope?.pluginConfigs !== undefined
+          ? { pluginConfigs: manifestScope.pluginConfigs }
+          : {}),
+        ...(manifestScope?.skillAllowlist !== undefined
+          ? { skillAllowlist: manifestScope.skillAllowlist }
           : {}),
       })
     : '';

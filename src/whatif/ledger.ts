@@ -90,7 +90,10 @@ export async function trackRecordSummary(
   const stats = new Map<string, { confirmed: number; total: number }>();
 
   const isCalibrationRecord = (x: unknown): x is CalibrationRecord =>
-    x !== null && typeof x === 'object';
+    x !== null &&
+    typeof x === 'object' &&
+    typeof (x as Record<string, unknown>)['ts'] === 'string' &&
+    typeof (x as Record<string, unknown>)['verdict'] === 'string';
   const records = parseJsonlLines<CalibrationRecord>(raw, { guard: isCalibrationRecord });
 
   for (const rec of records) {

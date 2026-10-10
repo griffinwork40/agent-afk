@@ -138,6 +138,46 @@ export async function discoverXaiOidcCached(deps: OAuthHttpDeps = {}): Promise<X
 }
 
 /**
+ * POST a form-urlencoded body to an OAuth token endpoint and return the parsed
+ * JSON response body.
+ *
+ * Contract:
+ *   - Always sends `Content-Type: application/x-www-form-urlencoded` and
+ *     `Accept: application/json`.
+ *   - On a non-2xx response, throws with a message of the form
+ *     `"<prefix>: <err>[: <desc>]"` where `err` is `json.error ?? http_<status>`
+ *     and `desc` is `json.error_description` (omitted when absent).
+ *   - JSON decode is tolerant: a body that cannot be parsed resolves to `{}`.
+ *     This matches xAI's error responses that sometimes arrive as plain text.
+ *
+ * @param url     - Token endpoint URL.
+ * @param params  - Form fields (passed to `URLSearchParams`).
+ * @param errPrefix - Prefix for the thrown error message, e.g. `"xAI token refresh failed"`.
+ * @param fetchFn - Injectable fetch implementation (defaults to global `fetch`).
+ * @returns Parsed JSON body as `Record<string, unknown>`.
+ * @throws Error when the response is not ok.
+ */
+export async function postOAuthForm(
+  url: string,
+  params: Record<string, string>,
+  errPrefix: string,
+  fetchFn: FetchFn = fetch,
+): Promise<Record<string, unknown>> {
+  const res = await fetchFn(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: new URLSearchParams(params).toString(),
+  });
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok) {
+    const err = asNonEmptyString(json['error']) ?? `http_${res.status}`;
+    const desc = asNonEmptyString(json['error_description']);
+    throw new Error(`${errPrefix}: ${desc ? `${err}: ${desc}` : err}`);
+  }
+  return json;
+}
+
+/**
  * Map a token-endpoint JSON body to {@link XaiTokenBundle}.
  * When `fallbackRefresh` is set and the response omits refresh_token, use it
  * (refresh grants that omit rotation — xAI usually rotates).

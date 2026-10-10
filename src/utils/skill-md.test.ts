@@ -72,12 +72,32 @@ describe('parseFlagsField — security: block-form items validated against FLAG_
   });
 });
 
+describe('parseFlagsField — dedupe (#3460)', () => {
+  it('dedupes duplicate flags in inline form, preserving first-seen order before sort', () => {
+    const result = parseFlagsField('[--beta, --alpha, --beta, --alpha]', []);
+    // Duplicates removed; result is sorted alphabetically.
+    expect(result).toEqual(['--alpha', '--beta']);
+  });
+
+  it('dedupes duplicate flags in block form, preserving first-seen order before sort', () => {
+    const followingLines = [
+      '  - --gamma',
+      '  - --alpha',
+      '  - --gamma',
+      '  - --beta',
+      '  - --alpha',
+    ];
+    const result = parseFlagsField('', followingLines);
+    expect(result).toEqual(['--alpha', '--beta', '--gamma']);
+  });
+});
+
 describe('extractFlagsFromBody — body scan capped at 64 (#3430)', () => {
   it('returns at most 64 flags from the body', () => {
     // Generate 80 unique flag-like strings in the body.
     const body = Array.from({ length: 80 }, (_, i) => `--flag-${i.toString().padStart(2, '0')}`).join(' ');
     const flags = extractFlagsFromBody(body);
-    expect(flags.length).toBeLessThanOrEqual(64);
+    expect(flags).toHaveLength(64);
   });
 
   it('returns all flags when body has fewer than 64', () => {

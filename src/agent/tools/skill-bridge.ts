@@ -95,7 +95,11 @@ export function buildSkillManifest(
   pluginConfigs?: SdkPluginConfig[],
   opts?: BuildSkillManifestOptions,
 ): string {
-  const collected = collectSkillEntries(pluginConfigs, opts);
+  // opts.pluginConfigs wins over the positional argument when defined. This
+  // lets callers pass the full scope object without needing to hoist the
+  // pluginConfigs out separately.
+  const resolvedPluginConfigs = opts?.pluginConfigs !== undefined ? opts.pluginConfigs : pluginConfigs;
+  const collected = collectSkillEntries(resolvedPluginConfigs, opts);
   // Invariant: a skill-dispatch fork must never be handed its OWN catalogue
   // entry. Its system prompt already IS that skill's SKILL.md body, and the
   // manifest preamble tells the model to "Prefer a skill over inline
@@ -113,6 +117,17 @@ export function buildSkillManifest(
     exclude !== undefined && exclude.length > 0
       ? collected.filter((e) => e.name !== exclude && !e.name.endsWith(`:${exclude}`))
       : collected;
+  // Invariant: when an executor scope provides a skillAllowlist, only entries
+  // whose name is listed verbatim appear in the model-facing manifest. Exact
+  // string equality — `plugin:name` and bare `name` are NOT interchangeable.
+  // Undefined => no gate (today's default behaviour). This is the manifest
+  // analogue of the execute-time allowlist gate in SkillExecutor.execute().
+  // Filtered HERE so slash-command router and `/skills` still see every skill.
+  const allowlist = opts?.skillAllowlist;
+  const allowlisted =
+    allowlist !== undefined
+      ? named.filter((e) => allowlist.includes(e.name))
+      : named;
   // Invariant: Claude Code `commands/*.md` entries are user-invocable only and
   // never enter the model-facing catalogue.
   //
@@ -136,7 +151,7 @@ export function buildSkillManifest(
   // users but invisible to the model's menu. The `disableModelInvocation` flag
   // is already set on entries by `collectSkillEntries`; it is filtered here
   // so the slash-command router and `/skills` still see and can invoke them.
-  const entries = named.filter((e) => e.source !== 'command' && !e.disableModelInvocation);
+  const entries = allowlisted.filter((e) => e.source !== 'command' && !e.disableModelInvocation);
   if (entries.length === 0) return '';
 
   const lines: string[] = [];
@@ -179,9 +194,10 @@ export interface CollectSkillEntriesOptions {
  * Options for {@link buildSkillManifest} — the model-facing manifest only.
  *
  * Contract: extends {@link CollectSkillEntriesOptions} with `excludeName`,
- * honored ONLY by `buildSkillManifest`. `collectSkillEntries` deliberately
- * ignores it so non-model consumers (slash-command router, skill listings)
- * always see the complete set.
+ * `pluginConfigs`, and `skillAllowlist`, all honored ONLY by
+ * `buildSkillManifest`. `collectSkillEntries` deliberately ignores them so
+ * non-model consumers (slash-command router, skill listings) always see the
+ * complete set.
  */
 export interface BuildSkillManifestOptions extends CollectSkillEntriesOptions {
   /**
@@ -190,6 +206,23 @@ export interface BuildSkillManifestOptions extends CollectSkillEntriesOptions {
    * cannot read its own entry and re-dispatch itself.
    */
   excludeName?: string;
+  /**
+   * Plugin configs to forward to `collectSkillEntries` as the sole plugin
+   * source, overriding the default full-scan. `[]` => no plugin skills.
+   * `undefined` => scan all plugin roots (today's default behaviour).
+   *
+   * Sourced from `SkillExecutor.getManifestScope().pluginConfigs`.
+   */
+  pluginConfigs?: SdkPluginConfig[];
+  /**
+   * When defined, only entries whose `name` is listed here appear in the
+   * model-facing manifest. Exact string equality — `plugin:name` and bare
+   * `name` are not interchangeable. `undefined` => no gate (today's default).
+   * `[]` => no skills listed.
+   *
+   * Sourced from `SkillExecutor.getManifestScope().skillAllowlist`.
+   */
+  skillAllowlist?: readonly string[];
 }
 
 // Invariant: skills before commands — SKILL.md wins over a same-named commands/*.md

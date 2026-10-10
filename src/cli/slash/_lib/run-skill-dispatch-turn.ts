@@ -41,8 +41,7 @@ import { saveSession } from '../../session-store.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
 import { buildSkillInvocationMessage } from './skill-message-bridge.js';
-import { redactSecrets } from '../../../agent/redact-secrets.js';
-import { isVerificationCommand, RESULT_TAIL_CHARS } from '../../../agent/outcomes/verification-patterns.js';
+import { buildVerificationResultTail } from '../../../agent/outcomes/verification-patterns.js';
 
 /**
  * Minimum ms between onContextProgress fires during a skill-dispatch turn.
@@ -220,18 +219,13 @@ export async function runSkillDispatchTurn(
             pending.isError = c.isError;
             if (c.incomplete === true) pending.incomplete = true;
             if (c.partialNodeCount !== undefined) pending.partialNodeCount = c.partialNodeCount;
-            const isVerify = pending.toolName === 'test_run' ||
-              (pending.toolName === 'bash' && isVerificationCommand(pending.input));
-            if (isVerify) {
-              const tailLines = c.tailPreview;
-              const rawForTail = tailLines !== undefined && tailLines.length > 0
-                ? tailLines.join('\n')
-                : c.content;
-              const tail = rawForTail.length > RESULT_TAIL_CHARS
-                ? rawForTail.slice(-RESULT_TAIL_CHARS)
-                : rawForTail;
-              pending.resultTail = redactSecrets(tail);
-            }
+            const resultTail = buildVerificationResultTail(
+              pending.toolName,
+              pending.input ?? '',
+              c.content,
+              c.tailPreview,
+            );
+            if (resultTail !== undefined) pending.resultTail = resultTail;
             pendingTools.delete(c.toolUseId);
           }
           if (ctx.onContextProgress) {

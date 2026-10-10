@@ -47,4 +47,15 @@ describe('library entry point', () => {
     expect(typeof mod.foldJournal).toBe('function');
     expect(typeof mod.hydrateMessages).toBe('function');
   });
+
+  it('exports createWiredExecutors for SDK opt-in executors (#3442)', async () => {
+    const mod = await import('./index.js');
+    expect(typeof mod.createWiredExecutors).toBe('function');
+    // Type-only exports compile-check here; erased at runtime.
+    const opts: import('./index.js').CreateWiredExecutorsOptions = { unattended: true, agent: true };
+    const bundle: import('./index.js').SessionExecutors = mod.createWiredExecutors({ model: 'claude-haiku-4-5', apiKey: 'k' }, opts).executors;
+    expect(bundle.subagentExecutor).toBeDefined();
+    expect(bundle.skillExecutor).toBeUndefined();
+    await bundle.drain('close');
+  });
 });

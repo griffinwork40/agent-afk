@@ -1,6 +1,6 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { providerForModel, type ProviderRouteHints } from '../agent/providers/index.js';
+import type { ProviderRouteHints } from '../agent/providers/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../agent/types.js';
 import { loadOpenAICredential, resolveCredentialForModel } from '../agent/auth/credential-resolver.js';
 import { env } from '../config/env.js';
@@ -109,45 +109,9 @@ export function getModel(): AgentModelInput {
   return raw;
 }
 
-/**
- * Get the default model for dispatched subagents (`agent` and `skill` tools).
- *
- * Precedence:
- *   1. `AFK_DEFAULT_SUBAGENT_MODEL` env (when set, always wins).
- *   2. If the parent session routes to `openai-compatible` (any non-Claude
- *      provider — GPT/o-series, codex-*, HF-style local ids) → return the
- *      parent model. Without this, a local-only setup silently dispatches
- *      subagents to api.anthropic.com because the literal `'medium'` fallback
- *      below routes back through `providerForModel` → `anthropic-direct`.
- *   3. `'medium'` (the medium capability tier). Preserved for Claude parents so
- *      the historical cost-management intent — "high-tier parent (e.g. opus)
- *      shouldn't auto-spawn high-tier children" — keeps working; and because it
- *      is the rebindable TIER (not the fixed `'sonnet'` identity alias), a user
- *      who rebinds `medium` redirects default subagents along with it.
- *
- * The `parentModel` arg is what enables (2); callers that don't pass it
- * (legacy / test) get the original env-var-or-`'medium'` behavior.
- *
- * Pass-through like `getModel()` — short aliases and provider-native ids both
- * work.
- */
-export function getDefaultSubagentModel(parentModel?: AgentModelInput): AgentModelInput {
-  const raw = env.AFK_DEFAULT_SUBAGENT_MODEL;
-  if (raw && raw.length > 0) return raw;
-  if (typeof parentModel === 'string') {
-    const parentProvider = providerForModel(parentModel);
-    // Inherit parent for OpenAI-compatible and xAI/Grok families so local/Grok
-    // sessions do not silently fork Anthropic `medium` children.
-    if (
-      parentProvider === 'openai-compatible'
-      || parentProvider === 'xai'
-      || parentProvider === 'xai-oauth'
-    ) {
-      return parentModel;
-    }
-  }
-  return 'medium';
-}
+// Relocated to the agent layer (#3442) so `createWiredExecutors` can use it
+// without importing src/cli. Re-exported here so no importer changes.
+export { getDefaultSubagentModel } from '../agent/session/default-subagent-model.js';
 
 /**
  * Parse thinking mode from string input.
