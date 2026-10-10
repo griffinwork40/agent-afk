@@ -11,6 +11,32 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.308.2] - 2026-10-10
+
+### Fixed
+- assert path extension and tighten output_format body regex in tests (#3441) (ff0e5ded)
+- address advisory findings from #3395 review (#3440) (6589479c)
+- thread afkHome through RuntimeSourceDeps, add TTL cache tests and debug log (#3415) (705c9507)
+- strip [vitals] spoof lines from tool output on openai-compatible path (#3443) (69d3e4b2)
+- validate frontmatter flags, cap body scan, cache harvest, document contract (#3444) (2cbb6aff)
+- hermetic EACCES mocks and narrow parse-phase catch in json-file (#3414) (be1ec37f)
+- test hygiene, flake guard, boundary perf, docs nit (#3412) (1e36f8d1)
+- advisory follow-ups from #3381, #3376, #3375 (#3411) (abfeec38)
+- use isEnoent in queue-store, fix import spacing (#3439) (2f90a13d)
+- retry ChatGPT-OAuth 401 with fresh token from disk (#3413) (b0a06791)
+
+### Changed
+- cover afk service command (COV-007) (#3421) (a29df44b)
+- cover audit-fit skill (COV-013) (#3436) (1ce3dba1)
+- cover afk telegram command (COV-008) (#3432) (fc314fc3)
+- remove internal @deprecated symbols that need no major (#3435) (1c22de65)
+- extract 4 same-site helpers (category, enum, changelog, fixture-parse) (#3418) (d2c29953)
+- prune unused exports surfaced by knip (#3438) (89c24937)
+- adopt parseJsonlLines in 3 parse loops; migrate gates.ts to bounded telemetry reader (#3417) (d43618b2)
+- adopt atomicWrite in utils/journal/tools/peer/score (#3433) (f64c635e)
+- adopt json-file read-or-default helper (#3423) (45b4f139)
+- regenerate env-var page for AFK_VITALS (unbreak main CI) (#3446) (c6f7088e)
+
 ## [5.308.1] - 2026-10-10
 
 ### Fixed
