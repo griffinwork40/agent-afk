@@ -175,7 +175,7 @@ export class SubagentExecutor implements SubagentControl {
       ...(c.parentModel !== undefined ? { parentModel: c.parentModel } : {}),
       ...(c.traceWriter !== undefined ? { traceWriter: c.traceWriter } : {}),
       ...(c.workspaceStore !== undefined ? { workspaceStore: c.workspaceStore } : {}),
-      ...(c.delegationBudget !== undefined ? { delegationBudget: c.delegationBudget } : {}),
+      ...(c.delegationBudget !== undefined ? { delegationBudget: c.delegationBudget } : {}), ...(c.hookRegistry !== undefined ? { hookRegistry: c.hookRegistry } : {}),
       ...(rootSessionId !== undefined ? { parentRootSessionId: rootSessionId } : {}),
     };
   }

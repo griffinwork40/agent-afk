@@ -98,9 +98,12 @@ export class SessionShutdown {
     } = this.deps;
     const config = getConfig();
 
-    if (config.drainSubagents !== undefined) {
-      await config.drainSubagents(reason).catch(() => {});
-    }
+    // Drain both the opt-in executor bundle (#3442) and the caller-supplied
+    // tree hook concurrently; neither may reject the shutdown.
+    await Promise.all([
+      config.executors?.drain(reason).catch(() => {}),
+      config.drainSubagents?.(reason).catch(() => {}),
+    ]);
 
     const signals = accounting.closureSignals(getAbortController().signal, reason);
     const acct = accounting.snapshot();

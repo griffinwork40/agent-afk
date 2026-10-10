@@ -66,6 +66,19 @@ export type {
 } from './agent/index.js';
 export type { DiffHunk, DiffLine, DiffPayload } from './utils/diff.js';
 
+// SDK opt-in executors (#3442): build the `agent` / `skill` / `compose` tool
+// executors for a library-constructed session (`AgentConfig.executors`, also
+// accepted by query()/queryText() via QueryOptions).
+export { createWiredExecutors } from './agent/session/create-wired-executors.js';
+export type {
+  CreateWiredExecutorsOptions,
+  CreatedWiredExecutors,
+} from './agent/session/create-wired-executors.js';
+export type {
+  SessionExecutors,
+  SessionExecutorsBindTarget,
+} from './agent/session/session-executors.js';
+
 // Framework SDK surface for out-of-tree skill plugins.
 // These re-exports expose the core symbols an external skill plugin installed
 // under ~/.afk/plugins/ needs to register skills and read session facets at

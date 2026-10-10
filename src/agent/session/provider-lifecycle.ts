@@ -105,6 +105,9 @@ export function buildProviderLifecycle(config: AgentConfig): ProviderLifecycleRe
           resolveProvider(m, undefined, {
             customTools: config.customTools,
             canUseTool: config.canUseTool,
+            // #3442: opt-in executors ride along on every provider the router
+            // builds, including ones rebuilt by a cross-family model swap.
+            ...(config.executors !== undefined ? { executors: config.executors } : {}),
           });
     providerQuery = new ProviderRouter(
       { prompt: promptIterable, config },

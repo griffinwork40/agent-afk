@@ -29,6 +29,8 @@ import type { SubagentExecutor } from './subagent-executor.js';
 import type { TraceSink } from '../trace/index.js';
 import type { BackgroundAgentRegistry } from '../background-registry.js';
 import type { AgentRegistry } from '../agents/types.js';
+import type { SdkPluginConfig } from '../types/sdk-types.js';
+import type { HookRegistry } from '../hooks.js';
 
 export const DEFAULT_MAX_NESTING_DEPTH = 3;
 
@@ -489,6 +491,15 @@ export function createChildSkillExecutorFactory(
   workspaceStore?: WorkspaceStore,
   // Tree-wide delegation budget threaded from root. Trailing optional.
   delegationBudget?: import('./delegation-budget.js').DelegationBudget,
+  // Executor-tree scope (#3442), threaded to every depth via the recursive
+  // `factory` (and to agent-tool children, which inherit this factory):
+  // pluginConfigs defined => sole plugin source ([] => none); skillAllowlist =>
+  // exact-name skill gate; hookRegistry => reaches the nested executors' fork
+  // managers, whose stub parents carry none. Trailing optional; undefined =>
+  // byte-identical to before.
+  pluginConfigs?: SdkPluginConfig[],
+  skillAllowlist?: readonly string[],
+  hookRegistry?: HookRegistry,
 ): (
   depth: number,
   maxDepth: number,
@@ -606,6 +617,9 @@ export function createChildSkillExecutorFactory(
       // the traceWriter / cwd propagation above; see this factory's parameter.
       ...(workspaceStore !== undefined ? { workspaceStore } : {}),
       ...(delegationBudget !== undefined ? { delegationBudget } : {}),
+      ...(pluginConfigs !== undefined ? { pluginConfigs } : {}),
+      ...(skillAllowlist !== undefined ? { skillAllowlist } : {}),
+      ...(hookRegistry !== undefined ? { hookRegistry } : {}),
       // Fix A (#skill-recursion): execution guard fires when grandchild calls same skill.
       ...(skillDispatchName !== undefined ? { skillDispatchName } : {}),
     });

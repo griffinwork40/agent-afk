@@ -15,6 +15,7 @@ import { sweepMemoryGc, MEMORY_GC_SWEEP_START_DELAY_MS } from '../memory/memory-
 import { debugLog } from '../../utils/debug.js';
 import { errorMessage } from '../../utils/errors.js';
 import { loadJournalMessages } from '../journal/index.js';
+import { computeMissingExecutors, warnMissingExecutorsOnce } from './session-setup.missing-executors.js';
 import type {
   AgentConfig,
   SessionIdentity,
@@ -70,10 +71,15 @@ export function buildInitialState(
     persistSession,
   };
 
+  // #3442: name the agent/skill/compose tools a bare session cannot offer.
+  const missingExecutors = computeMissingExecutors(config);
+  if (missingExecutors !== undefined) warnMissingExecutorsOnce(missingExecutors);
+
   const metadata: SessionMetadata = {
     sessionId: config.sessionId,
     model: resolvedModel,
     permissionMode,
+    ...(missingExecutors !== undefined ? { missingExecutors } : {}),
   };
 
   return { sessionIdentity, metadata };

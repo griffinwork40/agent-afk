@@ -261,6 +261,7 @@ function coerceSurface(raw: string): Surface {
     case 'telegram':
     case 'subagent':
     case 'web':
+    case 'sdk':
       return raw;
     default:
       return 'unknown';

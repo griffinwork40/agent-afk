@@ -83,6 +83,13 @@ export interface SessionMetadata {
    * See `docs/sdk-surface.md` for the full explanation.
    */
   reducedToolSurface?: boolean;
+  /**
+   * Tools (`'agent' | 'skill' | 'compose'`) that are NOT wired on this session
+   * even though skills were discovered: set only when the session was built
+   * with neither `AgentConfig.executors` nor an injected `provider` /
+   * `providerFactory`. Absent when executors are wired or nothing is missing.
+   */
+  missingExecutors?: string[];
 }
 
 /**
