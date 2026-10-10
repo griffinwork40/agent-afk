@@ -70,6 +70,19 @@ export interface SessionMetadata {
   claudeCodeVersion?: string;
   outputStyle?: string;
   status?: SDKStatus;
+  /**
+   * `true` when skills were discovered by the skill-bridge but the session has
+   * no `skillExecutor` — meaning the model cannot invoke `skill`, `agent`, or
+   * `compose` tools. This is the normal state for sessions created via the
+   * public SDK (`AgentSession` / `query()` / `queryText()`) without executor
+   * wiring. CLI/REPL/Telegram/web/daemon surfaces always wire executors, so
+   * this field is absent (or `false`) there.
+   *
+   * Embedders can inspect this field after `waitForInitialization()` to decide
+   * whether to display their own warning or proxy to a fully-wired surface.
+   * See `docs/sdk-surface.md` for the full explanation.
+   */
+  reducedToolSurface?: boolean;
 }
 
 /**
