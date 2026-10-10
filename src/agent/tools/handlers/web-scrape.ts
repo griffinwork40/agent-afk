@@ -45,7 +45,7 @@ import {
   playwrightInstallCommand,
 } from './playwright-hints.js';
 import { errorMessage, extractEgressBlockedError, fetchFailedMessage } from '../../../utils/errors.js';
-import { forwardAbortSignal } from '../../../utils/abort.js';
+import { createRequestAbortScope } from '../../../utils/abort.js';
 
 // External constraint: Node 20+ ships `fetch` as a global. Older runtimes
 // would throw before reaching this handler because tsconfig targets >=20.
@@ -196,24 +196,21 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
       return { content: `web_scrape aborted: ${msg}`, isError: true };
     }
 
-    // Ordered-operation constraint: build the AbortController, wire the parent
-    // signal AND the timeout to it, then issue work. The `finally` block tears
-    // down the timer + listener in the inverse order. Failing to clear the
-    // timer leaks a Node timer reference; failing to call cleanupAbort leaks
-    // a hard reference to `ac` from the caller's signal.
-    const ac = new AbortController();
-    const cleanupAbort = forwardAbortSignal(signal, ac);
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Ordered-operation constraint: build the abort scope (wires parent signal
+    // AND timeout), then issue work. The `finally` block calls dispose() which
+    // clears the timer and removes the parent listener — no leaks.
+    const scope = createRequestAbortScope({
+      parentSignal: signal,
+      timeoutMs: parsed.timeoutMs,
+      timeoutMessage: `web_scrape timeout after ${parsed.timeoutMs}ms`,
+    });
 
     const abortMessage = (): string => {
-      const reason = ac.signal.reason;
+      const reason = scope.signal.reason;
       return reason instanceof Error ? reason.message : String(reason ?? 'aborted');
     };
 
     try {
-      timer = setTimeout(() => {
-        ac.abort(new Error(`web_scrape timeout after ${parsed.timeoutMs}ms`));
-      }, parsed.timeoutMs);
 
       // Ordered-operation constraint: this SSRF pre-check is the handler's first
       // `await` (the guard resolves DNS, so it cannot sit in the synchronous
@@ -225,7 +222,7 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
       // pass just gives a blocked INITIAL url a clean refusal (issue #575).
       if (parsed.url !== undefined) {
         const verdict = await checkEgressTarget(parsed.url, guardOpts);
-        if (ac.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
+        if (scope.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
         if (!verdict.allowed) return { content: `web_scrape blocked: ${verdict.reason}`, isError: true };
       }
 
@@ -239,11 +236,11 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
           const init = {
             method: 'GET',
             headers: { 'User-Agent': 'agent-afk/web_scrape', Accept: '*/*' },
-            signal: ac.signal,
+            signal: scope.signal,
           };
           res = await guardedFetch(fetchFn, parsed.url!, init, guardOpts);
         } catch (err) {
-          if (ac.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
+          if (scope.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
           // A redirect hop that landed on internal space — name the refusal
           // rather than reporting it as a generic network failure.
           // Also covers the connect-time case: undici wraps EgressBlockedError
@@ -286,7 +283,7 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
             fetchFn,
             renderFn: opts.renderFn,
             timeoutMs: parsed.timeoutMs,
-            signal: ac.signal,
+            signal: scope.signal,
             ...(opts.lookupFn !== undefined ? { lookupFn: opts.lookupFn } : {}),
           });
           if (result.markdown.trim().length === 0) {
@@ -298,7 +295,7 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
           const capped = capBody(withAdvisory(result.markdown, result.advisory), parsed.maxBytes);
           return { content: capped.content, ...(capped.truncated ? { truncated: true } : {}) };
         } catch (err) {
-          if (ac.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
+          if (scope.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
           // As in raw mode: a guard refusal (initial URL, redirect hop, or the
           // render path's post-navigation re-check) is a policy decision, not a
           // markdown-extraction failure. Also handles the connect-time path
@@ -334,22 +331,19 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
         const results = await backend.search(parsed.query!, {
           limit: DEFAULT_SEARCH_LIMIT,
           timeoutMs: parsed.timeoutMs,
-          signal: ac.signal,
+          signal: scope.signal,
         });
         const capped = capBody(formatSearchResults(parsed.query!, results), parsed.maxBytes);
         return { content: capped.content, ...(capped.truncated ? { truncated: true } : {}) };
       } catch (err) {
-        if (ac.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
+        if (scope.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
         return {
           content: `web_scrape search error (${backend.name}): ${errorMessage(err)}`,
           isError: true,
         };
       }
     } finally {
-      // Inverse-of-setup teardown order: timer first (it was set last),
-      // then listener removal (it was added first).
-      if (timer !== undefined) clearTimeout(timer);
-      cleanupAbort();
+      scope.dispose();
     }
   };
 }
