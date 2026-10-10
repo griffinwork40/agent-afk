@@ -225,9 +225,12 @@ describe('SDK resume rehydration via journal', () => {
     };
     fs.mkdirSync(getSessionLedgerDir(sid), { recursive: true });
     fs.writeFileSync(getSessionJournalPath(sid), `${JSON.stringify(corrupt)}\n`);
-    // Precondition: the reader itself throws on this journal, so the test
-    // exercises the constructor-side boundary rather than a tolerant reader.
-    expect(() => loadJournalMessages(sid)).toThrow();
+    // Precondition: the new isResultPart guard catches `content: [null]` at
+    // parse time, so the record is silently skipped and the reader returns null
+    // (empty fold) rather than throwing. The test still exercises the
+    // constructor-side boundary: the constructor must not throw and must not
+    // seed resumeMessages when the journal yields nothing usable.
+    expect(loadJournalMessages(sid)).toBeNull();
 
     const { provider, configs } = capturingProvider(sid);
     let session: AgentSession | undefined;
