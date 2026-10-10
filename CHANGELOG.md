@@ -11,6 +11,25 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.308.3] - 2026-10-10
+
+### Fixed
+- add safety comment to `rest as T` cast in clampBreakpoints (#3445) (428e2697)
+- remove stale 'threads' category, guard default backticks, regen MDX (#3448) (9cd8c1c6)
+- warn and document that SDK sessions lack agent/skill/compose tools (#3454) (d5364a23)
+
+### Changed
+- fix bufferedLength JSDoc and remove duplicate newline comment (#3410) (1e35a8fa)
+- cover afk schedule command (COV-012) (#3453) (60f0f9d9)
+- cover marketplace browse slash command (COV-015) (#3451) (7b286760)
+- cover REPL cleanup (COV-018) (#3456) (9296fe4a)
+- cover afk browser command (COV-010) (#3452) (ffe88ce9)
+- extract installCrashNotifier shared by telegram and daemon (#3459) (156e70fe)
+- share request abort scope between web_request and web_scrape (#3458) (d5612e18)
+- remove Agent Browser backend; Playwright is the only backend (#3450) (f21d81d3)
+- extract configureSqliteConnection for state/workspace/memory stores (#3457) (b397c8d0)
+- upgrade marked to v18 (#3437) (537f3e41)
+
 ## [5.308.2] - 2026-10-10
 
 ### Fixed
