@@ -11,6 +11,22 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.308.6] - 2026-10-10
+
+### Added
+- first-class runAt one-shots and expiresAt hard expiry for schedules (#3491) (95541352)
+
+### Fixed
+- record status:blocked and fire notifyOn:failure when AFK gate hard-blocks tool calls (#3489) (1ecf9ada)
+- classify 403 oauth_not_allowed_for_organization as transient (#3485) (9cb00718)
+- replace clearAllMocks with resetAllMocks and widen far-reset margin (#3490) (d88cbef0)
+
+### Changed
+- retire the last 6 .filesize-baseline.json entries (#3492) (37160e26)
+- retire 4 TUI funcsize baseline entries via helper extraction (#3487) (fd472209)
+- extract postOAuthForm shared helper for xAI OAuth form POSTs (#3469) (a0162904)
+- correct tui-architecture-map tracks, pain points, and hotspot table (#3484) (c8855c04)
+
 ## [5.308.5] - 2026-10-10
 
 ### Added
