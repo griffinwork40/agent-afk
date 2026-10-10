@@ -181,6 +181,20 @@ describe('createWiredExecutors (#3442)', () => {
     await w2.dispose();
   });
 
+  it('concurrent dispose() calls share one drain (idempotent under Promise.all)', async () => {
+    const mgrSpy = vi.spyOn(SubagentManager.prototype, 'abortAllAndDrain');
+    const w = createWiredExecutors(base, { unattended: true, agent: true });
+    // Fire two dispose() calls in the same microtask turn — should share one drain.
+    const [r1, r2] = await Promise.all([w.dispose(), w.dispose()]);
+    expect(r1).toBeUndefined();
+    expect(r2).toBeUndefined();
+    // abortAllAndDrain must be called exactly once regardless of concurrent dispose() calls.
+    expect(mgrSpy).toHaveBeenCalledTimes(1);
+    // Subsequent dispose() still resolves without a second drain.
+    await w.dispose();
+    expect(mgrSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('end-to-end: session exposes agent/skill/compose and a skill tool call routes into SkillExecutor', async () => {
     const handler = vi.fn(async () => 'PROBE_SKILL_OUTPUT');
     registerSkill({ name: 'probe-cwe', description: 'probe', handler });
