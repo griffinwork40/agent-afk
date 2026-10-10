@@ -276,6 +276,12 @@ export function clampBreakpoints<T extends CacheableToolLike>(params: {
     for (const t of tools) {
       if (toRemove > 0 && blockHasBreakpoint(t)) {
         const { cache_control: _cc, ...rest } = t;
+        // Safe cast: `CacheableToolLike` declares `cache_control` as optional,
+        // so `Omit<T, 'cache_control'> ⊆ T` structurally — stripping an
+        // optional field cannot produce a value that is missing a required one.
+        // A future `T` with a *required* `cache_control` would need to revisit
+        // this assumption (the cast would still compile but the callee would
+        // receive an incomplete object).
         stripped.push(rest as T);
         toRemove--;
       } else {
