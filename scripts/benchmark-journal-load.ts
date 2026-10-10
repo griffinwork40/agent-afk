@@ -34,6 +34,8 @@ process.env['AFK_HOME'] = tmpDir; // audit-env-access: allow — standalone benc
 function cleanupTmpDir(): void {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 }
+// Signal handlers call cleanupTmpDir() explicitly before process.exit(0) because
+// process.exit() bypasses the try/finally block below.
 process.on('SIGTERM', () => { cleanupTmpDir(); process.exit(0); });
 process.on('SIGINT', () => { cleanupTmpDir(); process.exit(0); });
 
