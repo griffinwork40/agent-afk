@@ -292,13 +292,15 @@ describe('BgResultNotifier.dispose() — undelivered notice', () => {
 
 // ── Telegram TelegramBgResultNotifier.dispose() — no markDelivered mislabel ──
 
-// Import lazily here to avoid top-level Telegram module side-effects.
+// vi.mock is hoisted to module scope by vitest, so it runs before imports and
+// safely stubs push.js before bg-result-notifier.js loads it (v5 requires the
+// call to be at the top level of the file, not nested inside describe/test).
+vi.mock('../telegram/push.js', () => ({
+  pushIfConfigured: vi.fn(async () => []),
+}));
+
 describe('TelegramBgResultNotifier.dispose() — no markDelivered mislabel', async () => {
   const { TelegramBgResultNotifier } = await import('../telegram/bg-result-notifier.js');
-
-  vi.mock('../telegram/push.js', () => ({
-    pushIfConfigured: vi.fn(async () => []),
-  }));
 
   let registry: BackgroundAgentRegistry;
   let notifier: InstanceType<typeof TelegramBgResultNotifier>;
