@@ -383,14 +383,17 @@ describe('usageLimitNoTimestampPause', () => {
     expect(events[0]).toMatchObject({ type: 'paused', accountId: 'acct:tok-a' });
   });
 
-  it('falls back to the store account when the client token is unknown', async () => {
+  it('returns api-key sentinel when the client token is unknown (api-key mode)', async () => {
+    // liveAccountId no longer reads the store when getClientToken() is undefined.
+    // Passing null clientToken (api-key mode) should yield the 'api-key' sentinel.
     loadClaudeCodeOauthTokenMock.mockReturnValue('tok-b');
     waitForHotSwapMock.mockResolvedValue('aborted');
     const ctx = makeCtx(true, null);
     const events = await drain(
       usageLimitNoTimestampPause(ctx, makeInput(), () => false, nextOk(), { type: 'error', error: makeError() }),
     );
-    expect(events[0]).toMatchObject({ type: 'paused', accountId: 'acct:tok-b' });
+    expect(events[0]).toMatchObject({ type: 'paused', accountId: 'api-key' });
+    expect(loadClaudeCodeOauthTokenMock).not.toHaveBeenCalled();
   });
 
   it('joins a concurrent in-flight wait and probes, instead of ending the turn silently', async () => {

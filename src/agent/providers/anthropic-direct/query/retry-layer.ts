@@ -334,14 +334,18 @@ export class RetryLayer {
     runInput: RunTurnInput,
     isClosed: () => boolean,
   ): AsyncGenerator<ProviderEvent, void, void> {
+    // Hoist tierContext() once: both the stale-credential refresh and the tier
+    // composition must see the same live-accessor snapshot, and constructing two
+    // separate context objects in one turn would diverge if any internal field
+    // mutates between the two calls (currently safe, but fragile to maintain).
+    const ctx = this.tierContext();
     if (this.credentialSnapshotStale) {
-      await adoptFreshClient(this.tierContext(), runInput);
+      await adoptFreshClient(ctx, runInput);
       this.credentialSnapshotStale = false;
     }
     // Tier composition, outermost first: overload pause → usage limit → auth.
     // Each tier receives the next as an explicit parameter, preserving the
     // nesting the single-file version expressed through direct method calls.
-    const ctx = this.tierContext();
     yield* turnWithOverloadPause(ctx, runInput, isClosed, (c, input, closed) =>
       turnWithUsageLimitRetry(c, input, closed, turnWithAuthRetry),
     );

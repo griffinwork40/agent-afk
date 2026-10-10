@@ -19,7 +19,7 @@
  * @module agent/providers/anthropic-direct/query/live-client
  */
 
-import { loadClaudeCodeOauthToken, parseAccountIdentifier } from '../../../auth/keychain.js';
+import { parseAccountIdentifier } from '../../../auth/keychain.js';
 import type { AnthropicClientLike, RunTurnInput } from '../types.js';
 import type { RetryTierContext } from './retry-context.js';
 
@@ -45,10 +45,17 @@ export async function adoptFreshClient(
 }
 
 /**
- * Account identifier for the token the live client was built with. Falls
- * back to the store only when the client token is unknown (api-key mode, or
- * the store was unreadable when the client was built).
+ * Account identifier for the token the live client was built with.
+ *
+ * Contract: when the client token is undefined (api-key mode — no OAuth
+ * credential was ever loaded), returns the literal sentinel `'api-key'`
+ * rather than reading the credential store. The store cannot be trusted here:
+ * in api-key mode it may be empty, stale, or belong to a different account
+ * than the one the api-key was issued for, so falling through to it would
+ * produce a misleading account name on the paused/resumed events.
  */
 export function liveAccountId(ctx: Pick<RetryTierContext, 'getClientToken'>): string {
-  return parseAccountIdentifier(ctx.getClientToken() ?? loadClaudeCodeOauthToken() ?? '');
+  const token = ctx.getClientToken();
+  if (token === undefined) return 'api-key';
+  return parseAccountIdentifier(token);
 }

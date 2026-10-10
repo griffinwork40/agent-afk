@@ -44,6 +44,12 @@ export async function catchUpStaleCredential(
   const storeToken = loadClaudeCodeOauthToken();
   if (storeToken === undefined || storeToken === ctx.getClientToken()) return false;
 
+  // Contract: `adoptFreshClient` mutates `runInput.client` (and
+  // `runInput.headers`) unconditionally on success, even when the new client
+  // holds the same token as the old one (`refreshed.swapped === false`). That
+  // mutation is harmless here: the same-account client is functionally
+  // equivalent, and the no-swap early-return below ensures we never emit a
+  // spurious `usage_limit_resume` trace event for a non-swap.
   const refreshed = await adoptFreshClient(ctx, runInput);
   if (!refreshed || !refreshed.swapped) return false;
   // Witness layer: a resume with no matching pause, because the turn never
