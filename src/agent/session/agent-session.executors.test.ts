@@ -103,7 +103,12 @@ describe('AgentSession — opt-in executors (#3442)', () => {
     const second = new AgentSession({ model: 'claude-haiku-4-5', apiKey: 'sk-ant-oat01-test' });
     try {
       expect(session.getSessionMetadata().missingExecutors).toEqual(['agent', 'skill', 'compose']);
+      // Construction alone is silent (probe sessions such as `afk status` must not warn).
+      const warned = () => warn.mock.calls.filter((c) => String(c[0]).includes('without executors')).length;
+      expect(warned()).toBe(0);
       await session.sendMessage('hi');
+      expect(warned()).toBe(1);
+      await second.sendMessage('again');
       const names = anthropicToolNames();
       expect(names.length).toBeGreaterThan(0); // non-vacuous: other tools present
       expect(names).not.toContain('agent');

@@ -77,7 +77,7 @@ export function assembleQueryPrompt(args: PromptAssemblyArgs): AssembledPrompt {
   // openai-compatible call site — a per-provider divergence here is how a
   // fork on one provider silently keeps the self-entry.
   const { skillExecutor } = args;
-  const manifestScope = skillExecutor?.getManifestScope();
+  const manifestScope = skillExecutor?.getManifestScope?.();
   const manifest = skillExecutor
     ? buildSkillManifest(undefined, {
         cwd,

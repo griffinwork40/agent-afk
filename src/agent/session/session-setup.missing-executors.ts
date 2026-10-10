@@ -45,8 +45,8 @@ export function warnMissingExecutorsOnce(missing: readonly string[]): void {
   try {
     console.warn(
       `[afk] AgentSession built without executors: the ${missing.join('/')} tools are unavailable ` +
-        'although skills are installed. Pass `executors: createWiredExecutors(...)` in AgentConfig ' +
-        'to enable them (see SessionMetadata.missingExecutors).',
+        'although skills are installed. Pass `executors: createWiredExecutors(config, opts).executors` ' +
+        'in AgentConfig to enable them (see SessionMetadata.missingExecutors).',
     );
   } catch {
     // stderr unavailable: swallow.
@@ -54,6 +54,19 @@ export function warnMissingExecutorsOnce(missing: readonly string[]): void {
 }
 
 /** Test-only: re-arm the once-per-process latch. Production must not call. */
+/**
+ * Turn-start hook: emit the one-time warning only when a session actually runs
+ * a model turn. Construction alone stays silent so probe sessions (e.g.
+ * `afk status`, which builds and closes a bare session) never print it.
+ * Cheap after the first warning: the process flag short-circuits before
+ * re-scanning the skill registry.
+ */
+export function warnMissingExecutorsOnTurn(config: AgentConfig): void {
+  if (missingExecutorsWarned) return;
+  const missing = computeMissingExecutors(config);
+  if (missing !== undefined) warnMissingExecutorsOnce(missing);
+}
+
 export function resetMissingExecutorsWarningForTests(): void {
   missingExecutorsWarned = false;
 }

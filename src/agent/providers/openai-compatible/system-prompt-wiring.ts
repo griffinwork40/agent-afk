@@ -105,7 +105,7 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
   // resolve against the session's dir, not the host process's (#876).
   // `pluginConfigs` and `skillAllowlist` from `getManifestScope()` scope the
   // manifest to the executor's configured boundaries.
-  const manifestScope = skillExecutor?.getManifestScope();
+  const manifestScope = skillExecutor?.getManifestScope?.();
   const manifest = skillExecutor
     ? buildSkillManifest(undefined, {
         ...(typeof config.cwd === 'string' && config.cwd.length > 0
