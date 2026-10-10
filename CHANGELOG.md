@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.308.7] - 2026-10-10
+
+### Fixed
+- daemon tasks can disable their own schedule without approval (#3488) (dfa60454)
+
+### Changed
+- remove log-update — compositor-less TTY path is unreachable (#3486) (7f9a56f2)
+
 ## [5.308.6] - 2026-10-10
 
 ### Added
