@@ -4,6 +4,9 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    // v5 changed clearMocks default to true; keep v4 behaviour so tests that
+    // accumulate mock calls across beforeAll / module-scope setup still pass.
+    clearMocks: false,
     // Invariant: forks (vitest's default), pinned so nobody "speeds up" the
     // suite with threads. Under worker_threads, os.homedir() ignores HOME set
     // in JS, so no HOME redirect works and security tests aimed at ~/.ssh,

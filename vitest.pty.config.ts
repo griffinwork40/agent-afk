@@ -17,6 +17,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    // v5 changed clearMocks default to true; keep v4 behaviour.
+    clearMocks: false,
     setupFiles: [
       './src/__test-utils__/stdin-claim-reset.ts',
       './src/__test-utils__/redirect-paths-env.ts',
