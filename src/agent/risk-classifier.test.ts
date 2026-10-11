@@ -532,76 +532,76 @@ describe('classifyRisk — schedule self-disable carve-out (#3464)', () => {
 });
 
 // ---- #3534: heredoc prose false-positives --------------------------------
-// classifyBash must NOT rate high when BASH_HIGH substrings appear only
-// inside the body of a quoted-delimiter heredoc that redirects to a file.
-// It MUST still rate high when those tokens appear as real commands.
-describe('classifyRisk — bash heredoc prose false-positives (#3534)', () => {
-  // ── false-negative guards (prose in file-redirect heredocs) ──────────────
+// Conservative prose false positives are permitted by the safety invariant.
+// Do not strip payloads or narrow high patterns without proving executable
+// commands cannot be hidden by shell syntax or subsequent consumers.
+describe('classifyRisk — bash heredoc conservative prose classification (#3534)', () => {
+  // ── conservative guards (prose in file-redirect heredocs) ──────────────
 
-  it('heredoc body "platform shift and long-term outlook" → NOT high (rm  is prose)', () => {
-    // 'rm ' matches 'platform ', 'long-term ', 'form ' — must not trip.
+  it('heredoc body "platform shift and long-term outlook" → high conservatively (rm  is prose)', () => {
+    // Keep main's conservative verdict until safe shell parsing is available.
     const cmd = [
       "cat > /tmp/note.txt <<'EOF'",
       '# reasoning: the platform shift and long-term outlook',
       'EOF',
     ].join('\n');
-    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
   });
 
-  it('heredoc body "confirm the retrieval step" → NOT high (eval  is prose)', () => {
-    // 'eval ' matches 'retrieval ' — must not trip.
+  it('heredoc body "confirm the retrieval step" → high conservatively (eval  is prose)', () => {
+    // 'eval ' matches 'retrieval '; retain the conservative high verdict.
     const cmd = [
       "cat > /tmp/x.py <<'EOF'",
       'confirm the retrieval step',
       'EOF',
     ].join('\n');
-    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
   });
 
-  it('heredoc body with "form " and "confirm " → NOT high', () => {
+  it('heredoc body with "form " and "confirm " → high conservatively', () => {
     const cmd = [
       "cat > /tmp/doc.md <<'EOF'",
       'Please confirm the form submission.',
       'EOF',
     ].join('\n');
-    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
   });
 
-  it('tee heredoc body with prose containing "rm " → NOT high', () => {
+  it('tee heredoc body with prose containing "rm " → high conservatively', () => {
     const cmd = [
       "tee /tmp/out.txt <<'EOF'",
       'This is a long-term platform migration plan.',
       'EOF',
     ].join('\n');
-    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
   });
 
-  it('append-redirect heredoc body with prose → NOT high', () => {
+  it('append-redirect heredoc body with prose → high conservatively', () => {
     const cmd = [
       "cat >> /tmp/log.txt <<'EOF'",
       'retrieval complete for platform team',
       'EOF',
     ].join('\n');
-    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
   });
 
-  it('double-quoted delimiter heredoc body with prose → NOT high', () => {
+  it('double-quoted delimiter heredoc body with prose → high conservatively', () => {
     // <<"EOF" is also a quoted delimiter (no expansion in practice).
     const cmd = [
       'cat > /tmp/x.txt <<"EOF"',
       'The long-term outlook for platform teams is positive.',
       'EOF',
     ].join('\n');
-    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
   });
 
-  it('<<-EOF (tab-stripping) file-redirect body with prose → NOT high', () => {
+  it('<<-EOF (tab-stripping) file-redirect body with prose → high conservatively', () => {
     const cmd = [
       "cat > /tmp/x.txt <<-'EOF'",
       '\tthe platform shift matters',
       'EOF',
     ].join('\n');
-    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
   });
 
   // ── true-positive guards (real dangerous commands must stay high) ─────────
@@ -674,6 +674,49 @@ describe('classifyRisk — bash heredoc prose false-positives (#3534)', () => {
       'EOF',
     ].join('\n');
     expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+});
+
+// Invariant: PR #3549 must not downgrade executable commands that main
+// classified high. These strings are classifier data, never shell inputs.
+describe('classifyRisk — PR #3549 blocking review regressions', () => {
+  it.each([
+    'sudo rm secrets.txt',
+    'env rm secrets.txt',
+    'env FLAG=1 rm secrets.txt',
+    'printf x | xargs rm secrets.txt',
+    'echo ready && command rm secrets.txt',
+    'exec rm secrets.txt',
+    'if true; then rm x; fi',
+    'for x in secrets.txt; do rm "$x"; done',
+    'FLAG=1 rm secrets.txt',
+    '/bin/rm secrets.txt',
+    'command eval "$PAYLOAD"',
+  ])('F1: retains high behind wrappers, reserved words, assignments and paths: %s', (command) => {
+    expect(classifyRisk('bash', { command }, ctx)).toBe('high');
+  });
+
+  it.each([
+    ["cat > /tmp/payload.txt <<'EOF'", 'rm secrets.txt', 'EOF', 'bash /tmp/payload.txt'],
+    ["cat <<'EOF' > x.sh", 'rm secrets.txt', 'EOF', 'sh x.sh'],
+    ['cat <<EOF > x.sh', 'rm secrets.txt', 'EOF', 'sh x.sh'],
+    ["cat > payload <<'EOF'; sh payload", 'rm secrets.txt', 'EOF'],
+    ["tee payload <<'EOF'", 'eval "$PAYLOAD"', 'EOF', '. ./payload'],
+    ["cat >> payload <<'EOF'", 'rm secrets.txt', 'EOF', 'source payload'],
+    ["bash <<'EOF' > output", 'rm secrets.txt', 'EOF'],
+    ['bash <<EOF', 'rm secrets.txt', 'EOF'],
+  ])('F2: retains high for written scripts and interpreter heredocs: %j', (...lines) => {
+    expect(classifyRisk('bash', { command: lines.join('\n') }, ctx)).toBe('high');
+  });
+
+  it.each([
+    ['printf \'%s\\n\' "cat > /tmp/note.txt <<\'EOF\'"', 'rm secrets.txt'],
+    ['printf \'%s\\n\' "cat > /tmp/note.txt <<\'EOF\'"', 'rm secrets.txt', 'EOF'],
+    ["printf '%s\\n' 'cat > note <<\"EOF\"'", 'eval "$PAYLOAD"'],
+    ["cat > note <<'EOF'", 'rm secrets.txt'],
+    ["cat > note <<'EOF'", 'rm secrets.txt', ' EOF'],
+  ])('F3: quoted markers and uncertain terminators cannot hide commands: %j', (...lines) => {
+    expect(classifyRisk('bash', { command: lines.join('\n') }, ctx)).toBe('high');
   });
 });
 
