@@ -60,6 +60,16 @@ describe('atomicWriteFile (sync)', () => {
     expect(readFileSync(dest, 'utf-8')).toBe('nested');
   });
 
+  it('creates parent directory with mkdirMode when specified', () => {
+    const dest = join(dir, 'priv', 'out.txt');
+    atomicWriteFile(dest, 'secret', { mkdirMode: 0o700 });
+    expect(readFileSync(dest, 'utf-8')).toBe('secret');
+    // POSIX-only: NTFS does not expose permission bits via stat.
+    if (process.platform !== 'win32') {
+      expect(statSync(join(dir, 'priv')).mode & 0o777).toBe(0o700);
+    }
+  });
+
   it('does not leave a temp file behind on success', () => {
     const dest = join(dir, 'out.txt');
     atomicWriteFile(dest, 'data');
@@ -141,6 +151,16 @@ describe('atomicWriteFileAsync (async)', () => {
     const dest = join(dir, 'x', 'y', 'z', 'out.txt');
     await atomicWriteFileAsync(dest, 'deep');
     expect(readFileSync(dest, 'utf-8')).toBe('deep');
+  });
+
+  it('creates parent directory with mkdirMode when specified', async () => {
+    const dest = join(dir, 'priv', 'out.txt');
+    await atomicWriteFileAsync(dest, 'secret', { mkdirMode: 0o700 });
+    expect(readFileSync(dest, 'utf-8')).toBe('secret');
+    // POSIX-only: NTFS does not expose permission bits via stat.
+    if (process.platform !== 'win32') {
+      expect(statSync(join(dir, 'priv')).mode & 0o777).toBe(0o700);
+    }
   });
 
   it('does not leave a temp file behind on success', async () => {

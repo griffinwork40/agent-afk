@@ -67,6 +67,17 @@ export interface AtomicWriteOptions {
    */
   mkdirp?: boolean;
   /**
+   * POSIX mode bits to pass to `mkdirSync` / `mkdir` when creating the
+   * destination's parent directory.  Defaults to `undefined` (OS default,
+   * masked by umask).  Set to e.g. `0o700` when the parent directory must
+   * be owner-only regardless of the process umask — for example the
+   * `state/` directory that holds session files.
+   *
+   * Note: `mkdirSync` with `recursive: true` only sets the mode on newly
+   * created directories; pre-existing ancestors are left unchanged.
+   */
+  mkdirMode?: number;
+  /**
    * When true, open the temp file with `O_EXCL` (`flag: 'wx'`) so a
    * pre-existing temp path (e.g. from a prior interrupted write) causes an
    * immediate `EEXIST` error rather than silently overwriting it.
@@ -255,7 +266,10 @@ export function atomicWriteFile(
   const flag = resolvedOpts.secure ? 'wx' : 'w';
 
   if (mkdirp) {
-    mkdirSync(dirname(dest), { recursive: true });
+    mkdirSync(dirname(dest), {
+      recursive: true,
+      ...(resolvedOpts.mkdirMode !== undefined ? { mode: resolvedOpts.mkdirMode } : {}),
+    });
   }
 
   const tmp = makeTmpPath(dest);
@@ -310,7 +324,10 @@ export async function atomicWriteFileAsync(
   const flag = opts.secure ? 'wx' : 'w';
 
   if (mkdirp) {
-    await mkdir(dirname(dest), { recursive: true });
+    await mkdir(dirname(dest), {
+      recursive: true,
+      ...(opts.mkdirMode !== undefined ? { mode: opts.mkdirMode } : {}),
+    });
   }
 
   const tmp = makeTmpPath(dest);
