@@ -11,6 +11,34 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.308.9] - 2026-10-11
+
+### Changed
+- retire handleNavKey + readWithAutocompleteTty from funcsize baseline (#3514) (b03e5ae8)
+
+## [5.308.8] - 2026-10-11
+
+### Fixed
+- disposed guard in armTimeout, formatApprovalTimeout helper, crash-notifier comment, test nits (#3512) (4d6ce9ec)
+- dedupeAndSort helper, discriminant cast, ledger comment, audit-fit hoisted default, runtime-source history prefix, test name fixes (#3511) (36e22aef)
+- address advisory findings from #3472 review (#3510) (3fdedcf6)
+- dispose latch, compose-toggle guard, @experimental tag, concurrent-dispose test (#3509) (f41e6d26)
+- guard sessionId undefined + merge preflight imports (#3508) (81f05202)
+- address advisory findings from #3471 review (#3507) (e07192c4)
+- drop async from submitPrompt/submitSkillMessage, move buildChatGptOAuthResult up (#3506) (6e7c86db)
+- migrate createWiredExecutors inline proxy onto makeDeferredParentProxy (#3505) (53a3ede4)
+- address advisory findings from #3473 selector refactor (#3504) (9a9d7f99)
+- migrate external mcp/config-loader importers to barrel (#3503) (2b2e28c3)
+- advisory findings from 2026-10-09 PR triage batch (#3468) (ec6d0785)
+
+### Changed
+- raise coverage on entry.ts, manager.ts, setup-wizard.ts, bot.ts (COV-011,014,016,017) (#3521) (c638b1e5)
+- adopt atomicWrite/writeJsonFile in spine/dag/worktree/migrate/oauth (#3520) (86d5df9d)
+- audit remaining parseJsonlLines sites; document skipped loops in telemetry-reader (#3518) (0d6a09e8)
+- DEAD-033 incremental — agent/index.ts + tools/schemas.ts (88 unused exports) (#3517) (b873c472)
+- DEAD-033 incremental — src/agent/outcomes/index.ts (54 unused exports) (#3513) (ae40bfe6)
+- convert remaining hand-rolled error/execFile sites to shared helpers (#3461) (37a4467c)
+
 ## [5.308.7] - 2026-10-10
 
 ### Fixed
