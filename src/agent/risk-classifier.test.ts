@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, realpathSync, rmSync, symlinkSync } from 'fs';
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { classifyRisk, classifyRiskDetailed } from './risk-classifier.js';
 import type { RiskContext } from './risk-classifier.js';
 import { getTempRoots, isOutsideRoot, isPrivateTempRoot } from './risk-classifier.paths.js';
@@ -781,6 +781,16 @@ describe('isPrivateTempRoot — pure predicate', () => {
     expect(isPrivateTempRoot(st({ mode: 0o700 }), 1000, 'linux')).toBe(true);
   });
 
+  it('traversable 0o755 root owned by caller → excluded (other users can reach child dirs)', () => {
+    expect(isPrivateTempRoot(st({ mode: 0o40755 }), 1000, 'linux')).toBe(false);
+    expect(isPrivateTempRoot(st({ mode: 0o40755 }), 1000, 'darwin')).toBe(false);
+  });
+
+  it('group-readable 0o750 / other-exec 0o701 roots → excluded', () => {
+    expect(isPrivateTempRoot(st({ mode: 0o750 }), 1000, 'linux')).toBe(false);
+    expect(isPrivateTempRoot(st({ mode: 0o701 }), 1000, 'linux')).toBe(false);
+  });
+
   it('symlink → excluded regardless of mode', () => {
     expect(isPrivateTempRoot(st({ link: true, mode: 0o700 }), 1000, 'linux')).toBe(false);
   });
@@ -889,6 +899,25 @@ describe('classifyRisk — system temp dir carve-out', () => {
   it('getTempRoots() session root appears first', () => {
     const roots = getTempRoots();
     expect(roots[0]).toBe(sessRoot);
+  });
+
+  it('cached session root is re-validated: reaped and replaced by a non-directory → dropped', () => {
+    // Prime the cache (both candidates exist, so the result is cached).
+    expect(getTempRoots()).toContain(sessRoot);
+    expect(getTempRoots()).toContain(sessRoot);
+    // Simulate a tmp reaper deleting the idle root and something else taking
+    // its name. A regular file fails isPrivateTempRoot on every platform.
+    rmSync(sessRoot, { recursive: true, force: true });
+    writeFileSync(sessRoot, 'not a dir');
+    // (No classification assertion: sessRoot lives under os.tmpdir(), which is
+    // itself a private root on macOS, so the path stays admissible through it.)
+    expect(getTempRoots()).not.toContain(sessRoot);
+  });
+
+  it('cached session root is re-validated: reaped and not re-created → dropped', () => {
+    expect(getTempRoots()).toContain(sessRoot);
+    rmSync(sessRoot, { recursive: true, force: true });
+    expect(getTempRoots()).not.toContain(sessRoot);
   });
 
   it('<sessRoot>-sibling/x (prefix lookalike) → high', () => {

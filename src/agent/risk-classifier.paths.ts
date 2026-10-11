@@ -25,6 +25,8 @@ const MAX_LINK_HOPS = 40;
  * either (TMPDIR env var or test override) busts the cache. We do NOT cache
  * when any candidate was absent at probe time — the session root is created
  * lazily on first shell spawn, so a missing dir must be re-checked next call.
+ * A cache hit is never trusted blindly: every cached root is re-validated (see
+ * `getTempRoots`), so the cache only saves the realpath + candidate probing.
  */
 let tempRootsCache:
   | { key: string; roots: readonly string[]; complete: boolean }
@@ -38,7 +40,10 @@ let tempRootsCache:
  *   2. On POSIX when `uid` is defined: must be owned by `uid`.
  *   3. On win32 (`platform === 'win32'`): mode bits are meaningless (NTFS uses
  *      ACLs), so the mode check is skipped.
- *   4. On POSIX: `(mode & 0o022) === 0` — no group-write, no other-write.
+ *   4. On POSIX: `(mode & 0o077) === 0` — no group or other access at all.
+ *      Write bits alone are not enough: a traversable 0755 root lets another
+ *      user reach a 0777 subdirectory a child created inside it and swap a
+ *      leaf symlink there between gate and write.
  *
  * The predicate is PURE: it takes a synthetic-stat-shaped object, a uid, and a
  * platform string, so it can be unit-tested on any host without touching the
@@ -56,7 +61,20 @@ export function isPrivateTempRoot(
   if (!st.isDirectory() || st.isSymbolicLink()) return false;
   if (uid !== undefined && st.uid !== uid) return false;
   if (platform === 'win32') return true;
-  return (st.mode & 0o022) === 0;
+  return (st.mode & 0o077) === 0;
+}
+
+/** Re-check one already-admitted (realpath'd) root; any lstat error → false. */
+function isStillPrivate(
+  root: string,
+  uid: number | undefined,
+  platform: NodeJS.Platform,
+): boolean {
+  try {
+    return isPrivateTempRoot(lstatSync(root), uid, platform);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -66,8 +84,8 @@ export function isPrivateTempRoot(
  *   - The per-process session root (`sessionTmpdirRoot()`, typically
  *     `/tmp/afk-<uid>` on darwin or `<os.tmpdir()>/afk-<uid>` elsewhere) is
  *     included when lstat shows a real directory owned by this process's uid
- *     with no group/other-write bits (on POSIX).
- *   - `os.tmpdir()` is included only when `(mode & 0o022) === 0` on POSIX
+ *     with no group/other permission bits (on POSIX).
+ *   - `os.tmpdir()` is included only when `(mode & 0o077) === 0` on POSIX
  *     (macOS per-user /var/folders/…/T is 0700; Linux /tmp 1777 is excluded).
  *     On win32 (per-user profile temp; mode bits meaningless) it is always
  *     included.
@@ -80,18 +98,29 @@ export function isPrivateTempRoot(
  * Cache: keyed on `os.tmpdir() + sessionTmpdirRoot()`. When any candidate was
  * absent at probe time the result is NOT cached, so the session root (created
  * lazily on first shell spawn) is picked up on the next call.
+ *
+ * Invariant: a cached root is re-validated (lstat + isPrivateTempRoot) on
+ * every call before it is returned. In a long-running daemon a tmp reaper can
+ * delete an idle root and another local user can re-create it with loose
+ * permissions; a trusted cache would keep admitting that path. Any failed
+ * re-check discards the cache and re-probes from scratch.
  */
 export function getTempRoots(): readonly string[] {
   const tmp = os.tmpdir();
   const sessRoot = sessionTmpdirRoot();
   const cacheKey = tmp + '\0' + sessRoot;
-  if (tempRootsCache && tempRootsCache.key === cacheKey && tempRootsCache.complete) {
-    return tempRootsCache.roots;
-  }
-
   const uid: number | undefined =
     typeof process.getuid === 'function' ? process.getuid() : undefined;
   const platform = process.platform;
+
+  if (
+    tempRootsCache &&
+    tempRootsCache.key === cacheKey &&
+    tempRootsCache.complete &&
+    tempRootsCache.roots.every((r) => isStillPrivate(r, uid, platform))
+  ) {
+    return tempRootsCache.roots;
+  }
 
   const roots: string[] = [];
   let allPresent = true;
