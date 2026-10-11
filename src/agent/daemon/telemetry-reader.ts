@@ -31,6 +31,10 @@
  * | `src/whatif/episodes.ts` | Early-break on `isWhatifSession`; uses `parseRecord` domain transform, not raw `JSON.parse`. |
  * | `src/whatif/sandbox.home.ts` | Parses an `.env` key=value file with regex — not JSONL. |
  * | `src/improve/eval-gen/replay-fixture.ts` | Iterates byte-offset `lineRanges` by index; loop structure cannot be expressed as a guard predicate. |
+ * | `src/agent/log-retention.ts` | Splits on `\n` for byte-accounting and tail-slice rewriting; no JSON parsing — not a JSONL parse loop. |
+ * | `src/agent/journal/records.ts` | `readJournalFile` counts malformed lines separately and detects torn-tail via `endsWithNewline`; `parseJsonlLines` has no line-count or torn-tail signal. |
+ * | `src/agent/tools/bash-capture-index.ts` | `extractFirstLinePreview` splits on `\n` to find the first non-empty plain-text line — no JSON parsing. |
+ * | `src/agent/trace/factory.ts` | `readLastSeq` reads only the last non-empty line for a `seq` field; scanning all lines via `parseJsonlLines` would be wasteful and semantically wrong. |
  *
  * @module agent/daemon/telemetry-reader
  */
