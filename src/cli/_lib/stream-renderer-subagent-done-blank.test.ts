@@ -33,6 +33,7 @@ import { describe, it, expect } from 'vitest';
 import { StreamRenderer } from './stream-renderer.js';
 import type { Writer } from '../slash/types.js';
 import type { OutputEvent, SubagentProgressMeta } from '../../agent/types.js';
+import { stripAnsi } from '../display.js';
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Stub compositor that records every commitAbove call.
@@ -237,7 +238,6 @@ describe('PR #2196 fix — (b) nested-depth subagent-done: spine separator insid
 
     // Positive claim: the child's block commit ends with the dim-spine
     // separator row (the ancestor's `│` column), inside the same commit.
-    const stripAnsi = (t: string): string => t.replace(/\x1b\[[0-9;]*m/g, '');
     const lastRow = stripAnsi(commitAboveCalls[commitAboveCalls.length - 1]!).split('\n').pop();
     expect(lastRow?.trimEnd(), 'nested child block must end with the ancestor spine separator').toMatch(/│$/);
   });

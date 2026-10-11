@@ -9,6 +9,7 @@ import type { ProviderQuery } from '../../provider.js';
 import { formatXaiHttpAuthError } from './auth.js';
 import { resolveXaiEndpoint, type XaiAuthMode } from './endpoints.js';
 import { getErrorStatus } from '../openai-compatible/query/retry.js';
+import { ensureError } from '../../../utils/errors.js';
 
 export function isAccessTokenExpired(expiresAt: number | undefined): boolean {
   if (typeof expiresAt !== 'number') return false;
@@ -19,7 +20,7 @@ export function isAccessTokenExpired(expiresAt: number | undefined): boolean {
 export function rewriteXaiHttpError(error: unknown, mode: XaiAuthMode): Error {
   const status = getErrorStatus(error);
   if (status !== 402 && status !== 403) {
-    return error instanceof Error ? error : new Error(String(error));
+    return ensureError(error);
   }
   const bodySnippet =
     error instanceof Error

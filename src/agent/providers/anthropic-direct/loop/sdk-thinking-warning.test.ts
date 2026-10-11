@@ -26,6 +26,10 @@ const params = {
 
 describe('withoutSdkThinkingDeprecationWarning', () => {
   it('the real SDK warns for opus-4-6 + enabled thinking (guards against an SDK change making this dead code)', async () => {
+    // NOTE: if this test breaks after an SDK version bump that drops the
+    // deprecation warning, the breakage is INTENTIONAL — it means the
+    // `withoutSdkThinkingDeprecationWarning` wrapper has become dead code and
+    // can be removed together with its callers.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { client } = clientCapturingBody();
     await client.messages.create(params).catch(() => {});

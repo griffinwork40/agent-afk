@@ -1,13 +1,12 @@
 import { ResizeBus } from './terminal-size.js';
 import type { TerminalCompositor } from './terminal-compositor.js';
 import type { OverlayComposer } from './_lib/overlay-composer.js';
-import { calculateContentWidth, calculateProseContentWidth, formatPendingBuffer, formatBlockForCommit, applyIndent, initLogUpdateModule, accumulateCommitted, scheduleWithThrottle, isInOpenCodeFence, isInOpenTable, pendingRowCap } from './markdown-stream-format.js';
+import { calculateContentWidth, calculateProseContentWidth, formatPendingBuffer, formatBlockForCommit, applyIndent, accumulateCommitted, scheduleWithThrottle, isInOpenCodeFence, isInOpenTable, pendingRowCap } from './markdown-stream-format.js';
 import { contentMargin } from './render/measure.js';
 import { SmokeReveal, isSmokeTextEnabled } from './smoke-reveal.js';
 import { detectReducedMotion } from './_lib/capture-mode.js';
 import {
   type InputBufferState,
-  type LogUpdateFunction,
   createInputBufferState,
   pushChunk,
   drainInputBuffer,
@@ -49,17 +48,17 @@ interface StreamingMarkdownRendererOptions {
    * via `compositor.commitAbove()`. The compositor owns frame rendering via
    * `CupFrameRenderer` so a persistent input line can coexist below.
    *
-   * When absent: falls back to direct `log-update` on `out`. Reserved for
-   * non-TTY surfaces (Telegram/daemon/tests — `initLogUpdate` short-circuits
-   * on `!isTTY`) and TTY callers that haven't armed a compositor.
+   * When absent (non-TTY: Telegram, daemon, tests): the overlay is skipped.
+   * `scheduleRepaint()` is a no-op on non-TTY, `flush()` writes `committed`
+   * directly to `out`. The sole production TTY caller
+   * (`stream-renderer-orchestrator.ts:373`) always passes `ctx.compositor`
+   * (set by `StreamRenderer.arm()` before any events are processed), so this
+   * field is never null on a live terminal.
    *
    * Invariant: never construct this renderer without a compositor on a TTY
    * surface that has an independently-armed `TerminalCompositor` painting
-   * the same stdout. `CupFrameRenderer` + `log-update` both write CUP/erase
-   * escapes — concurrent ownership of one TTY interleaves frames (the
-   * "stacked prompt" rendering bug). The sole production caller
-   * (`stream-renderer-orchestrator.ts:176`) honors this by passing
-   * `ctx.compositor` whenever non-null.
+   * the same stdout. Two concurrent frame writers interleave CUP/erase
+   * escapes — the "stacked prompt" rendering bug.
    */
   compositor?: TerminalCompositor;
   /**
@@ -76,7 +75,7 @@ interface StreamingMarkdownRendererOptions {
  *
  * Maintains two output regions:
  * - committed: finalized blocks, printed once, never rewritten
- * - pending: partial in-progress block, rewritten via log-update on each new chunk
+ * - pending: partial in-progress block, rewritten via compositor overlay on each new chunk
  *
  * Block boundaries are detected by:
  * 1. Double newlines (\n\n)
@@ -97,7 +96,6 @@ export class StreamingMarkdownRenderer {
    *  throttle in `scheduleRepaint`. Starts at 0 so the very first push fires
    *  immediately (0 - 0 >= 33). */
   private lastPaintTime = 0;
-  private logUpdate: LogUpdateFunction | null = null;
   private isTTY: boolean;
   private flushing = false;
   private compositor: TerminalCompositor | null;
@@ -148,13 +146,6 @@ export class StreamingMarkdownRenderer {
     }
   }
 
-  /** Lazy-load log-update; stores result on `this.logUpdate` and returns it. */
-  private async initLogUpdate(): Promise<LogUpdateFunction | null> {
-    if (!this.isTTY || this.logUpdate !== null) return this.logUpdate;
-    this.logUpdate = (await initLogUpdateModule()) as LogUpdateFunction | null;
-    return this.logUpdate;
-  }
-
   /**
    * Render and commit a completed block
    */
@@ -185,7 +176,7 @@ export class StreamingMarkdownRenderer {
   }
 
   /**
-   * Schedule a repaint of the pending region via log-update (throttled)
+   * Schedule a repaint of the pending region (throttled)
    */
   private scheduleRepaint(): void {
     if (!this.isTTY || this.flushing) {
@@ -269,15 +260,12 @@ export class StreamingMarkdownRenderer {
   /**
    * Execute a single repaint of pending content
    */
-  private async repaint(): Promise<void> {
-    await executeRepaint({
+  private repaint(): void {
+    executeRepaint({
       flushing: this.flushing,
       overlayComposer: this.overlayComposer,
       compositor: this.compositor,
-      logUpdate: this.logUpdate,
       renderPending: () => this.renderPending(),
-      initLogUpdate: () => this.initLogUpdate(),
-      onLogUpdateReady: (fn) => { this.logUpdate = fn; },
     });
   }
 
@@ -314,7 +302,7 @@ export class StreamingMarkdownRenderer {
 
   /**
    * Finalize the stream: render and commit any remaining content,
-   * and clear the log-update overlay
+   * and clear the live overlay.
    */
   async flush(): Promise<void> {
     // Drain any micro-buffered input before finalizing.
@@ -336,7 +324,7 @@ export class StreamingMarkdownRenderer {
     // the tail buffer so the final commitBlock → commitAbove → repaint cycle
     // doesn't re-render stale pending text between the just-committed scrollback
     // line and the input row.
-    clearOverlay(this.overlayComposer, this.compositor, null);
+    clearOverlay(this.overlayComposer, this.compositor);
 
     // Commit any remaining buffer
     if (this.buffer.trim()) {
@@ -348,14 +336,8 @@ export class StreamingMarkdownRenderer {
       return;
     }
 
-    // Clear log-update overlay (for TTY)
-    if (this.isTTY && this.logUpdate) {
-      // Clear the overlay first so log-update's tracked region is released,
-      // then write committed content onto fresh ground.
-      this.logUpdate.clear();
-      this.out.write(this.committed + '\n');
-    } else if (this.committed) {
-      // Non-TTY: just append committed content
+    // Non-TTY (no compositor): write committed content directly.
+    if (this.committed) {
       this.out.write(this.committed + '\n');
     }
   }
@@ -458,11 +440,11 @@ export class StreamingMarkdownRenderer {
     // Clear the live overlay in whichever mode is active — mirror the slot
     // clears in commitPending()/flush() so the discarded text vanishes from
     // the screen, not just from the buffer.
-    clearOverlay(this.overlayComposer, this.compositor, this.isTTY ? this.logUpdate : null);
+    clearOverlay(this.overlayComposer, this.compositor);
   }
 
   /**
-   * Clean up resources: clear timers and release log-update state
+   * Clean up resources: clear timers and release overlay state.
    */
   dispose(): void {
     discardInputBuffer(this.inputState);
@@ -476,11 +458,6 @@ export class StreamingMarkdownRenderer {
     if (this.resizeUnsub) {
       this.resizeUnsub();
       this.resizeUnsub = null;
-    }
-
-    if (this.logUpdate) {
-      this.logUpdate.clear();
-      this.logUpdate = null;
     }
 
     this.buffer = '';

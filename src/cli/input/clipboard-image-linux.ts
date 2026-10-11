@@ -27,6 +27,8 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { env } from '../../config/env.js';
 import type { ImageAttachment } from './attachments.js';
+import { detectMediaType } from './detect-media-type.js';
+import { isEnoent, isErrnoCode } from '../../utils/errors.js';
 
 /**
  * When AFK_DEBUG_CLIPBOARD=1, structured diagnostic messages are written to
@@ -57,8 +59,7 @@ export function isCommandAvailable(cmd: string, args: string[]): Promise<boolean
   return new Promise<boolean>((resolve) => {
     const child = spawn(cmd, args, { stdio: ['ignore', 'ignore', 'ignore'] });
     child.on('error', (err) => {
-      const code = (err as NodeJS.ErrnoException).code;
-      resolve(code !== 'ENOENT' && code !== 'EACCES');
+      resolve(!isEnoent(err) && !isErrnoCode(err, 'EACCES'));
     });
     child.on('close', () => resolve(true));
   });
@@ -81,36 +82,6 @@ export function linuxClipboardRead(cmd: string, args: string[]): Promise<Buffer 
       resolve(buf.length > 0 ? buf : null);
     });
   });
-}
-
-/**
- * Detect image format by inspecting magic bytes at buffer start.
- * Subset of formats the Anthropic API accepts.
- */
-export function detectMediaTypeLinux(
-  buffer: Buffer,
-): ImageAttachment['mediaType'] | null {
-  // PNG: 89 50 4E 47 0D 0A 1A 0A
-  if (buffer.length >= 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
-    return 'image/png';
-  }
-  // JPEG: FF D8 FF
-  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
-    return 'image/jpeg';
-  }
-  // GIF: 47 49 46 38
-  if (buffer.length >= 4 && buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) {
-    return 'image/gif';
-  }
-  // WebP: RIFF....WEBP
-  if (
-    buffer.length >= 12 &&
-    buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
-    buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50
-  ) {
-    return 'image/webp';
-  }
-  return null;
 }
 
 /**
@@ -141,7 +112,7 @@ export async function readClipboardImageLinux(): Promise<ImageAttachment | null>
       if (DEBUG) dbg(`linux: ${cmd} returned ${buffer?.length ?? 0} bytes`);
       if (!buffer || buffer.length === 0) continue;
 
-      const mediaType = detectMediaTypeLinux(buffer);
+      const mediaType = detectMediaType(buffer);
       if (DEBUG) dbg(`linux: magic-byte detection: ${mediaType ?? 'unrecognized'}`);
       if (!mediaType) continue;
 

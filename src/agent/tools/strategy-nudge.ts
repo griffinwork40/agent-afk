@@ -153,8 +153,11 @@ const PY_EXCEPTION_LINE = /^[A-Za-z_][\w.]*(?:Error|Exception|Exit|Interrupt|War
  * exception-shaped identifier in mixed output (e.g. log lines, test names)
  * that happens to appear after the real traceback.
  */
+// /i is intentional for the Traceback/During/Above branches (case-insensitive
+// English variants); it is harmless but irrelevant for the structural branches
+// (File, indented source, caret, collapsed-frame marker).
 const PY_TRACEBACK_PREDECESSOR =
-  /^(?:\s+File\s+"[^"]*"|    |\s*\^+\s*$|Traceback\s*\(most recent call last\)|During handling of the above exception|The above exception was the direct cause|\s*\[Previous line repeated \d+ more times?\])/i;
+  /^(?:\s+File\s+"[^"]*"|    |\s*\^+\s*$|Traceback\s*\(most recent call last\)|During handling of the above exception|The above exception was the direct cause|  \[Previous line repeated \d+ more times?\]\s*$)/i;
 
 /**
  * When `lines` hold a Python traceback, the LAST exception line in them.

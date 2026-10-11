@@ -23,6 +23,7 @@ import { listenWithRecovery, closeServer } from './daemon.listen.js';
 import { errorMessage } from '../utils/errors.js';
 import { validateScheduleCwd } from './daemon/cwd-validator.js';
 import { getSchedule, toScheduledTask } from './daemon/schedule-store.js';
+import { parseTaskRetryFields, type TaskRetryFields } from './daemon/task-retry.js';
 
 export interface DaemonOptions {
   /** Port for the HTTP control surface. Defaults to 7777. */
@@ -296,6 +297,62 @@ function handleRequest(req: IncomingMessage, res: ServerResponse, scheduler: Cro
   });
 }
 
+/** Type guard: returns true only for the three valid `notifyOn` literal values. */
+function isValidNotifyOn(v: unknown): v is ScheduledTask['notifyOn'] {
+  return v === 'failure' || v === 'always' || v === 'never';
+}
+
+/** Parameters for {@link isShellExecutorTrusted}. */
+interface ShellTrustParams {
+  taskId: string;
+  command: string;
+  cronExpression: string;
+  trigger: TriggerMode | undefined;
+  notifyOn: ScheduledTask['notifyOn'];
+  notifyChat: number | string | undefined;
+  cwd: string | undefined;
+  maxAttempts: number | undefined;
+  retryDelayMs: number | undefined;
+}
+
+/**
+ * Returns true when a shell-executor POST /tasks request can be trusted —
+ * i.e. the payload matches an enabled shell entry already persisted in the
+ * schedule store. Extracted to keep handleRequestAsync under the 200-line ceiling.
+ */
+function isShellExecutorTrusted(params: ShellTrustParams): boolean {
+  const storedConfig = getSchedule(params.taskId);
+  if (!storedConfig || !storedConfig.enabled || storedConfig.executor !== 'shell') return false;
+  const canonical = toScheduledTask(storedConfig);
+  // Normalize notifyOn to the effective default ('failure') so an omitted field
+  // in the store entry and an omitted field in the request compare equal. A bare
+  // === between two optional values would reject a valid sync when one side is
+  // undefined and the other is 'failure' (the canonical default).
+  const canonicalNotifyOn: ScheduledTask['notifyOn'] = canonical.notifyOn ?? 'failure';
+  return (
+    canonical.command === params.command &&
+    canonical.cronExpression === params.cronExpression &&
+    (canonical.trigger ?? 'cron') === (params.trigger ?? 'cron') &&
+    canonicalNotifyOn === params.notifyOn &&
+    canonical.notifyChat === params.notifyChat &&
+    canonical.cwd === params.cwd &&
+    canonical.maxAttempts === params.maxAttempts &&
+    canonical.retryDelayMs === params.retryDelayMs
+  );
+}
+
+/**
+ * Validate the optional retry fields (#3243) with the same bounds as the
+ * tool/web surfaces. Writes a 400 and returns null on rejection.
+ */
+function parseRetryOr400(obj: Record<string, unknown>, res: ServerResponse): TaskRetryFields | null {
+  const retry = parseTaskRetryFields(obj);
+  if (retry.ok) return retry.value;
+  res.writeHead(400, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: retry.error }));
+  return null;
+}
+
 async function handleRequestAsync(
   req: IncomingMessage,
   res: ServerResponse,
@@ -363,6 +420,8 @@ async function handleRequestAsync(
       }
       cwd = cwdResult.resolved;
     }
+    const retry = parseRetryOr400(obj, res);
+    if (retry === null) return;
     const notifyChatRaw = obj['notifyChat'];
     const executorRaw = obj['executor'];
     const taskIdRaw = obj['taskId'] as string;
@@ -391,30 +450,30 @@ async function handleRequestAsync(
     // what the next daemon restart would do anyway.  No new untrusted command can
     // enter via this window.
     if (executorRaw === 'shell') {
-      const storedConfig = getSchedule(taskIdRaw);
-      const canonical = storedConfig ? toScheduledTask(storedConfig) : undefined;
-      // Normalize notifyOn to the effective default ('failure') on both sides so
-      // that an omitted field in the store entry and an omitted field in the
-      // request body are treated as equal.  A bare === between two optional
-      // values would silently reject a valid sync when one side is undefined and
-      // the other is 'failure' (the canonical default).
-      const canonicalNotifyOn: ScheduledTask['notifyOn'] = canonical?.notifyOn ?? 'failure';
-      const requestNotifyOn: ScheduledTask['notifyOn'] =
-        (obj['notifyOn'] as ScheduledTask['notifyOn'] | undefined) ?? 'failure';
+      // Validate the request-side notifyOn against the literal union instead of
+      // an unchecked cast. An absent value means the default ('failure'); a
+      // present but unrecognized value is rejected outright, never coerced to
+      // the default, so validation can only narrow trust, not widen it.
+      const rawNotifyOn = obj['notifyOn'];
+      // null is intentionally treated as absent (i.e. the request carries no
+      // notifyOn preference) and normalizes to the effective default 'failure'
+      // below. This mirrors the JSON convention used for optional fields on
+      // POST bodies — null signals "caller does not care, use the default".
+      const notifyOnValid = rawNotifyOn === undefined || rawNotifyOn === null || isValidNotifyOn(rawNotifyOn);
       const trusted =
-        storedConfig !== undefined &&
-        storedConfig.enabled === true &&
-        storedConfig.executor === 'shell' &&
-        canonical !== undefined &&
-        canonical.command === (obj['command'] as string) &&
-        canonical.cronExpression === cronValue &&
-        (canonical.trigger ?? 'cron') === ((obj['trigger'] as TriggerMode | undefined) ?? 'cron') &&
-        canonicalNotifyOn === requestNotifyOn &&
-        canonical.notifyChat ===
-          (typeof notifyChatRaw === 'number' || typeof notifyChatRaw === 'string'
-            ? notifyChatRaw
-            : undefined) &&
-        canonical.cwd === cwd;
+        notifyOnValid &&
+        isShellExecutorTrusted({
+          taskId: taskIdRaw,
+          command: obj['command'] as string,
+          cronExpression: cronValue,
+          trigger: obj['trigger'] as TriggerMode | undefined,
+          notifyOn: isValidNotifyOn(rawNotifyOn) ? rawNotifyOn : 'failure',
+          notifyChat:
+            typeof notifyChatRaw === 'number' || typeof notifyChatRaw === 'string' ? notifyChatRaw : undefined,
+          cwd,
+          maxAttempts: retry.maxAttempts,
+          retryDelayMs: retry.retryDelayMs,
+        });
       if (!trusted) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(
@@ -453,6 +512,7 @@ async function handleRequestAsync(
         ? { executor: executorRaw as TaskExecutor }
         : {}),
       ...(cwd !== undefined ? { cwd } : {}),
+      ...retry,
     };
     try {
       scheduler.register(task);

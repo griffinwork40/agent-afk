@@ -39,6 +39,7 @@ import { join, dirname, isAbsolute } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
 import { env } from './config/env.js';
+import { isErrnoCode } from './utils/errors.js';
 
 export function getAfkHome(): string {
   const envVal = env.AFK_HOME;
@@ -363,8 +364,15 @@ export function getDaemonStateDir(instanceId: string = 'default'): string {
  * runtime stores.
  *
  * Never hand-join paths to this directory — always call this helper.
+ *
+ * The `name` parameter is typed as the `ServiceName` union (`'telegram' | 'daemon'`)
+ * to prevent accidental sidecar paths for unknown service names. The type is
+ * inlined here to avoid a circular dependency with `src/service/types.ts`,
+ * which itself imports from `src/paths.ts`.
+ *
+ * Invariant: must stay in sync with ServiceName in src/service/types.ts.
  */
-export function getServiceStartupSidecarPath(name: string): string {
+export function getServiceStartupSidecarPath(name: 'telegram' | 'daemon'): string {
   return join(getAfkStateDir(), 'service-startup', `${name}.json`);
 }
 
@@ -467,7 +475,7 @@ function migrateDirOnce(oldPath: string, newPath: string): void {
       // External constraint: renameSync throws EXDEV when src and dst are on
       // different filesystems (cross-device rename). Fall back to copy+remove
       // so the migration succeeds even when AFK_HOME is on a different mount.
-      if ((renameErr as NodeJS.ErrnoException).code === 'EXDEV') {
+      if (isErrnoCode(renameErr, 'EXDEV')) {
         try {
           cpSync(oldPath, newPath, { recursive: true });
           rmSync(oldPath, { recursive: true, force: true });

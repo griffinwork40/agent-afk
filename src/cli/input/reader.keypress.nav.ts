@@ -17,6 +17,88 @@ import type { ReaderState } from './reader.state.js';
 import type { RepaintCtx, repaint as _repaint } from './reader.repaint.js';
 import type { KeyInfo, IHistoryRing } from './types.js';
 
+// ---------------------------------------------------------------------------
+// Private helpers — extracted to keep handleNavKey under the 200-line ceiling.
+// Each takes explicit parameters (no closure over readWithAutocompleteTty locals).
+// ---------------------------------------------------------------------------
+
+/**
+ * Handle Ctrl+P / ↑: move up one visual row in the draft, or recall history.
+ *
+ * Priority: (1) dropdown → existing selection behavior; (2) cursor can move
+ * up in buffer → do that; (3) buffer empty/pristine at top row → recall from
+ * history.
+ */
+function handleUpKey(
+  st: ReaderState,
+  stdout: NodeJS.WriteStream,
+  repaintCtx: RepaintCtx,
+  repaintFn: typeof _repaint,
+  history: IHistoryRing | undefined,
+): void {
+  if (st.ac.dropdownOpen) {
+    if (st.ac.selectedIndex > 0) {
+      st.ac.selectedIndex--;
+      if (st.ac.selectedIndex < st.ac.viewportStart) st.ac.viewportStart = st.ac.selectedIndex;
+      repaintFn(st, repaintCtx);
+    }
+    return;
+  }
+  const cols = stdout.columns || 80;
+  const result = InputCore.moveUpLine(st.input, cols, repaintCtx.promptVisibleLen);
+  if (result.moved) {
+    st.input = result.state;
+    history?.resetRecall();
+    repaintFn(st, repaintCtx);
+  } else if (history) {
+    const recalled = history.back(st.input.buffer);
+    if (recalled !== null) {
+      st.input = InputCore.seed(recalled);
+      repaintFn(st, repaintCtx);
+    }
+  }
+}
+
+/**
+ * Handle Ctrl+N / ↓: move down one visual row in the draft, or forward
+ * through history.
+ */
+function handleDownKey(
+  st: ReaderState,
+  stdout: NodeJS.WriteStream,
+  repaintCtx: RepaintCtx,
+  repaintFn: typeof _repaint,
+  history: IHistoryRing | undefined,
+): void {
+  if (st.ac.dropdownOpen) {
+    if (st.ac.selectedIndex < st.ac.candidates.length - 1) {
+      st.ac.selectedIndex++;
+      if (st.ac.selectedIndex >= st.ac.viewportStart + st.maxDropdownRows) {
+        st.ac.viewportStart = st.ac.selectedIndex - st.maxDropdownRows + 1;
+      }
+      repaintFn(st, repaintCtx);
+    }
+    return;
+  }
+  const cols = stdout.columns || 80;
+  const result = InputCore.moveDownLine(st.input, cols, repaintCtx.promptVisibleLen);
+  if (result.moved) {
+    st.input = result.state;
+    history?.resetRecall();
+    repaintFn(st, repaintCtx);
+  } else if (history) {
+    const recalled = history.forward();
+    if (recalled !== null) {
+      st.input = InputCore.seed(recalled);
+      repaintFn(st, repaintCtx);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 /**
  * Process a single navigation or editing key.
  *
@@ -93,64 +175,15 @@ export function handleNavKey(
     return true;
   }
 
-  // Ctrl+P / ↑: move up one visual row in draft, or recall history.
-  // Priority: (1) dropdown → existing selection behavior; (2) cursor can
-  // move up in buffer → do that; (3) buffer empty/pristine at top row →
-  // recall from history.
+  // Ctrl+P / ↑: delegated to handleUpKey.
   if ((key?.ctrl && key?.name === 'p') || key?.name === 'up') {
-    if (st.ac.dropdownOpen) {
-      if (st.ac.selectedIndex > 0) {
-        st.ac.selectedIndex--;
-        if (st.ac.selectedIndex < st.ac.viewportStart) st.ac.viewportStart = st.ac.selectedIndex;
-        repaintFn(st, repaintCtx);
-      }
-      return true;
-    }
-    const cols = stdout.columns || 80;
-    const result = InputCore.moveUpLine(st.input, cols, repaintCtx.promptVisibleLen);
-    if (result.moved) {
-      st.input = result.state;
-      history?.resetRecall();
-      repaintFn(st, repaintCtx);
-    } else {
-      if (history) {
-        const recalled = history.back(st.input.buffer);
-        if (recalled !== null) {
-          st.input = InputCore.seed(recalled);
-          repaintFn(st, repaintCtx);
-        }
-      }
-    }
+    handleUpKey(st, stdout, repaintCtx, repaintFn, history);
     return true;
   }
 
-  // Ctrl+N / ↓: move down one visual row in draft, or forward through history.
+  // Ctrl+N / ↓: delegated to handleDownKey.
   if ((key?.ctrl && key?.name === 'n') || key?.name === 'down') {
-    if (st.ac.dropdownOpen) {
-      if (st.ac.selectedIndex < st.ac.candidates.length - 1) {
-        st.ac.selectedIndex++;
-        if (st.ac.selectedIndex >= st.ac.viewportStart + st.maxDropdownRows) {
-          st.ac.viewportStart = st.ac.selectedIndex - st.maxDropdownRows + 1;
-        }
-        repaintFn(st, repaintCtx);
-      }
-      return true;
-    }
-    const cols = stdout.columns || 80;
-    const result = InputCore.moveDownLine(st.input, cols, repaintCtx.promptVisibleLen);
-    if (result.moved) {
-      st.input = result.state;
-      history?.resetRecall();
-      repaintFn(st, repaintCtx);
-    } else {
-      if (history) {
-        const recalled = history.forward();
-        if (recalled !== null) {
-          st.input = InputCore.seed(recalled);
-          repaintFn(st, repaintCtx);
-        }
-      }
-    }
+    handleDownKey(st, stdout, repaintCtx, repaintFn, history);
     return true;
   }
 

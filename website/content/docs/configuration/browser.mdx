@@ -76,7 +76,7 @@ All browser environment variables are optional.
 | `AFK_BROWSER_ALLOWED_DOMAINS` | (empty — permissive) | Comma-separated host globs. Non-matching navigation is blocked. |
 | `AFK_BROWSER_BLOCKED_DOMAINS` | (empty) | Comma-separated host globs. Matching navigation is blocked regardless of the allowlist. |
 | `AFK_BROWSER_DOM_SNAPSHOTS` | off | `1` writes a gzipped DOM snapshot per `browser_act` to `~/.afk/state/witness/<sid>/browser/dom-snapshots/`. |
-| `AFK_BROWSER_BACKEND` | `auto` | Browser provider backend. `auto` (default) prefers Agent Browser and falls back to Playwright. `agent-browser` requires Agent Browser (fails if unavailable). `playwright` uses headless Playwright only. |
+| `AFK_BROWSER_BACKEND` | `auto` | Browser provider backend. `playwright` or `auto` (default) — both use Playwright. The legacy value `agent-browser` is accepted but deprecated and resolves to Playwright with a warning. |
 | `AFK_BROWSER_CONFIG` | (none) | Absolute path to a JSON config file that overrides env-derived settings. |
 | `AFK_SESSION_ID` | `default` | Override the per-session BrowserContext key. Set when running multiple concurrent AFK processes that need isolated browser contexts. |
 

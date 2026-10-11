@@ -835,3 +835,111 @@ describe('updateAll — respects pinnedRef on every plugin', () => {
     if (auto?.status === 'updated') expect(auto.toRef).toBe('v2.0.0');
   });
 });
+
+// ---------------------------------------------------------------------------
+// trackedChanges warning before forced checkout (issue #3260)
+// Plugin update must warn before discarding locally-modified tracked files,
+// matching the behaviour already present in marketplace update.
+// ---------------------------------------------------------------------------
+
+describe('updatePlugin — warns before discarding local edits (#3260)', () => {
+  it('emits a warning naming locally-modified tracked files before --force checkout', async () => {
+    seed('my-plugin', { ref: 'main', commit: 'oldsha', sourceType: 'git' });
+
+    // Base runner: no semver tags, origin/main advanced to newsha.
+    const { runner: base, calls } = makeRunner([], 'oldsha', { main: 'newsha' });
+    // Intercept `git status --porcelain` to report two locally-modified tracked files.
+    const statusRunner: GitRunner = async (args, cwd, env) => {
+      const a = Array.from(args);
+      if (a.includes('status') && a.includes('--porcelain')) {
+        return { stdout: ' M SKILL.md\n M .claude-plugin/plugin.json\n', stderr: '' };
+      }
+      return base(args, cwd, env);
+    };
+
+    const warnMessages: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnMessages.push(args.join(' ')); };
+
+    try {
+      await updatePlugin(
+        'my-plugin',
+        {},
+        { pluginsDir, indexPath, gitRunner: statusRunner, now: () => new Date('2026-05-01T00:00:00Z') },
+      );
+    } finally {
+      console.warn = origWarn;
+    }
+
+    // The warning must name the modified files.
+    const warn = warnMessages.find((m) => m.includes('SKILL.md'));
+    expect(warn).toBeDefined();
+    expect(warn).toContain('.claude-plugin/plugin.json');
+    // The checkout must still proceed (--force).
+    expect(calls.some((c) => c.includes('checkout') && c.includes('--force'))).toBe(true);
+  });
+
+  it('does not warn when there are no locally-modified tracked files', async () => {
+    seed('my-plugin', { ref: 'main', commit: 'oldsha', sourceType: 'git' });
+
+    const { runner: base } = makeRunner([], 'oldsha', { main: 'newsha' });
+    const cleanRunner: GitRunner = async (args, cwd, env) => {
+      const a = Array.from(args);
+      if (a.includes('status') && a.includes('--porcelain')) {
+        // Untracked files only — must not trigger warning.
+        return { stdout: '?? local-only.txt\n', stderr: '' };
+      }
+      return base(args, cwd, env);
+    };
+
+    const warnMessages: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnMessages.push(args.join(' ')); };
+
+    try {
+      await updatePlugin(
+        'my-plugin',
+        {},
+        { pluginsDir, indexPath, gitRunner: cleanRunner, now: () => new Date() },
+      );
+    } finally {
+      console.warn = origWarn;
+    }
+
+    const warn = warnMessages.find((m) => m.includes('locally-edited'));
+    expect(warn).toBeUndefined();
+  });
+
+  it('does not warn or fail when git status itself errors (fail-safe)', async () => {
+    seed('my-plugin', { ref: 'main', commit: 'oldsha', sourceType: 'git' });
+
+    const { runner: base, calls } = makeRunner([], 'oldsha', { main: 'newsha' });
+    const errorRunner: GitRunner = async (args, cwd, env) => {
+      const a = Array.from(args);
+      if (a.includes('status')) throw new Error('git status failed');
+      return base(args, cwd, env);
+    };
+
+    const warnMessages: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnMessages.push(args.join(' ')); };
+
+    try {
+      const outcome = await updatePlugin(
+        'my-plugin',
+        {},
+        { pluginsDir, indexPath, gitRunner: errorRunner, now: () => new Date('2026-05-01T00:00:00Z') },
+      );
+      // Update should still succeed.
+      expect(outcome.status).toBe('updated');
+    } finally {
+      console.warn = origWarn;
+    }
+
+    // No "locally-edited" warning — status errored so we skipped the probe.
+    const warn = warnMessages.find((m) => m.includes('locally-edited'));
+    expect(warn).toBeUndefined();
+    // Checkout still ran with --force.
+    expect(calls.some((c) => c.includes('checkout') && c.includes('--force'))).toBe(true);
+  });
+});

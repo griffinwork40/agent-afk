@@ -49,6 +49,7 @@ import { runIterationWithQuotaLimitPause } from './usage-limit-tier.js';
 import type { ToolResult } from '../../anthropic-direct/types.js';
 import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 import { dispatchAndAppendToolCalls } from './dispatch-append.js';
+import { buildVitalsNote, type VitalsInput } from '../../shared/vitals.js';
 import type { ToolDispatcher } from '../../anthropic-direct/tool-dispatcher.js';
 import type { TraceSink } from '../../../trace/index.js';
 import type { OpenAIMessage } from '../messages.js';
@@ -180,7 +181,11 @@ async function* dispatchAndAppend(
   state: StreamState,
   signal: AbortSignal,
   vision: boolean,
+  vitals: Pick<VitalsInput, 'turnStartedAt' | 'softDeadlineMs' | 'contextTokens'>,
 ): AsyncGenerator<ProviderEvent, ToolResult | undefined> {
+  // Subscription usage stays off here: Codex windows refresh on demand only, so
+  // a per-round reading would usually be stale (docs/usage-awareness.md).
+  const vitalsNote = buildVitalsNote({ ...vitals, model: ctx.currentModel, subagentId: ctx.opts.config.subagentId });
   const denialTrip = yield* dispatchAndAppendToolCalls({
     state,
     signal,
@@ -190,6 +195,7 @@ async function* dispatchAndAppend(
     priorTurns: ctx.priorTurns,
     sessionId: ctx.initSessionId,
     subagentId: ctx.opts.config.subagentId,
+    vitalsNote,
   });
   ctx.journal.sync(ctx.priorTurns); // commit point: tool round (full results) on disk
   return denialTrip;
@@ -329,7 +335,8 @@ export async function* runTurnInner(
       }
 
       const appendedAt = ctx.priorTurns.length;
-      const denialTrip = yield* dispatchAndAppend(ctx, result.state, controller.signal, vision);
+      const vitals = { turnStartedAt: turnStartTime, softDeadlineMs, contextTokens: accumulatedUsage.contextWindowTokens };
+      const denialTrip = yield* dispatchAndAppend(ctx, result.state, controller.signal, vision, vitals);
       if (denialTrip) {
         ctx.abort.clear(controller);
         yield { type: 'error', error: new DenialCircuitBreakerError(denialTrip.content) };

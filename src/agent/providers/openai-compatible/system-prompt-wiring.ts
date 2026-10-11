@@ -19,6 +19,7 @@
 
 import type { AgentConfig } from '../../types/config-types.js';
 import type { RuntimeStateSource } from '../../awareness/index.js';
+import type { SkillExecutor } from '../../tools/skill-executor.js';
 import { formatEnvironmentFragment } from '../../awareness/index.js';
 import {
   resolveToolSystemPrompt,
@@ -26,14 +27,18 @@ import {
   resolveWorkspaceSystemPrompt,
 } from '../../tools/system-prompt.js';
 import { buildSkillManifest } from '../../tools/skill-bridge.js';
+import { normalizeSystemPromptOverlay } from '../shared/system-prompt.js';
 
 /**
  * Parameters forwarded from `query()` — all explicit, no closure over locals.
  */
 export interface SystemPromptWiringArgs {
   config: AgentConfig;
-  /** Whether a skill executor is present (controls manifest inclusion). */
-  hasSkillExecutor: boolean;
+  /**
+   * The wired skill executor, when present. Controls manifest inclusion and
+   * provides `getManifestScope()` for plugin/allowlist scoping.
+   */
+  skillExecutor?: SkillExecutor;
   /** Whether a workspace store is present (controls workspace fragment). */
   hasWorkspaceStore: boolean;
   /** Whether the memory store is read-only. */
@@ -87,18 +92,21 @@ export interface SystemPromptWiringResult {
  */
 export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPromptWiringResult {
   const {
-    config, hasSkillExecutor, hasWorkspaceStore, readOnlyMemory, readOnlyState,
+    config, skillExecutor, hasWorkspaceStore, readOnlyMemory, readOnlyState,
     resolvedSessionId, surface, getCurrentCwd, runtimeStateSource,
   } = args;
 
   // --- Stable fragments (computed once; not cwd-dependent) ---
-  const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
+  const toolBase = resolveToolSystemPrompt(config.isSkillDispatch, config.isUnnamedWorker);
   const memoryPrompt = resolveMemorySystemPrompt(readOnlyMemory, readOnlyState);
   // Invariant: kept in lockstep with anthropic-direct's call site.
   // `excludeName` omits the executing skill's own entry for a skill-dispatch
   // fork (AgentConfig.skillDispatchName); `cwd` is forwarded so project skills
   // resolve against the session's dir, not the host process's (#876).
-  const manifest = hasSkillExecutor
+  // `pluginConfigs` and `skillAllowlist` from `getManifestScope()` scope the
+  // manifest to the executor's configured boundaries.
+  const manifestScope = skillExecutor?.getManifestScope?.();
+  const manifest = skillExecutor
     ? buildSkillManifest(undefined, {
         ...(typeof config.cwd === 'string' && config.cwd.length > 0
           ? { cwd: config.cwd }
@@ -107,11 +115,20 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
         config.skillDispatchName.length > 0
           ? { excludeName: config.skillDispatchName }
           : {}),
+        ...(manifestScope?.pluginConfigs !== undefined
+          ? { pluginConfigs: manifestScope.pluginConfigs }
+          : {}),
+        ...(manifestScope?.skillAllowlist !== undefined
+          ? { skillAllowlist: manifestScope.skillAllowlist }
+          : {}),
       })
     : '';
   const hotMemory = typeof config.hotMemory === 'string' ? config.hotMemory : '';
   const goalPrompt = typeof config.goalPrompt === 'string' ? config.goalPrompt : '';
-  const existingSys = typeof config.systemPrompt === 'string' ? config.systemPrompt : undefined;
+  // Fix #3261: use the shared normalizer so a preset { append } is forwarded,
+  // not silently dropped. Previously `typeof ... === 'string'` discarded the
+  // `append` text of preset objects.
+  const existingSys = normalizeSystemPromptOverlay(config.systemPrompt) ?? undefined;
 
   // Mutable cell shared between rebuildAfterCwdChange and systemPromptRebuildFactory.
   // Invariant (#2420 P1): `setSystemPrompt(base)` on the query stores `base`
@@ -119,7 +136,15 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
   // rebuild uses the REPLACEMENT base prompt — not the construction-time default.
   // Without this shared ref, `setSystemPrompt(newBase)` works only until the
   // next `setCwd()`, which would silently resurrect the old base prompt.
-  const _currentBaseRef: { current: string | undefined } = { current: undefined };
+  //
+  // `set` tracks whether systemPromptRebuildFactory has ever been called (#3305).
+  // We cannot use `current === undefined` as that sentinel because the factory
+  // may be called with `undefined` (explicit clear), leaving both the
+  // never-called and cleared states looking identical.
+  const _currentBaseRef: { set: boolean; current: string | undefined } = {
+    set: false,
+    current: undefined,
+  };
 
   /** Build the cwd-dependent `# Environment` fragment. */
   const buildEnvFragment = (): string =>
@@ -134,13 +159,19 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
 
   /**
    * Join all fragments into the full system prompt.
-   * `baseSys` defaults to the construction-time `existingSys`; pass
-   * `_currentBaseRef.current` after `setSystemPrompt()` so a subsequent
-   * `setCwd()` rebuild uses the REPLACEMENT base prompt (#2420 P1).
+   *
+   * `resolvedBase` is the already-resolved base overlay (string or undefined
+   * for "cleared"). The caller is responsible for deciding which base to pass:
+   * construction-time `existingSys`, the stored `_currentBaseRef.current`,
+   * or a new value. There is no default parameter — this function does not
+   * distinguish "no arg" from "explicit undefined".
    */
-  const assemble = (envFragment: string, baseSys = existingSys): string => {
-    const parts = [toolBase];
-    if (baseSys !== undefined && baseSys.length > 0) parts.push(baseSys);
+  const assemble = (envFragment: string, resolvedBase: string | undefined): string => {
+    // toolBase is '' for unnamed workers (TOOL_SYSTEM_PROMPT_BASE already embedded
+    // in their systemPrompt via UNNAMED_SUBAGENT_WORKER_PROMPT — #3359). Skip so
+    // the join does not produce a leading blank line.
+    const parts: string[] = toolBase.length > 0 ? [toolBase] : [];
+    if (resolvedBase !== undefined && resolvedBase.length > 0) parts.push(resolvedBase);
     parts.push(memoryPrompt);
     const workspacePrompt = resolveWorkspaceSystemPrompt(hasWorkspaceStore);
     if (workspacePrompt) parts.push(workspacePrompt);
@@ -151,9 +182,18 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
   };
 
   return {
-    initialSystemPrompt: assemble(buildEnvFragment()),
-    rebuildAfterCwdChange: (): string => assemble(buildEnvFragment(), _currentBaseRef.current),
+    initialSystemPrompt: assemble(buildEnvFragment(), existingSys),
+    rebuildAfterCwdChange: (): string => {
+      // Contract: when systemPromptRebuildFactory was never called (`set` is
+      // false), fall back to the construction-time `existingSys` so the preset
+      // append is preserved. When it WAS called (even with `undefined` to
+      // clear), use the stored value — which may be `undefined`, meaning
+      // "cleared". This is the fix for #3305.
+      const base = _currentBaseRef.set ? _currentBaseRef.current : existingSys;
+      return assemble(buildEnvFragment(), base);
+    },
     systemPromptRebuildFactory: (base: string | undefined): string => {
+      _currentBaseRef.set = true;
       _currentBaseRef.current = base;
       return assemble(buildEnvFragment(), base);
     },

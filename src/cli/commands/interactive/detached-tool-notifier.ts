@@ -69,9 +69,21 @@ export function buildDetachedToolInjection(result: DetachedToolResult): string {
   );
 }
 
+/**
+ * Cap a string to at most `maxBytes` UTF-8 bytes, appending a truncation
+ * marker when trimmed. Mirrors the injection-path cap so `ToolEvent.result`
+ * written to the session sidecar on every autosave never holds >16 KiB of
+ * raw detached-tool output (carried-over finding from #3155).
+ */
+function capOutput(raw: string, maxBytes: number): string {
+  if (Buffer.byteLength(raw, 'utf8') <= maxBytes) return raw;
+  const truncated = Buffer.from(raw, 'utf8').subarray(0, maxBytes).toString('utf8');
+  return truncated + '\n… [detached output truncated]';
+}
+
 /** Patch partial-compose metadata from a settled result back onto a ToolEvent. */
 function applyResult(event: ToolEvent, result: DetachedToolResult): void {
-  event.result = result.output;
+  event.result = capOutput(result.output, MAX_OUTPUT_BYTES);
   event.isError = result.status === 'failed';
   if (result.incomplete !== undefined) event.incomplete = result.incomplete;
   if (result.incompleteReason !== undefined) event.incompleteReason = result.incompleteReason;

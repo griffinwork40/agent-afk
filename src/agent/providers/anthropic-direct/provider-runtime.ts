@@ -56,6 +56,8 @@ export {
   type AnthropicDirectProviderOptions,
 } from './provider-options.js';
 import type { ToolPermissionConfig } from '../../tools/permissions.js';
+import { snapshotOperatorPermissions } from '../../tools/operator-denied.js';
+import { withOperatorDeniedDispatcher } from '../../tools/operator-denied-dispatcher.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import { MemoryStore } from '../../memory/index.js';
 import { WorkspaceStore } from '../../workspace/workspace-store.js';
@@ -183,11 +185,11 @@ export class AnthropicDirectProvider implements ModelProvider {
     this.workspaceStore = opts.workspaceStore;
     this.subscribeHandler = opts.subscribeHandler;
     this._stateStore = opts.stateStore;
-    this.externalTools = opts.tools;
+    this.permissions = snapshotOperatorPermissions(opts.permissions, opts.customTools?.map((t) => t.schema.name));
+    this.externalTools = withOperatorDeniedDispatcher(opts.tools, this.permissions);
     this.skillExecutor = opts.skillExecutor;
     this.schemas = buildProviderSchemas(opts);
     this.hookRegistry = opts.hookRegistry;
-    this.permissions = opts.permissions;
     this.canUseTool = opts.canUseTool;
     this.subagentExecutor = opts.subagentExecutor;
     this.composeExecutor = opts.composeExecutor;

@@ -91,6 +91,10 @@ export const MODEL_PRICING: ReadonlyMap<string, ModelPricing> = new Map<string, 
   // Prompts up to 100k tokens: $0.10 / $0.50 / $0.125 (5m) / $0.20 (1h) / $0.01
   // read; over 100k: 5x every rate. Per
   // https://platform.claude.com/docs/en/models/haiku-5-5/overview (verified 2026-10-08).
+  // Boundary: the docs say "up to 100,000 tokens" / "over 100,000 tokens",
+  // where "over" means strictly greater than — so exactly 100,000 tokens bills
+  // at the base rate. The `applyPromptTier` helper uses `> thresholdTokens`
+  // (strict), which matches this reading. Verified 2026-10-08.
   ['claude-haiku-5-5', {
     inputPerMTok: 0.10, outputPerMTok: 0.50, cacheWrite5mPerMTok: 0.125, cacheWrite1hPerMTok: 0.20, cacheReadPerMTok: 0.01,
     longPrompt: {

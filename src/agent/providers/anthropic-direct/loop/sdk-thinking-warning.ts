@@ -11,6 +11,11 @@
  * corrupts the REPL. `console.warn` is swapped only for the synchronous
  * duration of `fn()` and restored in `finally`; JS is single-threaded, so no
  * other caller can observe the swap, and every other warning passes through.
+ *
+ * Near-zero risk note: the global swap window is effectively zero — the SDK
+ * fires `console.warn` synchronously before the promise is created, so the
+ * swap is in place only for that instant. An unrelated `console.warn` emitted
+ * from inside `fn()` is still passed through via the `original` reference.
  */
 const DEPRECATION_MARKER = "'thinking.type=enabled' is deprecated";
 

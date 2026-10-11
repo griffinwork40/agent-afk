@@ -31,6 +31,8 @@ export interface TelegramSessionBuildContext {
   config: TelegramBotConfig;
   /** Framework base + operator overlay, already layered (never substituted). */
   layeredBasePrompt: string | undefined;
+  /** Bare operator overlay (no framework); reaches unnamed `agent` children (#3324). */
+  operatorOverlay?: string;
   /** `sessionConfig.cwd ?? AFK_TELEGRAM_CWD`. */
   sessionCwd: string | undefined;
   /** Anthropic-only; undefined for OpenAI-routed sessions. */

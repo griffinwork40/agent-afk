@@ -15,6 +15,9 @@ export function killBashProcess(
   // Do not require exit: taskkill can fail, or the root may already have exited.
   // Normal close drains output and cancels cleanup. Otherwise bound the lifetime
   // of stdout/stderr even if an MSYS2 descendant is invisible to taskkill /T.
+  // When the timer fires, cancel is still registered (close never arrived),
+  // so we must explicitly deregister it here. `proc.once` only auto-removes
+  // on the actual event, not on timer-driven cleanup.
   const cleanup = () => {
     proc.removeListener('close', cancel);
     proc.stdout?.destroy();

@@ -558,4 +558,47 @@ describe('findErrorLine: boilerplate that must not become the signature', () => 
       'RecursionError: maximum recursion depth exceeded';
     expect(findErrorLine(content)).toBe('RecursionError: maximum recursion depth exceeded');
   });
+
+  // Issue #3303: tightened predecessor regex — zero-indent marker must not match
+  it('does not treat a zero-indent collapsed-frame marker as a traceback predecessor', () => {
+    // CPython always emits "[Previous line repeated N more times]" with 2-space
+    // indent. A zero-indent variant is not real traceback output; after the regex
+    // tightening it must not satisfy the predecessor guard.
+    //
+    // Scenario: real traceback ends with ValueError; below it is mixed log output
+    // that happens to contain a zero-indent marker and then an exception-shaped
+    // identifier. lastPythonException must return ValueError (from the real
+    // traceback), not the bogus identifier that follows the zero-indent marker.
+    const content =
+      'Traceback (most recent call last):\n' +
+      '  File "x.py", line 5, in main\n' +
+      '    do_work()\n' +
+      'ValueError: something went wrong\n' +
+      '\nsome log output\n' +
+      '[Previous line repeated 996 more times]\n' + // zero-indent — not valid CPython predecessor
+      'RecursionError: this is not a real traceback exception but looks like one';
+    // The real exception is ValueError; the bogus RecursionError-shaped line after
+    // the zero-indent marker must not be selected over it.
+    expect(findErrorLine(content)).toBe('ValueError: something went wrong');
+  });
+
+  // Issue #3303: chained exception combined with collapsed-frame marker
+  it('extracts RecursionError from a chained traceback where the second chain has a collapsed-frame marker', () => {
+    // "During handling of the above exception" connects two tracebacks; the second
+    // one ends with a collapsed-frame marker directly before RecursionError.
+    // lastPythonException must scan backward, accept the collapsed-frame marker as
+    // a valid predecessor, and return the escaped exception (RecursionError).
+    const content =
+      'Traceback (most recent call last):\n' +
+      '  File "handler.py", line 5, in handle\n' +
+      '    do_work()\n' +
+      'KeyError: missing key\n' +
+      '\nDuring handling of the above exception, another exception occurred:\n\n' +
+      'Traceback (most recent call last):\n' +
+      '  File "recurse.py", line 2, in f\n' +
+      '    return f()\n' +
+      '  [Previous line repeated 996 more times]\n' +
+      'RecursionError: maximum recursion depth exceeded';
+    expect(findErrorLine(content)).toBe('RecursionError: maximum recursion depth exceeded');
+  });
 });

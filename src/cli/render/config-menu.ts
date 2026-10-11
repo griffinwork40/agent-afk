@@ -61,6 +61,7 @@ import {
 import { createProvenanceCache, type ProvenanceCache } from '../config/provenance-cache.js';
 import { applyConfigLive, type LiveApplyHandle, type LiveApplyOutcome } from '../config/live-apply.js';
 import { errorMessage } from '../../utils/errors.js';
+import { defaultToolsIo, disabledCount, runToolsMenu, type ToolsMenuIo } from './config-menu-tools.js';
 
 // ── Injected effects (for testability) ───────────────────────────────────────
 
@@ -76,6 +77,11 @@ export interface MenuOverlays {
   ): Promise<string | null>;
   /** Write a durable line to scrollback (above the input region). */
   emit(line: string): void;
+  /**
+   * Multi-select checklist; resolve with the checked indices, or null on Esc.
+   * Optional: surfaces without it simply do not offer the Tools screen.
+   */
+  pickMany?(header: readonly string[], options: readonly string[], initialSelected: ReadonlySet<number>): Promise<number[] | null>;
 }
 
 export interface MenuIo {
@@ -98,6 +104,8 @@ export interface MenuIo {
    * on surfaces with no live session, where every write stays restart-scoped.
    */
   applyLive?(path: string, rawValue: string): Promise<LiveApplyOutcome>;
+  /** Operator tool deny list (`/config` → Tools). Optional, like `applyLive`. */
+  tools?: ToolsMenuIo;
 }
 
 // ── Orchestrator ─────────────────────────────────────────────────────────────
@@ -113,7 +121,9 @@ export async function runConfigMenu(ov: MenuOverlays, io: MenuIo): Promise<void>
   const cats = buildCategories(io.specs());
   if (cats.length === 0) return;
 
-  // Category level.
+  // Category level. The Tools screen is appended only when both the io and
+  // the overlay surface support it (it needs a multi-select checklist).
+  const tools = io.tools && ov.pickMany ? io.tools : undefined;
   for (;;) {
     const catHeader = [
       palette.bold(TITLE),
@@ -122,9 +132,16 @@ export async function runConfigMenu(ov: MenuOverlays, io: MenuIo): Promise<void>
     ];
     const ci = await ov.pick(
       catHeader,
-      cats.map((c) => `${c.name}  ·  ${c.keys.length} setting${c.keys.length === 1 ? '' : 's'}`),
+      [
+        ...cats.map((c) => `${c.name}  ·  ${c.keys.length} setting${c.keys.length === 1 ? '' : 's'}`),
+        ...(tools ? [`Tools  ·  ${disabledCount(tools)} off`] : []),
+      ],
     );
     if (ci === null) return; // Esc closes the menu
+    if (tools && ci === cats.length) {
+      await runToolsMenu(ov, tools);
+      continue;
+    }
     const cat = cats[ci];
     if (!cat) return;
 
@@ -243,6 +260,11 @@ export function overlaysFromCompositor(c: TerminalCompositor): MenuOverlays {
     emit(line) {
       c.commitAbove(line);
     },
+    async pickMany(header, options, initialSelected) {
+      const result = await runPicker(c, { header, options, multi: true, initialSelected });
+      if (result === null) return null;
+      return result.map((label) => options.indexOf(label)).filter((i) => i >= 0);
+    },
   };
 }
 
@@ -260,5 +282,6 @@ export function defaultIo(handle?: LiveApplyHandle): MenuIo {
       String(setConfigValue(path, rawValue, allowHuman ? { allowHumanOnly: true } : undefined).value),
     provenance: (path, cache) => resolveConfigProvenance(path, cache),
     applyLive: (path, rawValue) => applyConfigLive(path, rawValue, handle),
+    tools: defaultToolsIo(),
   };
 }

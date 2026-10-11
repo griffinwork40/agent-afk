@@ -25,6 +25,7 @@ import { createStreamState } from './translate.js';
 import { translateResponsesEvent, type ResponsesStreamEvent } from './responses-translate.js';
 import { abortableStream } from '../shared/abortable-stream.js';
 import type { OneShotStopReason } from '../anthropic-direct/oneshot.js';
+import { h1ModelFetch } from '../shared/h1-fetch.js';
 
 /**
  * Thrown by {@link oneShotResponses} when the summarize stream ends WITHOUT a
@@ -51,6 +52,8 @@ export type OneShotOpenAIClientFactory = (opts: {
   defaultHeaders?: Record<string, string>;
   /** Contract: always 0 — AFK owns retries. The factory must forward this. */
   maxRetries: number;
+  /** Invariant: always h1ModelFetch — force HTTP/1.1. See h1-fetch.ts. */
+  fetch: typeof globalThis.fetch;
 }) => OpenAI;
 let oneShotClientFactory: OneShotOpenAIClientFactory | null = null;
 
@@ -160,7 +163,8 @@ export async function oneShotChatCompletionWithStop(
       baseURL?: string;
       defaultHeaders?: Record<string, string>;
       maxRetries: number;
-    } = { apiKey: auth.apiKey, maxRetries: 0 };
+      fetch: typeof globalThis.fetch;
+    } = { apiKey: auth.apiKey, maxRetries: 0, fetch: h1ModelFetch };
     if (baseURL !== undefined) clientOpts.baseURL = baseURL;
     if (defaultHeaders !== undefined) clientOpts.defaultHeaders = defaultHeaders;
     const factory = clientFactory ?? oneShotClientFactory;

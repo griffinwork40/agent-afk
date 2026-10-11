@@ -170,3 +170,30 @@ export function buildSharedDeps(a: {
     ...(a.explicitProvider !== undefined ? { explicitProvider: a.explicitProvider } : {}),
   };
 }
+
+import { MemoryStore } from '../../../agent/memory/index.js';
+import { StateStore } from '../../../agent/state/state-store.js';
+import { WorkspaceStore } from '../../../agent/workspace/workspace-store.js';
+import { getStateDatabasePath } from '../../../paths.js';
+import { env } from '../../../config/env.js';
+
+/** Return type of {@link createBootstrapSharedStores}. */
+export interface BootstrapSharedStores {
+  sharedWorkspaceStore: WorkspaceStore | undefined;
+  sharedMemoryStore: MemoryStore;
+  sharedStateStore: StateStore;
+}
+
+/**
+ * Construct the three session-scoped stores shared across all mid-session
+ * swaps: workspace (optional — disabled via AFK_WORKSPACE_DISABLED), memory,
+ * and state. Extracted from {@link bootstrapSession} to keep that function
+ * within the 200-line function ceiling.
+ */
+export function createBootstrapSharedStores(): BootstrapSharedStores {
+  return {
+    sharedWorkspaceStore: env.AFK_WORKSPACE_DISABLED === '1' ? undefined : new WorkspaceStore(),
+    sharedMemoryStore: new MemoryStore(),
+    sharedStateStore: new StateStore(getStateDatabasePath()),
+  };
+}

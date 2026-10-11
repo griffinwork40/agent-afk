@@ -57,6 +57,12 @@ function fakeSession(): FakeSession {
     compact: vi.fn(),
     sendMessage: vi.fn().mockResolvedValue({ content: 'ok' }),
     // Default: 5 prompts before, 2 after (compact removes older ones).
+    // `mockReturnValueOnce` covers call 1 (before compaction) and
+    // `mockReturnValue` covers call 2+ (after compaction). If a third
+    // `listRewindTargets()` call were ever added (e.g. a second snapshot),
+    // it would silently return the post-compaction list — which may or may
+    // not be the right value. Keep the number of calls in sync with
+    // `core.ts` to prevent silent wrong-count bugs.
     listRewindTargets: vi.fn()
       .mockReturnValueOnce([
         { turnIndex: 8, preview: 'fifth' },

@@ -26,6 +26,7 @@ import { probeNonRebuildableIgnoredFiles } from '../../worktree/worktree-ignored
 import { env } from '../../../config/env.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { debugLog } from '../../../utils/debug.js';
+import { sleep } from '../../../utils/sleep.js';
 
 /** Default git runner. Exported so callers without their own can reuse it. */
 export const defaultExecFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
@@ -380,7 +381,7 @@ export async function createIsolatedWorktree(args: {
   } catch (err) {
     const message = errorMessage(err);
     if (!LOCK_CONTENTION.test(message)) throw err; // non-lock → propagate, no retry
-    await new Promise((r) => setTimeout(r, 100)); // brief backoff, then retry once
+    await sleep(100); // brief backoff, then retry once
     info = await create();
   }
   return { repoRoot: ctx.repoRoot, ...info };

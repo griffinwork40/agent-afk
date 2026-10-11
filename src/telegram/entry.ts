@@ -37,28 +37,22 @@ import { readDiskVersion, UNKNOWN_VERSION } from './daemon-version.js';
 import { createTelegramSessionFactory } from './create-session.js';
 import { writeServiceStartupSidecar } from '../service/version-skew.js';
 import { startStatsTicker } from './stats-ticker.js';
-import { errorMessage } from '../utils/errors.js';
 import { pushIfConfigured } from './push.js';
+import { installCrashNotifier } from '../utils/crash-notifier.js';
+import { errorMessage } from '../utils/errors.js';
 
 /**
- * Register uncaughtException / unhandledRejection process handlers that push a
- * best-effort Telegram crash notice before exiting. Rate-limited to one push
- * per 60 s to avoid crash-loop self-DOS. Mirrors the daemon's crash-handler
- * contract (src/cli/commands/daemon.ts).
+ * Crash-notification handler for the Telegram bot process.
  *
- * Re-entry safe: a module-scoped flag prevents duplicate listener registration
- * if this function is called more than once (e.g. in tests that import the
- * module without full teardown).
+ * Delegates to the shared `installCrashNotifier` helper in `src/utils/`.
+ * The label `"telegram"` distinguishes bot crashes from daemon crashes in
+ * the push message. Re-entry safety and rate-limiting are owned by the helper.
  *
  * Exported for testing only — callers should use `main()`.
  */
 
-/** Guards against duplicate listener registration on repeated calls. */
-let crashHandlersInstalled = false;
-
-/** Milliseconds to wait after firing the crash notification before exiting,
- *  giving the fire-and-forget HTTP push a chance to flush. */
-const CRASH_EXIT_DELAY_MS = 200;
+/** Module-scoped handle returned by installCrashNotifier; holds the reset fn. */
+let _crashHandle: { reset: () => void } | undefined;
 
 /**
  * Reset the re-entry guard. Exported for testing only — do not call in
@@ -67,40 +61,13 @@ const CRASH_EXIT_DELAY_MS = 200;
  * @internal
  */
 export function _resetCrashHandlersForTest(): void {
-  crashHandlersInstalled = false;
+  _crashHandle?.reset();
+  _crashHandle = undefined;
 }
 
 export function installCrashHandlers(): void {
-  if (crashHandlersInstalled) return;
-  crashHandlersInstalled = true;
-
-  let lastCrashPushAt = 0;
-  const CRASH_PUSH_GUARD_MS = 60_000;
-  const notifyCrash = (kind: string, err: unknown): void => {
-    const nowMs = Date.now();
-    if (nowMs - lastCrashPushAt < CRASH_PUSH_GUARD_MS) return;
-    lastCrashPushAt = nowMs;
-    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-    void pushIfConfigured(
-      `🛑 agent-afk telegram ${kind}\n${msg.slice(0, 500)}`,
-    ).catch((pushErr: unknown) => {
-      console.error('[telegram] crash notification push failed:', errorMessage(pushErr));
-    });
-  };
-  process.on('uncaughtException', (err) => {
-    notifyCrash('uncaughtException', err);
-    // exitCode is set first so a natural (early) exit — before the timer fires
-    // — still reports code 1 to the supervisor. The unref'd timer fires if the
-    // in-flight push keeps the event loop alive past CRASH_EXIT_DELAY_MS.
-    process.exitCode = 1;
-    setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
-  });
-  process.on('unhandledRejection', (err) => {
-    notifyCrash('unhandledRejection', err);
-    // Same rationale as uncaughtException above.
-    process.exitCode = 1;
-    setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
-  });
+  if (_crashHandle !== undefined) return;
+  _crashHandle = installCrashNotifier('telegram', pushIfConfigured);
 }
 
 export async function main(): Promise<void> {
@@ -268,8 +235,12 @@ export async function main(): Promise<void> {
     await bot.start();
 
     // Write the startup sidecar so `afk service status` can surface the
-    // running version and warn on version skew.
-    writeServiceStartupSidecar('telegram', daemonVersion);
+    // running version and warn on version skew. Skip when the version is
+    // unknown — a sidecar with UNKNOWN_VERSION would produce a spurious
+    // "version skew" warning rather than the intended "version unknown" path.
+    if (daemonVersion !== UNKNOWN_VERSION) {
+      writeServiceStartupSidecar('telegram', daemonVersion);
+    }
 
     console.log('✅ Bot started successfully!');
     console.log('\n📝 Slash commands (Agent SDK):');
