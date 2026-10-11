@@ -174,21 +174,21 @@ Plugin state (telemetry, ledger, briefs) writes to `~/.afk/agent-framework/` in 
 A marketplace is a GitHub repo whose root contains `.claude-plugin/marketplace.json` (not `plugin.json`). Install the marketplace first, then install individual plugins from it:
 
 ```bash
-# Step 1 — add a marketplace source (e.g. the official Anthropic marketplace)
-afk marketplace install anthropics/claude-plugins-official
+# Step 1 — add a marketplace source (GitHub shorthand or full URL)
+afk marketplace install <owner>/<marketplace-repo>
 
 # Step 2 — browse available plugins
-afk marketplace plugins claude-plugins-official
+afk marketplace plugins <marketplace-name>
 
 # Step 3 — install a plugin from the marketplace using <marketplace>:<plugin>
-afk plugin install claude-plugins-official:<plugin-name>
+afk plugin install <marketplace-name>:<plugin-name>
 
 # Other marketplace operations
 afk marketplace list
 afk marketplace remove <name>
 ```
 
-> **Note:** `afk plugin install anthropics/claude-plugins-official` fails because that repo is a marketplace, not a plugin. Use `afk marketplace install` for marketplace repos.
+> **Note:** A marketplace repo uses `.claude-plugin/marketplace.json`; a plugin repo uses `.claude-plugin/plugin.json`. Use `afk marketplace install` for the former and `afk plugin install` for the latter — they are not interchangeable.
 
 State lives under `~/.afk/marketplaces/`.
 
