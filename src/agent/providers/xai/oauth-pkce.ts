@@ -103,7 +103,7 @@ export async function exchangeAuthorizationCode(
       code_verifier: params.codeVerifier,
     },
     'xAI authorization_code exchange failed',
-    deps.fetchFn,
+    deps.fetchFn ?? fetch,
   );
   const tokens = tokenResponseToBundle(json, deps.nowSeconds);
   if (!tokens) {

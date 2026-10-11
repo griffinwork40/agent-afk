@@ -122,7 +122,7 @@ describe('postOAuthForm — tolerant JSON decode', () => {
 // Default fetch fallback (uses global fetch when none supplied)
 // ---------------------------------------------------------------------------
 
-describe('postOAuthForm — fetchFn defaulting', () => {
+describe('postOAuthForm — fetchFn injection', () => {
   it('uses the injected fetchFn when provided', async () => {
     const fetchFn = makeFetch({ status: 200, body: { access_token: 'x', refresh_token: 'y' } });
     await postOAuthForm(TOKEN_URL, PARAMS, 'p', fetchFn);

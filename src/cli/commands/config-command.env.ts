@@ -21,12 +21,7 @@ import {
   RESTART_NOTE,
 } from '../../config/mutate.js';
 import { readFileSync } from 'fs';
-
-/** Print an error and set a nonzero exit code (2 = bad input / refused). */
-function fail(message: string): void {
-  console.error(palette.warning(`✗ ${message}`));
-  process.exitCode = 2;
-}
+import { fail } from './config-command.fail.js';
 
 /** Read the entire stdin stream synchronously (for `--stdin` secret entry). */
 function readStdin(): string {

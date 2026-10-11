@@ -368,7 +368,7 @@ function makeGateBlockTraceWriter(
     write(event: TraceEventInput): Promise<void> {
       if (
         event.kind === 'hook_decision' &&
-        (event.payload as { approvalOutcome?: string }).approvalOutcome === 'hard-block'
+        event.payload.approvalOutcome === 'hard-block'
       ) {
         counter.count += 1;
       }

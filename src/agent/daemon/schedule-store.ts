@@ -434,12 +434,17 @@ export function resolveSlugCollision(base: string, existing: string[]): string {
  * entries with `"cwd": "~/my-project"` resolve to absolute paths at runtime.
  */
 export function toScheduledTask(config: ScheduledTaskConfig): ScheduledTask {
+  // When runAt is set the task is a one-shot; cronExpression must be omitted so
+  // validateScheduledTask's mutual-exclusivity check does not throw.  The stored
+  // `cron` field acts as a poll-cadence placeholder only (scheduler ticks
+  // minutely) and must not be forwarded as cronExpression in that case.
+  const includeCron = config.cron !== undefined && config.runAt === undefined;
   return {
     taskId: config.id,
     command: config.command,
     trigger: config.trigger ?? 'cron',
     ...(config.executor !== undefined ? { executor: config.executor } : {}),
-    ...(config.cron !== undefined ? { cronExpression: config.cron } : {}),
+    ...(includeCron ? { cronExpression: config.cron } : {}),
     ...(config.notifyOn !== undefined ? { notifyOn: config.notifyOn } : {}),
     ...(config.notifyChat !== undefined ? { notifyChat: config.notifyChat } : {}),
     ...(config.maxAttempts !== undefined ? { maxAttempts: config.maxAttempts } : {}),

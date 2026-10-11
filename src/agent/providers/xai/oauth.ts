@@ -74,7 +74,7 @@ export async function refreshXaiTokens(
       client_id: clientId,
     },
     'xAI token refresh failed',
-    deps.fetchFn,
+    deps.fetchFn ?? fetch,
   );
   // Invariant: prefer the NEW refresh_token from the response; if the IdP
   // omits it (unusual for xAI), fall back to the previous refresh token so

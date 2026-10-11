@@ -49,6 +49,13 @@ vi.mock('../../../trace/emit.js', () => ({
 const { usageLimitNoTimestampPause, usageLimitResetPause, joinUsageLimitWait } = await import('./usage-limit-pause.js');
 const { TWO_HOURS_MS } = await import('./retry-constants.js');
 
+/**
+ * Margin added to TWO_HOURS_MS to produce a reset timestamp far enough in the
+ * future that the far-reset path is taken (not the within-2h timer path).
+ * Used in the 'far-reset' describe blocks and the shared-wait-contract loop.
+ */
+const FAR_RESET_MARGIN_MS = 60_000;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -199,7 +206,7 @@ for (const family of ['no-ts', 'far-reset', 'timestamped'] as const) {
       return family === 'no-ts'
         ? usageLimitNoTimestampPause(ctx, input, () => false, next, pending)
         : usageLimitResetPause(ctx, input, () => false, next, pending,
-          new Date(Date.now() + (family === 'far-reset' ? TWO_HOURS_MS + 60_000 : 60_000)));
+          new Date(Date.now() + (family === 'far-reset' ? TWO_HOURS_MS + FAR_RESET_MARGIN_MS : 60_000)));
     }
     function mockWait(promise: Promise<WaitResult>) {
       (family === 'timestamped' ? waitForResetMock : waitForHotSwapMock).mockReturnValue(promise);
@@ -524,7 +531,7 @@ describe('usageLimitNoTimestampPause', () => {
 
 describe('usageLimitResetPause — far-reset', () => {
   function farResetsAt(): Date {
-    return new Date(Date.now() + TWO_HOURS_MS + 60_000);
+    return new Date(Date.now() + TWO_HOURS_MS + FAR_RESET_MARGIN_MS);
   }
 
   it('far-reset + autoResume=false: surfaces the error immediately with no paused (unchanged behavior)', async () => {
