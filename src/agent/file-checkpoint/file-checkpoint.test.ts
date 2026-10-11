@@ -69,9 +69,9 @@ describe('createFileCheckpointRegistry', () => {
     const snapshots = listTurnSnapshots('sess1', 'turn2', stateDir);
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0]!.isNewFile).toBe(true);
-    // New-file status is stored as an out-of-band .new sidecar (empty body).
+    // Existence metadata and content are atomically published together.
     expect(readFileSync(snapshots[0]!.snapshotPath, 'utf8')).toBe('');
-    expect(existsSync(`${snapshots[0]!.snapshotPath}.new`)).toBe(true);
+    expect(JSON.parse(readFileSync(path.join(path.dirname(snapshots[0]!.snapshotPath), 'metadata.json'), 'utf8')).isNewFile).toBe(true);
   });
 
   it('is idempotent — only the first call per path captures content', async () => {
@@ -193,6 +193,26 @@ describe('rewindFiles', () => {
     );
     expect(result.canRewind).toBe(true);
     expect(existsSync(file)).toBe(false);
+  });
+
+  it('reads version-2 flat snapshots without interpreting real sentinel bytes as deletion', async () => {
+    const file = path.join(tmpDir, 'v2.txt');
+    const created = path.join(tmpDir, 'v2-new.txt');
+    const turnDir = path.join(stateDir, 'file-checkpoints', 'v2-session', 'v2-turn');
+    mkdirSync(turnDir, { recursive: true });
+    writeFileSync(path.join(turnDir, '.format'), '2');
+    writeFileSync(path.join(turnDir, Buffer.from(file).toString('base64url')), NEW_FILE_SENTINEL);
+    const createdSnapshot = path.join(turnDir, Buffer.from(created).toString('base64url'));
+    writeFileSync(createdSnapshot, '');
+    writeFileSync(`${createdSnapshot}.new`, '');
+    writeFileSync(file, 'mutated');
+    writeFileSync(created, 'created');
+    const result = await rewindFiles(
+      { sessionId: 'v2-session', enableFileCheckpointing: true, _stateDir: stateDir }, 'v2-turn',
+    );
+    expect(result.canRewind).toBe(true);
+    expect(readFileSync(file, 'utf8')).toBe(NEW_FILE_SENTINEL);
+    expect(existsSync(created)).toBe(false);
   });
 
   it('restores a modified file to its pre-turn content', async () => {

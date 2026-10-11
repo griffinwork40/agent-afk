@@ -4,10 +4,10 @@
  * Checkpoints live under:
  *   `<stateDir>/file-checkpoints/<sessionId>/<turnId>/`
  *
- * Each file in a turn dir is named with the base64url encoding of the
- * snapshotted file's absolute path, and contains either the pre-edit file
- * content (binary) or the NEW_FILE_SENTINEL string (when the file did not
- * exist before that turn).
+ * Each SHA-256 digest-named entry directory contains binary pre-edit content
+ * and metadata recording the original absolute path, existence and mode.
+ * Content and metadata are published together with an atomic directory rename.
+ * Readers retain compatibility with legacy base64url-named snapshots.
  *
  * @module paths.checkpoint
  */
@@ -44,9 +44,8 @@ export function getFileCheckpointSessionDir(sessionId: string): string {
  * Directory that holds snapshots for ONE user turn.
  * `<stateDir>/file-checkpoints/<sessionId>/<turnId>/`
  *
- * Files inside are named `encodePathKey(absPath)` (base64url of the
- * absolute path) and contain the pre-edit file content (or the
- * NEW_FILE_SENTINEL if the file did not exist before the turn).
+ * Entries inside are named `<sha256(absPath)>.entry` and hold `content`
+ * and `metadata.json`; `.pending-*` directories are not restorable.
  */
 export function getFileCheckpointTurnDir(
   sessionId: string,

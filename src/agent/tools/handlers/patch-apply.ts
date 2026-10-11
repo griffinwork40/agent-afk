@@ -18,6 +18,7 @@ import { validatePatchChanges, type PatchFileChange } from './patch-validate.js'
 import { applyPatch } from './patch-apply-engine.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { isBlankInput } from '../subagent/optional-input.js';
+import { validatedWriteTarget } from '../../file-checkpoint/write-policy.js';
 
 // ---------------------------------------------------------------------------
 // Input parsing
@@ -173,7 +174,18 @@ export function createPatchApplyHandler(cwd?: string): ToolHandler {
       };
     }
 
-    const { changes, dry_run } = parsed;
+    const { dry_run } = parsed;
+    let changes = parsed.changes;
+    try {
+      // Snapshot and atomically replace the same physical target, preserving
+      // file symlinks rather than replacing the link itself with a regular file.
+      changes = await Promise.all(changes.map(async (change) => ({
+        ...change, path: await validatedWriteTarget(change.path, context, resolveBase),
+      })));
+    } catch (err) {
+      return { content: JSON.stringify({ status: 'validation_failed', diff: '', files_changed: [],
+        errors: [{ error: 'path_containment', detail: errorMessage(err) }] }), isError: true };
+    }
 
     if (changes.length === 0) {
       return {
@@ -191,8 +203,7 @@ export function createPatchApplyHandler(cwd?: string): ToolHandler {
       };
     }
 
-    // Validate first — this resolves each path through resolveAndContain so
-    // the canonical (post-symlink-resolution) path is known.
+    // Validate hashes and replacements after pinning the policy-checked target.
     const validation = await validatePatchChanges(changes, resolveBase, context);
 
     if (!validation.valid) {
@@ -208,12 +219,7 @@ export function createPatchApplyHandler(cwd?: string): ToolHandler {
       };
     }
 
-    // Snapshot the validated (resolved) target paths BEFORE any mutation so
-    // rewindFiles can restore them. We snapshot after validation so we use the
-    // canonical resolved paths (as resolveAndContain produced them), not the
-    // raw c.path values — these can diverge for symlinked or non-canonical
-    // inputs, which would cause the snapshot to capture a different file than
-    // the one actually written.
+    // Snapshot only validated physical destinations, immediately before apply.
     if (context?.fileCheckpoint && !dry_run) {
       await Promise.all(
         Array.from(validation.fileContents.keys()).map((resolvedPath) =>

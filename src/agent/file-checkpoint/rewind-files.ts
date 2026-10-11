@@ -1,126 +1,86 @@
-/**
- * Shared `rewindFiles` implementation used by both provider query objects
- * (anthropic-direct and openai-compatible).
- *
- * Restores each file that was mutated during a given user turn to the state
- * captured by the FileCheckpointRegistry before the first tool call in that
- * turn. Files that did not exist before the turn (sentinel) are deleted.
- *
- * Bash-made file mutations are NOT tracked and therefore NOT restored.
- * This is documented behaviour — only write_file, edit_file, and patch_apply
- * calls are captured.
- *
- * @module agent/file-checkpoint/rewind-files
- */
-
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'fs';
-import { dirname } from 'path';
+/** Restore tracked tool mutations using current write grants and atomic writes. */
+import { readFileSync, unlinkSync, lstatSync } from 'node:fs';
 import type { ProviderRewindResult } from '../provider.js';
-import { listTurnSnapshots } from './file-checkpoint.js';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+import type { ToolHandlerContext } from '../tools/types.js';
+import { listTurnSnapshots, type FileSnapshot } from './file-checkpoint.js';
+import { validatedWriteTarget } from './write-policy.js';
+import { resolveAndContain, realpathSafe } from '../tools/handlers/_cwd-utils.js';
+import { assertNotDenylisted } from '../tools/handlers/write-denylist.js';
+import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
+import { errorMessage } from '../../utils/errors.js';
 
 export interface RewindFilesDeps {
-  /** The session id whose checkpoints to restore. */
   sessionId: string;
-  /** Whether file checkpointing is enabled on this session. */
   enableFileCheckpointing: boolean;
-  /**
-   * Override the AFK state directory (for testing only).
-   * @internal
-   */
+  /** Fresh dispatcher grants supplied by the provider on every rewind. */
+  writePolicy?: ToolHandlerContext;
+  /** @internal Isolated state directory for tests. */
   _stateDir?: string;
 }
 
-// ---------------------------------------------------------------------------
-// Public
-// ---------------------------------------------------------------------------
+function currentBytes(path: string): Buffer | null {
+  try { return readFileSync(path); }
+  catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    return null;
+  }
+}
 
-/**
- * Restore files to their pre-turn state for the given `turnId`.
- *
- * - When `enableFileCheckpointing` is false → `{ canRewind: false }`.
- * - When no checkpoint exists for `turnId` → `{ canRewind: false }`.
- * - When `dryRun` is true → list what would change without touching the FS.
- * - Otherwise restore each snapshotted path and return changed-file info.
- */
+function assertDestination(path: string, target: string, policy?: ToolHandlerContext): void {
+  resolveAndContain(path, policy, 'write');
+  assertNotDenylisted(path, 'rewindFiles');
+  resolveAndContain(target, policy, 'write');
+  assertNotDenylisted(target, 'rewindFiles');
+  if (realpathSafe(path) !== target) throw new Error(`Rewind destination changed: ${path}`);
+}
+
 export async function rewindFiles(
-  deps: RewindFilesDeps,
-  turnId: string,
-  options?: { dryRun?: boolean },
+  deps: RewindFilesDeps, turnId: string, options?: { dryRun?: boolean },
 ): Promise<ProviderRewindResult> {
-  const { sessionId, enableFileCheckpointing } = deps;
-
-  if (!enableFileCheckpointing) {
-    return {
-      canRewind: false,
-      error: 'File checkpointing is not enabled (set enableFileCheckpointing: true in AgentConfig).',
-    };
+  if (!deps.enableFileCheckpointing) {
+    return { canRewind: false, error: 'File checkpointing is not enabled (set enableFileCheckpointing: true in AgentConfig).' };
   }
-
-  const snapshots = listTurnSnapshots(sessionId, turnId, deps._stateDir);
-
-  if (snapshots.length === 0) {
-    return {
-      canRewind: false,
-      error: `No file checkpoint found for turn ${JSON.stringify(turnId)}.`,
-    };
-  }
+  let snapshots: FileSnapshot[];
+  try { snapshots = listTurnSnapshots(deps.sessionId, turnId, deps._stateDir); }
+  catch (err) { return { canRewind: false, error: `Cannot read checkpoint: ${errorMessage(err)}`, filesChanged: [] }; }
+  if (!snapshots.length) return { canRewind: false, error: `No file checkpoint found for turn ${JSON.stringify(turnId)}.` };
 
   const changedFiles: string[] = [];
   let insertions = 0;
   let deletions = 0;
-
-  for (const { absPath, snapshotPath, isNewFile } of snapshots) {
-    if (options?.dryRun) {
-      changedFiles.push(absPath);
-      continue;
-    }
-
-    if (isNewFile) {
-      // The file did not exist before this turn — delete it to undo.
-      if (existsSync(absPath)) {
-        unlinkSync(absPath);
-        changedFiles.push(absPath);
+  for (const { absPath, snapshotPath, isNewFile, mode } of snapshots) {
+    try {
+      // Invariant: validate the actual current destination BEFORE reading it or
+      // creating directories; stored paths never grant historical permissions.
+      const target = await validatedWriteTarget(absPath, deps.writePolicy);
+      const current = currentBytes(target);
+      const prior = isNewFile ? null : readFileSync(snapshotPath);
+      if (isNewFile ? current === null : current?.equals(prior!)) continue;
+      if (options?.dryRun) { changedFiles.push(absPath); continue; }
+      if (isNewFile) {
+        assertDestination(absPath, target, deps.writePolicy);
+        // Delete only a regular tracked target, never a retargeted link.
+        if (lstatSync(target).isSymbolicLink()) throw new Error(`Refusing to delete symlink: ${target}`);
+        unlinkSync(target);
         deletions += 1;
+      } else {
+        await atomicWriteFileAsync(target, prior!, {
+          secure: true, mkdirp: true, ...(mode !== undefined ? { mode, exactMode: true } : {}),
+          // Invariant: policy validation and rename share an event-loop tick.
+          commitGuard: () => { assertDestination(absPath, target, deps.writePolicy); return true; },
+        });
+        const delta = prior!.toString('utf8').split('\n').length - (current?.toString('utf8').split('\n').length ?? 0);
+        if (delta > 0) insertions += delta;
+        else deletions += Math.abs(delta);
       }
-    } else {
-      // Restore the pre-edit content.
-      const prior = readFileSync(snapshotPath);
-      const currentExists = existsSync(absPath);
-      const currentContent = currentExists ? readFileSync(absPath) : null;
-
-      // Compute line diff stats for the result (best-effort).
-      const priorLines = prior.toString('utf8').split('\n').length;
-      const currentLines = currentContent ? currentContent.toString('utf8').split('\n').length : 0;
-      const lineDelta = priorLines - currentLines;
-      if (lineDelta > 0) insertions += lineDelta;
-      else deletions += Math.abs(lineDelta);
-
-      // Ensure parent directory exists (in case the file was deleted
-      // by a downstream mutation after the snapshot).
-      const parentDir = dirname(absPath);
-      if (!existsSync(parentDir)) {
-        mkdirSync(parentDir, { recursive: true });
-      }
-      writeFileSync(absPath, prior);
       changedFiles.push(absPath);
+    } catch (err) {
+      return {
+        canRewind: false, filesChanged: changedFiles, insertions, deletions,
+        error: `Rewind failed at ${absPath}; ${changedFiles.length} file(s) already changed: ${errorMessage(err)}`,
+      };
     }
   }
-
-  if (options?.dryRun) {
-    return {
-      canRewind: true,
-      filesChanged: changedFiles,
-    };
-  }
-
-  return {
-    canRewind: true,
-    filesChanged: changedFiles,
-    insertions,
-    deletions,
-  };
+  return options?.dryRun ? { canRewind: true, filesChanged: changedFiles }
+    : { canRewind: true, filesChanged: changedFiles, insertions, deletions };
 }

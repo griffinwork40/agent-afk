@@ -61,7 +61,7 @@ function makeQuery(provider: string, userMessageId?: string, duringWrite?: (q: P
       client: { messages: { create: () => stream(anthropicStream(calls++ === 0)) } } as unknown as Anthropic,
       authMode: 'api-key', sessionId: 'test-session', promptStream: input(userMessageId), toolDispatcher: dispatcher,
       model: 'claude-test', maxTokens: 1024, tools: [{ name: 'write_file', input_schema: { type: 'object' } }],
-      userSystem: null, systemPrefix: null, enableFileCheckpointing: true,
+      userSystem: null, systemPrefix: null, enableFileCheckpointing: true, cwd: tmp,
     });
   } else {
     __setOpenAIClientFactory(() => ({ chat: { completions: { create: async () => stream(calls++ === 0 ? [
@@ -70,7 +70,7 @@ function makeQuery(provider: string, userMessageId?: string, duringWrite?: (q: P
     ] : [{ choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } }]) } } }) as unknown as OpenAI);
     query = new OpenAICompatibleQuery({
       auth: { apiKey: 'test', source: 'config', last4: 'test' }, model: 'gpt-4o-mini', synthesizedSessionId: 'test-session',
-      promptStream: input(userMessageId), config: { model: 'gpt-4o-mini', enableFileCheckpointing: true },
+      promptStream: input(userMessageId), config: { model: 'gpt-4o-mini', enableFileCheckpointing: true, cwd: tmp },
       toolDispatcher: dispatcher,
       tools: [{ name: 'write_file', input_schema: { type: 'object' } }],
     });

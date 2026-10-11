@@ -8,6 +8,7 @@
  * @module agent/tools/handlers/edit-file
  */
 
+import { validatedWriteTarget } from '../../file-checkpoint/write-policy.js';
 import { env } from '../../../config/env.js';
 import { readFile, writeFile, stat } from 'fs/promises';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
@@ -138,20 +139,7 @@ const editFileImpl = async (
     // Denylist check — must run before the read so we never even open a
     // protected path (mirrors the write_file guard exactly).
     assertNotDenylisted(file_path, 'edit_file');
-
-    // Snapshot the file BEFORE any mutation so rewindFiles can restore it.
-    // A snapshot failure must not silently leave the turn without a checkpoint —
-    // surface it as a warn annotation on the result so the caller knows rewind
-    // will not be available for this file.
-    let snapshotWarning: string | undefined;
-    if (context?.fileCheckpoint) {
-      try {
-        await context.fileCheckpoint.snapshotFile(file_path);
-      } catch (snapErr) {
-        snapshotWarning = `[edit_file] checkpoint snapshot failed (rewind unavailable for this file): ${errorMessage(snapErr)}`;
-        console.warn(snapshotWarning);
-      }
-    }
+    const writeTarget = await validatedWriteTarget(file_path, context, cwd);
 
     // TOCTOU guard: record mtime before read; re-check before write so a
     // concurrent external edit is caught rather than silently clobbered.
@@ -159,11 +147,11 @@ const editFileImpl = async (
     // the same inode. The guard is best-effort on FAT/exFAT (1-second mtime
     // resolution) but catches the common case of a parallel agent or editor
     // write that finishes while we computed the replacement string.
-    const statBefore = await stat(file_path);
+    const statBefore = await stat(writeTarget);
     const mtimeBefore = statBefore.mtimeMs;
 
     // Read the file.
-    const content = await readFile(file_path, 'utf-8');
+    const content = await readFile(writeTarget, 'utf-8');
 
     // Content-hash staleness gate: when the caller supplies expected_hash
     // (format "sha256:<64 hex chars>", already validated in parseEditFileInput),
@@ -211,7 +199,7 @@ const editFileImpl = async (
     }
 
     // TOCTOU check: fail if the file was modified between our read and write.
-    const statAfter = await stat(file_path);
+    const statAfter = await stat(writeTarget);
     if (statAfter.mtimeMs !== mtimeBefore) {
       return {
         content: `edit_file aborted: ${file_path} was modified by another process between read and write (mtime changed). Re-read the file and retry.`,
@@ -219,8 +207,22 @@ const editFileImpl = async (
       };
     }
 
-    // Write back to file.
-    await writeFile(file_path, modified, 'utf-8');
+    // Invariant: rejected edits must never publish a restorable checkpoint.
+    let snapshotWarning: string | undefined;
+    if (context?.fileCheckpoint) {
+      try {
+        await context.fileCheckpoint.snapshotFile(writeTarget);
+      } catch (snapErr) {
+        snapshotWarning = `[edit_file] checkpoint snapshot failed (rewind unavailable for this file): ${errorMessage(snapErr)}`;
+        console.warn(snapshotWarning);
+      }
+    }
+    // Invariant: a retargeted link must not redirect an edit away from the
+    // destination whose pre-edit bytes were validated and snapshotted.
+    if (await validatedWriteTarget(writeTarget, context, cwd) !== writeTarget) {
+      throw new Error(`edit_file destination changed before write: ${writeTarget}`);
+    }
+    await writeFile(writeTarget, modified, 'utf-8');
 
     // Build the model-facing result message. The diff itself rides on
     // `render.diff` (out-of-band) — keeping it out of `content` saves

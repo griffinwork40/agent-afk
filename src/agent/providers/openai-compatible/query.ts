@@ -26,8 +26,7 @@
  * the turn-boundary check in {@link run} fires `compactHistory('token_threshold')`
  * once the context-window footprint crosses it (mirrors anthropic-direct/query.ts).
  *
- * Things deliberately deferred:
- *   - File checkpointing / rewindFiles
+ * File checkpointing and rewindFiles track file-writing tool mutations.
  *
  * @module agent/providers/openai-compatible/query
  */
@@ -79,6 +78,7 @@ import {
 } from '../shared/auto-compact.js';
 import { AbortCoordinator, CLOSED_SENTINEL } from '../shared/abort-coordinator.js';
 import { FileCheckpointState } from './query.file-checkpoint.js';
+import { currentWritePolicy } from '../../file-checkpoint/write-policy.js';
 import { HookBlockedError, ensureError } from '../../../utils/errors.js';
 
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
@@ -550,7 +550,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   }
 
   async rewindFiles(userMessageId: string, options?: { dryRun?: boolean }): Promise<ProviderRewindResult> {
-    return this.checkpoint.rewind(userMessageId, options);
+    return this.checkpoint.rewind(userMessageId, options, currentWritePolicy(this.toolDispatcher, { resolveBase: this.opts.config.cwd ?? process.cwd() }));
   }
 
   /** Live conversation in journal form (router `/model` swap carry); undefined without a journal. */

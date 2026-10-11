@@ -16,6 +16,7 @@ import {
   type FileCheckpointRegistry,
 } from '../../file-checkpoint/file-checkpoint.js';
 import { rewindFiles } from '../../file-checkpoint/rewind-files.js';
+import type { ToolHandlerContext } from '../../tools/types.js';
 import type { ProviderEvent, ProviderRewindResult } from '../../provider.js';
 
 interface CheckpointWiringHost {
@@ -71,12 +72,12 @@ export class FileCheckpointState {
   }
 
   /** Delegate rewindFiles for the enclosing provider query. */
-  rewind(userMessageId: string, options?: { dryRun?: boolean }): Promise<ProviderRewindResult> {
+  rewind(userMessageId: string, options?: { dryRun?: boolean }, writePolicy?: ToolHandlerContext): Promise<ProviderRewindResult> {
     if (this.currentTurnId !== undefined) {
       return Promise.resolve({ canRewind: false, error: 'Cannot rewind files while a turn is in flight.' });
     }
     return rewindFiles(
-      { sessionId: this.sessionId, enableFileCheckpointing: this.enabled },
+      { sessionId: this.sessionId, enableFileCheckpointing: this.enabled, ...(writePolicy ? { writePolicy } : {}) },
       userMessageId,
       options,
     );

@@ -17,6 +17,7 @@ import { fsErrorToToolResult } from './_fs-error.js';
 import { computeLineDiff, type DiffPayload } from '../../../utils/diff.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { commitFileWrite, WriteAbortedUntouchedError } from './write-file.atomic.js';
+import { validatedWriteTarget } from '../../file-checkpoint/write-policy.js';
 
 /**
  * Input shape for the write_file tool (validated at runtime).
@@ -101,6 +102,8 @@ const writeFileImpl = async (
 
   try {
     assertNotDenylisted(file_path, 'write_file');
+    // Pin the validated physical destination for BOTH snapshot and commit.
+    const writeTarget = await validatedWriteTarget(file_path, context, cwd);
 
     // Snapshot the file BEFORE any mutation so rewindFiles can restore it.
     // A snapshot failure must not silently leave the turn without a checkpoint —
@@ -109,7 +112,7 @@ const writeFileImpl = async (
     let snapshotWarning: string | undefined;
     if (context?.fileCheckpoint) {
       try {
-        await context.fileCheckpoint.snapshotFile(file_path);
+        await context.fileCheckpoint.snapshotFile(writeTarget);
       } catch (snapErr) {
         snapshotWarning = `[write_file] checkpoint snapshot failed (rewind unavailable for this file): ${errorMessage(snapErr)}`;
         console.warn(snapshotWarning);
@@ -173,7 +176,8 @@ const writeFileImpl = async (
     // Atomic temp+rename: an abort or crash leaves the old file intact, never a
     // truncated one. Follows symlinks (re-validating the resolved target) and
     // preserves the existing mode.
-    await commitFileWrite(file_path, content, signal, validateTarget);
+    validateTarget(writeTarget);
+    await commitFileWrite(writeTarget, content, signal, validateTarget);
 
     let diff: DiffPayload | null = null;
     // Binary guard: skip diff for content containing null bytes.

@@ -75,6 +75,7 @@ import {
   rewindQueryConversation,
 } from './query-maintenance.js';
 import { rewindFiles as rewindFilesImpl } from '../../file-checkpoint/rewind-files.js';
+import { currentWritePolicy } from '../../file-checkpoint/write-policy.js';
 
 // Re-exported so the historical `from './query-runtime.js'` (and thence
 // `query.js` / `index.js`) import paths stay valid after the #824 split.
@@ -409,6 +410,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       {
         sessionId: this.initSessionId,
         enableFileCheckpointing: this.state.enableFileCheckpointing,
+        writePolicy: currentWritePolicy(this.state.toolDispatcher, { resolveBase: this._cwd }),
       },
       userMessageId,
       options,
