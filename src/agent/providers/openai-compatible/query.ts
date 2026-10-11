@@ -66,7 +66,8 @@ import {
   toolDefsToOpenAIFunctions,
   type OpenAIFunctionTool,
 } from './loop.js';
-import { resolveWireMode, envFlagEnabled, type WireMode } from './responses-config.js';
+import { resolveWireMode, envFlagEnabled, CHATGPT_BACKEND_BASE_URL, type WireMode } from './responses-config.js';
+import { maybePrintChatGptOAuthNotice } from './query.chatgpt-notice.js';
 import { env } from '../../../config/env.js';
 import { isGrokModelId } from '../xai/pricing.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
@@ -77,7 +78,7 @@ import {
   resolveAutoCompactThreshold,
 } from '../shared/auto-compact.js';
 import { AbortCoordinator, CLOSED_SENTINEL } from '../shared/abort-coordinator.js';
-import { h1ModelFetch } from '../shared/h1-fetch.js';
+
 import { HookBlockedError, ensureError } from '../../../utils/errors.js';
 
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
@@ -87,7 +88,7 @@ import {
   normalizePermissionMode,
   resolveReasoningEffort,
 } from './query/model-params.js';
-import { resolveClientFactory, buildOpenAIAdmissionFetch } from './query/client.js';
+
 import { FastTierSession } from './query/fast-tier-session.js';
 import {
   runTurnInner,
@@ -106,8 +107,8 @@ import {
   rewindOpenAIConversation,
 } from './query/rewind-conversation.js';
 import { wrapTurnWithOAuthRefresh } from './query/token-refresh.js';
-import { buildRefreshedClient } from './query/client-rebuild.js';
-import type { AuthResolverDeps } from './auth.js';
+import { applyOAuthRefresh, buildRefreshedClient } from './query/client-rebuild.js';
+import type { AuthResolverDeps, OpenAIAuthResolution } from './auth.js';
 export { buildQueryFromConfig } from './query/build-query.js';
 
 // Re-exported from the extracted query/ submodules so existing import sites
@@ -119,6 +120,8 @@ export { isOSeriesModel, mapEffortForOpenAI } from './query/model-params.js';
 export { resolveReasoningEffort };
 
 const PROVIDER_NAME = 'openai-compatible';
+
+
 
 
 
@@ -264,10 +267,18 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     }
 
     // Resolve the wire (Chat Completions vs Responses) once.
+    // Pass opts.baseURL so resolveWireMode can suppress the chatgpt-oauth
+    // forced redirect when the caller configured a different endpoint.
     const responsesOptIn =
       (opts.useResponsesApi ?? false) || envFlagEnabled(env.AFK_OPENAI_USE_RESPONSES);
-    const wire = resolveWireMode(opts.auth, responsesOptIn);
+    const wire = resolveWireMode(opts.auth, responsesOptIn, opts.baseURL);
     this.wireMode = wire.mode;
+
+    // Inform the operator once per account that ChatGPT subscription OAuth is
+    // active, so they know their requests are routing to chatgpt.com.
+    if (opts.auth.source === 'chatgpt-oauth' && wire.baseURL === CHATGPT_BACKEND_BASE_URL) {
+      maybePrintChatGptOAuthNotice(opts.auth.accountId);
+    }
     this.useOpenAIPricing =
       (wire.baseURL === undefined && opts.baseURL === undefined) ||
       (isGrokModelId(opts.model) && opts.config.forceXaiOAuth !== true);
@@ -276,25 +287,8 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     this.lastUsage = this.journal.resumedUsage();
     this.priorTurns = this.journal.initialTurns();
 
-    if (opts.auth.apiKey === null) {
-      this._client = null as unknown as OpenAI;
-    } else {
-      const ctor = resolveClientFactory();
-      const clientOpts: { apiKey: string; baseURL?: string; defaultHeaders?: Record<string, string>; fetch?: typeof globalThis.fetch } = {
-        apiKey: opts.auth.apiKey,
-      };
-      const baseURL = wire.baseURL ?? opts.baseURL;
-      if (baseURL !== undefined) clientOpts.baseURL = baseURL;
-      if (wire.headers !== undefined) clientOpts.defaultHeaders = wire.headers;
-      else if (opts.defaultHeaders !== undefined) clientOpts.defaultHeaders = opts.defaultHeaders;
-      const admissionFetch = buildOpenAIAdmissionFetch(baseURL);
-      // Invariant: always inject a fetch that forces HTTP/1.1.  For remote
-      // endpoints, admissionFetch wraps h1ModelFetch with rate-limit logic.
-      // For local shims, fall back to bare h1ModelFetch so we still bypass
-      // the global undici dispatcher (which may have allowH2: true).
-      clientOpts.fetch = admissionFetch ?? h1ModelFetch;
-      this._client = ctor(clientOpts);
-    }
+    // Invariant: always inject a fetch that forces HTTP/1.1 (see buildRefreshedClient).
+    this._client = buildRefreshedClient(opts.auth, opts);
   }
 
   /**
@@ -391,14 +385,10 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
    * 350-line ceiling). AFK is read-only: never writes `~/.codex/auth.json`.
    * @internal
    */
-  rebuildClient(newAuth: import('./auth.js').OpenAIAuthResolution): void {
-    // Single mutation point for opts.auth: TurnDriverContext declares `auth`
-    // readonly to prevent accidental writes elsewhere, but this method is the
-    // one intentional exception — it swaps the token after a 401 refresh so
-    // all subsequent reads (runTurn, applyAndSyncSteering, compaction limit
-    // checks) see the new token without requiring a new query instance.
-    (this.opts as { auth: import('./auth.js').OpenAIAuthResolution }).auth = newAuth;
-    this._client = buildRefreshedClient(newAuth, this.opts);
+  rebuildClient(newAuth: OpenAIAuthResolution): void {
+    // Single mutation point for opts.auth — delegates to applyOAuthRefresh in
+    // client-rebuild.ts (extracted for the 350-line ceiling).
+    this._client = applyOAuthRefresh(this.opts as { auth: OpenAIAuthResolution } & typeof this.opts, newAuth);
   }
 
   /**

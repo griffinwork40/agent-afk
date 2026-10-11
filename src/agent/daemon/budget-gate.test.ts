@@ -235,6 +235,12 @@ describe('provider-aware daemon gate', () => {
     expect(resolveDaemonUsageTarget('gpt-5', undefined, () => { throw new Error('bad auth'); })).toBeNull();
   });
 
+  // PR #3388 pinning test: chatgptSignedIn=true → CODEX_SUBSCRIPTION
+  it('when chatgptSignedIn returns true (ChatGPT Codex subscription), resolveDaemonUsageTarget returns CODEX_SUBSCRIPTION', () => {
+    const target = resolveDaemonUsageTarget('gpt-5', undefined, () => true);
+    expect(target).toEqual({ provider: 'codex', account: 'chatgpt-subscription' });
+  });
+
   it('target null passes without any usage fetch', async () => {
     const fetchCodex = vi.fn();
     expect(await evaluateBudgetGate({ target: null, fetchUsage: noClaude, fetchCodex, now: NOW_MS })).toEqual({ skip: false });

@@ -234,11 +234,11 @@ function extractFilePath(input: unknown): string {
 }
 
 function classifyBash(cmd: string): RiskVerdict {
-  // External constraint: check HIGH before MEDIUM before SAFE.
-  // High patterns override everything; medium patterns override safe.
-  // This ordering matters for commands like `echo foo > out.txt` where
-  // both `echo ` (safe) and ` > ` (medium) match — the redirect takes
-  // precedence because medium is checked first.
+  // Invariant: scan the original command for HIGH before MEDIUM before SAFE.
+  // Wrappers and shell syntax can introduce executable positions anywhere;
+  // heredoc payloads may be executed later. Without a complete shell parser,
+  // neither boundary narrowing nor body stripping may lower main's verdict.
+  // Prose false positives are intentional until that safety can be proven.
   for (const p of BASH_HIGH) {
     if (cmd.includes(p)) return { level: 'high', reason: `bash-pattern: matched '${p}'` };
   }

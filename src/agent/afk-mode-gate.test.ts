@@ -689,7 +689,7 @@ describe('createAfkModeGate — high-risk approval round-trip (v1.5)', () => {
     await gate({
       event: 'PreToolUse',
       toolName: 'bash',
-      input: { command: `AWS_SECRET_ACCESS_KEY=${secret} terraform apply` },
+      input: { command: `AWS_SECRET_ACCESS_KEY=${secret} rm -rf /tmp/state` },
     });
     expect(seenReq).toBeDefined();
     expect(seenReq!.message).not.toContain(secret);

@@ -1208,13 +1208,13 @@ describe('OpenAICompatibleQuery — auth failure path', () => {
   it('emits session.init then error when no auth is resolvable', async () => {
     // Use hermetic auth deps so this test is isolated from the host machine's
     // real credentials. Without this, a developer whose ~/.codex/auth.json
-    // contains a ChatGPT OAuth bundle (and AFK_OPENAI_CHATGPT_OAUTH=1) will
+    // contains a ChatGPT OAuth bundle (the last-resort OAuth tier) will
     // resolve a real access_token — bypassing the no-auth path entirely and
     // sending the request on the Responses API wire. The mock only stubs
     // chat.completions.create, so this.client.responses.create would crash
     // with "Cannot read properties of undefined (reading 'create')".
     const noAuthDeps = {
-      readEnv: (_key: string) => undefined, // suppress OPENAI_API_KEY, CODEX_API_KEY, AFK_OPENAI_CHATGPT_OAUTH
+      readEnv: (_key: string) => undefined, // suppress OPENAI_API_KEY, CODEX_API_KEY
       homedir: () => '/nonexistent-test-home',
       readFile: (_path: string) => null, // no ~/.codex/auth.json
     };
@@ -1239,6 +1239,48 @@ describe('OpenAICompatibleQuery — auth failure path', () => {
     // covers that. Here we verify the error event surfaces the resolution.
     // This case is exercised by auth.test.ts + the integration above.
     expect(true).toBe(true);
+  });
+});
+
+describe('OpenAICompatibleQuery — warnedChatGptOAuth one-time stderr notice', () => {
+  afterEach(async () => {
+    // Reset the module-scope latch so it does not leak across test cases.
+    const { _resetChatGptOAuthNotice } = await import('./query.chatgpt-notice.js');
+    _resetChatGptOAuthNotice();
+  });
+
+  it('emits the chatgpt.com notice to stderr once per account, not on subsequent constructions', () => {
+    const written: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      written.push(typeof chunk === 'string' ? chunk : String(chunk));
+      return true;
+    });
+
+    const auth = { apiKey: 'tok', source: 'chatgpt-oauth' as const, last4: '_tok', accountId: 'acct-1' };
+
+    // First construction for this account: notice must fire.
+    const q1 = new OpenAICompatibleQuery({
+      auth,
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid1',
+      promptStream: singleInput('x'),
+      config: baseConfig(),
+    });
+    q1.close();
+    expect(written.filter((s) => s.includes('ChatGPT subscription OAuth'))).toHaveLength(1);
+
+    // Second construction for the same accountId: notice must NOT repeat.
+    const q2 = new OpenAICompatibleQuery({
+      auth,
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid2',
+      promptStream: singleInput('x'),
+      config: baseConfig(),
+    });
+    q2.close();
+    expect(written.filter((s) => s.includes('ChatGPT subscription OAuth'))).toHaveLength(1);
+
+    spy.mockRestore();
   });
 });
 

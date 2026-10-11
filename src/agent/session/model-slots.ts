@@ -55,8 +55,7 @@ export const SLOT_NAMES: readonly SlotName[] = ['local', 'small', 'medium', 'lar
  *
  * `chatgpt-oauth` routes to `openai-compatible` but additionally forces the
  * ChatGPT-subscription OAuth credential (`~/.codex/auth.json`) + backend for
- * THIS tier — regardless of `OPENAI_API_KEY` and without the global
- * `AFK_OPENAI_CHATGPT_OAUTH` flag. This lets a ChatGPT-subscription model, a
+ * THIS tier — ahead of `OPENAI_API_KEY` and any explicit key. This lets a ChatGPT-subscription model, a
  * custom keyed OpenAI model, and an Anthropic model coexist in one session.
  *
  * `xai` / `xai-oauth` route to the first-class xAI provider: API-key mode vs

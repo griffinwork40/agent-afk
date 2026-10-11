@@ -187,6 +187,11 @@ export interface CprHost {
    *   growTotal          — sum of all positive row-count deltas since last render.
    *   shrinkTotal        — sum of absolute negative row-count deltas since last render.
    *   requeryCt          — number of mid-burst re-queries issued (cap: CPR_MAX_REQUERY).
+   *   widthOnlyOrigin    — true when the burst was seeded by a WIDTH-ONLY event
+   *                         (rowDelta===0). Set once at burst creation, never
+   *                         mutated by accumulation. Snapshot provenance is
+   *                         tracked separately on pendingResizeErase because
+   *                         later events may replace the footprint (#3283).
    *
    * `null` when no burst is in progress.
    */
@@ -197,6 +202,8 @@ export interface CprHost {
     growTotal: number;
     shrinkTotal: number;
     requeryCt: number;
+    /** True when the burst was seeded by a WIDTH-ONLY resize (rowDelta===0). */
+    widthOnlyOrigin: boolean;
   } | null;
 
   // Absolute rows to translate on CPR reply.
@@ -204,7 +211,7 @@ export interface CprHost {
   lastMeasuredFrameBottom: number;
   committedBandTopRow: number;
   committedBandBottomRow: number;
-  pendingResizeErase: { top: number; bottom: number } | null;
+  pendingResizeErase: { top: number; bottom: number; origin?: 'width-only' | 'expand' } | null;
   logUpdate: { topRow?: number; resetGeometry?: () => void } | null;
   anchorRow: number | undefined;
 
@@ -246,6 +253,7 @@ export function requestCprOrMarkDirty(
       growTotal: rowDelta > 0 ? rowDelta : 0,
       shrinkTotal: rowDelta < 0 ? -rowDelta : 0,
       requeryCt: 0,
+      widthOnlyOrigin: rowDelta === 0,
     };
     _requestCpr(self, rttObserver);
     return;
@@ -261,6 +269,7 @@ export function requestCprOrMarkDirty(
       growTotal: rowDelta > 0 ? rowDelta : 0,
       shrinkTotal: rowDelta < 0 ? -rowDelta : 0,
       requeryCt: 0,
+      widthOnlyOrigin: false,
     };
   } else {
     self.cprBurst.dirty = true;
@@ -295,6 +304,7 @@ export function requestCprAndApplyDelta(
     growTotal: rowDelta > 0 ? rowDelta : 0,
     shrinkTotal: rowDelta < 0 ? -rowDelta : 0,
     requeryCt: 0,
+    widthOnlyOrigin: rowDelta === 0,
   };
   _requestCpr(self, rttObserver);
 }
@@ -573,6 +583,7 @@ function applyScrollDelta(self: CprHost, delta: number, newRows: number): void {
   }
   if (self.pendingResizeErase) {
     self.pendingResizeErase = {
+      ...self.pendingResizeErase,
       top: clamp(self.pendingResizeErase.top),
       bottom: clamp(self.pendingResizeErase.bottom),
     };

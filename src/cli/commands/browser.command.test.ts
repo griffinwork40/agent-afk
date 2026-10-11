@@ -448,13 +448,9 @@ describe('browser login — validation errors', () => {
     ).rejects.toThrow(/unsafe profile name/);
   });
 
-  it('propagates Playwright launch errors after decorating them', async () => {
-    // The dynamic import of playwright will fail in the test environment;
-    // we verify that the error propagation path calls decoratePlaywrightLaunchError.
-    // Since we cannot easily stub dynamic imports inline here, we instead verify
-    // that the URL and profile validation pass before Playwright is attempted —
-    // i.e. a valid URL + valid profile reaches the dynamic import boundary.
-    // The test simply confirms no early-exit error is thrown by the validators.
+  it('reaches Playwright after validating a valid login URL and profile', async () => {
+    // This covers validation flow only; the dedicated launch-failure test below
+    // verifies decoratePlaywrightLaunchError and propagation.
     const program = makeProgram();
     // parseAsync will throw at the dynamic `import('playwright')` stage.
     // We catch that and confirm it is NOT one of our validation errors.
