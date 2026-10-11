@@ -57,6 +57,7 @@ import * as path from 'node:path';
 import { env } from '../../config/env.js';
 import { debugLog } from '../../utils/debug.js';
 import type { AgentConfig } from '../types.js';
+import { isErrnoCode } from '../../utils/errors.js';
 
 type Env = Record<string, string>;
 
@@ -156,7 +157,7 @@ function mkdirPrivate(dir: string): boolean {
     fs.mkdirSync(dir, { mode: 0o700 });
     return true;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    if (isErrnoCode(err, 'EEXIST')) return false;
     throw err;
   }
 }
@@ -268,7 +269,7 @@ export class SessionTmpdir {
       try {
         await fs.promises.rename(this.dir, sibling);
       } catch (renameErr) {
-        if ((renameErr as NodeJS.ErrnoException).code !== 'EXDEV') throw renameErr;
+        if (!isErrnoCode(renameErr, 'EXDEV')) throw renameErr;
         // EXDEV: this.dir and its parent are on different mount points (e.g. a
         // bind-mounted tmpdir in a container). Rename cannot cross devices, so
         // fall back to a direct rm. Re-lstat immediately to close most of the

@@ -17,6 +17,7 @@ import { SOFT_DEADLINE_WIND_DOWN } from '../providers/shared/soft-deadline.js';
 import { CONTEXT_PRESSURE_WIND_DOWN } from '../providers/shared/context-pressure.js';
 import { OVERLOAD_EXHAUSTED } from '../providers/shared/overload-sentinel.js';
 import { isTruncationStopReason } from '../providers/shared/truncation.js';
+import { ensureError } from '../../utils/errors.js';
 
 export type SubagentStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
@@ -316,7 +317,7 @@ export function buildResultFromError<T>(
   trace?: SubagentTrace,
   stopReason?: string,
 ): SubagentResult<T> {
-  const error = err instanceof Error ? err : new Error(String(err));
+  const error = ensureError(err);
   return { id, status, error, trace, ...(stopReason !== undefined && { stopReason }) };
 }
 

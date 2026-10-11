@@ -176,11 +176,11 @@ export function setUpQuerySession(
     readOnlyMemory: ctx.readOnlyMemory,
     readOnlyState: ctx.readOnlyState,
     workspaceEnabled: ctx.workspaceStore !== undefined,
-    // Truthiness, NOT `!== undefined`: this must stay in lockstep with the
-    // constructor's `if (opts.skillExecutor) schemas.push(skillTool)` gate.
-    // Splitting them would let a falsy-but-defined executor inject a skill
-    // manifest into the system prompt with no `skill` tool registered.
-    hasSkillExecutor: Boolean(ctx.skillExecutor),
+    // Pass the executor (not just a boolean) so assembleQueryPrompt can call
+    // getManifestScope() for plugin/allowlist scoping. The truthiness gate is
+    // preserved: manifest is built iff skillExecutor is truthy (same invariant
+    // as the constructor's `if (opts.skillExecutor) schemas.push(skillTool)`).
+    skillExecutor: ctx.skillExecutor ?? undefined,
     runtimeStateSource,
     userSystem,
   });

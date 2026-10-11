@@ -29,7 +29,62 @@ import { compactUsageEntries } from '../usage/usage-formatter.js';
 import {
   aggregateSubagentOutcomes,
   buildSubagentOutcomeSummary,
+  type SubagentOutcomeSummaryEntry,
 } from '../../insights/aggregators/subagent-outcomes.js';
+import { debugLog } from '../../utils/debug.js';
+
+// ---------------------------------------------------------------------------
+// Module-level TTL cache for getSubagentOutcomeSummary
+//
+// The aggregator does a synchronous 1 MB tail-read of routing-decisions.jsonl
+// on every call. Most get_runtime_state invocations within a short window will
+// see the same data, so a 60-second TTL avoids the repeated I/O at negligible
+// staleness cost. The cache is keyed per-file path so different afkHome values
+// (common in tests) do not collide.
+//
+// History (#3460): production callers (anthropic-direct dispatcher-wiring,
+// openai-compatible session-wiring) do not forward `afkHome` to
+// `buildRuntimeStateSource`, so the cache key is always `'__default__'` at
+// runtime — the per-afkHome keying is exercised only in tests (where `afkHome`
+// is injected for isolation). To make the cache key meaningful in production,
+// callers would need to forward the resolved afkHome from env.AFK_HOME through
+// RuntimeSourceDeps.
+// ---------------------------------------------------------------------------
+
+interface OutcomeSummaryCache {
+  entries: SubagentOutcomeSummaryEntry[];
+  expiresAt: number;
+}
+
+const OUTCOME_SUMMARY_TTL_MS = 60_000; // 60 s
+const outcomeSummaryCache = new Map<string, OutcomeSummaryCache>();
+
+function getCachedOutcomeSummary(afkHome: string | undefined): SubagentOutcomeSummaryEntry[] {
+  const key = afkHome ?? '__default__';
+  const cached = outcomeSummaryCache.get(key);
+  if (cached !== undefined && Date.now() < cached.expiresAt) {
+    return cached.entries;
+  }
+  try {
+    const agg = aggregateSubagentOutcomes({ days: 30, ...(afkHome ? { afkHome } : {}) });
+    const entries = buildSubagentOutcomeSummary(agg);
+    outcomeSummaryCache.set(key, { entries, expiresAt: Date.now() + OUTCOME_SUMMARY_TTL_MS });
+    return entries;
+  } catch (err) {
+    debugLog('[runtime-source] getCachedOutcomeSummary: aggregator threw, returning []:', String(err));
+    return [];
+  }
+}
+
+/**
+ * Reset the outcome summary cache. Exported for test isolation only — do not
+ * call in production code.
+ *
+ * @internal
+ */
+export function resetOutcomeSummaryCache(): void {
+  outcomeSummaryCache.clear();
+}
 
 export interface RuntimeSourceDeps {
   /** Stable session UUID (may be undefined for pre-init sessions). */
@@ -91,6 +146,14 @@ export interface RuntimeSourceDeps {
    * Returns `{ active: [], backgroundJobs: [] }` when no executor is wired.
    */
   getSubagents: () => RuntimeSubagents;
+
+  /**
+   * AFK home directory used to locate routing-decisions.jsonl for the
+   * subagent outcome summary cache. When omitted the default path from
+   * `getRoutingDecisionsPath()` is used. Provided so different `afkHome`
+   * values (common in tests) do not collide in the module-level cache.
+   */
+  afkHome?: string | undefined;
 }
 
 /**
@@ -156,16 +219,12 @@ export function buildRuntimeStateSource(deps: RuntimeSourceDeps): RuntimeStateSo
       return compactUsageEntries(readUsageRecords());
     },
     getSubagentOutcomeSummary() {
-      // Reads the last 1 MB tail of routing-decisions.jsonl. Safe to call on
-      // every get_runtime_state invocation — synchronous, bounded, never throws
-      // (the aggregator swallows all errors and returns zero aggregates).
-      // 30-day window matches the default insights window.
-      try {
-        const agg = aggregateSubagentOutcomes({ days: 30 });
-        return buildSubagentOutcomeSummary(agg);
-      } catch {
-        return [];
-      }
+      // Reads the last 1 MB tail of routing-decisions.jsonl (synchronous,
+      // bounded). Results are cached for 60 s so repeated get_runtime_state
+      // calls within a session window avoid redundant I/O. The aggregator
+      // never throws; getCachedOutcomeSummary adds a belt-and-suspenders
+      // catch for unexpected errors.
+      return getCachedOutcomeSummary(deps.afkHome);
     },
   };
 }
@@ -210,6 +269,7 @@ function coerceSurface(raw: string): Surface {
     case 'telegram':
     case 'subagent':
     case 'web':
+    case 'sdk':
       return raw;
     default:
       return 'unknown';

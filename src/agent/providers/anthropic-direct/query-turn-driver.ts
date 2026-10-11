@@ -35,6 +35,7 @@ import type { HookRegistry } from '../../hooks.js';
 import { annotateFastError, prepareTurnRequest } from './query/turn-request.js';
 import { maybeAutoCompact } from './query-turn-driver.auto-compact.js';
 import { createFileCheckpointRegistry, type FileCheckpointRegistry } from '../../file-checkpoint/file-checkpoint.js';
+import { ensureError } from '../../../utils/errors.js';
 
 /** Live accessors the turn driver needs from the owning query. */
 export interface TurnDriverContext {
@@ -247,7 +248,7 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
             ctx.state.requestedModel ?? ctx.state.currentModel,
           );
         } catch (e) {
-          overflowErr = e instanceof Error ? e : new Error(String(e));
+          overflowErr = ensureError(e);
         }
         if (overflowErr !== undefined) {
           ctx.abort.clear(controller);
@@ -359,7 +360,7 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
       yield* maybeAutoCompact(ctx);
     }
   } catch (iterErr) {
-    const e = iterErr instanceof Error ? iterErr : new Error(String(iterErr));
+    const e = ensureError(iterErr);
     yield { type: 'error', error: e };
   } finally {
     try {

@@ -80,7 +80,7 @@ import { AbortCoordinator, CLOSED_SENTINEL } from '../shared/abort-coordinator.j
 import { beginTurnFileCheckpoint, endTurnFileCheckpoint } from './query.file-checkpoint.js';
 import { rewindFiles as rewindFilesImpl } from '../../file-checkpoint/rewind-files.js';
 import { h1ModelFetch } from '../shared/h1-fetch.js';
-import { HookBlockedError } from '../../../utils/errors.js';
+import { HookBlockedError, ensureError } from '../../../utils/errors.js';
 
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
 import { OpenAIJournalWiring } from './query/journal-wiring.js';
@@ -107,6 +107,9 @@ import {
   listOpenAIUserTurns,
   rewindOpenAIConversation,
 } from './query/rewind-conversation.js';
+import { wrapTurnWithOAuthRefresh } from './query/token-refresh.js';
+import { buildRefreshedClient } from './query/client-rebuild.js';
+import type { AuthResolverDeps } from './auth.js';
 export { buildQueryFromConfig } from './query/build-query.js';
 
 // Re-exported from the extracted query/ submodules so existing import sites
@@ -132,8 +135,16 @@ const PROVIDER_NAME = 'openai-compatible';
  * currentPermissionMode, closed, responsesCompactionUnavailable).
  */
 export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, CompactHandlerContext {
-  /** @internal Package-visible so extracted query/ modules can satisfy TurnDriverContext without an object literal intermediary. */
-  readonly client: OpenAI;
+  /** @internal Private backing for the live OpenAI client; swapped by rebuildClient() on OAuth token refresh. */
+  private _client: OpenAI;
+  /**
+   * Live OpenAI client — the getter satisfies the `readonly client: OpenAI`
+   * shape expected by {@link IterationContext} / {@link TurnDriverContext}.
+   * The backing field `_client` is swapped by {@link rebuildClient} when a
+   * ChatGPT-OAuth token is refreshed mid-session (see token-refresh.ts / #3396).
+   * @internal Package-visible so extracted query/ modules can satisfy TurnDriverContext.
+   */
+  get client(): OpenAI { return this._client; }
   /** @internal Package-visible for context-interface satisfaction. */
   readonly opts: OpenAICompatibleQueryOptions;
   /** @internal Package-visible so extracted query/ modules can read the synthesized session id. */
@@ -274,7 +285,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     this.priorTurns = this.journal.initialTurns();
 
     if (opts.auth.apiKey === null) {
-      this.client = null as unknown as OpenAI;
+      this._client = null as unknown as OpenAI;
     } else {
       const ctor = resolveClientFactory();
       const clientOpts: { apiKey: string; baseURL?: string; defaultHeaders?: Record<string, string>; fetch?: typeof globalThis.fetch } = {
@@ -290,7 +301,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
       // For local shims, fall back to bare h1ModelFetch so we still bypass
       // the global undici dispatcher (which may have allowH2: true).
       clientOpts.fetch = admissionFetch ?? h1ModelFetch;
-      this.client = ctor(clientOpts);
+      this._client = ctor(clientOpts);
     }
   }
 
@@ -366,7 +377,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
         }
       }
     } catch (iterErr) {
-      const e = iterErr instanceof Error ? iterErr : new Error(String(iterErr));
+      const e = ensureError(iterErr);
       yield { type: 'error', error: e };
     } finally {
       try {
@@ -378,8 +389,37 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   }
 
   /**
+   * Rebuild the OpenAI client with a refreshed ChatGPT-OAuth token.
+   *
+   * Called by {@link wrapTurnWithOAuthRefresh} (token-refresh.ts) when a 401
+   * response indicates the current token has expired and `codex` has already
+   * written a fresh token to `~/.codex/auth.json`. Updates `opts.auth` so all
+   * sibling modules see the fresh source tag, then delegates client construction
+   * to {@link buildRefreshedClient} (client-rebuild.ts, extracted for the
+   * 350-line ceiling). AFK is read-only: never writes `~/.codex/auth.json`.
+   * @internal
+   */
+  rebuildClient(newAuth: import('./auth.js').OpenAIAuthResolution): void {
+    // Single mutation point for opts.auth: TurnDriverContext declares `auth`
+    // readonly to prevent accidental writes elsewhere, but this method is the
+    // one intentional exception — it swaps the token after a 401 refresh so
+    // all subsequent reads (runTurn, applyAndSyncSteering, compaction limit
+    // checks) see the new token without requiring a new query instance.
+    (this.opts as { auth: import('./auth.js').OpenAIAuthResolution }).auth = newAuth;
+    this._client = buildRefreshedClient(newAuth, this.opts);
+  }
+
+  /**
+   * Optional env + fs injection point forwarded to `wrapTurnWithOAuthRefresh`.
+   * Tests inject a hermetic stub here to prevent reading real host credentials.
+   * @internal
+   */
+  _authDeps: AuthResolverDeps = {};
+
+  /**
    * Drive a single user turn through the model + tool loop.
-   * Delegates to the extracted `runTurnInner` in query/turn-driver.ts;
+   * Wraps `runTurnInner` (query/turn-driver.ts) with a single ChatGPT-OAuth
+   * token-refresh retry on 401 (see query/token-refresh.ts, issue #3396).
    * `this` satisfies `TurnDriverContext` so all live field reads work.
    */
   private async *runTurn(content: ProviderUserTurn['content']): AsyncGenerator<ProviderEvent> {
@@ -398,7 +438,13 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     try {
       // Pass `this` — which implements TurnDriverContext — so every mutable
       // field read inside runTurnInner is always live (no stale snapshot).
-      yield* runTurnInner(this, content, controller, turnStartTime, taskId);
+      // wrapTurnWithOAuthRefresh is a no-op for non-chatgpt-oauth sessions.
+      yield* wrapTurnWithOAuthRefresh(
+        this,
+        runTurnInner(this, content, controller, turnStartTime, taskId),
+        () => runTurnInner(this, content, controller, turnStartTime, taskId),
+        this._authDeps,
+      );
     } finally {
       trace.finish(Date.now() - turnStartTime);
       // Clear the per-turn checkpoint registry at turn end.

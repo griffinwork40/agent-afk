@@ -46,6 +46,7 @@ export const getRuntimeStateTool: AnthropicToolDef = {
     '- `self`       — identity + model + permissions + cwd only\n' +
     '- `tools`      — enabled tools, MCP servers, and available OpenAI subscription models with windows and upgrade notes\n' +
     '- `subagents`  — active subagent handles + background jobs only\n' +
+    '                 (also includes subagentOutcomeSummary when history is available)\n' +
     '- `workspace`  — git state (branch, headSha, dirty, dirtyCount, remoteUrl)\n' +
     '- `all`        — union of the four above (default)\n\n' +
     'This is read-only. The optional subscription model list reads the local Codex catalog; other fields come from in-memory state. No network requests. Fields the runtime does not know (e.g. depth for a ' +

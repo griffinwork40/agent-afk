@@ -415,6 +415,21 @@ describe('buildChildConfig', () => {
       });
     });
 
+    it('sets isUnnamedWorker=true for unnamed dispatches (#3359)', () => {
+      // Providers use this flag to skip prepending toolBase (which is already
+      // embedded in UNNAMED_SUBAGENT_WORKER_PROMPT), preventing a double-emit
+      // of TOOL_SYSTEM_PROMPT_BASE in the assembled system prompt.
+      const { childConfig } = buildChildConfig(baseArgs({ namedAgent: undefined }));
+      expect(childConfig.isUnnamedWorker).toBe(true);
+    });
+
+    it('does NOT set isUnnamedWorker for named dispatches (#3359)', () => {
+      const { childConfig } = buildChildConfig(
+        baseArgs({ namedAgent: namedAgent({ prompt: 'You are the research agent.' }) }),
+      );
+      expect(childConfig.isUnnamedWorker).toBeUndefined();
+    });
+
     it("uses the named agent's definition prompt (markdown body) for a named dispatch", () => {
       const { childConfig } = buildChildConfig(
         baseArgs({ namedAgent: namedAgent({ prompt: 'You are the research agent.' }) }),

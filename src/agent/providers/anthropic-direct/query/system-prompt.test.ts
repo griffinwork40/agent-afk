@@ -152,4 +152,27 @@ describe('assembleSystemPrompt — top-level order', () => {
     );
     expect(out).toContain('sess-123');
   });
+
+  it('skips toolBase when it is empty (#3359 unnamed-worker dedupe)', () => {
+    // When resolveToolSystemPrompt returns '' for isUnnamedWorker=true, the
+    // assembly must not produce a leading blank line — the first section is
+    // userSystem (the embedded UNNAMED_SUBAGENT_WORKER_PROMPT).
+    const out = assembleSystemPrompt(
+      buildStableSystemPrefix({
+        toolBase: '',
+        memoryPrompt: 'MEM',
+        workspacePrompt: '',
+        hotMemory: '',
+        manifest: '',
+        userSystem: 'WORKER-PROMPT',
+      }),
+      '/x',
+      IDENTITY,
+    );
+    expect(out.startsWith('WORKER-PROMPT')).toBe(true);
+    expect(out).not.toMatch(/^\n/);
+    const sections = out.split('\n\n');
+    expect(sections[0]).toBe('WORKER-PROMPT');
+    expect(sections[1]).toBe('MEM');
+  });
 });

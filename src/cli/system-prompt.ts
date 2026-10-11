@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 
 import { env } from '../config/env.js';
 import { loadConfig } from './config.js';
+import { errorMessage } from '../utils/errors.js';
 
 /**
  * Load the framework base system prompt.
@@ -42,7 +43,7 @@ export function loadSystemPrompt(): string | undefined {
       return readFileSync(override, 'utf-8');
     } catch (err) {
       throw new Error(
-        `AFK_FRAMEWORK_PROMPT_FILE="${override}" is unreadable: ${err instanceof Error ? err.message : String(err)}`,
+        `AFK_FRAMEWORK_PROMPT_FILE="${override}" is unreadable: ${errorMessage(err)}`,
       );
     }
   }

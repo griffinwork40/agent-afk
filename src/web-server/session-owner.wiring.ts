@@ -31,7 +31,7 @@ import type { AgentSession } from '../agent/session/agent-session.js';
 import type { AgentConfig } from '../agent/types.js';
 import type { TraceWriter } from '../agent/trace/index.js';
 import type { TraceSink } from '../agent/trace/writer.js';
-import type { SubagentExecutorContext } from '../agent/tools/subagent-executor.js';
+import { makeDeferredParentProxy } from '../agent/session/deferred-parent-proxy.js';
 
 /** Everything `SessionOwner.create` needs beyond the base `AgentConfig`. */
 export interface WebSessionWiring {
@@ -88,16 +88,7 @@ export async function wireWebSession(
   );
 
   // -- 5. Deferred parent proxy (session constructed after executors) ----------
-  let boundSession: AgentSession | undefined;
-  const deferredParent: SubagentExecutorContext['parentSession'] = {
-    get sessionId() { return boundSession?.sessionId; },
-    getInputStreamRef() { return boundSession?.getInputStreamRef?.() ?? { pushUserMessage: () => {} }; },
-    get abortSignal() { return boundSession?.abortSignal ?? new AbortController().signal; },
-    get hookRegistry() { return boundSession?.hookRegistry; },
-    // Journal parent view: forks journal to `messageJournal.forSubagent(id)`,
-    // never to the parent's own file (see fork-child-config.ts).
-    get messageJournal() { return boundSession?.messageJournal; },
-  };
+  const { proxy: deferredParent, bind: bindParent } = makeDeferredParentProxy();
 
   // -- 6. wireExecutors (cwd, executors, root manager) ------------------------
   const executors = wireExecutors({
@@ -164,7 +155,7 @@ export async function wireWebSession(
   // Attach the late-bind setter as a post-construction hook: the caller must
   // invoke this after `new AgentSession(config)` so the deferred proxy resolves.
   (wiring as WebSessionWiringInternal).__bindSession = (s: AgentSession) => {
-    boundSession = s;
+    bindParent(s);
     executors.rootManager.setOnSubagentSucceeded((usage, costUsd) => {
       s.recordSubagentCompletion(usage, costUsd);
     });

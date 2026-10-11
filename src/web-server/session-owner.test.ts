@@ -48,20 +48,20 @@ describe('SessionOwner — construction', () => {
 });
 
 describe('SessionOwner — submitPrompt on an unknown id', () => {
-  it('rejects rather than silently no-op-ing', async () => {
+  it('throws rather than silently no-op-ing', () => {
     const owner = freshOwner();
-    await expect(owner.submitPrompt('nope', 'hi')).rejects.toThrow(
+    expect(() => owner.submitPrompt('nope', 'hi')).toThrow(
       /nope.*not owned by this process/,
     );
   });
 });
 
 describe('SessionOwner — submitSkillMessage on an unknown id', () => {
-  it('rejects rather than silently no-op-ing', async () => {
+  it('throws rather than silently no-op-ing', () => {
     const owner = freshOwner();
-    await expect(
+    expect(() =>
       owner.submitSkillMessage('nope', [{ type: 'text', text: 'mock' }]),
-    ).rejects.toThrow(/nope.*not owned by this process/);
+    ).toThrow(/nope.*not owned by this process/);
   });
 });
 

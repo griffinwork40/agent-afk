@@ -7,7 +7,8 @@ import {
   clipboardReadTool,
 } from './schemas.js';
 import { sendToSessionTool } from './schemas.peer.js';
-import { updateScheduleTool } from './schemas.schedule.js';
+import { createScheduleTool, updateScheduleTool } from './schemas.schedule.js';
+import { TASK_MAX_ATTEMPTS_LIMIT, TASK_RETRY_DELAY_MAX_MS, TASK_RETRY_DELAY_MIN_MS } from '../daemon/task-retry.js';
 import { cancelBackgroundJobTool, sendMessageToAgentTool, getBackgroundJobHealthTool } from './schemas.orchestration.js';
 
 describe('builtinToolSchemas', () => {
@@ -275,5 +276,20 @@ describe('updateScheduleTool', () => {
     expect(Array.isArray(cwdType)).toBe(true);
     expect(cwdType).toContain('string');
     expect(cwdType).toContain('null');
+  });
+});
+
+describe('schedule tool retry fields (#3243)', () => {
+  it.each([
+    ['create_schedule', createScheduleTool],
+    ['update_schedule', updateScheduleTool],
+  ])('%s declares bounded integer maxAttempts / retryDelayMs', (_name, tool) => {
+    const props = tool.input_schema.properties as Record<string, { type: unknown; minimum?: number; maximum?: number }>;
+    expect(props['maxAttempts']).toMatchObject({ type: 'integer', minimum: 1, maximum: TASK_MAX_ATTEMPTS_LIMIT });
+    expect(props['retryDelayMs']).toMatchObject({
+      type: 'integer',
+      minimum: TASK_RETRY_DELAY_MIN_MS,
+      maximum: TASK_RETRY_DELAY_MAX_MS,
+    });
   });
 });

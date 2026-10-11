@@ -123,6 +123,7 @@ describe('CronScheduler overlap alert latch', () => {
 
     const scheduler = new CronScheduler({
       telemetryPath,
+      budgetGate: async () => ({ skip: false }),
       sessionFactory: ((_config: AgentConfig) => {
         sessionCount += 1;
         // First session: slow (holds the slot open while ticks 2+3 fire)
@@ -179,6 +180,7 @@ describe('CronScheduler overlap alert latch', () => {
 
     const scheduler = new CronScheduler({
       telemetryPath,
+      budgetGate: async () => ({ skip: false }),
       sessionFactory: ((_config: AgentConfig) => {
         sessionCount += 1;
         if (sessionCount === 1) return makeSlowSession(50);
@@ -218,6 +220,7 @@ describe('CronScheduler overlap alert latch', () => {
 
     const scheduler = new CronScheduler({
       telemetryPath,
+      budgetGate: async () => ({ skip: false }),
       sessionFactory: ((_config: AgentConfig) => {
         sessionCount += 1;
         // Sessions 1 and 3 are slow; 2 is instant (clears the latch)

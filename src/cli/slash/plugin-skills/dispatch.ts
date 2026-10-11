@@ -14,17 +14,13 @@ import { palette } from '../../palette.js';
 import { registerPluginAgents } from '../plugin-agents.js';
 import { registerOrReplace } from '../registry.js';
 import { runSkillDispatchTurn } from '../_lib/run-skill-dispatch-turn.js';
+import { invokeSkillPreflight } from '../_lib/run-skill-preflight.js';
 import { parsePostFlag, runReviewPostPublish, type PostTarget } from '../_lib/review-post.js';
 import { parsePrRef } from '../preflight/review-pr.js';
-import {
-  runPreflight,
-  getSkillPreflightDir,
-  type SkillInvocation,
-} from '../preflight/index.js';
 import { env } from '../../../config/env.js';
 import type { SlashCommand, SlashContext, SlashResult } from '../types.js';
 import type { ImageAttachment } from '../../input/attachments.js';
-import { harvestDiscoveredPluginSkillMetadata, extractHintFromDescription } from './flags.js';
+import { extractHintFromDescription } from './flags.js';
 import { makeDynamicSkillsCmd } from './listing.js';
 import {
   state,
@@ -139,33 +135,16 @@ export function makeForwardHandler(skill: DiscoveredSkill, flags?: readonly stri
           // Failure isolation: preflight throws or returns null → falls
           // through to the standard 2-block dispatch unchanged. A failing
           // context-gather must never block a skill from running.
-          preflight: async (): Promise<string | undefined> => {
+          preflight: () => {
             const bareSkillName = skill.name.includes(':')
               ? (skill.name.split(':').pop() ?? skill.name)
               : skill.name;
-            const inv: SkillInvocation = {
-              skillName: bareSkillName,
-              rawArgs: dispatchArgs,
-              source: skill.source ?? 'plugin',
-              capabilities: { compose: true, subagents: true },
-            };
-            const sessionIdMaybe = ctx.session.current.sessionId;
-            const artifactDir = getSkillPreflightDir(sessionIdMaybe);
-            const preflightResult = await runPreflight(
-              inv,
-              // Honor the session's effective cwd so preflights that shell
-              // out to `git status` / file globs operate on the worktree,
-              // not the Node host's process.cwd() (the parent repo when
-              // launched with `afk i --worktree`). `stats.cwd` is stamped
-              // at bootstrap.ts:328 with the same `process.cwd()` fallback.
-              { cwd: ctx.stats.cwd ?? process.cwd(), artifactDir },
-              (err) => {
-                if (env.AFK_SKILL_STREAM_VERBOSE === '1') {
-                  ctx.out.warn(`preflight(${bareSkillName}) failed: ${errorMessage(err)}`);
-                }
-              },
+            return invokeSkillPreflight(
+              bareSkillName,
+              dispatchArgs,
+              skill.source ?? 'plugin',
+              ctx,
             );
-            return preflightResult?.manifestBlock;
           },
         });
 
@@ -217,29 +196,24 @@ export async function registerPluginSkills(
     return null;
   }
 
-  // Harvest flags + categories from every root the skill bridge discovers
-  // skills from (cache, bundled, flat/project/imported plugins). Categories are
-  // first-write-wins with the marketplace cache walked first, so the
-  // actively-installed copy's category beats a bundled default; flags union.
-  const { flags: harvestedFlags, categories: harvestedCategories } =
-    harvestDiscoveredPluginSkillMetadata();
-
+  // Flags + category arrive on each command, parsed ONCE during discovery
+  // (tool-injector → skill-bridge → collectSupportedCommands, #3332) from the
+  // same SKILL.md that won registration. No second disk walk, so the flag set
+  // can never drift from the discovered skill set.
+  //
   // Cast to ProviderCommandInfo[] — session.supportedCommands() returns
   // SlashCommand[] for the REPL registry, but the underlying objects are
   // ProviderCommandInfo-shaped (produced by collectSupportedCommands) and
   // carry fields like `whenToUse` that are not on SlashCommand.
-  const discovered: DiscoveredSkill[] = (commands as unknown as ProviderCommandInfo[]).map((c) => {
-    const bare = bareName(c.name);
-    const cat = harvestedCategories.get(bare);
-    return {
-      name: c.name,
-      description: c.description ?? '',
-      ...(c.argumentHint ? { argumentHint: c.argumentHint } : {}),
-      ...(c.whenToUse ? { whenToUse: c.whenToUse } : {}),
-      ...(c.source ? { source: c.source } : {}),
-      ...(cat ? { category: cat } : {}),
-    };
-  });
+  const discovered: DiscoveredSkill[] = (commands as unknown as ProviderCommandInfo[]).map((c) => ({
+    name: c.name,
+    description: c.description ?? '',
+    ...(c.argumentHint ? { argumentHint: c.argumentHint } : {}),
+    ...(c.whenToUse ? { whenToUse: c.whenToUse } : {}),
+    ...(c.source ? { source: c.source } : {}),
+    ...(c.category ? { category: c.category } : {}),
+    ...(c.flags && c.flags.length > 0 ? { flags: c.flags } : {}),
+  }));
   // Reserved names = registry skills that are ACTUALLY VISIBLE at the
   // current tier. Internal-tier skills (forge, audit-fit) that are hidden
   // by the audience gate don't reserve their slash — otherwise a plugin
@@ -261,7 +235,7 @@ export async function registerPluginSkills(
     if (CORE_COMMANDS.has(slashName)) continue;
 
     const bare = bareName(skill.name);
-    const flags = harvestedFlags.get(bare);
+    const flags = skill.flags;
 
     if (reservedBareNames.has(bare)) {
       // Vendored or user skill already owns the bare slot. Register only the

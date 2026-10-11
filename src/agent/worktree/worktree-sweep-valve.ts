@@ -53,6 +53,7 @@ import { promises as fs, type Stats } from 'node:fs';
 import { O_WRONLY, O_CREAT, O_TRUNC } from 'node:constants';
 import * as nodeConstants from 'node:constants';
 import { join } from 'node:path';
+import { isEnoent, isErrnoCode } from '../../utils/errors.js';
 
 // O_NOFOLLOW is POSIX-only; node:constants does not export it on Windows.
 // Fall back to 0 (no-op flag) so the open() calls work on all platforms.
@@ -94,8 +95,7 @@ export async function readRootSweepCount(repoRoot: string): Promise<number | nul
   try {
     if (!(await fs.stat(afkWorktreesDir(repoRoot))).isDirectory()) return null;
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+    if (isEnoent(err) || isErrnoCode(err, 'ENOTDIR')) return null;
     return 0; // directory unreadable → fail closed (force previews)
   }
 

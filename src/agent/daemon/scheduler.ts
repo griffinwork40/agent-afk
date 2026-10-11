@@ -49,6 +49,14 @@ import { errorMessage } from '../../utils/errors.js';
 import { makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord, makeTelemetryUnwritableSkipRecord, OverlapAlertLatch, formatOverlapAlertMessage } from './scheduler.overlap-guard.js';
 import { BudgetAlertLatch, evaluateBudgetGate, formatBudgetSkipMessage, resolveDaemonUsageTarget } from './budget-gate.js';
 import { probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
+import { evaluateRunAtGate, applyAutoDisable } from './scheduler.runat-gate.js';
+
+/**
+ * Maximum length (chars) of the command preview included in crash-notice
+ * in-flight task snapshots. Redaction runs BEFORE truncation so a secret
+ * straddling the boundary is always fully masked (#3323 review).
+ */
+const COMMAND_HEAD_MAX_LEN = 60;
 
 export interface SchedulerOptions {
   /** Per-tick session config; merged with defaults at spawn time. */
@@ -132,10 +140,12 @@ export interface SchedulerOptions {
    * bypass the gate in tests that exercise other scheduler logic.
    */
   budgetGate?: () => Promise<import('./budget-gate.js').BudgetGateResult>;
+  /** Override the retry backoff sleep (tests). Defaults to `sleepWithAbort`. */
+  retrySleep?: (ms: number, signal: AbortSignal) => Promise<void>;
 }
 
 export type TelemetryTrigger = 'cron' | 'sessionstart' | 'pull';
-type TelemetryStatus = 'success' | 'error' | 'skipped';
+type TelemetryStatus = 'success' | 'error' | 'skipped' | 'blocked';
 
 export interface TelemetryRecord {
   taskId: string;
@@ -159,6 +169,18 @@ export interface TelemetryRecord {
    * The `status` field remains `'success'` for backward compatibility.
    */
   doneUnverified?: boolean;
+  /**
+   * Attempts made for this run (#3243). Present only when the task opted
+   * into retries (`maxAttempts > 1`); absent = single attempt, as before.
+   */
+  attempts?: number;
+  /**
+   * Number of tool calls hard-blocked by the AFK gate during this run (#3466).
+   * Present only when > 0. A run with gateBlocks > 0 is recorded as
+   * `status: 'blocked'` and treated as a failure for `notifyOn: 'failure'`
+   * so the operator is alerted when work silently never happened.
+   */
+  gateBlocks?: number;
 }
 
 export interface TaskCompletionDetails {
@@ -215,6 +237,8 @@ export class CronScheduler {
   private readonly overlapAlerts = new OverlapAlertLatch();
   /** One Telegram alert per daemon process for a non-writable telemetry file. */
   private readonly telemetryAlerts = new TelemetryAlertLatch();
+  /** Aborted by `stop()` so an in-progress retry backoff ends promptly (#3243). */
+  private shutdownController = new AbortController();
   // TODO(#337-hook): hook-driven dequeue path will share isDequeuing mutex
 
   constructor(options: SchedulerOptions = {}) {
@@ -232,8 +256,11 @@ export class CronScheduler {
     }
     let cronTask: CronTask | undefined;
     if (task.trigger === 'cron' || task.trigger === 'both') {
+      // runAt one-shots have no cronExpression; poll every minute so the
+      // scheduler can evaluate the wall-clock check on each tick.
+      const expr = task.cronExpression ?? '* * * * *';
       cronTask = cron.schedule(
-        task.cronExpression!,
+        expr,
         () => {
           // Fire-and-forget — the cron callback type doesn't await, but
           // catching here means a thrown promise can't leak as unhandled.
@@ -269,15 +296,16 @@ export class CronScheduler {
    * to Telegram verbatim (pushIfConfigured does not redact), and truncating
    * first could slice a secret below the redactor's minimum-length match.
    */
-  getInFlightTasks(): Array<{ taskId: string; commandHead: string; elapsedMs: number }> {
+  getInFlightTasks(): Array<{ taskId: string; displayId: string; commandHead: string; elapsedMs: number }> {
     const now = this.now();
-    const result: Array<{ taskId: string; commandHead: string; elapsedMs: number }> = [];
+    const result: Array<{ taskId: string; displayId: string; commandHead: string; elapsedMs: number }> = [];
     for (const [taskId, startedAt] of this.inFlightTasks) {
       const entry = this.registry.get(taskId);
       const commandHead = entry !== undefined
-        ? redactInlineSecrets(entry.task.command).slice(0, 60)
-        : taskId;
-      result.push({ taskId, commandHead, elapsedMs: now - startedAt });
+        ? redactInlineSecrets(entry.task.command).slice(0, COMMAND_HEAD_MAX_LEN)
+        : redactInlineSecrets(taskId).slice(0, COMMAND_HEAD_MAX_LEN);
+      const displayId = redactInlineSecrets(taskId);
+      result.push({ taskId, displayId, commandHead, elapsedMs: now - startedAt });
     }
     return result;
   }
@@ -338,7 +366,7 @@ export class CronScheduler {
         fireOnTaskComplete(skipRecord, { onTaskComplete: this.options.onTaskComplete }, task);
         continue;
       }
-      const decision = evaluateSessionStartGates({
+      const decision = await evaluateSessionStartGates({
         taskId: task.taskId,
         cooldownMs,
         nowMs: this.now(),
@@ -356,6 +384,10 @@ export class CronScheduler {
   }
 
   async stop(): Promise<void> {
+    // In-flight runs captured the old signal; a fresh controller keeps a
+    // scheduler reused after stop() (tests) retry-capable.
+    this.shutdownController.abort();
+    this.shutdownController = new AbortController();
     if (this.pullPollTimer !== undefined) {
       clearInterval(this.pullPollTimer);
       this.pullPollTimer = undefined;
@@ -416,6 +448,20 @@ export class CronScheduler {
     }
     this.inFlightTasks.set(task.taskId, this.now());
     try {
+
+    // ── expiresAt / runAt gate ───────────────────────────────────────────────
+    // Delegates to scheduler.runat-gate.ts; see that module for the full spec.
+    const gateResult = evaluateRunAtGate(task, trigger, this.now());
+    if (gateResult.kind === 'expired') {
+      this.writeTelemetry(gateResult.record, task);
+      applyAutoDisable(task.taskId, (id) => this.unregister(id));
+      return gateResult.record;
+    }
+    if (gateResult.kind === 'not-yet') {
+      // Silent skip — no telemetry write; pre-fire polling is noise-free.
+      return gateResult.record;
+    }
+
     // Resolve executor early so the cwd guard can skip builtin tasks (which
     // ignore cwd entirely and would produce spurious errors if the dir vanishes).
     // TODO(#2350): remove __BUILTIN_WORKTREE_PRUNE__ sentinel once all stored
@@ -500,8 +546,13 @@ export class CronScheduler {
         queueDir: this.queueDir,
         idleDetector: this.idleDetector,
         now: this.now,
-        spawnSession: (t, tr) => this.spawnSession(t, tr),
+        spawnSession: (t, tr, gbc) => this.spawnSession(t, tr, gbc),
         writeTelemetry: (r, t, d) => this.writeTelemetry(r, t, d),
+        shutdownSignal: this.shutdownController.signal,
+        // Unregistered/replaced mid-run → no further retry attempts. Pull
+        // tasks are synthetic (never in the registry) and never retry.
+        isCancelled: () => trigger !== 'pull' && this.registry.get(task.taskId)?.task !== task,
+        ...(this.options.retrySleep !== undefined ? { retrySleep: this.options.retrySleep } : {}),
       },
       task,
       trigger,
@@ -511,15 +562,26 @@ export class CronScheduler {
       // Any non-overlap run (success or error) ends the overlap episode for
       // this task, so the next overlap will alert again.
       this.overlapAlerts.clear(task.taskId);
+      // runAt one-shot: auto-disable + unregister after the run fires.
+      // The gate already confirmed runAt has been reached (kind:'pass'); just
+      // check presence of the field to identify this as a one-shot task.
+      if (task.runAt !== undefined) {
+        applyAutoDisable(task.taskId, (id) => this.unregister(id));
+      }
     }
   }
 
-  private async spawnSession(task: ScheduledTask, trigger: TelemetryTrigger = 'cron'): ReturnType<typeof spawnDaemonSession> {
+  private async spawnSession(
+    task: ScheduledTask,
+    trigger: TelemetryTrigger = 'cron',
+    gateBlockCounter?: { count: number },
+  ): ReturnType<typeof spawnDaemonSession> {
     return spawnDaemonSession(task.taskId, {
       ...this.options,
       trigger,
       // Per-task cwd takes precedence over the daemon-wide sessionConfig.cwd.
       ...(task.cwd !== undefined ? { taskCwd: task.cwd } : {}),
+      ...(gateBlockCounter !== undefined ? { gateBlockCounter } : {}),
     });
   }
 

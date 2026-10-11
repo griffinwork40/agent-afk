@@ -7,6 +7,8 @@
  * @module agent/providers/openai-compatible/query/chatgpt-backend-errors
  */
 
+import { ensureError } from '../../../../utils/errors.js';
+
 /**
  * Error for a Claude-family model routed to the ChatGPT backend. That backend
  * serves only OpenAI gpt-5.x and rejects other model families with an opaque
@@ -30,7 +32,7 @@ export function chatGptClaudeModelError(model: string): Error {
  * ChatGPT backend; every other error passes through unchanged.
  */
 export function clarifyResponsesError(err: unknown, isChatGptBackend: boolean, model: string): Error {
-  const e = err instanceof Error ? err : new Error(String(err));
+  const e = ensureError(err);
   if (!isChatGptBackend) return e;
   const status =
     err && typeof err === 'object' && 'status' in err

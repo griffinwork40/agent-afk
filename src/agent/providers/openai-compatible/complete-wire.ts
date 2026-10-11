@@ -21,7 +21,7 @@
  */
 
 import OpenAI from 'openai';
-import { resolveOpenAIAuth } from './auth.js';
+import { resolveOpenAIAuth, type AuthResolverDeps } from './auth.js';
 import {
   oneShotChatCompletion,
   oneShotResponses,
@@ -55,12 +55,17 @@ const defaultClientFactory: CompleteWireClientFactory = (opts) => new OpenAI(opt
  * headers from `resolveWireMode`, which win over any caller endpoint, as in
  * `query.ts`). Everything else -> the unchanged Chat Completions path, handed
  * the already-resolved key so auth is not resolved twice.
+ *
+ * @param authDeps - Injectable auth-resolver dependencies (env/fs). Used by
+ *   tests to drive the Responses-wire path without real credentials.  Production
+ *   callers omit this and get the real env + file-system resolvers.
  */
 export async function completeWithWire(
   input: OpenAIOneShotInput,
   clientFactory: CompleteWireClientFactory = defaultClientFactory,
+  authDeps: AuthResolverDeps = {},
 ): Promise<string> {
-  const auth = resolveOpenAIAuth(input.apiKey, {}, input.forceChatgptOAuth ?? false);
+  const auth = resolveOpenAIAuth(input.apiKey, authDeps, input.forceChatgptOAuth ?? false);
   const wire = resolveWireMode(auth);
 
   if (wire.mode === 'responses' && auth.apiKey !== null) {

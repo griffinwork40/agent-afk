@@ -574,6 +574,10 @@ export interface ProviderCommandInfo {
   description?: string;
   argumentHint?: string;
   whenToUse?: string;
+  /** Long-form CLI flags parsed during skill discovery (#3332). */
+  flags?: readonly string[];
+  /** Job-to-be-done category authored on the skill. */
+  category?: string;
   /**
    * Origin of the underlying skill/command. Inlined literal union (rather
    * than importing `SkillManifestEntry['source']` from

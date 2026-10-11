@@ -1,11 +1,9 @@
 /**
  * Process-wide singleton registry for the BrowserProvider.
  *
- * Selects the optimal backend via `selectBackend()` (Agent Browser when
- * available, Playwright as fallback) and constructs the provider lazily on
- * the first `getBrowserProvider()` call. Lazy `import()` boundaries ensure
- * neither Playwright nor the Agent Browser client are loaded into the hot
- * path for users who never call a browser tool.
+ * Constructs the Playwright provider lazily on the first
+ * `getBrowserProvider()` call. The lazy `import()` boundary ensures Playwright
+ * is not loaded into the hot path for users who never call a browser tool.
  *
  * Lifecycle:
  *   1. `getBrowserProvider()` -- lazily constructs, coalesces concurrent calls.
@@ -106,8 +104,8 @@ function removeSignalHandlers(): void {
  *   - If construction is in progress, returns the in-flight promise (coalesce).
  *   - Otherwise, kicks off construction:
  *       1. `loadBrowserConfig(opts)` -- resolves env + JSON config.
- *       2. `selectBackend()` -- probes Agent Browser, applies heuristics.
- *       3. Lazy `import()` of the selected backend module.
+ *       2. `selectBackend()` -- applies config heuristics (always Playwright).
+ *       3. Lazy `import()` of the Playwright backend module.
  *       4. Constructs the provider.
  *       5. Installs SIGINT/SIGTERM/exit handlers exactly once.
  *
@@ -130,21 +128,11 @@ export async function getBrowserProvider(opts?: LoadBrowserConfigOptions): Promi
     const config = loadBrowserConfig(opts);
     const surface = opts?.surface ?? (opts?.env ?? {})['AGENT_SURFACE'] ?? env.AGENT_SURFACE;
 
-    const decision = await selectBackend({ config, surface });
+    const decision = selectBackend({ config, surface });
     lastRouting = decision;
 
-    let newProvider: BrowserProvider;
-
-    if (decision.backend === 'agent-browser') {
-      const { AgentBrowserProvider } = await import('./agent-browser/index.js');
-      // availability is guaranteed non-null when backend is agent-browser
-      // (selectBackend either probed or threw).
-      const conn = decision.availability!.connection!;
-      newProvider = new AgentBrowserProvider(config, conn);
-    } else {
-      const { PlaywrightProvider } = await import('./playwright/index.js');
-      newProvider = new PlaywrightProvider(config);
-    }
+    const { PlaywrightProvider } = await import('./playwright/index.js');
+    const newProvider: BrowserProvider = new PlaywrightProvider(config);
 
     installSignalHandlers();
     provider = newProvider;

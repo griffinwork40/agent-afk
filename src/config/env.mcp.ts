@@ -33,6 +33,7 @@ export const MCP_ENV_REGISTRY = [
     description: 'Opt-in to loading + spawning MCP servers declared in <cwd>/.mcp.json. Fail-closed: when unset (or 0), project-local servers are NOT spawned; set to a truthy value (1/true/yes/on) to load them. A project-local .mcp.json spawns arbitrary commands on session start, so it is off by default to prevent code execution when entering an untrusted repo (issue #571). Skipped servers are listed in a startup warning with the opt-in instruction.',
     type: 'boolean',
     required: false,
+    default: '0',
     example: '1',
     category: 'mcp',
   },

@@ -1,10 +1,9 @@
 /**
  * Shell-string escaping utility.
  *
- * Previously duplicated verbatim across four sites:
+ * Previously duplicated verbatim across three sites:
  *   - `cli/input/clipboard-image.ts`
  *   - `cli/terminal-spawn/spawners.ts`
- *   - `browser/agent-browser/actions.ts`
  *   - `service/systemd/unit.ts` (partial — unit.ts also escapes \n, \r, %)
  *
  * All consolidated here so callers import one utility instead of repeating the

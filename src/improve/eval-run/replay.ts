@@ -171,6 +171,32 @@ function runLengthOf(result: DetectorResult): number {
 }
 
 /**
+ * Parse a committed fixture buffer into a single `TraceSession` for detector
+ * re-scanning.
+ *
+ * Both `replayRepeatedToolUse` and `replayClosureAnomaly` share this identical
+ * preamble (fixture bytes → UTF-8 → `parseTraceContent`). Extracted here so
+ * neither handler duplicates the property mapping.
+ *
+ * @param evalCase - Provides the session id and trace path recorded at eval-gen
+ *   time (used as the trace content's metadata; the session is not re-fetched).
+ * @param fixtureBytes - Raw bytes of the committed fixture file.
+ */
+function parseFixtureSession(
+  evalCase: EvalCase,
+  fixtureBytes: Buffer,
+): ReturnType<typeof parseTraceContent> {
+  const content = fixtureBytes.toString('utf8');
+  return parseTraceContent({
+    sessionId: evalCase.replay.sourceSessionId,
+    tracePath: evalCase.replay.sourceTracePath,
+    relativeTracePath: evalCase.replay.sourceTracePath,
+    content,
+    sessionMtimeMs: 0,
+  });
+}
+
+/**
  * Fixture-replay for `repeated-tool-use`.
  *
  * Re-drives the recorded loop through the live repeat-loop circuit breaker and
@@ -188,14 +214,7 @@ async function replayRepeatedToolUse(
   const evidence: EvalRunEvidenceRef[] = [];
 
   // 1. Re-scan the committed fixture and confirm it still encodes the pattern.
-  const content = fixtureBytes.toString('utf8');
-  const session = parseTraceContent({
-    sessionId: evalCase.replay.sourceSessionId,
-    tracePath: evalCase.replay.sourceTracePath,
-    relativeTracePath: evalCase.replay.sourceTracePath,
-    content,
-    sessionMtimeMs: 0,
-  });
+  const session = parseFixtureSession(evalCase, fixtureBytes);
   const findings = detectRepeatedToolUse([session], { minRepeats: 2 });
 
   // Prefer the run whose fingerprint matches the eval-case provenance; fall
@@ -345,14 +364,7 @@ async function replayClosureAnomaly(
   const evidence: EvalRunEvidenceRef[] = [];
 
   // 1. Re-scan the committed fixture and confirm it still encodes the pattern.
-  const content = fixtureBytes.toString('utf8');
-  const session = parseTraceContent({
-    sessionId: evalCase.replay.sourceSessionId,
-    tracePath: evalCase.replay.sourceTracePath,
-    relativeTracePath: evalCase.replay.sourceTracePath,
-    content,
-    sessionMtimeMs: 0,
-  });
+  const session = parseFixtureSession(evalCase, fixtureBytes);
   const findings = detectClosureAnomaly([session], { minOccurrences: 1 });
 
   // closure-anomaly has no fingerprint (provenance.fingerprintAtGeneration is

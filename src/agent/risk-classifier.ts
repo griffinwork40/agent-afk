@@ -36,6 +36,15 @@ export interface RiskContext {
    * this root are flagged as `high` risk (escaping the workspace boundary).
    */
   workspaceRoot?: string;
+  /**
+   * The taskId of the currently-running daemon task, supplied by the scheduler.
+   * When set, `cancel_schedule` and `update_schedule` (enabled:false only)
+   * targeting THIS task id are downgraded from `high` to `medium` — the
+   * self-disable carve-out for issue #3464. Every other schedule mutation
+   * (other task ids, `create_schedule`, command/cron edits) stays `high`.
+   * Never populated outside a daemon task run.
+   */
+  daemonTaskId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -325,6 +334,57 @@ function mcpSubNameTokens(tool: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// Schedule-mutation classifier (#3464)
+// ---------------------------------------------------------------------------
+
+/**
+ * Classify `create_schedule`, `cancel_schedule`, and `update_schedule`.
+ *
+ * Invariant: all three tools modify the daemon cron store (schedules.json)
+ * and may immediately affect a running daemon via live sync — they are `high`
+ * by default. The one exception is the self-disable carve-out (issue #3464):
+ * a daemon task disabling ONLY its own schedule is a routine one-shot cleanup
+ * step, not an attack on other tasks, and is downgraded to `medium` when:
+ *   1. `ctx.daemonTaskId` is set (injected by the scheduler — never from
+ *      model-supplied input, so it cannot be spoofed by the agent).
+ *   2. The input `taskId` matches the running task's own id exactly.
+ *   3. For `cancel_schedule`: `permanent` is not `true` (permanent delete
+ *      removes the task from the store and is irreversible → stays `high`).
+ *   4. For `update_schedule`: the ONLY supplied field besides `taskId` is
+ *      `enabled: false` (no command, cron, name, or other edits).
+ * `create_schedule` is always `high` — it adds new tasks, not removes self.
+ */
+function classifyScheduleMutation(tool: string, input: unknown, ctx: RiskContext): RiskLevel {
+  if (tool === 'create_schedule') return 'high';
+
+  const inputObj =
+    typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {};
+  const inputTaskId = typeof inputObj['taskId'] === 'string' ? inputObj['taskId'] : undefined;
+
+  // Self-disable carve-out: own task id, scheduler-supplied (trusted) context.
+  if (
+    ctx.daemonTaskId !== undefined &&
+    inputTaskId !== undefined &&
+    inputTaskId === ctx.daemonTaskId
+  ) {
+    if (tool === 'cancel_schedule') {
+      // Permanent delete stays high — only plain disable is carved out.
+      if (inputObj['permanent'] === true) return 'high';
+      // Re-enabling own schedule is a mutation, not a disable — keep it high.
+      if (inputObj['enable'] === true) return 'high';
+      return 'medium';
+    }
+    // update_schedule: only allowed when the sole change is enabled:false.
+    // Any other field (command, cron, name, …) keeps it high.
+    const { taskId: _tid, enabled, ...rest } = inputObj;
+    const hasOtherFields = Object.keys(rest).length > 0;
+    if (enabled === false && !hasOtherFields) return 'medium';
+  }
+
+  return 'high';
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -421,14 +481,9 @@ export function classifyRisk(
   }
 
   // ---- schedule mutations --------------------------------------------------
-  // Invariant: create_schedule and cancel_schedule modify the daemon's cron
-  // store (schedules.json) and may immediately affect a running daemon via live
-  // sync. These are irreversible in the sense that a wrongly-scheduled task
-  // could run before the operator notices — so they are 'high', gated behind
-  // explicit approval in AFK mode. list_schedules and get_schedule_history are
-  // read-only and fall through to the 'safe' default below.
-  if (tool === 'create_schedule' || tool === 'update_schedule' || tool === 'cancel_schedule') {
-    return 'high';
+  // See classifyScheduleMutation for the full rule set and self-disable carve-out.
+  if (tool === 'create_schedule' || tool === 'cancel_schedule' || tool === 'update_schedule') {
+    return classifyScheduleMutation(tool, input, ctx);
   }
 
   // ---- worktree lifecycle --------------------------------------------------
