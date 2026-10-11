@@ -180,7 +180,17 @@ export class AnthropicDirectProvider implements ModelProvider {
   private get memoryStore(): MemoryStore { return (this._memoryStore ??= makeDefaultMemoryStore()); }
   private get stateStore(): StateStore { return (this._stateStore ??= makeDefaultStateStore()); }
 
+  // Invariant: injected stores are owned by the caller (the REPL shares ONE
+  // memory/state/workspace store across the root provider and every forked
+  // child provider). close() must release only stores this provider created
+  // lazily. Closing an injected store kills it for the whole process: every
+  // later fork then fails with "The database connection is not open".
+  private readonly _injectedMemoryStore: boolean;
+  private readonly _injectedStateStore: boolean;
+
   constructor(opts: AnthropicDirectProviderOptions = {}) {
+    this._injectedMemoryStore = opts.memoryStore !== undefined;
+    this._injectedStateStore = opts.stateStore !== undefined;
     this._memoryStore = opts.memoryStore;
     this.workspaceStore = opts.workspaceStore;
     this.subscribeHandler = opts.subscribeHandler;
@@ -280,9 +290,10 @@ export class AnthropicDirectProvider implements ModelProvider {
   }
 
   close(): void {
-    this._memoryStore?.close();
-    this.workspaceStore?.close();
-    this._stateStore?.close();
+    // Only close stores this provider owns (see the Invariant above). The
+    // workspace store is always injected, so it is never closed here.
+    if (!this._injectedMemoryStore) this._memoryStore?.close();
+    if (!this._injectedStateStore) this._stateStore?.close();
   }
 
   /**
