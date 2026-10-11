@@ -31,10 +31,10 @@ import { requestCprOrMarkDirty } from './terminal-compositor.lifecycle.cpr.js';
  * called. While the CPR is pending, Frame.repaint() suppresses its write so
  * the stale-row repaint cannot race the delta correction.
  *
- * On SHRINK: if a CPR is already in-flight from a WIDTH-ONLY event
- * (widthOnlyOrigin), the existing snapshot is kept rather than discarded — the
- * pending CPR still needs it to drive the ghost-row erase on repaint.
- * When no CPR is pending, any stale EXPAND snapshot is dropped as before.
+ * On SHRINK: while CPR is in-flight, keep a WIDTH-ONLY snapshot so the
+ * pending repaint can erase the ghost rows. Snapshot provenance is independent
+ * of burst origin: an intervening EXPAND replaces it with a stale footprint
+ * that SHRINK must drop. With no pending CPR, drop any stale snapshot.
  *
  * On WIDTH-ONLY (net-zero rows): snapshots the footprint for ghost-row erase
  * (same as EXPAND) and emits a CPR to trigger a clean repaint after tmux
@@ -56,7 +56,7 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     const top = tops.length > 0 ? Math.min(...tops) : 0;
     const bottom = Math.max(1, self.lastKnownRows - 1 - extraRows);
     if (top > 0 && top <= bottom) {
-      self.pendingResizeErase = { top, bottom };
+      self.pendingResizeErase = { top, bottom, origin: 'expand' };
     }
 
     // CPR-based delta correction: after each frame render, CupFrameRenderer
@@ -77,7 +77,8 @@ export function handleResizeImmediate(self: LifecycleHost): void {
       requestCprOrMarkDirty(self, frameBottom, newRows, /* rowDelta= */ newRows - self.lastKnownRows);
     }
   } else if (newRows < self.lastKnownRows) {
-    // SHRINK: emit a CPR request to measure how many rows tmux pushed into
+    // Invariant: SHRINK must not erase an EXPAND footprint after reflow.
+    // Emit a CPR request to measure how many rows tmux pushed into
     // scrollback history.  When the pane shrinks, tmux first trims blank rows
     // below the cursor, then pushes top rows into history — shifting the cursor
     // UP by delta rows (0 ≤ |delta| ≤ shrink amount).  The CPR reply reports
@@ -94,22 +95,18 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     // spinner row that #3205/#3228 fixed would survive.
     //
     // Distinction:
-    //   • CPR started by a WIDTH-ONLY (widthOnlyOrigin===true): the snapshot
-    //     records ghost rows from a soft-wrap reflow; preserve it regardless
-    //     of how many SHRINKs accumulate in the burst (#3283).
-    //   • CPR started by an EXPAND (growTotal > 0): the snapshot records the
-    //     pre-expand footprint; a following SHRINK makes those rows stale —
-    //     drop the snapshot (existing contract, prevents erasing reflowed rows).
+    //   • Latest snapshot from WIDTH-ONLY: preserve soft-wrap ghost rows
+    //     regardless of how many SHRINKs accumulate in the burst (#3283).
+    //   • Latest snapshot from EXPAND: drop the pre-expand footprint because
+    //     SHRINK makes its rows stale, even in a WIDTH-ONLY-originated burst.
     //   • No CPR in-flight: drop any stale snapshot (existing contract).
-    const burstFromWidthOnly =
-      self.cprPending &&
-      self.cprBurst !== null &&
-      self.cprBurst.widthOnlyOrigin;
-    if (!burstFromWidthOnly) {
-      // Drop stale snapshot: no CPR in-flight, or CPR was started by an EXPAND.
+    const preserveWidthSnapshot =
+      self.cprPending && self.pendingResizeErase?.origin === 'width-only';
+    if (!preserveWidthSnapshot) {
+      // Drop stale snapshot: no CPR in-flight, or not a WIDTH-ONLY footprint.
       self.pendingResizeErase = null;
     }
-    // burstFromWidthOnly === true: preserve the snapshot so the pending
+    // preserveWidthSnapshot === true: preserve the snapshot so the pending
     // CPR repaint can erase the ghost spinner row left by the soft-wrap reflow.
     const frameBottom = self.lastMeasuredFrameBottom;
     if (frameBottom > 0 && self.stdin.isTTY) {
@@ -139,7 +136,7 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     const top = tops.length > 0 ? Math.min(...tops) : 0;
     const bottom = Math.max(1, self.lastKnownRows - 1 - extraRows);
     if (top > 0 && top <= bottom) {
-      self.pendingResizeErase = { top, bottom };
+      self.pendingResizeErase = { top, bottom, origin: 'width-only' };
     }
 
     const frameBottom = self.lastMeasuredFrameBottom;
@@ -180,7 +177,7 @@ export function handleDisarmWindowResize(self: LifecycleHost): void {
     const bottom = Math.max(1, self.disarmRows - 1 - extraRows);
     const top = 1;
     if (top <= bottom) {
-      self.pendingResizeErase = { top, bottom };
+      self.pendingResizeErase = { top, bottom, origin: 'expand' };
     }
   }
   self.bandGeometryStale = true;

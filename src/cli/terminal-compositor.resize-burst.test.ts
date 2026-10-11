@@ -9,7 +9,7 @@
  * erase did NOT fire because the snapshot was gone.
  *
  * Fix (terminal-compositor.lifecycle.resize.ts): when a CPR is already in-flight
- * from a WIDTH-ONLY event (`widthOnlyOrigin === true`), the SHRINK branch keeps
+ * with a WIDTH-ONLY snapshot, the SHRINK branch keeps
  * the existing snapshot rather than nulling it, so the CPR's repaint always has
  * an erase footprint to work with.
  *
@@ -18,25 +18,51 @@
  *   B2 — WIDTH-ONLY → SHRINK (CPR in-flight): erase snapshot preserved across both events.
  *   B3 — WIDTH-ONLY → SHRINK (CPR in-flight): ghost-erase CUP+EL is emitted after CPR resolves.
  *   B4 — SHRINK with NO prior CPR (cprPending=false): existing null contract preserved.
- *   B5 — WIDTH-ONLY → SHRINK (CPR in-flight, no prior snapshot): still nulls (no snapshot to merge).
+ *   B5 — WIDTH-ONLY → SHRINK with no frame: snapshot stays null.
+ *   B6 — WIDTH-ONLY → SHRINK → SHRINK: snapshot survives repeated SHRINKs.
+ *   B7 — WIDTH-ONLY → EXPAND → SHRINK: replacement EXPAND snapshot is dropped.
+ *   B8 — EXPAND → WIDTH-ONLY → SHRINK: latest WIDTH-ONLY snapshot survives.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
-  CPR_REQUEST,
-  CPR_TIMEOUT_MS,
+  __resetCprRttForTests,
 } from './terminal-compositor.lifecycle.cpr.js';
 import { TerminalCompositor } from './terminal-compositor.js';
 import { makeMockStdout, makeMockStdin, collectWrites } from './terminal-compositor.test-helpers.js';
 import { __resetStdinClaimForTests } from './input/stdin-claim.js';
+
+const armedCompositors: TerminalCompositor[] = [];
+// Invariant: disarm while fake timers are active, even if an assertion fails.
+afterEach(() => {
+  for (const c of armedCompositors.splice(0)) c.disarm();
+  vi.useRealTimers();
+});
+beforeEach(() => {
+  __resetStdinClaimForTests();
+  __resetCprRttForTests();
+  vi.useFakeTimers();
+});
+
+function completeCpr(c: TerminalCompositor, stdin: ReturnType<typeof makeMockStdin>): void {
+  const state = c as unknown as {
+    cprPending: boolean;
+    cprBurst: { originalExpectedRow: number; currentRows: number } | null;
+  };
+  // A dirty reply starts one fresh query; the second reply completes the burst.
+  for (let i = 0; i < 2 && state.cprPending; i++) {
+    const burst = state.cprBurst!;
+    const row = Math.min(burst.originalExpectedRow, burst.currentRows - 1);
+    stdin.emit('data', Buffer.from(`\x1b[${row};1R`));
+  }
+  expect(state.cprPending, 'CPR replies must complete the burst').toBe(false);
+}
 
 // ---------------------------------------------------------------------------
 // B1: WIDTH-ONLY → SHRINK while CPR in-flight: pendingResizeErase is NOT nulled
 // ---------------------------------------------------------------------------
 
 describe('B1: WIDTH-ONLY then SHRINK during in-flight CPR: snapshot NOT nulled', () => {
-  beforeEach(() => { __resetStdinClaimForTests(); vi.useFakeTimers(); });
-  afterEach(() => { vi.useRealTimers(); });
 
   it('pendingResizeErase survives a SHRINK that arrives while CPR is in-flight', async () => {
     const stdout = makeMockStdout();
@@ -44,6 +70,7 @@ describe('B1: WIDTH-ONLY then SHRINK during in-flight CPR: snapshot NOT nulled',
     stdout.rows = 40;
     stdout.columns = 99;
     const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+    armedCompositors.push(c);
     await c.arm();
     // Allow the initial frame to render (establishes lastMeasuredFrameBottom > 0).
     vi.advanceTimersByTime(20);
@@ -70,25 +97,24 @@ describe('B1: WIDTH-ONLY then SHRINK during in-flight CPR: snapshot NOT nulled',
     expect(internals.pendingResizeErase, 'snapshot must survive SHRINK while CPR is in-flight').not.toBeNull();
 
     // Cleanup.
-    vi.advanceTimersByTime(CPR_TIMEOUT_MS + 50);
+    completeCpr(c, stdin);
     c.disarm();
   });
 });
 
 // ---------------------------------------------------------------------------
-// B2: Merged footprint covers both WIDTH-ONLY and SHRINK events
+// B2: WIDTH-ONLY footprint is preserved unchanged by SHRINK
 // ---------------------------------------------------------------------------
 
-describe('B2: Merged erase footprint covers both WIDTH-ONLY and SHRINK events', () => {
-  beforeEach(() => { __resetStdinClaimForTests(); vi.useFakeTimers(); });
-  afterEach(() => { vi.useRealTimers(); });
+describe('B2: WIDTH-ONLY erase footprint is preserved unchanged by SHRINK', () => {
 
-  it('merged footprint uses min(top) / max(bottom) of both snapshots', async () => {
+  it('preserves the exact width-only snapshot through SHRINK', async () => {
     const stdout = makeMockStdout();
     const stdin = makeMockStdin();
     stdout.rows = 40;
     stdout.columns = 99;
     const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+    armedCompositors.push(c);
     await c.arm();
     vi.advanceTimersByTime(20);
 
@@ -109,15 +135,9 @@ describe('B2: Merged erase footprint covers both WIDTH-ONLY and SHRINK events', 
     stdout.rows = 35;
     process.stdout.emit('resize');
 
-    // The preserved snapshot must still cover the width-only erase footprint.
-    const after = internals.pendingResizeErase;
-    expect(after, 'snapshot must exist after SHRINK').not.toBeNull();
-    if (afterWidthClone !== null && after !== null) {
-      expect(after.top).toBeLessThanOrEqual(afterWidthClone.top);
-      expect(after.bottom).toBeGreaterThanOrEqual(afterWidthClone.bottom);
-    }
+    expect(internals.pendingResizeErase).toEqual(afterWidthClone);
 
-    vi.advanceTimersByTime(CPR_TIMEOUT_MS + 50);
+    completeCpr(c, stdin);
     c.disarm();
   });
 });
@@ -133,8 +153,6 @@ describe('B2: Merged erase footprint covers both WIDTH-ONLY and SHRINK events', 
 // ---------------------------------------------------------------------------
 
 describe('B3: ghost-erase CUP+EL emitted after CPR resolves in WIDTH-ONLY → SHRINK burst', () => {
-  beforeEach(() => { __resetStdinClaimForTests(); vi.useFakeTimers(); });
-  afterEach(() => { vi.useRealTimers(); });
 
   it('ghost-erase CUP+EL fires after WIDTH-ONLY → modest SHRINK when snapshot row stays in viewport', async () => {
     const stdout = makeMockStdout();
@@ -145,6 +163,7 @@ describe('B3: ghost-erase CUP+EL emitted after CPR resolves in WIDTH-ONLY → SH
     stdout.rows = 60;
     stdout.columns = 99;
     const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+    armedCompositors.push(c);
     await c.arm();
     // Allow the initial frame to render (establishes lastMeasuredFrameBottom).
     vi.advanceTimersByTime(20);
@@ -170,10 +189,9 @@ describe('B3: ghost-erase CUP+EL emitted after CPR resolves in WIDTH-ONLY → SH
     // Snapshot survived.
     expect(internals.pendingResizeErase, 'snapshot must survive SHRINK while CPR in-flight').not.toBeNull();
 
-    // Step 3: Allow CPR timeouts to fire → repaint WITH the erase snapshot.
-    // Two timeouts: one for the WIDTH-ONLY CPR (dirty=true → re-queries), one
-    // for the re-query.  Advance well past 2×CPR_TIMEOUT_MS to cover both.
-    vi.advanceTimersByTime((CPR_TIMEOUT_MS + 50) * 3);
+    // Step 3: The dirty reply re-queries; a quiescent reply repaints with erase.
+    // A timeout ends the burst directly, rather than issuing a re-query.
+    completeCpr(c, stdin);
 
     const out = writes.all();
     // The ghost-erase mechanism must have fired: at least one CUP+EL sequence.
@@ -191,22 +209,21 @@ describe('B3: ghost-erase CUP+EL emitted after CPR resolves in WIDTH-ONLY → SH
 // ---------------------------------------------------------------------------
 
 describe('B4: SHRINK with no prior CPR: existing null contract preserved', () => {
-  beforeEach(() => { __resetStdinClaimForTests(); vi.useFakeTimers(); });
-  afterEach(() => { vi.useRealTimers(); });
 
   it('SHRINK without prior CPR still nulls pendingResizeErase (existing contract)', async () => {
     const stdout = makeMockStdout();
     const stdin = makeMockStdin();
     stdout.rows = 50;
     const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+    armedCompositors.push(c);
     await c.arm();
     vi.advanceTimersByTime(20);
 
     // First EXPAND to set pendingResizeErase.
     stdout.rows = 70;
     process.stdout.emit('resize');
-    // Let the EXPAND CPR time out so no CPR is in-flight.
-    vi.advanceTimersByTime(CPR_TIMEOUT_MS + 50);
+    // Complete EXPAND deterministically, independent of adaptive RTT history.
+    completeCpr(c, stdin);
 
     const internals = c as unknown as {
       pendingResizeErase: { top: number; bottom: number } | null;
@@ -214,6 +231,9 @@ describe('B4: SHRINK with no prior CPR: existing null contract preserved', () =>
     };
     // No CPR in-flight now.
     expect(internals.cprPending).toBe(false);
+    // The completed repaint consumed its snapshot. Seed a stale footprint so
+    // the nulling assertion proves SHRINK discards it rather than passing vacuously.
+    internals.pendingResizeErase = { top: 30, bottom: 49 };
 
     // SHRINK without a pending CPR: must null the snapshot (existing contract).
     stdout.rows = 40;
@@ -221,7 +241,7 @@ describe('B4: SHRINK with no prior CPR: existing null contract preserved', () =>
 
     expect(internals.pendingResizeErase, 'SHRINK without pending CPR must null snapshot').toBeNull();
 
-    vi.advanceTimersByTime(CPR_TIMEOUT_MS + 50);
+    completeCpr(c, stdin);
     c.disarm();
   });
 });
@@ -231,8 +251,6 @@ describe('B4: SHRINK with no prior CPR: existing null contract preserved', () =>
 // ---------------------------------------------------------------------------
 
 describe('B5: WIDTH-ONLY → SHRINK (CPR in-flight) with no snapshot: stays null', () => {
-  beforeEach(() => { __resetStdinClaimForTests(); vi.useFakeTimers(); });
-  afterEach(() => { vi.useRealTimers(); });
 
   it('pendingResizeErase stays null when WIDTH-ONLY produced no snapshot', async () => {
     const stdout = makeMockStdout();
@@ -240,6 +258,7 @@ describe('B5: WIDTH-ONLY → SHRINK (CPR in-flight) with no snapshot: stays null
     stdout.rows = 40;
     stdout.columns = 99;
     const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+    armedCompositors.push(c);
     await c.arm();
     // Do NOT advance timers — no frame has rendered yet.
 
@@ -271,7 +290,7 @@ describe('B5: WIDTH-ONLY → SHRINK (CPR in-flight) with no snapshot: stays null
 
     expect(internals.pendingResizeErase, 'snapshot must remain null').toBeNull();
 
-    vi.advanceTimersByTime(CPR_TIMEOUT_MS + 50);
+    completeCpr(c, stdin);
     c.disarm();
   });
 });
@@ -280,9 +299,55 @@ describe('B5: WIDTH-ONLY → SHRINK (CPR in-flight) with no snapshot: stays null
 // B6: WIDTH-ONLY → SHRINK → second SHRINK inside one burst: snapshot survives
 // ---------------------------------------------------------------------------
 
+describe('B7/B8: snapshot provenance is independent of CPR burst origin', () => {
+  it.each([
+    { origin: 'width-only', firstRows: 40, secondRows: 50, preserve: false },
+    { origin: 'expand', firstRows: 50, secondRows: 40, preserve: true },
+  ])('SHRINK uses latest snapshot after a $origin-originated mixed burst', async ({ firstRows, secondRows, preserve }) => {
+    const stdout = makeMockStdout();
+    const stdin = makeMockStdin();
+    stdout.rows = 40;
+    stdout.columns = 99;
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+    armedCompositors.push(c);
+    await c.arm();
+    vi.advanceTimersByTime(20);
+    const state = c as unknown as {
+      pendingResizeErase: { top: number; bottom: number; origin?: string } | null;
+      cprPending: boolean;
+      cprBurst: { widthOnlyOrigin: boolean } | null;
+      committedBand: string[];
+      committedBandTopRow: number;
+    };
+    // resetGeometry clears the live-frame top after the first event. Keep a
+    // committed-band footprint so the second event genuinely replaces it.
+    state.committedBand.push('committed row');
+    state.committedBandTopRow = 30;
+    stdout.columns = 49;
+    stdout.rows = firstRows;
+    process.stdout.emit('resize');
+    expect(state.cprPending).toBe(true);
+    const firstSnapshot = state.pendingResizeErase;
+    expect(firstSnapshot).not.toBeNull();
+    const burstOrigin = state.cprBurst?.widthOnlyOrigin;
+
+    stdout.rows = secondRows;
+    process.stdout.emit('resize');
+    const replacement = state.pendingResizeErase;
+    expect(replacement).not.toBe(firstSnapshot);
+    expect(replacement?.origin).toBe(preserve ? 'width-only' : 'expand');
+    expect(state.cprBurst?.widthOnlyOrigin).toBe(burstOrigin);
+
+    stdout.rows = 35;
+    process.stdout.emit('resize');
+    expect(state.cprPending).toBe(true);
+    if (preserve) expect(state.pendingResizeErase).toBe(replacement);
+    else expect(state.pendingResizeErase).toBeNull();
+    completeCpr(c, stdin);
+  });
+});
+
 describe('B6: WIDTH-ONLY → SHRINK → second SHRINK in same burst: snapshot NOT nulled', () => {
-  beforeEach(() => { __resetStdinClaimForTests(); vi.useFakeTimers(); });
-  afterEach(() => { vi.useRealTimers(); });
 
   it('pendingResizeErase survives a second SHRINK that arrives while CPR is in-flight', async () => {
     const stdout = makeMockStdout();
@@ -290,6 +355,7 @@ describe('B6: WIDTH-ONLY → SHRINK → second SHRINK in same burst: snapshot NO
     stdout.rows = 40;
     stdout.columns = 99;
     const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+    armedCompositors.push(c);
     await c.arm();
     // Allow the initial frame to render (establishes lastMeasuredFrameBottom > 0).
     vi.advanceTimersByTime(20);
@@ -325,7 +391,7 @@ describe('B6: WIDTH-ONLY → SHRINK → second SHRINK in same burst: snapshot NO
     expect(internals.pendingResizeErase, 'snapshot must survive second SHRINK in width-only burst').not.toBeNull();
 
     // Cleanup.
-    vi.advanceTimersByTime(CPR_TIMEOUT_MS + 50);
+    completeCpr(c, stdin);
     c.disarm();
   });
 });

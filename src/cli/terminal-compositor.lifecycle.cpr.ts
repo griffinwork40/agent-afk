@@ -189,9 +189,9 @@ export interface CprHost {
    *   requeryCt          — number of mid-burst re-queries issued (cap: CPR_MAX_REQUERY).
    *   widthOnlyOrigin    — true when the burst was seeded by a WIDTH-ONLY event
    *                         (rowDelta===0). Set once at burst creation, never
-   *                         mutated by accumulation. Used by the SHRINK branch
-   *                         to preserve pendingResizeErase regardless of how
-   *                         many SHRINKs follow within the same burst (#3283).
+   *                         mutated by accumulation. Snapshot provenance is
+   *                         tracked separately on pendingResizeErase because
+   *                         later events may replace the footprint (#3283).
    *
    * `null` when no burst is in progress.
    */
@@ -211,7 +211,7 @@ export interface CprHost {
   lastMeasuredFrameBottom: number;
   committedBandTopRow: number;
   committedBandBottomRow: number;
-  pendingResizeErase: { top: number; bottom: number } | null;
+  pendingResizeErase: { top: number; bottom: number; origin?: 'width-only' | 'expand' } | null;
   logUpdate: { topRow?: number; resetGeometry?: () => void } | null;
   anchorRow: number | undefined;
 
@@ -583,6 +583,7 @@ function applyScrollDelta(self: CprHost, delta: number, newRows: number): void {
   }
   if (self.pendingResizeErase) {
     self.pendingResizeErase = {
+      ...self.pendingResizeErase,
       top: clamp(self.pendingResizeErase.top),
       bottom: clamp(self.pendingResizeErase.bottom),
     };
