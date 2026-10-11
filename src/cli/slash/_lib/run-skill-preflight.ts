@@ -23,8 +23,7 @@
  * a skill from running).
  */
 
-import { runPreflight, getSkillPreflightDir } from '../preflight/index.js';
-import type { SkillInvocation } from '../preflight/index.js';
+import { runPreflight, getSkillPreflightDir, type SkillInvocation } from '../preflight/index.js';
 import { env } from '../../../config/env.js';
 import { errorMessage } from '../../../utils/errors.js';
 import type { SlashContext } from '../types.js';
@@ -48,8 +47,13 @@ export async function invokeSkillPreflight(
     source,
     capabilities: { compose: true, subagents: true },
   };
-  const sessionIdMaybe = ctx.session.current.sessionId;
-  const artifactDir = getSkillPreflightDir(sessionIdMaybe);
+  // `sessionId` may be undefined early in bootstrap (AgentSession exposes it
+  // post-init).  getSkillPreflightDir accepts undefined and falls back to a
+  // random unbound-<hex> token so concurrent REPLs never share a directory
+  // and no exploitable identifier leaks via the path. Passing undefined here
+  // is intentional — do not coerce to a string.
+  const sessionId: string | undefined = ctx.session.current.sessionId;
+  const artifactDir = getSkillPreflightDir(sessionId);
   const preflightResult = await runPreflight(
     inv,
     // Honor the session's effective cwd so preflights that shell out to
