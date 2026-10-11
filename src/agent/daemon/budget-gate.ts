@@ -80,7 +80,8 @@ export interface BudgetGateOptions {
  * in `resolveOpenAIAuth` is now default-ON. Any OpenAI-compatible daemon that
  * has a ChatGPT login in ~/.codex/auth.json (and no OPENAI_API_KEY) will
  * automatically resolve `chatgpt-oauth` and be graded on Codex windows here.
- * Set AFK_OPENAI_CHATGPT_OAUTH=0 to opt out of the fallback (see env.auth.ts).
+ * To opt out: set OPENAI_API_KEY (which wins over the OAuth tier) or remove
+ * ~/.codex/auth.json.
  *
  * @param chatgptSignedIn Injectable for tests; defaults to the provider's own
  *   auth resolution for `apiKey` (the daemon's configured key, if any).
