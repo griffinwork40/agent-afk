@@ -28,6 +28,7 @@ import { readTelemetryHistory } from '../agent/daemon/telemetry-reader.js';
 import { parseCwdCreate, parseCwdUpdate } from './routes.schedules.cwd.js';
 import { join } from 'node:path';
 import { isRecord } from '../utils/type-guards.js';
+import { parseTaskRetryFields } from '../agent/daemon/task-retry.js';
 
 const VALID_TRIGGERS = new Set(['cron', 'sessionstart', 'both']);
 const VALID_NOTIFY_ON = new Set(['failure', 'always', 'never']);
@@ -40,6 +41,26 @@ function isValidId(id: string): boolean {
 }
 
 // ---- helpers ---------------------------------------------------------------
+
+/**
+ * Validate an optional string field against a closed set of allowed values.
+ *
+ * When `value` is `undefined` the field was absent — always valid; returns
+ * `null` (no error). When present but not in `allowed`, returns an error
+ * message string. When present and valid, returns `null`.
+ *
+ * Used by `handleCreateSchedule` and `handleUpdateSchedule` to avoid
+ * copy-pasting the same trigger/notifyOn rejection block twice.
+ */
+function validateEnumField(
+  value: string | undefined,
+  allowed: ReadonlySet<string>,
+  fieldName: string,
+): string | null {
+  if (value === undefined) return null;
+  if (allowed.has(value)) return null;
+  return `${fieldName} must be one of: ${[...allowed].join(', ')}`;
+}
 
 function str(body: unknown, field: string): string | undefined {
   if (!isRecord(body)) return undefined;
@@ -92,18 +113,14 @@ export async function handleCreateSchedule(
 
   const trigger = str(body, 'trigger');
   const notifyOn = str(body, 'notifyOn');
-  if (trigger !== undefined && !VALID_TRIGGERS.has(trigger)) {
-    sendJson(res, 400, {
-      error: 'bad_request',
-      message: `trigger must be one of: ${[...VALID_TRIGGERS].join(', ')}`,
-    });
+  const triggerErr = validateEnumField(trigger, VALID_TRIGGERS, 'trigger');
+  if (triggerErr) {
+    sendJson(res, 400, { error: 'bad_request', message: triggerErr });
     return;
   }
-  if (notifyOn !== undefined && !VALID_NOTIFY_ON.has(notifyOn)) {
-    sendJson(res, 400, {
-      error: 'bad_request',
-      message: `notifyOn must be one of: ${[...VALID_NOTIFY_ON].join(', ')}`,
-    });
+  const notifyOnErr = validateEnumField(notifyOn, VALID_NOTIFY_ON, 'notifyOn');
+  if (notifyOnErr) {
+    sendJson(res, 400, { error: 'bad_request', message: notifyOnErr });
     return;
   }
   const enabled = bool(body, 'enabled') ?? true;
@@ -115,6 +132,11 @@ export async function handleCreateSchedule(
     return;
   }
   const resolvedCwd = cwdCreate.resolved;
+  const retry = parseTaskRetryFields(isRecord(body) ? body : {});
+  if (!retry.ok) {
+    sendJson(res, 400, { error: 'bad_request', message: retry.error });
+    return;
+  }
 
   const config = addSchedule({
     name,
@@ -123,6 +145,7 @@ export async function handleCreateSchedule(
     trigger: trigger as ScheduledTaskConfig['trigger'],
     notifyOn: notifyOn as ScheduledTaskConfig['notifyOn'],
     ...(resolvedCwd !== undefined ? { cwd: resolvedCwd } : {}),
+    ...retry.value,
     enabled,
   });
 
@@ -160,18 +183,14 @@ export async function handleUpdateSchedule(
   const executor = str(body, 'executor');
   const enabled = bool(body, 'enabled');
 
-  if (trigger !== undefined && !VALID_TRIGGERS.has(trigger)) {
-    sendJson(res, 400, {
-      error: 'bad_request',
-      message: `trigger must be one of: ${[...VALID_TRIGGERS].join(', ')}`,
-    });
+  const triggerErrU = validateEnumField(trigger, VALID_TRIGGERS, 'trigger');
+  if (triggerErrU) {
+    sendJson(res, 400, { error: 'bad_request', message: triggerErrU });
     return;
   }
-  if (notifyOn !== undefined && !VALID_NOTIFY_ON.has(notifyOn)) {
-    sendJson(res, 400, {
-      error: 'bad_request',
-      message: `notifyOn must be one of: ${[...VALID_NOTIFY_ON].join(', ')}`,
-    });
+  const notifyOnErrU = validateEnumField(notifyOn, VALID_NOTIFY_ON, 'notifyOn');
+  if (notifyOnErrU) {
+    sendJson(res, 400, { error: 'bad_request', message: notifyOnErrU });
     return;
   }
   if (executor !== undefined && executor !== 'agent' && executor !== 'shell') {
@@ -208,6 +227,11 @@ export async function handleUpdateSchedule(
     return;
   }
   const resolvedCwd = cwdUpdate.resolved;
+  const retry = parseTaskRetryFields(isRecord(body) ? body : {});
+  if (!retry.ok) {
+    sendJson(res, 400, { error: 'bad_request', message: retry.error });
+    return;
+  }
 
   const updated = updateSchedule(id, {
     ...(name !== undefined ? { name } : {}),
@@ -219,6 +243,7 @@ export async function handleUpdateSchedule(
     ...(notifyChat !== undefined ? { notifyChat } : {}),
     ...(enabled !== undefined ? { enabled } : {}),
     ...(resolvedCwd !== undefined ? { cwd: resolvedCwd } : {}),
+    ...retry.value,
   });
   if (!updated) {
     sendJson(res, 404, { error: 'not_found', message: `schedule ${id} not found` });

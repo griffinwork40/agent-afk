@@ -25,7 +25,18 @@ matters.
   countdowns, and data age, for Claude and Codex. A credential whose endpoint
   failed shows the reason; one with no signal is listed as `unknown`.
 - **`get_runtime_state`**: the `all` view carries a compact `usage` field
-  (`src/agent/awareness/runtime-source.ts`).
+  (`src/agent/awareness/runtime-source.ts`) and a `clock` field.
+- **Per-round `[vitals]` note** (`src/agent/providers/shared/vitals.ts`, gated
+  by `AFK_VITALS`, default on): one line at the tail of every tool-result turn
+  with local time, elapsed turn time, time left before the soft deadline,
+  context fill once it reaches 50%, and (root anthropic-direct sessions only)
+  the Claude binding window once it reaches 80%, with a burn-rate time-to-full
+  when the history ring supports one. Reads the ledger at most once a minute
+  and never the network. Subagents never see subscription usage. Placement:
+  a sibling text block in the Anthropic tool_result turn; appended to the last
+  `role:'tool'` message on OpenAI-compatible, where a separate user message
+  would be a compaction boundary and a `/rewind` target. Never the system
+  prompt (cache) and never `beforeNextRound` (single slot owned by steering).
 - **Fan-out notice** (`src/agent/tools/usage-notice.ts`): when an `agent` or
   `compose` dispatch starts from a Claude parent and the subscription is at
   warn or over, ONE line is prepended to the tool result and a `usage_notice`

@@ -19,6 +19,7 @@
 
 import type { AgentConfig } from '../../types/config-types.js';
 import type { RuntimeStateSource } from '../../awareness/index.js';
+import type { SkillExecutor } from '../../tools/skill-executor.js';
 import { formatEnvironmentFragment } from '../../awareness/index.js';
 import {
   resolveToolSystemPrompt,
@@ -33,8 +34,11 @@ import { normalizeSystemPromptOverlay } from '../shared/system-prompt.js';
  */
 export interface SystemPromptWiringArgs {
   config: AgentConfig;
-  /** Whether a skill executor is present (controls manifest inclusion). */
-  hasSkillExecutor: boolean;
+  /**
+   * The wired skill executor, when present. Controls manifest inclusion and
+   * provides `getManifestScope()` for plugin/allowlist scoping.
+   */
+  skillExecutor?: SkillExecutor;
   /** Whether a workspace store is present (controls workspace fragment). */
   hasWorkspaceStore: boolean;
   /** Whether the memory store is read-only. */
@@ -88,18 +92,21 @@ export interface SystemPromptWiringResult {
  */
 export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPromptWiringResult {
   const {
-    config, hasSkillExecutor, hasWorkspaceStore, readOnlyMemory, readOnlyState,
+    config, skillExecutor, hasWorkspaceStore, readOnlyMemory, readOnlyState,
     resolvedSessionId, surface, getCurrentCwd, runtimeStateSource,
   } = args;
 
   // --- Stable fragments (computed once; not cwd-dependent) ---
-  const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
+  const toolBase = resolveToolSystemPrompt(config.isSkillDispatch, config.isUnnamedWorker);
   const memoryPrompt = resolveMemorySystemPrompt(readOnlyMemory, readOnlyState);
   // Invariant: kept in lockstep with anthropic-direct's call site.
   // `excludeName` omits the executing skill's own entry for a skill-dispatch
   // fork (AgentConfig.skillDispatchName); `cwd` is forwarded so project skills
   // resolve against the session's dir, not the host process's (#876).
-  const manifest = hasSkillExecutor
+  // `pluginConfigs` and `skillAllowlist` from `getManifestScope()` scope the
+  // manifest to the executor's configured boundaries.
+  const manifestScope = skillExecutor?.getManifestScope?.();
+  const manifest = skillExecutor
     ? buildSkillManifest(undefined, {
         ...(typeof config.cwd === 'string' && config.cwd.length > 0
           ? { cwd: config.cwd }
@@ -107,6 +114,12 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
         ...(typeof config.skillDispatchName === 'string' &&
         config.skillDispatchName.length > 0
           ? { excludeName: config.skillDispatchName }
+          : {}),
+        ...(manifestScope?.pluginConfigs !== undefined
+          ? { pluginConfigs: manifestScope.pluginConfigs }
+          : {}),
+        ...(manifestScope?.skillAllowlist !== undefined
+          ? { skillAllowlist: manifestScope.skillAllowlist }
           : {}),
       })
     : '';
@@ -154,7 +167,10 @@ export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPro
    * distinguish "no arg" from "explicit undefined".
    */
   const assemble = (envFragment: string, resolvedBase: string | undefined): string => {
-    const parts = [toolBase];
+    // toolBase is '' for unnamed workers (TOOL_SYSTEM_PROMPT_BASE already embedded
+    // in their systemPrompt via UNNAMED_SUBAGENT_WORKER_PROMPT — #3359). Skip so
+    // the join does not produce a leading blank line.
+    const parts: string[] = toolBase.length > 0 ? [toolBase] : [];
     if (resolvedBase !== undefined && resolvedBase.length > 0) parts.push(resolvedBase);
     parts.push(memoryPrompt);
     const workspacePrompt = resolveWorkspaceSystemPrompt(hasWorkspaceStore);

@@ -168,12 +168,15 @@ describe('loadBrowserConfig — backend', () => {
     expect(cfg.backend).toBe('playwright');
   });
 
-  it('AFK_BROWSER_BACKEND=agent-browser → "agent-browser"', () => {
+  it('AFK_BROWSER_BACKEND=agent-browser → "playwright" (deprecated, warns)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const cfg = loadBrowserConfig({
       env: makeEnv({ AFK_BROWSER_BACKEND: 'agent-browser' }),
       readFileSync: noFile,
     });
-    expect(cfg.backend).toBe('agent-browser');
+    expect(cfg.backend).toBe('playwright');
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('deprecated'));
+    warnSpy.mockRestore();
   });
 
   it('AFK_BROWSER_BACKEND=auto → "auto"', () => {
@@ -190,7 +193,7 @@ describe('loadBrowserConfig — backend', () => {
         env: makeEnv({ AFK_BROWSER_BACKEND: 'cdp' }),
         readFileSync: noFile,
       }),
-    ).toThrow('AFK_BROWSER_BACKEND: must be "playwright", "agent-browser", or "auto", got: cdp');
+    ).toThrow('AFK_BROWSER_BACKEND: must be "playwright" or "auto", got: cdp');
   });
 
   it('unknown backend value "puppeteer" throws', () => {
@@ -199,7 +202,7 @@ describe('loadBrowserConfig — backend', () => {
         env: makeEnv({ AFK_BROWSER_BACKEND: 'puppeteer' }),
         readFileSync: noFile,
       }),
-    ).toThrow('AFK_BROWSER_BACKEND: must be "playwright", "agent-browser", or "auto", got: puppeteer');
+    ).toThrow('AFK_BROWSER_BACKEND: must be "playwright" or "auto", got: puppeteer');
   });
 });
 

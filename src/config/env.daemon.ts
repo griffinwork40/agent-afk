@@ -91,6 +91,7 @@ export const DAEMON_ENV_REGISTRY = [
     description: 'Port for the `afk web` browser surface. Defaults to 4141; falls back to an ephemeral port when taken. Overridden by --port.',
     type: 'number',
     required: false,
+    default: '4141',
     example: '4141',
     category: 'daemon',
   },
@@ -99,6 +100,7 @@ export const DAEMON_ENV_REGISTRY = [
     description: 'Bind address for the `afk web` browser surface. Defaults to 127.0.0.1. Unlike the daemon control surface, a non-loopback bind is REFUSED unless AFK_WEB_TOKEN (or --token) is also set, because this surface can submit prompts and approve tool use. Overridden by --host.',
     type: 'string',
     required: false,
+    default: '127.0.0.1',
     example: '127.0.0.1',
     category: 'daemon',
   },
@@ -187,7 +189,7 @@ export const DAEMON_ENV_REGISTRY = [
   // ── Routing / behavior ────────────────────────────────────────────────────
   {
     name: 'AFK_AUTO_ROUTING',
-    description: 'Auto-route bare slash inputs to matching skills. Applies to interactive, chat, and telegram surfaces.',
+    description: 'Auto-route bare slash inputs to matching skills. Applies to interactive, chat, and telegram surfaces. The afk web surface also inherits the interactive value (autoRouting.interactive), so this setting covers web sessions too.',
     type: 'boolean',
     required: false,
     example: 'true',

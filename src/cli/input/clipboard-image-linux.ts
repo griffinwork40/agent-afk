@@ -28,6 +28,7 @@ import { join } from 'path';
 import { env } from '../../config/env.js';
 import type { ImageAttachment } from './attachments.js';
 import { detectMediaType } from './detect-media-type.js';
+import { isEnoent, isErrnoCode } from '../../utils/errors.js';
 
 /**
  * When AFK_DEBUG_CLIPBOARD=1, structured diagnostic messages are written to
@@ -58,8 +59,7 @@ export function isCommandAvailable(cmd: string, args: string[]): Promise<boolean
   return new Promise<boolean>((resolve) => {
     const child = spawn(cmd, args, { stdio: ['ignore', 'ignore', 'ignore'] });
     child.on('error', (err) => {
-      const code = (err as NodeJS.ErrnoException).code;
-      resolve(code !== 'ENOENT' && code !== 'EACCES');
+      resolve(!isEnoent(err) && !isErrnoCode(err, 'EACCES'));
     });
     child.on('close', () => resolve(true));
   });

@@ -202,3 +202,100 @@ describe('parseJournalLine — malformed blocks (null, not throw)', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Malformed nested JournalResultPart elements inside tool_result.content.
+// These are the shapes that previously passed isBlock but threw in hydratePart
+// (e.g. content: [null] → hydratePart(null) → TypeError on .type).
+// ---------------------------------------------------------------------------
+
+describe('parseJournalLine — malformed tool_result nested parts (null, not throw)', () => {
+  it('rejects tool_result with content: [null] (null element in array)', () => {
+    // This is the exact shape from issue #3389 — passes Array.isArray but
+    // hydratePart(null) throws TypeError reading .type.
+    const line = appendLine({
+      role: 'user',
+      content: [{ type: 'tool_result', toolUseId: 'tu-x', content: [null] }],
+    });
+    expect(parseJournalLine(line)).toBeNull();
+  });
+
+  it('rejects tool_result with content: [42] (number element in array)', () => {
+    const line = appendLine({
+      role: 'user',
+      content: [{ type: 'tool_result', toolUseId: 'tu-x', content: [42] }],
+    });
+    expect(parseJournalLine(line)).toBeNull();
+  });
+
+  it('rejects tool_result with content: ["text"] (string element in array)', () => {
+    const line = appendLine({
+      role: 'user',
+      content: [{ type: 'tool_result', toolUseId: 'tu-x', content: ['text'] }],
+    });
+    expect(parseJournalLine(line)).toBeNull();
+  });
+
+  it('rejects tool_result with content: [{}] (object missing type field)', () => {
+    const line = appendLine({
+      role: 'user',
+      content: [{ type: 'tool_result', toolUseId: 'tu-x', content: [{}] }],
+    });
+    expect(parseJournalLine(line)).toBeNull();
+  });
+
+  it('rejects tool_result with content: [{ type: "text" }] (text part missing text field)', () => {
+    const line = appendLine({
+      role: 'user',
+      content: [{ type: 'tool_result', toolUseId: 'tu-x', content: [{ type: 'text' }] }],
+    });
+    expect(parseJournalLine(line)).toBeNull();
+  });
+
+  it('rejects tool_result with content: [{ type: "unknown_future" }] (unknown part type)', () => {
+    const line = appendLine({
+      role: 'user',
+      content: [{ type: 'tool_result', toolUseId: 'tu-x', content: [{ type: 'unknown_future' }] }],
+    });
+    expect(parseJournalLine(line)).toBeNull();
+  });
+
+  it('accepts tool_result with valid mixed text and image parts', () => {
+    const line = appendLine({
+      role: 'user',
+      content: [{
+        type: 'tool_result',
+        toolUseId: 'tu-x',
+        content: [
+          { type: 'text', text: 'result' },
+          { type: 'image', source: { kind: 'url', url: 'https://example.com/img.png' } },
+        ],
+      }],
+    });
+    expect(parseJournalLine(line)).not.toBeNull();
+  });
+
+  it('never throws for any malformed nested part — returns null each time', () => {
+    const badParts: unknown[] = [
+      [null],
+      [undefined],
+      [42],
+      ['string'],
+      [{}],
+      [{ type: 'text' }],
+      [{ type: 'text', text: 99 }],
+      [{ type: 'text_ref', ref: 'not-an-object', preview: 'p' }],
+      [{ type: 'image' }],
+      [{ type: 'document' }],
+      [{ type: 'future_part', data: 'x' }],
+    ];
+    for (const parts of badParts) {
+      const line = appendLine({
+        role: 'user',
+        content: [{ type: 'tool_result', toolUseId: 'tu-x', content: parts }],
+      });
+      expect(() => parseJournalLine(line)).not.toThrow();
+      expect(parseJournalLine(line)).toBeNull();
+    }
+  });
+});

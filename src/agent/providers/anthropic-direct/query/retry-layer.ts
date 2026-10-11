@@ -54,11 +54,12 @@ import { buildRequestHeaders } from '../auth.js';
 import { isExtendedCacheTtlActive } from '../cache-policy.js';
 import { loadClaudeCodeOauthToken, parseAccountIdentifier } from '../../../auth/keychain.js';
 import { setRefreshedClaudeCodeOauthToken } from '../../../auth/credential-resolver.js';
-import type { AnthropicClientLike, AuthMode, RunTurnInput } from '../types.js';
+import type { AuthMode, RunTurnInput } from '../types.js';
 import type { RetryTierContext, UsageLimitWaitResult } from './retry-context.js';
 import { turnWithAuthRetry } from './auth-retry-tier.js';
 import { turnWithUsageLimitRetry } from './usage-limit-tier.js';
 import { turnWithOverloadPause } from './overload-pause-tier.js';
+import { adoptFreshClient } from './live-client.js';
 
 // Re-exported so the historical `from './retry-layer.js'` import paths stay
 // valid after the #824 split. `cli/quota-footer.ts` drift-tests against
@@ -211,6 +212,7 @@ export class RetryLayer {
         return layer.tokenRefresher;
       },
       getClient: () => layer._client,
+      getClientToken: () => layer._clientToken,
       rotateHeaders: (runInput) => layer.rotateHeaders(runInput),
       forceClientRefresh: () => layer.forceClientRefresh(),
       getUsageLimitWait: () => layer.usageLimitWaitPromise,
@@ -332,18 +334,18 @@ export class RetryLayer {
     runInput: RunTurnInput,
     isClosed: () => boolean,
   ): AsyncGenerator<ProviderEvent, void, void> {
+    // Hoist tierContext() once: both the stale-credential refresh and the tier
+    // composition must see the same live-accessor snapshot, and constructing two
+    // separate context objects in one turn would diverge if any internal field
+    // mutates between the two calls (currently safe, but fragile to maintain).
+    const ctx = this.tierContext();
     if (this.credentialSnapshotStale) {
-      const refreshed = await this.forceClientRefresh();
-      if (refreshed) {
-        runInput.client = this._client as unknown as AnthropicClientLike;
-        runInput.headers = this.rotateHeaders(runInput);
-      }
+      await adoptFreshClient(ctx, runInput);
       this.credentialSnapshotStale = false;
     }
     // Tier composition, outermost first: overload pause → usage limit → auth.
     // Each tier receives the next as an explicit parameter, preserving the
     // nesting the single-file version expressed through direct method calls.
-    const ctx = this.tierContext();
     yield* turnWithOverloadPause(ctx, runInput, isClosed, (c, input, closed) =>
       turnWithUsageLimitRetry(c, input, closed, turnWithAuthRetry),
     );

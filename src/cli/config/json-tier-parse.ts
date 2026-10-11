@@ -19,13 +19,14 @@
 import { readFileSync, existsSync } from 'fs';
 import { parseToolsConfig } from './json-tier-parse.tools.js';
 import { parseDaemonBlock } from './json-tier-parse.daemon.js';
+import { parseTelegramBlock } from './json-tier-parse.telegram.js';
+import { parseInteractiveBlock } from './json-tier-parse.interactive.js';
 import { isValidModel } from '../../agent/session/model-resolution.js';
 import {
   parseModelsConfig,
   type ModelSlotBinding,
   type SlotName,
 } from '../../agent/session/model-slots.js';
-import { validateBranchPrefix, validateBaseRef } from '../commands/interactive/worktree.js';
 import type { RawHooksConfig } from '../../agent/hooks/config-loader.js';
 import { importFromConfigPaths, parseImportFromConfig } from '../../config/import-sources.js';
 import type { AutoRoutingConfig, CliConfig, ConfigFileSchema } from './types.js';
@@ -106,53 +107,8 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
     config.daemon = parseDaemonBlock(json.daemon);
   }
 
-  if (json.telegram && typeof json.telegram === 'object') {
-    const telegram: NonNullable<ConfigFileSchema['telegram']> = {};
-    const notify = json.telegram.notify;
-    if (notify && typeof notify === 'object') {
-      const parsed: NonNullable<NonNullable<ConfigFileSchema['telegram']>['notify']> = {};
-      if (notify.mode === 'primary' || notify.mode === 'broadcast' || notify.mode === 'custom') {
-        parsed.mode = notify.mode;
-      }
-      if (typeof notify.primaryChatId === 'number' && Number.isFinite(notify.primaryChatId)) {
-        parsed.primaryChatId = notify.primaryChatId;
-      }
-      if (Array.isArray(notify.targets)) {
-        const targets = notify.targets.filter(
-          (t): t is number => typeof t === 'number' && Number.isFinite(t),
-        );
-        if (targets.length > 0) parsed.targets = targets;
-      }
-      telegram.notify = parsed;
-    }
-    if (typeof json.telegram.verifyDone === 'boolean') {
-      telegram.verifyDone = json.telegram.verifyDone;
-    }
-    if (Array.isArray(json.telegram.tagOnlyChats)) {
-      const tagOnly = json.telegram.tagOnlyChats.filter(
-        (t): t is number => typeof t === 'number' && Number.isFinite(t),
-      );
-      if (tagOnly.length > 0) telegram.tagOnlyChats = tagOnly;
-    }
-    // chatAliases: name → chat-id map. Drop non-numeric, non-finite, and
-    // zero values (0 is the sentinel for "no chat" throughout routing).
-    if (
-      json.telegram.chatAliases &&
-      typeof json.telegram.chatAliases === 'object' &&
-      !Array.isArray(json.telegram.chatAliases)
-    ) {
-      const aliases: Record<string, number> = {};
-      for (const [name, id] of Object.entries(
-        json.telegram.chatAliases as Record<string, unknown>,
-      )) {
-        if (typeof id === 'number' && Number.isFinite(id) && id !== 0) {
-          aliases[name] = id;
-        }
-      }
-      if (Object.keys(aliases).length > 0) telegram.chatAliases = aliases;
-    }
-    config.telegram = telegram;
-  }
+  const telegramParsed = parseTelegramBlock(json.telegram);
+  if (telegramParsed !== undefined) config.telegram = telegramParsed;
 
   if (json.updatePolicy && ['notify', 'auto', 'off'].includes(json.updatePolicy)) {
     config.updatePolicy = json.updatePolicy as 'notify' | 'auto' | 'off';
@@ -216,59 +172,8 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
     }
   }
 
-  if (json.interactive && typeof json.interactive === 'object') {
-    const interactive: NonNullable<CliConfig['interactive']> = {};
-    if (typeof json.interactive.worktreeAutoname === 'boolean') {
-      interactive.worktreeAutoname = json.interactive.worktreeAutoname;
-    }
-    if (typeof json.interactive.worktreeBranchPrefix === 'string') {
-      // Validate at config-read time — the value is concatenated into
-      // a `git worktree add -b <prefix><slug>` invocation, so a value
-      // starting with `--` or containing shell metacharacters would
-      // turn an attacker-writable JSON file into a CLI-flag injection.
-      // Allowlist matches `AFK_WORKTREE_BRANCH_PREFIX` env handling.
-      interactive.worktreeBranchPrefix = validateBranchPrefix(
-        json.interactive.worktreeBranchPrefix,
-        `${configPath}#/interactive/worktreeBranchPrefix`,
-      );
-    }
-    if (
-      typeof json.interactive.worktreeBase === 'string' &&
-      json.interactive.worktreeBase.trim().length > 0
-    ) {
-      // Validate at config-read time — the value is spliced into
-      // `git fetch` / `git rev-parse` / `git worktree add` invocations,
-      // so a value starting with `-` could be parsed by git as a flag.
-      validateBaseRef(
-        json.interactive.worktreeBase,
-        `${configPath}#/interactive/worktreeBase`,
-      );
-      interactive.worktreeBase = json.interactive.worktreeBase;
-    }
-    if (
-      json.interactive.worktreeOnExit === 'ask' ||
-      json.interactive.worktreeOnExit === 'keep' ||
-      json.interactive.worktreeOnExit === 'remove'
-    ) {
-      interactive.worktreeOnExit = json.interactive.worktreeOnExit;
-    }
-    if (typeof json.interactive.suggestGhost === 'boolean') {
-      interactive.suggestGhost = json.interactive.suggestGhost;
-    }
-    // Display-only enum; silently ignore anything outside the allowlist
-    // rather than throwing — a stray value shouldn't fail config load.
-    if (
-      json.interactive.thinkingUi === 'summary' ||
-      json.interactive.thinkingUi === 'live' ||
-      json.interactive.thinkingUi === 'digest' ||
-      json.interactive.thinkingUi === 'off'
-    ) {
-      interactive.thinkingUi = json.interactive.thinkingUi;
-    }
-    if (Object.keys(interactive).length > 0) {
-      config.interactive = interactive;
-    }
-  }
+  const interactiveParsed = parseInteractiveBlock(json.interactive, configPath);
+  if (interactiveParsed !== undefined) config.interactive = interactiveParsed;
 
   // skills.hidden: string array of skill names to hide from the model-facing
   // manifest. Accepts bare names and plugin-qualified names. Validated

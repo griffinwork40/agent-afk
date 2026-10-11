@@ -22,6 +22,7 @@ import type { Surface } from '../../awareness/types.js';
 import type { TraceSink } from '../../trace/index.js';
 import type { InboundAttachmentReader } from '../../content/attachment-registry.js';
 import type { DelegationBudget } from '../delegation-budget.js';
+import type { HookRegistry } from '../../hooks.js';
 import type { QueuedNoteClaim } from '../subagent/queued-note.js';
 import type { PromotedSubagentInfo } from '../subagent/foreground-promotion.js';
 
@@ -202,6 +203,13 @@ export interface SubagentExecutorContext {
   // Delegation budget: shared by reference across the entire session tree.
   // See delegation-budget.ts. Opt-in: undefined when no budget env vars are set.
   traceWriter?: TraceSink; workspaceStore?: import('../../workspace/index.js').WorkspaceStore; delegationBudget?: DelegationBudget;
+  /**
+   * Hook registry for the depth-2+ child {@link SubagentManager} this executor
+   * builds (child-config.ts buildNestedChildManager), whose stub parent carries
+   * none. Forwarded to the recursive child executor so the chain holds to
+   * maxDepth. Undefined => nested managers resolve hooks as before.
+   */
+  hookRegistry?: HookRegistry;
   /**
    * Tool allowlist to propagate to grandchild providers when this executor
    * is itself a read-only skill's child. Forwarded into `childProviderFactory`

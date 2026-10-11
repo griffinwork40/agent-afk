@@ -89,6 +89,24 @@ flags: [--ghost-flag]
     expect(categories.has('pr-triage')).toBe(false);
   });
 
+  it('fallback walker: marketplace-cache category wins over a flat copy while flags union', async () => {
+    // Retained for the `/skills <name>` detail-card fallback (#3332). Walk
+    // order is cache → bundled → discovered roots; categories first-write-wins.
+    const cacheSkill = join(tmpRoot, '.afk', 'plugins', 'cache', 'mp', 'software-factory', 'skills', 'pr-triage');
+    mkdirSync(cacheSkill, { recursive: true });
+    writeFileSync(join(cacheSkill, 'SKILL.md'), `---
+name: pr-triage
+description: "Cache copy."
+category: "Review & verify"
+flags: [--cache-only]
+---
+`);
+    const { harvestDiscoveredPluginSkillMetadata } = await import('./plugin-skills/flags.js');
+    const { flags, categories } = harvestDiscoveredPluginSkillMetadata();
+    expect(categories.get('pr-triage')).toBe('Review & verify');
+    expect(flags.get('pr-triage')).toEqual(['--auto-merge', '--cache-only', '--prs', '--skip-fix']);
+  });
+
   it('skips SKILL.md files inside .git', async () => {
     const { harvestDiscoveredPluginSkillMetadata } = await import('./plugin-skills/flags.js');
     expect(harvestDiscoveredPluginSkillMetadata().flags.has('ghost')).toBe(false);

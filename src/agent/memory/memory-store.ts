@@ -32,7 +32,8 @@ import { getMemoryDir } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
 import { factsToResults, sanitizeFtsQuery } from './memory-store.fts.js';
 import { queryUnaccessed, queryAccessStats } from './memory-store.access.js';
-import { SCHEMA_VERSION, SCHEMA_SQL, runMigrations, enableWalMode } from './memory-store.schema.js';
+import { SCHEMA_VERSION, SCHEMA_SQL, runMigrations } from './memory-store.schema.js';
+import { configureSqliteConnection } from '../storage/sqlite.js';
 import { appendWAL, replayWAL as replayWALImpl } from './memory-store.wal.js';
 import { supersedeFact as supersededFactImpl } from './memory-store.facts.js';
 import {
@@ -108,10 +109,10 @@ export class MemoryStore {
     mkdirSync(join(this.dir, PROCEDURES_DIR), { recursive: true });
 
     this.db = new Database(join(this.dir, DB_FILE));
-    // busy_timeout makes ordinary contended reads/writes wait up to 5s rather
-    // than failing fast; set it first so it covers everything below.
-    this.db.pragma('busy_timeout = 5000');
-    enableWalMode(this.db);
+    // configureSqliteConnection sets busy_timeout (5 000 ms) BEFORE the WAL
+    // switch so it covers all the schema work below, and bounds the WAL
+    // switch's cold-open SQLITE_BUSY retry loop (agent/storage/sqlite.ts).
+    configureSqliteConnection(this.db);
 
     // Schema versioning guard — prevents silent corruption when the schema
     // evolves across agent-afk versions.

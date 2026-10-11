@@ -6,11 +6,9 @@
  * find the repo root. All such paths import `resolveRepoRoot` from here.
  */
 
-import { execFile as execFileCallback, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { dirname, isAbsolute, resolve as resolvePath } from 'node:path';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFileCallback);
+import { execFileAsync } from './exec-file.js';
 
 /**
  * Minimal shape expected by the injectable `execFile` option of

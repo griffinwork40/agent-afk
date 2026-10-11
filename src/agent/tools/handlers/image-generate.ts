@@ -37,6 +37,7 @@ import type { ToolResult } from '../../providers/shared/tool-result.js';
 import { resolveAndContain, assertWriteTargetContained } from './_cwd-utils.js';
 import { assertNotDenylisted } from './write-denylist.js';
 import { makeSessionCounter } from './_image-operation.js';
+import { h1ModelFetch } from '../../providers/shared/h1-fetch.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -193,7 +194,7 @@ async function resolveGenSavePath(
 // ---------------------------------------------------------------------------
 
 export function createImageGenerateHandler(
-  fetchFn: typeof globalThis.fetch = globalThis.fetch,
+  fetchFn: typeof globalThis.fetch = h1ModelFetch,
 ): ToolHandler {
   return async (
     input: unknown,

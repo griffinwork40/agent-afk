@@ -225,8 +225,8 @@ export function aggregateSubagentOutcomes(
     const { status, durationMs, stopReason } = outcome;
 
     // Ensure nested path exists in output map
-    (agg.byModelTypeDepth[model] ??= {});
-    (agg.byModelTypeDepth[model]![agentType] ??= {});
+    const byType = (agg.byModelTypeDepth[model] ??= {});
+    (byType[agentType] ??= {});
     const depthKey = String(depth);
 
     const bucketKey = `${model}\x00${agentType}\x00${depthKey}`;
@@ -262,9 +262,9 @@ export function aggregateSubagentOutcomes(
       p95Ms: percentile(sorted, 95),
     };
 
-    (agg.byModelTypeDepth[model] ??= {});
-    (agg.byModelTypeDepth[model]![agentType] ??= {});
-    agg.byModelTypeDepth[model]![agentType]![depthKey] = bucket;
+    const byTypeP3 = (agg.byModelTypeDepth[model] ??= {});
+    const byDepthP3 = (byTypeP3[agentType] ??= {});
+    byDepthP3[depthKey] = bucket;
   }
 
   return agg;
@@ -289,7 +289,11 @@ export interface SubagentOutcomeSummaryEntry {
   count: number;
   successRate: number;
   capHitRate: number;
+  /** Fraction of outcomes whose stop_reason contains `timeout` (0–1). */
+  timeoutRate: number;
   p50Ms: number;
+  /** p95 latency in ms across outcomes in this bucket. 0 when no data. */
+  p95Ms: number;
 }
 
 /**
@@ -316,7 +320,9 @@ export function buildSubagentOutcomeSummary(
           count: bucket.count,
           successRate: bucket.successRate,
           capHitRate: bucket.capHitRate,
+          timeoutRate: bucket.timeoutRate,
           p50Ms: bucket.p50Ms,
+          p95Ms: bucket.p95Ms,
         });
       }
     }
