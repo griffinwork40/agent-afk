@@ -384,7 +384,17 @@ export class AnthropicDirectProvider implements ModelProvider {
   query(args: ProviderQueryArgs): ProviderQuery {
     const ctx = this.queryContext();
     const setup = setUpQuerySession(ctx, args, PROVIDER_NAME, DEFAULT_MODEL);
-    return buildProviderQuery(ctx, args, setup);
+    const providerQuery = buildProviderQuery(ctx, args, setup);
+    // #3532: close the provider's SQLite handle (kv.db) when the session
+    // closes. AgentSession.close() calls providerQuery.close() but not
+    // provider.close(), so _stateStore leaks on Windows (EBUSY on rmSync).
+    const provider = this;
+    const origClose = providerQuery.close.bind(providerQuery);
+    providerQuery.close = (): void => {
+      origClose();
+      provider.close();
+    };
+    return providerQuery;
   }
 }
 

@@ -9,6 +9,7 @@
  */
 
 import type { Context } from 'telegraf';
+import { errorMessage } from '../../utils/errors.js';
 import { downloadTelegramFile } from '../media-download.js';
 // Re-export so existing callers that import from this module keep working.
 export type { LimitedReadResult } from '../response-body-reader.js';
@@ -89,7 +90,7 @@ export async function fetchAndClassifyPhoto(
   try {
     fileUrlRaw = await ctx.telegram.getFileLink(fileId);
   } catch (err) {
-    log(`Photo handling: getFileLink failed for chat ${chatId}:`, err instanceof Error ? err.message : String(err));
+    log(`Photo handling: getFileLink failed for chat ${chatId}:`, errorMessage(err));
     await ctx.reply('❌ Couldn\'t download the image. Please try resending.');
     return { ok: false };
   }

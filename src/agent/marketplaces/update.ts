@@ -151,9 +151,11 @@ function resolvePluginVersions(
   manifest: MarketplaceManifest,
 ): MarketplacePluginVersion[] {
   return manifest.plugins.map((p) => {
-    const version = isLocalPluginSource(p.source)
-      ? readPluginManifest(resolvePluginSourceDir(marketplaceDir, p.source)).version
-      : null;
+    const src = p.source;
+    const version =
+      typeof src === 'string' && isLocalPluginSource(src)
+        ? readPluginManifest(resolvePluginSourceDir(marketplaceDir, src)).version
+        : null;
     return { name: p.name, version };
   });
 }

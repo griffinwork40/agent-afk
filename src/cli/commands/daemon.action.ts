@@ -54,7 +54,6 @@ import type { TaskCompletionDetails, TelemetryRecord } from '../../agent/daemon/
 import { writeServiceStartupSidecar } from '../../service/version-skew.js';
 import { getVersion } from '../version.js';
 
-/** "Done"-verification probe for the daemon gate. Pure and total — never throws. */
 /** Write the startup sidecar; warn on failure. Best-effort — never throws. */
 function recordDaemonStartup(): void {
   if (!writeServiceStartupSidecar('daemon', getVersion())) {
@@ -62,6 +61,7 @@ function recordDaemonStartup(): void {
   }
 }
 
+/** "Done"-verification probe for the daemon gate. Pure and total — never throws. */
 const isDoneUnverified = ({
   responseText,
   successfulToolNames,

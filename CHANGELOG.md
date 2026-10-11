@@ -11,6 +11,25 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.309.0] - 2026-10-11
+
+### Added
+- treat system temp dir as safe for AFK writes; specific block reasons (#3533) (170bf9ef)
+
+### Fixed
+- blockquotes own one trailing newline and keep their bar across gaps (#3547) (a63ffaa8)
+- start nested lists in tight items on their own line (#3544) (c643e0e2)
+
+### Changed
+- bump vite from 6.4.3 to 8.3.3 in /dashboard (#3541) (38e1ab9c)
+- bump lucide-react from 1.52.0 to 1.53.0 in /dashboard in the dashboard-prod-minor-patch group (#3540) (eb47e9f9)
+- bump next from 16.3.8 to 16.4.0 in /website (#3536) (f94afd18)
+- bump actions/upload-artifact from 6 to 7 (#3539) (91f3c0cd)
+- bump actions/setup-node from 4.4.0 to 7.1.0 (#3538) (976928a8)
+- bump actions/checkout from 4.4.0 to 7.0.1 (#3537) (3bc9e5b7)
+- bump the prod-minor-patch group with 3 updates (#3542) (0228d146)
+- fix plugin install example — use real plugin, show marketplace flow (#3343) (2d579b46)
+
 ## [5.308.13] - 2026-10-11
 
 ### Added

@@ -59,15 +59,6 @@ export interface ServiceStartupSidecar {
  * (daemon CLI, telegram entry) immediately after the service is ready.
  *
  * Best-effort: write errors are swallowed so a filesystem hiccup never
- * takes down the service itself. Callers should not rely on a successful
- * write for correctness — the status command degrades gracefully when the
- * sidecar is absent.
- */
-/**
- * Write a startup sidecar for `name`. Called by service entrypoints
- * (daemon CLI, telegram entry) immediately after the service is ready.
- *
- * Best-effort: write errors are swallowed so a filesystem hiccup never
  * takes down the service itself. Returns `true` on success, `false` on
  * failure — callers may log the failure at their own severity level.
  */
