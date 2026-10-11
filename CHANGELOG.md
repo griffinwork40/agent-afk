@@ -11,6 +11,93 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.310.0] - 2026-10-11
+
+### Added
+- remove AFK_OPENAI_CHATGPT_OAUTH; ChatGPT OAuth is the last-resort tier (#3388) (23404057)
+
+## [5.309.5] - 2026-10-11
+
+### Fixed
+- posix-guard timeout, scheduler gate indentation, double applyAutoDisable, JSDoc corrections (#3526) (e8a88411)
+
+## [5.309.4] - 2026-10-11
+
+### Fixed
+- strengthen isIndexLine guard and fix isError assertion (#3527) (a253e5f2)
+- dedupeAndSort simplification, double-bind guard, armTimeout-after-dispose test, JSDoc fix (#3523) (efae12ce)
+
+### Changed
+- extend skip-audit table with 4 additional non-JSONL-parse sites (#3528) (ae5ab60d)
+- retire disposeRenderer from funcsize baseline (#3525) (c2a497c5)
+- extract getScopeAbortMessage to utils/abort (#3529) (b63407ba)
+
+## [5.309.3] - 2026-10-11
+
+### Fixed
+- never close caller-injected stores in provider.close() (#3559) (c08635e2)
+
+## [5.309.2] - 2026-10-11
+
+### Fixed
+- advisory findings from 2026-10-11 PR triage batch (#3552) (157854cd)
+
+### Changed
+- raise coverage on src/cli/commands/browser.ts (16% → 98%) (#3557) (21c749fa)
+
+## [5.309.1] - 2026-10-11
+
+### Added
+- support object-valued source entries in marketplace manifests (#3551) (a29885d3)
+- make cron-task elicitations visible via handoff + notifyOn (#3531) (0410547f)
+
+### Fixed
+- close provider SQLite handle (kv.db) when session closes (#3550) (a7f30981)
+
+### Changed
+- bump the fumadocs group across 1 directory with 2 updates (#3535) (5aca60fc)
+- bump typescript from 5.9.3 to 7.0.2 in /dashboard (#3543) (b2181af7)
+- adopt atomic-write helper at 4 hand-rolled tmp+rename sites (#3530) (1328d226)
+- adopt errorMessage helper at 4 telegram sites (#3548) (79bbbe49)
+
+## [5.309.0] - 2026-10-11
+
+### Added
+- treat system temp dir as safe for AFK writes; specific block reasons (#3533) (170bf9ef)
+
+### Fixed
+- blockquotes own one trailing newline and keep their bar across gaps (#3547) (a63ffaa8)
+- start nested lists in tight items on their own line (#3544) (c643e0e2)
+
+### Changed
+- bump vite from 6.4.3 to 8.3.3 in /dashboard (#3541) (38e1ab9c)
+- bump lucide-react from 1.52.0 to 1.53.0 in /dashboard in the dashboard-prod-minor-patch group (#3540) (eb47e9f9)
+- bump next from 16.3.8 to 16.4.0 in /website (#3536) (f94afd18)
+- bump actions/upload-artifact from 6 to 7 (#3539) (91f3c0cd)
+- bump actions/setup-node from 4.4.0 to 7.1.0 (#3538) (976928a8)
+- bump actions/checkout from 4.4.0 to 7.0.1 (#3537) (3bc9e5b7)
+- bump the prod-minor-patch group with 3 updates (#3542) (0228d146)
+- fix plugin install example — use real plugin, show marketplace flow (#3343) (2d579b46)
+
+## [5.308.13] - 2026-10-11
+
+### Added
+- service status shows running version and warns on skew (#3313) (72b5dd8c)
+
+### Fixed
+- model_complete accepts empty prompt when input_path is set (#3344) (60bbe3e2)
+- advisory findings from 2026-10-08 pr-triage batch (#3347) (e17bf566)
+- render ledgerTruncated in insights HTML; remove dispatcher double-gate; export LEDGER_READ_LIMIT (#3374) (cd35a29e)
+
+## [5.308.12] - 2026-10-11
+
+### Fixed
+- fix --days 0 parsing, ledger cap warning, hidden-cluster count, path sanitization (#3373) (53aaf569)
+- add unnamed-worker empty-guard test + fix JSDoc arg reference (#3391) (b13a1f86)
+
+### Changed
+- extract downloadTelegramFile into media-download.ts (#3306) (f0e3f9d6)
+
 ## [5.308.11] - 2026-10-11
 
 ### Changed

@@ -201,7 +201,7 @@ export class SessionOwner {
   /**
    * Queue a prompt for an owned session.
    *
-   * Contract: resolves once the turn has been ACCEPTED, not once it completes.
+   * Contract: returns once the turn has been ACCEPTED, not once it completes.
    * Awaiting completion would hold the HTTP response open for the entire turn —
    * minutes, for a long agent run — while the browser is already receiving that
    * turn's output over SSE. Turns are chained per session so two rapid posts

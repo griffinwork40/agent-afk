@@ -102,8 +102,8 @@ export function applySlotCredentials(config: SlotCredentialTarget, bindings?: Mo
           : providerForModel(config.model, bindings ? { slots: bindings } : undefined);
 
   // A slot bound `provider: 'chatgpt-oauth'` selects the ChatGPT-subscription
-  // token for THIS tier regardless of OPENAI_API_KEY / the global
-  // AFK_OPENAI_CHATGPT_OAUTH flag — see resolveOpenAIAuth(..., forceChatgptOAuth).
+  // token for THIS tier ahead of OPENAI_API_KEY / an explicit key — see
+  // resolveOpenAIAuth(..., forceChatgptOAuth).
   // Written unconditionally (set AND clear): `resolveInner` spreads a shared
   // baseConfig for every /model target, so a stale `forceChatgptOAuth: true`
   // from the startup slot must be cleared when switching to a non-chatgpt slot,

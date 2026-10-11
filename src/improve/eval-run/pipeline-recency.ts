@@ -129,10 +129,15 @@ export function resolveStalenessThreshold(): number {
  * `checkEvalPipelineRecency` function.
  */
 export function parseLatestTimestamp(raw: string): string | null {
+  // Discriminant check: require `timestamp` to be a string (not just present).
+  // A plain `{ timestamp: 42 }` has the key but is not a valid IndexLine; the
+  // `isEffectRecord` pattern (check typeof, not just 'in') prevents such
+  // objects from passing the guard and being iterated as real index lines.
   const isIndexLine = (x: unknown): x is IndexLine =>
     x !== null &&
     typeof x === 'object' &&
-    ('timestamp' in (x as Record<string, unknown>) || 'event' in (x as Record<string, unknown>));
+    (typeof (x as Record<string, unknown>)['timestamp'] === 'string' ||
+      typeof (x as Record<string, unknown>)['event'] === 'string');
   const lines = parseJsonlLines<IndexLine>(raw, { guard: isIndexLine });
   let latest: string | null = null;
   for (const parsed of lines) {

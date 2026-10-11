@@ -55,7 +55,7 @@ Codex imports use `CODEX_HOME` when set (otherwise `~/.codex`) and also discover
 
 ## What only afk does
 
-**`/whatif` behavioural impact predictor.** Before changing a prompt, model, skill, or memory rule, predict how the agent's behaviour will shift without touching your real config. Run `afk whatif --append "Always ask first." --verify` and the engine diffs the system prompts, predicts labelled behaviour shifts, then optionally verifies empirically by running sandboxed episodes and measuring rates. No real writes happen during the run. Source: `src/whatif/`, `docs/whatif.md`.
+**`afk whatif` behavioural impact predictor.** Before changing a prompt, model, skill, or memory rule, predict how the agent's behaviour will shift without touching your real config. Run `afk whatif --append "Always ask a clarifying question before using tools." --verify` and the engine diffs the system prompts, predicts labelled behaviour shifts, then optionally verifies empirically by running sandboxed episodes and measuring rates. No real writes happen during the run. Source: `src/whatif/`, `docs/whatif.md`.
 
 **Jev calibrated judgment.** Jev is an external cross-family judge you configure as an MCP server in `~/.afk/config/mcp.json`. When present, `afk whatif --judge auto` selects Jev to grade verification episodes; it returns calibrated probabilities and removes Anthropic self-preference bias in verdicts. Falls back to Claude when Jev is not configured. Use `--judge claude` to keep all episode data within Anthropic. Source: `src/whatif/judge/jev-connect.ts`, `docs/whatif.md`.
 

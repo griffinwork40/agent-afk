@@ -9,7 +9,11 @@
  */
 
 import type { Context } from 'telegraf';
+import { errorMessage } from '../../utils/errors.js';
 import { downloadTelegramFile } from '../media-download.js';
+// Re-export so existing callers that import from this module keep working.
+export type { LimitedReadResult } from '../response-body-reader.js';
+export { readResponseBytesWithLimit } from '../response-body-reader.js';
 
 /**
  * Inspect magic bytes at the start of a buffer and return the corresponding
@@ -51,44 +55,6 @@ export function sniffMimeType(bytes: Buffer): 'image/jpeg' | 'image/png' | 'imag
   return null;
 }
 
-export type LimitedReadResult =
-  | { status: 'ok'; bytes: Buffer }
-  | { status: 'too-large'; bytesRead: number }
-  | { status: 'missing-body' };
-
-export async function readResponseBytesWithLimit(response: Response, maxBytes: number): Promise<LimitedReadResult> {
-  const contentLength = response.headers.get('content-length');
-  if (contentLength != null) {
-    const expectedBytes = Number(contentLength);
-    if (Number.isFinite(expectedBytes) && expectedBytes > maxBytes) {
-      return { status: 'too-large', bytesRead: expectedBytes };
-    }
-  }
-
-  const body = response.body;
-  if (!body) return { status: 'missing-body' };
-
-  const reader = body.getReader();
-  const chunks: Buffer[] = [];
-  let total = 0;
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel().catch(() => {});
-        return { status: 'too-large', bytesRead: total };
-      }
-      chunks.push(Buffer.from(value));
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  return { status: 'ok', bytes: Buffer.concat(chunks, total) };
-}
 
 /** Allowed image MIME types for Anthropic's vision API. */
 export const ALLOWED_PHOTO_MIME = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] as const;
@@ -124,13 +90,18 @@ export async function fetchAndClassifyPhoto(
   try {
     fileUrlRaw = await ctx.telegram.getFileLink(fileId);
   } catch (err) {
-    log(`Photo handling: getFileLink failed for chat ${chatId}:`, err instanceof Error ? err.message : String(err));
+    log(`Photo handling: getFileLink failed for chat ${chatId}:`, errorMessage(err));
     await ctx.reply('❌ Couldn\'t download the image. Please try resending.');
     return { ok: false };
   }
   const dlResult = await downloadTelegramFile(fileUrlRaw, { maxBytes: MAX_PHOTO_BYTES });
 
   switch (dlResult.status) {
+    case 'malformed-url':
+      log(`Photo handling: malformed file URL returned by getFileLink for chat ${chatId}`);
+      await ctx.reply('❌ Couldn\'t download the image. Please try resending.');
+      return { ok: false };
+
     case 'ssrf-rejected':
       // Do NOT log url.href -- it contains the live bot token in the path segment.
       log(`Photo handling: unexpected file URL (protocol=${dlResult.protocol} hostname=${dlResult.hostname}) rejected for chat ${chatId}`);

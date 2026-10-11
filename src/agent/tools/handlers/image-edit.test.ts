@@ -144,11 +144,10 @@ describe('image_edit handler', () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
-  it('returns no-usable-auth error when OAuth token exists but AFK_OPENAI_CHATGPT_OAUTH flag is off', async () => {
-    // When a Codex auth.json token is present but the global opt-in flag is
-    // unset, resolveOpenAIAuth returns source:'no-usable-auth-codex-oauth'.
-    // The handler must surface an actionable error — not forward the token —
-    // because AFK_OPENAI_CHATGPT_OAUTH was deliberately NOT set.
+  it('returns no-usable-auth error when a ChatGPT login has no access token', async () => {
+    // A ChatGPT-mode ~/.codex/auth.json with no access token makes
+    // resolveOpenAIAuth return source:'no-usable-auth-codex-oauth'. The
+    // handler must surface an actionable error — not call the endpoint.
     vi.stubEnv('AFK_IMAGE_API_KEY', '');
     mockResolveAuth.mockReturnValue({
       apiKey: null,
@@ -437,7 +436,7 @@ describe('image_edit handler', () => {
     const form: UndiciFormData = opts.body as UndiciFormData;
     expect(form.get('output_format')).toBe('jpeg');
     // The saved file must also carry the matching extension (#3429).
-    expect(result.isError).toBeUndefined();
+    expect(result.isError).toBeFalsy();
     const meta = JSON.parse(result.content);
     expect(meta.path).toMatch(/\.jpeg$/);
   });

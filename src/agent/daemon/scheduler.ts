@@ -142,6 +142,8 @@ export interface SchedulerOptions {
   budgetGate?: () => Promise<import('./budget-gate.js').BudgetGateResult>;
   /** Override the retry backoff sleep (tests). Defaults to `sleepWithAbort`. */
   retrySleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** Override the handoffs directory (tests). Forwarded to the cron elicitation handler. */
+  handoffsDir?: string;
 }
 
 export type TelemetryTrigger = 'cron' | 'sessionstart' | 'pull';
@@ -447,20 +449,22 @@ export class CronScheduler {
       return record;
     }
     this.inFlightTasks.set(task.taskId, this.now());
+    // Hoisted so the finally block can guard on kind:'pass' without a
+    // second applyAutoDisable call when 'expired' already ran it above.
+    let gateResult: ReturnType<typeof evaluateRunAtGate> | undefined;
     try {
-
-    // ── expiresAt / runAt gate ───────────────────────────────────────────────
-    // Delegates to scheduler.runat-gate.ts; see that module for the full spec.
-    const gateResult = evaluateRunAtGate(task, trigger, this.now());
-    if (gateResult.kind === 'expired') {
-      this.writeTelemetry(gateResult.record, task);
-      applyAutoDisable(task.taskId, (id) => this.unregister(id));
-      return gateResult.record;
-    }
-    if (gateResult.kind === 'not-yet') {
-      // Silent skip — no telemetry write; pre-fire polling is noise-free.
-      return gateResult.record;
-    }
+      // ── expiresAt / runAt gate ───────────────────────────────────────────────
+      // Delegates to scheduler.runat-gate.ts; see that module for the full spec.
+      gateResult = evaluateRunAtGate(task, trigger, this.now());
+      if (gateResult.kind === 'expired') {
+        this.writeTelemetry(gateResult.record, task);
+        applyAutoDisable(task.taskId, (id) => this.unregister(id));
+        return gateResult.record;
+      }
+      if (gateResult.kind === 'not-yet') {
+        // Silent skip — no telemetry write; pre-fire polling is noise-free.
+        return gateResult.record;
+      }
 
     // Resolve executor early so the cwd guard can skip builtin tasks (which
     // ignore cwd entirely and would produce spurious errors if the dir vanishes).
@@ -553,6 +557,7 @@ export class CronScheduler {
         // tasks are synthetic (never in the registry) and never retry.
         isCancelled: () => trigger !== 'pull' && this.registry.get(task.taskId)?.task !== task,
         ...(this.options.retrySleep !== undefined ? { retrySleep: this.options.retrySleep } : {}),
+        ...(this.options.handoffsDir !== undefined ? { handoffsDir: this.options.handoffsDir } : {}),
       },
       task,
       trigger,
@@ -563,9 +568,10 @@ export class CronScheduler {
       // this task, so the next overlap will alert again.
       this.overlapAlerts.clear(task.taskId);
       // runAt one-shot: auto-disable + unregister after the run fires.
-      // The gate already confirmed runAt has been reached (kind:'pass'); just
-      // check presence of the field to identify this as a one-shot task.
-      if (task.runAt !== undefined) {
+      // Guard on kind:'pass' so we don't call applyAutoDisable a second time
+      // when the 'expired' branch above already called it and returned early
+      // (the return exits the try body but the finally still runs).
+      if (task.runAt !== undefined && gateResult?.kind === 'pass') {
         applyAutoDisable(task.taskId, (id) => this.unregister(id));
       }
     }

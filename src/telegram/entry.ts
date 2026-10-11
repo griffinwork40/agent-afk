@@ -35,6 +35,7 @@ import { planTelegramCredential, applyTelegramCredentialPlan } from './credentia
 import { preloadClaudeKeychainOAuth, loadAnthropicCredential } from '../agent/auth/credential-resolver.js';
 import { readDiskVersion, UNKNOWN_VERSION } from './daemon-version.js';
 import { createTelegramSessionFactory } from './create-session.js';
+import { writeServiceStartupSidecar } from '../service/version-skew.js';
 import { startStatsTicker } from './stats-ticker.js';
 import { pushIfConfigured } from './push.js';
 import { installCrashNotifier } from '../utils/crash-notifier.js';
@@ -67,6 +68,20 @@ export function _resetCrashHandlersForTest(): void {
 export function installCrashHandlers(): void {
   if (_crashHandle !== undefined) return;
   _crashHandle = installCrashNotifier('telegram', pushIfConfigured);
+}
+
+/**
+ * Write the telegram startup sidecar; warn on failure. Best-effort — never throws.
+ *
+ * Uses daemonVersion (from disk via readDiskVersion) rather than getVersion()
+ * so the recorded value is consistent with the drift watchdog. Both resolve to
+ * the same file today, but the intent is "version this binary was installed as",
+ * not "version resolved at import time".
+ */
+function recordTelegramStartup(daemonVersion: string): void {
+  if (!writeServiceStartupSidecar('telegram', daemonVersion)) {
+    console.warn('warn: failed to write service startup sidecar — `afk service status` may not show the running version');
+  }
 }
 
 export async function main(): Promise<void> {
@@ -232,6 +247,13 @@ export async function main(): Promise<void> {
 
   try {
     await bot.start();
+
+    // Write the startup sidecar so `afk service status` can surface the
+    // running version and warn on version skew. Skip when the version is
+    // unknown — a sidecar with UNKNOWN_VERSION would produce a spurious
+    // "version skew" warning rather than the intended "version unknown" path.
+    // See recordTelegramStartup() above for the daemonVersion rationale.
+    if (daemonVersion !== UNKNOWN_VERSION) recordTelegramStartup(daemonVersion);
 
     console.log('✅ Bot started successfully!');
     console.log('\n📝 Slash commands (Agent SDK):');

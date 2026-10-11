@@ -133,6 +133,26 @@ describe('parseLatestTimestamp', () => {
     ].join('\n');
     expect(parseLatestTimestamp(raw)).toBe('2026-09-10T00:00:00.000Z');
   });
+
+  it('rejects lines where timestamp is a non-string (discriminant guard, #3460)', () => {
+    // { timestamp: 42 } has the key but fails the typeof === 'string' check;
+    // the guard must exclude it so the valid line is still picked up.
+    const raw = [
+      JSON.stringify({ timestamp: 42, event: 'created' }),
+      JSON.stringify({ timestamp: '2026-09-15T00:00:00.000Z', event: 'created' }),
+    ].join('\n');
+    expect(parseLatestTimestamp(raw)).toBe('2026-09-15T00:00:00.000Z');
+  });
+
+  it('rejects lines where event is a non-string (discriminant guard, #3460)', () => {
+    // { event: true } has the key but fails typeof === 'string'; only lines
+    // with a string timestamp should contribute.
+    const raw = [
+      JSON.stringify({ event: true }),
+      JSON.stringify({ timestamp: '2026-09-20T00:00:00.000Z', event: 'created' }),
+    ].join('\n');
+    expect(parseLatestTimestamp(raw)).toBe('2026-09-20T00:00:00.000Z');
+  });
 });
 
 // ---------------------------------------------------------------------------

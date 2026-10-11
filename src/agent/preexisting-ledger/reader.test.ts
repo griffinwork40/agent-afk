@@ -29,7 +29,7 @@ vi.mock('./paths.js', () => ({
 import { getPreexistingLedgerPath } from './paths.js';
 const mockLedgerPath = vi.mocked(getPreexistingLedgerPath);
 
-import { readLedgerRecords, clusterLedgerRecords } from './reader.js';
+import { readLedgerRecords, clusterLedgerRecords, LEDGER_READ_LIMIT } from './reader.js';
 
 function makeTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'afk-reader-test-'));
@@ -127,7 +127,6 @@ describe('readLedgerRecords', () => {
     const dir = makeTempDir();
     const ledgerPath = join(dir, 'preexisting-ledger.jsonl');
     // Write >1 MB of valid records so the reader must tail-cap.
-    const LEDGER_READ_LIMIT = 1_048_576;
     const line = record({ sessionId: 'sess-trunc' }) + '\n';
     const repetitions = Math.ceil((LEDGER_READ_LIMIT + line.length + 1) / line.length);
     writeFileSync(ledgerPath, line.repeat(repetitions), 'utf8');

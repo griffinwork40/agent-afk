@@ -59,9 +59,24 @@ afterEach(() => {
 });
 
 describe('parseModelCompleteInput', () => {
-  it('rejects a missing or blank prompt', () => {
+  it('rejects a missing or blank prompt when input_path is also absent', () => {
     expect(parseModelCompleteInput({})).toMatchObject({ isError: true });
     expect(parseModelCompleteInput({ prompt: '   ' })).toMatchObject({ isError: true });
+    expect(parseModelCompleteInput({ prompt: '' })).toMatchObject({ isError: true });
+  });
+
+  it('accepts an empty or absent prompt when input_path is set', () => {
+    expect(parseModelCompleteInput({ input_path: 'file.txt' })).toMatchObject({
+      prompt: '',
+      inputPath: 'file.txt',
+    });
+    expect(parseModelCompleteInput({ prompt: '', input_path: 'file.txt' })).toMatchObject({
+      prompt: '',
+      inputPath: 'file.txt',
+    });
+    expect(parseModelCompleteInput({ prompt: '   ', input_path: 'file.txt' })).toMatchObject({
+      inputPath: 'file.txt',
+    });
   });
 
   it('defaults model to AFK_MODEL and max_tokens to 4096', () => {
@@ -79,6 +94,24 @@ describe('parseModelCompleteInput', () => {
 
   it('rejects the auto routing sentinel', () => {
     expect(parseModelCompleteInput({ prompt: 'x', model: 'auto' })).toMatchObject({ isError: true });
+  });
+
+  it('rejects a non-string prompt value even when input_path is absent', () => {
+    expect(parseModelCompleteInput({ prompt: 42 })).toMatchObject({ isError: true });
+    expect(parseModelCompleteInput({ prompt: null })).toMatchObject({ isError: true });
+    expect(parseModelCompleteInput({ prompt: {} })).toMatchObject({ isError: true });
+  });
+
+  it('rejects a non-string prompt value even when input_path is present', () => {
+    expect(parseModelCompleteInput({ prompt: 42, input_path: 'file.txt' })).toMatchObject({ isError: true });
+    expect(parseModelCompleteInput({ prompt: null, input_path: 'file.txt' })).toMatchObject({ isError: true });
+    expect(parseModelCompleteInput({ prompt: {}, input_path: 'file.txt' })).toMatchObject({ isError: true });
+  });
+
+  it('pins the error message wording when input_path is not set', () => {
+    const result = parseModelCompleteInput({ prompt: '' });
+    expect(result).toMatchObject({ isError: true });
+    expect((result as { content: string }).content).toContain('when `input_path` is not set');
   });
 });
 
@@ -161,6 +194,19 @@ describe('model_complete handler', () => {
     expect(user.startsWith('summarize this\n\n<input path="notes.txt">')).toBe(true);
     expect(user).not.toContain(tmp);
     expect(user).toContain('line one\nline two\n</input>');
+  });
+
+  it('accepts an empty prompt when input_path is set (file content is the sole input)', async () => {
+    writeFileSync(path.join(tmp, 'data.txt'), 'file content only');
+    const res = await createModelCompleteHandler(tmp)(
+      { input_path: 'data.txt' },
+      signal(),
+      { resolveBase: tmp },
+    );
+    expect(res.isError).toBeUndefined();
+    expect(res.content).toContain('the reply');
+    const user = routedOneShotWithStop.mock.calls[0]?.[0].user as string;
+    expect(user).toBe('<input path="data.txt">\nfile content only\n</input>');
   });
 
   it('enforces read-root containment on input_path', async () => {

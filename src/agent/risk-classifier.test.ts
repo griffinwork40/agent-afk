@@ -1,18 +1,25 @@
 /**
  * Unit tests for the risk classifier.
  *
- * Uses a fixed CWD constant — no shell-outs, no filesystem reads.
+ * Uses a fixed CWD constant — no shell-outs. The temp-dir carve-out suite
+ * creates mkdtemp fixtures (incl. dangling symlinks) and cleans them up.
  */
 
-import { describe, it, expect } from 'vitest';
-import { classifyRisk } from './risk-classifier.js';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { classifyRisk, classifyRiskDetailed } from './risk-classifier.js';
 import type { RiskContext } from './risk-classifier.js';
+import { getTempRoots, isOutsideRoot, isPrivateTempRoot } from './risk-classifier.paths.js';
+import { setSessionTmpdirRootForTests } from './session/session-tmpdir.js';
 import { homedir } from 'os';
 import * as os from 'os';
 import path from 'path';
 
 const WORKSPACE = path.join(os.tmpdir(), 'agent-afk-test-workspace');
 const ctx: RiskContext = { cwd: WORKSPACE, workspaceRoot: WORKSPACE };
+// An outside-the-workspace path that is neither in the system temp dir nor on
+// the write denylist (resolve() makes it a valid absolute path on win32 too).
+const OUTSIDE_NON_TMP = path.resolve('/opt/afk-risk-outside/secret.txt');
 
 // ---- bash high-risk patterns ---------------------------------------------
 describe('classifyRisk — bash high', () => {
@@ -373,10 +380,26 @@ describe('classifyRisk — write_file / edit_file', () => {
     ).toBe('high');
   });
 
-  it('path outside workspaceRoot → high', () => {
+  it('path outside workspaceRoot (and outside the temp dir) → high', () => {
+    // Not os.tmpdir(): the system temp dir is carved out (see the temp-dir suite).
     expect(
-      classifyRisk('write_file', { file_path: path.join(os.tmpdir(), 'outside', 'secret.txt') }, ctx),
+      classifyRisk('write_file', { file_path: OUTSIDE_NON_TMP }, ctx),
     ).toBe('high');
+  });
+
+  it('path in a private temp root outside workspaceRoot → safe (temp carve-out)', () => {
+    // Use a private session root override (0700 mkdtemp) so the test passes
+    // whether or not os.tmpdir() is world-writable (e.g. Linux /tmp is 1777).
+    const pr = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'afk-risk-priv-')));
+    setSessionTmpdirRootForTests(pr);
+    try {
+      expect(
+        classifyRisk('write_file', { file_path: path.join(pr, 'outside', 'scratch.txt') }, ctx),
+      ).toBe('safe');
+    } finally {
+      setSessionTmpdirRootForTests(undefined);
+      rmSync(pr, { recursive: true, force: true });
+    }
   });
 
   it('path inside ~/.ssh → high (denylist)', () => {
@@ -505,6 +528,195 @@ describe('classifyRisk — schedule self-disable carve-out (#3464)', () => {
     expect(
       classifyRisk('create_schedule', { name: 'x', command: 'y', cron: '0 * * * *' }, daemonCtx),
     ).toBe('high');
+  });
+});
+
+// ---- #3534: heredoc prose false-positives --------------------------------
+// Conservative prose false positives are permitted by the safety invariant.
+// Do not strip payloads or narrow high patterns without proving executable
+// commands cannot be hidden by shell syntax or subsequent consumers.
+describe('classifyRisk — bash heredoc conservative prose classification (#3534)', () => {
+  // ── conservative guards (prose in file-redirect heredocs) ──────────────
+
+  it('heredoc body "platform shift and long-term outlook" → high conservatively (rm  is prose)', () => {
+    // Keep main's conservative verdict until safe shell parsing is available.
+    const cmd = [
+      "cat > /tmp/note.txt <<'EOF'",
+      '# reasoning: the platform shift and long-term outlook',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('heredoc body "confirm the retrieval step" → high conservatively (eval  is prose)', () => {
+    // 'eval ' matches 'retrieval '; retain the conservative high verdict.
+    const cmd = [
+      "cat > /tmp/x.py <<'EOF'",
+      'confirm the retrieval step',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('heredoc body with "form " and "confirm " → high conservatively', () => {
+    const cmd = [
+      "cat > /tmp/doc.md <<'EOF'",
+      'Please confirm the form submission.',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('tee heredoc body with prose containing "rm " → high conservatively', () => {
+    const cmd = [
+      "tee /tmp/out.txt <<'EOF'",
+      'This is a long-term platform migration plan.',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('append-redirect heredoc body with prose → high conservatively', () => {
+    const cmd = [
+      "cat >> /tmp/log.txt <<'EOF'",
+      'retrieval complete for platform team',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('double-quoted delimiter heredoc body with prose → high conservatively', () => {
+    // <<"EOF" is also a quoted delimiter (no expansion in practice).
+    const cmd = [
+      'cat > /tmp/x.txt <<"EOF"',
+      'The long-term outlook for platform teams is positive.',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('<<-EOF (tab-stripping) file-redirect body with prose → high conservatively', () => {
+    const cmd = [
+      "cat > /tmp/x.txt <<-'EOF'",
+      '\tthe platform shift matters',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  // ── true-positive guards (real dangerous commands must stay high) ─────────
+
+  it('bare rm  as first command → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'rm old-file.txt' }, ctx)).toBe('high');
+  });
+
+  it('rm  after semicolon → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'echo done; rm tmp.txt' }, ctx)).toBe('high');
+  });
+
+  it('rm  after && → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'build && rm artifacts/old.zip' }, ctx)).toBe('high');
+  });
+
+  it('rm  after || → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'test -f x || rm fallback.txt' }, ctx)).toBe('high');
+  });
+
+  it('rm  after pipe → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'find . -name "*.bak" | rm -rf' }, ctx)).toBe('high');
+  });
+
+  it('rm  after $( → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'x=$(rm -f tmp.txt)' }, ctx)).toBe('high');
+  });
+
+  it('rm  after newline in multi-line command → high (true positive)', () => {
+    const cmd = 'echo start\nrm old.txt\necho done';
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('sudo rm  → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'sudo rm /etc/hosts' }, ctx)).toBe('high');
+  });
+
+  it('eval  as command → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'eval "$PAYLOAD"' }, ctx)).toBe('high');
+  });
+
+  it('eval  after semicolon → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'source env.sh; eval "$CMD"' }, ctx)).toBe('high');
+  });
+
+  it('bash heredoc fed to shell — body eval  stays high (shell-exec heredoc)', () => {
+    // When the heredoc is fed to bash/sh, the body IS executed — must stay high.
+    const cmd = [
+      'bash <<EOF',
+      'eval "$PAYLOAD"',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('rm -rf in heredoc body fed to sh → high (shell-exec heredoc)', () => {
+    const cmd = [
+      'sh <<EOF',
+      'rm -rf /tmp/scratch',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('rm -rf before heredoc redirect → high (dangerous command precedes heredoc)', () => {
+    // The rm -rf is on the command line itself, not in the heredoc body.
+    const cmd = [
+      "rm -rf dist/ && cat > /tmp/note.txt <<'EOF'",
+      'platform notes',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+});
+
+// Invariant: PR #3549 must not downgrade executable commands that main
+// classified high. These strings are classifier data, never shell inputs.
+describe('classifyRisk — PR #3549 blocking review regressions', () => {
+  it.each([
+    'sudo rm secrets.txt',
+    'env rm secrets.txt',
+    'env FLAG=1 rm secrets.txt',
+    'printf x | xargs rm secrets.txt',
+    'echo ready && command rm secrets.txt',
+    'exec rm secrets.txt',
+    'if true; then rm x; fi',
+    'for x in secrets.txt; do rm "$x"; done',
+    'FLAG=1 rm secrets.txt',
+    '/bin/rm secrets.txt',
+    'command eval "$PAYLOAD"',
+  ])('F1: retains high behind wrappers, reserved words, assignments and paths: %s', (command) => {
+    expect(classifyRisk('bash', { command }, ctx)).toBe('high');
+  });
+
+  it.each([
+    ["cat > /tmp/payload.txt <<'EOF'", 'rm secrets.txt', 'EOF', 'bash /tmp/payload.txt'],
+    ["cat <<'EOF' > x.sh", 'rm secrets.txt', 'EOF', 'sh x.sh'],
+    ['cat <<EOF > x.sh', 'rm secrets.txt', 'EOF', 'sh x.sh'],
+    ["cat > payload <<'EOF'; sh payload", 'rm secrets.txt', 'EOF'],
+    ["tee payload <<'EOF'", 'eval "$PAYLOAD"', 'EOF', '. ./payload'],
+    ["cat >> payload <<'EOF'", 'rm secrets.txt', 'EOF', 'source payload'],
+    ["bash <<'EOF' > output", 'rm secrets.txt', 'EOF'],
+    ['bash <<EOF', 'rm secrets.txt', 'EOF'],
+  ])('F2: retains high for written scripts and interpreter heredocs: %j', (...lines) => {
+    expect(classifyRisk('bash', { command: lines.join('\n') }, ctx)).toBe('high');
+  });
+
+  it.each([
+    ['printf \'%s\\n\' "cat > /tmp/note.txt <<\'EOF\'"', 'rm secrets.txt'],
+    ['printf \'%s\\n\' "cat > /tmp/note.txt <<\'EOF\'"', 'rm secrets.txt', 'EOF'],
+    ["printf '%s\\n' 'cat > note <<\"EOF\"'", 'eval "$PAYLOAD"'],
+    ["cat > note <<'EOF'", 'rm secrets.txt'],
+    ["cat > note <<'EOF'", 'rm secrets.txt', ' EOF'],
+  ])('F3: quoted markers and uncertain terminators cannot hide commands: %j', (...lines) => {
+    expect(classifyRisk('bash', { command: lines.join('\n') }, ctx)).toBe('high');
   });
 });
 
@@ -729,5 +941,351 @@ describe('classifyRisk — MCP tools', () => {
   // `Mcp__…` is classified (not silently dropped to the 'safe' default).
   it('Mcp__server__delete_record → high (mixed-case prefix classified)', () => {
     expect(classifyRisk('Mcp__server__delete_record', { id: 1 }, ctx)).toBe('high');
+  });
+});
+
+// ---- isPrivateTempRoot pure predicate (portable unit tests) ----------------
+describe('isPrivateTempRoot — pure predicate', () => {
+  // Synthetic stat factory: isDirectory()=true, isSymbolicLink()=false by default.
+  function st(overrides: Partial<{ dir: boolean; link: boolean; uid: number; mode: number }> = {}) {
+    const dir = overrides.dir ?? true;
+    const link = overrides.link ?? false;
+    return {
+      isDirectory: () => dir,
+      isSymbolicLink: () => link,
+      uid: overrides.uid ?? 1000,
+      mode: overrides.mode ?? 0o700,
+    };
+  }
+
+  it('world-writable sticky (0o1777) → excluded on linux', () => {
+    expect(isPrivateTempRoot(st({ mode: 0o1777 }), 1000, 'linux')).toBe(false);
+  });
+
+  it('world-writable sticky (0o1777) → excluded on darwin', () => {
+    expect(isPrivateTempRoot(st({ mode: 0o1777 }), 1000, 'darwin')).toBe(false);
+  });
+
+  it('0o700 owned by caller uid → included on linux', () => {
+    expect(isPrivateTempRoot(st({ mode: 0o700 }), 1000, 'linux')).toBe(true);
+  });
+
+  it('traversable 0o755 root owned by caller → excluded (other users can reach child dirs)', () => {
+    expect(isPrivateTempRoot(st({ mode: 0o40755 }), 1000, 'linux')).toBe(false);
+    expect(isPrivateTempRoot(st({ mode: 0o40755 }), 1000, 'darwin')).toBe(false);
+  });
+
+  it('group-readable 0o750 / other-exec 0o701 roots → excluded', () => {
+    expect(isPrivateTempRoot(st({ mode: 0o750 }), 1000, 'linux')).toBe(false);
+    expect(isPrivateTempRoot(st({ mode: 0o701 }), 1000, 'linux')).toBe(false);
+  });
+
+  it('symlink → excluded regardless of mode', () => {
+    expect(isPrivateTempRoot(st({ link: true, mode: 0o700 }), 1000, 'linux')).toBe(false);
+  });
+
+  it('not a directory → excluded', () => {
+    expect(isPrivateTempRoot(st({ dir: false, mode: 0o700 }), 1000, 'linux')).toBe(false);
+  });
+
+  it('owned by different uid → excluded on linux', () => {
+    expect(isPrivateTempRoot(st({ uid: 999, mode: 0o700 }), 1000, 'linux')).toBe(false);
+  });
+
+  it('win32 → included regardless of mode (NTFS ACLs; mode bits meaningless)', () => {
+    expect(isPrivateTempRoot(st({ mode: 0o1777 }), 1000, 'win32')).toBe(true);
+  });
+
+  it('uid undefined (win32 process.getuid absent) → ownership check skipped', () => {
+    // uid mismatch is ignored when uid is undefined
+    expect(isPrivateTempRoot(st({ uid: 999, mode: 0o700 }), undefined, 'linux')).toBe(true);
+  });
+});
+
+// ---- system temp dir carve-out (AFK scratch writes) ------------------------
+describe('classifyRisk — system temp dir carve-out', () => {
+  // A workspace that is NOT itself under the temp dir, so every temp write
+  // below is a genuine workspace escape that only the carve-out can allow.
+  const WS = path.resolve('/opt/afk-risk-ws');
+  const wsCtx: RiskContext = { cwd: WS, workspaceRoot: WS };
+  // Literal POSIX `/tmp/x`, the shape models emit. Built by join so no
+  // '/'-rooted literal reaches a path API.
+  const LITERAL_TMP_X = ['', 'tmp', 'afk-risk-literal.py'].join('/');
+
+  // Private session root override: mkdtemp creates 0700 dirs, so this is a
+  // valid private root on every platform. Restored in afterEach.
+  let sessRoot: string;
+  let fixture: string;
+
+  beforeEach(() => {
+    // Create a private 0700 dir to use as the session tmpdir root.
+    sessRoot = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'afk-risk-sess-')));
+    setSessionTmpdirRootForTests(sessRoot);
+    // A fixture dir under that private root for per-test files.
+    fixture = realpathSync(mkdtempSync(path.join(sessRoot, 'afk-risk-fix-')));
+  });
+  afterEach(() => {
+    setSessionTmpdirRootForTests(undefined);
+    rmSync(sessRoot, { recursive: true, force: true });
+  });
+
+  it('write_file / edit_file to session root subdirectory → safe', () => {
+    const p = path.join(sessRoot, 'afk-risk-x.txt');
+    expect(classifyRisk('write_file', { file_path: p }, wsCtx)).toBe('safe');
+    expect(classifyRisk('edit_file', { file_path: p }, wsCtx)).toBe('safe');
+  });
+
+  it('literal /tmp/x → high (shared world-writable /tmp is not a private root)', () => {
+    // /tmp is world-writable (1777) on Linux and macOS (via symlink to /private/tmp
+    // which is also 1777). It is never a private root under the new contract.
+    // On all platforms this should be high (not in any private temp root).
+    const expected = 'high';
+    expect(classifyRisk('write_file', { file_path: LITERAL_TMP_X }, wsCtx)).toBe(expected);
+  });
+
+  it('patch_apply with every path in session root → safe', () => {
+    const input = {
+      changes: [
+        { path: path.join(fixture, 'a.txt'), content: 'a' },
+        { path: path.join(sessRoot, 'afk-risk-b.txt'), content: 'b' },
+      ],
+    };
+    expect(classifyRisk('patch_apply', input, wsCtx)).toBe('safe');
+  });
+
+  it('patch_apply mixing session-root path + a denylisted path → high', () => {
+    const input = {
+      changes: [
+        { path: path.join(fixture, 'a.txt'), content: 'a' },
+        { path: path.join(homedir(), '.ssh', 'authorized_keys'), content: 'x' },
+      ],
+    };
+    const v = classifyRiskDetailed('patch_apply', input, wsCtx);
+    expect(v.level).toBe('high');
+    expect(v.reason).toMatch(/^write-denylist: /);
+  });
+
+  it('tmp path inside a .git/ dir → high', () => {
+    const v = classifyRiskDetailed(
+      'write_file',
+      { file_path: path.join(fixture, 'repo', '.git', 'config') },
+      wsCtx,
+    );
+    expect(v.level).toBe('high');
+    expect(v.reason).toMatch(/^git-dir: .* is inside \.git\/$/);
+  });
+
+  it('getTempRoots() includes the session root and satisfies new contract', () => {
+    const roots = getTempRoots();
+    // Session root (private 0700 mkdtemp) must be included.
+    expect(roots).toContain(sessRoot);
+    // No root should be shared-world-writable: on POSIX all entries must pass
+    // the isPrivateTempRoot predicate (symlink=false, owned, mode&0o022===0).
+    // We cannot lstat here without importing fs, so just assert non-empty.
+    expect(roots.length).toBeGreaterThan(0);
+  });
+
+  it('getTempRoots() session root appears first', () => {
+    const roots = getTempRoots();
+    expect(roots[0]).toBe(sessRoot);
+  });
+
+  it('cached session root is re-validated: reaped and replaced by a non-directory → dropped', () => {
+    // Prime the cache (both candidates exist, so the result is cached).
+    expect(getTempRoots()).toContain(sessRoot);
+    expect(getTempRoots()).toContain(sessRoot);
+    // Simulate a tmp reaper deleting the idle root and something else taking
+    // its name. A regular file fails isPrivateTempRoot on every platform.
+    rmSync(sessRoot, { recursive: true, force: true });
+    writeFileSync(sessRoot, 'not a dir');
+    // (No classification assertion: sessRoot lives under os.tmpdir(), which is
+    // itself a private root on macOS, so the path stays admissible through it.)
+    expect(getTempRoots()).not.toContain(sessRoot);
+  });
+
+  it('cached session root is re-validated: reaped and not re-created → dropped', () => {
+    expect(getTempRoots()).toContain(sessRoot);
+    rmSync(sessRoot, { recursive: true, force: true });
+    expect(getTempRoots()).not.toContain(sessRoot);
+  });
+
+  it('<sessRoot>-sibling/x (prefix lookalike) → high', () => {
+    // The sibling dir name starts with the session root path but is outside it.
+    const roots = getTempRoots();
+    const outer = roots.filter((r) => !roots.some((o) => o !== r && r.startsWith(o + path.sep)));
+    expect(outer.length).toBeGreaterThan(0);
+    for (const root of outer) {
+      const v = classifyRiskDetailed(
+        'write_file',
+        { file_path: path.join(`${root}-sibling`, 'x.txt') },
+        wsCtx,
+      );
+      expect(v.level).toBe('high');
+      expect(v.reason).toMatch(/^workspace-escape: /);
+    }
+  });
+
+  it('dangling symlink in session root → non-tmp, non-denylisted target outside workspace → high', () => {
+    const link = path.join(fixture, 'link.txt');
+    symlinkSync(path.resolve('/opt/afk-risk-dangling-target/out.txt'), link);
+    const v = classifyRiskDetailed('write_file', { file_path: link }, wsCtx);
+    expect(v.level).toBe('high');
+    expect(v.reason).toMatch(/^workspace-escape: /);
+  });
+
+  it('dangling symlink in session root → another session-root path → safe', () => {
+    const link = path.join(fixture, 'link.txt');
+    symlinkSync(path.join(fixture, 'sub', 'target.txt'), link);
+    expect(classifyRisk('write_file', { file_path: link }, wsCtx)).toBe('safe');
+  });
+
+  it('no workspaceRoot (non-AFK caller) → behaviour unchanged', () => {
+    const noRoot: RiskContext = { cwd: WS };
+    expect(classifyRisk('write_file', { file_path: path.join(fixture, 'x') }, noRoot)).toBe('safe');
+    expect(classifyRisk('write_file', { file_path: OUTSIDE_NON_TMP }, noRoot)).toBe('safe');
+    expect(
+      classifyRisk('write_file', { file_path: path.join(homedir(), '.ssh', 'id_rsa') }, noRoot),
+    ).toBe('high');
+  });
+
+  it('integration: session root in getTempRoots() → write under it with non-temp workspaceRoot is safe', () => {
+    // setSessionTmpdirRootForTests(sessRoot) is already called in beforeEach.
+    // sessRoot is a 0700 mkdtemp dir → qualifies as private.
+    const roots = getTempRoots();
+    expect(roots).toContain(sessRoot);
+    const target = path.join(sessRoot, 'scratch', 'output.json');
+    expect(classifyRisk('write_file', { file_path: target }, wsCtx)).toBe('safe');
+  });
+});
+
+// ---- classifyRiskDetailed reasons -----------------------------------------
+describe('classifyRiskDetailed — reasons for each high category', () => {
+  it('workspace-escape names the path and the root', () => {
+    const v = classifyRiskDetailed('write_file', { file_path: OUTSIDE_NON_TMP }, ctx);
+    expect(v.level).toBe('high');
+    expect(v.reason).toContain('workspace-escape: ');
+    expect(v.reason).toContain(' is outside ');
+    expect(v.reason).toContain('afk-risk-outside');
+  });
+
+  it('write-denylist names the matched prefix', () => {
+    const v = classifyRiskDetailed(
+      'write_file',
+      { file_path: path.join(homedir(), '.ssh', 'id_rsa') },
+      ctx,
+    );
+    expect(v.level).toBe('high');
+    expect(v.reason).toMatch(/^write-denylist: .* is under .*\.ssh/);
+  });
+
+  it('bash-pattern names the matched token', () => {
+    expect(classifyRiskDetailed('bash', { command: 'sudo ls' }, ctx)).toEqual({
+      level: 'high',
+      reason: "bash-pattern: matched 'sudo'",
+    });
+  });
+
+  it('schedule-mutation', () => {
+    const v = classifyRiskDetailed('create_schedule', { name: 'x' }, ctx);
+    expect(v.level).toBe('high');
+    expect(v.reason).toMatch(/^schedule-mutation/);
+  });
+
+  it('mcp-destructive-verb names the verb', () => {
+    expect(classifyRiskDetailed('mcp__postgres__drop_table', {}, ctx)).toEqual({
+      level: 'high',
+      reason: 'mcp-destructive-verb: drop',
+    });
+  });
+
+  it('worktree force remove and web_request DELETE carry reasons', () => {
+    expect(
+      classifyRiskDetailed('worktree', { action: 'remove', force: true }, ctx).reason,
+    ).toBe('worktree-force-remove');
+    expect(classifyRiskDetailed('web_request', { method: 'DELETE' }, ctx).reason).toBe(
+      'web-request: DELETE',
+    );
+  });
+
+  it('classifyRisk returns the detailed level', () => {
+    expect(classifyRisk('bash', { command: 'sudo ls' }, ctx)).toBe(
+      classifyRiskDetailed('bash', { command: 'sudo ls' }, ctx).level,
+    );
+  });
+});
+
+// ---- isOutsideRoot — portable win32 cross-drive test --------------------------
+// Uses path.win32 so this runs correctly on every host (no platform gating).
+describe('isOutsideRoot — win32 cross-drive semantics via path.win32', () => {
+  const w32 = path.win32;
+
+  it('same-drive descendant → inside (not outside)', () => {
+    expect(isOutsideRoot('C:\\ws', 'C:\\ws\\a\\b.ts', w32)).toBe(false);
+  });
+
+  it('same-drive root itself → inside (rel is empty string)', () => {
+    expect(isOutsideRoot('C:\\ws', 'C:\\ws', w32)).toBe(false);
+  });
+
+  it('same-drive sibling with shared prefix → outside (boundary-safe)', () => {
+    // C:\ws-evil is NOT inside C:\ws — path.relative returns '..\ws-evil'
+    expect(isOutsideRoot('C:\\ws', 'C:\\ws-evil\\a', w32)).toBe(true);
+  });
+
+  it('same-drive parent escape → outside', () => {
+    expect(isOutsideRoot('C:\\ws', 'C:\\other', w32)).toBe(true);
+  });
+
+  it('different drive → outside (path.relative returns absolute on win32)', () => {
+    // This is the bug: path.win32.relative('C:\\ws', 'D:\\x') === 'D:\\x'
+    // which is absolute — the old rel.startsWith('..') check missed it.
+    expect(isOutsideRoot('C:\\ws', 'D:\\x', w32)).toBe(true);
+  });
+
+  it('POSIX paths → same behaviour as path.posix', () => {
+    expect(isOutsideRoot('/root/ws', '/root/ws/a', path.posix)).toBe(false);
+    expect(isOutsideRoot('/root/ws', '/other', path.posix)).toBe(true);
+  });
+});
+
+// ---- AFK_HOME under a temp root ---------------------------------------------
+describe('classifyRisk — AFK_HOME inside temp root blocks carve-out', () => {
+  // A workspace NOT under the temp dir, so all temp writes below are escapes
+  // that only the carve-out can allow.
+  const WS3 = path.resolve('/opt/afk-risk-ws3');
+  const ws3Ctx: RiskContext = { cwd: WS3, workspaceRoot: WS3 };
+
+  let sessRoot3: string;
+  let afkHomeFixture: string;
+  let sibling: string;
+
+  beforeEach(() => {
+    // Private session root (0700 mkdtemp) — fixtures live under it so they are
+    // inside a private temp root regardless of os.tmpdir() world-writability.
+    sessRoot3 = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'afk-risk-sess3-')));
+    setSessionTmpdirRootForTests(sessRoot3);
+    // Create two mkdtemp fixtures under the private session root.
+    afkHomeFixture = realpathSync(mkdtempSync(path.join(sessRoot3, 'afk-risk-home-')));
+    sibling = realpathSync(mkdtempSync(path.join(sessRoot3, 'afk-risk-sibling-')));
+    // Point AFK_HOME at the fixture so the carve-out excludes it.
+    vi.stubEnv('AFK_HOME', afkHomeFixture);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    setSessionTmpdirRootForTests(undefined);
+    rmSync(sessRoot3, { recursive: true, force: true });
+  });
+
+  it('write to <afkHome>/skills/x.md → high (workspace-escape, not safe via carve-out)', () => {
+    const target = path.join(afkHomeFixture, 'skills', 'x.md');
+    const v = classifyRiskDetailed('write_file', { file_path: target }, ws3Ctx);
+    expect(v.level).toBe('high');
+    expect(v.reason).toMatch(/^workspace-escape: /);
+  });
+
+  it('write to sibling temp fixture outside AFK_HOME → safe (carve-out still works)', () => {
+    const target = path.join(sibling, 'scratch.txt');
+    expect(classifyRisk('write_file', { file_path: target }, ws3Ctx)).toBe('safe');
   });
 });

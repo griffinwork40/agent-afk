@@ -76,6 +76,13 @@ export interface BudgetGateOptions {
  * when their auth resolves to the ChatGPT sign-in (an API key has per-minute
  * limits, not subscription windows). Anything else returns null (not gated).
  *
+ * Behavior change (PR #3388): the tier-4 ChatGPT-subscription OAuth fallback
+ * in `resolveOpenAIAuth` is now default-ON. Any OpenAI-compatible daemon that
+ * has a ChatGPT login in ~/.codex/auth.json (and no OPENAI_API_KEY) will
+ * automatically resolve `chatgpt-oauth` and be graded on Codex windows here.
+ * To opt out: set OPENAI_API_KEY (which wins over the OAuth tier) or remove
+ * ~/.codex/auth.json.
+ *
  * @param chatgptSignedIn Injectable for tests; defaults to the provider's own
  *   auth resolution for `apiKey` (the daemon's configured key, if any).
  */

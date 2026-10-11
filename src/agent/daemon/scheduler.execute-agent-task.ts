@@ -11,6 +11,7 @@
  */
 
 import { makeDaemonElicitationHandler } from './handoff-wiring.js';
+import { makeCronElicitationHandler } from './scheduler.elicitation-notify.js';
 import { elicitationRouter } from '../elicitation-router.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { errorMessage } from '../../utils/errors.js';
@@ -67,12 +68,16 @@ export interface AgentTaskContext {
   isCancelled?: () => boolean;
   /** Injected backoff sleep (tests). Defaults to `sleepWithAbort`. */
   retrySleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** Override the handoffs directory (tests). Forwarded to the cron elicitation handler. */
+  handoffsDir?: string;
 }
 
 /** What one successful attempt hands back to the telemetry writer. */
 interface AttemptResult {
   responseText: string;
   doneUnverified: boolean;
+  /** Set when a cron-task elicitation was declined and a handoff written. */
+  elicitationMessage?: string;
 }
 
 /**
@@ -142,7 +147,7 @@ export async function executeAgentTask(
       ctx.writeTelemetry(record, task);
       return record;
     }
-    const { responseText, doneUnverified } = outcome.value;
+    const { responseText, doneUnverified, elicitationMessage } = outcome.value;
     // A run whose model turn completed but whose tool calls were hard-blocked
     // by the AFK gate is recorded as 'blocked' rather than 'success' (#3466).
     // This surfaces to notifyOn:'failure' so the operator is alerted when the
@@ -159,7 +164,11 @@ export async function executeAgentTask(
       ...attemptsField,
       ...gateBlocksField,
     };
-    ctx.writeTelemetry(record, task, { responseText, ...(doneUnverified ? { doneUnverified: true } : {}) });
+    // When a cron-task elicitation was declined, pass the task-aware
+    // notification message as responseText so onTaskComplete routes it
+    // through the normal notifyOn path (#3243 gap 1 partial).
+    const notifyResponseText = elicitationMessage ?? responseText;
+    ctx.writeTelemetry(record, task, { responseText: notifyResponseText, ...(doneUnverified ? { doneUnverified: true } : {}) });
     return record;
   } finally {
     ctx.idleDetector.decrement();
@@ -194,6 +203,9 @@ async function runAgentAttempt(
     // Invariant: handoff handler installed BEFORE sendMessage so the
     // ask-question-gate's hasHandler() probe passes for pull tasks;
     // uninstalled in the finally block so cron ticks never inherit it.
+    // For cron/sessionstart tasks, install a lightweight handler that writes
+    // a durable handoff and immediately declines (#3243 gap 1 partial).
+    let elicitationMessage: string | undefined;
     if (trigger === 'pull') {
       elicitationRouter.install(makeDaemonElicitationHandler({
         taskId: task.taskId,
@@ -202,6 +214,15 @@ async function runAgentAttempt(
         ...(ctx.options.bot !== undefined ? { bot: ctx.options.bot } : {}),
         ...(ctx.options.primaryChatId !== undefined ? { chatId: ctx.options.primaryChatId } : {}),
         ...(ctx.options.primaryThreadId !== undefined ? { threadId: ctx.options.primaryThreadId } : {}),
+      }));
+      handlerInstalled = true;
+    } else {
+      elicitationRouter.install(makeCronElicitationHandler({
+        taskId: task.taskId,
+        originalCommand: redactInlineSecrets(task.command),
+        cronExpression: task.cronExpression,
+        ...(ctx.handoffsDir !== undefined ? { handoffsDir: ctx.handoffsDir } : {}),
+        onHandoffWritten: (msg) => { elicitationMessage = msg; },
       }));
       handlerInstalled = true;
     }
@@ -222,7 +243,7 @@ async function runAgentAttempt(
     } catch {
       // best-effort
     }
-    return { responseText, doneUnverified: probeDoneUnverified(ctx, responseText, response) };
+    return { responseText, doneUnverified: probeDoneUnverified(ctx, responseText, response), elicitationMessage };
   } finally {
     if (handlerInstalled) elicitationRouter.uninstall();
     if (session) {

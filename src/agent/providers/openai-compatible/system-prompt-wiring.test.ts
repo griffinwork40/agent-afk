@@ -102,17 +102,17 @@ describe('buildSystemPromptWiring — unnamed-worker toolBase dedupe guard (#335
     // conventions are already embedded in UNNAMED_SUBAGENT_WORKER_PROMPT
     // (which becomes config.systemPrompt). Returning '' exercises the
     // `toolBase.length > 0 ? [toolBase] : []` guard in `assemble`.
-    vi.mocked(systemPromptMod.resolveToolSystemPrompt).mockReturnValue('');
+    vi.mocked(systemPromptMod.resolveToolSystemPrompt).mockReturnValueOnce('');
   });
 
-  it('unnamed worker: no leading blank line and no TOOL_BASE prefix in assembled prompt', () => {
+  it('unnamed worker: resolveToolSystemPrompt called with (undefined, true) and result not prepended', () => {
     const { initialSystemPrompt } = buildSystemPromptWiring(
       makeArgs({ config: { isUnnamedWorker: true } }),
     );
+    // Verify the call site passes isSkillDispatch=undefined and isUnnamedWorker=true.
+    expect(systemPromptMod.resolveToolSystemPrompt).toHaveBeenCalledWith(undefined, true);
     // The assembled prompt must not start with a blank line (which would happen
     // if '' were pushed into parts[] before the join('\n\n')).
     expect(initialSystemPrompt).not.toMatch(/^\n/);
-    // TOOL_BASE sentinel must not appear (the mock returns '' for unnamed workers).
-    expect(initialSystemPrompt).not.toContain('TOOL_BASE');
   });
 });

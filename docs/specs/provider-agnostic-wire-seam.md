@@ -8,8 +8,9 @@
 
 > **Implementation status (update).** The OpenAI **Responses API** wire path and
 > a **read-only** ChatGPT-subscription OAuth path have landed in the
-> `openai-compatible` provider behind two off-by-default flags
-> (`AFK_OPENAI_USE_RESPONSES`, `AFK_OPENAI_CHATGPT_OAUTH`). See
+> `openai-compatible` provider. Responses is behind the off-by-default
+> `AFK_OPENAI_USE_RESPONSES` flag; ChatGPT OAuth is the last-resort auth tier
+> (its former `AFK_OPENAI_CHATGPT_OAUTH` flag was removed). See
 > `docs/openai-responses-and-chatgpt-oauth.md`. Notes correcting this spec:
 >
 > - **Open Question #1 resolved:** the ChatGPT backend does **not** serve a

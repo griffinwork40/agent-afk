@@ -73,6 +73,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
   private _memoryStore: MemoryStore | undefined;
   private readonly workspaceStore: WorkspaceStore | undefined;
   private _stateStore: StateStore | undefined;
+  // Invariant: injected stores are caller-owned and shared across the root and
+  // every forked child provider; close() releases only lazily created ones.
+  private readonly _injectedMemoryStore: boolean;
+  private readonly _injectedStateStore: boolean;
   private readonly schemas: AnthropicToolDef[];
   /**
    * Mutable per-session endpoint headers (xAI CLI proxy). Construction-time
@@ -119,6 +123,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
   constructor(opts: OpenAICompatibleProviderOptions = {}) {
     this.providerOpts = snapshotOperatorOptions(opts);
     this._defaultHeaders = opts.defaultHeaders;
+    this._injectedMemoryStore = opts.memoryStore !== undefined;
+    this._injectedStateStore = opts.stateStore !== undefined;
     this._memoryStore = opts.memoryStore;
     this.workspaceStore = opts.workspaceStore;
     this._stateStore = opts.stateStore;
@@ -339,7 +345,17 @@ export class OpenAICompatibleProvider implements ModelProvider {
     };
     buildOpts.systemPromptRebuildFactory = spw.systemPromptRebuildFactory;
 
-    return buildQueryFromConfig(patchedConfig, args.prompt, buildOpts);
+    const providerQuery = buildQueryFromConfig(patchedConfig, args.prompt, buildOpts);
+    // #3532: close the provider's SQLite handle (kv.db) when the session
+    // closes. AgentSession.close() calls providerQuery.close() but not
+    // provider.close(), so _stateStore leaks on Windows (EBUSY on rmSync).
+    const provider = this;
+    const origClose = providerQuery.close.bind(providerQuery);
+    providerQuery.close = (): void => {
+      origClose();
+      provider.close();
+    };
+    return providerQuery;
   }
 
   /**
@@ -533,9 +549,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
   }
 
   close(): void {
-    this._memoryStore?.close();
-    this.workspaceStore?.close();
-    this._stateStore?.close();
+    // Only close owned stores; the workspace store is always injected.
+    if (!this._injectedMemoryStore) this._memoryStore?.close();
+    if (!this._injectedStateStore) this._stateStore?.close();
   }
 
   /**

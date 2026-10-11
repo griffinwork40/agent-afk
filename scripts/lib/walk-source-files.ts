@@ -18,7 +18,13 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-/** Dirs excluded from traversal by default. */
+/**
+ * Named dirs excluded from traversal by default.
+ *
+ * Note: dot-prefixed dirs (`.git`, `.afk`, etc.) are excluded by a separate
+ * `entry.name.startsWith('.')` check in `walkSourceFiles` — they are NOT
+ * listed here (finding #3319-nit).
+ */
 const DEFAULT_EXCLUDED_DIRS = new Set(['node_modules', 'dist']);
 
 /**

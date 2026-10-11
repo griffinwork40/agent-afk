@@ -45,7 +45,7 @@ import {
   playwrightInstallCommand,
 } from './playwright-hints.js';
 import { errorMessage, extractEgressBlockedError, fetchFailedMessage } from '../../../utils/errors.js';
-import { createRequestAbortScope } from '../../../utils/abort.js';
+import { createRequestAbortScope, getScopeAbortMessage } from '../../../utils/abort.js';
 
 // External constraint: Node 20+ ships `fetch` as a global. Older runtimes
 // would throw before reaching this handler because tsconfig targets >=20.
@@ -205,10 +205,7 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
       timeoutMessage: `web_scrape timeout after ${parsed.timeoutMs}ms`,
     });
 
-    const abortMessage = (): string => {
-      const reason = scope.signal.reason;
-      return reason instanceof Error ? reason.message : String(reason ?? 'aborted');
-    };
+    const abortMessage = (): string => getScopeAbortMessage(scope);
 
     try {
 

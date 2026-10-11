@@ -15,6 +15,7 @@ import { senderPrefix } from '../sender-attribution.js';
 import { replyContextPrefix, type RepliedMessage } from '../reply-context.js';
 import { forwardProvenancePrefix } from '../forward-provenance.js';
 import { downloadTelegramFile } from '../media-download.js';
+import { errorMessage } from '../../utils/errors.js';
 
 // History: extracted from message.ts in PR #687 (document handler).
 // message.ts was already at its baselined ceiling, so all document
@@ -113,13 +114,18 @@ export async function handleDocumentMessage(
   try {
     fileUrlRaw = await ctx.telegram.getFileLink(document.file_id);
   } catch (err) {
-    log('Document handling: getFileLink failed:', err instanceof Error ? err.message : String(err));
+    log('Document handling: getFileLink failed:', errorMessage(err));
     await ctx.reply("❌ Couldn't download the document. Please try resending.");
     return null;
   }
   const dlResult = await downloadTelegramFile(fileUrlRaw, { maxBytes: MAX_DOCUMENT_BYTES });
 
   switch (dlResult.status) {
+    case 'malformed-url':
+      log(`Document handling: malformed file URL returned by getFileLink for chat ${chatId ?? '(unknown)'}`);
+      await ctx.reply("❌ Couldn't download the document. Please try resending.");
+      return null;
+
     case 'ssrf-rejected':
       log(`Document handling: unexpected file URL (protocol=${dlResult.protocol} hostname=${dlResult.hostname}) for chat ${chatId ?? '(unknown)'}`);
       await ctx.reply("❌ Couldn't download the document. Please try resending.");

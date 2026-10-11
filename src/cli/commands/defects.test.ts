@@ -46,6 +46,7 @@ const mockCluster = vi.mocked(clusterLedgerRecords);
 
 import { registerDefectsCommand } from './defects.js';
 import type { DefectCluster } from '../../agent/preexisting-ledger/reader.js';
+import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -86,11 +87,8 @@ async function run(args: string[]): Promise<string> {
   return captured.join('');
 }
 
-/** Strip ANSI escape sequences for plain-text assertions. */
-function stripAnsi(s: string): string {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/\x1b\[[0-9;]*m/g, '').replace(/\x1b\[[^m]*m/g, '');
-}
+/** Strip ANSI/escape sequences for plain-text assertions. */
+const stripAnsi = stripEscapeSequences;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -312,5 +310,49 @@ describe('afk defects', () => {
 
     const out = await run(['defects']);
     expect(stripAnsi(out)).not.toContain('Ledger exceeded 1 MB');
+  });
+
+  it('--days -1 floors to 1 day (negative input clamped, not reset to default)', async () => {
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
+    mockCluster.mockReturnValue([makeCluster()]);
+
+    const out = await run(['defects', '--days', '-1']);
+    expect(stripAnsi(out)).toContain('1 days');
+  });
+
+  it('--top -5 floors to 1 (negative input clamped)', async () => {
+    const clusters = [
+      makeCluster({ locus: 'a.ts', recurrenceCount: 5 }),
+      makeCluster({ locus: 'b.ts', recurrenceCount: 4 }),
+    ];
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
+    mockCluster.mockReturnValue(clusters);
+
+    const out = await run(['defects', '--top', '-5']);
+    // Only 1 cluster should be shown (topN clamped to 1)
+    expect(stripAnsi(out)).toContain('1 more cluster');
+  });
+
+  it('--json with ledgerTruncated emits warning on stderr (not stdout)', async () => {
+    const clusters = [makeCluster()];
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: true });
+    mockCluster.mockReturnValue(clusters);
+
+    const stderrChunks: string[] = [];
+    const origStderr = process.stderr.write.bind(process.stderr);
+    (process.stderr.write as unknown as (s: string) => boolean) = (s: string) => {
+      stderrChunks.push(s);
+      return true;
+    };
+    try {
+      const out = await run(['defects', '--json']);
+      // stdout must be valid JSON with no warning mixed in
+      const parsed = JSON.parse(out) as DefectCluster[];
+      expect(Array.isArray(parsed)).toBe(true);
+      // warning must have gone to stderr
+      expect(stderrChunks.join('')).toContain('ledger exceeded 1 MB');
+    } finally {
+      (process.stderr.write as unknown as (s: string) => boolean) = origStderr as unknown as (s: string) => boolean;
+    }
   });
 });

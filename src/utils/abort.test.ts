@@ -14,6 +14,7 @@ import {
   forwardAbortSignal,
   createRequestAbortScope,
   createDeferredRequestAbortScope,
+  getScopeAbortMessage,
 } from './abort.js';
 
 // ---------------------------------------------------------------------------
@@ -273,5 +274,55 @@ describe('createDeferredRequestAbortScope', () => {
     parent.abort();
     expect(fired).not.toHaveBeenCalled();
     expect(scope.signal.aborted).toBe(false);
+  });
+
+  it('armTimeout after dispose() is a no-op — does not arm a timer or abort', async () => {
+    const scope = createDeferredRequestAbortScope({ timeoutMs: 1_000, timeoutMessage: 't' });
+    scope.dispose();
+    const fired = vi.fn();
+    // Calling armTimeout after dispose must not throw and must not arm a timer.
+    scope.armTimeout(fired);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(fired).not.toHaveBeenCalled();
+    expect(scope.signal.aborted).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getScopeAbortMessage
+
+describe('getScopeAbortMessage', () => {
+  it('returns the Error message when reason is an Error', () => {
+    const ac = new AbortController();
+    ac.abort(new Error('timed out after 5000ms'));
+    expect(getScopeAbortMessage({ signal: ac.signal })).toBe('timed out after 5000ms');
+  });
+
+  it('returns String(reason) when reason is a plain string', () => {
+    const ac = new AbortController();
+    ac.abort('cancelled');
+    expect(getScopeAbortMessage({ signal: ac.signal })).toBe('cancelled');
+  });
+
+  it('returns "aborted" when reason is undefined (synthetic scope)', () => {
+    // ac.abort() sets a DOMException in Node, so we use a synthetic scope
+    // object whose signal.reason is literally undefined to exercise the
+    // `?? 'aborted'` fallback branch directly.
+    const syntheticScope = {
+      signal: { reason: undefined } as unknown as AbortSignal,
+    };
+    expect(getScopeAbortMessage(syntheticScope)).toBe('aborted');
+  });
+
+  it('works with a live RequestAbortScope signal', () => {
+    const parent = new AbortController();
+    const scope = createRequestAbortScope({
+      parentSignal: parent.signal,
+      timeoutMs: 1_000,
+      timeoutMessage: 'web_request timeout after 1000ms',
+    });
+    parent.abort(new Error('session cancelled'));
+    expect(getScopeAbortMessage(scope)).toBe('session cancelled');
+    scope.dispose();
   });
 });
