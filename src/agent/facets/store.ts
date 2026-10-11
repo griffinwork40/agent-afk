@@ -167,8 +167,8 @@ function readCachedFacetLoose(cachePath: string): Record<string, unknown> | null
   // carry-forward). This matches the original "missing file or parse error →
   // return null" contract. Unexpected I/O errors re-throw.
   const raw = readJsonFileLoose<unknown>(cachePath);
-  // Array.isArray guard: JSON arrays pass the `typeof raw !== 'object'` check
-  // (arrays are objects) but are not valid facet objects. Returning null treats
+  // JSON arrays survive the `typeof raw !== 'object'` check because arrays are
+  // objects, but they are not valid facet objects. Returning null treats
   // them as "no usable cache" and triggers re-derivation from scratch.
   if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return null;
   return raw as Record<string, unknown>;

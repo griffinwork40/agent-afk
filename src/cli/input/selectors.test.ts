@@ -301,11 +301,24 @@ describe('renderSelector — TTY keypress', () => {
     expect(result).toBe(':cancel');
   });
 
-  it('resolves :cancel immediately when abortSignal is already aborted', async () => {
+  it('resolves :cancel immediately without entering raw mode when already aborted', async () => {
     const ac = new AbortController();
     ac.abort();
     const result = await renderSelector(['alpha', 'beta'], ac.signal);
     expect(result).toBe(':cancel');
+    expect(mockSetRawMode).not.toHaveBeenCalled();
+    expect(mockOn).not.toHaveBeenCalled();
+  });
+
+  it('cleans up and resolves only once when abort races a keypress', async () => {
+    const ac = new AbortController();
+    const p = renderSelector(['alpha', 'beta'], ac.signal);
+    await Promise.resolve();
+    const keypress = keypressListeners[0]!;
+    ac.abort();
+    keypress(undefined, { name: 'return' });
+    await expect(p).resolves.toBe(':cancel');
+    expect(mockSetRawMode.mock.calls).toEqual([[true], [false]]);
   });
 });
 

@@ -2,7 +2,8 @@
  * Public surface of src/agent/outcomes/.
  *
  * Re-exports the schema, artifact recovery, immediate/delayed LFs, and
- * the v1 combiner. Consumers import from this barrel, not sub-modules.
+ * the v1 combiner. Runtime consumers should prefer this barrel; scripts may
+ * import types directly from sub-modules.
  */
 
 export type { VerifiedOutcome, OutcomeLabel, SelfReport, Vote } from './schema.js';

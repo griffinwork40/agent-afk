@@ -69,7 +69,9 @@ function runSelectorLoop<T>(
   }
 
   return new Promise<T | ':cancel'>((resolve) => {
-    process.stdin.setRawMode(true);
+    let resolved = false;
+    let rawModeEntered = false;
+
     // ESC is the cancel affordance here; fire it on the first press (small
     // sub-perception escapeCodeTimeout) instead of after readline's ~500ms
     // buffer. See emit-keypress.ts.
@@ -94,32 +96,39 @@ function runSelectorLoop<T>(
         onSpace(cursor);
         repaint();
       } else if (key.name === 'return' || key.name === 'enter') {
-        cleanup();
-        resolve(onEnter(cursor));
+        finish(onEnter(cursor));
       } else if (key.name === 'escape' || (key.ctrl && key.name === 'c')) {
-        cleanup();
-        resolve(':cancel');
+        finish(':cancel');
       }
     };
 
     function cleanup(): void {
       process.stdin.removeListener('keypress', onKeypress);
       abortSignal?.removeEventListener('abort', onAbort);
-      try { process.stdin.setRawMode(false); } catch { /* noop */ }
+      if (rawModeEntered) {
+        try { process.stdin.setRawMode(false); } catch { /* noop */ }
+      }
+    }
+
+    function finish(value: T | ':cancel'): void {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
+      resolve(value);
     }
 
     function onAbort(): void {
-      cleanup();
-      resolve(':cancel');
+      finish(':cancel');
     }
 
     if (abortSignal?.aborted) {
-      // Already aborted before the loop started — resolve immediately.
-      try { process.stdin.setRawMode(false); } catch { /* noop */ }
-      resolve(':cancel');
+      // Raw mode was never entered, so no cleanup is needed.
+      finish(':cancel');
       return;
     }
 
+    process.stdin.setRawMode(true);
+    rawModeEntered = true;
     abortSignal?.addEventListener('abort', onAbort, { once: true });
     process.stdin.on('keypress', onKeypress);
   });
