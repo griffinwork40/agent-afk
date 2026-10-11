@@ -34,6 +34,23 @@ import type { OpenAICompatibleQueryOptions } from './query-options.js';
  * @returns A new OpenAI client configured for `newAuth`, or null (typed as OpenAI)
  *   when `newAuth.apiKey === null` (caller should check before using the result).
  */
+/**
+ * Apply a ChatGPT-OAuth token refresh to a query instance: mutate opts.auth
+ * and rebuild the backing OpenAI client in one atomic step.
+ *
+ * Extracted from `OpenAICompatibleQuery.rebuildClient` to keep query.ts under
+ * the 350-code-line ceiling. Callers pass the mutable opts bag cast to allow
+ * the `auth` write — TurnDriverContext declares `auth` readonly to prevent
+ * accidental writes elsewhere; this is the one intentional exception.
+ */
+export function applyOAuthRefresh(
+  mutableOpts: { auth: OpenAIAuthResolution } & OpenAICompatibleQueryOptions,
+  newAuth: OpenAIAuthResolution,
+): OpenAI {
+  mutableOpts.auth = newAuth;
+  return buildRefreshedClient(newAuth, mutableOpts);
+}
+
 export function buildRefreshedClient(
   newAuth: OpenAIAuthResolution,
   opts: OpenAICompatibleQueryOptions,
