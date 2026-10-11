@@ -12,38 +12,40 @@ import os from 'os';
 import path from 'path';
 import { lstatSync, readlinkSync, realpathSync } from 'fs';
 import { safeRealpath, getWriteDenylist } from './tools/handlers/write-denylist.js';
+import { getAfkHome } from '../paths.js';
 import type { RiskContext, RiskVerdict } from './risk-classifier.js';
 
 /** Symlink hops followed for a dangling link before giving up (matches ELOOP
  *  and `MAX_LINK_HOPS` in tools/handlers/write-file.atomic.ts). */
 const MAX_LINK_HOPS = 40;
 
-/** Literal POSIX shared temp dir models commonly write to (`/tmp/x.py`). */
-const POSIX_SHARED_TMP = '/tmp';
-
 let tempRootsCache: { key: string; roots: readonly string[] } | undefined;
 
 /**
- * Realpath'd system temp roots: `os.tmpdir()` plus, on POSIX, the shared
- * `/tmp` (on macOS `/private/tmp`, distinct from the per-user `os.tmpdir()`).
+ * Realpath'd system temp roots: `os.tmpdir()` only.
  *
  * Invariant: roots are harness-derived (OS + TMPDIR), never model-authored, so
  * the carve-out adds no new trust channel. A root whose realpath fails is
- * skipped (fail closed: no carve-out), and on win32 there is no `/tmp`.
+ * skipped (fail closed: no carve-out).
  * Cached per `os.tmpdir()` value so a TMPDIR change is picked up.
+ *
+ * The shared POSIX `/tmp` is excluded even on platforms where it differs from
+ * `os.tmpdir()` (e.g. macOS, where `/tmp → /private/tmp` but `os.tmpdir()`
+ * returns a per-user dir). Reason: `/tmp` is world-writable and the gate-time
+ * symlink check cannot close a write-time TOCTOU race — another local user can
+ * plant `/tmp/<name> → ~/.zshrc` between the gate and the write. On Linux,
+ * `os.tmpdir()` is usually `/tmp` itself, where the kernel's
+ * `fs.protected_symlinks` default mitigates the race.
  */
 export function getTempRoots(): readonly string[] {
   const tmp = os.tmpdir();
   if (tempRootsCache && tempRootsCache.key === tmp) return tempRootsCache.roots;
-  const candidates = process.platform === 'win32' ? [tmp] : [tmp, POSIX_SHARED_TMP];
   const roots: string[] = [];
-  for (const c of candidates) {
-    try {
-      const real = realpathSync(c);
-      if (!roots.includes(real)) roots.push(real);
-    } catch {
-      // Unresolvable root: no carve-out for it.
-    }
+  try {
+    const real = realpathSync(tmp);
+    roots.push(real);
+  } catch {
+    // Unresolvable root: no carve-out for it.
   }
   tempRootsCache = { key: tmp, roots };
   return roots;
@@ -112,15 +114,51 @@ function hardBlock(resolved: string): RiskVerdict | undefined {
 }
 
 /**
+ * Exported for portable unit testing across path implementations (e.g.
+ * `path.win32`). Returns true when `target` resolves OUTSIDE `root` —
+ * either a `..`-relative escape or, on win32, an absolute path on a
+ * different drive (`path.relative` returns an absolute path in that case).
+ */
+export function isOutsideRoot(
+  root: string,
+  target: string,
+  pathImpl: Pick<typeof path, 'relative' | 'isAbsolute'> = path,
+): boolean {
+  const rel = pathImpl.relative(root, target);
+  return rel.startsWith('..') || pathImpl.isAbsolute(rel);
+}
+
+/**
+ * Resolved AFK home, or `null` when `getAfkHome()` throws (malformed env).
+ * Uses `safeRealpath` so a not-yet-created home still resolves through its
+ * existing ancestors (on macOS `/var` → `/private/var`), matching the
+ * realpath'd write target it is compared against.
+ */
+function afkHomeResolved(): string | null {
+  try {
+    return safeRealpath(getAfkHome());
+  } catch {
+    return null;
+  }
+}
+
+/**
  * True when a write that escapes the workspace may still proceed because both
- * the named path and the writer's final target sit inside a system temp root
- * and the final target is neither denylisted nor inside `.git/`.
+ * the named path and the writer's final target sit inside a system temp root,
+ * the final target is neither denylisted nor inside `.git/`, and the target
+ * is NOT inside the AFK home directory (skills/, agent-framework/, plugins/
+ * etc. must not be silently writable via a temp-root carve-out).
  */
 function isSafeTempWrite(abs: string, resolved: string): boolean {
   if (!isInsideTempRoot(resolved)) return false;
   const target = finalWriteTarget(abs);
   if (!isInsideTempRoot(target)) return false;
-  return hardBlock(target) === undefined;
+  if (hardBlock(target) !== undefined) return false;
+  // AFK home under a temp root (tests, TMPDIR-relocated installs) must not
+  // become writable through the carve-out. Unknown home → fail closed.
+  const afkHome = afkHomeResolved();
+  if (afkHome === null) return false;
+  return !(target === afkHome || target.startsWith(afkHome + path.sep));
 }
 
 /** Classify one write target path. */
@@ -137,12 +175,13 @@ export function classifyFilePath(filePath: string, ctx: RiskContext): RiskVerdic
   // Workspace boundary escape. Only the AFK gate passes workspaceRoot.
   if (ctx.workspaceRoot !== undefined) {
     const realRoot = safeRealpath(ctx.workspaceRoot);
-    const rel = path.relative(realRoot, resolved);
+    // On win32, path.relative returns an absolute path when root and target
+    // are on different drives; isOutsideRoot treats that as an escape too.
     // Invariant: the system temp dir is a sanctioned scratch area in AFK mode,
     // so a temp write is not an escape. Checked after denylist/.git (above) and
     // on the writer's final target (finalWriteTarget), so a temp symlink cannot
     // carry the bytes outside tmp.
-    if (rel.startsWith('..') && !isSafeTempWrite(abs, resolved)) {
+    if (isOutsideRoot(realRoot, resolved) && !isSafeTempWrite(abs, resolved)) {
       return { level: 'high', reason: `workspace-escape: ${resolved} is outside ${realRoot}` };
     }
   }

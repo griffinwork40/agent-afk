@@ -5,11 +5,11 @@
  * creates mkdtemp fixtures (incl. dangling symlinks) and cleans them up.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, realpathSync, rmSync, symlinkSync } from 'fs';
 import { classifyRisk, classifyRiskDetailed } from './risk-classifier.js';
 import type { RiskContext } from './risk-classifier.js';
-import { getTempRoots } from './risk-classifier.paths.js';
+import { getTempRoots, isOutsideRoot } from './risk-classifier.paths.js';
 import { homedir } from 'os';
 import * as os from 'os';
 import path from 'path';
@@ -770,8 +770,14 @@ describe('classifyRisk — system temp dir carve-out', () => {
     expect(classifyRisk('edit_file', { file_path: p }, wsCtx)).toBe('safe');
   });
 
-  it('literal /tmp/x → safe where /tmp exists (POSIX), high on win32 (no /tmp root)', () => {
-    const expected = process.platform === 'win32' ? 'high' : 'safe';
+  it('literal /tmp/x → safe only when /tmp resolves into getTempRoots(), else high', () => {
+    // Portable: compute expected from whether realpath('/tmp') (if it exists)
+    // is one of the temp roots. On Linux os.tmpdir()=='/tmp' → safe; on macOS
+    // os.tmpdir() is a per-user dir so /tmp is NOT in getTempRoots() → high;
+    // on win32 /tmp does not exist → high.
+    let tmpLiteralReal: string | undefined;
+    try { tmpLiteralReal = realpathSync('/tmp'); } catch { /* not present */ }
+    const expected = tmpLiteralReal !== undefined && getTempRoots().includes(tmpLiteralReal) ? 'safe' : 'high';
     expect(classifyRisk('write_file', { file_path: LITERAL_TMP_X }, wsCtx)).toBe(expected);
   });
 
@@ -805,6 +811,10 @@ describe('classifyRisk — system temp dir carve-out', () => {
     );
     expect(v.level).toBe('high');
     expect(v.reason).toMatch(/^git-dir: .* is inside \.git\/$/);
+  });
+
+  it('getTempRoots() returns exactly [realpath(os.tmpdir())]', () => {
+    expect(getTempRoots()).toEqual([tmpRoot]);
   });
 
   it('<tmpRoot>-sibling/x (prefix lookalike) → high', () => {
@@ -903,5 +913,77 @@ describe('classifyRiskDetailed — reasons for each high category', () => {
     expect(classifyRisk('bash', { command: 'sudo ls' }, ctx)).toBe(
       classifyRiskDetailed('bash', { command: 'sudo ls' }, ctx).level,
     );
+  });
+});
+
+// ---- isOutsideRoot — portable win32 cross-drive test --------------------------
+// Uses path.win32 so this runs correctly on every host (no platform gating).
+describe('isOutsideRoot — win32 cross-drive semantics via path.win32', () => {
+  const w32 = path.win32;
+
+  it('same-drive descendant → inside (not outside)', () => {
+    expect(isOutsideRoot('C:\\ws', 'C:\\ws\\a\\b.ts', w32)).toBe(false);
+  });
+
+  it('same-drive root itself → inside (rel is empty string)', () => {
+    expect(isOutsideRoot('C:\\ws', 'C:\\ws', w32)).toBe(false);
+  });
+
+  it('same-drive sibling with shared prefix → outside (boundary-safe)', () => {
+    // C:\ws-evil is NOT inside C:\ws — path.relative returns '..\ws-evil'
+    expect(isOutsideRoot('C:\\ws', 'C:\\ws-evil\\a', w32)).toBe(true);
+  });
+
+  it('same-drive parent escape → outside', () => {
+    expect(isOutsideRoot('C:\\ws', 'C:\\other', w32)).toBe(true);
+  });
+
+  it('different drive → outside (path.relative returns absolute on win32)', () => {
+    // This is the bug: path.win32.relative('C:\\ws', 'D:\\x') === 'D:\\x'
+    // which is absolute — the old rel.startsWith('..') check missed it.
+    expect(isOutsideRoot('C:\\ws', 'D:\\x', w32)).toBe(true);
+  });
+
+  it('POSIX paths → same behaviour as path.posix', () => {
+    expect(isOutsideRoot('/root/ws', '/root/ws/a', path.posix)).toBe(false);
+    expect(isOutsideRoot('/root/ws', '/other', path.posix)).toBe(true);
+  });
+});
+
+// ---- AFK_HOME under a temp root ---------------------------------------------
+describe('classifyRisk — AFK_HOME inside temp root blocks carve-out', () => {
+  // A workspace NOT under the temp dir, so all temp writes below are escapes
+  // that only the carve-out can allow.
+  const WS3 = path.resolve('/opt/afk-risk-ws3');
+  const ws3Ctx: RiskContext = { cwd: WS3, workspaceRoot: WS3 };
+
+  let afkHomeFixture: string;
+  let sibling: string;
+
+  beforeEach(() => {
+    // Create two mkdtemp fixtures: one that will be AFK_HOME, one sibling.
+    afkHomeFixture = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'afk-risk-home-')));
+    sibling = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'afk-risk-sibling-')));
+    // Point AFK_HOME at the fixture. The temp-roots cache is keyed on
+    // os.tmpdir(), which this does not change.
+    vi.stubEnv('AFK_HOME', afkHomeFixture);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(afkHomeFixture, { recursive: true, force: true });
+    rmSync(sibling, { recursive: true, force: true });
+  });
+
+  it('write to <afkHome>/skills/x.md → high (workspace-escape, not safe via carve-out)', () => {
+    const target = path.join(afkHomeFixture, 'skills', 'x.md');
+    const v = classifyRiskDetailed('write_file', { file_path: target }, ws3Ctx);
+    expect(v.level).toBe('high');
+    expect(v.reason).toMatch(/^workspace-escape: /);
+  });
+
+  it('write to sibling temp fixture outside AFK_HOME → safe (carve-out still works)', () => {
+    const target = path.join(sibling, 'scratch.txt');
+    expect(classifyRisk('write_file', { file_path: target }, ws3Ctx)).toBe('safe');
   });
 });
