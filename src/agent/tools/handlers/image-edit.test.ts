@@ -437,7 +437,7 @@ describe('image_edit handler', () => {
     const form: UndiciFormData = opts.body as UndiciFormData;
     expect(form.get('output_format')).toBe('jpeg');
     // The saved file must also carry the matching extension (#3429).
-    expect(result.isError).toBeUndefined();
+    expect(result.isError).toBeFalsy();
     const meta = JSON.parse(result.content);
     expect(meta.path).toMatch(/\.jpeg$/);
   });
