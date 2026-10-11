@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { runPicker, type PickerHost } from './picker.js';
+import { runPicker, handlePickerKey, type PickerHost, type PickerState } from './picker.js';
 import type { PickerController } from '../terminal-compositor.js';
 
 /**
@@ -839,5 +839,122 @@ describe('runPicker — searchable mode', () => {
     host.pressKey('escape');
     host.pressKey('escape');
     await p;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: handlePickerKey viewport clamping on short terminals (#3515)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a minimal PickerState for direct handlePickerKey tests.
+ */
+function makeState(cursor = 0, scrollOffset = 0): PickerState {
+  return {
+    cursor,
+    scrollOffset,
+    filterQuery: '',
+    filteredResults: [],
+    selected: new Set<number>(),
+  };
+}
+
+describe('handlePickerKey — short-terminal viewport clamping (regression #3515)', () => {
+  // Contract: terminalRows=8, header=1 line, searchable=false.
+  // pickerViewportSize(fn, 1, false, N) =
+  //   fixedRows = 1 + 0 + 1 = 2
+  //   withoutIndicator = max(0, 8 - 1 - 2) = 5
+  //   indicatorRows = N>min(20,5) ? 1 : 0  → for N=30: 1
+  //   result = min(20, max(0, 5-1)) = 4
+  // So the visible window is 4 rows on an 8-row terminal.
+
+  const TERMINAL_ROWS = 8;
+  const HEADER_LENGTH = 1;
+  const terminalRowsFn = (): number => TERMINAL_ROWS;
+  // 30 options — well beyond any window size
+  const options = Array.from({ length: 30 }, (_, i) => `option-${i}`);
+
+  it('cursor stays within visible scroll window after repeated down presses', () => {
+    const state = makeState(0, 0);
+
+    // Press down 15 times on a short terminal (window=4).
+    // After each press, assert cursor is within [scrollOffset, scrollOffset+windowSize).
+    for (let i = 0; i < 15; i++) {
+      handlePickerKey(
+        state,
+        options,
+        false,   // multi
+        false,   // searchable
+        undefined,
+        { name: 'down' },
+        terminalRowsFn,
+        HEADER_LENGTH,
+      );
+      // windowSize for these params = 4 (computed above).
+      // cursor must be inside [scrollOffset, scrollOffset + 4).
+      expect(state.cursor).toBeGreaterThanOrEqual(state.scrollOffset);
+      expect(state.cursor).toBeLessThan(state.scrollOffset + 4);
+    }
+  });
+
+  it('cursor stays within visible scroll window after repeated up presses from end', () => {
+    const state = makeState(options.length - 1, options.length - 4);
+
+    for (let i = 0; i < 15; i++) {
+      handlePickerKey(
+        state,
+        options,
+        false,
+        false,
+        undefined,
+        { name: 'up' },
+        terminalRowsFn,
+        HEADER_LENGTH,
+      );
+      expect(state.cursor).toBeGreaterThanOrEqual(state.scrollOffset);
+      expect(state.cursor).toBeLessThan(state.scrollOffset + 4);
+    }
+  });
+
+  it('end key clamps scroll to real viewport, not WINDOW_SIZE=20', () => {
+    const state = makeState(0, 0);
+    handlePickerKey(
+      state,
+      options,
+      false,
+      false,
+      undefined,
+      { name: 'end' },
+      terminalRowsFn,
+      HEADER_LENGTH,
+    );
+    // cursor should be at the last option
+    expect(state.cursor).toBe(options.length - 1);
+    // scrollOffset must put cursor within the 4-row window, NOT a 20-row window
+    expect(state.cursor).toBeGreaterThanOrEqual(state.scrollOffset);
+    expect(state.cursor).toBeLessThan(state.scrollOffset + 4);
+    // Specifically: scrollOffset should be options.length-4 = 26, not options.length-20 = 10
+    expect(state.scrollOffset).toBe(options.length - 4);
+  });
+
+  it('WITHOUT terminalRowsFn the window falls back to WINDOW_SIZE=20 (baseline check)', () => {
+    // When terminalRowsFn is omitted, pickerViewportSize returns 20.
+    // This verifies the fallback still works — and confirms the bug:
+    // without the fix, all branches would use this path even on short terminals.
+    const state = makeState(0, 0);
+    handlePickerKey(
+      state,
+      options,
+      false,
+      false,
+      undefined,
+      { name: 'end' },
+      // no terminalRowsFn — falls back to WINDOW_SIZE
+      undefined,
+      undefined,
+    );
+    expect(state.cursor).toBe(options.length - 1);
+    // With WINDOW_SIZE=20: scrollOffset = 30-20 = 10
+    expect(state.scrollOffset).toBe(options.length - 20);
   });
 });

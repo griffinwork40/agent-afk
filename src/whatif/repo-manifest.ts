@@ -8,12 +8,9 @@
  */
 
 import * as path from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { statSync } from 'node:fs';
 import { errorMessage } from '../utils/errors.js';
-
-const execFileAsync = promisify(execFile);
+import { execFileAsync } from '../utils/exec-file.js';
 
 // ---------------------------------------------------------------------------
 // Constants

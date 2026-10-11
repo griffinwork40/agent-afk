@@ -17,9 +17,19 @@
 import { Command } from 'commander';
 import { handleCommandError } from '../errors/index.js';
 import { palette } from '../palette.js';
+import { sanitizeForDisplay } from '../../utils/terminal-sanitize.js';
 import { readLedgerRecords, clusterLedgerRecords } from '../../agent/preexisting-ledger/reader.js';
 import { getPreexistingLedgerPath } from '../../agent/preexisting-ledger/paths.js';
 import type { DefectCluster } from '../../agent/preexisting-ledger/reader.js';
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const DEFAULT_DAYS = 90;
+const DEFAULT_TOP  = 10;
+const RECURRENCE_ERROR_THRESHOLD   = 5;
+const RECURRENCE_WARNING_THRESHOLD = 3;
 
 // ---------------------------------------------------------------------------
 // Rendering helpers
@@ -43,6 +53,22 @@ function shortRepo(repo: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Argument parsing helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse an integer CLI option, returning `defaultVal` for non-numeric input
+ * and clamping to a minimum of 1 for numeric input.
+ * This intentionally lets `--days 0` pass as 1 (floor) rather than silently
+ * falling back to the default as the old `|| defaultVal` pattern did.
+ */
+function parseIntOption(raw: string, defaultVal: number): number {
+  const n = parseInt(raw, 10);
+  if (Number.isNaN(n)) return defaultVal;
+  return Math.max(1, n);
+}
+
+// ---------------------------------------------------------------------------
 // Text renderer
 // ---------------------------------------------------------------------------
 
@@ -52,17 +78,32 @@ const CAT_W   = 12;
 const CNT_W   =  8; // "Sessions" is 8 chars
 const DATE_W  = 10;
 
-function renderTable(clusters: DefectCluster[], days: number): string {
+function renderTable(
+  clusters: DefectCluster[],
+  days: number,
+  totalClusters: number,
+  ledgerTruncated: boolean,
+  ledgerPath: string,
+): string {
+  const lines: string[] = [];
+
+  if (ledgerTruncated) {
+    lines.push(
+      palette.warning('⚠ Ledger exceeded 1 MB — only the most recent records were read. Older entries may be missing.') + '\n',
+    );
+  }
+
   if (clusters.length === 0) {
-    return (
+    lines.push(
       palette.meta('No pre-existing defect records in the last ') +
       palette.meta(String(days)) +
       palette.meta(' days.') +
       '\n' +
       palette.dim('Run `afk chat` sessions to accumulate data, or check ') +
-      palette.dim(getPreexistingLedgerPath()) +
-      '\n'
+      palette.dim(sanitizeForDisplay(ledgerPath)) +
+      '\n',
     );
+    return lines.join('');
   }
 
   const header =
@@ -76,9 +117,9 @@ function renderTable(clusters: DefectCluster[], days: number): string {
 
   const rows = clusters.map((c) => {
     const count = String(c.recurrenceCount);
-    const severityColor = c.recurrenceCount >= 5
+    const severityColor = c.recurrenceCount >= RECURRENCE_ERROR_THRESHOLD
       ? palette.error
-      : c.recurrenceCount >= 3
+      : c.recurrenceCount >= RECURRENCE_WARNING_THRESHOLD
         ? palette.warning
         : palette.meta;
     return (
@@ -90,10 +131,17 @@ function renderTable(clusters: DefectCluster[], days: number): string {
     );
   });
 
-  const caption =
-    palette.dim(`Showing top ${clusters.length} cluster(s) by recurrence count (lookback: ${days} days).`);
+  const hidden = totalClusters - clusters.length;
+  const hiddenSuffix = hidden > 0
+    ? palette.dim(` (${hidden} more cluster${hidden === 1 ? '' : 's'} not shown — use --top to expand)`)
+    : '';
 
-  return [header, divider, ...rows, '', caption].join('\n') + '\n';
+  const caption =
+    palette.dim(`Showing top ${clusters.length} cluster(s) by recurrence count (lookback: ${days} days).`) +
+    hiddenSuffix;
+
+  lines.push([header, divider, ...rows, '', caption].join('\n') + '\n');
+  return lines.join('');
 }
 
 // ---------------------------------------------------------------------------
@@ -104,16 +152,16 @@ export function registerDefectsCommand(program: Command): void {
   program
     .command('defects')
     .description('Show top recurring pre-existing defects from the session ledger')
-    .option('--days <n>',  'Lookback window in days',    '90')
-    .option('--top <n>',   'Maximum clusters to show',  '10')
+    .option('--days <n>',  'Lookback window in days',    String(DEFAULT_DAYS))
+    .option('--top <n>',   'Maximum clusters to show',  String(DEFAULT_TOP))
     .option('--json',      'Emit raw JSON (for scripting)')
     .action(async (opts: { days: string; top: string; json?: boolean }) => {
       try {
-        const days = Math.max(1, parseInt(opts.days, 10) || 90);
-        const topN = Math.max(1, parseInt(opts.top, 10) || 10);
+        const days = parseIntOption(opts.days, DEFAULT_DAYS);
+        const topN = parseIntOption(opts.top, DEFAULT_TOP);
 
         const ledgerPath = getPreexistingLedgerPath();
-        const { records: allRecords } = readLedgerRecords(ledgerPath);
+        const { records: allRecords, ledgerTruncated } = readLedgerRecords(ledgerPath);
 
         // Apply time window filter
         const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
@@ -122,14 +170,17 @@ export function registerDefectsCommand(program: Command): void {
           return !isNaN(t) && t >= cutoffMs;
         });
 
-        const clusters = clusterLedgerRecords(inWindow).slice(0, topN);
+        const allClusters = clusterLedgerRecords(inWindow);
+        const clusters    = allClusters.slice(0, topN);
 
         if (opts.json) {
           process.stdout.write(JSON.stringify(clusters, null, 2) + '\n');
           return;
         }
 
-        process.stdout.write(renderTable(clusters, days));
+        process.stdout.write(
+          renderTable(clusters, days, allClusters.length, ledgerTruncated, ledgerPath),
+        );
       } catch (err) {
         handleCommandError(err);
       }

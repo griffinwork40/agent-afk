@@ -120,7 +120,7 @@ export const TOOL_SYSTEM_PROMPT = `${TOOL_SYSTEM_PROMPT_BASE}\n\n${SLASH_COMMAND
  * 1. {@link TOOL_SYSTEM_PROMPT_BASE} — the filesystem/shell conventions the
  *    child needs to use its own tools correctly. Identical to what
  *    skill-dispatch sub-agents already receive (via
- *    `resolveToolSystemPrompt(isSkillDispatch)`).
+ *    `resolveToolSystemPrompt(isSkillDispatch, isUnnamedWorker)`).
  * 2. {@link SUBAGENT_HANDOFF_CONTRACT} — tells the child to keep its final
  *    reply compact and offload bulk output to files, preventing
  *    `StreamIncompleteError` on large replies.

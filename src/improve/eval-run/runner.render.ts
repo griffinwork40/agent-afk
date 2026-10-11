@@ -8,7 +8,8 @@
  * @module improve/eval-run/runner.render
  */
 
-import { existsSync, readFileSync, readdirSync } from 'fs';
+import { existsSync, readdirSync } from 'fs';
+import { readJsonFileLoose } from '../../utils/json-file.js';
 import { join } from 'path';
 import { EvalRunSchema, type EvalCheck, type EvalRun, type EvalRunStatus } from '../schemas.js';
 import { getEvalRunJsonPath, getEvalRunsDir } from '../paths.js';
@@ -162,12 +163,10 @@ export function getEvalRun(evalRunId: string): EvalRun | undefined {
 }
 
 function readEvalRunIfExists(path: string): EvalRun | undefined {
-  if (!existsSync(path)) return undefined;
-  try {
-    const parsed = JSON.parse(readFileSync(path, 'utf-8'));
-    const validated = EvalRunSchema.safeParse(parsed);
-    return validated.success ? validated.data : undefined;
-  } catch {
-    return undefined;
-  }
+  // readJsonFileLoose: ENOENT and parse errors return undefined. Unexpected I/O
+  // errors (EACCES, EISDIR) re-throw. Zod validation still runs below.
+  const raw = readJsonFileLoose<unknown>(path);
+  if (raw == null) return undefined;
+  const validated = EvalRunSchema.safeParse(raw);
+  return validated.success ? validated.data : undefined;
 }

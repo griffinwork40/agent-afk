@@ -479,6 +479,8 @@ Create a new scheduled task saved to `~/.afk/config/schedules.json` and live-syn
 | `trigger` | string | | `cron` (default), `sessionstart`, or `both`. |
 | `notifyOn` | string | | When to push Telegram notifications: `failure` (default), `always`, or `never`. |
 | `notifyChat` | string/number | | Route notifications to a specific chat (id or alias). |
+| `maxAttempts` | integer | | Total attempts per run for agent tasks (1–5). Default 1 = no retry. Only transient failures (429, network blip, provider 5xx) retry. |
+| `retryDelayMs` | integer | | Backoff base in ms between retries (1000–300000, doubles per attempt, capped at 5 min). Default 30000. |
 | `enabled` | boolean | | Whether to activate immediately. Default: true. |
 
 ### `list_schedules`

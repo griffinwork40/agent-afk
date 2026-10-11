@@ -113,6 +113,31 @@ function defaultReadFile(path: string): string | null {
  *   resolve the ChatGPT-subscription token from `~/.codex/auth.json` ahead of
  *   every other tier, including an explicit key or OPENAI_API_KEY.
  */
+/**
+ * Resolve a parsed ChatGPT-subscription token bundle to an auth resolution.
+ * Shared by the forced (slot-bound) and opt-in Codex auth.json tiers.
+ *
+ * Gate expiry: an expired token is treated as unusable so the diagnostic
+ * fires rather than passing an opaque 401 to OpenAI.
+ */
+function buildChatGptOAuthResult(
+  accessToken: string,
+  accountId: string | undefined,
+  expiresAt: number | undefined,
+): OpenAIAuthResolution {
+  if (expiresAt !== undefined && expiresAt <= Math.floor(Date.now() / 1000)) {
+    return { apiKey: null, source: 'chatgpt-oauth-expired', expiresAt };
+  }
+  const res: OpenAIAuthResolution = {
+    apiKey: accessToken,
+    source: 'chatgpt-oauth',
+    last4: last4Of(accessToken),
+  };
+  if (accountId !== undefined) res.accountId = accountId;
+  if (expiresAt !== undefined) res.expiresAt = expiresAt;
+  return res;
+}
+
 export function resolveOpenAIAuth(
   explicitConfigKey: string | undefined,
   deps: AuthResolverDeps = {},
@@ -133,19 +158,7 @@ export function resolveOpenAIAuth(
     if (codexRaw !== null) {
       const parsed = parseCodexAuthJson(codexRaw);
       if (parsed.kind === 'chatgpt' && parsed.accessToken) {
-        // Gate expiry: treat an expired token as unusable so the diagnostic fires
-        // rather than passing an opaque 401 to OpenAI.
-        if (parsed.expiresAt !== undefined && parsed.expiresAt <= Math.floor(Date.now() / 1000)) {
-          return { apiKey: null, source: 'chatgpt-oauth-expired', expiresAt: parsed.expiresAt };
-        }
-        const res: OpenAIAuthResolution = {
-          apiKey: parsed.accessToken,
-          source: 'chatgpt-oauth',
-          last4: last4Of(parsed.accessToken),
-        };
-        if (parsed.accountId !== undefined) res.accountId = parsed.accountId;
-        if (parsed.expiresAt !== undefined) res.expiresAt = parsed.expiresAt;
-        return res;
+        return buildChatGptOAuthResult(parsed.accessToken, parsed.accountId, parsed.expiresAt);
       }
     }
     // Slot explicitly requires ChatGPT OAuth but no usable token was found.

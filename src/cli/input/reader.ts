@@ -16,25 +16,23 @@
  *   - repaint / schedulePaint  ({@link ./reader.repaint.ts})
  *   - applySelection           ({@link ./reader.selection.ts})
  *   - handleKeypress           ({@link ./reader.keypress.ts})
+ *   - buildReaderCallbacks     ({@link ./reader.callbacks.ts})
  *   - ReaderState bag          ({@link ./reader.state.ts})
  */
 
-import * as ansiEscapes from 'ansi-escapes';
 import { emitKeypressEventsImmediateEscape } from './emit-keypress.js';
 import stringWidth from 'string-width';
 import { createSlashRegistryView } from '../slash/registry.js';
 import { stripAnsi } from '../display.js';
 import { acquireStdinClaim } from './stdin-claim.js';
 import { InputCore } from '../input-core.js';
-import { colorizeInputBuffer } from '../input-highlight.js';
-import { describeAttachmentSummary } from './attachments.js';
-import { formatSubmittedEcho } from './echo.js';
 import { enterRawMode } from './raw-mode.js';
 import { createAutocompleteState } from './autocomplete-state.js';
 import { ResizeBus } from '../terminal-size.js';
 import { repaint, schedulePaint } from './reader.repaint.js';
 import { applySelection } from './reader.selection.js';
 import { handleKeypress } from './reader.keypress.js';
+import { buildReaderCallbacks } from './reader.callbacks.js';
 import { createReverseSearchState } from './reader.reverse-search.js';
 import type { ReaderState } from './reader.state.js';
 import type { RepaintCtx } from './reader.repaint.js';
@@ -143,69 +141,9 @@ export async function readWithAutocompleteTty(
         resizeUnsub = null;
       };
 
-      const onSubmit = () => {
-        // Clear dropdown (if any) and leave the submitted input line as the last
-        // visible row, with cursor on the next line for the caller's output.
-        if (st.prevStatusRows > 0 || st.prevBufferRows > 0) {
-          stdout.write(ansiEscapes.cursorUp(st.prevStatusRows + st.prevBufferRows));
-        }
-        // Erase everything below the cursor so any prior multi-line edit
-        // state or dropdown chrome is cleared before the echo is rewritten.
-        stdout.write('\r');
-        stdout.write(ansiEscapes.eraseDown);
-        st.rowsBelow = 0;
-        // eraseDown above wipes the in-input `renderStatusLine` indicator, so
-        // any attachment acknowledgment must be re-emitted as part of the
-        // post-submit echo or the user loses all visual confirmation that an
-        // image rode along with the turn.
-        const echo = formatSubmittedEcho({
-          buffer: colorizeInputBuffer(st.input.buffer, repaintCtx.slashRegistryView),
-          promptText,
-          isTTY: Boolean(stdout.isTTY),
-          attachmentSummary: describeAttachmentSummary(st.attachments),
-        });
-        // External constraint (DECSTBM contract): the StatusLine reserves the
-        // bottom row via a persistent scroll region. A `\n` written at the
-        // bottom of that sub-region triggers a sub-region scroll on
-        // xterm/iTerm2/Apple Terminal and the displaced top line silently
-        // exits without entering scrollback — meaning this echo can vanish
-        // from the user's scroll history if subsequent turn output causes
-        // enough cumulative sub-region scrolls. Route through the guard so
-        // the write happens with full-screen scroll semantics, which DOES
-        // enter scrollback. No-op when statusLine has no guard or hasn't
-        // started (e.g. non-TTY test surfaces).
-        const writeEcho = () => stdout.write(echo + '\n');
-        if (opts.statusLine?.withFullScrollRegion) {
-          opts.statusLine.withFullScrollRegion(writeEcho);
-        } else {
-          writeEcho();
-        }
-        cleanup();
-        resolve({ text: st.input.buffer, attachments: [...st.attachments] });
-        st.prevBufferRows = 0;
-      };
-
-      const onAbort = (err: Error) => {
-        const abortUpRows = st.prevStatusRows + st.prevBufferRows;
-        if (abortUpRows > 0) {
-          stdout.write(ansiEscapes.cursorUp(abortUpRows));
-        }
-        if (st.rowsBelow > 0) {
-          stdout.write(ansiEscapes.eraseDown);
-          st.rowsBelow = 0;
-        }
-        stdout.write('\n');
-        cleanup();
-        reject(err);
-        st.prevBufferRows = 0;
-      };
-
-      // Ctrl+D on an empty buffer: resolve with empty text (not rejection).
-      const onEof = () => {
-        cleanup();
-        resolve({ text: '', attachments: [...st.attachments] });
-        st.prevBufferRows = 0;
-      };
+      const { onSubmit, onAbort, onEof } = buildReaderCallbacks(
+        st, stdout, repaintCtx, opts, promptText, cleanup, resolve, reject,
+      );
 
       keypressListener = (char: string | undefined, key: KeyInfo) => {
         handleKeypress(char, key, st, {

@@ -16,6 +16,7 @@ allowBuilds:
 
 minimumReleaseAgeExclude:
   - openai@7.30.0
+  - dotenv@18.0.7
 
 # Security overrides: pin transitive vulnerabilities to first patched release.
 # These come in via @modelcontextprotocol/sdk and ajv; direct bumps to those

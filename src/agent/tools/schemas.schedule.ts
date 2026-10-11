@@ -33,7 +33,23 @@ export const createScheduleTool: AnthropicToolDef = {
       },
       cron: {
         type: 'string',
-        description: '5-field cron expression, e.g. "0 2 * * *".',
+        description: '5-field cron expression, e.g. "0 2 * * *". Must be exactly 5 fields (no year field).',
+      },
+      runAt: {
+        type: 'string',
+        description:
+          'ISO 8601 datetime for a one-shot fire, e.g. "2026-11-01T09:00:00Z". ' +
+          'When set, the task fires once at or after this instant and is automatically disabled. ' +
+          'Mutually exclusive with a recurring cron expression — omit `cron` or leave it as a ' +
+          'polling cadence placeholder when using runAt.',
+      },
+      expiresAt: {
+        type: 'string',
+        description:
+          'ISO 8601 datetime after which the task is automatically disabled, ' +
+          'e.g. "2026-12-31T23:59:59Z". On expiry the scheduler skips the task, ' +
+          'writes a skipped/expired telemetry record, and disables the task in the store. ' +
+          'Works with both recurring cron tasks and runAt one-shots.',
       },
       executor: {
         type: 'string',
@@ -61,6 +77,23 @@ export const createScheduleTool: AnthropicToolDef = {
           'a non-numeric string is a chat alias name from afk.config.json `telegram.chatAliases`. ' +
           'The resolved chat must be allowlisted (AFK_TELEGRAM_ALLOWED_CHAT_IDS) — otherwise the ' +
           'daemon ignores the override and uses the default target. Omit for default routing.',
+      },
+      maxAttempts: {
+        type: 'integer',
+        minimum: 1,
+        maximum: 5,
+        description:
+          'Optional total attempts per run for agent tasks (1-5). Default 1 = no retry. ' +
+          'When > 1, a run that fails with a transient error (rate limit 429, network blip, provider 5xx) ' +
+          'is retried in-process with exponential backoff; non-transient failures never retry.',
+      },
+      retryDelayMs: {
+        type: 'integer',
+        minimum: 1000,
+        maximum: 300000,
+        description:
+          'Optional backoff base in ms between retry attempts (1000-300000; doubles per attempt, ' +
+          'capped at 5 minutes). Default 30000. Only used when maxAttempts > 1.',
       },
       enabled: {
         type: 'boolean',
@@ -107,7 +140,17 @@ export const updateScheduleTool: AnthropicToolDef = {
       },
       cron: {
         type: 'string',
-        description: 'New 5-field cron expression, e.g. "0 2 * * *".',
+        description: 'New 5-field cron expression (no year), e.g. "0 2 * * *".',
+      },
+      runAt: {
+        type: ['string', 'null'],
+        description:
+          'ISO 8601 datetime for a one-shot fire. Pass null to clear a previously-set runAt.',
+      },
+      expiresAt: {
+        type: ['string', 'null'],
+        description:
+          'ISO 8601 expiry datetime. Pass null to clear a previously-set expiresAt.',
       },
       executor: {
         type: 'string',
@@ -130,6 +173,18 @@ export const updateScheduleTool: AnthropicToolDef = {
           'Route this task\'s completion notification to a specific chat. ' +
           'A number (or numeric string) is a raw Telegram chat id; ' +
           'a non-numeric string is a chat alias name from afk.config.json `telegram.chatAliases`.',
+      },
+      maxAttempts: {
+        type: 'integer',
+        minimum: 1,
+        maximum: 5,
+        description: 'New total attempts per run (1-5). 1 disables retries. Only transient failures retry.',
+      },
+      retryDelayMs: {
+        type: 'integer',
+        minimum: 1000,
+        maximum: 300000,
+        description: 'New backoff base in ms between retry attempts (1000-300000).',
       },
       enabled: {
         type: 'boolean',

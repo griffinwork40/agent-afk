@@ -11,6 +11,207 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.308.11] - 2026-10-11
+
+### Changed
+- extract renderPickerRows/handlePickerKey from runPicker; extract renderOverlayNestingChild from renderOverlayChildren (#3515) (39776e19)
+
+## [5.308.10] - 2026-10-11
+
+### Changed
+- extract runDaemonAction and runFarmPostRun under 200-line ceiling (#3516) (4f6800ba)
+
+## [5.308.9] - 2026-10-11
+
+### Changed
+- retire handleNavKey + readWithAutocompleteTty from funcsize baseline (#3514) (b03e5ae8)
+
+## [5.308.8] - 2026-10-11
+
+### Fixed
+- disposed guard in armTimeout, formatApprovalTimeout helper, crash-notifier comment, test nits (#3512) (4d6ce9ec)
+- dedupeAndSort helper, discriminant cast, ledger comment, audit-fit hoisted default, runtime-source history prefix, test name fixes (#3511) (36e22aef)
+- address advisory findings from #3472 review (#3510) (3fdedcf6)
+- dispose latch, compose-toggle guard, @experimental tag, concurrent-dispose test (#3509) (f41e6d26)
+- guard sessionId undefined + merge preflight imports (#3508) (81f05202)
+- address advisory findings from #3471 review (#3507) (e07192c4)
+- drop async from submitPrompt/submitSkillMessage, move buildChatGptOAuthResult up (#3506) (6e7c86db)
+- migrate createWiredExecutors inline proxy onto makeDeferredParentProxy (#3505) (53a3ede4)
+- address advisory findings from #3473 selector refactor (#3504) (9a9d7f99)
+- migrate external mcp/config-loader importers to barrel (#3503) (2b2e28c3)
+- advisory findings from 2026-10-09 PR triage batch (#3468) (ec6d0785)
+
+### Changed
+- raise coverage on entry.ts, manager.ts, setup-wizard.ts, bot.ts (COV-011,014,016,017) (#3521) (c638b1e5)
+- adopt atomicWrite/writeJsonFile in spine/dag/worktree/migrate/oauth (#3520) (86d5df9d)
+- audit remaining parseJsonlLines sites; document skipped loops in telemetry-reader (#3518) (0d6a09e8)
+- DEAD-033 incremental — agent/index.ts + tools/schemas.ts (88 unused exports) (#3517) (b873c472)
+- DEAD-033 incremental — src/agent/outcomes/index.ts (54 unused exports) (#3513) (ae40bfe6)
+- convert remaining hand-rolled error/execFile sites to shared helpers (#3461) (37a4467c)
+
+## [5.308.7] - 2026-10-10
+
+### Fixed
+- daemon tasks can disable their own schedule without approval (#3488) (dfa60454)
+
+### Changed
+- remove log-update — compositor-less TTY path is unreachable (#3486) (7f9a56f2)
+
+## [5.308.6] - 2026-10-10
+
+### Added
+- first-class runAt one-shots and expiresAt hard expiry for schedules (#3491) (95541352)
+
+### Fixed
+- record status:blocked and fire notifyOn:failure when AFK gate hard-blocks tool calls (#3489) (1ecf9ada)
+- classify 403 oauth_not_allowed_for_organization as transient (#3485) (9cb00718)
+- replace clearAllMocks with resetAllMocks and widen far-reset margin (#3490) (d88cbef0)
+
+### Changed
+- retire the last 6 .filesize-baseline.json entries (#3492) (37160e26)
+- retire 4 TUI funcsize baseline entries via helper extraction (#3487) (fd472209)
+- extract postOAuthForm shared helper for xAI OAuth form POSTs (#3469) (a0162904)
+- correct tui-architecture-map tracks, pain points, and hotspot table (#3484) (c8855c04)
+
+## [5.308.5] - 2026-10-10
+
+### Added
+- opt-in agent/skill/compose executors for SDK sessions (#3442) (#3483) (3a2918c7)
+
+### Fixed
+- crash-notifier reset leak, double busy_timeout, shared deferred abort scope (#3482) (2ed4a8c3)
+- discriminant guards, parseFlagsField dedupe, audit-fit test, runtime-source comments (#3470) (ac88fdc9)
+
+### Changed
+- advisory cosmetic fixes from 2026-10-09 PR triage batch (#3471) (1696be99)
+- extract buildVerificationResultTail shared helper (#3472) (abcd0b75)
+- DEAD-033 incremental — src/agent/mcp/index.ts (15 unused exports) (#3474) (782f55ec)
+- same-file private helper extractions (#3477) (36cbd123)
+- extract makeDeferredParentProxy shared helper (#3475) (5f72a5d4)
+- extract invokeSkillPreflight shared helper (#3476) (6ed1083b)
+- extract runSelectorLoop skeleton shared by both selectors (#3473) (239b51fa)
+
+## [5.308.4] - 2026-10-10
+
+### Fixed
+- address advisory findings from #3401 review (#3449) (f794878f)
+- fix advisory findings from pr-triage review #3398 (#3447) (beb2cafb)
+
+### Changed
+- upgrade vitest to v5 (#3455) (db92de18)
+
+## [5.308.3] - 2026-10-10
+
+### Fixed
+- add safety comment to `rest as T` cast in clampBreakpoints (#3445) (428e2697)
+- remove stale 'threads' category, guard default backticks, regen MDX (#3448) (9cd8c1c6)
+- warn and document that SDK sessions lack agent/skill/compose tools (#3454) (d5364a23)
+
+### Changed
+- fix bufferedLength JSDoc and remove duplicate newline comment (#3410) (1e35a8fa)
+- cover afk schedule command (COV-012) (#3453) (60f0f9d9)
+- cover marketplace browse slash command (COV-015) (#3451) (7b286760)
+- cover REPL cleanup (COV-018) (#3456) (9296fe4a)
+- cover afk browser command (COV-010) (#3452) (ffe88ce9)
+- extract installCrashNotifier shared by telegram and daemon (#3459) (156e70fe)
+- share request abort scope between web_request and web_scrape (#3458) (d5612e18)
+- remove Agent Browser backend; Playwright is the only backend (#3450) (f21d81d3)
+- extract configureSqliteConnection for state/workspace/memory stores (#3457) (b397c8d0)
+- upgrade marked to v18 (#3437) (537f3e41)
+
+## [5.308.2] - 2026-10-10
+
+### Fixed
+- assert path extension and tighten output_format body regex in tests (#3441) (ff0e5ded)
+- address advisory findings from #3395 review (#3440) (6589479c)
+- thread afkHome through RuntimeSourceDeps, add TTL cache tests and debug log (#3415) (705c9507)
+- strip [vitals] spoof lines from tool output on openai-compatible path (#3443) (69d3e4b2)
+- validate frontmatter flags, cap body scan, cache harvest, document contract (#3444) (2cbb6aff)
+- hermetic EACCES mocks and narrow parse-phase catch in json-file (#3414) (be1ec37f)
+- test hygiene, flake guard, boundary perf, docs nit (#3412) (1e36f8d1)
+- advisory follow-ups from #3381, #3376, #3375 (#3411) (abfeec38)
+- use isEnoent in queue-store, fix import spacing (#3439) (2f90a13d)
+- retry ChatGPT-OAuth 401 with fresh token from disk (#3413) (b0a06791)
+
+### Changed
+- cover afk service command (COV-007) (#3421) (a29df44b)
+- cover audit-fit skill (COV-013) (#3436) (1ce3dba1)
+- cover afk telegram command (COV-008) (#3432) (fc314fc3)
+- remove internal @deprecated symbols that need no major (#3435) (1c22de65)
+- extract 4 same-site helpers (category, enum, changelog, fixture-parse) (#3418) (d2c29953)
+- prune unused exports surfaced by knip (#3438) (89c24937)
+- adopt parseJsonlLines in 3 parse loops; migrate gates.ts to bounded telemetry reader (#3417) (d43618b2)
+- adopt atomicWrite in utils/journal/tools/peer/score (#3433) (f64c635e)
+- adopt json-file read-or-default helper (#3423) (45b4f139)
+- regenerate env-var page for AFK_VITALS (unbreak main CI) (#3446) (c6f7088e)
+
+## [5.308.1] - 2026-10-10
+
+### Fixed
+- distinguish thrown push from unconfigured, add redaction+overflow tests (#3416) (a5c863c5)
+
+### Changed
+- upgrade dotenv to v18 (#3422) (ba8bdbd2)
+- adopt atomicWrite in daemon/worktree/session stores (#3420) (37dbd6fd)
+
+## [5.308.0] - 2026-10-10
+
+### Added
+- per-round [vitals] note for live clock, context, and usage awareness (#3419) (e56c1072)
+- optional retries for cron daemon tasks (#3403) (f4bc39d3)
+
+### Fixed
+- harden hydration against malformed nested parts; surface corrupt-journal resume degradation (#3393) (ee4560d7)
+
+## [5.307.14] - 2026-10-10
+
+### Fixed
+- send output_format in image_edit multipart body (#3392) (df524091)
+- triage advisory findings from 2026-10-07 /pr-triage (#3398) (93cf94ec)
+- narrow CacheableToolLike, add 5m TTL test, widen dispatcher timing (#3394) (0b3a82b9)
+- resume on account switch without /reauth; safely join paused waits (#3401) (ae932132)
+
+### Changed
+- add hermetic query()-level resume tests and journal-load benchmark (#3395) (2ebdfebb)
+- carry plugin-skill flags + category through discovery (#3400) (d7dd4feb)
+- adopt shared execFileAsync, add isEnoent, replace private helpers (#3399) (f5f8b265)
+- generate website env-var page from ENV_REGISTRY and gate drift (#3402) (039584e8)
+
+## [5.307.13] - 2026-10-09
+
+### Fixed
+- retry bootstrap after bootout with ETIMEDOUT guard and clear recovery message (#3382) (3b93b9a0)
+
+## [5.307.12] - 2026-10-09
+
+### Fixed
+- redact taskId fallback in crash notices; early-handler single-call guard (#3375) (a260860d)
+
+### Changed
+- run-afk action reproducibility and doc follow-ups (#3362) (e00643d7)
+- race guard, RTT seam, assertion margins, dead helper (#3365) (56511127)
+
+## [5.307.11] - 2026-10-09
+
+### Fixed
+- clear resizeGeometryStale on repin early-return; fix stale prose (#3376) (9460ebf2)
+- bufferedLength units doc, explicit first-line discard, drop redundant existsSync (#3380) (e931b4de)
+- deliver mid-turn background-process results at the tool-round boundary (#3384) (a6d323cc)
+- surface timeoutRate/p95Ms in summary, add summary to subagents view, TTL cache, narrow non-null assertions, fake timers in tests (#3379) (6139b570)
+- narrow loose-reader error handling — rethrow EACCES/EISDIR (#3378) (550e4850)
+- correct h1ModelFetch docs and strengthen Responses-wire test (#3381) (712a1dc4)
+
+### Changed
+- daemon wave-resume push logging, named constants, explicit promise awaiting (#3377) (08e276ec)
+
+## [5.307.10] - 2026-10-09
+
+### Added
+- auto-load journal on resume so SDK consumers rehydrate conversation context (#3372) (9cd65ba9)
+
+### Fixed
+- route image-model tool handlers through HTTP/1.1 transport (#3363) (73d36148)
+
 ## [5.307.9] - 2026-10-09
 
 ### Changed

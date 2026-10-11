@@ -11,8 +11,8 @@
  * @module utils/json-file.test
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -23,6 +23,56 @@ import {
   readJsonFileLoose,
   readJsonFileLooseAsync,
 } from './json-file.js';
+
+// ---------------------------------------------------------------------------
+// Hermetic EACCES injection
+//
+// vi.mock is hoisted above all imports, so these closures are established
+// before json-file.ts loads. Per-test, set throwSyncEacces / throwAsyncEacces
+// to true for a one-shot EACCES injection, then reset in afterEach.
+//
+// The source imports `readFileSync` from `node:fs` and `readFile` from
+// `node:fs/promises`; the mocks forward every other call to the real
+// implementation so all other tests continue to exercise real filesystem I/O.
+// ---------------------------------------------------------------------------
+
+let throwSyncEacces = false;
+let throwAsyncEacces = false;
+
+const eaccesErr = (): NodeJS.ErrnoException => {
+  const e = Object.assign(new Error('EACCES: permission denied, open'), {
+    code: 'EACCES',
+  });
+  return e;
+};
+
+vi.mock('node:fs', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...original,
+    readFileSync: (...args: Parameters<typeof original.readFileSync>) => {
+      if (throwSyncEacces) {
+        throwSyncEacces = false;
+        throw eaccesErr();
+      }
+      return original.readFileSync(...args);
+    },
+  };
+});
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...original,
+    readFile: async (...args: Parameters<typeof original.readFile>) => {
+      if (throwAsyncEacces) {
+        throwAsyncEacces = false;
+        throw eaccesErr();
+      }
+      return original.readFile(...args);
+    },
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -41,10 +91,13 @@ describe('json-file utilities', () => {
 
   beforeEach(() => {
     dir = makeTmpDir();
+    throwSyncEacces = false;
+    throwAsyncEacces = false;
   });
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
+    vi.clearAllMocks();
   });
 
   // ── writeJsonFile (sync) ──────────────────────────────────────────────────
@@ -202,6 +255,22 @@ describe('json-file utilities', () => {
       writeFileSync(p, '{bad json}');
       expect(readJsonFileLoose(p)).toBeUndefined();
     });
+
+    it('re-throws EISDIR (path is a directory, not ENOENT)', () => {
+      // A directory path is not ENOENT — it should propagate, not be swallowed.
+      const d = join(dir, 'is-a-dir');
+      mkdirSync(d);
+      expect(() => readJsonFileLoose(d)).toThrow();
+    });
+
+    it('re-throws EACCES (hermetic: injected via module mock, portable across UID 0 and all platforms)', () => {
+      // Set the one-shot flag; the vi.mock factory (hoisted above imports)
+      // intercepts the next readFileSync call and throws EACCES instead of
+      // hitting the real filesystem. This avoids chmodSync(0o000), which is
+      // silently ignored for UID 0 in root-owned containers.
+      throwSyncEacces = true;
+      expect(() => readJsonFileLoose('any-path.json')).toThrow('EACCES');
+    });
   });
 
   // ── readJsonFileLooseAsync (async, tolerant) ──────────────────────────────
@@ -227,6 +296,21 @@ describe('json-file utilities', () => {
       const p = join(dir, 'async-loose-bad.json');
       writeFileSync(p, 'bad');
       expect(await readJsonFileLooseAsync(p, { onMissing: 'fallback' })).toBe('fallback');
+    });
+
+    it('re-throws EISDIR (path is a directory, not ENOENT)', async () => {
+      const d = join(dir, 'async-is-a-dir');
+      mkdirSync(d);
+      await expect(readJsonFileLooseAsync(d)).rejects.toThrow();
+    });
+
+    it('re-throws EACCES (hermetic: injected via module mock, portable across UID 0 and all platforms)', async () => {
+      // Set the one-shot flag; the vi.mock factory (hoisted above imports)
+      // intercepts the next readFile call and rejects with EACCES. This avoids
+      // chmodSync(0o000), which is silently ignored for UID 0 in root-owned
+      // containers.
+      throwAsyncEacces = true;
+      await expect(readJsonFileLooseAsync('any-path.json')).rejects.toThrow('EACCES');
     });
   });
 });

@@ -427,7 +427,18 @@ export interface AgentConfig {
   /** Continue the most recent persisted session in the current working directory */
   continue?: boolean;
 
-  /** Resume a specific persisted session ID */
+  /**
+   * Resume a specific persisted session ID.
+   *
+   * When set (and {@link resumeMessages} and {@link resumeHistory} are absent
+   * and {@link persistSession} is not `false`), `AgentSession` automatically loads the on-disk message
+   * journal for this id and seeds `resumeMessages` — so SDK consumers get the
+   * same full-fidelity conversation rehydration the CLI achieves via
+   * `resumeConfigFor()`. The caller's explicit `resumeMessages` or
+   * `resumeHistory` always wins; passing either suppresses the auto-load.
+   * `sessionId` alone never triggers it. Journal-disabled environments
+   * (`AFK_MESSAGE_JOURNAL_DISABLED=1`) and subagent forks are excluded.
+   */
   resume?: string;
 
   /**
@@ -602,6 +613,22 @@ export interface AgentConfig {
    * logic. See `src/agent/provider.ts`.
    */
   provider?: ModelProvider;
+
+  /**
+   * Opt-in tool executors for the `agent`, `skill`, and `compose` tools
+   * (#3442). Default: none, so a bare `new AgentSession(config)` exposes no
+   * agent/skill/compose schemas (see `SessionMetadata.reducedToolSurface`).
+   * Build the bundle with `createWiredExecutors`, one bundle per session.
+   *
+   * Contract: mutually exclusive with {@link provider} and
+   * {@link providerFactory} (the constructor throws): an injected provider
+   * already carries its own executors. The session calls `executors.bind()`
+   * once before provider initialization, threads the defined executors into
+   * every provider it builds (including cross-family `/model` swaps), and
+   * calls `executors.drain(reason)` on close/reset alongside
+   * {@link drainSubagents}.
+   */
+  executors?: import('../session/session-executors.js').SessionExecutors;
 
   /**
    * Fully-wired provider factory for mid-session cross-family model switching.

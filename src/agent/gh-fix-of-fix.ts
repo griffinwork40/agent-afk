@@ -162,7 +162,7 @@ export function isMergedWithinDays(
  * Ensure the `fix-of-fix` label exists on the repo. Creates it (gold colour)
  * if absent. Never throws — label creation is best-effort.
  */
-export async function ensureFixOfFixLabel(execFn?: ExecFn): Promise<void> {
+async function ensureFixOfFixLabel(execFn?: ExecFn): Promise<void> {
   const exec = execFn ?? defaultExecFn;
   try {
     // Check if label exists
@@ -187,7 +187,7 @@ export async function ensureFixOfFixLabel(execFn?: ExecFn): Promise<void> {
 /**
  * Apply the `fix-of-fix` label to a PR. Never throws.
  */
-export async function applyFixOfFixLabel(
+async function applyFixOfFixLabel(
   prNumber: number | string,
   execFn?: ExecFn,
 ): Promise<void> {

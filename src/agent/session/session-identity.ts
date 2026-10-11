@@ -48,6 +48,8 @@ export function deriveOrigin(surface: Surface | undefined): TraceOrigin {
       return 'web';
     // 'subagent' is an actor role, not a surface; 'unknown'/undefined are
     // genuinely unknown. All collapse to 'unknown'.
+    // 'sdk' (a direct library embedding) has no dedicated origin bucket yet.
+    case 'sdk':
     case 'subagent':
     case 'unknown':
     case undefined:

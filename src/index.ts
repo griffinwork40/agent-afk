@@ -66,6 +66,19 @@ export type {
 } from './agent/index.js';
 export type { DiffHunk, DiffLine, DiffPayload } from './utils/diff.js';
 
+// SDK opt-in executors (#3442): build the `agent` / `skill` / `compose` tool
+// executors for a library-constructed session (`AgentConfig.executors`, also
+// accepted by query()/queryText() via QueryOptions).
+export { createWiredExecutors } from './agent/session/create-wired-executors.js';
+export type {
+  CreateWiredExecutorsOptions,
+  CreatedWiredExecutors,
+} from './agent/session/create-wired-executors.js';
+export type {
+  SessionExecutors,
+  SessionExecutorsBindTarget,
+} from './agent/session/session-executors.js';
+
 // Framework SDK surface for out-of-tree skill plugins.
 // These re-exports expose the core symbols an external skill plugin installed
 // under ~/.afk/plugins/ needs to register skills and read session facets at
@@ -101,6 +114,19 @@ export type {
 
 export { describeFailure } from './agent/subagent/result.js';
 export { discoverPluginSkillBodies } from './agent/tools/skill-bridge.js';
+
+// Journal helpers: exported so SDK consumers can resolve a prior session's
+// messages without shelling out. `loadJournalMessages` is what the CLI calls
+// internally via `resumeConfigFor()`; exporting it lets callers use the same
+// path for out-of-band inspection or custom resume logic.
+export {
+  loadJournalMessages,
+  loadJournalFold,
+  journalExists,
+  foldJournal,
+  hydrateMessages,
+} from './agent/journal/index.js';
+export type { JournalMessage, JournalLocator, FoldResult } from './agent/journal/index.js';
 
 export { env } from './config/env.js';
 export { getSessionsDir, getSkillsDir, getAgentFrameworkDir } from './paths.js';

@@ -122,6 +122,12 @@ export interface BuildChildConfigArgs {
    */
   workspaceStore?: import('../../workspace/index.js').WorkspaceStore; delegationBudget?: import('../../tools/delegation-budget.js').DelegationBudget;
   /**
+   * Hook registry (#3442) for the depth-2+ child {@link SubagentManager}
+   * (whose stub parent carries none) and the recursive child executor's ctx,
+   * so SubagentStart/Stop fire at every depth. Undefined => unchanged.
+   */
+  hookRegistry?: import('../../hooks.js').HookRegistry;
+  /**
    * Root (depth-0) session id, forwarded from the dispatching executor's
    * parent session id when the executor sits at depth 1, or from the
    * executor context's own `parentRootSessionId` at depth 2+. Threaded into
@@ -206,7 +212,23 @@ function buildNestedChildManager(
     ...(args.surface !== undefined ? { surface: args.surface } : {}),
     ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
     ...(args.parentRootSessionId !== undefined ? { parentRootSessionId: args.parentRootSessionId } : {}),
+    ...(args.hookRegistry !== undefined ? { hookRegistry: args.hookRegistry } : {}),
   });
+}
+
+/**
+ * Tree-wide fields the recursive child executor inherits unchanged (trace
+ * writer, workspace store, hook registry). Extracted from
+ * {@link buildChildConfig} (function-size ceiling, baselined: must not grow).
+ */
+function nestedExecutorInherits(
+  args: Pick<BuildChildConfigArgs, 'traceWriter' | 'workspaceStore' | 'hookRegistry'>,
+): Pick<SubagentExecutorContext, 'traceWriter' | 'workspaceStore' | 'hookRegistry'> {
+  return {
+    ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}),
+    ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
+    ...(args.hookRegistry !== undefined ? { hookRegistry: args.hookRegistry } : {}),
+  };
 }
 
 /**
@@ -475,7 +497,7 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
       ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
       // Forward the trace writer + workspace store for the same reason — the
       // child executor's own childManager (depth-3+) needs both. See BuildChildConfigArgs.
-      ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}), ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
+      ...nestedExecutorInherits(args),
       ...(args.delegationBudget !== undefined ? { delegationBudget: args.delegationBudget } : {}),
       // Propagate read-only constraints so depth ≥ 2 forks (this depth-1
       // child calling the `agent` tool) keep the same tool allowlist and

@@ -19,9 +19,9 @@
  */
 
 import { createHash } from 'node:crypto';
-import { mkdirSync, existsSync, unlinkSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { existsSync, unlinkSync } from 'node:fs';
+import { readJsonFileLoose, writeJsonFileAsync } from '../utils/json-file.js';
+import { join } from 'node:path';
 import { getAfkStateDir } from '../paths.js';
 
 /** Root directory for DAG checkpoints under the AFK state tier. */
@@ -102,17 +102,9 @@ export async function saveCheckpoint(
   dagId: string,
   checkpoint: DAGCheckpoint,
 ): Promise<void> {
-  mkdirSync(dagCheckpointsDir(), { recursive: true });
   const dest = checkpointPath(dagId);
   if (dest === null) throw new Error(`Invalid dagId: ${JSON.stringify(dagId)}`);
-  const tmp = join(dirname(dest), `.tmp-${randomBytes(4).toString('hex')}.json`);
-  try {
-    writeFileSync(tmp, JSON.stringify(checkpoint), 'utf-8');
-    renameSync(tmp, dest);
-  } catch (err) {
-    try { unlinkSync(tmp); } catch { /* ignore */ }
-    throw err;
-  }
+  await writeJsonFileAsync(dest, checkpoint);
 }
 
 /**
@@ -132,19 +124,12 @@ export async function loadCheckpoint(
 ): Promise<DAGCheckpoint | null> {
   const path = checkpointPath(dagId);
   if (path === null) return null; // Invalid dagId.
-  if (!existsSync(path)) return null;
-  let raw: string;
-  try {
-    raw = readFileSync(path, 'utf-8');
-  } catch {
-    return null;
-  }
-  let checkpoint: DAGCheckpoint;
-  try {
-    checkpoint = JSON.parse(raw) as DAGCheckpoint;
-  } catch {
-    return null; // Corrupt file.
-  }
+  // readJsonFileLoose: returns undefined for both ENOENT and parse errors —
+  // a missing or corrupt checkpoint is indistinguishable from a clean start,
+  // both of which should produce a null (force a clean re-run). Unexpected I/O
+  // errors (EACCES, EISDIR) re-throw rather than silently losing the checkpoint.
+  const checkpoint = readJsonFileLoose<DAGCheckpoint>(path);
+  if (checkpoint == null) return null;
   if (checkpoint.dagHash !== expectedHash) {
     return null; // Stale checkpoint — DAG structure changed.
   }

@@ -135,12 +135,16 @@ async function writeBlobExclusive(blob: PendingBlob): Promise<void> {
   try {
     await fsp.link(tmp, blob.absPath);
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== 'EEXIST') {
+    if (!isErrnoCode(err, 'EEXIST')) {
       // Filesystems without hard links (EPERM/ENOTSUP on some FUSE/FAT
       // mounts): fall back to rename. Same-hash races then just overwrite
       // identical bytes.
-      if (code === 'EPERM' || code === 'ENOTSUP' || code === 'EXDEV' || code === 'ENOSYS') {
+      if (
+        isErrnoCode(err, 'EPERM') ||
+        isErrnoCode(err, 'ENOTSUP') ||
+        isErrnoCode(err, 'EXDEV') ||
+        isErrnoCode(err, 'ENOSYS')
+      ) {
         await fsp.rename(tmp, blob.absPath);
         return;
       }
