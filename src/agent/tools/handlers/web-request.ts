@@ -38,7 +38,7 @@ import {
 import type { EgressGuardOptions } from '../../../http-client/egress-guard.js';
 import { redactSecrets } from '../../redact-secrets.js';
 import { extractEgressBlockedError, fetchFailedMessage } from '../../../utils/errors.js';
-import { createRequestAbortScope } from '../../../utils/abort.js';
+import { createRequestAbortScope, getScopeAbortMessage } from '../../../utils/abort.js';
 
 type FetchFn = typeof fetch;
 
@@ -290,10 +290,7 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
       timeoutMessage: `web_request timeout after ${parsed.timeoutMs}ms`,
     });
 
-    const abortMessage = (): string => {
-      const reason = scope.signal.reason;
-      return reason instanceof Error ? reason.message : String(reason ?? 'aborted');
-    };
+    const abortMessage = (): string => getScopeAbortMessage(scope);
 
     try {
 
