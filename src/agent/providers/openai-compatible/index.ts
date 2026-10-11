@@ -339,7 +339,17 @@ export class OpenAICompatibleProvider implements ModelProvider {
     };
     buildOpts.systemPromptRebuildFactory = spw.systemPromptRebuildFactory;
 
-    return buildQueryFromConfig(patchedConfig, args.prompt, buildOpts);
+    const providerQuery = buildQueryFromConfig(patchedConfig, args.prompt, buildOpts);
+    // #3532: close the provider's SQLite handle (kv.db) when the session
+    // closes. AgentSession.close() calls providerQuery.close() but not
+    // provider.close(), so _stateStore leaks on Windows (EBUSY on rmSync).
+    const provider = this;
+    const origClose = providerQuery.close.bind(providerQuery);
+    providerQuery.close = (): void => {
+      origClose();
+      provider.close();
+    };
+    return providerQuery;
   }
 
   /**
