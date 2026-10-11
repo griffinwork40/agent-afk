@@ -24,7 +24,6 @@ import type { FarmManifest } from '../../agent/worktree.js';
 
 export interface FarmPostRunOptions {
   task: string;
-  sourceCwd: string;
   manifest: FarmManifest;
   baseSha: string;
   branchResults: BranchResult[];

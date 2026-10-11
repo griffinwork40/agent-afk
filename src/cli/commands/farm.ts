@@ -270,7 +270,6 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
   // -- Score, summarise, persist, and exit (delegated to farm.post-run.ts) --
   await runFarmPostRun({
     task,
-    sourceCwd,
     manifest,
     baseSha,
     branchResults,
