@@ -292,8 +292,14 @@ export class AnthropicDirectProvider implements ModelProvider {
   close(): void {
     // Only close stores this provider owns (see the Invariant above). The
     // workspace store is always injected, so it is never closed here.
-    if (!this._injectedMemoryStore) this._memoryStore?.close();
-    if (!this._injectedStateStore) this._stateStore?.close();
+    if (!this._injectedMemoryStore) {
+      this._memoryStore?.close();
+      this._memoryStore = undefined;
+    }
+    if (!this._injectedStateStore) {
+      this._stateStore?.close();
+      this._stateStore = undefined;
+    }
   }
 
   /**

@@ -550,8 +550,14 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
   close(): void {
     // Only close owned stores; the workspace store is always injected.
-    if (!this._injectedMemoryStore) this._memoryStore?.close();
-    if (!this._injectedStateStore) this._stateStore?.close();
+    if (!this._injectedMemoryStore) {
+      this._memoryStore?.close();
+      this._memoryStore = undefined;
+    }
+    if (!this._injectedStateStore) {
+      this._stateStore?.close();
+      this._stateStore = undefined;
+    }
   }
 
   /**
