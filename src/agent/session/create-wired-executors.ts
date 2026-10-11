@@ -202,13 +202,17 @@ export function createWiredExecutors(
         session.recordSubagentCompletion(usage, costUsd);
       };
       wired.rootManager.setOnSubagentSucceeded(record);
-      wired.composeExecutor.setOnSubagentSucceeded(record);
+      if (toggles.compose) wired.composeExecutor.setOnSubagentSucceeded(record);
     },
     drain,
   };
 
+  let disposedPromise: Promise<void> | undefined;
   return {
     executors,
-    async dispose() { await drain('close'); },
+    dispose(): Promise<void> {
+      disposedPromise ??= drain('close').then(() => {});
+      return disposedPromise;
+    },
   };
 }
