@@ -274,4 +274,15 @@ describe('createDeferredRequestAbortScope', () => {
     expect(fired).not.toHaveBeenCalled();
     expect(scope.signal.aborted).toBe(false);
   });
+
+  it('armTimeout after dispose() is a no-op — does not arm a timer or abort', async () => {
+    const scope = createDeferredRequestAbortScope({ timeoutMs: 1_000, timeoutMessage: 't' });
+    scope.dispose();
+    const fired = vi.fn();
+    // Calling armTimeout after dispose must not throw and must not arm a timer.
+    scope.armTimeout(fired);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(fired).not.toHaveBeenCalled();
+    expect(scope.signal.aborted).toBe(false);
+  });
 });

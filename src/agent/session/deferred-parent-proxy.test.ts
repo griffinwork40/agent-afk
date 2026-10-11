@@ -129,3 +129,25 @@ describe('makeDeferredParentProxy — after bind', () => {
     expect(p2.sessionId).toBe('beta');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Double-bind guard (#3505)
+// ---------------------------------------------------------------------------
+
+describe('makeDeferredParentProxy — double-bind guard', () => {
+  it('bind() throws when called a second time', () => {
+    const { bind } = makeDeferredParentProxy();
+    bind(makeSessionStub({ sessionId: 'first' }));
+    expect(() => bind(makeSessionStub({ sessionId: 'second' }))).toThrow(
+      /double-bind/,
+    );
+  });
+
+  it('bind() succeeds exactly once — proxy still resolves correctly after a failed second bind', () => {
+    const { proxy, bind } = makeDeferredParentProxy();
+    bind(makeSessionStub({ sessionId: 'original' }));
+    expect(() => bind(makeSessionStub({ sessionId: 'intruder' }))).toThrow();
+    // The first binding must still be in effect.
+    expect(proxy.sessionId).toBe('original');
+  });
+});
