@@ -1648,7 +1648,13 @@ describe('createSpineSessionEndHook — fingerprint persistence ordering', () =>
     const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
     await hook(makeSessionEndContext());
 
-    expect(_capturedWriteCalls.some((call) => call.path.includes('spine-diff-fingerprints'))).toBe(true);
+    // writeJsonFile uses atomicWriteFile: writeFileSync targets a .tmp-<hex> sibling,
+    // then renameSync moves it to the final path. Check either the tmp write (same dir)
+    // or the mock store's final key (populated by the mock renameSync).
+    const fingerprintWritten =
+      _capturedWriteCalls.some((call) => call.path.includes('spine-diff-fingerprints')) ||
+      Object.keys(_mockFsStore).some((k) => k.includes('spine-diff-fingerprints'));
+    expect(fingerprintWritten).toBe(true);
   });
 
   it('does not persist fingerprint when writeSpine throws for a non-empty result', async () => {
