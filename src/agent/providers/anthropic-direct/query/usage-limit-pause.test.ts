@@ -275,12 +275,23 @@ for (const family of ['no-ts', 'far-reset', 'timestamped'] as const) {
       const refresh = vi.spyOn(ctx, 'forceClientRefresh');
       if (mode === 'rejected') refresh.mockRejectedValue(failure);
       else refresh.mockResolvedValue(mode === 'success' ? { accountId: 'acct:new', oldAccountId: 'acct:old', swapped: true } : null);
-      mockWait(Promise.resolve(mode === 'timer' ? 'timer' : 'hot-swap'));
+      // Use deferred() instead of Promise.resolve() so the generator has a
+      // chance to call setUsageLimitWait before the wait resolves — avoiding a
+      // microtask-ordering race on Node 24 (ubuntu CI leg).
+      const wait = deferred();
+      mockWait(wait.promise);
+      const result = mode === 'timer' ? 'timer' : 'hot-swap';
       if (mode === 'rejected') {
-        await expect(drain(park(ctx, input))).rejects.toBe(failure);
+        const drainP = drain(park(ctx, input));
+        await Promise.resolve(); // let the generator reach setUsageLimitWait
+        wait.resolve(result);
+        await expect(drainP).rejects.toBe(failure);
         expect(rotation).not.toHaveBeenCalled();
       } else {
-        await drain(park(ctx, input));
+        const drainP = drain(park(ctx, input));
+        await Promise.resolve(); // let the generator reach setUsageLimitWait
+        wait.resolve(result);
+        await drainP;
         expect(rotation).toHaveBeenCalledTimes(1);
         expect(input.headers).toEqual({ 'x-request-id': 'rotated' });
         expect(refresh).toHaveBeenCalledTimes(mode === 'timer' ? 0 : 1);

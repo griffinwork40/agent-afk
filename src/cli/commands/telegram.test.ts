@@ -536,9 +536,10 @@ describe('afk telegram logs — file exists, no --follow', () => {
     const logContent = Array.from({ length: 100 }, (_, i) => `line ${i}`).join('\n');
     mockReadFileSync.mockReturnValue(logContent);
     await run(['telegram', 'logs', '-n', '5']);
-    // Assert on actual tail content: the last 5 lines should appear in output.
-    expect(logs.some((l) => l.includes('line 99'))).toBe(true);
-    expect(logs.some((l) => l.includes('line 95'))).toBe(true);
+    // Assert on actual tail content: all 5 tail lines (95–99) must appear in output.
+    for (const n of [95, 96, 97, 98, 99]) {
+      expect(logs.some((l) => l.includes(`line ${n}`))).toBe(true);
+    }
     // Lines outside the tail window must not appear.
     expect(logs.every((l) => !l.includes('line 0'))).toBe(true);
   });
