@@ -19,6 +19,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Command } from 'commander';
+import { join } from 'path';
 
 // ---------------------------------------------------------------------------
 // Hoisted mock state — must be created before any SUT import.
@@ -379,7 +380,9 @@ describe('browser profiles', () => {
   it('lists profiles with ● when storageState.json is present', () => {
     const root = '/fake/home/.afk/browser/profiles';
     seedFile(root);
-    const stateFile = `${root}/default/storageState.json`;
+    // Must mirror the SUT's host-path join (browser.ts uses path.join), so the
+    // mocked existsSync key matches on win32 where join emits backslashes.
+    const stateFile = join(root, 'default', 'storageState.json');
     seedFile(stateFile);
 
     // readdirSync returns a Dirent-like object
