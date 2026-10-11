@@ -868,6 +868,21 @@ describe('renderMarkdownToTerminal', () => {
       expect(out).toMatch(/\n$/);
     });
 
+    it('multi-paragraph blockquote keeps its bar across the gap and owns one trailing newline', () => {
+      const out = stripAnsi(
+        renderMarkdownToTerminal('> first para\n>\n> second para\n\nafter\n', { maxWidth: 60 }),
+      );
+
+      // Exactly one blank line between the quote and the next block (the
+      // `space` token's), and the interior gap stays inside the quote.
+      expect(out).toBe('  │ first para\n  │\n  │ second para\n\nafter\n');
+    });
+
+    it('single-paragraph blockquote followed by prose leaves exactly one blank line', () => {
+      const out = stripAnsi(renderMarkdownToTerminal('> quoted\n\nafter\n', { maxWidth: 60 }));
+      expect(out).toBe('  │ quoted\n\nafter\n');
+    });
+
     it('F3: blockquote with multiple sentences has no trailing garbage prefix', () => {
       const out = stripAnsi(renderMarkdownToTerminal('> First sentence. Second sentence.\n'));
       const lines = out.split('\n').filter((l) => l.length > 0);
