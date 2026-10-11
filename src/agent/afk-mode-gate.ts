@@ -167,6 +167,17 @@ interface ApprovalCtx {
 }
 
 /**
+ * Format an approval timeout duration as a human-readable seconds string.
+ *
+ * Centralises the `Math.round(ms / 1000)` conversion so the two sites in
+ * `requestApproval` (the deferred-scope message and the timeout block-reason)
+ * always produce identical output.
+ */
+function formatApprovalTimeout(ms: number): string {
+  return `${Math.round(ms / 1000)}s`;
+}
+
+/**
  * Route an approve/deny elicitation to the operator and await their answer.
  *
  * Extracted from `createAfkModeGate` so the outer factory stays within the
@@ -190,7 +201,7 @@ async function requestApproval(
   const scope = createDeferredRequestAbortScope({
     parentSignal: signal,
     timeoutMs: ctx.approvalTimeoutMs,
-    timeoutMessage: `approval timeout after ${Math.round(ctx.approvalTimeoutMs / 1000)}s`,
+    timeoutMessage: `approval timeout after ${formatApprovalTimeout(ctx.approvalTimeoutMs)}`,
   });
 
   const TIMEOUT = Symbol('afk-approval-timeout');
@@ -259,7 +270,7 @@ async function requestApproval(
 
   if (outcome === TIMEOUT) {
     return decide(
-      blockDecision(toolName, `no approval arrived within ${Math.round(ctx.approvalTimeoutMs / 1000)}s`),
+      blockDecision(toolName, `no approval arrived within ${formatApprovalTimeout(ctx.approvalTimeoutMs)}`),
       'timeout',
     );
   }
