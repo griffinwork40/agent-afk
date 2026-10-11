@@ -25,12 +25,19 @@ describe('buildVerificationResultTail — non-verification tools', () => {
     expect(buildVerificationResultTail('write_file', '', 'ok')).toBeUndefined();
   });
 
-  it('returns undefined when rawContent is empty even for a verification command', () => {
+  it('returns undefined when rawContent is empty and no tailPreview', () => {
     expect(buildVerificationResultTail('bash', 'pnpm test', '')).toBeUndefined();
   });
 
-  it('returns undefined when rawContent is empty for test_run', () => {
+  it('returns undefined when rawContent is empty for test_run and no tailPreview', () => {
     expect(buildVerificationResultTail('test_run', '', '')).toBeUndefined();
+  });
+
+  it('returns content from tailPreview even when rawContent is empty', () => {
+    // Fix for #3496 finding 1: guard on the selected source being empty,
+    // not unconditionally on rawContent.length === 0.
+    const result = buildVerificationResultTail('bash', 'pnpm test', '', ['Tests  2 passed (2)']);
+    expect(result).toBe('Tests  2 passed (2)');
   });
 });
 
@@ -130,6 +137,7 @@ describe('buildVerificationResultTail — long content slicing', () => {
 
 describe('buildVerificationResultTail — tailPreview parameter', () => {
   it('uses tailPreview (joined) when provided and non-empty', () => {
+    // 500 chars is well over RESULT_TAIL_CHARS (240), forcing a slice.
     const rawContent = 'x'.repeat(500) + '\nignored suffix';
     const tailPreview = ['Tests  7 passed (7)', ''];
     const result = buildVerificationResultTail('bash', 'pnpm test', rawContent, tailPreview);
