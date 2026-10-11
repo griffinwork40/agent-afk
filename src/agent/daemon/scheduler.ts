@@ -142,6 +142,8 @@ export interface SchedulerOptions {
   budgetGate?: () => Promise<import('./budget-gate.js').BudgetGateResult>;
   /** Override the retry backoff sleep (tests). Defaults to `sleepWithAbort`. */
   retrySleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** Override the handoffs directory (tests). Forwarded to the cron elicitation handler. */
+  handoffsDir?: string;
 }
 
 export type TelemetryTrigger = 'cron' | 'sessionstart' | 'pull';
@@ -553,6 +555,7 @@ export class CronScheduler {
         // tasks are synthetic (never in the registry) and never retry.
         isCancelled: () => trigger !== 'pull' && this.registry.get(task.taskId)?.task !== task,
         ...(this.options.retrySleep !== undefined ? { retrySleep: this.options.retrySleep } : {}),
+        ...(this.options.handoffsDir !== undefined ? { handoffsDir: this.options.handoffsDir } : {}),
       },
       task,
       trigger,

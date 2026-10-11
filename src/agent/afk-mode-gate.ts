@@ -21,7 +21,10 @@
  *     `git reset --hard`, `mkfs`/`dd`/`diskutil`, pipe-to-shell, `eval`,
  *     `chmod`/`chown`)
  *   - writes that escape the workspace, hit the write-denylist (`~/.ssh`,
- *     `/etc`, …), or target the `.git` object store
+ *     `/etc`, …), or target the `.git` object store. Private temp roots
+ *     (per-uid dirs with no group/other-write bits — see `getTempRoots()` in
+ *     `risk-classifier.paths.ts`) are NOT an escape; shared world-writable
+ *     dirs like Linux `/tmp` (mode 1777) are excluded from the carve-out
  *   - schedule mutations: `create_schedule` / `update_schedule` / `cancel_schedule` — modify the
  *     daemon cron store with potential immediate live-sync side-effects
  *   - MCP tools whose sub-name contains a destructive verb (the full list is
@@ -82,7 +85,8 @@ import type { PermissionMode } from './types/sdk-types.js';
 import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js';
 import type { TraceSink } from './trace/index.js';
 import path from 'path';
-import { classifyRisk } from './risk-classifier.js';
+import { classifyRiskDetailed } from './risk-classifier.js';
+import { getTempRoots } from './risk-classifier.paths.js';
 import { elicitationRouter } from './elicitation-router.js';
 import { emitHookDecision } from './trace/emit.js';
 import { redactInlineSecrets } from './session/prompt-dump.js';
@@ -147,7 +151,8 @@ export interface AfkModeGateOptions {
    * The taskId of the currently-running daemon task. When set, the gate
    * threads it into `classifyRisk` so the self-disable carve-out (issue
    * #3464) can recognise `cancel_schedule` / `update_schedule` calls that
-   * target only this task's own id and downgrade them to `medium`.
+   * target only this task's own id and downgrade them to `medium`. It also
+   * selects the daemon refusal wording (no `/afk off`; see RefusalCtx).
    * This value is injected by the scheduler — it is NEVER sourced from
    * model-supplied input, so it cannot be spoofed by the agent.
    */
@@ -164,6 +169,10 @@ interface ApprovalCtx {
   approvalTimeoutMs: number;
   traceWriter: TraceSink | undefined;
   sessionId: string | undefined;
+  /** Classifier reason for this call (e.g. `workspace-escape: …`). */
+  riskReason?: string;
+  /** Refusal-wording context; see {@link RefusalCtx}. */
+  refusal: RefusalCtx;
 }
 
 /**
@@ -192,7 +201,8 @@ async function requestApproval(
   callSessionId?: string,
 ): Promise<HookDecision> {
   const start = Date.now();
-  const request = buildApprovalRequest(toolName, input);
+  const request = buildApprovalRequest(toolName, input, ctx.riskReason);
+  const block = (why: string): HookDecision => blockDecision(toolName, why, ctx.refusal);
 
   // A child abort scope so a deny-on-timeout (or a parent turn abort) cancels
   // the pending elicitation prompt — the real router resolves to a decline on
@@ -270,14 +280,13 @@ async function requestApproval(
 
   if (outcome === TIMEOUT) {
     return decide(
-      blockDecision(toolName, `no approval arrived within ${formatApprovalTimeout(ctx.approvalTimeoutMs)}`),
+      block(`no approval arrived within ${formatApprovalTimeout(ctx.approvalTimeoutMs)}`),
       'timeout',
     );
   }
   if (outcome.action !== 'accept') {
     return decide(
-      blockDecision(
-        toolName,
+      block(
         outcome.action === 'cancel'
           ? 'the operator cancelled the approval prompt'
           : 'no operator approval was available',
@@ -287,11 +296,11 @@ async function requestApproval(
   }
   const choice = String(outcome.content?.['choice'] ?? '').toLowerCase();
   if (choice === 'approve') return decide({}, 'approved');
-  if (choice === 'deny') return decide(blockDecision(toolName, 'the operator denied it'), 'denied');
+  if (choice === 'deny') return decide(block('the operator denied it'), 'denied');
   // action was 'accept' but choice ∉ {approve,deny} — a handler regression
   // (dropped/garbled choice), not a deliberate deny. Fail closed.
   return decide(
-    blockDecision(toolName, 'the approval prompt returned an unrecognised choice'),
+    block('the approval prompt returned an unrecognised choice'),
     'unrecognised',
   );
 }
@@ -317,6 +326,7 @@ export function createAfkModeGate(
     approvalTimeoutMs,
     traceWriter,
     sessionId,
+    refusal: {},
   };
 
   return function afkModeGate(
@@ -371,11 +381,16 @@ export function createAfkModeGate(
     const trustedRoot =
       perCall !== undefined ? trustedChildRoot(perCall, sessionRoot) : undefined;
     const workspaceRoot = trustedRoot ?? sessionRoot;
-    const risk = classifyRisk(toolName, context.input, {
+    const verdict = classifyRiskDetailed(toolName, context.input, {
       cwd: resolveBase,
       workspaceRoot,
       ...(daemonTaskId !== undefined ? { daemonTaskId } : {}),
     });
+    const risk = verdict.level;
+    const refusal: RefusalCtx = {
+      ...(verdict.reason !== undefined ? { reason: verdict.reason } : {}),
+      ...(daemonTaskId !== undefined ? { daemonCwd: workspaceRoot } : {}),
+    };
 
     // Issue #579 O3 — a `rm -rf <leaf-dir>` inside the workspace is a routine
     // clean-rebuild step (node_modules, dist, build, …), not the destructive
@@ -410,7 +425,11 @@ export function createAfkModeGate(
     // prompt would surface on the parent's surface with no attribution), and the
     // approval path can be opted out — both degrade to the legacy hard block.
     if (isSubagentContext(context) || !promptForApproval) {
-      const decision = blockDecision(toolName, 'AFK mode runs autonomously without a human watching');
+      const decision = blockDecision(
+        toolName,
+        'AFK mode runs autonomously without a human watching',
+        refusal,
+      );
       // Emit the audit trace on the no-prompt refusal too. requestApproval's
       // decide() helper centralises the emit for the prompt paths, but this
       // branch returns BEFORE requestApproval — so without this emit an always-on
@@ -431,14 +450,28 @@ export function createAfkModeGate(
 
     // Main session: ask the operator to approve/deny (deny-on-timeout). Returns
     // a Promise<HookDecision>; the gate is registered `longRunning: true`.
-    return requestApproval(approvalCtx, toolName, context.input, signal, context.sessionId);
+    return requestApproval(
+      {
+        ...approvalCtx,
+        ...(verdict.reason !== undefined ? { riskReason: verdict.reason } : {}),
+        refusal,
+      },
+      toolName,
+      context.input,
+      signal,
+      context.sessionId,
+    );
   };
 }
 
 /** Build the approve/deny form elicitation (same shape the path-approval hook
  *  uses, so it renders via the proven REPL numbered-prompt / Telegram inline-
  *  keyboard path). */
-function buildApprovalRequest(toolName: string, input: unknown): ElicitationRequest {
+function buildApprovalRequest(
+  toolName: string,
+  input: unknown,
+  riskReason?: string,
+): ElicitationRequest {
   // Redact secrets before any truncation so a credential straddling the preview
   // boundary cannot leak a partial value to the operator's phone. Same redaction
   // the AFK push path applies (cli/commands/interactive/afk-push.ts).
@@ -452,6 +485,7 @@ function buildApprovalRequest(toolName: string, input: unknown): ElicitationRequ
   const message =
     `AFK: \`${toolName}\` is high-risk / irreversible and AFK mode runs ` +
     `unattended. Approve this single call?` +
+    (riskReason ? `\n\nReason: ${riskReason}` : '') +
     (preview ? `\n\nInput: ${preview}` : '');
   return {
     serverName: AFK_HARNESS_SERVER_NAME,
@@ -476,15 +510,41 @@ function buildApprovalRequest(toolName: string, input: unknown): ElicitationRequ
   };
 }
 
+/**
+ * Per-call context for the refusal text surfaced to the model.
+ *
+ * Contract: `daemonCwd` is set only when the gate guards a daemon task
+ * (`daemonTaskId` supplied by the scheduler). A daemon run has no operator who
+ * can approve or run `/afk off`, so its refusal must not suggest either; it
+ * names the task working directory as the safe place to write instead.
+ */
+interface RefusalCtx {
+  /** Classifier reason (e.g. `workspace-escape: <path> is outside <root>`). */
+  reason?: string;
+  /** Daemon task working directory; presence selects the daemon tail. */
+  daemonCwd?: string;
+}
+
 /** The refusal decision surfaced to the model, with a cause-specific tail. */
-function blockDecision(toolName: string, why: string): HookDecision {
-  return {
-    decision: 'block',
-    reason:
-      `AFK mode: ${toolName} is refused — this op is high-risk or irreversible, ` +
-      `and ${why}. Push an Asking summary to Telegram (send_telegram) and stop, ` +
-      `or have the operator run /afk off and take over.`,
-  };
+function blockDecision(toolName: string, why: string, refusal: RefusalCtx): HookDecision {
+  const head =
+    `AFK mode: ${toolName} is refused — this op is high-risk or irreversible` +
+    (refusal.reason !== undefined ? ` (${refusal.reason})` : '') +
+    `, and ${why}. `;
+  const tail =
+    refusal.daemonCwd !== undefined
+      ? (() => {
+          const roots = getTempRoots();
+          const safeTemp = roots.length > 0 ? ` or a private temp root (${roots[0]})` : '';
+          return (
+            `This is a scheduled daemon task: no operator can approve this run. Write inside ` +
+            `the task working directory (${refusal.daemonCwd})${safeTemp}, or use ` +
+            `another safe approach; if the task cannot complete, report Blocked.`
+          );
+        })()
+      : `Push an Asking summary to Telegram (send_telegram) and stop, ` +
+        `or have the operator run /afk off and take over.`;
+  return { decision: 'block', reason: head + tail };
 }
 
 /**

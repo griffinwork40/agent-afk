@@ -10,6 +10,7 @@
 
 import type { Context } from 'telegraf';
 import { downloadTelegramFile } from '../media-download.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /**
  * Inspect magic bytes at the start of a buffer and return the corresponding
@@ -124,7 +125,7 @@ export async function fetchAndClassifyPhoto(
   try {
     fileUrlRaw = await ctx.telegram.getFileLink(fileId);
   } catch (err) {
-    log(`Photo handling: getFileLink failed for chat ${chatId}:`, err instanceof Error ? err.message : String(err));
+    log(`Photo handling: getFileLink failed for chat ${chatId}:`, errorMessage(err));
     await ctx.reply('❌ Couldn\'t download the image. Please try resending.');
     return { ok: false };
   }
