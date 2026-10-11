@@ -166,19 +166,40 @@ describe('renderPreexistingDefects', () => {
     expect(html).not.toContain(longRepo);
   });
 
-  it('renders a truncation notice when ledgerTruncated is true', () => {
+  it('renders a truncation notice when ledgerTruncated is true and clusters are present', () => {
     const agg = makeAgg([CLUSTER_FIXTURE], 5, 0, true);
     const html = renderPreexistingDefects(agg);
-    expect(html).toContain('Ledger exceeded the 1 MB read cap');
+    // Standalone banner (above the table)
+    expect(html).toContain('Ledger was truncated');
+    // totalNote caption also reflects truncation
     expect(html).toContain('tail only — ledger truncated');
+    // Table must still render
+    expect(html).toContain('<table class="data-table">');
+    // Banner must appear before the table
+    const bannerPos = html.indexOf('Ledger was truncated');
+    const tablePos = html.indexOf('<table');
+    expect(bannerPos).toBeLessThan(tablePos);
   });
 
   it('does not render a truncation notice when ledgerTruncated is false', () => {
     const agg = makeAgg([CLUSTER_FIXTURE], 5, 0, false);
     const html = renderPreexistingDefects(agg);
-    expect(html).not.toContain('Ledger exceeded the 1 MB read cap');
+    expect(html).not.toContain('Ledger was truncated');
     expect(html).not.toContain('tail only — ledger truncated');
     // The ordinary caption should still appear.
     expect(html).toContain('total ledger records');
+  });
+
+  it('renders a standalone truncation warning (no table) when ledgerTruncated=true and topClusters=[]', () => {
+    // Regression guard: the early-return guard must NOT suppress the warning
+    // when the ledger was truncated but no clusters survived the time window.
+    const agg = makeAgg([], 0, 0, true);
+    const html = renderPreexistingDefects(agg);
+    // Warning must be present
+    expect(html).toContain('Ledger was truncated');
+    // But no cluster table (no data to show)
+    expect(html).not.toContain('<table');
+    // The section wrapper must still render
+    expect(html).toContain('id="preexisting-defects"');
   });
 });

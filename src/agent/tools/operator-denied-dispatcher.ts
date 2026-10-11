@@ -75,6 +75,11 @@ export function withOperatorDeniedDispatcher(
       if (isToolDenied(call.name, denied)) return { isError: true, content: operatorDeniedReason(call.name) };
       return inner.execute(call);
     },
+    // Invariant: setResolveBase and setAllowAll delegate to rawInner (which is
+    // `inner` here, the unguarded dispatcher) so callers updating the cwd or
+    // allow-all flag reach the underlying SessionToolDispatcher rather than
+    // being silently dropped by the wrapper. The wrapper itself holds no
+    // mutable path or allow-all state.
     setResolveBase: (cwd: string) => inner.setResolveBase?.(cwd),
     setAllowAll: (allow: boolean) => inner.setAllowAll?.(allow),
   };
