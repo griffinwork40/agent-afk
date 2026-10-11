@@ -18,23 +18,6 @@ import type { OpenAIAuthResolution } from '../auth.js';
 import type { OpenAICompatibleQueryOptions } from './query-options.js';
 
 /**
- * Build a fresh OpenAI client from `newAuth` using the same wire-mode
- * resolution and endpoint configuration as the original constructor.
- *
- * Called by `OpenAICompatibleQuery.rebuildClient` when `wrapTurnWithOAuthRefresh`
- * detects a 401 and `codex` has written a fresh token to `~/.codex/auth.json`.
- * Re-runs `resolveWireMode` so the wire headers (chatgpt-account-id, beta
- * flags) are derived from the new auth bundle — the account-id embedded in
- * the JWT may differ across refreshes.
- *
- * AFK is read-only: this function NEVER writes `~/.codex/auth.json`.
- *
- * @param newAuth - The freshly resolved auth (caller verified it differs from the old one).
- * @param opts    - The query's immutable options bag (provides baseURL, headers, etc.).
- * @returns A new OpenAI client configured for `newAuth`, or null (typed as OpenAI)
- *   when `newAuth.apiKey === null` (caller should check before using the result).
- */
-/**
  * Apply a ChatGPT-OAuth token refresh to a query instance: mutate opts.auth
  * and rebuild the backing OpenAI client in one atomic step.
  *
@@ -61,7 +44,7 @@ export function buildRefreshedClient(
   }
   const responsesOptIn =
     (opts.useResponsesApi ?? false) || envFlagEnabled(env.AFK_OPENAI_USE_RESPONSES);
-  const wire = resolveWireMode(newAuth, responsesOptIn);
+  const wire = resolveWireMode(newAuth, responsesOptIn, opts.baseURL);
   const ctor = resolveClientFactory();
   const clientOpts: {
     apiKey: string;

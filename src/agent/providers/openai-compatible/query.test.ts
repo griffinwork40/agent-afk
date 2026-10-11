@@ -1243,6 +1243,12 @@ describe('OpenAICompatibleQuery — auth failure path', () => {
 });
 
 describe('OpenAICompatibleQuery — warnedChatGptOAuth one-time stderr notice', () => {
+  afterEach(async () => {
+    // Reset the module-scope latch so it does not leak across test cases.
+    const { _resetChatGptOAuthNotice } = await import('./query.chatgpt-notice.js');
+    _resetChatGptOAuthNotice();
+  });
+
   it('emits the chatgpt.com notice to stderr once per account, not on subsequent constructions', () => {
     const written: string[] = [];
     const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {

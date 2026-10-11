@@ -193,8 +193,7 @@ export function resolveOpenAIAuth(
     };
   }
 
-  // Tier 4: ~/.codex/auth.json (API-key mode only — ChatGPT OAuth is rejected
-  // here because AFK cannot safely refresh those tokens). See module docstring.
+  // Tier 4: ~/.codex/auth.json (last-resort tier). See module docstring.
   const codexAuthPath = join(home, '.codex', 'auth.json');
   const codexRaw = readFile(codexAuthPath);
   if (codexRaw !== null) {
