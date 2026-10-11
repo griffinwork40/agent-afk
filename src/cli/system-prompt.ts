@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 
 import { env } from '../config/env.js';
 import { loadConfig } from './config.js';
+import { errorMessage } from '../utils/errors.js';
 
 /**
  * Load the framework base system prompt.
@@ -42,7 +43,7 @@ export function loadSystemPrompt(): string | undefined {
       return readFileSync(override, 'utf-8');
     } catch (err) {
       throw new Error(
-        `AFK_FRAMEWORK_PROMPT_FILE="${override}" is unreadable: ${err instanceof Error ? err.message : String(err)}`,
+        `AFK_FRAMEWORK_PROMPT_FILE="${override}" is unreadable: ${errorMessage(err)}`,
       );
     }
   }
@@ -145,8 +146,13 @@ export function composeSystemPrompt(
  * present, `framework` when only the base is, `<overlaySource>` when only the
  * overlay is (framework absent), or `none`. The plain overlay source remains
  * available unchanged via `loadConfig().systemPromptSource`.
+ *
+ * Contract: `overlay` is the bare operator overlay (no framework, no header),
+ * `undefined` when absent or whitespace-only. Surfaces thread it to the
+ * `agent` executor so unnamed subagents, which do NOT receive the composed
+ * `prompt`, still carry the operator's instructions (#3324).
  */
-export function resolveBaseSystemPrompt(cwd: string = process.cwd()): { prompt: string | undefined; source: string } {
+export function resolveBaseSystemPrompt(cwd: string = process.cwd()): { prompt: string | undefined; source: string; overlay?: string } {
   const framework = loadSystemPrompt();
   const cfg = loadConfig(undefined, cwd);
   const overlay = cfg.systemPrompt;
@@ -158,5 +164,5 @@ export function resolveBaseSystemPrompt(cwd: string = process.cwd()): { prompt: 
   else if (hasFw) source = 'framework';
   else if (hasOv) source = overlaySource ?? 'unknown';
   else source = 'none';
-  return { prompt: composeSystemPrompt(framework, overlay), source };
+  return { prompt: composeSystemPrompt(framework, overlay), source, ...(hasOv ? { overlay } : {}) };
 }

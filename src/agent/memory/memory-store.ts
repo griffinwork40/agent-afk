@@ -24,16 +24,16 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  writeFileSync,
   copyFileSync,
-  renameSync,
 } from 'fs';
+import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { join } from 'path';
 import { getMemoryDir } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
 import { factsToResults, sanitizeFtsQuery } from './memory-store.fts.js';
 import { queryUnaccessed, queryAccessStats } from './memory-store.access.js';
-import { SCHEMA_VERSION, SCHEMA_SQL, runMigrations, enableWalMode } from './memory-store.schema.js';
+import { SCHEMA_VERSION, SCHEMA_SQL, runMigrations } from './memory-store.schema.js';
+import { configureSqliteConnection } from '../storage/sqlite.js';
 import { appendWAL, replayWAL as replayWALImpl } from './memory-store.wal.js';
 import { supersedeFact as supersededFactImpl } from './memory-store.facts.js';
 import {
@@ -57,7 +57,7 @@ import type {
 const HOT_FILE = 'HOT.md';
 const HOT_BACKUP = 'HOT.md.bak';
 const DB_FILE = 'memory.db';
-const HOT_TMP = 'HOT.md.tmp';
+
 const MAX_HOT_CHARS = 5250; // ~1,500 tokens at 3.5 chars/token
 const HOT_TOKEN_CAP = Math.ceil(MAX_HOT_CHARS / 3.5); // 1500 — surfaced in usage reports
 
@@ -109,10 +109,10 @@ export class MemoryStore {
     mkdirSync(join(this.dir, PROCEDURES_DIR), { recursive: true });
 
     this.db = new Database(join(this.dir, DB_FILE));
-    // busy_timeout makes ordinary contended reads/writes wait up to 5s rather
-    // than failing fast; set it first so it covers everything below.
-    this.db.pragma('busy_timeout = 5000');
-    enableWalMode(this.db);
+    // configureSqliteConnection sets busy_timeout (5 000 ms) BEFORE the WAL
+    // switch so it covers all the schema work below, and bounds the WAL
+    // switch's cold-open SQLITE_BUSY retry loop (agent/storage/sqlite.ts).
+    configureSqliteConnection(this.db);
 
     // Schema versioning guard — prevents silent corruption when the schema
     // evolves across agent-afk versions.
@@ -193,12 +193,10 @@ export class MemoryStore {
     if (existsSync(path)) {
       copyFileSync(path, join(this.dir, HOT_BACKUP));
     }
-    // Atomic write: write a temp file in the same directory, then rename it
-    // over HOT.md. renameSync is atomic on POSIX, so a concurrent reader (or a
-    // crash) never observes a partially-written file.
-    const tmp = join(this.dir, HOT_TMP);
-    writeFileSync(tmp, toWrite, 'utf-8');
-    renameSync(tmp, path);
+    // Atomic write via atomicWriteFile (tmp+rename, randomBytes suffix, mkdirp).
+    // A crash mid-write never leaves a partially-written HOT.md; rename is
+    // atomic on POSIX so a concurrent reader always sees a complete file.
+    atomicWriteFile(path, toWrite, { mode: 0o600, encoding: 'utf-8' });
 
     return this.computeHotUsage(toWrite, truncated);
   }

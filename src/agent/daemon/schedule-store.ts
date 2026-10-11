@@ -20,19 +20,18 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  renameSync,
   statSync,
   unlinkSync,
-  writeFileSync,
   writeSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { getSchedulesPath } from '../../paths.js';
 import { expandCwd } from './cwd-validator.js';
 import type { ScheduledTask, TaskExecutor } from './triggers.js';
-import { errorMessage } from '../../utils/errors.js';
+import { errorMessage, isErrnoCode } from '../../utils/errors.js';
 import { sleepSync } from '../../utils/sleep-sync.js';
+import { writeJsonFile } from '../../utils/json-file.js';
 
 // ---------------------------------------------------------------------------
 // Advisory file lock (O_EXCL)
@@ -73,8 +72,7 @@ function isProcessAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    return code !== 'ESRCH';
+    return !isErrnoCode(err, 'ESRCH');
   }
 }
 
@@ -123,8 +121,7 @@ function withFileLock<T>(storePath: string, fn: () => T): T {
       writeLockFile(lp, owner);
       acquired = true;
     } catch (err) {
-      const e = err as NodeJS.ErrnoException;
-      if (e.code !== 'EEXIST') throw err;
+      if (!isErrnoCode(err, 'EEXIST')) throw err;
       const currentOwner = readLockOwner(lp);
       try {
         if (currentOwner && Date.now() - statSync(lp).mtimeMs > LOCK_STALE_MS) {
@@ -193,6 +190,29 @@ export interface ScheduledTaskConfig {
    * completion-push time. Omitting it preserves default routing.
    */
   notifyChat?: number | string;
+  /**
+   * Total attempts per run for agent tasks (default 1 = no retry); threaded to
+   * `ScheduledTask.maxAttempts`. Only classified-transient failures retry.
+   */
+  maxAttempts?: number;
+  /** Backoff base (ms) between retry attempts; threaded to `ScheduledTask.retryDelayMs`. */
+  retryDelayMs?: number;
+  /**
+   * One-shot fire time (ISO 8601). When set, the task fires once at or after
+   * this instant and is automatically disabled afterward. Mutually exclusive
+   * with a recurring `cron` expression — use one or the other, not both.
+   * The 5-field cron expression (placeholder `"0 * * * *"`) in `cron` is
+   * used only as the scheduler tick cadence when `runAt` is set; the actual
+   * fire condition is the `runAt` wall-clock comparison in the scheduler.
+   */
+  runAt?: string;
+  /**
+   * Hard expiry (ISO 8601). When set and the current time is past this
+   * instant, the scheduler skips the task and records a
+   * `status:'skipped', skipReason:'expired'` telemetry entry. The task is
+   * also automatically disabled so it never fires again.
+   */
+  expiresAt?: string;
   /** ISO 8601 creation timestamp. */
   createdAt: string;
   /** ISO 8601 last-update timestamp. */
@@ -229,23 +249,9 @@ export function loadSchedules(path?: string): ScheduledTaskConfig[] {
  */
 export function saveSchedules(configs: ScheduledTaskConfig[], path?: string): void {
   const storePath = path ?? getSchedulesPath();
-  mkdirSync(dirname(storePath), { recursive: true });
-  const tmp = join(
-    dirname(storePath),
-    `.schedules.json.${process.pid}.${randomBytes(4).toString('hex')}.tmp`,
-  );
-  const payload = JSON.stringify(configs, null, 2);
-  try {
-    writeFileSync(tmp, payload, 'utf-8');
-    renameSync(tmp, storePath);
-  } catch (err) {
-    try {
-      if (existsSync(tmp)) unlinkSync(tmp);
-    } catch {
-      /* best effort cleanup */
-    }
-    throw err;
-  }
+  // atomicWriteFile (via writeJsonFile) creates parent dirs (mkdirp: true by default).
+  // Config files are not secret, but we keep 0o600 to match prior behaviour.
+  writeJsonFile(storePath, configs);
 }
 
 /**
@@ -316,9 +322,13 @@ export function getSchedule(id: string, path?: string): ScheduledTaskConfig | un
 }
 
 /** Patchable fields for `updateSchedule`. Excludes `id` and `createdAt`. */
-export type SchedulePatch = Partial<Omit<ScheduledTaskConfig, 'id' | 'createdAt' | 'updatedAt' | 'cwd'>> & {
+export type SchedulePatch = Partial<Omit<ScheduledTaskConfig, 'id' | 'createdAt' | 'updatedAt' | 'cwd' | 'runAt' | 'expiresAt'>> & {
   /** Set a new directory path, or pass `null`/`""` to clear the existing one. */
   cwd?: string | null;
+  /** Set or clear the one-shot fire time. Pass `null` to clear. */
+  runAt?: string | null;
+  /** Set or clear the hard expiry. Pass `null` to clear. */
+  expiresAt?: string | null;
 };
 
 /**
@@ -354,13 +364,20 @@ export function updateSchedule(
       ...(patch.trigger !== undefined ? { trigger: patch.trigger } : {}),
       ...(patch.notifyOn !== undefined ? { notifyOn: patch.notifyOn } : {}),
       ...(patch.notifyChat !== undefined ? { notifyChat: patch.notifyChat } : {}),
+      ...(patch.maxAttempts !== undefined ? { maxAttempts: patch.maxAttempts } : {}),
+      ...(patch.retryDelayMs !== undefined ? { retryDelayMs: patch.retryDelayMs } : {}),
       ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
       ...(patch.cwd !== undefined && patch.cwd !== null ? { cwd: patch.cwd } : {}),
+      ...(patch.runAt !== undefined && patch.runAt !== null ? { runAt: patch.runAt } : {}),
+      ...(patch.expiresAt !== undefined && patch.expiresAt !== null ? { expiresAt: patch.expiresAt } : {}),
       updatedAt: new Date().toISOString(),
     };
     // cwd: null means "clear" — remove the per-task pinning entirely so the task
     // falls back to the daemon-wide AFK_DAEMON_CWD default.
     if (patch.cwd === null) delete updated.cwd;
+    // runAt/expiresAt: null means "clear" — remove the field entirely.
+    if (patch.runAt === null) delete updated.runAt;
+    if (patch.expiresAt === null) delete updated.expiresAt;
     schedules[idx] = updated;
     saveSchedules(schedules, storePath);
     return updated;
@@ -425,6 +442,10 @@ export function toScheduledTask(config: ScheduledTaskConfig): ScheduledTask {
     ...(config.cron !== undefined ? { cronExpression: config.cron } : {}),
     ...(config.notifyOn !== undefined ? { notifyOn: config.notifyOn } : {}),
     ...(config.notifyChat !== undefined ? { notifyChat: config.notifyChat } : {}),
+    ...(config.maxAttempts !== undefined ? { maxAttempts: config.maxAttempts } : {}),
+    ...(config.retryDelayMs !== undefined ? { retryDelayMs: config.retryDelayMs } : {}),
     ...(config.cwd !== undefined ? { cwd: expandCwd(config.cwd) } : {}),
+    ...(config.runAt !== undefined ? { runAt: config.runAt } : {}),
+    ...(config.expiresAt !== undefined ? { expiresAt: config.expiresAt } : {}),
   };
 }

@@ -1,9 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { createAfkModeGate } from './afk-mode-gate.js';
+import { setSessionTmpdirRootForTests } from './session/session-tmpdir.js';
 import type { PermissionMode, ElicitationResult, ElicitationRequest } from './types/sdk-types.js';
 import type { TraceWriter } from './trace/index.js';
 
@@ -23,9 +24,12 @@ const P_REPO_WT_PARENT_X = resolve('/repo/.afk-worktrees/parent/x.ts');
 const P_REPO_WT_CHILD = resolve('/repo/.afk-worktrees/child');
 const P_REPO_WT_CHILD_OTHER = resolve('/repo/.afk-worktrees/child/other.ts');
 const P_REPO_WT_CHILD_APP = resolve('/repo/.afk-worktrees/child/packages/app');
-const P_TMP = resolve('/tmp');
-const P_TMP_EVIL = resolve('/tmp/evil.sh');
-const P_TMP_WT_EVIL = resolve('/tmp/.afk-worktrees/evil');
+// Untrusted out-of-tree location. Deliberately NOT the system temp dir: temp
+// writes are a sanctioned AFK scratch area (risk-classifier.paths.ts), so the
+// cwd-trust tests below need an escape target that is not carved out.
+const P_UNTRUSTED = resolve('/opt/untrusted');
+const P_UNTRUSTED_EVIL = resolve('/opt/untrusted/evil.sh');
+const P_UNTRUSTED_WT_EVIL = resolve('/opt/untrusted/.afk-worktrees/evil');
 const P_OTHER_REPO_WT = resolve('/other-repo/.afk-worktrees/evil');
 
 describe('createAfkModeGate', () => {
@@ -418,18 +422,18 @@ describe('createAfkModeGate', () => {
   it('SECURITY: refuses a subagent write anchored at an untrusted per-call cwd', async () => {
     // A forked subagent's cwd is caller-supplied via the `agent` tool and only
     // format-validated. A child dispatched at an out-of-tree absolute path
-    // (`/tmp`) must NOT have that path trusted as the containment boundary — its
+    // (`/opt/untrusted`) must NOT have that path trusted as the containment boundary — its
     // writes are measured against the trusted session root, escape it, and are
     // flagged high (blocked; subagents never prompt).
     const { gate } = makeGate('autonomous', P_USERS_DEV);
 
-    // relative write resolves under the untrusted /tmp base → escapes session root
+    // relative write resolves under the untrusted base → escapes session root
     const relative = await gate({
       event: 'PreToolUse',
       toolName: 'write_file',
       input: { file_path: 'evil.sh' },
       parentSessionId: 'parent-session-123',
-      cwd: P_TMP,
+      cwd: P_UNTRUSTED,
     });
     expect(relative.decision).toBe('block');
 
@@ -437,9 +441,9 @@ describe('createAfkModeGate', () => {
     const absolute = await gate({
       event: 'PreToolUse',
       toolName: 'write_file',
-      input: { file_path: P_TMP_EVIL },
+      input: { file_path: P_UNTRUSTED_EVIL },
       parentSessionId: 'parent-session-123',
-      cwd: P_TMP,
+      cwd: P_UNTRUSTED,
     });
     expect(absolute.decision).toBe('block');
   });
@@ -447,7 +451,7 @@ describe('createAfkModeGate', () => {
   it('SECURITY: refuses a per-call cwd spoofing an .afk-worktrees/ tree of another repo', async () => {
     // trustedChildRoot must not trust ANY path containing an `.afk-worktrees/`
     // segment — only a sibling under the SAME worktrees dir as the session. A
-    // child cwd at `/tmp/.afk-worktrees/evil` (a different repo family) is
+    // child cwd at `/opt/untrusted/.afk-worktrees/evil` (a different repo family) is
     // untrusted, so its write is measured against the session root and blocked.
     const { gate } = makeGate('autonomous', P_USERS_DEV);
     const spoofed = await gate({
@@ -455,7 +459,7 @@ describe('createAfkModeGate', () => {
       toolName: 'write_file',
       input: { file_path: 'evil.sh' },
       parentSessionId: 'parent-session-123',
-      cwd: P_TMP_WT_EVIL,
+      cwd: P_UNTRUSTED_WT_EVIL,
     });
     expect(spoofed.decision).toBe('block');
   });
@@ -1030,5 +1034,191 @@ describe('createAfkModeGate — command preview in approval request', () => {
     expect(captured!._harnessInternal).toBe(true);
     // serverName must be 'agent-afk'
     expect(captured!.serverName).toBe('agent-afk');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #3464: daemon self-disable carve-out in the gate
+// ---------------------------------------------------------------------------
+// The gate uses classifyRisk internally. These tests verify the gate-level
+// behaviour: own-task disable passes through; other-task cancel is blocked;
+// non-daemon surfaces are unchanged.
+describe('createAfkModeGate — daemon self-disable carve-out (#3464)', () => {
+  const DAEMON_CWD = P_USERS_DEV;
+
+  // Helper: gate wired as a daemon session (promptForApproval:false = hard-block)
+  // with daemonTaskId supplied. A route spy should NOT be called for carve-outs.
+  function makeDaemonGate(daemonTaskId: string) {
+    const route = vi.fn(async (): Promise<ElicitationResult> => ({ action: 'decline' }));
+    const gate = createAfkModeGate(
+      () => 'autonomous' as PermissionMode,
+      DAEMON_CWD,
+      () => DAEMON_CWD,
+      { promptForApproval: false, daemonTaskId, route },
+    );
+    return { gate, route };
+  }
+
+  it('cancel_schedule own taskId (plain disable) → allowed (no block)', async () => {
+    const { gate } = makeDaemonGate('my-task');
+    const result = await gate({
+      event: 'PreToolUse',
+      toolName: 'cancel_schedule',
+      input: { taskId: 'my-task' },
+    });
+    expect(result).toEqual({});
+  });
+
+  it('cancel_schedule own taskId permanent:true → blocked (permanent delete not carved out)', async () => {
+    const { gate } = makeDaemonGate('my-task');
+    const result = await gate({
+      event: 'PreToolUse',
+      toolName: 'cancel_schedule',
+      input: { taskId: 'my-task', permanent: true },
+    });
+    expect((result as { decision?: string }).decision).toBe('block');
+  });
+
+  it('cancel_schedule DIFFERENT taskId → blocked (cannot cancel other tasks)', async () => {
+    const { gate } = makeDaemonGate('my-task');
+    const result = await gate({
+      event: 'PreToolUse',
+      toolName: 'cancel_schedule',
+      input: { taskId: 'other-task' },
+    });
+    expect((result as { decision?: string }).decision).toBe('block');
+  });
+
+  it('update_schedule own taskId enabled:false only → allowed', async () => {
+    const { gate } = makeDaemonGate('my-task');
+    const result = await gate({
+      event: 'PreToolUse',
+      toolName: 'update_schedule',
+      input: { taskId: 'my-task', enabled: false },
+    });
+    expect(result).toEqual({});
+  });
+
+  it('update_schedule own taskId with extra fields → blocked', async () => {
+    const { gate } = makeDaemonGate('my-task');
+    const result = await gate({
+      event: 'PreToolUse',
+      toolName: 'update_schedule',
+      input: { taskId: 'my-task', enabled: false, command: 'new' },
+    });
+    expect((result as { decision?: string }).decision).toBe('block');
+  });
+
+  it('daemon refusal names the reason and the task cwd, never /afk off', async () => {
+    const { gate, route } = makeDaemonGate('my-task');
+    const result = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: P_USERS_DEV_ELSEWHERE },
+    });
+    expect(result.decision).toBe('block');
+    expect(result.reason).toContain('workspace-escape: ');
+    expect(result.reason).toContain('evil.ts');
+    expect(result.reason).toContain('no operator can approve this run');
+    expect(result.reason).toContain(DAEMON_CWD);
+    expect(result.reason).toContain('report Blocked');
+    expect(result.reason).not.toContain('/afk off');
+    expect(route).not.toHaveBeenCalled();
+  });
+
+  it('daemon write_file into a private temp root → allowed', async () => {
+    // Use a private session root (0700 mkdtemp) so this passes whether or not
+    // os.tmpdir() is world-writable (Linux /tmp is excluded by the new contract).
+    const sessRoot = realpathSync(mkdtempSync(join(tmpdir(), 'afk-gate-dsess-')));
+    setSessionTmpdirRootForTests(sessRoot);
+    try {
+      const { gate } = makeDaemonGate('my-task');
+      const result = await gate({
+        event: 'PreToolUse',
+        toolName: 'write_file',
+        input: { file_path: join(sessRoot, 'afk-gate-daemon-scratch.py') },
+      });
+      expect(result).toEqual({});
+    } finally {
+      setSessionTmpdirRootForTests(undefined);
+      rmSync(sessRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('cancel_schedule without daemonTaskId (non-daemon surface) → blocked', async () => {
+    // No daemonTaskId supplied → no carve-out → standard high-risk block.
+    const route = vi.fn(async (): Promise<ElicitationResult> => ({ action: 'decline' }));
+    const gate = createAfkModeGate(
+      () => 'autonomous' as PermissionMode,
+      DAEMON_CWD,
+      () => DAEMON_CWD,
+      { promptForApproval: false, route },
+    );
+    const result = await gate({
+      event: 'PreToolUse',
+      toolName: 'cancel_schedule',
+      input: { taskId: 'my-task' },
+    });
+    expect((result as { decision?: string }).decision).toBe('block');
+  });
+});
+
+describe('createAfkModeGate — specific block reasons and temp-dir writes', () => {
+  function makeGate(promptForApproval: boolean) {
+    const route = vi.fn(async (): Promise<ElicitationResult> => ({ action: 'decline' }));
+    const gate = createAfkModeGate(
+      () => 'autonomous' as PermissionMode,
+      P_USERS_DEV,
+      () => P_USERS_DEV,
+      { promptForApproval, route },
+    );
+    return { gate, route };
+  }
+
+  it('non-daemon hard-block refusal includes the reason and keeps the /afk off tail', async () => {
+    const { gate } = makeGate(false);
+    const result = await gate({
+      event: 'PreToolUse',
+      toolName: 'bash',
+      input: { command: 'sudo ls' },
+    });
+    expect(result.decision).toBe('block');
+    expect(result.reason).toContain("bash-pattern: matched 'sudo'");
+    expect(result.reason).toContain('/afk off');
+  });
+
+  it('non-daemon approval prompt and declined refusal both carry the reason', async () => {
+    const { gate, route } = makeGate(true);
+    const result = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: P_USERS_DEV_ELSEWHERE },
+    });
+    expect(result.decision).toBe('block');
+    expect(result.reason).toContain('workspace-escape: ');
+    expect(result.reason).toContain('/afk off');
+    const request = route.mock.calls[0]?.[0] as ElicitationRequest | undefined;
+    expect(request?.message).toContain('Reason: workspace-escape: ');
+  });
+
+  it('write_file to a private temp root in autonomous mode is allowed', async () => {
+    // Use a private session root (0700 mkdtemp) so this passes whether or not
+    // os.tmpdir() is world-writable (Linux /tmp is excluded by the new contract).
+    const sessRoot = realpathSync(mkdtempSync(join(tmpdir(), 'afk-gate-asess-')));
+    setSessionTmpdirRootForTests(sessRoot);
+    const scratch = mkdtempSync(join(sessRoot, 'afk-gate-tmp-'));
+    try {
+      const { gate, route } = makeGate(true);
+      const result = await gate({
+        event: 'PreToolUse',
+        toolName: 'write_file',
+        input: { file_path: join(scratch, 'notes.md') },
+      });
+      expect(result).toEqual({});
+      expect(route).not.toHaveBeenCalled();
+    } finally {
+      setSessionTmpdirRootForTests(undefined);
+      rmSync(sessRoot, { recursive: true, force: true });
+    }
   });
 });

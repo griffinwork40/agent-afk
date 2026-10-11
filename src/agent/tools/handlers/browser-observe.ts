@@ -95,7 +95,7 @@ export function createBrowserObserveHandler(opts: BrowserHandlerOptions = {}): T
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_observe',
         toolUseId: context?.toolUseId ?? '',
-        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingBackend ? { backend: routingBackend } : {}),
         ...(routingReason ? { backendReason: routingReason } : {}),
         urlBefore: obs.url,
         urlAfter: obs.url,
@@ -110,7 +110,7 @@ export function createBrowserObserveHandler(opts: BrowserHandlerOptions = {}): T
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_observe',
         toolUseId: context?.toolUseId ?? '',
-        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingBackend ? { backend: routingBackend } : {}),
         ...(routingReason ? { backendReason: routingReason } : {}),
         urlBefore: null,
         urlAfter: null,

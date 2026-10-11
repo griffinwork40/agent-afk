@@ -18,13 +18,13 @@ export class PreToolContext {
     const context = this.pending.get(call);
     this.pending.delete(call);
     if (context === undefined) return result;
-    result.content += `\n\n[PreToolUse context]\n${context}`;
+    const delivered: ToolResult = { ...result, content: result.content + `\n\n[PreToolUse context]\n${context}` };
     if (writer) {
       await emitHookDecision(writer, {
         hookEvent: 'PreToolUse',
         injectedContextBytes: Buffer.byteLength(context, 'utf8'),
       });
     }
-    return result;
+    return delivered;
   }
 }

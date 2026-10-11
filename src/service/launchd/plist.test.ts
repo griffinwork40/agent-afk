@@ -1,34 +1,35 @@
-/**
- * Tests for plist.ts integration with the Homebrew Cellar normalization.
- *
- * Pure unit tests for normalizeBrewCellarExecPath have moved to
- * brew-cellar.test.ts (colocated with brew-cellar.ts). This file retains
- * the integration test that verifies resolveServicePath (in plist.ts) uses
- * the stable opt-symlink dir when a Cellar path is passed.
- *
- * Mirrors the skipIf(darwin) guard used throughout launchd.test.ts — these
- * functions are consumed by macOS-specific install paths.
- */
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { delimiter, dirname, join } from 'path';
 
-import { describe, expect, it } from 'vitest';
+const { exists, realpath } = vi.hoisted(() => ({ exists: vi.fn(), realpath: vi.fn() }));
+vi.mock('fs', async (importOriginal) => ({
+  ...await importOriginal<typeof import('fs')>(),
+  existsSync: exists,
+  realpathSync: realpath,
+}));
+
 import { resolveServicePath } from './plist.js';
 
-// ── resolveServicePath picks up Cellar normalization ─────────────────────
+// Real normalization wiring, independent of the host's Homebrew installation.
+describe('resolveServicePath Cellar normalization', () => {
+  const cellar = '/opt/homebrew/Cellar/node/26.11.0/bin/node';
+  const opt = join('/opt/homebrew', 'opt', 'node', '/bin/node');
 
-describe.skipIf(process.platform !== 'darwin')('resolveServicePath Cellar normalization', () => {
-  it('uses the stable opt-symlink dir when a Cellar path is passed', () => {
-    // resolveServicePath calls normalizeBrewCellarExecPath internally.
-    // We pass a Cellar execPath; the function should use opt/node/bin as
-    // the first PATH component, not the versioned Cellar dir.
-    //
-    // Note: resolveServicePath does not accept existsFn/realpathFn — it
-    // calls normalizeBrewCellarExecPath with real fs. For a pure
-    // integration test we verify the *structure* (dirname of normalized):
-    // a Cellar path on a real macOS system may or may not have the opt
-    // symlink, so we use a Homebrew opt path that is already stable.
-    const optPath = '/opt/homebrew/opt/node/bin/node';
-    const parts = resolveServicePath(optPath).split(':');
-    // dirname of optPath → /opt/homebrew/opt/node/bin
-    expect(parts[0]).toBe('/opt/homebrew/opt/node/bin');
+  beforeEach(() => {
+    vi.resetAllMocks();
+    exists.mockImplementation((p: string) => p === opt);
+    realpath.mockImplementation((p: string) => p === opt ? cellar : p);
+  });
+
+  it('converts an actual Cellar input to the stable opt directory', () => {
+    expect(resolveServicePath(cellar).split(delimiter)[0]).toBe(dirname(opt));
+    expect(exists).toHaveBeenCalledWith(opt);
+    expect(realpath).toHaveBeenCalledWith(opt);
+    expect(realpath).toHaveBeenCalledWith(cellar);
+  });
+
+  it('preserves the Cellar directory if the opt link points to another binary', () => {
+    realpath.mockImplementation((p: string) => p === opt ? '/different/node' : p);
+    expect(resolveServicePath(cellar).split(delimiter)[0]).toBe(dirname(cellar));
   });
 });

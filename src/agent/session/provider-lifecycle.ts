@@ -21,12 +21,13 @@
 
 import { debugLog } from '../../utils/debug.js';
 import { emitSessionPhase } from '../trace/emit.js';
+import { isReducedToolSurface, resolveSurfaceInputs } from './sdk-surface-warning.js';
 import { emitSessionIdAssigned } from './session-id-trace.js';
 import { resolveProvider, providerForModel } from '../providers/index.js';
 import { ProviderRouter } from '../providers/router/provider-router.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import { dispatchSessionStart } from './hooks-dispatch.js';
-import { HookBlockedError } from '../../utils/errors.js';
+import { HookBlockedError, ensureError} from '../../utils/errors.js';
 import { transformProviderEvent } from './stream-consumer.js';
 import { buildInitialState } from './session-setup.js';
 import { SessionStateManager } from './session-state.js';
@@ -104,6 +105,9 @@ export function buildProviderLifecycle(config: AgentConfig): ProviderLifecycleRe
           resolveProvider(m, undefined, {
             customTools: config.customTools,
             canUseTool: config.canUseTool,
+            // #3442: opt-in executors ride along on every provider the router
+            // builds, including ones rebuilt by a cross-family model swap.
+            ...(config.executors !== undefined ? { executors: config.executors } : {}),
           });
     providerQuery = new ProviderRouter(
       { prompt: promptIterable, config },
@@ -188,6 +192,18 @@ export class ProviderInitializer {
           return;
         }
         const event = result.value;
+        // Invariant (#3442): stamp reducedToolSurface BEFORE transformProviderEvent,
+        // which resolves initPromise on session.init; stamping afterwards races
+        // waitForInitialization() callers. The init updater spreads `prev`, so the
+        // flag survives. Init metadata carries empty skills/tools, hence
+        // resolveSurfaceInputs (registry + executor wiring). The stderr warning is
+        // deferred to the first turn (session-send.ts) so probes stay quiet.
+        if (event.type === 'session.init') {
+          const surface = resolveSurfaceInputs(this.config, { skills: event.info.skills ?? [], tools: event.info.tools ?? [] });
+          if (isReducedToolSurface(surface)) {
+            stateManager.setSessionMetadata((prev) => ({ ...prev, reducedToolSurface: true }));
+          }
+        }
         const output = transformProviderEvent(event, buildTransformDeps());
         if (event.type === 'session.init') {
           // Witness layer: mark end of init phase with wall-clock duration.
@@ -212,7 +228,7 @@ export class ProviderInitializer {
         }
       }
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
+      const error = ensureError(err);
       if (error instanceof HookBlockedError) {
         this.accounting.markHookBlocked();
       }

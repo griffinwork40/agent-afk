@@ -117,6 +117,14 @@ export const AUTH_ENV_REGISTRY = [
     category: 'model',
   },
   {
+    name: 'OPENAI_BASE_URL',
+    description: 'Standard OpenAI SDK base URL override. When set without AFK_OPENAI_BASE_URL, the OpenAI SDK routes the client to this endpoint while AFK\'s own baseURL option remains undefined. AFK reads this variable to correctly classify the effective endpoint for decisions such as compaction model selection — without it, AFK would see an undefined baseURL and incorrectly treat the session as targeting api.openai.com.',
+    type: 'string',
+    required: false,
+    example: 'http://127.0.0.1:8000/v1',
+    category: 'model',
+  },
+  {
     name: 'AFK_OPENAI_BASE_URL',
     description: 'Base URL override for the OpenAI-compatible provider. Used for local shims (mlx_lm.server, Ollama, vLLM, LM Studio). The OpenAI SDK appends `/chat/completions` itself — a value ending in `/chat/completions` will be stripped at config-load time with a one-shot warning.',
     type: 'string',

@@ -31,6 +31,7 @@ import {
   requestCprAndApplyDelta,
   CPR_REQUEST,
   CPR_TIMEOUT_MS,
+  __resetCprRttForTests,
   type CprHost,
 } from './terminal-compositor.lifecycle.cpr.js';
 import { TerminalCompositor } from './terminal-compositor.js';
@@ -80,7 +81,7 @@ function makeCprHost(opts: {
 // ---------------------------------------------------------------------------
 
 describe('W1: CPR_REQUEST emitted on width-only SIGWINCH (rows unchanged)', () => {
-  beforeEach(() => { __resetStdinClaimForTests(); vi.useFakeTimers(); });
+  beforeEach(() => { __resetStdinClaimForTests(); __resetCprRttForTests(); vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   it('emits CPR_REQUEST when width shrinks but rows stay the same', async () => {
@@ -113,7 +114,7 @@ describe('W1: CPR_REQUEST emitted on width-only SIGWINCH (rows unchanged)', () =
 // ---------------------------------------------------------------------------
 
 describe('W2: pendingResizeErase populated on width-only SIGWINCH', () => {
-  beforeEach(() => { __resetStdinClaimForTests(); vi.useFakeTimers(); });
+  beforeEach(() => { __resetStdinClaimForTests(); __resetCprRttForTests(); vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   it('sets pendingResizeErase after a width-only SIGWINCH when a frame is active', async () => {
@@ -150,7 +151,7 @@ describe('W2: pendingResizeErase populated on width-only SIGWINCH', () => {
 // ---------------------------------------------------------------------------
 
 describe('W3: CPR_REQUEST not emitted on width-only SIGWINCH with no measured frame', () => {
-  beforeEach(() => { __resetStdinClaimForTests(); vi.useFakeTimers(); });
+  beforeEach(() => { __resetStdinClaimForTests(); __resetCprRttForTests(); vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   it('does NOT emit CPR_REQUEST when lastMeasuredFrameBottom is 0', async () => {
@@ -183,7 +184,7 @@ describe('W3: CPR_REQUEST not emitted on width-only SIGWINCH with no measured fr
 // ---------------------------------------------------------------------------
 
 describe('W4: pendingResizeErase null on width-only SIGWINCH with no active footprint', () => {
-  beforeEach(() => { __resetStdinClaimForTests(); vi.useFakeTimers(); });
+  beforeEach(() => { __resetStdinClaimForTests(); __resetCprRttForTests(); vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   it('pendingResizeErase remains null when no frame has been measured', async () => {
@@ -224,7 +225,7 @@ describe('W4: pendingResizeErase null on width-only SIGWINCH with no active foot
 // ---------------------------------------------------------------------------
 
 describe('W5: repaint fires after CPR reply on width-only resize', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
+  beforeEach(() => { __resetCprRttForTests(); vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   it('repaint fires and delta is 0 (no cursor shift for width-only) when CPR replies same row', async () => {
@@ -251,7 +252,7 @@ describe('W5: repaint fires after CPR reply on width-only resize', () => {
 // ---------------------------------------------------------------------------
 
 describe('W6: repaint fires after CPR timeout on width-only resize', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
+  beforeEach(() => { __resetCprRttForTests(); vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   it('repaint fires on timeout; rows unchanged (fallback contract)', async () => {
@@ -274,7 +275,7 @@ describe('W6: repaint fires after CPR timeout on width-only resize', () => {
 // ---------------------------------------------------------------------------
 
 describe('W7: regression — ghost-erase CUP emitted after width-only resize', () => {
-  beforeEach(() => { __resetStdinClaimForTests(); vi.useFakeTimers(); });
+  beforeEach(() => { __resetStdinClaimForTests(); __resetCprRttForTests(); vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
   it('ghost-erase CUP+EL emitted for the pre-resize frame row after width-only shrink', async () => {

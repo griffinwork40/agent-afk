@@ -17,6 +17,7 @@ import {
   PROTECTED_CREDENTIAL_PATH_MARKER,
 } from './read-denylist.js';
 import { assertNotDenylisted } from './write-denylist.js';
+import { isEnoent, isErrnoCode } from '../../../utils/errors.js';
 
 // Invariant: symlink containment must be resolved at the filesystem level, not
 // lexically. A symlink that lives INSIDE a granted root but points OUTSIDE it
@@ -343,8 +344,7 @@ function resolveSymlinkTarget(p: string): string {
       // a symlink inside the write root cannot be silently treated as "not a
       // link", because fs.writeFile would still follow it. Throw so the caller
       // reports the access error rather than granting a silent pass.
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT' || code === 'ENOTDIR') return current;
+      if (isEnoent(err) || isErrnoCode(err, 'ENOTDIR')) return current;
       throw new Error(
         `Cannot stat \`${current}\` while resolving symlink chain from \`${p}\`: ${(err as Error).message}`,
       );

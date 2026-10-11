@@ -6,20 +6,21 @@
  * per-editor filter.
  *
  * Design notes:
- *   - Atomic writes: data is written to a `.tmp` sibling then `rename`d so the
- *     settings file is never left in a half-written state.
+ *   - Atomic writes: `atomicWriteFileAsync` (tmp + rename) ensures the settings
+ *     file is never left in a half-written state.
  *   - JSONC guard: if `JSON.parse` fails on an existing file (comments, trailing
  *     commas, etc.) the `set` action aborts rather than overwriting user content.
  *   - Factory pattern: `createTerminalFontSizeHandler({ discoverFn?, writeFn? })`
- *     accepts injection seams so tests can redirect discovery and file writes
- *     without module-level mocking.
+ *     accepts injection seams so tests can redirect discovery and simulate
+ *     write failures without module-level mocking.
  *
  * @module agent/tools/handlers/terminal-font-size
  */
 
 import { existsSync } from 'node:fs';
-import { readFile, writeFile, rename } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { atomicWriteFileAsync } from '../../../utils/atomic-write.js';
 import { expandHome } from '../../plugins/source.js';
 import { env } from '../../../config/env.js';
 import type { ToolHandler } from '../types.js';
@@ -39,7 +40,12 @@ export interface EditorTarget {
 
 export interface TerminalFontSizeHandlerOpts {
   discoverFn?: () => EditorTarget[];
-  writeFn?: (path: string, data: string, encoding: BufferEncoding) => Promise<void>;
+  /**
+   * Injection seam for tests. Receives the destination path and serialised
+   * JSON; must write atomically (or throw to simulate failure). Production
+   * callers omit this — the default uses {@link atomicWriteFileAsync}.
+   */
+  writeFn?: (destPath: string, data: string) => Promise<void>;
 }
 
 // ── Editor discovery ─────────────────────────────────────────────────────────
@@ -104,14 +110,15 @@ function normalizeEditorName(s: string): string {
  *
  * @param opts - Optional injection seams for testing.
  *   - `discoverFn` — replaces the default `discoverEditors()` call
- *   - `writeFn`    — replaces `writeFile` from `node:fs/promises`; receives
- *                    the temp-file path, JSON string, and `'utf-8'`
+ *   - `writeFn`    — replaces atomic-write; receives the destination path and
+ *                    serialised JSON (no encoding arg — always UTF-8)
  */
 export function createTerminalFontSizeHandler(
   opts: TerminalFontSizeHandlerOpts = {},
 ): ToolHandler {
   const discover = opts.discoverFn ?? discoverEditors;
-  const writeFn = opts.writeFn ?? writeFile;
+  const writeFn = opts.writeFn ?? ((destPath: string, data: string) =>
+    atomicWriteFileAsync(destPath, data, { mode: 0o600, encoding: 'utf-8' }).then(() => undefined));
 
   return async (input, _signal) => {
     // ── Input validation ────────────────────────────────────────────────────
@@ -251,7 +258,7 @@ async function handleGet(
 async function handleSet(
   targets: EditorTarget[],
   size: number,
-  writeFn: (path: string, data: string, encoding: BufferEncoding) => Promise<void>,
+  writeFn: (destPath: string, data: string) => Promise<void>,
 ): Promise<{ content: string; isError?: true }> {
   const lines: string[] = [];
   let anyError = false;
@@ -290,12 +297,10 @@ async function handleSet(
     // Merge font size
     settings['terminal.integrated.fontSize'] = size;
 
-    const tmpPath = `${settingsPath}.tmp`;
     const serialised = JSON.stringify(settings, null, 2) + '\n';
 
     try {
-      await writeFn(tmpPath, serialised, 'utf-8');
-      await rename(tmpPath, settingsPath);
+      await writeFn(settingsPath, serialised);
       lines.push(`${target.name}: terminal.integrated.fontSize set to ${size}`);
     } catch (err) {
       const nodeErr = err as NodeJS.ErrnoException;

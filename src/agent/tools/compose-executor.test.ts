@@ -1877,7 +1877,7 @@ describe('ComposeExecutor', () => {
 
       await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'task a' }] }));
 
-      // First argument to buildComposeNodeProvider is the node model; second is the store.
+      // Second argument to buildComposeNodeProvider is the store (first is model).
       const [, passedStore] = mockBuildComposeNodeProvider.mock.calls[0];
       expect(passedStore).toBe(store);
     });
@@ -1891,9 +1891,9 @@ describe('ComposeExecutor', () => {
 
       await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'task a' }] }));
 
-      // Third argument to buildComposeNodeProvider is openaiBaseUrl.
-      const [, , passedUrl] = mockBuildComposeNodeProvider.mock.calls[0];
-      expect(passedUrl).toBe('http://localhost:11434/v1');
+      // Third argument to buildComposeNodeProvider is the opts object; openaiBaseUrl is inside it.
+      const [, , passedOpts] = mockBuildComposeNodeProvider.mock.calls[0];
+      expect((passedOpts as { openaiBaseUrl?: string }).openaiBaseUrl).toBe('http://localhost:11434/v1');
     });
 
     it('does NOT set provider on DAG nodes when ctx.workspaceStore is absent', async () => {

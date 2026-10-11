@@ -13,6 +13,7 @@
  * compositor via ctx.getCompositor(); non-TTY surfaces fall back to the dump.
  */
 
+import { readDisabledToolsByTier } from '../../config/tools-disabled.js';
 import { env } from '../../../config/env.js';
 import { palette } from '../../palette.js';
 import { divider, healthCheckRows, healthCheckSummary } from '../../render.js';
@@ -96,6 +97,8 @@ function renderConfigView(out: Writer): void {
       ? palette.warning(`${permissionMode} (bypass — containment off)`)
       : palette.info(`${permissionMode} (containment on)`)}`,
   );
+  const toolsOff = [...new Set(readDisabledToolsByTier().flatMap((t) => t.entries))];
+  out.line(`  tools off   ${toolsOff.length > 0 ? palette.warning(toolsOff.join(', ')) : palette.dim('(none)')}`);
 
   out.line();
   out.line(palette.bold('Environment variables'));

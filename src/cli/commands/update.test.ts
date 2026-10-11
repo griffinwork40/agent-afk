@@ -6,8 +6,8 @@
  *   - `afk update --pin <version>`: semver validation, happy path, install-failure
  *   - `afk update` (latest): fetches and installs
  *   - `runNpmInstall` signal-kill path (via exit event)
- *   - Fix A: resolveNpmBinary — uses npm sibling to the running Node, not PATH npm
- *   - Fix B: service restart after successful install; --no-restart; loud warning on failure
+ *   - npm CLI binding to the running Node, never inherited PATH's Node
+ *   - safe service handoff and lifecycle suppression for --no-restart
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -41,12 +41,14 @@ vi.mock('../palette.js', () => ({
   },
 }));
 
-// Mock fs.existsSync so resolveNpmBinary's sibling-lookup falls back to
-// bare 'npm' in existing tests (preserves pre-existing spawn assertions).
-const { mockExistsSync } = vi.hoisted(() => ({ mockExistsSync: vi.fn(() => false) }));
+// No host filesystem dependency, including Homebrew's sibling npm symlink.
+const { mockExistsSync, mockRealpathSync } = vi.hoisted(() => ({
+  mockExistsSync: vi.fn(() => false),
+  mockRealpathSync: vi.fn((p: string) => p),
+}));
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('fs')>();
-  return { ...actual, existsSync: mockExistsSync };
+  return { ...actual, existsSync: mockExistsSync, realpathSync: mockRealpathSync };
 });
 
 // Mock service manager — fix B tests
@@ -75,13 +77,15 @@ vi.mock('../../service/index.js', () => ({
 import path from 'path';
 import { spawn } from 'child_process';
 import { fetchLatestVersion, writePendingUpdateMarker, writeUpdateCache } from '../update-checker.js';
-import { registerUpdateCommand, resolveNpmBinary } from './update.js';
+import { registerUpdateCommand, resolveNpmCli } from './update.js';
+import { getVersion } from '../version.js';
 import { EventEmitter } from 'events';
 
 const mockFetchLatestVersion = vi.mocked(fetchLatestVersion);
 const mockWritePendingUpdateMarker = vi.mocked(writePendingUpdateMarker);
 const mockWriteUpdateCache = vi.mocked(writeUpdateCache);
 const mockSpawn = vi.mocked(spawn);
+const mockGetVersion = vi.mocked(getVersion);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -120,8 +124,9 @@ describe('afk update', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    // existsSync: default false so resolveNpmBinary falls back to 'npm'
-    mockExistsSync.mockReturnValue(false);
+    // npm CLI exists in the running Node installation unless a test overrides it.
+    mockExistsSync.mockReturnValue(true);
+    mockRealpathSync.mockImplementation((p: string) => p);
     consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     consoleErrSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
@@ -186,6 +191,18 @@ describe('afk update', () => {
       await runUpdate('--check');
       expect(mockSpawn).not.toHaveBeenCalled();
     });
+
+    it('--check reports update available when running a prerelease of the same core as latest', async () => {
+      // isPrerelease hardening: a running 1.10.1-rc.1 should be offered 1.10.1.
+      // The earlier `v.includes('-')` logic handled this correctly but the new
+      // regex must too — this test guards both the old and new code path.
+      mockGetVersion.mockReturnValueOnce('1.10.1-rc.1');
+      mockFetchLatestVersion.mockResolvedValue('1.10.1');
+      await runUpdate('--check');
+      const output = consoleSpy.mock.calls.flat().join('\n');
+      expect(output).toContain('Update available');
+      expect(output).toContain('1.10.1');
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -213,11 +230,9 @@ describe('afk update', () => {
       mockSpawn.mockImplementation(spawnExiting(0) as unknown as typeof spawn);
       await runUpdate('--pin', '1.11.0');
 
-      // resolveNpmBinary falls back to the platform npm name (existsSync is mocked false)
-      const expectedNpm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
       expect(mockSpawn).toHaveBeenCalledWith(
-        expectedNpm,
-        ['install', '-g', '--allow-scripts=agent-afk', 'agent-afk@1.11.0'],
+        process.execPath,
+        [resolveNpmCli(), 'install', '-g', '--allow-scripts=agent-afk', 'agent-afk@1.11.0'],
         expect.objectContaining({ stdio: 'inherit' }),
       );
       expect(mockWritePendingUpdateMarker).toHaveBeenCalledWith('1.11.0');
@@ -267,12 +282,10 @@ describe('afk update', () => {
 
       await runUpdate();
 
-      // resolveNpmBinary falls back to the platform npm name (existsSync is mocked false)
-      const expectedNpm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
       expect(mockFetchLatestVersion).toHaveBeenCalled();
       expect(mockSpawn).toHaveBeenCalledWith(
-        expectedNpm,
-        ['install', '-g', '--allow-scripts=agent-afk', 'agent-afk@1.12.0'],
+        process.execPath,
+        [resolveNpmCli(), 'install', '-g', '--allow-scripts=agent-afk', 'agent-afk@1.12.0'],
         expect.objectContaining({ stdio: 'inherit' }),
       );
       expect(mockWritePendingUpdateMarker).toHaveBeenCalledWith('1.12.0');
@@ -303,106 +316,77 @@ describe('afk update', () => {
     });
   });
 
-  // -------------------------------------------------------------------------
-  // Fix A: resolveNpmBinary
-  // -------------------------------------------------------------------------
-
-  describe('resolveNpmBinary (fix A)', () => {
-    it('returns sibling npm when it exists next to the node binary', () => {
-      // Use path.join/dirname — same functions the implementation uses — so the
-      // expected sibling path is platform-correct on every OS (R4: no platform gates).
-      const execPath = path.join(path.sep, 'opt', 'homebrew', 'bin', 'node');
-      const siblingNpm = path.join(path.dirname(execPath), 'npm');
-      const existsFn = (p: string) => p === siblingNpm;
-      const result = resolveNpmBinary(execPath, 'linux', existsFn);
-      expect(result).toBe(siblingNpm);
+  describe('npm interpreter binding', () => {
+    it('resolves Homebrew sibling symlinks into the shared npm installation', () => {
+      const execPath = path.join(path.sep, 'opt', 'homebrew', 'Cellar', 'node', '26.11.0', 'bin', 'node');
+      const sibling = path.join(path.dirname(execPath), 'npm');
+      const npmCli = path.join(path.sep, 'opt', 'homebrew', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+      expect(resolveNpmCli(execPath, (p) => p === sibling || p === npmCli, () => npmCli)).toBe(npmCli);
     });
 
-    it('falls back to bare "npm" when no sibling exists', () => {
-      const execPath = path.join(path.sep, 'some', 'custom', 'bin', 'node');
-      const result = resolveNpmBinary(execPath, 'linux', () => false);
-      expect(result).toBe('npm');
+    it('does not execute a sibling shell wrapper as JavaScript', () => {
+      const execPath = path.join(path.sep, 'nodejs', 'node');
+      expect(resolveNpmCli(execPath, () => true, (p) => p)).toMatch(/npm-cli\.js$/);
+    });
+    it.each(['homebrew', 'nvm'])('locates the POSIX npm CLI for %s layouts', (prefix) => {
+      const execPath = path.join(path.sep, prefix, 'bin', 'node');
+      const npmCli = path.join(path.dirname(execPath), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+      expect(resolveNpmCli(execPath, (p) => p === npmCli)).toBe(npmCli);
     });
 
-    it('uses npm.cmd on Windows when sibling exists (platform-neutral paths)', () => {
-      // Build paths with path.join so they match what the implementation computes
-      // regardless of whether the host is POSIX or Windows.
-      const execPath = path.join(path.sep, 'c', 'nodejs', 'node.exe');
-      const siblingNpmCmd = path.join(path.dirname(execPath), 'npm.cmd');
-      const existsFn = (p: string) => p === siblingNpmCmd;
-      const result = resolveNpmBinary(execPath, 'win32', existsFn);
-      expect(result).toBe(siblingNpmCmd);
+    it('locates the Windows npm CLI without using a cmd launcher', () => {
+      const execPath = path.join(path.sep, 'nodejs', 'node.exe');
+      const npmCli = path.join(path.dirname(execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+      expect(resolveNpmCli(execPath, (p) => p === npmCli)).toBe(npmCli);
     });
 
-    it('falls back to "npm.cmd" on Windows when sibling missing', () => {
-      const execPath = path.join(path.sep, 'c', 'nodejs', 'node.exe');
-      expect(resolveNpmBinary(execPath, 'win32', () => false)).toBe('npm.cmd');
+    it('does not fall back to an unrelated PATH npm', async () => {
+      mockExistsSync.mockReturnValue(false);
+      await runUpdate('--pin', '1.11.0');
+      expect(mockSpawn).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+      expect(consoleErrSpy.mock.calls.flat().join('\n')).toContain('different global prefix');
     });
 
-    it('uses nvm-local npm when node lives under nvm', () => {
-      const execPath = path.join(
-        path.sep, 'Users', 'me', '.nvm', 'versions', 'node', 'v24.11.0', 'bin', 'node',
-      );
-      const siblingNpm = path.join(path.dirname(execPath), 'npm');
-      const existsFn = (p: string) => p === siblingNpm;
-      expect(resolveNpmBinary(execPath, 'linux', existsFn)).toBe(siblingNpm);
+    it('executes the npm CLI directly with this Node rather than its env-node shebang', async () => {
+      mockSpawn.mockImplementation(spawnExiting(0) as unknown as typeof spawn);
+      await runUpdate('--pin', '1.11.0');
+      expect(mockSpawn.mock.calls[0]?.[0]).toBe(process.execPath);
+      expect(mockSpawn.mock.calls[0]?.[1]?.[0]).toMatch(/npm-cli\.js$/);
     });
   });
 
-  // -------------------------------------------------------------------------
-  // Fix B: restart services after successful install
-  // -------------------------------------------------------------------------
-
-  describe('service restart after install (fix B)', () => {
-    it('restarts installed services after a successful install', async () => {
-      mockFetchLatestVersion.mockResolvedValue('1.12.0');
-      mockSpawn.mockImplementation(spawnExiting(0) as unknown as typeof spawn);
-      mockServiceManager.isInstalled.mockImplementation((name: string) => name === 'daemon');
-      mockServiceManager.restart.mockReturnValue({ kind: 'restarted', label: 'com.afk.daemon' });
-
-      await runUpdate();
-
-      expect(mockServiceManager.restart).toHaveBeenCalledTimes(1);
-      expect(mockServiceManager.restart).toHaveBeenCalledWith('daemon');
-      expect(process.exitCode).toBeUndefined();
-    });
-
-    it('warns and sets exitCode=2 on restart failure without failing the update', async () => {
-      mockFetchLatestVersion.mockResolvedValue('1.12.0');
-      mockSpawn.mockImplementation(spawnExiting(0) as unknown as typeof spawn);
-      mockServiceManager.isInstalled.mockImplementation((name: string) => name === 'daemon');
-      mockServiceManager.restart.mockReturnValue({
-        kind: 'failed',
-        reason: 'spawnSync launchctl ETIMEDOUT',
-      });
-
-      await runUpdate();
-
-      const errCalls = consoleErrSpy.mock.calls.map((c) => String(c[0])).join('\n');
-      expect(errCalls).toMatch(/daemon/);
-      expect(errCalls).toMatch(/ETIMEDOUT/);
-      expect(errCalls).toMatch(/afk service restart daemon/);
-      // exitCode = 2 (restart failed) not 1 (install failed)
-      expect(process.exitCode).toBe(2);
-    });
-
-    it('skips service restart when --no-restart is passed', async () => {
-      mockFetchLatestVersion.mockResolvedValue('1.12.0');
-      mockSpawn.mockImplementation(spawnExiting(0) as unknown as typeof spawn);
+  describe('service handoff safety', () => {
+    beforeEach(() => {
       mockServiceManager.isInstalled.mockReturnValue(true);
+      mockSpawn.mockImplementation(spawnExiting(0) as unknown as typeof spawn);
+    });
 
-      await runUpdate('--no-restart');
+    it('never immediately restarts Telegram, even when installed and busy', async () => {
+      await runUpdate('--pin', '1.11.0');
+      expect(mockServiceManager.restart).not.toHaveBeenCalledWith('telegram');
+      expect(consoleSpy.mock.calls.flat().join('\n')).toContain('idle-aware watchdog');
+    });
 
+    it('never reconciles definitions using the old in-memory service renderer', async () => {
+      await runUpdate('--pin', '1.11.0');
       expect(mockServiceManager.restart).not.toHaveBeenCalled();
+      expect(mockServiceManager.upgrade).not.toHaveBeenCalled();
+      expect(mockServiceManager.isInstalled).not.toHaveBeenCalled();
+      // Normal installs still permit the NEW package's lifecycle to reconcile.
+      expect(mockSpawn.mock.calls[0]?.[1]).not.toContain('--ignore-scripts');
+    });
+
+    it.each(['1.11.0', '1.0.0'])('--no-restart suppresses lifecycle scripts even when pinning %s', async (version) => {
+      await runUpdate('--no-restart', '--pin', version);
+      expect(mockSpawn.mock.calls[0]?.[1]).toContain('--ignore-scripts');
+      expect(mockServiceManager.restart).not.toHaveBeenCalled();
+      expect(consoleSpy.mock.calls.flat().join('\n')).toContain('Idle version watchdogs remain active');
     });
 
     it('does not restart services when npm install fails', async () => {
-      mockFetchLatestVersion.mockResolvedValue('1.12.0');
       mockSpawn.mockImplementation(spawnExiting(1) as unknown as typeof spawn);
-      mockServiceManager.isInstalled.mockReturnValue(true);
-
-      await runUpdate();
-
+      await runUpdate('--pin', '1.11.0');
       expect(mockServiceManager.restart).not.toHaveBeenCalled();
       expect(process.exitCode).toBe(1);
     });

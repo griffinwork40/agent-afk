@@ -1,0 +1,20 @@
+# Three generating blocks for SW(25,16). Rows/columns of W are indexed by (I, r), I, r in {0,...,4};
+# matrix index = 5*I + r (0-based). Block (I,J) of W is B_{(J-I) mod 5}, with B3 = B2^T, B4 = B1^T.
+B0
+-1  0 -1  1 -1
+ 0 -1  0  0  1
+-1  0  0  1  0
+ 1  0  1 -1 -1
+-1  1  0 -1 -1
+B1
+ 0 -1  1 -1  0
+ 0  0 -1 -1  1
+ 1 -1 -1  1  0
+ 1  0 -1  0  1
+ 1  1  0  0  1
+B2
+-1 -1  1  0  0
+ 1  1  0  1 -1
+ 0  0  1  1  1
+ 0 -1  0 -1  1
+ 1  1  1  0  0

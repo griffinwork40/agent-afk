@@ -79,9 +79,14 @@ function fail(message: string): ToolResult {
 /** Validate raw tool input. Returns the parsed input or an error result. */
 export function parseModelCompleteInput(raw: unknown): ModelCompleteInput | ToolResult {
   const obj = (raw ?? {}) as Record<string, unknown>;
-  const prompt = obj['prompt'];
-  if (typeof prompt !== 'string' || prompt.trim() === '') {
-    return fail('`prompt` must be a non-empty string.');
+  const rawPrompt = obj['prompt'];
+  if (rawPrompt !== undefined && typeof rawPrompt !== 'string') {
+    return fail('`prompt` must be a string when provided.');
+  }
+  const prompt = typeof rawPrompt === 'string' ? rawPrompt : '';
+  const hasInputPath = typeof obj['input_path'] === 'string' && obj['input_path'].trim() !== '';
+  if (prompt.trim() === '' && !hasInputPath) {
+    return fail('`prompt` must be a non-empty string when `input_path` is not set.');
   }
   const model = typeof obj['model'] === 'string' && obj['model'].trim() !== ''
     ? obj['model'].trim()
@@ -147,11 +152,15 @@ async function modelCompleteImpl(
   if (input.inputPath !== undefined) {
     const file = await readInputFile(input.inputPath, context, cwd);
     if (isToolResult(file)) return file;
-    user = `${input.prompt}\n\n<input path="${input.inputPath}">\n${file.text}\n</input>`;
+    const inputBlock = `<input path="${input.inputPath}">\n${file.text}\n</input>`;
+    user = input.prompt.trim() !== ''
+      ? `${input.prompt}\n\n${inputBlock}`
+      : inputBlock;
   }
 
   const target = resolveOneShotTarget(input.model);
-  const callSignal = AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]);
+  const timeoutSignal = AbortSignal.timeout(TIMEOUT_MS);
+  const callSignal = AbortSignal.any([signal, timeoutSignal]);
   let reply: string;
   let stopReason: OneShotStopReason;
   try {
@@ -164,9 +173,11 @@ async function modelCompleteImpl(
       signal: callSignal,
     }));
   } catch (err) {
+    // Check timeoutSignal first: if the 300 s timer fired, report "timed out"
+    // regardless of whether the caller's turn signal also aborted concurrently.
+    if (timeoutSignal.aborted) return fail(`timed out after ${TIMEOUT_MS / 1000}s.`);
     if (signal.aborted) return fail('aborted.');
-    const timedOut = callSignal.aborted;
-    const detail = timedOut ? `timed out after ${TIMEOUT_MS / 1000}s.` : errorMessage(err);
+    const detail = errorMessage(err);
     return fail(`${target.model} (${target.provider}) failed: ${redactSecrets(detail)}`);
   }
 

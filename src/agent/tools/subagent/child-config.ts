@@ -20,7 +20,7 @@
  */
 
 import { SubagentManager } from '../../subagent.js';
-import { SUBAGENT_HANDOFF_CONTRACT } from '../../subagent-contract.js';
+import { composeUnnamedWorkerPrompt } from '../system-prompt.js';
 import type { ReadScopeInputs } from '../../subagent-read-scope.js';
 import type { ModelProvider } from '../../provider.js';
 import type { AgentModelInput, IAgentSession } from '../../types.js';
@@ -79,7 +79,8 @@ export interface BuildChildConfigArgs {
   childInheritedReadRoots?: string[];
   /** The dispatching tool-call's abort signal (owns the child manager lifetime). */
   signal: AbortSignal;
-  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'xaiBaseUrl' | 'skillDispatchName'>;
+  /** See SubagentExecutorContext.defaultConfig (incl. the bare `operatorOverlay`). */
+  defaultConfig: SubagentExecutorContext['defaultConfig'];
   resolveApiKeyForModel?: (model: string) => string | undefined;
   defaultSubagentModel: AgentModelInput;
   childProviderFactory?: (args: ChildProviderFactoryArgs) => ModelProvider;
@@ -120,6 +121,12 @@ export interface BuildChildConfigArgs {
    * the chain holds to maxDepth. See SubagentExecutorContext.workspaceStore.
    */
   workspaceStore?: import('../../workspace/index.js').WorkspaceStore; delegationBudget?: import('../../tools/delegation-budget.js').DelegationBudget;
+  /**
+   * Hook registry (#3442) for the depth-2+ child {@link SubagentManager}
+   * (whose stub parent carries none) and the recursive child executor's ctx,
+   * so SubagentStart/Stop fire at every depth. Undefined => unchanged.
+   */
+  hookRegistry?: import('../../hooks.js').HookRegistry;
   /**
    * Root (depth-0) session id, forwarded from the dispatching executor's
    * parent session id when the executor sits at depth 1, or from the
@@ -205,7 +212,37 @@ function buildNestedChildManager(
     ...(args.surface !== undefined ? { surface: args.surface } : {}),
     ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
     ...(args.parentRootSessionId !== undefined ? { parentRootSessionId: args.parentRootSessionId } : {}),
+    ...(args.hookRegistry !== undefined ? { hookRegistry: args.hookRegistry } : {}),
   });
+}
+
+/**
+ * Tree-wide fields the recursive child executor inherits unchanged (trace
+ * writer, workspace store, hook registry). Extracted from
+ * {@link buildChildConfig} (function-size ceiling, baselined: must not grow).
+ */
+function nestedExecutorInherits(
+  args: Pick<BuildChildConfigArgs, 'traceWriter' | 'workspaceStore' | 'hookRegistry'>,
+): Pick<SubagentExecutorContext, 'traceWriter' | 'workspaceStore' | 'hookRegistry'> {
+  return {
+    ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}),
+    ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
+    ...(args.hookRegistry !== undefined ? { hookRegistry: args.hookRegistry } : {}),
+  };
+}
+
+/**
+ * Resolve `systemPrompt` and the companion `isUnnamedWorker` flag together.
+ * Named agents supply their own prompt; unnamed workers embed
+ * `TOOL_SYSTEM_PROMPT_BASE` via `UNNAMED_SUBAGENT_WORKER_PROMPT` and signal
+ * this so providers skip the duplicate `toolBase` prepend (#3359).
+ */
+function resolveChildSystemPrompt(
+  namedAgent: RegisteredAgent | undefined,
+  operatorOverlay: string | undefined,
+): { systemPrompt: string; isUnnamedWorker?: true } {
+  if (namedAgent !== undefined) return { systemPrompt: namedAgent.definition.prompt };
+  return { systemPrompt: composeUnnamedWorkerPrompt(operatorOverlay), isUnnamedWorker: true };
 }
 
 export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigResult {
@@ -376,24 +413,12 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
   const childConfig: AgentConfig = {
     model: childModel,
     apiKey: childIsOpenAI ? undefined : resolvedChildApiKey,
-    // A named agent's markdown body IS the child's system prompt (Claude
-    // Code parity: subagents receive the definition prompt, not the parent
-    // surface's full prompt) — a named agent owns its own handoff guidance
-    // (general-purpose bakes in SUBAGENT_HANDOFF_CONTRACT; read-only vendored
-    // agents are already compact), so it is passed through unchanged.
-    //
-    // An UNNAMED dispatch inherits the parent's full base prompt, which frames
-    // delegation from the DISPATCHER's side but never tells the child itself to
-    // keep its reply short / write bulk output to files. Append the handoff
-    // contract so the truly-default dispatch cannot emit an unbounded final
-    // message that gets truncated mid-stream (the StreamIncompleteError class
-    // this change also adds a bounded retry for in loop.ts).
-    systemPrompt:
-      namedAgent !== undefined
-        ? namedAgent.definition.prompt
-        : defaultConfig.systemPrompt
-          ? `${defaultConfig.systemPrompt}\n\n${SUBAGENT_HANDOFF_CONTRACT}`
-          : SUBAGENT_HANDOFF_CONTRACT,
+    // Named-agent body IS the prompt (Claude Code parity; general-purpose
+    // bakes in SUBAGENT_HANDOFF_CONTRACT; read-only vendored agents compact).
+    // Unnamed dispatch: lean worker prompt + bare overlay (#3324); isUnnamedWorker
+    // prevents providers from prepending toolBase a second time (#3359).
+    // Identity/workspace preambles injected later by assembleChildConfig.
+    ...resolveChildSystemPrompt(namedAgent, defaultConfig.operatorOverlay),
     baseUrl: childIsOpenAI ? undefined : defaultConfig.baseUrl,
     ...(defaultConfig.xaiBaseUrl !== undefined ? { xaiBaseUrl: defaultConfig.xaiBaseUrl } : {}),
     maxTurns: effectiveMaxTurns,
@@ -472,7 +497,7 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
       ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
       // Forward the trace writer + workspace store for the same reason — the
       // child executor's own childManager (depth-3+) needs both. See BuildChildConfigArgs.
-      ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}), ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
+      ...nestedExecutorInherits(args),
       ...(args.delegationBudget !== undefined ? { delegationBudget: args.delegationBudget } : {}),
       // Propagate read-only constraints so depth ≥ 2 forks (this depth-1
       // child calling the `agent` tool) keep the same tool allowlist and

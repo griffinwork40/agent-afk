@@ -294,6 +294,120 @@ dispatcher gate — the child physically cannot mutate the repo.
 For the higher-level `agent` tool, background dispatch, and the `compose` DAG that the CLI
 exposes, see the [Subagents & Delegation guide](/guides/subagents).
 
+## Subagents, skills and compose from the SDK
+
+The `agent`, `skill`, and `compose` tools are opt-in for SDK sessions. A bare `new AgentSession(config)` exposes none of them; you build a bundle with `createWiredExecutors` and pass it as `AgentConfig.executors`.
+
+### Tool availability by surface
+
+| Surface | `agent` | `skill` | `compose` |
+|---|---|---|---|
+| REPL (`afk interactive`) | always on | always on | always on |
+| `afk chat` (one-shot) | always on | always on | always on |
+| Telegram bot | always on | always on | always on |
+| Daemon | always on | always on | always on |
+| `afk web` (web surface) | always on | always on | always on |
+| SDK default (bare `new AgentSession`) | off | off | off |
+| SDK with `executors` | per toggle | per toggle | per toggle |
+
+Pass `opts` to `createWiredExecutors` to control which tools the model sees. When `opts` is omitted, all three are enabled. When it is supplied, an omitted toggle means off:
+
+```ts
+import { createWiredExecutors, AgentSession } from 'agent-afk';
+
+// Build the bundle — one per AgentSession.
+const { executors, dispose } = createWiredExecutors(
+  { model: 'sonnet', apiKey: process.env.ANTHROPIC_API_KEY },
+  {
+    agent: true,                              // expose agent tool
+    skill: ['search', 'my-plugin:review'],   // expose skill tool, allowlisted names only
+    compose: true,                            // expose compose tool
+    pluginConfigs: [],                        // no ~/.afk/plugins scan (the default)
+    unattended: true,                         // run without SubagentStart/Stop hooks
+  },
+);
+
+const session = new AgentSession({ model: 'sonnet', executors });
+const reply = await session.sendMessage('Summarize open TODOs under src/.');
+await session.close(); // drains the bundle; dispose() is an idempotent alternative
+```
+
+`queryText` and `query` accept `executors` via `QueryOptions`. Build a fresh bundle per call because one bundle binds to exactly one session:
+
+```ts
+import { createWiredExecutors, queryText } from 'agent-afk';
+
+const { executors } = createWiredExecutors(
+  { model: 'sonnet' },
+  { agent: true, skill: true, compose: true, unattended: true },
+);
+
+const answer = await queryText('List files changed in the last commit.', {
+  model: 'sonnet',
+  executors,
+});
+console.log(answer);
+// session.close() is called automatically by queryText; executors drain with it
+```
+
+### Hooks: fail-closed by default
+
+`createWiredExecutors` refuses to build a bundle unless one of these conditions is met:
+
+- `opts.hookRegistry` is a `HookRegistry` instance.
+- `config.hookRegistry` (on the `AgentConfig` passed as the first argument) is set.
+- `opts.unattended: true` is explicitly provided.
+
+With `unattended: true` and no registry, the bundle runs without `SubagentStart`/`SubagentStop` hooks -- nothing is silently constructed. The fail-closed default prevents silent drops of audit hooks that a production caller expects to fire at every nesting depth.
+
+### Skill allowlist: exact-match semantics
+
+Pass a `string[]` as `opts.skill` to enable the tool AND restrict it to the listed names. Each entry must match the skill name exactly as the model would call it:
+
+- A bare name like `'search'` authorizes only `search` -- not `my-plugin:search`.
+- A plugin skill is requested by its namespaced name (`<plugin>:<skill>`, e.g. `'my-plugin:review'`) and must be listed verbatim; there is no prefix or suffix matching.
+- The allowlist applies at every nesting depth -- a skill dispatched by another skill inherits the same gate.
+
+### `pluginConfigs`: default `[]` (no home-directory discovery)
+
+Unlike the CLI surfaces, SDK sessions do NOT scan `~/.afk/plugins` by default. `pluginConfigs` defaults to `[]`, meaning no plugins are loaded and no home-directory discovery runs. Pass an explicit list of `SdkPluginConfig` entries to opt in to specific plugins.
+
+### Fields ignored on the SDK executor path
+
+Two `AgentConfig` fields are silently warned and ignored when building a bundle:
+
+- `config.agents`: named agents come from the built-in/user/project registry and `pluginConfigs`. Pass agent definitions through `pluginConfigs`, not through the session config.
+- `config.mcpServers`: MCP tools require a caller-owned `config.mcpManager`. Build and pass a manager instance directly; the executor path does not construct one from the server list.
+
+### Budget: tree-wide, checked at child completion
+
+`AgentConfig.maxBudgetUsd` covers the cumulative cost of the root session AND all its subagent children. Child cost is accumulated at child completion -- not mid-flight -- so a child that finishes just over the ceiling raises `BudgetExceededError` on the NEXT tool call in the parent, not mid-child.
+
+### Background jobs unavailable
+
+The `bash` tool's `run_in_background: true` flag is not available on the `sdk` surface. SDK sessions use the synchronous tool path only.
+
+### One bundle per session
+
+A `SessionExecutors` bundle binds to exactly one `AgentSession`. Passing the same bundle to a second session (or a second `queryText` call) throws before any rewiring happens. Call `createWiredExecutors` once per session:
+
+```ts
+// WRONG: reusing a bundle throws on the second bind
+const { executors } = createWiredExecutors({ model: 'sonnet' }, { unattended: true });
+const s1 = new AgentSession({ model: 'sonnet', executors }); // ok
+const s2 = new AgentSession({ model: 'sonnet', executors }); // throws
+
+// RIGHT: fresh bundle per session
+function makeSession() {
+  const { executors } = createWiredExecutors({ model: 'sonnet' }, { unattended: true });
+  return new AgentSession({ model: 'sonnet', executors });
+}
+```
+
+### Process-level environment caps
+
+Depth, nesting, and credential resolution are process-global. `AFK_MAX_NESTING_DEPTH` (and the other `AFK_*` env caps) apply to SDK-spawned subagents exactly as they do to CLI ones. API keys are resolved through the same credential resolver the agent layer uses -- not re-read from the session config at every depth.
+
 ## Providers and models
 
 AFK routes each session to a provider based on the model id. You rarely need to touch this — the

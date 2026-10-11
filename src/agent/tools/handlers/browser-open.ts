@@ -122,7 +122,7 @@ export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): Tool
         void emitBrowserEvent(context?.traceWriter, {
           tool: 'browser_open',
           toolUseId: context?.toolUseId ?? '',
-          ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+          ...(routingBackend ? { backend: routingBackend } : {}),
           ...(routingReason ? { backendReason: routingReason } : {}),
           urlBefore: null,
           urlAfter: null,
@@ -144,7 +144,7 @@ export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): Tool
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_open',
         toolUseId: context?.toolUseId ?? '',
-        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingBackend ? { backend: routingBackend } : {}),
         ...(routingReason ? { backendReason: routingReason } : {}),
         urlBefore: null,
         urlAfter: obs.url,
@@ -159,7 +159,7 @@ export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): Tool
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_open',
         toolUseId: context?.toolUseId ?? '',
-        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingBackend ? { backend: routingBackend } : {}),
         ...(routingReason ? { backendReason: routingReason } : {}),
         urlBefore: null,
         urlAfter: null,

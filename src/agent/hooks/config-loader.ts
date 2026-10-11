@@ -45,7 +45,7 @@ import { HOOK_HANDLER_TIMEOUT_MS } from '../hook-registry.js';
 import { errorMessage } from '../../utils/errors.js';
 import { parseDisabledPluginHooks, mergeDisabledPluginHooks } from './disabled-plugin-hooks.js';
 import { loadPluginHookConfigs } from './config-loader.plugin-hooks.js';
-export { compileMatcher, CLAUDE_CODE_ALIASES } from './matcher.js';
+export { compileMatcher } from './matcher.js';
 export { isPluginHookDisabled } from './disabled-plugin-hooks.js';
 
 // ---------------------------------------------------------------------------

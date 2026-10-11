@@ -12,9 +12,7 @@ import {
 import { segmentAnsi, countVisible } from './smoke-reveal.ansi.js';
 import { smokeTone, resetSmokeToneCache } from './smoke-reveal.tones.js';
 import { applyTheme } from './theme.js';
-
-const stripAnsi = (s: string): string =>
-  s.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\u001b\][^\u0007]*\u0007/g, '');
+import { stripAnsi } from './display.js';
 const hasSmokeGlyph = (s: string): boolean => SMOKE_GLYPHS.some((g) => stripAnsi(s).includes(g));
 /** Time after which every recorded character is guaranteed settled. */
 const SETTLED = MAX_LAG_MS + LIFETIME_MS + 1;

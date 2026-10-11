@@ -1,6 +1,6 @@
 /**
- * SQLite schema DDL, version constants, migration runner, and WAL-mode switch
- * for the cross-session memory store.
+ * SQLite schema DDL, version constants, and migration runner for the
+ * cross-session memory store.
  *
  * Extracted from memory-store.ts to keep that file under the 350-code-line
  * ceiling. The public surface here is used exclusively by MemoryStore.
@@ -10,7 +10,6 @@
 
 import type BetterSqlite3 from 'better-sqlite3';
 import { debugLog } from '../../utils/debug.js';
-import { sleepSync } from '../../utils/sleep-sync.js';
 
 /**
  * Increment this constant whenever the schema changes in a backward-incompatible way.
@@ -212,36 +211,5 @@ export function runMigrations(db: BetterSqlite3.Database, existingVersion: numbe
       db.pragma('user_version = 5');
     }).immediate(seedTs);
     debugLog('memory-store: migrated schema v4 → v5 (tracking epoch and metadata-only updates)');
-  }
-}
-
-/**
- * Switch the database into WAL mode, tolerant of concurrent cold opens.
- *
- * Invariant: enabling WAL requires a brief EXCLUSIVE lock, and SQLite does
- * NOT honor busy_timeout for the journal-mode change — a contended switch
- * throws SQLITE_BUSY immediately instead of waiting. The global memory DB is
- * cold-opened concurrently by every AFK surface (and, under vitest, by every
- * parallel worker via the provider module-load singletons), so the switch
- * races. WAL is a property persisted in the DB header, so once any opener
- * wins, the rest only need to observe it: read the mode first (a lock-free
- * query) and skip the switch when already 'wal', otherwise bound-retry the
- * brief cold-start contention window. WAL is a concurrency optimization, not
- * a correctness requirement, but we still surface a non-BUSY error or an
- * exhausted retry budget rather than masking a genuinely broken DB.
- */
-export function enableWalMode(db: BetterSqlite3.Database): void {
-  const MAX_ATTEMPTS = 50;
-  const BACKOFF_MS = 20;
-  for (let attempt = 1; ; attempt++) {
-    try {
-      if (db.pragma('journal_mode', { simple: true }) === 'wal') return;
-      db.pragma('journal_mode = WAL');
-      return;
-    } catch (err) {
-      const busy = (err as { code?: string } | null)?.code === 'SQLITE_BUSY';
-      if (!busy || attempt >= MAX_ATTEMPTS) throw err;
-      sleepSync(BACKOFF_MS);
-    }
   }
 }

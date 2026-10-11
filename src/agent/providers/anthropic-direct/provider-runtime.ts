@@ -56,6 +56,8 @@ export {
   type AnthropicDirectProviderOptions,
 } from './provider-options.js';
 import type { ToolPermissionConfig } from '../../tools/permissions.js';
+import { snapshotOperatorPermissions } from '../../tools/operator-denied.js';
+import { withOperatorDeniedDispatcher } from '../../tools/operator-denied-dispatcher.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import { MemoryStore } from '../../memory/index.js';
 import { WorkspaceStore } from '../../workspace/workspace-store.js';
@@ -178,16 +180,26 @@ export class AnthropicDirectProvider implements ModelProvider {
   private get memoryStore(): MemoryStore { return (this._memoryStore ??= makeDefaultMemoryStore()); }
   private get stateStore(): StateStore { return (this._stateStore ??= makeDefaultStateStore()); }
 
+  // Invariant: injected stores are owned by the caller (the REPL shares ONE
+  // memory/state/workspace store across the root provider and every forked
+  // child provider). close() must release only stores this provider created
+  // lazily. Closing an injected store kills it for the whole process: every
+  // later fork then fails with "The database connection is not open".
+  private readonly _injectedMemoryStore: boolean;
+  private readonly _injectedStateStore: boolean;
+
   constructor(opts: AnthropicDirectProviderOptions = {}) {
+    this._injectedMemoryStore = opts.memoryStore !== undefined;
+    this._injectedStateStore = opts.stateStore !== undefined;
     this._memoryStore = opts.memoryStore;
     this.workspaceStore = opts.workspaceStore;
     this.subscribeHandler = opts.subscribeHandler;
     this._stateStore = opts.stateStore;
-    this.externalTools = opts.tools;
+    this.permissions = snapshotOperatorPermissions(opts.permissions, opts.customTools?.map((t) => t.schema.name));
+    this.externalTools = withOperatorDeniedDispatcher(opts.tools, this.permissions);
     this.skillExecutor = opts.skillExecutor;
     this.schemas = buildProviderSchemas(opts);
     this.hookRegistry = opts.hookRegistry;
-    this.permissions = opts.permissions;
     this.canUseTool = opts.canUseTool;
     this.subagentExecutor = opts.subagentExecutor;
     this.composeExecutor = opts.composeExecutor;
@@ -278,9 +290,10 @@ export class AnthropicDirectProvider implements ModelProvider {
   }
 
   close(): void {
-    this._memoryStore?.close();
-    this.workspaceStore?.close();
-    this._stateStore?.close();
+    // Only close stores this provider owns (see the Invariant above). The
+    // workspace store is always injected, so it is never closed here.
+    if (!this._injectedMemoryStore) this._memoryStore?.close();
+    if (!this._injectedStateStore) this._stateStore?.close();
   }
 
   /**
@@ -382,7 +395,17 @@ export class AnthropicDirectProvider implements ModelProvider {
   query(args: ProviderQueryArgs): ProviderQuery {
     const ctx = this.queryContext();
     const setup = setUpQuerySession(ctx, args, PROVIDER_NAME, DEFAULT_MODEL);
-    return buildProviderQuery(ctx, args, setup);
+    const providerQuery = buildProviderQuery(ctx, args, setup);
+    // #3532: close the provider's SQLite handle (kv.db) when the session
+    // closes. AgentSession.close() calls providerQuery.close() but not
+    // provider.close(), so _stateStore leaks on Windows (EBUSY on rmSync).
+    const provider = this;
+    const origClose = providerQuery.close.bind(providerQuery);
+    providerQuery.close = (): void => {
+      origClose();
+      provider.close();
+    };
+    return providerQuery;
   }
 }
 

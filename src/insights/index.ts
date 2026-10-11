@@ -10,6 +10,7 @@ export { aggregateAll } from './aggregators/index.js';
 export { evaluateRecommendations } from './recommendations.js';
 export { generateHtml, htmlEscape } from './html.js';
 export { openInBrowser } from './open.js';
+export { aggregatePreexistingDefects } from './aggregators/index.js';
 
 export type {
   InsightAggregates,
@@ -23,3 +24,5 @@ export type {
   OutcomeAggregates,
   OutcomeWeekCounts,
 } from './types.js';
+export type { PreexistingDefectAggregates } from './aggregators/preexisting-defects.js';
+export type { DefectCluster } from '../agent/preexisting-ledger/reader.js';

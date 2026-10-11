@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TerminalCompositor } from './terminal-compositor.js';
 import { CupFrameRenderer } from './cup-frame-renderer.js';
 import { __resetStdinClaimForTests } from './input/stdin-claim.js';
+import { __resetCprRttForTests } from './terminal-compositor.lifecycle.cpr.js';
 import { makeMockStdout, makeMockStdin, collectWrites } from './terminal-compositor.test-helpers.js';
 import type { MockStdout, MockStdin } from './terminal-compositor.test-helpers.js';
 
@@ -22,6 +23,12 @@ describe('TerminalCompositor — resize handling', () => {
     writes = collectWrites(stdout);
     // Reset the process-wide StdinClaim singleton so each test starts clean.
     __resetStdinClaimForTests();
+    // Reset the adaptive CPR RTT sample: a CPR timeout in one test seeds the
+    // RTT singleton (bootstrap fix — item 1 of PR #3240 review), causing the
+    // next test to compute a larger adaptive timeout than the 120 ms baseline,
+    // which breaks tests that advance by only 150 ms expecting the CPR timeout
+    // to have already fired at 120 ms.
+    __resetCprRttForTests();
   });
 
   describe('resize handling', () => {

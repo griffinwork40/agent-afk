@@ -31,6 +31,12 @@ import {
   type ServiceName,
   type ServiceStatus,
 } from '../../service/index.js';
+import {
+  readServiceStartupSidecar,
+  compareVersions,
+  formatVersionLine,
+} from '../../service/version-skew.js';
+import { getVersion } from '../version.js';
 
 /** Resolve the platform's service backend, or fail with a clear message. */
 function resolveManager(): ServiceManager {
@@ -217,7 +223,8 @@ function printStatus(s: ServiceStatus, configKind: string): void {
     console.log(palette.meta(`  Install: afk service install ${s.name}`));
     return;
   }
-  if (s.pid !== undefined || s.running === true) {
+  const isRunning = s.pid !== undefined || s.running === true;
+  if (isRunning) {
     console.log(`  ${palette.success('●')} Running${s.pid !== undefined ? `  (PID ${s.pid})` : ''}`);
   } else {
     console.log(`  ${palette.warning('●')} Installed but not running`);
@@ -227,4 +234,14 @@ function printStatus(s: ServiceStatus, configKind: string): void {
   }
   console.log(palette.meta(`  Config:  ${s.configPath}  (${configKind})`));
   console.log(palette.meta(`  Log:     ${s.logFile}`));
+  if (isRunning) {
+    const sidecar = readServiceStartupSidecar(s.name);
+    const skew = compareVersions(sidecar?.version, getVersion());
+    const versionLine = formatVersionLine(skew, s.name);
+    if (skew.kind === 'skew') {
+      console.log(palette.warning(`  Version: ${versionLine}`));
+    } else {
+      console.log(palette.meta(`  Version: ${versionLine}`));
+    }
+  }
 }

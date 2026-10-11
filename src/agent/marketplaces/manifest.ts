@@ -13,13 +13,56 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { errorMessage } from '../../utils/errors.js';
 
+/**
+ * A `git-subdir` object source: clone `url` at `ref`/`sha` and resolve the
+ * plugin root to `path` within the clone. This is the shape used by the live
+ * `anthropics/claude-plugins-official` marketplace for the majority of its
+ * entries.
+ */
+export interface GitSubdirSource {
+  source: 'git-subdir';
+  url: string;
+  path: string;
+  ref?: string;
+  sha?: string;
+}
+
+/**
+ * A source entry that could not be resolved to a known installable shape.
+ * The entry is carried through so callers can warn the user rather than
+ * silently dropping the plugin from the list.
+ */
+export interface UnknownObjectSource {
+  source: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Union of all valid `source` shapes for a marketplace plugin entry.
+ *
+ * - `string` — existing shorthand: a relative path (`./plugins/foo`), an
+ *   `owner/repo` GitHub shorthand, or a full HTTPS URL.
+ * - `GitSubdirSource` — an object with `source: 'git-subdir'`; indicates the
+ *   plugin lives in a subdirectory of a git repository.
+ * - `UnknownObjectSource` — an object with an unrecognised `source`
+ *   discriminator. The entry is parsed but marked `skipped` so the manifest
+ *   load still succeeds.
+ */
+export type PluginSourceSpec = string | GitSubdirSource | UnknownObjectSource;
+
 export interface MarketplacePluginEntry {
   /** Plugin name as it appears in `afk plugin install <mp>:<plugin>`. */
   name: string;
-  /** Where to fetch the plugin: relative path (`./plugins/foo`), git URL, or `owner/repo`. */
-  source: string;
+  /** Where to fetch the plugin. See {@link PluginSourceSpec} for all shapes. */
+  source: PluginSourceSpec;
   /** Free-text description for list rendering. */
   description?: string;
+  /**
+   * Set when the source object shape is not yet supported or is malformed.
+   * The entry is still included in the manifest so list commands can surface
+   * it, but install will refuse with a descriptive error.
+   */
+  skipped?: string;
 }
 
 export interface MarketplaceManifest {
@@ -35,7 +78,7 @@ export interface MarketplaceManifest {
   plugins: MarketplacePluginEntry[];
 }
 
-export const MARKETPLACE_MANIFEST_RELPATH = '.claude-plugin/marketplace.json';
+const MARKETPLACE_MANIFEST_RELPATH = '.claude-plugin/marketplace.json';
 
 /** Absolute path to a marketplace's manifest given its install dir. */
 export function manifestPath(marketplaceDir: string): string {
@@ -49,7 +92,11 @@ export function isMarketplaceDir(dir: string): boolean {
 
 /**
  * Read and validate the marketplace manifest at `<dir>/.claude-plugin/marketplace.json`.
- * Throws on missing file, malformed JSON, or invalid shape.
+ * Throws on missing file, malformed JSON, or invalid top-level shape.
+ *
+ * Individual plugin entries with unrecognised or malformed object `source`
+ * values are **not** rejected — they are included with `skipped` set so the
+ * manifest load still succeeds for the remaining entries.
  */
 export function readManifest(dir: string): MarketplaceManifest {
   const path = manifestPath(dir);
@@ -88,6 +135,11 @@ export function tryReadManifest(dir: string): MarketplaceManifest | null {
   }
 }
 
+/** Narrow a parsed source object to {@link GitSubdirSource}. */
+export function isGitSubdirSource(s: PluginSourceSpec): s is GitSubdirSource {
+  return typeof s === 'object' && (s as GitSubdirSource).source === 'git-subdir';
+}
+
 function validate(raw: unknown, path: string): MarketplaceManifest {
   if (!raw || typeof raw !== 'object') {
     throw new Error(`marketplace manifest at ${path} must be a JSON object`);
@@ -111,12 +163,8 @@ function validate(raw: unknown, path: string): MarketplaceManifest {
     }
     const e = entry as Record<string, unknown>;
     const pName = e['name'];
-    const pSource = e['source'];
     if (typeof pName !== 'string' || !pName.trim()) {
       throw new Error(`marketplace manifest at ${path}: plugins[${idx}] missing required "name"`);
-    }
-    if (typeof pSource !== 'string' || !pSource.trim()) {
-      throw new Error(`marketplace manifest at ${path}: plugins[${idx}] missing required "source"`);
     }
     const trimmedName = pName.trim();
     if (seenNames.has(trimmedName)) {
@@ -126,10 +174,7 @@ function validate(raw: unknown, path: string): MarketplaceManifest {
     }
     seenNames.add(trimmedName);
 
-    const out: MarketplacePluginEntry = {
-      name: trimmedName,
-      source: pSource.trim(),
-    };
+    const out = parsePluginEntry(e, trimmedName, idx, path);
     const desc = e['description'];
     if (typeof desc === 'string') out.description = desc;
     return out;
@@ -155,6 +200,98 @@ function validate(raw: unknown, path: string): MarketplaceManifest {
   }
 
   return result;
+}
+
+/**
+ * Parse one plugin entry's `source` field.
+ *
+ * - Plain string: validated non-empty, returned as-is (trimmed).
+ * - Object with `source: 'git-subdir'`: validated for required `url` + `path`.
+ * - Object with unknown/missing `source` discriminator: accepted with `skipped`
+ *   set — the entry is listed but install will refuse gracefully.
+ *
+ * Never throws for individual entries — errors are captured in `skipped` so
+ * the overall manifest load is not aborted by a single unsupported entry.
+ */
+function parsePluginEntry(
+  e: Record<string, unknown>,
+  name: string,
+  idx: number,
+  manifestPath: string,
+): MarketplacePluginEntry {
+  const pSource = e['source'];
+
+  // ── String source (existing behaviour) ──────────────────────────────────
+  if (typeof pSource === 'string') {
+    if (!pSource.trim()) {
+      // Empty string is a hard validation error, same as before.
+      throw new Error(
+        `marketplace manifest at ${manifestPath}: plugins[${idx}] missing required "source"`,
+      );
+    }
+    return { name, source: pSource.trim() };
+  }
+
+  // ── Object source ────────────────────────────────────────────────────────
+  if (pSource !== null && typeof pSource === 'object') {
+    const s = pSource as Record<string, unknown>;
+    const discriminator = s['source'];
+
+    if (discriminator === 'git-subdir') {
+      return parseGitSubdirEntry(s, name, idx, manifestPath);
+    }
+
+    // Unknown discriminator — skip with warning rather than failing the manifest.
+    const disc = typeof discriminator === 'string' ? discriminator : '(none)';
+    return {
+      name,
+      source: pSource as UnknownObjectSource,
+      skipped: `unsupported source type "${disc}" in plugins[${idx}]`,
+    };
+  }
+
+  // ── Missing / null / non-string non-object source ─────────────────────
+  throw new Error(
+    `marketplace manifest at ${manifestPath}: plugins[${idx}] missing required "source"`,
+  );
+}
+
+function parseGitSubdirEntry(
+  s: Record<string, unknown>,
+  name: string,
+  idx: number,
+  path: string,
+): MarketplacePluginEntry {
+  const url = s['url'];
+  const subPath = s['path'];
+
+  if (typeof url !== 'string' || !url.trim()) {
+    return {
+      name,
+      source: s as unknown as UnknownObjectSource,
+      skipped: `git-subdir source in plugins[${idx}] is missing required "url"`,
+    };
+  }
+  if (typeof subPath !== 'string' || !subPath.trim()) {
+    return {
+      name,
+      source: s as unknown as UnknownObjectSource,
+      skipped: `git-subdir source in plugins[${idx}] is missing required "path"`,
+    };
+  }
+
+  const spec: GitSubdirSource = {
+    source: 'git-subdir',
+    url: url.trim(),
+    path: subPath.trim(),
+  };
+  const ref = s['ref'];
+  if (typeof ref === 'string' && ref.trim()) spec.ref = ref.trim();
+  const sha = s['sha'];
+  if (typeof sha === 'string' && sha.trim()) spec.sha = sha.trim();
+
+  void path; // referenced only for error messages; linter appeasement
+  return { name, source: spec };
 }
 
 function errorMsg(err: unknown): string {

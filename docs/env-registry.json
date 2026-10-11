@@ -6,12 +6,13 @@
       "description": "Opt-in to loading + spawning MCP servers declared in <cwd>/.mcp.json. Fail-closed: when unset (or 0), project-local servers are NOT spawned; set to a truthy value (1/true/yes/on) to load them. A project-local .mcp.json spawns arbitrary commands on session start, so it is off by default to prevent code execution when entering an untrusted repo (issue #571). Skipped servers are listed in a startup warning with the opt-in instruction.",
       "type": "boolean",
       "required": false,
+      "default": "0",
       "example": "1",
       "category": "mcp"
     },
     {
       "name": "AFK_AUTO_ROUTING",
-      "description": "Auto-route bare slash inputs to matching skills. Applies to interactive, chat, and telegram surfaces.",
+      "description": "Auto-route bare slash inputs to matching skills. Applies to interactive, chat, and telegram surfaces. The afk web surface also inherits the interactive value (autoRouting.interactive), so this setting covers web sessions too.",
       "type": "boolean",
       "required": false,
       "example": "true",
@@ -62,11 +63,11 @@
     },
     {
       "name": "AFK_BROWSER_BACKEND",
-      "description": "Browser provider backend: auto (default, prefer Agent Browser, fall back to Playwright), agent-browser (require Agent Browser), or playwright (headless only).",
+      "description": "Browser provider backend: playwright (Playwright, the only supported backend) or auto (default, resolves to playwright). The legacy value agent-browser is accepted but deprecated — it resolves to playwright and emits a warning.",
       "type": "string",
       "required": false,
       "default": "auto",
-      "example": "agent-browser",
+      "example": "playwright",
       "category": "browser"
     },
     {
@@ -90,6 +91,7 @@
       "description": "Name of the persistent session-vault profile the agent reuses for browser sessions. The context restores its login from (and saves it back to) ~/.afk/state/browser/<profile>/storageState.json, so a human runs `afk browser login --profile <name>` once and the agent reuses that authenticated session across unattended runs. Unset defaults to `default` (a fresh, empty profile — identical to pre-vault behavior). Allowed charset: [A-Za-z0-9_-], max 128 chars.",
       "type": "string",
       "required": false,
+      "default": "default",
       "example": "work",
       "category": "browser"
     },
@@ -128,7 +130,7 @@
     },
     {
       "name": "AFK_COMPACT_MODEL",
-      "description": "Model id or slot alias used by the /compact summarizer and auto-compaction. Accepts any model on any supported provider (anthropic, openai, xai). Cross-provider compaction is supported: set to a gpt-* id on a Claude session (or a claude-* id on an OpenAI session) and AFK will route the summarize call to that provider using its own credentials. The transcript is sent to the target provider — a one-time privacy warning is emitted on first cross-provider use. Requires that provider's credentials to be available (ANTHROPIC_API_KEY / OPENAI_API_KEY / XAI_API_KEY, or ChatGPT-subscription OAuth via AFK_OPENAI_CHATGPT_OAUTH). Falls back to a cheap haiku-class default when unset. Also drives ghost-text suggestions on Claude sessions (see AFK_SUGGEST_MODEL to override that independently).",
+      "description": "Model id or slot alias used by the /compact summarizer and auto-compaction. Accepts any model on any supported provider (anthropic, openai, xai). Cross-provider compaction is supported: set to a gpt-* id on a Claude session (or a claude-* id on an OpenAI session) and AFK will route the summarize call to that provider using its own credentials. The transcript is sent to the target provider — a one-time privacy warning is emitted on first cross-provider use. Requires that provider's credentials to be available (ANTHROPIC_API_KEY / OPENAI_API_KEY / XAI_API_KEY, or ChatGPT-subscription OAuth via AFK_OPENAI_CHATGPT_OAUTH). When unset: Anthropic sessions fall back to claude-haiku-class; OpenAI API-key sessions (api.openai.com) fall back to gpt-6-luna; ChatGPT-subscription (chatgpt-oauth) and custom-baseURL sessions (local runners, proxies) fall back to the session model. Also drives ghost-text suggestions on Claude sessions (see AFK_SUGGEST_MODEL to override that independently).",
       "type": "string",
       "required": false,
       "example": "gpt-6-luna",
@@ -277,7 +279,7 @@
     },
     {
       "name": "AFK_DISABLE_BASH_INTERPRETER_GUARD",
-      "description": "Skip ONLY the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) when set to 1, leaving the rest of path-approval intact. Applies on interactive surfaces (REPL/Telegram), where the denylist is active but your workflow legitimately runs interpreter one-liners. The restricted-root substring check is unaffected. Default: denylist active on interactive surfaces; headless already fails open (opt in with AFK_FORCE_BASH_INTERPRETER_GUARD=1). To disable all of path-approval + bash restriction instead, use AFK_DISABLE_PATH_APPROVAL=1.",
+      "description": "Skip ONLY the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) when set to 1, leaving the rest of path-approval intact. Applies on interactive surfaces (REPL/Telegram), where the denylist is active but your workflow legitimately runs interpreter one-liners. The restricted-root substring check is unaffected. Default: denylist active on interactive surfaces; contexts with no grant manager already fail open (opt in with AFK_FORCE_BASH_INTERPRETER_GUARD=1). To disable all of path-approval + bash restriction instead, use AFK_DISABLE_PATH_APPROVAL=1.",
       "type": "boolean",
       "required": false,
       "default": "0",
@@ -286,7 +288,7 @@
     },
     {
       "name": "AFK_DISABLE_PATH_APPROVAL",
-      "description": "Skip the path-approval + bash-restriction hooks entirely when set to 1. Use for headless flows that need wide-open file access (CI scripts, batch jobs). Default: hooks enabled. Note: on headless surfaces (afk chat, daemon) no grant manager is wired, so the interpreter denylist (python -c, node -e, sh -c, ...) fails OPEN by default — opt headless flows into it with AFK_FORCE_BASH_INTERPRETER_GUARD=1, or set this var to 1 to disable all of path-approval.",
+      "description": "Skip the path-approval + bash-restriction hooks entirely when set to 1. Use for headless flows that need wide-open file access (CI scripts, batch jobs). Default: hooks enabled. Note: the interpreter denylist (python -c, node -e, sh -c, ...) fires wherever the session provider is wired as the grant manager (every production surface) and fails OPEN only for contexts with none; opt those into it with AFK_FORCE_BASH_INTERPRETER_GUARD=1, or set this var to 1 to disable all of path-approval.",
       "type": "boolean",
       "required": false,
       "default": "0",
@@ -338,7 +340,7 @@
     },
     {
       "name": "AFK_FORCE_BASH_INTERPRETER_GUARD",
-      "description": "Apply the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) even on headless surfaces (afk chat, daemon) where no grant manager is wired. By default the denylist fires only on interactive surfaces (REPL/Telegram), failing open on headless so legitimate automation is not hard-blocked with no recourse. Set to 1 to opt headless flows back into the guard. Overridden by AFK_DISABLE_BASH_INTERPRETER_GUARD=1. Default: off (headless fails open).",
+      "description": "Apply the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) even to tool calls whose context carries no grant manager. Every production provider wires itself as the grant manager on every surface (REPL, Telegram, afk chat, daemon, subagents), so there the denylist is already active; without one it fails open. Set to 1 to force it on for those contexts too. Overridden by AFK_DISABLE_BASH_INTERPRETER_GUARD=1. Default: off.",
       "type": "boolean",
       "required": false,
       "default": "0",
@@ -863,6 +865,14 @@
       "category": "debug"
     },
     {
+      "name": "AFK_SDK_SURFACE_WARN",
+      "description": "Controls the one-time warning emitted when an SDK session (AgentSession / query() / queryText()) discovers skills but has no skillExecutor wired, meaning the model cannot invoke them. Set to 0 to silence the warning (useful when the reduced surface is intentional).",
+      "type": "string",
+      "required": false,
+      "example": "0",
+      "category": "misc"
+    },
+    {
       "name": "AFK_SESSION_ID",
       "description": "Override the browser session ID used by the native browser-control tools. Defaults to 'default' for single-session use. Subagents inherit the parent's session by default. Set this when running multiple concurrent AFK processes that should each manage an isolated browser context.",
       "type": "string",
@@ -1267,6 +1277,15 @@
       "category": "model"
     },
     {
+      "name": "AFK_VITALS",
+      "description": "Per-round \"[vitals]\" harness note appended to each tool-result turn so the model stays aware of fast-changing state: local wall-clock time and elapsed turn time every round, time left before the soft deadline when one is set, context-window fill once it reaches 50%, and (root Anthropic sessions only) Claude subscription usage once it reaches 80%. Set to 0 to disable. Default: on.",
+      "type": "boolean",
+      "required": false,
+      "default": "1",
+      "example": "0",
+      "category": "misc"
+    },
+    {
       "name": "AFK_WAVE_MANIFEST_DISABLED",
       "description": "Disable the wave manifest system entirely. When set to 1, no manifest is written for parallel subagent waves, and no resumption offer is made at session start.",
       "type": "boolean",
@@ -1306,6 +1325,7 @@
       "description": "Bind address for the `afk web` browser surface. Defaults to 127.0.0.1. Unlike the daemon control surface, a non-loopback bind is REFUSED unless AFK_WEB_TOKEN (or --token) is also set, because this surface can submit prompts and approve tool use. Overridden by --host.",
       "type": "string",
       "required": false,
+      "default": "127.0.0.1",
       "example": "127.0.0.1",
       "category": "daemon"
     },
@@ -1314,6 +1334,7 @@
       "description": "Port for the `afk web` browser surface. Defaults to 4141; falls back to an ephemeral port when taken. Overridden by --port.",
       "type": "number",
       "required": false,
+      "default": "4141",
       "example": "4141",
       "category": "daemon"
     },
@@ -1680,6 +1701,14 @@
       "required": false,
       "category": "auth",
       "secret": true
+    },
+    {
+      "name": "OPENAI_BASE_URL",
+      "description": "Standard OpenAI SDK base URL override. When set without AFK_OPENAI_BASE_URL, the OpenAI SDK routes the client to this endpoint while AFK's own baseURL option remains undefined. AFK reads this variable to correctly classify the effective endpoint for decisions such as compaction model selection — without it, AFK would see an undefined baseURL and incorrectly treat the session as targeting api.openai.com.",
+      "type": "string",
+      "required": false,
+      "example": "http://127.0.0.1:8000/v1",
+      "category": "model"
     },
     {
       "name": "PAGER",

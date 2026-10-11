@@ -16,7 +16,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { createTelegramAfkHookBundle } from './afk-hook-bundle.js';
 import { _resetWarningForTests } from '../agent/default-hook-registry.js';
@@ -47,7 +47,10 @@ describe('createTelegramAfkHookBundle — AFK autonomous safety wiring', () => {
   const outOfWorkspaceWrite = () => ({
     event: 'PreToolUse' as const,
     toolName: 'write_file',
-    input: { file_path: join(tmpdir(), `afk-outside-${Date.now()}-${Math.random()}.txt`), content: 'x' },
+    // Outside the workspace AND outside the system temp dir: temp writes are a
+    // sanctioned AFK scratch area (risk-classifier.paths.ts), so a tmpdir path
+    // would no longer be high-risk. Never written: the gate refuses it.
+    input: { file_path: join(resolve('/opt'), `afk-outside-${Date.now()}-${Math.random()}.txt`), content: 'x' },
   });
 
   it('autonomous session → HARD-REFUSES a high-risk op (gate registered + afkPromptForApproval:false)', async () => {

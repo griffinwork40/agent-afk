@@ -25,6 +25,7 @@
 
 import { makeBaseTracingFetch } from '../shared/tracing-fetch.js';
 import type { ThrottleInfo, RateLimitGate } from '../shared/tracing-fetch-utils.js';
+import { h1ModelFetch } from '../shared/h1-fetch.js';
 
 /**
  * Admission gate interface. Same shape as the shared `RateLimitGate`, so the
@@ -47,7 +48,7 @@ export type { RateLimitGate as OpenAIRateLimitGate } from '../shared/tracing-fet
  * Returns `baseFetch` unchanged when none of the optional parameters are set.
  */
 export function makeOpenAITracingFetch(
-  baseFetch: typeof fetch = fetch,
+  baseFetch: typeof fetch = h1ModelFetch,
   onThrottle?: (info: ThrottleInfo) => void,
   onRateLimit?: (headers: Headers) => void,
   gate?: RateLimitGate,

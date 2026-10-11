@@ -20,6 +20,14 @@ vi.mock('os', async (importOriginal) => {
   return { ...actual, homedir: () => fakeHome.dir };
 });
 
+// Provide a mock handle for h1ModelFetch so the token-refresh test can
+// intercept the fetch call that keychain.ts now routes through h1ModelFetch
+// (rather than globalThis.fetch) to force HTTP/1.1 (issue #3335).
+const h1FetchMock = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>();
+vi.mock('../providers/shared/h1-fetch.js', () => ({
+  h1ModelFetch: h1FetchMock,
+}));
+
 const {
   loadClaudeCodeOauthToken,
   refreshClaudeCodeOauthToken,
@@ -51,6 +59,7 @@ describe('Claude Code credentials on win32', () => {
     Object.defineProperty(process, 'platform', originalPlatform);
     _resetKeychainReadCache();
     vi.unstubAllGlobals();
+    h1FetchMock.mockReset();
     rmSync(fakeHome.dir, { recursive: true, force: true });
   });
 
@@ -74,10 +83,13 @@ describe('Claude Code credentials on win32', () => {
       claudeAiOauth: { accessToken: 'old', refreshToken: 'rt-1', expiresAt: Date.now() - 1_000 },
       mcpOAuth: { keep: true },
     });
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+    // keychain.ts now calls h1ModelFetch (not globalThis.fetch) for the OAuth
+    // token refresh, so mock h1FetchMock instead of stubbing the global fetch
+    // (issue #3335 — h1ModelFetch forces HTTP/1.1 to avoid the nghttp2 freeze).
+    h1FetchMock.mockResolvedValueOnce(new Response(
       JSON.stringify({ access_token: 'new', refresh_token: 'rt-2', expires_in: 3600 }),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
-    )));
+    ));
 
     await expect(refreshClaudeCodeOauthToken()).resolves.toBe('new');
 
