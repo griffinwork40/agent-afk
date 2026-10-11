@@ -18,7 +18,7 @@ import type { TelegramSessionBuildContext } from './session-context.js';
 export async function buildXaiTelegramSession(
   ctx: TelegramSessionBuildContext & { providerName: 'xai' | 'xai-oauth' },
 ): Promise<AgentSession> {
-  const { sessionConfig, mcpManager, providerName } = ctx;
+  const { sessionConfig, mcpManager, providerName, stateStore } = ctx;
 
   return buildTelegramSession({
     ctx,
@@ -37,6 +37,7 @@ export async function buildXaiTelegramSession(
         composeExecutor,
         ...(authMode !== undefined ? { authMode } : {}),
         ...(mcpManager !== undefined ? { mcpManager } : {}),
+        ...(stateStore !== undefined ? { stateStore } : {}),
       });
     },
     // xAI branch: provider-specific config is only `xaiBaseUrl`.
