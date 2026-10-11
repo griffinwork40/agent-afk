@@ -76,6 +76,22 @@ describe('external dispatcher operator guard', () => {
     // Execution must not have reached the inner dispatcher for either denied call
     expect(execute).not.toHaveBeenCalled();
   });
+
+  it('union wrapper routes allowed calls to the raw innermost dispatcher (no double-gating)', async () => {
+    const execute = vi.fn(async () => ({ content: 'allowed-ok' }));
+    const inner = { execute };
+    const signal = new AbortController().signal;
+
+    // Wrap with ['bash'], then re-wrap with ['read_file'] → union wrapper
+    const firstWrapped = withOperatorDeniedDispatcher(inner, { deniedTools: ['bash'] })!;
+    const reWrapped = withOperatorDeniedDispatcher(firstWrapped, { deniedTools: ['read_file'] })!;
+
+    // 'get_runtime_state' is not denied in either wrapper; an allowed call must
+    // reach the raw inner execute exactly once.
+    const result = await reWrapped.execute({ id: '3', name: 'get_runtime_state', input: {}, signal });
+    expect(result.content).toBe('allowed-ok');
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('OpenAI external-dispatcher schema filtering', () => {

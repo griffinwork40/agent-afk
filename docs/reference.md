@@ -143,7 +143,7 @@ The `/plugin` slash command (and marketplace-based install) is a Claude Code CLI
 
 ```bash
 # Install from a GitHub shorthand (expands to https://github.com/<owner>/<repo>.git)
-afk plugin install anthropics/claude-plugins-official
+afk plugin install griffinwork40/software-factory
 
 # Install from an explicit git URL (https or ssh)
 afk plugin install https://github.com/example/my-plugin.git
@@ -157,10 +157,10 @@ afk plugin install owner/repo --ref v1.2.3
 # List, update, and disable without deleting
 afk plugin list
 afk plugin update                                # all plugins
-afk plugin update claude-plugins-official
-afk plugin disable claude-plugins-official
-afk plugin enable  claude-plugins-official
-afk plugin remove  claude-plugins-official
+afk plugin update software-factory
+afk plugin disable software-factory
+afk plugin enable  software-factory
+afk plugin remove  software-factory
 ```
 
 By default `install` picks the highest semver git tag, falling back to the default branch when no tag parses as semver. State lives in `~/.afk/plugins/.index.json` — the scanner reads it at session startup and skips any entry with `enabled: false`.
@@ -171,11 +171,24 @@ Plugin state (telemetry, ledger, briefs) writes to `~/.afk/agent-framework/` in 
 
 ### Marketplaces
 
+A marketplace is a GitHub repo whose root contains `.claude-plugin/marketplace.json` (not `plugin.json`). Install the marketplace first, then install individual plugins from it:
+
 ```bash
-afk marketplace install <url>
+# Step 1 — add a marketplace source (GitHub shorthand or full URL)
+afk marketplace install <owner>/<marketplace-repo>
+
+# Step 2 — browse available plugins
+afk marketplace plugins <marketplace-name>
+
+# Step 3 — install a plugin from the marketplace using <marketplace>:<plugin>
+afk plugin install <marketplace-name>:<plugin-name>
+
+# Other marketplace operations
 afk marketplace list
 afk marketplace remove <name>
 ```
+
+> **Note:** A marketplace repo uses `.claude-plugin/marketplace.json`; a plugin repo uses `.claude-plugin/plugin.json`. Use `afk marketplace install` for the former and `afk plugin install` for the latter — they are not interchangeable.
 
 State lives under `~/.afk/marketplaces/`.
 

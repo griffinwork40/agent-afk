@@ -34,6 +34,8 @@ function hits(src: string, rules: readonly RuleId[] = ['R1', 'R2', 'R3', 'R4'], 
 }
 
 describe('posix-guard — the whole tree does not exceed the committed baseline', () => {
+  // Whole-tree AST scan; under coverage instrumentation this routinely exceeds
+  // the 15 s global default, so we give it an explicit generous timeout.
   it('has no (file, rule) count above .posix-guard-baseline.json', { timeout: 60_000 }, () => {
     const baseline = loadPosixBaseline(path.join(repoRoot, BASELINE_REL));
     expect(baseline.fileExisted).toBe(true);

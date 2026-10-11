@@ -1,6 +1,7 @@
 /**
  * Unit tests for `buildSystemPromptWiring` — specifically the preset-append
- * clear/preserve semantics fixed in #3305.
+ * clear/preserve semantics fixed in #3305, and the toolBase empty-guard for
+ * unnamed workers fixed in #3359.
  *
  * The real `normalizeSystemPromptOverlay` from `../shared/system-prompt` is
  * used intentionally so changes to that normalizer surface here too.
@@ -10,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { buildSystemPromptWiring } from './system-prompt-wiring.js';
 import type { SystemPromptWiringArgs } from './system-prompt-wiring.js';
+import * as systemPromptMod from '../../tools/system-prompt.js';
 
 // ---- mocks ----------------------------------------------------------------
 
@@ -90,5 +92,27 @@ describe('buildSystemPromptWiring — preset append semantics (#3305)', () => {
     systemPromptRebuildFactory(undefined);
     const result = rebuildAfterCwdChange();
     expect(result).not.toContain(APPEND);
+  });
+});
+
+describe('buildSystemPromptWiring — unnamed-worker toolBase dedupe guard (#3359)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // For unnamed workers, resolveToolSystemPrompt returns '' — the base
+    // conventions are already embedded in UNNAMED_SUBAGENT_WORKER_PROMPT
+    // (which becomes config.systemPrompt). Returning '' exercises the
+    // `toolBase.length > 0 ? [toolBase] : []` guard in `assemble`.
+    vi.mocked(systemPromptMod.resolveToolSystemPrompt).mockReturnValueOnce('');
+  });
+
+  it('unnamed worker: resolveToolSystemPrompt called with (undefined, true) and result not prepended', () => {
+    const { initialSystemPrompt } = buildSystemPromptWiring(
+      makeArgs({ config: { isUnnamedWorker: true } }),
+    );
+    // Verify the call site passes isSkillDispatch=undefined and isUnnamedWorker=true.
+    expect(systemPromptMod.resolveToolSystemPrompt).toHaveBeenCalledWith(undefined, true);
+    // The assembled prompt must not start with a blank line (which would happen
+    // if '' were pushed into parts[] before the join('\n\n')).
+    expect(initialSystemPrompt).not.toMatch(/^\n/);
   });
 });

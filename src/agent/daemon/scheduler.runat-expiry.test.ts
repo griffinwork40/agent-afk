@@ -13,6 +13,7 @@ import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CronScheduler } from './scheduler.js';
+import * as runAtGate from './scheduler.runat-gate.js';
 import type { AgentSession } from '../session/agent-session.js';
 import type { ScheduledTask } from './triggers.js';
 import { validateScheduledTask } from './triggers.js';
@@ -165,6 +166,37 @@ describe('CronScheduler — runAt one-shot', () => {
     await scheduler.stop();
   });
 
+  it('keeps a future runAt task enabled and registered until a later tick fires', async () => {
+    let nowMs = Date.parse(NOW_ISO);
+    const runAt = new Date(nowMs + 60_000).toISOString();
+    const storedTask = addSchedule({
+      name: 'Future One Shot', command: 'run once',
+      trigger: 'cron', enabled: true, runAt,
+    });
+    const session = makeSession('done');
+    const scheduler = new CronScheduler({
+      telemetryPath, now: () => nowMs,
+      sessionFactory: () => session,
+      budgetGate: async () => ({ skip: false }),
+    });
+    try {
+      scheduler.register(toScheduledTask(storedTask));
+      const skipped = await scheduler.tick(storedTask.id);
+      expect(skipped.skipReason).toBe('not-yet');
+      expect(loadSchedules().find((t) => t.id === storedTask.id)?.enabled).toBe(true);
+      expect(scheduler.list().some((t) => t.taskId === storedTask.id)).toBe(true);
+      expect(session.sendMessage).not.toHaveBeenCalled();
+
+      nowMs = Date.parse(runAt);
+      expect((await scheduler.tick(storedTask.id)).status).toBe('success');
+      expect(session.sendMessage).toHaveBeenCalledTimes(1);
+      expect(loadSchedules().find((t) => t.id === storedTask.id)?.enabled).toBe(false);
+      expect(scheduler.list().some((t) => t.taskId === storedTask.id)).toBe(false);
+    } finally {
+      await scheduler.stop();
+    }
+  });
+
   it('does NOT write a telemetry line for a not-yet skip (silent pre-fire polling)', async () => {
     const scheduler = new CronScheduler({
       telemetryPath,
@@ -294,6 +326,33 @@ describe('CronScheduler — expiresAt expiry', () => {
     expect(record.status).toBe('skipped');
     expect(record.skipReason).toBe('expired');
     await scheduler.stop();
+  });
+
+  it('auto-disables exactly once when a one-shot task has also expired', async () => {
+    const storedTask = addSchedule({
+      name: 'Expired One Shot', command: 'must not run',
+      trigger: 'cron', enabled: true, runAt: PAST_ISO, expiresAt: PAST_ISO,
+    });
+    const disable = vi.spyOn(runAtGate, 'applyAutoDisable');
+    const session = makeSession();
+    const scheduler = new CronScheduler({
+      telemetryPath, sessionFactory: () => session,
+      budgetGate: async () => ({ skip: false }),
+    });
+    try {
+      scheduler.register(toScheduledTask(storedTask));
+      const record = await scheduler.tick(storedTask.id);
+      expect(record.status).toBe('skipped');
+      expect(record.skipReason).toBe('expired');
+      expect(disable).toHaveBeenCalledTimes(1);
+      expect(disable).toHaveBeenCalledWith(storedTask.id, expect.any(Function));
+      expect(session.sendMessage).not.toHaveBeenCalled();
+      expect(loadSchedules().find((t) => t.id === storedTask.id)?.enabled).toBe(false);
+      expect(scheduler.list().some((t) => t.taskId === storedTask.id)).toBe(false);
+    } finally {
+      disable.mockRestore();
+      await scheduler.stop();
+    }
   });
 
   it('writes a telemetry line for an expired skip', async () => {

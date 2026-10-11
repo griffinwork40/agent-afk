@@ -13,6 +13,13 @@
  *   - --json flag → valid JSON array.
  *   - --top flag → limits cluster count.
  *   - Recurrence count colours (≥5 sessions vs < 3).
+ *   - --days 0 / --top 0 → floor at 1 (not treated as non-numeric fallback).
+ *   - Non-numeric --days → falls back to default (90).
+ *   - lastSeen: '' → renders as "—".
+ *   - Locus truncated at 42 chars with "…".
+ *   - --json combined with --days.
+ *   - Hidden-cluster suffix shown when --top cuts clusters off.
+ *   - Ledger-truncated warning surfaced when ledgerTruncated is true.
  *
  * @module cli/commands/defects.test
  */
@@ -39,6 +46,7 @@ const mockCluster = vi.mocked(clusterLedgerRecords);
 
 import { registerDefectsCommand } from './defects.js';
 import type { DefectCluster } from '../../agent/preexisting-ledger/reader.js';
+import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -78,6 +86,9 @@ async function run(args: string[]): Promise<string> {
 
   return captured.join('');
 }
+
+/** Strip ANSI/escape sequences for plain-text assertions. */
+const stripAnsi = stripEscapeSequences;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -185,5 +196,163 @@ describe('afk defects', () => {
     const out = await run(['defects', '--days', '45']);
     expect(out).toContain('1 cluster');
     expect(out).toContain('45 days');
+  });
+
+  // -------------------------------------------------------------------------
+  // New tests for issue #3370
+  // -------------------------------------------------------------------------
+
+  it('--days 0 is floored to 1, not treated as NaN fallback to 90', async () => {
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
+    mockCluster.mockReturnValue([]);
+
+    const out = await run(['defects', '--days', '0']);
+    // Should say "1 days" not "90 days"
+    expect(stripAnsi(out)).toContain('1 days');
+  });
+
+  it('--top 0 is floored to 1, not treated as NaN fallback to 10', async () => {
+    const clusters = [
+      makeCluster({ locus: 'a.ts', recurrenceCount: 5 }),
+      makeCluster({ locus: 'b.ts', recurrenceCount: 4 }),
+    ];
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
+    mockCluster.mockReturnValue(clusters);
+
+    const out = await run(['defects', '--top', '0']);
+    // Only the first cluster should appear (top=1)
+    expect(out).toContain('a.ts');
+    expect(out).not.toContain('b.ts');
+  });
+
+  it('non-numeric --days falls back to the default of 90', async () => {
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
+    mockCluster.mockReturnValue([]);
+
+    const out = await run(['defects', '--days', 'banana']);
+    expect(stripAnsi(out)).toContain('90 days');
+  });
+
+  it('lastSeen empty string renders as "—"', async () => {
+    const clusters = [makeCluster({ lastSeen: '' })];
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
+    mockCluster.mockReturnValue(clusters);
+
+    const out = await run(['defects']);
+    expect(out).toContain('—');
+  });
+
+  it('locus longer than 42 chars is truncated with "…"', async () => {
+    const longLocus = 'src/very/deep/nested/path/to/some/module/file.test.ts'; // >42 chars
+    expect(longLocus.length).toBeGreaterThan(42);
+
+    const clusters = [makeCluster({ locus: longLocus })];
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
+    mockCluster.mockReturnValue(clusters);
+
+    const out = await run(['defects']);
+    expect(out).toContain('…');
+    // The truncated prefix (41 chars) must appear
+    expect(out).toContain(longLocus.slice(0, 41));
+    // The full locus should NOT appear verbatim
+    expect(out).not.toContain(longLocus);
+  });
+
+  it('--json combined with --days only emits JSON (no table output)', async () => {
+    const clusters = [makeCluster({ recurrenceCount: 3 })];
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
+    mockCluster.mockReturnValue(clusters);
+
+    const out = await run(['defects', '--json', '--days', '7']);
+    // Must be valid JSON
+    const parsed = JSON.parse(out) as DefectCluster[];
+    expect(Array.isArray(parsed)).toBe(true);
+    // Must NOT contain table chrome
+    expect(out).not.toContain('Locus');
+    expect(out).not.toContain('lookback');
+  });
+
+  it('shows hidden-cluster count suffix when --top cuts clusters off', async () => {
+    const clusters = [
+      makeCluster({ locus: 'a.ts', recurrenceCount: 5 }),
+      makeCluster({ locus: 'b.ts', recurrenceCount: 4 }),
+      makeCluster({ locus: 'c.ts', recurrenceCount: 3 }),
+    ];
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
+    mockCluster.mockReturnValue(clusters);
+
+    const out = await run(['defects', '--top', '1']);
+    expect(stripAnsi(out)).toContain('2 more cluster');
+  });
+
+  it('does NOT show hidden-cluster suffix when --top shows all clusters', async () => {
+    const clusters = [makeCluster({ locus: 'only.ts', recurrenceCount: 2 })];
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
+    mockCluster.mockReturnValue(clusters);
+
+    const out = await run(['defects', '--top', '10']);
+    expect(stripAnsi(out)).not.toContain('more cluster');
+  });
+
+  it('surfaces a warning when ledgerTruncated is true', async () => {
+    const clusters = [makeCluster()];
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: true });
+    mockCluster.mockReturnValue(clusters);
+
+    const out = await run(['defects']);
+    expect(stripAnsi(out)).toContain('Ledger exceeded 1 MB');
+  });
+
+  it('does NOT show the truncation warning when ledgerTruncated is false', async () => {
+    const clusters = [makeCluster()];
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
+    mockCluster.mockReturnValue(clusters);
+
+    const out = await run(['defects']);
+    expect(stripAnsi(out)).not.toContain('Ledger exceeded 1 MB');
+  });
+
+  it('--days -1 floors to 1 day (negative input clamped, not reset to default)', async () => {
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
+    mockCluster.mockReturnValue([makeCluster()]);
+
+    const out = await run(['defects', '--days', '-1']);
+    expect(stripAnsi(out)).toContain('1 days');
+  });
+
+  it('--top -5 floors to 1 (negative input clamped)', async () => {
+    const clusters = [
+      makeCluster({ locus: 'a.ts', recurrenceCount: 5 }),
+      makeCluster({ locus: 'b.ts', recurrenceCount: 4 }),
+    ];
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: false });
+    mockCluster.mockReturnValue(clusters);
+
+    const out = await run(['defects', '--top', '-5']);
+    // Only 1 cluster should be shown (topN clamped to 1)
+    expect(stripAnsi(out)).toContain('1 more cluster');
+  });
+
+  it('--json with ledgerTruncated emits warning on stderr (not stdout)', async () => {
+    const clusters = [makeCluster()];
+    mockRead.mockReturnValue({ records: [], ledgerTruncated: true });
+    mockCluster.mockReturnValue(clusters);
+
+    const stderrChunks: string[] = [];
+    const origStderr = process.stderr.write.bind(process.stderr);
+    (process.stderr.write as unknown as (s: string) => boolean) = (s: string) => {
+      stderrChunks.push(s);
+      return true;
+    };
+    try {
+      const out = await run(['defects', '--json']);
+      // stdout must be valid JSON with no warning mixed in
+      const parsed = JSON.parse(out) as DefectCluster[];
+      expect(Array.isArray(parsed)).toBe(true);
+      // warning must have gone to stderr
+      expect(stderrChunks.join('')).toContain('ledger exceeded 1 MB');
+    } finally {
+      (process.stderr.write as unknown as (s: string) => boolean) = origStderr as unknown as (s: string) => boolean;
+    }
   });
 });

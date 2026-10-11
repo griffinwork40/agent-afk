@@ -35,6 +35,8 @@ export interface DeferredParentProxy {
    * Accepts {@link SessionExecutorsBindTarget} — the minimal structural
    * interface the proxy actually reads — so both `AgentSession` callers
    * and the SDK `createWiredExecutors` path can use the same helper.
+   *
+   * @throws if called more than once (double-bind is always a wiring bug).
    */
   bind: (session: SessionExecutorsBindTarget) => void;
 }
@@ -63,6 +65,9 @@ export function makeDeferredParentProxy(): DeferredParentProxy {
   };
 
   const bind = (session: SessionExecutorsBindTarget): void => {
+    if (boundSession !== undefined) {
+      throw new Error('makeDeferredParentProxy: bind() called twice — double-bind is a wiring bug');
+    }
     boundSession = session;
   };
 

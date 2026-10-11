@@ -54,15 +54,7 @@ function isValidFlag(flag: string): boolean {
  * the result. Shared by both the inline and block branches of `parseFlagsField`.
  */
 function dedupeAndSort(flags: string[]): string[] {
-  const seen = new Set<string>();
-  const unique: string[] = [];
-  for (const f of flags) {
-    if (!seen.has(f)) {
-      seen.add(f);
-      unique.push(f);
-    }
-  }
-  return unique.sort();
+  return [...new Set(flags)].sort();
 }
 
 /**

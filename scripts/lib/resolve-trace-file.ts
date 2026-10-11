@@ -13,7 +13,7 @@
  */
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 /** Resolved trace path or a structured error the caller may print and exit on. */
 export type TraceResolution = { path: string } | { error: string };
@@ -55,7 +55,9 @@ export function resolveTraceFile(
 ): TraceResolution {
   // ── --file: resolve directly without scanning the witness dir ─────────────
   if (args.file) {
-    const p = args.file.startsWith('/') ? args.file : join(cwd, args.file);
+    // Use path.isAbsolute() for platform-aware detection so Windows paths
+    // like `C:\...` are handled correctly (finding #3319-medium).
+    const p = isAbsolute(args.file) ? args.file : join(cwd, args.file);
     if (!existsSync(p)) return { error: `File not found: ${p}` };
     return { path: p };
   }
