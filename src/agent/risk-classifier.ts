@@ -213,6 +213,101 @@ function extractBashCommand(input: unknown): string {
   return '';
 }
 
+/**
+ * Strip heredoc bodies that are redirected to a file (not fed to a shell).
+ *
+ * A heredoc whose delimiter is quoted (`<<'EOF'` / `<<"EOF"`) is never
+ * interpreted by the shell — the body is literal text. When that heredoc
+ * is the payload of a file-writing command (`cat > f`, `tee f`, `cat >> f`
+ * etc.) the body cannot contain a dangerous command, so we remove it before
+ * pattern matching to avoid false positives from prose words like "platform"
+ * (matches `rm `) or "retrieval" (matches `eval `).
+ *
+ * Heredocs that feed a shell (`bash <<'EOF'`, `sh <<EOF`) are intentionally
+ * left intact — their bodies ARE executed and must be classified.
+ *
+ * Only quoted delimiters are stripped (unquoted heredocs undergo shell
+ * expansion and may be partially dynamic). `<<-` (tab-stripping) is also
+ * handled. The resulting string preserves line count so line-based patterns
+ * still work; body lines are replaced with empty lines.
+ */
+function stripFileHeredocBodies(cmd: string): string {
+  // Match: (cat|tee) [flags] [target] <<[-]?['"]WORD['"] … WORD
+  // We handle multi-line commands that arrive as a single string with \n.
+  //
+  // Step 1: locate every quoted heredoc opener on a line that contains a
+  // file-write intent (cat … >, tee …) and NOT a shell-exec intent.
+  // Step 2: remove lines between the opener and the matching closer.
+  //
+  // Regex for a here-doc opener with a quoted delimiter:
+  //   <<[-]?['"]WORD['"]   (WORD = identifier chars)
+  // We capture WORD so we can find the matching terminator.
+  const lines = cmd.split('\n');
+  const result: string[] = [];
+  let skipUntil: string | null = null;  // delimiter we're waiting to close
+
+  for (const line of lines) {
+    // If we're inside a body we're stripping, drop the line (keep blank for
+    // line-count stability) until we see the terminator.
+    if (skipUntil !== null) {
+      if (line.trimEnd() === skipUntil || line.trim() === skipUntil) {
+        // Terminator line — emit it (it's just the bare delimiter word) and
+        // stop skipping.
+        result.push(line);
+        skipUntil = null;
+      } else {
+        result.push('');  // blank placeholder preserves line count
+      }
+      continue;
+    }
+
+    // Check whether this line opens a file-redirect heredoc with a quoted
+    // delimiter. A shell-exec heredoc (bash/sh/node/python on the left of
+    // the redirect) must NOT be stripped.
+    //
+    // Heuristic: the line is a "file-write" heredoc opener when:
+    //   a) it contains a quoted heredoc marker: <<[-]?['"](\w+)['"]
+    //   b) the part before the heredoc marker contains a file-redirect token
+    //      (> / >> / tee) or the bare word `cat` with a redirect — but does
+    //      NOT contain a shell name (bash|sh|node|python|ruby|perl|zsh|dash).
+    const heredocMatch = line.match(/<<(-?)(['"])(\w+)\2/);
+    if (heredocMatch) {
+      const delimiter: string = heredocMatch[3] ?? ''; // the bare WORD
+      const before = line.slice(0, line.indexOf(heredocMatch[0]));
+
+      // Shell-execution patterns: if the left side pipes into a known shell,
+      // the body is code — do NOT strip.
+      const shellExecPattern = /\b(bash|sh|zsh|dash|node|python3?|ruby|perl)\b/;
+      if (!shellExecPattern.test(before)) {
+        // File-write patterns: redirect or tee present before the heredoc.
+        const fileWritePattern = /(?:>>?|tee\b)/;
+        if (fileWritePattern.test(before)) {
+          result.push(line);  // keep the opener line itself
+          skipUntil = delimiter;
+          continue;
+        }
+      }
+    }
+
+    result.push(line);
+  }
+
+  return result.join('\n');
+}
+
+/**
+ * Command-boundary regex prefix.
+ *
+ * Matches the start of the string or any shell token that introduces a new
+ * command: `;`, `&&`, `||`, `|`, `(`, `$(`, newline, or a leading `sudo `.
+ * The prefix itself is captured in a non-consuming look-behind so the pattern
+ * still matches the dangerous token (e.g. `rm `) as a whole word.
+ *
+ * Used for `rm ` and `eval ` — the two BASH_HIGH tokens that embed as
+ * substrings in common prose words ("platform", "retrieval").
+ */
+const COMMAND_BOUNDARY = /(?:^|[;|&(\n]|\$\()\s*/;
+
 function extractFilePath(input: unknown): string {
   if (typeof input !== 'object' || input === null) return '';
   const obj = input as Record<string, unknown>;
@@ -223,23 +318,54 @@ function extractFilePath(input: unknown): string {
   return '';
 }
 
+/**
+ * Tokens in BASH_HIGH that are prone to substring false-positives inside
+ * prose words or path components.  These are checked only at command
+ * boundaries (start-of-string or after `;`, `&&`, `||`, `|`, `(`, `$(`,
+ * newline) rather than anywhere in the raw command string.
+ *
+ * All other BASH_HIGH entries are unambiguous enough (e.g. `git push -f`,
+ * `-X POST`, `mkfs`) that plain substring matching is safe.
+ */
+const BASH_HIGH_BOUNDARY_CHECKED: ReadonlySet<string> = new Set(['rm ', 'eval ']);
+
 function classifyBash(cmd: string): RiskLevel {
+  // Strip heredoc bodies that are redirected to files (not executed by a
+  // shell) so prose inside them does not trip BASH_HIGH patterns.
+  const stripped = stripFileHeredocBodies(cmd);
+
   // External constraint: check HIGH before MEDIUM before SAFE.
   // High patterns override everything; medium patterns override safe.
   // This ordering matters for commands like `echo foo > out.txt` where
   // both `echo ` (safe) and ` > ` (medium) match — the redirect takes
   // precedence because medium is checked first.
   for (const p of BASH_HIGH) {
-    if (cmd.includes(p)) return 'high';
+    if (BASH_HIGH_BOUNDARY_CHECKED.has(p)) {
+      // Word-boundary check: only match at a command boundary so that prose
+      // words like "platform" (contains `rm `) or "retrieval" (contains
+      // `eval `) don't produce false positives.
+      const re = new RegExp(
+        COMMAND_BOUNDARY.source + escapeRegExp(p),
+        'm',
+      );
+      if (re.test(stripped)) return 'high';
+    } else {
+      if (stripped.includes(p)) return 'high';
+    }
   }
   for (const p of BASH_MEDIUM) {
-    if (cmd.includes(p)) return 'medium';
+    if (stripped.includes(p)) return 'medium';
   }
   for (const p of BASH_SAFE) {
-    if (cmd.includes(p)) return 'safe';
+    if (stripped.includes(p)) return 'safe';
   }
   // Default: medium — unknown bash commands are not safe by assumption.
   return 'medium';
+}
+
+/** Escape a string for literal use inside a RegExp. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function classifyFilePath(filePath: string, ctx: RiskContext): RiskLevel {

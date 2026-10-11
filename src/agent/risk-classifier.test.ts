@@ -508,6 +508,152 @@ describe('classifyRisk — schedule self-disable carve-out (#3464)', () => {
   });
 });
 
+// ---- #3534: heredoc prose false-positives --------------------------------
+// classifyBash must NOT rate high when BASH_HIGH substrings appear only
+// inside the body of a quoted-delimiter heredoc that redirects to a file.
+// It MUST still rate high when those tokens appear as real commands.
+describe('classifyRisk — bash heredoc prose false-positives (#3534)', () => {
+  // ── false-negative guards (prose in file-redirect heredocs) ──────────────
+
+  it('heredoc body "platform shift and long-term outlook" → NOT high (rm  is prose)', () => {
+    // 'rm ' matches 'platform ', 'long-term ', 'form ' — must not trip.
+    const cmd = [
+      "cat > /tmp/note.txt <<'EOF'",
+      '# reasoning: the platform shift and long-term outlook',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
+  });
+
+  it('heredoc body "confirm the retrieval step" → NOT high (eval  is prose)', () => {
+    // 'eval ' matches 'retrieval ' — must not trip.
+    const cmd = [
+      "cat > /tmp/x.py <<'EOF'",
+      'confirm the retrieval step',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
+  });
+
+  it('heredoc body with "form " and "confirm " → NOT high', () => {
+    const cmd = [
+      "cat > /tmp/doc.md <<'EOF'",
+      'Please confirm the form submission.',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
+  });
+
+  it('tee heredoc body with prose containing "rm " → NOT high', () => {
+    const cmd = [
+      "tee /tmp/out.txt <<'EOF'",
+      'This is a long-term platform migration plan.',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
+  });
+
+  it('append-redirect heredoc body with prose → NOT high', () => {
+    const cmd = [
+      "cat >> /tmp/log.txt <<'EOF'",
+      'retrieval complete for platform team',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
+  });
+
+  it('double-quoted delimiter heredoc body with prose → NOT high', () => {
+    // <<"EOF" is also a quoted delimiter (no expansion in practice).
+    const cmd = [
+      'cat > /tmp/x.txt <<"EOF"',
+      'The long-term outlook for platform teams is positive.',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
+  });
+
+  it('<<-EOF (tab-stripping) file-redirect body with prose → NOT high', () => {
+    const cmd = [
+      "cat > /tmp/x.txt <<-'EOF'",
+      '\tthe platform shift matters',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
+  });
+
+  // ── true-positive guards (real dangerous commands must stay high) ─────────
+
+  it('bare rm  as first command → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'rm old-file.txt' }, ctx)).toBe('high');
+  });
+
+  it('rm  after semicolon → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'echo done; rm tmp.txt' }, ctx)).toBe('high');
+  });
+
+  it('rm  after && → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'build && rm artifacts/old.zip' }, ctx)).toBe('high');
+  });
+
+  it('rm  after || → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'test -f x || rm fallback.txt' }, ctx)).toBe('high');
+  });
+
+  it('rm  after pipe → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'find . -name "*.bak" | rm -rf' }, ctx)).toBe('high');
+  });
+
+  it('rm  after $( → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'x=$(rm -f tmp.txt)' }, ctx)).toBe('high');
+  });
+
+  it('rm  after newline in multi-line command → high (true positive)', () => {
+    const cmd = 'echo start\nrm old.txt\necho done';
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('sudo rm  → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'sudo rm /etc/hosts' }, ctx)).toBe('high');
+  });
+
+  it('eval  as command → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'eval "$PAYLOAD"' }, ctx)).toBe('high');
+  });
+
+  it('eval  after semicolon → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'source env.sh; eval "$CMD"' }, ctx)).toBe('high');
+  });
+
+  it('bash heredoc fed to shell — body eval  stays high (shell-exec heredoc)', () => {
+    // When the heredoc is fed to bash/sh, the body IS executed — must stay high.
+    const cmd = [
+      'bash <<EOF',
+      'eval "$PAYLOAD"',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('rm -rf in heredoc body fed to sh → high (shell-exec heredoc)', () => {
+    const cmd = [
+      'sh <<EOF',
+      'rm -rf /tmp/scratch',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('rm -rf before heredoc redirect → high (dangerous command precedes heredoc)', () => {
+    // The rm -rf is on the command line itself, not in the heredoc body.
+    const cmd = [
+      "rm -rf dist/ && cat > /tmp/note.txt <<'EOF'",
+      'platform notes',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+});
+
 // ---- worktree lifecycle --------------------------------------------------
 // Regression guard for PR #390 review finding F1: the `worktree` tool had no
 // classifier branch, so every action (including `remove --force`, which can
