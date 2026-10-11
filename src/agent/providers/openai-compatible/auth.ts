@@ -111,6 +111,31 @@ function defaultReadFile(path: string): string | null {
  *   resolve the ChatGPT-subscription token from `~/.codex/auth.json` ahead of
  *   every other tier and without the global `AFK_OPENAI_CHATGPT_OAUTH` flag.
  */
+/**
+ * Resolve a parsed ChatGPT-subscription token bundle to an auth resolution.
+ * Shared by the forced (slot-bound) and opt-in Codex auth.json tiers.
+ *
+ * Gate expiry: an expired token is treated as unusable so the diagnostic
+ * fires rather than passing an opaque 401 to OpenAI.
+ */
+function buildChatGptOAuthResult(
+  accessToken: string,
+  accountId: string | undefined,
+  expiresAt: number | undefined,
+): OpenAIAuthResolution {
+  if (expiresAt !== undefined && expiresAt <= Math.floor(Date.now() / 1000)) {
+    return { apiKey: null, source: 'chatgpt-oauth-expired', expiresAt };
+  }
+  const res: OpenAIAuthResolution = {
+    apiKey: accessToken,
+    source: 'chatgpt-oauth',
+    last4: last4Of(accessToken),
+  };
+  if (accountId !== undefined) res.accountId = accountId;
+  if (expiresAt !== undefined) res.expiresAt = expiresAt;
+  return res;
+}
+
 export function resolveOpenAIAuth(
   explicitConfigKey: string | undefined,
   deps: AuthResolverDeps = {},
@@ -240,31 +265,6 @@ export function parseCodexAuthJson(raw: string): CodexAuthParse {
   }
   // File exists, parsed cleanly, but has no usable API key and no OAuth bundle.
   return { kind: 'no-key' };
-}
-
-/**
- * Resolve a parsed ChatGPT-subscription token bundle to an auth resolution.
- * Shared by the forced (slot-bound) and opt-in Codex auth.json tiers.
- *
- * Gate expiry: an expired token is treated as unusable so the diagnostic
- * fires rather than passing an opaque 401 to OpenAI.
- */
-function buildChatGptOAuthResult(
-  accessToken: string,
-  accountId: string | undefined,
-  expiresAt: number | undefined,
-): OpenAIAuthResolution {
-  if (expiresAt !== undefined && expiresAt <= Math.floor(Date.now() / 1000)) {
-    return { apiKey: null, source: 'chatgpt-oauth-expired', expiresAt };
-  }
-  const res: OpenAIAuthResolution = {
-    apiKey: accessToken,
-    source: 'chatgpt-oauth',
-    last4: last4Of(accessToken),
-  };
-  if (accountId !== undefined) res.accountId = accountId;
-  if (expiresAt !== undefined) res.expiresAt = expiresAt;
-  return res;
 }
 
 function last4Of(s: string): string {

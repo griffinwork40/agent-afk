@@ -120,7 +120,7 @@ describe('CSRF / Origin', () => {
     const submitted: string[] = [];
     const h = await start({
       owned: new Set(['s1']),
-      submitPrompt: async (_id, text) => {
+      submitPrompt: (_id, text) => {
         submitted.push(text);
       },
     });
@@ -171,7 +171,7 @@ describe('session ownership boundary', () => {
   });
 
   it('rejects a malformed prompt body with 400', async () => {
-    const h = await start({ owned: new Set(['mine']), submitPrompt: async () => {} });
+    const h = await start({ owned: new Set(['mine']), submitPrompt: () => {} });
     const res = await fetch(api(h, '/api/sessions/mine/prompt'), {
       method: 'POST',
       headers: { authorization: `Bearer ${h.token}`, 'content-type': 'application/json' },
@@ -347,7 +347,7 @@ describe('startWebServer — owned sessions', () => {
         owned.add('sess-1');
         return { id: 'sess-1', cwd: '/tmp', model: 'm', createdAt: 'now' };
       },
-      submitPrompt: async () => {},
+      submitPrompt: () => {},
       interrupt: async () => {},
     };
     const h = await start({ owner: fake as never });
@@ -374,14 +374,14 @@ describe('startWebServer — owned sessions', () => {
   // unbounded turns onto one session; these two tests are its only exercise.
   describe('prompt backpressure', () => {
     it('409s a prompt to an owned session that already has a turn in flight', async () => {
-      const h = await start({ owned: new Set(['mine']), isBusy: () => true, submitPrompt: async () => {} });
+      const h = await start({ owned: new Set(['mine']), isBusy: () => true, submitPrompt: () => {} });
       const res = await post(h, '/api/sessions/mine/prompt', { text: 'hi' });
       expect(res.status).toBe(409);
       expect((await res.json()).error).toBe('session_busy');
     });
 
     it('202s a prompt to an owned, idle session', async () => {
-      const h = await start({ owned: new Set(['mine']), isBusy: () => false, submitPrompt: async () => {} });
+      const h = await start({ owned: new Set(['mine']), isBusy: () => false, submitPrompt: () => {} });
       const res = await post(h, '/api/sessions/mine/prompt', { text: 'hi' });
       expect(res.status).toBe(202);
     });
@@ -394,7 +394,7 @@ describe('startWebServer — owned sessions', () => {
       owner: {
         owned,
         create: async () => ({ id: 'mine', cwd: '/tmp', model: 'm', createdAt: 'now' }),
-        submitPrompt: async () => {},
+        submitPrompt: () => {},
         interrupt: async (id: string) => {
           interrupted = id;
         },
@@ -415,7 +415,7 @@ describe('startWebServer — owned sessions', () => {
         create: async () => {
           throw new Error('no api key');
         },
-        submitPrompt: async () => {},
+        submitPrompt: () => {},
         interrupt: async () => {},
       } as never,
     });

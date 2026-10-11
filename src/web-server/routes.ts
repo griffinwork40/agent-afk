@@ -26,9 +26,9 @@ export interface RouteContext {
   owned: Set<string>;
   bridge: WebElicitationBridge;
   /** Submit a prompt to an owned session. */
-  submitPrompt: (sessionId: string, text: string) => Promise<void>;
+  submitPrompt: (sessionId: string, text: string) => void;
   /** Submit a pre-built skill-invocation message (ContentBlockParam[]). */
-  submitSkillMessage?: (sessionId: string, message: ContentBlockParam[]) => Promise<void>;
+  submitSkillMessage?: (sessionId: string, message: ContentBlockParam[]) => void;
   /** Session cwd for preflight context. */
   getSessionCwd?: (sessionId: string) => string | undefined;
   /** Provider-issued session id for preflight artifact dirs. */
@@ -266,7 +266,7 @@ export async function handlePrompt(
     if (slashHandled) return; // handled — response already sent
   }
 
-  await ctx.submitPrompt(sessionId, text);
+  ctx.submitPrompt(sessionId, text);
   sendJson(res, 202, { ok: true });
 }
 
@@ -364,7 +364,7 @@ async function dispatchSlashForWeb(
         });
         return true;
       }
-      await ctx.submitSkillMessage(sessionId, result.message);
+      ctx.submitSkillMessage(sessionId, result.message);
       // submitSkillMessage already incremented pending; release the
       // reservation so the net count stays 1.
       ctx.releaseTurn?.(sessionId);
