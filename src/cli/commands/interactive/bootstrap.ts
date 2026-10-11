@@ -1,8 +1,3 @@
-import { MemoryStore } from '../../../agent/memory/index.js';
-import { StateStore } from '../../../agent/state/state-store.js';
-import { getStateDatabasePath } from '../../../paths.js';
-import { WorkspaceStore } from '../../../agent/workspace/workspace-store.js';
-import { env } from '../../../config/env.js';
 import { registerSurfaceSession } from '../../../agent/session/register-surface-session.js';
 import { runReplReconcile } from '../../../agent/manifest/startup-reconcile.js';
 import type { SlashContext } from '../../slash/types.js';
@@ -22,7 +17,7 @@ import { createReplSurface } from './bootstrap-surface.js';
 import { createReplHookRegistry } from './bootstrap-hooks.js';
 import { createReplSlashContext } from './bootstrap-slash-context.js';
 import { wireTrustedSkillEvents, wireProviderGrants, createReplInput, createTurnBridgeRefs } from './bootstrap-wiring.js';
-import { buildAgentSession, buildSharedDeps } from './bootstrap-session-builder.js';
+import { buildAgentSession, buildSharedDeps, createBootstrapSharedStores } from './bootstrap-session-builder.js';
 import { registerAll } from '../../slash/index.js';
 import { setTasksIctx } from '../../slash/commands/tasks.js';
 
@@ -92,9 +87,7 @@ export async function bootstrapSession(
   // care get a local bucket and the prior behaviour.
   const bootWarnings: string[] = extras?.bootWarnings ?? [];
 
-  const sharedWorkspaceStore = env.AFK_WORKSPACE_DISABLED === '1' ? undefined : new WorkspaceStore();
-  const sharedMemoryStore = new MemoryStore();
-  const sharedStateStore = new StateStore(getStateDatabasePath());
+  const { sharedWorkspaceStore, sharedMemoryStore, sharedStateStore } = createBootstrapSharedStores();
 
   const {
     trace, backgroundRegistry, detachRegistry, processJobs, bgSummarizer,

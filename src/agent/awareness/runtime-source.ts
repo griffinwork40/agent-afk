@@ -42,12 +42,13 @@ import { debugLog } from '../../utils/debug.js';
 // staleness cost. The cache is keyed per-file path so different afkHome values
 // (common in tests) do not collide.
 //
-// NOTE: production callers (anthropic-direct dispatcher-wiring, openai-compatible
-// session-wiring) do not forward `afkHome` to `buildRuntimeStateSource`, so the
-// cache key is always `'__default__'` at runtime — the per-afkHome keying is
-// exercised only in tests (where `afkHome` is injected for isolation). To make
-// the cache key meaningful in production, callers would need to forward the
-// resolved afkHome from env.AFK_HOME through RuntimeSourceDeps. (#3460)
+// History (#3460): production callers (anthropic-direct dispatcher-wiring,
+// openai-compatible session-wiring) do not forward `afkHome` to
+// `buildRuntimeStateSource`, so the cache key is always `'__default__'` at
+// runtime — the per-afkHome keying is exercised only in tests (where `afkHome`
+// is injected for isolation). To make the cache key meaningful in production,
+// callers would need to forward the resolved afkHome from env.AFK_HOME through
+// RuntimeSourceDeps.
 // ---------------------------------------------------------------------------
 
 interface OutcomeSummaryCache {

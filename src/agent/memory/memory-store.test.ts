@@ -185,9 +185,9 @@ describe('saveHot — truncation covenant', () => {
 // does NOT cover with busy_timeout, so a contended switch throws SQLITE_BUSY
 // immediately — which flaked CI's coverage run on whichever test files lost the
 // race ("database is locked", 0 tests collected). configureSqliteConnection()
-// defends this: busy_timeout is set first (so the mode READ is protected), the
-// switch is skipped when the DB is already WAL, and the cold-start race is
-// bound-retried (agent/storage/sqlite.ts).
+// (src/agent/storage/sqlite.ts) defends this: busy_timeout is set first (so
+// the mode READ is protected), the switch is skipped when the DB is already
+// WAL, and the cold-start race is bound-retried.
 // ---------------------------------------------------------------------------
 
 describe('SQLite connection setup — WAL-mode concurrency', () => {

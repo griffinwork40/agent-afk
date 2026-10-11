@@ -26,7 +26,7 @@ vi.mock('child_process', () => ({
   }),
 }));
 
-vi.mock('../../agent/mcp/config-loader.js', () => ({
+vi.mock('../../agent/mcp/index.js', () => ({
   getMcpConfigPath: vi.fn(() => '/mock/mcp.json'),
 }));
 
@@ -107,7 +107,7 @@ vi.mock('playwright', async () => {
 // ---------------------------------------------------------------------------
 
 import { execFileSync } from 'child_process';
-import { getMcpConfigPath } from '../../agent/mcp/config-loader.js';
+import { getMcpConfigPath } from '../../agent/mcp/index.js';
 import { getBrowserStateRoot, assertSafeBrowserProfile } from '../../paths.js';
 import {
   buildChromeDevtoolsEntry,

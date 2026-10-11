@@ -165,6 +165,7 @@ export function createDeferredRequestAbortScope(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onFired: (() => void) | undefined;
   const armTimeout = (fired?: () => void): void => {
+    if (disposed) return; // structurally safe: no-op after dispose()
     if (timer !== undefined) return; // idempotent — first arm wins
     onFired = fired;
     timer = setTimeout(() => {

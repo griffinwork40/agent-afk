@@ -13,7 +13,15 @@ import { readTelemetryHistory } from './telemetry-reader.js';
 
 export const DEFAULT_SESSIONSTART_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 hours
 
-export type SessionStartSkipReason = 'cooldown' | 'overlap' | 'budget-over' | 'telemetry-unwritable';
+export type SessionStartSkipReason =
+  | 'cooldown'
+  | 'overlap'
+  | 'budget-over'
+  | 'telemetry-unwritable'
+  /** Task has passed its `expiresAt` wall-clock deadline. */
+  | 'expired'
+  /** Task has a `runAt` that has not been reached yet. */
+  | 'not-yet';
 
 export interface GateDecision {
   fire: boolean;
