@@ -191,6 +191,12 @@ function seedFile(p: string, content?: string): void {
 const MCP_CONFIG_PATH = '/fake/home/.afk/config/mcp.json';
 
 beforeEach(() => {
+  // Clear hoisted console/exit mocks so calls from prior tests never leak.
+  consoleLog.mockClear();
+  consoleError.mockClear();
+  consoleWarn.mockClear();
+  mockProcessExit.mockClear();
+
   mockExistsSyncStore.clear();
   atomicWritten.clear();
   mockAtomicWriteFile.mockImplementation((_path: string, content: string) => {
