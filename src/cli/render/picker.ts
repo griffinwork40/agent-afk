@@ -251,6 +251,8 @@ export function handlePickerKey(
   searchable: boolean,
   _char: string | undefined,
   key: { name?: string; ctrl?: boolean; shift?: boolean; meta?: boolean; sequence?: string },
+  terminalRowsFn?: (() => number | undefined) | undefined,
+  headerLength?: number,
 ): PickerKeyAction {
   // Esc: clear filter if non-empty (searchable); otherwise dismiss.
   if (key.name === 'escape') {
@@ -286,14 +288,14 @@ export function handlePickerKey(
   if (key.name === 'up' || (key.ctrl && key.name === 'p')) {
     const len = ao.length;
     state.cursor = state.cursor === 0 ? len - 1 : state.cursor - 1;
-    const windowSize = pickerViewportSize(undefined, 0, searchable, len);
+    const windowSize = pickerViewportSize(terminalRowsFn, headerLength ?? 0, searchable, len);
     clampPickerScroll(state, ao, windowSize);
     return { kind: 'repaint' };
   }
   if (key.name === 'down' || (key.ctrl && key.name === 'n')) {
     const len = ao.length;
     state.cursor = state.cursor === len - 1 ? 0 : state.cursor + 1;
-    const windowSize = pickerViewportSize(undefined, 0, searchable, len);
+    const windowSize = pickerViewportSize(terminalRowsFn, headerLength ?? 0, searchable, len);
     clampPickerScroll(state, ao, windowSize);
     return { kind: 'repaint' };
   }
@@ -337,7 +339,7 @@ export function handlePickerKey(
   }
   if (key.name === 'end') {
     state.cursor = ao.length - 1;
-    const windowSize = pickerViewportSize(undefined, 0, searchable, ao.length);
+    const windowSize = pickerViewportSize(terminalRowsFn, headerLength ?? 0, searchable, ao.length);
     clampPickerScroll(state, ao, windowSize);
     return { kind: 'repaint' };
   }
@@ -499,7 +501,7 @@ export function runPicker(
       key: { name?: string; ctrl?: boolean; shift?: boolean; meta?: boolean; sequence?: string },
     ): void => {
       if (resolved) return;
-      const action = handlePickerKey(state, options, multi, searchable, _char, key);
+      const action = handlePickerKey(state, options, multi, searchable, _char, key, host.terminalRows?.bind(host), header.length);
       if (action.kind === 'repaint') {
         host.repaintPicker();
       } else if (action.kind === 'finish') {
