@@ -9,6 +9,7 @@
  */
 
 import type { Context } from 'telegraf';
+import { downloadTelegramFile } from '../media-download.js';
 
 /**
  * Inspect magic bytes at the start of a buffer and return the corresponding
@@ -107,6 +108,9 @@ type LogFn = (...args: unknown[]) => void;
  *
  * Contract: MAX_PHOTO_BYTES is 5 MiB; the function enforces that limit.
  * Callers must not call getFileLink before this -- that call happens here.
+ *
+ * All security restrictions (SSRF guard, redirect rejection, timeout, size cap)
+ * are enforced by downloadTelegramFile from src/telegram/media-download.ts.
  */
 export async function fetchAndClassifyPhoto(
   ctx: Context,
@@ -116,70 +120,63 @@ export async function fetchAndClassifyPhoto(
 ): Promise<FetchPhotoResult> {
   const MAX_PHOTO_BYTES = 5 * 1024 * 1024; // 5 MB
 
-  // M1: validate the CDN URL before fetching to guard against SSRF.
-  // Check protocol, hostname, and port -- hostname-only checks can be bypassed
-  // via non-standard ports or non-HTTPS schemes. Pass redirect:'error' so a
-  // redirect to an internal address is never silently followed.
-  const fileUrlRaw = await ctx.telegram.getFileLink(fileId);
-  // M4: coerce to URL -- some Telegraf forks return a string instead of URL.
-  const url = fileUrlRaw instanceof URL ? fileUrlRaw : new URL(String(fileUrlRaw));
-  if (
-    url.protocol !== 'https:' ||
-    url.hostname !== 'api.telegram.org' ||
-    (url.port !== '' && url.port !== '443')
-  ) {
-    // Do NOT log url.href -- it contains the live bot token in the path segment.
-    log(`Photo handling: unexpected file URL (protocol=${url.protocol} hostname=${url.hostname}) rejected for chat ${chatId}`);
+  let fileUrlRaw: URL | string;
+  try {
+    fileUrlRaw = await ctx.telegram.getFileLink(fileId);
+  } catch (err) {
+    log(`Photo handling: getFileLink failed for chat ${chatId}:`, err instanceof Error ? err.message : String(err));
     await ctx.reply('❌ Couldn\'t download the image. Please try resending.');
     return { ok: false };
   }
-  // M3: 15-second timeout prevents a stalled CDN response from blocking the handler
-  const response = await globalThis.fetch(url.href, {
-    signal: AbortSignal.timeout(15_000),
-    redirect: 'error',
-  });
-  if (!response.ok) {
-    log(`Photo handling: fetch failed with status ${response.status} for chat ${chatId}`);
-    await ctx.reply('❌ Couldn\'t download the image. Please try resending.');
-    return { ok: false };
+  const dlResult = await downloadTelegramFile(fileUrlRaw, { maxBytes: MAX_PHOTO_BYTES });
+
+  switch (dlResult.status) {
+    case 'ssrf-rejected':
+      // Do NOT log url.href -- it contains the live bot token in the path segment.
+      log(`Photo handling: unexpected file URL (protocol=${dlResult.protocol} hostname=${dlResult.hostname}) rejected for chat ${chatId}`);
+      await ctx.reply('❌ Couldn\'t download the image. Please try resending.');
+      return { ok: false };
+
+    case 'fetch-failed':
+      log(`Photo handling: fetch failed with status ${dlResult.httpStatus} for chat ${chatId}`);
+      await ctx.reply('❌ Couldn\'t download the image. Please try resending.');
+      return { ok: false };
+
+    case 'too-large':
+      log(`Photo handling: downloaded file (${dlResult.bytesRead} bytes) exceeds limit for chat ${chatId}`);
+      await ctx.reply('❌ Image is too large (max 5 MB). Please send a smaller photo.');
+      return { ok: false };
+
+    case 'missing-body':
+      log(`Photo handling: fetch response had no body for chat ${chatId}`);
+      await ctx.reply('❌ Couldn\'t download the image. Please try resending.');
+      return { ok: false };
+
+    case 'network-error':
+      log(`Photo handling: network error for chat ${chatId}:`, dlResult.safeMessage);
+      await ctx.reply('❌ Couldn\'t download the image. Please try resending.');
+      return { ok: false };
+
+    case 'ok':
+      break;
   }
-  const readResult = await readResponseBytesWithLimit(response, MAX_PHOTO_BYTES);
-  if (readResult.status === 'too-large') {
-    log(`Photo handling: downloaded file (${readResult.bytesRead} bytes) exceeds limit for chat ${chatId}`);
-    await ctx.reply('❌ Image is too large (max 5 MB). Please send a smaller photo.');
-    return { ok: false };
-  }
-  if (readResult.status === 'missing-body') {
-    log(`Photo handling: fetch response had no body for chat ${chatId}`);
-    await ctx.reply('❌ Couldn\'t download the image. Please try resending.');
-    return { ok: false };
-  }
-  const bytes = readResult.bytes;
+
+  const bytes = dlResult.bytes;
 
   // H1: derive MIME type from the response Content-Type header instead of
   // hardcoding image/jpeg -- Telegram can serve PNG, GIF, and WebP as well.
-  const rawContentType = response.headers.get('content-type') ?? '';
-  // Lowercase before allow-list comparison -- HTTP headers are case-insensitive
-  // per RFC 7231, so 'Image/JPEG' must match as readily as 'image/jpeg'.
-  const detectedMime = (rawContentType.split(';')[0]?.trim() ?? '').toLowerCase();
-  let media_type: AllowedPhotoMime;
-  if ((ALLOWED_PHOTO_MIME as readonly string[]).includes(detectedMime)) {
-    media_type = detectedMime as AllowedPhotoMime;
-  } else {
-    // Content-Type absent or unrecognised: sniff magic bytes so we never
-    // mislabel PNG/GIF/WebP bytes as image/jpeg and get rejected by Anthropic.
-    const sniffed = sniffMimeType(bytes);
-    if (sniffed !== null) {
-      log(`Photo: sniffed ${sniffed} (Content-Type was "${rawContentType}") for chat ${chatId}`);
-      media_type = sniffed;
-    } else {
-      // Completely unrecognised format -- reject explicitly rather than sending
-      // mislabelled bytes that the Anthropic API will reject server-side.
-      log(`Photo: unrecognised image format for chat ${chatId} (Content-Type: "${rawContentType}")`);
-      await ctx.reply('❌ Unsupported image format. Please send a JPEG, PNG, GIF, or WebP.');
-      return { ok: false };
-    }
+  // Note: we no longer have direct access to the response object here, so we
+  // fall back to magic-bytes sniffing (sniffMimeType). Pre-refactor, the
+  // primary path was Content-Type with magic-bytes as fallback; since the
+  // response is no longer available here, magic bytes are the sole source.
+  const sniffed = sniffMimeType(bytes);
+  if (sniffed !== null) {
+    return { ok: true, bytes, media_type: sniffed };
   }
 
-  return { ok: true, bytes, media_type };
+  // Completely unrecognised format -- reject explicitly rather than sending
+  // mislabelled bytes that the Anthropic API will reject server-side.
+  log(`Photo: unrecognised image format for chat ${chatId}`);
+  await ctx.reply('❌ Unsupported image format. Please send a JPEG, PNG, GIF, or WebP.');
+  return { ok: false };
 }

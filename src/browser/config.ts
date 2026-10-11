@@ -14,6 +14,7 @@ import { join } from 'path';
 import { env as defaultEnv } from '../config/env.js';
 import { getAfkConfigDir, assertSafeBrowserProfile } from '../paths.js';
 import type { BrowserConfig } from './types.js';
+import { isErrnoCode } from '../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Public option types
@@ -129,11 +130,24 @@ function warnBadDomainConfig(path: string, message: string): void {
 // Backend validation
 // ---------------------------------------------------------------------------
 
-function resolveBackend(raw: string | undefined): 'playwright' | 'agent-browser' | 'auto' {
+let warnedAgentBrowserConfigDeprecation = false;
+
+function resolveBackend(raw: string | undefined): 'playwright' | 'auto' {
   if (raw === undefined || raw === '') return 'auto';
-  if (raw === 'playwright' || raw === 'agent-browser' || raw === 'auto') return raw;
+  if (raw === 'playwright' || raw === 'auto') return raw;
+  if (raw === 'agent-browser') {
+    if (!warnedAgentBrowserConfigDeprecation) {
+      warnedAgentBrowserConfigDeprecation = true;
+      console.warn(
+        '[browser/config] AFK_BROWSER_BACKEND=agent-browser is deprecated: ' +
+          'Agent Browser has been removed. Treating as "playwright". ' +
+          'Update your config to AFK_BROWSER_BACKEND=playwright or remove the setting.',
+      );
+    }
+    return 'playwright';
+  }
   throw new Error(
-    `AFK_BROWSER_BACKEND: must be "playwright", "agent-browser", or "auto", got: ${raw}`,
+    `AFK_BROWSER_BACKEND: must be "playwright" or "auto", got: ${raw}`,
   );
 }
 
@@ -176,7 +190,7 @@ function defaultReadFileSync(path: string): string | undefined {
   try {
     return readFileSync(path, 'utf8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    if (isErrnoCode(err, 'ENOENT')) return undefined;
     throw err;
   }
 }
@@ -209,12 +223,8 @@ function mergeFileConfig(base: BrowserConfig, fileConfig: Record<string, unknown
   if (typeof fileConfig['domSnapshots'] === 'boolean') {
     result.domSnapshots = fileConfig['domSnapshots'];
   }
-  if (fileConfig['backend'] === 'playwright' || fileConfig['backend'] === 'agent-browser' || fileConfig['backend'] === 'auto') {
-    result.backend = fileConfig['backend'];
-  } else if (fileConfig['backend'] !== undefined) {
-    throw new Error(
-      `AFK_BROWSER_BACKEND: must be "playwright", "agent-browser", or "auto", got: ${String(fileConfig['backend'])}`,
-    );
+  if (fileConfig['backend'] !== undefined) {
+    result.backend = resolveBackend(String(fileConfig['backend']));
   }
   if (typeof fileConfig['defaultProfile'] === 'string') {
     result.defaultProfile = resolveDefaultProfile(fileConfig['defaultProfile']);

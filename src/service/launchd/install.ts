@@ -4,7 +4,7 @@ import { homedir } from 'os';
 import { dirname } from 'path';
 import { guiDomain, LAUNCHCTL_TIMEOUT_MS, labelFor, launchAgentsDir, plistPath, serviceLogPath, type ServiceName } from './paths.js';
 import { type PlistOptions, renderPlist, resolveServicePath, resolveWatchPaths, resolveProgramArguments } from './plist.js';
-import { errorMessage } from '../../utils/errors.js';
+import { errorMessage, isErrnoCode} from '../../utils/errors.js';
 
 /**
  * Extract `EnvironmentVariables` key→value pairs from a plist string.
@@ -170,7 +170,7 @@ export function installService(name: ServiceName, opts: InstallOptions = {}): In
     // by launchd — common after a crash-recovery where launchd auto-
     // reloaded the plist before we bootstrapped it ourselves. Give an
     // actionable message instead of the cryptic OS error.
-    if ((err as NodeJS.ErrnoException).code === 'EALREADY' || /\b37\b/.test(msg)) {
+    if (isErrnoCode(err, 'EALREADY') || /\b37\b/.test(msg)) {
       return {
         kind: 'failed',
         reason: `Service already loaded — run 'afk service restart ${name}' to reload with the new plist.`,
@@ -318,7 +318,7 @@ export function upgradeService(name: ServiceName, opts: InstallOptions = {}): Up
   try {
     writeFileSync(tmpPath, desired, { encoding: 'utf-8', flag: 'wx', mode: 0o600 });
   } catch (firstErr) {
-    if ((firstErr as NodeJS.ErrnoException).code === 'EEXIST') {
+    if (isErrnoCode(firstErr, 'EEXIST')) {
       try { unlinkSync(tmpPath); } catch { /* ignore cleanup failure */ }
       try {
         writeFileSync(tmpPath, desired, { encoding: 'utf-8', flag: 'wx', mode: 0o600 });

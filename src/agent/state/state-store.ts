@@ -13,7 +13,7 @@ import Database from 'better-sqlite3';
 import type BetterSqlite3 from 'better-sqlite3';
 import { chmodSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
-import { sleepSync } from '../../utils/sleep-sync.js';
+import { configureSqliteConnection } from '../storage/sqlite.js';
 
 const SCHEMA_VERSION = 1;
 const NS_KEY_PATTERN = /^[A-Za-z0-9_.-]+$/;
@@ -98,33 +98,11 @@ export class StateStore {
         // best-effort — chmod failure must not prevent store construction
       }
     }
-    // busy_timeout makes ordinary contended reads/writes wait up to 5s rather
-    // than immediately throwing SQLITE_BUSY on the first lock conflict.
-    this.db.pragma('busy_timeout = 5000');
-    this.enableWalMode();
+    configureSqliteConnection(this.db);
     this.initSchema();
     this.runTtlGc();
   }
 
-  /**
-   * Switch the database into WAL mode, tolerant of concurrent cold opens.
-   * Mirrors the pattern in memory-store.ts to handle SQLITE_BUSY races.
-   */
-  private enableWalMode(): void {
-    const MAX_ATTEMPTS = 50;
-    const BACKOFF_MS = 20;
-    for (let attempt = 1; ; attempt++) {
-      try {
-        if (this.db.pragma('journal_mode', { simple: true }) === 'wal') return;
-        this.db.pragma('journal_mode = WAL');
-        return;
-      } catch (err) {
-        const busy = (err as { code?: string } | null)?.code === 'SQLITE_BUSY';
-        if (!busy || attempt >= MAX_ATTEMPTS) throw err;
-        sleepSync(BACKOFF_MS);
-      }
-    }
-  }
 
   /**
    * Initialize the schema.

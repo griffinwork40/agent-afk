@@ -16,6 +16,7 @@
 import { loadClaudeCodeOauthToken } from './auth/keychain.js';
 import { env } from '../config/env.js';
 import { DEFAULT_USAGE_TIMEOUT_MS, fetchUsageJson } from './usage/usage-http.js';
+import { h1ModelFetch } from './providers/shared/h1-fetch.js';
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const OAUTH_BETA_HEADER = 'oauth-2025-04-20';
@@ -56,7 +57,7 @@ export interface UsageUnavailable {
 export type UsageResult = UsageSnapshot | UsageUnavailable;
 
 export interface FetchSubscriptionUsageOptions {
-  /** Injectable for tests. Defaults to global fetch. */
+  /** Injectable for tests. Defaults to HTTP/1.1-only h1ModelFetch. */
   readonly fetchImpl?: typeof fetch;
   /** Override the OAuth token. Defaults to the keychain loader. */
   readonly token?: string;
@@ -75,7 +76,7 @@ export interface FetchSubscriptionUsageOptions {
 export async function fetchSubscriptionUsage(
   options?: FetchSubscriptionUsageOptions,
 ): Promise<UsageResult> {
-  const fetchImpl = options?.fetchImpl ?? fetch;
+  const fetchImpl = options?.fetchImpl ?? h1ModelFetch;
   const timeoutMs = options?.timeoutMs ?? DEFAULT_USAGE_TIMEOUT_MS;
   const token = options?.token ?? (env.CLAUDE_CODE_OAUTH_TOKEN || loadClaudeCodeOauthToken());
 

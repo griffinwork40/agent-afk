@@ -22,11 +22,8 @@
  * The sampler is session-scoped; the REPL constructs one per session.
  */
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { resolveCurrentBranchPr } from '../agent/gh.js';
-
-const execFileAsync = promisify(execFile);
+import { execFileAsync } from '../utils/exec-file.js';
 
 /**
  * Exec shape used for both the local `git` call and the injected `gh` call.

@@ -121,6 +121,30 @@ describe('validateScheduledTask', () => {
       validateScheduledTask({ taskId: 'a', command: 'x', trigger: 'both' }),
     ).toThrow(/cronExpression required/);
   });
+
+  it('rejects out-of-bounds maxAttempts', () => {
+    expect(() =>
+      validateScheduledTask({ taskId: 'a', command: 'x', trigger: 'cron', cronExpression: '* * * * *', maxAttempts: 0 }),
+    ).toThrow(/maxAttempts/);
+    expect(() =>
+      validateScheduledTask({ taskId: 'a', command: 'x', trigger: 'cron', cronExpression: '* * * * *', maxAttempts: 99 }),
+    ).toThrow(/maxAttempts/);
+  });
+
+  it('rejects out-of-bounds retryDelayMs', () => {
+    expect(() =>
+      validateScheduledTask({ taskId: 'a', command: 'x', trigger: 'cron', cronExpression: '* * * * *', retryDelayMs: 500 }),
+    ).toThrow(/retryDelayMs/);
+    expect(() =>
+      validateScheduledTask({ taskId: 'a', command: 'x', trigger: 'cron', cronExpression: '* * * * *', retryDelayMs: 999_999_999 }),
+    ).toThrow(/retryDelayMs/);
+  });
+
+  it('accepts valid retry fields', () => {
+    expect(() =>
+      validateScheduledTask({ taskId: 'a', command: 'x', trigger: 'cron', cronExpression: '* * * * *', maxAttempts: 3, retryDelayMs: 5_000 }),
+    ).not.toThrow();
+  });
 });
 
 describe('CronScheduler', () => {
@@ -713,6 +737,24 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
     expect(res2.status).toBe(409);
   });
 
+  it('POST /tasks threads maxAttempts / retryDelayMs and rejects out-of-bounds values (#3243)', async () => {
+    const h = await spinDaemon();
+    const ok = await fetch(`http://localhost:${h.port}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId: 'retry-task', command: '/cmd', cron: '* * * * *', maxAttempts: 3, retryDelayMs: 2000 }),
+    });
+    expect(ok.status).toBe(201);
+    const tasks = (await (await fetch(`http://localhost:${h.port}/tasks`)).json()) as Array<Record<string, unknown>>;
+    expect(tasks.find((t) => t['taskId'] === 'retry-task')).toMatchObject({ maxAttempts: 3, retryDelayMs: 2000 });
+    const bad = await fetch(`http://localhost:${h.port}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId: 'bad-retry', command: '/cmd', cron: '* * * * *', maxAttempts: 50 }),
+    });
+    expect(bad.status).toBe(400);
+  });
+
   it('POST /tasks with missing command → 400', async () => {
     const h = await spinDaemon();
     const res = await fetch(`http://localhost:${h.port}/tasks`, {
@@ -1150,6 +1192,58 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
       });
       expect(res.status).toBe(400);
       expect(h.scheduler.list().find((t) => t.taskId === 'shell-notify-bad')).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+      expect(getAfkHome()).not.toBe(tmpHome);
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /tasks shell: notifyOn: null is treated as absent and matches a store entry without notifyOn', async () => {
+    // Regression for advisory finding #3320: null on the POST body should be
+    // treated identically to an absent field (both normalize to the effective
+    // default 'failure'), so it must pass notifyOnValid and match a store entry
+    // whose notifyOn is also omitted.
+    const tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-notify-null-'));
+    vi.stubEnv('AFK_HOME', tmpHome);
+    mkdirSync(join(tmpHome, 'config'), { recursive: true });
+    writeFileSync(
+      join(tmpHome, 'config', 'schedules.json'),
+      JSON.stringify([
+        {
+          id: 'shell-null-notify',
+          name: 'Shell Null Notify',
+          command: 'echo null-notify',
+          cron: '0 4 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+          enabled: true,
+          // notifyOn intentionally omitted → effective default is 'failure'
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ]),
+    );
+    try {
+      expect(getAfkHome()).toBe(tmpHome);
+      const h = await spinDaemon();
+      // Request carries explicit notifyOn: null — must be treated as absent
+      // and match the store entry whose notifyOn is also omitted.
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: 'shell-null-notify',
+          command: 'echo null-notify',
+          cron: '0 4 * * *',
+          executor: 'shell',
+          trigger: 'cron',
+          notifyOn: null,
+        }),
+      });
+      expect(res.status).toBe(201);
+      const task = h.scheduler.list().find((t) => t.taskId === 'shell-null-notify');
+      expect(task?.executor).toBe('shell');
     } finally {
       vi.unstubAllEnvs();
       expect(getAfkHome()).not.toBe(tmpHome);

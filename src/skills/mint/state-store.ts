@@ -8,9 +8,10 @@
  * by id rather than by re-passing the entire state.
  */
 
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
-import { dirname, join } from 'path';
+import { existsSync, unlinkSync } from 'fs';
+import { join } from 'path';
 import { getSessionsDir } from '../../paths.js';
+import { writeJsonFile, readJsonFileLoose } from '../../utils/json-file.js';
 import type { MintState } from './index.js';
 
 function statePath(sessionId: string): string {
@@ -18,9 +19,8 @@ function statePath(sessionId: string): string {
 }
 
 export function saveMintState(sessionId: string, state: MintState): void {
-  const path = statePath(sessionId);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(state, null, 2), 'utf-8');
+  // Atomic write: writeJsonFile uses tmp+rename (mkdirp by default).
+  writeJsonFile(statePath(sessionId), state);
 }
 
 function isValidMintState(obj: unknown): obj is MintState {
@@ -36,15 +36,11 @@ function isValidMintState(obj: unknown): obj is MintState {
 }
 
 export function loadMintState(sessionId: string): MintState | null {
-  const path = statePath(sessionId);
-  if (!existsSync(path)) return null;
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(path, 'utf-8'));
-    if (!isValidMintState(parsed)) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
+  // readJsonFileLoose returns undefined for ENOENT and parse errors — treat
+  // both as "no state". isValidMintState then guards the shape before return.
+  const parsed = readJsonFileLoose<unknown>(statePath(sessionId));
+  if (!isValidMintState(parsed)) return null;
+  return parsed;
 }
 
 export function clearMintState(sessionId: string): void {

@@ -37,6 +37,7 @@ import type { ToolResult } from '../../providers/shared/tool-result.js';
 import { resolveAndContain, assertWriteTargetContained } from './_cwd-utils.js';
 import { assertNotDenylisted } from './write-denylist.js';
 import { makeSessionCounter } from './_image-operation.js';
+import { h1ModelFetch } from '../../providers/shared/h1-fetch.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -152,6 +153,7 @@ function parseInput(
 // in this handler's auth, API, and session concerns. Imported here for the
 // dimension guard below; re-exported so all existing importers keep working.
 import { readImageDimensions } from './_image-dimensions.js';
+import { errorMessage } from '../../../utils/errors.js';
 export { readImageDimensions };
 
 // ---------------------------------------------------------------------------
@@ -179,7 +181,7 @@ async function resolveGenSavePath(
       assertWriteTargetContained(savePath, context, 'image_generate', cwd);
       return { savePath };
     } catch (err: unknown) {
-      return { error: err instanceof Error ? err.message : String(err) };
+      return { error: errorMessage(err) };
     }
   }
   const dir = path.join(cwd, '.afk', 'generated-images');
@@ -192,7 +194,7 @@ async function resolveGenSavePath(
 // ---------------------------------------------------------------------------
 
 export function createImageGenerateHandler(
-  fetchFn: typeof globalThis.fetch = globalThis.fetch,
+  fetchFn: typeof globalThis.fetch = h1ModelFetch,
 ): ToolHandler {
   return async (
     input: unknown,
@@ -343,9 +345,8 @@ export function createImageGenerateHandler(
       await fs.writeFile(savePath, imageBuffer);
     } catch (err: unknown) {
       generateCounter.decrement(sessionId);
-      const msg = err instanceof Error ? err.message : String(err);
       return {
-        content: `Image generated successfully but failed to save to disk: ${msg}`,
+        content: `Image generated successfully but failed to save to disk: ${errorMessage(err)}`,
         isError: true,
       };
     }
@@ -445,8 +446,7 @@ async function callImagesApi(
       signal,
     });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { error: `OpenAI Images API request failed: ${msg}` };
+    return { error: `OpenAI Images API request failed: ${errorMessage(err)}` };
   }
 
   if (!response.ok) {

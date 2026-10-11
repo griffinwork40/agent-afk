@@ -30,6 +30,12 @@ export interface PreexistingDefectAggregates {
   skippedOutOfWindow: number;
   /** Top recurring clusters, ranked by recurrence count desc. */
   topClusters: DefectCluster[];
+  /**
+   * True when the ledger file exceeded the 1 MB tail-cap during this read.
+   * When true, `totalRecords` and `topClusters` reflect only the tail of the
+   * ledger; older records were silently discarded.
+   */
+  ledgerTruncated: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -37,7 +43,7 @@ export interface PreexistingDefectAggregates {
 // ---------------------------------------------------------------------------
 
 export function zeroPreexistingDefectAggregates(): PreexistingDefectAggregates {
-  return { totalRecords: 0, skippedOutOfWindow: 0, topClusters: [] };
+  return { totalRecords: 0, skippedOutOfWindow: 0, topClusters: [], ledgerTruncated: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -60,8 +66,8 @@ export function aggregatePreexistingDefects(
   const ledgerPath = options.afkHome
     ? join(options.afkHome, 'agent-framework', 'preexisting-ledger.jsonl')
     : getPreexistingLedgerPath();
-  const records = readLedgerRecords(ledgerPath);
-  if (records.length === 0) return zeroPreexistingDefectAggregates();
+  const { records, ledgerTruncated } = readLedgerRecords(ledgerPath);
+  if (records.length === 0) return { ...zeroPreexistingDefectAggregates(), ledgerTruncated };
 
   const cutoffMs = Date.now() - options.days * 24 * 60 * 60 * 1000;
   let skipped = 0;
@@ -80,5 +86,6 @@ export function aggregatePreexistingDefects(
     totalRecords: records.length,
     skippedOutOfWindow: skipped,
     topClusters: clusters.slice(0, MAX_CLUSTERS),
+    ledgerTruncated,
   };
 }

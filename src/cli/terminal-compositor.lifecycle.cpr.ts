@@ -66,7 +66,7 @@
  */
 
 import { env } from '../config/env.js';
-import { armCprKeypressGuard, CPR_KEYPRESS_GRACE_MS } from './input/emit-keypress.js';
+import { armCprKeypressGuard, disarmCprKeypressGuard, CPR_KEYPRESS_GRACE_MS } from './input/emit-keypress.js';
 import { CPR_REPLY_RE as _CPR_REPLY_RE_LEAF } from './input/cpr-reply-re.js';
 
 /**
@@ -235,6 +235,7 @@ export function requestCprOrMarkDirty(
   expectedRow: number,
   newRows: number,
   rowDelta: number,
+  rttObserver?: (rttMs: number) => void,
 ): void {
   if (!self.cprPending) {
     // No CPR in-flight — seed a fresh burst and start measuring.
@@ -246,7 +247,7 @@ export function requestCprOrMarkDirty(
       shrinkTotal: rowDelta < 0 ? -rowDelta : 0,
       requeryCt: 0,
     };
-    _requestCpr(self);
+    _requestCpr(self, rttObserver);
     return;
   }
 
@@ -273,12 +274,18 @@ export function requestCprOrMarkDirty(
  * Legacy entry point for direct test usage. Seeds a burst context with a
  * single-step rowDelta and calls _requestCpr. New callers should use
  * requestCprOrMarkDirty.
+ *
+ * @param rttObserver  Optional callback invoked with the measured round-trip
+ *                     time (in ms) each time an RTT sample is recorded.
+ *                     Provides a test seam for observing RTT without a
+ *                     test-only export.
  */
 export function requestCprAndApplyDelta(
   self: CprHost,
   expectedRow: number,
   newRows: number,
   rowDelta: number,
+  rttObserver?: (rttMs: number) => void,
 ): void {
   if (self.cprPending) return;
   self.cprBurst = {
@@ -289,7 +296,7 @@ export function requestCprAndApplyDelta(
     shrinkTotal: rowDelta < 0 ? -rowDelta : 0,
     requeryCt: 0,
   };
-  _requestCpr(self);
+  _requestCpr(self, rttObserver);
 }
 
 // ---------------------------------------------------------------------------
@@ -346,7 +353,7 @@ function _onCprTimeout(self: CprHost, timeoutMs: number): void {
  * keypress is dropped by any active keypress consumer (reader.ts, compositor)
  * before it can insert stray characters into the prompt buffer.
  */
-function _requestCpr(self: CprHost): void {
+function _requestCpr(self: CprHost, rttObserver?: (rttMs: number) => void): void {
   self.cprPending = true;
 
   // Compute the adaptive timeout for this request.
@@ -356,7 +363,10 @@ function _requestCpr(self: CprHost): void {
   // slips past the data listener (after timeout) is dropped at the keypress
   // layer too.  We arm for timeout + grace; armCprKeypressGuard extends the
   // deadline if already active (safe to call multiple times for a burst).
-  armCprKeypressGuard(self.stdin, timeoutMs + CPR_KEYPRESS_GRACE_MS);
+  // The generation token is passed to the deferred disarm below; a dirty-burst
+  // re-query that calls _requestCpr synchronously bumps the generation so the
+  // stale setImmediate becomes a no-op (see disarmCprKeypressGuard JSDoc).
+  const guardGenAtArm = armCprKeypressGuard(self.stdin, timeoutMs + CPR_KEYPRESS_GRACE_MS);
 
   // Accumulation buffer: the CPR reply is usually a single chunk but may
   // arrive split across multiple data events on a slow/remote PTY.
@@ -407,9 +417,18 @@ function _requestCpr(self: CprHost): void {
 
     // ── RTT sample ────────────────────────────────────────────────────────
     // Update the smoothed RTT so the next CPR uses an adaptive timeout.
-    if (emitAt > 0) _updateRtt(Date.now() - emitAt);
+    if (emitAt > 0) {
+      const sample = Date.now() - emitAt;
+      _updateRtt(sample);
+      rttObserver?.(sample);
+    }
 
     cleanup(onData);
+    // Defer the disarm past this tick so readline's same-snapshot 'data'
+    // listener sees an active guard (trailing-'R' fragment safety).
+    // Pass guardGenAtArm: a dirty-burst _requestCpr that fires synchronously
+    // below bumps the generation, making this setImmediate a no-op.
+    setImmediate(() => { disarmCprKeypressGuard(guardGenAtArm); });
 
     // ── Re-emit unconsumed bytes so keystrokes are not swallowed ──────────
     const consumedEnd = escIdx + candidate.length;
@@ -444,7 +463,7 @@ function _requestCpr(self: CprHost): void {
       // More SIGWINCHes arrived — re-query, keeping originalExpectedRow and accumulators.
       burst.dirty = false;
       burst.requeryCt += 1;
-      _requestCpr(self);
+      _requestCpr(self, rttObserver);
       return;
     }
 
@@ -508,6 +527,14 @@ function _requestCpr(self: CprHost): void {
     cleanup(onData);
     _onCprTimeout(self, timeoutMs);
   }, timeoutMs);
+  // Unref the CPR timeout so it does not keep the event loop alive after
+  // process exit.  The timeout handler calls repaint() / fallback; if the
+  // process is already shutting down there is nothing to repaint into.
+  // Without unref the timer can hold the loop for up to CPR_TIMEOUT_CEILING_MS
+  // (~1500ms) past the last real task.  The timer handle is cancelled by
+  // cleanup(onData) when a reply arrives, so unref only matters on the
+  // timeout path and only when the process exits mid-flight.
+  timer.unref();
 
   // Emit the CPR request AFTER installing the listener so we cannot miss a
   // same-tick synchronous reply (pathological but safe).

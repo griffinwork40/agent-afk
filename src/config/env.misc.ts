@@ -222,4 +222,16 @@ export const MISC_ENV_REGISTRY = [
     example: '1',
     category: 'debug',
   },
+  {
+    name: 'AFK_SDK_SURFACE_WARN',
+    description:
+      'Controls the one-time warning emitted when an SDK session ' +
+      '(AgentSession / query() / queryText()) discovers skills but has no ' +
+      'skillExecutor wired, meaning the model cannot invoke them. ' +
+      'Set to 0 to silence the warning (useful when the reduced surface is intentional).',
+    type: 'string',
+    required: false,
+    example: '0',
+    category: 'misc',
+  },
 ] as const satisfies readonly EnvVarMeta[];

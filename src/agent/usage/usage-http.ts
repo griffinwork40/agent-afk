@@ -12,6 +12,7 @@
  */
 
 import type { UsageUnavailable } from '../subscription-usage.js';
+import { h1ModelFetch } from '../providers/shared/h1-fetch.js';
 
 export const DEFAULT_USAGE_TIMEOUT_MS = 10_000;
 
@@ -35,7 +36,7 @@ export async function fetchUsageJson(
   headers: Record<string, string>,
   options: UsageHttpOptions = {},
 ): Promise<UsageJson | UsageUnavailable> {
-  const fetchImpl = options.fetchImpl ?? fetch;
+  const fetchImpl = options.fetchImpl ?? h1ModelFetch;
   const timeoutMs = options.timeoutMs ?? DEFAULT_USAGE_TIMEOUT_MS;
   let response: Response;
   try {

@@ -20,7 +20,8 @@ import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-
 import { getProjectSkillsDir } from '../../paths.js';
 import { registerOrReplace } from './registry.js';
 import { runSkillDispatchTurn } from './_lib/run-skill-dispatch-turn.js';
-import { runPreflight, getSkillPreflightDir, initBuiltinPreflights, type SkillInvocation } from './preflight/index.js';
+import { invokeSkillPreflight } from './_lib/run-skill-preflight.js';
+import { initBuiltinPreflights, type SkillInvocation } from './preflight/index.js';
 import type { SlashCommand, SlashContext, SlashResult } from './types.js';
 import type { ImageAttachment } from '../input/attachments.js';
 import { env } from '../../config/env.js';
@@ -74,31 +75,8 @@ export function makeImmediateHandler(skill: SkillMetadata): SlashCommand {
           // itself also wraps in try/catch internally, so the only
           // exception that ever reaches the helper is a synchronous
           // throw in this closure (e.g. SkillInvocation construction).
-          preflight: async (): Promise<string | undefined> => {
-            const inv: SkillInvocation = {
-              skillName: skill.name,
-              rawArgs: args,
-              source: originToSource(skill.origin),
-              capabilities: { compose: true, subagents: true },
-            };
-            const sessionIdMaybe = ctx.session.current.sessionId;
-            const artifactDir = getSkillPreflightDir(sessionIdMaybe);
-            const preflightResult = await runPreflight(
-              inv,
-              // Honor the session's effective cwd so preflights that shell
-              // out to `git status` / file globs operate on the worktree,
-              // not the Node host's process.cwd() (the parent repo when
-              // launched with `afk i --worktree`). `stats.cwd` is stamped
-              // at bootstrap.ts:328 with the same `process.cwd()` fallback.
-              { cwd: ctx.stats.cwd ?? process.cwd(), artifactDir },
-              (err) => {
-                if (env.AFK_SKILL_STREAM_VERBOSE === '1') {
-                  ctx.out.warn(`preflight(${skill.name}) failed: ${errorMessage(err)}`);
-                }
-              },
-            );
-            return preflightResult?.manifestBlock;
-          },
+          preflight: () =>
+            invokeSkillPreflight(skill.name, args, originToSource(skill.origin), ctx),
         });
       } catch (err) {
         ctx.out.line();

@@ -20,7 +20,8 @@
  * @module agent/session-sidecar-sweep
  */
 
-import { readdir, readFile, stat, unlink, writeFile, access } from 'node:fs/promises';
+import { readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { pathExists } from '../utils/fs.js';
 import { join } from 'node:path';
 import { getSessionsDir } from '../paths.js';
 import { env } from '../config/env.js';
@@ -109,15 +110,7 @@ async function sweptRecently(root: string, now: number): Promise<boolean> {
   }
 }
 
-/** True when the path exists (async replacement for existsSync). */
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
+// pathExists imported from utils/fs.js — shared async existence check.
 
 /**
  * Sweep session sidecar files, evicting files that exceed the age bound,

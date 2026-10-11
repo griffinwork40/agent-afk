@@ -148,4 +148,31 @@ describe('mid-session endpoint switch (#2791)', () => {
     expect(adapter.adopt?.(turns, 0)?.entries).toEqual([journal[0]]);
     expect(adapter.adopt?.(turns, 2)?.entries).toEqual([journal[1]]);
   });
+
+  it('text-only turn: content preserved; DeepSeek injects empty reasoning_content, Cerebras does not', () => {
+    // textTurn() helper: one assistant text turn without reasoning, journaled.
+    // Tests that text-only turns are handled correctly at two destination
+    // endpoints with different reasoning-field conventions.
+    //
+    // DeepSeek requires reasoning_content on every assistant turn (even empty
+    // ones) when the session uses extended thinking — the adapter injects ''.
+    // Cerebras does not require this, so the field is absent for Cerebras.
+    const turn = textTurn('summary of results');
+
+    const deepseekAdapter = openAIJournalAdapterForEndpoint('https://api.deepseek.com/v1');
+    const [deepseekWire] = deepseekAdapter.fromJournalMessages([turn]);
+    expect(deepseekWire).toBeDefined();
+    expect((deepseekWire as Record<string, unknown>)['content']).toBe('summary of results');
+    // DeepSeek injects an empty reasoning_content on turns without thinking.
+    expect(deepseekWire).toHaveProperty('reasoning_content', '');
+    expect(deepseekWire).not.toHaveProperty('reasoning');
+
+    const cerebrasAdapter = openAIJournalAdapterForEndpoint('https://api.cerebras.ai/v1');
+    const [cerebrasWire] = cerebrasAdapter.fromJournalMessages([turn]);
+    expect(cerebrasWire).toBeDefined();
+    expect((cerebrasWire as Record<string, unknown>)['content']).toBe('summary of results');
+    // Cerebras does not require the field on text-only turns.
+    expect(cerebrasWire).not.toHaveProperty('reasoning');
+    expect(cerebrasWire).not.toHaveProperty('reasoning_content');
+  });
 });

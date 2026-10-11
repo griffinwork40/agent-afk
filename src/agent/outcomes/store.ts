@@ -12,12 +12,12 @@
 import {
   existsSync,
   readdirSync,
-  readFileSync,
 } from 'node:fs';
 import { getOutcomesDir, getOutcomeRecordPath, validateSessionId } from '../../paths.js';
 import { VerifiedOutcomeSchema, type VerifiedOutcome, type Vote } from './schema.js';
 import { combine } from './combine.js';
 import { atomicWriteFile } from '../../utils/atomic-write.js';
+import { readJsonFileLoose } from '../../utils/json-file.js';
 
 // ---------------------------------------------------------------------------
 // Read
@@ -33,14 +33,15 @@ export function readRecord(
 ): VerifiedOutcome | undefined {
   validateSessionId(sessionId);
   const path = _recordPath(sessionId, outcomesDir);
-  if (!existsSync(path)) return undefined;
-  try {
-    const raw: unknown = JSON.parse(readFileSync(path, 'utf8'));
-    const parsed = VerifiedOutcomeSchema.safeParse(raw);
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
+  // readJsonFileLoose: returns undefined on ENOENT or parse errors; re-throws
+  // unexpected I/O (EACCES, EISDIR). A corrupt record is treated the same as a
+  // missing one — both represent "no record yet", and the caller writes a fresh
+  // skeleton via upsertVotes. A Zod validation failure is also treated as absent
+  // because an old schema version must not block session teardown.
+  const raw = readJsonFileLoose<unknown>(path);
+  if (raw == null) return undefined;
+  const parsed = VerifiedOutcomeSchema.safeParse(raw);
+  return parsed.success ? parsed.data : undefined;
 }
 
 // ---------------------------------------------------------------------------

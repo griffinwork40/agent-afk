@@ -11,7 +11,7 @@
  * @module agent/dag
  */
 
-import { TimeoutError } from '../utils/errors.js';
+import { TimeoutError, ensureError } from '../utils/errors.js';
 import { forwardAbortSignal } from '../utils/abort.js';
 import { settleWithConcurrencyLimit, resolveMaxConcurrentSubagentCalls } from './concurrency-pool.js';
 import {
@@ -339,7 +339,7 @@ export async function runDAG(
             inDegree.set(downId, inDegree.get(downId)! - 1);
           }
         } else {
-          const err = settled.reason instanceof Error ? settled.reason : new Error(String(settled.reason));
+          const err = ensureError(settled.reason);
           const nodeId = ready[i]!;
           failed.push({ id: nodeId, error: err });
           completed.add(nodeId);

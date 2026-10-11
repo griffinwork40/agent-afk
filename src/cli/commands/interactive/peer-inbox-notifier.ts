@@ -63,12 +63,9 @@ export interface PeerInboxNotifierOpts {
   /**
    * Live getter for the trace writer. Called on every emit so a mid-session
    * resume (which swaps the trace writer) is automatically reflected.
-   * When both `getTraceWriter` and `traceWriter` are provided, `getTraceWriter`
-   * takes precedence. When neither is provided, tracing is disabled.
+   * When not provided, tracing is disabled.
    */
   getTraceWriter?: () => TraceSink | undefined;
-  /** @deprecated Prefer `getTraceWriter` for correct behaviour after resume. */
-  traceWriter?: TraceSink;
   now?: () => number;
   /** Poll interval override (ms). Falls back to `AFK_PEER_POLL_MS`, then 1000. */
   pollMs?: number;
@@ -123,9 +120,7 @@ export class PeerInboxNotifier {
     this.wakeBudget = createWakeBudget(opts.now !== undefined ? { now: opts.now } : {});
     this.pollMs = resolvePollMs(opts.pollMs);
     this.getMode = opts.mode ?? resolvePeerInboundMode;
-    // Prefer live getter so a mid-session resume that swaps the trace writer is
-    // automatically picked up. Fall back to the static value for backwards compat.
-    this.resolveTraceWriter = opts.getTraceWriter ?? (() => opts.traceWriter);
+    this.resolveTraceWriter = opts.getTraceWriter ?? (() => undefined);
   }
 
   /**

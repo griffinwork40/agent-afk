@@ -143,6 +143,9 @@ export interface LifecycleHost {
   // repaint once repositionCommittedBand re-establishes real geometry. See the
   // field doc on the class (terminal-compositor.ts).
   bandGeometryStale: boolean;
+  // Resize-specific staleness: set ONLY by SIGWINCH handlers, not by resumeInput.
+  // See the field doc on the class (terminal-compositor.ts).
+  resizeGeometryStale: boolean;
   // Real frame top/bottom from the last repaint (0 = no frame measured).
   lastMeasuredFrameTop: number;
   lastMeasuredFrameBottom: number;
