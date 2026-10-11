@@ -60,7 +60,7 @@ describe('createFileCheckpointRegistry', () => {
     expect(readFileSync(snap.snapshotPath, 'utf8')).toBe('original content');
   });
 
-  it('records a NEW_FILE_SENTINEL for a file that does not exist', async () => {
+  it('records a new-file marker for a file that does not exist', async () => {
     const file = path.join(tmpDir, 'nonexistent.txt');
 
     const reg = createFileCheckpointRegistry('sess1', 'turn2', stateDir);
@@ -69,7 +69,9 @@ describe('createFileCheckpointRegistry', () => {
     const snapshots = listTurnSnapshots('sess1', 'turn2', stateDir);
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0]!.isNewFile).toBe(true);
-    expect(readFileSync(snapshots[0]!.snapshotPath, 'utf8')).toBe(NEW_FILE_SENTINEL);
+    // New-file status is stored as an out-of-band .new sidecar (empty body).
+    expect(readFileSync(snapshots[0]!.snapshotPath, 'utf8')).toBe('');
+    expect(existsSync(`${snapshots[0]!.snapshotPath}.new`)).toBe(true);
   });
 
   it('is idempotent — only the first call per path captures content', async () => {

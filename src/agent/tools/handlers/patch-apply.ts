@@ -18,7 +18,6 @@ import { validatePatchChanges, type PatchFileChange } from './patch-validate.js'
 import { applyPatch } from './patch-apply-engine.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { isBlankInput } from '../subagent/optional-input.js';
-import { resolve } from 'path';
 
 // ---------------------------------------------------------------------------
 // Input parsing
@@ -192,19 +191,8 @@ export function createPatchApplyHandler(cwd?: string): ToolHandler {
       };
     }
 
-    // Snapshot all target paths BEFORE any mutation so rewindFiles can restore them.
-    if (context?.fileCheckpoint && !dry_run) {
-      const base = resolveBase ?? process.cwd();
-      await Promise.all(
-        changes.map((c) =>
-          context.fileCheckpoint!.snapshotFile(
-            resolve(base, c.path),
-          ),
-        ),
-      );
-    }
-
-    // Validate.
+    // Validate first — this resolves each path through resolveAndContain so
+    // the canonical (post-symlink-resolution) path is known.
     const validation = await validatePatchChanges(changes, resolveBase, context);
 
     if (!validation.valid) {
@@ -218,6 +206,20 @@ export function createPatchApplyHandler(cwd?: string): ToolHandler {
         content: JSON.stringify(result, null, 2),
         isError: true,
       };
+    }
+
+    // Snapshot the validated (resolved) target paths BEFORE any mutation so
+    // rewindFiles can restore them. We snapshot after validation so we use the
+    // canonical resolved paths (as resolveAndContain produced them), not the
+    // raw c.path values — these can diverge for symlinked or non-canonical
+    // inputs, which would cause the snapshot to capture a different file than
+    // the one actually written.
+    if (context?.fileCheckpoint && !dry_run) {
+      await Promise.all(
+        Array.from(validation.fileContents.keys()).map((resolvedPath) =>
+          context.fileCheckpoint!.snapshotFile(resolvedPath),
+        ),
+      );
     }
 
     // Apply (or dry-run).

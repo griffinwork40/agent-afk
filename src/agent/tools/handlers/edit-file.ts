@@ -140,8 +140,17 @@ const editFileImpl = async (
     assertNotDenylisted(file_path, 'edit_file');
 
     // Snapshot the file BEFORE any mutation so rewindFiles can restore it.
+    // A snapshot failure must not silently leave the turn without a checkpoint —
+    // surface it as a warn annotation on the result so the caller knows rewind
+    // will not be available for this file.
+    let snapshotWarning: string | undefined;
     if (context?.fileCheckpoint) {
-      await context.fileCheckpoint.snapshotFile(file_path);
+      try {
+        await context.fileCheckpoint.snapshotFile(file_path);
+      } catch (snapErr) {
+        snapshotWarning = `[edit_file] checkpoint snapshot failed (rewind unavailable for this file): ${errorMessage(snapErr)}`;
+        console.warn(snapshotWarning);
+      }
     }
 
     // TOCTOU guard: record mtime before read; re-check before write so a
@@ -217,10 +226,11 @@ const editFileImpl = async (
     // `render.diff` (out-of-band) — keeping it out of `content` saves
     // tokens (model already supplied old_string + new_string) and lets
     // the renderer produce a richer multi-line block than a string allows.
-    const resultMsg =
+    const baseMsg =
       occurrences === 1
         ? `Replaced 1 occurrence in ${file_path}`
         : `Replaced ${occurrences} occurrences in ${file_path}`;
+    const resultMsg = snapshotWarning ? `${baseMsg}\nWARNING: ${snapshotWarning}` : baseMsg;
 
     const _t0 = performance.now();
     const diff = computeLineDiff(content, modified);

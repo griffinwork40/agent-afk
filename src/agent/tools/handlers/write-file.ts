@@ -103,8 +103,17 @@ const writeFileImpl = async (
     assertNotDenylisted(file_path, 'write_file');
 
     // Snapshot the file BEFORE any mutation so rewindFiles can restore it.
+    // A snapshot failure must not silently leave the turn without a checkpoint —
+    // surface it as a warn annotation on the result so the caller knows rewind
+    // will not be available for this file.
+    let snapshotWarning: string | undefined;
     if (context?.fileCheckpoint) {
-      await context.fileCheckpoint.snapshotFile(file_path);
+      try {
+        await context.fileCheckpoint.snapshotFile(file_path);
+      } catch (snapErr) {
+        snapshotWarning = `[write_file] checkpoint snapshot failed (rewind unavailable for this file): ${errorMessage(snapErr)}`;
+        console.warn(snapshotWarning);
+      }
     }
 
     // Opt-out: AFK_WRITE_DIFF=0 (or "false"/"no"/"off") skips the pre-read
@@ -184,8 +193,11 @@ const writeFileImpl = async (
     }
 
     const byteCount = Buffer.byteLength(content, 'utf8');
+    const successMsg = snapshotWarning
+      ? `Wrote ${byteCount} bytes to ${file_path}\nWARNING: ${snapshotWarning}`
+      : `Wrote ${byteCount} bytes to ${file_path}`;
     return {
-      content: `Wrote ${byteCount} bytes to ${file_path}`,
+      content: successMsg,
       ...(diff ? { render: { diff } } : {}),
     };
   } catch (err) {

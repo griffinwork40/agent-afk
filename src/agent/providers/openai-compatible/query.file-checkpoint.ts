@@ -15,6 +15,8 @@ import {
   createFileCheckpointRegistry,
   type FileCheckpointRegistry,
 } from '../../file-checkpoint/file-checkpoint.js';
+import { rewindFiles } from '../../file-checkpoint/rewind-files.js';
+import type { ProviderRewindResult } from '../../provider.js';
 
 interface CheckpointWiringHost {
   fileCheckpointWiring: { set: (r: FileCheckpointRegistry | undefined) => void };
@@ -26,25 +28,40 @@ function wiringOf(dispatcher: object | undefined): CheckpointWiringHost['fileChe
 }
 
 /**
- * Wire a fresh registry for a new turn. Returns the generated turnId so the
- * caller can store it for rewindFiles. Returns `undefined` when checkpointing
- * is disabled or the dispatcher does not carry file-checkpoint wiring.
+ * Encapsulates per-turn file-checkpoint state for the OpenAI-compatible
+ * provider. Extracted from `query.ts` to keep it within the 350-code-line
+ * ceiling — holds `enabled` + `currentTurnId` and exposes begin/end/rewind.
  */
-export function beginTurnFileCheckpoint(
-  enabled: boolean,
-  dispatcher: object | undefined,
-  sessionId: string,
-): string | undefined {
-  if (!enabled) return undefined;
-  const wiring = wiringOf(dispatcher);
-  if (wiring === undefined) return undefined;
-  const turnId = randomUUID();
-  wiring.set(createFileCheckpointRegistry(sessionId, turnId));
-  return turnId;
-}
+export class FileCheckpointState {
+  private currentTurnId: string | undefined;
+  constructor(
+    private readonly enabled: boolean,
+    private readonly sessionId: string,
+  ) {}
 
-/** Clear the per-turn registry (called from the turn's finally block). */
-export function endTurnFileCheckpoint(enabled: boolean, dispatcher: object | undefined): void {
-  if (!enabled) return;
-  wiringOf(dispatcher)?.set(undefined);
+  /** Wire a fresh registry for a new turn; stores the generated turnId. */
+  begin(dispatcher: object | undefined): void {
+    if (!this.enabled) return;
+    const wiring = wiringOf(dispatcher);
+    if (wiring === undefined) return;
+    const turnId = randomUUID();
+    this.currentTurnId = turnId;
+    wiring.set(createFileCheckpointRegistry(this.sessionId, turnId));
+  }
+
+  /** Clear the per-turn registry (called from the turn's finally block). */
+  end(dispatcher: object | undefined): void {
+    if (!this.enabled) return;
+    wiringOf(dispatcher)?.set(undefined);
+    this.currentTurnId = undefined;
+  }
+
+  /** Delegate rewindFiles for the enclosing provider query. */
+  rewind(userMessageId: string, options?: { dryRun?: boolean }): Promise<ProviderRewindResult> {
+    return rewindFiles(
+      { sessionId: this.sessionId, enableFileCheckpointing: this.enabled },
+      this.currentTurnId ?? userMessageId,
+      options,
+    );
+  }
 }

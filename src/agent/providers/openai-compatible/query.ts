@@ -77,8 +77,7 @@ import {
   resolveAutoCompactThreshold,
 } from '../shared/auto-compact.js';
 import { AbortCoordinator, CLOSED_SENTINEL } from '../shared/abort-coordinator.js';
-import { beginTurnFileCheckpoint, endTurnFileCheckpoint } from './query.file-checkpoint.js';
-import { rewindFiles as rewindFilesImpl } from '../../file-checkpoint/rewind-files.js';
+import { FileCheckpointState } from './query.file-checkpoint.js';
 import { h1ModelFetch } from '../shared/h1-fetch.js';
 import { HookBlockedError, ensureError } from '../../../utils/errors.js';
 
@@ -242,10 +241,8 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
    */
   private readonly autoCompactThreshold: number | undefined;
 
-  /** When true, write-class tool calls snapshot pre-edit content for rewindFiles(). */
-  private readonly enableFileCheckpointing: boolean;
-  /** The turnId registered for the current in-flight turn; cleared at turn end. */
-  private currentTurnId: string | undefined;
+  /** File-checkpoint state: enabled flag + current turn id + begin/end/rewind helpers. */
+  private readonly checkpoint: FileCheckpointState;
 
   constructor(opts: OpenAICompatibleQueryOptions) {
     this.opts = opts;
@@ -259,7 +256,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     this.traceWriter = opts.traceWriter;
     this.fastTier = new FastTierSession(opts.fastTier);
     this.autoCompactThreshold = resolveAutoCompactThreshold(opts.config.autoCompact, opts.model);
-    this.enableFileCheckpointing = opts.config.enableFileCheckpointing ?? false;
+    this.checkpoint = new FileCheckpointState(opts.config.enableFileCheckpointing ?? false, opts.synthesizedSessionId);
 
     // Pre-compute the OpenAI tool catalog once.
     if (this.toolDispatcher) {
@@ -429,9 +426,9 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     const turnStartTime = Date.now();
     const taskId = randomUUID();
 
-    // File-checkpoint: assign a stable turn id and wire a fresh registry onto
-    // the dispatcher so write-class tool handlers snapshot files before mutation.
-    this.currentTurnId = beginTurnFileCheckpoint(this.enableFileCheckpointing, this.toolDispatcher, this.initSessionId);
+    // File-checkpoint: wire a fresh registry onto the dispatcher so write-class
+    // tool handlers snapshot files before mutation.
+    this.checkpoint.begin(this.toolDispatcher);
 
     const trace = new TurnTrace(controller.signal, this.traceWriter, 'openai-compatible');
     this.fastTier.beginTurn(this.currentModel);
@@ -447,9 +444,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
       );
     } finally {
       trace.finish(Date.now() - turnStartTime);
-      // Clear the per-turn checkpoint registry at turn end.
-      endTurnFileCheckpoint(this.enableFileCheckpointing, this.toolDispatcher);
-      this.currentTurnId = undefined;
+      this.checkpoint.end(this.toolDispatcher);
     }
   }
 
@@ -565,18 +560,8 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     return { authSource: this.opts.auth.source };
   }
 
-  async rewindFiles(
-    userMessageId: string,
-    options?: { dryRun?: boolean },
-  ): Promise<ProviderRewindResult> {
-    return rewindFilesImpl(
-      {
-        sessionId: this.initSessionId,
-        enableFileCheckpointing: this.enableFileCheckpointing,
-      },
-      this.currentTurnId ?? userMessageId,
-      options,
-    );
+  async rewindFiles(userMessageId: string, options?: { dryRun?: boolean }): Promise<ProviderRewindResult> {
+    return this.checkpoint.rewind(userMessageId, options);
   }
 
   /** Live conversation in journal form (router `/model` swap carry); undefined without a journal. */
