@@ -24,20 +24,9 @@ import {
   grepTool,
   listDirectoryTool,
 } from './schemas.file-tools.js';
-export {
-  readFileTool,
-  viewImageTool,
-  extractDocumentTool,
-  writeFileTool,
-  editFileTool,
-  globTool,
-  grepTool,
-  listDirectoryTool,
-} from './schemas.file-tools.js';
 
 // ── Shell tool ─────────────────────────────────────────────────────────────
 import { bashTool } from './schemas.bash.js';
-export { bashTool } from './schemas.bash.js';
 
 // ── Web / network tools ────────────────────────────────────────────────────
 import {
@@ -47,25 +36,9 @@ import {
   imageGenerateTool,
   imageEditTool,
 } from './schemas.web-tools.js';
-export {
-  sendTelegramTool,
-  webScrapeTool,
-  webRequestTool,
-  imageGenerateTool,
-  imageEditTool,
-} from './schemas.web-tools.js';
 
 // ── Schedule tools ─────────────────────────────────────────────────────────
-// Schedule tool schemas extracted to schemas.schedule.ts — re-exported here to
-// keep the public surface unchanged while respecting the 350-code-line ceiling.
 import {
-  createScheduleTool,
-  updateScheduleTool,
-  listSchedulesTool,
-  getScheduleHistoryTool,
-  cancelScheduleTool,
-} from './schemas.schedule.js';
-export {
   createScheduleTool,
   updateScheduleTool,
   listSchedulesTool,
@@ -84,12 +57,6 @@ import {
   configGetTool,
   configSetTool,
 } from './schemas.worktree-tools.js';
-export {
-  worktreeTool,
-  terminalFontSizeTool,
-  configGetTool,
-  configSetTool,
-} from './schemas.worktree-tools.js';
 
 // ── User interaction + clipboard tools ────────────────────────────────────
 import {
@@ -97,11 +64,7 @@ import {
   clipboardWriteTool,
   clipboardReadTool,
 } from './schemas.interaction-tools.js';
-export {
-  askQuestionTool,
-  clipboardWriteTool,
-  clipboardReadTool,
-} from './schemas.interaction-tools.js';
+export { clipboardWriteTool, clipboardReadTool } from './schemas.interaction-tools.js';
 
 // ── Browser-control tools ──────────────────────────────────────────────────
 // Invariant: these schemas are wire-projected by `toWireToolDef` in
@@ -119,24 +82,11 @@ import {
   browserScreenshotTool,
   browserCloseTool,
 } from './schemas.browser-tools.js';
-export {
-  browserOpenTool,
-  browserObserveTool,
-  browserActTool,
-  browserScreenshotTool,
-  browserCloseTool,
-} from './schemas.browser-tools.js';
 
 // ── Orchestration (background jobs, patch-apply, witness) ─────────────────
 import { cancelBackgroundJobTool, patchApplyTool, sendMessageToAgentTool, getBackgroundJobHealthTool } from './schemas.orchestration.js';
 import { readWitnessTool, searchWitnessTool } from './schemas.witness.js';
 import { listSessionsTool, sendToSessionTool } from './schemas.peer.js';
-export { listSessionsTool, sendToSessionTool, PEER_TOOL_NAMES } from './schemas.peer.js';
-
-// ── Other extracted tools (re-exports only) ────────────────────────────────
-export { waitForTool } from './schemas.wait-for.js';
-export { jsonQueryTool } from './schemas.json-query.js';
-export { modelCompleteTool } from './schemas.model-complete.js';
 import { waitForTool } from './schemas.wait-for.js';
 import { testRunTool } from './schemas.test-run.js';
 import { getFacetTool } from './schemas.facet.js';
