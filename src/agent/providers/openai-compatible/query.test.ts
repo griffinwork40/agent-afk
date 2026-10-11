@@ -1242,6 +1242,42 @@ describe('OpenAICompatibleQuery — auth failure path', () => {
   });
 });
 
+describe('OpenAICompatibleQuery — warnedChatGptOAuth one-time stderr notice', () => {
+  it('emits the chatgpt.com notice to stderr once per account, not on subsequent constructions', () => {
+    const written: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      written.push(typeof chunk === 'string' ? chunk : String(chunk));
+      return true;
+    });
+
+    const auth = { apiKey: 'tok', source: 'chatgpt-oauth' as const, last4: '_tok', accountId: 'acct-1' };
+
+    // First construction for this account: notice must fire.
+    const q1 = new OpenAICompatibleQuery({
+      auth,
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid1',
+      promptStream: singleInput('x'),
+      config: baseConfig(),
+    });
+    q1.close();
+    expect(written.filter((s) => s.includes('ChatGPT subscription OAuth'))).toHaveLength(1);
+
+    // Second construction for the same accountId: notice must NOT repeat.
+    const q2 = new OpenAICompatibleQuery({
+      auth,
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid2',
+      promptStream: singleInput('x'),
+      config: baseConfig(),
+    });
+    q2.close();
+    expect(written.filter((s) => s.includes('ChatGPT subscription OAuth'))).toHaveLength(1);
+
+    spy.mockRestore();
+  });
+});
+
 describe('OpenAICompatibleQuery — lifecycle', () => {
   it('interrupt() aborts an in-flight stream', async () => {
     // Long stream — interrupt mid-way.
