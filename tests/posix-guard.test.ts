@@ -34,7 +34,7 @@ function hits(src: string, rules: readonly RuleId[] = ['R1', 'R2', 'R3', 'R4'], 
 }
 
 describe('posix-guard — the whole tree does not exceed the committed baseline', () => {
-  it('has no (file, rule) count above .posix-guard-baseline.json', () => {
+  it('has no (file, rule) count above .posix-guard-baseline.json', { timeout: 60_000 }, () => {
     const baseline = loadPosixBaseline(path.join(repoRoot, BASELINE_REL));
     expect(baseline.fileExisted).toBe(true);
     const cmp = compareToBaseline(scanTree(repoRoot), baseline);

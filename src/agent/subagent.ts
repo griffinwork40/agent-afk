@@ -674,6 +674,11 @@ export class SubagentManager {
     this.abortGraph.rearm(this.rootId, this.rootController);
     // The constructor's listener follows `this.rootController`, but an
     // external parent may have aborted in the narrow interval before rearm.
+    // Invariant: re-wire the parent abort listener through the new controller.
+    // Without this call the listener installed in the constructor is lost after
+    // rearm — an external parent abort would no longer propagate to the fleet.
+    // This is a latent bug fix that landed silently in a refactor; do not
+    // "simplify" this away (#3519 / PR #3492).
     if (this.parentAbortSignal) wireParentAbortSignal(this.parentAbortSignal, this.rootController);
   }
 

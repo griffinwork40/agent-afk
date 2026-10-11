@@ -162,7 +162,9 @@ export function isTransientOauthOrg403(err: unknown): boolean {
  * `isConnectionPhaseNetworkError`), 409 Conflict (included in the shared
  * `CONNECTION_PHASE_RETRYABLE_STATUSES` for streaming turn paths but excluded
  * here — retrying a POST after a 409 is semantically wrong for one-shot calls
- * because the conflict condition persists across attempts), or any other status.
+ * because the conflict condition persists across attempts), or any other status
+ * except the narrow `oauth_not_allowed_for_organization` 403 — see
+ * `isTransientOauthOrg403` and the module-level doc for that special case.
  *
  * Exported so the daemon's cron-task retry (`agent/daemon/task-retry.ts`)
  * classifies a failed run with the SAME predicate instead of a drifting copy.
