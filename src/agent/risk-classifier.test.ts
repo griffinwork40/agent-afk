@@ -890,8 +890,8 @@ describe('classifyRisk — system temp dir carve-out', () => {
     const roots = getTempRoots();
     // Session root (private 0700 mkdtemp) must be included.
     expect(roots).toContain(sessRoot);
-    // No root should be shared-world-writable: on POSIX all entries must pass
-    // the isPrivateTempRoot predicate (symlink=false, owned, mode&0o022===0).
+    // No root should permit group/other access: on POSIX all entries must pass
+    // the isPrivateTempRoot predicate (symlink=false, owned, mode&0o077===0).
     // We cannot lstat here without importing fs, so just assert non-empty.
     expect(roots.length).toBeGreaterThan(0);
   });
@@ -902,15 +902,17 @@ describe('classifyRisk — system temp dir carve-out', () => {
   });
 
   it('cached session root is re-validated: reaped and replaced by a non-directory → dropped', () => {
-    // Prime the cache (both candidates exist, so the result is cached).
+    // Prime a complete cache: both candidates are present, even if os.tmpdir()
+    // fails the privacy predicate (e.g. Linux /tmp); only private roots are kept.
     expect(getTempRoots()).toContain(sessRoot);
     expect(getTempRoots()).toContain(sessRoot);
     // Simulate a tmp reaper deleting the idle root and something else taking
     // its name. A regular file fails isPrivateTempRoot on every platform.
     rmSync(sessRoot, { recursive: true, force: true });
     writeFileSync(sessRoot, 'not a dir');
-    // (No classification assertion: sessRoot lives under os.tmpdir(), which is
-    // itself a private root on macOS, so the path stays admissible through it.)
+    // Assert root membership, not classification: on macOS the enclosing
+    // os.tmpdir() is private, so this path remains admissible through it;
+    // Linux's usual /tmp is not private and provides no such fallback.
     expect(getTempRoots()).not.toContain(sessRoot);
   });
 
