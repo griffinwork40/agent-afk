@@ -30,6 +30,7 @@
 import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
+import { writeJsonFileAsync } from '../utils/json-file.js';
 
 import { getFarmDir, getFarmsDir } from '../paths.js';
 import { resolveRepoRoot } from '../utils/git.js';
@@ -350,7 +351,7 @@ export async function createFarm(opts: CreateFarmOptions): Promise<FarmManifest>
     branches: created,
   };
 
-  await fs.writeFile(join(farmDir, 'farm.json'), JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+  await writeJsonFileAsync(join(farmDir, 'farm.json'), manifest);
 
   return manifest;
 }
@@ -433,11 +434,7 @@ export async function removeBranch(taskSlug: string, index: number): Promise<voi
   await tryDeleteBranch(manifest.repoRoot, branch.branch);
 
   manifest.branches = manifest.branches.filter((b) => b.index !== index);
-  await fs.writeFile(
-    join(manifest.farmDir, 'farm.json'),
-    JSON.stringify(manifest, null, 2) + '\n',
-    'utf8',
-  );
+  await writeJsonFileAsync(join(manifest.farmDir, 'farm.json'), manifest);
 }
 
 /**
@@ -478,11 +475,7 @@ export async function recordHumanDecision(
   // schemaVersion: protocol invariant — v3 is required to carry human_decision
   manifest.schemaVersion = 3;
 
-  await fs.writeFile(
-    join(manifest.farmDir, 'farm.json'),
-    JSON.stringify(manifest, null, 2) + '\n',
-    'utf8',
-  );
+  await writeJsonFileAsync(join(manifest.farmDir, 'farm.json'), manifest);
 
   return manifest;
 }
@@ -505,11 +498,7 @@ export async function recordRespawn(
   manifest.respawnedAs = respawnedAs;
   manifest.schemaVersion = 3;
 
-  await fs.writeFile(
-    join(manifest.farmDir, 'farm.json'),
-    JSON.stringify(manifest, null, 2) + '\n',
-    'utf8',
-  );
+  await writeJsonFileAsync(join(manifest.farmDir, 'farm.json'), manifest);
 
   return manifest;
 }
@@ -531,11 +520,7 @@ export async function setFarmMemoryFactId(
   manifest.memoryFactId = factId;
   manifest.schemaVersion = 3;
 
-  await fs.writeFile(
-    join(manifest.farmDir, 'farm.json'),
-    JSON.stringify(manifest, null, 2) + '\n',
-    'utf8',
-  );
+  await writeJsonFileAsync(join(manifest.farmDir, 'farm.json'), manifest);
 
   return manifest;
 }
@@ -557,11 +542,7 @@ export async function recordPrCreated(
   manifest.prCreatedAt = new Date().toISOString();
   manifest.schemaVersion = 3;
 
-  await fs.writeFile(
-    join(manifest.farmDir, 'farm.json'),
-    JSON.stringify(manifest, null, 2) + '\n',
-    'utf8',
-  );
+  await writeJsonFileAsync(join(manifest.farmDir, 'farm.json'), manifest);
 
   return manifest;
 }

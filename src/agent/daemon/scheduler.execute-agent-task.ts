@@ -53,7 +53,7 @@ export interface AgentTaskContext {
   queueDir: string;
   idleDetector: IdleDetector;
   now: () => number;
-  spawnSession: (task: ScheduledTask, trigger: TelemetryTrigger) => Promise<{
+  spawnSession: (task: ScheduledTask, trigger: TelemetryTrigger, gateBlockCounter?: { count: number }) => Promise<{
     session: AgentSession;
     memoryStore: MemoryStore;
     stateStore: StateStore;
@@ -105,9 +105,15 @@ export async function executeAgentTask(
     triggeredAt: triggeredAt.toISOString(),
   };
   const policy = resolveTaskRetryPolicy(task);
+  // Shared counter incremented by the trace shim on every AFK-gate hard-block
+  // during this run (#3466). A single object is created per executeAgentTask
+  // call (one per tick) and passed through spawnSession so the counting shim
+  // in session-spawn.ts can update it. Retries share the same counter so
+  // gateBlocks reflects the total across all attempts.
+  const gateBlockCounter = { count: 0 };
   ctx.idleDetector.increment();
   try {
-    const outcome = await runWithTaskRetry(() => runAgentAttempt(ctx, task, trigger), {
+    const outcome = await runWithTaskRetry(() => runAgentAttempt(ctx, task, trigger, gateBlockCounter), {
       ...policy,
       signal: ctx.shutdownSignal ?? new AbortController().signal,
       ...(ctx.isCancelled !== undefined ? { isCancelled: ctx.isCancelled } : {}),
@@ -123,6 +129,7 @@ export async function executeAgentTask(
       } : {}),
     });
     const attemptsField = policy.maxAttempts > 1 ? { attempts: outcome.attempts } : {};
+    const gateBlocksField = gateBlockCounter.count > 0 ? { gateBlocks: gateBlockCounter.count } : {};
     if (!outcome.ok) {
       const record: TelemetryRecord = {
         ...baseRecord,
@@ -130,19 +137,27 @@ export async function executeAgentTask(
         status: 'error',
         errorMessage: redactInlineSecrets(errorMessage(outcome.error)),
         ...attemptsField,
+        ...gateBlocksField,
       };
       ctx.writeTelemetry(record, task);
       return record;
     }
     const { responseText, doneUnverified } = outcome.value;
+    // A run whose model turn completed but whose tool calls were hard-blocked
+    // by the AFK gate is recorded as 'blocked' rather than 'success' (#3466).
+    // This surfaces to notifyOn:'failure' so the operator is alerted when the
+    // work silently never happened. The responseExcerpt is preserved so the
+    // operator can read the model's explanation of the refusal.
+    const status = gateBlockCounter.count > 0 ? 'blocked' : 'success';
     const record: TelemetryRecord = {
       ...baseRecord,
       durationMs: ctx.now() - startTimeMs,
-      status: 'success',
+      status,
       responseExcerpt: responseText.length > 280
         ? `${responseText.slice(0, 280)}… [truncated]`
         : responseText,
       ...attemptsField,
+      ...gateBlocksField,
     };
     ctx.writeTelemetry(record, task, { responseText, ...(doneUnverified ? { doneUnverified: true } : {}) });
     return record;
@@ -160,6 +175,7 @@ async function runAgentAttempt(
   ctx: AgentTaskContext,
   task: ScheduledTask,
   trigger: TelemetryTrigger,
+  gateBlockCounter?: { count: number },
 ): Promise<AttemptResult> {
   let session: AgentSession | null = null;
   let memoryStore: MemoryStore | null = null;
@@ -168,7 +184,7 @@ async function runAgentAttempt(
   let disposeRegistration: (() => void) | null = null;
   let handlerInstalled = false;
   try {
-    const spawned = await ctx.spawnSession(task, trigger);
+    const spawned = await ctx.spawnSession(task, trigger, gateBlockCounter);
     session = spawned.session;
     memoryStore = spawned.memoryStore;
     stateStore = spawned.stateStore;

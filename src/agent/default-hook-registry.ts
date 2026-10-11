@@ -205,7 +205,7 @@ export function createDefaultHookRegistry(
   memoryStore?: MemoryStore,
   getPermissionMode?: () => PermissionMode,
   hookConfig?: LoadedHooksConfig,
-  agentOptions?: { cwd?: string; sessionId?: string; traceWriter?: TraceSink; afkPromptForApproval?: boolean; getTranscriptPath?: () => string | null },
+  agentOptions?: { cwd?: string; sessionId?: string; traceWriter?: TraceSink; afkPromptForApproval?: boolean; getTranscriptPath?: () => string | null; daemonTaskId?: string },
   getCwd?: () => string | undefined,
 ): DefaultHookRegistryResult {
   const registry = createHookRegistry();
@@ -270,6 +270,7 @@ export function createDefaultHookRegistry(
         // Lets a pending approval mark this session's presence file as
         // blocked-on-human, so an out-of-process observer can see the wait.
         ...(agentOptions?.sessionId !== undefined ? { sessionId: agentOptions.sessionId } : {}),
+        ...(agentOptions?.daemonTaskId !== undefined ? { daemonTaskId: agentOptions.daemonTaskId } : {}),
       }),
       // Longrunning: on a high-risk op the gate awaits an operator approve/deny
       // via elicitationRouter.route() (deny-on-timeout). Bypass the 30s per-

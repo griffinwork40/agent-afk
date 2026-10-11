@@ -231,34 +231,10 @@ describe('chatgpt-oauth + 401 + different token on disk', () => {
   });
 
   it('(g) rolls back the user turn pushed during the failed attempt before retry', async () => {
-    const priorTurns: OpenAIMessage[] = [
-      // simulates state after pushUserTurn ran during the first attempt:
-      // snapshot length before == 0, then pushUserTurn added 1 entry.
-    ];
-    // Simulate the state as if pushUserTurn had already been called:
-    // priorTurns had 0 entries before the turn, then pushUserTurn appended one.
-    priorTurns.push({ role: 'user', content: 'my prompt' });
-
-    const ctx = makeCtx({ source: 'chatgpt-oauth', apiKey: 'tok-A', priorTurns });
-
-    // Snapshot the length before wrapTurnWithOAuthRefresh is entered.
-    // The wrapper itself snapshots this internally (priorTurnsLenBefore = 0 in
-    // the "before turn started" sense, but here we push BEFORE calling wrap,
-    // which mirrors what runTurnInner does AFTER wrap starts iterating the first
-    // attempt). To make this test precise, simulate the exact moment the user
-    // turn is appended: it happens during iteration of firstAttempt, BEFORE
-    // the 401 is yielded. The wrapper records `priorTurnsLenBefore` at the
-    // START of iteration, BEFORE the first event, so it won't see the push.
-    // BUT in production, pushUserTurn runs INSIDE runTurnInner, which runs INSIDE
-    // the firstAttempt generator. The wrapper records the length BEFORE iteration
-    // begins (priorTurns.length before the for-await), so if we pre-seed
-    // priorTurns with the push (as we do here), the wrapper sees length=1 as
-    // the "before" value and does not roll it back.
-    //
-    // This test instead verifies the real scenario:
-    // priorTurns is empty when wrap starts → pushUserTurn runs as part of
-    // firstAttempt iteration → length becomes 1 → 401 is yielded → wrapper
-    // splices back to 0.
+    // The real scenario: priorTurns is empty when wrapTurnWithOAuthRefresh
+    // starts (wrapper snapshots length=0), pushUserTurn runs inside the
+    // firstAttempt generator (length becomes 1), 401 is yielded, wrapper
+    // splices back to 0 before calling makeNewAttempt.
     const priorTurns2: OpenAIMessage[] = [];
     const ctx2 = makeCtx({ source: 'chatgpt-oauth', apiKey: 'tok-A', forceChatgptOAuth: true, priorTurns: priorTurns2 });
 

@@ -24,7 +24,7 @@
 import { palette } from '../palette.js';
 import type { MenuOverlays } from './config-menu.js';
 import { RESTART_NOTE } from '../../config/mutate.js';
-import { loadMcpConfig } from '../../agent/mcp/config-loader.js';
+import { loadMcpConfig } from '../../agent/mcp/index.js';
 import { LOCKED_TOOLS, TOOL_GROUP_NAMES, toolGroups } from '../../agent/tools/operator-denied.js';
 import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
 import { readDisabledToolsByTier, writeUserDisabledTools, type TierDisabledTools } from '../config/tools-disabled.js';

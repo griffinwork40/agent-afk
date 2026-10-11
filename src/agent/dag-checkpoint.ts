@@ -19,10 +19,9 @@
  */
 
 import { createHash } from 'node:crypto';
-import { mkdirSync, existsSync, unlinkSync, writeFileSync, renameSync } from 'node:fs';
-import { readJsonFileLoose } from '../utils/json-file.js';
-import { join, dirname } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { existsSync, unlinkSync } from 'node:fs';
+import { readJsonFileLoose, writeJsonFileAsync } from '../utils/json-file.js';
+import { join } from 'node:path';
 import { getAfkStateDir } from '../paths.js';
 
 /** Root directory for DAG checkpoints under the AFK state tier. */
@@ -103,17 +102,9 @@ export async function saveCheckpoint(
   dagId: string,
   checkpoint: DAGCheckpoint,
 ): Promise<void> {
-  mkdirSync(dagCheckpointsDir(), { recursive: true });
   const dest = checkpointPath(dagId);
   if (dest === null) throw new Error(`Invalid dagId: ${JSON.stringify(dagId)}`);
-  const tmp = join(dirname(dest), `.tmp-${randomBytes(4).toString('hex')}.json`);
-  try {
-    writeFileSync(tmp, JSON.stringify(checkpoint), 'utf-8');
-    renameSync(tmp, dest);
-  } catch (err) {
-    try { unlinkSync(tmp); } catch { /* ignore */ }
-    throw err;
-  }
+  await writeJsonFileAsync(dest, checkpoint);
 }
 
 /**

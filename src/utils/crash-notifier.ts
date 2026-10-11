@@ -66,8 +66,11 @@ export function installCrashNotifier(
 
   let lastCrashPushAt = 0;
 
-  // Invariant: reset() must process.off() the exact refs captured here.
-  // Re-installing after a reset stacks a second listener pair otherwise.
+  // These handler refs are intentionally process-lifetime: they are registered
+  // once on install and removed only by reset(). Holding the exact same
+  // function reference is what lets process.off() remove precisely the handler
+  // this instance added — without it, a re-install after reset() would stack a
+  // second uncaughtException/unhandledRejection pair on the process.
   let uncaughtHandler: ((err: unknown) => void) | undefined;
   let rejectionHandler: ((err: unknown) => void) | undefined;
 

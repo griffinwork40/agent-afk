@@ -21,8 +21,8 @@ import {
   writeXaiTokens,
 } from './auth-store.js';
 import {
-  asNonEmptyString,
   discoverXaiOidcCached,
+  postOAuthForm,
   tokenResponseToBundle,
   type OAuthHttpDeps,
 } from './oauth-http.js';
@@ -65,24 +65,17 @@ export async function refreshXaiTokens(
   deps: OAuthHttpDeps & { store?: XaiAuthStoreDeps; persist?: boolean } = {},
 ): Promise<XaiTokenBundle> {
   const discovery = await discoverXaiOidcCached(deps);
-  const fetchFn = deps.fetchFn ?? fetch;
   const clientId = deps.clientId ?? XAI_OAUTH_CLIENT_ID;
-  const body = new URLSearchParams({
-    grant_type: 'refresh_token',
-    refresh_token: refreshToken,
-    client_id: clientId,
-  });
-  const res = await fetchFn(discovery.token_endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-    body: body.toString(),
-  });
-  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!res.ok) {
-    const err = asNonEmptyString(json['error']) ?? `http_${res.status}`;
-    const desc = asNonEmptyString(json['error_description']);
-    throw new Error(`xAI token refresh failed: ${desc ? `${err}: ${desc}` : err}`);
-  }
+  const json = await postOAuthForm(
+    discovery.token_endpoint,
+    {
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: clientId,
+    },
+    'xAI token refresh failed',
+    deps.fetchFn,
+  );
   // Invariant: prefer the NEW refresh_token from the response; if the IdP
   // omits it (unusual for xAI), fall back to the previous refresh token so
   // we still persist a usable bundle.

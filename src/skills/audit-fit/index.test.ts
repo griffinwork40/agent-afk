@@ -83,14 +83,9 @@ vi.mock('../_agents/to-definition.js', () => ({
 }));
 
 // Mock loadSkillPrompts so tests control which prompts are returned.
-const mockLoadSkillPromptsImpl = vi.hoisted(() =>
-  vi.fn((_name: string) => ({
-    '01-skill-inspector.md': 'skill prompt',
-    '02-command-inspector.md': 'command prompt',
-    '03-agent-inspector.md': 'agent prompt',
-    '04-hook-inspector.md': 'hook prompt',
-  })),
-);
+// No default implementation here — the beforeEach block sets the default via
+// mockReturnValue so there is no duplication between the hoisted init and reset.
+const mockLoadSkillPromptsImpl = vi.hoisted(() => vi.fn());
 vi.mock('../_lib/prompt-loader.js', () => ({
   loadSkillPrompts: mockLoadSkillPromptsImpl,
 }));

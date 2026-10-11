@@ -28,6 +28,12 @@ import type { InputStreamRef } from '../types/permission-types.js';
  * provider lifecycle exists, so implementations must store the target and
  * read its members lazily (at execute time), never during `bind` itself:
  * `sessionId` is not readable until the provider lifecycle is built.
+ *
+ * @experimental The exact shape of this interface (particularly the internal
+ * session members `recordSubagentCompletion`, `messageJournal`, and
+ * `getInputStreamRef`) may change between minor versions while the SDK
+ * executor API stabilises. External embedders should not depend on it
+ * structurally until it is marked stable.
  */
 export interface SessionExecutorsBindTarget {
   readonly sessionId: string | undefined;

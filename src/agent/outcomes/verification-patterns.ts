@@ -65,7 +65,8 @@ export function isVerificationCommand(input: string): boolean {
  *
  * @param toolName    - The tool's name (e.g. `'bash'`, `'test_run'`).
  * @param input       - The tool's input summary (bash command string, or
- *                      empty string for `test_run`).
+ *                      ignored when `toolName` is `'test_run'` (the tool
+ *                      carries no meaningful input string).
  * @param rawContent  - The flat result text. For stream events this is the
  *                      chunk's `.content` field; for journal-derived events
  *                      it is the already-flat concatenated result text.
@@ -88,10 +89,11 @@ export function buildVerificationResultTail(
 ): string | undefined {
   const isVerify = toolName === 'test_run' ||
     (toolName === 'bash' && isVerificationCommand(input));
-  if (!isVerify || rawContent.length === 0) return undefined;
+  if (!isVerify) return undefined;
   const base = tailPreview !== undefined && tailPreview.length > 0
     ? tailPreview.join('\n')
     : rawContent;
+  if (base.length === 0) return undefined;
   const tail = base.length > RESULT_TAIL_CHARS
     ? base.slice(-RESULT_TAIL_CHARS)
     : base;
