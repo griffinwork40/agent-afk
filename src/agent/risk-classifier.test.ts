@@ -1,18 +1,24 @@
 /**
  * Unit tests for the risk classifier.
  *
- * Uses a fixed CWD constant — no shell-outs, no filesystem reads.
+ * Uses a fixed CWD constant — no shell-outs. The temp-dir carve-out suite
+ * creates mkdtemp fixtures (incl. dangling symlinks) and cleans them up.
  */
 
-import { describe, it, expect } from 'vitest';
-import { classifyRisk } from './risk-classifier.js';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, realpathSync, rmSync, symlinkSync } from 'fs';
+import { classifyRisk, classifyRiskDetailed } from './risk-classifier.js';
 import type { RiskContext } from './risk-classifier.js';
+import { getTempRoots } from './risk-classifier.paths.js';
 import { homedir } from 'os';
 import * as os from 'os';
 import path from 'path';
 
 const WORKSPACE = path.join(os.tmpdir(), 'agent-afk-test-workspace');
 const ctx: RiskContext = { cwd: WORKSPACE, workspaceRoot: WORKSPACE };
+// An outside-the-workspace path that is neither in the system temp dir nor on
+// the write denylist (resolve() makes it a valid absolute path on win32 too).
+const OUTSIDE_NON_TMP = path.resolve('/opt/afk-risk-outside/secret.txt');
 
 // ---- bash high-risk patterns ---------------------------------------------
 describe('classifyRisk — bash high', () => {
@@ -373,10 +379,17 @@ describe('classifyRisk — write_file / edit_file', () => {
     ).toBe('high');
   });
 
-  it('path outside workspaceRoot → high', () => {
+  it('path outside workspaceRoot (and outside the temp dir) → high', () => {
+    // Not os.tmpdir(): the system temp dir is carved out (see the temp-dir suite).
     expect(
-      classifyRisk('write_file', { file_path: path.join(os.tmpdir(), 'outside', 'secret.txt') }, ctx),
+      classifyRisk('write_file', { file_path: OUTSIDE_NON_TMP }, ctx),
     ).toBe('high');
+  });
+
+  it('path in the system temp dir outside workspaceRoot → safe (temp carve-out)', () => {
+    expect(
+      classifyRisk('write_file', { file_path: path.join(os.tmpdir(), 'outside', 'scratch.txt') }, ctx),
+    ).toBe('safe');
   });
 
   it('path inside ~/.ssh → high (denylist)', () => {
@@ -729,5 +742,166 @@ describe('classifyRisk — MCP tools', () => {
   // `Mcp__…` is classified (not silently dropped to the 'safe' default).
   it('Mcp__server__delete_record → high (mixed-case prefix classified)', () => {
     expect(classifyRisk('Mcp__server__delete_record', { id: 1 }, ctx)).toBe('high');
+  });
+});
+
+// ---- system temp dir carve-out (AFK scratch writes) ------------------------
+describe('classifyRisk — system temp dir carve-out', () => {
+  // A workspace that is NOT itself under the temp dir, so every temp write
+  // below is a genuine workspace escape that only the carve-out can allow.
+  const WS = path.resolve('/opt/afk-risk-ws');
+  const wsCtx: RiskContext = { cwd: WS, workspaceRoot: WS };
+  const tmpRoot = realpathSync(os.tmpdir());
+  // Literal POSIX `/tmp/x`, the shape models emit. Built by join so no
+  // '/'-rooted literal reaches a path API.
+  const LITERAL_TMP_X = ['', 'tmp', 'afk-risk-literal.py'].join('/');
+
+  let fixture: string;
+  beforeEach(() => {
+    fixture = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'afk-risk-tmp-')));
+  });
+  afterEach(() => {
+    rmSync(fixture, { recursive: true, force: true });
+  });
+
+  it('write_file / edit_file to os.tmpdir()/x → safe', () => {
+    const p = path.join(os.tmpdir(), 'afk-risk-x.txt');
+    expect(classifyRisk('write_file', { file_path: p }, wsCtx)).toBe('safe');
+    expect(classifyRisk('edit_file', { file_path: p }, wsCtx)).toBe('safe');
+  });
+
+  it('literal /tmp/x → safe where /tmp exists (POSIX), high on win32 (no /tmp root)', () => {
+    const expected = process.platform === 'win32' ? 'high' : 'safe';
+    expect(classifyRisk('write_file', { file_path: LITERAL_TMP_X }, wsCtx)).toBe(expected);
+  });
+
+  it('patch_apply with every path in tmp → safe', () => {
+    const input = {
+      changes: [
+        { path: path.join(fixture, 'a.txt'), content: 'a' },
+        { path: path.join(os.tmpdir(), 'afk-risk-b.txt'), content: 'b' },
+      ],
+    };
+    expect(classifyRisk('patch_apply', input, wsCtx)).toBe('safe');
+  });
+
+  it('patch_apply mixing tmp + a denylisted path → high', () => {
+    const input = {
+      changes: [
+        { path: path.join(fixture, 'a.txt'), content: 'a' },
+        { path: path.join(homedir(), '.ssh', 'authorized_keys'), content: 'x' },
+      ],
+    };
+    const v = classifyRiskDetailed('patch_apply', input, wsCtx);
+    expect(v.level).toBe('high');
+    expect(v.reason).toMatch(/^write-denylist: /);
+  });
+
+  it('tmp path inside a .git/ dir → high', () => {
+    const v = classifyRiskDetailed(
+      'write_file',
+      { file_path: path.join(fixture, 'repo', '.git', 'config') },
+      wsCtx,
+    );
+    expect(v.level).toBe('high');
+    expect(v.reason).toMatch(/^git-dir: .* is inside \.git\/$/);
+  });
+
+  it('<tmpRoot>-sibling/x (prefix lookalike) → high', () => {
+    // os.tmpdir() may itself live under /tmp (TMPDIR=/tmp/…), in which case its
+    // `-sibling` is legitimately inside the /tmp root. Test the lookalike of
+    // every OUTERMOST root (one not nested in another); at least one exists.
+    const roots = getTempRoots();
+    const outer = roots.filter((r) => !roots.some((o) => o !== r && r.startsWith(o + path.sep)));
+    expect(outer.length).toBeGreaterThan(0);
+    expect(roots).toContain(tmpRoot);
+    for (const root of outer) {
+      const v = classifyRiskDetailed(
+        'write_file',
+        { file_path: path.join(`${root}-sibling`, 'x.txt') },
+        wsCtx,
+      );
+      expect(v.level).toBe('high');
+      expect(v.reason).toMatch(/^workspace-escape: /);
+    }
+  });
+
+  it('dangling symlink in tmp → non-tmp, non-denylisted target outside workspace → high', () => {
+    const link = path.join(fixture, 'link.txt');
+    symlinkSync(path.resolve('/opt/afk-risk-dangling-target/out.txt'), link);
+    const v = classifyRiskDetailed('write_file', { file_path: link }, wsCtx);
+    expect(v.level).toBe('high');
+    expect(v.reason).toMatch(/^workspace-escape: /);
+  });
+
+  it('dangling symlink in tmp → another tmp path → safe', () => {
+    const link = path.join(fixture, 'link.txt');
+    symlinkSync(path.join(fixture, 'sub', 'target.txt'), link);
+    expect(classifyRisk('write_file', { file_path: link }, wsCtx)).toBe('safe');
+  });
+
+  it('no workspaceRoot (non-AFK caller) → behaviour unchanged', () => {
+    const noRoot: RiskContext = { cwd: WS };
+    expect(classifyRisk('write_file', { file_path: path.join(fixture, 'x') }, noRoot)).toBe('safe');
+    expect(classifyRisk('write_file', { file_path: OUTSIDE_NON_TMP }, noRoot)).toBe('safe');
+    expect(
+      classifyRisk('write_file', { file_path: path.join(homedir(), '.ssh', 'id_rsa') }, noRoot),
+    ).toBe('high');
+  });
+});
+
+// ---- classifyRiskDetailed reasons -----------------------------------------
+describe('classifyRiskDetailed — reasons for each high category', () => {
+  it('workspace-escape names the path and the root', () => {
+    const v = classifyRiskDetailed('write_file', { file_path: OUTSIDE_NON_TMP }, ctx);
+    expect(v.level).toBe('high');
+    expect(v.reason).toContain('workspace-escape: ');
+    expect(v.reason).toContain(' is outside ');
+    expect(v.reason).toContain('afk-risk-outside');
+  });
+
+  it('write-denylist names the matched prefix', () => {
+    const v = classifyRiskDetailed(
+      'write_file',
+      { file_path: path.join(homedir(), '.ssh', 'id_rsa') },
+      ctx,
+    );
+    expect(v.level).toBe('high');
+    expect(v.reason).toMatch(/^write-denylist: .* is under .*\.ssh/);
+  });
+
+  it('bash-pattern names the matched token', () => {
+    expect(classifyRiskDetailed('bash', { command: 'sudo ls' }, ctx)).toEqual({
+      level: 'high',
+      reason: "bash-pattern: matched 'sudo'",
+    });
+  });
+
+  it('schedule-mutation', () => {
+    const v = classifyRiskDetailed('create_schedule', { name: 'x' }, ctx);
+    expect(v.level).toBe('high');
+    expect(v.reason).toMatch(/^schedule-mutation/);
+  });
+
+  it('mcp-destructive-verb names the verb', () => {
+    expect(classifyRiskDetailed('mcp__postgres__drop_table', {}, ctx)).toEqual({
+      level: 'high',
+      reason: 'mcp-destructive-verb: drop',
+    });
+  });
+
+  it('worktree force remove and web_request DELETE carry reasons', () => {
+    expect(
+      classifyRiskDetailed('worktree', { action: 'remove', force: true }, ctx).reason,
+    ).toBe('worktree-force-remove');
+    expect(classifyRiskDetailed('web_request', { method: 'DELETE' }, ctx).reason).toBe(
+      'web-request: DELETE',
+    );
+  });
+
+  it('classifyRisk returns the detailed level', () => {
+    expect(classifyRisk('bash', { command: 'sudo ls' }, ctx)).toBe(
+      classifyRiskDetailed('bash', { command: 'sudo ls' }, ctx).level,
+    );
   });
 });

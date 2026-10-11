@@ -16,13 +16,23 @@
  * @module agent/risk-classifier
  */
 
-import path from 'path';
-import { safeRealpath, getWriteDenylist } from './tools/handlers/write-denylist.js';
 import { categorizeTool } from './tool-category.js';
 import { isBackgroundBashLaunch } from './tools/bash-background-flag.js';
+import { classifyFilePath, classifyPatchApply } from './risk-classifier.paths.js';
 
 /** Three-tier risk level for a tool invocation. */
 export type RiskLevel = 'safe' | 'medium' | 'high';
+
+/**
+ * A risk level plus, when known, a short concrete reason naming the rule that
+ * fired (e.g. `workspace-escape: <path> is outside <root>`). Surfaced to a
+ * blocked agent by the AFK gate so it can pick a safe alternative instead of
+ * guessing why it was refused.
+ */
+export interface RiskVerdict {
+  level: RiskLevel;
+  reason?: string;
+}
 
 /**
  * Workspace context required to evaluate path-based risk rules.
@@ -223,55 +233,23 @@ function extractFilePath(input: unknown): string {
   return '';
 }
 
-function classifyBash(cmd: string): RiskLevel {
+function classifyBash(cmd: string): RiskVerdict {
   // External constraint: check HIGH before MEDIUM before SAFE.
   // High patterns override everything; medium patterns override safe.
   // This ordering matters for commands like `echo foo > out.txt` where
   // both `echo ` (safe) and ` > ` (medium) match — the redirect takes
   // precedence because medium is checked first.
   for (const p of BASH_HIGH) {
-    if (cmd.includes(p)) return 'high';
+    if (cmd.includes(p)) return { level: 'high', reason: `bash-pattern: matched '${p}'` };
   }
   for (const p of BASH_MEDIUM) {
-    if (cmd.includes(p)) return 'medium';
+    if (cmd.includes(p)) return { level: 'medium', reason: `bash-pattern: matched '${p}'` };
   }
   for (const p of BASH_SAFE) {
-    if (cmd.includes(p)) return 'safe';
+    if (cmd.includes(p)) return { level: 'safe' };
   }
   // Default: medium — unknown bash commands are not safe by assumption.
-  return 'medium';
-}
-
-function classifyFilePath(filePath: string, ctx: RiskContext): RiskLevel {
-  if (!filePath) return 'safe';
-
-  const resolved = safeRealpath(path.resolve(ctx.cwd, filePath));
-  // Normalize to forward slashes for portable substring checks.
-  const resolvedNorm = resolved.split(path.sep).join('/');
-
-  // Denylist check — matches ~/.ssh, /etc, etc.
-  const denylist = getWriteDenylist();
-  for (const blocked of denylist) {
-    const blockedNorm = blocked.split(path.sep).join('/');
-    if (resolvedNorm === blockedNorm || resolvedNorm.startsWith(blockedNorm + '/')) {
-      return 'high';
-    }
-  }
-
-  // .git/ directory — writes to the git object store are almost always wrong.
-  if (resolvedNorm.includes('/.git/')) return 'high';
-
-  // Workspace boundary escape.
-  if (ctx.workspaceRoot !== undefined) {
-    const realRoot = safeRealpath(ctx.workspaceRoot);
-    const rel = path.relative(realRoot, resolved);
-    if (rel.startsWith('..')) return 'high';
-  }
-
-  // node_modules — usually unintentional; not catastrophic.
-  if (resolvedNorm.includes('/node_modules/')) return 'medium';
-
-  return 'safe';
+  return { level: 'medium' };
 }
 
 // ---------------------------------------------------------------------------
@@ -401,45 +379,42 @@ export function classifyRisk(
   input: unknown,
   ctx: RiskContext,
 ): RiskLevel {
+  return classifyRiskDetailed(toolName, input, ctx).level;
+}
+
+/**
+ * Like {@link classifyRisk}, but also returns a short concrete `reason` naming
+ * the rule that fired (always set for `'high'`). The AFK gate surfaces the
+ * reason in its refusal so a blocked agent knows exactly what to change.
+ */
+export function classifyRiskDetailed(
+  toolName: string,
+  input: unknown,
+  ctx: RiskContext,
+): RiskVerdict {
   // Normalise to lowercase for case-insensitive matching against known tools.
   const tool = toolName.toLowerCase();
 
   // ---- bash ----------------------------------------------------------------
   if (tool === 'bash') {
-    const cmd = extractBashCommand(input);
-    const level = classifyBash(cmd);
+    const verdict = classifyBash(extractBashCommand(input));
     // Background floor: a `run_in_background` launch can run for up to 24 h,
     // so a "safe" substring match (e.g. `cat ` or `pnpm test` anywhere in the
     // string) must never auto-approve it.
-    return isBackgroundBashLaunch(tool, input) && level === 'safe' ? 'medium' : level;
+    return isBackgroundBashLaunch(tool, input) && verdict.level === 'safe'
+      ? { level: 'medium', reason: 'bash-background' }
+      : verdict;
   }
 
   // ---- write_file / edit_file ---------------------------------------------
   if (tool === 'write_file' || tool === 'edit_file') {
-    const filePath = extractFilePath(input);
-    return classifyFilePath(filePath, ctx);
+    return classifyFilePath(extractFilePath(input), ctx);
   }
 
   // ---- patch_apply ---------------------------------------------------------
   // patch_apply atomically writes multiple files; classify by the highest-risk
   // path across the entire changes array. An empty changes array is safe.
-  if (tool === 'patch_apply') {
-    const obj =
-      typeof input === 'object' && input !== null
-        ? (input as Record<string, unknown>)
-        : {};
-    const changes = Array.isArray(obj['changes']) ? obj['changes'] : [];
-    let highest: RiskLevel = 'safe';
-    for (const change of changes) {
-      if (typeof change !== 'object' || change === null) continue;
-      const p = (change as Record<string, unknown>)['path'];
-      const filePath = typeof p === 'string' ? p : '';
-      const level = classifyFilePath(filePath, ctx);
-      if (level === 'high') return 'high';
-      if (level === 'medium') highest = 'medium';
-    }
-    return highest;
-  }
+  if (tool === 'patch_apply') return classifyPatchApply(input, ctx);
 
   // ---- read-class tools ---------------------------------------------------
   // Derive from tool-category taxonomy rather than a local hand-maintained list.
@@ -447,14 +422,12 @@ export function classifyRisk(
   // (notably missing memory_search). Now any tool that categorizeTool returns
   // 'read' for is safe by default; new read tools automatically get the right
   // risk level without a secondary edit here.
-  if (categorizeTool(toolName) === 'read') {
-    return 'safe';
-  }
+  if (categorizeTool(toolName) === 'read') return { level: 'safe' };
 
   // ---- outbound communication --------------------------------------------
   if (tool === 'send_telegram') {
     // Can't be unsent — medium risk.
-    return 'medium';
+    return { level: 'medium' };
   }
 
   // ---- MCP tools ----------------------------------------------------------
@@ -475,15 +448,16 @@ export function classifyRisk(
   // Prefix test uses the already-lowercased `tool` so mixed-case `Mcp__…` names
   // are classified too, not silently dropped to the 'safe' default below.
   if (tool.startsWith('mcp__')) {
-    const tokens = mcpSubNameTokens(tool);
-    if (tokens.some((t) => DESTRUCTIVE_VERBS.has(t))) return 'high';
-    return 'medium';
+    const verb = mcpSubNameTokens(tool).find((t) => DESTRUCTIVE_VERBS.has(t));
+    if (verb !== undefined) return { level: 'high', reason: `mcp-destructive-verb: ${verb}` };
+    return { level: 'medium' };
   }
 
   // ---- schedule mutations --------------------------------------------------
   // See classifyScheduleMutation for the full rule set and self-disable carve-out.
   if (tool === 'create_schedule' || tool === 'cancel_schedule' || tool === 'update_schedule') {
-    return classifyScheduleMutation(tool, input, ctx);
+    const level = classifyScheduleMutation(tool, input, ctx);
+    return level === 'high' ? { level, reason: `schedule-mutation: ${tool}` } : { level };
   }
 
   // ---- worktree lifecycle --------------------------------------------------
@@ -503,9 +477,11 @@ export function classifyRisk(
         ? (input as Record<string, unknown>)
         : {};
     const action = typeof obj['action'] === 'string' ? obj['action'] : '';
-    if (action === 'list') return 'safe';
-    if (action === 'remove' && obj['force'] === true) return 'high';
-    return 'medium';
+    if (action === 'list') return { level: 'safe' };
+    if (action === 'remove' && obj['force'] === true) {
+      return { level: 'high', reason: 'worktree-force-remove' };
+    }
+    return { level: 'medium' };
   }
 
   // ---- browser actions -----------------------------------------------------
@@ -516,18 +492,14 @@ export function classifyRisk(
   // generally recoverable (navigate away, close the tab) and the AFK posture
   // allows medium ops unattended. browser_screenshot and browser_observe are
   // read-only; browser_close is a cleanup op — all safe.
-  if (tool === 'browser_act' || tool === 'browser_open') {
-    return 'medium';
-  }
+  if (tool === 'browser_act' || tool === 'browser_open') return { level: 'medium' };
 
   // ---- web_scrape ----------------------------------------------------------
   // web_scrape issues outbound HTTP requests (and optionally headless-browser
   // renders for JS-heavy pages). It may hit rate-limited, metered, or
   // auth-gated endpoints. 'medium' — notable network side-effect but recoverable
   // and broadly necessary for autonomous research work in AFK mode.
-  if (tool === 'web_scrape') {
-    return 'medium';
-  }
+  if (tool === 'web_scrape') return { level: 'medium' };
 
   // ---- web_request ---------------------------------------------------------
   // web_request supports all HTTP methods, so risk is method-dependent:
@@ -544,9 +516,9 @@ export function classifyRisk(
         ? (input as Record<string, unknown>)
         : {};
     const rawMethod = typeof obj['method'] === 'string' ? obj['method'].toUpperCase() : '';
-    if (rawMethod === 'DELETE') return 'high';
-    if (rawMethod === 'GET' || rawMethod === 'HEAD' || rawMethod === 'OPTIONS') return 'safe';
-    return 'medium';
+    if (rawMethod === 'DELETE') return { level: 'high', reason: 'web-request: DELETE' };
+    if (rawMethod === 'GET' || rawMethod === 'HEAD' || rawMethod === 'OPTIONS') return { level: 'safe' };
+    return { level: 'medium' };
   }
 
   // ---- wait_for ------------------------------------------------------------
@@ -574,13 +546,13 @@ export function classifyRisk(
         typeof obj['command'] === 'string' ? obj['command'] : '';
       return classifyBash(cmd);
     }
-    if (condType === 'file' || condType === 'process') return 'safe';
+    if (condType === 'file' || condType === 'process') return { level: 'safe' };
     // url or unknown: treat as medium (outbound network).
-    return 'medium';
+    return { level: 'medium' };
   }
 
   // ---- unknown tool -------------------------------------------------------
   // Don't gate things we haven't classified — default to safe so the
   // classifier never blocks novel tools without an explicit rule.
-  return 'safe';
+  return { level: 'safe' };
 }
