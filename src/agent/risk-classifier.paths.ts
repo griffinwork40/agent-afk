@@ -13,41 +13,112 @@ import path from 'path';
 import { lstatSync, readlinkSync, realpathSync } from 'fs';
 import { safeRealpath, getWriteDenylist } from './tools/handlers/write-denylist.js';
 import { getAfkHome } from '../paths.js';
+import { sessionTmpdirRoot } from './session/session-tmpdir.js';
 import type { RiskContext, RiskVerdict } from './risk-classifier.js';
 
 /** Symlink hops followed for a dangling link before giving up (matches ELOOP
  *  and `MAX_LINK_HOPS` in tools/handlers/write-file.atomic.ts). */
 const MAX_LINK_HOPS = 40;
 
-let tempRootsCache: { key: string; roots: readonly string[] } | undefined;
+/**
+ * Cache key combines os.tmpdir() and sessionTmpdirRoot() so any change to
+ * either (TMPDIR env var or test override) busts the cache. We do NOT cache
+ * when any candidate was absent at probe time — the session root is created
+ * lazily on first shell spawn, so a missing dir must be re-checked next call.
+ */
+let tempRootsCache:
+  | { key: string; roots: readonly string[]; complete: boolean }
+  | undefined;
 
 /**
- * Realpath'd system temp roots: `os.tmpdir()` only.
+ * Pure predicate: is `st` a directory that no other local user can write into?
  *
- * Invariant: roots are harness-derived (OS + TMPDIR), never model-authored, so
- * the carve-out adds no new trust channel. A root whose realpath fails is
- * skipped (fail closed: no carve-out).
- * Cached per `os.tmpdir()` value so a TMPDIR change is picked up.
+ * Rules (applied in order):
+ *   1. Must be a real directory (not a symlink).
+ *   2. On POSIX when `uid` is defined: must be owned by `uid`.
+ *   3. On win32 (`platform === 'win32'`): mode bits are meaningless (NTFS uses
+ *      ACLs), so the mode check is skipped.
+ *   4. On POSIX: `(mode & 0o022) === 0` — no group-write, no other-write.
  *
- * The shared POSIX `/tmp` is excluded even on platforms where it differs from
- * `os.tmpdir()` (e.g. macOS, where `/tmp → /private/tmp` but `os.tmpdir()`
- * returns a per-user dir). Reason: `/tmp` is world-writable and the gate-time
- * symlink check cannot close a write-time TOCTOU race — another local user can
- * plant `/tmp/<name> → ~/.zshrc` between the gate and the write. On Linux,
- * `os.tmpdir()` is usually `/tmp` itself, where the kernel's
- * `fs.protected_symlinks` default mitigates the race.
+ * The predicate is PURE: it takes a synthetic-stat-shaped object, a uid, and a
+ * platform string, so it can be unit-tested on any host without touching the
+ * filesystem or branching on the host platform.
+ *
+ * @param st   Stat-shaped object (from lstatSync or synthetic for testing).
+ * @param uid  process.getuid() result — undefined on win32.
+ * @param platform  process.platform value.
+ */
+export function isPrivateTempRoot(
+  st: { isDirectory(): boolean; isSymbolicLink(): boolean; uid: number; mode: number },
+  uid: number | undefined,
+  platform: NodeJS.Platform,
+): boolean {
+  if (!st.isDirectory() || st.isSymbolicLink()) return false;
+  if (uid !== undefined && st.uid !== uid) return false;
+  if (platform === 'win32') return true;
+  return (st.mode & 0o022) === 0;
+}
+
+/**
+ * Realpath'd private temp roots, ordered: session root first, then os.tmpdir().
+ *
+ * Invariant: only directories no other local user can write into are included.
+ *   - The per-process session root (`sessionTmpdirRoot()`, typically
+ *     `/tmp/afk-<uid>` on darwin or `<os.tmpdir()>/afk-<uid>` elsewhere) is
+ *     included when lstat shows a real directory owned by this process's uid
+ *     with no group/other-write bits (on POSIX).
+ *   - `os.tmpdir()` is included only when `(mode & 0o022) === 0` on POSIX
+ *     (macOS per-user /var/folders/…/T is 0700; Linux /tmp 1777 is excluded).
+ *     On win32 (per-user profile temp; mode bits meaningless) it is always
+ *     included.
+ *   - Shared world-writable dirs (Linux /tmp, 0o1777) are never roots.
+ *     The gate-time symlink check cannot close a write-time TOCTOU race;
+ *     another local user can pre-create a directory and swap a path to ~/.bashrc
+ *     between gate and write.
+ *   - A root whose realpath fails is skipped (fail closed: no carve-out).
+ *
+ * Cache: keyed on `os.tmpdir() + sessionTmpdirRoot()`. When any candidate was
+ * absent at probe time the result is NOT cached, so the session root (created
+ * lazily on first shell spawn) is picked up on the next call.
  */
 export function getTempRoots(): readonly string[] {
   const tmp = os.tmpdir();
-  if (tempRootsCache && tempRootsCache.key === tmp) return tempRootsCache.roots;
+  const sessRoot = sessionTmpdirRoot();
+  const cacheKey = tmp + '\0' + sessRoot;
+  if (tempRootsCache && tempRootsCache.key === cacheKey && tempRootsCache.complete) {
+    return tempRootsCache.roots;
+  }
+
+  const uid: number | undefined =
+    typeof process.getuid === 'function' ? process.getuid() : undefined;
+  const platform = process.platform;
+
   const roots: string[] = [];
+  let allPresent = true;
+
+  // (a) Session root first — private per-uid directory.
+  try {
+    const st = lstatSync(sessRoot);
+    if (isPrivateTempRoot(st, uid, platform)) {
+      roots.push(realpathSync(sessRoot));
+    }
+  } catch {
+    // Dir does not exist yet (lazy creation) — skip but do not negatively cache.
+    allPresent = false;
+  }
+
+  // (b) os.tmpdir() — included only when private (or win32).
   try {
     const real = realpathSync(tmp);
-    roots.push(real);
+    const st = lstatSync(real);
+    if (isPrivateTempRoot(st, uid, platform)) {
+      if (!roots.includes(real)) roots.push(real);
+    }
   } catch {
-    // Unresolvable root: no carve-out for it.
+    allPresent = false;
   }
-  tempRootsCache = { key: tmp, roots };
+
+  tempRootsCache = { key: cacheKey, roots, complete: allPresent };
   return roots;
 }
 
@@ -144,7 +215,7 @@ function afkHomeResolved(): string | null {
 
 /**
  * True when a write that escapes the workspace may still proceed because both
- * the named path and the writer's final target sit inside a system temp root,
+ * the named path and the writer's final target sit inside a private temp root,
  * the final target is neither denylisted nor inside `.git/`, and the target
  * is NOT inside the AFK home directory (skills/, agent-framework/, plugins/
  * etc. must not be silently writable via a temp-root carve-out).
@@ -177,7 +248,7 @@ export function classifyFilePath(filePath: string, ctx: RiskContext): RiskVerdic
     const realRoot = safeRealpath(ctx.workspaceRoot);
     // On win32, path.relative returns an absolute path when root and target
     // are on different drives; isOutsideRoot treats that as an escape too.
-    // Invariant: the system temp dir is a sanctioned scratch area in AFK mode,
+    // Invariant: private temp roots are sanctioned scratch areas in AFK mode,
     // so a temp write is not an escape. Checked after denylist/.git (above) and
     // on the writer's final target (finalWriteTarget), so a temp symlink cannot
     // carry the bytes outside tmp.

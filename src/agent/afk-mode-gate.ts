@@ -21,8 +21,10 @@
  *     `git reset --hard`, `mkfs`/`dd`/`diskutil`, pipe-to-shell, `eval`,
  *     `chmod`/`chown`)
  *   - writes that escape the workspace, hit the write-denylist (`~/.ssh`,
- *     `/etc`, …), or target the `.git` object store. The system temp dir
- *     (`os.tmpdir()`, `/tmp`) is NOT an escape (risk-classifier.paths.ts)
+ *     `/etc`, …), or target the `.git` object store. Private temp roots
+ *     (per-uid dirs with no group/other-write bits — see `getTempRoots()` in
+ *     `risk-classifier.paths.ts`) are NOT an escape; shared world-writable
+ *     dirs like Linux `/tmp` (mode 1777) are excluded from the carve-out
  *   - schedule mutations: `create_schedule` / `update_schedule` / `cancel_schedule` — modify the
  *     daemon cron store with potential immediate live-sync side-effects
  *   - MCP tools whose sub-name contains a destructive verb (the full list is
@@ -84,6 +86,7 @@ import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js
 import type { TraceSink } from './trace/index.js';
 import path from 'path';
 import { classifyRiskDetailed } from './risk-classifier.js';
+import { getTempRoots } from './risk-classifier.paths.js';
 import { elicitationRouter } from './elicitation-router.js';
 import { emitHookDecision } from './trace/emit.js';
 import { redactInlineSecrets } from './session/prompt-dump.js';
@@ -530,9 +533,15 @@ function blockDecision(toolName: string, why: string, refusal: RefusalCtx): Hook
     `, and ${why}. `;
   const tail =
     refusal.daemonCwd !== undefined
-      ? `This is a scheduled daemon task: no operator can approve this run. Write inside ` +
-        `the task working directory (${refusal.daemonCwd}) or the system temp dir, or use ` +
-        `another safe approach; if the task cannot complete, report Blocked.`
+      ? (() => {
+          const roots = getTempRoots();
+          const safeTemp = roots.length > 0 ? ` or a private temp root (${roots[0]})` : '';
+          return (
+            `This is a scheduled daemon task: no operator can approve this run. Write inside ` +
+            `the task working directory (${refusal.daemonCwd})${safeTemp}, or use ` +
+            `another safe approach; if the task cannot complete, report Blocked.`
+          );
+        })()
       : `Push an Asking summary to Telegram (send_telegram) and stop, ` +
         `or have the operator run /afk off and take over.`;
   return { decision: 'block', reason: head + tail };

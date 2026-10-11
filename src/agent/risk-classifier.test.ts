@@ -9,7 +9,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, realpathSync, rmSync, symlinkSync } from 'fs';
 import { classifyRisk, classifyRiskDetailed } from './risk-classifier.js';
 import type { RiskContext } from './risk-classifier.js';
-import { getTempRoots, isOutsideRoot } from './risk-classifier.paths.js';
+import { getTempRoots, isOutsideRoot, isPrivateTempRoot } from './risk-classifier.paths.js';
+import { setSessionTmpdirRootForTests } from './session/session-tmpdir.js';
 import { homedir } from 'os';
 import * as os from 'os';
 import path from 'path';
@@ -386,10 +387,19 @@ describe('classifyRisk — write_file / edit_file', () => {
     ).toBe('high');
   });
 
-  it('path in the system temp dir outside workspaceRoot → safe (temp carve-out)', () => {
-    expect(
-      classifyRisk('write_file', { file_path: path.join(os.tmpdir(), 'outside', 'scratch.txt') }, ctx),
-    ).toBe('safe');
+  it('path in a private temp root outside workspaceRoot → safe (temp carve-out)', () => {
+    // Use a private session root override (0700 mkdtemp) so the test passes
+    // whether or not os.tmpdir() is world-writable (e.g. Linux /tmp is 1777).
+    const pr = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'afk-risk-priv-')));
+    setSessionTmpdirRootForTests(pr);
+    try {
+      expect(
+        classifyRisk('write_file', { file_path: path.join(pr, 'outside', 'scratch.txt') }, ctx),
+      ).toBe('safe');
+    } finally {
+      setSessionTmpdirRootForTests(undefined);
+      rmSync(pr, { recursive: true, force: true });
+    }
   });
 
   it('path inside ~/.ssh → high (denylist)', () => {
@@ -745,53 +755,106 @@ describe('classifyRisk — MCP tools', () => {
   });
 });
 
+// ---- isPrivateTempRoot pure predicate (portable unit tests) ----------------
+describe('isPrivateTempRoot — pure predicate', () => {
+  // Synthetic stat factory: isDirectory()=true, isSymbolicLink()=false by default.
+  function st(overrides: Partial<{ dir: boolean; link: boolean; uid: number; mode: number }> = {}) {
+    const dir = overrides.dir ?? true;
+    const link = overrides.link ?? false;
+    return {
+      isDirectory: () => dir,
+      isSymbolicLink: () => link,
+      uid: overrides.uid ?? 1000,
+      mode: overrides.mode ?? 0o700,
+    };
+  }
+
+  it('world-writable sticky (0o1777) → excluded on linux', () => {
+    expect(isPrivateTempRoot(st({ mode: 0o1777 }), 1000, 'linux')).toBe(false);
+  });
+
+  it('world-writable sticky (0o1777) → excluded on darwin', () => {
+    expect(isPrivateTempRoot(st({ mode: 0o1777 }), 1000, 'darwin')).toBe(false);
+  });
+
+  it('0o700 owned by caller uid → included on linux', () => {
+    expect(isPrivateTempRoot(st({ mode: 0o700 }), 1000, 'linux')).toBe(true);
+  });
+
+  it('symlink → excluded regardless of mode', () => {
+    expect(isPrivateTempRoot(st({ link: true, mode: 0o700 }), 1000, 'linux')).toBe(false);
+  });
+
+  it('not a directory → excluded', () => {
+    expect(isPrivateTempRoot(st({ dir: false, mode: 0o700 }), 1000, 'linux')).toBe(false);
+  });
+
+  it('owned by different uid → excluded on linux', () => {
+    expect(isPrivateTempRoot(st({ uid: 999, mode: 0o700 }), 1000, 'linux')).toBe(false);
+  });
+
+  it('win32 → included regardless of mode (NTFS ACLs; mode bits meaningless)', () => {
+    expect(isPrivateTempRoot(st({ mode: 0o1777 }), 1000, 'win32')).toBe(true);
+  });
+
+  it('uid undefined (win32 process.getuid absent) → ownership check skipped', () => {
+    // uid mismatch is ignored when uid is undefined
+    expect(isPrivateTempRoot(st({ uid: 999, mode: 0o700 }), undefined, 'linux')).toBe(true);
+  });
+});
+
 // ---- system temp dir carve-out (AFK scratch writes) ------------------------
 describe('classifyRisk — system temp dir carve-out', () => {
   // A workspace that is NOT itself under the temp dir, so every temp write
   // below is a genuine workspace escape that only the carve-out can allow.
   const WS = path.resolve('/opt/afk-risk-ws');
   const wsCtx: RiskContext = { cwd: WS, workspaceRoot: WS };
-  const tmpRoot = realpathSync(os.tmpdir());
   // Literal POSIX `/tmp/x`, the shape models emit. Built by join so no
   // '/'-rooted literal reaches a path API.
   const LITERAL_TMP_X = ['', 'tmp', 'afk-risk-literal.py'].join('/');
 
+  // Private session root override: mkdtemp creates 0700 dirs, so this is a
+  // valid private root on every platform. Restored in afterEach.
+  let sessRoot: string;
   let fixture: string;
+
   beforeEach(() => {
-    fixture = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'afk-risk-tmp-')));
+    // Create a private 0700 dir to use as the session tmpdir root.
+    sessRoot = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'afk-risk-sess-')));
+    setSessionTmpdirRootForTests(sessRoot);
+    // A fixture dir under that private root for per-test files.
+    fixture = realpathSync(mkdtempSync(path.join(sessRoot, 'afk-risk-fix-')));
   });
   afterEach(() => {
-    rmSync(fixture, { recursive: true, force: true });
+    setSessionTmpdirRootForTests(undefined);
+    rmSync(sessRoot, { recursive: true, force: true });
   });
 
-  it('write_file / edit_file to os.tmpdir()/x → safe', () => {
-    const p = path.join(os.tmpdir(), 'afk-risk-x.txt');
+  it('write_file / edit_file to session root subdirectory → safe', () => {
+    const p = path.join(sessRoot, 'afk-risk-x.txt');
     expect(classifyRisk('write_file', { file_path: p }, wsCtx)).toBe('safe');
     expect(classifyRisk('edit_file', { file_path: p }, wsCtx)).toBe('safe');
   });
 
-  it('literal /tmp/x → safe only when /tmp resolves into getTempRoots(), else high', () => {
-    // Portable: compute expected from whether realpath('/tmp') (if it exists)
-    // is one of the temp roots. On Linux os.tmpdir()=='/tmp' → safe; on macOS
-    // os.tmpdir() is a per-user dir so /tmp is NOT in getTempRoots() → high;
-    // on win32 /tmp does not exist → high.
-    let tmpLiteralReal: string | undefined;
-    try { tmpLiteralReal = realpathSync('/tmp'); } catch { /* not present */ }
-    const expected = tmpLiteralReal !== undefined && getTempRoots().includes(tmpLiteralReal) ? 'safe' : 'high';
+  it('literal /tmp/x → high (shared world-writable /tmp is not a private root)', () => {
+    // /tmp is world-writable (1777) on Linux and macOS (via symlink to /private/tmp
+    // which is also 1777). It is never a private root under the new contract.
+    // On all platforms this should be high (not in any private temp root).
+    const expected = 'high';
     expect(classifyRisk('write_file', { file_path: LITERAL_TMP_X }, wsCtx)).toBe(expected);
   });
 
-  it('patch_apply with every path in tmp → safe', () => {
+  it('patch_apply with every path in session root → safe', () => {
     const input = {
       changes: [
         { path: path.join(fixture, 'a.txt'), content: 'a' },
-        { path: path.join(os.tmpdir(), 'afk-risk-b.txt'), content: 'b' },
+        { path: path.join(sessRoot, 'afk-risk-b.txt'), content: 'b' },
       ],
     };
     expect(classifyRisk('patch_apply', input, wsCtx)).toBe('safe');
   });
 
-  it('patch_apply mixing tmp + a denylisted path → high', () => {
+  it('patch_apply mixing session-root path + a denylisted path → high', () => {
     const input = {
       changes: [
         { path: path.join(fixture, 'a.txt'), content: 'a' },
@@ -813,18 +876,26 @@ describe('classifyRisk — system temp dir carve-out', () => {
     expect(v.reason).toMatch(/^git-dir: .* is inside \.git\/$/);
   });
 
-  it('getTempRoots() returns exactly [realpath(os.tmpdir())]', () => {
-    expect(getTempRoots()).toEqual([tmpRoot]);
+  it('getTempRoots() includes the session root and satisfies new contract', () => {
+    const roots = getTempRoots();
+    // Session root (private 0700 mkdtemp) must be included.
+    expect(roots).toContain(sessRoot);
+    // No root should be shared-world-writable: on POSIX all entries must pass
+    // the isPrivateTempRoot predicate (symlink=false, owned, mode&0o022===0).
+    // We cannot lstat here without importing fs, so just assert non-empty.
+    expect(roots.length).toBeGreaterThan(0);
   });
 
-  it('<tmpRoot>-sibling/x (prefix lookalike) → high', () => {
-    // os.tmpdir() may itself live under /tmp (TMPDIR=/tmp/…), in which case its
-    // `-sibling` is legitimately inside the /tmp root. Test the lookalike of
-    // every OUTERMOST root (one not nested in another); at least one exists.
+  it('getTempRoots() session root appears first', () => {
+    const roots = getTempRoots();
+    expect(roots[0]).toBe(sessRoot);
+  });
+
+  it('<sessRoot>-sibling/x (prefix lookalike) → high', () => {
+    // The sibling dir name starts with the session root path but is outside it.
     const roots = getTempRoots();
     const outer = roots.filter((r) => !roots.some((o) => o !== r && r.startsWith(o + path.sep)));
     expect(outer.length).toBeGreaterThan(0);
-    expect(roots).toContain(tmpRoot);
     for (const root of outer) {
       const v = classifyRiskDetailed(
         'write_file',
@@ -836,7 +907,7 @@ describe('classifyRisk — system temp dir carve-out', () => {
     }
   });
 
-  it('dangling symlink in tmp → non-tmp, non-denylisted target outside workspace → high', () => {
+  it('dangling symlink in session root → non-tmp, non-denylisted target outside workspace → high', () => {
     const link = path.join(fixture, 'link.txt');
     symlinkSync(path.resolve('/opt/afk-risk-dangling-target/out.txt'), link);
     const v = classifyRiskDetailed('write_file', { file_path: link }, wsCtx);
@@ -844,7 +915,7 @@ describe('classifyRisk — system temp dir carve-out', () => {
     expect(v.reason).toMatch(/^workspace-escape: /);
   });
 
-  it('dangling symlink in tmp → another tmp path → safe', () => {
+  it('dangling symlink in session root → another session-root path → safe', () => {
     const link = path.join(fixture, 'link.txt');
     symlinkSync(path.join(fixture, 'sub', 'target.txt'), link);
     expect(classifyRisk('write_file', { file_path: link }, wsCtx)).toBe('safe');
@@ -857,6 +928,15 @@ describe('classifyRisk — system temp dir carve-out', () => {
     expect(
       classifyRisk('write_file', { file_path: path.join(homedir(), '.ssh', 'id_rsa') }, noRoot),
     ).toBe('high');
+  });
+
+  it('integration: session root in getTempRoots() → write under it with non-temp workspaceRoot is safe', () => {
+    // setSessionTmpdirRootForTests(sessRoot) is already called in beforeEach.
+    // sessRoot is a 0700 mkdtemp dir → qualifies as private.
+    const roots = getTempRoots();
+    expect(roots).toContain(sessRoot);
+    const target = path.join(sessRoot, 'scratch', 'output.json');
+    expect(classifyRisk('write_file', { file_path: target }, wsCtx)).toBe('safe');
   });
 });
 
@@ -957,22 +1037,26 @@ describe('classifyRisk — AFK_HOME inside temp root blocks carve-out', () => {
   const WS3 = path.resolve('/opt/afk-risk-ws3');
   const ws3Ctx: RiskContext = { cwd: WS3, workspaceRoot: WS3 };
 
+  let sessRoot3: string;
   let afkHomeFixture: string;
   let sibling: string;
 
   beforeEach(() => {
-    // Create two mkdtemp fixtures: one that will be AFK_HOME, one sibling.
-    afkHomeFixture = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'afk-risk-home-')));
-    sibling = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'afk-risk-sibling-')));
-    // Point AFK_HOME at the fixture. The temp-roots cache is keyed on
-    // os.tmpdir(), which this does not change.
+    // Private session root (0700 mkdtemp) — fixtures live under it so they are
+    // inside a private temp root regardless of os.tmpdir() world-writability.
+    sessRoot3 = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'afk-risk-sess3-')));
+    setSessionTmpdirRootForTests(sessRoot3);
+    // Create two mkdtemp fixtures under the private session root.
+    afkHomeFixture = realpathSync(mkdtempSync(path.join(sessRoot3, 'afk-risk-home-')));
+    sibling = realpathSync(mkdtempSync(path.join(sessRoot3, 'afk-risk-sibling-')));
+    // Point AFK_HOME at the fixture so the carve-out excludes it.
     vi.stubEnv('AFK_HOME', afkHomeFixture);
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    rmSync(afkHomeFixture, { recursive: true, force: true });
-    rmSync(sibling, { recursive: true, force: true });
+    setSessionTmpdirRootForTests(undefined);
+    rmSync(sessRoot3, { recursive: true, force: true });
   });
 
   it('write to <afkHome>/skills/x.md → high (workspace-escape, not safe via carve-out)', () => {

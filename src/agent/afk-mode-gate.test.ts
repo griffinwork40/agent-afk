@@ -1,9 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { createAfkModeGate } from './afk-mode-gate.js';
+import { setSessionTmpdirRootForTests } from './session/session-tmpdir.js';
 import type { PermissionMode, ElicitationResult, ElicitationRequest } from './types/sdk-types.js';
 import type { TraceWriter } from './trace/index.js';
 
@@ -1125,14 +1126,23 @@ describe('createAfkModeGate — daemon self-disable carve-out (#3464)', () => {
     expect(route).not.toHaveBeenCalled();
   });
 
-  it('daemon write_file into the system temp dir → allowed', async () => {
-    const { gate } = makeDaemonGate('my-task');
-    const result = await gate({
-      event: 'PreToolUse',
-      toolName: 'write_file',
-      input: { file_path: join(tmpdir(), 'afk-gate-daemon-scratch.py') },
-    });
-    expect(result).toEqual({});
+  it('daemon write_file into a private temp root → allowed', async () => {
+    // Use a private session root (0700 mkdtemp) so this passes whether or not
+    // os.tmpdir() is world-writable (Linux /tmp is excluded by the new contract).
+    const sessRoot = realpathSync(mkdtempSync(join(tmpdir(), 'afk-gate-dsess-')));
+    setSessionTmpdirRootForTests(sessRoot);
+    try {
+      const { gate } = makeDaemonGate('my-task');
+      const result = await gate({
+        event: 'PreToolUse',
+        toolName: 'write_file',
+        input: { file_path: join(sessRoot, 'afk-gate-daemon-scratch.py') },
+      });
+      expect(result).toEqual({});
+    } finally {
+      setSessionTmpdirRootForTests(undefined);
+      rmSync(sessRoot, { recursive: true, force: true });
+    }
   });
 
   it('cancel_schedule without daemonTaskId (non-daemon surface) → blocked', async () => {
@@ -1191,10 +1201,14 @@ describe('createAfkModeGate — specific block reasons and temp-dir writes', () 
     expect(request?.message).toContain('Reason: workspace-escape: ');
   });
 
-  it('write_file to the system temp dir in autonomous mode is allowed', async () => {
-    const { gate, route } = makeGate(true);
-    const scratch = mkdtempSync(join(tmpdir(), 'afk-gate-tmp-'));
+  it('write_file to a private temp root in autonomous mode is allowed', async () => {
+    // Use a private session root (0700 mkdtemp) so this passes whether or not
+    // os.tmpdir() is world-writable (Linux /tmp is excluded by the new contract).
+    const sessRoot = realpathSync(mkdtempSync(join(tmpdir(), 'afk-gate-asess-')));
+    setSessionTmpdirRootForTests(sessRoot);
+    const scratch = mkdtempSync(join(sessRoot, 'afk-gate-tmp-'));
     try {
+      const { gate, route } = makeGate(true);
       const result = await gate({
         event: 'PreToolUse',
         toolName: 'write_file',
@@ -1203,7 +1217,8 @@ describe('createAfkModeGate — specific block reasons and temp-dir writes', () 
       expect(result).toEqual({});
       expect(route).not.toHaveBeenCalled();
     } finally {
-      rmSync(scratch, { recursive: true, force: true });
+      setSessionTmpdirRootForTests(undefined);
+      rmSync(sessRoot, { recursive: true, force: true });
     }
   });
 });
