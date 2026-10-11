@@ -15,6 +15,7 @@
  */
 
 import { readResponseBytesWithLimit } from './handlers/message.media-helpers.js';
+import { errorMessage } from '../utils/errors.js';
 
 export type DownloadResult =
   | { status: 'ok'; bytes: Buffer }
@@ -81,7 +82,7 @@ export async function downloadTelegramFile(
   } catch (err) {
     // Network-level failures: ECONNREFUSED, AbortError (timeout), opaque
     // redirect error from redirect:'error'. SI-6: strip the URL entirely.
-    const raw = err instanceof Error ? err.message : String(err);
+    const raw = errorMessage(err);
     // Replace any path-like token reference in thrown error text just in case.
     const safeMessage = raw.replace(/\/bot[^/\s]+(?:\/|$)/g, '/bot[REDACTED]/');
     return { status: 'network-error', safeMessage };
@@ -96,7 +97,7 @@ export async function downloadTelegramFile(
     readResult = await readResponseBytesWithLimit(response, maxBytes);
   } catch (err) {
     // Mid-stream body read failure (ECONNRESET, abort after headers).
-    const raw = err instanceof Error ? err.message : String(err);
+    const raw = errorMessage(err);
     const safeMessage = raw.replace(/\/bot[^/\s]+(?:\/|$)/g, '/bot[REDACTED]/');
     return { status: 'network-error', safeMessage };
   }
