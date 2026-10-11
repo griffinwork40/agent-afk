@@ -11,6 +11,8 @@ export type MessageRole = 'user' | 'assistant';
 
 /** Metadata extracted from a completed assistant turn (result event) */
 export interface ResponseMetadata extends Record<string, unknown> {
+  /** Public target for AgentSession.rewindFiles after a checkpointed turn. */
+  userMessageId?: string;
   /** SDK session ID */
   sessionId?: string;
   /** Reason the model stopped generating */

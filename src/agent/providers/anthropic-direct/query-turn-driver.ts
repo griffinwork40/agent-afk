@@ -158,9 +158,9 @@ function buildTurnRunInput(
  * user turn (when checkpointing is enabled). Returns the registry so the
  * finally block can clear it, or `undefined` when checkpointing is disabled.
  */
-function beginTurnCheckpoint(ctx: TurnDriverContext): FileCheckpointRegistry | undefined {
+function beginTurnCheckpoint(ctx: TurnDriverContext, userMessageId?: string): FileCheckpointRegistry | undefined {
   if (!ctx.state.enableFileCheckpointing) return undefined;
-  const turnId = randomUUID();
+  const turnId = userMessageId ?? randomUUID();
   const registry = createFileCheckpointRegistry(ctx.initSessionId, turnId);
   ctx.state.currentTurnId = turnId;
   if ('fileCheckpointWiring' in ctx.state.toolDispatcher) {
@@ -263,7 +263,7 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
       ctx.state.messages.push({ role: 'user', content: turn.content });
 
       // File-checkpoint: wire a fresh registry for this turn (no-op when disabled).
-      beginTurnCheckpoint(ctx);
+      const checkpoint = beginTurnCheckpoint(ctx, turn.userMessageId);
 
       const system = ctx.composeSystem();
 
@@ -298,7 +298,10 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
             ctx.state.lastUsage = event.usage;
             ctx.abort.clear(controller);
             turnEmittedTerminal = true;
-            yield event;
+            // Invariant: release mutation wiring before publishing completion;
+            // consumers may rewind without advancing this generator again.
+            endTurnCheckpoint(ctx);
+            yield { ...event, ...(checkpoint ? { userMessageId: checkpoint.turnId } : {}) };
             if (ctx.state.closed) return;
             continue;
           }
@@ -326,7 +329,11 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
           // so a terminal event is usually already delivered. Synthesize one
           // only if the throw pre-empted it, so the consumer unwinds instead
           // of hanging on a `next()` that never resolves.
-          if (!turnEmittedTerminal) yield ctx.makeInterruptedTurnEvent();
+          if (!turnEmittedTerminal) {
+            endTurnCheckpoint(ctx);
+            const event = ctx.makeInterruptedTurnEvent();
+            yield { ...event, ...(checkpoint ? { userMessageId: checkpoint.turnId } : {}) };
+          }
           continue;
         }
         const e = annotateFastError(err, fastDecision?.effective === true);
@@ -353,7 +360,10 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
       // nulls the slot but does NOT reset `signal.aborted`.)
       if (ctx.state.closed) return;
       if (controller.signal.aborted) {
-        if (!turnEmittedTerminal) yield ctx.makeInterruptedTurnEvent();
+        if (!turnEmittedTerminal) {
+          const event = ctx.makeInterruptedTurnEvent();
+          yield { ...event, ...(checkpoint ? { userMessageId: checkpoint.turnId } : {}) };
+        }
         continue;
       }
 

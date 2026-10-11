@@ -313,6 +313,8 @@ export type ProviderEvent =
     }
   | {
       type: 'turn.completed';
+      /** Public file rewind target, present when file checkpointing is enabled. */
+      userMessageId?: string;
       usage: ProviderUsage;
       sessionId?: string;
     }
@@ -414,6 +416,8 @@ export interface ProviderUserTurn {
    * must stringify or reject array content at the adapter boundary.
    */
   content: string | ContentBlockParam[];
+  /** Optional stable file rewind target; otherwise emitted on turn.completed. */
+  userMessageId?: string;
   /** Associated harness session id, when known. */
   sessionId?: string;
 }

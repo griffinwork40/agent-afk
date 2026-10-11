@@ -102,7 +102,7 @@ export function parsePersistedOutput(
   };
 }
 
-export function usageToMetadata(usage: ProviderUsage, sessionId: string | undefined): ResponseMetadata {
+export function usageToMetadata(usage: ProviderUsage, sessionId: string | undefined, userMessageId?: string): ResponseMetadata {
   const usageObj: Record<string, unknown> = { ...(usage.raw ?? {}) };
   if (usage.inputTokens !== undefined) usageObj['input_tokens'] = usage.inputTokens;
   if (usage.outputTokens !== undefined) usageObj['output_tokens'] = usage.outputTokens;
@@ -115,6 +115,7 @@ export function usageToMetadata(usage: ProviderUsage, sessionId: string | undefi
   if (usage.contextWindowTokens !== undefined) usageObj['context_window_tokens'] = usage.contextWindowTokens;
 
   return {
+    ...(userMessageId !== undefined ? { userMessageId } : {}),
     sessionId,
     stopReason: usage.stopReason ?? undefined,
     resultSubtype: usage.resultSubtype,
@@ -405,7 +406,7 @@ export function transformProviderEvent(
       return { type: 'suggestion', suggestion: event.suggestion };
 
     case 'turn.completed': {
-      const metadata = usageToMetadata(event.usage, event.sessionId ?? deps.getSessionMetadata().sessionId);
+      const metadata = usageToMetadata(event.usage, event.sessionId ?? deps.getSessionMetadata().sessionId, event.userMessageId);
       // Drain the per-turn successful-tool accumulator onto the metadata so the
       // returned Message carries the raw observation (empty list ⇒ omit the
       // field, keeping the shape identical to today for tool-less turns).

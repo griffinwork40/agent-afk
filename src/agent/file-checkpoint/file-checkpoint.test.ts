@@ -166,6 +166,35 @@ describe('rewindFiles', () => {
     expect(result.error).toMatch(/No file checkpoint/);
   });
 
+  it('restores an existing file whose bytes equal the legacy new-file sentinel', async () => {
+    const file = path.join(tmpDir, 'sentinel.txt');
+    writeFileSync(file, NEW_FILE_SENTINEL);
+    await createFileCheckpointRegistry('sentinel-session', 'sentinel-turn', stateDir).snapshotFile(file);
+    writeFileSync(file, 'mutated');
+
+    const result = await rewindFiles(
+      { sessionId: 'sentinel-session', enableFileCheckpointing: true, _stateDir: stateDir },
+      'sentinel-turn',
+    );
+    expect(result.canRewind).toBe(true);
+    expect(existsSync(file)).toBe(true);
+    expect(readFileSync(file, 'utf8')).toBe(NEW_FILE_SENTINEL);
+  });
+
+  it('still deletes new files recorded by the legacy sentinel format', async () => {
+    const file = path.join(tmpDir, 'legacy.txt');
+    const turnDir = path.join(stateDir, 'file-checkpoints', 'legacy-session', 'legacy-turn');
+    mkdirSync(turnDir, { recursive: true });
+    writeFileSync(path.join(turnDir, Buffer.from(file).toString('base64url')), NEW_FILE_SENTINEL);
+    writeFileSync(file, 'created after checkpoint');
+    const result = await rewindFiles(
+      { sessionId: 'legacy-session', enableFileCheckpointing: true, _stateDir: stateDir },
+      'legacy-turn',
+    );
+    expect(result.canRewind).toBe(true);
+    expect(existsSync(file)).toBe(false);
+  });
+
   it('restores a modified file to its pre-turn content', async () => {
     const file = path.join(tmpDir, 'restore.txt');
     writeFileSync(file, 'pre-turn content');

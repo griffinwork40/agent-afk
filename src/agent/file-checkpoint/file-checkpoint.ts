@@ -67,10 +67,11 @@ export function decodePathKey(key: string): string {
 // the sidecar approach self-contained — rewindFiles checks for `.new` first
 // and never reads the snapshot body for new-file entries.
 //
-// NEW_FILE_SENTINEL is kept as a read-compatibility shim so that checkpoints
-// written by older versions of this module (which stored the sentinel in-band)
-// can still be rewound by rewindFiles.  It is only read in rewind-files.ts,
-// never written here.
+// Versioned turn directories use only sidecars for existence. Unversioned
+// legacy directories retain sentinel read compatibility; file contents in a
+// current checkpoint can never be interpreted as existence metadata.
+const FORMAT_FILE = '.format';
+const FORMAT_VERSION = '2';
 /** @deprecated Used only for reading legacy checkpoints written before the .new sidecar was introduced. */
 export const NEW_FILE_SENTINEL = '__afk_new_file__\n';
 
@@ -113,6 +114,13 @@ export function createFileCheckpointRegistry(
 
       // Create the turn dir on first use.
       await mkdir(turnDir, { recursive: true });
+      // Invariant: publish the format before any snapshot so current contents
+      // are never mistaken for legacy existence metadata.
+      try {
+        await writeFile(join(turnDir, FORMAT_FILE), FORMAT_VERSION, { flag: 'wx' });
+      } catch (e: unknown) {
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      }
 
       // Check if snapshot already exists on disk (cross-process dedup).
       try {
@@ -183,9 +191,10 @@ export function listTurnSnapshots(
   if (!existsSync(turnDir)) return [];
 
   const entries = readdirSync(turnDir, { withFileTypes: true });
+  const legacy = !existsSync(join(turnDir, FORMAT_FILE));
 
   return entries
-    .filter((e) => e.isFile() && !e.name.endsWith('.new'))
+    .filter((e) => e.isFile() && e.name !== FORMAT_FILE && !e.name.endsWith('.new'))
     .map((e) => {
       const snapshotPath = join(turnDir, e.name);
       const absPath = decodePathKey(e.name);
@@ -193,7 +202,7 @@ export function listTurnSnapshots(
       // Fall back to comparing snapshot content to the legacy sentinel string
       // for checkpoints written by older versions of this module.
       const hasSidecar = existsSync(`${snapshotPath}.new`);
-      const isNewFile = hasSidecar || readFileSync(snapshotPath, 'utf8') === NEW_FILE_SENTINEL;
+      const isNewFile = hasSidecar || (legacy && readFileSync(snapshotPath, 'utf8') === NEW_FILE_SENTINEL);
       return {
         absPath,
         snapshotPath,

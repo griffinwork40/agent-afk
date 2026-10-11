@@ -402,6 +402,9 @@ export class AnthropicDirectQuery implements ProviderQuery {
     userMessageId: string,
     options?: { dryRun?: boolean },
   ): Promise<ProviderRewindResult> {
+    if (this.state.currentTurnId !== undefined) {
+      return { canRewind: false, error: 'Cannot rewind files while a turn is in flight.' };
+    }
     return rewindFilesImpl(
       {
         sessionId: this.initSessionId,

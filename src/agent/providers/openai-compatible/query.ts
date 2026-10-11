@@ -349,7 +349,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
         const turnResult = nextOrClose as IteratorResult<ProviderUserTurn>;
         if (turnResult.done) break;
 
-        yield* this.runTurn(turnResult.value.content);
+        yield* this.runTurn(turnResult.value.content, turnResult.value.userMessageId);
 
         // Auto-compaction fires at the natural turn boundary.
         if (this.autoCompactThreshold !== undefined && !this.closed) {
@@ -419,7 +419,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
    * token-refresh retry on 401 (see query/token-refresh.ts, issue #3396).
    * `this` satisfies `TurnDriverContext` so all live field reads work.
    */
-  private async *runTurn(content: ProviderUserTurn['content']): AsyncGenerator<ProviderEvent> {
+  private async *runTurn(content: ProviderUserTurn['content'], userMessageId?: string): AsyncGenerator<ProviderEvent> {
     const controller = this.abort.begin();
     if (controller.signal.aborted) return;
 
@@ -428,7 +428,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
 
     // File-checkpoint: wire a fresh registry onto the dispatcher so write-class
     // tool handlers snapshot files before mutation.
-    this.checkpoint.begin(this.toolDispatcher);
+    const checkpointId = this.checkpoint.begin(this.toolDispatcher, userMessageId);
 
     const trace = new TurnTrace(controller.signal, this.traceWriter, 'openai-compatible');
     this.fastTier.beginTurn(this.currentModel);
@@ -436,12 +436,12 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
       // Pass `this` — which implements TurnDriverContext — so every mutable
       // field read inside runTurnInner is always live (no stale snapshot).
       // wrapTurnWithOAuthRefresh is a no-op for non-chatgpt-oauth sessions.
-      yield* wrapTurnWithOAuthRefresh(
+      yield* this.checkpoint.events(wrapTurnWithOAuthRefresh(
         this,
         runTurnInner(this, content, controller, turnStartTime, taskId),
         () => runTurnInner(this, content, controller, turnStartTime, taskId),
         this._authDeps,
-      );
+      ), this.toolDispatcher, checkpointId);
     } finally {
       trace.finish(Date.now() - turnStartTime);
       this.checkpoint.end(this.toolDispatcher);

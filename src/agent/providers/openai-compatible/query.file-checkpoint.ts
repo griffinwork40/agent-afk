@@ -16,7 +16,7 @@ import {
   type FileCheckpointRegistry,
 } from '../../file-checkpoint/file-checkpoint.js';
 import { rewindFiles } from '../../file-checkpoint/rewind-files.js';
-import type { ProviderRewindResult } from '../../provider.js';
+import type { ProviderEvent, ProviderRewindResult } from '../../provider.js';
 
 interface CheckpointWiringHost {
   fileCheckpointWiring: { set: (r: FileCheckpointRegistry | undefined) => void };
@@ -40,13 +40,14 @@ export class FileCheckpointState {
   ) {}
 
   /** Wire a fresh registry for a new turn; stores the generated turnId. */
-  begin(dispatcher: object | undefined): void {
+  begin(dispatcher: object | undefined, userMessageId?: string): string | undefined {
     if (!this.enabled) return;
     const wiring = wiringOf(dispatcher);
     if (wiring === undefined) return;
-    const turnId = randomUUID();
+    const turnId = userMessageId ?? randomUUID();
     this.currentTurnId = turnId;
     wiring.set(createFileCheckpointRegistry(this.sessionId, turnId));
+    return turnId;
   }
 
   /** Clear the per-turn registry (called from the turn's finally block). */
@@ -56,11 +57,27 @@ export class FileCheckpointState {
     this.currentTurnId = undefined;
   }
 
+  /** Publish completion only after clearing mutation wiring. */
+  async *events(
+    events: AsyncIterable<ProviderEvent>, dispatcher: object | undefined, checkpointId: string | undefined,
+  ): AsyncGenerator<ProviderEvent> {
+    for await (const event of events) {
+      // Invariant: consumers may rewind on completion without advancing the
+      // generator again, so release the registry before publishing the event.
+      if (event.type === 'turn.completed') this.end(dispatcher);
+      yield event.type === 'turn.completed' && checkpointId !== undefined
+        ? { ...event, userMessageId: checkpointId } : event;
+    }
+  }
+
   /** Delegate rewindFiles for the enclosing provider query. */
   rewind(userMessageId: string, options?: { dryRun?: boolean }): Promise<ProviderRewindResult> {
+    if (this.currentTurnId !== undefined) {
+      return Promise.resolve({ canRewind: false, error: 'Cannot rewind files while a turn is in flight.' });
+    }
     return rewindFiles(
       { sessionId: this.sessionId, enableFileCheckpointing: this.enabled },
-      this.currentTurnId ?? userMessageId,
+      userMessageId,
       options,
     );
   }
