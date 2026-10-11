@@ -50,6 +50,8 @@ function runSelectorLoop<T>(
   onSpace?: (cursor: number) => void,
   abortSignal?: AbortSignal,
 ): Promise<T | ':cancel'> {
+  if (abortSignal?.aborted) return Promise.resolve(':cancel');
+
   let cursor = 0;
   let scrollOffset = 0;
 
@@ -69,6 +71,7 @@ function runSelectorLoop<T>(
   }
 
   return new Promise<T | ':cancel'>((resolve) => {
+    let resolved = false;
     process.stdin.setRawMode(true);
     // ESC is the cancel affordance here; fire it on the first press (small
     // sub-perception escapeCodeTimeout) instead of after readline's ~500ms
@@ -76,7 +79,7 @@ function runSelectorLoop<T>(
     emitKeypressEventsImmediateEscape(process.stdin);
 
     const onKeypress = (_char: string | undefined, key: KeyEvent) => {
-      if (!key) return;
+      if (resolved || !key) return;
 
       if (key.name === 'up' || key.sequence === '\x1b[A') {
         if (cursor > 0) {
@@ -94,11 +97,9 @@ function runSelectorLoop<T>(
         onSpace(cursor);
         repaint();
       } else if (key.name === 'return' || key.name === 'enter') {
-        cleanup();
-        resolve(onEnter(cursor));
+        finish(onEnter(cursor));
       } else if (key.name === 'escape' || (key.ctrl && key.name === 'c')) {
-        cleanup();
-        resolve(':cancel');
+        finish(':cancel');
       }
     };
 
@@ -108,15 +109,19 @@ function runSelectorLoop<T>(
       try { process.stdin.setRawMode(false); } catch { /* noop */ }
     }
 
-    function onAbort(): void {
+    function finish(result: T | ':cancel'): void {
+      if (resolved) return;
+      resolved = true;
       cleanup();
-      resolve(':cancel');
+      resolve(result);
+    }
+
+    function onAbort(): void {
+      finish(':cancel');
     }
 
     if (abortSignal?.aborted) {
-      // Already aborted before the loop started — resolve immediately.
-      try { process.stdin.setRawMode(false); } catch { /* noop */ }
-      resolve(':cancel');
+      onAbort();
       return;
     }
 

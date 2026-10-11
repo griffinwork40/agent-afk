@@ -303,8 +303,12 @@ for (const family of ['no-ts', 'far-reset', 'timestamped'] as const) {
       const stored = 'synthetic-store-secret';
       loadClaudeCodeOauthTokenMock.mockReturnValue(stored);
       parseAccountIdentifierMock.mockImplementation((token) => token === active ? 'account-A' : 'account-B');
-      mockWait(Promise.resolve('timer'));
-      const events = await drain(park(makeCtx(true, active), makeInput()));
+      const wait = deferred();
+      mockWait(wait.promise);
+      const pending = drain(park(makeCtx(true, active), makeInput()));
+      await Promise.resolve(); // mirror the deferred wait setup above
+      wait.resolve('timer');
+      const events = await pending;
       expect(events[0]).toMatchObject({ type: 'paused', accountId: 'account-A' });
       expect(events[1]).toMatchObject({ type: 'resumed', accountId: 'account-A' });
       expect(loadClaudeCodeOauthTokenMock).not.toHaveBeenCalled();

@@ -66,6 +66,7 @@ vi.mock('../utils/crash-notifier.js', () => ({
   installCrashNotifier: vi.fn(() => ({ reset: vi.fn() })),
 }));
 vi.mock('../utils/errors.js', () => ({ errorMessage: vi.fn((e: unknown) => String(e)) }));
+vi.mock('../service/version-skew.js', () => ({ writeServiceStartupSidecar: vi.fn(() => true) }));
 
 // ---------------------------------------------------------------------------
 // env mock — controls TELEGRAM_BOT_TOKEN etc.
@@ -85,8 +86,13 @@ vi.mock('../config/env.js', () => ({ env: new Proxy({}, { get: (_t, k) => mockEn
 // process.exit stub — captured per-test
 // ---------------------------------------------------------------------------
 let exitSpy: MockInstance;
+let signalListeners: Map<'SIGINT' | 'SIGTERM', ReturnType<typeof process.listeners>>;
 
 beforeEach(() => {
+  // Each test imports a fresh entry module, never state left in the ESM cache.
+  vi.resetModules();
+  signalListeners = new Map(['SIGINT', 'SIGTERM'].map((signal) =>
+    [signal as 'SIGINT' | 'SIGTERM', process.listeners(signal)]));
   exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
   // Reset env to working defaults before each test.
   mockEnv.TELEGRAM_BOT_TOKEN = 'test-token:abc';
@@ -95,7 +101,14 @@ beforeEach(() => {
   mockBotStop.mockReset().mockResolvedValue(undefined);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  const { _resetCrashHandlersForTest } = await import('./entry.js');
+  _resetCrashHandlersForTest();
+  for (const [signal, original] of signalListeners) {
+    for (const listener of process.listeners(signal)) {
+      if (!original.includes(listener)) process.removeListener(signal, listener);
+    }
+  }
   exitSpy.mockRestore();
   vi.clearAllMocks();
 });
@@ -137,17 +150,19 @@ describe('entry.ts — installCrashHandlers', () => {
 
 describe('entry.ts — main() early-exit branches', () => {
   test('exits 1 when TELEGRAM_BOT_TOKEN is missing', async () => {
-    mockEnv.TELEGRAM_BOT_TOKEN = undefined as unknown as string;
+    mockEnv.TELEGRAM_BOT_TOKEN = undefined;
+    exitSpy.mockImplementationOnce((() => { throw new Error('exit:1'); }) as never);
     const { main } = await import('./entry.js');
-    await main();
+    await expect(main()).rejects.toThrow('exit:1');
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
   test('exits 1 when allowedChatIds is empty', async () => {
     const allowlist = await import('./allowlist.js');
     vi.mocked(allowlist.parseAllowedChatIds).mockReturnValueOnce(new Set());
+    exitSpy.mockImplementationOnce((() => { throw new Error('exit:1'); }) as never);
     const { main } = await import('./entry.js');
-    await main();
+    await expect(main()).rejects.toThrow('exit:1');
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
@@ -180,8 +195,9 @@ describe('entry.ts — main() early-exit branches', () => {
   test('exits 1 when applyTelegramCredentialPlan returns false', async () => {
     const creds = await import('./credentials.js');
     vi.mocked(creds.applyTelegramCredentialPlan).mockReturnValueOnce(false);
+    exitSpy.mockImplementationOnce((() => { throw new Error('exit:1'); }) as never);
     const { main } = await import('./entry.js');
-    await main();
+    await expect(main()).rejects.toThrow('exit:1');
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 });
@@ -198,6 +214,7 @@ describe('entry.ts — main() happy path', () => {
     await main();
     expect(mockBotCtor).toHaveBeenCalled();
     expect(mockBotStart).toHaveBeenCalledTimes(1);
+    expect(exitSpy).not.toHaveBeenCalledWith(1);
   });
 
   test('exits 1 when bot.start() throws', async () => {

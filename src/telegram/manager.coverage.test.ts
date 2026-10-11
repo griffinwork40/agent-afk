@@ -6,7 +6,7 @@
  * No real timers — sleep is mocked to resolve immediately.
  */
 
-import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, test, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -62,6 +62,10 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+afterAll(() => {
+  rmSync(tmpBase, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------------------
