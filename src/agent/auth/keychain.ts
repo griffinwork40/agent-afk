@@ -2,6 +2,7 @@ import { execFileSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { homedir, userInfo } from 'os';
 import { join } from 'path';
+import { h1ModelFetch } from '../providers/shared/h1-fetch.js';
 
 interface ParsedCredentials {
   accessToken: string;
@@ -230,7 +231,10 @@ interface TokenRefreshResponse {
 
 async function postTokenRefresh(refreshToken: string): Promise<TokenRefreshResponse | undefined> {
   try {
-    const res = await fetch(OAUTH_TOKEN_URL, {
+    // Invariant: use h1ModelFetch, not globalThis.fetch — the global may route
+    // through an undici Agent with allowH2:true installed by jsdom, which on
+    // Node 26 can trigger the spinning nghttp2 DATA-frame freeze (issue #3335).
+    const res = await h1ModelFetch(OAUTH_TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

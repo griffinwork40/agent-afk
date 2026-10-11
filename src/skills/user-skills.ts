@@ -25,7 +25,7 @@
  * name, but the later one stays reachable.
  *
  * Frontmatter parsing, flag harvesting, and body extraction are delegated
- * to `src/cli/slash/_lib/flag-harvest.ts` so the user surface stays in
+ * to `src/utils/skill-md.ts` so the user surface stays in
  * lockstep with the plugin surface.
  */
 
@@ -40,7 +40,7 @@ import {
   type SkillExecutionContext,
   type SkillMetadata,
 } from './index.js';
-import { harvestFlagsFromSkillMd, parseSkillMd } from '../cli/slash/_lib/flag-harvest.js';
+import { harvestFlagsFromSkillMd, parseSkillMd } from '../utils/skill-md.js';
 import { SubagentManager } from '../agent/subagent.js';
 import { resolveChildModel } from '../agent/subagent/resolve-child-model.js';
 import { substituteSkillArgs } from '../agent/tools/skill-executor/arg-substitution.js';

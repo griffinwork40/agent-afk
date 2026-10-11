@@ -4,6 +4,8 @@
  * Covers:
  *   - readLedgerRecords: empty when ledger absent.
  *   - readLedgerRecords: skips malformed lines, returns valid records.
+ *   - readLedgerRecords: ledgerTruncated=false for small files.
+ *   - readLedgerRecords: ledgerTruncated=true when file exceeds 1 MB cap.
  *   - clusterLedgerRecords: groups by (repo, locus, signal), counts distinct sessions.
  *   - clusterLedgerRecords: tracks firstSeen / lastSeen correctly.
  *   - clusterLedgerRecords: ranks by descending recurrenceCount, then lastSeen.
@@ -66,12 +68,14 @@ describe('readLedgerRecords', () => {
     mockLedgerPath.mockReset();
   });
 
-  it('returns empty array when ledger file does not exist', () => {
+  it('returns empty records with ledgerTruncated=false when ledger file does not exist', () => {
     mockLedgerPath.mockReturnValue('/nonexistent/path/preexisting-ledger.jsonl');
-    expect(readLedgerRecords()).toEqual([]);
+    const result = readLedgerRecords();
+    expect(result.records).toEqual([]);
+    expect(result.ledgerTruncated).toBe(false);
   });
 
-  it('parses valid records from a fixture ledger', () => {
+  it('parses valid records from a fixture ledger and reports ledgerTruncated=false', () => {
     const dir = makeTempDir();
     const ledgerPath = join(dir, 'preexisting-ledger.jsonl');
     writeFileSync(
@@ -83,10 +87,11 @@ describe('readLedgerRecords', () => {
       'utf8',
     );
     mockLedgerPath.mockReturnValue(ledgerPath);
-    const records = readLedgerRecords();
+    const { records, ledgerTruncated } = readLedgerRecords();
     expect(records).toHaveLength(2);
     expect(records[0]!.sessionId).toBe('sess-a');
     expect(records[1]!.sessionId).toBe('sess-b');
+    expect(ledgerTruncated).toBe(false);
   });
 
   it('skips malformed lines without throwing', () => {
@@ -103,17 +108,35 @@ describe('readLedgerRecords', () => {
       'utf8',
     );
     mockLedgerPath.mockReturnValue(ledgerPath);
-    const records = readLedgerRecords();
+    const { records } = readLedgerRecords();
     expect(records).toHaveLength(1);
     expect(records[0]!.sessionId).toBe('sess-good');
   });
 
-  it('returns empty array for an empty ledger file', () => {
+  it('returns empty records with ledgerTruncated=false for an empty ledger file', () => {
     const dir = makeTempDir();
     const ledgerPath = join(dir, 'preexisting-ledger.jsonl');
     writeFileSync(ledgerPath, '', 'utf8');
     mockLedgerPath.mockReturnValue(ledgerPath);
-    expect(readLedgerRecords()).toEqual([]);
+    const result = readLedgerRecords();
+    expect(result.records).toEqual([]);
+    expect(result.ledgerTruncated).toBe(false);
+  });
+
+  it('reports ledgerTruncated=true when the file exceeds the 1 MB cap', () => {
+    const dir = makeTempDir();
+    const ledgerPath = join(dir, 'preexisting-ledger.jsonl');
+    // Write >1 MB of valid records so the reader must tail-cap.
+    const LEDGER_READ_LIMIT = 1_048_576;
+    const line = record({ sessionId: 'sess-trunc' }) + '\n';
+    const repetitions = Math.ceil((LEDGER_READ_LIMIT + line.length + 1) / line.length);
+    writeFileSync(ledgerPath, line.repeat(repetitions), 'utf8');
+    mockLedgerPath.mockReturnValue(ledgerPath);
+    const { records, ledgerTruncated } = readLedgerRecords();
+    expect(ledgerTruncated).toBe(true);
+    // All returned records should still be valid (complete lines only).
+    expect(records.length).toBeGreaterThan(0);
+    expect(records.every((r) => r.sessionId === 'sess-trunc')).toBe(true);
   });
 });
 

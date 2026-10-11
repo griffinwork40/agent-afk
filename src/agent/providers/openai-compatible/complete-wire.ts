@@ -21,13 +21,14 @@
  */
 
 import OpenAI from 'openai';
-import { resolveOpenAIAuth } from './auth.js';
+import { resolveOpenAIAuth, type AuthResolverDeps } from './auth.js';
 import {
   oneShotChatCompletion,
   oneShotResponses,
   type OpenAIOneShotInput,
 } from './oneshot.js';
 import { resolveWireMode } from './responses-config.js';
+import { h1ModelFetch } from '../shared/h1-fetch.js';
 
 /** Re-exported so `index.ts` (at its line baseline) keeps a single import line. */
 export type { OpenAIOneShotInput } from './oneshot.js';
@@ -39,6 +40,8 @@ export interface CompleteWireClientOptions {
   defaultHeaders?: Record<string, string>;
   /** Always 0: a one-shot side-channel owns no retry policy (abort budget is tiny). */
   maxRetries: number;
+  /** Invariant: always h1ModelFetch — force HTTP/1.1. See h1-fetch.ts. */
+  fetch: typeof globalThis.fetch;
 }
 
 export type CompleteWireClientFactory = (opts: CompleteWireClientOptions) => OpenAI;
@@ -52,16 +55,21 @@ const defaultClientFactory: CompleteWireClientFactory = (opts) => new OpenAI(opt
  * headers from `resolveWireMode`, which win over any caller endpoint, as in
  * `query.ts`). Everything else -> the unchanged Chat Completions path, handed
  * the already-resolved key so auth is not resolved twice.
+ *
+ * @param authDeps - Injectable auth-resolver dependencies (env/fs). Used by
+ *   tests to drive the Responses-wire path without real credentials.  Production
+ *   callers omit this and get the real env + file-system resolvers.
  */
 export async function completeWithWire(
   input: OpenAIOneShotInput,
   clientFactory: CompleteWireClientFactory = defaultClientFactory,
+  authDeps: AuthResolverDeps = {},
 ): Promise<string> {
-  const auth = resolveOpenAIAuth(input.apiKey, {}, input.forceChatgptOAuth ?? false);
+  const auth = resolveOpenAIAuth(input.apiKey, authDeps, input.forceChatgptOAuth ?? false);
   const wire = resolveWireMode(auth);
 
   if (wire.mode === 'responses' && auth.apiKey !== null) {
-    const clientOpts: CompleteWireClientOptions = { apiKey: auth.apiKey, maxRetries: 0 };
+    const clientOpts: CompleteWireClientOptions = { apiKey: auth.apiKey, maxRetries: 0, fetch: h1ModelFetch };
     const baseURL = wire.baseURL ?? input.baseURL;
     if (baseURL !== undefined) clientOpts.baseURL = baseURL;
     const headers = { ...input.defaultHeaders, ...wire.headers };

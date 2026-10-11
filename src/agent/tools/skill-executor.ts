@@ -37,6 +37,8 @@ import { isGateSkill, sessionIdentity, truncateTelemetryString } from './skill-e
 import { executeLoadedPluginSkill, executeLoadedRegistrySkill } from './skill-executor/load-mode.js';
 import { executeForkedRegistrySkill, executePluginSkill } from './skill-executor/fork-dispatch.js';
 import { errorMessage } from '../../utils/errors.js';
+import { skillAllowlistRefusal } from './skill-executor/allowlist.js';
+import type { SdkPluginConfig } from '../types/sdk-types.js';
 
 export type { SkillExecutorContext } from './skill-executor/types.js';
 
@@ -108,6 +110,19 @@ export class SkillExecutor {
   }
 
   /**
+   * The executor-tree scope this executor was constructed with (#3442):
+   * `pluginConfigs` (undefined => scan every plugin root) and `skillAllowlist`
+   * (undefined => no gate). Read by the providers to filter the model-facing
+   * skill manifest to what `execute` will actually accept.
+   */
+  getManifestScope(): { pluginConfigs?: SdkPluginConfig[]; skillAllowlist?: readonly string[] } {
+    return {
+      ...(this.ctx.pluginConfigs !== undefined ? { pluginConfigs: this.ctx.pluginConfigs } : {}),
+      ...(this.ctx.skillAllowlist !== undefined ? { skillAllowlist: this.ctx.skillAllowlist } : {}),
+    };
+  }
+
+  /**
    * Re-point the trace writer skill forks inherit, after a REPL `/resume`
    * replaced the session that owned the previous writer. Only forks dispatched
    * after this call use `writer`; in-flight ones keep theirs (#731).
@@ -161,6 +176,11 @@ export class SkillExecutor {
         isError: true,
       };
     }
+
+    // Skill allowlist (#3442): exact-name gate, before any registry lookup so
+    // a disallowed name never reaches getSkill / plugin discovery.
+    const refusal = skillAllowlistRefusal(this.ctx.skillAllowlist, parsed.name);
+    if (refusal !== undefined) return refusal;
 
     // Fix A (#skill-recursion): execution-level self-dispatch block (manifest exclusion is cosmetic).
     if (this.ctx.skillDispatchName !== undefined && parsed.name === this.ctx.skillDispatchName) {

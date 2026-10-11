@@ -26,13 +26,13 @@
  * @module cli/commands/interactive/worktree-autoname
  */
 
-import { promises as fs } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { oneShotCompletion } from '../../../agent/providers/anthropic-direct/oneshot.js';
 import { resolveBranchPrefix, type DeferredWorktree } from './worktree.js';
 import type { AgentSession } from '../../../agent/session/agent-session.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { pathExists } from '../../../utils/fs.js';
 
 /**
  * System prompt for the slug-generation call. Locked-down format so we can
@@ -266,14 +266,7 @@ async function disambiguate(
   return `${base}-${suffix}`;
 }
 
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
+
 
 /**
  * Truncate a string to at most `maxBytes` UTF-8 bytes without splitting

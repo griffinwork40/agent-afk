@@ -1,5 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { h1ModelFetch } from '../providers/shared/h1-fetch.js';
 import { fetchCodexUsage, parseCodexUsagePayload } from './codex-usage.js';
+
+vi.mock('../providers/shared/h1-fetch.js', () => ({ h1ModelFetch: vi.fn() }));
+beforeEach(() => vi.mocked(h1ModelFetch).mockReset());
+afterEach(() => vi.restoreAllMocks());
 
 const SIGNED_IN = () => ({ apiKey: 'tok-secret', source: 'chatgpt-oauth' as const, accountId: 'acct-1' });
 const RESET_S = 1_791_580_263;
@@ -49,6 +54,21 @@ describe('parseCodexUsagePayload', () => {
 });
 
 describe('fetchCodexUsage', () => {
+  it('defaults the shared usage transport to HTTP/1.1 fetch', async () => {
+    const globalFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Unexpected global fetch'));
+    vi.mocked(h1ModelFetch).mockResolvedValue(jsonResponse({
+      rate_limit: { primary_window: { used_percent: 47, limit_window_seconds: 604_800 } },
+    }));
+
+    const result = await fetchCodexUsage({ auth: SIGNED_IN });
+
+    expect(result).toEqual({ kind: 'ok', sevenDay: { utilization: 0.47 } });
+    expect(h1ModelFetch).toHaveBeenCalledExactlyOnceWith(
+      'https://chatgpt.com/backend-api/wham/usage',
+      { headers: expect.objectContaining({ Authorization: 'Bearer tok-secret', 'chatgpt-account-id': 'acct-1' }), signal: expect.any(AbortSignal) },
+    );
+    expect(globalFetch).not.toHaveBeenCalled();
+  });
   it('sends the ChatGPT sign-in with AFK request headers and maps the body', async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({ rate_limit: { primary_window: { used_percent: 47, limit_window_seconds: 604_800, reset_at: RESET_S } } }),

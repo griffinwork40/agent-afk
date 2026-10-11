@@ -614,6 +614,15 @@ export class TerminalCompositor {
   // that never scrolled (DEFECT 2). See commitAbove's prevTopRow site.
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   bandGeometryStale = false;
+  /**
+   * Resize-specific geometry-stale flag — set ONLY by the SIGWINCH handler
+   * (`handleResizeImmediate`, `handleDisarmWindowResize`), never by
+   * `resumeInput()`.  Used by `preserveRowsBeforeFrameRender` to suppress
+   * the legacy deficit-eviction path while a resize burst is in flight (#3212).
+   * Cleared by `repositionCommittedBand` in parallel with `bandGeometryStale`.
+   * @internal
+   */
+  resizeGeometryStale = false;
   // Stale-guard for endTurnFlush (lifecycle.ts): set true when a commit
   // lands (committed-band-commit.ts, alongside hasCommitted); cleared by
   // clearCommittedBand(). Prevents redundant lifecycle redraws when the

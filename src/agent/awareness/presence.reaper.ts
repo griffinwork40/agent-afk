@@ -17,6 +17,7 @@
 
 import { readFile, unlink } from 'fs/promises';
 import { readPresenceFiles } from './presence.js';
+import { isErrnoCode } from '../../utils/errors.js';
 
 /** Injection seams for {@link sweepDeadPresence}. */
 export interface SweepDeadPresenceOptions {
@@ -37,7 +38,7 @@ function provenGone(pid: unknown, kill: (pid: number, signal: 0) => void): boole
     kill(pid, 0);
     return false;
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'ESRCH';
+    return isErrnoCode(err, 'ESRCH');
   }
 }
 

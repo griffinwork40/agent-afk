@@ -560,7 +560,8 @@ describe('loop.ts runTurn — witness-layer tool_call emission', () => {
     expect(slowEvent.payload.durationMs).toBeGreaterThanOrEqual(0);
     expect(fastEvent.payload.durationMs).toBeLessThan(batchDuration - 10);
     // Slow should be close to the full batch duration.
-    expect(slowEvent.payload.durationMs).toBeGreaterThan(fastEvent.payload.durationMs! + 30);
+    // Use >= to tolerate Windows' 15ms timer resolution (exact equality is valid).
+    expect(slowEvent.payload.durationMs).toBeGreaterThanOrEqual(fastEvent.payload.durationMs! + 30);
   });
 
   it('omits batchIndex and batchSize from tool_call.completed when only batchIndex is present (both-or-neither guard)', async () => {

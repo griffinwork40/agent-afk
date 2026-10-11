@@ -10,6 +10,7 @@
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { SUBAGENT_HANDOFF_CONTRACT } from '../subagent-contract.js';
+import { UNNAMED_SUBAGENT_WORKER_PROMPT } from '../tools/system-prompt.js';
 
 const appendRoutingDecision = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../routing-telemetry.js', () => ({ appendRoutingDecision }));
@@ -305,15 +306,18 @@ describe('SubagentExecutor named-agent dispatch', () => {
     expect(forkArgs.config.provider).toBeDefined();
   });
 
-  it('unnamed dispatch keeps the base prompt with the handoff contract appended (no provider restriction)', async () => {
+  it('unnamed dispatch uses the scoped worker prompt (not the parent base prompt) with no provider restriction', async () => {
     const executor = makeExecutor();
     await executor.execute(makeCall({ prompt: 'plain dispatch' }));
     const forkArgs = forkSubagent.mock.calls[0]?.[0];
-    // Unnamed dispatch inherits the parent base prompt, then has the default
-    // handoff contract appended so the child itself keeps its reply short /
-    // offloads bulk output to files (see SUBAGENT_HANDOFF_CONTRACT).
-    expect(forkArgs.config.systemPrompt).toMatch(/^BASE PROMPT/);
+    // Unnamed dispatch receives the lean scoped worker prompt
+    // (TOOL_SYSTEM_PROMPT_BASE + SUBAGENT_HANDOFF_CONTRACT) instead of the
+    // full coordinator-framed parent base (~54 KB). The parent base prompt
+    // is irrelevant to a worker child and is intentionally not forwarded.
+    expect(forkArgs.config.systemPrompt).toBe(UNNAMED_SUBAGENT_WORKER_PROMPT);
     expect(forkArgs.config.systemPrompt).toContain(SUBAGENT_HANDOFF_CONTRACT);
+    // Must NOT start with the parent base prompt text.
+    expect(forkArgs.config.systemPrompt).not.toMatch(/^BASE PROMPT/);
     expect(factoryCalls[0]?.['allowedTools']).toBeUndefined();
     expect(forkArgs.agentType).toBe('plain dispatch');
     // No registered agent resolved → resolvedAgentType stays absent, so

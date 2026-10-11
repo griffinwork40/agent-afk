@@ -23,6 +23,7 @@
 import { existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { errorMessage } from '../src/utils/errors.js';
 import { EXPERIMENT_PROMPT, promptHash } from './workspace-ab/prompt.js';
 import { runArm } from './workspace-ab/run-arm.js';
 import type { ArmResult } from './workspace-ab/run-arm.js';
@@ -248,7 +249,7 @@ async function main(): Promise<void> {
       console.log(`  [${i}] dedup ratio: control=${cRatio !== undefined ? (cRatio * 100).toFixed(1) + '%' : 'N/A'} treatment=${tRatio !== undefined ? (tRatio * 100).toFixed(1) + '%' : 'N/A'}`);
     } catch (err) {
       failureCount++;
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       console.error(`  [${i}] FAILED: ${msg}`);
       // Emit partial TrialResult so the manifest records the failure.
       trialResults.push({
@@ -290,6 +291,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error('Fatal:', err instanceof Error ? err.message : String(err));
+  console.error('Fatal:', errorMessage(err));
   process.exitCode = 1;
 });

@@ -22,8 +22,8 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { writeJsonFile } from '../../utils/json-file.js';
 import { getSpineDiffFingerprintPath } from '../../paths.spine.js';
 import { resolveRepoRootSync } from '../../utils/git.js';
 
@@ -121,12 +121,9 @@ export function isDuplicateDiff(fingerprint: string, worktreeRoot: string): bool
 export function persistDiffFingerprint(fingerprint: string, worktreeRoot: string): void {
   try {
     const p = getSpineDiffFingerprintPath();
-    mkdirSync(dirname(p), { recursive: true });
     const map = readFingerprintMap();
     map[rootKey(worktreeRoot)] = fingerprint;
-    const tmp = `${p}.${process.pid}.${Date.now()}.tmp`;
-    writeFileSync(tmp, JSON.stringify(map) + '\n', 'utf-8');
-    renameSync(tmp, p);
+    writeJsonFile(p, map);
   } catch {
     // Best-effort — fingerprint is an optimisation, not a correctness requirement.
   }

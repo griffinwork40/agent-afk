@@ -42,6 +42,13 @@ export interface KeypressCallbacks {
 export interface KeypressCtx {
   opts: ReadWithAutocompleteOpts;
   stdout: NodeJS.WriteStream;
+  /**
+   * The stdin stream that readline is decoding keypress events from.
+   * Threaded explicitly so `isCprSequence` can scope its guard check to the
+   * same stream the compositor armed the guard on, rather than hardcoding
+   * `process.stdin`.
+   */
+  stdin: NodeJS.ReadableStream;
   repaintCtx: RepaintCtx;
   callbacks: KeypressCallbacks;
   /** Burst detection window in milliseconds. */
@@ -60,7 +67,7 @@ export function handleKeypress(
   schedulePaintFn: typeof _schedulePaint,
   applySelectionFn: typeof _applySelection,
 ): void {
-  const { opts, stdout, repaintCtx, callbacks, pasteWindowMs } = kCtx;
+  const { opts, stdout, stdin, repaintCtx, callbacks, pasteWindowMs } = kCtx;
 
   // CPR keypress guard (Gap 2 — #3206): drop a late CPR reply that slipped
   // through after the compositor's per-request data listener timed out.
@@ -68,7 +75,10 @@ export function handleKeypress(
   // recently expected or just timed out) AND the sequence matches the CPR
   // reply pattern — so ordinary F3/Ctrl+F3 keypresses are unaffected outside
   // that narrow window.  See emit-keypress.ts for the F3 disambiguation note.
-  if (isCprSequence(process.stdin, key?.sequence ?? '')) return;
+  // `stdin` comes from KeypressCtx so the guard check is scoped to the exact
+  // stream the compositor armed the guard on (eliminating the prior implicit
+  // coupling to process.stdin).
+  if (isCprSequence(stdin, key?.sequence ?? '')) return;
 
   // Track timing for burst detection (for fallback when bracketed paste is unavailable).
   const now = Date.now();

@@ -6,8 +6,8 @@
  * non-empty; empty panels stay hidden.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
+import { writeJsonFile, readJsonFileLoose } from '../utils/json-file.js';
 import { ensureTodosMigrated, getTodosDir } from '../paths.js';
 import { displayWidth } from './display.js';
 import { renderCardLine } from './formatter.js';
@@ -38,21 +38,18 @@ function pathFor(sessionId: string): string {
 
 export function loadTodos(sessionId: string): TodoStore {
   const p = pathFor(sessionId);
-  if (!existsSync(p)) return { sessionId, items: [] };
-  try {
-    const raw = readFileSync(p, 'utf-8');
-    const parsed = JSON.parse(raw) as TodoStore;
-    if (!Array.isArray(parsed.items)) return { sessionId, items: [] };
-    return parsed;
-  } catch {
-    return { sessionId, items: [] };
-  }
+  // readJsonFileLoose: ENOENT and parse errors both yield undefined → empty
+  // store. A corrupt todo file is treated identically to a missing one — no
+  // previous items is a safe default, and the original code swallowed all
+  // errors the same way. Unexpected I/O errors (EACCES, EISDIR) re-throw.
+  const parsed = readJsonFileLoose<TodoStore>(p);
+  if (parsed == null || !Array.isArray(parsed.items)) return { sessionId, items: [] };
+  return parsed;
 }
 
 export function saveTodos(store: TodoStore): void {
-  const root = rootDir();
-  if (!existsSync(root)) mkdirSync(root, { recursive: true });
-  writeFileSync(pathFor(store.sessionId), JSON.stringify(store, null, 2));
+  // Atomic write: writeJsonFile uses tmp+rename (mkdirp by default).
+  writeJsonFile(pathFor(store.sessionId), store);
 }
 
 export function addTodo(store: TodoStore, text: string): TodoItem {
