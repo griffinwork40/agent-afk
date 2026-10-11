@@ -87,8 +87,16 @@ describe('downloadTelegramFile: SSRF restrictions', () => {
     expect(result.status).toBe('ok');
   });
 
-  it('rejects a malformed URL string without calling fetch', async () => {
+  it('returns malformed-url for a structurally invalid URL string', async () => {
     const result = await downloadTelegramFile('not a url !!!', { maxBytes: 5_000_000 });
+    expect(result.status).toBe('malformed-url');
+  });
+
+  it('returns ssrf-rejected for a URL with embedded credentials', async () => {
+    const result = await downloadTelegramFile(
+      'https://user:pass@api.telegram.org/botTOKEN/getFile',
+      { maxBytes: 5_000_000 },
+    );
     expect(result.status).toBe('ssrf-rejected');
   });
 

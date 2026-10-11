@@ -34,9 +34,14 @@ export const modelCompleteTool: AnthropicToolDef = {
     properties: {
       prompt: {
         type: 'string',
+        // Note: `required` is [] (relaxed) because `input_path` alone is valid
+        // input — the file content becomes the prompt body. In practice, prompt
+        // is almost always supplied; models should treat it as expected unless
+        // input_path is the sole input.
         description:
           'The user message / instruction sent to the model. ' +
-          'Optional when `input_path` is set — the file content alone is sufficient input.',
+          'Optional when `input_path` is set — the file content alone is sufficient input. ' +
+          'In practice prompt is almost always provided.',
       },
       system: {
         type: 'string',

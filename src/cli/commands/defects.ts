@@ -174,6 +174,11 @@ export function registerDefectsCommand(program: Command): void {
         const clusters    = allClusters.slice(0, topN);
 
         if (opts.json) {
+          if (ledgerTruncated) {
+            process.stderr.write(
+              'warning: ledger exceeded 1 MB — only the most recent records were read; older entries may be missing\n',
+            );
+          }
           process.stdout.write(JSON.stringify(clusters, null, 2) + '\n');
           return;
         }

@@ -55,6 +55,13 @@ import { writeServiceStartupSidecar } from '../../service/version-skew.js';
 import { getVersion } from '../version.js';
 
 /** "Done"-verification probe for the daemon gate. Pure and total — never throws. */
+/** Write the startup sidecar; warn on failure. Best-effort — never throws. */
+function recordDaemonStartup(): void {
+  if (!writeServiceStartupSidecar('daemon', getVersion())) {
+    console.warn(palette.warning('warn: failed to write service startup sidecar — `afk service status` may not show the running version'));
+  }
+}
+
 const isDoneUnverified = ({
   responseText,
   successfulToolNames,
@@ -232,7 +239,7 @@ export async function runDaemonAction(options: DaemonActionOptions): Promise<voi
     bindInFlightSource(() => handle.scheduler.getInFlightTasks());
     // Record running version for `afk service status` version-skew detection.
     // Skipped for transient --once ticks which are not long-running service instances.
-    if (!options.once) writeServiceStartupSidecar('daemon', getVersion());
+    if (!options.once) recordDaemonStartup();
     void runDaemonReconcile('');
 
     if (options.once) {

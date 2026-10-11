@@ -63,19 +63,29 @@ export interface ServiceStartupSidecar {
  * write for correctness — the status command degrades gracefully when the
  * sidecar is absent.
  */
+/**
+ * Write a startup sidecar for `name`. Called by service entrypoints
+ * (daemon CLI, telegram entry) immediately after the service is ready.
+ *
+ * Best-effort: write errors are swallowed so a filesystem hiccup never
+ * takes down the service itself. Returns `true` on success, `false` on
+ * failure — callers may log the failure at their own severity level.
+ */
 export function writeServiceStartupSidecar(
   name: ServiceName,
   version: string,
   pid: number = process.pid,
   now: () => string = () => new Date().toISOString(),
-): void {
+): boolean {
   const sidecar: ServiceStartupSidecar = { version, pid, startedAt: now() };
   const path = getServiceStartupSidecarPath(name);
   try {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, JSON.stringify(sidecar), 'utf-8');
+    return true;
   } catch {
     // Best-effort: filesystem errors must not crash the service.
+    return false;
   }
 }
 
@@ -112,12 +122,15 @@ export function readServiceStartupSidecar(
   return sidecar;
 }
 
+/** Loose semver pattern: MAJOR.MINOR.PATCH with optional pre-release/build suffix. */
+const SEMVER_RE = /^\d+\.\d+\.\d+/;
+
 function isValidSidecar(v: unknown): v is ServiceStartupSidecar {
   if (typeof v !== 'object' || v === null) return false;
   const o = v as Record<string, unknown>;
   return (
     typeof o['version'] === 'string' &&
-    o['version'].length > 0 &&
+    SEMVER_RE.test(o['version']) &&
     typeof o['pid'] === 'number' &&
     Number.isFinite(o['pid']) &&
     typeof o['startedAt'] === 'string'

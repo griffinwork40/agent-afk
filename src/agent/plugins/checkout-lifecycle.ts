@@ -27,6 +27,7 @@ import { basename } from 'path';
 import type { ParsedSource } from './source.js';
 import * as git from './git.js';
 import { pickLatestSemverTag } from './versions.js';
+import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
 
 // ── Filesystem primitives ────────────────────────────────────────────────────
 
@@ -253,14 +254,12 @@ export async function advanceCachedCheckout(
   // checkout. Untracked files are excluded — they survive --force intact.
   const dirty = await git.trackedChanges(dir, gitOpts);
   if (dirty.length > 0) {
-    // Strip ANSI escape sequences from `git status --porcelain` paths before
+    // Strip ANSI/escape sequences from `git status --porcelain` paths before
     // printing — adversarial or unusual filenames could embed sequences that
     // confuse terminal output (finding #3317-low).
-    // eslint-disable-next-line no-control-regex
-    const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, '');
     console.warn(
       `[${label}] updating "${name}": the following locally-edited tracked file(s) will be reset to the upstream version:\n` +
-        dirty.map((f) => `  ${stripAnsi(f)}`).join('\n'),
+        dirty.map((f) => `  ${stripEscapeSequences(f)}`).join('\n'),
     );
   }
 

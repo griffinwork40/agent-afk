@@ -120,6 +120,11 @@ export async function handleDocumentMessage(
   const dlResult = await downloadTelegramFile(fileUrlRaw, { maxBytes: MAX_DOCUMENT_BYTES });
 
   switch (dlResult.status) {
+    case 'malformed-url':
+      log(`Document handling: malformed file URL returned by getFileLink for chat ${chatId ?? '(unknown)'}`);
+      await ctx.reply("❌ Couldn't download the document. Please try resending.");
+      return null;
+
     case 'ssrf-rejected':
       log(`Document handling: unexpected file URL (protocol=${dlResult.protocol} hostname=${dlResult.hostname}) for chat ${chatId ?? '(unknown)'}`);
       await ctx.reply("❌ Couldn't download the document. Please try resending.");

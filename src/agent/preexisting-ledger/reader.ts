@@ -23,7 +23,14 @@ import type { LedgerRecord } from './session-end-hook.js';
 // Bounded reader (1 MB tail cap — mirrors insights/aggregators/daemon.ts)
 // ---------------------------------------------------------------------------
 
-/** Maximum bytes read from the ledger in a single pass. */
+/**
+ * Maximum bytes read from the ledger in a single pass.
+ *
+ * Exported so tests can verify truncation behaviour against a known constant
+ * rather than a magic number. Treat this as a stable API surface — changing
+ * the value is a breaking change for any consumer that pre-allocates buffers
+ * or stores the value in snapshot data.
+ */
 export const LEDGER_READ_LIMIT = 1_048_576; // 1 MB
 
 /**

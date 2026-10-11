@@ -70,6 +70,20 @@ export function installCrashHandlers(): void {
   _crashHandle = installCrashNotifier('telegram', pushIfConfigured);
 }
 
+/**
+ * Write the telegram startup sidecar; warn on failure. Best-effort — never throws.
+ *
+ * Uses daemonVersion (from disk via readDiskVersion) rather than getVersion()
+ * so the recorded value is consistent with the drift watchdog. Both resolve to
+ * the same file today, but the intent is "version this binary was installed as",
+ * not "version resolved at import time".
+ */
+function recordTelegramStartup(daemonVersion: string): void {
+  if (!writeServiceStartupSidecar('telegram', daemonVersion)) {
+    console.warn('warn: failed to write service startup sidecar — `afk service status` may not show the running version');
+  }
+}
+
 export async function main(): Promise<void> {
   // Version the daemon is running as, captured once. Compared against the
   // on-disk version each tick by the drift watchdog.
@@ -238,9 +252,8 @@ export async function main(): Promise<void> {
     // running version and warn on version skew. Skip when the version is
     // unknown — a sidecar with UNKNOWN_VERSION would produce a spurious
     // "version skew" warning rather than the intended "version unknown" path.
-    if (daemonVersion !== UNKNOWN_VERSION) {
-      writeServiceStartupSidecar('telegram', daemonVersion);
-    }
+    // See recordTelegramStartup() above for the daemonVersion rationale.
+    if (daemonVersion !== UNKNOWN_VERSION) recordTelegramStartup(daemonVersion);
 
     console.log('✅ Bot started successfully!');
     console.log('\n📝 Slash commands (Agent SDK):');

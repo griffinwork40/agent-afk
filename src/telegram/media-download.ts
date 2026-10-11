@@ -14,10 +14,11 @@
  * @module telegram/media-download
  */
 
-import { readResponseBytesWithLimit } from './handlers/message.media-helpers.js';
+import { readResponseBytesWithLimit } from './response-body-reader.js';
 
 export type DownloadResult =
   | { status: 'ok'; bytes: Buffer }
+  | { status: 'malformed-url' }
   | { status: 'ssrf-rejected'; protocol: string; hostname: string }
   | { status: 'fetch-failed'; httpStatus: number }
   | { status: 'too-large'; bytesRead: number }
@@ -58,15 +59,21 @@ export async function downloadTelegramFile(
   try {
     url = fileUrlRaw instanceof URL ? fileUrlRaw : new URL(String(fileUrlRaw));
   } catch {
-    // Malformed URL — treat like an SSRF rejection (empty hostname/protocol).
-    return { status: 'ssrf-rejected', protocol: '', hostname: '' };
+    // Malformed URL — return a dedicated status so callers can distinguish
+    // "structurally invalid" from "valid but disallowed by SSRF policy".
+    return { status: 'malformed-url' };
   }
 
   // SI-1, SI-2, SI-3: validate before making any network call.
+  // SI-2a: reject embedded credentials (username/password in the URL authority)
+  // as a defence-in-depth measure against credential-smuggling via URL parsing
+  // differences between this guard and the underlying fetch implementation.
   if (
     url.protocol !== 'https:' ||
     url.hostname !== 'api.telegram.org' ||
-    (url.port !== '' && url.port !== '443')
+    (url.port !== '' && url.port !== '443') ||
+    url.username !== '' ||
+    url.password !== ''
   ) {
     return { status: 'ssrf-rejected', protocol: url.protocol, hostname: url.hostname };
   }
@@ -83,7 +90,12 @@ export async function downloadTelegramFile(
     // redirect error from redirect:'error'. SI-6: strip the URL entirely.
     const raw = err instanceof Error ? err.message : String(err);
     // Replace any path-like token reference in thrown error text just in case.
-    const safeMessage = raw.replace(/\/bot[^/\s]+(?:\/|$)/g, '/bot[REDACTED]/');
+    // Also strip query params that could carry tokens (defence in depth —
+    // Telegram CDN URLs today use path-segment tokens, but this is unreachable
+    // code whose cost is negligible).
+    const safeMessage = raw
+      .replace(/\/bot[^/\s]+(?:\/|$)/g, '/bot[REDACTED]/')
+      .replace(/([?&])[^=\s]+=\S*/g, '$1[REDACTED]');
     return { status: 'network-error', safeMessage };
   }
 
@@ -97,7 +109,9 @@ export async function downloadTelegramFile(
   } catch (err) {
     // Mid-stream body read failure (ECONNRESET, abort after headers).
     const raw = err instanceof Error ? err.message : String(err);
-    const safeMessage = raw.replace(/\/bot[^/\s]+(?:\/|$)/g, '/bot[REDACTED]/');
+    const safeMessage = raw
+      .replace(/\/bot[^/\s]+(?:\/|$)/g, '/bot[REDACTED]/')
+      .replace(/([?&])[^=\s]+=\S*/g, '$1[REDACTED]');
     return { status: 'network-error', safeMessage };
   }
   // readResult discriminant matches DownloadResult directly for these two cases.
