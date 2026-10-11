@@ -384,6 +384,15 @@ describe('afk update', () => {
       expect(consoleSpy.mock.calls.flat().join('\n')).toContain('Idle version watchdogs remain active');
     });
 
+    it.each([false, true])('displays the actual npm lifecycle flags (noRestart=%s)', async (noRestart) => {
+      await runUpdate(...(noRestart ? ['--no-restart'] : []), '--pin', '1.11.0');
+      const args = mockSpawn.mock.calls[0]?.[1];
+      expect(args).toBeDefined();
+      expect(consoleSpy).toHaveBeenCalledWith(`  ${process.execPath} ${args!.join(' ')}`);
+      expect(args).toContain('--allow-scripts=agent-afk');
+      expect(args!.includes('--ignore-scripts')).toBe(noRestart);
+    });
+
     it('does not restart services when npm install fails', async () => {
       mockSpawn.mockImplementation(spawnExiting(1) as unknown as typeof spawn);
       await runUpdate('--pin', '1.11.0');

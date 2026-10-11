@@ -48,6 +48,7 @@ import {
   extractPlistEnvVars,
   installService,
   labelFor,
+  normalizeBrewCellarExecPath,
   parseLaunchctlListRow,
   plistPath,
   renderPlist,
@@ -341,7 +342,7 @@ describe.skipIf(process.platform !== 'darwin')('resolveProgramArguments', () => 
     // launchd must exec the entrypoint directly — running
     // `afk telegram start` would spawn-and-detach, triggering
     // KeepAlive's relaunch loop.
-    expect(args[0]).toBe(process.execPath);
+    expect(args[0]).toBe(normalizeBrewCellarExecPath(process.execPath));
     expect(args[1]).toBe('/fake/dist/telegram.mjs');
     expect(args).not.toContain('telegram');
     expect(args).not.toContain('start');
@@ -458,8 +459,8 @@ describe.skipIf(process.platform !== 'darwin')('install/uninstall/status I/O', (
       const contents = readFileSync(result.plistPath, 'utf-8');
       expect(contents).toContain('<key>EnvironmentVariables</key>');
       expect(contents).toContain('<key>PATH</key>');
-      // The node interpreter running this test must be on the injected PATH.
-      expect(contents).toContain(dirname(process.execPath));
+      // Homebrew interpreters use their stable opt directory on the injected PATH.
+      expect(contents).toContain(dirname(normalizeBrewCellarExecPath(process.execPath)));
     });
 
     it('returns already-installed if plist exists, without invoking launchctl', () => {

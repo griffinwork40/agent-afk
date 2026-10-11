@@ -1,5 +1,5 @@
 import { existsSync, realpathSync } from 'fs';
-import { join } from 'path';
+import { posix } from 'path';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Homebrew Cellar execPath normalization (fix C)
@@ -49,7 +49,8 @@ export function normalizeBrewCellarExecPath(
   const prefix = m[1]!.replace(/\/Cellar\/$/, '');
   const formula = m[2]!;
   const suffix = m[3]!; // e.g. /bin/node
-  const optPath = join(prefix, 'opt', formula, suffix);
+  // Homebrew paths are POSIX-shaped regardless of the host running this helper.
+  const optPath = posix.join(prefix, 'opt', formula, suffix);
   if (!existsFn(optPath)) return execPath;
   try {
     const optReal = realpathFn(optPath);

@@ -107,7 +107,6 @@ export function registerUpdateCommand(program: Command): void {
         return;
       }
       console.log(`Updating agent-afk: ${palette.dim(current)} → ${palette.bold(target)}`);
-      console.log(palette.dim(`  ${process.execPath} ${npmCli} install -g agent-afk@${target}`));
 
       const { code, signal } = await runNpmInstall(target, npmCli, opts.restart !== false);
       if (code === 0) {
@@ -142,6 +141,7 @@ function runNpmInstall(version: string, npmCli: string, restart: boolean): Promi
     const args = [npmCli, 'install', '-g', '--allow-scripts=agent-afk'];
     if (!restart) args.push('--ignore-scripts');
     args.push(`agent-afk@${version}`);
+    console.log(palette.dim(`  ${process.execPath} ${args.join(' ')}`));
     const child = spawn(process.execPath, args, { stdio: 'inherit' });
     child.on('error', () => resolve({ code: 1, signal: null }));
     child.on('exit', (code, signal) => resolve({ code, signal }));

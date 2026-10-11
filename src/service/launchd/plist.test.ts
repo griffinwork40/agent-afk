@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { delimiter, dirname, join } from 'path';
+import { delimiter, dirname } from 'path';
 
 const { exists, realpath } = vi.hoisted(() => ({ exists: vi.fn(), realpath: vi.fn() }));
 vi.mock('fs', async (importOriginal) => ({
@@ -13,7 +13,7 @@ import { resolveServicePath } from './plist.js';
 // Real normalization wiring, independent of the host's Homebrew installation.
 describe('resolveServicePath Cellar normalization', () => {
   const cellar = '/opt/homebrew/Cellar/node/26.11.0/bin/node';
-  const opt = join('/opt/homebrew', 'opt', 'node', '/bin/node');
+  const opt = '/opt/homebrew/opt/node/bin/node';
 
   beforeEach(() => {
     vi.resetAllMocks();
