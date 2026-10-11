@@ -297,6 +297,27 @@ describe('buildDetachedToolInjection', () => {
     const outputContent = xml.split('<output>')[1]?.split('\n… [detached output truncated]')[0] ?? '';
     expect(outputContent).not.toMatch(/&[^;]*$/);
   });
+
+  it('injection path: does not emit U+FFFD when a multi-byte char straddles the cap', () => {
+    // MAX_OUTPUT_BYTES = 16 * 1024 = 16384.
+    // Fill to 16383 bytes of ASCII, then append a 3-byte UTF-8 sequence (e.g.
+    // U+2026 HORIZONTAL ELLIPSIS: 0xE2 0x80 0xA6). The sequence starts at byte
+    // 16383, so bytes 16384 and 16385 are continuation bytes that fall past the
+    // cap — a naive subarray(0,16384) would leave a lone 0xE2 start byte and
+    // Node would replace it with U+FFFD.
+    const MAX_OUTPUT_BYTES = 16 * 1024;
+    const ascii = 'a'.repeat(MAX_OUTPUT_BYTES - 1); // 16383 ASCII bytes
+    const multiByte = '\u2026'; // 3 UTF-8 bytes: E2 80 A6
+    const raw = ascii + multiByte; // total: 16386 bytes — exceeds cap
+    const xml = buildDetachedToolInjection(makeResult({ output: raw }));
+    // The truncation marker must appear (output was over the cap).
+    expect(xml).toContain('[detached output truncated]');
+    // No replacement character must appear anywhere in the envelope.
+    expect(xml).not.toContain('\uFFFD');
+    // The truncated output must be valid: no partial entity fragment.
+    const outputContent = xml.split('<output>')[1]?.split('\n… [detached output truncated]')[0] ?? '';
+    expect(outputContent).not.toMatch(/&[^;]*$/);
+  });
 });
 
 // ---------------------------------------------------------------------------
