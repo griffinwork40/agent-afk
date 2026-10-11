@@ -27,7 +27,7 @@ import { displayWidth, padDisplayRight, truncateDisplayWidth } from '../../displ
 import { getTerminalWidth } from '../../terminal-size.js';
 import { renderMarkdownToTerminal } from '../../formatter.js';
 import { wrapToWidth } from '../../wrap.js';
-import { formatCost } from '../../format-utils.js';
+import { formatCost, formatDuration } from '../../format-utils.js';
 
 interface KindStyle {
   color: (s: string) => string;
@@ -80,15 +80,6 @@ export interface VerdictMeta {
   durationMs?: number;
   totalCostUsd?: number;
   toolCount?: number;
-}
-
-/** Format milliseconds as a compact human-readable duration string. */
-function formatDuration(ms: number): string {
-  const totalSec = Math.round(ms / 1000);
-  if (totalSec < 60) return `${totalSec}s`;
-  const mins = Math.floor(totalSec / 60);
-  const secs = totalSec % 60;
-  return secs === 0 ? `${mins}m` : `${mins}m ${secs}s`;
 }
 
 /**

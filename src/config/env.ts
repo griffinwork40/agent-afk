@@ -63,6 +63,7 @@ import { UI_ENV_REGISTRY } from './env.ui.js';
 import { WHATIF_ENV_REGISTRY } from './env.whatif.js';
 import { SESSION_STORAGE_ENV_REGISTRY } from './env.session-storage.js';
 import { MEMORY_GC_ENV_REGISTRY } from './env.memory-gc.js';
+import { VITALS_ENV_REGISTRY } from './env.vitals.js';
 
 export type EnvVarType = 'string' | 'number' | 'boolean' | 'json';
 
@@ -173,6 +174,9 @@ export const ENV_REGISTRY = [
 
   // ── Hook feature flags (env.hooks.ts) ────────────────────────────────────
   ...HOOKS_ENV_REGISTRY,
+
+  // ── Per-round vitals harness note (env.vitals.ts) ────────────────────────
+  ...VITALS_ENV_REGISTRY,
 ] as const satisfies readonly EnvVarMeta[];
 
 /**

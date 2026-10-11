@@ -13,6 +13,7 @@ import { env } from '../../config/env.js';
 import { palette } from '../palette.js';
 import { execFile as execFileCallback } from 'node:child_process';
 import { handleCommandError } from '../errors/index.js';
+import { printWarnings } from './print-warnings.js';
 import { promisify } from 'node:util';
 import { runSweep } from '../../agent/worktree/worktree-sweep.js';
 import type { SweepOptions } from '../../agent/worktree/worktree-sweep.js';
@@ -184,18 +185,7 @@ export function registerWorktreeCommand(program: Command): void {
         console.log(`  ${icon} [${c.verdict.padEnd(22)}] ${c.path}`);
       }
 
-      if (result.warnings.length > 0) {
-        console.log('');
-        for (const w of result.warnings) {
-          if (w.startsWith('[ERROR]')) {
-            console.error(palette.error(w));
-          } else {
-            console.log(palette.warning(w));
-          }
-        }
-      }
-
-      const hasErrors = result.warnings.some((w) => w.startsWith('[ERROR]'));
+      const hasErrors = printWarnings(result.warnings);
       if (hasErrors) process.exit(1);
     });
 }

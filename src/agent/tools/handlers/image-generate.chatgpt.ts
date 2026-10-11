@@ -27,6 +27,8 @@ import {
   CHATGPT_BACKEND_BASE_URL,
   buildChatGptOAuthHeaders,
 } from '../../providers/openai-compatible/responses-config.js';
+import { h1ModelFetch } from '../../providers/shared/h1-fetch.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -179,8 +181,16 @@ export interface ChatGptImageRequest {
   apiKey: string;
   accountId: string;
   signal: AbortSignal;
+  /** Default is h1ModelFetch; overrides receiving undici FormData must be undici-compatible. */
   fetchFn?: typeof globalThis.fetch;
 }
+
+// ---------------------------------------------------------------------------
+// Default fetchFn: h1ModelFetch (HTTP/1.1-only, bypasses h2-enabled global
+// dispatcher that jsdom/undici 8 installs in the process-wide slot). This
+// prevents the spinning DATA-frame freeze on Node 26 (issue #3335).
+// ---------------------------------------------------------------------------
+const DEFAULT_FETCH_FN: typeof globalThis.fetch = h1ModelFetch;
 
 /**
  * Generate an image via the ChatGPT subscription Responses endpoint.
@@ -193,7 +203,7 @@ export interface ChatGptImageRequest {
 export async function generateImageViaChatGpt(
   req: ChatGptImageRequest,
 ): Promise<ChatGptImageResult | { error: string }> {
-  const doFetch = req.fetchFn ?? globalThis.fetch;
+  const doFetch = req.fetchFn ?? DEFAULT_FETCH_FN;
   const oauthHeaders = buildChatGptOAuthHeaders(req.accountId);
 
   const payload = {
@@ -241,8 +251,7 @@ export async function generateImageViaChatGpt(
       signal: req.signal,
     });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { error: `ChatGPT image request failed: ${msg}` };
+    return { error: `ChatGPT image request failed: ${errorMessage(err)}` };
   }
 
   if (!response.ok) {

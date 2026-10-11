@@ -362,11 +362,25 @@ describe('routedOneShotWithStop — xai branch', () => {
   });
 
   it('runs OAuth refresh and propagates stopReason for the oauth force path', async () => {
-    xaiAuth.resolveXaiAuth.mockReturnValueOnce({
-      apiKey: 'xai-oauth-token',
-      source: 'xai-oauth' as const,
-      mode: 'oauth' as const,
-      expiresAt: Math.floor(Date.now() / 1000) + 3600,
+    // Ensure invocation-order assertion is meaningful: resolveXaiAuth returns
+    // a different token depending on whether the refresh ran first.  Before
+    // refresh the stored token is 'xai-oauth-token-stale'; after refresh
+    // resolveXaiAuth is called once and returns 'xai-oauth-token-fresh'.
+    // If the call order were swapped (resolveXaiAuth before refresh) the test
+    // would receive the stale token and the chat assertion would fail.
+    let refreshCompleted = false;
+    xaiOauth.ensureFreshAccessToken.mockImplementationOnce(async () => {
+      refreshCompleted = true;
+      return null;
+    });
+    xaiAuth.resolveXaiAuth.mockImplementationOnce(() => {
+      // resolveXaiAuth must be called AFTER refresh; capture the state.
+      return {
+        apiKey: refreshCompleted ? 'xai-oauth-token-fresh' : 'xai-oauth-token-stale',
+        source: 'xai-oauth' as const,
+        mode: 'oauth' as const,
+        expiresAt: Math.floor(Date.now() / 1000) + 3600,
+      };
     });
     xaiEndpoints.resolveXaiEndpoint.mockReturnValueOnce({
       baseURL: 'https://cli-chat-proxy.grok.com/v1',
@@ -388,11 +402,12 @@ describe('routedOneShotWithStop — xai branch', () => {
     });
 
     expect(result.stopReason).toBe('max_tokens');
-    // OAuth path must refresh tokens before resolving credentials.
+    // OAuth path must refresh tokens before resolving credentials; confirmed
+    // by asserting chat received the post-refresh token, not the stale one.
     expect(xaiOauth.ensureFreshAccessToken).toHaveBeenCalledTimes(1);
     expect(chat).toHaveBeenCalledWith(
       expect.objectContaining({
-        apiKey: 'xai-oauth-token',
+        apiKey: 'xai-oauth-token-fresh',
         baseURL: 'https://cli-chat-proxy.grok.com/v1',
         defaultHeaders: { 'x-proxy': 'true' },
       }),

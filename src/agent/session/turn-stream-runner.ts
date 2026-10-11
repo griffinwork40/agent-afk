@@ -35,6 +35,12 @@ import type { ToolEventMin } from '../done-evidence.js';
 import { dispatchTurnStop } from './turn-stream-runner.stop.js';
 import type { StopWiring } from '../types/session-types.js';
 
+/** Cost already counted against `maxBudgetUsd`: own turns + completed subagents. */
+function seededBudgetCost(accounting: AccountingAccumulator): number {
+  const acct = accounting.snapshot();
+  return acct.sessionRunningCostUsd + acct.subagentRunningCostUsd;
+}
+
 /**
  * Context bag passed to {@link TurnStreamRunner} at construction.
  * Most mutable fields are accessed via their owning objects — no raw
@@ -213,6 +219,10 @@ export class TurnStreamRunner {
       // Budget enforcement (C6): wire maxBudgetUsd from config so the
       // stream consumer can abort when cumulative cost crosses the ceiling.
       maxBudgetUsd: config.maxBudgetUsd,
+      // Tree budget (#3442): seed the per-turn accumulator with everything
+      // already spent (prior turns + completed subagents) so the ceiling is
+      // cumulative across turns and shared with the subagent tree.
+      ...(config.maxBudgetUsd !== undefined ? { _runningCostUsd: seededBudgetCost(accounting) } : {}),
       abortBudget: (reason) => {
         const ctrl = getAbortController();
         if (!ctrl.signal.aborted) ctrl.abort(reason);

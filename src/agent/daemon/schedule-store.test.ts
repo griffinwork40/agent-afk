@@ -828,3 +828,37 @@ describe('schedule-store concurrent mutation', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 });
+
+// ── retry fields round-trip (#3243) ─────────────────────────────────────────
+
+describe('retry fields (maxAttempts / retryDelayMs)', () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('round-trips through add → load → toScheduledTask', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-retry-'));
+    const path = join(tmpDir, 'schedules.json');
+    addSchedule({ name: 'Retry Me', command: '/r', cron: '0 * * * *', enabled: true, maxAttempts: 3, retryDelayMs: 2_000 }, path);
+    const loaded = getSchedule('retry-me', path)!;
+    expect(loaded.maxAttempts).toBe(3);
+    expect(loaded.retryDelayMs).toBe(2_000);
+    const task = toScheduledTask(loaded);
+    expect(task.maxAttempts).toBe(3);
+    expect(task.retryDelayMs).toBe(2_000);
+  });
+
+  it('updateSchedule patches the fields and preserves them when omitted', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-retry-'));
+    const path = join(tmpDir, 'schedules.json');
+    addSchedule({ name: 'Patch Me', command: '/p', cron: '0 * * * *', enabled: true }, path);
+    expect(toScheduledTask(getSchedule('patch-me', path)!).maxAttempts).toBeUndefined();
+    updateSchedule('patch-me', { maxAttempts: 2, retryDelayMs: 5_000 }, path);
+    updateSchedule('patch-me', { name: 'Renamed' }, path);
+    const after = getSchedule('patch-me', path)!;
+    expect(after.maxAttempts).toBe(2);
+    expect(after.retryDelayMs).toBe(5_000);
+  });
+});

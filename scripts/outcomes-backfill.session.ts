@@ -5,8 +5,6 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 
 import { StoredSessionInputSchema } from '../src/agent/facets/schema.js';
 import {
@@ -19,8 +17,7 @@ import {
 import type { Vote, OutcomeLabel, SelfReport } from '../src/agent/outcomes/index.js';
 import type { FetchPrState, PrState } from '../src/agent/outcomes/lf-delayed.js';
 import type { Turn } from '../src/agent/outcomes/artifacts.js';
-
-const execFileAsync = promisify(execFile);
+import { execFileAsync } from '../src/utils/exec-file.js';
 
 // ---------------------------------------------------------------------------
 // Session loading

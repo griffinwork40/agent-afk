@@ -29,6 +29,7 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { errorMessage } from '../src/utils/errors.js';
 
 import { getSessionsDir, getFacetCacheDir } from '../src/paths.js';
 import { recoverArtifacts } from '../src/agent/outcomes/index.js';
@@ -245,6 +246,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-  console.error('backfill failed:', err instanceof Error ? err.message : String(err));
+  console.error('backfill failed:', errorMessage(err));
   process.exit(1);
 });

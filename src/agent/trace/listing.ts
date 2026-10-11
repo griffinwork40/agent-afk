@@ -14,6 +14,7 @@
 import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getWitnessRoot } from '../../paths.js';
+import { isErrnoCode } from '../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,7 +44,7 @@ export async function listTraces(): Promise<TraceDirEntry[]> {
   try {
     names = await readdir(root);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    if (isErrnoCode(err, 'ENOENT')) return [];
     throw err;
   }
 

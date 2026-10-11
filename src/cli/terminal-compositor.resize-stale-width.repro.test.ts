@@ -379,7 +379,11 @@ describe('TerminalCompositor — resize-window stale-geometry corruption (H1 + H
   // introduced in #3205 (merged from main). The band content is held as
   // PENDING while the overlay is active; the CPR-triggered repaint clears
   // bandGeometryStale before the overlay collapses, so the band never gets
-  // row assignments on materialization. Tracked as a follow-up.
+  // row assignments on materialization.
+  // Follow-up: #3283 (compositor: SHRINK during a width-only CPR burst drops
+  // the ghost-row erase snapshot) is the closest match — both involve the
+  // width-only CPR + bandGeometryStale interaction.  Note: #3212 tracks the
+  // grow-eviction duplicate-frame scenario, which is a distinct defect.
   it.skip('multi-resize storm: commit, resize 160→100, commit, resize 100→64, collapse — all content present exactly once, no row exceeds 64 cols', async () => {
     vi.useFakeTimers();
     const stdout = makeStdout(160, 24);

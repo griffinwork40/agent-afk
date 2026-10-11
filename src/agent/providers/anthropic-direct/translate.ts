@@ -17,7 +17,7 @@ import type {
 import type { TranslateCtx, TranslateOutput, TurnResult } from './types.js';
 import { env } from '../../../config/env.js';
 import { incompleteStreamError, isStreamComplete } from './stream-completeness.js';
-import { errorMessage } from '../../../utils/errors.js';
+import { errorMessage, ensureError} from '../../../utils/errors.js';
 import { warnOnDroppedThinkingBlocks } from './input-transformations.js';
 import { emitSessionPhase } from '../../trace/emit.js';
 import { isMidStreamNetworkTermination } from './loop/network-termination.js';
@@ -411,7 +411,7 @@ export async function* translateMessageStream(
     if (traceEnabled) console.log('[translate] SDK iteration threw:', errorMessage(err));
     // (#2787) Drop after stop_reason = complete; drop before = surface error for re-drive.
     if (!isMidStreamNetworkTermination(err) || stopReason === null) {
-      yield { kind: 'event', event: { type: 'error', error: err instanceof Error ? err : new Error(String(err)) } };
+      yield { kind: 'event', event: { type: 'error', error: ensureError(err) } };
       return;
     }
     if (traceEnabled) console.log('[translate] (#2787) transport drop after stop_reason, accepting as complete');

@@ -268,6 +268,36 @@ jobs:
       - name: Test (Node 26 — includes undici gzip-bridge regression, issue #2525)
         run: pnpm test
 
+  # Node 24 compatibility leg (finding #3150 / issue #3252).
+  #
+  # Mirrors test-node26: standalone job so the `test` matrix artifact names are
+  # unchanged, Node 22 remains the primary coverage gate, and this job
+  # falsifies the ^24.15.0 branch of the engines.node range.
+  test-node24:
+    name: Test (ubuntu-latest, Node 24)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test (Node 24 — falsifies the ^24.15.0 engines.node branch)
+        run: pnpm test
+
   # A required Windows integration check, kept separate from the main test matrix
   # so a unit-suite failure cannot skip or mask it.
   smoke-windows:

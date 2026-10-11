@@ -1395,7 +1395,7 @@ describe('CronScheduler — overlap guard (#2299)', () => {
     // Start first tick (does not await — it is blocked on firstRunGate).
     const firstTickPromise = scheduler.tick('overlap-test');
 
-    // Yield to the microtask queue so the first tick's `inFlightTaskIds.add`
+    // Yield to the microtask queue so the first tick's `inFlightTasks.set`
     // runs before the second tick checks the guard.
     await Promise.resolve();
 

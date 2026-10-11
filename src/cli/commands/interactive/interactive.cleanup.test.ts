@@ -380,3 +380,392 @@ describe("exitReason 'eof' on readline close (issue #2900)", () => {
     expect(opts['exitReason']).toBe('eof');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Mocks for printExitSummary / snapshotGitStateForCancelAll / cancelSessionBackgroundWork
+// ---------------------------------------------------------------------------
+
+vi.mock('../../render.js', () => ({
+  divider: vi.fn((_label: string) => '--- Session Summary ---'),
+}));
+
+vi.mock('../../format-utils.js', () => ({
+  formatDuration: vi.fn((_ms: number) => '1m 23s'),
+}));
+
+vi.mock('../../render/session-summary.js', () => ({
+  costTokenParts: vi.fn(() => ['$0.01', '1234tok']),
+}));
+
+vi.mock('../../resume-command.js', () => ({
+  formatResumeCommand: vi.fn((id: string, _model: unknown) => `afk interactive --resume ${id}`),
+}));
+
+vi.mock('../../palette.js', () => ({
+  palette: {
+    dim: vi.fn((s: string) => s),
+    brand: vi.fn((s: string) => s),
+    info: vi.fn((s: string) => s),
+    warn: vi.fn((s: string) => s),
+    error: vi.fn((s: string) => s),
+  },
+}));
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    execFileSync: vi.fn(),
+    execFile: vi.fn(),
+  };
+});
+
+import { execFileSync, execFile as execFileCb } from 'node:child_process';
+const mockExecFileSync = execFileSync as ReturnType<typeof vi.fn>;
+const mockExecFileCb = execFileCb as ReturnType<typeof vi.fn>;
+
+import {
+  printExitSummary,
+  snapshotGitStateForCancelAll,
+  cancelSessionBackgroundWork,
+} from './interactive.cleanup.js';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeCtxWithTurns(overrides?: Partial<InteractiveCtx['stats']>): InteractiveCtx {
+  const base = makeMinimalCtx();
+  Object.assign(base.stats, {
+    totalTurns: 3,
+    sessionStartTime: Date.now() - 5000,
+    model: 'claude-opus-4',
+    sessionId: 'sess-abc123',
+    totalCostUsd: 0.01,
+    totalTokens: 1234,
+    cwd: '/tmp/test-repo',
+    ...overrides,
+  });
+  return base;
+}
+
+function makeBackgroundRegistry(jobs: Array<{ status: string }> = []) {
+  return {
+    list: vi.fn(() => jobs),
+    cancelAll: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+function makeDetachRegistry() {
+  return { cancelAll: vi.fn() };
+}
+
+function makeProcessJobs() {
+  return { killAll: vi.fn().mockResolvedValue(undefined) };
+}
+
+// ---------------------------------------------------------------------------
+// printExitSummary
+// ---------------------------------------------------------------------------
+
+describe('printExitSummary', () => {
+  let consoleSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    mockExecFileSync.mockReturnValue('');
+    mockSaveSession.mockReturnValue('/fake/sess-abc123.json');
+    vi.clearAllMocks();
+    consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  it('prints nothing when totalTurns === 0', () => {
+    const ctx = makeCtxWithTurns({ totalTurns: 0 });
+    const save = vi.fn(() => undefined);
+    printExitSummary(ctx, undefined, save);
+    expect(consoleSpy).not.toHaveBeenCalled();
+  });
+
+  it('prints divider, stats lines, and trailing blank when turns > 0', () => {
+    const ctx = makeCtxWithTurns();
+    mockExecFileSync.mockReturnValue('1 file changed, 2 insertions(+)');
+    const save = vi.fn(() => '/fake/sess-abc123.json');
+    printExitSummary(ctx, undefined, save);
+    // divider + line1 + line2 + edits + resume + trailing blank = at least 5 calls
+    expect(consoleSpy.mock.calls.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('includes worktree basename when worktreeHandle is provided', () => {
+    const ctx = makeCtxWithTurns();
+    mockExecFileSync.mockReturnValue('');
+    const save = vi.fn(() => undefined);
+    const handle = { path: '/some/.afk-worktrees/my-worktree' } as import('./worktree.js').WorktreeHandle;
+    printExitSummary(ctx, handle, save);
+    const allText = consoleSpy.mock.calls.flat().join('\n');
+    expect(allText).toContain('my-worktree');
+  });
+
+  it('shows "none" for worktree when handle is undefined', () => {
+    const ctx = makeCtxWithTurns();
+    mockExecFileSync.mockReturnValue('');
+    const save = vi.fn(() => undefined);
+    printExitSummary(ctx, undefined, save);
+    const allText = consoleSpy.mock.calls.flat().join('\n');
+    expect(allText).toContain('none');
+  });
+
+  it('shows "no files changed" when git diff --shortstat returns empty string', () => {
+    const ctx = makeCtxWithTurns();
+    mockExecFileSync.mockReturnValue('   '); // whitespace → trim → empty
+    const save = vi.fn(() => undefined);
+    printExitSummary(ctx, undefined, save);
+    const allText = consoleSpy.mock.calls.flat().join('\n');
+    expect(allText).toContain('no files changed');
+  });
+
+  it('shows the shortstat text when git diff returns content', () => {
+    const ctx = makeCtxWithTurns();
+    mockExecFileSync.mockReturnValue(' 2 files changed, 5 insertions(+), 1 deletion(-)\n');
+    const save = vi.fn(() => undefined);
+    printExitSummary(ctx, undefined, save);
+    const allText = consoleSpy.mock.calls.flat().join('\n');
+    expect(allText).toContain('2 files changed');
+  });
+
+  it('silently skips the edits line when execFileSync throws', () => {
+    const ctx = makeCtxWithTurns();
+    mockExecFileSync.mockImplementation(() => { throw new Error('not a git repo'); });
+    const save = vi.fn(() => undefined);
+    // Should not throw
+    expect(() => printExitSummary(ctx, undefined, save)).not.toThrow();
+    const allText = consoleSpy.mock.calls.flat().join('\n');
+    expect(allText).not.toContain('edits:');
+  });
+
+  it('prints resume command using ctx.stats.sessionId', () => {
+    const ctx = makeCtxWithTurns({ sessionId: 'my-session-id' });
+    mockExecFileSync.mockReturnValue('');
+    const save = vi.fn(() => undefined);
+    printExitSummary(ctx, undefined, save);
+    const allText = consoleSpy.mock.calls.flat().join('\n');
+    expect(allText).toContain('my-session-id');
+  });
+
+  it('derives resume id from savedPath when sessionId is absent', () => {
+    const ctx = makeCtxWithTurns({ sessionId: undefined });
+    mockExecFileSync.mockReturnValue('');
+    mockSaveSession.mockReturnValue('/fake/derived-id.json');
+    const save = vi.fn(() => '/fake/derived-id.json');
+    printExitSummary(ctx, undefined, save);
+    const allText = consoleSpy.mock.calls.flat().join('\n');
+    expect(allText).toContain('derived-id');
+  });
+
+  it('omits resume line when both sessionId and savedPath are absent', () => {
+    const ctx = makeCtxWithTurns({ sessionId: undefined });
+    mockExecFileSync.mockReturnValue('');
+    const save = vi.fn(() => undefined);
+    printExitSummary(ctx, undefined, save);
+    const allText = consoleSpy.mock.calls.flat().join('\n');
+    expect(allText).not.toContain('Continue with');
+  });
+
+  it('swallows errors thrown by saveCurrentSession and still prints other lines', () => {
+    const ctx = makeCtxWithTurns({ sessionId: undefined });
+    mockExecFileSync.mockReturnValue('');
+    const save = vi.fn(() => { throw new Error('disk full'); });
+    expect(() => printExitSummary(ctx, undefined, save)).not.toThrow();
+    // divider should still appear
+    expect(consoleSpy).toHaveBeenCalled();
+  });
+
+  it('uses process.cwd() as fallback cwd for git when ctx.stats.cwd is undefined', () => {
+    const ctx = makeCtxWithTurns({ cwd: undefined });
+    mockExecFileSync.mockReturnValue('');
+    const save = vi.fn(() => undefined);
+    printExitSummary(ctx, undefined, save);
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['diff', '--shortstat', 'HEAD'],
+      expect.objectContaining({ cwd: process.cwd() }),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// snapshotGitStateForCancelAll
+// ---------------------------------------------------------------------------
+
+describe('snapshotGitStateForCancelAll', () => {
+  let stderrSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    stderrSpy.mockRestore();
+    mockExecFileCb.mockReset();
+  });
+
+  it('writes a snapshot header to stderr when git commands succeed', async () => {
+    // execFile (promisified) — mock the callback form used by promisify
+    mockExecFileCb.mockImplementation(
+      (_cmd: string, _args: string[], _opts: unknown, cb: (err: null, result: { stdout: string; stderr: string }) => void) => {
+        cb(null, { stdout: ' 1 file changed\n', stderr: '' });
+      },
+    );
+    await snapshotGitStateForCancelAll('/tmp/repo');
+    expect(stderrSpy).toHaveBeenCalled();
+    const written = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+    expect(written).toContain('pre-cancelAll git snapshot');
+  });
+
+  it('shows "(no uncommitted changes)" when git diff --stat is empty', async () => {
+    mockExecFileCb.mockImplementation(
+      (_cmd: string, args: string[], _opts: unknown, cb: (err: null, result: { stdout: string; stderr: string }) => void) => {
+        const out = args.includes('--stat') ? '' : '';
+        cb(null, { stdout: out, stderr: '' });
+      },
+    );
+    await snapshotGitStateForCancelAll('/tmp/repo');
+    const written = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+    expect(written).toContain('(no uncommitted changes)');
+  });
+
+  it('shows "(working tree clean)" when git status --short is empty', async () => {
+    mockExecFileCb.mockImplementation(
+      (_cmd: string, _args: string[], _opts: unknown, cb: (err: null, result: { stdout: string; stderr: string }) => void) => {
+        cb(null, { stdout: '', stderr: '' });
+      },
+    );
+    await snapshotGitStateForCancelAll('/tmp/repo');
+    const written = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+    expect(written).toContain('(working tree clean)');
+  });
+
+  it('silently swallows errors from git (not a git repo, timeout, etc.)', async () => {
+    mockExecFileCb.mockImplementation(
+      (_cmd: string, _args: string[], _opts: unknown, cb: (err: Error) => void) => {
+        cb(new Error('not a git repo'));
+      },
+    );
+    await expect(snapshotGitStateForCancelAll('/tmp/not-a-repo')).resolves.toBeUndefined();
+    expect(stderrSpy).not.toHaveBeenCalled();
+  });
+
+  it('indents each diff line with 4 spaces', async () => {
+    mockExecFileCb.mockImplementation(
+      (_cmd: string, args: string[], _opts: unknown, cb: (err: null, result: { stdout: string; stderr: string }) => void) => {
+        const out = args.includes('--stat') ? 'file.ts | 2 ++\n' : '';
+        cb(null, { stdout: out, stderr: '' });
+      },
+    );
+    await snapshotGitStateForCancelAll('/tmp/repo');
+    const written = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+    expect(written).toContain('    file.ts | 2 ++');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cancelSessionBackgroundWork
+// ---------------------------------------------------------------------------
+
+describe('cancelSessionBackgroundWork', () => {
+  afterEach(() => {
+    mockExecFileCb.mockReset();
+    vi.spyOn(process.stderr, 'write').mockRestore();
+  });
+
+  it('calls backgroundRegistry.cancelAll()', async () => {
+    const bgReg = makeBackgroundRegistry();
+    const ctx = makeCtxWithTurns();
+    (ctx as unknown as Record<string, unknown>).backgroundRegistry = bgReg;
+    await cancelSessionBackgroundWork(ctx as unknown as InteractiveCtx);
+    expect(bgReg.cancelAll).toHaveBeenCalled();
+  });
+
+  it('calls detachRegistry.cancelAll() when present', async () => {
+    const bgReg = makeBackgroundRegistry();
+    const detach = makeDetachRegistry();
+    const ctx = makeCtxWithTurns();
+    (ctx as unknown as Record<string, unknown>).backgroundRegistry = bgReg;
+    (ctx as unknown as Record<string, unknown>).detachRegistry = detach;
+    await cancelSessionBackgroundWork(ctx as unknown as InteractiveCtx);
+    expect(detach.cancelAll).toHaveBeenCalled();
+  });
+
+  it('calls processJobs.killAll() when present', async () => {
+    const bgReg = makeBackgroundRegistry();
+    const pjobs = makeProcessJobs();
+    const ctx = makeCtxWithTurns();
+    (ctx as unknown as Record<string, unknown>).backgroundRegistry = bgReg;
+    (ctx as unknown as Record<string, unknown>).processJobs = pjobs;
+    await cancelSessionBackgroundWork(ctx as unknown as InteractiveCtx);
+    expect(pjobs.killAll).toHaveBeenCalled();
+  });
+
+  it('snapshots git state when there are running background jobs', async () => {
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    mockExecFileCb.mockImplementation(
+      (_cmd: string, _args: string[], _opts: unknown, cb: (err: null, result: { stdout: string; stderr: string }) => void) => {
+        cb(null, { stdout: '', stderr: '' });
+      },
+    );
+    const bgReg = makeBackgroundRegistry([{ status: 'running' }]);
+    const ctx = makeCtxWithTurns({ cwd: '/tmp/repo' });
+    (ctx as unknown as Record<string, unknown>).backgroundRegistry = bgReg;
+    await cancelSessionBackgroundWork(ctx as unknown as InteractiveCtx);
+    expect(bgReg.cancelAll).toHaveBeenCalled();
+  });
+
+  it('does NOT snapshot git state when no running jobs', async () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const bgReg = makeBackgroundRegistry([{ status: 'done' }]);
+    const ctx = makeCtxWithTurns();
+    (ctx as unknown as Record<string, unknown>).backgroundRegistry = bgReg;
+    await cancelSessionBackgroundWork(ctx as unknown as InteractiveCtx);
+    expect(stderrSpy).not.toHaveBeenCalled();
+    stderrSpy.mockRestore();
+  });
+
+  it('swallows backgroundRegistry.cancelAll() rejection (best-effort)', async () => {
+    const bgReg = {
+      list: vi.fn(() => []),
+      cancelAll: vi.fn().mockRejectedValue(new Error('cancel failed')),
+    };
+    const ctx = makeCtxWithTurns();
+    (ctx as unknown as Record<string, unknown>).backgroundRegistry = bgReg;
+    await expect(cancelSessionBackgroundWork(ctx as unknown as InteractiveCtx)).resolves.toBeUndefined();
+  });
+
+  it('swallows processJobs.killAll() rejection (best-effort)', async () => {
+    const bgReg = makeBackgroundRegistry();
+    const pjobs = { killAll: vi.fn().mockRejectedValue(new Error('kill failed')) };
+    const ctx = makeCtxWithTurns();
+    (ctx as unknown as Record<string, unknown>).backgroundRegistry = bgReg;
+    (ctx as unknown as Record<string, unknown>).processJobs = pjobs;
+    await expect(cancelSessionBackgroundWork(ctx as unknown as InteractiveCtx)).resolves.toBeUndefined();
+  });
+
+  it('is safe when detachRegistry is absent', async () => {
+    const bgReg = makeBackgroundRegistry();
+    const ctx = makeCtxWithTurns();
+    (ctx as unknown as Record<string, unknown>).backgroundRegistry = bgReg;
+    // detachRegistry intentionally absent
+    delete (ctx as unknown as Record<string, unknown>).detachRegistry;
+    await expect(cancelSessionBackgroundWork(ctx as unknown as InteractiveCtx)).resolves.toBeUndefined();
+  });
+
+  it('is safe when processJobs is absent', async () => {
+    const bgReg = makeBackgroundRegistry();
+    const ctx = makeCtxWithTurns();
+    (ctx as unknown as Record<string, unknown>).backgroundRegistry = bgReg;
+    delete (ctx as unknown as Record<string, unknown>).processJobs;
+    await expect(cancelSessionBackgroundWork(ctx as unknown as InteractiveCtx)).resolves.toBeUndefined();
+  });
+});

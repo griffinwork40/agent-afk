@@ -75,6 +75,7 @@ function makeZeroAgg(): InsightAggregates {
       totalRecords: 0,
       skippedOutOfWindow: 0,
       topClusters: [],
+      ledgerTruncated: false,
     },
   };
 }
@@ -171,6 +172,7 @@ function makeNonZeroAgg(): InsightAggregates {
           lastSeen: '2025-01-15T00:00:00.000Z',
         },
       ],
+      ledgerTruncated: false,
     },
   };
 }
