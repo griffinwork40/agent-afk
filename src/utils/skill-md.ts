@@ -50,42 +50,55 @@ function isValidFlag(flag: string): boolean {
 }
 
 /**
+ * Deduplicate an array of normalised flag strings (first-seen order) and sort
+ * the result. Shared by both the inline and block branches of `parseFlagsField`.
+ */
+function dedupeAndSort(flags: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const f of flags) {
+    if (!seen.has(f)) {
+      seen.add(f);
+      unique.push(f);
+    }
+  }
+  return unique.sort();
+}
+
+/**
  * Parse a frontmatter `flags:` value. `after` is the text following `flags:`
  * on the same line; `followingLines` are the frontmatter lines after it.
  *
  * Accepts the inline form (`flags: [--x, y]`) and the block form
  * (`flags:` / `null` followed by `  - --x` items). Items are normalised to a
  * leading `--`, validated against FLAG_REGEX (dropping any item that does not
- * match — e.g. `--foo; rm -rf /`), and sorted. Returns `null` when no valid
- * flags were declared.
+ * match — e.g. `--foo; rm -rf /`), deduped, and sorted. Returns `null` when
+ * no valid flags were declared.
  */
 export function parseFlagsField(after: string, followingLines: readonly string[]): string[] | null {
   const value = after.trim();
   if (value.startsWith('[')) {
     const m = value.match(/\[(.*?)\]/);
     if (!m?.[1]) return null;
-    const seen = new Set<string>();
     const items = m[1]
       .split(',')
       .map((s) => normalizeFlag(s.trim()))
-      .filter((s) => s.length > 2 && isValidFlag(s) && !seen.has(s) && seen.add(s));
-    return items.length > 0 ? items.sort() : null;
+      .filter((s) => s.length > 2 && isValidFlag(s));
+    const deduped = dedupeAndSort(items);
+    return deduped.length > 0 ? deduped : null;
   }
   if (value !== '' && value !== 'null') return null;
-  const seen = new Set<string>();
   const arr: string[] = [];
   for (const next of followingLines) {
     if (!next || !next.match(/^\s+-\s/)) break;
     const im = next.match(/^\s+-\s+(.+)/);
     if (im?.[1]) {
       const flag = normalizeFlag(im[1].trim());
-      if (isValidFlag(flag) && !seen.has(flag)) {
-        seen.add(flag);
-        arr.push(flag);
-      }
+      if (isValidFlag(flag)) arr.push(flag);
     }
   }
-  return arr.length > 0 ? arr.sort() : null;
+  const deduped = dedupeAndSort(arr);
+  return deduped.length > 0 ? deduped : null;
 }
 
 /**
