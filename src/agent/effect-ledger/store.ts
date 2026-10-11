@@ -24,6 +24,8 @@ import * as fsp from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getEffectLedgerPath } from '../../paths.js';
+import { isErrnoCode } from '../../utils/errors.js';
+import { parseJsonlLines } from '../../utils/jsonl.js';
 import type {
   EffectRecord,
   EffectQuery,
@@ -47,21 +49,10 @@ async function readAllRecords(path: string): Promise<EffectRecord[]> {
   try {
     raw = await fsp.readFile(path, 'utf8');
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    if (isErrnoCode(e, 'ENOENT')) return [];
     throw e;
   }
-  const records: EffectRecord[] = [];
-  for (const line of raw.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const parsed: unknown = JSON.parse(trimmed);
-      if (isEffectRecord(parsed)) records.push(parsed);
-    } catch {
-      // Skip malformed lines — partial writes, truncated lines, format drift.
-    }
-  }
-  return records;
+  return parseJsonlLines<EffectRecord>(raw, { guard: isEffectRecord });
 }
 
 /** Minimal runtime shape-check (not a full schema validator). */

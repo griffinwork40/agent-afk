@@ -67,6 +67,17 @@ export interface AtomicWriteOptions {
    */
   mkdirp?: boolean;
   /**
+   * POSIX mode bits to pass to `mkdirSync` / `mkdir` when creating the
+   * destination's parent directory.  Defaults to `undefined` (OS default,
+   * masked by umask).  Set to e.g. `0o700` when the parent directory must
+   * be owner-only regardless of the process umask — for example the
+   * `state/` directory that holds session files.
+   *
+   * Note: `mkdirSync` with `recursive: true` only sets the mode on newly
+   * created directories; pre-existing ancestors are left unchanged.
+   */
+  mkdirMode?: number;
+  /**
    * When true, open the temp file with `O_EXCL` (`flag: 'wx'`) so a
    * pre-existing temp path (e.g. from a prior interrupted write) causes an
    * immediate `EEXIST` error rather than silently overwriting it.
@@ -255,7 +266,10 @@ export function atomicWriteFile(
   const flag = resolvedOpts.secure ? 'wx' : 'w';
 
   if (mkdirp) {
-    mkdirSync(dirname(dest), { recursive: true });
+    mkdirSync(dirname(dest), {
+      recursive: true,
+      ...(resolvedOpts.mkdirMode !== undefined ? { mode: resolvedOpts.mkdirMode } : {}),
+    });
   }
 
   const tmp = makeTmpPath(dest);
@@ -274,31 +288,46 @@ export function atomicWriteFile(
 // ---------------------------------------------------------------------------
 
 /**
+ * Test-only injectables for {@link atomicWriteFileAsync}.
+ * Collapsed into a single object so the public positional signature stays
+ * narrow (finding #3153).  Production callers must not pass this.
+ * @internal
+ */
+export interface _AtomicWriteAsyncTestInternals {
+  renameFn?: (from: string, to: string) => Promise<void>;
+  platform?: string;
+}
+
+/**
  * Async version of {@link atomicWriteFile}.  Write `content` to `dest`
  * atomically via a sibling temp file and `rename`.
  *
  * @param dest    - Absolute path of the destination file.
  * @param content - String (or Buffer) to write.
  * @param opts    - Optional mode, encoding, and mkdirp flag.
- * @internal `_renameFn` — test-only injectable rename function forwarded to
- *   {@link renameWithRetry}.  Production callers must not pass this.
- * @internal `_platform` — test-only platform override forwarded to
- *   {@link renameWithRetry}.  Production callers must not pass this.
+ * @internal `_testInternals` — test-only injectable overrides (renameFn,
+ *   platform) forwarded to {@link renameWithRetry}.  Production callers must
+ *   not pass this.
  */
 export async function atomicWriteFileAsync(
   dest: string,
   content: string | Buffer,
   opts: AtomicWriteOptions = {},
-  /** @internal */ _renameFn?: (from: string, to: string) => Promise<void>,
-  /** @internal */ _platform?: string,
+  /** @internal */ _testInternals?: _AtomicWriteAsyncTestInternals,
 ): Promise<boolean> {
+  // Unpack internal overrides (undefined in production).
+  const _renameFn = _testInternals?.renameFn;
+  const _platform = _testInternals?.platform;
   const mode = opts.mode ?? 0o600;
   const encoding = opts.encoding ?? 'utf-8';
   const mkdirp = opts.mkdirp ?? true;
   const flag = opts.secure ? 'wx' : 'w';
 
   if (mkdirp) {
-    await mkdir(dirname(dest), { recursive: true });
+    await mkdir(dirname(dest), {
+      recursive: true,
+      ...(opts.mkdirMode !== undefined ? { mode: opts.mkdirMode } : {}),
+    });
   }
 
   const tmp = makeTmpPath(dest);

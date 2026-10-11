@@ -34,7 +34,6 @@
  * naming invariant in `lib/function-extents.ts`.
  */
 
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -50,6 +49,7 @@ import {
   type RatchetConfig,
   type Violation,
 } from './lib/size-ratchet.js';
+import { walkSourceFiles } from './lib/walk-source-files.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -111,17 +111,15 @@ export function isScannable(relPath: string): boolean {
 }
 
 function walk(dir: string, out: string[]): void {
-  if (!fs.existsSync(dir)) return;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (EXCLUDED_DIRS.includes(entry.name as never)) continue;
-      walk(full, out);
-    } else if (entry.isFile()) {
-      const rel = path.relative(repoRoot, full);
-      if (isScannable(rel)) out.push(rel);
-    }
-  }
+  const extraExclude = new Set(EXCLUDED_DIRS.filter(d => d !== 'node_modules' && d !== 'dist'));
+  const absPaths: string[] = [];
+  walkSourceFiles(
+    dir,
+    (absPath) => isScannable(path.relative(repoRoot, absPath)),
+    absPaths,
+    extraExclude,
+  );
+  for (const abs of absPaths) out.push(path.relative(repoRoot, abs));
 }
 
 interface Measured {

@@ -17,6 +17,7 @@ import { SECURITY_HEADERS } from './static-assets.js';
 import type { WebElicitationBridge } from './elicitation-web.js';
 import type { CreateSessionRequest, OwnedSessionInfo } from './session-owner.js';
 import { errorMessage } from '../utils/errors.js';
+import { isRecord } from '../utils/type-guards.js';
 
 export { SECURITY_HEADERS };
 
@@ -25,9 +26,9 @@ export interface RouteContext {
   owned: Set<string>;
   bridge: WebElicitationBridge;
   /** Submit a prompt to an owned session. */
-  submitPrompt: (sessionId: string, text: string) => Promise<void>;
+  submitPrompt: (sessionId: string, text: string) => void;
   /** Submit a pre-built skill-invocation message (ContentBlockParam[]). */
-  submitSkillMessage?: (sessionId: string, message: ContentBlockParam[]) => Promise<void>;
+  submitSkillMessage?: (sessionId: string, message: ContentBlockParam[]) => void;
   /** Session cwd for preflight context. */
   getSessionCwd?: (sessionId: string) => string | undefined;
   /** Provider-issued session id for preflight artifact dirs. */
@@ -265,7 +266,7 @@ export async function handlePrompt(
     if (slashHandled) return; // handled — response already sent
   }
 
-  await ctx.submitPrompt(sessionId, text);
+  ctx.submitPrompt(sessionId, text);
   sendJson(res, 202, { ok: true });
 }
 
@@ -363,7 +364,7 @@ async function dispatchSlashForWeb(
         });
         return true;
       }
-      await ctx.submitSkillMessage(sessionId, result.message);
+      ctx.submitSkillMessage(sessionId, result.message);
       // submitSkillMessage already incremented pending; release the
       // reservation so the net count stays 1.
       ctx.releaseTurn?.(sessionId);
@@ -395,10 +396,6 @@ async function dispatchSlashForWeb(
 export function header(req: IncomingMessage, name: string): string | undefined {
   const raw = req.headers[name];
   return Array.isArray(raw) ? raw[0] : raw;
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null;
 }
 
 function readStringField(body: unknown, field: string): string | undefined {

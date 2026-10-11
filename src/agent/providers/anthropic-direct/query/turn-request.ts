@@ -4,6 +4,7 @@ import type { AnthropicClientLike, AnthropicToolDef, RunTurnInput, ToolDispatche
 import { buildRequestHeaders } from '../auth.js';
 import { isExtendedCacheTtlActive } from '../cache-policy.js';
 import { TurnAccumulator } from '../loop/turn-accumulator.js';
+import { ensureError } from '../../../../utils/errors.js';
 
 export interface TurnRequestInput {
   client: AnthropicClientLike;
@@ -116,7 +117,7 @@ export const FAST_ERROR_PREFIX = '[Fast mode requested; no standard-mode fallbac
  * `query-auth-retry.test.ts`.
  */
 export function annotateFastError(error: unknown, fast: boolean): Error {
-  const original = error instanceof Error ? error : new Error(String(error));
+  const original = ensureError(error);
   if (!fast) return original;
   // Already annotated (e.g. round-request annotated it, then query-runtime saw
   // the same throw): don't stack a second prefix.

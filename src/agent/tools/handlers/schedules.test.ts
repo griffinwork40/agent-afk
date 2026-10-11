@@ -870,3 +870,52 @@ describe('shell executor live-sync — create_schedule + update_schedule with li
     }
   });
 });
+
+describe('schedule handlers — retry fields (#3243)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedules-handler-retry-'));
+    vi.stubEnv('AFK_HOME', tmpDir);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('create_schedule persists maxAttempts / retryDelayMs and list_schedules shows them', async () => {
+    const result = await createScheduleHandler(
+      { name: 'Retry Task', command: '/r', cron: '0 2 * * *', maxAttempts: 3, retryDelayMs: 2_000 },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    const list = JSON.parse((await listSchedulesHandler({}, fakeSignal)).content as string) as Array<Record<string, unknown>>;
+    expect(list[0]).toMatchObject({ id: 'retry-task', maxAttempts: 3, retryDelayMs: 2_000 });
+  });
+
+  it.each([
+    [{ maxAttempts: 0 }, /maxAttempts/],
+    [{ maxAttempts: 6 }, /maxAttempts/],
+    [{ maxAttempts: 2.5 }, /maxAttempts/],
+    [{ retryDelayMs: 10 }, /retryDelayMs/],
+    [{ retryDelayMs: '5000' }, /retryDelayMs/],
+  ])('create_schedule rejects %o', async (extra, pattern) => {
+    const result = await createScheduleHandler(
+      { name: 'Bad Retry', command: '/r', cron: '0 2 * * *', ...extra },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(pattern);
+  });
+
+  it('update_schedule sets and validates the fields', async () => {
+    await createScheduleHandler({ name: 'Upd Retry', command: '/r', cron: '0 2 * * *' }, fakeSignal);
+    const bad = await updateScheduleHandler({ taskId: 'upd-retry', maxAttempts: 99 }, fakeSignal);
+    expect(bad.isError).toBe(true);
+    const ok = await updateScheduleHandler({ taskId: 'upd-retry', maxAttempts: 2, retryDelayMs: 1_000 }, fakeSignal);
+    expect(ok.isError).toBeUndefined();
+    const list = JSON.parse((await listSchedulesHandler({}, fakeSignal)).content as string) as Array<Record<string, unknown>>;
+    expect(list[0]).toMatchObject({ maxAttempts: 2, retryDelayMs: 1_000 });
+  });
+});

@@ -22,6 +22,7 @@ import type { Surface } from '../../awareness/types.js';
 import type { TraceSink } from '../../trace/index.js';
 import type { InboundAttachmentReader } from '../../content/attachment-registry.js';
 import type { DelegationBudget } from '../delegation-budget.js';
+import type { HookRegistry } from '../../hooks.js';
 import type { QueuedNoteClaim } from '../subagent/queued-note.js';
 import type { PromotedSubagentInfo } from '../subagent/foreground-promotion.js';
 
@@ -42,8 +43,19 @@ export interface SubagentExecutorContext {
    * `systemPrompt` is the raw base prompt (pre-assembly), intentionally
    * excluding TOOL_SYSTEM_PROMPT and ROUTING_DIRECTIVE — subagents are task
    * workers that must not inherit routing directives. See ComposeExecutorContext.
+   *
+   * `operatorOverlay` is the BARE operator overlay (AFK.md / afk.config.json
+   * `systemPrompt` / AFK_SYSTEM_PROMPT, or a per-chat override) with no
+   * framework base and no header. Unnamed `agent` children do NOT inherit the
+   * composed `systemPrompt` (#3242); they get the lean worker prompt plus this
+   * overlay (`composeUnnamedWorkerPrompt`, #3324). Absent → no overlay. Not an
+   * AgentConfig field: it is consumed by `buildChildConfig` and never copied
+   * onto a child config. Inherited by nested child executors with the rest of
+   * `defaultConfig`.
    */
-  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'xaiBaseUrl' | 'skillDispatchName'>;
+  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'xaiBaseUrl' | 'skillDispatchName'> & {
+    operatorOverlay?: string;
+  };
   /**
    * User-facing surface of the session that owns this executor (cli/telegram/
    * daemon). Set at top-level wiring sites; inherited by nested child executors.
@@ -191,6 +203,13 @@ export interface SubagentExecutorContext {
   // Delegation budget: shared by reference across the entire session tree.
   // See delegation-budget.ts. Opt-in: undefined when no budget env vars are set.
   traceWriter?: TraceSink; workspaceStore?: import('../../workspace/index.js').WorkspaceStore; delegationBudget?: DelegationBudget;
+  /**
+   * Hook registry for the depth-2+ child {@link SubagentManager} this executor
+   * builds (child-config.ts buildNestedChildManager), whose stub parent carries
+   * none. Forwarded to the recursive child executor so the chain holds to
+   * maxDepth. Undefined => nested managers resolve hooks as before.
+   */
+  hookRegistry?: HookRegistry;
   /**
    * Tool allowlist to propagate to grandchild providers when this executor
    * is itself a read-only skill's child. Forwarded into `childProviderFactory`

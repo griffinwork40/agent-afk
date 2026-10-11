@@ -4,7 +4,7 @@
  * logic and the post-update version surfacing are both exercised.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -513,10 +513,8 @@ describe('updateMarketplace — warns before discarding local edits', () => {
       return runner(args, cwd, env);
     };
 
-    const warnMessages: string[] = [];
-    const origWarn = console.warn;
-    console.warn = (...args: unknown[]) => { warnMessages.push(args.join(' ')); };
-
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let warnMessages: string[] = [];
     try {
       await updateMarketplace(
         'mp',
@@ -524,7 +522,9 @@ describe('updateMarketplace — warns before discarding local edits', () => {
         { cacheDir, indexPath, gitRunner: statusRunner, now: () => new Date('2026-05-01T00:00:00Z') },
       );
     } finally {
-      console.warn = origWarn;
+      // Capture before mockRestore() clears mock.calls.
+      warnMessages = warnSpy.mock.calls.map((c) => c.join(' '));
+      warnSpy.mockRestore();
     }
 
     // The warning must name the modified files
@@ -549,10 +549,8 @@ describe('updateMarketplace — warns before discarding local edits', () => {
       return runner(args, cwd, env);
     };
 
-    const warnMessages: string[] = [];
-    const origWarn = console.warn;
-    console.warn = (...args: unknown[]) => { warnMessages.push(args.join(' ')); };
-
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let warnMessages: string[] = [];
     try {
       await updateMarketplace(
         'mp',
@@ -560,7 +558,8 @@ describe('updateMarketplace — warns before discarding local edits', () => {
         { cacheDir, indexPath, gitRunner: cleanRunner, now: () => new Date('2026-05-01T00:00:00Z') },
       );
     } finally {
-      console.warn = origWarn;
+      warnMessages = warnSpy.mock.calls.map((c) => c.join(' '));
+      warnSpy.mockRestore();
     }
 
     const warn = warnMessages.find((m) => m.includes('locally-edited'));
@@ -578,10 +577,8 @@ describe('updateMarketplace — warns before discarding local edits', () => {
       return runner(args, cwd, env);
     };
 
-    const warnMessages: string[] = [];
-    const origWarn = console.warn;
-    console.warn = (...args: unknown[]) => { warnMessages.push(args.join(' ')); };
-
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let warnMessages: string[] = [];
     try {
       const outcome = await updateMarketplace(
         'mp',
@@ -591,7 +588,8 @@ describe('updateMarketplace — warns before discarding local edits', () => {
       // Update should still succeed
       expect(outcome.status).toBe('updated');
     } finally {
-      console.warn = origWarn;
+      warnMessages = warnSpy.mock.calls.map((c) => c.join(' '));
+      warnSpy.mockRestore();
     }
 
     // No "locally-edited" warning — status errored so we skipped the probe

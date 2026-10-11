@@ -44,6 +44,7 @@ export async function registerPluginSkillsForWeb(): Promise<void> {
         acceptsAttachments: true,
         ...(entry.argumentHint ? { usage: `${slashName} ${entry.argumentHint}` } : {}),
         ...(hint ? { hint } : {}),
+        ...(entry.flags?.length ? { flags: entry.flags } : {}),
         async handler() {
           return 'continue';
         },

@@ -27,9 +27,6 @@
  * @module telegram/handlers/farm-callbacks
  */
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
 import type { Context } from 'telegraf';
 
 import {
@@ -51,8 +48,7 @@ import { parseFarmCallback, type FarmCallbackAction } from '../farm-callback-dat
 import { safeAnswer, type LogFn } from './farm-callbacks.helpers.js';
 import { handleOpenPr } from './farm-callbacks.open-pr.js';
 import { handleRespawn } from './farm-callbacks.respawn.js';
-
-const execFileAsync = promisify(execFile);
+import { execFileAsync } from '../../utils/exec-file.js';
 
 // ---------------------------------------------------------------------------
 // M1: Per-slug in-process lock to prevent double-tap races on Open PR / Respawn

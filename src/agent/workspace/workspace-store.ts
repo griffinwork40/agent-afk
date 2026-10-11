@@ -16,7 +16,7 @@ import Database from 'better-sqlite3';
 import type BetterSqlite3 from 'better-sqlite3';
 import type { WorkspaceSubscription } from './workspace-subscription.js';
 import { notifySubscribers } from './workspace-subscription.js';
-import { sleepSync } from '../../utils/sleep-sync.js';
+import { configureSqliteConnection } from '../storage/sqlite.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -139,31 +139,10 @@ export class WorkspaceStore {
 
   constructor(dbPath?: string) {
     this.db = new Database(dbPath ?? ':memory:');
-    // busy_timeout: concurrent writers wait up to 5s rather than failing fast.
-    this.db.pragma('busy_timeout = 5000');
-    this.enableWalMode();
+    configureSqliteConnection(this.db);
     this.db.exec(SCHEMA_SQL);
   }
 
-  /**
-   * WAL mode — tolerant of concurrent cold opens (same pattern as memory-store).
-   * Reads journal_mode first (lock-free) and skips the switch when already 'wal'.
-   */
-  private enableWalMode(): void {
-    const MAX_ATTEMPTS = 50;
-    const BACKOFF_MS = 20;
-    for (let attempt = 1; ; attempt++) {
-      try {
-        if (this.db.pragma('journal_mode', { simple: true }) === 'wal') return;
-        this.db.pragma('journal_mode = WAL');
-        return;
-      } catch (err) {
-        const busy = (err as { code?: string } | null)?.code === 'SQLITE_BUSY';
-        if (!busy || attempt >= MAX_ATTEMPTS) throw err;
-        sleepSync(BACKOFF_MS);
-      }
-    }
-  }
 
   /**
    * Publish a new workspace entry. Returns the assigned row id.

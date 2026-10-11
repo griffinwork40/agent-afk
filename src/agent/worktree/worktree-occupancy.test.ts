@@ -119,16 +119,26 @@ describe('startWorktreeOccupancyHeartbeat', () => {
 
     const stop = startWorktreeOccupancyHeartbeat(worktreePath, 10);
     try {
-      await new Promise((r) => setTimeout(r, 60));
+      // Wait on the observable condition rather than a fixed sleep: on a slow
+      // runner the 10 ms interval may not fire within an arbitrary 60 ms window,
+      // causing a false "expected 7200082 to be less than 3600000" assertion.
+      // vi.waitFor polls until the heartbeat has written a fresh timestamp or
+      // 2 s elapses (well within any CI budget).
+      await vi.waitFor(
+        async () => {
+          const m = JSON.parse(await fs.readFile(metaPath, 'utf-8')) as Record<string, unknown>;
+          expect(Date.now() - new Date(String(m['createdAt'])).getTime()).toBeLessThan(3_600_000);
+        },
+        { timeout: 2000, interval: 10 },
+      );
+      const meta = JSON.parse(await fs.readFile(metaPath, 'utf-8')) as Record<string, unknown>;
+      const ageMs = Date.now() - new Date(String(meta['createdAt'])).getTime();
+      expect(ageMs).toBeLessThan(5_000);
+      expect(meta['pid']).toBe(process.pid);
+      expect(meta['owner']).toBe('agent'); // unrelated fields preserved
     } finally {
       stop();
     }
-
-    const meta = JSON.parse(await fs.readFile(metaPath, 'utf-8')) as Record<string, unknown>;
-    const ageMs = Date.now() - new Date(String(meta['createdAt'])).getTime();
-    expect(ageMs).toBeLessThan(3_600_000);
-    expect(meta['pid']).toBe(process.pid);
-    expect(meta['owner']).toBe('agent'); // unrelated fields preserved
   });
 
   it('stops touching after stop() is called', async () => {

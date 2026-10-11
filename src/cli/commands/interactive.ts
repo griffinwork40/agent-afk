@@ -35,6 +35,7 @@ import {
 } from './interactive/worktree-disposition.js';
 import { installUnknownCommandGuard, checkBareUnknownCommand } from './interactive/unknown-command-guard.js';
 import { errorMessage } from '../../utils/errors.js';
+import { sleep } from '../../utils/sleep.js';
 
 // Lifecycle-phase siblings
 import {
@@ -303,7 +304,7 @@ export function registerInteractiveCommand(program: Command): void {
         await cancelSessionBackgroundWork(ctx);
         await Promise.race([
           ctx.session.current.close(),
-          new Promise<void>(resolve => { const t = setTimeout(resolve, 2000); t.unref(); }),
+          sleep(2000, { unref: true }),
         ]);
         if (ctx.mcpManager) await ctx.mcpManager.disconnectAll();
         ctx.memoryStore.close();

@@ -218,3 +218,29 @@ export function isReasoningModel(model: string | undefined): boolean {
   const bare = bareModelId(resolved);
   return REASONING_MODEL_PATTERNS.some((re) => re.test(bare));
 }
+
+// ---------------------------------------------------------------------------
+// Shared OpenAI-compatible third-party prefix list
+// ---------------------------------------------------------------------------
+
+/**
+ * Third-party model-family prefixes that route to the openai-compatible
+ * provider (providers/index.ts Tier 3) and receive the 262k context-window
+ * default (model-limits.ts `routesToOpenAICompatible`).
+ *
+ * This constant is the single source of truth for both routing rules so a new
+ * family addition propagates to both files — and to the regression test suite —
+ * automatically. Each entry is a lower-cased stem (no trailing `-` or `_`);
+ * callers test `startsWith(stem + '-')` and `startsWith(stem + '_')`.
+ *
+ * Families covered: DeepSeek, Mistral, Mixtral, Meta Llama, Qwen — all of
+ * which expose an OpenAI Chat Completions-compatible endpoint via providers
+ * like opencode.ai, OpenRouter, Together, Fireworks, and their own APIs.
+ */
+export const OPENAI_COMPAT_THIRD_PARTY_PREFIXES: readonly string[] = [
+  'deepseek',
+  'mistral',
+  'mixtral',
+  'llama',
+  'qwen',
+];

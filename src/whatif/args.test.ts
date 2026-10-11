@@ -652,6 +652,19 @@ describe('parseWhatifArgs — --predict flag', () => {
     expect(r as string).toContain('requires');
   });
 
+  it('strips a leading "should" from the testQuestion but preserves it in behavior', () => {
+    // --predict "should greet the user" must produce
+    // testQuestion "Does the response greet the user" (not "…should greet…").
+    const r = parseWhatifArgs(['--append', 'text', '--predict', 'should greet the user']) as ParsedWhatifArgs;
+    expect(r.options.operatorPredictions![0]!.behavior).toBe('should greet the user');
+    expect(r.options.operatorPredictions![0]!.testQuestion).toBe('Does the response greet the user');
+  });
+
+  it('strips a leading "will" from the testQuestion', () => {
+    const r = parseWhatifArgs(['--append', 'text', '--predict', 'will include a code block']) as ParsedWhatifArgs;
+    expect(r.options.operatorPredictions![0]!.testQuestion).toBe('Does the response include a code block');
+  });
+
   it('--predict can be combined with --verify and --yes', () => {
     const r = parseWhatifArgs([
       '--append', 'text', '--predict', 'behavior x', '--verify', '--yes',

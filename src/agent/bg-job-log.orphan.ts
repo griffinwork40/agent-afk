@@ -13,7 +13,7 @@ import {
   probeProcessStartTimes,
   ownProcessStartedAt,
 } from './process-liveness.start-time.js';
-import type { StartTimeProbeDeps } from './process-liveness.start-time.js';
+import type { StartTimeProbeDeps, ProcessStartInfo } from './process-liveness.start-time.js';
 import type { BgJobMeta } from './bg-job-log.js';
 
 /** Injection seams for {@link reconcileOrphanedMeta} — used only in tests. */
@@ -23,7 +23,7 @@ export interface ReconcileOrphanDeps {
    * object so tests can inject a fake readFile / exec without wrapping the
    * whole probe.
    */
-  probe?: (pids: readonly number[], deps?: StartTimeProbeDeps) => Promise<Map<number, { startedAtMs?: number; startTicks?: number } | undefined>>;
+  probe?: (pids: readonly number[], deps?: StartTimeProbeDeps) => Promise<Map<number, ProcessStartInfo | undefined>>;
   /** Override the recorded own-process start ticks (Linux). */
   ownTicks?: () => number | undefined;
   /** Override the recorded own-process start epoch ms. */
@@ -53,8 +53,10 @@ function isPidReused(
   if (probedInfo === undefined) return false; // probe could not determine start time → keep alive
 
   // Tick identity (Linux) — ownTicks is only defined when the probed pid is
-  // our own pid, which no longer reaches this function. Kept for forward
-  // compatibility in case a caller path resurfaces the own-pid case.
+  // our own pid, which no longer reaches this function (own-pid reuse is
+  // handled earlier in reconcileOrphanedMeta). This branch is unreachable by
+  // current callers but is kept for forward-compat in case a caller path
+  // resurfaces the own-pid case. It is intentionally untested.
   if (probedInfo.startTicks !== undefined && ownTicks !== undefined) {
     return probedInfo.startTicks !== ownTicks;
   }
@@ -144,12 +146,15 @@ export async function reconcileOrphanedMeta(
   // Foreign pid: run start-time probe only when ownerStartTime was recorded.
   // meta.ownerPid is guaranteed non-undefined here: classifyPidLiveness returns
   // 'unknown' for undefined pids and we returned early on that verdict above.
-  const ownerPid = meta.ownerPid as number;
+  // Narrowing guard instead of a cast: the type includes `undefined` so tighten
+  // with an explicit check rather than asserting with `as number`.
+  if (meta.ownerPid === undefined) return meta; // unreachable by invariant, but narrows the type
+  const ownerPid: number = meta.ownerPid;
   if (meta.ownerStartTime === undefined) return meta;
 
   const probe = deps?.probe ?? probeProcessStartTimes;
 
-  let probedMap: Map<number, { startedAtMs?: number; startTicks?: number } | undefined>;
+  let probedMap: Map<number, ProcessStartInfo | undefined>;
   try {
     probedMap = await probe([ownerPid]);
   } catch {

@@ -149,6 +149,10 @@ export function handleResizeImmediate(self: LifecycleHost): void {
   }
   self.logUpdate?.resetGeometry?.();
   self.bandGeometryStale = true;
+  // Resize-specific staleness flag: set ONLY here (and in handleDisarmWindowResize)
+  // so frame-preserve's legacy deficit eviction can distinguish mid-burst
+  // stale geometry from the suspend/resume path (which also sets bandGeometryStale).
+  self.resizeGeometryStale = true;
 }
 
 /**
@@ -161,7 +165,7 @@ export function handleResizeImmediate(self: LifecycleHost): void {
  * frozen pre-resize frame rows.
  *
  * Side-effect-free beyond mutating `self.pendingResizeErase`,
- * `self.bandGeometryStale`, and `self.disarmRows`.
+ * `self.bandGeometryStale`, `self.resizeGeometryStale`, and `self.disarmRows`.
  */
 export function handleDisarmWindowResize(self: LifecycleHost): void {
   const liveRows = self.stdout.rows ?? 24;
@@ -180,5 +184,6 @@ export function handleDisarmWindowResize(self: LifecycleHost): void {
     }
   }
   self.bandGeometryStale = true;
+  self.resizeGeometryStale = true; // mirrors handleResizeImmediate — SIGWINCH-only flag (#3212)
   self.disarmRows = 0;
 }

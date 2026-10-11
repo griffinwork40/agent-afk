@@ -48,21 +48,22 @@
 
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
-import type { SubagentHandle, SubagentResult, SubagentStatus } from './subagent.js';
+import type { SubagentHandle, SubagentResult } from './subagent.js';
 import { buildResultFromError, createEmptyTrace } from './subagent/result.js';
 import { debugLog } from '../utils/debug.js';
 import { emitBackgroundAgent } from './trace/emit.js';
 import type { TraceSink } from './trace/index.js';
 import { BgJobLogWriter, type BgJobMeta } from './bg-job-log.js';
 import { ownProcessStartedAt } from './process-liveness.start-time.js';
-import { emitBackgroundRoutingTelemetry } from './background-registry.telemetry.js';
-import { boundedStopReason } from './tools/subagent/failure-payload.js';
 import { sweepOldBgJobs } from './background-registry.sweep.js';
 import { BackgroundJobCapError, resolveBackgroundJobCap } from './background-registry.cap.js';
-import { appendTranscriptTail } from './background-registry.transcript.js';
-import { recordTouchedFile } from './background-registry.touched-files.js';
+
 import type { BackgroundJob, BackgroundJobProvenance, BackgroundJobStatus } from './background-registry.types.js';
-import { persistResultBody } from './background-registry.result.js';
+import {
+  markTerminalImpl,
+  appendTranscript as appendTranscriptImpl,
+  recordTouched,
+} from './background-registry.mark-terminal.js';
 
 export { BackgroundJobCapError } from './background-registry.cap.js';
 export { MAX_TRANSCRIPT_TAIL_BYTES } from './background-registry.transcript.js';
@@ -111,8 +112,6 @@ interface InternalJob extends BackgroundJob {
   /** Epoch-ms of the most recent observable activity. Updated on every progress event. */  lastActivityAt: number;
 }
 
-/** Default TTL for evicting terminal jobs from the registry map. */
-const TERMINAL_EVICT_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Maximum time to wait for a single job's terminal callback to settle
@@ -261,7 +260,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
           !event.chunk.pending &&
           (event.chunk.toolName === 'edit_file' || event.chunk.toolName === 'write_file')
         ) {
-          recordTouchedFile(job.touchedFiles, event.chunk.toolInputRaw ?? event.chunk.toolInput);
+          recordTouched(job, event.chunk.toolInputRaw ?? event.chunk.toolInput);
         }
       },
     );
@@ -536,7 +535,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
   appendTranscript(jobId: string, chunk: string): void {
     const job = this.jobs.get(jobId);
     if (!job) return;
-    job.transcriptTail = appendTranscriptTail(job.transcriptTail, chunk);
+    appendTranscriptImpl(job, chunk);
   }
 
   /**
@@ -619,176 +618,18 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
   ): Promise<void> {
     const job = this.jobs.get(jobId);
     if (!job || job.status !== 'running') return;
-
-    job.result = result;
-    job.endedAt = Date.now();
-    const durationMs = job.endedAt - job.startedAt;
-    job.status = this.statusFromResult(result.status);
-
-    // Map SubagentStatus → BackgroundAgentPayload transition + emit.
-    if (job.status === 'completed') {
-      const rawContent = result.message?.content;
-      // Invariant: `content` here is the RAW message content, measured BEFORE
-      // any `annotateIfIncomplete` / provenance-header pass runs. This method
-      // is an observation site only (see class-level note on markTerminal) —
-      // it never mutates `result` — so `content_chars` always reflects the
-      // subagent's actual output size, never the parent-visible banner text
-      // a delivery consumer (bg-result-notifier.ts, bgsub.ts) may prepend.
-      const content = typeof rawContent === 'string'
-        ? rawContent
-        : rawContent !== undefined
-          ? JSON.stringify(rawContent)
-          : '';
-      void emitBackgroundAgent(this.traceWriter, {
-        transition: 'completed',
-        jobId,
-        subagentId: job.subagentId,
-        durationMs,
-        outputBytes: Buffer.byteLength(content, 'utf8'),
-      });
-      emitBackgroundRoutingTelemetry({
-        event: 'subagent.completed',
-        subagent_id: job.subagentId,
-        parent_session_id: job.parentSessionId,
-        status: result.status,
-        duration_ms: durationMs,
-        content_chars: content.length,
-        stop_reason: boundedStopReason(result.stopReason),
-      });
-      this.emit('settled', this.snapshot(job));
-    } else if (job.status === 'failed') {
-      const err = result.error;
-      void emitBackgroundAgent(this.traceWriter, {
-        transition: 'failed',
-        jobId,
-        subagentId: job.subagentId,
-        durationMs,
-        errorClass: err?.name ?? 'Error',
-        errorMessage: err?.message ?? 'unknown',
-      });
-      emitBackgroundRoutingTelemetry({
-        event: 'subagent.failed',
-        subagent_id: job.subagentId,
-        parent_session_id: job.parentSessionId,
-        status: result.status,
-        duration_ms: durationMs,
-        error_message: err?.message,
-        stop_reason: boundedStopReason(result.stopReason),
-      });
-      this.emit('settled', this.snapshot(job));
-    } else {
-      // 'cancelled' — distinguish explicit operator cancels from cascade aborts
-      // so trace readers can correlate with parent-session teardown events.
-      // cancelSource is set before handle.cancel() in cancelJob() / cancelAll().
-      void emitBackgroundAgent(this.traceWriter, {
-        transition: 'cancelled',
-        jobId,
-        subagentId: job.subagentId,
-        source: job.cancelSource ?? 'explicit',
-        ...(job.modelCancelReason !== undefined
-          ? { cancelledBy: 'model' as const, reason: job.modelCancelReason }
-          : {}),
-      });
-      emitBackgroundRoutingTelemetry({
-        event: 'subagent.failed',
-        subagent_id: job.subagentId,
-        parent_session_id: job.parentSessionId,
-        status: result.status,
-        duration_ms: durationMs,
-        stop_reason: boundedStopReason(result.stopReason),
-      });
-      this.emit('settled', this.snapshot(job));
-    }
-
-    job.settle(result);
-
-    // Finalize the persistent log: update meta with terminal status + endedAt,
-    // persist the result body, then close the writer. Fire-and-forget — writer
-    // errors are logged inside.
-    if (writer && openMeta) {
-      persistResultBody(writer, jobId, job.status, result); // completed/failed only
-      void writer.writeMeta({
-        ...openMeta,
-        status: job.status,
-        ...(job.endedAt !== undefined ? { endedAt: job.endedAt } : {}),
-        // Persist stopReason so the /bgsub:join disk-fallback path (reached
-        // after this job's in-memory entry is TTL-evicted) can reconstruct
-        // the same partial-result labeling the in-memory replay applies —
-        // see BgJobMeta.stopReason. Omitted (not undefined/null) when absent.
-        // Bounded via the shared chokepoint (see failure-payload.ts) — this
-        // was the one write site (of six) that persisted the raw,
-        // provider-controlled value uncapped (#717).
-        ...(boundedStopReason(result.stopReason) !== undefined
-          ? { stopReason: boundedStopReason(result.stopReason) }
-          : {}),
-      }).then(() => writer.close());
-    }
-
-    // Schedule TTL eviction. `.unref()` prevents this timer from keeping the
-    // Node process alive after the REPL exits normally.
-    const timer = setTimeout(() => {
-      this.jobs.delete(jobId);
-    }, TERMINAL_EVICT_TTL_MS);
-    timer.unref();
-
-    // Tear the handle down so a naturally-completing background job fires
-    // `SubagentStop` — the same lifecycle guarantee foreground jobs get from
-    // `SubagentExecutor`'s finally block. This MUST be the last step (see the
-    // synchronous-observability invariant above): all state a caller observes
-    // synchronously is already committed by the time we suspend here.
-    //
-    // injectContext for background: `teardown()` routes any `injectContext` a
-    // SubagentStop handler returns through the handle's default channel —
-    // `queueFrameworkContext` on a live `parentInputStreamRef` (so it rides the
-    // parent's next real user message), else a no-op. A background job has no
-    // waiting tool_result to carry the note in-turn, so this default-queue path
-    // is the only correct delivery; if the parent already detached (no live
-    // ref), the note is silently dropped. That trade-off is intentional:
-    // firing the hook + sealing the trace is the primary goal here; inject
-    // delivery is best-effort and secondary for detached background work.
-    //
-    // Idempotent with the cancel path: on `cancelJob`/`cancelAll` the handle
-    // already fired `SubagentStop` (and set `stopDispatched`) before the
-    // cancelled result re-entered this method, so this call is a no-op there.
-    // Errors are swallowed — teardown is a cleanup step and must never turn a
-    // settled job into an unhandled rejection on the detached callback path.
-    try {
-      await job.handle.teardown();
-    } catch (err) {
-      debugLog(
-        `markTerminal: handle.teardown() failed for job ${jobId}: ${String(err)}`,
-      );
-    }
-
-    // Post-terminal cleanup (e.g. isolation:"worktree" unlock + teardown).
-    // Fires on ALL terminal states: completion, failure, and cancellation.
-    // Placed after handle.teardown() so hooks can inspect state. Best-effort.
-    if (job.onCleanup) {
-      try {
-        await job.onCleanup();
-      } catch (err) {
-        debugLog(`markTerminal: onCleanup failed for job ${jobId}: ${String(err)}`);
-      }
-    }
-
-    // Item 4: release delegation-budget slot for promoted foreground subagents.
-    // Fires synchronously after cleanup so the slot stays charged until the job
-    // actually settles — not when the foreground tool call returned.
-    if (job.onSettled) {
-      try {
-        job.onSettled();
-      } catch (err) {
-        debugLog(`markTerminal: onSettled failed for job ${jobId}: ${String(err)}`);
-      }
-    }
-  }
-
-  private statusFromResult(s: SubagentStatus): BackgroundJobStatus {
-    if (s === 'succeeded') return 'completed';
-    if (s === 'failed') return 'failed';
-    if (s === 'cancelled') return 'cancelled';
-    // 'idle' or 'running' shouldn't reach the terminal callback — treat as failed.
-    return 'failed';
+    // Delegate to the sibling module (background-registry.mark-terminal.ts).
+    // The emit callback wraps the EventEmitter so the sibling never imports
+    // BackgroundAgentRegistry directly (no circular dep).
+    await markTerminalImpl(
+      job,
+      result,
+      (_j) => this.emit('settled', this.snapshot(job)),
+      (id) => this.jobs.delete(id),
+      this.traceWriter,
+      writer,
+      openMeta,
+    );
   }
 
   /** External-facing snapshot: strips internal fields, preserves observable state. */

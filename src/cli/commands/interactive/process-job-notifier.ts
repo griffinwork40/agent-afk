@@ -4,7 +4,10 @@
  * Mirrors {@link BgResultNotifier}'s contract so the loop needs no new
  * mechanism: it buffers an injection envelope for the next model turn, a
  * one-line human notice for the top of the loop, and nudges `onInjectable` so
- * an idle prompt auto-resumes.
+ * an idle prompt auto-resumes. A job that settles mid-turn is drained at the
+ * next tool-round boundary of the running turn instead
+ * (loop-iteration.boundary.ts), so it only wakes a new turn when no later
+ * round delivered it.
  *
  * Invariant: the envelope carries METADATA ONLY (id, status, exit code,
  * signal, duration, byte count, log path), never process output. Output is

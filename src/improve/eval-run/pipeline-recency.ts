@@ -32,6 +32,7 @@ import { existsSync, readFileSync } from 'fs';
 import { env } from '../../config/env.js';
 import { getEvalRunsIndexPath } from '../paths.js';
 import { errorMessage } from '../../utils/errors.js';
+import { parseJsonlLines } from '../../utils/jsonl.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -128,17 +129,18 @@ export function resolveStalenessThreshold(): number {
  * `checkEvalPipelineRecency` function.
  */
 export function parseLatestTimestamp(raw: string): string | null {
+  // Discriminant check: require `timestamp` to be a string (not just present).
+  // A plain `{ timestamp: 42 }` has the key but is not a valid IndexLine; the
+  // `isEffectRecord` pattern (check typeof, not just 'in') prevents such
+  // objects from passing the guard and being iterated as real index lines.
+  const isIndexLine = (x: unknown): x is IndexLine =>
+    x !== null &&
+    typeof x === 'object' &&
+    (typeof (x as Record<string, unknown>)['timestamp'] === 'string' ||
+      typeof (x as Record<string, unknown>)['event'] === 'string');
+  const lines = parseJsonlLines<IndexLine>(raw, { guard: isIndexLine });
   let latest: string | null = null;
-  for (const line of raw.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    let parsed: IndexLine;
-    try {
-      parsed = JSON.parse(trimmed) as IndexLine;
-    } catch {
-      // Corrupt line — skip rather than abort.
-      continue;
-    }
+  for (const parsed of lines) {
     const ts = parsed.timestamp;
     if (typeof ts !== 'string' || ts === '') continue;
     if (latest === null || ts > latest) latest = ts;

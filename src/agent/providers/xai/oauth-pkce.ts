@@ -15,7 +15,7 @@ import {
 } from './oauth-constants.js';
 import type { XaiTokenBundle } from './auth-store.js';
 import {
-  asNonEmptyString,
+  postOAuthForm,
   tokenResponseToBundle,
   type OAuthHttpDeps,
   type XaiOidcDiscovery,
@@ -91,27 +91,20 @@ export async function exchangeAuthorizationCode(
   },
   deps: OAuthHttpDeps = {},
 ): Promise<XaiTokenBundle> {
-  const fetchFn = deps.fetchFn ?? fetch;
   const clientId = deps.clientId ?? XAI_OAUTH_CLIENT_ID;
   const redirectUri = params.redirectUri ?? XAI_OAUTH_REDIRECT_URI;
-  const body = new URLSearchParams({
-    grant_type: 'authorization_code',
-    code: params.code,
-    redirect_uri: redirectUri,
-    client_id: clientId,
-    code_verifier: params.codeVerifier,
-  });
-  const res = await fetchFn(discovery.token_endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-    body: body.toString(),
-  });
-  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!res.ok) {
-    const err = asNonEmptyString(json['error']) ?? `http_${res.status}`;
-    const desc = asNonEmptyString(json['error_description']);
-    throw new Error(`xAI authorization_code exchange failed: ${desc ? `${err}: ${desc}` : err}`);
-  }
+  const json = await postOAuthForm(
+    discovery.token_endpoint,
+    {
+      grant_type: 'authorization_code',
+      code: params.code,
+      redirect_uri: redirectUri,
+      client_id: clientId,
+      code_verifier: params.codeVerifier,
+    },
+    'xAI authorization_code exchange failed',
+    deps.fetchFn,
+  );
   const tokens = tokenResponseToBundle(json, deps.nowSeconds);
   if (!tokens) {
     throw new Error('xAI authorization_code response missing access_token or refresh_token');

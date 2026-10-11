@@ -8,10 +8,7 @@
  */
 
 import { validateScheduleCwd } from '../agent/daemon/cwd-validator.js';
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null;
-}
+import { isRecord } from '../utils/type-guards.js';
 
 /**
  * Parse the `cwd` field from a request body for CREATE routes.

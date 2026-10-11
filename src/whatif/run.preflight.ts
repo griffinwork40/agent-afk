@@ -17,6 +17,7 @@ import {
 } from './mde.js';
 import { runBaselineSample, type BaselineSampleResult } from './baseline-sample.js';
 import { WhatifBudgetError, WhatifMdeError } from './run.js';
+import { errorMessage } from '../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // PreflightInput
@@ -248,7 +249,7 @@ async function persistRefusal(
   try {
     await writeFile(join(runDir, 'refused.json'), JSON.stringify(record, null, 2) + '\n');
   } catch (err) {
-    console.warn(`[whatif] could not write refused.json: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(`[whatif] could not write refused.json: ${errorMessage(err)}`);
   }
 }
 

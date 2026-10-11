@@ -75,6 +75,9 @@ function buildSkillChildManager(
     // Workspace READ channel for grandchild `agent` forks.
     ...(ctx.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
     ...(rootSessionId !== undefined ? { parentRootSessionId: rootSessionId } : {}),
+    // Hook registry (#3442): the stub parent carries none, so without it
+    // SubagentStart/Stop never fire for this skill child's `agent` forks.
+    ...(ctx.hookRegistry !== undefined ? { hookRegistry: ctx.hookRegistry } : {}),
   });
 }
 
@@ -237,6 +240,7 @@ export function buildForkedChildConfig(
     // the agent-tool path (child-config.ts), which threads it at :424.
     ...(ctx.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
     ...(ctx.delegationBudget !== undefined ? { delegationBudget: ctx.delegationBudget } : {}),
+    ...(ctx.hookRegistry !== undefined ? { hookRegistry: ctx.hookRegistry } : {}),
     // Invariant: background dispatch requires the registry to be present
     // in every SubagentExecutor in the chain — root → skill-forked child →
     // skill-forked grandchild. Without forwarding, a plugin skill's

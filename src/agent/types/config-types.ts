@@ -157,8 +157,7 @@ export interface AgentConfig {
    * Per-slot signal set by `applySlotCredentials` for a `provider:
    * 'chatgpt-oauth'` tier: force ChatGPT-subscription OAuth for this session's
    * openai-compatible provider — selecting the `~/.codex/auth.json` ChatGPT
-   * token over `OPENAI_API_KEY`/`CODEX_API_KEY` and WITHOUT requiring the global
-   * `AFK_OPENAI_CHATGPT_OAUTH` flag. Lets a ChatGPT-subscription model coexist
+   * token over `OPENAI_API_KEY`/`CODEX_API_KEY` and any explicit key. Lets a ChatGPT-subscription model coexist
    * with a custom keyed OpenAI model in one session. See `resolveOpenAIAuth`.
    */
   forceChatgptOAuth?: boolean;
@@ -428,7 +427,18 @@ export interface AgentConfig {
   /** Continue the most recent persisted session in the current working directory */
   continue?: boolean;
 
-  /** Resume a specific persisted session ID */
+  /**
+   * Resume a specific persisted session ID.
+   *
+   * When set (and {@link resumeMessages} and {@link resumeHistory} are absent
+   * and {@link persistSession} is not `false`), `AgentSession` automatically loads the on-disk message
+   * journal for this id and seeds `resumeMessages` — so SDK consumers get the
+   * same full-fidelity conversation rehydration the CLI achieves via
+   * `resumeConfigFor()`. The caller's explicit `resumeMessages` or
+   * `resumeHistory` always wins; passing either suppresses the auto-load.
+   * `sessionId` alone never triggers it. Journal-disabled environments
+   * (`AFK_MESSAGE_JOURNAL_DISABLED=1`) and subagent forks are excluded.
+   */
   resume?: string;
 
   /**
@@ -603,6 +613,22 @@ export interface AgentConfig {
    * logic. See `src/agent/provider.ts`.
    */
   provider?: ModelProvider;
+
+  /**
+   * Opt-in tool executors for the `agent`, `skill`, and `compose` tools
+   * (#3442). Default: none, so a bare `new AgentSession(config)` exposes no
+   * agent/skill/compose schemas (see `SessionMetadata.reducedToolSurface`).
+   * Build the bundle with `createWiredExecutors`, one bundle per session.
+   *
+   * Contract: mutually exclusive with {@link provider} and
+   * {@link providerFactory} (the constructor throws): an injected provider
+   * already carries its own executors. The session calls `executors.bind()`
+   * once before provider initialization, threads the defined executors into
+   * every provider it builds (including cross-family `/model` swaps), and
+   * calls `executors.drain(reason)` on close/reset alongside
+   * {@link drainSubagents}.
+   */
+  executors?: import('../session/session-executors.js').SessionExecutors;
 
   /**
    * Fully-wired provider factory for mid-session cross-family model switching.
@@ -830,6 +856,21 @@ export interface AgentConfig {
    * Default: `undefined` (main sessions see the complete manifest).
    */
   skillDispatchName?: string;
+
+  /**
+   * When true, the session is an unnamed (bare `agent` tool) subagent dispatch
+   * — i.e. one built by `buildChildConfig` with `namedAgent === undefined`.
+   *
+   * Providers use this flag in `resolveToolSystemPrompt` to return an empty
+   * string rather than the full tool conventions block.  The conventions are
+   * already embedded in `UNNAMED_SUBAGENT_WORKER_PROMPT` (which becomes
+   * `config.systemPrompt` for these sessions via `composeUnnamedWorkerPrompt`),
+   * so prepending `toolBase` again would duplicate `TOOL_SYSTEM_PROMPT_BASE` in
+   * the assembled system prompt (#3359).
+   *
+   * Default: `undefined` / `false` (all other sessions get `toolBase`).
+   */
+  isUnnamedWorker?: boolean;
 
   /**
    * When true, the session runs on a non-interactive surface where no human is

@@ -106,6 +106,24 @@ describe('image_generate handler', () => {
     vi.unstubAllEnvs();
   });
 
+  // PR #3388 pinning test: chatgpt-oauth → ChatGPT backend (not standard Images API)
+  it('when auth resolves to chatgpt-oauth, image_generate routes through the ChatGPT backend (not the standard Images API)', async () => {
+    vi.stubEnv('AFK_IMAGE_API_KEY', '');
+    mockResolveAuth.mockReturnValue({
+      apiKey: 'chatgpt-token',
+      source: 'chatgpt-oauth',
+      accountId: 'acct_pintest',
+    });
+    mockChatGptImage.mockResolvedValue({ b64_json: TINY_PNG_B64, revised_prompt: null });
+    const directFetch = vi.fn(); // must NOT be called on the chatgpt-oauth path
+    const handler = createImageGenerateHandler(directFetch);
+    const result = await handler({ prompt: 'pin test' }, signal, { resolveBase: tmpDir, sessionId: 'pin-oauth' });
+    expect(result.isError).toBeUndefined();
+    expect(directFetch).not.toHaveBeenCalled(); // standard Images API bypassed
+    expect(mockChatGptImage).toHaveBeenCalledOnce();
+    vi.unstubAllEnvs();
+  });
+
   it('routes ChatGPT OAuth through the subscription Responses endpoint', async () => {
     vi.stubEnv('AFK_IMAGE_API_KEY', '');
     mockResolveAuth.mockReturnValue({

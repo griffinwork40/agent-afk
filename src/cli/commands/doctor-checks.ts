@@ -16,6 +16,7 @@ import nodePath from 'path';
 import { getApiKey } from '../shared-helpers.js';
 import { preloadClaudeKeychainOAuth } from '../../agent/auth/credential-resolver.js';
 import { resolveOpenAIAuth } from '../../agent/providers/openai-compatible/auth.js';
+import { isErrnoCode } from '../../utils/errors.js';
 import {
   getAfkConfigDir,
   getAfkStateDir,
@@ -96,15 +97,15 @@ export async function checkCodexKey(): Promise<Check> {
       return {
         name: 'Codex/OpenAI API Key',
         state: 'warn',
-        detail: 'ChatGPT/OAuth credentials found in ~/.codex/auth.json but unused',
-        fix: 'Set AFK_OPENAI_CHATGPT_OAUTH=1 to use your ChatGPT subscription, or set OPENAI_API_KEY',
+        detail: 'ChatGPT login found in ~/.codex/auth.json but it has no access token',
+        fix: 'Re-run `codex login` to use your ChatGPT subscription, or set OPENAI_API_KEY',
       };
     case 'no-usable-auth-forced-chatgpt-oauth':
       return {
         name: 'Codex/OpenAI API Key',
         state: 'warn',
-        detail: 'Forced ChatGPT OAuth mode (AFK_OPENAI_CHATGPT_OAUTH=1) but no usable OAuth token found',
-        fix: 'Run `codex` once to authenticate, or remove AFK_OPENAI_CHATGPT_OAUTH=1 and set OPENAI_API_KEY',
+        detail: "Forced ChatGPT OAuth mode (slot provider: 'chatgpt-oauth') but no usable OAuth token found",
+        fix: "Run `codex` once to authenticate, or change the slot to provider: 'openai' and set OPENAI_API_KEY",
       };
     case 'no-usable-auth':
     default:
@@ -203,7 +204,7 @@ export async function checkConfigFile(): Promise<Check> {
     JSON.parse(content);
     return { name: 'Config File', state: 'pass', detail: `${path} (valid JSON)` };
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+    if (isErrnoCode(err, 'ENOENT')) {
       return { name: 'Config File', state: 'pass', detail: 'no config file (using defaults)' };
     }
     return {

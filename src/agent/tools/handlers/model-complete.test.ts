@@ -59,9 +59,24 @@ afterEach(() => {
 });
 
 describe('parseModelCompleteInput', () => {
-  it('rejects a missing or blank prompt', () => {
+  it('rejects a missing or blank prompt when input_path is also absent', () => {
     expect(parseModelCompleteInput({})).toMatchObject({ isError: true });
     expect(parseModelCompleteInput({ prompt: '   ' })).toMatchObject({ isError: true });
+    expect(parseModelCompleteInput({ prompt: '' })).toMatchObject({ isError: true });
+  });
+
+  it('accepts an empty or absent prompt when input_path is set', () => {
+    expect(parseModelCompleteInput({ input_path: 'file.txt' })).toMatchObject({
+      prompt: '',
+      inputPath: 'file.txt',
+    });
+    expect(parseModelCompleteInput({ prompt: '', input_path: 'file.txt' })).toMatchObject({
+      prompt: '',
+      inputPath: 'file.txt',
+    });
+    expect(parseModelCompleteInput({ prompt: '   ', input_path: 'file.txt' })).toMatchObject({
+      inputPath: 'file.txt',
+    });
   });
 
   it('defaults model to AFK_MODEL and max_tokens to 4096', () => {
@@ -79,6 +94,24 @@ describe('parseModelCompleteInput', () => {
 
   it('rejects the auto routing sentinel', () => {
     expect(parseModelCompleteInput({ prompt: 'x', model: 'auto' })).toMatchObject({ isError: true });
+  });
+
+  it('rejects a non-string prompt value even when input_path is absent', () => {
+    expect(parseModelCompleteInput({ prompt: 42 })).toMatchObject({ isError: true });
+    expect(parseModelCompleteInput({ prompt: null })).toMatchObject({ isError: true });
+    expect(parseModelCompleteInput({ prompt: {} })).toMatchObject({ isError: true });
+  });
+
+  it('rejects a non-string prompt value even when input_path is present', () => {
+    expect(parseModelCompleteInput({ prompt: 42, input_path: 'file.txt' })).toMatchObject({ isError: true });
+    expect(parseModelCompleteInput({ prompt: null, input_path: 'file.txt' })).toMatchObject({ isError: true });
+    expect(parseModelCompleteInput({ prompt: {}, input_path: 'file.txt' })).toMatchObject({ isError: true });
+  });
+
+  it('pins the error message wording when input_path is not set', () => {
+    const result = parseModelCompleteInput({ prompt: '' });
+    expect(result).toMatchObject({ isError: true });
+    expect((result as { content: string }).content).toContain('when `input_path` is not set');
   });
 });
 
@@ -163,6 +196,19 @@ describe('model_complete handler', () => {
     expect(user).toContain('line one\nline two\n</input>');
   });
 
+  it('accepts an empty prompt when input_path is set (file content is the sole input)', async () => {
+    writeFileSync(path.join(tmp, 'data.txt'), 'file content only');
+    const res = await createModelCompleteHandler(tmp)(
+      { input_path: 'data.txt' },
+      signal(),
+      { resolveBase: tmp },
+    );
+    expect(res.isError).toBeUndefined();
+    expect(res.content).toContain('the reply');
+    const user = routedOneShotWithStop.mock.calls[0]?.[0].user as string;
+    expect(user).toBe('<input path="data.txt">\nfile content only\n</input>');
+  });
+
   it('enforces read-root containment on input_path', async () => {
     const outside = mkdtempSync(path.join(os.tmpdir(), 'afk-model-complete-out-'));
     try {
@@ -208,6 +254,56 @@ describe('model_complete handler', () => {
     });
     const res = await createModelCompleteHandler(tmp)({ prompt: 'x' }, ac.signal);
     expect(res).toMatchObject({ isError: true, content: 'model_complete: aborted.' });
+  });
+
+  it('reports timed out (not aborted) when both the timeout and caller signal fire', async () => {
+    // Simulate the race: the 300 s timeoutSignal fires first, then the caller
+    // signal also aborts before the catch block runs. The result should say
+    // "timed out" not "aborted" so slow-provider failures are diagnosable.
+    const ac = new AbortController();
+    routedOneShotWithStop.mockImplementation(async ({ signal: s }: { signal: AbortSignal }) => {
+      // Wait until callSignal is aborted (simulating a timeout firing)
+      await new Promise<void>((resolve) => {
+        if (s.aborted) { resolve(); return; }
+        s.addEventListener('abort', () => resolve(), { once: true });
+      });
+      // Also abort the caller signal to reproduce the race
+      ac.abort();
+      throw Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+    });
+    // Use a 0 ms timeout to trigger the timeout signal immediately
+    const origTimeout = AbortSignal.timeout;
+    const spy = vi.spyOn(AbortSignal, 'timeout').mockImplementationOnce((_ms: number) => origTimeout(0));
+    try {
+      const res = await createModelCompleteHandler(tmp)({ prompt: 'x' }, ac.signal);
+      expect(res).toMatchObject({ isError: true, content: 'model_complete: timed out after 300s.' });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('reports timed out when only the timeout signal fires (caller signal NOT aborted)', async () => {
+    // Solo-timeout path: the 300 s timer fires alone; the caller controller is
+    // never aborted. The handler should still return "timed out after 300s."
+    // rather than falling through to the generic error branch.
+    const origTimeout = AbortSignal.timeout;
+    const spy = vi.spyOn(AbortSignal, 'timeout').mockImplementationOnce((_ms: number) => origTimeout(0));
+    try {
+      routedOneShotWithStop.mockImplementation(async ({ signal: s }: { signal: AbortSignal }) => {
+        // Wait until the (mocked 0 ms) timeout signal aborts the composed signal
+        await new Promise<void>((resolve) => {
+          if (s.aborted) { resolve(); return; }
+          s.addEventListener('abort', () => resolve(), { once: true });
+        });
+        throw Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+      });
+      // Use a fresh controller that is never aborted
+      const ac = new AbortController();
+      const res = await createModelCompleteHandler(tmp)({ prompt: 'x' }, ac.signal);
+      expect(res).toMatchObject({ isError: true, content: 'model_complete: timed out after 300s.' });
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('flags an empty reply and truncates an oversized one', async () => {

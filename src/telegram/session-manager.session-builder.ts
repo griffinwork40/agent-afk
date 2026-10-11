@@ -114,7 +114,7 @@ export async function buildAndRegisterSession(
   // Wave-manifest reconciliation: surface resumption offers for unfinished
   // work. Telegram is interactive -- fire-and-forget, never blocks creation.
   if (opts.onResumptionOffer) {
-    runTelegramReconcile(session.sessionId ?? '', route, opts.onResumptionOffer);
+    void runTelegramReconcile(session.sessionId ?? '', route, opts.onResumptionOffer);
   }
   // Consume the staged resume only after a successful build: a thrown
   // createSession must leave it staged so the next getSession retries the

@@ -19,8 +19,9 @@
  * @module agent/facets/yield-probe
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { getFacetCacheDir, validateSessionId } from '../../paths.js';
 import { SessionFacetSchema, type SessionFacet } from './schema.js';
 import { debugLog } from '../../utils/debug.js';
@@ -205,10 +206,7 @@ export function patchYieldFields(
     },
   };
 
-  mkdirSync(dirname(cachePath), { recursive: true });
-  const tmpPath = `${cachePath}.${process.pid}.yield.tmp`;
-  writeFileSync(tmpPath, `${JSON.stringify(facet, null, 2)}\n`, 'utf8');
-  renameSync(tmpPath, cachePath);
+  atomicWriteFile(cachePath, `${JSON.stringify(facet, null, 2)}\n`, { mode: 0o600, encoding: 'utf-8' });
 }
 
 // ---------------------------------------------------------------------------

@@ -14,8 +14,9 @@
  * touching $AFK_HOME.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'fs';
-import { basename, dirname, join, resolve } from 'path';
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { basename, join, resolve } from 'path';
+import { writeJsonFile, readJsonFileLoose } from '../../utils/json-file.js';
 import { getFacetCacheDir, getSessionJournalPath, getSessionLedgerPath, getSessionsDir, getSubagentJournalPath, getTraceDir, isSafeLedgerSessionId, validateSessionId } from '../../paths.js';
 import { journalExists, listSubagentJournals, readJournalRecords } from '../journal/reader.js';
 import { isMessageJournalDisabled } from '../journal/noop.js';
@@ -57,35 +58,31 @@ export function loadStoredSession(
   sessionsDir: string = getSessionsDir(),
 ): StoredSessionInput | undefined {
   const path = sessionPathFor(sessionId, sessionsDir);
-  if (!existsSync(path)) return undefined;
-  try {
-    const raw: unknown = JSON.parse(readFileSync(path, 'utf8'));
-    const parsed = StoredSessionInputSchema.safeParse(raw);
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
+  // readJsonFileLoose: ENOENT and parse errors both yield undefined. Unexpected
+  // I/O errors (EACCES, EISDIR) re-throw — a permission problem on the sessions
+  // dir should surface rather than silently treating every session as missing.
+  // Zod schema validation still runs below to reject structurally invalid sidecars.
+  const raw = readJsonFileLoose<unknown>(path);
+  if (raw == null) return undefined;
+  const parsed = StoredSessionInputSchema.safeParse(raw);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function readCachedFacet(cachePath: string): SessionFacet | undefined {
-  if (!existsSync(cachePath)) return undefined;
-  try {
-    const raw: unknown = JSON.parse(readFileSync(cachePath, 'utf8'));
-    const parsed = SessionFacetSchema.safeParse(raw);
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
+  // readJsonFileLoose: ENOENT and parse errors return undefined (cache miss →
+  // re-derive). Unexpected I/O errors re-throw. Zod validates the schema.
+  const raw = readJsonFileLoose<unknown>(cachePath);
+  if (raw == null) return undefined;
+  const parsed = SessionFacetSchema.safeParse(raw);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function writeFacet(cachePath: string, facet: SessionFacet): void {
-  mkdirSync(dirname(cachePath), { recursive: true });
-  // Atomic write: serialize to a sibling temp file then rename into place, so a
-  // crash mid-write can never leave a torn cache file (rename is atomic on the
-  // same filesystem). The .pid suffix avoids collisions between concurrent writers.
-  const tmpPath = `${cachePath}.${process.pid}.tmp`;
-  writeFileSync(tmpPath, `${JSON.stringify(facet, null, 2)}\n`, 'utf8');
-  renameSync(tmpPath, cachePath);
+  // Atomic write via writeJsonFile: serialises to a sibling temp file with a
+  // random suffix (crypto.randomBytes), then renames into place. A crash
+  // mid-write never leaves a torn cache file; rename is atomic on POSIX.
+  // writeJsonFile also creates parent dirs (mkdirp: true by default).
+  writeJsonFile(cachePath, facet);
 }
 
 /**
@@ -166,13 +163,15 @@ function tryReadJournal(sessionId: string, sessionsDir: string): {
  * absent.
  */
 function readCachedFacetLoose(cachePath: string): Record<string, unknown> | null {
-  if (!existsSync(cachePath)) return null;
-  try {
-    const raw: unknown = JSON.parse(readFileSync(cachePath, 'utf8'));
-    return raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
+  // readJsonFileLoose: ENOENT and parse errors return undefined → null (no
+  // carry-forward). This matches the original "missing file or parse error →
+  // return null" contract. Unexpected I/O errors re-throw.
+  const raw = readJsonFileLoose<unknown>(cachePath);
+  // Array.isArray guard: JSON arrays pass the `typeof raw !== 'object'` check
+  // (arrays are objects) but are not valid facet objects. Returning null treats
+  // them as "no usable cache" and triggers re-derivation from scratch.
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  return raw as Record<string, unknown>;
 }
 
 /**

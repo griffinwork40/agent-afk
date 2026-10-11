@@ -29,6 +29,8 @@ import type { SubagentExecutor } from './subagent-executor.js';
 import type { TraceSink } from '../trace/index.js';
 import type { BackgroundAgentRegistry } from '../background-registry.js';
 import type { AgentRegistry } from '../agents/types.js';
+import type { SdkPluginConfig } from '../types/sdk-types.js';
+import type { HookRegistry } from '../hooks.js';
 
 export const DEFAULT_MAX_NESTING_DEPTH = 3;
 
@@ -377,12 +379,13 @@ export function buildReadOnlyReconProvider(
  *                   Grok-routed nodes get `XaiProvider`, and Anthropic-routed
  *                   nodes get `AnthropicDirectProvider`.
  * @param workspaceStore  Parent session's workspace store, shared with every node.
- * @param openaiBaseUrl   Local-shim endpoint (e.g. mlx_lm / vLLM). Forwarded as
- *                        `baseURL` when the node routes to `openai-compatible`.
- * @param readOnlyBash    When true, the node's dispatcher blocks mutating bash
- *                        commands (named agents declaring `bashReadOnly`, e.g.
- *                        git-investigator).
- * @param canUseTool      Named-agent allowlist callback for this node.
+ * @param opts            Optional per-node configuration:
+ *   - `openaiBaseUrl`  Local-shim endpoint (e.g. mlx_lm / vLLM). Forwarded
+ *                      as `baseURL` when the node routes to `openai-compatible`.
+ *   - `readOnlyBash`   When `true`, the node's dispatcher blocks mutating bash
+ *                      commands (named agents declaring `bashReadOnly`, e.g.
+ *                      git-investigator). `true | undefined` — never `false`.
+ *   - `canUseTool`     Named-agent allowlist callback for this node.
  *
  * Invariant: `canUseTool` / `readOnlyBash` MUST arrive here, at construction.
  * A preset `AgentConfig.provider` is queried directly (provider-lifecycle.ts),
@@ -399,13 +402,19 @@ export function buildReadOnlyReconProvider(
  * `subagentExecutor` / `skillExecutor` are intentionally absent — compose
  * nodes are leaves and must not spawn nested DAGs or invoke skills.
  */
+export interface BuildComposeNodeProviderOpts {
+  openaiBaseUrl?: string;
+  /** `true` blocks mutating bash for read-only named agents (e.g. git-investigator). */
+  readOnlyBash?: true;
+  canUseTool?: CanUseTool;
+}
+
 export function buildComposeNodeProvider(
   model: AgentModelInput | undefined,
   workspaceStore: WorkspaceStore | undefined,
-  openaiBaseUrl?: string,
-  readOnlyBash?: boolean,
-  canUseTool?: CanUseTool,
+  opts: BuildComposeNodeProviderOpts = {},
 ): ModelProvider {
+  const { openaiBaseUrl, readOnlyBash, canUseTool } = opts;
   // Materialize the allowlist per call so runtime array mutations don't bleed
   // across sibling nodes (mirrors buildPhaseRestrictedProvider / buildReadOnlyReconProvider).
   const common = {
@@ -482,6 +491,15 @@ export function createChildSkillExecutorFactory(
   workspaceStore?: WorkspaceStore,
   // Tree-wide delegation budget threaded from root. Trailing optional.
   delegationBudget?: import('./delegation-budget.js').DelegationBudget,
+  // Executor-tree scope (#3442), threaded to every depth via the recursive
+  // `factory` (and to agent-tool children, which inherit this factory):
+  // pluginConfigs defined => sole plugin source ([] => none); skillAllowlist =>
+  // exact-name skill gate; hookRegistry => reaches the nested executors' fork
+  // managers, whose stub parents carry none. Trailing optional; undefined =>
+  // byte-identical to before.
+  pluginConfigs?: SdkPluginConfig[],
+  skillAllowlist?: readonly string[],
+  hookRegistry?: HookRegistry,
 ): (
   depth: number,
   maxDepth: number,
@@ -599,6 +617,9 @@ export function createChildSkillExecutorFactory(
       // the traceWriter / cwd propagation above; see this factory's parameter.
       ...(workspaceStore !== undefined ? { workspaceStore } : {}),
       ...(delegationBudget !== undefined ? { delegationBudget } : {}),
+      ...(pluginConfigs !== undefined ? { pluginConfigs } : {}),
+      ...(skillAllowlist !== undefined ? { skillAllowlist } : {}),
+      ...(hookRegistry !== undefined ? { hookRegistry } : {}),
       // Fix A (#skill-recursion): execution guard fires when grandchild calls same skill.
       ...(skillDispatchName !== undefined ? { skillDispatchName } : {}),
     });

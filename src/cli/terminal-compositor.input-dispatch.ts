@@ -34,7 +34,7 @@ import {
 } from './terminal-compositor.input-dispatch.enter.js';
 import { handleCursorAndEdit } from './terminal-compositor.input-dispatch.cursor.js';
 import { clearModeNoticeOnKey } from './terminal-compositor.mode-notice.js';
-import { parseCprReply } from './terminal-compositor.lifecycle.cpr.js';
+import { CPR_REPLY_RE } from './terminal-compositor.lifecycle.cpr.js';
 
 /**
  * Max gap (ms) between the two Escapes of a double-Esc rewind trigger at an
@@ -219,7 +219,9 @@ export function dispatchKey(self: KeyDispatchHost, char: string | undefined, key
   // listener could consume them — especially when cprPending is false (the
   // reply arrived after the timeout cleared the flag). Either way, a CPR
   // sequence must never reach the prompt as literal text.
-  if (parseCprReply(key?.sequence ?? '')) return;
+  // CPR_REPLY_RE.test() is cheaper than parseCprReply() here: we only need
+  // a boolean match, not the parsed row/col fields.
+  if (CPR_REPLY_RE.test(key?.sequence ?? '')) return;
 
   // Any keystroke but Shift+Tab dismisses the mode notice (Shift+Tab replaces
   // it). Runs first so every handler below repaints without it.

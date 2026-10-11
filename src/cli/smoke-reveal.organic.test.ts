@@ -8,8 +8,7 @@ import chalk from 'chalk';
 import { SmokeReveal, LIFETIME_MS, MAX_LAG_MS, FRAME_MS, SMOKE_GLYPHS } from './smoke-reveal.js';
 import { SMOKE_GLYPH_LEVELS } from './smoke-reveal.frame.js';
 import { resetSmokeToneCache } from './smoke-reveal.tones.js';
-
-const stripAnsi = (s: string): string => s.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+import { stripAnsi } from './display.js';
 const glyphsIn = (s: string): string[] => [...stripAnsi(s)].filter((ch) => SMOKE_GLYPHS.includes(ch));
 
 let savedLevel: typeof chalk.level;

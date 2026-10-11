@@ -60,15 +60,20 @@ export function validateTextAnswer(
 // ---------------------------------------------------------------------------
 
 /**
- * Validate a non-empty, pre-trimmed number answer against the request's
- * `min` / `max` constraints.
+ * Validate a number answer against the request's `min` / `max` constraints.
  *
- * Precondition: `raw !== ''` (callers gate on empty before calling).
+ * Guards against empty strings explicitly: `Number('') === 0`, which is
+ * `isFinite` and would silently accept blank input. Although callers today
+ * gate on empty upstream, this guard is a defensive invariant so future
+ * callers cannot accidentally admit a blank string as zero.
  */
 export function validateNumberAnswer(
   raw: string,
   request: Pick<ElicitationRequest, 'min' | 'max'>,
 ): AnswerValidationResult {
+  if (raw === '') {
+    return { ok: false, message: 'Please enter a valid number.' };
+  }
   const n = Number(raw);
   if (!Number.isFinite(n)) {
     return { ok: false, message: 'Please enter a valid number.' };

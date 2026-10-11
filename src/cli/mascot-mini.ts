@@ -52,7 +52,7 @@ export const MINI_MASCOT_HEIGHT = 3;
 const CAP_ROWS: readonly string[] = [
   '.....BBB.....', // cap tip
   '...BBBBBBB...', // cap body
-  'D.KGGGGGGGK.D', // dim-gold hatband; ear tips sweep UP beside it
+  'D.KGGGGGGGK.D', // dim-gold hatband; ear tips sit level beside it
   'DDKMMKMKMMKDD', // V-brow: one dark lid pixel over each eye's inner corner
 ];
 
