@@ -55,8 +55,24 @@ export interface ScheduledTask {
   executor?: TaskExecutor;
   /** Trigger mode. */
   trigger: TriggerMode;
-  /** Cron expression (5- or 6-field). Required when trigger includes `'cron'`. */
+  /** Cron expression (5-field only — no year). Required when trigger includes `'cron'`. */
   cronExpression?: string;
+  /**
+   * One-shot fire time (ISO 8601). When set the task fires once at or after
+   * this instant and is then automatically disabled. Mutually exclusive with
+   * a recurring `cronExpression` — use one or the other, not both.
+   * The scheduler checks `runAt` on every cron tick so the precision is
+   * bounded by the cron interval; sub-minute precision is not guaranteed.
+   */
+  runAt?: string;
+  /**
+   * Hard expiry (ISO 8601). When set and the current time is past this
+   * instant, the scheduler skips the task and records a
+   * `status:'skipped', skipReason:'expired'` telemetry entry. The task is
+   * also automatically disabled in the store so it never fires again.
+   * Works with both recurring cron tasks and `runAt` one-shots.
+   */
+  expiresAt?: string;
   /**
    * Per-task cooldown override for sessionstart fires. Falls back to the
    * scheduler's default (6h) when omitted.
@@ -111,7 +127,7 @@ export function validateScheduledTask(task: ScheduledTask): void {
   if (!task.taskId) throw new Error('ScheduledTask.taskId is required');
   if (!task.command) throw new Error(`task ${task.taskId}: command is required`);
   if (task.trigger === 'cron' || task.trigger === 'both') {
-    if (!task.cronExpression) {
+    if (!task.cronExpression && !task.runAt) {
       throw new Error(`task ${task.taskId}: cronExpression required for trigger=${task.trigger}`);
     }
   }
@@ -119,6 +135,23 @@ export function validateScheduledTask(task: ScheduledTask): void {
     throw new Error(
       `task ${task.taskId}: cronExpression must not be set when trigger='pull' — pull tasks are dequeued from the queue directory, not scheduled via cron`,
     );
+  }
+  if (task.runAt !== undefined) {
+    const ms = Date.parse(task.runAt);
+    if (isNaN(ms)) {
+      throw new Error(`task ${task.taskId}: runAt must be a valid ISO 8601 date string`);
+    }
+    if (task.cronExpression !== undefined) {
+      throw new Error(
+        `task ${task.taskId}: runAt and cronExpression are mutually exclusive — use one or the other`,
+      );
+    }
+  }
+  if (task.expiresAt !== undefined) {
+    const ms = Date.parse(task.expiresAt);
+    if (isNaN(ms)) {
+      throw new Error(`task ${task.taskId}: expiresAt must be a valid ISO 8601 date string`);
+    }
   }
   const executor = task.executor ?? 'agent';
   if (executor === 'builtin' && !KNOWN_BUILTINS.includes(task.command as BuiltinTaskName)) {

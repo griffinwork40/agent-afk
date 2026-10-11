@@ -34,7 +34,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { readJsonFileLoose } from '../../utils/json-file.js';
+import { readJsonFileLoose, writeJsonFile } from '../../utils/json-file.js';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { homedir, userInfo } from 'node:os';
@@ -206,7 +206,7 @@ export function clearOauthPending(serverName: string): void {
   const existing = readJsonFileLoose<Record<string, unknown>>(path);
   if (existing == null || !(serverName in existing)) return;
   delete existing[serverName];
-  writeFileSync(path, JSON.stringify(existing, null, 2), { encoding: 'utf-8', mode: 0o600 });
+  writeJsonFile(path, existing, { mode: 0o600 });
 }
 
 /** Write (or update) an oauth_pending entry in the state file. */
@@ -226,7 +226,7 @@ function writeOauthPending(serverName: string, authUrl: string): void {
     authorizationUrl: baseUrl,
     timestamp: Date.now(),
   };
-  writeFileSync(path, JSON.stringify(existing, null, 2), { encoding: 'utf-8', mode: 0o600 });
+  writeJsonFile(path, existing, { mode: 0o600 });
 }
 
 // ---------------------------------------------------------------------------

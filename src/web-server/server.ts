@@ -65,7 +65,7 @@ export interface WebServerOptions {
   tokenExplicit?: boolean;
   /** Session ids this process owns. Shared by reference with the caller. */
   owned?: Set<string>;
-  submitPrompt?: (sessionId: string, text: string) => Promise<void>;
+  submitPrompt?: (sessionId: string, text: string) => void;
   /**
    * Backpressure predicate: true while a session already has a turn in
    * flight. `handlePrompt` 409s on it rather than chaining another turn.

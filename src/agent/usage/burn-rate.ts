@@ -139,7 +139,7 @@ export function computeBurnRate(
 }
 
 /**
- * Append one sample to an existing ring, trimming to {@link WINDOWS_HISTORY_MAX} (imported from `./usage-record.js`).
+ * Append one sample to an existing ring, trimming to {@link WINDOWS_HISTORY_MAX}.
  * Returns a new array; the input is not mutated.
  */
 export function appendSample(

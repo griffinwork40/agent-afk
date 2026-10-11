@@ -132,7 +132,7 @@ export function parseLatestTimestamp(raw: string): string | null {
   const isIndexLine = (x: unknown): x is IndexLine =>
     x !== null &&
     typeof x === 'object' &&
-    ('timestamp' in (x as object) || 'event' in (x as object));
+    ('timestamp' in (x as Record<string, unknown>) || 'event' in (x as Record<string, unknown>));
   const lines = parseJsonlLines<IndexLine>(raw, { guard: isIndexLine });
   let latest: string | null = null;
   for (const parsed of lines) {

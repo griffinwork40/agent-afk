@@ -35,7 +35,8 @@ function cleanupTmpDir(): void {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 }
 // Signal handlers call cleanupTmpDir() explicitly before process.exit(0) because
-// process.exit() bypasses the try/finally block below.
+// process.exit() bypasses both the try/finally block below and any pending
+// async callbacks (e.g. timers, I/O callbacks that have not yet fired).
 process.on('SIGTERM', () => { cleanupTmpDir(); process.exit(0); });
 process.on('SIGINT', () => { cleanupTmpDir(); process.exit(0); });
 

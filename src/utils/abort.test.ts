@@ -201,21 +201,24 @@ describe('createDeferredRequestAbortScope', () => {
     scope.dispose();
   });
 
-  it('aborts timeoutMs after arming, then calls onFired with the signal already aborted', async () => {
-    const scope = createDeferredRequestAbortScope({ timeoutMs: 1_000, timeoutMessage: 'approval timeout' });
-    let abortedAtFire: boolean | undefined;
-    await vi.advanceTimersByTimeAsync(5_000);
-    scope.armTimeout(() => {
-      abortedAtFire = scope.signal.aborted;
-    });
-    await vi.advanceTimersByTimeAsync(999);
-    expect(scope.signal.aborted).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(scope.signal.aborted).toBe(true);
-    expect(abortedAtFire).toBe(true);
-    expect((scope.signal.reason as Error).message).toBe('approval timeout');
-    scope.dispose();
-  });
+  it(
+    'aborts timeoutMs after arming, then calls onFired with the signal already aborted',
+    async () => {
+      const scope = createDeferredRequestAbortScope({ timeoutMs: 1_000, timeoutMessage: 'approval timeout' });
+      let abortedAtFire: boolean | undefined;
+      await vi.advanceTimersByTimeAsync(5_000);
+      scope.armTimeout(() => {
+        abortedAtFire = scope.signal.aborted;
+      });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(scope.signal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(scope.signal.aborted).toBe(true);
+      expect(abortedAtFire).toBe(true);
+      expect((scope.signal.reason as Error).message).toBe('approval timeout');
+      scope.dispose();
+    },
+  );
 
   it('armTimeout is idempotent: the first arm wins', async () => {
     const scope = createDeferredRequestAbortScope({ timeoutMs: 1_000, timeoutMessage: 't' });

@@ -32,19 +32,23 @@ type KeyEvent = { name?: string; ctrl?: boolean; sequence?: string };
  * parameters so it always reads the values mutated by the keypress loop — no
  * stale closure capture.
  *
- * @param choices     - Full choices array (used for bounds-checking only).
+ * @param choices     - Full choices array (used for bounds-checking and
+ *                      computing the visible window via `visibleEnd()`).
  * @param renderLines - Produces the display lines for the current view state.
  * @param onEnter     - Called with the current cursor on Enter; its return
  *                      value becomes the resolved result.
  * @param onSpace     - Optional Space-key handler (multi-selector toggle).
  *                      Receives the current cursor; must mutate its own state.
  *                      When omitted, Space is ignored.
+ * @param abortSignal - Optional signal; resolves `:cancel` and tears down
+ *                      raw-mode when fired.
  */
 function runSelectorLoop<T>(
   choices: string[],
   renderLines: (cursor: number, scrollOffset: number) => string[],
   onEnter: (cursor: number) => T,
   onSpace?: (cursor: number) => void,
+  abortSignal?: AbortSignal,
 ): Promise<T | ':cancel'> {
   let cursor = 0;
   let scrollOffset = 0;
@@ -100,9 +104,23 @@ function runSelectorLoop<T>(
 
     function cleanup(): void {
       process.stdin.removeListener('keypress', onKeypress);
+      abortSignal?.removeEventListener('abort', onAbort);
       try { process.stdin.setRawMode(false); } catch { /* noop */ }
     }
 
+    function onAbort(): void {
+      cleanup();
+      resolve(':cancel');
+    }
+
+    if (abortSignal?.aborted) {
+      // Already aborted before the loop started — resolve immediately.
+      try { process.stdin.setRawMode(false); } catch { /* noop */ }
+      resolve(':cancel');
+      return;
+    }
+
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
     process.stdin.on('keypress', onKeypress);
   });
 }
@@ -139,7 +157,7 @@ export async function renderSelector(
     return lines;
   }
 
-  return runSelectorLoop<number>(choices, renderLines, (c) => c);
+  return runSelectorLoop<number>(choices, renderLines, (c) => c, undefined, _abortSignal);
 }
 
 /**
@@ -177,7 +195,7 @@ export async function renderMultiSelector(
   return runSelectorLoop<number[]>(
     choices,
     renderLines,
-    (_c) => [...selected].sort((a, b) => a - b),
+    (_cursor) => [...selected].sort((a, b) => a - b),
     (c) => {
       if (selected.has(c)) {
         selected.delete(c);
@@ -185,5 +203,6 @@ export async function renderMultiSelector(
         selected.add(c);
       }
     },
+    _abortSignal,
   );
 }

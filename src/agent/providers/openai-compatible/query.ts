@@ -392,6 +392,11 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
    * @internal
    */
   rebuildClient(newAuth: import('./auth.js').OpenAIAuthResolution): void {
+    // Single mutation point for opts.auth: TurnDriverContext declares `auth`
+    // readonly to prevent accidental writes elsewhere, but this method is the
+    // one intentional exception — it swaps the token after a 401 refresh so
+    // all subsequent reads (runTurn, applyAndSyncSteering, compaction limit
+    // checks) see the new token without requiring a new query instance.
     (this.opts as { auth: import('./auth.js').OpenAIAuthResolution }).auth = newAuth;
     this._client = buildRefreshedClient(newAuth, this.opts);
   }

@@ -1,6 +1,8 @@
 /**
  * Public surface for the MCP client subsystem. Importers outside this
- * folder should only reach in through this barrel.
+ * folder should reach in through this barrel for any symbol it exports.
+ * Sub-modules may be imported directly only for symbols not re-exported
+ * here (e.g. dynamic imports of non-public internals).
  *
  * @module agent/mcp
  */
