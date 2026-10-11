@@ -95,6 +95,24 @@ describe('parseModelCompleteInput', () => {
   it('rejects the auto routing sentinel', () => {
     expect(parseModelCompleteInput({ prompt: 'x', model: 'auto' })).toMatchObject({ isError: true });
   });
+
+  it('rejects a non-string prompt value even when input_path is absent', () => {
+    expect(parseModelCompleteInput({ prompt: 42 })).toMatchObject({ isError: true });
+    expect(parseModelCompleteInput({ prompt: null })).toMatchObject({ isError: true });
+    expect(parseModelCompleteInput({ prompt: {} })).toMatchObject({ isError: true });
+  });
+
+  it('rejects a non-string prompt value even when input_path is present', () => {
+    expect(parseModelCompleteInput({ prompt: 42, input_path: 'file.txt' })).toMatchObject({ isError: true });
+    expect(parseModelCompleteInput({ prompt: null, input_path: 'file.txt' })).toMatchObject({ isError: true });
+    expect(parseModelCompleteInput({ prompt: {}, input_path: 'file.txt' })).toMatchObject({ isError: true });
+  });
+
+  it('pins the error message wording when input_path is not set', () => {
+    const result = parseModelCompleteInput({ prompt: '' });
+    expect(result).toMatchObject({ isError: true });
+    expect((result as { content: string }).content).toContain('when `input_path` is not set');
+  });
 });
 
 describe('defaultModelCompleteModel', () => {

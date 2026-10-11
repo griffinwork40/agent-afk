@@ -79,7 +79,11 @@ function fail(message: string): ToolResult {
 /** Validate raw tool input. Returns the parsed input or an error result. */
 export function parseModelCompleteInput(raw: unknown): ModelCompleteInput | ToolResult {
   const obj = (raw ?? {}) as Record<string, unknown>;
-  const prompt = typeof obj['prompt'] === 'string' ? obj['prompt'] : '';
+  const rawPrompt = obj['prompt'];
+  if (rawPrompt !== undefined && typeof rawPrompt !== 'string') {
+    return fail('`prompt` must be a string when provided.');
+  }
+  const prompt = typeof rawPrompt === 'string' ? rawPrompt : '';
   const hasInputPath = typeof obj['input_path'] === 'string' && obj['input_path'].trim() !== '';
   if (prompt.trim() === '' && !hasInputPath) {
     return fail('`prompt` must be a non-empty string when `input_path` is not set.');
