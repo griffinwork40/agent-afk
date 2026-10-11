@@ -1,0 +1,198 @@
+/**
+ * Cron-task elicitation visibility (#3243 gap 1 — partial).
+ *
+ * When a cron or sessionstart task's agent calls `ask_question`, the
+ * elicitation router has no handler installed (only pull tasks wire one via
+ * `makeDaemonElicitationHandler`). The router's built-in
+ * `notifyUnattendedElicitation` fires a generic Telegram push, but it has no
+ * task context: it doesn't name the task, doesn't write a durable handoff
+ * record, and doesn't respect the task's `notifyOn` setting.
+ *
+ * This module provides `makeCronElicitationHandler` — a lightweight handler
+ * for cron/sessionstart tasks that:
+ *
+ *   1. Writes a durable `HandoffRecord` so the question survives a restart
+ *      and `processAnsweredHandoffs` can re-enqueue it as a pull task later
+ *      (the same path pull tasks use for answered handoffs).
+ *   2. Sends a task-aware Telegram notification (names the task, respects
+ *      `notifyOn` via the injected `notify` callback).
+ *   3. Returns `{ action: 'decline' }` immediately — cron sessions cannot
+ *      block on a synchronous answer; the operator answers later and the
+ *      handoff is consumed on the next pull sweep.
+ *
+ * Deliberately omits the `setLeaseState('waiting_human_input')` step used
+ * by `makeDaemonElicitationHandler` for pull tasks: cron tasks have no
+ * durable lease file, so there is nothing to transition.
+ *
+ * The `formatCronElicitationMessage` helper is also exported so the
+ * scheduler can supply it as `responseText` inside a `TaskCompletionDetails`
+ * object — this routes the notification through the normal `onTaskComplete`
+ * path (honours `notifyOn: 'always' | 'failure' | 'never'` and
+ * `notifyChat`) rather than firing a raw unconditional push.
+ *
+ * @module agent/daemon/scheduler.elicitation-notify
+ */
+
+import { writeHandoff, type HandoffRecord } from './handoff-store.js';
+import { errorMessage } from '../../utils/errors.js';
+import type { ElicitationHandler } from '../elicitation-router.js';
+import type { ElicitationRequest, ElicitationResult } from '../types/sdk-types.js';
+
+// Re-export so callers only need one import for the whole cron-elicitation concern.
+export type { ElicitationHandler };
+
+// ---------------------------------------------------------------------------
+// Notification message
+// ---------------------------------------------------------------------------
+
+/**
+ * Plain-text notification body for a cron-task elicitation. Safe in all
+ * Telegram parse modes (no markdown). Includes enough context for the
+ * operator to decide how to respond without needing to look up the task.
+ *
+ * @param taskId   Scheduled task id (e.g. `my-deploy-task`).
+ * @param command  The task command string (already secret-redacted).
+ * @param cron     The cron expression, if any.
+ * @param question The `message` field from the `ElicitationRequest`.
+ */
+export function formatCronElicitationMessage(
+  taskId: string,
+  command: string,
+  cron: string | undefined,
+  question: string,
+): string {
+  const cronNote = cron !== undefined ? ` (cron: ${cron})` : '';
+  const cap = 300;
+  const questionHead = question.length > cap ? `${question.slice(0, cap)}\u2026(truncated)` : question;
+  return (
+    `[daemon] Cron task "${taskId}"${cronNote} needs your input and cannot continue.\n` +
+    `Command: ${command}\n` +
+    `Question: ${questionHead}\n` +
+    `The question has been saved as a handoff record. ` +
+    `Answer via Telegram and the daemon will re-run the task on the next pull sweep.`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Handler factory
+// ---------------------------------------------------------------------------
+
+/**
+ * Options for {@link makeCronElicitationHandler}.
+ */
+export interface CronElicitationHandlerOpts {
+  /** Scheduled task id. */
+  taskId: string;
+  /** The task's command string (already secret-redacted by the caller). */
+  originalCommand: string;
+  /** Override the handoffs directory (tests). Defaults to `getHandoffsDir()`. */
+  handoffsDir?: string;
+  /**
+   * Called synchronously after the handoff record is written and before the
+   * handler returns. Receives the plain-text notification message so the
+   * scheduler can pass it as `responseText` inside `TaskCompletionDetails`
+   * and route it through `onTaskComplete` (honours `notifyOn`).
+   * Best-effort: a throwing callback is swallowed; the handler always returns
+   * `{ action: 'decline' }`.
+   */
+  onHandoffWritten?: (message: string) => void;
+  /** Cron expression for the task, if any (included in notification text). */
+  cronExpression?: string;
+}
+
+/**
+ * Build an `ElicitationHandler` for cron and sessionstart daemon tasks.
+ *
+ * The handler writes a durable handoff, fires the `onHandoffWritten` callback
+ * with a task-aware notification message, then immediately returns
+ * `{ action: 'decline' }`.
+ *
+ * Install via `elicitationRouter.install(...)` before `session.sendMessage()`
+ * and uninstall in the `finally` block — the same pattern `executeAgentTask`
+ * already uses for pull tasks.
+ */
+export function makeCronElicitationHandler(
+  opts: CronElicitationHandlerOpts,
+): ElicitationHandler {
+  return async (
+    request: ElicitationRequest,
+    options: { signal: AbortSignal; sessionId?: string },
+  ): Promise<ElicitationResult> => {
+    if (options.signal.aborted) return { action: 'decline' };
+
+    const record: HandoffRecord = {
+      taskId: opts.taskId,
+      sessionId: options.sessionId ?? '',
+      question: serializeRequest(request),
+      requestType: 'ask_question',
+      createdAt: new Date().toISOString(),
+      status: 'pending',
+      originalCommand: opts.originalCommand,
+    };
+
+    // Step 1: persist the handoff so the operator can answer later and
+    // `processAnsweredHandoffs` re-enqueues it as a pull task.
+    let handoffWritten = false;
+    try {
+      await writeHandoff(record, opts.handoffsDir);
+      handoffWritten = true;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[cron-elicitation] failed to write handoff for task ${opts.taskId}:`,
+        errorMessage(err),
+      );
+    }
+
+    // Step 2: fire the notification callback only when the handoff was
+    // successfully persisted (avoids alerting without a backing record).
+    if (handoffWritten && opts.onHandoffWritten !== undefined) {
+      const msg = formatCronElicitationMessage(
+        opts.taskId,
+        opts.originalCommand,
+        opts.cronExpression,
+        request.message,
+      );
+      try {
+        opts.onHandoffWritten(msg);
+      } catch {
+        // observational only — never let a notification failure break the run
+      }
+    }
+
+    // Step 3: decline immediately. Cron sessions cannot block on a
+    // synchronous answer.
+    return { action: 'decline' };
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Serialize the JSON-safe fields of an `ElicitationRequest` into a plain
+ * record for durable storage (mirrors `handoff-wiring.ts`).
+ */
+function serializeRequest(request: ElicitationRequest): Record<string, unknown> {
+  const out: Record<string, unknown> = { message: request.message };
+  if (request.serverName !== undefined) out['serverName'] = request.serverName;
+  if (request.mode !== undefined) out['mode'] = request.mode;
+  if (request.url !== undefined) out['url'] = request.url;
+  if (request.elicitationId !== undefined) out['elicitationId'] = request.elicitationId;
+  if (request.requestedSchema !== undefined) out['requestedSchema'] = request.requestedSchema;
+  if (request.title !== undefined) out['title'] = request.title;
+  if (request.displayName !== undefined) out['displayName'] = request.displayName;
+  if (request.description !== undefined) out['description'] = request.description;
+  if (request.type !== undefined) out['type'] = request.type;
+  if (request.choices !== undefined) out['choices'] = request.choices;
+  if (request.questionDefault !== undefined) out['questionDefault'] = request.questionDefault;
+  if (request.minLength !== undefined) out['minLength'] = request.minLength;
+  if (request.maxLength !== undefined) out['maxLength'] = request.maxLength;
+  if (request.min !== undefined) out['min'] = request.min;
+  if (request.max !== undefined) out['max'] = request.max;
+  if (request.allowSkip !== undefined) out['allowSkip'] = request.allowSkip;
+  if (request.allowCustom !== undefined) out['allowCustom'] = request.allowCustom;
+  if (request.context !== undefined) out['context'] = request.context;
+  return out;
+}
