@@ -6,7 +6,8 @@ import { listTurnSnapshots, type FileSnapshot } from './file-checkpoint.js';
 import { validatedWriteTarget } from './write-policy.js';
 import { resolveAndContain, realpathSafe } from '../tools/handlers/_cwd-utils.js';
 import { assertNotDenylisted } from '../tools/handlers/write-denylist.js';
-import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
+import { isAbsolute } from 'node:path';
+import { stageRewindFile } from './rewind-staging.js';
 import { errorMessage } from '../../utils/errors.js';
 
 export interface RewindFilesDeps {
@@ -52,6 +53,7 @@ export async function rewindFiles(
     try {
       // Invariant: validate the actual current destination BEFORE reading it or
       // creating directories; stored paths never grant historical permissions.
+      if (!isAbsolute(absPath)) throw new Error(`Checkpoint path must be absolute: ${absPath}`);
       const target = await validatedWriteTarget(absPath, deps.writePolicy);
       const current = currentBytes(target);
       const prior = isNewFile ? null : readFileSync(snapshotPath);
@@ -64,11 +66,7 @@ export async function rewindFiles(
         unlinkSync(target);
         deletions += 1;
       } else {
-        await atomicWriteFileAsync(target, prior!, {
-          secure: true, mkdirp: true, ...(mode !== undefined ? { mode, exactMode: true } : {}),
-          // Invariant: policy validation and rename share an event-loop tick.
-          commitGuard: () => { assertDestination(absPath, target, deps.writePolicy); return true; },
-        });
+        stageRewindFile(target, prior!, () => assertDestination(absPath, target, deps.writePolicy), mode);
         const delta = prior!.toString('utf8').split('\n').length - (current?.toString('utf8').split('\n').length ?? 0);
         if (delta > 0) insertions += delta;
         else deletions += Math.abs(delta);

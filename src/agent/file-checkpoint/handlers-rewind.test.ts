@@ -25,7 +25,7 @@ const snapshots = () => listTurnSnapshots(session, turn, state);
 const rewind = (dryRun = false) => rewindFiles({ sessionId: session, enableFileCheckpointing: true, _stateDir: state, writePolicy: context }, turn, { dryRun });
 
 beforeEach(() => {
-  root = realpathSync(mkdtempSync(join(tmpdir(), 'afk-checkpoint-handlers-')));
+  root = realpathSync.native(mkdtempSync(join(tmpdir(), 'afk-checkpoint-handlers-')));
   state = join(root, 'state');
   context = { resolveBase: root, writeRoots: [root], readRoots: [root], fileCheckpoint: createFileCheckpointRegistry(session, turn, state) };
 });
@@ -238,16 +238,77 @@ describe('real handler checkpoint and rewind regressions', () => {
     const ordered = snapshots();
     const failing = ordered[1]!.absPath;
     const originalRename = fs.renameSync;
-    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
-      if (String(to) === failing) throw new Error('atomic rename failed');
+    let injected = false;
+    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (realpathSync.native(String(to)) === realpathSync.native(failing)) {
+        injected = true;
+        throw new Error('atomic rename failed');
+      }
       return originalRename(from, to);
     });
     const result = await rewind();
+    expect(renameSpy).toHaveBeenCalled();
+    expect(injected).toBe(true);
     expect(result.canRewind).toBe(false);
     expect(result.filesChanged).toEqual([ordered[0]!.absPath]);
     expect(result.error).toContain(failing);
     expect(readFileSync(failing, 'utf8')).toMatch(/^new/);
     expect(readdirSync(root).filter((name) => name.startsWith('.tmp-'))).toEqual([]);
+  });
+
+  it.each([false, true])('refuses a parent swap before staging writes (missing parent: %s)', async (missing) => {
+    const outside = realpathSync.native(mkdtempSync(join(tmpdir(), 'afk-checkpoint-outside-')));
+    const parent = join(root, 'parent');
+    const file = join(parent, ...(missing ? ['nested', 'file'] : ['file']));
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, 'old');
+    await context.fileCheckpoint!.snapshotFile(file);
+    if (missing) rmSync(join(parent, 'nested'), { recursive: true });
+    else writeFileSync(file, 'new');
+    const originalStat = fs.statSync;
+    let parentStats = 0;
+    let injected = false;
+    vi.spyOn(fs, 'statSync').mockImplementation((...args) => {
+      const result = originalStat(...args);
+      if (String(args[0]) === parent && ++parentStats === 2) {
+        rmSync(parent, { recursive: true });
+        symlinkSync(outside, parent, 'junction');
+        injected = true;
+      }
+      return result;
+    });
+    try {
+      const result = await rewind();
+      expect(injected).toBe(true);
+      expect(result.canRewind).toBe(false);
+      expect(result.filesChanged).toEqual([]);
+      expect(readdirSync(outside)).toEqual([]);
+    } finally { vi.restoreAllMocks(); rmSync(outside, { recursive: true, force: true }); }
+  });
+
+  it.each(['outside', 'protected', 'relative'])('refuses malicious %s checkpoint metadata without writing', async (kind) => {
+    const outside = realpathSync.native(mkdtempSync(join(tmpdir(), 'afk-checkpoint-manifest-')));
+    try {
+      const original = join(root, 'original');
+      writeFileSync(original, 'old');
+      await context.fileCheckpoint!.snapshotFile(original);
+      const entry = snapshots()[0]!;
+      const metadataPath = join(dirname(entry.snapshotPath), 'metadata.json');
+      const metadata = JSON.parse(readFileSync(metadataPath, 'utf8'));
+      const destination = kind === 'outside' ? join(outside, 'file')
+        : kind === 'protected' ? join(homedir(), '.ssh', 'checkpoint-malicious') : 'relative';
+      if (kind === 'protected') context.allowAll = true;
+      writeFileSync(metadataPath, JSON.stringify({ ...metadata, absPath: destination }));
+      const writeSpy = vi.spyOn(fs, 'writeFileSync');
+      const mkdirSpy = vi.spyOn(fs, 'mkdirSync');
+      const result = await rewind();
+      expect(result.canRewind).toBe(false);
+      expect(result.filesChanged).toEqual([]);
+      expect(writeSpy).not.toHaveBeenCalled();
+      expect(mkdirSpy).not.toHaveBeenCalled();
+      expect(readdirSync(outside)).toEqual([]);
+      expect(readFileSync(original, 'utf8')).toBe('old');
+    } finally { vi.restoreAllMocks(); rmSync(outside, { recursive: true, force: true }); }
   });
 
   it('dry-run and repeat rewind report only actual content changes', async () => {

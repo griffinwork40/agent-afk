@@ -210,11 +210,16 @@ export function _resetWriteDenylistCacheForTests(): void {
  * finding any real ancestor (e.g. an entirely synthetic path in tests).
  */
 export function safeRealpath(p: string): string {
+  return resolveRealpath(p, realpathSync);
+}
+
+/** Keep native and plain canonicalization local to the write-denylist floor. */
+function resolveRealpath(p: string, realpath: (path: string) => string): string {
   const abs = resolve(p);
 
   // Fast path: the path already exists — resolve directly.
   try {
-    return realpathSync(abs);
+    return realpath(abs);
   } catch {
     // Path doesn't exist yet (or broken symlink chain). Walk up.
   }
@@ -229,7 +234,7 @@ export function safeRealpath(p: string): string {
     parts.unshift(current.slice(parent.length + 1)); // tail segment
     current = parent;
     try {
-      const real = realpathSync(current);
+      const real = realpath(current);
       // Rejoin the tail segments beneath the resolved ancestor.
       return join(real, ...parts);
     } catch {
@@ -252,8 +257,11 @@ export function safeRealpath(p: string): string {
  */
 export function assertNotDenylisted(filePath: string, handlerName = 'write_file'): void {
   const real = safeRealpath(resolve(filePath));
+  const native = resolveRealpath(filePath, realpathSync.native);
   for (const blocked of getWriteDenylist()) {
-    if (pathIsWithin(real, blocked)) {
+    // Invariant: compare like canonical forms on both sides. Native expands
+    // Windows 8.3 ancestors; plain realpath can retain their short spelling.
+    if (pathIsWithin(real, blocked) || pathIsWithin(native, resolveRealpath(blocked, realpathSync.native))) {
       throw new Error(
         `${handlerName}: refusing to write to protected path: ${real}` +
           ` (matches denylist entry: ${blocked})`,

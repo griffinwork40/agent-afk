@@ -316,6 +316,18 @@ describe('patch_apply — stale-context re-read warning (#2028)', () => {
     expect(parsed._reread_warning).toContain(filePath);
   });
 
+  it('warns using the caller relative path while receipts stay canonical', async () => {
+    const filePath = await writeTemp('warn-relative.txt', 'before\n');
+    const result = await createPatchApplyHandler(tempDir)(
+      { changes: [{ path: 'warn-relative.txt', content: 'after\n' }] }, signal, makeCtx(),
+    );
+    const parsed = JSON.parse(result.content as string);
+    expect(result.isError).toBeFalsy();
+    expect(parsed._reread_warning).toContain('Modified paths: warn-relative.txt');
+    expect(parsed.files_changed[0].path).not.toBe('warn-relative.txt');
+    expect(await readFile(filePath, 'utf8')).toBe('after\n');
+  });
+
   it('includes _reread_warning listing all modified paths for multi-file patches', async () => {
     const file1 = await writeTemp('warn-a.txt', 'aaa\n');
     const file2 = await writeTemp('warn-b.txt', 'bbb\n');
