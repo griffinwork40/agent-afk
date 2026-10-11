@@ -238,7 +238,7 @@ function parsePluginEntry(
     const discriminator = s['source'];
 
     if (discriminator === 'git-subdir') {
-      return parseGitSubdirEntry(s, name, idx, manifestPath);
+      return parseGitSubdirEntry(s, name, idx);
     }
 
     // Unknown discriminator — skip with warning rather than failing the manifest.
@@ -260,7 +260,6 @@ function parseGitSubdirEntry(
   s: Record<string, unknown>,
   name: string,
   idx: number,
-  path: string,
 ): MarketplacePluginEntry {
   const url = s['url'];
   const subPath = s['path'];
@@ -290,7 +289,6 @@ function parseGitSubdirEntry(
   const sha = s['sha'];
   if (typeof sha === 'string' && sha.trim()) spec.sha = sha.trim();
 
-  void path; // referenced only for error messages; linter appeasement
   return { name, source: spec };
 }
 

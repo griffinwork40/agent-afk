@@ -18,6 +18,7 @@ import { __setAnthropicClientFactory } from '../providers/anthropic-direct/index
 import { createHookRegistry } from '../hook-registry.js';
 import { registerSkill, _resetRegistry } from '../../skills/skill-registry.js';
 import { resetSlotBindings } from './model-slots.js';
+import { resetUsageLedgerForTests } from '../usage/usage-ledger.js';
 import type { AgentConfig } from '../types.js';
 import type { SessionExecutorsBindTarget } from './session-executors.js';
 import { SubagentManager } from '../subagent.js';
@@ -85,12 +86,17 @@ describe('createWiredExecutors (#3442)', () => {
   });
   afterEach(() => {
     __setAnthropicClientFactory(null);
+    // Skill dispatch can open the process-wide usage ledger's kv.db handle.
+    // Session.close() does not own it; release it before removing AFK_HOME.
+    resetUsageLedgerForTests();
     if (savedHome === undefined) delete process.env['AFK_HOME'];
     else process.env['AFK_HOME'] = savedHome;
     _resetRegistry();
     resetSlotBindings();
     vi.restoreAllMocks();
-    rmSync(cwd, { recursive: true, force: true });
+    // Sessions close in their finally blocks before teardown. Retry transient
+    // Windows SQLite/antivirus locks rather than skipping this test on win32.
+    rmSync(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
   it('fails closed without a hook registry or unattended', () => {

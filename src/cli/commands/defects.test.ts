@@ -339,11 +339,10 @@ describe('afk defects', () => {
     mockCluster.mockReturnValue(clusters);
 
     const stderrChunks: string[] = [];
-    const origStderr = process.stderr.write.bind(process.stderr);
-    (process.stderr.write as unknown as (s: string) => boolean) = (s: string) => {
-      stderrChunks.push(s);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      stderrChunks.push(String(chunk));
       return true;
-    };
+    });
     try {
       const out = await run(['defects', '--json']);
       // stdout must be valid JSON with no warning mixed in
@@ -352,7 +351,7 @@ describe('afk defects', () => {
       // warning must have gone to stderr
       expect(stderrChunks.join('')).toContain('ledger exceeded 1 MB');
     } finally {
-      (process.stderr.write as unknown as (s: string) => boolean) = origStderr as unknown as (s: string) => boolean;
+      stderr.mockRestore();
     }
   });
 });

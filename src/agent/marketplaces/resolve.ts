@@ -38,7 +38,7 @@ import {
 } from './manifest.js';
 import * as git from '../plugins/git.js';
 import { assertHttpsUrl } from '../plugins/source.js';
-import { prepareCachedCheckout } from '../plugins/checkout-lifecycle.js';
+import { prepareCachedCheckout, removeDest } from '../plugins/checkout-lifecycle.js';
 
 export interface InstallFromMarketplaceOptions {
   /** Pin a specific ref for git-sourced plugins. Ignored for in-marketplace local plugins. */
@@ -105,10 +105,10 @@ export async function installFromMarketplace(
   const source = entry.source;
 
   if (typeof source === 'string' && isRelativeOrLocalString(source)) {
-    return installInMarketplaceLocal(marketplace, entry, marketplaceDir, indexPath, now, options);
+    return installInMarketplaceLocal(marketplace, entry, source, marketplaceDir, indexPath, now, options);
   }
   if (typeof source === 'string') {
-    return installFromMarketplaceViaGit(marketplace, entry, options, deps);
+    return installFromMarketplaceViaGit(marketplace, entry, source, options, deps);
   }
   if (isGitSubdirSource(source)) {
     return installFromMarketplaceViaGitSubdir(marketplace, entry, source, options, deps);
@@ -185,13 +185,13 @@ export function resolvePluginSourceDir(marketplaceDir: string, source: string): 
 function installInMarketplaceLocal(
   marketplace: string,
   pluginEntry: MarketplacePluginEntry,
+  rawSource: string,
   marketplaceDir: string,
   indexPath: string,
   now: () => Date,
   options: InstallFromMarketplaceOptions,
 ): InstallFromMarketplaceResult {
   // Resolve the relative source against the marketplace root.
-  const rawSource = pluginEntry.source as string;
   const absSource = resolvePluginSourceDir(marketplaceDir, rawSource);
 
   if (!existsSync(absSource)) {
@@ -239,6 +239,7 @@ function installInMarketplaceLocal(
 async function installFromMarketplaceViaGit(
   marketplace: string,
   pluginEntry: MarketplacePluginEntry,
+  source: string,
   options: InstallFromMarketplaceOptions,
   deps: InstallDeps,
 ): Promise<InstallFromMarketplaceResult> {
@@ -251,7 +252,7 @@ async function installFromMarketplaceViaGit(
     ...(options.ref ? { ref: options.ref } : {}),
     ...(options.force ? { force: true } : {}),
   };
-  const result = await installPlugin(pluginEntry.source as string, installOpts, deps);
+  const result = await installPlugin(source, installOpts, deps);
 
   // Annotate the freshly-written plugin entry with its marketplace origin.
   const indexPath = deps.indexPath ?? getPluginsIndexPath();
@@ -278,9 +279,7 @@ async function installFromMarketplaceViaGitSubdir(
 ): Promise<InstallFromMarketplaceResult> {
   const indexPath = deps.indexPath ?? getPluginsIndexPath();
   const now = deps.now ?? (() => new Date());
-  const gitOpts = (deps as { gitRunner?: git.GitRunner }).gitRunner
-    ? { runner: (deps as { gitRunner: git.GitRunner }).gitRunner }
-    : {};
+  const gitOpts = deps.gitRunner ? { runner: deps.gitRunner } : {};
 
   // S7-HTTPS: reject non-HTTPS git sources before any FS side-effect.
   assertHttpsUrl(spec.url);
@@ -299,32 +298,49 @@ async function installFromMarketplaceViaGitSubdir(
     );
   }
 
-  await git.clone(spec.url, cloneDir, gitOpts);
+  // Never remove a pre-existing checkout when a repeated clone fails.
+  const cloneDirExisted = existsSync(cloneDir);
+  try {
+    await git.clone(spec.url, cloneDir, gitOpts);
+    const refOverride = options.ref ?? spec.ref ?? spec.sha;
+    const { ref, commit } = await prepareCachedCheckout(cloneDir, refOverride, gitOpts);
 
-  const refOverride = options.ref ?? spec.ref ?? spec.sha;
-  const { ref, commit } = await prepareCachedCheckout(cloneDir, refOverride, gitOpts);
+    const pluginDir = join(cloneDir, spec.path);
+    if (!existsSync(pluginDir)) {
+      throw new Error(
+        `git-subdir plugin "${pluginEntry.name}": path "${spec.path}" not found in clone of ${spec.url}`,
+      );
+    }
 
-  const pluginDir = join(cloneDir, spec.path);
-  if (!existsSync(pluginDir)) {
-    throw new Error(
-      `git-subdir plugin "${pluginEntry.name}": path "${spec.path}" not found in clone of ${spec.url}`,
-    );
+    const pluginJsonPath = join(pluginDir, '.claude-plugin', 'plugin.json');
+    if (!existsSync(pluginJsonPath)) {
+      throw new Error(
+        `git-subdir plugin "${pluginEntry.name}": no .claude-plugin/plugin.json found at "${spec.path}" in clone of ${spec.url}`,
+      );
+    }
+
+    const ts = now().toISOString();
+    const entry: PluginIndexEntry = {
+      source: `${marketplace}:${pluginEntry.name}`,
+      sourceType: 'marketplace',
+      ref,
+      commit,
+      enabled: true,
+      installedAt: ts,
+      updatedAt: ts,
+      marketplace,
+    };
+    upsertPlugin(key, entry, indexPath);
+
+    return { key, name: pluginEntry.name, dir: pluginDir, entry };
+  } catch (err) {
+    try {
+      if (!cloneDirExisted && existsSync(cloneDir)) removeDest(cloneDir);
+    } catch {
+      /* best-effort cleanup */
+    }
+    throw err;
   }
-
-  const ts = now().toISOString();
-  const entry: PluginIndexEntry = {
-    source: `${marketplace}:${pluginEntry.name}`,
-    sourceType: 'marketplace',
-    ref,
-    commit,
-    enabled: true,
-    installedAt: ts,
-    updatedAt: ts,
-    marketplace,
-  };
-  upsertPlugin(key, entry, indexPath);
-
-  return { key, name: pluginEntry.name, dir: pluginDir, entry };
 }
 
 function expandLocal(p: string): string {
