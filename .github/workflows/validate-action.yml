@@ -45,7 +45,7 @@ jobs:
 
       - name: Setup Node.js
         # pinned to SHA for supply-chain safety; tag: actions/setup-node@v4
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 22
           cache: pnpm
