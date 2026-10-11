@@ -34,6 +34,15 @@ const URL_RE = /^https?:\/\/\S+$/;
  */
 const SHELL_PROMPT_LINE_RE = /^[$>]\s+(\S.*)$/;
 
+/**
+ * Block-level token types. A tight list item's leading `text` token carries
+ * no trailing newline, so when one of these follows it (most often a nested
+ * list) the `text` branch must end its line or the block glues onto it.
+ */
+const BLOCK_TOKEN_TYPES: ReadonlySet<string> = new Set([
+  'list', 'code', 'blockquote', 'heading', 'table', 'hr', 'html', 'paragraph',
+]);
+
 function renderInlineTokens(tokens?: Tokens.Generic[], commitOnly = false): string {
   if (!tokens) return '';
   return tokens.map((token) => {
@@ -255,8 +264,14 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           // Marked emits block-level 'text' tokens inside tight list items.
           // Its `.tokens` holds inline children (strong, em, codespan, …) —
           // render them through renderInline so bold/italic don't leak.
+          // Invariant: a tight item with a nested list lexes as [text, list].
+          // Without a line break here the nested list's first bullet joins
+          // this line and renderList re-wraps the merged line, which strands
+          // words and over-indents the nested rows.
           const t = token as Tokens.Text;
-          result = t.tokens ? renderInline(t.tokens as Tokens.Generic[]) : t.text;
+          const inline = t.tokens ? renderInline(t.tokens as Tokens.Generic[]) : t.text;
+          const next = tokens[idx + 1];
+          result = next !== undefined && BLOCK_TOKEN_TYPES.has(next.type) ? inline + '\n' : inline;
           break;
         }
         case 'list':

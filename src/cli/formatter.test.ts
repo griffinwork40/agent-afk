@@ -432,6 +432,25 @@ describe('renderMarkdownToTerminal', () => {
         expect(line).toMatch(/^ {4}\S/);
       }
     });
+
+    it('starts a nested list in a tight item on its own line without re-wrapping it', () => {
+      const md = [
+        '2. **Decide:**',
+        '   - **If exact oMLX DFlash reaches about 100 tok/s or more:** contribute it upstream and stop.',
+        '   - **If not:** build an engine only if Lithos, measured end to end in its exact mode, is at least 1.3x the patched exact oMLX.',
+        '',
+      ].join('\n');
+      const lines = stripAnsi(renderMarkdownToTerminal(md, { maxWidth: 80 })).trimEnd().split('\n');
+
+      expect(lines).toEqual([
+        '  2. Decide:',
+        '       • If exact oMLX DFlash reaches about 100 tok/s or more: contribute it',
+        '         upstream and stop.',
+        '       • If not: build an engine only if Lithos, measured end to end in its',
+        '         exact mode, is at least 1.3x the patched exact oMLX.',
+      ]);
+      for (const line of lines) expect(stringWidth(line)).toBeLessThanOrEqual(80);
+    });
   });
 
   describe('lists — unbreakable tokens wider than the item budget', () => {
