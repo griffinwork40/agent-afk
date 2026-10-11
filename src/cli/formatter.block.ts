@@ -37,7 +37,16 @@ export function renderBlockquote(
   // Render nested blocks against the space left after this blockquote's
   // prefix. In particular, code blocks must wrap once at their final inner
   // width rather than first at the terminal width and then again here.
-  const inner = bq.tokens ? renderTokens(bq.tokens as Token[], innerWidth) : bq.text;
+  // Invariant (TUI rhythm contract, docs/tui-rhythm.md): this block emits
+  // exactly ONE trailing '\n'. The inner paragraph already ends in '\n', so
+  // splitting the untrimmed text left a trailing empty row that, after the
+  // join below, doubled the blank before the next block's `space` token.
+  const inner = (bq.tokens ? renderTokens(bq.tokens as Token[], innerWidth) : bq.text)
+    .replace(/\n+$/, '');
+  // Interior blank rows (the `space` between quoted paragraphs) keep a bare
+  // bar so the quote reads as one continuous block. No trailing space, and
+  // trailing rows can no longer occur, so no orphan "  │ " row is possible.
+  const gapRow = palette.dim('  │');
   const lines: string[] = [];
   for (const para of inner.split('\n')) {
     // breakLongWords: same contract as the list branch above — an
@@ -49,10 +58,7 @@ export function renderBlockquote(
       ? wrapToWidth(para, innerWidth, { breakLongWords: true })
       : para;
     for (const line of wrapped.split('\n')) {
-      // Only stamp the prefix on non-empty lines; empty lines (produced
-      // by trailing \n\n on the inner paragraph token) must not become
-      // orphaned "  │ " rows at the end of the blockquote.
-      lines.push(line ? prefix + line : '');
+      lines.push(line ? prefix + line : gapRow);
     }
   }
   return lines.join('\n') + '\n';

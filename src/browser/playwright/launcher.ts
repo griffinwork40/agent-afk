@@ -14,7 +14,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
 import type { Browser, BrowserContext, Dialog, Page, Request, Response } from 'playwright';
 import type { BrowserType } from 'playwright';
 import type { BrowserConfig } from '../types.js';
@@ -790,18 +790,15 @@ export class BrowserLauncher {
       const file = getBrowserStorageStatePath(profile);
       if (!fs.existsSync(file)) return;
       const state = await context.storageState();
-      // Atomic 0600 write: stage into a uniquely-named sibling temp at 0600,
-      // then POSIX-rename it over the vault. The rename swaps the file in whole,
-      // so freshly-written credentials are never observed truncated or at looser
-      // perms (the old write-then-chmod left exactly that transient window). The
-      // temp lives in the same dir as the dest, so the rename never hits EXDEV.
-      const tmp = path.join(
-        path.dirname(file),
-        `.${path.basename(file)}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`,
-      );
-      fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
-      fs.chmodSync(tmp, 0o600); // enforce exact perms regardless of umask
-      fs.renameSync(tmp, file);
+      // Atomic 0600 write via shared helper: sibling temp (random suffix) →
+      // rename. exactMode: true enforces 0o600 verbatim regardless of umask,
+      // preserving the security contract (credentials must never be briefly
+      // world-readable). The temp lives in the same dir so rename never hits EXDEV.
+      await atomicWriteFileAsync(file, JSON.stringify(state), {
+        mode: 0o600,
+        exactMode: true,
+        mkdirp: false,
+      });
       debugLog('[browser/vault] saved session', { profile, file });
     } catch (err) {
       // Swallow — vault maintenance is best-effort and must not break close().

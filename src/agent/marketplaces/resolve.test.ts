@@ -1,7 +1,8 @@
 /**
  * Tests for the marketplace resolver. Covers in-marketplace local plugins
- * (relative `source` path) and listMarketplacePlugins's installed-vs-available
- * markers. Git-fanout coverage lives in the install harness.
+ * (relative `source` path), listMarketplacePlugins's installed-vs-available
+ * markers, skipped-entry refusals, and object source handling.
+ * Git-fanout coverage lives in the install harness.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -21,7 +22,7 @@ let indexPath: string;
 function writeMarketplace(
   dir: string,
   name: string,
-  plugins: { name: string; source: string; description?: string }[],
+  plugins: unknown[],
 ): void {
   mkdirSync(join(dir, '.claude-plugin'), { recursive: true });
   writeFileSync(
@@ -129,6 +130,52 @@ describe('installFromMarketplace — in-marketplace local plugin', () => {
   });
 });
 
+describe('installFromMarketplace — skipped entries', () => {
+  it('refuses to install a skipped entry (unknown object source discriminator)', async () => {
+    const mpDir = join(cacheDir, 'mp');
+    writeMarketplace(mpDir, 'mp', [
+      { name: 'future', source: { source: 'some-future-type', location: 'x' } },
+    ]);
+
+    await expect(
+      installFromMarketplace('mp', 'future', {}, {
+        marketplaceDirFor: (n) => join(cacheDir, n),
+        indexPath,
+      }),
+    ).rejects.toThrow(/cannot be installed/);
+  });
+
+  it('refuses to install a skipped entry (git-subdir missing url)', async () => {
+    const mpDir = join(cacheDir, 'mp');
+    writeMarketplace(mpDir, 'mp', [
+      { name: 'bad', source: { source: 'git-subdir', path: 'plugins/bad' } },
+    ]);
+
+    await expect(
+      installFromMarketplace('mp', 'bad', {}, {
+        marketplaceDirFor: (n) => join(cacheDir, n),
+        indexPath,
+      }),
+    ).rejects.toThrow(/cannot be installed/);
+  });
+
+  it('still allows installing a valid entry alongside a skipped one', async () => {
+    const mpDir = join(cacheDir, 'mp');
+    writeMarketplace(mpDir, 'mp', [
+      { name: 'good', source: './plugins/good' },
+      { name: 'bad', source: { source: 'unknown-type', x: 1 } },
+    ]);
+    writePlugin(join(mpDir, 'plugins', 'good'), 'good');
+
+    // 'good' should install without issue even though 'bad' is in the same manifest
+    const result = await installFromMarketplace('mp', 'good', {}, {
+      marketplaceDirFor: (n) => join(cacheDir, n),
+      indexPath,
+    });
+    expect(result.key).toBe('mp:good');
+  });
+});
+
 describe('listMarketplacePlugins', () => {
   it('marks installed entries based on the index', () => {
     const mpDir = join(cacheDir, 'mp');
@@ -160,6 +207,32 @@ describe('listMarketplacePlugins', () => {
       { name: 'a', description: 'first', installed: true, key: 'mp:a' },
       { name: 'b', installed: false, key: 'mp:b' },
     ]);
+  });
+
+  it('surfaces the skipped reason for object-sourced entries', () => {
+    const mpDir = join(cacheDir, 'mp');
+    writeMarketplace(mpDir, 'mp', [
+      { name: 'a', source: './plugins/a' },
+      { name: 'future', source: { source: 'unknown-type', extra: 'data' } },
+      {
+        name: 'subdir-plugin',
+        source: {
+          source: 'git-subdir',
+          url: 'https://github.com/anthropics/claude-plugins-official',
+          path: 'plugins/subdir-plugin',
+          ref: 'main',
+        },
+      },
+    ]);
+
+    const result = listMarketplacePlugins('mp', {
+      marketplaceDirFor: (n) => join(cacheDir, n),
+      indexPath,
+    });
+    expect(result).toHaveLength(3);
+    expect(result[0]!.skipped).toBeUndefined();
+    expect(result[1]!.skipped).toMatch(/unsupported source type/);
+    expect(result[2]!.skipped).toBeUndefined();
   });
 
   it('throws when the marketplace is not installed', () => {
