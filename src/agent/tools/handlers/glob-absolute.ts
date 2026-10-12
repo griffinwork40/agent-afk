@@ -17,6 +17,7 @@
  */
 
 import path from 'path';
+import { firstBraceAlternation } from './glob-braces.js';
 
 export interface SplitPattern {
   /** Absolute directory to walk from (must still be containment-checked). */
@@ -28,9 +29,8 @@ export interface SplitPattern {
 function hasGlobMeta(segment: string): boolean {
   // NOTE: `[` and `]` are intentionally omitted here — `globToRegExp` escapes
   // bracket characters rather than treating them as character-class syntax.
-  // If bracket/brace support is ever added to `globToRegExp`, extend this
-  // check in lockstep so `splitAbsolutePattern` continues to split at the
-  // first segment that contains a true metacharacter.
+  // Brace alternation is recognized across the full pattern below, because
+  // a brace group may contain path separators. Singletons remain literal.
   return segment.includes('*') || segment.includes('?');
 }
 
@@ -46,7 +46,9 @@ export function splitAbsolutePattern(
   if (!pathModule.isAbsolute(rawPattern)) return null;
   const normalized = rawPattern.replace(/\\/g, '/');
   const segments = normalized.split('/');
-  const firstMeta = segments.findIndex(hasGlobMeta);
+  const braceStart = firstBraceAlternation(normalized);
+  const braceSegment = braceStart === undefined ? -1 : normalized.slice(0, braceStart).split('/').length - 1;
+  const firstMeta = segments.findIndex((segment, i) => hasGlobMeta(segment) || i === braceSegment);
   // No metacharacters: a plain file path. Walk its parent for its basename.
   const splitAt = firstMeta === -1 ? segments.length - 1 : firstMeta;
   const baseSegments = segments.slice(0, splitAt);
