@@ -349,7 +349,7 @@ export function parseWhatifArgs(argv: string[]): ParseResult {
 
   const text = positionals.length > 0 ? positionals.join(' ') : undefined;
 
-  if (state.specFile && (flagChanges.length > 0 || text)) {
+  if (state.specFile && (flagChanges.length > 0 || text || state.aaMode)) {
     return `--spec cannot be combined with change flags or plain-text\n\n${WHATIF_USAGE}`;
   }
 

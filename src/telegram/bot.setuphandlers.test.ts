@@ -265,7 +265,7 @@ describe('TelegramBot — setupHandlers() closure coverage', () => {
   // /compact — closures on lines 148-165 (no-route and idle paths)
   // -------------------------------------------------------------------------
   describe('/compact command closure', () => {
-    test('idle path: calls handleCompact then drainQueue', async () => {
+    test('idle path: calls handleCompact then drainQueue (compact throws — error path)', async () => {
       const sm = (
         bot as unknown as {
           sessionManager: { getSession: (...a: unknown[]) => unknown };
@@ -282,6 +282,31 @@ describe('TelegramBot — setupHandlers() closure coverage', () => {
       // drainQueue is called in the finally block regardless of handleCompact result
       expect(drainSpy).toHaveBeenCalledTimes(1);
       expect(api).toHaveBeenCalled();
+    });
+
+    test('idle path: successful compact calls handleCompact and drainQueue', async () => {
+      // Mock handleCompact to simulate a successful compaction (no throw).
+      // handleCompact owns its own ctx.reply() internally, so we verify the
+      // closure wired it correctly by asserting the spy was called.
+      const commandsHandler = await import('./handlers/commands.js');
+      const compactSpy = vi
+        .spyOn(commandsHandler, 'handleCompact')
+        .mockResolvedValueOnce(undefined);
+      const sm = (
+        bot as unknown as {
+          sessionManager: { getSession: (...a: unknown[]) => unknown };
+        }
+      ).sessionManager;
+      vi.spyOn(sm, 'getSession').mockResolvedValueOnce({ state: 'idle' });
+      const mh = (
+        bot as unknown as {
+          messageHandler: { drainQueue: (...a: unknown[]) => Promise<void> };
+        }
+      ).messageHandler;
+      const drainSpy = vi.spyOn(mh, 'drainQueue').mockResolvedValue(undefined);
+      await fireCommand(bot, '/compact');
+      expect(compactSpy).toHaveBeenCalledTimes(1);
+      expect(drainSpy).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -348,7 +373,7 @@ describe('TelegramBot — setupHandlers() closure coverage', () => {
   // /abort — closures on lines 209-234
   // -------------------------------------------------------------------------
   describe('/abort command closure', () => {
-    test('replies error when chat id is missing (simulated via no-chat ctx)', async () => {
+    test('replies with guidance when not watching any session', async () => {
       // Drive via the registered closure using no-chat path via public method
       // (no-chat cannot be reached via handleUpdate; use handleClear analog pattern).
       // We test the happy no-chat guard via the watchManager.getWatched early exit.

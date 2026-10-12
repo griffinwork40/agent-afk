@@ -75,6 +75,29 @@ describe('layoutAgentQuestion', () => {
     expect(plain(layout.header.join('\n'))).toContain('full choices above');
   });
 
+  it('collision-only: identical choices trigger numbered labels AND spill to scrollback', () => {
+    // No choice is wide; they collide only. Before the fix, shortened stayed
+    // false so spill was false and scrollback was empty — operator had no way
+    // to read the originals.
+    const choices = ['Apple', 'Apple', 'Banana'];
+    const layout = layoutAgentQuestion(
+      agentRequest({ type: 'choice', choices }),
+      { columns: 80, rows: 40 },
+    );
+    // All labels must be numbered to be unique.
+    expect(layout.options[0]).toMatch(/^1\. /);
+    expect(layout.options[1]).toMatch(/^2\. /);
+    expect(layout.options[2]).toMatch(/^3\. /);
+    // Scrollback must carry the full original choices.
+    expect(layout.scrollback.length).toBeGreaterThan(0);
+    const sb = plain(layout.scrollback.join('\n'));
+    expect(sb).toContain('Apple');
+    expect(sb).toContain('Banana');
+    // choiceFor maps numbered labels back to the originals.
+    expect(layout.choiceFor(layout.options[0]!)).toBe('Apple');
+    expect(layout.choiceFor(layout.options[2]!)).toBe('Banana');
+  });
+
   it('flattens newlines in choice labels so each option is one row', () => {
     const layout = layoutAgentQuestion(
       agentRequest({ type: 'choice', choices: ['line one\nline two'] }),
@@ -215,11 +238,46 @@ describe('renderAgentQuestion — no truncation end-to-end', () => {
     for (let i = 0; i < overlayIdx; i++) {
       expect(events[i]).toBe('line');
     }
-    // There must be no 'line' events after the overlay opens (pre-overlay only).
-    const afterOverlay = events.slice(overlayIdx + 1).filter((e) => e === 'line');
     // The post-confirm echo line is written after the overlay — exclude it by
     // checking only the pre-overlay segment above; just assert overlay fired once.
     expect(events.filter((e) => e === 'overlay')).toHaveLength(1);
+  });
+
+  it('choice: scrollback is written BEFORE the picker overlay opens', async () => {
+    // Long choices collide so they spill; writer.line must fire before pickFromList.
+    const long = `Option ${'x'.repeat(200)}`;
+    const events: string[] = [];
+    const pickFromList = vi.fn(async (o: { options: readonly string[] }) => {
+      events.push('overlay');
+      return [o.options[0]!];
+    });
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: (t = '') => { events.push('line'); void t; } },
+      pendingCount: () => 0,
+      pickFromList,
+      terminalSize: () => size,
+    });
+    await handler(agentRequest({ type: 'choice', choices: [long, `${long} B`] }), { signal: NO_SIGNAL });
+    expect(events.indexOf('line')).toBeLessThan(events.indexOf('overlay'));
+  });
+
+  it('confirm: scrollback written BEFORE picker when question overflows', async () => {
+    const message = longText(400); // tall enough to trigger overflow
+    const events: string[] = [];
+    const pickFromList = vi.fn(async () => {
+      events.push('overlay');
+      return ['Yes'];
+    });
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: (t = '') => { events.push('line'); void t; } },
+      pendingCount: () => 0,
+      pickFromList,
+      terminalSize: () => size,
+    });
+    await handler(agentRequest({ type: 'confirm', message }), { signal: NO_SIGNAL });
+    expect(events.indexOf('line')).toBeLessThan(events.indexOf('overlay'));
   });
 
   it('short questions do not write anything to scrollback before the overlay', async () => {

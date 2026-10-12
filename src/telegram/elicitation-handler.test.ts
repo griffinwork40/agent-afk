@@ -1964,4 +1964,124 @@ describe('choice type: long choices split into pre-messages before keyboard', ()
 
     await expect(resultPromise).resolves.toEqual({ action: 'decline' });
   });
+
+  it('keyboard send failing after pre-messages succeed → decline', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    // Pre-messages succeed (first N calls), keyboard send (last call) fails.
+    // mockRejectedValueOnce on the LAST sendMessage call: we let pre-messages
+    // resolve, then reject the keyboard send.
+    let callCount = 0;
+    sendMessage.mockImplementation(() => {
+      callCount++;
+      // Allow a few pre-message sends, then fail on the keyboard send
+      // (pre-messages are typically 2–3 for longChoices; reject on call 3+)
+      if (callCount >= 3) {
+        return Promise.reject(new Error('keyboard send failed'));
+      }
+      return Promise.resolve({ message_id: callCount });
+    });
+
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+    const ac = makeAbort();
+
+    const resultPromise = handler(choiceRequest(longChoices), { signal: ac.signal });
+    await new Promise((r) => setTimeout(r, 20));
+
+    await expect(resultPromise).resolves.toEqual({ action: 'decline' });
+  });
+
+  it('abort during pre-sends stops further sends', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const ac = makeAbort();
+
+    let sendCount = 0;
+    sendMessage.mockImplementation(() => {
+      sendCount++;
+      // Abort after the first pre-message send
+      if (sendCount === 1) {
+        ac.abort();
+      }
+      return Promise.resolve({ message_id: sendCount });
+    });
+
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+
+    const resultPromise = handler(choiceRequest(longChoices), { signal: ac.signal });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const result = await resultPromise;
+    // Either declined (abort fired before resolve) or decline from abort signal
+    expect(result.action).toBe('decline');
+    // Crucially: should NOT have sent all pre-messages + keyboard after abort
+    // (at most 1 pre-message + possibly the keyboard attempt before abort propagated)
+    expect(sendCount).toBeLessThan(longChoices.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #3631 item 1: keyboardText (question + pointer) measured; falls back
+// to baseText when question alone is near the 4096-char limit.
+// ---------------------------------------------------------------------------
+
+describe('choice type: question near 4096-char limit (issue #3631 item 1)', () => {
+  it('keyboardText ≤ 4096 when question is ~4040 chars (pointer would overflow)', async () => {
+    // A question of 4040 chars + 57-char pointer = 4097 → should fall back to baseText.
+    const longQuestion = 'Q'.repeat(4040);
+    const choices = ['alpha-choice-that-is-over-64-bytes-long-xxxxxxxxxxxxxxxxxxx', 'beta'];
+
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+    const ac = makeAbort();
+
+    const resultPromise = handler(
+      choiceRequest(choices, { message: longQuestion }),
+      { signal: ac.signal },
+    );
+    await new Promise((r) => setTimeout(r, 10));
+
+    // All sendMessage calls must have text ≤ 4096
+    const calls = sendMessage.mock.calls as [number, string, object][];
+    for (const call of calls) {
+      expect(call[1].length).toBeLessThanOrEqual(4096);
+    }
+
+    ac.abort();
+    await resultPromise;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #3631 item 2: single choice > 4096 chars after escapeHtml is hard-split.
+// ---------------------------------------------------------------------------
+
+describe('choice type: single choice over 4096 chars (issue #3631 item 2)', () => {
+  it('a choice longer than 4096 chars is split so every pre-message is ≤ 4096', async () => {
+    // One huge choice: 5000 chars after escaping (no HTML entities, so length = chars).
+    const hugeChoice = 'x'.repeat(5000);
+    const choices = [hugeChoice, 'short'];
+
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+    const ac = makeAbort();
+
+    const resultPromise = handler(
+      choiceRequest(choices, { message: 'Pick one' }),
+      { signal: ac.signal },
+    );
+    await new Promise((r) => setTimeout(r, 10));
+
+    const calls = sendMessage.mock.calls as [number, string, object][];
+    // At least one pre-message call expected
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    for (const call of calls) {
+      expect(call[1].length).toBeLessThanOrEqual(4096);
+    }
+
+    ac.abort();
+    await resultPromise;
+  });
 });

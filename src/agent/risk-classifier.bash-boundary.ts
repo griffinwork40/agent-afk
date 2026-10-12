@@ -17,10 +17,10 @@ const WORD_CHAR = /[A-Za-z0-9_]/;
  * before #3534. This regex closes those gaps; hits are kept only at a word
  * start ({@link isWordStart}) so it adds no prose false positives inside
  * words. `RM` is matched too: on a case-insensitive filesystem (default macOS
- * APFS) `RM` resolves to /bin/rm. `grm`/`srm` (GNU and secure rm) are covered
- * by the optional prefix.
+ * APFS) `RM` resolves to /bin/rm. `grm`/`srm`/`GRM`/`SRM` (GNU and secure rm,
+ * upper-case variants) are covered by the optional prefix `[gsGS]`.
  */
-const SEPARATOR_EVASION = /((?:[gs])?[Rr][Mm]|eval)(?=[\s$'"\\])/g;
+const SEPARATOR_EVASION = /((?:[gsGS])?[Rr][Mm]|eval)(?=[\s$'"\\])/g;
 
 /**
  * True when position `i` of `cmd` can begin a shell word (or a word segment

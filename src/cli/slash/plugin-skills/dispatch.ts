@@ -14,7 +14,7 @@ import { palette } from '../../palette.js';
 import { registerPluginAgents } from '../plugin-agents.js';
 import { registerOrReplace } from '../registry.js';
 import { runSkillDispatchTurn } from '../_lib/run-skill-dispatch-turn.js';
-import { invokeSkillPreflight } from '../_lib/run-skill-preflight.js';
+import { bareSkillName, invokeSkillPreflight } from '../_lib/run-skill-preflight.js';
 import { parsePostFlag, runReviewPostPublish, type PostTarget } from '../_lib/review-post.js';
 import { parsePrRef } from '../preflight/review-pr.js';
 import { env } from '../../../config/env.js';
@@ -135,17 +135,13 @@ export function makeForwardHandler(skill: DiscoveredSkill, flags?: readonly stri
           // Failure isolation: preflight throws or returns null → falls
           // through to the standard 2-block dispatch unchanged. A failing
           // context-gather must never block a skill from running.
-          preflight: () => {
-            const bareSkillName = skill.name.includes(':')
-              ? (skill.name.split(':').pop() ?? skill.name)
-              : skill.name;
-            return invokeSkillPreflight(
-              bareSkillName,
+          preflight: () =>
+            invokeSkillPreflight(
+              bareSkillName(skill.name),
               dispatchArgs,
               skill.source ?? 'plugin',
               ctx,
-            );
-          },
+            ),
         });
 
         // Publish AFTER the verified review output lands. runReviewPostPublish

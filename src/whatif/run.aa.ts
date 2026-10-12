@@ -23,7 +23,6 @@ import type {
   ChangeSpec,
 } from './types.js';
 import type { WhatifOptions, WhatifDeps } from './types.orchestration.js';
-import type { SandboxResult } from './sandbox.js';
 
 /** Probe prompt used only to capture snapshots — content is irrelevant in A/A mode. */
 const AA_PROBE_PROMPT = 'Briefly, what can you help me with in this project?';
@@ -42,7 +41,6 @@ export async function runAaPhase(
   runDir: string,
   runnerOpts: RunnerOptions,
   autoKeepContextHooks: boolean,
-  _sandboxes: SandboxResult,
   options: WhatifOptions,
   deps: WhatifDeps,
 ): Promise<WhatifReport> {
@@ -63,7 +61,7 @@ export async function runAaPhase(
   );
 
   deps.onProgress?.({
-    stage: 'preflight',
+    stage: 'report',
     message: '[A/A] Zero changes — any non-empty structural diff indicates harness asymmetry',
   });
 

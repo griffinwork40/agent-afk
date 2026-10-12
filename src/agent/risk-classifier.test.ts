@@ -774,8 +774,12 @@ describe('classifyRisk — #3534 word-start matrix', () => {
     'gchmod 777 x',
     'gchown root x',
     'gdd if=in.img of=out.img',
+    'gdd of=out.img if=in.img',
     'dcfldd if=in.img of=out.img',
+    'dc3dd if=in.img of=out.img',
     'sfdisk x',
+    'cfdisk /dev/sda',
+    'gfdisk /dev/sda',
     'visudo',
     'gsudo x',
   ])('destructive single-line shape stays high: %j', (command) => {

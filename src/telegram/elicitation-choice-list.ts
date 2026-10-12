@@ -59,6 +59,9 @@ export interface ChoiceMessages {
   keyboardText: string;
 }
 
+/** The pointer appended to the keyboard message when the choice list is split out. */
+const POINTER_SUFFIX = '\n\n(See choices listed above — reply with a button below.)';
+
 /**
  * Decide how to deliver the full choice list without exceeding Telegram's
  * 4096-char limit.
@@ -66,6 +69,11 @@ export interface ChoiceMessages {
  * When `baseText + bodySuffix` fits, returns `{ preMessages: [], keyboardText: baseText + bodySuffix }`.
  * When it would overflow, chunks the numbered list into pre-messages and
  * returns a pointer as `keyboardText`.
+ *
+ * Fix (issue #3631, item 1): `keyboardText` (= baseText + POINTER_SUFFIX) is
+ * now measured and falls back to `baseText` alone when it would exceed
+ * TELEGRAM_MAX_CHARS (a question of ~4040+ chars would otherwise cause the
+ * keyboard send to be rejected by Telegram).
  *
  * @param baseText  The keyboard message body before any choice list is appended
  *                  (i.e. the question text already HTML-escaped).
@@ -91,16 +99,22 @@ export function buildChoiceMessages(
   // Need to split: build numbered lines and chunk them.
   const lines = choices.map((c, i) => `${i + 1}. ${escapeHtml(c)}`);
   const preMessages = chunkLines(lines, TELEGRAM_MAX_CHARS);
-  const keyboardText = `${baseText}\n\n(See choices listed above — reply with a button below.)`;
+
+  // Item 1 fix: measure keyboardText before using it; fall back to baseText
+  // alone if question + pointer would exceed TELEGRAM_MAX_CHARS.
+  const withPointer = `${baseText}${POINTER_SUFFIX}`;
+  const keyboardText = withPointer.length <= TELEGRAM_MAX_CHARS ? withPointer : baseText;
 
   return { preMessages, keyboardText };
 }
 
 /**
  * Pack `lines` into as few strings as possible, each ≤ `maxLen` chars,
- * joining with '\n'. A single line longer than `maxLen` is emitted as its
- * own chunk (truncation is not applied; Telegram will reject it, but that
- * is a degenerate case outside our scope).
+ * joining with '\n'.
+ *
+ * Fix (issue #3631, item 2): a single line longer than `maxLen` is now
+ * hard-split at a safe boundary (never inside an HTML entity) and truncated
+ * with '…' so every emitted chunk satisfies the limit.
  */
 function chunkLines(lines: string[], maxLen: number): string[] {
   const chunks: string[] = [];
@@ -108,15 +122,83 @@ function chunkLines(lines: string[], maxLen: number): string[] {
 
   for (const line of lines) {
     if (current === '') {
-      current = line;
-    } else if ((current + '\n' + line).length <= maxLen) {
-      current += '\n' + line;
+      // Line fits as its own chunk — or needs splitting.
+      const splits = splitLongLine(line, maxLen);
+      for (let i = 0; i < splits.length; i++) {
+        if (i < splits.length - 1) {
+          chunks.push(splits[i]!);
+        } else {
+          current = splits[i]!;
+        }
+      }
     } else {
-      chunks.push(current);
-      current = line;
+      const joined = `${current}\n${line}`;
+      if (joined.length <= maxLen) {
+        current = joined;
+      } else {
+        chunks.push(current);
+        // Start fresh with this line (may itself need splitting).
+        const splits = splitLongLine(line, maxLen);
+        for (let i = 0; i < splits.length; i++) {
+          if (i < splits.length - 1) {
+            chunks.push(splits[i]!);
+          } else {
+            current = splits[i]!;
+          }
+        }
+      }
     }
   }
   if (current !== '') chunks.push(current);
 
   return chunks;
+}
+
+/**
+ * Split a single line that may exceed `maxLen` into chunks each ≤ `maxLen`.
+ * Splits are placed outside HTML entities (`&…;`) to avoid breaking them.
+ * The last chunk is truncated with '…' when it would still exceed the limit
+ * after all safe split points are exhausted.
+ */
+function splitLongLine(line: string, maxLen: number): string[] {
+  if (line.length <= maxLen) return [line];
+
+  const result: string[] = [];
+  let remaining = line;
+
+  while (remaining.length > maxLen) {
+    // Find the rightmost split point within [0, maxLen) that is not inside
+    // an HTML entity.  An entity starts with '&' and ends with ';' (max ~8 chars).
+    let splitAt = maxLen;
+
+    // Walk left from maxLen to find a position not inside an entity.
+    // We check whether the candidate suffix-start is preceded by an '&'
+    // with no intervening ';' (meaning we are mid-entity).
+    const ENTITY_MAX_LEN = 9; // longest HTML entity like &amp;, &lt;, etc. + 1 for safety
+    const searchStart = Math.max(0, splitAt - ENTITY_MAX_LEN);
+    const window = remaining.slice(searchStart, splitAt);
+    const ampIdx = window.lastIndexOf('&');
+    if (ampIdx !== -1) {
+      // Check if entity is unclosed within the window
+      const afterAmp = window.slice(ampIdx);
+      if (!afterAmp.includes(';')) {
+        // We are inside an entity — move split point left to before '&'
+        splitAt = searchStart + ampIdx;
+      }
+    }
+
+    if (splitAt <= 0) {
+      // Degenerate: entire prefix is one huge entity — just hard-cut at maxLen-1
+      // and append ellipsis.
+      result.push(remaining.slice(0, maxLen - 1) + '…');
+      remaining = remaining.slice(maxLen - 1);
+      continue;
+    }
+
+    result.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt);
+  }
+
+  if (remaining.length > 0) result.push(remaining);
+  return result;
 }

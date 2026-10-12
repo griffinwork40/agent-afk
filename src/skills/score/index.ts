@@ -161,8 +161,8 @@ export async function scoreBranch(opts: ScoreBranchOptions): Promise<BranchScore
 
 /**
  * Persist a score to `<farmDir>/scores/branch-<index>.json`. Creates the
- * scores dir on demand. Atomic (tmp + rename) so a crash mid-write never
- * leaves a torn JSON snapshot.
+ * scores dir on demand. Uses {@link writeJsonFileAsync} for atomic tmp+rename
+ * writes so a crash mid-write never leaves a torn JSON snapshot.
  */
 export async function writeScore(
   farmDir: string,

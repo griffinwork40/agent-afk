@@ -881,6 +881,9 @@ describe.skipIf(process.platform !== 'darwin')('install/uninstall/status I/O', (
       if (result.kind !== 'failed') return;
       expect(result.reason).toMatch(/Failed to install upgraded plist/);
       expect(result.reason).toMatch(/permission denied/);
+      // Atomicity guarantee: the existing plist must survive a failed write
+      // (tmp+rename means the original is never clobbered on error).
+      expect(readFileSync(path, 'utf-8')).toBe('<stale/>');
     });
   });
 

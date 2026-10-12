@@ -30,6 +30,7 @@
  */
 
 import { readdirSync, readFileSync } from 'fs';
+import { errorMessage, isEnoent } from '../utils/errors.js';
 import { join } from 'path';
 import { getSkillsDir } from '../paths.js';
 import {
@@ -312,9 +313,8 @@ export function scanSkillsFromDir(
     // silent on ENOENT. Surface only unexpected failures (EACCES, broken
     // symlink) so a misconfigured dir doesn't vanish without a trace — mirrors
     // the `[afk] skipping skill …` signal in parseUserSkillMd.
-    const e = err as NodeJS.ErrnoException;
-    if (e.code !== 'ENOENT') {
-      process.stderr.write(`[afk] skipping skills dir ${dir}: ${e.message}\n`);
+    if (!isEnoent(err)) {
+      process.stderr.write(`[afk] skipping skills dir ${dir}: ${errorMessage(err)}\n`);
     }
     return 0;
   }
@@ -332,9 +332,8 @@ export function scanSkillsFromDir(
       // ENOENT just means the subdirectory carries no SKILL.md (not a skill),
       // so skip quietly. Surface permission/symlink failures so a present-but-
       // unreadable skill leaves a trace instead of silently disappearing.
-      const e = err as NodeJS.ErrnoException;
-      if (e.code !== 'ENOENT') {
-        process.stderr.write(`[afk] skipping skill ${entry.name}: ${e.message}\n`);
+      if (!isEnoent(err)) {
+        process.stderr.write(`[afk] skipping skill ${entry.name}: ${errorMessage(err)}\n`);
       }
       continue;
     }

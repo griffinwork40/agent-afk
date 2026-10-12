@@ -103,6 +103,14 @@ export async function readWorktreeSetupDeclaration(
 /** Default runner: platform shell via resolveShell(), process-group kill on timeout/abort. */
 export const defaultSetupCommandRunner: SetupCommandRunner = (command, opts) =>
   new Promise((resolvePromise) => {
+    // Pre-check: if the signal is already aborted before we even spawn, resolve
+    // immediately so the command never runs. Without this, an abort that lands
+    // between runWorktreeSetup's loop guard and the addEventListener below is
+    // missed and the command runs to its full timeout (#3637).
+    if (opts.signal?.aborted) {
+      resolvePromise({ kind: 'aborted' });
+      return;
+    }
     const isWin32 = process.platform === 'win32';
     const shell = resolveShell();
     const spawnOpts = {
@@ -129,6 +137,12 @@ export const defaultSetupCommandRunner: SetupCommandRunner = (command, opts) =>
       resolvePromise({ kind: 'failed', detail: errorMessage(err) });
       return;
     }
+    // Windows note: `detached: false` on win32 means the child is NOT in its own
+    // process group, so killProcessGroup relies on TerminateProcess for the direct
+    // child but may miss grandchildren. On Windows, `taskkill /T /F /PID <pid>`
+    // would be the portable tree-kill; this is a known limitation documented here
+    // rather than silently ignored (#3637).
+    //
     // Invariant: on Windows, killProcessGroup sends SIGTERM/TerminateProcess but
     // the child may still hold open file handles until its close event fires.
     // Resolving the promise before close causes afterEach rmSync to race those

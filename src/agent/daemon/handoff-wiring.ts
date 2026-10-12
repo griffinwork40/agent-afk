@@ -356,8 +356,7 @@ export async function answerHandoff(
     taskId,
     answer,
     source,
-    handoffsDir,
-    responderIdentity,
+    { handoffsDir, responderIdentity },
   );
   return result.won;
 }

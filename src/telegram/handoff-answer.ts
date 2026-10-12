@@ -260,11 +260,12 @@ export function registerHandoffAnswerHandlers(bot: Telegraf): void {
     }
 
     // Build responder identity from the Telegram callback context.
+    // Telegram guarantees `from.id` is always present on callback queries.
     // Format: "<userId>" or "<userId>:<username>" when available.
     const from = 'callbackQuery' in ctx && typeof ctx.callbackQuery === 'object' && ctx.callbackQuery !== null
-      ? (ctx.callbackQuery as { from?: { id?: number; username?: string } }).from
+      ? (ctx.callbackQuery as { from?: { id: number; username?: string } }).from
       : undefined;
-    const responderIdentity = from?.id !== undefined
+    const responderIdentity = from !== undefined
       ? (from.username ? `${from.id}:${from.username}` : String(from.id))
       : undefined;
 
