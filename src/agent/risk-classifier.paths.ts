@@ -234,30 +234,25 @@ export function isOutsideRoot(
  * Resolve through existing ancestors even when a root has not been created.
  * Unknown root → fail closed: no private-temp carve-out may be granted.
  *
- * One try per root, matching `derivedAfkHomeWriteEntries()` in write-denylist.ts,
- * so a malformed `AFK_FRAMEWORK_DIR` does not drop the valid `AFK_HOME` /
- * `AFK_STATE_DIR` exclusions.
+ * Invariant: if ANY root fails to resolve, the entire function returns `null`
+ * and the private-temp carve-out is denied for the write. These roots are
+ * EXCLUSIONS — we must be able to prove the write target is outside all of
+ * them. A partial list creates a security hole: if AFK_FRAMEWORK_DIR resolves
+ * to a temp path but we cannot check it, we might erroneously allow a write
+ * into it. The cost of fail-closed is only a false-positive denial; the cost
+ * of partial roots is a false-negative permission grant.
+ *
+ * This deliberately differs from `derivedAfkHomeWriteEntries()` in
+ * write-denylist.ts, which builds an additive block list — dropping one entry
+ * there is safe (the write is merely un-blocked by that entry; other entries
+ * still apply). Here, dropping one exclusion root silently opens a hole.
  */
 function afkStateRootsResolved(): readonly string[] | null {
-  const roots: string[] = [];
-  let anyFailed = false;
   try {
-    roots.push(safeRealpath(getAfkHome()));
+    return [getAfkHome(), getAfkStateDir(), getAgentFrameworkDir()].map(safeRealpath);
   } catch {
-    anyFailed = true;
+    return null;
   }
-  try {
-    roots.push(safeRealpath(getAfkStateDir()));
-  } catch {
-    anyFailed = true;
-  }
-  try {
-    roots.push(safeRealpath(getAgentFrameworkDir()));
-  } catch {
-    anyFailed = true;
-  }
-  // Fail closed: if any root is unresolvable the carve-out is not granted.
-  return anyFailed ? null : roots;
 }
 
 /**

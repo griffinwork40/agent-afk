@@ -75,19 +75,27 @@ describe('AFK state roots never receive the private-temp carve-out', () => {
     expect(classifyFilePath(path.join(tempRoot, 'scratch.md'), ctx).level).toBe('high');
   });
 
-  // item 1 regression: a malformed AFK_FRAMEWORK_DIR must not drop the
-  // AFK_HOME / AFK_STATE_DIR exclusions.
-  it('malformed AFK_FRAMEWORK_DIR still excludes AFK_HOME and AFK_STATE_DIR roots', () => {
+  // item 1 contract: afkStateRootsResolved() is fail-closed — if ANY root
+  // cannot be resolved the whole function returns null and the private-temp
+  // carve-out is denied. A malformed AFK_FRAMEWORK_DIR must therefore deny
+  // writes under AFK_HOME and AFK_STATE_DIR (which are valid), AND also deny
+  // a plain temp write that would otherwise be outside all AFK roots.
+  //
+  // This test would fail if someone changed the function to return partial roots:
+  // the plain-temp write would become 'safe' because it is outside the two
+  // resolvable roots, proving the hole that partial roots create.
+  it('malformed AFK_FRAMEWORK_DIR is fail-closed: denies AFK-root writes AND plain temp writes', () => {
     vi.stubEnv('AFK_FRAMEWORK_DIR', 'relative/bad-framework');
-    // With the old single-try block the whole afkStateRootsResolved() returned
-    // null and the carve-out was denied (fail-closed, but for the wrong reason).
-    // Now each root is tried independently, so a bad FRAMEWORK_DIR makes the
-    // function return null — still fail-closed — but in either era a write to
-    // AFK_HOME or AFK_STATE_DIR under temp must be rated high.
+    // Writes under valid AFK roots must be denied.
     const homeTarget = path.join(tempRoot, 'Home', 'config', 'secret.json');
     const stateTarget = path.join(tempRoot, 'State', 'sessions', 'data.json');
     expect(classifyFilePath(homeTarget, ctx).level).toBe('high');
     expect(classifyFilePath(stateTarget, ctx).level).toBe('high');
+    // A plain temp write outside all AFK roots must also be denied — because
+    // we cannot prove it is outside the unresolvable AFK_FRAMEWORK_DIR.
+    // If afkStateRootsResolved() returned partial roots this would be 'safe'.
+    const plainTemp = path.join(tempRoot, 'scratch', 'unrelated.txt');
+    expect(classifyFilePath(plainTemp, ctx).level).toBe('high');
   });
 
   // item 6: relocated AFK_STATE_DIR is hard-blocked by getWriteDenylist().
