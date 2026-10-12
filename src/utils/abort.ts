@@ -197,11 +197,11 @@ export function createDeferredRequestAbortScope(
  * Extract a human-readable abort reason from a {@link RequestAbortScope} or
  * {@link DeferredRequestAbortScope} signal.
  *
- * Both `web-request` and `web-scrape` need the same three-line logic:
+ * Both `web-request` and `web-scrape` need the same two-line logic:
  *
  * ```ts
  * const reason = scope.signal.reason;
- * return reason instanceof Error ? reason.message : String(reason ?? 'aborted');
+ * return errorMessage(reason ?? 'aborted');
  * ```
  *
  * This helper owns that logic once so each handler stays focused on its own

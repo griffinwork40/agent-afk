@@ -248,6 +248,10 @@ async function runAgentAttempt(
       const resolvedChatId = ctx.options.resolveNotifyChat !== undefined
         ? (ctx.options.resolveNotifyChat(task.notifyChat, task.taskId) ?? ctx.options.primaryChatId)
         : ctx.options.primaryChatId;
+      // resolvedThreadId is intentionally only set for the primary chat: per-chat
+      // thread IDs are specific to a single chat and cannot be safely forwarded
+      // to a different (notifyChat-resolved) chat without risking a wrong-thread
+      // delivery. Non-primary chats get no thread override (#3637).
       const resolvedThreadId = resolvedChatId === ctx.options.primaryChatId
         ? ctx.options.primaryThreadId
         : undefined;

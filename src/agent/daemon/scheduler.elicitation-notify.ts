@@ -170,7 +170,25 @@ export function makeCronElicitationHandler(
           chatId: opts.chatId,
           ...(opts.threadId !== undefined ? { threadId: opts.threadId } : {}),
           handoffsDir: opts.handoffsDir,
-        }).catch(() => undefined);
+        }).catch((err) => {
+          // Log the delivery failure so it is visible in daemon logs (#3637).
+          // The handoff record on disk still exists and can be answered later;
+          // fall back to onHandoffWritten so notifyOn routing still fires.
+          // eslint-disable-next-line no-console
+          console.error(
+            `[cron-elicitation] sendHandoffQuestion failed for task ${opts.taskId}:`,
+            errorMessage(err),
+          );
+          if (opts.onHandoffWritten !== undefined) {
+            const msg = formatCronElicitationMessage(
+              opts.taskId,
+              opts.originalCommand,
+              opts.cronExpression,
+              request.message,
+            );
+            try { opts.onHandoffWritten(msg); } catch { /* observational only */ }
+          }
+        });
       } else if (opts.onHandoffWritten !== undefined) {
         // Fallback: plain-text notification routed through onTaskComplete
         // so notifyOn / notifyChat are honoured.
