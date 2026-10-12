@@ -18,8 +18,8 @@ import { assembleSystemPrompt } from '../agent/routing-directive.js';
 import { createDefaultTraceWriter, type CreatedTraceWriter } from '../agent/trace/factory.js';
 import { BackgroundAgentRegistry } from '../agent/background-registry.js';
 import { McpManager, loadMcpConfig } from '../agent/mcp/index.js';
+import { connectMcpTraced } from '../agent/mcp/connect-traced.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../config/import-sources.js';
-import { emitSessionPhase } from '../agent/trace/emit.js';
 import { WorkspaceStore } from '../agent/workspace/index.js';
 import {
   getDefaultSubagentModel,
@@ -190,26 +190,7 @@ async function loadWebMcpManager(
   const enabledCount = Object.values(loaded.mcpServers).filter((s) => !s.disabled).length;
   if (enabledCount === 0) return undefined;
 
-  const mcpStartedAt = Date.now();
-  void emitSessionPhase(traceWriter, {
-    phase: 'mcp_connect_start',
-    metadata: { serverCount: enabledCount },
-  });
-  let manager: McpManager;
-  try {
-    manager = await McpManager.fromConfig(loaded.mcpServers, {
-      warnings: loaded.warnings,
-      serverLayers: loaded.serverLayers,
-      userAllowSecretEnv: loaded.userAllowSecretEnv,
-      ...(traceWriter !== undefined ? { traceWriter } : {}),
-    });
-  } finally {
-    void emitSessionPhase(traceWriter, {
-      phase: 'mcp_connect_done',
-      durationMs: Date.now() - mcpStartedAt,
-      metadata: { serverCount: enabledCount },
-    });
-  }
+  const manager = await connectMcpTraced(loaded, traceWriter);
 
   // Surface non-alwaysLoad server connection failures to stderr so operators
   // learn about broken MCP servers without having to parse structured logs.
