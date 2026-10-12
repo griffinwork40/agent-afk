@@ -729,3 +729,49 @@ describe('runWhatif — keepSandboxes sandboxes.json', () => {
     await expect(fsp.access(mappingPath)).rejects.toThrow();
   });
 });
+
+// ---------------------------------------------------------------------------
+// A/A mode: cleanup ownership + keptSandboxes wiring (#3630)
+// ---------------------------------------------------------------------------
+
+describe('runWhatif — A/A mode (aaMode: true)', () => {
+  it('returns a zero-prediction A/A report', async () => {
+    const deps = makeDeps();
+    const options = makeOptions({ aaMode: true, keepSandboxes: false });
+
+    const report = await runWhatif(options, deps);
+
+    expect(report.predictions).toHaveLength(0);
+    expect(report.costUsd).toBe(0);
+    expect(report.limits.some((l) => l.includes('A/A calibration run'))).toBe(true);
+  });
+
+  it('sets keptSandboxes on the returned report when keepSandboxes is true (finally block owns cleanup)', async () => {
+    // This test verifies the fix for the double-cleanup + pendingReport bug:
+    // run.ts must assign `pendingReport = await runAaPhase(...)` so the finally
+    // block can attach keptSandboxes.  If runAaPhase still called cleanupOrRecord
+    // internally the sandboxes would be cleaned up twice and this would throw or
+    // leave keptSandboxes unset.
+    const deps = makeDeps();
+    const options = makeOptions({ aaMode: true, keepSandboxes: true });
+
+    const report = await runWhatif(options, deps);
+
+    expect(report.keptSandboxes).toBeDefined();
+    expect(typeof report.keptSandboxes!.baseline).toBe('string');
+    expect(typeof report.keptSandboxes!.candidate).toBe('string');
+
+    // Clean up kept sandbox roots
+    await fsp.rm(report.keptSandboxes!.baseline, { recursive: true, force: true });
+    await fsp.rm(report.keptSandboxes!.candidate, { recursive: true, force: true });
+  });
+
+  it('does not call runner.run (A/A mode only takes snapshots)', async () => {
+    const deps = makeDeps();
+    const options = makeOptions({ aaMode: true, keepSandboxes: false });
+
+    await runWhatif(options, deps);
+
+    expect(deps.runner.run).not.toHaveBeenCalled();
+  });
+});

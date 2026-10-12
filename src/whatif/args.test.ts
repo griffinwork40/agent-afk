@@ -795,11 +795,22 @@ describe('parseWhatifArgs — --aa flag', () => {
     expect(r as string).toContain('nothing to predict');
   });
 
-  it('--aa does not conflict with --spec (--spec takes priority for changes)', () => {
-    // --spec combined with --aa would be unusual but --aa is a run-mode flag,
-    // not a change flag, so it should not trigger the spec+change conflict.
-    // The conflict guard only fires when flagChanges or positionals are present.
+  it('--aa is a run-mode flag and does not trigger the change-flag conflict guard', () => {
+    // --aa with --verify: no change flags and no positional text, so neither the
+    // --spec conflict guard nor the --aa conflict guard fires.  Parse succeeds.
     const r = parseWhatifArgs(['--aa', '--verify']);
     expect(typeof r).not.toBe('string');
+  });
+
+  it('--aa combined with --append returns an error', () => {
+    const r = parseWhatifArgs(['--aa', '--append', 'some text']);
+    expect(typeof r).toBe('string');
+    expect(r as string).toContain('--aa cannot be combined with change flags');
+  });
+
+  it('--aa combined with positional text returns an error', () => {
+    const r = parseWhatifArgs(['--aa', 'some plain text change']);
+    expect(typeof r).toBe('string');
+    expect(r as string).toContain('--aa cannot be combined with change flags');
   });
 });

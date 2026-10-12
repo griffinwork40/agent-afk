@@ -334,7 +334,10 @@ export async function runWhatif(
   let pendingReport: WhatifReport | undefined;
   try {
     // ── A/A calibration fast-path (#2415 Step 0) ──────────────────────────
-    if (options.aaMode) return runAaPhase(baseline, candidate, spec, runDir, runnerOpts, autoKeepContextHooks, sandboxes, options, deps);
+    if (options.aaMode) {
+      pendingReport = await runAaPhase(baseline, candidate, spec, runDir, runnerOpts, autoKeepContextHooks, sandboxes, options, deps);
+      return pendingReport;
+    }
 
     // ── c+d) Snapshots + Predictions ─────────────────────────────────────
 

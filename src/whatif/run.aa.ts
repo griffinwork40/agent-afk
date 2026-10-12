@@ -16,7 +16,6 @@ import { normalizeSnapshot } from './structural.normalize.js';
 import { hookIsolationLimits } from './run.limits.js';
 import { buildHeadline } from './report.js';
 import { persistRun } from './run.persist.js';
-import { cleanupOrRecord } from './kept-sandboxes.js';
 import type {
   Environment,
   WhatifReport,
@@ -43,7 +42,7 @@ export async function runAaPhase(
   runDir: string,
   runnerOpts: RunnerOptions,
   autoKeepContextHooks: boolean,
-  sandboxes: SandboxResult,
+  _sandboxes: SandboxResult,
   options: WhatifOptions,
   deps: WhatifDeps,
 ): Promise<WhatifReport> {
@@ -84,7 +83,6 @@ export async function runAaPhase(
   const report: WhatifReport = { ...partial, headline: buildHeadline(partial) };
 
   await persistRun(runDir, report, [] /* traces */);
-  await cleanupOrRecord(runDir, sandboxes.roots, sandboxes.cleanup, options.keepSandboxes ?? false);
 
   return report;
 }
