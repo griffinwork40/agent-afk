@@ -343,6 +343,22 @@ export function createGlobHandler(cwd?: string): ToolHandler {
     return { content: errorMessage(err), isError: true };
   }
 
+  // Validate brace expansion BEFORE entering the scan try/catch so that
+  // overflow errors surface as 'Invalid glob pattern:' not 'Error scanning
+  // directory:'. expandGlobBraces throws when the pattern exceeds the 256-
+  // alternative / 65536-character limit; catch it here and return early.
+  const normalizedPattern = pattern.replace(/\\/g, '/');
+  let patterns: string[];
+  try {
+    // Recognize braces against the whole input: splitting an absolute prefix
+    // must not turn an originally unbalanced literal pattern into alternation.
+    patterns = firstBraceAlternation(rawPattern) === undefined
+      ? [normalizedPattern]
+      : expandGlobBraces(normalizedPattern);
+  } catch (err) {
+    return { content: `Invalid glob pattern: ${errorMessage(err)}`, isError: true };
+  }
+
   try {
     // Verify the base path exists and is a directory
     const stat = await fs.stat(basePath);
@@ -353,12 +369,6 @@ export function createGlobHandler(cwd?: string): ToolHandler {
       };
     }
 
-    // Recognize braces against the whole input: splitting an absolute prefix
-    // must not turn an originally unbalanced literal pattern into alternation.
-    const normalizedPattern = pattern.replace(/\\/g, '/');
-    const patterns = firstBraceAlternation(rawPattern) === undefined
-      ? [normalizedPattern]
-      : expandGlobBraces(normalizedPattern);
     const relMatches = await collectMatches(basePath, patterns, signal);
     const matches = absolute ? relMatches.map((m) => path.join(basePath, m)) : relMatches;
 
