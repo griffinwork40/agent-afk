@@ -63,6 +63,7 @@ import { resolveSessionId, registerSessionPresence } from './session-wiring.js';
 import { buildSystemPromptWiring } from './system-prompt-wiring.js';
 import { isStateRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
 import { headlessSignalOpts, interactivityOpts, sessionRegistryOpts, type BuildDispatcherOpts } from './index.dispatcher-opts.js';
+import { chainProviderClose } from '../shared/chain-provider-close.js';
 
 const PROVIDER_NAME = 'openai-compatible';
 
@@ -346,16 +347,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
     buildOpts.systemPromptRebuildFactory = spw.systemPromptRebuildFactory;
 
     const providerQuery = buildQueryFromConfig(patchedConfig, args.prompt, buildOpts);
-    // #3532: close the provider's SQLite handle (kv.db) when the session
-    // closes. AgentSession.close() calls providerQuery.close() but not
-    // provider.close(), so _stateStore leaks on Windows (EBUSY on rmSync).
-    const provider = this;
-    const origClose = providerQuery.close.bind(providerQuery);
-    providerQuery.close = (): void => {
-      origClose();
-      provider.close();
-    };
-    return providerQuery;
+    // #3532/#3567: release owned stores once per query handle.
+    return chainProviderClose(providerQuery, () => this.close());
   }
 
   /**

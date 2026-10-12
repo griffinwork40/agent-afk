@@ -69,6 +69,7 @@ import { buildProviderSchemas } from './provider-schemas.js';
 import type { ProviderQueryContext } from './provider-context.js';
 import { setUpQuerySession } from './provider-query-setup.js';
 import { buildProviderQuery } from './provider-query-build.js';
+import { chainProviderClose } from '../shared/chain-provider-close.js';
 import { CLAUDE_SONNET_ID } from '../../session/model-slots.js';
 // Re-exported so the historical import path stays valid after the split.
 export { resolveUserSystem } from './provider-query-setup.js';
@@ -402,16 +403,8 @@ export class AnthropicDirectProvider implements ModelProvider {
     const ctx = this.queryContext();
     const setup = setUpQuerySession(ctx, args, PROVIDER_NAME, DEFAULT_MODEL);
     const providerQuery = buildProviderQuery(ctx, args, setup);
-    // #3532: close the provider's SQLite handle (kv.db) when the session
-    // closes. AgentSession.close() calls providerQuery.close() but not
-    // provider.close(), so _stateStore leaks on Windows (EBUSY on rmSync).
-    const provider = this;
-    const origClose = providerQuery.close.bind(providerQuery);
-    providerQuery.close = (): void => {
-      origClose();
-      provider.close();
-    };
-    return providerQuery;
+    // #3532/#3567: release owned stores once per query handle.
+    return chainProviderClose(providerQuery, () => this.close());
   }
 }
 
