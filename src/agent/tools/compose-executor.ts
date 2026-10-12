@@ -68,6 +68,11 @@ function emitLeafToolStrips(
   resolvedAgents: ReturnType<typeof resolveComposeNodeAgent>[],
   traceWriter: TraceSink | undefined,
 ): void {
+  // Guard first: emitSessionPhase is async; calling it with an undefined writer
+  // still schedules a microtask (async function always returns a Promise).
+  // Short-circuit here to avoid perturbing callers that rely on exact
+  // microtask-tick counts (e.g. compose detach tests that use drainMicrotasks).
+  if (!traceWriter) return;
   const strippedNames = [...COMPOSE_LEAF_STRIPPED_TOOLS].join(', ');
   for (let i = 0; i < nodes.length; i++) {
     const ra = resolvedAgents[i];
