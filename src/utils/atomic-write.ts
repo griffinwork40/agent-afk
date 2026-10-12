@@ -326,7 +326,7 @@ export async function atomicWriteFileAsync(
   if (mkdirp) {
     await mkdir(dirname(dest), {
       recursive: true,
-      ...(opts.mkdirMode !== undefined ? { mode: opts.mkdirMode } : {}),
+      mode: opts.mkdirMode,
     });
   }
 

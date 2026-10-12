@@ -94,7 +94,7 @@ export function recordCdIntent(target: string): void {
     // No trailing newline — the wrapper reads with `cat` and compares
     // against `-d`, which tolerates either form. Match what `pwd` would
     // output for symmetry with manual inspection.
-    atomicWriteFile(getCdIntentPath(), target, { encoding: 'utf8', mode: 0o600 });
+    atomicWriteFile(getCdIntentPath(), target, { encoding: 'utf8', mode: 0o600, mkdirMode: 0o700 });
   } catch {
     /* best-effort — cd-on-exit is convenience, not correctness */
   }

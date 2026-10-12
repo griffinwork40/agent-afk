@@ -1,8 +1,7 @@
 /**
  * Public surface for the MCP client subsystem. Importers outside this
  * folder should reach in through this barrel for any symbol it exports.
- * Sub-modules may be imported directly only for symbols not re-exported
- * here (e.g. dynamic imports of readOauthPending from oauth.ts).
+ * Sub-modules may be imported directly only for symbols not re-exported here.
  *
  * @module agent/mcp
  */

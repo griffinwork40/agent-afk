@@ -1,9 +1,31 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, statSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, statSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { atomicWriteFile, atomicWriteFileAsync, renameWithRetry, renameWithRetrySync } from './atomic-write.js';
 import type { _AtomicWriteAsyncTestInternals } from './atomic-write.js';
+
+describe.each([
+  ['sync', atomicWriteFile],
+  ['async', atomicWriteFileAsync],
+] as const)('atomic write mkdirMode (%s)', (_name, write) => {
+  it.each([undefined, 0o700])('matches native mkdir mode %s on nested parents', async (mkdirMode) => {
+    const dir = mkdtempSync(join(tmpdir(), 'afk-atomic-mkdir-'));
+    try {
+      const reference = join(dir, 'reference', 'nested');
+      mkdirSync(reference, { recursive: true, ...(mkdirMode !== undefined ? { mode: mkdirMode } : {}) });
+      const parent = join(dir, 'actual', 'nested');
+      await write(join(parent, 'out.txt'), 'data', { mkdirMode });
+      expect(readFileSync(join(parent, 'out.txt'), 'utf-8')).toBe('data');
+      // Contract: compare native permissions so this also runs on Windows without POSIX bits.
+      expect(statSync(parent).mode & 0o777).toBe(statSync(reference).mode & 0o777);
+      expect(statSync(join(dir, 'actual')).mode & 0o777)
+        .toBe(statSync(join(dir, 'reference')).mode & 0o777);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('atomicWriteFile (sync)', () => {
   let dir: string;
