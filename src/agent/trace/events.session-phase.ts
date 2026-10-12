@@ -112,6 +112,7 @@ export const SessionPhaseNameSchema = z.enum([
   // Must mirror the SessionPhaseName union in types.session-phase.ts;
   // session-phase.test.ts parity enforces it.
   'compose_recovery_decision',
+  'compose_leaf_tools_stripped',
   // Streaming connection opener diagnostics (opt-in AFK_CONNECT_RETRY_BUDGET_MS).
   // Must mirror the SessionPhaseName union in types.session-phase.ts;
   // session-phase.test.ts parity enforces it.

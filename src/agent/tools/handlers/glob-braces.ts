@@ -60,18 +60,18 @@ export function expandGlobBraces(pattern: string): string[] {
     }
     const boundaries = [group.start, ...group.commas, group.end];
     // Contract: >= 256 (not > 256) so the cap is inclusive: exactly 256
-    // alternatives are forbidden, matching the error message wording.
+    // alternatives are forbidden; the effective maximum is 255.
     if (pending.length + expanded.length + boundaries.length - 1 >= 256) {
-      throw new Error('Brace expansion exceeds limit (256 alternatives / 65536 characters); simplify the glob pattern');
+      throw new Error('Brace expansion exceeds limit (max 255 alternatives / 65,535 aggregate characters); simplify the glob pattern');
     }
     const arms = boundaries.slice(0, -1).map((start, i) =>
       current.slice(0, group.start) + current.slice(start + 1, boundaries[i + 1]) + current.slice(group.end + 1),
     );
     totalSize += arms.reduce((sum, arm) => sum + arm.length, 0);
     // Contract: >= 65_536 (not > 65_536) so the cap is inclusive: exactly
-    // 65536 aggregate characters are forbidden, matching the error message.
+    // 65536 aggregate characters are forbidden; the effective maximum is 65,535.
     if (totalSize >= 65_536) {
-      throw new Error('Brace expansion exceeds limit (256 alternatives / 65536 characters); simplify the glob pattern');
+      throw new Error('Brace expansion exceeds limit (max 255 alternatives / 65,535 aggregate characters); simplify the glob pattern');
     }
     // Reverse because pending is a stack: preserve the caller's arm order.
     pending.push(...arms.reverse());

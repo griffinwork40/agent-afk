@@ -352,6 +352,7 @@ describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
     background_process_started: true,
     background_process_settled: true,
     compose_recovery_decision: true,
+    compose_leaf_tools_stripped: true,
     connection_failure: true,
     connection_recovered: true,
     connection_budget_exhausted: true,

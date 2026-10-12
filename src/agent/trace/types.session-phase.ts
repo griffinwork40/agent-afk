@@ -285,7 +285,14 @@ export type SessionPhaseName =
   | 'background_process_started'
   | 'background_process_settled'
   // Bounded compose node replay eligibility and actual redispatch. No control-flow effects.
-  | 'compose_recovery_decision';
+  | 'compose_recovery_decision'
+  // Executor-backed tools (`agent`, `skill`) stripped from a named compose-node
+  // allowlist at resolution time (compose-executor.ts). Emitted once per node
+  // that had at least one tool stripped. PURE OBSERVABILITY — the strip already
+  // happened; this makes it visible so operators can see which agent_type grants
+  // were silently removed without inspecting the node's raw allowlist.
+  // metadata: { agentType, strippedTools (comma-separated list) }
+  | 'compose_leaf_tools_stripped';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

@@ -24,6 +24,7 @@ import { partialNodeFlag } from './compose-executor.partial.js';
 import { buildComposeWaveManifest } from './compose-executor.wave-manifest.js';
 
 import type { TraceSink } from '../trace/index.js';
+import { emitSessionPhase } from '../trace/emit.js';
 import type { ToolCall, ToolResult } from './types.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { deriveOrigin, actorFromDepth } from '../session/session-identity.js';
@@ -34,7 +35,7 @@ import type { SubagentProgressSink } from '../types/session-types.js';
 import { getCurrentSink } from '../_lib/skill-sink-channel.js';
 import { resolveMaxNestingDepth } from './nesting.js';
 import { resolveComposeNodeProvider } from './compose-node-provider.js';
-import { resolveComposeNodeAgent, resolvedAgentToolRestriction, resolveComposeAgentPrompt } from './compose-agent-resolve.js';
+import { resolveComposeNodeAgent, resolvedAgentToolRestriction, resolveComposeAgentPrompt, COMPOSE_LEAF_STRIPPED_TOOLS } from './compose-agent-resolve.js';
 import { splitComposeNodeResults } from './compose-node-results.js';
 import { buildComposeMaxDepthRefusal } from './skill-depth-message.js';
 import {
@@ -51,6 +52,34 @@ import { inboundAttachmentRegistry as defaultInboundAttachmentRegistry } from '.
 import type { DetachableToolRegistry } from './detach-registry.js';
 import { raceComposeDetach } from './detach-compose.js';
 import { evaluateDispatchUsageForModel, prependUsageNotice } from './usage-notice.js';
+
+/**
+ * Emit a `compose_leaf_tools_stripped` session-phase trace event for every
+ * resolved node whose executor-backed tools were stripped. PURE OBSERVABILITY
+ * — the strip happened in `resolveComposeNodeAgent`; this makes it visible to
+ * operators so they can see which `agent_type` grants were silently removed
+ * without inspecting raw allowlists.
+ *
+ * Extracted as a named helper (not a closure) to keep `ComposeExecutor.execute`
+ * under the 200-line function ceiling.
+ */
+function emitLeafToolStrips(
+  nodes: import('./compose-input-parse.js').ComposeNodeInput[],
+  resolvedAgents: ReturnType<typeof resolveComposeNodeAgent>[],
+  traceWriter: TraceSink | undefined,
+): void {
+  const strippedNames = [...COMPOSE_LEAF_STRIPPED_TOOLS].join(', ');
+  for (let i = 0; i < nodes.length; i++) {
+    const ra = resolvedAgents[i];
+    const node = nodes[i];
+    if (ra?.leafNotice !== undefined && node?.agent_type !== undefined) {
+      void emitSessionPhase(traceWriter, {
+        phase: 'compose_leaf_tools_stripped',
+        metadata: { agentType: node.agent_type, strippedTools: strippedNames },
+      });
+    }
+  }
+}
 
 export class ComposeExecutor {
   // Current worktree cwd. Seeded from ctx.cwd; updated by setCwd when the
@@ -293,7 +322,7 @@ export class ComposeExecutor {
         const message = errorMessage(resolveErr);
         return { content: message, isError: true };
       }
-
+      emitLeafToolStrips(parsed.nodes, resolvedAgents, this.ctx.traceWriter);
       // Invariant: attachment resolution errors are isolated per-node so a bad
       // path or unknown image id on one node never aborts siblings. Each callback
       // either resolves with a SubagentDAGNode (success) or a sentinel

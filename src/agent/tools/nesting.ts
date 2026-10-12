@@ -379,8 +379,10 @@ export const COMPOSE_LEAF_STRIPPED_TOOLS: ReadonlySet<string> = new Set(['agent'
  * `childProviderFactory` (which bundles both executors) must never be used for
  * this purpose.
  *
- * Tool surface: `CHILD_ALLOWED_TOOLS` (same as normal children) — `compose` is
- * already absent from that set, so no additional stripping is needed.
+ * Tool surface: `CHILD_ALLOWED_TOOLS` minus `COMPOSE_LEAF_STRIPPED_TOOLS` —
+ * `compose` is already absent from `CHILD_ALLOWED_TOOLS`, and `agent`/`skill`
+ * are stripped via `COMPOSE_LEAF_STRIPPED_TOOLS` (compose nodes are leaves and
+ * have no `subagentExecutor`/`skillExecutor` to back those tools).
  *
  * @param model      Effective model for this node. Drives provider routing so
  *                   OpenAI-routed nodes get `OpenAICompatibleProvider`,

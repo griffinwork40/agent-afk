@@ -8,6 +8,7 @@ import { cliProviderFamily } from './provider-selection.js';
 import { preloadClaudeKeychainOAuth } from '../agent/auth/credential-resolver.js';
 import { runAuthWizard } from './auth-wizard.js';
 import { resolveResumeTarget } from './resume-session.js';
+import { debugLog } from '../utils/debug.js';
 
 const AUTH_GATED_COMMANDS = new Set(['chat', 'interactive', 'daemon', 'farm']);
 
@@ -29,10 +30,23 @@ export async function runFirstRunDetector(command: Command): Promise<void> {
   if (command.name() === 'interactive') {
     try {
       model = resolveResumeTarget(options)?.stored?.model ?? model;
-    } catch {
-      // Resolution errors (conflicting flags, missing session) are user-facing
-      // validation issues handled by the command action; retain the default
-      // model so the credential gate can complete and the action fires normally.
+    } catch (err) {
+      // resolveResumeTarget throws Error for two expected validation cases:
+      //   1. Both --resume and --continue supplied (conflicting flags).
+      //   2. No saved sessions found for --continue (missing session).
+      // These are user-facing validation issues re-thrown by the command action;
+      // retain the default model so the credential gate can complete first.
+      // Any other error (fs permission failure, corrupt session store, JSON
+      // parse error) is unexpected — log it at debug level so it is visible
+      // under AFK_DEBUG=1 without surfacing raw stack traces to all users.
+      const isExpected =
+        err instanceof Error &&
+        (err.message.startsWith('Use either --resume') ||
+          err.message.startsWith('No saved sessions found') ||
+          err.message.startsWith('Could not load latest saved session'));
+      if (!isExpected) {
+        debugLog('[first-run] resolveResumeTarget failed unexpectedly:', err);
+      }
     }
   }
   // chat's provider is currently built from options.model even for a resume;
