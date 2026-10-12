@@ -142,8 +142,26 @@ async function persistBlob(
     try {
       await rename(tmpName, blobPath);
     } catch (err) {
-      // EEXIST / ENOTEMPTY: another writer committed first — that is fine.
-      if (!isErrnoCode(err, 'EEXIST') && !isErrnoCode(err, 'ENOTEMPTY')) throw err;
+      // Invariant: this store is content-addressed — every blob is named by its
+      // SHA-256 hash, so a blob that already exists at `blobPath` is byte-for-byte
+      // identical to the content we are trying to write.  It is therefore safe to
+      // treat any error that leaves a complete blob at `blobPath` as a harmless
+      // collision with a concurrent writer that won the race.
+      //
+      // Tolerated codes:
+      //   EEXIST / ENOTEMPTY — POSIX: destination already exists (concurrent winner).
+      //   EPERM  / EACCES    — Windows rename-collision shape: renaming onto a
+      //     destination that a concurrent writer is still renaming or has open
+      //     yields EPERM (-4048) or EACCES (-4092) instead of EEXIST.  We
+      //     tolerate these ONLY when `existsSync(blobPath)` confirms the blob
+      //     landed (i.e. the concurrent winner committed successfully).  If the
+      //     blob is absent we re-throw so a genuine permission error is not
+      //     silently swallowed.
+      const isCollision =
+        isErrnoCode(err, 'EEXIST') ||
+        isErrnoCode(err, 'ENOTEMPTY') ||
+        ((isErrnoCode(err, 'EPERM') || isErrnoCode(err, 'EACCES')) && existsSync(blobPath));
+      if (!isCollision) throw err;
     }
   } finally {
     await rm(tmpName, { force: true });
