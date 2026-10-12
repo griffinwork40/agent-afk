@@ -131,20 +131,7 @@ export class TelegramBot {
 
     this.bot.command('start', (ctx) => handleStart(ctx));
     this.bot.command('help', (ctx) => handleHelp(ctx, this.sessionManager));
-    this.bot.command('clear', async (ctx) => {
-      const route = routeFromCtx(ctx);
-      if (!route) {
-        await ctx.reply(formatError('Could not identify chat'));
-        return;
-      }
-      const session = await this.sessionManager.getSession(route);
-      if (session.state !== 'idle') {
-        this.messageHandler.enqueueClear(route, ctx);
-        await ctx.reply('Clear queued.');
-      } else {
-        await handleClear(ctx, this.sessionManager, this.registeredCommandChats, this.log.bind(this));
-      }
-    });
+    this.bot.command('clear', (ctx) => this.handleClear(ctx));
     this.bot.command('compact', async (ctx) => {
       const route = routeFromCtx(ctx);
       if (!route) {
