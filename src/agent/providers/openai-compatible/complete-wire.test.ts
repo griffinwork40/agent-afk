@@ -55,11 +55,12 @@ describe('completeWithWire', () => {
     );
   });
 
-  it('ChatGPT backend URL wins over a caller endpoint (mirrors the live session), and caller headers are kept', async () => {
+  it('ChatGPT backend URL wins when no custom caller endpoint is set (mirrors the live session), and caller headers are kept', async () => {
     resolveOpenAIAuth.mockReturnValue({ apiKey: 'chatgpt-access', source: 'chatgpt-oauth', accountId: 'acct_1' });
     const factory = vi.fn((_: CompleteWireClientOptions) => ({}) as OpenAI);
 
-    await completeWithWire({ ...base, baseURL: 'http://localhost:8080/v1', defaultHeaders: { 'x-extra': '1' } }, factory);
+    // No baseURL → resolveWireMode forces the ChatGPT backend.
+    await completeWithWire({ ...base, defaultHeaders: { 'x-extra': '1' } }, factory);
 
     const opts = factory.mock.calls[0]![0];
     expect(opts.baseURL).toBe(CHATGPT_BACKEND_BASE_URL);
@@ -108,5 +109,26 @@ describe('completeWithWire', () => {
     await completeWithWire({ ...base, forceChatgptOAuth: true }, () => ({}) as OpenAI);
 
     expect(resolveOpenAIAuth).toHaveBeenCalledWith(undefined, {}, true);
+  });
+
+  // Regression #3620: customBaseURL guard must be threaded into resolveWireMode
+  it('OAuth + custom baseURL: routes to Chat Completions on the custom endpoint, not the ChatGPT backend', async () => {
+    // resolveWireMode suppresses the ChatGPT backend redirect when a custom
+    // endpoint is set — verify completeWithWire passes input.baseURL through.
+    resolveOpenAIAuth.mockReturnValue({ apiKey: 'chatgpt-access', source: 'chatgpt-oauth', accountId: 'acct_1' });
+    const factory = vi.fn((_: CompleteWireClientOptions) => ({}) as OpenAI);
+
+    const out = await completeWithWire(
+      { ...base, baseURL: 'http://my-proxy.internal/v1' },
+      factory,
+    );
+
+    // Must land on Chat Completions (not Responses) — factory never called.
+    expect(out).toBe('chat-reply');
+    expect(factory).not.toHaveBeenCalled();
+    expect(oneShotResponses).not.toHaveBeenCalled();
+    expect(oneShotChatCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ baseURL: 'http://my-proxy.internal/v1', apiKey: 'chatgpt-access' }),
+    );
   });
 });
