@@ -80,7 +80,6 @@ import { AbortCoordinator, CLOSED_SENTINEL } from '../shared/abort-coordinator.j
 import { FileCheckpointState } from './query.file-checkpoint.js';
 import { currentWritePolicy } from '../../file-checkpoint/write-policy.js';
 import { HookBlockedError, ensureError } from '../../../utils/errors.js';
-
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
 import { OpenAIJournalWiring } from './query/journal-wiring.js';
 
@@ -120,12 +119,6 @@ export { isOSeriesModel, mapEffortForOpenAI } from './query/model-params.js';
 export { resolveReasoningEffort };
 
 const PROVIDER_NAME = 'openai-compatible';
-
-
-
-
-
-
 
 /**
  * OpenAI-compatible ProviderQuery implementation.
