@@ -2,12 +2,14 @@
  * Per-turn snapshots for write_file, edit_file and patch_apply.
  * Bash mutations are not tracked. Digest-named entry directories contain
  * content and original-path metadata, published together by one rename.
+ * Content-addressed session blobs deduplicate identical bytes across turns.
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { stat, readFile, writeFile, mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { getFileCheckpointTurnDir } from '../../paths.js';
+import { storeCheckpointContent } from './content-store.js';
 
 export interface FileCheckpointRegistry {
   snapshotFile(absPath: string): Promise<void>;
@@ -19,10 +21,12 @@ export interface FileSnapshot {
   snapshotPath: string;
   isNewFile: boolean;
   mode?: number;
+  contentHash?: string;
 }
 
 interface SnapshotMetadata {
   version: 3;
+  contentHash?: string;
   absPath: string;
   isNewFile: boolean;
   mode?: number;
@@ -51,7 +55,7 @@ async function capture(absPath: string): Promise<{ content: Buffer; metadata: Sn
   }
 }
 
-async function publishSnapshot(turnDir: string, absPath: string): Promise<void> {
+async function publishSnapshot(turnDir: string, absPath: string, sessionId: string, stateDir?: string): Promise<void> {
   const key = createHash('sha256').update(absPath).digest('hex');
   const destination = join(turnDir, `${key}.entry`);
   if (existsSync(destination)) return;
@@ -59,7 +63,7 @@ async function publishSnapshot(turnDir: string, absPath: string): Promise<void> 
   await mkdir(turnDir, { recursive: true, mode: 0o700 });
   const staging = await mkdtemp(join(turnDir, '.pending-'));
   try {
-    await writeFile(join(staging, 'content'), content, { flag: 'wx', mode: 0o600 });
+    metadata.contentHash = await storeCheckpointContent(sessionId, content, join(staging, 'content'), stateDir);
     await writeFile(join(staging, 'metadata.json'), JSON.stringify(metadata), { flag: 'wx', mode: 0o600 });
     // Invariant: the nonempty directory rename publishes content AND metadata
     // atomically. A competing publisher cannot replace a committed directory.
@@ -86,7 +90,7 @@ export function createFileCheckpointRegistry(
       if (seen.has(absPath)) return;
       let task = pending.get(absPath);
       if (!task) {
-        task = publishSnapshot(turnDir, absPath);
+        task = publishSnapshot(turnDir, absPath, sessionId, _stateDir);
         pending.set(absPath, task);
       }
       try {
@@ -116,6 +120,10 @@ export function listTurnSnapshots(sessionId: string, turnId: string, _stateDir?:
       const metadata = JSON.parse(readFileSync(join(directory, 'metadata.json'), 'utf8')) as SnapshotMetadata;
       if (metadata.version !== 3 || typeof metadata.absPath !== 'string' || typeof metadata.isNewFile !== 'boolean') {
         throw new Error(`Invalid checkpoint metadata: ${directory}`);
+      }
+      if (metadata.contentHash !== undefined && (typeof metadata.contentHash !== 'string'
+        || !/^[a-f0-9]{64}$/.test(metadata.contentHash))) {
+        throw new Error(`Invalid checkpoint content hash: ${directory}`);
       }
       if (metadata.mode !== undefined && (typeof metadata.mode !== 'number'
         || !Number.isFinite(metadata.mode) || !Number.isInteger(metadata.mode)

@@ -840,5 +840,5 @@ export { getWhatifDir } from './paths.whatif.js';
 // Peer messaging inbox — extracted to paths.peer.ts for the 350-line ceiling.
 // ---------------------------------------------------------------------------
 export { getPeerInboxRoot, getPeerInboxDir } from './paths.peer.js';
-export { getFileCheckpointsRoot, getFileCheckpointSessionDir, getFileCheckpointTurnDir } from './paths.checkpoint.js';
+export { getFileCheckpointsRoot, getFileCheckpointSessionDir, getFileCheckpointTurnDir, getFileCheckpointBlobDir } from './paths.checkpoint.js';
 
