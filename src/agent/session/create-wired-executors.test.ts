@@ -8,7 +8,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createWiredExecutors } from './create-wired-executors.js';
@@ -25,6 +26,28 @@ import { SubagentManager } from '../subagent.js';
 import { ComposeExecutor } from '../tools/compose-executor.js';
 
 vi.mock('../../utils/debug.js', () => ({ debugLog: vi.fn(), isDebugEnabled: () => false }));
+
+// Invariant: POSIX can unlink an open SQLite file, hiding the Windows EBUSY
+// regression. Track real connections (not stubbed I/O) so teardown catches
+// an unclosed provider or process-wide ledger handle on every platform.
+const openedStores = vi.hoisted(() => new Map<object, string>());
+vi.mock('../state/state-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../state/state-store.js')>();
+  return {
+    ...actual,
+    StateStore: class extends actual.StateStore {
+      constructor(dbPath: string) {
+        super(dbPath);
+        openedStores.set(this, dbPath);
+      }
+      override close(): void {
+        super.close();
+        expect(() => this.get('close-probe', 'closed')).toThrow(/not open/);
+        openedStores.delete(this);
+      }
+    },
+  };
+});
 
 const createMock = vi.fn();
 class MockAnthropic { public messages = { create: createMock }; }
@@ -84,19 +107,24 @@ describe('createWiredExecutors (#3442)', () => {
     __setAnthropicClientFactory(() => new MockAnthropic() as unknown as Anthropic);
     base = { model: 'claude-haiku-4-5', apiKey: 'sk-ant-oat01-test', cwd };
   });
-  afterEach(() => {
+  afterEach(async () => {
     __setAnthropicClientFactory(null);
-    // Skill dispatch can open the process-wide usage ledger's kv.db handle.
+    // Tool-round vitals can open the process-wide usage ledger's kv.db handle.
     // Session.close() does not own it; release it before removing AFK_HOME.
     resetUsageLedgerForTests();
-    if (savedHome === undefined) delete process.env['AFK_HOME'];
-    else process.env['AFK_HOME'] = savedHome;
-    _resetRegistry();
-    resetSlotBindings();
-    vi.restoreAllMocks();
-    // Sessions close in their finally blocks before teardown. Retry transient
-    // Windows SQLite/antivirus locks rather than skipping this test on win32.
-    rmSync(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    try {
+      expect([...openedStores.values()], 'SQLite handles must close before AFK_HOME removal').toEqual([]);
+    } finally {
+      if (savedHome === undefined) delete process.env['AFK_HOME'];
+      else process.env['AFK_HOME'] = savedHome;
+      _resetRegistry();
+      resetSlotBindings();
+      vi.restoreAllMocks();
+    }
+    // Sessions close in their finally blocks before teardown. Async retries
+    // yield to the event loop for transient Windows SQLite/antivirus locks;
+    // retrying must not substitute for closing the handles asserted above.
+    await rm(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
   it('fails closed without a hook registry or unattended', () => {
