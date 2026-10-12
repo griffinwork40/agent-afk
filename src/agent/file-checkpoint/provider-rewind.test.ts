@@ -6,6 +6,9 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type OpenAI from 'openai';
 import type { ProviderEvent, ProviderQuery, ProviderUserTurn } from '../provider.js';
 import type { FileCheckpointRegistry } from './file-checkpoint.js';
+import { FileCheckpointState } from '../providers/openai-compatible/query.file-checkpoint.js';
+import * as checkpoints from './file-checkpoint.js';
+vi.mock('./file-checkpoint.js', async original => ({ ...await original<typeof import('./file-checkpoint.js')>() }));
 import { AnthropicDirectQuery } from '../providers/anthropic-direct/query.js';
 import { OpenAICompatibleQuery, __setOpenAIClientFactory } from '../providers/openai-compatible/query.js';
 
@@ -17,8 +20,23 @@ beforeEach(() => {
 });
 afterEach(() => {
   __setOpenAIClientFactory(null);
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   rmSync(tmp, { recursive: true, force: true });
+});
+
+describe('FileCheckpointState.begin without dispatcher wiring', () => {
+  it.each([undefined, {}])('is an enabled no-op for dispatcher %j', async dispatcher => {
+    const registrySpy = vi.spyOn(checkpoints, 'createFileCheckpointRegistry');
+    const checkpoint = new FileCheckpointState(true, 'unwired-session');
+    expect(checkpoint.begin(dispatcher, 'unwired-turn')).toBeUndefined();
+    expect(registrySpy).not.toHaveBeenCalled();
+    // An accidental currentTurnId would reject rewind as an in-flight turn.
+    const result = await checkpoint.rewind('unwired-turn');
+    expect(result.canRewind).toBe(false);
+    expect(result.error).toMatch(/No file checkpoint/);
+    expect(result.error).not.toMatch(/in flight/);
+  });
 });
 
 async function* input(userMessageId?: string): AsyncIterable<ProviderUserTurn> {

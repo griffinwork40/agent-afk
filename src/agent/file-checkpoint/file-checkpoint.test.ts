@@ -126,6 +126,45 @@ describe('createFileCheckpointRegistry', () => {
   });
 });
 
+describe('listTurnSnapshots mode validation', () => {
+  async function metadataPath(): Promise<string> {
+    const file = path.join(tmpDir, 'mode.txt');
+    writeFileSync(file, 'original');
+    await createFileCheckpointRegistry('mode-session', 'mode-turn', stateDir).snapshotFile(file);
+    return path.join(path.dirname(listTurnSnapshots('mode-session', 'mode-turn', stateDir)[0]!.snapshotPath), 'metadata.json');
+  }
+
+  it.each(['384', null, true, {}, [], 1.5, 0o4600, 0o2600, 0o6600])('rejects malicious mode %j before rewind mutation', async (mode) => {
+    const metadataFile = await metadataPath();
+    const metadata = JSON.parse(readFileSync(metadataFile, 'utf8'));
+    writeFileSync(metadataFile, JSON.stringify({ ...metadata, mode }));
+    writeFileSync(metadata.absPath, 'mutated');
+    expect(() => listTurnSnapshots('mode-session', 'mode-turn', stateDir)).toThrow(/Invalid checkpoint mode/);
+    const result = await rewindFiles(
+      { sessionId: 'mode-session', enableFileCheckpointing: true, _stateDir: stateDir }, 'mode-turn',
+    );
+    expect(result.canRewind).toBe(false);
+    expect(result.filesChanged).toEqual([]);
+    expect(readFileSync(metadata.absPath, 'utf8')).toBe('mutated');
+  });
+
+  it.each(['1e400', '-1e400'])('rejects nonfinite JSON mode %s', async (mode) => {
+    const metadataFile = await metadataPath();
+    const metadata = JSON.parse(readFileSync(metadataFile, 'utf8'));
+    delete metadata.mode;
+    writeFileSync(metadataFile, JSON.stringify(metadata).replace(/}$/, `,"mode":${mode}}`));
+    expect(() => listTurnSnapshots('mode-session', 'mode-turn', stateDir)).toThrow(/Invalid checkpoint mode/);
+  });
+
+  it.each([undefined, 0, 0o600, 0o755, 0o1755, 0o100755])('preserves legacy/normal mode and masks file type bits: %s', async (mode) => {
+    const metadataFile = await metadataPath();
+    const metadata = JSON.parse(readFileSync(metadataFile, 'utf8'));
+    writeFileSync(metadataFile, JSON.stringify({ ...metadata, mode }));
+    expect(listTurnSnapshots('mode-session', 'mode-turn', stateDir)[0]!.mode)
+      .toBe(mode === undefined ? undefined : mode & 0o7777);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Unit tests: decodePathKey round-trip
 // ---------------------------------------------------------------------------
@@ -157,10 +196,27 @@ describe('rewindFiles', () => {
     expect(result.canRewind).toBe(false);
   });
 
-  it('returns canRewind:false when no checkpoint exists for the turn', async () => {
+  it.each([false, true])('rewinds an existing empty turn directory (dryRun: %s)', async (dryRun) => {
+    const turnDir = path.join(stateDir, 'file-checkpoints', 'sess1', 'empty-turn');
+    mkdirSync(turnDir, { recursive: true });
+    expect(await rewindFiles(
+      { sessionId: 'sess1', enableFileCheckpointing: true, _stateDir: stateDir }, 'empty-turn', { dryRun },
+    )).toEqual({ canRewind: true, filesChanged: [], insertions: 0, deletions: 0 });
+  });
+
+  it('registry creation alone stays lazy and does not authorize a missing turn', async () => {
+    createFileCheckpointRegistry('sess1', 'lazy-turn', stateDir);
+    expect(existsSync(path.join(stateDir, 'file-checkpoints', 'sess1', 'lazy-turn'))).toBe(false);
+    expect((await rewindFiles(
+      { sessionId: 'sess1', enableFileCheckpointing: true, _stateDir: stateDir }, 'lazy-turn',
+    )).canRewind).toBe(false);
+  });
+
+  it.each([false, true])('returns canRewind:false when no checkpoint exists (dryRun: %s)', async (dryRun) => {
     const result = await rewindFiles(
       { sessionId: 'sess1', enableFileCheckpointing: true, _stateDir: stateDir },
       'missing-turn',
+      { dryRun },
     );
     expect(result.canRewind).toBe(false);
     expect(result.error).toMatch(/No file checkpoint/);

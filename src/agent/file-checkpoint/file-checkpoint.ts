@@ -100,6 +100,11 @@ export function createFileCheckpointRegistry(
   };
 }
 
+/** Registry creation is lazy; only an existing turn directory is a checkpoint. */
+export function hasTurnCheckpoint(sessionId: string, turnId: string, _stateDir?: string): boolean {
+  return existsSync(turnDirectory(sessionId, turnId, _stateDir));
+}
+
 export function listTurnSnapshots(sessionId: string, turnId: string, _stateDir?: string): FileSnapshot[] {
   const turnDir = turnDirectory(sessionId, turnId, _stateDir);
   if (!existsSync(turnDir)) return [];
@@ -112,7 +117,16 @@ export function listTurnSnapshots(sessionId: string, turnId: string, _stateDir?:
       if (metadata.version !== 3 || typeof metadata.absPath !== 'string' || typeof metadata.isNewFile !== 'boolean') {
         throw new Error(`Invalid checkpoint metadata: ${directory}`);
       }
-      result.push({ ...metadata, snapshotPath: join(directory, 'content') });
+      if (metadata.mode !== undefined && (typeof metadata.mode !== 'number'
+        || !Number.isFinite(metadata.mode) || !Number.isInteger(metadata.mode)
+        || (metadata.mode & 0o6000) !== 0)) {
+        throw new Error(`Invalid checkpoint mode: ${directory}`);
+      }
+      result.push({
+        ...metadata,
+        mode: metadata.mode === undefined ? undefined : metadata.mode & 0o7777,
+        snapshotPath: join(directory, 'content'),
+      });
     } else if (entry.isFile() && !entry.name.startsWith('.') && !entry.name.endsWith('.new')) {
       const snapshotPath = join(turnDir, entry.name);
       result.push({

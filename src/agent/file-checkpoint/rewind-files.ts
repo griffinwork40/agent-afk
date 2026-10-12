@@ -2,12 +2,12 @@
 import { readFileSync, unlinkSync, lstatSync } from 'node:fs';
 import type { ProviderRewindResult } from '../provider.js';
 import type { ToolHandlerContext } from '../tools/types.js';
-import { listTurnSnapshots, type FileSnapshot } from './file-checkpoint.js';
+import { hasTurnCheckpoint, listTurnSnapshots, type FileSnapshot } from './file-checkpoint.js';
 import { validatedWriteTarget } from './write-policy.js';
 import { resolveAndContain, realpathSafe } from '../tools/handlers/_cwd-utils.js';
 import { assertNotDenylisted } from '../tools/handlers/write-denylist.js';
 import { isAbsolute } from 'node:path';
-import { stageRewindFile } from './rewind-staging.js';
+import { pinRewindParent, stageRewindFile } from './rewind-staging.js';
 import { errorMessage } from '../../utils/errors.js';
 
 export interface RewindFilesDeps {
@@ -42,9 +42,14 @@ export async function rewindFiles(
     return { canRewind: false, error: 'File checkpointing is not enabled (set enableFileCheckpointing: true in AgentConfig).' };
   }
   let snapshots: FileSnapshot[];
-  try { snapshots = listTurnSnapshots(deps.sessionId, turnId, deps._stateDir); }
+  try {
+    if (!hasTurnCheckpoint(deps.sessionId, turnId, deps._stateDir)) {
+      return { canRewind: false, error: `No file checkpoint found for turn ${JSON.stringify(turnId)}.` };
+    }
+    snapshots = listTurnSnapshots(deps.sessionId, turnId, deps._stateDir);
+  }
   catch (err) { return { canRewind: false, error: `Cannot read checkpoint: ${errorMessage(err)}`, filesChanged: [] }; }
-  if (!snapshots.length) return { canRewind: false, error: `No file checkpoint found for turn ${JSON.stringify(turnId)}.` };
+  if (!snapshots.length) return { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 };
 
   const changedFiles: string[] = [];
   let insertions = 0;
@@ -60,9 +65,17 @@ export async function rewindFiles(
       if (isNewFile ? current === null : current?.equals(prior!)) continue;
       if (options?.dryRun) { changedFiles.push(absPath); continue; }
       if (isNewFile) {
+        const guardParent = pinRewindParent(target);
+        const saved = lstatSync(target);
+        if (!saved.isFile()) throw new Error(`Refusing to delete non-regular file: ${target}`);
         assertDestination(absPath, target, deps.writePolicy);
-        // Delete only a regular tracked target, never a retargeted link.
-        if (lstatSync(target).isSymbolicLink()) throw new Error(`Refusing to delete symlink: ${target}`);
+        guardParent();
+        // Like staging, pin before validation and recheck synchronously before
+        // mutation. Node cannot eliminate external OS races after this check.
+        const now = lstatSync(target);
+        if (!now.isFile() || now.dev !== saved.dev || now.ino !== saved.ino) {
+          throw new Error(`Rewind destination identity changed: ${target}`);
+        }
         unlinkSync(target);
         deletions += 1;
       } else {

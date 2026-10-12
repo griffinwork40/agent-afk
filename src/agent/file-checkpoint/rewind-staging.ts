@@ -21,6 +21,12 @@ function unchanged(pins: DirectoryPin[]): void {
   }
 }
 
+/** Pin an existing destination parent for synchronous deletion guards too. */
+export function pinRewindParent(target: string): () => void {
+  const pins = [pin(dirname(target))];
+  return () => unchanged(pins);
+}
+
 export function stageRewindFile(target: string, content: Buffer, validate: () => void, mode = 0o600): void {
   const missing: string[] = [];
   let ancestor = dirname(target);

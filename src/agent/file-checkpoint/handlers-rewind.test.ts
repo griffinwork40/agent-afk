@@ -158,6 +158,42 @@ describe('real handler checkpoint and rewind regressions', () => {
     } finally { rmSync(outside, { recursive: true, force: true }); }
   });
 
+  it.each(['file', 'parent'])('refuses a regular %s replacement during deletion validation', async (kind) => {
+    const parent = join(root, 'parent');
+    const file = join(parent, 'new');
+    mkdirSync(parent);
+    await context.fileCheckpoint!.snapshotFile(file);
+    writeFileSync(file, 'tracked');
+    const originalRead = fs.readFileSync;
+    let readCurrent = false;
+    let injected = false;
+    vi.spyOn(fs, 'readFileSync').mockImplementation((...args) => {
+      const result = originalRead(...args);
+      if (String(args[0]) === file) readCurrent = true;
+      return result;
+    });
+    // The getter runs inside assertDestination's real containment validation.
+    Object.defineProperty(context, 'writeRoots', { get() {
+      if (readCurrent && !injected) {
+        injected = true;
+        fs.renameSync(kind === 'file' ? file : parent, join(root, 'saved'));
+        if (kind === 'parent') mkdirSync(parent);
+        writeFileSync(file, 'replacement');
+      }
+      return [root];
+    } });
+    const unlinkSpy = vi.spyOn(fs, 'unlinkSync');
+    const result = await rewind();
+    expect(injected).toBe(true);
+    expect(result.canRewind).toBe(false);
+    expect(result.error).toMatch(/identity changed/);
+    expect(result.filesChanged).toEqual([]);
+    expect(result.deletions).toBe(0);
+    expect(unlinkSpy).not.toHaveBeenCalled();
+    expect(readFileSync(file, 'utf8')).toBe('replacement');
+    expect(readFileSync(kind === 'file' ? join(root, 'saved') : join(root, 'saved', 'new'), 'utf8')).toBe('tracked');
+  });
+
   it('rechecks denylist even when containment is bypassed', async () => {
     const file = join(root, 'file');
     writeFileSync(file, 'old');
