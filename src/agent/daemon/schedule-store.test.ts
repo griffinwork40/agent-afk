@@ -3,7 +3,8 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { rmSyncRetry } from '../../__test-utils__/rm-sync-retry.js';
 import { tmpdir } from 'node:os';
 import { dirname, join, isAbsolute } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -74,7 +75,7 @@ describe('loadSchedules', () => {
   let tmpDir: string;
 
   afterEach(() => {
-    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    if (tmpDir) rmSyncRetry(tmpDir);
   });
 
   it('returns [] for missing file', () => {
@@ -116,7 +117,7 @@ describe('addSchedule', () => {
   let tmpDir: string;
 
   afterEach(() => {
-    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    if (tmpDir) rmSyncRetry(tmpDir);
   });
 
   it('writes and reloads correctly', () => {
@@ -231,7 +232,7 @@ describe('removeSchedule', () => {
   let tmpDir: string;
 
   afterEach(() => {
-    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    if (tmpDir) rmSyncRetry(tmpDir);
   });
 
   it('returns true and removes entry', () => {
@@ -261,7 +262,7 @@ describe('getSchedule', () => {
   let tmpDir: string;
 
   afterEach(() => {
-    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    if (tmpDir) rmSyncRetry(tmpDir);
   });
 
   it('returns config by id', () => {
@@ -286,7 +287,7 @@ describe('toggleScheduleEnabled', () => {
   let tmpDir: string;
 
   afterEach(() => {
-    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    if (tmpDir) rmSyncRetry(tmpDir);
   });
 
   it('enables a disabled task and returns the updated config', () => {
@@ -352,7 +353,7 @@ describe('updateSchedule', () => {
   let tmpDir: string;
 
   afterEach(() => {
-    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    if (tmpDir) rmSyncRetry(tmpDir);
   });
 
   it('patches a single field and preserves others', () => {
@@ -582,7 +583,7 @@ describe('toScheduledTask', () => {
     const loaded = loadSchedules(path);
     expect(loaded).toHaveLength(1);
     expect(loaded[0]).toEqual(config);
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSyncRetry(tmpDir);
   });
 });
 
@@ -594,7 +595,7 @@ describe('schedule-store cwd field', () => {
   let realDir: string;
 
   afterEach(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSyncRetry(tmpDir);
   });
 
   function setup() {
@@ -738,8 +739,11 @@ function waitForChild(scriptPath: string, args: string[]): Promise<void> {
     });
     let stderr = '';
     child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
-    child.on('error', reject);
-    child.on('exit', (code) => {
+    let spawnError: Error | undefined;
+    child.on('error', (error) => { spawnError = error; });
+    // close follows exit after stdio handles are released, including on Windows.
+    child.on('close', (code) => {
+      if (spawnError) { reject(spawnError); return; }
       if (code === 0) resolve();
       else reject(new Error(`schedule writer exited ${code ?? 'unknown'}: ${stderr}`));
     });
@@ -770,9 +774,9 @@ describe('schedule-store concurrent mutation', () => {
       }
     `, 'utf-8');
 
+    const children = Array.from({ length: workerCount }, (_, i) =>
+      waitForChild(scriptPath, [storePath, startPath, String(i), String(perWorker)]));
     try {
-      const children = Array.from({ length: workerCount }, (_, i) =>
-        waitForChild(scriptPath, [storePath, startPath, String(i), String(perWorker)]));
       await new Promise((resolve) => setTimeout(resolve, 50));
       writeFileSync(startPath, 'go', 'utf-8');
       await Promise.all(children);
@@ -782,7 +786,9 @@ describe('schedule-store concurrent mutation', () => {
       const ids = loaded.map((s) => s.id);
       expect(new Set(ids).size).toBe(workerCount * perWorker);
     } finally {
-      rmSync(tmpDir, { recursive: true, force: true });
+      // Promise.all rejects early: still drain every writer before removing its files.
+      await Promise.allSettled(children);
+      rmSyncRetry(tmpDir);
     }
   });
 
@@ -806,7 +812,7 @@ describe('schedule-store concurrent mutation', () => {
     expect(ids).toContain('beta');         // untouched
     expect(ids).toContain('gamma');        // added
 
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSyncRetry(tmpDir);
   });
 
   it('updateSchedule concurrent: each patch is applied without clobbering others', () => {
@@ -825,7 +831,7 @@ describe('schedule-store concurrent mutation', () => {
     expect(loaded).toHaveLength(1);
     expect(loaded[0]?.cron).toBe('9 1 * * *');
 
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSyncRetry(tmpDir);
   });
 });
 
@@ -835,7 +841,7 @@ describe('retry fields (maxAttempts / retryDelayMs)', () => {
   let tmpDir: string;
 
   afterEach(() => {
-    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+    if (tmpDir) rmSyncRetry(tmpDir);
   });
 
   it('round-trips through add → load → toScheduledTask', () => {
