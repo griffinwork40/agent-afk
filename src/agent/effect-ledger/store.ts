@@ -20,12 +20,10 @@
  */
 
 import * as fs from 'node:fs';
-import * as fsp from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getEffectLedgerPath } from '../../paths.js';
-import { isErrnoCode } from '../../utils/errors.js';
-import { parseJsonlLines } from '../../utils/jsonl.js';
+import { readJsonlFile } from '../../utils/jsonl.js';
 import type {
   EffectRecord,
   EffectQuery,
@@ -45,14 +43,15 @@ function appendLine(path: string, record: EffectRecord): void {
 
 /** Parse a JSONL file, skipping malformed lines. Returns all valid records. */
 async function readAllRecords(path: string): Promise<EffectRecord[]> {
-  let raw: string;
-  try {
-    raw = await fsp.readFile(path, 'utf8');
-  } catch (e) {
-    if (isErrnoCode(e, 'ENOENT')) return [];
-    throw e;
+  // readJsonlFile handles ENOENT gracefully (zero records); other I/O errors
+  // propagate, preserving the previous throw-on-unexpected-error contract.
+  // appendLine uses appendFileSync with mode 0o600 — appendJsonl cannot be
+  // used here because it does not support per-file mode bits.
+  const records: EffectRecord[] = [];
+  for await (const rec of readJsonlFile<EffectRecord>(path, { guard: isEffectRecord })) {
+    records.push(rec);
   }
-  return parseJsonlLines<EffectRecord>(raw, { guard: isEffectRecord });
+  return records;
 }
 
 /** Minimal runtime shape-check (not a full schema validator). */

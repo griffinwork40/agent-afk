@@ -12,8 +12,7 @@ import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { getWhatifDir } from '../paths.js';
 import type { Prediction, Verdict } from './types.js';
-import { isErrnoCode } from '../utils/errors.js';
-import { parseJsonlLines } from '../utils/jsonl.js';
+import { readJsonlFile } from '../utils/jsonl.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -78,14 +77,6 @@ export async function trackRecordSummary(
 ): Promise<string | undefined> {
   const ledgerPath = file ?? path.join(getWhatifDir(), 'ledger.jsonl');
 
-  let raw: string;
-  try {
-    raw = await fsp.readFile(ledgerPath, 'utf8');
-  } catch (e) {
-    if (isErrnoCode(e, 'ENOENT')) return undefined;
-    throw e;
-  }
-
   // ── Aggregate per change kind ─────────────────────────────────────────────
   const stats = new Map<string, { confirmed: number; total: number }>();
 
@@ -101,7 +92,16 @@ export async function trackRecordSummary(
     typeof (x as Record<string, unknown>)['ts'] === 'string' &&
     typeof (x as Record<string, unknown>)['verdict'] === 'string' &&
     Array.isArray((x as Record<string, unknown>)['changeKinds']);
-  const records = parseJsonlLines<CalibrationRecord>(raw, { guard: isCalibrationRecord });
+
+  // readJsonlFile handles ENOENT gracefully (zero records); other I/O errors
+  // propagate to the caller, preserving the previous throw-on-unexpected-error
+  // contract.
+  const records: CalibrationRecord[] = [];
+  for await (const rec of readJsonlFile<CalibrationRecord>(ledgerPath, {
+    guard: isCalibrationRecord,
+  })) {
+    records.push(rec);
+  }
 
   for (const rec of records) {
     if (rec.verdict !== 'confirmed' && rec.verdict !== 'refuted') continue;
