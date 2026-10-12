@@ -45,7 +45,11 @@ vi.mock('../paths.js', () => ({
   getEnvConfigPath: vi.fn(() => '/tmp/test-afk.env'),
   getStateDatabasePath: vi.fn(() => '/tmp/test-state.db'),
 }));
-vi.mock('../cli/shared-helpers.js', () => ({ loadSystemPrompt: vi.fn(() => 'base prompt') }));
+vi.mock('../cli/shared-helpers.js', () => ({
+  loadSystemPrompt: vi.fn(() => 'base prompt'),
+  getThinking: vi.fn(() => undefined),
+  getEffort: vi.fn(() => undefined),
+}));
 vi.mock('./env-file-overrides.js', () => ({ applyTelegramFileOverrides: vi.fn() }));
 vi.mock('./credentials.js', () => ({
   planTelegramCredential: vi.fn(() => ({ kind: 'env', key: 'ANTHROPIC_API_KEY' })),
