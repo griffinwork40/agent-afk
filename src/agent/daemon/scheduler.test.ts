@@ -1510,3 +1510,173 @@ describe('CronScheduler — overlap guard (#2299)', () => {
     await scheduler.stop();
   });
 });
+
+// ── elicitation router — per-session keying (#3619) ──────────────────────────
+
+describe('elicitationRouter — installForSession / uninstallForSession isolation (#3619)', () => {
+  /**
+   * Unit tests for the per-session keyed handler slots added to fix the
+   * concurrent-cron-task race condition. Independent of CronScheduler.
+   */
+
+  it('route() with sessionKey resolves via the matching per-session handler', async () => {
+    const { elicitationRouter } = await import('../elicitation-router.js');
+
+    const keyA = 'isolation-test-A';
+    const keyB = 'isolation-test-B';
+    const handlerA = vi.fn(async () => ({ action: 'decline' as const }));
+    const handlerB = vi.fn(async () => ({ action: 'decline' as const }));
+    const req = {
+      type: 'text' as const,
+      message: 'q',
+      title: 't',
+      serverName: 's',
+      requestId: 'r',
+    };
+    const ac = new AbortController();
+
+    try {
+      elicitationRouter.installForSession(keyA, handlerA);
+      elicitationRouter.installForSession(keyB, handlerB);
+
+      // Route to A → handlerA fires, handlerB does not
+      await elicitationRouter.route(req, { signal: ac.signal, sessionKey: keyA });
+      expect(handlerA).toHaveBeenCalledOnce();
+      expect(handlerB).not.toHaveBeenCalled();
+
+      handlerA.mockClear();
+
+      // Route to B → handlerB fires, handlerA does not
+      await elicitationRouter.route(req, { signal: ac.signal, sessionKey: keyB });
+      expect(handlerB).toHaveBeenCalledOnce();
+      expect(handlerA).not.toHaveBeenCalled();
+    } finally {
+      elicitationRouter.uninstallForSession(keyA);
+      elicitationRouter.uninstallForSession(keyB);
+    }
+  });
+
+  it('uninstallForSession(keyA) does not remove the handler for keyB', async () => {
+    const { elicitationRouter } = await import('../elicitation-router.js');
+
+    const keyA = 'uninstall-iso-A';
+    const keyB = 'uninstall-iso-B';
+    const handlerB = vi.fn(async () => ({ action: 'decline' as const }));
+    const req = {
+      type: 'text' as const,
+      message: 'still?',
+      title: 't',
+      serverName: 's',
+      requestId: 'r2',
+    };
+    const ac = new AbortController();
+
+    try {
+      elicitationRouter.installForSession(keyA, vi.fn(async () => ({ action: 'decline' as const })));
+      elicitationRouter.installForSession(keyB, handlerB);
+
+      // Uninstall A only — B must still resolve to its handler
+      elicitationRouter.uninstallForSession(keyA);
+
+      await elicitationRouter.route(req, { signal: ac.signal, sessionKey: keyB });
+      expect(handlerB).toHaveBeenCalledOnce();
+    } finally {
+      elicitationRouter.uninstallForSession(keyB);
+    }
+  });
+
+  it('hasHandler() returns true while any per-session handler is installed', async () => {
+    const { elicitationRouter } = await import('../elicitation-router.js');
+    const key = 'has-handler-test';
+
+    elicitationRouter.installForSession(key, async () => ({ action: 'decline' as const }));
+    expect(elicitationRouter.hasHandler()).toBe(true);
+
+    elicitationRouter.uninstallForSession(key);
+    // After removal the router has no handlers (global is null, map is empty)
+    expect(elicitationRouter.hasHandler()).toBe(false);
+  });
+});
+
+describe('CronScheduler — concurrent cron tasks each get their own elicitation handler (#3619)', () => {
+  /**
+   * Integration regression test: two schedulers with different taskIds tick
+   * simultaneously. Each installs a per-session handler via installForSession.
+   * Verify that:
+   *   1. installForSession is called with two distinct keys (no slot collision).
+   *   2. Both ticks succeed.
+   *   3. All per-session slots are cleaned up after completion.
+   */
+  it('two concurrent ticks install distinct handler keys and clean up on completion', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'afk-elicit-race-'));
+    const telemetryPath = join(dir, 'telemetry.jsonl');
+    const handoffsDir = join(dir, 'handoffs');
+
+    // Gates hold both sessions in-flight simultaneously so both installs happen
+    // before either uninstall — the window where the race was possible.
+    let releaseA!: () => void;
+    let releaseB!: () => void;
+    const gateA = new Promise<void>((r) => { releaseA = r; });
+    const gateB = new Promise<void>((r) => { releaseB = r; });
+
+    const { elicitationRouter } = await import('../elicitation-router.js');
+    const installSpy = vi.spyOn(elicitationRouter, 'installForSession');
+    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstallForSession');
+
+    // Two separate schedulers — different taskIds prevent the overlap guard firing.
+    const schedulerA = new CronScheduler({
+      telemetryPath,
+      handoffsDir,
+      budgetGate: async () => ({ skip: false }),
+      sessionFactory: () => ({
+        sendMessage: () => gateA.then(() => ({ content: 'resp-A' })),
+        close: () => Promise.resolve(),
+      } as unknown as AgentSession),
+    });
+    const schedulerB = new CronScheduler({
+      telemetryPath,
+      handoffsDir,
+      budgetGate: async () => ({ skip: false }),
+      sessionFactory: () => ({
+        sendMessage: () => gateB.then(() => ({ content: 'resp-B' })),
+        close: () => Promise.resolve(),
+      } as unknown as AgentSession),
+    });
+
+    try {
+      schedulerA.register({ taskId: 'concurrent-A', command: 'run A', trigger: 'cron', cronExpression: '* * * * *' });
+      schedulerB.register({ taskId: 'concurrent-B', command: 'run B', trigger: 'cron', cronExpression: '* * * * *' });
+
+      // Fire both ticks concurrently — neither resolves until its gate releases.
+      const tickAPromise = schedulerA.tick('concurrent-A');
+      const tickBPromise = schedulerB.tick('concurrent-B');
+
+      // Yield enough for both ticks to reach sendMessage (past the install point).
+      await new Promise<void>((r) => setTimeout(r, 20));
+
+      // Both installs must have happened with DISTINCT keys (no overwrite).
+      const installedKeys = installSpy.mock.calls.map(([k]) => k);
+      expect(installedKeys.length).toBeGreaterThanOrEqual(2);
+      expect(new Set(installedKeys).size).toBe(installedKeys.length);
+
+      // Release both sessions — both ticks must succeed.
+      releaseA();
+      releaseB();
+      const [recA, recB] = await Promise.all([tickAPromise, tickBPromise]);
+      expect(recA.status).toBe('success');
+      expect(recB.status).toBe('success');
+
+      // After both ticks complete, every installed key must have been uninstalled.
+      const uninstalledKeys = uninstallSpy.mock.calls.map(([k]) => k);
+      for (const key of installedKeys) {
+        expect(uninstalledKeys).toContain(key);
+      }
+    } finally {
+      installSpy.mockRestore();
+      uninstallSpy.mockRestore();
+      await schedulerA.stop();
+      await schedulerB.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

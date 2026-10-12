@@ -124,6 +124,14 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
   mcpManager?: McpManager;
   /** Archive the cross-surface registry handle. Called by runOnce on close. */
   dispose: () => void;
+  /**
+   * The per-tick session label derived from `daemonTraceLabel(taskId)`. This
+   * value is also threaded into the dispatcher as `context.sessionId` so
+   * `ask-question.ts` can pass it to `elicitationRouter.route()` as a lookup
+   * key. Returned here so the caller can register a per-session elicitation
+   * handler under this exact key, eliminating the single-slot race (#3619).
+   */
+  elicitationKey: string;
 }> {
   // Derive a unique-per-tick sessionId (daemonTraceLabel appends a random
   // suffix, so each tick gets its own label) so hook commands receive a
@@ -279,6 +287,7 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
       memoryStore,
       stateStore,
       dispose: registration.dispose,
+      elicitationKey: sessionId,
       ...(mcpManager !== undefined ? { mcpManager } : {}),
     };
   } catch (err) {

@@ -144,6 +144,14 @@ export interface SchedulerOptions {
   retrySleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   /** Override the handoffs directory (tests). Forwarded to the cron elicitation handler. */
   handoffsDir?: string;
+  /**
+   * Resolve a task's `notifyChat` to an allowlisted chat id (#3243 item 2).
+   * Injected by the CLI layer; `src/agent/` must never import `src/cli/`.
+   * Signature mirrors `AgentTaskOptions.resolveNotifyChat` in
+   * `scheduler.execute-agent-task.ts` — both fields flow from the same
+   * `DaemonOptions` spread in `daemon.ts`.
+   */
+  resolveNotifyChat?: (notifyChat: number | string | undefined, taskId: string) => number | undefined;
 }
 
 export type TelemetryTrigger = 'cron' | 'sessionstart' | 'pull';
@@ -615,9 +623,8 @@ export class CronScheduler {
     } catch (err) {
       // Telemetry write failure must not crash the daemon or suppress the
       // completion push — log and fall through so fireOnTaskComplete still runs.
-      const msg = errorMessage(err);
       // eslint-disable-next-line no-console
-      console.error(`[daemon] telemetry write failed: ${msg}`);
+      console.error(`[daemon] telemetry write failed: ${errorMessage(err)}`);
     }
     // Contract: persistedRecord is passed unconditionally — if appendFileSync
     // threw above, the record may not be on disk (see CronSchedulerOptions.onTaskComplete).

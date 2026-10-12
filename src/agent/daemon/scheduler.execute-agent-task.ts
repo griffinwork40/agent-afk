@@ -65,6 +65,8 @@ export interface AgentTaskContext {
     stateStore: StateStore;
     mcpManager?: McpManager;
     dispose: () => void;
+    /** Per-tick key for `elicitationRouter.installForSession` / `uninstallForSession` (#3619). */
+    elicitationKey: string;
   }>;
   writeTelemetry: (record: TelemetryRecord, task: ScheduledTask, details?: TaskCompletionDetails) => void;
   /** Scheduler shutdown signal; ends a retry backoff wait immediately (#3243). */
@@ -196,6 +198,12 @@ async function runAgentAttempt(
   let stateStore: StateStore | null = null;
   let mcpManager: McpManager | null = null;
   let disposeRegistration: (() => void) | null = null;
+  // elicitationKey is set after spawnSession returns — it equals the
+  // daemonTraceLabel that spawnDaemonSession threads into the dispatcher as
+  // context.sessionId. Using this value as the router key means ask-question.ts
+  // can look up the correct per-session handler via context.sessionId without
+  // any additional plumbing (#3619).
+  let elicitationKey = '';
   let handlerInstalled = false;
   try {
     const spawned = await ctx.spawnSession(task, trigger, gateBlockCounter);
@@ -204,6 +212,7 @@ async function runAgentAttempt(
     stateStore = spawned.stateStore;
     mcpManager = spawned.mcpManager ?? null;
     disposeRegistration = spawned.dispose;
+    elicitationKey = spawned.elicitationKey;
 
     // Invariant: handoff handler installed BEFORE sendMessage so the
     // ask-question-gate's hasHandler() probe passes for pull tasks;
@@ -213,9 +222,17 @@ async function runAgentAttempt(
     // Scoped per attempt: only the final retry's elicitation is notified.
     // Within that attempt the latest persisted question wins; earlier attempts
     // cannot leak a stale question into the final completion notification.
+    //
+    // Concurrency invariant (#3619): handlers are installed into a per-session
+    // keyed slot (installForSession / uninstallForSession) rather than the
+    // shared global slot (install / uninstall). Two concurrent cron tasks
+    // each get their own slot (keyed by elicitationKey = daemonTraceLabel,
+    // which is unique per tick). Uninstalling one slot never affects another.
+    // ask-question.ts resolves the right handler via context.sessionId, which
+    // equals elicitationKey (both come from daemonTraceLabel in session-spawn.ts).
     let elicitationMessage: string | undefined;
     if (trigger === 'pull') {
-      elicitationRouter.install(makeDaemonElicitationHandler({
+      elicitationRouter.installForSession(elicitationKey, makeDaemonElicitationHandler({
         taskId: task.taskId,
         originalCommand: redactInlineSecrets(task.command),
         queueDir: ctx.queueDir,
@@ -234,7 +251,7 @@ async function runAgentAttempt(
       const resolvedThreadId = resolvedChatId === ctx.options.primaryChatId
         ? ctx.options.primaryThreadId
         : undefined;
-      elicitationRouter.install(makeCronElicitationHandler({
+      elicitationRouter.installForSession(elicitationKey, makeCronElicitationHandler({
         taskId: task.taskId,
         originalCommand: redactInlineSecrets(task.command),
         cronExpression: task.cronExpression,
@@ -264,7 +281,7 @@ async function runAgentAttempt(
     }
     return { responseText, doneUnverified: probeDoneUnverified(ctx, responseText, response), elicitationMessage };
   } finally {
-    if (handlerInstalled) elicitationRouter.uninstall();
+    if (handlerInstalled) elicitationRouter.uninstallForSession(elicitationKey);
     if (session) {
       try {
         await session.close();

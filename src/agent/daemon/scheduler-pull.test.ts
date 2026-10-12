@@ -310,8 +310,10 @@ describe('stop', () => {
 describe('pull tick — elicitation handler lifecycle', () => {
   it('installs the elicitation handler for pull tasks and uninstalls it in finally', async () => {
     const { elicitationRouter } = await import('../elicitation-router.js');
-    const installSpy = vi.spyOn(elicitationRouter, 'install');
-    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstall');
+    // Daemon tasks now use installForSession/uninstallForSession (keyed slots)
+    // rather than the shared global install/uninstall (#3619).
+    const installSpy = vi.spyOn(elicitationRouter, 'installForSession');
+    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstallForSession');
 
     enqueue('/pull-elicitation-test', {}, queueDir);
     const scheduler = makeScheduler(queueDir, telemetryPath);
@@ -333,8 +335,8 @@ describe('pull tick — elicitation handler lifecycle', () => {
 
   it('does not install or uninstall elicitation handler on an empty pull tick', async () => {
     const { elicitationRouter } = await import('../elicitation-router.js');
-    const installSpy = vi.spyOn(elicitationRouter, 'install');
-    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstall');
+    const installSpy = vi.spyOn(elicitationRouter, 'installForSession');
+    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstallForSession');
 
     // An empty pull-tick (nothing in the queue) never reaches the install path.
     const scheduler = makeScheduler(queueDir, telemetryPath);
@@ -354,8 +356,9 @@ describe('pull tick — elicitation handler lifecycle', () => {
     // so ask_question is visible (handoff written + notifyOn respected) rather
     // than silently declined by the router's unattended path.
     const { elicitationRouter } = await import('../elicitation-router.js');
-    const installSpy = vi.spyOn(elicitationRouter, 'install');
-    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstall');
+    // Daemon tasks now use installForSession/uninstallForSession (#3619).
+    const installSpy = vi.spyOn(elicitationRouter, 'installForSession');
+    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstallForSession');
 
     const handoffWiring = await import('./handoff-wiring.js');
     const pullHandlerSpy = vi.spyOn(handoffWiring, 'makeDaemonElicitationHandler');

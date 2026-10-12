@@ -214,18 +214,22 @@ describe('CronScheduler cron elicitation notify', () => {
     else process.env['AFK_HOME'] = savedAfkHome;
     if (savedProjectMcp === undefined) delete process.env['AFK_ALLOW_PROJECT_MCP'];
     else process.env['AFK_ALLOW_PROJECT_MCP'] = savedProjectMcp;
+    restoreInstallForSession();
     rmSync(dir, { recursive: true, force: true });
   });
 
-  function makeFakeSession(triggerElicitation: boolean): AgentSession {
+  function makeFakeSession(triggerElicitation: boolean, getSessionKey: () => string | undefined): AgentSession {
     return {
       sendMessage: async (_cmd: string) => {
         if (triggerElicitation) {
           // Route an elicitation through the router (simulates ask_question).
+          // Pass sessionKey so the per-session handler registered by
+          // runAgentAttempt is found (#3619 — daemon tasks use installForSession).
           const ac = new AbortController();
+          const sessionKey = getSessionKey();
           await elicitationRouter.route(
             { message: 'Need approval', type: 'confirm' },
-            { signal: ac.signal },
+            { signal: ac.signal, ...(sessionKey !== undefined ? { sessionKey } : {}) },
           );
         }
         return {
@@ -242,11 +246,37 @@ describe('CronScheduler cron elicitation notify', () => {
 
   type Factory = NonNullable<ConstructorParameters<typeof CronScheduler>[0]>['sessionFactory'];
 
+  // Shared key capture for the active tick. installForSession is intercepted
+  // (call-through) so makeFakeSession.sendMessage can read the key at call
+  // time — sendMessage fires AFTER installForSession, so the key is ready.
+  let capturedElicitationKey: string | undefined;
+  let _originalInstallForSession: typeof elicitationRouter.installForSession | undefined;
+
+  function interceptInstallForSession(): void {
+    if (_originalInstallForSession !== undefined) return; // already intercepted
+    const orig = elicitationRouter.installForSession.bind(elicitationRouter);
+    _originalInstallForSession = orig;
+    elicitationRouter.installForSession = (key, handler) => {
+      capturedElicitationKey = key;
+      orig(key, handler);
+    };
+  }
+
+  function restoreInstallForSession(): void {
+    if (_originalInstallForSession !== undefined) {
+      elicitationRouter.installForSession = _originalInstallForSession;
+      _originalInstallForSession = undefined;
+    }
+    capturedElicitationKey = undefined;
+  }
+
   function makeScheduler(
     triggerElicitation: boolean,
     onTaskComplete?: (record: TelemetryRecord, details?: TaskCompletionDetails) => void,
   ): CronScheduler {
-    const factory: Factory = ((_config: AgentConfig) => makeFakeSession(triggerElicitation)) as Factory;
+    interceptInstallForSession();
+    const getKey = () => capturedElicitationKey;
+    const factory: Factory = ((_config: AgentConfig) => makeFakeSession(triggerElicitation, getKey)) as Factory;
     return new CronScheduler({
       telemetryPath,
       handoffsDir,
