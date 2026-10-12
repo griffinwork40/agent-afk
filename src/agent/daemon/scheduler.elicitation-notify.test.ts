@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -174,8 +174,13 @@ describe('makeCronElicitationHandler', () => {
 
   it('does not call onHandoffWritten when handoff write fails', async () => {
     const messages: string[] = [];
-    // Pass a non-existent, non-creatable path to force a write failure.
-    const badDir = '/dev/null/no-such-dir';
+    // Force a write failure portably: a directory path nested under a regular
+    // FILE fails mkdir/write with ENOTDIR (POSIX) or ENOENT/EEXIST (win32).
+    // `/dev/null/...` is NOT portable — on Windows it resolves to a creatable
+    // `C:\dev\null\...`, so the write succeeded and this test failed there.
+    const blocker = join(handoffsDir, 'not-a-dir');
+    writeFileSync(blocker, '');
+    const badDir = join(blocker, 'no-such-dir');
     const handler = makeCronElicitationHandler({
       taskId: 'task-4',
       originalCommand: '/cmd',
