@@ -34,7 +34,7 @@ import type { SubagentProgressSink } from '../types/session-types.js';
 import { getCurrentSink } from '../_lib/skill-sink-channel.js';
 import { resolveMaxNestingDepth } from './nesting.js';
 import { resolveComposeNodeProvider } from './compose-node-provider.js';
-import { resolveComposeNodeAgent, resolvedAgentToolRestriction } from './compose-agent-resolve.js';
+import { resolveComposeNodeAgent, resolvedAgentToolRestriction, resolveComposeAgentPrompt } from './compose-agent-resolve.js';
 import { splitComposeNodeResults } from './compose-node-results.js';
 import { buildComposeMaxDepthRefusal } from './skill-depth-message.js';
 import {
@@ -367,11 +367,11 @@ export class ComposeExecutor {
           // System prompt: named agent's definition body takes precedence over
           // the parent's base prompt when present (Claude Code parity — the
           // definition body IS the child's system prompt for a named dispatch).
-          // Falls back to the executor's base prompt for unnamed nodes.
-          systemPrompt: resolvedAgent.systemPrompt ?? this.ctx.systemPrompt,
+          // Invariant: append leaf notice AFTER resolving the base prompt fallback (#3583).
+          systemPrompt: resolveComposeAgentPrompt(resolvedAgent, this.ctx.systemPrompt),
           // Tool restriction: wire the named agent's canUseTool filter so the
           // node's subagent is mechanically restricted, not just labelled.
-          // namedAgentAllowedTools is forwarded alongside canUseTool so
+          // namedAgentAllowedTools reaches the provider via resolvedAgent so
           // buildComposeNodeProvider intersects permissions.allowedTools (the
           // toolDefs source) with it, keeping advertised and enforced surfaces
           // in sync (#3580).  resolvedAgentToolRestriction returns {} for

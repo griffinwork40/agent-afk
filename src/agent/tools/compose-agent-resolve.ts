@@ -49,14 +49,27 @@ export const COMPOSE_LEAF_NOTICE =
 
 /**
  * Result of resolving a named agent for a compose node.
- * Every field is optional so callers can spread it directly into the
- * `SubagentDAGNode` without conditional spreading on each property.
+ * Optional fields carry node instructions and provider tool restrictions;
+ * only DAG-supported fields should be forwarded to `SubagentDAGNode`.
  */
 export interface ResolvedComposeAgent {
   /** Proven pure read surface; omitted for inherit-all definitions. */
   replaySafe?: boolean;
-  /** Named agent's system prompt (definition body). */
+  /**
+   * Named agent's system prompt (definition body). Undefined when the
+   * definition body is blank — callers should fall back to the executor's
+   * base/operator prompt via `resolvedAgent.systemPrompt ?? ctx.systemPrompt`.
+   *
+   * Do NOT inline `leafNotice` here; append it AFTER the fallback resolves
+   * so the base prompt is never suppressed (see `leafNotice`).
+   */
   systemPrompt?: string;
+  /**
+   * Notice for stripped executor-backed tools. Kept separate from the body
+   * so resolveComposeAgentPrompt appends it AFTER selecting the base/operator
+   * fallback for blank definitions.
+   */
+  leafNotice?: string;
   /** Named agent's model default (undefined = inherit compose default). */
   namedAgentModel?: string;
   /**
@@ -77,10 +90,9 @@ export interface ResolvedComposeAgent {
    * `permissions.allowedTools` (which drives `toolDefs`) with this list —
    * keeping the advertised schema in sync with the enforced surface.
    *
-   * Seam for #3579: executor-backed tools (`agent`, `skill`, `compose`) that
-   * the sibling PR strips from compose-leaf allowlists should be removed from
-   * THIS array before it reaches `buildComposeNodeProvider`, not from
-   * `canUseTool` (which is async and cannot be statically inspected).
+   * Executor-backed tools (`agent`, `skill`) are stripped before building
+   * both this array and `canUseTool`, keeping advertisement and enforcement
+   * aligned (#3579, #3580). `compose` is absent from CHILD_ALLOWED_TOOLS.
    */
   namedAgentAllowedTools?: string[];
   /**
@@ -192,22 +204,31 @@ export function resolveComposeNodeAgent(
 
     // The definition body may still tell the model to delegate; a one-line
     // runtime notice keeps it from spending rounds trying.
+    // Store it separately so the executor can append it AFTER resolving
+    // `resolvedAgent.systemPrompt ?? ctx.systemPrompt` — this preserves the
+    // base/operator prompt even when the definition body is blank or absent
+    // (previously setting systemPrompt = COMPOSE_LEAF_NOTICE alone caused the
+    // ?? fallback to short-circuit, silently dropping the operator prompt).
     if (strippedTools.length > 0) {
-      result.systemPrompt =
-        result.systemPrompt !== undefined
-          ? `${result.systemPrompt}\n\n${COMPOSE_LEAF_NOTICE}`
-          : COMPOSE_LEAF_NOTICE;
+      result.leafNotice = COMPOSE_LEAF_NOTICE;
     }
   }
 
   return result;
 }
 
+/** Resolve the body fallback before appending the leaf notice. */
+export function resolveComposeAgentPrompt(agent: ResolvedComposeAgent, basePrompt: string): string {
+  // Invariant: notice-only instructions must never suppress the base/operator fallback.
+  const base = agent.systemPrompt ?? basePrompt;
+  return agent.leafNotice ? `${base}\n\n${agent.leafNotice}` : base;
+}
+
 /**
  * Extract the tool-restriction fields from a resolved agent for spreading into
- * a `SubagentDAGNode`.  Returns an object with `canUseTool` and
+ * a `SubagentDAGNode`. Returns an object with `canUseTool` and
  * `namedAgentAllowedTools` when the agent has an allowlist, or an empty object
- * when it is inherit-all.  Extracted so compose-executor.ts can stay under its
+ * when it is inherit-all. Extracted so compose-executor.ts can stay under its
  * 200-line function ceiling without duplicating the conditional spread logic.
  */
 export function resolvedAgentToolRestriction(

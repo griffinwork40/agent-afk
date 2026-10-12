@@ -107,10 +107,11 @@ function makeContext(workspaceStore?: WorkspaceStore): ComposeExecutorContext {
 /** Run one compose node through the real executor; return the DAG node spec. */
 async function runAndGetDagNode(
   node: Record<string, unknown>,
+  contextOverrides: Partial<ComposeExecutorContext> = {},
 ): Promise<{ provider?: ModelProvider; canUseTool?: unknown; systemPrompt?: string }> {
   const store = new WorkspaceStore();
   openStores.push(store);
-  const executor = new ComposeExecutor(makeContext(store));
+  const executor = new ComposeExecutor({ ...makeContext(store), ...contextOverrides });
   await executor.execute({
     id: 'compose-call',
     name: 'compose',
@@ -186,11 +187,88 @@ describe('resolveComposeNodeAgent — leaf tool stripping', () => {
     expect(skillResult.behavior).toBe('deny');
   });
 
-  it('research-agent: COMPOSE_LEAF_NOTICE is appended to the system prompt', () => {
+  it('research-agent: leafNotice is set to COMPOSE_LEAF_NOTICE when tools are stripped', () => {
+    // Notice is now returned as a separate field so the executor can append it
+    // AFTER resolving resolvedAgent.systemPrompt ?? ctx.systemPrompt, preserving
+    // the base/operator prompt even when the definition body is blank (#3583).
     const resolved = resolveComposeNodeAgent('research-agent', agentRegistry);
-    expect(resolved.systemPrompt).toContain(COMPOSE_LEAF_NOTICE);
-    // The definition body must still be present (not replaced)
-    expect(resolved.systemPrompt!.length).toBeGreaterThan(COMPOSE_LEAF_NOTICE.length);
+    expect(resolved.leafNotice).toBe(COMPOSE_LEAF_NOTICE);
+    // systemPrompt carries only the definition body — notice is NOT inlined here
+    expect(resolved.systemPrompt).toBeDefined();
+    expect(resolved.systemPrompt).not.toContain(COMPOSE_LEAF_NOTICE);
+    // The definition body must still be present and non-trivial
+    expect(resolved.systemPrompt!.length).toBeGreaterThan(0);
+  });
+
+  it('blank-prompt agent with stripped tools: leafNotice set, systemPrompt undefined (base prompt survives in executor)', () => {
+    // Regression for #3583: when the definition body is blank, the old code set
+    // systemPrompt = COMPOSE_LEAF_NOTICE, causing ?? to short-circuit and losing
+    // the operator's base prompt. Now leafNotice is separate; systemPrompt stays
+    // undefined so ?? falls through to ctx.systemPrompt in the executor.
+    const blankPromptRegistry = new Map([
+      [
+        'blank-prompt-agent',
+        {
+          name: 'blank-prompt-agent',
+          definition: {
+            prompt: '',        // blank body
+            tools: ['agent'],  // will be stripped → leafNotice fires
+          },
+        } as import('../agents/types.js').RegisteredAgent,
+      ],
+    ]);
+    const resolved = resolveComposeNodeAgent('blank-prompt-agent', blankPromptRegistry);
+    // leafNotice must be set (tools were stripped)
+    expect(resolved.leafNotice).toBe(COMPOSE_LEAF_NOTICE);
+    // systemPrompt must be undefined so the executor falls back to ctx.systemPrompt
+    expect(resolved.systemPrompt).toBeUndefined();
+  });
+
+  it('undefined-prompt agent with stripped tools: leafNotice set, systemPrompt undefined', () => {
+    const noPromptRegistry = new Map([
+      [
+        'no-prompt-agent',
+        {
+          name: 'no-prompt-agent',
+          definition: {
+            // prompt omitted entirely
+            tools: ['skill'],  // will be stripped
+          },
+        } as import('../agents/types.js').RegisteredAgent,
+      ],
+    ]);
+    const resolved = resolveComposeNodeAgent('no-prompt-agent', noPromptRegistry);
+    expect(resolved.leafNotice).toBe(COMPOSE_LEAF_NOTICE);
+    expect(resolved.systemPrompt).toBeUndefined();
+  });
+
+  it('disallowedTools-only agent with agent in inherited surface: leafNotice set, systemPrompt undefined when blank', () => {
+    // An agent with only disallowedTools (no explicit tools) inherits the full
+    // surface minus the denied list. resolveAgentToolAccess returns allowedTools
+    // (not undefined), so the stripping branch runs. If any stripped tool is in
+    // the effective set, leafNotice fires. This path previously also inlined the
+    // notice into systemPrompt, losing the base prompt when body was blank.
+    const disallowedOnlyRegistry = new Map([
+      [
+        'disallowed-only-agent',
+        {
+          name: 'disallowed-only-agent',
+          definition: {
+            prompt: '',                    // blank body — base prompt must survive
+            disallowedTools: ['bash'],     // uses disallowedTools, not tools
+            // agent/skill come from inherited surface and are stripped by leaf rule
+          },
+        } as import('../agents/types.js').RegisteredAgent,
+      ],
+    ]);
+    const resolved = resolveComposeNodeAgent('disallowed-only-agent', disallowedOnlyRegistry);
+    // canUseTool must be set (allowedTools is defined for disallowedTools-only agents)
+    expect(resolved.canUseTool).toBeDefined();
+    // systemPrompt must be undefined (blank body)
+    expect(resolved.systemPrompt).toBeUndefined();
+    // leafNotice must be set IF agent/skill were in the inherited surface
+    // (they are: CHILD_ALLOWED_TOOLS includes 'agent' and 'skill').
+    expect(resolved.leafNotice).toBe(COMPOSE_LEAF_NOTICE);
   });
 
   it('research-agent: canUseTool still allows declared read tools (read_file, grep, glob)', async () => {
@@ -206,6 +284,32 @@ describe('resolveComposeNodeAgent — leaf tool stripping', () => {
     }
   });
 
+  it('body+notice path: systemPrompt carries body only, leafNotice carries notice (preserved independently)', () => {
+    // When body IS present and tools are stripped, both fields must be set so
+    // the executor can compose them correctly: `${body}\n\n${notice}`.
+    // Regression guard: the old code inlined notice into systemPrompt; the new
+    // contract keeps them separate so the executor controls composition order.
+    const bodyRegistry = new Map([
+      [
+        'body-and-notice-agent',
+        {
+          name: 'body-and-notice-agent',
+          definition: {
+            prompt: 'You are a read-only analyst.',
+            tools: ['read_file', 'agent'],  // agent will be stripped
+          },
+        } as import('../agents/types.js').RegisteredAgent,
+      ],
+    ]);
+    const resolved = resolveComposeNodeAgent('body-and-notice-agent', bodyRegistry);
+    // Body present → systemPrompt set to the body text only
+    expect(resolved.systemPrompt).toBe('You are a read-only analyst.');
+    // Notice separate
+    expect(resolved.leafNotice).toBe(COMPOSE_LEAF_NOTICE);
+    // Crucially: notice is NOT inlined into systemPrompt
+    expect(resolved.systemPrompt).not.toContain(COMPOSE_LEAF_NOTICE);
+  });
+
   it('git-investigator: no agent/skill in its declaration — no notice appended', () => {
     // git-investigator declares only read tools; no executor-backed tools.
     // The notice must NOT be appended (no spurious modification).
@@ -213,6 +317,7 @@ describe('resolveComposeNodeAgent — leaf tool stripping', () => {
     // It has a canUseTool (it has a restricted tool list)
     expect(resolved.canUseTool).toBeDefined();
     // But the notice must NOT appear — no tools were stripped
+    expect(resolved.leafNotice).toBeUndefined();
     if (resolved.systemPrompt !== undefined) {
       expect(resolved.systemPrompt).not.toContain(COMPOSE_LEAF_NOTICE);
     }
@@ -316,5 +421,53 @@ describe('compose leaf invariant — end-to-end (issue #3579)', () => {
     if (dagNode.systemPrompt !== undefined) {
       expect(dagNode.systemPrompt).not.toContain(COMPOSE_LEAF_NOTICE);
     }
+  });
+
+  // -----------------------------------------------------------------------
+  // #3583: base prompt must survive when named agent has blank/undefined body
+  // -----------------------------------------------------------------------
+
+  it.each([
+    { prompt: '', tools: ['read_file', 'agent'] },
+    { prompt: '  \n ', tools: ['skill'] },
+    { tools: ['agent'] },
+    { prompt: '', disallowedTools: ['bash'] },
+  ])('blank/absent body preserves ctx.systemPrompt with leaf notice: %j (#3583)', async (definition) => {
+    // Old behaviour: resolveComposeNodeAgent set systemPrompt = COMPOSE_LEAF_NOTICE
+    // when the definition body was blank and tools were stripped. The executor's
+    // `resolvedAgent.systemPrompt ?? ctx.systemPrompt` short-circuited on the
+    // notice string, silently discarding the operator's base prompt.
+    // New behaviour: leafNotice is separate; systemPrompt stays undefined so ??
+    // falls through to ctx.systemPrompt; executor appends leafNotice after.
+    const blankRegistry = new Map([
+      [
+        'blank-leaf-agent',
+        {
+          name: 'blank-leaf-agent',
+          definition,
+        } as import('../agents/types.js').RegisteredAgent,
+      ],
+    ]);
+
+    const dagNode = await runAndGetDagNode(
+      { agent_type: 'blank-leaf-agent', model: 'sonnet' },
+      { systemPrompt: 'OPERATOR BASE PROMPT', agentRegistry: blankRegistry },
+    );
+    const nodePrompt = dagNode.systemPrompt;
+
+    // Base prompt must be present
+    expect(nodePrompt).toContain('OPERATOR BASE PROMPT');
+    // Notice must also be appended
+    expect(nodePrompt).toContain(COMPOSE_LEAF_NOTICE);
+    // Notice must come AFTER the base prompt
+    expect(nodePrompt).toBe(`OPERATOR BASE PROMPT\n\n${COMPOSE_LEAF_NOTICE}`);
+  });
+
+  it('research-agent (non-blank body) + notice: body precedes notice in DAG node systemPrompt', async () => {
+    // Regression guard for the body+notice composition path: when the definition
+    // body IS present, it must appear before the notice (not replaced by it).
+    const dagNode = await runAndGetDagNode({ agent_type: 'research-agent', model: 'sonnet' });
+    const body = agentRegistry.get('research-agent')!.definition.prompt;
+    expect(dagNode.systemPrompt).toBe(`${body}\n\n${COMPOSE_LEAF_NOTICE}`);
   });
 });
