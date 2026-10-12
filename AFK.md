@@ -8,7 +8,7 @@ Standalone TypeScript CLI + daemon + Telegram bot built on `@anthropic-ai/sdk`. 
 
 ```bash
 pnpm install                                       # pnpm exclusively
-pnpm build                                         # tsc + copy *.md prompts → dist/
+pnpm build                                         # tsc + web UI (dashboard/, auto-installs its deps locally) + copy *.md prompts → dist/
 pnpm test                                          # vitest run (all)
 pnpm test src/agent/session.test.ts                # single file (NO --; pnpm 10+ drops args after -- and runs ALL files)
 pnpm test src/agent/session.test.ts -t "sends a message"   # single test by name (scope to a file, then filter by -t)
