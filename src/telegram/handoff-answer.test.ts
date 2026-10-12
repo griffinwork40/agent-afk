@@ -185,7 +185,7 @@ describe('sendHandoffQuestion', () => {
     // window between sendMessage resolving and persistRouteAndMessageId writing.
     (bot.telegram.sendMessage as ReturnType<typeof vi.fn>).mockImplementation(async () => {
       // Concurrent answer lands while the Telegram send is "in-flight".
-      await updateHandoffAnswer(record.taskId, { value: true }, 'telegram', handoffsDir);
+      await updateHandoffAnswer(record.taskId, { value: true }, 'telegram', { handoffsDir });
       return { message_id: 42 };
     });
 
@@ -485,10 +485,20 @@ describe('allowCustom', () => {
 });
 
 // ---------------------------------------------------------------------------
-// registerHandoffAnswerHandlers
+// registerHandoffAnswerHandlers — button-tap identity extraction
 // ---------------------------------------------------------------------------
 
 describe('registerHandoffAnswerHandlers', () => {
+  let handoffsDir: string;
+
+  beforeEach(async () => {
+    handoffsDir = await mkdtemp(join(tmpdir(), 'handoff-btn-test-'));
+  });
+
+  afterEach(async () => {
+    if (handoffsDir) await rm(handoffsDir, { recursive: true, force: true }).catch(() => {});
+  });
+
   it('registers a bot.action handler with the afk:h: prefix', () => {
     const bot = mockBot();
     registerHandoffAnswerHandlers(bot);
@@ -496,5 +506,76 @@ describe('registerHandoffAnswerHandlers', () => {
     const re = (bot.action as ReturnType<typeof vi.fn>).mock.calls[0]![0] as RegExp;
     expect(re.test('afk:h:0:q-123')).toBe(true);
     expect(re.test('afk:e:0:elic-abc')).toBe(false);
+  });
+
+  it('button-tap handler extracts responderIdentity with userId and username', async () => {
+    // The action handler calls readHandoff (default dir) then answerHandoff.
+    // Mock both at the handoff-answer module's import boundary so the handler
+    // runs with full logic but no disk I/O.
+    const { buildHandoffCallback } = await import('./handoff-callback-data.js');
+    const record = makeRecord({ question: { message: 'Deploy?', type: 'confirm' } });
+
+    // Capture answerHandoff args by hooking the wiring module's export.
+    // Because handoff-answer.ts imports answerHandoff with a static import,
+    // we can't spy on it after the fact. Instead we verify the responderIdentity
+    // value by reading it off the updateHandoffAnswer opts — spy on the store.
+    const storeMod = await import('../agent/daemon/handoff-store.js');
+    const spyUpdate = vi.spyOn(storeMod, 'updateHandoffAnswer').mockResolvedValue({ won: true });
+    // Also mock readHandoff so the handler gets our record without disk I/O.
+    const spyRead = vi.spyOn(storeMod, 'readHandoff').mockResolvedValue(record);
+
+    const bot = mockBot();
+    registerHandoffAnswerHandlers(bot);
+    const [, handler] = (bot.action as ReturnType<typeof vi.fn>).mock.calls[0]!;
+
+    const ctx = {
+      answerCbQuery: vi.fn().mockResolvedValue(undefined),
+      callbackQuery: {
+        data: buildHandoffCallback(record.taskId, 1),
+        from: { id: 55667788, username: 'charlie' },
+      },
+      editMessageText: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await (handler as (ctx: unknown) => Promise<void>)(ctx);
+
+    // updateHandoffAnswer (the store call inside answerHandoff) receives opts with responderIdentity.
+    expect(spyUpdate).toHaveBeenCalled();
+    const opts = spyUpdate.mock.calls[0]![3] as { responderIdentity?: string };
+    expect(opts.responderIdentity).toBe('55667788:charlie');
+
+    spyUpdate.mockRestore();
+    spyRead.mockRestore();
+  });
+
+  it('button-tap handler extracts responderIdentity with userId only when username absent', async () => {
+    const { buildHandoffCallback } = await import('./handoff-callback-data.js');
+    const record = makeRecord({ question: { message: 'Go?', type: 'confirm' } });
+
+    const storeMod = await import('../agent/daemon/handoff-store.js');
+    const spyUpdate = vi.spyOn(storeMod, 'updateHandoffAnswer').mockResolvedValue({ won: true });
+    const spyRead = vi.spyOn(storeMod, 'readHandoff').mockResolvedValue(record);
+
+    const bot = mockBot();
+    registerHandoffAnswerHandlers(bot);
+    const [, handler] = (bot.action as ReturnType<typeof vi.fn>).mock.calls[0]!;
+
+    const ctx = {
+      answerCbQuery: vi.fn().mockResolvedValue(undefined),
+      callbackQuery: {
+        data: buildHandoffCallback(record.taskId, 1),
+        from: { id: 11223344 },
+      },
+      editMessageText: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await (handler as (ctx: unknown) => Promise<void>)(ctx);
+
+    expect(spyUpdate).toHaveBeenCalled();
+    const opts = spyUpdate.mock.calls[0]![3] as { responderIdentity?: string };
+    expect(opts.responderIdentity).toBe('11223344');
+
+    spyUpdate.mockRestore();
+    spyRead.mockRestore();
   });
 });

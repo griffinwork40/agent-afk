@@ -380,6 +380,63 @@ describe('answerHandoff', () => {
     expect(won1).toBe(true);
     expect(won2).toBe(false);
   });
+
+  it('persists responderIdentity when passed as 5th arg', async () => {
+    const record: HandoffRecord = {
+      taskId: 'q-responder-wiring',
+      sessionId: 'sess-1',
+      question: { message: 'Confirm?' } as Record<string, unknown>,
+      requestType: 'ask_question',
+      createdAt: new Date().toISOString(),
+      status: 'pending',
+      originalCommand: '/test',
+    };
+    await writeHandoff(record, handoffsDir);
+
+    const won = await answerHandoff('q-responder-wiring', { value: true }, 'telegram', handoffsDir, '42:alice');
+    expect(won).toBe(true);
+
+    const updated = await readHandoff('q-responder-wiring', handoffsDir);
+    expect(updated?.responderIdentity).toBe('42:alice');
+    expect(updated?.answerSource).toBe('telegram');
+  });
+
+  it('persists responderIdentity as userId-only when username is absent', async () => {
+    const record: HandoffRecord = {
+      taskId: 'q-responder-nousername',
+      sessionId: 'sess-1',
+      question: { message: 'Proceed?' } as Record<string, unknown>,
+      requestType: 'ask_question',
+      createdAt: new Date().toISOString(),
+      status: 'pending',
+      originalCommand: '/test',
+    };
+    await writeHandoff(record, handoffsDir);
+
+    const won = await answerHandoff('q-responder-nousername', { value: false }, 'telegram', handoffsDir, '99887766');
+    expect(won).toBe(true);
+
+    const updated = await readHandoff('q-responder-nousername', handoffsDir);
+    expect(updated?.responderIdentity).toBe('99887766');
+  });
+
+  it('leaves responderIdentity undefined when not passed', async () => {
+    const record: HandoffRecord = {
+      taskId: 'q-responder-absent-wiring',
+      sessionId: 'sess-1',
+      question: { message: 'Skip?' } as Record<string, unknown>,
+      requestType: 'ask_question',
+      createdAt: new Date().toISOString(),
+      status: 'pending',
+      originalCommand: '/test',
+    };
+    await writeHandoff(record, handoffsDir);
+
+    await answerHandoff('q-responder-absent-wiring', 'nope', 'repl', handoffsDir);
+
+    const updated = await readHandoff('q-responder-absent-wiring', handoffsDir);
+    expect(updated?.responderIdentity).toBeUndefined();
+  });
 });
 
 describe('cleanupHandoff', () => {
