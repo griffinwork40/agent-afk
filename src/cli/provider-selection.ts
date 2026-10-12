@@ -39,7 +39,7 @@ export function cliProviderFamily(
   opts?: CliProviderContext,
 ): BundledProviderName {
   const selected = selectCliProvider(raw, opts);
-  if (selected === 'openai' || selected === 'openai-compatible') return 'openai-compatible';
+  if (selected === 'openai' || selected === 'openai-compatible' || selected === 'openai-codex') return 'openai-compatible';
   if (selected === 'xai' || selected === 'xai-oauth') return selected;
   return 'anthropic-direct';
 }

@@ -176,6 +176,29 @@ describe('credential gate after real Commander parsing', () => {
     await expect(parse(['chat', '--', '--provider=openai-compatible'])).rejects.toThrow('credential-gate-exit');
   });
 
+  it.each([
+    { args: ['interactive', '--resume', 'saved', '--continue'], error: 'Use either --resume <id> or --continue, not both.' },
+    { args: ['interactive', '--continue'], error: 'No saved sessions found for --continue.' },
+    { args: ['interactive', '--continue'], error: 'Corrupt latest session.' },
+  ])('leaves resume validation to the action: $error', async ({ args, error }) => {
+    vi.mocked(resolveResumeTarget).mockImplementation(() => { throw new Error(error); });
+    vi.mocked(loadCredential).mockReturnValue('test-credential');
+    const { action } = await parse(args);
+    expect(action).toHaveBeenCalledOnce();
+    expect(preloadClaudeKeychainOAuth).toHaveBeenCalledWith('anthropic-direct');
+    expect(loadCredential).toHaveBeenCalledOnce();
+  });
+
+  it('resolveResumeTarget throws do not escape preAction — passes through for non-Anthropic route', async () => {
+    vi.mocked(resolveResumeTarget).mockImplementation(() => {
+      throw new Error('No saved sessions found for --continue.');
+    });
+    noCredential();
+    // With a non-Anthropic model the gate exits early; action fires normally.
+    const { action } = await parse(['interactive', '-m', 'local', '--continue']);
+    expect(action).toHaveBeenCalledOnce();
+  });
+
   it('uses normalized config endpoint hints for opaque model ids', async () => {
     noCredential();
     vi.mocked(loadConfig).mockReturnValue({ model: 'medium', updatePolicy: 'off', openaiBaseUrl: 'http://localhost:1234/v1' } as ReturnType<typeof loadConfig>);

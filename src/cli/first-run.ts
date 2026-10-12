@@ -27,7 +27,13 @@ export async function runFirstRunDetector(command: Command): Promise<void> {
   }>();
   let model = options.model ?? String(getModel());
   if (command.name() === 'interactive') {
-    model = resolveResumeTarget(options)?.stored?.model ?? model;
+    try {
+      model = resolveResumeTarget(options)?.stored?.model ?? model;
+    } catch {
+      // Resolution errors (conflicting flags, missing session) are user-facing
+      // validation issues handled by the command action; retain the default
+      // model so the credential gate can complete and the action fires normally.
+    }
   }
   // chat's provider is currently built from options.model even for a resume;
   // mirror it here rather than silently changing that existing behavior.
