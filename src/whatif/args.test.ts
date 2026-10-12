@@ -813,4 +813,10 @@ describe('parseWhatifArgs — --aa flag', () => {
     expect(typeof r).toBe('string');
     expect(r as string).toContain('--aa cannot be combined with change flags');
   });
+
+  it('--aa combined with --spec returns an error (#3635)', () => {
+    const r = parseWhatifArgs(['--aa', '--spec', 'my-change.json']);
+    expect(typeof r).toBe('string');
+    expect(r as string).toContain('--spec cannot be combined');
+  });
 });
