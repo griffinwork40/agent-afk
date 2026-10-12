@@ -187,6 +187,16 @@ describe('createWiredExecutors (#3442)', () => {
     await w2.dispose();
   });
 
+  it('dispose() caches and re-throws a drain rejection on every later call', async () => {
+    const err = new Error('drain failed');
+    vi.spyOn(SubagentManager.prototype, 'abortAllAndDrain').mockRejectedValue(err);
+    const w = createWiredExecutors(base, { unattended: true, agent: true });
+    await expect(w.dispose()).rejects.toBe(err);
+    // The rejection is cached — every subsequent dispose() re-throws the same error.
+    await expect(w.dispose()).rejects.toBe(err);
+    await expect(w.dispose()).rejects.toBe(err);
+  });
+
   it('concurrent dispose() calls share one drain (idempotent under Promise.all)', async () => {
     const mgrSpy = vi.spyOn(SubagentManager.prototype, 'abortAllAndDrain');
     const w = createWiredExecutors(base, { unattended: true, agent: true });

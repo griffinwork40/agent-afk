@@ -71,8 +71,41 @@ function runSelectorLoop<T>(
   }
 
   return new Promise<T | ':cancel'>((resolve) => {
+    // `resolved` guards against double-resolution: both `onAbort` (signal) and
+    // the ESC/Ctrl+C keypress handler call `finish()`, which is idempotent.
     let resolved = false;
+    // `rawModeEntered` tracks whether setRawMode(true) succeeded so that
+    // cleanup never calls setRawMode(false) on a pre-aborted fast path where
+    // raw mode was never entered.
+    let rawModeEntered = false;
+
+    function cleanup(): void {
+      process.stdin.removeListener('keypress', onKeypress);
+      abortSignal?.removeEventListener('abort', onAbort);
+      if (rawModeEntered) {
+        try { process.stdin.setRawMode(false); } catch { /* noop */ }
+      }
+    }
+
+    function finish(result: T | ':cancel'): void {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
+      resolve(result);
+    }
+
+    function onAbort(): void {
+      finish(':cancel');
+    }
+
+    // Pre-aborted fast path: resolve without entering raw mode.
+    if (abortSignal?.aborted) {
+      resolve(':cancel');
+      return;
+    }
+
     process.stdin.setRawMode(true);
+    rawModeEntered = true;
     // ESC is the cancel affordance here; fire it on the first press (small
     // sub-perception escapeCodeTimeout) instead of after readline's ~500ms
     // buffer. See emit-keypress.ts.
@@ -102,28 +135,6 @@ function runSelectorLoop<T>(
         finish(':cancel');
       }
     };
-
-    function cleanup(): void {
-      process.stdin.removeListener('keypress', onKeypress);
-      abortSignal?.removeEventListener('abort', onAbort);
-      try { process.stdin.setRawMode(false); } catch { /* noop */ }
-    }
-
-    function finish(result: T | ':cancel'): void {
-      if (resolved) return;
-      resolved = true;
-      cleanup();
-      resolve(result);
-    }
-
-    function onAbort(): void {
-      finish(':cancel');
-    }
-
-    if (abortSignal?.aborted) {
-      onAbort();
-      return;
-    }
 
     abortSignal?.addEventListener('abort', onAbort, { once: true });
     process.stdin.on('keypress', onKeypress);
