@@ -4,9 +4,17 @@ import type { MemoryStore } from '../agent/memory/index.js';
 import type { StateStore } from '../agent/state/state-store.js';
 import type { TelegramSessionBuildContext } from './session-context.js';
 
-const mocks = vi.hoisted(() => ({ build: vi.fn(), disconnect: vi.fn(), workspaceClose: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  build: vi.fn(),
+  disconnect: vi.fn(),
+  workspaceClose: vi.fn(),
+  workspaceThrow: false,
+}));
 vi.mock('../agent/workspace/workspace-store.js', () => ({
-  WorkspaceStore: class { close = mocks.workspaceClose; },
+  WorkspaceStore: class {
+    constructor() { if (mocks.workspaceThrow) throw new Error('sqlite open failed'); }
+    close = mocks.workspaceClose;
+  },
 }));
 vi.mock('./construct-session.js', () => ({ createTelegramTraceWriter: () => null }));
 vi.mock('./mcp-session.js', () => ({
@@ -27,7 +35,7 @@ function factory() {
     memoryStore, stateStore, log: () => {},
   });
 }
-beforeEach(() => { vi.clearAllMocks(); vi.stubEnv('AFK_WORKSPACE_DISABLED', '0'); });
+beforeEach(() => { vi.clearAllMocks(); mocks.workspaceThrow = false; vi.stubEnv('AFK_WORKSPACE_DISABLED', '0'); });
 afterEach(() => { vi.unstubAllEnvs(); });
 
 describe('Telegram store ownership', () => {
@@ -81,5 +89,30 @@ describe('Telegram store ownership', () => {
     });
     await (await factory()({ model: 'sonnet' })).close();
     expect(mocks.workspaceClose).not.toHaveBeenCalled();
+  });
+
+  it('calls disconnectAll when WorkspaceStore constructor throws (item 1 — #3588)', async () => {
+    // WorkspaceStore open throws after MCP has connected; MCP must not leak.
+    mocks.workspaceThrow = true;
+    await expect(factory()({ model: 'sonnet' })).rejects.toThrow('sqlite open failed');
+    expect(mocks.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs session-close failures during recovery instead of discarding them (item 2 — #3588)', async () => {
+    const logged: string[] = [];
+    function factoryWithLog() {
+      return createTelegramSessionFactory({
+        config: {}, frameworkBase: undefined, telegramCwd: undefined,
+        memoryStore, stateStore, log: (msg: string) => { logged.push(msg); },
+      });
+    }
+    mocks.build.mockImplementation(async (ctx: TelegramSessionBuildContext) => {
+      const session = { close: async () => { throw new Error('close boom'); } } as unknown as AgentSession;
+      ctx.reportSession(session);
+      // Builder throws after reportSession so the catch path runs close()
+      throw new Error('build failed');
+    });
+    await expect(factoryWithLog()({ model: 'sonnet' })).rejects.toThrow('build failed');
+    expect(logged.some(m => m.includes('close boom'))).toBe(true);
   });
 });
