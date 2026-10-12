@@ -737,6 +737,47 @@ describe('searchFacts — access tracking', () => {
 
     vi.restoreAllMocks();
   });
+
+  it('drops a fact deleted between SELECT and UPDATE (partial RETURNING)', () => {
+    // Two facts match the query. After the SELECT but before the UPDATE one is
+    // hard-deleted directly in SQLite (simulating a concurrent cross-process
+    // delete under WAL). The UPDATE ... RETURNING will only return one row.
+    // Contract: searchFacts must return only the surviving fact, not the
+    // deleted one with stale pre-UPDATE access_count/last_accessed.
+    const idKeep = store.storeFact({
+      category: 'learning', content: 'partial returning keep', source_surface: 'test',
+    });
+    const idDrop = store.storeFact({
+      category: 'learning', content: 'partial returning drop', source_surface: 'test',
+    });
+
+    const originalPrepare = Database.prototype.prepare;
+    const spy = vi.spyOn(Database.prototype, 'prepare').mockImplementation(function (
+      this: BetterSqlite3.Database, sql: string,
+    ) {
+      if (/UPDATE facts\s+SET access_count/.test(sql)) {
+        // Simulate concurrent delete: remove idDrop before UPDATE runs.
+        originalPrepare.call(this, 'DELETE FROM facts WHERE id = ?').run(idDrop);
+      }
+      return originalPrepare.call(this, sql);
+    } as BetterSqlite3.Database['prepare']);
+
+    let results: ReturnType<typeof store.searchFacts> = [];
+    try {
+      results = store.searchFacts('partial returning');
+    } finally {
+      spy.mockRestore();
+    }
+
+    // Only the surviving fact should be returned.
+    const ids = results.map((r) => r.id);
+    expect(ids).toContain(idKeep);
+    expect(ids).not.toContain(idDrop);
+    // The returned fact must have the committed (incremented) access_count.
+    const kept = results.find((r) => r.id === idKeep)!;
+    expect(kept.access_count).toBe(1);
+    expect(typeof kept.last_accessed).toBe('string');
+  });
 });
 
 // ---------------------------------------------------------------------------
