@@ -141,14 +141,6 @@ export const AUTH_ENV_REGISTRY = [
     category: 'model',
   },
   {
-    name: 'AFK_OPENAI_CHATGPT_OAUTH',
-    description: 'Use ChatGPT-subscription OAuth credentials from ~/.codex/auth.json (auth_mode: chatgpt) as OpenAI provider auth. Off by default. Set to 1/true/yes/on to enable. READ-ONLY: AFK never refreshes these tokens — re-run codex when the access token expires. Routes requests over the Responses API to the private ChatGPT backend (chatgpt.com/backend-api).',
-    type: 'boolean',
-    required: false,
-    example: '1',
-    category: 'model',
-  },
-  {
     name: 'AFK_PROVIDER',
     description: 'Force provider selection (anthropic | anthropic-direct | openai | openai-compatible | openai-codex | xai | xai-oauth). Overrides the model-name heuristic. Same surface as the --provider CLI flag; CLI flag wins when both are set.',
     type: 'string',

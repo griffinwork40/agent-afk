@@ -11,6 +11,34 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.310.3] - 2026-10-12
+
+### Fixed
+- correct workflow annotations and formatter edge cases (#3570) (3dec3a1e)
+
+### Changed
+- document verdict reasons and temp-root privacy (#3569) (6eab069d)
+- add Invariant: prefix to long JSDoc block in stream-renderer-dispose.ts (#3564) (c0ead9bd)
+
+## [5.310.2] - 2026-10-11
+
+### Fixed
+- complete advisory cleanup and release test ledger (#3574) (98980630)
+
+## [5.310.1] - 2026-10-11
+
+### Fixed
+- preserve width-only erase snapshot during SHRINK within a CPR burst (#3293) (bf2cfba1)
+- cross-prefix npm, post-update service restart, Cellar execPath normalization (#3300) (dfb5699e)
+
+### Changed
+- pin conservative BASH_HIGH classification for heredoc prose (#3549) (0c6adaf9)
+
+## [5.310.0] - 2026-10-11
+
+### Added
+- remove AFK_OPENAI_CHATGPT_OAUTH; ChatGPT OAuth is the last-resort tier (#3388) (23404057)
+
 ## [5.309.5] - 2026-10-11
 
 ### Fixed

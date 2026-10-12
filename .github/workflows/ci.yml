@@ -221,7 +221,7 @@ jobs:
         if: always() && matrix.os != 'windows-2022'
         uses: actions/upload-artifact@v7
         with:
-          # Per-OS name — a matrix can't upload multiple artifacts under one name (v4 immutable).
+          # Per-OS name — a matrix can't upload multiple artifacts under one immutable name.
           name: coverage-report-${{ matrix.os }}
           path: coverage/
           retention-days: 14
@@ -230,7 +230,7 @@ jobs:
   #
   # Why a separate job rather than adding node-version to the `test` matrix:
   # the `test` job uploads a coverage artifact named coverage-report-${{ matrix.os }}.
-  # Artifacts in actions/upload-artifact@v4 are immutable-named; adding a second
+  # Artifacts in actions/upload-artifact are immutable-named; adding a second
   # dimension to the matrix would require changing the artifact name (to include
   # node-version) in every branch of the matrix, touching the existing required gate.
   # A standalone job keeps the `test` matrix and its artifacts unchanged, Node 22

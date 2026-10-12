@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const { telegram } = vi.hoisted(() => ({ telegram: { entrypoint: 'C:\\afk\\dist\\telegram.mjs' } }));
 vi.mock('../telegram/manager.js', () => ({ resolveEntrypoint: () => telegram.entrypoint }));
 
+import { normalizeBrewCellarExecPath } from './launchd/brew-cellar.js';
 import { resolveWindowsProgramArguments } from './windows/argv.js';
 import { renderWindowsTask } from './windows/install.js';
 
@@ -74,7 +75,7 @@ describe('resolveWindowsProgramArguments', () => {
 
   it('telegram: delegates to the shared [execPath, entry] shape', () => {
     const argv = resolveWindowsProgramArguments('telegram', { existsCheck: () => true });
-    expect(argv).toEqual([process.execPath, telegram.entrypoint]);
+    expect(argv).toEqual([normalizeBrewCellarExecPath(process.execPath), telegram.entrypoint]);
   });
 });
 

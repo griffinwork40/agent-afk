@@ -12,8 +12,7 @@
  *   1. `AFK_IMAGE_API_KEY` env var (dedicated billing separation)
  *   2. `resolveOpenAIAuth()` from the openai-compatible provider, which
  *      covers OPENAI_API_KEY, CODEX_API_KEY, ~/.codex/auth.json (API-key
- *      mode), and ChatGPT-subscription OAuth (when AFK_OPENAI_CHATGPT_OAUTH
- *      is truthy). ChatGPT OAuth tokens route through the ChatGPT backend
+ *      mode), and ChatGPT-subscription OAuth (the last-resort tier). ChatGPT OAuth tokens route through the ChatGPT backend
  *      Responses API (see image-generate.chatgpt.ts) instead of the standard
  *      Images API, which rejects the OAuth token's limited scopes.
  *
@@ -239,7 +238,7 @@ export function createImageGenerateHandler(
           '  1. AFK_IMAGE_API_KEY in ~/.afk/config/afk.env (dedicated image billing)\n' +
           '  2. OPENAI_API_KEY env var\n' +
           '  3. `codex login --api-key` (writes ~/.codex/auth.json)\n' +
-          '  4. ChatGPT subscription OAuth (set AFK_OPENAI_CHATGPT_OAUTH=1)\n\n' +
+          '  4. ChatGPT subscription OAuth (run `codex login`)\n\n' +
           'No usable auth was found from any source.',
         isError: true,
       };

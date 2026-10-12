@@ -63,8 +63,7 @@ import {
   getEvalCasesIndexPath,
 } from '../paths.js';
 import { getAfkHome } from '../../paths.js';
-import { atomicWriteFile } from '../../utils/envFile.js';
-import { atomicWriteFile as atomicWriteFileCore } from '../../utils/atomic-write.js';
+import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { appendJsonlIndex, formatYyyymmdd } from '../_lib/writer-utils.js';
 import { describeEvalRunCoverage } from './eval-run-coverage.js';
 import { getEvalCasesForCard } from './eval-case-readers.js';
@@ -396,8 +395,8 @@ export function writeEvalCase(
   }
 
   // 2. Write JSON + markdown (atomic) after fixture is durable.
-  atomicWriteFile(jsonPath, JSON.stringify(validated, null, 2), 0o666);
-  atomicWriteFile(mdPath, renderEvalCaseMarkdown(validated), 0o666);
+  atomicWriteFile(jsonPath, JSON.stringify(validated, null, 2), { mode: 0o666 });
+  atomicWriteFile(mdPath, renderEvalCaseMarkdown(validated), { mode: 0o666 });
 
   // 3. Append the index event — best-effort, matching card-writer convention.
   appendIndex({
@@ -522,5 +521,7 @@ function appendIndex(event: EvalCaseIndexEvent): void {
  * `atomicWriteFile` helper which accepts Buffer directly (#3265).
  */
 function atomicWriteBinary(path: string, bytes: Buffer): void {
-  atomicWriteFileCore(path, bytes, { mode: 0o600 });
+  // Intentionally owner-only rather than OS-default permissions: replay
+  // fixtures can contain sensitive session data.
+  atomicWriteFile(path, bytes, { mode: 0o600 });
 }

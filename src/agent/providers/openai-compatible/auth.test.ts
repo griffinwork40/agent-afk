@@ -91,9 +91,8 @@ describe('resolveOpenAIAuth — precedence', () => {
     expect(r.last4).toBe('5555');
   });
 
-  it('uses ChatGPT OAuth when present and flag is explicitly ON (off by default — opt-in)', () => {
+  it('uses ChatGPT OAuth when present and no API key resolves', () => {
     const r = resolveOpenAIAuth(undefined, deps({
-      readEnv: (k) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? '1' : undefined),
       readFile: () =>
         JSON.stringify({
           auth_mode: 'chatgpt',
@@ -189,9 +188,9 @@ describe('formatAuthDiagnostic', () => {
     const msg = formatAuthDiagnostic({ apiKey: null, source: 'no-usable-auth-codex-oauth' });
     expect(msg).toContain('codex login --api-key');
     expect(msg).toContain('OPENAI_API_KEY');
-    // Critical: must explain WHY ChatGPT OAuth isn't usable AND how to opt in.
-    expect(msg).toContain('API-key mode');
-    expect(msg).toContain('AFK_OPENAI_CHATGPT_OAUTH');
+    // Critical: must explain WHY ChatGPT OAuth isn't usable AND how to fix it.
+    expect(msg).toContain('no access token');
+    expect(msg).toContain('Re-run `codex login`');
   });
 
   it('renders no-usable-auth with all 3 next steps', () => {
@@ -212,7 +211,7 @@ describe('formatAuthDiagnostic', () => {
   });
 });
 
-describe('resolveOpenAIAuth — ChatGPT-subscription OAuth (flag-gated, read-only)', () => {
+describe('resolveOpenAIAuth — ChatGPT-subscription OAuth (last-resort tier, read-only)', () => {
   /** Build an unsigned JWT (header.payload.sig) with the given payload claims. */
   function makeJwt(payload: Record<string, unknown>): string {
     const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -228,50 +227,47 @@ describe('resolveOpenAIAuth — ChatGPT-subscription OAuth (flag-gated, read-onl
       OPENAI_API_KEY: null,
       tokens: { access_token: ACCESS, refresh_token: 'rt_x', ...extra },
     });
-  const flagOn = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? '1' : undefined);
-
-  it('stays rejected when the flag is explicitly OFF', () => {
-    const flagOff = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? '0' : undefined);
-    const r = resolveOpenAIAuth(undefined, deps({ readEnv: flagOff, readFile: () => chatgptAuthJson() }));
-    expect(r.source).toBe('no-usable-auth-codex-oauth');
-    expect(r.apiKey).toBeNull();
-  });
-
-  it('stays rejected when the flag is unset (off by default — opt-in)', () => {
+  it('uses the ChatGPT token when no API key resolves', () => {
     const r = resolveOpenAIAuth(undefined, deps({ readFile: () => chatgptAuthJson() }));
+    expect(r.source).toBe('chatgpt-oauth');
+    expect(r.apiKey).toBe(ACCESS);
+  });
+
+  it.each(['0', 'false', 'off', '1'])('ignores a leftover AFK_OPENAI_CHATGPT_OAUTH=%j (the flag was removed)', (v) => {
+    const leftover = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? v : undefined);
+    const r = resolveOpenAIAuth(undefined, deps({ readEnv: leftover, readFile: () => chatgptAuthJson() }));
+    expect(r.source).toBe('chatgpt-oauth');
+  });
+
+  it('returns no-usable-auth-codex-oauth for a ChatGPT-mode file with no access token', () => {
+    const noToken = JSON.stringify({ auth_mode: 'chatgpt', OPENAI_API_KEY: null, tokens: {} });
+    const r = resolveOpenAIAuth(undefined, deps({ readFile: () => noToken }));
     expect(r.source).toBe('no-usable-auth-codex-oauth');
     expect(r.apiKey).toBeNull();
   });
 
-  it('returns the access token tagged chatgpt-oauth when flag is explicitly ON', () => {
-    const r = resolveOpenAIAuth(undefined, deps({ readEnv: flagOn, readFile: () => chatgptAuthJson() }));
+  it('lets OPENAI_API_KEY win over the ChatGPT OAuth fallback', () => {
+    const keyEnv = (k: string) => (k === 'OPENAI_API_KEY' ? 'sk-env-5678' : undefined);
+    const r = resolveOpenAIAuth(undefined, deps({ readEnv: keyEnv, readFile: () => chatgptAuthJson() }));
+    expect(r.source).toBe('env');
+    expect(r.apiKey).toBe('sk-env-5678');
+  });
+
+  it('returns the access token tagged chatgpt-oauth with decoded account id and expiry', () => {
+    const r = resolveOpenAIAuth(undefined, deps({ readFile: () => chatgptAuthJson() }));
     expect(r.source).toBe('chatgpt-oauth');
     expect(r.apiKey).toBe(ACCESS);
     expect(r.accountId).toBe('acct_from_jwt');
     expect(r.expiresAt).toBe(9999999999);
   });
 
-  it('treats unrecognized env value as disabled (safe default)', () => {
-    const garbageEnv = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? 'garbage' : undefined);
-    const r = resolveOpenAIAuth(undefined, deps({ readEnv: garbageEnv, readFile: () => chatgptAuthJson() }));
-    expect(r.source).toBe('no-usable-auth-codex-oauth');
-    expect(r.apiKey).toBeNull();
-  });
-
-  it.each(['false', 'no', 'off', 'FALSE', 'NO', 'OFF'])('stays rejected when flag is %j (not in allowlist)', (flagVal) => {
-    const flagEnv = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? flagVal : undefined);
-    const r = resolveOpenAIAuth(undefined, deps({ readEnv: flagEnv, readFile: () => chatgptAuthJson() }));
-    expect(r.source).toBe('no-usable-auth-codex-oauth');
-    expect(r.apiKey).toBeNull();
-  });
-
   it('prefers an explicit account_id field over the JWT claim', () => {
-    const r = resolveOpenAIAuth(undefined, deps({ readEnv: flagOn, readFile: () => chatgptAuthJson({ account_id: 'acct_explicit' }) }));
+    const r = resolveOpenAIAuth(undefined, deps({ readFile: () => chatgptAuthJson({ account_id: 'acct_explicit' }) }));
     expect(r.accountId).toBe('acct_explicit');
   });
 
-  it('lets an explicit API key still win over OAuth even with the flag ON', () => {
-    const r = resolveOpenAIAuth('sk-explicit-1234', deps({ readEnv: flagOn, readFile: () => chatgptAuthJson() }));
+  it('lets an explicit API key still win over OAuth', () => {
+    const r = resolveOpenAIAuth('sk-explicit-1234', deps({ readFile: () => chatgptAuthJson() }));
     expect(r.source).toBe('config');
     expect(r.apiKey).toBe('sk-explicit-1234');
   });
@@ -289,7 +285,7 @@ describe('resolveOpenAIAuth — ChatGPT-subscription OAuth (flag-gated, read-onl
   });
 });
 
-describe('resolveOpenAIAuth — forced ChatGPT OAuth (per-slot, flag-independent)', () => {
+describe('resolveOpenAIAuth — forced ChatGPT OAuth (per-slot)', () => {
   const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
   const ACCESS = `${b64({ alg: 'none', typ: 'JWT' })}.${b64({
     'https://api.openai.com/auth': { chatgpt_account_id: 'acct_slot' },
@@ -298,8 +294,8 @@ describe('resolveOpenAIAuth — forced ChatGPT OAuth (per-slot, flag-independent
   const chatgptAuthJson = () =>
     JSON.stringify({ auth_mode: 'chatgpt', OPENAI_API_KEY: null, tokens: { access_token: ACCESS } });
 
-  it('selects the ChatGPT token over OPENAI_API_KEY and WITHOUT the global flag', () => {
-    // OPENAI_API_KEY set, AFK_OPENAI_CHATGPT_OAUTH deliberately OFF — the per-slot
+  it('selects the ChatGPT token over OPENAI_API_KEY', () => {
+    // OPENAI_API_KEY set — the per-slot
     // signal alone must win. This is the whole point: a keyed OpenAI model and a
     // ChatGPT-subscription model can coexist in one session.
     const r = resolveOpenAIAuth(
@@ -343,7 +339,7 @@ describe('resolveOpenAIAuth — forced ChatGPT OAuth (per-slot, flag-independent
     expect(r.apiKey).toBe('sk-env-9999');
   });
 
-  it('renders an accurate diagnostic that names the slot, not the global flag', () => {
+  it('renders an accurate diagnostic that names the slot', () => {
     const msg = formatAuthDiagnostic({ apiKey: null, source: 'no-usable-auth-forced-chatgpt-oauth' });
     expect(msg).toContain("provider: 'chatgpt-oauth'");
     expect(msg).not.toContain('Found ChatGPT/OAuth credentials');
@@ -368,7 +364,6 @@ describe('resolveOpenAIAuth — expiry gate (#555)', () => {
     });
   }
 
-  const flagOn = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? '1' : undefined);
 
   // ── Tier 0 (forced per-slot) ──────────────────────────────────────────────
 
@@ -412,33 +407,32 @@ describe('resolveOpenAIAuth — expiry gate (#555)', () => {
     expect(r.expiresAt).toBeUndefined();
   });
 
-  // ── Tier 4 flag-gated ─────────────────────────────────────────────────────
+  // ── Tier 4 (last-resort ChatGPT OAuth) ─────────────────────────────────────────────────────
 
-  it('flag-gated: rejects an expired token and returns chatgpt-oauth-expired with expiresAt', () => {
+  it('Tier 4: rejects an expired token and returns chatgpt-oauth-expired with expiresAt', () => {
     const r = resolveOpenAIAuth(
       undefined,
-      deps({ readEnv: flagOn, readFile: () => authJson(EXPIRED_S) }),
+      deps({ readFile: () => authJson(EXPIRED_S) }),
     );
     expect(r.source).toBe('chatgpt-oauth-expired');
     expect(r.apiKey).toBeNull();
     expect(r.expiresAt).toBe(EXPIRED_S);
   });
 
-  it('flag-gated: accepts a not-yet-expired token', () => {
+  it('Tier 4: accepts a not-yet-expired token', () => {
     const r = resolveOpenAIAuth(
       undefined,
-      deps({ readEnv: flagOn, readFile: () => authJson(VALID_S) }),
+      deps({ readFile: () => authJson(VALID_S) }),
     );
     expect(r.source).toBe('chatgpt-oauth');
     expect(r.apiKey).not.toBeNull();
   });
 
-  it('flag-gated: passes through a token with no expiresAt (unknown expiry is optimistic)', () => {
+  it('Tier 4: passes through a token with no expiresAt (unknown expiry is optimistic)', () => {
     const noExpJwt = `${b64({ alg: 'none', typ: 'JWT' })}.${b64({ sub: 'u' })}.sig`;
     const r = resolveOpenAIAuth(
       undefined,
       deps({
-        readEnv: flagOn,
         readFile: () =>
           JSON.stringify({
             auth_mode: 'chatgpt',
@@ -463,10 +457,10 @@ describe('resolveOpenAIAuth — expiry gate (#555)', () => {
     expect(r.apiKey).toBeNull();
   });
 
-  it('flag-gated: treats exp === now as expired (boundary contract: exp <= now)', () => {
+  it('Tier 4: treats exp === now as expired (boundary contract: exp <= now)', () => {
     const r = resolveOpenAIAuth(
       undefined,
-      deps({ readEnv: flagOn, readFile: () => authJson(NOW_S) }),
+      deps({ readFile: () => authJson(NOW_S) }),
     );
     expect(r.source).toBe('chatgpt-oauth-expired');
     expect(r.apiKey).toBeNull();

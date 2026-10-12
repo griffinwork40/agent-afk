@@ -531,6 +531,195 @@ describe('classifyRisk — schedule self-disable carve-out (#3464)', () => {
   });
 });
 
+// ---- #3534: heredoc prose false-positives --------------------------------
+// Conservative prose false positives are permitted by the safety invariant.
+// Do not strip payloads or narrow high patterns without proving executable
+// commands cannot be hidden by shell syntax or subsequent consumers.
+describe('classifyRisk — bash heredoc conservative prose classification (#3534)', () => {
+  // ── conservative guards (prose in file-redirect heredocs) ──────────────
+
+  it('heredoc body "platform shift and long-term outlook" → high conservatively (rm  is prose)', () => {
+    // Keep main's conservative verdict until safe shell parsing is available.
+    const cmd = [
+      "cat > /tmp/note.txt <<'EOF'",
+      '# reasoning: the platform shift and long-term outlook',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('heredoc body "confirm the retrieval step" → high conservatively (eval  is prose)', () => {
+    // 'eval ' matches 'retrieval '; retain the conservative high verdict.
+    const cmd = [
+      "cat > /tmp/x.py <<'EOF'",
+      'confirm the retrieval step',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('heredoc body with "form " and "confirm " → high conservatively', () => {
+    const cmd = [
+      "cat > /tmp/doc.md <<'EOF'",
+      'Please confirm the form submission.',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('tee heredoc body with prose containing "rm " → high conservatively', () => {
+    const cmd = [
+      "tee /tmp/out.txt <<'EOF'",
+      'This is a long-term platform migration plan.',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('append-redirect heredoc body with prose → high conservatively', () => {
+    const cmd = [
+      "cat >> /tmp/log.txt <<'EOF'",
+      'retrieval complete for platform team',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('double-quoted delimiter heredoc body with prose → high conservatively', () => {
+    // <<"EOF" is also a quoted delimiter (no expansion in practice).
+    const cmd = [
+      'cat > /tmp/x.txt <<"EOF"',
+      'The long-term outlook for platform teams is positive.',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('<<-EOF (tab-stripping) file-redirect body with prose → high conservatively', () => {
+    const cmd = [
+      "cat > /tmp/x.txt <<-'EOF'",
+      '\tthe platform shift matters',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  // ── true-positive guards (real dangerous commands must stay high) ─────────
+
+  it('bare rm  as first command → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'rm old-file.txt' }, ctx)).toBe('high');
+  });
+
+  it('rm  after semicolon → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'echo done; rm tmp.txt' }, ctx)).toBe('high');
+  });
+
+  it('rm  after && → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'build && rm artifacts/old.zip' }, ctx)).toBe('high');
+  });
+
+  it('rm  after || → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'test -f x || rm fallback.txt' }, ctx)).toBe('high');
+  });
+
+  it('rm  after pipe → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'find . -name "*.bak" | rm -rf' }, ctx)).toBe('high');
+  });
+
+  it('rm  after $( → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'x=$(rm -f tmp.txt)' }, ctx)).toBe('high');
+  });
+
+  it('rm  after newline in multi-line command → high (true positive)', () => {
+    const cmd = 'echo start\nrm old.txt\necho done';
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('sudo rm  → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'sudo rm /etc/hosts' }, ctx)).toBe('high');
+  });
+
+  it('eval  as command → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'eval "$PAYLOAD"' }, ctx)).toBe('high');
+  });
+
+  it('eval  after semicolon → high (true positive)', () => {
+    expect(classifyRisk('bash', { command: 'source env.sh; eval "$CMD"' }, ctx)).toBe('high');
+  });
+
+  it('bash heredoc fed to shell — body eval  stays high (shell-exec heredoc)', () => {
+    // When the heredoc is fed to bash/sh, the body IS executed — must stay high.
+    const cmd = [
+      'bash <<EOF',
+      'eval "$PAYLOAD"',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('rm -rf in heredoc body fed to sh → high (shell-exec heredoc)', () => {
+    const cmd = [
+      'sh <<EOF',
+      'rm -rf /tmp/scratch',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+
+  it('rm -rf before heredoc redirect → high (dangerous command precedes heredoc)', () => {
+    // The rm -rf is on the command line itself, not in the heredoc body.
+    const cmd = [
+      "rm -rf dist/ && cat > /tmp/note.txt <<'EOF'",
+      'platform notes',
+      'EOF',
+    ].join('\n');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+  });
+});
+
+// Invariant: PR #3549 must not downgrade executable commands that main
+// classified high. These strings are classifier data, never shell inputs.
+describe('classifyRisk — PR #3549 blocking review regressions', () => {
+  it.each([
+    'sudo rm secrets.txt',
+    'env rm secrets.txt',
+    'env FLAG=1 rm secrets.txt',
+    'printf x | xargs rm secrets.txt',
+    'echo ready && command rm secrets.txt',
+    'exec rm secrets.txt',
+    'if true; then rm x; fi',
+    'for x in secrets.txt; do rm "$x"; done',
+    'FLAG=1 rm secrets.txt',
+    '/bin/rm secrets.txt',
+    'command eval "$PAYLOAD"',
+  ])('F1: retains high behind wrappers, reserved words, assignments and paths: %s', (command) => {
+    expect(classifyRisk('bash', { command }, ctx)).toBe('high');
+  });
+
+  it.each([
+    ["cat > /tmp/payload.txt <<'EOF'", 'rm secrets.txt', 'EOF', 'bash /tmp/payload.txt'],
+    ["cat <<'EOF' > x.sh", 'rm secrets.txt', 'EOF', 'sh x.sh'],
+    ['cat <<EOF > x.sh', 'rm secrets.txt', 'EOF', 'sh x.sh'],
+    ["cat > payload <<'EOF'; sh payload", 'rm secrets.txt', 'EOF'],
+    ["tee payload <<'EOF'", 'eval "$PAYLOAD"', 'EOF', '. ./payload'],
+    ["cat >> payload <<'EOF'", 'rm secrets.txt', 'EOF', 'source payload'],
+    ["bash <<'EOF' > output", 'rm secrets.txt', 'EOF'],
+    ['bash <<EOF', 'rm secrets.txt', 'EOF'],
+  ])('F2: retains high for written scripts and interpreter heredocs: %j', (...lines) => {
+    expect(classifyRisk('bash', { command: lines.join('\n') }, ctx)).toBe('high');
+  });
+
+  it.each([
+    ['printf \'%s\\n\' "cat > /tmp/note.txt <<\'EOF\'"', 'rm secrets.txt'],
+    ['printf \'%s\\n\' "cat > /tmp/note.txt <<\'EOF\'"', 'rm secrets.txt', 'EOF'],
+    ["printf '%s\\n' 'cat > note <<\"EOF\"'", 'eval "$PAYLOAD"'],
+    ["cat > note <<'EOF'", 'rm secrets.txt'],
+    ["cat > note <<'EOF'", 'rm secrets.txt', ' EOF'],
+  ])('F3: quoted markers and uncertain terminators cannot hide commands: %j', (...lines) => {
+    expect(classifyRisk('bash', { command: lines.join('\n') }, ctx)).toBe('high');
+  });
+});
+
 // ---- worktree lifecycle --------------------------------------------------
 // Regression guard for PR #390 review finding F1: the `worktree` tool had no
 // classifier branch, so every action (including `remove --force`, which can
@@ -890,8 +1079,8 @@ describe('classifyRisk — system temp dir carve-out', () => {
     const roots = getTempRoots();
     // Session root (private 0700 mkdtemp) must be included.
     expect(roots).toContain(sessRoot);
-    // No root should be shared-world-writable: on POSIX all entries must pass
-    // the isPrivateTempRoot predicate (symlink=false, owned, mode&0o022===0).
+    // No root should permit group/other access: on POSIX all entries must pass
+    // the isPrivateTempRoot predicate (symlink=false, owned, mode&0o077===0).
     // We cannot lstat here without importing fs, so just assert non-empty.
     expect(roots.length).toBeGreaterThan(0);
   });
@@ -902,15 +1091,17 @@ describe('classifyRisk — system temp dir carve-out', () => {
   });
 
   it('cached session root is re-validated: reaped and replaced by a non-directory → dropped', () => {
-    // Prime the cache (both candidates exist, so the result is cached).
+    // Prime a complete cache: both candidates are present, even if os.tmpdir()
+    // fails the privacy predicate (e.g. Linux /tmp); only private roots are kept.
     expect(getTempRoots()).toContain(sessRoot);
     expect(getTempRoots()).toContain(sessRoot);
     // Simulate a tmp reaper deleting the idle root and something else taking
     // its name. A regular file fails isPrivateTempRoot on every platform.
     rmSync(sessRoot, { recursive: true, force: true });
     writeFileSync(sessRoot, 'not a dir');
-    // (No classification assertion: sessRoot lives under os.tmpdir(), which is
-    // itself a private root on macOS, so the path stays admissible through it.)
+    // Assert root membership, not classification: on macOS the enclosing
+    // os.tmpdir() is private, so this path remains admissible through it;
+    // Linux's usual /tmp is not private and provides no such fallback.
     expect(getTempRoots()).not.toContain(sessRoot);
   });
 

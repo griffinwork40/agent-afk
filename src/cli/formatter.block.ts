@@ -43,6 +43,7 @@ export function renderBlockquote(
   // join below, doubled the blank before the next block's `space` token.
   const inner = (bq.tokens ? renderTokens(bq.tokens as Token[], innerWidth) : bq.text)
     .replace(/\n+$/, '');
+  if (inner === '') return '\n';
   // Interior blank rows (the `space` between quoted paragraphs) keep a bare
   // bar so the quote reads as one continuous block. No trailing space, and
   // trailing rows can no longer occur, so no orphan "  │ " row is possible.

@@ -96,7 +96,7 @@ export async function downloadTelegramFile(
     // code whose cost is negligible).
     const safeMessage = raw
       .replace(/\/bot[^/\s]+(?:\/|$)/g, '/bot[REDACTED]/')
-      .replace(/([?&])[^=\s]+=\S*/g, '$1[REDACTED]');
+      .replace(/([?&])[^=\s]*=\S*/g, '$1[REDACTED]');
     return { status: 'network-error', safeMessage };
   }
 
@@ -112,7 +112,7 @@ export async function downloadTelegramFile(
     const raw = errorMessage(err);
     const safeMessage = raw
       .replace(/\/bot[^/\s]+(?:\/|$)/g, '/bot[REDACTED]/')
-      .replace(/([?&])[^=\s]+=\S*/g, '$1[REDACTED]');
+      .replace(/([?&])[^=\s]*=\S*/g, '$1[REDACTED]');
     return { status: 'network-error', safeMessage };
   }
   // readResult discriminant matches DownloadResult directly for these two cases.

@@ -577,7 +577,7 @@ export class TerminalCompositor {
   /** @internal Relaxed from `private` for the frame module (FrameHost). */
   lastKnownRows = 0;
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
-  pendingResizeErase: { top: number; bottom: number } | null = null;
+  pendingResizeErase: { top: number; bottom: number; origin?: 'width-only' | 'expand' } | null = null;
   /**
    * True while a CPR (Cursor Position Report, ESC[6n) reply is in-flight
    * after a tmux EXPAND SIGWINCH. Frame.repaint() skips the physical write
@@ -599,6 +599,7 @@ export class TerminalCompositor {
     growTotal: number;
     shrinkTotal: number;
     requeryCt: number;
+    widthOnlyOrigin: boolean;
   } | null = null;
   // Invariant (F2 — fail-safe commit mode on stale geometry): set by the
   // SIGWINCH-immediate handler alongside logUpdate.resetGeometry() and cleared

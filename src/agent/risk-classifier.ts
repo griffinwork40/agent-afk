@@ -1,5 +1,5 @@
 /**
- * Risk classifier — pure function, no I/O, no permissions side-effects.
+ * Contract: risk classifier — pure function, no I/O, no permissions side-effects.
  *
  * Maps (toolName, toolInput, RiskContext) → RiskLevel. Intended for use by
  * operator-facing UI (status line, permission prompts) and the audit log.
@@ -24,10 +24,17 @@ import { classifyFilePath, classifyPatchApply } from './risk-classifier.paths.js
 export type RiskLevel = 'safe' | 'medium' | 'high';
 
 /**
- * A risk level plus, when known, a short concrete reason naming the rule that
- * fired (e.g. `workspace-escape: <path> is outside <root>`). Surfaced to a
- * blocked agent by the AFK gate so it can pick a safe alternative instead of
- * guessing why it was refused.
+ * Contract: `reason` is a short concrete rule diagnostic, not a stable code.
+ * Every `high` verdict has a reason, including path rules (write-denylist,
+ * .git, workspace escape), bash patterns, destructive MCP verbs, schedule
+ * mutations, forced worktree removal, and web_request DELETE.
+ * For `medium`, it is present only for matched bash patterns (also used by
+ * wait_for command), a background bash launch raised from safe, or a
+ * node_modules write target (including the selected patch_apply verdict).
+ * Other `medium` verdicts omit it; all `safe` verdicts omit it.
+ * The field remains optional: callers such as the AFK gate must tolerate its
+ * absence when building refusal text, rather than assuming every verdict
+ * explains its level.
  */
 export interface RiskVerdict {
   level: RiskLevel;
@@ -234,11 +241,11 @@ function extractFilePath(input: unknown): string {
 }
 
 function classifyBash(cmd: string): RiskVerdict {
-  // External constraint: check HIGH before MEDIUM before SAFE.
-  // High patterns override everything; medium patterns override safe.
-  // This ordering matters for commands like `echo foo > out.txt` where
-  // both `echo ` (safe) and ` > ` (medium) match — the redirect takes
-  // precedence because medium is checked first.
+  // Invariant: scan the original command for HIGH before MEDIUM before SAFE.
+  // Wrappers and shell syntax can introduce executable positions anywhere;
+  // heredoc payloads may be executed later. Without a complete shell parser,
+  // neither boundary narrowing nor body stripping may lower main's verdict.
+  // Prose false positives are intentional until that safety can be proven.
   for (const p of BASH_HIGH) {
     if (cmd.includes(p)) return { level: 'high', reason: `bash-pattern: matched '${p}'` };
   }
