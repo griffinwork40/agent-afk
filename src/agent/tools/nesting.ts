@@ -360,6 +360,14 @@ export function buildReadOnlyReconProvider(
 }
 
 /**
+ * Executor-backed tools a compose node can never run: buildComposeNodeProvider
+ * omits subagentExecutor/skillExecutor (leaf invariant below), so these are
+ * removed from every compose node's tool surface, named or not (#3579).
+ * `compose` itself is not in CHILD_ALLOWED_TOOLS, so it needs no entry.
+ */
+export const COMPOSE_LEAF_STRIPPED_TOOLS: ReadonlySet<string> = new Set(['agent', 'skill']);
+
+/**
  * Build a provider for a compose DAG node that carries the workspace store
  * (so nodes can call `workspace_publish` / `workspace_query`) but deliberately
  * omits `subagentExecutor` and `skillExecutor`.
@@ -407,6 +415,23 @@ export interface BuildComposeNodeProviderOpts {
   /** `true` blocks mutating bash for read-only named agents (e.g. git-investigator). */
   readOnlyBash?: true;
   canUseTool?: CanUseTool;
+  /**
+   * Static string allowlist that mirrors what `canUseTool` enforces at
+   * runtime.  When present, `permissions.allowedTools` is set to the
+   * intersection of `CHILD_ALLOWED_TOOLS` and this list so that `toolDefs`
+   * (the schema surface advertised to the model) exactly matches the enforced
+   * surface — closing the drift that caused the 'Unknown tool' error to list
+   * blocked tools (issue #3580).
+   *
+   * Must be present whenever `canUseTool` is set.  When absent (inherit-all
+   * named agents and unnamed nodes), `permissions.allowedTools` stays as the
+   * full `CHILD_ALLOWED_TOOLS` list.
+   *
+   * Seam for #3579: executor-backed tools (`agent`, `skill`, `compose`) that
+   * the sibling PR strips from compose-leaf allowlists should be removed from
+   * this array before it reaches here, not from `canUseTool` (async/opaque).
+   */
+  namedAgentAllowedTools?: string[];
 }
 
 export function buildComposeNodeProvider(
@@ -414,11 +439,25 @@ export function buildComposeNodeProvider(
   workspaceStore: WorkspaceStore | undefined,
   opts: BuildComposeNodeProviderOpts = {},
 ): ModelProvider {
-  const { openaiBaseUrl, readOnlyBash, canUseTool } = opts;
+  const { openaiBaseUrl, readOnlyBash, canUseTool, namedAgentAllowedTools } = opts;
+  // Effective tool surface: when the named agent declares an allowlist, use
+  // the intersection of CHILD_ALLOWED_TOOLS and that list so that toolDefs
+  // (the per-turn schema sent to the model) matches the canUseTool enforcement
+  // gate exactly.  Without this intersection the model sees the full
+  // CHILD_ALLOWED_TOOLS surface in the API schema, calls a blocked tool, and
+  // gets a confusing denial — and the 'Unknown tool' suggestion list leaks the
+  // same blocked names (issue #3580).
+  // When namedAgentAllowedTools is absent (inherit-all agents, unnamed nodes),
+  // fall back to the full CHILD_ALLOWED_TOOLS list unchanged.
+  const leafTools = CHILD_ALLOWED_TOOLS.filter((t) => !COMPOSE_LEAF_STRIPPED_TOOLS.has(t));
+  const effectiveAllowedTools =
+    namedAgentAllowedTools !== undefined
+      ? leafTools.filter((t) => namedAgentAllowedTools.includes(t))
+      : leafTools;
   // Materialize the allowlist per call so runtime array mutations don't bleed
   // across sibling nodes (mirrors buildPhaseRestrictedProvider / buildReadOnlyReconProvider).
   const common = {
-    permissions: { allowedTools: [...CHILD_ALLOWED_TOOLS] },
+    permissions: { allowedTools: effectiveAllowedTools },
     readOnlyMemory: true,
     ...(workspaceStore !== undefined ? { workspaceStore } : {}),
     ...(readOnlyBash === true ? { readOnlyBash: true } : {}),

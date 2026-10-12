@@ -16,6 +16,14 @@
  *     model (lower precedence than an explicit node model, higher than
  *     the compose-level default).
  *
+ * Leaf invariant: compose nodes are task-worker leaves — they have no
+ * `subagentExecutor` or `skillExecutor` (see `buildComposeNodeProvider`
+ * in nesting.ts). Executor-backed tools (`agent`, `skill`) that survive
+ * `resolveAgentToolAccess` are stripped here so the node's allowlist never
+ * advertises tools it cannot run. When any such tools are stripped a
+ * one-line notice is appended to the node's system prompt so the model
+ * does not waste rounds attempting to delegate.
+ *
  * @module agent/tools/compose-agent-resolve
  */
 
@@ -23,8 +31,21 @@ import { resolveAgentToolAccess } from '../agents/index.js';
 import type { RegisteredAgent, AgentRegistry } from '../agents/index.js';
 import type { CanUseTool } from '../types.js';
 import type { PermissionResult } from '../types/sdk-types.js';
-import { CHILD_ALLOWED_TOOLS } from './nesting.js';
+import { CHILD_ALLOWED_TOOLS, COMPOSE_LEAF_STRIPPED_TOOLS } from './nesting.js';
 import { isComposeReplaySafe } from '../dag-subagent.recovery.js';
+
+// Defined beside buildComposeNodeProvider (which withholds the executors);
+// re-exported here for callers and tests.
+export { COMPOSE_LEAF_STRIPPED_TOOLS } from './nesting.js';
+
+/**
+ * System-prompt suffix appended to a named compose node's prompt when one or
+ * more executor-backed tools are stripped from its allowlist. Keeps the message
+ * compact and actionable: one sentence, no markdown headers.
+ */
+export const COMPOSE_LEAF_NOTICE =
+  'Note: this node is a compose leaf — the agent and skill tools are not ' +
+  'available; do not attempt to delegate to sub-agents.';
 
 /**
  * Result of resolving a named agent for a compose node.
@@ -48,6 +69,20 @@ export interface ResolvedComposeAgent {
    * normal compose-node surface.
    */
   canUseTool?: CanUseTool;
+  /**
+   * The static allowlist that backs `canUseTool`, as a plain string array.
+   *
+   * Present whenever `canUseTool` is set.  Forwarded to
+   * `buildComposeNodeProvider` so it can intersect the node's
+   * `permissions.allowedTools` (which drives `toolDefs`) with this list —
+   * keeping the advertised schema in sync with the enforced surface.
+   *
+   * Seam for #3579: executor-backed tools (`agent`, `skill`, `compose`) that
+   * the sibling PR strips from compose-leaf allowlists should be removed from
+   * THIS array before it reaches `buildComposeNodeProvider`, not from
+   * `canUseTool` (which is async and cannot be statically inspected).
+   */
+  namedAgentAllowedTools?: string[];
   /**
    * Named agent's `bashReadOnly` contract (e.g. git-investigator). Threaded
    * into the node provider's constructor so the dispatcher blocks mutating
@@ -134,13 +169,55 @@ export function resolveComposeNodeAgent(
   // When allowedTools is undefined (inherit-all definition), skip — no
   // additional restriction beyond the normal compose-node surface.
   if (resolvedAccess.allowedTools !== undefined) {
-    result.canUseTool = buildAllowlistCanUseTool(resolvedAccess.allowedTools);
-    // Contract: this value reflects the DECLARED frontmatter surface. The
-    // node provider (buildComposeNodeProvider) enforces it via canUseTool on
-    // top of CHILD_ALLOWED_TOOLS; compose-executor.ts still pins replaySafe to
-    // false for compose nodes (conservative; unchanged).
-    result.replaySafe = isComposeReplaySafe(resolvedAccess.allowedTools);
+    // Leaf invariant: compose nodes have no subagentExecutor/skillExecutor
+    // (buildComposeNodeProvider), so `agent`/`skill` can never run there even
+    // when the definition declares them (e.g. `Agent(git-investigator)`).
+    // Strip them ONCE here; the single resulting list feeds both the runtime
+    // gate (canUseTool) and the advertised surface (namedAgentAllowedTools ->
+    // permissions.allowedTools -> toolDefs), so they cannot drift (#3579, #3580).
+    const strippedTools: string[] = [];
+    const leafAllowed = resolvedAccess.allowedTools.filter((t) => {
+      if (COMPOSE_LEAF_STRIPPED_TOOLS.has(t)) {
+        strippedTools.push(t);
+        return false;
+      }
+      return true;
+    });
+
+    result.canUseTool = buildAllowlistCanUseTool(leafAllowed);
+    result.namedAgentAllowedTools = leafAllowed;
+    // compose-executor.ts still pins replaySafe to false for compose nodes
+    // (conservative; unchanged).
+    result.replaySafe = isComposeReplaySafe(leafAllowed);
+
+    // The definition body may still tell the model to delegate; a one-line
+    // runtime notice keeps it from spending rounds trying.
+    if (strippedTools.length > 0) {
+      result.systemPrompt =
+        result.systemPrompt !== undefined
+          ? `${result.systemPrompt}\n\n${COMPOSE_LEAF_NOTICE}`
+          : COMPOSE_LEAF_NOTICE;
+    }
   }
 
   return result;
+}
+
+/**
+ * Extract the tool-restriction fields from a resolved agent for spreading into
+ * a `SubagentDAGNode`.  Returns an object with `canUseTool` and
+ * `namedAgentAllowedTools` when the agent has an allowlist, or an empty object
+ * when it is inherit-all.  Extracted so compose-executor.ts can stay under its
+ * 200-line function ceiling without duplicating the conditional spread logic.
+ */
+export function resolvedAgentToolRestriction(
+  agent: ResolvedComposeAgent,
+): Pick<ResolvedComposeAgent, 'canUseTool' | 'namedAgentAllowedTools'> | Record<string, never> {
+  if (agent.canUseTool === undefined) return {};
+  return {
+    canUseTool: agent.canUseTool,
+    ...(agent.namedAgentAllowedTools !== undefined
+      ? { namedAgentAllowedTools: agent.namedAgentAllowedTools }
+      : {}),
+  };
 }

@@ -16,6 +16,13 @@ import type { AgentModelInput } from '../types/model-types.js';
 /** Named-agent restrictions resolved for one node (compose-agent-resolve.ts). */
 export interface ComposeNodeRestrictions {
   canUseTool?: CanUseTool;
+  /**
+   * Static allowlist that backs `canUseTool` (present whenever `canUseTool`
+   * is set). Forwarded to `buildComposeNodeProvider` so it intersects
+   * `permissions.allowedTools` (the `toolDefs` source) with this list, keeping
+   * the advertised schema in sync with the enforced surface.
+   */
+  namedAgentAllowedTools?: string[];
   /** `true` blocks mutating bash; the field is absent when not restricted. */
   readOnlyBash?: true;
 }
@@ -47,7 +54,7 @@ export function resolveComposeNodeProvider(
   openaiBaseUrl: string | undefined,
   restrictions: ComposeNodeRestrictions = {},
 ): { provider: ModelProvider } | Record<string, never> {
-  const { canUseTool, readOnlyBash } = restrictions;
+  const { canUseTool, namedAgentAllowedTools, readOnlyBash } = restrictions;
   const restricted = canUseTool !== undefined || readOnlyBash === true;
   if (workspaceStore === undefined && !restricted) return {};
   return {
@@ -55,6 +62,7 @@ export function resolveComposeNodeProvider(
       openaiBaseUrl,
       readOnlyBash,
       canUseTool,
+      namedAgentAllowedTools,
     }),
   };
 }
