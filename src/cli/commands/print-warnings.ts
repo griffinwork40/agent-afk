@@ -5,6 +5,9 @@
  * Items starting with `[ERROR]` are written to stderr in `palette.error`
  * colour; all others are written to stdout in `palette.warning` colour.
  *
+ * Extracted from the duplicated `[ERROR]` printer + exit pattern that appeared
+ * in `branch.ts` and `worktree.ts` (refs #3268).
+ *
  * @module cli/commands/print-warnings
  */
 
