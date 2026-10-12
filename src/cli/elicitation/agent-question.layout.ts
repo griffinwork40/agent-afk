@@ -28,8 +28,12 @@ import { wrapToWidth } from '../wrap.js';
 export const MIN_OPTION_ROWS = 3;
 /** Rows the overlay needs besides header + options: bottom margin, help row, scroll indicator. */
 const RESERVED_ROWS = 3;
-/** Widest picker row prefix (`  ▶ [x] ` in multi mode) plus a safety column. */
-const OPTION_PREFIX_COLS = 10;
+/** Widest picker row prefix (`  ▶ [x] ` in multi mode) plus a safety column.
+ * Derived from the actual prefix used in {@link optionLabels}: `"  1. "` = 5 cols
+ * at most (up to 4-digit indices), plus the picker's own `  ▶ [x] ` = 8 cols
+ * and one safety column — 10 is the correct minimum for the realistic range. */
+const OPTION_NUM_PREFIX = '  1. ';
+const OPTION_PREFIX_COLS = Math.max(10, displayWidth(OPTION_NUM_PREFIX) + 5);
 
 export interface TerminalSize {
   columns: number;
@@ -67,17 +71,20 @@ function questionRows(request: ElicitationRequest, columns: number): string[] {
 }
 
 /** One-row picker labels; numbered when any had to be shortened (or collide) so they stay unique. */
-function optionLabels(choices: readonly string[], columns: number): { labels: string[]; shortened: boolean } {
+function optionLabels(choices: readonly string[], columns: number): { labels: string[]; numbered: boolean } {
   const flat = choices.map((c) => sanitizeTerminalText(c).replace(/\s*[\r\n]+\s*/g, ' '));
   const max = Math.max(10, columns - OPTION_PREFIX_COLS);
   const shortened = flat.some((l) => displayWidth(l) > max);
   const collide = new Set(flat).size !== flat.length;
-  if (!shortened && !collide) return { labels: flat, shortened: false };
+  if (!shortened && !collide) return { labels: flat, numbered: false };
   const labels = flat.map((l, i) => {
     const num = `${i + 1}. `;
     return num + truncateDisplayWidth(l, max - displayWidth(num));
   });
-  return { labels, shortened };
+  // `numbered` is true whenever we numbered choices — either because a label
+  // was too wide OR because duplicates collided. Either way the operator needs
+  // scrollback to read the original full-text choices.
+  return { labels, numbered: true };
 }
 
 /**
@@ -88,12 +95,12 @@ export function layoutAgentQuestion(request: ElicitationRequest, size: TerminalS
   const columns = Math.max(20, size.columns);
   const banner = palette.warning('  💬 Agent question');
   const qRows = questionRows(request, columns);
-  const { labels, shortened } = optionLabels(request.choices ?? [], columns);
+  const { labels, numbered } = optionLabels(request.choices ?? [], columns);
 
-  // header = banner + question rows + (choices pointer when shortened) + trailing blank.
-  const fullHeaderRows = qRows.length + 2 + (shortened ? 1 : 0);
+  // header = banner + question rows + (choices pointer when numbered) + trailing blank.
+  const fullHeaderRows = qRows.length + 2 + (numbered ? 1 : 0);
   const overflow = fullHeaderRows + RESERVED_ROWS + MIN_OPTION_ROWS > size.rows;
-  const spill = overflow || shortened;
+  const spill = overflow || numbered;
 
   const byLabel = new Map<string, string>();
   labels.forEach((l, i) => {
@@ -111,8 +118,9 @@ export function layoutAgentQuestion(request: ElicitationRequest, size: TerminalS
     const num = `  ${i + 1}. `;
     scrollback.push(...wrapWithPrefix(sanitizeTerminalText(c), columns, num, ' '.repeat(num.length)));
   });
-  // Question fits but a choice was shortened: keep the full question in the
-  // overlay and point at the full choices. Otherwise point at the whole block.
+  // Question fits but choices were numbered (shortened or collided): keep the
+  // full question in the overlay and point at the full choices in scrollback.
+  // Otherwise (overflow) point at the whole block above.
   const header = overflow
     ? [banner, palette.bold('  ? (full question above \u2191)'), '']
     : [banner, ...qRows, palette.dim('    (full choices above \u2191)'), ''];
