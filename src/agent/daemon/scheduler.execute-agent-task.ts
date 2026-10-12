@@ -33,6 +33,11 @@ interface AgentTaskOptions {
   primaryThreadId?: number;
   doneUnverifiedProbe?: (args: { responseText: string; successfulToolNames: readonly string[] }) => boolean;
   onTaskTurnComplete?: (args: TaskTurnCompleteArgs) => void;
+  /**
+   * Resolve a task's `notifyChat` to an allowlisted chat id (#3243 item 2).
+   * Injected by the CLI layer; `src/agent/` must never import `src/cli/`.
+   */
+  resolveNotifyChat?: (notifyChat: number | string | undefined, taskId: string) => number | undefined;
 }
 
 /**
@@ -220,12 +225,23 @@ async function runAgentAttempt(
       }));
       handlerInstalled = true;
     } else {
+      // Resolve the task's notifyChat to a concrete chat id for the rich
+      // Telegram handoff path (#3243 item 2). Falls back to primaryChatId
+      // when notifyChat is unset so the operator's default chat is used.
+      const resolvedChatId = ctx.options.resolveNotifyChat !== undefined
+        ? (ctx.options.resolveNotifyChat(task.notifyChat, task.taskId) ?? ctx.options.primaryChatId)
+        : ctx.options.primaryChatId;
+      const resolvedThreadId = resolvedChatId === ctx.options.primaryChatId
+        ? ctx.options.primaryThreadId
+        : undefined;
       elicitationRouter.install(makeCronElicitationHandler({
         taskId: task.taskId,
         originalCommand: redactInlineSecrets(task.command),
         cronExpression: task.cronExpression,
         ...(ctx.handoffsDir !== undefined ? { handoffsDir: ctx.handoffsDir } : {}),
-        onHandoffWritten: (msg) => { elicitationMessage = msg; },
+        ...(ctx.options.bot !== undefined && resolvedChatId !== undefined
+          ? { bot: ctx.options.bot, chatId: resolvedChatId, ...(resolvedThreadId !== undefined ? { threadId: resolvedThreadId } : {}) }
+          : { onHandoffWritten: (msg) => { elicitationMessage = msg; } }),
       }));
       handlerInstalled = true;
     }

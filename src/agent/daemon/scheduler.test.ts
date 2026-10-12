@@ -783,7 +783,11 @@ describe('CronScheduler — MCP fixture wiring', () => {
         const record = await scheduler.tick('scheduler-mcp-fixture');
 
         expect(record.status).toBe('success');
-        expect(capturedConfig?.isNonInteractive).toBe(true);
+        // #3243 item 2: cron tasks now install an elicitation handler, so
+        // isNonInteractive is false (ask_question is NOT stripped). The
+        // unattended-bash floor is preserved via surface:'daemon' in
+        // isHeadlessSession — headless bash restrictions are unaffected.
+        expect(capturedConfig?.isNonInteractive).toBe(false);
         expect(capturedConfig?.permissionMode).toBe('bypassPermissions');
         expect(spawnedSession?.getSessionMetadata().tools?.sort()).toEqual([
           'mcp__testsrv__add',

@@ -85,10 +85,11 @@ export interface DaemonOptions {
   writePortFile?: boolean;
   /**
    * Telegraf bot instance for rich daemon elicitation. When provided together
-   * with `primaryChatId`, pull-mode tasks use `sendHandoffQuestion` (inline
-   * keyboards, reply-to matching) instead of the plain push fallback. Follows
-   * the `doneUnverifiedProbe` injection pattern — injected from the co-running
-   * caller (e.g. a shared Telegram+daemon process) rather than imported.
+   * with `primaryChatId`, both pull-mode and cron/sessionstart tasks use
+   * `sendHandoffQuestion` (inline keyboards, reply-to matching) instead of
+   * the plain push fallback (#3243 item 2). Follows the `doneUnverifiedProbe`
+   * injection pattern — injected from the co-running caller (e.g. a shared
+   * Telegram+daemon process) rather than imported.
    * Has no effect when absent — fallback is always preserved.
    */
   bot?: Telegraf;
@@ -96,6 +97,13 @@ export interface DaemonOptions {
   primaryChatId?: number;
   /** Optional topic thread ID for supergroup delivery. */
   primaryThreadId?: number;
+  /**
+   * Resolve a task's `notifyChat` (alias or raw id) to an allowlisted numeric
+   * chat id. Injected by the CLI layer so `src/agent/` never imports
+   * `src/cli/`. Used by the cron elicitation handler to route the rich
+   * Telegram handoff question to the correct chat (#3243 item 2).
+   */
+  resolveNotifyChat?: (notifyChat: number | string | undefined, taskId: string) => number | undefined;
   /**
    * Proactive OAuth token refresher (optional).
    *
@@ -161,6 +169,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
     ...(options.bot !== undefined ? { bot: options.bot } : {}),
     ...(options.primaryChatId !== undefined ? { primaryChatId: options.primaryChatId } : {}),
     ...(options.primaryThreadId !== undefined ? { primaryThreadId: options.primaryThreadId } : {}),
+    ...(options.resolveNotifyChat !== undefined ? { resolveNotifyChat: options.resolveNotifyChat } : {}),
   });
 
   if (options.pullPollIntervalMs !== undefined && options.pullPollIntervalMs > 0) {

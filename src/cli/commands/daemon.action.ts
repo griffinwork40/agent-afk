@@ -93,6 +93,17 @@ export interface DaemonActionOptions {
   dumpPrompt?: string | boolean | undefined;
 }
 
+/** Build the onTaskComplete callback for startDaemon. */
+function makeTaskCompleteHandler(verifyDone: boolean): (record: TelemetryRecord, details?: TaskCompletionDetails) => void {
+  return (record, details) => {
+    const target = resolveNotifyChatTarget(details?.notifyChat, record.taskId);
+    void pushIfConfigured(
+      formatTaskCompletion(record, details, verifyDone),
+      { markdown: true, ...(target !== undefined ? { target } : {}) },
+    ).catch(() => undefined);
+  };
+}
+
 /**
  * Body of the `afk daemon` `.action()` callback, extracted as a named function
  * so `registerDaemonCommand` stays under 200 lines.
@@ -227,13 +238,8 @@ export async function runDaemonAction(options: DaemonActionOptions): Promise<voi
           }
         : {}),
       ...daemonTurnHooks(daemonModel, isDoneUnverified),
-      onTaskComplete: (record: TelemetryRecord, details?: TaskCompletionDetails) => {
-        const target = resolveNotifyChatTarget(details?.notifyChat, record.taskId);
-        void pushIfConfigured(
-          formatTaskCompletion(record, details, config.daemon?.verifyDone !== false),
-          { markdown: true, ...(target !== undefined ? { target } : {}) },
-        ).catch(() => undefined);
-      },
+      resolveNotifyChat: resolveNotifyChatTarget,
+      onTaskComplete: makeTaskCompleteHandler(config.daemon?.verifyDone !== false),
     });
 
     bindInFlightSource(() => handle.scheduler.getInFlightTasks());

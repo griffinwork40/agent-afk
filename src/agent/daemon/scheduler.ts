@@ -122,12 +122,12 @@ export interface SchedulerOptions {
    */
   onTaskTurnComplete?: (args: TaskTurnCompleteArgs) => void;
   /**
-   * Telegraf bot instance for rich elicitation in pull-mode tasks. When
-   * provided together with `primaryChatId`, daemon ask_question calls use
+   * Telegraf bot instance for rich elicitation in daemon tasks. When provided
+   * together with `primaryChatId`, daemon ask_question calls use
    * `sendHandoffQuestion` (inline keyboards, reply-to matching) instead of
    * falling back to the plain `pushIfConfigured` text notification path.
+   * Applies to both pull tasks and cron/sessionstart tasks (#3243 item 2).
    * Has no effect when absent — fallback is always preserved.
-   * Has no effect on cron-triggered tasks, which use the plain push path.
    */
   bot?: Telegraf;
   /** Primary Telegram chat ID for handoff question delivery. */
