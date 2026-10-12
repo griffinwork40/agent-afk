@@ -153,8 +153,8 @@ export function getTempRoots(): readonly string[] {
 }
 
 /** Boundary-safe containment on realpath'd values (`<tmp>-evil/x` is NOT inside). */
-function isInsideTempRoot(p: string): boolean {
-  return getTempRoots().some((root) => p === root || p.startsWith(root + path.sep));
+function isInsideTempRoot(p: string, roots: readonly string[]): boolean {
+  return roots.some((root) => p === root || p.startsWith(root + path.sep));
 }
 
 function errCode(err: unknown): string | undefined {
@@ -250,9 +250,12 @@ function afkStateRootsResolved(): readonly string[] | null {
  * These must not be silently writable via a temp-root carve-out.
  */
 function isSafeTempWrite(abs: string, resolved: string): boolean {
-  if (!isInsideTempRoot(resolved)) return false;
+  // Invariant: re-validate cached roots once per write classification, never once
+  // per process. Both containment checks use the same fail-closed snapshot.
+  const tempRoots = getTempRoots();
+  if (!isInsideTempRoot(resolved, tempRoots)) return false;
   const target = finalWriteTarget(abs);
-  if (!isInsideTempRoot(target)) return false;
+  if (!isInsideTempRoot(target, tempRoots)) return false;
   if (hardBlock(target) !== undefined) return false;
   // AFK state under a temp root must not become writable through the carve-out.
   // Keep the original exact comparison additive; the case-aware check only
