@@ -6,14 +6,23 @@ interface BraceGroup {
   scopeStart: number;
 }
 
+// Contract: MAX_BRACE_DEPTH caps how deeply nested brace groups may be before
+// braceGroups() rejects the pattern. Without this cap, a pattern like
+// {a,{b,{c,...}}} of depth D calls braceGroups() O(D) times inside
+// expandGlobBraces(), each O(n), producing O(n*D) = O(n^2) total work.
+// D <= 16 keeps worst-case work linear for any realistic glob pattern.
+const MAX_BRACE_DEPTH = 16;
+
 /** Unbalanced braces are literal, including otherwise valid inner groups. */
 function braceGroups(pattern: string): BraceGroup[] {
   const stack: Array<{ start: number; commas: number[] }> = [];
   const groups: BraceGroup[] = [];
   for (let i = 0; i < pattern.length; i++) {
     const ch = pattern.charAt(i);
-    if (ch === '{') stack.push({ start: i, commas: [] });
-    else if (ch === ',') stack.at(-1)?.commas.push(i);
+    if (ch === '{') {
+      if (stack.length >= MAX_BRACE_DEPTH) return [];
+      stack.push({ start: i, commas: [] });
+    } else if (ch === ',') stack.at(-1)?.commas.push(i);
     else if (ch === '}') {
       const group = stack.pop();
       if (!group) return [];
@@ -50,18 +59,25 @@ export function expandGlobBraces(pattern: string): string[] {
       continue;
     }
     const boundaries = [group.start, ...group.commas, group.end];
-    if (pending.length + expanded.length + boundaries.length - 1 > 256) {
+    // Contract: >= 256 (not > 256) so the cap is inclusive: exactly 256
+    // alternatives are forbidden, matching the error message wording.
+    if (pending.length + expanded.length + boundaries.length - 1 >= 256) {
       throw new Error('Brace expansion exceeds limit (256 alternatives / 65536 characters); simplify the glob pattern');
     }
     const arms = boundaries.slice(0, -1).map((start, i) =>
       current.slice(0, group.start) + current.slice(start + 1, boundaries[i + 1]) + current.slice(group.end + 1),
     );
     totalSize += arms.reduce((sum, arm) => sum + arm.length, 0);
-    if (totalSize > 65_536) {
+    // Contract: >= 65_536 (not > 65_536) so the cap is inclusive: exactly
+    // 65536 aggregate characters are forbidden, matching the error message.
+    if (totalSize >= 65_536) {
       throw new Error('Brace expansion exceeds limit (256 alternatives / 65536 characters); simplify the glob pattern');
     }
     // Reverse because pending is a stack: preserve the caller's arm order.
     pending.push(...arms.reverse());
   }
+  // Contract: Set deduplication removes identical alternatives produced by
+  // overlapping patterns (e.g. {a,a} → ['a']) before returning to callers.
+  // Spread preserves insertion order (first-seen wins).
   return [...new Set(expanded)];
 }

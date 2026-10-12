@@ -28,12 +28,35 @@ describe('bounded brace expansion', () => {
   });
 
   it('rejects excessive fanout without silently truncating', () => {
-    expect(expandGlobBraces('{a,b}'.repeat(8))).toHaveLength(256);
+    // 2^7 = 128 alternatives: below the 256 cap, must succeed.
+    expect(expandGlobBraces('{a,b}'.repeat(7))).toHaveLength(128);
+    // 2^8 = 256 alternatives: exactly at the cap (>= 256), must throw.
+    expect(() => expandGlobBraces('{a,b}'.repeat(8))).toThrow('Brace expansion exceeds limit');
     expect(() => expandGlobBraces('{a,b}'.repeat(9))).toThrow('Brace expansion exceeds limit');
   });
 
   it('bounds aggregate expansion size', () => {
     expect(() => expandGlobBraces('x'.repeat(40_000) + '{a,b}')).toThrow('Brace expansion exceeds limit');
+  });
+
+  it.each([
+    // Empty arms are valid: the arm expands to an empty string segment.
+    // Order matches arm position: first arm, second arm (empty), third arm.
+    ['{a,,b}', ['a', '', 'b']],
+    ['{,a}',   ['', 'a']],
+    ['*.{ts,,tsx}', ['*.ts', '*.', '*.tsx']],
+  ])('handles empty brace arms: %s', (pattern, expected) => {
+    expect(expandGlobBraces(pattern as string)).toEqual(expected);
+  });
+
+  it('treats over-deep nesting (>16 levels) as unbalanced literal', () => {
+    // Build a pattern with 17 nested opening braces (depth 17 > MAX_BRACE_DEPTH=16).
+    // When the 17th '{' is encountered, stack.length is already 16, so
+    // braceGroups() returns [] and expandGlobBraces treats the whole string as
+    // a literal — no expansion.
+    let deep = 'b';
+    for (let i = 0; i < 17; i++) deep = '{a,' + deep + '}';
+    expect(expandGlobBraces(deep)).toEqual([deep]);
   });
 });
 
