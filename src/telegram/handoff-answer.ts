@@ -259,7 +259,16 @@ export function registerHandoffAnswerHandlers(bot: Telegraf): void {
       return;
     }
 
-    const won = await answerHandoff(taskId, answer, 'telegram').catch(() => false);
+    // Build responder identity from the Telegram callback context.
+    // Format: "<userId>" or "<userId>:<username>" when available.
+    const from = 'callbackQuery' in ctx && typeof ctx.callbackQuery === 'object' && ctx.callbackQuery !== null
+      ? (ctx.callbackQuery as { from?: { id?: number; username?: string } }).from
+      : undefined;
+    const responderIdentity = from?.id !== undefined
+      ? (from.username ? `${from.id}:${from.username}` : String(from.id))
+      : undefined;
+
+    const won = await answerHandoff(taskId, answer, 'telegram', undefined, responderIdentity).catch(() => false);
     if (won) {
       // Edit the original message to show visual closure.
       const answerLabel = qType === 'confirm'
@@ -283,6 +292,7 @@ export function registerHandoffAnswerHandlers(bot: Telegraf): void {
  * @param replyToMessageId - The message_id of the message being replied to.
  * @param text - The operator's reply text.
  * @param handoffsDir - Override for the handoffs directory (testing).
+ * @param fromUser - Optional Telegram sender identity for provenance recording.
  * @returns true if the reply was matched and consumed as a handoff answer.
  */
 export async function matchReplyToHandoff(
@@ -291,6 +301,7 @@ export async function matchReplyToHandoff(
   replyToMessageId: number,
   text: string,
   handoffsDir?: string,
+  fromUser?: { id: number; username?: string },
 ): Promise<boolean> {
   const taskId = pendingTextHandoffs.get(replyToMessageId);
   if (!taskId) return false;
@@ -367,7 +378,10 @@ export async function matchReplyToHandoff(
     answer = { value: trimmed };
   }
 
-  const won = await answerHandoff(taskId, answer, 'telegram', handoffsDir).catch(() => false);
+  const responderIdentity = fromUser !== undefined
+    ? (fromUser.username ? `${fromUser.id}:${fromUser.username}` : String(fromUser.id))
+    : undefined;
+  const won = await answerHandoff(taskId, answer, 'telegram', handoffsDir, responderIdentity).catch(() => false);
   pendingTextHandoffs.delete(replyToMessageId);
 
   if (won) {

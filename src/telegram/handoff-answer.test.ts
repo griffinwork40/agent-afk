@@ -265,6 +265,65 @@ describe('matchReplyToHandoff', () => {
     expect(still.status).toBe('pending');
   });
 
+  it('records responderIdentity with userId and username when fromUser is provided', async () => {
+    const bot = mockBot();
+    const record = makeRecord({
+      question: { message: 'Confirm?', type: 'text' },
+    });
+    await writeHandoff(record, handoffsDir);
+    await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
+
+    const consumed = await matchReplyToHandoff(
+      bot, 12345, 42, 'sure',
+      handoffsDir,
+      { id: 111222333, username: 'bob' },
+    );
+    expect(consumed).toBe(true);
+
+    const updated = JSON.parse(
+      await readFile(join(handoffsDir, `${record.taskId}.json`), 'utf-8'),
+    ) as HandoffRecord;
+    expect(updated.responderIdentity).toBe('111222333:bob');
+    expect(updated.answerSource).toBe('telegram');
+  });
+
+  it('records responderIdentity with userId only when username is absent', async () => {
+    const bot = mockBot();
+    const record = makeRecord({
+      question: { message: 'Proceed?', type: 'text' },
+    });
+    await writeHandoff(record, handoffsDir);
+    await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
+
+    const consumed = await matchReplyToHandoff(
+      bot, 12345, 42, 'yes',
+      handoffsDir,
+      { id: 999888777 },
+    );
+    expect(consumed).toBe(true);
+
+    const updated = JSON.parse(
+      await readFile(join(handoffsDir, `${record.taskId}.json`), 'utf-8'),
+    ) as HandoffRecord;
+    expect(updated.responderIdentity).toBe('999888777');
+  });
+
+  it('leaves responderIdentity undefined when fromUser is not provided', async () => {
+    const bot = mockBot();
+    const record = makeRecord({
+      question: { message: 'Skip me?', type: 'text' },
+    });
+    await writeHandoff(record, handoffsDir);
+    await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
+
+    await matchReplyToHandoff(bot, 12345, 42, 'nope', handoffsDir);
+
+    const updated = JSON.parse(
+      await readFile(join(handoffsDir, `${record.taskId}.json`), 'utf-8'),
+    ) as HandoffRecord;
+    expect(updated.responderIdentity).toBeUndefined();
+  });
+
   afterEach(async () => {
     if (handoffsDir) await rm(handoffsDir, { recursive: true, force: true }).catch(() => {});
   });

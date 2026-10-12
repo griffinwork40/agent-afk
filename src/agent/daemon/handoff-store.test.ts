@@ -318,6 +318,39 @@ describe('updateHandoffAnswer', () => {
     expect(final?.status).toBe('answered');
     expect(final?.answeredAt).toBeDefined();
   });
+
+  it('stores responderIdentity when supplied', async () => {
+    const record = makeRecord({ taskId: 'q-responder-id' });
+    await writeHandoff(record, testDir);
+
+    const result = await updateHandoffAnswer(record.taskId, 'yes', 'telegram', testDir, '123456789:alice');
+    expect(result.won).toBe(true);
+
+    const read = await readHandoff(record.taskId, testDir);
+    expect(read?.responderIdentity).toBe('123456789:alice');
+    expect(read?.answerSource).toBe('telegram');
+  });
+
+  it('leaves responderIdentity undefined when not supplied', async () => {
+    const record = makeRecord({ taskId: 'q-responder-absent' });
+    await writeHandoff(record, testDir);
+
+    await updateHandoffAnswer(record.taskId, 'done', 'repl', testDir);
+
+    const read = await readHandoff(record.taskId, testDir);
+    expect(read?.responderIdentity).toBeUndefined();
+    expect(read?.answerSource).toBe('repl');
+  });
+
+  it('stores userId-only identity when username is absent', async () => {
+    const record = makeRecord({ taskId: 'q-responder-no-uname' });
+    await writeHandoff(record, testDir);
+
+    await updateHandoffAnswer(record.taskId, 'ok', 'telegram', testDir, '987654321');
+
+    const read = await readHandoff(record.taskId, testDir);
+    expect(read?.responderIdentity).toBe('987654321');
+  });
 });
 
 // ---------------------------------------------------------------------------

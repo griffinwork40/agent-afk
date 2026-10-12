@@ -327,11 +327,14 @@ const MAX_ANSWER_BYTES = 64 * 1024; // 64 KB
  * Called by Telegram reply handlers (or any future surface) when the operator
  * provides an answer to a pending handoff question.
  *
- * @param taskId - The daemon task ID whose handoff to answer.
- * @param answer - The human's response value (type-narrowing to known shapes
+ * @param taskId             - The daemon task ID whose handoff to answer.
+ * @param answer             - The human's response value (type-narrowing to known shapes
  *   is deferred to PR 3 when the answer is consumed by the session).
- * @param source - Which surface provided the answer ('telegram' | 'web' | 'repl').
- * @param handoffsDir - Override for testing.
+ * @param source             - Which surface provided the answer ('telegram' | 'web' | 'repl').
+ * @param handoffsDir        - Override for testing.
+ * @param responderIdentity  - Optional opaque identity token for the responder.
+ *   Surface-specific format: Telegram uses `"<userId>"` or `"<userId>:<username>"`;
+ *   web uses `"web:<remoteIp>"`; REPL omits (passes undefined).
  * @returns true if this caller won the first-writer CAS, false if another
  *   surface already answered.
  * @throws if the serialized answer exceeds MAX_ANSWER_BYTES.
@@ -341,6 +344,7 @@ export async function answerHandoff(
   answer: unknown,
   source: string,
   handoffsDir?: string,
+  responderIdentity?: string,
 ): Promise<boolean> {
   const serialized = JSON.stringify(answer);
   if (Buffer.byteLength(serialized, 'utf-8') > MAX_ANSWER_BYTES) {
@@ -348,7 +352,13 @@ export async function answerHandoff(
       `[handoff-wiring] answer for task ${taskId} exceeds ${MAX_ANSWER_BYTES} bytes — rejected`,
     );
   }
-  const result = await updateHandoffAnswer(taskId, answer, source, handoffsDir);
+  const result = await updateHandoffAnswer(
+    taskId,
+    answer,
+    source,
+    handoffsDir,
+    responderIdentity,
+  );
   return result.won;
 }
 
