@@ -5,7 +5,7 @@ import type { TraceSink } from '../../../trace/index.js';
 import type { ProviderEvent } from '../../../provider.js';
 import { extractRawToolInput } from '../../../facets/raw-input.js';
 import type { ToolDispatcher } from '../../anthropic-direct/tool-dispatcher.js';
-import type { ToolResult } from '../../anthropic-direct/types.js';
+import type { ToolCall, ToolResult } from '../../anthropic-direct/types.js';
 import { DENIAL_BREAKER_FAILURE_CLASS } from '../../../tools/denial-circuit-breaker.js';
 import { summarizeToolInput } from '../../shared/tool-input-summary.js';
 import { buildToolCallStartedPayload } from '../../shared/tool-call-trace.js';
@@ -22,6 +22,7 @@ import {
   toolResultsToMessages,
 } from '../loop.js';
 import { errorMessage } from '../../../../utils/errors.js';
+import { VITALS_PREFIX } from '../../shared/vitals.js';
 
 export interface DispatchAndAppendInput {
   state: StreamState;
@@ -38,6 +39,8 @@ export interface DispatchAndAppendInput {
    * (a child resumes the parent's sessionId). Absent for a top-level session.
    * See issue #612. */
   subagentId?: string | undefined;
+  /** Per-round `[vitals]` note (shared/vitals.ts), appended to the last tool message. */
+  vitalsNote?: string | undefined;
 }
 
 /**
@@ -61,6 +64,7 @@ export async function* dispatchAndAppendToolCalls({
   priorTurns,
   sessionId,
   subagentId,
+  vitalsNote,
 }: DispatchAndAppendInput): AsyncGenerator<ProviderEvent, ToolResult | undefined> {
   if (!toolDispatcher) {
     // Shouldn't reach here — runIteration won't return needsToolDispatch=true
@@ -209,6 +213,28 @@ export async function* dispatchAndAppendToolCalls({
     });
   }
 
+  appendRoundHistory(priorTurns, state, accumulated, results, vision, vitalsNote);
+
+  // Denial circuit breaker (#546): if the dispatcher tripped this round, hand
+  // the tripping result back so the caller can surface a loud `error` event and
+  // stop — matching anthropic-direct/loop.ts. History is already appended above.
+  return results.find((r) => r.result.failureClass === DENIAL_BREAKER_FAILURE_CLASS)?.result;
+}
+
+/**
+ * Append the assistant{tool_calls} turn, the tool messages (the last one
+ * carrying the vitals note, if any), the authenticated queued-user carriers,
+ * and the optional image follow-up to running history, in wire order.
+ * Extracted so `dispatchAndAppendToolCalls` stays under the 200-line ceiling.
+ */
+function appendRoundHistory(
+  priorTurns: OpenAIMessage[],
+  state: StreamState,
+  accumulated: ReturnType<typeof finalizedToolCalls>,
+  results: readonly { call: ToolCall; result: ToolResult }[],
+  vision: boolean,
+  vitalsNote: string | undefined,
+): void {
   // Append the assistant turn (with tool_calls) and the tool-result
   // messages to running history so the next iteration's request includes
   // them. OpenAI is strict about this order: assistant{tool_calls} must
@@ -226,7 +252,29 @@ export async function* dispatchAndAppendToolCalls({
   priorTurns.push(
     assistantMessageWithToolCalls(state.assistantText, accumulated, state.reasoningText, state.reasoningField) as unknown as OpenAIMessage,
   );
-  for (const m of toolResultsToMessages(results)) {
+  const toolMessages = toolResultsToMessages(results);
+  // Security: strip any lines in tool output that start with the vitals prefix
+  // before we append the real harness note. A tool could otherwise print a
+  // lookalike `[vitals] …` line and have the model treat it as an authoritative
+  // harness reading (time, context fill, usage budget). The stripping is applied
+  // to every tool message because any of them could carry spoofed lines, and the
+  // real note is always appended by the harness below — never by a tool. The
+  // check is line-based so partial matches inside longer text are unaffected.
+  for (const m of toolMessages) {
+    m.content = stripVitalsSpoofLines(m.content);
+  }
+  // Invariant: the per-round vitals note (shared/vitals.ts) is appended to the
+  // LAST tool message of the round, NOT pushed as its own `role:'user'` message
+  // as on anthropic-direct. On this wire every `role:'user'` message is a
+  // compaction boundary (openai-compatible/compact.ts isFreshUserTurn) and a
+  // /rewind target (rewind-conversation.ts isGenuineUserTurn), so a per-round
+  // user message would make compaction keep N rounds instead of N human turns
+  // and list every stamp as a rewindable turn. The note carries no operator
+  // authority (unlike queued_user_message), so riding in tool content is safe.
+  // Mutated in place before the push so tagResultFlags identity is preserved.
+  const lastTool = toolMessages.at(-1);
+  if (vitalsNote && lastTool !== undefined) lastTool.content = `${lastTool.content}\n\n${vitalsNote}`;
+  for (const m of toolMessages) {
     priorTurns.push(m as unknown as OpenAIMessage);
   }
   // Provider-agnostic authority boundary: only the structural harness carrier
@@ -243,9 +291,26 @@ export async function* dispatchAndAppendToolCalls({
   // model lacks vision or no result carried an image. See issue #127.
   const imageFollowup = toolImageFollowupMessage(results, { vision });
   if (imageFollowup) priorTurns.push(imageFollowup);
+}
 
-  // Denial circuit breaker (#546): if the dispatcher tripped this round, hand
-  // the tripping result back so the caller can surface a loud `error` event and
-  // stop — matching anthropic-direct/loop.ts. History is already appended above.
-  return results.find((r) => r.result.failureClass === DENIAL_BREAKER_FAILURE_CLASS)?.result;
+/**
+ * Remove any lines from tool output that begin with the `[vitals]` prefix.
+ *
+ * On the openai-compatible path the real harness note rides as a string suffix
+ * on the last `role:'tool'` message. A tool that emits a lookalike line (e.g.
+ * `echo '[vitals] context 99%'`) would appear indistinguishable from the
+ * harness reading. Stripping those lines before the harness note is appended
+ * closes the spoof surface: the model only ever sees the note the harness
+ * writes, never one a tool invented.
+ *
+ * Lines that merely CONTAIN the prefix somewhere in the middle are left alone
+ * — the boundary is `line.startsWith(VITALS_PREFIX)` — so prose that happens
+ * to mention "[vitals]" as part of a longer sentence is not corrupted.
+ */
+export function stripVitalsSpoofLines(content: string): string {
+  const prefix = VITALS_PREFIX + ' ';
+  const lines = content.split('\n');
+  const filtered = lines.filter((line) => !line.startsWith(prefix) && line !== VITALS_PREFIX);
+  // Preserve the original string reference when nothing was stripped (fast path).
+  return filtered.length === lines.length ? content : filtered.join('\n');
 }

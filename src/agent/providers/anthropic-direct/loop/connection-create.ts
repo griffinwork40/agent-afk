@@ -4,6 +4,8 @@ import { jitterBackoff } from '../overload-pause.js';
 import { OVERLOAD_BASE_DELAY_MS, OVERLOAD_MAX_RETRIES, isTransientServerError } from './retry-budget.js';
 import { CONNECTION_ERROR_BASE_DELAY_MS, CONNECTION_ERROR_MAX_RETRIES, isConnectionPhaseNetworkError, isConnectionTimeoutError, isRetryableConnectionStatus } from './connection-error.js';
 import { ConnectionRetryBudget, connectionFailureMetadata } from '../../shared/connection-retry-budget.js';
+import { withoutSdkThinkingDeprecationWarning } from './sdk-thinking-warning.js';
+import { ensureError } from '../../../../utils/errors.js';
 
 export class ConnectionOverloadExhaustedError extends Error {
   constructor() { super('Connection-phase overload budget exhausted'); this.name = 'ConnectionOverloadExhaustedError'; }
@@ -44,12 +46,14 @@ export async function createWithRetry(
     try {
       // Invariant: tools execute client-side only after consumeRoundStream completes
       // (loop.ts -> runToolRound). Reopening before receiving the stream cannot replay tool side effects.
-      const stream = await Promise.resolve(client.messages.create(params, { headers, signal: requestSignal })) as AsyncIterable<unknown>;
+      const stream = await Promise.resolve(
+        withoutSdkThinkingDeprecationWarning(() => client.messages.create(params, { headers, signal: requestSignal })),
+      ) as AsyncIterable<unknown>;
       if (connectionAttempts) notify({ phase: 'connection_recovered', metadata: { attempts: connectionAttempts + 1, outageMs: budget.elapsedMs() } });
       return stream;
     } catch (err) {
       if (requestSignal.aborted || turnSignal.aborted) throw err;
-      const e = err instanceof Error ? err : new Error(String(err));
+      const e = ensureError(err);
       if (isTransientServerError(e)) {
         lastConnectionError = undefined;
         if (overloadAttempts >= OVERLOAD_MAX_RETRIES) throw new ConnectionOverloadExhaustedError();

@@ -323,6 +323,65 @@ describe('withTransientRetry — retry-after ceiling', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// isTransientOauthOrg403 unit tests (#3467)
+// Moved from daemon/task-retry.test.ts — lives beside the predicate it tests.
+// ---------------------------------------------------------------------------
+
+import { isTransientOauthOrg403 } from './transient-retry.js';
+
+/** Build a 403 error matching the exact shape the Anthropic SDK surfaces. */
+function makeOauthOrg403(): Error {
+  return Object.assign(new Error('OAuth authentication is currently not allowed for this organization.'), {
+    status: 403,
+    error: {
+      type: 'permission_error',
+      message: 'OAuth authentication is currently not allowed for this organization.',
+      details: { error_code: 'oauth_not_allowed_for_organization' },
+    },
+  });
+}
+
+describe('isTransientOauthOrg403', () => {
+  it('matches a 403 with the exact oauth_not_allowed_for_organization error_code', () => {
+    expect(isTransientOauthOrg403(makeOauthOrg403())).toBe(true);
+  });
+
+  it('does NOT match a plain 403 with no error body', () => {
+    expect(isTransientOauthOrg403(makeStatusError(403))).toBe(false);
+  });
+
+  it('does NOT match a 403 with a different error_code', () => {
+    const err = Object.assign(new Error('permission denied'), {
+      status: 403,
+      error: { type: 'permission_error', details: { error_code: 'insufficient_permissions' } },
+    });
+    expect(isTransientOauthOrg403(err)).toBe(false);
+  });
+
+  it('does NOT match a 403 with no details field', () => {
+    const err = Object.assign(new Error('forbidden'), {
+      status: 403,
+      error: { type: 'permission_error' },
+    });
+    expect(isTransientOauthOrg403(err)).toBe(false);
+  });
+
+  it('does NOT match a non-403 status even with the matching error_code', () => {
+    const err = Object.assign(new Error('wrong status'), {
+      status: 401,
+      error: { type: 'permission_error', details: { error_code: 'oauth_not_allowed_for_organization' } },
+    });
+    expect(isTransientOauthOrg403(err)).toBe(false);
+  });
+
+  it('does NOT match null or non-object values', () => {
+    expect(isTransientOauthOrg403(null)).toBe(false);
+    expect(isTransientOauthOrg403('forbidden')).toBe(false);
+    expect(isTransientOauthOrg403(undefined)).toBe(false);
+  });
+});
+
 describe('withTransientRetry — shouldStop / signal abort', () => {
   it('stops (no new attempt) when shouldStop flips to true during the wait', async () => {
     const err = makeStatusError(500);

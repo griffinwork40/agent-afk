@@ -40,6 +40,7 @@ import {
 import { escapeHtml } from './formatter.js';
 import { escapeRegExp } from '../utils/regexp.js';
 import { errorMessage } from '../utils/errors.js';
+import { truncateTelegramLabel } from '../utils/truncate-telegram-label.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -90,12 +91,8 @@ function truncateQuestion(text: string): string {
     : `${text.slice(0, MAX_QUESTION_CHARS)}...(truncated)`;
 }
 
-/** Truncate a button label for display (Telegram allows ~200 bytes for labels; 64-byte cap here is conservative). */
-function truncateLabel(label: string, maxBytes = 64): string {
-  if (Buffer.byteLength(label, 'utf8') <= maxBytes) return label;
-  const buf = Buffer.from(label, 'utf8').subarray(0, maxBytes);
-  return new TextDecoder('utf-8', { fatal: false }).decode(buf).replace(/\uFFFD$/, '');
-}
+/** Alias for the shared helper (kept for local call-site readability). */
+const truncateLabel = truncateTelegramLabel;
 
 /**
  * Send a handoff question as a rich Telegram message.

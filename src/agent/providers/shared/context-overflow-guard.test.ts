@@ -15,6 +15,12 @@
 import { describe, it, expect } from 'vitest';
 import { guardContextOverflow, safeAutoCompactThresholdFor, resolveAutoCompactThreshold } from './auto-compact.js';
 
+// The narrow-headroom fixture: Claude Haiku 4.5 (200k window, 64k output
+// ceiling), addressed by raw wire id. The `haiku` alias moved to Haiku 5.5
+// (1M window, 128k ceiling, 200k compaction budget), which no longer exercises
+// the safe-threshold cap, so these cases pin the model they were written for.
+const HAIKU_45 = 'claude-haiku-4-5-20251001';
+
 // ─── guardContextOverflow ──────────────────────────────────────────────────
 
 describe('guardContextOverflow', () => {
@@ -125,13 +131,13 @@ describe('safeAutoCompactThresholdFor', () => {
   it('returns a threshold strictly below the overflow point for haiku', () => {
     // Haiku: 200k window, 64k ceiling → overflow at 136k/200k = 0.68.
     // Safe threshold must be < 0.68 so compaction fires before overflow.
-    const t = safeAutoCompactThresholdFor('haiku');
+    const t = safeAutoCompactThresholdFor(HAIKU_45);
     expect(t).toBeLessThan(0.68);
     expect(t).toBeGreaterThan(0);
   });
 
   it('returns a value in (0, 1) for known models', () => {
-    for (const model of ['haiku', 'claude-sonnet-5', 'claude-opus-5', 'gpt-4o']) {
+    for (const model of [HAIKU_45, 'claude-sonnet-5', 'claude-opus-5', 'gpt-4o']) {
       const t = safeAutoCompactThresholdFor(model);
       expect(t).toBeGreaterThan(0);
       expect(t).toBeLessThan(1);
@@ -143,7 +149,7 @@ describe('safeAutoCompactThresholdFor', () => {
     // 1M window, 128k ceiling → (872k/1M) - slack ≈ 0.832.
     // haiku: 200k window, 64k ceiling → (136k/200k) - slack ≈ 0.64.
     // So sonnet_1m safe threshold > haiku safe threshold.
-    const haikuT = safeAutoCompactThresholdFor('haiku');
+    const haikuT = safeAutoCompactThresholdFor(HAIKU_45);
     const sonnetT = safeAutoCompactThresholdFor('sonnet_1m');
     expect(sonnetT).toBeGreaterThan(haikuT);
   });
@@ -160,7 +166,7 @@ describe('safeAutoCompactThresholdFor', () => {
     // We test haiku explicitly.
     const window = 200_000;
     const ceiling = 64_000;
-    const t = safeAutoCompactThresholdFor('haiku');
+    const t = safeAutoCompactThresholdFor(HAIKU_45);
     const wouldCompactAt = t * window;
     // Compaction trigger + output ceiling must not exceed the window.
     expect(wouldCompactAt + ceiling).toBeLessThanOrEqual(window);
@@ -171,7 +177,7 @@ describe('safeAutoCompactThresholdFor', () => {
 
 describe('resolveAutoCompactThreshold — model-aware safe cap (#962)', () => {
   it('caps the default 0.9 threshold for haiku below the overflow point', () => {
-    const t = resolveAutoCompactThreshold(true, 'haiku');
+    const t = resolveAutoCompactThreshold(true, HAIKU_45);
     // Safe threshold for haiku is ~0.64; must be below 0.68 (overflow point).
     expect(t).not.toBeUndefined();
     expect(t!).toBeLessThan(0.68);
@@ -179,25 +185,25 @@ describe('resolveAutoCompactThreshold — model-aware safe cap (#962)', () => {
 
   it('does not raise a user-configured lower threshold', () => {
     // A user who explicitly sets 0.5 should keep 0.5, even if safe cap is 0.64.
-    const t = resolveAutoCompactThreshold({ threshold: 0.5 }, 'haiku');
+    const t = resolveAutoCompactThreshold({ threshold: 0.5 }, HAIKU_45);
     expect(t).toBe(0.5);
   });
 
   it('caps a user-configured threshold that is above the safe boundary', () => {
     // A user who sets 0.85 on haiku (> safe cap of ~0.64) gets the safe cap.
-    const t = resolveAutoCompactThreshold({ threshold: 0.85 }, 'haiku');
+    const t = resolveAutoCompactThreshold({ threshold: 0.85 }, HAIKU_45);
     expect(t).not.toBeUndefined();
     expect(t!).toBeLessThan(0.68); // must be at or below safe boundary
   });
 
   it('returns undefined when autoCompact is false (no model)', () => {
     expect(resolveAutoCompactThreshold(false)).toBeUndefined();
-    expect(resolveAutoCompactThreshold(false, 'haiku')).toBeUndefined();
+    expect(resolveAutoCompactThreshold(false, HAIKU_45)).toBeUndefined();
   });
 
   it('returns undefined when autoCompact is undefined', () => {
     expect(resolveAutoCompactThreshold(undefined)).toBeUndefined();
-    expect(resolveAutoCompactThreshold(undefined, 'haiku')).toBeUndefined();
+    expect(resolveAutoCompactThreshold(undefined, HAIKU_45)).toBeUndefined();
   });
 
   it('does NOT cap base sonnet (has a budget-based compaction limit, already safe)', () => {

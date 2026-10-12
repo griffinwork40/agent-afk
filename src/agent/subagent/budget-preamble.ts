@@ -25,6 +25,7 @@
  */
 
 import type { AgentConfig } from '../types/config-types.js';
+import { appendSystemPromptBlock } from './append-system-prompt-block.js';
 
 /**
  * Render the budget preamble for a given round cap.
@@ -88,25 +89,5 @@ export function injectToolBudgetPreamble(config: AgentConfig): AgentConfig {
   }
 
   const block = renderBudgetPreamble(Math.floor(maxRounds));
-  const sp = config.systemPrompt;
-
-  if (typeof sp === 'string') {
-    return sp.length > 0
-      ? { ...config, systemPrompt: `${sp}\n\n${block}` }
-      : { ...config, systemPrompt: block };
-  }
-
-  if (sp && typeof sp === 'object' && 'type' in sp && sp.type === 'preset') {
-    const existingAppend = sp.append ?? '';
-    return {
-      ...config,
-      systemPrompt: {
-        ...sp,
-        append: existingAppend.length > 0 ? `${existingAppend}\n\n${block}` : block,
-      },
-    };
-  }
-
-  // No system prompt set — the preamble becomes the system prompt.
-  return { ...config, systemPrompt: block };
+  return appendSystemPromptBlock(config, block);
 }

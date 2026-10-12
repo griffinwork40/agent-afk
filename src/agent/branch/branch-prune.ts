@@ -11,6 +11,8 @@
  * @module agent/branch/branch-prune
  */
 
+import { errorMessage } from '../../utils/errors.js';
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -226,8 +228,7 @@ export async function runBranchPrune(options: BranchPruneOptions): Promise<Branc
   try {
     remoteBranches = await listRemoteBranches(execFn, remote, branchPrefix, cwd);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    result.warnings.push(`[ERROR] Failed to list remote branches from ${remote}: ${msg}`);
+    result.warnings.push(`[ERROR] Failed to list remote branches from ${remote}: ${errorMessage(err)}`);
     return result;
   }
 
@@ -289,7 +290,7 @@ export async function runBranchPrune(options: BranchPruneOptions): Promise<Branc
         await execFn('git', ['push', remote, '--delete', candidate.shortName], { cwd });
         result.deleted.push(candidate.shortName);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         result.warnings.push(`[ERROR] Failed to delete ${candidate.shortName}: ${msg}`);
         // Update the verdict so the output is accurate
         candidate.verdict = 'error';

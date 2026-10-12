@@ -116,6 +116,43 @@ describe('SessionToolDispatcher', () => {
     });
   });
 
+  describe('isNonInteractive injection (#2302, PR #2312 review)', () => {
+    // The explicit headless signal: grant-manager presence cannot carry it,
+    // because production providers wire themselves on every surface.
+    const fakeGM = {
+      getGrants: () => ({ resolveBase: undefined, readRoots: [], writeRoots: [] }),
+      addReadRoot: () => {},
+      addWriteRoot: () => {},
+      revokeRoot: () => {},
+    };
+
+    async function capturedNonInteractive(
+      overrides: Partial<ConstructorParameters<typeof SessionToolDispatcher>[0]>,
+    ): Promise<unknown> {
+      let captured: unknown = 'unset';
+      const registry = createHookRegistry();
+      registry.register('PreToolUse', (ctx) => {
+        if (ctx.event === 'PreToolUse') captured = ctx.nonInteractive;
+        return {};
+      });
+      await makeDispatcher({ hookRegistry: registry, ...overrides }).execute(makeCall());
+      return captured;
+    }
+
+    it('sets context.nonInteractive alongside a wired grant manager', async () => {
+      expect(
+        await capturedNonInteractive({ sessionGrantManager: fakeGM, isNonInteractive: true }),
+      ).toBe(true);
+    });
+
+    it('leaves context.nonInteractive undefined on an interactive dispatcher', async () => {
+      expect(await capturedNonInteractive({ sessionGrantManager: fakeGM })).toBeUndefined();
+      expect(
+        await capturedNonInteractive({ sessionGrantManager: fakeGM, isNonInteractive: false }),
+      ).toBeUndefined();
+    });
+  });
+
   it('returns isError for unknown tool', async () => {
     const dispatcher = makeDispatcher({
       permissions: { allowedTools: ['echo', 'nonexistent'] },
@@ -1380,17 +1417,22 @@ describe('SessionToolDispatcher', () => {
 
     // Issue #2249: per-call completedAt in parallel batches
     it('stamps completedAt per-call so fast and slow parallel calls have distinct timestamps', async () => {
-      // Fast call resolves in ~5ms; slow call resolves in ~80ms.
+      // Fast call resolves in ~5ms; slow call resolves in ~200ms.
       // After executeBatch both results must have completedAt set and the
       // fast call's completedAt must be earlier than the slow call's by a
-      // meaningful margin (>30ms) — proving each call captured its OWN
+      // meaningful margin (>=100ms) — proving each call captured its OWN
       // settle time rather than the batch's end time.
+      //
+      // The slow delay is 200ms (not 80ms) and the required margin is 100ms
+      // (not 30ms) to stay well clear of Windows' ~15ms timer resolution,
+      // which can shrink a nominal 75ms gap to <30ms under load. See #3366
+      // for the same widening applied to loop.trace.test.ts.
       const fastHandler: ToolHandler = async () => {
         await new Promise((r) => setTimeout(r, 5));
         return { content: 'fast' };
       };
       const slowHandler: ToolHandler = async () => {
-        await new Promise((r) => setTimeout(r, 80));
+        await new Promise((r) => setTimeout(r, 200));
         return { content: 'slow' };
       };
       const dispatcher = makeDispatcher({
@@ -1411,7 +1453,7 @@ describe('SessionToolDispatcher', () => {
       expect(typeof fastResult.completedAt).toBe('number');
       expect(typeof slowResult.completedAt).toBe('number');
       // Fast call must have settled well before the slow call.
-      expect(slowResult.completedAt! - fastResult.completedAt!).toBeGreaterThan(30);
+      expect(slowResult.completedAt! - fastResult.completedAt!).toBeGreaterThanOrEqual(100);
     });
 
     it('stamps completedAt on sequential batch calls', async () => {

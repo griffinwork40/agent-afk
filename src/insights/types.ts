@@ -7,6 +7,10 @@
  *   - No `telegramChatId` field anywhere in output aggregates.
  *   - No `responseExcerpt` field anywhere in output aggregates.
  *   - No prompt content, no file paths in Recommendation fields.
+ *   - EXCEPTION: `preexistingDefects.topClusters[].locus` contains file paths
+ *     (and `.repo` contains repo root paths). These are intentional — the
+ *     defect report is a developer-local report and path visibility is the
+ *     point. Do not forward these fields to remote telemetry or public logs.
  *
  * @module insights/types
  */
@@ -157,6 +161,13 @@ export interface InsightAggregates {
   routing: RoutingAggregates;
   /** Per-week outcome label counts (good-proven / good-presumed / bad / blocked / unknown). */
   outcomes: OutcomeAggregates;
+  /** Recurring pre-existing defects acknowledged by the agent across sessions. */
+  preexistingDefects: import('./aggregators/preexisting-defects.js').PreexistingDefectAggregates;
+  /**
+   * Subagent outcome statistics bucketed by model × agentType × depth.
+   * Derived by joining dispatch + outcome rows in routing-decisions.jsonl.
+   */
+  subagentOutcomes: import('./aggregators/subagent-outcomes.js').SubagentOutcomeAggregates;
 }
 
 // ---------------------------------------------------------------------------

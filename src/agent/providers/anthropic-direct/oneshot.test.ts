@@ -250,14 +250,14 @@ describe('oneShotCompletion (T21 + T22)', () => {
         return { content: [{ type: 'text', text: 'ok' }] };
       }),
     });
-    expect(captured).toBe('claude-haiku-4-5-20251001');
+    expect(captured).toBe('claude-haiku-5-5');
   });
 
   it('(T22b) resolves all canonical short aliases (opus/sonnet/haiku)', async () => {
     const cases: Array<[string, string]> = [
       ['opus', 'claude-opus-5-5'],
       ['sonnet', 'claude-sonnet-4-6'],
-      ['haiku', 'claude-haiku-4-5-20251001'],
+      ['haiku', 'claude-haiku-5-5'],
     ];
     for (const [alias, fullId] of cases) {
       let captured: string | undefined;

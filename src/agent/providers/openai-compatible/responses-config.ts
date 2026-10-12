@@ -87,12 +87,25 @@ export function buildChatGptOAuthHeaders(accountId?: string): Record<string, str
  * @param responsesOptIn - public Responses opt-in, pre-resolved by the caller
  *   from `env.AFK_OPENAI_USE_RESPONSES` (see {@link RESPONSES_OPT_IN_ENV}) and/or
  *   a construction-time flag.
+ * @param customBaseURL - caller's explicitly-configured base URL override
+ *   (e.g. AFK_OPENAI_BASE_URL). When non-empty and not the ChatGPT backend
+ *   itself, the chatgpt-oauth forced-redirect is suppressed: routing to
+ *   chatgpt.com when the user explicitly pointed the client elsewhere is a
+ *   security concern (their endpoint, not OpenAI's, should receive the request).
  */
 export function resolveWireMode(
   auth: Pick<OpenAIAuthResolution, 'source' | 'accountId'>,
   responsesOptIn = false,
+  customBaseURL?: string,
 ): WireResolution {
-  if (auth.source === 'chatgpt-oauth') {
+  // Only force the ChatGPT backend when the caller has NOT configured a
+  // different endpoint. If they pointed AFK at a custom server, respect that
+  // choice — don't silently redirect their traffic to chatgpt.com.
+  const hasCustomEndpoint =
+    typeof customBaseURL === 'string' &&
+    customBaseURL.length > 0 &&
+    customBaseURL !== CHATGPT_BACKEND_BASE_URL;
+  if (auth.source === 'chatgpt-oauth' && !hasCustomEndpoint) {
     return {
       mode: 'responses',
       baseURL: CHATGPT_BACKEND_BASE_URL,

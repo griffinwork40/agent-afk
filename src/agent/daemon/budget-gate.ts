@@ -31,6 +31,7 @@ import { providerForModel } from '../providers/index.js';
 import { resolveOpenAIAuth } from '../providers/openai-compatible/auth.js';
 import { evaluateUsage, type BindingWindow } from '../usage/usage-budget.js';
 import { describeBindingWindow } from '../usage/usage-formatter.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /** Result when the gate allows the task to proceed. */
 interface BudgetGatePass {
@@ -74,6 +75,13 @@ export interface BudgetGateOptions {
  * use the Claude windows; OpenAI-compatible models use the Codex windows only
  * when their auth resolves to the ChatGPT sign-in (an API key has per-minute
  * limits, not subscription windows). Anything else returns null (not gated).
+ *
+ * Behavior change (PR #3388): the tier-4 ChatGPT-subscription OAuth fallback
+ * in `resolveOpenAIAuth` is now default-ON. Any OpenAI-compatible daemon that
+ * has a ChatGPT login in ~/.codex/auth.json (and no OPENAI_API_KEY) will
+ * automatically resolve `chatgpt-oauth` and be graded on Codex windows here.
+ * To opt out: set OPENAI_API_KEY (which wins over the OAuth tier) or remove
+ * ~/.codex/auth.json.
  *
  * @param chatgptSignedIn Injectable for tests; defaults to the provider's own
  *   auth resolution for `apiKey` (the daemon's configured key, if any).
@@ -133,7 +141,7 @@ export async function evaluateBudgetGate(options: BudgetGateOptions = {}): Promi
     }
   } catch (err) {
     // Fail-open (see module Invariant).
-    console.debug(`[daemon] budget-gate: collectUsage failed, passing task through (${err instanceof Error ? err.message : String(err)})`);
+    console.debug(`[daemon] budget-gate: collectUsage failed, passing task through (${errorMessage(err)})`);
   }
   return { skip: false };
 }

@@ -18,13 +18,12 @@ import type {
   ProviderQueryArgs,
   ProviderCompleteArgs,
 } from '../../provider.js';
-import type { HookRegistry } from '../../hooks.js';
 import { resolveSessionHookRegistry } from '../../hooks.js';
-import type { SubagentExecutor } from '../../tools/subagent-executor.js';
-import type { SkillExecutor } from '../../tools/skill-executor.js';
-import type { ComposeExecutor } from '../../tools/compose-executor.js';
-import { withMcpToolsAllowed, withCustomToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
-import type { CanUseTool } from '../../types/sdk-types.js';
+import { composeDispatcherPermissions } from '../../tools/permissions-compose.js';
+import { type OpenAICompatibleProviderOptions } from './index.options.js';
+export type { OpenAICompatibleProviderOptions } from './index.options.js';
+import { snapshotOperatorOptions, operatorDispatcherToolDefs } from '../../tools/operator-denied-dispatcher.js';
+
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
 import { PathGrantManager } from '../../tools/grant-manager.js';
@@ -62,81 +61,11 @@ import {
 } from '../../awareness/index.js';
 import { resolveSessionId, registerSessionPresence } from './session-wiring.js';
 import { buildSystemPromptWiring } from './system-prompt-wiring.js';
-import { type ChildSessionOptions, isStateRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
-import { sessionRegistryOpts, type BuildDispatcherOpts } from './index.dispatcher-opts.js';
+import { isStateRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
+import { headlessSignalOpts, interactivityOpts, sessionRegistryOpts, type BuildDispatcherOpts } from './index.dispatcher-opts.js';
 
 const PROVIDER_NAME = 'openai-compatible';
 
-/**
- * Construction options. The same surface anthropic-direct exposes — modulo
- * Anthropic-specific knobs (client factory, OAuth keychain) — so callers
- * can build either provider with the same dependency bundle.
- */
-export interface OpenAICompatibleProviderOptions extends ChildSessionOptions {
-  /** Override the default `https://api.openai.com/v1` endpoint. */
-  baseURL?: string;
-  /**
-   * Optional default headers for every client built by this provider
-   * (e.g. xAI CLI-proxy identity). Per-query overrides may also be supplied
-   * via {@link OpenAICompatibleProvider.setEndpointDefaults}.
-   */
-  defaultHeaders?: Record<string, string>;
-  /** Hook registry — PreToolUse / PostToolUse fire from the dispatcher. */
-  hookRegistry?: HookRegistry;
-  /** Tool permission gate (allowlist/denylist). */
-  permissions?: ToolPermissionConfig;
-  /** In-process permission callback, forwarded to the session dispatcher. */
-  canUseTool?: CanUseTool;
-  subagentExecutor?: SubagentExecutor;
-  skillExecutor?: SkillExecutor;
-  composeExecutor?: ComposeExecutor;
-  /** Shared memory store (avoids dual SQLite handles when CLI builds it once). */
-  memoryStore?: MemoryStore;
-  workspaceStore?: WorkspaceStore;
-  stateStore?: StateStore;
-  /** UI surface tag forwarded to memory handlers ('cli' | 'telegram' | etc.). */
-  surface?: string;
-  /**
-   * When true, expose and wire only the read-only `memory_search` tool.
-   * Child sessions set this so OpenAI-routed subagents follow the same
-   * provider-level memory-write embargo as Anthropic-routed subagents.
-   */
-  readOnlyMemory?: boolean;
-  /**
-   * When true, the per-query {@link SessionToolDispatcher} blocks mutating
-   * `bash` commands (read-only recon allowed). Parity with
-   * `AnthropicDirectProviderOptions.readOnlyBash`. Set by
-   * `createChildProviderFactory` / `buildReadOnlyReconProvider` for a
-   * read-only skill's forked child. Defaults to false.
-   */
-  readOnlyBash?: boolean;
-  /**
-   * Caller-provided dispatcher. When set, the provider does NOT build its
-   * own — the caller owns lifecycle. Mirrors anthropic-direct's `externalTools`
-   * option used by tests and the nesting fixture.
-   */
-  tools?: ToolDispatcher;
-  /**
-   * Optional MCP manager — mirrors `AnthropicDirectProviderOptions.mcpManager`.
-   * When provided, every tool exposed by a `connected` MCP server is merged
-   * into the provider's tool schema list and the per-query dispatcher's
-   * handler map. Hooks fire for MCP tools automatically via the dispatcher.
-   */
-  mcpManager?: import('../../mcp/index.js').McpManager;
-  /**
-   * In-process custom tools registered by the library consumer. Mirrors
-   * `AnthropicDirectProviderOptions.customTools` for full provider parity.
-   * Each entry supplies an `AnthropicToolDef` schema (added to the provider's
-   * schema list at construction time) and a `ToolHandler` (registered in the
-   * per-query dispatcher's handler map).
-   *
-   * Precedence: builtins > custom (a custom tool whose name collides with a
-   * builtin is silently skipped — see `buildDispatcher`).
-   */
-  customTools?: import('../../tools/custom-tool.js').CustomToolDef[];
-  /** `/fast` controller (top-level REPL sessions); sends service_tier "priority" when eligible. */
-  fastModeController?: import('../../fast-mode.js').FastModeController;
-}
 
 export class OpenAICompatibleProvider implements ModelProvider {
   readonly name = PROVIDER_NAME;
@@ -144,6 +73,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
   private _memoryStore: MemoryStore | undefined;
   private readonly workspaceStore: WorkspaceStore | undefined;
   private _stateStore: StateStore | undefined;
+  // Invariant: injected stores are caller-owned and shared across the root and
+  // every forked child provider; close() releases only lazily created ones.
+  private readonly _injectedMemoryStore: boolean;
+  private readonly _injectedStateStore: boolean;
   private readonly schemas: AnthropicToolDef[];
   /**
    * Mutable per-session endpoint headers (xAI CLI proxy). Construction-time
@@ -188,8 +121,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
   private readonly _spawnedPidRegistry = new SpawnedPidRegistry();
 
   constructor(opts: OpenAICompatibleProviderOptions = {}) {
-    this.providerOpts = opts;
+    this.providerOpts = snapshotOperatorOptions(opts);
     this._defaultHeaders = opts.defaultHeaders;
+    this._injectedMemoryStore = opts.memoryStore !== undefined;
+    this._injectedStateStore = opts.stateStore !== undefined;
     this._memoryStore = opts.memoryStore;
     this.workspaceStore = opts.workspaceStore;
     this._stateStore = opts.stateStore;
@@ -316,8 +251,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // intercepted by the awareness handler. Otherwise the inner dispatcher
     // would return `Unknown tool` for a tool the model legitimately sees in
     // its schema list. See wrapDispatcherWithRuntimeState for the invariant.
+    // Stamp toolDefs on the external-dispatcher wrapper so query.ts:246 picks
+    // up the schema list — mirrors dispatcher-wiring.ts:219 (Anthropic path).
     dispatcher = this.providerOpts.tools
-      ? wrapDispatcherWithRuntimeState(this.providerOpts.tools, runtimeStateSource)
+      ? Object.assign(wrapDispatcherWithRuntimeState(this.providerOpts.tools, runtimeStateSource),
+          { toolDefs: operatorDispatcherToolDefs(this.providerOpts.tools, selectBaseSchemas(this.schemas, { isSkillDispatch: config.isSkillDispatch, isNonInteractive: config.isNonInteractive })) })
       : this.buildDispatcher(permissionMode, {
           ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
           ...(this._sharedReadRoots !== undefined ? { readRoots: this._sharedReadRoots } : {}),
@@ -342,7 +280,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
           ...sessionRegistryOpts(config),
           runtimeStateSource,
           ...(config.isSkillDispatch ? { isSkillDispatch: true } : {}),
-          ...(config.isNonInteractive ? { isNonInteractive: true } : {}),
+          ...interactivityOpts(config), // ask_question strip + #2302 headless bash floor
           ...(config.hookRegistry !== undefined ? { hookRegistry: config.hookRegistry } : {}),
           ...(config.planExitControls !== undefined ? { planExitControls: config.planExitControls } : {}),
         });
@@ -383,7 +321,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // goalPrompt?, envFragment, manifest?] — mirrors AnthropicDirectProvider.query().
     const spw = buildSystemPromptWiring({
       config,
-      hasSkillExecutor: this.providerOpts.skillExecutor !== undefined,
+      skillExecutor: this.providerOpts.skillExecutor ?? undefined,
       hasWorkspaceStore: this.workspaceStore !== undefined,
       readOnlyMemory: this.providerOpts.readOnlyMemory,
       readOnlyState: this.providerOpts.readOnlyState,
@@ -407,7 +345,17 @@ export class OpenAICompatibleProvider implements ModelProvider {
     };
     buildOpts.systemPromptRebuildFactory = spw.systemPromptRebuildFactory;
 
-    return buildQueryFromConfig(patchedConfig, args.prompt, buildOpts);
+    const providerQuery = buildQueryFromConfig(patchedConfig, args.prompt, buildOpts);
+    // #3532: close the provider's SQLite handle (kv.db) when the session
+    // closes. AgentSession.close() calls providerQuery.close() but not
+    // provider.close(), so _stateStore leaks on Windows (EBUSY on rmSync).
+    const provider = this;
+    const origClose = providerQuery.close.bind(providerQuery);
+    providerQuery.close = (): void => {
+      origClose();
+      provider.close();
+    };
+    return providerQuery;
   }
 
   /**
@@ -487,18 +435,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
       // makes a silent drop (c6892c6) a compile error.
       hookRegistry: resolveSessionHookRegistry(opts.hookRegistry, this.providerOpts.hookRegistry),
     };
-    // Union live MCP wire-names AND consumer-registered custom-tool names into
-    // the (statically-snapshotted) allowlist so neither is rejected by the gate
-    // while present in `schemas`/`handlers`. No-op when there is no allowlist
-    // (undefined => all allowed) or nothing to union. Mirrors
-    // AnthropicDirectProvider; restricted sub-agents carry no customTools.
-    const effectivePermissions = withCustomToolsAllowed(
-      this.providerOpts.mcpManager
-        ? withMcpToolsAllowed(
-            this.providerOpts.permissions,
-            this.providerOpts.mcpManager.getMcpToolWireNames(),
-          )
-        : this.providerOpts.permissions,
+    // MCP + custom-tool unions, then operator denies LAST (shared with
+    // AnthropicDirectProvider; invariant in tools/permissions-compose.ts).
+    const effectivePermissions = composeDispatcherPermissions(
+      this.providerOpts.permissions,
+      this.providerOpts.mcpManager?.getMcpToolWireNames(),
       (this.providerOpts.customTools ?? []).map((t) => t.schema.name),
     );
     if (effectivePermissions !== undefined) dispatcherOpts.permissions = effectivePermissions;
@@ -549,7 +490,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     if (planExitControls) dispatcherOpts.userAttention = userAttentionFrom(planExitControls);
     // #2542/#2735 detach registry + background process registry — parity with
     // AnthropicDirectProvider.buildDispatcher. Top-level REPL sessions only.
-    Object.assign(dispatcherOpts, sessionRegistryOpts(opts));
+    Object.assign(dispatcherOpts, sessionRegistryOpts(opts), headlessSignalOpts(opts));
 
     return new SessionToolDispatcher(dispatcherOpts);
   }
@@ -608,9 +549,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
   }
 
   close(): void {
-    this._memoryStore?.close();
-    this.workspaceStore?.close();
-    this._stateStore?.close();
+    // Only close owned stores; the workspace store is always injected.
+    if (!this._injectedMemoryStore) this._memoryStore?.close();
+    if (!this._injectedStateStore) this._stateStore?.close();
   }
 
   /**

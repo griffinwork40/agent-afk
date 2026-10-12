@@ -383,8 +383,8 @@ export interface BrowserConfig {
   blockedDomains: readonly string[];
   /** When true, every `browser_act` writes a gzipped DOM snapshot sidecar. */
   domSnapshots: boolean;
-  /** Backend selection. `'auto'` probes Agent Browser first, falls back to Playwright. */
-  backend: 'playwright' | 'agent-browser' | 'auto';
+  /** Backend selection. `'auto'` resolves to Playwright (the only supported backend). */
+  backend: 'playwright' | 'auto';
   /** Optional path to a config JSON used to override anything above. */
   configPath: string | null;
   /**

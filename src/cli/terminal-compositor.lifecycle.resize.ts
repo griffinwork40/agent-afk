@@ -31,7 +31,10 @@ import { requestCprOrMarkDirty } from './terminal-compositor.lifecycle.cpr.js';
  * called. While the CPR is pending, Frame.repaint() suppresses its write so
  * the stale-row repaint cannot race the delta correction.
  *
- * On SHRINK: drops any stale EXPAND snapshot.
+ * On SHRINK: while CPR is in-flight, keep a WIDTH-ONLY snapshot so the
+ * pending repaint can erase the ghost rows. Snapshot provenance is independent
+ * of burst origin: an intervening EXPAND replaces it with a stale footprint
+ * that SHRINK must drop. With no pending CPR, drop any stale snapshot.
  *
  * On WIDTH-ONLY (net-zero rows): snapshots the footprint for ghost-row erase
  * (same as EXPAND) and emits a CPR to trigger a clean repaint after tmux
@@ -53,7 +56,7 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     const top = tops.length > 0 ? Math.min(...tops) : 0;
     const bottom = Math.max(1, self.lastKnownRows - 1 - extraRows);
     if (top > 0 && top <= bottom) {
-      self.pendingResizeErase = { top, bottom };
+      self.pendingResizeErase = { top, bottom, origin: 'expand' };
     }
 
     // CPR-based delta correction: after each frame render, CupFrameRenderer
@@ -74,16 +77,37 @@ export function handleResizeImmediate(self: LifecycleHost): void {
       requestCprOrMarkDirty(self, frameBottom, newRows, /* rowDelta= */ newRows - self.lastKnownRows);
     }
   } else if (newRows < self.lastKnownRows) {
-    // SHRINK: drop any stale EXPAND snapshot (existing contract), then emit a
-    // CPR request to measure how many rows tmux pushed into scrollback history.
-    // When the pane shrinks, tmux first trims blank rows below the cursor, then
-    // pushes top rows into history — shifting the cursor UP by delta rows
-    // (0 ≤ |delta| ≤ shrink amount). The CPR reply reports the real cursor row;
-    // delta = reported − originalExpectedRow (negative on a push). We apply
-    // applyScrollDelta with the negative delta so tracked rows shift UP with the
-    // content, preventing the stale high-row frame ghost below the live frame
-    // after a shrink. Bursts handled by requestCprOrMarkDirty (same as EXPAND).
-    self.pendingResizeErase = null;
+    // Invariant: SHRINK must not erase an EXPAND footprint after reflow.
+    // Emit a CPR request to measure how many rows tmux pushed into
+    // scrollback history.  When the pane shrinks, tmux first trims blank rows
+    // below the cursor, then pushes top rows into history — shifting the cursor
+    // UP by delta rows (0 ≤ |delta| ≤ shrink amount).  The CPR reply reports
+    // the real cursor row; delta = reported − originalExpectedRow (negative on
+    // a push).  We apply applyScrollDelta with the negative delta so tracked
+    // rows shift UP with the content, preventing the stale high-row frame ghost
+    // below the live frame after a shrink.  Bursts handled by
+    // requestCprOrMarkDirty (same as EXPAND).
+    //
+    // Snapshot rule (burst safety, #3283): a WIDTH-ONLY event that precedes
+    // this SHRINK in the same burst has already set pendingResizeErase AND
+    // started a CPR.  Unconditionally nulling the snapshot here would discard
+    // the erase footprint before the in-flight CPR calls repaint() — the ghost
+    // spinner row that #3205/#3228 fixed would survive.
+    //
+    // Distinction:
+    //   • Latest snapshot from WIDTH-ONLY: preserve soft-wrap ghost rows
+    //     regardless of how many SHRINKs accumulate in the burst (#3283).
+    //   • Latest snapshot from EXPAND: drop the pre-expand footprint because
+    //     SHRINK makes its rows stale, even in a WIDTH-ONLY-originated burst.
+    //   • No CPR in-flight: drop any stale snapshot (existing contract).
+    const preserveWidthSnapshot =
+      self.cprPending && self.pendingResizeErase?.origin === 'width-only';
+    if (!preserveWidthSnapshot) {
+      // Drop stale snapshot: no CPR in-flight, or not a WIDTH-ONLY footprint.
+      self.pendingResizeErase = null;
+    }
+    // preserveWidthSnapshot === true: preserve the snapshot so the pending
+    // CPR repaint can erase the ghost spinner row left by the soft-wrap reflow.
     const frameBottom = self.lastMeasuredFrameBottom;
     if (frameBottom > 0 && self.stdin.isTTY) {
       requestCprOrMarkDirty(self, frameBottom, newRows, /* rowDelta= */ newRows - self.lastKnownRows);
@@ -112,7 +136,7 @@ export function handleResizeImmediate(self: LifecycleHost): void {
     const top = tops.length > 0 ? Math.min(...tops) : 0;
     const bottom = Math.max(1, self.lastKnownRows - 1 - extraRows);
     if (top > 0 && top <= bottom) {
-      self.pendingResizeErase = { top, bottom };
+      self.pendingResizeErase = { top, bottom, origin: 'width-only' };
     }
 
     const frameBottom = self.lastMeasuredFrameBottom;
@@ -122,6 +146,10 @@ export function handleResizeImmediate(self: LifecycleHost): void {
   }
   self.logUpdate?.resetGeometry?.();
   self.bandGeometryStale = true;
+  // Resize-specific staleness flag: set ONLY here (and in handleDisarmWindowResize)
+  // so frame-preserve's legacy deficit eviction can distinguish mid-burst
+  // stale geometry from the suspend/resume path (which also sets bandGeometryStale).
+  self.resizeGeometryStale = true;
 }
 
 /**
@@ -134,7 +162,7 @@ export function handleResizeImmediate(self: LifecycleHost): void {
  * frozen pre-resize frame rows.
  *
  * Side-effect-free beyond mutating `self.pendingResizeErase`,
- * `self.bandGeometryStale`, and `self.disarmRows`.
+ * `self.bandGeometryStale`, `self.resizeGeometryStale`, and `self.disarmRows`.
  */
 export function handleDisarmWindowResize(self: LifecycleHost): void {
   const liveRows = self.stdout.rows ?? 24;
@@ -149,9 +177,10 @@ export function handleDisarmWindowResize(self: LifecycleHost): void {
     const bottom = Math.max(1, self.disarmRows - 1 - extraRows);
     const top = 1;
     if (top <= bottom) {
-      self.pendingResizeErase = { top, bottom };
+      self.pendingResizeErase = { top, bottom, origin: 'expand' };
     }
   }
   self.bandGeometryStale = true;
+  self.resizeGeometryStale = true; // mirrors handleResizeImmediate — SIGWINCH-only flag (#3212)
   self.disarmRows = 0;
 }

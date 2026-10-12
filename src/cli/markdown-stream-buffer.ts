@@ -195,40 +195,26 @@ export function runParsePipeline(
 // 3. Repaint execution helper
 // ---------------------------------------------------------------------------
 
-/**
- * Shape of the `log-update` function (or a compatible wrapper).
- * Exported so `markdown-stream.ts` can reference it without re-declaring it.
- */
-export interface LogUpdateFunction {
-  (str: string): void;
-  clear: () => void;
-}
-
 /** Parameters for {@link executeRepaint}. */
 export interface RepaintParams {
   flushing: boolean;
   overlayComposer: OverlayComposerLike | null | undefined;
   compositor: CompositorLike | null;
-  logUpdate: LogUpdateFunction | null;
   /** Returns the formatted pending overlay string. */
   renderPending(): string;
-  /** Lazily initialise log-update; resolves to the function or null. */
-  initLogUpdate(): Promise<LogUpdateFunction | null>;
-  /** Called after `initLogUpdate` resolves to store the result on the owner. */
-  onLogUpdateReady(fn: LogUpdateFunction | null): void;
 }
 
 /**
  * Execute a single repaint of the pending markdown content.
  *
- * Routing priority (matches original `repaint()` behaviour):
+ * Routing priority:
  *  1. `overlayComposer` → mark dirty + flush (slot renderer calls renderPending).
  *  2. `compositor` → `setOverlay(renderPending())`.
- *  3. `logUpdate` (TTY fallback) → `logUpdate(indented)`, lazy-init on first call.
+ *  3. Neither → no-op (non-TTY surfaces have no live overlay).
  *
  * A no-op when `flushing` is true or when `renderPending()` returns an empty string.
  */
-export async function executeRepaint(p: RepaintParams): Promise<void> {
+export function executeRepaint(p: RepaintParams): void {
   if (p.flushing) return;
   const indented = p.renderPending();
   if (!indented) return;
@@ -240,17 +226,7 @@ export async function executeRepaint(p: RepaintParams): Promise<void> {
   }
   if (p.compositor) {
     p.compositor.setOverlay(indented);
-    return;
   }
-
-  // log-update path: lazy init
-  let lu = p.logUpdate;
-  if (!lu) {
-    lu = await p.initLogUpdate();
-    p.onLogUpdateReady(lu);
-  }
-  if (!lu || p.flushing) return;
-  lu(indented);
 }
 
 // ---------------------------------------------------------------------------
@@ -275,27 +251,23 @@ export interface OverlayComposerLike {
 }
 
 /**
- * Clear the live overlay in whichever sink is active (overlayComposer,
- * compositor, or logUpdate). Used by `flush()`, `discardPending()`, and any
- * other path that wants to erase the pending markdown region from the screen.
+ * Clear the live overlay in whichever sink is active (overlayComposer or
+ * compositor). Used by `flush()`, `discardPending()`, and any other path that
+ * wants to erase the pending markdown region from the screen.
  *
  * - `overlayComposer`: marks the 'markdown-pending' slot dirty and flushes.
  * - `compositor`: calls `setOverlay('')`.
- * - `logUpdate`: calls `.clear()`.
- * - None active: no-op.
+ * - Neither: no-op (non-TTY surfaces have no live overlay to clear).
  */
 export function clearOverlay(
   overlayComposer: OverlayComposerLike | null | undefined,
   compositor: CompositorLike | null,
-  logUpdate: { clear(): void } | null,
 ): void {
   if (overlayComposer) {
     overlayComposer.markDirty('markdown-pending');
     overlayComposer.flush();
   } else if (compositor) {
     compositor.setOverlay('');
-  } else if (logUpdate) {
-    logUpdate.clear();
   }
 }
 
@@ -307,7 +279,7 @@ export function clearOverlay(
  * - `overlayComposer`: marks the slot dirty and flushes (slot renderer pulls
  *   the up-to-date pending string via `renderPending`).
  * - `compositor`: calls `setOverlay(renderPending())` directly.
- * - Neither: no-op (log-update path repaints lazily via scheduleRepaint).
+ * - Neither: no-op (non-TTY surfaces have no live overlay to sync).
  */
 export function syncPendingOverlay(
   overlayComposer: OverlayComposerLike | null | undefined,

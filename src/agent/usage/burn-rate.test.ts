@@ -11,9 +11,9 @@ import {
   appendSample,
   MIN_SAMPLES,
   MAX_SAMPLE_AGE_MS,
-  RING_SIZE,
   type WindowObservationSample,
 } from './burn-rate.js';
+import { WINDOWS_HISTORY_MAX } from './usage-record.js';
 
 const NOW = 1_800_000_000_000;
 const MIN_MS = 60_000;
@@ -195,11 +195,11 @@ describe('appendSample', () => {
     expect(appendSample([], s)).toEqual([s]);
   });
 
-  it('trims the ring to RING_SIZE when full', () => {
-    const full = samples(Array(RING_SIZE).fill(0).map((_, i) => i * 0.05), NOW - RING_SIZE * MIN_MS, MIN_MS);
+  it('trims the ring to WINDOWS_HISTORY_MAX when full', () => {
+    const full = samples(Array(WINDOWS_HISTORY_MAX).fill(0).map((_, i) => i * 0.05), NOW - WINDOWS_HISTORY_MAX * MIN_MS, MIN_MS);
     const one: WindowObservationSample = { observedAt: NOW, utilization: 0.99 };
     const result = appendSample(full, one);
-    expect(result).toHaveLength(RING_SIZE);
+    expect(result).toHaveLength(WINDOWS_HISTORY_MAX);
     expect(result[result.length - 1]).toEqual(one);
   });
 

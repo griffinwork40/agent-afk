@@ -66,7 +66,8 @@ import {
   toolDefsToOpenAIFunctions,
   type OpenAIFunctionTool,
 } from './loop.js';
-import { resolveWireMode, envFlagEnabled, type WireMode } from './responses-config.js';
+import { resolveWireMode, envFlagEnabled, CHATGPT_BACKEND_BASE_URL, type WireMode } from './responses-config.js';
+import { maybePrintChatGptOAuthNotice } from './query.chatgpt-notice.js';
 import { env } from '../../../config/env.js';
 import { isGrokModelId } from '../xai/pricing.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
@@ -77,7 +78,8 @@ import {
   resolveAutoCompactThreshold,
 } from '../shared/auto-compact.js';
 import { AbortCoordinator, CLOSED_SENTINEL } from '../shared/abort-coordinator.js';
-import { HookBlockedError } from '../../../utils/errors.js';
+
+import { HookBlockedError, ensureError } from '../../../utils/errors.js';
 
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
 import { OpenAIJournalWiring } from './query/journal-wiring.js';
@@ -86,7 +88,7 @@ import {
   normalizePermissionMode,
   resolveReasoningEffort,
 } from './query/model-params.js';
-import { resolveClientFactory, buildOpenAIAdmissionFetch } from './query/client.js';
+
 import { FastTierSession } from './query/fast-tier-session.js';
 import {
   runTurnInner,
@@ -104,6 +106,9 @@ import {
   listOpenAIUserTurns,
   rewindOpenAIConversation,
 } from './query/rewind-conversation.js';
+import { wrapTurnWithOAuthRefresh } from './query/token-refresh.js';
+import { applyOAuthRefresh, buildRefreshedClient } from './query/client-rebuild.js';
+import type { AuthResolverDeps, OpenAIAuthResolution } from './auth.js';
 export { buildQueryFromConfig } from './query/build-query.js';
 
 // Re-exported from the extracted query/ submodules so existing import sites
@@ -120,6 +125,8 @@ const PROVIDER_NAME = 'openai-compatible';
 
 
 
+
+
 /**
  * OpenAI-compatible ProviderQuery implementation.
  *
@@ -129,8 +136,16 @@ const PROVIDER_NAME = 'openai-compatible';
  * currentPermissionMode, closed, responsesCompactionUnavailable).
  */
 export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, CompactHandlerContext {
-  /** @internal Package-visible so extracted query/ modules can satisfy TurnDriverContext without an object literal intermediary. */
-  readonly client: OpenAI;
+  /** @internal Private backing for the live OpenAI client; swapped by rebuildClient() on OAuth token refresh. */
+  private _client: OpenAI;
+  /**
+   * Live OpenAI client — the getter satisfies the `readonly client: OpenAI`
+   * shape expected by {@link IterationContext} / {@link TurnDriverContext}.
+   * The backing field `_client` is swapped by {@link rebuildClient} when a
+   * ChatGPT-OAuth token is refreshed mid-session (see token-refresh.ts / #3396).
+   * @internal Package-visible so extracted query/ modules can satisfy TurnDriverContext.
+   */
+  get client(): OpenAI { return this._client; }
   /** @internal Package-visible for context-interface satisfaction. */
   readonly opts: OpenAICompatibleQueryOptions;
   /** @internal Package-visible so extracted query/ modules can read the synthesized session id. */
@@ -252,10 +267,18 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     }
 
     // Resolve the wire (Chat Completions vs Responses) once.
+    // Pass opts.baseURL so resolveWireMode can suppress the chatgpt-oauth
+    // forced redirect when the caller configured a different endpoint.
     const responsesOptIn =
       (opts.useResponsesApi ?? false) || envFlagEnabled(env.AFK_OPENAI_USE_RESPONSES);
-    const wire = resolveWireMode(opts.auth, responsesOptIn);
+    const wire = resolveWireMode(opts.auth, responsesOptIn, opts.baseURL);
     this.wireMode = wire.mode;
+
+    // Inform the operator once per account that ChatGPT subscription OAuth is
+    // active, so they know their requests are routing to chatgpt.com.
+    if (opts.auth.source === 'chatgpt-oauth' && wire.baseURL === CHATGPT_BACKEND_BASE_URL) {
+      maybePrintChatGptOAuthNotice(opts.auth.accountId);
+    }
     this.useOpenAIPricing =
       (wire.baseURL === undefined && opts.baseURL === undefined) ||
       (isGrokModelId(opts.model) && opts.config.forceXaiOAuth !== true);
@@ -264,21 +287,8 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     this.lastUsage = this.journal.resumedUsage();
     this.priorTurns = this.journal.initialTurns();
 
-    if (opts.auth.apiKey === null) {
-      this.client = null as unknown as OpenAI;
-    } else {
-      const ctor = resolveClientFactory();
-      const clientOpts: { apiKey: string; baseURL?: string; defaultHeaders?: Record<string, string>; fetch?: typeof globalThis.fetch } = {
-        apiKey: opts.auth.apiKey,
-      };
-      const baseURL = wire.baseURL ?? opts.baseURL;
-      if (baseURL !== undefined) clientOpts.baseURL = baseURL;
-      if (wire.headers !== undefined) clientOpts.defaultHeaders = wire.headers;
-      else if (opts.defaultHeaders !== undefined) clientOpts.defaultHeaders = opts.defaultHeaders;
-      const admissionFetch = buildOpenAIAdmissionFetch(baseURL);
-      if (admissionFetch !== undefined) clientOpts.fetch = admissionFetch;
-      this.client = ctor(clientOpts);
-    }
+    // Invariant: always inject a fetch that forces HTTP/1.1 (see buildRefreshedClient).
+    this._client = buildRefreshedClient(opts.auth, opts);
   }
 
   /**
@@ -353,7 +363,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
         }
       }
     } catch (iterErr) {
-      const e = iterErr instanceof Error ? iterErr : new Error(String(iterErr));
+      const e = ensureError(iterErr);
       yield { type: 'error', error: e };
     } finally {
       try {
@@ -365,8 +375,33 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   }
 
   /**
+   * Rebuild the OpenAI client with a refreshed ChatGPT-OAuth token.
+   *
+   * Called by {@link wrapTurnWithOAuthRefresh} (token-refresh.ts) when a 401
+   * response indicates the current token has expired and `codex` has already
+   * written a fresh token to `~/.codex/auth.json`. Updates `opts.auth` so all
+   * sibling modules see the fresh source tag, then delegates client construction
+   * to {@link buildRefreshedClient} (client-rebuild.ts, extracted for the
+   * 350-line ceiling). AFK is read-only: never writes `~/.codex/auth.json`.
+   * @internal
+   */
+  rebuildClient(newAuth: OpenAIAuthResolution): void {
+    // Single mutation point for opts.auth — delegates to applyOAuthRefresh in
+    // client-rebuild.ts (extracted for the 350-line ceiling).
+    this._client = applyOAuthRefresh(this.opts as { auth: OpenAIAuthResolution } & typeof this.opts, newAuth);
+  }
+
+  /**
+   * Optional env + fs injection point forwarded to `wrapTurnWithOAuthRefresh`.
+   * Tests inject a hermetic stub here to prevent reading real host credentials.
+   * @internal
+   */
+  _authDeps: AuthResolverDeps = {};
+
+  /**
    * Drive a single user turn through the model + tool loop.
-   * Delegates to the extracted `runTurnInner` in query/turn-driver.ts;
+   * Wraps `runTurnInner` (query/turn-driver.ts) with a single ChatGPT-OAuth
+   * token-refresh retry on 401 (see query/token-refresh.ts, issue #3396).
    * `this` satisfies `TurnDriverContext` so all live field reads work.
    */
   private async *runTurn(content: ProviderUserTurn['content']): AsyncGenerator<ProviderEvent> {
@@ -381,7 +416,13 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     try {
       // Pass `this` — which implements TurnDriverContext — so every mutable
       // field read inside runTurnInner is always live (no stale snapshot).
-      yield* runTurnInner(this, content, controller, turnStartTime, taskId);
+      // wrapTurnWithOAuthRefresh is a no-op for non-chatgpt-oauth sessions.
+      yield* wrapTurnWithOAuthRefresh(
+        this,
+        runTurnInner(this, content, controller, turnStartTime, taskId),
+        () => runTurnInner(this, content, controller, turnStartTime, taskId),
+        this._authDeps,
+      );
     } finally {
       trace.finish(Date.now() - turnStartTime);
     }

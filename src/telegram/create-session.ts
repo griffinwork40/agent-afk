@@ -50,15 +50,10 @@ export interface TelegramSessionFactoryOptions {
 export function createTelegramSessionFactory(
   options: TelegramSessionFactoryOptions,
 ): (sessionConfig: AgentConfig) => Promise<AgentSession> {
-  const { config, frameworkBase, telegramCwd, memoryStore } = options;
+  const { config, frameworkBase, telegramCwd, memoryStore, stateStore } = options;
   const log = options.log ?? console.log;
 
   return async function createSession(sessionConfig: AgentConfig): Promise<AgentSession> {
-    // Lifecycle: owned by this session — closed when session.close() →
-    // provider.close() → workspaceStore.close() tears down the chain.
-    // Per-chat isolation: each Telegram chat gets its own store so workspace
-    // findings from one user's session do not leak into another's.
-    const workspaceStore = env.AFK_WORKSPACE_DISABLED === '1' ? undefined : new WorkspaceStore();
     const fullModelId = resolveModelId(sessionConfig.model) ?? sessionConfig.model;
     log(`Creating session with model: ${sessionConfig.model} -> ${fullModelId}`);
 
@@ -84,10 +79,10 @@ export function createTelegramSessionFactory(
     // top, never substituted for the base. Shared by both branches below, and
     // inherited by forked subagent / compose children so they carry the same base.
     const overlayPrompt = sessionConfig.systemPrompt ?? config.systemPrompt;
-    const layeredBasePrompt = composeSystemPrompt(
-      frameworkBase,
-      typeof overlayPrompt === 'string' ? overlayPrompt : undefined,
-    );
+    const operatorOverlay = typeof overlayPrompt === 'string' && overlayPrompt.trim().length > 0
+      ? overlayPrompt
+      : undefined;
+    const layeredBasePrompt = composeSystemPrompt(frameworkBase, operatorOverlay);
 
     const sessionCwd = sessionConfig.cwd ?? telegramCwd;
     // Invariant: the trace writer is created BEFORE loadTelegramMcpManager so
@@ -112,21 +107,39 @@ export function createTelegramSessionFactory(
         : undefined,
     });
 
+    // Per-chat isolation; the factory releases this owned store after session
+    // teardown, never the bot-global memory/state stores passed in by the caller.
+    const workspaceStore = env.AFK_WORKSPACE_DISABLED === '1' ? undefined : new WorkspaceStore();
+    let workspaceClosed = false;
+    const closeWorkspace = () => {
+      if (workspaceClosed) return;
+      workspaceClosed = true;
+      workspaceStore?.close();
+    };
     let returnedSession: AgentSession | undefined;
     const ctx: TelegramSessionBuildContext = {
       sessionConfig,
       config,
       layeredBasePrompt,
+      ...(operatorOverlay !== undefined ? { operatorOverlay } : {}),
       sessionCwd,
       maxOutputTokens,
       maxToolUseIterations,
       traceWriter,
       mcpManager,
       memoryStore,
+      ...(stateStore !== undefined ? { stateStore } : {}),
       workspaceStore,
       ...(sessionConfig.telegramChatId !== undefined ? { chatId: sessionConfig.telegramChatId } : {}),
       ...(sessionConfig.telegramThreadId !== undefined ? { threadId: sessionConfig.telegramThreadId } : {}),
-      reportSession: (session) => { returnedSession = session; },
+      reportSession: (session) => {
+        returnedSession = session;
+        const close = session.close.bind(session);
+        let closing: Promise<void> | undefined;
+        session.close = () => closing ??= (async () => {
+          try { await close(); } finally { closeWorkspace(); }
+        })();
+      },
     };
 
     try {
@@ -142,10 +155,14 @@ export function createTelegramSessionFactory(
       // also tears down its attached MCP manager. Only when no session exists
       // does the manager need disconnecting directly, or the connected servers
       // leak for the life of the bot process.
-      if (returnedSession !== undefined) {
-        await returnedSession.close().catch(() => undefined);
-      } else if (mcpManager !== undefined) {
-        await mcpManager.disconnectAll();
+      try {
+        if (returnedSession !== undefined) {
+          await returnedSession.close().catch(() => undefined);
+        } else if (mcpManager !== undefined) {
+          await mcpManager.disconnectAll();
+        }
+      } finally {
+        closeWorkspace();
       }
       throw error;
     }

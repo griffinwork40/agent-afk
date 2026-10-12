@@ -44,6 +44,8 @@ export const BrowserEventPayloadSchema = z.object({
   tool: BrowserEventToolSchema,
   action: BrowserActActionSchema.optional(),
   toolUseId: z.string(),
+  // Keep 'agent-browser' in the read-side schema so old traces on disk
+  // that contain backend:'agent-browser' parse without error.
   backend: z.enum(['playwright', 'agent-browser']).optional(),
   backendReason: z.string().optional(),
   target: BrowserEventTargetSchema.optional(),

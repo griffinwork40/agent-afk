@@ -14,6 +14,7 @@
 
 import type { InsightAggregates, Recommendation, InsightsOptions } from './types.js';
 import { renderOutcomes } from './html.outcomes.js';
+import { renderPreexistingDefects } from './html.preexisting-defects.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -396,6 +397,7 @@ export function generateHtml(
     renderTraces(aggregates),
     renderRouting(aggregates),
     renderOutcomes(aggregates),
+    renderPreexistingDefects(aggregates),
     renderRecommendations(recommendations),
     renderAbout(aggregates),
   ].join('\n');
@@ -452,6 +454,7 @@ export function generateHtml(
     <a href="#traces">Traces</a>
     <a href="#routing">Routing</a>
     <a href="#outcomes">Outcomes</a>
+    <a href="#preexisting-defects">Pre-existing Defects</a>
     <a href="#recommendations">Recommendations</a>
     <a href="#about">About</a>
   </nav>

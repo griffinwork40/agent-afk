@@ -469,6 +469,38 @@ describe('drainQueue with document item', () => {
 // SSRF guard
 // ---------------------------------------------------------------------------
 
+describe('handleDocument: getFileLink rejection', () => {
+  it('replies with error and returns null when getFileLink throws', async () => {
+    const session = makeSession('idle');
+    const handler = makeHandler(session);
+    const { ctx, replies } = makeDocCtx();
+    (ctx.telegram.getFileLink as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('400: Bad Request: file is too big'),
+    );
+
+    const result = await handler.handleDocument(ctx);
+
+    expect(result).toBeUndefined(); // handleDocument returns void but handler returns null internally
+    expect(mockStreamResponse).not.toHaveBeenCalled();
+    expect(replies.some(r => r.includes("Couldn't download"))).toBe(true);
+  });
+
+  it('does not call downloadTelegramFile when getFileLink throws', async () => {
+    const session = makeSession('idle');
+    const handler = makeHandler(session);
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { ctx } = makeDocCtx();
+    (ctx.telegram.getFileLink as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('429: Too Many Requests'),
+    );
+
+    await handler.handleDocument(ctx);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe('handleDocument: SSRF hostname mismatch', () => {
   it('replies with error and never calls fetch when file URL host is not api.telegram.org', async () => {
     const session = makeSession('idle');

@@ -577,7 +577,7 @@ export class TerminalCompositor {
   /** @internal Relaxed from `private` for the frame module (FrameHost). */
   lastKnownRows = 0;
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
-  pendingResizeErase: { top: number; bottom: number } | null = null;
+  pendingResizeErase: { top: number; bottom: number; origin?: 'width-only' | 'expand' } | null = null;
   /**
    * True while a CPR (Cursor Position Report, ESC[6n) reply is in-flight
    * after a tmux EXPAND SIGWINCH. Frame.repaint() skips the physical write
@@ -599,6 +599,7 @@ export class TerminalCompositor {
     growTotal: number;
     shrinkTotal: number;
     requeryCt: number;
+    widthOnlyOrigin: boolean;
   } | null = null;
   // Invariant (F2 — fail-safe commit mode on stale geometry): set by the
   // SIGWINCH-immediate handler alongside logUpdate.resetGeometry() and cleared
@@ -614,6 +615,15 @@ export class TerminalCompositor {
   // that never scrolled (DEFECT 2). See commitAbove's prevTopRow site.
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   bandGeometryStale = false;
+  /**
+   * Resize-specific geometry-stale flag — set ONLY by the SIGWINCH handler
+   * (`handleResizeImmediate`, `handleDisarmWindowResize`), never by
+   * `resumeInput()`.  Used by `preserveRowsBeforeFrameRender` to suppress
+   * the legacy deficit-eviction path while a resize burst is in flight (#3212).
+   * Cleared by `repositionCommittedBand` in parallel with `bandGeometryStale`.
+   * @internal
+   */
+  resizeGeometryStale = false;
   // Stale-guard for endTurnFlush (lifecycle.ts): set true when a commit
   // lands (committed-band-commit.ts, alongside hasCommitted); cleared by
   // clearCommittedBand(). Prevents redundant lifecycle redraws when the

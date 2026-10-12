@@ -139,17 +139,7 @@ export function computeBurnRate(
 }
 
 /**
- * Maximum ring size: keep only the last N samples. Any older samples are
- * trimmed when a new one is appended. Exported so callers (ledger, tests) use
- * the same constant.
- *
- * @deprecated Use {@link WINDOWS_HISTORY_MAX} directly. Kept as a re-export
- * alias for existing call-sites and tests.
- */
-export const RING_SIZE: number = WINDOWS_HISTORY_MAX;
-
-/**
- * Append one sample to an existing ring, trimming to {@link RING_SIZE}.
+ * Append one sample to an existing ring, trimming to {@link WINDOWS_HISTORY_MAX}.
  * Returns a new array; the input is not mutated.
  */
 export function appendSample(
@@ -157,5 +147,5 @@ export function appendSample(
   sample: WindowObservationSample,
 ): WindowObservationSample[] {
   const next = [...ring, sample];
-  return next.length > RING_SIZE ? next.slice(next.length - RING_SIZE) : next;
+  return next.length > WINDOWS_HISTORY_MAX ? next.slice(next.length - WINDOWS_HISTORY_MAX) : next;
 }

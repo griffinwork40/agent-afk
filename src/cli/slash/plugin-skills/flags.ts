@@ -4,12 +4,32 @@
  * Split out of `plugin-skills.ts` (#366) — the extraction layer that walks
  * plugin directories on disk and plucks flags / "when to use" hints, with no
  * knowledge of the slash registry or rendering.
+ *
+ * Since #3332, registered plugin skills get flags + category from discovery
+ * itself (`PluginSkillMetadata` → `SkillManifestEntry` → `ProviderCommandInfo`),
+ * so `registerPluginSkills` no longer walks disk. The walkers below remain as
+ * the `/skills <name>` detail-card fallback for skills not in the session's
+ * command list, and as a public API for existing callers/tests.
  */
 
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join, basename, dirname } from 'path';
 import { getMarketplaceCacheDir, getBundledPluginsDir } from '../../../paths.js';
-import { parseSkillMd, extractFlagsFromBody } from '../_lib/flag-harvest.js';
+import { scanAllPluginRoots } from '../../../agent/tools/skill-bridge.js';
+import { _registerScanCacheResetHook } from '../../../agent/plugins-scanner.js';
+import { parseSkillMd, resolveSkillFlags } from '../_lib/flag-harvest.js';
+
+/**
+ * Module-level cache for the full discovered-metadata harvest.
+ * Populated lazily on first call to `harvestDiscoveredPluginSkillMetadata`
+ * and invalidated by `_resetPluginScanCache` via the hook registered below.
+ * This avoids a disk re-walk on every `/skills <name>` detail-card call.
+ */
+let _discoveredMetadataCache: PluginSkillHarvest | undefined;
+
+_registerScanCacheResetHook(() => {
+  _discoveredMetadataCache = undefined;
+});
 
 /** Result of a full SKILL.md harvest pass (flags + category). */
 export interface PluginSkillHarvest {
@@ -66,6 +86,8 @@ export function harvestPluginSkillMetadata(cacheRoot?: string): PluginSkillHarve
     }
 
     for (const entry of entries) {
+      // Match the skill loader: hidden entries and dependencies are not skills.
+      if (entry.startsWith('.') || entry === 'node_modules') continue;
       const fullPath = join(dir, entry);
 
       let stat;
@@ -100,12 +122,13 @@ export function harvestPluginSkillMetadata(cacheRoot?: string): PluginSkillHarve
       // calls parseSkillMd — then called parseSkillMd(content) again separately.
       const parsed = parseSkillMd(content);
 
-      // Flag extraction mirrors harvestFlagsFromSkillMd's precedence rules:
-      // frontmatter flags win; fall back to argument-hint + body scan.
-      const skillFlags: string[] =
-        parsed.frontmatterFlags && parsed.frontmatterFlags.length > 0
-          ? parsed.frontmatterFlags
-          : extractFlagsFromBody(`${parsed.frontmatter?.['argument-hint'] ?? ''}\n${parsed.body}`);
+      // Shared precedence (same helper discovery uses): frontmatter flags win;
+      // fall back to argument-hint + body scan.
+      const skillFlags = resolveSkillFlags(
+        parsed.frontmatterFlags,
+        parsed.frontmatter?.['argument-hint'],
+        parsed.body,
+      );
 
       if (skillFlags.length > 0) {
         const existing = flags.get(skillName) ?? [];
@@ -138,12 +161,48 @@ export function harvestPluginSkillMetadata(cacheRoot?: string): PluginSkillHarve
  * (cache) or shipped (bundled).
  */
 export function harvestAllPluginSkillFlags(): Map<string, string[]> {
-  const merged = harvestPluginSkillFlags();
-  for (const [name, flags] of harvestPluginSkillFlags(getBundledPluginsDir())) {
-    const existing = merged.get(name) ?? [];
-    merged.set(name, Array.from(new Set([...existing, ...flags])).sort());
+  return harvestDiscoveredPluginSkillMetadata().flags;
+}
+
+/**
+ * Harvest flags + categories from every plugin root AFK actually loads skills
+ * from: the marketplace cache, the bundled-plugins dir, AND each plugin path
+ * returned by `scanAllPluginRoots()` (flat `~/.afk/plugins/<name>/`,
+ * project-scope `<cwd>/.afk/plugins/`, imported roots).
+ *
+ * History: the harvest used to walk only the cache + bundled dirs, so a skill
+ * from a flat-installed plugin (e.g. `software-factory`'s /pr-triage) was
+ * registered as a slash command with NO flags and the `--` completion menu
+ * never opened for it. Reusing the bridge's root list keeps the flag set in
+ * lockstep with the set of discovered skills.
+ *
+ * Merge rules: flags union (deduped, sorted); categories first-write-wins in
+ * walk order (cache, then bundled, then discovered roots).
+ */
+export function harvestDiscoveredPluginSkillMetadata(): PluginSkillHarvest {
+  if (_discoveredMetadataCache) return _discoveredMetadataCache;
+
+  const roots: string[] = [getMarketplaceCacheDir(), getBundledPluginsDir()];
+  try {
+    for (const plugin of scanAllPluginRoots()) roots.push(plugin.path);
+  } catch {
+    // Contract: fail-soft, matching the walker. Discovery failure falls back to
+    // the cache + bundled harvest instead of dropping every flag.
   }
-  return merged;
+  const flags = new Map<string, string[]>();
+  const categories = new Map<string, string>();
+  for (const root of new Set(roots)) {
+    const harvest = harvestPluginSkillMetadata(root);
+    for (const [name, skillFlags] of harvest.flags) {
+      const existing = flags.get(name) ?? [];
+      flags.set(name, Array.from(new Set([...existing, ...skillFlags])).sort());
+    }
+    for (const [name, cat] of harvest.categories) {
+      if (!categories.has(name)) categories.set(name, cat);
+    }
+  }
+  _discoveredMetadataCache = { flags, categories };
+  return _discoveredMetadataCache;
 }
 
 /**

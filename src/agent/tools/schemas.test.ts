@@ -3,11 +3,11 @@ import {
   builtinToolSchemas,
   BUILTIN_TOOL_NAMES,
   agentTool,
-  clipboardWriteTool,
-  clipboardReadTool,
 } from './schemas.js';
+import { clipboardWriteTool, clipboardReadTool } from './schemas.interaction-tools.js';
 import { sendToSessionTool } from './schemas.peer.js';
-import { updateScheduleTool } from './schemas.schedule.js';
+import { createScheduleTool, updateScheduleTool } from './schemas.schedule.js';
+import { TASK_MAX_ATTEMPTS_LIMIT, TASK_RETRY_DELAY_MAX_MS, TASK_RETRY_DELAY_MIN_MS } from '../daemon/task-retry.js';
 import { cancelBackgroundJobTool, sendMessageToAgentTool, getBackgroundJobHealthTool } from './schemas.orchestration.js';
 
 describe('builtinToolSchemas', () => {
@@ -84,6 +84,8 @@ describe('builtinToolSchemas', () => {
     //   `browser_close`     — no inputs at all.
     //   `test_run`          — all 4 fields (file, name, timeout_ms, coverage)
     //                         are optional; required is [].
+    //   `model_complete`    — `prompt` is optional when `input_path` is set;
+    //                         handler enforces the conditional requirement.
     // All other built-ins have non-empty required arrays.
     const noRequired = new Set([
       'web_scrape',
@@ -96,6 +98,7 @@ describe('builtinToolSchemas', () => {
       'get_facet',
       'clipboard_read',
       'list_sessions',
+      'model_complete',
     ]);
     for (const tool of builtinToolSchemas) {
       expect(tool.input_schema.required).toBeDefined();
@@ -275,5 +278,20 @@ describe('updateScheduleTool', () => {
     expect(Array.isArray(cwdType)).toBe(true);
     expect(cwdType).toContain('string');
     expect(cwdType).toContain('null');
+  });
+});
+
+describe('schedule tool retry fields (#3243)', () => {
+  it.each([
+    ['create_schedule', createScheduleTool],
+    ['update_schedule', updateScheduleTool],
+  ])('%s declares bounded integer maxAttempts / retryDelayMs', (_name, tool) => {
+    const props = tool.input_schema.properties as Record<string, { type: unknown; minimum?: number; maximum?: number }>;
+    expect(props['maxAttempts']).toMatchObject({ type: 'integer', minimum: 1, maximum: TASK_MAX_ATTEMPTS_LIMIT });
+    expect(props['retryDelayMs']).toMatchObject({
+      type: 'integer',
+      minimum: TASK_RETRY_DELAY_MIN_MS,
+      maximum: TASK_RETRY_DELAY_MAX_MS,
+    });
   });
 });

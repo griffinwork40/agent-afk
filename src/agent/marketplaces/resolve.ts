@@ -7,8 +7,10 @@
  *     dir (for relative-path sources — no copy/symlink needed since the
  *     scanner will find the plugin in-place under
  *     `~/.afk/plugins/cache/<mp>/<plugin>/`), or
- *   - fan out to `installPlugin()` for git/URL sources (the resulting plugin
- *     lands in `~/.afk/plugins/<name>/` like any other git install).
+ *   - fan out to `installPlugin()` for git/URL string sources (the resulting
+ *     plugin lands in `~/.afk/plugins/<name>/` like any other git install), or
+ *   - clone + subdir for `git-subdir` object sources (url cloned, plugin root
+ *     resolved to `path` within the clone).
  *
  * Either path produces a `PluginIndexEntry` keyed `<marketplace>:<plugin>` for
  * relative sources, or by the canonical plugin name for git sources.
@@ -28,9 +30,15 @@ import {
 import { installPlugin, type InstallDeps, type InstallOptions } from '../plugins/install.js';
 import {
   isMarketplaceDir,
+  isGitSubdirSource,
   readManifest,
+  type GitSubdirSource,
   type MarketplacePluginEntry,
+  type PluginSourceSpec,
 } from './manifest.js';
+import * as git from '../plugins/git.js';
+import { assertHttpsUrl } from '../plugins/source.js';
+import { prepareCachedCheckout, removeDest } from '../plugins/checkout-lifecycle.js';
 
 export interface InstallFromMarketplaceOptions {
   /** Pin a specific ref for git-sourced plugins. Ignored for in-marketplace local plugins. */
@@ -86,10 +94,30 @@ export async function installFromMarketplace(
     );
   }
 
-  if (isRelativeOrLocal(entry.source)) {
-    return installInMarketplaceLocal(marketplace, entry, marketplaceDir, indexPath, now, options);
+  // Skipped entries are included in the manifest for list commands but are
+  // not installable. Surface the skip reason so the user understands why.
+  if (entry.skipped) {
+    throw new Error(
+      `plugin "${plugin}" in marketplace "${marketplace}" cannot be installed: ${entry.skipped}`,
+    );
   }
-  return installFromMarketplaceViaGit(marketplace, entry, options, deps);
+
+  const source = entry.source;
+
+  if (typeof source === 'string' && isRelativeOrLocalString(source)) {
+    return installInMarketplaceLocal(marketplace, entry, source, marketplaceDir, indexPath, now, options);
+  }
+  if (typeof source === 'string') {
+    return installFromMarketplaceViaGit(marketplace, entry, source, options, deps);
+  }
+  if (isGitSubdirSource(source)) {
+    return installFromMarketplaceViaGitSubdir(marketplace, entry, source, options, deps);
+  }
+
+  // Should not be reachable if manifest parsing is correct, but guard anyway.
+  throw new Error(
+    `plugin "${plugin}" in marketplace "${marketplace}" has an unsupported source shape`,
+  );
 }
 
 /**
@@ -100,7 +128,7 @@ export async function installFromMarketplace(
 export function listMarketplacePlugins(
   marketplace: string,
   deps: { marketplaceDirFor?: (name: string) => string; indexPath?: string } = {},
-): { name: string; description?: string; installed: boolean; key: string }[] {
+): { name: string; description?: string; installed: boolean; key: string; skipped?: string }[] {
   const dirFor = deps.marketplaceDirFor ?? getMarketplaceDir;
   const indexPath = deps.indexPath ?? getPluginsIndexPath();
   const marketplaceDir = dirFor(marketplace);
@@ -115,17 +143,24 @@ export function listMarketplacePlugins(
     const installed =
       compositeKey in index.plugins ||
       (p.name in index.plugins && index.plugins[p.name]?.marketplace === marketplace);
-    const result: { name: string; description?: string; installed: boolean; key: string } = {
+    const result: {
+      name: string;
+      description?: string;
+      installed: boolean;
+      key: string;
+      skipped?: string;
+    } = {
       name: p.name,
       installed,
       key: compositeKey,
     };
     if (p.description) result.description = p.description;
+    if (p.skipped) result.skipped = p.skipped;
     return result;
   });
 }
 
-function isRelativeOrLocal(source: string): boolean {
+function isRelativeOrLocalString(source: string): boolean {
   return (
     source.startsWith('./') ||
     source.startsWith('../') ||
@@ -135,11 +170,12 @@ function isRelativeOrLocal(source: string): boolean {
 }
 
 /** True when a marketplace plugin `source` is a local path (relative, absolute, or `~`) rather than a git-URL / `owner/repo` source. */
-export function isLocalPluginSource(source: string): boolean {
+export function isLocalPluginSource(source: PluginSourceSpec): boolean {
+  if (typeof source !== 'string') return false;
   return source.startsWith('.') || isAbsolute(source) || source.startsWith('~');
 }
 
-/** Resolve a marketplace plugin `source` to its on-disk dir: absolute / `~` expand directly; relative resolves against the marketplace root. */
+/** Resolve a marketplace plugin string `source` to its on-disk dir: absolute / `~` expand directly; relative resolves against the marketplace root. */
 export function resolvePluginSourceDir(marketplaceDir: string, source: string): string {
   return isAbsolute(source) || source.startsWith('~')
     ? expandLocal(source)
@@ -149,13 +185,13 @@ export function resolvePluginSourceDir(marketplaceDir: string, source: string): 
 function installInMarketplaceLocal(
   marketplace: string,
   pluginEntry: MarketplacePluginEntry,
+  rawSource: string,
   marketplaceDir: string,
   indexPath: string,
   now: () => Date,
   options: InstallFromMarketplaceOptions,
 ): InstallFromMarketplaceResult {
   // Resolve the relative source against the marketplace root.
-  const rawSource = pluginEntry.source;
   const absSource = resolvePluginSourceDir(marketplaceDir, rawSource);
 
   if (!existsSync(absSource)) {
@@ -203,6 +239,7 @@ function installInMarketplaceLocal(
 async function installFromMarketplaceViaGit(
   marketplace: string,
   pluginEntry: MarketplacePluginEntry,
+  source: string,
   options: InstallFromMarketplaceOptions,
   deps: InstallDeps,
 ): Promise<InstallFromMarketplaceResult> {
@@ -215,7 +252,7 @@ async function installFromMarketplaceViaGit(
     ...(options.ref ? { ref: options.ref } : {}),
     ...(options.force ? { force: true } : {}),
   };
-  const result = await installPlugin(pluginEntry.source, installOpts, deps);
+  const result = await installPlugin(source, installOpts, deps);
 
   // Annotate the freshly-written plugin entry with its marketplace origin.
   const indexPath = deps.indexPath ?? getPluginsIndexPath();
@@ -223,6 +260,87 @@ async function installFromMarketplaceViaGit(
   upsertPlugin(result.name, annotated, indexPath);
 
   return { key: result.name, name: result.name, dir: result.dir, entry: annotated };
+}
+
+/**
+ * Handle a `git-subdir` object source: clone `url` at `ref`/`sha`, then
+ * resolve the plugin root to `path` within the clone.
+ *
+ * The clone is placed in a temporary staging dir under the marketplace cache
+ * and then the subdir is exposed as the plugin dir directly (no copy — the
+ * clone acts as the plugin dir, with the subpath appended).
+ */
+async function installFromMarketplaceViaGitSubdir(
+  marketplace: string,
+  pluginEntry: MarketplacePluginEntry,
+  spec: GitSubdirSource,
+  options: InstallFromMarketplaceOptions,
+  deps: InstallFromMarketplaceDeps,
+): Promise<InstallFromMarketplaceResult> {
+  const indexPath = deps.indexPath ?? getPluginsIndexPath();
+  const now = deps.now ?? (() => new Date());
+  const gitOpts = deps.gitRunner ? { runner: deps.gitRunner } : {};
+
+  // S7-HTTPS: reject non-HTTPS git sources before any FS side-effect.
+  assertHttpsUrl(spec.url);
+
+  // Use a staging clone dir named by marketplace + plugin so repeated installs
+  // land in predictable, non-colliding locations.
+  const dirFor = deps.marketplaceDirFor ?? getMarketplaceDir;
+  const marketplaceDir = dirFor(marketplace);
+  const cloneDir = join(marketplaceDir, '.git-subdir-clones', pluginEntry.name);
+
+  const key = `${marketplace}:${pluginEntry.name}`;
+  const index = readIndex(indexPath);
+  if (!options.force && key in index.plugins && index.plugins[key]?.enabled) {
+    throw new Error(
+      `plugin "${key}" is already installed (re-run with --force to overwrite)`,
+    );
+  }
+
+  // Never remove a pre-existing checkout when a repeated clone fails.
+  const cloneDirExisted = existsSync(cloneDir);
+  try {
+    await git.clone(spec.url, cloneDir, gitOpts);
+    const refOverride = options.ref ?? spec.ref ?? spec.sha;
+    const { ref, commit } = await prepareCachedCheckout(cloneDir, refOverride, gitOpts);
+
+    const pluginDir = join(cloneDir, spec.path);
+    if (!existsSync(pluginDir)) {
+      throw new Error(
+        `git-subdir plugin "${pluginEntry.name}": path "${spec.path}" not found in clone of ${spec.url}`,
+      );
+    }
+
+    const pluginJsonPath = join(pluginDir, '.claude-plugin', 'plugin.json');
+    if (!existsSync(pluginJsonPath)) {
+      throw new Error(
+        `git-subdir plugin "${pluginEntry.name}": no .claude-plugin/plugin.json found at "${spec.path}" in clone of ${spec.url}`,
+      );
+    }
+
+    const ts = now().toISOString();
+    const entry: PluginIndexEntry = {
+      source: `${marketplace}:${pluginEntry.name}`,
+      sourceType: 'marketplace',
+      ref,
+      commit,
+      enabled: true,
+      installedAt: ts,
+      updatedAt: ts,
+      marketplace,
+    };
+    upsertPlugin(key, entry, indexPath);
+
+    return { key, name: pluginEntry.name, dir: pluginDir, entry };
+  } catch (err) {
+    try {
+      if (!cloneDirExisted && existsSync(cloneDir)) removeDest(cloneDir);
+    } catch {
+      /* best-effort cleanup */
+    }
+    throw err;
+  }
 }
 
 function expandLocal(p: string): string {

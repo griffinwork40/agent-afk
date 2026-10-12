@@ -29,8 +29,18 @@ const isOpus47Plus = (model: string): boolean => /opus-4-(7|[89])/.test(model);
  */
 export const isFable51 = (model: string): boolean => /(claude-)?fable-5[-.]1(?:[-.@]|$)/.test(model);
 
+/**
+ * Claude Haiku 5.5 (released 2026-10-07): adaptive thinking on by default,
+ * `enabled` + `budget_tokens` is a 400, `disabled` is accepted only at
+ * low/medium/high effort, and non-default `temperature`/`top_p`/`top_k` are a
+ * 400 on every request. Sources: platform.claude.com
+ * build-with-claude/thinking and models/haiku-5-5/migration-guide (verified
+ * 2026-10-08). Haiku 4.5 and earlier keep the extended-thinking profile.
+ */
+export const isHaiku55 = (model: string): boolean => /(claude-)?haiku-5[-.]5(?:[-.@]|$)/.test(model);
+
 const requiresAdaptiveThinking = (model: string): boolean =>
-  isOpus47Plus(model) || /(claude-)?(opus|sonnet)-5/.test(model) || isFable51(model);
+  isOpus47Plus(model) || /(claude-)?(opus|sonnet)-5/.test(model) || isFable51(model) || isHaiku55(model);
 
 // resolveAutoCompactThreshold moved to shared/auto-compact.ts (both providers
 // auto-compact now). Re-exported here so existing importers (index.ts) resolve
@@ -72,7 +82,7 @@ export function _resetWarnedTemperatureClampsForTest(): void {
  * (server default). Negative or non-finite values are treated as unset.
  */
 export function isNonDefaultSamplingForbiddenModel(model: string | undefined): boolean {
-  return typeof model === 'string' && isFable51(model);
+  return typeof model === 'string' && (isFable51(model) || isHaiku55(model));
 }
 
 export function resolveAnthropicTemperature(
@@ -421,10 +431,11 @@ export function resolveThinkingParam(
         // server accepts it with no beta header.
         return { type: 'between_tools' } as unknown as ThinkingConfigParam;
       }
-      // Claude Opus 5: rejects {type:'disabled'} at xhigh/max effort only.
+      // Claude Opus 5 and Claude Haiku 5.5: reject {type:'disabled'} at
+      // xhigh/max effort only.
       if (
         m.length > 0 &&
-        /(claude-)?opus-5(?![-.]5)/.test(m) &&
+        (/(claude-)?opus-5(?![-.]5)/.test(m) || isHaiku55(m)) &&
         effort !== undefined &&
         OPUS5_DISABLED_FORBIDDEN_EFFORTS.has(effort)
       ) {
@@ -510,9 +521,11 @@ export function resolveThinkingParam(
  *     here preserves the high-thinking-depth experience users had on 4.7.
  *     Sonnet 5's server default is also `high`; `max` keeps parity with the
  *     prior Sonnet tier (4.6).
- *  3. Older 4-x variants (4-1, 4-5) and every Haiku reject
+ *  3. Older 4-x variants (4-1, 4-5) and Haiku 4.5 and earlier reject
  *     `output_config.effort` with HTTP 400 — auto-default is skipped so
- *     non-effort requests on those models stay byte-equal to before.
+ *     non-effort requests on those models stay byte-equal to before. Haiku
+ *     5.5 accepts effort but is also left unset: its server default
+ *     (`medium`) suits the cheap, latency-sensitive work the alias is used for.
  *  4. 3.x / legacy / unknown ids: omit. Matches Claude Code's
  *     `modelSupportsEffort()` allowlist behavior.
  *
@@ -550,7 +563,7 @@ export function resolveEffort(
   // scripts/probe-effort-{all-models,older}.mjs against the OAuth identity;
   // Sonnet 5 / Opus 5 documented to accept `effort` with a `high` server
   // default — we keep `max` for high thinking depth). Earlier minor versions —
-  // 4-1, 4-5 sonnet, 4-5 opus, and every Haiku — return HTTP 400
+  // 4-1, 4-5 sonnet, 4-5 opus, and Haiku 4.5 and earlier — return HTTP 400
   // "This model does not support the effort parameter." Caller-supplied
   // effort still flows through unchanged so explicit overrides fail loudly
   // rather than silently ignoring, but auto-default is gated tightly.

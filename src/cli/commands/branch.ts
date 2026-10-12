@@ -16,6 +16,7 @@ import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 import { handleCommandError } from '../errors/index.js';
 import { palette } from '../palette.js';
+import { printWarnings } from './print-warnings.js';
 import { errorMessage } from '../../utils/errors.js';
 import { resolveRepoRoot } from '../../utils/git.js';
 import { runBranchPrune } from '../../agent/branch/branch-prune.js';
@@ -148,18 +149,7 @@ export function registerBranchCommand(program: Command): void {
         );
       }
 
-      if (result.warnings.length > 0) {
-        console.log('');
-        for (const w of result.warnings) {
-          if (w.startsWith('[ERROR]')) {
-            console.error(palette.error(w));
-          } else {
-            console.log(palette.warning(w));
-          }
-        }
-      }
-
-      const hasErrors = result.warnings.some((w) => w.startsWith('[ERROR]'));
+      const hasErrors = printWarnings(result.warnings);
       if (hasErrors) process.exit(1);
     });
 }

@@ -55,9 +55,14 @@ const STARTER_MODELS: ReadonlyArray<{ value: string; displayName: string; descri
     description: 'Max-capability Claude — long-horizon agentic coding and research, 1M context',
   },
   {
+    value: 'claude-haiku-5-5',
+    displayName: 'Claude Haiku 5.5',
+    description: 'Fastest, cheapest Claude — adaptive thinking, 1M context',
+  },
+  {
     value: 'claude-haiku-4-5-20251001',
     displayName: 'Claude Haiku 4.5',
-    description: 'Fastest, cheapest Claude',
+    description: 'Previous Haiku — 200k context, no adaptive thinking',
   },
 ];
 

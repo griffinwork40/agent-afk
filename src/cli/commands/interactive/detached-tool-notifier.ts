@@ -39,6 +39,23 @@ function stripTrailingPartialEntity(s: string): string {
 }
 
 /**
+ * Truncate `s` to at most `maxBytes` UTF-8 bytes without splitting a multi-byte
+ * code-point. UTF-8 continuation bytes are 0x80–0xBF; walking back from the cap
+ * boundary finds the nearest start byte in at most 3 steps (widest code-point).
+ *
+ * Contract: returned string has UTF-8 byte length ≤ maxBytes and contains no
+ * U+FFFD replacement characters introduced by truncation.
+ */
+function utf8SafeTruncate(s: string, maxBytes: number): string {
+  const buf = Buffer.from(s, 'utf8');
+  if (buf.length <= maxBytes) return s;
+  let end = maxBytes;
+  // Walk back over continuation bytes (0x80–0xBF) to land on a start byte.
+  while (end > 0 && (buf[end]! & 0xc0) === 0x80) end--;
+  return buf.subarray(0, end).toString('utf8');
+}
+
+/**
  * Build the model-context injection envelope for a settled detached tool call.
  * Escape before capping so adversarial `<` output does not expand past the budget.
  */
@@ -49,9 +66,13 @@ export function buildDetachedToolInjection(result: DetachedToolResult): string {
   const safeToolUseId = result.toolUseId.replace(/[^\x20-\x7e]/g, '');
   const escaped = escapeXmlAttr(result.output);
   let output: string;
-  if (Buffer.byteLength(escaped) > MAX_OUTPUT_BYTES) {
-    const truncated = Buffer.from(escaped).subarray(0, MAX_OUTPUT_BYTES).toString('utf8');
-    output = stripTrailingPartialEntity(truncated) + '\n… [detached output truncated]';
+  if (Buffer.byteLength(escaped, 'utf8') > MAX_OUTPUT_BYTES) {
+    // Invariant: escape first, cap second — XML entities are counted toward the
+    // byte budget so adversarial '<' expansion cannot exceed MAX_OUTPUT_BYTES.
+    // utf8SafeTruncate never splits a multi-byte code-point.
+    // stripTrailingPartialEntity removes any '&…' entity fragment cut by the cap.
+    output = stripTrailingPartialEntity(utf8SafeTruncate(escaped, MAX_OUTPUT_BYTES)) +
+      '\n… [detached output truncated]';
   } else {
     output = escaped;
   }
@@ -69,9 +90,20 @@ export function buildDetachedToolInjection(result: DetachedToolResult): string {
   );
 }
 
+/**
+ * Cap a string to at most `maxBytes` UTF-8 bytes, appending a truncation
+ * marker when trimmed. Mirrors the injection-path cap so `ToolEvent.result`
+ * written to the session sidecar on every autosave never holds >16 KiB of
+ * raw detached-tool output (carried-over finding from #3155).
+ */
+function capOutput(raw: string, maxBytes: number): string {
+  if (Buffer.byteLength(raw, 'utf8') <= maxBytes) return raw;
+  return utf8SafeTruncate(raw, maxBytes) + '\n… [detached output truncated]';
+}
+
 /** Patch partial-compose metadata from a settled result back onto a ToolEvent. */
 function applyResult(event: ToolEvent, result: DetachedToolResult): void {
-  event.result = result.output;
+  event.result = capOutput(result.output, MAX_OUTPUT_BYTES);
   event.isError = result.status === 'failed';
   if (result.incomplete !== undefined) event.incomplete = result.incomplete;
   if (result.incompleteReason !== undefined) event.incompleteReason = result.incompleteReason;

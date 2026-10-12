@@ -12,7 +12,7 @@
  * @module service/windows/install
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'fs';
 import { homedir, userInfo } from 'os';
 import { dirname } from 'path';
 import type { ServiceInstallOptions, ServiceInstallOutcome, ServiceName, ServiceUninstallOutcome } from '../types.js';
@@ -20,6 +20,7 @@ import { resolveWindowsProgramArguments } from './argv.js';
 import { serviceLogPath, taskName, taskXmlPath } from './paths.js';
 import { renderTaskXml } from './task-xml.js';
 import { errorMessage } from '../../utils/errors.js';
+import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { schtasks, errorDetail } from './schtasks-exec.js';
 
 /** Internal install opts — adds a test seam for the neutral options. */
@@ -37,22 +38,16 @@ export interface WindowsInstallOptions extends ServiceInstallOptions {
  * Returns an error string on failure.
  */
 export function writeUtf16Le(path: string, content: string): string | undefined {
-  let tmpPath: string | undefined;
   try {
-    mkdirSync(dirname(path), { recursive: true });
-    // Same directory as the target so renameSync never crosses volumes (EXDEV).
-    const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-    tmpPath = tmp;
     // UTF-16LE BOM + content encoded as UTF-16LE.
     const bom = '\uFEFF';
     const buf = Buffer.from(bom + content, 'utf16le');
-    writeFileSync(tmp, buf, { mode: 0o600 });
-    renameSync(tmp, path);
+    // atomicWriteFile: sibling temp (random suffix, same dir → no EXDEV) →
+    // rename. mkdirp creates parent dirs. Cleanup on failure is handled by
+    // the helper's finally block (#3265).
+    atomicWriteFile(path, buf, { mode: 0o600 });
     return undefined;
   } catch (err) {
-    if (tmpPath) {
-      try { rmSync(tmpPath, { force: true }); } catch { /* ignore */ }
-    }
     return `Failed to write task XML at ${path}: ${errorMessage(err)}`;
   }
 }

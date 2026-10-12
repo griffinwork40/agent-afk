@@ -956,4 +956,59 @@ describe('createPathApprovalHook — model_complete input_path', () => {
     expect(mgr._events).toHaveLength(0);
   });
 
+  it('once grant: allows the call, records for post-cleanup; PostToolUse revokes the temporary read root', async () => {
+    // The "once" choice grants single-use read access — the root is added
+    // before the tool call and revoked by PostToolUse. Verify the full lifecycle
+    // works for model_complete + input_path, mirroring the read_file once tests.
+    elicitationRouter.install(async () => ({ action: 'accept' as const, content: { choice: 'once' } }));
+    const mgr = makeMockGrantManager();
+    const { preToolUse, postToolUse } = createPathApprovalHook({
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    // PreToolUse: outside-root input_path must be approved once.
+    const decision = await preToolUse(
+      preCtx('model_complete', { prompt: 'summarise', input_path: '/etc/hosts' }, mgr),
+    );
+    expect(decision).toEqual({});
+    // The once-grant must have added the path to readRoots temporarily.
+    expect(mgr._readRoots).toContain('/etc/hosts');
+    expect(mgr._events.map((e) => e.op)).toEqual(['addRead']);
+
+    // PostToolUse: the once-grant must be revoked after the tool completes.
+    postToolUse(postCtx('model_complete', { prompt: 'summarise', input_path: '/etc/hosts' }, mgr));
+    expect(mgr._readRoots).not.toContain('/etc/hosts');
+    expect(mgr._events.map((e) => e.op)).toEqual(['addRead', 'revoke']);
+  });
+
+  it('subagent auto-deny: blocks an out-of-root input_path inside a fork without prompting', async () => {
+    // A forked sub-agent (parentSessionId set) must never elicit a prompt.
+    // Instead the hook auto-denies and returns a block decision so the fork
+    // reports the path requirement back to its parent (path-approval-hook.ts:301).
+    const handler = vi.fn(async () => ({ action: 'accept' as const, content: { choice: 'session' } }));
+    elicitationRouter.install(handler);
+    const mgr = makeMockGrantManager(); // roots: [BASE]
+    const { preToolUse } = createPathApprovalHook({
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    const decision = await preToolUse({
+      event: 'PreToolUse',
+      toolName: 'model_complete',
+      input: { prompt: 'summarise', input_path: '/etc/passwd' },
+      sessionId: 'child-1',
+      parentSessionId: 'parent-1',   // marks this as a fork
+      grantManager: mgr,
+    });
+
+    // Must be a hard block — never pass through, never prompt the operator.
+    expect(decision).toMatchObject({ decision: 'block' });
+    expect(handler).not.toHaveBeenCalled();
+    // No grant mutations: the denied path must not have been added to the roots.
+    expect(mgr._readRoots).not.toContain('/etc/passwd');
+    expect(mgr._events).toHaveLength(0);
+  });
+
 });

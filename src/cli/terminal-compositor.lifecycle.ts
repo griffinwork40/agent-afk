@@ -104,7 +104,7 @@ export interface LifecycleHost {
   // Resize ghost-erase state + committed-band rows: read by arm()'s immediate
   // SIGWINCH subscriber to snapshot the pre-resize footprint for erase.
   lastKnownRows: number;
-  pendingResizeErase: { top: number; bottom: number } | null;
+  pendingResizeErase: { top: number; bottom: number; origin?: 'width-only' | 'expand' } | null;
   /**
    * Set to `true` while a CPR (Cursor Position Report) reply is in-flight
    * after a tmux EXPAND SIGWINCH. Frame.repaint() checks this flag and skips
@@ -124,6 +124,7 @@ export interface LifecycleHost {
     growTotal: number;
     shrinkTotal: number;
     requeryCt: number;
+    widthOnlyOrigin: boolean;
   } | null;
   committedBand: string[];
   // #540: per-physical-row logical provenance, index-aligned 1:1 with
@@ -143,6 +144,9 @@ export interface LifecycleHost {
   // repaint once repositionCommittedBand re-establishes real geometry. See the
   // field doc on the class (terminal-compositor.ts).
   bandGeometryStale: boolean;
+  // Resize-specific staleness: set ONLY by SIGWINCH handlers, not by resumeInput.
+  // See the field doc on the class (terminal-compositor.ts).
+  resizeGeometryStale: boolean;
   // Real frame top/bottom from the last repaint (0 = no frame measured).
   lastMeasuredFrameTop: number;
   lastMeasuredFrameBottom: number;

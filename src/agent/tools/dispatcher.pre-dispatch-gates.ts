@@ -51,6 +51,7 @@ import type { CanUseTool, PermissionResult } from '../types/sdk-types.js';
 import type { TraceSink } from '../trace/index.js';
 import type { GrantManager } from './grant-manager.js';
 import { isBackgroundBashLaunch } from './bash-background-flag.js';
+import { isPeerToolBlocked, peerToolChildDenial } from './peer-tool-gate.js';
 
 // ---------------------------------------------------------------------------
 // Mutable state
@@ -115,6 +116,12 @@ export interface PreDispatchGateDeps {
   subagentId: string | undefined;
   /** Session grant manager injected into PreToolUse context. */
   sessionGrantManager: GrantManager | undefined;
+  /**
+   * Session is headless (`isHeadlessSession(config)`). Injected into
+   * the PreToolUse context as `nonInteractive: true` when set — the explicit
+   * headless signal, since a grant manager is wired on every production surface.
+   */
+  nonInteractive: boolean;
   /** Current working directory injected into PreToolUse context. */
   resolveBase: string | undefined;
   /** Witness trace writer; used by emitHookDecision and emitSessionPhase. */
@@ -531,6 +538,9 @@ export async function runPreDispatchGates(
       ...(deps.sessionGrantManager !== undefined
         ? { grantManager: deps.sessionGrantManager }
         : {}),
+      // Explicit headless signal (#2302): grant-manager presence cannot carry
+      // it, because every production provider wires one on every surface.
+      ...(deps.nonInteractive ? { nonInteractive: true } : {}),
       // Inject the tool-call id so hooks (e.g. edit-preview-hook) can
       // correlate this PreToolUse event with an in-flight tool-lane entry.
       ...(call.id !== undefined ? { toolUseId: call.id } : {}),
@@ -578,6 +588,16 @@ export async function runPreDispatchGates(
       }
       throw err;
     }
+  }
+
+  // 2-pre. Top-level-only peer tools (list_sessions / send_to_session).
+  // Structural: a forked child is refused regardless of its allowlist, which
+  // (CHILD_ALLOWED_TOOLS) contains every builtin name. Shares its predicate
+  // with the toolDefs filter so visibility and execution never diverge.
+  if (isPeerToolBlocked(call.name, deps)) {
+    const reason = peerToolChildDenial(call.name);
+    await emitPreToolUseBlock(call.name, reason, deps);
+    return { content: reason, isError: true, failureClass: 'permission-denied' };
   }
 
   // 2. Permission check

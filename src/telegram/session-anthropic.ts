@@ -20,7 +20,7 @@ import type { TelegramSessionBuildContext } from './session-context.js';
 export async function buildAnthropicTelegramSession(
   ctx: TelegramSessionBuildContext,
 ): Promise<AgentSession> {
-  const { sessionConfig, config, mcpManager, workspaceStore } = ctx;
+  const { sessionConfig, config, mcpManager, workspaceStore, stateStore } = ctx;
 
   const telegramApiKey = sessionConfig.apiKey ?? config.apiKey ?? '';
   const telegramBaseUrl = config.baseUrl;
@@ -49,6 +49,7 @@ export async function buildAnthropicTelegramSession(
         composeExecutor,
         ...(mcpManager !== undefined ? { mcpManager } : {}),
         workspaceStore,
+        ...(stateStore !== undefined ? { stateStore } : {}),
         // Tag the presence file (~/.afk/state/presence/<id>.json) and
         // get_runtime_state as the Telegram surface. Without this the provider
         // defaults to 'cli' (anthropic-direct/index.ts) and `/watch`

@@ -82,6 +82,14 @@ describe('validateNumberAnswer', () => {
     expect(result).toEqual({ ok: true, value: 42 });
   });
 
+  it('returns ok:false for empty string (Number(\'\') === 0 is a silent footgun)', () => {
+    // `Number('') === 0` which is isFinite — without an explicit guard, blank
+    // input silently passes as zero. The function must reject it.
+    const result = validateNumberAnswer('', {});
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toMatch(/valid number/i);
+  });
+
   it('returns ok:false for non-numeric input', () => {
     const result = validateNumberAnswer('abc', {});
     expect(result.ok).toBe(false);

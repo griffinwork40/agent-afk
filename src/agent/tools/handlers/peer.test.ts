@@ -357,3 +357,59 @@ describe('dispatcher gating — peer tools', () => {
     expect(toolNames).not.toContain('send_to_session');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Dispatcher gating — EXECUTION (not just visibility). Hiding the schema is
+// not enforcement: CHILD_ALLOWED_TOOLS admits every builtin and the handlers
+// are registered unconditionally, so a child naming the tool must be refused
+// by the pre-dispatch gate with a normal isError result.
+// ---------------------------------------------------------------------------
+
+describe('dispatcher gating — peer tools at execution time', () => {
+  function peerDispatcher(fork: { parentSessionId?: string; subagentId?: string }) {
+    return new SessionToolDispatcher({
+      handlers: createBuiltinHandlers(),
+      schemas: [...builtinToolSchemas],
+      permissions: { allowedTools: builtinToolSchemas.map((s) => s.name) },
+      hookRegistry: undefined,
+      sessionId: SELF_ID,
+      ...fork,
+    });
+  }
+  function peerCall(name: string, input: Record<string, unknown>) {
+    return { id: `${name}-call`, name, input, signal: new AbortController().signal };
+  }
+
+  it.each([
+    ['parentSessionId', { parentSessionId: 'parent-session-xyz' }],
+    ['subagentId only (stub-parent skill fork)', { subagentId: 'sub-123' }],
+  ])('child (%s) gets an isError result for list_sessions and send_to_session', async (_label, fork) => {
+    const dispatcher = peerDispatcher(fork);
+    const list = await dispatcher.execute(peerCall('list_sessions', {}));
+    expect(list.isError).toBe(true);
+    expect(list.failureClass).toBe('permission-denied');
+    expect(String(list.content)).toContain('top-level only');
+    const send = await dispatcher.execute(peerCall('send_to_session', { to: PEER_ID, message: 'hi' }));
+    expect(send.isError).toBe(true);
+    expect(String(send.content)).toContain('top-level only');
+  });
+
+  it('child batch path refuses peer tools too', async () => {
+    const dispatcher = peerDispatcher({ parentSessionId: 'parent-session-xyz' });
+    const results = await dispatcher.executeBatch([
+      peerCall('list_sessions', {}),
+      peerCall('send_to_session', { to: PEER_ID, message: 'hi' }),
+    ]);
+    expect(results.map((r) => r.isError)).toEqual([true, true]);
+  });
+
+  it('top-level dispatcher still runs list_sessions and send_to_session', async () => {
+    await writeSession(PEER_ID, { peerInbox: true });
+    const dispatcher = peerDispatcher({});
+    const list = await dispatcher.execute(peerCall('list_sessions', {}));
+    expect(list.isError).toBeFalsy();
+    expect(String(list.content)).toContain(PEER_ID);
+    const send = await dispatcher.execute(peerCall('send_to_session', { to: PEER_ID, message: 'hi' }));
+    expect(String(send.content)).not.toContain('top-level only');
+  });
+});

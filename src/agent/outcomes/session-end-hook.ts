@@ -181,7 +181,12 @@ async function _runImmediatePass(
   // sidecar), also walk subagents/*.jsonl to collect child commits/PRs.
   // This is the primary child-attribution path for journal-enabled sessions
   // (#2446); the PostToolUse hook remains the fallback for journal-absent runs.
-  const hasJournal = source === 'journal' || journalExists(sessionId);
+  //
+  // Short-circuit: when source === 'none' the journal was already probed by
+  // loadOutcomeTurns and found empty — no need to stat again. Only call
+  // journalExists when the sidecar was used (source === 'sidecar') to check
+  // whether a parallel journal was also written for subagent attribution.
+  const hasJournal = source === 'journal' || (source !== 'none' && journalExists(sessionId));
   if (hasJournal) {
     mergeArtifacts(artifacts, recoverSubagentArtifacts(sessionId));
   }

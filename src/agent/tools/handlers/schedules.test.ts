@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { loadSchedules } from '../../daemon/schedule-store.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -52,6 +53,26 @@ describe('create_schedule handler', () => {
     expect(parsed.name).toBe('Test Task');
     expect(parsed.cron).toBe('0 2 * * *');
     expect(parsed.enabled).toBe(true);
+  });
+
+  it('accepts runAt without cron, persists polling cadence and lists both one-shot dates', async () => {
+    const runAt = '2099-01-01T00:00:00Z';
+    const expiresAt = '2099-01-02T00:00:00Z';
+    const result = await createScheduleHandler(
+      { name: 'One Shot', command: '/cmd', runAt, expiresAt }, fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    expect(loadSchedules()[0]).toMatchObject({ cron: '* * * * *', runAt, expiresAt });
+    const list = await listSchedulesHandler(null, fakeSignal);
+    expect(JSON.parse(list.content as string)).toEqual([
+      expect.objectContaining({ runAt, expiresAt }),
+    ]);
+  });
+
+  it('rejects a create request without cron or runAt', async () => {
+    const result = await createScheduleHandler({ name: 'Missing Time', command: '/cmd' }, fakeSignal);
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/cron or runAt/);
   });
 
   it('invalid cron (3 fields) → isError: true', async () => {
@@ -823,6 +844,25 @@ describe('shell executor live-sync — create_schedule + update_schedule with li
     }
   });
 
+  it('one-shot shell task live-syncs runAt and expiresAt without a recurring cron', async () => {
+    const handle = await startDaemon({ port: 0 });
+    try {
+      const runAt = '2099-01-01T00:00:00Z';
+      const expiresAt = '2099-01-02T00:00:00Z';
+      const result = await createScheduleHandler(
+        { name: 'Shell One Shot', command: 'echo one-shot', executor: 'shell', runAt, expiresAt },
+        fakeSignal,
+      );
+      expect((JSON.parse(result.content as string) as SyncShape).daemonSynced).toBe(true);
+      expect(handle.scheduler.list().find((task) => task.taskId === 'shell-one-shot')).toMatchObject({
+        runAt, expiresAt, executor: 'shell',
+      });
+      expect(handle.scheduler.list().find((task) => task.taskId === 'shell-one-shot')?.cronExpression).toBeUndefined();
+    } finally {
+      await handle.stop();
+    }
+  });
+
   it('update_schedule shell: enabled task stays live after DELETE+POST update cycle', async () => {
     // Regression guard for PR #2316 review high finding:
     // The update path does DELETE then POST.  With the old flat shell block the
@@ -868,5 +908,54 @@ describe('shell executor live-sync — create_schedule + update_schedule with li
     } finally {
       await handle.stop();
     }
+  });
+});
+
+describe('schedule handlers — retry fields (#3243)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedules-handler-retry-'));
+    vi.stubEnv('AFK_HOME', tmpDir);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('create_schedule persists maxAttempts / retryDelayMs and list_schedules shows them', async () => {
+    const result = await createScheduleHandler(
+      { name: 'Retry Task', command: '/r', cron: '0 2 * * *', maxAttempts: 3, retryDelayMs: 2_000 },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    const list = JSON.parse((await listSchedulesHandler({}, fakeSignal)).content as string) as Array<Record<string, unknown>>;
+    expect(list[0]).toMatchObject({ id: 'retry-task', maxAttempts: 3, retryDelayMs: 2_000 });
+  });
+
+  it.each([
+    [{ maxAttempts: 0 }, /maxAttempts/],
+    [{ maxAttempts: 6 }, /maxAttempts/],
+    [{ maxAttempts: 2.5 }, /maxAttempts/],
+    [{ retryDelayMs: 10 }, /retryDelayMs/],
+    [{ retryDelayMs: '5000' }, /retryDelayMs/],
+  ])('create_schedule rejects %o', async (extra, pattern) => {
+    const result = await createScheduleHandler(
+      { name: 'Bad Retry', command: '/r', cron: '0 2 * * *', ...extra },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(pattern);
+  });
+
+  it('update_schedule sets and validates the fields', async () => {
+    await createScheduleHandler({ name: 'Upd Retry', command: '/r', cron: '0 2 * * *' }, fakeSignal);
+    const bad = await updateScheduleHandler({ taskId: 'upd-retry', maxAttempts: 99 }, fakeSignal);
+    expect(bad.isError).toBe(true);
+    const ok = await updateScheduleHandler({ taskId: 'upd-retry', maxAttempts: 2, retryDelayMs: 1_000 }, fakeSignal);
+    expect(ok.isError).toBeUndefined();
+    const list = JSON.parse((await listSchedulesHandler({}, fakeSignal)).content as string) as Array<Record<string, unknown>>;
+    expect(list[0]).toMatchObject({ maxAttempts: 2, retryDelayMs: 1_000 });
   });
 });

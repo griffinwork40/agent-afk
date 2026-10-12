@@ -5,21 +5,12 @@ import * as path from 'node:path';
 import ts from 'typescript';
 import type { TrackedPackage, ImportKind, SymbolUsage, Inventory } from './audit-sdk-dependency.types.js';
 import { TRACKED_PACKAGES, SCAN_ROOTS } from './audit-sdk-dependency.types.js';
+import { isAnyTs, walkSourceFiles } from './lib/walk-source-files.js';
 
 export { TRACKED_PACKAGES, SCAN_ROOTS };
 
 export function walk(dir: string, out: string[]): void {
-  if (!fs.existsSync(dir)) return;
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name.startsWith('.')) continue;
-      walk(full, out);
-    } else if (entry.isFile() && entry.name.endsWith('.ts')) {
-      out.push(full);
-    }
-  }
+  walkSourceFiles(dir, (absPath) => isAnyTs(absPath), out);
 }
 
 function isTracked(moduleSpecifier: string): moduleSpecifier is TrackedPackage {

@@ -11,9 +11,11 @@ import { clearCdIntent } from '../utils/cd-on-exit.js';
 // Load project .env (ANTHROPIC_API_KEY, CLAUDE_MODEL, etc).
 // Do NOT load ~/.claude/.env — that file can hold stale OAuth tokens
 // that interfere with the subprocess's native keychain auth.
-loadEnv();
+// quiet:true suppresses the "injecting env" log added in dotenv v17+ so
+// it never leaks into CLI stdout or piped output (e.g. `afk chat`).
+loadEnv({ quiet: true });
 // Also load ~/.afk/config/afk.env with override: false so project .env takes precedence
-loadEnv({ path: getEnvConfigPath(), override: false });
+loadEnv({ path: getEnvConfigPath(), override: false, quiet: true });
 
 // Invariant: Guard against multi-terminal race — `afk shell-init` must NOT
 // clear a marker another terminal's wrapper is about to read. The race:
@@ -83,12 +85,14 @@ import { registerTraceCommand } from './commands/trace.js';
 import { registerWhatifCommand } from './commands/whatif.js';
 import { registerWitnessCommand } from './commands/witness.js';
 import { registerServiceCommand } from './commands/service.js';
+import { registerRestartCommand } from './commands/restart.js';
 import { registerBrowserCommand } from './commands/browser.js';
 import { registerImproveCommand } from './commands/improve/index.js';
 import { registerShellInitCommand } from './commands/shell-init.js';
 import { registerTranscriptCommand } from './commands/transcript.js';
 import { registerInsightsCommand } from './commands/insights.js';
 import { registerCapturesCommand } from './commands/captures.js';
+import { registerDefectsCommand } from './commands/defects.js';
 import { setInteractiveUpdateNotices } from './commands/interactive.js';
 import { loadConfig, loadCredential } from './config.js';
 import { providerForModel } from '../agent/providers/index.js';
@@ -151,12 +155,14 @@ registerTraceCommand(program);
 registerWhatifCommand(program);
 registerWitnessCommand(program);
 registerServiceCommand(program);
+registerRestartCommand(program);
 registerBrowserCommand(program);
 registerImproveCommand(program);
 registerShellInitCommand(program);
 registerTranscriptCommand(program);
 registerInsightsCommand(program);
 registerCapturesCommand(program);
+registerDefectsCommand(program);
 
 // Add aliases
 program.commands.find((c) => c.name() === 'chat')?.alias('c');
@@ -240,7 +246,7 @@ export async function runFirstRunDetector(argv: string[] = process.argv): Promis
     }
     try {
       await runAuthWizard();
-      loadEnv({ path: getEnvConfigPath(), override: true });
+      loadEnv({ path: getEnvConfigPath(), override: true, quiet: true });
     } catch {
       // swallow — let program.parse() surface auth error naturally
     }

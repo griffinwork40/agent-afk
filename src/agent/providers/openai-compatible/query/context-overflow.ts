@@ -13,6 +13,7 @@ import { guardContextOverflow, contextWindowTokensUsed } from '../../shared/auto
 import { contextLimitFor } from '../../../model-limits.js';
 import { resolveEffectiveMaxOutputTokens } from './model-params.js';
 import type { ProviderUsage } from '../../../provider.js';
+import { ensureError } from '../../../../utils/errors.js';
 
 /**
  * Run the context-overflow guard for a pending turn.
@@ -47,6 +48,6 @@ export function checkContextOverflow(
     );
     return null;
   } catch (err) {
-    return err instanceof Error ? err : new Error(String(err));
+    return ensureError(err);
   }
 }

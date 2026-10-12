@@ -26,7 +26,7 @@
  */
 
 import { debugLog } from '../../utils/debug.js';
-import { AbortError, HookBlockedError } from '../../utils/errors.js';
+import { AbortError, HookBlockedError, ensureError} from '../../utils/errors.js';
 import type {
   HookDecision,
   HookRegistry,
@@ -131,7 +131,7 @@ export async function dispatchSessionEnd(
       return;
     }
     debugLog(`SessionEnd hook unexpected error: ${String(err)}`);
-    options.onError?.(err instanceof Error ? err : new Error(String(err)));
+    options.onError?.(ensureError(err));
   }
 }
 

@@ -23,6 +23,7 @@ import { mkdir, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/p
 import { join } from 'node:path';
 import { assertSafeJobId, getHandoffsDir } from '../../paths.js';
 import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
+import { isErrnoCode } from '../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // HandoffRecord schema
@@ -175,7 +176,7 @@ export async function readHandoff(
     const raw = await readFile(filePath, 'utf-8');
     return JSON.parse(raw) as HandoffRecord;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    if (isErrnoCode(err, 'ENOENT')) return null;
     throw err;
   }
 }
@@ -196,7 +197,7 @@ export async function deleteHandoff(
   try {
     await rm(handoffPath(handoffsDir, taskId), { force: true });
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    if (isErrnoCode(err, 'ENOENT')) return;
     throw err;
   }
 }
@@ -276,7 +277,7 @@ export async function withHandoffLock<T>(
   try {
     await writeFile(lock, '', { flag: 'wx', mode: 0o600 });
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+    if (isErrnoCode(err, 'EEXIST')) {
       // Check whether the lock is stale (crash-leftover). A fresh lock means a
       // genuine concurrent holder — give up immediately.
       let lockMtime: number;
@@ -297,7 +298,7 @@ export async function withHandoffLock<T>(
       try {
         await writeFile(lock, '', { flag: 'wx', mode: 0o600 });
       } catch (retryErr) {
-        if ((retryErr as NodeJS.ErrnoException).code === 'EEXIST') {
+        if (isErrnoCode(retryErr, 'EEXIST')) {
           // Genuine race on the retry — another process won.
           return null;
         }

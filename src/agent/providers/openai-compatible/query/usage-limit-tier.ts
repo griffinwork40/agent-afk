@@ -124,6 +124,26 @@ function resolveQuotaFallbackWaitMs(): number {
 }
 
 /**
+ * Convenience test-injection helper that sets any combination of the three
+ * quota override knobs in a single call. Pass `null` for a field to restore
+ * its production default; omit a field to leave it unchanged. Call with an
+ * empty object (`{}`) to leave all three unchanged (NOT a reset — use
+ * `{ transientThresholdMs: null, twoHoursMs: null, fallbackWaitMs: null }`
+ * to reset all three to production defaults).
+ *
+ * @internal Test injection only — never call in production code.
+ */
+export function __setQuotaOverrides(overrides: {
+  transientThresholdMs?: number | null;
+  twoHoursMs?: number | null;
+  fallbackWaitMs?: number | null;
+}): void {
+  if ('transientThresholdMs' in overrides) __setQuotaTransientThresholdMs(overrides.transientThresholdMs ?? null);
+  if ('twoHoursMs' in overrides) __setQuotaTwoHoursMs(overrides.twoHoursMs ?? null);
+  if ('fallbackWaitMs' in overrides) __setQuotaFallbackWaitMs(overrides.fallbackWaitMs ?? null);
+}
+
+/**
  * True when `event` is an `error` that should be treated as a quota /
  * usage-limit (long wait) rather than a transient rate-limit (short retry).
  *

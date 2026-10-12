@@ -22,6 +22,8 @@ export interface BootstrapConfig {
   maxOutputTokens: number | undefined;
   maxToolUseIterations: number | undefined;
   basePrompt: string | undefined;
+  /** Bare operator overlay (no framework); reaches unnamed `agent` children (#3324). */
+  operatorOverlay: string | undefined;
   systemPrompt: string | undefined;
   systemPromptSource: string | undefined;
   cliConfig: CliConfig;
@@ -79,7 +81,7 @@ export function resolveBootstrapConfig(
   // is appended on top via resolveBaseSystemPrompt(), never substituted for
   // the base. `source` is the layered provenance string surfaced by
   // --dump-prompt (`framework`, `framework+afk-md:/path`, …).
-  const { prompt: basePrompt, source: systemPromptSource } = resolveBaseSystemPrompt();
+  const { prompt: basePrompt, source: systemPromptSource, overlay: operatorOverlay } = resolveBaseSystemPrompt();
   const cliConfig = loadConfig();
   const autoRouting = cliConfig.autoRouting?.interactive ?? true;
   const systemPrompt = assembleSystemPrompt(basePrompt, autoRouting, 'repl');
@@ -94,6 +96,7 @@ export function resolveBootstrapConfig(
     maxOutputTokens,
     maxToolUseIterations,
     basePrompt,
+    operatorOverlay,
     systemPrompt,
     systemPromptSource,
     cliConfig,

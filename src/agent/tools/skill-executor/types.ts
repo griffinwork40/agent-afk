@@ -18,6 +18,7 @@ import type { ModelProvider } from '../../provider.js';
 import type { TraceSink } from '../../trace/index.js';
 import type { BackgroundAgentRegistry } from '../../background-registry.js';
 import type { SdkPluginConfig } from '../../types/sdk-types.js';
+import type { HookRegistry } from '../../hooks.js';
 import type { ChildProviderFactoryArgs } from '../nesting.js';
 import type { Surface } from '../../awareness/types.js';
 import type { ReadScopeInputs } from '../../subagent-read-scope.js';
@@ -78,7 +79,27 @@ export interface SkillExecutorContext {
   openaiBaseUrl?: string;
   /** xAI endpoint forwarded through skill-forked agent descendants. */
   xaiBaseUrl?: string;
+  /**
+   * Plugin source for this executor's skill discovery (registry refresh and
+   * plugin SKILL.md bodies). Defined => the SOLE plugin source (`[]` => no
+   * plugins); undefined => scan every plugin root (today's behaviour).
+   * Threaded to nested executors by the depth-aware factory (nesting.ts).
+   */
   pluginConfigs?: SdkPluginConfig[];
+  /**
+   * Skill allowlist (#3442). Exact string equality on the requested skill
+   * name: `plugin:name` / `user:name` / `project:name` must be listed
+   * verbatim, and a bare `name` authorizes only the entry keyed exactly
+   * `name`. Enforced in `SkillExecutor.execute` before any registry lookup;
+   * undefined => no gate.
+   */
+  skillAllowlist?: readonly string[];
+  /**
+   * Hook registry for the per-call {@link SubagentManager}s this executor
+   * builds (fork-dispatch.ts, fork-child-config.ts), whose stub parents carry
+   * none, so SubagentStart/Stop fire for skill forks at every depth.
+   */
+  hookRegistry?: HookRegistry;
   depth?: number;
   maxDepth?: number;
   /**

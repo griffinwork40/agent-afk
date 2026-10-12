@@ -16,10 +16,8 @@
  * @module agent/gh
  */
 
-import { execFile, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
+import { spawn } from 'node:child_process';
+import { execFileAsync } from '../utils/exec-file.js';
 
 // ---------------------------------------------------------------------------
 // Exec timeout (P2): all execFileAsync calls get a 20 s hard timeout so a DNS

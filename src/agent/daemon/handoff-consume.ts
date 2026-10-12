@@ -24,7 +24,7 @@ import { mkdirSync } from 'node:fs';
 import { assertSafeJobId, getHandoffsDir } from '../../paths.js';
 import type { HandoffRecord } from './handoff-store.js';
 import { enqueue } from './queue-store.js';
-import { errorMessage } from '../../utils/errors.js';
+import { errorMessage, isErrnoCode} from '../../utils/errors.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import {
   deadLetterHandoffFile,
@@ -297,7 +297,7 @@ export async function processAnsweredHandoffs(
       try {
         await rename(src, claimed);
       } catch (renameErr) {
-        if ((renameErr as NodeJS.ErrnoException).code === 'ENOENT') continue; // another caller got it
+        if (isErrnoCode(renameErr, 'ENOENT')) continue; // another caller got it
         throw renameErr;
       }
 

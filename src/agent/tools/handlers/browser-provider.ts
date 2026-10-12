@@ -19,6 +19,7 @@
 import type { BrowserProvider } from '../../../browser/provider.js';
 import { env } from '../../../config/env.js';
 import { isPlaywrightMissing, playwrightMissingHint } from './playwright-hints.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -119,7 +120,7 @@ export async function acquireBrowserProvider(
       }
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     if (isPlaywrightMissing(msg)) {
       return { ok: false, isError: true, content: playwrightMissingHint(msg) };
     }
