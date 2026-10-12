@@ -19,7 +19,7 @@ import type { ExecFileFn } from './worktree-sweep.js';
 
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'wt-setup-')); });
-afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }); });
 
 async function declare(root: string, decl: unknown): Promise<void> {
   await fs.mkdir(join(root, '.afk'), { recursive: true });

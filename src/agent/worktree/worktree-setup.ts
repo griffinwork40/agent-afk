@@ -129,17 +129,40 @@ export const defaultSetupCommandRunner: SetupCommandRunner = (command, opts) =>
       resolvePromise({ kind: 'failed', detail: errorMessage(err) });
       return;
     }
-    const kill = (): void => { if (proc.pid !== undefined) killProcessGroup(proc.pid); };
+    // Invariant: on Windows, killProcessGroup sends SIGTERM/TerminateProcess but
+    // the child may still hold open file handles until its close event fires.
+    // Resolving the promise before close causes afterEach rmSync to race those
+    // handles (EBUSY on Windows).  We therefore always resolve from the close
+    // handler (never before it), so the caller returns only after the process
+    // has fully exited and released its handles.
+    //
+    // On timeout/abort we record a pending kill outcome and let close fire
+    // naturally, bounded by a grace timer that forces resolution if close is
+    // unreasonably delayed (e.g. a zombie that never exits).
+    const CLOSE_GRACE_MS = 5_000;
+    let killOutcome: SetupCommandOutcome | undefined;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    const kill = (outcome: SetupCommandOutcome): void => {
+      if (killOutcome !== undefined) return; // already killing
+      killOutcome = outcome;
+      if (proc.pid !== undefined) killProcessGroup(proc.pid);
+      // Grace timer: if the process never fires close, resolve after grace period.
+      graceTimer = setTimeout(() => finish(outcome), CLOSE_GRACE_MS);
+    };
     const onData = (chunk: Buffer): void => {
       tail = (tail + chunk.toString('utf-8')).slice(-OUTPUT_TAIL_BYTES);
     };
     proc.stdout?.on('data', onData);
     proc.stderr?.on('data', onData);
-    const timer = setTimeout(() => { kill(); finish({ kind: 'timeout' }); }, opts.timeoutMs);
-    const onAbort = (): void => { kill(); finish({ kind: 'aborted' }); };
+    const timer = setTimeout(() => { kill({ kind: 'timeout' }); }, opts.timeoutMs);
+    const onAbort = (): void => { kill({ kind: 'aborted' }); };
     opts.signal?.addEventListener('abort', onAbort, { once: true });
     proc.on('error', (err) => finish({ kind: 'failed', detail: errorMessage(err) }));
     proc.on('close', (code, sig) => {
+      if (graceTimer !== undefined) clearTimeout(graceTimer);
+      // If we killed the process, report the kill outcome (timeout/aborted),
+      // not the resulting non-zero exit code.
+      if (killOutcome !== undefined) { finish(killOutcome); return; }
       if (code === 0) finish({ kind: 'ok' });
       else finish({ kind: 'failed', detail: `exit ${code ?? sig ?? 'unknown'}${tail.trim() ? `: ${tail.trim()}` : ''}` });
     });
