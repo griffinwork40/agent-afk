@@ -142,6 +142,18 @@ describe('downloadTelegramFile: timeout (SI-5)', () => {
 // ---------------------------------------------------------------------------
 
 describe('downloadTelegramFile: token safety (SI-6)', () => {
+  it.each(['fetch', 'body'] as const)('redacts empty-key query values on %s failure', async (phase) => {
+    const error = new Error('failed https://api.telegram.org/file?=EMPTY_KEY_SECRET');
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      if (phase === 'fetch') throw error;
+      return new Response(new ReadableStream({ start(controller) { controller.error(error); } }));
+    }));
+    const result = await downloadTelegramFile(VALID_URL, { maxBytes: 5_000_000 });
+    expect(result.status).toBe('network-error');
+    expect(JSON.stringify(result)).not.toContain('EMPTY_KEY_SECRET');
+    expect(JSON.stringify(result)).toContain('[REDACTED]');
+  });
+
   it('does not include the bot token in ssrf-rejected result fields', async () => {
     const result = await downloadTelegramFile(
       `https://evil.example.com/file/bot${TOKEN}/file.txt`,

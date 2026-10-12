@@ -1,5 +1,5 @@
 /**
- * AFK-mode gate hook factory.
+ * Contract: AFK-mode gate hook factory.
  *
  * Returns a `HookHandler` that governs high-risk / irreversible tool calls when
  * the session is in `'autonomous'` (AFK) mode. The handler reads the current
@@ -22,7 +22,7 @@
  *     `chmod`/`chown`)
  *   - writes that escape the workspace, hit the write-denylist (`~/.ssh`,
  *     `/etc`, …), or target the `.git` object store. Private temp roots
- *     (per-uid dirs with no group/other-write bits — see `getTempRoots()` in
+ *     (per-uid dirs with no group/other access bits on POSIX — see `getTempRoots()` in
  *     `risk-classifier.paths.ts`) are NOT an escape; shared world-writable
  *     dirs like Linux `/tmp` (mode 1777) are excluded from the carve-out
  *   - schedule mutations: `create_schedule` / `update_schedule` / `cancel_schedule` — modify the

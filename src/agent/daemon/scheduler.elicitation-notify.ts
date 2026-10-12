@@ -36,7 +36,7 @@
 import { writeHandoff, type HandoffRecord } from './handoff-store.js';
 import { errorMessage } from '../../utils/errors.js';
 import type { ElicitationHandler } from '../elicitation-router.js';
-import type { ElicitationRequest, ElicitationResult } from '../types/sdk-types.js';
+import { serializeRequest } from './elicitation-serialize.js';
 
 // Re-export so callers only need one import for the whole cron-elicitation concern.
 export type { ElicitationHandler };
@@ -114,10 +114,7 @@ export interface CronElicitationHandlerOpts {
 export function makeCronElicitationHandler(
   opts: CronElicitationHandlerOpts,
 ): ElicitationHandler {
-  return async (
-    request: ElicitationRequest,
-    options: { signal: AbortSignal; sessionId?: string },
-  ): Promise<ElicitationResult> => {
+  const handler: ElicitationHandler = async (request, options) => {
     if (options.signal.aborted) return { action: 'decline' };
 
     const record: HandoffRecord = {
@@ -164,35 +161,5 @@ export function makeCronElicitationHandler(
     // synchronous answer.
     return { action: 'decline' };
   };
-}
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Serialize the JSON-safe fields of an `ElicitationRequest` into a plain
- * record for durable storage (mirrors `handoff-wiring.ts`).
- */
-function serializeRequest(request: ElicitationRequest): Record<string, unknown> {
-  const out: Record<string, unknown> = { message: request.message };
-  if (request.serverName !== undefined) out['serverName'] = request.serverName;
-  if (request.mode !== undefined) out['mode'] = request.mode;
-  if (request.url !== undefined) out['url'] = request.url;
-  if (request.elicitationId !== undefined) out['elicitationId'] = request.elicitationId;
-  if (request.requestedSchema !== undefined) out['requestedSchema'] = request.requestedSchema;
-  if (request.title !== undefined) out['title'] = request.title;
-  if (request.displayName !== undefined) out['displayName'] = request.displayName;
-  if (request.description !== undefined) out['description'] = request.description;
-  if (request.type !== undefined) out['type'] = request.type;
-  if (request.choices !== undefined) out['choices'] = request.choices;
-  if (request.questionDefault !== undefined) out['questionDefault'] = request.questionDefault;
-  if (request.minLength !== undefined) out['minLength'] = request.minLength;
-  if (request.maxLength !== undefined) out['maxLength'] = request.maxLength;
-  if (request.min !== undefined) out['min'] = request.min;
-  if (request.max !== undefined) out['max'] = request.max;
-  if (request.allowSkip !== undefined) out['allowSkip'] = request.allowSkip;
-  if (request.allowCustom !== undefined) out['allowCustom'] = request.allowCustom;
-  if (request.context !== undefined) out['context'] = request.context;
-  return out;
+  return handler;
 }

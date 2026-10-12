@@ -12,8 +12,9 @@ import os from 'os';
 import path from 'path';
 import { lstatSync, readlinkSync, realpathSync } from 'fs';
 import { safeRealpath, getWriteDenylist } from './tools/handlers/write-denylist.js';
-import { getAfkHome } from '../paths.js';
+import { getAfkHome, getAfkStateDir, getAgentFrameworkDir } from '../paths.js';
 import { sessionTmpdirRoot } from './session/session-tmpdir.js';
+import { pathIsWithin } from './tools/fs-case.js';
 import type { RiskContext, RiskVerdict } from './risk-classifier.js';
 
 /** Symlink hops followed for a dangling link before giving up (matches ELOOP
@@ -229,14 +230,13 @@ export function isOutsideRoot(
 }
 
 /**
- * Resolved AFK home, or `null` when `getAfkHome()` throws (malformed env).
- * Uses `safeRealpath` so a not-yet-created home still resolves through its
- * existing ancestors (on macOS `/var` → `/private/var`), matching the
- * realpath'd write target it is compared against.
+ * All independently relocatable AFK state roots, or `null` if any is invalid.
+ * Resolve through existing ancestors even when a root has not been created.
+ * Unknown root → fail closed: no private-temp carve-out may be granted.
  */
-function afkHomeResolved(): string | null {
+function afkStateRootsResolved(): readonly string[] | null {
   try {
-    return safeRealpath(getAfkHome());
+    return [getAfkHome(), getAfkStateDir(), getAgentFrameworkDir()].map(safeRealpath);
   } catch {
     return null;
   }
@@ -246,19 +246,21 @@ function afkHomeResolved(): string | null {
  * True when a write that escapes the workspace may still proceed because both
  * the named path and the writer's final target sit inside a private temp root,
  * the final target is neither denylisted nor inside `.git/`, and the target
- * is NOT inside the AFK home directory (skills/, agent-framework/, plugins/
- * etc. must not be silently writable via a temp-root carve-out).
+ * is NOT inside any AFK state root (home, state tier, or framework tier).
+ * These must not be silently writable via a temp-root carve-out.
  */
 function isSafeTempWrite(abs: string, resolved: string): boolean {
   if (!isInsideTempRoot(resolved)) return false;
   const target = finalWriteTarget(abs);
   if (!isInsideTempRoot(target)) return false;
   if (hardBlock(target) !== undefined) return false;
-  // AFK home under a temp root (tests, TMPDIR-relocated installs) must not
-  // become writable through the carve-out. Unknown home → fail closed.
-  const afkHome = afkHomeResolved();
-  if (afkHome === null) return false;
-  return !(target === afkHome || target.startsWith(afkHome + path.sep));
+  // AFK state under a temp root must not become writable through the carve-out.
+  // Keep the original exact comparison additive; the case-aware check only
+  // excludes more, including missing leaves on case-insensitive volumes.
+  const roots = afkStateRootsResolved();
+  if (roots === null) return false;
+  return !roots.some((root) =>
+    target === root || target.startsWith(root + path.sep) || pathIsWithin(target, root));
 }
 
 /** Classify one write target path. */

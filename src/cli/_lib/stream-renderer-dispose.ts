@@ -269,7 +269,7 @@ function teardownOwnedCompositor(ctx: DisposeCtx): void {
 }
 
 /**
- * Phase 8 (borrowed): reset streaming-only state on a borrowed TerminalCompositor
+ * Invariant: Phase 8 (borrowed): reset streaming-only state on a borrowed TerminalCompositor
  * and restore the surface's cancel handler, leaving the compositor armed for idle
  * input.
  *

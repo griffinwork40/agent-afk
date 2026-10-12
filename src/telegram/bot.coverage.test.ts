@@ -18,7 +18,7 @@
 
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TelegramBot } from './bot.js';
-import type { Context } from 'telegraf';
+import type { Context, Telegraf } from 'telegraf';
 import type { AgentConfig } from '../agent/types.js';
 
 // ---------------------------------------------------------------------------
@@ -75,6 +75,24 @@ function makeBot(verbose = false): TelegramBot {
     allowedChatIds: new Set([12345]),
     createSession,
   });
+}
+
+/** Drive real registered command middleware, intercepting Telegram at the API boundary. */
+async function command(bot: TelegramBot, text: string) {
+  const inner = (bot as unknown as { bot: Telegraf<Context> }).bot;
+  inner.botInfo = { id: 1, is_bot: true, first_name: 'T', username: 'bot', can_join_groups: false, can_read_all_group_messages: false, supports_inline_queries: false };
+  // Telegraf creates a per-update Telegram instance; intercept its prototype.
+  const api = vi.spyOn(Object.getPrototypeOf(inner.telegram), 'callApi').mockResolvedValue({ message_id: 1 });
+  await inner.handleUpdate({
+    update_id: 1,
+    message: {
+      message_id: 1, text, date: 0,
+      chat: { id: 12345, type: 'private', first_name: 'T' },
+      from: { id: 12345, is_bot: false, first_name: 'T' },
+      entities: [{ type: 'bot_command', offset: 0, length: text.length }],
+    },
+  });
+  return api;
 }
 
 // ---------------------------------------------------------------------------
@@ -170,8 +188,15 @@ describe('TelegramBot — additional branch coverage', () => {
   // /compact — idle and busy paths
   // -------------------------------------------------------------------------
   describe('/compact command', () => {
-    test('getBusySessionCount still returns 0 after failed compact route lookup', () => {
-      expect(bot.getBusySessionCount()).toBe(0);
+    test('queues compact and replies when the session is busy', async () => {
+      const sm = (bot as unknown as { sessionManager: { getSession: (...a: unknown[]) => unknown } }).sessionManager;
+      const getSession = vi.spyOn(sm, 'getSession').mockResolvedValue({ state: 'streaming' });
+      const mh = (bot as unknown as { messageHandler: { enqueueCompact: (...a: unknown[]) => void } }).messageHandler;
+      const enqueue = vi.spyOn(mh, 'enqueueCompact').mockImplementation(() => {});
+      const api = await command(bot, '/compact');
+      expect(getSession).toHaveBeenCalledTimes(1);
+      expect(enqueue).toHaveBeenCalledTimes(1);
+      expect(api).toHaveBeenCalledWith('sendMessage', expect.objectContaining({ chat_id: 12345, text: 'Compact queued.' }));
     });
   });
 
@@ -180,20 +205,11 @@ describe('TelegramBot — additional branch coverage', () => {
   // -------------------------------------------------------------------------
   describe('/unwatch command', () => {
     test('replies "Not watching anything" when nothing is watched', async () => {
-      const c = ctx(12345, '/unwatch');
-      // Access the watchManager and simulate the unwatch handler path.
       const watchManager = (bot as unknown as { watchManager: { stop: (id: number) => string | undefined } }).watchManager;
       const stopSpy = vi.spyOn(watchManager, 'stop').mockReturnValue(undefined);
-      // Trigger via the internal bot dispatcher by directly exercising the
-      // registered action. Since Telegraf is not launched we call the handler
-      // through the registered middleware by calling handleUpdate with a fake
-      // /unwatch command update on the inner bot instance.
-      const innerBot = (bot as unknown as { bot: { botInfo: unknown; handleUpdate: (u: unknown) => Promise<void> } }).bot;
-      innerBot.botInfo = { id: 1, is_bot: true, first_name: 'T', username: 'bot', can_join_groups: false, can_read_all_group_messages: false, supports_inline_queries: false };
-      // We can't easily drive Telegraf's command handler without a real update
-      // pipeline, so just verify stop() is accessible and returns undefined.
-      expect(watchManager.stop(12345)).toBeUndefined();
-      stopSpy.mockRestore();
+      const api = await command(bot, '/unwatch');
+      expect(stopSpy).toHaveBeenCalledExactlyOnceWith(12345);
+      expect(api).toHaveBeenCalledWith('sendMessage', expect.objectContaining({ chat_id: 12345, text: 'Not watching anything.' }));
     });
   });
 

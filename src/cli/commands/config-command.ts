@@ -33,12 +33,7 @@ import {
   RESTART_NOTE,
 } from '../../config/mutate.js';
 import { registerEnvSubcommands } from './config-command.env.js';
-
-/** Print an error and set a nonzero exit code (2 = bad input / refused). */
-function fail(message: string): void {
-  console.error(palette.warning(`✗ ${message}`));
-  process.exitCode = 2;
-}
+import { fail } from './config-command.fail.js';
 
 export function registerConfigCommand(program: Command): void {
   const config = program

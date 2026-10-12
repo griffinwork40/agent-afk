@@ -3,9 +3,8 @@ import {
   builtinToolSchemas,
   BUILTIN_TOOL_NAMES,
   agentTool,
-  clipboardWriteTool,
-  clipboardReadTool,
 } from './schemas.js';
+import { clipboardWriteTool, clipboardReadTool } from './schemas.interaction-tools.js';
 import { sendToSessionTool } from './schemas.peer.js';
 import { createScheduleTool, updateScheduleTool } from './schemas.schedule.js';
 import { TASK_MAX_ATTEMPTS_LIMIT, TASK_RETRY_DELAY_MAX_MS, TASK_RETRY_DELAY_MIN_MS } from '../daemon/task-retry.js';

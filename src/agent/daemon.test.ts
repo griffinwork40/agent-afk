@@ -20,6 +20,7 @@ import { validateScheduledTask, type ScheduledTask } from './daemon/triggers.js'
 import { CronScheduler } from './daemon/scheduler.js';
 import { startDaemon, type DaemonHandle } from './daemon.js';
 import { getDaemonStateDir, getAfkHome } from '../paths.js';
+import { toScheduledTask } from './daemon/schedule-store.js';
 
 // node-cron schedules tasks against real wall-clock time. We never let them
 // fire — every test uses scheduler.tick(taskId) directly to invoke the
@@ -1549,6 +1550,54 @@ describe('oauthRefresher timer (proactive token refresh, #1296)', () => {
   });
 });
 
+describe('toScheduledTask store conversion', () => {
+  it('omits cronExpression when runAt is set (mutual exclusivity)', () => {
+    const config = {
+      id: 'one-shot',
+      name: 'One Shot',
+      command: '/cmd',
+      cron: '0 * * * *',
+      runAt: '2099-01-01T00:00:00Z',
+      enabled: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const task = toScheduledTask(config);
+    expect(task.runAt).toBe('2099-01-01T00:00:00Z');
+    expect(task.cronExpression).toBeUndefined();
+  });
+
+  it('includes cronExpression when runAt is absent', () => {
+    const config = {
+      id: 'recurring',
+      name: 'Recurring',
+      command: '/cmd',
+      cron: '0 2 * * *',
+      enabled: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const task = toScheduledTask(config);
+    expect(task.cronExpression).toBe('0 2 * * *');
+    expect(task.runAt).toBeUndefined();
+  });
+
+  it('threads expiresAt from store config to ScheduledTask', () => {
+    const config = {
+      id: 'expiring',
+      name: 'Expiring',
+      command: '/cmd',
+      cron: '* * * * *',
+      expiresAt: '2099-12-31T23:59:59Z',
+      enabled: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const task = toScheduledTask(config);
+    expect(task.expiresAt).toBe('2099-12-31T23:59:59Z');
+  });
+});
+
 // SessionFactory return-type indirection — keeps the cast localized so the
 // fake-session shape doesn't need to satisfy the full AgentSession class.
 type SessionFactoryReturn = NonNullable<
@@ -1616,6 +1665,188 @@ describe('port file lifecycle', () => {
     const h = await startDaemon({ port: 0, host: '127.0.0.1', writePortFile: false, telemetryPath });
     expect(h.host).toBe('127.0.0.1');
     await h.stop();
+  });
+
+  it('POST /tasks runAt one-shot: accepted without cron, roundtrips runAt, no cronExpression', async () => {
+    const runAt = '2099-01-01T00:00:00Z';
+    const h = await startDaemon({ port: 0, writePortFile: false, telemetryPath });
+    try {
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: 'runAt-task', command: '/cmd', runAt }),
+      });
+      expect(res.status).toBe(201);
+      const list = (await (await fetch(`http://localhost:${h.port}/tasks`)).json()) as Array<Record<string, unknown>>;
+      const task = list.find((t) => t['taskId'] === 'runAt-task');
+      expect(task?.['runAt']).toBe(runAt);
+      expect(task?.['cronExpression']).toBeUndefined();
+    } finally {
+      await h.stop();
+    }
+  });
+
+  it('POST /tasks runAt+cron: cronExpression omitted from registered task (mutual exclusivity)', async () => {
+    const runAt = '2099-06-15T12:00:00Z';
+    const h = await startDaemon({ port: 0, writePortFile: false, telemetryPath });
+    try {
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: 'runAt-cron-task', command: '/cmd', cron: '0 * * * *', runAt }),
+      });
+      expect(res.status).toBe(201);
+      const list = (await (await fetch(`http://localhost:${h.port}/tasks`)).json()) as Array<Record<string, unknown>>;
+      const task = list.find((t) => t['taskId'] === 'runAt-cron-task');
+      expect(task?.['runAt']).toBe(runAt);
+      expect(task?.['cronExpression']).toBeUndefined();
+    } finally {
+      await h.stop();
+    }
+  });
+
+  it('POST /tasks expiresAt: roundtrips through GET /tasks', async () => {
+    const expiresAt = '2099-12-31T23:59:59Z';
+    const h = await startDaemon({ port: 0, writePortFile: false, telemetryPath });
+    try {
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: 'expires-task', command: '/cmd', cron: '* * * * *', expiresAt }),
+      });
+      expect(res.status).toBe(201);
+      const list = (await (await fetch(`http://localhost:${h.port}/tasks`)).json()) as Array<Record<string, unknown>>;
+      const task = list.find((t) => t['taskId'] === 'expires-task');
+      expect(task?.['expiresAt']).toBe(expiresAt);
+    } finally {
+      await h.stop();
+    }
+  });
+
+  it('POST /tasks rejects invalid runAt string with 400', async () => {
+    const h = await startDaemon({ port: 0, writePortFile: false, telemetryPath });
+    try {
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: 'bad-runAt', command: '/cmd', runAt: 'not-a-date' }),
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toMatch(/runAt/);
+    } finally {
+      await h.stop();
+    }
+  });
+
+  it('POST /tasks rejects invalid expiresAt string with 400', async () => {
+    const h = await startDaemon({ port: 0, writePortFile: false, telemetryPath });
+    try {
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: 'bad-expires', command: '/cmd', cron: '* * * * *', expiresAt: 'tomorrow' }),
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toMatch(/expiresAt/);
+    } finally {
+      await h.stop();
+    }
+  });
+
+  it('POST /tasks rejects non-string expiresAt with 400', async () => {
+    const h = await startDaemon({ port: 0, writePortFile: false, telemetryPath });
+    try {
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: 'bad-expires2', command: '/cmd', cron: '* * * * *', expiresAt: 12345 }),
+      });
+      expect(res.status).toBe(400);
+    } finally {
+      await h.stop();
+    }
+  });
+
+  it('POST /tasks shell trust: rejects when runAt in request does not match store (prevents expiry drop)', async () => {
+    const tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-shell-runat-'));
+    vi.stubEnv('AFK_HOME', tmpHome);
+    mkdirSync(join(tmpHome, 'config'), { recursive: true });
+    const runAt = '2099-01-01T00:00:00Z';
+    writeFileSync(
+      join(tmpHome, 'config', 'schedules.json'),
+      JSON.stringify([{
+        id: 'shell-runat',
+        name: 'Shell RunAt',
+        command: 'echo hi',
+        cron: '0 * * * *',
+        executor: 'shell',
+        trigger: 'cron',
+        enabled: true,
+        runAt,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }]),
+    );
+    const h = await startDaemon({ port: 0, writePortFile: false, telemetryPath,
+      sessionFactory: () => makeFakeSession('ok') as unknown as ReturnType<SessionFactoryReturn> });
+    try {
+      expect(getAfkHome()).toBe(tmpHome);
+      // Request omits runAt → mismatch with store → must be rejected
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: 'shell-runat', command: 'echo hi', cron: '0 * * * *', executor: 'shell', trigger: 'cron' }),
+      });
+      expect(res.status).toBe(400);
+      expect(h.scheduler.list().find((t) => t.taskId === 'shell-runat')).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+      await h.stop();
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /tasks shell trust: accepts when runAt matches store entry', async () => {
+    const tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-shell-runat2-'));
+    vi.stubEnv('AFK_HOME', tmpHome);
+    mkdirSync(join(tmpHome, 'config'), { recursive: true });
+    const runAt = '2099-01-01T00:00:00Z';
+    writeFileSync(
+      join(tmpHome, 'config', 'schedules.json'),
+      JSON.stringify([{
+        id: 'shell-runat2',
+        name: 'Shell RunAt2',
+        command: 'echo ok',
+        cron: '0 * * * *',
+        executor: 'shell',
+        trigger: 'cron',
+        enabled: true,
+        runAt,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }]),
+    );
+    const h = await startDaemon({ port: 0, writePortFile: false, telemetryPath,
+      sessionFactory: () => makeFakeSession('ok') as unknown as ReturnType<SessionFactoryReturn> });
+    try {
+      expect(getAfkHome()).toBe(tmpHome);
+      // runAt present and matching → trusted
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: 'shell-runat2', command: 'echo ok', executor: 'shell', trigger: 'cron', runAt }),
+      });
+      expect(res.status).toBe(201);
+      const task = h.scheduler.list().find((t) => t.taskId === 'shell-runat2');
+      expect(task?.runAt).toBe(runAt);
+      expect(task?.cronExpression).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+      await h.stop();
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
   });
 
   it('POST /tasks accepts cronExpression as an alias for cron', async () => {

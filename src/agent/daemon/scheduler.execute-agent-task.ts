@@ -205,6 +205,9 @@ async function runAgentAttempt(
     // uninstalled in the finally block so cron ticks never inherit it.
     // For cron/sessionstart tasks, install a lightweight handler that writes
     // a durable handoff and immediately declines (#3243 gap 1 partial).
+    // Scoped per attempt: only the final retry's elicitation is notified.
+    // Within that attempt the latest persisted question wins; earlier attempts
+    // cannot leak a stale question into the final completion notification.
     let elicitationMessage: string | undefined;
     if (trigger === 'pull') {
       elicitationRouter.install(makeDaemonElicitationHandler({

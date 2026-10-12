@@ -11,6 +11,41 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.310.4] - 2026-10-12
+
+### Added
+- add `afk restart` for AFK background services (#3290) (3ccb0096)
+
+### Fixed
+- close surface-owned session stores (#3568) (13cc408a)
+- finish one-shot schedule surfacing and advisory cleanup (#3573) (86ec6d15)
+- exclude all AFK state roots from temp writes (#3566) (79e3e979)
+- finish scoped advisory fixes and regression coverage (#3571) (f147fd64)
+- strengthen isIndexLine guard to AND all field checks (#3565) (226dc7b0)
+
+## [5.310.3] - 2026-10-12
+
+### Fixed
+- correct workflow annotations and formatter edge cases (#3570) (3dec3a1e)
+
+### Changed
+- document verdict reasons and temp-root privacy (#3569) (6eab069d)
+- add Invariant: prefix to long JSDoc block in stream-renderer-dispose.ts (#3564) (c0ead9bd)
+
+## [5.310.2] - 2026-10-11
+
+### Fixed
+- complete advisory cleanup and release test ledger (#3574) (98980630)
+
+## [5.310.1] - 2026-10-11
+
+### Fixed
+- preserve width-only erase snapshot during SHRINK within a CPR burst (#3293) (bf2cfba1)
+- cross-prefix npm, post-update service restart, Cellar execPath normalization (#3300) (dfb5699e)
+
+### Changed
+- pin conservative BASH_HIGH classification for heredoc prose (#3549) (0c6adaf9)
+
 ## [5.310.0] - 2026-10-11
 
 ### Added

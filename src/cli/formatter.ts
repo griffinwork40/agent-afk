@@ -270,6 +270,7 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           // words and over-indents the nested rows.
           const t = token as Tokens.Text;
           const inline = t.tokens ? renderInline(t.tokens as Tokens.Generic[]) : t.text;
+          // Block-level text occurs in tight list items, not the top-level array mutated by table merging.
           const next = tokens[idx + 1];
           result = next !== undefined && BLOCK_TOKEN_TYPES.has(next.type) ? inline + '\n' : inline;
           break;
