@@ -20,4 +20,5 @@ export const BOT_COMMAND_DESCRIPTORS: ReadonlyArray<{ command: string; descripti
   { command: 'usage', description: 'Show Claude subscription usage' },
   { command: 'watch', description: 'Live-tail a CLI session from this chat' },
   { command: 'unwatch', description: 'Stop watching a session' },
+  { command: 'inbox', description: 'List, release, or drop held peer messages (AFK_PEER_INBOUND=hold)' },
 ];
