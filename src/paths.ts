@@ -419,6 +419,13 @@ export function getProjectSettingsPath(cwd: string = process.cwd()): string {
 }
 
 /**
+ * Path to a repo's opt-in worktree setup declaration
+ * (`<cwd>/.afk/worktree-setup.json`, #3601). `cwd` is the freshly created
+ * worktree, so the declaration read is the one at the tree's base commit.
+ */
+export const getProjectWorktreeSetupPath = (cwd: string): string => join(getProjectAfkDir(cwd), 'worktree-setup.json');
+
+/**
  * Path to the user-scope AFK.md system-prompt overlay (`$AFK_HOME/AFK.md`).
  *
  * Contract: this is the BROADEST tier — it applies to every project on the
