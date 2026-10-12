@@ -38,6 +38,7 @@ import { escapeHtml } from './formatter.js';
 import { escapeRegExp } from '../utils/regexp.js';
 import { validateTextAnswer, validateNumberAnswer } from '../agent/elicitation/answer-validation.js';
 import { renderTelegramChoices, buildChoiceMessages, type ChoiceMessages } from './elicitation-choice-list.js';
+import { sendChoiceMessages } from './elicitation-handler.send.js';
 
 function nextElicitationId(): string {
   return `elic-${randomBytes(8).toString('hex')}`;
@@ -62,38 +63,6 @@ function prepareChoiceRender(
   return { choiceMsg, buttons };
 }
 
-/**
- * Send the choice pre-messages (if any) and then the keyboard message.
- * Returns a promise that resolves when the keyboard send is initiated.
- * If any send fails, `onFailure` is called once.
- *
- * Extracted as a named helper (explicit params) so `makeTelegramElicitationHandler`
- * does not grow beyond its baselined size.
- */
-function sendChoiceMessages(
-  telegram: { sendMessage: (chatId: number, text: string, opts: object) => Promise<unknown> },
-  chatId: number,
-  preMessages: string[],
-  keyboardText: string,
-  threadOpts: object,
-  keyboardOpts: object,
-  onFailure: () => void,
-): void {
-  const sendKeyboard = () => {
-    telegram.sendMessage(chatId, keyboardText, { parse_mode: 'HTML', ...threadOpts, ...keyboardOpts })
-      .catch(onFailure);
-  };
-  if (preMessages.length === 0) {
-    sendKeyboard();
-    return;
-  }
-  const sendPre = async () => {
-    for (const msg of preMessages) {
-      await telegram.sendMessage(chatId, msg, { parse_mode: 'HTML', ...threadOpts });
-    }
-  };
-  sendPre().then(sendKeyboard).catch(onFailure);
-}
 
 /**
  * Build a Telegram elicitation handler.
@@ -310,8 +279,8 @@ export function makeTelegramElicitationHandler(
           },
         });
 
-        // Send pre-messages (full choice list) then the keyboard message.
-        // A failure at either stage declines identically to the prior behaviour.
+        // Send pre-messages then keyboard; signal stops pre-sends on abort,
+        // failure at either stage declines identically to the prior behaviour.
         sendChoiceMessages(
           bot.telegram, chatId,
           choicePreMessages, displayText,
@@ -324,6 +293,7 @@ export function makeTelegramElicitationHandler(
               resolve({ action: 'decline' });
             }
           },
+          options.signal,
         );
       });
     }
