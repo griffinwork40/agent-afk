@@ -83,9 +83,22 @@ function optionLabels(choices: readonly string[], columns: number): { labels: st
 /**
  * Build the overlay header, picker labels, and (when needed) the full-text
  * scrollback block for an agent question.
+ *
+ * Known gap: if the terminal is resized while a question is open, the layout
+ * is not recalculated — the overlay keeps the wrap computed at open time.
+ * Fixing this would require a SIGWINCH / onResize hook wired into the picker
+ * and text-overlay paths (terminal-compositor.lifecycle.resize.ts has such
+ * infrastructure, but it is not plumbed through ReplElicitationDeps). The
+ * impact is limited to the narrow window between open and answer, and only
+ * affects wrapping aesthetics, not correctness — the answer value always maps
+ * back to the original choice string via `choiceFor`.
  */
 export function layoutAgentQuestion(request: ElicitationRequest, size: TerminalSize): AgentQuestionLayout {
-  const columns = Math.max(20, size.columns);
+  // Wrap to the REAL terminal width so the header row-count matches what
+  // CupFrameRenderer will physically paint.  Below 20 columns the overlay
+  // cannot usefully host the question, so we always spill to scrollback (the
+  // `spill` flag is forced true at the end of this block in that case).
+  const columns = size.columns;
   const banner = palette.warning('  💬 Agent question');
   const qRows = questionRows(request, columns);
   const { labels, shortened } = optionLabels(request.choices ?? [], columns);
@@ -93,7 +106,9 @@ export function layoutAgentQuestion(request: ElicitationRequest, size: TerminalS
   // header = banner + question rows + (choices pointer when shortened) + trailing blank.
   const fullHeaderRows = qRows.length + 2 + (shortened ? 1 : 0);
   const overflow = fullHeaderRows + RESERVED_ROWS + MIN_OPTION_ROWS > size.rows;
-  const spill = overflow || shortened;
+  // Below 20 columns the overlay is too narrow to be usable — force a spill
+  // so the full question lands in scrollback regardless of row count.
+  const spill = overflow || shortened || size.columns < 20;
 
   const byLabel = new Map<string, string>();
   labels.forEach((l, i) => {
