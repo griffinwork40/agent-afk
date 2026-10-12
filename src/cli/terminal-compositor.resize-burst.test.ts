@@ -145,11 +145,11 @@ describe('B2: WIDTH-ONLY erase footprint is preserved unchanged by SHRINK', () =
 // ---------------------------------------------------------------------------
 // B3: Ghost-erase CUP+EL emitted after CPR resolves in a WIDTH-ONLY → SHRINK burst
 //
-// We use a tall terminal (60 rows) so the WIDTH-ONLY snapshot (row 5, near
-// the top) stays within range after a modest SHRINK (60→50), and the erase
-// can physically reach that row.  A SHRINK to fewer rows than the old frame
-// bottom would push it out of viewport and the clamping in flushResizeGhostErase
-// would correctly skip the now-nonexistent rows — not a ghost-erase failure.
+// We pin anchorRow: 5 so the frame renders near the top (ghostTop ≈ 5), then
+// shrink from 60→50 rows — a genuine SHRINK (50 < lastKnownRows 60) with the
+// ghost row well within the post-shrink viewport.  Without the anchor the
+// default bottom-pinned frame lands at row 59, making ghostTop+4 = 63 > 60
+// which takes the EXPAND path instead of SHRINK.
 // ---------------------------------------------------------------------------
 
 describe('B3: ghost-erase CUP+EL emitted after CPR resolves in WIDTH-ONLY → SHRINK burst', () => {
@@ -158,12 +158,15 @@ describe('B3: ghost-erase CUP+EL emitted after CPR resolves in WIDTH-ONLY → SH
     const stdout = makeMockStdout();
     const stdin = makeMockStdin();
     const writes = collectWrites(stdout);
-    // Use a tall terminal (60 rows) so the WIDTH-ONLY snapshot rows remain
-    // within the post-SHRINK viewport (60→50): flushResizeGhostErase clamps to
-    // stdout.rows, so the snapshot top must be ≤ 50 for the erase to fire.
+    // Pin anchorRow near the top so the frame renders at a low row, making
+    // ghostTop small (≈5).  This ensures that shrinking to 50 rows is a
+    // GENUINE shrink from 60 (50 < 60) while ghostTop stays within the
+    // post-shrink viewport (ghostTop < 50) so flushResizeGhostErase fires.
+    // Without the anchor, the default bottom-pinned frame lands at row 59,
+    // and ghostTop+4 = 63 > 60 — which takes the EXPAND path, not SHRINK.
     stdout.rows = 60;
     stdout.columns = 99;
-    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), anchorRow: 5 });
     armedCompositors.push(c);
     await c.arm();
     // Allow the initial frame to render so logUpdate.topRow is populated and
@@ -173,6 +176,7 @@ describe('B3: ghost-erase CUP+EL emitted after CPR resolves in WIDTH-ONLY → SH
     const internals = c as unknown as {
       pendingResizeErase: { top: number; bottom: number } | null;
       lastMeasuredFrameBottom: number;
+      lastKnownRows: number;
     };
 
     // Confirm a frame rendered (frameBottom > 0 is required for CPR to fire).
@@ -191,11 +195,12 @@ describe('B3: ghost-erase CUP+EL emitted after CPR resolves in WIDTH-ONLY → SH
     const ghostTop = snapshot!.top;
     expect(ghostTop, 'ghost top row must be ≥ 1').toBeGreaterThanOrEqual(1);
 
-    // Shrink to ghostTop+4 rows: the snapshot top stays within the post-shrink
-    // viewport so flushResizeGhostErase will not clamp it away, while the
-    // post-resize row count is still smaller than the original 60.
-    // The +4 slack keeps the frame's cursor-park row in range too.
-    const shrinkTarget = ghostTop + 4;
+    // Step 2: Shrink to 50 rows — a genuine SHRINK (50 < lastKnownRows 60).
+    // ghostTop (≈5) is well within the post-shrink viewport so
+    // flushResizeGhostErase will not clamp it away.
+    const shrinkTarget = 50;
+    expect(shrinkTarget, 'shrinkTarget must be a genuine shrink from 60').toBeLessThan(internals.lastKnownRows);
+    expect(ghostTop, 'ghostTop must be within post-shrink viewport').toBeLessThan(shrinkTarget);
     stdout.rows = shrinkTarget;
     process.stdout.emit('resize');
     expect(internals.pendingResizeErase, 'snapshot must survive SHRINK while CPR in-flight').not.toBeNull();
@@ -204,7 +209,7 @@ describe('B3: ghost-erase CUP+EL emitted after CPR resolves in WIDTH-ONLY → SH
     // output is inspected.
     writes.clear();
 
-    // Step 3: Drive dirty then quiescent CPR replies (not the timeout fallback).
+    // Step 3: Drive dirty then quiescent CPR replies to complete the burst.
     // completeCpr feeds a dirty reply first (re-queries) then a quiescent reply
     // (repaints with ghost erase).  After the quiescent reply, repaint() runs
     // flushResizeGhostErase which emits CUP+EL for every row in [top, bottom].
