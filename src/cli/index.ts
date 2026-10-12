@@ -93,11 +93,8 @@ import { registerInsightsCommand } from './commands/insights.js';
 import { registerCapturesCommand } from './commands/captures.js';
 import { registerDefectsCommand } from './commands/defects.js';
 import { setInteractiveUpdateNotices } from './commands/interactive.js';
-import { loadConfig, loadCredential } from './config.js';
-import { providerForModel } from '../agent/providers/index.js';
-import { preloadClaudeKeychainOAuth } from '../agent/auth/credential-resolver.js';
-import { getModel } from './shared-helpers.js';
-import { runAuthWizard } from './auth-wizard.js';
+import { loadConfig } from './config.js';
+import { installCredentialGate } from './first-run.js';
 import { getVersion } from './version.js';
 import {
   checkForUpdates,
@@ -180,76 +177,10 @@ Examples:
   $ afk status --format json`,
 );
 
-/**
- * Commands that cannot do anything useful without an Anthropic credential.
- * Everything else (login, doctor, --version, --help, config, …) must work
- * pre-auth — a fresh install's first commands are exactly those.
- */
-const AUTH_GATED_COMMANDS = new Set(['chat', 'c', 'interactive', 'i', 'daemon', 'farm']);
+// Commander parses options before this hook and before command action side effects.
+installCredentialGate(program);
 
-/**
- * Pure function. Decides whether the invoked command needs the credential
- * gate. `--version`/`--help` never gate. A leading non-flag arg is the
- * subcommand (commander convention); only AUTH_GATED_COMMANDS gate. No
- * subcommand (bare `afk`, or program flags like `--model opus`) means the
- * REPL is starting, which needs auth.
- *
- * Exported for unit testing.
- */
-export function needsCredentialGate(argv: string[]): boolean {
-  const args = argv.slice(2);
-  if (args.some((a) => a === '--version' || a === '-V' || a === '--help' || a === '-h')) {
-    return false;
-  }
-  const first = args[0];
-  const sub = first && !first.startsWith('-') ? first : undefined;
-  if (sub === undefined) return true; // bare `afk` → REPL → needs auth
-  return AUTH_GATED_COMMANDS.has(sub);
-}
-
-/**
- * First-run detector. When no credential is present and the resolved provider
- * is anthropic-direct, offers an interactive wizard (TTY) or prints a helpful
- * error (non-TTY) instead of surfacing a cryptic provider error.
- *
- * Only fires for commands that actually need a credential (see
- * needsCredentialGate) — `afk --version`, `afk login`, `afk doctor` etc. must
- * never be blocked by the gate they would be used to satisfy or diagnose.
- *
- * Exported so it can be tested independently without running program.parse().
- */
-export async function runFirstRunDetector(argv: string[] = process.argv): Promise<void> {
-  if (!needsCredentialGate(argv)) return;
-  const provider = providerForModel(getModel() as string);
-  // Refresh a near-expiry / expired Claude Code keychain OAuth token and write
-  // it back to the store BEFORE the synchronous loadCredential() read below.
-  // Invariant: this gate runs before Commander dispatches any command action,
-  // so a daemon whose only credential is an expired keychain token would
-  // otherwise hit loadCredential() → undefined → process.exit(1) here, before
-  // the command's own refresh could run. The refresh is internally guarded to
-  // the keychain-OAuth case (Anthropic provider, no env credential), so it is a
-  // no-op for OpenAI/xAI/env-var users, and bounded by a fetch timeout.
-  const refreshedToken = await preloadClaudeKeychainOAuth(provider);
-  // Use the returned token directly as well as caching it in the resolver: a
-  // locked/read-only credential store may reject refresh write-back, so an
-  // immediate re-read can still return the expired token or no credential.
-  const credential = refreshedToken ?? loadCredential();
-  if (!credential && provider === 'anthropic-direct') {
-    if (!process.stdin.isTTY) {
-      process.stderr.write(
-        'agent-afk: No Anthropic credential found. Run `afk login` to authenticate.\n',
-      );
-      process.exit(1);
-      return; // guard for test environments where process.exit is mocked
-    }
-    try {
-      await runAuthWizard();
-      loadEnv({ path: getEnvConfigPath(), override: true, quiet: true });
-    } catch {
-      // swallow — let program.parse() surface auth error naturally
-    }
-  }
-}
+export { needsCredentialGate, runFirstRunDetector } from './first-run.js';
 
 // Parse and execute — only when run directly as CLI (not imported by tests)
 import { realpathSync } from 'fs';
@@ -263,8 +194,6 @@ const isDirectRun =
   import.meta.url === pathToFileURL(realpathSync(argv1)).href;
 if (isDirectRun) {
   (async () => {
-    await runFirstRunDetector();
-
     // The `--no-update-check` flag must be detected here, BEFORE program.parse()
     // runs — program.opts() is empty until parse() executes. Commander turns
     // `--no-update-check` into `updateCheck: false`, not `noUpdateCheck: true`,
