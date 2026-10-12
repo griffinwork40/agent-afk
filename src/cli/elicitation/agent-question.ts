@@ -8,8 +8,10 @@
 import type { ElicitationRequest, ElicitationResult } from '../../agent/types/sdk-types.js';
 import { debugLog } from '../../utils/debug.js';
 import { CUSTOM_ANSWER_SENTINEL } from '../input/selectors.js';
-import { sanitizeSchemaString } from '../_lib/sanitize.js';
+import { sanitizeSchemaString, sanitizeTerminalText } from '../_lib/sanitize.js';
 import { palette } from '../palette.js';
+import { getTerminalHeight, getTerminalWidth } from '../terminal-size.js';
+import { layoutAgentQuestion } from './agent-question.layout.js';
 import { validateNumberField, validateTextField } from './field-validation.js';
 import type { ReplElicitationDeps } from './repl-shared.js';
 import { DECLINE, CANCEL } from './repl-shared.js';
@@ -27,30 +29,6 @@ export { SKIP };
 // ---------------------------------------------------------------------------
 // Agent-question mode
 // ---------------------------------------------------------------------------
-
-/**
- * Build the overlay header lines that render INSIDE the picker frame
- * for both `pickFromList` and `readTextOverlay`. Lifted into a helper
- * so all overlay paths surface the same envelope (banner + question +
- * optional context) and vanish on confirm/cancel — only the single
- * `✓ <answer>` echo line below survives in scrollback.
- *
- * Layout (4 lines max):
- *   💬 Agent question
- *   ? <bold question>
- *     <dim context, optional>
- *   <trailing blank — visual breathing room before the input/options row>
- */
-function buildOverlayHeader(request: ElicitationRequest): readonly string[] {
-  const lines: string[] = [];
-  lines.push(palette.warning('  💬 Agent question'));
-  lines.push(palette.bold('  ? ' + sanitizeSchemaString(request.message, 512)));
-  if (request.context) {
-    lines.push(palette.dim('    ' + sanitizeSchemaString(request.context, 512)));
-  }
-  lines.push('');
-  return lines;
-}
 
 /**
  * Discriminated outcome from {@link runOverlayTextOrNumber}. Lets the
@@ -78,10 +56,10 @@ type OverlayTextOutcome =
 async function runOverlayTextOrNumber(
   qType: 'text' | 'number',
   request: ElicitationRequest,
+  header: readonly string[],
   readTextOverlay: NonNullable<ReplElicitationDeps['readTextOverlay']>,
   signal: AbortSignal,
 ): Promise<OverlayTextOutcome | null> {
-  const header = buildOverlayHeader(request);
   const allowSkip = request.allowSkip === true;
 
   if (qType === 'number') {
@@ -151,11 +129,21 @@ export async function renderAgentQuestion(
   // Queue-depth notice survives in scrollback so the user can see how
   // many more questions are queued even after the current overlay
   // vanishes. All other envelope chrome (banner, question, context)
-  // moves INSIDE the overlay frame below — see {@link buildOverlayHeader}.
+  // moves INSIDE the overlay frame below — see {@link layoutAgentQuestion}.
   const depth = pendingCount();
   if (depth > 1) {
     writer.line(palette.dim(`  [${depth} questions queued]`));
   }
+
+  // Overlay envelope sized to the terminal (see agent-question.layout.ts).
+  // When the full question cannot fit inside the overlay, its complete text
+  // is written to scrollback BEFORE the overlay opens (never during picker
+  // mode), so nothing the agent asked is only visible in truncated form.
+  const size = deps.terminalSize?.() ?? { columns: getTerminalWidth(), rows: getTerminalHeight() };
+  const layout = layoutAgentQuestion(request, size);
+  const spillToScrollback = (): void => {
+    for (const l of layout.scrollback) writer.line(l);
+  };
 
   // Picker path for choice / multi_choice. The question prompt, options,
   // and help line ALL render inside the picker frame so they vanish on
@@ -163,13 +151,14 @@ export async function renderAgentQuestion(
   // scrollback. Falls back to numbered-text below when pickFromList is
   // absent (non-TTY: daemon, pipes, tests that don't exercise picker UX).
   if ((qType === 'choice' || qType === 'multi_choice') && pickFromList && (request.choices?.length ?? 0) > 0) {
-    const sanitizedOptions = (request.choices ?? []).map((c) => sanitizeSchemaString(c, 128));
-    if (request.allowCustom) sanitizedOptions.push(CUSTOM_ANSWER_SENTINEL);
+    const pickerOptions = [...layout.options];
+    if (request.allowCustom) pickerOptions.push(CUSTOM_ANSWER_SENTINEL);
+    spillToScrollback();
     let selected: readonly string[] | null;
     try {
       selected = await pickFromList({
-        header: buildOverlayHeader(request),
-        options: sanitizedOptions,
+        header: layout.header,
+        options: pickerOptions,
         multi: qType === 'multi_choice',
         signal,
       });
@@ -187,7 +176,7 @@ export async function renderAgentQuestion(
     if (request.allowCustom && selected.includes(CUSTOM_ANSWER_SENTINEL)) {
       if (!readTextOverlay) return CANCEL;
       const customText = await readTextOverlay({
-        header: buildOverlayHeader(request),
+        header: layout.header,
         help: 'Type your custom answer (Esc to cancel)',
         validate: (v) => v.trim() === '' ? 'Please enter a non-empty answer' : null,
         signal,
@@ -206,15 +195,21 @@ export async function renderAgentQuestion(
 
     // Single-line result echo — survives in scrollback so the user
     // can see what they answered. Brand-coloured selection, dim prefix.
-    const echoLabel = selected.length === 1
-      ? sanitizeSchemaString(selected[0] ?? '', 128)
-      : selected.map((s) => sanitizeSchemaString(s, 128)).join(', ');
+    // Map display labels back to the agent's ORIGINAL choice strings: labels
+    // are sanitized and may be shortened/numbered to fit one row, and the
+    // agent must receive a value that exactly matches one of its choices.
+    const values = selected.map((label) => layout.choiceFor(label));
+    if (values.some((v) => v === undefined)) {
+      debugLog('[elicitation] picker returned a label with no matching choice:', selected);
+      return CANCEL;
+    }
+    const echoLabel = selected.map((s) => sanitizeSchemaString(s, 128)).join(', ');
     writer.line(palette.dim('  ✓ ') + palette.brand(echoLabel));
 
     if (qType === 'choice') {
-      return { action: 'accept', content: { value: selected[0] } };
+      return { action: 'accept', content: { value: values[0] } };
     }
-    return { action: 'accept', content: { value: [...selected] } };
+    return { action: 'accept', content: { value: values as string[] } };
   }
 
   // Confirm-as-picker: reuse the arrow-key picker with a Yes / No
@@ -225,10 +220,11 @@ export async function renderAgentQuestion(
   if (qType === 'confirm' && pickFromList) {
     const yesFirst = request.questionDefault !== false;
     const options = yesFirst ? ['Yes', 'No'] : ['No', 'Yes'];
+    spillToScrollback();
     let selected: readonly string[] | null;
     try {
       selected = await pickFromList({
-        header: buildOverlayHeader(request),
+        header: layout.header,
         options,
         multi: false,
         signal,
@@ -254,7 +250,8 @@ export async function renderAgentQuestion(
   // legacy readLine numbered path when the dep is absent (non-TTY
   // surfaces, daemon, pipes, tests that don't wire the overlay).
   if ((qType === 'text' || qType === 'number') && readTextOverlay) {
-    const result = await runOverlayTextOrNumber(qType, request, readTextOverlay, signal);
+    spillToScrollback();
+    const result = await runOverlayTextOrNumber(qType, request, layout.header, readTextOverlay, signal);
     if (result === null) return CANCEL;
     if (result.tag === 'skip') return SKIP;
 
@@ -279,9 +276,9 @@ export async function renderAgentQuestion(
   writer.line();
   writer.line(palette.warning('💬 Agent question'));
   if (request.context) {
-    writer.line(palette.dim('  context: ') + sanitizeSchemaString(request.context, 512));
+    writer.line(palette.dim('  context: ') + sanitizeTerminalText(request.context));
   }
-  writer.line(palette.bold('  ' + sanitizeSchemaString(request.message, 512)));
+  writer.line(palette.bold('  ' + sanitizeTerminalText(request.message)));
   writer.line(palette.dim('  Type :cancel to skip this question.'));
   writer.line();
 

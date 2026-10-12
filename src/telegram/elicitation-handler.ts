@@ -37,7 +37,7 @@ import { randomBytes } from 'node:crypto';
 import { escapeHtml } from './formatter.js';
 import { escapeRegExp } from '../utils/regexp.js';
 import { validateTextAnswer, validateNumberAnswer } from '../agent/elicitation/answer-validation.js';
-import { truncateTelegramLabel } from '../utils/truncate-telegram-label.js';
+import { renderTelegramChoices } from './elicitation-choice-list.js';
 
 function nextElicitationId(): string {
   return `elic-${randomBytes(8).toString('hex')}`;
@@ -46,9 +46,6 @@ function nextElicitationId(): string {
 
 /** Sentinel returned by the custom-entry wildcard handler to the dispatch table. */
 const CUSTOM_ENTRY_SENTINEL_INDEX = -1;
-
-/** Alias for the shared helper (kept for local call-site readability). */
-const truncateLabel = truncateTelegramLabel;
 
 /**
  * Build a Telegram elicitation handler.
@@ -194,10 +191,9 @@ export function makeTelegramElicitationHandler(
         // keyboards (Telegram silently rejects messages with too many buttons).
         // M2: truncate labels to Telegram's ~64-byte limit.
         const MAX_CHOICES = 20;
-        const choices = (request.choices ?? []).slice(0, MAX_CHOICES);
-        buttons = choices.map((choice, i) => [
-          Markup.button.callback(truncateLabel(choice), buildElicitationCallback(elicitId, i)),
-        ]);
+        const rendered = renderTelegramChoices((request.choices ?? []).slice(0, MAX_CHOICES));
+        displayText += rendered.bodySuffix; // full text of over-long choices, buttons numbered to match
+        buttons = rendered.labels.map((label, i) => [Markup.button.callback(label, buildElicitationCallback(elicitId, i))]);
         if (request.allowCustom) {
           buttons.push([
             Markup.button.callback('✍️ Type a custom answer', buildCustomElicitationCallback(elicitId)),
