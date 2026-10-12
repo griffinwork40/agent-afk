@@ -841,4 +841,5 @@ export { getWhatifDir } from './paths.whatif.js';
 // ---------------------------------------------------------------------------
 export { getPeerInboxRoot, getPeerInboxDir } from './paths.peer.js';
 export { getFileCheckpointsRoot, getFileCheckpointSessionDir, getFileCheckpointTurnDir } from './paths.checkpoint.js';
+export { getArtifactRegistryDir, getArtifactStoreDir, getArtifactIndexPath } from './paths.artifact.js';
 
