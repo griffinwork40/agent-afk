@@ -46,6 +46,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # prepublishOnly -> build:dist -> scripts/build-web-ui.mjs needs these;
+      # mirrors auto-release.yml and ci.yml.
+      - name: Install dashboard dependencies
+        run: cd dashboard && pnpm install --frozen-lockfile
+
       - name: Verify tag matches package.json version
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
