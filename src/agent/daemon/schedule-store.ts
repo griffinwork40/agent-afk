@@ -65,6 +65,7 @@ interface LockOwner {
  *
  * @param err    - The error thrown by `writeLockFile`.
  * @param platform - `process.platform` value; injectable for unit-testing.
+ * @internal
  */
 export function isLockContention(err: unknown, platform: string): boolean {
   if (platform !== 'win32') return false;
@@ -114,6 +115,11 @@ function sameOwner(a: LockOwner | undefined, b: LockOwner | undefined): boolean 
 // On filesystems where hardlinks are unavailable (cross-device EXDEV, permission
 // EPERM), this throws and the caller falls through to the catch block, degrading
 // gracefully to retry-based polling until the lock holder releases or times out.
+// Note: EPERM surfaces here for two unrelated reasons — (1) the filesystem does
+// not support hardlinks (e.g. cross-device or restricted mount), and (2) Windows
+// delete-pending: the old lock file is awaiting handle close before its directory
+// entry is removed, so linkSync hits EPERM on the still-visible path. These are
+// structurally distinct; only the delete-pending case is transient.
 function tryReclaimDeadLock(lockPath: string, owner: LockOwner): void {
   if (isProcessAlive(owner.pid)) return;
   const claimPath = `${lockPath}.claim.${process.pid}.${randomBytes(4).toString('hex')}`;
