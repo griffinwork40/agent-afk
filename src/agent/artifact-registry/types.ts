@@ -34,7 +34,7 @@ export type ArtifactRetention = 'permanent' | 'session' | `ttl:${number}`;
  * validation.  `inputs` and `tags` default to empty arrays at creation time.
  */
 export interface ArtifactRecord {
-  /** Stable opaque identifier: `art_<first-16-hex-chars-of-sha256>`. */
+  /** Stable opaque identifier: `art_<first-32-hex-chars-of-sha256>`. */
   id: string;
 
   /**
@@ -53,8 +53,8 @@ export interface ArtifactRecord {
    * Hex-encoded SHA-256 of the artifact content.
    *
    * Used for integrity verification and as the basis for the stable `id`.
-   * Content-identical artifacts share the same hash but may have different
-   * IDs if they carry different metadata (producer, inputs, etc.).
+   * Content-identical artifacts share the same hash and the same stable ID
+   * (the ID is derived solely from the content hash, not from metadata).
    */
   hash: string;
 

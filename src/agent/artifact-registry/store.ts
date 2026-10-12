@@ -33,11 +33,12 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  statSync,
 } from 'node:fs';
 import {
   appendFile,
-  copyFile,
   open,
+  readFile,
   rename,
   rm,
   writeFile,
@@ -92,9 +93,9 @@ function extForMediaType(mediaType: string): string {
   return sub.replace(/[^a-z0-9]/g, '').slice(0, 16) || 'bin';
 }
 
-/** Derive a stable artifact ID from its content hash. */
+/** Derive a stable artifact ID from its content hash (32 hex = 128-bit). */
 function idFromHash(hash: string): string {
-  return `art_${hash.slice(0, 16)}`;
+  return `art_${hash.slice(0, 32)}`;
 }
 
 /** Ensure store and index parent directories exist (sync, idempotent). */
@@ -127,12 +128,15 @@ async function persistBlob(
 
   const tmpName = join(storeDir, `.tmp-${randomBytes(6).toString('hex')}`);
   try {
-    if (source.kind === 'path') {
-      await copyFile(source.path, tmpName);
-    } else {
-      // Exclusive-create: if concurrent writer raced us, open throws EEXIST.
-      const fh = await open(tmpName, 'wx', 0o600);
-      await fh.writeFile(source.buf);
+    // Exclusive-create for both branches: if concurrent writer raced us, open throws EEXIST.
+    const fh = await open(tmpName, 'wx', 0o600);
+    try {
+      if (source.kind === 'path') {
+        await fh.writeFile(readFileSync(source.path));
+      } else {
+        await fh.writeFile(source.buf);
+      }
+    } finally {
       await fh.close();
     }
     try {
@@ -152,13 +156,12 @@ async function persistBlob(
 // ---------------------------------------------------------------------------
 
 /**
- * Append one record to the NDJSON index atomically.
+ * Append one record to the NDJSON index.
  *
- * `appendFile` is not truly atomic on all platforms for concurrent writers, so
- * we use a write-to-temp + atomic rename, which is safe on POSIX.  The
- * trade-off is that a concurrent append from another process could be lost;
- * for this use case (best-effort registry) that is acceptable and matches the
- * existing pattern in `src/agent/memory/memory-store.wal.ts`.
+ * Uses `appendFile` with the append flag — not truly atomic for concurrent
+ * writers, but torn writes produce blank or partial lines that `readIndex()`
+ * skips via `try/catch JSON.parse`.  For this use case (best-effort registry)
+ * that is acceptable and matches `src/agent/memory/memory-store.wal.ts`.
  */
 async function appendIndex(indexPath: string, record: ArtifactRecord): Promise<void> {
   const line = JSON.stringify(record) + '\n';
@@ -220,8 +223,13 @@ export async function artifactPut(
   let source: { kind: 'path'; path: string } | { kind: 'buffer'; buf: Buffer };
 
   if (opts.path !== undefined) {
+    // Containment guard: reject traversal segments and null bytes in source paths.
+    // The destination blob is always <storeDir>/<hash>.<ext> (safe by construction),
+    // but the source must not contain path-tricks that could confuse fs operations.
+    if (opts.path.includes('\0') || opts.path.split('/').includes('..')) {
+      throw new Error(`artifactPut: unsafe source path: ${opts.path}`);
+    }
     hash = await sha256File(opts.path);
-    const { statSync } = await import('node:fs');
     size = statSync(opts.path).size;
     source = { kind: 'path', path: opts.path };
   } else {
@@ -313,7 +321,6 @@ export async function artifactRead(
 ): Promise<Buffer> {
   const rec = artifactGet(id, _indexPath);
   if (!rec) throw new Error(`Artifact not found: ${id}`);
-  const { readFile } = await import('node:fs/promises');
   return readFile(rec.uri);
 }
 

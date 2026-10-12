@@ -67,7 +67,7 @@ describe('artifactPut — inline content', () => {
       indexPath,
     );
 
-    expect(rec.id).toMatch(/^art_[0-9a-f]{16}$/);
+    expect(rec.id).toMatch(/^art_[0-9a-f]{32}$/);
     expect(rec.hash).toBe(sha256(content));
     expect(rec.size).toBe(content.length);
     expect(rec.media_type).toBe('text/plain');
@@ -372,7 +372,7 @@ describe('compactIndex', () => {
 
     const rawAfter = readFileSync(indexPath, 'utf8').trim().split('\n');
     expect(rawAfter.length).toBe(1); // compacted to one
-    expect(JSON.parse(rawAfter[0]!).id).toBe(`art_${sha256(buf).slice(0, 16)}`);
+    expect(JSON.parse(rawAfter[0]!).id).toBe(`art_${sha256(buf).slice(0, 32)}`);
   });
 
   it('is a no-op on an empty index', async () => {
@@ -405,5 +405,42 @@ describe('listStoreBlobs', () => {
     writeFileSync(join(storeDir, '.tmp-abcdef'), 'partial');
     const blobs = listStoreBlobs(storeDir);
     expect(blobs.every((b) => !b.startsWith('.'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// artifactPut — error paths
+// ---------------------------------------------------------------------------
+
+describe('artifactPut — error paths', () => {
+  it('rejects when source path does not exist', async () => {
+    await expect(
+      artifactPut({ path: join(tmpDir, 'nonexistent.txt') }, storeDir, indexPath),
+    ).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// artifactPut — concurrent identical content
+// ---------------------------------------------------------------------------
+
+describe('artifactPut — concurrent identical content', () => {
+  it('produces a single blob and a single deduplicated index entry', async () => {
+    const buf = Buffer.from('concurrent content');
+    const opts = { content: buf, media_type: 'text/plain' } as const;
+    const [r1, r2, r3] = await Promise.all([
+      artifactPut({ ...opts }, storeDir, indexPath),
+      artifactPut({ ...opts }, storeDir, indexPath),
+      artifactPut({ ...opts }, storeDir, indexPath),
+    ]);
+    // All return the same id and blob path.
+    expect(r1.id).toBe(r2.id);
+    expect(r2.id).toBe(r3.id);
+    expect(r1.uri).toBe(r2.uri);
+    // Single blob on disk.
+    const blobs = listStoreBlobs(storeDir);
+    expect(blobs).toHaveLength(1);
+    // Deduplicated index: readIndex last-write-wins → 1 entry.
+    expect(artifactCount(indexPath)).toBe(1);
   });
 });
