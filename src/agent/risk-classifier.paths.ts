@@ -233,13 +233,31 @@ export function isOutsideRoot(
  * All independently relocatable AFK state roots, or `null` if any is invalid.
  * Resolve through existing ancestors even when a root has not been created.
  * Unknown root → fail closed: no private-temp carve-out may be granted.
+ *
+ * One try per root, matching `derivedAfkHomeWriteEntries()` in write-denylist.ts,
+ * so a malformed `AFK_FRAMEWORK_DIR` does not drop the valid `AFK_HOME` /
+ * `AFK_STATE_DIR` exclusions.
  */
 function afkStateRootsResolved(): readonly string[] | null {
+  const roots: string[] = [];
+  let anyFailed = false;
   try {
-    return [getAfkHome(), getAfkStateDir(), getAgentFrameworkDir()].map(safeRealpath);
+    roots.push(safeRealpath(getAfkHome()));
   } catch {
-    return null;
+    anyFailed = true;
   }
+  try {
+    roots.push(safeRealpath(getAfkStateDir()));
+  } catch {
+    anyFailed = true;
+  }
+  try {
+    roots.push(safeRealpath(getAgentFrameworkDir()));
+  } catch {
+    anyFailed = true;
+  }
+  // Fail closed: if any root is unresolvable the carve-out is not granted.
+  return anyFailed ? null : roots;
 }
 
 /**
@@ -259,6 +277,9 @@ function isSafeTempWrite(abs: string, resolved: string): boolean {
   // excludes more, including missing leaves on case-insensitive volumes.
   const roots = afkStateRootsResolved();
   if (roots === null) return false;
+  // Fast path: exact match or literal prefix avoids the case-aware pathIsWithin
+  // call on the common hot path. pathIsWithin subsumes both, so this only
+  // changes performance, not correctness.
   return !roots.some((root) =>
     target === root || target.startsWith(root + path.sep) || pathIsWithin(target, root));
 }
