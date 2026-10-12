@@ -192,7 +192,7 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
     // issuing any request when the caller's signal is already aborted.
     if (signal.aborted) {
       const reason = signal.reason;
-      const msg = reason instanceof Error ? reason.message : String(reason ?? 'aborted');
+      const msg = errorMessage(reason ?? 'aborted');
       return { content: `web_scrape aborted: ${msg}`, isError: true };
     }
 

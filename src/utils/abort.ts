@@ -4,6 +4,8 @@
  * @module utils/abort
  */
 
+import { errorMessage } from './errors.js';
+
 /**
  * Forward an abort from a parent signal to a child AbortController.
  * Returns a cleanup function that removes the listener.
@@ -211,5 +213,5 @@ export function createDeferredRequestAbortScope(
  */
 export function getScopeAbortMessage(scope: { signal: AbortSignal }): string {
   const reason = scope.signal.reason;
-  return reason instanceof Error ? reason.message : String(reason ?? 'aborted');
+  return errorMessage(reason ?? 'aborted');
 }

@@ -70,7 +70,7 @@ export function createBrowserObserveHandler(opts: BrowserHandlerOptions = {}): T
     // Pre-aborted short-circuit.
     if (signal.aborted) {
       const reason = signal.reason;
-      const msg = reason instanceof Error ? reason.message : String(reason ?? 'aborted');
+      const msg = errorMessage(reason ?? 'aborted');
       return { content: `browser_observe aborted: ${msg}`, isError: true };
     }
 
