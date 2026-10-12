@@ -74,19 +74,16 @@ export interface InstallOptions {
  * `launchctl bootstrap` runs, otherwise bootstrap fails with "input/output
  * error". So we write → bootstrap, never the inverse.
  *
- * Write atomicity: we write the rendered XML to a sibling tmp file with
- * `O_EXCL` (`flag: 'wx'`) + explicit `mode: 0o600`, then `renameSync` it
- * into place. APFS guarantees the rename is atomic relative to crashes,
- * which means an observer (including launchctl bootstrap on a retry)
- * will see either the full new plist or the previous state — never a
- * truncated half-written file that passes `existsSync` but fails XML
- * parsing. The `wx` flag closes the TOCTOU window between the
- * `existsSync` check above and the write: if another process (or a
- * symlink attack) created the tmp path between the two operations,
- * `writeFileSync` throws instead of following a symlink to clobber an
- * arbitrary file. Explicit `mode: 0o600` overrides the user's `umask` so
- * the plist file is owner-readable only — the plist may embed env-var
- * values (API keys, tokens) and should not be world-readable.
+ * Write atomicity: we delegate to `atomicWriteFile` (utils/atomic-write),
+ * which writes to a random-named sibling temp file (`.tmp-<hex>`) with
+ * `O_EXCL` and `mode: 0o600`, then renames it atomically into place.
+ * APFS guarantees the rename is atomic relative to crashes, so an observer
+ * (including launchctl bootstrap on a retry) will see either the full new
+ * plist or the previous state — never a truncated half-written file that
+ * passes `existsSync` but fails XML parsing. The random temp name and
+ * `secure: true` (O_EXCL) together close the TOCTOU symlink-attack window.
+ * Explicit `mode: 0o600` ensures the plist is owner-readable only — it
+ * may embed env-var values (API keys, tokens) and must not be world-readable.
  */
 export function installService(name: ServiceName, opts: InstallOptions = {}): InstallResult {
   const path = plistPath(name);
