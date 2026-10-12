@@ -58,6 +58,10 @@ describe('private-temp classification validation reuse', () => {
       return original(...args);
     });
     expect(classify(scratch).level).toBe('high');
+    // Restore lstatSync before this test ends so the throwing implementation
+    // does not leak into the next test. vi.restoreAllMocks() in afterEach does
+    // not reset mockImplementation on a vi.fn() created by vi.mock('fs').
+    vi.mocked(lstatSync).mockImplementation(original);
   });
 
   it('tracks AFK_HOME changes after the temp-root cache is populated', () => {
