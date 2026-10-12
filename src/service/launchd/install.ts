@@ -1,10 +1,11 @@
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { dirname } from 'path';
 import { guiDomain, LAUNCHCTL_TIMEOUT_MS, labelFor, launchAgentsDir, plistPath, serviceLogPath, type ServiceName } from './paths.js';
 import { type PlistOptions, renderPlist, resolveServicePath, resolveWatchPaths, resolveProgramArguments } from './plist.js';
 import { errorMessage, isErrnoCode} from '../../utils/errors.js';
+import { atomicWriteFile } from '../../utils/atomic-write.js';
 
 /**
  * Extract `EnvironmentVariables` key→value pairs from a plist string.
@@ -126,27 +127,12 @@ export function installService(name: ServiceName, opts: InstallOptions = {}): In
   };
   const xml = renderPlist(plistOpts);
 
-  // Atomic write: tmp file with O_EXCL + explicit mode → rename. See
-  // function-level docstring for the threat model.
-  const tmpPath = `${path}.tmp`;
+  // Atomic write: tmp+rename via atomicWriteFile (random temp name, O_EXCL,
+  // mode 0o600). See function-level docstring for the threat model.
   try {
-    writeFileSync(tmpPath, xml, { encoding: 'utf-8', flag: 'wx', mode: 0o600 });
+    atomicWriteFile(path, xml, { mode: 0o600, secure: true, mkdirp: false });
   } catch (err) {
-    // Best-effort cleanup so a stale tmp file from a prior failed run
-    // doesn't permanently break subsequent installs. We swallow the
-    // unlink error: if it fails, the user gets a clearer message on the
-    // next install attempt naming the stale tmp path.
-    return { kind: 'failed', reason: `Failed to write plist (tmp ${tmpPath}): ${errorMessage(err)}` };
-  }
-  try {
-    renameSync(tmpPath, path);
-  } catch (err) {
-    try {
-      unlinkSync(tmpPath);
-    } catch {
-      // Ignore — the rename error message below is the actionable one.
-    }
-    return { kind: 'failed', reason: `Failed to install plist (rename ${tmpPath} → ${path}): ${errorMessage(err)}` };
+    return { kind: 'failed', reason: `Failed to install plist: ${errorMessage(err)}` };
   }
 
   if (opts.skipBootstrap) {
@@ -311,29 +297,14 @@ export function upgradeService(name: ServiceName, opts: InstallOptions = {}): Up
     return { kind: 'already-current', plistPath: path, label: labelFor(name) };
   }
 
-  // Atomic write: O_EXCL (wx) to close the TOCTOU symlink window at the
-  // predictable tmp path. On EEXIST (stale crash leftover), clean up and
-  // retry once — same defense-in-depth as installService().
-  const tmpPath = `${path}.tmp`;
+  // Atomic write: tmp+rename via atomicWriteFile (random temp name, O_EXCL,
+  // mode 0o600). Random temp names make EEXIST-on-tmp virtually impossible,
+  // so the stale-leftover retry loop from the hand-rolled version is not
+  // needed. secure:true preserves O_EXCL on the temp file.
   try {
-    writeFileSync(tmpPath, desired, { encoding: 'utf-8', flag: 'wx', mode: 0o600 });
-  } catch (firstErr) {
-    if (isErrnoCode(firstErr, 'EEXIST')) {
-      try { unlinkSync(tmpPath); } catch { /* ignore cleanup failure */ }
-      try {
-        writeFileSync(tmpPath, desired, { encoding: 'utf-8', flag: 'wx', mode: 0o600 });
-      } catch (retryErr) {
-        return { kind: 'failed', reason: `Failed to write upgraded plist (tmp ${tmpPath}): ${errorMessage(retryErr)}` };
-      }
-    } else {
-      return { kind: 'failed', reason: `Failed to write upgraded plist (tmp ${tmpPath}): ${errorMessage(firstErr)}` };
-    }
-  }
-  try {
-    renameSync(tmpPath, path);
+    atomicWriteFile(path, desired, { mode: 0o600, secure: true, mkdirp: false });
   } catch (err) {
-    try { unlinkSync(tmpPath); } catch { /* ignore */ }
-    return { kind: 'failed', reason: `Failed to install upgraded plist (rename ${tmpPath} -> ${path}): ${errorMessage(err)}` };
+    return { kind: 'failed', reason: `Failed to install upgraded plist: ${errorMessage(err)}` };
   }
 
   return { kind: 'upgraded', plistPath: path, label: labelFor(name) };
