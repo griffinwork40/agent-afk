@@ -20,6 +20,7 @@ import {
   toggleScheduleEnabled,
   updateSchedule,
   toScheduledTask,
+  isLockContention,
   type ScheduledTaskConfig,
 } from './schedule-store.js';
 
@@ -866,5 +867,53 @@ describe('retry fields (maxAttempts / retryDelayMs)', () => {
     const after = getSchedule('patch-me', path)!;
     expect(after.maxAttempts).toBe(2);
     expect(after.retryDelayMs).toBe(5_000);
+  });
+});
+
+// ── isLockContention ─────────────────────────────────────────────────────────
+// Tests run on all platforms — the helper is pure and accepts `platform` as a
+// parameter so behaviour for both platforms can be verified without skip/runIf.
+
+describe('isLockContention', () => {
+  function makeErr(code: string): NodeJS.ErrnoException {
+    const e: NodeJS.ErrnoException = new Error(`${code}`);
+    e.code = code;
+    return e;
+  }
+
+  describe('win32 platform', () => {
+    it('returns true for EPERM', () => {
+      expect(isLockContention(makeErr('EPERM'), 'win32')).toBe(true);
+    });
+    it('returns true for EACCES', () => {
+      expect(isLockContention(makeErr('EACCES'), 'win32')).toBe(true);
+    });
+    it('returns true for EBUSY', () => {
+      expect(isLockContention(makeErr('EBUSY'), 'win32')).toBe(true);
+    });
+    it('returns false for EEXIST (handled separately by the caller)', () => {
+      expect(isLockContention(makeErr('EEXIST'), 'win32')).toBe(false);
+    });
+    it('returns false for ENOENT', () => {
+      expect(isLockContention(makeErr('ENOENT'), 'win32')).toBe(false);
+    });
+    it('returns false for non-errno values', () => {
+      expect(isLockContention(new Error('plain error'), 'win32')).toBe(false);
+      expect(isLockContention(null, 'win32')).toBe(false);
+    });
+  });
+
+  describe('posix platforms', () => {
+    for (const platform of ['linux', 'darwin', 'freebsd'] as const) {
+      it(`returns false for EPERM on ${platform} (real permission error)`, () => {
+        expect(isLockContention(makeErr('EPERM'), platform)).toBe(false);
+      });
+      it(`returns false for EACCES on ${platform}`, () => {
+        expect(isLockContention(makeErr('EACCES'), platform)).toBe(false);
+      });
+      it(`returns false for EBUSY on ${platform}`, () => {
+        expect(isLockContention(makeErr('EBUSY'), platform)).toBe(false);
+      });
+    }
   });
 });

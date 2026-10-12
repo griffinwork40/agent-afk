@@ -46,6 +46,35 @@ interface LockOwner {
   token: string;
 }
 
+/**
+ * Returns true when `err` from `writeLockFile` represents lock contention
+ * rather than a real permission problem.
+ *
+ * On Windows, unlinking a lock file leaves it in a "delete-pending" state
+ * until every open handle is closed. A concurrent `openSync(path, 'wx')`
+ * during that window receives EPERM, EACCES, or EBUSY — none of which are
+ * the EEXIST the caller normally expects for contention. On POSIX those same
+ * codes always mean a real permission problem, so we throw immediately there.
+ *
+ * Invariant: Windows delete-pending — the OS marks the file for deletion but
+ * keeps its directory entry alive until the last handle closes. Any process
+ * that tries to create a new file at that path before the handle closes gets
+ * EPERM/EACCES/EBUSY. Treating these as transient contention lets the retry
+ * loop wait until the delete completes rather than surfacing a misleading
+ * permission error.
+ *
+ * @param err    - The error thrown by `writeLockFile`.
+ * @param platform - `process.platform` value; injectable for unit-testing.
+ */
+export function isLockContention(err: unknown, platform: string): boolean {
+  if (platform !== 'win32') return false;
+  return (
+    isErrnoCode(err, 'EPERM') ||
+    isErrnoCode(err, 'EACCES') ||
+    isErrnoCode(err, 'EBUSY')
+  );
+}
+
 function writeLockFile(lockPath: string, owner: LockOwner): void {
   const fd = openSync(lockPath, 'wx');
   try {
@@ -121,7 +150,7 @@ function withFileLock<T>(storePath: string, fn: () => T): T {
       writeLockFile(lp, owner);
       acquired = true;
     } catch (err) {
-      if (!isErrnoCode(err, 'EEXIST')) throw err;
+      if (!isErrnoCode(err, 'EEXIST') && !isLockContention(err, process.platform)) throw err;
       const currentOwner = readLockOwner(lp);
       try {
         if (currentOwner && Date.now() - statSync(lp).mtimeMs > LOCK_STALE_MS) {
