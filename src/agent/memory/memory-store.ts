@@ -318,14 +318,19 @@ export class MemoryStore {
       const ids = rows.map((r) => r.id);
       const placeholders = ids.map(() => '?').join(', ');
       try {
-        this.db
+        const accesses = this.db
           .prepare(
             `UPDATE facts
                SET access_count = access_count + 1,
                    last_accessed = ?
-             WHERE id IN (${placeholders})`,
+             WHERE id IN (${placeholders})
+             RETURNING id, access_count, last_accessed`,
           )
-          .run(now, ...ids);
+          .all(now, ...ids) as Pick<Fact, 'id' | 'access_count' | 'last_accessed'>[];
+        // RETURNING captures the committed increment, including concurrent recalls.
+        // Never report an access before the write succeeds, or reorder FTS results.
+        const byId = new Map(accesses.map((access) => [access.id, access]));
+        for (const row of rows) Object.assign(row, byId.get(row.id));
       } catch (err) {
         debugLog('memory-store: access tracking update failed (non-fatal):', String(err));
       }

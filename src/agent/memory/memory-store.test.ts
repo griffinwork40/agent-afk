@@ -629,6 +629,12 @@ describe('searchFacts — access tracking', () => {
     expect(typeof after.last_accessed).toBe('string');
     // last_accessed must be a valid ISO-8601 timestamp.
     expect(new Date(after.last_accessed!).getTime()).not.toBeNaN();
+    // Recall results must expose the successful access, not the pre-UPDATE snapshot.
+    expect(results.find((r) => r.id === id)).toEqual(after);
+    expect(results[0]).not.toHaveProperty('rank');
+    const next = store.searchFacts('pnpm');
+    expect(next[0]).toEqual(store.getFact(id));
+    expect(next[0]!.access_count).toBe(2);
   });
 
   it('accumulates access_count across successive searches', () => {
@@ -665,6 +671,29 @@ describe('searchFacts — access tracking', () => {
     expect(store.getFact(idB)!.access_count).toBe(1);
   });
 
+  it('returns the persisted counter when another recall increments after SELECT', () => {
+    const id = store.storeFact({
+      category: 'learning', content: 'concurrent recall', source_surface: 'test',
+    });
+    const originalPrepare = Database.prototype.prepare;
+    const spy = vi.spyOn(Database.prototype, 'prepare').mockImplementation(function (
+      this: BetterSqlite3.Database, sql: string,
+    ) {
+      if (/UPDATE facts\s+SET access_count/.test(sql)) {
+        // Model a competing recall between the ranked SELECT and our UPDATE.
+        originalPrepare.call(this, 'UPDATE facts SET access_count = access_count + 1 WHERE id = ?').run(id);
+      }
+      return originalPrepare.call(this, sql);
+    } as BetterSqlite3.Database['prepare']);
+    try {
+      const results = store.searchFacts('concurrent');
+      expect(results[0]!.access_count).toBe(2);
+      expect(results[0]).toEqual(store.getFact(id));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('a failed access-tracking UPDATE does not break the search (non-fatal)', () => {
     // The access-tracking UPDATE inside searchFacts is wrapped in a try/catch.
     // If the UPDATE throws (e.g. disk-full or a transient write error), the
@@ -675,7 +704,7 @@ describe('searchFacts — access tracking', () => {
       source_surface: 'test',
     });
 
-    // Force the next `prepare().run()` to throw when it matches the UPDATE
+    // Force the next `prepare().all()` to throw when it matches the UPDATE
     // access tracking query, simulating a transient write failure.
     const originalPrepare = Database.prototype.prepare;
     vi.spyOn(Database.prototype, 'prepare').mockImplementation(function (
@@ -686,7 +715,7 @@ describe('searchFacts — access tracking', () => {
       if (/UPDATE facts\s+SET access_count/.test(sql)) {
         return {
           ...stmt,
-          run: (..._args: unknown[]) => {
+          all: (..._args: unknown[]) => {
             throw new Error('simulated disk-full error');
           },
         } as unknown as BetterSqlite3.Statement;
@@ -702,6 +731,9 @@ describe('searchFacts — access tracking', () => {
     // Results must still be returned despite the UPDATE failure.
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]!.content).toContain('vitest');
+    expect(results[0]!.access_count).toBe(0);
+    expect(results[0]!.last_accessed).toBeNull();
+    expect(results[0]).toEqual(store.getFact(results[0]!.id));
 
     vi.restoreAllMocks();
   });
