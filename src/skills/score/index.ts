@@ -34,7 +34,7 @@
 import { spawn, type ChildProcess } from 'child_process';
 import { promises as fs } from 'fs';
 import { join, dirname } from 'path';
-import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
+import { writeJsonFileAsync } from '../../utils/json-file.js';
 import { errorMessage } from '../../utils/errors.js';
 import { pathExists } from '../../utils/fs.js';
 import { isPlainObject } from '../../utils/type-guards.js';
@@ -170,10 +170,7 @@ export async function writeScore(
   score: BranchScore,
 ): Promise<string> {
   const path = join(farmDir, 'scores', `branch-${index}.json`);
-  await atomicWriteFileAsync(path, JSON.stringify(score, null, 2) + '\n', {
-    mode: 0o600,
-    encoding: 'utf-8',
-  });
+  await writeJsonFileAsync(path, score, { mode: 0o600 });
   return path;
 }
 
