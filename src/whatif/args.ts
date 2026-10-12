@@ -132,6 +132,11 @@ export interface WhatifFlagOptions {
   noBaselineSample?: boolean;
   /** Operator-supplied predictions (#2861); accumulated in order. */
   operatorPredictions?: OperatorPrediction[];
+  /**
+   * A/A calibration mode (#2415 Step 0): run both arms with zero changes so
+   * any measured difference is harness noise, not a real effect.
+   */
+  aaMode?: boolean;
 }
 
 export interface ParsedWhatifArgs {
@@ -149,6 +154,11 @@ export interface ParsedWhatifArgs {
   json: boolean;
   /** Bypass the MDE underpowered hard gate. */
   force: boolean;
+  /**
+   * A/A calibration mode (#2415 Step 0): zero changes, both arms identical.
+   * Any measured difference is harness noise. Implies an empty ChangeSpec.
+   */
+  aaMode: boolean;
 }
 
 // WHATIF_USAGE is re-exported from args.usage.ts (extracted for the 350-line ceiling).
@@ -185,6 +195,7 @@ interface RunState {
   maxPredictions?: number;
   noBaselineSample: boolean;
   operatorPredictions: OperatorPrediction[];
+  aaMode: boolean;
 }
 
 /**
@@ -210,6 +221,7 @@ function parseRunOptionFlag(token: string, nextVal: string | undefined, state: R
     case '--json': state.json = true; return 1;
     case '--keep-sandboxes': state.keepSandboxes = true; return 1;
     case '--no-baseline-sample': state.noBaselineSample = true; return 1;
+    case '--aa': state.aaMode = true; return 1;
     case '--predict': {
       if (!nextVal) return `--predict requires a prediction text\n\n${WHATIF_USAGE}`;
       // Strip a leading auxiliary verb so "should greet the user" becomes
@@ -303,6 +315,7 @@ export function parseWhatifArgs(argv: string[]): ParseResult {
     force: false,
     noBaselineSample: false,
     operatorPredictions: [],
+    aaMode: false,
   };
 
   let i = 0;
@@ -340,7 +353,7 @@ export function parseWhatifArgs(argv: string[]): ParseResult {
     return `--spec cannot be combined with change flags or plain-text\n\n${WHATIF_USAGE}`;
   }
 
-  if (!text && !state.specFile && flagChanges.length === 0) {
+  if (!text && !state.specFile && flagChanges.length === 0 && !state.aaMode) {
     return `whatif: nothing to predict — provide a description, flags, or --spec\n\n${WHATIF_USAGE}`;
   }
 
@@ -364,10 +377,12 @@ export function parseWhatifArgs(argv: string[]): ParseResult {
       ...(state.maxPredictions !== undefined ? { maxPredictions: state.maxPredictions } : {}),
       ...(state.noBaselineSample ? { noBaselineSample: true } : {}),
       ...(state.operatorPredictions.length > 0 ? { operatorPredictions: state.operatorPredictions } : {}),
+      ...(state.aaMode ? { aaMode: true } : {}),
     },
     yes: state.yes,
     json: state.json,
     force: state.force,
+    aaMode: state.aaMode,
   };
 }
 

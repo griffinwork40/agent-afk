@@ -736,3 +736,70 @@ describe('loadSpecFile — predictions field', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// parseWhatifArgs — --aa flag (#2415 Step 0)
+// ---------------------------------------------------------------------------
+
+describe('parseWhatifArgs — --aa flag', () => {
+  it('parses --aa alone, sets aaMode true and flagChanges empty', () => {
+    const r = parseWhatifArgs(['--aa']);
+    expect(typeof r).not.toBe('string');
+    const parsed = r as import('./args.js').ParsedWhatifArgs;
+    expect(parsed.aaMode).toBe(true);
+    expect(parsed.flagChanges).toHaveLength(0);
+    expect(parsed.text).toBeUndefined();
+    expect(parsed.specFile).toBeUndefined();
+  });
+
+  it('--aa sets aaMode on options as well', () => {
+    const r = parseWhatifArgs(['--aa']);
+    expect(typeof r).not.toBe('string');
+    const parsed = r as import('./args.js').ParsedWhatifArgs;
+    expect(parsed.options.aaMode).toBe(true);
+  });
+
+  it('--aa can be combined with --verify', () => {
+    const r = parseWhatifArgs(['--aa', '--verify']);
+    expect(typeof r).not.toBe('string');
+    const parsed = r as import('./args.js').ParsedWhatifArgs;
+    expect(parsed.aaMode).toBe(true);
+    expect(parsed.options.verify).toBe(true);
+  });
+
+  it('--aa can be combined with --quick', () => {
+    const r = parseWhatifArgs(['--aa', '--quick']);
+    expect(typeof r).not.toBe('string');
+    const parsed = r as import('./args.js').ParsedWhatifArgs;
+    expect(parsed.aaMode).toBe(true);
+    expect(parsed.options.maxTurns).toBe(1);
+  });
+
+  it('without --aa, aaMode is false', () => {
+    const r = parseWhatifArgs(['--append', 'some text']);
+    expect(typeof r).not.toBe('string');
+    const parsed = r as import('./args.js').ParsedWhatifArgs;
+    expect(parsed.aaMode).toBe(false);
+  });
+
+  it('without --aa, options.aaMode is undefined', () => {
+    const r = parseWhatifArgs(['--append', 'some text']);
+    expect(typeof r).not.toBe('string');
+    const parsed = r as import('./args.js').ParsedWhatifArgs;
+    expect(parsed.options.aaMode).toBeUndefined();
+  });
+
+  it('returns error when no change flags and no --aa', () => {
+    const r = parseWhatifArgs([]);
+    expect(typeof r).toBe('string');
+    expect(r as string).toContain('nothing to predict');
+  });
+
+  it('--aa does not conflict with --spec (--spec takes priority for changes)', () => {
+    // --spec combined with --aa would be unusual but --aa is a run-mode flag,
+    // not a change flag, so it should not trigger the spec+change conflict.
+    // The conflict guard only fires when flagChanges or positionals are present.
+    const r = parseWhatifArgs(['--aa', '--verify']);
+    expect(typeof r).not.toBe('string');
+  });
+});

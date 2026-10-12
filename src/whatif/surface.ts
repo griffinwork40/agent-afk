@@ -183,6 +183,7 @@ export function buildWhatifRunOptions(
     ...(o.operatorPredictions && o.operatorPredictions.length > 0
       ? { operatorPredictions: o.operatorPredictions }
       : {}),
+    ...(parsed.aaMode ? { aaMode: true } : {}),
   };
 }
 
