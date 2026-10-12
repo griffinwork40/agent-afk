@@ -307,7 +307,7 @@ export function setupPeerBoundary(
   surface: InputSurface,
   peerNotifier: PeerInboxNotifier,
   isQueuedHumanTurn: () => boolean,
-  processJobNotifier?: InjectionSource & { hasPendingInjections(): boolean },
+  processJobNotifier?: InjectionSource,
 ): { admissionQueue: AdmissionQueue; reinstall: () => void } {
   const admissionQueue = new AdmissionQueue();
   const opts: PeerBoundaryOpts = {

@@ -70,6 +70,14 @@ export interface ResolvedComposeAgent {
    * fallback for blank definitions.
    */
   leafNotice?: string;
+  /**
+   * Tools stripped from the named agent's allowlist because compose leaf
+   * nodes cannot run executor-backed tools (`agent`, `skill`). Populated only
+   * when `leafNotice` is set — same condition. Used by `emitLeafToolStrips` in
+   * `compose-executor.ts` to emit accurate per-node trace metadata instead of
+   * the global `COMPOSE_LEAF_STRIPPED_TOOLS` constant.
+   */
+  strippedTools?: string[];
   /** Named agent's model default (undefined = inherit compose default). */
   namedAgentModel?: string;
   /**
@@ -211,6 +219,7 @@ export function resolveComposeNodeAgent(
     // ?? fallback to short-circuit, silently dropping the operator prompt).
     if (strippedTools.length > 0) {
       result.leafNotice = COMPOSE_LEAF_NOTICE;
+      result.strippedTools = strippedTools;
     }
   }
 

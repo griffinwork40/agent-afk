@@ -37,11 +37,15 @@ describe('private-temp classification validation reuse', () => {
   });
 
   it('validates a cached root once per classification, not once per containment check', () => {
+    // Pin os.tmpdir() so the lstat-count assertion is not affected by whatever
+    // the real tmpdir returns on this host. Mirrors the sibling test below.
+    vi.spyOn(os, 'tmpdir').mockReturnValue(root);
     expect(classify(scratch).level).toBe('safe');
     vi.mocked(lstatSync).mockClear();
     for (let i = 0; i < 3; i++) expect(classify(scratch).level).toBe('safe');
     const rootProbes = vi.mocked(lstatSync).mock.calls.filter(([candidate]) => candidate === root);
     expect(rootProbes).toHaveLength(3);
+    vi.restoreAllMocks();
   });
 
   it('fails closed when a cached root can no longer be inspected', () => {

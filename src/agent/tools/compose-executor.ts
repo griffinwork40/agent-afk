@@ -46,7 +46,7 @@ import {
 // Re-export for callers that import cleanupComposeSpills from compose-executor.ts
 // (test files, and any surface that predates the format-module extraction).
 export { cleanupComposeSpills };
-import { errorMessage, ensureError} from '../../utils/errors.js';
+import { errorMessage, ensureError } from '../../utils/errors.js';
 import { resolveSubagentAttachments } from './subagent/attachment-resolve.js';
 import { inboundAttachmentRegistry as defaultInboundAttachmentRegistry } from '../content/attachment-registry.js';
 import type { DetachableToolRegistry } from './detach-registry.js';
@@ -73,11 +73,16 @@ function emitLeafToolStrips(
   // Short-circuit here to avoid perturbing callers that rely on exact
   // microtask-tick counts (e.g. compose detach tests that use drainMicrotasks).
   if (!traceWriter) return;
-  const strippedNames = [...COMPOSE_LEAF_STRIPPED_TOOLS].join(', ');
+  if (nodes.length !== resolvedAgents.length) return;
   for (let i = 0; i < nodes.length; i++) {
     const ra = resolvedAgents[i];
     const node = nodes[i];
     if (ra?.leafNotice !== undefined && node?.agent_type !== undefined) {
+      // Use the actual stripped list from the resolved agent so the trace
+      // reflects which tools were removed for THIS node, not the global
+      // COMPOSE_LEAF_STRIPPED_TOOLS constant which may include tools the
+      // agent's allowlist never declared.
+      const strippedNames = ra.strippedTools?.join(', ') ?? [...COMPOSE_LEAF_STRIPPED_TOOLS].join(', ');
       void emitSessionPhase(traceWriter, {
         phase: 'compose_leaf_tools_stripped',
         metadata: { agentType: node.agent_type, strippedTools: strippedNames },
