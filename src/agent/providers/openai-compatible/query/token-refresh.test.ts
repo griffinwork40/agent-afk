@@ -188,15 +188,10 @@ describe('chatgpt-oauth + 401 + different token on disk', () => {
     let rebuildCalledWith: OpenAIAuthResolution | null = null;
     let makeNewAttemptCallCount = 0;
 
-    const priorTurns: OpenAIMessage[] = [
-      { role: 'user', content: 'original prompt' },
-    ]; // simulates pushUserTurn having run
-
     const ctx = makeCtx({
       source: 'chatgpt-oauth',
       apiKey: 'tok-A',
       forceChatgptOAuth: true, // Tier 0 path — slot forces chatgpt-oauth
-      priorTurns,
       onRebuild: (a) => { rebuildCalledWith = a; },
     });
 

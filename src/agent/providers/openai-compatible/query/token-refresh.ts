@@ -107,16 +107,17 @@ export async function* wrapTurnWithOAuthRefresh(
     return;
   }
 
+  // Invariant: `preTurnEvents` is empty when a 401 fires on the very first model
+  // request. `runTurnInner` emits no ProviderEvents before the first model
+  // request returns — session.init and any synthetic pre-turn events are only
+  // yielded after the request is in flight. If that ordering ever changes, the
+  // preTurnEvents replay below must be audited for idempotence (no duplicate
+  // session.init or tool events).
+
   // Snapshot priorTurns length BEFORE the first attempt so we can roll back
   // the user turn that pushUserTurn appends inside runTurnInner.
   const priorTurnsLenBefore = ctx.priorTurns.length;
 
-  // Invariant: `runTurnInner` emits no events before the first model request
-  // returns — session.init and any synthetic pre-turn events are yielded only
-  // after the request is in flight.  This means `preTurnEvents` is empty when
-  // a 401 fires on the very first request, so replaying it on retry is safe:
-  // no duplicate session.init or tool events are emitted.  If that ordering
-  // ever changes, the replay below must be audited for idempotence.
   const preTurnEvents: ProviderEvent[] = [];
   let detected401 = false;
 

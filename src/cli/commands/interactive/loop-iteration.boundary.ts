@@ -96,11 +96,8 @@ export interface PeerBoundaryOpts {
   /**
    * Settled background-process envelopes, drained at each boundary (behind
    * the human barrier). Absent when the session has no process registry.
-   *
-   * Requires `hasPendingInjections()` in addition to `drainInjections()` so
-   * the boundary can skip the allocation when nothing is ready.
    */
-  processJobNotifier?: InjectionSource & { hasPendingInjections(): boolean };
+  processJobNotifier?: InjectionSource;
 }
 
 /**

@@ -89,15 +89,18 @@ export async function trackRecordSummary(
   // ── Aggregate per change kind ─────────────────────────────────────────────
   const stats = new Map<string, { confirmed: number; total: number }>();
 
-  // Discriminant pair: `ts` (ISO timestamp string) and `verdict` ('confirmed' |
-  // 'refuted') are the two fields that every CalibrationRecord must carry and
-  // that plain JSON objects (e.g. index lines, partial writes) will not have.
-  // Checking both gives stronger type narrowing than a single field would.
+  // Discriminant triple: `ts` (ISO timestamp string), `verdict` ('confirmed' |
+  // 'refuted'), and `changeKinds` (string array) are the fields that every
+  // CalibrationRecord must carry and that plain JSON objects (e.g. index lines,
+  // partial writes) will not have. Checking all three — including the array
+  // discriminant — gives stronger narrowing than a non-null object check alone
+  // (the `isEffectRecord` pattern).
   const isCalibrationRecord = (x: unknown): x is CalibrationRecord =>
     x !== null &&
     typeof x === 'object' &&
     typeof (x as Record<string, unknown>)['ts'] === 'string' &&
-    typeof (x as Record<string, unknown>)['verdict'] === 'string';
+    typeof (x as Record<string, unknown>)['verdict'] === 'string' &&
+    Array.isArray((x as Record<string, unknown>)['changeKinds']);
   const records = parseJsonlLines<CalibrationRecord>(raw, { guard: isCalibrationRecord });
 
   for (const rec of records) {
