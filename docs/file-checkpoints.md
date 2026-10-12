@@ -25,8 +25,9 @@ There is no cross-session sharing. Content files use mode `0600`; newly created
 state directories use `0700` where the platform supports POSIX modes.
 
 Metadata records the original path, existence, file mode, and optional
-`contentHash`. Content and metadata become visible together by a second atomic
-directory rename. Empty existing files and previously missing files can share
+`contentHash`. A blob is published first by one atomic rename into `.blobs/`;
+content and metadata then become visible together by a second atomic rename
+that publishes the entry directory. Empty existing files and previously missing files can share
 empty content but retain separate existence metadata. Concurrent publishers do
 not overwrite committed entries or blobs. Failed publications clean temporary
 directories; a complete but unreferenced blob can remain after an entry failure.

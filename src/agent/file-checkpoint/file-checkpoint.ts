@@ -121,8 +121,9 @@ export function listTurnSnapshots(sessionId: string, turnId: string, _stateDir?:
       if (metadata.version !== 3 || typeof metadata.absPath !== 'string' || typeof metadata.isNewFile !== 'boolean') {
         throw new Error(`Invalid checkpoint metadata: ${directory}`);
       }
-      if (metadata.contentHash !== undefined && (typeof metadata.contentHash !== 'string'
-        || !/^[a-f0-9]{64}$/.test(metadata.contentHash))) {
+      // Contract: contentHash format is validated in readCheckpointContent so a
+      // single corrupt entry fails closed per-file without blocking sibling restores.
+      if (metadata.contentHash !== undefined && typeof metadata.contentHash !== 'string') {
         throw new Error(`Invalid checkpoint content hash: ${directory}`);
       }
       if (metadata.mode !== undefined && (typeof metadata.mode !== 'number'

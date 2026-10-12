@@ -18,15 +18,16 @@ export async function storeCheckpointContent(
   const staging = await mkdtemp(join(directory, '.pending-'));
   try {
     await writeFile(join(staging, 'content'), content, { flag: 'wx', mode: 0o600 });
-    // Invariant: a nonempty-directory rename publishes complete bytes without
-    // replacing the winner when separate turns publish the same digest.
+    // Invariant: blob content is written to staging before the nonempty-directory
+    // rename publishes it. A reader that wins the rename sees complete bytes;
+    // a later publisher that loses the rename verifies the winner is identical.
     try { await rename(staging, blobDirectory); }
     catch (err) {
       if (!['EEXIST', 'ENOTEMPTY', 'EPERM', 'EACCES'].includes((err as NodeJS.ErrnoException).code ?? '')) throw err;
       // Windows can report permission-shaped errors for a rename collision;
       // retain the original error if there is no readable committed winner.
       const winner = await readFile(blob).catch(() => { throw err; });
-      if (!winner.equals(content)) throw new Error(`Corrupt checkpoint content: ${digest}`);
+      if (!winner.equals(content)) throw new Error(`Corrupt checkpoint content at ${digest}: blob mismatch`);
     }
     try { await link(blob, destination); }
     catch (err) {
@@ -43,9 +44,16 @@ export async function storeCheckpointContent(
 /** Legacy entries have no digest; new entries verify integrity before restore. */
 export function readCheckpointContent(snapshot: FileSnapshot): Buffer {
   const content = readFileSync(snapshot.snapshotPath);
-  if (snapshot.contentHash !== undefined
-    && createHash('sha256').update(content).digest('hex') !== snapshot.contentHash) {
-    throw new Error(`Corrupt checkpoint content: ${snapshot.absPath}`);
+  if (snapshot.contentHash !== undefined) {
+    // Contract: validate both format and digest here so listTurnSnapshots can
+    // return all entries and rewindFiles fails closed per-file on corruption.
+    if (!/^[a-f0-9]{64}$/.test(snapshot.contentHash)) {
+      throw new Error(`Invalid checkpoint content hash at ${snapshot.absPath}: ${snapshot.contentHash}`);
+    }
+    const actual = createHash('sha256').update(content).digest('hex');
+    if (actual !== snapshot.contentHash) {
+      throw new Error(`Corrupt checkpoint content at ${snapshot.absPath}: expected ${snapshot.contentHash}, got ${actual}`);
+    }
   }
   return content;
 }

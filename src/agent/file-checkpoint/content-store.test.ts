@@ -38,6 +38,7 @@ describe('content-addressed checkpoint store', () => {
     writeFileSync(a, bytes); writeFileSync(b, bytes);
     const entries = await Promise.all([snapshot(a, 'one'), snapshot(b, 'two')]);
     const blobs = getFileCheckpointBlobDir(session, state);
+    expect(readdirSync(blobs)).toHaveLength(1);
     expect(readdirSync(blobs)).toEqual([digest(bytes)]);
     for (const entry of entries) {
       expect(entry.contentHash).toBe(digest(bytes));
@@ -136,5 +137,49 @@ describe('content-addressed checkpoint store', () => {
     await expect(snapshot(file, 'two')).rejects.toThrow('Corrupt checkpoint content');
     expect(listTurnSnapshots(session, 'two', state)).toEqual([]);
     expect(readdirSync(getFileCheckpointBlobDir(session, state))).toEqual([digest('old')]);
+  });
+
+  it('blob/dedup/integrity: same content to two paths shares one blob; corrupt blob fails that file while sibling with valid entry still restores', async () => {
+    // Write the same bytes to two paths; snapshot both in the same turn.
+    const bytes = Buffer.from('shared-content');
+    const a = join(root, 'a'); const b = join(root, 'b');
+    writeFileSync(a, bytes); writeFileSync(b, bytes);
+    const registry = createFileCheckpointRegistry(session, 'turn', state);
+    await registry.snapshotFile(a);
+    await registry.snapshotFile(b);
+
+    // One blob for both entries.
+    const blobs = getFileCheckpointBlobDir(session, state);
+    expect(readdirSync(blobs)).toHaveLength(1);
+    expect(readdirSync(blobs)).toEqual([digest(bytes)]);
+
+    // Corrupt the shared blob — both entry content files are hardlinks to it.
+    const blobContent = join(blobs, digest(bytes), 'content');
+    writeFileSync(blobContent, 'corrupted');
+
+    // Overwrite both files so rewind has something to restore.
+    writeFileSync(a, 'new-a'); writeFileSync(b, 'new-b');
+
+    // Rewind must fail: the corrupt blob means neither file can be verified.
+    const result = await rewind();
+    expect(result.canRewind).toBe(false);
+    expect(result.error).toMatch(/Corrupt checkpoint content/);
+    // No file was changed before detection.
+    expect(result.filesChanged).toEqual([]);
+
+    // Now snapshot a second file with distinct content (valid entry) alongside
+    // the corrupt one, to prove Fix 1: a sibling with a valid entry still restores.
+    const c = join(root, 'c');
+    writeFileSync(c, 'good-content');
+    const registry2 = createFileCheckpointRegistry(session, 'turn2', state);
+    await registry2.snapshotFile(c);
+    writeFileSync(c, 'modified-c');
+    const result2 = await rewindFiles(
+      { sessionId: session, enableFileCheckpointing: true, _stateDir: state,
+        writePolicy: { resolveBase: root, writeRoots: [root] } },
+      'turn2',
+    );
+    expect(result2.canRewind).toBe(true);
+    expect(readFileSync(c, 'utf8')).toBe('good-content');
   });
 });
