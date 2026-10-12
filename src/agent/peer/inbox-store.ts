@@ -40,6 +40,7 @@
  */
 
 import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
+import { isEnoent } from '../../utils/errors.js';
 import {
   mkdir,
   rename,
@@ -259,8 +260,7 @@ export async function peekPending(
   try {
     raw = await readFile(join(getPeerInboxDir(sessionId), 'pending', file), 'utf8');
   } catch (err: unknown) {
-    const e = err as NodeJS.ErrnoException;
-    if (e.code === 'ENOENT') return 'vanished';
+    if (isEnoent(err)) return 'vanished';
     // Other read errors (EACCES, EIO, …): treat as unparseable — content may
     // be partially intact; move to held/ rather than leaving it looping.
     return 'unparseable';
@@ -283,8 +283,7 @@ export async function holdPending(sessionId: string, file: string): Promise<bool
     await rename(src, dst);
     return true;
   } catch (err: unknown) {
-    const e = err as NodeJS.ErrnoException;
-    if (e.code === 'ENOENT') return false;
+    if (isEnoent(err)) return false;
     throw err;
   }
 }
@@ -366,8 +365,7 @@ export async function releaseHeld(sessionId: string, file: string): Promise<bool
     await rename(src, dst);
     return true;
   } catch (err: unknown) {
-    const e = err as NodeJS.ErrnoException;
-    if (e.code === 'ENOENT') return false;
+    if (isEnoent(err)) return false;
     throw err;
   }
 }
@@ -383,8 +381,7 @@ export async function dropHeld(sessionId: string, file: string): Promise<boolean
     await unlink(path);
     return true;
   } catch (err: unknown) {
-    const e = err as NodeJS.ErrnoException;
-    if (e.code === 'ENOENT') return false;
+    if (isEnoent(err)) return false;
     throw err;
   }
 }
@@ -421,8 +418,7 @@ export async function reclaimDelivered(sessionId: string, file: string): Promise
     await rename(src, dst);
     return true;
   } catch (err: unknown) {
-    const e = err as NodeJS.ErrnoException;
-    if (e.code === 'ENOENT') return false;
+    if (isEnoent(err)) return false;
     throw err;
   }
 }
@@ -563,9 +559,8 @@ export async function recoverUnackedDelivered(sessionId: string): Promise<string
       await rename(join(deliveredDir, file), join(pendingDir, file));
       recovered.push(file);
     } catch (err: unknown) {
-      const e = err as NodeJS.ErrnoException;
       // ENOENT: already gone (concurrent restart or prior recovery); skip.
-      if (e.code !== 'ENOENT') {
+      if (!isEnoent(err)) {
         // Any other error: leave the file in place, do not corrupt state.
       }
     }

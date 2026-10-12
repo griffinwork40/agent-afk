@@ -8,6 +8,7 @@ import { stat, readFile, writeFile, mkdir, mkdtemp, rename, rm } from 'node:fs/p
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { getFileCheckpointTurnDir } from '../../paths.js';
+import { isEnoent } from '../../utils/errors.js';
 
 export interface FileCheckpointRegistry {
   snapshotFile(absPath: string): Promise<void>;
@@ -46,7 +47,7 @@ async function capture(absPath: string): Promise<{ content: Buffer; metadata: Sn
     const content = await readFile(absPath);
     return { content, metadata: { version: 3, absPath, isNewFile: false, mode: info.mode & 0o7777 } };
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    if (!isEnoent(err)) throw err;
     return { content: Buffer.alloc(0), metadata: { version: 3, absPath, isNewFile: true } };
   }
 }
