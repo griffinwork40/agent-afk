@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { loadSchedules } from '../../daemon/schedule-store.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -52,6 +53,26 @@ describe('create_schedule handler', () => {
     expect(parsed.name).toBe('Test Task');
     expect(parsed.cron).toBe('0 2 * * *');
     expect(parsed.enabled).toBe(true);
+  });
+
+  it('accepts runAt without cron, persists polling cadence and lists both one-shot dates', async () => {
+    const runAt = '2099-01-01T00:00:00Z';
+    const expiresAt = '2099-01-02T00:00:00Z';
+    const result = await createScheduleHandler(
+      { name: 'One Shot', command: '/cmd', runAt, expiresAt }, fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    expect(loadSchedules()[0]).toMatchObject({ cron: '* * * * *', runAt, expiresAt });
+    const list = await listSchedulesHandler(null, fakeSignal);
+    expect(JSON.parse(list.content as string)).toEqual([
+      expect.objectContaining({ runAt, expiresAt }),
+    ]);
+  });
+
+  it('rejects a create request without cron or runAt', async () => {
+    const result = await createScheduleHandler({ name: 'Missing Time', command: '/cmd' }, fakeSignal);
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/cron or runAt/);
   });
 
   it('invalid cron (3 fields) → isError: true', async () => {
@@ -818,6 +839,25 @@ describe('shell executor live-sync — create_schedule + update_schedule with li
       const task = tasks.find((t) => t.taskId === 'shell-live');
       expect(task).toBeDefined();
       expect(task?.executor).toBe('shell');
+    } finally {
+      await handle.stop();
+    }
+  });
+
+  it('one-shot shell task live-syncs runAt and expiresAt without a recurring cron', async () => {
+    const handle = await startDaemon({ port: 0 });
+    try {
+      const runAt = '2099-01-01T00:00:00Z';
+      const expiresAt = '2099-01-02T00:00:00Z';
+      const result = await createScheduleHandler(
+        { name: 'Shell One Shot', command: 'echo one-shot', executor: 'shell', runAt, expiresAt },
+        fakeSignal,
+      );
+      expect((JSON.parse(result.content as string) as SyncShape).daemonSynced).toBe(true);
+      expect(handle.scheduler.list().find((task) => task.taskId === 'shell-one-shot')).toMatchObject({
+        runAt, expiresAt, executor: 'shell',
+      });
+      expect(handle.scheduler.list().find((task) => task.taskId === 'shell-one-shot')?.cronExpression).toBeUndefined();
     } finally {
       await handle.stop();
     }

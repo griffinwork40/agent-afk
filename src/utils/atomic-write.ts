@@ -268,7 +268,7 @@ export function atomicWriteFile(
   if (mkdirp) {
     mkdirSync(dirname(dest), {
       recursive: true,
-      ...(resolvedOpts.mkdirMode !== undefined ? { mode: resolvedOpts.mkdirMode } : {}),
+      mode: resolvedOpts.mkdirMode,
     });
   }
 

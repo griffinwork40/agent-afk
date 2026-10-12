@@ -11,6 +11,18 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.310.4] - 2026-10-12
+
+### Added
+- add `afk restart` for AFK background services (#3290) (3ccb0096)
+
+### Fixed
+- close surface-owned session stores (#3568) (13cc408a)
+- finish one-shot schedule surfacing and advisory cleanup (#3573) (86ec6d15)
+- exclude all AFK state roots from temp writes (#3566) (79e3e979)
+- finish scoped advisory fixes and regression coverage (#3571) (f147fd64)
+- strengthen isIndexLine guard to AND all field checks (#3565) (226dc7b0)
+
 ## [5.310.3] - 2026-10-12
 
 ### Fixed

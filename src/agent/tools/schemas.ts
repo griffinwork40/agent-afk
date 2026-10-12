@@ -64,7 +64,6 @@ import {
   clipboardWriteTool,
   clipboardReadTool,
 } from './schemas.interaction-tools.js';
-export { clipboardWriteTool, clipboardReadTool } from './schemas.interaction-tools.js';
 
 // ── Browser-control tools ──────────────────────────────────────────────────
 // Invariant: these schemas are wire-projected by `toWireToolDef` in

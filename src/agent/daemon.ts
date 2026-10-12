@@ -24,6 +24,7 @@ import { errorMessage } from '../utils/errors.js';
 import { validateScheduleCwd } from './daemon/cwd-validator.js';
 import { getSchedule, toScheduledTask } from './daemon/schedule-store.js';
 import { parseTaskRetryFields, type TaskRetryFields } from './daemon/task-retry.js';
+import { parseTaskRequestTime } from './daemon/task-request-time.js';
 
 export interface DaemonOptions {
   /** Port for the HTTP control surface. Defaults to 7777. */
@@ -306,13 +307,15 @@ function isValidNotifyOn(v: unknown): v is ScheduledTask['notifyOn'] {
 interface ShellTrustParams {
   taskId: string;
   command: string;
-  cronExpression: string;
+  cronExpression: string | undefined;
   trigger: TriggerMode | undefined;
   notifyOn: ScheduledTask['notifyOn'];
   notifyChat: number | string | undefined;
   cwd: string | undefined;
   maxAttempts: number | undefined;
   retryDelayMs: number | undefined;
+  runAt: string | undefined;
+  expiresAt: string | undefined;
 }
 
 /**
@@ -331,13 +334,15 @@ function isShellExecutorTrusted(params: ShellTrustParams): boolean {
   const canonicalNotifyOn: ScheduledTask['notifyOn'] = canonical.notifyOn ?? 'failure';
   return (
     canonical.command === params.command &&
-    canonical.cronExpression === params.cronExpression &&
+    canonical.cronExpression === (params.runAt !== undefined ? undefined : params.cronExpression) &&
     (canonical.trigger ?? 'cron') === (params.trigger ?? 'cron') &&
     canonicalNotifyOn === params.notifyOn &&
     canonical.notifyChat === params.notifyChat &&
     canonical.cwd === params.cwd &&
     canonical.maxAttempts === params.maxAttempts &&
-    canonical.retryDelayMs === params.retryDelayMs
+    canonical.retryDelayMs === params.retryDelayMs &&
+    canonical.runAt === params.runAt &&
+    canonical.expiresAt === params.expiresAt
   );
 }
 
@@ -351,6 +356,12 @@ function parseRetryOr400(obj: Record<string, unknown>, res: ServerResponse): Tas
   res.writeHead(400, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: retry.error }));
   return null;
+}
+
+/** Respond consistently to invalid POST /tasks fields. */
+function taskInputError(res: ServerResponse, error: string): void {
+  res.writeHead(400, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error }));
 }
 
 async function handleRequestAsync(
@@ -390,18 +401,13 @@ async function handleRequestAsync(
       return;
     }
     const obj = body as Record<string, unknown>;
-    // Tolerant reader: GET /tasks returns `cronExpression`, so accept it as
-    // an alias for `cron` on the way in (round-trip symmetry for manual ops).
-    const cronValue = obj['cron'] ?? obj['cronExpression'];
-    if (
-      typeof obj['taskId'] !== 'string' ||
-      typeof obj['command'] !== 'string' ||
-      typeof cronValue !== 'string'
-    ) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(
-        JSON.stringify({ error: 'taskId, command, and cron (or cronExpression) are required strings' }),
-      );
+    if (typeof obj['taskId'] !== 'string' || typeof obj['command'] !== 'string') {
+      taskInputError(res, 'taskId and command are required strings');
+      return;
+    }
+    const time = parseTaskRequestTime(obj);
+    if (!time.ok) {
+      taskInputError(res, time.error);
       return;
     }
     // Per-task cwd: validate with the same rules as every other surface so a
@@ -465,7 +471,7 @@ async function handleRequestAsync(
         isShellExecutorTrusted({
           taskId: taskIdRaw,
           command: obj['command'] as string,
-          cronExpression: cronValue,
+          cronExpression: time.cron,
           trigger: obj['trigger'] as TriggerMode | undefined,
           notifyOn: isValidNotifyOn(rawNotifyOn) ? rawNotifyOn : 'failure',
           notifyChat:
@@ -473,6 +479,8 @@ async function handleRequestAsync(
           cwd,
           maxAttempts: retry.maxAttempts,
           retryDelayMs: retry.retryDelayMs,
+          runAt: time.runAt,
+          expiresAt: time.expiresAt,
         });
       if (!trusted) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -501,7 +509,10 @@ async function handleRequestAsync(
       taskId: taskIdRaw,
       command: obj['command'] as string,
       trigger: (obj['trigger'] as TriggerMode | undefined) ?? 'cron',
-      cronExpression: cronValue,
+      // Omit cronExpression when runAt is set — they are mutually exclusive per
+      // validateScheduledTask. The placeholder cron from the tool layer must not
+      // become a cronExpression on the scheduler task when runAt drives firing.
+      ...(time.cron !== undefined && time.runAt === undefined ? { cronExpression: time.cron } : {}),
       ...(obj['notifyOn'] !== undefined
         ? { notifyOn: obj['notifyOn'] as ScheduledTask['notifyOn'] }
         : {}),
@@ -512,6 +523,8 @@ async function handleRequestAsync(
         ? { executor: executorRaw as TaskExecutor }
         : {}),
       ...(cwd !== undefined ? { cwd } : {}),
+      ...(time.runAt !== undefined ? { runAt: time.runAt } : {}),
+      ...(time.expiresAt !== undefined ? { expiresAt: time.expiresAt } : {}),
       ...retry,
     };
     try {

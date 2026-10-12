@@ -306,6 +306,33 @@ describe('renderSelector — TTY keypress', () => {
     ac.abort();
     const result = await renderSelector(['alpha', 'beta'], ac.signal);
     expect(result).toBe(':cancel');
+    expect(mockSetRawMode).not.toHaveBeenCalled();
+    expect(mockEmitKeypress).not.toHaveBeenCalled();
+    expect(mockWrite).not.toHaveBeenCalled();
+  });
+
+  it.each(['escape', 'return'])('ignores stale %s keypresses after abort cleanup', async (name) => {
+    const ac = new AbortController();
+    const pending = renderSelector(['alpha', 'beta'], ac.signal);
+    const staleKeypress = keypressListeners[0]!;
+    ac.abort();
+    staleKeypress(undefined, { name });
+    expect(await pending).toBe(':cancel');
+    expect(mockSetRawMode.mock.calls).toEqual([[true], [false]]);
+    expect(mockRemoveListener).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores an abort callback captured before Escape cleanup', async () => {
+    const ac = new AbortController();
+    const add = vi.spyOn(ac.signal, 'addEventListener');
+    const pending = renderSelector(['alpha', 'beta'], ac.signal);
+    const onAbort = add.mock.calls[0]![1] as () => void;
+    pressKey({ name: 'escape' });
+    onAbort();
+    expect(await pending).toBe(':cancel');
+    expect(mockSetRawMode.mock.calls).toEqual([[true], [false]]);
+    expect(mockRemoveListener).toHaveBeenCalledTimes(1);
+    add.mockRestore();
   });
 });
 

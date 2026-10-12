@@ -47,17 +47,14 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
   if (typeof obj['command'] !== 'string' || !obj['command']) {
     return { content: 'Invalid input: command required', isError: true };
   }
-  if (typeof obj['cron'] !== 'string' || !obj['cron']) {
-    return { content: 'Invalid input: cron required', isError: true };
+  const cron = obj['cron'];
+  if (cron === undefined && obj['runAt'] === undefined) {
+    return { content: 'Invalid input: cron or runAt required', isError: true };
   }
-
-  // Basic cron validation: must have exactly 5 space-separated fields (no year)
-  const cronParts = obj['cron'].trim().split(/\s+/);
-  if (cronParts.length !== 5) {
-    return {
-      content: 'Invalid input: cron must be a 5-field expression (no year field)',
-      isError: true,
-    };
+  if (cron !== undefined) {
+    if (typeof cron !== 'string' || cron.trim().split(/\s+/).length !== 5) {
+      return { content: 'Invalid input: cron must be a 5-field expression (no year field)', isError: true };
+    }
   }
 
   const notifyChat = obj['notifyChat'];
@@ -122,7 +119,8 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
   const config = addSchedule({
     name: obj['name'] as string,
     command: obj['command'] as string,
-    cron: obj['cron'] as string,
+    // Store retains a valid polling cadence for one-shots; the scheduler omits cronExpression.
+    cron: (cron as string | undefined) ?? '* * * * *',
     ...(executor !== undefined ? { executor } : {}),
     trigger:
       (obj['trigger'] as 'cron' | 'sessionstart' | 'both' | undefined) ?? 'cron',
@@ -151,6 +149,8 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
         ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
         ...(config.maxAttempts !== undefined ? { maxAttempts: config.maxAttempts } : {}),
         ...(config.retryDelayMs !== undefined ? { retryDelayMs: config.retryDelayMs } : {}),
+        ...(config.runAt !== undefined ? { runAt: config.runAt } : {}),
+        ...(config.expiresAt !== undefined ? { expiresAt: config.expiresAt } : {}),
       })
     : await trySyncToDaemon('DELETE', `/tasks/${config.id}`);
 
@@ -341,6 +341,8 @@ export const listSchedulesHandler: ToolHandler = async (_input, _signal) => {
         ...(s.maxAttempts !== undefined ? { maxAttempts: s.maxAttempts } : {}),
         ...(s.retryDelayMs !== undefined ? { retryDelayMs: s.retryDelayMs } : {}),
         ...(s.cwd !== undefined ? { cwd: s.cwd } : {}),
+        ...(s.runAt !== undefined ? { runAt: s.runAt } : {}),
+        ...(s.expiresAt !== undefined ? { expiresAt: s.expiresAt } : {}),
       })),
     ),
   };

@@ -14,7 +14,7 @@ export const createScheduleTool: AnthropicToolDef = {
   category: 'schedule',
   concurrencySafe: false,
   description:
-    'Create a new scheduled task that the daemon will run on a cron expression. ' +
+    'Create a new recurring or one-shot scheduled task for the daemon. ' +
     'The task is saved to ~/.afk/config/schedules.json and live-synced to the running daemon if available. ' +
     'Returns the new task ID (slug) on success, plus daemonSynced/syncDetail — when daemonSynced is false, ' +
     'no running daemon picked up the change and it applies on the next daemon (re)start.',
@@ -33,15 +33,14 @@ export const createScheduleTool: AnthropicToolDef = {
       },
       cron: {
         type: 'string',
-        description: '5-field cron expression, e.g. "0 2 * * *". Must be exactly 5 fields (no year field).',
+        description: '5-field cron expression, e.g. "0 2 * * *". Required unless runAt is set.',
       },
       runAt: {
         type: 'string',
         description:
           'ISO 8601 datetime for a one-shot fire, e.g. "2026-11-01T09:00:00Z". ' +
           'When set, the task fires once at or after this instant and is automatically disabled. ' +
-          'Mutually exclusive with a recurring cron expression — omit `cron` or leave it as a ' +
-          'polling cadence placeholder when using runAt.',
+          'Omit cron for a one-shot; if both are supplied, cron is only a stored polling placeholder.',
       },
       expiresAt: {
         type: 'string',
@@ -108,7 +107,7 @@ export const createScheduleTool: AnthropicToolDef = {
           'Must be an existing directory. Tilde (~) is expanded at save time.',
       },
     },
-    required: ['name', 'command', 'cron'],
+    required: ['name', 'command'],
   },
 };
 
@@ -208,7 +207,7 @@ export const listSchedulesTool: AnthropicToolDef = {
   category: 'schedule',
   concurrencySafe: true,
   description:
-    'List all scheduled tasks with their IDs, cron expressions, enabled status, and notify settings. ' +
+    'List all scheduled tasks with their IDs, cron expressions, runAt/expiresAt, enabled status, and notify settings. ' +
     'Returns a JSON array of task configs.',
   input_schema: {
     type: 'object',

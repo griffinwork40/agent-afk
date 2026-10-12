@@ -150,6 +150,16 @@ export class SessionOwner {
     };
 
     const session = new AgentSession(config, wiring.traceWriter);
+    // These stores were created for this web session, not by the provider.
+    // Keep them alive through SessionEnd hooks and child draining, even when
+    // close rejects; coalesce repeated/concurrent closes into one teardown.
+    const close = session.close.bind(session);
+    let closing: Promise<void> | undefined;
+    session.close = () => closing ??= (async () => {
+      try { await close(); } finally {
+        try { wiring.memoryStore.close(); } finally { wiring.workspaceStore.close(); }
+      }
+    })();
 
     // Late-bind the deferred parent proxy so executors resolve session fields.
     wiring.__bindSession(session);
@@ -174,7 +184,10 @@ export class SessionOwner {
     // Invariant: the id is provider-issued and undefined until initialization
     // resolves. Registering as owned before this point would make prompt and
     // approve 409 against an id the caller was just handed.
-    const metadata = await session.waitForInitialization();
+    const metadata = await session.waitForInitialization().catch(async (error: unknown) => {
+      await session.close().catch(() => {});
+      throw error;
+    });
     const id = metadata.sessionId ?? session.sessionId;
     if (id === undefined) {
       await session.close().catch(() => {});

@@ -153,7 +153,7 @@
 |---|---|---|
 | **2143** | `feat(tui): inline terminal image rendering via Kitty graphics protocol` | No inline image support in the REPL surface. |
 | **1609** | `feat(tui): status-line turn/budget indicator + parallel fan-out count` | Status line lacks live turn counter and parallel subagent count. |
-| **3479** | `chore(tui): decide fate of log-update — one live dynamic import` | One live dynamic import on a compositor-less TTY path; the rest of the TTY surface is fully owned by `CupFrameRenderer`. |
+| ~~**3479**~~ | `chore(tui): decide fate of log-update` — **RESOLVED.** `log-update` removed from `package.json`; all `initLogUpdateModule` / `logUpdate` branches deleted. | ✅ |
 
 **Closed:** #1619 (tool-lane row budget, `0fd9d2bd9`), #1505 (expandable bash output, `5da98b86b`), #2229 (content-hug banner overflow, `9c1748f09`).
 
@@ -185,12 +185,12 @@ Hard-coded LOC counts drift quickly as the file-size ceiling (`pnpm audit:filesi
 pnpm audit:filesize:check   # flags files approaching or over the ceiling
 pnpm audit:funcsize:check   # flags functions over the 200-line ceiling
 # or for a sorted list of the current worst offenders:
-npx tsx scripts/check-function-size.ts --list
+pnpm audit:funcsize:list
 ```
 
 Notable structural changes since the map was first generated (2026-09-26):
 
-- `terminal-compositor.input-dispatch.ts` was ~1 158 LOC; it has since been split into `.enter`, `.cursor`, `.editor-key`, and `.viewer-key` siblings.
+- `terminal-compositor.input-dispatch.ts` remains the root input-dispatch file at ~662 lines (verified October 2026); its `.enter` (390 LOC), `.cursor` (169 LOC), `.editor-key` (23 LOC), and `.viewer-key` (22 LOC) siblings handle the bulk of the sub-paths.
 - `commands/interactive/loop-iteration.ts` was ~861 LOC; it is now 267 lines after extraction of turn-orchestration helpers.
 - `CommitGeometry` was extracted into `terminal-compositor.commit-geometry.ts`; the dev/test geometry guard lives in `terminal-compositor.geometry-assert.ts`.
 
@@ -222,7 +222,7 @@ The test files for the compositor remain much larger than the production source 
 
 4. **PTY suite coverage gaps.** The suite does not test input (paste, history, autocomplete), wide-char committed-content, multi-turn geometry, or teardown. Adding one scenario each for: (a) wide-char content in committed band, (b) a SIGTERM mid-stream (to validate teardown ordering), and (c) a two-turn script, would materially increase regression coverage without much harness complexity.
 
-5. **`log-update` removal.** ✅ Resolved in #3479. `log-update` has been removed from `package.json`. The `initLogUpdateModule` dynamic import, `LogUpdateFunction` type, and all `logUpdate` branches in `StreamingMarkdownRenderer`, `executeRepaint`, and `clearOverlay` are deleted. Non-TTY output writes committed content directly via `out.write`.
+5. **`log-update` removal — RESOLVED (#3479).** `log-update` has been removed from `package.json`. The `initLogUpdateModule` dynamic import, `LogUpdateFunction` type, and all `logUpdate` branches in `StreamingMarkdownRenderer`, `executeRepaint`, and `clearOverlay` are deleted. Non-TTY output writes committed content directly via `out.write`.
 
 ---
 
@@ -233,7 +233,7 @@ The test files for the compositor remain much larger than the production source 
 Every named subsystem (renderer, markdown, input, spinner, teardown, resize, PTY test suite) was confirmed by direct source read with file:line citations. The package.json dependency list was verified directly.
 
 **Known gaps:**
-- `terminal-compositor.input-dispatch.ts` (1 158 LOC) was not read fully — the keypress routing detail beyond Ctrl+B / Ctrl+C was sampled, not exhaustively mapped.
+- `terminal-compositor.input-dispatch.ts` (662 LOC, verified October 2026) was not read fully — the keypress routing detail beyond Ctrl+B / Ctrl+C was sampled, not exhaustively mapped.
 - The `smoke-reveal.ts` visual effect (AFK_SMOKE_TEXT) was identified but not traced end-to-end.
 - `_lib/stream-renderer.ts` per-subagent state machine internals were not fully traced.
 - `.filesize-baseline.json` / `.funcsize-baseline.json` keys were empty in the root (the files exist but parsing produced no output), so function-level hotspot ranking is from LOC only.

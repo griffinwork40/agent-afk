@@ -9,6 +9,11 @@ import type { HookRegistry } from '../../../agent/hooks.js';
 import type { TraceWriter } from '../../../agent/trace/index.js';
 import { explicitProviderHints, getApiKeyForModel } from '../../shared-helpers.js';
 import type { CliConfig } from '../../config.js';
+import { MemoryStore } from '../../../agent/memory/index.js';
+import { StateStore } from '../../../agent/state/state-store.js';
+import { WorkspaceStore } from '../../../agent/workspace/workspace-store.js';
+import { getStateDatabasePath } from '../../../paths.js';
+import { env } from '../../../config/env.js';
 
 /**
  * Dependencies for constructing a fresh `AgentSession`. Captures everything
@@ -170,12 +175,6 @@ export function buildSharedDeps(a: {
     ...(a.explicitProvider !== undefined ? { explicitProvider: a.explicitProvider } : {}),
   };
 }
-
-import { MemoryStore } from '../../../agent/memory/index.js';
-import { StateStore } from '../../../agent/state/state-store.js';
-import { WorkspaceStore } from '../../../agent/workspace/workspace-store.js';
-import { getStateDatabasePath } from '../../../paths.js';
-import { env } from '../../../config/env.js';
 
 /** Return type of {@link createBootstrapSharedStores}. */
 export interface BootstrapSharedStores {

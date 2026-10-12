@@ -363,6 +363,7 @@ function classifyScheduleMutation(tool: string, input: unknown, ctx: RiskContext
     // Any other field (command, cron, name, …) keeps it high.
     const { taskId: _tid, enabled, ...rest } = inputObj;
     const hasOtherFields = Object.keys(rest).length > 0;
+    // Invariant: strict false fails closed for non-boolean values (e.g. "false", 0).
     if (enabled === false && !hasOtherFields) return 'medium';
   }
 

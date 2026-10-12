@@ -153,6 +153,17 @@ describe('parseLatestTimestamp', () => {
     ].join('\n');
     expect(parseLatestTimestamp(raw)).toBe('2026-09-20T00:00:00.000Z');
   });
+
+  it('rejects lines with one valid string field and one malformed field (#3563)', () => {
+    // The old OR guard accepted { timestamp: '...', event: 99 } because the
+    // timestamp field was a string. The AND guard must reject it because event
+    // is present but not a string.
+    const raw = [
+      JSON.stringify({ timestamp: '2026-09-25T00:00:00.000Z', event: 99 }),
+      JSON.stringify({ timestamp: '2026-09-20T00:00:00.000Z', event: 'created' }),
+    ].join('\n');
+    expect(parseLatestTimestamp(raw)).toBe('2026-09-20T00:00:00.000Z');
+  });
 });
 
 // ---------------------------------------------------------------------------
