@@ -1876,3 +1876,92 @@ describe('dynamic route resolution (topic-aware routing, issue #1021)', () => {
     clearElicitationRoute('test-session-general');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Long-choice splitting: pre-messages sent before keyboard, index mapping intact
+// ---------------------------------------------------------------------------
+
+describe('choice type: long choices split into pre-messages before keyboard', () => {
+  // 20 choices each ~250 chars — overflow rendering fires, total > 4096.
+  const longChoices = Array.from({ length: 20 }, (_, i) => `Option ${i + 1}: ${'x'.repeat(240)}`);
+
+  it('sends pre-messages before the keyboard message when list exceeds 4096 chars', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+    const ac = makeAbort();
+
+    const resultPromise = handler(choiceRequest(longChoices), { signal: ac.signal });
+    // Let the async pre-message chain run
+    await new Promise((r) => setTimeout(r, 10));
+
+    // At least 2 sendMessage calls: ≥1 pre-message + 1 keyboard
+    expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+    // All pre-messages must be ≤ 4096 chars
+    const calls = sendMessage.mock.calls as [number, string, object][];
+    const preMessages = calls.slice(0, -1); // everything except the last (keyboard)
+    for (const call of preMessages) {
+      expect(call[1].length).toBeLessThanOrEqual(4096);
+    }
+
+    // Keyboard message (last call) must also be ≤ 4096 chars
+    const lastCall = calls[calls.length - 1]!;
+    expect(lastCall[1].length).toBeLessThanOrEqual(4096);
+
+    // Pre-messages come before the keyboard message (ordering guaranteed by await-in-order)
+    // Verify: the last call has reply_markup (the keyboard), earlier calls do not
+    const lastOpts = lastCall[2] as { reply_markup?: unknown };
+    expect(lastOpts.reply_markup).toBeDefined();
+    for (const pre of preMessages) {
+      const opts = pre[2] as { reply_markup?: unknown };
+      expect(opts.reply_markup).toBeUndefined();
+    }
+
+    ac.abort();
+    await resultPromise;
+  });
+
+  it('button callback index i still maps to request.choices[i]', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+    const ac = makeAbort();
+
+    const resultPromise = handler(choiceRequest(longChoices), { signal: ac.signal });
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Extract the keyboard call (last sendMessage call)
+    const calls = sendMessage.mock.calls as [number, string, { reply_markup: { inline_keyboard: { text: string; callback_data: string }[][] } }][];
+    const kbCall = calls[calls.length - 1]!;
+    const rows = kbCall[2].reply_markup.inline_keyboard;
+
+    // Fire button 0 → should resolve to longChoices[0]
+    const firstButtonData = rows[0]![0]!.callback_data;
+    // Simulate the callback via the captured action handler
+    await capturedActionHandler!({
+      chat: { id: CHAT_ID },
+      callbackQuery: { data: firstButtonData },
+      answerCbQuery: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await expect(resultPromise).resolves.toEqual({
+      action: 'accept',
+      content: { value: longChoices[0] },
+    });
+  });
+
+  it('pre-message send failure → decline (same as keyboard failure)', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    // First sendMessage (pre-message) rejects
+    sendMessage.mockRejectedValueOnce(new Error('Network error'));
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+    const ac = makeAbort();
+
+    const resultPromise = handler(choiceRequest(longChoices), { signal: ac.signal });
+    await new Promise((r) => setTimeout(r, 10));
+
+    await expect(resultPromise).resolves.toEqual({ action: 'decline' });
+  });
+});

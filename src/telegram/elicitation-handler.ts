@@ -37,7 +37,7 @@ import { randomBytes } from 'node:crypto';
 import { escapeHtml } from './formatter.js';
 import { escapeRegExp } from '../utils/regexp.js';
 import { validateTextAnswer, validateNumberAnswer } from '../agent/elicitation/answer-validation.js';
-import { renderTelegramChoices } from './elicitation-choice-list.js';
+import { renderTelegramChoices, buildChoiceMessages, type ChoiceMessages } from './elicitation-choice-list.js';
 
 function nextElicitationId(): string {
   return `elic-${randomBytes(8).toString('hex')}`;
@@ -46,6 +46,54 @@ function nextElicitationId(): string {
 
 /** Sentinel returned by the custom-entry wildcard handler to the dispatch table. */
 const CUSTOM_ENTRY_SENTINEL_INDEX = -1;
+
+const MAX_CHOICES = 20;
+
+/** Prepare rendered labels and split choice messages for a `choice` elicitation. */
+function prepareChoiceRender(
+  choices: readonly string[],
+  displayText: string,
+  buildCallback: (i: number) => string,
+): { choiceMsg: ChoiceMessages; buttons: ReturnType<typeof Markup.button.callback>[][] } {
+  const cappedChoices = choices.slice(0, MAX_CHOICES);
+  const rendered = renderTelegramChoices(cappedChoices);
+  const choiceMsg = buildChoiceMessages(displayText, rendered, cappedChoices);
+  const buttons = rendered.labels.map((label, i) => [Markup.button.callback(label, buildCallback(i))]);
+  return { choiceMsg, buttons };
+}
+
+/**
+ * Send the choice pre-messages (if any) and then the keyboard message.
+ * Returns a promise that resolves when the keyboard send is initiated.
+ * If any send fails, `onFailure` is called once.
+ *
+ * Extracted as a named helper (explicit params) so `makeTelegramElicitationHandler`
+ * does not grow beyond its baselined size.
+ */
+function sendChoiceMessages(
+  telegram: { sendMessage: (chatId: number, text: string, opts: object) => Promise<unknown> },
+  chatId: number,
+  preMessages: string[],
+  keyboardText: string,
+  threadOpts: object,
+  keyboardOpts: object,
+  onFailure: () => void,
+): void {
+  const sendKeyboard = () => {
+    telegram.sendMessage(chatId, keyboardText, { parse_mode: 'HTML', ...threadOpts, ...keyboardOpts })
+      .catch(onFailure);
+  };
+  if (preMessages.length === 0) {
+    sendKeyboard();
+    return;
+  }
+  const sendPre = async () => {
+    for (const msg of preMessages) {
+      await telegram.sendMessage(chatId, msg, { parse_mode: 'HTML', ...threadOpts });
+    }
+  };
+  sendPre().then(sendKeyboard).catch(onFailure);
+}
 
 /**
  * Build a Telegram elicitation handler.
@@ -181,19 +229,17 @@ export function makeTelegramElicitationHandler(
       const elicitId = nextElicitationId();
 
       let buttons: ReturnType<typeof Markup.button.callback>[][];
+      let choicePreMessages: string[] = [];
       if (qType === 'confirm') {
         buttons = [[
           Markup.button.callback('✅ Yes', buildElicitationCallback(elicitId, 1)),
           Markup.button.callback('❌ No', buildElicitationCallback(elicitId, 0)),
         ]];
       } else {
-        // choice — M1: cap to 20 items to avoid Telegram API 400 on oversized
-        // keyboards (Telegram silently rejects messages with too many buttons).
-        // M2: truncate labels to Telegram's ~64-byte limit.
-        const MAX_CHOICES = 20;
-        const rendered = renderTelegramChoices((request.choices ?? []).slice(0, MAX_CHOICES));
-        displayText += rendered.bodySuffix; // full text of over-long choices, buttons numbered to match
-        buttons = rendered.labels.map((label, i) => [Markup.button.callback(label, buildElicitationCallback(elicitId, i))]);
+        // choice — M1/M2/M3: cap, truncate labels, split if over 4096 chars.
+        const { choiceMsg, buttons: cb } = prepareChoiceRender(request.choices ?? [], displayText, (i) => buildElicitationCallback(elicitId, i));
+        ({ keyboardText: displayText, preMessages: choicePreMessages } = choiceMsg);
+        buttons = cb;
         if (request.allowCustom) {
           buttons.push([
             Markup.button.callback('✍️ Type a custom answer', buildCustomElicitationCallback(elicitId)),
@@ -264,19 +310,21 @@ export function makeTelegramElicitationHandler(
           },
         });
 
-        // Send the keyboard message (pinned to the route's topic thread).
-        bot.telegram.sendMessage(chatId, displayText, {
-          parse_mode: 'HTML',
-          ...threadOpts,
-          reply_markup: Markup.inlineKeyboard(buttons).reply_markup,
-        }).catch(() => {
-          if (!resolved) {
-            resolved = true;
-            pendingChoiceElicitations.delete(elicitId);
-            options.signal.removeEventListener('abort', onAbort);
-            resolve({ action: 'decline' });
-          }
-        });
+        // Send pre-messages (full choice list) then the keyboard message.
+        // A failure at either stage declines identically to the prior behaviour.
+        sendChoiceMessages(
+          bot.telegram, chatId,
+          choicePreMessages, displayText,
+          threadOpts, { reply_markup: Markup.inlineKeyboard(buttons).reply_markup },
+          () => {
+            if (!resolved) {
+              resolved = true;
+              pendingChoiceElicitations.delete(elicitId);
+              options.signal.removeEventListener('abort', onAbort);
+              resolve({ action: 'decline' });
+            }
+          },
+        );
       });
     }
 
