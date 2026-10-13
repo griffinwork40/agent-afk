@@ -11,6 +11,53 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.312.6] - 2026-10-13
+
+### Changed
+- split makeTelegramElicitationHandler under 200-line ceiling (#3656) (2d3cf0b5)
+- split runSweep under 200-line ceiling (#3657) (2fa61bb6)
+
+## [5.312.5] - 2026-10-13
+
+### Changed
+- split registerInteractiveCommand under 200-line ceiling (#3651) (7cebc1cf)
+
+## [5.312.4] - 2026-10-13
+
+### Changed
+- split setupSurface under 200-line ceiling (#3648) (26ffc64e)
+
+## [5.312.3] - 2026-10-13
+
+### Changed
+- split renderToolLaneOverlay under 200-line ceiling (#3649) (52e8909b)
+- add shared execFileAsync (#3653) (20968114)
+- add abortReason helper for AbortSignal.reason sites (#3654) (ccfe7fe5)
+- adopt isErrnoCode/isEnoent at errno cast sites (#3655) (79026f23)
+
+## [5.312.2] - 2026-10-13
+
+### Fixed
+- narrow-terminal layout: wrap to real width, force spill below 20 cols, add edge-case tests (#3643) (2cc5fb5f)
+
+## [5.312.1] - 2026-10-12
+
+### Fixed
+- use native Rolldown dashboard build options (#3592) (ee49d01a)
+- verify OAuth form global fetch fallback (#3590) (9c24cc0a)
+- advisory follow-ups — store comment, selectors guard, drain-rejects test, outcomes barrel doc (#3593) (45ddcb2e)
+- collision-only scrollback, type-guard filter, echo original, derive prefix cols, spill-ordering tests (#3639) (f5bc519c)
+- telegram ask_question edge cases near 4096-char limit (#3646) (fddb4b67)
+- address advisory findings from 2026-10-12 PR triage batch (#3642) (f59ec87c)
+- refactor updateHandoffAnswer to options object, tighten from type, add PII JSDoc, debugLog, and tests (#3641) (ecc51dbe)
+- low/cosmetic fixes — @internal, EPERM note, spawnError, workspaceClose assert, mcp example (#3644) (0bd4138c)
+- remove unused _sandboxes param, reject --aa+--spec, clarify A/A stage name (#3638) (a0045d86)
+
+### Changed
+- split stream-rendering functions under 200-line ceiling (#3609) (68740aeb)
+- telegram clear-or-queue delegation + bareSkillName helper (#3645) (9a99c78b)
+- adopt isEnoent at file-checkpoint, peer inbox, and user-skills sites (#3647) (538f6c74)
+
 ## [5.312.0] - 2026-10-12
 
 ### Added
