@@ -275,9 +275,9 @@ function isSafeTempWrite(abs: string, resolved: string): boolean {
   // excludes more, including missing leaves on case-insensitive volumes.
   const roots = afkStateRootsResolved();
   if (roots === null) return false;
-  // Fast path: exact match or literal prefix avoids the case-aware pathIsWithin
-  // call on the common hot path. pathIsWithin subsumes both, so this only
-  // changes performance, not correctness.
+  // Fast path: exact match or literal prefix skips the isCaseInsensitiveFs
+  // probe on the common hot path. pathIsWithin subsumes both checks, so this
+  // only changes performance, not correctness.
   return !roots.some((root) =>
     target === root || target.startsWith(root + path.sep) || pathIsWithin(target, root));
 }
