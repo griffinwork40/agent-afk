@@ -221,10 +221,18 @@ export async function dispatchDagNode(
       prompt = spec.promptBuilder(inputs);
     }
     const result = await handle.runToResult(prompt);
-    // #3601: surface a failed setup to the compose caller too, not just the node.
-    const text = result.message?.content;
-    if (setupNotice !== undefined && result.message !== undefined && typeof text === 'string') {
-      return { ...result, message: { ...result.message, content: `${setupNotice}\n\n${text}` } };
+    // #3601 / #3660: surface a failed setup notice to the compose caller.
+    // Always attach setupNotice as a dedicated field so callers can act on it
+    // regardless of whether message.content is a plain string (outputSchema
+    // nodes, failed nodes, and cancelled nodes all produce non-string content).
+    // Additionally prepend the notice to plain-string content as before so
+    // the model sees it inline when content is readable text.
+    if (setupNotice !== undefined) {
+      const text = result.message?.content;
+      if (result.message !== undefined && typeof text === 'string') {
+        return { ...result, message: { ...result.message, content: `${setupNotice}\n\n${text}` }, setupNotice };
+      }
+      return { ...result, setupNotice };
     }
     return result;
   } finally {

@@ -248,6 +248,17 @@ export interface SubagentResult<T = unknown> extends Partial<CappedHandoff> {
    * when the provider reported no stop reason.
    */
   stopReason?: string;
+  /**
+   * Human-readable notice describing a worktree setup step that failed or was
+   * skipped for this node (e.g. a repo-declared setup script that exited
+   * non-zero). Set by `dispatchDagNode` when the node ran with
+   * `isolation:"worktree"` and `describeWorktreeSetupFailure` returned a
+   * non-empty string. Surfaced here as a dedicated field so callers can act on
+   * it regardless of whether `message.content` is a plain string — the
+   * previous approach of prepending the notice to `content` silently dropped it
+   * for `outputSchema` nodes and failed/cancelled nodes (#3660).
+   */
+  setupNotice?: string;
 }
 
 /**

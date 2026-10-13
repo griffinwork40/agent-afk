@@ -366,6 +366,37 @@ describe('hasHandler', () => {
     elicitationRouter.uninstall();
     expect(elicitationRouter.hasHandler()).toBe(false);
   });
+
+  it('with sessionKey: returns true only for the session that has a handler', () => {
+    elicitationRouter.uninstall();
+    const keyA = 'session-key-A';
+    const keyB = 'session-key-B';
+
+    elicitationRouter.installForSession(keyA, async () => ({ action: 'decline' as const }));
+    try {
+      // keyA has a handler
+      expect(elicitationRouter.hasHandler(keyA)).toBe(true);
+      // keyB has no handler — must NOT see keyA's handler
+      expect(elicitationRouter.hasHandler(keyB)).toBe(false);
+      // no sessionKey still returns true (any handler present)
+      expect(elicitationRouter.hasHandler()).toBe(true);
+    } finally {
+      elicitationRouter.uninstallForSession(keyA);
+    }
+
+    // After uninstall, keyA is gone
+    expect(elicitationRouter.hasHandler(keyA)).toBe(false);
+    expect(elicitationRouter.hasHandler()).toBe(false);
+  });
+
+  it('with sessionKey: global handler satisfies any sessionKey', () => {
+    elicitationRouter.install(async () => ({ action: 'decline' as const }));
+    try {
+      expect(elicitationRouter.hasHandler('any-key')).toBe(true);
+    } finally {
+      elicitationRouter.uninstall();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
