@@ -332,7 +332,7 @@ describe('B5: WIDTH-ONLY → SHRINK (CPR in-flight) with no snapshot: stays null
 
     // SHRINK while the width-only CPR is in-flight.  The preservation rule in
     // handleResizeImmediate reads:
-    //   preserveWidthSnapshot = cprPending && cprBurst.widthOnlyOrigin
+    //   preserveWidthSnapshot = cprPending && pendingResizeErase?.origin === 'width-only'
     // With pendingResizeErase===null the condition is false, so the branch must
     // null the snapshot — but it is already null.  Crucially, it must NOT set
     // pendingResizeErase to a non-null value (which would be a false positive).
