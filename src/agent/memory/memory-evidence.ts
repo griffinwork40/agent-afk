@@ -7,15 +7,19 @@
  * The existing fact `category` already encodes the classification the gate
  * needs, so no separate classifier is introduced:
  *
- *   - 'convention'             → codebase fact/convention  → EVIDENCE-GATED
- *   - 'preference'             → user preference/instruction → never gated
- *   - 'learning' | 'decision'  → agent reflection / rationale → never gated
+ *   - 'convention'  → codebase fact/convention        → EVIDENCE-GATED
+ *   - 'learning'    → agent reflection / rationale    → AUTO-REFLECTED tagged
+ *   - 'preference'  → user preference/instruction     → never gated
+ *   - 'decision'    → rationale / choice              → never gated
  *
- * Only `convention` is treated as a checkable codebase claim. Preferences are
- * the user's own instructions (not the agent's claims) and reflections/
- * decisions are inherently conversational (a file:line citation would be
- * ceremony, not signal) — so neither is gated, and neither is ever stamped
- * 'verified' (that would lend a reflection false factual authority).
+ * Only `convention` is treated as a checkable codebase claim (evidence-gated).
+ * `learning` facts are agent-authored reflections; they receive an
+ * `[auto-reflected]` prefix at recall so readers know the content was written
+ * by automated end-of-session reflection, not by a human directly. Preferences
+ * are the user's own instructions and decisions are inherently conversational
+ * (a file:line citation would be ceremony, not signal) -- so neither is gated,
+ * and neither is ever stamped 'verified' (that would lend a reflection false
+ * factual authority).
  *
  * Design: these helpers are PURE (no I/O, no env) except {@link evidenceGateEnabled},
  * which is the single env read-point. The store persists `evidence` as plain
@@ -40,6 +44,23 @@ export const CODEBASE_FACT_CATEGORIES: ReadonlySet<FactCategory> = new Set<FactC
 
 /** Marker prefixed to recalled content for an uncited codebase fact. */
 export const UNVERIFIED_TAG = '[unverified]';
+
+/**
+ * Marker prefixed to recalled content for an agent-authored reflection
+ * (`learning` category). Signals that the content was written by automated
+ * end-of-session reflection, not by a human directly, so readers can weight
+ * it accordingly. Idempotent and stripped from comparison when checking.
+ */
+export const AUTO_REFLECTED_TAG = '[auto-reflected]';
+
+/**
+ * Fact categories that carry the `[auto-reflected]` tag at recall time.
+ * A ReadonlySet (not a bare === 'learning') so the tagged set can grow in
+ * exactly one place without touching call sites.
+ */
+export const AUTO_REFLECTED_CATEGORIES: ReadonlySet<FactCategory> = new Set<FactCategory>([
+  'learning',
+]);
 
 /** True when `category` is a checkable codebase claim. */
 export function isCodebaseFactCategory(category: FactCategory): boolean {
@@ -94,4 +115,19 @@ export function applyUnverifiedTag(content: string, status: FactVerification): s
   if (status !== 'unverified') return content;
   if (content.startsWith(UNVERIFIED_TAG)) return content;
   return `${UNVERIFIED_TAG} ${content}`;
+}
+
+/** True when `category` is an agent-authored reflection that gets tagged at recall. */
+export function isAutoReflectedCategory(category: FactCategory): boolean {
+  return AUTO_REFLECTED_CATEGORIES.has(category);
+}
+
+/**
+ * Prefix recalled content with {@link AUTO_REFLECTED_TAG} for a `learning`
+ * fact. Idempotent (never double-tags) and a no-op for any other category.
+ */
+export function applyAutoReflectedTag(content: string, category: FactCategory): string {
+  if (!isAutoReflectedCategory(category)) return content;
+  if (content.startsWith(AUTO_REFLECTED_TAG)) return content;
+  return `${AUTO_REFLECTED_TAG} ${content}`;
 }
