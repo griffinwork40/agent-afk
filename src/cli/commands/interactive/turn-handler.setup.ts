@@ -14,6 +14,7 @@ import type { StreamRenderer } from '../../_lib/stream-renderer.js';
 import type { StreamRendererOptions } from '../../_lib/stream-renderer-options.js';
 import type { InputSurfaceRefs } from '../../input/input-surface.js';
 import type { TerminalCompositor } from '../../terminal-compositor.js';
+import type { ThinkingUiMode } from '../../slash/types.js';
 import { palette } from '../../palette.js';
 import { isDebugEnabled } from '../../../utils/debug.js';
 import { createConsoleWriter } from '../../slash/writer.js';
@@ -34,7 +35,7 @@ import { setTerminalTitleIfEnabled, formatTerminalTitle } from '../../_lib/captu
  */
 export function buildRendererOptions(params: {
   completionWriter: CompletionWriter | undefined;
-  thinkingUi: import('../../slash/types.js').ThinkingUiMode;
+  thinkingUi: ThinkingUiMode;
   activeSkillName: string | undefined;
   session: AgentSession;
   h: TurnHandles;
@@ -210,6 +211,7 @@ export async function teardownTurn(params: {
 }): Promise<void> {
   const { h, completionWriter, pickerRef, disposeRendererOnce } = params;
 
+  await disposeRendererOnce();
   // OSC 2 title: reset "· running" on EVERY exit path (clean, ESC, error).
   setTerminalTitleIfEnabled(process.stdout, formatTerminalTitle(process.cwd(), false));
 
@@ -233,10 +235,6 @@ export async function teardownTurn(params: {
   pickerRef.abort = null;
   h.setInFlight(false);
   h.rearmStatus?.();
-
-  // Must follow all handle-clears (renderer.dispose() triggers compositor
-  // teardown which may write to the terminal).
-  await disposeRendererOnce();
 }
 
 // Re-export syncCapturePathRef so turn-handler.ts imports from one setup sibling.
