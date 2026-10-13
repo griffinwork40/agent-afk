@@ -40,7 +40,7 @@
  */
 
 import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
-import { isEnoent } from '../../utils/errors.js';
+import { isEnoent, isErrnoCode } from '../../utils/errors.js';
 import {
   mkdir,
   rename,
@@ -213,15 +213,14 @@ export async function claimPending(
   try {
     await link(src, dst);
   } catch (err: unknown) {
-    const e = err as NodeJS.ErrnoException;
-    if (e.code === 'EEXIST' || e.code === 'ENOENT') return null;
-    if (!HARDLINK_UNSUPPORTED_CODES.has(e.code ?? '')) throw err;
+    if (isErrnoCode(err, 'EEXIST') || isErrnoCode(err, 'ENOENT')) return null;
+    const eCode = (err instanceof Error && 'code' in err) ? String((err as { code: unknown }).code) : undefined;
+    if (!HARDLINK_UNSUPPORTED_CODES.has(eCode ?? '')) throw err;
     // Fallback: copyFile with exclusive-create flag.
     try {
       await copyFile(src, dst, fsConstants.COPYFILE_EXCL);
     } catch (copyErr: unknown) {
-      const ce = copyErr as NodeJS.ErrnoException;
-      if (ce.code === 'EEXIST' || ce.code === 'ENOENT') return null;
+      if (isErrnoCode(copyErr, 'EEXIST') || isErrnoCode(copyErr, 'ENOENT')) return null;
       throw copyErr;
     }
   }

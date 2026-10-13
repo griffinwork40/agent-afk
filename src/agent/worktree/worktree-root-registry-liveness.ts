@@ -77,7 +77,7 @@ export async function classifyRootLiveness<T extends { path: string }>(
       if (isEnoent(err) || isErrnoCode(err, 'ENOTDIR')) {
         dead.add(absolute);
       } else {
-        const code = (err as NodeJS.ErrnoException).code ?? 'unknown errno';
+        const code = (err instanceof Error && 'code' in err) ? String((err as { code: unknown }).code) : 'unknown errno';
         unknown.set(absolute, code);
       }
       continue;

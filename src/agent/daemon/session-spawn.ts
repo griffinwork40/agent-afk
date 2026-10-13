@@ -104,7 +104,7 @@ export function daemonDefaultCwd(): string {
     return dir;
   } catch (err) {
     const fallback = tmpdir();
-    const code = (err as NodeJS.ErrnoException).code ?? String(err);
+    const code = (err instanceof Error && 'code' in err) ? String((err as { code: unknown }).code) : String(err);
     console.warn(
       `[daemon] daemonDefaultCwd: could not create ${dir} (${code}); ` +
         `falling back to ${fallback}. ` +
