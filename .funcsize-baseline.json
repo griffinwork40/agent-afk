@@ -11,7 +11,6 @@
     "src/agent/subagent/handle.ts::SubagentHandleImpl.run": { "loc": 210, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/compose-executor.ts::ComposeExecutor.execute": { "loc": 466, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/compose-input-parse.ts::parseComposeInput": { "loc": 236, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/agent/tools/handlers/bash.ts::createBashHandler": { "loc": 418, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/subagent/child-config.ts::buildChildConfig": { "loc": 327, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/subagent/foreground-promotion.ts::runForegroundWithPromotion": { "loc": 376, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/subagent/input-parse.ts::parseAgentInput": { "loc": 406, "reason": "legacy: predates the function-size gate; pending helper extraction" },
