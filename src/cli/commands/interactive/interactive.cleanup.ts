@@ -18,9 +18,8 @@
  */
 
 import * as path from 'node:path';
-import { execFileSync, execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
-const execFile = promisify(execFileCb);
+import { execFileSync } from 'node:child_process';
+import { execFileAsync as execFile } from '../../../utils/exec-file.js';
 import { divider } from '../../render.js';
 import { formatDuration } from '../../format-utils.js';
 import { costTokenParts } from '../../render/session-summary.js';

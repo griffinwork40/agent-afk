@@ -17,15 +17,12 @@
  * @module agent/daemon/shell-task
  */
 
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execFileAsync as execFile } from '../../utils/exec-file.js';
 
 import { env } from '../../config/env.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { resolveShell } from '../../utils/resolve-shell.js';
 import type { TelemetryRecord, TelemetryTrigger } from './scheduler.js';
-
-const execFile = promisify(execFileCb);
 
 /** Tail cap for stdout/stderr carried in `responseExcerpt`. */
 const EXCERPT_CAP = 4096;
