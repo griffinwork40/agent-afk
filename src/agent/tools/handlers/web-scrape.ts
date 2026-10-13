@@ -44,7 +44,7 @@ import {
   isPlaywrightMissing,
   playwrightInstallCommand,
 } from './playwright-hints.js';
-import { errorMessage, extractEgressBlockedError, fetchFailedMessage } from '../../../utils/errors.js';
+import { abortReason, errorMessage, extractEgressBlockedError, fetchFailedMessage } from '../../../utils/errors.js';
 import { createRequestAbortScope, getScopeAbortMessage } from '../../../utils/abort.js';
 
 // External constraint: Node 20+ ships `fetch` as a global. Older runtimes
@@ -191,8 +191,7 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
     // Pre-aborted short-circuit: return immediately without arming a timer or
     // issuing any request when the caller's signal is already aborted.
     if (signal.aborted) {
-      const reason = signal.reason;
-      const msg = errorMessage(reason ?? 'aborted');
+            const msg = abortReason(signal.reason);
       return { content: `web_scrape aborted: ${msg}`, isError: true };
     }
 

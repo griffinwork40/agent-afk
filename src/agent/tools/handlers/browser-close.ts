@@ -14,14 +14,13 @@ import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { BrowserHandlerOptions } from './browser-provider.js';
 import { emitBrowserEvent } from '../../trace/emit.js';
 import { acquireBrowserProvider } from './browser-provider.js';
-import { errorMessage } from '../../../utils/errors.js';
+import { abortReason, errorMessage } from '../../../utils/errors.js';
 
 export function createBrowserCloseHandler(opts: BrowserHandlerOptions = {}): ToolHandler {
   return async (_input, signal, context?: ToolHandlerContext) => {
     // Pre-aborted short-circuit.
     if (signal.aborted) {
-      const reason = signal.reason;
-      const msg = errorMessage(reason ?? 'aborted');
+            const msg = abortReason(signal.reason);
       return { content: `browser_close aborted: ${msg}`, isError: true };
     }
 

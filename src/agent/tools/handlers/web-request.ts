@@ -37,7 +37,7 @@ import {
 } from '../../../http-client/web-request.js';
 import type { EgressGuardOptions } from '../../../http-client/egress-guard.js';
 import { redactSecrets } from '../../redact-secrets.js';
-import { errorMessage, extractEgressBlockedError, fetchFailedMessage } from '../../../utils/errors.js';
+import { abortReason, extractEgressBlockedError, fetchFailedMessage } from '../../../utils/errors.js';
 import { createRequestAbortScope, getScopeAbortMessage } from '../../../utils/abort.js';
 
 type FetchFn = typeof fetch;
@@ -249,8 +249,7 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
 
     // Pre-aborted short-circuit
     if (signal.aborted) {
-      const reason = signal.reason;
-      const msg = errorMessage(reason ?? 'aborted');
+            const msg = abortReason(signal.reason);
       return { content: `web_request aborted: ${msg}`, isError: true };
     }
 
