@@ -22,7 +22,8 @@ import { join } from 'node:path';
 import { Command } from 'commander';
 import { registerScheduleCommand } from './schedule.js';
 import { startDaemon, type DaemonHandle } from '../../agent/daemon.js';
-import { loadSchedules, addSchedule } from '../../agent/daemon/schedule-store.js';
+import { loadSchedules, addSchedule, removeSchedule, toggleScheduleEnabled } from '../../agent/daemon/schedule-store.js';
+import * as scheduleStore from '../../agent/daemon/schedule-store.js';
 
 // debug.js: expose all real exports, just silence debugLog.
 vi.mock('../../utils/debug.js', async (importOriginal) => {
@@ -373,5 +374,83 @@ describe('afk schedule CLI — mock-based branch coverage', () => {
     const calls = vi.mocked(readTelemetryHistory).mock.calls;
     expect(calls.length).toBeGreaterThan(0);
     expect(calls[calls.length - 1][1].limit).toBe(10);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Suite 3: error-path coverage (lines 119, 132, 151, 183, 203 in schedule.ts)
+//
+// Each subcommand wraps its body in try/catch and delegates to
+// handleCommandError, which calls process.exit.  We make the underlying store
+// functions throw and verify that process.exit is called — proving the catch
+// branch is exercised.
+// ---------------------------------------------------------------------------
+
+describe('afk schedule CLI — catch-branch coverage (COV-012)', () => {
+  let tmpDir: string;
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'afk-sched-err-'));
+    vi.stubEnv('AFK_HOME', tmpDir);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.mocked(trySyncToDaemon).mockResolvedValue({ synced: true, detail: 'synced' });
+    // process.exit must not actually terminate the test runner.
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as () => never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('add — catch branch fires when addSchedule throws (line 119)', async () => {
+    // addSchedule is the real implementation; make the store file unwritable
+    // by pointing AFK_HOME at a path that is a file, not a dir.
+    const filePath = join(tmpDir, 'collision');
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(filePath, 'x');
+    vi.stubEnv('AFK_HOME', filePath); // schedule-store will fail to mkdir/write
+    await buildProgram().parseAsync([
+      'node', 'afk', 'schedule', 'add',
+      '--name', 'ErrTask', '--command', '/x', '--cron', FAR_FUTURE_CRON,
+    ]);
+    expect(exitSpy).toHaveBeenCalled();
+  });
+
+  it('list — catch branch: printScheduleList handles schedules returned by loadSchedules without throwing', async () => {
+    // loadSchedules() swallows its own errors and returns []; printScheduleList is
+    // a pure local function that never throws. The catch on line 132 is dead code
+    // in the current implementation. This test documents that invariant: list
+    // succeeds without calling process.exit.
+    await buildProgram().parseAsync(['node', 'afk', 'schedule', 'list']);
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it('remove — catch branch fires when removeSchedule throws (line 151)', async () => {
+    vi.spyOn(scheduleStore, 'removeSchedule').mockImplementation(() => { throw new Error('remove-fail'); });
+    await buildProgram().parseAsync(['node', 'afk', 'schedule', 'remove', 'some-id']);
+    expect(exitSpy).toHaveBeenCalled();
+  });
+
+  it('enable — catch branch fires when toggleScheduleEnabled throws (line 183)', async () => {
+    vi.spyOn(scheduleStore, 'toggleScheduleEnabled').mockImplementation(() => { throw new Error('enable-fail'); });
+    await buildProgram().parseAsync(['node', 'afk', 'schedule', 'enable', 'some-id']);
+    expect(exitSpy).toHaveBeenCalled();
+  });
+
+  it('disable — catch branch fires when toggleScheduleEnabled throws (line 183/203)', async () => {
+    vi.spyOn(scheduleStore, 'toggleScheduleEnabled').mockImplementation(() => { throw new Error('disable-fail'); });
+    await buildProgram().parseAsync(['node', 'afk', 'schedule', 'disable', 'some-id']);
+    expect(exitSpy).toHaveBeenCalled();
+  });
+
+  it('logs — catch branch fires when readTelemetryHistory throws (line 203)', async () => {
+    vi.mocked(readTelemetryHistory).mockRejectedValue(new Error('telemetry-fail'));
+    await buildProgram().parseAsync(['node', 'afk', 'schedule', 'logs', 'some-id']);
+    expect(exitSpy).toHaveBeenCalled();
   });
 });
