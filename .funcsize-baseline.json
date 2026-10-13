@@ -21,7 +21,6 @@
     "src/browser/playwright/observe.ts::observePage": { "loc": 233, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/chat.ts::registerChatCommand": { "loc": 351, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive.ts::registerInteractiveCommand": { "loc": 315, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/cli/commands/interactive/surface-setup.ts::setupSurface": { "loc": 319, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive/tool-lane-overlay.ts::renderToolLaneOverlay": { "loc": 276, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive/turn-handler.ts::runTurn": { "loc": 274, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/terminal-compositor.frame-preserve.ts::preserveRowsBeforeFrameRender": { "loc": 228, "reason": "preserveRowsBeforeFrameRender gains resizeGeometryStale=false clear on early return (#3371)" },
