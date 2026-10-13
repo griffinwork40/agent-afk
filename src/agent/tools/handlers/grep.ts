@@ -30,6 +30,7 @@ import { classifyRgExit2, type GrepSettleResult } from './_rg-exit2.js';
 import { createStreamingCap, SCAN_CAP_BYTES, scanCapKillNote } from './_streaming-cap.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { awaitChildExit } from './_await-child-exit.js';
+import { debugLog } from '../../../utils/debug.js';
 
 /** Optional overrides for {@link createGrepHandler}. */
 export interface GrepHandlerOptions {
@@ -239,9 +240,10 @@ export function createGrepHandler(cwd?: string, options?: GrepHandlerOptions): T
       const totalBytes = out.totalBytes() + err.totalBytes();
       if (totalBytes < scanCap) return;
       scanKilled = true;
-      // P1: structured log so operators can observe runaway kills in
-      // production without grepping for RangeError crash traces.
-      console.warn(
+      // P1: debug-only log (AFK_DEBUG=1). A raw console.warn here cut through
+      // the REPL's TUI as an unexplained line; the tool row, the in-band
+      // scanCapKillNote, and the routing-decisions row below carry the signal.
+      debugLog(
         `[grep] overflow kill: stream=${stream} totalBytes=${totalBytes} pattern=${pattern} path=${path}`,
       );
       // P2: structured JSONL counterpart so the same event is queryable from
