@@ -124,7 +124,16 @@ describe('createWiredExecutors (#3442)', () => {
     // Sessions close in their finally blocks before teardown. Async retries
     // yield to the event loop for transient Windows SQLite/antivirus locks;
     // retrying must not substitute for closing the handles asserted above.
-    await rm(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    await rm(cwd, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+      onRetry: (err, attempt) => {
+        // eslint-disable-next-line no-console
+        console.warn(`[create-wired-executors] rm retry ${attempt}/10: ${String(err)}`);
+      },
+    });
   });
 
   it('fails closed without a hook registry or unattended', () => {

@@ -291,6 +291,10 @@ describe('B5: WIDTH-ONLY → SHRINK (CPR in-flight) with no snapshot: stays null
     const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
     armedCompositors.push(c);
     await c.arm();
+    // Advance 20 ms so the arm() timeout fires and sets lastMeasuredFrameBottom
+    // from the initial CPR response. Without this, lastMeasuredFrameBottom is 0
+    // and the cprBurst.originalExpectedRow injected below would also be 0,
+    // making the SHRINK branch's math degenerate.
     vi.advanceTimersByTime(20);
 
     const internals = c as unknown as {
@@ -328,7 +332,7 @@ describe('B5: WIDTH-ONLY → SHRINK (CPR in-flight) with no snapshot: stays null
 
     // SHRINK while the width-only CPR is in-flight.  The preservation rule in
     // handleResizeImmediate reads:
-    //   preserveWidthSnapshot = cprPending && pendingResizeErase?.origin === 'width-only'
+    //   preserveWidthSnapshot = cprPending && cprBurst.widthOnlyOrigin
     // With pendingResizeErase===null the condition is false, so the branch must
     // null the snapshot — but it is already null.  Crucially, it must NOT set
     // pendingResizeErase to a non-null value (which would be a false positive).
