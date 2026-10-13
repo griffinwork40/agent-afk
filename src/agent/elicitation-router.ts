@@ -212,6 +212,7 @@ class ElicitationRouter {
       try {
         // Re-check abort after waiting in queue
         if (options.signal.aborted) {
+          try { markResolved(questionId, 'aborted'); } catch { /* non-fatal */ }
           resolveResult(DECLINE);
           return;
         }

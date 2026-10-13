@@ -174,6 +174,24 @@ describe('listQuestions', () => {
     const limited = listQuestions({ limit: 3 });
     expect(limited.length).toBeLessThanOrEqual(3);
   });
+
+  it('status filter applied after limit: pending question beyond first N total rows is still returned', () => {
+    // Insert 3 resolved questions first, then 1 pending.
+    // With the old (buggy) code, listQuestions({ status: 'pending', limit: 3 })
+    // would cap at 3 rows BEFORE filtering, returning only the 3 resolved ones
+    // and missing the pending question entirely.
+    recordQuestion('eid-filter-0', 's', 'repl', 'R0');
+    recordQuestion('eid-filter-1', 's', 'repl', 'R1');
+    recordQuestion('eid-filter-2', 's', 'repl', 'R2');
+    markResolved('eid-filter-0', 'accept');
+    markResolved('eid-filter-1', 'accept');
+    markResolved('eid-filter-2', 'accept');
+    recordQuestion('eid-filter-pending', 's', 'repl', 'P0');
+
+    const result = listQuestions({ status: 'pending', limit: 3 });
+    expect(result.length).toBe(1);
+    expect(result[0]!.questionId).toBe('eid-filter-pending');
+  });
 });
 
 // ── key sanitization ──────────────────────────────────────────────────────────

@@ -199,12 +199,12 @@ export function listQuestions(opts?: {
   limit?: number;
 }): PendingQuestion[] {
   const limit = opts?.limit ?? 50;
-  const rows = store().query(NAMESPACE, { limit });
-  const questions = rows.map((r) => r.value as PendingQuestion);
+  const rows = store().query(NAMESPACE);
+  let questions = rows.map((r) => r.value as PendingQuestion);
   if (opts?.status !== undefined) {
-    return questions.filter((q) => q.status === opts.status);
+    questions = questions.filter((q) => q.status === opts.status);
   }
-  return questions;
+  return questions.slice(0, limit);
 }
 
 /**
