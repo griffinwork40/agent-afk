@@ -8,6 +8,28 @@ export function errorMessage(err: unknown): string {
 }
 
 /**
+ * Extracts a human-readable message from an {@link AbortSignal}'s `reason`.
+ *
+ * This is NOT a drop-in for {@link errorMessage}: when `reason` is `undefined`
+ * (the signal was never aborted, or was aborted without a reason) it returns
+ * the sentinel string `'aborted'` rather than `'undefined'`.
+ *
+ * Use wherever code reads `signal.reason` and needs a displayable string:
+ *
+ * ```ts
+ * // Before
+ * const reason = signal.reason;
+ * const msg = errorMessage(reason ?? 'aborted');
+ *
+ * // After
+ * const msg = abortReason(signal.reason);
+ * ```
+ */
+export function abortReason(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason ?? 'aborted');
+}
+
+/**
  * Coerces an unknown caught value to an `Error` instance.
  *
  * If `err` is already an `Error` (or subclass) it is returned unchanged.
