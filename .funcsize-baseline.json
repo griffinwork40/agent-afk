@@ -18,7 +18,6 @@
     "src/agent/tools/subagent/foreground-promotion.ts::runForegroundWithPromotion": { "loc": 376, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/subagent/input-parse.ts::parseAgentInput": { "loc": 406, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/browser/playwright/observe.ts::observePage": { "loc": 233, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/cli/commands/chat.ts::registerChatCommand": { "loc": 351, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/terminal-compositor.frame-preserve.ts::preserveRowsBeforeFrameRender": { "loc": 228, "reason": "preserveRowsBeforeFrameRender gains resizeGeometryStale=false clear on early return (#3371)" },
     "src/cli/terminal-compositor.input-dispatch.enter.ts::handleEnter": { "loc": 259, "reason": "handleEnter restored from pre-split terminal-compositor.input-dispatch.ts (fix #2981); inline invariant comments are non-negotiable documentation per #2981 advisory" }
   }
