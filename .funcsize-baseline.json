@@ -10,7 +10,6 @@
     "src/agent/subagent/handle.streaming.ts::streamToFinalMessage": { "loc": 231, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/subagent/handle.ts::SubagentHandleImpl.run": { "loc": 210, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/compose-executor.ts::ComposeExecutor.execute": { "loc": 466, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/agent/tools/compose-input-parse.ts::parseComposeInput": { "loc": 236, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/handlers/bash.ts::createBashHandler": { "loc": 418, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/handlers/image-generate.ts::createImageGenerateHandler": { "loc": 212, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/handlers/patch-apply-engine.ts::applyPatch": { "loc": 208, "reason": "legacy: predates the function-size gate; pending helper extraction" },
