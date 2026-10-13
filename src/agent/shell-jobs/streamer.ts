@@ -25,9 +25,13 @@
  * @module agent/shell-jobs/streamer
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
 import { killProcessGroup } from '../../utils/kill-process-group.js';
-import { errorMessage } from '../../utils/errors.js';
+import {
+  spawnChild,
+  makeCaptureState,
+  wireStreams,
+  wireExitHandlers,
+} from './streamer.helpers.js';
 
 /**
  * ANSI / VT escape sequence regex — strips:
@@ -249,24 +253,10 @@ export function startShell(opts: StartShellOptions): ShellHandle {
   const startedAt = Date.now();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
-  const stripAnsi = makeAnsiStripper();
 
-  // Spawn shape mirrors `createBashHandler` so the failure modes that
-  // file documents (overflow kill, process-group SIGKILL, env merge) all
-  // carry over identically. The one structural difference is that this
-  // function pipes onChunk for live display where the bash tool only
-  // collects + returns.
-  let proc: ChildProcess;
-  try {
-    proc = spawn(opts.command, {
-      shell: true,
-      detached: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
-      ...(opts.env !== undefined ? { env: { ...process.env, ...opts.env } } : {}),
-    });
-  } catch (err) {
-    const message = errorMessage(err);
+  // --- Concern 1: spawn setup ---
+  const spawnResult = spawnChild(opts.command, opts.cwd, opts.env);
+  if ('spawnFailed' in spawnResult) {
     return {
       pid: undefined,
       kill: () => {},
@@ -276,74 +266,41 @@ export function startShell(opts: StartShellOptions): ShellHandle {
         displayCaptured: '',
         modelCaptured: '',
         truncated: false,
-        errorReason: 'spawn-failed',
-        errorMessage: `Failed to spawn shell: ${message}`,
+        errorReason: 'spawn-failed' as const,
+        errorMessage: `Failed to spawn shell: ${spawnResult.message}`,
       }),
     };
   }
+  const { proc } = spawnResult;
 
   // Detach the child from Node's event loop so an abandoned background
   // job doesn't keep the REPL process alive when the user exits.
   proc.unref();
 
-  // Lazy resolver — assigned inside the Promise executor.
+  // Shared mutable capture state — passed explicitly to each helper.
+  const state = makeCaptureState();
+
+  // Lazy resolver — settled is tracked inside state so helpers can read it.
   let resolveResult!: (r: ShellResult) => void;
-  let settled = false;
   const promise = new Promise<ShellResult>((resolve) => {
     resolveResult = (r) => {
-      if (settled) return;
-      settled = true;
+      if (state.settled) return;
+      state.settled = true;
       resolve(r);
     };
   });
 
-  let displayCaptured = '';
-  let modelCaptured = '';
-  let displayBytes = 0;
-  let modelBytes = 0;
-  let truncated = false;
-  let overflowKilled = false;
-  let killedByCaller = false;
-
-  function captureChunk(chunk: Buffer): void {
-    // Display buffer: raw bytes, ANSI preserved.
-    const displayRemaining = maxBytes - displayBytes;
-    if (displayRemaining > 0) {
-      const safe = chunk.length <= displayRemaining
-        ? chunk
-        : utf8SafeTruncate(chunk, displayRemaining);
-      displayBytes += safe.length;
-      displayCaptured += safe.toString('utf8');
-      if (chunk.length > displayRemaining) truncated = true;
-    } else if (chunk.length > 0) {
-      truncated = true;
-    }
-
-    // Model buffer: ANSI stripped, separate byte counter. The stateful
-    // stripAnsi closure carries any partial ESC sequence residual across
-    // chunk boundaries so split ANSI sequences are handled correctly (H-2).
-    if (modelBytes < maxBytes) {
-      const stripped = stripAnsi.strip(chunk.toString('utf8'));
-      const strippedBytes = Buffer.byteLength(stripped, 'utf8');
-      const modelRemaining = maxBytes - modelBytes;
-      if (strippedBytes <= modelRemaining) {
-        modelCaptured += stripped;
-        modelBytes += strippedBytes;
-      } else {
-        // Slice on UTF-8 byte boundary using Buffer to avoid mid-codepoint cuts.
-        const buf = Buffer.from(stripped, 'utf8');
-        modelCaptured += utf8SafeTruncate(buf, modelRemaining).toString('utf8');
-        modelBytes = maxBytes;
-        truncated = true;
-      }
-    }
-  }
+  // --- Concern 2: timeout + abort wiring ---
+  // These must be constructed before wireStreams / wireExitHandlers so the
+  // handlers can reference them.
+  // Invariant: timeoutHandle and abortHandler are created before stream/exit
+  // handlers are attached, so overflow and error/close paths can always
+  // clearTimeout and removeEventListener — even if they fire synchronously.
 
   function killGroup(): void {
     // Guard pid !== 0: `process.kill(-0, …)` would signal THIS process's own
     // group. Node never assigns pid 0 to a live child, but the guard is cheap
-    // insurance against ever turning a child-kill into a self-kill. (PR #565
-    // review: N3.)
+    // insurance. (PR #565 review: N3.)
     if (proc.pid !== undefined && proc.pid !== 0 && !proc.killed) {
       killProcessGroup(proc.pid);
     }
@@ -359,9 +316,9 @@ export function startShell(opts: StartShellOptions): ShellHandle {
     resolveResult({
       exitCode: null,
       durationMs: Date.now() - startedAt,
-      displayCaptured,
-      modelCaptured,
-      truncated,
+      displayCaptured: state.displayCaptured,
+      modelCaptured: state.modelCaptured,
+      truncated: state.truncated,
       errorReason: 'timeout',
       errorMessage: `Command timed out after ${timeoutMs}ms`,
     });
@@ -374,147 +331,38 @@ export function startShell(opts: StartShellOptions): ShellHandle {
     resolveResult({
       exitCode: null,
       durationMs: Date.now() - startedAt,
-      displayCaptured,
-      modelCaptured,
-      truncated,
+      displayCaptured: state.displayCaptured,
+      modelCaptured: state.modelCaptured,
+      truncated: state.truncated,
       errorReason: 'abort',
-      errorMessage: killedByCaller ? 'Command killed' : 'Command aborted',
+      errorMessage: state.killedByCaller ? 'Command killed' : 'Command aborted',
     });
   };
   opts.abort.addEventListener('abort', abortHandler);
 
-  // Wire stdout / stderr. The combined byte counter (displayBytes +
-  // modelBytes capped independently) means an extreme overflow on one
-  // stream doesn't starve the other; the overflowKilled latch ensures
-  // we only fire the kill+resolve once across both data handlers.
-  function maybeOverflow(): void {
-    if (overflowKilled || settled) return;
-    if (displayBytes < maxBytes && modelBytes < maxBytes) return;
-    // Both buffers are at cap. The child can keep running for as long as
-    // it wants — we'd just discard further bytes — but the model-side
-    // bash tool kills here because a runaway `yes` can hit V8's max
-    // string length faster than 120s. Mirroring that hardening: kill
-    // and settle as soon as the cap is crossed.
-    overflowKilled = true;
-    killGroup();
-    clearTimeout(timeoutHandle);
-    opts.abort.removeEventListener('abort', abortHandler);
-    resolveResult({
-      exitCode: null,
-      durationMs: Date.now() - startedAt,
-      displayCaptured,
-      modelCaptured,
-      truncated: true,
-      errorReason: 'overflow',
-      errorMessage: `Output exceeded ${maxBytes} bytes`,
-    });
-  }
+  // --- Concern 3: stream wiring (stdout/stderr data + overflow) ---
+  wireStreams(
+    proc,
+    state,
+    maxBytes,
+    startedAt,
+    timeoutHandle,
+    abortHandler,
+    opts.abort,
+    opts.onChunk,
+    resolveResult,
+  );
 
-  proc.stdout?.on('data', (chunk: Buffer) => {
-    captureChunk(chunk);
-    try {
-      opts.onChunk?.(chunk, 'stdout');
-    } catch {
-      // onChunk callbacks must not break the streamer — swallow.
-    }
-    maybeOverflow();
-  });
-
-  proc.stderr?.on('data', (chunk: Buffer) => {
-    captureChunk(chunk);
-    try {
-      opts.onChunk?.(chunk, 'stderr');
-    } catch {
-      // onChunk callbacks must not break the streamer — swallow.
-    }
-    maybeOverflow();
-  });
-
-  proc.on('error', (err) => {
-    clearTimeout(timeoutHandle);
-    opts.abort.removeEventListener('abort', abortHandler);
-    resolveResult({
-      exitCode: null,
-      durationMs: Date.now() - startedAt,
-      displayCaptured,
-      modelCaptured,
-      truncated,
-      errorReason: 'spawn-failed',
-      errorMessage: `Shell process error: ${err.message}`,
-    });
-  });
-
-  proc.on('close', (code, signal) => {
-    clearTimeout(timeoutHandle);
-    opts.abort.removeEventListener('abort', abortHandler);
-    if (overflowKilled || settled) return;
-
-    // Flush any partial ESC residue the stripper was holding across chunks.
-    // A partial escape sequence at the tail of the last chunk is never
-    // printable text, so flush() discards it rather than appending raw bytes
-    // to modelCaptured. Without this, up to ~6 bytes of the last chunk tail
-    // would silently disappear from modelCaptured while remaining visible in
-    // displayCaptured.
-    stripAnsi.flush();
-
-    // If kill() was called by the caller, surface as 'abort' so callers
-    // can disambiguate "I told you to stop" from "command exited normally
-    // with a nonzero code".
-    if (killedByCaller) {
-      resolveResult({
-        exitCode: code,
-        durationMs: Date.now() - startedAt,
-        displayCaptured,
-        modelCaptured,
-        truncated,
-        errorReason: 'abort',
-        errorMessage: 'Command killed',
-      });
-      return;
-    }
-
-    if (code !== null && code !== 0) {
-      resolveResult({
-        exitCode: code,
-        durationMs: Date.now() - startedAt,
-        displayCaptured,
-        modelCaptured,
-        truncated,
-        errorReason: 'nonzero-exit',
-        errorMessage: `Command exited with code ${code}`,
-      });
-      return;
-    }
-
-    if (code === null) {
-      // Process terminated by a signal we did NOT send (segfault, OOM-killer,
-      // external `kill`, or a self-signal like `kill -9 $$`). The caller-kill,
-      // timeout, abort, and overflow paths are all handled above, so a null
-      // code reaching here means an unrequested signal death. Surface it as a
-      // failure instead of falling through to the success resolve, which would
-      // tell the model a crashed command "succeeded". (PR #565 review: M2.)
-      resolveResult({
-        exitCode: null,
-        durationMs: Date.now() - startedAt,
-        displayCaptured,
-        modelCaptured,
-        truncated,
-        errorReason: 'signal-killed',
-        errorMessage: signal
-          ? `Command killed by signal ${signal}`
-          : 'Command killed by signal',
-      });
-      return;
-    }
-
-    resolveResult({
-      exitCode: code,
-      durationMs: Date.now() - startedAt,
-      displayCaptured,
-      modelCaptured,
-      truncated,
-    });
-  });
+  // --- Concern 4: exit/cleanup handling (error + close events) ---
+  wireExitHandlers(
+    proc,
+    state,
+    startedAt,
+    timeoutHandle,
+    abortHandler,
+    opts.abort,
+    resolveResult,
+  );
 
   return {
     pid: proc.pid,
@@ -522,7 +370,7 @@ export function startShell(opts: StartShellOptions): ShellHandle {
     kill: (signal: NodeJS.Signals = 'SIGKILL') => {
       // pid !== 0 guard: never let -pid resolve to -0 (this process's group).
       if (proc.pid === undefined || proc.pid === 0 || proc.killed) return;
-      killedByCaller = true;
+      state.killedByCaller = true;
       // Note: on Windows the `signal` argument is silently ignored — taskkill
       // always force-kills the process tree regardless of which signal is passed.
       killProcessGroup(proc.pid, signal);
