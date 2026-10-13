@@ -35,3 +35,6 @@ export const execFileAsync = promisify(execFile) as any as (
   args: readonly string[],
   options?: Parameters<typeof execFile>[2],
 ) => Promise<{ stdout: string; stderr: string }>;
+
+/** Shared executor type for callers that inject an execFileAsync implementation. */
+export type ExecFileAsync = typeof execFileAsync;
