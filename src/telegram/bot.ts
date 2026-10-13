@@ -132,24 +132,7 @@ export class TelegramBot {
     this.bot.command('start', (ctx) => handleStart(ctx));
     this.bot.command('help', (ctx) => handleHelp(ctx, this.sessionManager));
     this.bot.command('clear', (ctx) => this.handleClear(ctx));
-    this.bot.command('compact', async (ctx) => {
-      const route = routeFromCtx(ctx);
-      if (!route) {
-        await ctx.reply(formatError('Could not identify chat'));
-        return;
-      }
-      const session = await this.sessionManager.getSession(route);
-      if (session.state !== 'idle') {
-        this.messageHandler.enqueueCompact(route, ctx);
-        await ctx.reply('Compact queued.');
-      } else {
-        try {
-          await handleCompact(ctx, this.sessionManager, this.log.bind(this));
-        } finally {
-          this.messageHandler.drainQueue(route).catch(err => this.log('Drain error:', err));
-        }
-      }
-    });
+    this.bot.command('compact', (ctx) => this.handleCompact(ctx));
     registerDelegatingCommands(this.bot, this.sessionManager, this.log.bind(this));
     // /sessions — list this chat's resumable conversations with tap-to-switch
     // buttons; /new — start a fresh conversation (previous preserved). One
@@ -460,6 +443,25 @@ export class TelegramBot {
       await ctx.reply('Clear queued.');
     } else {
       return handleClear(ctx, this.sessionManager, this.registeredCommandChats, this.log.bind(this));
+    }
+  }
+
+  async handleCompact(ctx: Context): Promise<void> {
+    const route = routeFromCtx(ctx);
+    if (!route) {
+      await ctx.reply(formatError('Could not identify chat'));
+      return;
+    }
+    const session = await this.sessionManager.getSession(route);
+    if (session.state !== 'idle') {
+      this.messageHandler.enqueueCompact(route, ctx);
+      await ctx.reply('Compact queued.');
+    } else {
+      try {
+        await handleCompact(ctx, this.sessionManager, this.log.bind(this));
+      } finally {
+        this.messageHandler.drainQueue(route).catch(err => this.log('Drain error:', err));
+      }
     }
   }
 

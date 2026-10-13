@@ -1,8 +1,8 @@
 /**
  * Flush operations for ToolLane -- extracted from tool-lane.ts.
  *
- * Exports: flushSource, flushCompletedRoots.
- * Both operate on the ToolLane's internal state via an explicit host
+ * Exports: flushSource, flushCompletedRoots, flush.
+ * All operate on the ToolLane's internal state via an explicit host
  * interface so they carry no module-scope state.
  */
 
@@ -31,6 +31,7 @@ import { ancestorDepthOf as ancestorDepthIn } from './tool-lane.ancestry.js';
 export interface ToolLaneFlushHost {
   readonly entries: Map<string, Entry>;
   order: string[];
+  agentIdStack: string[];
   readonly compactScrollback: boolean;
 }
 
@@ -172,6 +173,54 @@ export function flushCompletedRoots(
 
   if (rootOrder.length === 0) return [];
 
+  const lines = renderRootOrderLines(host, rootOrder, childMap, homeDir);
+
+  // BFS-collect each flushed root + its descendants. Only collected IDs
+  // are removed; in-flight roots and their subtrees remain in the lane.
+  const collected = new Set<string>(rootOrder);
+  const bfsQueue = [...rootOrder];
+  while (bfsQueue.length > 0) {
+    const current = bfsQueue.shift()!;
+    for (const [id, entry] of host.entries) {
+      if (collected.has(id)) continue;
+      const ctx = entry.kind === 'tool' ? entry.agentContext : entry.agentContext;
+      if (ctx === current) {
+        collected.add(id);
+        if (entry.kind === 'tool') bfsQueue.push(id);
+      }
+    }
+  }
+
+  for (const id of collected) {
+    host.entries.delete(id);
+  }
+  host.order = host.order.filter((id) => !collected.has(id));
+
+  return lines;
+}
+
+// ---------------------------------------------------------------------------
+// renderRootOrderLines (shared inner loop)
+// ---------------------------------------------------------------------------
+
+/**
+ * Render a pre-computed list of root tool-use IDs into scrollback lines.
+ *
+ * Contract: `rootOrder` contains only root entries (no `agentContext`) that
+ * the caller has already filtered to its desired subset (all roots for
+ * {@link flush}; completed-only for {@link flushCompletedRoots}). The caller
+ * owns entry removal after this returns.
+ *
+ * History: the loop body was duplicated verbatim between `flush` and
+ * `flushCompletedRoots`; extracted here by #3268 so both delegate to one
+ * place.
+ */
+function renderRootOrderLines(
+  host: ToolLaneFlushHost,
+  rootOrder: string[],
+  childMap: Map<string, Entry[]>,
+  homeDir?: string,
+): string[] {
   const lines: string[] = [];
   const groups = new Map<string, ToolEntry[]>();
   const groupOrder: string[] = [];
@@ -201,27 +250,42 @@ export function flushCompletedRoots(
   }
 
   lines.push(...renderGroupedRootTools(groups, groupOrder, homeDir));
+  return lines;
+}
 
-  // BFS-collect each flushed root + its descendants. Only collected IDs
-  // are removed; in-flight roots and their subtrees remain in the lane.
-  const collected = new Set<string>(rootOrder);
-  const bfsQueue = [...rootOrder];
-  while (bfsQueue.length > 0) {
-    const current = bfsQueue.shift()!;
-    for (const [id, entry] of host.entries) {
-      if (collected.has(id)) continue;
-      const ctx = entry.kind === 'tool' ? entry.agentContext : entry.agentContext;
-      if (ctx === current) {
-        collected.add(id);
-        if (entry.kind === 'tool') bfsQueue.push(id);
-      }
-    }
+// ---------------------------------------------------------------------------
+// flush
+// ---------------------------------------------------------------------------
+
+/**
+ * Commit all remaining entries in the lane to scrollback lines and reset
+ * the lane to empty.
+ *
+ * Contract: every entry is rendered and removed -- in-flight or not. Call
+ * this at turn-end (dispose time) when the turn is definitively over and
+ * nothing should remain. For selective mid-turn commits use
+ * {@link flushCompletedRoots} instead.
+ *
+ * See the full contract comment on ToolLane.flush in tool-lane.ts.
+ * This function carries the implementation; ToolLane.flush is a one-line
+ * delegator (same pattern as flushSource and flushCompletedRoots).
+ */
+export function flush(host: ToolLaneFlushHost, homeDir?: string): string[] {
+  if (host.entries.size === 0) return [];
+
+  const childMap = buildChildMap(host.entries, host.order);
+  const rootOrder: string[] = [];
+
+  for (const id of host.order) {
+    const entry = host.entries.get(id);
+    if (!entry || entry.kind !== 'tool') continue;
+    if (!entry.agentContext) rootOrder.push(id);
   }
 
-  for (const id of collected) {
-    host.entries.delete(id);
-  }
-  host.order = host.order.filter((id) => !collected.has(id));
+  const lines = renderRootOrderLines(host, rootOrder, childMap, homeDir);
 
+  host.entries.clear();
+  host.order = [];
+  host.agentIdStack = [];
   return lines;
 }
