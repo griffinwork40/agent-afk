@@ -19,6 +19,7 @@
 import { escapeHtml } from './formatter.js';
 import { validateTextAnswer, validateNumberAnswer } from '../agent/elicitation/answer-validation.js';
 import type { ElicitationCtx, ResolveGuard, Resolve } from './elicitation-handler.types.js';
+import { splitLongPrompt } from './elicitation-handler.send.js';
 
 // ---------------------------------------------------------------------------
 // Prompt builder
@@ -277,21 +278,58 @@ export function handleTextElicitation(
 
     const promptText = buildTextPrompt(displayText, ctx.request, qType, isFirstPrompt);
 
-    ctx.bot.telegram
-      .sendMessage(ctx.chatId, promptText, { parse_mode: 'HTML', ...ctx.threadOpts })
-      .catch(() => {
+    // Fix (issue #3631, item 3): if promptText exceeds TELEGRAM_MAX_CHARS, split
+    // it into chunks. Send all but the last as plain pre-messages, then send the
+    // last chunk as the interceptable prompt (the one the user replies to).
+    const chunks = splitLongPrompt(promptText);
+    const preChunks = chunks.slice(0, -1);
+    const finalChunk = chunks[chunks.length - 1]!;
+
+    const sendFinal = () => {
+      if (guard.resolved) return;
+      ctx.bot.telegram
+        .sendMessage(ctx.chatId, finalChunk, { parse_mode: 'HTML', ...ctx.threadOpts })
+        .catch(() => {
+          if (!guard.resolved) {
+            guard.resolved = true;
+            ctx.signal.removeEventListener('abort', onAbort);
+            // M6: log sendMessage failure so callers can diagnose silent declines
+            // without a visible error (e.g., MarkdownV2 parse failure, network error).
+            console.warn(
+              '[elicitation-handler] sendMessage failed; declining elicitation for route',
+              ctx.key,
+            );
+            ctx.deletePending();
+            resolve({ action: 'decline' });
+          }
+        });
+    };
+
+    if (preChunks.length === 0) {
+      sendFinal();
+    } else {
+      const sendPre = async () => {
+        for (const chunk of preChunks) {
+          if (guard.resolved) return;
+          await ctx.bot.telegram.sendMessage(ctx.chatId, chunk, {
+            parse_mode: 'HTML',
+            ...ctx.threadOpts,
+          });
+        }
+      };
+      sendPre().then(sendFinal).catch((err: unknown) => {
         if (!guard.resolved) {
           guard.resolved = true;
           ctx.signal.removeEventListener('abort', onAbort);
-          // M6: log sendMessage failure so callers can diagnose silent declines
-          // without a visible error (e.g., MarkdownV2 parse failure, network error).
           console.warn(
-            '[elicitation-handler] sendMessage failed; declining elicitation for route',
+            '[elicitation-handler] pre-message sendMessage failed; declining elicitation for route',
             ctx.key,
+            err,
           );
           ctx.deletePending();
           resolve({ action: 'decline' });
         }
       });
+    }
   });
 }

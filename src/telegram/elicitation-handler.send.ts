@@ -1,3 +1,35 @@
+import { TELEGRAM_MAX_CHARS } from './elicitation-choice-list.js';
+
+/**
+ * Split a prompt that exceeds TELEGRAM_MAX_CHARS into chunks each ≤ maxLen.
+ * Splits on the last newline within the window so message boundaries fall at
+ * natural paragraph breaks where possible. Falls back to a hard character split
+ * when no newline is present.
+ *
+ * Returns an array of at least one element. The caller sends all but the last
+ * chunk as plain pre-messages, then sends the last chunk as the interceptable
+ * prompt message (so only one message requires the user's reply).
+ *
+ * Fix (issue #3631, item 3).
+ */
+export function splitLongPrompt(prompt: string, maxLen: number = TELEGRAM_MAX_CHARS): string[] {
+  if (prompt.length <= maxLen) return [prompt];
+
+  const chunks: string[] = [];
+  let remaining = prompt;
+
+  while (remaining.length > maxLen) {
+    const window = remaining.slice(0, maxLen);
+    const nlIdx = window.lastIndexOf('\n');
+    const splitAt = nlIdx > 0 ? nlIdx : maxLen;
+    chunks.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt === nlIdx ? splitAt + 1 : splitAt);
+  }
+
+  if (remaining.length > 0) chunks.push(remaining);
+  return chunks;
+}
+
 /**
  * Low-level send helper for Telegram choice elicitations.
  *

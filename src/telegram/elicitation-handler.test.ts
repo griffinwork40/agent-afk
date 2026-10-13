@@ -2085,3 +2085,103 @@ describe('choice type: single choice over 4096 chars (issue #3631 item 2)', () =
     await resultPromise;
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #3631 item 3: question alone > 4096 chars on text/number/confirm types
+// is split into pre-messages + final interceptable prompt, never declined.
+// ---------------------------------------------------------------------------
+
+import { splitLongPrompt } from './elicitation-handler.send.js';
+
+describe('splitLongPrompt', () => {
+  it('returns the original string when it fits', () => {
+    expect(splitLongPrompt('hello')).toEqual(['hello']);
+  });
+
+  it('splits at a newline boundary when possible', () => {
+    const a = 'A'.repeat(3000);
+    const b = 'B'.repeat(3000);
+    const prompt = `${a}\n${b}`;
+    const chunks = splitLongPrompt(prompt);
+    expect(chunks.length).toBe(2);
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(4096);
+    // Rejoined content must equal original (newline at split is consumed)
+    expect(chunks.join('\n')).toBe(prompt);
+  });
+
+  it('hard-splits when no newline exists within the window', () => {
+    const prompt = 'x'.repeat(5000);
+    const chunks = splitLongPrompt(prompt);
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(4096);
+    expect(chunks.join('')).toBe(prompt);
+  });
+
+  it('handles a prompt of exactly 4096 chars without splitting', () => {
+    const prompt = 'z'.repeat(4096);
+    expect(splitLongPrompt(prompt)).toEqual([prompt]);
+  });
+});
+
+describe('text type: question over 4096 chars is split, not declined (issue #3631 item 3)', () => {
+  it('sends pre-messages then the final prompt for a 5000-char text question', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+    const ac = makeAbort();
+
+    const longQuestion = 'Q'.repeat(5000);
+    const resultPromise = handler(textRequest({ message: longQuestion }), { signal: ac.signal });
+    await new Promise((r) => setTimeout(r, 10));
+
+    // At least 2 sendMessage calls: ≥1 pre-message + 1 final prompt
+    const calls = sendMessage.mock.calls as [number, string, object][];
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    for (const call of calls) {
+      expect(call[1].length).toBeLessThanOrEqual(4096);
+    }
+
+    // A pending intercept should be registered (the final chunk is the prompt)
+    expect(messageHandler.pendingElicitations.has(ROUTE_KEY)).toBe(true);
+
+    // Simulate user reply — should resolve normally
+    const pendingFn = messageHandler.pendingElicitations.get(ROUTE_KEY)!;
+    pendingFn('my answer');
+    await expect(resultPromise).resolves.toEqual({ action: 'accept', content: { value: 'my answer' } });
+  });
+
+  it('sends pre-messages then keyboard for a 5000-char confirm question', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+    const ac = makeAbort();
+
+    const longQuestion = 'C'.repeat(5000);
+    const resultPromise = handler(confirmRequest({ message: longQuestion }), { signal: ac.signal });
+    await new Promise((r) => setTimeout(r, 10));
+
+    const calls = sendMessage.mock.calls as [number, string, object][];
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    for (const call of calls) {
+      expect(call[1].length).toBeLessThanOrEqual(4096);
+    }
+
+    ac.abort();
+    await resultPromise;
+  });
+
+  it('pre-message send failure on long text question → decline', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    // First sendMessage (pre-message) rejects
+    sendMessage.mockRejectedValueOnce(new Error('network error'));
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+    const ac = makeAbort();
+
+    const longQuestion = 'Q'.repeat(5000);
+    const resultPromise = handler(textRequest({ message: longQuestion }), { signal: ac.signal });
+    await new Promise((r) => setTimeout(r, 10));
+
+    await expect(resultPromise).resolves.toEqual({ action: 'decline' });
+  });
+});
