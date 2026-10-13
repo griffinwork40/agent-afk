@@ -26,11 +26,12 @@ export function sendChoiceMessages(
   keyboardOpts: object,
   onFailure: () => void,
   signal?: AbortSignal,
-): void {
-  const sendKeyboard = () => {
-    if (signal?.aborted) return;
-    telegram
+): Promise<void> {
+  const sendKeyboard = (): Promise<void> => {
+    if (signal?.aborted) return Promise.resolve();
+    return telegram
       .sendMessage(chatId, keyboardText, { parse_mode: 'HTML', ...threadOpts, ...keyboardOpts })
+      .then(() => undefined)
       .catch((err: unknown) => {
         console.warn(
           '[elicitation-handler] keyboard sendMessage failed; declining elicitation for chat',
@@ -42,8 +43,7 @@ export function sendChoiceMessages(
   };
 
   if (preMessages.length === 0) {
-    sendKeyboard();
-    return;
+    return sendKeyboard();
   }
 
   const sendPre = async () => {
@@ -53,7 +53,7 @@ export function sendChoiceMessages(
     }
   };
 
-  sendPre().then(sendKeyboard).catch((err: unknown) => {
+  return sendPre().then(sendKeyboard).catch((err: unknown) => {
     console.warn(
       '[elicitation-handler] pre-message sendMessage failed; declining elicitation for chat',
       chatId,

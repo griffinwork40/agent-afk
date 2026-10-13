@@ -562,6 +562,8 @@ export async function recoverUnackedDelivered(sessionId: string): Promise<string
       // ENOENT: already gone (concurrent restart or prior recovery); skip.
       if (!isEnoent(err)) {
         // Any other error: leave the file in place, do not corrupt state.
+        // Explicitly swallow: recovery is best-effort; the file stays put.
+        void err;
       }
     }
   }

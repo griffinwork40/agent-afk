@@ -805,6 +805,24 @@ describe('classifyRisk — #3534 word-start matrix', () => {
       reason: "bash-pattern: matched 'rm'",
     });
   });
+
+  // Regression guard for issue #3659: SEPARATOR_EVASION lookahead did not
+  // cover ';' or '|', so 'rm;foo' and 'rm|grep' slipped through as non-high.
+  it('separator-evasion: rm immediately followed by ; (no space) → high', () => {
+    expect(classifyRisk('bash', { command: 'rm;foo' }, ctx)).toBe('high');
+  });
+
+  it('separator-evasion: rm immediately followed by | (no space) → high', () => {
+    expect(classifyRisk('bash', { command: 'rm|grep lost' }, ctx)).toBe('high');
+  });
+
+  it('separator-evasion: eval immediately followed by ; (no space) → high', () => {
+    expect(classifyRisk('bash', { command: 'eval;payload' }, ctx)).toBe('high');
+  });
+
+  it('separator-evasion: eval immediately followed by | (no space) → high', () => {
+    expect(classifyRisk('bash', { command: 'eval|sh' }, ctx)).toBe('high');
+  });
 });
 
 // ---- worktree lifecycle --------------------------------------------------
