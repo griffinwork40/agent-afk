@@ -12,8 +12,9 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { writeFileSync, unlinkSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { unlinkSync, readFileSync } from 'node:fs';
+import { atomicWriteFile } from '../utils/atomic-write.js';
+import { join } from 'node:path';
 import type { AgentConfig } from './types.js';
 import type { Telegraf } from 'telegraf';
 import { CronScheduler, type SchedulerOptions, type TelemetryRecord } from './daemon/scheduler.js';
@@ -200,8 +201,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
   // is found (pre-existing port files from before this change).
   if (writePortFile) {
     try {
-      mkdirSync(dirname(portFilePath), { recursive: true });
-      writeFileSync(portFilePath, `${host}:${port}`, 'utf-8');
+      atomicWriteFile(portFilePath, `${host}:${port}`, { encoding: 'utf-8', mkdirp: true });
     } catch {
       // Best-effort; daemon still functional without port file
     }

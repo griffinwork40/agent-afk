@@ -1,5 +1,6 @@
 import { execFileSync } from 'child_process';
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
+import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { homedir, userInfo } from 'os';
 import { join } from 'path';
 import { h1ModelFetch } from '../providers/shared/h1-fetch.js';
@@ -327,5 +328,5 @@ function writeCredentialsBlob(blob: string): void {
  * @internal
  */
 export function writeLinuxCredentials(credPath: string, blob: string): void {
-  writeFileSync(credPath, blob, { encoding: 'utf-8', mode: 0o600 });
+  atomicWriteFile(credPath, blob, { encoding: 'utf-8', mode: 0o600 });
 }

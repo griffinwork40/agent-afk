@@ -41,8 +41,8 @@ import {
   readFile,
   rename,
   rm,
-  writeFile,
 } from 'node:fs/promises';
+import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
 import { extname, join } from 'node:path';
 import { getArtifactStoreDir, getArtifactIndexPath } from '../../paths.artifact.js';
 import { isErrnoCode } from '../../utils/errors.js';
@@ -365,13 +365,7 @@ export async function compactIndex(_indexPath?: string): Promise<void> {
   const map = readIndex(indexPath);
   const sorted = Array.from(map.values()).sort((a, b) => a.created_at - b.created_at);
   const lines = sorted.map((r) => JSON.stringify(r)).join('\n') + (sorted.length ? '\n' : '');
-  const tmp = `${indexPath}.${randomBytes(6).toString('hex')}.tmp`;
-  try {
-    await writeFile(tmp, lines, { encoding: 'utf8', mode: 0o600 });
-    await rename(tmp, indexPath);
-  } finally {
-    await rm(tmp, { force: true });
-  }
+  await atomicWriteFileAsync(indexPath, lines, { encoding: 'utf8', mode: 0o600, mkdirp: false });
 }
 
 // ---------------------------------------------------------------------------
