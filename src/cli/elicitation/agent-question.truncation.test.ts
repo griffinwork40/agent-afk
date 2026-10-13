@@ -164,6 +164,85 @@ describe('renderAgentQuestion — no truncation end-to-end', () => {
     expect(sb).toBe(message);
   });
 
+  it('duplicate choices produce distinct numbered labels that map back to the right value', async () => {
+    const layout = layoutAgentQuestion(
+      agentRequest({ type: 'choice', choices: ['a', 'a'] }),
+      { columns: 80, rows: 40 },
+    );
+    // Both labels must be distinct (numbered) so the picker can tell them apart.
+    expect(layout.options[0]).toBe('1. a');
+    expect(layout.options[1]).toBe('2. a');
+    expect(new Set(layout.options).size).toBe(2);
+    // Each label maps back to the correct original value.
+    expect(layout.choiceFor('1. a')).toBe('a');
+    expect(layout.choiceFor('2. a')).toBe('a');
+  });
+
+  it('wide characters (CJK/emoji) are counted by display width, not code-unit length', () => {
+    // Each CJK character is 2 display columns wide; 40 chars = 80 cols → fits
+    // exactly in one row at columns=80.  One extra character forces wrapping.
+    const cjk40 = '你'.repeat(40);
+    const layout40 = layoutAgentQuestion(
+      agentRequest({ message: cjk40 }),
+      { columns: 80, rows: 40 },
+    );
+    // 80-col message should fit in one question row (plus prefix) without spill.
+    expect(layout40.scrollback).toEqual([]);
+    for (const row of layout40.header) {
+      expect(displayWidth(plain(row))).toBeLessThanOrEqual(80);
+    }
+
+    // An emoji choice wider than the available option columns triggers numbering.
+    const emoji = '🎉'.repeat(50); // 100 display cols > 80 - OPTION_PREFIX_COLS
+    const layoutEmoji = layoutAgentQuestion(
+      agentRequest({ type: 'choice', choices: [emoji, 'plain'] }),
+      { columns: 80, rows: 40 },
+    );
+    // Shortened → numbered labels.
+    expect(layoutEmoji.options[0]!.startsWith('1. ')).toBe(true);
+    // Each option label must fit within the terminal width.
+    for (const label of layoutEmoji.options) {
+      expect(displayWidth(plain(label))).toBeLessThanOrEqual(80);
+    }
+    // Original value still recoverable.
+    expect(layoutEmoji.choiceFor(layoutEmoji.options[0]!)).toBe(emoji);
+  });
+
+  it('below-20-column terminals always spill to scrollback', () => {
+    const layout = layoutAgentQuestion(
+      agentRequest({ message: 'Hi', type: 'choice', choices: ['yes', 'no'] }),
+      { columns: 15, rows: 40 },
+    );
+    expect(layout.scrollback.length).toBeGreaterThan(0);
+  });
+
+  it('every pre-echo scrollback line event precedes the overlay open event', async () => {
+    const message = longText(400);
+    const events: Array<'line' | 'overlay'> = [];
+    const readTextOverlay = vi.fn(async (o: { header: readonly string[] }) => {
+      events.push('overlay');
+      expect(o.header.length + 3 + MIN_OPTION_ROWS).toBeLessThanOrEqual(size.rows);
+      return 'answer';
+    });
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: () => { events.push('line'); } },
+      pendingCount: () => 0,
+      readTextOverlay,
+      terminalSize: () => size,
+    });
+    await handler(agentRequest({ type: 'text', message }), { signal: NO_SIGNAL });
+    const overlayIdx = events.indexOf('overlay');
+    expect(overlayIdx).toBeGreaterThan(0);
+    // Every 'line' event (there may be several scrollback rows) must come before the overlay.
+    for (let i = 0; i < overlayIdx; i++) {
+      expect(events[i]).toBe('line');
+    }
+    // The post-confirm echo line is written after the overlay — exclude it by
+    // checking only the pre-overlay segment above; just assert overlay fired once.
+    expect(events.filter((e) => e === 'overlay')).toHaveLength(1);
+  });
+
   it('choice: scrollback is written BEFORE the picker overlay opens', async () => {
     // Long choices collide so they spill; writer.line must fire before pickFromList.
     const long = `Option ${'x'.repeat(200)}`;

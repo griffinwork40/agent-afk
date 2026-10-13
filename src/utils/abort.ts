@@ -4,7 +4,7 @@
  * @module utils/abort
  */
 
-import { errorMessage } from './errors.js';
+import { abortReason } from './errors.js';
 
 /**
  * Forward an abort from a parent signal to a child AbortController.
@@ -200,8 +200,7 @@ export function createDeferredRequestAbortScope(
  * Both `web-request` and `web-scrape` need the same two-line logic:
  *
  * ```ts
- * const reason = scope.signal.reason;
- * return errorMessage(reason ?? 'aborted');
+ * return abortReason(scope.signal.reason);
  * ```
  *
  * This helper owns that logic once so each handler stays focused on its own
@@ -212,6 +211,5 @@ export function createDeferredRequestAbortScope(
  *   this shape.
  */
 export function getScopeAbortMessage(scope: { signal: AbortSignal }): string {
-  const reason = scope.signal.reason;
-  return errorMessage(reason ?? 'aborted');
+  return abortReason(scope.signal.reason);
 }
