@@ -16,6 +16,7 @@
 
 import type { Server } from 'node:http';
 import { execFileSync } from 'node:child_process';
+import { isErrnoCode } from '../utils/errors.js';
 
 // Invariant: these are the only two loopback literals the fallback considers.
 // 'localhost' is intentionally excluded — its resolution is OS-dependent and
@@ -65,8 +66,7 @@ export function listenWithRecovery(
       // Only diagnose "both occupied" when the fallback also hit EADDRINUSE.
       // Other codes (EACCES, EADDRNOTAVAIL, etc.) are rethrown as-is so the
       // operator sees the real failure, not misleading ghost-socket guidance.
-      const retryCode = (retryErr as NodeJS.ErrnoException)?.code;
-      if (retryCode !== 'EADDRINUSE') throw retryErr;
+      if (!isErrnoCode(retryErr, 'EADDRINUSE')) throw retryErr;
 
       process.stderr.write(
         `[daemon] EADDRINUSE on ${host}:${requestedPort} (ghost socket attempt) — ` +

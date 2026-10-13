@@ -8,12 +8,9 @@
  * @module agent/tools/handlers/worktree-managed.background
  */
 
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execFileAsync as defaultExecFile } from '../../../utils/exec-file.js';
 import { teardownIsolatedWorktree, type IsolatedTeardownResult } from './worktree-managed.js';
 import { debugLog } from '../../../utils/debug.js';
-
-const defaultExecFile = promisify(execFileCb);
 
 /**
  * Lock a freshly-created isolated worktree so the sweep engine cannot reap it

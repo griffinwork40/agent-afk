@@ -16,53 +16,38 @@
  *     and routes to a short-lived `Map<id, resolver>` (H3: no per-question
  *     Telegraf closure accumulation).
  *
+ * Per-type handler modules:
+ *   - elicitation-handler.choice.ts  — confirm/choice inline-keyboard path
+ *   - elicitation-handler.text.ts    — text/number/multi_choice reply path
+ *   - elicitation-handler.render.ts  — prepareChoiceRender helper
+ *   - elicitation-handler.types.ts   — shared types and constants
+ *
  * @module telegram/elicitation-handler
  */
 
-import { Markup, Telegraf } from 'telegraf';
+import { Telegraf } from 'telegraf';
 import type { ElicitationHandler } from '../agent/elicitation-router.js';
 import type { ElicitationRequest, ElicitationResult } from '../agent/types/sdk-types.js';
 import type { MessageHandler } from './handlers/message.js';
 import { type TelegramRoute, routeKey, sendOptions } from './route.js';
 import { getElicitationRoute } from './elicitation-route-registry.js';
 import {
-  buildElicitationCallback,
   parseElicitationCallback,
   ELICITATION_CALLBACK_PREFIX,
-  buildCustomElicitationCallback,
   parseCustomElicitationCallback,
   ELICITATION_CUSTOM_CALLBACK_PREFIX,
 } from './elicitation-callback-data.js';
 import { randomBytes } from 'node:crypto';
 import { escapeHtml } from './formatter.js';
 import { escapeRegExp } from '../utils/regexp.js';
-import { validateTextAnswer, validateNumberAnswer } from '../agent/elicitation/answer-validation.js';
-import { renderTelegramChoices, buildChoiceMessages, type ChoiceMessages } from './elicitation-choice-list.js';
-import { sendChoiceMessages } from './elicitation-handler.send.js';
+import { CUSTOM_ENTRY_SENTINEL_INDEX } from './elicitation-handler.types.js';
+import type { ChoiceResolver } from './elicitation-handler.choice.js';
+import { handleChoiceElicitation } from './elicitation-handler.choice.js';
+import { handleTextElicitation } from './elicitation-handler.text.js';
 
 function nextElicitationId(): string {
   return `elic-${randomBytes(8).toString('hex')}`;
 }
-
-
-/** Sentinel returned by the custom-entry wildcard handler to the dispatch table. */
-const CUSTOM_ENTRY_SENTINEL_INDEX = -1;
-
-const MAX_CHOICES = 20;
-
-/** Prepare rendered labels and split choice messages for a `choice` elicitation. */
-function prepareChoiceRender(
-  choices: readonly string[],
-  displayText: string,
-  buildCallback: (i: number) => string,
-): { choiceMsg: ChoiceMessages; buttons: ReturnType<typeof Markup.button.callback>[][] } {
-  const cappedChoices = choices.slice(0, MAX_CHOICES);
-  const rendered = renderTelegramChoices(cappedChoices);
-  const choiceMsg = buildChoiceMessages(displayText, rendered, cappedChoices);
-  const buttons = rendered.labels.map((label, i) => [Markup.button.callback(label, buildCallback(i))]);
-  return { choiceMsg, buttons };
-}
-
 
 /**
  * Build a Telegram elicitation handler.
@@ -100,6 +85,7 @@ export function makeTelegramElicitationHandler(
   // MessageHandler.handle() — the resolver fires on the next text reply
   // regardless of whether an AgentSession exists for this route.
   const ledgerOriginated = opts?.ledgerOriginated ?? false;
+
   /**
    * H3: Single dispatch table for confirm/choice elicitations.
    * Keys are cryptographically random elicitation IDs. Values retain both the
@@ -107,10 +93,7 @@ export function makeTelegramElicitationHandler(
    * against the chat that received that particular keyboard.
    * Entries are deleted synchronously on resolve or abort.
    */
-  const pendingChoiceElicitations = new Map<
-    string,
-    { chatId: number; resolve: (choiceIndex: number) => void }
-  >();
+  const pendingChoiceElicitations = new Map<string, ChoiceResolver>();
 
   /**
    * H3: One wildcard action handler registered once.
@@ -194,290 +177,38 @@ export function makeTelegramElicitationHandler(
     }
 
     if (qType === 'confirm' || qType === 'choice') {
-      // Use inline keyboard routed through the single wildcard dispatcher (H3).
-      const elicitId = nextElicitationId();
-
-      let buttons: ReturnType<typeof Markup.button.callback>[][];
-      let choicePreMessages: string[] = [];
-      if (qType === 'confirm') {
-        buttons = [[
-          Markup.button.callback('✅ Yes', buildElicitationCallback(elicitId, 1)),
-          Markup.button.callback('❌ No', buildElicitationCallback(elicitId, 0)),
-        ]];
-      } else {
-        // choice — M1/M2/M3: cap, truncate labels, split if over 4096 chars.
-        const { choiceMsg, buttons: cb } = prepareChoiceRender(request.choices ?? [], displayText, (i) => buildElicitationCallback(elicitId, i));
-        ({ keyboardText: displayText, preMessages: choicePreMessages } = choiceMsg);
-        buttons = cb;
-        if (request.allowCustom) {
-          buttons.push([
-            Markup.button.callback('✍️ Type a custom answer', buildCustomElicitationCallback(elicitId)),
-          ]);
-        }
-      }
-
-      return new Promise<ElicitationResult>((resolve) => {
-        let resolved = false;
-        // Set once the custom-entry flow installs a chatId-keyed text intercept.
-        // The choice dispatch table is keyed by elicitId; the text intercept by
-        // chatId — abort must clear BOTH or a stale handler lingers.
-        let inCustomTextWait = false;
-
-        const onAbort = () => {
-          if (resolved) return;
-          resolved = true;
-          // H3: clean up the dispatch table entry so the wildcard handler
-          // can't fire after the promise is settled.
-          pendingChoiceElicitations.delete(elicitId);
-          // Custom-entry abort: also drop the chatId-keyed text intercept so a
-          // stale handler can't swallow the user's next message.
-          if (inCustomTextWait) deletePending();
-          resolve({ action: 'decline' });
-        };
-        options.signal.addEventListener('abort', onAbort, { once: true });
-
-        // H3: register a short-lived resolver in the dispatch table.
-        pendingChoiceElicitations.set(elicitId, {
+      return handleChoiceElicitation(
+        {
           chatId,
-          resolve: (choiceIndex: number) => {
-            if (resolved) return;
-            resolved = true;
-            pendingChoiceElicitations.delete(elicitId);
-            options.signal.removeEventListener('abort', onAbort);
-
-            // Custom-entry path: transition to text-intercept mode
-            if (choiceIndex === CUSTOM_ENTRY_SENTINEL_INDEX) {
-              resolved = false; // re-arm for the text intercept
-              inCustomTextWait = true;
-              bot.telegram.sendMessage(chatId, '✍️ Please type your custom answer:', threadOpts).catch(() => {});
-              if (options.signal.aborted) { resolve({ action: 'decline' }); return; }
-              setPending((text: string) => {
-                if (resolved) return;
-                resolved = true;
-                options.signal.removeEventListener('abort', onAbort);
-                const trimmed = text.trim();
-                if (trimmed === ':cancel') { resolve({ action: 'cancel' }); return; }
-                resolve({ action: 'accept', content: { value: null, custom_value: trimmed } });
-              });
-              // H1: re-attach abort listener so abort during text wait resolves correctly
-              options.signal.addEventListener('abort', onAbort, { once: true });
-              return;
-            }
-
-            if (qType === 'confirm') {
-              // index 1 = Yes, index 0 = No
-              resolve({ action: 'accept', content: { value: choiceIndex === 1 } });
-            } else {
-              const choices = request.choices ?? [];
-              const selected = choices[choiceIndex];
-              if (selected === undefined) {
-                resolve({ action: 'decline' });
-              } else {
-                resolve({ action: 'accept', content: { value: selected } });
-              }
-            }
-          },
-        });
-
-        // Send pre-messages then keyboard; signal stops pre-sends on abort,
-        // failure at either stage declines identically to the prior behaviour.
-        sendChoiceMessages(
-          bot.telegram, chatId,
-          choicePreMessages, displayText,
-          threadOpts, { reply_markup: Markup.inlineKeyboard(buttons).reply_markup },
-          () => {
-            if (!resolved) {
-              resolved = true;
-              pendingChoiceElicitations.delete(elicitId);
-              options.signal.removeEventListener('abort', onAbort);
-              resolve({ action: 'decline' });
-            }
-          },
-          options.signal,
-        );
-      });
+          threadOpts,
+          request,
+          signal: options.signal,
+          bot,
+          elicitId: nextElicitationId(),
+          pendingChoiceElicitations,
+          setPending,
+          deletePending,
+        },
+        qType,
+        displayText,
+      );
     }
 
     // text / number / multi_choice — plain message + intercept next reply
-    return new Promise<ElicitationResult>((resolve) => {
-      let resolved = false;
-
-      const onAbort = () => {
-        if (resolved) return;
-        resolved = true;
-        // M6: log abandoned-entry cleanup so diagnostic traces surface if the
-        // re-prompt race (H1) or an unanticipated path leaves a stale entry.
-        if (messageHandler.pendingElicitations.has(key)) {
-          console.warn('[elicitation-handler] abort: cleaning up stale pendingElicitation for route', key);
-        }
-        deletePending();
-        resolve({ action: 'decline' });
-      };
-      options.signal.addEventListener('abort', onAbort, { once: true });
-
-      // isFirstPrompt tracks whether this is the initial prompt (true) or a re-prompt
-      // after invalid input (false). The :cancel hint is only shown on the first prompt
-      // to avoid cluttering every validation error re-prompt.
-      let isFirstPrompt = true;
-
-      function handleText(text: string): void {
-        if (resolved) return;
-        resolved = true;
-        options.signal.removeEventListener('abort', onAbort);
-
-        const trimmed = text.trim();
-        if (trimmed === ':cancel') {
-          resolve({ action: 'cancel' });
-          return;
-        }
-        if (trimmed === '' && request.allowSkip) {
-          resolve({ action: 'skip' });
-          return;
-        }
-
-        if (qType === 'number') {
-          // Contract: empty input on a required number question must re-prompt, not silently
-          // accept Number('') === 0. Without this guard, an accidental empty Telegram message
-          // is forwarded to the agent as a deliberate `0` answer.
-          if (trimmed === '' && !request.allowSkip) {
-            resolved = false;
-            isFirstPrompt = false;
-            bot.telegram.sendMessage(chatId, '❌ Please enter a number.', threadOpts).catch(() => {});
-            // H1: abort guard — if abort fired between `resolved = false` and `.set()`,
-            // the promise is already settled; skip re-registration to avoid a dangling intercept.
-            if (options.signal.aborted) return;
-            setPending(handleText);
-            // H1: re-attach abort listener so abort during the next wait resolves the promise.
-            options.signal.addEventListener('abort', onAbort, { once: true });
-            return;
-          }
-          const numResult = validateNumberAnswer(trimmed, request);
-          if (!numResult.ok) {
-            resolved = false;
-            isFirstPrompt = false;
-            bot.telegram.sendMessage(chatId, `❌ ${numResult.message}`, threadOpts).catch(() => {});
-            // H1: abort guard before re-registration.
-            if (options.signal.aborted) return;
-            setPending(handleText);
-            // H1: re-attach abort listener for the next wait.
-            options.signal.addEventListener('abort', onAbort, { once: true });
-            return;
-          }
-          resolve({ action: 'accept', content: { value: numResult.value } });
-          return;
-        }
-
-        if (qType === 'multi_choice') {
-          const choices = request.choices ?? [];
-
-          // allow_custom: non-numeric, non-empty, non-cancel text on multi_choice is a custom answer
-          if (request.allowCustom) {
-            const firstPart = trimmed.split(',')[0]?.trim() ?? '';
-            const parsedFirst = parseInt(firstPart, 10);
-            const looksNumeric = Number.isInteger(parsedFirst) && String(parsedFirst) === firstPart && parsedFirst >= 1 && parsedFirst <= choices.length;
-            if (!looksNumeric && trimmed !== '' && trimmed !== ':cancel') {
-              resolve({ action: 'accept', content: { value: null, custom_value: trimmed } });
-              return;
-            }
-          }
-
-          const parts = trimmed.split(',').map((s) => s.trim());
-          const selected: string[] = [];
-          for (const part of parts) {
-            const idx = parseInt(part, 10);
-            if (!Number.isInteger(idx) || String(idx) !== part || idx < 1 || idx > choices.length) {
-              resolved = false;
-              isFirstPrompt = false;
-              bot.telegram.sendMessage(
-                chatId,
-                `❌ Invalid selection. Enter comma-separated numbers between 1 and ${choices.length}.`,
-                threadOpts,
-              ).catch(() => {});
-              // H1: abort guard before re-registration.
-              if (options.signal.aborted) return;
-              setPending(handleText);
-              // H1: re-attach abort listener for the next wait.
-              options.signal.addEventListener('abort', onAbort, { once: true });
-              return;
-            }
-            selected.push(choices[idx - 1]!);
-          }
-          resolve({ action: 'accept', content: { value: selected } });
-          return;
-        }
-
-        // text (default)
-        if (trimmed === '' && !request.allowSkip) {
-          resolved = false;
-          isFirstPrompt = false;
-          bot.telegram.sendMessage(chatId, '❌ Please enter a response (or type :cancel to skip).', threadOpts).catch(() => {});
-          // H1: abort guard before re-registration.
-          if (options.signal.aborted) return;
-          setPending(handleText);
-          // H1: re-attach abort listener for the next wait.
-          options.signal.addEventListener('abort', onAbort, { once: true });
-          return;
-        }
-        // Validate minLength / maxLength constraints (shared with CLI path).
-        if (trimmed !== '') {
-          const textResult = validateTextAnswer(trimmed, request);
-          if (!textResult.ok) {
-            resolved = false;
-            isFirstPrompt = false;
-            bot.telegram.sendMessage(chatId, `❌ ${textResult.message}`, threadOpts).catch(() => {});
-            // H1: abort guard before re-registration.
-            if (options.signal.aborted) return;
-            setPending(handleText);
-            // H1: re-attach abort listener for the next wait.
-            options.signal.addEventListener('abort', onAbort, { once: true });
-            return;
-          }
-        }
-        resolve({ action: 'accept', content: { value: trimmed } });
-      }
-
-      // Register intercept
-      setPending(handleText);
-
-      // Build prompt text
-      let promptText = displayText;
-      if (qType === 'multi_choice') {
-        const choices = request.choices ?? [];
-        const choiceList = choices.map((c, i) => `${i + 1}. ${escapeHtml(c)}`).join('\n');
-        promptText += `\n\n${choiceList}\n\nEnter comma-separated numbers (e.g. 1,3)`;
-        if (request.allowCustom) {
-          promptText += '\n\n<i>Or type any free-form text as a custom answer.</i>';
-        }
-      } else if (qType === 'number') {
-        const boundsHint =
-          request.min !== undefined && request.max !== undefined
-            ? ` (${request.min}–${request.max})`
-            : request.min !== undefined
-            ? ` (≥${request.min})`
-            : request.max !== undefined
-            ? ` (≤${request.max})`
-            : '';
-        promptText += `\n\nEnter a number${boundsHint}`;
-      }
-      if (isFirstPrompt) {
-        if (request.allowSkip) {
-          promptText += '\n\n<i>Enter empty to skip, or :cancel to cancel.</i>';
-        } else {
-          promptText += '\n\n<i>Type :cancel to cancel.</i>';
-        }
-      }
-
-      bot.telegram.sendMessage(chatId, promptText, { parse_mode: 'HTML', ...threadOpts }).catch(() => {
-        if (!resolved) {
-          resolved = true;
-          options.signal.removeEventListener('abort', onAbort);
-          // M6: log sendMessage failure so callers can diagnose silent declines
-          // without a visible error (e.g., MarkdownV2 parse failure, network error).
-          console.warn('[elicitation-handler] sendMessage failed; declining elicitation for route', key);
-          deletePending();
-          resolve({ action: 'decline' });
-        }
-      });
-    });
+    return handleTextElicitation(
+      {
+        chatId,
+        threadOpts,
+        request,
+        signal: options.signal,
+        bot,
+        setPending,
+        deletePending,
+        key,
+        messageHandler,
+      },
+      qType,
+      displayText,
+    );
   };
 }

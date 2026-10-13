@@ -2,9 +2,7 @@ import { Command } from 'commander';
 import { env } from '../../config/env.js';
 import ora from 'ora';
 
-import * as path from 'node:path';
-import { welcomeBanner } from '../render.js';
-import { registerCleanup, runCleanupFunctions } from '../../utils/cleanupRegistry.js';
+import { runCleanupFunctions } from '../../utils/cleanupRegistry.js';
 import { activateDumpPrompt } from '../shared-helpers.js';
 import { applySharedChatOptions } from './shared-command-options.js';
 import { palette } from '../palette.js';
@@ -12,48 +10,41 @@ import { setTerminalTitleIfEnabled, formatTerminalTitle } from '../_lib/capture-
 import { formatCwd } from '../format-cwd.js';
 import { bootstrapSession } from './interactive/bootstrap.js';
 import { drainBootWarnings } from './interactive/boot-warnings.js';
-import { printFirstRunBanner } from './interactive/first-run.js';
-import { elicitationRouter } from '../../agent/elicitation-router.js';
-import { initTranscript } from './interactive/transcript.js';
-import { runReplLoop, type TurnState } from './interactive/repl-loop.js';
-import { setupWorktree, setupWorktreeDeferred, type WorktreeHandle, type DeferredWorktree } from './interactive/worktree.js';
+import { runReplLoop } from './interactive/repl-loop.js';
+import { setupWorktree, setupWorktreeDeferred, type WorktreeHandle } from './interactive/worktree.js';
 import { bootPruneWorktrees } from './interactive/boot-prune.js';
-import { runFirstTurnAutoname } from './interactive/worktree-autoname.js';
 import { getApiKey } from '../shared-helpers.js';
 import { loadConfig } from '../config.js';
-import { resolveResumeTarget } from '../resume-session.js';
 import type { CliOptions, InteractiveCtx } from './interactive/shared.js';
 import { applyTheme, resolveTheme, resolveThemeMode } from '../theme.js';
-import { REPL_SPINNER_OPTIONS, printResumeBanner } from './interactive/shared.js';
+import { REPL_SPINNER_OPTIONS } from './interactive/shared.js';
 import { handleCommandError } from '../errors/index.js';
-import { type UpdateInfo, printUpdateBanner } from '../update-checker.js';
-import { getVersion } from '../version.js';
-import { runPicker } from '../render/picker.js';
-import {
-  resolveWorktreeDisposition,
-  resolveWorktreeExitPolicy,
-} from './interactive/worktree-disposition.js';
+import { type UpdateInfo } from '../update-checker.js';
+import { resolveWorktreeExitPolicy } from './interactive/worktree-disposition.js';
 import { installUnknownCommandGuard, checkBareUnknownCommand } from './interactive/unknown-command-guard.js';
-import { errorMessage } from '../../utils/errors.js';
-import { sleep } from '../../utils/sleep.js';
 
 // Lifecycle-phase siblings
 import {
   setInteractiveUpdateNotices as _setInteractiveUpdateNotices,
-  getAndClearUpdateNotices,
-  parseThinkingUiMode,
   resolveThinkingUi,
   isAutonameEnabled,
   startupHintLine,
   formatAutonameSkipReason,
 } from './interactive/interactive.session-init.js';
-import {
-  installSignalHandlers,
-  printExitSummary,
-  cancelSessionBackgroundWork,
-  makeSessionSaver,
-} from './interactive/interactive.cleanup.js';
+import { printExitSummary } from './interactive/interactive.cleanup.js';
 import { measurePreArmAnchorRow } from './interactive/interactive.pty-setup.js';
+
+// Extracted helpers (option registration + named action helpers).
+import {
+  applyInteractiveOptions,
+  buildFirstTurnHook,
+  buildDispositionResolver,
+  registerSessionCleanup,
+  wireSessionSubsystems,
+  printStartupBanner,
+  validateResumeOption,
+  resolveWorktreeSetupArg,
+} from './interactive.register-helpers.js';
 
 export { formatToolResultLine } from './interactive/tool-lane.js';
 
@@ -79,49 +70,32 @@ export function setInteractiveUpdateNotices(
 
 export function registerInteractiveCommand(program: Command): void {
   // Build the command with shared options, then append interactive-only flags.
-  const interactiveCmd = applySharedChatOptions(
-    program
-      .command('interactive', { isDefault: true })
-      .description('Start interactive chat session')
-      .argument(
-        '[input...]',
-        'Optional first message — or a /slash-command — auto-submitted as the opening turn. ' +
-          'E.g. `afk "what does this project do"` or `afk /review`. A bare `afk` starts an empty REPL.',
-      ),
-    {
-      maxTurnsDefault: '100',
-      themeDescriptionSuffix: 'Toggle live with /theme.',
-      worktreeDescription:
-        'Create a git worktree for an isolated session. Optional value sets the branch name; ' +
-        'otherwise auto-named. On clean interactive exit, choose whether to keep or delete it; ' +
-        'dirty worktrees are always preserved.',
-      worktreeBaseDescriptionSuffix:
-        ', or interactive.worktreeBase in afk.config.json.',
-      dangerouslySkipPermissionsDescription:
-        'Force bypass mode (already the default for new installs): skip path-approval prompts; ' +
-        'read/write ANY path with no confirmation. Toggle live with Shift+Tab (permission-mode cycle); ' +
-        'disable persistently with `afk config set permissionMode default`. Does not affect ask_question.',
-    },
-  )
-    .option('--thinking-ui <mode>', 'Thinking display mode: summary|live|digest|off. Default live. Also: AFK_THINKING_UI env, or interactive.thinkingUi in afk.config.json.', parseThinkingUiMode)
-    .option('--debug', 'Show SDK init metadata on startup; enables /debug command', false)
-    .option(
-      '--worktree-on-exit <ask|keep|remove>',
-      'Clean-worktree quit policy. Default: ask on TTY, remove otherwise. Also: AFK_WORKTREE_ON_EXIT, or interactive.worktreeOnExit in afk.config.json.',
-    )
-    .option(
-      '--no-worktree-autoname',
-      'Disable mid-session rename of auto-named worktrees from the first user message via haiku. Default on. Also: AFK_WORKTREE_AUTONAME=0, or interactive.worktreeAutoname:false in afk.config.json.',
-    )
-    .option(
-      '--no-shell-passthrough',
-      'Disable the ! shell-passthrough feature. When set, inputs beginning with ! are sent to the model as literal text instead of being executed as shell commands. Also: AFK_SHELL_PASSTHROUGH set to 0, false, off, or no.',
-    )
-    .option(
-      '--plain',
-      'Force the session to fully behave like a non-TTY surface for rendering: append-only plain-stdout output instead of the live-overlay renderer, AND the input surface downgrades to the simple line reader — even when stdout/stdin ARE a TTY. Full opt-out escape hatch for tmux/SSH/multiplexer sessions. Also: AFK_PLAIN_OUTPUT=1. Non-TTY sessions (pipes, CI) already use this path by default.',
-    )
-    .action(async (input: string[], options: CliOptions) => {
+  const interactiveCmd = applyInteractiveOptions(
+    applySharedChatOptions(
+      program
+        .command('interactive', { isDefault: true })
+        .description('Start interactive chat session')
+        .argument(
+          '[input...]',
+          'Optional first message — or a /slash-command — auto-submitted as the opening turn. ' +
+            'E.g. `afk "what does this project do"` or `afk /review`. A bare `afk` starts an empty REPL.',
+        ),
+      {
+        maxTurnsDefault: '100',
+        themeDescriptionSuffix: 'Toggle live with /theme.',
+        worktreeDescription:
+          'Create a git worktree for an isolated session. Optional value sets the branch name; ' +
+          'otherwise auto-named. On clean interactive exit, choose whether to keep or delete it; ' +
+          'dirty worktrees are always preserved.',
+        worktreeBaseDescriptionSuffix:
+          ', or interactive.worktreeBase in afk.config.json.',
+        dangerouslySkipPermissionsDescription:
+          'Force bypass mode (already the default for new installs): skip path-approval prompts; ' +
+          'read/write ANY path with no confirmation. Toggle live with Shift+Tab (permission-mode cycle); ' +
+          'disable persistently with `afk config set permissionMode default`. Does not affect ask_question.',
+      },
+    ),
+  ).action(async (input: string[], options: CliOptions) => {
       // Issue #710 mode 2: a bare unknown token with no flags (`afk skill`)
       // reaches this action because Commander's default-command swallows it
       // silently. Intercept here — before any side-effect — when the token is
@@ -145,28 +119,7 @@ export function registerInteractiveCommand(program: Command): void {
 
       // Validate --resume / --continue early — before any side effects so a
       // bad resume id never leaks a partially-created worktree directory.
-      if (options.resume || options.continue) {
-        try {
-          const earlyTarget = resolveResumeTarget({ resume: options.resume, continue: options.continue });
-          if (earlyTarget && !earlyTarget.stored) {
-            spinner.fail('Session not found');
-            process.stderr.write(
-              `Error: session not found: ${JSON.stringify(options.resume)}\n` +
-                `Run \`afk i\` then \`/resume\` to list saved sessions.\n`,
-            );
-            process.exitCode = 1;
-            return;
-          }
-        } catch (err) {
-          spinner.fail('Session not found');
-          process.stderr.write(
-            `Error: ${errorMessage(err)}\n` +
-              `Run \`afk i\` then \`/resume\` to list saved sessions.\n`,
-          );
-          process.exitCode = 1;
-          return;
-        }
-      }
+      if (!validateResumeOption(options, spinner).ok) return;
 
       const cliConfig = loadConfig();
       const worktreeExitPolicy = resolveWorktreeExitPolicy({
@@ -183,10 +136,7 @@ export function registerInteractiveCommand(program: Command): void {
 
       const branchPrefixOverride = env.AFK_WORKTREE_BRANCH_PREFIX ?? cliConfig.interactive?.worktreeBranchPrefix;
       const worktreeBaseOverride = options.worktreeBase ?? env.AFK_WORKTREE_BASE ?? cliConfig.interactive?.worktreeBase;
-      const worktreeSetupOpts: { branchPrefix?: string; baseRef?: string } = {};
-      if (branchPrefixOverride !== undefined) worktreeSetupOpts.branchPrefix = branchPrefixOverride;
-      if (worktreeBaseOverride !== undefined) worktreeSetupOpts.baseRef = worktreeBaseOverride;
-      const worktreeSetupArg = Object.keys(worktreeSetupOpts).length > 0 ? worktreeSetupOpts : undefined;
+      const worktreeSetupArg = resolveWorktreeSetupArg(branchPrefixOverride, worktreeBaseOverride);
 
       // Boot-time worktree sweep before setupWorktree so the new worktree
       // isn't judged as a ghost. 1.5s hard budget, silent on failure.
@@ -198,18 +148,21 @@ export function registerInteractiveCommand(program: Command): void {
       const apiToken = getApiKey();
       const useDeferredWorktree = options.worktree === true && autonameAllowed && apiToken !== undefined;
 
+      // Mutable ref so helpers (cleanup, disposition) always see the current handle.
+      const worktreeHandleRef: { current: WorktreeHandle | undefined } = { current: undefined };
       let worktreeCwd: string | undefined;
-      let worktreeHandle: WorktreeHandle | undefined;
-      let deferredWorktree: DeferredWorktree | undefined;
+      let deferredWorktree: Awaited<ReturnType<typeof setupWorktreeDeferred>> | undefined;
+
       if (options.worktree !== undefined) {
         try {
           if (useDeferredWorktree) {
             deferredWorktree = await setupWorktreeDeferred(worktreeSetupArg);
             spinner.text = 'Worktree will be named from your first message';
           } else {
-            worktreeHandle = await setupWorktree(options.worktree, worktreeSetupArg);
-            worktreeCwd = worktreeHandle.path;
-            spinner.text = `Worktree ready at ${worktreeHandle.path} (branch: ${worktreeHandle.branch})`;
+            const handle = await setupWorktree(options.worktree, worktreeSetupArg);
+            worktreeHandleRef.current = handle;
+            worktreeCwd = handle.path;
+            spinner.text = `Worktree ready at ${handle.path} (branch: ${handle.branch})`;
           }
         } catch (err) { spinner.fail('Worktree setup failed'); handleCommandError(err); }
       }
@@ -241,133 +194,50 @@ export function registerInteractiveCommand(program: Command): void {
       // hook BEFORE the turn runs, so the worktree is created with its final
       // name before any tool call fires — no race, no directory move.
       if (deferredWorktree !== undefined && apiToken !== undefined) {
-        const deferred = deferredWorktree;
-        const token = apiToken;
-        ctx.firstTurnHook = async (firstMessage: string): Promise<void> => {
-          const namingSpinner = ora({ text: 'Naming & creating worktree…', ...REPL_SPINNER_OPTIONS }).start();
-          const outcome = await runFirstTurnAutoname({
-            deferred,
-            message: firstMessage,
-            token,
-            session: ctx.session.current,
-            ...(branchPrefixOverride !== undefined ? { branchPrefix: branchPrefixOverride } : {}),
-          }).finally(() => namingSpinner.stop());
-          if (outcome.status === 'created' || outcome.status === 'created-fallback') {
-            worktreeHandle = deferred.handle();
-            ctx.stats.cwd = outcome.path;
-            const rel = path.relative(process.cwd(), outcome.path) || outcome.path;
-            const reasonText = outcome.status === 'created-fallback'
-              ? formatAutonameSkipReason(outcome.reason, outcome.detail)
-              : undefined;
-            const note = reasonText !== undefined ? palette.dim(` — ${reasonText}`) : '';
-            console.log(
-              palette.dim('  ↪ worktree: ') + `${rel} ` +
-              palette.dim(`(branch: ${outcome.branch})`) + note,
-            );
-          } else {
-            console.warn(
-              palette.warning('⚠ ') + `Worktree creation failed: ${outcome.reason}. ` +
-              palette.dim(`Continuing in ${formatCwd(process.cwd(), { maxWidth: 60 })} (no isolation).`),
-            );
-          }
-        };
+        ctx.firstTurnHook = buildFirstTurnHook({
+          deferred: deferredWorktree,
+          apiToken,
+          ctx,
+          branchPrefixOverride,
+          worktreeHandleRef,
+        });
       }
 
       // Invariant: the picker owns raw stdin until it settles, so a signal-driven
       // shutdown MUST be able to cancel it via pickerAbort.
       const pickerAbort = new AbortController();
-      let dispositionResolution: Promise<void> | undefined;
-      ctx.resolveWorktreeDisposition = (canPrompt: boolean): Promise<void> => {
-        if (dispositionResolution !== undefined) return dispositionResolution;
-        const compositor = canPrompt ? ctx.slashCtx.getCompositor?.() ?? null : null;
-        dispositionResolution = resolveWorktreeDisposition({
-          ...(compositor !== null
-            ? { picker: (o) => runPicker(compositor, { ...o, signal: AbortSignal.any([pickerAbort.signal, AbortSignal.timeout(30_000)]) }) }
-            : {}),
-          isTTY: canPrompt && Boolean(process.stdout.isTTY),
-          policy: worktreeExitPolicy,
-          turnCount: ctx.stats.totalTurns,
-          hasWorktree: worktreeHandle !== undefined,
-          console,
-        }).then((disposition) => { ctx.worktreeDisposition = disposition; });
-        return dispositionResolution;
-      };
-
-      // Ordering matters: session close → MCP disconnect → worktree cleanup.
-      registerCleanup(async () => {
-        await ctx.resolveWorktreeDisposition?.(false);
-        ctx.teardownTrustedSkillEvents?.();
-        elicitationRouter.uninstall();
-        ctx.bgSummarizer?.stop();
-        // Background subagents, Ctrl+B-detached calls (Invariant:D3) and
-        // `bash run_in_background` process jobs all stop with the session.
-        await cancelSessionBackgroundWork(ctx);
-        await Promise.race([
-          ctx.session.current.close(),
-          sleep(2000, { unref: true }),
-        ]);
-        if (ctx.mcpManager) await ctx.mcpManager.disconnectAll();
-        ctx.memoryStore.close();
-        if (worktreeHandle !== undefined) {
-          await worktreeHandle.cleanup({ force: ctx.stats.totalTurns === 0, disposition: ctx.worktreeDisposition });
-        }
+      ctx.resolveWorktreeDisposition = buildDispositionResolver({
+        ctx,
+        pickerAbort,
+        worktreeExitPolicy,
+        worktreeHandleRef,
       });
 
+      // Ordering matters: session close → MCP disconnect → worktree cleanup.
+      registerSessionCleanup({ ctx, worktreeHandleRef });
+
       spinner.succeed('Session ready');
-      if (worktreeHandle !== undefined) {
+      if (worktreeHandleRef.current !== undefined) {
         console.log(
           palette.dim('  ↪ worktree: ') +
-          palette.dim(formatCwd(worktreeHandle.path, { maxWidth: 60 })) +
-          palette.dim(` (branch: ${worktreeHandle.branch})`),
+          palette.dim(formatCwd(worktreeHandleRef.current.path, { maxWidth: 60 })) +
+          palette.dim(` (branch: ${worktreeHandleRef.current.branch})`),
         );
       } else if (deferredWorktree !== undefined) {
         console.log(palette.dim('  ↪ worktree: named & created from your first message'));
       }
 
-      const transcript = await initTranscript(() => ctx.stats.model);
-      console.log(palette.dim(`  transcript: ${transcript.path()}`));
-      registerCleanup(async () => { await transcript.appendEnded(); });
-      ctx.setTranscriptPathGetter?.(() => transcript.path());
       ctx.exitReasonRef = { current: undefined };
-      const { saveCurrentSession, isSaved } = makeSessionSaver(ctx, ctx.exitReasonRef);
-      registerCleanup(async () => {
-        if (isSaved()) return;
-        try { saveCurrentSession(); } catch { /* session-sidecar best-effort */ }
-      });
-
-      const turnState: TurnState = { turnInFlight: false, lastSigintAt: 0 };
-      ctx.getInFlight = () => turnState.turnInFlight;
-
-      const { handleSigint, removeListeners } = installSignalHandlers({ ctx, turnState, pickerAbort, exitReasonRef: ctx.exitReasonRef });
-      registerCleanup(async () => { removeListeners(); });
+      const { transcript, saveCurrentSession, turnState, handleSigint } =
+        await wireSessionSubsystems(ctx, ctx.exitReasonRef, pickerAbort);
+      console.log(palette.dim(`  transcript: ${transcript.path()}`));
 
       // Screen clear then measure the pre-arm anchor row (newlines from
       // banner/notices) so the persistent compositor starts below them.
       process.stdout.write('\x1b[3J\x1b[2J\x1b[H');
-      const { anchorRow } = await measurePreArmAnchorRow(async () => {
-        const notices = getAndClearUpdateNotices();
-        if (notices !== null) {
-          if (notices.pendingMessage !== null) process.stderr.write(notices.pendingMessage);
-          if (notices.updateInfo !== null) printUpdateBanner(notices.updateInfo);
-        }
-        const resumeMeta = ctx.resumeTarget
-          ? `Resuming ${ctx.resumeTarget.id} · ${ctx.stats.totalTurns} prior turn${ctx.stats.totalTurns === 1 ? '' : 's'}`
-          : undefined;
-        console.log(welcomeBanner({
-          mode: 'Interactive Mode',
-          model: ctx.stats.model,
-          version: getVersion(),
-          ...(worktreeHandle !== undefined ? { worktree: worktreeHandle.branch } : {}),
-          cwd: worktreeCwd ?? process.cwd(),
-          ...(resumeMeta !== undefined ? { metaLine: resumeMeta } : {}),
-          hintLine: startupHintLine(),
-        }));
-        if (bootPruneNotice !== undefined) console.log(palette.dim(`  ${bootPruneNotice}`));
-        if (ctx.resumeTarget) await printResumeBanner(ctx.stats, ctx.completionWriter);
-        printFirstRunBanner({ isTTY: Boolean(process.stdout.isTTY), isResume: ctx.resumeTarget !== undefined });
-        drainBootWarnings(ctx.bootWarnings);
-        console.log();
-      });
+      const { anchorRow } = await measurePreArmAnchorRow(() =>
+        printStartupBanner({ ctx, worktreeHandleRef, worktreeCwd, bootPruneNotice }),
+      );
 
       ctx.preArmAnchorRow = anchorRow;
       setTerminalTitleIfEnabled(process.stdout, formatTerminalTitle(process.cwd(), false));
@@ -379,7 +249,7 @@ export function registerInteractiveCommand(program: Command): void {
         setTerminalTitleIfEnabled(process.stdout, '');
         // No signal handler wrote exitReason → stdin reached EOF.
         ctx.exitReasonRef!.current ??= 'eof';
-        printExitSummary(ctx, worktreeHandle, saveCurrentSession);
+        printExitSummary(ctx, worktreeHandleRef.current, saveCurrentSession);
         console.log(palette.info('ℹ ') + 'Goodbye!');
         await runCleanupFunctions();
         process.exit(0);

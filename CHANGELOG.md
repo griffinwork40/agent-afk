@@ -11,6 +11,29 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.312.5] - 2026-10-13
+
+### Changed
+- split registerInteractiveCommand under 200-line ceiling (#3651) (7cebc1cf)
+
+## [5.312.4] - 2026-10-13
+
+### Changed
+- split setupSurface under 200-line ceiling (#3648) (26ffc64e)
+
+## [5.312.3] - 2026-10-13
+
+### Changed
+- split renderToolLaneOverlay under 200-line ceiling (#3649) (52e8909b)
+- add shared execFileAsync (#3653) (20968114)
+- add abortReason helper for AbortSignal.reason sites (#3654) (ccfe7fe5)
+- adopt isErrnoCode/isEnoent at errno cast sites (#3655) (79026f23)
+
+## [5.312.2] - 2026-10-13
+
+### Fixed
+- narrow-terminal layout: wrap to real width, force spill below 20 cols, add edge-case tests (#3643) (2cc5fb5f)
+
 ## [5.312.1] - 2026-10-12
 
 ### Fixed
