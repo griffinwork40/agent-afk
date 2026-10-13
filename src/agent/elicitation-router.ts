@@ -35,6 +35,7 @@
 import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js';
 import { pushIfConfigured } from '../telegram/push.js';
 import { setPresenceBlocked } from './awareness/presence.js';
+import { recordQuestion, markResolved } from './elicitation/pending-question-store.js';
 
 export type ElicitationHandler = (
   request: ElicitationRequest,
@@ -42,6 +43,18 @@ export type ElicitationHandler = (
 ) => Promise<ElicitationResult>;
 
 const DECLINE: ElicitationResult = { action: 'decline' };
+
+/**
+ * Derive a stable question id from the elicitation request. Prefers the
+ * SDK-supplied `elicitationId` so records are de-duplicated on retry. Falls
+ * back to a timestamp-based id when the SDK omits the field (older servers).
+ */
+function questionIdFor(request: ElicitationRequest): string {
+  if (request.elicitationId !== undefined && request.elicitationId !== '') {
+    return request.elicitationId;
+  }
+  return `router-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
 
 /**
  * Cap on the model-authored `message` echoed to Telegram. The prompt itself is
@@ -190,6 +203,10 @@ class ElicitationRouter {
       (options.sessionKey !== undefined ? this.sessionHandlers.get(options.sessionKey) : undefined)
       ?? this.handler;
 
+    // Derive a stable question id early so both the record and resolve calls
+    // use the same key regardless of which branch the queue body takes.
+    const questionId = questionIdFor(request);
+
     // Chain onto the serial queue; each call waits for all prior calls to finish.
     this.queue = this.queue.then(async () => {
       try {
@@ -198,10 +215,29 @@ class ElicitationRouter {
           resolveResult(DECLINE);
           return;
         }
+
+        // Determine the surface label before branching so both the attended
+        // and unattended paths record a consistent value.
+        const surface = capturedHandler
+          ? (options.sessionKey !== undefined ? 'session-handler' : 'global-handler')
+          : 'unattended';
+
+        // Persist the question durably before the handler is called so that a
+        // crash between here and markResolved leaves a `pending` record that
+        // can be inspected on restart. Fire-and-forget errors: a storage
+        // failure must never block or fail the elicitation path.
+        try {
+          recordQuestion(questionId, options.sessionId, surface, request.message);
+        } catch {
+          // Storage failure is non-fatal. The in-memory elicitation path
+          // continues unaffected; durability is best-effort for this slice.
+        }
+
         if (!capturedHandler) {
           // No handler = unattended surface. Surface the prompt out-of-band
           // (Telegram) instead of declining silently, then DECLINE to continue.
           notifyUnattendedElicitation(request);
+          try { markResolved(questionId, 'decline'); } catch { /* non-fatal */ }
           resolveResult(DECLINE);
           return;
         }
@@ -239,6 +275,13 @@ class ElicitationRouter {
             capturedHandler(request, options).catch(() => DECLINE),
             abortPromise,
           ]);
+          // Record resolution durably. The action is 'decline' when the abort
+          // signal won the race (abortPromise resolves to DECLINE). Non-fatal:
+          // a storage failure must never affect the elicitation result path.
+          try {
+            const action = options.signal.aborted ? 'aborted' : (result.action ?? 'decline');
+            markResolved(questionId, action);
+          } catch { /* non-fatal */ }
           resolveResult(result);
         } finally {
           markBlocked(options.sessionId, false);
