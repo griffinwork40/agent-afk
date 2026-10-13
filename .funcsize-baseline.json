@@ -17,7 +17,6 @@
     "src/agent/tools/subagent/child-config.ts::buildChildConfig": { "loc": 327, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/subagent/foreground-promotion.ts::runForegroundWithPromotion": { "loc": 376, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/subagent/input-parse.ts::parseAgentInput": { "loc": 406, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/agent/worktree/worktree-sweep.ts::runSweep": { "loc": 420, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/browser/playwright/observe.ts::observePage": { "loc": 233, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/chat.ts::registerChatCommand": { "loc": 351, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive.ts::registerInteractiveCommand": { "loc": 315, "reason": "legacy: predates the function-size gate; pending helper extraction" },
