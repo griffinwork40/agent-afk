@@ -53,8 +53,8 @@ More specifically, the agents:
 5. **Searched for prior work**: papers (arXiv to 2026-10-14), the Harada–Munemasa and Atlas databases,
    GitHub code repositories, Zenodo, AI-result sites, and MathOverflow. They found two published
    non-symmetric W(27,16) classes, but no symmetric one.
-6. **Ran a kill lane**: an independent subagent, given only the matrix files and a fresh checker, tried to
-   show the result was invalid or already known. It could not.
+6. **Ran a kill lane**: a separate subagent was told to try to show the result invalid or already known; it wrote its
+   own checker and searched the literature and archives. It could not.
 
 ## What a human did
 
