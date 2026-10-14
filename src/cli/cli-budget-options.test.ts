@@ -110,6 +110,14 @@ describe('parseBudgetEnv (env-var parser — warns, never throws)', () => {
     parseBudgetEnv('bad', 'MY_CUSTOM_VAR');
     expect(warnSpy.mock.calls[0]?.[0]).toContain('MY_CUSTOM_VAR');
   });
+
+  // #3707: document that "Infinity" (a finite-false number) is rejected
+  it('warns and returns undefined for "Infinity" string (#3707)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = parseBudgetEnv('Infinity', 'AFK_MAX_BUDGET_USD');
+    expect(result).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('getMaxBudgetUsd / getTaskBudget (env-var readers)', () => {

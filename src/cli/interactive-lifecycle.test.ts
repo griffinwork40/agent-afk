@@ -1310,3 +1310,64 @@ describe('interactive bootstrap — path-approval grant wiring for OpenAI-compat
     expect(setAllowDirSpy).toHaveBeenCalledWith(noGrantsStub);
   });
 });
+
+/**
+ * Regression guard for #3707 (gap 2): `maxBudgetUsd` must reach `buildAgentSession`
+ * on the initial REPL bootstrap when `getMaxBudgetUsd` returns a finite value.
+ *
+ * We test this at the `buildSharedDeps` boundary — the pure function that
+ * assembles the session deps object bootstrap.ts passes to `buildAgentSession`.
+ * `buildSharedDeps` takes `maxBudgetUsd` as a first-class input and maps it
+ * straight through; this is the only transformation step between
+ * `getMaxBudgetUsd()` and the `AgentConfig` the session receives.
+ */
+describe('interactive bootstrap — maxBudgetUsd reaches buildAgentSession (#3707)', () => {
+  it('buildSharedDeps includes maxBudgetUsd: 3 in the returned deps object', async () => {
+    const { buildSharedDeps } = await import('./commands/interactive/bootstrap-session-builder.js');
+    const deps = buildSharedDeps({
+      sessionModel: 'sonnet',
+      resumeConfig: {},
+      systemPrompt: undefined,
+      systemPromptSource: undefined,
+      thinking: undefined,
+      effort: undefined,
+      maxOutputTokens: undefined,
+      maxToolUseIterations: undefined,
+      maxBudgetUsd: 3,
+      cliConfig: {},
+      providerFactory: vi.fn(),
+      hookRegistry: {} as never,
+      traceWriter: undefined,
+      effectiveCwd: undefined,
+      maxTurns: '10',
+      initialPermissionMode: undefined,
+    });
+    // maxBudgetUsd must survive the buildSharedDeps transformation so
+    // buildAgentSession (which reads deps.maxBudgetUsd) can forward it into
+    // the AgentConfig. A value of undefined here would silently drop the budget.
+    expect(deps.maxBudgetUsd).toBe(3);
+  });
+
+  it('buildSharedDeps leaves maxBudgetUsd undefined when not provided', async () => {
+    const { buildSharedDeps } = await import('./commands/interactive/bootstrap-session-builder.js');
+    const deps = buildSharedDeps({
+      sessionModel: 'sonnet',
+      resumeConfig: {},
+      systemPrompt: undefined,
+      systemPromptSource: undefined,
+      thinking: undefined,
+      effort: undefined,
+      maxOutputTokens: undefined,
+      maxToolUseIterations: undefined,
+      maxBudgetUsd: undefined,
+      cliConfig: {},
+      providerFactory: vi.fn(),
+      hookRegistry: {} as never,
+      traceWriter: undefined,
+      effectiveCwd: undefined,
+      maxTurns: '10',
+      initialPermissionMode: undefined,
+    });
+    expect(deps.maxBudgetUsd).toBeUndefined();
+  });
+});
