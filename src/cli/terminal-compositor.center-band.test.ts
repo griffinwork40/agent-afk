@@ -53,13 +53,18 @@ afterEach(() => { vi.unstubAllEnvs(); setProcCols(origProcCols); });
 
 type Scenario = (c: TerminalCompositor, s: MockStdout) => void;
 
-async function run(centered: boolean, scenario: Scenario, procCols: number = COLS): Promise<string[]> {
+async function run(
+  centered: boolean,
+  scenario: Scenario,
+  procCols: number = COLS,
+  rows: number = ROWS,
+): Promise<string[]> {
   const cols = COLS;
   setProcCols(procCols);
   __resetStdinClaimForTests();
   vi.stubEnv('AFK_CENTER_CONTENT', centered ? '1' : '');
   vi.stubEnv('AFK_TEXT_MEASURE', '100');
-  const stdout = makeStdout(cols, ROWS);
+  const stdout = makeStdout(cols, rows);
   const chunks: string[] = [];
   stdout.on('data', (x) => chunks.push(String(x)));
   const c = new TerminalCompositor({ stdout, stdin: makeStdin(), onCancel: vi.fn(), anchorRow: 1 });
@@ -67,7 +72,7 @@ async function run(centered: boolean, scenario: Scenario, procCols: number = COL
   scenario(c, stdout);
   const bytes = chunks.join('');
   try { c.disarm(); } catch { /* teardown best-effort */ }
-  const term = new HeadlessTerminal({ cols: stdout.columns, rows: ROWS, scrollback: 800, allowProposedApi: true });
+  const term = new HeadlessTerminal({ cols: stdout.columns, rows, scrollback: 800, allowProposedApi: true, convertEol: true }); // ONLCR, as libuv raw mode keeps it
   await termWrite(term, bytes);
   const lines = bufferLines(term);
   term.dispose();
@@ -167,6 +172,16 @@ describe('centered committed band (AFK_CENTER_CONTENT)', () => {
       const row = lines.find((l) => l.includes(k)) ?? '';
       expect(row, k).toBe(' '.repeat(MARGIN) + k);
     }
+  });
+
+  it('B8: the phase-1 overflow arm (no band room: 2-row terminal) paints rows with the margin', async () => {
+    const lines = await run(true, (c) => {
+      c.commitAbove('OVF_A\nOVF_B\nOVF_C\n');
+      repaint(c);
+    }, COLS, 2);
+    const ovf = lines.filter((l) => l.includes('OVF_'));
+    expect(ovf.length).toBeGreaterThan(0);
+    for (const l of ovf) expect(l.startsWith(' '.repeat(MARGIN) + 'OVF_'), l).toBe(true);
   });
 
   it('default path: centering off keeps full-width single-row wrapping', async () => {
