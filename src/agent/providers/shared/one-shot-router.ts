@@ -217,6 +217,8 @@ async function viaOpenAI(
   if (auth.source === 'chatgpt-oauth') {
     const wire = resolveWireMode(auth, false, binding.baseUrl);
     if (wire.mode === 'responses') {
+      // wire.baseURL is only set for chatgpt-oauth without a custom endpoint;
+      // fall back to binding.baseUrl to honour a user-configured base URL.
       const clientBaseURL = wire.baseURL ?? binding.baseUrl;
       const client = new OpenAI({
         apiKey: auth.apiKey,

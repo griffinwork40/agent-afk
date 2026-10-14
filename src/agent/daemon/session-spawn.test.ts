@@ -126,6 +126,14 @@ describe('parseDaemonEnvLimits', () => {
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 
+  // #3707: document that "Infinity" (a finite-false number) is rejected
+  it('returns undefined and warns for "Infinity" budget string (#3707)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, 'Infinity');
+    expect(parsedMaxBudget).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('both limits resolved in one call', () => {
     const { parsedMaxToolIters, parsedMaxBudget } = parseDaemonEnvLimits('10', '2.50');
     expect(parsedMaxToolIters).toBe(10);

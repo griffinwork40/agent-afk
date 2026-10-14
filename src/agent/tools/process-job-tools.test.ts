@@ -179,8 +179,11 @@ describe('filterBackgroundToolDefs', () => {
 describe('risk floor for background launches', () => {
   const ctx = { cwd: os.tmpdir(), workspaceRoot: os.tmpdir() };
   it('raises a safe-classified command to medium when backgrounded', () => {
-    expect(classifyRisk('bash', { command: 'cat x; python -m http.server' }, ctx)).toBe('safe');
-    expect(classifyRisk('bash', { command: 'cat x; python -m http.server', run_in_background: true }, ctx)).toBe('medium');
+    // `python -m http.server` is not a safe-table command, so the pair is
+    // `medium` on its own; a genuinely safe long-runner shows the floor.
+    expect(classifyRisk('bash', { command: 'cat x; python -m http.server' }, ctx)).toBe('medium');
+    expect(classifyRisk('bash', { command: 'tail -f server.log' }, ctx)).toBe('safe');
+    expect(classifyRisk('bash', { command: 'tail -f server.log', run_in_background: true }, ctx)).toBe('medium');
   });
   it('never lowers a higher classification', () => {
     expect(classifyRisk('bash', { command: 'rm -rf dist/', run_in_background: true }, ctx)).toBe('high');

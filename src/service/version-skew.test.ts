@@ -12,6 +12,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { tmpdir } from 'os';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
+import * as jsonFile from '../utils/json-file.js';
 
 // ---------------------------------------------------------------------------
 // Mock paths.ts to redirect sidecar writes to a temp directory.
@@ -88,21 +89,16 @@ describe('writeServiceStartupSidecar', () => {
   });
 
   it('swallows filesystem errors without throwing', () => {
-    // Place a file where the sidecar would be written, so the write fails
-    // with EISDIR or similar when the directory can't be created.
-    // We simulate this by placing a regular file at the sidecar path itself
-    // and then trying to write to that path as if it were a JSON file —
-    // this is a no-op (it would just overwrite), so instead we test that
-    // calling writeServiceStartupSidecar never propagates an exception even
-    // when the underlying mkdirSync/writeFileSync would throw. We verify
-    // this via the module's own error swallowing by spying on mkdirSync.
-    const fsMod = require('fs');
-    const orig = fsMod.mkdirSync;
-    fsMod.mkdirSync = () => { throw new Error('simulated EPERM'); };
+    // Simulate a write failure by making writeJsonFile throw. The function
+    // wraps the write in a try/catch so no error should propagate to the caller.
+    const spy = vi.spyOn(jsonFile, 'writeJsonFile').mockImplementation(() => {
+      throw new Error('simulated EPERM');
+    });
     try {
-      expect(() => writeServiceStartupSidecar('daemon', '5.305.5', 99)).not.toThrow();
+      const result = writeServiceStartupSidecar('daemon', '5.305.5', 99);
+      expect(result).toBe(false);
     } finally {
-      fsMod.mkdirSync = orig;
+      spy.mockRestore();
     }
   });
 });

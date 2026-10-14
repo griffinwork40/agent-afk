@@ -18,6 +18,7 @@ import { emitSessionPhase } from '../trace/emit.js';
 import { createDefaultTraceWriter } from '../trace/factory.js';
 import type { TraceSink, TraceWriter } from '../trace/index.js';
 import type { TraceEventInput } from '../trace/types.js';
+import type { HookTallyAliasedSink } from '../trace/hook-tally.js';
 import type { AgentConfig } from '../types.js';
 
 export interface DaemonSpawnOptions {
@@ -427,7 +428,10 @@ function makeGateBlockTraceWriter(
   counter: { count: number } | undefined,
 ): TraceSink | undefined {
   if (inner === undefined || counter === undefined) return inner;
-  return {
+  const shim: HookTallyAliasedSink = {
+    // Tally this shim's hook_decision emissions under the wrapped writer so
+    // the session's `hook_summary` (taken at seal on `inner`) includes them.
+    hookTallyKey: inner,
     getTracePath(): string {
       return inner.getTracePath();
     },
@@ -441,4 +445,5 @@ function makeGateBlockTraceWriter(
       return inner.write(event);
     },
   };
+  return shim;
 }

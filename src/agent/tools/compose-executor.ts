@@ -66,6 +66,8 @@ function emitLeafToolStrips(
       // reflects which tools were removed for THIS node, not the global
       // COMPOSE_LEAF_STRIPPED_TOOLS constant which may include tools the
       // agent's allowlist never declared.
+      // ra.strippedTools is always defined when leafNotice is set (same
+      // condition), so the ?? fallback is unreachable; kept for type safety.
       const strippedNames = ra.strippedTools?.join(', ') ?? [...COMPOSE_LEAF_STRIPPED_TOOLS].join(', ');
       void emitSessionPhase(traceWriter, {
         phase: 'compose_leaf_tools_stripped',

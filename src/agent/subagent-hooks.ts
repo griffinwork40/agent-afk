@@ -40,8 +40,10 @@ import type { HookEventName, TraceSink } from './trace/index.js';
 export interface SubagentHookDispatchOptions {
   signal?: AbortSignal;
   onError?: (err: Error) => void;
-  /** Witness-layer trace writer. When provided, every hook dispatch
-   *  emits a `hook_decision` event with the decision outcome. */
+  /** Witness-layer trace writer. When provided, every dispatch is routed
+   *  through `emitHookDecision`: informative outcomes are written as
+   *  `hook_decision` rows; pure pass-through outcomes are only counted in the
+   *  session's `hook_summary` (see trace/hook-tally.ts). */
   traceWriter?: TraceSink;
 }
 

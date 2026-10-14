@@ -10,6 +10,27 @@
 
 import type { AnthropicToolDef } from './types.js';
 
+/** Shared `where` property for read_witness and search_witness. */
+const WHERE_PROPERTY = {
+  type: 'object',
+  additionalProperties: { type: ['string', 'number', 'boolean', 'null'] },
+  description:
+    'Exact-match AND filter: maps dotted paths relative to the event to scalar values, ' +
+    'e.g. {"kind":"hook_decision","payload.decision":"block"} or ' +
+    '{"payload.hookEvent":"PreToolUse"}. Own properties only; segments __proto__, ' +
+    'constructor, prototype are rejected. A path that does not resolve is a mismatch.',
+} as const;
+
+/** Shared hook-trace semantics, appended to both tool descriptions. */
+const HOOK_SEMANTICS =
+  '\n\nHOOKS: hook_decision rows are written only when they carry information ' +
+  '(a decision such as block/approve, a reason, an approval outcome, or injected ' +
+  'context). Plain allow/pass-through dispatches are not written individually; ' +
+  'they are counted in one hook_summary event per session (written at seal, ' +
+  'counts[hookEvent][decision|"allow"]). A session with no hook_summary ' +
+  '(crashed, live, or recorded before this event existed) has UNKNOWN hook volume, ' +
+  'not zero. To find blocks, filter with where {"payload.decision":"block"}.';
+
 export const readWitnessTool: AnthropicToolDef = {
   name: 'read_witness',
   category: 'read',
@@ -25,7 +46,8 @@ export const readWitnessTool: AnthropicToolDef = {
     'conversation text, user/assistant messages, complete tool arguments, or ' +
     'tool output. To find a session by what was *discussed*, search transcripts ' +
     'or session events via bash (paths vary with AFK_STATE_DIR). ' +
-    'To recall cross-session context by topic, use memory_search.',
+    'To recall cross-session context by topic, use memory_search.' +
+    HOOK_SEMANTICS,
   input_schema: {
     type: 'object',
     properties: {
@@ -39,9 +61,10 @@ export const readWitnessTool: AnthropicToolDef = {
         items: { type: 'string' },
         description:
           'Filter by event kind(s). Values: tool_call, subagent_lifecycle, ' +
-          'session_phase, closure, abort, budget, hook_decision, browser_event, ' +
+          'session_phase, closure, abort, budget, hook_decision, hook_summary, browser_event, ' +
           'claim, compaction, background_agent, queued_user_message, session_sealed.',
       },
+      where: WHERE_PROPERTY,
       tool_name: {
         type: 'string',
         description: 'Filter tool_call events to only this tool name (e.g. "bash", "edit_file").',
@@ -69,15 +92,18 @@ export const searchWitnessTool: AnthropicToolDef = {
     'Search across multiple sessions\' witness traces for a text pattern. Returns matching ' +
     'trace events grouped by session. Use to find patterns across sessions — recurring errors, ' +
     'specific tool usage, cost spikes, or any text that appears in trace event payloads. ' +
-    'Scans the N most recent sessions (default 20). Results are capped at 200 total matches ' +
-    'across all scanned sessions.\n\n' +
+    'Scans the N most recent sessions (default 20), excluding the calling session\'s own ' +
+    'trace unless include_current_session is true. Results are capped at 200 total matches ' +
+    'across all scanned sessions; when the cap stops the scan the result carries ' +
+    'matchLimitReached: true and a hint (narrow with where, since, or kinds).\n\n' +
     'SCOPE: searches trace event payloads — tool names, session phases, subagent IDs, ' +
     'error classes, timing, and semantic snippets like subagent promptHead (first 80 ' +
     'chars), compaction summaries, and claims. Does NOT contain full conversation ' +
     'text, user/assistant messages, complete tool arguments, or tool output. ' +
     'To find a prior session by topic or what was said, search transcripts ' +
     'or session events via bash (paths vary with AFK_STATE_DIR), ' +
-    'or use memory_search for cross-session topic recall.',
+    'or use memory_search for cross-session topic recall.' +
+    HOOK_SEMANTICS,
   input_schema: {
     type: 'object',
     properties: {
@@ -108,6 +134,13 @@ export const searchWitnessTool: AnthropicToolDef = {
         description:
           'Filter tool_call events to only this tool name (e.g. "bash", "edit_file"). ' +
           'Non-tool_call events are excluded when set.',
+      },
+      where: WHERE_PROPERTY,
+      include_current_session: {
+        type: 'boolean',
+        description:
+          'Include the calling session\'s own trace (excluded by default, since it ' +
+          'contains the search in progress). Default: false.',
       },
     },
     required: ['query'],

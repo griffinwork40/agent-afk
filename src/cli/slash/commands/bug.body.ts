@@ -65,9 +65,12 @@ export function buildBugTitle(description: string): string {
   return `${firstLine.slice(0, MAX_TITLE_LENGTH - 1).trimEnd()}…`;
 }
 
-/** Body that mirrors the repo's bug_report.md sections. */
-export function buildBugBody(description: string, env: BugEnvironment): string {
-  const what = redactSecrets(description).trim() || '_Describe the bug._';
+/**
+ * Internal body builder that accepts already-redacted text.
+ * The truncation loop needs this to avoid double-redacting.
+ */
+function buildBugBodyFromRedacted(redactedDescription: string, env: BugEnvironment): string {
+  const what = redactedDescription.trim() || '_Describe the bug._';
   const envLines = [
     `- \`agent-afk\` version: ${env.version}`,
     `- Node version: ${env.nodeVersion}`,
@@ -94,6 +97,11 @@ export function buildBugBody(description: string, env: BugEnvironment): string {
   ].join('\n');
 }
 
+/** Body that mirrors the repo's bug_report.md sections. */
+export function buildBugBody(description: string, env: BugEnvironment): string {
+  return buildBugBodyFromRedacted(redactSecrets(description), env);
+}
+
 export function buildBugReport(description: string, env: BugEnvironment): BugReport {
   return { title: buildBugTitle(description), body: buildBugBody(description, env) };
 }
@@ -108,23 +116,29 @@ export function bugReportUrl(report: BugReport, repo: string = BUG_REPORT_REPO):
  * Build the link, shortening the description until the URL fits the limit.
  * Terminates: each pass removes at least 16 chars, and an empty description
  * yields a fixed-size body far below the limit.
+ *
+ * Security: redaction runs ONCE on the full description before any
+ * truncation. The loop slices the already-redacted text so a cut can never
+ * split a secret token and dodge the redaction regexes.
  */
 export function buildBugReportLink(
   description: string,
   env: BugEnvironment,
   maxLength: number = MAX_BUG_URL_LENGTH,
 ): BugReportLink {
-  let url = bugReportUrl(buildBugReport(description, env));
+  const redacted = redactSecrets(description);
+  const title = buildBugTitle(description);
+  let url = bugReportUrl({ title, body: buildBugBodyFromRedacted(redacted, env) });
   if (url.length <= maxLength) return { url, truncated: false };
 
-  let desc = description;
+  let desc = redacted;
   while (url.length > maxLength && desc.length > 0) {
     // Encoded length can exceed raw length (multi-byte, %XX), so cut by the
     // overflow but never by fewer than 16 chars to guarantee progress.
     const cut = Math.max(url.length - maxLength, 16);
     desc = desc.slice(0, Math.max(desc.length - cut, 0));
-    const body = buildBugBody(desc + TRUNCATION_MARKER, env);
-    url = bugReportUrl({ title: buildBugTitle(description), body });
+    const body = buildBugBodyFromRedacted(desc + TRUNCATION_MARKER, env);
+    url = bugReportUrl({ title, body });
   }
   return { url, truncated: true };
 }
