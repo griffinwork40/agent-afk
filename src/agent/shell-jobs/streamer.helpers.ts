@@ -9,13 +9,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { killProcessGroup } from '../../utils/kill-process-group.js';
 import { errorMessage } from '../../utils/errors.js';
-import {
-  makeAnsiStripper,
-  utf8SafeTruncate,
-  type AnsiStripper,
-  type ShellResult,
-  type ShellErrorReason,
-} from './streamer.js';
+import { makeAnsiStripper, utf8SafeTruncate, type AnsiStripper } from './streamer.utils.js';
+import { type ShellResult, type ShellErrorReason } from './streamer.js';
 
 // ---------------------------------------------------------------------------
 // Shared mutable capture state — passed by reference to helpers so every
@@ -155,9 +150,7 @@ export function wireStreams(
     // Guard pid !== 0: `process.kill(-0, …)` would signal THIS process's
     // own group.  Node never assigns pid 0 to a live child, but the guard
     // is cheap insurance. (PR #565 review: N3.)
-    if (pid !== 0 && !proc.killed) {
-      killProcessGroup(pid);
-    }
+    if (pid !== 0 && !proc.killed) killProcessGroup(pid);
   }
 
   function maybeOverflow(): void {
@@ -221,7 +214,8 @@ export function wireStreams(
  * // Invariant: `close` fires after all stdio `data` events have been
  * // delivered (Node stream ordering guarantee).  Therefore flushing the
  * // ANSI stripper in the `close` handler is always safe — every chunk has
- * // already been processed.
+ * // already been processed, unless the stream was cut short by the overflow
+ * // path (in which case the `settled` guard below prevents a double-settle).
  */
 export function wireExitHandlers(
   proc: ChildProcess,
@@ -233,6 +227,7 @@ export function wireExitHandlers(
   resolveResult: (r: ShellResult) => void,
 ): void {
   proc.on('error', (err) => {
+    if (state.settled) return;
     clearTimeout(timeoutHandle);
     abortSignal.removeEventListener('abort', abortHandler);
     resolveResult({
