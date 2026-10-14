@@ -1,4 +1,5 @@
 import { snapshotOperatorPermissions } from './operator-denied.js';
+import { resolveSlotDeniedTools } from './operator-denied.slots.js';
 import { isToolDenied, operatorDeniedReason } from './operator-denied.match.js';
 import { SessionToolDispatcher } from './dispatcher.js';
 import type { ToolPermissionConfig } from './permissions.js';
@@ -84,6 +85,21 @@ export function withOperatorDeniedDispatcher(
     setAllowAll: (allow: boolean) => inner.setAllowAll?.(allow),
   };
   return wrapped;
+}
+
+/**
+ * Per-query: guard a consumer-owned dispatcher with the per-slot deny list for
+ * `model` (`tools.disabledBySlot`). Unions with any construction-time
+ * `tools.disabled` guard already on `inner`; returns `inner` unchanged when
+ * the slot has no list, so the pre-feature path is untouched.
+ */
+export function withSlotDeniedDispatcher(
+  inner: ToolDispatcher | undefined,
+  model: unknown,
+  customNames: readonly string[] = [],
+): ToolDispatcher | undefined {
+  const denied = resolveSlotDeniedTools(model, customNames);
+  return denied.length === 0 ? inner : withOperatorDeniedDispatcher(inner, { deniedTools: denied });
 }
 
 /** Construct OpenAI options with a deny snapshot and guarded external dispatcher. */

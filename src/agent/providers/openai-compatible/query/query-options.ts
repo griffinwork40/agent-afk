@@ -39,6 +39,8 @@ export interface OpenAICompatibleQueryOptions {
    * the loop reduces to slice-2 text-only behavior.
    */
   toolDispatcher?: ToolDispatcher;
+  /** Rebuild dispatcher and catalog when the requested model's slot deny key changes. */
+  modelDispatcherFactory?: (model: string, permissionMode: string) => ToolDispatcher;
   /**
    * Provider callback invoked by `setPermissionMode()` to update the
    * provider-level `_currentPermissionMode`.
