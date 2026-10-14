@@ -22,6 +22,7 @@ import nodePath from 'node:path';
 interface StubPage {
   close: ReturnType<typeof vi.fn>;
   on: ReturnType<typeof vi.fn>;
+  off: ReturnType<typeof vi.fn>;
   mainFrame: ReturnType<typeof vi.fn>;
   url: ReturnType<typeof vi.fn>;
   goto: ReturnType<typeof vi.fn>;
@@ -57,6 +58,7 @@ function makeStubPage(): StubPage {
     close: vi.fn().mockResolvedValue(undefined),
     // `on` captures listeners so tests can fire them manually
     on: vi.fn(),
+    off: vi.fn(),
     mainFrame: vi.fn(),
     url: vi.fn().mockReturnValue('about:blank'),
     goto: vi.fn().mockResolvedValue({ status: () => 200 }),
@@ -673,6 +675,89 @@ describe('BrowserLauncher', () => {
       expect(out.httpStatus).toBeNull();
       expect(out.html).toBe('<html><body>no-response page</body></html>');
       expect(out.finalUrl).toBe('about:blank');
+      // Context must still be torn down.
+      expect(ctx.close).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // renderHtml — proxy refusal surfaces as EgressBlockedError (#3719 item 1)
+  // -------------------------------------------------------------------------
+
+  describe('renderHtml — proxy-originated refusal (#3719 item 1)', () => {
+    it('surfaces a proxy refusal for the render page as EgressBlockedError', async () => {
+      /**
+       * Strategy: inject a fake egressLog (RefusalLog) that has one pre-recorded
+       * refusal for the host:port the render page requested.  The stub page's
+       * `on('request', …)` listener is captured and fired manually so
+       * watchEgressRefusals attributes the refusal to THIS page.  When
+       * page.goto() subsequently throws (simulating the net::ERR abort that
+       * Chromium produces when the proxy refuses), renderHtml must re-throw the
+       * EgressBlockedError from the refusal log, not the raw navigation error.
+       */
+      const TARGET_URL = 'http://internal.corp:8080/secret';
+      const TARGET_KEY = 'internal.corp:8080';
+      const REFUSAL_REASON = 'refusing browser connection to internal.corp — private address';
+
+      // Fake RefusalLog: one refusal recorded AFTER any mark().
+      let markSeq = 0;
+      const fakeLog = {
+        mark: () => markSeq++,
+        refusalsSince: (m: number) =>
+          m < markSeq
+            ? [{ seq: markSeq, at: Date.now(), target: TARGET_KEY, reason: REFUSAL_REASON }]
+            : [],
+      };
+
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      // Inject the fake egress log so egressLog() returns it.
+      // BrowserLauncher.egressLog() returns this.egress when isActive().
+      // We can't easily swap the private field, so instead we test via the
+      // watchEgressRefusals path directly: we construct the scenario at the
+      // module level by mocking GuardedEgress on the launcher instance.
+      // The simplest seam: override egressLog() via prototype.
+      const orig = Object.getPrototypeOf(launcher) as { egressLog?: () => unknown };
+      const origEgressLog = orig.egressLog;
+      orig.egressLog = function () { return fakeLog; };
+
+      const ctx = makeStubContext();
+      currentStubBrowser.newContext.mockResolvedValueOnce(ctx);
+
+      ctx.newPage.mockImplementationOnce(async () => {
+        const p = makeStubPage();
+        // Capture the 'request' listener installed by watchEgressRefusals.
+        const requestListeners: Array<(r: unknown) => void> = [];
+        p.on.mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+          if (event === 'request') requestListeners.push(listener as (r: unknown) => void);
+          if (event === 'websocket') { /* captured but not fired */ }
+        });
+
+        // goto throws — simulates Chromium aborting due to proxy refusal.
+        p.goto.mockImplementationOnce(async () => {
+          // Fire the request listener first (page issued a request before abort).
+          for (const l of requestListeners) {
+            l({
+              url: () => TARGET_URL,
+              isNavigationRequest: () => true,
+              frame: () => p.mainFrame(),
+            });
+          }
+          throw new Error('net::ERR_TUNNEL_CONNECTION_FAILED');
+        });
+        p.url.mockReturnValue(TARGET_URL);
+        ctx._pages.push(p);
+        return p;
+      });
+
+      try {
+        await launcher.renderHtml(TARGET_URL, { timeoutMs: 5000, waitUntil: 'load' });
+        expect.fail('expected EgressBlockedError to be thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(Error);
+        expect((err as Error).message).toContain('refusing browser connection');
+      } finally {
+        orig.egressLog = origEgressLog;
+      }
       // Context must still be torn down.
       expect(ctx.close).toHaveBeenCalledTimes(1);
     });
