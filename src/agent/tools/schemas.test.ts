@@ -3,7 +3,10 @@ import {
   builtinToolSchemas,
   BUILTIN_TOOL_NAMES,
   agentTool,
+  composeTool,
+  skillTool,
 } from './schemas.js';
+import { CHILD_ALLOWED_TOOLS, COMPOSE_LEAF_STRIPPED_TOOLS } from './nesting.js';
 import { clipboardWriteTool, clipboardReadTool } from './schemas.interaction-tools.js';
 import { sendToSessionTool } from './schemas.peer.js';
 import { createScheduleTool, updateScheduleTool } from './schemas.schedule.js';
@@ -210,6 +213,24 @@ describe('agentTool', () => {
 
   it('is NOT included in BUILTIN_TOOL_NAMES', () => {
     expect(BUILTIN_TOOL_NAMES).not.toContain('agent');
+  });
+});
+
+describe('compose and skill tool descriptions', () => {
+  it('documents every tool unavailable to compose leaf nodes', () => {
+    expect(CHILD_ALLOWED_TOOLS).not.toContain('compose');
+    const unavailableTools = composeTool.description.match(/cannot call ([^.]+);/)?.[1];
+    expect(unavailableTools).toBeDefined();
+    for (const name of [...COMPOSE_LEAF_STRIPPED_TOOLS, 'compose']) {
+      expect(unavailableTools).toContain(`\`${name}\``);
+    }
+    expect(composeTool.description).toContain('parallel `agent` calls');
+    expect(composeTool.description).toContain('invoke `skill` once');
+  });
+
+  it('does not suggest compose nodes for parallel skill invocation', () => {
+    expect(skillTool.description).toContain('parallel `agent` calls');
+    expect(skillTool.description).not.toContain('via `agent` or `compose`');
   });
 });
 
