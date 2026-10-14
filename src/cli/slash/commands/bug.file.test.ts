@@ -32,7 +32,7 @@ function makeCompositor(key: Key): { compositor: unknown; rows: () => readonly s
 function makeCtx(compositor: unknown | null): { ctx: SlashContext; lines: string[] } {
   const lines: string[] = [];
   const stats: SessionStats = {
-    totalTurns: 0, totalCostUsd: 0, totalTokens: 0, totalDurationMs: 0,
+    totalTurns: 0, totalCostUsd: 0, unpricedTurns: 0, totalTokens: 0, totalDurationMs: 0,
     sessionStartTime: Date.now(), turnCosts: [], turnTokens: [], turns: [],
     model: 'sonnet', permissionMode: 'default',
   };

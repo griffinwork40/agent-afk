@@ -4,7 +4,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { canApplyLabels, createIssue, getGhLogin, getViewerPermission } from './gh.issue.js';
-import { GhError } from './gh.js';
+import { GhError, type ExecWithInputFn } from './gh.js';
 
 describe('canApplyLabels', () => {
   it('allows triage and above only', () => {
@@ -54,9 +54,9 @@ describe('createIssue', () => {
     );
   });
   it('omits --label when no labels are given', async () => {
-    const exec = vi.fn(async () => ({ stdout: 'u', stderr: '' }));
+    const exec = vi.fn<ExecWithInputFn>(async () => ({ stdout: 'u', stderr: '' }));
     await createIssue({ repo: 'o/r', title: 'T', body: 'b' }, exec);
-    const args = exec.mock.calls[0]![1] as string[];
+    const args = exec.mock.calls[0]![1];
     expect(args).not.toContain('--label');
   });
   it('throws GhError on failure', async () => {
