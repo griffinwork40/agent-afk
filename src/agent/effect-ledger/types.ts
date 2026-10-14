@@ -6,7 +6,7 @@
  * intent through its observed outcome. The record lifecycle is:
  *
  *   prepare   → write "pending" record (write-ahead, before execution)
- *   execute   → update to "executed" / "failed" / "ambiguous"
+ *   execute   → update to "executed" / "failed" / "unknown"
  *   reconcile → (future) update to "confirmed" after out-of-band verification
  *
  * @module agent/effect-ledger/types
@@ -24,8 +24,10 @@ export type EffectStatus =
   | 'executed'
   /** Independently confirmed to have taken effect (out-of-band check). */
   | 'confirmed'
-  /** Execution threw / returned an error result. */
+  /** Definitively rejected before sending or otherwise known not to apply. */
   | 'failed'
+  /** Dispatched, but no definitive remote outcome was observed. */
+  | 'unknown'
   /**
    * Execution succeeded locally but external confirmation is impossible or
    * ambiguous (e.g. network cut after send, no idempotency header support).
@@ -70,6 +72,10 @@ export interface EffectRecord {
   taskId?: string;
   /** Unix epoch ms when the record was written. */
   timestamp: number;
+  /** Previous uncertain attempt from which this retry proceeds. */
+  retryOf?: string;
+  /** First blocked retry acknowledged the need for remote verification. */
+  retryAcknowledgedAt?: number;
   /** Redacted summary of the tool output (set on execute). */
   result?: unknown;
   /** Unix epoch ms when a reconcile transition occurred. */
@@ -100,6 +106,7 @@ export interface PendingEffectInput {
   args: unknown;
   sessionId?: string;
   taskId?: string;
+  retryOf?: string;
 }
 
 /** Payload for transitioning a pending record after execution completes. */

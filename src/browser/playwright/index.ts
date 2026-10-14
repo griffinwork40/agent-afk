@@ -8,7 +8,7 @@
  * @module browser/playwright/index
  */
 
-import type { Page } from 'playwright';
+import type { Page, Response } from 'playwright';
 import type { BrowserProvider, OpenOutcome, ActOutcome } from '../provider.js';
 import type {
   ActInput,
@@ -32,6 +32,7 @@ import { resolveTarget } from './resolve-target.js';
 import { enforceDomainPolicy } from '../config.js';
 import { recheckLandedUrl } from './domain-recheck.js';
 import { writeScreenshotSidecar } from '../witness.js';
+import { checkNavigationEgress, checkRedirectChain, egressBlockOutcome, invalidateOnRefusal, mainRefusalOutcome, runActionWithRetry, watchEgressRefusals, watchMainFrameNavigation } from './egress-gate.js';
 
 // ---------------------------------------------------------------------------
 // Per-session state
@@ -114,6 +115,13 @@ export class PlaywrightProvider implements BrowserProvider {
    * blocked URLs never touch the browser process. The BrowserContext is
    * created lazily on first open() via ensurePage().
    *
+   * Invariant: the SSRF egress guard (`checkNavigationEgress` → `checkEgressTarget`) is applied
+   * BEFORE the domain policy check, blocking private/loopback/link-local/
+   * cloud-metadata ranges — including 169.254.169.254 (IMDS) and 127.x.x.x
+   * daemon surfaces — that the domain allow/block glob lists cannot cover.
+   * Honoured escape hatch: `AFK_WEB_ALLOW_PRIVATE_HOSTS=1` disables the guard,
+   * consistent with the same escape hatch on web_request / web_scrape (#2301).
+   *
    * Invariant: domain policy is ALSO re-enforced on the URL the tab actually
    * landed on, because goto() follows 30x redirects. Defense in depth — the
    * pre-navigation check is kept, not replaced. Both checks are required: the
@@ -121,6 +129,12 @@ export class PlaywrightProvider implements BrowserProvider {
    * redirect-laundered blocked host from being observed.
    */
   async open(input: OpenInput): Promise<OpenOutcome> {
+    // SSRF guard: block private/loopback/link-local/metadata ranges.
+    // Runs before the domain policy check and before any browser interaction.
+    // Honours AFK_WEB_ALLOW_PRIVATE_HOSTS, matching web_request / web_scrape.
+    const egressBlocked = await checkNavigationEgress(input.url);
+    if (egressBlocked) return egressBlocked;
+
     // Domain policy check before any browser interaction.
     const policyResult = enforceDomainPolicy(input.url, this.config);
     if (!policyResult.allowed) {
@@ -134,18 +148,26 @@ export class PlaywrightProvider implements BrowserProvider {
     const { sessionId } = input;
     const page = await this.launcher.ensurePage(sessionId);
     const state = this.ensureSessionState(sessionId);
+    // Clear any stale refusal from a prior iframe before this operation.
+    this.launcher.clearRequestGuardError(sessionId);
 
     let screenshotPath: string | null = null;
     let navError: unknown = null;
-
+    let navResponse: Response | null = null;
+    const egressWatch = watchEgressRefusals(page, this.launcher.egressLog());
     try {
-      await page.goto(input.url, {
+      navResponse = await page.goto(input.url, {
         timeout: input.timeoutMs ?? 30000,
         waitUntil: input.waitFor ?? 'load',
       });
     } catch (err) {
-      navError = err;
+      navError = this.launcher.consumeRequestGuardError(sessionId) ?? err;
     }
+
+    // Proxy refusal of the main navigation (any hop) wins, even when goto()
+    // rejected after commit or resolved onto Chromium's error page (#2313 r2).
+    const navBlocked = mainRefusalOutcome(egressWatch.stop(), input.url) ?? egressBlockOutcome(navError, input.url);
+    if (navBlocked) return invalidateOnRefusal(navBlocked, () => this.close({ sessionId }));
 
     // Re-check the LANDED url: goto() follows 30x redirects, so an allowed URL
     // can hand the tab to a blocked host after the pre-navigation check passed
@@ -161,16 +183,12 @@ export class PlaywrightProvider implements BrowserProvider {
       navError !== null && (landedUrl === '' || landedUrl === 'about:blank');
 
     if (!neverNavigated) {
-      const blocked = await recheckLandedUrl(
-        page,
-        this.config,
-        input.url,
-        () => this.close({ sessionId }),
-      );
-      if (blocked !== null) {
-        return blocked;
-      }
+      const redirectBlocked = await checkRedirectChain(navResponse, page.url(), this.launcher.egressLog() !== undefined);
+      if (redirectBlocked !== null) return invalidateOnRefusal(redirectBlocked, () => this.close({ sessionId }));
+      const blocked = await recheckLandedUrl(page, this.config, input.url, () => this.close({ sessionId }));
+      if (blocked !== null) return blocked;
     }
+    this.launcher.consumeRequestGuardError(sessionId);
 
     // Capture screenshot if requested or if navigation threw.
     if (input.screenshot === true || navError !== null) {
@@ -263,6 +281,8 @@ export class PlaywrightProvider implements BrowserProvider {
     }
 
     const state = this.ensureSessionState(sessionId);
+    // Clear any stale refusal from a prior iframe before this operation.
+    this.launcher.clearRequestGuardError(sessionId);
     const preActionUrl = page.url();
     const timeout = input.timeoutMs ?? 30000;
 
@@ -280,9 +300,7 @@ export class PlaywrightProvider implements BrowserProvider {
 
     // resolution.outcome === 'resolved'
     const { locator } = resolution;
-    let actionError: unknown = null;
-
-    // Execute the action with one retry on network/navigation errors.
+    // Execute the action (retry policy: runActionWithRetry).
     const executeAction = async (): Promise<void> => {
       switch (input.action) {
         case 'click':
@@ -323,32 +341,26 @@ export class PlaywrightProvider implements BrowserProvider {
       }
     };
 
-    try {
-      await executeAction();
-    } catch (err) {
-      // Retry once on navigation / network errors.
-      if (err instanceof Error && /navigation|net::ERR/i.test(err.message)) {
-        try {
-          await executeAction();
-        } catch (retryErr) {
-          actionError = retryErr;
-        }
-      } else {
-        actionError = err;
-      }
-    }
+    const stopNavWatch = watchMainFrameNavigation(page);
+    const egressWatch = watchEgressRefusals(page, this.launcher.egressLog());
+    // One retry on non-guard network errors; never after a guard/proxy refusal.
+    const actionError = await runActionWithRetry(executeAction, () => this.launcher.consumeRequestGuardError(sessionId), egressWatch);
+    // Consume any non-blocking refusal after a successful action.
+    if (actionError === null) this.launcher.consumeRequestGuardError(sessionId);
+
+    const actionNavResponse = stopNavWatch();
+    // A proxy-refused main-frame navigation is reported even when the locator
+    // action itself resolved (#2313 round 2, item 6).
+    const actionBlocked = mainRefusalOutcome(egressWatch.stop(), page.url()) ?? egressBlockOutcome(actionError, page.url());
+    if (actionBlocked) return invalidateOnRefusal(actionBlocked, () => this.close({ sessionId }));
+    // Redirect hops + connected IP of any action-triggered navigation (#2301).
+    const redirectBlocked = await checkRedirectChain(actionNavResponse, page.url(), this.launcher.egressLog() !== undefined);
+    if (redirectBlocked !== null) return invalidateOnRefusal(redirectBlocked, () => this.close({ sessionId }));
 
     // Check post-action URL for policy violations. Shared with open() so the
     // two navigation paths cannot drift apart — see domain-recheck.ts.
-    const blocked = await recheckLandedUrl(
-      page,
-      this.config,
-      preActionUrl,
-      () => this.close({ sessionId }),
-    );
-    if (blocked !== null) {
-      return blocked;
-    }
+    const blocked = await recheckLandedUrl(page, this.config, preActionUrl, () => this.close({ sessionId }));
+    if (blocked !== null) return blocked;
 
     // Capture screenshot if requested or if action threw.
     let screenshotPath: string | null = null;

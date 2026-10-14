@@ -19,6 +19,7 @@
 
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
+import { isEnoent } from '../../../utils/errors.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import { getWitnessRoot } from '../../../paths.witness.js';
 
@@ -127,8 +128,7 @@ export function loadViewer(capturePath: string | undefined, viewportRows: number
   try {
     raw = readFileSync(resolved, 'utf8');
   } catch (err: unknown) {
-    const code = (err as NodeJS.ErrnoException | null)?.code;
-    if (code === 'ENOENT') return { ok: false, error: 'expired' };
+    if (isEnoent(err)) return { ok: false, error: 'expired' };
     return { ok: false, error: 'read_error' };
   }
 

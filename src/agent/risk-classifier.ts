@@ -5,9 +5,11 @@
  * operator-facing UI (status line, permission prompts) and the audit log.
  * Does NOT wire to `permissions.onAsk` — that is Stream C's job.
  *
- * The bash rule table uses substring-matching against the raw command string
- * and is intentionally conservative: we catch the shapes a model naturally
- * emits; we do not attempt to parse shell syntax comprehensively.
+ * The bash rule tables use substring-matching against the raw command string
+ * and are intentionally conservative: we catch the shapes a model naturally
+ * emits; we do not attempt to parse shell syntax comprehensively. `high`
+ * tokens must additionally sit at a word start (see
+ * `risk-classifier.bash-boundary.ts`, #3534).
  *
  * BUILTIN_WRITE_DENYLIST from `src/agent/tools/handlers/write-denylist.ts`
  * is reused for the write_file / edit_file path-based risk check so the
@@ -19,6 +21,7 @@
 import { categorizeTool } from './tool-category.js';
 import { isBackgroundBashLaunch } from './tools/bash-background-flag.js';
 import { classifyFilePath, classifyPatchApply } from './risk-classifier.paths.js';
+import { findHighBashPattern } from './risk-classifier.bash-boundary.js';
 
 /** Three-tier risk level for a tool invocation. */
 export type RiskLevel = 'safe' | 'medium' | 'high';
@@ -131,6 +134,22 @@ const BASH_HIGH: readonly string[] = [
   'systemctl enable ',
   'systemctl start ',
   'systemctl daemon-reload',
+  // Real binaries whose names merely CONTAIN a token above (GNU coreutils `g*`
+  // on macOS, secure-rm, partitioners, sudoers editor). Plain `includes` used
+  // to catch them; word-start matching (#3534) needs them listed explicitly.
+  'grm ',
+  'srm ',
+  'gchmod',
+  'gchown',
+  'gdd if=',
+  'gdd of=',
+  'dcfldd',
+  'dc3dd',
+  'gsudo',
+  'sfdisk',
+  'cfdisk',
+  'gfdisk',
+  'visudo',
 ];
 
 /**
@@ -242,13 +261,12 @@ function extractFilePath(input: unknown): string {
 
 function classifyBash(cmd: string): RiskVerdict {
   // Invariant: scan the original command for HIGH before MEDIUM before SAFE.
-  // Wrappers and shell syntax can introduce executable positions anywhere;
-  // heredoc payloads may be executed later. Without a complete shell parser,
-  // neither boundary narrowing nor body stripping may lower main's verdict.
-  // Prose false positives are intentional until that safety can be proven.
-  for (const p of BASH_HIGH) {
-    if (cmd.includes(p)) return { level: 'high', reason: `bash-pattern: matched '${p}'` };
-  }
+  // No heredoc stripping or quote parsing: wrappers, interpreters and later
+  // consumers can execute any payload. HIGH tokens are only discounted when
+  // glued to a preceding word character (`platform `, `retrieval `), which
+  // can never start a shell word — see risk-classifier.bash-boundary.ts.
+  const high = findHighBashPattern(cmd, BASH_HIGH);
+  if (high !== undefined) return { level: 'high', reason: `bash-pattern: matched '${high}'` };
   for (const p of BASH_MEDIUM) {
     if (cmd.includes(p)) return { level: 'medium', reason: `bash-pattern: matched '${p}'` };
   }

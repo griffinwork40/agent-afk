@@ -10,6 +10,15 @@
 
 import type { BlockedByPolicy, BrowserConfig } from '../types.js';
 import { enforceDomainPolicy } from '../config.js';
+import { checkEgressTarget } from '../../http-client/egress-guard.js';
+
+function urlProtocol(rawUrl: string): string | null {
+  try {
+    return new URL(rawUrl).protocol;
+  } catch {
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Minimal page surface
@@ -50,8 +59,29 @@ export interface RecheckablePage {
 // Callers MUST invoke this before building an observation or capturing a
 // screenshot. Returning `BlockedByPolicy` is only half the guard; the other
 // half is that the blocked page's content is never read at all.
+
+/** Options threading into the SSRF guard for testability. */
+export interface RecheckOptions {
+  /**
+   * Injectable DNS resolver for the SSRF guard — mirrors `EgressGuardOptions`
+   * so tests can skip real DNS without touching the env.
+   */
+  lookupFn?: (hostname: string) => Promise<readonly { address: string }[]>;
+  /**
+   * Override the `AFK_WEB_ALLOW_PRIVATE_HOSTS` opt-out read. When `true` the
+   * SSRF guard is bypassed, consistent with other egress paths.
+   */
+  allowPrivateHosts?: boolean;
+}
+
 /**
  * Re-validate the URL the tab landed on after a navigation.
+ *
+ * In addition to the allow/block glob lists (`enforceDomainPolicy`), this
+ * function also applies the SSRF egress guard (`checkEgressTarget`) so that a
+ * redirect from a public URL to a private/loopback/metadata address is blocked
+ * even when both domain lists are empty. The SSRF check runs first; if it
+ * passes the domain policy check runs as before (#2301).
  *
  * @param page       The session tab. Only `url()` and `goBack()` are used.
  * @param config     Browser config carrying the allow/block lists.
@@ -59,6 +89,7 @@ export interface RecheckablePage {
  *                   target for `open()`, the pre-action URL for `act()`.
  * @param invalidateSession Closes the session if rollback fails, preventing a
  *                          later read from observing the blocked page.
+ * @param opts       Optional overrides for the SSRF guard (DNS, escape hatch).
  * @returns `BlockedByPolicy` when the landed URL is refused (after a
  *          best-effort `goBack()`), or `null` when the tab may be observed.
  */
@@ -67,12 +98,45 @@ export async function recheckLandedUrl(
   config: BrowserConfig,
   clearedUrl: string,
   invalidateSession: () => Promise<void>,
+  opts: RecheckOptions = {},
 ): Promise<BlockedByPolicy | null> {
   const landedUrl = page.url();
 
   // Tab never moved off the already-cleared URL — nothing new to vet.
   if (landedUrl === clearedUrl) {
     return null;
+  }
+
+  const protocol = urlProtocol(landedUrl);
+  // Browser-internal error pages such as chrome-error://chromewebdata/ are
+  // not network egress targets. Let the caller surface the real navigation
+  // error instead of relabeling it as an SSRF policy refusal.
+  if (protocol === 'chrome-error:') {
+    return null;
+  }
+
+  if (protocol === 'http:' || protocol === 'https:') {
+    // SSRF guard on the landed URL. A redirect from a public host to a private
+    // IP bypasses the pre-navigation check in open(); this closes the gap.
+    const egressVerdict = await checkEgressTarget(landedUrl, {
+      ...(opts.lookupFn !== undefined ? { lookupFn: opts.lookupFn } : {}),
+      ...(opts.allowPrivateHosts !== undefined
+        ? { allowPrivateHosts: opts.allowPrivateHosts }
+        : {}),
+    });
+    if (!egressVerdict.allowed) {
+      // Best-effort rollback before returning the refusal.
+      try {
+        await page.goBack();
+      } catch {
+        await invalidateSession();
+      }
+      return {
+        outcome: 'blocked_by_policy',
+        url: landedUrl,
+        reason: egressVerdict.reason,
+      };
+    }
   }
 
   const policy = enforceDomainPolicy(landedUrl, config);

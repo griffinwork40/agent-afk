@@ -31,10 +31,7 @@ import {
 export type { OneShotStopReason };
 import { resolveOpenAIAuth } from '../openai-compatible/auth.js';
 import { h1ModelFetch } from './h1-fetch.js';
-import {
-  buildChatGptOAuthHeaders,
-  CHATGPT_BACKEND_BASE_URL,
-} from '../openai-compatible/responses-config.js';
+import { resolveWireMode } from '../openai-compatible/responses-config.js';
 import { resolveXaiAuth } from '../xai/auth.js';
 import { resolveXaiEndpoint } from '../xai/endpoints.js';
 import { ensureFreshAccessToken } from '../xai/oauth.js';
@@ -213,26 +210,46 @@ async function viaOpenAI(
   // delegate to oneShotResponses with isChatGptBackend: true.
   // oneShotResponses throws when incomplete, so a successful return is always
   // 'end' — the Responses wire never exposes truncated text.
+  //
+  // Guard: when the binding has a custom baseUrl, pass it to resolveWireMode
+  // so a user-configured custom endpoint is respected instead of silently
+  // redirecting their traffic to the ChatGPT backend (#3620).
   if (auth.source === 'chatgpt-oauth') {
-    const client = new OpenAI({
+    const wire = resolveWireMode(auth, false, binding.baseUrl);
+    if (wire.mode === 'responses') {
+      // wire.baseURL is only set for chatgpt-oauth without a custom endpoint;
+      // fall back to binding.baseUrl to honour a user-configured base URL.
+      const clientBaseURL = wire.baseURL ?? binding.baseUrl;
+      const client = new OpenAI({
+        apiKey: auth.apiKey,
+        ...(clientBaseURL !== undefined ? { baseURL: clientBaseURL } : {}),
+        defaultHeaders: { ...wire.headers },
+        // Contract: maxRetries: 0 — AFK owns retries via withTransientRetry.
+        maxRetries: 0,
+        // Invariant: force HTTP/1.1 — see src/agent/providers/shared/h1-fetch.ts.
+        fetch: h1ModelFetch,
+      });
+      const text = await oneShotResponses({
+        client,
+        model: input.model,
+        system: input.system,
+        user: input.user,
+        isChatGptBackend: true,
+        maxTokens: input.maxTokens,
+        signal: input.signal,
+      });
+      return { text, stopReason: 'end' };
+    }
+    // Custom endpoint set — fall through to Chat Completions on that endpoint.
+    return oneShotChatCompletionWithStop({
       apiKey: auth.apiKey,
-      baseURL: CHATGPT_BACKEND_BASE_URL,
-      defaultHeaders: buildChatGptOAuthHeaders(auth.accountId),
-      // Contract: maxRetries: 0 — AFK owns retries via withTransientRetry.
-      maxRetries: 0,
-      // Invariant: force HTTP/1.1 — see src/agent/providers/shared/h1-fetch.ts.
-      fetch: h1ModelFetch,
-    });
-    const text = await oneShotResponses({
-      client,
+      baseURL: binding.baseUrl,
       model: input.model,
       system: input.system,
       user: input.user,
-      isChatGptBackend: true,
       maxTokens: input.maxTokens,
       signal: input.signal,
     });
-    return { text, stopReason: 'end' };
   }
 
   // Standard API-key path: Chat Completions.

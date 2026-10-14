@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
+import { errCodeOrString } from '../../utils/errors.js';
 import { env } from '../../config/env.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
 import { getStateDatabasePath, getDaemonStateDir } from '../../paths.js';
@@ -104,7 +105,7 @@ export function daemonDefaultCwd(): string {
     return dir;
   } catch (err) {
     const fallback = tmpdir();
-    const code = (err as NodeJS.ErrnoException).code ?? String(err);
+    const code = errCodeOrString(err);
     console.warn(
       `[daemon] daemonDefaultCwd: could not create ${dir} (${code}); ` +
         `falling back to ${fallback}. ` +
@@ -117,6 +118,57 @@ export function daemonDefaultCwd(): string {
   }
 }
 
+/**
+ * Contract: parse the env-var-sourced resource limits for a daemon session.
+ *
+ * Extracted from {@link spawnDaemonSession} to keep that function under the
+ * 200-line ceiling (spec #1) and to allow independent unit testing.
+ *
+ * Accepts explicit raw string values (not closures over `env`) so the helper
+ * is pure with respect to the env object and its contract is visible at the
+ * call site.
+ *
+ * `rawMaxToolIters` — raw value of `AFK_MAX_TOOL_USE_ITERATIONS`:
+ *   - `undefined` / non-numeric / `<= 0` → `undefined` (unlimited, no change)
+ *   - positive number → `Math.floor(parsed)` (integer ceiling)
+ *
+ * `rawMaxBudget` — raw value of `AFK_MAX_BUDGET_USD`:
+ *   - `undefined` → `undefined` (uncapped, no change)
+ *   - empty / whitespace-only → `undefined` (treated as unset, not $0 hard-stop)
+ *   - malformed / negative / NaN → `undefined` + `console.warn` (never throws)
+ *   - valid non-negative number → parsed value
+ */
+export function parseDaemonEnvLimits(
+  rawMaxToolIters: string | undefined,
+  rawMaxBudget: string | undefined,
+): { parsedMaxToolIters: number | undefined; parsedMaxBudget: number | undefined } {
+  const parsedMaxToolIters =
+    rawMaxToolIters !== undefined &&
+    Number.isFinite(Number(rawMaxToolIters)) &&
+    Number(rawMaxToolIters) > 0
+      ? Math.floor(Number(rawMaxToolIters))
+      : undefined;
+
+  let parsedMaxBudget: number | undefined;
+  if (rawMaxBudget === undefined || rawMaxBudget.trim() === '') {
+    // undefined or empty/whitespace → uncapped (not a $0 hard-stop)
+    parsedMaxBudget = undefined;
+  } else {
+    const n = Number(rawMaxBudget);
+    if (!Number.isFinite(n) || n < 0) {
+      console.warn(
+        `[daemon] AFK_MAX_BUDGET_USD=${JSON.stringify(rawMaxBudget)} is not a valid non-negative number — ` +
+          `ignoring (budget uncapped). Set AFK_MAX_BUDGET_USD to a non-negative number or leave it unset.`,
+      );
+      parsedMaxBudget = undefined;
+    } else {
+      parsedMaxBudget = n;
+    }
+  }
+
+  return { parsedMaxToolIters, parsedMaxBudget };
+}
+
 export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOptions): Promise<{
   session: AgentSession;
   memoryStore: MemoryStore;
@@ -124,6 +176,14 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
   mcpManager?: McpManager;
   /** Archive the cross-surface registry handle. Called by runOnce on close. */
   dispose: () => void;
+  /**
+   * The per-tick session label derived from `daemonTraceLabel(taskId)`. This
+   * value is also threaded into the dispatcher as `context.sessionId` so
+   * `ask-question.ts` can pass it to `elicitationRouter.route()` as a lookup
+   * key. Returned here so the caller can register a per-session elicitation
+   * handler under this exact key, eliminating the single-slot race (#3619).
+   */
+  elicitationKey: string;
 }> {
   // Derive a unique-per-tick sessionId (daemonTraceLabel appends a random
   // suffix, so each tick gets its own label) so hook commands receive a
@@ -195,21 +255,17 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     throw err;
   }
 
-  // Opt-in top-level tool-use-round ceiling (AFK_MAX_TOOL_USE_ITERATIONS).
-  // Parsed inline from the already-imported `env` rather than via the CLI
-  // `getMaxToolUseIterations()` helper to avoid an agent→cli layering
-  // dependency (scheduler lives in src/agent/). Mirrors the lenient contract
-  // of `parseMaxToolUseIterations` in cli/shared-helpers.ts: unset/non-numeric/
-  // <=0 → undefined = unlimited (no behavior change); positive → floored int.
-  // Placed BEFORE the `...sessionConfig` spread so an explicit
-  // sessionConfig.maxToolUseIterations still wins (escape-hatch parity with
-  // permissionMode/surface). The production path also re-applies the same
-  // env fallback in the daemon.ts factory; both resolve to the same value.
-  const rawMaxToolIters = env.AFK_MAX_TOOL_USE_ITERATIONS;
-  const parsedMaxToolIters =
-    rawMaxToolIters !== undefined && Number.isFinite(Number(rawMaxToolIters)) && Number(rawMaxToolIters) > 0
-      ? Math.floor(Number(rawMaxToolIters))
-      : undefined;
+  // Opt-in top-level tool-use-round ceiling and USD budget ceiling.
+  // Delegated to the named helper below to keep spawnDaemonSession under the
+  // 200-line function-size ceiling (spec item 1). The helper reads from the
+  // `env` object (the single read-point) with explicit params rather than a
+  // closure, making it independently testable.
+  // Placed BEFORE the `...sessionConfig` spread so an explicit caller value
+  // still wins (escape-hatch parity with permissionMode/surface).
+  const { parsedMaxToolIters, parsedMaxBudget } = parseDaemonEnvLimits(
+    env.AFK_MAX_TOOL_USE_ITERATIONS,
+    env.AFK_MAX_BUDGET_USD,
+  );
   const config: AgentConfig = {
     model: 'sonnet',
     // Daemon-spawned sessions run autonomously and require tool use without
@@ -218,9 +274,15 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     // break scheduled tasks that depend on tool execution.
     permissionMode: 'bypassPermissions',
     hookRegistry: registry,
-    // Pull tasks keep ask_question (handoff handler persists the question
-    // for eventual reply); cron/sessionstart tasks strip it.
-    isNonInteractive: options.trigger !== 'pull',
+    // All daemon tasks now install an elicitation handler before sendMessage
+    // (pull: makeDaemonElicitationHandler; cron/sessionstart:
+    // makeCronElicitationHandler — #3243 item 2), so ask_question must NOT be
+    // stripped for any trigger. The ask_question strip is driven by
+    // isNonInteractive in dispatcher-wiring.ts; setting it false here keeps
+    // the tool available. The unattended-bash floor (isHeadlessSession) is
+    // preserved independently via surface:'daemon' below, so bash-restriction
+    // hooks are unaffected by this change.
+    isNonInteractive: false,
     // Surface stamps the session as 'daemon' so routing-decision telemetry
     // rows derive origin:'daemon' correctly. Placed before sessionConfig so
     // an operator escape-hatch via sessionConfig.surface can still override.
@@ -236,6 +298,9 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     // Opt-in top-level tool-round ceiling default; overridable by an explicit
     // sessionConfig.maxToolUseIterations via the spread below.
     ...(parsedMaxToolIters !== undefined ? { maxToolUseIterations: parsedMaxToolIters } : {}),
+    // USD budget ceiling default; overridable by an explicit
+    // sessionConfig.maxBudgetUsd via the spread below.
+    ...(parsedMaxBudget !== undefined ? { maxBudgetUsd: parsedMaxBudget } : {}),
     // sessionConfig may override permissionMode if the operator explicitly
     // wants a different mode for daemon tasks (intentional escape hatch).
     ...options.sessionConfig,
@@ -273,6 +338,7 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
       memoryStore,
       stateStore,
       dispose: registration.dispose,
+      elicitationKey: sessionId,
       ...(mcpManager !== undefined ? { mcpManager } : {}),
     };
   } catch (err) {

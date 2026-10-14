@@ -318,14 +318,28 @@ export class MemoryStore {
       const ids = rows.map((r) => r.id);
       const placeholders = ids.map(() => '?').join(', ');
       try {
-        this.db
+        const accesses = this.db
           .prepare(
             `UPDATE facts
                SET access_count = access_count + 1,
                    last_accessed = ?
-             WHERE id IN (${placeholders})`,
+             WHERE id IN (${placeholders})
+             RETURNING id, access_count, last_accessed`,
           )
-          .run(now, ...ids);
+          .all(now, ...ids) as Pick<Fact, 'id' | 'access_count' | 'last_accessed'>[];
+        // RETURNING captures the committed increment, including concurrent recalls.
+        // Never report an access before the write succeeds, or reorder FTS results.
+        const byId = new Map(accesses.map((access) => [access.id, access]));
+        // Contract: a row absent from RETURNING was deleted mid-flight (WAL
+        // concurrent delete). Drop it — returning stale pre-UPDATE metadata for
+        // a fact that no longer exists is more confusing than omitting it.
+        const survived = rows.filter((row) => byId.has(row.id));
+        if (survived.length === 0) {
+          debugLog('memory-store: all recalled rows were deleted mid-flight; returning empty.');
+          return survived.map(({ rank: _rank, ...fact }) => fact as Fact);
+        }
+        for (const row of survived) Object.assign(row, byId.get(row.id));
+        return survived.map(({ rank: _rank, ...fact }) => fact as Fact);
       } catch (err) {
         debugLog('memory-store: access tracking update failed (non-fatal):', String(err));
       }

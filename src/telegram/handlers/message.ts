@@ -287,7 +287,7 @@ export class MessageHandler {
     // the durable store. Checked BEFORE in-process elicitation (disjoint).
     if (tgMsg.reply_to_message?.message_id !== undefined) {
       const { matchReplyToHandoff } = await import('../handoff-answer.js');
-      if (await matchReplyToHandoff(this.bot, chatId, tgMsg.reply_to_message.message_id, messageText)) return;
+      if (await matchReplyToHandoff(this.bot, chatId, tgMsg.reply_to_message.message_id, messageText, undefined, tgMsg.from)) return;
     }
 
     // Answer consumed by active ask_question elicitation -- never reaches

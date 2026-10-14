@@ -119,13 +119,32 @@ describe('postOAuthForm — tolerant JSON decode', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Default fetch fallback (uses global fetch when none supplied)
+// Fetch injection and global fallback
 // ---------------------------------------------------------------------------
 
-describe('postOAuthForm — fetchFn injection', () => {
+describe('postOAuthForm — fetchFn injection and defaulting', () => {
   it('uses the injected fetchFn when provided', async () => {
     const fetchFn = makeFetch({ status: 200, body: { access_token: 'x', refresh_token: 'y' } });
     await postOAuthForm(TOKEN_URL, PARAMS, 'p', fetchFn);
     expect(fetchFn).toHaveBeenCalledOnce();
+  });
+
+  it.each(['omitted', 'undefined'] as const)('uses global fetch when fetchFn is %s', async (mode) => {
+    const body = { access_token: 'global-at', refresh_token: 'global-rt' };
+    const fetchFn = makeFetch({ status: 200, body });
+    vi.stubGlobal('fetch', fetchFn);
+    try {
+      const result = mode === 'omitted'
+        ? await postOAuthForm(TOKEN_URL, PARAMS, 'p')
+        : await postOAuthForm(TOKEN_URL, PARAMS, 'p', undefined);
+      expect(result).toEqual(body);
+      expect(fetchFn).toHaveBeenCalledExactlyOnceWith(TOKEN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+        body: new URLSearchParams(PARAMS).toString(),
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

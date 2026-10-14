@@ -34,6 +34,7 @@ One line per document, grouped by concern.
 - [headless.md](headless.md) — `--format stream-json` headless output mode for CI pipelines and shell-script consumers.
 - [mcp.md](mcp.md) — MCP (Model Context Protocol) integration: connecting to MCP servers and bridging their tools into a session.
 - [bundled-plugins.md](bundled-plugins.md) — How `awa-bundled/` ships pinned-hash snapshots of bundled skills and how the integrity test works.
+- [worktree-setup.md](worktree-setup.md) — Opt-in `.afk/worktree-setup.json`: repo-declared commands run once in every afk-managed worktree (best-effort, timeout/abort, trust model).
 - [queued-message-flush-on-background.md](queued-message-flush-on-background.md) — Flushing a queued message into the parent turn on Ctrl+B; implemented in PR #891 via `ToolResult.harnessUserMessage`.
 
 ---

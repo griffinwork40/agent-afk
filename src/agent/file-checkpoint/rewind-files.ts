@@ -8,7 +8,7 @@ import { resolveAndContain, realpathSafe } from '../tools/handlers/_cwd-utils.js
 import { assertNotDenylisted } from '../tools/handlers/write-denylist.js';
 import { isAbsolute } from 'node:path';
 import { pinRewindParent, stageRewindFile } from './rewind-staging.js';
-import { errorMessage } from '../../utils/errors.js';
+import { errorMessage, isEnoent } from '../../utils/errors.js';
 import { readCheckpointContent } from './content-store.js';
 
 export interface RewindFilesDeps {
@@ -23,7 +23,7 @@ export interface RewindFilesDeps {
 function currentBytes(path: string): Buffer | null {
   try { return readFileSync(path); }
   catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    if (!isEnoent(err)) throw err;
     return null;
   }
 }

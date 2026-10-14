@@ -14,8 +14,9 @@ import type { Message } from 'telegraf/types';
 // Module mocks — must be before imports of the modules under test.
 // ---------------------------------------------------------------------------
 
-const { mockStreamResponse } = vi.hoisted(() => ({
+const { mockStreamResponse, mockMatchReplyToHandoff } = vi.hoisted(() => ({
   mockStreamResponse: vi.fn(async () => { /* no-op */ }),
+  mockMatchReplyToHandoff: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('../streaming.js', () => ({
@@ -24,6 +25,10 @@ vi.mock('../streaming.js', () => ({
 
 vi.mock('./registration.js', () => ({
   registerChatCommands: vi.fn(async () => { /* no-op */ }),
+}));
+
+vi.mock('../handoff-answer.js', () => ({
+  matchReplyToHandoff: mockMatchReplyToHandoff,
 }));
 
 // ---------------------------------------------------------------------------
@@ -494,5 +499,91 @@ describe('MessageHandler.ledgerOriginatedPendingChats bypass (C3)', () => {
     const handler = makeHandler();
     expect(handler.ledgerOriginatedPendingChats).toBeInstanceOf(Set);
     expect(handler.ledgerOriginatedPendingChats.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MessageHandler: tgMsg.from is passed as fromUser to matchReplyToHandoff
+// ---------------------------------------------------------------------------
+
+describe('MessageHandler.handle passes tgMsg.from to matchReplyToHandoff', () => {
+  beforeEach(() => {
+    mockMatchReplyToHandoff.mockClear();
+    mockStreamResponse.mockClear();
+  });
+
+  it('passes tgMsg.from as the 6th arg to matchReplyToHandoff when message is a reply', async () => {
+    const chatId = 200;
+    const sessionManager = {
+      getSession: vi.fn().mockResolvedValue({ state: 'idle' }),
+      getSessionIfExists: vi.fn().mockReturnValue(null),
+      resetSession: vi.fn(),
+    };
+    const bot = {
+      telegram: { sendMessage: vi.fn().mockResolvedValue({}) },
+      command: vi.fn(),
+      on: vi.fn(),
+    };
+    const handler = new MessageHandler(
+      bot as unknown as import('telegraf').Telegraf,
+      sessionManager as unknown as import('../../session-manager.js').SessionManager,
+      new Set<number>(),
+      vi.fn(),
+    );
+
+    const from = { id: 77665544, username: 'diana' };
+    const ctx = {
+      chat: { id: chatId },
+      message: {
+        text: 'my handoff answer',
+        from,
+        reply_to_message: { message_id: 101 },
+      },
+      reply: vi.fn(),
+      sendChatAction: vi.fn(),
+    } as unknown as import('telegraf').Context;
+
+    await handler.handle(ctx);
+
+    // matchReplyToHandoff must have been called with from as the 6th argument.
+    expect(mockMatchReplyToHandoff).toHaveBeenCalledOnce();
+    const args = mockMatchReplyToHandoff.mock.calls[0]!;
+    // arg[0]=bot, arg[1]=chatId, arg[2]=replyToMessageId, arg[3]=text, arg[4]=undefined(dir), arg[5]=from
+    expect(args[5]).toEqual(from);
+  });
+
+  it('does not call matchReplyToHandoff when message is not a reply', async () => {
+    const chatId = 201;
+    const sessionManager = {
+      getSession: vi.fn().mockResolvedValue({ state: 'idle' }),
+      getSessionIfExists: vi.fn().mockReturnValue(null),
+      resetSession: vi.fn(),
+    };
+    const bot = {
+      telegram: { sendMessage: vi.fn().mockResolvedValue({}) },
+      command: vi.fn(),
+      on: vi.fn(),
+    };
+    const handler = new MessageHandler(
+      bot as unknown as import('telegraf').Telegraf,
+      sessionManager as unknown as import('../../session-manager.js').SessionManager,
+      new Set<number>(),
+      vi.fn(),
+    );
+
+    const ctx = {
+      chat: { id: chatId },
+      message: {
+        text: 'just a normal message',
+        from: { id: 12345 },
+        // no reply_to_message
+      },
+      reply: vi.fn(),
+      sendChatAction: vi.fn(),
+    } as unknown as import('telegraf').Context;
+
+    await handler.handle(ctx);
+
+    expect(mockMatchReplyToHandoff).not.toHaveBeenCalled();
   });
 });

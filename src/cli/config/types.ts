@@ -341,7 +341,12 @@ export interface ModelSlotConfigEntry {
 }
 
 export interface ConfigFileSchema {
-  tools?: { disabled?: string[] };
+  /**
+   * Operator tool visibility. `disabledBySlot` maps a model-slot name to an
+   * extra deny list for sessions whose active model resolves to that slot;
+   * resolved and enforced in agent/tools/operator-denied.slots.ts.
+   */
+  tools?: { disabled?: string[]; disabledBySlot?: Partial<Record<string, string[]>> };
   model?: string;
   /**
    * Per-tier model bindings. Each slot accepts a bare id string

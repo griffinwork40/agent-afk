@@ -284,4 +284,22 @@ describe('entry.ts — main() happy path', () => {
     await main();
     expect(exitSpy).toHaveBeenCalledWith(0);
   });
+
+  test('threads AFK_THINKING / AFK_EFFORT into TelegramBot constructor', async () => {
+    // Arrange: return env-sourced thinking and effort from the shared-helpers mock.
+    const helpers = await import('../cli/shared-helpers.js');
+    vi.mocked(helpers.getThinking).mockReturnValueOnce({ type: 'enabled', budgetTokens: 8000 });
+    vi.mocked(helpers.getEffort).mockReturnValueOnce('high');
+
+    mockBotCtor.mockClear();
+    mockBotStart.mockImplementationOnce(async () => { process.emit('SIGINT'); });
+
+    const { main } = await import('./entry.js');
+    await main();
+
+    expect(mockBotCtor).toHaveBeenCalledTimes(1);
+    const ctorArg = mockBotCtor.mock.calls[0][0] as Record<string, unknown>;
+    expect(ctorArg.thinking).toEqual({ type: 'enabled', budgetTokens: 8000 });
+    expect(ctorArg.effort).toBe('high');
+  });
 });

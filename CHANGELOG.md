@@ -11,6 +11,241 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.313.13] - 2026-10-14
+
+### Fixed
+- name the safe alternative in two high-friction denials (#3727) (aa94b8e7)
+
+## [5.313.12] - 2026-10-14
+
+### Added
+- durable pending-question store wired into elicitation router (#3678) (3cceb09d)
+
+### Fixed
+- split question-only prompts over 4096 chars (item 3) (#3663) (990f8646)
+
+### Changed
+- adopt atomic-write at 5 hand-rolled sites (#3668) (3e47d1ec)
+- add SW(29,16) symmetric weighing matrix (#3722) (034e2f89)
+
+## [5.313.11] - 2026-10-14
+
+### Changed
+- split createDefaultHookRegistry under 200-line ceiling (#3684) (c8151569)
+- split transformProviderEvent under 200-line ceiling (#3667) (6b6691a2)
+- split startShell under 200-line ceiling (#3682) (9b1d4554)
+- split parseAgentInput under 200-line ceiling (#3666) (aa03c31a)
+- split observePage under 200-line ceiling (#3681) (2c42787c)
+- split parseComposeInput under 200-line ceiling (#3683) (4e0a74d4)
+- raise coverage on COV-009..013 modules (#3669) (688e0fa1)
+
+## [5.313.10] - 2026-10-14
+
+### Fixed
+- apply SSRF egress guard to browser_open navigation (#2313) (109db833)
+
+### Changed
+- SW(27,16) result write-up and README section (#3717) (cfcb1f06)
+
+## [5.313.9] - 2026-10-14
+
+### Changed
+- split registerChatCommand under 200-line ceiling (#3685) (55a74162)
+
+## [5.313.8] - 2026-10-14
+
+### Changed
+- split buildChildConfig under 200-line ceiling (#3688) (2c4945d7)
+
+## [5.313.7] - 2026-10-14
+
+### Added
+- write-ahead intent, outcome-unknown status, and pre-execution retry gate (#3713) (e7ee6b30)
+
+### Fixed
+- replace fixed sleeps with vi.waitFor in elicitation intercept tests (#3701) (7046c5b2)
+- make afk whatif --aa reachable from the CLI and /whatif (#3715) (1b18068f)
+
+### Changed
+- clean-install guide, task pack, and intervention log for outside-user trial (#3711) (fb322dc2)
+- shared execFileAsync export and abortReason helper (#3686) (1b612231)
+- deterministic repro for parent seal over live child subagents (#3712) (86e8ea18)
+- pathExists helper and atomic-write adoption at remaining tmp+rename sites (#3687) (d129bd58)
+- extract rawPostOAuthForm; consolidate xAI device-code POST blocks (#3702) (5523afb6)
+
+## [5.313.6] - 2026-10-14
+
+### Fixed
+- resolve nit/low advisory findings from PR triage batch #3670-#3680 (#3703) (10538e16)
+
+## [5.313.5] - 2026-10-14
+
+### Added
+- per-model-slot tool deny list (tools.disabledBySlot) (#3704) (2e6ea1aa)
+
+### Fixed
+- wire AFK_MAX_BUDGET_USD to daemon, Telegram, and REPL sessions (#2314) (ebdf6a4d)
+
+## [5.313.4] - 2026-10-14
+
+### Changed
+- split createBashHandler under 200-line ceiling (#3690) (93ff16b5)
+- split SubagentHandleImpl.run under 200-line ceiling (#3700) (cbfbe6b7)
+
+## [5.313.3] - 2026-10-14
+
+### Changed
+- split SubagentManager.forkSubagent under 200-line ceiling (#3699) (f0c909da)
+
+## [5.313.2] - 2026-10-14
+
+### Changed
+- split anthropic-direct runTurn under 200-line ceiling (#3698) (e43106db)
+- split preserveRowsBeforeFrameRender under 200-line ceiling (#3692) (1a8a234b)
+
+## [5.313.1] - 2026-10-14
+
+### Changed
+- split consumeRoundStream under 200-line ceiling (#3697) (84ca3e2b)
+- split ComposeExecutor.execute under 200-line ceiling (#3696) (d4801b60)
+- split streamToFinalMessage under 200-line ceiling (#3695) (755eaf31)
+- split handleEnter under 200-line ceiling (#3691) (300d76ee)
+- split runForegroundWithPromotion under 200-line ceiling (#3689) (e16db44d)
+
+## [5.313.0] - 2026-10-13
+
+### Added
+- tag learning facts with [auto-reflected] at recall (#3677) (d5a9697c)
+
+### Fixed
+- cosmetic comment fixes — resize-burst B5 discriminant, advanceTimersByTime explanation, rm onRetry warn (#3671) (a559dd18)
+- replace raw bash/grep overflow-kill warn with a styled tool-row label (#3680) (0ae2bdfd)
+
+## [5.312.9] - 2026-10-13
+
+### Added
+- document and test redundancy preflight warning (#2414) (#3675) (c2b661ac)
+
+### Fixed
+- static deliverClean import, restore Invariant comment, add ALS comment, dedupe JSDoc, remove unused env re-export (#3679) (3332ed78)
+
+### Changed
+- split applyPatch and createImageGenerateHandler under 200-line ceiling (#3673) (4fbf2222)
+- extract renderRootOrderLines + flush helper; handleCompact method (#3672) (8a766a43)
+- drop NodeJS.ErrnoException casts at 12 production sites (#3676) (0506684c)
+- adopt IncrementalLineReader/readJsonlFile at remaining hand-rolled sites (#3670) (c41bc657)
+
+## [5.312.8] - 2026-10-13
+
+### Fixed
+- advisory findings from PR triage batch #3638-#3647 (#3664) (9e3cf384)
+- remaining cosmetic items — fast-path comment, dedupe compose-agent-resolve tests (#3662) (e1012b60)
+
+### Changed
+- split interactive runTurn under 200-line ceiling (#3650) (43d3a44b)
+
+## [5.312.7] - 2026-10-13
+
+### Changed
+- split telegram streamResponse under 200-line ceiling (#3658) (4b286689)
+
+## [5.312.6] - 2026-10-13
+
+### Changed
+- split makeTelegramElicitationHandler under 200-line ceiling (#3656) (2d3cf0b5)
+- split runSweep under 200-line ceiling (#3657) (2fa61bb6)
+
+## [5.312.5] - 2026-10-13
+
+### Changed
+- split registerInteractiveCommand under 200-line ceiling (#3651) (7cebc1cf)
+
+## [5.312.4] - 2026-10-13
+
+### Changed
+- split setupSurface under 200-line ceiling (#3648) (26ffc64e)
+
+## [5.312.3] - 2026-10-13
+
+### Changed
+- split renderToolLaneOverlay under 200-line ceiling (#3649) (52e8909b)
+- add shared execFileAsync (#3653) (20968114)
+- add abortReason helper for AbortSignal.reason sites (#3654) (ccfe7fe5)
+- adopt isErrnoCode/isEnoent at errno cast sites (#3655) (79026f23)
+
+## [5.312.2] - 2026-10-13
+
+### Fixed
+- narrow-terminal layout: wrap to real width, force spill below 20 cols, add edge-case tests (#3643) (2cc5fb5f)
+
+## [5.312.1] - 2026-10-12
+
+### Fixed
+- use native Rolldown dashboard build options (#3592) (ee49d01a)
+- verify OAuth form global fetch fallback (#3590) (9c24cc0a)
+- advisory follow-ups — store comment, selectors guard, drain-rejects test, outcomes barrel doc (#3593) (45ddcb2e)
+- collision-only scrollback, type-guard filter, echo original, derive prefix cols, spill-ordering tests (#3639) (f5bc519c)
+- telegram ask_question edge cases near 4096-char limit (#3646) (fddb4b67)
+- address advisory findings from 2026-10-12 PR triage batch (#3642) (f59ec87c)
+- refactor updateHandoffAnswer to options object, tighten from type, add PII JSDoc, debugLog, and tests (#3641) (ecc51dbe)
+- low/cosmetic fixes — @internal, EPERM note, spawnError, workspaceClose assert, mcp example (#3644) (0bd4138c)
+- remove unused _sandboxes param, reject --aa+--spec, clarify A/A stage name (#3638) (a0045d86)
+
+### Changed
+- split stream-rendering functions under 200-line ceiling (#3609) (68740aeb)
+- telegram clear-or-queue delegation + bareSkillName helper (#3645) (9a99c78b)
+- adopt isEnoent at file-checkpoint, peer inbox, and user-skills sites (#3647) (538f6c74)
+
+## [5.312.0] - 2026-10-12
+
+### Added
+- content-addressed artifact registry (put/get/list/read) (#3629) (f22ec95a)
+
+## [5.311.0] - 2026-10-12
+
+### Added
+- return committed fact access metadata (#3623) (2ebcb5d8)
+- add --aa flag for A/A calibration mode (Step 0) (#3630) (6a50ad73)
+- install daemon elicitation handler for cron/sessionstart tasks (#3619) (8e10e234)
+
+## [5.310.14] - 2026-10-12
+
+### Added
+- add responderIdentity to HandoffRecord for response provenance (#3627) (a1e07953)
+
+### Fixed
+- address advisory findings from 2026-10-12 PR triage batch (#3626) (dec4d416)
+- thread customBaseURL into resolveWireMode on complete() and one-shot-router paths (#3624) (a93be7fe)
+
+### Changed
+- adopt readJsonlFile in ledger/store; audit remaining sites (#3622) (5f38fe77)
+
+## [5.310.13] - 2026-10-12
+
+### Added
+- opt-in repo-declared worktree setup step (#3611) (8715836c)
+
+### Changed
+- adopt atomic-write for launchd plist install/upgrade (#3615) (8788ae22)
+
+## [5.310.12] - 2026-10-12
+
+### Fixed
+- never cut off ask_question text (#3625) (4f04d330)
+
+## [5.310.11] - 2026-10-12
+
+### Fixed
+- match BASH_HIGH tokens only at shell word starts (#3610) (f4cf9300)
+- thread AFK_THINKING/AFK_EFFORT into Telegram bot constructor (#3613) (1192ede6)
+
+### Changed
+- raise bot.ts statement coverage 56.5% → 91.6% (setupHandlers closures) (#3618) (a99e34ef)
+- extract connectMcpTraced helper (MCP trace-phase duplication) (#3617) (937f8fd8)
+- adopt errorMessage at ?? 'aborted' sites in abort.ts and browser/web handlers (#3614) (01c1cb90)
+- convert score/writeScore to writeJsonFileAsync (#3612) (4037a8a2)
+- strengthen B3/B5 resize-burst precision + add cpr diagnostic (#3603) (b61e74d7)
+
 ## [5.310.10] - 2026-10-12
 
 ### Fixed

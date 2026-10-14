@@ -61,7 +61,9 @@ export const askQuestionTool: AnthropicToolDef = {
     properties: {
       question: {
         type: 'string',
-        description: 'The question to ask the operator.',
+        description:
+          'The question to ask the operator. Keep it to one or two sentences; put background, ' +
+          'trade-offs, and detail in `context`, and keep each choice short (Telegram buttons show ~60 characters).',
       },
       type: {
         type: 'string',

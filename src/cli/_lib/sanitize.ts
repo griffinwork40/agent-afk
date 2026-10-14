@@ -36,6 +36,21 @@ export function sanitizeSchemaString(s: string, maxLen = 128): string {
 }
 
 /**
+ * Strip ANSI escapes and bare C1 bytes from text the operator MUST be able to
+ * read in full, with only a generous runaway guard on length.
+ *
+ * Contract: same escape-stripping as {@link sanitizeSchemaString} (that is the
+ * security property: no forged prompts, no cursor moves, no hidden content),
+ * but `maxLen` defaults to 8000 instead of 128. Use for agent-authored prose
+ * such as `ask_question` messages and context, where the strict schema clamp
+ * silently cut questions off mid-sentence. Keep `sanitizeSchemaString` for
+ * untrusted MCP schema strings, whose short caps are part of their threat model.
+ */
+export function sanitizeTerminalText(s: string, maxLen = 8000): string {
+  return sanitizeSchemaString(s, maxLen);
+}
+
+/**
  * Sanitise a message string and truncate it at a whole-line boundary, adding
  * an explicit count notice when lines are dropped.
  *

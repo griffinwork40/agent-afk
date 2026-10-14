@@ -103,37 +103,43 @@ function tempPath(targetPath: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Exported engine
+// Internal planned-change type
+// ---------------------------------------------------------------------------
+
+interface PlannedChange {
+  resolvedPath: string;
+  originalContent: string;
+  newContent: string;
+  diffBlock: string;
+  diffPayload: DiffPayload | null;
+  filePath: string;
+  /** True when the file did not exist before the patch (null sentinel in fileContents). */
+  isNewFile: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1: plan (compute content + diffs, no I/O)
 // ---------------------------------------------------------------------------
 
 /**
- * Apply a validated set of file changes, optionally as a dry run.
+ * Invariant: `fileContents` must be the map produced by validatePatchChanges
+ * for the same `changes` array -- null values signal new files, strings signal
+ * existing content (including empty string for an existing empty file).
  *
- * Pre-condition: `fileContents` was produced by {@link validatePatchChanges}
- * for the same `changes` array.
- *
- * @param changes      - Validated file changes.
- * @param fileContents - Current file contents keyed by RESOLVED path.
- * @param resolveBase  - Used to form relative paths in diff headers.
- * @param dryRun       - When true, compute diffs but do not write.
+ * Contract: throws if a change has neither `content` nor `edits` (guarded
+ * defensively; should not occur after successful validation).
  */
-export async function applyPatch(
+function planPatchChanges(
   changes: PatchFileChange[],
   fileContents: Map<string, string | null>,
   resolveBase: string | undefined,
-  dryRun: boolean,
-): Promise<PatchApplyResult> {
-  // Phase 1: compute new content and diffs for every file.
-  const planned: Array<{
-    resolvedPath: string;
-    originalContent: string;
-    newContent: string;
-    diffBlock: string;
-    diffPayload: DiffPayload | null;
-    filePath: string;
-    /** True when the file did not exist before the patch (null sentinel in fileContents). */
-    isNewFile: boolean;
-  }> = [];
+): {
+  planned: PlannedChange[];
+  combinedDiff: string;
+  structuredDiff: DiffPayload | undefined;
+  filesChanged: Array<{ path: string; before_hash: string; after_hash: string }>;
+} {
+  const planned: PlannedChange[] = [];
 
   for (const change of changes) {
     // Derive the resolved path using the same logic as the validator:
@@ -160,11 +166,17 @@ export async function applyPatch(
     }
 
     const fileDiff = computeFileDiff(change.path, originalContent, newContent);
-
-    planned.push({ resolvedPath, originalContent, newContent, diffBlock: fileDiff.text, diffPayload: fileDiff.payload, filePath: change.path, isNewFile });
+    planned.push({
+      resolvedPath,
+      originalContent,
+      newContent,
+      diffBlock: fileDiff.text,
+      diffPayload: fileDiff.payload,
+      filePath: change.path,
+      isNewFile,
+    });
   }
 
-  // Build combined diff string.
   const combinedDiff = planned.map((p) => p.diffBlock).filter(Boolean).join('\n');
 
   // Merge per-file structured diffs into a single DiffPayload.
@@ -181,31 +193,37 @@ export async function applyPatch(
     totalAdded += p.diffPayload.addedLines;
     totalRemoved += p.diffPayload.removedLines;
   }
-  const structuredDiff: DiffPayload | undefined = mergedHunks.length > 0
-    ? { hunks: mergedHunks, addedLines: totalAdded, removedLines: totalRemoved }
-    : undefined;
+  const structuredDiff: DiffPayload | undefined =
+    mergedHunks.length > 0
+      ? { hunks: mergedHunks, addedLines: totalAdded, removedLines: totalRemoved }
+      : undefined;
 
-  // Compute result metadata (before/after hashes).
   const filesChanged = planned.map((p) => ({
     path: p.resolvedPath,
     before_hash: `sha256:${sha256Hex(p.originalContent)}`,
     after_hash: `sha256:${sha256Hex(p.newContent)}`,
   }));
 
-  // Dry-run: return without touching the filesystem.
-  if (dryRun) {
-    return {
-      status: 'dry_run',
-      diff: combinedDiff,
-      structuredDiff,
-      files_changed: filesChanged,
-      errors: [],
-    };
-  }
+  return { planned, combinedDiff, structuredDiff, filesChanged };
+}
 
-  // Phase 2: atomic apply via temp files.
-  // Write each new content to a temp file (same directory — ensures same mount
-  // point for an atomic rename). Collect temp paths for rollback.
+// ---------------------------------------------------------------------------
+// Phase 2a: write temp files
+// ---------------------------------------------------------------------------
+
+/**
+ * Write each planned change to a temp file in the same directory as the
+ * target (guaranteeing same mount point for an atomic rename). Preserves
+ * original file permissions for existing files via stat + chmod on the temp.
+ *
+ * Returns `tempFiles` (one entry per successful write) and `writeErrors`
+ * (validation errors for any failed write). When `writeErrors` is non-empty
+ * the caller must unlink all returned `tempFiles` before returning.
+ */
+async function writeTempFiles(planned: PlannedChange[]): Promise<{
+  tempFiles: Array<{ tempPath: string; targetPath: string; originalMode: number | undefined }>;
+  writeErrors: ValidationError[];
+}> {
   const tempFiles: Array<{ tempPath: string; targetPath: string; originalMode: number | undefined }> = [];
   const writeErrors: ValidationError[] = [];
 
@@ -241,24 +259,27 @@ export async function applyPatch(
     }
   }
 
-  if (writeErrors.length > 0) {
-    // Clean up any temp files already written.
-    for (const tf of tempFiles) {
-      try {
-        await unlink(tf.tempPath);
-      } catch {
-        // Best-effort cleanup.
-      }
-    }
-    return {
-      status: 'partial_failure',
-      diff: combinedDiff,
-      files_changed: filesChanged,
-      errors: writeErrors,
-    };
-  }
+  return { tempFiles, writeErrors };
+}
 
-  // Commit point: rename all temp files to their targets atomically.
+// ---------------------------------------------------------------------------
+// Phase 2b: rename temp files to targets, roll back on partial failure
+// ---------------------------------------------------------------------------
+
+/**
+ * Rename each temp file to its target path. If any rename fails, rolls back
+ * all completed renames (unlink for new files, overwrite for existing ones)
+ * and cleans up remaining temp files.
+ *
+ * Contract: `planned[i]` must correspond to `tempFiles[i]` -- same ordering
+ * as returned by {@link writeTempFiles}.
+ *
+ * Returns `renameErrors` (empty on full success).
+ */
+async function renameAndRollback(
+  tempFiles: Array<{ tempPath: string; targetPath: string; originalMode: number | undefined }>,
+  planned: PlannedChange[],
+): Promise<{ renameErrors: ValidationError[] }> {
   const renameErrors: ValidationError[] = [];
   const completedRenames: Array<{
     targetPath: string;
@@ -297,7 +318,7 @@ export async function applyPatch(
           await writeFile(completed.targetPath, completed.originalContent, 'utf-8');
         }
       } catch {
-        // Best-effort rollback — log but continue.
+        // Best-effort rollback -- log but continue.
       }
     }
     // Also clean up remaining temp files.
@@ -309,6 +330,70 @@ export async function applyPatch(
         // Best-effort cleanup.
       }
     }
+  }
+
+  return { renameErrors };
+}
+
+// ---------------------------------------------------------------------------
+// Exported engine
+// ---------------------------------------------------------------------------
+
+/**
+ * Apply a validated set of file changes, optionally as a dry run.
+ *
+ * Pre-condition: `fileContents` was produced by {@link validatePatchChanges}
+ * for the same `changes` array.
+ *
+ * @param changes      - Validated file changes.
+ * @param fileContents - Current file contents keyed by RESOLVED path.
+ * @param resolveBase  - Used to form relative paths in diff headers.
+ * @param dryRun       - When true, compute diffs but do not write.
+ */
+export async function applyPatch(
+  changes: PatchFileChange[],
+  fileContents: Map<string, string | null>,
+  resolveBase: string | undefined,
+  dryRun: boolean,
+): Promise<PatchApplyResult> {
+  const { planned, combinedDiff, structuredDiff, filesChanged } =
+    planPatchChanges(changes, fileContents, resolveBase);
+
+  // Dry-run: return without touching the filesystem.
+  if (dryRun) {
+    return {
+      status: 'dry_run',
+      diff: combinedDiff,
+      structuredDiff,
+      files_changed: filesChanged,
+      errors: [],
+    };
+  }
+
+  // Phase 2a: write temp files (same directory => same mount point => atomic rename).
+  const { tempFiles, writeErrors } = await writeTempFiles(planned);
+
+  if (writeErrors.length > 0) {
+    // Clean up any temp files already written.
+    for (const tf of tempFiles) {
+      try {
+        await unlink(tf.tempPath);
+      } catch {
+        // Best-effort cleanup.
+      }
+    }
+    return {
+      status: 'partial_failure',
+      diff: combinedDiff,
+      files_changed: filesChanged,
+      errors: writeErrors,
+    };
+  }
+
+  // Phase 2b: commit point -- rename all temp files to their targets.
+  const { renameErrors } = await renameAndRollback(tempFiles, planned);
+
+  if (renameErrors.length > 0) {
     return {
       status: 'partial_failure',
       diff: combinedDiff,

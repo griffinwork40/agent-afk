@@ -1379,6 +1379,107 @@ describe('ComposeExecutor', () => {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // emitLeafToolStrips behavioral tests (#3598)
+  //
+  // Verifies that the compose_leaf_tools_stripped trace event is:
+  //   1. Emitted when a named agent has tools stripped.
+  //   2. NOT emitted when no agent_type is set or no tools are stripped.
+  //   3. Uses the per-node stripped tool list (not the global constant).
+  //   4. Skips emission when nodes.length !== resolvedAgents.length.
+  // -------------------------------------------------------------------------
+  describe('emitLeafToolStrips', () => {
+    const agentWithStrippedTool = {
+      name: 'agent-with-delegation',
+      definition: {
+        prompt: 'You are a specialist.',
+        // 'agent' is in COMPOSE_LEAF_STRIPPED_TOOLS — it will be stripped.
+        tools: ['read_file', 'agent'],
+        model: 'haiku',
+      },
+      source: 'user' as const,
+    };
+    const registryWithStripped: ReadonlyMap<string, typeof agentWithStrippedTool> = new Map([
+      ['agent-with-delegation', agentWithStrippedTool],
+    ]);
+
+    it('emits compose_leaf_tools_stripped event with per-node stripped tool list', async () => {
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const mockWrite = vi.fn(async () => undefined);
+      const traceWriter = { write: mockWrite };
+
+      const executor = new ComposeExecutor(
+        makeContext({ traceWriter: traceWriter as never, agentRegistry: registryWithStripped }),
+      );
+      await executor.execute(makeCall({
+        nodes: [{ id: 'a', prompt: 'research task', agent_type: 'agent-with-delegation' }],
+      }));
+
+      // Allow pending microtasks from void emitSessionPhase to flush.
+      await new Promise((r) => setTimeout(r, 0));
+
+      // At least one write must be the leaf-strip event.
+      const writeArgs = mockWrite.mock.calls.map((c) => c[0] as { kind?: string; payload?: { phase?: string; metadata?: unknown } });
+      const stripEvent = writeArgs.find(
+        (e) => e?.kind === 'session_phase' && (e?.payload as { phase?: string })?.phase === 'compose_leaf_tools_stripped',
+      );
+      expect(stripEvent).toBeDefined();
+      // Metadata must name the agent type.
+      const meta = (stripEvent?.payload as { metadata?: { agentType?: string; strippedTools?: string } })?.metadata;
+      expect(meta?.agentType).toBe('agent-with-delegation');
+      // strippedTools must list only 'agent' (the tool actually stripped from
+      // THIS agent's allowlist), NOT every tool in COMPOSE_LEAF_STRIPPED_TOOLS.
+      expect(meta?.strippedTools).toBe('agent');
+    });
+
+    it('does NOT emit the event when the node has no agent_type', async () => {
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const mockWrite = vi.fn(async () => undefined);
+      const traceWriter = { write: mockWrite };
+
+      const executor = new ComposeExecutor(makeContext({ traceWriter: traceWriter as never }));
+      await executor.execute(makeCall({
+        nodes: [{ id: 'a', prompt: 'generic task' }], // no agent_type
+      }));
+
+      await new Promise((r) => setTimeout(r, 0));
+
+      const writeArgs = mockWrite.mock.calls.map((c) => c[0] as { kind?: string; payload?: { phase?: string } });
+      const stripEvent = writeArgs.find(
+        (e) => e?.kind === 'session_phase' && (e?.payload as { phase?: string })?.phase === 'compose_leaf_tools_stripped',
+      );
+      expect(stripEvent).toBeUndefined();
+    });
+
+    it('does NOT emit the event when no tools are stripped from the named agent', async () => {
+      // An agent whose allowlist has no executor-backed tools yields no stripped list.
+      const agentNoStrip = {
+        name: 'read-only-agent',
+        definition: { prompt: 'Read only.', tools: ['read_file', 'grep'], model: 'haiku' },
+        source: 'user' as const,
+      };
+      const registry = new Map([['read-only-agent', agentNoStrip]]);
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const mockWrite = vi.fn(async () => undefined);
+      const traceWriter = { write: mockWrite };
+
+      const executor = new ComposeExecutor(
+        makeContext({ traceWriter: traceWriter as never, agentRegistry: registry }),
+      );
+      await executor.execute(makeCall({
+        nodes: [{ id: 'a', prompt: 'task', agent_type: 'read-only-agent' }],
+      }));
+
+      await new Promise((r) => setTimeout(r, 0));
+
+      const writeArgs = mockWrite.mock.calls.map((c) => c[0] as { kind?: string; payload?: { phase?: string } });
+      const stripEvent = writeArgs.find(
+        (e) => e?.kind === 'session_phase' && (e?.payload as { phase?: string })?.phase === 'compose_leaf_tools_stripped',
+      );
+      expect(stripEvent).toBeUndefined();
+    });
+  });
+
   describe('workspaceStore forwarding', () => {
     // Regression guard: compose DAG nodes share the session's workspace store so
     // findings published by one node are visible to sibling nodes and to the

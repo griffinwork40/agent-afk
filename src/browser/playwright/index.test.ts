@@ -31,6 +31,9 @@ const ctx = {
   getConsoleErrorCountFn: vi.fn() as ReturnType<typeof vi.fn>,
   getLastHttpStatusFn: vi.fn() as ReturnType<typeof vi.fn>,
   hasOpenDialogFn: vi.fn() as ReturnType<typeof vi.fn>,
+  consumeRequestGuardErrorFn: vi.fn() as ReturnType<typeof vi.fn>,
+  clearRequestGuardErrorFn: vi.fn() as ReturnType<typeof vi.fn>,
+  egressLogFn: vi.fn() as ReturnType<typeof vi.fn>,
 };
 
 // ---------------------------------------------------------------------------
@@ -50,6 +53,11 @@ vi.mock('./launcher.js', () => {
         (ctx.getLastHttpStatusFn as (...a: unknown[]) => unknown)(...args),
       hasOpenDialog: (...args: unknown[]) =>
         (ctx.hasOpenDialogFn as (...a: unknown[]) => unknown)(...args),
+      consumeRequestGuardError: (...args: unknown[]) =>
+        (ctx.consumeRequestGuardErrorFn as (...a: unknown[]) => unknown)(...args),
+      clearRequestGuardError: (...args: unknown[]) =>
+        (ctx.clearRequestGuardErrorFn as (...a: unknown[]) => unknown)(...args),
+      egressLog: (...args: unknown[]) => (ctx.egressLogFn as (...a: unknown[]) => unknown)(...args),
     };
   }
   return { BrowserLauncher: MockBrowserLauncher };
@@ -81,6 +89,16 @@ vi.mock('../config.js', () => ({
   enforceDomainPolicy: vi.fn(),
 }));
 
+vi.mock('../../http-client/egress-guard.js', () => ({
+  checkEgressTarget: vi.fn(),
+  EgressBlockedError: class EgressBlockedError extends Error {},
+}));
+
+vi.mock('./egress-gate.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./egress-gate.js')>();
+  return { ...actual, checkRedirectChain: vi.fn() };
+});
+
 // ---------------------------------------------------------------------------
 // Import subjects AFTER mocks
 // ---------------------------------------------------------------------------
@@ -90,6 +108,8 @@ import { observePage } from './observe.js';
 import { resolveTarget } from './resolve-target.js';
 import { enforceDomainPolicy } from '../config.js';
 import { writeScreenshotSidecar } from '../witness.js';
+import { checkEgressTarget, EgressBlockedError } from '../../http-client/egress-guard.js';
+import { checkRedirectChain } from './egress-gate.js';
 
 // ---------------------------------------------------------------------------
 // Type helpers
@@ -132,6 +152,8 @@ function makeStubElement(id = 'el_abc123'): InteractiveElement {
   };
 }
 
+const MAIN_FRAME = { name: 'main' };
+
 function makeStubPage(url = 'https://example.com'): Record<string, ReturnType<typeof vi.fn>> {
   return {
     goto: vi.fn().mockResolvedValue(undefined),
@@ -140,6 +162,9 @@ function makeStubPage(url = 'https://example.com'): Record<string, ReturnType<ty
     goBack: vi.fn().mockResolvedValue(undefined),
     viewportSize: vi.fn().mockReturnValue({ width: 1280, height: 800 }),
     evaluate: vi.fn().mockResolvedValue({ w: 1280, h: 6000 }),
+    on: vi.fn(),
+    off: vi.fn(),
+    mainFrame: vi.fn().mockReturnValue(MAIN_FRAME),
   };
 }
 
@@ -185,6 +210,9 @@ function resetCtx(): void {
   ctx.getConsoleErrorCountFn = vi.fn().mockReturnValue(0);
   ctx.getLastHttpStatusFn = vi.fn().mockReturnValue(200);
   ctx.hasOpenDialogFn = vi.fn().mockReturnValue(false);
+  ctx.consumeRequestGuardErrorFn = vi.fn().mockReturnValue(undefined);
+  ctx.clearRequestGuardErrorFn = vi.fn().mockReturnValue(undefined);
+  ctx.egressLogFn = vi.fn().mockReturnValue(undefined);
 }
 
 function makeProvider(): PlaywrightProvider {
@@ -202,6 +230,8 @@ beforeEach(() => {
   // Default behaviour for module-level mocks.
   asMock(observePage).mockResolvedValue(makeStubObservation());
   asMock(enforceDomainPolicy).mockReturnValue({ allowed: true });
+  asMock(checkEgressTarget).mockResolvedValue({ allowed: true });
+  asMock(checkRedirectChain).mockResolvedValue(null);
   asMock(writeScreenshotSidecar).mockResolvedValue({ path: '/fake/screenshot.png', bytes: 100 });
   asMock(resolveTarget).mockResolvedValue({ outcome: 'resolved', locator: ctx.locator });
 });
@@ -435,6 +465,82 @@ describe('open()', () => {
       lastAction: 'browser_open',
     });
     expect(state?.lastActionAt).toBeDefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // Regression: #2301 — SSRF egress guard in browser_open
+  //
+  // browser_open previously only checked the allow/block glob lists, meaning
+  // private/loopback/metadata ranges (169.254.169.254, 127.x.x.x, etc.) were
+  // reachable by default. Now checkEgressTarget runs before any browser
+  // interaction, matching the guard applied by web_request and web_scrape.
+  // -------------------------------------------------------------------------
+
+  it('returns BlockedByPolicy for a private-IP URL (#2301)', async () => {
+    asMock(checkEgressTarget).mockResolvedValue({
+      allowed: false,
+      reason:
+        'refusing to fetch 169.254.169.254 — internal/private address 169.254.169.254 ' +
+        '(loopback, link-local, cloud metadata, or RFC1918 space). ' +
+        'Set AFK_WEB_ALLOW_PRIVATE_HOSTS=1 to allow private-host access.',
+    });
+
+    const provider = makeProvider();
+    const result = await provider.open({
+      sessionId: 'sess1',
+      url: 'http://169.254.169.254/latest/meta-data/',
+    });
+
+    expect(result).toMatchObject({
+      outcome: 'blocked_by_policy',
+      url: 'http://169.254.169.254/latest/meta-data/',
+      reason: expect.stringContaining('169.254.169.254'),
+    });
+
+    // No browser interaction when the SSRF guard fires.
+    expect(ctx.ensurePageFn).not.toHaveBeenCalled();
+  });
+
+  it('returns BlockedByPolicy for a loopback URL (#2301)', async () => {
+    asMock(checkEgressTarget).mockResolvedValue({
+      allowed: false,
+      reason:
+        'refusing to fetch 127.0.0.1 — internal/private address 127.0.0.1 ' +
+        '(loopback, link-local, cloud metadata, or RFC1918 space). ' +
+        'Set AFK_WEB_ALLOW_PRIVATE_HOSTS=1 to allow private-host access.',
+    });
+
+    const provider = makeProvider();
+    const result = await provider.open({
+      sessionId: 'sess1',
+      url: 'http://127.0.0.1:7777/',
+    });
+
+    expect(result).toMatchObject({
+      outcome: 'blocked_by_policy',
+      url: 'http://127.0.0.1:7777/',
+      reason: expect.stringContaining('127.0.0.1'),
+    });
+
+    expect(ctx.ensurePageFn).not.toHaveBeenCalled();
+    // The domain policy check must not have run (SSRF fires first).
+    expect(enforceDomainPolicy).not.toHaveBeenCalled();
+  });
+
+  it('allows a public URL when AFK_WEB_ALLOW_PRIVATE_HOSTS escapes the guard (#2301)', async () => {
+    // When the guard is bypassed (opt-out), open() proceeds normally.
+    asMock(checkEgressTarget).mockResolvedValue({ allowed: true });
+    const obs = makeStubObservation({ url: 'https://example.com' });
+    asMock(observePage).mockResolvedValue(obs);
+
+    const provider = makeProvider();
+    const result = await provider.open({
+      sessionId: 'sess1',
+      url: 'https://example.com',
+    });
+
+    expect(result).toBe(obs);
+    expect(ctx.ensurePageFn).toHaveBeenCalled();
   });
 });
 
@@ -883,5 +989,196 @@ describe('describeTarget (via thrown error messages)', () => {
         target: { kind: 'selector', selector: '#submit' },
       }),
     ).rejects.toThrow('selector(#submit)');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Egress guard provider tests (items 1, 4, 5, 6)
+// ---------------------------------------------------------------------------
+
+describe('open() egress guard provider tests', () => {
+  it('returns blocked_by_policy when navError is an EgressBlockedError (guard abort)', async () => {
+    const guardErr = new EgressBlockedError('blocked: 127.0.0.1');
+    asMock(ctx.page?.['goto']).mockRejectedValue(new Error('net::ERR_BLOCKED_BY_CLIENT'));
+    ctx.consumeRequestGuardErrorFn = vi.fn().mockReturnValue(guardErr);
+
+    const provider = makeProvider();
+    const result = await provider.open({ sessionId: 's1', url: 'https://example.com' });
+    expect(result).toMatchObject({ outcome: 'blocked_by_policy', reason: 'blocked: 127.0.0.1' });
+    expect(ctx.ensurePageFn).toHaveBeenCalled();
+  });
+
+  it('returns blocked_by_policy when checkRedirectChain detects a private hop', async () => {
+    asMock(checkRedirectChain).mockResolvedValue({
+      outcome: 'blocked_by_policy',
+      url: 'https://example.com',
+      reason: 'private hop detected',
+    });
+
+    const provider = makeProvider();
+    const result = await provider.open({ sessionId: 's1', url: 'https://example.com' });
+    expect(result).toMatchObject({ outcome: 'blocked_by_policy', reason: 'private hop detected' });
+    expect(observePage).not.toHaveBeenCalled();
+  });
+
+  it('clear() is called at start of open() to discard stale latch (item 4)', async () => {
+    const provider = makeProvider();
+    await provider.open({ sessionId: 's1', url: 'https://example.com' });
+    expect(ctx.clearRequestGuardErrorFn).toHaveBeenCalledWith('s1');
+  });
+
+  it('stale latch from successful open() is consumed and does not poison next op (item 4)', async () => {
+    // First open succeeds but had an iframe refusal latched.
+    const guardErr = new EgressBlockedError('iframe blocked');
+    let consumeCallCount = 0;
+    ctx.consumeRequestGuardErrorFn = vi.fn().mockImplementation(() => {
+      consumeCallCount += 1;
+      // Return the error on first consume (post-success cleanup), undefined after.
+      return consumeCallCount === 1 ? guardErr : undefined;
+    });
+
+    const provider = makeProvider();
+    const result = await provider.open({ sessionId: 's1', url: 'https://example.com' });
+    // Successful op despite the iframe refusal.
+    expect(result).toMatchObject({ observationId: 'obs_1' });
+
+    // Second open: clearRequestGuardError is called, so stale error is gone.
+    ctx.consumeRequestGuardErrorFn = vi.fn().mockReturnValue(undefined);
+    const result2 = await provider.open({ sessionId: 's1', url: 'https://example.com' });
+    expect(result2).toMatchObject({ observationId: 'obs_1' });
+  });
+});
+
+describe('act() egress guard provider tests', () => {
+  it('returns blocked_by_policy immediately without retry when first attempt is guard-aborted (item 5)', async () => {
+    const guardErr = new EgressBlockedError('blocked: 10.0.0.1');
+    asMock(ctx.locator?.['click']).mockRejectedValue(new Error('net::ERR_BLOCKED_BY_CLIENT'));
+    ctx.consumeRequestGuardErrorFn = vi.fn().mockReturnValue(guardErr);
+    asMock(resolveTarget).mockResolvedValue({ outcome: 'resolved', locator: ctx.locator });
+
+    const provider = makeProvider();
+    const result = await provider.act({
+      sessionId: 's1',
+      action: 'click',
+      target: { kind: 'semantic', text: 'Go' },
+    });
+
+    expect(result).toMatchObject({ outcome: 'blocked_by_policy', reason: 'blocked: 10.0.0.1' });
+    // Only one attempt — no retry when guard fires.
+    expect(asMock(ctx.locator?.['click'])).toHaveBeenCalledTimes(1);
+  });
+
+  it('clear() is called at start of act() to discard stale latch (item 4)', async () => {
+    asMock(resolveTarget).mockResolvedValue({ outcome: 'resolved', locator: ctx.locator });
+
+    const provider = makeProvider();
+    await provider.act({ sessionId: 's1', action: 'click', target: { kind: 'semantic', text: 'OK' } });
+    expect(ctx.clearRequestGuardErrorFn).toHaveBeenCalledWith('s1');
+  });
+
+  it('checks the redirect chain of an action-triggered main-frame navigation (items 1, 3)', async () => {
+    asMock(resolveTarget).mockResolvedValue({ outcome: 'resolved', locator: ctx.locator });
+    const navResponse = {
+      request: () => ({ isNavigationRequest: () => true }),
+      frame: () => MAIN_FRAME,
+    };
+    asMock(ctx.locator?.['click']).mockImplementation(async () => {
+      const onCall = asMock(ctx.page?.['on']).mock.calls.find((c) => c[0] === 'response');
+      (onCall?.[1] as (r: unknown) => void)(navResponse);
+    });
+    asMock(checkRedirectChain).mockResolvedValue({
+      outcome: 'blocked_by_policy',
+      url: 'https://example.com',
+      reason: 'hop touched 127.0.0.1',
+    });
+
+    const provider = makeProvider();
+    const result = await provider.act({ sessionId: 's1', action: 'click', target: { kind: 'semantic', text: 'Go' } });
+
+    expect(asMock(checkRedirectChain)).toHaveBeenCalledWith(navResponse, expect.any(String), false);
+    expect(result).toMatchObject({ outcome: 'blocked_by_policy', reason: 'hop touched 127.0.0.1' });
+    expect(asMock(ctx.page?.['off'])).toHaveBeenCalledWith('response', expect.any(Function));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Guarded egress proxy refusal attribution (#2301, ADR 20261014 PATH_B)
+// ---------------------------------------------------------------------------
+
+describe('proxy refusal attribution in open()/act()', () => {
+  const REASON = 'refusing browser connection to internal.test — internal/private address 10.0.0.5';
+
+  /** Fake proxy log: refusal for internal.test:80 recorded after the mark. */
+  function installRefusalLog(): void {
+    ctx.egressLogFn = vi.fn().mockReturnValue({
+      mark: () => 0,
+      refusalsSince: () => [{ seq: 1, at: Date.now(), target: 'internal.test:80', reason: REASON }],
+    });
+  }
+
+  /** Emit a main-frame navigation request to the page's 'request' listener. */
+  function emitMainRequest(url: string): void {
+    const onCall = asMock(ctx.page?.['on']).mock.calls.find((c) => c[0] === 'request');
+    (onCall?.[1] as (r: unknown) => void)({ url: () => url, isNavigationRequest: () => true, frame: () => MAIN_FRAME });
+  }
+
+  it('open(): a refused main-frame redirect hop returns blocked_by_policy, not the error page, and invalidates the session', async () => {
+    installRefusalLog();
+    // goto RESOLVES (Chromium shows its error page for the refused hop).
+    asMock(ctx.page?.['goto']).mockImplementation(async () => {
+      emitMainRequest('http://internal.test/secret');
+      return null;
+    });
+    const result = await makeProvider().open({ sessionId: 's1', url: 'https://example.com' });
+    expect(result).toMatchObject({ outcome: 'blocked_by_policy', reason: REASON });
+    expect(asMock(observePage)).not.toHaveBeenCalled();
+    expect(ctx.closeSessionFn).toHaveBeenCalledWith('s1');
+  });
+
+  it('open(): a refusal for a host this page never requested is NOT attributed', async () => {
+    installRefusalLog();
+    asMock(ctx.page?.['goto']).mockImplementation(async () => {
+      emitMainRequest('https://example.com/');
+      return null;
+    });
+    const result = await makeProvider().open({ sessionId: 's1', url: 'https://example.com' });
+    expect(result).toMatchObject({ observationId: 'obs_1' });
+  });
+
+  it('act(): a locator action that resolves while its main-frame navigation was refused reports blocked_by_policy', async () => {
+    installRefusalLog();
+    asMock(resolveTarget).mockResolvedValue({ outcome: 'resolved', locator: ctx.locator });
+    asMock(ctx.locator?.['click']).mockImplementation(async () => {
+      emitMainRequest('http://internal.test/');
+    });
+    const result = await makeProvider().act({ sessionId: 's1', action: 'click', target: { kind: 'semantic', text: 'Go' } });
+    expect(result).toMatchObject({ outcome: 'blocked_by_policy', reason: REASON });
+    expect(asMock(observePage)).not.toHaveBeenCalled();
+    expect(ctx.closeSessionFn).toHaveBeenCalledWith('s1');
+    expect(asMock(ctx.page?.['off'])).toHaveBeenCalledWith('request', expect.any(Function));
+  });
+
+  it('act(): a net::ERR failure whose main-frame navigation the proxy refused is NOT retried (#2313 F5)', async () => {
+    installRefusalLog();
+    asMock(resolveTarget).mockResolvedValue({ outcome: 'resolved', locator: ctx.locator });
+    asMock(ctx.locator?.['click']).mockImplementation(async () => {
+      emitMainRequest('http://internal.test/');
+      throw new Error('net::ERR_TUNNEL_CONNECTION_FAILED');
+    });
+    const result = await makeProvider().act({ sessionId: 's1', action: 'click', target: { kind: 'semantic', text: 'Go' } });
+    expect(asMock(ctx.locator?.['click'])).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ outcome: 'blocked_by_policy', reason: REASON });
+    expect(ctx.closeSessionFn).toHaveBeenCalledWith('s1');
+  });
+
+  it('act(): a net::ERR failure with no attributable refusal is still retried once', async () => {
+    installRefusalLog();
+    asMock(resolveTarget).mockResolvedValue({ outcome: 'resolved', locator: ctx.locator });
+    asMock(ctx.locator?.['click'])
+      .mockRejectedValueOnce(new Error('net::ERR_CONNECTION_RESET'))
+      .mockResolvedValueOnce(undefined);
+    const result = await makeProvider().act({ sessionId: 's1', action: 'click', target: { kind: 'semantic', text: 'Go' } });
+    expect(asMock(ctx.locator?.['click'])).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ observationId: expect.any(String) });
   });
 });

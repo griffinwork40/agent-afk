@@ -532,76 +532,76 @@ describe('classifyRisk — schedule self-disable carve-out (#3464)', () => {
 });
 
 // ---- #3534: heredoc prose false-positives --------------------------------
-// Conservative prose false positives are permitted by the safety invariant.
-// Do not strip payloads or narrow high patterns without proving executable
-// commands cannot be hidden by shell syntax or subsequent consumers.
-describe('classifyRisk — bash heredoc conservative prose classification (#3534)', () => {
-  // ── conservative guards (prose in file-redirect heredocs) ──────────────
+// Invariant: HIGH tokens glued to a preceding word character (`platform `,
+// `retrieval `) can never start a shell word, so they no longer trip high.
+// No heredoc payload is stripped: a standalone `rm`/`eval` word in a body
+// still trips high (see the matrix below and the PR #3549 regressions).
+describe('classifyRisk — bash heredoc prose classification (#3534)', () => {
+  // ── prose guards (in-word token substrings in file-redirect heredocs) ──
 
-  it('heredoc body "platform shift and long-term outlook" → high conservatively (rm  is prose)', () => {
-    // Keep main's conservative verdict until safe shell parsing is available.
+  it('heredoc body "platform shift and long-term outlook" → NOT high (rm  is in-word prose)', () => {
     const cmd = [
       "cat > /tmp/note.txt <<'EOF'",
       '# reasoning: the platform shift and long-term outlook',
       'EOF',
     ].join('\n');
-    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
   });
 
-  it('heredoc body "confirm the retrieval step" → high conservatively (eval  is prose)', () => {
-    // 'eval ' matches 'retrieval '; retain the conservative high verdict.
+  it('heredoc body "confirm the retrieval step" → NOT high (eval  is in-word prose)', () => {
+    // 'eval ' is a substring of 'retrieval ' but not at a word start.
     const cmd = [
       "cat > /tmp/x.py <<'EOF'",
       'confirm the retrieval step',
       'EOF',
     ].join('\n');
-    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
   });
 
-  it('heredoc body with "form " and "confirm " → high conservatively', () => {
+  it('heredoc body with "form " and "confirm " → NOT high', () => {
     const cmd = [
       "cat > /tmp/doc.md <<'EOF'",
       'Please confirm the form submission.',
       'EOF',
     ].join('\n');
-    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
   });
 
-  it('tee heredoc body with prose containing "rm " → high conservatively', () => {
+  it('tee heredoc body with prose containing "rm " → NOT high', () => {
     const cmd = [
       "tee /tmp/out.txt <<'EOF'",
       'This is a long-term platform migration plan.',
       'EOF',
     ].join('\n');
-    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
   });
 
-  it('append-redirect heredoc body with prose → high conservatively', () => {
+  it('append-redirect heredoc body with prose → NOT high', () => {
     const cmd = [
       "cat >> /tmp/log.txt <<'EOF'",
       'retrieval complete for platform team',
       'EOF',
     ].join('\n');
-    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
   });
 
-  it('double-quoted delimiter heredoc body with prose → high conservatively', () => {
+  it('double-quoted delimiter heredoc body with prose → NOT high', () => {
     // <<"EOF" is also a quoted delimiter (no expansion in practice).
     const cmd = [
       'cat > /tmp/x.txt <<"EOF"',
       'The long-term outlook for platform teams is positive.',
       'EOF',
     ].join('\n');
-    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
   });
 
-  it('<<-EOF (tab-stripping) file-redirect body with prose → high conservatively', () => {
+  it('<<-EOF (tab-stripping) file-redirect body with prose → NOT high', () => {
     const cmd = [
       "cat > /tmp/x.txt <<-'EOF'",
       '\tthe platform shift matters',
       'EOF',
     ].join('\n');
-    expect(classifyRisk('bash', { command: cmd }, ctx)).toBe('high');
+    expect(classifyRisk('bash', { command: cmd }, ctx)).not.toBe('high');
   });
 
   // ── true-positive guards (real dangerous commands must stay high) ─────────
@@ -717,6 +717,111 @@ describe('classifyRisk — PR #3549 blocking review regressions', () => {
     ["cat > note <<'EOF'", 'rm secrets.txt', ' EOF'],
   ])('F3: quoted markers and uncertain terminators cannot hide commands: %j', (...lines) => {
     expect(classifyRisk('bash', { command: lines.join('\n') }, ctx)).toBe('high');
+  });
+});
+
+// Invariant: two-directional matrix for #3534 word-start matching. Prose
+// whose only HIGH hit is an in-word substring must not trip high; every
+// executable destructive shape (separators, wrappers, quoting, evasion,
+// interpreter heredocs, nested heredocs, prefixed binaries) must stay high.
+// These strings are classifier data, never shell inputs.
+describe('classifyRisk — #3534 word-start matrix', () => {
+  it.each([
+    ["cat > /tmp/a.md <<'EOF'", 'The platform team owns long-term storage.', 'EOF'],
+    ["cat > /tmp/a.md <<'EOF'", 'Please confirm the retrieval pipeline works.', 'EOF'],
+    ["cat <<'EOF' > /tmp/a.md", 'inform, perform, transform, uniform, norm', 'EOF'],
+    ['cat <<EOF > /tmp/a.md', 'firm warm storm alarm farm harm term', 'EOF'],
+    ["tee /tmp/a.md <<'EOF'", 'medieval upheaval retrieval', 'EOF'],
+    ["cat > /tmp/a.md <<-'EOF'", '\tthe platform shift; confirm form', '\tEOF'],
+    ["cat > /tmp/outer.md <<'A'", 'platform A notes', 'A', "cat >> /tmp/outer.md <<'B'", 'retrieval B notes', 'B'],
+    ['git commit -m "transform the platform form"'],
+    ['echo "long-term retrieval for the platform"'],
+  ])('prose with in-word token substrings → NOT high: %j', (...lines) => {
+    expect(classifyRisk('bash', { command: lines.join('\n') }, ctx)).not.toBe('high');
+  });
+
+  it.each([
+    'rm -rf x',
+    'rm\tx',
+    'rm${IFS}-rf x',
+    'rm$IFS-rf x',
+    'rm\\ x',
+    'RM -rf x',
+    ';rm x',
+    'a;rm x',
+    'a&&rm x',
+    'a || rm x',
+    'a|rm x',
+    '(rm x)',
+    '{ rm x; }',
+    '$(rm -rf x)',
+    'x=$(rm -f x)',
+    '`rm x`',
+    'echo `rm x`',
+    '$1rm x',
+    'bash -c "rm -rf /"',
+    "sh -c 'rm -rf /'",
+    "bash -c $'rm -rf /'",
+    "$'rm' -rf x",
+    'eval "$x"',
+    'eval\t"$x"',
+    'eval"$x"',
+    "eval'$x'",
+    'eval$x',
+    'sudo\tx',
+    'grm -rf x',
+    'srm x',
+    'gchmod 777 x',
+    'gchown root x',
+    'gdd if=in.img of=out.img',
+    'gdd of=out.img if=in.img',
+    'dcfldd if=in.img of=out.img',
+    'dc3dd if=in.img of=out.img',
+    'sfdisk x',
+    'cfdisk /dev/sda',
+    'gfdisk /dev/sda',
+    'visudo',
+    'gsudo x',
+  ])('destructive single-line shape stays high: %j', (command) => {
+    expect(classifyRisk('bash', { command }, ctx)).toBe('high');
+  });
+
+  it.each([
+    ['bash <<EOF', 'rm -rf /', 'EOF'],
+    ["sh <<-'EOF'", '\trm -rf /', '\tEOF'],
+    ['python3 <<EOF', 'import os; os.system("rm -rf /")', 'EOF'],
+    ['python3 <<EOF', "import os; os.system('eval $x')", 'EOF'],
+    ["bash <<'OUTER'", "cat > f <<'INNER'", 'platform notes', 'INNER', 'rm -rf /', 'OUTER'],
+    ["cat > /tmp/run.sh <<'EOF'", 'rm -rf /', 'EOF', 'bash /tmp/run.sh'],
+    ["cat > /tmp/a.md <<'EOF'", 'run rm on the old files', 'EOF'],
+    ["cat > /tmp/a.md <<'EOF'", 'the platform', 'EOF', 'rm /tmp/a.md'],
+  ])('heredoc shapes with an executable token stay high: %j', (...lines) => {
+    expect(classifyRisk('bash', { command: lines.join('\n') }, ctx)).toBe('high');
+  });
+
+  it('separator-evasion reason names the matched word', () => {
+    expect(classifyRiskDetailed('bash', { command: 'rm\t-rf x' }, ctx)).toEqual({
+      level: 'high',
+      reason: "bash-pattern: matched 'rm'",
+    });
+  });
+
+  // Regression guard for issue #3659: SEPARATOR_EVASION lookahead did not
+  // cover ';' or '|', so 'rm;foo' and 'rm|grep' slipped through as non-high.
+  it('separator-evasion: rm immediately followed by ; (no space) → high', () => {
+    expect(classifyRisk('bash', { command: 'rm;foo' }, ctx)).toBe('high');
+  });
+
+  it('separator-evasion: rm immediately followed by | (no space) → high', () => {
+    expect(classifyRisk('bash', { command: 'rm|grep lost' }, ctx)).toBe('high');
+  });
+
+  it('separator-evasion: eval immediately followed by ; (no space) → high', () => {
+    expect(classifyRisk('bash', { command: 'eval;payload' }, ctx)).toBe('high');
+  });
+
+  it('separator-evasion: eval immediately followed by | (no space) → high', () => {
+    expect(classifyRisk('bash', { command: 'eval|sh' }, ctx)).toBe('high');
   });
 });
 

@@ -22,11 +22,13 @@ import { promises as fs } from 'node:fs';
 import { join, resolve, isAbsolute, dirname } from 'node:path';
 import type { ExecFileFn } from '../../worktree/worktree-sweep.js';
 import { registerWorktreeRoot } from '../../worktree/worktree-root-registry.js';
+import { writeJsonFile } from '../../../utils/json-file.js';
 import { probeNonRebuildableIgnoredFiles } from '../../worktree/worktree-ignored-probe.js';
 import { env } from '../../../config/env.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { debugLog } from '../../../utils/debug.js';
 import { sleep } from '../../../utils/sleep.js';
+import { runWorktreeSetup, type SetupCommandRunner, type WorktreeSetupResult } from '../../worktree/worktree-setup.js';
 
 /** Default git runner. Exported so callers without their own can reuse it. */
 export const defaultExecFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
@@ -172,6 +174,10 @@ export interface CreateManagedWorktreeArgs {
   baseRef: string;
   /** Meta `owner` tag. Default `'agent'`. */
   owner?: string;
+  /** Session abort signal; cancels a running repo-declared setup (#3601). */
+  signal?: AbortSignal;
+  /** Injectable setup command runner (tests). */
+  setupRunner?: SetupCommandRunner;
 }
 
 export interface ManagedWorktreeInfo {
@@ -180,6 +186,12 @@ export interface ManagedWorktreeInfo {
   baseRef: string;
   /** Resolved SHA of `baseRef` at creation ('' if rev-parse failed). */
   baseSha: string;
+  /**
+   * Outcome of the repo-declared `.afk/worktree-setup.json` (#3601). Absent
+   * when the repo declares nothing, so undeclared repos see the exact
+   * pre-#3601 shape.
+   */
+  setup?: WorktreeSetupResult;
 }
 
 /**
@@ -188,6 +200,7 @@ export interface ManagedWorktreeInfo {
  * Emits `git worktree add -b <branch> <path> <baseRef>`, then best-effort
  * `rev-parse <baseRef>` (for `baseSha`) and the meta write — neither of which
  * fails the create (mirrors the pre-extraction handler behavior exactly).
+ * Finally runs the repo's opt-in setup declaration, if any (#3601).
  */
 export async function createManagedWorktree(
   args: CreateManagedWorktreeArgs,
@@ -214,23 +227,24 @@ export async function createManagedWorktree(
     baseSha = sha.stdout.trim();
   } catch { /* non-fatal */ }
   try {
-    await fs.writeFile(
-      join(worktreePath, '.afk-worktree-meta.json'),
-      JSON.stringify(
-        {
-          owner: args.owner ?? 'agent',
-          pid: process.pid,
-          createdAt: new Date().toISOString(),
-          baseSha,
-          baseBranch: baseRef,
-        },
-        null,
-        2,
-      ),
-      'utf-8',
-    );
+    await writeJsonFile(join(worktreePath, '.afk-worktree-meta.json'), {
+      owner: args.owner ?? 'agent',
+      pid: process.pid,
+      createdAt: new Date().toISOString(),
+      baseSha,
+      baseBranch: baseRef,
+    });
   } catch { /* best-effort */ }
-  return { path: worktreePath, branch, baseRef, baseSha };
+  // Invariant (#3601): setup runs only AFTER the meta write, so the sweep
+  // never sees a meta-less tree mid-setup, and runWorktreeSetup never throws,
+  // so a setup failure can never reach createIsolatedWorktree's
+  // LOCK_CONTENTION retry and re-run `git worktree add` on a live branch.
+  const setup = await runWorktreeSetup({
+    worktreePath,
+    ...(args.signal !== undefined ? { signal: args.signal } : {}),
+    ...(args.setupRunner !== undefined ? { runCommand: args.setupRunner } : {}),
+  });
+  return { path: worktreePath, branch, baseRef, baseSha, ...(setup.status !== 'none' ? { setup } : {}) };
 }
 
 /** True when the worktree has uncommitted changes (unreadable → dirty). */
@@ -347,6 +361,10 @@ export async function createIsolatedWorktree(args: {
   slugHint: string;
   /** Base ref for the branch. Default: HEAD of `cwd`'s checkout (#760). */
   baseRef?: string;
+  /** Abort signal forwarded to the repo-declared setup (#3601). */
+  signal?: AbortSignal;
+  /** Injectable setup command runner (tests). */
+  setupRunner?: SetupCommandRunner;
 }): Promise<ManagedWorktreeInfo & { repoRoot: string }> {
   const execFile = args.execFile ?? defaultExecFile;
   const ctx = await resolveRepoContext(execFile, args.cwd); // throws if non-git
@@ -374,6 +392,8 @@ export async function createIsolatedWorktree(args: {
       worktreePath,
       branch,
       baseRef,
+      ...(args.signal !== undefined ? { signal: args.signal } : {}),
+      ...(args.setupRunner !== undefined ? { setupRunner: args.setupRunner } : {}),
     });
   let info: ManagedWorktreeInfo;
   try {
@@ -508,7 +528,7 @@ export async function teardownIsolatedWorktree(args: {
         patch['ignoredDetailAtPreserve'] = outcome.detail;
         patch['ignoredBecauseAtPreserve'] = outcome.because;
       }
-      await fs.writeFile(metaPath, JSON.stringify({ ...existing, ...patch }, null, 2), 'utf-8');
+      await writeJsonFile(metaPath, { ...existing, ...patch });
     } catch { /* best-effort — never fail teardown over a meta write */ }
     return { removed: false, preserved: true, reason: outcome.reason, ignoredDetail, ignoredBecause };
   } catch {

@@ -223,6 +223,11 @@ for (const family of ['no-ts', 'far-reset', 'timestamped'] as const) {
       expect((await gen.next()).value).toMatchObject({ type: 'paused' });
       let settled = false;
       const pending = drain(gen).then((events) => { settled = true; return events; });
+      // Two ticks are load-bearing: the generator's first `await` (the park
+      // yield) consumes one microtask, and the internal `await wait` in the
+      // park loop consumes a second before the outer pending Promise can
+      // observe a settled state. Removing either tick makes `settled` true
+      // prematurely on Node 24's stricter microtask ordering (ubuntu CI leg).
       await Promise.resolve();
       await Promise.resolve();
       expect(settled).toBe(false);

@@ -322,6 +322,49 @@ describe('runWhatif — predict-only path', () => {
     expect(messages.some((m) => m.startsWith('[redundancy] Jaccard pass complete'))).toBe(true);
   });
 
+  it('emits [redundancy] warning progress message when added paragraph restates baseline (#2414)', async () => {
+    // Contract: when the candidate system prompt adds a paragraph that closely
+    // restates an existing baseline paragraph, run.ts must emit a
+    // '[redundancy] Added paragraph may restate' progress message before any
+    // model call so the operator can abort a paid run early.
+    //
+    // We wire a custom runner whose snapshot returns a baseline with a
+    // substantive delegation paragraph and a candidate that adds a near-
+    // paraphrase of that same paragraph.  The Jaccard similarity between the
+    // two phrases reliably exceeds REDUNDANCY_THRESHOLD (0.35).
+    const RICH_BASELINE =
+      'Stay inline for: single-file edits, localized fixes visible in ' +
+      'fewer than two reads, and tasks solvable without spawning a subagent.';
+    // The added line restates the baseline rule with slightly different wording.
+    const ADDED_LINE =
+      'For tasks solvable with at most three file reads and one localized ' +
+      'edit, work directly without skills or subagents.';
+
+    const customRunner: AgentRunner = {
+      name: 'fake-redundancy',
+      run: vi.fn(async (_env: Environment, ep: Episode, sample: number): Promise<EpisodeTrace> => {
+        if (_env.label === 'candidate') return makeCandidateTrace(ep.id, sample);
+        return makeBaselineTrace(ep.id, sample);
+      }) as unknown as AgentRunner['run'],
+      snapshot: vi.fn(async (env: Environment): Promise<RequestSnapshot> => {
+        if (env.label === 'candidate') {
+          return makeSnap(`${RICH_BASELINE}\n\n${ADDED_LINE}`);
+        }
+        return makeSnap(RICH_BASELINE);
+      }),
+    };
+
+    const deps = makeDeps({ runner: customRunner });
+    await runWhatif(makeOptions({ verify: false }), deps);
+
+    const messages = (deps.onProgress as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c: Array<{ message?: string }>) => c[0]?.message ?? '',
+    );
+    expect(
+      messages.some((m) => m.startsWith('[redundancy] Added paragraph may restate an existing rule')),
+    ).toBe(true);
+  });
+
   it('includes headline', async () => {
     const deps = makeDeps();
     const report = await runWhatif(makeOptions({ verify: false }), deps);
@@ -727,5 +770,51 @@ describe('runWhatif — keepSandboxes sandboxes.json', () => {
     // sandboxes.json must NOT exist in runDir
     const mappingPath = path.join(report.runDir, 'sandboxes.json');
     await expect(fsp.access(mappingPath)).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A/A mode: cleanup ownership + keptSandboxes wiring (#3630)
+// ---------------------------------------------------------------------------
+
+describe('runWhatif — A/A mode (aaMode: true)', () => {
+  it('returns a zero-prediction A/A report', async () => {
+    const deps = makeDeps();
+    const options = makeOptions({ aaMode: true, keepSandboxes: false });
+
+    const report = await runWhatif(options, deps);
+
+    expect(report.predictions).toHaveLength(0);
+    expect(report.costUsd).toBe(0);
+    expect(report.limits.some((l) => l.includes('A/A calibration run'))).toBe(true);
+  });
+
+  it('sets keptSandboxes on the returned report when keepSandboxes is true (finally block owns cleanup)', async () => {
+    // This test verifies the fix for the double-cleanup + pendingReport bug:
+    // run.ts must assign `pendingReport = await runAaPhase(...)` so the finally
+    // block can attach keptSandboxes.  If runAaPhase still called cleanupOrRecord
+    // internally the sandboxes would be cleaned up twice and this would throw or
+    // leave keptSandboxes unset.
+    const deps = makeDeps();
+    const options = makeOptions({ aaMode: true, keepSandboxes: true });
+
+    const report = await runWhatif(options, deps);
+
+    expect(report.keptSandboxes).toBeDefined();
+    expect(typeof report.keptSandboxes!.baseline).toBe('string');
+    expect(typeof report.keptSandboxes!.candidate).toBe('string');
+
+    // Clean up kept sandbox roots
+    await fsp.rm(report.keptSandboxes!.baseline, { recursive: true, force: true });
+    await fsp.rm(report.keptSandboxes!.candidate, { recursive: true, force: true });
+  });
+
+  it('does not call runner.run (A/A mode only takes snapshots)', async () => {
+    const deps = makeDeps();
+    const options = makeOptions({ aaMode: true, keepSandboxes: false });
+
+    await runWhatif(options, deps);
+
+    expect(deps.runner.run).not.toHaveBeenCalled();
   });
 });

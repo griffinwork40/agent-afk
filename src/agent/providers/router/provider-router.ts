@@ -66,6 +66,7 @@ import type { AgentConfig, ResumeHistoryTurn } from '../../types/config-types.js
 import type { JournalMessage } from '../../journal/index.js';
 import { QueryInputStream } from '../../session/input-iterable.js';
 import { applySlotCredentials } from '../../session/slot-credentials.js';
+import { slotDenyKey } from '../../tools/operator-denied.slots.js';
 import { debugLog } from '../../../utils/debug.js';
 
 /** Collaborators injected for testability (real impls come from the providers/auth layer). */
@@ -231,6 +232,10 @@ export class ProviderRouter implements ProviderQuery {
       innerConfig.forceXaiApiKey ? 'xai-apikey' : '',
       // Slot-only xAI endpoint (not global AFK_OPENAI_BASE_URL).
       innerConfig.xaiBaseUrl ?? '',
+      // Per-slot tool deny list (tools.disabledBySlot): the live inner's
+      // dispatcher froze the old model's list, so a switch onto a slot with a
+      // different list must rebuild rather than forward setModel().
+      slotDenyKey(innerConfig.model),
     ].join('\u0000');
 
     return { provider, innerConfig, signature };

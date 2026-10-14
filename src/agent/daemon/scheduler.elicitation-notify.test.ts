@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -53,6 +53,7 @@ import {
 } from './scheduler.elicitation-notify.js';
 import { CronScheduler, type TelemetryRecord, type TaskCompletionDetails } from './scheduler.js';
 import { elicitationRouter } from '../elicitation-router.js';
+import { closeStore } from '../elicitation/pending-question-store.js';
 import type { AgentSession } from '../session/agent-session.js';
 import type { AgentConfig } from '../types.js';
 import type { ScheduledTask } from './triggers.js';
@@ -174,8 +175,13 @@ describe('makeCronElicitationHandler', () => {
 
   it('does not call onHandoffWritten when handoff write fails', async () => {
     const messages: string[] = [];
-    // Pass a non-existent, non-creatable path to force a write failure.
-    const badDir = '/dev/null/no-such-dir';
+    // Force a write failure portably: a directory path nested under a regular
+    // FILE fails mkdir/write with ENOTDIR (POSIX) or ENOENT/EEXIST (win32).
+    // `/dev/null/...` is NOT portable — on Windows it resolves to a creatable
+    // `C:\dev\null\...`, so the write succeeded and this test failed there.
+    const blocker = join(handoffsDir, 'not-a-dir');
+    writeFileSync(blocker, '');
+    const badDir = join(blocker, 'no-such-dir');
     const handler = makeCronElicitationHandler({
       taskId: 'task-4',
       originalCommand: '/cmd',
@@ -214,18 +220,23 @@ describe('CronScheduler cron elicitation notify', () => {
     else process.env['AFK_HOME'] = savedAfkHome;
     if (savedProjectMcp === undefined) delete process.env['AFK_ALLOW_PROJECT_MCP'];
     else process.env['AFK_ALLOW_PROJECT_MCP'] = savedProjectMcp;
+    restoreInstallForSession();
+    closeStore();
     rmSync(dir, { recursive: true, force: true });
   });
 
-  function makeFakeSession(triggerElicitation: boolean): AgentSession {
+  function makeFakeSession(triggerElicitation: boolean, getSessionKey: () => string | undefined): AgentSession {
     return {
       sendMessage: async (_cmd: string) => {
         if (triggerElicitation) {
           // Route an elicitation through the router (simulates ask_question).
+          // Pass sessionKey so the per-session handler registered by
+          // runAgentAttempt is found (#3619 — daemon tasks use installForSession).
           const ac = new AbortController();
+          const sessionKey = getSessionKey();
           await elicitationRouter.route(
             { message: 'Need approval', type: 'confirm' },
-            { signal: ac.signal },
+            { signal: ac.signal, ...(sessionKey !== undefined ? { sessionKey } : {}) },
           );
         }
         return {
@@ -242,11 +253,37 @@ describe('CronScheduler cron elicitation notify', () => {
 
   type Factory = NonNullable<ConstructorParameters<typeof CronScheduler>[0]>['sessionFactory'];
 
+  // Shared key capture for the active tick. installForSession is intercepted
+  // (call-through) so makeFakeSession.sendMessage can read the key at call
+  // time — sendMessage fires AFTER installForSession, so the key is ready.
+  let capturedElicitationKey: string | undefined;
+  let _originalInstallForSession: typeof elicitationRouter.installForSession | undefined;
+
+  function interceptInstallForSession(): void {
+    if (_originalInstallForSession !== undefined) return; // already intercepted
+    const orig = elicitationRouter.installForSession.bind(elicitationRouter);
+    _originalInstallForSession = orig;
+    elicitationRouter.installForSession = (key, handler) => {
+      capturedElicitationKey = key;
+      orig(key, handler);
+    };
+  }
+
+  function restoreInstallForSession(): void {
+    if (_originalInstallForSession !== undefined) {
+      elicitationRouter.installForSession = _originalInstallForSession;
+      _originalInstallForSession = undefined;
+    }
+    capturedElicitationKey = undefined;
+  }
+
   function makeScheduler(
     triggerElicitation: boolean,
     onTaskComplete?: (record: TelemetryRecord, details?: TaskCompletionDetails) => void,
   ): CronScheduler {
-    const factory: Factory = ((_config: AgentConfig) => makeFakeSession(triggerElicitation)) as Factory;
+    interceptInstallForSession();
+    const getKey = () => capturedElicitationKey;
+    const factory: Factory = ((_config: AgentConfig) => makeFakeSession(triggerElicitation, getKey)) as Factory;
     return new CronScheduler({
       telemetryPath,
       handoffsDir,

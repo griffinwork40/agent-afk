@@ -96,6 +96,7 @@ describe('Telegram store ownership', () => {
     mocks.workspaceThrow = true;
     await expect(factory()({ model: 'sonnet' })).rejects.toThrow('sqlite open failed');
     expect(mocks.disconnect).toHaveBeenCalledTimes(1);
+    expect(mocks.workspaceClose).not.toHaveBeenCalled();
   });
 
   it('logs session-close failures during recovery instead of discarding them (item 2 — #3588)', async () => {

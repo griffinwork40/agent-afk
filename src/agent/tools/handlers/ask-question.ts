@@ -134,6 +134,12 @@ export const askQuestionHandler: ToolHandler = async (input, signal, context) =>
     // Marks this session's presence file as blocked-on-human for the duration of
     // the prompt (no-op when the dispatcher supplied no id).
     ...(context?.sessionId !== undefined ? { sessionId: context.sessionId } : {}),
+    // Per-session handler lookup (#3619): daemon tasks install their elicitation
+    // handler under the daemonTraceLabel key, which equals context.sessionId
+    // (both originate from the same spawnDaemonSession call). Passing it as
+    // sessionKey lets route() resolve the correct per-task handler instead of
+    // the shared global slot, eliminating the concurrent-task race condition.
+    ...(context?.sessionId !== undefined ? { sessionKey: context.sessionId } : {}),
   });
   // Contract: only `decline` (no handler installed) and `cancel` (user
   // interrupted) are surfaced to the agent as tool errors. `accept` and

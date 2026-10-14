@@ -9,6 +9,7 @@
 import { SubagentManager } from '../subagent.js';
 import type { AgentInput } from './subagent/input-parse.js';
 import { createIsolatedWorktree } from './handlers/worktree-managed.js';
+import { describeWorktreeSetupFailure } from '../worktree/worktree-setup.js';
 import {
   lockWorktreeForBackground,
   teardownBackgroundWorktree,
@@ -41,6 +42,12 @@ import type { TraceSink } from '../trace/index.js';
 export interface IsolationWorktreeResult {
   /** Paths needed to tear down the worktree on completion. */
   teardown: { repoRoot: string; worktreePath: string };
+  /**
+   * Set when the repo-declared worktree setup (#3601) did not succeed. Already
+   * prepended to `parsed.prompt` for the child; the caller also surfaces it to
+   * the parent in the tool result.
+   */
+  setupNotice?: string;
 }
 
 export interface SetupIsolationWorktreeArgs {
@@ -51,6 +58,8 @@ export interface SetupIsolationWorktreeArgs {
   childWriteCapable: boolean;
   probe: StreamCutProbe | undefined;
   budgetReceipt: SpawnReceipt | undefined;
+  /** Session abort signal; cancels a running repo-declared setup (#3601). */
+  signal?: AbortSignal;
 }
 
 /**
@@ -85,13 +94,19 @@ export async function setupIsolationWorktree(
       slugHint: `iso-${parsed.id_prefix}-${++isolationCounterRef.value}-${Math.random()
         .toString(36)
         .slice(2, 8)}`,
+      ...(args.signal !== undefined ? { signal: args.signal } : {}),
     });
     childConfig.cwd = iso.path;
     const teardown = { repoRoot: iso.repoRoot, worktreePath: iso.path };
     if (parsed.mode === 'background') {
       await lockWorktreeForBackground(iso.repoRoot, iso.path);
     }
-    return { teardown };
+    // Best-effort setup (#3601): a failure never fails the dispatch, but the
+    // child must know its tree may lack dependencies, so tell it up front.
+    const setupNotice = describeWorktreeSetupFailure(iso.setup, iso.path);
+    if (setupNotice === undefined) return { teardown };
+    parsed.prompt = `${setupNotice}\n\n${parsed.prompt}`;
+    return { teardown, setupNotice };
   } catch (err) {
     const message = errorMessage(err);
     budgetReceipt?.rollback();

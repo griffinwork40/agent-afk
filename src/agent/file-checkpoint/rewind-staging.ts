@@ -2,6 +2,7 @@
 import { statSync, realpathSync, mkdirSync, writeFileSync, chmodSync, renameSync, unlinkSync, rmdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { isEnoent } from '../../utils/errors.js';
 
 interface DirectoryPin { path: string; real: string; dev: number; ino: number }
 
@@ -34,7 +35,7 @@ export function stageRewindFile(target: string, content: Buffer, validate: () =>
   for (;;) {
     try { initial = pin(ancestor); break; }
     catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      if (!isEnoent(err)) throw err;
       missing.unshift(ancestor);
       const parent = dirname(ancestor);
       if (parent === ancestor) throw err;

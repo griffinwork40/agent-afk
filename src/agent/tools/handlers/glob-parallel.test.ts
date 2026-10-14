@@ -44,6 +44,9 @@ const FILES_PER_DIR = 2;
 describe('glob parallel readdir — ordering (#2586)', () => {
   let root: string;
 
+  // Raise hook timeout for this suite: the fixture tree (10×20 dirs + 2 files
+  // each = 400 mkdirs + 400 writes) can exceed the default 5 s on slow CI
+  // runners (windows-2022 hit the 10 s hook timeout in run 38297146202).
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'glob-par-'));
 
@@ -56,10 +59,12 @@ describe('glob parallel readdir — ordering (#2586)', () => {
         }
       }
     }
-  });
+  }, 30_000);
 
   afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true });
+    // maxRetries guards against ENOTEMPTY races on Windows where a child
+    // process may still hold a handle when rm fires (CI flake, run 38297146202).
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 3 });
   });
 
   it('returns results in depth-first walk order (byte-identical to sequential)', async () => {

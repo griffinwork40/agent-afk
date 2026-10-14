@@ -35,8 +35,11 @@
 
 import { writeHandoff, type HandoffRecord } from './handoff-store.js';
 import { errorMessage } from '../../utils/errors.js';
+import { debugLog } from '../../utils/debug.js';
 import type { ElicitationHandler } from '../elicitation-router.js';
 import { serializeRequest } from './elicitation-serialize.js';
+import type { Telegraf } from 'telegraf';
+import { sendHandoffQuestion } from '../../telegram/handoff-answer.js';
 
 // Re-export so callers only need one import for the whole cron-elicitation concern.
 export type { ElicitationHandler };
@@ -98,6 +101,19 @@ export interface CronElicitationHandlerOpts {
   onHandoffWritten?: (message: string) => void;
   /** Cron expression for the task, if any (included in notification text). */
   cronExpression?: string;
+  /**
+   * Telegraf bot instance. When provided together with `chatId`, the handler
+   * sends a rich interactive handoff question (inline keyboard for
+   * confirm/choice, reply-to-message for text/number) — the same path
+   * `makeDaemonElicitationHandler` uses for pull tasks (#3243 item 2).
+   * When absent, the `onHandoffWritten` callback routes the notification
+   * through `onTaskComplete` (honours `notifyOn`/`notifyChat`).
+   */
+  bot?: Telegraf;
+  /** Target Telegram chat ID for the rich handoff question. */
+  chatId?: number;
+  /** Optional topic thread ID for supergroups. */
+  threadId?: number;
 }
 
 /**
@@ -141,19 +157,53 @@ export function makeCronElicitationHandler(
       );
     }
 
-    // Step 2: fire the notification callback only when the handoff was
-    // successfully persisted (avoids alerting without a backing record).
-    if (handoffWritten && opts.onHandoffWritten !== undefined) {
-      const msg = formatCronElicitationMessage(
-        opts.taskId,
-        opts.originalCommand,
-        opts.cronExpression,
-        request.message,
-      );
-      try {
-        opts.onHandoffWritten(msg);
-      } catch {
-        // observational only — never let a notification failure break the run
+    // Step 2: send notification — rich Telegram handoff if bot+chatId are
+    // available (#3243 item 2), otherwise fall back to the onHandoffWritten
+    // callback which routes through onTaskComplete (honours notifyOn).
+    if (handoffWritten) {
+      if (opts.bot !== undefined && opts.chatId !== undefined) {
+        // Rich interactive path: sends inline keyboards for confirm/choice and
+        // enables reply-to-message matching for text/number answers — the same
+        // path pull tasks use via makeDaemonElicitationHandler.
+        void sendHandoffQuestion({
+          bot: opts.bot,
+          record,
+          chatId: opts.chatId,
+          ...(opts.threadId !== undefined ? { threadId: opts.threadId } : {}),
+          handoffsDir: opts.handoffsDir,
+        }).catch((err) => {
+          // Log the delivery failure so it is visible in daemon logs (#3637).
+          // The handoff record on disk still exists and can be answered later;
+          // fall back to onHandoffWritten so notifyOn routing still fires.
+          // eslint-disable-next-line no-console
+          console.error(
+            `[cron-elicitation] sendHandoffQuestion failed for task ${opts.taskId}:`,
+            errorMessage(err),
+          );
+          if (opts.onHandoffWritten !== undefined) {
+            const msg = formatCronElicitationMessage(
+              opts.taskId,
+              opts.originalCommand,
+              opts.cronExpression,
+              request.message,
+            );
+            try { opts.onHandoffWritten(msg); } catch (e) { debugLog('[cron-elicitation] onHandoffWritten fallback threw:', errorMessage(e)); }
+          }
+        });
+      } else if (opts.onHandoffWritten !== undefined) {
+        // Fallback: plain-text notification routed through onTaskComplete
+        // so notifyOn / notifyChat are honoured.
+        const msg = formatCronElicitationMessage(
+          opts.taskId,
+          opts.originalCommand,
+          opts.cronExpression,
+          request.message,
+        );
+        try {
+          opts.onHandoffWritten(msg);
+        } catch {
+          // observational only — never let a notification failure break the run
+        }
       }
     }
 

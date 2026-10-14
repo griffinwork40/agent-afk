@@ -28,6 +28,7 @@ import { WaveManifestTracker } from './subagent-executor.wave-manifest.js';
 import { errorMessage } from '../../utils/errors.js';
 import type { SubagentExecutorContext } from './subagent-executor/types.js';
 import { SubagentExecutor } from './subagent-executor.js';
+import { prependSetupNotice } from '../worktree/worktree-setup.js';
 import {
   setupIsolationWorktree,
   forkAndCheckCancel,
@@ -165,13 +166,14 @@ export async function executeOnce(
 
   // isolation:"worktree"
   let isolationTeardown: { repoRoot: string; worktreePath: string } | undefined;
+  let setupNotice: string | undefined; // #3601: failed repo-declared setup, surfaced to the parent too
   if (parsed.isolation === 'worktree') {
     const isoResult = await setupIsolationWorktree({
       parsed, currentCwd, isolationCounterRef, childConfig,
-      childWriteCapable, probe, budgetReceipt,
+      childWriteCapable, probe, budgetReceipt, signal: call.signal,
     });
     if ('error' in isoResult) { budgetReceipt = undefined; return isoResult.error; }
-    if (!('skipped' in isoResult)) { isolationTeardown = isoResult.teardown; }
+    if (!('skipped' in isoResult)) { isolationTeardown = isoResult.teardown; setupNotice = isoResult.setupNotice; }
   }
 
   if (parsed.mode === 'background' && childConfig.timeoutMs === undefined) {
@@ -197,14 +199,14 @@ export async function executeOnce(
   updateCurrentWaveUnit(call.id, 'running', undefined, isolationTeardown !== undefined ? childConfig.cwd : undefined);
 
   if (parsed.mode === 'background') {
-    return runBackgroundDispatch({
+    return prependSetupNotice(setupNotice, await runBackgroundDispatch({
       handle, ctx, parsed, childConfig,
       waveId: waveTracker.waveId,
       callId: call.id,
       budgetRelease: budgetReceipt?.release,
       isolationTeardown,
       traceWriter: ctx.traceWriter,
-    });
+    }));
   }
 
   // Foreground: resolve prompt (expand attachments if any).
@@ -243,6 +245,7 @@ export async function executeOnce(
   });
   if (!promotionTookBudget.value) budgetRelease?.();
   addForegroundNotices(result, childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, usageNotice, ctx.traceWriter);
+  prependSetupNotice(setupNotice, result);
   if (result.isError === true) {
     updateCurrentWaveUnit(call.id, 'failed', typeof result.content === 'string' ? result.content.slice(0, 500) : undefined);
   } else {

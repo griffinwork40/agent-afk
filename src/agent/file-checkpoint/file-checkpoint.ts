@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { getFileCheckpointTurnDir } from '../../paths.js';
 import { storeCheckpointContent } from './content-store.js';
+import { isEnoent } from '../../utils/errors.js';
 
 export interface FileCheckpointRegistry {
   snapshotFile(absPath: string): Promise<void>;
@@ -50,7 +51,7 @@ async function capture(absPath: string): Promise<{ content: Buffer; metadata: Sn
     const content = await readFile(absPath);
     return { content, metadata: { version: 3, absPath, isNewFile: false, mode: info.mode & 0o7777 } };
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    if (!isEnoent(err)) throw err;
     return { content: Buffer.alloc(0), metadata: { version: 3, absPath, isNewFile: true } };
   }
 }
@@ -70,7 +71,7 @@ async function publishSnapshot(turnDir: string, absPath: string, sessionId: stri
     try {
       await rename(staging, destination);
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
+      const code = (err instanceof Error && 'code' in err) ? String((err as { code: unknown }).code) : undefined;
       if (!['EEXIST', 'ENOTEMPTY', 'EPERM', 'EACCES'].includes(code ?? '') || !existsSync(destination)) throw err;
     }
   } finally {

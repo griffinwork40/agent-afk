@@ -267,6 +267,8 @@ function dateStamp(now: Date): string {
 }
 
 // Preflight helper and probe-count helper extracted to run.preflight.ts (#2511).
+// A/A calibration fast-path extracted to run.aa.ts (#2415).
+import { runAaPhase } from './run.aa.js';
 
 // ---------------------------------------------------------------------------
 // runWhatif
@@ -331,6 +333,12 @@ export async function runWhatif(
 
   let pendingReport: WhatifReport | undefined;
   try {
+    // ── A/A calibration fast-path (#2415 Step 0) ──────────────────────────
+    if (options.aaMode) {
+      pendingReport = await runAaPhase(baseline, candidate, spec, runDir, runnerOpts, autoKeepContextHooks, options, deps);
+      return pendingReport;
+    }
+
     // ── c+d) Snapshots + Predictions ─────────────────────────────────────
 
     const { structural, predictions, analystCostUsd: predictCost, changeKinds, droppedProbes } =
