@@ -73,7 +73,7 @@ Both gaps — the dispatch prompt and the child's full conversation — are cove
 
 Journal writes go through an async `SerialQueue`, so a SIGKILL can lose queued records. A graceful abort calls `journal.flush()` before exit (`src/agent/session/agent-session.ts`), bounding the loss window.
 
-One residual bug, worth recognizing: a parent ending mid-wave seals over live children and silently drops their terminal rows (`write()` throws on a sealed writer; `emitSubagentLifecycle` swallows it), so ~3% of dispatched subagents have no recorded fate — ~8% in daemon/cron parallel waves vs ~1% interactive. Detector: an **unmatched `started` in a trace that contains `session_sealed`** — not "a `started` is the last line", which misses it because the seal is written afterward.
+Residual trace gap: normal shutdown cascade-aborts and drains children for up to 5 seconds before sealing. If no drain is configured or it expires while a cancellation emit is still pending (the explicit cancellation emit is fire-and-forget), a terminal row can arrive after seal and be rejected. The first late-write failure per writer is reported to stderr, not silently dropped. Detect this as an **unmatched `started` in a trace containing `session_sealed`**; the child result or journal may still be available.
 
 **Witness retention.** The tree is no longer unbounded (`src/agent/witness-sweep.ts`, #849). A sweep runs at root-session start — fire-and-forget beside `capJsonlBySize`, never able to fail construction — and evicts **whole session directories**, first any whose newest content is older than `AFK_WITNESS_MAX_AGE_DAYS` (default **30**), then oldest-first until the tree fits `AFK_WITNESS_MAX_BYTES` (default **2 GiB**). `AFK_WITNESS_RETENTION_DISABLE=1` turns it off entirely. Three properties are load-bearing and each has a test: the **active session is excluded by identity** (its witness label, never by timestamp); anything whose newest content is inside a 1-hour grace window is never evicted, which covers the concurrent REPL/daemon/telegram sessions this process cannot enumerate; and liveness is judged by the **newest mtime across a directory's contents, not the directory's own mtime** — POSIX does not bump a directory's mtime when an existing file inside it is appended to, so a long-running session that creates no new sidecars looks ancient and an mtime-only sweep would delete a live trace. Cost is bounded twice over: the sweep is deferred 5s off the construction path and `.unref()`ed (so a short-lived process never pays for it), and a `.last-sweep` stamp in the witness root caps it at one walk every 6 hours rather than one per session start.
 
@@ -83,7 +83,7 @@ The unit of the budget cap is **tool-use rounds**, not tool calls — 5 parallel
 
 ## Architecture
 
-Operator tool visibility settings (`tools.disabled`): see [docs/tool-toggles.md](docs/tool-toggles.md).
+Operator tool visibility settings (`tools.disabled`, and the per-model-slot `tools.disabledBySlot`): see [docs/tool-toggles.md](docs/tool-toggles.md).
 
 Key layers under `src/`:
 
@@ -113,6 +113,7 @@ Both providers emit a normalized `ProviderEvent` stream consumed by `src/agent/s
 ### Cross-cutting subsystems
 
 - **Hooks** (`src/agent/hooks.ts`, `hook-registry.ts`) — SessionStart/End, SubagentStart/Stop, PreToolUse/PostToolUse. Sequential; `decision: 'block'` short-circuits. SubagentStop supports `injectContext` for parent-session context injection.
+- **Effect ledger** (`src/agent/effect-ledger/`) — Write-ahead external effects and outcome-unknown retry gate; see [`docs/effect-ledger.md`](docs/effect-ledger.md).
 - **SubagentManager** (`src/agent/subagent.ts`) — Forks child `AgentSession`s with permission bubbling, transitive abort via `AbortGraph`, optional Zod output schemas.
 - **Background processes** (`src/agent/shell-jobs/process-jobs.ts`) — `bash` with `run_in_background: true` starts a supervised process (`proc-N`, own process group, capped log under `$AFK_STATE_DIR/proc-jobs/`), returns at once, and delivers a metadata-only `<background-process-result>` on exit via the REPL injection + idle-wake path. Inspect/stop through `get_background_job_health` / `cancel_background_job`; `/sh` lists and kills them. Root interactive REPL only (children, Telegram, daemon get an explicit refusal); jobs end with the session. Separate from the user `!&` `ShellJobRegistry` on purpose. Spec: `docs/background-processes.md`.
 - **AbortGraph** (`src/agent/abort-graph.ts`) — Tree of `AbortController`s. Parent abort cascades down; child abort notifies up (never auto-aborts parent). Abort beats hook decisions.

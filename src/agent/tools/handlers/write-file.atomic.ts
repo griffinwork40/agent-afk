@@ -43,7 +43,7 @@ const MAX_LINK_HOPS = 40;
 
 /** Read the `code` off a Node fs error, if any. */
 function errCode(err: unknown): string | undefined {
-  return err instanceof Error && 'code' in err ? String((err as NodeJS.ErrnoException).code) : undefined;
+  return err instanceof Error && 'code' in err ? String((err as { code: unknown }).code) : undefined;
 }
 
 /**

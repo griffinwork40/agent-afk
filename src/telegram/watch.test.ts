@@ -302,13 +302,17 @@ describe('SessionWatchManager — elicitation intercept + signed write-back (cri
       request: { type: 'text', message: 'What is your name?' },
     });
 
-    // Give the tail loop time to process the record and install the interceptor.
-    await sleep(200);
+    // tailLedger polls at 250ms — vi.waitFor instead of a fixed sleep so the
+    // test is correct on slow CI runners where 200ms expires before the first
+    // poll fires and installs the pending resolver (same race fixed in #3056
+    // for the skip-path sibling, now applied here for the routeKey variant).
+    await vi.waitFor(() => {
+      expect(pendingElicitations.get(routeKey({ chatId, threadId: 88 }))).toBeDefined();
+    }, { timeout: 2000 });
 
     // Simulate the operator typing an answer into Telegram (the message handler
     // fires the resolver, which is what handle() would do when it sees a text).
     const resolver = pendingElicitations.get(routeKey({ chatId, threadId: 88 }));
-    expect(resolver).toBeDefined();
     expect(bot.telegram.sendMessage).toHaveBeenCalledWith(
       chatId,
       expect.stringContaining('What is your name?'),
@@ -316,21 +320,22 @@ describe('SessionWatchManager — elicitation intercept + signed write-back (cri
     );
     resolver!('Alice');
 
-    // Give _run time to receive the result and write back the response.
-    await sleep(200);
-
-    // The elicitation_response record must be in the ledger and HMAC-verified.
+    // Poll the ledger until the elicitation_response record appears — avoids
+    // the fixed 200ms sleep that races the async write-back on slow CI hosts.
     const ledgerPath = path.join(
       tmpDir, 'state', 'sessions', id, 'events.jsonl',
     );
-    const lines = fs.readFileSync(ledgerPath, 'utf8').trim().split('\n');
-    const responseRecord = lines
-      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
-      .find((r) => r?.kind === 'elicitation_response');
+    let responseRecord: Record<string, unknown> | undefined;
+    await vi.waitFor(() => {
+      const lines = fs.readFileSync(ledgerPath, 'utf8').trim().split('\n');
+      responseRecord = lines
+        .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+        .find((r) => r?.kind === 'elicitation_response');
+      expect(responseRecord).toBeDefined();
+    }, { timeout: 2000 });
 
-    expect(responseRecord).toBeDefined();
-    expect(responseRecord.reqId).toBe(reqId);
-    const result: ElicitationResult = responseRecord.result;
+    expect(responseRecord!.reqId).toBe(reqId);
+    const result: ElicitationResult = responseRecord!.result as ElicitationResult;
     expect(result.action).toBe('accept');
 
     // Verify the HMAC using the real verifyElicitationResponse.
@@ -538,7 +543,11 @@ describe('SessionWatchManager — F1 regression: form-mode approval renders butt
       },
     });
 
-    await sleep(250);
+    // tailLedger polls at 250ms — vi.waitFor on the actual sendMessage call
+    // instead of a fixed sleep to handle slow CI runners.
+    await vi.waitFor(() => {
+      expect(sent.find((m) => m.options?.reply_markup !== undefined)).toBeDefined();
+    }, { timeout: 2000 });
 
     // ASSERTION 1: the prompt rendered with an inline keyboard whose buttons carry
     // afk:pa: callback_data. The ask-only handler would send a plain text prompt
@@ -559,19 +568,21 @@ describe('SessionWatchManager — F1 regression: form-mode approval renders butt
     const answerCbQuery = vi.fn().mockResolvedValue(undefined);
     await paAction!.handler({ callbackQuery: { data: approveBtn!.callback_data }, answerCbQuery });
 
-    await sleep(200);
-
     // ASSERTION 2: the written-back response carries content.choice (what
     // afk-mode-gate reads) — NOT content.value. Under the ask-only handler this
     // would be content.value and the gate would refuse the op.
+    // Poll instead of fixed sleep to avoid the write-back race on slow CI.
     const ledgerPath = path.join(tmpDir, 'state', 'sessions', id, 'events.jsonl');
-    const lines = fs.readFileSync(ledgerPath, 'utf8').trim().split('\n');
-    const responseRecord = lines
+    let responseRecord: Record<string, unknown> | undefined;
+    await vi.waitFor(() => {
+      const lines = fs.readFileSync(ledgerPath, 'utf8').trim().split('\n');
+      responseRecord = lines
       .map((l) => { try { return JSON.parse(l); } catch { return null; } })
-      .find((r) => r?.kind === 'elicitation_response');
-    expect(responseRecord).toBeDefined();
-    expect(responseRecord.reqId).toBe(reqId);
-    const result: ElicitationResult = responseRecord.result;
+        .find((r) => r?.kind === 'elicitation_response');
+      expect(responseRecord).toBeDefined();
+    }, { timeout: 2000 });
+    expect(responseRecord!.reqId).toBe(reqId);
+    const result: ElicitationResult = responseRecord!.result as ElicitationResult;
     expect(result.action).toBe('accept');
     expect((result.content as { choice?: string } | undefined)?.choice).toBe('approve');
 

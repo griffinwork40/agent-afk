@@ -35,6 +35,7 @@
 
 import { existsSync, accessSync, constants } from 'node:fs';
 import { dirname } from 'node:path';
+import { errorMessage } from '../../utils/errors.js';
 import { pushIfConfigured } from '../../telegram/push.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 
@@ -78,8 +79,8 @@ export function probeTelemetryWritable(
       probe.accessSync(dirname(telemetryPath), constants.W_OK);
       return null; // parent writable — fresh install, safe to proceed
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      const message = (err as NodeJS.ErrnoException).message ?? String(err);
+      const code = (err instanceof Error && 'code' in err) ? String((err as { code: unknown }).code) : undefined;
+      const message = errorMessage(err);
       return code != null ? `${code}: ${message}` : message;
     }
   }
@@ -87,8 +88,8 @@ export function probeTelemetryWritable(
     probe.accessSync(telemetryPath, constants.W_OK);
     return null; // writable
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    const message = (err as NodeJS.ErrnoException).message ?? String(err);
+    const code = (err instanceof Error && 'code' in err) ? String((err as { code: unknown }).code) : undefined;
+    const message = errorMessage(err);
     return code != null ? `${code}: ${message}` : message;
   }
 }

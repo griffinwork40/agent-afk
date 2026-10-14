@@ -208,6 +208,9 @@ export async function streamResponse(
     );
 
     try {
+      // Intentional: post-loop finalization (deliverClean / deliverOverflow) runs
+      // inside the runWithSink AsyncLocalStorage scope so skill-sink context is
+      // still active during final delivery.
       await runWithSink(subagentSink, async () => {
         await runStreamLoop({
           nextWithTimeout, state, watchdog, run,
