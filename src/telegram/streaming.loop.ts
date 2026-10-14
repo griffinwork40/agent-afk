@@ -5,7 +5,7 @@
  * per-event chunk processing, and the main `while (true)` event loop body.
  * Each function takes explicit state parameters rather than closing over the
  * outer scope, mirroring the pattern in the other streaming.* siblings.
- * Extracted from streaming.ts — the public surface of streaming.ts is unchanged.
+ * The public surface of streaming.ts is unchanged.
  * @module telegram/streaming.loop
  */
 
@@ -14,7 +14,7 @@ import type { Message } from 'telegraf/types';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { IAgentSession, OutputEvent } from '../agent/types.js';
 import { env } from '../config/env.js';
-import { sendOrEdit } from './streaming.sender.js';
+import { sendOrEdit, deliverClean } from './streaming.sender.js';
 import type { StreamState } from './streaming.handlers.js';
 import {
   handlePaused, handleResumed, handleDone, handleError, deliverOverflow,
@@ -327,8 +327,12 @@ export async function runStreamLoop(params: {
     if (shouldContinue) continue;
   }
 
-  // Post-loop: deliver any overflow chunks (long responses split across messages)
-  // and handle non-terminal exit (no `done` event received).
+  // Invariant: finalize BEFORE closing the generator so the session's
+  // currentState stays 'streaming' while Telegram messages are in flight.
+  // The in-place preview is edit-throttled and can freeze mid-stream. A `done`
+  // event handled delivery above; any other exit (no terminal event, early break)
+  // re-delivers everything as fresh messages so nothing is lost to a stale preview.
+  // iter.return() is called by the outer finally in streaming.ts AFTER this block.
   const preview = state.sentMessage as Message.TextMessage | null;
   if (preview && !state.sawTerminalEvent) {
     const full =
@@ -336,7 +340,6 @@ export async function runStreamLoop(params: {
         ? state.answerText
         : finalBody();
     if (full.trim()) {
-      const { deliverClean } = await import('./streaming.sender.js');
       const delivered = await deliverClean(ctx, full);
       if (delivered) {
         await ctx.telegram.deleteMessage?.(chatId, preview.message_id).catch(() => {});

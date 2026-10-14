@@ -25,8 +25,8 @@
 
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
-import * as readline from 'node:readline';
 import { getBgJobsRoot, getBgJobDir, getBgJobLog, getBgJobMeta, getBgJobResult } from '../paths.js';
+import { readJsonlFile, IncrementalLineReader } from '../utils/jsonl.js';
 import { atomicWriteFileAsync } from '../utils/atomic-write.js';
 import { persistReconciled, reconcileOrphanedMeta } from './bg-job-log.orphan.js';
 import type { OutputEvent } from './types/session-types.js';
@@ -389,30 +389,7 @@ export class BgJobLogReader {
    */
   static async *readEvents(jobId: string): AsyncGenerator<OutputEvent> {
     const logPath = getBgJobLog(jobId);
-    let fd: fs.promises.FileHandle;
-    try {
-      fd = await fsp.open(logPath, 'r');
-    } catch (e) {
-      if (isErrnoCode(e, 'ENOENT')) return;
-      throw e;
-    }
-    try {
-      const rl = readline.createInterface({
-        input: fd.createReadStream({ encoding: 'utf8' }),
-        crlfDelay: Infinity,
-      });
-      for await (const line of rl) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        try {
-          yield JSON.parse(trimmed) as OutputEvent;
-        } catch {
-          // Skip malformed lines
-        }
-      }
-    } finally {
-      await fd.close();
-    }
+    yield* readJsonlFile<OutputEvent>(logPath);
   }
 
   /**
@@ -439,14 +416,14 @@ export class BgJobLogReader {
     }
 
     let fileOffset = 0;
-    let buffer = '';
+    const lineReader = new IncrementalLineReader();
     let watcher: fs.FSWatcher | null = null;
 
     const POLL_INTERVAL_MS = 250;
 
     // Helper: read new bytes from the file starting at fileOffset
     async function* readNewLines(): AsyncGenerator<OutputEvent> {
-      let fd: fs.promises.FileHandle | null = null;
+      let fd: fsp.FileHandle | null = null;
       try {
         fd = await fsp.open(logPath, 'r');
         const stat = await fd.stat();
@@ -456,11 +433,7 @@ export class BgJobLogReader {
         const { bytesRead } = await fd.read(readBuf, 0, toRead, fileOffset);
         if (bytesRead === 0) return;
         fileOffset += bytesRead;
-        buffer += readBuf.toString('utf8', 0, bytesRead);
-        const lines = buffer.split('\n');
-        // Keep the last incomplete fragment in the buffer
-        buffer = lines.pop() ?? '';
-        for (const line of lines) {
+        for (const line of lineReader.feed(readBuf.toString('utf8', 0, bytesRead))) {
           const trimmed = line.trim();
           if (!trimmed) continue;
           try {
