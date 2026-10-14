@@ -92,6 +92,7 @@ The interactive REPL registers slash commands directly in TypeScript (`src/cli/s
 - `/mcp` — show MCP server status ([full docs](mcp.md))
 - `/limits` — show rate-limit / budget state
 - `/debug` — toggle verbose debug output
+- `/bug [what went wrong]` — print a prefilled GitHub issue link to report an afk bug (attaches version, Node, OS, model and session id; nothing is sent until you submit it on GitHub)
 
 ### Planning & state
 - `/plan` — open the plan editor
