@@ -26,6 +26,7 @@
 export type TraceEventKind =
   | 'tool_call'
   | 'hook_decision'
+  | 'hook_summary'
   | 'subagent_lifecycle'
   | 'background_agent'
   | 'budget'
@@ -324,6 +325,28 @@ export interface HookDecisionPayload {
   durationMs?: number;
   /** Set only by the AFK high-risk approval gate. Fine-grained approval outcome. */
   approvalOutcome?: AfkApprovalOutcome;
+}
+
+// ---------------------------------------------------------------------------
+// hook_summary — once per root session, written just before session_sealed
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-session tally of hook dispatches, including the allow-path dispatches
+ * whose no-information `hook_decision` rows are no longer written (see
+ * `./hook-tally.ts`). Consumers MUST treat a missing `hook_summary` as
+ * "unknown", never as zero: crashed sessions, process-exit backstop seals, and
+ * traces recorded before this event existed all lack it.
+ */
+export interface HookSummaryPayload {
+  /** Counts cover the root session and every forked child sharing its writer. */
+  scope: 'root-session-including-subagents';
+  /** `counts[hookEvent][decision | 'allow'] = n` (all emissions, written or not). */
+  counts: Record<string, Record<string, number>>;
+  /** hook_decision rows actually written to the trace. */
+  written: number;
+  /** No-information allow-path rows counted but not written. */
+  suppressed: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -820,6 +843,7 @@ export interface SessionSealedPayload {
 export type TraceEventInput =
   | { kind: 'tool_call'; payload: ToolCallPayload }
   | { kind: 'hook_decision'; payload: HookDecisionPayload }
+  | { kind: 'hook_summary'; payload: HookSummaryPayload }
   | { kind: 'subagent_lifecycle'; payload: SubagentLifecyclePayload }
   | { kind: 'background_agent'; payload: BackgroundAgentPayload }
   | { kind: 'budget'; payload: BudgetPayload }
@@ -838,6 +862,7 @@ export type TraceEventInput =
 export type TraceEvent =
   | { ts: string; seq: number; kind: 'tool_call'; payload: ToolCallPayload }
   | { ts: string; seq: number; kind: 'hook_decision'; payload: HookDecisionPayload }
+  | { ts: string; seq: number; kind: 'hook_summary'; payload: HookSummaryPayload }
   | { ts: string; seq: number; kind: 'subagent_lifecycle'; payload: SubagentLifecyclePayload }
   | { ts: string; seq: number; kind: 'background_agent'; payload: BackgroundAgentPayload }
   | { ts: string; seq: number; kind: 'budget'; payload: BudgetPayload }

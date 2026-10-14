@@ -30,6 +30,7 @@ describe('private-temp classification validation reuse', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.clearAllMocks();
     setSessionTmpdirRootForTests(undefined);
@@ -45,7 +46,6 @@ describe('private-temp classification validation reuse', () => {
     for (let i = 0; i < 3; i++) expect(classify(scratch).level).toBe('safe');
     const rootProbes = vi.mocked(lstatSync).mock.calls.filter(([candidate]) => candidate === root);
     expect(rootProbes).toHaveLength(3);
-    vi.restoreAllMocks();
   });
 
   it('fails closed when a cached root can no longer be inspected', () => {
@@ -58,7 +58,9 @@ describe('private-temp classification validation reuse', () => {
       return original(...args);
     });
     expect(classify(scratch).level).toBe('high');
-    vi.restoreAllMocks();
+    // Restore lstatSync before this test ends so the throwing implementation
+    // does not leak into the next test. vi.restoreAllMocks() in afterEach does
+    // not reset mockImplementation on a vi.fn() created by vi.mock('fs').
     vi.mocked(lstatSync).mockImplementation(original);
   });
 

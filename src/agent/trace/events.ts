@@ -151,6 +151,14 @@ export const HookDecisionPayloadSchema = z.object({
     .optional(),
 });
 
+/** Mirrors `HookSummaryPayload` in ./types (see ./hook-tally.ts). */
+export const HookSummaryPayloadSchema = z.object({
+  scope: z.literal('root-session-including-subagents'),
+  counts: z.record(z.string(), z.record(z.string(), z.number().int().nonnegative())),
+  written: z.number().int().nonnegative(),
+  suppressed: z.number().int().nonnegative(),
+});
+
 // ---------------------------------------------------------------------------
 // background_agent
 // ---------------------------------------------------------------------------
@@ -294,6 +302,7 @@ export const SessionSealedPayloadSchema = z.object({
 export const TraceEventInputSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('tool_call'), payload: ToolCallPayloadSchema }),
   z.object({ kind: z.literal('hook_decision'), payload: HookDecisionPayloadSchema }),
+  z.object({ kind: z.literal('hook_summary'), payload: HookSummaryPayloadSchema }),
   z.object({
     kind: z.literal('subagent_lifecycle'),
     payload: SubagentLifecyclePayloadSchema,
@@ -326,6 +335,12 @@ export const TraceEventSchema = z.discriminatedUnion('kind', [
     seq: z.number().int().nonnegative(),
     kind: z.literal('hook_decision'),
     payload: HookDecisionPayloadSchema,
+  }),
+  z.object({
+    ts: z.string().datetime(),
+    seq: z.number().int().nonnegative(),
+    kind: z.literal('hook_summary'),
+    payload: HookSummaryPayloadSchema,
   }),
   z.object({
     ts: z.string().datetime(),

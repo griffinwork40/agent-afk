@@ -43,6 +43,14 @@ const TSCONFIG_REL = 'tsconfig.test.json';
 /** Pattern that TypeScript emits for each type error. */
 const ERROR_TS_RE = /^.*error TS\d+:/m;
 
+/**
+ * Pattern for TS6xxx option/config diagnostics (e.g. TS6059 rootDir errors).
+ * When any TS6xxx appears, tsc never runs semantic checking, making the gate
+ * blind.  We fail loudly rather than silently counting config errors as if
+ * they were semantic ones.
+ */
+const ERROR_TS6_RE = /^.*error TS6\d+:/m;
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -99,6 +107,26 @@ function measureErrors(): number {
     const e = err as { stdout?: string; stderr?: string };
     output = `${e.stdout ?? ''}${e.stderr ?? ''}`;
   }
+
+  // TS6xxx = option/config diagnostics (e.g. TS6059 rootDir mismatch).
+  // When present, tsc skips semantic checking and the gate goes blind.
+  // Fail loudly so a misconfigured tsconfig.test.json is immediately visible.
+  const ts6Lines = output.split('\n').filter((l) => ERROR_TS6_RE.test(l));
+  if (ts6Lines.length > 0) {
+    process.stderr.write(
+      `\u2717 lint:tests:check — TS6xxx option/config diagnostics detected.\n` +
+        `  These errors suppress all semantic type-checking, making the gate blind.\n` +
+        `  Fix the tsconfig.test.json configuration first:\n` +
+        ts6Lines
+          .slice(0, 5)
+          .map((l) => `    ${l.trim()}`)
+          .join('\n') +
+        (ts6Lines.length > 5 ? `\n    … and ${ts6Lines.length - 5} more` : '') +
+        '\n',
+    );
+    process.exit(1);
+  }
+
   return output.split('\n').filter((l) => ERROR_TS_RE.test(l)).length;
 }
 

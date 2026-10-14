@@ -245,3 +245,95 @@ describe('createDefaultHookRegistry — AFK gate wired for daemon and afk-chat (
 
   void declineRoute; // referenced in test description; kept for doc clarity
 });
+
+// ---------------------------------------------------------------------------
+// Hook registration order — PreToolUse (#3726)
+// ---------------------------------------------------------------------------
+//
+// Registration order is load-bearing: `decision: 'block'` short-circuits the
+// chain so no later handler fires. The effect-ledger PreToolUse hook (#3713)
+// must run AFTER the path-approval and policy hooks so those gates can block
+// a call before it is journaled as "dispatched". Conversely, whatif-episode
+// must run FIRST because it can cancel the entire tool dispatch regardless of
+// policy. This test pins the observable ordering by spying on the module
+// factories, capturing their returned handler functions, and verifying that
+// dispatching a pass-through event calls them in the correct relative sequence.
+
+import * as effectLedgerMod from './effect-ledger/index.js';
+import * as pathApprovalMod from './tools/hooks/path-approval-hook.js';
+import * as bashRestrictionMod from './tools/hooks/bash-restriction-hook.js';
+import * as whatifMod from './whatif-episode-gate.js';
+
+describe('createDefaultHookRegistry — PreToolUse hook registration order (#3726)', () => {
+  beforeEach(() => {
+    _resetWarningForTests();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('whatif-episode fires before path-approval, which fires before effect-ledger', async () => {
+    const callOrder: string[] = [];
+
+    // Spy on createWhatifEpisodeGate — capture the returned handler and wrap it.
+    vi.spyOn(whatifMod, 'createWhatifEpisodeGate').mockImplementation(() => {
+      return (_ctx) => { callOrder.push('whatif'); return {}; };
+    });
+
+    // Spy on createPathApprovalHook — wrap preToolUse to record call.
+    vi.spyOn(pathApprovalMod, 'createPathApprovalHook').mockImplementation((opts) => {
+      return {
+        preToolUse: (_ctx) => { callOrder.push('path-approval'); return {}; },
+        postToolUse: (_ctx) => ({}),
+        sessionEnd: (_ctx) => ({}),
+      };
+    });
+
+    // Spy on createBashRestrictionHook — record but pass through.
+    vi.spyOn(bashRestrictionMod, 'createBashRestrictionHook').mockImplementation(() => {
+      return (_ctx) => { callOrder.push('bash-restriction'); return {}; };
+    });
+
+    // Spy on createEffectLedgerHooks — capture pre handler.
+    vi.spyOn(effectLedgerMod, 'createEffectLedgerHooks').mockImplementation(() => {
+      return {
+        pre: (_ctx) => { callOrder.push('effect-ledger'); return {}; },
+        post: (_ctx) => ({}),
+      };
+    });
+
+    // Build registry with path-approval enabled (AFK_DISABLE_PATH_APPROVAL not set).
+    const { registry } = createDefaultHookRegistry(
+      undefined,
+      'cli',
+      undefined,
+      // No getPermissionMode → plan-mode and afk-mode gates are skipped,
+      // keeping this test focused on the path-approval / ledger ordering.
+      undefined,
+    );
+
+    // Dispatch a read_file call — passes all non-blocking guards — so every
+    // PreToolUse handler that does not short-circuit gets to run.
+    await registry.dispatch(
+      { event: 'PreToolUse', toolName: 'read_file' },
+      undefined,
+      Infinity,
+    );
+
+    // Whatif must be first.
+    const whatifIdx = callOrder.indexOf('whatif');
+    const pathApprovalIdx = callOrder.indexOf('path-approval');
+    const bashIdx = callOrder.indexOf('bash-restriction');
+    const ledgerIdx = callOrder.indexOf('effect-ledger');
+
+    expect(whatifIdx, 'whatif-episode must be registered').toBeGreaterThanOrEqual(0);
+    expect(pathApprovalIdx, 'path-approval must be registered').toBeGreaterThanOrEqual(0);
+    expect(bashIdx, 'bash-restriction must be registered').toBeGreaterThanOrEqual(0);
+    expect(ledgerIdx, 'effect-ledger must be registered').toBeGreaterThanOrEqual(0);
+
+    expect(whatifIdx, 'whatif-episode fires before path-approval').toBeLessThan(pathApprovalIdx);
+    expect(pathApprovalIdx, 'path-approval fires before bash-restriction').toBeLessThan(bashIdx);
+    expect(bashIdx, 'bash-restriction fires before effect-ledger').toBeLessThan(ledgerIdx);
+  });
+});

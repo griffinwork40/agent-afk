@@ -114,3 +114,51 @@ describe('check-test-typecheck parseArgs — happy path', () => {
     expect(result).toMatchObject({ mode: 'update', allowGrowth: true, reason: 'intentional growth' });
   });
 });
+
+// ── TS6xxx option/config diagnostic guard ─────────────────────────────────────
+//
+// Mirror of the ERROR_TS6_RE constant and ts6Lines detection logic from
+// scripts/check-test-typecheck.ts.  We test the regex and detection inline
+// because the script cannot be imported (shebang + main() at module scope).
+
+const ERROR_TS6_RE = /^.*error TS6\d+:/m;
+
+function detectTs6Lines(output: string): string[] {
+  return output.split('\n').filter((l) => ERROR_TS6_RE.test(l));
+}
+
+describe('check-test-typecheck TS6xxx guard', () => {
+  it('detects a TS6059 rootDir line', () => {
+    const line =
+      "tests/foo.test.ts(1,1): error TS6059: File 'tests/foo.test.ts' is not under 'rootDir' 'src'.";
+    expect(detectTs6Lines(line)).toHaveLength(1);
+  });
+
+  it('detects multiple TS6xxx lines in multi-line output', () => {
+    const output = [
+      "tests/a.test.ts(1,1): error TS6059: File 'tests/a.test.ts' is not under 'rootDir' 'src'.",
+      "tests/b.test.ts(1,1): error TS6059: File 'tests/b.test.ts' is not under 'rootDir' 'src'.",
+      "src/c.ts(5,3): error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.",
+    ].join('\n');
+    expect(detectTs6Lines(output)).toHaveLength(2);
+  });
+
+  it('does not flag non-TS6xxx errors (TS2345, TS2322, etc.)', () => {
+    const output = [
+      "src/a.ts(1,1): error TS2345: Argument of type 'string' is not assignable.",
+      "src/b.ts(2,3): error TS2322: Type 'number' is not assignable to type 'string'.",
+    ].join('\n');
+    expect(detectTs6Lines(output)).toHaveLength(0);
+  });
+
+  it('does not flag warning or info lines that mention TS6xxx in prose', () => {
+    // Prose mention in a comment — should not match because the pattern requires
+    // the "error TS6NNN:" prefix.
+    const line = '  // See TS6059 for details about rootDir';
+    expect(detectTs6Lines(line)).toHaveLength(0);
+  });
+
+  it('handles empty tsc output without throwing', () => {
+    expect(detectTs6Lines('')).toHaveLength(0);
+  });
+});

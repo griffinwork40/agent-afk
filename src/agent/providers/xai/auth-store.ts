@@ -19,10 +19,10 @@ import {
   mkdirSync,
   readFileSync,
   unlinkSync,
-  writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { getAfkStateDir } from '../../../paths.js';
+import { atomicWriteFile } from '../../../utils/atomic-write.js';
 
 /**
  * OAuth token path under state: `$AFK_STATE_DIR/xai/auth.json`.
@@ -67,7 +67,11 @@ function defaultReadFile(path: string): string | null {
 }
 
 function defaultWriteFile(path: string, data: string, mode: number): void {
-  writeFileSync(path, data, { encoding: 'utf-8', mode });
+  // atomicWriteFile writes to a sibling temp file (mode applied before rename)
+  // then renames atomically, so a torn write never corrupts the token store.
+  // mkdirp is true by default; the separate mkdir() call in writeXaiTokens is
+  // kept so the injectable deps seam stays intact for tests.
+  atomicWriteFile(path, data, { mode, mkdirp: false });
 }
 
 function defaultChmod(path: string, mode: number): void {

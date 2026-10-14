@@ -128,6 +128,7 @@ Append-only NDJSON. Each line:
 ```
 tool_call
 hook_decision
+hook_summary
 subagent_lifecycle
 budget
 abort

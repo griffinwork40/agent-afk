@@ -585,10 +585,11 @@ Read and filter events from a session's witness trace — the durable record of 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `session` | string | | Session ID or `"latest"` (default). |
-| `kinds` | array | | Filter by event kind(s): `tool_call`, `subagent_lifecycle`, `session_phase`, `closure`, `abort`, `budget`, `hook_decision`, `browser_event`, `claim`, `compaction`, `background_agent`, `queued_user_message`, `session_sealed`. |
+| `kinds` | array | | Filter by event kind(s): `tool_call`, `subagent_lifecycle`, `session_phase`, `closure`, `abort`, `budget`, `hook_decision`, `hook_summary`, `browser_event`, `claim`, `compaction`, `background_agent`, `queued_user_message`, `session_sealed`. |
 | `tool_name` | string | | Filter `tool_call` events to one tool name. |
 | `errors_only` | boolean | | When true, show only error events. Default: false. |
 | `limit` | number | | Max events to return (default 50, max 200). |
+| `where` | object | | Exact-match AND filter mapping dotted event paths to scalars, e.g. `{"payload.decision":"block"}`. Own properties only; `__proto__`, `constructor`, `prototype` segments are rejected. |
 
 ### `search_witness`
 
@@ -601,6 +602,10 @@ Search across multiple sessions' witness traces for a text pattern. Returns matc
 | `kinds` | array | | Filter results to specific event kinds. |
 | `since` | string | | ISO date — only search sessions modified after this date. |
 | `tool_name` | string | | Filter `tool_call` events to one tool name. |
+| `where` | object | | Exact-match AND filter mapping dotted event paths to scalars, e.g. `{"kind":"hook_decision","payload.decision":"block"}`. |
+| `include_current_session` | boolean | | Include the calling session's own trace (excluded by default). |
+
+Results are capped at 200 matches; when the cap stops the scan the result carries `matchLimitReached: true` and a `hint`. Allow-path hook dispatches are not written as `hook_decision` rows; they are counted in the per-session `hook_summary` event.
 
 ### `clipboard_read`
 

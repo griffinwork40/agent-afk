@@ -88,6 +88,17 @@ export function renderEvent(event: TraceEvent, ctx: RenderContext): string | nul
       return line('hook', `approve ${p.hookEvent}${reason}`);
     }
 
+    case 'hook_summary': {
+      // One line per session: "PreToolUse allow=12 block=1 · Stop allow=3".
+      const p = event.payload;
+      const parts = Object.entries(p.counts).map(
+        ([hookEvent, byOutcome]) =>
+          `${hookEvent} ${Object.entries(byOutcome).map(([o, n]) => `${o}=${n}`).join(' ')}`,
+      );
+      const body = parts.length > 0 ? parts.join(' · ') : 'no hook dispatches';
+      return line('hooks', `${body}  (${p.written} rows written, ${p.suppressed} allow rows suppressed)`);
+    }
+
     case 'subagent_lifecycle':
       return renderSubagentLifecycle(event.payload, line);
 
