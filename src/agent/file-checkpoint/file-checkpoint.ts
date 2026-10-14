@@ -67,7 +67,7 @@ async function publishSnapshot(turnDir: string, absPath: string): Promise<void> 
     try {
       await rename(staging, destination);
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
+      const code = (err instanceof Error && 'code' in err) ? String((err as { code: unknown }).code) : undefined;
       if (!['EEXIST', 'ENOTEMPTY', 'EPERM', 'EACCES'].includes(code ?? '') || !existsSync(destination)) throw err;
     }
   } finally {

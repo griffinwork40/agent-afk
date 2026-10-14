@@ -4,25 +4,30 @@ import type { OutputEvent, SubagentProgressMeta } from '../../../agent/types.js'
 import { describeForHistory, type ImageAttachment } from '../../input/attachments.js';
 import type { InputSurfaceRefs } from '../../input/input-surface.js';
 import { palette } from '../../palette.js';
-import { isDebugEnabled } from '../../../utils/debug.js';
 import { classifyError, presentError } from '../../errors/index.js';
 import { type CompletionWriter, type ThinkingUiMode, type TurnHandles } from './shared.js';
 import { StreamRenderer } from '../../_lib/stream-renderer.js';
-import { createConsoleWriter } from '../../slash/writer.js';
-import {
-  setTerminalTitleIfEnabled,
-  formatTerminalTitle,
-} from '../../_lib/capture-mode.js';
 import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
 import { createTaskViewHandler } from './task-view-mid-turn.js';
 import { buildUserPayload } from '../../slash/_lib/user-payload.js';
 import { expandAtFileTokens } from './at-file-inject.js';
 import { makeHandleBackgroundKey, installSubagentPromotion } from './turn-handler.bg-promotion.js';
-import { createTurnTtfbState, emitPlainTtfbWaiting, ttfbRendererOptions } from './turn-handler.ttfb.js';
+import { createTurnTtfbState, emitPlainTtfbWaiting } from './turn-handler.ttfb.js';
 import { type PausedPickerRef } from './turn-handler.paused.js';
 import { processStreamEvent, type StreamEventState, type StreamEventContext } from './turn-handler.stream-events.js';
 import { handleTurnCompletion } from './turn-handler.completion.js';
-import { syncCapturePathRef } from './turn-handler.capture-sync.js';
+import {
+  buildRendererOptions,
+  disposeRendererOnce as doDisposeRendererOnce,
+  armAndWire as doArmAndWire,
+  installTurnHandlers,
+  teardownTurn,
+  syncCapturePathRef,
+} from './turn-handler.setup.js';
+import {
+  setTerminalTitleIfEnabled,
+  formatTerminalTitle,
+} from '../../_lib/capture-mode.js';
 
 export { formatToolLine, formatToolResultLine, ToolLane } from './tool-lane.js';
 
@@ -92,27 +97,10 @@ export async function runTurn(
 
   // Factory so the paused→resumed path can swap in a fresh renderer mid-turn
   // (the original renderer is disposed at "Usage paused" and its process() is a no-op).
-  const buildRenderer = (): StreamRenderer => new StreamRenderer({
-    out: createConsoleWriter(completionWriter),
-    thinkingMode: thinkingUi,
-    ...(activeSkillName ? { activeSkillName } : {}),
-    onCancel: () => {
-      session.interrupt().catch((err) => {
-        if (isDebugEnabled()) {
-          console.error('  ' + palette.error('session.interrupt() failed:'), err);
-        }
-      });
-    },
-    ...(h.subagentControl ? { onBackground: handleBackgroundKey } : {}),
-    ...(inputSurface?.history ? { history: inputSurface.history } : {}),
-    ...(inputSurface?.autocompleteState ? { autocompleteState: inputSurface.autocompleteState } : {}),
-    ...(inputSurface?.promptText !== undefined ? { promptText: inputSurface.promptText } : {}),
-    ...(h.scrollRegion ? { scrollRegion: h.scrollRegion } : {}),
-    ...(borrowedCompositor ? { compositor: borrowedCompositor } : {}),
-    ...(h.onStageChange ? { onStageChange: h.onStageChange } : {}),
-    ...ttfbRendererOptions(turnTtfb),
-    ...(h.addPreviewDiffRef ? { addPreviewDiffRef: h.addPreviewDiffRef } : {}),
-  });
+  const buildRenderer = (): StreamRenderer => new StreamRenderer(
+    buildRendererOptions({ completionWriter, thinkingUi, activeSkillName, session, h,
+      handleBackgroundKey, inputSurface, borrowedCompositor, turnTtfb }),
+  );
 
   // `let` so the resumed-event handler can swap in a fresh renderer.
   let renderer = buildRenderer();
@@ -122,29 +110,13 @@ export async function runTurn(
     h.bashTailSetter.current = (id, tail) => renderer.setBashOutputTail(id, tail);
   }
 
-  const disposeRendererOnce = async (): Promise<void> => {
-    if (state.rendererDisposed) return;
-    state.rendererDisposed = true;
-    if (h.bashTailSetter) h.bashTailSetter.current = undefined;
-    try { await renderer.dispose(); } catch { /* best-effort */ }
-  };
+  const disposeRendererOnce = (): Promise<void> =>
+    doDisposeRendererOnce({ state, h, getRenderer: () => renderer });
 
   // Hoisted so both initial setup and post-resume swap re-publish the
   // active compositor to completionWriter + SIGINT routing.
-  const armAndWire = async (): Promise<void> => {
-    await renderer.arm();
-    const armedCompositor = renderer.getCompositor();
-    if (completionWriter && armedCompositor) {
-      const c = armedCompositor;
-      completionWriter.fn = (line) => c.commitAbove(line);
-      // Suppress the redundant SubagentStop line while the overlay is live.
-      completionWriter.suppressSubagentCompletion = true;
-    }
-    h.setActiveCompositor?.(armedCompositor);
-    // Notifier follows the live renderer across paused→resumed hot-swaps.
-    h.setInterruptNotifier?.((active) => renderer.setInterrupting(active));
-    h.rearmStatus?.();
-  };
+  const armAndWire = (): Promise<void> =>
+    doArmAndWire({ getRenderer: () => renderer, completionWriter, h });
 
   try {
     // Blank line separating user input from agent output.
@@ -161,42 +133,7 @@ export async function runTurn(
 
     // Install the per-turn ESC soft-stop handler BEFORE arm() to close the
     // window between arm()'s setInputMode('streaming') and handler installation.
-    if (h.setSoftStopHandler) {
-      h.setSoftStopHandler(() => {
-        state.softStopRequested = true;
-        // Immediate banner feedback; closure follows the live renderer post-swap.
-        renderer.setSoftStopping(true);
-        // Fire interrupt() synchronously — deferred fire via the for-await loop
-        // would block during long tool calls (the "ESC does nothing" bug).
-        session.interrupt().catch((err) => {
-          if (isDebugEnabled()) {
-            console.error('  ' + palette.error('soft-stop session.interrupt() failed:'), err);
-          }
-        });
-        // A turn parked on a subagent await cannot be halted by interrupt() alone;
-        // cancel the foreground subagent so it resolves and the loop can break.
-        const ctrl = h.subagentControl;
-        if (ctrl?.hasActiveForeground()) {
-          void ctrl.cancelActiveForeground().catch((err) => {
-            if (isDebugEnabled()) {
-              console.error('  ' + palette.error('soft-stop cancelActiveForeground() failed:'), err);
-            }
-          });
-        }
-      });
-    }
-
-    // Install the per-turn pause-interrupt handler (usage-limit pause → next turn).
-    if (h.setPauseInterruptHandler) {
-      h.setPauseInterruptHandler(() => {
-        state.pauseInterruptRequested = true;
-        session.interrupt().catch((err) => {
-          if (isDebugEnabled()) {
-            console.error('  ' + palette.error('pause-interrupt session.interrupt() failed:'), err);
-          }
-        });
-      });
-    }
+    installTurnHandlers({ h, state, session, getRenderer: () => renderer });
 
     await armAndWire();
 
@@ -281,28 +218,7 @@ export async function runTurn(
     }
   } finally {
     if (h.capturePathRef) syncCapturePathRef(h.capturePathRef, renderer); // must precede dispose (#1505)
-    await disposeRendererOnce();
-    // OSC 2 title: reset "· running" on EVERY exit path (clean, ESC, error).
-    setTerminalTitleIfEnabled(process.stdout, formatTerminalTitle(process.cwd(), false));
-    if (completionWriter) {
-      // Restore the idle sink (routes through compositor.commitAbove on the
-      // borrowed path — must NOT be hardcoded to console.log; see PR /model bug).
-      completionWriter.fn = completionWriter.idleFn;
-      // Let backgrounded subagent completions surface again between turns.
-      completionWriter.suppressSubagentCompletion = false;
-    }
-    // Clear all per-turn handles so between-turn presses are no-ops.
-    h.setActiveCompositor?.(null);
-    h.setInterruptNotifier?.(null);
-    h.setBackgroundHandler?.(null);
-    h.setTaskViewHandler?.(null);
-    h.setSoftStopHandler?.(null);
-    h.setPausedState?.(false);
-    h.setPauseInterruptHandler?.(null);
-    pickerRef.abort?.abort();
-    pickerRef.abort = null;
-    h.setInFlight(false);
-    h.rearmStatus?.();
+    await teardownTurn({ h, completionWriter, pickerRef, disposeRendererOnce });
   }
 }
 

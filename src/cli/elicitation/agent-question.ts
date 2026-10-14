@@ -205,16 +205,16 @@ export async function renderAgentQuestion(
     }
     // Echo the ORIGINAL choice text (not the display label which may be
     // numbered/shortened) so scrollback shows what the operator actually chose.
-    const originals = values as string[]; // narrowed: undefined already guarded above
+    // Type-guard filter: values[i] was already verified non-undefined above,
+    // but the filter makes this safe against future edits that drop the guard.
+    const originals = values.filter((v): v is string => v !== undefined);
     const echoLabel = originals.map((s) => sanitizeSchemaString(s, 128)).join(', ');
     writer.line(palette.dim('  ✓ ') + palette.brand(echoLabel));
 
     if (qType === 'choice') {
       return { action: 'accept', content: { value: originals[0] } };
     }
-    // Type-guard filter: values[i] was already verified non-undefined above,
-    // but the filter makes this safe against future edits that drop the guard.
-    return { action: 'accept', content: { value: values.filter((v): v is string => v !== undefined) } };
+    return { action: 'accept', content: { value: originals } };
   }
 
   // Confirm-as-picker: reuse the arrow-key picker with a Yes / No

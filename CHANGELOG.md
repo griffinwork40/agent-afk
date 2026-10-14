@@ -11,6 +11,116 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.313.10] - 2026-10-14
+
+### Fixed
+- apply SSRF egress guard to browser_open navigation (#2313) (109db833)
+
+### Changed
+- SW(27,16) result write-up and README section (#3717) (cfcb1f06)
+
+## [5.313.9] - 2026-10-14
+
+### Changed
+- split registerChatCommand under 200-line ceiling (#3685) (55a74162)
+
+## [5.313.8] - 2026-10-14
+
+### Changed
+- split buildChildConfig under 200-line ceiling (#3688) (2c4945d7)
+
+## [5.313.7] - 2026-10-14
+
+### Added
+- write-ahead intent, outcome-unknown status, and pre-execution retry gate (#3713) (e7ee6b30)
+
+### Fixed
+- replace fixed sleeps with vi.waitFor in elicitation intercept tests (#3701) (7046c5b2)
+- make afk whatif --aa reachable from the CLI and /whatif (#3715) (1b18068f)
+
+### Changed
+- clean-install guide, task pack, and intervention log for outside-user trial (#3711) (fb322dc2)
+- shared execFileAsync export and abortReason helper (#3686) (1b612231)
+- deterministic repro for parent seal over live child subagents (#3712) (86e8ea18)
+- pathExists helper and atomic-write adoption at remaining tmp+rename sites (#3687) (d129bd58)
+- extract rawPostOAuthForm; consolidate xAI device-code POST blocks (#3702) (5523afb6)
+
+## [5.313.6] - 2026-10-14
+
+### Fixed
+- resolve nit/low advisory findings from PR triage batch #3670-#3680 (#3703) (10538e16)
+
+## [5.313.5] - 2026-10-14
+
+### Added
+- per-model-slot tool deny list (tools.disabledBySlot) (#3704) (2e6ea1aa)
+
+### Fixed
+- wire AFK_MAX_BUDGET_USD to daemon, Telegram, and REPL sessions (#2314) (ebdf6a4d)
+
+## [5.313.4] - 2026-10-14
+
+### Changed
+- split createBashHandler under 200-line ceiling (#3690) (93ff16b5)
+- split SubagentHandleImpl.run under 200-line ceiling (#3700) (cbfbe6b7)
+
+## [5.313.3] - 2026-10-14
+
+### Changed
+- split SubagentManager.forkSubagent under 200-line ceiling (#3699) (f0c909da)
+
+## [5.313.2] - 2026-10-14
+
+### Changed
+- split anthropic-direct runTurn under 200-line ceiling (#3698) (e43106db)
+- split preserveRowsBeforeFrameRender under 200-line ceiling (#3692) (1a8a234b)
+
+## [5.313.1] - 2026-10-14
+
+### Changed
+- split consumeRoundStream under 200-line ceiling (#3697) (84ca3e2b)
+- split ComposeExecutor.execute under 200-line ceiling (#3696) (d4801b60)
+- split streamToFinalMessage under 200-line ceiling (#3695) (755eaf31)
+- split handleEnter under 200-line ceiling (#3691) (300d76ee)
+- split runForegroundWithPromotion under 200-line ceiling (#3689) (e16db44d)
+
+## [5.313.0] - 2026-10-13
+
+### Added
+- tag learning facts with [auto-reflected] at recall (#3677) (d5a9697c)
+
+### Fixed
+- cosmetic comment fixes — resize-burst B5 discriminant, advanceTimersByTime explanation, rm onRetry warn (#3671) (a559dd18)
+- replace raw bash/grep overflow-kill warn with a styled tool-row label (#3680) (0ae2bdfd)
+
+## [5.312.9] - 2026-10-13
+
+### Added
+- document and test redundancy preflight warning (#2414) (#3675) (c2b661ac)
+
+### Fixed
+- static deliverClean import, restore Invariant comment, add ALS comment, dedupe JSDoc, remove unused env re-export (#3679) (3332ed78)
+
+### Changed
+- split applyPatch and createImageGenerateHandler under 200-line ceiling (#3673) (4fbf2222)
+- extract renderRootOrderLines + flush helper; handleCompact method (#3672) (8a766a43)
+- drop NodeJS.ErrnoException casts at 12 production sites (#3676) (0506684c)
+- adopt IncrementalLineReader/readJsonlFile at remaining hand-rolled sites (#3670) (c41bc657)
+
+## [5.312.8] - 2026-10-13
+
+### Fixed
+- advisory findings from PR triage batch #3638-#3647 (#3664) (9e3cf384)
+- remaining cosmetic items — fast-path comment, dedupe compose-agent-resolve tests (#3662) (e1012b60)
+
+### Changed
+- split interactive runTurn under 200-line ceiling (#3650) (43d3a44b)
+
+## [5.312.7] - 2026-10-13
+
+### Changed
+- split telegram streamResponse under 200-line ceiling (#3658) (4b286689)
+
 ## [5.312.6] - 2026-10-13
 
 ### Changed

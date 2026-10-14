@@ -38,8 +38,9 @@ import type { SlashContext } from '../types.js';
  * carry a `<plugin>:` prefix) must normalise before the registry lookup.
  *
  * @example
- * bareSkillName('mint')           // → 'mint'
- * bareSkillName('awa-private:mint') // → 'mint'
+ * bareSkillName('mint')              // → 'mint'
+ * bareSkillName('awa-private:mint')  // → 'mint'
+ * bareSkillName('a:b:c')             // → 'c'
  */
 export function bareSkillName(name: string): string {
   const colonIdx = name.lastIndexOf(':');

@@ -20,7 +20,6 @@ import { emitSessionPhase, emitSubagentLifecycle } from '../trace/emit.js';
 import type { TraceSink } from '../trace/index.js';
 import { PauseAwareCeiling, SUBAGENT_MAX_PAUSE_EXTENSION_MS } from './pause-ceiling.js';
 import { PROGRESS_RING_CAPACITY } from './progress-constants.js';
-import { emitSuccessfulHandoff } from './capped-handoff.js';
 import type { WorkspaceEntry, WorkspaceStore } from '../workspace/workspace-store.js';
 import { formatWorkspaceDeliveryEnvelope } from '../workspace/workspace-subscription.js';
 import {
@@ -35,6 +34,7 @@ import {
   runInBackground as runInBackgroundImpl,
   dispatchStopAndRelease,
 } from './handle.streaming.js';
+import { drainAndEmitSuccess } from './handle.run-success.js';
 
 // Re-export so external callers importing debugLog-depending path still work.
 export type { SubagentProgressMeta };
@@ -206,7 +206,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
      * accumulate them into the `session_sealed` rollup fields without
      * reaching back into the handle's private state.
      */
-    private readonly onSubagentSucceeded?: (
+    /** @internal */ public readonly onSubagentSucceeded?: (
       usage: SubagentTrace['usage'],
       costUsd: number | undefined,
     ) => void,
@@ -291,66 +291,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       this._lastDurationMs = Date.now() - startTime;
       this._currentStatus = 'succeeded';
       this.latestTerminalStatus = 'succeeded';
-
-      // Item 7: Drain pending user messages queued via sendMessage(). Each
-      // message starts a new turn in the same subagent conversation.
-      // driveTurns already supports multi-turn; we just keep calling
-      // streamToFinalMessage with each queued message. _onTerminal is
-      // deferred so the handle stays in the active map while draining.
-      // Status stays 'succeeded' during drain (no flip back to 'running').
-      let lastMsg = msg;
-      // FIX-2: Open the drain window so sendMessage() can still accept
-      // pushes while status is 'succeeded'.
-      this._drainingMessages = true;
-      try {
-        while (this._pendingUserMessages.length > 0) {
-          // Item 7c: abort-signal guard — stop draining if cancelled.
-          if (this._controller.signal.aborted) break;
-          const next = this._pendingUserMessages.shift()!;
-          lastMsg = await streamToFinalMessage(this, next, sinkOverride);
-          this._lastMessage = lastMsg.content;
-          this._currentTrace.turnCount++;
-        }
-      } catch {
-        // Item 7b: drain error — clear remaining queue and fall through to
-        // lifecycle events, which will use accumulated usage/cost so far.
-        this._pendingUserMessages.length = 0;
-      }
-      // FIX-2: Close the drain window — subsequent sendMessage() calls after
-      // the drain loop completes are dropped as normal terminal-state messages.
-      this._drainingMessages = false;
-
-      // Item 7a: Emit lifecycle + propagate usage AFTER all drain turns so
-      // turnCount and cost reflect the full conversation.
-      //
-      // Witness layer: subagent_lifecycle.succeeded MUST be awaited before
-      // onTerminal(). onTerminal() may trigger the owning session's immediate
-      // teardown, which calls writer.seal(); once sealed, writer.write() throws
-      // and emitSubagentLifecycle swallows it, silently dropping this terminal
-      // record (the "lost terminal trace event" orphan bug). Awaiting here
-      // guarantees the succeeded event is enqueued+persisted on the writer's
-      // FIFO queue BEFORE any seal can run. Safe: write() is a bounded FS append
-      // and emitSubagentLifecycle already swallows errors, so the await cannot
-      // introduce a new failure mode or an unbounded hang.
-      await emitSuccessfulHandoff(this, lastMsg, startTime);
-      // Propagate usage and cost to the parent session's rollup accumulators.
-      // Fire synchronously before onTerminal() so the session_sealed event
-      // always captures this subagent's contribution even if onTerminal()
-      // triggers an immediate session teardown.
-      //
-      // `lastMsg` reflects the final drain turn (or the initial turn when no
-      // drain occurred). `lastMsg.metadata.totalCostUsd` is populated by the
-      // provider's stream-consumer (turn.completed retroactively mutates the
-      // assistant message's metadata in place — see stream-consumer.ts), so by
-      // the time `run()` reads `lastMsg` here the cost is present for providers
-      // that report it. It is `undefined` for backends without pricing data,
-      // which `recordSubagentCompletion` already tolerates.
-      const costUsd =
-        typeof lastMsg.metadata?.totalCostUsd === 'number' ? lastMsg.metadata.totalCostUsd : undefined;
-      this.onSubagentSucceeded?.(this._currentTrace.usage, costUsd);
-
-      this._onTerminal();
-      return lastMsg;
+      return await drainAndEmitSuccess(this, msg, startTime, sinkOverride);
     } catch (err) {
       this._lastDurationMs = Date.now() - startTime;
       // Invariant: own-budget timeouts classify 'failed', inherited (cascaded)
@@ -549,7 +490,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
    * FIX-2: True while the drain loop is executing so sendMessage() can
    * still accept pushes even though _currentStatus is already 'succeeded'.
    */
-  private _drainingMessages = false;
+  /** @internal */ _drainingMessages = false;
 
   sendMessage(text: string): void {
     // FIX-4: Discard empty/whitespace-only messages before any other check.

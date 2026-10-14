@@ -526,6 +526,43 @@ src/cli/slash/commands/whatif.ts  REPL surface
 docs/whatif.md                  This file
 ```
 
+### Redundancy preflight warning (#2414)
+
+Before any model call, `afk whatif` runs a deterministic token-set Jaccard
+similarity pass over every paragraph added by the change against every
+paragraph in the baseline system prompt. When the best match exceeds the
+threshold (35% Jaccard by default), a preflight warning is surfaced.
+
+**What you see in the terminal:**
+
+```
+[redundancy] Jaccard pass complete (1.23ms)
+[redundancy] Added paragraph may restate an existing rule (§ Delegation) [72% similar]
+```
+
+**What it means:** the added paragraph closely resembles an instruction the
+baseline agent already follows. If the change truly restates an existing rule,
+the correct prediction is an empty set -- the behavior will not differ between
+arms because both start from the same baseline instruction.
+
+**What to do:**
+
+- If the similarity is a false positive (your change is genuinely novel despite
+  shared vocabulary), proceed normally. The analyst is told to predict normally
+  when the change is substantively different.
+- If the warning is accurate, the change has no behavioral effect and `--verify`
+  will find no difference. Rephrase the instruction so it is clearly distinct,
+  or remove it and rely on the existing rule.
+
+The warning fires even on `--predict`-only runs (no paid episodes) because it
+affects what the analyst predicts. It does not block the run; use it as a
+signal to review the change before spending on `--verify`.
+
+The similarity score and nearest baseline section heading are included in the
+warning so you can locate the duplicate quickly. Stopwords are removed and
+common inflection suffixes are stripped before comparison, so "spawn a
+subagent" and "spawning subagents" score as equivalent.
+
 ### Failed episodes and arm-imbalance warning (#2411)
 
 When `--verify` is used and one or more episodes fail (timeout or subprocess

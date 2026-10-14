@@ -25,6 +25,7 @@ import type { TraceSink } from '../trace/index.js';
 import { renderToolResult } from '../tools/render-registry.js';
 import { truncateContent } from './stream-consumer.preview.js';
 import { handleSessionInit, handleTurnCompleted } from './stream-consumer.turn-handlers.js';
+import { isOutputCapKill } from '../tools/handlers/_output-cap.js';
 
 /** Callbacks the transform needs to produce side effects. */
 export type TransformDeps = ToolEventAccumulator & {
@@ -225,6 +226,9 @@ function buildToolOutputEvent(
       sizeBytes,
       sizeLabel,
       ...(event.truncated === true && { truncated: true }),
+      // Read the kill sentinel from the RAW content: truncateContent's preview
+      // above drops the trailing note, so the renderer cannot recover it.
+      ...(event.truncated === true && isOutputCapKill(event.content) && { outputCapKilled: true }),
       ...(event.capturePath !== undefined && { capturePath: event.capturePath }),
       ...(lineCount !== undefined && { lineCount }),
       ...(tailPreview !== undefined && tailPreview.length > 0 && { tailPreview }),

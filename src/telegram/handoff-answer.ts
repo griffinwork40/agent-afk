@@ -269,7 +269,7 @@ export function registerHandoffAnswerHandlers(bot: Telegraf): void {
       ? (from.username ? `${from.id}:${from.username}` : String(from.id))
       : undefined;
 
-    const won = await answerHandoff(taskId, answer, 'telegram', undefined, responderIdentity).catch(() => false);
+    const won = await answerHandoff(taskId, answer, 'telegram', undefined, responderIdentity).catch((): false => false);
     if (won) {
       // Edit the original message to show visual closure.
       const answerLabel = qType === 'confirm'

@@ -125,8 +125,13 @@ function unbracket(hostname: string): string {
     : hostname;
 }
 
-/** True when `ip` (a valid literal) falls inside a blocked range. */
-function isBlockedAddress(ip: string): boolean {
+/**
+ * True when `ip` (a valid literal) falls inside a blocked range.
+ *
+ * Exported so callers can classify an IP Chromium actually connected to
+ * (e.g. `Response.serverAddr().ipAddress`) without re-running DNS resolution.
+ */
+export function isBlockedAddress(ip: string): boolean {
   const family = isIP(ip);
   if (family === 0) return false;
   return blockList.check(ip, family === 4 ? 'ipv4' : 'ipv6');

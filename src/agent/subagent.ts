@@ -23,16 +23,13 @@ import type { CanUseTool } from './types/sdk-types.js';
 import type { WorkspaceStore } from './workspace/workspace-store.js';
 import { AbortGraph, type ChildAbortedListener } from './abort-graph.js';
 import type { HookRegistry } from './hooks.js';
-import { AgentSession } from './session.js';
 
 import type { AgentConfig } from './types.js';
 import type { SubagentProgressSink, OutputEvent } from './types/session-types.js';
-import { dispatchSubagentStart, dispatchSubagentStop } from './subagent-hooks.js';
+import { dispatchSubagentStart } from './subagent-hooks.js';
 import type { AbortOrigin, TraceSink } from './trace/index.js';
 import type { Surface } from './awareness/types.js';
-import { admitFork, wrapTerminalWithRelease, type SpawnReceipt, type DelegationBudget } from './subagent/fork-budget.js';
-import { getCurrentSink } from './_lib/skill-sink-channel.js';
-import { touchWorktreeOccupancy, startWorktreeOccupancyHeartbeat } from './worktree/worktree-occupancy.js';
+import { admitFork, type SpawnReceipt, type DelegationBudget } from './subagent/fork-budget.js';
 import { WorktreeMainRootCache } from './subagent/worktree-main-root-cache.js';
 import { type ReadScopeInputs } from './subagent-read-scope.js';
 import { resolveReadScope, composeWriteRoots } from './subagent/resolve-fork-scope.js';
@@ -44,11 +41,7 @@ import { SubagentHandleImpl, type SubagentHandle } from './subagent/handle.js';
 import { resolveForkInputs } from './subagent/fork-resolution.js';
 import type { SubagentStatus, SubagentResult, SubagentTrace } from './subagent/result.js';
 import { CompletedCache } from './subagent/completed-cache.js';
-import { SubagentLogWriter } from './subagent/log.js';
-import { wireProgressEvents } from './subagent/fork-progress-events.js';
-import { wireWorkspaceSubscriptions } from './subagent/workspace-subscription-wiring.js';
-import { makeForkTerminalHook } from './subagent/fork-terminal-hook.js';
-import { errorMessage } from '../utils/errors.js';
+import { armForkOccupancy, constructForkHandle, rollbackFailedFork, type ConstructedFork } from './subagent/fork-wiring.js';
 import { abortAllAndDrainImpl } from './subagent.drain.js';
 import { wireParentAbortSignal } from './subagent.abort-wiring.js';
 
@@ -370,25 +363,19 @@ export class SubagentManager {
     // so every exit path — including throws from resolveReadScope,
     // assembleChildConfig, heartbeat setup, wireWorkspaceSubscriptions, and
     // AgentSession construction — disposes the graph node and disarms the
-    // heartbeat. SubagentStop is also emitted for symmetry with the SubagentStart
-    // that has already fired above.
+    // heartbeat (see rollbackFailedFork in ./subagent/fork-wiring.ts).
     this.abortGraph.register(id, childController);
     this.abortGraph.linkChild(this.rootId, id);
 
     // Ordering constraint: declared before the try block so the catch path can
     // always call stopOccupancyHeartbeat() regardless of where the throw
-    // originated. If the throw happens before startWorktreeOccupancyHeartbeat
-    // is invoked, this no-op stub is what fires — harmless.
+    // originated. If the throw happens before the heartbeat is armed, this
+    // no-op stub is what fires — harmless.
     let stopOccupancyHeartbeat: () => void = () => {};
-
-    let session: AgentSession;
-    let handle: SubagentHandleImpl<T>;
-    let effectiveAgentType: string | undefined;
-    let effectiveResolvedAgentType: string | undefined;
-    // Hoisted so the post-try emitForkStarted call can reference it. Assigned
-    // inside the try block; the catch always re-throws so this is always set
-    // when control reaches the code after the try/catch.
+    // Assigned inside the try block; the catch always re-throws so these are
+    // always set when control reaches the code after the try/catch.
     let childConfig!: AgentConfig;
+    let constructed!: ConstructedFork<T>;
     try {
       // Read-scope inheritance (#416/#441 successor — see ./subagent-read-scope
       // and ./subagent/resolve-fork-scope). Invariants (Gap A/B/C, farm-pin,
@@ -424,171 +411,32 @@ export class SubagentManager {
         workspaceStore: this.workspaceStore, ...(options.nestedAgentAllowlist !== undefined ? { nestedAgentAllowlist: options.nestedAgentAllowlist } : {}),
       });
 
-      // Occupancy touch: subagents never write presence files (top-level-only
-      // by design — presence.ts), so the worktree sweep's live-session guard
-      // cannot see a fork occupying a worktree. Refresh the worktree's meta
-      // (pid + createdAt) instead, resetting the sweep's age clock and PID
-      // liveness. Fire-and-forget: the helper swallows all errors and no-ops
-      // for cwds outside `.afk-worktrees/`, so it can never delay or fail the
-      // fork. Single wiring point — agent/skill/compose/farm dispatches all
-      // converge here, whether cwd came per-call or via manager inheritance.
-      //
-      // Ordering constraint: one touch only protects the tree for the sweep's
-      // MIN_EMPTY_AGE_MS (1h), after which a still-running child ages back into
-      // the `empty` verdict and is force-removed mid-flight (#759). So arm a
-      // heartbeat alongside the initial touch, and capture its stop handle HERE —
-      // before the session is constructed — so every exit path below (settle,
-      // construction throw) already has the inverse in hand and cannot orphan the
-      // timer. The timer is unref()'d, so even a leaked one cannot hold the
-      // process open.
-      if (childConfig.cwd !== undefined) {
-        void touchWorktreeOccupancy(childConfig.cwd);
-        stopOccupancyHeartbeat = startWorktreeOccupancyHeartbeat(childConfig.cwd);
-      }
+      // Occupancy touch + heartbeat, armed BEFORE session construction so every
+      // exit path holds the stop handle (#759). See armForkOccupancy.
+      stopOccupancyHeartbeat = armForkOccupancy(childConfig.cwd);
 
-      // Progress-events opt-in — mutates childConfig.customTools in place when enabled.
-      const bindProgressHandle = wireProgressEvents(childConfig, options.progressEvents, options.parent.getInputStreamRef?.(), options.parent.abortSignal);
-
-      // Workspace subscriptions (Pillar 3): two-phase init mirrors progress events.
-      const wsSubs = wireWorkspaceSubscriptions(this.workspaceStore, id, effectiveTraceWriter, childConfig.provider as never);
-
-      // Ordering constraint: the heartbeat armed above is disarmed by the settle
-      // callback installed on the handle built below, so the guarded span has to
-      // run from construction all the way through `active.set`. A throw anywhere
-      // in between — the parent-stream read, the sink resolve, the handle
-      // constructor — would otherwise return with the interval live and no handle
-      // in existence to ever cancel it, and the tree would never be reaped again.
-      session = new AgentSession(childConfig);
-      const parentInputStreamRef = options.parent.getInputStreamRef?.();
-      const parentAbortSignal = options.parent.abortSignal;
-      // Resolve sink: explicit option takes precedence, then ambient from AsyncLocalStorage
-      const sink = this.progressSink ?? getCurrentSink();
-      // Normalize empty-string render hints to undefined so the `??` fallbacks
-      // engage. A caller passing `agentType: ''` or `parentId: ''` would
-      // otherwise produce an empty Agent() label / empty agentContext anchor
-      // rather than the intended fallback (idPrefix / parent.sessionId).
-      effectiveAgentType = options.agentType?.trim() || undefined;
-      effectiveResolvedAgentType = options.resolvedAgentType?.trim() || undefined;
-      const effectiveParentId = options.parentId?.trim() || undefined;
-      // Per-subagent conversation log — opt-in via AFK_SUBAGENT_LOG=1 (off by default).
-      // Use sessionLabel (the directory key for /tasks) rather than
-      // options.parent.sessionId (the SDK runtime ID): writer and reader must
-      // agree on the same key so logs are found after the handle is evicted.
-      // Falls back to options.parent.sessionId for backwards compatibility
-      // when no sessionLabel was threaded through SubagentManagerOptions.
-      const logSessionKey = this.sessionLabel ?? options.parent.sessionId;
-      const logWriter = SubagentLogWriter.isEnabled() && logSessionKey
-        ? new SubagentLogWriter(logSessionKey, id)
-        : undefined;
-      // Forward-reference ref: assigned immediately after handle construction,
-      // before any async tick that could fire _onTerminal.
-      const handleRef: { current: SubagentHandleImpl<T> | undefined } = { current: undefined };
-      const onTerminal = wrapTerminalWithRelease(
-        makeForkTerminalHook<T>(
-          {
-            id,
-            stopOccupancyHeartbeat,
-            // Resolve at termination time so setOutputEventSink() retains its
-            // documented late-binding/replacement semantics for in-flight forks.
-            getOutputEventSink: () => this.outputEventSink,
-            activeMap: this.active,
-            abortGraph: this.abortGraph,
-            logWriter,
-            completedCache: this.completed,
-          },
-          handleRef,
-        ),
-        budgetReceipt,
-      );
-      handle = new SubagentHandleImpl<T>(
-        id,
-        session,
-        childController,
-        this.abortGraph,
-        options.outputSchema,
-        // Hard wall-clock backstop, settled above as `effectiveTimeoutMs` and
-        // SHARED with the child config's derived soft deadline so the two cannot
-        // drift. Unchanged behaviour: this still aborts a wedged child on schedule.
-        effectiveTimeoutMs,
-        registry,
-        onTerminal,
-        parentInputStreamRef,
-        parentAbortSignal,
-        // agentType: explicit override → idPrefix fallback. Lets callers
-        // (e.g. compose) supply a render-only label without altering idPrefix
-        // which is also used for routing telemetry.
-        effectiveAgentType ?? options.idPrefix,
-        sink,
-        // parentId: explicit override → parent session id fallback. Lets
-        // callers (e.g. compose) anchor the renderer's nesting at the compose
-        // tool_use_id rather than at the orchestrator session id.
-        effectiveParentId ?? options.parent.sessionId,
-        // traceWriter: child shares the parent's writer so its SubagentStop
-        // hook decision lands in the same trace file. Contract:
-        // docs/philosophy/afk-contract.md — "a child sub-agent inherits its
-        // parent's witness." Resolved once above (per-fork config →
-        // manager-level writer) so the handle's terminal lifecycle emits
-        // pair with the 'started' emit below even when inheritance came
-        // from the manager rather than the per-fork config.
-        effectiveTraceWriter,
-        // onSubagentSucceeded: propagate completion data to the parent
-        // session's session_sealed rollup accumulators.
-        this.onSubagentSucceededCb,
-        // Progress-aware idle-watchdog window for the child's turn (see
-        // SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS above). Explicit caller values win,
-        // including `0` to disable the watchdog for this fork — `??` preserves that
-        // precedence. The default is env-tunable via AFK_SUBAGENT_IDLE_TIMEOUT_MS
-        // (resolveSubagentIdleTimeoutMs); an unset/invalid env value returns
-        // SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS, so behaviour is unchanged when the var
-        // is not set. Runs concurrently with the wall-clock budget above.
-        options.config.idleTimeoutMs ?? resolveSubagentIdleTimeoutMs(),
-      );
-      handleRef.current = handle;
-      if (logWriter) handle._logWriter = logWriter;
-      bindProgressHandle(handle as SubagentHandleImpl<unknown>);
-      wsSubs.bindHandle(handle as SubagentHandleImpl<unknown>);
-      this.active.set(id, handle as SubagentHandleImpl<unknown>);
+      // Progress/workspace wiring, session + handle construction, active.set.
+      constructed = constructForkHandle<T>({
+        options, id, childConfig, childController, effectiveTimeoutMs, registry, effectiveTraceWriter,
+        budgetReceipt, stopOccupancyHeartbeat,
+        workspaceStore: this.workspaceStore,
+        progressSink: this.progressSink,
+        sessionLabel: this.sessionLabel,
+        getOutputEventSink: () => this.outputEventSink,
+        activeMap: this.active,
+        abortGraph: this.abortGraph,
+        completedCache: this.completed,
+        onSubagentSucceeded: this.onSubagentSucceededCb,
+      });
     } catch (err) {
-      // A throw anywhere in the guarded span (resolveReadScope, assembleChildConfig,
-      // heartbeat setup, wireWorkspaceSubscriptions, AgentSession construction, or
-      // handle wiring) reaches here. Four invariants to restore:
-      //
-      // 1. Disarm the occupancy heartbeat — there is no child left to protect, and
-      //    a live timer would pin the worktree's sweep clock forever. The stub no-op
-      //    fires harmlessly when the throw happened before startWorktreeOccupancyHeartbeat.
-      //
-      // 2. Dispose the abort-graph node — SubagentStart has already been emitted, so
-      //    the node is live. Leaking it across retry loops (forge/farm) accumulates
-      //    orphan nodes and eventually corrupts cascade-abort semantics.
-      //
-      // 3. Emit SubagentStop for symmetry — SubagentStart was dispatched above, so
-      //    any hook observing SubagentStart expects a matching SubagentStop. Non-
-      //    blocking: errors are swallowed by dispatchSubagentStop itself.
-      //
-      // 4. Roll back the delegation budget slot — the child never ran, so a
-      //    permanent slot consumption would silently exhaust maxTotalAgents across
-      //    forge/farm retry loops. `budgetReceipt` is undefined when no budget is
-      //    configured, so the rollback is a no-op in the common case.
-      stopOccupancyHeartbeat();
-      budgetReceipt?.rollback();
-      this.abortGraph.dispose(id);
-      if (registry) {
-        void dispatchSubagentStop(
-          registry,
-          {
-            event: 'SubagentStop',
-            subagentId: id,
-            status: 'failed',
-            reason: errorMessage(err),
-          },
-          {
-            signal: this.rootController.signal,
-            ...(effectiveTraceWriter ? { traceWriter: effectiveTraceWriter } : {}),
-          },
-        );
-      }
+      rollbackFailedFork({
+        err, id, stopOccupancyHeartbeat, budgetReceipt, registry, effectiveTraceWriter,
+        abortGraph: this.abortGraph,
+        rootSignal: this.rootController.signal,
+      });
       throw err;
     }
+    const { handle, effectiveAgentType, effectiveResolvedAgentType } = constructed;
 
     // Witness emit + routing telemetry: fires AFTER the handle is wired into
     // the manager's active map and the abort-graph. See ./subagent/fork-lifecycle.ts.

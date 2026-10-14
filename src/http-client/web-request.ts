@@ -53,7 +53,9 @@ export type MethodRisk = 'low' | 'medium' | 'high';
 export type HttpMethod = 'GET' | 'HEAD' | 'OPTIONS' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 const LOW_RISK_METHODS = new Set<HttpMethod>(['GET', 'HEAD', 'OPTIONS']);
-const IDEMPOTENT_METHODS = new Set<HttpMethod>(['GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE']);
+// Invariant: even PUT/DELETE can apply before a response is lost. The ledger must
+// gate a second dispatch; do not retry mutating methods inside guardedFetch.
+const IDEMPOTENT_METHODS = new Set<HttpMethod>(['GET', 'HEAD', 'OPTIONS']);
 
 export function classifyMethodRisk(method: HttpMethod): MethodRisk {
   if (LOW_RISK_METHODS.has(method)) return 'low';
@@ -278,7 +280,7 @@ export async function webRequest(opts: WebRequestOptions): Promise<WebRequestRes
   const idempotent = isIdempotentMethod(method);
   const retryOpts = idempotent
     ? { retries: 2, baseDelayMs: 300, maxDelayMs: 5_000 }
-    : { retries: 0 }; // never auto-retry POST/PATCH
+    : { retries: 0 }; // external mutations must pass the ledger gate before each attempt
 
   const t0 = Date.now();
 

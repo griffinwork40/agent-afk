@@ -20,6 +20,7 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { isEnoent, errorMessage } from '../../../utils/errors.js';
 import { atomicWriteFileAsync } from '../../../utils/atomic-write.js';
 import { expandHome } from '../../plugins/source.js';
 import { env } from '../../../config/env.js';
@@ -282,10 +283,9 @@ async function handleSet(
         continue;
       }
     } catch (err) {
-      const nodeErr = err as NodeJS.ErrnoException;
-      if (nodeErr.code !== 'ENOENT') {
+      if (!isEnoent(err)) {
         lines.push(
-          `${target.name}: could not read settings — ${nodeErr.message}`,
+          `${target.name}: could not read settings — ${errorMessage(err)}`,
         );
         anyError = true;
         continue;
@@ -303,9 +303,8 @@ async function handleSet(
       await writeFn(settingsPath, serialised);
       lines.push(`${target.name}: terminal.integrated.fontSize set to ${size}`);
     } catch (err) {
-      const nodeErr = err as NodeJS.ErrnoException;
       lines.push(
-        `${target.name}: could not write settings — ${nodeErr.message}`,
+        `${target.name}: could not write settings — ${errorMessage(err)}`,
       );
       anyError = true;
     }

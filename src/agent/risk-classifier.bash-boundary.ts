@@ -20,7 +20,7 @@ const WORD_CHAR = /[A-Za-z0-9_]/;
  * APFS) `RM` resolves to /bin/rm. `grm`/`srm`/`GRM`/`SRM` (GNU and secure rm,
  * upper-case variants) are covered by the optional prefix `[gsGS]`.
  */
-const SEPARATOR_EVASION = /((?:[gsGS])?[Rr][Mm]|eval)(?=[\s$'"\\])/g;
+const SEPARATOR_EVASION = /((?:[gsGS])?[Rr][Mm]|eval)(?=[\s$'"\\;|])/g;
 
 /**
  * True when position `i` of `cmd` can begin a shell word (or a word segment
