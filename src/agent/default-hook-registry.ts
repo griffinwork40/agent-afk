@@ -376,8 +376,7 @@ export function createDefaultHookRegistry(
   getCwd?: () => string | undefined,
 ): DefaultHookRegistryResult {
   const registry = createHookRegistry();
-  // Invariant: hooks run sequentially; `decision: 'block'` short-circuits the
-  // chain — no later handler in the same event fires. Order is load-bearing.
+  // Invariant: see module-level comment above `registerChildMemoryGuard`.
   registerWhatifEpisodeGate(registry);
   registerShadowVerifyNudge(registry);
   // Two-layer placeholder defense (#2125) + unproven-diagnosis gate (#2987).
