@@ -22,6 +22,7 @@ import { categorizeTool } from './tool-category.js';
 import { isBackgroundBashLaunch } from './tools/bash-background-flag.js';
 import { classifyFilePath, classifyPatchApply } from './risk-classifier.paths.js';
 import { findHighBashPattern } from './risk-classifier.bash-boundary.js';
+import { isSafeAtCommandPosition } from './risk-classifier.bash-safe.js';
 
 /** Three-tier risk level for a tool invocation. */
 export type RiskLevel = 'safe' | 'medium' | 'high';
@@ -210,10 +211,10 @@ const BASH_SAFE: readonly string[] = [
   // checks, status, diff) are safe-listed; mutating verbs (merge, create, edit,
   // close, comment, review, approve) are NOT listed here and fall through to
   // the default-medium rule.
-  // Matched by substring so `gh pr view --json` and `gh run list --limit 5`
-  // both hit the entry. The check order (high → medium → safe) means any
-  // command that ALSO contains a BASH_HIGH token (e.g. `| bash`) is gated
-  // before it ever reaches this table.
+  // Matched by leading words at command position (risk-classifier.bash-safe.ts)
+  // so `gh pr view --json` and `gh run list --limit 5` both hit the entry. The
+  // check order (high → medium → safe) means any command that ALSO contains a
+  // BASH_HIGH token (e.g. `| bash`) is gated before it ever reaches this table.
   'gh pr view',
   'gh pr list',
   'gh pr checks',
@@ -270,9 +271,10 @@ function classifyBash(cmd: string): RiskVerdict {
   for (const p of BASH_MEDIUM) {
     if (cmd.includes(p)) return { level: 'medium', reason: `bash-pattern: matched '${p}'` };
   }
-  for (const p of BASH_SAFE) {
-    if (cmd.includes(p)) return { level: 'safe' };
-  }
+  // SAFE requires every segment to start with a safe-table command — never a
+  // substring hit inside an argument (`--head`, `"cat food"`); see
+  // risk-classifier.bash-safe.ts.
+  if (isSafeAtCommandPosition(cmd, BASH_SAFE)) return { level: 'safe' };
   // Default: medium — unknown bash commands are not safe by assumption.
   return { level: 'medium' };
 }

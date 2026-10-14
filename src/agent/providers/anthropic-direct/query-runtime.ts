@@ -364,6 +364,22 @@ export class AnthropicDirectQuery implements ProviderQuery {
         ? { cwdDependentsFactory: this.cwdDependentsFactory }
         : {}),
     });
+    // Refresh the advertised catalog so it stays consistent with the freshly
+    // rebuilt dispatcher. `setLiveCwd` re-runs `buildDispatcher` (which re-reads
+    // `tools.disabledBySlot` for the live model), but `this.tools` was set only
+    // at construction and in `setModel`. Without this refresh the execution guard
+    // and the wire catalog can diverge when a slot deny is added while the
+    // session is live and the session then re-anchors its cwd. The slot deny key
+    // is unchanged (no model switch), so `currentSlotDenyKey` stays as-is.
+    // Documented contract: live edits take effect at the next `/model` switch or
+    // session; a cwd re-anchor is treated as a second synchronisation point.
+    if (this.modelToolsFactory && this.cwdDependentsFactory) {
+      const { tools } = this.modelToolsFactory(
+        this.state.requestedModel ?? this.state.currentModel,
+        this.state.currentPermissionMode,
+      );
+      this.tools = tools;
+    }
   }
 
   setSystemPrompt(basePrompt: string | undefined): boolean {

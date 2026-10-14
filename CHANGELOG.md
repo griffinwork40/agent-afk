@@ -11,6 +11,29 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.315.1] - 2026-10-14
+
+### Fixed
+- stop confining unconfined forks to read roots [] (#3734) (761a2580)
+- match BASH_SAFE only at command position (#3761) (e608a1d6)
+- refresh advertised catalog on setCwd so execution and wire catalog agree (#3744) (c27de050)
+- make lint:tests:check gate visible by fixing TS6059 rootDir blindness (#3747) (3c1ec3ae)
+
+### Changed
+- write mutable JSON snapshots atomically (#3749) (d58ad5cb)
+- assert maxBudgetUsd reaches Telegram/REPL; add Infinity parser cases (#3748) (bd200f8f)
+- MCP tools are top-level only, not shared with subagents (#3753) (923061a4)
+
+## [5.315.0] - 2026-10-14
+
+### Added
+- content-addressed checkpoint blobs with integrity verification (#3628) (1215b324)
+
+## [5.314.0] - 2026-10-14
+
+### Added
+- suppress no-info hook_decision rows, add hook_summary and search_witness where filter (#3728) (b5c39cab)
+
 ## [5.313.15] - 2026-10-14
 
 ### Fixed

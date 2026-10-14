@@ -98,6 +98,7 @@ describe.each([['anthropic', AnthropicDirectProvider], ['openai', OpenAICompatib
     expect(live(q).dispatcher).toBe(restricted);
     q.setCwd?.(project);
     expect((await call(live(q).dispatcher, 'bash')).content).toContain('disabled by operator settings');
+    if (name === 'anthropic') expect(live(q).names).not.toContain('bash'); // catalog must agree with execution
     await q.setModel('large');
     expect(live(q).names).toContain('bash');
     // Invalid input proves the call passed the operator gate without executing a shell.
@@ -113,5 +114,19 @@ describe.each([['anthropic', AnthropicDirectProvider], ['openai', OpenAICompatib
     configure({ disabledBySlot: { local: ['bash'] } }); // live operator edit
     q.setCwd?.(project);
     expect((await call(live(q).dispatcher, 'bash')).content).toContain('disabled by operator settings');
+  });
+  // #3710: after a live slot-deny edit + cwd re-anchor, the advertised catalog
+  // must agree with the execution guard (was: dispatcher refused, catalog still
+  // advertised the tool). openai-compatible does not rebuild on setCwd so this
+  // gap cannot occur there; the test is anthropic-direct only.
+  it.runIf(name === 'anthropic')('setCwd after live slot-deny edit: catalog and execution agree', async () => {
+    configure({});
+    const q = query(new Provider(), 'local');
+    expect(live(q).names).toContain('bash');
+    configure({ disabledBySlot: { local: ['bash'] } }); // operator edits while session is live
+    q.setCwd?.(project); // re-anchor triggers rebuild
+    // Both the execution guard and the advertised catalog must now deny bash.
+    expect((await call(live(q).dispatcher, 'bash')).content).toContain('disabled by operator settings');
+    expect(live(q).names).not.toContain('bash');
   });
 });

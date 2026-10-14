@@ -236,6 +236,30 @@ describe('finalizeTelegramSession — thinking/effort forwarding (#3289)', () =>
   });
 
   // -------------------------------------------------------------------------
+  // Item 4: maxBudgetUsd forwarded to constructTelegramSession (#3707)
+  // -------------------------------------------------------------------------
+
+  it('forwards maxBudgetUsd from ctx to constructTelegramSession when set', () => {
+    const sessionConfig: AgentConfig = {
+      model: 'claude-sonnet',
+      apiKey: 'test-key',
+    };
+    const ctx = makeCtx(sessionConfig, tmpHome);
+    ctx.maxBudgetUsd = 3;
+
+    finalizeTelegramSession(
+      makeStubProvider(),
+      {},
+      ctx,
+      makeStubWiring(),
+    );
+
+    expect(vi.mocked(constructTelegramSession)).toHaveBeenCalledOnce();
+    const capturedBaseConfig = vi.mocked(constructTelegramSession).mock.calls[0]![0];
+    expect(capturedBaseConfig.maxBudgetUsd).toBe(3);
+  });
+
+  // -------------------------------------------------------------------------
   // Bonus: both thinking and effort set simultaneously
   // -------------------------------------------------------------------------
 
