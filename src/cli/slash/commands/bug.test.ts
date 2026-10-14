@@ -122,6 +122,21 @@ describe('bug.body builders', () => {
   it('does not truncate short descriptions', () => {
     expect(buildBugReportLink('short', ENV).truncated).toBe(false);
   });
+
+  it('does not leak partial secrets when truncation splits a token', () => {
+    // Place a ≥32-char opaque token so truncation would split it if the
+    // loop sliced raw (unredacted) text and then redacted the fragment.
+    const opaqueToken = 'AAAA' + 'Bx9Kz7Qm4Wp3Ry6Fn8Ls2Jd5Hg0Tv1C'; // 36 chars
+    const padding = 'x '.repeat(4000); // force truncation
+    const desc = `${padding}secret: ${opaqueToken} end`;
+    const { url, truncated } = buildBugReportLink(desc, ENV, 2000);
+    expect(truncated).toBe(true);
+    const decoded = decodeURIComponent(url);
+    // No prefix of the token of length ≥8 should survive in the URL.
+    for (let len = 8; len <= opaqueToken.length; len++) {
+      expect(decoded).not.toContain(opaqueToken.slice(0, len));
+    }
+  });
 });
 
 describe('/bug handler', () => {
