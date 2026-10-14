@@ -43,7 +43,7 @@ import type { AgentConfig } from '../../../types/config-types.js';
 import type { AnthropicToolDef } from '../../../tools/types.js';
 import type { ToolDispatcher } from '../tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../../tools/dispatcher.js';
-import { operatorDispatcherToolDefs } from '../../../tools/operator-denied-dispatcher.js';
+import { operatorDispatcherToolDefs, withSlotDeniedDispatcher } from '../../../tools/operator-denied-dispatcher.js';
 import {
   buildRuntimeStateSource,
   getRuntimeStateTool,
@@ -179,10 +179,15 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
 
   // STEP 3 — assign. The source built in STEP 2 is handed to the dispatcher so
   // the `get_runtime_state` handler resolves against it.
-  queryDispatcher = args.externalTools
-    ? wrapDispatcherWithRuntimeState(args.externalTools, runtimeStateSource)
+  // Per-slot denies (`tools.disabledBySlot`) follow THIS query's model —
+  // see tools/operator-denied.slots.ts. Both branches carry them.
+  const slotModel = typeof config.model === 'string' ? config.model : undefined;
+  const externalTools = withSlotDeniedDispatcher(args.externalTools, slotModel);
+  queryDispatcher = externalTools
+    ? wrapDispatcherWithRuntimeState(externalTools, runtimeStateSource)
     : args.buildDispatcher(args.permissionMode, {
         cwd: config.cwd,
+        ...(slotModel !== undefined ? { slotModel } : {}),
         readRoots: args.sharedReadRoots,
         writeRoots: args.sharedWriteRoots,
         ...(config.env !== undefined ? { env: config.env } : {}),

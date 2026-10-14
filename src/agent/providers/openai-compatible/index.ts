@@ -22,7 +22,7 @@ import { resolveSessionHookRegistry } from '../../hooks.js';
 import { composeDispatcherPermissions } from '../../tools/permissions-compose.js';
 import { type OpenAICompatibleProviderOptions } from './index.options.js';
 export type { OpenAICompatibleProviderOptions } from './index.options.js';
-import { snapshotOperatorOptions, operatorDispatcherToolDefs } from '../../tools/operator-denied-dispatcher.js';
+import { snapshotOperatorOptions, operatorDispatcherToolDefs, withSlotDeniedDispatcher } from '../../tools/operator-denied-dispatcher.js';
 
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
@@ -254,11 +254,14 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // its schema list. See wrapDispatcherWithRuntimeState for the invariant.
     // Stamp toolDefs on the external-dispatcher wrapper so query.ts:246 picks
     // up the schema list — mirrors dispatcher-wiring.ts:219 (Anthropic path).
-    dispatcher = this.providerOpts.tools
-      ? Object.assign(wrapDispatcherWithRuntimeState(this.providerOpts.tools, runtimeStateSource),
-          { toolDefs: operatorDispatcherToolDefs(this.providerOpts.tools, selectBaseSchemas(this.schemas, { isSkillDispatch: config.isSkillDispatch, isNonInteractive: config.isNonInteractive })) })
+    const slotModel = typeof config.model === 'string' ? config.model : undefined; // tools.disabledBySlot
+    const externalTools = withSlotDeniedDispatcher(this.providerOpts.tools, slotModel);
+    dispatcher = externalTools
+      ? Object.assign(wrapDispatcherWithRuntimeState(externalTools, runtimeStateSource),
+          { toolDefs: operatorDispatcherToolDefs(externalTools, selectBaseSchemas(this.schemas, { isSkillDispatch: config.isSkillDispatch, isNonInteractive: config.isNonInteractive })) })
       : this.buildDispatcher(permissionMode, {
           ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
+          ...(slotModel !== undefined ? { slotModel } : {}),
           ...(this._sharedReadRoots !== undefined ? { readRoots: this._sharedReadRoots } : {}),
           ...(this._sharedWriteRoots !== undefined ? { writeRoots: this._sharedWriteRoots } : {}),
           ...(resolvedSession.id !== undefined ? { sessionId: resolvedSession.id } : {}),
@@ -434,6 +437,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       this.providerOpts.permissions,
       this.providerOpts.mcpManager?.getMcpToolWireNames(),
       (this.providerOpts.customTools ?? []).map((t) => t.schema.name),
+      opts.slotModel,
     );
     if (effectivePermissions !== undefined) dispatcherOpts.permissions = effectivePermissions;
     if (this.providerOpts.subagentExecutor !== undefined) dispatcherOpts.subagentExecutor = this.providerOpts.subagentExecutor;
