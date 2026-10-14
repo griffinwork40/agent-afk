@@ -58,7 +58,18 @@ describe('emitHookDecision suppression', () => {
 
   it('isInformativeHookDecision ignores subagentId alone', () => {
     expect(isInformativeHookDecision({ hookEvent: 'PreToolUse', subagentId: 'x' })).toBe(false);
-    expect(isInformativeHookDecision({ hookEvent: 'PreToolUse', reason: '' })).toBe(true);
+    expect(isInformativeHookDecision({ hookEvent: 'PreToolUse', reason: '' })).toBe(false);
+  });
+
+  it('isInformativeHookDecision: empty-string reason alone is NOT informative', () => {
+    expect(isInformativeHookDecision({ hookEvent: 'PreToolUse', reason: '' })).toBe(false);
+    expect(isInformativeHookDecision({ hookEvent: 'Stop', reason: '' })).toBe(false);
+    // Non-empty reason IS still informative
+    expect(isInformativeHookDecision({ hookEvent: 'Stop', reason: 'note' })).toBe(true);
+  });
+
+  it('isInformativeHookDecision: durationMs alone is informative', () => {
+    expect(isInformativeHookDecision({ hookEvent: 'PreToolUse', durationMs: 42 })).toBe(true);
   });
 
   it('is a no-op with no writer', async () => {
