@@ -67,4 +67,4 @@ GitHub. Every human intervention is logged, and failed attempts are kept alongsi
 - **Not claimed:** that this is certainly the first SW(25,16). We know of no earlier construction, but we are not
   specialists. If you know of one, please [open an issue](https://github.com/griffinwork40/agent-afk/issues) and
   we will correct this page.
-- SW(27,16) and SW(29,16) remain open as far as we know.
+- SW(27,16) and SW(29,16) are now also on this site: [results/sw-27-16](../sw-27-16/) and [results/sw-29-16](../sw-29-16/).

@@ -72,7 +72,7 @@ failed attempts are kept alongside the successes.
   and we will correct this page.
 - **Not claimed:** inequivalence to any published W(27,16) class (a computer comparison suggests it; we have not
   independently confirmed it).
-- SW(29,16) remains open as far as we know.
+- SW(29,16) is now also on this site: [results/sw-29-16](../sw-29-16/).
 
 ## Standalone checker (no dependencies)
 
