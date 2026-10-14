@@ -431,8 +431,10 @@ export function flushToolLaneToScrollback(ctx: OrchestratorCtx): void {
       // Atomic block commit — the flushed root(s) form ONE coherent block;
       // committing line-by-line desyncs the band-hold model under a tall
       // overlay and scrolls blank rows into scrollback (the "weird gaps"
-      // bug). See commit-block.ts.
-      commitBlockAbove(ctx.compositor, lines);
+      // bug). See commit-block.ts. indentForScrollback: same 2-col tool-lane
+      // indent the live overlay row had (no-op when centering is off), so the
+      // row does not jump left on commit — like every other flush path.
+      commitBlockAbove(ctx.compositor, indentForScrollback(lines));
       ctx.compositor.commitAbove('');
     }
     // Refresh from current lane state. Empty when all roots were
