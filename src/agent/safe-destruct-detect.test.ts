@@ -232,9 +232,22 @@ describe('createSafeDestructDetect (two-tier hook)', () => {
   it('git-reset-hard blockReason names rescue-branch and git switch -C alternative', () => {
     const decision = hook(preCtx('git reset --hard HEAD~3'));
     expect(decision.decision).toBe('block');
-    expect(decision.reason).toContain('rescue-branch');
+    expect(decision.reason).toContain('rescue branch');
+    expect(decision.reason).toContain('git stash push --include-untracked');
     expect(decision.reason).toContain('git switch -C');
     expect(decision.reason).toContain('deliberate');
+    // Never recommend staging everything: `git add -A` can commit secrets.
+    expect(decision.reason).not.toContain('git add -A');
+  });
+
+  it.each([
+    'git reset --hard HEAD~3',
+    'git clean -fd .',
+    'git push --force origin main',
+  ])('deliberate-block reasons keep the ask-the-operator escalation: %s', (cmd) => {
+    const decision = hook(preCtx(cmd));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('ask the operator to run it');
   });
 
   it('git-clean-force blockReason names quarantine directory alternative', () => {

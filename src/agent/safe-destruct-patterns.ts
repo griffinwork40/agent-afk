@@ -100,7 +100,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     re: /\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*reset\s+--hard\b/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit to a rescue branch ("git switch -C rescue-branch && git add -A && git commit") or run "git stash" first, then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script.',
+      'safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; preserve it first with "git stash push --include-untracked" or by committing the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.',
   },
   // git clean -f: BLOCK — removes untracked files with no recovery path.
   {
@@ -108,7 +108,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     re: /\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*clean\s+-[a-z]*f|\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*clean\s+[^|&;\n]*--force\b/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [git-clean-force] — deletes untracked files irrecoverably; use "git clean -n" (dry-run) to preview, then move files to a quarantine directory inside the workspace (e.g. ".afk/quarantine/") and report the exact list to the operator instead of deleting. This block is deliberate: do not reach the same effect via bash, python, or a script.',
+      'safe-destruct: blocked [git-clean-force] — deletes untracked files irrecoverably; use "git clean -n" (dry-run) to preview, then move files to a quarantine directory inside the workspace (e.g. ".afk/quarantine/") and report the exact list to the operator instead of deleting. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.',
   },
   // git push --force: BLOCK — rewrites remote history, potentially for all
   // consumers. Measured at 6 firings in 5 weeks; not inner-loop.
@@ -117,7 +117,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     re: /\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*push\b[^|&;\n]*--force(?!-)|\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*push\b[^|&;\n]*(?<![\w-])-f\b/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [git-push-force] — rewrites remote history, permanently destructive for all branch consumers; push a new branch instead ("git push origin HEAD:refs/heads/<new-branch>") and open a replacement PR that links the old one, or use "--force-with-lease" only after coordinating with collaborators. This block is deliberate: do not reach the same effect via bash, python, or a script.',
+      'safe-destruct: blocked [git-push-force] — rewrites remote history, permanently destructive for all branch consumers; push a new branch instead ("git push origin HEAD:refs/heads/<new-branch>") and open a replacement PR that links the old one, or use "--force-with-lease" only after coordinating with collaborators. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.',
   },
   // Invariant: git branch -D stays OBSERVE because only the ref is deleted —
   // the commit objects survive in the reflog for at least 30 days by default.
