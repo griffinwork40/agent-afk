@@ -156,6 +156,10 @@ export function setUpQuerySession(
     // is re-read. Same `||` fall-through as the `cwd` const below, so the
     // `- Working directory:` and `- Workspace:` lines can never disagree.
     getCwd: () => ctx.getCurrentCwd() || config.cwd || process.cwd(),
+    // Containment base for the dispatcher: the live re-anchored cwd or the
+    // configured one, and NEVER the `process.cwd()` display fallback above
+    // (undefined = unconfined; see DispatcherWiringArgs.getDispatcherCwd).
+    getDispatcherCwd: () => ctx.getCurrentCwd() || config.cwd,
     getMcpTools: () => ctx.mcpManager?.getMcpTools() ?? [],
     getMcpServerStates: () => ctx.mcpManager?.getServerStates() ?? [],
     getSubagents: () =>

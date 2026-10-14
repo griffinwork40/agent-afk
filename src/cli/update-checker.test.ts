@@ -28,6 +28,14 @@ vi.mock('fs', async (importOriginal) => {
   };
 });
 
+// writeJsonFile (and its atomic-write backing) uses node:fs, not fs, so the
+// fs mock above does not intercept it.  Mock the helper at the module boundary
+// so write-path tests stay fast and side-effect-free.
+vi.mock('../utils/json-file.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/json-file.js')>();
+  return { ...actual, writeJsonFile: vi.fn() };
+});
+
 // ---------------------------------------------------------------------------
 // https mock — used by fetchLatestVersion tests
 // vi.hoisted() is required so the variable is available inside the vi.mock()
@@ -81,6 +89,7 @@ function buildFakeHttp(
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs';
 import { spawn } from 'child_process';
 import { getVersion } from './version.js';
+import { writeJsonFile } from '../utils/json-file.js';
 import {
   checkForUpdates,
   coldStartUpdateCheck,
@@ -96,6 +105,7 @@ import {
 
 const mockReadFileSync = vi.mocked(readFileSync);
 const mockWriteFileSync = vi.mocked(writeFileSync);
+const mockWriteJsonFile = vi.mocked(writeJsonFile);
 const mockExistsSync = vi.mocked(existsSync);
 const mockUnlinkSync = vi.mocked(unlinkSync);
 const mockSpawn = vi.mocked(spawn);
@@ -299,9 +309,10 @@ describe('update-checker', () => {
       mockExistsSync.mockReturnValue(false); // no in-flight marker
       triggerAutoUpdate('1.11.0');
 
-      expect(mockWriteFileSync).toHaveBeenCalledWith(
+      expect(mockWriteJsonFile).toHaveBeenCalledWith(
         pendingFile,
-        expect.stringContaining('"targetVersion":"1.11.0"'),
+        expect.objectContaining({ targetVersion: '1.11.0' }),
+        expect.objectContaining({ indent: 0 }),
       );
       expect(mockSpawn).toHaveBeenCalledWith(
         'npm',
@@ -313,7 +324,7 @@ describe('update-checker', () => {
     it('rejects malicious version strings', () => {
       triggerAutoUpdate('1.0.0; rm -rf /');
       expect(mockSpawn).not.toHaveBeenCalled();
-      expect(mockWriteFileSync).not.toHaveBeenCalled();
+      expect(mockWriteJsonFile).not.toHaveBeenCalled();
     });
 
     it('accepts same-major pre-release versions', () => {
@@ -328,36 +339,37 @@ describe('update-checker', () => {
       triggerAutoUpdate('6.0.0');
       triggerAutoUpdate('6.0.0-beta.1');
       expect(mockSpawn).not.toHaveBeenCalled();
-      expect(mockWriteFileSync).not.toHaveBeenCalled();
+      expect(mockWriteJsonFile).not.toHaveBeenCalled();
     });
 
     it('does not re-trigger when a pending marker already exists (install in flight)', () => {
       mockExistsSync.mockReturnValue(true); // marker on disk → install in flight
       triggerAutoUpdate('1.11.0');
       expect(mockSpawn).not.toHaveBeenCalled();
-      expect(mockWriteFileSync).not.toHaveBeenCalled();
+      expect(mockWriteJsonFile).not.toHaveBeenCalled();
     });
   });
 
   describe('writePendingUpdateMarker', () => {
     it('writes the pending marker for a valid semver', () => {
       writePendingUpdateMarker('1.11.0');
-      expect(mockWriteFileSync).toHaveBeenCalledWith(
+      expect(mockWriteJsonFile).toHaveBeenCalledWith(
         pendingFile,
-        expect.stringContaining('"targetVersion":"1.11.0"'),
+        expect.objectContaining({ targetVersion: '1.11.0' }),
+        expect.objectContaining({ indent: 0 }),
       );
     });
 
     it('rejects malicious version strings', () => {
       writePendingUpdateMarker('1.0.0; rm -rf /');
-      expect(mockWriteFileSync).not.toHaveBeenCalled();
+      expect(mockWriteJsonFile).not.toHaveBeenCalled();
     });
 
-    it('silently swallows writeFileSync errors (best-effort)', () => {
-      mockWriteFileSync.mockImplementation(() => {
+    it('silently swallows writeJsonFile errors (best-effort)', () => {
+      mockWriteJsonFile.mockImplementation(() => {
         throw new Error('EACCES: permission denied');
       });
-      // Must not throw even when writeFileSync fails.
+      // Must not throw even when writeJsonFile fails.
       expect(() => writePendingUpdateMarker('1.11.0')).not.toThrow();
     });
   });
@@ -526,25 +538,25 @@ describe('update-checker', () => {
   describe('writeUpdateCache', () => {
     it('writes the update-check cache for a valid semver', () => {
       writeUpdateCache('1.12.0');
-      expect(mockWriteFileSync).toHaveBeenCalledWith(
+      expect(mockWriteJsonFile).toHaveBeenCalledWith(
         cacheFile,
-        expect.stringContaining('"latestVersion":"1.12.0"'),
+        expect.objectContaining({ latestVersion: '1.12.0' }),
+        expect.objectContaining({ indent: 0 }),
       );
     });
 
     it('rejects a non-semver version without writing', () => {
       writeUpdateCache('1.0.0; rm -rf /');
-      expect(mockWriteFileSync).not.toHaveBeenCalled();
+      expect(mockWriteJsonFile).not.toHaveBeenCalled();
     });
 
-    it('silently swallows writeFileSync errors (best-effort)', () => {
-      mockWriteFileSync.mockImplementation(() => {
+    it('silently swallows writeJsonFile errors (best-effort)', () => {
+      mockWriteJsonFile.mockImplementation(() => {
         throw new Error('EACCES: permission denied');
       });
       expect(() => writeUpdateCache('1.12.0')).not.toThrow();
-      // Reset the throwing impl so it does not leak into later tests
-      // (the suite uses clearAllMocks, which keeps implementations).
-      mockWriteFileSync.mockReset();
+      // Reset so the throwing impl does not leak into later tests.
+      mockWriteJsonFile.mockReset();
     });
   });
 
@@ -579,9 +591,10 @@ describe('update-checker', () => {
       buildFakeHttp(200, JSON.stringify({ version: '1.12.0' }));
       const result = await coldStartUpdateCheck('notify');
       expect(result).toEqual({ currentVersion: '1.10.1', latestVersion: '1.12.0' });
-      expect(mockWriteFileSync).toHaveBeenCalledWith(
+      expect(mockWriteJsonFile).toHaveBeenCalledWith(
         cacheFile,
-        expect.stringContaining('"latestVersion":"1.12.0"'),
+        expect.objectContaining({ latestVersion: '1.12.0' }),
+        expect.objectContaining({ indent: 0 }),
       );
     });
 
@@ -589,9 +602,10 @@ describe('update-checker', () => {
       buildFakeHttp(200, JSON.stringify({ version: '1.10.1' }));
       const result = await coldStartUpdateCheck('notify');
       expect(result).toBeNull();
-      expect(mockWriteFileSync).toHaveBeenCalledWith(
+      expect(mockWriteJsonFile).toHaveBeenCalledWith(
         cacheFile,
-        expect.stringContaining('"latestVersion":"1.10.1"'),
+        expect.objectContaining({ latestVersion: '1.10.1' }),
+        expect.objectContaining({ indent: 0 }),
       );
     });
 
@@ -599,7 +613,7 @@ describe('update-checker', () => {
       buildFakeHttp(500, null);
       const result = await coldStartUpdateCheck('notify');
       expect(result).toBeNull();
-      expect(mockWriteFileSync).not.toHaveBeenCalled();
+      expect(mockWriteJsonFile).not.toHaveBeenCalled();
       expect(mockSpawn).toHaveBeenCalled();
     });
 

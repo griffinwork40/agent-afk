@@ -44,6 +44,8 @@ const {
   consoleError,
   consoleWarn,
   mockProcessExit,
+  mockGuardedEgressStart,
+  mockGuardedEgressStop,
 } = vi.hoisted(() => {
   const existsStore = new Set<string>();
   const written: Map<string, string> = new Map();
@@ -80,6 +82,8 @@ const {
     consoleError: vi.fn(),
     consoleWarn: vi.fn(),
     mockProcessExit: vi.fn((_code?: number) => { throw new Error(`process.exit(${_code})`); }),
+    mockGuardedEgressStart: vi.fn().mockResolvedValue({ headless: false }),
+    mockGuardedEgressStop: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -113,6 +117,15 @@ vi.mock('../../paths.js', () => ({
 vi.mock('../../browser/playwright-missing.js', () => ({
   decoratePlaywrightLaunchError: mockDecoratePlaywrightLaunchError,
 }));
+
+// GuardedEgress mock — delegates to hoisted fns so vi.mock factory can reference them.
+vi.mock('../../browser/playwright/egress-launch.js', () => {
+  class GuardedEgress {
+    start(...args: unknown[]) { return mockGuardedEgressStart(...args); }
+    stop(...args: unknown[]) { return mockGuardedEgressStop(...args); }
+  }
+  return { GuardedEgress };
+});
 
 vi.mock('../palette.js', () => ({
   palette: {
@@ -616,6 +629,55 @@ describe('browser login — Playwright launch error', () => {
       program.parseAsync(['node', 'afk', 'browser', 'login', 'https://example.com']),
     ).rejects.toThrow(/decorated: Executable not found/);
     expect(mockDecoratePlaywrightLaunchError).toHaveBeenCalledWith(launchErr, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// browser login — GuardedEgress proxy wiring (#3720)
+// ---------------------------------------------------------------------------
+
+describe('browser login — GuardedEgress proxy wiring', () => {
+  beforeEach(() => {
+    mockGuardedEgressStart.mockClear();
+    mockGuardedEgressStop.mockClear();
+  });
+
+  it('passes launch options from GuardedEgress.start() to chromium.launch', async () => {
+    const proxyOptions = {
+      headless: false,
+      proxy: { server: 'http://127.0.0.1:9999', bypass: '<-loopback>' },
+      args: ['--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'],
+    };
+    mockGuardedEgressStart.mockResolvedValueOnce(proxyOptions);
+
+    const { chromium } = await import('playwright');
+    const launchSpy = vi.spyOn(chromium, 'launch');
+
+    const program = makeProgram();
+    await program.parseAsync(['node', 'afk', 'browser', 'login', 'https://example.com', '--profile', 'default']);
+
+    expect(mockGuardedEgressStart).toHaveBeenCalledWith(false);
+    expect(launchSpy).toHaveBeenCalledWith(proxyOptions);
+  });
+
+  it('calls GuardedEgress.stop() on the success path after the browser closes', async () => {
+    const program = makeProgram();
+    await program.parseAsync(['node', 'afk', 'browser', 'login', 'https://example.com', '--profile', 'default']);
+
+    expect(mockGuardedEgressStop).toHaveBeenCalled();
+  });
+
+  it('calls GuardedEgress.stop() on the error path when chromium.launch rejects', async () => {
+    const { chromium } = await import('playwright');
+    vi.spyOn(chromium, 'launch').mockRejectedValueOnce(new Error('launch failed'));
+    mockDecoratePlaywrightLaunchError.mockReturnValueOnce(new Error('launch failed'));
+
+    const program = makeProgram();
+    await expect(
+      program.parseAsync(['node', 'afk', 'browser', 'login', 'https://example.com']),
+    ).rejects.toThrow(/launch failed/);
+
+    expect(mockGuardedEgressStop).toHaveBeenCalled();
   });
 });
 

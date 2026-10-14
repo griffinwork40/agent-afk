@@ -9,13 +9,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { killProcessGroup } from '../../utils/kill-process-group.js';
 import { errorMessage } from '../../utils/errors.js';
-import {
-  makeAnsiStripper,
-  utf8SafeTruncate,
-  type AnsiStripper,
-  type ShellResult,
-  type ShellErrorReason,
-} from './streamer.js';
+import { makeAnsiStripper, utf8SafeTruncate, type AnsiStripper } from './streamer.utils.js';
+import { type ShellResult, type ShellErrorReason } from './streamer.js';
 
 // ---------------------------------------------------------------------------
 // Shared mutable capture state — passed by reference to helpers so every
@@ -151,12 +146,12 @@ export function wireStreams(
     }
   }
 
-  function killGroup(pid: number): void {
+  function killGroup(): void {
     // Guard pid !== 0: `process.kill(-0, …)` would signal THIS process's
     // own group.  Node never assigns pid 0 to a live child, but the guard
     // is cheap insurance. (PR #565 review: N3.)
-    if (pid !== 0 && !proc.killed) {
-      killProcessGroup(pid);
+    if (proc.pid !== undefined && proc.pid !== 0 && !proc.killed) {
+      killProcessGroup(proc.pid);
     }
   }
 
@@ -167,7 +162,7 @@ export function wireStreams(
     // kill and settle as soon as the cap is crossed to prevent V8 max-string
     // length exhaustion from a runaway `yes`-style command.
     state.overflowKilled = true;
-    if (proc.pid !== undefined) killGroup(proc.pid);
+    killGroup();
     clearTimeout(timeoutHandle);
     abortSignal.removeEventListener('abort', abortHandler);
     resolveResult({
@@ -235,6 +230,7 @@ export function wireExitHandlers(
   proc.on('error', (err) => {
     clearTimeout(timeoutHandle);
     abortSignal.removeEventListener('abort', abortHandler);
+    if (state.settled) return;
     resolveResult({
       exitCode: null,
       durationMs: Date.now() - startedAt,

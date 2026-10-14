@@ -31,8 +31,8 @@
  * @module service/version-skew
  */
 
-import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
-import { dirname } from 'path';
+import { readFileSync, existsSync } from 'fs';
+import { writeJsonFile } from '../utils/json-file.js';
 import type { ServiceName } from './types.js';
 import { getServiceStartupSidecarPath } from '../paths.js';
 
@@ -71,8 +71,10 @@ export function writeServiceStartupSidecar(
   const sidecar: ServiceStartupSidecar = { version, pid, startedAt: now() };
   const path = getServiceStartupSidecarPath(name);
   try {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify(sidecar), 'utf-8');
+    // writeJsonFile uses atomicWriteFile (tmp+rename) — mkdirp is on by default.
+    // indent:0 keeps the sidecar compact; mode 0o644 matches the read-only
+    // status-command use case (no secrets in this file).
+    writeJsonFile(path, sidecar, { mode: 0o644, indent: 0 });
     return true;
   } catch {
     // Best-effort: filesystem errors must not crash the service.

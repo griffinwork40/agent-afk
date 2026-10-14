@@ -76,6 +76,19 @@ export interface DispatcherWiringArgs {
    * {@link RuntimeSourceDeps.getCwd}.
    */
   getCwd: () => string;
+  /**
+   * Live containment base for the DISPATCHER (every build, including
+   * `modelToolsFactory` rebuilds). Distinct from {@link getCwd}, which is a
+   * display accessor that falls back to `process.cwd()`.
+   *
+   * Invariant: returns `undefined` for an UNCONFINED session (no worktree, no
+   * `config.cwd`) and must never fall back to `process.cwd()`. A dispatcher
+   * with a cwd but empty shared roots denies every path (see the
+   * `resolveAndContain` invariant in `tools/handlers/_cwd-utils.ts`); feeding
+   * it the display fallback confined every fork of an unconfined session to
+   * `read roots []` (regression from #3704).
+   */
+  getDispatcherCwd: () => string | undefined;
   /** Live MCP tool accessor for the awareness source. */
   getMcpTools: () => readonly AnthropicToolDef[];
   /** Live MCP server-state accessor for surfacing failed servers (#1702). */
@@ -180,7 +193,7 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
   }
 
   const rebuild = (model: string, permissionMode: string) => {
-    const result = buildQueryTools({ ...args, config: { ...config, model, cwd: args.getCwd() }, permissionMode }, runtimeStateSource, resolvedSession.id);
+    const result = buildQueryTools({ ...args, config: { ...config, model, cwd: args.getDispatcherCwd() }, permissionMode }, runtimeStateSource, resolvedSession.id);
     queryDispatcher = result.dispatcher;
     return result;
   };
