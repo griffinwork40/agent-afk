@@ -201,6 +201,7 @@ export function listQuestions(opts?: {
   const limit = opts?.limit ?? 50;
   const rows = store().query(NAMESPACE);
   let questions = rows.map((r) => r.value as PendingQuestion);
+  questions.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   if (opts?.status !== undefined) {
     questions = questions.filter((q) => q.status === opts.status);
   }

@@ -297,6 +297,9 @@ class ElicitationRouter {
         // swallowed by `.catch(() => {})` on the queue chain, leaving
         // `resultPromise` pending forever. Idempotent: Promise resolve ignores
         // later calls, so on the happy path this is a no-op.
+        // Best-effort: resolve any stale pending record when a handler threw
+        // before reaching the normal markResolved path.
+        try { markResolved(questionId, 'decline'); } catch { /* non-fatal */ }
         resolveResult(DECLINE);
       }
     }).catch(() => {});
