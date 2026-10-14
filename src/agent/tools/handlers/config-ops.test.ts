@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { configGetHandler, configSetHandler } from './config-ops.js';
@@ -136,9 +136,48 @@ describe('config_get / config_set handlers', () => {
     it('reads a config key and the whole file', async () => {
       await configSetHandler({ target: 'config', key: 'model', value: 'opus' }, signal);
       const one = await configGetHandler({ target: 'config', key: 'model' }, signal);
-      expect(one.content).toContain('opus');
+      expect(one.isError).toBeFalsy();
+      expect(JSON.parse(one.content)).toEqual({ path: 'model', class: 'agent', value: 'opus' });
       const all = await configGetHandler({ target: 'config' }, signal);
       expect(JSON.parse(all.content)).toEqual({ model: 'opus' });
+    });
+
+    it('reads an unregistered but present parent object and dotted path', async () => {
+      await configSetHandler({ target: 'config', key: 'models.large', value: 'opus' }, signal);
+      const parent = await configGetHandler({ target: 'config', key: 'models' }, signal);
+      expect(parent.isError).toBeFalsy();
+      expect(JSON.parse(parent.content)).toEqual({ path: 'models', class: 'unknown', value: { large: 'opus' } });
+      mkdirSync(join(home, 'config'), { recursive: true });
+      writeFileSync(jsonFile, JSON.stringify({ custom: { flag: false, nullable: null } }));
+      for (const [key, value] of [['custom.flag', false], ['custom.nullable', null]]) {
+        const result = await configGetHandler({ target: 'config', key }, signal);
+        expect(result.isError).toBeFalsy();
+        expect(JSON.parse(result.content).value).toBe(value);
+      }
+    });
+
+    it('reads registered keys even when no value is persisted', async () => {
+      const result = await configGetHandler({ target: 'config', key: 'model' }, signal);
+      expect(result.isError).toBeFalsy();
+      expect(JSON.parse(result.content)).toEqual({ path: 'model', class: 'agent' });
+    });
+
+    it('errors on an unknown config key with a discovery hint', async () => {
+      const r = await configGetHandler({ target: 'config', key: 'made.up' }, signal);
+      expect(r.isError).toBe(true);
+      expect(r.content).toContain('unknown config key');
+      expect(r.content).toContain('Omit key');
+      expect(r.content).not.toContain('"class"');
+    });
+
+    it.each(['hooks', 'hooks.PreToolUse'])('redirects %s to the safe hooks view', async (key) => {
+      mkdirSync(join(home, 'config'), { recursive: true });
+      writeFileSync(jsonFile, JSON.stringify({ hooks: { PreToolUse: 'MY_DB_PASS=hunter2 notify' } }));
+      const r = await configGetHandler({ target: 'config', key }, signal);
+      expect(r.isError).toBe(true);
+      expect(r.content).not.toContain('hunter2');
+      expect(r.content).toContain('settings.json, not afk.config.json');
+      expect(r.content).toContain("get_runtime_state with view 'hooks'");
     });
 
     it('never reveals a raw secret value', async () => {

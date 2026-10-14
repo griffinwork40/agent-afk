@@ -48,8 +48,9 @@ export const getRuntimeStateTool: AnthropicToolDef = {
     '- `subagents`  — active subagent handles + background jobs only\n' +
     '                 (also includes subagentOutcomeSummary when history is available)\n' +
     '- `workspace`  — git state (branch, headSha, dirty, dirtyCount, remoteUrl)\n' +
-    '- `all`        — union of the four above (default)\n\n' +
-    'This is read-only. The optional subscription model list reads the local Codex catalog; other fields come from in-memory state. No network requests. Fields the runtime does not know (e.g. depth for a ' +
+    '- `hooks`      — merged disk hook configuration: event, matcher, source tier/plugin name, type, resolved timeout, command fingerprint and literal executable basename only; loader warning count and trust flags. Not a live registration list; builtin listing unavailable.\n' +
+    '- `all`        — union of self/tools/subagents/workspace (default); excludes hooks to avoid extra disk I/O and size\n\n' +
+    'This is read-only. The optional subscription model list reads the local Codex catalog; the opt in hooks view reads local configuration via the session hook loader. No raw command text, arguments, env assignments or warning text are returned. No network requests. Fields the runtime does not know (e.g. depth for a ' +
     'top-level session) come back as `null` rather than synthesised defaults.\n\n' +
     'The `all` view also includes `subagentOutcomeSummary` — historical success ' +
     'rate, cap-hit rate, and p50 latency bucketed by model × agentType × depth ' +
@@ -60,10 +61,10 @@ export const getRuntimeStateTool: AnthropicToolDef = {
     properties: {
       view: {
         type: 'string',
-        enum: ['self', 'tools', 'subagents', 'workspace', 'all'],
+        enum: ['self', 'tools', 'subagents', 'workspace', 'hooks', 'all'],
         description:
           'Which slice of state to return. Defaults to "all". Use a narrower ' +
-          'view when only one slice is needed to keep the response compact.',
+          'view when only one slice is needed to keep the response compact. Hooks is opt in and excluded from all.',
       },
     },
     required: [],

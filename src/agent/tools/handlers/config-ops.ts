@@ -70,7 +70,15 @@ export const configGetHandler: ToolHandler = async (input) => {
     }
     // target === 'config'
     if (key) {
+      // Contract: hook commands must use the safe inventory even if persisted
+      // in the primary config. Other arbitrary stored dotted paths remain readable.
+      if (key === 'hooks' || key.startsWith('hooks.')) {
+        return errResult(`config_get: unknown config key ${JSON.stringify(key)}. Hooks are configured in settings.json, not afk.config.json. Use get_runtime_state with view 'hooks' for a safe inventory.`);
+      }
       const v = getConfigValue(key);
+      if (v.class === 'unknown' && v.value === undefined) {
+        return errResult(`config_get: unknown config key ${JSON.stringify(key)}. Omit key to list configuration or check the documented afk.config.json keys.`);
+      }
       return { content: JSON.stringify(v, null, 2) };
     }
     return { content: JSON.stringify(listConfig(), null, 2) };
