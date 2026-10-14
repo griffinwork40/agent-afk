@@ -31,6 +31,7 @@ function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
   return {
     totalTurns: 0,
     totalCostUsd: 0,
+    unpricedTurns: 0,
     totalTokens: 0,
     totalDurationMs: 0,
     sessionStartTime: Date.now(),
