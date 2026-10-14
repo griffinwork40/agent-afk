@@ -34,6 +34,7 @@ import type {
   PickerController,
 } from './terminal-compositor.types.js';
 import { preserveRowsBeforeFrameRender } from './terminal-compositor.frame-preserve.js';
+import { compositorBand } from './terminal-compositor.content-band.js';
 import {
   reflowCommittedBandToWidth,
   type BandReflowCache,
@@ -160,7 +161,9 @@ export function repaint(self: FrameHost): void {
   // sites) both read `self.committedBand` verbatim. Placed above the picker
   // short-circuit so both paths see fresh-width rows; a steady-width repeat
   // repaint is a cache hit (see reflowCommittedBandToWidth) and costs nothing.
-  reflowCommittedBandToWidth(self, self.stdout.columns ?? 80);
+  // Wrap width is the content-band width (== cols when centering is off): the
+  // band paint sites prepend the margin, so rows must fit `cols - marginCols`.
+  reflowCommittedBandToWidth(self, compositorBand(self.stdout).width);
   // Picker-mode short-circuit. The picker rents the input region
   // (dropdown + hint + input line all suppressed) and supplies its
   // own rows via `renderRows()`. Overlay/spinner/tip/attachment

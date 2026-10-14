@@ -32,7 +32,7 @@ import {
   scrollbackFlushLines,
 } from './terminal-compositor.scrollback.js';
 import { withAutowrapDisabled } from './terminal-compositor.band-reflow.js';
-import { contentMargin } from './render/measure.js';
+import { compositorBand } from './terminal-compositor.content-band.js';
 import {
   archivedPrefix,
   capArchivedPrefix,
@@ -145,7 +145,7 @@ export function archiveBandPrefixAndRepaintSurvivors(
     // Content centering (AFK_CENTER_CONTENT): derive the margin from the CURRENT
     // terminal width. The band stores raw (unpadded) content; padding is applied
     // at paint time so the band adapts correctly on resize.
-    const pad = contentMargin();
+    const pad = compositorBand(self.stdout).margin;
     let paint = '';
     for (let i = 0; i < survivors.length; i++) {
       const line = pad && survivors[i] !== '' ? pad + survivors[i] : survivors[i];
