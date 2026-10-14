@@ -113,6 +113,7 @@ Both providers emit a normalized `ProviderEvent` stream consumed by `src/agent/s
 ### Cross-cutting subsystems
 
 - **Hooks** (`src/agent/hooks.ts`, `hook-registry.ts`) — SessionStart/End, SubagentStart/Stop, PreToolUse/PostToolUse. Sequential; `decision: 'block'` short-circuits. SubagentStop supports `injectContext` for parent-session context injection.
+- **Effect ledger** (`src/agent/effect-ledger/`) — Write-ahead external effects and outcome-unknown retry gate; see [`docs/effect-ledger.md`](docs/effect-ledger.md).
 - **SubagentManager** (`src/agent/subagent.ts`) — Forks child `AgentSession`s with permission bubbling, transitive abort via `AbortGraph`, optional Zod output schemas.
 - **Background processes** (`src/agent/shell-jobs/process-jobs.ts`) — `bash` with `run_in_background: true` starts a supervised process (`proc-N`, own process group, capped log under `$AFK_STATE_DIR/proc-jobs/`), returns at once, and delivers a metadata-only `<background-process-result>` on exit via the REPL injection + idle-wake path. Inspect/stop through `get_background_job_health` / `cancel_background_job`; `/sh` lists and kills them. Root interactive REPL only (children, Telegram, daemon get an explicit refusal); jobs end with the session. Separate from the user `!&` `ShellJobRegistry` on purpose. Spec: `docs/background-processes.md`.
 - **AbortGraph** (`src/agent/abort-graph.ts`) — Tree of `AbortController`s. Parent abort cascades down; child abort notifies up (never auto-aborts parent). Abort beats hook decisions.

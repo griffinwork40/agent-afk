@@ -197,11 +197,13 @@ export function firePostToolUse(
   deps: CoreExecDeps,
   input?: unknown,
   resultFlags?: Pick<ToolResult, 'incomplete' | 'incompleteReason' | 'isError'>,
+  toolUseId?: string,
 ): void {
   if (!deps.hookRegistry) return;
   const postCtx: PostToolUseContext = {
     event: 'PostToolUse',
     toolName,
+    ...(toolUseId !== undefined ? { toolUseId } : {}),
     output,
     ...(input !== undefined ? { input } : {}),
     ...(deps.sessionId !== undefined ? { sessionId: deps.sessionId } : {}),
@@ -234,11 +236,13 @@ export function firePostToolUseFailure(
   signal: AbortSignal,
   deps: CoreExecDeps,
   input?: unknown,
+  toolUseId?: string,
 ): void {
   if (!deps.hookRegistry) return;
   const ctx: PostToolUseFailureContext = {
     event: 'PostToolUseFailure',
     toolName,
+    ...(toolUseId !== undefined ? { toolUseId } : {}),
     error: errorMessage,
     ...(input !== undefined ? { input } : {}),
     ...(deps.sessionId !== undefined ? { sessionId: deps.sessionId } : {}),
@@ -326,9 +330,9 @@ export async function executeCoreInner(call: ToolCall, deps: CoreExecDeps): Prom
   if (isSubagentProviderTool(call.name)) {
     const outcome = await executeSubagentProviderTool(deps.subagentExecutor, call, deps.processJobs);
     if (outcome.thrownMessage !== undefined) {
-      firePostToolUseFailure(call.name, outcome.thrownMessage, call.signal, deps, call.input);
+      firePostToolUseFailure(call.name, outcome.thrownMessage, call.signal, deps, call.input, call.id);
     } else {
-      firePostToolUse(call.name, outcome.result.content, call.signal, deps, call.input, outcome.result);
+      firePostToolUse(call.name, outcome.result.content, call.signal, deps, call.input, outcome.result, call.id);
     }
     return outcome.result;
   }
@@ -352,9 +356,9 @@ export async function executeCoreInner(call: ToolCall, deps: CoreExecDeps): Prom
       result = { content: `Skill tool error: ${skillErrMsg}`, isError: true };
     }
     if (skillThrew) {
-      firePostToolUseFailure(call.name, skillErrMsg, call.signal, deps, call.input);
+      firePostToolUseFailure(call.name, skillErrMsg, call.signal, deps, call.input, call.id);
     } else {
-      firePostToolUse(call.name, result.content, call.signal, deps, call.input, result);
+      firePostToolUse(call.name, result.content, call.signal, deps, call.input, result, call.id);
     }
     return result;
   }
@@ -362,7 +366,7 @@ export async function executeCoreInner(call: ToolCall, deps: CoreExecDeps): Prom
   // Compose tool — DAG-based parallel subagent dispatch
   if (call.name === 'compose') {
     const result = await executeCompose(call, deps);
-    firePostToolUse(call.name, result.content, call.signal, deps, call.input, result);
+    firePostToolUse(call.name, result.content, call.signal, deps, call.input, result, call.id);
     return result;
   }
 
@@ -387,9 +391,9 @@ export async function executeCoreInner(call: ToolCall, deps: CoreExecDeps): Prom
 
   // Invariant: exactly one of PostToolUse / PostToolUseFailure fires per call.
   if (handlerThrew) {
-    firePostToolUseFailure(call.name, handlerErrMsg, call.signal, deps, call.input);
+    firePostToolUseFailure(call.name, handlerErrMsg, call.signal, deps, call.input, call.id);
   } else {
-    firePostToolUse(call.name, result.content, call.signal, deps, call.input, result);
+    firePostToolUse(call.name, result.content, call.signal, deps, call.input, result, call.id);
   }
   return result;
 }
