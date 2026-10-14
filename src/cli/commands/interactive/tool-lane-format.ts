@@ -113,6 +113,23 @@ function outcomeNoun(toolName: string | undefined, count: number): string {
   return count === 1 ? 'line' : 'lines';
 }
 
+/**
+ * True when the tool was SIGKILL'd by its output safety cap (bash 8 MB hard
+ * cap, grep scan ceiling). Distinct from a plain `truncated` result, which
+ * grep also sets when it only head+tail-trimmed a search that ran to
+ * completion: labelling that "killed" would be false.
+ */
+function killedAtOutputCap(chunk: ToolResultChunk): boolean {
+  return chunk.outputCapKilled === true && !chunk.capturePath;
+}
+
+/**
+ * Row label for an output-cap kill. Warning tone (not error): the cap is a
+ * deliberate circuit-breaker that worked, and the user's question on seeing it
+ * is "is this a bug I must fix?" — the answer is no, so say "safety cap".
+ */
+const OUTPUT_CAP_KILL_LABEL = ' · ⚠ stopped at output safety cap';
+
 export function formatOutcome(
   chunk: ToolResultChunk,
   homeDir?: string,
@@ -178,7 +195,7 @@ export function formatOutcome(
     //     "N lines · full output saved → ~/…path"
     //
     //   - `truncated` true, no `capturePath` (SIGKILL'd at hard cap, middle
-    //     genuinely unrecoverable): "N lines · output capped · command killed"
+    //     genuinely unrecoverable): "N lines · ⚠ stopped at output safety cap"
     //
     //   - neither (command completed within model cap): "N lines"
     //
@@ -201,9 +218,12 @@ export function formatOutcome(
         : displayPath;
       headline = resultColor(`${chunk.lineCount} ${noun}`) +
         palette.dim(' · full output saved → ') + resultColor(linked) + exitSuffix + durSuffix;
+    } else if (killedAtOutputCap(chunk)) {
+      headline = resultColor(`${chunk.lineCount} ${noun}`) +
+        palette.warning(OUTPUT_CAP_KILL_LABEL) + exitSuffix + durSuffix;
     } else if (chunk.truncated) {
       headline = resultColor(`${chunk.lineCount} ${noun}`) +
-        palette.dim(' · output capped · command killed') + exitSuffix + durSuffix;
+        palette.dim(' · output capped') + exitSuffix + durSuffix;
     } else {
       headline = resultColor(`${chunk.lineCount} ${noun}`) + exitSuffix + durSuffix;
     }
@@ -257,7 +277,8 @@ export function formatOutcome(
   const durSuffix = chunk.durationMs !== undefined
     ? palette.dim(` · ${(chunk.durationMs / 1000).toFixed(1)}s`)
     : '';
-  return resultColor(preview) + exitSuffix + durSuffix;
+  const capSuffix = killedAtOutputCap(chunk) ? palette.warning(OUTPUT_CAP_KILL_LABEL) : '';
+  return resultColor(preview) + capSuffix + exitSuffix + durSuffix;
 }
 
 /**

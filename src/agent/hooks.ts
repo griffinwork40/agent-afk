@@ -275,6 +275,8 @@ export interface PreToolUseContext {
 
 export interface PostToolUseContext {
   event: 'PostToolUse';
+  /** Tool call id shared with the PreToolUse intent. */
+  toolUseId?: string;
   sessionId?: string;
   subagentId?: string;
   /**
@@ -344,6 +346,8 @@ export interface PreCompactContext {
 
 export interface PostToolUseFailureContext {
   event: 'PostToolUseFailure';
+  /** Tool call id shared with the PreToolUse intent. */
+  toolUseId?: string;
   sessionId?: string;
   subagentId?: string;
   /**

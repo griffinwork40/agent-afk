@@ -158,7 +158,7 @@ function isInsideTempRoot(p: string, roots: readonly string[]): boolean {
 }
 
 function errCode(err: unknown): string | undefined {
-  return err instanceof Error && 'code' in err ? String((err as NodeJS.ErrnoException).code) : undefined;
+  return err instanceof Error && 'code' in err ? String((err as { code: unknown }).code) : undefined;
 }
 
 /**

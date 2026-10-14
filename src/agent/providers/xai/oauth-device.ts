@@ -10,7 +10,7 @@ import type { XaiTokenBundle } from './auth-store.js';
 import {
   asNonEmptyString,
   discoverXaiOidc,
-  safeText,
+  rawPostOAuthForm,
   tokenResponseToBundle,
   type OAuthHttpDeps,
   type XaiOidcDiscovery,
@@ -58,20 +58,14 @@ export async function startDeviceCodeFlow(deps: OAuthHttpDeps = {}): Promise<{
   const clientId = deps.clientId ?? XAI_OAUTH_CLIENT_ID;
   const scopes = deps.scopes ?? XAI_OAUTH_SCOPES;
 
-  const body = new URLSearchParams({
-    client_id: clientId,
-    scope: scopes,
-  });
-  const res = await fetchFn(deviceEndpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-    body: body.toString(),
-  });
-  if (!res.ok) {
-    const text = await safeText(res);
-    throw new Error(`xAI device-code start failed: HTTP ${res.status}${text ? ` — ${text}` : ''}`);
+  const { ok, status, json, text } = await rawPostOAuthForm(
+    deviceEndpoint,
+    { client_id: clientId, scope: scopes },
+    fetchFn,
+  );
+  if (!ok) {
+    throw new Error(`xAI device-code start failed: HTTP ${status}${text ? ` — ${text}` : ''}`);
   }
-  const json = (await res.json()) as Record<string, unknown>;
   const device_code = asNonEmptyString(json['device_code']);
   const user_code = asNonEmptyString(json['user_code']);
   const verification_uri = asNonEmptyString(json['verification_uri']);
@@ -104,23 +98,21 @@ export async function pollDeviceCodeToken(
 ): Promise<DevicePollResult> {
   const fetchFn = deps.fetchFn ?? fetch;
   const clientId = deps.clientId ?? XAI_OAUTH_CLIENT_ID;
-  const body = new URLSearchParams({
-    grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-    device_code: deviceCode,
-    client_id: clientId,
-  });
-  const res = await fetchFn(discovery.token_endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-    body: body.toString(),
-  });
-  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  if (res.ok) {
+  const { ok, status: httpStatus, json } = await rawPostOAuthForm(
+    discovery.token_endpoint,
+    {
+      grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+      device_code: deviceCode,
+      client_id: clientId,
+    },
+    fetchFn,
+  );
+  if (ok) {
     const tokens = tokenResponseToBundle(json, deps.nowSeconds);
     if (!tokens) return { status: 'error', message: 'token response missing access_token or refresh_token' };
     return { status: 'success', tokens };
   }
-  const err = asNonEmptyString(json['error']) ?? `http_${res.status}`;
+  const err = asNonEmptyString(json['error']) ?? `http_${httpStatus}`;
   if (err === 'authorization_pending') return { status: 'pending' };
   if (err === 'slow_down') {
     // RFC 8628: bump by at least 5s; prefer server interval when sane.

@@ -38,6 +38,7 @@ export interface QuerySetupResult {
   queryDispatcher: ReturnType<typeof wireQueryDispatcher>['queryDispatcher'];
   runtimeStateSource: ReturnType<typeof wireQueryDispatcher>['runtimeStateSource'];
   toolDefs: ReturnType<typeof wireQueryDispatcher>['toolDefs'];
+  modelToolsFactory: ReturnType<typeof wireQueryDispatcher>['modelToolsFactory'];
   resolvedSessionId: ReturnType<typeof wireQueryDispatcher>['resolvedSessionId'];
   stableSystemPrefix: ReturnType<typeof assembleQueryPrompt>['stableSystemPrefix'];
   toolSystemAppend: ReturnType<typeof assembleQueryPrompt>['toolSystemAppend'];
@@ -139,13 +140,14 @@ export function setUpQuerySession(
   // declare/capture/assign sequence for `queryDispatcher` lives entirely
   // inside this helper — see its module header; splitting it reintroduces
   // the stale-tool-list hazard (#824).
-  const { queryDispatcher, runtimeStateSource, toolDefs, resolvedSessionId } = wireQueryDispatcher({
+  const { queryDispatcher, runtimeStateSource, toolDefs, resolvedSessionId, modelToolsFactory } = wireQueryDispatcher({
     config,
     model,
     permissionMode,
     surface: ctx.surface,
     providerName,
     externalTools: ctx.externalTools,
+    customToolSchemas: ctx.customToolSchemas,
     sharedReadRoots,
     sharedWriteRoots,
     // Live cwd: `_currentCwd` is re-seeded from this query's config above,
@@ -220,6 +222,7 @@ export function setUpQuerySession(
     queryDispatcher,
     runtimeStateSource,
     toolDefs,
+    modelToolsFactory,
     resolvedSessionId,
     stableSystemPrefix,
     toolSystemAppend,

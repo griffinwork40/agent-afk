@@ -1,16 +1,12 @@
 import { mergeAgentLabel } from './tool-lane.labels.js';
 import { formatSkillIdentity, type SkillIdentity } from '../../_lib/skill-identity-format.js';
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
-import { SUBAGENT_TOOLS, NESTING_TOOLS, SKILL_TOOLS } from '../../tool-category.js';
+import { SUBAGENT_TOOLS, SKILL_TOOLS } from '../../tool-category.js';
 import { formatToolLine, formatToolResultLine } from './tool-lane-format.js';
 import type { DiffPayload } from '../../../utils/diff.js';
 import { stripAnsi } from '../../display.js';
 import {
-  renderGroupedRootTools,
-  buildChildMap,
   freshToolEntry,
-  formatAgentSummary,
-  formatAgentChildren,
   type ToolEntry,
   type TextEntry,
   type Entry,
@@ -24,6 +20,7 @@ import { elapsedDisplayNeedsUpdate } from './tool-lane.elapsed-check.js';
 import {
   flushSource as flushSourceImpl,
   flushCompletedRoots as flushCompletedRootsImpl,
+  flush as flushImpl,
 } from './tool-lane.flush.js';
 
 // Re-export types from render module for consumers
@@ -543,65 +540,7 @@ export class ToolLane {
   }
 
   flush(homeDir?: string): string[] {
-    if (this.entries.size === 0) return [];
-
-    const childMap = buildChildMap(this.entries, this.order);
-    const rootOrder: string[] = [];
-
-    for (const id of this.order) {
-      const entry = this.entries.get(id);
-      if (!entry || entry.kind !== 'tool') continue;
-      if (!entry.agentContext) rootOrder.push(id);
-    }
-
-    const lines: string[] = [];
-    const groups = new Map<string, ToolEntry[]>();
-    const groupOrder: string[] = [];
-
-    for (const id of rootOrder) {
-      const entry = this.entries.get(id);
-      if (!entry || entry.kind !== 'tool') continue;
-      const children = childMap.get(entry.toolUseId);
-
-      // History: `children.length > 0` was a co-discriminant alongside NESTING_TOOLS
-      //   membership. Symptom: a skill/agent whose children all flushed mid-turn (via
-      //   flushSource) fell through to renderGroupedRootTools and rendered as a flat
-      //   leaf BELOW its own already-committed children — visually ejecting them from
-      //   the skill frame. Fix: membership alone is the discriminant; formatAgentSummary
-      //   emits header + agentResultSummary correctly even with an empty child list.
-      //   Pattern card: ordered-sequences-governed-by-append-only-scrollback (indent
-      //   and frame must be resolved at commit time, never after).
-      //
-      // Invariant: when {@link flushSource} has already emitted this entry's header
-      //   (entry.headerEmitted === true), route to {@link formatAgentChildren}
-      //   (children + agentResultSummary, no header) — formatAgentSummary would
-      //   re-emit the header and duplicate it in scrollback.
-      if (NESTING_TOOLS.has(entry.toolName)) {
-        lines.push(...renderGroupedRootTools(groups, groupOrder, homeDir));
-        groups.clear();
-        groupOrder.length = 0;
-        if (entry.headerEmitted) {
-          // Header already in scrollback from flushSource; emit only closer.
-          const closerLines = formatAgentChildren(entry, children ?? [], childMap, homeDir, [], this.compactScrollback);
-          lines.push(...closerLines);
-        } else {
-          lines.push(formatAgentSummary(entry, children ?? [], childMap, homeDir, undefined, this.compactScrollback));
-        }
-      } else {
-        if (!groups.has(entry.toolName)) {
-          groups.set(entry.toolName, []);
-          groupOrder.push(entry.toolName);
-        }
-        groups.get(entry.toolName)!.push(entry);
-      }
-    }
-
-    lines.push(...renderGroupedRootTools(groups, groupOrder, homeDir));
-
-    this.entries.clear();
-    this.order = [];
-    this.agentIdStack = [];
-    return lines;
+    return flushImpl(this as unknown as import('./tool-lane.flush.js').ToolLaneFlushHost, homeDir);
   }
 
 

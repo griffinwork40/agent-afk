@@ -25,7 +25,7 @@ import { createOutcomeSessionEndHook, createChildAttributionHook } from './outco
 import { createSpineSessionEndHook } from './spine/index.js';
 import { inboundAttachmentRegistry } from './content/attachment-registry.js';
 import { env } from '../config/env.js';
-import { createEffectLedgerPostHook } from './effect-ledger/index.js';
+import { createEffectLedgerHooks } from './effect-ledger/index.js';
 import {
   createPathApprovalHook,
   type PathApprovalSurface,
@@ -329,16 +329,17 @@ function registerPathApprovalAndBashHooks(
 }
 
 /**
- * Register the external-effect ledger on both PostToolUse and
- * PostToolUseFailure. Registered last among built-in PostToolUse handlers so
- * it runs after all policy hooks (path-approval once-grant revoke, etc.).
- * PostToolUseFailure coverage ensures thrown tool handlers (the most
- * uncertain-outcome case) are recorded with status 'failed'.
+ * Register the external-effect ledger: write intent on PreToolUse before
+ * dispatch, and settle the same record on PostToolUse / PostToolUseFailure.
+ * Registered last among built-in tool hooks so it runs after all policy hooks
+ * (path-approval once-grant revoke, etc.). PostToolUseFailure coverage ensures
+ * thrown tool handlers (the most uncertain-outcome case) are settled too.
  */
 function registerEffectLedgerHooks(registry: HookRegistry): void {
-  const ledgerHook = createEffectLedgerPostHook();
-  registry.register('PostToolUse', ledgerHook);
-  registry.register('PostToolUseFailure', ledgerHook);
+  const ledgerHooks = createEffectLedgerHooks();
+  registry.register('PreToolUse', ledgerHooks.pre);
+  registry.register('PostToolUse', ledgerHooks.post);
+  registry.register('PostToolUseFailure', ledgerHooks.post);
 }
 
 /**

@@ -40,7 +40,8 @@
 
 import { createHash } from 'crypto';
 import { appendFileSync } from 'fs';
-import { mkdir, open, writeFile } from 'fs/promises';
+import { mkdir, open } from 'fs/promises';
+import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
 import type { FileHandle } from 'fs/promises';
 import { join } from 'path';
 
@@ -408,7 +409,7 @@ export class NdjsonTraceWriter implements TraceWriter {
     const body = JSON.stringify(payload.preCompactionMessages);
     const sizeBytes = Buffer.byteLength(body, 'utf8');
     const sha256 = createHash('sha256').update(body).digest('hex');
-    await writeFile(sidecarPath, body, { encoding: 'utf8', flag: 'w' });
+    await atomicWriteFileAsync(sidecarPath, body);
 
     const ref: CompactionSidecarRef = { path: sidecarPath, sizeBytes, sha256 };
     return {
