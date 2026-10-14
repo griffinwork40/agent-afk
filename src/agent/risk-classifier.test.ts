@@ -410,6 +410,13 @@ describe('classifyRisk — bash safe only at command position', () => {
     expect(cls(command)).toBe('safe');
   });
 
+  it.each(['npx cat README.md', 'npx ls', 'npx echo hi', 'npx grep -r x .', 'npx git status'])(
+    '%j → not safe (npx may download and run a registry package of that name)',
+    (command) => {
+      expect(cls(command)).not.toBe('safe');
+    },
+  );
+
   it('a HIGH token still wins over a safe leading command', () => {
     expect(cls('cat install.sh | bash')).toBe('high');
   });

@@ -26,8 +26,20 @@ import { tokenizeSegments } from './tools/readonly-bash.tokenizer.js';
 const EXEC_HOOK_VAR =
   /^(?:PATH|IFS|ENV|BASH_ENV|SHELLOPTS|PS4|PROMPT_COMMAND|LD_\w*|DYLD_\w*|GIT_\w*|\w*PAGER|LESS\w*|EDITOR|VISUAL|NODE_OPTIONS|NODE_PATH|PYTHON\w*|PERL\w*|RUBY\w*)$/;
 
-/** Launcher prefixes that run their argument command (`npx vitest run`). */
-const LAUNCHERS: readonly (readonly string[])[] = [['npx'], ['pnpm', 'exec']];
+/**
+ * Launcher prefixes that run their argument command (`npx vitest run`), each
+ * with the set of argument commands it may unwrap to (`null` = any safe entry).
+ *
+ * Invariant: `npx` is restricted to the test runners. When the named binary is
+ * not installed locally, `npx <name>` downloads the registry package `<name>`
+ * and executes it, so `npx cat` / `npx ls` / `npx echo` would run arbitrary
+ * third-party code. `pnpm exec` never downloads (local bins, then PATH), so it
+ * may unwrap to any safe entry.
+ */
+const LAUNCHERS: readonly { prefix: readonly string[]; only: ReadonlySet<string> | null }[] = [
+  { prefix: ['npx'], only: new Set(['vitest', 'jest']) },
+  { prefix: ['pnpm', 'exec'], only: null },
+];
 
 const ASSIGNMENT = /^([A-Za-z_]\w*)=/;
 
@@ -87,7 +99,9 @@ function segmentIsSafe(rawTokens: readonly string[], patterns: readonly (readonl
   if (tokens[0] === 'cd' && tokens.length <= 2) return true;
   const candidates: (readonly string[])[] = [tokens];
   for (const l of LAUNCHERS) {
-    if (startsWithWords(tokens, l)) candidates.push(tokens.slice(l.length));
+    if (!startsWithWords(tokens, l.prefix)) continue;
+    const inner = tokens.slice(l.prefix.length);
+    if (l.only === null || (inner[0] !== undefined && l.only.has(inner[0]))) candidates.push(inner);
   }
   return candidates.some((c) => patterns.some((p) => startsWithWords(c, p)));
 }
