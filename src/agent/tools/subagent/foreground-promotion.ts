@@ -19,20 +19,18 @@
 
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { BackgroundAgentRegistry } from '../../background-registry.js';
-import { backgroundDeliveryNote, type BackgroundDelivery } from './background-delivery.js';
+import type { BackgroundDelivery } from './background-delivery.js';
 import type { SubagentManager } from '../../subagent.js';
-import { annotateIfIncomplete, incompleteToolResultFields } from '../../subagent/result.js';
 import { debugLog } from '../../../utils/debug.js';
 import type { TraceOrigin, TraceActor } from '../../session/session-identity.js';
 import type { TraceSink } from '../../trace/index.js';
 import { emitQueuedUserMessage } from '../../trace/emit.js';
 import type { ToolResult } from '../types.js';
-import { emitTelemetry, truncate, boundedStopReason, measurePartial, buildFailurePayload } from './failure-payload.js';
 import { appendInjectContext } from './inject-context.js';
 import { claimQueuedNote, type QueuedNoteClaim } from './queued-note.js';
-import { capSubagentResult } from './foreground-promotion.result-cap.js';
-import { teardownIsolatedWorktree, describePreserveReason } from '../handlers/worktree-managed.js';
-import { lockWorktreeForBackground, teardownBackgroundWorktree, unlockWorktreeForPromotion } from '../handlers/worktree-managed.background.js';
+import { teardownIsolatedWorktree } from '../handlers/worktree-managed.js';
+import { lockWorktreeForBackground, unlockWorktreeForPromotion } from '../handlers/worktree-managed.background.js';
+import { prepareForegroundRun, foregroundCompletionResult, emitForegroundRejection, foregroundPromotionPayload, reportPreservedForegroundWorktree, adoptForegroundRun } from './foreground-handoff.js';
 import { withProvenanceHeader } from './foreground-promotion.provenance.js';
 import { errorMessage } from '../../../utils/errors.js';
 export { withProvenanceHeader };
@@ -135,15 +133,15 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
     handle,
     signal,
     prompt,
+    childManager,
     backgroundPrompt,
-    idPrefix,
     model,
     parentModel,
-    childManager,
-    identity,
-    traceWriter,
-    depth,
     parentSessionId,
+    identity,
+    depth,
+    idPrefix,
+    traceWriter,
     registry,
     promotionTriggers,
     activeForegroundHandles,
@@ -151,66 +149,19 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
     promotionTookBudget,
   } = args;
 
-  // Wire abort: if signal fires, cancel the handle (foreground only —
-  // see comment on the background branch above for why).
-  const abortListener = () => {
-    void handle.cancel();
-  };
-  signal.addEventListener('abort', abortListener, { once: true });
-
-  const startedAt = Date.now();
-
-  // ------------------------------------------------------------------
-  // Promotion plumbing (user-triggered backgrounding of a running
-  // foreground subagent — Ctrl+B).
-  //
-  // External constraint: the parent model is suspended at the single
-  // `runToResult` await below for this subagent's entire lifetime, and
-  // its progress reaches the UI through a side-channel progress sink —
-  // NOT via events on the parent stream. So a keyboard flag polled in the
-  // turn loop cannot interrupt this await. Instead we expose a promotion
-  // trigger through the narrow SubagentControl seam: when fired, it wins a
-  // race against the run; we hand the still-running handle to the
-  // BackgroundAgentRegistry and return the same synthetic "running"
-  // pointer the mode:'background' branch returns — unblocking the parent
-  // turn while the subagent keeps running detached.
-  //
-  // `promoted` gates the finally so a promoted (detached) handle and its
-  // child manager are NOT torn down here: the registry now owns the
-  // handle's lifetime, bounded by parent-session abort exactly like a
-  // natively-backgrounded job.
-  // ------------------------------------------------------------------
+  // Invariant: abort wiring precedes trigger registration, which precedes starting the run.
+  const { abortListener, startedAt, promotionSignal, resolveJob } = prepareForegroundRun(args);
   let promoted = false;
-  let firePromotion!: (queuedNote?: QueuedNoteClaim) => void;
-  const promotionSignal = new Promise<QueuedNoteClaim | undefined>((resolve) => {
-    firePromotion = resolve;
-  });
-  let resolveJob!: (info: PromotedSubagentInfo | null) => void;
-  const jobReady = new Promise<PromotedSubagentInfo | null>((resolve) => {
-    resolveJob = resolve;
-  });
-  promotionTriggers.set(handle.id, { fire: firePromotion, ready: jobReady });
-  // Registry-independent cancel handle (soft-stop path). Removed in the same
-  // finally as the promotion trigger below.
-  activeForegroundHandles.set(handle.id, handle);
 
-  // In-turn SubagentStop delivery.
-  //
-  // Invariant (delivery order — externally governed by the SDK tool-use
-  // protocol): SubagentStop fires from `handle.teardown()` in the `finally`
-  // below, which runs BEFORE this async execute() resolves and its
-  // tool_result is assembled/sent. So a foreground `agent` fork can carry the
-  // stop hook's `injectContext` (e.g. the shadow-verify nudge) in-turn — as
-  // part of the SAME tool_result the parent sees — instead of via the
-  // deferred queue channel. We therefore hoist the completion ToolResult into
-  // `toolResult` (rather than returning inside the try) and, after teardown
-  // records the note, append it to `toolResult.content`. Exactly-once:
-  // `teardown({ deferInjectContextToCaller: true })` suppresses the queue
-  // push for this stop, so the note rides the tool_result OR the queue, never
-  // both. The promoted / error-rethrow / abort paths leave `toolResult`
-  // unset, so no append happens on them (queue/registry semantics preserved).
+  // Invariant (in-turn SubagentStop delivery): SubagentStop fires from `handle.teardown()` in the
+  // `finally` below, BEFORE execute() resolves, so a foreground `agent` fork carries the stop
+  // hook's `injectContext` in-turn. We hoist into `toolResult` and append after teardown.
+  // `teardown({ deferInjectContextToCaller: true })` suppresses the queue push — note rides
+  // the tool_result OR the queue, never both. Promoted/error/abort paths leave `toolResult`
+  // unset so no append happens on them (queue/registry semantics preserved).
   let toolResult: ToolResult | undefined;
 
+  // Invariant: start once, outside try, before racing; retain the result-first race operand order.
   // Start the run but don't await it directly — race it against the
   // promotion signal. The same `runPromise` is handed to the registry on
   // promotion (it must NOT be re-run via runInBackground; see adoptRunning).
@@ -237,49 +188,26 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
         // foreground finally can tear it down normally.
         const isoTd = args.isolationTeardown;
         try {
-          // Lock the worktree before handing to the registry — the promoted
+          // Invariant: await the worktree lock before handing to the registry — the promoted
           // job outlives the foreground finally that would have torn it down.
           if (isoTd) await lockWorktreeForBackground(isoTd.repoRoot, isoTd.worktreePath);
-          const job = registry.adoptRunning({
-            handle,
-            runPromise,
-            prompt: backgroundPrompt,
-            model: model ?? 'sonnet',
-            provenance: 'user',
-            parentSessionId,
-            ...(isoTd ? {
-              onCleanup: async () => {
-                const result = await teardownBackgroundWorktree(isoTd);
-                debugLog(`background worktree teardown: ${JSON.stringify(result)}`);
-              },
-            } : {}),
-            // Item 4: defer the budget-slot release to registry settlement so a
-            // promoted agent's concurrent slot is held until the job finishes,
-            // matching the accounting of natively-backgrounded jobs.
-            ...(budgetRelease !== undefined ? { onSettled: budgetRelease } : {}),
-          });
+          // Invariant: adoption is synchronous after the lock await; ownership flips in this continuation.
+          const job = adoptForegroundRun({ handle, backgroundPrompt, model, parentSessionId, budgetRelease }, registry, runPromise, isoTd);
           promoted = true;
           // Item 4: signal the caller that the registry owns budgetRelease now.
           if (promotionTookBudget !== undefined && budgetRelease !== undefined) {
             promotionTookBudget.value = true;
           }
+          // Invariant: mark promotion and budget transfer before detaching abort, then resolve ready.
           // Detach the end-of-turn abort bridge — the promoted job must
           // outlive the turn that spawned it, exactly like mode:'background'.
           signal.removeEventListener('abort', abortListener);
           // Absence of isolationTeardown means the child runs in the parent's
           // worktree — flag this so the TUI can warn the user (#1513).
           resolveJob({ jobId: job.jobId, label: job.label, sharesWorktree: !isoTd });
-          const promotedPayload: Record<string, unknown> = {
-            status: 'running' as const,
-            jobId: job.jobId,
-            subagentId: job.subagentId,
-            label: job.label,
-            message:
-              `Subagent backgrounded by user (jobId=${job.jobId}). It keeps running detached. ` +
-              `${backgroundDeliveryNote(args.delivery, job.jobId)} ` +
-              `/bgsub:join ${job.jobId} remains available for manual replay.`,
-          };
-          // Ordering: claim the queued note only AFTER `adoptRunning` succeeded
+          // Invariant: payload shaping stays synchronous, before claiming the queued note.
+          const promotedPayload = foregroundPromotionPayload(job, args.delivery);
+          // Invariant: claim the queued note only AFTER `adoptRunning` succeeded
           // and `promoted` is set. The cap-hit / registry-refusal path below
           // throws out of `adoptRunning` and falls through to a normal
           // foreground await — there is no promotion tool_result for the note to
@@ -287,7 +215,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
           // keep the message queued instead of dropping it.
           const queuedUserMessage = claimQueuedNote(outcome.queuedNote);
           if (queuedUserMessage !== undefined) {
-            // Ordering invariant: claim → witness → structural carrier. The trace
+            // Invariant: claim → await witness → structural carrier. The trace
             // records only size/job identity (never raw user text), and the model
             // receives authority outside child-controlled `content`.
             await emitQueuedUserMessage(traceWriter, {
@@ -310,6 +238,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
             'subagent-executor: promotion failed, staying foreground: ' +
               (errorMessage(e)),
           );
+          // Invariant: await unlock before resolving ready(null) and awaiting the original run.
           // If the worktree was locked (before adoptRunning threw), unlock it
           // now. The foreground finally will handle full teardown; a locked
           // tree would cause `git worktree remove` to fail and leak permanently.
@@ -329,135 +258,24 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
       }
     }
 
+    // Invariant: refusal/no registry falls back to awaiting the same run, never restarting it.
     // Normal completion: result already in hand from the race, or promotion
     // fell through and we await the still-running run.
     const result = outcome.kind === 'result' ? outcome.result : await runPromise;
 
-    // Extract success or failure
-    if (result.status === 'succeeded' && result.message) {
-      const rawContent = result.message.content;
-      // Guard against non-string content (e.g. SDK may return a ContentBlock[])
-      const content = typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent);
-      const trace = result.trace;
-      // Invariant: `content`/`content_chars` are measured on the RAW message
-      // content, before `annotateIfIncomplete`/`withProvenanceHeader` run
-      // below. Telemetry must reflect the subagent's actual output size, not
-      // the parent-visible banner/provenance text prepended at delivery time.
-      void emitTelemetry({
-        ...identity,
-        event: 'subagent.completed',
-        subagent_id: handle.id,
-        parent_session_id: parentSessionId,
-        status: result.status,
-        duration_ms: Date.now() - startedAt,
-        content_chars: content.length,
-        // Bounded via the shared chokepoint (see failure-payload.ts) rather
-        // than an inline `truncate(x, 64)` — that duplication (this site,
-        // its failure-path sibling below, and background-registry.ts) is how
-        // the sixth call site drifted unbounded (#717).
-        stop_reason: boundedStopReason(result.stopReason),
-        depth,
-        tool_call_count: trace?.toolCalls.length,
-        // Preserve `false` ("confirmed absent") distinctly from `undefined`
-        // ("no trace available"); `|| undefined` would collapse both.
-        thinking_present: trace != null ? trace.thinkingPresent : undefined,
-        tool_names: trace?.toolCalls.length
-          ? JSON.stringify([...new Set(trace.toolCalls.map(tc => tc.name))])
-          : undefined,
-      });
-      // Assign (don't return) so the finally can append the in-turn
-      // SubagentStop injectContext after teardown. See `toolResult` above.
-      // annotateIfIncomplete marks capped/stream-truncated partials so the
-      // parent model doesn't treat them as a final answer (no-op if clean);
-      // withProvenanceHeader stamps the producing model on a mixed-model
-      // dispatch (no-op when child == parent). incompleteToolResultFields adds
-      // the structured counterpart to that same banner, alongside it, for
-      // non-model consumers.
-      const assembled = withProvenanceHeader(
-        annotateIfIncomplete(content, result.stopReason),
-        model,
-        parentModel,
-      );
-      const { content: cappedContent, capped: wasCapped } = capSubagentResult(assembled, parentSessionId, handle.id);
-      toolResult = {
-        content: cappedContent,
-        ...incompleteToolResultFields(result.stopReason),
-        ...(wasCapped ? { truncated: true } : {}),
-      };
-      return toolResult;
-    }
-
-    const errorMsg =
-      result.error?.message ?? 'Subagent failed with no output';
-    const failedTrace = result.trace;
-    void emitTelemetry({
-      ...identity,
-      event: 'subagent.failed',
-      subagent_id: handle.id,
-      id_prefix: idPrefix,
-      parent_session_id: parentSessionId,
-      status: result.status,
-      duration_ms: Date.now() - startedAt,
-      error_message: truncate(errorMsg),
-      schema_error: result.schemaError
-        ? truncate(result.schemaError.message)
-        : undefined,
-      partial_output_chars: measurePartial(result.partialOutput),
-      // Bounded via the shared chokepoint — see the completed-path comment above.
-      stop_reason: boundedStopReason(result.stopReason),
-      depth,
-      // Mirror trace fields on the failure path — failed subagents are the
-      // highest-value debugging target and benefit most from this signal.
-      tool_call_count: failedTrace?.toolCalls.length,
-      thinking_present: failedTrace != null ? failedTrace.thinkingPresent : undefined,
-      tool_names: failedTrace?.toolCalls.length
-        ? JSON.stringify([...new Set(failedTrace.toolCalls.map(tc => tc.name))])
-        : undefined,
-    });
-    // Audit §F.1: surface a structured JSON payload to the parent model
-    // instead of a plain error string, so the model can distinguish
-    // schema mismatch / partial output / hard failure rather than seeing
-    // a flattened "Subagent failed: ..." line.
-    const payload = buildFailurePayload({
-      status: result.status,
-      errorMessage: errorMsg,
-      schemaErrorMessage: result.schemaError?.message,
-      partialOutput: result.partialOutput,
-      subagentId: handle.id,
-    });
-    // Assign (don't return) so the finally can append the in-turn
-    // SubagentStop injectContext after teardown. See `toolResult` above.
-    // incompleteToolResultFields flags the ZERO-OUTPUT stream_incomplete case
-    // (see `subagent/result.ts` — a pure cut-off-mid-flight run with nothing
-    // to salvage resolves `status:'failed'` and routes through this exact
-    // literal): without it that case's `stopReason` never reaches the
-    // non-model consumers that key off `ToolResult.incomplete`. No-op
-    // (adds nothing) for a clean failure or an absent stopReason.
-    toolResult = {
-      content: JSON.stringify(payload),
-      isError: true,
-      ...incompleteToolResultFields(result.stopReason),
-    };
+    // Invariant: shape synchronously and assign before teardown appends the stop note.
+    toolResult = foregroundCompletionResult({ handle, identity, parentSessionId, depth, model, parentModel, idPrefix }, result, startedAt);
     return toolResult;
   } catch (err) {
     // Defense in depth: an unexpected throw (e.g. timeout that surfaces
     // as a rejection rather than a `failed` status) should still emit
     // telemetry before propagating. The outer call chain treats a thrown
     // execute() as an error path; we preserve that by re-throwing.
-    const message = errorMessage(err);
-    void emitTelemetry({
-      ...identity,
-      event: 'subagent.failed',
-      subagent_id: handle.id,
-      id_prefix: idPrefix,
-      parent_session_id: parentSessionId,
-      status: 'failed',
-      duration_ms: Date.now() - startedAt,
-      error_message: truncate(message),
-      depth,
-    });
+    // Invariant: unexpected-failure telemetry is emitted before rethrow and finally cleanup.
+    emitForegroundRejection({ identity, handle, idPrefix, parentSessionId, depth }, err, startedAt);
     throw err;
   } finally {
+    // Invariant: remove both control-map entries and settle ready before any teardown awaits.
     promotionTriggers.delete(handle.id);
     activeForegroundHandles.delete(handle.id);
     // Safety net: if the run won the race (or threw) before a fired
@@ -466,6 +284,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
     // once resolveJob has already settled on the promotion path.
     resolveJob(null);
     if (!promoted) {
+      // Invariant: detach abort → await child-manager teardown → await handle stop → append context.
       signal.removeEventListener('abort', abortListener);
       await childManager?.teardownAll();
       // Defer the SubagentStop injectContext to this caller so it rides the
@@ -492,15 +311,12 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
       // destroyed); the promoted path skips this (guarded by !promoted) so a
       // still-running detached job keeps its tree. Best-effort:
       // teardownIsolatedWorktree never throws, so it cannot break the finally.
+      // Invariant: isolated worktree teardown follows stop-context append; promoted jobs skip it.
       if (args.isolationTeardown) {
         const { repoRoot, worktreePath } = args.isolationTeardown;
         const outcome = await teardownIsolatedWorktree({ repoRoot, worktreePath });
         if (outcome.preserved) {
-          debugLog(
-            `[isolation] preserved worktree ${worktreePath} ` +
-              `(${outcome.reason ? describePreserveReason(outcome.reason, outcome.ignoredDetail, outcome.ignoredBecause) : 'unknown'}) — ` +
-              `locked so the sweep will not reap it; recover via the worktree tool`,
-          );
+          reportPreservedForegroundWorktree(worktreePath, outcome);
         }
       }
     }
