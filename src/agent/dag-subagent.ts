@@ -259,12 +259,16 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
         const throwable = reason instanceof TimeoutError
           ? new Error(`Subagent ${originalSpec.id} aborted: ${reason.message}`, result.error ? { cause: result.error } : {})
           : result.error ?? new Error(`Subagent ${originalSpec.id} ${result.status}`);
-        throw attachSubagentContext(throwable, { partialOutput: result.partialOutput, subagentId: result.id });
+        throw attachSubagentContext(throwable, { partialOutput: result.partialOutput, subagentId: result.id, setupNotice: result.setupNotice });
       }
       recordIfPartial(partialNodes, originalSpec.id, result.stopReason);
       if (result.output !== undefined) return result.output;
       const text = result.message?.content;
-      return typeof text === 'string' ? annotateIfIncomplete(text, result.stopReason) : text;
+      const body = typeof text === 'string' ? annotateIfIncomplete(text, result.stopReason) : text;
+      // Prepend setup notice to string output so the compose caller sees it.
+      return result.setupNotice !== undefined && typeof body === 'string'
+        ? `${result.setupNotice}\n\n${body}`
+        : body;
     },
   }));
 

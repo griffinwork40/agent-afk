@@ -1072,6 +1072,76 @@ describe('runSubagentDAG', () => {
       expect(dagResult.partial).toEqual([]);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // setupNotice propagation (#3660 / #3661)
+  //
+  // dispatchDagNode attaches setupNotice to the SubagentResult it returns.
+  // runSubagentDAG must propagate it through both the failure path (via
+  // attachSubagentContext → SubagentExecutionError.setupNotice) and the
+  // success path (prepended to string output).
+  //
+  // In the test harness there is no real worktree isolation, so we exercise
+  // the propagation by having runToResult return a result that already carries
+  // setupNotice — exactly the shape dispatchDagNode produces after attaching
+  // it in the worktree path.
+  // ---------------------------------------------------------------------------
+  describe('setupNotice propagation (#3661)', () => {
+    it('carries setupNotice through to the thrown error on a failed node', async () => {
+      const handleWithSetupNotice: FakeHandle = {
+        runToResult: vi.fn(async () => ({
+          id: 'fork-setup-fail',
+          status: 'failed' as const,
+          error: new Error('node failed'),
+          setupNotice: 'Setup step "pnpm install" failed with exit 1',
+        })),
+        teardown: vi.fn(async () => undefined),
+      };
+      const manager = makeFakeManager(() => handleWithSetupNotice);
+
+      const result = await runSubagentDAG({
+        manager,
+        parentSession: makeParent(),
+        nodes: [{ id: 'A', systemPrompt: 's', promptBuilder: () => 'p' }],
+        edges: [],
+      });
+
+      expect(result.failed).toHaveLength(1);
+      const failedErr = result.failed[0]!.error as Error & { setupNotice?: string };
+      expect(failedErr.message).toBe('node failed');
+      expect(failedErr.setupNotice).toBe('Setup step "pnpm install" failed with exit 1');
+    });
+
+    it('prepends setupNotice to string output on a succeeded node', async () => {
+      const handleWithSetupNotice: FakeHandle = {
+        runToResult: vi.fn(async () => ({
+          id: 'fork-setup-ok',
+          status: 'succeeded' as const,
+          message: {
+            role: 'assistant' as const,
+            content: 'Agent output here.',
+            timestamp: new Date(),
+          },
+          setupNotice: 'Setup step "pnpm install" failed with exit 1',
+        })),
+        teardown: vi.fn(async () => undefined),
+      };
+      const manager = makeFakeManager(() => handleWithSetupNotice);
+
+      const result = await runSubagentDAG({
+        manager,
+        parentSession: makeParent(),
+        nodes: [{ id: 'A', systemPrompt: 's', promptBuilder: () => 'p' }],
+        edges: [],
+      });
+
+      expect(result.failed).toHaveLength(0);
+      const output = result.outputs['A'] as string;
+      expect(output).toContain('Setup step "pnpm install" failed with exit 1');
+      expect(output).toContain('Agent output here.');
+      expect(output.indexOf('Setup step')).toBeLessThan(output.indexOf('Agent output here.'));
+    });
+  });
 });
 
 describe('runSubagentDAG message journal', () => {

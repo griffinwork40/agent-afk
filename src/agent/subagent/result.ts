@@ -353,11 +353,13 @@ export function describeFailure(result: Pick<SubagentResult, 'status' | 'error'>
 export interface SubagentExecutionError extends Error {
   partialOutput?: unknown;
   subagentId?: string;
+  /** Propagated from {@link SubagentResult.setupNotice} so compose's failure formatter can surface it. */
+  setupNotice?: string;
 }
 
 export function attachSubagentContext(
   err: Error,
-  context: { partialOutput?: unknown; subagentId?: string },
+  context: { partialOutput?: unknown; subagentId?: string; setupNotice?: string },
 ): SubagentExecutionError {
   const wrapped = err as SubagentExecutionError;
   if (context.partialOutput !== undefined && context.partialOutput !== null) {
@@ -365,6 +367,9 @@ export function attachSubagentContext(
   }
   if (context.subagentId !== undefined) {
     wrapped.subagentId = context.subagentId;
+  }
+  if (context.setupNotice !== undefined) {
+    wrapped.setupNotice = context.setupNotice;
   }
   return wrapped;
 }
