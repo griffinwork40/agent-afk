@@ -157,20 +157,58 @@ export async function discoverXaiOidcCached(deps: OAuthHttpDeps = {}): Promise<X
  * @returns Parsed JSON body as `Record<string, unknown>`.
  * @throws Error when the response is not ok.
  */
+
+export interface RawPostResult {
+  ok: boolean;
+  status: number;
+  json: Record<string, unknown>;
+  /** Populated (via safeText) only when JSON decode fails — used for plain-text error bodies. */
+  text: string;
+}
+
+/**
+ * Low-level form POST that never throws on non-ok responses.
+ * JSON decode is tolerant: a body that cannot be parsed resolves to `{}` and
+ * the raw text (up to 200 chars) is returned in `text`.
+ *
+ * All higher-level helpers ({@link postOAuthForm}, device-code flows) build on
+ * this so wire-format encoding is defined exactly once.
+ */
+export async function rawPostOAuthForm(
+  url: string,
+  params: Record<string, string>,
+  fetchFn: FetchFn = fetch,
+): Promise<RawPostResult> {
+  const res = await fetchFn(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: new URLSearchParams(params).toString(),
+  });
+  // Clone before reading so both JSON and text paths can access the body.
+  // (A consumed body throws on re-read; cloning is the standard workaround.)
+  const clone = typeof res.clone === 'function' ? res.clone() : res;
+  let json: Record<string, unknown> = {};
+  let text = '';
+  try {
+    const parsed: unknown = await res.json();
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      json = parsed as Record<string, unknown>;
+    }
+  } catch {
+    text = await safeText(clone);
+  }
+  return { ok: res.ok, status: res.status, json, text };
+}
+
 export async function postOAuthForm(
   url: string,
   params: Record<string, string>,
   errPrefix: string,
   fetchFn: FetchFn = fetch,
 ): Promise<Record<string, unknown>> {
-  const res = await fetchFn(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-    body: new URLSearchParams(params).toString(),
-  });
-  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!res.ok) {
-    const err = asNonEmptyString(json['error']) ?? `http_${res.status}`;
+  const { ok, status, json } = await rawPostOAuthForm(url, params, fetchFn);
+  if (!ok) {
+    const err = asNonEmptyString(json['error']) ?? `http_${status}`;
     const desc = asNonEmptyString(json['error_description']);
     throw new Error(`${errPrefix}: ${desc ? `${err}: ${desc}` : err}`);
   }

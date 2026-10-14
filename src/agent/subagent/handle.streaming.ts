@@ -12,6 +12,7 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { debugLog } from '../../utils/debug.js';
 import { StreamIncompleteError, TimeoutError } from '../../utils/errors.js';
+import type { MessageChunk } from '../types/message-types.js';
 import type { OutputEvent, SubagentProgressSink } from '../types/session-types.js';
 import { getCurrentSink } from '../_lib/skill-sink-channel.js';
 import { dispatchSubagentStop } from '../subagent-hooks.js';
@@ -119,27 +120,7 @@ export async function streamToFinalMessage<T>(
 
       handoff.onEvent(event);
       if (event.type === 'chunk') {
-        const chunk = event.chunk;
-        if (chunk.type === 'content') {
-          handle._lastStreamedContent += chunk.content;
-        } else if (chunk.type === 'tool_use_detail') {
-          handle._currentTrace.toolCalls.push({
-            id: chunk.toolUseId,
-            name: chunk.toolName,
-            // Privacy: store byte length only — never raw input content, which
-            // routinely contains secrets (tokens, file contents, env vars).
-            inputBytes: Buffer.byteLength(chunk.toolInput, 'utf8'),
-          });
-        } else if (chunk.type === 'tool_result') {
-          handle._currentTrace.toolResults.push({
-            toolUseId: chunk.toolUseId,
-            isError: chunk.isError,
-            truncated: chunk.truncated,
-            sizeBytes: chunk.sizeBytes,
-          });
-        } else if (chunk.type === 'thinking') {
-          handle._currentTrace.thinkingPresent = true;
-        }
+        processChunkEvent(handle, event.chunk);
       }
 
       if (event.type === 'message') {
@@ -152,28 +133,7 @@ export async function streamToFinalMessage<T>(
         streamError = event.error;
         break;
       } else if (event.type === 'done') {
-        // Capture the turn's stop reason so the post-loop fallback can tell a
-        // tool-use-cap termination (which yields a `done` with no assistant
-        // message) apart from a genuinely empty stream — and so `runToResult`
-        // can surface it on the SubagentResult (persisted on the handle).
-        if (typeof event.metadata?.stopReason === 'string') {
-          handle._lastStopReason = event.metadata.stopReason;
-        }
-        if (typeof event.metadata?.usage === 'object' && event.metadata.usage !== null) {
-          const u = event.metadata.usage as Record<string, unknown>;
-          handle._currentTrace.usage = {
-            inputTokens: typeof u['input_tokens'] === 'number' ? u['input_tokens'] : undefined,
-            outputTokens: typeof u['output_tokens'] === 'number' ? u['output_tokens'] : undefined,
-            cacheReadTokens:
-              typeof u['cache_read_input_tokens'] === 'number'
-                ? u['cache_read_input_tokens']
-                : undefined,
-            cacheCreationTokens:
-              typeof u['cache_creation_input_tokens'] === 'number'
-                ? u['cache_creation_input_tokens']
-                : undefined,
-          };
-        }
+        processDoneEvent(handle, event);
         break;
       }
     }
@@ -188,6 +148,89 @@ export async function streamToFinalMessage<T>(
     idleWatchdog.dispose();
   }
 
+  return resolveStreamResult(handle, handoff, finalMessage, streamError);
+}
+
+/**
+ * Apply a single `chunk` event's payload to the handle's running trace and
+ * streamed-content buffer. Called once per chunk event inside the stream loop.
+ *
+ * @internal
+ */
+function processChunkEvent<T>(
+  handle: SubagentHandleImpl<T>,
+  chunk: MessageChunk,
+): void {
+  if (chunk.type === 'content') {
+    handle._lastStreamedContent += chunk.content;
+  } else if (chunk.type === 'tool_use_detail') {
+    handle._currentTrace.toolCalls.push({
+      id: chunk.toolUseId,
+      name: chunk.toolName,
+      // Privacy: store byte length only — never raw input content, which
+      // routinely contains secrets (tokens, file contents, env vars).
+      inputBytes: Buffer.byteLength(chunk.toolInput, 'utf8'),
+    });
+  } else if (chunk.type === 'tool_result') {
+    handle._currentTrace.toolResults.push({
+      toolUseId: chunk.toolUseId,
+      isError: chunk.isError,
+      truncated: chunk.truncated,
+      sizeBytes: chunk.sizeBytes,
+    });
+  } else if (chunk.type === 'thinking') {
+    handle._currentTrace.thinkingPresent = true;
+  }
+}
+
+/**
+ * Capture stop-reason and usage from a `done` event into the handle's trace.
+ * Called once when the stream loop encounters `event.type === 'done'`.
+ *
+ * @internal
+ */
+function processDoneEvent<T>(
+  handle: SubagentHandleImpl<T>,
+  event: { type: 'done'; metadata?: { stopReason?: unknown; usage?: unknown } },
+): void {
+  // Capture the turn's stop reason so the post-loop fallback can tell a
+  // tool-use-cap termination (which yields a `done` with no assistant
+  // message) apart from a genuinely empty stream — and so `runToResult`
+  // can surface it on the SubagentResult (persisted on the handle).
+  if (typeof event.metadata?.stopReason === 'string') {
+    handle._lastStopReason = event.metadata.stopReason;
+  }
+  if (typeof event.metadata?.usage === 'object' && event.metadata.usage !== null) {
+    const u = event.metadata.usage as Record<string, unknown>;
+    handle._currentTrace.usage = {
+      inputTokens: typeof u['input_tokens'] === 'number' ? u['input_tokens'] : undefined,
+      outputTokens: typeof u['output_tokens'] === 'number' ? u['output_tokens'] : undefined,
+      cacheReadTokens:
+        typeof u['cache_read_input_tokens'] === 'number'
+          ? u['cache_read_input_tokens']
+          : undefined,
+      cacheCreationTokens:
+        typeof u['cache_creation_input_tokens'] === 'number'
+          ? u['cache_creation_input_tokens']
+          : undefined,
+    };
+  }
+}
+
+/**
+ * Resolve the post-loop stream state to a final Message or throw.
+ * Encapsulates all branching after the for-await loop exits — error
+ * propagation, cap handoff, buffered-text partial, wind-down synthetic
+ * message, cancel/abort throw, and the zero-output StreamIncompleteError.
+ *
+ * @internal
+ */
+function resolveStreamResult<T>(
+  handle: SubagentHandleImpl<T>,
+  handoff: CappedHandoffAccumulator,
+  finalMessage: Message | undefined,
+  streamError: Error | undefined,
+): Message {
   if (streamError) throw streamError;
   if (handle._lastStopReason === TOOL_USE_LOOP_CAPPED) {
     return handoff.finish(finalMessage, handle.session);
