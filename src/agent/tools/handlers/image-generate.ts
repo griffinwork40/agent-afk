@@ -244,9 +244,18 @@ function buildGenerateResult(opts: {
   limit: number;
 }): ToolResult {
   const {
-    savePath, parsedModel, parsedSize, parsedQuality, parsedFormat,
-    parsedInspect, imageBuffer, imageData, revisedPrompt,
-    authSource, sessionCount, limit,
+    savePath,
+    parsedModel,
+    parsedSize,
+    parsedQuality,
+    parsedFormat,
+    parsedInspect,
+    imageBuffer,
+    imageData,
+    revisedPrompt,
+    authSource,
+    sessionCount,
+    limit,
   } = opts;
 
   const meta: Record<string, unknown> = {

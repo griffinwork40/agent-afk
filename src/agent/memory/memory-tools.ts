@@ -206,6 +206,10 @@ function projectSearchResults(
       return { ...r, verification: 'not-applicable' as const };
     }
     const verification = verificationStatus(r.category, r.evidence);
+    // applyUnverifiedTag is a no-op for 'learning' facts, so stacking order
+    // is safe: applyAutoReflectedTag always sees the unwrapped content for
+    // that category. If applyUnverifiedTag ever starts tagging 'learning',
+    // review the composition order here.
     const content = applyAutoReflectedTag(
       applyUnverifiedTag(r.content, verification),
       r.category,

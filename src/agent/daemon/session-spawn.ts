@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
+import { errCodeOrString } from '../../utils/errors.js';
 import { env } from '../../config/env.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
 import { getStateDatabasePath, getDaemonStateDir } from '../../paths.js';
@@ -104,7 +105,7 @@ export function daemonDefaultCwd(): string {
     return dir;
   } catch (err) {
     const fallback = tmpdir();
-    const code = (err instanceof Error && 'code' in err) ? String((err as { code: unknown }).code) : String(err);
+    const code = errCodeOrString(err);
     console.warn(
       `[daemon] daemonDefaultCwd: could not create ${dir} (${code}); ` +
         `falling back to ${fallback}. ` +

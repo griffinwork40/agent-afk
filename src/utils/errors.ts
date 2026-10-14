@@ -78,6 +78,26 @@ export function isEnoent(err: unknown): boolean {
 }
 
 /**
+ * Returns the errno `code` string for an unknown caught value, or falls back
+ * to `String(err)` when the value is not an ErrnoException.
+ *
+ * Use in `catch (err)` blocks that need the OS error code (e.g. `'EACCES'`)
+ * for logging or user-facing messages, replacing the inline ternary:
+ * `(err instanceof Error && 'code' in err) ? String((err as { code: unknown }).code) : String(err)`
+ */
+export function errCodeOrString(err: unknown): string {
+  if (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code: unknown }).code !== undefined
+  ) {
+    return String((err as { code: unknown }).code);
+  }
+  return String(err);
+}
+
+/**
  * True when `err` is an `EgressBlockedError` — either directly or as the
  * `cause` of a wrapping `TypeError('fetch failed', { cause })`.
  *

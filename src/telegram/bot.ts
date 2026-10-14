@@ -431,7 +431,7 @@ export class TelegramBot {
     return handleHelp(ctx, this.sessionManager);
   }
 
-  async handleClear(ctx: Context): Promise<void> {
+  private async handleClear(ctx: Context): Promise<void> {
     const route = routeFromCtx(ctx);
     if (!route) {
       await ctx.reply(formatError('Could not identify chat'));
@@ -446,7 +446,7 @@ export class TelegramBot {
     }
   }
 
-  async handleCompact(ctx: Context): Promise<void> {
+  private async handleCompact(ctx: Context): Promise<void> {
     const route = routeFromCtx(ctx);
     if (!route) {
       await ctx.reply(formatError('Could not identify chat'));
