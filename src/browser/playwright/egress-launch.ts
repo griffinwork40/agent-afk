@@ -26,15 +26,19 @@ export const EGRESS_LAUNCH_ARGS: readonly string[] = [
   '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
 ];
 
+/** Chromium rule that removes the implicit loopback bypass (see buildLaunchOptions). */
+export const EGRESS_PROXY_BYPASS = '<-loopback>';
+
 /** Pure builder for the `chromium.launch` options (unit-tested). */
 export function buildLaunchOptions(headless: boolean, proxyPort: number | undefined): LaunchOptions {
   if (proxyPort === undefined) return { headless };
-  // Playwright 1.64 appends `<-loopback>` to --proxy-bypass-list for us
-  // (shouldProxyLoopback), so loopback targets cannot skip the proxy. An
-  // explicit empty bypass keeps that behaviour and adds no other bypasses.
+  // `<-loopback>` is passed EXPLICITLY so loopback / link-local (IMDS) targets
+  // are proxied even when PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK
+  // disables Playwright's implicit append; shouldProxyLoopback sees the rule
+  // and does not duplicate it. No other bypass is ever added.
   return {
     headless,
-    proxy: { server: `http://127.0.0.1:${proxyPort}`, bypass: '' },
+    proxy: { server: `http://127.0.0.1:${proxyPort}`, bypass: EGRESS_PROXY_BYPASS },
     args: [...EGRESS_LAUNCH_ARGS],
   };
 }

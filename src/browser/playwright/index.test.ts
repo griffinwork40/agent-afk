@@ -1157,4 +1157,28 @@ describe('proxy refusal attribution in open()/act()', () => {
     expect(ctx.closeSessionFn).toHaveBeenCalledWith('s1');
     expect(asMock(ctx.page?.['off'])).toHaveBeenCalledWith('request', expect.any(Function));
   });
+
+  it('act(): a net::ERR failure whose main-frame navigation the proxy refused is NOT retried (#2313 F5)', async () => {
+    installRefusalLog();
+    asMock(resolveTarget).mockResolvedValue({ outcome: 'resolved', locator: ctx.locator });
+    asMock(ctx.locator?.['click']).mockImplementation(async () => {
+      emitMainRequest('http://internal.test/');
+      throw new Error('net::ERR_TUNNEL_CONNECTION_FAILED');
+    });
+    const result = await makeProvider().act({ sessionId: 's1', action: 'click', target: { kind: 'semantic', text: 'Go' } });
+    expect(asMock(ctx.locator?.['click'])).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ outcome: 'blocked_by_policy', reason: REASON });
+    expect(ctx.closeSessionFn).toHaveBeenCalledWith('s1');
+  });
+
+  it('act(): a net::ERR failure with no attributable refusal is still retried once', async () => {
+    installRefusalLog();
+    asMock(resolveTarget).mockResolvedValue({ outcome: 'resolved', locator: ctx.locator });
+    asMock(ctx.locator?.['click'])
+      .mockRejectedValueOnce(new Error('net::ERR_CONNECTION_RESET'))
+      .mockResolvedValueOnce(undefined);
+    const result = await makeProvider().act({ sessionId: 's1', action: 'click', target: { kind: 'semantic', text: 'Go' } });
+    expect(asMock(ctx.locator?.['click'])).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ observationId: expect.any(String) });
+  });
 });

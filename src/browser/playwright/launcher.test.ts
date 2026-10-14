@@ -1419,7 +1419,7 @@ describe('BrowserLauncher — guarded egress proxy launch wiring', () => {
     await launcher.ensureBrowser();
     const opts = vi.mocked(chromium.launch).mock.calls[0]?.[0];
     expect(opts?.proxy?.server).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-    expect(opts?.proxy?.bypass).toBe('');
+    expect(opts?.proxy?.bypass).toBe('<-loopback>');
     expect(opts?.args).toEqual(['--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp']);
     expect(launcher.egressLog()).toBeDefined();
     await launcher.shutdown();

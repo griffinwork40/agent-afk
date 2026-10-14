@@ -88,3 +88,33 @@ export async function invalidateOnRefusal(
   await invalidate().catch(() => undefined);
   return outcome;
 }
+
+/**
+ * Run a browser_act action with ONE retry on navigation / net::ERR failures.
+ * Contract: after the first failure the route trap AND the proxy refusal log
+ * are consulted before any retry — a trapped refusal is returned as the error,
+ * and a refused main-frame navigation is never retried (the refusal is stable
+ * and a retry would repeat the click's side effects). Returns the action error,
+ * or null on success.
+ */
+export async function runActionWithRetry(
+  execute: () => Promise<void>,
+  consumeTrap: () => unknown,
+  watch: EgressWatch,
+): Promise<unknown> {
+  try {
+    await execute();
+    return null;
+  } catch (err) {
+    const trapped = consumeTrap();
+    if (trapped !== undefined) return trapped;
+    if (watch.check().main !== undefined) return err;
+    if (!(err instanceof Error) || !/navigation|net::ERR/i.test(err.message)) return err;
+    try {
+      await execute();
+      return null;
+    } catch (retryErr) {
+      return consumeTrap() ?? retryErr;
+    }
+  }
+}

@@ -195,4 +195,4 @@ export async function installRenderRouteGuard(
   });
 }
 
-export { invalidateOnRefusal, mainRefusalOutcome, renderRefusalError, watchEgressRefusals } from './egress-attribution.js';
+export { invalidateOnRefusal, mainRefusalOutcome, renderRefusalError, runActionWithRetry, watchEgressRefusals } from './egress-attribution.js';

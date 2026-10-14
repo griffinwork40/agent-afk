@@ -10,7 +10,7 @@ import http from 'node:http';
 import net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { EgressProxy, targetKey, targetKeyFromUrl } from './egress-proxy.js';
-import { buildLaunchOptions, EGRESS_LAUNCH_ARGS, GuardedEgress } from './egress-launch.js';
+import { buildLaunchOptions, EGRESS_LAUNCH_ARGS, EGRESS_PROXY_BYPASS, GuardedEgress } from './egress-launch.js';
 
 vi.mock('../../http-client/egress-guard.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../http-client/egress-guard.js')>();
@@ -168,10 +168,11 @@ describe('EgressProxy — lifecycle', () => {
 });
 
 describe('egress launch options', () => {
-  it('routes Chromium through the proxy with no extra bypass and disables QUIC / non-proxied WebRTC UDP', () => {
+  it('routes Chromium through the proxy with an explicit <-loopback> bypass rule and disables QUIC / non-proxied WebRTC UDP', () => {
+    expect(EGRESS_PROXY_BYPASS).toBe('<-loopback>');
     expect(buildLaunchOptions(true, 4321)).toEqual({
       headless: true,
-      proxy: { server: 'http://127.0.0.1:4321', bypass: '' },
+      proxy: { server: 'http://127.0.0.1:4321', bypass: '<-loopback>' },
       args: ['--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'],
     });
     expect(EGRESS_LAUNCH_ARGS).toHaveLength(2);
@@ -190,4 +191,110 @@ describe('egress launch options', () => {
     expect(await g.start(false)).toEqual({ headless: false });
     expect(g.isActive()).toBe(false);
   });
+});
+
+/** Raw TCP "upstream" that answers every connection with `onConn`. */
+async function rawUpstream(onConn: (s: net.Socket) => void): Promise<{ server: net.Server; port: number; conns: () => number }> {
+  let n = 0;
+  const server = net.createServer((s) => { n += 1; s.on('error', () => undefined); onConn(s); });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  return { server, port: (server.address() as AddressInfo).port, conns: () => n };
+}
+
+const get = (port: number, path = '/'): string =>
+  `GET http://public.test:${port}${path} HTTP/1.1\r\nHost: public.test\r\nConnection: close\r\n\r\n`;
+
+describe('EgressProxy — hostile / broken upstreams never crash the process (#2313 F1, F6)', () => {
+  const cases: [string, (s: net.Socket) => void][] = [
+    ['status 000', (s) => s.end('HTTP/1.1 000 Zero\r\nContent-Length: 0\r\n\r\n')],
+    ['status 099', (s) => s.end('HTTP/1.1 099 Low\r\nContent-Length: 0\r\n\r\n')],
+    ['garbage response', (s) => s.end('\x00\x01 not http at all\r\n\r\n')],
+    ['reset mid-headers', (s) => { s.write('HTTP/1.1 200 OK\r\nContent-Ty'); setTimeout(() => s.resetAndDestroy(), 20); }],
+  ];
+  for (const [name, onConn] of cases) {
+    it(`${name} → 502 and the proxy keeps serving`, async () => {
+      const up = await rawUpstream(onConn);
+      expect(await raw(proxyPort, get(up.port))).toContain('502');
+      expect(await raw(proxyPort, get(pub.port, '/after'))).toContain('hello /after');
+      up.server.close();
+    });
+  }
+
+  it('upstream that sends headers then dies is propagated: the client sees close promptly, not a hang', async () => {
+    const up = await rawUpstream((s) => {
+      s.write('HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\npartial');
+      setTimeout(() => s.destroy(), 30);
+    });
+    const t0 = Date.now();
+    const res = await raw(proxyPort, get(up.port), 3_000);
+    expect(res).toContain('200');
+    expect(Date.now() - t0).toBeLessThan(1_500);
+    up.server.close();
+  });
+
+  it('a client that disconnects mid-response cancels the upstream request', async () => {
+    let upstreamClosed = false;
+    const held = http.createServer((_req, res) => { res.writeHead(200); res.write('x'); res.on('close', () => { upstreamClosed = true; }); });
+    await new Promise<void>((r) => held.listen(0, '127.0.0.1', r));
+    const port = (held.address() as AddressInfo).port;
+    await raw(proxyPort, get(port), 200);
+    await vi.waitFor(() => expect(upstreamClosed).toBe(true), { timeout: 2_000 });
+    held.closeAllConnections();
+    held.close();
+  });
+
+  it('forwards a request body', async () => {
+    const echo = http.createServer((req, res) => { req.pipe(res); });
+    await new Promise<void>((r) => echo.listen(0, '127.0.0.1', r));
+    const port = (echo.address() as AddressInfo).port;
+    const res = await raw(proxyPort, `POST http://public.test:${port}/ HTTP/1.1\r\nHost: public.test\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello`);
+    expect(res).toContain('hello');
+    echo.close();
+  });
+});
+
+describe('EgressProxy — validated answer set fallback (#2313 F3)', () => {
+  it('tries each validated literal in order without re-resolving', async () => {
+    const lookupFn = vi.fn(async () => [{ address: '::1' }, { address: '127.0.0.1' }]);
+    const p = new EgressProxy({ isBlocked: () => false, lookupFn });
+    const port = await p.listen();
+    const res = await raw(port, get(pub.port, '/v4'), 2_000);
+    expect(res).toContain('hello /v4');
+    expect(lookupFn).toHaveBeenCalledTimes(1);
+    await p.close();
+  });
+
+  it('fails as 502 (not a refusal) when no validated literal is reachable', async () => {
+    const dead = await rawUpstream((s) => s.destroy());
+    const deadPort = dead.port;
+    await new Promise<void>((r) => dead.server.close(() => r()));
+    const p = new EgressProxy({ isBlocked: () => false, lookupFn: async () => [{ address: '127.0.0.1' }], connectTimeoutMs: 500 });
+    const port = await p.listen();
+    expect(await raw(port, `CONNECT public.test:${deadPort} HTTP/1.1\r\nHost: x\r\n\r\n`, 1_500)).toContain('502');
+    expect(p.refusalsSince(0)).toEqual([]);
+    await p.close();
+  });
+});
+
+describe('EgressProxy — shutdown fences outbound work (#2313 F4)', () => {
+  for (const kind of ['forward', 'connect'] as const) {
+    it(`${kind}: close() while a DNS lookup is pending → no upstream connection is ever made`, async () => {
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((r) => { release = r; });
+      const p = new EgressProxy({
+        isBlocked: () => false,
+        lookupFn: async () => { await gate; return [{ address: '127.0.0.1' }]; },
+        drainTimeoutMs: 100,
+      });
+      const port = await p.listen();
+      const payload = kind === 'forward' ? get(pub.port) : `CONNECT slow.test:${pub.port} HTTP/1.1\r\nHost: x\r\n\r\n`;
+      const pending = raw(port, payload, 1_000);
+      await new Promise((r) => setTimeout(r, 50));
+      await p.close();
+      release();
+      await pending;
+      await new Promise((r) => setTimeout(r, 100));
+      expect(pub.connections).toBe(0);
+    });
+  }
 });

@@ -32,7 +32,7 @@ import { resolveTarget } from './resolve-target.js';
 import { enforceDomainPolicy } from '../config.js';
 import { recheckLandedUrl } from './domain-recheck.js';
 import { writeScreenshotSidecar } from '../witness.js';
-import { checkNavigationEgress, checkRedirectChain, egressBlockOutcome, invalidateOnRefusal, mainRefusalOutcome, watchEgressRefusals, watchMainFrameNavigation } from './egress-gate.js';
+import { checkNavigationEgress, checkRedirectChain, egressBlockOutcome, invalidateOnRefusal, mainRefusalOutcome, runActionWithRetry, watchEgressRefusals, watchMainFrameNavigation } from './egress-gate.js';
 
 // ---------------------------------------------------------------------------
 // Per-session state
@@ -300,9 +300,7 @@ export class PlaywrightProvider implements BrowserProvider {
 
     // resolution.outcome === 'resolved'
     const { locator } = resolution;
-    let actionError: unknown = null;
-
-    // Execute the action with one retry on network/navigation errors.
+    // Execute the action (retry policy: runActionWithRetry).
     const executeAction = async (): Promise<void> => {
       switch (input.action) {
         case 'click':
@@ -345,25 +343,8 @@ export class PlaywrightProvider implements BrowserProvider {
 
     const stopNavWatch = watchMainFrameNavigation(page);
     const egressWatch = watchEgressRefusals(page, this.launcher.egressLog());
-    try {
-      await executeAction();
-    } catch (err) {
-      // Item 5: consume trap immediately after first failure. If a refusal is
-      // latched, return blocked_by_policy — do NOT retry (the block is stable).
-      const firstRefusal = this.launcher.consumeRequestGuardError(sessionId);
-      if (firstRefusal !== undefined) {
-        actionError = firstRefusal;
-      } else if (err instanceof Error && /navigation|net::ERR/i.test(err.message)) {
-        // Retry once on navigation / network errors (non-guard).
-        try {
-          await executeAction();
-        } catch (retryErr) {
-          actionError = this.launcher.consumeRequestGuardError(sessionId) ?? retryErr;
-        }
-      } else {
-        actionError = err;
-      }
-    }
+    // One retry on non-guard network errors; never after a guard/proxy refusal.
+    const actionError = await runActionWithRetry(executeAction, () => this.launcher.consumeRequestGuardError(sessionId), egressWatch);
     // Consume any non-blocking refusal after a successful action.
     if (actionError === null) this.launcher.consumeRequestGuardError(sessionId);
 
