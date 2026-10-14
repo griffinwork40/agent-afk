@@ -8,7 +8,7 @@
  * @module browser/playwright/index
  */
 
-import type { Page } from 'playwright';
+import type { Page, Response } from 'playwright';
 import type { BrowserProvider, OpenOutcome, ActOutcome } from '../provider.js';
 import type {
   ActInput,
@@ -32,7 +32,7 @@ import { resolveTarget } from './resolve-target.js';
 import { enforceDomainPolicy } from '../config.js';
 import { recheckLandedUrl } from './domain-recheck.js';
 import { writeScreenshotSidecar } from '../witness.js';
-import { checkNavigationEgress, egressBlockOutcome } from './egress-gate.js';
+import { checkNavigationEgress, checkRedirectChain, egressBlockOutcome, watchMainFrameNavigation } from './egress-gate.js';
 
 // ---------------------------------------------------------------------------
 // Per-session state
@@ -148,12 +148,15 @@ export class PlaywrightProvider implements BrowserProvider {
     const { sessionId } = input;
     const page = await this.launcher.ensurePage(sessionId);
     const state = this.ensureSessionState(sessionId);
+    // Clear any stale refusal from a prior iframe before this operation.
+    this.launcher.clearRequestGuardError(sessionId);
 
     let screenshotPath: string | null = null;
     let navError: unknown = null;
+    let navResponse: Response | null = null;
 
     try {
-      await page.goto(input.url, {
+      navResponse = await page.goto(input.url, {
         timeout: input.timeoutMs ?? 30000,
         waitUntil: input.waitFor ?? 'load',
       });
@@ -178,16 +181,12 @@ export class PlaywrightProvider implements BrowserProvider {
       navError !== null && (landedUrl === '' || landedUrl === 'about:blank');
 
     if (!neverNavigated) {
-      const blocked = await recheckLandedUrl(
-        page,
-        this.config,
-        input.url,
-        () => this.close({ sessionId }),
-      );
-      if (blocked !== null) {
-        return blocked;
-      }
+      const redirectBlocked = await checkRedirectChain(navResponse, page.url());
+      if (redirectBlocked !== null) return redirectBlocked;
+      const blocked = await recheckLandedUrl(page, this.config, input.url, () => this.close({ sessionId }));
+      if (blocked !== null) return blocked;
     }
+    this.launcher.consumeRequestGuardError(sessionId);
 
     // Capture screenshot if requested or if navigation threw.
     if (input.screenshot === true || navError !== null) {
@@ -280,6 +279,8 @@ export class PlaywrightProvider implements BrowserProvider {
     }
 
     const state = this.ensureSessionState(sessionId);
+    // Clear any stale refusal from a prior iframe before this operation.
+    this.launcher.clearRequestGuardError(sessionId);
     const preActionUrl = page.url();
     const timeout = input.timeoutMs ?? 30000;
 
@@ -340,35 +341,40 @@ export class PlaywrightProvider implements BrowserProvider {
       }
     };
 
+    const stopNavWatch = watchMainFrameNavigation(page);
     try {
       await executeAction();
     } catch (err) {
-      // Retry once on navigation / network errors.
-      if (err instanceof Error && /navigation|net::ERR/i.test(err.message)) {
+      // Item 5: consume trap immediately after first failure. If a refusal is
+      // latched, return blocked_by_policy — do NOT retry (the block is stable).
+      const firstRefusal = this.launcher.consumeRequestGuardError(sessionId);
+      if (firstRefusal !== undefined) {
+        actionError = firstRefusal;
+      } else if (err instanceof Error && /navigation|net::ERR/i.test(err.message)) {
+        // Retry once on navigation / network errors (non-guard).
         try {
           await executeAction();
         } catch (retryErr) {
           actionError = this.launcher.consumeRequestGuardError(sessionId) ?? retryErr;
         }
       } else {
-        actionError = this.launcher.consumeRequestGuardError(sessionId) ?? err;
+        actionError = err;
       }
     }
+    // Consume any non-blocking refusal after a successful action.
+    if (actionError === null) this.launcher.consumeRequestGuardError(sessionId);
 
+    const actionNavResponse = stopNavWatch();
     const actionBlocked = egressBlockOutcome(actionError, page.url());
     if (actionBlocked) return actionBlocked;
+    // Redirect hops + connected IP of any action-triggered navigation (#2301).
+    const redirectBlocked = await checkRedirectChain(actionNavResponse, page.url());
+    if (redirectBlocked !== null) return redirectBlocked;
 
     // Check post-action URL for policy violations. Shared with open() so the
     // two navigation paths cannot drift apart — see domain-recheck.ts.
-    const blocked = await recheckLandedUrl(
-      page,
-      this.config,
-      preActionUrl,
-      () => this.close({ sessionId }),
-    );
-    if (blocked !== null) {
-      return blocked;
-    }
+    const blocked = await recheckLandedUrl(page, this.config, preActionUrl, () => this.close({ sessionId }));
+    if (blocked !== null) return blocked;
 
     // Capture screenshot if requested or if action threw.
     let screenshotPath: string | null = null;

@@ -147,12 +147,18 @@ vi.mock('../../config/env.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../../http-client/egress-guard.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../http-client/egress-guard.js')>();
+  return { ...actual, privateHostsAllowed: vi.fn(() => false) };
+});
+
 // Import AFTER the mock so the hoisted mock is in place.
 import { BrowserLauncher } from './launcher.js';
 import type { BrowserConfig } from '../types.js';
 import { chromium } from 'playwright';
 import { getBrowserProfileStateDir, getBrowserStorageStatePath } from '../../paths.js';
 import { privateHostsAllowed } from '../../config/env.js';
+import { privateHostsAllowed as guardPrivateHostsAllowed } from '../../http-client/egress-guard.js';
 
 // ---------------------------------------------------------------------------
 // Test config fixture
@@ -453,6 +459,7 @@ describe('BrowserLauncher', () => {
       expect(blocked.continue).not.toHaveBeenCalled();
       expect(blocked.abort).toHaveBeenCalledWith('blockedbyclient');
 
+      // Item 2: subresource requests on http(s) are also guarded — IMDS must be blocked.
       const subresource = {
         request: () => ({
           url: () => 'http://169.254.169.254/latest/meta-data/',
@@ -462,8 +469,35 @@ describe('BrowserLauncher', () => {
         abort: vi.fn().mockResolvedValue(undefined),
       };
       await handler(subresource);
-      expect(subresource.continue).toHaveBeenCalledOnce();
-      expect(subresource.abort).not.toHaveBeenCalled();
+      expect(subresource.abort).toHaveBeenCalledWith('blockedbyclient');
+      expect(subresource.continue).not.toHaveBeenCalled();
+    });
+
+    it('skips route install when privateHostsAllowed is true (item 7)', async () => {
+      vi.mocked(guardPrivateHostsAllowed).mockReturnValue(true);
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      const ctx = await launcher.ensureContext('session-A') as unknown as StubContext;
+      expect(ctx.route).not.toHaveBeenCalled();
+      vi.mocked(guardPrivateHostsAllowed).mockReturnValue(false);
+    });
+
+    it('passes non-http(s) requests (e.g. data:) through unchanged (item 2)', async () => {
+      vi.mocked(guardPrivateHostsAllowed).mockReturnValue(false);
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      const ctx = await launcher.ensureContext('session-A') as unknown as StubContext;
+      const handler = ctx.route.mock.calls[0]?.[1] as (route: {
+        request: () => { url: () => string; isNavigationRequest: () => boolean };
+        continue: () => Promise<void>;
+        abort: (r: string) => Promise<void>;
+      }) => Promise<void>;
+      const dataRoute = {
+        request: () => ({ url: () => 'data:text/plain,hello', isNavigationRequest: () => false }),
+        continue: vi.fn().mockResolvedValue(undefined),
+        abort: vi.fn().mockResolvedValue(undefined),
+      };
+      await handler(dataRoute);
+      expect(dataRoute.continue).toHaveBeenCalledOnce();
+      expect(dataRoute.abort).not.toHaveBeenCalled();
     });
 
     it('returns the cached context on repeated calls for the same session', async () => {

@@ -430,6 +430,11 @@ export class BrowserLauncher {
     return this.sessions.get(sessionId)?.requestGuard.consume();
   }
 
+  /** Discard any latched egress refusal without returning it. */
+  clearRequestGuardError(sessionId: string): void {
+    this.sessions.get(sessionId)?.requestGuard.clear();
+  }
+
   // -------------------------------------------------------------------------
   // One-shot render (stateless content fetch)
   // -------------------------------------------------------------------------
