@@ -291,6 +291,10 @@ describe('B5: WIDTH-ONLY → SHRINK (CPR in-flight) with no snapshot: stays null
     const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
     armedCompositors.push(c);
     await c.arm();
+    // Advance 20 ms so the arm() timeout fires and sets lastMeasuredFrameBottom
+    // from the initial CPR response. Without this, lastMeasuredFrameBottom is 0
+    // and the cprBurst.originalExpectedRow injected below would also be 0,
+    // making the SHRINK branch's math degenerate.
     vi.advanceTimersByTime(20);
 
     const internals = c as unknown as {
