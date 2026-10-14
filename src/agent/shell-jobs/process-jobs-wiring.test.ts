@@ -63,6 +63,7 @@ describe('ProcessJobRegistry production wiring', () => {
       effort: undefined,
       maxOutputTokens: undefined,
       maxToolUseIterations: undefined,
+      maxBudgetUsd: undefined,
       cliConfig: { baseUrl: undefined } as any,
       providerFactory: (() => {}) as any,
       hookRegistry: { register: () => {} } as any,

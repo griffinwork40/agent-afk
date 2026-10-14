@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.313.5] - 2026-10-14
+
+### Added
+- per-model-slot tool deny list (tools.disabledBySlot) (#3704) (2e6ea1aa)
+
+### Fixed
+- wire AFK_MAX_BUDGET_USD to daemon, Telegram, and REPL sessions (#2314) (ebdf6a4d)
+
 ## [5.313.4] - 2026-10-14
 
 ### Changed

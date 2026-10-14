@@ -4,7 +4,7 @@
  * Uses fake providers so routing/swap/delegation/shadow-history/credential
  * behavior is exercised without any real SDK.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ProviderRouter, type ProviderRouterDeps } from './provider-router.js';
 import { QueryInputStream } from '../../session/input-iterable.js';
 import { resetSlotBindings, setSlotBindings } from '../../session/model-slots.js';
@@ -646,6 +646,66 @@ describe('ProviderRouter', () => {
     expect(openai.queries[1]!.rec.config.forceChatgptOAuth).toBe(true);
     // …and the plain-keyed inner was torn down.
     expect(openai.queries[0]!.rec.closed).toBe(true);
+    await router.close();
+  });
+});
+
+describe('ProviderRouter — per-slot tool deny list (tools.disabledBySlot) on /model', () => {
+  let tierPath: string;
+  beforeEach(async () => {
+    const { mkdtempSync, mkdirSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join, dirname } = await import('node:path');
+    const { jsonConfigTierPaths } = await import('../../../cli/config/json-tier-paths.js');
+    const root = mkdtempSync(join(tmpdir(), 'afk-router-slot-deny-'));
+    vi.stubEnv('HOME', join(root, 'home'));
+    vi.stubEnv('AFK_HOME', join(root, 'home'));
+    vi.spyOn(process, 'cwd').mockReturnValue(join(root, 'project'));
+    tierPath = jsonConfigTierPaths()[1]!.path;
+    mkdirSync(dirname(tierPath), { recursive: true });
+    resetSlotBindings();
+  });
+  afterEach(() => { resetSlotBindings(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+
+  it('rebuilds a same-endpoint switch onto a slot whose deny list differs', async () => {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(tierPath, JSON.stringify({ tools: { disabledBySlot: { medium: ['browser'] } } }));
+    setSlotBindings({
+      local: { id: '' },
+      small: { id: 'gpt-4o-mini', provider: 'openai' },
+      medium: { id: 'gpt-4o', provider: 'openai' },
+      large: { id: 'claude-opus-4-8' },
+    });
+    const { router, outer, openai } = makeSlotRouter('small');
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+    await driveTurn(iter, outer, 'first');
+    await router.setModel('medium'); // same family + endpoint, but its own tool list
+    await driveTurn(iter, outer, 'second');
+    // A fresh inner was built for `medium` (its query() resolves the new list);
+    // the old inner, whose dispatcher froze small's list, was torn down.
+    expect(openai.queries).toHaveLength(2);
+    expect(openai.queries[0]!.rec.setModelCalls).not.toContain('medium');
+    expect(String(openai.queries[1]!.rec.config.model)).toBe('medium');
+    expect(openai.queries[0]!.rec.closed).toBe(true);
+    await router.close();
+  });
+
+  it('still forwards (no rebuild) when neither slot has a list', async () => {
+    setSlotBindings({
+      local: { id: '' },
+      small: { id: 'gpt-4o-mini', provider: 'openai' },
+      medium: { id: 'gpt-4o', provider: 'openai' },
+      large: { id: 'claude-opus-4-8' },
+    });
+    const { router, outer, openai } = makeSlotRouter('small');
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+    await driveTurn(iter, outer, 'first');
+    await router.setModel('medium');
+    await driveTurn(iter, outer, 'second');
+    expect(openai.queries).toHaveLength(1);
+    expect(openai.queries[0]!.rec.setModelCalls).toContain('medium');
     await router.close();
   });
 });
