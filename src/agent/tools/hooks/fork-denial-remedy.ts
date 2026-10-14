@@ -41,7 +41,10 @@ export function buildForkDenialRemedy(args: { mode: ForkDenialMode; resolvedPath
       `Writes are confined to this fork's granted write roots by design ` +
       `(worktree isolation). To allow it, the parent must re-dispatch you via ` +
       `the \`agent\` tool with \`writeRoots: [${grant}]\`, or perform the write ` +
-      `itself. Return this exact path requirement to your parent.`
+      `itself. Return this exact path requirement to your parent. ` +
+      `Exception: if this was only a scratch file for a commit message or PR ` +
+      `body, skip the file and pipe the text on stdin with a quoted heredoc: ` +
+      `\`git commit -F - <<'EOF'\` or \`gh pr create --body-file - <<'EOF'\`.`
     );
   }
 
