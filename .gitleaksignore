@@ -1,0 +1,99 @@
+# .gitleaksignore — allowlist for gitleaks false positives
+#
+# All entries are either:
+#   (A) Public PKCE OAuth client IDs — hardcoded in the shipped binary, not secrets.
+#       PKCE flows never use a client secret; the client_id is intentionally public.
+#   (B) Synthetic test tokens — constructed exclusively to test the redaction logic;
+#       they are never used to authenticate with any real service.
+#
+# Verified at HEAD 570996572 (2026-10-07).  See issue #2938 for audit trail.
+#
+# Format: one fingerprint per line (gitleaks v8+).
+# Fingerprint = <commit_sha>:<file>:<rule>:<line>
+
+# ── (A) Public PKCE OAuth client IDs ─────────────────────────────────────────
+
+# SEC-001: Anthropic Claude Code OAuth PKCE client ID
+# src/agent/auth/keychain.ts:12  — OAUTH_CLIENT_ID (public PKCE client ID, value in source)
+# Public client ID shipped in the open-source binary; no client secret exists for PKCE.
+f38600332a988fd7fa8599fc8fd3436641a43c97:src/agent/auth/keychain.ts:generic-api-key:12
+0a23cff444e6f878df2fd3b5cb47943edf8754f6:src/agent/auth/keychain.ts:generic-api-key:12
+
+# SEC-002: xAI (Grok) OAuth PKCE client ID
+# src/agent/providers/xai/oauth-constants.ts:11 — XAI_OAUTH_CLIENT_ID (public PKCE client ID, value in source)
+# Public PKCE client ID for xAI's OAuth flow; listed in xAI's public developer docs.
+f38600332a988fd7fa8599fc8fd3436641a43c97:src/agent/providers/xai/oauth-constants.ts:generic-api-key:11
+efd78cf7b1bcf0cffd29ce73313e1c7087fbd735:src/agent/providers/xai/oauth-constants.ts:generic-api-key:11
+a3c3b87a1e5d36c98ab425eae8d98831a5c756cf:src/agent/providers/xai/oauth-constants.ts:generic-api-key:11
+
+# ── (B) Synthetic test tokens ─────────────────────────────────────────────────
+
+# SEC-003: presence-activity test — mixed-case 40-char synthetic token used to
+#          verify that normalizePromptHead() redacts generic long tokens.
+f38600332a988fd7fa8599fc8fd3436641a43c97:src/agent/awareness/presence.activity.test.ts:generic-api-key:118
+f38600332a988fd7fa8599fc8fd3436641a43c97:src/agent/awareness/presence.activity.test.ts:generic-api-key:135
+77a4629a8a6968ee43376472eb33fd9ec3f6bf3d:src/agent/awareness/presence.activity.test.ts:generic-api-key:118
+77a4629a8a6968ee43376472eb33fd9ec3f6bf3d:src/agent/awareness/presence.activity.test.ts:generic-api-key:135
+e6f5b096172dfe0d3e83a45c24595ba369643f9f:src/agent/awareness/presence.activity.test.ts:generic-api-key:135
+4e7e64d9d021bd83aa3b9d8c09ee8c9bcb21d161:src/agent/awareness/presence.activity.test.ts:generic-api-key:118
+4e7e64d9d021bd83aa3b9d8c09ee8c9bcb21d161:src/agent/awareness/presence.activity.test.ts:generic-api-key:135
+b23425d9adf9c8a1d1cc37493aa175f30f776f81:src/agent/awareness/presence.activity.test.ts:generic-api-key:118
+
+# SEC-004: background-summarizer test — hex token used to verify redactSecrets()
+#          strips a long hex token fused into a path segment.
+f38600332a988fd7fa8599fc8fd3436641a43c97:src/agent/background-summarizer.test.ts:generic-api-key:551
+57cb5927dd9bb13c99dc7fdb8afcbbfa73bedc85:src/agent/background-summarizer.test.ts:generic-api-key:551
+c75de1c1aac9786a8cf6cc8f1351017efcf4b7a3:src/agent/background-summarizer.test.ts:generic-api-key:551
+
+# SEC-005: placeholder-detect and raw-input tests — curl command fixtures used to
+#          verify that detectPlaceholdersInBlocks() and extractRawToolInput() detect
+#          and redact credential-bearing curl headers. Values are obvious placeholders
+#          ('your-api-key', 'sk-leaked-bash-secret') with no real auth surface.
+f38600332a988fd7fa8599fc8fd3436641a43c97:src/agent/facets/raw-input.test.ts:curl-auth-header:26
+7ae9c1a3a317989238a9ec82e81eb20c7c0a7b56:src/agent/facets/raw-input.test.ts:curl-auth-header:26
+f38600332a988fd7fa8599fc8fd3436641a43c97:src/agent/placeholder-detect.test.ts:curl-auth-header:147
+f38600332a988fd7fa8599fc8fd3436641a43c97:src/agent/placeholder-detect.test.ts:curl-auth-header:218
+bb0ea4565f574b5ba21265f6ed37262170ec5b18:src/agent/placeholder-detect.test.ts:curl-auth-header:105
+bb0ea4565f574b5ba21265f6ed37262170ec5b18:src/agent/placeholder-detect.test.ts:curl-auth-header:178
+300027a55cb215cccd7a604a12bcfedeb1f2f9f9:src/agent/placeholder-detect.test.ts:curl-auth-header:262
+
+# fast-mode test — anthropic-beta header values that happen to contain 'oauth-2025-04-20';
+# this is an API feature flag name, not a credential.
+f38600332a988fd7fa8599fc8fd3436641a43c97:src/agent/providers/anthropic-direct/fast-mode.test.ts:generic-api-key:11
+2e3339f7d39b7414b41823887fde35031b5e20f3:src/agent/providers/anthropic-direct/fast-mode.test.ts:generic-api-key:11
+45a9c92916cf373c725f788c96670830684e60d5:src/agent/providers/anthropic-direct/fast-mode.test.ts:generic-api-key:11
+
+# prompt-dump tests — fabricated secrets used to verify redactInlineSecrets()
+#   'abcdefghijklmnop1234567890'  → verifies openai_api_key= pattern
+#   'aB3xQ9zK7mN2pL5vR8tY1wC4dF6gH0jM' → verifies high-entropy opaque token pattern
+f38600332a988fd7fa8599fc8fd3436641a43c97:src/agent/prompt-dump.test.ts:generic-api-key:612
+f38600332a988fd7fa8599fc8fd3436641a43c97:src/agent/prompt-dump.test.ts:generic-api-key:692
+0a23cff444e6f878df2fd3b5cb47943edf8754f6:src/agent/prompt-dump.test.ts:generic-api-key:586
+eb7b8755972d16cdefe05f75067ef2f821651a18:src/agent/prompt-dump.test.ts:generic-api-key:689
+f47959929c0bd87c43a1f6f0da095d4f41adbb6e:src/agent/prompt-dump.test.ts:generic-api-key:670
+
+# SEC-006: browser sanitize tests — fake Slack xoxb/xoxa tokens used to verify that
+#          redactSecrets() masks Slack legacy workspace tokens.
+f38600332a988fd7fa8599fc8fd3436641a43c97:src/browser/sanitize.test.ts:generic-api-key:75
+f38600332a988fd7fa8599fc8fd3436641a43c97:src/browser/sanitize.test.ts:slack-legacy-workspace-token:80
+0a23cff444e6f878df2fd3b5cb47943edf8754f6:src/browser/sanitize.test.ts:generic-api-key:75
+0a23cff444e6f878df2fd3b5cb47943edf8754f6:src/browser/sanitize.test.ts:slack-legacy-workspace-token:80
+
+# skill-identity-format test — '--password hunter2' and '--api-key=short' are
+#   obviously synthetic; the test verifies that credential-bearing CLI arguments
+#   are omitted from skill identity display.
+f38600332a988fd7fa8599fc8fd3436641a43c97:src/cli/_lib/skill-identity-format.test.ts:generic-api-key:20
+77a4629a8a6968ee43376472eb33fd9ec3f6bf3d:src/cli/_lib/skill-identity-format.test.ts:generic-api-key:21
+0d2b4bc84f3e05bf9b75cf504966cc34cd87c6c1:src/cli/_lib/skill-identity-format.test.ts:generic-api-key:21
+3f3b847b3ffa85fd2cc3e703572b71da263ddb6d:src/cli/_lib/skill-identity-format.test.ts:generic-api-key:20
+
+# cli/config tests — 'test-api-key-12345' is set as process.env.ANTHROPIC_API_KEY
+#   in beforeEach/afterEach blocks to provide a minimal env for unit tests; it is
+#   cleared in afterEach and is never a real Anthropic key.
+f38600332a988fd7fa8599fc8fd3436641a43c97:src/cli/config.test.ts:generic-api-key:138
+f38600332a988fd7fa8599fc8fd3436641a43c97:src/cli/config.test.ts:generic-api-key:1226
+f38600332a988fd7fa8599fc8fd3436641a43c97:src/cli/config.test.ts:generic-api-key:1438
+a678b8180b6426564b2291505389d71868f41243:src/cli/config.test.ts:generic-api-key:844
+8d62c71dabfd61144b441dc567f9c5e0fe821e00:src/cli/config.test.ts:generic-api-key:844
+024d80871067bf9a51a2d4a9c601fbebfd970ffc:src/cli/config.test.ts:generic-api-key:672
+0a23cff444e6f878df2fd3b5cb47943edf8754f6:src/cli/config.test.ts:generic-api-key:117

@@ -133,6 +133,37 @@ describe('parseLatestTimestamp', () => {
     ].join('\n');
     expect(parseLatestTimestamp(raw)).toBe('2026-09-10T00:00:00.000Z');
   });
+
+  it('rejects lines where timestamp is a non-string (discriminant guard, #3460)', () => {
+    // { timestamp: 42 } has the key but fails the typeof === 'string' check;
+    // the guard must exclude it so the valid line is still picked up.
+    const raw = [
+      JSON.stringify({ timestamp: 42, event: 'created' }),
+      JSON.stringify({ timestamp: '2026-09-15T00:00:00.000Z', event: 'created' }),
+    ].join('\n');
+    expect(parseLatestTimestamp(raw)).toBe('2026-09-15T00:00:00.000Z');
+  });
+
+  it('rejects lines where event is a non-string (discriminant guard, #3460)', () => {
+    // { event: true } has the key but fails typeof === 'string'; only lines
+    // with a string timestamp should contribute.
+    const raw = [
+      JSON.stringify({ event: true }),
+      JSON.stringify({ timestamp: '2026-09-20T00:00:00.000Z', event: 'created' }),
+    ].join('\n');
+    expect(parseLatestTimestamp(raw)).toBe('2026-09-20T00:00:00.000Z');
+  });
+
+  it('rejects lines with one valid string field and one malformed field (#3563)', () => {
+    // The old OR guard accepted { timestamp: '...', event: 99 } because the
+    // timestamp field was a string. The AND guard must reject it because event
+    // is present but not a string.
+    const raw = [
+      JSON.stringify({ timestamp: '2026-09-25T00:00:00.000Z', event: 99 }),
+      JSON.stringify({ timestamp: '2026-09-20T00:00:00.000Z', event: 'created' }),
+    ].join('\n');
+    expect(parseLatestTimestamp(raw)).toBe('2026-09-20T00:00:00.000Z');
+  });
 });
 
 // ---------------------------------------------------------------------------

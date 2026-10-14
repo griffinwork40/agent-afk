@@ -14,17 +14,13 @@ import { palette } from '../../palette.js';
 import { registerPluginAgents } from '../plugin-agents.js';
 import { registerOrReplace } from '../registry.js';
 import { runSkillDispatchTurn } from '../_lib/run-skill-dispatch-turn.js';
+import { bareSkillName, invokeSkillPreflight } from '../_lib/run-skill-preflight.js';
 import { parsePostFlag, runReviewPostPublish, type PostTarget } from '../_lib/review-post.js';
 import { parsePrRef } from '../preflight/review-pr.js';
-import {
-  runPreflight,
-  getSkillPreflightDir,
-  type SkillInvocation,
-} from '../preflight/index.js';
 import { env } from '../../../config/env.js';
 import type { SlashCommand, SlashContext, SlashResult } from '../types.js';
 import type { ImageAttachment } from '../../input/attachments.js';
-import { harvestPluginSkillMetadata, extractHintFromDescription } from './flags.js';
+import { extractHintFromDescription } from './flags.js';
 import { makeDynamicSkillsCmd } from './listing.js';
 import {
   state,
@@ -139,34 +135,13 @@ export function makeForwardHandler(skill: DiscoveredSkill, flags?: readonly stri
           // Failure isolation: preflight throws or returns null → falls
           // through to the standard 2-block dispatch unchanged. A failing
           // context-gather must never block a skill from running.
-          preflight: async (): Promise<string | undefined> => {
-            const bareSkillName = skill.name.includes(':')
-              ? (skill.name.split(':').pop() ?? skill.name)
-              : skill.name;
-            const inv: SkillInvocation = {
-              skillName: bareSkillName,
-              rawArgs: dispatchArgs,
-              source: skill.source ?? 'plugin',
-              capabilities: { compose: true, subagents: true },
-            };
-            const sessionIdMaybe = ctx.session.current.sessionId;
-            const artifactDir = getSkillPreflightDir(sessionIdMaybe);
-            const preflightResult = await runPreflight(
-              inv,
-              // Honor the session's effective cwd so preflights that shell
-              // out to `git status` / file globs operate on the worktree,
-              // not the Node host's process.cwd() (the parent repo when
-              // launched with `afk i --worktree`). `stats.cwd` is stamped
-              // at bootstrap.ts:328 with the same `process.cwd()` fallback.
-              { cwd: ctx.stats.cwd ?? process.cwd(), artifactDir },
-              (err) => {
-                if (env.AFK_SKILL_STREAM_VERBOSE === '1') {
-                  ctx.out.warn(`preflight(${bareSkillName}) failed: ${errorMessage(err)}`);
-                }
-              },
-            );
-            return preflightResult?.manifestBlock;
-          },
+          preflight: () =>
+            invokeSkillPreflight(
+              bareSkillName(skill.name),
+              dispatchArgs,
+              skill.source ?? 'plugin',
+              ctx,
+            ),
         });
 
         // Publish AFTER the verified review output lands. runReviewPostPublish
@@ -217,43 +192,24 @@ export async function registerPluginSkills(
     return null;
   }
 
-  // Harvest both flags and categories in a single unified pass.
-  const { flags: harvestedFlags, categories: harvestedCategories } = harvestPluginSkillMetadata();
-  // Also walk the bundled-plugins dir (harvestAllPluginSkillFlags already
-  // merges both dirs — replicate for the combined metadata walk).
-  const bundled = harvestPluginSkillMetadata(
-    await import('../../../paths.js').then((m) => m.getBundledPluginsDir()),
-  );
-  for (const [name, flags] of bundled.flags) {
-    const existing = harvestedFlags.get(name) ?? [];
-    harvestedFlags.set(name, Array.from(new Set([...existing, ...flags])).sort());
-  }
-  // Category merge: marketplace-first-wins (first-write-wins). If the marketplace
-  // cache already has a category for a skill name, the bundled-plugins dir does
-  // not overwrite it. This differs from flags, which use union-merge (both
-  // sources contribute). The asymmetry is intentional: a marketplace plugin's
-  // category annotation takes precedence over a bundled default, since the
-  // marketplace version is the actively-installed copy.
-  for (const [name, cat] of bundled.categories) {
-    if (!harvestedCategories.has(name)) harvestedCategories.set(name, cat);
-  }
-
+  // Flags + category arrive on each command, parsed ONCE during discovery
+  // (tool-injector → skill-bridge → collectSupportedCommands, #3332) from the
+  // same SKILL.md that won registration. No second disk walk, so the flag set
+  // can never drift from the discovered skill set.
+  //
   // Cast to ProviderCommandInfo[] — session.supportedCommands() returns
   // SlashCommand[] for the REPL registry, but the underlying objects are
   // ProviderCommandInfo-shaped (produced by collectSupportedCommands) and
   // carry fields like `whenToUse` that are not on SlashCommand.
-  const discovered: DiscoveredSkill[] = (commands as unknown as ProviderCommandInfo[]).map((c) => {
-    const bare = bareName(c.name);
-    const cat = harvestedCategories.get(bare);
-    return {
-      name: c.name,
-      description: c.description ?? '',
-      ...(c.argumentHint ? { argumentHint: c.argumentHint } : {}),
-      ...(c.whenToUse ? { whenToUse: c.whenToUse } : {}),
-      ...(c.source ? { source: c.source } : {}),
-      ...(cat ? { category: cat } : {}),
-    };
-  });
+  const discovered: DiscoveredSkill[] = (commands as unknown as ProviderCommandInfo[]).map((c) => ({
+    name: c.name,
+    description: c.description ?? '',
+    ...(c.argumentHint ? { argumentHint: c.argumentHint } : {}),
+    ...(c.whenToUse ? { whenToUse: c.whenToUse } : {}),
+    ...(c.source ? { source: c.source } : {}),
+    ...(c.category ? { category: c.category } : {}),
+    ...(c.flags && c.flags.length > 0 ? { flags: c.flags } : {}),
+  }));
   // Reserved names = registry skills that are ACTUALLY VISIBLE at the
   // current tier. Internal-tier skills (forge, audit-fit) that are hidden
   // by the audience gate don't reserve their slash — otherwise a plugin
@@ -275,7 +231,7 @@ export async function registerPluginSkills(
     if (CORE_COMMANDS.has(slashName)) continue;
 
     const bare = bareName(skill.name);
-    const flags = harvestedFlags.get(bare);
+    const flags = skill.flags;
 
     if (reservedBareNames.has(bare)) {
       // Vendored or user skill already owns the bare slot. Register only the

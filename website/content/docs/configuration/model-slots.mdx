@@ -17,7 +17,7 @@ An unconfigured install uses these defaults:
 | Tier | Default model ID | Identity alias (fixed) |
 |------|-----------------|----------------|
 | `local` | _(unset — configure via `AFK_MODEL_LOCAL`)_ | — |
-| `small` | `claude-haiku-4-5-20251001` | `haiku` |
+| `small` | `claude-haiku-5-5` | `haiku` |
 | `medium` | `claude-sonnet-4-6` | `sonnet`, `sonnet_1m` |
 | `large` | `claude-opus-5-5` | `opus`, `opus_1m` |
 
@@ -43,7 +43,7 @@ provider credentials. The full object shape (`ModelSlotConfigEntry`, source:
 {
   "models": {
     // Bare ID — provider inferred, global credentials used.
-    "small": "claude-haiku-4-5-20251001",
+    "small": "claude-haiku-5-5",
 
     // Object — local OpenAI-compatible shim with its own endpoint.
     "medium": {

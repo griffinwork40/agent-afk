@@ -152,6 +152,20 @@ describe('getOrDeriveFacet yield_tracking carry-forward (#2777)', () => {
     expect(facet?.yield_tracking.pr_merged).toBe(true);
   });
 
+  it('carries a stale pr_url across a version bump when derive detects no PR (#2796)', () => {
+    writeSession('y-url', sampleSession('y-url'));
+    writeStaleV6Cache('y-url', {
+      is_scheduled_session: false, produced_pr: true, pr_merged: true, pr_url: PR_URL,
+    });
+
+    const facet = getOrDeriveFacet('y-url', { sessionsDir, cacheDir });
+    expect(facet?.facet_version).toBeGreaterThan(6);
+    expect(facet?.yield_tracking).toMatchObject({
+      produced_pr: true, pr_merged: true, pr_url: PR_URL,
+    });
+    expect(readCache('y-url')['yield_tracking']).toEqual(facet?.yield_tracking);
+  });
+
   it('keeps a probed pr_merged when the new derive itself detects the PR', () => {
     writeSession('y-b', prSession('y-b'));
     writeStaleV6Cache('y-b', { is_scheduled_session: false, produced_pr: true, pr_merged: true });

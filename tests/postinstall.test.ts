@@ -1,11 +1,10 @@
-// Windows: .mjs dynamic import of scripts/postinstall.mjs fails on Windows (#703)
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { join, resolve, dirname } from 'path';
 import { tmpdir } from 'os';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
-const isWin32 = process.platform === 'win32';
+const _testDir = dirname(fileURLToPath(import.meta.url));
 
 // Invariant (no real service side effects): restartLaunchdServices'
 // DEFAULT restartFn runs `node <repo>/dist/cli.mjs service restart <name>`,
@@ -73,8 +72,10 @@ let isMainModule: IsMainModuleFn;
 
 beforeAll(async () => {
   // Dynamic import avoids TypeScript transform issues with plain .mjs files.
-  // Pattern mirrors src/cli/postinstall.test.ts exactly.
-  const mod = await import('../scripts/postinstall.mjs');
+  // pathToFileURL converts the absolute path to a file:// URL so Windows ESM
+  // loaders accept it (bare absolute paths like C:\... are rejected by the loader).
+  const url = pathToFileURL(resolve(_testDir, '..', 'scripts', 'postinstall.mjs')).href;
+  const mod = await import(url);
   killStaleDaemon = mod.killStaleDaemon as KillStaleDaemonFn;
   isManualBotRunning = mod.isManualBotRunning as IsManualBotRunningFn;
   restartLaunchdServices = mod.restartLaunchdServices as RestartLaunchdServicesFn;
@@ -83,7 +84,7 @@ beforeAll(async () => {
   isMainModule = mod.isMainModule as IsMainModuleFn;
 });
 
-describe.skipIf(isWin32)('killStaleDaemon', () => {
+describe('killStaleDaemon', () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -140,7 +141,7 @@ describe.skipIf(isWin32)('killStaleDaemon', () => {
   });
 });
 
-describe.skipIf(isWin32)('isManualBotRunning', () => {
+describe('isManualBotRunning', () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -210,7 +211,7 @@ describe.skipIf(isWin32)('isManualBotRunning', () => {
   });
 });
 
-describe.skipIf(isWin32)('restartLaunchdServices', () => {
+describe('restartLaunchdServices', () => {
   const HOME = '/Users/tester';
   const TELEGRAM_PLIST = join(HOME, 'Library', 'LaunchAgents', 'com.afk.telegram.plist');
   const DAEMON_PLIST = join(HOME, 'Library', 'LaunchAgents', 'com.afk.daemon.plist');
@@ -319,7 +320,7 @@ describe.skipIf(isWin32)('restartLaunchdServices', () => {
 // during local `pnpm install` runs inside source checkouts and worktrees.
 // All tests inject pkgRoot, env, and existsFn so no real filesystem or npm
 // lifecycle environment leaks into the assertions.
-describe.skipIf(isWin32)('isGlobalInstall', () => {
+describe('isGlobalInstall', () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -387,7 +388,7 @@ describe.skipIf(isWin32)('isGlobalInstall', () => {
 //
 // All tests inject platform, env, pkgRoot, existsFn, and restartFn so no real
 // filesystem or npm lifecycle environment leaks into the assertions.
-describe.skipIf(isWin32)('maybeRestartServices', () => {
+describe('maybeRestartServices', () => {
   const FAKE_PKG_ROOT = '/fake/pkg/root';
 
   afterEach(() => {
@@ -416,7 +417,7 @@ describe.skipIf(isWin32)('maybeRestartServices', () => {
       platform: 'darwin',
       env: { npm_config_global: 'true' },
       pkgRoot: FAKE_PKG_ROOT,
-      existsFn: (p) => p === `${FAKE_PKG_ROOT}/.git`, // .git present
+      existsFn: (p) => p === join(FAKE_PKG_ROOT, '.git'), // .git present
       restartFn,
     });
     expect(result).toEqual([]);
@@ -498,13 +499,21 @@ describe.skipIf(isWin32)('maybeRestartServices', () => {
 // returns false when the install path contains URL-encoding-required characters
 // (spaces, non-ASCII). isMainModule() uses fileURLToPath + realpathSync so the
 // comparison is always on decoded, symlink-resolved absolute paths.
-describe.skipIf(isWin32)('isMainModule', () => {
+describe('isMainModule', () => {
+  // Build valid cross-platform file:// URLs from real OS-rooted paths via
+  // pathToFileURL so Windows file URLs include the drive letter (file:///C:/…).
+  // Bare POSIX-style URLs like file:///some/path are invalid on Windows and cause
+  // fileURLToPath to throw "File URL path must be absolute".
+  const scriptUrl = pathToFileURL(join(tmpdir(), 'script.mjs')).href;
+  const otherUrl = pathToFileURL(join(tmpdir(), 'other.mjs')).href;
+  const otherPath = fileURLToPath(otherUrl);
+
   it('returns false when argv1 is undefined', () => {
-    expect(isMainModule('file:///some/path/script.mjs', undefined)).toBe(false);
+    expect(isMainModule(scriptUrl, undefined)).toBe(false);
   });
 
   it('returns false when argv1 is an empty string', () => {
-    expect(isMainModule('file:///some/path/script.mjs', '')).toBe(false);
+    expect(isMainModule(scriptUrl, '')).toBe(false);
   });
 
   it('returns true when metaUrl and argv1 refer to the same real path', async () => {
@@ -519,35 +528,40 @@ describe.skipIf(isWin32)('isMainModule', () => {
   });
 
   it('returns false when metaUrl and argv1 refer to different files', () => {
-    expect(
-      isMainModule('file:///some/path/script.mjs', '/other/path/different.mjs'),
-    ).toBe(false);
+    // scriptUrl and otherUrl are both valid cross-platform file:// URLs but
+    // point to different (non-existent) paths, so isMainModule returns false.
+    expect(isMainModule(scriptUrl, otherPath)).toBe(false);
   });
 
   it('handles a space-containing path without throwing (the URL-encoding bug)', () => {
     // This is the latent bug fixed by #2198. Previously:
     //   import.meta.url === `file://${process.argv[1]}`
-    // would compare "file:///my%20dir/script.mjs" with "file:///my dir/script.mjs"
-    // and return false even when they represent the same file.
+    // would compare the URL-encoded form with the raw argv1 and return false
+    // even when they represent the same file.
     //
     // The fix uses fileURLToPath on metaUrl and realpathSync on argv1.
     // Since argv1 does not exist on disk, realpathSync throws; isMainModule()
     // catches and falls back to comparing fileURLToPath(metaUrl) === argv1.
-    // Both sides are now raw paths, so the comparison is correct.
-    const spaceUrl = 'file:///my%20dir/script.mjs';
-    const rawPath = '/my dir/script.mjs'; // same path, not URL-encoded
+    // pathToFileURL produces a valid file:// URL including the drive letter on
+    // Windows (file:///C:/…/my%20dir/script.mjs), making fileURLToPath round-trip
+    // safe on all platforms.
+    const spaceUrl = pathToFileURL(join(tmpdir(), 'my dir', 'script.mjs')).href;
+    const rawPath = fileURLToPath(spaceUrl); // decoded, OS-native path (space not percent-encoded)
     expect(isMainModule(spaceUrl, rawPath)).toBe(true);
   });
 
   it('handles non-ASCII characters in the path without throwing', () => {
-    const encodedUrl = 'file:///home/caf%C3%A9/script.mjs'; // café
-    const rawPath = '/home/café/script.mjs';
-    expect(isMainModule(encodedUrl, rawPath)).toBe(true);
+    // café contains a non-ASCII character; pathToFileURL percent-encodes it
+    // (é → %C3%A9) in the URL, and fileURLToPath decodes it back on both sides.
+    const cafeUrl = pathToFileURL(join(tmpdir(), 'café', 'script.mjs')).href;
+    const rawPath = fileURLToPath(cafeUrl); // decoded OS-native path with é literal
+    expect(isMainModule(cafeUrl, rawPath)).toBe(true);
   });
 
   it('returns false for a non-existent argv1 that does not match', () => {
-    expect(
-      isMainModule('file:///real/script.mjs', '/nonexistent/other.mjs'),
-    ).toBe(false);
+    // scriptUrl and otherPath refer to different (non-existent) files;
+    // realpathSync throws for both, and the fallback fileURLToPath comparison
+    // sees different paths, so isMainModule returns false.
+    expect(isMainModule(scriptUrl, otherPath)).toBe(false);
   });
 });

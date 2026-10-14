@@ -8,8 +8,8 @@
  */
 
 import { readFileSync } from 'node:fs';
-import type { Change, ChangeSpec } from './types.js';
-import { AnyChangeSchema, SpecOutputSchema } from './compile.js';
+import type { Change, ChangeSpec, OperatorPrediction } from './types.js';
+import { AnyChangeSchema, OperatorPredictionSchema, SpecOutputSchema } from './compile.js';
 
 /**
  * Build a ChangeSpec title from the flag changes, falling back to the
@@ -69,5 +69,22 @@ export function loadSpecFile(filePath: string): ChangeSpec {
     );
   }
 
-  return { title: outer.data.title, changes: valid };
+  // Validate optional operator predictions; drop invalid entries with a warning.
+  const validPredictions: OperatorPrediction[] = [];
+  for (let i = 0; i < (outer.data.predictions ?? []).length; i++) {
+    const entry = (outer.data.predictions ?? [])[i];
+    const result = OperatorPredictionSchema.safeParse(entry);
+    if (result.success) {
+      validPredictions.push(result.data as OperatorPrediction);
+    } else {
+      const issues = result.error.issues.map((iss) => `${iss.path.join('.') || '<root>'}: ${iss.message}`).join('; ');
+      console.warn(`[whatif/args] spec predictions[${i}] dropped — schema validation failed: ${issues}`);
+    }
+  }
+
+  return {
+    title: outer.data.title,
+    changes: valid,
+    ...(validPredictions.length > 0 ? { predictions: validPredictions } : {}),
+  };
 }

@@ -90,6 +90,28 @@ describe('forceAccept continuations', () => {
     expect(h.line).not.toHaveBeenCalled();
     expect(h.notifier.onInjectable).not.toHaveBeenCalled();
   });
+
+  it('forceAccept skips corrupt held entries — releaseHeld and claimPending never called for them', async () => {
+    // Mix: one corrupt entry (should be skipped) + one parseable entry (should be accepted).
+    vi.mocked(listHeld).mockResolvedValue([
+      { file: 'corrupt.json', corrupt: true as const },
+      { file: 'good.json', envelope },
+    ]);
+    vi.mocked(releaseHeld).mockResolvedValue(true);
+    vi.mocked(claimPending).mockResolvedValue(envelope);
+    const h = harness();
+    const accepted = await h.notifier.forceAccept('all');
+    // Only the parseable entry should be accepted.
+    expect(accepted).toBe(1);
+    // releaseHeld and claimPending should have been called exactly once (for good.json),
+    // never for corrupt.json.
+    expect(releaseHeld).toHaveBeenCalledTimes(1);
+    expect(releaseHeld).toHaveBeenCalledWith(expect.any(String), 'good.json');
+    expect(claimPending).toHaveBeenCalledTimes(1);
+    expect(claimPending).toHaveBeenCalledWith(expect.any(String), 'good.json');
+    expect(releaseHeld).not.toHaveBeenCalledWith(expect.any(String), 'corrupt.json');
+    expect(claimPending).not.toHaveBeenCalledWith(expect.any(String), 'corrupt.json');
+  });
 });
 
 it.each(['dispose', 'id-change', 'A-B-A'])('%s during watcher setup cannot resurrect the old watcher', async (kind) => {

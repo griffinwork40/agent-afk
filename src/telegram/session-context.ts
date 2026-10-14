@@ -12,6 +12,7 @@
 import type { AgentSession } from '../agent/session.js';
 import type { AgentConfig } from '../agent/types.js';
 import type { MemoryStore } from '../agent/memory/index.js';
+import type { StateStore } from '../agent/state/state-store.js';
 import type { WorkspaceStore } from '../agent/workspace/workspace-store.js';
 import type { loadConfig } from '../cli/config.js';
 import type { createTelegramTraceWriter } from './construct-session.js';
@@ -31,6 +32,8 @@ export interface TelegramSessionBuildContext {
   config: TelegramBotConfig;
   /** Framework base + operator overlay, already layered (never substituted). */
   layeredBasePrompt: string | undefined;
+  /** Bare operator overlay (no framework); reaches unnamed `agent` children (#3324). */
+  operatorOverlay?: string;
   /** `sessionConfig.cwd ?? AFK_TELEGRAM_CWD`. */
   sessionCwd: string | undefined;
   /** Anthropic-only; undefined for OpenAI-routed sessions. */
@@ -41,7 +44,9 @@ export interface TelegramSessionBuildContext {
   mcpManager: TelegramMcpManager;
   /** Bot-global store shared across every chat's hook bundle. */
   memoryStore: MemoryStore;
-  /** Bot-global workspace store; one SQLite per bot process, shared by all sessions. Undefined when AFK_WORKSPACE_DISABLED=1. */
+  /** Caller-owned bot-global durable state; never closed per chat. */
+  stateStore?: StateStore;
+  /** Factory-owned per-chat workspace. Undefined when AFK_WORKSPACE_DISABLED=1. */
   workspaceStore?: WorkspaceStore;
   /**
    * Telegram chat id for the originating session. Threaded from

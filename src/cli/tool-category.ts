@@ -31,6 +31,7 @@ import {
   categorizeTool,
   dispatchTagForCategory,
   SUBAGENT_TOOLS,
+  PEER_TOOLS,
   SKILL_TOOLS,
   DAG_TOOLS,
   NESTING_TOOLS,
@@ -41,6 +42,7 @@ export {
   categorizeTool,
   dispatchTagForCategory,
   SUBAGENT_TOOLS,
+  PEER_TOOLS,
   SKILL_TOOLS,
   DAG_TOOLS,
   NESTING_TOOLS,
@@ -70,6 +72,10 @@ function categoryColor(cat: ToolCategory): ChalkInstance {
     case 'write': return chalk.hex('#E8A33D');
     case 'shell': return chalk.hex('#A8E060');
     case 'subagent': return palette.plan;
+    // peer — violet, one hue step from subagent (plan) but desaturated enough
+    // to stay distinct. Peer tools are a sibling-dispatch pattern, not a child
+    // dispatch — different semantic weight from agent/skill.
+    case 'peer': return chalk.hex('#9B7EE8');
     case 'skill': return chalk.hex('#F08AC4');
     // dag — teal. Distinct from skill pink, subagent purple, mcp cyan, and web sage.
     case 'dag': return chalk.hex('#4EC9B0');
@@ -105,6 +111,8 @@ const CATEGORY_GLYPH: Record<ToolCategory, string> = {
   write: '✎',
   shell: '▸',
   subagent: '→',
+  // ⇆ = bidirectional arrow, evokes peer-to-peer exchange vs. subagent (→, child-only).
+  peer: '⇆',
   skill: '◆',
   // hexagon evokes the "node graph" / DAG shape; distinct from ◆ (skill)
   // and ⊡ (mcp). Single-cell width in standard monospace fonts.
@@ -134,6 +142,7 @@ export const CATEGORY_HUMAN_VERB: Record<ToolCategory, string> = {
   write: 'Writing…',
   shell: 'Running…',
   subagent: 'Delegating…',
+  peer: 'Messaging…',
   skill: 'Running skill…',
   dag: 'Coordinating…',
   mcp: 'Calling plugin…',
@@ -153,6 +162,8 @@ export const CATEGORY_HUMAN_VERB: Record<ToolCategory, string> = {
  * as `worktree` deliberately retain the category default.
  */
 export const TOOL_VERB_OVERRIDES: Partial<Record<string, string>> = {
+  list_sessions: 'Listing sessions…',
+  send_to_session: 'Sending…',
   cancel_background_job: 'Cancelling…',
   list_schedules: 'Reading…',
   get_schedule_history: 'Reading…',

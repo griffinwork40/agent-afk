@@ -36,8 +36,10 @@ import {
   WINDOW_KEYS,
   type PerMinuteObservation,
   type UsageRecord,
+  type WindowHistorySample,
   type WindowsObservation,
 } from './usage-record.js';
+import { appendSample } from './burn-rate.js';
 import type { QuotaSnapshot } from '../quota-cache.js';
 import type { RateLimitSnapshot } from '../providers/shared/rate-limit-bucket.js';
 import type { RateLimitGate } from '../providers/shared/tracing-fetch-utils.js';
@@ -45,6 +47,43 @@ import type { UsageResult } from '../subscription-usage.js';
 
 const NAMESPACE = 'usage';
 const MAX_CAS_ATTEMPTS = 4;
+
+/**
+ * Build a history sample from the binding (highest-utilization) window in a
+ * `WindowsObservation`. Returns `undefined` when no window is present.
+ * Exported for tests.
+ */
+export function bindingSampleFromWindows(w: WindowsObservation): WindowHistorySample | undefined {
+  let best: WindowHistorySample | undefined;
+  for (const key of WINDOW_KEYS) {
+    const win = w[key];
+    if (win === undefined) continue;
+    if (best === undefined || win.utilization > best.utilization) {
+      best = {
+        observedAt: w.observedAt,
+        utilization: win.utilization,
+        ...(win.resetsAt !== undefined ? { resetsAt: win.resetsAt } : {}),
+      };
+    }
+  }
+  return best;
+}
+
+/**
+ * Enrich an incoming `WindowsObservation` with the new sample appended to the
+ * existing history ring. Carries the existing ring forward even when the
+ * incoming record has none.
+ */
+function withHistorySample(
+  incoming: WindowsObservation,
+  existing: WindowsObservation | undefined,
+): WindowsObservation {
+  const sample = bindingSampleFromWindows(incoming);
+  if (sample === undefined) return incoming;
+  const base = existing?.history ?? [];
+  const history = appendSample(base, sample);
+  return { ...incoming, history };
+}
 /** Minimum spacing between unchanged publishes for one key (freezes bypass it). */
 const PUBLISH_MIN_INTERVAL_MS = 5_000;
 /** Mirrors the bucket's own clamp so the ledger never advertises a longer freeze. */
@@ -122,10 +161,20 @@ function writeMerged(db: StateStore, key: string, rec: UsageRecord): boolean {
   for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt++) {
     const row = db.get(NAMESPACE, key);
     if (row === null) {
-      if (db.insertIfAbsent(NAMESPACE, key, rec).created) return true;
+      // First write: seed history from this record's own windows.
+      const seeded = rec.windows !== undefined
+        ? { ...rec, windows: withHistorySample(rec.windows, undefined) }
+        : rec;
+      if (db.insertIfAbsent(NAMESPACE, key, seeded).created) return true;
       continue;
     }
-    const merged = mergeUsageRecords(parseUsageRecord(row.value), rec);
+    const existing = parseUsageRecord(row.value);
+    // Enrich incoming windows with a history sample before merging, carrying
+    // the existing ring forward so no samples are lost on a concurrent write.
+    const enriched = rec.windows !== undefined
+      ? { ...rec, windows: withHistorySample(rec.windows, existing?.windows) }
+      : rec;
+    const merged = mergeUsageRecords(existing, enriched);
     if (db.cas(NAMESPACE, key, row.version, merged).matched) return true;
   }
   return false;

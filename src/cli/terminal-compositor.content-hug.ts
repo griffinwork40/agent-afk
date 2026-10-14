@@ -32,6 +32,7 @@
  * Phase 3 is about to paint (Phase 3 paints relative to that frame top).
  */
 
+import { hiddenArchivedRows } from './terminal-compositor.archived-reveal.js';
 import type { FramePlacementMode } from './terminal-compositor.types.js';
 
 /** State slice the content-hug helpers read. */
@@ -39,6 +40,8 @@ export interface ContentHugHost {
   placementMode: FramePlacementMode;
   anchorRow: number | undefined;
   committedBand: string[];
+  committedBandArchivedPrefix?: number;
+  stdout?: NodeJS.WriteStream;
   pendingContentRows: number | null;
   lastMeasuredFrameBottom: number;
   bandGeometryStale: boolean;
@@ -50,11 +53,14 @@ export interface ContentHugHost {
  * the post-commit band length (see module Contract).
  */
 export function contentHugAnchor(
-  self: Pick<ContentHugHost, 'anchorRow' | 'committedBand' | 'pendingContentRows'>,
+  self: Pick<ContentHugHost, 'anchorRow' | 'committedBand' | 'pendingContentRows' | 'placementMode' | 'committedBandArchivedPrefix' | 'stdout'>,
+  physicalRows?: number,
+  absoluteBottom?: number,
 ): number {
   const floor = Math.max(self.anchorRow ?? 1, 1);
   const contentRows = self.pendingContentRows ?? self.committedBand.length;
-  return floor + contentRows;
+  const geometry = physicalRows !== undefined && absoluteBottom !== undefined ? { physicalRows, absoluteBottom } : undefined;
+  return floor + contentRows - hiddenArchivedRows(self, geometry);
 }
 
 /**
@@ -118,7 +124,8 @@ export function projectedBandLength(
  * on the next one (preserveRowsBeforeFrameRender / pendingEvictionAllowed), so
  * history never has a hole. They are ALSO retained in the band model as the
  * archived prefix (terminal-compositor.band-archived-prefix.ts), hidden while
- * covered and re-shown when the frame shrinks, so the screen refills instead
+ * covered and on small shrinks; large collapses reveal them (archived-reveal.ts),
+ * so the screen refills instead
  * of leaving a blank gap below the prompt. They are never written to
  * scrollback twice; while re-shown they exist at the scrollback tail and on
  * screen (the seam overlap, docs/scrollback.md).
@@ -192,11 +199,11 @@ export function phase2PendingContentRows(
  * Returns 0 outside content-hug (no-op for all other placement modes).
  */
 export function contentHugBandReserve(
-  self: Pick<ContentHugHost, 'placementMode' | 'committedBand'>,
+  self: Pick<ContentHugHost, 'placementMode' | 'committedBand' | 'committedBandArchivedPrefix' | 'stdout'>,
   rows: number,
 ): number {
   if (self.placementMode !== 'content-hug') return 0;
-  const bandLen = self.committedBand.length;
+  const bandLen = self.committedBand.length - hiddenArchivedRows(self);
   if (bandLen === 0) return 0;
   return Math.min(bandLen, Math.max(3, Math.floor(rows / 4)));
 }

@@ -28,6 +28,8 @@ export function pausedMessage(input: PausedCopyInput): string {
   const { timeStr, minutesRemaining, autoResume } = input;
   const isAnthropic = input.provider === undefined || input.provider === 'anthropic';
   const accountLine = input.accountId ? `\n\nAccount: ${input.accountId}` : '';
+  // `plan` may contain `_ . -` (Telegram MarkdownV2 special chars), but output goes
+  // through markdownToTelegramHtml → parse_mode:'HTML', so no escaping is needed.
   const limitLine = isAnthropic
     ? ''
     : `\n\n${usageLimitProviderName(input.provider)} usage limit reached${input.plan !== undefined ? ` (${input.plan} plan)` : ''}.`;

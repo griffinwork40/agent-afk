@@ -1,6 +1,7 @@
 /**
  * Tests for the marketplace.json parser. Validates required fields,
- * optional metadata/owner blocks, and rejection of malformed shapes.
+ * optional metadata/owner blocks, object-valued source entries, and
+ * rejection of malformed shapes.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -9,6 +10,7 @@ import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import {
   isMarketplaceDir,
+  isGitSubdirSource,
   manifestPath,
   readManifest,
   tryReadManifest,
@@ -82,7 +84,7 @@ describe('readManifest — happy path', () => {
     expect(parsed.owner).toBeUndefined();
   });
 
-  it('trims whitespace from name and source', () => {
+  it('trims whitespace from name and string source', () => {
     writeManifestRaw(tmpDir, {
       name: '  mp  ',
       plugins: [{ name: '  p1  ', source: '  ./plugins/p1  ' }],
@@ -91,6 +93,197 @@ describe('readManifest — happy path', () => {
       name: 'mp',
       plugins: [{ name: 'p1', source: './plugins/p1' }],
     });
+  });
+});
+
+describe('readManifest — object source: git-subdir', () => {
+  it('accepts a well-formed git-subdir source', () => {
+    writeManifestRaw(tmpDir, {
+      name: 'mp',
+      plugins: [
+        {
+          name: 'api-sec',
+          source: {
+            source: 'git-subdir',
+            url: 'https://github.com/anthropics/claude-plugins-official',
+            path: 'plugins/api-security-testing',
+            ref: 'main',
+            sha: 'abc1234',
+          },
+          description: 'API security testing plugin',
+        },
+      ],
+    });
+    const manifest = readManifest(tmpDir);
+    expect(manifest.plugins).toHaveLength(1);
+    const p = manifest.plugins[0]!;
+    expect(p.name).toBe('api-sec');
+    expect(p.description).toBe('API security testing plugin');
+    expect(p.skipped).toBeUndefined();
+    expect(isGitSubdirSource(p.source)).toBe(true);
+    if (isGitSubdirSource(p.source)) {
+      expect(p.source.url).toBe('https://github.com/anthropics/claude-plugins-official');
+      expect(p.source.path).toBe('plugins/api-security-testing');
+      expect(p.source.ref).toBe('main');
+      expect(p.source.sha).toBe('abc1234');
+    }
+  });
+
+  it('accepts git-subdir without optional ref and sha', () => {
+    writeManifestRaw(tmpDir, {
+      name: 'mp',
+      plugins: [
+        {
+          name: 'myplugin',
+          source: {
+            source: 'git-subdir',
+            url: 'https://github.com/example/repo',
+            path: 'plugins/myplugin',
+          },
+        },
+      ],
+    });
+    const manifest = readManifest(tmpDir);
+    const p = manifest.plugins[0]!;
+    expect(isGitSubdirSource(p.source)).toBe(true);
+    if (isGitSubdirSource(p.source)) {
+      expect(p.source.ref).toBeUndefined();
+      expect(p.source.sha).toBeUndefined();
+    }
+    expect(p.skipped).toBeUndefined();
+  });
+
+  it('marks a git-subdir entry skipped when url is missing', () => {
+    writeManifestRaw(tmpDir, {
+      name: 'mp',
+      plugins: [
+        {
+          name: 'bad',
+          source: { source: 'git-subdir', path: 'plugins/bad' },
+        },
+      ],
+    });
+    const manifest = readManifest(tmpDir);
+    const p = manifest.plugins[0]!;
+    expect(p.skipped).toMatch(/missing required "url"/);
+  });
+
+  it('marks a git-subdir entry skipped when path is missing', () => {
+    writeManifestRaw(tmpDir, {
+      name: 'mp',
+      plugins: [
+        {
+          name: 'bad',
+          source: { source: 'git-subdir', url: 'https://github.com/example/repo' },
+        },
+      ],
+    });
+    const manifest = readManifest(tmpDir);
+    const p = manifest.plugins[0]!;
+    expect(p.skipped).toMatch(/missing required "path"/);
+  });
+
+  it('does NOT throw for the whole manifest when one entry has a malformed git-subdir source', () => {
+    writeManifestRaw(tmpDir, {
+      name: 'mp',
+      plugins: [
+        { name: 'good', source: './plugins/good' },
+        { name: 'bad', source: { source: 'git-subdir', path: 'plugins/bad' } }, // missing url
+        {
+          name: 'also-good',
+          source: {
+            source: 'git-subdir',
+            url: 'https://github.com/example/repo',
+            path: 'plugins/also-good',
+          },
+        },
+      ],
+    });
+    const manifest = readManifest(tmpDir);
+    expect(manifest.plugins).toHaveLength(3);
+    expect(manifest.plugins[0]!.source).toBe('./plugins/good');
+    expect(manifest.plugins[1]!.skipped).toBeTruthy();
+    expect(manifest.plugins[2]!.skipped).toBeUndefined();
+    expect(isGitSubdirSource(manifest.plugins[2]!.source)).toBe(true);
+  });
+});
+
+describe('readManifest — object source: unknown discriminator', () => {
+  it('marks entries with unknown source discriminator as skipped', () => {
+    writeManifestRaw(tmpDir, {
+      name: 'mp',
+      plugins: [
+        {
+          name: 'future-plugin',
+          source: { source: 'some-future-type', location: 'somewhere' },
+        },
+      ],
+    });
+    const manifest = readManifest(tmpDir);
+    const p = manifest.plugins[0]!;
+    expect(p.skipped).toMatch(/unsupported source type "some-future-type"/);
+  });
+
+  it('marks entries with no source discriminator as skipped', () => {
+    writeManifestRaw(tmpDir, {
+      name: 'mp',
+      plugins: [
+        {
+          name: 'weird',
+          source: { url: 'https://example.com' }, // no `source` field
+        },
+      ],
+    });
+    const manifest = readManifest(tmpDir);
+    const p = manifest.plugins[0]!;
+    expect(p.skipped).toMatch(/unsupported source type/);
+  });
+
+  it('does NOT throw for the whole manifest when one entry has an unknown object source', () => {
+    writeManifestRaw(tmpDir, {
+      name: 'mp',
+      plugins: [
+        { name: 'a', source: './plugins/a' },
+        { name: 'b', source: { source: 'unknown-type', extra: 'data' } },
+        { name: 'c', source: 'https://github.com/owner/repo' },
+      ],
+    });
+    const manifest = readManifest(tmpDir);
+    expect(manifest.plugins).toHaveLength(3);
+    expect(manifest.plugins[0]!.skipped).toBeUndefined();
+    expect(manifest.plugins[1]!.skipped).toBeTruthy();
+    expect(manifest.plugins[2]!.skipped).toBeUndefined();
+  });
+
+  it('simulates the anthropics/claude-plugins-official manifest shape (262 object + 53 string)', () => {
+    // Build a synthetic manifest matching the live one's shape.
+    const objectPlugins = Array.from({ length: 262 }, (_, i) => ({
+      name: `obj-plugin-${i}`,
+      source: {
+        source: 'git-subdir',
+        url: 'https://github.com/anthropics/claude-plugins-official',
+        path: `plugins/obj-plugin-${i}`,
+        ref: 'main',
+        sha: `sha${i}`,
+      },
+    }));
+    const stringPlugins = Array.from({ length: 53 }, (_, i) => ({
+      name: `str-plugin-${i}`,
+      source: `./plugins/str-plugin-${i}`,
+    }));
+    writeManifestRaw(tmpDir, {
+      name: 'claude-plugins-official',
+      plugins: [...objectPlugins, ...stringPlugins],
+    });
+
+    const manifest = readManifest(tmpDir);
+    expect(manifest.plugins).toHaveLength(315);
+    const skipped = manifest.plugins.filter((p) => p.skipped);
+    expect(skipped).toHaveLength(0);
+    const gitSubdirs = manifest.plugins.filter((p) => isGitSubdirSource(p.source));
+    expect(gitSubdirs).toHaveLength(262);
+    const strings = manifest.plugins.filter((p) => typeof p.source === 'string');
+    expect(strings).toHaveLength(53);
   });
 });
 
@@ -119,11 +312,18 @@ describe('readManifest — rejection cases', () => {
     expect(() => readManifest(tmpDir)).toThrow(/missing required "plugins" array/);
   });
 
-  it('throws when a plugin entry is missing name or source', () => {
+  it('throws when a plugin entry is missing name', () => {
     writeManifestRaw(tmpDir, { name: 'mp', plugins: [{ source: './plugins/p1' }] });
     expect(() => readManifest(tmpDir)).toThrow(/missing required "name"/);
+  });
 
+  it('throws when a plugin entry has a null/missing source', () => {
     writeManifestRaw(tmpDir, { name: 'mp', plugins: [{ name: 'p1' }] });
+    expect(() => readManifest(tmpDir)).toThrow(/missing required "source"/);
+  });
+
+  it('throws when a plugin entry has an empty-string source', () => {
+    writeManifestRaw(tmpDir, { name: 'mp', plugins: [{ name: 'p1', source: '   ' }] });
     expect(() => readManifest(tmpDir)).toThrow(/missing required "source"/);
   });
 
@@ -152,5 +352,19 @@ describe('tryReadManifest', () => {
   it('returns the parsed manifest on success', () => {
     writeManifestRaw(tmpDir, { name: 'mp', plugins: [] });
     expect(tryReadManifest(tmpDir)).toEqual({ name: 'mp', plugins: [] });
+  });
+});
+
+describe('isGitSubdirSource', () => {
+  it('returns true for a GitSubdirSource object', () => {
+    expect(isGitSubdirSource({ source: 'git-subdir', url: 'https://x.com', path: 'p' })).toBe(true);
+  });
+
+  it('returns false for a string', () => {
+    expect(isGitSubdirSource('./path')).toBe(false);
+  });
+
+  it('returns false for an object with a different discriminator', () => {
+    expect(isGitSubdirSource({ source: 'other', url: 'https://x.com', path: 'p' })).toBe(false);
   });
 });

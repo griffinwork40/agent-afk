@@ -23,7 +23,7 @@ optional `contextWindow` override (see below):
 {
   "models": {
     // Stage 1: just rebind the id (provider inferred, global creds).
-    "small":  "claude-haiku-4-5-20251001",
+    "small":  "claude-haiku-5-5",
     // Stage 2: a local OpenAI-compatible shim with its own endpoint.
     "medium": {
       "id": "mlx-community/Qwen3-32B-4bit",
@@ -83,6 +83,13 @@ credentials):
 | `AFK_MODEL_{LOCAL,SMALL,MEDIUM,LARGE}_BASE_URL` | the tier's endpoint base URL |
 | `AFK_MODEL_{LOCAL,SMALL,MEDIUM,LARGE}_API_KEY` | the tier's API key (secret) |
 
+> **No `AFK_MODEL_<TIER>_CONTEXT_WINDOW` env var.** Unlike `id`, `baseUrl`, and
+> `apiKey`, the `contextWindow` override is **config-file only** — there is no
+> corresponding env var. If you need to raise the context window on a tier that
+> cannot (or should not) carry a persistent `afk.config.json` entry, use the
+> `afk config set models.<tier>.contextWindow <N>` CLI command, which writes to
+> the config file. An env-only workaround is not currently supported.
+
 ```bash
 # Point the local tier at Ollama. The per-slot BASE_URL routes the tier to the
 # OpenAI-compatible path even though `llama3.2:3b` matches no provider prefix;
@@ -114,7 +121,7 @@ An unconfigured install behaves exactly as before this feature:
 | Tier     | Default id                      | Identity alias (fixed)    |
 | -------- | ------------------------------- | ------------------------- |
 | `local`  | `` (empty — user-configured)    | —                         |
-| `small`  | `claude-haiku-4-5-20251001`     | `haiku`                   |
+| `small`  | `claude-haiku-5-5`              | `haiku`                   |
 | `medium` | `claude-sonnet-4-6`          | `sonnet`, `sonnet_1m`     |
 | `large`  | `claude-opus-5-5`               | `opus`, `opus_1m`         |
 

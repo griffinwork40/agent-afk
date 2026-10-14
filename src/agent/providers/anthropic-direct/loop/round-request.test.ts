@@ -70,6 +70,124 @@ describe('toWireTool', () => {
 
 const MESSAGES: MessageParam[] = [{ role: 'user', content: 'hi' }];
 
+// ---------------------------------------------------------------------------
+// openRound — orphan_repair trace event
+// ---------------------------------------------------------------------------
+
+import { vi, afterEach } from 'vitest';
+import { openRound } from './round-request.js';
+import { TurnAccumulator } from './turn-accumulator.js';
+import { RoundRetryBudget } from './retry-budget.js';
+import { InMemoryTraceWriter } from '../../../trace/writer.js';
+import type { RunTurnInput } from '../types.js';
+import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
+
+afterEach(() => vi.restoreAllMocks());
+
+/** Minimal async iterable that yields a message_stop event then ends. */
+async function* minimalStream(): AsyncIterable<unknown> {
+  yield { type: 'message_stop' };
+}
+
+/** Build a minimal RunTurnInput. Only fields consumed by openRound are set. */
+function makeInput(overrides: { messages: MessageParam[]; traceWriter?: InMemoryTraceWriter }): RunTurnInput {
+  const controller = new AbortController();
+  return {
+    client: {
+      messages: {
+        create: () => Promise.resolve(minimalStream()),
+      },
+    },
+    messages: overrides.messages,
+    system: null,
+    tools: null,
+    toolDispatcher: {} as RunTurnInput['toolDispatcher'],
+    model: 'claude-test',
+    maxTokens: 1024,
+    headers: {},
+    signal: controller.signal,
+    ctx: { sessionId: 'test-session' },
+    traceWriter: overrides.traceWriter,
+  } as unknown as RunTurnInput;
+}
+
+/** Drain an AsyncGenerator fully, returning all yielded values. */
+async function drainGen<T>(gen: AsyncGenerator<T, unknown, void>): Promise<T[]> {
+  const out: T[] = [];
+  for (;;) {
+    const step = await gen.next();
+    if (step.done) break;
+    out.push(step.value);
+  }
+  return out;
+}
+
+describe('openRound — orphan_repair trace event', () => {
+  it('emits orphan_repair phase event when the history has an orphaned tool_use', async () => {
+    const writer = new InMemoryTraceWriter();
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'do something' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'toolu_orphan_x', name: 'bash', input: {} },
+        ] as ContentBlockParam[],
+      },
+      // Intentionally missing the user tool_result — this is the orphan.
+    ];
+    const input = makeInput({ messages, traceWriter: writer });
+    const turn = new TurnAccumulator();
+    const retry = new RoundRetryBudget();
+
+    await drainGen(openRound({ input, turn, retry, ttfbTimeoutMs: 10_000, stallTimeoutMs: 30_000 }));
+
+    // Wait a tick for the fire-and-forget write to settle.
+    await new Promise((r) => setTimeout(r, 0));
+
+    const phaseEvents = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'orphan_repair',
+    );
+    expect(phaseEvents).toHaveLength(1);
+    const meta = phaseEvents[0]!.payload.metadata as Record<string, string | number | boolean>;
+    expect(meta.orphanIds).toContain('toolu_orphan_x');
+    expect(meta.messageCount).toBe(2);
+    // shapeBefore must be present and non-empty
+    expect(typeof meta.shapeBefore).toBe('string');
+    expect((meta.shapeBefore as string).length).toBeGreaterThan(0);
+  });
+
+  it('does NOT emit orphan_repair when history is healthy', async () => {
+    const writer = new InMemoryTraceWriter();
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'hi' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'toolu_ok', name: 'bash', input: {} },
+        ] as ContentBlockParam[],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'toolu_ok', content: 'done' },
+        ] as ContentBlockParam[],
+      },
+    ];
+    const input = makeInput({ messages, traceWriter: writer });
+    const turn = new TurnAccumulator();
+    const retry = new RoundRetryBudget();
+
+    await drainGen(openRound({ input, turn, retry, ttfbTimeoutMs: 10_000, stallTimeoutMs: 30_000 }));
+
+    await new Promise((r) => setTimeout(r, 0));
+
+    const phaseEvents = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'orphan_repair',
+    );
+    expect(phaseEvents).toHaveLength(0);
+  });
+});
+
 describe('buildRoundParams', () => {
   it('includes temperature in the wire request when set', () => {
     const params = buildRoundParams({

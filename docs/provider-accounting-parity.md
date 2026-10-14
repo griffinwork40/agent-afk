@@ -21,9 +21,9 @@ Everything else — cached-input pricing semantics, `contextWindowTokens` comput
 ### 1a. Anthropic-direct: cache-write TTL split (`anthropic-direct/pricing.ts`)
 
 **What it does:**  
-`deriveCallCostUsd` (pricing.ts:244) accepts a `CacheWriteSplit` with `ephemeral5m`/`ephemeral1h` fields and applies separate multipliers: `CACHE_WRITE_5M_MULTIPLIER = 1.25` (pricing.ts:46) and `CACHE_WRITE_1H_MULTIPLIER = 2.0` (pricing.ts:48). The split is resolved by `resolveCacheWriteSplit` in `usage.ts:40`, which prefers the API's own `usage.cache_creation` breakdown and falls back to `getCacheTtl()` (defaults to `1h`). Cache-read multiplier is `0.1×` by default, with per-model overrides in the pricing table.
+`deriveCallCostUsd` accepts a `CacheWriteSplit` with `ephemeral5m`/`ephemeral1h` fields and applies separate multipliers: `CACHE_WRITE_5M_MULTIPLIER = 1.25` and `CACHE_WRITE_1H_MULTIPLIER = 2.0` (both in `anthropic-direct/pricing.ts`). The split is resolved by `resolveCacheWriteSplit` in `anthropic-direct/usage.ts`, which prefers the API's own `usage.cache_creation` breakdown and falls back to `getCacheTtl()` (defaults to `1h`). Cache-read multiplier is `0.1×` by default, with per-model overrides in the pricing table.
 
-**Key invariant (pricing.ts:17-41):**  
+**Key invariant (see module-level comment in `anthropic-direct/pricing.ts`):**  
 `input_tokens` from the Anthropic API EXCLUDES cache reads and writes. So `inputTokens` is passed verbatim (not pre-subtracted) to the cost formula, and cache fields are added separately.
 
 **Reasoning tokens (Anthropic):**  

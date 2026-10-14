@@ -12,10 +12,10 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { writeJsonFile } from '../../utils/json-file.js';
 import { env } from '../../config/env.js';
-import { getWavesDir, getWaveManifestPath } from '../../paths.js';
+import { getWaveManifestPath } from '../../paths.js';
 import type { WaveManifest, WaveUnit, WaveUnitStatus, PromptDigest } from './types.js';
 import { extractWorktreePath } from './worktree.js';
 import { redactSecrets } from '../redact-secrets.js';
@@ -118,12 +118,10 @@ export function createManifest(opts: {
  */
 export function writeManifestSync(manifest: WaveManifest): void {
   try {
-    const dir = getWavesDir();
-    mkdirSync(dir, { recursive: true });
+    // writeJsonFile uses atomic-write (tmp+rename, randomBytes suffix, mkdirp)
+    // and defaults to 0o600; explicit mode preserves the prior 0o600 contract.
     const target = getWaveManifestPath(manifest.waveId);
-    const tmp = join(dirname(target), `.${manifest.waveId}.tmp`);
-    writeFileSync(tmp, JSON.stringify(manifest, null, 2), { encoding: 'utf8', mode: 0o600 });
-    renameSync(tmp, target);
+    writeJsonFile(target, manifest, { mode: 0o600 });
   } catch {
     // Fire-and-forget: manifest write failures must never abort a wave.
   }

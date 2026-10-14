@@ -513,8 +513,8 @@ describe('resolveAnchorBaseRef — mocked (#2749)', () => {
  */
 async function realGit(cwd: string, args: string[]): Promise<string> {
   try {
-    const r = await execFileAsync('git', args, { cwd } as never);
-    return (r as { stdout: string }).stdout.trim();
+    const r = await execFileAsync('git', args, { cwd });
+    return r.stdout.trim();
   } catch (err) {
     const e = err as { stderr?: string; message?: string };
     throw new Error(`git ${args.join(' ')} failed: ${e.stderr ?? e.message ?? ''}`);
@@ -576,14 +576,34 @@ describe('#2749: concurrent worktree creates — real git repos in tmpdir', () =
   });
 
   it('explicit base caller override is passed through unchanged (backward-compat)', async () => {
-    // The #2749 fix is in the DEFAULT path — explicit `base` is untouched.
-    // Verify the explicit-base path in createIsolatedWorktree still works.
+    // The #2749 fix is in the DEFAULT path — explicit `base` bypasses
+    // resolveAnchorBaseRef entirely. Verify that createIsolatedWorktree
+    // honours the caller-supplied baseRef even when it differs from origin/main.
+
+    // Make a local commit so localHead !== origin/main.
+    await fs.writeFile(join(cloneDir, 'explicit-base.txt'), 'explicit base test');
+    await realGit(cloneDir, ['add', 'explicit-base.txt']);
+    await realGit(cloneDir, ['commit', '-m', 'diverge for explicit-base test']);
+    const localHead = await realGit(cloneDir, ['rev-parse', 'HEAD']);
     const remoteSha = await realGit(cloneDir, ['rev-parse', 'origin/main']);
-    // resolveAnchorBaseRef is for the DEFAULT; explicit base is caller-supplied.
-    // The existing createIsolatedWorktree already honors args.baseRef directly,
-    // so we just confirm resolveAnchorBaseRef is not called on that path
-    // by verifying the result from the explicit override matches exactly.
-    const explicitSha = await realGit(cloneDir, ['rev-parse', 'origin/main']);
-    expect(explicitSha).toBe(remoteSha); // sanity: explicit == remote
+    expect(localHead).not.toBe(remoteSha); // sanity: we actually diverged
+
+    // Ask createIsolatedWorktree to use the local HEAD SHA as the explicit base.
+    // The DEFAULT path would have returned remoteSha; the explicit path must
+    // return localHead instead.
+    const iso = await createIsolatedWorktree({
+      execFile: execFileAsync,
+      cwd: cloneDir,
+      slugHint: 'iso-explicit-base-test',
+      baseRef: localHead,
+    });
+    try {
+      expect(iso.baseRef).toBe(localHead);
+      expect(iso.baseSha).toBe(localHead);
+      expect(iso.baseSha).not.toBe(remoteSha);
+    } finally {
+      // Best-effort cleanup — ignore errors (rmSync clears the cloneDir anyway).
+      rmSync(iso.path, { recursive: true, force: true });
+    }
   });
 });

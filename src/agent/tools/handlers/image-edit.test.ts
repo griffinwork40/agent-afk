@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as fsSync from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { FormData as UndiciFormData } from 'undici';
 import { createImageEditHandler } from './image-edit.js';
 import { _resetWriteDenylistCacheForTests } from './write-denylist.js';
 import { _resetRootRealpathCacheForTests } from './_cwd-utils.js';
@@ -12,7 +13,13 @@ vi.mock('../../providers/openai-compatible/auth.js', () => ({
   resolveOpenAIAuth: vi.fn(() => ({ apiKey: null, source: 'no-usable-auth' })),
 }));
 
+// Mock h1-fetch so we can spy on the default fetchFn without a real network call.
+vi.mock('../../providers/shared/h1-fetch.js', () => ({
+  h1ModelFetch: vi.fn(),
+}));
+
 import { resolveOpenAIAuth } from '../../providers/openai-compatible/auth.js';
+import * as h1FetchModule from '../../providers/shared/h1-fetch.js';
 const mockResolveAuth = vi.mocked(resolveOpenAIAuth);
 
 // ---------------------------------------------------------------------------
@@ -110,6 +117,54 @@ describe('image_edit handler', () => {
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('expired');
+  });
+
+  it('rejects chatgpt-oauth source without calling the Images Edit API', async () => {
+    // The Images Edit endpoint does not accept ChatGPT OAuth tokens (wrong
+    // OAuth scopes). The handler must reject with a clear error naming the
+    // supported credential sources and never reach the fetch call.
+    vi.stubEnv('AFK_IMAGE_API_KEY', '');
+    mockResolveAuth.mockReturnValue({
+      apiKey: 'chatgpt-oauth-token',
+      source: 'chatgpt-oauth',
+      accountId: 'acct-123',
+    });
+    const fetchFn = vi.fn();
+    const handler = createImageEditHandler(fetchFn);
+    const result = await handler(
+      { prompt: 'test', image_paths: [refImagePath] },
+      signal,
+      { resolveBase: tmpDir, sessionId: 'oauth-reject-test' },
+    );
+    expect(result.isError).toBe(true);
+    // Must name the supported credentials.
+    expect(result.content).toContain('AFK_IMAGE_API_KEY');
+    expect(result.content).toContain('OPENAI_API_KEY');
+    // Must NOT have forwarded the OAuth token to the Images Edit endpoint.
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('returns no-usable-auth error when a ChatGPT login has no access token', async () => {
+    // A ChatGPT-mode ~/.codex/auth.json with no access token makes
+    // resolveOpenAIAuth return source:'no-usable-auth-codex-oauth'. The
+    // handler must surface an actionable error — not call the endpoint.
+    vi.stubEnv('AFK_IMAGE_API_KEY', '');
+    mockResolveAuth.mockReturnValue({
+      apiKey: null,
+      source: 'no-usable-auth-codex-oauth',
+    });
+    const fetchFn = vi.fn();
+    const handler = createImageEditHandler(fetchFn);
+    const result = await handler(
+      { prompt: 'test', image_paths: [refImagePath] },
+      signal,
+      { resolveBase: tmpDir, sessionId: 'flag-off-test' },
+    );
+    expect(result.isError).toBe(true);
+    // The no-usable-auth path must name at least one actionable credential source.
+    expect(result.content).toContain('AFK_IMAGE_API_KEY');
+    // Must never have called the Images Edit endpoint.
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 
   // ── Daemon gate ─────────────────────────────────────────────────────────
@@ -299,8 +354,9 @@ describe('image_edit handler', () => {
     expect(opts.headers['Authorization']).toBe('Bearer test-key');
     // Content-Type should NOT be set manually (fetch sets it with the boundary).
     expect(opts.headers['Content-Type']).toBeUndefined();
-    // Body should be FormData.
-    expect(opts.body).toBeInstanceOf(FormData);
+    // Body should be undici's FormData (not globalThis.FormData, which would
+    // fail undici's brand-check when h1ModelFetch serializes the multipart body).
+    expect(opts.body).toBeInstanceOf(UndiciFormData);
   });
 
   it('accepts .jpg reference images', async () => {
@@ -349,6 +405,61 @@ describe('image_edit handler', () => {
     expect(stat.size).toBeGreaterThan(0);
   });
 
+  // ── output_format forwarded to API (#3387) ──────────────────────────────
+
+  it('sends output_format field in the multipart body (default: png)', async () => {
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
+    const handler = createImageEditHandler(fetchFn);
+    await handler(
+      { prompt: 'test', image_paths: [refImagePath] },
+      signal,
+      { resolveBase: tmpDir, sessionId: `fmt-default-${Date.now()}` },
+    );
+    expect(fetchFn).toHaveBeenCalledOnce();
+    const [, opts] = fetchFn.mock.calls[0]!;
+    const form: UndiciFormData = opts.body as UndiciFormData;
+    expect(form.get('output_format')).toBe('png');
+  });
+
+  it('sends the requested output_format (jpeg) in the multipart body', async () => {
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
+    const handler = createImageEditHandler(fetchFn);
+    const result = await handler(
+      { prompt: 'test', image_paths: [refImagePath], output_format: 'jpeg' },
+      signal,
+      { resolveBase: tmpDir, sessionId: `fmt-jpeg-${Date.now()}` },
+    );
+    expect(fetchFn).toHaveBeenCalledOnce();
+    const [, opts] = fetchFn.mock.calls[0]!;
+    const form: UndiciFormData = opts.body as UndiciFormData;
+    expect(form.get('output_format')).toBe('jpeg');
+    // The saved file must also carry the matching extension (#3429).
+    expect(result.isError).toBeUndefined();
+    const meta = JSON.parse(result.content);
+    expect(meta.path).toMatch(/\.jpeg$/);
+  });
+
+  it('sends the requested output_format (webp) in the multipart body', async () => {
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
+    const handler = createImageEditHandler(fetchFn);
+    const result = await handler(
+      { prompt: 'test', image_paths: [refImagePath], output_format: 'webp' },
+      signal,
+      { resolveBase: tmpDir, sessionId: `fmt-webp-${Date.now()}` },
+    );
+    expect(fetchFn).toHaveBeenCalledOnce();
+    const [, opts] = fetchFn.mock.calls[0]!;
+    const form: UndiciFormData = opts.body as UndiciFormData;
+    expect(form.get('output_format')).toBe('webp');
+    // The saved file must also carry the matching extension (#3429).
+    expect(result.isError).toBeUndefined();
+    const meta = JSON.parse(result.content);
+    expect(meta.path).toMatch(/\.webp$/);
+  });
+
   it('sends multiple image paths as multiple form fields', async () => {
     vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
     const ref2Path = path.join(tmpDir!, 'ref2.png');
@@ -362,7 +473,7 @@ describe('image_edit handler', () => {
     );
     expect(fetchFn).toHaveBeenCalledOnce();
     const [, opts] = fetchFn.mock.calls[0]!;
-    const form: FormData = opts.body;
+    const form: UndiciFormData = opts.body as UndiciFormData;
     // getAll returns all values for the key
     expect(form.getAll('image[]').length).toBe(2);
   });
@@ -496,6 +607,24 @@ describe('image_edit handler', () => {
     vi.unstubAllEnvs();
     _resetRootRealpathCacheForTests();
     _resetWriteDenylistCacheForTests();
+  });
+
+  // ── Default fetchFn ─────────────────────────────────────────────────────
+
+  it('uses h1ModelFetch as the default fetchFn when createImageEditHandler is called with no arguments', async () => {
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    const mockH1 = vi.mocked(h1FetchModule.h1ModelFetch);
+    mockH1.mockResolvedValueOnce(makeOkResponse(TINY_PNG_B64));
+
+    // Create handler with NO fetchFn argument — must fall back to h1ModelFetch.
+    const handler = createImageEditHandler();
+    await handler(
+      { prompt: 'test default fetch', image_paths: [refImagePath] },
+      signal,
+      { resolveBase: tmpDir, sessionId: `default-fetch-${Date.now()}` },
+    );
+
+    expect(mockH1).toHaveBeenCalledOnce();
   });
 
   // ── Intermediate symlinked-directory escape (#2836 Item 1) ───────────────

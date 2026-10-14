@@ -98,6 +98,8 @@ export function journalRecordsToToolEvents(
   const toolUseCommand = new Map<string, string | undefined>(); // id → bash command summary
   const toolResultText = new Map<string, string>(); // id → result text
   const toolResultError = new Map<string, boolean>(); // id → isError
+  const toolResultIncomplete = new Map<string, true>(); // id → incomplete (#2970)
+  const toolResultPartialCount = new Map<string, number>(); // id → partial node count (#2978)
 
   for (const rec of records) {
     if (rec.kind !== 'append') continue;
@@ -122,6 +124,17 @@ export function journalRecordsToToolEvents(
         if (block.isError !== undefined) {
           toolResultError.set(block.toolUseId, block.isError);
         }
+        // #2970/#2978: incomplete (+ compose partialNodeCount) is written by
+        // the provider journal adapters. Old journal records that lack it are
+        // read as absent (= not incomplete), the correct conservative default.
+        // Sticky, unlike the text above: a later re-append that lost the flag
+        // (a cloned native has no tag) must not erase a recorded partial.
+        if (block.incomplete === true) {
+          toolResultIncomplete.set(block.toolUseId, true);
+          if (typeof block.partialNodeCount === 'number') {
+            toolResultPartialCount.set(block.toolUseId, block.partialNodeCount);
+          }
+        }
       }
     }
   }
@@ -135,6 +148,8 @@ export function journalRecordsToToolEvents(
     const input = toolUseCommand.get(id);
     const result = toolResultText.get(id);
     const isError = toolResultError.get(id);
+    const incomplete = toolResultIncomplete.get(id);
+    const partialNodeCount = toolResultPartialCount.get(id);
     const ev: ToolEventInput = {
       toolName,
       toolUseId: id,
@@ -142,6 +157,8 @@ export function journalRecordsToToolEvents(
       ...(inputRaw !== undefined ? { inputRaw } : {}),
       ...(result !== undefined ? { result } : {}),
       ...(isError !== undefined ? { isError } : {}),
+      ...(incomplete === true ? { incomplete: true } : {}),
+      ...(partialNodeCount !== undefined ? { partialNodeCount } : {}),
     };
     events.push(ev);
   }

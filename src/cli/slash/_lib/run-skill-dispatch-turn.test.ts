@@ -19,6 +19,9 @@ import type { ImageAttachment } from '../../input/attachments.js';
 import type { SlashContext, SessionStats } from '../types.js';
 import type { OutputEvent } from '../../../agent/types.js';
 import { runSkillDispatchTurn } from './run-skill-dispatch-turn.js';
+import { saveSession } from '../../session-store.js';
+
+vi.mock('../../session-store.js', () => ({ saveSession: vi.fn() }));
 
 function fakeDone(metadata?: Record<string, unknown>): OutputEvent {
   return { type: 'done', ...(metadata ? { metadata } : {}) } as OutputEvent;
@@ -619,3 +622,43 @@ describe('dispatch identity preparation', () => {
     expect(JSON.stringify(session.sendMessageStream.mock.calls[0])).toContain('the effective args');
   });
 });
+
+describe('runSkillDispatchTurn — sidecar autosave', () => {
+  it('saves the session sidecar after a completed skill turn, like a normal turn', async () => {
+    vi.mocked(saveSession).mockClear();
+    const session = fakeSession([fakeAssistantMessage('ok'), fakeDone({ sessionId: 'sess-1' })]);
+    const { ctx } = makeCtx(session);
+
+    await runSkillDispatchTurn(ctx, { skillName: 'god', skillMeta: makeSkill('god'), args: 'ship it' });
+
+    expect(saveSession).toHaveBeenCalledTimes(1);
+    expect(saveSession).toHaveBeenCalledWith(ctx.stats);
+    // The auto-derived name is what /resume and the web list show.
+    expect(ctx.stats.name).toBe('god-ship-it');
+  });
+
+  it('does not save an interrupted skill turn (no done event)', async () => {
+    vi.mocked(saveSession).mockClear();
+    const session = fakeSession([fakeAssistantMessage('partial')]);
+    const { ctx } = makeCtx(session);
+    ctx.stats.sessionId = 'sess-1';
+
+    await runSkillDispatchTurn(ctx, { skillName: 'god', skillMeta: makeSkill('god'), args: '' });
+
+    expect(saveSession).not.toHaveBeenCalled();
+  });
+
+  it('warns instead of throwing when the autosave fails', async () => {
+    vi.mocked(saveSession).mockClear().mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+    const session = fakeSession([fakeAssistantMessage('ok'), fakeDone({ sessionId: 'sess-1' })]);
+    const { ctx, lines } = makeCtx(session);
+
+    await expect(
+      runSkillDispatchTurn(ctx, { skillName: 'god', skillMeta: makeSkill('god'), args: '' }),
+    ).resolves.toBe('ok');
+    expect(lines.some((l) => l.startsWith('WARN:') && l.includes('disk full'))).toBe(true);
+  });
+});
+

@@ -155,4 +155,42 @@ describe('cyclePermissionMode', () => {
     expect(stats.permissionMode).toBe('default');
     expect(lines.some((l) => l.startsWith('ERROR:'))).toBe(true);
   });
+  describe('mode-notice routing (toggle, not log)', () => {
+    it('routes copy to the live compositor notice and writes nothing to scrollback', async () => {
+      const stats = makeStats({ permissionMode: 'default' });
+      const { ctx, lines } = makeCtx({ stats });
+      const setModeNotice = vi.fn(() => true);
+      ctx.getCompositor = () => ({ setModeNotice }) as unknown as ReturnType<NonNullable<SlashContext['getCompositor']>>;
+
+      await cyclePermissionMode(ctx); // default → plan
+      await cyclePermissionMode(ctx); // plan → bypass
+
+      expect(setModeNotice).toHaveBeenCalledTimes(2);
+      expect(String(setModeNotice.mock.calls[0]).toLowerCase()).toContain('plan mode on');
+      expect(String(setModeNotice.mock.calls[1]).toLowerCase()).toContain('bypass on');
+      expect(lines).toEqual([]);
+    });
+
+    it('falls back to one scrollback line when the compositor is disarmed', async () => {
+      const stats = makeStats({ permissionMode: 'default' });
+      const { ctx, lines } = makeCtx({ stats });
+      ctx.getCompositor = () => ({ setModeNotice: () => false }) as unknown as ReturnType<NonNullable<SlashContext['getCompositor']>>;
+
+      await cyclePermissionMode(ctx);
+
+      expect(lines).toHaveLength(1);
+      expect(lines[0]!.toLowerCase()).toContain('plan mode on');
+    });
+
+    it('falls back to scrollback when no compositor exists (null)', async () => {
+      const stats = makeStats({ permissionMode: 'plan' });
+      const { ctx, lines } = makeCtx({ stats });
+      ctx.getCompositor = () => null;
+
+      await cyclePermissionMode(ctx);
+
+      expect(lines).toHaveLength(1);
+      expect(lines[0]!.toLowerCase()).toContain('bypass on');
+    });
+  });
 });

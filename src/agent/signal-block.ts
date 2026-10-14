@@ -49,6 +49,7 @@
  */
 
 import { z } from 'zod';
+import { findMatchingClose } from './json-brace-scanner.js';
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -208,37 +209,4 @@ function hasSignalKey(value: unknown): boolean {
   );
 }
 
-/**
- * Forward-direction balanced brace matcher. Skips string literals so braces
- * inside JSON strings do not confuse depth tracking. Returns -1 if no match.
- */
-function findMatchingClose(content: string, openIdx: number): number {
-  let depth = 0;
-  let inString = false;
-  let escape = false;
-  for (let i = openIdx; i < content.length; i++) {
-    const ch = content[i];
-    if (escape) {
-      escape = false;
-      continue;
-    }
-    if (inString) {
-      if (ch === '\\') {
-        escape = true;
-        continue;
-      }
-      if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-      continue;
-    }
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) return i;
-    }
-  }
-  return -1;
-}
+

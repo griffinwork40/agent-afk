@@ -8,7 +8,5 @@
  */
 
 export {
-  loadCompanionPrimer,
   injectCompanionPrimer,
-  MAX_PRIMER_CHARS,
 } from './primer-loader.js';

@@ -21,7 +21,7 @@ import type { BrowserHandlerOptions } from './browser-open.js';
 import type { Target } from '../../../browser/types.js';
 import { emitBrowserEvent } from '../../trace/emit.js';
 import { acquireBrowserProvider } from './browser-provider.js';
-import { errorMessage } from '../../../utils/errors.js';
+import { abortReason, errorMessage } from '../../../utils/errors.js';
 
 const VALID_TARGET_KINDS = ['semantic', 'element_id', 'selector'] as const;
 
@@ -103,8 +103,7 @@ export function createBrowserScreenshotHandler(opts: BrowserHandlerOptions = {})
   return async (input, signal, context?: ToolHandlerContext) => {
     // Pre-aborted short-circuit.
     if (signal.aborted) {
-      const reason = signal.reason;
-      const msg = reason instanceof Error ? reason.message : String(reason ?? 'aborted');
+            const msg = abortReason(signal.reason);
       return { content: `browser_screenshot aborted: ${msg}`, isError: true };
     }
 
@@ -136,7 +135,7 @@ export function createBrowserScreenshotHandler(opts: BrowserHandlerOptions = {})
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_screenshot',
         toolUseId: context?.toolUseId ?? '',
-        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingBackend ? { backend: routingBackend } : {}),
         ...(routingReason ? { backendReason: routingReason } : {}),
         // screenshot is a non-navigating read — URL is unchanged; we don't
         // have a currentUrl() on the provider so we use null for both fields.
@@ -175,7 +174,7 @@ export function createBrowserScreenshotHandler(opts: BrowserHandlerOptions = {})
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_screenshot',
         toolUseId: context?.toolUseId ?? '',
-        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingBackend ? { backend: routingBackend } : {}),
         ...(routingReason ? { backendReason: routingReason } : {}),
         urlBefore: null,
         urlAfter: null,

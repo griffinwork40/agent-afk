@@ -25,7 +25,7 @@ beforeEach(async () => {
 afterEach(async () => {
   if (oldState === undefined) delete process.env['AFK_STATE_DIR'];
   else process.env['AFK_STATE_DIR'] = oldState;
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   vi.clearAllMocks();
 });
 

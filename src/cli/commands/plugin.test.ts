@@ -190,6 +190,58 @@ describe('plugin enable / disable', () => {
   });
 });
 
+
+describe('plugin config', () => {
+  it('reads marketplace plugin userConfig from the marketplace cache layout', async () => {
+    const pluginDir = join(pluginsDir, 'cache', 'mp', 'plugins', 'demo');
+    mkdirSync(join(pluginDir, '.claude-plugin'), { recursive: true });
+    writeFileSync(
+      join(pluginDir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({
+        name: 'demo',
+        userConfig: { provider: { type: 'string', default: 'anthropic' } },
+      }),
+    );
+    upsertPlugin(
+      'mp:demo',
+      {
+        source: 'mp:demo', sourceType: 'marketplace', ref: null, commit: null,
+        enabled: true, installedAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+        marketplace: 'mp',
+      },
+      indexPath,
+    );
+
+    await runArgv(makeProgram(), ['plugin', 'config', 'mp:demo']);
+    expect(logs.join('\n')).toContain('provider');
+    expect(logs.join('\n')).toContain('anthropic');
+  });
+
+  it('validates --unset keys against the manifest schema', async () => {
+    const pluginDir = join(pluginsDir, 'demo');
+    mkdirSync(join(pluginDir, '.claude-plugin'), { recursive: true });
+    writeFileSync(
+      join(pluginDir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'demo', userConfig: { provider: { type: 'string' } } }),
+    );
+    upsertPlugin(
+      'demo',
+      {
+        source: 'x', sourceType: 'local', ref: null, commit: null,
+        enabled: true, installedAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+        options: { provider: 'openai' },
+      },
+      indexPath,
+    );
+
+    await runArgv(makeProgram(), ['plugin', 'config', 'demo', 'typo', '--unset']);
+    expect(process.exitCode).toBe(1);
+    expect(logs.join('\n')).toContain('Key "typo" is not declared');
+    expect(readIndex(indexPath).plugins['demo']!.options?.provider).toBe('openai');
+    process.exitCode = 0;
+  });
+});
+
 describe('plugin remove', () => {
   it('removes the dir and index entry', async () => {
     const dir = join(pluginsDir, 'nuke-me');

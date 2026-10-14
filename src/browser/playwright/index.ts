@@ -32,7 +32,7 @@ import { resolveTarget } from './resolve-target.js';
 import { enforceDomainPolicy } from '../config.js';
 import { recheckLandedUrl } from './domain-recheck.js';
 import { writeScreenshotSidecar } from '../witness.js';
-import { checkEgressTarget, EgressBlockedError } from '../../http-client/egress-guard.js';
+import { checkNavigationEgress, egressBlockOutcome } from './egress-gate.js';
 
 // ---------------------------------------------------------------------------
 // Per-session state
@@ -115,7 +115,7 @@ export class PlaywrightProvider implements BrowserProvider {
    * blocked URLs never touch the browser process. The BrowserContext is
    * created lazily on first open() via ensurePage().
    *
-   * Invariant: the SSRF egress guard ({@link checkEgressTarget}) is applied
+   * Invariant: the SSRF egress guard (`checkNavigationEgress` → `checkEgressTarget`) is applied
    * BEFORE the domain policy check, blocking private/loopback/link-local/
    * cloud-metadata ranges — including 169.254.169.254 (IMDS) and 127.x.x.x
    * daemon surfaces — that the domain allow/block glob lists cannot cover.
@@ -132,14 +132,8 @@ export class PlaywrightProvider implements BrowserProvider {
     // SSRF guard: block private/loopback/link-local/metadata ranges.
     // Runs before the domain policy check and before any browser interaction.
     // Honours AFK_WEB_ALLOW_PRIVATE_HOSTS, matching web_request / web_scrape.
-    const egressVerdict = await checkEgressTarget(input.url);
-    if (!egressVerdict.allowed) {
-      return {
-        outcome: 'blocked_by_policy',
-        url: input.url,
-        reason: egressVerdict.reason,
-      };
-    }
+    const egressBlocked = await checkNavigationEgress(input.url);
+    if (egressBlocked) return egressBlocked;
 
     // Domain policy check before any browser interaction.
     const policyResult = enforceDomainPolicy(input.url, this.config);
@@ -167,13 +161,8 @@ export class PlaywrightProvider implements BrowserProvider {
       navError = this.launcher.consumeRequestGuardError(sessionId) ?? err;
     }
 
-    if (navError instanceof EgressBlockedError) {
-      return {
-        outcome: 'blocked_by_policy',
-        url: input.url,
-        reason: navError.message,
-      };
-    }
+    const navBlocked = egressBlockOutcome(navError, input.url);
+    if (navBlocked) return navBlocked;
 
     // Re-check the LANDED url: goto() follows 30x redirects, so an allowed URL
     // can hand the tab to a blocked host after the pre-navigation check passed
@@ -366,13 +355,8 @@ export class PlaywrightProvider implements BrowserProvider {
       }
     }
 
-    if (actionError instanceof EgressBlockedError) {
-      return {
-        outcome: 'blocked_by_policy',
-        url: page.url(),
-        reason: actionError.message,
-      };
-    }
+    const actionBlocked = egressBlockOutcome(actionError, page.url());
+    if (actionBlocked) return actionBlocked;
 
     // Check post-action URL for policy violations. Shared with open() so the
     // two navigation paths cannot drift apart — see domain-recheck.ts.

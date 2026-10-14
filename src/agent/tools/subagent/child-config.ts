@@ -20,7 +20,7 @@
  */
 
 import { SubagentManager } from '../../subagent.js';
-import { SUBAGENT_HANDOFF_CONTRACT } from '../../subagent-contract.js';
+import { composeUnnamedWorkerPrompt } from '../system-prompt.js';
 import type { ReadScopeInputs } from '../../subagent-read-scope.js';
 import type { ModelProvider } from '../../provider.js';
 import type { AgentModelInput, IAgentSession } from '../../types.js';
@@ -79,7 +79,8 @@ export interface BuildChildConfigArgs {
   childInheritedReadRoots?: string[];
   /** The dispatching tool-call's abort signal (owns the child manager lifetime). */
   signal: AbortSignal;
-  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'xaiBaseUrl' | 'skillDispatchName'>;
+  /** See SubagentExecutorContext.defaultConfig (incl. the bare `operatorOverlay`). */
+  defaultConfig: SubagentExecutorContext['defaultConfig'];
   resolveApiKeyForModel?: (model: string) => string | undefined;
   defaultSubagentModel: AgentModelInput;
   childProviderFactory?: (args: ChildProviderFactoryArgs) => ModelProvider;
@@ -93,6 +94,9 @@ export interface BuildChildConfigArgs {
     // Forking child's journal view (read lazily): nested skill forks journal
     // via its `forSubagent(id)`. Absent → nested skill forks run unjournaled.
     journalParent?: JournalParent,
+    // Root (depth-0) session id for child-attribution (#2442); becomes the
+    // nested executor's `parentRootSessionId`.
+    rootSessionId?: string,
   ) => SkillExecutor;
   surface?: Surface;
   allowedTools?: string[];
@@ -117,6 +121,20 @@ export interface BuildChildConfigArgs {
    * the chain holds to maxDepth. See SubagentExecutorContext.workspaceStore.
    */
   workspaceStore?: import('../../workspace/index.js').WorkspaceStore; delegationBudget?: import('../../tools/delegation-budget.js').DelegationBudget;
+  /**
+   * Hook registry (#3442) for the depth-2+ child {@link SubagentManager}
+   * (whose stub parent carries none) and the recursive child executor's ctx,
+   * so SubagentStart/Stop fire at every depth. Undefined => unchanged.
+   */
+  hookRegistry?: import('../../hooks.js').HookRegistry;
+  /**
+   * Root (depth-0) session id, forwarded from the dispatching executor's
+   * parent session id when the executor sits at depth 1, or from the
+   * executor context's own `parentRootSessionId` at depth 2+. Threaded into
+   * the grandchild {@link SubagentManager} as `parentRootSessionId` so
+   * depth-2+ forks inherit the real root id for child-attribution.
+   */
+  parentRootSessionId?: string;
   /**
    * Construct the recursive child executor. Injected by the owning
    * `SubagentExecutor.execute()` as `(ctx) => new SubagentExecutor(ctx)` so
@@ -165,6 +183,68 @@ export interface BuildChildConfigResult {
  * executor + provider). Returns the config plus the mutable child parent
  * session the caller backfills with `handle.id` after `forkSubagent`.
  */
+/**
+ * Build the depth-2+ {@link SubagentManager} a nested child uses for its own
+ * `agent` forks. Extracted from {@link buildChildConfig} (function-size
+ * ceiling); every input is an explicit parameter.
+ *
+ * Each field chains one parent property to the grandchild forks:
+ * - `cwd`: worktree anchor (else `forkSubagent` reads an undefined
+ *   `parentCwd` and grandchild bash/grep fall back to process.cwd()).
+ * - `parentReadRoots`: transitive read scope (../subagent-read-scope), so a
+ *   read-open child does not re-confine its grandchildren to `[cwd]`.
+ * - `traceWriter`: witness layer; without it depth-2+ forks emit no
+ *   subagent_lifecycle events.
+ * - `surface`: origin attribution ('cli'/'telegram'/'daemon', not 'unknown').
+ * - `workspaceStore`: workspace READ channel.
+ * - `parentRootSessionId` (#2442): grandchildren credit artifacts to the root.
+ */
+function buildNestedChildManager(
+  args: BuildChildConfigArgs,
+  signal: AbortSignal,
+  currentCwd: string | undefined,
+): SubagentManager {
+  return new SubagentManager({
+    parentAbortSignal: signal,
+    ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
+    ...(args.childInheritedReadRoots !== undefined ? { parentReadRoots: args.childInheritedReadRoots } : {}),
+    ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}),
+    ...(args.surface !== undefined ? { surface: args.surface } : {}),
+    ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
+    ...(args.parentRootSessionId !== undefined ? { parentRootSessionId: args.parentRootSessionId } : {}),
+    ...(args.hookRegistry !== undefined ? { hookRegistry: args.hookRegistry } : {}),
+  });
+}
+
+/**
+ * Tree-wide fields the recursive child executor inherits unchanged (trace
+ * writer, workspace store, hook registry). Extracted from
+ * {@link buildChildConfig} (function-size ceiling, baselined: must not grow).
+ */
+function nestedExecutorInherits(
+  args: Pick<BuildChildConfigArgs, 'traceWriter' | 'workspaceStore' | 'hookRegistry'>,
+): Pick<SubagentExecutorContext, 'traceWriter' | 'workspaceStore' | 'hookRegistry'> {
+  return {
+    ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}),
+    ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
+    ...(args.hookRegistry !== undefined ? { hookRegistry: args.hookRegistry } : {}),
+  };
+}
+
+/**
+ * Resolve `systemPrompt` and the companion `isUnnamedWorker` flag together.
+ * Named agents supply their own prompt; unnamed workers embed
+ * `TOOL_SYSTEM_PROMPT_BASE` via `UNNAMED_SUBAGENT_WORKER_PROMPT` and signal
+ * this so providers skip the duplicate `toolBase` prepend (#3359).
+ */
+function resolveChildSystemPrompt(
+  namedAgent: RegisteredAgent | undefined,
+  operatorOverlay: string | undefined,
+): { systemPrompt: string; isUnnamedWorker?: true } {
+  if (namedAgent !== undefined) return { systemPrompt: namedAgent.definition.prompt };
+  return { systemPrompt: composeUnnamedWorkerPrompt(operatorOverlay), isUnnamedWorker: true };
+}
+
 export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigResult {
   const {
     parsed,
@@ -333,24 +413,12 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
   const childConfig: AgentConfig = {
     model: childModel,
     apiKey: childIsOpenAI ? undefined : resolvedChildApiKey,
-    // A named agent's markdown body IS the child's system prompt (Claude
-    // Code parity: subagents receive the definition prompt, not the parent
-    // surface's full prompt) — a named agent owns its own handoff guidance
-    // (general-purpose bakes in SUBAGENT_HANDOFF_CONTRACT; read-only vendored
-    // agents are already compact), so it is passed through unchanged.
-    //
-    // An UNNAMED dispatch inherits the parent's full base prompt, which frames
-    // delegation from the DISPATCHER's side but never tells the child itself to
-    // keep its reply short / write bulk output to files. Append the handoff
-    // contract so the truly-default dispatch cannot emit an unbounded final
-    // message that gets truncated mid-stream (the StreamIncompleteError class
-    // this change also adds a bounded retry for in loop.ts).
-    systemPrompt:
-      namedAgent !== undefined
-        ? namedAgent.definition.prompt
-        : defaultConfig.systemPrompt
-          ? `${defaultConfig.systemPrompt}\n\n${SUBAGENT_HANDOFF_CONTRACT}`
-          : SUBAGENT_HANDOFF_CONTRACT,
+    // Named-agent body IS the prompt (Claude Code parity; general-purpose
+    // bakes in SUBAGENT_HANDOFF_CONTRACT; read-only vendored agents compact).
+    // Unnamed dispatch: lean worker prompt + bare overlay (#3324); isUnnamedWorker
+    // prevents providers from prepending toolBase a second time (#3359).
+    // Identity/workspace preambles injected later by assembleChildConfig.
+    ...resolveChildSystemPrompt(namedAgent, defaultConfig.operatorOverlay),
     baseUrl: childIsOpenAI ? undefined : defaultConfig.baseUrl,
     ...(defaultConfig.xaiBaseUrl !== undefined ? { xaiBaseUrl: defaultConfig.xaiBaseUrl } : {}),
     maxTurns: effectiveMaxTurns,
@@ -404,27 +472,7 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     // Without this, `SubagentManager.forkSubagent` reads `this.parentCwd`
     // (undefined) and depth-2 child config.cwd is omitted — its
     // bash/grep/read_file fall back to process.cwd() (host repo).
-    childManager = new SubagentManager({
-      parentAbortSignal: signal,
-      ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
-      // Transitive read-scope: seed the grandchild manager with THIS child's
-      // inherited read roots (see ../subagent-read-scope) so a read-open child
-      // does not re-confine its own grandchildren to `[cwd]`.
-      ...(args.childInheritedReadRoots !== undefined
-        ? { parentReadRoots: args.childInheritedReadRoots }
-        : {}),
-      // Witness layer: without this, depth-2+ `agent` forks emit no
-      // subagent_lifecycle events — the nested manager had no writer and
-      // agent-tool dispatches never set config.traceWriter. Mirrors the
-      // cwd chaining above; see BuildChildConfigArgs.traceWriter.
-      ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}),
-      // Origin attribution: thread the surface into the nested manager so
-      // depth-2+ `agent` forks inherit the owning surface's origin
-      // ('cli'/'telegram'/'daemon', not 'unknown') via forkSubagent's
-      // parentSurface fill. Mirrors the traceWriter/cwd chaining above and the
-      // recursive child executor ctx below (which already forwards args.surface).
-      ...(args.surface !== undefined ? { surface: args.surface } : {}), ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
-    });
+    childManager = buildNestedChildManager(args, signal, currentCwd);
     childParentSession = createStubParentSession(signal) as ChildParentSession;
     const childExecutor = createChildExecutor({
       subagentManager: childManager,
@@ -449,7 +497,7 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
       ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
       // Forward the trace writer + workspace store for the same reason — the
       // child executor's own childManager (depth-3+) needs both. See BuildChildConfigArgs.
-      ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}), ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
+      ...nestedExecutorInherits(args),
       ...(args.delegationBudget !== undefined ? { delegationBudget: args.delegationBudget } : {}),
       // Propagate read-only constraints so depth ≥ 2 forks (this depth-1
       // child calling the `agent` tool) keep the same tool allowlist and
@@ -473,12 +521,14 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
         ? { nestedAgentAllowlist: resolvedAccess.nestedAgentTypes }
         : {}),
       parentModel: childModel,
+      ...(args.parentRootSessionId !== undefined ? { parentRootSessionId: args.parentRootSessionId } : {}),
     });
     const childReadScope = { parentReadRoots: args.childInheritedReadRoots, parentCwd: currentCwd }; // #547
     const childSkillExecutor = args.childSkillExecutorFactory
       ? args.childSkillExecutorFactory(
           depth + 1, maxDepth, signal, currentCwd, childReadScope,
           namedAgent === undefined ? defaultConfig.skillDispatchName : undefined, childParentSession, // Fix A; journal view
+          args.parentRootSessionId, // #2442: root id for the nested skill executor
         )
       : undefined;
     // Pass `model` so the factory routes between AnthropicDirect /

@@ -39,6 +39,7 @@ import { join, dirname, isAbsolute } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
 import { env } from './config/env.js';
+import { isErrnoCode } from './utils/errors.js';
 
 export function getAfkHome(): string {
   const envVal = env.AFK_HOME;
@@ -132,10 +133,6 @@ export function getSkillsDir(): string {
   return join(getAfkHome(), 'skills');
 }
 
-export function getPluginsDir(): string {
-  return join(getAfkHome(), 'plugins');
-}
-
 // ---------------------------------------------------------------------------
 // Project-scope paths (cwd-relative)
 // ---------------------------------------------------------------------------
@@ -162,10 +159,6 @@ export function getProjectSkillsDir(cwd: string = process.cwd()): string {
   return join(getProjectAfkDir(cwd), 'skills');
 }
 
-export function getProjectPluginsDir(cwd: string = process.cwd()): string {
-  return join(getProjectAfkDir(cwd), 'plugins');
-}
-
 /**
  * Project-scoped plans directory: `<cwd>/.afk/plans/`.
  *
@@ -181,38 +174,8 @@ export function getProjectPlansDir(cwd: string = process.cwd()): string {
   return join(cwd, '.afk', 'plans');
 }
 
-export function getPluginsIndexPath(): string {
-  return join(getPluginsDir(), '.index.json');
-}
-
 export function getSchedulesPath(): string {
   return join(getAfkConfigDir(), 'schedules.json');
-}
-
-/**
- * Marketplace cache root. Marketplaces clone into
- * `~/.afk/plugins/cache/<marketplace>/`, matching Claude Code's layout.
- */
-export function getMarketplaceCacheDir(): string {
-  return join(getPluginsDir(), 'cache');
-}
-
-/** Path to a specific marketplace's clone dir. */
-export function getMarketplaceDir(name: string): string {
-  return join(getMarketplaceCacheDir(), name);
-}
-
-/**
- * Bundled plugins shipped inside the compiled dist/ output.
- * Resolved relative to this module's location so it works from both
- * `src/` (dev via tsx) and `dist/` (built output).
- */
-export function getBundledPluginsDir(): string {
-  const thisFile = fileURLToPath(import.meta.url);
-  const thisDir = dirname(thisFile);
-  // In dist/: thisDir = <root>/dist  → bundled-plugins is a sibling
-  // In src/:  thisDir = <root>/src   → bundled-plugins is a sibling
-  return join(thisDir, 'bundled-plugins');
 }
 
 /**
@@ -375,8 +338,42 @@ export {
   getSubagentJournalsDir,
 } from './paths.journal.js';
 
+// Plugin-scope paths — whole concern extracted at the 350-code-line ceiling
+// (same pattern as paths.journal.ts above: paths.ts keeps its public surface).
+export {
+  getPluginsDir,
+  getProjectPluginsDir,
+  getPluginsIndexPath,
+  getPluginDataDir,
+  getMarketplaceCacheDir,
+  getMarketplaceDir,
+  getBundledPluginsDir,
+} from './paths.plugins.js';
+
 export function getDaemonStateDir(instanceId: string = 'default'): string {
   return join(getAfkStateDir(), 'daemon', `agent-afk@${instanceId}`);
+}
+
+/**
+ * Path to the startup sidecar JSON written by a service at launch.
+ *
+ * Each service (`telegram`, `daemon`) writes `<name>.json` here immediately
+ * after it is ready. The sidecar records the running version and PID so that
+ * `afk service status` can surface version-skew warnings without a live
+ * health endpoint. Lives under `state/service-startup/` alongside other
+ * runtime stores.
+ *
+ * Never hand-join paths to this directory — always call this helper.
+ *
+ * The `name` parameter is typed as the `ServiceName` union (`'telegram' | 'daemon'`)
+ * to prevent accidental sidecar paths for unknown service names. The type is
+ * inlined here to avoid a circular dependency with `src/service/types.ts`,
+ * which itself imports from `src/paths.ts`.
+ *
+ * Invariant: must stay in sync with ServiceName in src/service/types.ts.
+ */
+export function getServiceStartupSidecarPath(name: 'telegram' | 'daemon'): string {
+  return join(getAfkStateDir(), 'service-startup', `${name}.json`);
 }
 
 export function getWorktreeSweepLockPath(): string {
@@ -420,6 +417,13 @@ export function getSettingsPath(): string {
 export function getProjectSettingsPath(cwd: string = process.cwd()): string {
   return join(cwd, '.afk', 'settings.json');
 }
+
+/**
+ * Path to a repo's opt-in worktree setup declaration
+ * (`<cwd>/.afk/worktree-setup.json`, #3601). `cwd` is the freshly created
+ * worktree, so the declaration read is the one at the tree's base commit.
+ */
+export const getProjectWorktreeSetupPath = (cwd: string): string => join(getProjectAfkDir(cwd), 'worktree-setup.json');
 
 /**
  * Path to the user-scope AFK.md system-prompt overlay (`$AFK_HOME/AFK.md`).
@@ -478,7 +482,7 @@ function migrateDirOnce(oldPath: string, newPath: string): void {
       // External constraint: renameSync throws EXDEV when src and dst are on
       // different filesystems (cross-device rename). Fall back to copy+remove
       // so the migration succeeds even when AFK_HOME is on a different mount.
-      if ((renameErr as NodeJS.ErrnoException).code === 'EXDEV') {
+      if (isErrnoCode(renameErr, 'EXDEV')) {
         try {
           cpSync(oldPath, newPath, { recursive: true });
           rmSync(oldPath, { recursive: true, force: true });
@@ -574,6 +578,20 @@ export function assertSafeJobId(jobId: string): void {
  */
 export function getBgJobsRoot(): string {
   return join(getAfkStateDir(), 'bg');
+}
+
+/** Root for model-started background process logs (`bash run_in_background`). */
+export function getProcessJobsRoot(): string {
+  return join(getAfkStateDir(), 'proc-jobs');
+}
+
+/**
+ * Per-session log directory for background process jobs.
+ * @throws if `sessionLabel` fails {@link assertSafeJobId}.
+ */
+export function getProcessJobSessionDir(sessionLabel: string): string {
+  assertSafeJobId(sessionLabel);
+  return join(getProcessJobsRoot(), sessionLabel);
 }
 
 /**
@@ -776,29 +794,9 @@ export function getOauthPendingPath(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Wave manifest paths
+// Wave manifest paths — extracted to paths.wave.ts for the 350-line ceiling.
 // ---------------------------------------------------------------------------
-
-/**
- * Root for wave manifests: `~/.afk/state/waves/`.
- *
- * One JSON file per wave (≥2 concurrent dispatches in one turn) lives here.
- * Written by coordinators (SubagentExecutor, ComposeExecutor) before a fan-out
- * starts; cleaned up by the reconciler and witness sweep after TTL expiry.
- */
-export function getWavesDir(): string {
-  return join(getAfkStateDir(), 'waves');
-}
-
-/**
- * Per-manifest file: `~/.afk/state/waves/<waveId>.json`.
- *
- * waveId is a UUID v4, which fits the isSafeLedgerSessionId charset
- * ([A-Za-z0-9_-]), so no extra validation is needed beyond the UUID generator.
- */
-export function getWaveManifestPath(waveId: string): string {
-  return join(getWavesDir(), `${waveId}.json`);
-}
+export { getWavesDir, getWaveManifestPath } from './paths.wave.js';
 
 // ---------------------------------------------------------------------------
 // Effect ledger path
@@ -823,18 +821,12 @@ export function getEffectLedgerPath(): string {
 // What-if state
 // ---------------------------------------------------------------------------
 
-/**
- * Root directory for what-if engine state.
- *
- * Stores the calibration ledger (`ledger.jsonl`) and per-run outputs.
- * Lives at `<getAfkStateDir()>/whatif`.
- */
-export function getWhatifDir(): string {
-  return join(getAfkStateDir(), 'whatif');
-}
+export { getWhatifDir } from './paths.whatif.js';
 
 // ---------------------------------------------------------------------------
 // Peer messaging inbox — extracted to paths.peer.ts for the 350-line ceiling.
 // ---------------------------------------------------------------------------
 export { getPeerInboxRoot, getPeerInboxDir } from './paths.peer.js';
+export { getFileCheckpointsRoot, getFileCheckpointSessionDir, getFileCheckpointTurnDir } from './paths.checkpoint.js';
+export { getArtifactRegistryDir, getArtifactStoreDir, getArtifactIndexPath } from './paths.artifact.js';
 

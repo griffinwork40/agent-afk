@@ -49,8 +49,10 @@ export const DEFAULT_MAX_TOOL_USE_ITERATIONS = 0;
  */
 export const WIND_DOWN_NOTE =
   'You have reached your tool-use budget for this turn. Do not request ' +
-  'any more tools — give your final answer now using only the ' +
-  'information already gathered.';
+  'any more tools. Tools are unavailable. This reply IS the deliverable: ' +
+  'return concrete findings, evidence, completed work, and remaining uncertainty ' +
+  'using only information already gathered. Do not narrate future actions or ' +
+  'promise to write a file. If nothing was established, explicitly say so.';
 
 /**
  * Resolve the effective per-turn tool-round cap from the configured value.
@@ -88,4 +90,16 @@ export function shouldWindDown(completedRounds: number, maxIterations: number): 
  */
 export function formatRoundLabel(round: number, maxIterations: number): string {
   return maxIterations > 0 ? `round ${round}/${maxIterations}` : `round ${round}`;
+}
+
+/** A single advance delivery checkpoint, inspired by PR #2811's round-warning policy.
+ * Small caps still retain one usable tool round for persistence; unlimited turns never warn.
+ */
+export function roundDeliveryNotice(completedRounds: number, budget: number): string | null {
+  if (budget <= 1 || completedRounds !== Math.max(1, budget - 3)) return null;
+  const remaining = budget - completedRounds;
+  const roundWord = remaining === 1 ? 'round remains' : 'rounds remain';
+  return `[Budget notice: ${remaining} tool-use ${roundWord} of ${budget}. ` +
+    'Deliver useful findings now. Persist any requested artifact while tools are still available; ' +
+    'stop expanding scope. Your final reply must contain findings and remaining work, not future actions.]';
 }

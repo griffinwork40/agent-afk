@@ -1,10 +1,13 @@
 /**
  * Archived-prefix bookkeeping for the committed band (content-hug only).
  *
- * Invariant (archived prefix): `committedBandArchivedPrefix` counts the
+ * Invariant: archived prefix: `committedBandArchivedPrefix` counts the
  * LEADING rows of `committedBand` that are already in native scrollback. They
- * stay in the band model so a later frame shrink can re-show them (the screen
- * refills instead of leaving a blank gap below the prompt), but they must never
+ * stay in the band model so a large collapse can refill the screen. The shared
+ * hiddenArchivedRows plan (archived-reveal.ts) keeps them hidden on small shrinks
+ * when the bottom gap is <= max(3, floor(rows/8)). Reveal latches until the next
+ * archive, commit, or resize; threshold oscillation cannot hide them again.
+ * Initial small shrinks may progress to a large collapse and reveal once. They must never
  * reach scrollback a second time. Hence two rules every scrollback-writing site
  * follows:
  *   1. A logical-line archive (scrollbackFlushLines + buildScrollbackArchiveEscape)
@@ -17,7 +20,7 @@
  * reset with the band (clear/forget); decremented by n whenever a band prefix
  * of n rows is removed. Bounded by {@link capArchivedPrefix}.
  *
- * Accepted trade-off: while re-shown archived rows are on screen, tmux
+ * Accepted trade-off: only after a large collapse re-shows archived rows, tmux
  * copy-mode shows them twice at the seam (bottom of history, top of screen).
  * They are never written to scrollback twice. Full account: docs/scrollback.md
  * "Fixed: blank gap below prompt after tall overlay collapses (content-hug)".
@@ -28,7 +31,14 @@ import { eraseAndPaintRow, scrollbackFlushLines } from './terminal-compositor.sc
 import { withAutowrapDisabled } from './terminal-compositor.band-reflow.js';
 import { contentMargin } from './render/measure.js';
 
-/** State slice the archived-prefix helpers read and mutate. */
+/**
+ * State slice the archived-prefix helpers read and mutate.
+ *
+ * @internal — host-protocol interface, not a public API. Exported for type
+ * inference only: sibling modules (frame-preserve.ts, committed-band-commit.ts,
+ * lifecycle.ts) reference it via `Pick<>`/`Omit<>` rather than implementing it
+ * directly. External code must not reference this type.
+ */
 export interface ArchivedPrefixHost {
   committedBand: string[];
   committedBandMeta: BandRowMeta[];
@@ -144,6 +154,13 @@ export function dropScrollingArchivedRows(self: Omit<ArchivedPrefixHost, 'placem
   const bottom = self.committedBandBottomRow;
   const top = self.committedBandTopRow > 0 ? self.committedBandTopRow : bottom - painted + 1;
   if (bottom <= 0 || top <= 0) return 0; // position unknown: cannot repaint safely
+  // Safety note (advisory finding #2871.3): this guard is verified unreachable
+  // today — the only paths that set committedBandArchivedPrefix > 0 also always
+  // set valid (> 0) bottom/top positions. If a future path sets the prefix
+  // without first establishing positions this early return prevents the caller
+  // from performing a raw scroll that would carry the archived rows into history
+  // a second time; it does not drop them from the model (the caller scrolls
+  // fewer rows instead). Keep this guard when adding new prefix-setting paths.
   const lastLeaving = Math.min(top + paintedArchived - 1, scrollRows);
   const d = Math.max(0, Math.min(paintedArchived, lastLeaving - top + 1));
   if (d === 0) return 0;

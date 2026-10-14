@@ -1,0 +1,275 @@
+#!/usr/bin/env node
+/**
+ * install-pre-push-hook.mjs — Install a pre-push launcher into the git repo's
+ * common hooks directory so it covers all worktrees.
+ *
+ * Invoked by the package.json `prepare` lifecycle hook (runs on `pnpm install`).
+ * Must never fail `pnpm install` — catches everything and exits 0 on error.
+ *
+ * Contract:
+ *  - Skips when CI env var is set (any truthy value).
+ *  - Skips when not inside a git work tree.
+ *  - Skips when core.hooksPath is configured; custom hook routing is left alone.
+ *  - Never overwrites an existing pre-push hook that lacks our marker.
+ *  - Idempotent: re-running updates the launcher content but only when our
+ *    marker is present (i.e. we own the file).
+ *  - Sets chmod +x on the written file.
+ *  - Does NOT set core.hooksPath.
+ *  - Safe when run by `npm publish` / `npm pack` (CI skip + no git tree).
+ *
+ * The installer writes to the git COMMON dir so it is shared across all
+ * worktrees. The launcher itself resolves the CURRENT worktree's toplevel at
+ * run time and delegates to scripts/git-hooks/pre-push from that tree — so
+ * branches/worktrees without the script are unaffected (the launcher exits 0).
+ *
+ * NOTE: this file is intentionally absent from the `files` array in package.json.
+ * It is a contributor-only tool and must NOT ship on the npm registry.  It runs
+ * during `prepare` (which npm always executes locally), but when it is invoked as
+ * a dependency the `installerBelongsToTopLevel` guard silently skips the install.
+ * The `|| true` on the prepare script ensures any unexpected error never breaks a
+ * consumer's `npm install`.  ENOENT from the registry install is therefore benign
+ * and intentional.
+ */
+
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join, normalize, relative, resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+// ── Marker embedded in the launcher ──────────────────────────────────────────
+// The installer checks for this string before overwriting.
+const MARKER = '# installed-by: agent-afk/install-pre-push-hook';
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Run a git command and return stdout trimmed. Throws on failure.
+ * @param {string[]} args
+ * @returns {string}
+ */
+function git(args) {
+  return execFileSync('git', args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim();
+}
+
+/**
+ * Determine whether we are inside a git work tree.
+ * @returns {boolean}
+ */
+function insideGitWorkTree() {
+  try {
+    return git(['rev-parse', '--is-inside-work-tree']) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Return the git common dir (shared across all worktrees).
+ * @returns {string}
+ */
+function gitCommonDir() {
+  return git(['rev-parse', '--git-common-dir']);
+}
+
+/** @returns {string} */
+function gitTopLevel() {
+  return git(['rev-parse', '--show-toplevel']);
+}
+
+/** @returns {string} */
+function configuredHooksPath() {
+  try {
+    return git(['config', '--get', 'core.hooksPath']);
+  } catch (err) {
+    // `git config --get` exits 1 when the key is not set (normal / expected).
+    // Any other status (e.g. 128 for "not a git repo") is an unexpected git
+    // failure — propagate it so the caller can decide.
+    if (err && typeof err === 'object' && 'status' in err && err.status !== 1) {
+      throw err;
+    }
+    return '';
+  }
+}
+
+/**
+ * Canonicalise a path for string comparison.
+ *
+ * Contract: uses `realpathSync.native` (GetFinalPathNameByHandle on Windows),
+ * NOT the JS `realpathSync`. The JS implementation only walks symlinks and
+ * leaves 8.3 short names untouched, so `C:\Users\RUNNER~1\...` (from
+ * os.tmpdir / import.meta.url) never matched git's long-form
+ * `C:/Users/runneradmin/...` and every Windows install was refused as
+ * "nested". The native call expands short names and fixes case; we still
+ * lower-case on win32 because NTFS is case-insensitive and drive letters vary.
+ * @param {string} p
+ * @returns {string}
+ */
+function canonicalPath(p) {
+  const native = resolve(p);
+  let real = native;
+  try {
+    real = realpathSync.native(native);
+  } catch {
+    try {
+      real = realpathSync(native);
+    } catch {
+      // Keep the resolved path; comparison degrades to lexical.
+    }
+  }
+  const out = normalize(real);
+  return process.platform === 'win32' ? out.toLowerCase() : out;
+}
+
+/**
+ * Identity of a directory as dev+ino (bigint, so 64-bit NTFS file ids do not
+ * lose precision). Returns undefined when unavailable or zero.
+ * @param {string} p
+ * @returns {string | undefined}
+ */
+function dirIdentity(p) {
+  try {
+    const st = statSync(p, { bigint: true });
+    if (st.ino === 0n) return undefined;
+    return `${st.dev}:${st.ino}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * True when `a` and `b` name the same directory. Filesystem identity
+ * (dev+ino) is authoritative and immune to separator, case, short-name, and
+ * symlink differences; canonical path comparison is the fallback when stat
+ * cannot provide an identity.
+ * @param {string} a
+ * @param {string} b
+ * @returns {boolean}
+ */
+function sameDirectory(a, b) {
+  const ia = dirIdentity(a);
+  const ib = dirIdentity(b);
+  if (ia !== undefined && ib !== undefined) return ia === ib;
+  return relative(canonicalPath(a), canonicalPath(b)) === '';
+}
+
+/**
+ * True only when this installer is running from the checkout it is about to
+ * modify. This prevents a nested consumer package or copied script from writing
+ * hooks into an ancestor repository that does not own this package.
+ * @param {string} dir
+ */
+function installerBelongsToTopLevel(dir) {
+  const scriptDir = dirname(fileURLToPath(import.meta.url));
+  const packageRoot = dirname(scriptDir);
+  return sameDirectory(packageRoot, dir);
+}
+
+// ── Launcher content ──────────────────────────────────────────────────────────
+
+/**
+ * Build the launcher shell script content.
+ * @returns {string}
+ */
+function launcherContent() {
+  return [
+    '#!/bin/sh',
+    MARKER,
+    '# This launcher delegates to scripts/git-hooks/pre-push in the CURRENT',
+    '# worktree. Branches or worktrees that lack that file are unaffected.',
+    '#',
+    '# To bypass: git push --no-verify',
+    '',
+    'toplevel=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0',
+    'hook="$toplevel/scripts/git-hooks/pre-push"',
+    'if [ -f "$hook" ]; then',
+    '  exec sh "$hook" "$@"',
+    'fi',
+    'exit 0',
+    '',
+  ].join('\n');
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
+function main() {
+  // Skip in CI.
+  if (process.env['CI']) {
+    return;
+  }
+
+  // Skip when not in a git work tree (e.g. npm pack / npm publish outside git).
+  if (!insideGitWorkTree()) {
+    return;
+  }
+
+  let commonDir;
+  let topLevel;
+  try {
+    commonDir = gitCommonDir();
+    topLevel = gitTopLevel();
+  } catch {
+    // Cannot determine git dirs — skip silently.
+    return;
+  }
+
+  if (!installerBelongsToTopLevel(topLevel)) {
+    // This script is running from inside node_modules (e.g. when a downstream
+    // project runs `npm install agent-afk`).  The `prepare` lifecycle hook
+    // fires in that case too, but we must never write into a consumer's git
+    // hooks directory — so we intentionally skip and log a note.  This is
+    // expected behaviour: the pre-push hook is only installed for contributors
+    // working directly inside the agent-afk repository itself.
+    console.warn('[agent-afk] install-pre-push-hook: running as a dependency (not the agent-afk source repo); skipping pre-push hook install');
+    return;
+  }
+
+  const hooksPath = configuredHooksPath();
+  if (hooksPath) {
+    console.warn(`[agent-afk] core.hooksPath is configured (${hooksPath}); skipping pre-push hook install`);
+    return;
+  }
+
+  // Contract: commonDir from `git rev-parse --git-common-dir` may be a relative
+  // path (e.g. `.git` or `../../.git`) — it is relative to process.cwd(), NOT to
+  // topLevel. Resolve it against process.cwd() so that subdirectory invocations
+  // (e.g. from packages/app/ in a monorepo) point to the correct hooks directory.
+  const hooksDir = join(resolve(commonDir), 'hooks');
+  const hookPath = join(hooksDir, 'pre-push');
+  const content = launcherContent();
+
+  // Ensure hooks directory exists.
+  if (!existsSync(hooksDir)) {
+    mkdirSync(hooksDir, { recursive: true });
+  }
+
+  if (existsSync(hookPath)) {
+    const existing = readFileSync(hookPath, 'utf8');
+    if (!existing.includes(MARKER)) {
+      // Foreign hook — warn and leave it alone.
+      console.warn(
+        `[agent-afk] pre-push hook already exists at ${hookPath} without our marker.\n` +
+          '  Not overwriting. To install the agent-afk launcher, back up the existing hook\n' +
+          '  and re-run: node scripts/install-pre-push-hook.mjs',
+      );
+      return;
+    }
+    // Our hook — check if content changed.
+    if (existing === content) {
+      return; // Already up-to-date; idempotent.
+    }
+  }
+
+  writeFileSync(hookPath, content, 'utf8');
+  chmodSync(hookPath, 0o755);
+  console.log(`[agent-afk] installed pre-push launcher → ${hookPath}`);
+}
+
+try {
+  main();
+} catch (err) {
+  // Never fail pnpm install.
+  console.warn('[agent-afk] install-pre-push-hook: non-fatal error during install:', err?.message ?? err);
+}

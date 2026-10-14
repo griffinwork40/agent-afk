@@ -50,6 +50,7 @@ import * as Lifecycle from './terminal-compositor.lifecycle.js';
 import * as Reset from './terminal-compositor.reset.js';
 import * as QueuedAccess from './terminal-compositor.queued-access.js';
 import * as Api from './terminal-compositor.api.js';
+import * as ModeNotice from './terminal-compositor.mode-notice.js';
 import type { BandReflowCache } from './terminal-compositor.band-reflow.js';
 
 // Re-export public types so existing importers of './terminal-compositor.js'
@@ -269,6 +270,12 @@ export class TerminalCompositor {
    * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
    */
   clipboardFailureMsg: string | null = null;
+  /**
+   * Transient Shift+Tab permission-mode notice, rendered in the live frame
+   * instead of scrollback; see terminal-compositor.mode-notice.ts.
+   * @internal Relaxed from `private` for the frame/input-dispatch/reset modules.
+   */
+  modeNotice: string | null = null;
   /**
    * Input mode — see {@link CompositorInputMode}. Default `'streaming'`
    * matches the historical single-mode behavior all existing callers
@@ -570,7 +577,30 @@ export class TerminalCompositor {
   /** @internal Relaxed from `private` for the frame module (FrameHost). */
   lastKnownRows = 0;
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
-  pendingResizeErase: { top: number; bottom: number } | null = null;
+  pendingResizeErase: { top: number; bottom: number; origin?: 'width-only' | 'expand' } | null = null;
+  /**
+   * True while a CPR (Cursor Position Report, ESC[6n) reply is in-flight
+   * after a tmux EXPAND SIGWINCH. Frame.repaint() skips the physical write
+   * while this flag is set so the stale-row repaint cannot race the delta
+   * correction applied once the CPR reply arrives.
+   * @internal Relaxed from `private` for the lifecycle module (LifecycleHost).
+   */
+  cprPending = false;
+  /**
+   * Burst-tracking context for the "measure until quiescent" CPR algorithm.
+   * Created when the first CPR of a burst is requested; cleared once the burst
+   * resolves (quiescent reply, re-query cap, or timeout). See CprHost.cprBurst.
+   * @internal Relaxed from `private` for the lifecycle module (LifecycleHost).
+   */
+  cprBurst: {
+    dirty: boolean;
+    originalExpectedRow: number;
+    currentRows: number;
+    growTotal: number;
+    shrinkTotal: number;
+    requeryCt: number;
+    widthOnlyOrigin: boolean;
+  } | null = null;
   // Invariant (F2 — fail-safe commit mode on stale geometry): set by the
   // SIGWINCH-immediate handler alongside logUpdate.resetGeometry() and cleared
   // only once the debounced post-resize repaint has re-established real
@@ -585,6 +615,15 @@ export class TerminalCompositor {
   // that never scrolled (DEFECT 2). See commitAbove's prevTopRow site.
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   bandGeometryStale = false;
+  /**
+   * Resize-specific geometry-stale flag — set ONLY by the SIGWINCH handler
+   * (`handleResizeImmediate`, `handleDisarmWindowResize`), never by
+   * `resumeInput()`.  Used by `preserveRowsBeforeFrameRender` to suppress
+   * the legacy deficit-eviction path while a resize burst is in flight (#3212).
+   * Cleared by `repositionCommittedBand` in parallel with `bandGeometryStale`.
+   * @internal
+   */
+  resizeGeometryStale = false;
   // Stale-guard for endTurnFlush (lifecycle.ts): set true when a commit
   // lands (committed-band-commit.ts, alongside hasCommitted); cleared by
   // clearCommittedBand(). Prevents redundant lifecycle redraws when the
@@ -1144,6 +1183,12 @@ export class TerminalCompositor {
    * @internal Relaxed from `private` for the frame module (FrameHost).
    */
   renderHintRow(): string | null { return Api.renderHintRow(this); }
+
+  /**
+   * Show/replace (or clear, with `null`) the transient mode notice row.
+   * Returns false when disarmed so the caller can fall back to scrollback.
+   */
+  setModeNotice(text: string | null): boolean { return ModeNotice.setModeNotice(this, text); }
 
   /** @internal Public for sibling free-function modules (via Host interfaces) and test casts. */
   repaint(): void {

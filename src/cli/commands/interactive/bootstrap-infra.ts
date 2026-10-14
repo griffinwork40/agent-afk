@@ -14,6 +14,7 @@ import type { SubagentManager } from '../../../agent/subagent.js';
 import { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
 import { DetachableToolRegistry } from '../../../agent/tools/detach-registry.js';
+import { ProcessJobRegistry } from '../../../agent/shell-jobs/process-jobs.js';
 import { setBgsubRegistry, setBgsubSummarizer } from '../../slash/commands/bgsub.js';
 import { setTasksRegistry } from '../../slash/commands/tasks.js';
 import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
@@ -22,6 +23,8 @@ import { randomUUID } from 'node:crypto';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
 import type { CliOptions } from './shared.js';
 import { recordBootWarning } from './boot-warning-recorder.js';
+import { isAutoDeliverEnabled, replCanAutoWake } from './bg-result-notifier.js';
+import { env } from '../../../config/env.js';
 
 /** Wired infra bundle returned by {@link createBootstrapInfra}. */
 export interface BootstrapInfra {
@@ -34,6 +37,11 @@ export interface BootstrapInfra {
    * Ctrl+B handler and the per-query dispatcher can share the same instance.
    */
   detachRegistry: DetachableToolRegistry;
+  /**
+   * Model-started background processes (`bash run_in_background`). Root REPL
+   * only; the teardown path calls `killAll()`.
+   */
+  processJobs: ProcessJobRegistry;
   bgSummarizer: BackgroundSummarizer | undefined;
   rootManager: SubagentManager;
   subagentExecutor: SubagentExecutor;
@@ -68,6 +76,8 @@ export function createBootstrapInfra(a: {
   cliConfig: CliConfig;
   sessionModel: string;
   basePrompt: string | undefined;
+  /** Bare operator overlay (no framework); reaches unnamed `agent` children (#3324). */
+  operatorOverlay?: string | undefined;
   effectiveCwd: string | undefined;
   resumeTarget: ResolvedResumeTarget | undefined;
   bootWarnings: string[];
@@ -116,6 +126,10 @@ export function createBootstrapInfra(a: {
   // handler and every per-query dispatcher can share the same instance.
   // cancelAll() is called by the interactive teardown path (Invariant:D3).
   const detachRegistry = new DetachableToolRegistry();
+  // Background process registry for `bash run_in_background`. Same lifetime
+  // as the detach registry: shared with every per-query dispatcher of this
+  // root session, stopped by the interactive teardown path.
+  const processJobs = new ProcessJobRegistry(trace ? { traceWriter: trace.writer } : {});
 
   // Opt-in background summarizer — only constructed when bgSummaries: true.
   const bgSummariesEnabled = a.cliConfig.bgSummaries === true;
@@ -124,6 +138,7 @@ export function createBootstrapInfra(a: {
         registry: backgroundRegistry,
         apiKey,
         maxCallsPerSession: a.cliConfig.maxSummaryCallsPerSession ?? 200,
+        ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
       })
     : undefined;
   bgSummarizer?.start();
@@ -175,6 +190,7 @@ export function createBootstrapInfra(a: {
     // Raw base prompt (pre-assembly): children and compose nodes stay task
     // workers, without ROUTING_DIRECTIVE / TOOL_SYSTEM_PROMPT.
     ...(a.basePrompt !== undefined ? { systemPrompt: a.basePrompt } : {}),
+    ...(a.operatorOverlay !== undefined ? { operatorOverlay: a.operatorOverlay } : {}),
     ...(a.cliConfig.baseUrl !== undefined ? { baseUrl: a.cliConfig.baseUrl } : {}),
     ...(a.cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: a.cliConfig.openaiBaseUrl } : {}),
     // Worktree cwd (`afk i --worktree`, or a resumed session's restored cwd)
@@ -187,6 +203,14 @@ export function createBootstrapInfra(a: {
     // Background dispatch (`agent` with mode:"background") is REPL-only; the
     // registry must reach every depth of the skill/agent fork chain.
     backgroundRegistry,
+    // Idle-prompt auto-wake on bg results exists only on the TTY REPL path;
+    // the probe keeps the agent tool's delivery note truthful
+    // (agent/tools/subagent/background-delivery.ts).
+    backgroundAutoWake: replCanAutoWake,
+    // Delivery-enabled probe: false when AFK_BG_AUTO_DELIVER=0. When false,
+    // resolveBackgroundDelivery returns 'manual-join' so the model is not
+    // promised automatic delivery that the disabled notifier will never perform.
+    backgroundAutoDeliver: () => isAutoDeliverEnabled(env.AFK_BG_AUTO_DELIVER),
     // `warn` routes into bootWarnings rather than stderr: the built-in-shadow
     // warning is a safety signal and the startup screen clear eats stderr.
     // Also emits a durable `boot_warning` trace event via the shared
@@ -215,6 +239,7 @@ export function createBootstrapInfra(a: {
     apiKey,
     backgroundRegistry,
     detachRegistry,
+    processJobs,
     bgSummarizer,
     rootManager,
     subagentExecutor,

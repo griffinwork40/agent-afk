@@ -25,10 +25,14 @@
 
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
-import * as readline from 'node:readline';
 import { getBgJobsRoot, getBgJobDir, getBgJobLog, getBgJobMeta, getBgJobResult } from '../paths.js';
+import { readJsonlFile, IncrementalLineReader } from '../utils/jsonl.js';
 import { atomicWriteFileAsync } from '../utils/atomic-write.js';
+import { persistReconciled, reconcileOrphanedMeta } from './bg-job-log.orphan.js';
 import type { OutputEvent } from './types/session-types.js';
+import { isErrnoCode } from '../utils/errors.js';
+
+export { reconcileOrphanedMeta };
 
 // ---------------------------------------------------------------------------
 // Public schema
@@ -52,8 +56,30 @@ export interface BgJobMeta {
    * `isIncompleteStopReason` / `annotateIfIncomplete` partial-result labeling
    * the in-memory replay applies. Optional and additive: old logs written
    * before this field existed simply lack it (schemaVersion stays 1).
+   *
+   * Synthetic sentinel values (not emitted by the subagent runtime):
+   * - `'owner-process-exited'` — set by `reconcileOrphanedMeta` when the job
+   *   was still `running` on disk but its owner PID has since died. The job
+   *   was never explicitly stopped; this value signals post-hoc detection.
    */
   stopReason?: string;
+  /**
+   * PID of the process that created this job. Written at registration time so
+   * that if the owner crashes or is killed, readers can detect the orphan and
+   * promote it from `running` to `failed` with `reason: 'owner-process-exited'`
+   * instead of leaving it stuck in `running` forever. Optional and additive —
+   * old meta.json files that predate this field are treated as if the owner is
+   * alive (no promotion), preserving backward compatibility.
+   */
+  ownerPid?: number;
+  /**
+   * Epoch ms at which the owner process started, captured at registration time
+   * via `ownProcessStartedAt()`. Complements `ownerPid` for future pid-reuse
+   * detection: if a new process inherits the recorded pid, its start time will
+   * differ from this value. Optional and additive — old meta.json files that
+   * predate this field simply lack it.
+   */
+  ownerStartTime?: number;
   schemaVersion: 1;
 }
 
@@ -316,9 +342,13 @@ export class BgJobLogReader {
       const parsed = JSON.parse(raw) as BgJobMeta;
       // Reject files with an unexpected schema version (stale v0, future v2, etc.)
       if (parsed.schemaVersion !== 1) return null;
-      return parsed;
+      // Lazily promote orphaned running entries whose owner PID has died or
+      // whose pid has been recycled by a different process.
+      const reconciled = await reconcileOrphanedMeta(parsed);
+      if (reconciled !== parsed) persistReconciled(metaPath, reconciled);
+      return reconciled;
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      if (isErrnoCode(e, 'ENOENT')) return null;
       // Corrupted meta — log and return null
       process.stderr.write(`[afk] bg-job-log: readMeta parse error for ${jobId}: ${String(e)}\n`);
       return null;
@@ -347,7 +377,7 @@ export class BgJobLogReader {
       if (typeof parsed.outputText !== 'string') return null;
       return parsed;
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      if (isErrnoCode(e, 'ENOENT')) return null;
       process.stderr.write(`[afk] bg-job-log: readResult parse error for ${jobId}: ${String(e)}\n`);
       return null;
     }
@@ -359,30 +389,7 @@ export class BgJobLogReader {
    */
   static async *readEvents(jobId: string): AsyncGenerator<OutputEvent> {
     const logPath = getBgJobLog(jobId);
-    let fd: fs.promises.FileHandle;
-    try {
-      fd = await fsp.open(logPath, 'r');
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
-      throw e;
-    }
-    try {
-      const rl = readline.createInterface({
-        input: fd.createReadStream({ encoding: 'utf8' }),
-        crlfDelay: Infinity,
-      });
-      for await (const line of rl) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        try {
-          yield JSON.parse(trimmed) as OutputEvent;
-        } catch {
-          // Skip malformed lines
-        }
-      }
-    } finally {
-      await fd.close();
-    }
+    yield* readJsonlFile<OutputEvent>(logPath);
   }
 
   /**
@@ -409,14 +416,14 @@ export class BgJobLogReader {
     }
 
     let fileOffset = 0;
-    let buffer = '';
+    const lineReader = new IncrementalLineReader();
     let watcher: fs.FSWatcher | null = null;
 
     const POLL_INTERVAL_MS = 250;
 
     // Helper: read new bytes from the file starting at fileOffset
     async function* readNewLines(): AsyncGenerator<OutputEvent> {
-      let fd: fs.promises.FileHandle | null = null;
+      let fd: fsp.FileHandle | null = null;
       try {
         fd = await fsp.open(logPath, 'r');
         const stat = await fd.stat();
@@ -426,11 +433,7 @@ export class BgJobLogReader {
         const { bytesRead } = await fd.read(readBuf, 0, toRead, fileOffset);
         if (bytesRead === 0) return;
         fileOffset += bytesRead;
-        buffer += readBuf.toString('utf8', 0, bytesRead);
-        const lines = buffer.split('\n');
-        // Keep the last incomplete fragment in the buffer
-        buffer = lines.pop() ?? '';
-        for (const line of lines) {
+        for (const line of lineReader.feed(readBuf.toString('utf8', 0, bytesRead))) {
           const trimmed = line.trim();
           if (!trimmed) continue;
           try {
@@ -440,7 +443,7 @@ export class BgJobLogReader {
           }
         }
       } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+        if (!isErrnoCode(e, 'ENOENT')) {
           process.stderr.write(`[afk] bg-job-log: tailEvents read error for ${jobId}: ${String(e)}\n`);
         }
       } finally {

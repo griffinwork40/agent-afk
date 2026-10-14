@@ -25,6 +25,9 @@ import { registerWorktreeRoot } from '../../worktree/worktree-root-registry.js';
 import { probeNonRebuildableIgnoredFiles } from '../../worktree/worktree-ignored-probe.js';
 import { env } from '../../../config/env.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { debugLog } from '../../../utils/debug.js';
+import { sleep } from '../../../utils/sleep.js';
+import { runWorktreeSetup, type SetupCommandRunner, type WorktreeSetupResult } from '../../worktree/worktree-setup.js';
 
 /** Default git runner. Exported so callers without their own can reuse it. */
 export const defaultExecFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
@@ -72,6 +75,14 @@ export function sanitizeSlug(name: string): string {
  * All calls are local ref reads — no fetch. The returned value is a short
  * tracking-ref name (e.g. `"origin/main"`), not a SHA — callers resolve it.
  *
+ * **Limitations (acceptable for current use-cases):**
+ * - Only the `origin` remote is probed; repos with a differently-named upstream
+ *   (e.g. `upstream`, `github`) will return `undefined` even when a default branch
+ *   is otherwise discoverable.
+ * - The conventional-name fallback only checks `origin/main` and `origin/master`;
+ *   other default-branch names (e.g. `origin/trunk`, `origin/develop`) are not
+ *   tried and will also yield `undefined`.
+ *
  * Exported only for testing.
  * @internal
  */
@@ -85,7 +96,9 @@ export async function detectRemoteDefaultRef(
     ]);
     const ref = stdout.trim();
     if (ref.length > 0) return ref; // e.g. "origin/main"
-  } catch { /* origin/HEAD not set — try conventional names */ }
+  } catch (err) {
+    debugLog('[worktree-managed] detectRemoteDefaultRef: refs/remotes/origin/HEAD not set, trying conventional names:', errorMessage(err));
+  }
 
   for (const candidate of ['origin/main', 'origin/master']) {
     try {
@@ -160,6 +173,10 @@ export interface CreateManagedWorktreeArgs {
   baseRef: string;
   /** Meta `owner` tag. Default `'agent'`. */
   owner?: string;
+  /** Session abort signal; cancels a running repo-declared setup (#3601). */
+  signal?: AbortSignal;
+  /** Injectable setup command runner (tests). */
+  setupRunner?: SetupCommandRunner;
 }
 
 export interface ManagedWorktreeInfo {
@@ -168,6 +185,12 @@ export interface ManagedWorktreeInfo {
   baseRef: string;
   /** Resolved SHA of `baseRef` at creation ('' if rev-parse failed). */
   baseSha: string;
+  /**
+   * Outcome of the repo-declared `.afk/worktree-setup.json` (#3601). Absent
+   * when the repo declares nothing, so undeclared repos see the exact
+   * pre-#3601 shape.
+   */
+  setup?: WorktreeSetupResult;
 }
 
 /**
@@ -176,6 +199,7 @@ export interface ManagedWorktreeInfo {
  * Emits `git worktree add -b <branch> <path> <baseRef>`, then best-effort
  * `rev-parse <baseRef>` (for `baseSha`) and the meta write — neither of which
  * fails the create (mirrors the pre-extraction handler behavior exactly).
+ * Finally runs the repo's opt-in setup declaration, if any (#3601).
  */
 export async function createManagedWorktree(
   args: CreateManagedWorktreeArgs,
@@ -218,7 +242,16 @@ export async function createManagedWorktree(
       'utf-8',
     );
   } catch { /* best-effort */ }
-  return { path: worktreePath, branch, baseRef, baseSha };
+  // Invariant (#3601): setup runs only AFTER the meta write, so the sweep
+  // never sees a meta-less tree mid-setup, and runWorktreeSetup never throws,
+  // so a setup failure can never reach createIsolatedWorktree's
+  // LOCK_CONTENTION retry and re-run `git worktree add` on a live branch.
+  const setup = await runWorktreeSetup({
+    worktreePath,
+    ...(args.signal !== undefined ? { signal: args.signal } : {}),
+    ...(args.setupRunner !== undefined ? { runCommand: args.setupRunner } : {}),
+  });
+  return { path: worktreePath, branch, baseRef, baseSha, ...(setup.status !== 'none' ? { setup } : {}) };
 }
 
 /** True when the worktree has uncommitted changes (unreadable → dirty). */
@@ -335,6 +368,10 @@ export async function createIsolatedWorktree(args: {
   slugHint: string;
   /** Base ref for the branch. Default: HEAD of `cwd`'s checkout (#760). */
   baseRef?: string;
+  /** Abort signal forwarded to the repo-declared setup (#3601). */
+  signal?: AbortSignal;
+  /** Injectable setup command runner (tests). */
+  setupRunner?: SetupCommandRunner;
 }): Promise<ManagedWorktreeInfo & { repoRoot: string }> {
   const execFile = args.execFile ?? defaultExecFile;
   const ctx = await resolveRepoContext(execFile, args.cwd); // throws if non-git
@@ -362,6 +399,8 @@ export async function createIsolatedWorktree(args: {
       worktreePath,
       branch,
       baseRef,
+      ...(args.signal !== undefined ? { signal: args.signal } : {}),
+      ...(args.setupRunner !== undefined ? { setupRunner: args.setupRunner } : {}),
     });
   let info: ManagedWorktreeInfo;
   try {
@@ -369,7 +408,7 @@ export async function createIsolatedWorktree(args: {
   } catch (err) {
     const message = errorMessage(err);
     if (!LOCK_CONTENTION.test(message)) throw err; // non-lock → propagate, no retry
-    await new Promise((r) => setTimeout(r, 100)); // brief backoff, then retry once
+    await sleep(100); // brief backoff, then retry once
     info = await create();
   }
   return { repoRoot: ctx.repoRoot, ...info };

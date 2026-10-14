@@ -800,7 +800,10 @@ describe('combine', () => {
     expect(result.label).toBe('succeeded');
   });
 
-  it('rule 5: conflicting strong votes → unknown', () => {
+  it('v2 rule 3: strong -1 with no later strong +1 → failed (v2 changed behavior from v1 unknown)', () => {
+    // In combiner v1, conflicting strong votes → unknown.
+    // In combiner v2, a major/critical negative not outweighed by a LATER positive → failed.
+    // This test uses simultaneous votes (same observed_at), so the +1 is not later than -1.
     const result = combine({
       votes: [
         makeVote('pr_fate', 1, 'strong'),
@@ -809,7 +812,7 @@ describe('combine', () => {
       selfReport: 'none',
       artifacts: emptyArtifacts,
     });
-    expect(result.label).toBe('unknown');
+    expect(result.label).toBe('failed');
   });
 
   it('rule 5: no votes → unknown', () => {

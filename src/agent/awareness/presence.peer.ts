@@ -12,12 +12,9 @@
  * @module agent/awareness/presence.peer
  */
 
-import { execFile as _execFile } from 'child_process';
-import { promisify } from 'util';
+import { execFileAsync as execFile } from '../../utils/exec-file.js';
 import { env } from '../../config/env.js';
 import { patchPresenceFile } from './presence.js';
-
-const execFile = promisify(_execFile);
 
 /** Longest accepted session name; longer input is truncated. */
 export const PRESENCE_NAME_MAX = 64;

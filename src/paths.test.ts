@@ -39,6 +39,8 @@ import {
   getTraceDir,
   sessionLabelFromTracePath,
   getWhatifDir,
+  getPluginDataDir,
+  getPluginsDir,
 } from './paths.js';
 import { useUnsetAfkHome } from './__test-utils__/unset-afk-home.js';
 
@@ -401,6 +403,36 @@ describe('sessionLabelFromTracePath — inverse of getTraceDir', () => {
 // ---------------------------------------------------------------------------
 // getWhatifDir
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// getPluginDataDir — traversal guard
+// ---------------------------------------------------------------------------
+
+describe('getPluginDataDir', () => {
+  it('returns a path outside the installed plugins dir for a normal key', () => {
+    const dir = getPluginDataDir('my-plugin');
+    expect(dir).toBe(join(getAfkHome(), 'plugin-data', 'p-my-plugin'));
+    expect(dir.startsWith(`${getPluginsDir()}${sep}`)).toBe(false);
+  });
+
+  it('percent-encodes filesystem-unsafe characters', () => {
+    const dir = getPluginDataDir('marketplace:my-plugin');
+    expect(dir).toBe(join(getAfkHome(), 'plugin-data', 'p-marketplace%3Amy-plugin'));
+  });
+
+  it('keeps formerly colliding keys distinct', () => {
+    expect(getPluginDataDir('foo:bar')).not.toBe(getPluginDataDir('foo__bar'));
+  });
+
+  it.each([
+    ['bare dot-dot', '..'],
+    ['bare dot', '.'],
+    ['empty string', ''],
+    ['slashes', '///'],
+  ])('encodes %s under the plugin data root', (_label, key) => {
+    expect(getPluginDataDir(key)).toBe(join(getAfkHome(), 'plugin-data', `p-${encodeURIComponent(key)}`));
+  });
+});
 
 describe('getWhatifDir', () => {
   afterEach(() => {

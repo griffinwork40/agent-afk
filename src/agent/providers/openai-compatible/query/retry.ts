@@ -178,9 +178,11 @@ const OVERLOAD_TYPES = new Set(['service_unavailable_error', 'overloaded_error']
  * excluding unrelated messages where an unrelated subsystem is overloaded
  * (e.g. "Model context window is overloaded", "worker pool overloaded").
  * The lookahead/lookbehind window is intentionally wide (40 chars) to stay
- * robust across provider-specific phrasing variations.
+ * robust across provider-specific phrasing variations. The `\b` around
+ * "overloaded" ensures the match does not fire when "overloaded" appears as
+ * a suffix in a compound word (e.g. "server requestoverloaded") — see #2860.
  */
-const OVERLOAD_MESSAGE_RE = /server.{0,40}overloaded|overloaded.{0,40}server/i;
+const OVERLOAD_MESSAGE_RE = /server.{0,40}\boverloaded\b|\boverloaded\b.{0,40}server/i;
 
 /**
  * True when a `{ code?, type?, message? }` record carries an overload marker.

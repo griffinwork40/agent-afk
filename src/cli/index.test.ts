@@ -38,6 +38,7 @@ vi.mock('commander', () => {
     self['option'] = chain;
     self['alias'] = chain;
     self['action'] = chain;
+    self['hook'] = chain;
     self['argument'] = chain;
     self['addHelpText'] = chain;
     self['parseAsync'] = vi.fn().mockResolvedValue(undefined);

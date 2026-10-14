@@ -14,9 +14,10 @@
  * touching $AFK_HOME.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'fs';
-import { basename, dirname, join, resolve } from 'path';
-import { getFacetCacheDir, getSessionJournalPath, getSessionsDir, getSubagentJournalPath, validateSessionId } from '../../paths.js';
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { basename, join, resolve } from 'path';
+import { writeJsonFile, readJsonFileLoose } from '../../utils/json-file.js';
+import { getFacetCacheDir, getSessionJournalPath, getSessionLedgerPath, getSessionsDir, getSubagentJournalPath, getTraceDir, isSafeLedgerSessionId, validateSessionId } from '../../paths.js';
 import { journalExists, listSubagentJournals, readJournalRecords } from '../journal/reader.js';
 import { isMessageJournalDisabled } from '../journal/noop.js';
 import { journalRecordsToToolEvents, summarizeSubagentJournal } from './journal-adapter.js';
@@ -30,6 +31,7 @@ import {
   type SubagentToolSummary,
   type ToolEventInput,
 } from './schema.js';
+import { parseTraceSignals, type TraceSignals } from './derive.trace.js';
 
 export interface FacetStoreOptions {
   /** Override the session sidecar directory (default: getSessionsDir()). */
@@ -56,35 +58,31 @@ export function loadStoredSession(
   sessionsDir: string = getSessionsDir(),
 ): StoredSessionInput | undefined {
   const path = sessionPathFor(sessionId, sessionsDir);
-  if (!existsSync(path)) return undefined;
-  try {
-    const raw: unknown = JSON.parse(readFileSync(path, 'utf8'));
-    const parsed = StoredSessionInputSchema.safeParse(raw);
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
+  // readJsonFileLoose: ENOENT and parse errors both yield undefined. Unexpected
+  // I/O errors (EACCES, EISDIR) re-throw — a permission problem on the sessions
+  // dir should surface rather than silently treating every session as missing.
+  // Zod schema validation still runs below to reject structurally invalid sidecars.
+  const raw = readJsonFileLoose<unknown>(path);
+  if (raw == null) return undefined;
+  const parsed = StoredSessionInputSchema.safeParse(raw);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function readCachedFacet(cachePath: string): SessionFacet | undefined {
-  if (!existsSync(cachePath)) return undefined;
-  try {
-    const raw: unknown = JSON.parse(readFileSync(cachePath, 'utf8'));
-    const parsed = SessionFacetSchema.safeParse(raw);
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
+  // readJsonFileLoose: ENOENT and parse errors return undefined (cache miss →
+  // re-derive). Unexpected I/O errors re-throw. Zod validates the schema.
+  const raw = readJsonFileLoose<unknown>(cachePath);
+  if (raw == null) return undefined;
+  const parsed = SessionFacetSchema.safeParse(raw);
+  return parsed.success ? parsed.data : undefined;
 }
 
 function writeFacet(cachePath: string, facet: SessionFacet): void {
-  mkdirSync(dirname(cachePath), { recursive: true });
-  // Atomic write: serialize to a sibling temp file then rename into place, so a
-  // crash mid-write can never leave a torn cache file (rename is atomic on the
-  // same filesystem). The .pid suffix avoids collisions between concurrent writers.
-  const tmpPath = `${cachePath}.${process.pid}.tmp`;
-  writeFileSync(tmpPath, `${JSON.stringify(facet, null, 2)}\n`, 'utf8');
-  renameSync(tmpPath, cachePath);
+  // Atomic write via writeJsonFile: serialises to a sibling temp file with a
+  // random suffix (crypto.randomBytes), then renames into place. A crash
+  // mid-write never leaves a torn cache file; rename is atomic on POSIX.
+  // writeJsonFile also creates parent dirs (mkdirp: true by default).
+  writeJsonFile(cachePath, facet);
 }
 
 /**
@@ -165,13 +163,15 @@ function tryReadJournal(sessionId: string, sessionsDir: string): {
  * absent.
  */
 function readCachedFacetLoose(cachePath: string): Record<string, unknown> | null {
-  if (!existsSync(cachePath)) return null;
-  try {
-    const raw: unknown = JSON.parse(readFileSync(cachePath, 'utf8'));
-    return raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
+  // readJsonFileLoose: ENOENT and parse errors return undefined → null (no
+  // carry-forward). This matches the original "missing file or parse error →
+  // return null" contract. Unexpected I/O errors re-throw.
+  const raw = readJsonFileLoose<unknown>(cachePath);
+  // Array.isArray guard: arrays survive the `typeof raw !== 'object'` rejection
+  // because typeof [] === 'object', but are not valid facets. Returning null
+  // treats them as "no usable cache" and triggers re-derivation.
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  return raw as Record<string, unknown>;
 }
 
 /**
@@ -201,6 +201,76 @@ function extractLooseYieldTracking(loose: Record<string, unknown> | null): {
 }
 
 /**
+ * Attempt to read trace signals for a session by locating the witness trace
+ * through the session ledger's `meta.traceLabel`. Returns undefined when:
+ * - the ledger file is absent (old session, tracing disabled);
+ * - no `meta` record with a non-null `traceLabel` is found;
+ * - the trace file does not exist;
+ * - any I/O error occurs.
+ *
+ * Callers treat `undefined` as "no trace data → no signal" — never a
+ * downgrade. This is intentional: absence of data must not downgrade (#2798).
+ *
+ * Returns `{ signals, traceMtimeMs }` so the caller can fold `traceMtimeMs`
+ * into `effectiveMtimeMs` for staleness checks — a facet cached before an
+ * async trace flush should be invalidated by a later trace write.
+ *
+ * Synchronous so it fits into the existing sync I/O pattern of store.ts.
+ */
+function tryReadTraceSignals(
+  sessionId: string,
+  sessionsDir: string,
+): { signals: TraceSignals; traceMtimeMs: number } | undefined {
+  try {
+    // Only resolve the ledger under the default sessions dir. When the caller
+    // has overridden sessionsDir (e.g. `afk insights --afk-home`), we might
+    // be looking at a different home — skip trace-signal extraction, same
+    // policy as tryReadJournal.
+    if (resolve(sessionsDir) !== resolve(getSessionsDir())) return undefined;
+    if (!isSafeLedgerSessionId(sessionId)) return undefined;
+
+    const ledgerPath = getSessionLedgerPath(sessionId);
+    if (!existsSync(ledgerPath)) return undefined;
+
+    // Read the ledger file synchronously and scan for the `meta` record that
+    // carries `traceLabel`. Only the first `meta` record is meaningful.
+    const ledgerContent = readFileSync(ledgerPath, 'utf8');
+    let traceLabel: string | null | undefined;
+    for (const rawLine of ledgerContent.split('\n')) {
+      const trimmed = rawLine.trim();
+      if (!trimmed) continue;
+      try {
+        const rec = JSON.parse(trimmed) as Record<string, unknown>;
+        if (rec['kind'] === 'meta' && 'traceLabel' in rec) {
+          const tl = rec['traceLabel'];
+          traceLabel = typeof tl === 'string' ? tl : null;
+          break;
+        }
+      } catch {
+        // malformed line — skip
+      }
+    }
+
+    // `null` means tracing was explicitly disabled for this session.
+    if (traceLabel == null) return undefined;
+
+    // Defense-in-depth: the traceLabel comes from the ledger file (external
+    // data). Guard it with the same safety check applied to the sessionId so
+    // it never reaches getTraceDir/validateSessionId with a bad value.
+    if (!isSafeLedgerSessionId(traceLabel)) return undefined;
+
+    const tracePath = join(getTraceDir(traceLabel), 'trace.jsonl');
+    if (!existsSync(tracePath)) return undefined;
+
+    const traceMtimeMs = safeMtimeMs(tracePath);
+    const traceContent = readFileSync(tracePath, 'utf8');
+    return { signals: parseTraceSignals(traceContent), traceMtimeMs };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Return the facet for `sessionId`, deriving + caching on a miss or when the
  * cache is stale. Returns undefined if the session sidecar does not exist.
  */
@@ -220,11 +290,28 @@ export function getOrDeriveFacet(
   // (sidecar path) when the journal is absent, disabled, or unreadable.
   const journalData = tryReadJournal(sessionId, sessionsDir);
 
-  // Effective mtime for staleness: max(sidecar, journal files) so a journal
-  // append after the sidecar is saved still triggers a re-derive.
-  const effectiveMtimeMs = journalData !== undefined
+  // Read trace signals BEFORE the isFresh check so the trace file's mtime can
+  // participate in effectiveMtimeMs. A facet cached before the async trace
+  // flush would otherwise never be invalidated by a later trace write.
+  // We load the session sidecar first only to resolve session.sessionId for the
+  // override-id case (Finding 2). In the no-override case the sidecar load is
+  // a cheap no-op that is repeated below with the same result.
+  const sessionForId = loadStoredSession(sessionId, sessionsDir);
+  // Use the SDK session ID from the sidecar when it differs from the sidecar
+  // filename. getSessionLedgerPath needs the SDK ID because the ledger lives
+  // under ~/.afk/state/sessions/<SDK-sessionId>/.
+  const traceSessionId = sessionForId?.sessionId ?? sessionId;
+  const traceResult = tryReadTraceSignals(traceSessionId, sessionsDir);
+
+  // Effective mtime for staleness: max(sidecar, journal, trace file) so a
+  // journal append or an async trace flush after the sidecar is saved still
+  // triggers a re-derive.
+  let effectiveMtimeMs = journalData !== undefined
     ? Math.max(sessionMtimeMs, journalData.journalMtimeMs)
     : sessionMtimeMs;
+  if (traceResult !== undefined) {
+    effectiveMtimeMs = Math.max(effectiveMtimeMs, traceResult.traceMtimeMs);
+  }
 
   if (!options.force) {
     const cached = readCachedFacet(cachePath);
@@ -240,8 +327,13 @@ export function getOrDeriveFacet(
   const staleCached = readCachedFacetLoose(cachePath);
   const staleYield = extractLooseYieldTracking(staleCached);
 
-  const session = loadStoredSession(sessionId, sessionsDir);
+  // Re-use the already-loaded sidecar; fall back to a fresh load (defensive
+  // against the unlikely case the first load returned undefined but the file
+  // now exists — same file so in practice identical).
+  const session = sessionForId ?? loadStoredSession(sessionId, sessionsDir);
   if (!session) return undefined;
+
+  const traceSignals = traceResult?.signals;
 
   const facet = deriveSessionFacet(session, {
     sourceSessionPath: sessionPath,
@@ -252,6 +344,7 @@ export function getOrDeriveFacet(
           subagentBreakdown: journalData.subagentBreakdown,
         }
       : {}),
+    ...(traceSignals !== undefined ? { traceSignals } : {}),
   });
 
   // Carry forward yield fields that the new derivation left null (#2777).

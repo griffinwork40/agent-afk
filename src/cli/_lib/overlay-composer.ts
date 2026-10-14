@@ -89,4 +89,9 @@ export class OverlayComposer {
   invalidate(): void {
     this.dirty = true;
   }
+
+  /** Returns true when there are pending dirty marks that a flush() would act on. */
+  isDirty(): boolean {
+    return this.dirty;
+  }
 }

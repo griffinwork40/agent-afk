@@ -14,14 +14,13 @@ import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { BrowserHandlerOptions } from './browser-provider.js';
 import { emitBrowserEvent } from '../../trace/emit.js';
 import { acquireBrowserProvider } from './browser-provider.js';
-import { errorMessage } from '../../../utils/errors.js';
+import { abortReason, errorMessage } from '../../../utils/errors.js';
 
 export function createBrowserCloseHandler(opts: BrowserHandlerOptions = {}): ToolHandler {
   return async (_input, signal, context?: ToolHandlerContext) => {
     // Pre-aborted short-circuit.
     if (signal.aborted) {
-      const reason = signal.reason;
-      const msg = reason instanceof Error ? reason.message : String(reason ?? 'aborted');
+            const msg = abortReason(signal.reason);
       return { content: `browser_close aborted: ${msg}`, isError: true };
     }
 
@@ -36,7 +35,7 @@ export function createBrowserCloseHandler(opts: BrowserHandlerOptions = {}): Too
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_close',
         toolUseId: context?.toolUseId ?? '',
-        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingBackend ? { backend: routingBackend } : {}),
         ...(routingReason ? { backendReason: routingReason } : {}),
         urlBefore: null,
         urlAfter: null,
@@ -50,7 +49,7 @@ export function createBrowserCloseHandler(opts: BrowserHandlerOptions = {}): Too
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_close',
         toolUseId: context?.toolUseId ?? '',
-        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingBackend ? { backend: routingBackend } : {}),
         ...(routingReason ? { backendReason: routingReason } : {}),
         urlBefore: null,
         urlAfter: null,

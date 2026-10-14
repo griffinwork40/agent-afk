@@ -23,6 +23,7 @@
 
 import type { ElicitationHandler } from '../elicitation-router.js';
 import type { ElicitationRequest, ElicitationResult } from '../types/sdk-types.js';
+import { serializeRequest } from './elicitation-serialize.js';
 import {
   writeHandoff,
   listPendingHandoffs,
@@ -36,6 +37,7 @@ import type { Telegraf } from 'telegraf';
 import { sendHandoffQuestion, clearPendingTextHandoff } from '../../telegram/handoff-answer.js';
 import { buildHandoffCallback } from '../../telegram/handoff-callback-data.js';
 import { errorMessage } from '../../utils/errors.js';
+import { truncateTelegramLabel } from '../../utils/truncate-telegram-label.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -325,11 +327,14 @@ const MAX_ANSWER_BYTES = 64 * 1024; // 64 KB
  * Called by Telegram reply handlers (or any future surface) when the operator
  * provides an answer to a pending handoff question.
  *
- * @param taskId - The daemon task ID whose handoff to answer.
- * @param answer - The human's response value (type-narrowing to known shapes
+ * @param taskId             - The daemon task ID whose handoff to answer.
+ * @param answer             - The human's response value (type-narrowing to known shapes
  *   is deferred to PR 3 when the answer is consumed by the session).
- * @param source - Which surface provided the answer ('telegram' | 'web' | 'repl').
- * @param handoffsDir - Override for testing.
+ * @param source             - Which surface provided the answer ('telegram' | 'web' | 'repl').
+ * @param handoffsDir        - Override for testing.
+ * @param responderIdentity  - Optional opaque identity token for the responder.
+ *   Surface-specific format: Telegram uses `"<userId>"` or `"<userId>:<username>"`;
+ *   web uses `"web:<remoteIp>"`; REPL omits (passes undefined).
  * @returns true if this caller won the first-writer CAS, false if another
  *   surface already answered.
  * @throws if the serialized answer exceeds MAX_ANSWER_BYTES.
@@ -339,6 +344,7 @@ export async function answerHandoff(
   answer: unknown,
   source: string,
   handoffsDir?: string,
+  responderIdentity?: string,
 ): Promise<boolean> {
   const serialized = JSON.stringify(answer);
   if (Buffer.byteLength(serialized, 'utf-8') > MAX_ANSWER_BYTES) {
@@ -346,7 +352,12 @@ export async function answerHandoff(
       `[handoff-wiring] answer for task ${taskId} exceeds ${MAX_ANSWER_BYTES} bytes — rejected`,
     );
   }
-  const result = await updateHandoffAnswer(taskId, answer, source, handoffsDir);
+  const result = await updateHandoffAnswer(
+    taskId,
+    answer,
+    source,
+    { handoffsDir, responderIdentity },
+  );
   return result.won;
 }
 
@@ -365,12 +376,8 @@ export async function cleanupHandoff(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/** Truncate a button label to Telegram's ~64-byte UTF-8 limit. */
-function truncateLabel(label: string, maxBytes = 64): string {
-  if (Buffer.byteLength(label, 'utf8') <= maxBytes) return label;
-  const buf = Buffer.from(label, 'utf8').subarray(0, maxBytes);
-  return new TextDecoder('utf-8', { fatal: false }).decode(buf).replace(/\uFFFD$/, '');
-}
+/** Alias for the shared helper (kept for local call-site readability). */
+const truncateLabel = truncateTelegramLabel;
 
 /**
  * Build Telegram InlineKeyboardMarkup for confirm/choice question types.
@@ -407,34 +414,4 @@ function buildHandoffReplyMarkup(
     // Telegram limit. Fall through to no-markup so the push still sends.
   }
   return undefined;
-}
-
-/**
- * Serialize an ElicitationRequest into a plain Record for durable storage.
- * Strips non-serializable fields (functions, symbols) and preserves only
- * the JSON-safe question metadata needed for re-presentation.
- */
-function serializeRequest(request: ElicitationRequest): Record<string, unknown> {
-  const out: Record<string, unknown> = {
-    message: request.message,
-  };
-  if (request.serverName !== undefined) out['serverName'] = request.serverName;
-  if (request.mode !== undefined) out['mode'] = request.mode;
-  if (request.url !== undefined) out['url'] = request.url;
-  if (request.elicitationId !== undefined) out['elicitationId'] = request.elicitationId;
-  if (request.requestedSchema !== undefined) out['requestedSchema'] = request.requestedSchema;
-  if (request.title !== undefined) out['title'] = request.title;
-  if (request.displayName !== undefined) out['displayName'] = request.displayName;
-  if (request.description !== undefined) out['description'] = request.description;
-  if (request.type !== undefined) out['type'] = request.type;
-  if (request.choices !== undefined) out['choices'] = request.choices;
-  if (request.questionDefault !== undefined) out['questionDefault'] = request.questionDefault;
-  if (request.minLength !== undefined) out['minLength'] = request.minLength;
-  if (request.maxLength !== undefined) out['maxLength'] = request.maxLength;
-  if (request.min !== undefined) out['min'] = request.min;
-  if (request.max !== undefined) out['max'] = request.max;
-  if (request.allowSkip !== undefined) out['allowSkip'] = request.allowSkip;
-  if (request.allowCustom !== undefined) out['allowCustom'] = request.allowCustom;
-  if (request.context !== undefined) out['context'] = request.context;
-  return out;
 }

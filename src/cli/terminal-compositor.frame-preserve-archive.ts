@@ -24,6 +24,7 @@
  * eviction (`verdict-card-overflow.test.ts` guards it).
  */
 
+import { resetArchivedReveal } from './terminal-compositor.archived-reveal.js';
 import type { FrameHost } from './terminal-compositor.frame.js';
 import {
   buildScrollbackArchiveEscape,
@@ -166,6 +167,7 @@ export function archiveBandPrefixAndRepaintSurvivors(
     // Archive-and-retain: the archived rows stay in the model as the hidden
     // pending prefix; only the survivors are painted.
     self.committedBandArchivedPrefix = Math.max(prefix, overflow);
+    resetArchivedReveal(self);
     self.committedBandTopRow = floor;
     self.committedBandBottomRow = floor + survivors.length - 1;
     self.committedBandPaintedRows = survivors.length;

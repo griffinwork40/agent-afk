@@ -210,6 +210,9 @@ function makeDispatcherForPR2(opts?: { withDiff?: boolean }): {
 }
 
 beforeEach(() => {
+  // Exact-shape transcript assertions: keep the per-round [vitals] note out
+  // (covered by vitals-delivery.test.ts).
+  vi.stubEnv('AFK_VITALS', '0');
   createCalls = [];
   pendingChunks = [];
   pendingError = null;
@@ -386,6 +389,39 @@ describe('OpenAICompatibleProvider — system-prompt assembly order', () => {
     expect(iDoctrine).toBeLessThan(iHot); // before hot-memory project context
     expect(iDoctrine).toBeLessThan(iEnv); // before the # Environment reference block
   });
+
+  // Regression for #3261: a preset object { type:'preset', append } must forward
+  // the append text into the system message.  The pre-fix code used
+  //   `typeof config.systemPrompt === 'string' ? config.systemPrompt : undefined`
+  // which silently dropped the append text for non-string inputs.
+  it('preset {append} text reaches the system message (regression #3261)', async () => {
+    pendingChunks = [
+      {
+        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ];
+    const provider = new OpenAICompatibleProvider();
+    const q = provider.query({
+      prompt: singleInput('hi'),
+      config: {
+        model: 'gpt-4o-mini',
+        apiKey: 'sk-test-key',
+        systemPrompt: {
+          type: 'preset',
+          preset: 'claude_code',
+          append: 'PRESET_APPEND_SENTINEL',
+        },
+      } as AgentConfig,
+    });
+    await collect(q);
+
+    expect(createCalls).toHaveLength(1);
+    const args = createCalls[0]!.args as { messages: Array<{ role: string; content: string }> };
+    expect(args.messages[0]!.role).toBe('system');
+    // The append text must be present — it was silently dropped before #3261.
+    expect(args.messages[0]!.content).toContain('PRESET_APPEND_SENTINEL');
+  });
 });
 
 describe('OpenAICompatibleProvider — plan-mode gate via config.hookRegistry', () => {
@@ -484,6 +520,87 @@ describe('OpenAICompatibleProvider — plan-mode gate via config.hookRegistry', 
       expect(out.content).not.toContain('plan mode');
       expect(out.content).not.toContain('blocked by PreToolUse hook');
     }
+  });
+});
+
+describe('OpenAICompatibleProvider — config.isNonInteractive reaches the PreToolUse context (#2302)', () => {
+  // Parity with anthropic-direct: this provider wires itself as the session
+  // grant manager on every surface, so the bash-restriction hook's headless
+  // floor keys on `context.nonInteractive`. Pin the full query() path.
+  function scriptBashThenDone(): void {
+    installScriptedClient();
+    scriptedTurns = [
+      {
+        chunks: [
+          {
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: 'call_bash',
+                      type: 'function',
+                      function: { name: 'bash', arguments: JSON.stringify({ command: 'true' }) },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+            usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
+          },
+        ],
+      },
+      {
+        chunks: [
+          {
+            choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
+          },
+        ],
+      },
+    ];
+  }
+
+  async function captureCtx(over: Partial<AgentConfig>): Promise<{ nonInteractive: unknown; grantManagerWired: boolean }> {
+    scriptBashThenDone();
+    const seen = { nonInteractive: 'unset' as unknown, grantManagerWired: false };
+    const registry = createHookRegistry();
+    registry.register('PreToolUse', (ctx) => {
+      if (ctx.event === 'PreToolUse' && ctx.toolName === 'bash') {
+        seen.nonInteractive = ctx.nonInteractive;
+        seen.grantManagerWired = ctx.grantManager !== undefined;
+      }
+      // Block so the harmless command never actually spawns.
+      return { decision: 'block', reason: 'captured' };
+    });
+    // ask_question allowed too so the daemon-pull case can prove it survives.
+    const provider = new OpenAICompatibleProvider({ permissions: { allowedTools: ['bash', 'ask_question'] } });
+    await collect(provider.query({ prompt: singleInput('run it'), config: baseConfig({ hookRegistry: registry, ...over }) }));
+    return seen;
+  }
+
+  it('injects nonInteractive: true alongside the provider-wired grant manager', async () => {
+    const seen = await captureCtx({ isNonInteractive: true });
+    expect(seen.grantManagerWired).toBe(true);
+    expect(seen.nonInteractive).toBe(true);
+  });
+
+  it('leaves nonInteractive undefined on an interactive session', async () => {
+    const seen = await captureCtx({});
+    expect(seen.grantManagerWired).toBe(true);
+    expect(seen.nonInteractive).toBeUndefined();
+  });
+
+  it('daemon pull shape (surface daemon, isNonInteractive false): headless floor ON, ask_question KEPT', async () => {
+    const seen = await captureCtx({ surface: 'daemon', isNonInteractive: false });
+    expect(seen.grantManagerWired).toBe(true);
+    expect(seen.nonInteractive).toBe(true);
+    const tools = (createCalls[0]!.args as { tools?: Array<{ function?: { name?: string } }> }).tools ?? [];
+    expect(tools.map((t) => t.function?.name)).toContain('ask_question');
   });
 });
 
@@ -1091,13 +1208,13 @@ describe('OpenAICompatibleQuery — auth failure path', () => {
   it('emits session.init then error when no auth is resolvable', async () => {
     // Use hermetic auth deps so this test is isolated from the host machine's
     // real credentials. Without this, a developer whose ~/.codex/auth.json
-    // contains a ChatGPT OAuth bundle (and AFK_OPENAI_CHATGPT_OAUTH=1) will
+    // contains a ChatGPT OAuth bundle (the last-resort OAuth tier) will
     // resolve a real access_token — bypassing the no-auth path entirely and
     // sending the request on the Responses API wire. The mock only stubs
     // chat.completions.create, so this.client.responses.create would crash
     // with "Cannot read properties of undefined (reading 'create')".
     const noAuthDeps = {
-      readEnv: (_key: string) => undefined, // suppress OPENAI_API_KEY, CODEX_API_KEY, AFK_OPENAI_CHATGPT_OAUTH
+      readEnv: (_key: string) => undefined, // suppress OPENAI_API_KEY, CODEX_API_KEY
       homedir: () => '/nonexistent-test-home',
       readFile: (_path: string) => null, // no ~/.codex/auth.json
     };
@@ -1122,6 +1239,48 @@ describe('OpenAICompatibleQuery — auth failure path', () => {
     // covers that. Here we verify the error event surfaces the resolution.
     // This case is exercised by auth.test.ts + the integration above.
     expect(true).toBe(true);
+  });
+});
+
+describe('OpenAICompatibleQuery — warnedChatGptOAuth one-time stderr notice', () => {
+  afterEach(async () => {
+    // Reset the module-scope latch so it does not leak across test cases.
+    const { _resetChatGptOAuthNotice } = await import('./query.chatgpt-notice.js');
+    _resetChatGptOAuthNotice();
+  });
+
+  it('emits the chatgpt.com notice to stderr once per account, not on subsequent constructions', () => {
+    const written: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      written.push(typeof chunk === 'string' ? chunk : String(chunk));
+      return true;
+    });
+
+    const auth = { apiKey: 'tok', source: 'chatgpt-oauth' as const, last4: '_tok', accountId: 'acct-1' };
+
+    // First construction for this account: notice must fire.
+    const q1 = new OpenAICompatibleQuery({
+      auth,
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid1',
+      promptStream: singleInput('x'),
+      config: baseConfig(),
+    });
+    q1.close();
+    expect(written.filter((s) => s.includes('ChatGPT subscription OAuth'))).toHaveLength(1);
+
+    // Second construction for the same accountId: notice must NOT repeat.
+    const q2 = new OpenAICompatibleQuery({
+      auth,
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid2',
+      promptStream: singleInput('x'),
+      config: baseConfig(),
+    });
+    q2.close();
+    expect(written.filter((s) => s.includes('ChatGPT subscription OAuth'))).toHaveLength(1);
+
+    spy.mockRestore();
   });
 });
 
@@ -1340,7 +1499,7 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
 
     const rewind = await q.rewindFiles('fake-id');
     expect(rewind.canRewind).toBe(false);
-    expect(rewind.error).toContain('does not support');
+    expect(rewind.error).toContain('File checkpointing is not enabled');
 
     // NOTE: the in-loop `this.lastUsage = accumulatedUsage` write (query.ts:316)
     // is behaviorally tested in the 'in-loop lastUsage refresh (PR 527)' describe
@@ -3953,3 +4112,5 @@ describe('OpenAICompatibleQuery — Responses wire tool arguments on *.done even
     }
   });
 });
+
+// Public checkpoint lifecycle regressions live in file-checkpoint/provider-rewind.test.ts.

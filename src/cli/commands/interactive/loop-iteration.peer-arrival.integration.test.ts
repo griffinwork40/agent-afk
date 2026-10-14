@@ -10,7 +10,7 @@ vi.mock('./loop-iteration.turn-run.js', () => ({ runOneTurn: turn }));
 vi.mock('./loop-iteration.drain.js', () => ({ drainLoopNotifications: vi.fn() }));
 vi.mock('./loop-iteration.first-turn.js', () => ({ runFirstTurnHookIfNeeded: vi.fn() }));
 vi.mock('./loop-iteration.hooks.js', () => ({
-  dispatchUserPromptSubmit: async (runText: string) => ({ runText }), dispatchStop: vi.fn(),
+  dispatchUserPromptSubmit: async (runText: string) => ({ runText }),
 }));
 vi.mock('./version-notice.js', () => ({ createVersionNotice: () => () => undefined }));
 vi.mock('../../slash/plugin-skills.js', () => ({
@@ -41,6 +41,7 @@ function harness(opts: { peer?: boolean; bg?: boolean; typed?: string; initial?:
   let awaiting = false, buffer = opts.typed ?? '', reads = 0;
   let resolveRead: ((value: { text: string; attachments: [] }) => void) | undefined;
   const surface = {
+    getCompositor: () => null,
     onAwaitingInput: undefined as (() => void) | undefined,
     isAwaitingInput: () => awaiting, bufferIsEmpty: () => buffer === '',
     abortPendingRead: vi.fn(() => { awaiting = false; resolveRead?.({ text: '', attachments: [] }); }),
@@ -72,10 +73,11 @@ function harness(opts: { peer?: boolean; bg?: boolean; typed?: string; initial?:
       takePendingPlanExitSeed: vi.fn().mockResolvedValueOnce(opts.plan ? { message: opts.plan, mode: 'default' } : undefined),
     } }, replRenderer: { writeLine: writes }, statusLine: { rearm: vi.fn() },
   } as unknown as InteractiveCtx;
+  const history = { push: vi.fn() };
   const run = () => runInputLoop(ctx, {} as never, {} as never, vi.fn(), surface as unknown as InputSurface,
     vi.fn(), { peerNotifier: peer, bgResultNotifier: bg, shellPassthrough: shell } as unknown as FooterSubsystems,
-    { push: vi.fn() } as never);
-  return { run, writes, surface, peer, bg };
+    history as never);
+  return { run, writes, surface, peer, bg, history };
 }
 beforeEach(() => turn.mockClear());
 it.each([{ peer: true }, { bg: true }, { peer: true, bg: true }])('silences automatic wake %j without changing model inputs', async (opts) => {
@@ -89,6 +91,7 @@ it.each([{ peer: true }, { bg: true }, { peer: true, bg: true }])('silences auto
   expect(h.writes).not.toHaveBeenCalled();
   expect(h.peer.pending + h.bg.pending).toBe('');
   expect(h.surface.abortPendingRead).toHaveBeenCalled();
+  expect(h.history.push).not.toHaveBeenCalled();
 });
 it('protects half-typed input and preserves injections until submission', async () => {
   const h = harness({ peer: true, bg: true, typed: '[auto-resume] human text' });

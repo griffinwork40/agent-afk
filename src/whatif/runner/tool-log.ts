@@ -13,6 +13,7 @@
 
 import { readFile } from 'node:fs/promises';
 import type { ToolRequest } from '../types.js';
+import { isEnoent } from '../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Internal shape
@@ -69,8 +70,7 @@ export async function readToolLog(path: string): Promise<ToolRequest[]> {
     content = await readFile(path, 'utf-8');
   } catch (err) {
     // ENOENT is normal: no tools were called, or the file was already deleted.
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') return [];
+    if (isEnoent(err)) return [];
     throw err;
   }
   const results: ToolRequest[] = [];

@@ -137,6 +137,16 @@ describe('providerForModel — per-slot baseUrl routing (Tier 3.5)', () => {
     const slots = makeSlots({ medium: { id: 'claude-sonnet-5', baseUrl: 'http://proxy.internal' } });
     expect(providerForModel('medium', { slots })).toBe('anthropic-direct');
   });
+
+  it('routes a raw slot id to the slot endpoint via Tier 3.5 baseUrl (#2985)', () => {
+    // #2985: model: "qwen-3.8-27b" must reach the local endpoint, not the
+    // ambient OpenAI credential. resolveBinding now promotes the raw id to the
+    // full slot binding, so providerForModel sees binding.baseUrl and picks
+    // openai-compatible via Tier 3.5, not Tier 3 prefix matching.
+    const slots = makeSlots({ local: { id: 'qwen-3.8-27b', provider: 'openai',
+      baseUrl: 'https://api.cerebras.ai/v1', apiKey: 'csk-secret' } });
+    expect(providerForModel('qwen-3.8-27b', { slots })).toBe('openai-compatible');
+  });
 });
 
 describe('resolveProvider — slot resolution', () => {

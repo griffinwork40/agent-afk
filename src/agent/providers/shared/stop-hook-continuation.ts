@@ -14,7 +14,9 @@
  *   4. If no continueWith: return undefined — caller proceeds to journal sync
  *      and `turn.completed` normally.
  *
- * Cap enforcement: AFK_STOP_HOOK_MAX_CONTINUATIONS (default 2, 0 = disabled).
+ * Cap enforcement: AFK_STOP_HOOK_MAX_CONTINUATIONS (default 2, 0 = no
+ * continuation). At 0 the seam does not dispatch at all and reports
+ * `dispatched: false`, so the session-layer fallback still fires Stop once.
  * The cap is per-turn and shared across all hooks — two blocking hooks each
  * consume from the same counter. On cap the hook result is treated as
  * non-blocking and the turn ends normally.
@@ -46,6 +48,23 @@ const DEFAULT_MAX_CONTINUATIONS = 2;
 
 /** Max chars of the block reason to include in the trace. */
 const REASON_HEAD_MAX = 200;
+
+/**
+ * Max chars of the block reason forwarded to the provider as the
+ * continuation user message. Hook output is operator-authored, but an
+ * unbounded reason can push the request past provider limits (HTTP 400).
+ */
+export const CONTINUE_WITH_MAX_CHARS = 4_000;
+
+/** Bound `text` to {@link CONTINUE_WITH_MAX_CHARS}, appending a marker when cut. Idempotent: already-capped text is returned unchanged. */
+export function capContinueWith(text: string): string {
+  if (text.length <= CONTINUE_WITH_MAX_CHARS) return text;
+  // Idempotency guard: if the text already carries a truncation marker from a
+  // prior application, do not re-truncate (which would corrupt the marker).
+  if (/\n… \[stop hook reason truncated: \d+ more chars\]$/.test(text)) return text;
+  const dropped = text.length - CONTINUE_WITH_MAX_CHARS;
+  return `${text.slice(0, CONTINUE_WITH_MAX_CHARS)}\n… [stop hook reason truncated: ${dropped} more chars]`;
+}
 
 /**
  * Resolve the per-turn continuation cap from AFK_STOP_HOOK_MAX_CONTINUATIONS.
@@ -118,6 +137,14 @@ export interface BeforeTurnEndResult {
   readonly continueWith?: string;
   /** Updated continuation counter to thread into the next dispatch. */
   readonly nextContinuation: number;
+  /**
+   * `true` when this call actually dispatched the Stop hook chain. `false` /
+   * absent on every early return (no registry, fork, cap already reached), so
+   * the session layer can fall back to its own dispatch — e.g. with
+   * AFK_STOP_HOOK_MAX_CONTINUATIONS=0, Stop still fires, it just never
+   * continues the turn.
+   */
+  readonly dispatched?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +167,9 @@ function buildStopContext(ctx: BeforeTurnEndContext): StopContext {
   const text = ctx.assistantText ?? lastAssistantText(ctx.messages);
   const terminalKind = parseTerminalState(text)?.kind;
   const isDone = terminalKind === 'done';
+  const successfulToolNames = ctx.toolEvents
+    .filter((e) => !e.isError)
+    .map((e) => e.toolName);
   return {
     event: 'Stop' as const,
     sessionId: ctx.sessionId,
@@ -148,6 +178,8 @@ function buildStopContext(ctx: BeforeTurnEndContext): StopContext {
     ...(isDone ? { doneEvidenceClassification: classifyDoneEvidence(ctx.toolEvents) } : {}),
     ...(ctx.continuation > 0 ? { stopHookActive: true } : {}),
     continuation: ctx.continuation,
+    assistantText: text,
+    successfulToolNames,
   };
 }
 
@@ -166,7 +198,7 @@ function buildStopContext(ctx: BeforeTurnEndContext): StopContext {
  *
  * Guards:
  *   - No-op when hookRegistry or config.parentSessionId is set (forks excluded).
- *   - No-op when cap is 0 or already reached (`continuation >= maxContinuations`).
+ *   - 0 = no continuation (seam does not dispatch); already-reached cap also skips.
  *   - AbortError propagates; all other errors are swallowed and treated as pass.
  *
  * @param ctx   Turn-end context from the provider.
@@ -210,15 +242,20 @@ export async function runBeforeTurnEnd(ctx: BeforeTurnEndContext): Promise<Befor
     signal: ctx.signal,
     traceWriter: ctx.config.traceWriter,
   });
+  const dispatchedNoop: BeforeTurnEndResult = { ...noop, dispatched: true };
 
   // Non-blocking paths: deliver injectContext / timeout to surface callbacks.
   if (!result.wasBlocked) {
     if (result.wasTimeout) {
       ctx.wiring?.onStopTimeout?.();
     } else if (result.injectContext) {
-      ctx.wiring?.onStopInjectContext?.(result.injectContext);
+      // Cap injectContext at CONTINUE_WITH_MAX_CHARS to prevent oversized hook
+      // output from being forwarded unbounded to queueFrameworkContext on
+      // Telegram, REPL, and other surfaces. Mirrors the cap already applied on
+      // the same-turn block path (capContinueWith at the continueWith site).
+      ctx.wiring?.onStopInjectContext?.(capContinueWith(result.injectContext));
     }
-    return noop;
+    return dispatchedNoop;
   }
 
   // --- Block path: attempt same-turn continuation ---
@@ -237,12 +274,13 @@ export async function runBeforeTurnEnd(ctx: BeforeTurnEndContext): Promise<Befor
       nextContinuation,
       cap: maxContinuations,
     });
-    return { nextContinuation };
+    return { nextContinuation, dispatched: true };
   }
 
-  // Build the framework user message from the block reason.
+  // Build the framework user message from the block reason, bounded so an
+  // oversized hook reason cannot 400 the provider request.
   const reasonText = result.blockedReason ?? 'Stop hook blocked this turn.';
-  const continueWith = reasonText;
+  const continueWith = capContinueWith(reasonText);
 
   // Observability: truncate + redact the reason for the trace.
   const rawReasonHead = reasonText.length > REASON_HEAD_MAX
@@ -265,5 +303,5 @@ export async function runBeforeTurnEnd(ctx: BeforeTurnEndContext): Promise<Befor
     reasonHead,
   });
 
-  return { continueWith, nextContinuation };
+  return { continueWith, nextContinuation, dispatched: true };
 }

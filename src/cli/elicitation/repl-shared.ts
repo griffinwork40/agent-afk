@@ -66,6 +66,13 @@ export interface ReplElicitationDeps {
     validate?: (value: string) => string | null;
     signal: AbortSignal;
   }) => Promise<string | null>;
+  /**
+   * Current terminal size, used to wrap agent-question overlay headers to
+   * physical rows and decide when the full question must spill to scrollback.
+   * Optional: defaults to `process.stdout` columns/rows (80x24 when unknown).
+   * Injected by tests to exercise narrow/short terminals deterministically.
+   */
+  terminalSize?: () => { columns: number; rows: number };
 }
 
 export const DECLINE: ElicitationResult = { action: 'decline' };

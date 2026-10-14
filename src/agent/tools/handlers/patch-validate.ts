@@ -139,7 +139,10 @@ export async function validatePatchChanges(
     }
 
     // 4. At least one of edits or content must be present.
-    if (change.edits === undefined && change.content === undefined) {
+    // An empty edits array carries no intent — treat it as absent so that
+    // { content: null, edits: [] } correctly fires no_change_specified instead
+    // of silently passing through as a no-op rewrite (issue #3126).
+    if ((change.edits === undefined || change.edits.length === 0) && change.content === undefined) {
       errors.push({
         path: rawPath,
         error: 'no_change_specified',

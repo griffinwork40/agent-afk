@@ -3,7 +3,8 @@
  *
  * Recursively matches files against a glob pattern within a directory.
  * Supports basic glob patterns: * (any chars within a segment), ** (zero or
- * more path segments — including zero), and ? (single char). Up to 500 results.
+ * more path segments — including zero), ? (single char), and nested comma-list
+ * braces (e.g. *.{ts,tsx}). Up to 500 results.
  *
  * By default, recursion skips node_modules/.git/.hg/.svn; naming such a
  * directory as a literal pattern segment opts back into searching it.
@@ -19,6 +20,7 @@ import { fsErrorToToolResult } from './_fs-error.js';
 import { isCanonicalPathReadDenied, isReadDenied } from './read-denylist.js';
 import { safeRealpath } from './write-denylist.js';
 import { splitAbsolutePattern } from './glob-absolute.js';
+import { expandGlobBraces, firstBraceAlternation } from './glob-braces.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { Readahead, READAHEAD_CONCURRENCY } from './glob-readahead.js';
 
@@ -134,14 +136,14 @@ class GlobAbortedError extends Error {
  * the same depth-first order, so output under the 500-entry cap is
  * **byte-identical** to the sequential walker.
  */
-async function collectMatches(dir: string, pattern: string, signal?: AbortSignal): Promise<string[]> {
+async function collectMatches(dir: string, patterns: string[], signal?: AbortSignal): Promise<string[]> {
   const matches: string[] = [];
   const maxResults = 500;
   // Directory names the caller explicitly named as literal pattern segments
   // are exempt from default pruning (opt back into node_modules/.git/etc.).
-  const literalSegments = literalPatternSegments(pattern);
-  // Compile the pattern once; the walker tests every entry against it.
-  const matcher = globToRegExp(pattern);
+  const literalSegments = new Set(patterns.flatMap((p) => [...literalPatternSegments(p)]));
+  // Compile each bounded alternative once; keep one walk and one global cap.
+  const matchers = patterns.map(globToRegExp);
   // Read-ahead cache: pre-schedules readdir for child directories so I/O
   // overlaps with the walker's CPU work, bounded at READAHEAD_CONCURRENCY.
   const ra = new Readahead(READAHEAD_CONCURRENCY, signal);
@@ -177,6 +179,11 @@ async function collectMatches(dir: string, pattern: string, signal?: AbortSignal
 
       const entryPath = path.join(currentPath, entry.name);
       const entryReal = path.join(realPath, entry.name);
+      // '/' is intentional here: entryRel lives in pattern-space (not OS
+      // path-space). Glob patterns are always normalized to '/' separators
+      // (see globToRegExp / literalPatternSegments above) so entryRel must
+      // also use '/' for matcher.test(entryRel) to work correctly on all
+      // platforms. It is never passed to fs APIs.
       const entryRel = relPath ? `${relPath}/${entry.name}` : entry.name;
 
       // The requested root has already passed resolveAndContain, but a
@@ -191,7 +198,7 @@ async function collectMatches(dir: string, pattern: string, signal?: AbortSignal
       }
 
       // Test if this entry matches the pattern
-      if (matcher.test(entryRel)) {
+      if (matchers.some((matcher) => matcher.test(entryRel))) {
         matches.push(entryRel);
       }
 
@@ -336,6 +343,22 @@ export function createGlobHandler(cwd?: string): ToolHandler {
     return { content: errorMessage(err), isError: true };
   }
 
+  // Validate brace expansion BEFORE entering the scan try/catch so that
+  // overflow errors surface as 'Invalid glob pattern:' not 'Error scanning
+  // directory:'. expandGlobBraces throws when the pattern exceeds the 256-
+  // alternative / 65536-character limit; catch it here and return early.
+  const normalizedPattern = pattern.replace(/\\/g, '/');
+  let patterns: string[];
+  try {
+    // Recognize braces against the whole input: splitting an absolute prefix
+    // must not turn an originally unbalanced literal pattern into alternation.
+    patterns = firstBraceAlternation(rawPattern) === undefined
+      ? [normalizedPattern]
+      : expandGlobBraces(normalizedPattern);
+  } catch (err) {
+    return { content: `Invalid glob pattern: ${errorMessage(err)}`, isError: true };
+  }
+
   try {
     // Verify the base path exists and is a directory
     const stat = await fs.stat(basePath);
@@ -346,8 +369,7 @@ export function createGlobHandler(cwd?: string): ToolHandler {
       };
     }
 
-    // Collect matching files
-    const relMatches = await collectMatches(basePath, pattern, signal);
+    const relMatches = await collectMatches(basePath, patterns, signal);
     const matches = absolute ? relMatches.map((m) => path.join(basePath, m)) : relMatches;
 
     // No matches

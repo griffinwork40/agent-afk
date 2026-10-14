@@ -31,6 +31,39 @@ describe('resolveWireMode', () => {
   it('chatgpt-oauth selects Responses even when the public opt-in is false', () => {
     expect(resolveWireMode({ source: 'chatgpt-oauth', accountId: 'a' }, false).mode).toBe('responses');
   });
+
+  // Fix 1: customBaseURL suppresses the chatgpt-oauth forced redirect
+  it('when customBaseURL is set and auth is chatgpt-oauth, returns chat-completions (no baseURL override)', () => {
+    const res = resolveWireMode(
+      { source: 'chatgpt-oauth', accountId: 'acct_123' },
+      false,
+      'http://localhost:8000/v1',
+    );
+    expect(res.mode).toBe('chat-completions');
+    expect(res.baseURL).toBeUndefined();
+    expect(res.headers).toBeUndefined();
+  });
+
+  it('when customBaseURL is the chatgpt backend itself, still forces the ChatGPT route', () => {
+    const res = resolveWireMode(
+      { source: 'chatgpt-oauth', accountId: 'acct_123' },
+      false,
+      CHATGPT_BACKEND_BASE_URL,
+    );
+    expect(res.mode).toBe('responses');
+    expect(res.baseURL).toBe(CHATGPT_BACKEND_BASE_URL);
+  });
+
+  it('when customBaseURL is empty string, still forces ChatGPT route (treated as not set)', () => {
+    const res = resolveWireMode({ source: 'chatgpt-oauth', accountId: 'a' }, false, '');
+    expect(res.mode).toBe('responses');
+    expect(res.baseURL).toBe(CHATGPT_BACKEND_BASE_URL);
+  });
+
+  it('when customBaseURL is set but auth is not chatgpt-oauth, returns chat-completions', () => {
+    const res = resolveWireMode({ source: 'env' }, false, 'http://myserver/v1');
+    expect(res.mode).toBe('chat-completions');
+  });
 });
 
 describe('envFlagEnabled', () => {

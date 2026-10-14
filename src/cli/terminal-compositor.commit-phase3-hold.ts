@@ -1,3 +1,4 @@
+import { hiddenArchivedRows } from './terminal-compositor.archived-reveal.js';
 import type { CommittedBandHost } from './terminal-compositor.committed-band-commit.js';
 import type { CommitGeometry } from './terminal-compositor.commit-geometry.js';
 import type { CommitRoute } from './terminal-compositor.commit-route.js';
@@ -35,7 +36,9 @@ export function commitPhase3Hold(
   const model = overflowRun.slice(archiveCount);
   // #540: slice the provenance at the SAME index so it stays 1:1 with `model`.
   const modelMeta = overflowRunMeta.slice(archiveCount);
-  const paintedCount = Math.min(model.length, maxRun);
+  const prefix = retainedArchivedPrefix(self, route.overflowPriorContiguous, archiveCount);
+  const hidden = hiddenArchivedRows(self, undefined, { length: model.length, prefix });
+  const paintedCount = Math.min(model.length - hidden, maxRun);
   const bandTop = newTopRow - paintedCount;
   // Content centering (AFK_CENTER_CONTENT): derive the margin from the CURRENT
   // terminal width so painted rows adapt on resize. The band stores raw (unpadded)

@@ -76,7 +76,15 @@ afk whatif --model claude-haiku-4-5
 # With verification
 afk whatif --append "Never use bash" --verify
 
-# From a prepared spec file
+# Operator-supplied prediction — deterministic, no analyst model call (#2861)
+afk whatif --append "Always ask first." --predict "agent asks a clarifying question"
+
+# Multiple predictions (accumulate in order)
+afk whatif --model claude-haiku-4-5 \
+  --predict "agent responds faster" \
+  --predict "agent uses fewer tokens"
+
+# From a prepared spec file (may include predictions field)
 afk whatif --spec my-change.json
 
 # REPL
@@ -167,6 +175,7 @@ is no TTY readline prompt in the REPL.
 | `--quick` | off | Single-turn episodes (sets `--max-turns 1`) |
 | `--probes <n>` | 6 | Synthetic probe episodes per prediction (1–12). More probes give each prediction more statistical power. Near-duplicate probes are dropped automatically. |
 | `--max-predictions <n>` | 3 (when `--probes > 2`), 8 otherwise | Maximum predictions to retain. Concentrating on fewer predictions with more probes improves verdict reliability. |
+| `--predict <text>` | — | Operator-supplied prediction (repeatable). The text becomes the `behavior`; a default `testQuestion` is generated. When one or more `--predict` flags are supplied, the analyst model call is skipped entirely and these predictions are used instead, making the predict step fully deterministic (#2861). |
 | `--turns <n>` | 12 | Real turns to replay |
 | `--samples <n>` | 3 | Samples per episode per environment |
 | `--max-usd <n>` | 5 | Budget cap in USD |
@@ -412,6 +421,34 @@ afk whatif / /whatif
 model, effort, env). New change kinds are added by implementing the interface
 and registering in `src/whatif/operators/index.ts`.
 
+**Operator predictions** (`--predict`, spec `predictions` field, #2861): the
+operator can supply predictions directly, bypassing the analyst model entirely.
+This makes the predict step deterministic — the same prediction appears on
+every run, regardless of what the analyst would have chosen. Operator
+predictions are normalized with sensible defaults (`direction: 'added'`,
+`confidence: 'high'`, `observable: 'decision'`) and participate in the
+standard verify flow. A spec file can supply predictions via the optional
+`predictions` array:
+
+```json
+{
+  "title": "Test faster responses",
+  "changes": [{ "kind": "model", "model": "claude-haiku-4-5" }],
+  "predictions": [
+    {
+      "behavior": "Responds with shorter answers",
+      "testQuestion": "Does the response contain fewer than 200 words?",
+      "direction": "strengthened",
+      "confidence": "high"
+    }
+  ]
+}
+```
+
+CLI predictions (`--predict`) and spec-file predictions are merged, with CLI
+predictions prepended. The analyst model is skipped when any operator
+predictions are present.
+
 **AgentRunner** (`src/whatif/types.ts`): the afk-runner spawns real `afk chat`
 subprocesses. A generic OpenAI-messages runner (model + endpoint + system prompt
 + tools file) is planned for later.
@@ -488,6 +525,43 @@ src/cli/commands/whatif.ts      CLI surface
 src/cli/slash/commands/whatif.ts  REPL surface
 docs/whatif.md                  This file
 ```
+
+### Redundancy preflight warning (#2414)
+
+Before any model call, `afk whatif` runs a deterministic token-set Jaccard
+similarity pass over every paragraph added by the change against every
+paragraph in the baseline system prompt. When the best match exceeds the
+threshold (35% Jaccard by default), a preflight warning is surfaced.
+
+**What you see in the terminal:**
+
+```
+[redundancy] Jaccard pass complete (1.23ms)
+[redundancy] Added paragraph may restate an existing rule (§ Delegation) [72% similar]
+```
+
+**What it means:** the added paragraph closely resembles an instruction the
+baseline agent already follows. If the change truly restates an existing rule,
+the correct prediction is an empty set -- the behavior will not differ between
+arms because both start from the same baseline instruction.
+
+**What to do:**
+
+- If the similarity is a false positive (your change is genuinely novel despite
+  shared vocabulary), proceed normally. The analyst is told to predict normally
+  when the change is substantively different.
+- If the warning is accurate, the change has no behavioral effect and `--verify`
+  will find no difference. Rephrase the instruction so it is clearly distinct,
+  or remove it and rely on the existing rule.
+
+The warning fires even on `--predict`-only runs (no paid episodes) because it
+affects what the analyst predicts. It does not block the run; use it as a
+signal to review the change before spending on `--verify`.
+
+The similarity score and nearest baseline section heading are included in the
+warning so you can locate the duplicate quickly. Stopwords are removed and
+common inflection suffixes are stripped before comparison, so "spawn a
+subagent" and "spawning subagents" score as equivalent.
 
 ### Failed episodes and arm-imbalance warning (#2411)
 

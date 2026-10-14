@@ -237,7 +237,7 @@ export async function performResumeSwap(
   // stdout — this is the load-bearing reason we accept a writer rather
   // than calling process.stdout.write directly. See printResumeBanner's
   // docblock for the transport rationale.
-  printResumeBanner(deps.stats, deps.completionWriter);
+  await printResumeBanner(deps.stats, deps.completionWriter);
 
   // Step 12 — Repaint status line.
   deps.statusLine.repaint(formatStatusFields(deps.stats, deps.contextSampler, deps.gitStatusSampler, deps.maxTurns));

@@ -49,6 +49,12 @@ export interface ToolResult {
   exitCode?: number;
   incomplete?: boolean;
   incompleteReason?: string;
+  /**
+   * Compose only: number of DAG nodes that wound down partial (soft deadline,
+   * tool-round cap) in this call. Present only alongside `incomplete: true`.
+   * Not model-facing; feeds `compose_partial_node_count` in the facet (#2978).
+   */
+  partialNodeCount?: number;
   circuitBreaker?: boolean;
   failureClass?: ToolFailureClass;
   /**

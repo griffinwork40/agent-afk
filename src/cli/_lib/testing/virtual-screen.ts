@@ -3,13 +3,14 @@
  *
  * Processes byte-level ANSI escape sequences and maintains a 2D grid representing
  * the visible screen. Handles multibyte UTF-8 sequences split across writes,
- * detects broken sequences (with `�`), and tracks cursor position, scrollback,
+ * detects broken sequences (with `\uFFFD`), and tracks cursor position, scrollback,
  * and terminal attributes.
  *
  * @module cli/_lib/testing/virtual-screen
  */
 
 import { displayWidth } from '../../display.js';
+import { dispatchCsi, type CsiHost } from './virtual-screen.csi.js';
 
 type ParserState = 'GROUND' | 'ESC' | 'CSI' | 'OSC' | 'UTF8';
 
@@ -214,110 +215,13 @@ export class VirtualScreen {
   }
 
   private dispatchCsi(final: number): void {
-    const params = this.normalizeCsiParams(this.csiParams);
-    const privatePrefix = this.csiPrivatePrefix;
-
-    // Final byte as character
-    const finalChar = String.fromCharCode(final);
-
-    if (finalChar === 'H' || finalChar === 'f') {
-      // CUP — Cursor Position: param0=row (1-based), param1=col (1-based)
-      const row = params[0] !== undefined ? params[0] : 1;
-      const col = params[1] !== undefined ? params[1] : 1;
-      this.cursorRow = this.clampRow(row);
-      this.cursorCol = this.clampCol(col);
-      this.pendingWrap = false;
-    } else if (finalChar === 'A') {
-      // CUU — Cursor Up by param0 rows
-      const count = params[0] !== undefined ? params[0] : 1;
-      this.cursorRow = this.clampRow(this.cursorRow - count);
-    } else if (finalChar === 'B') {
-      // CUD — Cursor Down by param0 rows
-      const count = params[0] !== undefined ? params[0] : 1;
-      this.cursorRow = this.clampRow(this.cursorRow + count);
-    } else if (finalChar === 'C') {
-      // CUF — Cursor Forward by param0 cols
-      const count = params[0] !== undefined ? params[0] : 1;
-      this.cursorCol = this.clampCol(this.cursorCol + count);
-    } else if (finalChar === 'D') {
-      // CUB — Cursor Back by param0 cols
-      const count = params[0] !== undefined ? params[0] : 1;
-      this.cursorCol = this.clampCol(this.cursorCol - count);
-    } else if (finalChar === 'G') {
-      // CHA — Cursor Horizontal Absolute
-      const col = params[0] !== undefined ? params[0] : 1;
-      this.cursorCol = this.clampCol(col);
-    } else if (finalChar === 'd') {
-      // VPA — Cursor Vertical Absolute
-      const row = params[0] !== undefined ? params[0] : 1;
-      this.cursorRow = this.clampRow(row);
-    } else if (finalChar === 'J') {
-      // ED — Erase in Display
-      const mode = params[0] !== undefined ? params[0] : 0;
-      if (mode === 0 || params.length === 0) {
-        // Erase cursor to end of screen
-        this.eraseCursorToEndOfScreen();
-      } else if (mode === 1) {
-        // Erase start of screen to cursor
-        this.eraseStartOfScreenToCursor();
-      } else if (mode === 2) {
-        // Erase entire screen
-        this.eraseEntireScreen();
-      } else if (mode === 3) {
-        // Erase entire screen and scrollback (xterm extension)
-        this.eraseEntireScreen();
-        this.scrollback = [];
-      }
-    } else if (finalChar === 'K') {
-      // EL — Erase in Line
-      const mode = params[0] !== undefined ? params[0] : 0;
-      if (mode === 0 || params.length === 0) {
-        // Erase cursor to end of line
-        this.eraseCursorToEndOfLine();
-      } else if (mode === 1) {
-        // Erase start of line to cursor
-        this.eraseStartOfLineToCursor();
-      } else if (mode === 2) {
-        // Erase entire line
-        this.eraseEntireLine();
-      }
-    } else if (finalChar === 'm') {
-      // SGR — Select Graphic Rendition (no-op for content assertions)
-    } else if (finalChar === 'r' && !privatePrefix) {
-      // DECSTBM — Set scrolling region
-      const top = params[0] !== undefined ? params[0] : 1;
-      const bottom = params[1] !== undefined ? params[1] : this.rows;
-      if (top < bottom) {
-        this.scrollTop = this.clampRow(top);
-        this.scrollBottom = this.clampRow(bottom);
-      }
-    } else if (privatePrefix && (finalChar === 'h' || finalChar === 'l')) {
-      // DECSET/DECRST — Private mode set/reset
-      const code = params[0];
-      if (code === 25) {
-        // Cursor visibility: 'h' = show, 'l' = hide
-        this.cursorHidden = finalChar === 'l';
-      }
-      // 2026 (sync mode) and others are no-ops for testing
-    }
-  }
-
-  private normalizeCsiParams(raw: number[]): number[] {
-    const params: number[] = [];
-    for (const val of raw) {
-      if (val === -1) {
-        // Separator marker — push 0 as placeholder
-        params.push(0);
-      } else {
-        params.push(val);
-      }
-    }
-    // Remove trailing separator markers
-    const lastRaw = raw[raw.length - 1];
-    while (params.length > 0 && params[params.length - 1] === 0 && lastRaw === -1) {
-      params.pop();
-    }
-    return params;
+    // Cast: VirtualScreen satisfies CsiHost structurally (all required fields
+    // are present at runtime) but TypeScript's `private` keyword prevents the
+    // direct assignment. The cast is safe because:
+    //   (1) every field CsiHost declares is present on VirtualScreen,
+    //   (2) dispatchCsi reads and writes exactly those fields,
+    //   (3) this cast is the only site that crosses the visibility boundary.
+    dispatchCsi(this as unknown as CsiHost, final, this.csiParams, this.csiPrivatePrefix);
   }
 
   private processOscByte(byte: number): void {
@@ -447,64 +351,8 @@ export class VirtualScreen {
     }
   }
 
-  private eraseCursorToEndOfLine(): void {
-    const row = this.cursorRow - 1;
-    if (row >= 0 && row < this.rows) {
-      for (let c = this.cursorCol - 1; c < this.cols; c++) {
-        this.grid[row]![c] = ' ';
-      }
-    }
-  }
-
-  private eraseStartOfLineToCursor(): void {
-    const row = this.cursorRow - 1;
-    if (row >= 0 && row < this.rows) {
-      for (let c = 0; c < this.cursorCol; c++) {
-        this.grid[row]![c] = ' ';
-      }
-    }
-  }
-
-  private eraseEntireLine(): void {
-    const row = this.cursorRow - 1;
-    if (row >= 0 && row < this.rows) {
-      for (let c = 0; c < this.cols; c++) {
-        this.grid[row]![c] = ' ';
-      }
-    }
-  }
-
-  private eraseCursorToEndOfScreen(): void {
-    // Erase from cursor to end of line (on current row)
-    this.eraseCursorToEndOfLine();
-    // Erase all lines below cursor
-    for (let r = this.cursorRow + 1; r <= this.rows; r++) {
-      const savedRow = this.cursorRow;
-      this.cursorRow = r;
-      this.eraseEntireLine();
-      this.cursorRow = savedRow;
-    }
-  }
-
-  private eraseStartOfScreenToCursor(): void {
-    // Erase all lines above cursor
-    for (let r = 1; r < this.cursorRow; r++) {
-      const oldRow = this.cursorRow;
-      this.cursorRow = r;
-      this.eraseEntireLine();
-      this.cursorRow = oldRow;
-    }
-    // Erase from start of line to cursor
-    this.eraseStartOfLineToCursor();
-  }
-
-  private eraseEntireScreen(): void {
-    for (let r = 0; r < this.rows; r++) {
-      for (let c = 0; c < this.cols; c++) {
-        this.grid[r]![c] = ' ';
-      }
-    }
-  }
+  // Erase and CSI operations are fully handled in virtual-screen.csi.ts.
+  // dispatchCsi() above is the single call site.
 
   /**
    * Assertion API: return visible lines (1..rows), right-trimmed.

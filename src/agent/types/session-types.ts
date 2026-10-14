@@ -70,6 +70,20 @@ export interface SessionMetadata {
   claudeCodeVersion?: string;
   outputStyle?: string;
   status?: SDKStatus;
+  /**
+   * `true` when skills were discovered by the skill-bridge but the session has
+   * no `skillExecutor` — meaning the model cannot invoke `skill`, `agent`, or
+   * `compose` tools. This is the normal state for sessions created via the
+   * public SDK (`AgentSession` / `query()` / `queryText()`) without executor
+   * wiring. CLI/REPL/Telegram/web/daemon surfaces always wire executors, so
+   * this field is absent (or `false`) there. SDK callers clear it by passing
+   * `executors` from `createWiredExecutors()` with the `skill` tool enabled.
+   *
+   * Embedders can inspect this field after `waitForInitialization()` to decide
+   * whether to display their own warning or proxy to a fully-wired surface.
+   * See `docs/sdk-surface.md` for the full explanation.
+   */
+  reducedToolSurface?: boolean;
 }
 
 /**
@@ -170,7 +184,8 @@ export type OutputEvent =
        * surface error). Watchdog/ceiling arithmetic prefers this over `resetsAt`
        * when present. Never shown to users as "resumes at X" copy.
        */
-      waitDeadline?: Date;      /**
+      waitDeadline?: Date;
+      /**
        * Mirror of {@link import('../provider.js').ProviderEvent.paused.provider}.
        * Absent = unknown; UI layers render the legacy Claude copy for it.
        */
@@ -232,6 +247,9 @@ export interface ProgressEvent {
   taskId: string;
   description: string;
   summary?: string;
+  /** Completed tool rounds, distinct from the tool call count. */
+  roundsUsed?: number;
+  budget?: number;
   lastToolName?: string;
   totalTokens: number;
   toolUses: number;
@@ -470,6 +488,9 @@ export interface StopWiring {
    * Finding 2: set to `true` by `buildBeforeTurnEnd` after the provider seam
    * dispatches Stop. Checked by `dispatchTurnStop` in turn-stream-runner.ts to
    * avoid firing Stop twice on the same turn. Reset per turn by the session.
+   *
+   * @internal Runtime bookkeeping mutated by the session harness; not part of
+   * the public surface contract. Surfaces must not set or read it.
    */
   stopDispatchedBySeam?: boolean;
 }

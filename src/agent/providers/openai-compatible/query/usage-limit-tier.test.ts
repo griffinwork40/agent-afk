@@ -21,9 +21,12 @@ import {
   isQuotaLimitErrorEvent,
   runIterationWithQuotaLimitPause,
   QUOTA_TRANSIENT_THRESHOLD_MS,
+  QUOTA_FALLBACK_WAIT_MS,
+  QUOTA_TWO_HOURS_MS,
   __setQuotaTwoHoursMs,
   __setQuotaFallbackWaitMs,
   __setQuotaTransientThresholdMs,
+  __setQuotaOverrides,
 } from './usage-limit-tier.js';
 import type { IterationResult } from './stream-drive.js';
 import { createStreamState } from '../translate.js';
@@ -231,18 +234,19 @@ describe('runIterationWithQuotaLimitPause — auto-resume=true', () => {
   });
 
   it('waits the retry-after duration before probing (budget large enough to allow probe)', async () => {
-    // Use a tiny two-hours budget (2000ms) so the wait is capped:
-    // wait = Math.min(600_000ms, 2000ms) = 2000ms.
-    // Budget (2000ms) ≥ first wait (2000ms) → post-sleep budget check: elapsed≈2000ms ≤ 2000ms
-    // NOT strictly greater → probe fires. Factory call 2 succeeds.
-    __setQuotaTwoHoursMs(2000);
+    // threshold=500ms, budget=3000ms, retry-after=1s (1000ms):
+    //   1000ms > 500ms → classified as quota (not transient).
+    //   wait = Math.min(1000ms, 3000ms) = 1000ms.
+    //   After sleeping 1000ms: elapsed ≈ 1000ms < budget (3000ms) → >= check false → probe fires.
+    __setQuotaTransientThresholdMs(500);
+    __setQuotaTwoHoursMs(3000);
 
     let callCount = 0;
     const factory = (): AsyncGenerator<ProviderEvent, IterationResult | null> => {
       callCount++;
       if (callCount === 1) {
         return (function* () {
-          yield quotaErrorEvent(600); // 600s retry-after → capped to 2000ms budget
+          yield quotaErrorEvent(1); // 1s retry-after > 500ms threshold → quota
           return null;
         })() as unknown as AsyncGenerator<ProviderEvent, IterationResult | null>;
       }
@@ -253,8 +257,8 @@ describe('runIterationWithQuotaLimitPause — auto-resume=true', () => {
     };
 
     const tierPromise = runTier(factory);
-    // Advance past the 2000ms sleep.
-    await vi.advanceTimersByTimeAsync(3000);
+    // Advance past the 1000ms sleep.
+    await vi.advanceTimersByTimeAsync(2000);
     const { events, result } = await tierPromise;
 
     expect(callCount).toBe(2);
@@ -371,6 +375,37 @@ describe('runIterationWithQuotaLimitPause — auto-resume=true', () => {
     // A quota error was yielded when cap hit
     const errs = events.filter((e) => e.type === 'error');
     expect(errs.length).toBeGreaterThan(0);
+  });
+
+  it('caps at exact two-hour equality (>= boundary, not just >)', async () => {
+    // Budget set to the same value as the wait, so elapsed === budget exactly
+    // at the post-sleep re-check. With strict >, this probe would re-fire;
+    // with >=, the error is surfaced without an extra iteration.
+    // Relies on the describe-level afterEach to restore __setQuotaTwoHoursMs /
+    // __setQuotaFallbackWaitMs to their defaults after this test.
+    const BUDGET = 1000;
+    __setQuotaTwoHoursMs(BUDGET);
+    __setQuotaFallbackWaitMs(BUDGET); // sleep exactly 1000ms = budget
+
+    let callCount = 0;
+    const factory = (): AsyncGenerator<ProviderEvent, IterationResult | null> => {
+      callCount++;
+      return (function* () {
+        yield quotaErrorEvent(600); // always quota (no retry-after)
+        return null;
+      })() as unknown as AsyncGenerator<ProviderEvent, IterationResult | null>;
+    };
+
+    const tierPromise = runTier(factory);
+    await vi.advanceTimersByTimeAsync(BUDGET); // advance exactly to the boundary
+    const { events, result } = await tierPromise;
+
+    expect(result).toBeNull();
+    // Error must have been yielded (cap fired at equality)
+    const errs = events.filter((e) => e.type === 'error');
+    expect(errs.length).toBeGreaterThan(0);
+    // Only one probe should have fired (the cap applied at the post-sleep check)
+    expect(callCount).toBe(1);
   });
 });
 
@@ -504,5 +539,64 @@ describe('runIterationWithQuotaLimitPause — ChatGPT usage_limit_reached', () =
     const { events } = await runTier(makeGen([quotaErrorEvent(600)], null), { autoResumeOnUsageLimit: false });
     const paused = events[0] as PausedEv;
     expect(paused).toEqual({ type: 'paused', reason: 'usage-limit', autoResume: false });
+  });
+});
+
+describe('__setQuotaOverrides', () => {
+  afterEach(() => {
+    // Reset all three knobs to production defaults after each test.
+    __setQuotaOverrides({ transientThresholdMs: null, twoHoursMs: null, fallbackWaitMs: null });
+  });
+
+  it('sets individual knobs when the corresponding field is present', () => {
+    __setQuotaOverrides({ transientThresholdMs: 1000 });
+    // A 1001 ms retry-after is now above the (overridden) 1000 ms threshold → quota.
+    const ev = {
+      type: 'error' as const,
+      error: Object.assign(new Error('rate limited'), {
+        status: 429,
+        headers: { 'retry-after': '2' }, // 2 seconds → 2000 ms
+      }),
+    };
+    expect(isQuotaLimitErrorEvent(ev)).toBe(true);
+  });
+
+  it('empty object leaves all knobs unchanged', () => {
+    __setQuotaOverrides({ transientThresholdMs: 9999 });
+    __setQuotaOverrides({}); // must NOT reset
+    // Threshold is still 9999; a 10000 ms retry-after → quota.
+    const ev = {
+      type: 'error' as const,
+      error: Object.assign(new Error('rate limited'), {
+        status: 429,
+        headers: { 'retry-after': '10' }, // 10 seconds → 10000 ms
+      }),
+    };
+    expect(isQuotaLimitErrorEvent(ev)).toBe(true);
+    __setQuotaOverrides({ transientThresholdMs: null }); // clean up explicitly
+  });
+
+  it('passing null for a field resets it to the production default', () => {
+    __setQuotaOverrides({ transientThresholdMs: 1 });
+    __setQuotaOverrides({ transientThresholdMs: null });
+    // Back to the production threshold (QUOTA_TRANSIENT_THRESHOLD_MS = 5 min).
+    // A 4-min retry-after is below the default threshold → NOT quota.
+    const ev = {
+      type: 'error' as const,
+      error: Object.assign(new Error('rate limited'), {
+        status: 429,
+        headers: { 'retry-after': String(4 * 60) }, // 4 minutes
+      }),
+    };
+    expect(isQuotaLimitErrorEvent(ev)).toBe(false);
+  });
+
+  it('resetting all three with explicit nulls restores every production default', () => {
+    __setQuotaOverrides({ transientThresholdMs: 1, twoHoursMs: 1, fallbackWaitMs: 1 });
+    __setQuotaOverrides({ transientThresholdMs: null, twoHoursMs: null, fallbackWaitMs: null });
+    // Verifying production constants are back (we just need that a sane threshold is active).
+    expect(QUOTA_TRANSIENT_THRESHOLD_MS).toBe(5 * 60 * 1000);
+    expect(QUOTA_TWO_HOURS_MS).toBe(2 * 60 * 60 * 1000);
+    expect(QUOTA_FALLBACK_WAIT_MS).toBe(60 * 1000);
   });
 });

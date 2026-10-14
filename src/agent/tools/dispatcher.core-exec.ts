@@ -40,7 +40,9 @@ import type { TraceSink } from '../trace/index.js';
 import type { GrantManager } from './grant-manager.js';
 import type { PreDispatchGateDeps } from './dispatcher.pre-dispatch-gates.js';
 import type { DetachableToolRegistry } from './detach-registry.js';
+import type { ProcessJobRegistry } from '../shell-jobs/process-jobs.js';
 import { errorMessage } from '../../utils/errors.js';
+import { OPERATOR_DENIED_MARKER } from './operator-denied.match.js';
 
 // ---------------------------------------------------------------------------
 // Dependency surface
@@ -63,6 +65,8 @@ export interface CoreExecDeps {
   sessionId: string | undefined;
   /** Parent session id; stamped on PostToolUse context. */
   parentSessionId: string | undefined;
+  /** Root (depth-0) session id; stamped on PostToolUse context for deep attribution. */
+  rootSessionId: string | undefined;
   /** Session grant manager; injected into PostToolUse context. */
   sessionGrantManager: GrantManager | undefined;
   /** Witness trace writer; forwarded to dispatchPostToolUse(Failure). */
@@ -87,6 +91,11 @@ export interface CoreExecDeps {
    * REPL surfaces where a background-result notifier can inject the late result.
    */
   detachRegistry?: DetachableToolRegistry;
+  /**
+   * Background process registry (root interactive sessions only). Backs the
+   * background health/cancel tools for `proc-` ids.
+   */
+  processJobs?: ProcessJobRegistry;
   /**
    * Per-call handler context factory. The class supplies this as an arrow
    * calling its own private `callHandlerContext(call)` method so the free
@@ -124,9 +133,9 @@ export function isRegisteredTool(toolName: string, deps: CoreExecDeps): boolean 
   return (
     deps.handlers.has(toolName) ||
     (toolName === 'agent' && deps.subagentExecutor !== undefined) ||
-    (toolName === 'cancel_background_job' && deps.subagentExecutor?.supportsBackgroundJobs?.() === true) ||
+    (toolName === 'cancel_background_job' && (deps.subagentExecutor?.supportsBackgroundJobs?.() === true || deps.processJobs !== undefined)) ||
     (toolName === 'send_message_to_agent' && deps.subagentExecutor?.supportsBackgroundJobs?.() === true) ||
-    (toolName === 'get_background_job_health' && deps.subagentExecutor?.supportsBackgroundJobs?.() === true) ||
+    (toolName === 'get_background_job_health' && (deps.subagentExecutor?.supportsBackgroundJobs?.() === true || deps.processJobs !== undefined)) ||
     (toolName === 'skill' && deps.skillExecutor !== undefined) ||
     (toolName === 'compose' && deps.composeExecutor !== undefined)
   );
@@ -162,7 +171,7 @@ export function denialReason(
   permissionReason: string | undefined,
   deps: CoreExecDeps,
 ): string {
-  if (isRegisteredTool(toolName, deps)) {
+  if (permissionReason?.includes(OPERATOR_DENIED_MARKER) || isRegisteredTool(toolName, deps)) {
     return permissionReason ?? `Tool "${toolName}" is not permitted`;
   }
   return unknownToolMessage(toolName, deps);
@@ -197,6 +206,7 @@ export function firePostToolUse(
     ...(input !== undefined ? { input } : {}),
     ...(deps.sessionId !== undefined ? { sessionId: deps.sessionId } : {}),
     ...(deps.parentSessionId !== undefined ? { parentSessionId: deps.parentSessionId } : {}),
+    ...(deps.rootSessionId !== undefined ? { rootSessionId: deps.rootSessionId } : {}),
     // Mirror PreToolUse so path-approval "Once"-grant revoke uses the same grant manager.
     ...(deps.sessionGrantManager ? { grantManager: deps.sessionGrantManager } : {}),
     ...(resultFlags?.isError === true ? { isError: true } : {}),
@@ -314,7 +324,7 @@ export async function executeCompose(call: ToolCall, deps: CoreExecDeps): Promis
 export async function executeCoreInner(call: ToolCall, deps: CoreExecDeps): Promise<ToolResult> {
   // Agent dispatch and model cancellation share the provider-level executor.
   if (isSubagentProviderTool(call.name)) {
-    const outcome = await executeSubagentProviderTool(deps.subagentExecutor, call);
+    const outcome = await executeSubagentProviderTool(deps.subagentExecutor, call, deps.processJobs);
     if (outcome.thrownMessage !== undefined) {
       firePostToolUseFailure(call.name, outcome.thrownMessage, call.signal, deps, call.input);
     } else {

@@ -47,7 +47,9 @@ export interface ResetStateHost {
   pendingContentRows: number | null;
   pendingResizeErase: { top: number; bottom: number } | null;
   bandGeometryStale: boolean;
+  resizeGeometryStale: boolean;
   lastKnownRows: number;
+  cprPending: boolean;
   pickerController: PickerController | null;
   inputMode: CompositorInputMode;
   attachments: ImageAttachment[];
@@ -56,6 +58,7 @@ export interface ResetStateHost {
   pasteStartCursor: number;
   readonly pasteRegistry: Map<string, string>;
   clipboardFailureMsg: string | null;
+  modeNotice: string | null;
   readonly autocompleteState?: AutocompleteState;
   resizeUnsub: (() => void) | null;
   resizeImmediateUnsub: (() => void) | null;
@@ -115,6 +118,9 @@ export function resetState(self: ResetStateHost): void {
   // the previous arm cycle must not leak into the next one (the first repaint
   // of a fresh arm re-seeds lastKnownRows before any resize can be detected).
   self.pendingResizeErase = null;
+  // Clear the CPR-pending flag so a stale in-flight CPR from the previous
+  // arm cycle cannot suppress repaints in the next one.
+  self.cprPending = false;
   // F2: a stale-geometry flag from the previous arm cycle must not leak into
   // the next one either — a fresh arm has no geometry yet (rather than WRONG
   // geometry), which is the same "genuinely unknown" case BLOCKER-1 already
@@ -122,6 +128,7 @@ export function resetState(self: ResetStateHost): void {
   // but resetting it keeps the field's meaning exact: "stale since the last
   // resize", not "stale forever until any resize happens to occur".
   self.bandGeometryStale = false;
+  self.resizeGeometryStale = false; // mirrors bandGeometryStale reset (#3212)
   self.lastKnownRows = 0;
   // Drop the between-turn resize snapshot — a fresh arm cycle has no
   // geometry yet (same as the bandGeometryStale reset above).
@@ -141,6 +148,7 @@ export function resetState(self: ResetStateHost): void {
   self.pasteStartCursor = 0;
   self.pasteRegistry.clear();
   self.clipboardFailureMsg = null;
+  self.modeNotice = null;
   // clipboardInFlight is NOT reset — an in-flight osascript probe is
   // tied to a Promise that will resolve/reject independently. Setting
   // the flag to false here would allow a new probe to spawn while the

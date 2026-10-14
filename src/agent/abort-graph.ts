@@ -23,7 +23,7 @@
 import { emitAbort } from './trace/emit.js';
 import type { AbortOrigin, TraceSink } from './trace/index.js';
 
-export interface ChildAbortedEvent {
+interface ChildAbortedEvent {
   parentId: string;
   childId: string;
   reason?: unknown;

@@ -75,6 +75,7 @@ vi.mock('./shell-task.js', () => ({
 
 import { CronScheduler } from './scheduler.js';
 import { runShellTask } from './shell-task.js';
+import { resetUsageLedgerForTests } from '../usage/usage-ledger.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -113,6 +114,9 @@ describe('CronScheduler + budget gate', () => {
   afterEach(() => {
     if (savedAfkHome === undefined) delete process.env['AFK_HOME'];
     else process.env['AFK_HOME'] = savedAfkHome;
+    // Close any usage-ledger kv.db handle opened during the tick so Windows
+    // does not EBUSY on the rmSync below (same pattern as create-wired-executors.test.ts).
+    resetUsageLedgerForTests();
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -305,6 +309,9 @@ describe('CronScheduler + budget gate: one alert per episode', () => {
   afterEach(() => {
     if (savedAfkHome === undefined) delete process.env['AFK_HOME'];
     else process.env['AFK_HOME'] = savedAfkHome;
+    // Close any usage-ledger kv.db handle opened during the tick so Windows
+    // does not EBUSY on the rmSync below (same pattern as create-wired-executors.test.ts).
+    resetUsageLedgerForTests();
     rmSync(dir, { recursive: true, force: true });
   });
 

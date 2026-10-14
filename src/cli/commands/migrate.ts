@@ -17,8 +17,8 @@
  */
 
 import type { Command } from 'commander';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
-import { dirname } from 'path';
+import { existsSync, readFileSync } from 'fs';
+import { writeJsonFile } from '../../utils/json-file.js';
 import { createInterface } from 'node:readline/promises';
 import { palette } from '../palette.js';
 import { getJsonConfigPath } from '../../paths.js';
@@ -242,8 +242,5 @@ export function writeImportFrom(
   }
   existing['importFrom'] = merged;
 
-  mkdirSync(dirname(configPath), { recursive: true });
-  const tmp = `${configPath}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(existing, null, 2) + '\n', 'utf-8');
-  renameSync(tmp, configPath);
+  writeJsonFile(configPath, existing);
 }

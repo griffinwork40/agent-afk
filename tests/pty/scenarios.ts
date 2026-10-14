@@ -1075,6 +1075,180 @@ export const SCENARIOS: Record<string, PtyScenario> = {
 
     },
   },
+  // ─────────────────────────────────────────────────────────────────────────
+  // height-grow-single (#3204): pane GROWS taller mid-streaming. tmux pulls
+  // scrollback history back onto screen, shifting all content and the cursor
+  // DOWN by `delta` rows. After CPR re-anchoring the compositor must show
+  // exactly ONE spinner and ONE prompt row — no ghost duplicate from the
+  // pre-grow position. No CPR reply text must appear on the prompt line.
+  //
+  // Faithfulness note: xterm-headless simulates the scrollback-pull on height
+  // grow by decrementing `ybase` (same as tmux). The CPR reply comes from the
+  // real PTY kernel, so the compositor's requestCprOrMarkDirty sees a real
+  // SIGWINCH and a real CPR reply. The sentinel timing (settle ≥150ms past
+  // the last resize) ensures the CPR exchange and always-repaint both complete.
+  // ─────────────────────────────────────────────────────────────────────────
+  'height-grow-single': {
+    description: 'pane GROW mid-streaming: one spinner, one prompt, no CPR text on prompt line (#3204)',
+    cols: 80,
+    rows: 24,
+    ref: '#3204 · terminal-compositor.lifecycle.cpr.ts requestCprOrMarkDirty',
+    async drive(ctx): Promise<void> {
+      const { stdout, stdin } = ctx;
+      const statusLine = wireProductionFooter(stdout, 'GROWMODELXYZ');
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      await c.arm();
+      const ix = c as unknown as Repaintable;
+      c.setSpinner({ enabled: true });
+
+      // Fill the viewport with streaming content so there is scrollback to pull.
+      const overlay = Array.from({ length: 10 }, (_, i) => `streaming token ${i} …`).join('\n');
+      for (let k = 0; k < 12; k++) {
+        c.setOverlay(overlay);
+        c.commitAbove(`GROW_PRE_${String(k).padStart(2, '0')}\n`);
+      }
+      ix.repaint();
+      await settle(40);
+
+      // GROW 24→30: triggers SIGWINCH → CPR → delta correction.
+      // rows=30 > rows=24, so xterm will pull scrollback on height grow.
+      c.setOverlay(overlay);
+      await requestResize(ctx, 80, 30); // HEIGHT GROW 24 → 30
+
+      // Post-resize streaming continues.
+      for (let k = 12; k < 16; k++) {
+        c.setOverlay(overlay);
+        c.commitAbove(`GROW_POST_${String(k).padStart(2, '0')}\n`);
+      }
+      c.setSpinner({ enabled: false });
+      c.setOverlay('');
+      c.commitAbove('GROW_DONE\n');
+      ix.repaint();
+      ix.repaint();
+      await settle(200); // let CPR exchange + always-repaint complete (≥120ms timeout + debounce)
+    },
+    expect: {
+      // Turn output appears exactly once — a ghost would duplicate GROW_DONE.
+      exactlyOnce: ['GROW_DONE', 'GROWMODELXYZ'],
+      inViewport: ['GROW_DONE'],
+      // No CPR reply text (ESC[N;NR) must appear anywhere as visible content.
+      // The CPR reply is consumed by the data listener before readline; if it
+      // leaks it appears as a literal "[N;NR" sequence in the prompt area.
+      absent: [';1R', ';80R'],
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // height-shrink-single (#3204): pane SHRINKS mid-streaming. tmux pushes
+  // top rows into scrollback history, shifting the cursor UP. After CPR
+  // re-anchoring the compositor must show exactly ONE spinner and ONE prompt
+  // row with no ghost below the frame. No CPR text on prompt line.
+  // ─────────────────────────────────────────────────────────────────────────
+  'height-shrink-single': {
+    description: 'pane SHRINK mid-streaming: one spinner, one prompt, no ghost below frame (#3204)',
+    cols: 80,
+    rows: 30,
+    ref: '#3204 · terminal-compositor.lifecycle.cpr.ts requestCprOrMarkDirty',
+    async drive(ctx): Promise<void> {
+      const { stdout, stdin } = ctx;
+      const statusLine = wireProductionFooter(stdout, 'SHRINKMODELXYZ');
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      await c.arm();
+      const ix = c as unknown as Repaintable;
+      c.setSpinner({ enabled: true });
+
+      const overlay = Array.from({ length: 8 }, (_, i) => `streaming token ${i} …`).join('\n');
+      for (let k = 0; k < 10; k++) {
+        c.setOverlay(overlay);
+        c.commitAbove(`SHRINK_PRE_${String(k).padStart(2, '0')}\n`);
+      }
+      ix.repaint();
+      await settle(40);
+
+      // SHRINK 30→24: triggers SIGWINCH → CPR → negative delta correction.
+      c.setOverlay(overlay);
+      await requestResize(ctx, 80, 24); // HEIGHT SHRINK 30 → 24
+
+      for (let k = 10; k < 14; k++) {
+        c.setOverlay(overlay);
+        c.commitAbove(`SHRINK_POST_${String(k).padStart(2, '0')}\n`);
+      }
+      c.setSpinner({ enabled: false });
+      c.setOverlay('');
+      c.commitAbove('SHRINK_DONE\n');
+      ix.repaint();
+      ix.repaint();
+      await settle(200); // let CPR exchange + always-repaint complete
+    },
+    expect: {
+      exactlyOnce: ['SHRINK_DONE', 'SHRINKMODELXYZ'],
+      inViewport: ['SHRINK_DONE'],
+      absent: [';1R', ';80R'],
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // height-burst (#3204): a height GROW mid-streaming with rapid synthetic
+  // SIGWINCHes emitted to the compositor BEFORE the CPR reply arrives,
+  // exercising the "dirty" branch of the "measure until quiescent" algorithm.
+  // Uses one external resize (parent → child.resize via the marker mechanism)
+  // and then process.stdout.emit('resize') calls that fire handleResizeImmediate
+  // without a further winsize change — marking burst.dirty so a re-query fires.
+  //
+  // Note: `requestResize` can only be called ONCE per scenario run (the parent
+  // only processes the FIRST resize marker). Subsequent resizes are simulated
+  // with process.stdout.emit('resize') which fires the compositor's SIGWINCH
+  // handler synchronously; isTTY=true so the CPR is re-queued correctly.
+  // ─────────────────────────────────────────────────────────────────────────
+  'height-burst': {
+    description: 'height burst (synthetic mid-CPR SIGWINCHes): quiescent delta applied once, no ghost (#3204)',
+    cols: 80,
+    rows: 24,
+    ref: '#3204 · CprHost.cprBurst "measure until quiescent"',
+    async drive(ctx): Promise<void> {
+      const { stdout, stdin } = ctx;
+      const statusLine = wireProductionFooter(stdout, 'BURSTMODELXYZ');
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      await c.arm();
+      const ix = c as unknown as Repaintable;
+      c.setSpinner({ enabled: true });
+
+      const overlay = Array.from({ length: 10 }, (_, i) => `streaming token ${i} …`).join('\n');
+      for (let k = 0; k < 12; k++) {
+        c.setOverlay(overlay);
+        c.commitAbove(`BURST_PRE_${String(k).padStart(2, '0')}\n`);
+      }
+      ix.repaint();
+      await settle(40);
+
+      c.setOverlay(overlay);
+      // External GROW 24→30 via parent (triggers real SIGWINCH → CPR starts).
+      await requestResize(ctx, 80, 30); // HEIGHT GROW 24 → 30
+      // Immediately fire synthetic SIGWINCHes (before CPR reply arrives) to
+      // exercise the dirty-marking burst path. The compositor's rows is already
+      // 30 from the SIGWINCH; stdout.rows is read at emit time.
+      process.stdout.emit('resize');
+      process.stdout.emit('resize');
+      // Settle: let the CPR re-queries and quiescent apply complete (≥2 × 120ms).
+      await settle(300);
+
+      for (let k = 12; k < 16; k++) {
+        c.setOverlay(overlay);
+        c.commitAbove(`BURST_POST_${String(k).padStart(2, '0')}\n`);
+      }
+      c.setSpinner({ enabled: false });
+      c.setOverlay('');
+      c.commitAbove('BURST_DONE\n');
+      ix.repaint();
+      ix.repaint();
+      await settle(200);
+    },
+    expect: {
+      exactlyOnce: ['BURST_DONE', 'BURSTMODELXYZ'],
+      inViewport: ['BURST_DONE'],
+      absent: [';1R', ';80R'],
+    },
+  },
 };
 
 export type ScenarioName = keyof typeof SCENARIOS;

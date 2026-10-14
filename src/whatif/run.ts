@@ -45,6 +45,7 @@ import { verifyRun } from './run.verify.js';
 import { runVerifyPreflight, runBaselineSamplePhase } from './run.preflight.js';
 import { checkRedundancy, formatRedundancySection } from './redundancy.js';
 import { classifyQuestionFit } from './question-fit.js';
+import { errorMessage } from '../utils/errors.js';
 import type {
   EpisodeTrace,
   RunnerOptions,
@@ -157,7 +158,15 @@ async function runPredictPhase(
   // Check added paragraphs against the baseline system prompt using
   // deterministic token-set Jaccard similarity.  Warnings are surfaced via
   // onProgress BEFORE the model call so a user can abort a paid run early.
+  // Elapsed time is reported so operators know when a large system prompt
+  // (many paragraphs × many added paragraphs) is driving the O(n×m) pass.
+  const redundancyStart = performance.now();
   const redundancyWarnings = checkRedundancy(structural.baseline.system, structural.systemDiff);
+  const redundancyElapsedMs = performance.now() - redundancyStart;
+  deps.onProgress?.({
+    stage: 'predict',
+    message: `[redundancy] Jaccard pass complete (${redundancyElapsedMs.toFixed(2)}ms)`,
+  });
   for (const w of redundancyWarnings) {
     const sectionNote = w.sourceSection ? ` (§ ${w.sourceSection})` : '';
     const scoreNote = ` [${(w.similarity * 100).toFixed(0)}% similar]`;
@@ -186,11 +195,18 @@ async function runPredictPhase(
   const probesPerPrediction = options.probes ?? DEFAULT_PROBES;
   const maxPredictions = resolveMaxPredictions(probesPerPrediction, options.maxPredictions);
 
+  // Collect operator predictions from options and from the spec file (#2861).
+  const specPredictions = options.spec.predictions ?? [];
+  const cliPredictions = options.operatorPredictions ?? [];
+  const allOperatorPredictions = [...cliPredictions, ...specPredictions];
+
   const rawPredictions = await predictChanges(
     {
       spec, changeDescriptions, structural, trackRecord, repoManifest,
       probesPerPrediction, maxPredictions,
       ...(redundancySection !== undefined ? { redundancySection } : {}),
+      ...(allOperatorPredictions.length > 0 ? { operatorPredictions: allOperatorPredictions } : {}),
+      ...(options.verify ? { verify: true } : {}),
     },
     wrappedComplete,
     options.analystModel,
@@ -251,6 +267,8 @@ function dateStamp(now: Date): string {
 }
 
 // Preflight helper and probe-count helper extracted to run.preflight.ts (#2511).
+// A/A calibration fast-path extracted to run.aa.ts (#2415).
+import { runAaPhase } from './run.aa.js';
 
 // ---------------------------------------------------------------------------
 // runWhatif
@@ -315,6 +333,12 @@ export async function runWhatif(
 
   let pendingReport: WhatifReport | undefined;
   try {
+    // ── A/A calibration fast-path (#2415 Step 0) ──────────────────────────
+    if (options.aaMode) {
+      pendingReport = await runAaPhase(baseline, candidate, spec, runDir, runnerOpts, autoKeepContextHooks, options, deps);
+      return pendingReport;
+    }
+
     // ── c+d) Snapshots + Predictions ─────────────────────────────────────
 
     const { structural, predictions, analystCostUsd: predictCost, changeKinds, droppedProbes } =
@@ -365,7 +389,7 @@ export async function runWhatif(
     // Resolve judge BEFORE preflight estimate (so we know if it's external)
     const resolvedJudge = await deps.makeJudge(options.judge);
     const crossCheckJudge = await deps.makeCrossCheckJudge().catch((err: unknown) => {
-      console.warn(`[whatif/run] cross-check judge unavailable: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`[whatif/run] cross-check judge unavailable: ${errorMessage(err)}`);
       return undefined;
     });
 

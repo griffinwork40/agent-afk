@@ -9,28 +9,28 @@
  * ## Quick start
  *
  * ```ts
- * // In default-hook-registry.ts:
+ * // In default-hook-registry.ts (production registers PostToolUse only):
  * import { createEffectLedgerPostHook } from './effect-ledger/index.js';
- * registry.register('PostToolUse', createEffectLedgerPostHook());
- *
- * // Query the ledger:
- * import { EffectStore } from './effect-ledger/index.js';
- * const store = new EffectStore();
- * const records = await store.query({ sessionId: 'abc123', status: 'ambiguous' });
+ * const ledgerHook = createEffectLedgerPostHook();
+ * registry.register('PostToolUse', ledgerHook);
+ * registry.register('PostToolUseFailure', ledgerHook);
  * ```
+ *
+ * `createEffectLedgerPreHook` is exported for opt-in use (e.g. pre-recording
+ * high-risk operations before they execute) but is **not** registered by
+ * default.
+ *
+ * ## Injectable seam (not re-exported from this barrel)
+ *
+ * `EffectStore`, `EffectRecord`, `EffectStatus`, `EffectQuery`,
+ * `PendingEffectInput`, `ExecuteEffectInput`, `Classification`,
+ * `classifyToolCall`, and `computeIdempotencyKey` are implementation details.
+ * Import them directly from `./store.js`, `./types.js`, `./classifier.js`, or
+ * `./idempotency.js` only if you are extending the ledger internals.
+ * `createEffectLedgerPreHook` is likewise internal — import directly from
+ * `./hook.js` when needed.
  *
  * @module agent/effect-ledger
  */
 
-export { EffectStore } from './store.js';
-export { classifyToolCall } from './classifier.js';
-export { computeIdempotencyKey } from './idempotency.js';
-export { createEffectLedgerPostHook, createEffectLedgerPreHook } from './hook.js';
-export type {
-  EffectRecord,
-  EffectStatus,
-  EffectQuery,
-  PendingEffectInput,
-  ExecuteEffectInput,
-} from './types.js';
-export type { Classification } from './classifier.js';
+export { createEffectLedgerPostHook } from './hook.js';

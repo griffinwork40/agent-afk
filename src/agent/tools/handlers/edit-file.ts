@@ -8,6 +8,7 @@
  * @module agent/tools/handlers/edit-file
  */
 
+import { validatedWriteTarget } from '../../file-checkpoint/write-policy.js';
 import { env } from '../../../config/env.js';
 import { readFile, writeFile, stat } from 'fs/promises';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
@@ -16,6 +17,7 @@ import { resolveAndContain } from './_cwd-utils.js';
 import { computeLineDiff } from '../../../utils/diff.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { sha256Hex } from './patch-validate.js';
+import { isBlankInput } from '../subagent/optional-input.js';
 
 /**
  * Input shape for the edit_file tool (validated at runtime).
@@ -65,8 +67,14 @@ function parseEditFileInput(input: unknown): {
     replace_all = editInput.replace_all;
   }
 
+  // Contract: a blank expected_hash ("", whitespace, null) means "no hash
+  // precondition", not a malformed hash. Callers under OpenAI strict function
+  // calling (the Responses API defaults `strict` to true) must emit every
+  // schema property, so they send `expected_hash: ""` when they have none; a
+  // blank precondition carries no caller intent, so it is dropped rather than
+  // rejected. Opt-in per field, per optional-input.ts scope rules.
   let expected_hash: string | undefined;
-  if (editInput.expected_hash !== undefined) {
+  if (!isBlankInput(editInput.expected_hash)) {
     if (typeof editInput.expected_hash !== 'string') {
       throw new Error('expected_hash must be a string');
     }
@@ -131,6 +139,7 @@ const editFileImpl = async (
     // Denylist check — must run before the read so we never even open a
     // protected path (mirrors the write_file guard exactly).
     assertNotDenylisted(file_path, 'edit_file');
+    const writeTarget = await validatedWriteTarget(file_path, context, cwd);
 
     // TOCTOU guard: record mtime before read; re-check before write so a
     // concurrent external edit is caught rather than silently clobbered.
@@ -138,11 +147,11 @@ const editFileImpl = async (
     // the same inode. The guard is best-effort on FAT/exFAT (1-second mtime
     // resolution) but catches the common case of a parallel agent or editor
     // write that finishes while we computed the replacement string.
-    const statBefore = await stat(file_path);
+    const statBefore = await stat(writeTarget);
     const mtimeBefore = statBefore.mtimeMs;
 
     // Read the file.
-    const content = await readFile(file_path, 'utf-8');
+    const content = await readFile(writeTarget, 'utf-8');
 
     // Content-hash staleness gate: when the caller supplies expected_hash
     // (format "sha256:<64 hex chars>", already validated in parseEditFileInput),
@@ -190,7 +199,7 @@ const editFileImpl = async (
     }
 
     // TOCTOU check: fail if the file was modified between our read and write.
-    const statAfter = await stat(file_path);
+    const statAfter = await stat(writeTarget);
     if (statAfter.mtimeMs !== mtimeBefore) {
       return {
         content: `edit_file aborted: ${file_path} was modified by another process between read and write (mtime changed). Re-read the file and retry.`,
@@ -198,17 +207,32 @@ const editFileImpl = async (
       };
     }
 
-    // Write back to file.
-    await writeFile(file_path, modified, 'utf-8');
+    // Invariant: rejected edits must never publish a restorable checkpoint.
+    let snapshotWarning: string | undefined;
+    if (context?.fileCheckpoint) {
+      try {
+        await context.fileCheckpoint.snapshotFile(writeTarget);
+      } catch (snapErr) {
+        snapshotWarning = `[edit_file] checkpoint snapshot failed (rewind unavailable for this file): ${errorMessage(snapErr)}`;
+        console.warn(snapshotWarning);
+      }
+    }
+    // Invariant: a retargeted link must not redirect an edit away from the
+    // destination whose pre-edit bytes were validated and snapshotted.
+    if (await validatedWriteTarget(writeTarget, context, cwd) !== writeTarget) {
+      throw new Error(`edit_file destination changed before write: ${writeTarget}`);
+    }
+    await writeFile(writeTarget, modified, 'utf-8');
 
     // Build the model-facing result message. The diff itself rides on
     // `render.diff` (out-of-band) — keeping it out of `content` saves
     // tokens (model already supplied old_string + new_string) and lets
     // the renderer produce a richer multi-line block than a string allows.
-    const resultMsg =
+    const baseMsg =
       occurrences === 1
         ? `Replaced 1 occurrence in ${file_path}`
         : `Replaced ${occurrences} occurrences in ${file_path}`;
+    const resultMsg = snapshotWarning ? `${baseMsg}\nWARNING: ${snapshotWarning}` : baseMsg;
 
     const _t0 = performance.now();
     const diff = computeLineDiff(content, modified);

@@ -28,6 +28,7 @@ export interface AutoRoutingConfig {
 }
 
 export interface CliConfig {
+  tools?: { disabled?: string[] };
   apiKey?: string;
   /**
    * Base URL for the Anthropic Messages API. When set, traffic is routed to
@@ -94,8 +95,10 @@ export interface CliConfig {
     worktreePrune?: {
       enabled: boolean;
       cron: string;
-      maxAgeDaysClean: number;
-      maxAgeDaysDirty: number;
+      /** Optional — absent means the user did not set it; `resolveSweepPolicy` falls through. */
+      maxAgeDaysClean?: number;
+      /** Optional — absent means the user did not set it; `resolveSweepPolicy` falls through. */
+      maxAgeDaysDirty?: number;
       scope: string;
     };
     /** Tool-health builtin configuration. Mirrors worktreePrune shape. */
@@ -338,6 +341,7 @@ export interface ModelSlotConfigEntry {
 }
 
 export interface ConfigFileSchema {
+  tools?: { disabled?: string[] };
   model?: string;
   /**
    * Per-tier model bindings. Each slot accepts a bare id string

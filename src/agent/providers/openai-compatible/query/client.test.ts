@@ -44,9 +44,15 @@ describe('ledgerAccountForBaseUrl — distinct keys for unparseable baseURLs (#2
     expect(b).toMatch(/^custom-[0-9a-f]{12}$/);
   });
 
-  it('the same malformed baseURL is stable across calls', () => {
-    const url = 'garbage://endpoint?token=secret';
-    expect(ledgerAccountForBaseUrl(url)).toBe(ledgerAccountForBaseUrl(url));
+  it('the same unparseable baseURL is stable across calls', () => {
+    // 'garbage://...' is parsed successfully by WHATWG URL (hostname='endpoint'),
+    // so use a string that is truly unparseable — no scheme, no valid host.
+    const url = 'not-a-url-with-secret-token-67890';
+    const first = ledgerAccountForBaseUrl(url);
+    const second = ledgerAccountForBaseUrl(url);
+    expect(first).toBe(second);
+    // Must be in the hashed custom- form, not the raw URL
+    expect(first).toMatch(/^custom-[0-9a-f]{12}$/);
   });
 
   it('never exposes the raw URL in the key (hashed, not embedded)', () => {

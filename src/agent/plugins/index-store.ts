@@ -18,15 +18,11 @@
 
 import {
   existsSync,
-  mkdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
-  unlinkSync,
 } from 'fs';
-import { dirname, join } from 'path';
-import { randomBytes } from 'crypto';
+
 import { getPluginsIndexPath } from '../../paths.js';
+import { writeJsonFile } from '../../utils/json-file.js';
 
 export type SourceType = 'git' | 'github' | 'local' | 'marketplace';
 
@@ -61,6 +57,13 @@ export interface PluginIndexEntry {
   manifestName?: string;
   /** For `sourceType: 'marketplace'`, the marketplace this plugin came from. */
   marketplace?: string;
+  /**
+   * User-supplied option values for this plugin's `userConfig` keys.
+   * Map of manifest key → string value.  Set by `afk plugin config <name> <key> <value>`.
+   * Sensitive keys are stored here but NEVER exported to hook env vars; stale
+   * keys (removed from the manifest) are silently skipped at export time.
+   */
+  options?: Record<string, string>;
 }
 
 export interface MarketplaceIndexEntry {
@@ -138,23 +141,8 @@ export function readIndex(path: string = getPluginsIndexPath()): PluginIndex {
  * Atomically write `index` to `path`. Creates parent dirs if needed.
  */
 export function writeIndex(index: PluginIndex, path: string = getPluginsIndexPath()): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = join(
-    dirname(path),
-    `.index.json.${process.pid}.${randomBytes(4).toString('hex')}.tmp`,
-  );
-  const payload = JSON.stringify(index, null, 2);
-  try {
-    writeFileSync(tmp, payload, 'utf8');
-    renameSync(tmp, path);
-  } catch (err) {
-    try {
-      if (existsSync(tmp)) unlinkSync(tmp);
-    } catch {
-      /* best effort */
-    }
-    throw err;
-  }
+  // atomicWriteFile (via writeJsonFile) creates parent dirs (mkdirp: true by default).
+  writeJsonFile(path, index, { mode: 0o600 });
 }
 
 /**
@@ -276,6 +264,52 @@ export function isMarketplacePinnedRef(entry: Pick<MarketplaceIndexEntry, 'ref' 
   if (ref === defaultBranch) return false;
   const SEMVER_RE = /^v?\d+\.\d+\.\d+/;
   return !SEMVER_RE.test(ref);
+}
+
+/**
+ * Set a single option key for a plugin. Throws if the plugin is not in the index.
+ * The caller is responsible for validating that `key` is declared in the manifest
+ * and is not sensitive (see `validateOptionKey` in `plugin-user-config.ts`).
+ */
+export function setPluginOption(
+  name: string,
+  key: string,
+  value: string,
+  path: string = getPluginsIndexPath(),
+): PluginIndex {
+  const index = readIndex(path);
+  const entry = index.plugins[name];
+  if (!entry) {
+    throw new Error(`plugin "${name}" is not in the index`);
+  }
+  entry.options = { ...(entry.options ?? {}), [key]: value };
+  entry.updatedAt = new Date().toISOString();
+  writeIndex(index, path);
+  return index;
+}
+
+/**
+ * Unset (remove) a single option key for a plugin. No-op when the key is absent.
+ * Throws if the plugin is not in the index.
+ */
+export function unsetPluginOption(
+  name: string,
+  key: string,
+  path: string = getPluginsIndexPath(),
+): PluginIndex {
+  const index = readIndex(path);
+  const entry = index.plugins[name];
+  if (!entry) {
+    throw new Error(`plugin "${name}" is not in the index`);
+  }
+  if (entry.options && key in entry.options) {
+    const updated = { ...entry.options };
+    delete updated[key];
+    entry.options = Object.keys(updated).length > 0 ? updated : undefined;
+    entry.updatedAt = new Date().toISOString();
+    writeIndex(index, path);
+  }
+  return index;
 }
 
 function cloneEmpty(): PluginIndex {

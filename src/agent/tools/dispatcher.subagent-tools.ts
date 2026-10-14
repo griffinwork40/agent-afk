@@ -1,6 +1,8 @@
 import type { SubagentExecutor } from './subagent-executor.js';
 import type { ToolCall, ToolResult } from './types.js';
 import { errorMessage } from '../../utils/errors.js';
+import { executeProcessJobTool, routesToProcessJobs } from './process-job-tools.js';
+import type { ProcessJobRegistry } from '../shell-jobs/process-jobs.js';
 
 export function isSubagentProviderTool(name: string): boolean {
   return name === 'agent' || name === 'cancel_background_job' || name === 'send_message_to_agent' || name === 'get_background_job_health';
@@ -14,7 +16,13 @@ export interface SubagentProviderToolOutcome {
 export async function executeSubagentProviderTool(
   executor: SubagentExecutor | undefined,
   call: ToolCall,
+  processJobs?: ProcessJobRegistry,
 ): Promise<SubagentProviderToolOutcome> {
+  // Background processes (`proc-` ids) share the background tool names but
+  // not the subagent executor; route them before the executor check.
+  if (routesToProcessJobs(call, executor?.supportsBackgroundJobs?.() === true, processJobs !== undefined)) {
+    return { result: await executeProcessJobTool(processJobs, call) };
+  }
   if (!executor) {
     return { result: {
       content: call.name === 'agent'

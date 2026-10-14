@@ -1,6 +1,15 @@
 /**
  * Public surface for the MCP client subsystem. Importers outside this
- * folder should only reach in through this barrel.
+ * folder should reach in through this barrel for any symbol it exports.
+ * Sub-modules may be imported directly only for symbols not re-exported here.
+ *
+ * @example
+ * ```ts
+ * import { McpManager, loadMcpConfig } from './agent/mcp/index.js';
+ * const { servers } = await loadMcpConfig();
+ * const manager = new McpManager(servers);
+ * await manager.connectAll();
+ * ```
  *
  * @module agent/mcp
  */
@@ -12,35 +21,11 @@ export type {
   McpTransportType,
 } from './types.js';
 
-export { McpClient, type McpClientConnectResult } from './client.js';
 export { McpManager, type McpManagerInitOptions } from './manager.js';
 export {
   loadMcpConfig,
-  loadMcpConfigFile,
   getMcpConfigPath,
-  getProjectMcpConfigPath,
-  discoverPluginMcpConfigs,
   type LoadedMcpConfig,
   type LoadMcpConfigOptions,
   type McpConfigFile,
 } from './config-loader.js';
-export {
-  buildMcpToolName,
-  isMcpToolName,
-  buildMcpNameRegistry,
-  sanitizeNameSegment,
-  type McpNameRegistry,
-} from './naming.js';
-export { expandEnvString, expandEnvRecord, type EnvExpansionResult } from './env.js';
-export {
-  createTransport,
-  expandHeaders,
-  type CreateTransportResult,
-} from './transport.js';
-export {
-  KeychainOAuthProvider,
-  readOauthPending,
-  clearOauthPending,
-  type KeychainBackend,
-  type OauthPendingEntry,
-} from './oauth.js';

@@ -20,6 +20,7 @@ import type { ToolCall, ToolResult } from '../providers/anthropic-direct/types.j
 import type { ToolDispatcher } from '../providers/anthropic-direct/tool-dispatcher.js';
 import type { RuntimeStateSource } from './types.js';
 import { buildRuntimeSnapshot, parseView } from './runtime-snapshot.js';
+import { availableCatalogModels } from '../providers/openai-compatible/catalog-awareness.js';
 
 /**
  * Tool definition for `get_runtime_state`. Stable surface — the model relies
@@ -43,13 +44,17 @@ export const getRuntimeStateTool: AnthropicToolDef = {
     'branch / commit the session started on.\n\n' +
     'Views:\n' +
     '- `self`       — identity + model + permissions + cwd only\n' +
-    '- `tools`      — enabled tool names + MCP server summary only\n' +
+    '- `tools`      — enabled tools, MCP servers, and available OpenAI subscription models with windows and upgrade notes\n' +
     '- `subagents`  — active subagent handles + background jobs only\n' +
+    '                 (also includes subagentOutcomeSummary when history is available)\n' +
     '- `workspace`  — git state (branch, headSha, dirty, dirtyCount, remoteUrl)\n' +
     '- `all`        — union of the four above (default)\n\n' +
-    'This is a read-only, in-memory inspection. It does not probe the file ' +
-    'system or network. Fields the runtime does not know (e.g. depth for a ' +
-    'top-level session) come back as `null` rather than synthesised defaults.',
+    'This is read-only. The optional subscription model list reads the local Codex catalog; other fields come from in-memory state. No network requests. Fields the runtime does not know (e.g. depth for a ' +
+    'top-level session) come back as `null` rather than synthesised defaults.\n\n' +
+    'The `all` view also includes `subagentOutcomeSummary` — historical success ' +
+    'rate, cap-hit rate, and p50 latency bucketed by model × agentType × depth ' +
+    '(30-day window, ≥3-run buckets only; omitted when empty). A high `capHitRate` ' +
+    'signals that `maxToolUseIterations` is too tight for that model+type workload.',
   input_schema: {
     type: 'object',
     properties: {
@@ -94,7 +99,8 @@ export function createGetRuntimeStateHandler(source: RuntimeStateSource): ToolHa
       ? parseView((input as Record<string, unknown>)['view'])
       : 'all';
     const snapshot = buildRuntimeSnapshot(source, view);
-    return { content: JSON.stringify(snapshot) };
+    const models = view === 'tools' || view === 'all' ? availableCatalogModels() : [];
+    return { content: JSON.stringify({ ...snapshot, ...(models.length ? { openaiSubscriptionModels: models } : {}) }) };
   };
 }
 

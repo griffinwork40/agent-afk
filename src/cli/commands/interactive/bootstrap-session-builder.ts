@@ -9,6 +9,11 @@ import type { HookRegistry } from '../../../agent/hooks.js';
 import type { TraceWriter } from '../../../agent/trace/index.js';
 import { explicitProviderHints, getApiKeyForModel } from '../../shared-helpers.js';
 import type { CliConfig } from '../../config.js';
+import { MemoryStore } from '../../../agent/memory/index.js';
+import { StateStore } from '../../../agent/state/state-store.js';
+import { WorkspaceStore } from '../../../agent/workspace/workspace-store.js';
+import { getStateDatabasePath } from '../../../paths.js';
+import { env } from '../../../config/env.js';
 
 /**
  * Dependencies for constructing a fresh `AgentSession`. Captures everything
@@ -48,6 +53,8 @@ export interface BuildAgentSessionDeps {
    * dispatcher. Absent for subagent forks and headless surfaces.
    */
   detachRegistry?: import('../../../agent/tools/detach-registry.js').DetachableToolRegistry;
+  /** Background process registry (`bash run_in_background`); root REPL only. */
+  processJobs?: import('../../../agent/shell-jobs/process-jobs.js').ProcessJobRegistry;
   cwd: string | undefined;
   maxTurns: number;
   autoResumeOnUsageLimit: boolean | undefined;
@@ -101,6 +108,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
     ...(deps.detachRegistry !== undefined
       ? { detachRegistry: deps.detachRegistry }
       : {}),
+    ...(deps.processJobs !== undefined ? { processJobs: deps.processJobs } : {}),
     ...(deps.drainSubagents !== undefined ? { drainSubagents: deps.drainSubagents } : {}),
     ...(deps.autoResumeOnUsageLimit !== undefined
       ? { autoResumeOnUsageLimit: deps.autoResumeOnUsageLimit }
@@ -132,6 +140,7 @@ export function buildSharedDeps(a: {
   drainSubagents?: ((reason: string) => Promise<unknown>) | undefined;
   bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
   detachRegistry?: import('../../../agent/tools/detach-registry.js').DetachableToolRegistry;
+  processJobs?: import('../../../agent/shell-jobs/process-jobs.js').ProcessJobRegistry;
   effectiveCwd: string | undefined;
   maxTurns: string;
   initialPermissionMode: PermissionMode | undefined;
@@ -158,10 +167,32 @@ export function buildSharedDeps(a: {
     ...(a.detachRegistry !== undefined
       ? { detachRegistry: a.detachRegistry }
       : {}),
+    ...(a.processJobs !== undefined ? { processJobs: a.processJobs } : {}),
     cwd: a.effectiveCwd,
     maxTurns: parseInt(a.maxTurns, 10),
     autoResumeOnUsageLimit: a.cliConfig.autoResumeOnUsageLimit,
     ...(a.initialPermissionMode !== undefined ? { permissionMode: a.initialPermissionMode } : {}),
     ...(a.explicitProvider !== undefined ? { explicitProvider: a.explicitProvider } : {}),
+  };
+}
+
+/** Return type of {@link createBootstrapSharedStores}. */
+export interface BootstrapSharedStores {
+  sharedWorkspaceStore: WorkspaceStore | undefined;
+  sharedMemoryStore: MemoryStore;
+  sharedStateStore: StateStore;
+}
+
+/**
+ * Construct the three session-scoped stores shared across all mid-session
+ * swaps: workspace (optional — disabled via AFK_WORKSPACE_DISABLED), memory,
+ * and state. Extracted from {@link bootstrapSession} to keep that function
+ * within the 200-line function ceiling.
+ */
+export function createBootstrapSharedStores(): BootstrapSharedStores {
+  return {
+    sharedWorkspaceStore: env.AFK_WORKSPACE_DISABLED === '1' ? undefined : new WorkspaceStore(),
+    sharedMemoryStore: new MemoryStore(),
+    sharedStateStore: new StateStore(getStateDatabasePath()),
   };
 }

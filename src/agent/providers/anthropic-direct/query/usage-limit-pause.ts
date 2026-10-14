@@ -11,12 +11,31 @@
 
 import type { ProviderEvent } from '../../../provider.js';
 import { classifyUsageLimitError, waitForReset, waitForHotSwap } from '../usage-limit.js';
-import { loadClaudeCodeOauthToken, parseAccountIdentifier } from '../../../auth/keychain.js';
+import { adoptFreshClient, liveAccountId } from './live-client.js';
 import { emitSessionPhase } from '../../../trace/emit.js';
-import type { AnthropicClientLike, RunTurnInput } from '../types.js';
-import type { RetryTierContext, TierGenerator } from './retry-context.js';
+import type { RunTurnInput } from '../types.js';
+import type { RetryTierContext, TierGenerator, UsageLimitWaitResult } from './retry-context.js';
 import { NO_TS_RETRY_INTERVAL_MS, TWO_HOURS_MS } from './retry-constants.js';
 import { anthropicLimitErrorEvent } from '../usage-limit.error.js';
+
+/** Join the actual owner's outcome; our abort can end only our join. */
+export function joinUsageLimitWait(
+  shared: Promise<UsageLimitWaitResult>,
+  signal: AbortSignal,
+): Promise<UsageLimitWaitResult> {
+  if (signal.aborted) return Promise.resolve('aborted');
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => { resolve('aborted'); };
+    signal.addEventListener('abort', onAbort, { once: true });
+    void shared.then((result) => {
+      signal.removeEventListener('abort', onAbort);
+      resolve(result);
+    }, (error: unknown) => {
+      signal.removeEventListener('abort', onAbort);
+      reject(error);
+    });
+  });
+}
 
 /**
  * Shared hot-swap wait loop for both the no-timestamp and far-reset parks.
@@ -30,6 +49,20 @@ import { anthropicLimitErrorEvent } from '../usage-limit.error.js';
  * Contract: the caller emits `paused` BEFORE calling this helper so the UI
  * can render the pause panel immediately. The helper assumes that has happened
  * and does NOT emit `paused` itself.
+ *
+ * @remarks The far-reset + autoResume=true path enters this loop instead of
+ * sleeping until the distant reset. Each iteration waits up to
+ * {@link NO_TS_RETRY_INTERVAL_MS} (60 s) before replaying a probe, so over
+ * a 2 h cap the loop can issue up to ~120 API probes on the same account.
+ * That is intentional: the primary purpose of this path is to resume
+ * immediately on an account hot-swap, and a pure hot-swap-only wait (no timer
+ * probes) would require a separate code path, increase complexity, and prevent
+ * same-account recovery if the far reset happens to lift earlier than
+ * advertised. The probe rate is low enough (~1/min) that it does not
+ * constitute meaningful API abuse. A future optimisation could back off
+ * exponentially after the first few failed probes, but that is not
+ * warranted until measured as a real cost concern. Tracked in #3170 for
+ * re-evaluation when probe rate shows up in billing or latency profiles.
  */
 async function* runHotSwapParkLoop(
   ctx: RetryTierContext,
@@ -44,9 +77,11 @@ async function* runHotSwapParkLoop(
     let noTsResult: 'aborted' | 'hot-swap' | 'timer';
     const inFlight = ctx.getUsageLimitWait();
     if (inFlight) {
-      // A concurrent session already waiting — dedup by treating any
-      // resolve as 'aborted' since we can't share this wait.
-      noTsResult = 'aborted';
+      // Invariant: joining another session's wait does not confer ownership of
+      // the slot — this caller never calls setUsageLimitWait and must not clear
+      // it. The owner's finally block manages slot lifecycle; the join only
+      // propagates the outcome (or resolves 'aborted' early on our own signal).
+      noTsResult = await joinUsageLimitWait(inFlight, runInput.signal);
     } else {
       const wait = waitForHotSwap({
         signal: runInput.signal,
@@ -56,13 +91,15 @@ async function* runHotSwapParkLoop(
       try {
         noTsResult = await wait;
       } finally {
-        ctx.setUsageLimitWait(null);
+        // Invariant: only the owner of the current slot may clear it.
+        if (ctx.getUsageLimitWait() === wait) ctx.setUsageLimitWait(null);
       }
     }
 
     if (noTsResult === 'aborted') return;
 
     let resumedAccountId = accountId;
+    let adopted = false;
     if (noTsResult === 'hot-swap') {
       // hot-swap: new token in keychain. The Anthropic SDK caches
       // `authToken` at construction, so we MUST rebuild the client — not
@@ -71,13 +108,13 @@ async function* runHotSwapParkLoop(
       // fall through with the existing client (mirrors the oauth-limit hot-
       // swap path); the timer probe may still succeed once the same-account
       // limit resets.
-      const refreshed = await ctx.forceClientRefresh();
+      const refreshed = await adoptFreshClient(ctx, runInput);
       if (refreshed) {
-        runInput.client = ctx.getClient() as unknown as AnthropicClientLike;
         resumedAccountId = refreshed.accountId;
+        adopted = true;
       }
     }
-    runInput.headers = ctx.rotateHeaders(runInput);
+    if (!adopted) runInput.headers = ctx.rotateHeaders(runInput);
 
     // Replay the turn. Peek the stream: if the FIRST thing it does is
     // re-hit a usage limit we are still limited — stay paused and wait
@@ -85,6 +122,11 @@ async function* runHotSwapParkLoop(
     let reLimited: ProviderEvent | null = null;
     let reLimitedResetsAt: Date | undefined;
     for await (const event of next(ctx, runInput, isClosed)) {
+      // A probe that re-hits the limit emits the live throttle signal for
+      // its own 429 (tracing-fetch → throttle-signals) BEFORE the error.
+      // That is not evidence the limit lifted; treating it as such emitted a
+      // false `resumed` and leaked the raw 429. Drop it while still paused.
+      if (!resumeEmitted && event.type === 'rate_limit') continue;
       if (!resumeEmitted && event.type === 'error') {
         const c = classifyUsageLimitError(event.error);
         if (c && (c.kind === 'oauth-limit' || c.kind === 'oauth-limit-no-ts')) {
@@ -108,7 +150,9 @@ async function* runHotSwapParkLoop(
     // Resumed (or the turn ended without re-limiting) — done.
     if (!reLimited) return;
 
-    if (Date.now() - startedAt > TWO_HOURS_MS) {
+    // Use >= so the session at exact equality is also capped (one extra probe
+    // at strict > would otherwise fire at the boundary).
+    if (Date.now() - startedAt >= TWO_HOURS_MS) {
       // Limit never lifted within the cap — stop polling and surface it.
       ctx.markCredentialSnapshotStale();
       yield anthropicLimitErrorEvent(reLimited, reLimitedResetsAt);
@@ -149,7 +193,7 @@ export async function* usageLimitNoTimestampPause(
     // accountId is only needed when we will actually park (auto-resume path);
     // read it lazily so fail-fast callers never touch the keychain.
     accountId: ctx.autoResumeOnUsageLimit
-      ? parseAccountIdentifier(loadClaudeCodeOauthToken() ?? '')
+      ? liveAccountId(ctx)
       : undefined,
     autoResume: ctx.autoResumeOnUsageLimit,
     ...(ctx.autoResumeOnUsageLimit ? { waitDeadline: new Date(startedAt + TWO_HOURS_MS) } : {}),
@@ -180,7 +224,7 @@ export async function* usageLimitNoTimestampPause(
     return;
   }
 
-  const accountId = parseAccountIdentifier(loadClaudeCodeOauthToken() ?? '');
+  const accountId = liveAccountId(ctx);
   yield* runHotSwapParkLoop(
     ctx, runInput, isClosed, next, accountId, startedAt,
   );
@@ -230,7 +274,7 @@ export async function* usageLimitResetPause(
     // a false "resumes at <distant time>" to the user. Instead emit no resetsAt
     // (→ "no reset time available / resume on account switch") and set
     // waitDeadline so watchdog/ceiling arm for exactly the 2h park window.
-    const accountId = parseAccountIdentifier(loadClaudeCodeOauthToken() ?? '');
+    const accountId = liveAccountId(ctx);
     const startedAt = Date.now();
     const waitDeadline = new Date(startedAt + TWO_HOURS_MS);
     yield {
@@ -260,7 +304,7 @@ export async function* usageLimitResetPause(
     return;
   }
 
-  const accountId = parseAccountIdentifier(loadClaudeCodeOauthToken() ?? '');
+  const accountId = liveAccountId(ctx);
   const pausedAt = Date.now();
   // External constraint: this event must carry `autoResume` BEFORE the
   // autoResumeOnUsageLimit branch below decides what comes next, so the UI
@@ -300,36 +344,42 @@ export async function* usageLimitResetPause(
   let result: 'aborted' | 'timer' | 'hot-swap';
   const inFlight = ctx.getUsageLimitWait();
   if (inFlight) {
-    result = await inFlight;
+    // Invariant: joining another session's wait does not confer ownership of
+    // the slot — this caller never calls setUsageLimitWait and must not clear
+    // it. The owner's finally block manages slot lifecycle; the join only
+    // propagates the outcome (or resolves 'aborted' early on our own signal).
+    result = await joinUsageLimitWait(inFlight, runInput.signal);
   } else {
     const wait = waitForReset({ resetsAt, signal: runInput.signal });
     ctx.setUsageLimitWait(wait);
     try {
       result = await wait;
     } finally {
-      ctx.setUsageLimitWait(null);
+      // Invariant: a replacement wait belongs to a different owner.
+      if (ctx.getUsageLimitWait() === wait) ctx.setUsageLimitWait(null);
     }
   }
 
   if (result === 'aborted') return;
 
   let resumedAccountId = accountId;
+  let adopted = false;
   if (result === 'hot-swap') {
     // hot-swap: user logged into a different account during the wait. Same
     // SDK-caches-authToken constraint as the no-ts path above — rebuild
     // the client or the replayed turn keeps using the prior account's
     // bearer token.
-    const refreshed = await ctx.forceClientRefresh();
+    const refreshed = await adoptFreshClient(ctx, runInput);
     if (refreshed) {
-      runInput.client = ctx.getClient() as unknown as AnthropicClientLike;
       resumedAccountId = refreshed.accountId;
+      adopted = true;
     }
     // If refresh failed, fall through with the old client — the inner
     // 401 path may still recover if the prior token has since expired.
   }
   // 'timer' resolution: deadline passed, same account, same token — no
   // client rebuild needed. Headers still rotated to refresh the request-id.
-  runInput.headers = ctx.rotateHeaders(runInput);
+  if (!adopted) runInput.headers = ctx.rotateHeaders(runInput);
   yield { type: 'resumed', hotSwapped: result === 'hot-swap', accountId: resumedAccountId };
   void emitSessionPhase(runInput.traceWriter, {
     phase: 'usage_limit_resume',

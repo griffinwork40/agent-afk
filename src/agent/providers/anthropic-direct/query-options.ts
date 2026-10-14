@@ -55,9 +55,14 @@ const STARTER_MODELS: ReadonlyArray<{ value: string; displayName: string; descri
     description: 'Max-capability Claude — long-horizon agentic coding and research, 1M context',
   },
   {
+    value: 'claude-haiku-5-5',
+    displayName: 'Claude Haiku 5.5',
+    description: 'Fastest, cheapest Claude — adaptive thinking, 1M context',
+  },
+  {
     value: 'claude-haiku-4-5-20251001',
     displayName: 'Claude Haiku 4.5',
-    description: 'Fastest, cheapest Claude',
+    description: 'Previous Haiku — 200k context, no adaptive thinking',
   },
 ];
 
@@ -246,6 +251,13 @@ export interface AnthropicDirectQueryOptions {
    * can inject mid-run guidance without a new user turn.
    */
   beforeNextRound?: () => string | undefined;
+  /**
+   * When true, file-writing tool calls (write_file, edit_file, patch_apply)
+   * snapshot pre-edit file content before each user turn so rewindFiles() can
+   * restore the working tree to its pre-turn state. Disabled by default.
+   * Bash-made file mutations are NOT captured (out of scope).
+   */
+  enableFileCheckpointing?: boolean;
 }
 
 /** Snapshot of the starter list, freshly cloned per call (callers may mutate). */

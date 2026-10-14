@@ -31,6 +31,7 @@ import type { Batch } from './dispatch-batching.js';
 import type { TraceSink } from '../trace/index.js';
 import type { ToolHealthMonitor } from './tool-health-monitor.js';
 import { applyToolHealth } from './tool-health-monitor.js';
+import { applyStrategyNudge, type StrategyNudger } from './strategy-nudge.js';
 
 /**
  * Indexed entry produced by `executeBatch`'s phase-1 loop. Each element pairs
@@ -93,6 +94,8 @@ export interface BatchExecDeps {
    * to `execute()` directly, so there is no risk of double-counting.
    */
   toolHealthMonitor: ToolHealthMonitor;
+  /** Same-error strategy nudge, applied right after `applyToolHealth`. */
+  strategyNudger: StrategyNudger;
   /** Witness trace writer forwarded to `applyToolHealth` → `emitToolDegraded`. */
   traceWriter: TraceSink | undefined;
 }
@@ -376,6 +379,7 @@ export async function runConcurrentBatch(
         // Tool-health monitor: observe and potentially append notice.
         // applyToolHealth is a no-op for non-error results and when not degraded.
         result = applyToolHealth(deps.toolHealthMonitor, deps.traceWriter, call, result);
+        result = applyStrategyNudge(deps.strategyNudger, deps.traceWriter, call, result);
         results[originalIndex] = result;
       }
     }
@@ -431,8 +435,8 @@ export async function runSequentialBatch(
     deps.repeatFailureGuard.note(call, stamped);
     // Tool-health monitor: observe and potentially append notice.
     // applyToolHealth is a no-op for non-error results and when not degraded.
-    const result = applyToolHealth(deps.toolHealthMonitor, deps.traceWriter, call, stamped);
-    results[originalIndex] = result;
+    const healthChecked = applyToolHealth(deps.toolHealthMonitor, deps.traceWriter, call, stamped);
+    results[originalIndex] = applyStrategyNudge(deps.strategyNudger, deps.traceWriter, call, healthChecked);
   }
 }
 

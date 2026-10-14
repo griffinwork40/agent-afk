@@ -11,7 +11,7 @@
  * @module agent/session/stream-consumer
  */
 
-import type { ProviderEvent, ProviderUsage } from '../provider.js';
+import type { ProviderEvent, ProviderProgress, ProviderUsage } from '../provider.js';
 import { recordToolOutput, recordToolUseStart, type ToolEventAccumulator } from './stream-consumer.tool-events.js';
 import type {
   Message,
@@ -25,6 +25,7 @@ import { emitBudget } from '../trace/emit.js';
 import type { TraceSink } from '../trace/index.js';
 import { renderToolResult } from '../tools/render-registry.js';
 import { truncateContent } from './stream-consumer.preview.js';
+import { isOutputCapKill } from '../tools/handlers/_output-cap.js';
 
 /** Callbacks the transform needs to produce side effects. */
 export type TransformDeps = ToolEventAccumulator & {
@@ -102,7 +103,7 @@ export function parsePersistedOutput(
   };
 }
 
-export function usageToMetadata(usage: ProviderUsage, sessionId: string | undefined): ResponseMetadata {
+export function usageToMetadata(usage: ProviderUsage, sessionId: string | undefined, userMessageId?: string): ResponseMetadata {
   const usageObj: Record<string, unknown> = { ...(usage.raw ?? {}) };
   if (usage.inputTokens !== undefined) usageObj['input_tokens'] = usage.inputTokens;
   if (usage.outputTokens !== undefined) usageObj['output_tokens'] = usage.outputTokens;
@@ -115,6 +116,7 @@ export function usageToMetadata(usage: ProviderUsage, sessionId: string | undefi
   if (usage.contextWindowTokens !== undefined) usageObj['context_window_tokens'] = usage.contextWindowTokens;
 
   return {
+    ...(userMessageId !== undefined ? { userMessageId } : {}),
     sessionId,
     stopReason: usage.stopReason ?? undefined,
     resultSubtype: usage.resultSubtype,
@@ -167,6 +169,21 @@ function buildToolOutputEvent(
     ? { failureClass: event.failureClass }
     : {};
 
+  // Plumb compose soft-deadline partial flag through to both return branches.
+  // A persisted-output compose result can still carry incomplete: true when one
+  // or more of its nodes hit the soft deadline; omitting it from the persisted
+  // branch would silently drop the partial signal and leave compose_partial_nodes
+  // un-counted in the facet for any compose whose output was large enough to
+  // spill to disk.
+  const incompletePassthrough =
+    event.incomplete === true
+      ? {
+          incomplete: true as const,
+          ...(event.incompleteReason !== undefined && { incompleteReason: event.incompleteReason }),
+          ...(event.partialNodeCount !== undefined && { partialNodeCount: event.partialNodeCount }),
+        }
+      : {};
+
   const parsed = parsePersistedOutput(event.content);
   if (parsed) {
     return {
@@ -182,6 +199,7 @@ function buildToolOutputEvent(
         ...displayPassthrough,
         ...batchPassthrough,
         ...failureClassPassthrough,
+        ...incompletePassthrough,
       },
     };
   }
@@ -208,15 +226,37 @@ function buildToolOutputEvent(
       sizeBytes,
       sizeLabel,
       ...(event.truncated === true && { truncated: true }),
+      // Read the kill sentinel from the RAW content: truncateContent's preview
+      // above drops the trailing note, so the renderer cannot recover it.
+      ...(event.truncated === true && isOutputCapKill(event.content) && { outputCapKilled: true }),
       ...(event.capturePath !== undefined && { capturePath: event.capturePath }),
       ...(lineCount !== undefined && { lineCount }),
       ...(tailPreview !== undefined && tailPreview.length > 0 && { tailPreview }),
       ...(hiddenLineCount !== undefined && { hiddenLineCount }),
       ...(event.exitCode !== undefined && { exitCode: event.exitCode }),
       ...(event.durationMs !== undefined && { durationMs: event.durationMs }),
+      ...incompletePassthrough,
       ...displayPassthrough,
       ...batchPassthrough,
       ...failureClassPassthrough,
+    },
+  };
+}
+
+/** Map a provider `progress` event to the output-layer shape with explicit field allow-list. */
+function mapProgressEvent(progress: ProviderProgress): OutputEvent {
+  return {
+    type: 'progress',
+    progress: {
+      taskId: progress.taskId,
+      description: progress.description,
+      ...(progress.summary !== undefined ? { summary: progress.summary } : {}),
+      ...(progress.roundsUsed !== undefined ? { roundsUsed: progress.roundsUsed } : {}),
+      ...(progress.budget !== undefined ? { budget: progress.budget } : {}),
+      ...(progress.lastToolName !== undefined ? { lastToolName: progress.lastToolName } : {}),
+      totalTokens: progress.totalTokens,
+      toolUses: progress.toolUses,
+      durationMs: progress.durationMs,
     },
   };
 }
@@ -364,26 +404,13 @@ export function transformProviderEvent(
       };
 
     case 'progress':
-      return {
-        type: 'progress',
-        progress: {
-          taskId: event.progress.taskId,
-          description: event.progress.description,
-          ...(event.progress.summary !== undefined ? { summary: event.progress.summary } : {}),
-          ...(event.progress.lastToolName !== undefined
-            ? { lastToolName: event.progress.lastToolName }
-            : {}),
-          totalTokens: event.progress.totalTokens,
-          toolUses: event.progress.toolUses,
-          durationMs: event.progress.durationMs,
-        },
-      };
+      return mapProgressEvent(event.progress);
 
     case 'suggestion':
       return { type: 'suggestion', suggestion: event.suggestion };
 
     case 'turn.completed': {
-      const metadata = usageToMetadata(event.usage, event.sessionId ?? deps.getSessionMetadata().sessionId);
+      const metadata = usageToMetadata(event.usage, event.sessionId ?? deps.getSessionMetadata().sessionId, event.userMessageId);
       // Drain the per-turn successful-tool accumulator onto the metadata so the
       // returned Message carries the raw observation (empty list ⇒ omit the
       // field, keeping the shape identical to today for tool-less turns).

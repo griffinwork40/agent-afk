@@ -17,8 +17,8 @@
 import { palette } from '../../palette.js';
 import type { SlashCommand } from '../types.js';
 import type { PeerInboxNotifier } from '../../commands/interactive/peer-inbox-notifier.js';
-import { listHeld, dropHeld } from '../../../agent/peer/inbox-store.js';
-import { resolvePeerInboundMode } from '../../../agent/peer/inbound-mode.js';
+import { listHeld, dropHeld, type HeldEntry } from '../../../agent/peer/inbox-store.js';
+import { getPeerInboundModeConfig } from '../../../agent/peer/inbound-mode.js';
 
 let notifierRef: PeerInboxNotifier | undefined;
 let sessionIdGetter: (() => string | undefined) | undefined;
@@ -54,6 +54,12 @@ function truncate(text: string, n: number): string {
   return oneLine.slice(0, n - 1) + '…';
 }
 
+/** Strip C0/C1 control characters (except space) from a string for safe display. */
+function stripControls(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/[\x00-\x1f\x7f-\x9f]/g, '');
+}
+
 export const inboxCmd: SlashCommand = {
   name: '/inbox',
   usage: '/inbox [accept <id-prefix|all> | drop <id-prefix|all>]',
@@ -79,16 +85,25 @@ export const inboxCmd: SlashCommand = {
     const [verb, ...rest] = trimmed === '' ? ['list'] : trimmed.split(/\s+/);
     const arg = rest.join(' ').trim();
 
-    const mode = resolvePeerInboundMode();
-
     if (verb === 'list' || verb === undefined) {
+      const modeCfg = getPeerInboundModeConfig();
       const held = await listHeld(sessionId);
       if (held.length === 0) {
         ctx.out.info('No held messages.');
       } else {
         ctx.out.line(palette.dim('  id        from                  age   preview'));
         const now = Date.now();
-        for (const { envelope: e } of held) {
+        for (const entry of held) {
+          if (entry.corrupt) {
+            // Show unparseable held files so the operator can drop them.
+            const fileShort = stripControls(entry.file).slice(0, 8);
+            ctx.out.line(
+              `  ${fileShort}  ${'[corrupt]'.padEnd(20)}  ${'?'.padEnd(4)}  ` +
+              palette.dim('(unparseable — use /inbox drop to remove)'),
+            );
+            continue;
+          }
+          const e = entry.envelope;
           const idShort = e.messageId.slice(0, 8);
           const fromLabel =
             e.from.name !== undefined
@@ -101,7 +116,16 @@ export const inboxCmd: SlashCommand = {
           );
         }
       }
-      ctx.out.line(palette.dim(`  mode: AFK_PEER_INBOUND=${mode}`));
+      ctx.out.line(palette.dim(`  mode: AFK_PEER_INBOUND=${modeCfg.mode}`));
+      if (modeCfg.invalid) {
+        // Surface the typo in a TUI-safe warning so the operator notices without
+        // needing AFK_DEBUG=1. The raw value is already capped (≤20 chars + "…")
+        // by getPeerInboundModeConfig to prevent display corruption.
+        ctx.out.warn(
+          `AFK_PEER_INBOUND=${JSON.stringify(modeCfg.rawTruncated)} is not recognised ` +
+          `(expected 'accept', 'hold', or 'off'); falling back to 'accept'.`,
+        );
+      }
       return 'continue';
     }
 
@@ -116,8 +140,10 @@ export const inboxCmd: SlashCommand = {
       if (arg === '' || arg === 'all') {
         ids = 'all';
       } else {
-        // Match the prefix against held message ids.
+        // Match the prefix against held message ids. Corrupt entries have no
+        // messageId and cannot be accepted; they can only be dropped.
         const matched = held
+          .filter((h): h is Extract<HeldEntry, { corrupt?: never }> => !h.corrupt)
           .filter(({ envelope: e }) => e.messageId.startsWith(arg))
           .map(({ envelope: e }) => e.messageId);
         if (matched.length === 0) {
@@ -125,6 +151,14 @@ export const inboxCmd: SlashCommand = {
           return 'continue';
         }
         ids = new Set(matched);
+      }
+
+      // When every held entry is corrupt, forceAccept skips all of them and
+      // returns 0 — which would show the generic "may have already been claimed"
+      // warning. Detect this case early and give the operator a clearer message.
+      if (ids === 'all' && held.every((h) => h.corrupt)) {
+        ctx.out.warn('All held messages are corrupt and cannot be accepted. Use /inbox drop to remove them.');
+        return 'continue';
       }
 
       const count = await notifierRef.forceAccept(ids);
@@ -149,11 +183,25 @@ export const inboxCmd: SlashCommand = {
 
       let targets: Array<{ file: string; id: string }>;
       if (arg === '' || arg === 'all') {
-        targets = held.map(({ file, envelope: e }) => ({ file, id: e.messageId }));
+        // Corrupt entries have no messageId; use the filename as a fallback id
+        // so the operator can still drop them with /inbox drop all.
+        targets = held.map((h) => ({
+          file: h.file,
+          id: h.corrupt ? `[corrupt:${h.file}]` : h.envelope.messageId,
+        }));
       } else {
-        targets = held
+        // Match parseable entries by messageId prefix, and corrupt entries by
+        // filename prefix so the operator can drop individual corrupt files
+        // without resorting to "drop all".
+        const parseableMatches = held
+          .filter((h): h is Extract<HeldEntry, { corrupt?: never }> => !h.corrupt)
           .filter(({ envelope: e }) => e.messageId.startsWith(arg))
           .map(({ file, envelope: e }) => ({ file, id: e.messageId }));
+        const corruptMatches = held
+          .filter((h): h is Extract<HeldEntry, { corrupt: true }> => !!h.corrupt)
+          .filter((h) => h.file.startsWith(arg))
+          .map((h) => ({ file: h.file, id: `[corrupt:${h.file}]` }));
+        targets = [...parseableMatches, ...corruptMatches];
         if (targets.length === 0) {
           ctx.out.warn(`No held message id starts with "${arg}".`);
           return 'continue';

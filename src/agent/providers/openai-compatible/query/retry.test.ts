@@ -215,10 +215,15 @@ describe('OVERLOAD_MESSAGE_RE word-boundary false-positive guard (#2855)', () =>
     expect(isOpenAIOverloadError(err)).toBe(true);
   });
 
-  it('does not match if "overloaded" is part of a longer word (no word boundary)', () => {
-    // Hypothetical: the prefix/suffix of "overloaded" attached to other chars.
-    const err = sdkMidStreamError({ message: 'requestoverloaded status' });
+  it('does not match if "overloaded" is part of a longer compound word, even when "server" is nearby', () => {
+    // The \b anchors in OVERLOAD_MESSAGE_RE prevent a false positive when "overloaded"
+    // appears as a suffix of a compound word. Without \b, "server requestoverloaded"
+    // would match (server + within 40 chars + overloaded) — see #2860.
+    const err = sdkMidStreamError({ message: 'server requestoverloaded status' });
     expect(isOpenAIOverloadError(err)).toBe(false);
+    // Compound as prefix: "overloadedserver" should also not match.
+    const err2 = sdkMidStreamError({ message: 'overloadedserver error occurred' });
+    expect(isOpenAIOverloadError(err2)).toBe(false);
   });
 });
 

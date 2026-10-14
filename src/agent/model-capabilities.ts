@@ -13,8 +13,11 @@
  *   2. Force-enable override  — any other `AFK_VISION_MODELS` token (exact id
  *      or substring). This is the escape hatch for local vision-language models
  *      we don't recognise by name.
- *   3. Built-in allowlist — exact ids + family regex patterns.
- *   4. Default `false` — degrade gracefully. Sending images to an endpoint that
+ *   3. Codex models catalog — the entry's `input_modalities`, when the model is
+ *      listed (`models-catalog.capabilities.ts`). Refreshed by Codex, so new
+ *      OpenAI families work without a table edit.
+ *   4. Built-in allowlist — exact ids + family regex patterns.
+ *   5. Default `false` — degrade gracefully. Sending images to an endpoint that
  *      can't take them risks a hard 400; a text notice never does and always
  *      informs the user.
  *
@@ -27,6 +30,10 @@
 
 import { env } from '../config/env.js';
 import { resolveModelInput } from './session/model-slots.js';
+import {
+  catalogIsReasoningModel,
+  catalogSupportsImages,
+} from './providers/openai-compatible/models-catalog.capabilities.js';
 
 /**
  * Exact model ids known to accept image input. Mirrors the maintained-table
@@ -56,12 +63,15 @@ const VISION_MODEL_IDS: ReadonlySet<string> = new Set([
 const VISION_MODEL_PATTERNS: readonly RegExp[] = [
   // Anthropic — every current Claude model is vision-capable.
   /^claude-/i,
-  // OpenAI flagship multimodal + gpt-5.x line.
+  // OpenAI flagship multimodal + gpt-5.x / gpt-6.x lines. gpt-6 is listed so
+  // API-key users without a Codex catalog still get vision (every gpt-6 entry
+  // in the catalog declares `input_modalities: ["text", "image"]`).
   /^gpt-4o/i,
   /^gpt-4\.1/i,
   /^gpt-4-turbo/i,
   /^gpt-4-vision/i,
   /^gpt-5/i,
+  /^gpt-6/i,
   // Short, ambiguous tokens need delimiters on BOTH sides so "vllm" (a runner,
   // not a model) does NOT false-positive on the bare "vl".
   /(?:^|[/_-])(?:vl|vlm)(?:[/_.-]|$)/i,
@@ -121,6 +131,9 @@ export function supportsVision(model: string | undefined): boolean {
   if (disable.some((t) => overrideMatches(lowered, t))) return false;
   if (enable.some((t) => overrideMatches(lowered, t))) return true;
 
+  const fromCatalog = catalogSupportsImages(resolved);
+  if (fromCatalog !== undefined) return fromCatalog;
+
   if (VISION_MODEL_IDS.has(lowered)) return true;
   return VISION_MODEL_PATTERNS.some((re) => re.test(resolved));
 }
@@ -176,7 +189,8 @@ export function isOSeriesModel(model: string | undefined): boolean {
  * lower-cased id from {@link bareModelId}, so no `/i` flag is needed.
  */
 const REASONING_MODEL_PATTERNS: readonly RegExp[] = [
-  /^gpt-5/, // gpt-5.x line: gpt-5, gpt-5.1, gpt-5.5, gpt-5-mini, gpt-5-codex, …
+  /^gpt-5(?:[.-]|$)/, // gpt-5.x line: gpt-5, gpt-5.1, gpt-5.5, gpt-5-mini, gpt-5-codex, …
+  /^gpt-6(?:[.-]|$)/, // gpt-6.x line: every catalog entry lists reasoning levels
 ];
 
 /**
@@ -193,6 +207,40 @@ const REASONING_MODEL_PATTERNS: readonly RegExp[] = [
 export function isReasoningModel(model: string | undefined): boolean {
   if (!model) return false;
   if (isOSeriesModel(model)) return true;
-  const bare = bareModelId(model);
+  // Resolve slot aliases (local/small/medium/large, etc.) to their concrete ids
+  // before the catalog lookup — consistent with supportsVision.
+  const resolved = (resolveModelInput(model) ?? model).trim();
+  // The Codex catalog knows ids no pattern can (gpt-reserve,
+  // codex-auto-review, the next family) and also knows a listed model that
+  // takes no reasoning effort, so its answer wins whenever it has one.
+  const fromCatalog = catalogIsReasoningModel(resolved);
+  if (fromCatalog !== undefined) return fromCatalog;
+  const bare = bareModelId(resolved);
   return REASONING_MODEL_PATTERNS.some((re) => re.test(bare));
 }
+
+// ---------------------------------------------------------------------------
+// Shared OpenAI-compatible third-party prefix list
+// ---------------------------------------------------------------------------
+
+/**
+ * Third-party model-family prefixes that route to the openai-compatible
+ * provider (providers/index.ts Tier 3) and receive the 262k context-window
+ * default (model-limits.ts `routesToOpenAICompatible`).
+ *
+ * This constant is the single source of truth for both routing rules so a new
+ * family addition propagates to both files — and to the regression test suite —
+ * automatically. Each entry is a lower-cased stem (no trailing `-` or `_`);
+ * callers test `startsWith(stem + '-')` and `startsWith(stem + '_')`.
+ *
+ * Families covered: DeepSeek, Mistral, Mixtral, Meta Llama, Qwen — all of
+ * which expose an OpenAI Chat Completions-compatible endpoint via providers
+ * like opencode.ai, OpenRouter, Together, Fireworks, and their own APIs.
+ */
+export const OPENAI_COMPAT_THIRD_PARTY_PREFIXES: readonly string[] = [
+  'deepseek',
+  'mistral',
+  'mixtral',
+  'llama',
+  'qwen',
+];

@@ -8,6 +8,10 @@
  * @module cli/commands/trace-format
  */
 
+// Re-exported from src/utils/truncate.ts; kept here so existing importers
+// of this module do not need to change their import path.
+export { truncate } from '../../utils/truncate.js';
+
 export function fmtDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
@@ -28,17 +32,6 @@ export function fmtUsd(n: number): string {
  *  timezones (good for stable output and tests). */
 export function fmtTime(ts: string): string {
   return ts.length >= 19 ? ts.slice(11, 19) : ts;
-}
-
-/**
- * Truncate `s` to at most `n` Unicode code points (not UTF-16 units), appending
- * `…` at the cut so an emoji straddling the boundary is never split into a lone
- * surrogate. ASCII input is unaffected: `s.length` and code-point count agree
- * for ASCII, so existing callers see identical output for ASCII strings.
- */
-export function truncate(s: string, n: number): string {
-  const cps = Array.from(s);
-  return cps.length > n ? `${cps.slice(0, n - 1).join('')}…` : s;
 }
 
 /** Fixed label column so event lines align. */

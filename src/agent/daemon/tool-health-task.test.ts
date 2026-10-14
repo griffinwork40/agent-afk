@@ -8,6 +8,8 @@
  * 3. Builtin dispatch: runBuiltinTask routes 'tool-health' to the handler.
  * 4. Daemon registration: tool-health is registered with notifyOn 'failure'
  *    and respects AFK_TOOL_HEALTH_DISABLE env and config.
+ * 5. Write-failure: when atomicWriteFileAsync rejects, the second tick for the
+ *    same degraded group is suppressed by the in-process cooldown.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -25,6 +27,16 @@ vi.mock('../trace/listing.js', () => ({
   listTraces: vi.fn(),
 }));
 
+// Mock atomicWriteFileAsync so write-failure tests can simulate EPERM etc.
+// Default: pass through to the real implementation; individual tests override.
+vi.mock('../../utils/atomic-write.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../utils/atomic-write.js')>();
+  return {
+    ...real,
+    atomicWriteFileAsync: vi.fn(real.atomicWriteFileAsync),
+  };
+});
+
 // Mock the worktree-prune-task so no git sweep runs in dispatch tests.
 vi.mock('./worktree-prune-task.js', () => ({
   runBuiltinWorktreePruneTask: vi.fn().mockResolvedValue({
@@ -38,16 +50,20 @@ vi.mock('./worktree-prune-task.js', () => ({
 }));
 
 import { listTraces } from '../trace/listing.js';
+import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
 import {
   runBuiltinToolHealthTask,
   TOOL_HEALTH_LOOKBACK_MS,
   TOOL_HEALTH_COOLDOWN_MS,
   TOOL_HEALTH_MIN_SESSIONS,
+  _resetToolHealthAlertCooldownForTests,
 } from './tool-health-task.js';
 import { runBuiltinTask } from './builtin-task.js';
+import { buildToolHealthTask } from '../../cli/commands/daemon-builtin-tasks.js';
 import type { TelemetryRecord } from './scheduler.js';
 
 const mockListTraces = vi.mocked(listTraces);
+const mockAtomicWrite = vi.mocked(atomicWriteFileAsync);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -58,6 +74,12 @@ let tmpDir: string;
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'tool-health-test-'));
   mockListTraces.mockReset();
+  // Restore atomicWriteFileAsync to the real implementation between tests so
+  // individual write-failure tests can opt in without affecting others.
+  mockAtomicWrite.mockRestore();
+  // Clear in-process cooldown so test cases do not bleed alert suppression
+  // into each other through the module-scope Map.
+  _resetToolHealthAlertCooldownForTests();
 });
 
 afterEach(() => {
@@ -556,24 +578,14 @@ describe('runBuiltinTask – tool-health dispatch', () => {
 
 describe('tool-health daemon registration', () => {
   it('notifyOn constant: task object should have notifyOn "failure"', () => {
-    // We verify the task object shape by inspecting what would be registered.
-    // The daemon.ts wires a constant toolHealthTask — we re-derive that object
-    // here to guard the invariant without importing daemon.ts (which has side
-    // effects).
-    const toolHealthTask = {
-      taskId: 'tool-health',
-      executor: 'builtin' as const,
-      command: 'tool-health',
-      trigger: 'cron' as const,
-      cronExpression: '17 * * * *',
-      notifyOn: 'failure' as const,
-    };
+    // Verify the real builder emits notifyOn 'failure' so success runs don't
+    // push Telegram — the daemon wires this via buildToolHealthTask().
+    const task = buildToolHealthTask('17 * * * *');
 
-    expect(toolHealthTask.notifyOn).toBe('failure');
-    // The task must NOT be 'never' or 'always' — only 'failure' is correct
-    // because success runs should not push Telegram
-    expect(toolHealthTask.notifyOn).not.toBe('never');
-    expect(toolHealthTask.notifyOn).not.toBe('always');
+    expect(task.notifyOn).toBe('failure');
+    // Must NOT be 'never' or 'always' — only 'failure' is correct.
+    expect(task.notifyOn).not.toBe('never');
+    expect(task.notifyOn).not.toBe('always');
   });
 
   it('TOOL_HEALTH_MIN_SESSIONS threshold is 2', () => {
@@ -586,5 +598,63 @@ describe('tool-health daemon registration', () => {
 
   it('TOOL_HEALTH_LOOKBACK_MS is 6 hours', () => {
     expect(TOOL_HEALTH_LOOKBACK_MS).toBe(6 * 60 * 60 * 1000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. Write-failure: in-process fallback cooldown
+// ---------------------------------------------------------------------------
+
+describe('tool-health write-failure cooldown', () => {
+  it('suppresses the second tick when atomicWriteFileAsync rejects (EPERM)', async () => {
+    // Make every disk write fail, simulating a read-only volume or EPERM.
+    mockAtomicWrite.mockRejectedValue(
+      Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' }),
+    );
+
+    const alertStatePath = join(tmpDir, 'no-write-state.json');
+
+    // Tick 1: degraded group seen in 2 sessions — alert fires (status: 'error').
+    // The disk write fails but the in-process map records the alert timestamp.
+    const traceA = writeTrace('session-a', [degradedLine('bash', 'timeout')]);
+    const traceB = writeTrace('session-b', [degradedLine('bash', 'timeout')]);
+    mockListTraces.mockResolvedValueOnce([
+      { sessionId: 'session-a', tracePath: traceA, mtimeMs: NOW_MS, exists: true },
+      { sessionId: 'session-b', tracePath: traceB, mtimeMs: NOW_MS, exists: true },
+    ]);
+
+    const opts1 = makeOptions({ alertStatePath, now: () => NOW_MS });
+    const result1 = await runBuiltinToolHealthTask(
+      { taskId: 'tool-health', command: 'tool-health' },
+      'cron',
+      opts1,
+    );
+
+    // First tick must still send the alert even though the write failed.
+    expect(result1.status).toBe('error');
+    expect(result1.errorMessage).toContain('bash');
+    // The telemetry responseExcerpt must note the write failure.
+    expect(result1.responseExcerpt).toContain('alert state write failed');
+
+    // Tick 2: same degraded group, 1 minute later (well within 24h cooldown).
+    // Disk state file still absent/unwritable. The in-process map must gate it.
+    const traceC = writeTrace('session-c', [degradedLine('bash', 'timeout')]);
+    const traceD = writeTrace('session-d', [degradedLine('bash', 'timeout')]);
+    const MINUTE = 60_000;
+    mockListTraces.mockResolvedValueOnce([
+      { sessionId: 'session-c', tracePath: traceC, mtimeMs: NOW_MS + MINUTE, exists: true },
+      { sessionId: 'session-d', tracePath: traceD, mtimeMs: NOW_MS + MINUTE, exists: true },
+    ]);
+
+    const opts2 = makeOptions({ alertStatePath, now: () => NOW_MS + MINUTE });
+    const result2 = await runBuiltinToolHealthTask(
+      { taskId: 'tool-health', command: 'tool-health' },
+      'cron',
+      opts2,
+    );
+
+    // Second tick must be suppressed — no Telegram push, telemetry says 'success'.
+    expect(result2.status).toBe('success');
+    expect(result2.responseExcerpt).toContain('cooldown');
   });
 });

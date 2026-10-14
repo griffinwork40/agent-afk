@@ -664,8 +664,8 @@ Fix (archive-and-retain, `terminal-compositor.band-archived-prefix.ts`): under
 content-hug the covered rows are still archived immediately (no history hole),
 but they stay in the band model as the **archived prefix**
 (`committedBandArchivedPrefix`, the leading band rows already in scrollback).
-Hidden while covered, they are re-shown by the normal re-pin when the frame
-shrinks, so the screen refills and the prompt returns to the bottom. Two rules
+Hidden while covered, they are re-shown by the normal re-pin on a LARGE frame
+collapse, so the screen refills and the prompt returns to the bottom. Two rules
 keep them from reaching scrollback twice:
 
 1. Every logical-line archive (`scrollbackFlushLines` +
@@ -680,14 +680,24 @@ The prefix is capped, dropping the oldest unpainted archived rows silently
 (they are already in scrollback). Bottom-pinned placement never retains (the
 prefix is always 0 there), so it is unchanged.
 
-Accepted trade-off (the seam overlap): while re-shown archived rows are on
-screen, they also sit at the tail of scrollback, so scrolling back (tmux
-copy-mode, native scrollback) shows them twice at the seam until new output
-displaces them (they are then dropped by repaint, not scrolled). Nothing is
-ever written to scrollback twice and nothing is missing, which strictly
-improves on both earlier states (pre-#2804: rows missing from history
-mid-turn; #2804: blank gap on screen). Tests that assert "exactly once across
-scrollback + viewport" discount exactly that overlap:
+Accepted trade-off (the seam overlap, now limited to large collapses):
+`hiddenArchivedRows` in `terminal-compositor.archived-reveal.ts` hides a
+contiguous leading archived prefix when leaving it hidden would put at most
+`K = max(3, floor(rows / 8))` blank rows below the frame. Small spinner/tip
+shrinks therefore do not re-show historical rows or duplicate an Agent header
+at the seam. Those harmless bottom blanks are overwritten by the next commit,
+not scrolled into history. A larger collapse reveals the archived prefix and
+refills the screen, preserving the tall-overlay fix above. Reveal is a one-way
+episode latch: once revealed, threshold oscillation cannot hide it again;
+a new archive event, commit, or resize resets the episode. Initial small
+shrinks can still progress to a large collapse within the same episode (for
+example spinner-off followed by overlay-clear), then reveal only once.
+
+Only after that large-collapse reveal do rows also sit at the tail of
+scrollback, so copy-mode shows them twice at the seam until new output
+displaces them (they are dropped by repaint, not scrolled). No row is written
+to scrollback twice and none is missing. Tests that assert "exactly once across
+scrollback + viewport" discount exactly that large-collapse overlap:
 `src/cli/_lib/testing/scrollback-seam.ts` pins it to the compositor-reported
 count of painted archived rows; the PTY harness's `PtyExpect.seamOverlap`
 (`collapse-void`, `multi-commit-gap` hug expectations) is the structural form.

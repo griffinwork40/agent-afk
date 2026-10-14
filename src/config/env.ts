@@ -51,6 +51,7 @@ import { BROWSER_ENV_REGISTRY } from './env.browser.js';
 import { DAEMON_ENV_REGISTRY } from './env.daemon.js';
 import { DEBUG_ENV_REGISTRY } from './env.debug.js';
 import { DISPLAY_ENV_REGISTRY } from './env.display.js';
+import { HOOKS_ENV_REGISTRY } from './env.hooks.js';
 import { MCP_ENV_REGISTRY } from './env.mcp.js';
 import { MISC_ENV_REGISTRY } from './env.misc.js';
 import { MODEL_ENV_REGISTRY } from './env.model.js';
@@ -61,6 +62,8 @@ import { TELEGRAM_ENV_REGISTRY } from './env.telegram.js';
 import { UI_ENV_REGISTRY } from './env.ui.js';
 import { WHATIF_ENV_REGISTRY } from './env.whatif.js';
 import { SESSION_STORAGE_ENV_REGISTRY } from './env.session-storage.js';
+import { MEMORY_GC_ENV_REGISTRY } from './env.memory-gc.js';
+import { VITALS_ENV_REGISTRY } from './env.vitals.js';
 
 export type EnvVarType = 'string' | 'number' | 'boolean' | 'json';
 
@@ -125,6 +128,8 @@ export const ENV_REGISTRY = [
   ...MODEL_ENV_REGISTRY,
   // Model tiers, timeouts, suggestions, legacy aliases (env.model-tiers.ts)
   ...MODEL_TIERS_ENV_REGISTRY,
+  // Memory GC env vars (env.memory-gc.ts)
+  ...MEMORY_GC_ENV_REGISTRY,
 
   // ── System prompt / Auth / Image generation (env.auth.ts) ─────────────────
   ...AUTH_ENV_REGISTRY,
@@ -166,6 +171,12 @@ export const ENV_REGISTRY = [
 
   // ── Filesystem / Rate-limit / Web egress / CLI / Session / Shell (env.misc.ts)
   ...MISC_ENV_REGISTRY,
+
+  // ── Hook feature flags (env.hooks.ts) ────────────────────────────────────
+  ...HOOKS_ENV_REGISTRY,
+
+  // ── Per-round vitals harness note (env.vitals.ts) ────────────────────────
+  ...VITALS_ENV_REGISTRY,
 ] as const satisfies readonly EnvVarMeta[];
 
 /**

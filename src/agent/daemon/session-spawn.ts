@@ -15,7 +15,8 @@ import { loadHooksConfig } from '../hooks/config-loader.js';
 import { StateStore } from '../state/state-store.js';
 import { emitSessionPhase } from '../trace/emit.js';
 import { createDefaultTraceWriter } from '../trace/factory.js';
-import type { TraceWriter } from '../trace/index.js';
+import type { TraceSink, TraceWriter } from '../trace/index.js';
+import type { TraceEventInput } from '../trace/types.js';
 import type { AgentConfig } from '../types.js';
 
 export interface DaemonSpawnOptions {
@@ -28,6 +29,14 @@ export interface DaemonSpawnOptions {
    * (daemon-wide AFK_DAEMON_CWD). Precedence: taskCwd ?? sessionConfig.cwd ?? daemonDefaultCwd().
    */
   taskCwd?: string;
+  /**
+   * Shared mutable counter incremented each time the AFK gate emits a
+   * `hook_decision` with `approvalOutcome: 'hard-block'` during this tick
+   * (#3466). The spawn wires a counting shim around the trace writer so the
+   * caller can read the total after `sendMessage` resolves and record it on
+   * the telemetry record without polling the trace file.
+   */
+  gateBlockCounter?: { count: number };
 }
 
 /**
@@ -95,7 +104,7 @@ export function daemonDefaultCwd(): string {
     return dir;
   } catch (err) {
     const fallback = tmpdir();
-    const code = (err as NodeJS.ErrnoException).code ?? String(err);
+    const code = (err instanceof Error && 'code' in err) ? String((err as { code: unknown }).code) : String(err);
     console.warn(
       `[daemon] daemonDefaultCwd: could not create ${dir} (${code}); ` +
         `falling back to ${fallback}. ` +
@@ -115,6 +124,14 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
   mcpManager?: McpManager;
   /** Archive the cross-surface registry handle. Called by runOnce on close. */
   dispose: () => void;
+  /**
+   * The per-tick session label derived from `daemonTraceLabel(taskId)`. This
+   * value is also threaded into the dispatcher as `context.sessionId` so
+   * `ask-question.ts` can pass it to `elicitationRouter.route()` as a lookup
+   * key. Returned here so the caller can register a per-session elicitation
+   * handler under this exact key, eliminating the single-slot race (#3619).
+   */
+  elicitationKey: string;
 }> {
   // Derive a unique-per-tick sessionId (daemonTraceLabel appends a random
   // suffix, so each tick gets its own label) so hook commands receive a
@@ -137,6 +154,14 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
   // still gets its own trace dir. Created before the hook registry so the
   // AFK gate's structured audit trace is wired from the start of the session.
   const trace = createDefaultTraceWriter({ sessionLabel: sessionId });
+  // Contract: when a gateBlockCounter is supplied, wrap the trace writer with a
+  // counting shim BEFORE wiring it into createDefaultHookRegistry so the AFK
+  // gate's emitHookDecision calls go through the shim. The shim delegates every
+  // write() to the real writer — it is purely observational — and increments
+  // the counter each time it sees a hook_decision with approvalOutcome:
+  // 'hard-block'. This lets executeAgentTask read the final count after
+  // sendMessage() returns and set status:'blocked' without polling the trace file.
+  const hookTraceWriter = makeGateBlockTraceWriter(trace?.writer, options.gateBlockCounter);
   const { registry, memoryStore } = createDefaultHookRegistry(
     undefined,
     'daemon',
@@ -152,55 +177,22 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     {
       cwd: agentCwd,
       sessionId,
-      ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
+      ...(hookTraceWriter !== undefined ? { traceWriter: hookTraceWriter } : {}),
       // Hard-block posture: no operator is reachable on a daemon tick.
       // High-risk ops are refused immediately rather than queued for approval.
       afkPromptForApproval: false,
+      // Issue #3464: supply the running task's own id so the risk classifier
+      // can carve out self-disable (cancel_schedule / update_schedule with
+      // enabled:false) as 'medium'. This value comes from the scheduler, not
+      // from any model-supplied input — it cannot be spoofed by the agent.
+      daemonTaskId: taskId,
     },
   );
   const stateStore = new StateStore(getStateDatabasePath());
 
   let mcpManager: McpManager | undefined;
-  // Mirror the chat / telegram / interactive surfaces: include MCP configs
-  // contributed by imported roots so the daemon reaches the same MCP
-  // surface-parity, not just cwd `.mcp.json` + the global config.
-  const importedMcpConfigs = resolveImportedRoots(loadImportFromConfig())
-    .mcpConfigs.filter((c) => c.format === 'json')
-    .map((c) => c.source);
-  const loadedMcp = loadMcpConfig({
-    cwd: agentCwd,
-    ...(importedMcpConfigs.length > 0 ? { importedMcpConfigs } : {}),
-  });
-  const enabledMcpCount = Object.values(loadedMcp.mcpServers).filter((s) => !s.disabled).length;
   try {
-    if (enabledMcpCount > 0) {
-      // Witness layer: bracket the whole-fleet MCP connect with
-      // mcp_connect_start / mcp_connect_done phases — surface-parity with
-      // chat.ts, interactive/bootstrap.ts, and telegram/mcp-session.ts.
-      // try/finally so mcp_connect_done fires even when an alwaysLoad server
-      // makes fromConfig throw. Fire-and-forget; never gates the connect.
-      const mcpStartedAt = Date.now();
-      void emitSessionPhase(trace?.writer, {
-        phase: 'mcp_connect_start',
-        metadata: { serverCount: enabledMcpCount },
-      });
-      try {
-        mcpManager = await McpManager.fromConfig(loadedMcp.mcpServers, {
-          warnings: loadedMcp.warnings,
-          serverLayers: loadedMcp.serverLayers,
-          userAllowSecretEnv: loadedMcp.userAllowSecretEnv,
-          ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
-        });
-      } finally {
-        void emitSessionPhase(trace?.writer, {
-          phase: 'mcp_connect_done',
-          durationMs: Date.now() - mcpStartedAt,
-          metadata: { serverCount: enabledMcpCount },
-        });
-      }
-    } else if (loadedMcp.warnings.length > 0) {
-      for (const warning of loadedMcp.warnings) console.warn(`[mcp] ${warning}`);
-    }
+    mcpManager = await connectDaemonMcp(agentCwd, trace?.writer);
   } catch (err) {
     // McpManager.fromConfig re-throws when an `alwaysLoad` server fails to
     // connect. runOnce()'s finally cannot close this tick's MemoryStore
@@ -234,9 +226,15 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     // break scheduled tasks that depend on tool execution.
     permissionMode: 'bypassPermissions',
     hookRegistry: registry,
-    // Pull tasks keep ask_question (handoff handler persists the question
-    // for eventual reply); cron/sessionstart tasks strip it.
-    isNonInteractive: options.trigger !== 'pull',
+    // All daemon tasks now install an elicitation handler before sendMessage
+    // (pull: makeDaemonElicitationHandler; cron/sessionstart:
+    // makeCronElicitationHandler — #3243 item 2), so ask_question must NOT be
+    // stripped for any trigger. The ask_question strip is driven by
+    // isNonInteractive in dispatcher-wiring.ts; setting it false here keeps
+    // the tool available. The unattended-bash floor (isHeadlessSession) is
+    // preserved independently via surface:'daemon' below, so bash-restriction
+    // hooks are unaffected by this change.
+    isNonInteractive: false,
     // Surface stamps the session as 'daemon' so routing-decision telemetry
     // rows derive origin:'daemon' correctly. Placed before sessionConfig so
     // an operator escape-hatch via sessionConfig.surface can still override.
@@ -289,6 +287,7 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
       memoryStore,
       stateStore,
       dispose: registration.dispose,
+      elicitationKey: sessionId,
       ...(mcpManager !== undefined ? { mcpManager } : {}),
     };
   } catch (err) {
@@ -302,4 +301,93 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     stateStore.close();
     throw err;
   }
+}
+
+/**
+ * Load MCP config from disk and connect all enabled servers for a daemon tick.
+ *
+ * Extracted from `spawnDaemonSession` to keep that function within the 200-line
+ * ceiling. Mirrors the connect block in `chat.ts`, `interactive/bootstrap.ts`,
+ * and `telegram/mcp-session.ts`. Returns `undefined` when no servers are enabled.
+ *
+ * Throws when an `alwaysLoad` server fails — callers are responsible for closing
+ * any already-opened stores before propagating the error.
+ */
+async function connectDaemonMcp(
+  agentCwd: string,
+  traceWriter: TraceSink | undefined,
+): Promise<McpManager | undefined> {
+  // Mirror the chat / telegram / interactive surfaces: include MCP configs
+  // contributed by imported roots so the daemon reaches the same MCP
+  // surface-parity, not just cwd `.mcp.json` + the global config.
+  const importedMcpConfigs = resolveImportedRoots(loadImportFromConfig())
+    .mcpConfigs.filter((c) => c.format === 'json')
+    .map((c) => c.source);
+  const loadedMcp = loadMcpConfig({
+    cwd: agentCwd,
+    ...(importedMcpConfigs.length > 0 ? { importedMcpConfigs } : {}),
+  });
+  const enabledMcpCount = Object.values(loadedMcp.mcpServers).filter((s) => !s.disabled).length;
+  if (enabledMcpCount === 0) {
+    if (loadedMcp.warnings.length > 0) {
+      for (const warning of loadedMcp.warnings) console.warn(`[mcp] ${warning}`);
+    }
+    return undefined;
+  }
+  // Witness layer: bracket the whole-fleet MCP connect with
+  // mcp_connect_start / mcp_connect_done phases — surface-parity with
+  // chat.ts, interactive/bootstrap.ts, and telegram/mcp-session.ts.
+  // try/finally so mcp_connect_done fires even when an alwaysLoad server
+  // makes fromConfig throw. Fire-and-forget; never gates the connect.
+  const mcpStartedAt = Date.now();
+  void emitSessionPhase(traceWriter, {
+    phase: 'mcp_connect_start',
+    metadata: { serverCount: enabledMcpCount },
+  });
+  try {
+    return await McpManager.fromConfig(loadedMcp.mcpServers, {
+      warnings: loadedMcp.warnings,
+      serverLayers: loadedMcp.serverLayers,
+      userAllowSecretEnv: loadedMcp.userAllowSecretEnv,
+      ...(traceWriter !== undefined ? { traceWriter } : {}),
+    });
+  } finally {
+    void emitSessionPhase(traceWriter, {
+      phase: 'mcp_connect_done',
+      durationMs: Date.now() - mcpStartedAt,
+      metadata: { serverCount: enabledMcpCount },
+    });
+  }
+}
+
+/**
+ * Wrap a real {@link TraceSink} with a shim that increments `counter.count`
+ * each time the AFK gate emits a `hook_decision` with
+ * `approvalOutcome: 'hard-block'` (#3466).
+ *
+ * Returns `undefined` when either `inner` or `counter` is absent — callers
+ * spread the result with `?? undefined` so the hook registry falls back to
+ * its normal no-writer path. The shim is purely observational: every `write()`
+ * call is delegated to the real writer unconditionally, even on hard-block
+ * events, so the trace file is unaffected.
+ */
+function makeGateBlockTraceWriter(
+  inner: TraceSink | undefined,
+  counter: { count: number } | undefined,
+): TraceSink | undefined {
+  if (inner === undefined || counter === undefined) return inner;
+  return {
+    getTracePath(): string {
+      return inner.getTracePath();
+    },
+    write(event: TraceEventInput): Promise<void> {
+      if (
+        event.kind === 'hook_decision' &&
+        event.payload.approvalOutcome === 'hard-block'
+      ) {
+        counter.count += 1;
+      }
+      return inner.write(event);
+    },
+  };
 }

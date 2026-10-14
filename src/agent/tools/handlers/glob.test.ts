@@ -548,6 +548,33 @@ describe('glob handler — globstar collapses to zero segments (root-level match
 });
 
 // ---------------------------------------------------------------------------
+// Brace expansion cap — must surface as 'Invalid glob pattern:', NOT
+// 'Error scanning directory:' (#3578 regression guard).
+// ---------------------------------------------------------------------------
+
+describe('glob handler — brace expansion cap error prefix (#3578)', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'glob-brace-cap-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('exceeded cap message begins with "Invalid glob pattern:" not "Error scanning directory:"', async () => {
+    // {a,b}.repeat(9) produces 2^9 = 512 alternatives, exceeding the 256 limit.
+    const pattern = '{a,b}'.repeat(9);
+    const result = await globHandler({ pattern, path: tempDir }, new AbortController().signal);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Invalid glob pattern:');
+    expect(result.content).toContain('Brace expansion exceeds limit');
+    expect(result.content).not.toContain('Error scanning directory');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // GlobAbortedError.message — the handler catch maps it to 'Search aborted'
 // ---------------------------------------------------------------------------
 

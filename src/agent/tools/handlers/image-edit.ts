@@ -7,7 +7,9 @@
  *
  * Auth resolution (same chain as image_generate, highest wins):
  *   1. `AFK_IMAGE_API_KEY`   — dedicated billing key
- *   2. `resolveOpenAIAuth()` — OPENAI_API_KEY / Codex / ChatGPT OAuth
+ *   2. `resolveOpenAIAuth()` — OPENAI_API_KEY / Codex auth.json
+ *   Note: ChatGPT subscription OAuth is explicitly rejected — the Images Edit
+ *   endpoint does not accept those tokens (wrong OAuth scope).
  *
  * Safety layers (identical to image_generate):
  *   - Registered in the effect ledger as ALWAYS_EXTERNAL (classifier.ts).
@@ -27,12 +29,16 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
+import { FormData as UndiciFormData } from 'undici';
 import { env } from '../../../config/env.js';
 import { resolveOpenAIAuth } from '../../providers/openai-compatible/auth.js';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { ToolResult } from '../../providers/shared/tool-result.js';
 import { resolveAndContain, assertWriteTargetContained } from './_cwd-utils.js';
 import { assertNotDenylisted } from './write-denylist.js';
+import { makeSessionCounter } from './_image-operation.js';
+import { h1ModelFetch } from '../../providers/shared/h1-fetch.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -55,24 +61,7 @@ const DEFAULT_SESSION_LIMIT = 10;
 // Both are billed to the same API key, but the cap semantics are per-tool.
 // ---------------------------------------------------------------------------
 
-const sessionCounters = new Map<string, number>();
-
-function getSessionCount(sessionId: string): number {
-  return sessionCounters.get(sessionId) ?? 0;
-}
-
-function incrementSessionCount(sessionId: string): number {
-  const next = getSessionCount(sessionId) + 1;
-  sessionCounters.set(sessionId, next);
-  return next;
-}
-
-function decrementSessionCount(sessionId: string): void {
-  const current = getSessionCount(sessionId);
-  if (current > 0) {
-    sessionCounters.set(sessionId, current - 1);
-  }
-}
+const editCounter = makeSessionCounter();
 
 // ---------------------------------------------------------------------------
 // Input parsing
@@ -186,7 +175,7 @@ async function loadRefImages(
     try {
       resolvedPath = resolveAndContain(rawPath, context, 'read', cwd);
     } catch (err: unknown) {
-      return { error: err instanceof Error ? err.message : String(err) };
+      return { error: errorMessage(err) };
     }
 
     // Extension check.
@@ -204,7 +193,7 @@ async function loadRefImages(
     try {
       statResult = await fs.stat(resolvedPath);
     } catch (err: unknown) {
-      return { error: `Cannot stat reference image "${rawPath}": ${err instanceof Error ? err.message : String(err)}` };
+      return { error: `Cannot stat reference image "${rawPath}": ${errorMessage(err)}` };
     }
 
     if (statResult.size > MAX_REF_IMAGE_BYTES) {
@@ -220,7 +209,7 @@ async function loadRefImages(
     try {
       buf = Buffer.from(await fs.readFile(resolvedPath));
     } catch (err: unknown) {
-      return { error: `Failed to read reference image "${rawPath}": ${err instanceof Error ? err.message : String(err)}` };
+      return { error: `Failed to read reference image "${rawPath}": ${errorMessage(err)}` };
     }
 
     images.push({ name: path.basename(resolvedPath), buf, ext });
@@ -255,7 +244,7 @@ async function saveEditedImage(
       assertNotDenylisted(savePath, 'image_edit');
       assertWriteTargetContained(savePath, context, 'image_edit', cwd);
     } catch (err: unknown) {
-      return { error: err instanceof Error ? err.message : String(err) };
+      return { error: errorMessage(err) };
     }
   } else {
     const dir = path.join(cwd, '.afk', 'generated-images');
@@ -268,7 +257,7 @@ async function saveEditedImage(
     await fs.mkdir(path.dirname(savePath), { recursive: true });
     await fs.writeFile(savePath, imageBuffer);
   } catch (err: unknown) {
-    return { error: `Image edited successfully but failed to save to disk: ${err instanceof Error ? err.message : String(err)}` };
+    return { error: `Image edited successfully but failed to save to disk: ${errorMessage(err)}` };
   }
 
   return { savePath, imageBuffer };
@@ -279,7 +268,7 @@ async function saveEditedImage(
 // ---------------------------------------------------------------------------
 
 export function createImageEditHandler(
-  fetchFn: typeof globalThis.fetch = globalThis.fetch,
+  fetchFn: typeof globalThis.fetch = h1ModelFetch,
 ): ToolHandler {
   return async (
     input: unknown,
@@ -296,7 +285,23 @@ export function createImageEditHandler(
       authSource = 'AFK_IMAGE_API_KEY';
     } else {
       const resolved = resolveOpenAIAuth(undefined);
-      if (resolved.apiKey) {
+      if (resolved.source === 'chatgpt-oauth') {
+        // The standard Images Edit endpoint does not accept ChatGPT OAuth tokens
+        // (their OAuth scopes exclude api.model.images.request). Unlike
+        // image_generate, there is no ChatGPT backend path for image editing.
+        // Reject early with actionable guidance rather than sending an invalid
+        // token to the API.
+        return {
+          content:
+            'image_edit does not support ChatGPT subscription OAuth credentials. ' +
+            'The Images Edit endpoint requires an API key. ' +
+            'Use one of the supported credential sources:\n' +
+            '  1. AFK_IMAGE_API_KEY in ~/.afk/config/afk.env (dedicated image billing)\n' +
+            '  2. OPENAI_API_KEY env var\n' +
+            '  3. `codex login --api-key` (writes ~/.codex/auth.json)',
+          isError: true,
+        };
+      } else if (resolved.apiKey) {
         apiKey = resolved.apiKey;
         authSource = resolved.source;
       } else if (resolved.source === 'chatgpt-oauth-expired') {
@@ -343,9 +348,9 @@ export function createImageEditHandler(
     const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : DEFAULT_SESSION_LIMIT;
 
     // Optimistic increment before the API call (closes the TOCTOU race).
-    incrementSessionCount(sessionId);
-    if (getSessionCount(sessionId) > limit) {
-      decrementSessionCount(sessionId);
+    editCounter.increment(sessionId);
+    if (editCounter.get(sessionId) > limit) {
+      editCounter.decrement(sessionId);
       return {
         content:
           `Image edit limit reached (${limit} per session). ` +
@@ -357,7 +362,7 @@ export function createImageEditHandler(
     // 5. Parse input.
     const parsed = parseInput(input);
     if ('error' in parsed) {
-      decrementSessionCount(sessionId);
+      editCounter.decrement(sessionId);
       return { content: parsed.error, isError: true };
     }
 
@@ -365,14 +370,14 @@ export function createImageEditHandler(
     const cwd = context?.resolveBase ?? process.cwd();
     const loadResult = await loadRefImages(parsed.image_paths, context, cwd);
     if ('error' in loadResult) {
-      decrementSessionCount(sessionId);
+      editCounter.decrement(sessionId);
       return { content: loadResult.error, isError: true };
     }
 
     // 7. Call the OpenAI Images Edit API.
     const apiResult = await callImagesEditApi(fetchFn, apiKey, parsed, loadResult, signal);
     if ('error' in apiResult) {
-      decrementSessionCount(sessionId);
+      editCounter.decrement(sessionId);
       return { content: apiResult.error, isError: true };
     }
 
@@ -381,12 +386,12 @@ export function createImageEditHandler(
       apiResult.b64_json, parsed.output_format, parsed.output_path, context, cwd,
     );
     if ('error' in saveResult) {
-      decrementSessionCount(sessionId);
+      editCounter.decrement(sessionId);
       return { content: saveResult.error, isError: true };
     }
 
     const { savePath, imageBuffer } = saveResult;
-    const newCount = getSessionCount(sessionId);
+    const newCount = editCounter.get(sessionId);
 
     return {
       content: JSON.stringify({
@@ -414,6 +419,12 @@ interface ImagesEditApiResult {
   b64_json: string;
 }
 
+/**
+ * Call the OpenAI Images Edit API with a multipart/form-data body.
+ *
+ * Default fetchFn is h1ModelFetch; any override receiving an undici FormData
+ * body must be undici-compatible.
+ */
 async function callImagesEditApi(
   fetchFn: typeof globalThis.fetch,
   apiKey: string,
@@ -421,8 +432,14 @@ async function callImagesEditApi(
   imageBuffers: Array<{ name: string; buf: Buffer; ext: string }>,
   signal: AbortSignal,
 ): Promise<ImagesEditApiResult | { error: string }> {
-  // Build multipart/form-data payload using the Web FormData API.
-  const form = new FormData();
+  // Build multipart/form-data payload using undici's FormData (not
+  // globalThis.FormData). npm undici 8 brand-checks the body object via
+  // webidl.is.FormData before serializing it; passing globalThis.FormData
+  // fails that check when the body is processed by h1ModelFetch (which uses
+  // undici's own fetch internally). globalThis.Blob is accepted as file parts
+  // — undici uses webidl.is.Blob which resolves to the same built-in Blob
+  // class on Node 22+. See issue #3345.
+  const form = new UndiciFormData();
 
   // image field: single file or first file (API accepts one primary image).
   // Additional images are passed as extra `image[]` fields.
@@ -443,11 +460,18 @@ async function callImagesEditApi(
   form.append('model', parsed.model);
   form.append('size', parsed.size);
   form.append('quality', parsed.quality);
+  form.append('output_format', parsed.output_format);
   form.append('response_format', 'b64_json');
   form.append('n', '1');
 
   let response: Response;
   try {
+    // Cast required: undici's FormData and globalThis.FormData are nominally
+    // distinct types. At runtime h1ModelFetch (undici's own fetch) deserializes
+    // the body correctly because it accepts its own FormData instance. For an
+    // injectable fetchFn the same cast is safe: any fetch implementation that
+    // handles multipart MUST accept a FormData-like body — the brand-check issue
+    // only affects undici's body extraction, not the wire format.
     response = await fetchFn('https://api.openai.com/v1/images/edits', {
       method: 'POST',
       headers: {
@@ -455,12 +479,11 @@ async function callImagesEditApi(
         // Do NOT set Content-Type — fetch sets it automatically with the
         // correct multipart boundary when the body is FormData.
       },
-      body: form,
+      body: form as unknown as BodyInit,
       signal,
     });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { error: `OpenAI Images Edit API request failed: ${msg}` };
+    return { error: `OpenAI Images Edit API request failed: ${errorMessage(err)}` };
   }
 
   if (!response.ok) {

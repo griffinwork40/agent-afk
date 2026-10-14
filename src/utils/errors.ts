@@ -8,6 +8,76 @@ export function errorMessage(err: unknown): string {
 }
 
 /**
+ * Extracts a human-readable message from an {@link AbortSignal}'s `reason`.
+ *
+ * This is NOT a drop-in for {@link errorMessage}: when `reason` is `undefined`
+ * (the signal was never aborted, or was aborted without a reason) it returns
+ * the sentinel string `'aborted'` rather than `'undefined'`.
+ *
+ * Use wherever code reads `signal.reason` and needs a displayable string:
+ *
+ * ```ts
+ * // Before
+ * const reason = signal.reason;
+ * const msg = errorMessage(reason ?? 'aborted');
+ *
+ * // After
+ * const msg = abortReason(signal.reason);
+ * ```
+ */
+export function abortReason(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason ?? 'aborted');
+}
+
+/**
+ * Coerces an unknown caught value to an `Error` instance.
+ *
+ * If `err` is already an `Error` (or subclass) it is returned unchanged.
+ * Otherwise a new `Error` is created whose `message` is `String(err)` —
+ * the same coercion `errorMessage` applies.
+ *
+ * Use in `catch (err)` blocks where an `Error` object is required, e.g.
+ * when setting `cause`, passing to an `onError` callback, or yielding to
+ * an error-typed event stream.
+ *
+ * Replaces the inline ternary
+ * `err instanceof Error ? err : new Error(String(err))`.
+ */
+export function ensureError(err: unknown): Error {
+  return err instanceof Error ? err : new Error(String(err));
+}
+
+/**
+ * Returns `true` when `err` is a `NodeJS.ErrnoException` whose `.code`
+ * property equals `code`.
+ *
+ * Replaces the verbose cast-and-compare pattern:
+ * `(err as NodeJS.ErrnoException).code === 'ENOENT'`
+ *
+ * The check is intentionally defensive — it returns `false` for any value
+ * that is not an object, lacks a `.code` property, or has a `.code` that
+ * does not match.
+ */
+export function isErrnoCode(err: unknown, code: string): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code: unknown }).code === code
+  );
+}
+
+/**
+ * Returns `true` when `err` is a Node.js `ENOENT` filesystem error.
+ *
+ * Convenience alias for `isErrnoCode(err, 'ENOENT')` — the most common
+ * errno check, replacing private `isEnoent` wrappers in individual modules.
+ */
+export function isEnoent(err: unknown): boolean {
+  return isErrnoCode(err, 'ENOENT');
+}
+
+/**
  * True when `err` is an `EgressBlockedError` — either directly or as the
  * `cause` of a wrapping `TypeError('fetch failed', { cause })`.
  *
@@ -253,6 +323,12 @@ export interface UsageLimitInfo {
  * value `errorClass` telemetry records). No SDK import: this is a leaf module.
  */
 export class UsageLimitError extends Error {
+  /**
+   * HTTP status code for this error: `400` when `info.kind === 'credit'`
+   * (empty API credit balance), `429` for all other usage-limit kinds
+   * (subscription window exhausted). Matches the raw SDK error it replaces so
+   * status-keyed classifiers continue to work.
+   */
   public readonly status: number;
   public override readonly cause?: unknown;
 

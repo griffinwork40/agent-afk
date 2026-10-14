@@ -21,8 +21,7 @@ import {
 import { renderGroupedRootTools } from '../commands/interactive/tool-lane-render-grouped-root.js';
 import { formatPreviewDiffBlock } from '../commands/interactive/tool-lane-format-diff.js';
 import { computeLineDiff } from '../../utils/diff.js';
-
-const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, '');
+import { stripAnsi } from '../display.js';
 
 /** Run `fn` with `AFK_TEXT_MEASURE` set (or cleared), restoring it after. */
 function withMeasureEnv<T>(value: string | undefined, fn: () => T): T {

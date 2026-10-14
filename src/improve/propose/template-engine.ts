@@ -2,7 +2,7 @@
  * Template-mode proposal engine.
  *
  * Given a {@link FailureCard}, deterministically produces an
- * {@link ImprovementProposal} populated from a static pattern → starter
+ * {@link ImprovementProposal} populated from a static pattern -> starter
  * map. No LLM calls, no file-system access, no network. Pure.
  *
  * The goal is NOT to produce a finished fix — it's to produce a starter
@@ -29,6 +29,12 @@
  * When the codebase moves, the templates need to move too (these are
  * implementation references, not philosophy).
  *
+ * Pattern template records are split across siblings by concern family:
+ *   - {@link ./template-engine.templates-loop} — loop/hook patterns
+ *     (`repeated-tool-use`, `subagent-block`, `subagent-read-denial`)
+ *   - {@link ./template-engine.templates-density} — density/closure patterns
+ *     (`tool-failure-density`, `closure-anomaly`)
+ *
  * @module improve/propose/template-engine
  */
 
@@ -41,13 +47,23 @@ import {
   type Severity,
   type ValidationPlan,
 } from '../schemas.js';
+import {
+  repeatedToolUseTemplate,
+  subagentBlockTemplate,
+  subagentReadDenialTemplate,
+} from './template-engine.templates-loop.js';
+import {
+  toolFailureDensityTemplate,
+  closureAnomalyTemplate,
+  closureAdviceFor as _closureAdviceFor,
+} from './template-engine.templates-density.js';
 
 /** Optional injection seam for deterministic tests. */
 export interface TemplateContext {
   /** Override the proposal id. Tests use this; production uses the
    *  generator in `writer.ts`. */
   proposalId: string;
-  /** Override the timestamp. Tests use this; production defaults to `new Date()`. */
+  /** Override the timestamp source. Tests use this; production defaults to `new Date()`. */
   now?: () => Date;
 }
 
@@ -67,397 +83,12 @@ interface PatternTemplate {
 }
 
 const TEMPLATES: Record<FailureCard['pattern'], PatternTemplate> = {
-  // -------------------------------------------------------------------------
-  // repeated-tool-use
-  // -------------------------------------------------------------------------
-  'repeated-tool-use': {
-    rootCauseClass: 'dispatcher-bug',
-    hypothesis: (card) => {
-      const toolName = typeof card.detail['toolName'] === 'string' ? card.detail['toolName'] : '<unknown>';
-      const runLength = typeof card.detail['runLength'] === 'number' ? card.detail['runLength'] : '?';
-      return (
-        `The '${toolName}' tool was dispatched ${runLength} times in a row with an identical input/output byte fingerprint. ` +
-        `This is either (a) the model is stuck retrying the same call without responding to its result, ` +
-        `(b) the tool's result shape is too uninformative for the model to make progress, or ` +
-        `(c) a productive recursion that happens to share byte counts (rare; the fingerprint caveat is documented on the detector).`
-      );
-    },
-    fixSketch: (card) => {
-      const toolName = typeof card.detail['toolName'] === 'string' ? card.detail['toolName'] : '<the tool>';
-      return [
-        '## Candidate fixes (human picks)',
-        '',
-        `**Option A — make the loop visible.** Surface a clear "no-progress" signal to the model when '${toolName}' returns the same result N times in a row. Today the dispatcher just executes the call.`,
-        '',
-        `**Option B — improve the tool's result shape.** If the model can't distinguish "no results" from "same results," its result is information-poor. Inspect the tool's response and verify it carries enough signal for the model to change its query.`,
-        '',
-        `**Option C — confirm productive recursion.** Open the source trace at the seq values listed in the evidence and inspect the model's reasoning between repeats. If each call's args genuinely differ (and the byte-count collision is the issue), no code change is needed; tune the detector instead.`,
-        '',
-        '_Option C first — the byte-fingerprint detector has a documented collision caveat. Confirm there is a real loop before changing dispatcher behavior._',
-      ].join('\n');
-    },
-    likelyFiles: [
-      {
-        path: 'src/agent/providers/anthropic-direct/loop.ts',
-        rationale:
-          'Main tool dispatch loop. If a no-progress detector is added at the dispatch boundary, it lives here.',
-        riskTier: 'moderate',
-        confidence: 'medium',
-      },
-      {
-        path: 'src/agent/tools/',
-        rationale:
-          'Tool implementations. If the result shape is information-poor, the specific tool implementation needs the change.',
-        riskTier: 'safe',
-        confidence: 'low',
-      },
-      {
-        path: 'src/improve/scan/detectors/repeated-tool-use.ts',
-        rationale: 'If this turns out to be detector noise rather than a real bug, tune here.',
-        riskTier: 'safe',
-        confidence: 'medium',
-      },
-    ],
-    riskFloor: 'medium',
-    validationPlan: {
-      unitTests: [
-        'pnpm test src/improve/scan/detectors/repeated-tool-use',
-        'pnpm test src/agent/providers/anthropic-direct',
-      ],
-      evalCases: [],
-      smokeChecks: [
-        'pnpm lint',
-        'afk improve scan --since 7d  # after fix lands, this pattern should NOT recur',
-      ],
-      manualChecks: [
-        'Open the trace at the evidence seqs and confirm the calls are truly identical (not just byte-coincident).',
-      ],
-    },
-  },
-
-  // -------------------------------------------------------------------------
-  // subagent-block
-  // -------------------------------------------------------------------------
-  'subagent-block': {
-    rootCauseClass: 'hook-overreach',
-    hypothesis: (card) => {
-      const reason = typeof card.detail['reason'] === 'string' ? card.detail['reason'] : '';
-      const blockCount = typeof card.detail['blockCount'] === 'number' ? card.detail['blockCount'] : '?';
-      const distinctSessions = typeof card.detail['distinctSessions'] === 'number' ? card.detail['distinctSessions'] : '?';
-      const reasonPart = reason ? ` with reason "${reason.slice(0, 200)}"` : ' (no reason field on the block events)';
-      return (
-        `A SubagentStart hook returned decision:'block' ${blockCount} times across ${distinctSessions} session(s)${reasonPart}. ` +
-        `Recurring blocks suggest either (a) the guard is over-broad and trips on legitimate dispatches, (b) the legitimate use case actually needs a refactor to satisfy the guard, or (c) the user has no signal explaining the block and keeps retrying.`
-      );
-    },
-    fixSketch: (card) => {
-      const reason = typeof card.detail['reason'] === 'string' ? card.detail['reason'] : '<not in payload>';
-      return [
-        '## Candidate fixes (human picks)',
-        '',
-        `**Identify the hook owner first.** The trace's hook_decision event carries the \`reason\` field ("${reason}"). Grep the codebase for that literal string — that locates the hook handler.`,
-        '',
-        '```sh',
-        `# Replace the quoted string below with the actual reason text from the evidence.`,
-        `grep -rn -- "${reason.slice(0, 60).replace(/"/g, '\\"')}" src/`,
-        '```',
-        '',
-        '**Option A — tighten the guard.** If the block fires on dispatches it should not, narrow the predicate. Confirm by adding a unit test that exercises the false-positive case.',
-        '',
-        '**Option B — make the refusal legible.** Instead of `decision: \'block\'`, return a hook decision that injects a context message via `injectContext`. The parent session then sees a clear no-op message instead of a silent block.',
-        '',
-        '**Option C — accept the block as correct.** If the guard is doing its job, mark the card resolved via `afk improve cards triage <slug> --status resolved --note "..."`. No code change.',
-      ].join('\n');
-    },
-    likelyFiles: [
-      {
-        path: 'src/agent/hooks.ts',
-        rationale: 'Hook dispatch core. Only touched if the injectContext mechanism itself needs an extension.',
-        riskTier: 'high',
-        confidence: 'low',
-      },
-      {
-        path: 'src/agent/hook-registry.ts',
-        rationale: 'Hook registration. Same caveat — usually not the right spot.',
-        riskTier: 'high',
-        confidence: 'low',
-      },
-      {
-        path: 'src/agent/subagent-hooks.ts',
-        rationale: 'SubagentStart hook dispatch path. The reason text is set by whatever handler is registered here.',
-        riskTier: 'moderate',
-        confidence: 'medium',
-      },
-      {
-        path: 'src/skills/',
-        rationale:
-          'A skill is the typical owner of a SubagentStart hook. Grep for the block reason text to locate the specific handler.',
-        riskTier: 'safe',
-        confidence: 'medium',
-      },
-    ],
-    riskFloor: 'medium',
-    validationPlan: {
-      unitTests: [
-        'pnpm test src/agent/hooks',
-        'pnpm test src/agent/subagent-hooks',
-        'pnpm test src/improve/scan/detectors/subagent-block',
-      ],
-      evalCases: [],
-      smokeChecks: [
-        'pnpm lint',
-        'afk improve scan --since 7d  # after fix, blocks with same reason should not recur',
-      ],
-      manualChecks: [
-        'Grep the codebase for the reason text from the evidence to find the hook handler.',
-        'Run a session that exercises the legitimate dispatch and confirm it is no longer blocked.',
-      ],
-    },
-  },
-
-  // -------------------------------------------------------------------------
-  // subagent-read-denial
-  // -------------------------------------------------------------------------
-  'subagent-read-denial': {
-    rootCauseClass: 'dispatcher-bug',
-    hypothesis: (card) => {
-      const denialCount = typeof card.detail['denialCount'] === 'number' ? card.detail['denialCount'] : '?';
-      const distinctSessions = typeof card.detail['distinctSessions'] === 'number' ? card.detail['distinctSessions'] : '?';
-      const tools = Array.isArray(card.detail['blockedTools']) ? (card.detail['blockedTools'] as unknown[]).join(', ') : '?';
-      return (
-        `The path-approval PreToolUse hook auto-denied a forked sub-agent's READ (${tools}) ${denialCount} times across ${distinctSessions} session(s) — the resolved path fell outside the fork's granted READ roots and a fork cannot prompt to approve. ` +
-        `The child then retries the read and spins until a wall-clock timeout. Root cause is almost always a read-scope grant that is NARROWER than the parent's: the fork was given a concrete cwd but not the parent's read reach (main repo, sibling .afk-worktrees/*, ~/.afk/state).`
-      );
-    },
-    fixSketch: () => {
-      return [
-        '## Candidate fixes (human picks)',
-        '',
-        "**Option A — widen the fork's inherited read scope (usual fix).** A forked read-only sub-agent must be able to READ everything its parent could; only WRITES stay confined. The inheritance rule lives in `computeInheritedReadRoots` (`src/agent/subagent-read-scope.ts`), applied at the fork choke point in `SubagentManager.forkSubagent` (`src/agent/subagent.ts`). Confirm an unconfined parent yields a read-open child and a confined parent yields union(childCwd, parentRoots, worktreeMainRoot).",
-        '',
-        '**Option B — verify the `afk farm` guardrail still holds.** A caller that pins `readRoots` (branch workers) must keep suppressing inheritance so a deliberately-confined worker is never widened. Guard with the regression test in `subagent-worktree-readroot.test.ts`.',
-        '',
-        '**Option C — fail fast instead of hanging.** If a denial is legitimate (genuinely out-of-scope), the fork should abort with an actionable message after N identical denials rather than retry to a wall-clock timeout. Separate hardening from the scope fix.',
-      ].join('\n');
-    },
-    likelyFiles: [
-      {
-        path: 'src/agent/subagent-read-scope.ts',
-        rationale: 'The read-scope inheritance rule (computeInheritedReadRoots). The usual fix site.',
-        riskTier: 'moderate',
-        confidence: 'high',
-      },
-      {
-        path: 'src/agent/subagent.ts',
-        rationale: 'forkSubagent applies the inherited read roots at the fork choke point.',
-        riskTier: 'moderate',
-        confidence: 'medium',
-      },
-      {
-        path: 'src/agent/tools/hooks/path-approval-hook.ts',
-        rationale: 'The PreToolUse hook that auto-denies out-of-root reads. Touch only to change the fail-fast behavior (Option C), not the grant.',
-        riskTier: 'high',
-        confidence: 'low',
-      },
-    ],
-    riskFloor: 'medium',
-    validationPlan: {
-      unitTests: [
-        'pnpm test src/agent/subagent-read-scope',
-        'pnpm test src/agent/subagent-worktree-readroot',
-        'pnpm test src/improve/scan/detectors/subagent-read-denial',
-      ],
-      evalCases: [],
-      smokeChecks: [
-        'pnpm lint',
-        'afk improve scan --only subagent-read-denial --since 7d  # after fix, read-denials should not recur',
-      ],
-      manualChecks: [
-        'Open the trace at the evidence seqs; confirm the denied paths are ones the parent could read (main repo / sibling worktree / ~/.afk/state).',
-        'Run a fan-out (e.g. /diagnose) that dispatches read-only forks and confirm they can read across the workspace.',
-      ],
-    },
-  },
-
-  // -------------------------------------------------------------------------
-  // tool-failure-density
-  // -------------------------------------------------------------------------
-  'tool-failure-density': {
-    rootCauseClass: 'unknown',
-    hypothesis: (card) => {
-      const toolName = typeof card.detail['toolName'] === 'string' ? card.detail['toolName'] : '<unknown>';
-      const failures = typeof card.detail['failureCount'] === 'number' ? card.detail['failureCount'] : '?';
-      const total = typeof card.detail['totalCalls'] === 'number' ? card.detail['totalCalls'] : '?';
-      const rate = typeof card.detail['failureRate'] === 'number'
-        ? `${(card.detail['failureRate'] * 100).toFixed(1)}%`
-        : '?%';
-      const truncated = typeof card.detail['truncatedFailureCount'] === 'number'
-        ? card.detail['truncatedFailureCount']
-        : 0;
-      const truncatedPart = truncated > 0
-        ? ` ${truncated} of those failures were also truncated, which often indicates a separate output-shape problem.`
-        : '';
-      return (
-        `The '${toolName}' tool returned isError: true on ${failures}/${total} calls (${rate}).${truncatedPart} ` +
-        `Likely causes: (a) the tool's handler has a bug, (b) the model is calling the tool with malformed inputs the tool rejects, ` +
-        `(c) a permission/hook guard is denying legitimate calls, or (d) the tool legitimately returns isError as a signal to the model and this detector is firing on normal behavior.`
-      );
-    },
-    fixSketch: (card) => {
-      const toolName = typeof card.detail['toolName'] === 'string' ? card.detail['toolName'] : '<the tool>';
-      const sessionIds = Array.isArray(card.detail['sessionIds']) ? (card.detail['sessionIds'] as string[]) : [];
-      const firstId = sessionIds[0] ?? '<session-id>';
-      return [
-        '## Diagnostic steps (do these first)',
-        '',
-        `1. Inspect a representative failure trace: \`cat ~/.afk/state/witness/${firstId}/trace.jsonl | grep '"name":"${toolName}"' | tail -5\``,
-        `2. Look at the events immediately BEFORE each failure — what did the model send as input?`,
-        '3. The witness trace does not capture tool args verbatim. To see the actual input, check the session message history under `~/.afk/state/sessions/<sessionId>/`.',
-        '',
-        '## Candidate fixes (human picks)',
-        '',
-        `**Option A — handler bug.** Locate the tool implementation under \`src/agent/tools/handlers/\` and read its error paths. If a specific failure mode is reachable from common LLM inputs, fix the handler.`,
-        '',
-        `**Option B — input shape too restrictive.** If the tool's input schema rejects inputs the model naturally produces, either loosen the schema or improve the schema's description so the model can comply.`,
-        '',
-        `**Option C — permission/hook denial.** Check whether a PreToolUse hook or permission gate is rejecting the call. The dispatcher returns isError: true for hook blocks and permission denials (\`src/agent/tools/dispatcher.ts:337–352\`).`,
-        '',
-        `**Option D — accept as normal.** Some tools intentionally return isError as a signal (e.g., grep finding nothing). If this is the case, mark the card resolved with a note explaining why, or tune the detector threshold via \`--tool-failure-min-rate\`.`,
-      ].join('\n');
-    },
-    likelyFiles: [
-      {
-        path: 'src/agent/tools/dispatcher.ts',
-        rationale:
-          'Tool dispatch core. Every isError: true path goes through here: hook block, permission denied, handler throw, unknown tool. Read this to understand which class each failure falls into.',
-        riskTier: 'high',
-        confidence: 'medium',
-      },
-      {
-        path: 'src/agent/tools/handlers/',
-        rationale:
-          'Tool handlers. If a specific handler is buggy, the fix lives in the handler file matching the tool name (e.g. handlers/bash.ts for the Bash tool).',
-        riskTier: 'moderate',
-        confidence: 'medium',
-      },
-      {
-        path: 'src/improve/scan/detectors/tool-failure-density.ts',
-        rationale: 'If the detector is flagging legitimate isError-as-signal behavior, tune the threshold here or document the tool as expected-failures.',
-        riskTier: 'safe',
-        confidence: 'low',
-      },
-    ],
-    riskFloor: 'medium',
-    validationPlan: {
-      unitTests: [
-        'pnpm test src/improve/scan/detectors/tool-failure-density',
-        'pnpm test src/agent/tools/dispatcher',
-      ],
-      evalCases: [],
-      smokeChecks: [
-        'pnpm lint',
-        'afk improve scan --only tool-failure-density --since 7d  # after fix, failure rate should drop',
-      ],
-      manualChecks: [
-        'Open the trace at the evidence seqs and read the failure annotations (resultBytes, durationMs).',
-        'Inspect the session message history for the actual tool input that triggered the failure.',
-        'Decide which of the four root cause classes (handler bug / input shape / permission / detector noise) the failures belong to.',
-      ],
-    },
-  },
-
-  // -------------------------------------------------------------------------
-  // closure-anomaly
-  // -------------------------------------------------------------------------
-  'closure-anomaly': {
-    rootCauseClass: 'unknown',
-    hypothesis: (card) => {
-      const reason = typeof card.detail['closureReason'] === 'string' ? card.detail['closureReason'] : '<unknown>';
-      const affected = typeof card.detail['affectedSessions'] === 'number' ? card.detail['affectedSessions'] : '?';
-      const total = typeof card.detail['totalCostUsd'] === 'number' ? card.detail['totalCostUsd'] : null;
-      const costPart = total !== null ? ` totalling $${total.toFixed(4)}` : '';
-      return (
-        `${affected} session(s) closed with reason='${reason}'${costPart}. ` +
-        `Anomalous closure reasons signal one of: budget mis-configuration, timeout too tight, a hook returning block at the session edge, or an explicit/cascaded abort. The right fix depends on the reason value.`
-      );
-    },
-    fixSketch: (card) => {
-      const reason = typeof card.detail['closureReason'] === 'string' ? card.detail['closureReason'] : '<unknown>';
-      const sessionIds = Array.isArray(card.detail['sessionIds']) ? (card.detail['sessionIds'] as string[]) : [];
-      const firstId = sessionIds[0] ?? '<session-id>';
-      const advice = closureAdviceFor(reason);
-      return [
-        `## Closure reason: \`${reason}\``,
-        '',
-        advice,
-        '',
-        '## Diagnostic steps',
-        '',
-        `1. Inspect the trace for one of the affected sessions: \`cat ~/.afk/state/witness/${firstId}/trace.jsonl | tail -20\``,
-        `2. Check the events immediately before the closure — what was the runtime trying to do?`,
-        '3. Cross-reference with \`~/.afk/agent-framework/routing-decisions.jsonl\` for any subagent activity at the same timestamp.',
-      ].join('\n');
-    },
-    likelyFiles: [
-      {
-        path: 'src/agent/session/agent-session.ts',
-        rationale: 'Closure-event emission lives here. Field meanings and the reason classification are owned by this module.',
-        riskTier: 'high',
-        confidence: 'medium',
-      },
-      {
-        path: 'src/agent/session/stream-consumer.ts',
-        rationale: 'Budget threshold detection / closure-reason routing. Touch only if the closure CAUSE is here.',
-        riskTier: 'high',
-        confidence: 'low',
-      },
-      {
-        path: 'src/agent/abort-graph.ts',
-        rationale: 'Origin tracking for abort-type closures.',
-        riskTier: 'moderate',
-        confidence: 'low',
-      },
-    ],
-    riskFloor: 'medium',
-    validationPlan: {
-      unitTests: [
-        'pnpm test src/agent/session',
-        'pnpm test src/improve/scan/detectors/closure-anomaly',
-      ],
-      evalCases: [],
-      smokeChecks: ['pnpm lint'],
-      manualChecks: [
-        'Read the closure events at the seqs listed in the evidence.',
-        'Confirm the closure reason is correct semantically (not a misclassification).',
-      ],
-    },
-  },
+  'repeated-tool-use': repeatedToolUseTemplate,
+  'subagent-block': subagentBlockTemplate,
+  'subagent-read-denial': subagentReadDenialTemplate,
+  'tool-failure-density': toolFailureDensityTemplate,
+  'closure-anomaly': closureAnomalyTemplate,
 };
-
-/**
- * Stable, file-set-tested advice per closure reason. Kept separate so it
- * can be unit-tested without exercising the full template pipeline.
- */
-function closureAdviceFor(reason: string): string {
-  switch (reason) {
-    case 'budget_exceeded':
-      return 'The monetary ceiling tripped. Confirm `AFK_MAX_BUDGET_USD` is set to a realistic value for the workload; if so, the LLM call shape (cache use, output cap, model choice) is the next place to look.';
-    case 'timeout':
-      return 'The wall-clock cap fired. Check whether the timeout is configured too tightly for the workload, or whether a tool call is hanging. Tool-call durations in the same trace will tell you which.';
-    case 'hook_blocked':
-      return 'A hook returned `decision: \'block\'` at the session edge. Cross-reference with any `subagent-block` cards on this scan — the underlying cause is likely the same handler.';
-    case 'abort':
-      return 'An explicit or cascaded abort closed the session. If origin is `user_signal`, no action needed. If `cascade`/`budget`/`timeout`, the originating cause is the real issue.';
-    case 'iteration_cap':
-      return 'Loop iteration ceiling tripped. The model could not make progress in N turns. Either the task is genuinely impossible at that budget, or a tool is in an unproductive loop (cross-reference repeated-tool-use cards).';
-    case 'max_turns_exceeded':
-      return 'Turn ceiling tripped. Same diagnostic as iteration_cap.';
-    case 'truncated':
-      return 'The model hit the output-token ceiling mid-response. Check `max_tokens` and the model\'s output limit. Consider retrying with a larger output budget or splitting the task into smaller steps.';
-    default:
-      return 'Reason not in the known anomalous set. Inspect the trace and update the detector if this is a new closure variant.';
-  }
-}
 
 /**
  * Build a starter proposal from a card. Deterministic given the same
@@ -513,11 +144,11 @@ export function proposeFromCard(card: FailureCard, ctx: TemplateContext): Improv
 /**
  * Risk derivation. Goal: never UNDERESTIMATE risk.
  *
- *   - Worst tier `forbidden` → high (and `requiresExplicitApproval: true`
+ *   - Worst tier `forbidden` -> high (and `requiresExplicitApproval: true`
  *     downstream).
- *   - Worst tier `high` → high.
- *   - Worst tier `moderate` → max(floor, 'medium').
- *   - Worst tier `safe` → floor.
+ *   - Worst tier `high` -> high.
+ *   - Worst tier `moderate` -> max(floor, 'medium').
+ *   - Worst tier `safe` -> floor.
  */
 export function deriveRiskLevel(
   floor: Severity,
@@ -560,3 +191,7 @@ function structuredCloneShallow(plan: ValidationPlan): ValidationPlan {
     manualChecks: [...plan.manualChecks],
   };
 }
+
+// Re-export closureAdviceFor so existing test imports that reference it from
+// this module path continue to resolve without change.
+export { _closureAdviceFor as closureAdviceFor };

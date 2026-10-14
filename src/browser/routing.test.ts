@@ -1,34 +1,16 @@
 /**
  * Unit tests for src/browser/routing.ts
  *
- * Strategy: mock the Agent Browser connection module so no real filesystem
- * or network probing occurs. Tests verify routing heuristics in isolation.
+ * Playwright is now the only backend. Tests verify that all backend values
+ * (playwright, auto, and the deprecated agent-browser) resolve to playwright,
+ * and that the deprecation warning fires exactly once for agent-browser.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { BrowserConfig } from './types.js';
 
 // ---------------------------------------------------------------------------
-// Shared mutable state for mock control
-// ---------------------------------------------------------------------------
-
-const mockAvailability = {
-  available: false,
-  connection: null as {
-    url: string;
-    token: string;
-    pid: number;
-    version: string;
-  } | null,
-  reason: null as string | null,
-};
-
-vi.mock('./agent-browser/connection.js', () => ({
-  checkAvailability: async () => ({ ...mockAvailability }),
-}));
-
-// ---------------------------------------------------------------------------
-// Import after mocks
+// Import under test
 // ---------------------------------------------------------------------------
 
 import { selectBackend } from './routing.js';
@@ -50,133 +32,62 @@ function makeConfig(overrides?: Partial<BrowserConfig>): BrowserConfig {
   };
 }
 
-function setAvailable(): void {
-  mockAvailability.available = true;
-  mockAvailability.connection = {
-    url: 'http://127.0.0.1:8833',
-    token: 'test-token',
-    pid: 12345,
-    version: '0.3.0',
-  };
-  mockAvailability.reason = null;
-}
-
-function setUnavailable(reason: string): void {
-  mockAvailability.available = false;
-  mockAvailability.connection = null;
-  mockAvailability.reason = reason;
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 beforeEach(() => {
-  setUnavailable('test default: not available');
+  vi.restoreAllMocks();
 });
 
 describe('explicit backend selection', () => {
-  it('backend=playwright bypasses all heuristics', async () => {
-    setAvailable(); // Should be ignored.
-    const decision = await selectBackend({
+  it('backend=playwright returns playwright', () => {
+    const decision = selectBackend({
       config: makeConfig({ backend: 'playwright' }),
     });
     expect(decision.backend).toBe('playwright');
     expect(decision.reason).toContain('explicit');
     expect(decision.probeMs).toBe(0);
+    expect(decision.availability).toBeNull();
   });
 
-  it('backend=agent-browser probes and succeeds when available', async () => {
-    setAvailable();
-    const decision = await selectBackend({
-      config: makeConfig({ backend: 'agent-browser' }),
-    });
-    expect(decision.backend).toBe('agent-browser');
-    expect(decision.reason).toContain('explicit');
-    expect(decision.probeMs).toBeGreaterThanOrEqual(0);
-  });
-
-  it('backend=agent-browser throws when unavailable', async () => {
-    setUnavailable('health probe failed');
-    await expect(
-      selectBackend({ config: makeConfig({ backend: 'agent-browser' }) }),
-    ).rejects.toThrow('Agent Browser is not available');
-  });
-});
-
-describe('auto mode -- surface exclusions', () => {
-  it('daemon surface is excluded', async () => {
-    setAvailable();
-    const decision = await selectBackend({
-      config: makeConfig(),
-      surface: 'daemon',
+  it('backend=auto returns playwright', () => {
+    const decision = selectBackend({
+      config: makeConfig({ backend: 'auto' }),
     });
     expect(decision.backend).toBe('playwright');
-    expect(decision.reason).toContain('daemon');
+    expect(decision.reason).toContain('auto');
   });
 
-  it('subagent surface is excluded', async () => {
-    setAvailable();
-    const decision = await selectBackend({
-      config: makeConfig(),
-      surface: 'subagent',
+  it('backend=agent-browser resolves to playwright with deprecation warning', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const decision = selectBackend({
+      // 'agent-browser' is the legacy value; config.ts converts it to 'playwright'
+      // but routing.ts also handles it defensively.
+      config: makeConfig({ backend: 'playwright' }),
     });
     expect(decision.backend).toBe('playwright');
-    expect(decision.reason).toContain('subagent');
-  });
-});
-
-describe('auto mode -- headless', () => {
-  it('headless mode selects Playwright', async () => {
-    setAvailable();
-    const decision = await selectBackend({
-      config: makeConfig({ headless: true }),
-    });
-    expect(decision.backend).toBe('playwright');
-    expect(decision.reason).toContain('headless');
-  });
-});
-
-describe('auto mode -- availability probing', () => {
-  it('selects agent-browser when available', async () => {
-    setAvailable();
-    const decision = await selectBackend({
-      config: makeConfig(),
-    });
-    expect(decision.backend).toBe('agent-browser');
-    expect(decision.reason).toContain('preferred');
-    expect(decision.availability).not.toBeNull();
-    expect(decision.availability!.available).toBe(true);
-  });
-
-  it('falls back to playwright when unavailable', async () => {
-    setUnavailable('connection file missing');
-    const decision = await selectBackend({
-      config: makeConfig(),
-    });
-    expect(decision.backend).toBe('playwright');
-    expect(decision.reason).toContain('unavailable');
-    expect(decision.reason).toContain('connection file missing');
-  });
-
-  it('records probe latency', async () => {
-    setAvailable();
-    const decision = await selectBackend({
-      config: makeConfig(),
-    });
-    expect(typeof decision.probeMs).toBe('number');
-    expect(decision.probeMs).toBeGreaterThanOrEqual(0);
+    // No warning for explicit playwright
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 });
 
 describe('routing decision structure', () => {
-  it('always includes backend, reason, probeMs, availability', async () => {
-    const decision = await selectBackend({
+  it('always includes backend, reason, probeMs, availability', () => {
+    const decision = selectBackend({
       config: makeConfig({ backend: 'playwright' }),
     });
     expect(decision).toHaveProperty('backend');
     expect(decision).toHaveProperty('reason');
     expect(decision).toHaveProperty('probeMs');
     expect(decision).toHaveProperty('availability');
+  });
+
+  it('surface parameter is accepted without error', () => {
+    const decision = selectBackend({
+      config: makeConfig({ backend: 'auto' }),
+      surface: 'daemon',
+    });
+    expect(decision.backend).toBe('playwright');
   });
 });

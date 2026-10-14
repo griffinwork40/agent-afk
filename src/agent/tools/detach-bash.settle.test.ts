@@ -17,9 +17,9 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DetachableToolRegistry, type DetachedToolResult } from './detach-registry.js';
-import { execOnDetach, SETTLE_AFTER_KILL_MS } from './detach-bash.js';
+import { execOnDetach, SETTLE_AFTER_KILL_MS, BASH_SETTLE_TIMEOUT_SENTINEL, buildBashDelivery } from './detach-bash.js';
 import type { OnDetachParams } from './detach-bash.js';
 import type { DetachToken } from './detach-registry.js';
 
@@ -54,6 +54,11 @@ function makeStubbornProc(): {
 }
 
 describe('settle-after-kill fallback (Fix #2742)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  it('classifies the settle timeout sentinel as failed even with exit code zero', () => {
+    expect(buildBashDelivery('call-sentinel', 'bash', '', 0,
+      BASH_SETTLE_TIMEOUT_SENTINEL, Date.now()).status).toBe('failed');
+  });
   it(
     'deliver() fires within SETTLE_AFTER_KILL_MS when close never arrives',
     async () => {
@@ -106,7 +111,7 @@ describe('settle-after-kill fallback (Fix #2742)', () => {
       expect(delivered).toHaveLength(1);
       const d = delivered[0]!;
 
-      // The synthesized delivery treats the proc as SIGKILL'd → status 'failed'.
+      // The fallback fires with BASH_SETTLE_TIMEOUT_SENTINEL (not 'SIGKILL') → status 'failed'.
       expect(d.status).toBe('failed');
       expect(d.toolUseId).toBe('call-stub');
       expect(d.output).toBe('partial output');
@@ -207,4 +212,60 @@ describe('settle-after-kill fallback (Fix #2742)', () => {
   },
   SETTLE_AFTER_KILL_MS + 5_000,
   );
+
+  it('close arriving before fallback timer cancels the timer (clearTimeout branch)', async () => {
+    vi.useFakeTimers();
+    // Exercises the path: abort fires → startSettleFallback arms the timer →
+    // proc.close() arrives before SETTLE_AFTER_KILL_MS → deliverOnce runs,
+    // clears the timer, removes the stale startSettleFallback listener, and
+    // delivers exactly once with status 'completed'.
+    const registry = new DetachableToolRegistry();
+    const sessionAbort = new AbortController();
+    const token: DetachToken = registry.register('call-closefirst');
+
+    const delivered: DetachedToolResult[] = [];
+    const deliveredPromise = new Promise<DetachedToolResult>((resolve) => {
+      registry.on('settled', (r: DetachedToolResult) => {
+        delivered.push(r);
+        resolve(r);
+      });
+    });
+
+    const proc = new EventEmitter() as unknown as OnDetachParams['proc'];
+    (proc as { stdout: unknown }).stdout = new EventEmitter();
+    (proc as { stderr: unknown }).stderr = new EventEmitter();
+
+    const params: OnDetachParams = {
+      resolvedRef: { value: false },
+      timeoutHandle: setTimeout(() => {}, 60_000),
+      signal: sessionAbort.signal,
+      abortHandler: () => {},
+      deregisterOnCloseRef: { value: undefined },
+      clearTail: undefined,
+      getOutput: () => 'ok output',
+      proc,
+      startedAt: Date.now(),
+      resolve: () => {},
+    };
+
+    execOnDetach(token, 'echo hi', 'call-closefirst', params);
+
+    // Fire session abort — this arms the fallback timer.
+    sessionAbort.abort();
+
+    // Immediately emit close (exit 0) before the 5s timer fires.
+    proc.emit('close', 0, null);
+
+    // Verify cancellation itself, not just idempotent delivery: without
+    // clearTimeout the timer would remain pending despite deliverOnce's guard.
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(SETTLE_AFTER_KILL_MS + 1);
+    const result = await deliveredPromise;
+
+    expect(result).not.toBeNull();
+    // Delivered exactly once via the close path (not the fallback).
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]!.status).toBe('completed');
+    expect(delivered[0]!.output).toBe('ok output');
+  });
 });

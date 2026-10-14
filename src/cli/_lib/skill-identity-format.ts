@@ -13,7 +13,12 @@ const credentialMaterial = /(?:password|passwd|secret|token|api[-_]?key|authoriz
 
 export function sanitizeSkillIdentity(input: SkillIdentity): SkillIdentity {
   const name = truncateDisplayWidth(redactSecrets(clean(input.name)), SKILL_IDENTITY_BUDGETS.name);
-  const purpose = input.purpose ? truncateDisplayWidth(redactSecrets(clean(input.purpose)), SKILL_IDENTITY_BUDGETS.purpose) : '';
+  const rawPurpose = input.purpose ? clean(input.purpose) : '';
+  const purpose = rawPurpose
+    ? credentialMaterial.test(rawPurpose)
+      ? '[purpose omitted]'
+      : truncateDisplayWidth(redactSecrets(rawPurpose), SKILL_IDENTITY_BUDGETS.purpose)
+    : '';
   const args = input.arguments ? clean(input.arguments) : '';
   const argumentsText = credentialMaterial.test(args) ? '[arguments omitted]' : truncateDisplayWidth(redactSecrets(args), SKILL_IDENTITY_BUDGETS.arguments);
   return { name, ...(purpose ? { purpose } : {}), ...(argumentsText ? { arguments: argumentsText } : {}) };

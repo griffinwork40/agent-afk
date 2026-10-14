@@ -1,15 +1,16 @@
 /**
  * Win32 semantics regression tests for sandbox-guard.ts containment helper.
  *
- * Issue #703: on Windows the containment check in sandbox-guard.ts used a
- * hardcoded '/' separator in trailingSlash(), so paths that looked like
- * "C:\Temp\afk-foo\home\skills\a" (all backslashes from realpathSync) failed
- * the startsWith("C:\Temp\afk-foo\home/") check.
+ * Issue #703: the original containment check used trailingSlash() with a
+ * hardcoded '/' separator, so paths like "C:\Temp\afk-foo\home\skills\a"
+ * (all backslashes from realpathSync) failed the startsWith("C:\...\home/")
+ * check.  Issue #3029 replaced the trailingSlash idiom with isInside(), which
+ * uses path.relative() — sep-aware and matching the _cwd-utils.ts idiom.
  *
- * This file mocks 'path' to win32 semantics so that path.sep === '\\' on any
- * host (precedent: bash-scan-exempt.win32.test.ts / PR #2605). 'node:fs' is
- * mocked so that realpathSync returns win32-style backslash paths without
- * needing a real Windows filesystem.
+ * This file mocks 'path' to win32 semantics so that path.relative / isAbsolute
+ * use backslash rules on any host (precedent: bash-scan-exempt.win32.test.ts /
+ * PR #2605). 'node:fs' is mocked so that realpathSync returns win32-style
+ * backslash paths without needing a real Windows filesystem.
  *
  * Tests prove BOTH directions: a path inside the sandbox is allowed, a path
  * outside is refused. Containment is not weakened.
@@ -74,10 +75,10 @@ describe('assertInsideSandbox under win32 path semantics', () => {
   });
 
   it('accepts a deep path inside env.home with backslash separator', () => {
-    // Before the fix, trailingSlash appended '/' so:
-    //   "C:\...\home\skills\a".startsWith("C:\...\home/")  -> false  (BUG)
-    // After the fix with path.sep ('\\'):
-    //   "C:\...\home\skills\a".startsWith("C:\...\home\\") -> true   (CORRECT)
+    // isInside() uses path.relative(home, deepPath) under win32 semantics,
+    // which returns 'skills\\a' — no '..' prefix, not absolute → accepted.
+    // (The old trailingSlash('/')+startsWith check would have returned false
+    // here because "C:\...\home\skills\a".startsWith("C:\...\home/") is false.)
     const deepPath = `${SANDBOX_HOME}\\skills\\a`;
     expect(() => assertInsideSandbox(deepPath, env)).not.toThrow();
   });
@@ -99,10 +100,9 @@ describe('assertInsideSandbox under win32 path semantics', () => {
   });
 
   it('rejects a sibling of env.home (prefix without separator — classic prefix attack)', () => {
-    // "C:\...\home-evil" shares the prefix "C:\...\home" but is NOT inside it.
-    // Before the fix with '/', startsWith("C:\...\home/") would have caught this
-    // only because the mismatch separator already meant most paths failed.
-    // After the fix we must confirm the separator boundary is respected.
+    // "C:\...\home-evil" shares the string prefix "C:\...\home" but is NOT
+    // inside it.  path.relative(home, sibling) returns '..\\home-evil' under
+    // win32 semantics — starts with '..' → rejected.
     const sibling = SANDBOX_HOME + '-evil';
     expect(() => assertInsideSandbox(sibling, env)).toThrow(/containment violation/);
   });

@@ -1,0 +1,616 @@
+/**
+ * Unit tests for the soft-delete GC sweep (memory-gc-sweep.ts).
+ *
+ * Issue #1848, step 2. All tests use isolated tmp-dir SQLite databases so
+ * they never touch the real ~/.afk/state/memory/memory.db.
+ *
+ * @module agent/memory/memory-gc-sweep.test
+ */
+
+import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
+
+vi.mock('../../utils/debug.js', () => ({ debugLog: vi.fn() }));
+import { mkdirSync, rmSync, existsSync, writeFileSync, utimesSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import BetterSqlite3 from 'better-sqlite3';
+import { debugLog } from '../../utils/debug.js';
+import { MemoryStore } from './memory-store.js';
+import {
+  sweepMemoryGc,
+  MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
+  GC_EXCLUDED_CATEGORIES,
+} from './memory-gc-sweep.js';
+
+// ---------------------------------------------------------------------------
+// Test-local helpers
+// ---------------------------------------------------------------------------
+
+let tmpDir: string;
+let store: MemoryStore;
+const MEMORY_ACCESS_TRACKING_STARTED_AT = '2026-09-23T00:00:00.000Z';
+
+/** Backdated ISO timestamp, `days` days ago. */
+function daysAgo(days: number): string {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+/**
+ * Directly patch a fact's created_at via a sibling DB handle so it appears
+ * old enough to be eligible for GC. MemoryStore doesn't expose a setter.
+ */
+function backdateFactSync(factId: number, createdAt: string): void {
+  const db = new BetterSqlite3(join(tmpDir, 'memory.db'));
+  db.prepare('UPDATE facts SET created_at = ? WHERE id = ?').run(createdAt, factId);
+  db.close();
+}
+
+/** Set access_count on a fact directly via a sibling DB handle. */
+function setAccessCount(factId: number, count: number): void {
+  const db = new BetterSqlite3(join(tmpDir, 'memory.db'));
+  db.prepare('UPDATE facts SET access_count = ? WHERE id = ?').run(count, factId);
+  db.close();
+}
+
+function trackingDatePlusDays(days: number): string {
+  return new Date(
+    Date.parse(MEMORY_ACCESS_TRACKING_STARTED_AT) + days * 24 * 60 * 60 * 1000,
+  ).toISOString();
+}
+
+/** Read superseded_by for a fact directly. */
+function readSupersededBy(factId: number): number | null {
+  const db = new BetterSqlite3(join(tmpDir, 'memory.db'), { readonly: true });
+  const row = db.prepare('SELECT superseded_by FROM facts WHERE id = ?').get(factId) as
+    | { superseded_by: number | null }
+    | undefined;
+  db.close();
+  return row?.superseded_by ?? null;
+}
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2027-01-15T00:00:00.000Z'));
+
+  tmpDir = join(
+    tmpdir(),
+    `afk-mem-gc-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+  mkdirSync(tmpDir, { recursive: true });
+  store = new MemoryStore(tmpDir);
+  // Simulate an archive that has actually been tracking since September.
+  const db = new BetterSqlite3(join(tmpDir, 'memory.db'));
+  db.prepare('UPDATE memory_metadata SET value = ? WHERE key = ?')
+    .run(MEMORY_ACCESS_TRACKING_STARTED_AT, 'tracking_started_at');
+  db.close();
+  // Enable the GC sweep for most tests.
+  vi.stubEnv('AFK_MEMORY_GC_SWEEP_ENABLE', '1');
+});
+
+afterEach(() => {
+  store.close();
+  if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
+  vi.unstubAllEnvs();
+  vi.useRealTimers();
+});
+
+// ---------------------------------------------------------------------------
+// Disabled by default
+// ---------------------------------------------------------------------------
+
+describe('sweepMemoryGc — disabled by default', () => {
+  it('returns skipped=true with skipReason=disabled when env var is not set', async () => {
+    vi.stubEnv('AFK_MEMORY_GC_SWEEP_ENABLE', '');
+    const result = await sweepMemoryGc({ memoryDir: tmpDir, force: true });
+    expect(result.skipped).toBe(true);
+    expect(result.skipReason).toBe('disabled');
+    expect(result.archived).toBe(0);
+  });
+
+  it('returns skipped=true when env var is 0', async () => {
+    vi.stubEnv('AFK_MEMORY_GC_SWEEP_ENABLE', '0');
+    const result = await sweepMemoryGc({ memoryDir: tmpDir, force: true });
+    expect(result.skipped).toBe(true);
+    expect(result.skipReason).toBe('disabled');
+  });
+
+  it('runs when env var is 1', async () => {
+    vi.stubEnv('AFK_MEMORY_GC_SWEEP_ENABLE', '1');
+    const result = await sweepMemoryGc({ memoryDir: tmpDir, force: true });
+    expect(result.skipped).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AFK_MEMORY_GC_MIN_AGE_DAYS env path
+// ---------------------------------------------------------------------------
+
+describe('sweepMemoryGc — AFK_MEMORY_GC_MIN_AGE_DAYS env override', () => {
+  it('uses AFK_MEMORY_GC_MIN_AGE_DAYS when no options.minAgeDays is given', async () => {
+    // Set a very short age threshold via env.
+    vi.stubEnv('AFK_MEMORY_GC_MIN_AGE_DAYS', '5');
+
+    const id = store.storeFact({
+      category: 'decision',
+      content: 'Env-driven GC threshold test.',
+      source_surface: 'cli',
+    });
+    // Backdate to 10 days ago — older than env threshold of 5.
+    backdateFactSync(id, daysAgo(10));
+
+    const result = await sweepMemoryGc({ memoryDir: tmpDir, force: true });
+    expect(result.archived).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Eligibility selection
+// ---------------------------------------------------------------------------
+
+describe('sweepMemoryGc — eligibility: never-accessed + old enough', () => {
+  it('archives a never-accessed fact older than minAgeDays', async () => {
+    const id = store.storeFact({
+      category: 'decision',
+      content: 'We use PostgreSQL for the main DB.',
+      source_surface: 'cli',
+    });
+    backdateFactSync(id, daysAgo(MEMORY_GC_MIN_AGE_DAYS_DEFAULT + 10));
+
+    const result = await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
+      force: true,
+    });
+
+    expect(result.skipped).toBe(false);
+    expect(result.candidates).toBe(1);
+    expect(result.archived).toBe(1);
+  });
+
+  it('does NOT archive a fact that was accessed (access_count > 0)', async () => {
+    const id = store.storeFact({
+      category: 'decision',
+      content: 'We deploy with Docker.',
+      source_surface: 'cli',
+    });
+    backdateFactSync(id, daysAgo(MEMORY_GC_MIN_AGE_DAYS_DEFAULT + 10));
+    setAccessCount(id, 3);
+
+    const result = await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
+      force: true,
+    });
+
+    expect(result.candidates).toBe(0);
+    expect(result.archived).toBe(0);
+  });
+
+  it('does NOT archive a fact younger than minAgeDays', async () => {
+    store.storeFact({
+      category: 'learning',
+      content: 'Async generators are useful for streams.',
+      source_surface: 'cli',
+    });
+    // No backdating — fact is brand new.
+
+    const result = await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
+      force: true,
+    });
+
+    expect(result.candidates).toBe(0);
+    expect(result.archived).toBe(0);
+  });
+
+  it('does NOT archive pre-tracking facts with zero access_count', async () => {
+    const id = store.storeFact({
+      category: 'decision',
+      content: 'Legacy fact predating access tracking.',
+      source_surface: 'cli',
+    });
+    backdateFactSync(id, '2026-09-22T23:59:59.000Z');
+
+    const result = await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: 1,
+      force: true,
+    });
+
+    expect(result.candidates).toBe(0);
+    expect(result.archived).toBe(0);
+    expect(readSupersededBy(id)).toBeNull();
+  });
+
+  it('measures age from the access-tracking epoch for post-tracking facts', async () => {
+    const id = store.storeFact({
+      category: 'decision',
+      content: 'Tracked-era fact old enough to archive.',
+      source_surface: 'cli',
+    });
+    backdateFactSync(id, trackingDatePlusDays(1));
+
+    const result = await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: 1,
+      force: true,
+    });
+
+    expect(result.candidates).toBe(1);
+    expect(result.archived).toBe(1);
+    expect(readSupersededBy(id)).toBe(id);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Excluded categories
+// ---------------------------------------------------------------------------
+
+describe('sweepMemoryGc — excluded categories', () => {
+  it('never archives preference facts', async () => {
+    const id = store.storeFact({
+      category: 'preference',
+      content: 'I prefer dark mode.',
+      source_surface: 'cli',
+    });
+    backdateFactSync(id, daysAgo(MEMORY_GC_MIN_AGE_DAYS_DEFAULT + 30));
+
+    const result = await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
+      force: true,
+    });
+
+    expect(result.candidates).toBe(0);
+    expect(result.archived).toBe(0);
+  });
+
+  it('does archive convention / decision / learning facts that are eligible', async () => {
+    const ids = [
+      store.storeFact({ category: 'convention', content: 'Use kebab-case for filenames.', source_surface: 'cli' }),
+      store.storeFact({ category: 'decision', content: 'We chose pnpm over npm.', source_surface: 'cli' }),
+      store.storeFact({ category: 'learning', content: 'SQLite WAL mode improves concurrency.', source_surface: 'cli' }),
+    ];
+    for (const id of ids) {
+      backdateFactSync(id, daysAgo(MEMORY_GC_MIN_AGE_DAYS_DEFAULT + 5));
+    }
+
+    const result = await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
+      force: true,
+    });
+
+    expect(result.candidates).toBe(3);
+    expect(result.archived).toBe(3);
+  });
+
+  it('GC_EXCLUDED_CATEGORIES includes "preference"', () => {
+    expect(GC_EXCLUDED_CATEGORIES.has('preference')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Soft-delete semantics
+// ---------------------------------------------------------------------------
+
+describe('sweepMemoryGc — soft-delete: rows are recoverable', () => {
+  it('sets superseded_by to the fact\'s own id (self-reference sentinel) on archived rows', async () => {
+    const id = store.storeFact({
+      category: 'convention',
+      content: 'Use ESM for new modules.',
+      source_surface: 'cli',
+    });
+    backdateFactSync(id, daysAgo(MEMORY_GC_MIN_AGE_DAYS_DEFAULT + 1));
+
+    await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
+      force: true,
+    });
+
+    // Soft-delete uses superseded_by = id (self-reference), not a negative sentinel.
+    expect(readSupersededBy(id)).toBe(id);
+  });
+
+  it('archived facts are excluded from subsequent searches', async () => {
+    const id = store.storeFact({
+      category: 'convention',
+      content: 'Use ESM for new modules unique99887.',
+      source_surface: 'cli',
+    });
+    backdateFactSync(id, daysAgo(MEMORY_GC_MIN_AGE_DAYS_DEFAULT + 1));
+
+    await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
+      force: true,
+    });
+
+    // searchFacts already filters superseded_by IS NULL — sentinel qualifies.
+    const results = store.searchFacts('ESM modules unique99887');
+    expect(results).toHaveLength(0);
+  });
+
+  it('does not archive already-superseded facts', async () => {
+    const id1 = store.storeFact({
+      category: 'decision',
+      content: 'Old decision about tooling.',
+      source_surface: 'cli',
+    });
+    // Supersede the fact normally via MemoryStore.
+    store.supersedeFact(id1, 'New decision about tooling.', 'decision');
+    backdateFactSync(id1, daysAgo(MEMORY_GC_MIN_AGE_DAYS_DEFAULT + 1));
+
+    const result = await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
+      force: true,
+    });
+
+    // id1 has superseded_by != NULL so it must not be a candidate.
+    expect(result.candidates).toBe(0);
+    expect(result.archived).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Throttle (stamp file)
+// ---------------------------------------------------------------------------
+
+describe('sweepMemoryGc — throttle: at most once per interval', () => {
+  it('skips when stamp is fresh (force=false)', async () => {
+    // Write a stamp that looks recent.
+    const stampPath = join(tmpDir, '.last-gc-sweep');
+    writeFileSync(stampPath, new Date().toISOString());
+    utimesSync(stampPath, new Date(), new Date());
+
+    const result = await sweepMemoryGc({ memoryDir: tmpDir });
+    expect(result.skipped).toBe(true);
+    expect(result.skipReason).toBe('too-soon');
+  });
+
+  it('runs when force=true even with a fresh stamp', async () => {
+    const stampPath = join(tmpDir, '.last-gc-sweep');
+    writeFileSync(stampPath, new Date().toISOString());
+    utimesSync(stampPath, new Date(), new Date());
+
+    const result = await sweepMemoryGc({ memoryDir: tmpDir, force: true });
+    expect(result.skipped).toBe(false);
+  });
+
+  it('runs when no stamp exists', async () => {
+    // No .last-gc-sweep file — sweep should run.
+    const result = await sweepMemoryGc({ memoryDir: tmpDir, force: false });
+    expect(result.skipped).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Never throws
+// ---------------------------------------------------------------------------
+
+describe('sweepMemoryGc — never throws', () => {
+  it('returns skipped with skipReason=no-db when the DB does not exist', async () => {
+    const emptyDir = join(
+      tmpdir(),
+      `afk-mem-gc-nodb-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(emptyDir, { recursive: true });
+    try {
+      const result = await sweepMemoryGc({ memoryDir: emptyDir, force: true });
+      expect(result.skipped).toBe(true);
+      expect(result.skipReason).toBe('no-db');
+      expect(result.archived).toBe(0);
+    } finally {
+      rmSync(emptyDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not throw on a missing / unreadable directory', async () => {
+    await expect(
+      sweepMemoryGc({
+        memoryDir: join(tmpdir(), `afk-gc-nonexistent-${Date.now()}`),
+        force: true,
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it('populates the error field when the DB is corrupt', async () => {
+    const corruptDir = join(
+      tmpdir(),
+      `afk-mem-gc-corrupt-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(corruptDir, { recursive: true });
+    // Write invalid data as memory.db — better-sqlite3 will reject it.
+    writeFileSync(join(corruptDir, 'memory.db'), 'not a sqlite database');
+    try {
+      const result = await sweepMemoryGc({ memoryDir: corruptDir, force: true });
+      expect(result.archived).toBe(0);
+      expect(result.error).toBeDefined();
+      expect(typeof result.error).toBe('string');
+    } finally {
+      rmSync(corruptDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mixed fact set — only eligible ones are swept
+// ---------------------------------------------------------------------------
+
+describe('sweepMemoryGc — mixed eligibility', () => {
+  it('archives only the eligible subset out of a mixed fact set', async () => {
+    // Fact A: old + never accessed + sweepable category → should be archived.
+    const idA = store.storeFact({
+      category: 'convention',
+      content: 'Archive candidate A.',
+      source_surface: 'cli',
+    });
+    backdateFactSync(idA, daysAgo(MEMORY_GC_MIN_AGE_DAYS_DEFAULT + 1));
+
+    // Fact B: old + never accessed + preference → excluded.
+    const idB = store.storeFact({
+      category: 'preference',
+      content: 'Dark mode preference.',
+      source_surface: 'cli',
+    });
+    backdateFactSync(idB, daysAgo(MEMORY_GC_MIN_AGE_DAYS_DEFAULT + 1));
+
+    // Fact C: young + never accessed + sweepable → too young.
+    store.storeFact({
+      category: 'decision',
+      content: 'Recent decision, should stay.',
+      source_surface: 'cli',
+    });
+
+    // Fact D: old + accessed + sweepable → has been accessed.
+    const idD = store.storeFact({
+      category: 'learning',
+      content: 'Old but accessed learning fact.',
+      source_surface: 'cli',
+    });
+    backdateFactSync(idD, daysAgo(MEMORY_GC_MIN_AGE_DAYS_DEFAULT + 1));
+    setAccessCount(idD, 1);
+
+    const result = await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
+      force: true,
+    });
+
+    expect(result.candidates).toBe(1);
+    expect(result.archived).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// candidates = real pre-sweep count, not just archived (#2967)
+// ---------------------------------------------------------------------------
+
+describe('sweepMemoryGc — candidates reflects a real count, not just archived', () => {
+  it('candidates equals zero when no facts match the predicate', async () => {
+    // No facts in DB at all — candidates and archived must both be 0.
+    const result = await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
+      force: true,
+    });
+
+    expect(result.candidates).toBe(0);
+    expect(result.archived).toBe(0);
+  });
+
+  it('candidates counts only predicate-matching facts, not ineligible ones', async () => {
+    // One eligible fact.
+    const idEligible = store.storeFact({
+      category: 'decision',
+      content: 'Eligible fact for real-count test.',
+      source_surface: 'cli',
+    });
+    backdateFactSync(idEligible, daysAgo(MEMORY_GC_MIN_AGE_DAYS_DEFAULT + 1));
+
+    // One ineligible fact (too young — not backdated).
+    store.storeFact({
+      category: 'decision',
+      content: 'Too-young fact — must not inflate candidates.',
+      source_surface: 'cli',
+    });
+
+    // One ineligible fact (preference — excluded category).
+    const idPref = store.storeFact({
+      category: 'preference',
+      content: 'Preference fact — excluded from GC.',
+      source_surface: 'cli',
+    });
+    backdateFactSync(idPref, daysAgo(MEMORY_GC_MIN_AGE_DAYS_DEFAULT + 1));
+
+    const result = await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
+      force: true,
+    });
+
+    // Only the first fact matches; candidates must equal 1, not 3.
+    expect(result.candidates).toBe(1);
+    expect(result.archived).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// debugLog is called when archived > 0 or error is set (#2967)
+// ---------------------------------------------------------------------------
+
+describe('sweepMemoryGc — debugLog behavior', () => {
+  let mockedDebugLog: MockInstance;
+
+  beforeEach(() => {
+    mockedDebugLog = vi.mocked(debugLog);
+    mockedDebugLog.mockClear();
+  });
+
+  it('calls debugLog when at least one fact is archived', async () => {
+    const id = store.storeFact({
+      category: 'decision',
+      content: 'Fact that will be archived for log test.',
+      source_surface: 'cli',
+    });
+    backdateFactSync(id, daysAgo(MEMORY_GC_MIN_AGE_DAYS_DEFAULT + 1));
+
+    await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
+      force: true,
+    });
+
+    // debugLog must have been called at least once with a message mentioning
+    // "archived" and a non-zero count.
+    const archiveCalls = mockedDebugLog.mock.calls.filter(
+      (args) => typeof args[0] === 'string' && args[0].includes('archived'),
+    );
+    expect(archiveCalls.length).toBeGreaterThan(0);
+    const msg = archiveCalls[0]![0] as string;
+    expect(msg).toMatch(/archived 1/);
+    expect(msg).toMatch(/candidate/);
+  });
+
+  it('does NOT call debugLog for the archive message when nothing is archived', async () => {
+    // No facts in the DB — nothing is archived.
+    mockedDebugLog.mockClear();
+
+    await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
+      force: true,
+    });
+
+    // No "archived N" log line should be emitted when archived === 0.
+    const archiveCalls = mockedDebugLog.mock.calls.filter(
+      (args) => typeof args[0] === 'string' && (args[0] as string).includes('archived'),
+    );
+    expect(archiveCalls).toHaveLength(0);
+  });
+
+  it('calls debugLog with the error message when the DB is corrupt', async () => {
+    const corruptDir = join(
+      tmpdir(),
+      `afk-mem-gc-corrupt-log-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(corruptDir, { recursive: true });
+    writeFileSync(join(corruptDir, 'memory.db'), 'not a sqlite database');
+    mockedDebugLog.mockClear();
+
+    try {
+      await sweepMemoryGc({ memoryDir: corruptDir, force: true });
+    } finally {
+      rmSync(corruptDir, { recursive: true, force: true });
+    }
+
+    // An error log line must be emitted.
+    const errorCalls = mockedDebugLog.mock.calls.filter(
+      (args) => typeof args[0] === 'string' && (args[0] as string).includes('error'),
+    );
+    expect(errorCalls.length).toBeGreaterThan(0);
+  });
+});

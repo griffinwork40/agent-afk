@@ -128,6 +128,16 @@ export async function setPresenceActivityPromptHead(
 }
 
 /**
+ * Auto-resume directive prefix, mirroring the constant in
+ * loop-iteration.injections.ts. Duplicated here so presence.activity.ts can
+ * guard its own fallback without a cross-layer import.
+ *
+ * Invariant: must stay byte-identical to AUTO_RESUME_PREFIX in
+ * loop-iteration.injections.ts. If that constant ever changes, update this one.
+ */
+const AUTO_RESUME_PREFIX = '[auto-resume]';
+
+/**
  * Stamp `activity.turns` and `activity.lastTurnEndedAt` on this session's
  * presence file at TURN END.
  *
@@ -142,6 +152,13 @@ export async function setPresenceActivityPromptHead(
  *   where ctx.stats.sessionId was undefined at turn start), it is stored as
  *   the promptHead so the first prompt is never silently lost. Never pass the
  *   composited runText — that would leak peer/bg-injection bodies.
+ *   Auto-resume directives (text starting with `AUTO_RESUME_PREFIX`, i.e.
+ *   `[auto-resume]`) are silently skipped even when no promptHead exists yet:
+ *   they are synthetic wakeup text, not operator-typed content, and must never
+ *   appear in `activity.promptHead`. This guard mirrors the one in
+ *   `markPresenceTurn` (loop-iteration.injections.ts) for the busy path;
+ *   having it here ensures the idle path is also protected without requiring
+ *   the caller to filter first.
  *
  * Best-effort and never throws.
  */
@@ -153,11 +170,17 @@ export async function setPresenceActivityTurnEnd(
   return patchPresenceFile(sessionId, (rec) => {
     const prev = rec.activity;
     // Contract: if no promptHead has been written yet (first turn where sessionId
-    // was undefined at turn start), seed it now from rawUserText. Never write
-    // an empty string — omit the field if we have nothing useful.
+    // was undefined at turn start), seed it now from rawUserText — UNLESS it is
+    // a synthetic auto-resume directive, which must never masquerade as
+    // operator-typed content in the presence file.
+    // Never write an empty string — omit the field if we have nothing useful.
+    const safeRawText =
+      rawUserText !== undefined && !rawUserText.startsWith(AUTO_RESUME_PREFIX)
+        ? rawUserText
+        : undefined;
     const head = prev?.promptHead !== undefined
       ? prev.promptHead
-      : (rawUserText !== undefined ? normalizePromptHead(rawUserText) : undefined);
+      : (safeRawText !== undefined ? normalizePromptHead(safeRawText) : undefined);
     rec.activity = {
       // promptHead is omitted rather than written as '' when absent. See JSDoc.
       ...(head !== undefined ? { promptHead: head } : {}),

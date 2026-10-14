@@ -42,7 +42,7 @@ export default defineConfig({
     outDir: resolve(__dirname, '../src/web-ui-assets'),
     emptyOutDir: true,
     // Deterministic asset names for CSP + cache-busting
-    rollupOptions: {
+    rolldownOptions: {
       output: {
         entryFileNames: 'assets/[name]-[hash].js',
         chunkFileNames: 'assets/[name]-[hash].js',

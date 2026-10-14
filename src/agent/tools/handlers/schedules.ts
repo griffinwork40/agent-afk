@@ -14,8 +14,6 @@
  * @module agent/tools/handlers/schedules
  */
 
-import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import type { ToolHandler } from '../types.js';
 import {
   loadSchedules,
@@ -33,6 +31,8 @@ import {
   trySyncToDaemon,
   SYNC_FAILED_NOTE,
 } from '../../daemon/http-client.js';
+import { readTelemetryHistory } from '../../daemon/telemetry-reader.js';
+import { parseTaskRetryFields } from '../../daemon/task-retry.js';
 
 export type { DaemonSyncResult };
 
@@ -47,17 +47,14 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
   if (typeof obj['command'] !== 'string' || !obj['command']) {
     return { content: 'Invalid input: command required', isError: true };
   }
-  if (typeof obj['cron'] !== 'string' || !obj['cron']) {
-    return { content: 'Invalid input: cron required', isError: true };
+  const cron = obj['cron'];
+  if (cron === undefined && obj['runAt'] === undefined) {
+    return { content: 'Invalid input: cron or runAt required', isError: true };
   }
-
-  // Basic cron validation: must have 5 or 6 space-separated fields
-  const cronParts = obj['cron'].trim().split(/\s+/);
-  if (cronParts.length !== 5 && cronParts.length !== 6) {
-    return {
-      content: 'Invalid input: cron must be a 5 or 6-field expression',
-      isError: true,
-    };
+  if (cron !== undefined) {
+    if (typeof cron !== 'string' || cron.trim().split(/\s+/).length !== 5) {
+      return { content: 'Invalid input: cron must be a 5-field expression (no year field)', isError: true };
+    }
   }
 
   const notifyChat = obj['notifyChat'];
@@ -74,6 +71,35 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
       content: 'Invalid input: executor must be "agent" or "shell"',
       isError: true,
     };
+  }
+
+  const retry = parseTaskRetryFields(obj);
+  if (!retry.ok) return { content: `Invalid input: ${retry.error}`, isError: true };
+
+  // Validate runAt when supplied.
+  const rawRunAt = obj['runAt'];
+  let resolvedRunAt: string | undefined;
+  if (rawRunAt !== undefined) {
+    if (typeof rawRunAt !== 'string') {
+      return { content: 'Invalid input: runAt must be an ISO 8601 string', isError: true };
+    }
+    if (isNaN(Date.parse(rawRunAt))) {
+      return { content: 'Invalid input: runAt must be a valid ISO 8601 date string', isError: true };
+    }
+    resolvedRunAt = rawRunAt;
+  }
+
+  // Validate expiresAt when supplied.
+  const rawExpiresAt = obj['expiresAt'];
+  let resolvedExpiresAt: string | undefined;
+  if (rawExpiresAt !== undefined) {
+    if (typeof rawExpiresAt !== 'string') {
+      return { content: 'Invalid input: expiresAt must be an ISO 8601 string', isError: true };
+    }
+    if (isNaN(Date.parse(rawExpiresAt))) {
+      return { content: 'Invalid input: expiresAt must be a valid ISO 8601 date string', isError: true };
+    }
+    resolvedExpiresAt = rawExpiresAt;
   }
 
   // Validate per-task cwd when supplied.
@@ -93,13 +119,17 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
   const config = addSchedule({
     name: obj['name'] as string,
     command: obj['command'] as string,
-    cron: obj['cron'] as string,
+    // Store retains a valid polling cadence for one-shots; the scheduler omits cronExpression.
+    cron: (cron as string | undefined) ?? '* * * * *',
     ...(executor !== undefined ? { executor } : {}),
     trigger:
       (obj['trigger'] as 'cron' | 'sessionstart' | 'both' | undefined) ?? 'cron',
     notifyOn: obj['notifyOn'] as 'failure' | 'always' | 'never' | undefined,
     ...(notifyChat !== undefined ? { notifyChat: notifyChat as number | string } : {}),
     ...(resolvedCwd !== undefined ? { cwd: resolvedCwd } : {}),
+    ...(resolvedRunAt !== undefined ? { runAt: resolvedRunAt } : {}),
+    ...(resolvedExpiresAt !== undefined ? { expiresAt: resolvedExpiresAt } : {}),
+    ...retry.value,
     enabled: typeof obj['enabled'] === 'boolean' ? obj['enabled'] : true,
   });
 
@@ -117,6 +147,10 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
         notifyOn: config.notifyOn,
         ...(config.notifyChat !== undefined ? { notifyChat: config.notifyChat } : {}),
         ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
+        ...(config.maxAttempts !== undefined ? { maxAttempts: config.maxAttempts } : {}),
+        ...(config.retryDelayMs !== undefined ? { retryDelayMs: config.retryDelayMs } : {}),
+        ...(config.runAt !== undefined ? { runAt: config.runAt } : {}),
+        ...(config.expiresAt !== undefined ? { expiresAt: config.expiresAt } : {}),
       })
     : await trySyncToDaemon('DELETE', `/tasks/${config.id}`);
 
@@ -155,9 +189,9 @@ export const updateScheduleHandler: ToolHandler = async (input, _signal) => {
       return { content: 'Invalid input: cron must be a string', isError: true };
     }
     const cronParts = cron.trim().split(/\s+/);
-    if (cronParts.length !== 5 && cronParts.length !== 6) {
+    if (cronParts.length !== 5) {
       return {
-        content: 'Invalid input: cron must be a 5 or 6-field expression',
+        content: 'Invalid input: cron must be a 5-field expression (no year field)',
         isError: true,
       };
     }
@@ -195,6 +229,9 @@ export const updateScheduleHandler: ToolHandler = async (input, _signal) => {
     };
   }
 
+  const retry = parseTaskRetryFields(obj);
+  if (!retry.ok) return { content: `Invalid input: ${retry.error}`, isError: true };
+
   // Validate per-task cwd when supplied.
   // null or "" means "unset" — removes the per-task cwd so the task falls back
   // to the daemon-wide default. A non-empty string is validated as a directory.
@@ -215,6 +252,36 @@ export const updateScheduleHandler: ToolHandler = async (input, _signal) => {
     }
   }
 
+  // Validate runAt when supplied (string = set, null = clear).
+  const rawRunAt = obj['runAt'];
+  let patchRunAt: string | null | undefined;
+  if (rawRunAt !== undefined) {
+    if (rawRunAt === null) {
+      patchRunAt = null;
+    } else if (typeof rawRunAt !== 'string') {
+      return { content: 'Invalid input: runAt must be an ISO 8601 string or null to clear', isError: true };
+    } else if (isNaN(Date.parse(rawRunAt))) {
+      return { content: 'Invalid input: runAt must be a valid ISO 8601 date string', isError: true };
+    } else {
+      patchRunAt = rawRunAt;
+    }
+  }
+
+  // Validate expiresAt when supplied (string = set, null = clear).
+  const rawExpiresAt = obj['expiresAt'];
+  let patchExpiresAt: string | null | undefined;
+  if (rawExpiresAt !== undefined) {
+    if (rawExpiresAt === null) {
+      patchExpiresAt = null;
+    } else if (typeof rawExpiresAt !== 'string') {
+      return { content: 'Invalid input: expiresAt must be an ISO 8601 string or null to clear', isError: true };
+    } else if (isNaN(Date.parse(rawExpiresAt))) {
+      return { content: 'Invalid input: expiresAt must be a valid ISO 8601 date string', isError: true };
+    } else {
+      patchExpiresAt = rawExpiresAt;
+    }
+  }
+
   // Build the patch from supplied fields only
   type Patch = Parameters<typeof updateSchedule>[1];
   const patch: Patch = {};
@@ -227,6 +294,9 @@ export const updateScheduleHandler: ToolHandler = async (input, _signal) => {
   if (notifyChat !== undefined) patch.notifyChat = notifyChat as number | string;
   if (typeof obj['enabled'] === 'boolean') patch.enabled = obj['enabled'];
   if (resolvedCwd !== undefined) patch.cwd = resolvedCwd;
+  if (patchRunAt !== undefined) patch.runAt = patchRunAt;
+  if (patchExpiresAt !== undefined) patch.expiresAt = patchExpiresAt;
+  Object.assign(patch, retry.value);
 
   const updated = updateSchedule(taskId, patch);
   if (!updated) {
@@ -268,7 +338,11 @@ export const listSchedulesHandler: ToolHandler = async (_input, _signal) => {
         trigger: s.trigger,
         enabled: s.enabled,
         notifyOn: s.notifyOn,
+        ...(s.maxAttempts !== undefined ? { maxAttempts: s.maxAttempts } : {}),
+        ...(s.retryDelayMs !== undefined ? { retryDelayMs: s.retryDelayMs } : {}),
         ...(s.cwd !== undefined ? { cwd: s.cwd } : {}),
+        ...(s.runAt !== undefined ? { runAt: s.runAt } : {}),
+        ...(s.expiresAt !== undefined ? { expiresAt: s.expiresAt } : {}),
       })),
     ),
   };
@@ -287,40 +361,8 @@ export const getScheduleHistoryHandler: ToolHandler = async (input, _signal) => 
     typeof obj['limit'] === 'number' ? Math.min(Math.max(1, obj['limit']), 50) : 10;
 
   const telemetryPath = getTelemetryPath();
-  if (!existsSync(telemetryPath)) {
-    return { content: JSON.stringify([]) };
-  }
-
-  let content: string;
-  try {
-    // 1MB tail cap to avoid reading huge files.
-    // Async read keeps the event loop responsive — telemetry files can be
-    // multi-MB on long-running daemons.
-    const buf = await readFile(telemetryPath);
-    const tailBuf = buf.length > 1_048_576 ? buf.subarray(buf.length - 1_048_576) : buf;
-    content = tailBuf.toString('utf-8');
-  } catch {
-    return { content: JSON.stringify([]) };
-  }
-
-  const lines = content.split('\n');
-  const matching: unknown[] = [];
-  // Reverse scan (newest first) — mirror gates.ts pattern exactly
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i];
-    if (!line) continue; // noUncheckedIndexedAccess guard
-    try {
-      const record = JSON.parse(line) as { taskId?: string };
-      if (record.taskId !== taskId) continue;
-      matching.push(record);
-      if (matching.length >= limit) break;
-    } catch {
-      continue;
-    }
-  }
-
-  // Return in chronological order (oldest first)
-  return { content: JSON.stringify(matching.reverse()) };
+  const matching = await readTelemetryHistory(telemetryPath, { taskId, limit });
+  return { content: JSON.stringify(matching) };
 };
 
 export const cancelScheduleHandler: ToolHandler = async (input, _signal) => {

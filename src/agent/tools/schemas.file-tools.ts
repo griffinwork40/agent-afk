@@ -150,7 +150,10 @@ export const editFileTool: AnthropicToolDef = {
         description:
           'SHA-256 hash to verify the file has not changed (format: "sha256:<hex>"). ' +
           "If the file's current hash does not match, the edit is rejected before any write occurs. " +
-          'Use to guard against stale-context overwrites after a prior patch_apply modified the file.',
+          'Use to guard against stale-context overwrites after a prior patch_apply modified the file. ' +
+          'Only set this to a hash copied verbatim from a prior tool result ' +
+          '(e.g. patch_apply `after_hash`); never compute or guess one. ' +
+          'Otherwise omit it or pass an empty string (treated as no hash check).',
       },
     },
     required: ['file_path', 'old_string', 'new_string'],
@@ -163,9 +166,12 @@ export const globTool: AnthropicToolDef = {
   concurrencySafe: true,
   description:
     'Find files matching a glob pattern. Returns matching file paths, capped at 500 results. ' +
-    'Use for discovering files before reading them. Patterns follow standard glob syntax ' +
-    '(e.g., "src/**/*.ts", "*.json"). Skips node_modules/.git/.hg/.svn by default; ' +
-    'name such a directory literally in the pattern (e.g. "node_modules/**/*.js") to search it.',
+    'Use for discovering files before reading them. Supports *, ?, ** and nested comma-list braces ' +
+    '(e.g., "src/**/*.{ts,tsx}", "{src,lib}/**/*.ts"). Singleton, unbalanced and range braces are literal; ' +
+    'brace expansion is capped at 255 alternatives (the limit is >=256, so 255 is the effective maximum) ' +
+    'and at 65,535 aggregate characters across all expanded patterns. ' +
+    'Skips node_modules/.git/.hg/.svn/.afk-worktrees by default; ' +
+    'name such a directory literally (including in a brace arm) to search it.',
   input_schema: {
     type: 'object',
     properties: {
