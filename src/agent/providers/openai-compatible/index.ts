@@ -22,7 +22,8 @@ import { resolveSessionHookRegistry } from '../../hooks.js';
 import { composeDispatcherPermissions } from '../../tools/permissions-compose.js';
 import { type OpenAICompatibleProviderOptions } from './index.options.js';
 export type { OpenAICompatibleProviderOptions } from './index.options.js';
-import { snapshotOperatorOptions, operatorDispatcherToolDefs, withSlotDeniedDispatcher } from '../../tools/operator-denied-dispatcher.js';
+import { snapshotOperatorOptions } from '../../tools/operator-denied-dispatcher.js';
+import { buildQueryDispatcher } from './index.query-dispatcher.js';
 
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
@@ -55,14 +56,13 @@ import { completeWithWire, type OpenAIOneShotInput } from './complete-wire.js';
 import {
   getRuntimeStateTool,
   createGetRuntimeStateHandler,
-  wrapDispatcherWithRuntimeState,
   buildRuntimeStateSource,
   type RuntimeStateSource,
 } from '../../awareness/index.js';
 import { resolveSessionId, registerSessionPresence } from './session-wiring.js';
 import { buildSystemPromptWiring } from './system-prompt-wiring.js';
 import { isStateRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
-import { headlessSignalOpts, interactivityOpts, sessionRegistryOpts, type BuildDispatcherOpts } from './index.dispatcher-opts.js';
+import { headlessSignalOpts, sessionRegistryOpts, type BuildDispatcherOpts } from './index.dispatcher-opts.js';
 import { chainProviderClose } from '../shared/chain-provider-close.js';
 
 const PROVIDER_NAME = 'openai-compatible';
@@ -254,40 +254,16 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // its schema list. See wrapDispatcherWithRuntimeState for the invariant.
     // Stamp toolDefs on the external-dispatcher wrapper so query.ts:246 picks
     // up the schema list — mirrors dispatcher-wiring.ts:219 (Anthropic path).
-    const slotModel = typeof config.model === 'string' ? config.model : undefined; // tools.disabledBySlot
-    const externalTools = withSlotDeniedDispatcher(this.providerOpts.tools, slotModel);
-    dispatcher = externalTools
-      ? Object.assign(wrapDispatcherWithRuntimeState(externalTools, runtimeStateSource),
-          { toolDefs: operatorDispatcherToolDefs(externalTools, selectBaseSchemas(this.schemas, { isSkillDispatch: config.isSkillDispatch, isNonInteractive: config.isNonInteractive })) })
-      : this.buildDispatcher(permissionMode, {
-          ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
-          ...(slotModel !== undefined ? { slotModel } : {}),
-          ...(this._sharedReadRoots !== undefined ? { readRoots: this._sharedReadRoots } : {}),
-          ...(this._sharedWriteRoots !== undefined ? { writeRoots: this._sharedWriteRoots } : {}),
-          ...(resolvedSession.id !== undefined ? { sessionId: resolvedSession.id } : {}),
-          ...(config.parentSessionId !== undefined ? { parentSessionId: config.parentSessionId } : {}),
-          ...(config.rootSessionId !== undefined ? { rootSessionId: config.rootSessionId } : {}),
-          ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
-          ...(config.env !== undefined ? { env: config.env } : {}), // PLUGIN_ROOT, session TMPDIR
-          // Fork-scoped central output cap (#661): forwarded from the child
-          // config that forkSubagent stamped, arming maxOutputBytes for forks
-          // only (top-level leaves it unset). Parity with anthropic-direct.
-          ...(config.subagentToolOutputCapBytes !== undefined
-            ? { subagentToolOutputCapBytes: config.subagentToolOutputCapBytes }
-            : {}),
-          ...(config.traceWriter !== undefined ? { traceWriter: config.traceWriter } : {}),
-          ...(config.bashOutputTailReporter !== undefined
-            ? { bashOutputTailReporter: config.bashOutputTailReporter }
-            : {}),
-          // #2542/#2735 detach registry + background process registry,
-          // forwarded from AgentConfig (root REPL sessions only).
-          ...sessionRegistryOpts(config),
-          runtimeStateSource,
-          ...(config.isSkillDispatch ? { isSkillDispatch: true } : {}),
-          ...interactivityOpts(config), // ask_question strip + #2302 headless bash floor
-          ...(config.hookRegistry !== undefined ? { hookRegistry: config.hookRegistry } : {}),
-          ...(config.planExitControls !== undefined ? { planExitControls: config.planExitControls } : {}),
-        });
+    const dispatcherFactory = (model: string, mode: string): ToolDispatcher => buildQueryDispatcher({
+      config: { ...config, model, cwd: _currentCwd }, permissionMode: mode,
+      externalTools: this.providerOpts.tools,
+      customNames: (this.providerOpts.customTools ?? []).map((t) => t.schema.name),
+      schemas: this.schemas, runtimeStateSource,
+      readRoots: this._sharedReadRoots, writeRoots: this._sharedWriteRoots,
+      sessionId: resolvedSession.id,
+      buildDispatcher: (m, opts) => this.buildDispatcher(m, opts),
+    });
+    dispatcher = dispatcherFactory(modelName, permissionMode);
 
     const buildOpts: NonNullable<Parameters<typeof buildQueryFromConfig>[2]> = {};
     // Undefined for forks — they keep the factory's own per-call mint.
@@ -300,6 +276,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     if (effectiveBaseURL !== undefined) buildOpts.baseURL = effectiveBaseURL;
     if (this._defaultHeaders !== undefined) buildOpts.defaultHeaders = this._defaultHeaders;
     buildOpts.toolDispatcher = dispatcher;
+    buildOpts.modelDispatcherFactory = (model, mode) => (dispatcher = dispatcherFactory(model, mode));
     // Path-approval half of the live `/bypass` toggle: keep the provider's
     // `_currentPermissionMode` (read by getGrants().allowAll) in sync with the
     // query handle's mode. File-tool half is the dispatcher's setAllowAll().

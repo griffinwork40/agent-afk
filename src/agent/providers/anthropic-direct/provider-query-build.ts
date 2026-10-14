@@ -144,6 +144,11 @@ export function buildProviderQuery(
       : {}),
     maxTokens,
     tools: toolDefs,
+    modelToolsFactory: (model, mode) => {
+      const result = setup.modelToolsFactory(model, mode);
+      config.model = model; // The cwd rebuild must inherit the live slot policy.
+      return result;
+    },
     userSystem: toolSystemAppend,
     systemPrefix,
     tokenRefresher,

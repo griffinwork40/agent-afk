@@ -67,6 +67,7 @@ export interface DispatcherWiringArgs {
   providerName: string;
   /** Non-null only when the caller injected an external dispatcher. */
   externalTools: ToolDispatcher | undefined;
+  customToolSchemas?: readonly AnthropicToolDef[] | undefined;
   sharedReadRoots: string[] | undefined;
   sharedWriteRoots: string[] | undefined;
   /**
@@ -100,6 +101,7 @@ export interface DispatcherWiring {
   toolDefs: AnthropicToolDef[];
   /** The session id the presence file advertises and the query must reuse. */
   resolvedSessionId: string | undefined;
+  modelToolsFactory: (model: string, permissionMode: string) => { dispatcher: ToolDispatcher; tools: AnthropicToolDef[] };
 }
 
 /**
@@ -177,13 +179,25 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
     );
   }
 
+  const rebuild = (model: string, permissionMode: string) => {
+    const result = buildQueryTools({ ...args, config: { ...config, model, cwd: args.getCwd() }, permissionMode }, runtimeStateSource, resolvedSession.id);
+    queryDispatcher = result.dispatcher;
+    return result;
+  };
+  const initial = rebuild(typeof config.model === 'string' ? config.model : args.model, args.permissionMode);
+  return { queryDispatcher: initial.dispatcher, runtimeStateSource, toolDefs: initial.tools, resolvedSessionId: resolvedSession.id, modelToolsFactory: rebuild };
+}
+
+/** Reuse the initial dispatcher wiring without repeating presence/session registration. */
+function buildQueryTools(args: DispatcherWiringArgs, runtimeStateSource: RuntimeStateSource, sessionId: string | undefined): { dispatcher: ToolDispatcher; tools: AnthropicToolDef[] } {
+  const { config } = args;
   // STEP 3 — assign. The source built in STEP 2 is handed to the dispatcher so
   // the `get_runtime_state` handler resolves against it.
   // Per-slot denies (`tools.disabledBySlot`) follow THIS query's model —
   // see tools/operator-denied.slots.ts. Both branches carry them.
   const slotModel = typeof config.model === 'string' ? config.model : undefined;
-  const externalTools = withSlotDeniedDispatcher(args.externalTools, slotModel);
-  queryDispatcher = externalTools
+  const externalTools = withSlotDeniedDispatcher(args.externalTools, slotModel, args.customToolSchemas?.map((t) => t.name));
+  const queryDispatcher = externalTools
     ? wrapDispatcherWithRuntimeState(externalTools, runtimeStateSource)
     : args.buildDispatcher(args.permissionMode, {
         cwd: config.cwd,
@@ -191,7 +205,7 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
         readRoots: args.sharedReadRoots,
         writeRoots: args.sharedWriteRoots,
         ...(config.env !== undefined ? { env: config.env } : {}),
-        sessionId: resolvedSession.id,
+        sessionId,
         parentSessionId: config.parentSessionId,
         ...(config.rootSessionId !== undefined ? { rootSessionId: config.rootSessionId } : {}),
         ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
@@ -226,7 +240,7 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
   // Without adding the schema here the model has no way to know the tool
   // exists — leaving the awareness layer reachable only via the
   // `SessionToolDispatcher` path.
-  const baseToolDefs = [...operatorDispatcherToolDefs(queryDispatcher, [...builtinToolSchemas, getRuntimeStateTool])];
+  const baseToolDefs = [...operatorDispatcherToolDefs(externalTools ?? queryDispatcher, [...builtinToolSchemas, getRuntimeStateTool])];
   // Invariant: skill-dispatch sub-agents are dispatched AS a specific skill, so
   // they must neither (a) pause to ask the operator "which skill?" nor (b) mutate
   // the operator's environment. Strip `ask_question` (the operator-prompt escape
@@ -267,10 +281,5 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
           )
         : baseToolDefs;
 
-  return {
-    queryDispatcher,
-    runtimeStateSource,
-    toolDefs,
-    resolvedSessionId: resolvedSession.id,
-  };
+  return { dispatcher: queryDispatcher, tools: toolDefs };
 }

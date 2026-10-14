@@ -76,6 +76,7 @@ import {
 } from './query-maintenance.js';
 import { rewindFiles as rewindFilesImpl } from '../../file-checkpoint/rewind-files.js';
 import { currentWritePolicy } from '../../file-checkpoint/write-policy.js';
+import { slotDenyKey } from '../../tools/operator-denied.slots.js';
 
 // Re-exported so the historical `from './query-runtime.js'` (and thence
 // `query.js` / `index.js`) import paths stay valid after the #824 split.
@@ -100,7 +101,9 @@ export class AnthropicDirectQuery implements ProviderQuery {
    * requiring a session reset.
    */
   private readonly maxTokens: number;
-  private readonly tools: AnthropicToolDef[] | null;
+  private tools: AnthropicToolDef[] | null;
+  private currentSlotDenyKey: string;
+  private readonly modelToolsFactory: AnthropicDirectQueryOptions['modelToolsFactory'];
   private readonly systemPrefix: ContentBlockParam[] | null;
   /** Resolved thinking config for the LAUNCH model. Used as the per-turn value
    * when no rawThinkingConfig is available (external/legacy callers). */
@@ -176,6 +179,8 @@ export class AnthropicDirectQuery implements ProviderQuery {
     this.promptStream = opts.promptStream;
     this.maxTokens = opts.maxTokens;
     this.tools = opts.tools;
+    this.currentSlotDenyKey = slotDenyKey(opts.requestedModel ?? opts.model);
+    this.modelToolsFactory = opts.modelToolsFactory;
     this.systemPrefix = opts.systemPrefix;
     this.thinking = opts.thinking;
     if (opts.rawThinkingConfig !== undefined) this.rawThinkingConfig = opts.rawThinkingConfig;
@@ -328,6 +333,15 @@ export class AnthropicDirectQuery implements ProviderQuery {
   }
 
   async setModel(model?: string): Promise<void> {
+    if (model === undefined || model.length === 0) return;
+    const key = slotDenyKey(model);
+    if (key !== this.currentSlotDenyKey) {
+      if (!this.modelToolsFactory) throw new Error('Slot tool policy changed; rebuild the session before changing model.');
+      const { dispatcher, tools } = this.modelToolsFactory(model, this.state.currentPermissionMode);
+      this.state.toolDispatcher = dispatcher;
+      this.tools = tools;
+      this.currentSlotDenyKey = key;
+    }
     setLiveModel(this.state, model);
   }
 

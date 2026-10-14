@@ -106,6 +106,8 @@ export interface AnthropicDirectQueryOptions {
   permissionMode?: string;
   maxTokens: number;
   tools: AnthropicToolDef[] | null;
+  /** Rebuild the dispatcher and advertised catalog together for a changed slot deny key. */
+  modelToolsFactory?: (model: string, permissionMode: string) => { dispatcher: ToolDispatcher; tools: AnthropicToolDef[] };
   userSystem: string | null;
   systemPrefix: ContentBlockParam[] | null;
   /** When set, called on 401 to obtain a fresh SDK client. Retry once. */
