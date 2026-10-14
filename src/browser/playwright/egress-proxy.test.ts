@@ -276,6 +276,21 @@ describe('EgressProxy — validated answer set fallback (#2313 F3)', () => {
   });
 });
 
+describe('EgressProxy — upstream inactivity timeout (#2313 R2.1)', () => {
+  it('a forwarded request to a silent upstream fails as 502 within the budget instead of hanging', async () => {
+    const silent = await rawUpstream((s) => s.resume()); // accepts TCP, reads, never replies
+    const p = new EgressProxy({ isBlocked: () => false, lookupFn: async () => [{ address: '127.0.0.1' }], connectTimeoutMs: 400 });
+    const port = await p.listen();
+    const t0 = Date.now();
+    const out = await raw(port, get(silent.port), 2_500);
+    expect(out).toContain('502');
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    expect(silent.conns()).toBe(1);
+    await p.close();
+    await new Promise<void>((r) => silent.server.close(() => r()));
+  });
+});
+
 describe('EgressProxy — shutdown fences outbound work (#2313 F4)', () => {
   for (const kind of ['forward', 'connect'] as const) {
     it(`${kind}: close() while a DNS lookup is pending → no upstream connection is ever made`, async () => {

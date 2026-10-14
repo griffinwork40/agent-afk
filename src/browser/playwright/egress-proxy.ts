@@ -207,6 +207,9 @@ export class EgressProxy {
         up.setTimeout(0);
         resolve(up);
       });
+      // close() destroys still-connecting sockets without an error; settle the
+      // promise so openUpstream never hangs (no-op once already resolved).
+      up.once('close', () => reject(new Error('egress proxy: upstream closed before connect')));
     });
   }
 
@@ -261,6 +264,10 @@ export class EgressProxy {
       host: sock.remoteAddress, port, method: req.method, path: `${url.pathname}${url.search}`, headers,
       timeout: this.connectTimeoutMs, createConnection: () => sock,
     });
+    // `timeout` above is stored but never armed for a pre-connected socket from
+    // createConnection (verified on Node 26), so arm the inactivity timer
+    // explicitly: a silent upstream must not pin proxy sockets (#2313 R2.1).
+    upstream.setTimeout(this.connectTimeoutMs);
     upstream.on('timeout', () => upstream.destroy(new Error('egress proxy: upstream timeout')));
     upstream.on('response', (up) => this.relayResponse(up, res));
     upstream.on('error', () => reply(res, 502, 'egress proxy: upstream error'));
