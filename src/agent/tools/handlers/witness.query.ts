@@ -25,6 +25,13 @@ import { resolveSessionByName } from '../../trace/session-name-resolver.js';
 import type { TraceEvent } from '../../trace/index.js';
 import { readTraceSafe } from './witness.query.io.js';
 import { parseJsonlLines } from '../../../utils/jsonl.js';
+import {
+  isCurrentSession,
+  matchesWhere,
+  MATCH_LIMIT_HINT,
+  type CurrentSessionRef,
+  type WhereClause,
+} from './witness.query.where.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -84,12 +91,14 @@ export function clampSessions(raw: unknown): number {
 
 interface EventFilter {
   kinds?: Set<string>;
+  where?: WhereClause;
   toolName?: string;
   errorsOnly?: boolean;
 }
 
 function matchesFilter(event: TraceEvent, filter: EventFilter): boolean {
   if (filter.kinds && !filter.kinds.has(event.kind)) return false;
+  if (!matchesWhere(event, filter.where)) return false;
 
   // toolName filter: reject ALL non-tool_call events when a name is specified.
   if (filter.toolName) {
@@ -126,6 +135,8 @@ export interface ReadWitnessParams {
   toolName?: string;
   errorsOnly?: boolean;
   limit?: number;
+  /** Exact-match AND filter over dotted event paths (see witness.query.where). */
+  where?: WhereClause;
 }
 
 export interface ReadWitnessResult {
@@ -211,6 +222,7 @@ export async function readSessionTrace(
     kinds: params.kinds ? new Set(params.kinds) : undefined,
     toolName: params.toolName,
     errorsOnly: params.errorsOnly,
+    where: params.where,
   };
 
   const limit = clampLimit(params.limit);
@@ -246,6 +258,11 @@ export interface SearchWitnessParams {
   kinds?: string[];
   since?: string;
   toolName?: string;
+  /** Exact-match AND filter over dotted event paths (see witness.query.where). */
+  where?: WhereClause;
+  /** The caller's own trace; excluded unless `includeCurrentSession`. */
+  currentSession?: CurrentSessionRef;
+  includeCurrentSession?: boolean;
 }
 
 export interface SearchMatch {
@@ -282,6 +299,16 @@ export interface SearchWitnessResult {
    * session was truncated.
    */
   truncatedSessions?: string[];
+  /**
+   * Present (true) only when the MAX_SEARCH_MATCHES cap stopped the scan
+   * while candidate lines or sessions remained unread: `matches` may be
+   * incomplete (a remaining candidate might still have failed the filters).
+   */
+  matchLimitReached?: true;
+  /** Present with `matchLimitReached`: how to narrow the search. */
+  hint?: string;
+  /** Present (true) when the caller's own session trace was skipped. */
+  excludedCurrentSession?: true;
 }
 
 export async function searchAcrossSessions(
@@ -306,15 +333,30 @@ export async function searchAcrossSessions(
     traces = sliced.filter((t) => t.mtimeMs >= sinceMs);
   }
 
+  // Exclude the caller's own live trace by default: it contains the search
+  // in progress and floods results with self-referential rows.
+  let excludedCurrentSession = false;
+  if (!params.includeCurrentSession && params.currentSession !== undefined) {
+    const current = params.currentSession;
+    const before = traces.length;
+    traces = traces.filter((t) => !isCurrentSession(t, current));
+    excludedCurrentSession = traces.length < before;
+  }
+
   const kindFilter = params.kinds ? new Set(params.kinds) : undefined;
   const queryLower = params.query.toLowerCase();
   const matches: SearchMatch[] = [];
   const matchLimit = MAX_SEARCH_MATCHES; // cap total matches
   const truncatedSessions: string[] = [];
   let sessionsActuallySearched = 0;
+  let matchLimitReached = false;
 
   for (const entry of traces) {
-    if (matches.length >= matchLimit) break;
+    if (matches.length >= matchLimit) {
+      // Unread sessions remain: the cap, not the corpus, ended the scan.
+      matchLimitReached = true;
+      break;
+    }
     const { content, truncated } = await readTraceSafe(entry.tracePath);
     sessionsActuallySearched++;
     if (truncated) truncatedSessions.push(entry.sessionId);
@@ -326,7 +368,10 @@ export async function searchAcrossSessions(
       .filter((l) => l.trim() !== '' && l.toLowerCase().includes(queryLower));
 
     for (const line of candidateLines) {
-      if (matches.length >= matchLimit) break;
+      if (matches.length >= matchLimit) {
+        matchLimitReached = true;
+        break;
+      }
       const [event] = parseJsonlLines<TraceEvent>(line, { guard: isTraceEvent });
       if (!event) continue;
       if (kindFilter && !kindFilter.has(event.kind)) continue;
@@ -336,6 +381,7 @@ export async function searchAcrossSessions(
         const payload = event.payload as { name?: string };
         if (payload.name !== params.toolName) continue;
       }
+      if (!matchesWhere(event, params.where)) continue;
       matches.push({
         sessionId: entry.sessionId,
         event,
@@ -351,5 +397,7 @@ export async function searchAcrossSessions(
     sessionsScanned: sessionsActuallySearched,
     matches,
     ...(truncatedSessions.length > 0 ? { truncatedSessions } : {}),
+    ...(matchLimitReached ? { matchLimitReached: true as const, hint: MATCH_LIMIT_HINT } : {}),
+    ...(excludedCurrentSession ? { excludedCurrentSession: true as const } : {}),
   };
 }

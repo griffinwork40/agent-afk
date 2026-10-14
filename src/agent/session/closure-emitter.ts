@@ -20,7 +20,8 @@
 
 import { BudgetExceededError, TimeoutError } from '../../utils/errors.js';
 import { OVERLOAD_EXHAUSTED } from '../providers/shared/overload-sentinel.js';
-import { emitClosure } from '../trace/emit.js';
+import { emitClosure, emitHookSummary } from '../trace/emit.js';
+import { takeHookSummary } from '../trace/hook-tally.js';
 import type { ClosureReason, TraceSink } from '../trace/index.js';
 import type { TraceWriter } from '../trace/writer.js';
 import { buildClosureGuidance } from './closure-guidance.js';
@@ -167,6 +168,13 @@ export async function sealTraceWriter(
   input: SealTraceInput,
 ): Promise<void> {
   if (!writer) return;
+  // Invariant: the once-per-session `hook_summary` lands immediately before
+  // the terminal `session_sealed` record (after seal, write() rejects).
+  // takeHookSummary() returns undefined on a second call for the same writer,
+  // so a repeated seal attempt never double-emits. Fire-and-forget (INV-040):
+  // emitHookSummary swallows writer failures and the seal proceeds regardless.
+  const hookSummary = takeHookSummary(writer);
+  if (hookSummary !== undefined) await emitHookSummary(writer, hookSummary);
   const status = deriveSealStatus(input);
 
   const subagentCount =

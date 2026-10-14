@@ -130,6 +130,23 @@ describe('formatTrace — default human view', () => {
   });
 });
 
+describe('formatTrace — hook_summary', () => {
+  const sealed = { ts: '2026-06-05T12:31:00.000Z', seq: 2, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0, finalTurnCount: 1, closedAt: '2026-06-05T12:31:00.000Z' } };
+
+  it('renders the summary line and a header dispatch total', () => {
+    const summary = { ts: '2026-06-05T12:30:59.000Z', seq: 1, kind: 'hook_summary', payload: { scope: 'root-session-including-subagents', counts: { PreToolUse: { allow: 4, block: 1 }, Stop: { allow: 2 } }, written: 1, suppressed: 6 } };
+    const out = formatTrace('s', '/p', parseTrace(toJsonl([summary, sealed])));
+    expect(out).toContain('7 hook dispatches');
+    expect(out).toContain('PreToolUse allow=4 block=1 · Stop allow=2');
+    expect(out).toContain('6 allow rows suppressed');
+  });
+
+  it('omits the dispatch total when no summary exists (unknown, not zero)', () => {
+    const out = formatTrace('s', '/p', parseTrace(toJsonl([sealed])));
+    expect(out).not.toContain('hook dispatches');
+  });
+});
+
 describe('formatTrace — subagent timeout markers', () => {
   // PR (observable forked children): the reader must surface the new lifecycle
   // timeout signals — `[timeout]` on a failed child that blew its OWN budget

@@ -55,9 +55,21 @@ describe('hook_decision — emitted from dispatch helpers', () => {
     return createHookRegistry();
   }
 
-  it('PreToolUse approve records decision=undefined', async () => {
+  it('PreToolUse allow (no decision/reason/context) writes NO hook_decision row', async () => {
     const writer = new InMemoryTraceWriter();
     const registry = makeRegistry();
+    await dispatchPreToolUse(
+      registry,
+      { event: 'PreToolUse', toolName: 'bash', input: {} },
+      { traceWriter: writer },
+    );
+    expect(writer.events.filter((e) => e.kind === 'hook_decision')).toHaveLength(0);
+  });
+
+  it('approve WITH a reason is still written', async () => {
+    const writer = new InMemoryTraceWriter();
+    const registry = makeRegistry();
+    registry.register('PreToolUse', async () => ({ decision: 'approve', reason: 'ok by policy' }));
     await dispatchPreToolUse(
       registry,
       { event: 'PreToolUse', toolName: 'bash', input: {} },
@@ -67,9 +79,8 @@ describe('hook_decision — emitted from dispatch helpers', () => {
     expect(decisions).toHaveLength(1);
     const d = decisions[0];
     if (d?.kind !== 'hook_decision') throw new Error('unreachable');
-    expect(d.payload.hookEvent).toBe('PreToolUse');
-    expect(d.payload.decision).toBeUndefined();
-    expect(d.payload.blockedTool).toBeUndefined();
+    expect(d.payload.decision).toBe('approve');
+    expect(d.payload.reason).toBe('ok by policy');
   });
 
   it('PreToolUse block records decision=block + reason + blockedTool', async () => {
@@ -158,17 +169,18 @@ describe('hook_decision — emitted from dispatch helpers', () => {
       { traceWriter: writer },
     );
     const decisions = writer.events.filter((e) => e.kind === 'hook_decision');
-    // One event is emitted (the dispatch outcome), but it must NOT carry
-    // injectedContextBytes — delivery hasn't happened yet.
-    expect(decisions).toHaveLength(1);
-    const d = decisions[0];
-    if (d?.kind !== 'hook_decision') throw new Error('unreachable');
-    expect(d.payload.injectedContextBytes).toBeUndefined();
+    // The dispatch outcome must NOT carry injectedContextBytes (delivery has
+    // not happened yet), and carrying nothing else it is a no-information
+    // allow row, so it is not written at all (counted in hook_summary instead).
+    expect(decisions).toHaveLength(0);
   });
 
-  it('SessionStart, SessionEnd, SubagentStart each emit', async () => {
+  it('SessionStart, SessionEnd, SubagentStart each emit when informative', async () => {
     const writer = new InMemoryTraceWriter();
     const registry = makeRegistry();
+    registry.register('SessionStart', async () => ({ reason: 'start-note' }));
+    registry.register('SubagentStart', async () => ({ reason: 'sub-note' }));
+    registry.register('SessionEnd', async () => ({ reason: 'end-note' }));
     await dispatchSessionStart(
       registry,
       { event: 'SessionStart', sessionId: 's' },
@@ -248,7 +260,7 @@ describe('tool_call — emitted from SessionToolDispatcher', () => {
     expect(toolCalls).toHaveLength(0);
   });
 
-  it('emits hook_decision for PreToolUse and PostToolUse around dispatch', async () => {
+  it('allow-path PreToolUse and PostToolUse around dispatch write no hook_decision rows', async () => {
     const writer = new InMemoryTraceWriter();
     const registry = createHookRegistry();
     const dispatcher = makeDispatcher(writer, async () => ({ content: 'result', isError: false }), 'fake_tool', registry);
@@ -259,13 +271,9 @@ describe('tool_call — emitted from SessionToolDispatcher', () => {
       input: {},
       signal: ac.signal,
     });
-    const decisions = writer.events.filter((e) => e.kind === 'hook_decision');
-    expect(decisions).toHaveLength(2);
-    if (decisions[0]?.kind !== 'hook_decision' || decisions[1]?.kind !== 'hook_decision') {
-      throw new Error('unreachable');
-    }
-    expect(decisions[0].payload.hookEvent).toBe('PreToolUse');
-    expect(decisions[1].payload.hookEvent).toBe('PostToolUse');
+    // PostToolUse is fire-and-forget; let it settle before asserting.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(writer.events.filter((e) => e.kind === 'hook_decision')).toHaveLength(0);
   });
 
   it('blocked PreToolUse records the block AND short-circuits the dispatch', async () => {
@@ -324,9 +332,11 @@ describe('tool_call — emitted from SessionToolDispatcher', () => {
     // Context must appear in the tool result.
     expect(result.content).toContain('[PreToolUse context]');
     expect(result.content).toContain(context);
-    // Three hook_decision events: PreToolUse dispatch, delivery, PostToolUse.
+    // Only the delivery event is written; the no-information PreToolUse
+    // dispatch row and the allow-path PostToolUse row are suppressed.
+    await new Promise((r) => setTimeout(r, 10));
     const decisions = writer.events.filter((e) => e.kind === 'hook_decision');
-    expect(decisions).toHaveLength(3);
+    expect(decisions).toHaveLength(1);
     const delivery = decisions.find(
       (e) => e.kind === 'hook_decision' && e.payload.injectedContextBytes !== undefined,
     );

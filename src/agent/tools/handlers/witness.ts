@@ -15,6 +15,8 @@
 import type { ToolHandler } from '../types.js';
 import { readSessionTrace, searchAcrossSessions } from './witness.query.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { currentSessionRef, parseWhere, WitnessWhereError } from './witness.query.where.js';
+import type { WhereClause } from './witness.query.where.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -23,6 +25,21 @@ import { errorMessage } from '../../../utils/errors.js';
 function asObj(input: unknown): Record<string, unknown> | null {
   if (!input || typeof input !== 'object') return null;
   return input as Record<string, unknown>;
+}
+
+/** Parse `where`, or return the tool error result for a malformed one. */
+function whereOrError(
+  obj: Record<string, unknown>,
+  tool: string,
+): { where: WhereClause | undefined } | { error: { content: string; isError: true } } {
+  try {
+    return { where: parseWhere(obj['where']) };
+  } catch (err) {
+    if (err instanceof WitnessWhereError) {
+      return { error: { content: `${tool} failed: invalid where: ${err.message}`, isError: true } };
+    }
+    throw err;
+  }
 }
 
 function asStringArray(v: unknown): string[] | undefined {
@@ -45,6 +62,8 @@ export const readWitnessHandler: ToolHandler = async (input) => {
   const toolName = typeof obj['tool_name'] === 'string' ? obj['tool_name'] : undefined;
   const errorsOnly = typeof obj['errors_only'] === 'boolean' ? obj['errors_only'] : false;
   const limit = typeof obj['limit'] === 'number' ? obj['limit'] : undefined;
+  const parsedWhere = whereOrError(obj, 'read_witness');
+  if ('error' in parsedWhere) return parsedWhere.error;
 
   try {
     const result = await readSessionTrace({
@@ -53,6 +72,7 @@ export const readWitnessHandler: ToolHandler = async (input) => {
       toolName,
       errorsOnly,
       limit,
+      ...(parsedWhere.where !== undefined ? { where: parsedWhere.where } : {}),
     });
     return { content: JSON.stringify(result) };
   } catch (err) {
@@ -65,7 +85,7 @@ export const readWitnessHandler: ToolHandler = async (input) => {
 // search_witness handler
 // ---------------------------------------------------------------------------
 
-export const searchWitnessHandler: ToolHandler = async (input) => {
+export const searchWitnessHandler: ToolHandler = async (input, _signal, context) => {
   const obj = asObj(input);
   if (!obj) {
     return { content: 'Invalid input: expected object', isError: true };
@@ -80,6 +100,10 @@ export const searchWitnessHandler: ToolHandler = async (input) => {
   const kinds = asStringArray(obj['kinds']);
   const since = typeof obj['since'] === 'string' ? obj['since'] : undefined;
   const toolName = typeof obj['tool_name'] === 'string' ? obj['tool_name'] : undefined;
+  const includeCurrentSession = obj['include_current_session'] === true;
+  const parsedWhere = whereOrError(obj, 'search_witness');
+  if ('error' in parsedWhere) return parsedWhere.error;
+  const currentSession = context !== undefined ? currentSessionRef(context) : undefined;
 
   try {
     const result = await searchAcrossSessions({
@@ -88,6 +112,9 @@ export const searchWitnessHandler: ToolHandler = async (input) => {
       kinds,
       since,
       toolName,
+      ...(parsedWhere.where !== undefined ? { where: parsedWhere.where } : {}),
+      ...(currentSession !== undefined ? { currentSession } : {}),
+      ...(includeCurrentSession ? { includeCurrentSession } : {}),
     });
     return { content: JSON.stringify(result) };
   } catch (err) {
