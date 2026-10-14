@@ -19,6 +19,7 @@ import { __resetStdinClaimForTests } from './input/stdin-claim.js';
 import { createAutocompleteState } from './input/autocomplete-state.js';
 import { register as registerSlashCommand, resetRegistry as resetSlashRegistry } from './slash/registry.js';
 import { renderPickerRows, type PickerState } from './render/picker.js';
+import { runTextInput } from './render/text-input.js';
 import { makeMockStdin, makeMockStdout, collectWrites } from './terminal-compositor.test-helpers.js';
 
 const COLS = 200;
@@ -98,6 +99,15 @@ const SCENARIOS: Record<string, { marks: string[]; drive: (c: TerminalCompositor
     marks: ['PICKHEAD', 'PICKOPT_A', 'PICKOPT_B'],
     drive: (c) => {
       c.enterPickerMode({ renderRows: pickerRows, onKey: vi.fn() });
+    },
+  },
+  // readTextOverlay (elicitation text/number input) is runTextInput on the
+  // armed compositor's picker mode — NOT reader.repaint — so it shares the
+  // picker-frame margin.
+  'readTextOverlay (runTextInput) rows': {
+    marks: ['TEXTHEAD', 'TEXTHELP'],
+    drive: (c) => {
+      void runTextInput(c, { header: ['? TEXTHEAD question'], help: 'TEXTHELP enter to submit' });
     },
   },
 };
