@@ -277,7 +277,7 @@ export function formatStatusLine(f: StatusLineFields, maxW: number): string {
   // Token budget consumption -- droppablePriority 7.
   if (f.budgetUsd !== undefined) {
     const capSuffix =
-      f.maxBudgetUsd !== undefined && f.maxBudgetUsd > 0
+      f.maxBudgetUsd !== undefined && f.maxBudgetUsd >= 0
         ? `/$${f.maxBudgetUsd.toFixed(2)}`
         : '';
     parts.push({

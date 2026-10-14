@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.315.2] - 2026-10-14
+
+### Fixed
+- restore lint:tests:check on main (merge race #3748/#3747) (#3768) (6184908e)
+
 ## [5.315.1] - 2026-10-14
 
 ### Fixed

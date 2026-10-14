@@ -536,14 +536,34 @@ function blockDecision(toolName: string, why: string, refusal: RefusalCtx): Hook
       ? (() => {
           const roots = getTempRoots();
           const safeTemp = roots.length > 0 ? ` or a private temp root (${roots[0]})` : '';
+          const isEscape = refusal.reason?.startsWith('workspace-escape:') ?? false;
+          const escapeTail = isEscape
+            ? ` For commit messages or PR/review bodies use stdin heredocs` +
+              ` (\`git commit -F - <<'EOF'\`, \`gh pr create --body-file - <<'EOF'\`);` +
+              ` for reports or artifacts, write into the workspace \`.afk/\` directory.` +
+              ` This boundary is deliberate: do not reach the same effect via bash, python, or a script.`
+            : '';
           return (
             `This is a scheduled daemon task: no operator can approve this run. Write inside ` +
             `the task working directory (${refusal.daemonCwd})${safeTemp}, or use ` +
-            `another safe approach; if the task cannot complete, report Blocked.`
+            `another safe approach; if the task cannot complete, report Blocked.${escapeTail}`
           );
         })()
-      : `Push an Asking summary to Telegram (send_telegram) and stop, ` +
-        `or have the operator run /afk off and take over.`;
+      : (() => {
+          const isEscape = refusal.reason?.startsWith('workspace-escape:') ?? false;
+          const escapeTail = isEscape
+            ? ` Sanctioned scratch locations: the private session temp root and` +
+              ` $TMPDIR (os.tmpdir()); for commit messages or PR/review bodies` +
+              ` use stdin heredocs (\`git commit -F - <<'EOF'\`,` +
+              ` \`gh pr create --body-file - <<'EOF'\`); for reports or artifacts,` +
+              ` write into the workspace \`.afk/\` directory.` +
+              ` This boundary is deliberate: do not reach the same effect via bash, python, or a script.`
+            : '';
+          return (
+            `Push an Asking summary to Telegram (send_telegram) and stop, ` +
+            `or have the operator run /afk off and take over.${escapeTail}`
+          );
+        })();
   return { decision: 'block', reason: head + tail };
 }
 
