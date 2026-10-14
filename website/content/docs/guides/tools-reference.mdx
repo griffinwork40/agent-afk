@@ -519,8 +519,9 @@ Manage AFK-managed git worktrees under `<repoRoot>/.afk-worktrees/`. Prefer this
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `action` | string | ✓ | `create`, `keep`, `release`, `list`, or `remove`. |
+| `repo` | string | | (All actions) Existing absolute directory inside the target git repo; no `..` segments. Defaults to session cwd. Resolves the main checkout and manages its `.afk-worktrees/`. |
 | `name` | string | | (`create`) Worktree slug (kebab-case). Becomes `.afk-worktrees/<name>` and branch `afk/<name>`. |
-| `base` | string | | (`create`) Git ref to base the new branch on. Default: HEAD. |
+| `base` | string | | (`create`) Git ref to base the new branch on. Default: HEAD. The new branch does not track the base ref. |
 | `path` | string | | (`keep`/`release`/`remove`) Worktree slug or repo-relative path. |
 | `reason` | string | | (`keep`) Why this worktree must survive (stored as the git lock reason). |
 | `force` | boolean | | (`remove`) Also remove when dirty or with commits ahead of base. Branch ref is always preserved. |

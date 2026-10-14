@@ -54,7 +54,7 @@ afterEach(() => {
 });
 
 describe('createManagedWorktree — argv + meta parity', () => {
-  it('emits `git worktree add -b <branch> <path> <baseRef>` and writes meta', async () => {
+  it('emits `git worktree add --no-track -b <branch> <path> <baseRef>` and writes meta', async () => {
     const wtPath = join(repoRoot, '.afk-worktrees', 'feat');
     const mock = makeMock((call) => {
       if (call.args.includes('add')) {
@@ -72,7 +72,7 @@ describe('createManagedWorktree — argv + meta parity', () => {
     });
     expect(info).toEqual({ path: wtPath, branch: 'afk/feat', baseRef: 'HEAD', baseSha: 'base-sha-999' });
     const addCall = mock.calls.find((c) => c.args.includes('add'));
-    expect(addCall?.args).toEqual(['-C', repoRoot, 'worktree', 'add', '-b', 'afk/feat', wtPath, 'HEAD']);
+    expect(addCall?.args).toEqual(['-C', repoRoot, 'worktree', 'add', '--no-track', '-b', 'afk/feat', wtPath, 'HEAD']);
     const meta = JSON.parse(await fs.readFile(join(wtPath, '.afk-worktree-meta.json'), 'utf-8')) as Record<string, unknown>;
     expect(meta['owner']).toBe('agent');
     expect(meta['baseSha']).toBe('base-sha-999');
@@ -199,7 +199,7 @@ describe('createIsolatedWorktree', () => {
     expect(iso.baseRef).toBe('headsha');
     const addCall = mock.calls.find((c) => c.args.includes('add'));
     expect(addCall?.args).toEqual([
-      '-C', repoRoot, 'worktree', 'add', '-b', 'afk/iso-diagnose-1-abc123', iso.path, 'headsha',
+      '-C', repoRoot, 'worktree', 'add', '--no-track', '-b', 'afk/iso-diagnose-1-abc123', iso.path, 'headsha',
     ]);
   });
 

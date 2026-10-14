@@ -197,7 +197,7 @@ export interface ManagedWorktreeInfo {
 /**
  * Create a worktree + branch and stamp `.afk-worktree-meta.json`.
  *
- * Emits `git worktree add -b <branch> <path> <baseRef>`, then best-effort
+ * Emits `git worktree add --no-track -b <branch> <path> <baseRef>`, then best-effort
  * `rev-parse <baseRef>` (for `baseSha`) and the meta write — neither of which
  * fails the create (mirrors the pre-extraction handler behavior exactly).
  * Finally runs the repo's opt-in setup declaration, if any (#3601).
@@ -207,7 +207,8 @@ export async function createManagedWorktree(
 ): Promise<ManagedWorktreeInfo> {
   const { execFile, repoRoot, worktreePath, branch, baseRef } = args;
   await execFile('git', [
-    '-C', repoRoot, 'worktree', 'add', '-b', branch, worktreePath, baseRef,
+    // Never inherit a remote base's upstream: a plain push must not target main.
+    '-C', repoRoot, 'worktree', 'add', '--no-track', '-b', branch, worktreePath, baseRef,
   ]);
   // The sweep is per-root, so a root the daemon never resolves is a root whose
   // trees leak forever (#761). This covers the `worktree` tool's create action
