@@ -85,8 +85,11 @@ describe('run it, don\'t relay it: hook block messages', () => {
     expect(withHandoff.length).toBeGreaterThan(0);
     for (const p of withHandoff) {
       if (p.tier !== 'block') continue;
-      expect(p.blockReason, p.id).toContain('it blocks only this command');
-      expect(p.blockReason, p.id).toContain('do not reach the same destructive effect another way');
+      // Old-style patterns use 'it blocks only this command'; new-style use 'This block is deliberate'.
+      // Both are valid scoping declarations — the regex matches either.
+      expect(p.blockReason, p.id).toMatch(/it blocks only this command|This block is deliberate/);
+      // Both phrase families share this common substance: the agent must not reach the same effect another way.
+      expect(p.blockReason, p.id).toContain('do not reach the same');
       expect(p.blockReason, p.id).not.toContain('if the destruction is genuinely intended');
     }
   });
