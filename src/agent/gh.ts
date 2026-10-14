@@ -108,7 +108,7 @@ function classifyStderr(stderr: string, code?: string, killed?: boolean): GhErro
   return 'unknown';
 }
 
-function defaultExecFn(file: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+export function defaultExecFn(file: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
   // P2: apply 20 s timeout to every execFileAsync call
   return execFileAsync(file, args, { timeout: EXEC_TIMEOUT_MS, killSignal: 'SIGTERM' }).then(
     (r) => ({ stdout: r.stdout, stderr: r.stderr }),
@@ -265,7 +265,7 @@ interface ExecError extends Error {
  * hard timeout as `defaultExecFn`; on timeout the child is SIGTERM'd and the
  * rejection carries `killed: true` so `classifyStderr` maps it to `'timeout'`.
  */
-function defaultExecWithInput(
+export function defaultExecWithInput(
   file: string,
   args: string[],
   input: string,
