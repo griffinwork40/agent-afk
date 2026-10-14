@@ -104,6 +104,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
   private tools: AnthropicToolDef[] | null;
   private currentSlotDenyKey: string;
   private readonly modelToolsFactory: AnthropicDirectQueryOptions['modelToolsFactory'];
+  private readonly onModelChange: AnthropicDirectQueryOptions['onModelChange'];
   private readonly systemPrefix: ContentBlockParam[] | null;
   /** Resolved thinking config for the LAUNCH model. Used as the per-turn value
    * when no rawThinkingConfig is available (external/legacy callers). */
@@ -181,6 +182,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
     this.tools = opts.tools;
     this.currentSlotDenyKey = slotDenyKey(opts.requestedModel ?? opts.model);
     this.modelToolsFactory = opts.modelToolsFactory;
+    this.onModelChange = opts.onModelChange;
     this.systemPrefix = opts.systemPrefix;
     this.thinking = opts.thinking;
     if (opts.rawThinkingConfig !== undefined) this.rawThinkingConfig = opts.rawThinkingConfig;
@@ -342,6 +344,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       this.tools = tools;
       this.currentSlotDenyKey = key;
     }
+    this.onModelChange?.(model);
     setLiveModel(this.state, model);
   }
 

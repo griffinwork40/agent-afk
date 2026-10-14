@@ -108,6 +108,8 @@ export interface AnthropicDirectQueryOptions {
   tools: AnthropicToolDef[] | null;
   /** Rebuild the dispatcher and advertised catalog together for a changed slot deny key. */
   modelToolsFactory?: (model: string, permissionMode: string) => { dispatcher: ToolDispatcher; tools: AnthropicToolDef[] };
+  /** Called on every non-empty setModel() so later rebuilds (cwd re-anchor) see the live model. */
+  onModelChange?: (model: string) => void;
   userSystem: string | null;
   systemPrefix: ContentBlockParam[] | null;
   /** When set, called on 401 to obtain a fresh SDK client. Retry once. */

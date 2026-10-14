@@ -144,11 +144,11 @@ export function buildProviderQuery(
       : {}),
     maxTokens,
     tools: toolDefs,
-    modelToolsFactory: (model, mode) => {
-      const result = setup.modelToolsFactory(model, mode);
-      config.model = model; // The cwd rebuild must inherit the live slot policy.
-      return result;
-    },
+    modelToolsFactory: setup.modelToolsFactory,
+    // Every live switch (same slot-deny key or not) re-points the shared
+    // `config` the cwd re-anchor factory reads, so a later setCwd() rebuilds
+    // under the ACTIVE slot's policy, never the launch model's.
+    onModelChange: (model) => { config.model = model; },
     userSystem: toolSystemAppend,
     systemPrefix,
     tokenRefresher,

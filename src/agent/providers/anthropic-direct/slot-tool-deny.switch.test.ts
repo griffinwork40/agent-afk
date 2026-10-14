@@ -97,10 +97,21 @@ describe.each([['anthropic', AnthropicDirectProvider], ['openai', OpenAICompatib
     await q.setModel('qwen-local');
     expect(live(q).dispatcher).toBe(restricted);
     q.setCwd?.(project);
-    expect((await call(live(q).dispatcher, 'bash')).isError).toBe(true);
+    expect((await call(live(q).dispatcher, 'bash')).content).toContain('disabled by operator settings');
     await q.setModel('large');
     expect(live(q).names).toContain('bash');
     // Invalid input proves the call passed the operator gate without executing a shell.
     expect((await call(live(q).dispatcher, 'bash')).content).not.toContain('disabled by operator settings');
+  });
+  // Only anthropic-direct re-reads slot policy on a cwd re-anchor (its cwd
+  // rebuild re-runs buildDispatcher); openai-compatible keeps its dispatcher
+  // across setCwd, so a live edit there waits for the next /model or session.
+  it.runIf(name === 'anthropic')('cwd re-anchor after a same-key switch rebuilds under the active slot, not the launch model', async () => {
+    configure({});
+    const q = query(new Provider(), 'large');
+    await q.setModel('local'); // identical (empty) deny keys: no dispatcher rebuild
+    configure({ disabledBySlot: { local: ['bash'] } }); // live operator edit
+    q.setCwd?.(project);
+    expect((await call(live(q).dispatcher, 'bash')).content).toContain('disabled by operator settings');
   });
 });
