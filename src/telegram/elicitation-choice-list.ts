@@ -20,6 +20,7 @@
 
 import { escapeHtml } from './formatter.js';
 import { truncateTelegramLabel } from '../utils/truncate-telegram-label.js';
+import { splitLongPrompt } from './elicitation-handler.send.js';
 
 const MAX_LABEL_BYTES = 64;
 
@@ -85,9 +86,18 @@ export function buildChoiceMessages(
   rendering: TelegramChoiceRendering,
   choices: readonly string[],
 ): ChoiceMessages {
-  // No overflow rendering — nothing to split.
+  // No overflow rendering — but baseText itself may exceed the limit.
+  // Fix (Finding 2, issue #3663): split oversized baseText so Telegram never
+  // rejects the send even when no choice-list overflow rendering is needed.
   if (rendering.bodySuffix === '') {
-    return { preMessages: [], keyboardText: baseText };
+    if (baseText.length <= TELEGRAM_MAX_CHARS) {
+      return { preMessages: [], keyboardText: baseText };
+    }
+    const parts = splitLongPrompt(baseText);
+    return {
+      preMessages: parts.slice(0, -1),
+      keyboardText: parts[parts.length - 1]!,
+    };
   }
 
   const candidate = baseText + rendering.bodySuffix;

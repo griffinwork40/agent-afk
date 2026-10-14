@@ -71,6 +71,7 @@ vi.mock('./formatter.js', () => ({
 
 import { makeTelegramElicitationHandler } from './elicitation-handler.js';
 import { Telegraf } from 'telegraf';
+import { splitLongPrompt } from './elicitation-handler.send.js';
 
 // ---------------------------------------------------------------------------
 // Type helpers for the mock ctx used in callback tests.
@@ -2091,8 +2092,6 @@ describe('choice type: single choice over 4096 chars (issue #3631 item 2)', () =
 // is split into pre-messages + final interceptable prompt, never declined.
 // ---------------------------------------------------------------------------
 
-import { splitLongPrompt } from './elicitation-handler.send.js';
-
 describe('splitLongPrompt', () => {
   it('returns the original string when it fits', () => {
     expect(splitLongPrompt('hello')).toEqual(['hello']);
@@ -2120,6 +2119,143 @@ describe('splitLongPrompt', () => {
   it('handles a prompt of exactly 4096 chars without splitting', () => {
     const prompt = 'z'.repeat(4096);
     expect(splitLongPrompt(prompt)).toEqual([prompt]);
+  });
+
+  // -------------------------------------------------------------------------
+  // Finding 1 (issue #3663): HTML-aware splitting
+  // -------------------------------------------------------------------------
+
+  it('closes open <i> tag at chunk boundary and reopens it in the next chunk', () => {
+    // Use maxLen=100 so tag overhead (<i> = 3, </i> = 4) fits comfortably.
+    // 200 chars of inner content forces at least 2 chunks.
+    const maxLen = 100;
+    const longContext = 'C'.repeat(200);
+    const bigPrompt = `<i>${longContext}</i>`;
+    const chunks = splitLongPrompt(bigPrompt, maxLen);
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(maxLen);
+    // Every chunk must have balanced tags
+    for (const c of chunks) {
+      const opens = (c.match(/<i>/g) ?? []).length;
+      const closes = (c.match(/<\/i>/g) ?? []).length;
+      expect(opens).toBe(closes);
+    }
+  });
+
+  it('does not split inside an HTML entity near the boundary', () => {
+    // Place &amp; right before position maxLen so a naive split would cut through it.
+    const maxLen = 30;
+    // prefix of 27 chars + &amp; (5 chars) = 32, so entity straddles boundary at 30.
+    const prompt = 'A'.repeat(27) + '&amp;' + 'B'.repeat(27);
+    const chunks = splitLongPrompt(prompt, maxLen);
+    for (const c of chunks) {
+      expect(c.length).toBeLessThanOrEqual(maxLen);
+      // No chunk should contain a broken entity (& without ;)
+      // i.e. a bare & that is not part of a complete &xxx; sequence
+      const brokenEntity = /&(?![a-zA-Z#][a-zA-Z0-9]*;)/.test(c);
+      expect(brokenEntity).toBe(false);
+    }
+  });
+
+  it('<b> tag spanning chunks: each chunk is self-contained valid HTML', () => {
+    // maxLen=100: <b> (3) + </b> (4) = 7 bytes overhead; 300 chars forces 3+ chunks.
+    const maxLen = 100;
+    const inner = 'B'.repeat(300);
+    const prompt = `<b>${inner}</b>`;
+    const chunks = splitLongPrompt(prompt, maxLen);
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    for (const c of chunks) {
+      expect(c.length).toBeLessThanOrEqual(maxLen);
+      const opens = (c.match(/<b>/g) ?? []).length;
+      const closes = (c.match(/<\/b>/g) ?? []).length;
+      expect(opens).toBe(closes);
+    }
+    // Concatenation after stripping tag wrappers reconstructs inner content
+    const stripped = chunks.map((c) => c.replace(/<\/?b>/g, '')).join('');
+    expect(stripped).toBe(inner);
+  });
+
+  it('long <i>-wrapped context spanning two chunks has valid HTML in each', () => {
+    // Mirrors the real displayText shape: <b>header</b>\n\n<i>context</i>\n\nquestion
+    const context = 'X'.repeat(3800);
+    const question = 'Q'.repeat(500);
+    const prompt = `💬 <b>Question from agent</b>\n\n<i>${context}</i>\n\n${question}`;
+    const chunks = splitLongPrompt(prompt); // default 4096 maxLen
+    for (const c of chunks) {
+      expect(c.length).toBeLessThanOrEqual(4096);
+      // Count open/close for i and b — must be balanced
+      for (const tag of ['i', 'b'] as const) {
+        const opens = (c.match(new RegExp(`<${tag}>`, 'g')) ?? []).length;
+        const closes = (c.match(new RegExp(`</${tag}>`, 'g')) ?? []).length;
+        expect(opens).toBe(closes);
+      }
+    }
+  });
+
+  it('entity &amp; near split boundary is never broken across chunks', () => {
+    // Build a prompt where &amp; sits exactly at various positions near 4096
+    const prefix = 'A'.repeat(4090);
+    const prompt = `${prefix}&amp;BBBBB`;
+    const chunks = splitLongPrompt(prompt);
+    for (const c of chunks) {
+      expect(c.length).toBeLessThanOrEqual(4096);
+      // No partial entity: every & must be followed by word chars and ;
+      const partial = /&(?![a-zA-Z#][a-zA-Z0-9]*;)/.test(c);
+      expect(partial).toBe(false);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Finding 2 (issue #3663): buildChoiceMessages splits oversized baseText
+// even when bodySuffix is empty (no overflow rendering).
+// ---------------------------------------------------------------------------
+
+import { buildChoiceMessages, renderTelegramChoices } from './elicitation-choice-list.js';
+
+describe('buildChoiceMessages — oversized baseText with no bodySuffix (Finding 2)', () => {
+  it('returns preMessages + keyboardText when baseText alone exceeds 4096 chars', () => {
+    // Short choices that all fit their buttons — bodySuffix will be ''
+    const choices = ['yes', 'no'];
+    const rendering = renderTelegramChoices(choices);
+    expect(rendering.bodySuffix).toBe('');
+
+    const baseText = 'Q'.repeat(5000);
+    const result = buildChoiceMessages(baseText, rendering, choices);
+
+    expect(result.preMessages.length).toBeGreaterThanOrEqual(1);
+    expect(result.keyboardText.length).toBeLessThanOrEqual(4096);
+    for (const msg of result.preMessages) {
+      expect(msg.length).toBeLessThanOrEqual(4096);
+    }
+  });
+
+  it('returns empty preMessages when baseText fits within 4096 chars', () => {
+    const choices = ['yes', 'no'];
+    const rendering = renderTelegramChoices(choices);
+    expect(rendering.bodySuffix).toBe('');
+
+    const baseText = 'Q'.repeat(100);
+    const result = buildChoiceMessages(baseText, rendering, choices);
+
+    expect(result.preMessages).toHaveLength(0);
+    expect(result.keyboardText).toBe(baseText);
+  });
+
+  it('keyboardText is the last chunk of the split baseText', () => {
+    const choices = ['alpha', 'beta'];
+    const rendering = renderTelegramChoices(choices);
+    expect(rendering.bodySuffix).toBe('');
+
+    // Just over the limit so it splits into exactly 2 parts
+    const baseText = 'Z'.repeat(4097);
+    const result = buildChoiceMessages(baseText, rendering, choices);
+
+    // keyboardText must be non-empty and ≤ 4096
+    expect(result.keyboardText.length).toBeGreaterThan(0);
+    expect(result.keyboardText.length).toBeLessThanOrEqual(4096);
+    // preMessages must be non-empty
+    expect(result.preMessages.length).toBeGreaterThanOrEqual(1);
   });
 });
 
