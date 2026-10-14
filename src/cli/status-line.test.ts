@@ -1466,14 +1466,14 @@ describe('StatusLine — token budget indicator', () => {
     status.stop();
   });
 
-  it('does not render the maxBudgetUsd cap when maxBudgetUsd is 0', () => {
+  it('renders the maxBudgetUsd cap as $0.00 when maxBudgetUsd is 0', () => {
     const stream = mockStreamWide(120);
     const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
     status.start(); stream.writes.length = 0;
     status.repaint({ model: 'sonnet', budgetUsd: 0.10, maxBudgetUsd: 0 });
     const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
     expect(out).toContain('$0.10');
-    expect(out).not.toContain('$0.10/$');
+    expect(out).toContain('$0.10/$0.00');
     status.stop();
   });
 
