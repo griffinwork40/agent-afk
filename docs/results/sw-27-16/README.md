@@ -1,9 +1,10 @@
-# agent-afk constructed SW(27,16), a case a 2025 paper listed as open
+# agent-afk constructed a symmetric weighing matrix SW(27,16)
 
 On 2026-10-14, agent-afk agents working on a research campaign constructed a **symmetric weighing matrix
-SW(27,16)**. A 2025 paper by Christopher Rosin ([arXiv:2505.23881](https://arxiv.org/abs/2505.23881)) lists
-orders 25, 27 and 29 as the remaining open cases for weight 16. The standard archives (Harada–Munemasa
-Database of Small Weighing Matrices and the Atlas of Weighing Matrices) list a W(27,16) but no symmetric one.
+SW(27,16)**. As far as we know, none was known before: the two standard archives (the Harada–Munemasa
+Database of Small Weighing Matrices and the Atlas of Weighing Matrices) list a W(27,16) but no symmetric one,
+and a 2025 preprint by Christopher Rosin ([arXiv:2505.23881](https://arxiv.org/abs/2505.23881)) lists orders
+25, 27 and 29 as the remaining open cases for weight 16.
 (The same campaign found SW(25,16) on 2026-10-03; see [results/sw-25-16](../sw-25-16/).)
 
 You can check it yourself in well under a second:
@@ -69,7 +70,8 @@ failed attempts are kept alongside the successes.
 - **Not claimed:** that this is certainly the first SW(27,16). We know of no earlier construction, but we
   are not specialists. If you know of one, please [open an issue](https://github.com/griffinwork40/agent-afk/issues)
   and we will correct this page.
-- **Not claimed:** inequivalence to any published W(27,16) class beyond the two we checked.
+- **Not claimed:** inequivalence to any published W(27,16) class (a computer comparison suggests it; we have not
+  independently confirmed it).
 - SW(29,16) remains open as far as we know.
 
 ## Standalone checker (no dependencies)
