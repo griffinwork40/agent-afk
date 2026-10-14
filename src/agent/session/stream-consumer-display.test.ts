@@ -408,14 +408,13 @@ describe('stream-consumer → formatOutcome: bash output integration', () => {
     expect(rendered).toContain('~/.afk/state/witness/sess-1/bash-captures/tu-1.txt');
   });
 
-  it('SIGKILL path (truncated, no capturePath): shows "output capped · command killed"', () => {
+  it('SIGKILL path (truncated, no capturePath): shows the output-safety-cap label', () => {
     const rendered = outcome(buildBashEvent({
       content: 'partial output\nmore output\n[output truncated — command exceeded the 8000000-byte output cap and was terminated]',
       truncated: true,
       // no capturePath
     }));
-    expect(rendered).toContain('output capped');
-    expect(rendered).toContain('command killed');
+    expect(rendered).toContain('stopped at output safety cap');
     expect(rendered).not.toContain('full output saved');
   });
 

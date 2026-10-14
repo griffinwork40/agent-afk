@@ -18,6 +18,7 @@ import { appendRoutingDecision } from '../../routing-telemetry.js';
 import { detectTestResult } from './test-runner-detector.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import { HARD_CAP_BYTES, MODEL_CAP_BYTES, headAndTail, HARD_CAP_KILL_NOTE } from './_output-cap.js';
+import { debugLog } from '../../../utils/debug.js';
 
 /** Shared mutable accumulator passed by reference so both stream handlers share one counter. */
 export interface OverflowState {
@@ -56,8 +57,9 @@ function maybeOverflow(
   if (resolved()) return;
   if (state.totalBytes < HARD_CAP_BYTES) return;
   state.overflowKilled = true;
-  // P1: structured log so operators can observe runaway kills in production.
-  console.warn(
+  // P1: debug-only (a raw console.warn tore through the TUI); users see the
+  // tool row's outputCapKilled label, the model sees HARD_CAP_KILL_NOTE.
+  debugLog(
     `[bash] overflow kill: stream=${stream} totalBytes=${state.totalBytes} command="${command}"`,
   );
   // P2: structured JSONL counterpart queryable from routing-decisions.jsonl.
