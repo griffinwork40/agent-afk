@@ -112,6 +112,26 @@ describe('parseDaemonEnvLimits', () => {
     expect(warnSpy.mock.calls[0]?.[0]).toMatch(/AFK_MAX_BUDGET_USD/);
   });
 
+  it('does not echo the raw value in the warning for a token-shaped budget (#3708)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tokenLike = 'sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
+    const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, tokenLike);
+    expect(parsedMaxBudget).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const msg: string = warnSpy.mock.calls[0]?.[0] as string;
+    expect(msg).not.toContain(tokenLike);
+    expect(msg).toContain('AFK_MAX_BUDGET_USD');
+  });
+
+  it('says "finite" in the warning for Infinity budget (#3708)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, 'Infinity');
+    expect(parsedMaxBudget).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const msg: string = warnSpy.mock.calls[0]?.[0] as string;
+    expect(msg).toContain('finite');
+  });
+
   it('returns undefined and warns for NaN budget string (does not throw)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, 'NaN');

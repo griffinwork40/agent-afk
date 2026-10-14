@@ -157,7 +157,7 @@ export function parseDaemonEnvLimits(
     const n = Number(rawMaxBudget);
     if (!Number.isFinite(n) || n < 0) {
       console.warn(
-        `[daemon] AFK_MAX_BUDGET_USD=${JSON.stringify(rawMaxBudget)} is not a valid non-negative number — ` +
+        `[daemon] AFK_MAX_BUDGET_USD is not a valid finite non-negative number — ` +
           `ignoring (budget uncapped). Set AFK_MAX_BUDGET_USD to a non-negative number or leave it unset.`,
       );
       parsedMaxBudget = undefined;
