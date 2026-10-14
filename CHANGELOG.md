@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.313.0] - 2026-10-13
+
+### Added
+- tag learning facts with [auto-reflected] at recall (#3677) (d5a9697c)
+
+### Fixed
+- cosmetic comment fixes — resize-burst B5 discriminant, advanceTimersByTime explanation, rm onRetry warn (#3671) (a559dd18)
+- replace raw bash/grep overflow-kill warn with a styled tool-row label (#3680) (0ae2bdfd)
+
 ## [5.312.9] - 2026-10-13
 
 ### Added
