@@ -37,6 +37,7 @@ import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { palette } from '../palette.js';
 import { handleCommandError } from '../errors/index.js';
 import { decoratePlaywrightLaunchError } from '../../browser/playwright-missing.js';
+import { GuardedEgress } from '../../browser/playwright/egress-launch.js';
 import { getMcpConfigPath, type McpConfigFile } from '../../agent/mcp/index.js';
 import type { McpServerConfig } from '../../agent/mcp/types.js';
 import { errorMessage } from '../../utils/errors.js';
@@ -275,12 +276,14 @@ export function registerBrowserCommand(program: Command): void {
         // Dynamic import: Playwright is heavy; only load it when login actually runs.
         const { chromium } = await import('playwright');
         console.log(palette.meta(`Launching a browser for profile "${profile}"…`));
-        // This launch bypasses BrowserLauncher (and therefore its hint
-        // decoration), so apply the same decorator here. `headless: false` is
-        // hardcoded above, making this the one path that ALWAYS needs the full
-        // `chromium-*` build — a cache holding only the headless shell fails
-        // here while satisfying every agent-facing browser tool.
-        const browserInstance = await chromium.launch({ headless: false }).catch((err: unknown) => {
+        // Route through GuardedEgress so redirects cannot reach private/link-local
+        // addresses (#3720). AFK_WEB_ALLOW_PRIVATE_HOSTS opts out, matching the
+        // agent-facing browser tools. `headless: false` always requires the full
+        // `chromium-*` build — a headless-shell-only cache fails here.
+        const egress = new GuardedEgress();
+        const launchOpts = await egress.start(false);
+        const browserInstance = await chromium.launch(launchOpts).catch(async (err: unknown) => {
+          await egress.stop();
           throw decoratePlaywrightLaunchError(err, false);
         });
         // Restore an existing session if present, so re-running login refreshes
@@ -306,6 +309,7 @@ export function registerBrowserCommand(program: Command): void {
         // write-then-chmod window on freshly-written credentials.
         atomicWriteFile(statePath, JSON.stringify(state), { mode: 0o600, mkdirp: false });
         await browserInstance.close().catch(() => undefined);
+        await egress.stop();
 
         console.log(palette.success(`✓ Saved session for profile "${profile}"`));
         console.log(palette.meta(`  Vault: ${statePath} (0600 — treat as a credential)`));
