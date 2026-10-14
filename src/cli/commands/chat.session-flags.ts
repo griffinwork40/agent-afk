@@ -14,6 +14,11 @@ import { findSession } from '../session-store.js';
 // Session-flag validation
 // ---------------------------------------------------------------------------
 
+/** Returns true when `s` is a well-formed UUID (v1–v5, case-insensitive). */
+function isUuidShaped(s: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+}
+
 /**
  * Check mutual-exclusion rules for --resume / --continue / --session-id and
  * write a human-readable error to stderr when a violation is found.
@@ -36,7 +41,7 @@ export function validateSessionFlags(options: {
     process.exitCode = 1;
     return false;
   }
-  if (options.sessionId !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(options.sessionId)) {
+  if (options.sessionId !== undefined && !isUuidShaped(options.sessionId)) {
     process.stderr.write(`Error: --session-id must be a UUID (got: ${options.sessionId})\n`);
     process.exitCode = 1;
     return false;

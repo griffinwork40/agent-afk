@@ -248,6 +248,7 @@ export async function runChatAction(
   let worktreeCwd: string | undefined;
   let shouldPersist = false;
   let persistId: string | undefined;
+  let resumeConfig: ReturnType<typeof resumeConfigFor> = {};
   let stats = createSessionStats(options.model);
   let encounteredError = false;
   let receiptTracePath: string | undefined;
@@ -303,8 +304,7 @@ export async function runChatAction(
       return;
     }
 
-    ({ shouldPersist, persistId } = resolveResumeConfig(options, resumeTarget, stats));
-    const resumeConfig = resolveResumeConfig(options, resumeTarget, stats).resumeConfig;
+    ({ resumeConfig, shouldPersist, persistId } = resolveResumeConfig(options, resumeTarget, stats));
 
     const sessionModel = resumeTarget?.stored?.model ?? options.model;
     const unconfiguredModel = unconfiguredSlotError(sessionModel);
