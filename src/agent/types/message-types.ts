@@ -141,6 +141,14 @@ export interface ToolResultChunk {
    * `[output truncated …]` sentinel.
    */
   truncated?: boolean;
+  /**
+   * Set when the tool was SIGKILL'd by its output safety cap (bash 8 MB hard
+   * cap, grep scan ceiling), as opposed to a result that ran to completion and
+   * was merely head+tail-trimmed. Derived once from the raw content in
+   * `stream-consumer.ts` (the display preview drops the trailing kill note).
+   * TUI-only — lets the tool row say "stopped at output safety cap".
+   */
+  outputCapKilled?: boolean;
   persistedPath?: string;
   /**
    * Absolute path to a capture file holding the full bash output when the

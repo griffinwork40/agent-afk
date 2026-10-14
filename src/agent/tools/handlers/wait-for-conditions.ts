@@ -229,7 +229,7 @@ export function evaluateProcess(
     if (isErrnoCode(err, 'ESRCH')) {
       return { met: true, detail: `pid ${cond.pid} has exited`, data: { pid: cond.pid } };
     }
-    const code = (err as NodeJS.ErrnoException).code;
+    const code = (err instanceof Error && 'code' in err) ? String((err as { code: unknown }).code) : undefined;
     return { met: false, detail: `pid ${cond.pid} is alive (${code ?? 'unknown'})`, data: { pid: cond.pid } };
   }
 }

@@ -122,6 +122,7 @@ function makeCtx(sessionConfig: AgentConfig, tmpHome: string): TelegramSessionBu
     sessionCwd: tmpHome,
     maxOutputTokens: undefined,
     maxToolUseIterations: undefined,
+    maxBudgetUsd: undefined,
     traceWriter: null,
     mcpManager: undefined,
     memoryStore: undefined as unknown as TelegramSessionBuildContext['memoryStore'],

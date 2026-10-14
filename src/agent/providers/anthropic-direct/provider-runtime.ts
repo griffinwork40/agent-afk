@@ -372,6 +372,7 @@ export class AnthropicDirectProvider implements ModelProvider {
     const provider = this;
     return {
       get externalTools() { return provider.externalTools; },
+      get customToolSchemas() { return provider.customTools.map((t) => t.schema); },
       get providerFactory() { return provider.providerFactory; },
       get skillExecutor() { return provider.skillExecutor; },
       get subagentExecutor() { return provider.subagentExecutor; },

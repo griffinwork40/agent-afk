@@ -32,6 +32,7 @@ import type { BuildDispatcherOptions } from './build-dispatcher.js';
 export interface ProviderQueryContext {
   /** Non-null only when the caller provided an explicit `opts.tools` override. */
   readonly externalTools: ToolDispatcher | undefined;
+  readonly customToolSchemas?: readonly import('../../tools/types.js').AnthropicToolDef[];
   readonly providerFactory: AnthropicClientFactory | undefined;
   readonly skillExecutor: SkillExecutor | undefined;
   readonly subagentExecutor: import('../../tools/subagent-executor.js').SubagentExecutor | undefined;

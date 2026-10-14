@@ -60,7 +60,11 @@ export const SCAN_CAP_BYTES = 256_000_000;
  * test ceiling reports itself accurately.
  */
 export function scanCapKillNote(capBytes: number): string {
-  return `\n[output truncated — search exceeded the ${capBytes}-byte scan ceiling and was terminated]`;
+  return (
+    `\n[output truncated — search exceeded the ${capBytes}-byte scan ceiling and was terminated. ` +
+    'This is a safety limit, not a search failure. Narrow the pattern or path, add a glob filter, ' +
+    'or list matching files only.]'
+  );
 }
 
 /** Count newline bytes in a chunk without materialising a JS string. */
