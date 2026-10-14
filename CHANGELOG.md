@@ -11,6 +11,29 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.313.0] - 2026-10-13
+
+### Added
+- tag learning facts with [auto-reflected] at recall (#3677) (d5a9697c)
+
+### Fixed
+- cosmetic comment fixes — resize-burst B5 discriminant, advanceTimersByTime explanation, rm onRetry warn (#3671) (a559dd18)
+- replace raw bash/grep overflow-kill warn with a styled tool-row label (#3680) (0ae2bdfd)
+
+## [5.312.9] - 2026-10-13
+
+### Added
+- document and test redundancy preflight warning (#2414) (#3675) (c2b661ac)
+
+### Fixed
+- static deliverClean import, restore Invariant comment, add ALS comment, dedupe JSDoc, remove unused env re-export (#3679) (3332ed78)
+
+### Changed
+- split applyPatch and createImageGenerateHandler under 200-line ceiling (#3673) (4fbf2222)
+- extract renderRootOrderLines + flush helper; handleCompact method (#3672) (8a766a43)
+- drop NodeJS.ErrnoException casts at 12 production sites (#3676) (0506684c)
+- adopt IncrementalLineReader/readJsonlFile at remaining hand-rolled sites (#3670) (c41bc657)
+
 ## [5.312.8] - 2026-10-13
 
 ### Fixed

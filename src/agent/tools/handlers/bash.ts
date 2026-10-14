@@ -34,6 +34,7 @@ import { applyBashDetach, execOnDetach } from '../detach-bash.js';
 import type { OnDetachParams } from '../detach-bash.js';
 import { startBackgroundBash } from './bash.background.js';
 import { MAX_PROCESS_MAX_RUNTIME_MS } from '../../shell-jobs/process-jobs.js';
+import { debugLog } from '../../../utils/debug.js';
 
 /**
  * Input shape for the bash tool (validated at runtime).
@@ -362,9 +363,9 @@ export function createBashHandler(
         if (resolved) return;
         if (totalBytes < HARD_CAP_BYTES) return;
         overflowKilled = true;
-        // P1: structured log so operators can observe runaway kills in
-        // production without grepping for RangeError crash traces.
-        console.warn(
+        // P1: debug-only (a raw console.warn tore through the TUI); users see the
+        // tool row's outputCapKilled label, the model sees HARD_CAP_KILL_NOTE.
+        debugLog(
           `[bash] overflow kill: stream=${stream} totalBytes=${totalBytes} command="${command}"`,
         );
         // P2: structured JSONL counterpart so the same event is queryable from
