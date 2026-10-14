@@ -54,6 +54,14 @@ export async function resolveSpec(
 ): Promise<ChangeSpec> {
   const { complete, analystModel, skills, plugins } = deps;
 
+  // A/A calibration (#2415 Step 0): both arms run with zero changes, so there
+  // is nothing to resolve. parseWhatifArgs already rejects --aa combined with a
+  // spec file, change flags, or text, so returning the empty spec here is the
+  // only way the run.aa fast path is reachable from `afk whatif` and `/whatif`.
+  if (parsed.aaMode) {
+    return { title: 'A/A calibration (no changes)', changes: [] };
+  }
+
   // Spec file takes priority.
   if (parsed.specFile) {
     return loadSpecFile(parsed.specFile);

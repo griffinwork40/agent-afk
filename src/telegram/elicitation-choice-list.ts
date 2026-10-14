@@ -112,9 +112,10 @@ export function buildChoiceMessages(
  * Pack `lines` into as few strings as possible, each ≤ `maxLen` chars,
  * joining with '\n'.
  *
- * Fix (issue #3631, item 2): a single line longer than `maxLen` is now
- * hard-split at a safe boundary (never inside an HTML entity) and truncated
- * with '…' so every emitted chunk satisfies the limit.
+ * Fix (issue #3631, item 2): a single line longer than `maxLen` is
+ * hard-split at a safe boundary (never inside an HTML entity). Truncation
+ * with '…' occurs only in the degenerate `splitAt <= 0` branch (a single
+ * entity longer than `maxLen`); normal splits do not add an ellipsis.
  */
 function chunkLines(lines: string[], maxLen: number): string[] {
   const chunks: string[] = [];
@@ -174,7 +175,7 @@ function splitLongLine(line: string, maxLen: number): string[] {
     // Walk left from maxLen to find a position not inside an entity.
     // We check whether the candidate suffix-start is preceded by an '&'
     // with no intervening ';' (meaning we are mid-entity).
-    const ENTITY_MAX_LEN = 9; // longest HTML entity like &amp;, &lt;, etc. + 1 for safety
+    const ENTITY_MAX_LEN = 9; // longest entity produced by escapeHtml (&amp; = 5, &lt;/&gt; = 4, &quot;/&#39; = 6) + safety margin
     const searchStart = Math.max(0, splitAt - ENTITY_MAX_LEN);
     const window = remaining.slice(searchStart, splitAt);
     const ampIdx = window.lastIndexOf('&');

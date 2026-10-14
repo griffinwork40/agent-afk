@@ -15,13 +15,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
-import type { Browser, BrowserContext, Dialog, Page, Request, Response } from 'playwright';
-import type { BrowserType } from 'playwright';
+import type { Browser, BrowserContext, BrowserType, Dialog, Page, Request, Response } from 'playwright';
 import type { BrowserConfig } from '../types.js';
 import { decoratePlaywrightLaunchError } from '../playwright-missing.js';
 import { getBrowserStorageStatePath } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
 import { registerCleanup } from '../../utils/cleanupRegistry.js';
+import { installRenderRouteGuard, RequestGuardTrap, renderRefusalError, watchEgressRefusals } from './egress-gate.js';
+import { GuardedEgress, type RefusalLog } from './egress-launch.js';
 
 // ---------------------------------------------------------------------------
 // Close-with-fallback timeout
@@ -89,6 +90,7 @@ interface SessionEntry {
   consoleErrors: number;
   lastHttpStatus: number | null;
   openDialog: Dialog | undefined;
+  requestGuard: RequestGuardTrap;
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +127,9 @@ export class BrowserLauncher {
 
   // Set to true by `shutdown()` so a second call no-ops cleanly.
   private shutdownComplete = false;
+
+  // Guarded egress proxy (#2301): started before, and stopped with, Chromium.
+  private readonly egress = new GuardedEgress();
 
   constructor(config: BrowserConfig) {
     this.config = config;
@@ -251,7 +256,7 @@ export class BrowserLauncher {
       }
 
       try {
-        const b = await chromium.launch({ headless: this.config.headless });
+        const b = await chromium.launch(await this.egress.start(this.config.headless));
         this.browser = b;
         // A success must never leave a latch behind. Nothing can set one while
         // this launch is in flight (the latch short-circuits before we get
@@ -267,6 +272,7 @@ export class BrowserLauncher {
         // the only one where the hint may tell the caller to reset via
         // browser_close. Set at decoration time so the verbatim rethrow at the
         // fast-fail path carries the advice without re-messaging the error.
+        await this.egress.stop(); // a failed launch must not leak the proxy
         const decorated = decoratePlaywrightLaunchError(err, this.config.headless, true);
         // Latch the DECORATED error, not `err`: the fast-failed retry must
         // carry the same install remediation as this first failure.
@@ -326,7 +332,10 @@ export class BrowserLauncher {
       consoleErrors: 0,
       lastHttpStatus: null,
       openDialog: undefined,
+      requestGuard: new RequestGuardTrap(),
     };
+
+    await entry.requestGuard.install(context);
 
     this.sessions.set(sessionId, entry);
     return context;
@@ -420,6 +429,21 @@ export class BrowserLauncher {
     return this.sessions.get(sessionId)?.page;
   }
 
+  /** Return (and clear) the last egress refusal recorded for this session. */
+  consumeRequestGuardError(sessionId: string): unknown {
+    return this.sessions.get(sessionId)?.requestGuard.consume();
+  }
+
+  /** Refusal log of the guarded egress proxy, or undefined when the guard is off. */
+  egressLog(): RefusalLog | undefined {
+    return this.egress.isActive() ? this.egress : undefined;
+  }
+
+  /** Discard any latched egress refusal without returning it. */
+  clearRequestGuardError(sessionId: string): void {
+    this.sessions.get(sessionId)?.requestGuard.clear();
+  }
+
   // -------------------------------------------------------------------------
   // One-shot render (stateless content fetch)
   // -------------------------------------------------------------------------
@@ -454,17 +478,7 @@ export class BrowserLauncher {
     const context = await browser.newContext(this.contextOptions());
     let guardError: unknown;
 
-    if (opts.requestGuard !== undefined) {
-      await context.route('**/*', async (route) => {
-        try {
-          await opts.requestGuard!(route.request().url());
-          await route.continue();
-        } catch (err) {
-          guardError = err;
-          await route.abort('blockedbyclient');
-        }
-      });
-    }
+    if (opts.requestGuard !== undefined) await installRenderRouteGuard(context, opts.requestGuard, (e) => { guardError = e; });
 
     // Register the ephemeral context with the process-wide cleanup registry so
     // that a SIGINT/SIGTERM-triggered shutdown also closes it even when it was
@@ -495,6 +509,10 @@ export class BrowserLauncher {
 
     try {
       const page = await context.newPage();
+      // Proxy refusals for THIS render page surface as EgressBlockedError,
+      // which web_scrape already treats as a terminal block (#2301).
+      const watch = watchEgressRefusals(page, this.egressLog());
+      const refusal = (): unknown => guardError ?? renderRefusalError(watch.check());
       let resp;
       try {
         resp = await page.goto(url, {
@@ -502,14 +520,14 @@ export class BrowserLauncher {
           waitUntil: opts.waitUntil,
         });
       } catch (err) {
-        throw guardError ?? err;
+        throw refusal() ?? err;
       }
-      if (guardError !== undefined) throw guardError;
+      if (refusal() !== undefined) throw refusal();
       const html = await page.content();
       // A script can start a request immediately after the load event. Do not
       // return successful content if the route guard rejected such a late
       // subresource while the DOM was being serialized.
-      if (guardError !== undefined) throw guardError;
+      if (refusal() !== undefined) throw refusal();
       const finalUrl = page.url();
       const httpStatus = resp !== null ? resp.status() : null;
       return { html, finalUrl, httpStatus };
@@ -668,6 +686,7 @@ export class BrowserLauncher {
         // Swallow — browser may already be closed (e.g. crash).
       });
     }
+    await this.egress.stop();
   }
 
   /**

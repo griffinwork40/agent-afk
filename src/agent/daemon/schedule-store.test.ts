@@ -740,9 +740,12 @@ function waitForChild(scriptPath: string, args: string[]): Promise<void> {
     });
     let stderr = '';
     child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
-    child.on('error', (error) => { reject(error); });
+    let settled = false;
+    child.on('error', (error) => { if (!settled) { settled = true; reject(error); } });
     // close follows exit after stdio handles are released, including on Windows.
     child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
       if (code === 0) resolve();
       else reject(new Error(`schedule writer exited ${code ?? 'unknown'}: ${stderr}`));
     });

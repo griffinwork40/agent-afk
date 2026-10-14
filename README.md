@@ -61,6 +61,8 @@ Codex imports use `CODEX_HOME` when set (otherwise `~/.codex`) and also discover
 
 ## What it has done
 
+**Constructed SW(27,16), a symmetric weighing matrix the standard archives do not list.** Given a research campaign goal, agent-afk agents picked the target, designed a prescribed-automorphism SAT search, found a symmetric 27x27 weighing matrix in 1903 seconds of solver time, checked it with independent exact checkers on two machines, and ran a kill lane that could not refute it. The standard databases list no symmetric W(27,16). Check it yourself in under a second: [`docs/results/sw-27-16`](docs/results/sw-27-16/README.md).
+
 **Constructed SW(25,16), a math case a 2025 paper listed as open.** Given a one-sentence goal ("settle one published open question"), agent-afk agents picked the target, designed a structured SAT search, found a symmetric 25x25 weighing matrix in 760 seconds of solver time, checked it with independent exact checkers and a prior-work search, and wrote up a short proof. The author of the paper that listed the case as open confirmed it passes his verifier. Check it yourself in under a second: [`docs/results/sw-25-16`](docs/results/sw-25-16/README.md).
 
 ## How it compares

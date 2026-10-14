@@ -405,7 +405,7 @@ export async function updateHandoffAnswer(
     await atomicWriteJson(handoffPath(handoffsDir, taskId), updated);
 
     if (responderIdentity !== undefined) {
-      debugLog(`[handoff-store] responderIdentity captured for task ${taskId}: ${responderIdentity}`);
+      debugLog(`[handoff-store] responderIdentity captured for task ${taskId} (present, masked)`);
     } else {
       debugLog(`[handoff-store] responderIdentity absent for task ${taskId} (source: ${source})`);
     }

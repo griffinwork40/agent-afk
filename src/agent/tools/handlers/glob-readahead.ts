@@ -176,7 +176,7 @@ export class Readahead {
       // This mirrors the narrowing pattern in `_fs-error.ts`:
       //   `if (!(err instanceof Error)) return undefined;`
       //   `const code = (err as Error & { code?: string }).code;`
-      if (err instanceof Error && typeof (err as NodeJS.ErrnoException).code === 'string') {
+      if (err instanceof Error && typeof (err as { code?: unknown }).code === 'string') {
         return [];
       }
       throw err;

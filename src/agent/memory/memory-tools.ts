@@ -16,6 +16,7 @@ import {
   requiresEvidence,
   verificationStatus,
   applyUnverifiedTag,
+  applyAutoReflectedTag,
   normalizeEvidence,
 } from './memory-evidence.js';
 import type {
@@ -205,7 +206,15 @@ function projectSearchResults(
       return { ...r, verification: 'not-applicable' as const };
     }
     const verification = verificationStatus(r.category, r.evidence);
-    return { ...r, verification, content: applyUnverifiedTag(r.content, verification) };
+    // applyUnverifiedTag is a no-op for 'learning' facts, so stacking order
+    // is safe: applyAutoReflectedTag always sees the unwrapped content for
+    // that category. If applyUnverifiedTag ever starts tagging 'learning',
+    // review the composition order here.
+    const content = applyAutoReflectedTag(
+      applyUnverifiedTag(r.content, verification),
+      r.category,
+    );
+    return { ...r, verification, content };
   });
 }
 

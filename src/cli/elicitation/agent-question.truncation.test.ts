@@ -164,7 +164,7 @@ describe('renderAgentQuestion — no truncation end-to-end', () => {
     expect(sb).toBe(message);
   });
 
-  it('duplicate choices produce distinct numbered labels that map back to the right value', async () => {
+  it('duplicate choices produce distinct numbered labels that map back to the right value', () => {
     const layout = layoutAgentQuestion(
       agentRequest({ type: 'choice', choices: ['a', 'a'] }),
       { columns: 80, rows: 40 },

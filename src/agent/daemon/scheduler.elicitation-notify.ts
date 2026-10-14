@@ -35,6 +35,7 @@
 
 import { writeHandoff, type HandoffRecord } from './handoff-store.js';
 import { errorMessage } from '../../utils/errors.js';
+import { debugLog } from '../../utils/debug.js';
 import type { ElicitationHandler } from '../elicitation-router.js';
 import { serializeRequest } from './elicitation-serialize.js';
 import type { Telegraf } from 'telegraf';
@@ -186,7 +187,7 @@ export function makeCronElicitationHandler(
               opts.cronExpression,
               request.message,
             );
-            try { opts.onHandoffWritten(msg); } catch { /* observational only */ }
+            try { opts.onHandoffWritten(msg); } catch (e) { debugLog('[cron-elicitation] onHandoffWritten fallback threw:', errorMessage(e)); }
           }
         });
       } else if (opts.onHandoffWritten !== undefined) {

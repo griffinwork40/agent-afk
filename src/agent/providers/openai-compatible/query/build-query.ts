@@ -29,6 +29,7 @@ export function buildQueryFromConfig(
     baseURL?: string;
     defaultHeaders?: Record<string, string>;
     toolDispatcher?: ToolDispatcher;
+    modelDispatcherFactory?: (model: string, permissionMode: string) => ToolDispatcher;
     onPermissionMode?: (mode: string) => void;
     onCwdChange?: (cwd: string) => void;
     systemPromptRebuildFactory?: (basePrompt: string | undefined) => string;
@@ -66,6 +67,7 @@ export function buildQueryFromConfig(
   if (options.baseURL !== undefined) opts.baseURL = options.baseURL;
   if (options.defaultHeaders !== undefined) opts.defaultHeaders = options.defaultHeaders;
   if (options.toolDispatcher !== undefined) opts.toolDispatcher = options.toolDispatcher;
+  if (options.modelDispatcherFactory !== undefined) opts.modelDispatcherFactory = options.modelDispatcherFactory;
   if (options.onPermissionMode !== undefined) opts.onPermissionMode = options.onPermissionMode;
   if (options.onCwdChange !== undefined) opts.onCwdChange = options.onCwdChange;
   if (options.systemPromptRebuildFactory !== undefined) opts.systemPromptRebuildFactory = options.systemPromptRebuildFactory;
