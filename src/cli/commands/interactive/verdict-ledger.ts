@@ -29,7 +29,7 @@
 import type { TerminalKind, TerminalState } from './terminal-state.js';
 import { palette } from '../../palette.js';
 import { displayWidth, truncateDisplayWidth } from '../../display.js';
-import { ResizeBus } from '../../terminal-size.js';
+import { ResizeBus, getTerminalWidth } from '../../terminal-size.js';
 import { isPlainOutputRequested } from '../../../config/env.js';
 import { contentBand, contentMargin } from '../../render/measure.js';
 
@@ -239,9 +239,11 @@ export function createVerdictLedger(opts: VerdictLedgerOptions = {}): VerdictLed
     },
 
     render() {
-      // Use the stream width when started; fall back to process.stdout for
-      // callers (tests) that call render() without a live stream.
-      const cols = stream?.columns ?? process.stdout.columns ?? 80;
+      // Use the stream width when started; fall back to getTerminalWidth()
+      // for callers (tests) that call render() without a live stream.
+      // getTerminalWidth() reads process.stdout.columns with an 80-col fallback
+      // — the only approved read site per scripts/check-terminal-width.ts.
+      const cols = stream?.columns ?? getTerminalWidth();
       return renderRail(cols);
     },
 
