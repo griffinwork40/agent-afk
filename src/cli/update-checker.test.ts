@@ -263,7 +263,7 @@ describe('update-checker', () => {
       const output = stderrSpy.mock.calls.map((c) => c[0]).join('');
       expect(output).toContain('1.10.1');
       expect(output).toContain('1.11.0');
-      expect(output).toContain('npm install -g agent-afk');
+      expect(output).toContain('npm install -g --allow-scripts=agent-afk agent-afk');
       expect(output).not.toContain('Major release');
     });
 
@@ -273,7 +273,7 @@ describe('update-checker', () => {
       expect(output).toContain('Major release');
       expect(output).toContain('not installed automatically');
       expect(output).toContain('releases/tag/v6.0.0');
-      expect(output).toContain('npm install -g agent-afk@6.0.0');
+      expect(output).toContain('npm install -g --allow-scripts=agent-afk agent-afk@6.0.0');
     });
   });
 
@@ -305,7 +305,7 @@ describe('update-checker', () => {
       );
       expect(mockSpawn).toHaveBeenCalledWith(
         'npm',
-        ['install', '-g', 'agent-afk@1.11.0'],
+        ['install', '-g', '--allow-scripts=agent-afk', 'agent-afk@1.11.0'],
         expect.objectContaining({ detached: true, stdio: 'ignore' }),
       );
     });

@@ -22,7 +22,7 @@ import {
 import { rmSyncRetry } from '../__test-utils__/rm-sync-retry.js';
 import { join, resolve, tmpdir } from 'node:path';
 import os from 'node:os';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 
 import { materializeSandboxes } from './sandbox.js';
 import {
@@ -724,11 +724,11 @@ describe('materializeSandboxes: git worktrees', () => {
     gitRepo = join(root, 'repo');
     mkdirSync(gitRepo, { recursive: true });
     writeFileSync(join(gitRepo, 'README.md'), '# test\n', 'utf8');
-    execSync('git init', { cwd: gitRepo, stdio: 'ignore' });
-    execSync('git config user.email "test@test.com"', { cwd: gitRepo, stdio: 'ignore' });
-    execSync('git config user.name "Test"', { cwd: gitRepo, stdio: 'ignore' });
-    execSync('git add .', { cwd: gitRepo, stdio: 'ignore' });
-    execSync('git commit -m "init"', { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['init'], { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['add', '.'], { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: gitRepo, stdio: 'ignore' });
   });
 
   afterEach(async () => {
@@ -785,6 +785,158 @@ describe('materializeSandboxes: git worktrees', () => {
         baseLaunch: BASE_LAUNCH,
       }),
     ).rejects.toThrow(/git/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SEC-011: execFileSync array-arg call (no shell interpolation)
+// ---------------------------------------------------------------------------
+
+describe('SEC-011: worktree add/remove use execFileSync array args, not shell interpolation', () => {
+  let root: string;
+  let realHome: string;
+  let runDir: string;
+  let gitRepo: string;
+
+  beforeEach(() => {
+    root = tmpDir();
+    realHome = buildFakeHome(root);
+    runDir = join(root, 'run');
+
+    gitRepo = join(root, 'repo');
+    mkdirSync(gitRepo, { recursive: true });
+    writeFileSync(join(gitRepo, 'README.md'), '# test\n', 'utf8');
+    execFileSync('git', ['init'], { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['add', '.'], { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: gitRepo, stdio: 'ignore' });
+  });
+
+  afterEach(async () => {
+    rmSyncRetry(root);
+  });
+
+  it('source code for addWorktree/removeWorktree calls execFileSync, not execSync with template string', async () => {
+    // Static assertion: read the sandbox source and verify the worktree helpers
+    // use execFileSync with array args, not execSync with template-interpolated strings.
+    // This is the SEC-011 guard: shell injection is impossible with array-arg execFileSync.
+    const { readFileSync: readFile, existsSync: fileExists } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const { dirname, join: pathJoin } = await import('node:path');
+    const thisDir = dirname(fileURLToPath(import.meta.url));
+    const sandboxPath = pathJoin(thisDir, 'sandbox.ts');
+    if (!fileExists(sandboxPath)) {
+      throw new Error(
+        `[SEC-011] sandbox.ts not found at ${sandboxPath}. ` +
+          `If the file moved, update this test to match the new location.`,
+      );
+    }
+    const src = readFile(sandboxPath, 'utf8');
+
+    // addWorktree and removeWorktree must use execFileSync
+    expect(src).toContain("execFileSync('git', ['worktree', 'add'");
+    expect(src).toContain("execFileSync('git', ['worktree', 'remove'");
+
+    // findGitRoot must also use execFileSync (not execSync) — low: SEC-011 extension
+    expect(src).toContain("execFileSync('git', ['rev-parse', '--show-toplevel']");
+
+    // Neither helper should use execSync with a template literal containing 'worktree'
+    // (the old shell-interpolated form was: execSync(`git worktree add --detach "${path}" HEAD`))
+    expect(src).not.toMatch(/execSync\(`git worktree/);
+    // findGitRoot must not use execSync with a shell string
+    expect(src).not.toMatch(/execSync\(['"`]git rev-parse/);
+  });
+
+  it('worktree integration: materializes successfully using execFileSync array args', async () => {
+    // Integration smoke: if execFileSync were still shell-interpolated, a path
+    // with a trailing space in the mkdtemp prefix would silently break — this
+    // confirms the real call path works end-to-end without shell quoting tricks.
+    const spec: ChangeSpec = {
+      title: 'sec-011-integration',
+      changes: [{ kind: 'file', path: 'project:SEC011.md', content: 'array-arg verified' }],
+    };
+    const { baseline, candidate, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: gitRepo,
+      runDir,
+      spec,
+      baseLaunch: BASE_LAUNCH,
+    });
+    try {
+      expect(baseline.cwd).not.toBe(gitRepo);
+      expect(candidate.cwd).not.toBe(gitRepo);
+      expect(existsSync(join(candidate.cwd, 'SEC011.md'))).toBe(true);
+      expect(existsSync(join(baseline.cwd, 'SEC011.md'))).toBe(false);
+      expect(existsSync(join(gitRepo, 'SEC011.md'))).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  // Shell-metacharacter injection guard: a realCwd path containing a space
+  // and the $(...) subshell sequence must not cause git invocations to fail
+  // or split into unintended arguments.  With execSync and a shell string this
+  // would require careful quoting; with execFileSync array-args it is a non-issue.
+  it('worktree: realCwd with shell metacharacters (space, $(...)) does not cause injection', async () => {
+    // Create a subdirectory whose name contains a space and a dollar-paren sequence.
+    // On all POSIX filesystems these are legal characters; git itself handles them fine.
+    const metaSubdir = join(gitRepo, 'sub dir $(echo hi)');
+    mkdirSync(metaSubdir, { recursive: true });
+    writeFileSync(join(metaSubdir, 'marker.md'), 'meta\n', 'utf8');
+    execFileSync('git', ['add', '.'], { cwd: gitRepo, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'add meta subdir'], { cwd: gitRepo, stdio: 'ignore' });
+
+    const spec: ChangeSpec = {
+      title: 'metachar-injection-guard',
+      changes: [{ kind: 'file', path: 'project:INJECTED.md', content: 'injection-safe' }],
+    };
+    // If findGitRoot used execSync with a shell string the path with $(...) could be
+    // interpreted as a subshell and the root detection would fail or produce garbage.
+    const result = await materializeSandboxes({
+      realHome,
+      realCwd: metaSubdir,
+      runDir,
+      spec,
+      baseLaunch: BASE_LAUNCH,
+    });
+    try {
+      expect(existsSync(result.baseline.cwd)).toBe(true);
+      expect(existsSync(result.candidate.cwd)).toBe(true);
+    } finally {
+      await result.cleanup();
+    }
+  });
+
+  // removeWorktree failure path: cleanup continues and removes the arm root even
+  // when the git worktree remove command fails (e.g. worktree already deleted).
+  it('cleanup: partial teardown — removeWorktree failure does not prevent arm root removal', async () => {
+    const spec: ChangeSpec = {
+      title: 'partial-teardown',
+      changes: [{ kind: 'file', path: 'project:PARTIAL.md', content: 'partial' }],
+    };
+    const { baseline, candidate, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: gitRepo,
+      runDir,
+      spec,
+      baseLaunch: BASE_LAUNCH,
+    });
+
+    const baselineRoot = resolve(join(baseline.home, '..'));
+    const candidateRoot = resolve(join(candidate.home, '..'));
+
+    // Simulate a partial failure by manually deleting one worktree's directory
+    // before cleanup runs.  removeWorktree will fail on the missing path, but
+    // cleanup() must be best-effort and still remove both arm roots.
+    rmSync(baseline.cwd, { recursive: true, force: true });
+
+    // cleanup must not throw even though the baseline worktree is already gone
+    await expect(cleanup()).resolves.toBeUndefined();
+
+    // Both arm roots should be gone regardless of the removeWorktree error
+    expect(existsSync(baselineRoot)).toBe(false);
+    expect(existsSync(candidateRoot)).toBe(false);
   });
 });
 

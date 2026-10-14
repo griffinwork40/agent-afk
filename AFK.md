@@ -2,13 +2,13 @@
 
 ## What This Is
 
-Standalone TypeScript CLI + daemon + Telegram bot built on `@anthropic-ai/sdk`. Runs **outside** Claude Code as its own process. Binary: `afk`. Node ≥22.13 (pnpm 11 minimum), pnpm 11 only (pinned via `package.json#packageManager`; lockfile is pnpm-specific; dependency build scripts must be allowlisted under `allowBuilds` in `pnpm-workspace.yaml`, and `dashboard/` has its own copy). CI publishes with `npm publish`/`npm version`, not the pnpm equivalents; see the Invariant in `.github/workflows/publish.yml`.
+Standalone TypeScript CLI + daemon + Telegram bot built on `@anthropic-ai/sdk`. Runs **outside** Claude Code as its own process. Binary: `afk`. Node `^22.22.2 || ^24.15.0 || >=26.0.0` (jsdom 30's floor; keep `engines.node` in sync with it), pnpm 11 only (pinned via `package.json#packageManager`; lockfile is pnpm-specific; dependency build scripts must be allowlisted under `allowBuilds` in `pnpm-workspace.yaml`, and `dashboard/` has its own copy). CI publishes with `npm publish`/`npm version`, not the pnpm equivalents; see the Invariant in `.github/workflows/publish.yml`.
 
 ## Commands
 
 ```bash
 pnpm install                                       # pnpm exclusively
-pnpm build                                         # tsc + copy *.md prompts → dist/
+pnpm build                                         # tsc + web UI (dashboard/, auto-installs its deps locally) + copy *.md prompts → dist/
 pnpm test                                          # vitest run (all)
 pnpm test src/agent/session.test.ts                # single file (NO --; pnpm 10+ drops args after -- and runs ALL files)
 pnpm test src/agent/session.test.ts -t "sends a message"   # single test by name (scope to a file, then filter by -t)
@@ -17,6 +17,9 @@ pnpm test:watch                                    # vitest watch
 pnpm test:coverage                                 # CI gate: has coverage floors that `pnpm test` does not enforce
 pnpm test:pty                                      # PTY suite — separate config (vitest.pty.config.ts), own CI job
 pnpm lint                                          # tsc --noEmit (strict)
+pnpm lint:tests                                    # type-check test files (non-blocking, #3053)
+pnpm lint:tests:check                             # CI gate: error-count ratchet (fails if count > .test-typecheck-baseline.json)
+pnpm lint:tests:update                            # lower the baseline after fixing a batch (add --allow-growth --reason for deliberate raises)
 
 pnpm audit:sdk:check                               # CI gate: fail on unlocked SDK symbols (audit:sdk regenerates the doc)
 pnpm audit:sdk:update-lock                         # add new symbols → .sdk-dependency.lock.json (edit `reason` before commit)
@@ -30,6 +33,7 @@ pnpm audit:funcsize:update                         # regenerate the function bas
 pnpm audit:module-state:check                      # CI gate: no module-scope singleton/process.on duplicated across a sibling family
 pnpm fix:pins:check                                # CI gate: SHA-256 pins for vendored agents + bundled skills (pnpm fix:pins to rewrite)
 pnpm audit:deps                                    # CI gate: pnpm audit --audit-level=critical --prod
+pnpm check:audits                                  # run all deterministic CI audit gates locally (full-scan; exit 0=pass, 1=some failed, 2=all failed→broken env)
 pnpm release                                       # release pipeline (scripts/release.mjs; --dry via release:dry)
 ```
 
@@ -42,6 +46,10 @@ pnpm dev                                     # tsx watch — live-reloads CLI
 afk chat "hi" / afk interactive / afk daemon # one-shot / REPL (alias: afk i) / cron headless runner
 pnpm telegram:start                          # Telegram bot
 ```
+
+### Pre-push hook
+
+`pnpm install` (via the `prepare` lifecycle script) installs a launcher at `.git/hooks/pre-push` (the git common dir, covering all worktrees). Before every push it runs `pnpm check:audits` — the same deterministic audit gates CI runs in the lint-build job. If the environment looks broken (node_modules missing or pnpm not on PATH) the hook exits 0 (fail-open). Bypass with `git push --no-verify`.
 
 ### Observability / tracing
 
@@ -75,6 +83,8 @@ The unit of the budget cap is **tool-use rounds**, not tool calls — 5 parallel
 
 ## Architecture
 
+Operator tool visibility settings (`tools.disabled`): see [docs/tool-toggles.md](docs/tool-toggles.md).
+
 Key layers under `src/`:
 
 | Path | Purpose |
@@ -104,6 +114,7 @@ Both providers emit a normalized `ProviderEvent` stream consumed by `src/agent/s
 
 - **Hooks** (`src/agent/hooks.ts`, `hook-registry.ts`) — SessionStart/End, SubagentStart/Stop, PreToolUse/PostToolUse. Sequential; `decision: 'block'` short-circuits. SubagentStop supports `injectContext` for parent-session context injection.
 - **SubagentManager** (`src/agent/subagent.ts`) — Forks child `AgentSession`s with permission bubbling, transitive abort via `AbortGraph`, optional Zod output schemas.
+- **Background processes** (`src/agent/shell-jobs/process-jobs.ts`) — `bash` with `run_in_background: true` starts a supervised process (`proc-N`, own process group, capped log under `$AFK_STATE_DIR/proc-jobs/`), returns at once, and delivers a metadata-only `<background-process-result>` on exit via the REPL injection + idle-wake path. Inspect/stop through `get_background_job_health` / `cancel_background_job`; `/sh` lists and kills them. Root interactive REPL only (children, Telegram, daemon get an explicit refusal); jobs end with the session. Separate from the user `!&` `ShellJobRegistry` on purpose. Spec: `docs/background-processes.md`.
 - **AbortGraph** (`src/agent/abort-graph.ts`) — Tree of `AbortController`s. Parent abort cascades down; child abort notifies up (never auto-aborts parent). Abort beats hook decisions.
 - **Elicitation Router** (`src/agent/elicitation-router.ts`) — Module-scope handler bridging SDK elicitations to REPL/Telegram/iMessage surfaces.
 - **Plugins** (`src/agent/plugins-scanner.ts`, `src/agent/plugins/`) — Scans `~/.afk/plugins/` at session construction; install/remove/update + git-based sources.

@@ -51,10 +51,10 @@ async function* emptyPrompt(): AsyncIterable<ProviderUserTurn> {
 }
 
 /** Spy on the provider's private buildDispatcher; returns the captured opts per call. */
-function captureDispatcherOpts(provider: ModelProvider): Array<{ sessionId?: string }> {
-  const calls: Array<{ sessionId?: string }> = [];
+function captureDispatcherOpts(provider: ModelProvider): Array<{ sessionId?: string; rootSessionId?: string }> {
+  const calls: Array<{ sessionId?: string; rootSessionId?: string }> = [];
   const target = provider as unknown as {
-    buildDispatcher: (mode: string, opts: { sessionId?: string }) => unknown;
+    buildDispatcher: (mode: string, opts: { sessionId?: string; rootSessionId?: string }) => unknown;
   };
   const original = target.buildDispatcher.bind(provider);
   vi.spyOn(target, 'buildDispatcher').mockImplementation((mode, opts) => {
@@ -109,6 +109,38 @@ function trackedOnSurface(branch: Branch, surface: string): ModelProvider {
 }
 
 for (const branch of branches) {
+  describe(`dispatcher rootSessionId — ${branch.name} (PR #2710)`, () => {
+    it('passes rootSessionId from config to the dispatcher when set (grandchild attribution)', () => {
+      // Regression guard: before PR #2710, openai-compatible did NOT thread
+      // rootSessionId into buildDispatcher opts — grandchild artifacts were
+      // attributed to the intermediate session rather than the root.
+      const provider = tracked(branch);
+      const calls = captureDispatcherOpts(provider);
+
+      runTurn(provider, {
+        ...branch.freshConfig(),
+        depth: 2,
+        parentSessionId: 'intermediate-1',
+        rootSessionId: 'root-0',
+      });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.rootSessionId).toBe('root-0');
+    });
+
+    it('passes undefined rootSessionId when not set (top-level session)', () => {
+      // Top-level sessions have no rootSessionId — the dispatcher should not
+      // invent one; parity between providers.
+      const provider = tracked(branch);
+      const calls = captureDispatcherOpts(provider);
+
+      runTurn(provider, branch.freshConfig());
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.rootSessionId).toBeUndefined();
+    });
+  });
+
   describe(`dispatcher sessionId — ${branch.name}`, () => {
     it('hands tools a session id on a fresh session (no config.sessionId), equal to the advertised id', async () => {
       const provider = tracked(branch);

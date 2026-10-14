@@ -175,6 +175,74 @@ describe('withTransientRetry — exhaustion', () => {
     ).rejects.toThrow();
     expect(attempt).toHaveBeenCalledTimes(1);
   });
+
+  it('calls onExhausted with attempt === 1 when maxRetries is 0', async () => {
+    // maxRetries:0 means the first (and only) attempt exhausts the budget
+    // immediately; onExhausted must fire with attempt=1.
+    const err = makeStatusError(503);
+    const attempt = vi.fn().mockRejectedValue(err);
+    const onExhausted = vi.fn();
+
+    await expect(
+      withTransientRetry(attempt, { maxRetries: 0, sleep: fastSleep, onExhausted }),
+    ).rejects.toThrow();
+
+    expect(onExhausted).toHaveBeenCalledTimes(1);
+    const info = onExhausted.mock.calls[0]?.[0] as RetryInfo;
+    // n === 0 === maxRetries at budget exhaustion → attempt = n+1 = 1
+    expect(info.attempt).toBe(1);
+    expect(info.delayMs).toBe(0);
+    expect(info.status).toBe(503);
+  });
+
+  it('calls onExhausted exactly once when budget is spent', async () => {
+    const err = makeStatusError(500);
+    const attempt = vi.fn().mockRejectedValue(err);
+    const onExhausted = vi.fn();
+
+    await expect(
+      withTransientRetry(attempt, { maxRetries: 2, sleep: fastSleep, onExhausted }),
+    ).rejects.toThrow();
+
+    expect(onExhausted).toHaveBeenCalledTimes(1);
+    const info = onExhausted.mock.calls[0]?.[0] as RetryInfo;
+    expect(info.attempt).toBe(3); // attempt n+1 when n === maxRetries (2)
+    expect(info.status).toBe(500);
+    expect(info.delayMs).toBe(0);
+  });
+
+  it('does NOT call onExhausted for a non-retryable error', async () => {
+    const err = makeStatusError(400, 'bad request');
+    const attempt = vi.fn().mockRejectedValue(err);
+    const onExhausted = vi.fn();
+
+    await expect(
+      withTransientRetry(attempt, { sleep: fastSleep, onExhausted }),
+    ).rejects.toThrow('bad request');
+
+    expect(onExhausted).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call onExhausted when aborted mid-backoff', async () => {
+    const controller = new AbortController();
+    const err = makeStatusError(500);
+    const attempt = vi.fn().mockRejectedValue(err);
+    const onExhausted = vi.fn();
+
+    const mockSleep = async (_ms: number, _signal: AbortSignal): Promise<void> => {
+      controller.abort();
+    };
+
+    await expect(
+      withTransientRetry(attempt, {
+        maxRetries: 3,
+        signal: controller.signal,
+        sleep: mockSleep,
+        onExhausted,
+      }),
+    ).rejects.toThrow();
+    expect(onExhausted).not.toHaveBeenCalled();
+  });
 });
 
 describe('withTransientRetry — non-retryable errors', () => {
@@ -192,6 +260,13 @@ describe('withTransientRetry — non-retryable errors', () => {
     const err = makeStatusError(401, 'unauthorized');
     const attempt = vi.fn().mockRejectedValue(err);
     await expect(withTransientRetry(attempt, { sleep: fastSleep })).rejects.toThrow('unauthorized');
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT retry a 409 Conflict error (semantically wrong for POST one-shots)', async () => {
+    const err = makeStatusError(409, 'conflict');
+    const attempt = vi.fn().mockRejectedValue(err);
+    await expect(withTransientRetry(attempt, { sleep: fastSleep })).rejects.toThrow('conflict');
     expect(attempt).toHaveBeenCalledTimes(1);
   });
 
@@ -245,6 +320,65 @@ describe('withTransientRetry — retry-after ceiling', () => {
     });
     expect(result).toBe('ok');
     expect(attempt).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isTransientOauthOrg403 unit tests (#3467)
+// Moved from daemon/task-retry.test.ts — lives beside the predicate it tests.
+// ---------------------------------------------------------------------------
+
+import { isTransientOauthOrg403 } from './transient-retry.js';
+
+/** Build a 403 error matching the exact shape the Anthropic SDK surfaces. */
+function makeOauthOrg403(): Error {
+  return Object.assign(new Error('OAuth authentication is currently not allowed for this organization.'), {
+    status: 403,
+    error: {
+      type: 'permission_error',
+      message: 'OAuth authentication is currently not allowed for this organization.',
+      details: { error_code: 'oauth_not_allowed_for_organization' },
+    },
+  });
+}
+
+describe('isTransientOauthOrg403', () => {
+  it('matches a 403 with the exact oauth_not_allowed_for_organization error_code', () => {
+    expect(isTransientOauthOrg403(makeOauthOrg403())).toBe(true);
+  });
+
+  it('does NOT match a plain 403 with no error body', () => {
+    expect(isTransientOauthOrg403(makeStatusError(403))).toBe(false);
+  });
+
+  it('does NOT match a 403 with a different error_code', () => {
+    const err = Object.assign(new Error('permission denied'), {
+      status: 403,
+      error: { type: 'permission_error', details: { error_code: 'insufficient_permissions' } },
+    });
+    expect(isTransientOauthOrg403(err)).toBe(false);
+  });
+
+  it('does NOT match a 403 with no details field', () => {
+    const err = Object.assign(new Error('forbidden'), {
+      status: 403,
+      error: { type: 'permission_error' },
+    });
+    expect(isTransientOauthOrg403(err)).toBe(false);
+  });
+
+  it('does NOT match a non-403 status even with the matching error_code', () => {
+    const err = Object.assign(new Error('wrong status'), {
+      status: 401,
+      error: { type: 'permission_error', details: { error_code: 'oauth_not_allowed_for_organization' } },
+    });
+    expect(isTransientOauthOrg403(err)).toBe(false);
+  });
+
+  it('does NOT match null or non-object values', () => {
+    expect(isTransientOauthOrg403(null)).toBe(false);
+    expect(isTransientOauthOrg403('forbidden')).toBe(false);
+    expect(isTransientOauthOrg403(undefined)).toBe(false);
   });
 });
 

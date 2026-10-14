@@ -23,7 +23,7 @@
  */
 
 import { debugLog } from '../utils/debug.js';
-import { AbortError, HookBlockedError } from '../utils/errors.js';
+import { AbortError, HookBlockedError, ensureError} from '../utils/errors.js';
 import type {
   HookDecision,
   HookRegistry,
@@ -80,7 +80,8 @@ async function emitHookDecisionFromOutcome(
     hookEvent,
     decision: decision.decision,
     ...(decision.reason !== undefined ? { reason: decision.reason } : {}),
-    ...(decision.injectContext !== undefined
+    // PreToolUse context is counted by the dispatcher only after result delivery.
+    ...(hookEvent !== 'PreToolUse' && decision.injectContext !== undefined
       ? { injectedContextBytes: Buffer.byteLength(decision.injectContext, 'utf8') }
       : {}),
   });
@@ -191,7 +192,7 @@ export async function dispatchSubagentStop(
       return {};
     }
     debugLog(`SubagentStop hook unexpected error: ${String(err)}`);
-    options.onError?.(err instanceof Error ? err : new Error(String(err)));
+    options.onError?.(ensureError(err));
     return {};
   }
 }
@@ -253,7 +254,7 @@ export async function dispatchPostToolUse(
       return;
     }
     debugLog(`PostToolUse hook unexpected error: ${String(err)}`);
-    options.onError?.(err instanceof Error ? err : new Error(String(err)));
+    options.onError?.(ensureError(err));
   }
 }
 
@@ -293,6 +294,6 @@ export async function dispatchPostToolUseFailure(
       return;
     }
     debugLog(`PostToolUseFailure hook unexpected error: ${String(err)}`);
-    options.onError?.(err instanceof Error ? err : new Error(String(err)));
+    options.onError?.(ensureError(err));
   }
 }

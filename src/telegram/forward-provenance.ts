@@ -81,6 +81,17 @@ function labelFromOriginHiddenUser(origin: MessageOriginHiddenUser): string {
 }
 
 /**
+ * Build a sanitized "title @handle" label from a titled-chat shape.
+ * Shared by `labelFromOriginChat` and `labelFromOriginChannel`.
+ */
+function chatLabel(chat: { title?: string; username?: string }): string {
+  const title = sanitizeField(chat.title ?? '');
+  const handle = chat.username ? sanitizeField(chat.username) : '';
+  const parts = [title, handle ? `@${handle}` : ''].filter(Boolean);
+  return parts.join(' ');
+}
+
+/**
  * Derive a sanitized label from a `MessageOriginChat` (Bot API 7.0+: sent on
  * behalf of a chat, e.g. anonymous group admin).
  */
@@ -88,11 +99,7 @@ function labelFromOriginChat(origin: MessageOriginChat): string {
   // sender_chat is a discriminated-union Chat type. In practice MessageOriginChat is always
   // a group/supergroup (never private), so title and username are semantically present.
   // Cast to the common titled-chat shape rather than exhaustively narrowing all variants.
-  const chat = origin.sender_chat as { title?: string; username?: string };
-  const title = sanitizeField(chat.title ?? '');
-  const handle = chat.username ? sanitizeField(chat.username) : '';
-  const parts = [title, handle ? `@${handle}` : ''].filter(Boolean);
-  return parts.join(' ');
+  return chatLabel(origin.sender_chat as { title?: string; username?: string });
 }
 
 /**
@@ -101,11 +108,7 @@ function labelFromOriginChat(origin: MessageOriginChat): string {
  */
 function labelFromOriginChannel(origin: MessageOriginChannel): string {
   // chat is a discriminated-union Chat type; MessageOriginChannel is always a channel chat.
-  const chat = origin.chat as { title?: string; username?: string };
-  const title = sanitizeField(chat.title ?? '');
-  const handle = chat.username ? sanitizeField(chat.username) : '';
-  const parts = [title, handle ? `@${handle}` : ''].filter(Boolean);
-  return parts.join(' ');
+  return chatLabel(origin.chat as { title?: string; username?: string });
 }
 
 /**

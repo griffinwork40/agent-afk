@@ -94,11 +94,19 @@ export function classifyPresenceRecord(
     ) {
       return 'reused';
     }
+    // The record has start-identity fields but neither ticks nor epoch comparison
+    // was conclusive (e.g. probed is undefined because the OS probe failed, or
+    // only one side has a usable value). "Unknown keeps": we cannot prove the
+    // pid was reused, so we keep the record as 'live' rather than hiding a
+    // session that may still be running. Hiding a live session is a worse failure
+    // than showing a stale one.
     return 'live';
   }
   if (record.heartbeatAgeMs !== null && record.heartbeatAgeMs >= LEGACY_STALE_HEARTBEAT_MS) {
     return 'stale-legacy';
   }
+  // No start-identity fields and heartbeat is fresh (or absent — absence is not
+  // evidence of death for records predating heartbeat support). "Unknown keeps".
   return 'live';
 }
 

@@ -206,10 +206,11 @@ describe('createPathApprovalHook — session-scoped grants via context.grantMana
     expect(decision.reason).toContain('Sub-agent path access denied');
   });
 
-  it('context.grantManager takes precedence over opts.getGrantManager (the ref)', async () => {
-    // Ref grants the sibling; the injected (child) manager does NOT. If the
-    // injected manager wins, the fork write is restricted → auto-deny.
-    const refMgr = makeMockGrantManager({ writeRoots: [BASE, SIBLING] });
+  it('injected context.grantManager confines forked-child writes (restrictive injected manager denies out-of-root path)', async () => {
+    // The injected (child) manager grants only BASE. A write to the sibling
+    // path is outside those grants → restricted → auto-deny, regardless of
+    // what any parent-level ref might permit. (No stale opts.getGrantManager
+    // fallback exists; the hook reads context.grantManager directly.)
     const injectedMgr = makeMockGrantManager({ writeRoots: [BASE] });
     const { preToolUse } = createPathApprovalHook({
       getCwd: () => BASE,
@@ -359,16 +360,13 @@ describe('createPathApprovalHook — outcome mapping', () => {
     expect(mgr._events.map((e) => e.op)).toEqual(['addRead', 'revoke']);
   });
 
-  it('once: revoke targets the injected context.grantManager, not the ref (#514)', async () => {
+  it('once: revoke targets the injected context.grantManager (#514)', async () => {
     // #514 PostToolUse mirror: the dispatcher injects the executing session's
     // provider as context.grantManager on BOTH Pre and Post. The "Once"-grant
-    // must be added to — and revoked from — that SAME injected manager, never
-    // the process-global ref (opts.getGrantManager). Here the ref and the
-    // injected manager are DISTINCT instances: if the Post revoke hit the ref
-    // instead of the injected manager, the once-grant would leak on the
-    // injected manager (its writeRoots/readRoots would keep the granted path).
+    // must be added to — and revoked from — that SAME injected manager.
+    // There is no process-global ref fallback (#2748 removed opts.getGrantManager);
+    // the hook reads context.grantManager directly.
     elicitationRouter.install(async () => ({ action: 'accept', content: { choice: 'once' } }));
-    const refMgr = makeMockGrantManager();
     const injectedMgr = makeMockGrantManager();
     const { preToolUse, postToolUse } = createPathApprovalHook({
       getCwd: () => BASE,
@@ -376,25 +374,14 @@ describe('createPathApprovalHook — outcome mapping', () => {
     });
 
     // Pre: approve "once" against the INJECTED manager (context.grantManager).
-    const decision = await preToolUse({
-      ...preCtx('read_file', { file_path: '/etc/hosts' }, injectedMgr),
-      grantManager: injectedMgr,
-    });
+    const decision = await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }, injectedMgr));
     expect(decision).toEqual({});
     expect(injectedMgr._readRoots).toContain('/etc/hosts');
-    // The ref was never consulted or mutated for the add.
-    expect(refMgr._events).toHaveLength(0);
 
     // Post: revoke must land on the SAME injected manager the Pre check mutated.
-    postToolUse({
-      ...postCtx('read_file', { file_path: '/etc/hosts' }, injectedMgr),
-      grantManager: injectedMgr,
-    });
+    postToolUse(postCtx('read_file', { file_path: '/etc/hosts' }, injectedMgr));
     expect(injectedMgr._readRoots).not.toContain('/etc/hosts');
     expect(injectedMgr._events.map((e) => e.op)).toEqual(['addRead', 'revoke']);
-    // The ref remained untouched throughout — proving the injected manager
-    // (not opts.getGrantManager) drove BOTH the add and the revoke.
-    expect(refMgr._events).toHaveLength(0);
   });
 
   it('session: adds to readRoots and caches; second call does not re-prompt', async () => {
@@ -917,4 +904,111 @@ describe('path-approval hook ↔ handler parity (the divergence six PRs kept re-
       expect(hookAllows).toBe(handlerAllows);
     });
   }
+});
+
+describe('createPathApprovalHook — model_complete input_path', () => {
+  // model_complete is in TYPED_FILE_TOOLS and extractCandidatePath returns the
+  // `input_path` field. An outside-root input_path must trigger the approval
+  // prompt just like read_file would. A model_complete call without input_path
+  // must be a no-op (no candidate path → hook returns {} immediately).
+
+  it('prompts for approval when input_path is outside the session read roots', async () => {
+    // The elicitation handler grants session access — we care that it WAS called
+    // (i.e. the hook forwarded model_complete + input_path to the prompt flow).
+    const handler = vi.fn(async () => ({ action: 'accept' as const, content: { choice: 'session' } }));
+    elicitationRouter.install(handler);
+    const mgr = makeMockGrantManager(); // roots: [BASE]
+    const { preToolUse } = createPathApprovalHook({
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    const decision = await preToolUse(
+      preCtx('model_complete', { prompt: 'summarise', input_path: '/etc/passwd' }, mgr),
+    );
+
+    // The hook must have routed the prompt and granted access (session choice).
+    expect(decision).toEqual({});
+    expect(handler).toHaveBeenCalledTimes(1);
+    // Grant was added to the read roots.
+    expect(mgr._readRoots).toContain('/etc/passwd');
+    expect(mgr._writeRoots).not.toContain('/etc/passwd');
+  });
+
+  it('does NOT prompt when input_path is absent (no-file model_complete call)', async () => {
+    // A model_complete call without input_path reads no file; extractCandidatePath
+    // returns undefined, so the hook short-circuits before any containment check.
+    const handler = vi.fn(async () => ({ action: 'accept' as const, content: { choice: 'session' } }));
+    elicitationRouter.install(handler);
+    const mgr = makeMockGrantManager();
+    const { preToolUse } = createPathApprovalHook({
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    const decision = await preToolUse(
+      preCtx('model_complete', { prompt: 'what is 2+2?' }, mgr),
+    );
+
+    // Hook must pass through without any grant mutation or prompt.
+    expect(decision).toEqual({});
+    expect(handler).not.toHaveBeenCalled();
+    expect(mgr._events).toHaveLength(0);
+  });
+
+  it('once grant: allows the call, records for post-cleanup; PostToolUse revokes the temporary read root', async () => {
+    // The "once" choice grants single-use read access — the root is added
+    // before the tool call and revoked by PostToolUse. Verify the full lifecycle
+    // works for model_complete + input_path, mirroring the read_file once tests.
+    elicitationRouter.install(async () => ({ action: 'accept' as const, content: { choice: 'once' } }));
+    const mgr = makeMockGrantManager();
+    const { preToolUse, postToolUse } = createPathApprovalHook({
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    // PreToolUse: outside-root input_path must be approved once.
+    const decision = await preToolUse(
+      preCtx('model_complete', { prompt: 'summarise', input_path: '/etc/hosts' }, mgr),
+    );
+    expect(decision).toEqual({});
+    // The once-grant must have added the path to readRoots temporarily.
+    expect(mgr._readRoots).toContain('/etc/hosts');
+    expect(mgr._events.map((e) => e.op)).toEqual(['addRead']);
+
+    // PostToolUse: the once-grant must be revoked after the tool completes.
+    postToolUse(postCtx('model_complete', { prompt: 'summarise', input_path: '/etc/hosts' }, mgr));
+    expect(mgr._readRoots).not.toContain('/etc/hosts');
+    expect(mgr._events.map((e) => e.op)).toEqual(['addRead', 'revoke']);
+  });
+
+  it('subagent auto-deny: blocks an out-of-root input_path inside a fork without prompting', async () => {
+    // A forked sub-agent (parentSessionId set) must never elicit a prompt.
+    // Instead the hook auto-denies and returns a block decision so the fork
+    // reports the path requirement back to its parent (path-approval-hook.ts:301).
+    const handler = vi.fn(async () => ({ action: 'accept' as const, content: { choice: 'session' } }));
+    elicitationRouter.install(handler);
+    const mgr = makeMockGrantManager(); // roots: [BASE]
+    const { preToolUse } = createPathApprovalHook({
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    const decision = await preToolUse({
+      event: 'PreToolUse',
+      toolName: 'model_complete',
+      input: { prompt: 'summarise', input_path: '/etc/passwd' },
+      sessionId: 'child-1',
+      parentSessionId: 'parent-1',   // marks this as a fork
+      grantManager: mgr,
+    });
+
+    // Must be a hard block — never pass through, never prompt the operator.
+    expect(decision).toMatchObject({ decision: 'block' });
+    expect(handler).not.toHaveBeenCalled();
+    // No grant mutations: the denied path must not have been added to the roots.
+    expect(mgr._readRoots).not.toContain('/etc/passwd');
+    expect(mgr._events).toHaveLength(0);
+  });
+
 });

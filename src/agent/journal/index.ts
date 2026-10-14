@@ -21,5 +21,7 @@ export {
   type FoldResult,
   type JournalLocator,
 } from './reader.js';
-export { findToolResultAsync } from './reader.async.js';
+export { findToolResultAsync, journalExistsAsync } from './reader.async.js';
 export { forkJournal } from './fork.js';
+export { foldForDisplay, loadDisplayMessages } from './display-fold.js';
+export { pickResultFlags, readResultFlags, tagResultFlags, type JournalResultFlags } from './result-flags.js';

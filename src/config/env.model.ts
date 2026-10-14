@@ -16,6 +16,24 @@ import type { EnvVarMeta } from './env.js';
 
 export const MODEL_ENV_REGISTRY = [
   {
+    name: 'AFK_CONNECT_RETRY_BUDGET_MS',
+    description: 'Experimental streaming connection retry wall budget in milliseconds. Positive finite value enables capped jittered backoff before the stream opens; unset or invalid preserves legacy retry counts. In-flight attempts retain existing timeouts.',
+    type: 'number',
+    required: false,
+    example: '120000',
+    category: 'model',
+  },
+  {
+    name: 'AFK_CONTEXT_GUARD_PCT',
+    description: 'Temporary within-turn context guard operational threshold as percent of the effective provider-route limit (catalog metadata for subscription routes; contextLimitFor() for API-key routes). Default 95. Not a documented model capacity or guaranteed server cutoff. Valid range 1–99.',
+    type: 'number', required: false, default: '95', example: '90', category: 'model',
+  },
+  {
+    name: 'AFK_CONTEXT_GUARD_DISABLE',
+    description: 'Disable the temporary within-turn context pressure guard (1/true/yes/on). Restores unguarded tool-loop behavior; ordinary compaction and round caps remain enabled.',
+    type: 'boolean', required: false, default: '0', example: '1', category: 'model',
+  },
+  {
     name: 'AFK_COMPACT_KEEP_LAST_TURNS',
     description: 'Number of recent turns the compactor keeps verbatim during /compact. Default tuned in compact-handler.ts.',
     type: 'number',
@@ -25,7 +43,7 @@ export const MODEL_ENV_REGISTRY = [
   },
   {
     name: 'AFK_COMPACT_MODEL',
-    description: 'Model id or slot alias used by the /compact summarizer and auto-compaction. Accepts any model on any supported provider (anthropic, openai, xai). Cross-provider compaction is supported: set to a gpt-* id on a Claude session (or a claude-* id on an OpenAI session) and AFK will route the summarize call to that provider using its own credentials. The transcript is sent to the target provider — a one-time privacy warning is emitted on first cross-provider use. Requires that provider\'s credentials to be available (ANTHROPIC_API_KEY / OPENAI_API_KEY / XAI_API_KEY, or ChatGPT-subscription OAuth via AFK_OPENAI_CHATGPT_OAUTH). Falls back to a cheap haiku-class default when unset. Also drives ghost-text suggestions on Claude sessions (see AFK_SUGGEST_MODEL to override that independently).',
+    description: 'Model id or slot alias used by the /compact summarizer and auto-compaction. Accepts any model on any supported provider (anthropic, openai, xai). Cross-provider compaction is supported: set to a gpt-* id on a Claude session (or a claude-* id on an OpenAI session) and AFK will route the summarize call to that provider using its own credentials. The transcript is sent to the target provider — a one-time privacy warning is emitted on first cross-provider use. Requires that provider\'s credentials to be available (ANTHROPIC_API_KEY / OPENAI_API_KEY / XAI_API_KEY, or ChatGPT-subscription OAuth from `codex login`). When unset: Anthropic sessions fall back to claude-haiku-class; OpenAI API-key sessions (api.openai.com) fall back to gpt-6-luna; ChatGPT-subscription (chatgpt-oauth) and custom-baseURL sessions (local runners, proxies) fall back to the session model. Also drives ghost-text suggestions on Claude sessions (see AFK_SUGGEST_MODEL to override that independently).',
     type: 'string',
     required: false,
     example: 'gpt-6-luna',
@@ -63,7 +81,8 @@ export const MODEL_ENV_REGISTRY = [
       'leaving the rest of path-approval intact. Applies on interactive surfaces (REPL/Telegram), ' +
       'where the denylist is active but your workflow legitimately runs interpreter one-liners. ' +
       'The restricted-root substring check is unaffected. Default: denylist active on interactive ' +
-      'surfaces; headless already fails open (opt in with AFK_FORCE_BASH_INTERPRETER_GUARD=1). To ' +
+      'surfaces; contexts with no grant manager already fail open (opt in with ' +
+      'AFK_FORCE_BASH_INTERPRETER_GUARD=1). To ' +
       'disable all of path-approval + bash restriction instead, use AFK_DISABLE_PATH_APPROVAL=1.',
     type: 'boolean',
     required: false,
@@ -76,9 +95,10 @@ export const MODEL_ENV_REGISTRY = [
     description:
       'Skip the path-approval + bash-restriction hooks entirely when set to 1. Use for headless ' +
       'flows that need wide-open file access (CI scripts, batch jobs). Default: hooks enabled. ' +
-      'Note: on headless surfaces (afk chat, daemon) no grant manager is wired, so the interpreter ' +
-      'denylist (python -c, node -e, sh -c, ...) fails OPEN by default — opt headless flows into it ' +
-      'with AFK_FORCE_BASH_INTERPRETER_GUARD=1, or set this var to 1 to disable all of path-approval.',
+      'Note: the interpreter denylist (python -c, node -e, sh -c, ...) fires wherever the session ' +
+      'provider is wired as the grant manager (every production surface) and fails OPEN only for ' +
+      'contexts with none; opt those into it with AFK_FORCE_BASH_INTERPRETER_GUARD=1, or set this ' +
+      'var to 1 to disable all of path-approval.',
     type: 'boolean',
     required: false,
     default: '0',
@@ -100,11 +120,11 @@ export const MODEL_ENV_REGISTRY = [
   {
     name: 'AFK_FORCE_BASH_INTERPRETER_GUARD',
     description:
-      'Apply the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) even on headless ' +
-      'surfaces (afk chat, daemon) where no grant manager is wired. By default the denylist ' +
-      'fires only on interactive surfaces (REPL/Telegram), failing open on headless so legitimate ' +
-      'automation is not hard-blocked with no recourse. Set to 1 to opt headless flows back into the ' +
-      'guard. Overridden by AFK_DISABLE_BASH_INTERPRETER_GUARD=1. Default: off (headless fails open).',
+      'Apply the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) even to tool ' +
+      'calls whose context carries no grant manager. Every production provider wires itself as ' +
+      'the grant manager on every surface (REPL, Telegram, afk chat, daemon, subagents), so there ' +
+      'the denylist is already active; without one it fails open. Set to 1 to force it on for ' +
+      'those contexts too. Overridden by AFK_DISABLE_BASH_INTERPRETER_GUARD=1. Default: off.',
     type: 'boolean',
     required: false,
     default: '0',

@@ -85,9 +85,26 @@ describe('classifyChatGptUsageLimit', () => {
     expect(info?.plan).toBeUndefined();
   });
 
-  it('reads windowMinutes from x-codex headers when present', () => {
-    const e = sdk429(limitBody(), { 'x-codex-active-limit': 'codex', 'x-codex-primary-window-minutes': '300' });
+  it('reads windowMinutes from x-codex-primary-window-minutes header', () => {
+    const e = sdk429(limitBody(), { 'x-codex-primary-window-minutes': '300' });
     expect(classifyChatGptUsageLimit(e, NOW)?.windowMinutes).toBe(300);
+  });
+
+  it('hostile x-codex-active-limit value cannot select an arbitrary header', () => {
+    // A server sets x-codex-active-limit to "evil" and x-evil-primary-window-minutes to "999".
+    // The header name is hardcoded so this hostile attempt has no effect.
+    const e = sdk429(limitBody(), {
+      'x-codex-active-limit': 'evil',
+      'x-evil-primary-window-minutes': '999',
+      'x-codex-primary-window-minutes': '300',
+    });
+    // Only the hardcoded header is read; the injected value is ignored.
+    expect(classifyChatGptUsageLimit(e, NOW)?.windowMinutes).toBe(300);
+  });
+
+  it('no x-codex-primary-window-minutes header yields no windowMinutes', () => {
+    const e = sdk429(limitBody(), { 'x-codex-active-limit': 'codex' });
+    expect(classifyChatGptUsageLimit(e, NOW)?.windowMinutes).toBeUndefined();
   });
 
   it('a plain 429 returns null', () => {

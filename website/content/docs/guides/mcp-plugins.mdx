@@ -146,7 +146,7 @@ Plugins extend AFK with skills, user-defined subagents, and MCP server contribut
 
 ```bash
 # GitHub shorthand (expands to https://github.com/<owner>/<repo>.git)
-afk plugin install anthropics/claude-plugins-official
+afk plugin install griffinwork40/software-factory
 
 # Explicit git URL
 afk plugin install https://github.com/example/my-plugin.git
@@ -195,11 +195,26 @@ Skills from plugins are auto-registered at session start and appear in `/skills`
 
 ### Marketplaces
 
+A marketplace repo contains `.claude-plugin/marketplace.json` instead of `plugin.json`. Install it as a marketplace first, then install individual plugins from it with the `<marketplace>:<plugin>` shorthand:
+
 ```bash
-afk marketplace install <url>    # add a marketplace source
-afk marketplace list              # installed marketplaces
-afk marketplace remove <name>     # remove a source
+# Step 1 — add a marketplace source (GitHub shorthand or full URL)
+afk marketplace install <owner>/<marketplace-repo>
+
+# Step 2 — browse plugins in the marketplace
+afk marketplace plugins <marketplace-name>
+
+# Step 3 — install a plugin from it
+afk plugin install <marketplace-name>:<plugin-name>
+
+# Other operations
+afk marketplace list
+afk marketplace remove <name>
 ```
+
+:::note
+A marketplace repo uses `.claude-plugin/marketplace.json`; a plugin repo uses `.claude-plugin/plugin.json`. Use `afk marketplace install` for the former and `afk plugin install` for the latter — they are not interchangeable.
+:::
 
 Marketplace state lives under `~/.afk/plugins/cache/`.
 

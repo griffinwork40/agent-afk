@@ -48,20 +48,20 @@ describe('SessionOwner — construction', () => {
 });
 
 describe('SessionOwner — submitPrompt on an unknown id', () => {
-  it('rejects rather than silently no-op-ing', async () => {
+  it('throws rather than silently no-op-ing', () => {
     const owner = freshOwner();
-    await expect(owner.submitPrompt('nope', 'hi')).rejects.toThrow(
+    expect(() => owner.submitPrompt('nope', 'hi')).toThrow(
       /nope.*not owned by this process/,
     );
   });
 });
 
 describe('SessionOwner — submitSkillMessage on an unknown id', () => {
-  it('rejects rather than silently no-op-ing', async () => {
+  it('throws rather than silently no-op-ing', () => {
     const owner = freshOwner();
-    await expect(
+    expect(() =>
       owner.submitSkillMessage('nope', [{ type: 'text', text: 'mock' }]),
-    ).rejects.toThrow(/nope.*not owned by this process/);
+    ).toThrow(/nope.*not owned by this process/);
   });
 });
 
@@ -246,3 +246,34 @@ describe('SessionOwner.create — bad AFK_FRAMEWORK_PROMPT_FILE (issue #2388)', 
     expect(owner.list()).toEqual([]);
   });
 });
+
+describe('SessionOwner — completed turns are saved to the session sidecar', () => {
+  interface Internals {
+    sessions: Map<string, { sendMessageStream: (c: unknown) => AsyncIterable<unknown> }>;
+    autosavers: Map<string, { stats: unknown; saveTurn: (...a: unknown[]) => void }>;
+    turns: Map<string, Promise<void>>;
+  }
+
+  it('routes both prompt and skill turns through the per-session autosaver', async () => {
+    const owner = freshOwner();
+    const internals = owner as unknown as Internals;
+    const saveTurn = vi.fn();
+    internals.autosavers.set('s1', { stats: {}, saveTurn });
+    internals.sessions.set('s1', {
+      async *sendMessageStream() {
+        yield { type: 'message', message: { role: 'assistant', content: 'reply' } };
+        yield { type: 'done', metadata: { totalCostUsd: 0 } };
+      },
+    });
+
+    await owner.submitPrompt('s1', 'hello');
+    await internals.turns.get('s1');
+    await owner.submitSkillMessage('s1', [
+      { type: 'text', text: '<command-name>/review</command-name><command-args>9</command-args>' },
+    ]);
+    await internals.turns.get('s1');
+
+    expect(saveTurn.mock.calls.map((c) => c[0])).toEqual(['hello', '/review 9']);
+  });
+});
+

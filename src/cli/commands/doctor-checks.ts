@@ -16,6 +16,7 @@ import nodePath from 'path';
 import { getApiKey } from '../shared-helpers.js';
 import { preloadClaudeKeychainOAuth } from '../../agent/auth/credential-resolver.js';
 import { resolveOpenAIAuth } from '../../agent/providers/openai-compatible/auth.js';
+import { isErrnoCode } from '../../utils/errors.js';
 import {
   getAfkConfigDir,
   getAfkStateDir,
@@ -96,10 +97,16 @@ export async function checkCodexKey(): Promise<Check> {
       return {
         name: 'Codex/OpenAI API Key',
         state: 'warn',
-        detail: 'ChatGPT/OAuth credentials found in ~/.codex/auth.json but unused',
-        fix: 'Set AFK_OPENAI_CHATGPT_OAUTH=1 to use your ChatGPT subscription, or set OPENAI_API_KEY',
+        detail: 'ChatGPT login found in ~/.codex/auth.json but it has no access token',
+        fix: 'Re-run `codex login` to use your ChatGPT subscription, or set OPENAI_API_KEY',
       };
     case 'no-usable-auth-forced-chatgpt-oauth':
+      return {
+        name: 'Codex/OpenAI API Key',
+        state: 'warn',
+        detail: "Forced ChatGPT OAuth mode (slot provider: 'chatgpt-oauth') but no usable OAuth token found",
+        fix: "Run `codex` once to authenticate, or change the slot to provider: 'openai' and set OPENAI_API_KEY",
+      };
     case 'no-usable-auth':
     default:
       return {
@@ -141,13 +148,15 @@ export async function checkXaiAuth(): Promise<Check> {
 export interface NpmBinOnPathDeps {
   platform?: NodeJS.Platform;
   pathDelimiter?: string;
+  execSync?: typeof import('child_process').execSync;
 }
 
 export async function checkNpmBinOnPath(deps: NpmBinOnPathDeps = {}): Promise<Check> {
   const platform = deps.platform ?? process.platform;
   const pathDelimiter = deps.pathDelimiter ?? nodePath.delimiter;
+  const _execSync = deps.execSync ?? execSync;
   try {
-    const prefix = execSync('npm config get prefix', {
+    const prefix = _execSync('npm config get prefix', {
       timeout: 2000,
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
@@ -195,7 +204,7 @@ export async function checkConfigFile(): Promise<Check> {
     JSON.parse(content);
     return { name: 'Config File', state: 'pass', detail: `${path} (valid JSON)` };
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+    if (isErrnoCode(err, 'ENOENT')) {
       return { name: 'Config File', state: 'pass', detail: 'no config file (using defaults)' };
     }
     return {

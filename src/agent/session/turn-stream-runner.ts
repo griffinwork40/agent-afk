@@ -35,6 +35,12 @@ import type { ToolEventMin } from '../done-evidence.js';
 import { dispatchTurnStop } from './turn-stream-runner.stop.js';
 import type { StopWiring } from '../types/session-types.js';
 
+/** Cost already counted against `maxBudgetUsd`: own turns + completed subagents. */
+function seededBudgetCost(accounting: AccountingAccumulator): number {
+  const acct = accounting.snapshot();
+  return acct.sessionRunningCostUsd + acct.subagentRunningCostUsd;
+}
+
 /**
  * Context bag passed to {@link TurnStreamRunner} at construction.
  * Most mutable fields are accessed via their owning objects — no raw
@@ -213,6 +219,10 @@ export class TurnStreamRunner {
       // Budget enforcement (C6): wire maxBudgetUsd from config so the
       // stream consumer can abort when cumulative cost crosses the ceiling.
       maxBudgetUsd: config.maxBudgetUsd,
+      // Tree budget (#3442): seed the per-turn accumulator with everything
+      // already spent (prior turns + completed subagents) so the ceiling is
+      // cumulative across turns and shared with the subagent tree.
+      ...(config.maxBudgetUsd !== undefined ? { _runningCostUsd: seededBudgetCost(accounting) } : {}),
       abortBudget: (reason) => {
         const ctrl = getAbortController();
         if (!ctrl.signal.aborted) ctrl.abort(reason);
@@ -252,7 +262,11 @@ export class TurnStreamRunner {
     inputStream.pushUserMessage(effectiveContent);
 
     this.ensureLedger();
-    this.deps.ledger.recordUser(historySummary);
+    // `content` is the caller's own message; `effectiveContent` may carry
+    // drained framework context in front of it. Record both so the web
+    // session list can title the session from what the user actually typed.
+    const inputSummary = typeof content === 'string' ? content : this.summarize(content);
+    this.deps.ledger.recordUser(historySummary, inputSummary);
 
     this.deps.incInboundMessageCount();
 

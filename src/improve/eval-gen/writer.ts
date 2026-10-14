@@ -46,8 +46,6 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
 } from 'fs';
 import { join, relative } from 'path';
 import {
@@ -65,7 +63,7 @@ import {
   getEvalCasesIndexPath,
 } from '../paths.js';
 import { getAfkHome } from '../../paths.js';
-import { atomicWriteFile } from '../../utils/envFile.js';
+import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { appendJsonlIndex, formatYyyymmdd } from '../_lib/writer-utils.js';
 import { describeEvalRunCoverage } from './eval-run-coverage.js';
 import { getEvalCasesForCard } from './eval-case-readers.js';
@@ -397,8 +395,8 @@ export function writeEvalCase(
   }
 
   // 2. Write JSON + markdown (atomic) after fixture is durable.
-  atomicWriteFile(jsonPath, JSON.stringify(validated, null, 2), 0o666);
-  atomicWriteFile(mdPath, renderEvalCaseMarkdown(validated), 0o666);
+  atomicWriteFile(jsonPath, JSON.stringify(validated, null, 2), { mode: 0o666 });
+  atomicWriteFile(mdPath, renderEvalCaseMarkdown(validated), { mode: 0o666 });
 
   // 3. Append the index event — best-effort, matching card-writer convention.
   appendIndex({
@@ -519,12 +517,11 @@ function appendIndex(event: EvalCaseIndexEvent): void {
  * Atomic write for a binary payload — keeps the bytes verbatim through the
  * tmp → rename dance. The fixture file is JSONL text in practice, but we
  * write the raw Buffer to preserve byte-fidelity guarantees the slicer
- * provides (no transcoding through string). Kept local (rather than the
- * shared `atomicWriteFile` in `utils/envFile.ts`, used below for the JSON/
- * markdown writes) because that helper's signature is `string`-only.
+ * provides (no transcoding through string). Delegates to the shared
+ * `atomicWriteFile` helper which accepts Buffer directly (#3265).
  */
 function atomicWriteBinary(path: string, bytes: Buffer): void {
-  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmp, bytes);
-  renameSync(tmp, path);
+  // Intentionally owner-only rather than OS-default permissions: replay
+  // fixtures can contain sensitive session data.
+  atomicWriteFile(path, bytes, { mode: 0o600 });
 }

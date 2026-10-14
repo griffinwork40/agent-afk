@@ -121,6 +121,46 @@ describe('buildDaemonSessionFactory', () => {
     rmSync(tmpHome, { recursive: true, force: true });
   });
 
+  it('closes each task workspace once while keeping factory-shared stores alive', async () => {
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const first = trackSession(factory(makeConfig()));
+    const second = trackSession(factory(makeConfig()));
+    type Stores = { workspaceStore: { close(): void }; memoryStore: { close(): void }; stateStore: { close(): void } };
+    const stores = (s: unknown) => (s as { config: { provider: Stores } }).config.provider;
+    const a = stores(first);
+    const b = stores(second);
+    expect(a.workspaceStore).not.toBe(b.workspaceStore);
+    expect(a.memoryStore).toBe(b.memoryStore);
+    expect(a.stateStore).toBe(b.stateStore);
+    const workspaceA = vi.spyOn(a.workspaceStore, 'close');
+    const workspaceB = vi.spyOn(b.workspaceStore, 'close');
+    const memory = vi.spyOn(a.memoryStore, 'close');
+    const state = vi.spyOn(a.stateStore, 'close');
+    await Promise.all([first.close(), first.close()]);
+    expect(workspaceA).toHaveBeenCalledTimes(1);
+    expect(workspaceB).not.toHaveBeenCalled();
+    expect(memory).not.toHaveBeenCalled();
+    expect(state).not.toHaveBeenCalled();
+    await second.close();
+    factory.dispose();
+    factory.dispose();
+    expect(workspaceA).toHaveBeenCalledTimes(1);
+    expect(workspaceB).toHaveBeenCalledTimes(1);
+    expect(memory).toHaveBeenCalledTimes(1);
+    expect(state).toHaveBeenCalledTimes(1);
+  });
+
+  it('dispose releases residual task workspaces without double-close on later session close', async () => {
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const session = trackSession(factory(makeConfig()));
+    const provider = (session as unknown as { config: { provider: { workspaceStore: { close(): void } } } }).config.provider;
+    const close = vi.spyOn(provider.workspaceStore, 'close');
+    factory.dispose();
+    factory.dispose();
+    await session.close();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it('returns a factory function', () => {
     const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     expect(typeof factory).toBe('function');

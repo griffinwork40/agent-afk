@@ -193,6 +193,37 @@ describe('playwrightInstallCommand', () => {
 // tests portable by injecting platform).
 // ---------------------------------------------------------------------------
 
+/**
+ * Shared assertions that hold for every win32 install-command string (or a
+ * hint body that embeds such a command), regardless of whether it came from
+ * `playwrightInstallCommand` or was embedded inside a `playwrightMissingHint`.
+ *
+ * The `/npx/` check is scoped to the embedded install command only: hint text
+ * legitimately mentions "npx" in its "Do NOT use `npx playwright install
+ * chromium`" warning prose, so matching the full string would be a false fail.
+ */
+function assertWin32InstallCommandInvariants(text: string): void {
+  // Must use the PowerShell $env: prefix, not the POSIX VAR=value form.
+  expect(text).toMatch(/\$env:PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=\d+;/);
+  expect(text).not.toMatch(/^PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=/);
+  // Timeout must be sufficient for a slow-network chromium download.
+  const ms = Number(/PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=(\d+)/.exec(text)?.[1]);
+  expect(ms).toBeGreaterThanOrEqual(120_000);
+  // The action must still be to install chromium.
+  // Note: we cannot use a $ anchor here because this helper is also called with
+  // full hint strings (e.g. playwrightMissingHint) that include trailing prose
+  // after the command (e.g. "Do NOT use `npx`…"). The pre-PR standalone test
+  // that anchored with $ only tested playwrightInstallCommand() in isolation.
+  expect(text).toMatch(/install chromium/);
+  // The embedded command itself must not use npx (version-skew risk, issue #1998).
+  // Use a lazy [\ \S]+? so the match succeeds on real paths that contain dots
+  // (e.g. `.pnpm/…/cli.js`). The `[^.]+` form stopped at the first dot and
+  // silently made cmdMatch null, meaning the no-npx assertion never ran.
+  const cmdMatch = /(\$env:PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=\d+;[\s\S]+?install chromium)/.exec(text);
+  expect(cmdMatch).not.toBeNull();
+  expect(cmdMatch![1]).not.toMatch(/npx/);
+}
+
 describe('playwrightInstallCommand — Windows PowerShell syntax (issue #2758)', () => {
   beforeEach(() => {
     resetPlaywrightInstallCommandCache();
@@ -214,18 +245,8 @@ describe('playwrightInstallCommand — Windows PowerShell syntax (issue #2758)',
     expect(cmd).not.toMatch(/^PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=/);
   });
 
-  it('win32 command still sets the timeout to >= 120000 ms', () => {
-    const cmd = playwrightInstallCommand('win32');
-    const ms = Number(/PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=(\d+)/.exec(cmd)?.[1]);
-    expect(ms).toBeGreaterThanOrEqual(120_000);
-  });
-
-  it('win32 command still ends with "install chromium"', () => {
-    expect(playwrightInstallCommand('win32')).toMatch(/install chromium$/);
-  });
-
-  it('win32 command does NOT include npx (issue #1998)', () => {
-    expect(playwrightInstallCommand('win32')).not.toMatch(/npx/);
+  it('win32 command satisfies all install-command invariants', () => {
+    assertWin32InstallCommandInvariants(playwrightInstallCommand('win32'));
   });
 
   it('memoizes per-platform so win32 and linux produce independent cached values', () => {
@@ -243,26 +264,18 @@ describe('playwrightMissingHint — Windows PowerShell syntax (issue #2758)', ()
   const BIN_MISSING = "Executable doesn't exist at /ms-playwright/chromium/chrome";
   const PKG_MISSING = 'Cannot find package playwright';
 
-  it('emits $env: prefix in the chromium-missing hint on win32', () => {
-    const hint = playwrightMissingHint(BIN_MISSING, { platform: 'win32' });
-    expect(hint).toMatch(/\$env:PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=\d+;/);
-    expect(hint).not.toMatch(/^PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=/);
+  it('chromium-missing hint satisfies all win32 install-command invariants', () => {
+    assertWin32InstallCommandInvariants(playwrightMissingHint(BIN_MISSING, { platform: 'win32' }));
   });
 
-  it('emits $env: prefix in the package-missing hint on win32', () => {
-    const hint = playwrightMissingHint(PKG_MISSING, { platform: 'win32' });
-    expect(hint).toMatch(/\$env:PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=\d+;/);
+  it('package-missing hint satisfies all win32 install-command invariants', () => {
+    assertWin32InstallCommandInvariants(playwrightMissingHint(PKG_MISSING, { platform: 'win32' }));
   });
 
   it('still emits POSIX prefix on linux', () => {
     const hint = playwrightMissingHint(BIN_MISSING, { platform: 'linux' });
     expect(hint).toMatch(/PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=\d+ node/);
     expect(hint).not.toMatch(/\$env:/);
-  });
-
-  it('win32 hint still contains "install chromium"', () => {
-    const hint = playwrightMissingHint(BIN_MISSING, { platform: 'win32' });
-    expect(hint).toMatch(/install chromium/);
   });
 
   it('win32 hint still contains the "Do NOT use npx" warning', () => {
@@ -275,9 +288,7 @@ describe('playwrightMissingHint — Windows PowerShell syntax (issue #2758)', ()
     const original = new Error(BIN_MISSING);
     const decorated = decoratePlaywrightLaunchError(original, false, false, 'win32');
     expect(decorated).toBeInstanceOf(Error);
-    const msg = (decorated as Error).message;
-    expect(msg).toMatch(/\$env:PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=\d+;/);
-    expect(msg).not.toMatch(/^PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=/);
+    assertWin32InstallCommandInvariants((decorated as Error).message);
   });
 });
 

@@ -432,6 +432,36 @@ describe('renderMarkdownToTerminal', () => {
         expect(line).toMatch(/^ {4}\S/);
       }
     });
+
+    it('starts a nested list in a tight item on its own line without re-wrapping it', () => {
+      const md = [
+        '2. **Decide:**',
+        '   - **If exact oMLX DFlash reaches about 100 tok/s or more:** contribute it upstream and stop.',
+        '   - **If not:** build an engine only if Lithos, measured end to end in its exact mode, is at least 1.3x the patched exact oMLX.',
+        '',
+      ].join('\n');
+      const lines = stripAnsi(renderMarkdownToTerminal(md, { maxWidth: 80 })).trimEnd().split('\n');
+
+      expect(lines[0]).toMatch(/^ {2}2\. Decide:$/);
+      const children = lines.slice(1);
+      expect(children.filter((line) => /^ {7}• /.test(line))).toHaveLength(2);
+      expect(children.filter((line) => /^ {9}\S/.test(line)).length).toBeGreaterThan(0);
+      for (const line of children) expect(line).toMatch(/^ {7}• \S|^ {9}\S/);
+      expect(children.join(' ').replace(/\s+/g, ' ')).toContain('upstream and stop.');
+      expect(children.join(' ').replace(/\s+/g, ' ')).toContain('at least 1.3x the patched exact oMLX.');
+      for (const line of lines) expect(stringWidth(line)).toBeLessThanOrEqual(80);
+    });
+
+    it.each([
+      ['ordered list', '- parent\n  1. child\n', /^ {6}1\. child$/],
+      ['blockquote', '- parent\n  > quote\n', /^ {6}│ quote$/],
+    ])('starts a %s child in a tight item on its own line', (_kind, md, childPattern) => {
+      const lines = stripAnsi(renderMarkdownToTerminal(md, { maxWidth: 40 })).trimEnd().split('\n');
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toMatch(/^ {2}• parent$/);
+      expect(lines[1]).toMatch(childPattern);
+      for (const line of lines) expect(stringWidth(line)).toBeLessThanOrEqual(40);
+    });
   });
 
   describe('lists — unbreakable tokens wider than the item budget', () => {
@@ -866,6 +896,30 @@ describe('renderMarkdownToTerminal', () => {
     it('F3: blockquote output ends with a trailing newline', () => {
       const out = renderMarkdownToTerminal('> Hello world\n');
       expect(out).toMatch(/\n$/);
+    });
+
+    it('multi-paragraph blockquote keeps its bar across the gap and owns one trailing newline', () => {
+      const out = stripAnsi(
+        renderMarkdownToTerminal('> first para\n>\n> second para\n\nafter\n', { maxWidth: 60 }),
+      );
+
+      // Exactly one blank line between the quote and the next block (the
+      // `space` token's), and the interior gap stays inside the quote.
+      expect(out).toBe('  │ first para\n  │\n  │ second para\n\nafter\n');
+    });
+
+    it('empty blockquote renders a blank line without a gap bar', () => {
+      expect(stripAnsi(renderMarkdownToTerminal('>\n'))).toBe('\n');
+    });
+
+    it('default-width multi-paragraph blockquote keeps its gap bar and trailing rhythm', () => {
+      const out = stripAnsi(renderMarkdownToTerminal('> first para\n>\n> second para\n\nafter\n'));
+      expect(out).toBe('  │ first para\n  │\n  │ second para\n\nafter\n');
+    });
+
+    it('single-paragraph blockquote followed by prose leaves exactly one blank line', () => {
+      const out = stripAnsi(renderMarkdownToTerminal('> quoted\n\nafter\n', { maxWidth: 60 }));
+      expect(out).toBe('  │ quoted\n\nafter\n');
     });
 
     it('F3: blockquote with multiple sentences has no trailing garbage prefix', () => {

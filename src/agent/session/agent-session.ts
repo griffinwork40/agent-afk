@@ -25,7 +25,6 @@ import type {
   ProviderRewindConversationResult,
   RewindTarget,
 } from '../provider.js';
-import { RESET_DRAIN_TIMEOUT_MS } from '../timeout.js';
 import type {
   AccountInfo,
   AgentConfig,
@@ -55,7 +54,7 @@ import type { ElicitationRequest } from '../types/sdk-types.js';
 import type { StopWiring } from '../types/session-types.js';
 import { resolveModelId } from './model-resolution.js';
 import { deriveOrigin, deriveActor } from './session-identity.js';
-import { scheduleTopLevelHousekeeping, wireAbortSignal } from './session-setup.js';
+import { scheduleTopLevelHousekeeping, seedResumeMessages, wireAbortSignal } from './session-setup.js';
 import { sessionLabelFromTracePath } from '../../paths.js';
 import { JournalLifecycle } from './journal-lifecycle.js';
 import type { MessageJournal } from '../journal/index.js';
@@ -64,13 +63,15 @@ import { AccountingAccumulator } from './accounting-accumulator.js';
 import { buildProviderLifecycle, ProviderInitializer } from './provider-lifecycle.js';
 import { TurnStreamRunner } from './turn-stream-runner.js';
 import { SessionShutdown } from './session-shutdown.js';
-import { withSessionTmpdir, cleanupSessionTmpdir } from './session-tmpdir.js';
+import { withSessionTmpdir } from './session-tmpdir.js';
+import { drainAndFinalizeClose } from './agent-session.close.js';
 import { resetSession } from './session-reset.js';
 import * as compact from './session-compact.js';
 import * as ss from './session-send.js';
 import * as sc from './session-config.js';
 import { toModelInfo, toAgentInfo, toContextUsageResponse, toMcpServerStatus } from './provider-type-mappers.js';
 import { applyStopHookWiring } from './agent-session.stop-hook-wiring.js';
+import { bindSessionExecutors, recordSubagentCompletionInTree } from './agent-session.executors.js';
 
 
 export class AgentSession implements IAgentSession {
@@ -133,6 +134,8 @@ export class AgentSession implements IAgentSession {
   private runner!: TurnStreamRunner;
 
   constructor(config: AgentConfig, ownedTraceWriter?: TraceWriter) {
+    // #3442: validate + bind opt-in executors before any provider exists.
+    bindSessionExecutors(config, this);
     // Invariant: seal ownership requires the caller to explicitly supply the
     // owner handle (second arg) AND it must be the same object as
     // config.traceWriter. The TraceSink/TraceWriter type split prevents forks
@@ -189,6 +192,13 @@ export class AgentSession implements IAgentSession {
       origin: deriveOrigin(config.surface),
       actor: deriveActor(config.parentSessionId),
     });
+
+    // SDK resume rehydration: when the caller passed `resume`/`sessionId` but
+    // omitted `resumeMessages`, load the on-disk journal so the conversation
+    // context is restored — matching the CLI's `resumeConfigFor()` behaviour.
+    // Must run before `journal.open()` so the `mark('resume')` stamp in
+    // `journal.arm()` sees the correct `resumeMessages` length.
+    this.config = seedResumeMessages(this.config);
 
     // Private per-session TMPDIR (session-tmpdir.ts); a no-op for forks.
     this.config = withSessionTmpdir(this.journal.open(this.config));
@@ -465,32 +475,13 @@ export class AgentSession implements IAgentSession {
     this.currentState = 'closed';
     this.outputBroadcast.close();
     await this.ledger.seal('close');
-    // Invariant: abort and drain the provider BEFORE closing the journal.
-    // Both providers perform final journal synchronization during their
-    // abort/turn-finalization paths (JournalSync.sync at commit points).
-    // Closing the journal first silently discards those writes, leaving the
-    // journal ending at an unmatched tool_use or missing completed tool
-    // results — corrupting the resume source. The reset path (session-reset.ts)
-    // already follows this order: provider.close() + iterator.return + drain
-    // initPromise → closeForReset(). close() must match it.
-    if (!this.abortController.signal.aborted) this.abortController.abort('closed');
-    this.stateManager.resolveInitializationIfNeeded();
-    try {
-      await this.providerQuery.close();
-    } catch {
-      // ignore
-    }
-    await this.providerIterator.return?.();
-    if (this.initPromise) {
-      try {
-        await Promise.race([this.initPromise, new Promise((resolve) => setTimeout(resolve, RESET_DRAIN_TIMEOUT_MS))]);
-      } catch {
-        // ignore
-      }
-    }
-    await this.journal.close();
-    await this.shutdown.dispatchOnce('close');
-    await cleanupSessionTmpdir(this.config.env); // after drain: children are done with it
+    // Invariant: provider abort+drain precedes journal close (see agent-session.close.ts).
+    await drainAndFinalizeClose({
+      abortController: this.abortController, stateManager: this.stateManager,
+      providerQuery: this.providerQuery, providerIterator: this.providerIterator,
+      initPromise: this.initPromise, journal: this.journal, shutdown: this.shutdown,
+      env: this.config.env,
+    });
   }
 
   /**
@@ -504,12 +495,17 @@ export class AgentSession implements IAgentSession {
    * @param usage   - Token breakdown from {@link SubagentTrace.usage}.
    * @param costUsd - Optional USD cost for this subagent (from
    *                  {@link SubagentSucceededPayload.totalCostUsd}).
+   *
+   * When `config.maxBudgetUsd` is set, the cost counts toward the same
+   * ceiling as this session's own turns (tree budget, checked at completion
+   * granularity); crossing it aborts with `BudgetExceededError`.
    */
   recordSubagentCompletion(
     usage?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheCreationTokens?: number },
     costUsd?: number,
   ): void {
-    this.accounting.recordSubagentCompletion(usage, costUsd);
+    // Tree budget: subagent cost shares config.maxBudgetUsd with this session.
+    recordSubagentCompletionInTree(this.accounting, this.config, this.abortController, usage, costUsd);
   }
 
   /**

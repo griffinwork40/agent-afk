@@ -18,8 +18,8 @@ import { assembleSystemPrompt } from '../agent/routing-directive.js';
 import { createDefaultTraceWriter, type CreatedTraceWriter } from '../agent/trace/factory.js';
 import { BackgroundAgentRegistry } from '../agent/background-registry.js';
 import { McpManager, loadMcpConfig } from '../agent/mcp/index.js';
+import { connectMcpTraced } from '../agent/mcp/connect-traced.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../config/import-sources.js';
-import { emitSessionPhase } from '../agent/trace/emit.js';
 import { WorkspaceStore } from '../agent/workspace/index.js';
 import {
   getDefaultSubagentModel,
@@ -31,7 +31,7 @@ import type { AgentSession } from '../agent/session/agent-session.js';
 import type { AgentConfig } from '../agent/types.js';
 import type { TraceWriter } from '../agent/trace/index.js';
 import type { TraceSink } from '../agent/trace/writer.js';
-import type { SubagentExecutorContext } from '../agent/tools/subagent-executor.js';
+import { makeDeferredParentProxy } from '../agent/session/deferred-parent-proxy.js';
 
 /** Everything `SessionOwner.create` needs beyond the base `AgentConfig`. */
 export interface WebSessionWiring {
@@ -55,6 +55,8 @@ export interface WireWebSessionOptions {
   cwd: string;
   rawPrompt: string | undefined;
   rawPromptSource: string | undefined;
+  /** Bare operator overlay (no framework); reaches unnamed `agent` children (#3324). */
+  operatorOverlay?: string | undefined;
 }
 
 /**
@@ -66,7 +68,7 @@ export interface WireWebSessionOptions {
 export async function wireWebSession(
   opts: WireWebSessionOptions,
 ): Promise<WebSessionWiring> {
-  const { model, apiKey, cwd, rawPrompt, rawPromptSource } = opts;
+  const { model, apiKey, cwd, rawPrompt, rawPromptSource, operatorOverlay } = opts;
 
   // -- 1. Trace writer (session-scoped UUID) ----------------------------------
   const created: CreatedTraceWriter | null = createDefaultTraceWriter();
@@ -86,16 +88,7 @@ export async function wireWebSession(
   );
 
   // -- 5. Deferred parent proxy (session constructed after executors) ----------
-  let boundSession: AgentSession | undefined;
-  const deferredParent: SubagentExecutorContext['parentSession'] = {
-    get sessionId() { return boundSession?.sessionId; },
-    getInputStreamRef() { return boundSession?.getInputStreamRef?.() ?? { pushUserMessage: () => {} }; },
-    get abortSignal() { return boundSession?.abortSignal ?? new AbortController().signal; },
-    get hookRegistry() { return boundSession?.hookRegistry; },
-    // Journal parent view: forks journal to `messageJournal.forSubagent(id)`,
-    // never to the parent's own file (see fork-child-config.ts).
-    get messageJournal() { return boundSession?.messageJournal; },
-  };
+  const { proxy: deferredParent, bind: bindParent } = makeDeferredParentProxy();
 
   // -- 6. wireExecutors (cwd, executors, root manager) ------------------------
   const executors = wireExecutors({
@@ -107,6 +100,7 @@ export async function wireWebSession(
     defaultSubagentModel: getDefaultSubagentModel(model),
     resolveApiKeyForModel: getApiKeyForModel,
     ...(rawPrompt !== undefined ? { systemPrompt: rawPrompt } : {}),
+    ...(operatorOverlay !== undefined ? { operatorOverlay } : {}),
     cwd,
     // Web uses uniform cwd anchoring (same as REPL, unlike Telegram).
     nestedCwd: cwd,
@@ -161,7 +155,7 @@ export async function wireWebSession(
   // Attach the late-bind setter as a post-construction hook: the caller must
   // invoke this after `new AgentSession(config)` so the deferred proxy resolves.
   (wiring as WebSessionWiringInternal).__bindSession = (s: AgentSession) => {
-    boundSession = s;
+    bindParent(s);
     executors.rootManager.setOnSubagentSucceeded((usage, costUsd) => {
       s.recordSubagentCompletion(usage, costUsd);
     });
@@ -196,26 +190,7 @@ async function loadWebMcpManager(
   const enabledCount = Object.values(loaded.mcpServers).filter((s) => !s.disabled).length;
   if (enabledCount === 0) return undefined;
 
-  const mcpStartedAt = Date.now();
-  void emitSessionPhase(traceWriter, {
-    phase: 'mcp_connect_start',
-    metadata: { serverCount: enabledCount },
-  });
-  let manager: McpManager;
-  try {
-    manager = await McpManager.fromConfig(loaded.mcpServers, {
-      warnings: loaded.warnings,
-      serverLayers: loaded.serverLayers,
-      userAllowSecretEnv: loaded.userAllowSecretEnv,
-      ...(traceWriter !== undefined ? { traceWriter } : {}),
-    });
-  } finally {
-    void emitSessionPhase(traceWriter, {
-      phase: 'mcp_connect_done',
-      durationMs: Date.now() - mcpStartedAt,
-      metadata: { serverCount: enabledCount },
-    });
-  }
+  const manager = await connectMcpTraced(loaded, traceWriter);
 
   // Surface non-alwaysLoad server connection failures to stderr so operators
   // learn about broken MCP servers without having to parse structured logs.

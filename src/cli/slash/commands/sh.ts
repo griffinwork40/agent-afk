@@ -11,10 +11,10 @@
  * The `<id>` form is `sh-N` (zero leading prefix accepted for muscle memory:
  * `/sh show 3` and `/sh show sh-3` are equivalent).
  *
- * Distinct from `/bgsub` (subagent backgrounding). This command operates
- * only on shell processes spawned via the REPL's `!`-prefix dispatch path;
- * the model-side bash tool has its own (non-backgrounded, v1) result
- * delivery and is not surfaced here.
+ * Distinct from `/bgsub` (subagent backgrounding). User jobs come from the
+ * REPL's `!`-prefix dispatch path; model-started background processes
+ * (`bash run_in_background`, ids `proc-N`) are listed alongside them and can
+ * be shown and killed with the same verbs (see `sh.process-jobs.ts`).
  *
  * @module cli/slash/commands/sh
  */
@@ -23,6 +23,9 @@ import { palette } from '../../palette.js';
 import type { SlashCommand } from '../types.js';
 import type { ShellPassthrough } from '../../commands/interactive/shell-passthrough.js';
 import { formatDuration } from '../../format-utils.js';
+import { isProcessJobId } from '../../../agent/shell-jobs/process-jobs.js';
+import { killProcessJob, listProcessJobs, showProcessJob } from './sh.process-jobs.js';
+import { truncate } from '../../../utils/truncate.js';
 
 let passthroughRef: ShellPassthrough | undefined;
 
@@ -58,7 +61,7 @@ function statusGlyph(status: string): string {
 
 export const shCmd: SlashCommand = {
   name: '/sh',
-  summary: 'Inspect or kill user-typed `!cmd` shell jobs',
+  summary: 'Inspect or kill `!cmd` shell jobs and model background processes',
   usage: '/sh [list | show <id> | kill <id>]',
   hint:
     'Manages shell processes started with `!cmd` (foreground) or `!&cmd` ' +
@@ -72,12 +75,18 @@ export const shCmd: SlashCommand = {
     const trimmed = args.trim();
     const [verb, ...rest] = trimmed === '' ? ['list'] : trimmed.split(/\s+/);
     const arg = rest.join(' ');
+    if ((verb === 'show' || verb === 'kill') && isProcessJobId(arg)) {
+      if (verb === 'show') showProcessJob(ctx.out, arg);
+      else killProcessJob(ctx.out, arg);
+      return 'continue';
+    }
 
     switch (verb) {
       case 'list': {
         const jobs = passthroughRef.registry.list();
         if (jobs.length === 0) {
           ctx.out.line(palette.dim('  no shell jobs in this session yet — type !<cmd> to start one'));
+          listProcessJobs(ctx.out);
           return 'continue';
         }
         ctx.out.line(palette.dim('  id     status     duration     mode  command'));
@@ -88,9 +97,10 @@ export const shCmd: SlashCommand = {
             ? formatDuration(job.result.durationMs).padEnd(12)
             : formatDuration(Date.now() - job.startedAt).padEnd(12);
           const mode = job.mode === 'background' ? 'bg' : 'fg';
-          const cmd = job.command.length > 60 ? job.command.slice(0, 57) + '...' : job.command;
+          const cmd = truncate(job.command, 60);
           ctx.out.line(`  ${glyph} ${job.id.padEnd(5)} ${status} ${dur} ${mode.padEnd(4)} ${cmd}`);
         }
+        listProcessJobs(ctx.out);
         return 'continue';
       }
       case 'show': {

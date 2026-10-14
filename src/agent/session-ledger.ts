@@ -103,9 +103,17 @@ export class SessionLedgerWriter {
     if (payload) this.record(payload);
   }
 
-  /** Record a user turn entering the session. */
-  recordUser(text: string): void {
-    this.record({ kind: 'user', text: clip(text, MAX_TEXT_LEN) });
+  /**
+   * Record a user turn entering the session. `input` is the caller's own
+   * message before framework context was prepended; it is stored only when it
+   * differs from `text` (see the `user` record in session-ledger-project).
+   */
+  recordUser(text: string, input?: string): void {
+    this.record(
+      input !== undefined && input !== text
+        ? { kind: 'user', text: clip(text, MAX_TEXT_LEN), input: clip(input, MAX_TEXT_LEN) }
+        : { kind: 'user', text: clip(text, MAX_TEXT_LEN) },
+    );
   }
 
   private _openStream(): void {

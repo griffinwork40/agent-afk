@@ -26,6 +26,9 @@ import { promisify } from 'node:util';
 
 import { runSweep } from '../../../agent/worktree/worktree-sweep.js';
 import type { ExecFileFn, SweepOptions } from '../../../agent/worktree/worktree-sweep.js';
+import { resolveSweepPolicy } from '../../../agent/worktree/sweep-policy.js';
+import { env } from '../../../config/env.js';
+import { loadConfig } from '../../config.js';
 import {
   VALID_SCOPES,
   PRUNABLE_VERDICTS,
@@ -211,6 +214,15 @@ async function handlePrune(ctx: SlashContext, args: string): Promise<SlashResult
     return 'continue';
   }
 
+  const config = loadConfig();
+  const { maxAgeDaysClean, maxAgeDaysDirty } = resolveSweepPolicy({
+    config: config.daemon?.worktreePrune,
+    env: {
+      maxAgeDaysClean: env.AFK_WORKTREE_MAX_AGE_CLEAN,
+      maxAgeDaysDirty: env.AFK_WORKTREE_MAX_AGE_DIRTY,
+    },
+  });
+
   let result;
   try {
     // An explicit `--apply` bypasses the soft-launch valve — see the same
@@ -221,6 +233,8 @@ async function handlePrune(ctx: SlashContext, args: string): Promise<SlashResult
       repoRoot,
       dryRun: !parsed.apply,
       scope: parsed.scope,
+      maxAgeDaysClean,
+      maxAgeDaysDirty,
       ...(parsed.apply === true ? { bypassSoftLaunch: true } : {}),
     };
     result = await runSweep(options);

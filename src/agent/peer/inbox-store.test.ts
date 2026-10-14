@@ -121,8 +121,12 @@ describe('peekPending', () => {
     expect(files).toHaveLength(1);
 
     const peeked = await peekPending(TARGET_ID, files[0]!);
-    expect(peeked).not.toBeNull();
-    expect(peeked!.messageId).toBe(env.messageId);
+    // A valid envelope is returned as-is.
+    expect(peeked).not.toBe('vanished');
+    expect(peeked).not.toBe('unparseable');
+    // Type narrowing: peeked is PeerEnvelope here.
+    if (typeof peeked === 'string') throw new Error('unexpected string result');
+    expect(peeked.messageId).toBe(env.messageId);
 
     // File is still in pending after peek.
     const filesAfterPeek = await listPending(TARGET_ID);
@@ -130,10 +134,34 @@ describe('peekPending', () => {
     expect(filesAfterPeek[0]).toBe(files[0]);
   });
 
-  it('returns null for a nonexistent file', async () => {
+  it('returns "vanished" for a nonexistent file', async () => {
     const { peekPending } = await getInboxStore();
     const result = await peekPending(TARGET_ID, 'nonexistent.json');
-    expect(result).toBeNull();
+    expect(result).toBe('vanished');
+  });
+
+  it('returns "unparseable" for a file that exists but has invalid content', async () => {
+    const { peekPending } = await getInboxStore();
+    const pendingDir = path.join(tmpDir, 'inbox', TARGET_ID, 'pending');
+    fs.mkdirSync(pendingDir, { recursive: true, mode: 0o700 });
+    const file = 'bad-content.json';
+    fs.writeFileSync(path.join(pendingDir, file), 'THIS IS NOT JSON', { mode: 0o600 });
+    const result = await peekPending(TARGET_ID, file);
+    expect(result).toBe('unparseable');
+  });
+
+  it('returns "unparseable" for a v:2 envelope (unsupported version)', async () => {
+    const { peekPending } = await getInboxStore();
+    const pendingDir = path.join(tmpDir, 'inbox', TARGET_ID, 'pending');
+    fs.mkdirSync(pendingDir, { recursive: true, mode: 0o700 });
+    const file = 'v2-envelope.json';
+    fs.writeFileSync(
+      path.join(pendingDir, file),
+      JSON.stringify({ v: 2, messageId: 'x', from: { id: 'a' }, to: 'b', hop: 0, ts: new Date().toISOString(), body: 'hi' }),
+      { mode: 0o600 },
+    );
+    const result = await peekPending(TARGET_ID, file);
+    expect(result).toBe('unparseable');
   });
 });
 
@@ -329,6 +357,93 @@ describe('hold/listHeld/releaseHeld/dropHeld', () => {
     fs.mkdirSync(path.join(tmpDir, 'inbox', TARGET_ID, 'held'), { recursive: true });
     const result = await dropHeld(TARGET_ID, 'ghost.json');
     expect(result).toBe(false);
+  });
+
+  it('holdPending rejects traversal filenames', async () => {
+    const { holdPending } = await getInboxStore();
+    await expect(holdPending(TARGET_ID, '../etc')).rejects.toThrow(/Invalid file/);
+    await expect(holdPending(TARGET_ID, 'a/b')).rejects.toThrow(/Invalid file/);
+    await expect(holdPending(TARGET_ID, 'a\\b')).rejects.toThrow(/Invalid file/);
+    await expect(holdPending(TARGET_ID, '..')).rejects.toThrow(/Invalid file/);
+  });
+
+  it('peekPending rejects traversal filenames', async () => {
+    const { peekPending } = await getInboxStore();
+    await expect(peekPending(TARGET_ID, '../etc')).rejects.toThrow(/Invalid file/);
+    await expect(peekPending(TARGET_ID, 'a/b')).rejects.toThrow(/Invalid file/);
+    await expect(peekPending(TARGET_ID, 'a\\b')).rejects.toThrow(/Invalid file/);
+    await expect(peekPending(TARGET_ID, '..')).rejects.toThrow(/Invalid file/);
+  });
+
+  it('dropHeld rejects traversal filenames', async () => {
+    const { dropHeld } = await getInboxStore();
+    await expect(dropHeld(TARGET_ID, '../etc')).rejects.toThrow(/Invalid file/);
+    await expect(dropHeld(TARGET_ID, 'a/b')).rejects.toThrow(/Invalid file/);
+    await expect(dropHeld(TARGET_ID, 'a\\b')).rejects.toThrow(/Invalid file/);
+    await expect(dropHeld(TARGET_ID, '..')).rejects.toThrow(/Invalid file/);
+  });
+
+  it('holdPending/peekPending/dropHeld accept plain bare filenames', async () => {
+    const { holdPending, peekPending, dropHeld } = await getInboxStore();
+    // peekPending on a nonexistent plain name returns 'vanished' (not a throw).
+    await expect(peekPending(TARGET_ID, 'plain-name.json')).resolves.toBe('vanished');
+    // holdPending on a missing file returns false (not a throw).
+    await expect(holdPending(TARGET_ID, 'plain-name.json')).resolves.toBe(false);
+    // dropHeld on a missing file returns false (not a throw).
+    await expect(dropHeld(TARGET_ID, 'plain-name.json')).resolves.toBe(false);
+  });
+
+  it('assertBareFilename: double-dots within a filename component are accepted', async () => {
+    // 'corrupt..json' and 'a..b.json' contain ".." as a substring but NOT as a
+    // bare path component — they must not be rejected (the bug was file.includes('..')).
+    const { peekPending, holdPending, dropHeld } = await getInboxStore();
+    await expect(peekPending(TARGET_ID, 'corrupt..json')).resolves.toBe('vanished');
+    await expect(peekPending(TARGET_ID, 'a..b.json')).resolves.toBe('vanished');
+    await expect(holdPending(TARGET_ID, 'corrupt..json')).resolves.toBe(false);
+    await expect(dropHeld(TARGET_ID, 'a..b.json')).resolves.toBe(false);
+  });
+
+  it('assertBareFilename: exact traversal components are still rejected', async () => {
+    // Bare '..' and '../x' must still throw — they are path traversal.
+    const { peekPending } = await getInboxStore();
+    await expect(peekPending(TARGET_ID, '..')).rejects.toThrow(/Invalid file/);
+    await expect(peekPending(TARGET_ID, '../x')).rejects.toThrow(/Invalid file/);
+    await expect(peekPending(TARGET_ID, 'a/b')).rejects.toThrow(/Invalid file/);
+  });
+
+  it('claimPending/releaseHeld/reclaimDelivered/writeInjectionAck reject traversal filenames', async () => {
+    // Verify the four functions newly guarded with assertBareFilename.
+    const { claimPending, releaseHeld, reclaimDelivered, writeInjectionAck } = await getInboxStore();
+    const traversalCases = ['..', '../etc', 'a/b', 'a\\b'];
+    for (const bad of traversalCases) {
+      await expect(claimPending(TARGET_ID, bad)).rejects.toThrow(/Invalid file/);
+      await expect(releaseHeld(TARGET_ID, bad)).rejects.toThrow(/Invalid file/);
+      await expect(reclaimDelivered(TARGET_ID, bad)).rejects.toThrow(/Invalid file/);
+      await expect(writeInjectionAck(TARGET_ID, bad)).rejects.toThrow(/Invalid file/);
+    }
+  });
+
+  it('claimPending/releaseHeld/reclaimDelivered/writeInjectionAck accept double-dot filenames', async () => {
+    // 'corrupt..json' must be accepted by all four guarded functions — they should
+    // return false / resolve (not throw) for a missing-file bare name.
+    const { claimPending, releaseHeld, reclaimDelivered, writeInjectionAck } = await getInboxStore();
+    await expect(claimPending(TARGET_ID, 'corrupt..json')).resolves.toBeNull();
+    await expect(releaseHeld(TARGET_ID, 'corrupt..json')).resolves.toBe(false);
+    await expect(reclaimDelivered(TARGET_ID, 'corrupt..json')).resolves.toBe(false);
+    await expect(writeInjectionAck(TARGET_ID, 'corrupt..json')).resolves.toBeUndefined();
+  });
+
+  it('listHeld returns { file, corrupt: true } for an unparseable held file', async () => {
+    const { listHeld } = await getInboxStore();
+    const heldDir = path.join(tmpDir, 'inbox', TARGET_ID, 'held');
+    fs.mkdirSync(heldDir, { recursive: true, mode: 0o700 });
+    const filename = 'corrupt-entry.json';
+    fs.writeFileSync(path.join(heldDir, filename), 'NOT VALID JSON', { mode: 0o600 });
+    const held = await listHeld(TARGET_ID);
+    expect(held).toHaveLength(1);
+    expect(held[0]!.file).toBe(filename);
+    expect(held[0]!.corrupt).toBe(true);
+    expect(held[0]!.envelope).toBeUndefined();
   });
 });
 

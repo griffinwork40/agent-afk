@@ -25,11 +25,12 @@
  * name, but the later one stays reachable.
  *
  * Frontmatter parsing, flag harvesting, and body extraction are delegated
- * to `src/cli/slash/_lib/flag-harvest.ts` so the user surface stays in
+ * to `src/utils/skill-md.ts` so the user surface stays in
  * lockstep with the plugin surface.
  */
 
 import { readdirSync, readFileSync } from 'fs';
+import { errorMessage, isEnoent } from '../utils/errors.js';
 import { join } from 'path';
 import { getSkillsDir } from '../paths.js';
 import {
@@ -40,7 +41,7 @@ import {
   type SkillExecutionContext,
   type SkillMetadata,
 } from './index.js';
-import { harvestFlagsFromSkillMd, parseSkillMd } from '../cli/slash/_lib/flag-harvest.js';
+import { harvestFlagsFromSkillMd, parseSkillMd } from '../utils/skill-md.js';
 import { SubagentManager } from '../agent/subagent.js';
 import { resolveChildModel } from '../agent/subagent/resolve-child-model.js';
 import { substituteSkillArgs } from '../agent/tools/skill-executor/arg-substitution.js';
@@ -312,9 +313,8 @@ export function scanSkillsFromDir(
     // silent on ENOENT. Surface only unexpected failures (EACCES, broken
     // symlink) so a misconfigured dir doesn't vanish without a trace — mirrors
     // the `[afk] skipping skill …` signal in parseUserSkillMd.
-    const e = err as NodeJS.ErrnoException;
-    if (e.code !== 'ENOENT') {
-      process.stderr.write(`[afk] skipping skills dir ${dir}: ${e.message}\n`);
+    if (!isEnoent(err)) {
+      process.stderr.write(`[afk] skipping skills dir ${dir}: ${errorMessage(err)}\n`);
     }
     return 0;
   }
@@ -332,9 +332,8 @@ export function scanSkillsFromDir(
       // ENOENT just means the subdirectory carries no SKILL.md (not a skill),
       // so skip quietly. Surface permission/symlink failures so a present-but-
       // unreadable skill leaves a trace instead of silently disappearing.
-      const e = err as NodeJS.ErrnoException;
-      if (e.code !== 'ENOENT') {
-        process.stderr.write(`[afk] skipping skill ${entry.name}: ${e.message}\n`);
+      if (!isEnoent(err)) {
+        process.stderr.write(`[afk] skipping skill ${entry.name}: ${errorMessage(err)}\n`);
       }
       continue;
     }

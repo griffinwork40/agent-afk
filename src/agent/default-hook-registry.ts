@@ -37,6 +37,7 @@ import type { TraceSink } from './trace/index.js';
 import type { LoadedHooksConfig } from './hooks/config-loader.js';
 import { loadAndRegisterConfigHooks } from './hooks/config-bridge.js';
 import { createWhatifEpisodeGate } from './whatif-episode-gate.js';
+import { createUnprovenDiagnosisDetectHook } from './unproven-diagnosis-detect.js';
 
 export interface SubagentCompleteInfo {
   subagentId: string;
@@ -166,6 +167,29 @@ function registerWhatifEpisodeGate(registry: HookRegistry): void {
 }
 
 /**
+ * Register the two-layer placeholder defense and the unproven-diagnosis gate.
+ *
+ * Layer 1 (Prevention): `SessionStart` `injectContext` — proactively instructs
+ * the model to resolve placeholder values from context before presenting shell
+ * commands. Fires for top-level sessions only. See `placeholder-prevent.ts`.
+ *
+ * Layer 2 (Correction): `Stop` hook — scans shellable code blocks for
+ * unresolved placeholder tokens and injects a correction. Bounded per session
+ * (fails open after 2 corrections). No-op on non-REPL surfaces. See
+ * `placeholder-detect.ts`.
+ *
+ * Unproven-diagnosis gate (issue #2987): `Stop` hook — injects the elimination
+ * ladder when the turn closes on an external / cause-unknown diagnosis with no
+ * instrumentation evidence. Opt-in via `AFK_UNPROVEN_DIAGNOSIS_GATE=1`. See
+ * `unproven-diagnosis-detect.ts`.
+ */
+function registerPlaceholderAndDiagnosisHooks(registry: HookRegistry): void {
+  registry.register('SessionStart', createPlaceholderPreventHook());
+  registry.register('Stop', createPlaceholderDetectHook());
+  registry.register('Stop', createUnprovenDiagnosisDetectHook());
+}
+
+/**
  * Register the pre-existing-defect ledger SessionEnd hook. Scans assistant
  * turns for pre-existing-defect flags and appends JSONL entries to
  * ~/.afk/agent-framework/preexisting-ledger.jsonl. Best-effort; never throws;
@@ -181,7 +205,7 @@ export function createDefaultHookRegistry(
   memoryStore?: MemoryStore,
   getPermissionMode?: () => PermissionMode,
   hookConfig?: LoadedHooksConfig,
-  agentOptions?: { cwd?: string; sessionId?: string; traceWriter?: TraceSink; afkPromptForApproval?: boolean; getTranscriptPath?: () => string | null },
+  agentOptions?: { cwd?: string; sessionId?: string; traceWriter?: TraceSink; afkPromptForApproval?: boolean; getTranscriptPath?: () => string | null; daemonTaskId?: string },
   getCwd?: () => string | undefined,
 ): DefaultHookRegistryResult {
   const registry = createHookRegistry();
@@ -191,26 +215,9 @@ export function createDefaultHookRegistry(
   const shadowVerifyNudge = createShadowVerifyNudge();
   registry.register('SubagentStop', shadowVerifyNudge);
   registry.register('Stop', shadowVerifyNudge);
-  // ── Two-layer placeholder defense (#2125) ──────────────────────────────
-  // Layer 1 (Prevention): SessionStart injectContext — proactively instructs
-  // the model to resolve placeholder values from context before presenting
-  // shell commands, and to flag unresolvable values prominently. Works on
-  // all surfaces. Non-deterministic (the model may still generate placeholders
-  // despite the instruction), so Layer 2 below provides the backstop.
-  // Fires for top-level sessions only; subagent forks are skipped both by
-  // AgentSession.pullInitialization and by the handler's own parentSessionId
-  // guard (defence-in-depth). See placeholder-prevent.ts.
-  registry.register('SessionStart', createPlaceholderPreventHook());
-  // Layer 2 (Correction): Stop hook — scans shellable code blocks in the
-  // turn's code-block register for unresolved placeholder tokens (e.g.
-  // `your-user@mac-mini-ip`, `<YOUR_API_KEY>`) that the user would
-  // copy-paste and run literally. Injects a correction into the next turn
-  // asking the model to resolve or prominently mark them. Bounded per
-  // session (fails open after 2 corrections). Reads from the code-block
-  // register (src/cli/code-block-register.ts) which is only populated in
-  // the REPL loop, so the hook is automatically a no-op on non-REPL
-  // surfaces and subagents without any guard code. See placeholder-detect.ts.
-  registry.register('Stop', createPlaceholderDetectHook());
+  // Two-layer placeholder defense (#2125) + unproven-diagnosis gate (#2987).
+  // See registerPlaceholderAndDiagnosisHooks for details of each layer.
+  registerPlaceholderAndDiagnosisHooks(registry);
   // Ask-question gate: on surfaces with no elicitation handler (daemon,
   // scheduler, one-shot chat) a question can never be answered — block it
   // pre-flight with proceed-on-assumption guidance instead of letting the
@@ -263,6 +270,7 @@ export function createDefaultHookRegistry(
         // Lets a pending approval mark this session's presence file as
         // blocked-on-human, so an out-of-process observer can see the wait.
         ...(agentOptions?.sessionId !== undefined ? { sessionId: agentOptions.sessionId } : {}),
+        ...(agentOptions?.daemonTaskId !== undefined ? { daemonTaskId: agentOptions.daemonTaskId } : {}),
       }),
       // Longrunning: on a high-risk op the gate awaits an operator approve/deny
       // via elicitationRouter.route() (deny-on-timeout). Bypass the 30s per-
@@ -293,22 +301,20 @@ export function createDefaultHookRegistry(
   //
   // Invariant: path-approval and bash-restriction hooks read the grant manager
   // from `context.grantManager` (injected per-session by the dispatcher since
-  // #527; the former process-global ref was retired in #528). Headless surfaces
-  // (afk chat, daemon, threads) never wire a sessionGrantManager into the
-  // dispatcher, so on those surfaces:
-  //   - path-approval PreToolUse: fails open (no prompt; the typed-tool
-  //     handler's own resolveAndContain still enforces containment);
-  //   - bash restricted-root substring check: fails open (no backstop);
-  //   - bash interpreter denylist: ALSO fails open by default — it is gated on
-  //     a wired grant manager (interactive surfaces only), so headless
-  //     automation that runs `python -c` / `sh -c` one-liners is not hard-
-  //     blocked with no recourse. Opt headless flows back into the guard with
-  //     AFK_FORCE_BASH_INTERPRETER_GUARD=1; disable the whole feature with
-  //     AFK_DISABLE_PATH_APPROVAL=1.
-  //
-  // The former process-global `pathApprovalGrantRef` has been retired (#528).
-  // Both hooks now read the grant manager exclusively from `context.grantManager`
-  // — injected per-session by the dispatcher since #527.
+  // #527; the global ref was retired in #528). Both production providers wire
+  // THEMSELVES as the grant manager on EVERY surface (REPL, Telegram, afk chat,
+  // daemon, forks), so its presence is NOT an interactivity signal; the
+  // explicit one is `context.nonInteractive` (isHeadlessSession(config):
+  // isNonInteractive OR surface 'daemon', threaded by the dispatcher, #2302):
+  //   - bash restricted-root check: nonInteractive (or no grant manager) uses
+  //     the UNFILTERED builtin floor, else the `/allow-dir`-filtered set;
+  //   - bash interpreter denylist: gated on a wired grant manager, NOT on
+  //     nonInteractive, so daemon / chat / forks keep it. No grant manager
+  //     fails open unless AFK_FORCE_BASH_INTERPRETER_GUARD=1;
+  //     AFK_DISABLE_BASH_INTERPRETER_GUARD=1 lifts it;
+  //   - path-approval: the prompt declines where no elicitation handler is
+  //     installed; the handler's resolveAndContain still enforces containment.
+  // AFK_DISABLE_PATH_APPROVAL=1 disables both hooks.
   const disabled = env.AFK_DISABLE_PATH_APPROVAL === '1';
   if (disabled && !warnedPathApprovalDisabled) {
     warnedPathApprovalDisabled = true;
@@ -350,10 +356,10 @@ export function createDefaultHookRegistry(
         // circuits the whole `if (!disabled)` block above):
         //   - disableInterpreterGuard: force the denylist OFF even on
         //     interactive surfaces (wins over force).
-        //   - forceInterpreterGuard: force the denylist ON even on headless
-        //     surfaces, where it otherwise fails open (the denylist is gated on
-        //     a wired grant manager so headless automation running `python -c`
-        //     / `sh -c` isn't hard-blocked with no recourse).
+        //   - forceInterpreterGuard: force the denylist ON even for contexts
+        //     with no grant manager, where it otherwise fails open (the
+        //     denylist is gated on a wired grant manager, so non-dispatcher
+        //     callers running `python -c` / `sh -c` aren't hard-blocked).
         disableInterpreterGuard: env.AFK_DISABLE_BASH_INTERPRETER_GUARD === '1',
         forceInterpreterGuard: env.AFK_FORCE_BASH_INTERPRETER_GUARD === '1',
       }),

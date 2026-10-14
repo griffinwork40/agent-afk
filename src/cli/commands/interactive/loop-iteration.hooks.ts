@@ -1,9 +1,9 @@
 /**
- * REPL-turn hook dispatchers — `UserPromptSubmit` (pre-turn) and `Stop`
- * (post-turn). Extracted from `runInputLoop` so policy hook wiring never
- * grows that grandfathered function.
+ * REPL-turn hook dispatcher — `UserPromptSubmit` (pre-turn). Extracted from
+ * `runInputLoop` so policy hook wiring never grows that grandfathered function.
+ * (Stop is dispatched by the session layer — see `wireStopHook`.)
  *
- * Both dispatchers are thin wrappers: they translate hook-registry primitives
+ * The dispatcher is a thin wrapper: it translates hook-registry primitives
  * (injectContext, HookBlockedError, HookHandlerTimeoutError) into the caller's
  * concrete next-action without exposing registry internals to the loop.
  *
@@ -12,17 +12,10 @@
 
 import type { UserPromptSubmitContext } from '../../../agent/hooks.js';
 import { sanitizeForDisplay } from '../../../utils/terminal-sanitize.js';
-import { AbortError, HookBlockedError } from '../../../utils/errors.js';
+import { HookBlockedError } from '../../../utils/errors.js';
 import { HookHandlerTimeoutError } from '../../../agent/hook-registry.js';
-import { debugLog } from '../../../utils/debug.js';
 import { palette } from '../../palette.js';
 import type { InteractiveCtx } from './shared.js';
-
-/** Per-handler timeout for the post-turn Stop notification. Tighter than the
- *  registry default (HOOK_HANDLER_TIMEOUT_MS = 30s) because Stop fires every
- *  REPL turn — a notification hook must not stall the prompt for 30s × N
- *  handlers. */
-const STOP_HOOK_HANDLER_TIMEOUT_MS = 5_000;
 
 /**
  * Result of the pre-turn `UserPromptSubmit` hook dispatch.
@@ -76,57 +69,5 @@ export async function dispatchUserPromptSubmit(runText: string, ctx: Interactive
       return { shouldContinue: true, runText };
     }
     throw err; // AbortError and unexpected errors propagate.
-  }
-}
-
-/**
- * Dispatch the `Stop` hook after a completed turn.
- *
- * Returns the merged `injectContext` string from all non-blocking handlers,
- * or `undefined` when no injection was produced. `AbortError` propagates;
- * block and timeout errors are surfaced as dim completion-writer notices
- * (they do NOT abort the loop — Stop block semantics are advisory post-turn).
- *
- * @param ctx                     Interactive session context.
- * @param currentTerminalKind     Parsed verdict kind from this turn, if any.
- * @param currentDoneHasEvidence  Whether the Done verdict had corroborating evidence.
- * @param currentDoneClassification  Evidence classification for Done verdicts.
- */
-export async function dispatchStop(
-  ctx: InteractiveCtx,
-  currentTerminalKind: 'done' | 'blocked' | 'asking' | 'interrupted' | undefined,
-  currentDoneHasEvidence: boolean | undefined,
-  currentDoneClassification: 'no-code-changes' | 'verified' | 'unverified' | undefined,
-): Promise<string | undefined> {
-  if (!ctx.hookRegistry) return undefined;
-  try {
-    const stopDecision = await ctx.hookRegistry.dispatch(
-      {
-        event: 'Stop',
-        sessionId: ctx.stats.sessionId,
-        ...(currentTerminalKind !== undefined ? { terminalState: currentTerminalKind } : {}),
-        ...(currentDoneHasEvidence !== undefined ? { doneHasCorroboratingEvidence: currentDoneHasEvidence } : {}),
-        ...(currentDoneClassification !== undefined ? { doneEvidenceClassification: currentDoneClassification } : {}),
-      },
-      undefined,
-      STOP_HOOK_HANDLER_TIMEOUT_MS,
-    );
-    if (stopDecision.injectContext && stopDecision.injectContext.trim().length > 0) {
-      return stopDecision.injectContext;
-    }
-    return undefined;
-  } catch (err) {
-    if (err instanceof AbortError) throw err;
-    if (err instanceof HookHandlerTimeoutError) {
-      debugLog('[stop hook] handler timed out');
-      ctx.completionWriter.fn(palette.dim('  [stop hook] timed out'));
-    } else if (err instanceof HookBlockedError) {
-      ctx.completionWriter.fn(
-        palette.dim(`  [stop hook] blocked: ${sanitizeForDisplay(err.reason ?? 'no reason given')}`),
-      );
-    } else {
-      debugLog('[stop hook] unexpected error: ' + String(err));
-    }
-    return undefined;
   }
 }

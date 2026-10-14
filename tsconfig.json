@@ -27,6 +27,7 @@
     
     /* Emit */
     "declaration": true,
+    "rootDir": "./src",
     "outDir": "./dist",
     "removeComments": true,
     "importHelpers": false,

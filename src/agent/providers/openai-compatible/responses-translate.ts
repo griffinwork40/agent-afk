@@ -130,6 +130,13 @@ export function* translateResponsesEvent(
     // Reasoning trace: o-series / gpt-5 over Responses surface both a raw
     // reasoning stream and a summarized one depending on the `reasoning`
     // request param. Treat both as reasoning deltas.
+    //
+    // Intentional omission: `state.reasoningField` is NOT set here.
+    // The Responses API is currently used only for OpenAI models, which do not
+    // expose reasoning in conversation history — so the echo key is irrelevant.
+    // If a future Responses-to-other-provider bridge is added (e.g. Cerebras over
+    // Responses), this path must be updated to set `state.reasoningField` the same
+    // way `translate.ts:translateChunk` does for Chat Completions.
     case 'response.reasoning_text.delta':
     case 'response.reasoning_summary_text.delta': {
       if (typeof event.delta === 'string' && event.delta.length > 0) {

@@ -8,16 +8,13 @@
  *
  * Contract:
  *   - `parseEnvelope` never throws; returns null on any shape/version mismatch.
- *   - `renderPeerMessageBlock` escapes all dynamic content via the local
- *     `escapeXml` helper (same five replacements as bg-result-notifier.ts).
+ *   - `renderPeerMessageBlock` escapes all dynamic content via the shared
+ *     {@link escapeXml} helper from `xml-escape.ts` (five replacements: & < > " ').
  *   - Body size is NOT re-validated here — {@link PEER_MAX_BODY_BYTES} is the
  *     sender-side gate enforced in guards.ts and send.ts.
  *
  * @module agent/peer/envelope
  */
-
-/** Current envelope schema version. */
-export const PEER_ENVELOPE_VERSION = 1;
 
 /** Maximum body size in bytes. Enforced by the sender before writing. */
 export const PEER_MAX_BODY_BYTES = 64 * 1024;
@@ -49,23 +46,7 @@ export interface PeerEnvelope {
   body: string;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Minimal XML escaping — matches the same five replacements used in
- * bg-result-notifier.ts#escapeXml. Replaces &, <, >, ", and ' so that
- * adversarial body content cannot inject arbitrary XML structure.
- */
-function escapeXml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
+import { escapeXml } from './xml-escape.js';
 
 // ---------------------------------------------------------------------------
 // Public API

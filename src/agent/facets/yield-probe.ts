@@ -19,10 +19,12 @@
  * @module agent/facets/yield-probe
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { getFacetCacheDir, validateSessionId } from '../../paths.js';
 import { SessionFacetSchema, type SessionFacet } from './schema.js';
+import { debugLog } from '../../utils/debug.js';
 
 // ---------------------------------------------------------------------------
 // Injectable exec type (matches promisify(execFile) signature)
@@ -204,10 +206,7 @@ export function patchYieldFields(
     },
   };
 
-  mkdirSync(dirname(cachePath), { recursive: true });
-  const tmpPath = `${cachePath}.${process.pid}.yield.tmp`;
-  writeFileSync(tmpPath, `${JSON.stringify(facet, null, 2)}\n`, 'utf8');
-  renameSync(tmpPath, cachePath);
+  atomicWriteFile(cachePath, `${JSON.stringify(facet, null, 2)}\n`, { mode: 0o600, encoding: 'utf-8' });
 }
 
 // ---------------------------------------------------------------------------
@@ -231,9 +230,19 @@ export async function writeFacetYield(
   sessionId: string,
   execFn: ExecFnYield,
   cwd?: string,
+  cacheDir: string = getFacetCacheDir(),
 ): Promise<void> {
+  // Retain only the error class, not gh stderr/messages which may contain secrets.
+  let errorClass = 'InvalidResponse';
+  const probeExec: ExecFnYield = async (file, args, opts) => {
+    try {
+      return await execFn(file, args, opts);
+    } catch (error) {
+      errorClass = error instanceof Error ? error.name : 'UnknownError';
+      throw error;
+    }
+  };
   // Read the cached facet to check for a pre-detected pr_url
-  const cacheDir = getFacetCacheDir();
   const cachePath = cachePathFor(sessionId, cacheDir);
   let cachedPrUrl: string | null | undefined;
   let cachedProducedPr: boolean | null = null;
@@ -253,8 +262,11 @@ export async function writeFacetYield(
 
   // Path 1: pr_url already detected by derive.ts — query by URL directly
   if (typeof cachedPrUrl === 'string' && cachedPrUrl.length > 0) {
-    const prState = await queryPrStateByUrl(execFn, cachedPrUrl, cwd);
-    if (prState === 'error') return; // leave fields as-is, probe inconclusive
+    const prState = await queryPrStateByUrl(probeExec, cachedPrUrl, cwd);
+    if (prState === 'error') {
+      debugLog('[yield-probe] gh probe inconclusive', { sessionId, path: 'url', errorClass });
+      return; // leave fields as-is, probe inconclusive
+    }
     patchYieldFields(sessionId, true, prState === 'merged', cacheDir, cachedPrUrl);
     return;
   }
@@ -263,18 +275,19 @@ export async function writeFacetYield(
   const branch = await getCurrentBranch(execFn, cwd);
   if (!branch) return;
 
-  const prState = await queryPrState(execFn, branch, cwd);
+  const prState = await queryPrState(probeExec, branch, cwd);
   if (prState === 'error') {
-    // gh exec failure — leave yield_tracking fields null (probe inconclusive).
+    // gh exec failure — leave yield_tracking fields unchanged (probe inconclusive).
+    debugLog('[yield-probe] gh probe inconclusive', { sessionId, path: 'branch', errorClass });
     return;
   }
   if (prState === 'none') {
     // Never downgrade produced_pr=true to false — if derive already detected
     // a PR URL, don't record false just because branch lookup found nothing.
     if (cachedProducedPr === true) return;
-    patchYieldFields(sessionId, false, null);
+    patchYieldFields(sessionId, false, null, cacheDir);
     return;
   }
 
-  patchYieldFields(sessionId, true, prState === 'merged');
+  patchYieldFields(sessionId, true, prState === 'merged', cacheDir);
 }

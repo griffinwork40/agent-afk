@@ -63,12 +63,9 @@ export interface PeerInboxNotifierOpts {
   /**
    * Live getter for the trace writer. Called on every emit so a mid-session
    * resume (which swaps the trace writer) is automatically reflected.
-   * When both `getTraceWriter` and `traceWriter` are provided, `getTraceWriter`
-   * takes precedence. When neither is provided, tracing is disabled.
+   * When not provided, tracing is disabled.
    */
   getTraceWriter?: () => TraceSink | undefined;
-  /** @deprecated Prefer `getTraceWriter` for correct behaviour after resume. */
-  traceWriter?: TraceSink;
   now?: () => number;
   /** Poll interval override (ms). Falls back to `AFK_PEER_POLL_MS`, then 1000. */
   pollMs?: number;
@@ -123,9 +120,7 @@ export class PeerInboxNotifier {
     this.wakeBudget = createWakeBudget(opts.now !== undefined ? { now: opts.now } : {});
     this.pollMs = resolvePollMs(opts.pollMs);
     this.getMode = opts.mode ?? resolvePeerInboundMode;
-    // Prefer live getter so a mid-session resume that swaps the trace writer is
-    // automatically picked up. Fall back to the static value for backwards compat.
-    this.resolveTraceWriter = opts.getTraceWriter ?? (() => opts.traceWriter);
+    this.resolveTraceWriter = opts.getTraceWriter ?? (() => undefined);
   }
 
   /**
@@ -174,6 +169,16 @@ export class PeerInboxNotifier {
    * remain in the buffer for the next boundary turn or next-turn fallback.
    *
    * Returns the rendered text of the consumed envelopes joined by '\n'.
+   *
+   * Generation-guard note: `consumeEnvelopes` does NOT check `isCurrent()`.
+   * This is intentional. The REPL boundary callback that calls
+   * `peekEnvelopes()` + `consumeEnvelopes()` is synchronous — the session
+   * generation cannot advance between the peek and the consume (there is no
+   * await). A generation mismatch therefore cannot occur on this path:
+   * `resetForNewSession()` is only called from the resume-swap commit point,
+   * which is serialized against the callback by the REPL event loop.
+   * The async paths (`scan`, `forceAccept`) do check `isCurrent()` after
+   * every await because a swap CAN fire while those are in flight.
    */
   consumeEnvelopes(count: number): string {
     if (count <= 0 || this.buffer.length === 0) return '';
@@ -212,6 +217,15 @@ export class PeerInboxNotifier {
    * are swallowed so a partial reclaim doesn't block the swap.
    *
    * Returns the number of envelopes successfully reclaimed.
+   *
+   * Generation-guard note: `reclaim` does NOT check `isCurrent()` and does
+   * not use `this.generation`. It is called exclusively from
+   * `resetForNewSession()`, which holds a lock on the swap sequence: at the
+   * call site, `this.generation` has already been incremented and the buffer
+   * has been spliced out atomically (in JavaScript's single-threaded sense).
+   * Any concurrently in-flight `scan` or `forceAccept` that returns after
+   * this point will find a stale generation and discard its results — so
+   * reclaim owns the spliced claims exclusively and needs no generation check.
    */
   async reclaim(): Promise<number> {
     if (this.buffer.length === 0) return 0;
@@ -269,8 +283,11 @@ export class PeerInboxNotifier {
     const gen = this.generation;
     const wasEmpty = this.buffer.length === 0;
     let injected = 0;
-    for (const { file, envelope } of await listHeld(sessionId)) {
+    for (const held of await listHeld(sessionId)) {
       if (!this.isCurrent(sessionId, gen)) return 0; // swap fired mid-flight; discard
+      // Corrupt entries cannot be accepted (no parseable envelope); skip.
+      if (held.corrupt) continue;
+      const { file, envelope } = held;
       if (messageIds !== 'all' && !messageIds.has(envelope.messageId)) continue;
       const released = await releaseHeld(sessionId, file);
       if (!this.isCurrent(sessionId, gen)) return 0; // swap fired between release and claim
@@ -333,7 +350,13 @@ export class PeerInboxNotifier {
     });
     // Drop results if a swap fired while the async scan was in flight.
     if (!this.isCurrent(sessionId, gen)) return;
-    for (const h of held) this.noteHeld(h.envelope, h.reason);
+    for (const h of held) {
+      if (h.reason === 'corrupt') {
+        this.noteCorrupt(h.file);
+      } else {
+        this.noteHeld(h.envelope, h.reason);
+      }
+    }
     for (const e of claimed) this.accept(e, sessionId);
     if (wasEmpty && claimed.length > 0) this.fireInjectable();
   }
@@ -353,12 +376,34 @@ export class PeerInboxNotifier {
     void emitPeerMessage(this.resolveTraceWriter(), { action: 'claimed', messageId: e.messageId, peer: e.from.id, bytes });
   }
 
-  private noteHeld(e: PeerEnvelope, reason: HeldReason): void {
+  private noteHeld(e: PeerEnvelope, reason: Exclude<HeldReason, 'corrupt'>): void {
     const bytes = Buffer.byteLength(e.body, 'utf8');
     const why = reason === 'wake-budget' ? 'wake budget reached' : 'AFK_PEER_INBOUND=hold';
-    this.opts.writeLine(palette.dim(`↘ peer message from ${safePeerSender(e.from)} held (${why}) · /inbox to review`));
+    const sizeHint = bytes >= 1024 ? ` · ${(bytes / 1024).toFixed(1)} kB` : '';
+    this.opts.writeLine(palette.dim(`↘ peer message from ${safePeerSender(e.from)} held (${why})${sizeHint} · /inbox to review`));
     // resolveTraceWriter() reads live so mid-session resume is reflected.
     void emitPeerMessage(this.resolveTraceWriter(), { action: 'held', messageId: e.messageId, peer: e.from.id, bytes, reason });
+  }
+
+  /** Notify the operator when an unparseable or corrupt pending file is quarantined. */
+  private noteCorrupt(file: string): void {
+    // Strip control characters from the filename for safe terminal display.
+    // eslint-disable-next-line no-control-regex
+    const safeFile = file.replace(/[\x00-\x1f\x7f-\x9f]/g, '');
+    this.opts.writeLine(
+      palette.dim(`↘ peer message held (corrupt/unsupported format: ${safeFile}) · /inbox drop to remove`),
+    );
+    // Invariant: messageId and peer are unavailable here — the file is
+    // unparseable, so no structured envelope exists. peer is set to 'unknown'
+    // and bytes to 0 rather than omitting the trace event entirely, so the
+    // operator can see the quarantine in the trace even without a sender id.
+    void emitPeerMessage(this.resolveTraceWriter(), {
+      action: 'held',
+      peer: 'unknown',
+      bytes: 0,
+      reason: 'corrupt',
+      file: safeFile,
+    });
   }
 
   private fireInjectable(): void {

@@ -10,8 +10,10 @@
  * Retryable errors:
  *   - Connection-phase network errors (ECONNRESET, DNS, socket) via
  *     `isConnectionPhaseNetworkError`.
- *   - Retryable connection-phase HTTP statuses (408/409/500/502/504) via
- *     `isRetryableConnectionStatus`.
+ *   - Retryable connection-phase HTTP statuses (408/500/502/504) via
+ *     `isRetryableConnectionStatus` — 409 Conflict is excluded here even
+ *     though the shared set includes it, because retrying a POST after a
+ *     409 is semantically wrong for one-shot calls (the conflict persists).
  *   - 429 Too Many Requests (transient rate-limit with a short retry-after).
  *   - 503 Service Unavailable / 529 Overloaded.
  *
@@ -20,12 +22,22 @@
  *   - `APIConnectionTimeoutError` — the SDK's own request timeout; AFK's TTFB
  *     watchdog owns that window (`isConnectionPhaseNetworkError` already
  *     excludes it).
- *   - 400 Bad Request, 401 Unauthorized, 403 Forbidden, 404 Not Found, or any
- *     other 4xx status not in the retryable set — these are not transient.
+ *   - 400 Bad Request, 401 Unauthorized, 403 Forbidden (except the narrow
+ *     `oauth_not_allowed_for_organization` transient — see below), 404 Not
+ *     Found, or any other 4xx status not in the retryable set — these are not
+ *     transient.
  *   - Any error that carries a `retry-after` hint exceeding
  *     `retryAfterCeilingMs` — a long server-mandated wait (e.g. a usage-limit
  *     429) cannot be served inside a compaction budget, so we rethrow instead
  *     of blocking the caller for 60+ seconds.
+ *
+ * Special case — transient 403 `oauth_not_allowed_for_organization` (#3467):
+ *   The Anthropic API intermittently returns this 403 during concurrent OAuth
+ *   token refresh across multiple daemon sessions. The same credentials succeed
+ *   on adjacent runs, confirming this is a provider-side race, not a genuine
+ *   authorization failure. Classified via `isTransientOauthOrg403`, which
+ *   requires BOTH status 403 AND the exact `error_code` string — all other
+ *   403s remain non-retryable.
  *
  * Backoff: exponential with additive jitter — `baseDelayMs * 2^attempt + jitter`.
  * When the error carries a `retry-after` hint (at most `retryAfterCeilingMs`,
@@ -86,6 +98,15 @@ export interface TransientRetryOpts {
    */
   onRetry?: (info: RetryInfo) => void;
   /**
+   * Called once when the retry budget is fully exhausted (all `maxRetries`
+   * attempts have been made and the last error is about to be rethrown). Lets
+   * callers emit a trace event for the terminal outcome without polling
+   * `onRetry` attempt counts. Fire-and-forget — errors here are not caught.
+   * Not called when the loop exits early due to abort, shouldStop, or a
+   * non-transient error.
+   */
+  onExhausted?: (info: RetryInfo) => void;
+  /**
    * Injected sleep function for tests. Defaults to `sleepWithAbort` (signal
    * propagates the abort) or plain `setTimeout` when no signal is given.
    */
@@ -99,22 +120,71 @@ function isAbortError(err: unknown): boolean {
 }
 
 /**
+ * Contract: true when `err` is the specific transient 403 the Anthropic API
+ * returns during concurrent OAuth token refresh across daemon sessions (#3467).
+ *
+ * The response body shape is:
+ *   `{"type":"error","error":{"type":"permission_error",
+ *     "message":"...","details":{"error_code":"oauth_not_allowed_for_organization"}}}`
+ *
+ * The SDK surfaces this as an `APIError` (status 403) whose `.error` property
+ * carries the parsed body. We require BOTH the 403 status AND the exact
+ * `error_code` string so that genuine org-level OAuth denials — which also
+ * arrive as 403 but with a different or absent `error_code` — are never
+ * retried.
+ *
+ * Invariant: `(err as any).error` is the parsed response body object when the
+ * Anthropic SDK's `APIError` is thrown; it is absent on plain `Error` instances
+ * and non-SDK shapes. The nested access is intentionally optional-chained so
+ * any missing level safely returns `undefined` rather than throwing.
+ */
+export function isTransientOauthOrg403(err: unknown): boolean {
+  if (err == null || typeof err !== 'object') return false;
+  const status = (err as { status?: unknown }).status;
+  if (status !== 403) return false;
+  // Walk the parsed error body: err.error.details.error_code
+  const body = (err as { error?: unknown }).error;
+  if (body == null || typeof body !== 'object') return false;
+  const details = (body as { details?: unknown }).details;
+  if (details == null || typeof details !== 'object') return false;
+  const code = (details as { error_code?: unknown }).error_code;
+  return code === 'oauth_not_allowed_for_organization';
+}
+
+/**
  * Contract: true when `err` should be retried by this module.
  *
  * Retryable: connection-phase network errors (ECONNRESET etc.), retryable
- * connection-phase HTTP statuses (408/409/500/502/504), and transient server
+ * connection-phase HTTP statuses (408/500/502/504), and transient server
  * errors with statuses 429/503/529.
  *
  * NOT retryable: AbortError, APIConnectionTimeoutError (excluded by
- * `isConnectionPhaseNetworkError`), or any other status.
+ * `isConnectionPhaseNetworkError`), 409 Conflict (included in the shared
+ * `CONNECTION_PHASE_RETRYABLE_STATUSES` for streaming turn paths but excluded
+ * here — retrying a POST after a 409 is semantically wrong for one-shot calls
+ * because the conflict condition persists across attempts), or any other status
+ * except the narrow `oauth_not_allowed_for_organization` 403 — see
+ * `isTransientOauthOrg403` and the module-level doc for that special case.
+ *
+ * Exported so the daemon's cron-task retry (`agent/daemon/task-retry.ts`)
+ * classifies a failed run with the SAME predicate instead of a drifting copy.
  */
-function isTransientError(err: unknown): boolean {
+export function isTransientError(err: unknown): boolean {
   if (isAbortError(err)) return false;
   if (isConnectionPhaseNetworkError(err)) return true;
-  if (isRetryableConnectionStatus(err)) return true;
+  // Invariant: 409 Conflict is excluded from the one-shot retry path even
+  // though `isRetryableConnectionStatus` (shared with streaming turn paths)
+  // includes it. A POST 409 is not a transient condition — the conflict
+  // persists on retry. LLM APIs do not return 409 in practice, but the
+  // exclusion removes a latent semantic error.
   const status = (err as { status?: unknown }).status;
+  if (typeof status === 'number' && status === 409) return false;
+  if (isRetryableConnectionStatus(err)) return true;
   if (typeof status === 'number') {
-    return status === 429 || status === 503 || status === 529;
+    if (status === 429 || status === 503 || status === 529) return true;
+    // Invariant: only this one specific 403 error_code is transient (#3467).
+    // All other 403s are genuine auth denials and must NOT be retried.
+    if (status === 403) return isTransientOauthOrg403(err);
   }
   return false;
 }
@@ -144,9 +214,12 @@ function codeOf(err: unknown): string | undefined {
  * Invariant: the first call to `attempt` is not counted as a retry; `maxRetries`
  * caps how many ADDITIONAL attempts are made after the first failure.
  *
- * A plain `AbortSignal` is synthesised when none is given so `sleepWithAbort`
- * always has a signal to race against (it resolves immediately on an already-
- * aborted signal, so this is always safe).
+ * Contract: when `opts.signal` is omitted a dummy `AbortController().signal` is
+ * synthesised so `sleepWithAbort` always has a signal to race against (it
+ * resolves immediately on an already-aborted signal, making this safe). The
+ * dummy signal never fires, so abort propagation is silently disabled in that
+ * case. All known production callers supply a real signal — if you add a new
+ * caller, pass `signal` explicitly to preserve abort semantics.
  */
 export async function withTransientRetry<T>(
   attempt: () => Promise<T>,
@@ -189,8 +262,17 @@ export async function withTransientRetry<T>(
       // Not a transient error: do not retry.
       if (!isTransientError(err)) throw err;
 
-      // Budget exhausted: do not retry.
-      if (n >= maxRetries) throw err;
+      // Budget exhausted: notify caller and rethrow.
+      if (n >= maxRetries) {
+        opts.onExhausted?.({
+          attempt: n + 1,
+          delayMs: 0,
+          error: err,
+          status: statusOf(err),
+          code: codeOf(err),
+        });
+        throw err;
+      }
 
       // Retry-after ceiling check: if the server mandated a long wait, refuse.
       const hint = parseRetryAfterMs(err);

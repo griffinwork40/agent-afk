@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { predictChanges, DEFAULT_PROBES, MAX_PROBES, resolveMaxPredictions } from './predict.js';
-import type { CompleteFn, StructuralImpact } from './types.js';
+import { predictChanges, DEFAULT_PROBES, MAX_PROBES, resolveMaxPredictions, normalizeOperatorPrediction } from './predict.js';
+import type { CompleteFn, OperatorPrediction, StructuralImpact } from './types.js';
 
 const MODEL = 'claude-haiku-4-5-20250929';
 
@@ -390,6 +390,153 @@ describe('predictChanges', () => {
     it('returns 8 when probes <= 2 and no explicit (legacy)', () => {
       expect(resolveMaxPredictions(1)).toBe(8);
       expect(resolveMaxPredictions(2)).toBe(8);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Operator predictions (#2861)
+  // ---------------------------------------------------------------------------
+
+  describe('operatorPredictions', () => {
+    const baseInput = {
+      spec: { title: 't', changes: [] },
+      changeDescriptions: [],
+      structural: emptyStructural(),
+    };
+
+    it('returns operator predictions without calling the analyst model', async () => {
+      const fn = makeFake('[]');
+      const op: OperatorPrediction = {
+        behavior: 'Asks a clarifying question',
+        testQuestion: 'Does the response ask a clarifying question?',
+      };
+      const result = await predictChanges(
+        { ...baseInput, operatorPredictions: [op] },
+        fn,
+        MODEL,
+      );
+      // Model should NOT be called
+      expect((fn as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+      expect(result).toHaveLength(1);
+      expect(result[0]!.behavior).toBe('Asks a clarifying question');
+      expect(result[0]!.testQuestion).toBe('Does the response ask a clarifying question?');
+      expect(result[0]!.id).toBe('p1');
+    });
+
+    it('assigns sequential ids to multiple operator predictions', async () => {
+      const fn = makeFake('[]');
+      const ops: OperatorPrediction[] = [
+        { behavior: 'First behavior', testQuestion: 'Does it do first?' },
+        { behavior: 'Second behavior', testQuestion: 'Does it do second?' },
+        { behavior: 'Third behavior', testQuestion: 'Does it do third?' },
+      ];
+      const result = await predictChanges({ ...baseInput, operatorPredictions: ops }, fn, MODEL);
+      expect(result.map((p) => p.id)).toEqual(['p1', 'p2', 'p3']);
+      expect((fn as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    });
+
+    it('falls back to analyst model when operatorPredictions is empty', async () => {
+      const fn = makeFake('[]');
+      await predictChanges({ ...baseInput, operatorPredictions: [] }, fn, MODEL);
+      expect((fn as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+    });
+
+    it('operator prediction defaults direction to added, confidence to high', async () => {
+      const fn = makeFake('[]');
+      const [result] = await predictChanges(
+        { ...baseInput, operatorPredictions: [{ behavior: 'b', testQuestion: 'Does it b?' }] },
+        fn,
+        MODEL,
+      );
+      expect(result!.direction).toBe('added');
+      expect(result!.confidence).toBe('high');
+      expect(result!.observable).toBe('decision');
+    });
+
+    it('respects explicit direction and confidence in operator prediction', async () => {
+      const fn = makeFake('[]');
+      const op: OperatorPrediction = {
+        behavior: 'Stops asking',
+        direction: 'removed',
+        confidence: 'medium',
+        testQuestion: 'Does the response omit the clarifying question?',
+      };
+      const [result] = await predictChanges({ ...baseInput, operatorPredictions: [op] }, fn, MODEL);
+      expect(result!.direction).toBe('removed');
+      expect(result!.confidence).toBe('medium');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // --verify + empty probes warning (#2861)
+  // ---------------------------------------------------------------------------
+
+  describe('operator predictions with --verify and empty probes', () => {
+    const localBase = {
+      spec: { title: 't', changes: [] },
+      changeDescriptions: [],
+      structural: emptyStructural(),
+    };
+
+    it('emits a warning to stderr when verify=true and an operator prediction has no probes', async () => {
+      const fn = makeFake('[]');
+      const stderrLines: string[] = [];
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+        stderrLines.push(String(chunk));
+        return true;
+      });
+      try {
+        const op: OperatorPrediction = { behavior: 'agent asks a clarifying question', testQuestion: 'q' };
+        await predictChanges({ ...localBase, operatorPredictions: [op], verify: true }, fn, MODEL);
+        expect(stderrLines.join('')).toMatch(/warning.*no probes/i);
+        expect(stderrLines.join('')).toContain('agent asks a clarifying question');
+      } finally {
+        stderrSpy.mockRestore();
+      }
+    });
+
+    it('does not warn when verify=false and operator prediction has no probes', async () => {
+      const fn = makeFake('[]');
+      const stderrLines: string[] = [];
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+        stderrLines.push(String(chunk));
+        return true;
+      });
+      try {
+        const op: OperatorPrediction = { behavior: 'agent asks a clarifying question', testQuestion: 'q' };
+        await predictChanges({ ...localBase, operatorPredictions: [op] }, fn, MODEL);
+        expect(stderrLines.join('')).not.toMatch(/warning.*no probes/i);
+      } finally {
+        stderrSpy.mockRestore();
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // normalizeOperatorPrediction
+  // ---------------------------------------------------------------------------
+
+  describe('normalizeOperatorPrediction', () => {
+    it('fills defaults for minimal operator prediction', () => {
+      const op: OperatorPrediction = { behavior: 'Does X', testQuestion: 'Does it X?' };
+      const p = normalizeOperatorPrediction(op, 'p1');
+      expect(p.id).toBe('p1');
+      expect(p.behavior).toBe('Does X');
+      expect(p.testQuestion).toBe('Does it X?');
+      expect(p.direction).toBe('added');
+      expect(p.confidence).toBe('high');
+      expect(p.observable).toBe('decision');
+      expect(p.reason).toMatch(/operator/i);
+      expect(p.probes).toEqual([]);
+    });
+
+    it('preserves optional probes when provided', () => {
+      const op: OperatorPrediction = {
+        behavior: 'b', testQuestion: 'q',
+        probes: ['probe one', 'probe two'],
+      };
+      const p = normalizeOperatorPrediction(op, 'p2');
+      expect(p.probes).toEqual(['probe one', 'probe two']);
     });
   });
 });

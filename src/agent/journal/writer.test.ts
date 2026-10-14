@@ -18,6 +18,19 @@ const texts = (sid: string) =>
   foldJournal(readJournalRecords(sid)).messages.map((m) => (m.content[0]?.type === 'text' ? m.content[0].text : '?'));
 
 describe('createMessageJournal', () => {
+  it('exposes resolved fork paths and leaves unknown or disabled journals without a pointer', async () => {
+    let id: string | undefined;
+    const j = createMessageJournal({ getSessionId: () => id });
+    const child = j.forSubagent('child');
+    expect(child.path).toBeUndefined();
+    id = 'pointer-root';
+    expect(child.path).toBe(getSubagentJournalPath(id, 'child'));
+    child.append(0, user('findings'));
+    await child.flush();
+    expect(fs.existsSync(child.path!)).toBe(true);
+    vi.stubEnv('AFK_MESSAGE_JOURNAL_DISABLED', '1');
+    expect(createMessageJournal({ getSessionId: () => id }).path).toBeUndefined();
+  });
   it('round-trips appends, truncates, and marks through the fold', async () => {
     const j = createMessageJournal({ getSessionId: () => 'sess-1', meta: { provider: 'anthropic', model: 'm1', cwd: '/x' } });
     j.append(0, user('a'));

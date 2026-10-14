@@ -1,13 +1,15 @@
 /**
- * Risk classifier — pure function, no I/O, no permissions side-effects.
+ * Contract: risk classifier — pure function, no I/O, no permissions side-effects.
  *
  * Maps (toolName, toolInput, RiskContext) → RiskLevel. Intended for use by
  * operator-facing UI (status line, permission prompts) and the audit log.
  * Does NOT wire to `permissions.onAsk` — that is Stream C's job.
  *
- * The bash rule table uses substring-matching against the raw command string
- * and is intentionally conservative: we catch the shapes a model naturally
- * emits; we do not attempt to parse shell syntax comprehensively.
+ * The bash rule tables use substring-matching against the raw command string
+ * and are intentionally conservative: we catch the shapes a model naturally
+ * emits; we do not attempt to parse shell syntax comprehensively. `high`
+ * tokens must additionally sit at a word start (see
+ * `risk-classifier.bash-boundary.ts`, #3534).
  *
  * BUILTIN_WRITE_DENYLIST from `src/agent/tools/handlers/write-denylist.ts`
  * is reused for the write_file / edit_file path-based risk check so the
@@ -16,12 +18,31 @@
  * @module agent/risk-classifier
  */
 
-import path from 'path';
-import { safeRealpath, getWriteDenylist } from './tools/handlers/write-denylist.js';
 import { categorizeTool } from './tool-category.js';
+import { isBackgroundBashLaunch } from './tools/bash-background-flag.js';
+import { classifyFilePath, classifyPatchApply } from './risk-classifier.paths.js';
+import { findHighBashPattern } from './risk-classifier.bash-boundary.js';
 
 /** Three-tier risk level for a tool invocation. */
 export type RiskLevel = 'safe' | 'medium' | 'high';
+
+/**
+ * Contract: `reason` is a short concrete rule diagnostic, not a stable code.
+ * Every `high` verdict has a reason, including path rules (write-denylist,
+ * .git, workspace escape), bash patterns, destructive MCP verbs, schedule
+ * mutations, forced worktree removal, and web_request DELETE.
+ * For `medium`, it is present only for matched bash patterns (also used by
+ * wait_for command), a background bash launch raised from safe, or a
+ * node_modules write target (including the selected patch_apply verdict).
+ * Other `medium` verdicts omit it; all `safe` verdicts omit it.
+ * The field remains optional: callers such as the AFK gate must tolerate its
+ * absence when building refusal text, rather than assuming every verdict
+ * explains its level.
+ */
+export interface RiskVerdict {
+  level: RiskLevel;
+  reason?: string;
+}
 
 /**
  * Workspace context required to evaluate path-based risk rules.
@@ -35,6 +56,15 @@ export interface RiskContext {
    * this root are flagged as `high` risk (escaping the workspace boundary).
    */
   workspaceRoot?: string;
+  /**
+   * The taskId of the currently-running daemon task, supplied by the scheduler.
+   * When set, `cancel_schedule` and `update_schedule` (enabled:false only)
+   * targeting THIS task id are downgraded from `high` to `medium` — the
+   * self-disable carve-out for issue #3464. Every other schedule mutation
+   * (other task ids, `create_schedule`, command/cron edits) stays `high`.
+   * Never populated outside a daemon task run.
+   */
+  daemonTaskId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +134,22 @@ const BASH_HIGH: readonly string[] = [
   'systemctl enable ',
   'systemctl start ',
   'systemctl daemon-reload',
+  // Real binaries whose names merely CONTAIN a token above (GNU coreutils `g*`
+  // on macOS, secure-rm, partitioners, sudoers editor). Plain `includes` used
+  // to catch them; word-start matching (#3534) needs them listed explicitly.
+  'grm ',
+  'srm ',
+  'gchmod',
+  'gchown',
+  'gdd if=',
+  'gdd of=',
+  'dcfldd',
+  'dc3dd',
+  'gsudo',
+  'sfdisk',
+  'cfdisk',
+  'gfdisk',
+  'visudo',
 ];
 
 /**
@@ -179,12 +225,15 @@ const BASH_SAFE: readonly string[] = [
   'gh issue list',
   'gh issue status',
   'gh repo view',
-  // curl/wget read-only HTTP probes — HEAD and spider modes are non-mutating
-  // and widely used in CI health checks. `-I` is the short form of --head.
+  // curl/wget read-only HTTP probes — these modes are non-mutating and widely
+  // used in CI health checks. `-I`/`--head` issue an HTTP HEAD request; `-sI`
+  // combines silent + HEAD. Note: `-si` (lowercase i) prints response headers
+  // for a GET — still read-only, but NOT a HEAD probe. `wget --spider` is the
+  // wget equivalent of HEAD mode.
   'curl --head',
   'curl -I ',
   'curl -sI ',
-  'curl -si ',
+  'curl -si ', // trailing space is intentional — blocks `-siX POST` (flags without separator)
   'wget --spider',
 ];
 
@@ -210,55 +259,22 @@ function extractFilePath(input: unknown): string {
   return '';
 }
 
-function classifyBash(cmd: string): RiskLevel {
-  // External constraint: check HIGH before MEDIUM before SAFE.
-  // High patterns override everything; medium patterns override safe.
-  // This ordering matters for commands like `echo foo > out.txt` where
-  // both `echo ` (safe) and ` > ` (medium) match — the redirect takes
-  // precedence because medium is checked first.
-  for (const p of BASH_HIGH) {
-    if (cmd.includes(p)) return 'high';
-  }
+function classifyBash(cmd: string): RiskVerdict {
+  // Invariant: scan the original command for HIGH before MEDIUM before SAFE.
+  // No heredoc stripping or quote parsing: wrappers, interpreters and later
+  // consumers can execute any payload. HIGH tokens are only discounted when
+  // glued to a preceding word character (`platform `, `retrieval `), which
+  // can never start a shell word — see risk-classifier.bash-boundary.ts.
+  const high = findHighBashPattern(cmd, BASH_HIGH);
+  if (high !== undefined) return { level: 'high', reason: `bash-pattern: matched '${high}'` };
   for (const p of BASH_MEDIUM) {
-    if (cmd.includes(p)) return 'medium';
+    if (cmd.includes(p)) return { level: 'medium', reason: `bash-pattern: matched '${p}'` };
   }
   for (const p of BASH_SAFE) {
-    if (cmd.includes(p)) return 'safe';
+    if (cmd.includes(p)) return { level: 'safe' };
   }
   // Default: medium — unknown bash commands are not safe by assumption.
-  return 'medium';
-}
-
-function classifyFilePath(filePath: string, ctx: RiskContext): RiskLevel {
-  if (!filePath) return 'safe';
-
-  const resolved = safeRealpath(path.resolve(ctx.cwd, filePath));
-  // Normalize to forward slashes for portable substring checks.
-  const resolvedNorm = resolved.split(path.sep).join('/');
-
-  // Denylist check — matches ~/.ssh, /etc, etc.
-  const denylist = getWriteDenylist();
-  for (const blocked of denylist) {
-    const blockedNorm = blocked.split(path.sep).join('/');
-    if (resolvedNorm === blockedNorm || resolvedNorm.startsWith(blockedNorm + '/')) {
-      return 'high';
-    }
-  }
-
-  // .git/ directory — writes to the git object store are almost always wrong.
-  if (resolvedNorm.includes('/.git/')) return 'high';
-
-  // Workspace boundary escape.
-  if (ctx.workspaceRoot !== undefined) {
-    const realRoot = safeRealpath(ctx.workspaceRoot);
-    const rel = path.relative(realRoot, resolved);
-    if (rel.startsWith('..')) return 'high';
-  }
-
-  // node_modules — usually unintentional; not catastrophic.
-  if (resolvedNorm.includes('/node_modules/')) return 'medium';
-
-  return 'safe';
+  return { level: 'medium' };
 }
 
 // ---------------------------------------------------------------------------
@@ -321,6 +337,58 @@ function mcpSubNameTokens(tool: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// Schedule-mutation classifier (#3464)
+// ---------------------------------------------------------------------------
+
+/**
+ * Classify `create_schedule`, `cancel_schedule`, and `update_schedule`.
+ *
+ * Invariant: all three tools modify the daemon cron store (schedules.json)
+ * and may immediately affect a running daemon via live sync — they are `high`
+ * by default. The one exception is the self-disable carve-out (issue #3464):
+ * a daemon task disabling ONLY its own schedule is a routine one-shot cleanup
+ * step, not an attack on other tasks, and is downgraded to `medium` when:
+ *   1. `ctx.daemonTaskId` is set (injected by the scheduler — never from
+ *      model-supplied input, so it cannot be spoofed by the agent).
+ *   2. The input `taskId` matches the running task's own id exactly.
+ *   3. For `cancel_schedule`: `permanent` is not `true` (permanent delete
+ *      removes the task from the store and is irreversible → stays `high`).
+ *   4. For `update_schedule`: the ONLY supplied field besides `taskId` is
+ *      `enabled: false` (no command, cron, name, or other edits).
+ * `create_schedule` is always `high` — it adds new tasks, not removes self.
+ */
+function classifyScheduleMutation(tool: string, input: unknown, ctx: RiskContext): RiskLevel {
+  if (tool === 'create_schedule') return 'high';
+
+  const inputObj =
+    typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {};
+  const inputTaskId = typeof inputObj['taskId'] === 'string' ? inputObj['taskId'] : undefined;
+
+  // Self-disable carve-out: own task id, scheduler-supplied (trusted) context.
+  if (
+    ctx.daemonTaskId !== undefined &&
+    inputTaskId !== undefined &&
+    inputTaskId === ctx.daemonTaskId
+  ) {
+    if (tool === 'cancel_schedule') {
+      // Permanent delete stays high — only plain disable is carved out.
+      if (inputObj['permanent'] === true) return 'high';
+      // Re-enabling own schedule is a mutation, not a disable — keep it high.
+      if (inputObj['enable'] === true) return 'high';
+      return 'medium';
+    }
+    // update_schedule: only allowed when the sole change is enabled:false.
+    // Any other field (command, cron, name, …) keeps it high.
+    const { taskId: _tid, enabled, ...rest } = inputObj;
+    const hasOtherFields = Object.keys(rest).length > 0;
+    // Invariant: strict false fails closed for non-boolean values (e.g. "false", 0).
+    if (enabled === false && !hasOtherFields) return 'medium';
+  }
+
+  return 'high';
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -337,41 +405,42 @@ export function classifyRisk(
   input: unknown,
   ctx: RiskContext,
 ): RiskLevel {
+  return classifyRiskDetailed(toolName, input, ctx).level;
+}
+
+/**
+ * Like {@link classifyRisk}, but also returns a short concrete `reason` naming
+ * the rule that fired (always set for `'high'`). The AFK gate surfaces the
+ * reason in its refusal so a blocked agent knows exactly what to change.
+ */
+export function classifyRiskDetailed(
+  toolName: string,
+  input: unknown,
+  ctx: RiskContext,
+): RiskVerdict {
   // Normalise to lowercase for case-insensitive matching against known tools.
   const tool = toolName.toLowerCase();
 
   // ---- bash ----------------------------------------------------------------
   if (tool === 'bash') {
-    const cmd = extractBashCommand(input);
-    return classifyBash(cmd);
+    const verdict = classifyBash(extractBashCommand(input));
+    // Background floor: a `run_in_background` launch can run for up to 24 h,
+    // so a "safe" substring match (e.g. `cat ` or `pnpm test` anywhere in the
+    // string) must never auto-approve it.
+    return isBackgroundBashLaunch(tool, input) && verdict.level === 'safe'
+      ? { level: 'medium', reason: 'bash-background' }
+      : verdict;
   }
 
   // ---- write_file / edit_file ---------------------------------------------
   if (tool === 'write_file' || tool === 'edit_file') {
-    const filePath = extractFilePath(input);
-    return classifyFilePath(filePath, ctx);
+    return classifyFilePath(extractFilePath(input), ctx);
   }
 
   // ---- patch_apply ---------------------------------------------------------
   // patch_apply atomically writes multiple files; classify by the highest-risk
   // path across the entire changes array. An empty changes array is safe.
-  if (tool === 'patch_apply') {
-    const obj =
-      typeof input === 'object' && input !== null
-        ? (input as Record<string, unknown>)
-        : {};
-    const changes = Array.isArray(obj['changes']) ? obj['changes'] : [];
-    let highest: RiskLevel = 'safe';
-    for (const change of changes) {
-      if (typeof change !== 'object' || change === null) continue;
-      const p = (change as Record<string, unknown>)['path'];
-      const filePath = typeof p === 'string' ? p : '';
-      const level = classifyFilePath(filePath, ctx);
-      if (level === 'high') return 'high';
-      if (level === 'medium') highest = 'medium';
-    }
-    return highest;
-  }
+  if (tool === 'patch_apply') return classifyPatchApply(input, ctx);
 
   // ---- read-class tools ---------------------------------------------------
   // Derive from tool-category taxonomy rather than a local hand-maintained list.
@@ -379,14 +448,12 @@ export function classifyRisk(
   // (notably missing memory_search). Now any tool that categorizeTool returns
   // 'read' for is safe by default; new read tools automatically get the right
   // risk level without a secondary edit here.
-  if (categorizeTool(toolName) === 'read') {
-    return 'safe';
-  }
+  if (categorizeTool(toolName) === 'read') return { level: 'safe' };
 
   // ---- outbound communication --------------------------------------------
   if (tool === 'send_telegram') {
     // Can't be unsent — medium risk.
-    return 'medium';
+    return { level: 'medium' };
   }
 
   // ---- MCP tools ----------------------------------------------------------
@@ -407,20 +474,16 @@ export function classifyRisk(
   // Prefix test uses the already-lowercased `tool` so mixed-case `Mcp__…` names
   // are classified too, not silently dropped to the 'safe' default below.
   if (tool.startsWith('mcp__')) {
-    const tokens = mcpSubNameTokens(tool);
-    if (tokens.some((t) => DESTRUCTIVE_VERBS.has(t))) return 'high';
-    return 'medium';
+    const verb = mcpSubNameTokens(tool).find((t) => DESTRUCTIVE_VERBS.has(t));
+    if (verb !== undefined) return { level: 'high', reason: `mcp-destructive-verb: ${verb}` };
+    return { level: 'medium' };
   }
 
   // ---- schedule mutations --------------------------------------------------
-  // Invariant: create_schedule and cancel_schedule modify the daemon's cron
-  // store (schedules.json) and may immediately affect a running daemon via live
-  // sync. These are irreversible in the sense that a wrongly-scheduled task
-  // could run before the operator notices — so they are 'high', gated behind
-  // explicit approval in AFK mode. list_schedules and get_schedule_history are
-  // read-only and fall through to the 'safe' default below.
-  if (tool === 'create_schedule' || tool === 'update_schedule' || tool === 'cancel_schedule') {
-    return 'high';
+  // See classifyScheduleMutation for the full rule set and self-disable carve-out.
+  if (tool === 'create_schedule' || tool === 'cancel_schedule' || tool === 'update_schedule') {
+    const level = classifyScheduleMutation(tool, input, ctx);
+    return level === 'high' ? { level, reason: `schedule-mutation: ${tool}` } : { level };
   }
 
   // ---- worktree lifecycle --------------------------------------------------
@@ -440,9 +503,11 @@ export function classifyRisk(
         ? (input as Record<string, unknown>)
         : {};
     const action = typeof obj['action'] === 'string' ? obj['action'] : '';
-    if (action === 'list') return 'safe';
-    if (action === 'remove' && obj['force'] === true) return 'high';
-    return 'medium';
+    if (action === 'list') return { level: 'safe' };
+    if (action === 'remove' && obj['force'] === true) {
+      return { level: 'high', reason: 'worktree-force-remove' };
+    }
+    return { level: 'medium' };
   }
 
   // ---- browser actions -----------------------------------------------------
@@ -453,18 +518,14 @@ export function classifyRisk(
   // generally recoverable (navigate away, close the tab) and the AFK posture
   // allows medium ops unattended. browser_screenshot and browser_observe are
   // read-only; browser_close is a cleanup op — all safe.
-  if (tool === 'browser_act' || tool === 'browser_open') {
-    return 'medium';
-  }
+  if (tool === 'browser_act' || tool === 'browser_open') return { level: 'medium' };
 
   // ---- web_scrape ----------------------------------------------------------
   // web_scrape issues outbound HTTP requests (and optionally headless-browser
   // renders for JS-heavy pages). It may hit rate-limited, metered, or
   // auth-gated endpoints. 'medium' — notable network side-effect but recoverable
   // and broadly necessary for autonomous research work in AFK mode.
-  if (tool === 'web_scrape') {
-    return 'medium';
-  }
+  if (tool === 'web_scrape') return { level: 'medium' };
 
   // ---- web_request ---------------------------------------------------------
   // web_request supports all HTTP methods, so risk is method-dependent:
@@ -481,9 +542,9 @@ export function classifyRisk(
         ? (input as Record<string, unknown>)
         : {};
     const rawMethod = typeof obj['method'] === 'string' ? obj['method'].toUpperCase() : '';
-    if (rawMethod === 'DELETE') return 'high';
-    if (rawMethod === 'GET' || rawMethod === 'HEAD' || rawMethod === 'OPTIONS') return 'safe';
-    return 'medium';
+    if (rawMethod === 'DELETE') return { level: 'high', reason: 'web-request: DELETE' };
+    if (rawMethod === 'GET' || rawMethod === 'HEAD' || rawMethod === 'OPTIONS') return { level: 'safe' };
+    return { level: 'medium' };
   }
 
   // ---- wait_for ------------------------------------------------------------
@@ -511,13 +572,13 @@ export function classifyRisk(
         typeof obj['command'] === 'string' ? obj['command'] : '';
       return classifyBash(cmd);
     }
-    if (condType === 'file' || condType === 'process') return 'safe';
+    if (condType === 'file' || condType === 'process') return { level: 'safe' };
     // url or unknown: treat as medium (outbound network).
-    return 'medium';
+    return { level: 'medium' };
   }
 
   // ---- unknown tool -------------------------------------------------------
   // Don't gate things we haven't classified — default to safe so the
   // classifier never blocks novel tools without an explicit rule.
-  return 'safe';
+  return { level: 'safe' };
 }

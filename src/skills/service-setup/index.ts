@@ -48,7 +48,7 @@ async function handler(): Promise<unknown> {
 export const serviceSetupSkill: SkillMetadata = {
   name: 'service-setup',
   description:
-    'Install an AFK background process (telegram bot or daemon) as an OS-supervised service — a launchd LaunchAgent on macOS or a systemd `--user` unit on Linux — so it auto-starts on login and relaunches on crash. Runs pre-flight checks (e.g., refuses to install the telegram service with an invalid token, which would otherwise crash-loop under KeepAlive/Restart=always), invokes `afk service install`, verifies with `afk service status`, and surfaces the management cheatsheet (including the `loginctl enable-linger` step on Linux). macOS + Linux — gracefully refuses on other platforms.',
+    'Install an AFK background process (telegram bot or daemon) as an OS-supervised service — a launchd LaunchAgent on macOS or a systemd `--user` unit on Linux — so it auto-starts on login and relaunches on crash. Runs pre-flight checks (e.g., refuses to install the telegram service with an invalid token, which would otherwise crash-loop under KeepAlive/Restart=always), invokes `afk service install`, verifies with `afk service status`, and surfaces the management cheatsheet (including the `loginctl enable-linger` step on Linux). macOS + Linux + Windows (Task Scheduler) — fully supported; gracefully refuses on other unrecognised platforms.',
   handler,
   context: 'fork',
   whenToUse:

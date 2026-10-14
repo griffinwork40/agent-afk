@@ -57,7 +57,14 @@ export function dropSeamOverlap(
   const norm = (l: string | undefined): string => (l ?? '').trimEnd();
   expect(reshown, `seam overlap ${reshown} exceeds scrollback length:\n${dump}`).toBeLessThanOrEqual(scrollback.length);
   const tail = scrollback.slice(scrollback.length - reshown).map(norm);
-  const start = visible.findIndex((_, i) => tail.every((t, j) => norm(visible[i + j]) === t));
+  // Bound `visible[i + j]` at the viewport edge: without the upper-bound check,
+  // `j` can exceed `visible.length - i`, returning `undefined`; `norm(undefined)`
+  // yields `''`, which would spuriously match a blank archived row at the seam
+  // and produce a false positive that hides a real double-write (#2871.7).
+  const start = visible.findIndex((_, i) =>
+    i + tail.length <= visible.length &&
+    tail.every((t, j) => norm(visible[i + j]) === t),
+  );
   expect(start, `re-shown archived rows (${reshown}) are not the scrollback tail shown on screen:\n${dump}`).toBeGreaterThanOrEqual(0);
   return scrollback.slice(0, scrollback.length - reshown);
 }

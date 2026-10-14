@@ -113,7 +113,19 @@ const compactCmd: SlashCommand = {
         }).start();
         spinnerActive = true;
       }
+      // Report in PROMPTS, not raw API messages: `messagesBefore/After` count
+      // every assistant tool_use and user tool_result message (~2 per tool
+      // round), so a 12-prompt session reads as "Compacted 247 → 5 messages".
+      // Snapshot the genuine user-prompt count before and after compaction the
+      // same way /rewind does (fix #3109), so the two commands stay consistent.
+      // Coupling note: `listRewindTargets()` runs while the compaction spinner
+      // is already armed (inside the PreCompact guard window), so it sees the
+      // pre-compaction history — this is intentional. If `compact()` is ever
+      // refactored to call `listRewindTargets()` internally, the before/after
+      // snapshot split here will need revisiting.
+      const promptsBefore = session.listRewindTargets().length;
       const result = await session.compact();
+      const promptsAfter = session.listRewindTargets().length;
       stopSpinner();
       if (!result.compacted) {
         const reason = result.reason ?? 'unknown';
@@ -148,7 +160,7 @@ const compactCmd: SlashCommand = {
           ? ` (~${result.tokensSavedEstimate} input tokens saved)`
           : '';
         ctx.out.success(
-          `Compacted ${result.messagesBefore} → ${result.messagesAfter} messages${saved}.`,
+          `Compacted ${promptsBefore} → ${promptsAfter} prompts${saved}.`,
         );
       }
     } catch (err) {
@@ -215,8 +227,15 @@ const rewindCmd: SlashCommand = {
       return 'continue';
     }
 
+    // Report in PROMPTS, not raw API messages: `messagesBefore/After` count
+    // every assistant tool_use and user tool_result message (~2 per tool
+    // round), so a 12-prompt session reads as "Rewound 247 → 232 messages".
+    // Targets are newest-first, so picking index `choice` discards the
+    // chosen prompt plus the `choice` newer ones.
+    const dropped = choice + 1;
+    const kept = targets.length - dropped;
     ctx.out.success(
-      `Rewound ${result.messagesBefore} → ${result.messagesAfter} messages. Edit the message below and press Enter to resend.`,
+      `Rewound ${dropped} ${dropped === 1 ? 'prompt' : 'prompts'} (${kept} earlier kept). Edit the message below and press Enter to resend.`,
     );
     return { kind: 'prefill', message: result.reloadText ?? '' };
   },

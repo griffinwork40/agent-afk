@@ -2,7 +2,8 @@
  * Tests for the peer inter-round boundary delivery wiring.
  *
  * Covers:
- *  - installPeerBoundary: human priority, peer fallback, barrier, compose
+ *  - installPeerBoundary: human queue never consumed (end-of-turn delivery),
+ *    human barrier holds peers, peer delivery, compose
  *  - reinstallPeerBoundary: clears queue and re-installs on new session
  *  - Fake provider integration: both Anthropic and OpenAI applyBeforeNextRound
  *  - REPL adapter integration: connected, not just isolated queue unit tests
@@ -12,7 +13,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AdmissionQueue } from '../../../agent/peer/admission-queue.js';
-import { installPeerBoundary, reinstallPeerBoundary } from './loop-iteration.boundary.js';
+import { installPeerBoundary, reinstallPeerBoundary, applyDeferPeers } from './loop-iteration.boundary.js';
+import type { InjectionSource } from './loop-iteration.injections.js';
 
 // ── Minimal fakes ────────────────────────────────────────────────────────────
 
@@ -128,6 +130,8 @@ function makeCompositor(queuedText?: string) {
     },
     _reservations: reservations,
     _dropped: dropped,
+    /** Simulate the compositor's end-of-turn `→ idle` drain of the queue. */
+    _clear: () => { payloads.splice(0); queuedText = undefined; },
   };
 }
 
@@ -208,7 +212,10 @@ describe('installPeerBoundary', () => {
     expect(result).toContain('peer message A');
   });
 
-  it('returns human text when only human messages are queued in compositor', () => {
+  it('never injects or consumes queued human text (it is delivered at end of turn)', () => {
+    // Regression: #2810 drained the human queue at every tool boundary, so a
+    // message typed during bash/compose landed mid-turn and the wait_for yield
+    // notice ("end your turn so the message is delivered") became false.
     const session = makeSession();
     const compositor = makeCompositor('user typed this');
     const peerNotifier = makePeerNotifier();
@@ -218,13 +225,17 @@ describe('installPeerBoundary', () => {
       peerNotifier: peerNotifier as never,
       admissionQueue,
     });
-    const result = session.invokeCallback();
-    expect(result).toBe('user typed this');
-    // Must have consumed from compositor (dropQueued called).
-    expect(compositor._dropped).toHaveLength(1);
+    expect(session.invokeCallback()).toBeUndefined();
+    expect(session.invokeCallback()).toBeUndefined();
+    // Queue untouched: nothing dropped or left reserved, text still queued.
+    expect(compositor._dropped).toHaveLength(0);
+    expect(compositor._reservations.size).toBe(0);
+    expect(compositor.hasPendingSubmission()).toBe(true);
+    expect(compositor.peekQueuedText()?.text).toBe('user typed this');
+    expect(admissionQueue.pending).toBe(false);
   });
 
-  it('human text wins over peer text (barrier)', () => {
+  it('queued human text holds peers back at every boundary until the queue drains', () => {
     const session = makeSession();
     const compositor = makeCompositor('user typed this');
     const peerNotifier = makePeerNotifier(['peer message']);
@@ -234,16 +245,13 @@ describe('installPeerBoundary', () => {
       peerNotifier: peerNotifier as never,
       admissionQueue,
     });
-    const result = session.invokeCallback();
-    // Only human text returned first.
-    expect(result).toBe('user typed this');
-    expect(result).not.toContain('peer message');
-    // hasPendingSubmission=true blocked peer injection — peer stays in the
-    // notifier buffer (NOT drained into the admission queue). On the second
-    // invocation, the human queue is empty so the barrier lifts and peer
-    // is admitted from the notifier buffer.
-    const result2 = session.invokeCallback();
-    expect(result2).toContain('peer message');
+    // Barrier holds for as long as the human message is queued.
+    expect(session.invokeCallback()).toBeUndefined();
+    expect(session.invokeCallback()).toBeUndefined();
+    expect(peerNotifier.hasPendingInjections()).toBe(true);
+    // End of turn: the compositor drains the human queue; the barrier lifts.
+    compositor._clear();
+    expect(session.invokeCallback()).toContain('peer message');
   });
 
   it('drain is idempotent — second call with empty queue returns undefined', () => {
@@ -337,7 +345,7 @@ describe('reinstallPeerBoundary', () => {
 // call the stored callback and inject the result into the message history.
 
 describe('Fake Anthropic provider integration', () => {
-  it('injects human queued message before next model request', () => {
+  it('does NOT inject a human queued message after a tool round (e.g. bash)', () => {
     const admissionQueue = new AdmissionQueue();
     const session = makeSession();
     const compositor = makeCompositor('user mid-turn text');
@@ -350,19 +358,20 @@ describe('Fake Anthropic provider integration', () => {
       admissionQueue,
     });
 
-    // Simulate provider loop: tool batch completed, ask for steering text.
+    // Simulate provider loop: a bash tool batch completed, ask for steering text.
     const steeringText = session.invokeCallback();
-    expect(steeringText).toBe('user mid-turn text');
+    expect(steeringText).toBeUndefined();
 
-    // Simulate applyBeforeNextRound (Anthropic): push new user turn.
+    // Simulate applyBeforeNextRound (Anthropic): nothing is pushed.
     const messages: Array<{ role: string; content: unknown }> = [
       { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu-1', content: 'ok' }] },
     ];
     if (steeringText) {
       messages.push({ role: 'user', content: [{ type: 'text', text: steeringText }] });
     }
-    expect(messages).toHaveLength(2);
-    expect((messages[1]!.content as Array<{ type: string; text: string }>)[0]!.text).toBe('user mid-turn text');
+    expect(messages).toHaveLength(1);
+    // The message is still queued for the end-of-turn drain.
+    expect(compositor.peekQueuedText()?.text).toBe('user mid-turn text');
   });
 
   it('injects peer message when no human queued message', () => {
@@ -395,12 +404,12 @@ describe('Fake Anthropic provider integration', () => {
       admissionQueue,
     });
 
-    // First boundary: human wins.
+    // First boundary: human pending → nothing injected, peer held.
     const text1 = session.invokeCallback();
-    expect(text1).toBe('user typed something');
-    expect(text1).not.toContain('peer message X');
+    expect(text1).toBeUndefined();
 
-    // Second boundary: peer is now admitted (human queue empty).
+    // Turn ends, human queue drains; the next boundary admits the peer.
+    compositor._clear();
     const text2 = session.invokeCallback();
     expect(text2).toBeDefined();
     expect(text2).toContain('peer message X');
@@ -426,7 +435,7 @@ describe('Fake Anthropic provider integration', () => {
 });
 
 describe('Fake OpenAI provider integration', () => {
-  it('injects human message at tool boundary', () => {
+  it('does NOT inject a human message at a tool boundary', () => {
     const admissionQueue = new AdmissionQueue();
     const session = makeSession();
     const compositor = makeCompositor('openai user queued msg');
@@ -441,17 +450,8 @@ describe('Fake OpenAI provider integration', () => {
 
     // Simulate OpenAI provider: it calls setBeforeNextRound callback.
     const steeringText = session.invokeCallback();
-    expect(steeringText).toBe('openai user queued msg');
-
-    // Simulate OpenAI applyBeforeNextRound: append to priorTurns.
-    const priorTurns: Array<{ role: string; content: unknown }> = [
-      { role: 'tool', content: 'tool result content' },
-    ];
-    if (steeringText) {
-      priorTurns.push({ role: 'user', content: steeringText });
-    }
-    expect(priorTurns).toHaveLength(2);
-    expect(priorTurns[1]!.content).toBe('openai user queued msg');
+    expect(steeringText).toBeUndefined();
+    expect(compositor.peekQueuedText()?.text).toBe('openai user queued msg');
   });
 
   it('peer message from notifier buffer injected for OpenAI path', () => {
@@ -637,19 +637,19 @@ describe('Human barrier — attachment blocking', () => {
       admissionQueue,
     });
 
-    // First boundary: hasPendingSubmission=true and peekQueuedText returns text.
-    // Human wins; peer waits in notifier buffer.
+    // First boundary: hasPendingSubmission=true. Nothing injected; the slash
+    // text stays queued for end of turn and the peer waits in the buffer.
     const first = session.invokeCallback();
-    expect(first).toBe('/model gpt-4');
-    expect(first).not.toContain('peer wants in');
+    expect(first).toBeUndefined();
+    expect(compositor.peekQueuedText()?.text).toBe('/model gpt-4');
 
-    // Second boundary: human queue empty (hasPendingSubmission=false);
-    // peer is admitted from the notifier buffer.
+    // Turn ends, human queue drains; peer is admitted from the notifier buffer.
+    compositor._clear();
     const second = session.invokeCallback();
     expect(second).toContain('peer wants in');
   });
 
-  it('compositor queue is consumed exactly once (no duplicate delivery)', () => {
+  it('compositor queue is never consumed by the boundary (no duplicate delivery)', () => {
     const admissionQueue = new AdmissionQueue();
     const session = makeSession();
     const compositor = makeCompositor('exact-once-text');
@@ -662,16 +662,11 @@ describe('Human barrier — attachment blocking', () => {
       admissionQueue,
     });
 
-    const first = session.invokeCallback();
-    expect(first).toBe('exact-once-text');
-    // Consumed from compositor.
-    expect(compositor._dropped).toHaveLength(1);
-
-    // Second call: compositor is empty.
-    const second = session.invokeCallback();
-    expect(second).toBeUndefined();
-    // No second drop.
-    expect(compositor._dropped).toHaveLength(1);
+    // The end-of-turn drain is the only consumer, so it can never be delivered
+    // twice (once here, once as its own turn).
+    expect(session.invokeCallback()).toBeUndefined();
+    expect(session.invokeCallback()).toBeUndefined();
+    expect(compositor._dropped).toHaveLength(0);
   });
 
   it('peer stays in notifier buffer after attachment barrier — delivered at next boundary once attachment is gone', () => {
@@ -920,10 +915,9 @@ describe('Data-loss regression — five near-64KiB messages delivered without lo
   });
 });
 
-// ── Slash / shell barrier: submitHuman is GATED (not unconditional) ───────────
+// ── Slash / shell barrier: human text is never admitted ──────────────────────
 // Verifies that /slash and !shell text in the compositor queue acts as a human
-// barrier (blocks peer) AND that the submitHuman call is only made when
-// hasPendingSubmission() is true — it is NOT called unconditionally.
+// barrier (blocks peer) AND that submitHuman is never called by the boundary.
 // Also verifies that slash/shell text does NOT appear when the compositor is
 // empty (no spurious injection).
 
@@ -942,14 +936,14 @@ describe('Slash and shell passthrough as human barriers', () => {
       admissionQueue,
     });
 
-    // First boundary: /slash command wins; peer is blocked.
+    // First boundary: /slash command pending; nothing injected, peer blocked.
     const result1 = session.invokeCallback();
-    expect(result1).toBe('/model gpt-4o');
-    expect(result1).not.toContain('peer while slash pending');
+    expect(result1).toBeUndefined();
     // Peer still buffered — not lost.
     expect(peerNotifier.hasPendingInjections()).toBe(true);
 
-    // Second boundary: slash is consumed; peer is now admitted.
+    // Turn ends and the slash command drains; peer is now admitted.
+    compositor._clear();
     const result2 = session.invokeCallback();
     expect(result2).toContain('peer while slash pending');
   });
@@ -968,13 +962,13 @@ describe('Slash and shell passthrough as human barriers', () => {
       admissionQueue,
     });
 
-    // First boundary: shell text wins.
+    // First boundary: shell text pending; nothing injected.
     const result1 = session.invokeCallback();
-    expect(result1).toBe('!ls -la');
-    expect(result1).not.toContain('peer while shell pending');
+    expect(result1).toBeUndefined();
     expect(peerNotifier.hasPendingInjections()).toBe(true);
 
-    // Second boundary: peer delivered.
+    // Turn ends and the shell text drains; peer delivered.
+    compositor._clear();
     const result2 = session.invokeCallback();
     expect(result2).toContain('peer while shell pending');
   });
@@ -1004,7 +998,7 @@ describe('Slash and shell passthrough as human barriers', () => {
     expect(result).toContain('only peer message');
   });
 
-  it('submitHuman is called ONLY when hasPendingSubmission=true and peekQueuedText returns text', () => {
+  it('submitHuman is NEVER called, even when queued human text is pending', () => {
     const admissionQueue = new AdmissionQueue();
     const session = makeSession();
     const compositor = makeCompositor('queued human text');
@@ -1019,9 +1013,8 @@ describe('Slash and shell passthrough as human barriers', () => {
     });
 
     session.invokeCallback();
-    // submitHuman called exactly once with the queued text.
-    expect(submitHumanSpy).toHaveBeenCalledTimes(1);
-    expect(submitHumanSpy).toHaveBeenCalledWith('queued human text');
+    // The boundary never admits human text; it is delivered at end of turn.
+    expect(submitHumanSpy).not.toHaveBeenCalled();
   });
 
   it('attachment barrier (hasPendingSubmission=true, peekQueuedText=undefined) does NOT call submitHuman', () => {
@@ -1047,5 +1040,309 @@ describe('Slash and shell passthrough as human barriers', () => {
     expect(result).toBeUndefined();
     // Peer still in buffer.
     expect(peerNotifier.hasPendingInjections()).toBe(true);
+  });
+});
+
+// ── applyDeferPeers unit tests ───────────────────────────────────────────────
+// Directly tests the peer-deferral injection block extracted from `runInputLoop`.
+//
+// `applyDeferPeers` collects InjectionSource drains in order and optionally
+// calls drainAdmissionQueueFallback. We spy on drainInjections() to observe
+// which sources were called and in what order.
+
+describe('applyDeferPeers', () => {
+  /**
+   * Build a named InjectionSource spy. The source emits `[<name>]` exactly
+   * once; subsequent drains return ''. The spy records calls so tests can
+   * assert ordering.
+   */
+  function makeNamedSource(name: string): InjectionSource & { calls: string[] } {
+    const calls: string[] = [];
+    let drained = false;
+    return {
+      calls,
+      hasPendingInjections(): boolean {
+        return !drained;
+      },
+      drainInjections() {
+        calls.push(name);
+        if (drained) return '';
+        drained = true;
+        return `[${name}]`;
+      },
+    };
+  }
+
+  /** Minimal InputSurface stub — only getCompositor() is used by applyDeferPeers. */
+  function makeSurface(hasPending: boolean) {
+    return {
+      getCompositor: () => ({
+        hasPendingSubmission: () => hasPending,
+      }),
+    };
+  }
+
+  /** Empty-queue AdmissionQueue — pending=false, drain returns ''. */
+  function makeEmptyQueue(): AdmissionQueue {
+    return new AdmissionQueue();
+  }
+
+  it('queuedHumanTurn=true: peer notifier is deferred; shell, bgResult, and processJob sources are still injected', () => {
+    const shell = makeNamedSource('shell');
+    const bg = makeNamedSource('bg');
+    const peer = makeNamedSource('peer');
+    const processJob = makeNamedSource('processJob');
+    // No compositor pending submission — deferral comes only from queuedHumanTurn.
+    const surface = makeSurface(false);
+
+    const result = applyDeferPeers(
+      'base',
+      /* queuedHumanTurn */ true,
+      surface as never,
+      shell,
+      bg,
+      peer,
+      makeEmptyQueue(),
+      processJob,
+    );
+
+    // shell, bg, and processJob were drained (injected).
+    expect(shell.calls).toHaveLength(1);
+    expect(bg.calls).toHaveLength(1);
+    expect(processJob.calls).toHaveLength(1);
+    // peer was NOT drained (deferred).
+    expect(peer.calls).toHaveLength(0);
+    // The output does not contain the peer block.
+    expect(result).not.toContain('[peer]');
+    // But it does contain the other three injections.
+    expect(result).toContain('[shell]');
+    expect(result).toContain('[bg]');
+    expect(result).toContain('[processJob]');
+  });
+
+  it('hasPendingSubmission=true: peer notifier is deferred; shell, bgResult, and processJob sources are still injected', () => {
+    const shell = makeNamedSource('shell');
+    const bg = makeNamedSource('bg');
+    const peer = makeNamedSource('peer');
+    const processJob = makeNamedSource('processJob');
+    // Deferral comes from the compositor's pending submission (queuedHumanTurn=false).
+    const surface = makeSurface(true);
+
+    const result = applyDeferPeers(
+      'base',
+      /* queuedHumanTurn */ false,
+      surface as never,
+      shell,
+      bg,
+      peer,
+      makeEmptyQueue(),
+      processJob,
+    );
+
+    // shell, bg, and processJob were drained.
+    expect(shell.calls).toHaveLength(1);
+    expect(bg.calls).toHaveLength(1);
+    expect(processJob.calls).toHaveLength(1);
+    // peer was NOT drained.
+    expect(peer.calls).toHaveLength(0);
+    expect(result).not.toContain('[peer]');
+    expect(result).toContain('[shell]');
+    expect(result).toContain('[bg]');
+    expect(result).toContain('[processJob]');
+  });
+
+  it('neither flag set: all sources injected in order [shell, bg, processJob, peer]', () => {
+    // prependTurnInjections prepends each source in argument order, so the last
+    // source in the array ends up first in the output string. To verify argument
+    // order we inspect the call sequence directly: drainInjections() is called in
+    // array order: shell, bg, processJob, peer.
+    const callOrder: string[] = [];
+
+    function makeOrderSource(name: string): InjectionSource {
+      return {
+        hasPendingInjections(): boolean { return true; },
+        drainInjections() {
+          callOrder.push(name);
+          return `[${name}]`;
+        },
+      };
+    }
+
+    const shell = makeOrderSource('shell');
+    const bg = makeOrderSource('bg');
+    const processJob = makeOrderSource('processJob');
+    const peer = makeOrderSource('peer');
+    const surface = makeSurface(false);
+
+    applyDeferPeers(
+      '',
+      /* queuedHumanTurn */ false,
+      surface as never,
+      shell,
+      bg,
+      peer,
+      makeEmptyQueue(),
+      processJob,
+    );
+
+    // All four sources must have been called, in the documented order.
+    expect(callOrder).toEqual(['shell', 'bg', 'processJob', 'peer']);
+  });
+
+  it('processJobNotifier omitted: no hole in the array; shell, bg, peer ordering unchanged', () => {
+    const callOrder: string[] = [];
+
+    function makeOrderSource(name: string): InjectionSource {
+      return {
+        hasPendingInjections(): boolean { return true; },
+        drainInjections() {
+          callOrder.push(name);
+          return `[${name}]`;
+        },
+      };
+    }
+
+    const shell = makeOrderSource('shell');
+    const bg = makeOrderSource('bg');
+    const peer = makeOrderSource('peer');
+    const surface = makeSurface(false);
+
+    // processJobNotifier is NOT passed.
+    const result = applyDeferPeers(
+      '',
+      /* queuedHumanTurn */ false,
+      surface as never,
+      shell,
+      bg,
+      peer,
+      makeEmptyQueue(),
+      // processJobNotifier omitted
+    );
+
+    // Exactly three sources called, in order — no hole where processJob would be.
+    expect(callOrder).toEqual(['shell', 'bg', 'peer']);
+    // All three injections present in output.
+    expect(result).toContain('[shell]');
+    expect(result).toContain('[bg]');
+    expect(result).toContain('[peer]');
+  });
+});
+
+// ── admissionQueue.full guard: skip render loop when queue already saturated ──
+// Verifies that the boundary skips the per-envelope render loop entirely when
+// the admission queue is at maxCount — no envelope can be admitted regardless
+// of byte size, so calling renderPeerMessageBlock would be wasted work (and
+// could mislead a future reader into thinking renders happened when nothing
+// was consumed). This is the fix for the advisory finding in #2901.
+
+describe('admissionQueue.full pre-loop guard (#2901)', () => {
+  it('peekEnvelopes is not called (no render work) when admissionQueue is full', () => {
+    // Use maxCount=1 and pre-fill with a human entry so the queue is full
+    // before the boundary callback runs.
+    const admissionQueue = new AdmissionQueue({ maxCount: 1 });
+    const session = makeSession();
+
+    // Spy on peekEnvelopes to detect whether the render loop was entered.
+    const peerBuffer = ['peer-message-should-not-render'];
+    const notifier = makePeerNotifier(peerBuffer);
+    const peekSpy = vi.spyOn(notifier, 'peekEnvelopes');
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => null,
+      peerNotifier: notifier as never,
+      admissionQueue,
+    });
+
+    // Fill the queue to capacity.
+    admissionQueue.submitHuman('fills-the-queue');
+    expect(admissionQueue.full).toBe(true);
+
+    // Invoke boundary: queue is full; human barrier is NOT active
+    // (hasPendingSubmission returns false — compositor is null). The full
+    // guard should prevent entering the render loop without peeking.
+    const result = session.invokeCallback();
+
+    // The human entry is delivered (it was already in the queue).
+    expect(result).toBe('fills-the-queue');
+    // The per-envelope render loop must NOT have been entered:
+    // peekEnvelopes must not be called when the queue is full.
+    expect(peekSpy).not.toHaveBeenCalled();
+    // The peer message must still be in the notifier buffer.
+    expect(notifier.hasPendingInjections()).toBe(true);
+  });
+
+  it('peekEnvelopes IS called when queue is not full', () => {
+    // Sanity check: when the queue has room, the render loop is entered.
+    const admissionQueue = new AdmissionQueue({ maxCount: 5 });
+    const session = makeSession();
+    const peerBuffer = ['peer-message'];
+    const notifier = makePeerNotifier(peerBuffer);
+    const peekSpy = vi.spyOn(notifier, 'peekEnvelopes');
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => null,
+      peerNotifier: notifier as never,
+      admissionQueue,
+    });
+
+    expect(admissionQueue.full).toBe(false);
+    const result = session.invokeCallback();
+
+    expect(result).toContain('peer-message');
+    // peekEnvelopes was called because the queue had room.
+    expect(peekSpy).toHaveBeenCalled();
+  });
+});
+
+// ── consumeEnvelopes synchronous-callback invariant (#2901 medium) ─────────────
+// The generation guard is intentionally absent from consumeEnvelopes() because
+// it is only ever called synchronously within the boundary callback — between
+// the peek and consume there is no await, so the generation cannot advance.
+// This test proves that the peek→consume handshake is atomic from the event-
+// loop's perspective: a resetForNewSession() called BETWEEN two synchronous
+// boundary invocations does NOT cause consume to process the wrong generation's
+// envelopes (because the buffer is spliced by resetForNewSession before the next
+// callback fires).
+
+describe('consumeEnvelopes synchronous-callback invariant (#2901 medium)', () => {
+  it('consume sees exactly the envelopes that were in the buffer at peek time', () => {
+    const admissionQueue = new AdmissionQueue();
+    const session = makeSession();
+    const peerBuffer = ['msg-A', 'msg-B'];
+    const notifier = makePeerNotifier(peerBuffer);
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => null,
+      peerNotifier: notifier as never,
+      admissionQueue,
+    });
+
+    // First synchronous boundary: peek sees ['msg-A', 'msg-B'], consume takes both.
+    const result = session.invokeCallback();
+    expect(result).toContain('msg-A');
+    expect(result).toContain('msg-B');
+    expect(notifier.hasPendingInjections()).toBe(false);
+
+    // Second boundary: buffer is empty — nothing to deliver.
+    expect(session.invokeCallback()).toBeUndefined();
+  });
+
+  it('drainInjections (which calls consumeEnvelopes) empties the buffer in one call', () => {
+    // drainInjections is the convenience wrapper for callers that always drain
+    // all pending entries — the next-turn fallback path. It delegates to
+    // consumeEnvelopes(buffer.length) synchronously with no await, so the
+    // generation invariant holds there too.
+    const peerBuffer = ['alpha', 'beta', 'gamma'];
+    const notifier = makePeerNotifier(peerBuffer);
+    const result = notifier.drainInjections();
+    expect(result).toContain('alpha');
+    expect(result).toContain('beta');
+    expect(result).toContain('gamma');
+    expect(notifier.hasPendingInjections()).toBe(false);
+    // A second drain returns empty.
+    expect(notifier.drainInjections()).toBe('');
   });
 });

@@ -108,6 +108,15 @@ function markBlocked(sessionId: string | undefined, blocked: boolean): void {
 
 class ElicitationRouter {
   private handler: ElicitationHandler | null = null;
+  /**
+   * Per-session handlers keyed by an opaque string supplied by the caller
+   * (e.g. a per-attempt UUID). Looked up by `options.sessionKey` in `route()`
+   * before falling back to the global `handler`. This eliminates the
+   * single-slot race where two concurrent daemon tasks overwrite each other's
+   * handler: each task installs into its own slot and uninstalls only that
+   * slot, leaving sibling sessions unaffected (#3619).
+   */
+  private readonly sessionHandlers = new Map<string, ElicitationHandler>();
   private queue: Promise<void> = Promise.resolve();
   private queueDepth = 0;
 
@@ -120,14 +129,39 @@ class ElicitationRouter {
   }
 
   /**
+   * Install a handler scoped to a single session attempt. The `key` must be
+   * unique per concurrent task (e.g. a per-attempt UUID). A second
+   * `installForSession` call with a different key does NOT overwrite the first,
+   * so two concurrent daemon tasks each get their own handler slot.
+   *
+   * Pair every `installForSession` with exactly one `uninstallForSession` in a
+   * `finally` block to avoid accumulating stale entries in the map.
+   */
+  installForSession(key: string, handler: ElicitationHandler): void {
+    this.sessionHandlers.set(key, handler);
+  }
+
+  /**
+   * Remove the per-session handler registered under `key`. No-op when the key
+   * is absent (idempotent, safe to call in a `finally` block even if install
+   * was never reached).
+   */
+  uninstallForSession(key: string): void {
+    this.sessionHandlers.delete(key);
+  }
+
+  /**
    * Whether an elicitation handler is currently installed. Deterministic
    * probe used by the ask-question PreToolUse gate (`ask-question-gate.ts`):
    * handler presence is the ground truth for "an interactive operator surface
    * (REPL/Telegram) is attached to this process". Read at call time — a
    * handler installed later is observed by subsequent probes.
+   *
+   * Returns true when either the global handler or ANY per-session handler is
+   * installed, so daemon tasks that use the keyed path still pass the gate.
    */
   hasHandler(): boolean {
-    return this.handler !== null;
+    return this.handler !== null || this.sessionHandlers.size > 0;
   }
 
   /** Number of requests currently waiting in (or executing from) the queue. */
@@ -137,7 +171,7 @@ class ElicitationRouter {
 
   route(
     request: ElicitationRequest,
-    options: { signal: AbortSignal; onActive?: () => void; sessionId?: string },
+    options: { signal: AbortSignal; onActive?: () => void; sessionId?: string; sessionKey?: string },
   ): Promise<ElicitationResult> {
     // Fast-path: already aborted before entering the queue
     if (options.signal.aborted) return Promise.resolve(DECLINE);
@@ -149,8 +183,12 @@ class ElicitationRouter {
     });
 
     // Capture handler at enqueue time so a later install() doesn't affect
-    // requests already in the queue.
-    const capturedHandler = this.handler;
+    // requests already in the queue. Per-session handler (keyed by sessionKey)
+    // takes priority over the global handler so concurrent daemon tasks each
+    // get their own handler rather than sharing the last-installed global one.
+    const capturedHandler =
+      (options.sessionKey !== undefined ? this.sessionHandlers.get(options.sessionKey) : undefined)
+      ?? this.handler;
 
     // Chain onto the serial queue; each call waits for all prior calls to finish.
     this.queue = this.queue.then(async () => {
@@ -225,14 +263,3 @@ class ElicitationRouter {
 
 export const elicitationRouter = new ElicitationRouter();
 
-/**
- * The shim {@link buildQueryOptions} installs as `options.onElicitation`.
- * Indirection lets surfaces (`src/cli/commands/interactive.ts`, telegram)
- * hot-swap handlers without reconstructing the session.
- */
-export async function routeElicitation(
-  request: ElicitationRequest,
-  options: { signal: AbortSignal; onActive?: () => void; sessionId?: string },
-): Promise<ElicitationResult> {
-  return elicitationRouter.route(request, options);
-}

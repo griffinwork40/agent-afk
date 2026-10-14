@@ -195,6 +195,61 @@ describe('PeerInboxNotifier — accept path', () => {
     expect(stripAnsi(lines[0]!)).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
   });
 
+  it('held path appends size hint when message body >= 1024 bytes', async () => {
+    const sessionId = randomUUID();
+    const largeBody = 'x'.repeat(1024);
+    await writeEnvelope(makeEnvelope(sessionId, { body: largeBody }));
+
+    const { notifier, lines } = makeNotifier(sessionId, { mode: () => 'hold' });
+    await notifier.scan();
+
+    const plain = stripAnsi(lines[0]!);
+    expect(plain).toContain('held (AFK_PEER_INBOUND=hold)');
+    expect(plain).toMatch(/\d+\.\d+ kB/);
+    expect(plain).toContain('/inbox to review');
+  });
+
+  it('held path omits size hint when message body < 1024 bytes', async () => {
+    const sessionId = randomUUID();
+    await writeEnvelope(makeEnvelope(sessionId, { body: 'short' }));
+
+    const { notifier, lines } = makeNotifier(sessionId, { mode: () => 'hold' });
+    await notifier.scan();
+
+    const plain = stripAnsi(lines[0]!);
+    expect(plain).toContain('held (AFK_PEER_INBOUND=hold) · /inbox to review');
+    expect(plain).not.toMatch(/\d+\.\d+ kB/);
+  });
+
+  it('wake-budget held reason appends kB size hint when body >= 1024 bytes', async () => {
+    // Exhaust the default 20-wake-per-sender budget by scanning 20 accepted
+    // messages from the same sender, then write a 21st with a large body.
+    // Time is frozen so no credit refreshes during the loop.
+    const sessionId = randomUUID();
+    const sender = 'wake-budget-sender-' + randomUUID().slice(0, 8);
+    const { notifier, lines } = makeNotifier(sessionId, { now: () => 0 });
+
+    // Consume all 20 wake credits for this sender.
+    for (let i = 0; i < 20; i++) {
+      await writeEnvelope(makeEnvelope(sessionId, { from: { id: sender }, messageId: `wb-msg-${i}`, body: 'x' }));
+      await notifier.scan();
+      notifier.drainInjections(); // flush so the buffer stays below capacity
+    }
+
+    // 21st message: large body, same sender → wake budget exhausted → held.
+    const largeBody = 'y'.repeat(1024);
+    await writeEnvelope(makeEnvelope(sessionId, { from: { id: sender }, messageId: 'wb-msg-20', body: largeBody }));
+    lines.length = 0; // clear previous arrival lines
+    await notifier.scan();
+
+    const heldLine = lines.find((l) => stripAnsi(l).includes('held (wake budget reached)'));
+    expect(heldLine).toBeDefined();
+    const plain = stripAnsi(heldLine!);
+    expect(plain).toMatch(/\d+\.\d+ kB/);
+    expect(plain).toContain('/inbox to review');
+    expect(notifier.hasPendingInjections()).toBe(false);
+  });
+
   it('two notifiers on the same inbox deliver each message exactly once total', async () => {
     const sessionId = randomUUID();
     await writeEnvelope(makeEnvelope(sessionId));
@@ -363,15 +418,15 @@ describe('PeerInboxNotifier — resetForNewSession (resume swap)', () => {
 });
 
 describe('PeerInboxNotifier — live trace writer', () => {
-  it('routes delivered AND held events after switching writers; getter beats static sink', async () => {
+  it('routes delivered AND held events after switching writers', async () => {
     const sessionId = randomUUID();
     const oldWriter = new InMemoryTraceWriter();
     const newWriter = new InMemoryTraceWriter();
-    let currentWriter = oldWriter;
+    let currentWriter: typeof oldWriter = oldWriter;
     let mode: 'accept' | 'hold' = 'accept';
     const notifier = new PeerInboxNotifier({
       getSessionId: () => sessionId, writeLine: () => undefined,
-      mode: () => mode, traceWriter: oldWriter,
+      mode: () => mode,
       getTraceWriter: () => currentWriter,
     });
     await writeEnvelope(makeEnvelope(sessionId));
@@ -392,14 +447,46 @@ describe('PeerInboxNotifier — live trace writer', () => {
     ]);
   });
 
-  it('retains static traceWriter support without a getter', async () => {
+  it('noteCorrupt trace event includes sanitized file field for correlation', async () => {
+    // Write a corrupt (non-JSON) file directly into pending/ so the scan
+    // cannot parse it and calls noteCorrupt → emitPeerMessage with file=safeFile.
+    const { mkdir: mkdirFs, writeFile } = await import('fs/promises');
+    const { getPeerInboxDir } = await import('../../../paths.js');
     const sessionId = randomUUID();
+    const pendingDir = join(getPeerInboxDir(sessionId), 'pending');
+    await mkdirFs(pendingDir, { recursive: true, mode: 0o700 });
+    const corruptFilename = 'corrupt-quarantine-test.json';
+    await writeFile(join(pendingDir, corruptFilename), 'NOT VALID JSON', { mode: 0o600 });
+
     const writer = new InMemoryTraceWriter();
-    const notifier = new PeerInboxNotifier({ getSessionId: () => sessionId, writeLine: () => undefined, mode: () => 'accept', traceWriter: writer });
-    await writeEnvelope(makeEnvelope(sessionId));
-    await notifier.scan();
-    expect(writer.events).toHaveLength(1);
-    expect(writer.events[0]).toMatchObject({ kind: 'peer_message', payload: { action: 'claimed' } });
+    const { notifier } = makeNotifier(sessionId, {});
+    // Attach writer.
+    const notifierWithWriter = new PeerInboxNotifier({
+      getSessionId: () => sessionId,
+      writeLine: () => undefined,
+      mode: () => 'accept',
+      getTraceWriter: () => writer,
+    });
+    await notifierWithWriter.scan();
+    notifierWithWriter.dispose();
+
+    // The trace should contain a 'held' event with reason:'corrupt' and
+    // file: corruptFilename (the sanitized name).
+    const heldEvent = writer.events.find(
+      (e) => e.kind === 'peer_message' && (e as { kind: string; payload: { action: string } }).payload.action === 'held',
+    );
+    expect(heldEvent).toBeDefined();
+    expect(heldEvent).toMatchObject({
+      kind: 'peer_message',
+      payload: {
+        action: 'held',
+        peer: 'unknown',
+        bytes: 0,
+        reason: 'corrupt',
+        file: corruptFilename,
+      },
+    });
+    notifier.dispose();
   });
 });
 

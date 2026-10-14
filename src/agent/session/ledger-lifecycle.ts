@@ -75,8 +75,8 @@ export class LedgerLifecycle {
   }
 
   /** Record the outbound user message summary. No-op when unledgered. */
-  recordUser(text: string): void {
-    this.writer?.recordUser(text);
+  recordUser(text: string, input?: string): void {
+    this.writer?.recordUser(text, input);
   }
 
   /** Record a transformed provider output event. No-op when unledgered. */

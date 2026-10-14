@@ -4,6 +4,7 @@ import type { AnthropicClientLike, AnthropicToolDef, RunTurnInput, ToolDispatche
 import { buildRequestHeaders } from '../auth.js';
 import { isExtendedCacheTtlActive } from '../cache-policy.js';
 import { TurnAccumulator } from '../loop/turn-accumulator.js';
+import { ensureError } from '../../../../utils/errors.js';
 
 export interface TurnRequestInput {
   client: AnthropicClientLike;
@@ -30,6 +31,7 @@ export interface TurnRequestInput {
   throttleQueue?: RunTurnInput['throttleQueue'];
   onUsageProgress?: RunTurnInput['onUsageProgress'];
   beforeNextRound?: RunTurnInput['beforeNextRound'];
+  beforeTurnEnd?: RunTurnInput['beforeTurnEnd'];
   journalSync?: RunTurnInput['journalSync'];
 }
 
@@ -66,7 +68,10 @@ export function prepareTurnRequest(input: TurnRequestInput): {
       maxTokens: input.maxTokens,
       headers,
       signal: input.signal,
-      ctx: { sessionId: input.sessionId },
+      ctx: {
+        sessionId: input.sessionId,
+        ...(input.traceWriter ? { traceWriter: input.traceWriter } : {}),
+      },
       ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
       ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
@@ -80,6 +85,9 @@ export function prepareTurnRequest(input: TurnRequestInput): {
       ...(input.throttleQueue ? { throttleQueue: input.throttleQueue } : {}),
       ...(input.onUsageProgress ? { onUsageProgress: input.onUsageProgress } : {}),
       ...(input.beforeNextRound ? { beforeNextRound: input.beforeNextRound } : {}),
+      // Stop-hook seam (#2714): without this forward the seam is dead on
+      // anthropic-direct and blocking Stop hooks never continue (#2957).
+      ...(input.beforeTurnEnd ? { beforeTurnEnd: input.beforeTurnEnd } : {}),
       ...(input.journalSync ? { journalSync: input.journalSync } : {}),
       // One accumulator per USER TURN, shared by every retry-tier replay of it
       // (see RunTurnInput.turnState).
@@ -109,7 +117,7 @@ export const FAST_ERROR_PREFIX = '[Fast mode requested; no standard-mode fallbac
  * `query-auth-retry.test.ts`.
  */
 export function annotateFastError(error: unknown, fast: boolean): Error {
-  const original = error instanceof Error ? error : new Error(String(error));
+  const original = ensureError(error);
   if (!fast) return original;
   // Already annotated (e.g. round-request annotated it, then query-runtime saw
   // the same throw): don't stack a second prefix.

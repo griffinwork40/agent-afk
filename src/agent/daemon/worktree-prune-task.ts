@@ -6,6 +6,7 @@ import { redactInlineSecrets } from '../session/prompt-dump.js';
 import type { TelemetryRecord, TelemetryTrigger } from './scheduler.js';
 import { runSweep } from '../worktree/worktree-sweep.js';
 import type { ExecFileFn, SweepResult } from '../worktree/worktree-sweep.js';
+import { resolveSweepPolicy } from '../worktree/sweep-policy.js';
 import { sweepRootSet } from '../worktree/worktree-root-registry.js';
 import { summarizeRootFailures } from './root-failure-summary.js';
 import { countPrunable, formatWorktreePruneSummary } from './worktree-prune-summary.js';
@@ -116,8 +117,12 @@ export async function runBuiltinWorktreePruneTask(
       return skipped;
     }
 
-    const maxAgeDaysClean = parseInt(env.AFK_WORKTREE_MAX_AGE_CLEAN ?? '', 10) || 14;
-    const maxAgeDaysDirty = parseInt(env.AFK_WORKTREE_MAX_AGE_DIRTY ?? '', 10) || 30;
+    const { maxAgeDaysClean, maxAgeDaysDirty } = resolveSweepPolicy({
+      env: {
+        maxAgeDaysClean: env.AFK_WORKTREE_MAX_AGE_CLEAN,
+        maxAgeDaysDirty: env.AFK_WORKTREE_MAX_AGE_DIRTY,
+      },
+    });
 
     const results: SweepResult[] = [];
     const rootFailures: string[] = [];

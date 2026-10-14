@@ -99,6 +99,8 @@ export interface ProviderProgress {
   taskId: string;
   description: string;
   summary?: string;
+  roundsUsed?: number;
+  budget?: number;
   lastToolName?: string;
   totalTokens: number;
   toolUses: number;
@@ -229,6 +231,12 @@ export type ProviderEvent =
        */
       incompleteReason?: string;
       /**
+       * Compose only: number of partial DAG nodes, plumbed from
+       * `ToolResult.partialNodeCount`. Present only alongside
+       * `incomplete: true` (#2978).
+       */
+      partialNodeCount?: number;
+      /**
        * Plumbed from `ToolResult.failureClass` — WHY this call returned
        * `isError: true`. Present only alongside `isError: true`; an absent
        * class on an errored result means "unclassified failure", which is the
@@ -305,6 +313,8 @@ export type ProviderEvent =
     }
   | {
       type: 'turn.completed';
+      /** Public file rewind target, present when file checkpointing is enabled. */
+      userMessageId?: string;
       usage: ProviderUsage;
       sessionId?: string;
     }
@@ -406,6 +416,8 @@ export interface ProviderUserTurn {
    * must stringify or reject array content at the adapter boundary.
    */
   content: string | ContentBlockParam[];
+  /** Optional stable file rewind target; otherwise emitted on turn.completed. */
+  userMessageId?: string;
   /** Associated harness session id, when known. */
   sessionId?: string;
 }
@@ -566,6 +578,10 @@ export interface ProviderCommandInfo {
   description?: string;
   argumentHint?: string;
   whenToUse?: string;
+  /** Long-form CLI flags parsed during skill discovery (#3332). */
+  flags?: readonly string[];
+  /** Job-to-be-done category authored on the skill. */
+  category?: string;
   /**
    * Origin of the underlying skill/command. Inlined literal union (rather
    * than importing `SkillManifestEntry['source']` from

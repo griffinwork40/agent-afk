@@ -45,7 +45,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import type { Change } from './types.js';
+import type { Change, OperatorPrediction } from './types.js';
 export { WHATIF_USAGE } from './args.usage.js';
 
 // ---------------------------------------------------------------------------
@@ -130,6 +130,13 @@ export interface WhatifFlagOptions {
   maxPredictions?: number;
   /** Skip the baseline-sample preflight; use analyst-estimate check instead (#2511). */
   noBaselineSample?: boolean;
+  /** Operator-supplied predictions (#2861); accumulated in order. */
+  operatorPredictions?: OperatorPrediction[];
+  /**
+   * A/A calibration mode (#2415 Step 0): run both arms with zero changes so
+   * any measured difference is harness noise, not a real effect.
+   */
+  aaMode?: boolean;
 }
 
 export interface ParsedWhatifArgs {
@@ -147,6 +154,11 @@ export interface ParsedWhatifArgs {
   json: boolean;
   /** Bypass the MDE underpowered hard gate. */
   force: boolean;
+  /**
+   * A/A calibration mode (#2415 Step 0): zero changes, both arms identical.
+   * Any measured difference is harness noise. Implies an empty ChangeSpec.
+   */
+  aaMode: boolean;
 }
 
 // WHATIF_USAGE is re-exported from args.usage.ts (extracted for the 350-line ceiling).
@@ -182,6 +194,8 @@ interface RunState {
   probes?: number;
   maxPredictions?: number;
   noBaselineSample: boolean;
+  operatorPredictions: OperatorPrediction[];
+  aaMode: boolean;
 }
 
 /**
@@ -207,6 +221,15 @@ function parseRunOptionFlag(token: string, nextVal: string | undefined, state: R
     case '--json': state.json = true; return 1;
     case '--keep-sandboxes': state.keepSandboxes = true; return 1;
     case '--no-baseline-sample': state.noBaselineSample = true; return 1;
+    case '--aa': state.aaMode = true; return 1;
+    case '--predict': {
+      if (!nextVal) return `--predict requires a prediction text\n\n${WHATIF_USAGE}`;
+      // Strip a leading auxiliary verb so "should greet the user" becomes
+      // "Does the response greet the user?" not "Does the response should…".
+      const stripped = nextVal.replace(/^(should|will|would|can|must|may)\s+/i, '');
+      state.operatorPredictions.push({ behavior: nextVal, testQuestion: `Does the response ${stripped}` });
+      return 2;
+    }
     case '--turns': {
       if (!nextVal) return `--turns requires a number\n\n${WHATIF_USAGE}`;
       const n = parseInt(nextVal, 10);
@@ -291,6 +314,8 @@ export function parseWhatifArgs(argv: string[]): ParseResult {
     json: false,
     force: false,
     noBaselineSample: false,
+    operatorPredictions: [],
+    aaMode: false,
   };
 
   let i = 0;
@@ -324,11 +349,15 @@ export function parseWhatifArgs(argv: string[]): ParseResult {
 
   const text = positionals.length > 0 ? positionals.join(' ') : undefined;
 
-  if (state.specFile && (flagChanges.length > 0 || text)) {
-    return `--spec cannot be combined with change flags or plain-text\n\n${WHATIF_USAGE}`;
+  if (state.specFile && (flagChanges.length > 0 || text || state.aaMode)) {
+    return `--spec cannot be combined with change flags, plain-text, or --aa\n\n${WHATIF_USAGE}`;
   }
 
-  if (!text && !state.specFile && flagChanges.length === 0) {
+  if (state.aaMode && (flagChanges.length > 0 || text)) {
+    return `--aa cannot be combined with change flags or plain-text (A/A mode uses no changes)\n\n${WHATIF_USAGE}`;
+  }
+
+  if (!text && !state.specFile && flagChanges.length === 0 && !state.aaMode) {
     return `whatif: nothing to predict — provide a description, flags, or --spec\n\n${WHATIF_USAGE}`;
   }
 
@@ -351,10 +380,13 @@ export function parseWhatifArgs(argv: string[]): ParseResult {
       ...(state.probes !== undefined ? { probes: state.probes } : {}),
       ...(state.maxPredictions !== undefined ? { maxPredictions: state.maxPredictions } : {}),
       ...(state.noBaselineSample ? { noBaselineSample: true } : {}),
+      ...(state.operatorPredictions.length > 0 ? { operatorPredictions: state.operatorPredictions } : {}),
+      ...(state.aaMode ? { aaMode: true } : {}),
     },
     yes: state.yes,
     json: state.json,
     force: state.force,
+    aaMode: state.aaMode,
   };
 }
 

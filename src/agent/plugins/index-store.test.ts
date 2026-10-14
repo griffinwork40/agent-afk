@@ -293,3 +293,54 @@ describe('upsertMarketplace — pinnedRef round-trip', () => {
     expect(readIndex(indexPath).marketplaces['pinned-mp'].pinnedRef).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// setPluginOption / unsetPluginOption
+// ---------------------------------------------------------------------------
+
+import { setPluginOption, unsetPluginOption } from './index-store.js';
+
+describe('setPluginOption', () => {
+  it('stores an option on an existing plugin entry', () => {
+    upsertPlugin('myplugin', sampleEntry(), indexPath);
+    setPluginOption('myplugin', 'provider', 'openai', indexPath);
+    const stored = readIndex(indexPath).plugins['myplugin']?.options;
+    expect(stored).toEqual({ provider: 'openai' });
+  });
+
+  it('merges with existing options without overwriting others', () => {
+    upsertPlugin('myplugin', sampleEntry({ options: { region: 'us' } }), indexPath);
+    setPluginOption('myplugin', 'provider', 'openai', indexPath);
+    const stored = readIndex(indexPath).plugins['myplugin']?.options;
+    expect(stored).toEqual({ region: 'us', provider: 'openai' });
+  });
+
+  it('throws when plugin is not in the index', () => {
+    expect(() => setPluginOption('missing', 'key', 'val', indexPath)).toThrow(/"missing"/);
+  });
+});
+
+describe('unsetPluginOption', () => {
+  it('removes a stored option key', () => {
+    upsertPlugin('myplugin', sampleEntry({ options: { provider: 'openai', region: 'us' } }), indexPath);
+    unsetPluginOption('myplugin', 'provider', indexPath);
+    const stored = readIndex(indexPath).plugins['myplugin']?.options;
+    expect(stored).toEqual({ region: 'us' });
+  });
+
+  it('sets options to undefined when last key is removed', () => {
+    upsertPlugin('myplugin', sampleEntry({ options: { provider: 'openai' } }), indexPath);
+    unsetPluginOption('myplugin', 'provider', indexPath);
+    expect(readIndex(indexPath).plugins['myplugin']?.options).toBeUndefined();
+  });
+
+  it('is a no-op when the key is absent', () => {
+    upsertPlugin('myplugin', sampleEntry({ options: { region: 'us' } }), indexPath);
+    unsetPluginOption('myplugin', 'missing', indexPath);
+    expect(readIndex(indexPath).plugins['myplugin']?.options).toEqual({ region: 'us' });
+  });
+
+  it('throws when plugin is not in the index', () => {
+    expect(() => unsetPluginOption('missing', 'key', indexPath)).toThrow(/"missing"/);
+  });
+});

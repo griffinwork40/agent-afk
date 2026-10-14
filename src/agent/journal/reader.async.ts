@@ -28,7 +28,35 @@ import {
 } from '../../paths.js';
 import { hydrateBlock } from './hydrate.js';
 import { parseJournalLine } from './records.js';
-import type { JournalBlock } from './types.js';
+import type { JournalBlock, ToolResultLookup } from './types.js';
+
+export type { ToolResultLookup } from './types.js';
+
+/**
+ * Async equivalent of the sync `journalExists` helper in reader.ts.
+ *
+ * Uses `fs.promises.stat(path).isFile()` — matching the sync path's
+ * `statSync(path).isFile()` — so a directory at the journal path returns
+ * `false`, not `true`. Returns `true` only when the path exists AND is a
+ * regular file; returns `false` otherwise (including on any error).
+ *
+ * Consumed by the 404 path in `web-server/routes.tool-results.ts` so the
+ * entire request handler stays non-blocking.
+ */
+export async function journalExistsAsync(sessionId: string): Promise<boolean> {
+  if (typeof sessionId !== 'string' || !isSafeLedgerSessionId(sessionId)) return false;
+  let path: string;
+  try {
+    path = getSessionJournalPath(sessionId);
+  } catch {
+    return false;
+  }
+  try {
+    return (await fs.promises.stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
 
 type ToolResultBlock = Extract<JournalBlock, { type: 'tool_result' }>;
 
@@ -104,7 +132,7 @@ async function listSubagentJournalsAsync(sessionId: string): Promise<string[]> {
 export async function findToolResultAsync(
   sessionId: string,
   toolUseId: string,
-): Promise<{ block: ToolResultBlock; subagentId?: string } | null> {
+): Promise<ToolResultLookup | null> {
   if (typeof sessionId !== 'string' || !isSafeLedgerSessionId(sessionId)) return null;
   if (typeof toolUseId !== 'string' || toolUseId.length === 0) return null;
 

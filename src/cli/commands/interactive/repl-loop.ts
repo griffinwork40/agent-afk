@@ -166,6 +166,7 @@ export async function runReplLoop(
     // fires (interactive.ts teardown) so cascade-cancelled jobs don't queue
     // notices into a buffer that will never drain.
     footer?.bgResultNotifier.dispose();
+    footer?.processJobNotifier?.dispose();
     // Stop the peer inbox notifier (watcher + poll). Must run before the
     // process exits so no orphaned interval keeps it alive.
     footer?.peerNotifier.dispose();

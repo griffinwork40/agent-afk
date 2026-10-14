@@ -107,6 +107,15 @@ function removeAllTracked(): void {
  * that shutdown (defect (a) above). Removing the presence file(s) is safe
  * either way and always runs first — it is synchronous and idempotent.
  */
+// Ordering constraint: `sigintOwnedElsewhere` / `sigtermOwnedElsewhere` are
+// captured at `ensureInstalled()` time (i.e. the first `registerPresenceCleanup`
+// call, which happens during session construction). Any future surface that
+// installs SIGINT/SIGTERM handlers AFTER that point will have its "owned"
+// status misreported as false here — this module would then call
+// `process.exit()` on those signals, truncating the surface's async shutdown.
+// Invariant: every surface that owns its own graceful shutdown (bot.ts,
+// daemon.ts, interactive.ts) MUST install its signal handlers BEFORE calling
+// `registerPresenceCleanup`. Validated by the presence-signals test suite.
 function ensureInstalled(): void {
   if (installed) return;
   installed = true;

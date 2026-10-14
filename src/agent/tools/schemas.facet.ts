@@ -32,16 +32,32 @@ export const getFacetTool: AnthropicToolDef = {
     'schema-validated summary of what a session did. Defaults to the most recent session.\n\n' +
     'The response is a JSON object. Internal provenance fields (source_session_path, ' +
     'derived_at, facet_version, derived_from, source_session_mtime_ms) are excluded by ' +
-    'default; pass them in `fields` to include them explicitly.',
+    'default; pass them in `fields` to include them explicitly.\n\n' +
+    'Every response includes three resolution-context fields regardless of the `fields` ' +
+    'allowlist:\n' +
+    '  - `session_cwd` — the `cwd` recorded in the session sidecar (null for legacy ' +
+    'sidecars that predate the field).\n' +
+    '  - `is_current_session` — true only when the session was resolved via the ' +
+    '"current"/"self" alias and the resolved session matches the caller\'s id. ' +
+    'An explicit id lookup that coincidentally matches the caller\'s id does NOT set this.\n' +
+    '  - `cwd_mismatch` — true when `session_cwd` differs from the caller\'s working ' +
+    'directory (signals a cross-cwd analysis that may be unintentional).',
   input_schema: {
     type: 'object',
     properties: {
       session: {
         type: 'string',
         description:
-          'Session ID, name, or "latest" (default). Resolves via the session sidecar ' +
-          'index — accepts the sidecar filename stem, the stored sessionId, or the ' +
-          'human-readable session name.',
+          'Session ID, name, or a special alias (default: "latest"). ' +
+          'Special values:\n' +
+          '  - "latest": the most recently modified sealed session whose sidecar cwd ' +
+          'matches the caller\'s working directory. Falls back to the global newest ' +
+          'session when no cwd match exists (cwd_mismatch will be true).\n' +
+          '  - "current" / "self": the session that invoked this tool call, resolved ' +
+          'from the dispatch context\'s session id. Falls back to "latest" semantics ' +
+          'when no context session id is available.\n' +
+          'Any other string is resolved via the session sidecar index: accepts the ' +
+          'sidecar filename stem, the stored sessionId, or the human-readable session name.',
       },
       fields: {
         type: 'array',
@@ -50,7 +66,12 @@ export const getFacetTool: AnthropicToolDef = {
           'Optional allowlist of top-level fields to include in the response. ' +
           'When omitted, all non-provenance fields are returned. When supplied, ' +
           'ONLY the listed fields are returned — including provenance fields if ' +
-          'you name them explicitly.',
+          'you name them explicitly.\n\n' +
+          'ADDITIVE CONTRACT: `session_cwd`, `is_current_session`, and ' +
+          '`cwd_mismatch` are always appended to the response regardless of ' +
+          'this allowlist. Strict-schema consumers that set ' +
+          '`additionalProperties: false` should allowlist these three fields ' +
+          'explicitly, or treat the response schema as open/additive.',
       },
     },
     required: [],

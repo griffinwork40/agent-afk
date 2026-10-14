@@ -44,6 +44,8 @@ export type SessionPhaseName =
   | 'loop_start'
   | 'loop_end'
   | 'model_ttfb'
+  | 'context_pressure_wind_down'
+  | 'catalog_model_upgrade'
   // Interrupt→halt latency. A SINGLE event (no paired start) emitted on the
   // turn's abort path when an ESC soft-stop (`interrupt()`) is what ended the
   // stream, carrying in `durationMs` the wall-clock from the abort signal firing
@@ -201,6 +203,18 @@ export type SessionPhaseName =
   // followed by success means the retry saved the turn; `attempt === maxRetries`
   // then an error means it ran out.
   | 'connection_retry'
+  // One-shot retry budget exhausted (withTransientRetry / traceExhaustedRetry):
+  // all `maxRetries` attempts were spent and the error is about to be rethrown.
+  // `durationMs` is 0 (no further backoff). Same `metadata` shape as
+  // `connection_retry` — `attempt` is the last attempt number, `maxRetries`
+  // is the configured ceiling, `error`/`code`/`status` identify the final failure.
+  // PURE OBSERVABILITY — emitted as `onExhausted` fires, before the rethrow.
+  | 'connection_retry_exhausted'
+  // Streaming openers: pure diagnostics, including the final failed attempt.
+  | 'connection_failure'
+  | 'connection_recovered'
+  // Separate from #3144's one-shot connection_retry_exhausted hook.
+  | 'connection_budget_exhausted'
   // Fan-out dispatch usage notice (compose / agent wave start). Emitted once at
   // dispatch start when the Anthropic quota snapshot shows warn (≥80%) or over
   // (≥100%) usage. PURE OBSERVABILITY — no blocking, no routing change.
@@ -214,6 +228,14 @@ export type SessionPhaseName =
   // sessions and pushes a Telegram alert.
   // metadata: { tool, errorHead, errorCount, callCount }
   | 'tool_degraded'
+  // Advisory same-error strategy nudge (src/agent/tools/strategy-nudge.ts).
+  // Emitted at most once per normalized error signature per dispatcher when
+  // the same error recurs within a short window of bash/test_run attempts, at
+  // the moment the nudge text is appended to the failing result. PURE
+  // OBSERVABILITY — never alters dispatch or isError. `distinctCalls` is true
+  // when the recurrences came from different calls (the case the repeat-failure
+  // guard cannot see). metadata: { tool, errorHead, occurrences, distinctCalls }
+  | 'strategy_nudge_fired'
   // Stop-hook injectContext was returned on a one-shot surface (daemon/cron task,
   // `afk chat`) that has no next user turn. The context is dropped — delivery
   // requires a subsequent prompt, which never arrives. Emitted by the session-
@@ -233,7 +255,44 @@ export type SessionPhaseName =
   // was reached; the turn ends normally without another model round.
   // `metadata` carries `cap` (the configured ceiling value). Distinct from
   // `stop_hook_continuation` — that fires per-round; this fires once at cap.
-  | 'stop_hook_cap_reached';
+  | 'stop_hook_cap_reached'
+  // Last-resort orphan repair fired (single event, no paired start). Emitted
+  // from openRound only when repairOrphanToolUses actually changed history —
+  // i.e. a corruption path evaded both the tool-round rollback and the
+  // turn-driver repair. metadata carries hoistedIndices, orphanIds,
+  // assistantIndices, bridgedIndices, messageCount, shapeBefore. See #2136.
+  | 'orphan_repair'
+  // Server dropped one or more thinking blocks via `input_transformations`
+  // (thinking-binding-controls-2026-08-01 beta, `drop_block` policy). Emitted
+  // per drop-bearing frame (both message_start and message_delta paths) so the
+  // witness layer records each frame's droppedCount and source independently.
+  // Distinct from the process-global warn cap — the trace event fires on
+  // every drop-bearing frame so operators can correlate per-session without
+  // depending on the bounded console output.
+  // metadata: { droppedCount, source ('message_start'|'message_delta') }
+  // No path values, thinking text, or signatures are recorded.
+  | 'thinking_block_dropped'
+  // Background process lifecycle — emitted by `bash run_in_background` so
+  // `afk trace show` can reconstruct which background jobs ran in a session
+  // (analogous to `background_agent` for subagent jobs).
+  // `background_process_started`: emitted at launch from the bash handler;
+  //   metadata carries `jobId`, `pid` (number, omitted when not yet known), `command`
+  //   (first 200 chars), and `maxRuntimeMs`.
+  // `background_process_settled`: emitted from ProcessJobRegistry.onSettled
+  //   via the registry's optional traceWriter; metadata carries `jobId`,
+  //   `status`, `exitCode` (number, omitted when process ended by signal only), `signal` (string|''), `durationMs`, and
+  //   `bytes`. PURE OBSERVABILITY — never alters control flow.
+  | 'background_process_started'
+  | 'background_process_settled'
+  // Bounded compose node replay eligibility and actual redispatch. No control-flow effects.
+  | 'compose_recovery_decision'
+  // Executor-backed tools (`agent`, `skill`) stripped from a named compose-node
+  // allowlist at resolution time (compose-executor.ts). Emitted once per node
+  // that had at least one tool stripped. PURE OBSERVABILITY — the strip already
+  // happened; this makes it visible so operators can see which agent_type grants
+  // were silently removed without inspecting the node's raw allowlist.
+  // metadata: { agentType, strippedTools (comma-separated list) }
+  | 'compose_leaf_tools_stripped';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

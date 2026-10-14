@@ -1,0 +1,26 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    /* Tests are never emitted — typecheck only. */
+    "noEmit": true,
+    /* Relax noUnusedLocals/noUnusedParameters for test helpers and fixtures
+       that intentionally declare variables used only as type witnesses. */
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  /* `include` overrides the parent tsconfig.json `include` entirely (TypeScript
+     does not merge include lists). The explicit list here means any future
+     top-level directory that contains *.test.ts files (e.g. scripts/) is NOT
+     picked up automatically — add it here if intentional. The `exclude` below
+     reinstates the node_modules / dist exclusions that the parent tsconfig would
+     otherwise have contributed via its own exclude. This is the desired behaviour:
+     tight opt-in scope rather than implicit expansion. Tracked in #3105. */
+  "include": [
+    "src/**/*",
+    "tests/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

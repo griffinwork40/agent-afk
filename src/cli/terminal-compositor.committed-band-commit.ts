@@ -13,6 +13,8 @@
  * borrows them through the host interface.
  */
 
+import { resetArchivedReveal } from './terminal-compositor.archived-reveal.js';
+import { retainedArchivedPrefix } from './terminal-compositor.band-archived-prefix.js';
 import type { LogUpdateFn, CompositorScrollRegionGuard, BandRowMeta, FramePlacementMode } from './terminal-compositor.types.js';
 import type { BandReflowCache } from './terminal-compositor.band-reflow.js';
 import {
@@ -81,6 +83,8 @@ export interface CommittedBandHost {
    * class (terminal-compositor.ts) for the full failure mode this guards.
    */
   bandGeometryStale: boolean;
+  /** SIGWINCH-only staleness flag — see field doc on TerminalCompositor (#3212). */
+  resizeGeometryStale: boolean;
   /** Pre-arm content ceiling — committed text never lands above this row. */
   anchorRow: number | undefined;
   /** Whether the compositor currently holds raw mode + the keypress listener. */
@@ -311,6 +315,12 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   // below the rows Phase 3 will paint — content-hug.ts, in-flight commit).
   self.debugLog('commitAbove:phase2:repaint');
   self.pendingContentRows = phase2PendingContentRows(self, geo, route);
+  const projectedMerged = !route.useBandHold && geo.fitsAboveFrame &&
+    (self.committedBandBottomRow === geo.frameTop - 1 || self.committedBandBottomRow === geo.phase1EffectiveFrameTop - 1);
+  const projectedPrefix = route.useBandHold
+    ? retainedArchivedPrefix(self, route.overflowPriorContiguous, route.archiveCount)
+    : retainedArchivedPrefix(self, projectedMerged, 0);
+  resetArchivedReveal(self, projectedPrefix);
   self.repaint();
   self.debugLog('commitAbove:phase2:done', { newTopRow: self.logUpdate.topRow ?? null });
 
@@ -360,6 +370,7 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
 }
 
 export function clearCommittedBand(self: CommittedBandHost): void {
+  resetArchivedReveal(self);
   self.committedBand = [];
   self.committedBandMeta = [];
   self.committedBandTopRow = 0;
@@ -391,6 +402,7 @@ export function clearCommittedBand(self: CommittedBandHost): void {
  * must stay on screen and must NOT be re-emitted or re-tracked.
  */
 export function forgetCommittedBand(self: CommittedBandHost): void {
+  resetArchivedReveal(self);
   self.committedBand = [];
   self.committedBandMeta = [];
   self.committedBandTopRow = 0;

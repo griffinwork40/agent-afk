@@ -36,8 +36,11 @@ import type {
 } from '../../../agent/background-registry.js';
 import { extractOutputText } from '../../../agent/background-registry.result.js';
 import { redactSecrets } from '../../../agent/redact-secrets.js';
-import { env } from '../../../config/env.js';
+import { env, isPlainOutputRequested } from '../../../config/env.js';
 import { formatDuration } from '../../format-utils.js';
+import { DetachedToolNotifier } from './detached-tool-notifier.js';
+import type { DetachableToolRegistry } from '../../../agent/tools/detach-registry.js';
+import type { ToolEvent } from '../../slash/types.js';
 
 /**
  * Maximum byte length of one job's injected output. Results beyond this are
@@ -134,7 +137,7 @@ export function buildBgResultInjection(job: BackgroundJob): string {
   const output = truncateBytes(escapeXml(extractOutput(job)), MAX_INJECTION_BYTES, job.jobId);
   const lines: string[] = [];
   lines.push(
-    `<background-subagent-result jobId="${job.jobId}" status="${job.status}" ` +
+    `<background-subagent-result jobId="${escapeXml(job.jobId)}" status="${escapeXml(job.status)}" ` +
       `model="${escapeXml(job.model)}" duration="${duration}">`,
   );
   lines.push(`<task>${escapeXml(job.label)}</task>`);
@@ -152,6 +155,25 @@ export function buildBgResultInjection(job: BackgroundJob): string {
 export function isAutoDeliverEnabled(raw: string | undefined): boolean {
   if (raw === undefined) return true;
   return !/^(0|false|off|no)$/i.test(raw);
+}
+
+/**
+ * Can this REPL wake an idle prompt when a background result lands?
+ *
+ * Invariant: mirrors the conditions under which the wake path can fire.
+ * `tryAutoResume` (loop-iteration.ts) needs `surface.isAwaitingInput()`, which
+ * is only ever true on the compositor path, and the compositor arms only when
+ * both stdio streams are TTYs and plain output was not requested
+ * (input-surface.ts armCompositor). Auto-deliver must also be on, or nothing
+ * is buffered to wake for. Read live at each dispatch so the agent tool's
+ * delivery note stays truthful (agent/tools/subagent/background-delivery.ts).
+ */
+export function replCanAutoWake(): boolean {
+  return (
+    Boolean(process.stdin.isTTY && process.stdout.isTTY) &&
+    !isPlainOutputRequested() &&
+    isAutoDeliverEnabled(env.AFK_BG_AUTO_DELIVER)
+  );
 }
 
 /**
@@ -195,9 +217,21 @@ export class BgResultNotifier {
     this.onInjectable?.();
   };
 
-  constructor(private readonly registry: BackgroundAgentRegistry) {
+  private readonly detachedTools: DetachedToolNotifier | undefined;
+
+  constructor(private readonly registry: BackgroundAgentRegistry, detachRegistry?: DetachableToolRegistry) {
     registry.on('settled', this.onSettled);
+    if (detachRegistry) {
+      this.detachedTools = new DetachedToolNotifier(detachRegistry);
+      // Explicit Ctrl+B promises delivery even when background-subagent auto-delivery is off.
+      this.detachedTools.onInjectable = () => this.onInjectable?.();
+    }
   }
+
+  /** Forward tool events so settled detach results can patch back partial metadata. */
+  observeToolEvent(event: ToolEvent): void { this.detachedTools?.observe(event); }
+  /** One-line completion notices for settled Ctrl+B tools (rendered by the drain loop). */
+  drainToolNotices(): string[] { return this.detachedTools?.drainNotices() ?? []; }
 
   /**
    * Drain and return the concatenated injection envelopes to prepend to the
@@ -207,11 +241,12 @@ export class BgResultNotifier {
    * joins.
    */
   drainInjections(): string {
-    if (this.pendingInjections.length === 0) return '';
+    const detached = this.detachedTools?.drainInjections() ?? '';
+    if (this.pendingInjections.length === 0) return detached;
     const jobs = this.pendingInjections;
     this.pendingInjections = [];
     for (const job of jobs) this.registry.markDelivered(job.jobId);
-    return jobs.map((j) => buildBgResultInjection(j)).join('\n') + '\n';
+    return detached + jobs.map((j) => buildBgResultInjection(j)).join('\n') + '\n';
   }
 
   /**
@@ -232,6 +267,7 @@ export class BgResultNotifier {
    * session's first turn (mirrors the verdict-ledger reset semantics).
    */
   reset(): void {
+    this.detachedTools?.reset();
     this.pendingInjections = [];
     this.pendingNotifications = [];
   }
@@ -244,7 +280,7 @@ export class BgResultNotifier {
    * fired but `isAwaitingInput()` was false.
    */
   hasPendingInjections(): boolean {
-    return this.pendingInjections.length > 0;
+    return this.pendingInjections.length > 0 || this.detachedTools?.hasPendingInjections() === true;
   }
 
   /**
@@ -261,6 +297,7 @@ export class BgResultNotifier {
    * has already been torn down.
    */
   dispose(): void {
+    this.detachedTools?.dispose();
     this.registry.off('settled', this.onSettled);
     if (this.pendingInjections.length > 0) {
       const ids = this.pendingInjections.map((j) => j.jobId).join(', ');

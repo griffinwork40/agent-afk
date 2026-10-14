@@ -1,8 +1,3 @@
-import { MemoryStore } from '../../../agent/memory/index.js';
-import { StateStore } from '../../../agent/state/state-store.js';
-import { getStateDatabasePath } from '../../../paths.js';
-import { WorkspaceStore } from '../../../agent/workspace/workspace-store.js';
-import { env } from '../../../config/env.js';
 import { registerSurfaceSession } from '../../../agent/session/register-surface-session.js';
 import { runReplReconcile } from '../../../agent/manifest/startup-reconcile.js';
 import type { SlashContext } from '../../slash/types.js';
@@ -22,7 +17,7 @@ import { createReplSurface } from './bootstrap-surface.js';
 import { createReplHookRegistry } from './bootstrap-hooks.js';
 import { createReplSlashContext } from './bootstrap-slash-context.js';
 import { wireTrustedSkillEvents, wireProviderGrants, createReplInput, createTurnBridgeRefs } from './bootstrap-wiring.js';
-import { buildAgentSession, buildSharedDeps } from './bootstrap-session-builder.js';
+import { buildAgentSession, buildSharedDeps, createBootstrapSharedStores } from './bootstrap-session-builder.js';
 import { registerAll } from '../../slash/index.js';
 import { setTasksIctx } from '../../slash/commands/tasks.js';
 
@@ -72,7 +67,7 @@ export async function bootstrapSession(
   const {
     resumeTarget, resumeConfig, effectiveCwd, sessionModel,
     thinking, effort, maxOutputTokens, maxToolUseIterations, maxBudgetUsd,
-    basePrompt, systemPrompt, systemPromptSource, cliConfig,
+    basePrompt, operatorOverlay, systemPrompt, systemPromptSource, cliConfig,
   } = resolveBootstrapConfig(options, extras);
 
   // Deferred parent proxy reads through sessionRef across mid-session swaps.
@@ -92,15 +87,13 @@ export async function bootstrapSession(
   // care get a local bucket and the prior behaviour.
   const bootWarnings: string[] = extras?.bootWarnings ?? [];
 
-  const sharedWorkspaceStore = env.AFK_WORKSPACE_DISABLED === '1' ? undefined : new WorkspaceStore();
-  const sharedMemoryStore = new MemoryStore();
-  const sharedStateStore = new StateStore(getStateDatabasePath());
+  const { sharedWorkspaceStore, sharedMemoryStore, sharedStateStore } = createBootstrapSharedStores();
 
   const {
-    trace, backgroundRegistry, detachRegistry, bgSummarizer,
+    trace, backgroundRegistry, detachRegistry, processJobs, bgSummarizer,
     rootManager, subagentExecutor, skillExecutor, composeExecutor,
   } = createBootstrapInfra({
-    sessionRef, options, cliConfig, sessionModel, basePrompt, effectiveCwd, resumeTarget, bootWarnings,
+    sessionRef, options, cliConfig, sessionModel, basePrompt, operatorOverlay, effectiveCwd, resumeTarget, bootWarnings,
     workspaceStore: sharedWorkspaceStore,
   });
   const { FastModeController } = await import('../../../agent/fast-mode.js');
@@ -158,7 +151,7 @@ export async function bootstrapSession(
     bashOutputTailReporter,
     // #2542/#2735: Detach registry shared between REPL Ctrl+B handler and
     // every per-query dispatcher for this session.
-    detachRegistry,
+    detachRegistry, processJobs,
     // Cascade-abort and drain in-flight children before the writer seals,
     // so a wave still running when this session ends emits real `cancelled`
     // rows instead of vanishing (#733).
@@ -175,7 +168,7 @@ export async function bootstrapSession(
 
   // Wave-manifest reconciliation: surface resumption offers for unfinished work
   // from prior sessions. Fire-and-forget — never blocks session startup.
-  runReplReconcile(session.sessionId ?? '');
+  void runReplReconcile(session.sessionId ?? '');
 
   registerReplSession(session, sharedDeps, resumeTarget?.stored?.sessionId);
 
@@ -196,7 +189,7 @@ export async function bootstrapSession(
 
   const requestResume = createResumeRequest(
     () => ctx, sessionRef, sharedDeps,
-    { subagentExecutor, skillExecutor, composeExecutor, rootManager, backgroundRegistry },
+    { subagentExecutor, skillExecutor, composeExecutor, rootManager, backgroundRegistry, processJobs },
     () => trustedSkillLedger.clear(), maxTurnsNum,
   );
 
@@ -231,7 +224,7 @@ export async function bootstrapSession(
     subagentControl: subagentExecutor,
     // #2542/#2735: Detach registry shared with every per-query dispatcher so
     // Ctrl+B can free the model's turn while a bash process keeps running.
-    detachRegistry,
+    detachRegistry, processJobs,
     ...(bgSummarizer !== undefined ? { bgSummarizer } : {}),
     requestResume,
     // Default to false so any code path that reads getInFlight before

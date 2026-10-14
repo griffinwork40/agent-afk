@@ -27,7 +27,7 @@
 import { env } from '../../../config/env.js';
 import type { ProviderCompactResult } from '../../provider.js';
 import { emitCompaction } from '../../trace/emit.js';
-import { traceTransientRetry } from '../shared/transient-retry.trace.js';
+import { traceTransientRetry, traceExhaustedRetry } from '../shared/transient-retry.trace.js';
 import { DEFAULT_TRANSIENT_MAX_RETRIES } from '../shared/transient-retry.js';
 import type { TraceSink } from '../../trace/index.js';
 import type { CompactionTrigger } from '../../trace/types.js';
@@ -292,6 +292,7 @@ export async function compactOpenAIHistory(
         });
       },
       onRetry: traceTransientRetry(deps.traceWriter, 'compaction', DEFAULT_TRANSIENT_MAX_RETRIES),
+      onExhausted: traceExhaustedRetry(deps.traceWriter, 'compaction', DEFAULT_TRANSIENT_MAX_RETRIES),
       signal: controller.signal,
     });
   } finally {

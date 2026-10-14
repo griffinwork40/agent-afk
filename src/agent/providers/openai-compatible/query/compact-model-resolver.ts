@@ -1,0 +1,109 @@
+/**
+ * Cheap-default model resolver for the openai-compatible compaction handler.
+ *
+ * When `AFK_COMPACT_MODEL` is unset, the anthropic-direct provider defaults to
+ * `claude-haiku-4-5-20251001` — a cheap model — rather than the session model.
+ * This module provides the equivalent logic for openai-compatible sessions.
+ *
+ * ## Decision table
+ *
+ * | Condition                                        | Resolved model              |
+ * |--------------------------------------------------|-----------------------------|
+ * | `AFK_COMPACT_MODEL` is set                       | `AFK_COMPACT_MODEL`         |
+ * | `authSource === 'chatgpt-oauth'`                 | `currentModel`              |
+ * | effective baseURL is set (AFK or SDK env)        | `currentModel`              |
+ * | no effective baseURL (real api.openai.com)       | `OPENAI_CHEAP_COMPACT_DEFAULT` |
+ *
+ * **Effective baseURL:** the resolver accepts both `opts.baseURL` (AFK's own
+ * construction-time override, from `AFK_OPENAI_BASE_URL`) and `OPENAI_BASE_URL`
+ * (the OpenAI SDK's standard env var). When `OPENAI_BASE_URL` is set but
+ * `AFK_OPENAI_BASE_URL` is not, the SDK routes the client to the custom
+ * endpoint while `opts.baseURL` remains `undefined`. Checking only `opts.baseURL`
+ * would therefore incorrectly treat the session as targeting api.openai.com.
+ *
+ * **Real OpenAI endpoint:** no effective baseURL means the SDK connects to
+ * `api.openai.com` (the default). That endpoint reliably serves every model in
+ * the OpenAI catalogue, including the cheap mini/nano tier, so substituting a
+ * cheap default is safe and saves money.
+ *
+ * **ChatGPT-subscription (chatgpt-oauth):** the ChatGPT subscription backend
+ * (`chatgpt.com/backend-api/codex`) has its own model availability — a cheap
+ * API model may not be subscribed there. Keep the current model to avoid a
+ * guaranteed 404 mid-compaction.
+ *
+ * **Custom baseURL (local / proxy):** an MLX, llama.cpp, vLLM, ollama, or
+ * OpenRouter endpoint may serve only the session model. Substituting a mini
+ * model id would likely 404. Keep the current model.
+ *
+ * ## Choice of default
+ *
+ * `gpt-6-luna` is the luna (cheap) tier of the current gpt-6 line
+ * (`openai-compatible/pricing.ts`, $0.10/$0.50 per MTok), covered by the
+ * `^gpt-6` capability patterns in `model-capabilities.ts`, and capable of
+ * producing a compact session summary (output is capped at 1,024 tokens).
+ * Operator decision (#3244): prefer the current-generation luna tier over
+ * the older gpt-4.1-nano.
+ *
+ * @module agent/providers/openai-compatible/query/compact-model-resolver
+ */
+
+/**
+ * Default OpenAI API model for compaction when `AFK_COMPACT_MODEL` is unset.
+ *
+ * `gpt-6-luna` ($0.10/$0.50 per MTok in openai-compatible/pricing.ts) is the
+ * luna tier of the gpt-6 line: roughly an order of magnitude cheaper than
+ * flagship session models and adequate for a 1,024-token session summary.
+ */
+export const OPENAI_CHEAP_COMPACT_DEFAULT = 'gpt-6-luna';
+
+/**
+ * Resolve the model to use for openai-compatible compaction.
+ *
+ * Pure function — no env reads, no side effects. The caller supplies the raw
+ * `AFK_COMPACT_MODEL` value, the current session's base URL, the SDK-level
+ * `OPENAI_BASE_URL` env value, the auth source, and the current model as
+ * inputs so this function can be tested without manipulating `process.env`.
+ *
+ * @param compactModelEnv  Raw `env.AFK_COMPACT_MODEL` value (string or undefined).
+ * @param baseURL          Session `opts.baseURL` (AFK override; undefined when not set).
+ * @param openaiBaseUrlEnv Raw `env.OPENAI_BASE_URL` value (OpenAI SDK env var; undefined when not set).
+ * @param authSource       Auth source string from `opts.auth.source`.
+ * @param currentModel     The session's live current model id.
+ * @returns The model id to use for the compaction summarize call.
+ */
+export function resolveOpenAICompactModel(
+  compactModelEnv: string | undefined,
+  baseURL: string | undefined,
+  openaiBaseUrlEnv: string | undefined,
+  authSource: string,
+  currentModel: string,
+): string {
+  // Explicit override always wins.
+  if (compactModelEnv !== undefined && compactModelEnv.length > 0) {
+    return compactModelEnv;
+  }
+
+  // ChatGPT-subscription backend: its model availability is subscription-scoped —
+  // a cheap API-key model may not be served there. Check before baseURL so that
+  // chatgpt-oauth sessions with no explicit baseURL are never misclassified as
+  // "real api.openai.com" and sent gpt-6-luna.
+  if (authSource === 'chatgpt-oauth') {
+    return currentModel;
+  }
+
+  // Effective base URL: AFK's own override wins; fall back to the OpenAI SDK's
+  // standard OPENAI_BASE_URL env var. The SDK reads OPENAI_BASE_URL directly, so
+  // a user with only OPENAI_BASE_URL set routes the client to a custom endpoint
+  // even though opts.baseURL remains undefined.
+  const effectiveBaseURL = baseURL ?? openaiBaseUrlEnv;
+
+  // Custom base URL (local runner, proxy, or OPENAI_BASE_URL-redirected endpoint):
+  // the endpoint only knows the session model — substituting a mini model id would 404.
+  if (effectiveBaseURL !== undefined) {
+    return currentModel;
+  }
+
+  // Default case: real OpenAI API key against api.openai.com.
+  // Use the cheapest model in the catalog.
+  return OPENAI_CHEAP_COMPACT_DEFAULT;
+}

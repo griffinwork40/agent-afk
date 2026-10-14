@@ -44,6 +44,7 @@ import { mkdir, writeFile, rename, rm, chmod } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { sleepSync } from './sleep-sync.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -65,6 +66,17 @@ export interface AtomicWriteOptions {
    * ancestors) before writing.  Defaults to `true`.
    */
   mkdirp?: boolean;
+  /**
+   * POSIX mode bits to pass to `mkdirSync` / `mkdir` when creating the
+   * destination's parent directory.  Defaults to `undefined` (OS default,
+   * masked by umask).  Set to e.g. `0o700` when the parent directory must
+   * be owner-only regardless of the process umask — for example the
+   * `state/` directory that holds session files.
+   *
+   * Note: `mkdirSync` with `recursive: true` only sets the mode on newly
+   * created directories; pre-existing ancestors are left unchanged.
+   */
+  mkdirMode?: number;
   /**
    * When true, open the temp file with `O_EXCL` (`flag: 'wx'`) so a
    * pre-existing temp path (e.g. from a prior interrupted write) causes an
@@ -137,15 +149,6 @@ function makeTmpPath(dest: string): string {
 const WIN_RENAME_TRANSIENT = new Set(['EPERM', 'EACCES', 'EBUSY']);
 
 /**
- * Synchronous sleep using `Atomics.wait` on a shared buffer.
- * `setTimeout` is not available in synchronous contexts; this is the
- * standard portable alternative for a sync delay.
- */
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/**
  * Attempt `rename(tmp, dest)` synchronously, retrying up to `maxRetries`
  * times on transient Windows errors (EPERM / EACCES / EBUSY).  Each retry
  * waits an exponentially increasing, clamped delay so callers converge quickly.
@@ -174,9 +177,14 @@ export function renameWithRetrySync(
       renameFn(tmp, dest);
       return;
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
+      const code = (err instanceof Error && 'code' in err) ? String((err as { code: unknown }).code) : undefined;
       if (platform !== 'win32' || !WIN_RENAME_TRANSIENT.has(code ?? '')) throw err;
       lastErr = err;
+      // Emit on entry to the retry path so Windows transient rename races are
+      // visible to operators rather than silently absorbed (finding #2870-3).
+      if (attempt === 0) {
+        process.stderr.write(`[atomic-write] rename retry: ${code} on attempt 0 of ${retries} (${dest})\n`);
+      }
       if (attempt < retries) sleepSync(Math.min(10 * 2 ** attempt, 5000));
     }
   }
@@ -202,6 +210,7 @@ export async function renameWithRetry(
   maxRetries = 5,
   /** @internal */ _platform: string = process.platform,
   /** @internal */ _renameFn: (from: string, to: string) => Promise<void> = rename,
+  /** @internal */ _sleepFn: (ms: number) => Promise<void> = sleep,
 ): Promise<void> {
   let lastErr: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -209,13 +218,18 @@ export async function renameWithRetry(
       await _renameFn(tmp, dest);
       return;
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
+      const code = (err instanceof Error && 'code' in err) ? String((err as { code: unknown }).code) : undefined;
       // Invariant: only retry transient Windows rename races; on POSIX these
       // codes are permanent and must propagate immediately.
       if (_platform !== 'win32' || !WIN_RENAME_TRANSIENT.has(code ?? '')) throw err;
       lastErr = err;
+      // Emit on entry to the retry path so Windows transient rename races are
+      // visible to operators rather than silently absorbed (finding #2870-3).
+      if (attempt === 0) {
+        process.stderr.write(`[atomic-write] rename retry: ${code} on attempt 0 of ${maxRetries} (${dest})\n`);
+      }
       // Skip the sleep on the final attempt — we are about to throw anyway.
-      if (attempt < maxRetries) await sleep(Math.min(10 * 2 ** attempt, 5000));
+      if (attempt < maxRetries) await _sleepFn(Math.min(10 * 2 ** attempt, 5000));
     }
   }
   throw lastErr;
@@ -252,7 +266,10 @@ export function atomicWriteFile(
   const flag = resolvedOpts.secure ? 'wx' : 'w';
 
   if (mkdirp) {
-    mkdirSync(dirname(dest), { recursive: true });
+    mkdirSync(dirname(dest), {
+      recursive: true,
+      mode: resolvedOpts.mkdirMode,
+    });
   }
 
   const tmp = makeTmpPath(dest);
@@ -271,25 +288,46 @@ export function atomicWriteFile(
 // ---------------------------------------------------------------------------
 
 /**
+ * Test-only injectables for {@link atomicWriteFileAsync}.
+ * Collapsed into a single object so the public positional signature stays
+ * narrow (finding #3153).  Production callers must not pass this.
+ * @internal
+ */
+export interface _AtomicWriteAsyncTestInternals {
+  renameFn?: (from: string, to: string) => Promise<void>;
+  platform?: string;
+}
+
+/**
  * Async version of {@link atomicWriteFile}.  Write `content` to `dest`
  * atomically via a sibling temp file and `rename`.
  *
  * @param dest    - Absolute path of the destination file.
  * @param content - String (or Buffer) to write.
  * @param opts    - Optional mode, encoding, and mkdirp flag.
+ * @internal `_testInternals` — test-only injectable overrides (renameFn,
+ *   platform) forwarded to {@link renameWithRetry}.  Production callers must
+ *   not pass this.
  */
 export async function atomicWriteFileAsync(
   dest: string,
   content: string | Buffer,
   opts: AtomicWriteOptions = {},
+  /** @internal */ _testInternals?: _AtomicWriteAsyncTestInternals,
 ): Promise<boolean> {
+  // Unpack internal overrides (undefined in production).
+  const _renameFn = _testInternals?.renameFn;
+  const _platform = _testInternals?.platform;
   const mode = opts.mode ?? 0o600;
   const encoding = opts.encoding ?? 'utf-8';
   const mkdirp = opts.mkdirp ?? true;
   const flag = opts.secure ? 'wx' : 'w';
 
   if (mkdirp) {
-    await mkdir(dirname(dest), { recursive: true });
+    await mkdir(dirname(dest), {
+      recursive: true,
+      mode: opts.mkdirMode,
+    });
   }
 
   const tmp = makeTmpPath(dest);
@@ -307,7 +345,7 @@ export async function atomicWriteFileAsync(
       renameSync(tmp, dest);
       return true;
     }
-    await renameWithRetry(tmp, dest);
+    await renameWithRetry(tmp, dest, undefined, _platform, _renameFn);
     return true;
   } catch (err) {
     // Best-effort cleanup — suppress rm errors.

@@ -23,31 +23,27 @@ import type { CanUseTool } from './types/sdk-types.js';
 import type { WorkspaceStore } from './workspace/workspace-store.js';
 import { AbortGraph, type ChildAbortedListener } from './abort-graph.js';
 import type { HookRegistry } from './hooks.js';
-import { AgentSession } from './session.js';
 
 import type { AgentConfig } from './types.js';
 import type { SubagentProgressSink, OutputEvent } from './types/session-types.js';
-import { dispatchSubagentStart, dispatchSubagentStop } from './subagent-hooks.js';
+import { dispatchSubagentStart } from './subagent-hooks.js';
 import type { AbortOrigin, TraceSink } from './trace/index.js';
 import type { Surface } from './awareness/types.js';
-import { admitFork, wrapTerminalWithRelease, type SpawnReceipt, type DelegationBudget } from './subagent/fork-budget.js';
-import { getCurrentSink } from './_lib/skill-sink-channel.js';
-import { touchWorktreeOccupancy, startWorktreeOccupancyHeartbeat } from './worktree/worktree-occupancy.js';
-import { resolveWorktreeMainRoot } from './worktree/worktree-read-root.js';
+import { admitFork, type SpawnReceipt, type DelegationBudget } from './subagent/fork-budget.js';
+import { WorktreeMainRootCache } from './subagent/worktree-main-root-cache.js';
 import { type ReadScopeInputs } from './subagent-read-scope.js';
 import { resolveReadScope, composeWriteRoots } from './subagent/resolve-fork-scope.js';
 import { providerForModel, type BundledProviderName } from './providers/index.js';
 import { validatePhaseRole } from './subagent/fork-validation.js';
-import { assembleChildConfig } from './subagent/fork-child-config.js';
+import { assembleChildConfig, type ParentForkFields } from './subagent/fork-child-config.js';
 import { emitForkStarted, appendForkTelemetry, emitSubagentStartedEvent } from './subagent/fork-lifecycle.js';
 import { SubagentHandleImpl, type SubagentHandle } from './subagent/handle.js';
 import { resolveForkInputs } from './subagent/fork-resolution.js';
 import type { SubagentStatus, SubagentResult, SubagentTrace } from './subagent/result.js';
 import { CompletedCache } from './subagent/completed-cache.js';
-import { SubagentLogWriter } from './subagent/log.js';
-import { wireProgressEvents } from './subagent/fork-progress-events.js';
-import { wireWorkspaceSubscriptions } from './subagent/workspace-subscription-wiring.js';
-import { makeForkTerminalHook } from './subagent/fork-terminal-hook.js';
+import { armForkOccupancy, constructForkHandle, rollbackFailedFork, type ConstructedFork } from './subagent/fork-wiring.js';
+import { abortAllAndDrainImpl } from './subagent.drain.js';
+import { wireParentAbortSignal } from './subagent.abort-wiring.js';
 
 // Re-export types for public API
 export type { SubagentStatus, SubagentResult, SubagentTrace, SubagentHandle };
@@ -109,12 +105,13 @@ export class SubagentManager {
   // (see ./subagent-read-scope). `undefined` = derive from parentCwd
   // (defined → confined base; undefined → unconfined parent → read-open child).
   private readonly parentReadRoots: string[] | undefined;
-  // Per-cwd cache of the resolved main-repo root for worktree children (see
-  // `resolveWorktreeMainRoot`). Forks overwhelmingly share one cwd, so this
-  // collapses N git subprocesses to one per distinct cwd for the whole
-  // manager lifetime. `undefined` value = resolved-and-there-is-none, so the
-  // Map's `.has()` distinguishes "not yet resolved" from "resolved to none".
-  private readonly worktreeMainRootCache = new Map<string, string | undefined>();
+  // Root (depth-0) session id inherited from the forking parent's config.
+  // Undefined when THIS manager belongs to a top-level session. Threaded into
+  // assembleChildConfig so grandchild forks inherit the real root id.
+  private readonly parentRootSessionId: string | undefined;
+  // Per-cwd cache of the resolved main-repo root for worktree children.
+  // Extracted to WorktreeMainRootCache (./subagent/worktree-main-root-cache.ts).
+  private readonly worktreeMainRootCache = new WorktreeMainRootCache();
   // Not readonly: a REPL `/resume` swaps the session out from under this
   // long-lived manager and hands it a fresh writer via `setTraceWriter`,
   // because the outgoing session sealed the one captured here (#731).
@@ -153,6 +150,7 @@ export class SubagentManager {
     this.parentModel = effectiveModel;
     this.parentCwd = options.cwd;
     this.parentReadRoots = options.parentReadRoots;
+    this.parentRootSessionId = options.parentRootSessionId;
     this.parentTraceWriter = options.traceWriter;
     this.parentSurface = options.surface;
     this.parentAbortSignal = options.parentAbortSignal;
@@ -169,20 +167,7 @@ export class SubagentManager {
     this.abortGraph.register(this.rootId, this.rootController);
 
     if (options.parentAbortSignal) {
-      const parentSignal = options.parentAbortSignal;
-      if (parentSignal.aborted) {
-        this.rootController.abort(parentSignal.reason);
-      } else {
-        parentSignal.addEventListener(
-          'abort',
-          () => {
-            if (!this.rootController.signal.aborted) {
-              this.rootController.abort(parentSignal.reason);
-            }
-          },
-          { once: true },
-        );
-      }
+      wireParentAbortSignal(options.parentAbortSignal, this.rootController);
     }
   }
 
@@ -248,7 +233,7 @@ export class SubagentManager {
     // which would otherwise hand every subsequent fork a stale mainRoot from
     // the cache (#441). setCwd is rare (born-named worktree creation on turn 1),
     // so forcing one re-resolution on the next fork costs nothing.
-    this.worktreeMainRootCache.delete(cwd);
+    this.worktreeMainRootCache.invalidate(cwd);
   }
 
   /**
@@ -281,20 +266,17 @@ export class SubagentManager {
   }
 
   /**
-   * Resolve (and memoize) the main-repo root for a worktree `cwd`. Returns the
-   * main repository root when `cwd` is inside a linked git worktree distinct
-   * from the main worktree, else undefined. Best-effort — never throws.
-   *
-   * Cached per cwd so a fan-out of subagents sharing one worktree pays a single
-   * `git rev-parse`, not one per fork.
+   * The manager-owned parent fields every fork hands to
+   * {@link assembleChildConfig}. Extracted from `forkSubagent` (function-size
+   * ceiling); `parentRootSessionId` (#2442) seeds grandchild root attribution.
    */
+  private parentForkFields(): ParentForkFields {
+    const { parentCwd, parentApiKey, parentBaseUrl, parentProvider, parentTraceWriter, parentSurface, parentCanUseTool, parentRootSessionId } = this;
+    return { parentCwd, parentApiKey, parentBaseUrl, parentProvider, parentTraceWriter, parentSurface, parentCanUseTool, parentRootSessionId };
+  }
+
   private async resolveMainRootForCwd(cwd: string): Promise<string | undefined> {
-    if (this.worktreeMainRootCache.has(cwd)) {
-      return this.worktreeMainRootCache.get(cwd);
-    }
-    const mainRoot = await resolveWorktreeMainRoot(cwd);
-    this.worktreeMainRootCache.set(cwd, mainRoot);
-    return mainRoot;
+    return this.worktreeMainRootCache.resolve(cwd);
   }
 
   /**
@@ -381,25 +363,19 @@ export class SubagentManager {
     // so every exit path — including throws from resolveReadScope,
     // assembleChildConfig, heartbeat setup, wireWorkspaceSubscriptions, and
     // AgentSession construction — disposes the graph node and disarms the
-    // heartbeat. SubagentStop is also emitted for symmetry with the SubagentStart
-    // that has already fired above.
+    // heartbeat (see rollbackFailedFork in ./subagent/fork-wiring.ts).
     this.abortGraph.register(id, childController);
     this.abortGraph.linkChild(this.rootId, id);
 
     // Ordering constraint: declared before the try block so the catch path can
     // always call stopOccupancyHeartbeat() regardless of where the throw
-    // originated. If the throw happens before startWorktreeOccupancyHeartbeat
-    // is invoked, this no-op stub is what fires — harmless.
+    // originated. If the throw happens before the heartbeat is armed, this
+    // no-op stub is what fires — harmless.
     let stopOccupancyHeartbeat: () => void = () => {};
-
-    let session: AgentSession;
-    let handle: SubagentHandleImpl<T>;
-    let effectiveAgentType: string | undefined;
-    let effectiveResolvedAgentType: string | undefined;
-    // Hoisted so the post-try emitForkStarted call can reference it. Assigned
-    // inside the try block; the catch always re-throws so this is always set
-    // when control reaches the code after the try/catch.
+    // Assigned inside the try block; the catch always re-throws so these are
+    // always set when control reaches the code after the try/catch.
     let childConfig!: AgentConfig;
+    let constructed!: ConstructedFork<T>;
     try {
       // Read-scope inheritance (#416/#441 successor — see ./subagent-read-scope
       // and ./subagent/resolve-fork-scope). Invariants (Gap A/B/C, farm-pin,
@@ -431,181 +407,36 @@ export class SubagentManager {
         inheritedReadRoots,
         composedWriteRoots,
         childController,
-        parentCwd: this.parentCwd,
-        parentApiKey: this.parentApiKey,
-        parentBaseUrl: this.parentBaseUrl,
-        parentProvider: this.parentProvider,
-        parentTraceWriter: this.parentTraceWriter,
-        parentSurface: this.parentSurface,
-        parentCanUseTool: this.parentCanUseTool,
+        ...this.parentForkFields(),
         workspaceStore: this.workspaceStore, ...(options.nestedAgentAllowlist !== undefined ? { nestedAgentAllowlist: options.nestedAgentAllowlist } : {}),
       });
 
-      // Occupancy touch: subagents never write presence files (top-level-only
-      // by design — presence.ts), so the worktree sweep's live-session guard
-      // cannot see a fork occupying a worktree. Refresh the worktree's meta
-      // (pid + createdAt) instead, resetting the sweep's age clock and PID
-      // liveness. Fire-and-forget: the helper swallows all errors and no-ops
-      // for cwds outside `.afk-worktrees/`, so it can never delay or fail the
-      // fork. Single wiring point — agent/skill/compose/farm dispatches all
-      // converge here, whether cwd came per-call or via manager inheritance.
-      //
-      // Ordering constraint: one touch only protects the tree for the sweep's
-      // MIN_EMPTY_AGE_MS (1h), after which a still-running child ages back into
-      // the `empty` verdict and is force-removed mid-flight (#759). So arm a
-      // heartbeat alongside the initial touch, and capture its stop handle HERE —
-      // before the session is constructed — so every exit path below (settle,
-      // construction throw) already has the inverse in hand and cannot orphan the
-      // timer. The timer is unref()'d, so even a leaked one cannot hold the
-      // process open.
-      if (childConfig.cwd !== undefined) {
-        void touchWorktreeOccupancy(childConfig.cwd);
-        stopOccupancyHeartbeat = startWorktreeOccupancyHeartbeat(childConfig.cwd);
-      }
+      // Occupancy touch + heartbeat, armed BEFORE session construction so every
+      // exit path holds the stop handle (#759). See armForkOccupancy.
+      stopOccupancyHeartbeat = armForkOccupancy(childConfig.cwd);
 
-      // Progress-events opt-in — mutates childConfig.customTools in place when enabled.
-      const bindProgressHandle = wireProgressEvents(childConfig, options.progressEvents, options.parent.getInputStreamRef?.(), options.parent.abortSignal);
-
-      // Workspace subscriptions (Pillar 3): two-phase init mirrors progress events.
-      const wsSubs = wireWorkspaceSubscriptions(this.workspaceStore, id, effectiveTraceWriter, childConfig.provider as never);
-
-      // Ordering constraint: the heartbeat armed above is disarmed by the settle
-      // callback installed on the handle built below, so the guarded span has to
-      // run from construction all the way through `active.set`. A throw anywhere
-      // in between — the parent-stream read, the sink resolve, the handle
-      // constructor — would otherwise return with the interval live and no handle
-      // in existence to ever cancel it, and the tree would never be reaped again.
-      session = new AgentSession(childConfig);
-      const parentInputStreamRef = options.parent.getInputStreamRef?.();
-      const parentAbortSignal = options.parent.abortSignal;
-      // Resolve sink: explicit option takes precedence, then ambient from AsyncLocalStorage
-      const sink = this.progressSink ?? getCurrentSink();
-      // Normalize empty-string render hints to undefined so the `??` fallbacks
-      // engage. A caller passing `agentType: ''` or `parentId: ''` would
-      // otherwise produce an empty Agent() label / empty agentContext anchor
-      // rather than the intended fallback (idPrefix / parent.sessionId).
-      effectiveAgentType = options.agentType?.trim() || undefined;
-      effectiveResolvedAgentType = options.resolvedAgentType?.trim() || undefined;
-      const effectiveParentId = options.parentId?.trim() || undefined;
-      // Per-subagent conversation log — opt-in via AFK_SUBAGENT_LOG=1 (off by default).
-      // Use sessionLabel (the directory key for /tasks) rather than
-      // options.parent.sessionId (the SDK runtime ID): writer and reader must
-      // agree on the same key so logs are found after the handle is evicted.
-      // Falls back to options.parent.sessionId for backwards compatibility
-      // when no sessionLabel was threaded through SubagentManagerOptions.
-      const logSessionKey = this.sessionLabel ?? options.parent.sessionId;
-      const logWriter = SubagentLogWriter.isEnabled() && logSessionKey
-        ? new SubagentLogWriter(logSessionKey, id)
-        : undefined;
-      // Forward-reference ref: assigned immediately after handle construction,
-      // before any async tick that could fire _onTerminal.
-      const handleRef: { current: SubagentHandleImpl<T> | undefined } = { current: undefined };
-      const onTerminal = wrapTerminalWithRelease(
-        makeForkTerminalHook<T>(
-          {
-            id,
-            stopOccupancyHeartbeat,
-            // Resolve at termination time so setOutputEventSink() retains its
-            // documented late-binding/replacement semantics for in-flight forks.
-            getOutputEventSink: () => this.outputEventSink,
-            activeMap: this.active,
-            abortGraph: this.abortGraph,
-            logWriter,
-            completedCache: this.completed,
-          },
-          handleRef,
-        ),
-        budgetReceipt,
-      );
-      handle = new SubagentHandleImpl<T>(
-        id,
-        session,
-        childController,
-        this.abortGraph,
-        options.outputSchema,
-        // Hard wall-clock backstop, settled above as `effectiveTimeoutMs` and
-        // SHARED with the child config's derived soft deadline so the two cannot
-        // drift. Unchanged behaviour: this still aborts a wedged child on schedule.
-        effectiveTimeoutMs,
-        registry,
-        onTerminal,
-        parentInputStreamRef,
-        parentAbortSignal,
-        // agentType: explicit override → idPrefix fallback. Lets callers
-        // (e.g. compose) supply a render-only label without altering idPrefix
-        // which is also used for routing telemetry.
-        effectiveAgentType ?? options.idPrefix,
-        sink,
-        // parentId: explicit override → parent session id fallback. Lets
-        // callers (e.g. compose) anchor the renderer's nesting at the compose
-        // tool_use_id rather than at the orchestrator session id.
-        effectiveParentId ?? options.parent.sessionId,
-        // traceWriter: child shares the parent's writer so its SubagentStop
-        // hook decision lands in the same trace file. Contract:
-        // docs/philosophy/afk-contract.md — "a child sub-agent inherits its
-        // parent's witness." Resolved once above (per-fork config →
-        // manager-level writer) so the handle's terminal lifecycle emits
-        // pair with the 'started' emit below even when inheritance came
-        // from the manager rather than the per-fork config.
-        effectiveTraceWriter,
-        // onSubagentSucceeded: propagate completion data to the parent
-        // session's session_sealed rollup accumulators.
-        this.onSubagentSucceededCb,
-        // Progress-aware idle-watchdog window for the child's turn (see
-        // SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS above). Explicit caller values win,
-        // including `0` to disable the watchdog for this fork — `??` preserves that
-        // precedence. The default is env-tunable via AFK_SUBAGENT_IDLE_TIMEOUT_MS
-        // (resolveSubagentIdleTimeoutMs); an unset/invalid env value returns
-        // SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS, so behaviour is unchanged when the var
-        // is not set. Runs concurrently with the wall-clock budget above.
-        options.config.idleTimeoutMs ?? resolveSubagentIdleTimeoutMs(),
-      );
-      handleRef.current = handle;
-      if (logWriter) handle._logWriter = logWriter;
-      bindProgressHandle(handle as SubagentHandleImpl<unknown>);
-      wsSubs.bindHandle(handle as SubagentHandleImpl<unknown>);
-      this.active.set(id, handle as SubagentHandleImpl<unknown>);
+      // Progress/workspace wiring, session + handle construction, active.set.
+      constructed = constructForkHandle<T>({
+        options, id, childConfig, childController, effectiveTimeoutMs, registry, effectiveTraceWriter,
+        budgetReceipt, stopOccupancyHeartbeat,
+        workspaceStore: this.workspaceStore,
+        progressSink: this.progressSink,
+        sessionLabel: this.sessionLabel,
+        getOutputEventSink: () => this.outputEventSink,
+        activeMap: this.active,
+        abortGraph: this.abortGraph,
+        completedCache: this.completed,
+        onSubagentSucceeded: this.onSubagentSucceededCb,
+      });
     } catch (err) {
-      // A throw anywhere in the guarded span (resolveReadScope, assembleChildConfig,
-      // heartbeat setup, wireWorkspaceSubscriptions, AgentSession construction, or
-      // handle wiring) reaches here. Four invariants to restore:
-      //
-      // 1. Disarm the occupancy heartbeat — there is no child left to protect, and
-      //    a live timer would pin the worktree's sweep clock forever. The stub no-op
-      //    fires harmlessly when the throw happened before startWorktreeOccupancyHeartbeat.
-      //
-      // 2. Dispose the abort-graph node — SubagentStart has already been emitted, so
-      //    the node is live. Leaking it across retry loops (forge/farm) accumulates
-      //    orphan nodes and eventually corrupts cascade-abort semantics.
-      //
-      // 3. Emit SubagentStop for symmetry — SubagentStart was dispatched above, so
-      //    any hook observing SubagentStart expects a matching SubagentStop. Non-
-      //    blocking: errors are swallowed by dispatchSubagentStop itself.
-      //
-      // 4. Roll back the delegation budget slot — the child never ran, so a
-      //    permanent slot consumption would silently exhaust maxTotalAgents across
-      //    forge/farm retry loops. `budgetReceipt` is undefined when no budget is
-      //    configured, so the rollback is a no-op in the common case.
-      stopOccupancyHeartbeat();
-      budgetReceipt?.rollback();
-      this.abortGraph.dispose(id);
-      if (registry) {
-        void dispatchSubagentStop(
-          registry,
-          {
-            event: 'SubagentStop',
-            subagentId: id,
-            status: 'failed',
-            reason: err instanceof Error ? err.message : String(err),
-          },
-          {
-            signal: this.rootController.signal,
-            ...(effectiveTraceWriter ? { traceWriter: effectiveTraceWriter } : {}),
-          },
-        );
-      }
+      rollbackFailedFork({
+        err, id, stopOccupancyHeartbeat, budgetReceipt, registry, effectiveTraceWriter,
+        abortGraph: this.abortGraph,
+        rootSignal: this.rootController.signal,
+      });
       throw err;
     }
+    const { handle, effectiveAgentType, effectiveResolvedAgentType } = constructed;
 
     // Witness emit + routing telemetry: fires AFTER the handle is wired into
     // the manager's active map and the abort-graph. See ./subagent/fork-lifecycle.ts.
@@ -667,42 +498,23 @@ export class SubagentManager {
     timeoutMs: number = SUBAGENT_DRAIN_TIMEOUT_MS,
     rearm: boolean = false,
   ): Promise<{ drained: number; timedOut: boolean }> {
-    const inFlight = [...this.active.values()];
-    if (inFlight.length === 0) {
-      if (rearm && this.rootController.signal.aborted) this.rearmRoot();
+    // Delegate to sibling module (subagent.drain.ts) — extracted for the
+    // file-size ceiling (#3481). The rearmRoot guard (signal.aborted) for the
+    // empty-map fast path lives here because it accesses rootController directly.
+    if (this.active.size === 0 && rearm && this.rootController.signal.aborted) {
+      this.rearmRoot();
       return { drained: 0, timedOut: false };
     }
-
-    // Cascade first so descendants see the abort while we await their parents.
-    this.abortGraph.abort(this.rootId, reason, origin);
-
-    // Invariant: `handle.cancel()` emits the child's `cancelled` lifecycle row
-    // synchronously before its own first await, so awaiting it here guarantees
-    // the row has ENTERED writer.write() — and is therefore queued ahead of the
-    // seal — even though the emit itself is fire-and-forget.
-    let timedOut = false;
-    const bound = new Promise<void>((resolve) =>
-      setTimeout(() => {
-        timedOut = true;
-        resolve();
-      }, timeoutMs).unref(),
+    return abortAllAndDrainImpl(
+      this.active,
+      this.abortGraph,
+      this.rootId,
+      reason,
+      origin,
+      timeoutMs,
+      rearm,
+      () => this.rearmRoot(),
     );
-    await Promise.race([
-      Promise.allSettled(inFlight.map((h) => h.cancel())),
-      bound,
-    ]);
-    if (timedOut) {
-      console.warn(
-        `[SubagentManager] abortAllAndDrain: ${inFlight.length} child(ren) did not settle ` +
-          `within ${timeoutMs}ms — sealing anyway; their terminal rows may be missing`,
-      );
-    }
-    // `/clear` ends one session lifecycle but the manager itself survives.
-    // AbortSignals are terminal, so replace the root controller before the
-    // rebuilt session can dispatch children. The graph node is retained to
-    // preserve manager-level listeners and child-link bookkeeping.
-    if (rearm) this.rearmRoot();
-    return { drained: inFlight.length, timedOut };
   }
 
   private rearmRoot(): void {
@@ -710,9 +522,12 @@ export class SubagentManager {
     this.abortGraph.rearm(this.rootId, this.rootController);
     // The constructor's listener follows `this.rootController`, but an
     // external parent may have aborted in the narrow interval before rearm.
-    if (this.parentAbortSignal?.aborted) {
-      this.rootController.abort(this.parentAbortSignal.reason);
-    }
+    // Invariant: re-wire the parent abort listener through the new controller.
+    // Without this call the listener installed in the constructor is lost after
+    // rearm — an external parent abort would no longer propagate to the fleet.
+    // This is a latent bug fix that landed silently in a refactor; do not
+    // "simplify" this away (#3519 / PR #3492).
+    if (this.parentAbortSignal) wireParentAbortSignal(this.parentAbortSignal, this.rootController);
   }
 
   /**

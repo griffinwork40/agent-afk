@@ -33,6 +33,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { ModelProvider } from '../provider.js';
 import { SubagentExecutor, DEFAULT_MAX_NESTING_DEPTH, type SubagentExecutorContext } from './subagent-executor.js';
 import { SUBAGENT_HANDOFF_CONTRACT } from '../subagent-contract.js';
+import { UNNAMED_SUBAGENT_WORKER_PROMPT } from '../tools/system-prompt.js';
 import type { InboundAttachmentReader } from '../content/attachment-registry.js';
 import { SKILL_MAX_DEPTH_RECOVERY_HINT } from './skill-depth-message.js';
 import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
@@ -201,6 +202,10 @@ describe('SubagentExecutor', () => {
       // The mock returns 'resolved-test-credential' for Anthropic-routed models.
       // maxTurns / maxToolUseIterations both default to 0 = unlimited on the
       // agent-tool dispatch path (uncapped by default; opt into a cap).
+      //
+      // Unnamed dispatch uses the lean scoped worker prompt (TOOL_SYSTEM_PROMPT_BASE
+      // + SUBAGENT_HANDOFF_CONTRACT) — NOT the parent's 'test system prompt'.
+      // The coordinator-framed parent base is not forwarded to worker children.
       expect(mockSubagentMgr.forkSubagent).toHaveBeenCalledWith(
         expect.objectContaining({
           idPrefix: 'agent-tool',
@@ -209,8 +214,7 @@ describe('SubagentExecutor', () => {
             maxToolUseIterations: 0,
             model: 'sonnet',
             apiKey: 'resolved-test-credential',
-            // Unnamed dispatch: parent base prompt + appended handoff contract.
-            systemPrompt: expect.stringContaining('test system prompt'),
+            systemPrompt: UNNAMED_SUBAGENT_WORKER_PROMPT,
           }),
         }),
       );
@@ -218,6 +222,8 @@ describe('SubagentExecutor', () => {
         config: { systemPrompt: string };
       };
       expect(forkArg.config.systemPrompt).toContain(SUBAGENT_HANDOFF_CONTRACT);
+      // Must NOT contain the parent's 'test system prompt'.
+      expect(forkArg.config.systemPrompt).not.toContain('test system prompt');
     });
   });
 
@@ -1852,34 +1858,49 @@ describe('SubagentExecutor', () => {
       };
       const bgExecutor = new SubagentExecutor(ctxWithBg);
 
-      // Time the call — must return promptly even though terminal never fires.
-      const before = Date.now();
       const result = await bgExecutor.execute(
         makeCall({ input: { prompt: 'long investigation', mode: 'background' } }),
       );
-      const elapsed = Date.now() - before;
-      expect(elapsed).toBeLessThan(200);
 
-      expect(result.isError).toBeUndefined();
       const payload = JSON.parse(result.content as string);
-      expect(payload.status).toBe('running');
-      expect(payload.jobId).toMatch(/^bg-/);
-      expect(payload.subagentId).toBe('sub-1');
-      expect(payload.label).toBe('long investigation');
-      expect(payload.message).toMatch(/delivered into this context/);
 
-      // Sanity: the job is observable via the registry; status still running.
-      const observed = registry.get(payload.jobId);
-      expect(observed?.status).toBe('running');
-      expect(observed?.provenance).toBe('model');
+      try {
+        // Ordering probe: execute() must return without blocking on terminal state.
+        // We verify this deterministically — without any wall-clock budget — by
+        // racing registry.join(jobId) (pending; no terminal event has fired yet)
+        // against an already-resolved microtask sentinel.  If execute() had driven
+        // the job to a terminal state before returning, join()'s .then() would be a
+        // queued microtask that fires before the sentinel resolves, so 'join' would
+        // win.  On correct code join() is still pending and 'sentinel' wins.
+        const SENTINEL = 'sentinel';
+        const winner = await Promise.race([
+          registry.join(payload.jobId).then(() => 'join'),
+          Promise.resolve(SENTINEL),
+        ]);
+        expect(winner).toBe(SENTINEL);
 
-      // Terminal callback was wired correctly: firing it transitions the
-      // registry without touching the executor.
-      fireTerminal({
-        id: 'sub-1',
-        status: 'succeeded' as SubagentResult['status'],
-        message: { content: 'final', role: 'assistant' } as any,
-      });
+        expect(result.isError).toBeUndefined();
+        expect(payload.status).toBe('running');
+        expect(payload.jobId).toMatch(/^bg-/);
+        expect(payload.subagentId).toBe('sub-1');
+        expect(payload.label).toBe('long investigation');
+        expect(payload.message).toMatch(/delivered into this context/);
+
+        // Sanity: the job is observable via the registry; status still running.
+        const observed = registry.get(payload.jobId);
+        expect(observed?.status).toBe('running');
+        expect(observed?.provenance).toBe('model');
+      } finally {
+        // Terminal callback was wired correctly: firing it transitions the
+        // registry without touching the executor.  Placed in finally so the
+        // join() promise always settles and does not leak on expect failures.
+        fireTerminal({
+          id: 'sub-1',
+          status: 'succeeded' as SubagentResult['status'],
+          message: { content: 'final', role: 'assistant' } as any,
+        });
+        await registry.join(payload.jobId);
+      }
       expect(registry.get(payload.jobId)?.status).toBe('completed');
     });
 

@@ -13,7 +13,7 @@ import {
   handleDaemonStatus,
 } from './routes.schedules.js';
 import { trySyncToDaemon } from '../agent/daemon/http-client.js';
-import { addSchedule, updateSchedule } from '../agent/daemon/schedule-store.js';
+import { addSchedule, toggleScheduleEnabled, updateSchedule } from '../agent/daemon/schedule-store.js';
 
 // ---- mocks -----------------------------------------------------------------
 
@@ -44,6 +44,11 @@ vi.mock('../agent/daemon/schedule-store.js', () => ({
   updateSchedule: vi.fn((id: string, patch: Record<string, unknown>) =>
     id === 'nightly-forge'
       ? { ...mockSchedules[0], ...patch, updatedAt: new Date().toISOString() }
+      : undefined,
+  ),
+  toggleScheduleEnabled: vi.fn((id: string, enabled: boolean) =>
+    id === 'nightly-forge'
+      ? { ...mockSchedules[0], enabled, updatedAt: new Date().toISOString() }
       : undefined,
   ),
   removeSchedule: vi.fn((id: string) => id === 'nightly-forge'),
@@ -142,6 +147,32 @@ describe('routes.schedules', () => {
       expect(json().status).toBe(400);
     });
 
+    it('rejects an invalid trigger value', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, {
+        name: 'Test',
+        command: '/test',
+        cron: '0 * * * *',
+        trigger: 'daily',
+      });
+      const { status, body } = json();
+      expect(status).toBe(400);
+      expect((body as { message: string }).message).toMatch(/trigger must be one of/);
+    });
+
+    it('rejects an invalid notifyOn value', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, {
+        name: 'Test',
+        command: '/test',
+        cron: '0 * * * *',
+        notifyOn: 'always_and_never',
+      });
+      const { status, body } = json();
+      expect(status).toBe(400);
+      expect((body as { message: string }).message).toMatch(/notifyOn must be one of/);
+    });
+
     it('enabled:false skips daemon sync and returns daemonSynced:false without syncNote', async () => {
       const { res, json } = makeRes();
       await handleCreateSchedule(res, {
@@ -172,6 +203,32 @@ describe('routes.schedules', () => {
       expect(status).toBe(201);
       expect(body).toHaveProperty('daemonSynced', false);
       expect(body).toHaveProperty('syncNote', 'sync note');
+    });
+  });
+
+  describe('retry fields (#3243)', () => {
+    it('create threads valid maxAttempts / retryDelayMs into addSchedule', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, { name: 'R', command: '/r', cron: '0 * * * *', maxAttempts: 2, retryDelayMs: 1000 });
+      expect(json().status).toBe(201);
+      expect(vi.mocked(addSchedule)).toHaveBeenCalledWith(expect.objectContaining({ maxAttempts: 2, retryDelayMs: 1000 }));
+    });
+
+    it('create rejects out-of-bounds maxAttempts with 400', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, { name: 'R', command: '/r', cron: '0 * * * *', maxAttempts: 9 });
+      expect(json().status).toBe(400);
+      expect(vi.mocked(addSchedule)).not.toHaveBeenCalled();
+    });
+
+    it('update patches valid fields and rejects bad retryDelayMs', async () => {
+      const ok = makeRes();
+      await handleUpdateSchedule(ok.res, 'nightly-forge', { maxAttempts: 3 });
+      expect(ok.json().status).toBe(200);
+      expect(vi.mocked(updateSchedule)).toHaveBeenCalledWith('nightly-forge', expect.objectContaining({ maxAttempts: 3 }));
+      const bad = makeRes();
+      await handleUpdateSchedule(bad.res, 'nightly-forge', { retryDelayMs: 5 });
+      expect(bad.json().status).toBe(400);
     });
   });
 
@@ -317,6 +374,7 @@ describe('routes.schedules', () => {
       await handleToggleSchedule(res, 'nightly-forge');
       const { status, body } = json();
       expect(status).toBe(200);
+      expect(vi.mocked(toggleScheduleEnabled)).toHaveBeenCalledWith('nightly-forge', false);
       // Was enabled, now disabled
       expect((body as { enabled: boolean }).enabled).toBe(false);
     });

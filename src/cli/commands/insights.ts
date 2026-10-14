@@ -31,7 +31,8 @@ export function registerInsightsCommand(program: Command): void {
     .action(
       async (opts: { days: string; output?: string; open: boolean }) => {
         try {
-          const days = Math.max(1, parseInt(opts.days, 10) || 30);
+          const n = parseInt(opts.days, 10);
+          const days = Number.isNaN(n) ? 30 : Math.max(1, n);
 
           // Determine output path
           const cacheDir = getAfkCacheDir();

@@ -87,6 +87,7 @@ export async function lfPrFate(
         lf: 'pr_fate',
         vote: -1,
         strength: 'strong',
+        severity: 'major',
         evidence: `PR ${url} state=CLOSED (unmerged)`,
         observed_at: now,
       });
@@ -123,6 +124,7 @@ export async function lfCommitSurvival(
         lf: 'commit_survival',
         vote: -1,
         strength: 'strong',
+        severity: 'critical',
         evidence: `SHA ${sha} has a "This reverts commit ${sha}" in git log`,
         observed_at: now,
       });
@@ -165,10 +167,7 @@ export function lfFixOfFix(): Vote[] {
 // Real exec implementations (used by the backfill script, not by unit tests)
 // ---------------------------------------------------------------------------
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
+import { execFileAsync } from '../../utils/exec-file.js';
 
 export const realFetchPrState: FetchPrState = async (
   prUrl: string,

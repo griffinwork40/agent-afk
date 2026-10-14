@@ -1,22 +1,26 @@
 /**
- * Combiner v1 — ordered rules + confidence calculation.
+ * Combiner — delegates to combiner v2 while re-exporting the v1 helpers
+ * (`computeConfidence`) for backward compatibility with existing tests.
  *
- * Evaluated top to bottom; first match wins:
+ * The public `combine()` function now invokes combiner v2 internally.
+ * Callers that need severity-aware results directly should import from
+ * combine-v2.ts. This file exists purely as the stable import surface used
+ * by store.ts and the rest of the codebase.
+ *
+ * v2 rules (first match wins):
+ *   0. explicit_feedback override (/good → succeeded 1.0, /bad → failed 1.0)
  *   1. closure=abort and no artifacts → interrupted
- *   2. self_report == blocked         → blocked
- *   3. Any strong -1 and no later strong +1 → failed
- *   4. Any strong +1 and no strong -1      → succeeded
- *   5. Otherwise                           → unknown
- *
- * Confidence = strong votes agreeing ÷ strong votes cast,
- *   discounted by 0.2 for each weak vote that disagrees.
- *   unknown → 0.
- *
- * explicit_feedback overrides the combiner entirely: /good → succeeded (1.0),
- * /bad → failed (1.0), settled immediately.
+ *   2. self_report == blocked → blocked
+ *   3. critical/major negative not outweighed by later strong positive → failed
+ *   4. Two or more minor negatives → failed
+ *   5. Strong positive and no major/critical negative → succeeded (proven)
+ *   6. Good-by-default (past settle window, normal closure, no negatives)
+ *   7. One minor negative past window → succeeded 0.3 (no_bad_signals)
+ *   8. Otherwise → unknown
  */
 
 import type { Vote, OutcomeLabel, SelfReport, Artifacts } from './schema.js';
+import { combineV2 } from './combine-v2.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -27,39 +31,29 @@ export interface CombinerInput {
   selfReport: SelfReport;
   artifacts: Artifacts;
   explicit_feedback?: 'good' | 'bad'; // M0 has no source; supported for completeness
+  /** Whether the settle window has passed (used by v2 good-by-default rule). */
+  settleWindowPassed?: boolean;
+  /** Whether the closure was normal (used by v2 good-by-default rule). */
+  normalClosure?: boolean;
 }
 
 export interface CombinerResult {
   label: OutcomeLabel;
   confidence: number;
+  /** How the label was established. Absent on unknown/blocked. */
+  basis?: 'proven' | 'no_bad_signals';
 }
 
 // ---------------------------------------------------------------------------
-// Vote helpers
+// Vote helpers (kept for backward compat and tests)
 // ---------------------------------------------------------------------------
 
 function strongVotes(votes: Vote[]): Vote[] {
   return votes.filter((v) => v.strength === 'strong');
 }
 
-function hasStrongPositive(votes: Vote[]): boolean {
-  return strongVotes(votes).some((v) => v.vote === 1);
-}
-
-function hasStrongNegative(votes: Vote[]): boolean {
-  return strongVotes(votes).some((v) => v.vote === -1);
-}
-
-function hasClosureAbort(votes: Vote[]): boolean {
-  return votes.some((v) => v.lf === 'closure' && v.vote === -1);
-}
-
-function hasArtifacts(artifacts: Artifacts): boolean {
-  return artifacts.commits.length > 0 || artifacts.prs.length > 0;
-}
-
 // ---------------------------------------------------------------------------
-// Confidence calculation
+// Confidence calculation (v1 — kept for backward compat with existing tests)
 // ---------------------------------------------------------------------------
 
 /**
@@ -68,6 +62,9 @@ function hasArtifacts(artifacts: Artifacts): boolean {
  * Base: strong votes agreeing with the chosen label ÷ strong votes cast.
  * Penalty: 0.2 per weak vote that disagrees with the chosen label.
  * unknown always returns 0.
+ *
+ * Retained for backward compatibility. New code should use computeConfidenceV2
+ * from combine-v2.ts which applies severity-based penalties.
  */
 export function computeConfidence(
   label: OutcomeLabel,
@@ -78,7 +75,6 @@ export function computeConfidence(
   const sVotes = strongVotes(votes);
   if (sVotes.length === 0) return 0;
 
-  // Determine "agreeing" direction for this label
   const agreeDir: 1 | -1 =
     label === 'succeeded' ? 1
     : label === 'failed' ? -1
@@ -89,7 +85,6 @@ export function computeConfidence(
   const agreeing = sVotes.filter((v) => v.vote === agreeDir).length;
   const base = agreeing / sVotes.length;
 
-  // Penalty from weak disagreers
   const weakDisagree = votes.filter(
     (v) => v.strength === 'weak' && v.vote !== 0 && v.vote !== agreeDir,
   ).length;
@@ -99,53 +94,22 @@ export function computeConfidence(
 }
 
 // ---------------------------------------------------------------------------
-// Main combiner
+// Main combiner — delegates to combiner v2
 // ---------------------------------------------------------------------------
 
+/**
+ * Evaluate the combiner rules and return a label + confidence + basis.
+ *
+ * Delegates to combiner v2. The v1 computeConfidence helper above is retained
+ * for tests that cover the confidence calculation in isolation.
+ */
 export function combine(input: CombinerInput): CombinerResult {
-  const { votes, selfReport, artifacts } = input;
-
-  // Explicit feedback overrides everything (M0 has no source, but combiner
-  // respects it when present so M2+ can pass it through unchanged)
-  if (input.explicit_feedback === 'good') {
-    return { label: 'succeeded', confidence: 1.0 };
-  }
-  if (input.explicit_feedback === 'bad') {
-    return { label: 'failed', confidence: 1.0 };
-  }
-
-  // Rule 1: abort closure + no artifacts → interrupted
-  if (hasClosureAbort(votes) && !hasArtifacts(artifacts)) {
-    return {
-      label: 'interrupted',
-      confidence: computeConfidence('interrupted', votes),
-    };
-  }
-
-  // Rule 2: self_report == blocked → blocked
-  if (selfReport === 'blocked') {
-    return {
-      label: 'blocked',
-      confidence: computeConfidence('blocked', votes),
-    };
-  }
-
-  // Rule 3: any strong -1 and no later strong +1 → failed
-  if (hasStrongNegative(votes) && !hasStrongPositive(votes)) {
-    return {
-      label: 'failed',
-      confidence: computeConfidence('failed', votes),
-    };
-  }
-
-  // Rule 4: any strong +1 and no strong -1 → succeeded
-  if (hasStrongPositive(votes) && !hasStrongNegative(votes)) {
-    return {
-      label: 'succeeded',
-      confidence: computeConfidence('succeeded', votes),
-    };
-  }
-
-  // Rule 5: unknown
-  return { label: 'unknown', confidence: 0 };
+  return combineV2({
+    votes: input.votes,
+    selfReport: input.selfReport,
+    artifacts: input.artifacts,
+    explicit_feedback: input.explicit_feedback,
+    settleWindowPassed: input.settleWindowPassed,
+    normalClosure: input.normalClosure,
+  });
 }

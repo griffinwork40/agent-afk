@@ -78,8 +78,12 @@ export function buildBeforeTurnEnd(
       continuation,
     });
     // Finding 2: signal that the provider seam dispatched Stop this turn,
-    // so turn-stream-runner.ts skips the duplicate dispatchTurnStop.
-    if (currentWiring) currentWiring.stopDispatchedBySeam = true;
+    // so turn-stream-runner.ts skips the duplicate dispatchTurnStop. Set ONLY
+    // when the seam really dispatched (#2957): with a cap of 0 (or no
+    // registry) the seam returns early, and the session-layer fallback must
+    // still fire Stop. Never reset here — a later cap-reached round in the
+    // same turn must not clear a dispatch from an earlier round.
+    if (currentWiring && result.dispatched === true) currentWiring.stopDispatchedBySeam = true;
     return result;
   };
 }

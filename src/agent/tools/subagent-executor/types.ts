@@ -22,6 +22,7 @@ import type { Surface } from '../../awareness/types.js';
 import type { TraceSink } from '../../trace/index.js';
 import type { InboundAttachmentReader } from '../../content/attachment-registry.js';
 import type { DelegationBudget } from '../delegation-budget.js';
+import type { HookRegistry } from '../../hooks.js';
 import type { QueuedNoteClaim } from '../subagent/queued-note.js';
 import type { PromotedSubagentInfo } from '../subagent/foreground-promotion.js';
 
@@ -42,8 +43,19 @@ export interface SubagentExecutorContext {
    * `systemPrompt` is the raw base prompt (pre-assembly), intentionally
    * excluding TOOL_SYSTEM_PROMPT and ROUTING_DIRECTIVE — subagents are task
    * workers that must not inherit routing directives. See ComposeExecutorContext.
+   *
+   * `operatorOverlay` is the BARE operator overlay (AFK.md / afk.config.json
+   * `systemPrompt` / AFK_SYSTEM_PROMPT, or a per-chat override) with no
+   * framework base and no header. Unnamed `agent` children do NOT inherit the
+   * composed `systemPrompt` (#3242); they get the lean worker prompt plus this
+   * overlay (`composeUnnamedWorkerPrompt`, #3324). Absent → no overlay. Not an
+   * AgentConfig field: it is consumed by `buildChildConfig` and never copied
+   * onto a child config. Inherited by nested child executors with the rest of
+   * `defaultConfig`.
    */
-  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'xaiBaseUrl' | 'skillDispatchName'>;
+  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'xaiBaseUrl' | 'skillDispatchName'> & {
+    operatorOverlay?: string;
+  };
   /**
    * User-facing surface of the session that owns this executor (cli/telegram/
    * daemon). Set at top-level wiring sites; inherited by nested child executors.
@@ -95,6 +107,9 @@ export interface SubagentExecutorContext {
     // Forking child's journal view (read lazily): nested skill forks journal
     // via its `forSubagent(id)`. Absent → nested skill forks run unjournaled.
     journalParent?: JournalParent,
+    // Root (depth-0) session id for child-attribution (#2442); becomes the
+    // nested executor's `parentRootSessionId`.
+    rootSessionId?: string,
   ) => SkillExecutor;
   /**
    * Nesting depth this executor sits at. **Required** — pass explicit `0`
@@ -123,6 +138,23 @@ export interface SubagentExecutorContext {
    * (e.g. one-shot CLI, daemon turn).
    */
   backgroundRegistry?: BackgroundAgentRegistry;
+  /**
+   * Live probe: does this surface wake an idle prompt when a background result
+   * lands? Only the TTY REPL wires it (depth 0). Read at dispatch time by
+   * `resolveBackgroundDelivery` to pick a truthful model-facing note. Never
+   * forwarded to nested executors: depth >= 1 results go to the root session.
+   */
+  backgroundAutoWake?: () => boolean;
+  /**
+   * Live probe: will BgResultNotifier buffer the result for the next user
+   * message? Returns false when AFK_BG_AUTO_DELIVER=0 — the notifier's
+   * `onSettled` guard returns early, so no injection is queued. When false at
+   * depth 0, `resolveBackgroundDelivery` returns `manual-join` instead of
+   * `next-message`, so the model is told to use /bgsub:join rather than
+   * promised an automatic delivery that never arrives. Never forwarded to
+   * nested executors (same rationale as backgroundAutoWake).
+   */
+  backgroundAutoDeliver?: () => boolean;
   /**
    * Worktree cwd inherited from the parent session. Forwarded to the
    * per-depth child {@link SubagentManager} and to the recursive child
@@ -171,6 +203,13 @@ export interface SubagentExecutorContext {
   // Delegation budget: shared by reference across the entire session tree.
   // See delegation-budget.ts. Opt-in: undefined when no budget env vars are set.
   traceWriter?: TraceSink; workspaceStore?: import('../../workspace/index.js').WorkspaceStore; delegationBudget?: DelegationBudget;
+  /**
+   * Hook registry for the depth-2+ child {@link SubagentManager} this executor
+   * builds (child-config.ts buildNestedChildManager), whose stub parent carries
+   * none. Forwarded to the recursive child executor so the chain holds to
+   * maxDepth. Undefined => nested managers resolve hooks as before.
+   */
+  hookRegistry?: HookRegistry;
   /**
    * Tool allowlist to propagate to grandchild providers when this executor
    * is itself a read-only skill's child. Forwarded into `childProviderFactory`
@@ -225,6 +264,22 @@ export interface SubagentExecutorContext {
    * them. When unset, `inherit` falls back to the policy default chain.
    */
   parentModel?: AgentModelInput;
+  /**
+   * Root (depth-0) session id, forwarded from the root session and threaded
+   * unchanged through every depth. Always undefined at depth-0 (the root
+   * session has no ancestor to inherit from). Threaded into
+   * {@link BuildChildConfigArgs.parentRootSessionId} so the grandchild manager
+   * can seed depth-2+ forks with the real root id for child-attribution.
+   *
+   * Future-proofing note: compose executors run exclusively at depth 0 today
+   * (compose is excluded from {@link CHILD_ALLOWED_TOOLS}), so this field is
+   * never set on a compose-owned executor context — compose DAG nodes are
+   * depth-1 forks whose attribution falls back to `parentSessionId` via
+   * `resolveRootSessionId`. If compose is ever permitted at depth > 0, this
+   * field should be threaded into the compose {@link SubagentManager}
+   * alongside the other inherited parent fields.
+   */
+  parentRootSessionId?: string;
 }
 
 /**

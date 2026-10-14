@@ -105,6 +105,7 @@ export async function lfFixOfFix(
         lf: 'fix_of_fix',
         vote: -1,
         strength: 'weak',
+        severity: 'minor',
         evidence: `PR #${refPrNumber} in ${parsed.repo} references ${url} as a fix/regression within ${FIX_OF_FIX_WINDOW_DAYS} days`,
         observed_at: now,
       });
@@ -173,10 +174,7 @@ async function _findFixOfFixRefs(
 // Real exec implementation
 // ---------------------------------------------------------------------------
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
+import { execFileAsync } from '../../utils/exec-file.js';
 
 const FOF_EXEC_TIMEOUT_MS = 20_000;
 

@@ -11,8 +11,11 @@
  *   - guard function filtering
  */
 
-import { describe, it, expect, vi } from 'vitest';
-import { parseJsonlLines } from './jsonl.js';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { parseJsonlLines, readJsonlFile, IncrementalLineReader, appendJsonl } from './jsonl.js';
 
 // ---------------------------------------------------------------------------
 // Basic happy path
@@ -249,5 +252,208 @@ describe('parseJsonlLines — type narrowing', () => {
     const isNum = (x: unknown): x is number => typeof x === 'number';
     const result = parseJsonlLines<number>('1\n"two"\n3', { guard: isNum });
     expect(result).toEqual([1, 3]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readJsonlFile — streaming reader
+// ---------------------------------------------------------------------------
+
+function makeTmpDir(): string {
+  return mkdtempSync(join(tmpdir(), 'agent-afk-jsonl-test-'));
+}
+
+describe('readJsonlFile', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = makeTmpDir();
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('yields zero values for a non-existent file (ENOENT-safe)', async () => {
+    const results: unknown[] = [];
+    for await (const v of readJsonlFile(join(dir, 'nonexistent.jsonl'))) {
+      results.push(v);
+    }
+    expect(results).toEqual([]);
+  });
+
+  it('yields all parsed values from a valid JSONL file', async () => {
+    const path = join(dir, 'test.jsonl');
+    writeFileSync(path, '{"a":1}\n{"b":2}\n{"c":3}\n');
+    const results: unknown[] = [];
+    for await (const v of readJsonlFile(path)) {
+      results.push(v);
+    }
+    expect(results).toEqual([{ a: 1 }, { b: 2 }, { c: 3 }]);
+  });
+
+  it('skips blank lines', async () => {
+    const path = join(dir, 'blanks.jsonl');
+    writeFileSync(path, '{"a":1}\n\n{"b":2}\n');
+    const results: unknown[] = [];
+    for await (const v of readJsonlFile(path)) {
+      results.push(v);
+    }
+    expect(results).toEqual([{ a: 1 }, { b: 2 }]);
+  });
+
+  it('skips malformed lines', async () => {
+    const path = join(dir, 'malformed.jsonl');
+    writeFileSync(path, '{"ok":1}\nBAD\n{"ok":2}\n');
+    const results: unknown[] = [];
+    for await (const v of readJsonlFile(path)) {
+      results.push(v);
+    }
+    expect(results).toEqual([{ ok: 1 }, { ok: 2 }]);
+  });
+
+  it('calls onParseError for malformed lines', async () => {
+    const path = join(dir, 'errors.jsonl');
+    writeFileSync(path, '{"ok":1}\nBAD_LINE\n{"ok":2}\n');
+    const errors: string[] = [];
+    const results: unknown[] = [];
+    for await (const v of readJsonlFile(path, { onParseError: (l) => errors.push(l) })) {
+      results.push(v);
+    }
+    expect(errors).toEqual(['BAD_LINE']);
+    expect(results).toEqual([{ ok: 1 }, { ok: 2 }]);
+  });
+
+  it('applies the guard to filter values', async () => {
+    const path = join(dir, 'guard.jsonl');
+    writeFileSync(path, '{"n":1}\n{"other":"x"}\n{"n":2}\n');
+    type Numbered = { n: number };
+    const isNumbered = (x: unknown): x is Numbered =>
+      typeof x === 'object' && x !== null && typeof (x as Record<string, unknown>)['n'] === 'number';
+    const results: Numbered[] = [];
+    for await (const v of readJsonlFile<Numbered>(path, { guard: isNumbered })) {
+      results.push(v);
+    }
+    expect(results).toEqual([{ n: 1 }, { n: 2 }]);
+  });
+
+  it('handles an empty file (zero values)', async () => {
+    const path = join(dir, 'empty.jsonl');
+    writeFileSync(path, '');
+    const results: unknown[] = [];
+    for await (const v of readJsonlFile(path)) {
+      results.push(v);
+    }
+    expect(results).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// IncrementalLineReader
+// ---------------------------------------------------------------------------
+
+describe('IncrementalLineReader', () => {
+  it('returns complete lines from a single chunk', () => {
+    const reader = new IncrementalLineReader();
+    const lines = reader.feed('{"a":1}\n{"b":2}\n');
+    expect(lines).toEqual(['{"a":1}', '{"b":2}']);
+    expect(reader.bufferedLength).toBe(0);
+  });
+
+  it('buffers an incomplete trailing fragment', () => {
+    const reader = new IncrementalLineReader();
+    const lines = reader.feed('{"a":1}\n{"b":');
+    expect(lines).toEqual(['{"a":1}']);
+    expect(reader.bufferedLength).toBeGreaterThan(0);
+  });
+
+  it('completes the fragment across two feeds', () => {
+    const reader = new IncrementalLineReader();
+    reader.feed('{"a":1}\n{"b":');
+    const lines = reader.feed('2}\n');
+    expect(lines).toEqual(['{"b":2}']);
+    expect(reader.bufferedLength).toBe(0);
+  });
+
+  it('flush() drains the remaining buffer', () => {
+    const reader = new IncrementalLineReader();
+    reader.feed('{"a":1}\n{"no-newline"');
+    const flushed = reader.flush();
+    expect(flushed).toEqual(['{"no-newline"']);
+    expect(reader.bufferedLength).toBe(0);
+  });
+
+  it('flush() returns [] when buffer is empty', () => {
+    const reader = new IncrementalLineReader();
+    expect(reader.flush()).toEqual([]);
+  });
+
+  it('handles multiple chunks that each lack a newline', () => {
+    const reader = new IncrementalLineReader();
+    reader.feed('part');
+    reader.feed('ial');
+    const flushed = reader.flush();
+    expect(flushed).toEqual(['partial']);
+  });
+
+  it('handles empty string feed gracefully', () => {
+    const reader = new IncrementalLineReader();
+    const lines = reader.feed('');
+    expect(lines).toEqual([]);
+    expect(reader.bufferedLength).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// appendJsonl
+// ---------------------------------------------------------------------------
+
+describe('appendJsonl', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = makeTmpDir();
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('creates the file and appends a JSON line', () => {
+    const path = join(dir, 'out.jsonl');
+    appendJsonl(path, { x: 1 });
+    const content = readFileSync(path, 'utf-8');
+    expect(content).toBe('{"x":1}\n');
+  });
+
+  it('appends multiple values in order', () => {
+    const path = join(dir, 'out.jsonl');
+    appendJsonl(path, { a: 1 });
+    appendJsonl(path, { b: 2 });
+    const lines = readFileSync(path, 'utf-8').trim().split('\n');
+    expect(lines).toEqual(['{"a":1}', '{"b":2}']);
+  });
+
+  it('silently ignores errors by default (errorPolicy: ignore)', () => {
+    // Write to a non-existent directory — should not throw.
+    expect(() =>
+      appendJsonl('/nonexistent/path/file.jsonl', { x: 1 }),
+    ).not.toThrow();
+  });
+
+  it('re-throws errors when errorPolicy is throw', () => {
+    expect(() =>
+      appendJsonl('/nonexistent/path/file.jsonl', { x: 1 }, { errorPolicy: 'throw' }),
+    ).toThrow();
+  });
+
+  it('serializes various JSON values correctly', () => {
+    const path = join(dir, 'types.jsonl');
+    appendJsonl(path, null);
+    appendJsonl(path, 42);
+    appendJsonl(path, 'hello');
+    appendJsonl(path, [1, 2]);
+    const lines = readFileSync(path, 'utf-8').trim().split('\n');
+    expect(lines).toEqual(['null', '42', '"hello"', '[1,2]']);
   });
 });

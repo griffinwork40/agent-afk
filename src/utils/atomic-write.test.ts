@@ -1,8 +1,31 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, statSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, statSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { atomicWriteFile, atomicWriteFileAsync, renameWithRetry, renameWithRetrySync } from './atomic-write.js';
+import type { _AtomicWriteAsyncTestInternals } from './atomic-write.js';
+
+describe.each([
+  ['sync', atomicWriteFile],
+  ['async', atomicWriteFileAsync],
+] as const)('atomic write mkdirMode (%s)', (_name, write) => {
+  it.each([undefined, 0o700])('matches native mkdir mode %s on nested parents', async (mkdirMode) => {
+    const dir = mkdtempSync(join(tmpdir(), 'afk-atomic-mkdir-'));
+    try {
+      const reference = join(dir, 'reference', 'nested');
+      mkdirSync(reference, { recursive: true, ...(mkdirMode !== undefined ? { mode: mkdirMode } : {}) });
+      const parent = join(dir, 'actual', 'nested');
+      await write(join(parent, 'out.txt'), 'data', { mkdirMode });
+      expect(readFileSync(join(parent, 'out.txt'), 'utf-8')).toBe('data');
+      // Contract: compare native permissions so this also runs on Windows without POSIX bits.
+      expect(statSync(parent).mode & 0o777).toBe(statSync(reference).mode & 0o777);
+      expect(statSync(join(dir, 'actual')).mode & 0o777)
+        .toBe(statSync(join(dir, 'reference')).mode & 0o777);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('atomicWriteFile (sync)', () => {
   let dir: string;
@@ -57,6 +80,16 @@ describe('atomicWriteFile (sync)', () => {
     const dest = join(dir, 'a', 'b', 'c', 'out.txt');
     atomicWriteFile(dest, 'nested');
     expect(readFileSync(dest, 'utf-8')).toBe('nested');
+  });
+
+  it('creates parent directory with mkdirMode when specified', () => {
+    const dest = join(dir, 'priv', 'out.txt');
+    atomicWriteFile(dest, 'secret', { mkdirMode: 0o700 });
+    expect(readFileSync(dest, 'utf-8')).toBe('secret');
+    // POSIX-only: NTFS does not expose permission bits via stat.
+    if (process.platform !== 'win32') {
+      expect(statSync(join(dir, 'priv')).mode & 0o777).toBe(0o700);
+    }
   });
 
   it('does not leave a temp file behind on success', () => {
@@ -142,6 +175,16 @@ describe('atomicWriteFileAsync (async)', () => {
     expect(readFileSync(dest, 'utf-8')).toBe('deep');
   });
 
+  it('creates parent directory with mkdirMode when specified', async () => {
+    const dest = join(dir, 'priv', 'out.txt');
+    await atomicWriteFileAsync(dest, 'secret', { mkdirMode: 0o700 });
+    expect(readFileSync(dest, 'utf-8')).toBe('secret');
+    // POSIX-only: NTFS does not expose permission bits via stat.
+    if (process.platform !== 'win32') {
+      expect(statSync(join(dir, 'priv')).mode & 0o777).toBe(0o700);
+    }
+  });
+
   it('does not leave a temp file behind on success', async () => {
     const dest = join(dir, 'out.txt');
     await atomicWriteFileAsync(dest, 'data');
@@ -186,6 +229,10 @@ describe('atomicWriteFileAsync (async)', () => {
 // ---------------------------------------------------------------------------
 
 describe('renameWithRetry', () => {
+  // No suite-level stderr spy: each test that emits to stderr suppresses or
+  // captures it inline so unexpected warnings from other tests stay visible
+  // (finding #3153 advisory — avoid masking unrelated stderr across the suite).
+
   // Helper: build a rename mock that throws `err` for the first `failTimes`
   // calls, then resolves successfully.
   function mockRename(
@@ -222,8 +269,31 @@ describe('renameWithRetry', () => {
   it('retries on EPERM when platform is win32 and succeeds on retry', async () => {
     const eperm = Object.assign(new Error('EPERM'), { code: 'EPERM' });
     const { fn, callCount } = mockRename(eperm, 1);
-    await expect(renameWithRetry('a', 'b', 3, 'win32', fn)).resolves.toBeUndefined();
-    expect(callCount()).toBe(2);
+    // Suppress the retry-log line emitted on the first retry attempt.
+    const spy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      await expect(renameWithRetry('a', 'b', 3, 'win32', fn)).resolves.toBeUndefined();
+      expect(callCount()).toBe(2);
+    } finally { spy.mockRestore(); }
+  });
+
+  it('logs to stderr on the first retry attempt so Windows retries are visible to operators', async () => {
+    // Finding #2870-3: the retry path must emit a diagnostic so operators can
+    // observe Windows rename races rather than absorbing them silently.
+    const eperm = Object.assign(new Error('EPERM'), { code: 'EPERM' });
+    const { fn } = mockRename(eperm, 1);
+    const captured: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((msg: unknown) => {
+      captured.push(String(msg));
+      return true;
+    });
+    try {
+      await renameWithRetry('a', 'b', 3, 'win32', fn);
+    } finally { spy.mockRestore(); }
+    // Exactly one log line on entry to the retry path (attempt 0 only).
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toContain('[atomic-write] rename retry');
+    expect(captured[0]).toContain('EPERM');
   });
 
   it('does NOT retry EPERM when platform is not win32 — throws immediately', async () => {
@@ -244,9 +314,13 @@ describe('renameWithRetry', () => {
   it('exhausts maxRetries on win32 and throws the last error', async () => {
     const eperm = Object.assign(new Error('EPERM'), { code: 'EPERM' });
     const { fn, callCount } = alwaysFailRename(eperm);
-    // maxRetries=2 → attempts 0, 1, 2 = 3 total calls.
-    await expect(renameWithRetry('a', 'b', 2, 'win32', fn)).rejects.toMatchObject({ code: 'EPERM' });
-    expect(callCount()).toBe(3);
+    // Suppress the single retry-log line emitted on attempt 0.
+    const spy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      // maxRetries=2 → attempts 0, 1, 2 = 3 total calls.
+      await expect(renameWithRetry('a', 'b', 2, 'win32', fn)).rejects.toMatchObject({ code: 'EPERM' });
+      expect(callCount()).toBe(3);
+    } finally { spy.mockRestore(); }
   });
 
   it('does not sleep after the final failed attempt on win32', async () => {
@@ -255,8 +329,13 @@ describe('renameWithRetry', () => {
     // grow — verified here by the attempt count being exactly 1.
     const eperm = Object.assign(new Error('EPERM'), { code: 'EPERM' });
     const { fn, callCount } = alwaysFailRename(eperm);
-    await expect(renameWithRetry('a', 'b', 0, 'win32', fn)).rejects.toMatchObject({ code: 'EPERM' });
-    expect(callCount()).toBe(1);
+    // maxRetries=0: attempt 0 fires the log line (attempt===0 check) then
+    // immediately throws — suppress so test output stays clean.
+    const spy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      await expect(renameWithRetry('a', 'b', 0, 'win32', fn)).rejects.toMatchObject({ code: 'EPERM' });
+      expect(callCount()).toBe(1);
+    } finally { spy.mockRestore(); }
   });
 
   it('re-throws non-transient errors immediately on win32', async () => {
@@ -267,15 +346,20 @@ describe('renameWithRetry', () => {
   });
 
   it('clamps exponential backoff to 5000 ms ceiling for large attempt numbers', async () => {
-    // With attempt=30, 10 * 2^30 would overflow into billions of ms. After
-    // clamping the delay is Math.min(10 * 2^attempt, 5000) — we verify the
-    // function does not hang by using a mock that succeeds on the second call.
+    // failTimes=10 makes attempts 0-9 fail, so attempt 9 schedules the first
+    // clamped sleep: Math.min(10 * 2^9, 5000) = 5000 (not the unclamped 5120).
     const eperm = Object.assign(new Error('EPERM'), { code: 'EPERM' });
-    const { fn, callCount } = mockRename(eperm, 1);
-    // The clamping is internal; if sleep(huge) were called this test would time
-    // out — passing confirms the clamp is in place.
-    await expect(renameWithRetry('a', 'b', 5, 'win32', fn)).resolves.toBeUndefined();
-    expect(callCount()).toBe(2);
+    const { fn, callCount } = mockRename(eperm, 10);
+    const delays: number[] = [];
+    const sleepSpy = async (ms: number): Promise<void> => { delays.push(ms); };
+
+    // Suppress the single retry-log line emitted on attempt 0.
+    const spy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      await expect(renameWithRetry('a', 'b', 10, 'win32', fn, sleepSpy)).resolves.toBeUndefined();
+    } finally { spy.mockRestore(); }
+    expect(delays).toEqual([10, 20, 40, 80, 160, 320, 640, 1280, 2560, 5000]);
+    expect(callCount()).toBe(11);
   });
 });
 
@@ -284,6 +368,10 @@ describe('renameWithRetry', () => {
 // ---------------------------------------------------------------------------
 
 describe('renameWithRetrySync', () => {
+  // Suppress retry-log stderr noise across all tests in this suite.
+  beforeEach(() => { vi.spyOn(process.stderr, 'write').mockReturnValue(true); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
   function mockRenameSync(
     err: Error,
     failTimes: number,
@@ -361,12 +449,16 @@ describe('renameWithRetrySync', () => {
 // ---------------------------------------------------------------------------
 // atomicWriteFileAsync — end-to-end wiring: routes through renameWithRetry
 //
-// This test injects a rename that throws EPERM once on the simulated win32
+// These tests inject a rename that throws EPERM once on the simulated win32
 // platform to prove that atomicWriteFileAsync uses renameWithRetry rather than
 // a bare rename call.  Because renameWithRetry accepts injectable params, and
-// atomicWriteFileAsync calls renameWithRetry directly, we verify the E2E
-// contract by checking that a transient EPERM on "win32" is recovered without
-// corrupting the destination.
+// atomicWriteFileAsync forwards _renameFn to renameWithRetry, we verify the
+// E2E contract by checking that a transient EPERM on "win32" is recovered
+// without corrupting the destination.
+//
+// Fix for #2819: atomicWriteFileAsync now accepts an optional `_renameFn`
+// parameter that threads into renameWithRetry, making the retry path testable
+// without relying on real filesystem concurrency (which is inherently flaky).
 // ---------------------------------------------------------------------------
 
 describe('atomicWriteFileAsync — E2E wiring through renameWithRetry', () => {
@@ -374,10 +466,12 @@ describe('atomicWriteFileAsync — E2E wiring through renameWithRetry', () => {
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'afk-e2e-'));
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
   });
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
+    vi.restoreAllMocks();
   });
 
   it('atomicWriteFileAsync resolves after one transient EPERM via renameWithRetry', async () => {
@@ -403,6 +497,43 @@ describe('atomicWriteFileAsync — E2E wiring through renameWithRetry', () => {
     await renameWithRetry(tmpPath, dest, 5, 'win32', injectFn);
     expect(renameCalls).toBe(2);
     expect(readFileSync(dest, 'utf-8')).toBe('e2e-content');
+  });
+
+  it('atomicWriteFileAsync retries a simulated EPERM through its own _renameFn injectable (fix for #2819)', async () => {
+    // Root cause of #2819: concurrent same-file writers on Windows can each
+    // get EPERM when the winning rename lands just before them. This test
+    // exercises the FULL code path — atomicWriteFileAsync → renameWithRetry
+    // retry loop — without relying on real filesystem concurrency (which is
+    // flaky by nature). The injectable _renameFn simulates one transient EPERM
+    // then succeeds, proving the retry survives end-to-end.
+    const dest = join(dir, 'issue-2819.json');
+    const eperm = Object.assign(new Error('EPERM'), { code: 'EPERM' });
+    let renameCalls = 0;
+    const injectFn = async (from: string, to: string): Promise<void> => {
+      renameCalls++;
+      if (renameCalls === 1) throw eperm;
+      const { rename: realRename } = await import('node:fs/promises');
+      await realRename(from, to);
+    };
+    // Drive through atomicWriteFileAsync with "win32" platform injected via
+    // renameWithRetry's _platform default — but here we pass renameFn through
+    // atomicWriteFileAsync's _testInternals object. The function must thread
+    // it into renameWithRetry; if it uses a bare rename instead the first call
+    // would throw and the test fails.
+    // Pass 'win32' as the platform injectable so the retry path fires on all
+    // host OSes (including macOS/Linux in CI) — repo rule R4: no platform skips.
+    const internals: _AtomicWriteAsyncTestInternals = { renameFn: injectFn, platform: 'win32' };
+    const result = await atomicWriteFileAsync(
+      dest, JSON.stringify({ writer: 1 }), {}, internals,
+    );
+    expect(result).toBe(true);
+    expect(renameCalls).toBe(2); // First call threw EPERM, second succeeded.
+    expect(existsSync(dest)).toBe(true);
+    const parsed = JSON.parse(readFileSync(dest, 'utf-8')) as { writer: number };
+    expect(parsed.writer).toBe(1);
+    // Temp file must be cleaned up by atomicWriteFileAsync on success.
+    const leftovers = readdirSync(dir).filter((f: string) => f.startsWith('.tmp-'));
+    expect(leftovers).toHaveLength(0);
   });
 });
 

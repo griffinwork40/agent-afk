@@ -14,9 +14,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import chalk from 'chalk';
 import { highlightCode } from './syntax-highlight.js';
 import { applyTheme } from './theme.js';
+import { stripAnsi } from './display.js';
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
-const stripAnsi = (s: string): string => s.replace(ANSI_RE, '');
 
 describe('highlightCode', () => {
   let originalLevel: typeof chalk.level;

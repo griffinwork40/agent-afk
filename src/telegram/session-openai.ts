@@ -18,7 +18,7 @@ import type { TelegramSessionBuildContext } from './session-context.js';
 export async function buildOpenAiTelegramSession(
   ctx: TelegramSessionBuildContext,
 ): Promise<AgentSession> {
-  const { sessionConfig, config, mcpManager, workspaceStore } = ctx;
+  const { sessionConfig, config, mcpManager, workspaceStore, stateStore } = ctx;
 
   // OpenAI-compatible endpoint for this branch's own top-level session
   // (parity with the Anthropic branch's telegramOpenaiBaseUrl).
@@ -42,6 +42,7 @@ export async function buildOpenAiTelegramSession(
         composeExecutor,
         ...(mcpManager !== undefined ? { mcpManager } : {}),
         workspaceStore,
+        ...(stateStore !== undefined ? { stateStore } : {}),
       }),
     // OpenAI branch: provider-specific config is only `openaiBaseUrl`.
     // Sets config.openaiBaseUrl -> effectiveBaseURL (openai-compatible/index.ts)

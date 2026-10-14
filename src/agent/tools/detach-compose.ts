@@ -37,6 +37,7 @@
  */
 
 import type { DetachableToolRegistry, DetachToken, DetachedToolResult } from './detach-registry.js';
+import { partialNodeFlag } from './compose-executor.partial.js';
 
 /**
  * Maximum nodes to list in the detach label before collapsing to "N nodes".
@@ -61,10 +62,12 @@ export function composeDetachLabel(nodeIds: readonly string[]): string {
  * Build the {@link DetachedToolResult} delivered to the registry's 'settled'
  * notifier once the detached DAG actually finishes.
  *
- * Status is 'failed' when the session was aborted or the DAG itself threw;
- * 'completed' otherwise (even when individual nodes failed — compose already
- * surfaces node failures in its output, so the tool result is only an error
- * when the DAG threw entirely).
+ * Status is 'failed' when `failed` is true — meaning either the DAG threw
+ * entirely (caught by the `.catch` continuation), the session was aborted, or
+ * one or more DAG nodes failed. This mirrors the non-detached path, which
+ * returns `isError: result.failed.length > 0` (see compose-executor.ts). Node
+ * failures are surfaced in the formatted output text; the status flag signals
+ * the same "at least one node did not succeed" condition to downstream consumers.
  *
  * @param toolUseId   Stable id from the provider's tool-use block.
  * @param label       Human-readable summary (from {@link composeDetachLabel}).
@@ -203,6 +206,8 @@ export async function raceComposeDetach(
   // this second one resolves the race leg without coupling to that callback.
   const detachPromise = new Promise<ToolResult>((resolve) => {
     token.detachSignal.addEventListener('abort', () => {
+      // The abort event itself establishes detachment; shouldDetach() would
+      // only recheck this signal's already-true aborted flag.
       resolve(token.detachResult(label));
     }, { once: true });
   });
@@ -221,7 +226,14 @@ export async function raceComposeDetach(
         const merged = attachmentErrors.length > 0
           ? { ...r, failed: [...attachmentErrors, ...r.failed] } : r;
         const failed = merged.failed.length > 0;
-        token.deliver(buildComposeDelivery(toolUseId, label, p.formatResult(merged), failed, startedAt));
+        // Carry the soft-deadline partial flag (#2970) so the detached
+        // delivery matches the non-detached tool result. Note: no production
+        // subscriber consumes the registry's 'settled' event yet, so this flag
+        // reaches the sidecar only once detached delivery is wired.
+        token.deliver({
+          ...buildComposeDelivery(toolUseId, label, p.formatResult(merged), failed, startedAt),
+          ...partialNodeFlag(merged.partial),
+        });
       })
       .catch((err: unknown) => {
         const msg = errorMessage(err);

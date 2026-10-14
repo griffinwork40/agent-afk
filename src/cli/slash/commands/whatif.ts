@@ -33,6 +33,7 @@ import {
 import {
   resolveSpec,
   buildWhatifDeps,
+  buildWhatifRunOptions,
   readDirNames,
 } from '../../../whatif/surface.js';
 import type { SlashCommand, SlashContext } from '../types.js';
@@ -46,6 +47,7 @@ import type {
   WhatifMdeError as WhatifMdeErrorType,
 } from '../../../whatif/run.js';
 import { decideMdeAction } from '../../commands/whatif.mde-handler.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 function isBudgetError(err: unknown): err is WhatifBudgetErrorType {
   return (
@@ -150,7 +152,7 @@ async function handleWhatif(ctx: SlashContext, args: string): Promise<void> {
       plugins,
     });
   } catch (err) {
-    ctx.out.error(err instanceof Error ? err.message : String(err));
+    ctx.out.error(errorMessage(err));
     return;
   } finally {
     ctx.setSoftStopHandler?.(null);
@@ -175,35 +177,18 @@ async function handleWhatif(ctx: SlashContext, args: string): Promise<void> {
   // Register stop handler for the run phase.
   ctx.setSoftStopHandler?.(() => ac.abort());
 
+  const runOpts = buildWhatifRunOptions(parsed, {
+    spec,
+    realHome,
+    realCwd,
+    agentModel,
+    analystModel,
+  });
+
   let report: WhatifReport;
   try {
     const { runWhatif } = await import('../../../whatif/run.js');
-    report = await runWhatif(
-      {
-        spec,
-        realHome,
-        realCwd,
-        agentModel,
-        analystModel,
-        verify: parsed.options.verify,
-        turns: parsed.options.turns,
-        samples: parsed.options.samples,
-        maxUsd: parsed.options.maxUsd,
-        judge: parsed.options.judge,
-        concurrency: parsed.options.concurrency,
-        maxTurns: parsed.options.maxTurns,
-        episodeTimeoutMs: parsed.options.episodeTimeoutMs,
-        keepSandboxes: parsed.options.keepSandboxes,
-        // --force bypasses the MDE underpowered gate; the CLI path forwards it
-        // too (src/cli/commands/whatif.ts). Omitting it here made the gate
-        // unbypassable from the REPL.
-        force: parsed.force,
-        ...(parsed.options.probes !== undefined ? { probes: parsed.options.probes } : {}),
-        ...(parsed.options.maxPredictions !== undefined ? { maxPredictions: parsed.options.maxPredictions } : {}),
-        ...(parsed.options.noBaselineSample ? { noBaselineSample: true } : {}),
-      },
-      deps,
-    );
+    report = await runWhatif(runOpts, deps);
   } catch (err) {
     ctx.setSoftStopHandler?.(null);
 
@@ -226,7 +211,7 @@ async function handleWhatif(ctx: SlashContext, args: string): Promise<void> {
       return;
     }
 
-    ctx.out.error(err instanceof Error ? err.message : String(err));
+    ctx.out.error(errorMessage(err));
     return;
   }
 
@@ -287,6 +272,7 @@ export const whatifCmd: SlashCommand = {
     '--max-turns',
     '--timeout',
     '--keep-sandboxes',
+    '--predict',
     '--probes',
     '--max-predictions',
     '--no-baseline-sample',

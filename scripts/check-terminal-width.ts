@@ -39,6 +39,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { groupViolationsByFile, isProdTs, walkSourceFiles } from './lib/walk-source-files.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -76,16 +77,7 @@ interface Violation {
 const RAW_WIDTH_RE = /\bprocess\.std(?:out|err)\.columns\b/g;
 
 function walk(dir: string, out: string[]): void {
-  if (!fs.existsSync(dir)) return;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name.startsWith('.')) continue;
-      walk(full, out);
-    } else if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) {
-      out.push(full);
-    }
-  }
+  walkSourceFiles(dir, (absPath) => isProdTs(absPath), out);
 }
 
 function isAllowedFile(relPath: string): boolean {
@@ -152,13 +144,7 @@ function main(): void {
   }
 
   console.error(`\n✗ check-terminal-width: ${allViolations.length} raw terminal-width read(s) outside the central helper:\n`);
-  const byFile = new Map<string, Violation[]>();
-  for (const v of allViolations) {
-    const existing = byFile.get(v.file);
-    if (existing) existing.push(v);
-    else byFile.set(v.file, [v]);
-  }
-  for (const [file, vs] of [...byFile.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [file, vs] of groupViolationsByFile(allViolations)) {
     console.error(`  ${file}`);
     for (const v of vs) {
       console.error(`    L${v.line}: ${v.match}`);

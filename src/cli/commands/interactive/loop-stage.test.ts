@@ -257,7 +257,7 @@ describe('LoopStageBar', () => {
     resizeUnsub = vi.fn();
     vi.spyOn(ResizeBus, 'subscribe').mockImplementation((fn: () => void) => {
       resizeCb = fn;
-      return resizeUnsub;
+      return resizeUnsub as unknown as () => void;
     });
   });
 
@@ -432,6 +432,169 @@ describe('LoopStageBar — AFK_PLAIN_OUTPUT full render opt-out', () => {
     bar.start();
     expect(rowHandler).toHaveBeenCalledWith(1);
     expect(joinWrites(stream)).not.toBe('');
+    bar.stop();
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// LoopStageBar — idle GROW footer ghost (defect 2)
+//
+// When a tmux pane grows while the compositor is idle (between turns),
+// LoopStageBar must erase the old rail row before painting at the new
+// (lower) position. Without a ResizeBus.subscribeImmediate snapshot of the
+// pre-resize row, the old copy stays on screen as a ghost above the new one.
+//
+// Fix: LoopStageBar registers a subscribeImmediate callback that snapshots
+// `lastPaintedRow` → `preResizePaintedRow`. The debounced subscriber's
+// repaint() then erases `preResizePaintedRow` before writing the new row.
+//
+// Covers:
+//   G1 — subscribeImmediate is registered on start() and unregistered on stop().
+//   G2 — on GROW, the old rail row is erased (EL+CUP) before the new one is painted.
+//   G3 — on SHRINK, no attempt to erase a stale row below the new viewport.
+//   G4 — snapshot is cleared after consumption (idempotent across two consecutive GROWs).
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('LoopStageBar — idle GROW footer ghost erase', () => {
+  let resizeCb: (() => void) | null;
+  let resizeImmCb: (() => void) | null;
+  let resizeUnsub: ReturnType<typeof vi.fn>;
+  let resizeImmUnsub: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    resizeCb = null;
+    resizeImmCb = null;
+    resizeUnsub = vi.fn();
+    resizeImmUnsub = vi.fn();
+    vi.spyOn(ResizeBus, 'subscribe').mockImplementation((fn: () => void) => {
+      resizeCb = fn;
+      return resizeUnsub as unknown as () => void;
+    });
+    vi.spyOn(ResizeBus, 'subscribeImmediate').mockImplementation((fn: () => void) => {
+      resizeImmCb = fn;
+      return resizeImmUnsub as unknown as () => void;
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('G1: subscribeImmediate is registered on start() and unregistered on stop()', () => {
+    const stream = makeMockStream(24, 80);
+    const bar = new LoopStageBar({ getExtraRows: () => 1, stream });
+    bar.start();
+    expect(resizeImmCb, 'subscribeImmediate callback must be registered on start()').not.toBeNull();
+    bar.stop();
+    expect(resizeImmUnsub, 'subscribeImmediate must be unsubscribed on stop()').toHaveBeenCalledOnce();
+  });
+
+  it('G2: on GROW, the old rail row is erased before the new row is painted', () => {
+    // pane: 24 rows, extraRows=1 → rail at row 23 initially.
+    let rows = 24;
+    const stream = {
+      columns: 80,
+      get rows() { return rows; },
+      isTTY: true,
+      write: vi.fn(),
+    } as unknown as NodeJS.WriteStream;
+
+    let extraRows = 1;
+    const bar = new LoopStageBar({ getExtraRows: () => extraRows, stream });
+    bar.start();
+    // Initial paint at row 23 (24 - 1 = 23).
+    (stream.write as ReturnType<typeof vi.fn>).mockClear();
+
+    // SIGWINCH immediate fires (resize): snapshot the old row.
+    // At this point, stream.rows might already reflect new height in a real
+    // scenario, but the immediate channel fires synchronously at resize time
+    // before any repaint, so lastPaintedRow still holds the OLD position.
+    // Simulate by calling the immediate callback now.
+    expect(resizeImmCb, 'immediate callback must be registered').not.toBeNull();
+    resizeImmCb!();
+
+    // Now simulate the debounced resize callback (GROW: rows 24→50).
+    rows = 50;
+    // With GROW, extraRows stays at 1. New paint row = 49 (50 - 1 = 49).
+    resizeCb!();
+
+    const out = joinWrites(stream);
+    const rowsWritten = cupRows(out);
+
+    // The old row (23) must appear in the output as an erase target
+    // (CUP to row 23 followed by EL or similar).
+    expect(out, 'old rail row 23 must be erased in the resize repaint').toContain('\x1b[23;1H');
+    // The erase at row 23 must be followed by a clear-line sequence.
+    expect(out, 'old rail row 23 must be cleared (EL)').toMatch(/\x1b\[23;1H\x1b\[2K/);
+
+    // The new rail must be painted at row 49.
+    expect(rowsWritten, 'new rail must be painted at row 49').toContain(49);
+
+    bar.stop();
+  });
+
+  it('G3: on SHRINK, no stale-row erase for a row outside the new viewport', () => {
+    // pane: 50 rows, rail at row 49. Shrink to 24.
+    let rows = 50;
+    const stream = {
+      columns: 80,
+      get rows() { return rows; },
+      isTTY: true,
+      write: vi.fn(),
+    } as unknown as NodeJS.WriteStream;
+
+    const bar = new LoopStageBar({ getExtraRows: () => 1, stream });
+    bar.start();
+    (stream.write as ReturnType<typeof vi.fn>).mockClear();
+
+    // Immediate callback: snapshot row 49.
+    resizeImmCb!();
+
+    // Debounced callback fires after SHRINK: rows=24, new rail at row 23.
+    rows = 24;
+    resizeCb!();
+
+    const out = joinWrites(stream);
+    // Row 49 is now OUTSIDE the 24-row viewport. It MUST NOT be addressed
+    // (addressing it would scroll the terminal unexpectedly).
+    expect(out, 'row 49 must not be addressed after shrink to 24 rows').not.toContain('\x1b[49;1H');
+    // New rail must be at row 23.
+    expect(cupRows(out), 'new rail must be at row 23').toContain(23);
+
+    bar.stop();
+  });
+
+  it('G4: pre-resize snapshot is cleared after consumption (second GROW does not double-erase)', () => {
+    let rows = 24;
+    const stream = {
+      columns: 80,
+      get rows() { return rows; },
+      isTTY: true,
+      write: vi.fn(),
+    } as unknown as NodeJS.WriteStream;
+
+    const bar = new LoopStageBar({ getExtraRows: () => 1, stream });
+    bar.start();
+    (stream.write as ReturnType<typeof vi.fn>).mockClear();
+
+    // First GROW: 24→50, rail moves from 23 to 49.
+    resizeImmCb!();
+    rows = 50;
+    resizeCb!();
+    (stream.write as ReturnType<typeof vi.fn>).mockClear();
+
+    // Second GROW: 50→70, rail moves from 49 to 69.
+    resizeImmCb!();
+    rows = 70;
+    resizeCb!();
+
+    const out = joinWrites(stream);
+    // Row 23 must NOT appear (snapshot was consumed on first resize).
+    expect(out, 'row 23 from first GROW must not appear on second GROW').not.toContain('\x1b[23;1H');
+    // Row 49 (previous rail) must be erased.
+    expect(out, 'old rail row 49 must be erased on second GROW').toContain('\x1b[49;1H');
+    expect(out).toMatch(/\x1b\[49;1H\x1b\[2K/);
+
     bar.stop();
   });
 });

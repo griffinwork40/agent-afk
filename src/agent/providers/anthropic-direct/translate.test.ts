@@ -14,6 +14,7 @@ import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
 import { translateMessageStream } from './translate.js';
 import type { TranslateOutput } from './types.js';
 import { _resetWarnCountForTest } from './input-transformations.js';
+import { InMemoryTraceWriter } from '../../trace/writer.js';
 
 async function* fromArray<T>(arr: T[]): AsyncIterable<T> {
   for (const x of arr) yield x;
@@ -1212,5 +1213,196 @@ describe('translateMessageStream: input_transformations (thinking drop_block)', 
     // An 11th stream should produce no warn (cap already exhausted)
     await collect(translateMessageStream(fromArray(makeBothFramesStream()), { sessionId: SESSION_ID }));
     expect(warnSpy).toHaveBeenCalledTimes(10);
+  });
+
+  // ── Finding 2 (observability): thinking_block_dropped trace event ────────
+  // Drops must be emitted as a thinking_block_dropped session_phase event in
+  // addition to the bounded console.warn. The trace event fires for every
+  // drop-bearing frame (message_start and message_delta independently), so the
+  // witness layer records per-frame droppedCount. Console-warn dedup (alreadyWarned)
+  // is preserved — only 1 console line per stream — but trace events are per-frame.
+
+  it('emits thinking_block_dropped session_phase trace event when traceWriter is supplied', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const writer = new InMemoryTraceWriter();
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_trace_test',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'reply'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID, traceWriter: writer }));
+    // Give the async void emitSessionPhase a tick to settle.
+    await new Promise((r) => setTimeout(r, 0));
+
+    const phaseEvents = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'thinking_block_dropped',
+    );
+    expect(phaseEvents).toHaveLength(1);
+    const first = phaseEvents[0];
+    const metadata = first?.kind === 'session_phase' ? first.payload.metadata : undefined;
+    expect(metadata?.['droppedCount']).toBe(1);
+    expect(metadata?.['source']).toBe('message_start');
+  });
+
+  it('does NOT emit thinking_block_dropped trace event when no traceWriter is supplied', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_no_trace',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'reply'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    // No traceWriter — should warn to console but NOT throw; trace event cannot fire.
+    await expect(
+      collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID })),
+    ).resolves.not.toThrow();
+  });
+
+  it('emits one thinking_block_dropped trace event per drop-bearing frame (both message_start and message_delta)', async () => {
+    // After the fix: trace events are emitted per-frame (not per-stream), while
+    // console-warn dedup (alreadyWarned) is preserved. A stream where both
+    // message_start and message_delta carry drops produces 2 trace events
+    // (source: 'message_start' and source: 'message_delta') but only 1 console-warn.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const writer = new InMemoryTraceWriter();
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_dedup_trace',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'x'),
+      blockStop(0),
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { output_tokens: 5, cache_creation_input_tokens: null, cache_read_input_tokens: null, input_tokens: null, server_tool_use: null },
+        // Server-side fallback also carries drops in message_delta.
+        input_transformations: [
+          { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+        ],
+      } as unknown as RawMessageStreamEvent,
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID, traceWriter: writer }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const phaseEvents = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'thinking_block_dropped',
+    );
+    // Trace is emitted per frame: 1 for message_start + 1 for message_delta = 2 total.
+    expect(phaseEvents).toHaveLength(2);
+    const meta0 = phaseEvents[0]?.kind === 'session_phase' ? phaseEvents[0].payload.metadata : undefined;
+    const meta1 = phaseEvents[1]?.kind === 'session_phase' ? phaseEvents[1].payload.metadata : undefined;
+    expect(meta0?.['source']).toBe('message_start');
+    expect(meta1?.['source']).toBe('message_delta');
+    // Console-warn dedup is preserved: only 1 warn emitted even though 2 frames carried drops.
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('emits thinking_block_dropped trace with source: message_delta when only message_delta carries drops', async () => {
+    // Regression test for the delta-only drop path (server-side fallback scenario):
+    // message_start has no input_transformations, but message_delta does.
+    // Before the fix, the alreadyWarned=false path called warnOnDroppedThinkingBlocks
+    // normally, but if message_start had already been processed (alreadyWarned=true),
+    // the trace event was never emitted for the delta frame.
+    // This test exercises the delta-only variant: message_start has NO drops, so
+    // alreadyWarned is false when message_delta is processed, verifying the normal path.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const writer = new InMemoryTraceWriter();
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_delta_only',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          // No input_transformations on message_start — drops arrive only on delta.
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'reply'),
+      blockStop(0),
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { output_tokens: 5, cache_creation_input_tokens: null, cache_read_input_tokens: null, input_tokens: null, server_tool_use: null },
+        input_transformations: [
+          { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'model_binding_mismatch' },
+        ],
+      } as unknown as RawMessageStreamEvent,
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID, traceWriter: writer }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const phaseEvents = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'thinking_block_dropped',
+    );
+    // Exactly 1 trace event from the message_delta frame.
+    expect(phaseEvents).toHaveLength(1);
+    const meta = phaseEvents[0]?.kind === 'session_phase' ? phaseEvents[0].payload.metadata : undefined;
+    expect(meta?.['source']).toBe('message_delta');
+    expect(meta?.['droppedCount']).toBe(1);
   });
 });

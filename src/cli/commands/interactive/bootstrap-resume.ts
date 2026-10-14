@@ -32,7 +32,7 @@ export function createResumeRequest(
   sessionRef: SessionRef,
   sharedDeps: ReturnType<typeof buildSharedDeps>,
   infra: Pick<ReturnType<typeof createBootstrapInfra>,
-    'subagentExecutor' | 'skillExecutor' | 'composeExecutor' | 'rootManager' | 'backgroundRegistry'>,
+    'subagentExecutor' | 'skillExecutor' | 'composeExecutor' | 'rootManager' | 'backgroundRegistry' | 'processJobs'>,
   clearTrustedSkills: () => void,
   maxTurns: number,
 ): (target: ResolvedResumeTarget) => ReturnType<typeof performResumeSwap> {
@@ -53,7 +53,7 @@ export function createResumeRequest(
         // outgoing writer is sealed on close; all live getters must move now.
         rebindResumeTraceWriter(ctx, pendingTraceWriter, [
           infra.subagentExecutor, infra.skillExecutor, infra.composeExecutor,
-          infra.rootManager, infra.backgroundRegistry,
+          infra.rootManager, infra.backgroundRegistry, infra.processJobs,
         ]);
         // Re-install the peer boundary callback on the resumed session so
         // mid-turn delivery works and old admission-queue entries are cleared.

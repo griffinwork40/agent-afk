@@ -24,6 +24,7 @@ import {
   TOOL_USE_LOOP_CAPPED,
   resolveMaxToolIterations,
   shouldWindDown,
+  roundDeliveryNotice,
 } from '../../shared/tool-loop-cap.js';
 import {
   SOFT_DEADLINE_WIND_DOWN,
@@ -34,6 +35,8 @@ import { supportsVision } from '../../../model-capabilities.js';
 import { usageFromState, finalizedToolCalls, type StreamState } from '../translate.js';
 import { checkContextOverflow } from './context-overflow.js';
 import { roundContextWindowTokens } from './turn-driver.context-window.js';
+import { windDownForContextPressure, canSynthesizeUnderPressure } from './context-pressure.js';
+import { CONTEXT_PRESSURE_WIND_DOWN } from '../../shared/context-pressure.js';
 import {
   runIteration,
   finishTurn,
@@ -46,6 +49,7 @@ import { runIterationWithQuotaLimitPause } from './usage-limit-tier.js';
 import type { ToolResult } from '../../anthropic-direct/types.js';
 import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 import { dispatchAndAppendToolCalls } from './dispatch-append.js';
+import { buildVitalsNote, type VitalsInput } from '../../shared/vitals.js';
 import type { ToolDispatcher } from '../../anthropic-direct/tool-dispatcher.js';
 import type { TraceSink } from '../../../trace/index.js';
 import type { OpenAIMessage } from '../messages.js';
@@ -145,7 +149,7 @@ function makeCompositeIteration(
   ctx: TurnDriverContext,
   controller: AbortController,
   vision: boolean,
-  windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null,
+  windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | typeof CONTEXT_PRESSURE_WIND_DOWN | null,
 ): ReturnType<typeof runIterationWithQuotaLimitPause> {
   return runIterationWithQuotaLimitPause(
     () => runIterationWithOverloadPause(
@@ -177,7 +181,11 @@ async function* dispatchAndAppend(
   state: StreamState,
   signal: AbortSignal,
   vision: boolean,
+  vitals: Pick<VitalsInput, 'turnStartedAt' | 'softDeadlineMs' | 'contextTokens'>,
 ): AsyncGenerator<ProviderEvent, ToolResult | undefined> {
+  // Subscription usage stays off here: Codex windows refresh on demand only, so
+  // a per-round reading would usually be stale (docs/usage-awareness.md).
+  const vitalsNote = buildVitalsNote({ ...vitals, model: ctx.currentModel, subagentId: ctx.opts.config.subagentId });
   const denialTrip = yield* dispatchAndAppendToolCalls({
     state,
     signal,
@@ -187,9 +195,25 @@ async function* dispatchAndAppend(
     priorTurns: ctx.priorTurns,
     sessionId: ctx.initSessionId,
     subagentId: ctx.opts.config.subagentId,
+    vitalsNote,
   });
   ctx.journal.sync(ctx.priorTurns); // commit point: tool round (full results) on disk
   return denialTrip;
+}
+
+/**
+ * Inject a round-cap delivery notice into the last tool-result message so the
+ * model sees the budget reminder before its next reply.  Extracted from
+ * `runTurnInner` to keep it under the 200-line function ceiling.
+ */
+function injectRoundCapNotice(priorTurns: OpenAIMessage[], round: number, maxIterations: number): void {
+  const notice = roundDeliveryNotice(round, maxIterations);
+  if (notice) {
+    const lastTool = [...priorTurns].reverse().find(m => m.role === 'tool');
+    if (lastTool && typeof lastTool.content === 'string') {
+      lastTool.content += '\n\n' + notice;
+    }
+  }
 }
 
 /**
@@ -222,6 +246,7 @@ export async function* runTurnInner(
     ctx.currentModel,
     ctx.opts.config.maxOutputTokens,
     ctx.opts.config.model ?? ctx.currentModel,
+    ctx.opts.auth.source === 'chatgpt-oauth',
   );
   if (overflowErr) {
     ctx.abort.clear(controller);
@@ -257,9 +282,16 @@ export async function* runTurnInner(
     let finalAssistantText = '';
     let finalReasoningText = '';
     let finalReasoningField: 'reasoning_content' | 'reasoning' = 'reasoning_content';
-    let windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null = null;
+    let windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | typeof CONTEXT_PRESSURE_WIND_DOWN | null = null;
     let round = 0;
     let toolCallCount = 0;
+    // Invariant: tool calls that were being streamed when the output cap cut the
+    // round off. `isToolCallStop` returns false for any truncation finish reason,
+    // so a call truncated mid-arguments sets needsToolDispatch=false and is
+    // discarded in-memory — it never reaches `dispatchAndAppend`, which is the
+    // ONLY site that builds an assistant `tool_calls` message. That silent drop
+    // is correct (a half-built call would poison history with an incomplete id).
+    // The names are captured here for `emitTurnTerminal`'s truncation notice.
     let droppedToolNames: string[] = [];
 
     // Inner tool-use loop: keep driving the model as long as it emits tool calls.
@@ -302,7 +334,9 @@ export async function* runTurnInner(
         break;
       }
 
-      const denialTrip = yield* dispatchAndAppend(ctx, result.state, controller.signal, vision);
+      const appendedAt = ctx.priorTurns.length;
+      const vitals = { turnStartedAt: turnStartTime, softDeadlineMs, contextTokens: accumulatedUsage.contextWindowTokens };
+      const denialTrip = yield* dispatchAndAppend(ctx, result.state, controller.signal, vision, vitals);
       if (denialTrip) {
         ctx.abort.clear(controller);
         yield { type: 'error', error: new DenialCircuitBreakerError(denialTrip.content) };
@@ -323,6 +357,16 @@ export async function* runTurnInner(
         return;
       }
 
+      if (windDownForContextPressure(ctx, appendedAt)) {
+        windDownReason = CONTEXT_PRESSURE_WIND_DOWN;
+        if (!canSynthesizeUnderPressure(ctx, appendedAt)) {
+          finalAssistantText ||= 'Context capacity exhausted. Partial tool outputs are journaled; resume from saved work.';
+          break;
+        }
+        continue;
+      }
+
+      injectRoundCapNotice(ctx.priorTurns, round, maxIterations);
       const roundsSpent = shouldWindDown(round, maxIterations);
       const timeSpent = softDeadlineExpired(turnStartTime, softDeadlineMs);
       if (roundsSpent || timeSpent) {
@@ -398,9 +442,20 @@ async function* emitTurnTerminal(
   finalAssistantText: string,
   droppedToolNames: string[],
   accumulatedUsage: ProviderUsage,
-  windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null,
+  windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | typeof CONTEXT_PRESSURE_WIND_DOWN | null,
   turnStartTime: number,
 ): AsyncGenerator<ProviderEvent> {
+  // Invariant: the truncation notice is APPENDED to the single terminal
+  // assistant.message, never yielded as a second one — last-wins consumers
+  // (the non-streaming sendMessage() path, a subagent's final-message
+  // capture) keep only the LAST assistant message of a turn, so a second
+  // event would discard the model's real partial answer and surface only the
+  // warning. Same rule as the anthropic-direct terminal path. Deliberately
+  // applied AFTER the priorTurns push: the notice is operator-facing and
+  // must not enter conversation history.
+  //
+  // Issue #970: textless truncations use the `notice` channel instead of
+  // silently dropping. See the analogous logic in the anthropic-direct loop.
   const truncationText = isTruncationStopReason(accumulatedUsage.stopReason)
     ? truncationNotice(droppedToolNames, accumulatedUsage.stopReason, {
         canIncreaseOutputLimit: !(

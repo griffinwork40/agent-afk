@@ -5,9 +5,12 @@
  * stamps a `toolInputRaw` field onto each tool-use event so facet derivation
  * (derive.ts) can extract the exact tool-input fields the summarized `input`
  * string loses. The whitelist holds ONLY non-sensitive scalar identifiers:
- *   - file_path  → read/write/edit evidence pointers
- *   - name       → skill label
- *   - id_prefix  → agent (subagent) label
+ *   - file_path      → read/write/edit evidence pointers
+ *   - name           → skill label
+ *   - id_prefix      → agent (subagent) label
+ *   - dry_run        → patch_apply: distinguish dry-run previews from real writes
+ *   - changes_paths  → patch_apply: bounded path-only projection of `changes[].path`
+ *                       so evidence-path collection works in production (#3182)
  *
  * `command` is deliberately NOT whitelisted. A bash command is the single
  * highest inline-secret risk of any tool input (`export TOKEN=…`,
@@ -35,7 +38,7 @@
  */
 
 /** The exact non-sensitive scalar fields facet derivation reads from a tool input. */
-export const RAW_INPUT_FIELDS = ['file_path', 'name', 'id_prefix'] as const;
+export const RAW_INPUT_FIELDS = ['file_path', 'name', 'id_prefix', 'dry_run'] as const;
 
 /** Per-field character cap — a pathologically large field value is truncated. */
 export const RAW_INPUT_FIELD_CAP = 4096;
@@ -46,6 +49,9 @@ export const RAW_INPUT_FIELD_CAP = 4096;
  * object or carries none of the relevant fields, so callers store nothing
  * rather than an empty `{}`. String fields are capped at RAW_INPUT_FIELD_CAP.
  */
+/** Maximum number of patch_apply change paths to persist. */
+const CHANGES_PATHS_CAP = 50;
+
 export function extractRawToolInput(input: unknown): string | undefined {
   if (!input || typeof input !== 'object') return undefined;
   const obj = input as Record<string, unknown>;
@@ -58,5 +64,23 @@ export function extractRawToolInput(input: unknown): string | undefined {
         ? value.slice(0, RAW_INPUT_FIELD_CAP)
         : value;
   }
+
+  // patch_apply: persist a bounded path-only projection of `changes[].path`
+  // so evidence-path collection in derive.aggregate.ts works against real
+  // sidecar data, not just hand-constructed test inputs (#3182).
+  const changes = obj['changes'];
+  if (Array.isArray(changes)) {
+    const paths: string[] = [];
+    for (const ch of changes) {
+      if (ch && typeof ch === 'object') {
+        const p = (ch as Record<string, unknown>)['path'];
+        if (typeof p === 'string' && paths.length < CHANGES_PATHS_CAP) {
+          paths.push(p.length > RAW_INPUT_FIELD_CAP ? p.slice(0, RAW_INPUT_FIELD_CAP) : p);
+        }
+      }
+    }
+    if (paths.length > 0) picked['changes_paths'] = paths;
+  }
+
   return Object.keys(picked).length > 0 ? JSON.stringify(picked) : undefined;
 }

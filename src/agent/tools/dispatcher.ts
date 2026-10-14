@@ -26,7 +26,7 @@ import type { ComposeExecutor } from './compose-executor.js';
 import type { ToolHandler, ToolHandlerContext, ConcurrencyClassifier } from './types.js';
 import type { ToolActivityReporter } from '../providers/shared/tool-activity.js';
 import type { SpawnedPidRegistry } from './handlers/pid-registry.js';
-import type { ToolPermissionConfig } from './permissions.js';
+import { checkToolPermission, type ToolPermissionConfig } from './permissions.js';
 import type { CanUseTool } from '../types/sdk-types.js';
 import { PathGrantManager, type GrantSnapshot, type GrantManager } from './grant-manager.js';
 
@@ -36,7 +36,9 @@ import { defaultConcurrencyClassifier } from './dispatch-batching.js';
 import type { SuspectedLoopWindow } from './suspected-loop-detector.js';
 import { RepeatFailureGuard } from './repeat-failure-guard.js';
 import { ToolHealthMonitor, applyToolHealth } from './tool-health-monitor.js';
+import { StrategyNudger, applyStrategyNudge } from './strategy-nudge.js';
 import { executeBatchImpl } from './dispatcher.execute-batch.js';
+import { PreToolContext } from './pre-tool-context.js';
 import {
   runPreDispatchGates as _runPreDispatchGates,
   resetDenialBreaker as _resetDenialBreaker,
@@ -54,6 +56,10 @@ import {
 import type { CoreExecDeps } from './dispatcher.core-exec.js';
 import { isYieldableTool, type UserAttention } from './user-yield.js';
 import { isDetachableTool, type DetachableToolRegistry } from './detach-bash.js';
+import type { ProcessJobRegistry } from '../shell-jobs/process-jobs.js';
+import { filterBackgroundToolDefs } from './process-job-tools.js';
+import { FileCheckpointWiring } from './dispatcher.file-checkpoint.js';
+import { isPeerToolBlocked } from './peer-tool-gate.js';
 
 // Re-exported for backward compatibility: external importers (dispatcher.test.ts,
 // schema-classification.test.ts) historically import this from './dispatcher.js'.
@@ -170,6 +176,12 @@ export interface SessionToolDispatcherOptions {
    */
   parentSessionId?: string;
   /**
+   * Root (depth-0) session id, inherited from {@link AgentConfig.rootSessionId}.
+   * Undefined for top-level (depth-0) sessions. Stamped on PostToolUse so
+   * child-attribution credits artifacts to the root record regardless of depth.
+   */
+  rootSessionId?: string;
+  /**
    * This fork's own subagent id, when the dispatcher belongs to a forked child.
    * Stamped onto every `hook_decision` this dispatcher emits so a block can be
    * ATTRIBUTED to the child that provoked it, mirroring what `tool_call`
@@ -182,10 +194,23 @@ export interface SessionToolDispatcherOptions {
    * onto every PreToolUse/PostToolUse context as `context.grantManager` so
    * path-scoped hooks resolve THIS session's live grants rather than a stale
    * process-global ref (#435/#514, retired in #528). Optional: test dispatchers
-   * that construct directly leave it unset and the hooks fail open (no grant
-   * manager → no containment prompt, handler resolveAndContain still enforces).
+   * that construct directly leave it unset; path-approval then fails open (no
+   * containment prompt, handler resolveAndContain still enforces) and the bash
+   * restriction hook treats the context as headless (unfiltered floor, #2302).
+   *
+   * Presence of a grant manager is NOT an "interactive surface" signal: both
+   * production providers wire it on every surface (daemon, `afk chat`, forks
+   * included). Use {@link isNonInteractive} for that.
    */
   sessionGrantManager?: GrantManager;
+  /**
+   * `isHeadlessSession(config)` of the owning session: no human can approve
+   * a prompt (`afk chat`, every daemon task including pull, forks by default). Injected
+   * onto every PreToolUse context as `context.nonInteractive` (only when true)
+   * so the bash-restriction hook applies its unfiltered headless floor even
+   * though a grant manager is wired (#2302). Default false.
+   */
+  isNonInteractive?: boolean;
   /** Witness-layer trace writer. When provided, every PreToolUse and
    *  PostToolUse dispatch records a `hook_decision` event. */
   traceWriter?: TraceSink;
@@ -259,6 +284,12 @@ export interface SessionToolDispatcherOptions {
    * that have no REPL to inject the result into.
    */
   detachRegistry?: DetachableToolRegistry;
+  /**
+   * Background process registry (`bash run_in_background`). Root interactive
+   * sessions only; handed to `bash` and to the background health/cancel tools
+   * for `proc-` ids. Never propagated to subagent children.
+   */
+  processJobs?: ProcessJobRegistry;
 }
 
 export class SessionToolDispatcher implements ToolDispatcher {
@@ -300,6 +331,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly _env: Record<string, string> | undefined;
   private readonly sessionId: string | undefined;
   private readonly parentSessionId: string | undefined;
+  private readonly rootSessionId: string | undefined;
   private readonly subagentId: string | undefined;
   /**
    * Provider that owns this dispatcher (implements GrantManager). Injected onto
@@ -307,6 +339,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * live grants. See {@link SessionToolDispatcherOptions.sessionGrantManager}.
    */
   private readonly sessionGrantManager: GrantManager | undefined;
+  /** See {@link SessionToolDispatcherOptions.isNonInteractive}. */
+  private readonly isNonInteractive: boolean;
   private readonly traceWriter: TraceSink | undefined;
   /** When true, mutating `bash` commands are blocked (read-only skill child). */
   private readonly readOnlyBash: boolean;
@@ -323,6 +357,14 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly userAttention: UserAttention | undefined;
   /** Detach registry for Ctrl+B backgrounding (#2542); handed to `DETACHABLE_TOOLS`. */
   private readonly detachRegistry: DetachableToolRegistry | undefined;
+  /** Background process registry; handed to `bash` and the background tools. */
+  private readonly processJobs: ProcessJobRegistry | undefined;
+  /**
+   * File-checkpoint wiring for the current user turn. Holds the per-turn
+   * {@link FileCheckpointRegistry} and provides the context-spread fragment.
+   * Providers call `.set()` on this directly; no wrapper method needed.
+   */
+  readonly fileCheckpointWiring = new FileCheckpointWiring();
   /** Live bash output tail reporter factory (issue #1506). */
   private readonly bashOutputTailReporter:
     | ((toolUseId: string) => (tail: string | undefined) => void)
@@ -357,6 +399,9 @@ export class SessionToolDispatcher implements ToolDispatcher {
    */
   private readonly toolHealthMonitor = new ToolHealthMonitor();
 
+  /** Advisory same-error strategy nudge; per dispatcher, see strategy-nudge.ts. */
+  private readonly strategyNudger = new StrategyNudger();
+
 
 
   /**
@@ -388,8 +433,10 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this._env = opts.env;
     this.sessionId = opts.sessionId;
     this.parentSessionId = opts.parentSessionId;
+    this.rootSessionId = opts.rootSessionId;
     this.subagentId = opts.subagentId;
     this.sessionGrantManager = opts.sessionGrantManager;
+    this.isNonInteractive = opts.isNonInteractive === true;
     this.traceWriter = opts.traceWriter;
     this.readOnlyBash = opts.readOnlyBash === true;
     // Central output cap: only a positive finite number arms the backstop; any
@@ -405,6 +452,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this.spawnedPidRegistry = opts.spawnedPidRegistry;
     this.userAttention = opts.userAttention;
     this.detachRegistry = opts.detachRegistry;
+    this.processJobs = opts.processJobs;
     this.bashOutputTailReporter = opts.bashOutputTailReporter;
 
     // When caller passes arrays by reference (provider sharing pattern), use
@@ -439,6 +487,14 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private get handlerContext(): ToolHandlerContext {
     return {
       resolveBase: this.resolveBase,
+      // @deprecated alias — kept for back-compat with custom tools that read
+      // context.cwd (#2935). Internal code must NOT start reading this field;
+      // use resolveBase directly. Will be removed in the next semver-major.
+      // `cwd` is conditionally spread (only when resolveBase is defined) so
+      // that tool implementations doing `'cwd' in context` still get the
+      // correct "absent" signal when no base path is set; `resolveBase` is
+      // always present on the type so undefined is its own meaningful absence.
+      ...(this.resolveBase !== undefined ? { cwd: this.resolveBase } : {}),
       readRoots: this._readRoots.slice(),
       writeRoots: this._writeRoots.slice(),
       ...(this._allowAll ? { allowAll: true } : {}),
@@ -448,6 +504,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
       ...(this.sessionId !== undefined ? { sessionId: this.sessionId } : {}),
       // #1430: PID registry gates wait_for process condition to session-owned PIDs.
       ...(this.spawnedPidRegistry !== undefined ? { spawnedPidRegistry: this.spawnedPidRegistry } : {}),
+      // File-checkpoint registry for rewindFiles; swapped per-turn by the provider.
+      ...this.fileCheckpointWiring.contextSpread(),
     };
   }
 
@@ -478,6 +536,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       ...(this.detachRegistry !== undefined && isDetachableTool(call.name)
         ? { detachRegistry: this.detachRegistry }
         : {}),
+      ...(this.processJobs !== undefined && call.name === 'bash' ? { processJobs: this.processJobs } : {}),
     };
   }
 
@@ -611,21 +670,19 @@ export class SessionToolDispatcher implements ToolDispatcher {
   // with live MCP wire-names before reaching the dispatcher (see
   // permissions.ts:withMcpToolsAllowed).
   get toolDefs(): readonly AnthropicToolDef[] {
-    const withBg = this.subagentExecutor?.supportsBackgroundJobs?.()
-      ? this.schemas
-      : this.schemas.filter(
-          (schema) =>
-            schema.name !== 'cancel_background_job' && schema.name !== 'send_message_to_agent' && schema.name !== 'get_background_job_health',
-        );
-    // Peer-messaging tools are top-level only: subagents (parentSessionId set)
-    // cannot use list_sessions or send_to_session.
-    const available = this.parentSessionId === undefined
-      ? withBg
-      : withBg.filter((s) => s.name !== 'list_sessions' && s.name !== 'send_to_session');
-    const allowed = this.permissions?.allowedTools;
-    if (!allowed) return available;
-    const set = new Set(allowed);
-    return available.filter((s) => set.has(s.name));
+    const withBg = filterBackgroundToolDefs(
+      this.schemas,
+      this.subagentExecutor?.supportsBackgroundJobs?.() === true,
+      this.processJobs !== undefined,
+    );
+    // Peer-messaging tools are top-level only. Same predicate as the
+    // execution-time gate in runPreDispatchGates (peer-tool-gate.ts), so the
+    // advertised schema and the enforced surface cannot drift.
+    const signals = { parentSessionId: this.parentSessionId, subagentId: this.subagentId };
+    const available = withBg.filter((s) => !isPeerToolBlocked(s.name, signals));
+    // Same predicate as the execution-time permission gate (allowlist plus
+    // operator denies), so advertised and enforced surfaces cannot drift.
+    return available.filter((s) => checkToolPermission(s.name, this.permissions).allowed);
   }
 
   /**
@@ -661,10 +718,13 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * Called inline in `execute()` and `executeBatch()` so both paths always
    * observe the current `resolveBase` and grant-manager reference.
    */
+  private readonly preToolContext = new PreToolContext();
+
   private gateDeps(): PreDispatchGateDeps {
     const cDeps = this.coreExecDeps();
     return {
       state: this.gateState,
+      capturePreToolContext: (call, context) => this.preToolContext.capture(call, context),
       hookRegistry: this.hookRegistry,
       permissions: this.permissions,
       canUseTool: this.canUseTool,
@@ -674,6 +734,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       parentSessionId: this.parentSessionId,
       subagentId: this.subagentId,
       sessionGrantManager: this.sessionGrantManager,
+      nonInteractive: this.isNonInteractive,
       resolveBase: this.resolveBase,
       traceWriter: this.traceWriter,
       isRegisteredTool: (name) => _isRegisteredTool(name, cDeps),
@@ -697,6 +758,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       hookRegistry: this.hookRegistry,
       sessionId: this.sessionId,
       parentSessionId: this.parentSessionId,
+      rootSessionId: this.rootSessionId,
       sessionGrantManager: this.sessionGrantManager,
       traceWriter: this.traceWriter,
       maxOutputBytes: this.maxOutputBytes,
@@ -707,6 +769,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       // executor can register its DAG and respond to Ctrl+B detachment.
       // Mirrors the `callHandlerContext` injection path for bash.
       ...(this.detachRegistry !== undefined ? { detachRegistry: this.detachRegistry } : {}),
+      ...(this.processJobs !== undefined ? { processJobs: this.processJobs } : {}),
       callHandlerContext: (call) => this.callHandlerContext(call),
       gateDeps: () => this.gateDeps(),
       toolDefs: this.toolDefs,
@@ -743,7 +806,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     }
 
     const gateResult = await this.runPreDispatchGates(call);
-    if (gateResult) return gateResult;
+    if (gateResult) return this.preToolContext.deliver(call, gateResult, this.traceWriter);
 
     // 3. Agent routing + handler dispatch + PostToolUse. Hoisting coreExecDeps()
     // here avoids the duplicate allocation that occurred when executeCore() called
@@ -761,7 +824,9 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // append a model notice and emit one trace event per (tool, errorHead).
     // Fire-and-forget: applyToolHealth → emitToolDegraded swallows errors;
     // never alters isError. Shared helper used by both execute() and batch paths.
-    return applyToolHealth(this.toolHealthMonitor, this.traceWriter, call, coreResult);
+    const healthChecked = applyToolHealth(this.toolHealthMonitor, this.traceWriter, call, coreResult);
+    return this.preToolContext.deliver(call,
+      applyStrategyNudge(this.strategyNudger, this.traceWriter, call, healthChecked), this.traceWriter);
   }
 
   // History: executeBatch's Phase 1 gate loop, Phase 2 batch-partition loop, and
@@ -770,7 +835,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
   // ceiling. The class delegates via executeBatchImpl imported from that module,
   // threaded through an ExecuteBatchDeps bundle wired here.
   async executeBatch(calls: ToolCall[], onActivity?: ToolActivityReporter): Promise<ToolResult[]> {
-    return executeBatchImpl(calls, {
+    const results = await executeBatchImpl(calls, {
       execute: (call) => this.execute(call),
       classifier: this.classifier,
       runPreDispatchGates: (call, opts) => this.runPreDispatchGates(call, opts),
@@ -784,7 +849,9 @@ export class SessionToolDispatcher implements ToolDispatcher {
       gateDeps: () => this.gateDeps(),
       traceWriter: this.traceWriter,
       toolHealthMonitor: this.toolHealthMonitor,
+      strategyNudger: this.strategyNudger,
     }, onActivity);
+    return Promise.all(results.map((result, i) => this.preToolContext.deliver(calls[i]!, result, this.traceWriter)));
   }
 
   /**

@@ -20,6 +20,7 @@ import path from 'path';
 import { lstatSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { safeRealpath } from './tools/handlers/write-denylist.js';
+import { isErrnoCode } from '../utils/errors.js';
 
 /**
  * In-workspace leaf directories whose recursive delete is a routine
@@ -131,7 +132,7 @@ function isGeneratedDirTarget(resolved: string, workspaceRoot: string): boolean 
   } catch (err) {
     // ENOENT: nothing there to delete, so the command is a harmless no-op.
     // Every other errno (EACCES, ELOOP, …) is ambiguous → fail closed.
-    return (err as NodeJS.ErrnoException).code === 'ENOENT';
+    return isErrnoCode(err, 'ENOENT');
   }
 }
 

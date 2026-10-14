@@ -224,6 +224,53 @@ describe('stream-consumer: render-registry → chunk.display → formatOutcome',
     expect(out.chunk.persistedPath).toBe('/tmp/afk-out.txt');
     expect(out.chunk.failureClass).toBe('hook-block');
   });
+
+  it('propagates incomplete/incompleteReason through the persisted-output branch', () => {
+    // A compose call with a soft-deadline partial node whose output was large
+    // enough to spill to disk must still surface incomplete: true on the chunk.
+    // Regression guard: the persisted-output branch built its chunk separately
+    // and previously omitted incompletePassthrough, silently dropping the flag.
+    const partialPersisted: ProviderEvent = {
+      type: 'tool.output',
+      toolUseId: 'partial-persisted',
+      toolName: 'compose',
+      content: 'Output too large (1.2 MB). Full output saved to: /tmp/compose-out.txt',
+      incomplete: true,
+      incompleteReason: 'compose_partial_nodes',
+      partialNodeCount: 2,
+      sessionId: 's1',
+    };
+    const out = transformProviderEvent(partialPersisted, noopDeps) as Extract<
+      OutputEvent,
+      { type: 'chunk' }
+    >;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    expect(out.chunk.persistedPath).toBe('/tmp/compose-out.txt');
+    expect(out.chunk.incomplete).toBe(true);
+    expect(out.chunk.incompleteReason).toBe('compose_partial_nodes');
+    expect(out.chunk.partialNodeCount).toBe(2); // #2978
+  });
+
+  it('propagates incomplete/incompleteReason through the normal (non-persisted) branch', () => {
+    // Counterpart to the persisted-branch test: the normal path must also carry
+    // the flag (it did before; this pins the invariant at the transform boundary).
+    const partialNormal: ProviderEvent = {
+      type: 'tool.output',
+      toolUseId: 'partial-normal',
+      toolName: 'compose',
+      content: 'some compose output',
+      incomplete: true,
+      incompleteReason: 'compose_partial_nodes',
+      sessionId: 's1',
+    };
+    const out = transformProviderEvent(partialNormal, noopDeps) as Extract<
+      OutputEvent,
+      { type: 'chunk' }
+    >;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    expect(out.chunk.incomplete).toBe(true);
+    expect(out.chunk.incompleteReason).toBe('compose_partial_nodes');
+  });
 });
 
 describe('stream-consumer: stream.retry → stream_retry', () => {
@@ -361,14 +408,13 @@ describe('stream-consumer → formatOutcome: bash output integration', () => {
     expect(rendered).toContain('~/.afk/state/witness/sess-1/bash-captures/tu-1.txt');
   });
 
-  it('SIGKILL path (truncated, no capturePath): shows "output capped · command killed"', () => {
+  it('SIGKILL path (truncated, no capturePath): shows the output-safety-cap label', () => {
     const rendered = outcome(buildBashEvent({
       content: 'partial output\nmore output\n[output truncated — command exceeded the 8000000-byte output cap and was terminated]',
       truncated: true,
       // no capturePath
     }));
-    expect(rendered).toContain('output capped');
-    expect(rendered).toContain('command killed');
+    expect(rendered).toContain('stopped at output safety cap');
     expect(rendered).not.toContain('full output saved');
   });
 

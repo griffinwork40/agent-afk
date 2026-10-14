@@ -31,9 +31,11 @@ import {
   WIND_DOWN_NOTE,
   formatRoundLabel,
   shouldWindDown,
+  roundDeliveryNotice,
 } from '../../shared/tool-loop-cap.js';
 import { dispatchToolCalls } from './tool-dispatch.js';
 import { emitAndCommitToolResults } from './tool-results.js';
+import { buildVitalsNote } from '../../shared/vitals.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
 
 /**
@@ -82,6 +84,14 @@ export async function* runToolRound(
       dispatched.results,
       dispatched.startTimes,
       input,
+      buildVitalsNote({
+        turnStartedAt: turn.startedAt,
+        softDeadlineMs,
+        contextTokens: turn.usage.contextWindowTokens,
+        model: input.model,
+        subagentId: input.subagentId,
+        claudeUsage: !input.baseUrl,
+      }),
     );
     if (committed === 'denial-tripped') return 'terminated';
   } catch (err) {
@@ -114,6 +124,8 @@ export async function* runToolRound(
       taskId: turn.taskId,
       description: 'Working',
       summary: `${formatRoundLabel(turn.iterations, maxIterations)}: ${lastToolHeadline}`,
+      roundsUsed: turn.iterations,
+      budget: maxIterations,
       lastToolName: lastTool?.name,
       totalTokens: turn.usage.totalTokens ?? 0,
       // Contract: `toolUses` is the cumulative COUNT OF TOOL CALLS so far in
@@ -148,6 +160,11 @@ export async function* runToolRound(
   // which would end it with no final assistant message and read as a silent
   // hang. `windDownReason` guarantees this fires at most once; the guard above
   // hard-stops if the wind-down round pathologically emits another tool_use.
+  const notice = roundDeliveryNotice(turn.iterations, maxIterations);
+  const lastResult = input.messages[input.messages.length - 1];
+  if (notice && lastResult?.role === 'user' && Array.isArray(lastResult.content)) {
+    lastResult.content.push({ type: 'text', text: notice });
+  }
   const roundsSpent = shouldWindDown(turn.iterations, maxIterations);
   const timeSpent = softDeadlineExpired(turn.startedAt, softDeadlineMs);
   if (roundsSpent || timeSpent) {

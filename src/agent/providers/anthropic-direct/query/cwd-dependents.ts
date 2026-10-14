@@ -16,6 +16,7 @@ import type { ComposeExecutor } from '../../../tools/compose-executor.js';
 import type { ToolDispatcher } from '../tool-dispatcher.js';
 import type { RuntimeStateSource } from '../../../awareness/index.js';
 import { assembleSystemPrompt, type StableSystemParts } from './system-prompt.js';
+import { isHeadlessSession } from '../../shared/headless-session.js';
 
 export type CwdDependentsFactory = (newCwd: string) => {
   userSystem: string;
@@ -42,10 +43,12 @@ export interface CwdDependentsFactoryArgs {
     writeRoots?: string[];
     sessionId?: string;
     parentSessionId?: string;
+    rootSessionId?: string;
     traceWriter?: AgentConfig['traceWriter'];
     runtimeStateSource?: RuntimeStateSource;
     hookRegistry?: AgentConfig['hookRegistry'];
     planExitControls?: AgentConfig['planExitControls'];
+    isNonInteractive?: boolean;
   }) => ToolDispatcher;
 }
 
@@ -125,12 +128,17 @@ export function createCwdDependentsFactory(args: CwdDependentsFactoryArgs): CwdD
       ...(args.config.env !== undefined ? { env: args.config.env } : {}),
       sessionId: args.config.sessionId,
       parentSessionId: args.config.parentSessionId,
+      // #2442: keep root attribution across a cwd re-anchor (parity with
+      // dispatcher-wiring.ts), else a depth-2 child's artifacts are lost.
+      ...(args.config.rootSessionId !== undefined ? { rootSessionId: args.config.rootSessionId } : {}),
       traceWriter: args.config.traceWriter,
       runtimeStateSource: args.runtimeStateSource,
       hookRegistry: args.config.hookRegistry,
       // Carry the resident plan-exit handler across a cwd rebuild — omitting
       // this previously dropped `exit_plan_mode` after a cwd re-anchor while planning.
       planExitControls: args.config.planExitControls,
+      // #2302: a cwd re-anchor must not drop the headless bash floor.
+      ...(isHeadlessSession(args.config) ? { isNonInteractive: true } : {}),
     });
     return { userSystem: newUserSystem, dispatcher: newDispatcher };
   };

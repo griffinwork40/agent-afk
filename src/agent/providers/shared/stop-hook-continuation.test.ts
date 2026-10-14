@@ -15,7 +15,12 @@
  * @module agent/providers/shared/stop-hook-continuation.test
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { runBeforeTurnEnd, resolveMaxContinuations } from './stop-hook-continuation.js';
+import {
+  runBeforeTurnEnd,
+  resolveMaxContinuations,
+  capContinueWith,
+  CONTINUE_WITH_MAX_CHARS,
+} from './stop-hook-continuation.js';
 import type { BeforeTurnEndContext } from './stop-hook-continuation.js';
 import type { AgentConfig } from '../../types.js';
 import type { HookRegistry } from '../../hooks.js';
@@ -116,6 +121,17 @@ describe('runBeforeTurnEnd — pass-through', () => {
     expect(result.continueWith).toBeUndefined();
     expect(result.nextContinuation).toBe(0);
     expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it('caps oversized non-blocking injectContext before surface dispatch', async () => {
+    const text = 'x'.repeat(CONTINUE_WITH_MAX_CHARS + 500);
+    const dispatch = vi.fn().mockResolvedValue({ injectContext: text });
+    const onStopInjectContext = vi.fn();
+    await runBeforeTurnEnd(makeCtx({
+      config: makeConfig(makeRegistry({ dispatch })), wiring: { onStopInjectContext },
+    }));
+    expect(onStopInjectContext).toHaveBeenCalledWith(capContinueWith(text));
+    expect(onStopInjectContext.mock.calls[0]?.[0].length).toBeLessThan(text.length);
   });
 
   it('delivers injectContext via wiring when hook passes with context', async () => {
@@ -331,5 +347,77 @@ describe('runBeforeTurnEnd — assistantText overrides stale history (Finding 3)
     const calledCtx = (dispatch.mock.calls[0] as [unknown, ...unknown[]])[0];
     // Must be 'done' (from fresh text), not absent (from stale messages)
     expect((calledCtx as Record<string, unknown>).terminalState).toBe('done');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runBeforeTurnEnd — `dispatched` flag (#2957)
+// ---------------------------------------------------------------------------
+
+describe('runBeforeTurnEnd — dispatched flag (#2957)', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('reports dispatched=false when cap=0 skips dispatch', async () => {
+    vi.stubEnv('AFK_STOP_HOOK_MAX_CONTINUATIONS', '0');
+    const dispatch = vi.fn().mockResolvedValue({});
+    const result = await runBeforeTurnEnd(makeCtx({ config: makeConfig(makeRegistry({ dispatch })) }));
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(result.dispatched).toBeUndefined();
+  });
+
+  it('reports dispatched=false with no hook registry', async () => {
+    const result = await runBeforeTurnEnd(makeCtx({ config: makeConfig(undefined) }));
+    expect(result.dispatched).toBeUndefined();
+  });
+
+  it('reports dispatched=true on a pass-through dispatch', async () => {
+    vi.stubEnv('AFK_STOP_HOOK_MAX_CONTINUATIONS', '2');
+    const result = await runBeforeTurnEnd(makeCtx());
+    expect(result.dispatched).toBe(true);
+  });
+
+  it('reports dispatched=true on a blocking dispatch that continues', async () => {
+    vi.stubEnv('AFK_STOP_HOOK_MAX_CONTINUATIONS', '2');
+    const dispatch = vi.fn().mockRejectedValue(new HookBlockedError('blocked', 'Stop', 'again'));
+    const result = await runBeforeTurnEnd(makeCtx({ config: makeConfig(makeRegistry({ dispatch })) }));
+    expect(result.continueWith).toBe('again');
+    expect(result.dispatched).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// continueWith length cap (#2957)
+// ---------------------------------------------------------------------------
+
+describe('continueWith length cap (#2957)', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('leaves a reason at or under the cap unchanged', () => {
+    const text = 'x'.repeat(CONTINUE_WITH_MAX_CHARS);
+    expect(capContinueWith(text)).toBe(text);
+  });
+
+  it('truncates an oversized reason and appends a marker', () => {
+    const capped = capContinueWith('y'.repeat(CONTINUE_WITH_MAX_CHARS + 500));
+    expect(capped.startsWith('y'.repeat(CONTINUE_WITH_MAX_CHARS))).toBe(true);
+    expect(capped).toContain('[stop hook reason truncated: 500 more chars]');
+    expect(capped.length).toBeLessThan(CONTINUE_WITH_MAX_CHARS + 100);
+  });
+
+  it('caps the continueWith message returned by a blocking hook', async () => {
+    vi.stubEnv('AFK_STOP_HOOK_MAX_CONTINUATIONS', '2');
+    const huge = 'z'.repeat(CONTINUE_WITH_MAX_CHARS * 5);
+    const dispatch = vi.fn().mockRejectedValue(new HookBlockedError('blocked', 'Stop', huge));
+    const result = await runBeforeTurnEnd(makeCtx({ config: makeConfig(makeRegistry({ dispatch })) }));
+    expect(result.continueWith).toBeDefined();
+    expect(result.continueWith!.length).toBeLessThan(CONTINUE_WITH_MAX_CHARS + 100);
+    expect(result.continueWith).toContain('stop hook reason truncated');
+  });
+
+  it('capContinueWith is idempotent on already-capped input', () => {
+    const input = 'a'.repeat(100_000);
+    const onceCapped = capContinueWith(input);
+    const twiceCapped = capContinueWith(onceCapped);
+    expect(twiceCapped).toBe(onceCapped);
   });
 });

@@ -4,10 +4,7 @@
  */
 
 import type { IAgentSession, AgentConfig, AgentModelInput, ThinkingConfig, EffortLevel, ResponseMetadata } from '../agent/types.js';
-import { injectHotMemory, injectGoalPrompt } from '../agent/memory/index.js';
-import { injectCompanionPrimer } from '../agent/companion/index.js';
 import { setElicitationRoute } from './elicitation-route-registry.js';
-import { runTelegramReconcile } from '../agent/manifest/startup-reconcile.js';
 // Shared session-persistence utilities. These live under src/cli/ but are
 // surface-agnostic (pure functions over SessionStats / sidecar files); the
 // Telegram bot reuses them so a chat session lands in the SAME
@@ -15,8 +12,7 @@ import { runTelegramReconcile } from '../agent/manifest/startup-reconcile.js';
 // future cleanup could relocate them to a neutral module — for now this is the
 // only telegram→cli edge and there is no import cycle (they never import telegram).
 import { createSessionStats, recordTurn } from '../cli/slash/session-stats.js';
-import { saveSession, loadSession, listSessions } from '../cli/session-store.js';
-import { resumeConfigFor } from '../cli/resume-session.js';
+import { saveSession } from '../cli/session-store.js';
 import type { SessionStats } from '../cli/slash/types.js';
 import { type TelegramRoute, routeKey } from './route.js';
 import { sessionRegistry, type SessionRegistry } from '../agent/session/session-registry.js';
@@ -25,8 +21,9 @@ import { resolveActiveRouteForChat } from './session-manager.active-route.js';
 import { hydrateStatsFromStore, getRouteSessionId, getRouteSessionName, persistSessionName } from './session-manager.hydrate-stats.js';
 import { evictIdleSessions, evictStaleSessionData, clearElicitationRouteForKey } from './session-manager.evict-idle.js';
 import { demandLoadSidecar } from './session-manager.demand-load.js';
-import { promises as fs } from 'fs';
-import { join } from 'path';
+import { loadSessionsFromDisk, saveSessionsToDisk } from './session-manager.disk-io.js';
+import { listChatSessionsImpl, switchToSessionImpl } from './session-manager.switcher.js';
+import { buildAndRegisterSession } from './session-manager.session-builder.js';
 
 /**
  * Public methods that used to take a bare `chatId: number` now take a route
@@ -269,73 +266,15 @@ export class SessionManager {
     // the chatId (provenance/sends) and the topic threadId (route round-trip).
     const data = this.sessionData.get(key) ?? this._newData(route);
 
-    const creationPromise = (async (): Promise<IAgentSession> => {
-      const config: AgentConfig = {
-        model: data.model,
-        apiKey: this.options.apiKey,
-        telegramChatId: route.chatId,
-        ...(route.threadId !== undefined ? { telegramThreadId: route.threadId } : {}),
-      };
-      if (this.options.settingSources?.length) {
-        config.settingSources = this.options.settingSources;
-      }
-      if (this.options.thinking !== undefined) {
-        config.thinking = this.options.thinking;
-      }
-      if (this.options.effort !== undefined) {
-        config.effort = this.options.effort;
-      }
-      // Per-session cwd (set via /cd) overrides the bot-global botCwd.
-      // When neither is set, leave config.cwd undefined and let the
-      // downstream createSession factory fall back to its own default.
-      const effectiveCwd = data.cwd ?? this.options.botCwd;
-      if (effectiveCwd !== undefined && effectiveCwd.length > 0) {
-        config.cwd = effectiveCwd;
-      }
-      // /switch: continue a staged prior conversation instead of starting fresh.
-      // Consumed after a successful build below — a failed createSession leaves it
-      // staged so the next getSession retries the resume; teardown via _resetStats
-      // (/clear, model switch, /cd) still clears any stale target.
-      // Load the target sidecar and populate the SAME resume fields the CLI does
-      // (resume + sessionId + resumeHistory) so the providers actually replay the
-      // saved transcript. Forwarding only config.resume (the SDK id) resumes an
-      // empty conversation. Mirrors resumeConfigFor (src/cli/resume-session.ts).
-      const resumeTarget = this.pendingResume.get(key);
-      if (resumeTarget !== undefined) {
-        const stored = loadSession(resumeTarget);
-        Object.assign(
-          config,
-          resumeConfigFor({
-            id: resumeTarget,
-            resumeId: stored?.sessionId ?? resumeTarget,
-            stored,
-          }),
-        );
-      }
-
-      const session = await this.options.createSession(injectGoalPrompt(injectCompanionPrimer(injectHotMemory(config))));
-      this.sessions.set(key, session);
-      this.sessionData.set(key, data);
-      // Register with the session registry (best-effort: never orphan the live session).
-      try { this._ensureRegistryHandle(route, data); } catch { /* non-fatal */ }
-      // Seed elicitation routing before the first turn starts. ask_question can
-      // suspend that turn, so waiting for recordTelegramTurn (onComplete) would
-      // deadlock a topic's first question on the General-route fallback.
-      if (session.sessionId) {
-        setElicitationRoute(session.sessionId, route);
-        data.sessionId = session.sessionId;
-      }
-      // Wave-manifest reconciliation: surface resumption offers for unfinished
-      // work. Telegram is interactive — fire-and-forget, never blocks creation.
-      if (this.options.onResumptionOffer) {
-        runTelegramReconcile(session.sessionId ?? '', route, this.options.onResumptionOffer);
-      }
-      // Consume the staged resume only after a successful build: a thrown
-      // createSession must leave it staged so the next getSession retries the
-      // resume instead of silently starting a fresh conversation.
-      if (resumeTarget !== undefined) this.pendingResume.delete(key);
-      return session;
-    })();
+    // Delegates session-creation to buildAndRegisterSession
+    // (session-manager.session-builder.ts): builds AgentConfig, applies resume,
+    // injects memory/companion, registers with registry + elicitation router.
+    const creationPromise = buildAndRegisterSession(route, key, data, this.options, {
+      sessions: this.sessions,
+      sessionData: this.sessionData,
+      pendingResume: this.pendingResume,
+      ensureRegistryHandle: (r, d) => this._ensureRegistryHandle(r, d),
+    });
 
     this.pendingSessions.set(key, creationPromise);
     try {
@@ -647,194 +586,63 @@ export class SessionManager {
 
   /**
    * List this chat's resumable conversations for the `/sessions` switcher,
-   * newest-active first. Sourced from the shared sidecar store (telegram
-   * sidecars for this chatId) — the durable record of every conversation the
-   * chat has held — with the route's currently-active one flagged.
-   *
-   * Provenance is the chatId, so this lists every conversation the chat has
-   * held (across General and any topics). The `active` flag reflects the
-   * requesting route's own live session id — the conversation the switcher
-   * would replace on that route.
-   *
-   * A brand-new conversation with no recorded turn yet has no sidecar and so
-   * does not appear until its first turn is saved.
+   * newest-active first. Delegates to listChatSessionsImpl
+   * (session-manager.switcher.ts) to stay within the 350-line file ceiling
+   * while keeping the public surface unchanged.
    */
   listChatSessions(target: RouteTarget): ChatSessionInfo[] {
-    const route = toRoute(target);
-    const activeId = this.sessionData.get(routeKey(route))?.sessionId;
-    return listSessions()
-      .filter(
-        (s) => s.source === 'telegram' && s.telegramChatId === route.chatId && s.sessionId !== undefined,
-      )
-      .map((s) => {
-        const info: ChatSessionInfo = {
-          sessionId: s.sessionId as string,
-          model: s.model,
-          turns: s.totalTurns,
-          lastActive: s.savedAt,
-          active: s.sessionId === activeId,
-        };
-        if (s.name !== undefined) info.name = s.name;
-        return info;
-      })
-      .sort((a, b) => b.lastActive - a.lastActive);
+    return listChatSessionsImpl(target, this.sessionData);
   }
 
   /**
    * Switch the chat's active conversation to a previously-persisted session
-   * (the `/switch` command). Closes the current live session — its sidecar is
-   * already persisted per-turn, so it stays resumable — drops in-memory stats so
-   * the target's name/turns re-hydrate from its sidecar, adopts the target's
-   * model + cwd, and stages the SDK session id for resume. The next
-   * getSession(chatId) rebuilds the session with `config.resume` so it continues
-   * the chosen conversation; callers wanting it warmed can await getSession after.
-   *
-   * @returns `{ ok: true }` on success; `{ ok: false, reason }` when the target
-   *   is missing / not a telegram sidecar for this chat, or already active.
+   * (the `/switch` command). Delegates to switchToSessionImpl
+   * (session-manager.switcher.ts) to stay within the 350-line file ceiling
+   * while keeping the public surface unchanged.
    */
   async switchToSession(
     target: RouteTarget,
     targetSessionId: string,
   ): Promise<{ ok: true; name?: string } | { ok: false; reason: 'not-found' | 'already-active' }> {
-    const route = toRoute(target);
-    const key = routeKey(route);
-
-    // If a session creation is in flight for this route, let it settle before we
-    // inspect and close the live session. Otherwise the in-flight promise sets
-    // the pre-switch session as live AFTER we adopt the target below, silently
-    // reverting the switch. Awaiting materializes it so the close path evicts it
-    // normally; a failed creation leaves this.sessions empty, which the `old`
-    // guard already handles.
-    const inflight = this.pendingSessions.get(key);
-    if (inflight !== undefined) {
-      await inflight.catch(() => undefined);
-    }
-
-    // Already the live active conversation → no-op (avoid a needless rebuild).
-    if (this.sessions.has(key) && this.sessionData.get(key)?.sessionId === targetSessionId) {
-      return { ok: false, reason: 'already-active' };
-    }
-
-    const stored = loadSession(targetSessionId);
-    if (!stored || stored.source !== 'telegram' || stored.telegramChatId !== route.chatId) {
-      return { ok: false, reason: 'not-found' };
-    }
-
-    // Close the current live session (sidecar already persisted per-turn).
-    const old = this.sessions.get(key);
-    if (old) {
-      // Guard the close (mirrors closeAll): a throwing close() must never block
-      // the delete + target-state adoption below, or the stale session stays keyed
-      // in this.sessions and the next getSession returns it unrebuilt.
-      await old.close().catch((err) => console.error('Error closing session on switch:', err));
-      this.sessions.delete(key);
-    }
-    // Drop in-memory stats so the resumed session hydrates the TARGET's stats
-    // (name/turns/sessionId) from its sidecar on next access — never the
-    // previous conversation's. autosave-failure notice re-arms for the switch.
-    clearElicitationRouteForKey(key, this.sessionStats, this.sessionData); // clear before dropping stats (#1662)
-    this.sessionStats.delete(key);
-    this.autosaveFailureLogged.delete(key);
-
-    // Adopt the target's identity + model/cwd and stage the resume.
-    let data = this.sessionData.get(key);
-    if (!data) {
-      data = this._newData(route);
-      data.model = stored.model;
-      this.sessionData.set(key, data);
-    } else {
-      data.model = stored.model;
-      data.lastActivity = new Date().toISOString();
-    }
-    data.sessionId = targetSessionId;
-    // Adopt the target's cwd, or CLEAR a stale per-chat override when the target
-    // has none — otherwise the resumed session runs + autosaves under the
-    // previously-active conversation's directory (getSession uses data.cwd ?? botCwd).
-    if (stored.cwd !== undefined) data.cwd = stored.cwd;
-    else delete data.cwd;
-    this.pendingResume.set(key, targetSessionId);
-    return stored.name !== undefined ? { ok: true, name: stored.name } : { ok: true };
+    return switchToSessionImpl(target, targetSessionId, {
+      sessions: this.sessions,
+      pendingSessions: this.pendingSessions,
+      sessionData: this.sessionData,
+      sessionStats: this.sessionStats,
+      autosaveFailureLogged: this.autosaveFailureLogged,
+      pendingResume: this.pendingResume,
+      newData: (route) => this._newData(route),
+    });
   }
 
   /**
    * Start a fresh conversation for the chat (the `/new` command), preserving the
-   * previous one as a resumable session — its sidecar was persisted per-turn and
-   * is never deleted here, so `/sessions` still lists it and `/switch` can return
-   * to it. Behaviorally this is resetSession (close + fresh sessionId), exposed
-   * under a name that reflects the switcher intent.
+   * previous one as a resumable session. Delegates to resetSession.
    */
   async newSession(target: RouteTarget): Promise<void> {
-    // resetSession → _resetStats already clears pendingResume; explicit here too
+    // resetSession -> _resetStats already clears pendingResume; explicit here too
     // so intent is local and obvious.
     this.pendingResume.delete(routeKey(toRoute(target)));
     await this.resetSession(target);
   }
 
   /**
-   * The on-disk sidecar filename for a route's SessionData.
-   *
-   * Invariant: a General route's file is `<chatId>.json` — byte-identical to
-   * the pre-topics layout, so an existing user's session data loads unchanged.
-   * A topic route uses its routeKey (`<chatId>:<threadId>`). The `:` separator
-   * is legal on the macOS/Linux targets AFK supports; the loader recomputes the
-   * map key from the data's chatId+threadId, so it never relies on the filename.
-   */
-  private sidecarFileName(data: SessionData): string {
-    const route: TelegramRoute = { chatId: data.chatId };
-    if (data.threadId !== undefined) route.threadId = data.threadId;
-    return `${routeKey(route)}.json`;
-  }
-
-  /**
-   * Load session data from disk.
-   *
-   * Keys the in-memory map by the route recomputed from each file's payload
-   * (chatId + optional threadId), NOT the filename — so a legacy `<chatId>.json`
-   * (no threadId) loads to the General key `String(chatId)` exactly as before,
-   * and a topic sidecar loads to `<chatId>:<threadId>`.
+   * Load session data from disk. Delegates to loadSessionsFromDisk
+   * (session-manager.disk-io.ts) to stay within the 350-line file ceiling
+   * while keeping the public surface unchanged.
    */
   async loadSessions(): Promise<void> {
-    try {
-      await fs.mkdir(this.options.dataDir, { recursive: true });
-      const files = await fs.readdir(this.options.dataDir);
-      
-      for (const file of files) {
-        if (file.endsWith('.json')) {
-          const filePath = join(this.options.dataDir, file);
-          const content = await fs.readFile(filePath, 'utf-8');
-          const data: SessionData = JSON.parse(content);
-          const route: TelegramRoute = { chatId: data.chatId };
-          if (data.threadId !== undefined) route.threadId = data.threadId;
-          this.sessionData.set(routeKey(route), data);
-          try {
-            this._ensureRegistryHandle(route, data);
-          } catch {
-            // non-fatal: registry error should not skip remaining sidecars
-          }
-        }
-      }
-    } catch (error) {
-      // Ignore errors if directory doesn't exist
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.error('Failed to load sessions:', error);
-      }
-    }
+    await loadSessionsFromDisk(this.options.dataDir, this.sessionData, (route, data) => {
+      this._ensureRegistryHandle(route, data);
+    });
   }
 
   /**
-   * Save session data to disk, one file per route (General → `<chatId>.json`).
+   * Save session data to disk, one file per route (General -> `<chatId>.json`).
+   * Delegates to saveSessionsToDisk (session-manager.disk-io.ts).
    */
   async saveSessions(): Promise<void> {
-    try {
-      await fs.mkdir(this.options.dataDir, { recursive: true });
-      
-      for (const data of this.sessionData.values()) {
-        const filePath = join(this.options.dataDir, this.sidecarFileName(data));
-        await fs.writeFile(filePath, JSON.stringify(data, null, 2));
-      }
-    } catch (error) {
-      console.error('Failed to save sessions:', error);
-    }
+    await saveSessionsToDisk(this.options.dataDir, this.sessionData);
   }
 
   /**

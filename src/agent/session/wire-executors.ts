@@ -40,6 +40,9 @@ import type { Surface } from '../awareness/types.js';
 import type { AgentModelInput } from '../types.js';
 import type { WorkspaceStore } from '../workspace/index.js';
 import { inboundAttachmentRegistry } from '../content/attachment-registry.js';
+import type { SdkPluginConfig } from '../types/sdk-types.js';
+import type { HookRegistry } from '../hooks.js';
+import { hookRegistryOpt, skillScopeOpts } from './wire-executors.scope.js';
 
 /** Options for {@link wireExecutors}. */
 export interface WireExecutorsOptions {
@@ -86,6 +89,14 @@ export interface WireExecutorsOptions {
    * `undefined` to `''`.
    */
   systemPrompt?: string;
+  /**
+   * The BARE operator overlay (AFK.md / afk.config.json `systemPrompt` /
+   * AFK_SYSTEM_PROMPT, or a per-chat override): no framework base, no header.
+   * Forwarded to the `agent` executor so unnamed children, which receive the
+   * lean worker prompt instead of {@link WireExecutorsOptions.systemPrompt},
+   * still carry the operator's instructions (#3324). Omit when none.
+   */
+  operatorOverlay?: string;
   /** Anthropic-compatible endpoint forwarded to children. */
   baseUrl?: string;
   /** OpenAI-compatible endpoint forwarded to OpenAI-routed children. */
@@ -129,6 +140,19 @@ export interface WireExecutorsOptions {
    */
   backgroundRegistry?: BackgroundAgentRegistry;
   /**
+   * Surface wakes an idle prompt when a background result lands (TTY REPL
+   * only). Forwarded to the root `agent` executor; see
+   * SubagentExecutorContext.backgroundAutoWake.
+   */
+  backgroundAutoWake?: () => boolean;
+  /**
+   * Live probe: will BgResultNotifier buffer the result for the next user
+   * message? Forwarded alongside backgroundAutoWake so `resolveBackgroundDelivery`
+   * can distinguish `next-message` (deliver enabled) from `manual-join`
+   * (AFK_BG_AUTO_DELIVER=0, notifier disabled). See SubagentExecutorContext.backgroundAutoDeliver.
+   */
+  backgroundAutoDeliver?: () => boolean;
+  /**
    * Sink for named-agent scan warnings (e.g. a user agent file shadowing a
    * tool-restricted builtin). When omitted, `loadAgentRegistry` uses its
    * default writer.
@@ -142,6 +166,26 @@ export interface WireExecutorsOptions {
    * `SubagentManager` so the log writer and `/tasks` reader use the same key.
    */
   sessionLabel?: string;
+  /**
+   * Executor-tree plugin scope (#3442). Defined => the SOLE plugin source for
+   * plugin-agent discovery, the root `skill` executor, and every nested skill
+   * executor at all depths (`[]` => no plugins). Undefined => scan every plugin
+   * root, exactly as before. Compose is untouched (INV-028).
+   */
+  pluginConfigs?: SdkPluginConfig[];
+  /**
+   * Skill allowlist (#3442) enforced by the root and every nested `skill`
+   * executor: exact string equality on the requested name (`plugin:name` etc.
+   * must be listed verbatim; bare `name` authorizes only `name`). Undefined =>
+   * no gate.
+   */
+  skillAllowlist?: readonly string[];
+  /**
+   * Hook registry (#3442) for the root manager and the nested managers built
+   * with stub parents (agent-tool depth 2+, skill forks, skill-child agent
+   * forks), so SubagentStart/Stop fire at every depth. Undefined => unchanged.
+   */
+  hookRegistry?: HookRegistry;
 }
 
 /** The wired executor set returned by {@link wireExecutors}. */
@@ -154,6 +198,76 @@ export interface WiredExecutors {
   subagentExecutor: SubagentExecutor;
   skillExecutor: SkillExecutor;
   composeExecutor: ComposeExecutor;
+}
+
+/**
+ * Background-dispatch fields for the root `agent` executor: the registry plus
+ * the surface probes that drive `resolveBackgroundDelivery`. Only the `agent`
+ * tool reads the probes (to pick a truthful delivery note), so skill/compose
+ * keep the bare registry.
+ */
+function agentBackgroundOpts(
+  opts: Pick<WireExecutorsOptions, 'backgroundRegistry' | 'backgroundAutoWake' | 'backgroundAutoDeliver'>,
+): Pick<WireExecutorsOptions, 'backgroundRegistry' | 'backgroundAutoWake' | 'backgroundAutoDeliver'> {
+  return {
+    ...(opts.backgroundRegistry !== undefined ? { backgroundRegistry: opts.backgroundRegistry } : {}),
+    ...(opts.backgroundAutoWake !== undefined ? { backgroundAutoWake: opts.backgroundAutoWake } : {}),
+    ...(opts.backgroundAutoDeliver !== undefined ? { backgroundAutoDeliver: opts.backgroundAutoDeliver } : {}),
+  };
+}
+
+/**
+ * `defaultConfig` for the root `agent` executor. Extracted from
+ * {@link wireExecutors} (function-size ceiling). Conditional spreads keep an
+ * absent option an absent key.
+ */
+function agentDefaultConfig(
+  opts: Pick<WireExecutorsOptions, 'apiKey' | 'systemPrompt' | 'operatorOverlay' | 'baseUrl' | 'openaiBaseUrl' | 'xaiBaseUrl'>,
+): SubagentExecutorContext['defaultConfig'] {
+  return {
+    ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
+    ...(opts.systemPrompt !== undefined ? { systemPrompt: opts.systemPrompt } : {}),
+    ...(opts.operatorOverlay !== undefined ? { operatorOverlay: opts.operatorOverlay } : {}),
+    ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
+    ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
+    ...(opts.xaiBaseUrl !== undefined ? { xaiBaseUrl: opts.xaiBaseUrl } : {}),
+  };
+}
+
+/**
+ * Step 4 of {@link wireExecutors}: the depth-aware nested skill-executor
+ * factory. Extracted (function-size ceiling); the positional order matches
+ * `createChildSkillExecutorFactory`. The workspace store is the READ channel at
+ * every nesting depth (a skill dispatched BY a skill otherwise gets a
+ * store-less executor and its forks lose the preamble); the trailing #3442
+ * scope args carry pluginConfigs / skillAllowlist / hookRegistry to every depth.
+ */
+function buildChildSkillFactory(
+  opts: WireExecutorsOptions,
+  childProviderFactory: ReturnType<typeof createChildProviderFactory>,
+  agentRegistry: ReturnType<typeof loadAgentRegistry>,
+  delegationBudget: DelegationBudget | undefined,
+): ReturnType<typeof createChildSkillExecutorFactory> {
+  return createChildSkillExecutorFactory(
+    opts.model,
+    opts.apiKey,
+    childProviderFactory,
+    opts.baseUrl,
+    opts.skillTraceWriter,
+    opts.backgroundRegistry,
+    opts.cwd,
+    opts.resolveApiKeyForModel,
+    opts.surface,
+    opts.defaultSubagentModel,
+    agentRegistry,
+    opts.openaiBaseUrl,
+    opts.xaiBaseUrl,
+    opts.workspaceStore,
+    delegationBudget,
+    opts.pluginConfigs,
+    opts.skillAllowlist,
+    opts.hookRegistry,
+  );
 }
 
 /**
@@ -233,6 +347,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     surface,
     ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
     ...(opts.sessionLabel !== undefined ? { sessionLabel: opts.sessionLabel } : {}),
+    ...hookRegistryOpt(opts),
   });
 
   // 2. Routes each child model to AnthropicDirect / OpenAICompatible, pointing
@@ -249,48 +364,24 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     // Same sink both scanners report through: a malformed plugin agent file
     // now warns exactly like a malformed user/project one (#752) instead of
     // vanishing silently ahead of the merge below.
-    pluginAgents: discoverPluginAgents(undefined, registryWarn),
+    pluginAgents: discoverPluginAgents(opts.pluginConfigs, registryWarn),
     warn: registryWarn,
   });
 
   // 4. Shared by the `agent` and `skill` executors so plugin skill children
   //    nest with identical depth-aware wiring at every hop.
-  const childSkillExecutorFactory = createChildSkillExecutorFactory(
-    model,
-    apiKey,
-    childProviderFactory,
-    baseUrl,
-    skillTraceWriter,
-    backgroundRegistry,
-    cwd,
-    resolveApiKeyForModel,
-    surface,
-    defaultSubagentModel,
-    agentRegistry,
-    openaiBaseUrl,
-    xaiBaseUrl,
-    // Workspace READ channel at every nesting depth — a skill dispatched BY a
-    // skill otherwise gets a store-less executor and its forks lose the preamble.
-    opts.workspaceStore,
-    delegationBudget,
-  );
+  const childSkillExecutorFactory = buildChildSkillFactory(opts, childProviderFactory, agentRegistry, delegationBudget);
 
   // 5. `agent` tool.
   const subagentExecutor = new SubagentExecutor({
     subagentManager: rootManager,
     parentSession,
     surface,
-    defaultConfig: {
-      ...apiKeyOpt,
-      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
-      ...baseUrlOpt,
-      ...openaiBaseUrlOpt,
-      ...xaiBaseUrlOpt,
-    },
+    defaultConfig: agentDefaultConfig(opts),
     defaultSubagentModel,
     childProviderFactory,
     childSkillExecutorFactory,
-    ...bgRegistryOpt,
+    ...agentBackgroundOpts(opts),
     resolveApiKeyForModel,
     // Top-level wiring → explicit depth 0. See SubagentExecutorContext.depth
     // for why this is required rather than defaulted.
@@ -306,6 +397,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     // exactly as traceOpt does. See SubagentExecutorContext.workspaceStore.
     ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
     ...budgetOpt,
+    ...hookRegistryOpt(opts), // depth-2+ nested managers (child-config.ts)
   });
 
   // 6. `skill` tool.
@@ -336,6 +428,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     // the store has to reach it as data on SkillExecutionContext.
     ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
     ...budgetOpt,
+    ...skillScopeOpts(opts), // #3442 pluginConfigs / skillAllowlist / hookRegistry
   });
 
   // 7. `compose` tool. Nodes receive the raw base prompt so they stay task

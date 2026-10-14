@@ -20,6 +20,7 @@ import {
 import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
 import { TRUNCATION_STOP_REASONS } from '../providers/shared/truncation.js';
 import { SOFT_DEADLINE_WIND_DOWN } from '../providers/shared/soft-deadline.js';
+import { CONTEXT_PRESSURE_WIND_DOWN } from '../providers/shared/context-pressure.js';
 import { OVERLOAD_EXHAUSTED } from '../providers/anthropic-direct/overload-pause.js';
 
 // ---------------------------------------------------------------------------
@@ -323,5 +324,25 @@ describe('SOFT_DEADLINE_WIND_DOWN — a wall-clock wind-down is not a clean answ
       incomplete: true,
       incompleteReason: SOFT_DEADLINE_WIND_DOWN,
     });
+  });
+});
+
+// Context-pressure wind-down (sprint B2) is the third budget that fires the same
+// tools-stripped synthesis round; e2e Lane V observed it reaching the parent
+// unlabelled as a clean answer before this arm existed.
+describe('CONTEXT_PRESSURE_WIND_DOWN — a context-pressure wind-down is not a clean answer', () => {
+  it('classifies it identically to the round-budget sibling', () => {
+    expect(isIncompleteStopReason(CONTEXT_PRESSURE_WIND_DOWN)).toBe(true);
+    expect(incompleteToolResultFields(CONTEXT_PRESSURE_WIND_DOWN)).toEqual({
+      incomplete: true,
+      incompleteReason: CONTEXT_PRESSURE_WIND_DOWN,
+    });
+  });
+
+  it('names the context cause in the parent-visible banner', () => {
+    const out = annotateIfIncomplete('partial findings', CONTEXT_PRESSURE_WIND_DOWN);
+    expect(out).toContain('PARTIAL RESULT');
+    expect(out).toContain('context-window limit');
+    expect(out).not.toContain('iteration cap');
   });
 });

@@ -222,7 +222,7 @@ describe('updateHandoffAnswer', () => {
     await writeHandoff(record, testDir);
 
     const before = Date.now();
-    const result = await updateHandoffAnswer(record.taskId, 'Alice', 'telegram', testDir);
+    const result = await updateHandoffAnswer(record.taskId, 'Alice', 'telegram', { handoffsDir: testDir });
     const after = Date.now();
 
     expect(result.won).toBe(true);
@@ -247,7 +247,7 @@ describe('updateHandoffAnswer', () => {
       originalCommand: '/run-preserved',
     });
     await writeHandoff(record, testDir);
-    const result = await updateHandoffAnswer(record.taskId, true, 'web', testDir);
+    const result = await updateHandoffAnswer(record.taskId, true, 'web', { handoffsDir: testDir });
     expect(result.won).toBe(true);
 
     const read = await readHandoff(record.taskId, testDir);
@@ -261,7 +261,7 @@ describe('updateHandoffAnswer', () => {
 
   it('throws if the record does not exist', async () => {
     await expect(
-      updateHandoffAnswer('q-no-record', 'x', 'telegram', testDir),
+      updateHandoffAnswer('q-no-record', 'x', 'telegram', { handoffsDir: testDir }),
     ).rejects.toThrow(/no record found/);
   });
 
@@ -274,7 +274,7 @@ describe('updateHandoffAnswer', () => {
       answerSource: 'telegram',
     });
     await writeHandoff(record, testDir);
-    const result = await updateHandoffAnswer(record.taskId, 'second answer', 'web', testDir);
+    const result = await updateHandoffAnswer(record.taskId, 'second answer', 'web', { handoffsDir: testDir });
     expect(result.won).toBe(false);
   });
 
@@ -289,7 +289,7 @@ describe('updateHandoffAnswer', () => {
     await utimes(lockFile, staleTime, staleTime);
 
     // updateHandoffAnswer should detect the stale lock, remove it, and succeed.
-    const result = await updateHandoffAnswer(record.taskId, 'recovered', 'telegram', testDir);
+    const result = await updateHandoffAnswer(record.taskId, 'recovered', 'telegram', { handoffsDir: testDir });
     expect(result.won).toBe(true);
 
     const read = await readHandoff(record.taskId, testDir);
@@ -303,8 +303,8 @@ describe('updateHandoffAnswer', () => {
 
     // Fire both calls in parallel — only one should acquire the exclusive lock.
     const [r1, r2] = await Promise.all([
-      updateHandoffAnswer(record.taskId, 'answer-from-caller-1', 'telegram', testDir),
-      updateHandoffAnswer(record.taskId, 'answer-from-caller-2', 'web', testDir),
+      updateHandoffAnswer(record.taskId, 'answer-from-caller-1', 'telegram', { handoffsDir: testDir }),
+      updateHandoffAnswer(record.taskId, 'answer-from-caller-2', 'web', { handoffsDir: testDir }),
     ]);
 
     const winners = [r1.won, r2.won].filter(Boolean);
@@ -317,6 +317,39 @@ describe('updateHandoffAnswer', () => {
     const final = await readHandoff(record.taskId, testDir);
     expect(final?.status).toBe('answered');
     expect(final?.answeredAt).toBeDefined();
+  });
+
+  it('stores responderIdentity when supplied', async () => {
+    const record = makeRecord({ taskId: 'q-responder-id' });
+    await writeHandoff(record, testDir);
+
+    const result = await updateHandoffAnswer(record.taskId, 'yes', 'telegram', { handoffsDir: testDir, responderIdentity: '123456789:alice' });
+    expect(result.won).toBe(true);
+
+    const read = await readHandoff(record.taskId, testDir);
+    expect(read?.responderIdentity).toBe('123456789:alice');
+    expect(read?.answerSource).toBe('telegram');
+  });
+
+  it('leaves responderIdentity undefined when not supplied', async () => {
+    const record = makeRecord({ taskId: 'q-responder-absent' });
+    await writeHandoff(record, testDir);
+
+    await updateHandoffAnswer(record.taskId, 'done', 'repl', { handoffsDir: testDir });
+
+    const read = await readHandoff(record.taskId, testDir);
+    expect(read?.responderIdentity).toBeUndefined();
+    expect(read?.answerSource).toBe('repl');
+  });
+
+  it('stores userId-only identity when username is absent', async () => {
+    const record = makeRecord({ taskId: 'q-responder-no-uname' });
+    await writeHandoff(record, testDir);
+
+    await updateHandoffAnswer(record.taskId, 'ok', 'telegram', { handoffsDir: testDir, responderIdentity: '987654321' });
+
+    const read = await readHandoff(record.taskId, testDir);
+    expect(read?.responderIdentity).toBe('987654321');
   });
 });
 

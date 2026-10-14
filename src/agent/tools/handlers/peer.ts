@@ -15,7 +15,7 @@
 
 import type { ToolResult } from '../types.js';
 import type { ToolHandlerContext } from '../types.js';
-import { readLivePresenceFiles, readPresenceFiles } from '../../awareness/presence.js';
+import { readLivePresenceFiles } from '../../awareness/presence.js';
 import { sendToSession, describeTargetState } from '../../peer/send.js';
 import { countPending } from '../../peer/inbox-store.js';
 import { findDeliveredEnvelope } from '../../peer/inbox-store.js';
@@ -84,10 +84,12 @@ export async function sendToSessionHandler(
   }
   const traceWriter = context?.traceWriter;
 
-  // Read caller's own presence file to get name (best-effort).
+  // Read all presence files once to get the caller's own name (best-effort).
+  // readLivePresenceFiles() already filters by liveness; the caller is always
+  // live (it's the current session), so it appears in the result set.
   let callerName: string | undefined;
   try {
-    const allRecords = await readPresenceFiles();
+    const allRecords = await readLivePresenceFiles();
     const self = allRecords.find((r) => r.sessionId === callerSessionId);
     callerName = self?.name;
   } catch {

@@ -157,3 +157,58 @@ describe('runConnectionPhase — connection-phase status retries', () => {
     expect(createStream).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('runConnectionPhase — independent retry budgets', () => {
+  it('a 429 still gets its own retry allowance after network failures consumed shared counter', async () => {
+    __setRetryBaseDelay(0);
+    vi.useFakeTimers();
+    // Scenario: MAX_CONNECTION_RETRIES network errors (all retried, then
+    // recover), followed by a 429 rate-limit. With a shared `attempt` counter
+    // the 429 would see attempt=MAX_CONNECTION_RETRIES and get zero retries.
+    // With split counters the 429 sees overloadAttempts=0 and retries normally.
+    let calls = 0;
+    const createStream = vi.fn(async (_signal: AbortSignal) => {
+      calls++;
+      // Calls 1..MAX_CONNECTION_RETRIES: network errors (retried, not exhausted).
+      if (calls <= MAX_CONNECTION_RETRIES) throw new APIConnectionError();
+      // Call MAX_CONNECTION_RETRIES+1: network recovers, but a 429 arrives instead.
+      if (calls === MAX_CONNECTION_RETRIES + 1) throw new APIError(429, 'Too Many Requests');
+      // Call MAX_CONNECTION_RETRIES+2: success.
+      return emptyStream;
+    });
+    const ac = new AbortController();
+    const p = runConnectionPhase(createStream, ac.signal, ac.signal, undefined, 'test-model');
+    await vi.runAllTimersAsync();
+    const result = await p;
+    // With split counters the 429 retries on its own budget and succeeds.
+    expect(result.ok).toBe(true);
+    // MAX_CONNECTION_RETRIES network retries + 1 failed 429 + 1 success
+    expect(createStream).toHaveBeenCalledTimes(MAX_CONNECTION_RETRIES + 2);
+  });
+
+  it('exhausting network retries does not affect overload retry budget', async () => {
+    __setRetryBaseDelay(0);
+    vi.useFakeTimers();
+    // Exhaust the full network budget, then verify a 429 on a fresh connection
+    // attempt still gets its own full retry allowance.
+    let calls = 0;
+    const createStream = vi.fn(async (_signal: AbortSignal) => {
+      calls++;
+      // Calls 1..MAX_CONNECTION_RETRIES: network errors, all retried.
+      if (calls <= MAX_CONNECTION_RETRIES) throw new APIConnectionError();
+      // Calls MAX+1..MAX+MAX: 429 rate-limit errors (MAX of them, all retried).
+      // With a shared counter, the first 429 at call MAX+1 would see
+      // attempt==MAX, so `attempt < MAX` is false and it gets zero retries.
+      if (calls <= MAX_CONNECTION_RETRIES + MAX_CONNECTION_RETRIES) throw new APIError(429, 'Too Many Requests');
+      // Call MAX+MAX+1: succeed.
+      return emptyStream;
+    });
+    const ac = new AbortController();
+    const p = runConnectionPhase(createStream, ac.signal, ac.signal, undefined, 'test-model');
+    await vi.runAllTimersAsync();
+    const result = await p;
+    expect(result.ok).toBe(true);
+    // MAX network retries + MAX overload retries + 1 success
+    expect(createStream).toHaveBeenCalledTimes(MAX_CONNECTION_RETRIES * 2 + 1);
+  });
+});

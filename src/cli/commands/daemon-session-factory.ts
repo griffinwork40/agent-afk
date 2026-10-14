@@ -38,7 +38,9 @@ export type DaemonSessionFactory = ((
   /**
    * Close the shared MemoryStore / StateStore this factory created (if any)
    * and reset them so a later spawn re-opens fresh handles. Sessions never
-   * close these stores themselves — the factory is the owner. Idempotent.
+   * close these shared stores themselves — the factory is the owner. Also
+   * releases any residual per-task workspaces (normally closed with their
+   * sessions). Idempotent.
    * Callers (tests, or a daemon shutdown path) must only call this once no
    * session built by this factory is still running.
    */
@@ -80,6 +82,7 @@ export function buildDaemonSessionFactory(
   // task's run. Create a fresh store per task invocation instead.
   let memoryStore: MemoryStore | undefined;
   let stateStore: StateStore | undefined;
+  const workspaces = new Set<WorkspaceStore>();
   const factory = (config: AgentConfig, ownedTraceWriter?: import('../../agent/trace/index.js').TraceWriter): AgentSession => {
     // Ephemeral abort controller — the daemon root session has no parent
     // to propagate cancellation from.
@@ -105,6 +108,7 @@ export function buildDaemonSessionFactory(
     // would inject stale workspace entries from a prior task's run.
     // Skipped when workspace is disabled (AFK_WORKSPACE_DISABLED=1).
     const workspaceStore = env.AFK_WORKSPACE_DISABLED === '1' ? undefined : new WorkspaceStore();
+    if (workspaceStore !== undefined) workspaces.add(workspaceStore);
     const { rootManager, subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
       surface: 'daemon',
       parentSession: stubParent,
@@ -207,6 +211,13 @@ export function buildDaemonSessionFactory(
       ...(daemonMaxBudgetUsd !== undefined ? { maxBudgetUsd: daemonMaxBudgetUsd } : {}),
     }))), ownedTraceWriter);
     bound = session;
+    const close = session.close.bind(session);
+    let closing: Promise<void> | undefined;
+    session.close = () => closing ??= (async () => {
+      try { await close(); } finally {
+        if (workspaceStore !== undefined && workspaces.delete(workspaceStore)) workspaceStore.close();
+      }
+    })();
     // Subagent-success rollup: wire both the root manager and the compose
     // executor so all subagent token/cost data (including compose DAG nodes)
     // accumulates into this session's session_sealed telemetry. Late-bound
@@ -223,6 +234,10 @@ export function buildDaemonSessionFactory(
   };
   return Object.assign(factory, {
     dispose(): void {
+      for (const workspace of workspaces) {
+        workspaces.delete(workspace);
+        workspace.close();
+      }
       memoryStore?.close();
       memoryStore = undefined;
       stateStore?.close();

@@ -12,6 +12,7 @@ import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { getWhatifDir } from '../paths.js';
 import type { Prediction, Verdict } from './types.js';
+import { readJsonlFile } from '../utils/jsonl.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,28 +77,33 @@ export async function trackRecordSummary(
 ): Promise<string | undefined> {
   const ledgerPath = file ?? path.join(getWhatifDir(), 'ledger.jsonl');
 
-  let raw: string;
-  try {
-    raw = await fsp.readFile(ledgerPath, 'utf8');
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw e;
-  }
-
   // ── Aggregate per change kind ─────────────────────────────────────────────
   const stats = new Map<string, { confirmed: number; total: number }>();
 
-  for (const line of raw.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
+  // Discriminant triple: `ts` (ISO timestamp string), `verdict` ('confirmed' |
+  // 'refuted'), and `changeKinds` (string array) are the fields that every
+  // CalibrationRecord must carry and that plain JSON objects (e.g. index lines,
+  // partial writes) will not have. Checking all three — including the array
+  // discriminant — gives stronger narrowing than a non-null object check alone
+  // (the `isEffectRecord` pattern).
+  const isCalibrationRecord = (x: unknown): x is CalibrationRecord =>
+    x !== null &&
+    typeof x === 'object' &&
+    typeof (x as Record<string, unknown>)['ts'] === 'string' &&
+    typeof (x as Record<string, unknown>)['verdict'] === 'string' &&
+    Array.isArray((x as Record<string, unknown>)['changeKinds']);
 
-    let rec: CalibrationRecord;
-    try {
-      rec = JSON.parse(trimmed) as CalibrationRecord;
-    } catch {
-      continue;
-    }
+  // readJsonlFile handles ENOENT gracefully (zero records); other I/O errors
+  // propagate to the caller, preserving the previous throw-on-unexpected-error
+  // contract.
+  const records: CalibrationRecord[] = [];
+  for await (const rec of readJsonlFile<CalibrationRecord>(ledgerPath, {
+    guard: isCalibrationRecord,
+  })) {
+    records.push(rec);
+  }
 
+  for (const rec of records) {
     if (rec.verdict !== 'confirmed' && rec.verdict !== 'refuted') continue;
 
     for (const kind of rec.changeKinds) {

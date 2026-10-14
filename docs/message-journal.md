@@ -198,6 +198,40 @@ back to its text `shadowHistory`, as before.
 - The OpenAI-compatible provider previously resumed text-only; with a journal
   it resumes tool calls and results too.
 
+## Display fold (on-screen replay)
+
+`--resume`, `/fork`, and `/history` re-render the prior conversation on
+screen from the journal (`printResumeBanner` in
+`src/cli/commands/interactive/shared.ts`, `/history` in
+`src/cli/slash/commands/info.ts`). The sidecar `turns[]` replay is the
+fallback when a session has no journal.
+
+The model fold cannot drive this: compaction replaces history with a
+summary, and `forkJournal` copies only the current fold, so a fork of a
+compacted session would show *less* than the human saw. `loadDisplayMessages`
+(`src/agent/journal/display-fold.ts`) folds the raw records with display
+semantics instead:
+
+| Record | Model fold | Display fold |
+|---|---|---|
+| truncate `compact` / `resync` / `repair` / `provider_switch`, or an append at `index < length` | drops the tail | keeps the rows; the re-appended messages match back by fingerprint (tool blocks by id, thinking ignored) and the original row wins, so a microcompaction placeholder never replaces real output |
+| truncate `rewind` | drops the tail | drops the rows |
+| truncate `clear` | drops the tail | starts over |
+| compaction summary + ack | kept | never shown |
+
+The match window closes at the first append that matches nothing, so a later
+identical message ("continue" twice) gets its own row. A fork is replayed as
+its parent's records up to the fork instant (`meta.ts`, disambiguated within
+the same millisecond by `forkedFrom.length`), then the fork's own records,
+whose re-appended fold matches back onto the parent's rows.
+
+Rendering (`src/cli/commands/interactive/turn-record-renderer.replay.journal.ts`)
+groups messages into turns, recovers the typed text from preamble-wrapped user
+messages (the sidecar `TurnRecord.user` texts are passed as exact-suffix hints),
+translates each model round into the `OutputEvent`s a live turn emits, and feeds
+them to a non-TTY `StreamRenderer`, one per round so tool calls stay under the
+text that issued them.
+
 ## Retention
 
 `sessions/<id>/` directories (ledger, journal, blobs, subagents) are swept by
@@ -230,6 +264,7 @@ sidecar path. No redaction is applied (same as Claude Code); files are 0600 in
 | `findToolResult(id, toolUseId)` | web UI full tool output, `afk trace show --results` |
 | `readJournalRecords` + `foldJournal` | audit, analysis |
 | `forkJournal(src, dst)` | `/fork` |
+| `loadDisplayMessages(id)` / `foldForDisplay` | on-screen replay (resume banner, `/history`) |
 
 Import everything from `src/agent/journal/index.ts`.
 

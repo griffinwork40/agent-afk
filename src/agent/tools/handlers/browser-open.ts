@@ -23,7 +23,7 @@ import { emitBrowserEvent } from '../../trace/emit.js';
 
 import { browserTimeoutFailureClass } from './playwright-hints.js';
 import { acquireBrowserProvider } from './browser-provider.js';
-import { errorMessage } from '../../../utils/errors.js';
+import { abortReason, errorMessage } from '../../../utils/errors.js';
 import type { BrowserHandlerOptions } from './browser-provider.js';
 // Re-export so existing importers (browser-observe, browser-act, browser-screenshot)
 // continue to resolve `BrowserHandlerOptions` from this module without changes.
@@ -93,8 +93,7 @@ export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): Tool
   return async (input, signal, context?: ToolHandlerContext) => {
     // Pre-aborted short-circuit.
     if (signal.aborted) {
-      const reason = signal.reason;
-      const msg = reason instanceof Error ? reason.message : String(reason ?? 'aborted');
+            const msg = abortReason(signal.reason);
       return { content: `browser_open aborted: ${msg}`, isError: true, failureClass: abortFailureClass(signal) };
     }
 
@@ -122,7 +121,7 @@ export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): Tool
         void emitBrowserEvent(context?.traceWriter, {
           tool: 'browser_open',
           toolUseId: context?.toolUseId ?? '',
-          ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+          ...(routingBackend ? { backend: routingBackend } : {}),
           ...(routingReason ? { backendReason: routingReason } : {}),
           urlBefore: null,
           urlAfter: null,
@@ -144,7 +143,7 @@ export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): Tool
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_open',
         toolUseId: context?.toolUseId ?? '',
-        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingBackend ? { backend: routingBackend } : {}),
         ...(routingReason ? { backendReason: routingReason } : {}),
         urlBefore: null,
         urlAfter: obs.url,
@@ -159,7 +158,7 @@ export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): Tool
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_open',
         toolUseId: context?.toolUseId ?? '',
-        ...(routingBackend ? { backend: routingBackend as 'playwright' | 'agent-browser' } : {}),
+        ...(routingBackend ? { backend: routingBackend } : {}),
         ...(routingReason ? { backendReason: routingReason } : {}),
         urlBefore: null,
         urlAfter: null,

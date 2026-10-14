@@ -146,3 +146,37 @@ describe('buildBeforeTurnEnd — counter increments across repeated calls (Findi
     expect(dispatch).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// #2957: stopDispatchedBySeam is set only when the seam actually dispatched
+// ---------------------------------------------------------------------------
+
+describe('buildBeforeTurnEnd — stopDispatchedBySeam (#2957)', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('cap=0: leaves stopDispatchedBySeam unset so the session-layer fallback fires Stop', async () => {
+    vi.stubEnv('AFK_STOP_HOOK_MAX_CONTINUATIONS', '0');
+    const dispatch = vi.fn().mockResolvedValue({});
+    const wiring = makeWiring();
+    await buildBeforeTurnEnd(makeDeps(makeRegistry({ dispatch }), wiring))(0, 'Done.');
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(wiring.stopDispatchedBySeam).not.toBe(true);
+  });
+
+  it('sets stopDispatchedBySeam when the seam dispatched Stop', async () => {
+    vi.stubEnv('AFK_STOP_HOOK_MAX_CONTINUATIONS', '2');
+    const wiring = makeWiring();
+    await buildBeforeTurnEnd(makeDeps(makeRegistry(), wiring))(0, 'Done.');
+    expect(wiring.stopDispatchedBySeam).toBe(true);
+  });
+
+  it('a later cap-reached round does not clear a dispatch from an earlier round', async () => {
+    vi.stubEnv('AFK_STOP_HOOK_MAX_CONTINUATIONS', '1');
+    const dispatch = vi.fn().mockRejectedValue(new HookBlockedError('blocked', 'Stop', 'verify'));
+    const wiring = makeWiring();
+    const cb = buildBeforeTurnEnd(makeDeps(makeRegistry({ dispatch }), wiring));
+    expect((await cb(0, 'Done.'))?.continueWith).toBe('verify');
+    expect((await cb(1, 'Done.'))?.continueWith).toBeUndefined();
+    expect(wiring.stopDispatchedBySeam).toBe(true);
+  });
+});

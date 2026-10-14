@@ -74,6 +74,8 @@ import {
   queryRewindTargets,
   rewindQueryConversation,
 } from './query-maintenance.js';
+import { rewindFiles as rewindFilesImpl } from '../../file-checkpoint/rewind-files.js';
+import { currentWritePolicy } from '../../file-checkpoint/write-policy.js';
 
 // Re-exported so the historical `from './query-runtime.js'` (and thence
 // `query.js` / `index.js`) import paths stay valid after the #824 split.
@@ -215,6 +217,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       ...(opts.messageJournal ? { messageJournal: opts.messageJournal } : {}),
       ...(opts.autoCompactThreshold !== undefined ? { autoCompactThreshold: opts.autoCompactThreshold } : {}),
       ...(opts.initialUsageInputTokens !== undefined ? { initialUsageInputTokens: opts.initialUsageInputTokens } : {}),
+      ...(opts.enableFileCheckpointing ? { enableFileCheckpointing: true } : {}),
     });
     this.abort = new AbortCoordinator();
   }
@@ -272,7 +275,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       },
       get temperature() { return query.temperature; },
       get thinkingBlockBinding() {
-        return isFable51(query.state.currentModel.toLowerCase()) && query.baseUrl === undefined
+        return isFable51(query.state.currentModel) && query.baseUrl === undefined
           ? ({ prefix_mismatch_behavior: 'drop_block' as const })
           : undefined;
       },
@@ -397,14 +400,21 @@ export class AnthropicDirectQuery implements ProviderQuery {
   }
 
   async rewindFiles(
-    _userMessageId: string,
-    _options?: { dryRun?: boolean },
+    userMessageId: string,
+    options?: { dryRun?: boolean },
   ): Promise<ProviderRewindResult> {
-    return {
-      canRewind: false,
-      error:
-        'anthropic-direct provider does not support file checkpoint rewind',
-    };
+    if (this.state.currentTurnId !== undefined) {
+      return { canRewind: false, error: 'Cannot rewind files while a turn is in flight.' };
+    }
+    return rewindFilesImpl(
+      {
+        sessionId: this.initSessionId,
+        enableFileCheckpointing: this.state.enableFileCheckpointing,
+        writePolicy: currentWritePolicy(this.state.toolDispatcher, { resolveBase: this._cwd }),
+      },
+      userMessageId,
+      options,
+    );
   }
 
   async compact(): Promise<ProviderCompactResult> {

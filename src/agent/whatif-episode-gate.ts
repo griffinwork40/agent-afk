@@ -35,6 +35,7 @@ import { env } from '../config/env.js';
 import type { HookContext, HookDecision } from './hooks.js';
 import { categorizeTool } from './tool-category.js';
 import { classifyBashCommand } from './tools/readonly-bash.js';
+import { isBackgroundBashLaunch } from './tools/bash-background-flag.js';
 
 // ---------------------------------------------------------------------------
 // Module-scope latch: once a 'recorded' verdict fires in this process, every
@@ -144,6 +145,7 @@ function shouldExecute(toolName: string, input: unknown): boolean {
 
   // Bash: allowed only when the classifier confirms it is non-mutating.
   if (toolName === 'bash') {
+    if (isBackgroundBashLaunch(toolName, input)) return false;
     const cmd =
       typeof input === 'object' && input !== null
         ? String((input as Record<string, unknown>)['command'] ?? '')

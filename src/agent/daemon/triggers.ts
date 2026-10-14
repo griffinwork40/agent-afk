@@ -15,6 +15,12 @@
  * @module agent/daemon/triggers
  */
 
+import {
+  TASK_MAX_ATTEMPTS_LIMIT,
+  TASK_RETRY_DELAY_MIN_MS,
+  TASK_RETRY_DELAY_MAX_MS,
+} from './task-retry.js';
+
 export type TriggerMode = 'cron' | 'sessionstart' | 'both' | 'pull';
 
 /**
@@ -29,8 +35,8 @@ export type TriggerMode = 'cron' | 'sessionstart' | 'both' | 'pull';
 export type TaskExecutor = 'agent' | 'shell' | 'builtin';
 
 /** Known builtin task names that `executor: 'builtin'` can dispatch to. */
-export const KNOWN_BUILTINS = ['worktree-prune', 'tool-health'] as const;
-export type BuiltinTaskName = (typeof KNOWN_BUILTINS)[number];
+const KNOWN_BUILTINS = ['worktree-prune', 'tool-health'] as const;
+type BuiltinTaskName = (typeof KNOWN_BUILTINS)[number];
 
 export interface ScheduledTask {
   /** Stable identifier; stops/restarts target this. */
@@ -49,8 +55,24 @@ export interface ScheduledTask {
   executor?: TaskExecutor;
   /** Trigger mode. */
   trigger: TriggerMode;
-  /** Cron expression (5- or 6-field). Required when trigger includes `'cron'`. */
+  /** Cron expression (5-field only — no year). Required when trigger includes `'cron'`. */
   cronExpression?: string;
+  /**
+   * One-shot fire time (ISO 8601). When set the task fires once at or after
+   * this instant and is then automatically disabled. Mutually exclusive with
+   * a recurring `cronExpression` — use one or the other, not both.
+   * The scheduler checks `runAt` on every cron tick so the precision is
+   * bounded by the cron interval; sub-minute precision is not guaranteed.
+   */
+  runAt?: string;
+  /**
+   * Hard expiry (ISO 8601). When set and the current time is past this
+   * instant, the scheduler skips the task and records a
+   * `status:'skipped', skipReason:'expired'` telemetry entry. The task is
+   * also automatically disabled in the store so it never fires again.
+   * Works with both recurring cron tasks and `runAt` one-shots.
+   */
+  expiresAt?: string;
   /**
    * Per-task cooldown override for sessionstart fires. Falls back to the
    * scheduler's default (6h) when omitted.
@@ -84,6 +106,17 @@ export interface ScheduledTask {
    * Shell tasks honor this too: execFile receives it as the `cwd` option.
    */
   cwd?: string;
+  /**
+   * Total attempts per run (including the first) for `executor: 'agent'`
+   * tasks. Default 1 = no retry. When > 1, a run that fails with a
+   * classified-transient error (429, network blip, provider 5xx) is retried
+   * in-process with exponential backoff while still holding the overlap
+   * guard. Non-transient failures never retry. Bounds are enforced at the
+   * input surfaces — see `parseTaskRetryFields` in `./task-retry.ts`.
+   */
+  maxAttempts?: number;
+  /** Backoff base (ms) between retry attempts; doubles per attempt. See `maxAttempts`. */
+  retryDelayMs?: number;
 }
 
 /**
@@ -94,7 +127,7 @@ export function validateScheduledTask(task: ScheduledTask): void {
   if (!task.taskId) throw new Error('ScheduledTask.taskId is required');
   if (!task.command) throw new Error(`task ${task.taskId}: command is required`);
   if (task.trigger === 'cron' || task.trigger === 'both') {
-    if (!task.cronExpression) {
+    if (!task.cronExpression && !task.runAt) {
       throw new Error(`task ${task.taskId}: cronExpression required for trigger=${task.trigger}`);
     }
   }
@@ -102,6 +135,23 @@ export function validateScheduledTask(task: ScheduledTask): void {
     throw new Error(
       `task ${task.taskId}: cronExpression must not be set when trigger='pull' — pull tasks are dequeued from the queue directory, not scheduled via cron`,
     );
+  }
+  if (task.runAt !== undefined) {
+    const ms = Date.parse(task.runAt);
+    if (isNaN(ms)) {
+      throw new Error(`task ${task.taskId}: runAt must be a valid ISO 8601 date string`);
+    }
+    if (task.cronExpression !== undefined) {
+      throw new Error(
+        `task ${task.taskId}: runAt and cronExpression are mutually exclusive — use one or the other`,
+      );
+    }
+  }
+  if (task.expiresAt !== undefined) {
+    const ms = Date.parse(task.expiresAt);
+    if (isNaN(ms)) {
+      throw new Error(`task ${task.taskId}: expiresAt must be a valid ISO 8601 date string`);
+    }
   }
   const executor = task.executor ?? 'agent';
   if (executor === 'builtin' && !KNOWN_BUILTINS.includes(task.command as BuiltinTaskName)) {
@@ -111,5 +161,21 @@ export function validateScheduledTask(task: ScheduledTask): void {
   }
   if (task.cwd !== undefined && (typeof task.cwd !== 'string' || !task.cwd)) {
     throw new Error(`task ${task.taskId}: cwd must be a non-empty string when set`);
+  }
+  // Validate retry fields with the same bounds as the input surfaces so a
+  // hand-edited schedules.json is caught at registration, not silently clamped.
+  if (task.maxAttempts !== undefined) {
+    if (!Number.isInteger(task.maxAttempts) || task.maxAttempts < 1 || task.maxAttempts > TASK_MAX_ATTEMPTS_LIMIT) {
+      throw new Error(
+        `task ${task.taskId}: maxAttempts must be an integer between 1 and ${TASK_MAX_ATTEMPTS_LIMIT}`,
+      );
+    }
+  }
+  if (task.retryDelayMs !== undefined) {
+    if (!Number.isInteger(task.retryDelayMs) || task.retryDelayMs < TASK_RETRY_DELAY_MIN_MS || task.retryDelayMs > TASK_RETRY_DELAY_MAX_MS) {
+      throw new Error(
+        `task ${task.taskId}: retryDelayMs must be an integer between ${TASK_RETRY_DELAY_MIN_MS} and ${TASK_RETRY_DELAY_MAX_MS}`,
+      );
+    }
   }
 }

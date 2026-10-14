@@ -18,6 +18,8 @@ import type { TraceSink } from '../trace/index.js';
 import type { SpawnedPidRegistry } from './handlers/pid-registry.js';
 import type { UserAttention } from './user-yield.js';
 import type { DetachableToolRegistry } from './detach-registry.js';
+import type { ProcessJobRegistry } from '../shell-jobs/process-jobs.js';
+import type { FileCheckpointRegistry } from '../file-checkpoint/file-checkpoint.js';
 
 /**
  * Per-invocation context forwarded to every tool handler.
@@ -37,6 +39,18 @@ import type { DetachableToolRegistry } from './detach-registry.js';
 export interface ToolHandlerContext {
   /** Path-resolution anchor for relative paths. */
   resolveBase?: string;
+  /**
+   * @deprecated Use `resolveBase` instead. Populated at runtime as a direct
+   * alias of `resolveBase` for back-compatibility with custom tools that read
+   * `context.cwd`. Will be removed in the next semver-major release.
+   *
+   * `context.cwd` was removed in #2748 as an internal clean-up. It reaches the
+   * public npm surface via the exported `tool()` API (`custom-tool.ts`), making
+   * the removal a silent breaking change for JS consumers. This alias restores
+   * the field so existing third-party tools continue to work; migrate to
+   * `context.resolveBase` before the next major version.
+   */
+  cwd?: string;
   /**
    * Allowed roots for read-class tools (read_file, glob, grep,
    * list_directory). Defaults to `[resolveBase]` when unset.
@@ -156,6 +170,29 @@ export interface ToolHandlerContext {
    * Absent for non-detachable tools, subagents, and headless surfaces.
    */
   detachRegistry?: DetachableToolRegistry;
+  /**
+   * Registry for model-started background processes (`bash` with
+   * `run_in_background: true`). Attached by the dispatcher to `bash` only, and
+   * only on root interactive sessions that wire one. Absent for subagent
+   * children, Telegram, daemon and one-shot runs, where the bash handler
+   * refuses background launches with an explicit "unavailable" error.
+   */
+  processJobs?: ProcessJobRegistry;
+  /**
+   * File-checkpoint registry for the current user turn.
+   *
+   * When present (i.e. when `enableFileCheckpointing` is true), write-class
+   * tool handlers (`write_file`, `edit_file`, `patch_apply`) call
+   * `registry.snapshotFile(absPath)` BEFORE mutating the file so that
+   * `rewindFiles(turnId)` can restore the pre-turn state later.
+   *
+   * Absent when file checkpointing is disabled or when no sessionId is
+   * available (headless one-shot runs). The first snapshot of a path in a
+   * given turn wins; subsequent calls for the same path are no-ops.
+   *
+   * Bash-made file mutations are NOT tracked (out of scope).
+   */
+  fileCheckpoint?: FileCheckpointRegistry;
 }
 
 /**

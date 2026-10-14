@@ -115,6 +115,13 @@ export class AdmissionQueue {
    *
    * The `cutoff` is the next seq that would be issued — used by callers to
    * verify that late arrivals after the snapshot are not included.
+   *
+   * Implementation note: the sort is applied unconditionally (even when all
+   * entries are of the same kind and already in seq order) because seq values
+   * are strictly monotone and the queue is append-only — in practice the sort
+   * is a no-op on sorted input (O(n) for TimSort), so the cost is bounded.
+   * An optimised path would skip the sort when `hasHuman=false` (all-peer,
+   * already FIFO), but correctness takes priority over micro-optimisation here.
    */
   snapshot(): AdmissionSnapshot {
     const hasHuman = this.entries.some((e) => e.kind === 'human');
@@ -134,6 +141,12 @@ export class AdmissionQueue {
    * their joined text (empty string if no entries).
    *
    * Only removes entries whose seq is still present — idempotent on double drain.
+   *
+   * Implementation note: the loop iterates in reverse and splices individual
+   * entries by index (`O(n²)` in the worst case). For the configured maximum
+   * of `maxCount = 50` entries this is bounded and harmless; the splice avoids
+   * a full array copy by mutating in place, which keeps constant-factor cost
+   * lower than a filter+reassign approach for this queue size.
    */
   drain(snap: AdmissionSnapshot): string {
     if (snap.entries.length === 0) return '';

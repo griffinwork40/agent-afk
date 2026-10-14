@@ -30,6 +30,7 @@
  */
 
 import { formatResetCountdown, type QuotaWindowState, type QuotaWindows } from './quota-indicator.js';
+import { computeBurnRate } from '../agent/usage/burn-rate.js';
 
 /**
  * Mirrors `ContextTier` minus its `normal` band — the quota footer has no
@@ -100,6 +101,20 @@ function capNote(state: QuotaWindowState, now: Date, autoResume: boolean): strin
   return 'AFK pauses and auto-resumes at the cap';
 }
 
+/**
+ * `cap in ~40m at this rate`, or undefined when the projection is suppressed
+ * (idle session, too few samples, or projected cap after reset).
+ */
+function burnRateClause(state: QuotaWindowState, now: Date): string | undefined {
+  if (state.history === undefined || state.history.length === 0) return undefined;
+  const resetsAtMs = state.resetsAt?.getTime();
+  const proj = computeBurnRate(state.history, now.getTime(), resetsAtMs);
+  if (proj === null) return undefined;
+  const msLeft = proj.capsAtMs - now.getTime();
+  if (msLeft <= 0) return undefined;
+  return `cap in ~${formatResetCountdown(msLeft)} at this rate`;
+}
+
 /** `resets in 1h20m`, or undefined when no usable deadline is known. */
 function resetClause(state: QuotaWindowState, now: Date): string | undefined {
   if (state.resetsAt === undefined) return undefined;
@@ -142,6 +157,7 @@ export function formatQuotaUsage(
 
   const percent = Math.round(binding.state.utilization * 100);
   const reset = resetClause(binding.state, now);
+  const burnRate = burnRateClause(binding.state, now);
   const alsoHot = all
     .filter((w) => w !== binding && tierFor(w.state.utilization) !== 'quiet')
     .map((w) => `${w.label} ${Math.round(w.state.utilization * 100)}%`);
@@ -153,15 +169,16 @@ export function formatQuotaUsage(
   // capNote checks. Saying so turns an alarming line into an actionable one;
   // saying so when it is false walks the user away from a turn that will die.
   const parkNote = capNote(binding.state, now, opts.autoResume ?? true);
+  const burnSuffix = burnRate !== undefined ? ` · ${burnRate}` : '';
 
   if (tier === 'over') {
     const head = `  ${binding.label} quota exhausted`;
-    return { tier, text: `${head}${reset === undefined ? '' : ` — ${reset}`} — ${parkNote}${suffix}` };
+    return { tier, text: `${head}${reset === undefined ? '' : ` — ${reset}`} — ${parkNote}${suffix}${burnSuffix}` };
   }
   if (tier === 'near') {
     const head = `  ${binding.label} quota ${percent}% used`;
-    return { tier, text: `${head}${reset === undefined ? '' : ` — ${reset}`} — ${parkNote}${suffix}` };
+    return { tier, text: `${head}${reset === undefined ? '' : ` — ${reset}`} — ${parkNote}${suffix}${burnSuffix}` };
   }
   const head = `  ${binding.label} quota ${percent}% used`;
-  return { tier, text: `${head}${reset === undefined ? '' : ` — ${reset}`}${suffix}` };
+  return { tier, text: `${head}${reset === undefined ? '' : ` — ${reset}`}${suffix}${burnSuffix}` };
 }

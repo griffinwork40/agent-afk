@@ -77,6 +77,11 @@ export class JournalFileWriter {
     return this.len;
   }
 
+  get path(): string | undefined {
+    this.tryResolve();
+    return this.resolved?.appender.path;
+  }
+
   get isClosed(): boolean {
     return this.closed;
   }

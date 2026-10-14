@@ -39,6 +39,7 @@ import type { PermissionMode } from './types/sdk-types.js';
 import { categorizeTool } from './tool-category.js';
 import { classifyBashCommand } from './tools/readonly-bash.js';
 import { isSubagentContext } from './hooks/hook-utils.js';
+import { isBackgroundBashLaunch } from './tools/bash-background-flag.js';
 
 export function createPlanModeGate(
   getMode: () => PermissionMode,
@@ -108,6 +109,12 @@ export function createPlanModeGate(
     // classifier as the read-only skill phases (single source of mutation
     // rules). Best-effort, not a sandbox — see the module header.
     if (toolName === 'bash') {
+      if (isBackgroundBashLaunch(toolName, context.input)) {
+        return {
+          decision: 'block',
+          reason: 'plan mode: bash run_in_background refused — a background process outlives the call. Use /plan off to act.',
+        };
+      }
       const cmd =
         typeof context.input === 'object' && context.input !== null
           ? String((context.input as Record<string, unknown>)['command'] ?? '')

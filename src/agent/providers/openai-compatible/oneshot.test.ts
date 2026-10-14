@@ -22,6 +22,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type OpenAI from 'openai';
 import {
   oneShotChatCompletion,
+  oneShotChatCompletionWithStop,
   oneShotResponses,
   ResponsesSummaryIncompleteError,
   __setOpenAIOneShotClientFactory,
@@ -47,7 +48,7 @@ interface ChatCreateParams {
 type ChatCreateFn = (
   params: ChatCreateParams,
   options?: { signal?: AbortSignal },
-) => Promise<{ choices?: Array<{ message?: { content?: string | null } }> }>;
+) => Promise<{ choices?: Array<{ finish_reason?: string | null; message?: { content?: string | null } }> }>;
 
 function makeClient(createFn: ChatCreateFn): OpenAI {
   return { chat: { completions: { create: createFn } } } as unknown as OpenAI;
@@ -68,6 +69,54 @@ describe('oneShotChatCompletion', () => {
   afterEach(() => {
     __setOpenAIOneShotClientFactory(null);
     vi.clearAllMocks();
+  });
+
+  it.each([false, true])('preserves a custom endpoint with OAuth (forced: %s)', async (forced) => {
+    mockResolveAuth.mockReturnValue({ apiKey: 'oauth-token', source: 'chatgpt-oauth', accountId: 'acct' });
+    const factory = vi.fn(() => makeClient(async () => ({
+      choices: [{ finish_reason: 'stop', message: { content: 'custom' } }],
+    })));
+    const result = await oneShotChatCompletionWithStop({
+      model: 'gpt-5.5', system: 'sys', user: 'msg',
+      baseURL: 'https://custom.example/v1', defaultHeaders: { 'x-custom': 'yes' },
+      forceChatgptOAuth: forced, clientFactory: factory,
+    });
+    expect(mockResolveAuth).toHaveBeenCalledWith(undefined, {}, forced);
+    expect(factory).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: 'oauth-token', baseURL: 'https://custom.example/v1',
+      defaultHeaders: { 'x-custom': 'yes' }, maxRetries: 0,
+    }));
+    expect(result).toEqual({ text: 'custom', stopReason: 'end' });
+  });
+
+  it.each([undefined, 'https://chatgpt.com/backend-api/codex'])(
+    'routes OAuth via Responses when no different endpoint is configured (%s)', async (baseURL) => {
+      mockResolveAuth.mockReturnValue({ apiKey: 'oauth-token', source: 'chatgpt-oauth', accountId: 'acct' });
+      const create = vi.fn(() => streamOf(...completedStreamOf('  subscribed  ')));
+      const factory = vi.fn(() => makeResponsesClient(create));
+      const signal = new AbortController().signal;
+      const result = await oneShotChatCompletionWithStop({
+        model: 'gpt-5.5', system: 'sys', user: 'msg', maxTokens: 32, signal,
+        ...(baseURL === undefined ? {} : { baseURL }), clientFactory: factory,
+      });
+      expect(factory).toHaveBeenCalledWith(expect.objectContaining({
+        apiKey: 'oauth-token', baseURL: 'https://chatgpt.com/backend-api/codex',
+        defaultHeaders: {
+          'OpenAI-Beta': 'responses=experimental', originator: 'agent-afk', 'chatgpt-account-id': 'acct',
+        }, maxRetries: 0,
+      }));
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ store: false, stream: true }), { signal });
+      expect(create.mock.calls[0]?.[0]).not.toHaveProperty('max_output_tokens');
+      expect(result).toEqual({ text: 'subscribed', stopReason: 'end' });
+    },
+  );
+
+  it('does not report an incomplete OAuth response as a completed one-shot', async () => {
+    mockResolveAuth.mockReturnValue({ apiKey: 'oauth-token', source: 'chatgpt-oauth' });
+    await expect(oneShotChatCompletionWithStop({
+      model: 'gpt-5.5', system: 'sys', user: 'msg',
+      clientFactory: () => makeResponsesClient(() => streamOf({ type: 'response.output_text.delta', delta: 'partial' })),
+    })).rejects.toBeInstanceOf(ResponsesSummaryIncompleteError);
   });
 
   // ── happy path ────────────────────────────────────────────────────────────
@@ -320,7 +369,7 @@ describe('oneShotChatCompletion', () => {
       system: 'sys',
       user: 'msg',
       forceChatgptOAuth: true,
-      clientFactory: () => makeClient(async () => ({ choices: [{ message: { content: 'ok' } }] })),
+      clientFactory: () => makeResponsesClient(() => streamOf(...completedStreamOf('ok'))),
     });
     expect(mockResolveAuth).toHaveBeenCalledWith(undefined, {}, true);
   });
@@ -362,6 +411,75 @@ describe('oneShotChatCompletion', () => {
       user: 'msg',
     });
     expect(result).toBe('from-hook');
+  });
+});
+
+// ── oneShotChatCompletionWithStop: stop-reason mapping ───────────────────────
+
+describe('oneShotChatCompletionWithStop (stop-reason mapping)', () => {
+  beforeEach(() => {
+    mockResolveAuth.mockImplementation((explicit?: string) =>
+      okAuth(explicit && explicit.length > 0 ? explicit : 'env-test-key'),
+    );
+  });
+
+  afterEach(() => {
+    __setOpenAIOneShotClientFactory(null);
+    vi.clearAllMocks();
+  });
+
+  it('maps finish_reason length → stopReason max_tokens', async () => {
+    const result = await oneShotChatCompletionWithStop({
+      apiKey: 'sk-test',
+      model: 'gpt-4o-mini',
+      system: 'sys',
+      user: 'msg',
+      clientFactory: () => makeClient(async () => ({
+        choices: [{ finish_reason: 'length', message: { content: 'cut off mid' } }],
+      })),
+    });
+    expect(result.stopReason).toBe('max_tokens');
+    expect(result.text).toBe('cut off mid');
+  });
+
+  it('maps finish_reason stop → stopReason end', async () => {
+    const result = await oneShotChatCompletionWithStop({
+      apiKey: 'sk-test',
+      model: 'gpt-4o-mini',
+      system: 'sys',
+      user: 'msg',
+      clientFactory: () => makeClient(async () => ({
+        choices: [{ finish_reason: 'stop', message: { content: 'complete' } }],
+      })),
+    });
+    expect(result.stopReason).toBe('end');
+  });
+
+  it('maps an unknown finish_reason → stopReason other', async () => {
+    const result = await oneShotChatCompletionWithStop({
+      apiKey: 'sk-test',
+      model: 'gpt-4o-mini',
+      system: 'sys',
+      user: 'msg',
+      clientFactory: () => makeClient(async () => ({
+        choices: [{ finish_reason: 'content_filter', message: { content: 'filtered' } }],
+      })),
+    });
+    expect(result.stopReason).toBe('other');
+  });
+
+  it('oneShotChatCompletion wrapper still returns a plain string (backward compat)', async () => {
+    const result = await oneShotChatCompletion({
+      apiKey: 'sk-test',
+      model: 'gpt-4o-mini',
+      system: 'sys',
+      user: 'msg',
+      clientFactory: () => makeClient(async () => ({
+        choices: [{ finish_reason: 'length', message: { content: 'partial' } }],
+      })),
+    });
+    expect(typeof result).toBe('string');
+    expect(result).toBe('partial');
   });
 });
 

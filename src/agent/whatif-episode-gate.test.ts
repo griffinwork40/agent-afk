@@ -210,6 +210,12 @@ describe('mutating tools are recorded and blocked', () => {
     expect(result).toEqual({ decision: 'block', reason: EPISODE_BLOCK_REASON });
   });
 
+  it('blocks a background bash launch even for a read-only command', () => {
+    const gate = createWhatifEpisodeGate();
+    const result = gate(makePreToolUse('bash', { command: 'git log', run_in_background: true }));
+    expect(result).toEqual({ decision: 'block', reason: EPISODE_BLOCK_REASON });
+  });
+
   it('blocks mutating bash (rm -rf)', () => {
     const gate = createWhatifEpisodeGate();
     const result = gate(makePreToolUse('bash', { command: 'rm -rf /tmp/sandbox' }));

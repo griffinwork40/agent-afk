@@ -4,11 +4,12 @@
  * Spawns N isolated git worktrees, runs a subagent on each in parallel via
  * `runSubagentDAG`, then prints a summary and performs an escape check.
  *
+ * Display helpers live in farm.summary.ts; the FarmRunRecord builder lives in
+ * farm.run-record.ts.
+ *
  * @module cli/commands/farm
  */
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { Command } from 'commander';
 import { palette } from '../palette.js';
 import { createFarm, setFarmMemoryFactId } from '../../agent/worktree.js';
@@ -18,20 +19,24 @@ import { resolveBaseSystemPrompt, getModel } from '../shared-helpers.js';
 import {
   scoreBranch,
   writeScore,
-  rankBranches,
   DEFAULT_TIMEOUT_MS as SCORE_DEFAULT_TIMEOUT_MS,
-  type BranchScore,
 } from '../../skills/score/index.js';
 import { writeFarmFact } from '../../skills/score/memory-write.js';
 import { sendFarmDigest } from '../../skills/score/digest.js';
 import { createDefaultTraceWriter } from '../../agent/trace/factory.js';
-import type { FarmRunRecord, FarmBranchRecord } from '../../skills/score/farm-run-record.js';
 import type { SubagentDAGNode } from '../../agent/dag-subagent.js';
-import type { FarmManifest, CreatedBranch } from '../../agent/worktree.js';
+import type { FarmManifest } from '../../agent/worktree.js';
 import type { DAGRunResult } from '../../agent/dag.js';
 import { errorMessage } from '../../utils/errors.js';
+import { execFileAsync } from '../../utils/exec-file.js';
+import { printSummary, formatScore, type BranchResult } from './farm.summary.js';
+import { runFarmPostRun } from './farm.post-run.js';
 
-const execFileAsync = promisify(execFile);
+// Re-export the public surface that callers (tests, other modules) expect
+// from this module directly — avoids forcing importers to know the sibling files.
+export { FarmIsolationViolation } from './farm.escape-check.js';
+export type { BranchResult } from './farm.summary.js';
+export { formatScore, printSummary };
 
 // ---------------------------------------------------------------------------
 // Escape-check helpers
@@ -62,174 +67,6 @@ async function getSourceRepoDirtyFiles(sourceCwd: string): Promise<string[]> {
   } catch {
     return [];
   }
-}
-
-// ---------------------------------------------------------------------------
-// FarmIsolationViolation
-// ---------------------------------------------------------------------------
-
-export class FarmIsolationViolation extends Error {
-  public readonly dirtyFiles: string[];
-  constructor(dirtyFiles: string[]) {
-    super(
-      `Source repository has uncommitted changes after farm run. ` +
-        `Dirty files:\n${dirtyFiles.map((f) => `  ${f}`).join('\n')}`,
-    );
-    this.name = 'FarmIsolationViolation';
-    this.dirtyFiles = dirtyFiles;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Summary helpers
-// ---------------------------------------------------------------------------
-
-function pad(s: string, n: number): string {
-  return s.length >= n ? s : s + ' '.repeat(n - s.length);
-}
-
-function formatScore(score: BranchScore | null | undefined): string {
-  if (score === undefined) return palette.dim('—');
-  if (score === null) return palette.dim('skipped');
-  // Compact: tests + lint + LoC. Test signal is binary in v1.
-  const testIcon = score.fail === 0 && score.pass > 0
-    ? palette.success('tests✓')
-    : palette.error('tests✗');
-  const lintIcon = score.lint_ok === true
-    ? palette.success('lint✓')
-    : score.lint_ok === false
-    ? palette.error('lint✗')
-    : palette.dim('lint?');
-  const sign = score.loc_delta > 0 ? '+' : '';
-  const loc = palette.dim(`${sign}${score.loc_delta} LoC`);
-  return `${testIcon} ${lintIcon} ${loc}`;
-}
-
-function printSummary(
-  taskName: string,
-  taskSlug: string,
-  branches: CreatedBranch[],
-  branchResults: BranchResult[],
-): void {
-  const line = '─'.repeat(45);
-  console.log(palette.dim(line));
-  console.log(`farm:    ${taskName}`);
-  console.log(`slug:    ${taskSlug}`);
-  console.log('');
-
-  // Determine if any scoring data is present — drives ranked-order display.
-  const anyScored = branchResults.some((r) => r.score != null);
-  const orderedResults = anyScored
-    ? rankBranches(
-        branchResults.map((r) => ({ index: r.index, score: r.score ?? null })),
-      ).map((idx) => branchResults.find((r) => r.index === idx)!)
-    : branchResults;
-
-  for (let i = 0; i < orderedResults.length; i++) {
-    const r = orderedResults[i]!;
-    const branch = branches.find((b) => b.index === r.index)!;
-    const icon = r.ok ? palette.success('✓') : palette.error('✗');
-    const ref = pad(branch.branch, 40);
-    const detail = r.ok
-      ? palette.dim(`(${r.commitCount} commit${r.commitCount === 1 ? '' : 's'})`)
-      : palette.error(`[error: ${r.error}]`);
-    const rank = anyScored ? palette.brand(`#${i + 1} `) : '';
-    const scoreCol = anyScored ? `  ${formatScore(r.score)}` : '';
-    console.log(`${rank}branch-${r.index}  ${icon}  ${ref}   ${detail}${scoreCol}`);
-    console.log(palette.dim(`        worktree: ${branch.path}`));
-  }
-
-  console.log(palette.dim(line));
-  const succeeded = branchResults.filter((r) => r.ok).length;
-  const total = branchResults.length;
-  console.log(`${succeeded}/${total} branches completed.`);
-
-  // All-fail warning per Day 3 spec.
-  const anyTestsPassed = branchResults.some(
-    (r) => r.score != null && r.score.pass > 0,
-  );
-  if (anyScored && !anyTestsPassed) {
-    console.log(palette.warning('⚠  no branch passed tests — ranking falls back to lint + LoC'));
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Internal types
-// ---------------------------------------------------------------------------
-
-interface BranchResult {
-  index: number;
-  ok: boolean;
-  commitCount: number;
-  error?: string;
-  /** Populated after scoring. null if scoring was disabled or the branch failed before scoring. */
-  score?: BranchScore | null;
-}
-
-/**
- * Build the FarmRunRecord consumed by memory write-through and Telegram digest.
- *
- * Determines the `winner` index by re-running `rankBranches` over the scored
- * results — same algorithm `printSummary` uses, so memory/digest/CLI all agree
- * on which branch is #1. If no branch has a score (scoring disabled or all
- * failed), `winner` is left undefined.
- */
-function buildFarmRunRecord(
-  manifest: FarmManifest,
-  branchResults: BranchResult[],
-  startedAt: string,
-): FarmRunRecord {
-  const branches: FarmBranchRecord[] = branchResults.map((r) => {
-    const meta = manifest.branches.find((b) => b.index === r.index);
-    const rec: FarmBranchRecord = {
-      index: r.index,
-      branch: meta?.branch ?? `(unknown-${r.index})`,
-      ok: r.ok,
-      commitCount: r.commitCount,
-    };
-    if (meta?.label !== undefined) rec.label = meta.label;
-    if (r.error !== undefined) rec.error = r.error;
-    if (r.score !== undefined) rec.score = r.score;
-    return rec;
-  });
-
-  // Determine winner: rank only branches that have a score, take the first
-  // ok-and-tests-passing one.
-  const ranked = rankBranches(
-    branchResults.map((r) => ({ index: r.index, score: r.score ?? null })),
-  );
-  let winner: number | undefined;
-  for (const idx of ranked) {
-    const r = branchResults.find((b) => b.index === idx);
-    if (!r || !r.ok || !r.score) continue;
-    if (r.score.pass > 0 && r.score.fail === 0) {
-      winner = idx;
-      break;
-    }
-  }
-  // Fallback: if no branch passed tests but some are `ok` with scoring data,
-  // the top-ranked one is still meaningful (lint + LoC tiebreakers).
-  if (winner === undefined) {
-    for (const idx of ranked) {
-      const r = branchResults.find((b) => b.index === idx);
-      if (r?.ok && r.score) {
-        winner = idx;
-        break;
-      }
-    }
-  }
-
-  const record: FarmRunRecord = {
-    taskName: manifest.taskName,
-    taskSlug: manifest.taskSlug,
-    baseSha: manifest.baseRef,
-    startedAt,
-    completedAt: new Date().toISOString(),
-    branches,
-  };
-  if (winner !== undefined) record.winner = winner;
-  if (manifest.human_decision !== undefined) record.human_decision = manifest.human_decision;
-  return record;
 }
 
 // ---------------------------------------------------------------------------
@@ -430,84 +267,24 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
   // -- Source repo dirty check --
   const dirtyFiles = await getDirtyFn(sourceCwd);
 
-  // -- Score successful branches (Day 3) --
-  // Constraint: sequential (NOT parallel) — concurrent test runs across
-  // worktrees risk OOM on small projects and serialize disk I/O badly.
-  // Each branch's score writes through to <farmDir>/scores/branch-<n>.json
-  // BEFORE the next branch starts, so a crash mid-scoring still surfaces
-  // partial results.
-  if (scoringEnabled) {
-    for (const r of branchResults) {
-      if (!r.ok) {
-        r.score = null;
-        continue;
-      }
-      const branch = manifest.branches.find((b) => b.index === r.index)!;
-      console.log(`[branch-${r.index}] scoring…`);
-      const score = await scoreBranchFn({
-        branchPath: branch.path,
-        baseSha,
-        timeoutMs: scoreTimeoutMs,
-      });
-      r.score = score;
-      try {
-        await writeScoreFn(manifest.farmDir, r.index, score);
-      } catch (err) {
-        // Score persistence failure is non-fatal — the in-memory score still
-        // ranks the branch for printSummary. Surface for visibility.
-        console.error(
-          palette.warning(`[branch-${r.index}] score.json write failed: ${errorMessage(err)}`),
-        );
-      }
-    }
-  }
-
-  // -- Print summary --
-  printSummary(task, manifest.taskSlug, manifest.branches, branchResults);
-
-  // -- Build the FarmRunRecord and dispatch to memory + Telegram (Day 4) --
-  // Constraint: this MUST happen before process.exit. Memory write is
-  // synchronous (sqlite); digest is awaited. Both swallow their own failures
-  // (see writeFarmFact / sendFarmDigest) — farm exit code is unaffected by
-  // either bookkeeping channel.
-  if (memoryWriteEnabled || digestEnabled) {
-    const farmRecord = buildFarmRunRecord(manifest, branchResults, startedAt);
-    if (memoryWriteEnabled) {
-      const memResult = writeFarmFactFn(farmRecord);
-      if ('skipped' in memResult) {
-        console.error(palette.warning(`[memory] write skipped: ${memResult.reason}`));
-      } else {
-        // Thread the returned factId back into the manifest so the Telegram
-        // Respawn handler can cross-reference this run in memory.
-        const { factId } = memResult;
-        try {
-          await setFarmMemoryFactIdFn(manifest.taskSlug, factId);
-        } catch (err) {
-          // Best-effort: manifest is not the source of truth for factId; log and continue.
-          console.error(palette.warning(`[memory] setFarmMemoryFactId failed: ${errorMessage(err)}`));
-        }
-      }
-    }
-    if (digestEnabled) {
-      const digestResult = await sendFarmDigestFn(farmRecord);
-      if (digestResult.sent) {
-        console.log(palette.dim(`[telegram] digest sent (${digestResult.chatCount} chat${digestResult.chatCount === 1 ? '' : 's'})`));
-      } else if (digestResult.reason && digestResult.reason !== 'telegram unconfigured') {
-        console.error(palette.warning(`[telegram] digest failed: ${digestResult.reason}`));
-      }
-    }
-  }
-
-  // -- Exit handling --
-  if (dirtyFiles.length > 0) {
-    const violation = new FarmIsolationViolation(dirtyFiles);
-    console.error(palette.error('\n⚠  ISOLATION VIOLATION'));
-    console.error(palette.error(violation.message));
-    process.exit(1);
-  }
-
-  const allOk = branchResults.every((r) => r.ok);
-  process.exit(allOk ? 0 : 1);
+  // -- Score, summarise, persist, and exit (delegated to farm.post-run.ts) --
+  await runFarmPostRun({
+    task,
+    manifest,
+    baseSha,
+    branchResults,
+    dirtyFiles,
+    startedAt,
+    scoringEnabled,
+    scoreTimeoutMs,
+    memoryWriteEnabled,
+    digestEnabled,
+    _scoreBranch: scoreBranchFn,
+    _writeScore: writeScoreFn,
+    _writeFarmFact: writeFarmFactFn,
+    _sendFarmDigest: sendFarmDigestFn,
+    _setFarmMemoryFactId: setFarmMemoryFactIdFn,
+  });
 }
 
 // ---------------------------------------------------------------------------
