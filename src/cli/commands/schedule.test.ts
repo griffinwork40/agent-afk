@@ -378,7 +378,7 @@ describe('afk schedule CLI — mock-based branch coverage', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Suite 3: error-path coverage (lines 119, 132, 151, 183, 203 in schedule.ts)
+// Suite 3: error-path coverage (lines 119, 132, 151, 167, 183, 203 in schedule.ts)
 //
 // Each subcommand wraps its body in try/catch and delegates to
 // handleCommandError, which calls process.exit.  We make the underlying store
@@ -425,9 +425,11 @@ describe('afk schedule CLI — catch-branch coverage (COV-012)', () => {
     // loadSchedules() swallows its own errors and returns []; printScheduleList is
     // a pure local function that never throws. The catch on line 132 is dead code
     // in the current implementation. This test documents that invariant: list
-    // succeeds without calling process.exit.
+    // succeeds without calling process.exit, and prints the empty-list message.
+    const logSpy = vi.spyOn(console, 'log');
     await buildProgram().parseAsync(['node', 'afk', 'schedule', 'list']);
     expect(exitSpy).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledWith('No scheduled tasks.');
   });
 
   it('remove — catch branch fires when removeSchedule throws (line 151)', async () => {
@@ -436,13 +438,13 @@ describe('afk schedule CLI — catch-branch coverage (COV-012)', () => {
     expect(exitSpy).toHaveBeenCalled();
   });
 
-  it('enable — catch branch fires when toggleScheduleEnabled throws (line 183)', async () => {
+  it('enable — catch branch fires when toggleScheduleEnabled throws (line 167)', async () => {
     vi.spyOn(scheduleStore, 'toggleScheduleEnabled').mockImplementation(() => { throw new Error('enable-fail'); });
     await buildProgram().parseAsync(['node', 'afk', 'schedule', 'enable', 'some-id']);
     expect(exitSpy).toHaveBeenCalled();
   });
 
-  it('disable — catch branch fires when toggleScheduleEnabled throws (line 183/203)', async () => {
+  it('disable — catch branch fires when toggleScheduleEnabled throws (line 183)', async () => {
     vi.spyOn(scheduleStore, 'toggleScheduleEnabled').mockImplementation(() => { throw new Error('disable-fail'); });
     await buildProgram().parseAsync(['node', 'afk', 'schedule', 'disable', 'some-id']);
     expect(exitSpy).toHaveBeenCalled();
