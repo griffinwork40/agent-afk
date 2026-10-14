@@ -33,6 +33,7 @@ const ctx = {
   hasOpenDialogFn: vi.fn() as ReturnType<typeof vi.fn>,
   consumeRequestGuardErrorFn: vi.fn() as ReturnType<typeof vi.fn>,
   clearRequestGuardErrorFn: vi.fn() as ReturnType<typeof vi.fn>,
+  egressLogFn: vi.fn() as ReturnType<typeof vi.fn>,
 };
 
 // ---------------------------------------------------------------------------
@@ -56,6 +57,7 @@ vi.mock('./launcher.js', () => {
         (ctx.consumeRequestGuardErrorFn as (...a: unknown[]) => unknown)(...args),
       clearRequestGuardError: (...args: unknown[]) =>
         (ctx.clearRequestGuardErrorFn as (...a: unknown[]) => unknown)(...args),
+      egressLog: (...args: unknown[]) => (ctx.egressLogFn as (...a: unknown[]) => unknown)(...args),
     };
   }
   return { BrowserLauncher: MockBrowserLauncher };
@@ -210,6 +212,7 @@ function resetCtx(): void {
   ctx.hasOpenDialogFn = vi.fn().mockReturnValue(false);
   ctx.consumeRequestGuardErrorFn = vi.fn().mockReturnValue(undefined);
   ctx.clearRequestGuardErrorFn = vi.fn().mockReturnValue(undefined);
+  ctx.egressLogFn = vi.fn().mockReturnValue(undefined);
 }
 
 function makeProvider(): PlaywrightProvider {
@@ -1092,8 +1095,66 @@ describe('act() egress guard provider tests', () => {
     const provider = makeProvider();
     const result = await provider.act({ sessionId: 's1', action: 'click', target: { kind: 'semantic', text: 'Go' } });
 
-    expect(asMock(checkRedirectChain)).toHaveBeenCalledWith(navResponse, expect.any(String));
+    expect(asMock(checkRedirectChain)).toHaveBeenCalledWith(navResponse, expect.any(String), false);
     expect(result).toMatchObject({ outcome: 'blocked_by_policy', reason: 'hop touched 127.0.0.1' });
     expect(asMock(ctx.page?.['off'])).toHaveBeenCalledWith('response', expect.any(Function));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Guarded egress proxy refusal attribution (#2301, ADR 20261014 PATH_B)
+// ---------------------------------------------------------------------------
+
+describe('proxy refusal attribution in open()/act()', () => {
+  const REASON = 'refusing browser connection to internal.test — internal/private address 10.0.0.5';
+
+  /** Fake proxy log: refusal for internal.test:80 recorded after the mark. */
+  function installRefusalLog(): void {
+    ctx.egressLogFn = vi.fn().mockReturnValue({
+      mark: () => 0,
+      refusalsSince: () => [{ seq: 1, at: Date.now(), target: 'internal.test:80', reason: REASON }],
+    });
+  }
+
+  /** Emit a main-frame navigation request to the page's 'request' listener. */
+  function emitMainRequest(url: string): void {
+    const onCall = asMock(ctx.page?.['on']).mock.calls.find((c) => c[0] === 'request');
+    (onCall?.[1] as (r: unknown) => void)({ url: () => url, isNavigationRequest: () => true, frame: () => MAIN_FRAME });
+  }
+
+  it('open(): a refused main-frame redirect hop returns blocked_by_policy, not the error page, and invalidates the session', async () => {
+    installRefusalLog();
+    // goto RESOLVES (Chromium shows its error page for the refused hop).
+    asMock(ctx.page?.['goto']).mockImplementation(async () => {
+      emitMainRequest('http://internal.test/secret');
+      return null;
+    });
+    const result = await makeProvider().open({ sessionId: 's1', url: 'https://example.com' });
+    expect(result).toMatchObject({ outcome: 'blocked_by_policy', reason: REASON });
+    expect(asMock(observePage)).not.toHaveBeenCalled();
+    expect(ctx.closeSessionFn).toHaveBeenCalledWith('s1');
+  });
+
+  it('open(): a refusal for a host this page never requested is NOT attributed', async () => {
+    installRefusalLog();
+    asMock(ctx.page?.['goto']).mockImplementation(async () => {
+      emitMainRequest('https://example.com/');
+      return null;
+    });
+    const result = await makeProvider().open({ sessionId: 's1', url: 'https://example.com' });
+    expect(result).toMatchObject({ observationId: 'obs_1' });
+  });
+
+  it('act(): a locator action that resolves while its main-frame navigation was refused reports blocked_by_policy', async () => {
+    installRefusalLog();
+    asMock(resolveTarget).mockResolvedValue({ outcome: 'resolved', locator: ctx.locator });
+    asMock(ctx.locator?.['click']).mockImplementation(async () => {
+      emitMainRequest('http://internal.test/');
+    });
+    const result = await makeProvider().act({ sessionId: 's1', action: 'click', target: { kind: 'semantic', text: 'Go' } });
+    expect(result).toMatchObject({ outcome: 'blocked_by_policy', reason: REASON });
+    expect(asMock(observePage)).not.toHaveBeenCalled();
+    expect(ctx.closeSessionFn).toHaveBeenCalledWith('s1');
+    expect(asMock(ctx.page?.['off'])).toHaveBeenCalledWith('request', expect.any(Function));
   });
 });

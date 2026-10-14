@@ -75,10 +75,16 @@ export function watchMainFrameNavigation(page: Page): () => Response | null {
  * Null serverAddr: occurs for cache hits, service-worker-served responses,
  * about:blank, and responses with no network round-trip. We treat null as
  * "no IP to classify" — not a block. The URL check on that hop still runs.
+ *
+ * `proxied`: when Chromium egresses through the guarded egress proxy,
+ * serverAddr() is the PROXY's loopback address, so classifying it would refuse
+ * every page. The proxy already classified the real connected IP at connect
+ * time, so the serverAddr check is skipped (hop URL checks still run).
  */
 export async function checkRedirectChain(
   response: Response | null,
   finalUrl: string,
+  proxied = false,
 ): Promise<BlockedByPolicy | null> {
   if (privateHostsAllowed()) return null;
   if (response === null) return null;
@@ -100,6 +106,7 @@ export async function checkRedirectChain(
       return { outcome: 'blocked_by_policy', url: finalUrl, reason: verdict.reason };
     }
     // Check the IP Chromium actually connected to (DNS rebinding, item 3).
+    if (proxied) continue;
     const serverAddr = await hop.serverAddr();
     const addr = serverAddr?.ipAddress;
     if (addr !== undefined && addr !== '' && isBlockedAddress(addr)) {
@@ -166,3 +173,26 @@ export class RequestGuardTrap {
     return err;
   }
 }
+
+/**
+ * Per-browser installer for the ephemeral-render route guard (web_scrape's
+ * `requestGuard`), moved out of launcher.ts. Defense in depth only — the
+ * guarded egress proxy is the connection-time enforcement layer.
+ */
+export async function installRenderRouteGuard(
+  context: BrowserContext,
+  guard: (url: string) => Promise<void>,
+  onRefusal: (err: unknown) => void,
+): Promise<void> {
+  await context.route('**/*', async (route) => {
+    try {
+      await guard(route.request().url());
+      await route.continue();
+    } catch (err) {
+      onRefusal(err);
+      await route.abort('blockedbyclient');
+    }
+  });
+}
+
+export { invalidateOnRefusal, mainRefusalOutcome, renderRefusalError, watchEgressRefusals } from './egress-attribution.js';

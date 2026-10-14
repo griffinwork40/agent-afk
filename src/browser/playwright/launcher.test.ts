@@ -1402,3 +1402,47 @@ describe('BrowserLauncher — chromium-missing launch decoration', () => {
     expect(vi.mocked(chromium.launch)).toHaveBeenCalledTimes(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Guarded egress proxy wiring (#2301, ADR 20261014 PATH_B)
+// ---------------------------------------------------------------------------
+
+describe('BrowserLauncher — guarded egress proxy launch wiring', () => {
+  beforeEach(() => {
+    currentStubBrowser = makeStubBrowser();
+    vi.mocked(chromium.launch).mockClear();
+    vi.mocked(chromium.launch).mockImplementation(async () => currentStubBrowser as never);
+  });
+
+  it('launches Chromium through a listening 127.0.0.1 proxy with QUIC/WebRTC-UDP egress disabled', async () => {
+    const launcher = new BrowserLauncher(TEST_CONFIG);
+    await launcher.ensureBrowser();
+    const opts = vi.mocked(chromium.launch).mock.calls[0]?.[0];
+    expect(opts?.proxy?.server).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(opts?.proxy?.bypass).toBe('');
+    expect(opts?.args).toEqual(['--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp']);
+    expect(launcher.egressLog()).toBeDefined();
+    await launcher.shutdown();
+    expect(launcher.egressLog()).toBeUndefined();
+  });
+
+  it('a failed launch stops the proxy', async () => {
+    vi.mocked(chromium.launch).mockRejectedValueOnce(new Error('boom'));
+    const launcher = new BrowserLauncher(TEST_CONFIG);
+    await expect(launcher.ensureBrowser()).rejects.toThrow();
+    expect(launcher.egressLog()).toBeUndefined();
+  });
+
+  it('installs no proxy when AFK_WEB_ALLOW_PRIVATE_HOSTS opts out', async () => {
+    vi.mocked(guardPrivateHostsAllowed).mockReturnValue(true);
+    try {
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      await launcher.ensureBrowser();
+      expect(vi.mocked(chromium.launch).mock.calls[0]?.[0]).toEqual({ headless: true });
+      expect(launcher.egressLog()).toBeUndefined();
+      await launcher.shutdown();
+    } finally {
+      vi.mocked(guardPrivateHostsAllowed).mockReturnValue(false);
+    }
+  });
+});

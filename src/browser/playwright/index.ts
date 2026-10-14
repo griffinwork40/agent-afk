@@ -32,7 +32,7 @@ import { resolveTarget } from './resolve-target.js';
 import { enforceDomainPolicy } from '../config.js';
 import { recheckLandedUrl } from './domain-recheck.js';
 import { writeScreenshotSidecar } from '../witness.js';
-import { checkNavigationEgress, checkRedirectChain, egressBlockOutcome, watchMainFrameNavigation } from './egress-gate.js';
+import { checkNavigationEgress, checkRedirectChain, egressBlockOutcome, invalidateOnRefusal, mainRefusalOutcome, watchEgressRefusals, watchMainFrameNavigation } from './egress-gate.js';
 
 // ---------------------------------------------------------------------------
 // Per-session state
@@ -154,7 +154,7 @@ export class PlaywrightProvider implements BrowserProvider {
     let screenshotPath: string | null = null;
     let navError: unknown = null;
     let navResponse: Response | null = null;
-
+    const egressWatch = watchEgressRefusals(page, this.launcher.egressLog());
     try {
       navResponse = await page.goto(input.url, {
         timeout: input.timeoutMs ?? 30000,
@@ -164,8 +164,10 @@ export class PlaywrightProvider implements BrowserProvider {
       navError = this.launcher.consumeRequestGuardError(sessionId) ?? err;
     }
 
-    const navBlocked = egressBlockOutcome(navError, input.url);
-    if (navBlocked) return navBlocked;
+    // Proxy refusal of the main navigation (any hop) wins, even when goto()
+    // rejected after commit or resolved onto Chromium's error page (#2313 r2).
+    const navBlocked = mainRefusalOutcome(egressWatch.stop(), input.url) ?? egressBlockOutcome(navError, input.url);
+    if (navBlocked) return invalidateOnRefusal(navBlocked, () => this.close({ sessionId }));
 
     // Re-check the LANDED url: goto() follows 30x redirects, so an allowed URL
     // can hand the tab to a blocked host after the pre-navigation check passed
@@ -181,8 +183,8 @@ export class PlaywrightProvider implements BrowserProvider {
       navError !== null && (landedUrl === '' || landedUrl === 'about:blank');
 
     if (!neverNavigated) {
-      const redirectBlocked = await checkRedirectChain(navResponse, page.url());
-      if (redirectBlocked !== null) return redirectBlocked;
+      const redirectBlocked = await checkRedirectChain(navResponse, page.url(), this.launcher.egressLog() !== undefined);
+      if (redirectBlocked !== null) return invalidateOnRefusal(redirectBlocked, () => this.close({ sessionId }));
       const blocked = await recheckLandedUrl(page, this.config, input.url, () => this.close({ sessionId }));
       if (blocked !== null) return blocked;
     }
@@ -342,6 +344,7 @@ export class PlaywrightProvider implements BrowserProvider {
     };
 
     const stopNavWatch = watchMainFrameNavigation(page);
+    const egressWatch = watchEgressRefusals(page, this.launcher.egressLog());
     try {
       await executeAction();
     } catch (err) {
@@ -365,11 +368,13 @@ export class PlaywrightProvider implements BrowserProvider {
     if (actionError === null) this.launcher.consumeRequestGuardError(sessionId);
 
     const actionNavResponse = stopNavWatch();
-    const actionBlocked = egressBlockOutcome(actionError, page.url());
-    if (actionBlocked) return actionBlocked;
+    // A proxy-refused main-frame navigation is reported even when the locator
+    // action itself resolved (#2313 round 2, item 6).
+    const actionBlocked = mainRefusalOutcome(egressWatch.stop(), page.url()) ?? egressBlockOutcome(actionError, page.url());
+    if (actionBlocked) return invalidateOnRefusal(actionBlocked, () => this.close({ sessionId }));
     // Redirect hops + connected IP of any action-triggered navigation (#2301).
-    const redirectBlocked = await checkRedirectChain(actionNavResponse, page.url());
-    if (redirectBlocked !== null) return redirectBlocked;
+    const redirectBlocked = await checkRedirectChain(actionNavResponse, page.url(), this.launcher.egressLog() !== undefined);
+    if (redirectBlocked !== null) return invalidateOnRefusal(redirectBlocked, () => this.close({ sessionId }));
 
     // Check post-action URL for policy violations. Shared with open() so the
     // two navigation paths cannot drift apart — see domain-recheck.ts.

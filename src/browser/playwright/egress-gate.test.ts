@@ -176,3 +176,11 @@ describe('egress-gate (#2301)', () => {
     vi.mocked(privateHostsAllowed).mockReturnValue(false);
   });
 });
+
+describe('checkRedirectChain — behind the guarded egress proxy', () => {
+  it('skips the serverAddr check when proxied (serverAddr is the proxy loopback)', async () => {
+    const resp = makeStubResponse({ url: 'https://93.184.216.34/', ip: '127.0.0.1' });
+    expect(await checkRedirectChain(resp as never, 'https://93.184.216.34/', true)).toBeNull();
+    expect(await checkRedirectChain(resp as never, 'https://93.184.216.34/')).toMatchObject({ outcome: 'blocked_by_policy' });
+  });
+});
