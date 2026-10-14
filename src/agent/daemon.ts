@@ -201,7 +201,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
   // is found (pre-existing port files from before this change).
   if (writePortFile) {
     try {
-      atomicWriteFile(portFilePath, `${host}:${port}`, { encoding: 'utf-8', mkdirp: true });
+      atomicWriteFile(portFilePath, `${host}:${port}`, { encoding: 'utf-8', mkdirp: true, mode: 0o644 });
     } catch {
       // Best-effort; daemon still functional without port file
     }

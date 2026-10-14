@@ -328,5 +328,5 @@ function writeCredentialsBlob(blob: string): void {
  * @internal
  */
 export function writeLinuxCredentials(credPath: string, blob: string): void {
-  atomicWriteFile(credPath, blob, { encoding: 'utf-8', mode: 0o600 });
+  atomicWriteFile(credPath, blob, { encoding: 'utf-8', mode: 0o600, mkdirp: false });
 }
