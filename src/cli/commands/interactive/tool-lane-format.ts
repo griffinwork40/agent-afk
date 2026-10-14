@@ -195,7 +195,7 @@ export function formatOutcome(
     //     "N lines · full output saved → ~/…path"
     //
     //   - `truncated` true, no `capturePath` (SIGKILL'd at hard cap, middle
-    //     genuinely unrecoverable): "N lines · output capped · command killed"
+    //     genuinely unrecoverable): "N lines · ⚠ stopped at output safety cap"
     //
     //   - neither (command completed within model cap): "N lines"
     //

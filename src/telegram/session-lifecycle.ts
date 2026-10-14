@@ -89,6 +89,7 @@ export function finalizeTelegramSession(
     sessionCwd,
     maxOutputTokens,
     maxToolUseIterations,
+    maxBudgetUsd,
     traceWriter,
     mcpManager,
     memoryStore,
@@ -137,6 +138,7 @@ export function finalizeTelegramSession(
     drainSubagents: wiring.drainSubagents,
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     ...(maxToolUseIterations !== undefined ? { maxToolUseIterations } : {}),
+    ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
     // Provider-specific extras (baseUrl / openaiBaseUrl / xaiBaseUrl).
     // Only the keys present in providerConfig are spread; absent keys are
     // not forwarded so the session config stays clean.

@@ -54,6 +54,12 @@ import { userAttentionFrom } from '../../tools/user-yield.js';
 /** Per-call options — the session-scoped half of the dispatcher inputs. */
 export interface BuildDispatcherOptions {
   cwd?: string;
+  /**
+   * Active model input (alias or raw id) whose model-slot
+   * `tools.disabledBySlot` list applies to this dispatcher. Resolved in
+   * `composeDispatcherPermissions`; absent => no per-slot denies.
+   */
+  slotModel?: string;
   readRoots?: string[];
   writeRoots?: string[];
   env?: Record<string, string>;
@@ -326,6 +332,7 @@ export function buildDispatcher(
       deps.permissions,
       deps.mcpManager?.getMcpToolWireNames(),
       deps.customTools.map((t) => t.schema.name),
+      opts?.slotModel,
     ),
     subagentExecutor: deps.subagentExecutor,
     skillExecutor: deps.skillExecutor,

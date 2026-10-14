@@ -11,6 +11,46 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.313.8] - 2026-10-14
+
+### Changed
+- split buildChildConfig under 200-line ceiling (#3688) (2c4945d7)
+
+## [5.313.7] - 2026-10-14
+
+### Added
+- write-ahead intent, outcome-unknown status, and pre-execution retry gate (#3713) (e7ee6b30)
+
+### Fixed
+- replace fixed sleeps with vi.waitFor in elicitation intercept tests (#3701) (7046c5b2)
+- make afk whatif --aa reachable from the CLI and /whatif (#3715) (1b18068f)
+
+### Changed
+- clean-install guide, task pack, and intervention log for outside-user trial (#3711) (fb322dc2)
+- shared execFileAsync export and abortReason helper (#3686) (1b612231)
+- deterministic repro for parent seal over live child subagents (#3712) (86e8ea18)
+- pathExists helper and atomic-write adoption at remaining tmp+rename sites (#3687) (d129bd58)
+- extract rawPostOAuthForm; consolidate xAI device-code POST blocks (#3702) (5523afb6)
+
+## [5.313.6] - 2026-10-14
+
+### Fixed
+- resolve nit/low advisory findings from PR triage batch #3670-#3680 (#3703) (10538e16)
+
+## [5.313.5] - 2026-10-14
+
+### Added
+- per-model-slot tool deny list (tools.disabledBySlot) (#3704) (2e6ea1aa)
+
+### Fixed
+- wire AFK_MAX_BUDGET_USD to daemon, Telegram, and REPL sessions (#2314) (ebdf6a4d)
+
+## [5.313.4] - 2026-10-14
+
+### Changed
+- split createBashHandler under 200-line ceiling (#3690) (93ff16b5)
+- split SubagentHandleImpl.run under 200-line ceiling (#3700) (cbfbe6b7)
+
 ## [5.313.3] - 2026-10-14
 
 ### Changed

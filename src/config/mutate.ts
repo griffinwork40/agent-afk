@@ -52,8 +52,11 @@ export class UnknownKeyError extends Error {
     // that does NOT match `"unknown config key:"`. Any caller that pattern-matches
     // on that literal string (e.g. error-boundary logging) must also handle the
     // tools.disabled message variant, or check `instanceof UnknownKeyError` instead.
-    super(key === 'tools.disabled' || key.startsWith('tools.disabled.') || key === 'tools'
-      ? 'tools.disabled is operator-only and is not a `config set` key (the agent cannot change it). Toggle tools in the REPL with /config → Tools, or edit afk.config.json.'
+    // tools.disabledBySlot (per-model-slot deny list) shares the same
+    // operator-only gating as tools.disabled: the agent must not be able to
+    // re-enable tools the operator hid from a slot.
+    super(key === 'tools' || key.startsWith('tools.disabled')
+      ? 'tools.disabled / tools.disabledBySlot are operator-only and are not `config set` keys (the agent cannot change it). Toggle tools in the REPL with /config → Tools, or edit afk.config.json.'
       : `unknown config key: ${key}`);
     this.name = 'UnknownKeyError';
   }

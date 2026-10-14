@@ -7,6 +7,7 @@ import { SessionManager } from './session-manager';
 import type { IAgentSession, AgentConfig, SessionState } from '../agent/types';
 import { findSession, listSessions, loadSession } from '../cli/session-store';
 import { promises as fs, existsSync, rmSync } from 'fs';
+import { pathExists } from '../utils/fs.js';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { useUnsetAfkHome } from '../__test-utils__/unset-afk-home.js';
@@ -425,7 +426,7 @@ describe('SessionManager', () => {
       await manager.saveSessions();
 
       const filePath = join(testDataDir, '12345.json');
-      const exists = await fs.access(filePath).then(() => true).catch(() => false);
+      const exists = await pathExists(filePath);
       expect(exists).toBe(true);
     });
 
@@ -519,7 +520,7 @@ describe('SessionManager', () => {
       await manager.closeAll();
 
       const filePath = join(testDataDir, '12345.json');
-      const exists = await fs.access(filePath).then(() => true).catch(() => false);
+      const exists = await pathExists(filePath);
       expect(exists).toBe(true);
     });
 

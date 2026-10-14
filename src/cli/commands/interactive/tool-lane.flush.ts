@@ -102,7 +102,7 @@ export function flushSource(
     const current = queue.shift()!;
     for (const [id, entry] of host.entries) {
       if (collected.has(id)) continue;
-      const ctx = entry.kind === 'tool' ? entry.agentContext : entry.agentContext;
+      const ctx = entry.agentContext;
       if (ctx === current) {
         collected.add(id);
         if (entry.kind === 'tool') queue.push(id);
@@ -116,7 +116,7 @@ export function flushSource(
     if (!collected.has(id)) continue;
     const entry = host.entries.get(id);
     if (!entry) continue;
-    const ctx = entry.kind === 'tool' ? entry.agentContext : entry.agentContext;
+    const ctx = entry.agentContext;
     if (!ctx) continue;
     let children = childMap.get(ctx);
     if (!children) {
@@ -183,7 +183,7 @@ export function flushCompletedRoots(
     const current = bfsQueue.shift()!;
     for (const [id, entry] of host.entries) {
       if (collected.has(id)) continue;
-      const ctx = entry.kind === 'tool' ? entry.agentContext : entry.agentContext;
+      const ctx = entry.agentContext;
       if (ctx === current) {
         collected.add(id);
         if (entry.kind === 'tool') bfsQueue.push(id);
