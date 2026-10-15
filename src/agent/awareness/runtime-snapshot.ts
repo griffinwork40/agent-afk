@@ -43,8 +43,9 @@ export function buildRuntimeSnapshot(
       };
     }
     case 'hooks':
-      if (!source.getHooks) throw new Error('Hooks view is unavailable for this runtime source.');
-      return { hooks: source.getHooks() };
+      // Callers (the get_runtime_state handler) pre-check getHooks and return a
+      // tool error; an absent getHooks here yields an empty slice, never a throw.
+      return source.getHooks ? { hooks: source.getHooks() } : {};
     case 'workspace':
       return { workspace: source.getWorkspace() };
     case 'all':

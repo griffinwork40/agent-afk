@@ -73,7 +73,7 @@ export const configGetHandler: ToolHandler = async (input) => {
       // Contract: hook commands must use the safe inventory even if persisted
       // in the primary config. Other arbitrary stored dotted paths remain readable.
       if (key === 'hooks' || key.startsWith('hooks.')) {
-        return errResult(`config_get: unknown config key ${JSON.stringify(key)}. Hooks are configured in settings.json, not afk.config.json. Use get_runtime_state with view 'hooks' for a safe inventory.`);
+        return errResult(`config_get: hooks are not readable via config_get (key ${JSON.stringify(key)}). Hooks may be defined in settings.json or afk.config.json (user-global or project-local); use get_runtime_state with view 'hooks' for a safe inventory.`);
       }
       const v = getConfigValue(key);
       if (v.class === 'unknown' && v.value === undefined) {
@@ -81,7 +81,12 @@ export const configGetHandler: ToolHandler = async (input) => {
       }
       return { content: JSON.stringify(v, null, 2) };
     }
-    return { content: JSON.stringify(listConfig(), null, 2) };
+    // Contract: the whole-config listing must honour the same "never echoed"
+    // rule — afk.config.json is a hook source (hooks/config-loader.ts), so its
+    // raw `hooks` block (commands, possibly with embedded secrets) is stripped
+    // here. listConfig() itself stays raw because the human CLI needs it.
+    const { hooks: _omittedHooks, ...safeConfig } = listConfig();
+    return { content: JSON.stringify(safeConfig, null, 2) };
   } catch (err) {
     return errResult(`config_get: ${errorMessage(err)}`);
   }

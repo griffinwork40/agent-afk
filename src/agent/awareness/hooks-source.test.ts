@@ -121,8 +121,10 @@ describe('hooks runtime view', () => {
   it('reports unavailable rather than an invented empty inventory for custom sources', async () => {
     const runtime = source();
     delete runtime.getHooks;
-    await expect(createGetRuntimeStateHandler(runtime)({ view: 'hooks' }, new AbortController().signal))
-      .rejects.toThrow('Hooks view is unavailable');
+    const result = await createGetRuntimeStateHandler(runtime)({ view: 'hooks' }, new AbortController().signal);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('hooks view is unavailable');
+    expect(result.content).not.toContain('"hooks"');
   });
 });
 

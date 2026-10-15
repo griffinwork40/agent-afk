@@ -176,8 +176,22 @@ describe('config_get / config_set handlers', () => {
       const r = await configGetHandler({ target: 'config', key }, signal);
       expect(r.isError).toBe(true);
       expect(r.content).not.toContain('hunter2');
-      expect(r.content).toContain('settings.json, not afk.config.json');
+      expect(r.content).toContain('settings.json or afk.config.json');
       expect(r.content).toContain("get_runtime_state with view 'hooks'");
+    });
+
+    it('strips hooks from the whole-config listing (no key)', async () => {
+      mkdirSync(join(home, 'config'), { recursive: true });
+      writeFileSync(
+        jsonFile,
+        JSON.stringify({ model: 'opus', hooks: { PreToolUse: [{ command: 'MY_DB_PASS=hunter2 notify' }] } }),
+      );
+      const r = await configGetHandler({ target: 'config' }, signal);
+      expect(r.isError).toBeFalsy();
+      const parsed = JSON.parse(r.content) as Record<string, unknown>;
+      expect(parsed).not.toHaveProperty('hooks');
+      expect(parsed).toEqual({ model: 'opus' });
+      expect(r.content).not.toContain('hunter2');
     });
 
     it('never reveals a raw secret value', async () => {

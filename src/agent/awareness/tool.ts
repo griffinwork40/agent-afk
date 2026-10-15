@@ -99,6 +99,11 @@ export function createGetRuntimeStateHandler(source: RuntimeStateSource): ToolHa
     const view = input && typeof input === 'object'
       ? parseView((input as Record<string, unknown>)['view'])
       : 'all';
+    // A source without getHooks (embedder fixtures) yields a tool error rather
+    // than a thrown exception from the snapshot builder.
+    if (view === 'hooks' && !source.getHooks) {
+      return { content: 'get_runtime_state: the hooks view is unavailable for this runtime source.', isError: true };
+    }
     const snapshot = buildRuntimeSnapshot(source, view);
     const models = view === 'tools' || view === 'all' ? availableCatalogModels() : [];
     return { content: JSON.stringify({ ...snapshot, ...(models.length ? { openaiSubscriptionModels: models } : {}) }) };
