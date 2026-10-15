@@ -98,8 +98,11 @@ Verified on macOS over SSH (2026-10-15), which is why it works this way:
   `AFK_REMOTE_DEPTH` is set.
 - **Fail fast.** An unreachable or sleeping host fails in about 5 s with
   "host unreachable"; a missing afk install and a bad cwd have their own messages.
-- **Permissions.** Skip-permissions is never passed; the remote's own headless
-  permission gate applies.
+- **Permissions.** The remote `afk chat` runs under its own configured
+  `permissionMode`, which defaults to `bypassPermissions` (no `--permission-mode`
+  flag is injected by the launcher). Because a destructive prompt could therefore
+  bypass the local AFK gate, `remote_agent` is classified **risk class high** and
+  autonomous mode holds it for approval.
 
 ## Known limits
 

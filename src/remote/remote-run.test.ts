@@ -89,7 +89,7 @@ describe('runRemoteAgent', () => {
   it('explains the locked-keychain cause when the remote has no credential', async () => {
     const f = fakeRunner({ streams: [[EXIT_MARKER]], errTail: 'agent-afk: No Anthropic credential found. Run `afk login` to authenticate.' });
     const out = await runRemoteAgent(REQ, new AbortController().signal, { runner: f.runner, sleep: noSleep });
-    expect(out.kind === 'error' && out.reason).toContain('login keychain is locked');
+    expect(out.kind === 'error' && out.reason).toContain('If user@box is a macOS host');
     expect(out.kind === 'error' && out.reason).toContain('CLAUDE_CODE_OAUTH_TOKEN');
   });
 

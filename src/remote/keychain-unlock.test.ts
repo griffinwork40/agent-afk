@@ -70,9 +70,11 @@ describe('runRemoteAgent with keychainPassword', () => {
       { runner: runner(0, {}, 'No Anthropic credential found. Run `afk login`') });
     expect(out.kind === 'error' && out.reason).not.toContain('Hint:');
   });
-  it('without unlock, the hint names the unlockKeychain setup for the host', async () => {
+  it('without unlock, the hint is platform-neutral and names the unlockKeychain setup for the host', async () => {
     const out = await runRemoteAgent(REQ, new AbortController().signal,
       { runner: runner(0, {}, 'No Anthropic credential found. Run `afk login`') });
     expect(out.kind === 'error' && out.reason).toContain('"unlockKeychain": true for "cm"');
+    expect(out.kind === 'error' && out.reason).toContain('If cm is a macOS host');
+    expect(out.kind === 'error' && out.reason).not.toContain("cm's macOS login keychain is locked");
   });
 });

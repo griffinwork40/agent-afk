@@ -25,8 +25,10 @@ export const remoteAgentTool: AnthropicToolDef = {
     'fast. The result names the remote session id: pass it as `resume` to continue the ' +
     'same conversation on that host.\n\n' +
     'The remote agent cannot dispatch subagents or further remote agents. It runs headless ' +
-    'under that machine\'s own permission gate. This call blocks until the remote finishes; ' +
-    'for long work, call it from a background `agent`.',
+    'under that machine\'s own configured permissionMode, which is bypassPermissions by ' +
+    'default, so remote_agent is risk class high and autonomous mode (AFK gate) holds it ' +
+    'for approval. This call blocks until the remote finishes; for long work, call it from ' +
+    'a background `agent`.',
   input_schema: {
     type: 'object',
     properties: {

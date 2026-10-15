@@ -41,10 +41,12 @@ export const NO_CREDENTIAL_SIGNATURE = 'No Anthropic credential found';
  * host's afk.env, which is read before the keychain (src/config/env.auth.ts).
  */
 export function lockedKeychainHint(hostName: string): string {
-  return `\n\nHint: over SSH, ${hostName}'s macOS login keychain is locked, so afk cannot read its keychain OAuth login. ` +
-    `To unlock it automatically on every run, set "unlockKeychain": true for "${hostName}" in hosts.json and store ` +
+  return `\n\nHint: ${hostName} has no Anthropic credential available over SSH. ` +
+    `If ${hostName} is a macOS host, its login keychain is likely locked over SSH: ` +
+    `set "unlockKeychain": true for "${hostName}" in hosts.json and store ` +
     `its login password once on this machine with \`${unlockSetupCommand(hostName)}\`. ` +
-    `Alternatively put CLAUDE_CODE_OAUTH_TOKEN in that host's afk.env.`;
+    `Otherwise run \`afk login\` on ${hostName} directly and ensure the credential ` +
+    `is readable in a non-interactive SSH session (e.g. via CLAUDE_CODE_OAUTH_TOKEN in that host's afk.env).`;
 }
 const LAUNCH_TIMEOUT_MS = 60_000;
 const CANCEL_TIMEOUT_MS = 10_000;

@@ -503,6 +503,9 @@ describe('classifyRisk — other tools', () => {
     expect(classifyRisk('web_scrape', { url: 'https://example.com' }, ctx)).toBe('medium');
   });
 
+  it('remote_agent → high (arbitrary remote execution, bypassPermissions default)', () => {
+    expect(classifyRisk('remote_agent', { host: 'cm', prompt: 'rm -rf /' }, ctx)).toBe('high');
+  });
   it('send_telegram → medium', () => {
     expect(classifyRisk('send_telegram', { message: 'hello' }, ctx)).toBe('medium');
   });

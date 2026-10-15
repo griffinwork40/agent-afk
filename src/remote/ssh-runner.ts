@@ -61,6 +61,7 @@ function spawnSsh(
   onStdout: (chunk: string, stop: () => void) => void,
   stdin?: string,
   timeoutMs?: number,
+  collectStdout = true,
 ): Promise<SshExecResult> {
   return new Promise((resolve) => {
     const child = spawn('ssh', sshArgs(target, script), { stdio: ['pipe', 'pipe', 'pipe'] });
@@ -84,7 +85,7 @@ function spawnSsh(
     };
     child.stdout.setEncoding('utf-8');
     child.stderr.setEncoding('utf-8');
-    child.stdout.on('data', (chunk: string) => { stdout += chunk; onStdout(chunk, stop); });
+    child.stdout.on('data', (chunk: string) => { if (collectStdout) stdout += chunk; onStdout(chunk, stop); });
     child.stderr.on('data', (chunk: string) => {
       if (stderr.length < MAX_STDERR) stderr += chunk;
     });
@@ -124,7 +125,7 @@ export const defaultSshRunner: SshRunner = {
         if (opts.onLine(line) === 'stop') { stopped = true; stop(); return; }
         nl = buf.indexOf('\n');
       }
-    });
+    }, undefined, undefined, false);
     // Keep only the trailing fragment in the result; full lines went to onLine.
     return { ...res, stdout: buf };
   },
