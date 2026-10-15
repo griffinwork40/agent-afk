@@ -6,8 +6,14 @@ repos, accounts, and model subscriptions. Nothing is copied: move code with git.
 
 ## Setup
 
-1. The remote needs afk installed and logged in (`afk login` on that machine; the
-   remote run is headless, so it must authenticate without a prompt).
+1. The remote needs afk installed and a credential a headless SSH session can read.
+   **On macOS, `afk login`'s keychain OAuth is not enough:** the login keychain is locked
+   in SSH sessions, so the remote run fails with "No Anthropic credential found" (the
+   tool adds a hint naming this). Put `CLAUDE_CODE_OAUTH_TOKEN` (a long-lived token,
+   e.g. from `claude setup-token`) or `ANTHROPIC_API_KEY` in that machine's
+   `~/.afk/config/afk.env`; both are read before the keychain. `security
+   unlock-keychain` over `ssh -t` also works, but needs the password every time and
+   may not reach a detached run started from a later session.
 2. Key-based SSH from this machine to the remote (`ssh user@host true` works with no
    password prompt).
 3. Optional: name hosts in `~/.afk/config/hosts.json`:

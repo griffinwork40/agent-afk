@@ -86,6 +86,13 @@ describe('runRemoteAgent', () => {
     expect(out).toMatchObject({ kind: 'error', reason: 'remote afk exited without a result: Error: not logged in' });
   });
 
+  it('explains the locked-keychain cause when the remote has no credential', async () => {
+    const f = fakeRunner({ streams: [[EXIT_MARKER]], errTail: 'agent-afk: No Anthropic credential found. Run `afk login` to authenticate.' });
+    const out = await runRemoteAgent(REQ, new AbortController().signal, { runner: f.runner, sleep: noSleep });
+    expect(out.kind === 'error' && out.reason).toContain('login keychain is locked');
+    expect(out.kind === 'error' && out.reason).toContain('CLAUDE_CODE_OAUTH_TOKEN');
+  });
+
   it('fails fast when the host is unreachable', async () => {
     const f = fakeRunner({ launch: { code: 255, stdout: '', stderr: 'ssh: connect to host box port 22: Operation timed out' }, streams: [] });
     const out = await runRemoteAgent(REQ, new AbortController().signal, { runner: f.runner, sleep: noSleep });

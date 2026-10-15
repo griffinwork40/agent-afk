@@ -28,6 +28,21 @@ import { SSH_CONNECT_FAILURE, type SshRunner } from './ssh-runner.js';
 import { createEventCollector } from './remote-events.js';
 
 export const MAX_RECONNECTS = 6;
+/** Stderr text afk prints when a headless run finds no Anthropic credential. */
+export const NO_CREDENTIAL_SIGNATURE = 'No Anthropic credential found';
+
+/**
+ * Over SSH a Mac's login keychain is locked, so keychain-stored OAuth is
+ * unreadable even when the host is logged in, and afk's "Run `afk login`"
+ * advice is wrong there. A CLAUDE_CODE_OAUTH_TOKEN in the host's afk.env is
+ * read before the keychain (src/config/env.auth.ts) and works in every session.
+ */
+export function lockedKeychainHint(target: string): string {
+  return `\n\nHint: over SSH, ${target}'s macOS login keychain is locked, so afk cannot read its keychain OAuth login. ` +
+    'Fix it once by setting CLAUDE_CODE_OAUTH_TOKEN (a long-lived token, e.g. from `claude setup-token`) ' +
+    `in ~/.afk/config/afk.env on ${target}. Unlocking per session (\`ssh -t ${target} security unlock-keychain\`) ` +
+    'needs the password each time and may not reach a detached run.';
+}
 const LAUNCH_TIMEOUT_MS = 60_000;
 const CANCEL_TIMEOUT_MS = 10_000;
 const MAX_BACKOFF_MS = 30_000;
@@ -123,7 +138,8 @@ export async function runRemoteAgent(
     if (exited) {
       const err = await runner.exec(req.target, buildErrTailScript(req.runId), { timeoutMs: CANCEL_TIMEOUT_MS });
       const tail = err.stdout.trim();
-      return { kind: 'error', reason: `remote afk exited without a result${tail ? `: ${tail}` : ''}`, pid, partial: events.finalMessage() };
+      const hint = tail.includes(NO_CREDENTIAL_SIGNATURE) ? lockedKeychainHint(req.target) : '';
+      return { kind: 'error', reason: `remote afk exited without a result${tail ? `: ${tail}` : ''}${hint}`, pid, partial: events.finalMessage() };
     }
     // Connection dropped mid-follow: reconnect from the next unseen line.
     lastStderr = res.stderr.trim();
