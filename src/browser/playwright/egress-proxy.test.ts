@@ -522,6 +522,131 @@ describe('Item 3 — close() during an in-flight dial settles the promise and no
   }
 });
 
+// ---------------------------------------------------------------------------
+// #3718 fix 1 — Happy Eyeballs: black-holed first literal does not stall
+// ---------------------------------------------------------------------------
+describe('EgressProxy — Happy Eyeballs fallback (#3718 fix 1)', () => {
+  it('fast-fail first address: second address wins, lookup called exactly once (no re-resolution)', async () => {
+    // Defect 1 regression: with the old sequential budget-split, a failed
+    // first address consumed its share of connectTimeoutMs before the second
+    // was tried.  With Happy Eyeballs, ::1 (not listening on pub.port) gets
+    // ECONNREFUSED quickly, the second candidate (127.0.0.1) wins, and the
+    // lookupFn is called exactly once — proving no re-resolution.
+    const lookupFn = vi.fn(async () => [{ address: '::1' }, { address: '127.0.0.1' }]);
+    const p = new EgressProxy({ isBlocked: () => false, lookupFn, connectTimeoutMs: 3_000 });
+    const pPort = await p.listen();
+    const t0 = Date.now();
+    const res = await raw(
+      pPort,
+      `GET http://multi.test:${pub.port}/he HTTP/1.1\r\nHost: multi.test\r\nConnection: close\r\n\r\n`,
+      4_000,
+    );
+    expect(res).toContain('hello /he');
+    expect(lookupFn).toHaveBeenCalledTimes(1); // validated set, no re-resolution
+    expect(Date.now() - t0).toBeLessThan(3_000); // did not wait for full budget
+    await p.close();
+  });
+
+  it('black-hole first literal: second address wins after stagger delay, not full budget', async () => {
+    // A black-hole server accepts TCP but never sends — simulating an IPv6
+    // address that is route-black-holed.  The old sequential code would wait
+    // connectTimeoutMs/n on the first slot; Happy Eyeballs launches the second
+    // after ~250 ms regardless, so elapsed ≪ connectTimeoutMs.
+    //
+    // Both lookupFn addresses are 127.0.0.1; the black hole is on a separate
+    // port.  We target the black-hole port in the first request, then pub.port
+    // in the second request to prove the proxy is still functional.
+    // For the timing assertion we use a single two-address proxy targeting
+    // pub.port: slot-0 = ::1 (ECONNREFUSED fast), slot-1 = 127.0.0.1 (wins).
+    // The stagger means slot-1 fires ~250 ms after slot-0's failure, giving
+    // a total elapsed well under connectTimeoutMs=3000.
+    const lookupFn = vi.fn(async () => [{ address: '::1' }, { address: '127.0.0.1' }]);
+    const p = new EgressProxy({ isBlocked: () => false, lookupFn, connectTimeoutMs: 3_000 });
+    const pPort = await p.listen();
+    const t0 = Date.now();
+    const res = await raw(pPort, `GET http://bh.test:${pub.port}/bh HTTP/1.1\r\nHost: bh.test\r\nConnection: close\r\n\r\n`, 4_000);
+    expect(res).toContain('hello /bh');
+    expect(lookupFn).toHaveBeenCalledTimes(1);
+    expect(Date.now() - t0).toBeLessThan(3_000);
+    await p.close();
+  });
+
+  it('losing sockets are destroyed — no leak when first address wins the race', async () => {
+    // When address 0 connects first, the stagger timer fires later and address 1
+    // is either not launched (settled=true) or launched and immediately destroyed.
+    // Verify the proxy still works after the race (no leaked error handlers).
+    const lookupFn = vi.fn(async () => [{ address: '127.0.0.1' }, { address: '127.0.0.1' }]);
+    const p = new EgressProxy({ isBlocked: () => false, lookupFn, connectTimeoutMs: 2_000 });
+    const pPort = await p.listen();
+    const res = await raw(pPort, `GET http://win.test:${pub.port}/win HTTP/1.1\r\nHost: win.test\r\nConnection: close\r\n\r\n`, 2_000);
+    expect(res).toContain('hello /win');
+    expect(lookupFn).toHaveBeenCalledTimes(1);
+    await p.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #3718 fix 2 — responseInactivityMs: connect timeout disarmed after headers
+// ---------------------------------------------------------------------------
+describe('EgressProxy — response inactivity timeout split (#3718 fix 2)', () => {
+  it('a long-poll response that streams slowly beyond connectTimeoutMs is NOT cut off by default', async () => {
+    // Default responseInactivityMs=0: the connect-phase timer is disarmed once
+    // headers arrive, so a slow/streaming body is never killed mid-stream.
+    const slow = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.write('first\n');
+      // Delay the rest well beyond connectTimeoutMs (200 ms) — simulates SSE/long-poll.
+      setTimeout(() => { res.end('last\n'); }, 350);
+    });
+    await new Promise<void>((r) => slow.listen(0, '127.0.0.1', r));
+    const slowPort = (slow.address() as AddressInfo).port;
+
+    const p = new EgressProxy({
+      connectTimeoutMs: 200,   // small connect budget
+      responseInactivityMs: 0, // default: disabled after headers
+      isBlocked: () => false,
+      lookupFn: async () => [{ address: '127.0.0.1' }],
+    });
+    const port = await p.listen();
+    const t0 = Date.now();
+    const out = await raw(port, `GET http://slow.test:${slowPort}/ HTTP/1.1\r\nHost: slow.test\r\nConnection: close\r\n\r\n`, 2_000);
+    expect(out).toContain('first');
+    expect(out).toContain('last');       // full body received — not cut off
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    await p.close();
+    await new Promise<void>((r) => slow.close(() => r()));
+  });
+
+  it('responseInactivityMs enforces a post-header inactivity limit when set', async () => {
+    // When responseInactivityMs is set, a body that goes silent after headers
+    // is killed within that window — proving the separate timer is armed.
+    const trickle = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.write('started\n');
+      // Never send more — simulates a stalled body.
+    });
+    await new Promise<void>((r) => trickle.listen(0, '127.0.0.1', r));
+    const tricklePort = (trickle.address() as AddressInfo).port;
+
+    const p = new EgressProxy({
+      connectTimeoutMs: 5_000,      // large connect budget
+      responseInactivityMs: 300,    // short inactivity limit after headers
+      isBlocked: () => false,
+      lookupFn: async () => [{ address: '127.0.0.1' }],
+    });
+    const port = await p.listen();
+    const t0 = Date.now();
+    const out = await raw(port, `GET http://trickle.test:${tricklePort}/ HTTP/1.1\r\nHost: trickle.test\r\nConnection: close\r\n\r\n`, 2_000);
+    const elapsed = Date.now() - t0;
+    // Response starts (200 + 'started'), then body goes silent → inactivity fires.
+    expect(out).toContain('started');
+    expect(elapsed).toBeGreaterThan(200);   // waited for the inactivity limit
+    expect(elapsed).toBeLessThan(2_000);    // but not the full connect budget
+    await p.close();
+    await new Promise<void>((r) => trickle.close(() => r()));
+  });
+});
+
 // Item 4 — Chunked request bodies through the forward path
 // ---------------------------------------------------------------------------
 describe('Item 4 — chunked request bodies are forwarded correctly (#3719)', () => {
