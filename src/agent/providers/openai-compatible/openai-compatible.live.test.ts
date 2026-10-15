@@ -54,7 +54,17 @@ describeMaybe('openai-compatible — live smoke (requires OPENAI_API_KEY)', () =
         model: 'gpt-4o-mini',
       } as AgentConfig;
 
-      const q = buildQueryFromConfig(config, yieldOnce('Say exactly the word "pong" and nothing else.'));
+      // Pass pre-resolved auth so buildQueryFromConfig does not re-read
+      // OPENAI_API_KEY from process.env (deleted by vitest's global
+      // beforeEach in clean-config-env.ts). The second test already does
+      // this via the OpenAICompatibleQuery constructor.
+      const capturedKey = auth.apiKey!;
+      const q = buildQueryFromConfig(config, yieldOnce('Say exactly the word "pong" and nothing else.'), {
+        authDeps: {
+          readEnv: (k) => (k === 'OPENAI_API_KEY' ? capturedKey : undefined),
+          readFile: () => null,
+        },
+      });
       const events = await collect(q);
 
       const types = events.map((e) => e.type);

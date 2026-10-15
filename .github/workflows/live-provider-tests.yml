@@ -73,7 +73,7 @@ jobs:
       # tracking issue (labelled "live-test-failure") rather than failing
       # the PR gate.
       - name: Report failure
-        if: failure()
+        if: failure() || cancelled()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
