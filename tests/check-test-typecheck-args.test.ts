@@ -6,11 +6,9 @@
  * and silently accepted a trailing bare `--reason`. Both are now rejected via
  * the shared `parseGrowthArgs` helper (issue #3267).
  *
- * Because `check-test-typecheck.ts` calls `main()` at import time (it is a
- * shebang script), we cannot import it directly.  Instead we re-implement
- * the `parseArgs` contract inline — the same pattern used by
- * `tests/check-terminal-width.test.ts` for its scan logic — and assert the
- * exact behaviour the fix must preserve.
+ * The argument tests retain the historical inline `parseArgs` contract.
+ * Diagnostic tests import the production detection helper directly; the
+ * script's isMain() guard makes importing it safe.
  *
  * These tests are complementary to `tests/growth-args.test.ts`, which covers
  * `parseGrowthArgs` in isolation.  These tests cover the _glue_: the additional
@@ -20,6 +18,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { detectConfigDiagnosticLines } from '../scripts/check-test-typecheck.js';
 import { parseGrowthArgs } from '../scripts/lib/growth-args.js';
 
 // ── Mirror of KNOWN_FLAGS from scripts/check-test-typecheck.ts ───────────────
@@ -115,23 +114,24 @@ describe('check-test-typecheck parseArgs — happy path', () => {
   });
 });
 
-// ── TS6xxx option/config diagnostic guard ─────────────────────────────────────
-//
-// Mirror of the ERROR_TS6_RE constant and ts6Lines detection logic from
-// scripts/check-test-typecheck.ts.  We test the regex and detection inline
-// because the script cannot be imported (shebang + main() at module scope).
+// ── Option/config diagnostic guard (production implementation) ────────────────
 
-const ERROR_TS6_RE = /^.*error TS6\d+:/m;
+describe('check-test-typecheck option/config guard', () => {
+  it.each([
+    'error TS18002: The files list in config file tsconfig.test.json is empty.',
+    'error TS18003: No inputs were found in config file tsconfig.test.json.',
+  ])('detects fatal input configuration: %s', (line) => {
+    expect(detectConfigDiagnosticLines(line)).toEqual([line]);
+  });
 
-function detectTs6Lines(output: string): string[] {
-  return output.split('\n').filter((l) => ERROR_TS6_RE.test(l));
-}
-
-describe('check-test-typecheck TS6xxx guard', () => {
+  it('does not reject semantic TS18xxx diagnostics', () => {
+    const line = "tests/a.ts(1,1): error TS18004: No value exists in scope for the shorthand property 'a'.";
+    expect(detectConfigDiagnosticLines(line)).toEqual([]);
+  });
   it('detects a TS6059 rootDir line', () => {
     const line =
       "tests/foo.test.ts(1,1): error TS6059: File 'tests/foo.test.ts' is not under 'rootDir' 'src'.";
-    expect(detectTs6Lines(line)).toHaveLength(1);
+    expect(detectConfigDiagnosticLines(line)).toHaveLength(1);
   });
 
   it('detects multiple TS6xxx lines in multi-line output', () => {
@@ -140,7 +140,7 @@ describe('check-test-typecheck TS6xxx guard', () => {
       "tests/b.test.ts(1,1): error TS6059: File 'tests/b.test.ts' is not under 'rootDir' 'src'.",
       "src/c.ts(5,3): error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.",
     ].join('\n');
-    expect(detectTs6Lines(output)).toHaveLength(2);
+    expect(detectConfigDiagnosticLines(output)).toHaveLength(2);
   });
 
   it('does not flag non-TS6xxx errors (TS2345, TS2322, etc.)', () => {
@@ -148,17 +148,17 @@ describe('check-test-typecheck TS6xxx guard', () => {
       "src/a.ts(1,1): error TS2345: Argument of type 'string' is not assignable.",
       "src/b.ts(2,3): error TS2322: Type 'number' is not assignable to type 'string'.",
     ].join('\n');
-    expect(detectTs6Lines(output)).toHaveLength(0);
+    expect(detectConfigDiagnosticLines(output)).toHaveLength(0);
   });
 
   it('does not flag warning or info lines that mention TS6xxx in prose', () => {
     // Prose mention in a comment — should not match because the pattern requires
     // the "error TS6NNN:" prefix.
     const line = '  // See TS6059 for details about rootDir';
-    expect(detectTs6Lines(line)).toHaveLength(0);
+    expect(detectConfigDiagnosticLines(line)).toHaveLength(0);
   });
 
   it('handles empty tsc output without throwing', () => {
-    expect(detectTs6Lines('')).toHaveLength(0);
+    expect(detectConfigDiagnosticLines('')).toHaveLength(0);
   });
 });
