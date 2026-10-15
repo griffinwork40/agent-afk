@@ -137,6 +137,8 @@ export type JournalRecord =
       provider?: string;
       model?: string;
       cwd?: string;
+      /** Running afk package version at the time the journal was written. Absent in older journals. */
+      afkVersion?: string;
       /** Set when this journal was created by /fork. */
       forkedFrom?: { sessionId: string; length: number };
     })
@@ -169,8 +171,12 @@ export interface MessageJournal {
   append(index: number, message: JournalMessage): void;
   truncate(length: number, reason?: JournalTruncateReason): void;
   mark(label: JournalMarkLabel, detail?: Record<string, unknown>): void;
-  /** Journal for a forked child: `sessions/<sessionId>/subagents/<subagentId>.jsonl`. */
-  forSubagent(subagentId: string): MessageJournal;
+  /**
+   * Journal for a forked child: `sessions/<sessionId>/subagents/<subagentId>.jsonl`.
+   * Pass `childMeta` with the child's resolved `model` and `provider` so the
+   * subagent's `meta` record reflects what the child actually ran. (#3808)
+   */
+  forSubagent(subagentId: string, childMeta?: { model?: string; provider?: string }): MessageJournal;
   /** Resolve once every queued write has hit disk. For tests and shutdown. */
   flush(): Promise<void>;
   /** Flush and stop accepting writes. Idempotent. */

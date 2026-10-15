@@ -376,8 +376,9 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     // spread so an inherited `options.config.messageJournal` (a caller that
     // cloned the parent's config) can never leak through; `resumeMessages` is
     // cleared for the same reason: children never reseed from the parent's
-    // journal, they start from their own prompt.
-    messageJournal: options.parent.messageJournal?.forSubagent(id),
+    // journal, they start from their own prompt. Child model + provider are
+    // passed so the subagent meta record reflects what THIS child runs. (#3808)
+    messageJournal: options.parent.messageJournal?.forSubagent(id, { model: String(effectiveChildModel), provider: providerForModel(effectiveChildModel) }),
     resumeMessages: undefined,
     // Child session inherits the SAME resolved registry (see `registry`
     // in forkSubagent) so its own SessionStart/SessionEnd/PreToolUse fire
