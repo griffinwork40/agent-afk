@@ -336,6 +336,7 @@ describe('buildBgResultInjection', () => {
   it('escapes double-quote in jobId attribute value', () => {
     const job = {
       jobId: 'id-with-"quote"',
+      provenance: 'model' as const,
       subagentId: 'sub-q',
       label: 'test',
       model: 'sonnet',
@@ -361,6 +362,7 @@ describe('buildBgResultInjection', () => {
     const adversarial = 'a"b<c>d&e';
     const job = {
       jobId: adversarial,
+      provenance: 'model' as const,
       subagentId: 'sub-adv',
       label: adversarial,
       model: adversarial,
