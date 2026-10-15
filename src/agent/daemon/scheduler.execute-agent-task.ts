@@ -10,6 +10,7 @@
  * @module agent/daemon/scheduler.execute-agent-task
  */
 
+import { gateRecoveryNote, hasRecoveredFromGate, type GateBlockCounter } from './scheduler-gate-recovery.js';
 import { makeDaemonElicitationHandler } from './handoff-wiring.js';
 import { makeCronElicitationHandler } from './scheduler.elicitation-notify.js';
 import { elicitationRouter } from '../elicitation-router.js';
@@ -59,7 +60,7 @@ export interface AgentTaskContext {
   queueDir: string;
   idleDetector: IdleDetector;
   now: () => number;
-  spawnSession: (task: ScheduledTask, trigger: TelemetryTrigger, gateBlockCounter?: { count: number }) => Promise<{
+  spawnSession: (task: ScheduledTask, trigger: TelemetryTrigger, gateBlockCounter?: GateBlockCounter) => Promise<{
     session: AgentSession;
     memoryStore: MemoryStore;
     stateStore: StateStore;
@@ -82,6 +83,7 @@ export interface AgentTaskContext {
 /** What one successful attempt hands back to the telemetry writer. */
 interface AttemptResult {
   responseText: string;
+  recovered: boolean;
   doneUnverified: boolean;
   /** Set when a cron-task elicitation was declined and a handoff written. */
   elicitationMessage?: string;
@@ -122,7 +124,7 @@ export async function executeAgentTask(
   // call (one per tick) and passed through spawnSession so the counting shim
   // in session-spawn.ts can update it. Retries share the same counter so
   // gateBlocks reflects the total across all attempts.
-  const gateBlockCounter = { count: 0 };
+  const gateBlockCounter: GateBlockCounter = { count: 0 };
   ctx.idleDetector.increment();
   try {
     const outcome = await runWithTaskRetry(() => runAgentAttempt(ctx, task, trigger, gateBlockCounter), {
@@ -141,7 +143,10 @@ export async function executeAgentTask(
       } : {}),
     });
     const attemptsField = policy.maxAttempts > 1 ? { attempts: outcome.attempts } : {};
-    const gateBlocksField = gateBlockCounter.count > 0 ? { gateBlocks: gateBlockCounter.count } : {};
+    const gateBlocksField = gateBlockCounter.count > 0 ? {
+      gateBlocks: gateBlockCounter.count,
+      ...(gateBlockCounter.calls?.length ? { gateBlockCalls: gateBlockCounter.calls } : {}),
+    } : {};
     if (!outcome.ok) {
       const record: TelemetryRecord = {
         ...baseRecord,
@@ -154,17 +159,14 @@ export async function executeAgentTask(
       ctx.writeTelemetry(record, task);
       return record;
     }
-    const { responseText, doneUnverified, elicitationMessage } = outcome.value;
-    // A run whose model turn completed but whose tool calls were hard-blocked
-    // by the AFK gate is recorded as 'blocked' rather than 'success' (#3466).
-    // This surfaces to notifyOn:'failure' so the operator is alerted when the
-    // work silently never happened. The responseExcerpt is preserved so the
-    // operator can read the model's explanation of the refusal.
-    const status = gateBlockCounter.count > 0 ? 'blocked' : 'success';
+    const { responseText, recovered, doneUnverified, elicitationMessage } = outcome.value;
+    const status = gateBlockCounter.count > 0 && !recovered ? 'blocked' : 'success';
+    const recoveryNote = gateBlockCounter.count > 0 && recovered ? gateRecoveryNote(gateBlockCounter) : undefined;
     const record: TelemetryRecord = {
       ...baseRecord,
       durationMs: ctx.now() - startTimeMs,
       status,
+      ...(recoveryNote !== undefined ? { gateRecoveryNote: recoveryNote } : {}),
       responseExcerpt: responseText.length > 280
         ? `${responseText.slice(0, 280)}… [truncated]`
         : responseText,
@@ -191,7 +193,7 @@ async function runAgentAttempt(
   ctx: AgentTaskContext,
   task: ScheduledTask,
   trigger: TelemetryTrigger,
-  gateBlockCounter?: { count: number },
+  gateBlockCounter?: GateBlockCounter,
 ): Promise<AttemptResult> {
   let session: AgentSession | null = null;
   let memoryStore: MemoryStore | null = null;
@@ -283,7 +285,12 @@ async function runAgentAttempt(
     } catch {
       // best-effort
     }
-    return { responseText, doneUnverified: probeDoneUnverified(ctx, responseText, response), elicitationMessage };
+    return {
+      responseText,
+      recovered: hasRecoveredFromGate(response, session.abortSignal?.aborted === true),
+      doneUnverified: probeDoneUnverified(ctx, responseText, response),
+      elicitationMessage,
+    };
   } finally {
     if (handlerInstalled) elicitationRouter.uninstallForSession(elicitationKey);
     if (session) {

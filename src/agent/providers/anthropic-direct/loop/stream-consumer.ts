@@ -54,7 +54,7 @@ export interface StreamConsumerContext {
 }
 
 /** Mutable per-round flags that track stream outcome as events arrive. */
-export interface StreamRoundState {
+interface StreamRoundState {
   turnResult: TurnResult | null;
   translatorErrored: boolean;
   retryTtfb: boolean;
@@ -109,7 +109,6 @@ export function handleFirstByteIfNeeded(
  * discriminated action:
  * - `'break'`: caller should `break` with no yield.
  * - `'yield-and-break'`: caller should yield `yieldEvent` then `break`.
- * - `'yield-original-and-break'`: caller should yield the original event then `break`.
  */
 export function handleInBandError(
   state: StreamRoundState,
@@ -344,7 +343,6 @@ export async function* consumeRoundStream({
     ttfbEmitted: false,
   };
 
-  let catchHandled = false;
   try {
     if (env.AFK_TELEGRAM_TRACE) console.log('[loop] awaiting translateMessageStream events');
     // Race every SSE pull against the turn signal so an ESC interrupt halts
@@ -406,7 +404,6 @@ export async function* consumeRoundStream({
     }
     if (env.AFK_TELEGRAM_TRACE) console.log('[loop] translate loop exited, turnResult=', state.turnResult ? 'set' : 'null');
   } catch (err) {
-    catchHandled = true;
     const result = handleCatchError(state, err, input, turn, ttfb, stall, stallTimeoutMs, retry);
     if (result.done) {
       if (result.yieldEvent !== undefined) yield result.yieldEvent;
@@ -416,13 +413,11 @@ export async function* consumeRoundStream({
     return classifyOutcome(state);
   }
 
-  if (!catchHandled) {
-    // Dispose both stall timers for this round once stream consumption is done
-    // (clean end, turn-result, or a retry decision) — idempotent, so the
-    // firstByteSeen() / catch-path disposes above are harmless duplicates.
-    ttfb.dispose();
-    stall.dispose();
-  }
+  // Dispose both stall timers for this round once stream consumption is done
+  // (clean end, turn-result, or a retry decision) — idempotent, so the
+  // firstByteSeen() / catch-path disposes above are harmless duplicates.
+  ttfb.dispose();
+  stall.dispose();
 
   return classifyOutcome(state);
 }

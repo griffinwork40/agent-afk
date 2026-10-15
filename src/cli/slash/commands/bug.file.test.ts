@@ -5,11 +5,12 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { parseBugArgs, runBug } from './bug.js';
-import { buildFilePreviewRows, type BugFileDeps } from './bug.file.js';
+import { buildFilePreviewRows, confirmFiling, type BugFileDeps } from './bug.file.js';
 import { BUG_REPORT_REPO } from './bug.body.js';
 import { resetHyperlinksEnabledForTest } from '../../hyperlink.js';
 import type { SlashContext, SessionStats } from '../types.js';
-import type { PickerController } from '../../terminal-compositor.js';
+import { displayWidth } from '../../display.js';
+import type { PickerController, TerminalCompositor } from '../../terminal-compositor.js';
 
 type Key = 'return' | 'escape' | 'ctrl-c';
 
@@ -25,6 +26,7 @@ function makeCompositor(key: Key): { compositor: unknown; rows: () => readonly s
       });
     },
     exitPickerMode: exit,
+    terminalRows: () => 24,
   };
   return { compositor, rows: () => captured?.renderRows() ?? [], exit };
 }
@@ -87,7 +89,8 @@ describe('/bug --file', () => {
     await runBug(ctx, '--file REPL froze', deps);
     expect(deps.createIssue).toHaveBeenCalledTimes(1);
     const opts = deps.createIssue.mock.calls[0]![0];
-    expect(opts.repo).toBe(BUG_REPORT_REPO);
+    expect(opts.repo).toBe(`github.com/${BUG_REPORT_REPO}`);
+    expect(deps.getViewerPermission).toHaveBeenCalledWith(`github.com/${BUG_REPORT_REPO}`);
     expect(opts.title).toBe('REPL froze');
     expect(opts.body).toContain('**Environment**');
     expect(opts.labels).toEqual([]);
@@ -111,7 +114,7 @@ describe('/bug --file', () => {
     expect(lines.some((l) => l.includes('Nothing was filed'))).toBe(true);
   });
 
-  it('previews repo, account, labels, title, and body before filing', async () => {
+  it('previews repo, account, labels, title, and capped body before filing', async () => {
     const { compositor, rows } = makeCompositor('escape');
     await runBug(makeCtx(compositor).ctx, '--file tool lane flickers', makeDeps());
     const text = rows().join('\n');
@@ -120,7 +123,9 @@ describe('/bug --file', () => {
     expect(text).toContain('PUBLIC');
     expect(text).toContain('tool lane flickers');
     expect(text).toContain('none (triage will label it)');
-    expect(text).toContain('**Environment**');
+    expect(text).toContain('more lines');
+    expect(rows().length).toBeLessThanOrEqual(20);
+    expect(rows().at(-1)).toContain('Esc: cancel');
   });
 
   it('falls back to the link without a compositor (non-interactive) and never calls gh', async () => {
@@ -160,6 +165,15 @@ describe('/bug --file', () => {
     expect(printedLink(lines)).toBe(true);
   });
 
+  it('does not print unvalidated create output as success', async () => {
+    const { compositor } = makeCompositor('return');
+    const { ctx, lines } = makeCtx(compositor);
+    await runBug(ctx, '--file x', makeDeps({ createIssue: vi.fn(async () => 'javascript:alert(1)') }));
+    expect(lines.some((l) => l.startsWith('SUCCESS:'))).toBe(false);
+    expect(lines.some((l) => l.includes('invalid issue URL'))).toBe(true);
+    expect(printedLink(lines)).toBe(true);
+  });
+
   it('requires a description', async () => {
     const { compositor } = makeCompositor('return');
     const { ctx, lines } = makeCtx(compositor);
@@ -179,6 +193,50 @@ describe('/bug --file', () => {
 });
 
 describe('buildFilePreviewRows', () => {
+  it('recomputes the preview budget when the terminal resizes', async () => {
+    let height = 24;
+    let controller!: PickerController;
+    const compositor = { enterPickerMode: (c: PickerController) => { controller = c; }, exitPickerMode: vi.fn() };
+    const report = { title: 't', body: 'body\n'.repeat(50) };
+    const pending = confirmFiling(compositor as unknown as TerminalCompositor,
+      () => buildFilePreviewRows(report, 'me', [], 'o/r', height - 4, 80));
+    expect(controller.renderRows()).toHaveLength(20);
+    height = 12;
+    expect(controller.renderRows()).toHaveLength(8);
+    controller.onKey(undefined, { name: 'escape' });
+    expect(await pending).toBe(false);
+  });
+
+  it('keeps marker and footer within narrow terminal columns', () => {
+    const rows = buildFilePreviewRows({ title: 't', body: 'x'.repeat(500) }, 'me', [], 'o/r', 10, 20);
+    expect(rows).toHaveLength(10);
+    expect(rows.every((row) => displayWidth(row) <= 19)).toBe(true);
+    expect(rows[8]).toContain('more lines');
+    expect(rows[9]).toContain('Enter: file it');
+  });
+  it('caps physical rows and accurately counts omitted lines', () => {
+    const report = { title: 't', body: Array.from({ length: 50 }, (_, i) => `line ${i}`).join('\n') };
+    const full = buildFilePreviewRows(report, 'me', [], 'github.com/o/r', Infinity, 80);
+    const rows = buildFilePreviewRows(report, 'me', [], 'github.com/o/r', 20, 80);
+    expect(rows).toHaveLength(20);
+    expect(rows[18]).toContain(`${full.length - 19} more lines`);
+    expect(rows[19]).toContain('Enter: file it');
+    expect(rows.slice(0, 18)).toEqual(full.slice(0, 18));
+  });
+
+  it('counts wrapped long lines and keeps the footer for tiny viewports', () => {
+    const report = { title: 't', body: 'x'.repeat(500) };
+    const rows = buildFilePreviewRows(report, 'me', [], 'github.com/o/r', 20, 40);
+    expect(rows).toHaveLength(20);
+    expect(rows[18]).toContain('more lines');
+    expect(buildFilePreviewRows(report, 'me', [], 'o/r', 1, 80)).toEqual([expect.stringContaining('Enter: file it')]);
+  });
+
+  it('keeps the entire preview when it fits', () => {
+    const rows = buildFilePreviewRows({ title: 't', body: 'complete body' }, 'me', [], 'o/r', 20, 80);
+    expect(rows.join('\n')).toContain('complete body');
+    expect(rows.join('\n')).not.toContain('more lines');
+  });
   it('lists labels when present', () => {
     const rows = buildFilePreviewRows({ title: 't', body: 'b' }, 'me', ['bug']).join('\n');
     expect(rows).toContain('bug');

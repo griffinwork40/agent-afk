@@ -1,6 +1,6 @@
 import { truncateDisplayWidth } from '../display.js';
 import { palette } from '../palette.js';
-import { contentMargin } from './measure.js';
+import { contentMargin, resolveTextMeasure } from './measure.js';
 
 // ─── InterruptPeek ───────────────────────────────────────────────────────────
 
@@ -25,7 +25,7 @@ export interface InterruptPeekSpec {
   };
   /** Hint text shown dim on the last line. Defaults to "Ctrl+C again to exit". */
   hint?: string;
-  /** Terminal width for padding. Defaults to 80. */
+  /** Panel width. Defaults to 80, or the text measure when centering is active. */
   width?: number;
 }
 
@@ -62,7 +62,10 @@ export function interruptPeek(spec: InterruptPeekSpec): string {
   // interrupt panel aligns with centered scrollback and overlay content.
   const pad = contentMargin();
   const indent = '  ';
-  const width = spec.width ?? 80;
+  // Centered: the panel sits inside the content band, so default to the band
+  // measure (margin + measure <= tw by construction) instead of a fixed 80
+  // that clipped context 20 cols early (audit C3). Centering off: 80, as before.
+  const width = spec.width ?? (pad ? (resolveTextMeasure() ?? 80) : 80);
   // Account for the 2-character indent when computing the usable content width.
   const contentWidth = Math.max(1, width - indent.length);
   const lines: string[] = [];

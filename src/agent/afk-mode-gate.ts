@@ -525,6 +525,20 @@ interface RefusalCtx {
   daemonCwd?: string;
 }
 
+/** Only workspace-escape verdicts get scratch guidance; other refusals must not suggest a workaround. */
+function workspaceEscapeTail(refusal: RefusalCtx): string {
+  // Classifier contract: risk-classifier.paths emits this prefix for containment failures.
+  if (!refusal.reason?.startsWith('workspace-escape:')) return '';
+  const scratch = refusal.daemonCwd === undefined
+    ? ` Sanctioned scratch locations: the private session temp root and $TMPDIR (os.tmpdir()).`
+    : '';
+  return scratch +
+    ` For commit messages or PR/review bodies use stdin heredocs` +
+    ` (\`git commit -F - <<'EOF'\`, \`gh pr create --body-file - <<'EOF'\`);` +
+    ` for reports or artifacts, write into the workspace \`.afk/\` directory.` +
+    ` This boundary is deliberate: do not reach the same effect via bash, python, or a script.`;
+}
+
 /** The refusal decision surfaced to the model, with a cause-specific tail. */
 function blockDecision(toolName: string, why: string, refusal: RefusalCtx): HookDecision {
   const head =
@@ -536,35 +550,15 @@ function blockDecision(toolName: string, why: string, refusal: RefusalCtx): Hook
       ? (() => {
           const roots = getTempRoots();
           const safeTemp = roots.length > 0 ? ` or a private temp root (${roots[0]})` : '';
-          const isEscape = refusal.reason?.startsWith('workspace-escape:') ?? false;
-          const escapeTail = isEscape
-            ? ` For commit messages or PR/review bodies use stdin heredocs` +
-              ` (\`git commit -F - <<'EOF'\`, \`gh pr create --body-file - <<'EOF'\`);` +
-              ` for reports or artifacts, write into the workspace \`.afk/\` directory.` +
-              ` This boundary is deliberate: do not reach the same effect via bash, python, or a script.`
-            : '';
           return (
             `This is a scheduled daemon task: no operator can approve this run. Write inside ` +
             `the task working directory (${refusal.daemonCwd})${safeTemp}, or use ` +
-            `another safe approach; if the task cannot complete, report Blocked.${escapeTail}`
+            `another safe approach; if the task cannot complete, report Blocked.`
           );
         })()
-      : (() => {
-          const isEscape = refusal.reason?.startsWith('workspace-escape:') ?? false;
-          const escapeTail = isEscape
-            ? ` Sanctioned scratch locations: the private session temp root and` +
-              ` $TMPDIR (os.tmpdir()); for commit messages or PR/review bodies` +
-              ` use stdin heredocs (\`git commit -F - <<'EOF'\`,` +
-              ` \`gh pr create --body-file - <<'EOF'\`); for reports or artifacts,` +
-              ` write into the workspace \`.afk/\` directory.` +
-              ` This boundary is deliberate: do not reach the same effect via bash, python, or a script.`
-            : '';
-          return (
-            `Push an Asking summary to Telegram (send_telegram) and stop, ` +
-            `or have the operator run /afk off and take over.${escapeTail}`
-          );
-        })();
-  return { decision: 'block', reason: head + tail };
+      : `Push an Asking summary to Telegram (send_telegram) and stop, ` +
+        `or have the operator run /afk off and take over.`;
+  return { decision: 'block', reason: head + tail + workspaceEscapeTail(refusal) };
 }
 
 /**

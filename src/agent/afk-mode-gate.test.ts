@@ -1268,15 +1268,23 @@ describe('createAfkModeGate — specific block reasons and temp-dir writes', () 
     expect(result.reason).toContain('workspace-escape: ');
   });
 
-  it('non-workspace-escape hard-block does NOT gain the escape hint', async () => {
-    const { gate } = makeGate(false);
+  it.each([false, true])('non-workspace-escape hard-block does NOT gain the escape hint (daemon=%s)', async (daemon) => {
+    const gate = createAfkModeGate(
+      () => 'autonomous' as PermissionMode,
+      P_USERS_DEV,
+      () => P_USERS_DEV,
+      { promptForApproval: false, ...(daemon ? { daemonTaskId: 'my-task' } : {}) },
+    );
     const result = await gate({
       event: 'PreToolUse',
       toolName: 'bash',
       input: { command: 'sudo ls' },
     });
     expect(result.decision).toBe('block');
+    expect(result.reason).toContain("bash-pattern: matched 'sudo'");
     expect(result.reason).not.toContain(`git commit -F - <<'EOF'`);
-    expect(result.reason).not.toContain('sanctioned scratch');
+    expect(result.reason).not.toContain(`gh pr create --body-file - <<'EOF'`);
+    expect(result.reason).not.toContain('Sanctioned scratch');
+    expect(result.reason).not.toContain('This boundary is deliberate');
   });
 });
