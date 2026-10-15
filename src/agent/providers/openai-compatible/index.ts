@@ -49,6 +49,7 @@ import { createStateHandlers } from '../../state/state-tools.js';
 import { makeDefaultMemoryStore, makeDefaultStateStore } from '../shared/provider-stores.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { selectBaseSchemas } from './base-schemas.js';
+import { applyReadOnlyGitPermissions, readOnlyGitSchemas } from '../../tools/readonly-git-surface.js';
 import { userAttentionFrom } from '../../tools/user-yield.js';
 import { buildQueryFromConfig } from './query.js';
 import { isCustomOpenAIEndpoint } from './query/fast-tier-session.js';
@@ -122,7 +123,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
   private readonly _spawnedPidRegistry = new SpawnedPidRegistry();
 
   constructor(opts: OpenAICompatibleProviderOptions = {}) {
-    this.providerOpts = snapshotOperatorOptions(opts);
+    // #3754: with AFK_READONLY_GIT_TOOL on, a read-only-bash surface swaps `bash` for `git_read`.
+    this.providerOpts = snapshotOperatorOptions({ ...opts, permissions: applyReadOnlyGitPermissions(opts.permissions, opts.readOnlyBash) });
     this._defaultHeaders = opts.defaultHeaders;
     this._injectedMemoryStore = opts.memoryStore !== undefined;
     this._injectedStateStore = opts.stateStore !== undefined;
@@ -130,7 +132,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this.workspaceStore = opts.workspaceStore;
     this._stateStore = opts.stateStore;
 
-    const schemas: AnthropicToolDef[] = [...builtinToolSchemas];
+    const schemas: AnthropicToolDef[] = [...builtinToolSchemas, ...readOnlyGitSchemas()];
     // Executor-supplied `agent` def advertises named agent types when a
     // registry is wired — parity with anthropic-direct (see agents/tool-def.ts).
     if (opts.subagentExecutor) schemas.push(opts.subagentExecutor.describeAgentTool?.() ?? agentTool);

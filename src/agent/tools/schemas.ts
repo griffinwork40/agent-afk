@@ -91,6 +91,7 @@ import { testRunTool } from './schemas.test-run.js';
 import { getFacetTool } from './schemas.facet.js';
 import { jsonQueryTool } from './schemas.json-query.js';
 import { modelCompleteTool } from './schemas.model-complete.js';
+import { gitReadTool } from './schemas.git-read.js';
 
 /**
  * The always-on built-in tool definitions,
@@ -163,4 +164,6 @@ export const ALL_TOOL_SCHEMAS: readonly AnthropicToolDef[] = [
   agentTool,
   skillTool,
   composeTool,
+  // Opt-in (AFK_READONLY_GIT_TOOL, #3754); registered via readonly-git-surface.ts.
+  gitReadTool,
 ];

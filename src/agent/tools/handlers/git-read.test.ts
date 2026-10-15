@@ -1,0 +1,192 @@
+/**
+ * Unit tests for the structured read-only `git_read` tool (#3754): policy
+ * allowlist, injection rejection, path confinement, and output bounding,
+ * plus a live run against a scratch repository.
+ */
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { planGitRead, confinePathspec, GIT_READ_SUBCOMMANDS } from '../git-read.policy.js';
+import { boundOutput, buildGitReadEnv, createGitReadHandler, GIT_READ_GLOBAL_ARGS, GIT_READ_MAX_BYTES_CEILING } from './git-read.js';
+
+const CWD = '/repo';
+
+function rejected(req: Parameters<typeof planGitRead>[0]): string {
+  const plan = planGitRead(req, CWD);
+  expect(plan.ok).toBe(false);
+  return plan.ok ? '' : plan.error;
+}
+
+describe('planGitRead: subcommand allowlist', () => {
+  it.each(['commit', 'push', 'checkout', 'reset', 'fetch', 'config', 'clean', 'stash', 'rm', 'am', '!sh', 'difftool'])('rejects %s', (sub) => {
+    expect(rejected({ subcommand: sub })).toContain('must be one of');
+  });
+
+  it.each([...GIT_READ_SUBCOMMANDS].filter((s) => s !== 'grep'))('accepts bare %s', (sub) => {
+    expect(planGitRead({ subcommand: sub }, CWD).ok).toBe(true);
+  });
+
+  it('forces --no-ext-diff and --no-textconv on diff/log/show', () => {
+    for (const sub of ['diff', 'log', 'show']) {
+      const plan = planGitRead({ subcommand: sub }, CWD);
+      expect(plan.ok && plan.argv).toEqual([sub, '--no-ext-diff', '--no-textconv', '--']);
+    }
+  });
+
+  it('tag and branch are list-only', () => {
+    const tag = planGitRead({ subcommand: 'tag', args: ['--sort=-creatordate'] }, CWD);
+    expect(tag.ok && tag.argv).toEqual(['tag', '--list', '--sort=-creatordate']);
+    expect(rejected({ subcommand: 'tag', args: ['v9.9.9'] })).toContain('no revision');
+    expect(rejected({ subcommand: 'tag', args: ['-d', 'v1'] })).toContain('Rejected option');
+    expect(rejected({ subcommand: 'branch', args: ['-D', 'main'] })).toContain('Rejected option');
+    expect(rejected({ subcommand: 'branch', args: ['newbranch'] })).toContain('no revision');
+  });
+});
+
+describe('planGitRead: injection rejection', () => {
+  it.each([
+    ['log', ['-c', 'core.pager=sh']],
+    ['diff', ['-c', 'diff.external=/bin/x']],
+    ['log', ['--output=/tmp/pwn']],
+    ['diff', ['--output', '/tmp/pwn']],
+    ['diff', ['-o', '/tmp/pwn']],
+    ['diff', ['--ext-diff']],
+    ['show', ['--textconv']],
+    ['log', ['--exec=sh']],
+    ['grep', ['-O']],
+    ['grep', ['--open-files-in-pager=sh']],
+    ['log', ['--config-env=core.pager=X']],
+    ['diff', ['--no-index']],
+    ['log', ['--show-signature']],
+    ['log', ['--format=%GS']],
+    ['blame', ['--contents=/etc/passwd']],
+    ['show', ['--upload-pack=sh']],
+  ])('%s %j is rejected', (sub, args) => {
+    const req = sub === 'grep' ? { subcommand: sub, args, pattern: 'x' } : { subcommand: sub, args };
+    expect(planGitRead(req, CWD).ok).toBe(false);
+  });
+
+  it('rejects revisions with shell or control characters', () => {
+    expect(rejected({ subcommand: 'log', args: ['HEAD;rm -rf /'] })).toContain('unsupported');
+    expect(rejected({ subcommand: 'log', args: ['$(id)'] })).toContain('unsupported');
+    expect(rejected({ subcommand: 'log', args: ['HEAD\n'] })).toContain('control');
+  });
+
+  it('pattern beginning with "-" stays a pattern (passed via -e)', () => {
+    const plan = planGitRead({ subcommand: 'grep', pattern: '--output=x', args: ['-n', 'HEAD'] }, CWD);
+    expect(plan.ok && plan.argv).toEqual(['grep', '--no-textconv', '--no-color', '-n', '-e', '--output=x', 'HEAD', '--']);
+  });
+
+  it('grep requires a pattern; pattern is invalid elsewhere', () => {
+    expect(rejected({ subcommand: 'grep' })).toContain('pattern');
+    expect(rejected({ subcommand: 'log', pattern: 'x' })).toContain('only valid');
+  });
+
+  it('rejects non-array args and too many args', () => {
+    expect(rejected({ subcommand: 'log', args: '--oneline' })).toContain('array');
+    expect(rejected({ subcommand: 'log', args: Array(41).fill('HEAD') })).toContain('at most');
+  });
+});
+
+describe('path confinement', () => {
+  it('accepts paths inside cwd and passes them after --', () => {
+    const plan = planGitRead({ subcommand: 'log', args: ['--oneline'], paths: ['src/a.ts', '/repo/b.ts', '.'] }, CWD);
+    expect(plan.ok && plan.argv.slice(-4)).toEqual(['--', 'src/a.ts', 'b.ts', '.']);
+  });
+
+  it.each(['../etc/passwd', '/etc/passwd', 'src/../../x', ':(top)x', ':/x'])('rejects %s', (p) => {
+    expect(typeof confinePathspec(CWD, p)).not.toBe('string');
+    expect(planGitRead({ subcommand: 'diff', paths: [p] }, CWD).ok).toBe(false);
+  });
+});
+
+describe('execution hardening', () => {
+  it('global args disable pager, external diff and fsmonitor', () => {
+    expect(GIT_READ_GLOBAL_ARGS).toEqual(expect.arrayContaining(['--no-pager', 'core.pager=cat', 'diff.external=', 'core.fsmonitor=false']));
+  });
+
+  it('env pins GIT_PAGER/PAGER/GIT_EDITOR and drops inherited GIT_* overrides', () => {
+    const before = { ...process.env };
+    process.env['GIT_DIR'] = '/elsewhere';
+    process.env['GIT_EXTERNAL_DIFF'] = '/bin/evil';
+    process.env['GIT_CONFIG_PARAMETERS'] = "'core.pager'='sh'";
+    try {
+      const e = buildGitReadEnv(undefined);
+      expect(e['GIT_DIR']).toBeUndefined();
+      expect(e['GIT_EXTERNAL_DIFF']).toBeUndefined();
+      expect(e['GIT_CONFIG_PARAMETERS']).toBeUndefined();
+      expect(e['GIT_PAGER']).toBe('cat');
+      expect(e['PAGER']).toBe('cat');
+      expect(e['GIT_EDITOR']).toBe(':');
+    } finally {
+      for (const k of ['GIT_DIR', 'GIT_EXTERNAL_DIFF', 'GIT_CONFIG_PARAMETERS']) {
+        if (before[k] === undefined) delete process.env[k]; else process.env[k] = before[k];
+      }
+    }
+  });
+
+  it('boundOutput truncates to max bytes with a marker', () => {
+    const out = boundOutput('x'.repeat(5000), 1000);
+    expect(out.startsWith('x'.repeat(1000))).toBe(true);
+    expect(out).toContain('truncated: 4000 of 5000 bytes omitted');
+    expect(boundOutput('short', 1000)).toBe('short');
+  });
+});
+
+describe('git_read handler (live repo)', () => {
+  let repo: string;
+  const signal = new AbortController().signal;
+  const git = (...a: string[]): void => { execFileSync('git', a, { cwd: repo, stdio: 'ignore' }); };
+
+  beforeAll(() => {
+    repo = mkdtempSync(join(tmpdir(), 'git-read-'));
+    git('init', '-q');
+    git('config', 'user.email', 't@example.com');
+    git('config', 'user.name', 'T');
+    git('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(repo, 'a.txt'), `${'line\n'.repeat(3000)}needle\n`);
+    git('add', '.');
+    git('commit', '-q', '-m', 'init');
+    git('tag', 'v1.0.0');
+  });
+  afterAll(() => { rmSync(repo, { recursive: true, force: true }); });
+
+  it('runs log, grep and tag listing', async () => {
+    const h = createGitReadHandler(repo);
+    expect((await h({ subcommand: 'log', args: ['--oneline'] }, signal)).content).toContain('init');
+    expect((await h({ subcommand: 'grep', pattern: 'needle', args: ['-n'] }, signal)).content).toContain('a.txt:3001:needle');
+    expect((await h({ subcommand: 'grep', pattern: 'absent-zzz' }, signal)).content).toBe('(no matches)');
+    expect((await h({ subcommand: 'tag' }, signal)).content).toContain('v1.0.0');
+  });
+
+  it('uses the context cwd (resolveBase) over the factory fallback', async () => {
+    const h = createGitReadHandler('/nonexistent');
+    const r = await h({ subcommand: 'rev-parse', args: ['--show-toplevel'] }, signal, { resolveBase: repo });
+    expect(r.isError).toBeFalsy();
+  });
+
+  it('bounds output by max_bytes and clamps to the ceiling', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'show', args: ['HEAD'], max_bytes: 500 }, signal);
+    expect(String(r.content)).toContain('git_read output truncated');
+    expect(Buffer.byteLength(String(r.content).split('\n…')[0] ?? '')).toBeLessThanOrEqual(500);
+    const big = await h({ subcommand: 'show', args: ['HEAD'], max_bytes: 10_000_000 }, signal);
+    expect(Buffer.byteLength(String(big.content))).toBeLessThanOrEqual(GIT_READ_MAX_BYTES_CEILING + 200);
+  });
+
+  it('rejected requests never run git and never write', async () => {
+    const h = createGitReadHandler(repo);
+    const target = join(repo, 'pwn.txt');
+    const r = await h({ subcommand: 'log', args: ['--output=pwn.txt'] }, signal);
+    expect(r.isError).toBe(true);
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it('a git failure surfaces as isError', async () => {
+    const h = createGitReadHandler(repo);
+    const r = await h({ subcommand: 'show', args: ['no-such-ref'] }, signal);
+    expect(r.isError).toBe(true);
+  });
+});

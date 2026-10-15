@@ -9,7 +9,7 @@
  * @module agent/tools/dispatch-batching
  */
 
-import { builtinToolSchemas, agentTool, skillTool, composeTool } from './schemas.js';
+import { ALL_TOOL_SCHEMAS } from './schemas.js';
 import { memoryToolSchemas } from '../memory/memory-tools.js';
 import { stateToolSchemas } from '../state/state-schemas.js';
 import { getRuntimeStateTool } from '../awareness/index.js';
@@ -28,10 +28,8 @@ import type { ConcurrencyClassifier } from './types.js';
  */
 const SAFE_TOOLS: ReadonlySet<string> = new Set(
   [
-    ...builtinToolSchemas,
-    agentTool,
-    skillTool,
-    composeTool,
+    // builtins + agent/skill/compose + opt-in git_read (#3754).
+    ...ALL_TOOL_SCHEMAS,
     ...memoryToolSchemas,
     ...stateToolSchemas,
     getRuntimeStateTool,

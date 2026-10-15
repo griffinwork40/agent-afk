@@ -66,6 +66,8 @@ const READ_TOOLS = new Set([
   'get_facet',
   // json_query — read-only: reads a JSON file and evaluates a bounded query.
   'json_query',
+  // git_read — structured read-only git (#3754, opt-in via AFK_READONLY_GIT_TOOL).
+  'git_read',
   // state-tools.ts — read-only queries against the durable cross-session KV store.
   'state_get', 'state_query',
 ]);

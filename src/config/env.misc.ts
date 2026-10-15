@@ -234,4 +234,20 @@ export const MISC_ENV_REGISTRY = [
     example: '0',
     category: 'misc',
   },
+  {
+    name: 'AFK_READONLY_GIT_TOOL',
+    description:
+      'Opt-in (#3754). When set to 1/true/yes/on, read-only child agents (read-only ' +
+      'skills such as ground-state, named agents with `bash: read-only` such as ' +
+      'git-investigator, and compose nodes running such agents) lose the generic `bash` ' +
+      'tool and get the structured `git_read` tool instead (status, log, diff, show, ' +
+      'grep, tag/branch listing, blame, ls-files; argv-only, fixed option allowlist). ' +
+      'Top-level sessions (no tool allowlist) also see `git_read` while set. ' +
+      'Default: off (read-only children keep classifier-gated bash).',
+    type: 'boolean',
+    required: false,
+    default: '0',
+    example: '1',
+    category: 'misc',
+  },
 ] as const satisfies readonly EnvVarMeta[];
