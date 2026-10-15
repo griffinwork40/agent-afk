@@ -168,6 +168,8 @@ legitimate Blocked/Asking verdict, and no telemetry tracks parse-failure rate.
   `('pending','deferred','follow-up','followup','next')` (`terminal-state.ts:247`), and
   `find()` returns on first substring match. A bullet labeled "Suggested next" contains
   `next` and would be captured as `deferred`. Narrow the needle or order the new field first.
+  (Resolved: `next` was removed from the Done `deferred` needles; it remains a needle for
+  the Asking `followup` field, where it is correct.)
 - Card-to-prompt adjacency is conditional: background-subagent and shell-passthrough
   notifications drain at the top of the *next* loop iteration
   (`loop-iteration.ts:236-266`), printing after the verdict card and before the prompt. Any
