@@ -10,7 +10,7 @@
  * @module agent/daemon/scheduler.execute-agent-task
  */
 
-import { gateRecoveryNote, hasRecoveredFromGate, type GateBlockCounter } from './scheduler-gate-recovery.js';
+import { gateBlockReason, gateRecoveryNote, hasRecoveredFromGate, type GateBlockCounter } from './scheduler-gate-recovery.js';
 import { makeDaemonElicitationHandler } from './handoff-wiring.js';
 import { makeCronElicitationHandler } from './scheduler.elicitation-notify.js';
 import { resumeContextFromTask } from './handoff-resume-context.js';
@@ -167,6 +167,7 @@ export async function executeAgentTask(
       ...baseRecord,
       durationMs: ctx.now() - startTimeMs,
       status,
+      ...(status === 'blocked' ? { errorMessage: gateBlockReason(gateBlockCounter) } : {}),
       ...(recoveryNote !== undefined ? { gateRecoveryNote: recoveryNote } : {}),
       responseExcerpt: responseText.length > 280
         ? `${responseText.slice(0, 280)}… [truncated]`
