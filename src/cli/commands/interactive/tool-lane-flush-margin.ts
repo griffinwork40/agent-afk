@@ -19,7 +19,7 @@ import { getTerminalWidth } from '../../terminal-size.js';
  * and 3 is barely perceptible and helps distinguish "the agent is talking"
  * from "the agent is working."
  */
-const TOOL_LANE_INDENT = '  ';
+export const TOOL_LANE_INDENT = '  ';
 
 /**
  * Join assembled overlay lines into a single string, applying the

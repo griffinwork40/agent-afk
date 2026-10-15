@@ -3,8 +3,9 @@
  * `gh issue create` after an explicit on-screen confirmation.
  *
  * Invariant: nothing reaches GitHub before the user presses Enter on a
- * preview that shows the exact title, labels, body, target repo, and the
- * `gh` account it will post as. The preview needs the interactive REPL's
+ * preview that shows the title, labels, target repo, and the
+ * `gh` account it will post as, plus a height-capped body excerpt with an
+ * explicit omitted-line count. The preview needs the interactive REPL's
  * compositor; without one (Telegram, daemon, piped stdin) we fail closed and
  * fall back to the v1 prefilled link instead of filing unconfirmed.
  *
@@ -19,12 +20,16 @@
  */
 
 import { palette } from '../../palette.js';
-import { checkGhReady, type GhReadiness } from '../../../agent/gh.js';
+import { checkGhReady, defaultExecFn, type GhReadiness, type ExecFn } from '../../../agent/gh.js';
+import { getTerminalWidth } from '../../terminal-size.js';
+import { hardWrapToWidth } from '../../wrap.js';
+import { truncateDisplayWidth } from '../../display.js';
 import {
   canApplyLabels,
   createIssue,
   getGhLogin,
   getViewerPermission,
+  validateIssueUrl,
   type CreateIssueOpts,
   type ViewerPermission,
 } from '../../../agent/gh.issue.js';
@@ -41,9 +46,15 @@ export interface BugFileDeps {
   createIssue: (opts: CreateIssueOpts) => Promise<string>;
 }
 
+const BUG_FILE_REPO = `github.com/${BUG_REPORT_REPO}`;
+
+/** Explicit CLI flags override GH_HOST without touching the spawn environment. */
+const githubExec: ExecFn = (file, args) => defaultExecFn(file, [...args, '--hostname', 'github.com']);
+
 export const defaultBugFileDeps: BugFileDeps = {
-  checkGhReady: () => checkGhReady(),
-  getGhLogin: () => getGhLogin(),
+  // Bypass the ambient-host cache: a GHE readiness result says nothing about github.com.
+  checkGhReady: () => checkGhReady({ hostname: 'github.com' }),
+  getGhLogin: () => getGhLogin(githubExec),
   getViewerPermission: (repo) => getViewerPermission(repo),
   createIssue: (opts) => createIssue(opts),
 };
@@ -53,9 +64,13 @@ export function buildFilePreviewRows(
   report: BugReport,
   login: string,
   labels: readonly string[],
-  repo: string = BUG_REPORT_REPO,
+  repo: string = BUG_FILE_REPO,
+  maxRows: number = Number.POSITIVE_INFINITY,
+  columns: number = getTerminalWidth(),
 ): string[] {
-  return [
+  const width = Math.max(1, columns - 1);
+  const footer = truncateDisplayWidth(palette.dim('Enter: file it   Esc: cancel'), width);
+  const rows = [
     palette.warning(`File this as a PUBLIC issue on ${repo} as @${login}?`),
     '',
     `${palette.dim('Title: ')}${report.title}`,
@@ -63,12 +78,20 @@ export function buildFilePreviewRows(
     '',
     ...report.body.split('\n'),
     '',
-    palette.dim('Enter: file it   Esc: cancel'),
-  ];
+  ].flatMap((row) => hardWrapToWidth(row, width).split('\n'));
+  rows.push(footer);
+  const budget = Math.max(1, Math.floor(maxRows));
+  if (rows.length <= budget) return rows;
+  // Keep the confirmation controls visible, even in a very short viewport.
+  if (budget === 1) return [footer];
+  const visible = Math.max(0, budget - 2);
+  const omitted = rows.length - visible - 1;
+  return [...rows.slice(0, visible),
+    truncateDisplayWidth(palette.dim(`${omitted} more lines (preview truncated)`), width), footer];
 }
 
 /** Show the preview; resolves true on Enter, false on Esc / Ctrl+C. */
-export function confirmFiling(compositor: TerminalCompositor, rows: readonly string[]): Promise<boolean> {
+export function confirmFiling(compositor: TerminalCompositor, rows: () => readonly string[]): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     let settled = false;
     const finish = (ok: boolean): void => {
@@ -78,7 +101,7 @@ export function confirmFiling(compositor: TerminalCompositor, rows: readonly str
       resolve(ok);
     };
     const controller: PickerController = {
-      renderRows: (): readonly string[] => rows,
+      renderRows: rows,
       onKey: (_char, key): void => {
         if (key.name === 'return') finish(true);
         else if (key.name === 'escape' || (key.ctrl && key.name === 'c')) finish(false);
@@ -118,16 +141,22 @@ export async function fileBugViaGh(
     ctx.out.warn('Could not read your GitHub account from gh. Use this link instead:');
     return fallback();
   }
-  const labels = canApplyLabels(await deps.getViewerPermission(BUG_REPORT_REPO)) ? ['bug'] : [];
+  const labels = canApplyLabels(await deps.getViewerPermission(BUG_FILE_REPO)) ? ['bug'] : [];
   const report = buildBugReport(description, env);
 
-  const confirmed = await confirmFiling(compositor, buildFilePreviewRows(report, login, labels));
+  const confirmed = await confirmFiling(compositor, () => buildFilePreviewRows(
+    report, login, labels, BUG_FILE_REPO,
+    // Leave room for the compositor's guard row, gap, and background status rows.
+    Math.max(1, compositor.terminalRows() - 4),
+  ));
   if (!confirmed) {
     ctx.out.info('Cancelled. Nothing was filed.');
     return 'continue';
   }
   try {
-    const url = await deps.createIssue({ repo: BUG_REPORT_REPO, title: report.title, body: report.body, labels });
+    const url = validateIssueUrl(await deps.createIssue({
+      repo: BUG_FILE_REPO, title: report.title, body: report.body, labels,
+    }), BUG_FILE_REPO);
     ctx.out.success(`${palette.success('Filed:')} ${url}`);
     return 'continue';
   } catch (err) {

@@ -15,6 +15,7 @@ import { getGlyphs, type Glyphs } from './commands/interactive/tool-lane-render.
 import { renderStatusLine, type ImageAttachment } from './input/attachments.js';
 import type { SpinnerController } from './input/spinner.js';
 import type { CompositorScrollRegionGuard } from './terminal-compositor.types.js';
+import { contentBand } from './render/measure.js';
 
 export interface ChromeRows {
   overlayLines: string[];
@@ -36,6 +37,11 @@ export interface ChromeRows {
  * slot at the lowest precedence and is NOT consumed here: it persists across
  * repaints until the key dispatcher clears it. It is truncated to the terminal
  * width so a long notice can never wrap and skew the frame's row math.
+ *
+ * Contract (centering): rows are returned UNMARGINED — buildFrameLines /
+ * buildPickerFrameLines prefix `contentBand(cols).margin` — so width-bounded
+ * rows (tip, mode notice) are fitted to `contentBand(cols).width`, which
+ * equals `cols` when centering is off.
  */
 export function gatherChromeRows(
   overlay: string,
@@ -46,8 +52,9 @@ export function gatherChromeRows(
   modeNotice: string | null = null,
 ): ChromeRows {
   const overlayLines = overlay ? overlay.split('\n') : [];
+  const bandWidth = contentBand(cols).width;
   const spinnerRow = spinnerController.renderSpinnerRow();
-  const tipRow = spinnerController.renderTipRow(cols);
+  const tipRow = spinnerController.renderTipRow(bandWidth);
   let attachmentRow: string | null = null;
   if (attachments.length > 0) {
     attachmentRow = renderStatusLine(attachments);
@@ -55,7 +62,7 @@ export function gatherChromeRows(
     attachmentRow = palette.dim(clipboardFailureMsgRef.value);
     clipboardFailureMsgRef.value = null;
   } else if (modeNotice !== null) {
-    attachmentRow = truncateDisplayWidth(modeNotice, Math.max(1, cols - 1));
+    attachmentRow = truncateDisplayWidth(modeNotice, Math.max(1, bandWidth - 1));
   }
   return { overlayLines, spinnerRow, tipRow, attachmentRow };
 }

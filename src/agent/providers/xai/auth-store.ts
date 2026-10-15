@@ -75,7 +75,8 @@ function defaultWriteFile(path: string, data: string, mode: number): void {
 }
 
 function defaultChmod(path: string, mode: number): void {
-  // Invariant: always re-apply mode. writeFileSync mode is O_CREAT-only.
+  // Retained for injectable writeFile implementations (e.g. writeFileSync,
+  // whose mode is O_CREAT-only). The default atomic writer sets mode before rename.
   chmodSync(path, mode);
 }
 

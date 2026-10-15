@@ -6,8 +6,9 @@ import { wrapToWidth } from '../wrap.js';
 import { palette } from '../palette.js';
 import { renderMascotLines, MASCOT_WIDTH, mascotSuppressed } from '../mascot.js';
 import { maxInnerBoxWidth, truncateDisplay } from './utils.js';
+import { truncateDisplayWidth } from '../display.js';
 import { renderAsciiWordmark, asciiWordmarkWidth } from './ascii-wordmark.js';
-import { contentMargin } from './measure.js';
+import { contentBand } from './measure.js';
 
 // ─── Welcome Banner ───────────────────────────────────────────────────────────
 
@@ -141,17 +142,26 @@ function renderLegacyBoxBanner(opts: WelcomeBannerOpts): string {
 
   const lines: string[] = [top, ...midLines, bot];
 
+  // Content centering (AFK_CENTER_CONTENT): derive the margin before wrapping
+  // metaLine/hintLine so wrap targets account for the margin that will be
+  // prepended. Without this, wrapToWidth produces lines up to cols wide, then
+  // prepend adds margin, overflowing the terminal by margin.length chars.
+  const tw = getTerminalWidth();
+  const { margin: pad, marginCols } = contentBand(tw);
+  // Wrap target: cols minus margin so that pad + wrapped_line <= cols.
+  // Each wrapped sub-line is also truncated as a safety net for unbreakable
+  // tokens (long paths, URLs) that wrapToWidth cannot split without
+  // breakLongWords — those would overflow even at a correct wrap target.
+  const wrapTarget = Math.max(4, tw - marginCols);
   if (opts.metaLine !== undefined) {
-    lines.push(...wrapToWidth(palette.dim('  ' + opts.metaLine), getTerminalWidth()).split('\n'));
+    const wrapped = wrapToWidth(palette.dim('  ' + opts.metaLine), wrapTarget).split('\n');
+    lines.push(...wrapped.map(l => truncateDisplayWidth(l, wrapTarget)));
   }
   if (opts.hintLine !== undefined) {
-    lines.push(...wrapToWidth(palette.dim('  ' + opts.hintLine), getTerminalWidth()).split('\n'));
+    const wrapped = wrapToWidth(palette.dim('  ' + opts.hintLine), wrapTarget).split('\n');
+    lines.push(...wrapped.map(l => truncateDisplayWidth(l, wrapTarget)));
   }
 
-  // Content centering (AFK_CENTER_CONTENT): prepend left margin to every
-  // line so the banner floats at the same horizontal position as the
-  // centered content below it.
-  const pad = contentMargin();
   if (pad.length > 0) {
     return lines.map(l => pad + l).join('\n');
   }
@@ -282,6 +292,13 @@ function renderHybridBanner(opts: WelcomeBannerOpts): string {
   // compositor-written rows, which are followed by a CUP instead.)
   const usableCols = cols - 1;
 
+  // Content centering (AFK_CENTER_CONTENT): derive margin now so that
+  // headerMaxW subtracts it. Without this subtraction, text rows are truncated
+  // to up to cols-3 wide and then pad is prepended, overflowing the terminal
+  // by margin.length columns. The band is derived from the full cols, not
+  // usableCols, to match what contentMargin() returns at paint time.
+  const { marginCols } = contentBand(cols);
+
   // Below this width the 27-col sprite would crush the right column into a
   // sliver; drop the mascot and stack the column full-width instead so the
   // banner stays legible at any narrow window size.
@@ -289,10 +306,10 @@ function renderHybridBanner(opts: WelcomeBannerOpts): string {
   const spriteBudget = usableCols - LEFT_PAD.length - MASCOT_WIDTH - GUTTER.length;
   const showMascot = spriteBudget >= MIN_INFO_COLS;
 
-  // Right-column width: beside the sprite when shown, else the full terminal
-  // width (minus the left pad and the reserved final column) in the compact,
-  // mascot-less fallback.
-  const headerMaxW = Math.max(1, usableCols - LEFT_PAD.length);
+  // Right-column width: subtract the centering margin so that when contentMargin()
+  // is prepended at paint time the total stays within usableCols.
+  // In the non-centered case marginCols=0 and this is identical to before.
+  const headerMaxW = Math.max(1, usableCols - LEFT_PAD.length - marginCols);
   const colMaxW = showMascot ? spriteBudget : headerMaxW;
 
   const versionText = opts.version !== undefined ? formatVersion(opts.version) : undefined;
@@ -416,22 +433,26 @@ function renderHybridBanner(opts: WelcomeBannerOpts): string {
   );
 
   // Hint line sits flush-left below the whole composition. Wrapped to
-  // `usableCols`, not `cols`: a wrap that lands exactly on the terminal width
-  // would put a glyph in the reserved final column and re-open the
-  // deferred-wrap hazard documented at the top of this function.
+  // `usableCols - marginCols`, not `cols`: a wrap at the full terminal width
+  // would re-open the deferred-wrap hazard, AND with centering active the
+  // margin is prepended afterwards, so the effective budget is usableCols minus
+  // the margin. In non-centered mode marginCols=0 and this is identical to the
+  // previous `usableCols` cap.
   if (opts.hintLine !== undefined) {
+    const hintWrap = Math.max(4, usableCols - marginCols);
     lines.push(
       ...wrapToWidth(
         palette.dim(LEFT_PAD + normalizeHintLine(opts.hintLine)),
-        usableCols,
+        hintWrap,
       ).split('\n'),
     );
   }
 
   // Content centering (AFK_CENTER_CONTENT): prepend left margin to every
   // line so the banner floats at the same horizontal position as the
-  // centered content below it.
-  const pad = contentMargin();
+  // centered content below it. Use the already-derived marginCols to avoid
+  // a second env read; contentMargin(cols) is equivalent.
+  const pad = ' '.repeat(marginCols);
   if (pad.length > 0) {
     return lines.map(l => l.length > 0 ? pad + l : l).join('\n');
   }

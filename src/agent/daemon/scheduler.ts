@@ -20,6 +20,7 @@ import { recoverDaemonQueues } from './pull-recovery.js';
 import { getQueueDir, getTelemetryPath } from '../../paths.js';
 import type { ScheduledTask as CronTask } from 'node-cron';
 import type { TraceWriter } from '../trace/index.js';
+import type { GateRecoveryFields } from './scheduler-gate-recovery.js';
 import type { AgentSession } from '../session/agent-session.js';
 import type { AgentConfig } from '../types.js';
 import type { Telegraf } from 'telegraf';
@@ -157,7 +158,7 @@ export interface SchedulerOptions {
 export type TelemetryTrigger = 'cron' | 'sessionstart' | 'pull';
 type TelemetryStatus = 'success' | 'error' | 'skipped' | 'blocked';
 
-export interface TelemetryRecord {
+export interface TelemetryRecord extends GateRecoveryFields {
   taskId: string;
   command: string;
   trigger: TelemetryTrigger;
@@ -184,13 +185,6 @@ export interface TelemetryRecord {
    * into retries (`maxAttempts > 1`); absent = single attempt, as before.
    */
   attempts?: number;
-  /**
-   * Number of tool calls hard-blocked by the AFK gate during this run (#3466).
-   * Present only when > 0. A run with gateBlocks > 0 is recorded as
-   * `status: 'blocked'` and treated as a failure for `notifyOn: 'failure'`
-   * so the operator is alerted when work silently never happened.
-   */
-  gateBlocks?: number;
 }
 
 export interface TaskCompletionDetails {
@@ -588,7 +582,7 @@ export class CronScheduler {
   private async spawnSession(
     task: ScheduledTask,
     trigger: TelemetryTrigger = 'cron',
-    gateBlockCounter?: { count: number },
+    gateBlockCounter?: import('./scheduler-gate-recovery.js').GateBlockCounter,
   ): ReturnType<typeof spawnDaemonSession> {
     return spawnDaemonSession(task.taskId, {
       ...this.options,

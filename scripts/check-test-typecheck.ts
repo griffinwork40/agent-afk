@@ -44,12 +44,16 @@ const TSCONFIG_REL = 'tsconfig.test.json';
 const ERROR_TS_RE = /^.*error TS\d+:/m;
 
 /**
- * Pattern for TS6xxx option/config diagnostics (e.g. TS6059 rootDir errors).
- * When any TS6xxx appears, tsc never runs semantic checking, making the gate
- * blind.  We fail loudly rather than silently counting config errors as if
- * they were semantic ones.
+ * Option/config diagnostics invalidate the semantic error count. Besides TS6xxx,
+ * TS18002 (empty files list) and TS18003 (no inputs) can hide the entire suite.
+ * Do not match all TS18xxx: that range also contains ordinary semantic errors.
  */
-const ERROR_TS6_RE = /^.*error TS6\d+:/m;
+const CONFIG_DIAGNOSTIC_RE = /^.*error TS(?:6\d+|18002|18003):/m;
+
+/** Shared by the CLI and its tests; importing this script does not run main(). */
+export function detectConfigDiagnosticLines(output: string): string[] {
+  return output.split('\n').filter((line) => CONFIG_DIAGNOSTIC_RE.test(line));
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -108,20 +112,18 @@ function measureErrors(): number {
     output = `${e.stdout ?? ''}${e.stderr ?? ''}`;
   }
 
-  // TS6xxx = option/config diagnostics (e.g. TS6059 rootDir mismatch).
-  // When present, tsc skips semantic checking and the gate goes blind.
-  // Fail loudly so a misconfigured tsconfig.test.json is immediately visible.
-  const ts6Lines = output.split('\n').filter((l) => ERROR_TS6_RE.test(l));
-  if (ts6Lines.length > 0) {
+  // Reject config failures before either check or update can use a bogus count.
+  const configLines = detectConfigDiagnosticLines(output);
+  if (configLines.length > 0) {
     process.stderr.write(
-      `\u2717 lint:tests:check — TS6xxx option/config diagnostics detected.\n` +
-        `  These errors suppress all semantic type-checking, making the gate blind.\n` +
+      `\u2717 lint:tests:check — option/config diagnostics detected (TS6xxx, TS18002, TS18003).\n` +
+        `  These errors can prevent semantic type-checking, making the gate blind.\n` +
         `  Fix the tsconfig.test.json configuration first:\n` +
-        ts6Lines
+        configLines
           .slice(0, 5)
           .map((l) => `    ${l.trim()}`)
           .join('\n') +
-        (ts6Lines.length > 5 ? `\n    … and ${ts6Lines.length - 5} more` : '') +
+        (configLines.length > 5 ? `\n    … and ${configLines.length - 5} more` : '') +
         '\n',
     );
     process.exit(1);
