@@ -12,8 +12,7 @@
  *   1. `AFK_IMAGE_API_KEY` env var (dedicated billing separation)
  *   2. `resolveOpenAIAuth()` from the openai-compatible provider, which
  *      covers OPENAI_API_KEY, CODEX_API_KEY, ~/.codex/auth.json (API-key
- *      mode), and ChatGPT-subscription OAuth (when AFK_OPENAI_CHATGPT_OAUTH
- *      is truthy). ChatGPT OAuth tokens route through the ChatGPT backend
+ *      mode), and ChatGPT-subscription OAuth (the last-resort tier). ChatGPT OAuth tokens route through the ChatGPT backend
  *      Responses API (see image-generate.chatgpt.ts) instead of the standard
  *      Images API, which rejects the OAuth token's limited scopes.
  *
@@ -34,8 +33,9 @@ import { resolveOpenAIAuth } from '../../providers/openai-compatible/auth.js';
 import { generateImageViaChatGpt } from './image-generate.chatgpt.js';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { ToolResult } from '../../providers/shared/tool-result.js';
-import { resolveAndContain } from './_cwd-utils.js';
-import { assertNotDenylisted } from './write-denylist.js';
+import { makeSessionCounter } from './_image-operation.js';
+import { h1ModelFetch } from '../../providers/shared/h1-fetch.js';
+import { resolveGenSavePath, callImagesApi } from './image-generate.api.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -77,24 +77,7 @@ const DEFAULT_SESSION_LIMIT = 10;
 // Per-session generation counter (module-scope, keyed by session id)
 // ---------------------------------------------------------------------------
 
-const sessionCounters = new Map<string, number>();
-
-function getSessionCount(sessionId: string): number {
-  return sessionCounters.get(sessionId) ?? 0;
-}
-
-function incrementSessionCount(sessionId: string): number {
-  const next = getSessionCount(sessionId) + 1;
-  sessionCounters.set(sessionId, next);
-  return next;
-}
-
-function decrementSessionCount(sessionId: string): void {
-  const current = getSessionCount(sessionId);
-  if (current > 0) {
-    sessionCounters.set(sessionId, current - 1);
-  }
-}
+const generateCounter = makeSessionCounter();
 
 // ---------------------------------------------------------------------------
 // Input parsing
@@ -168,65 +151,180 @@ function parseInput(
 // in this handler's auth, API, and session concerns. Imported here for the
 // dimension guard below; re-exported so all existing importers keep working.
 import { readImageDimensions } from './_image-dimensions.js';
+import { errorMessage } from '../../../utils/errors.js';
 export { readImageDimensions };
+
+// ---------------------------------------------------------------------------
+// Auth resolution helper
+// ---------------------------------------------------------------------------
+
+interface ResolvedAuth {
+  apiKey: string;
+  authSource: string;
+  extraHeaders: Record<string, string> | undefined;
+}
+
+/**
+ * Resolve OpenAI auth for image operations.
+ *
+ * Invariant: AFK_IMAGE_API_KEY takes highest precedence; the full
+ * openai-compatible auth chain (OPENAI_API_KEY, CODEX_API_KEY,
+ * ~/.codex/auth.json API-key mode, ChatGPT-subscription OAuth) is the
+ * fallback. Returns `{ errorResult }` on any terminal auth failure so the
+ * caller can return it directly without branching on individual error cases.
+ */
+function resolveImageAuth(): { auth: ResolvedAuth } | { errorResult: ToolResult } {
+  const dedicatedKey = env.AFK_IMAGE_API_KEY;
+  if (dedicatedKey) {
+    return {
+      auth: { apiKey: dedicatedKey, authSource: 'AFK_IMAGE_API_KEY', extraHeaders: undefined },
+    };
+  }
+
+  const resolved = resolveOpenAIAuth(undefined);
+  if (resolved.apiKey) {
+    let extraHeaders: Record<string, string> | undefined;
+    // ChatGPT OAuth tokens need the account id header for billing.
+    if (resolved.source === 'chatgpt-oauth' && resolved.accountId) {
+      extraHeaders = { 'chatgpt-account-id': resolved.accountId };
+    }
+    return { auth: { apiKey: resolved.apiKey, authSource: resolved.source, extraHeaders } };
+  }
+
+  if (resolved.source === 'chatgpt-oauth-expired') {
+    return {
+      errorResult: {
+        content:
+          'ChatGPT subscription token from ~/.codex/auth.json is expired. ' +
+          'Re-run `codex` to refresh the token, then retry. ' +
+          '(AFK reads the token but does not refresh it.)',
+        isError: true,
+      },
+    };
+  }
+
+  return {
+    errorResult: {
+      content:
+        'image_generate requires OpenAI auth. Options (checked in order):\n' +
+        '  1. AFK_IMAGE_API_KEY in ~/.afk/config/afk.env (dedicated image billing)\n' +
+        '  2. OPENAI_API_KEY env var\n' +
+        '  3. `codex login --api-key` (writes ~/.codex/auth.json)\n' +
+        '  4. ChatGPT subscription OAuth (run `codex login`)\n\n' +
+        'No usable auth was found from any source.',
+      isError: true,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Result-building helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the final ToolResult after a successful generation and disk save.
+ *
+ * Invariant: when `inspect` is true, two guards gate the inline image
+ * attachment -- a base64 byte cap (MAX_BASE64_BYTES) and a pixel dimension
+ * cap (MAX_IMAGE_DIMENSION). Either guard sets `imageOmitted` on the metadata
+ * and returns content-only, matching the behaviour of browser-screenshot.ts.
+ */
+function buildGenerateResult(opts: {
+  savePath: string;
+  parsedModel: string;
+  parsedSize: string;
+  parsedQuality: string;
+  parsedFormat: string;
+  parsedInspect: boolean;
+  imageBuffer: Buffer;
+  imageData: string;
+  revisedPrompt: string | null;
+  authSource: string | undefined;
+  sessionCount: number;
+  limit: number;
+}): ToolResult {
+  const {
+    savePath,
+    parsedModel,
+    parsedSize,
+    parsedQuality,
+    parsedFormat,
+    parsedInspect,
+    imageBuffer,
+    imageData,
+    revisedPrompt,
+    authSource,
+    sessionCount,
+    limit,
+  } = opts;
+
+  const meta: Record<string, unknown> = {
+    path: savePath,
+    model: parsedModel,
+    size: parsedSize,
+    quality: parsedQuality,
+    format: parsedFormat,
+    bytes: imageBuffer.length,
+    revised_prompt: revisedPrompt ?? null,
+    auth_source: authSource,
+    session_images_used: sessionCount,
+    session_images_limit: limit,
+  };
+
+  if (!parsedInspect) {
+    return { content: JSON.stringify(meta, null, 2) };
+  }
+
+  const formatToMediaType: Record<string, 'image/png' | 'image/jpeg' | 'image/webp'> = {
+    png: 'image/png',
+    jpeg: 'image/jpeg',
+    webp: 'image/webp',
+  };
+  const mediaType = formatToMediaType[parsedFormat] ?? 'image/png';
+
+  // Byte cap guard -- 2 MiB base64 to bound worst-case context consumption.
+  if (imageData.length > MAX_BASE64_BYTES) {
+    meta['imageOmitted'] =
+      `inspect:true requested but base64 payload (${imageData.length} bytes) exceeds the ` +
+      `${MAX_BASE64_BYTES}-byte cap; image saved to disk only. Use a smaller size or lower quality.`;
+    return { content: JSON.stringify(meta, null, 2) };
+  }
+
+  // Dimension guard -- mirrors browser-screenshot.ts MAX_IMAGE_DIMENSION check.
+  const dims = readImageDimensions(imageBuffer, parsedFormat);
+  if (dims !== null && (dims.width > MAX_IMAGE_DIMENSION || dims.height > MAX_IMAGE_DIMENSION)) {
+    meta['imageOmitted'] =
+      `inspect:true requested but image dimensions ${dims.width}x${dims.height}px exceed ` +
+      `the ${MAX_IMAGE_DIMENSION}px model-vision limit; image saved to disk only.`;
+    return { content: JSON.stringify(meta, null, 2) };
+  }
+
+  return {
+    content: JSON.stringify(meta, null, 2),
+    image: { mediaType, data: imageData },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
 
 export function createImageGenerateHandler(
-  fetchFn: typeof globalThis.fetch = globalThis.fetch,
+  fetchFn: typeof globalThis.fetch = h1ModelFetch,
 ): ToolHandler {
   return async (
     input: unknown,
     signal: AbortSignal,
     context?: ToolHandlerContext,
   ): Promise<ToolResult> => {
-    // 1. Resolve auth — prefer dedicated AFK_IMAGE_API_KEY, then fall through
+    // 1. Resolve auth -- prefer dedicated AFK_IMAGE_API_KEY, then fall through
     //    to the full openai-compatible auth chain (OPENAI_API_KEY, CODEX_API_KEY,
     //    ~/.codex/auth.json API-key mode, and ChatGPT-subscription OAuth).
-    const dedicatedKey = env.AFK_IMAGE_API_KEY;
-    let apiKey: string | undefined;
-    let authSource: string | undefined;
-    let extraHeaders: Record<string, string> | undefined;
+    const authResult = resolveImageAuth();
+    if ('errorResult' in authResult) return authResult.errorResult;
+    const { apiKey, authSource, extraHeaders } = authResult.auth;
 
-    if (dedicatedKey) {
-      apiKey = dedicatedKey;
-      authSource = 'AFK_IMAGE_API_KEY';
-    } else {
-      const resolved = resolveOpenAIAuth(undefined);
-      if (resolved.apiKey) {
-        apiKey = resolved.apiKey;
-        authSource = resolved.source;
-        // ChatGPT OAuth tokens need the account id header for billing.
-        if (resolved.source === 'chatgpt-oauth' && resolved.accountId) {
-          extraHeaders = { 'chatgpt-account-id': resolved.accountId };
-        }
-      } else if (resolved.source === 'chatgpt-oauth-expired') {
-        return {
-          content:
-            'ChatGPT subscription token from ~/.codex/auth.json is expired. ' +
-            'Re-run `codex` to refresh the token, then retry. ' +
-            '(AFK reads the token but does not refresh it.)',
-          isError: true,
-        };
-      }
-    }
-
-    if (!apiKey) {
-      return {
-        content:
-          'image_generate requires OpenAI auth. Options (checked in order):\n' +
-          '  1. AFK_IMAGE_API_KEY in ~/.afk/config/afk.env (dedicated image billing)\n' +
-          '  2. OPENAI_API_KEY env var\n' +
-          '  3. `codex login --api-key` (writes ~/.codex/auth.json)\n' +
-          '  4. ChatGPT subscription OAuth (set AFK_OPENAI_CHATGPT_OAUTH=1)\n\n' +
-          'No usable auth was found from any source.',
-        isError: true,
-      };
-    }
-
-    // 2. Daemon gate — AFK_DAEMON_TASK_ID is set when running inside a
+    // 2. Daemon gate -- AFK_DAEMON_TASK_ID is set when running inside a
     //    daemon/cron scheduled task (see src/config/env.ts).
     const allowDaemon = env.AFK_IMAGE_ALLOW_DAEMON;
     const isDaemon = Boolean(env.AFK_DAEMON_TASK_ID);
@@ -239,8 +337,8 @@ export function createImageGenerateHandler(
       };
     }
 
-    // 3. Per-session rate limit
-    // F-3: Fail closed when sessionId is absent — no shared 'unknown' bucket.
+    // 3. Per-session rate limit.
+    // F-3: Fail closed when sessionId is absent -- no shared 'unknown' bucket.
     const sessionId = context?.sessionId;
     if (!sessionId) {
       return {
@@ -255,9 +353,9 @@ export function createImageGenerateHandler(
 
     // 4. Optimistically increment before the API call to close the TOCTOU race
     //    (F-4); decrement on any failure path so the counter stays accurate.
-    incrementSessionCount(sessionId);
-    if (getSessionCount(sessionId) > limit) {
-      decrementSessionCount(sessionId);
+    generateCounter.increment(sessionId);
+    if (generateCounter.get(sessionId) > limit) {
+      generateCounter.decrement(sessionId);
       return {
         content:
           `Image generation limit reached (${limit} per session). ` +
@@ -267,14 +365,14 @@ export function createImageGenerateHandler(
       };
     }
 
-    // 5. Parse input
+    // 5. Parse input.
     const parsed = parseInput(input);
     if ('error' in parsed) {
-      decrementSessionCount(sessionId);
+      generateCounter.decrement(sessionId);
       return { content: parsed.error, isError: true };
     }
 
-    // 6. Generate image — route through ChatGPT subscription backend when
+    // 6. Generate image -- route through ChatGPT subscription backend when
     //    auth is chatgpt-oauth (the standard Images API rejects the token),
     //    otherwise use the public OpenAI Images API.
     let imageData: string;
@@ -286,189 +384,67 @@ export function createImageGenerateHandler(
         size: parsed.size,
         quality: parsed.quality,
         output_format: parsed.output_format,
-        apiKey: apiKey!,
+        apiKey,
         accountId: extraHeaders['chatgpt-account-id'],
         signal,
         fetchFn,
       });
       if ('error' in chatgptResult) {
-        decrementSessionCount(sessionId);
+        generateCounter.decrement(sessionId);
         return { content: chatgptResult.error, isError: true };
       }
       imageData = chatgptResult.b64_json;
       revisedPrompt = chatgptResult.revised_prompt;
     } else {
-      const result = await callImagesApi(
-        fetchFn, apiKey!, parsed, extraHeaders, signal,
-      );
+      const result = await callImagesApi(fetchFn, apiKey, parsed, extraHeaders, signal);
       if ('error' in result) {
-        decrementSessionCount(sessionId);
+        generateCounter.decrement(sessionId);
         return { content: result.error, isError: true };
       }
       imageData = result.b64_json;
       revisedPrompt = result.revised_prompt;
     }
 
-    // 7. Save to disk
+    // 7. Save to disk.
     const imageId = crypto.randomUUID().slice(0, 8);
     const ext = parsed.output_format;
-    const cwd = context?.cwd ?? process.cwd();
-
-    let savePath: string;
-    if (parsed.output_path) {
-      // F-1: Apply the same path containment + denylist guards as write_file
-      // to prevent path traversal (e.g. ../../.ssh/authorized_keys).
-      try {
-        savePath = resolveAndContain(parsed.output_path, context, 'write', cwd);
-        assertNotDenylisted(savePath, 'image_generate');
-      } catch (err: unknown) {
-        decrementSessionCount(sessionId);
-        const msg = err instanceof Error ? err.message : String(err);
-        return { content: msg, isError: true };
-      }
-    } else {
-      const dir = path.join(cwd, '.afk', 'generated-images');
-      await fs.mkdir(dir, { recursive: true });
-      savePath = path.join(dir, `${imageId}.${ext}`);
+    const cwd = context?.resolveBase ?? process.cwd();
+    const savePathResult = await resolveGenSavePath(parsed.output_path, context, cwd, imageId, ext);
+    if ('error' in savePathResult) {
+      generateCounter.decrement(sessionId);
+      return { content: savePathResult.error, isError: true };
     }
+    const { savePath } = savePathResult;
 
     const imageBuffer = Buffer.from(imageData, 'base64');
     try {
       await fs.mkdir(path.dirname(savePath), { recursive: true });
       await fs.writeFile(savePath, imageBuffer);
     } catch (err: unknown) {
-      decrementSessionCount(sessionId);
-      const msg = err instanceof Error ? err.message : String(err);
+      generateCounter.decrement(sessionId);
       return {
-        content: `Image generated successfully but failed to save to disk: ${msg}`,
+        content: `Image generated successfully but failed to save to disk: ${errorMessage(err)}`,
         isError: true,
       };
     }
 
-    // 8. Session counter was incremented optimistically before the API call (F-4).
-    const newCount = getSessionCount(sessionId);
-
-    // 9. Build metadata (always returned in content regardless of inspect flag)
-    const meta: Record<string, unknown> = {
-      path: savePath,
-      model: parsed.model,
-      size: parsed.size,
-      quality: parsed.quality,
-      format: parsed.output_format,
-      bytes: imageBuffer.length,
-      revised_prompt: revisedPrompt ?? null,
-      auth_source: authSource,
-      session_images_used: newCount,
-      session_images_limit: limit,
-    };
-
-    // 10. Optionally attach image for same-turn vision feedback.
-    if (parsed.inspect) {
-      const formatToMediaType: Record<string, 'image/png' | 'image/jpeg' | 'image/webp'> = {
-        png: 'image/png',
-        jpeg: 'image/jpeg',
-        webp: 'image/webp',
-      };
-      const mediaType = formatToMediaType[parsed.output_format] ?? 'image/png';
-
-      // Byte cap guard — 2 MiB base64 to bound worst-case context consumption.
-      if (imageData.length > MAX_BASE64_BYTES) {
-        meta['imageOmitted'] =
-          `inspect:true requested but base64 payload (${imageData.length} bytes) exceeds the ` +
-          `${MAX_BASE64_BYTES}-byte cap; image saved to disk only. Use a smaller size or lower quality.`;
-        return { content: JSON.stringify(meta, null, 2) };
-      }
-
-      // Dimension guard — mirrors browser-screenshot.ts MAX_IMAGE_DIMENSION check.
-      const dims = readImageDimensions(imageBuffer, parsed.output_format);
-      if (dims !== null && (dims.width > MAX_IMAGE_DIMENSION || dims.height > MAX_IMAGE_DIMENSION)) {
-        meta['imageOmitted'] =
-          `inspect:true requested but image dimensions ${dims.width}x${dims.height}px exceed ` +
-          `the ${MAX_IMAGE_DIMENSION}px model-vision limit; image saved to disk only.`;
-        return { content: JSON.stringify(meta, null, 2) };
-      }
-
-      return {
-        content: JSON.stringify(meta, null, 2),
-        image: { mediaType, data: imageData },
-      };
-    }
-
-    return {
-      content: JSON.stringify(meta, null, 2),
-    };
+    // 8. Build and return result (metadata + optional inline image attachment).
+    //    Session counter was incremented optimistically before the API call (F-4).
+    return buildGenerateResult({
+      savePath,
+      parsedModel: parsed.model,
+      parsedSize: parsed.size,
+      parsedQuality: parsed.quality,
+      parsedFormat: parsed.output_format,
+      parsedInspect: parsed.inspect,
+      imageBuffer,
+      imageData,
+      revisedPrompt,
+      authSource,
+      sessionCount: generateCounter.get(sessionId),
+      limit,
+    });
   };
 }
 
 export const imageGenerateHandler = createImageGenerateHandler();
-
-// ---------------------------------------------------------------------------
-// OpenAI Images API (standard path for API-key auth)
-// ---------------------------------------------------------------------------
-
-interface ImagesApiResult {
-  b64_json: string;
-  revised_prompt: string | null;
-}
-
-async function callImagesApi(
-  fetchFn: typeof globalThis.fetch,
-  apiKey: string,
-  parsed: ParsedInput,
-  extraHeaders: Record<string, string> | undefined,
-  signal: AbortSignal,
-): Promise<ImagesApiResult | { error: string }> {
-  const body = JSON.stringify({
-    model: parsed.model,
-    prompt: parsed.prompt,
-    size: parsed.size,
-    quality: parsed.quality,
-    output_format: parsed.output_format,
-    n: 1,
-  });
-
-  let response: Response;
-  try {
-    response = await fetchFn('https://api.openai.com/v1/images/generations', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-        ...extraHeaders,
-      },
-      body,
-      signal,
-    });
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { error: `OpenAI Images API request failed: ${msg}` };
-  }
-
-  if (!response.ok) {
-    let detail: string;
-    try {
-      const errorBody = await response.text();
-      detail = errorBody.slice(0, 2000);
-    } catch {
-      detail = `HTTP ${response.status} ${response.statusText}`;
-    }
-    return { error: `OpenAI Images API returned ${response.status}: ${detail}` };
-  }
-
-  let responseData: { data?: Array<{ b64_json?: string; revised_prompt?: string }> };
-  try {
-    responseData = (await response.json()) as typeof responseData;
-  } catch {
-    return { error: 'Failed to parse OpenAI Images API response as JSON.' };
-  }
-
-  const b64 = responseData.data?.[0]?.b64_json;
-  if (!b64) {
-    return { error: 'OpenAI Images API returned no image data (missing b64_json field).' };
-  }
-
-  return {
-    b64_json: b64,
-    revised_prompt: responseData.data?.[0]?.revised_prompt ?? null,
-  };
-}

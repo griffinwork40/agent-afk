@@ -21,6 +21,8 @@ import {
   RATE_LIMIT_TRANSIENT_MAX_RETRIES,
 } from './retry-constants.js';
 import { usageLimitNoTimestampPause, usageLimitResetPause } from './usage-limit-pause.js';
+import { anthropicCreditErrorEvent } from '../usage-limit.error.js';
+import { catchUpStaleCredential } from './usage-limit-catch-up.js';
 
 /**
  * Outer tier: intercept 429 usage-limit errors and (when enabled)
@@ -56,6 +58,9 @@ export async function* turnWithUsageLimitRetry(
   // Per-turn transient 429 replay budget. Local to this generator, so each
   // user turn gets a fresh RATE_LIMIT_TRANSIENT_MAX_RETRIES attempts.
   let rateLimitRetries = 0;
+  // One stale-credential catch-up per turn (see usage-limit-catch-up.ts), so
+  // a replay that re-limits falls through to the normal park, never loops.
+  let credentialCatchUpTried = false;
 
   for (;;) {
     let transientRetryAfterMs: number | undefined;
@@ -92,8 +97,28 @@ export async function* turnWithUsageLimitRetry(
           transientRetryAfterMs = c.retryAfterMs;
           break;
         }
+        // An empty API credit balance is terminal (never parked): surface it
+        // with the shared provider-labeled message, status 400 preserved.
+        if (c && c.kind === 'credit-exhausted') {
+          yield anthropicCreditErrorEvent(event);
+          continue;
+        }
       }
       yield event;
+    }
+
+    // A usage-limit 429 on a client whose token is older than the store
+    // means the operator already switched accounts: replay on the new
+    // credential instead of parking on the old one (which needed /reauth).
+    if (pendingErrorEvent && !credentialCatchUpTried) {
+      credentialCatchUpTried = true;
+      if (isClosed() || runInput.signal.aborted) return;
+      if (await catchUpStaleCredential(ctx, runInput)) {
+        pendingErrorEvent = null;
+        resetsAt = null;
+        noTimestamp = false;
+        continue;
+      }
     }
 
     if (!sawTransient) break;

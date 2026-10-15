@@ -16,10 +16,8 @@
  * @module agent/gh
  */
 
-import { execFile, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
+import { spawn } from 'node:child_process';
+import { execFileAsync } from '../utils/exec-file.js';
 
 // ---------------------------------------------------------------------------
 // Exec timeout (P2): all execFileAsync calls get a 20 s hard timeout so a DNS
@@ -110,7 +108,7 @@ function classifyStderr(stderr: string, code?: string, killed?: boolean): GhErro
   return 'unknown';
 }
 
-function defaultExecFn(file: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+export function defaultExecFn(file: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
   // P2: apply 20 s timeout to every execFileAsync call
   return execFileAsync(file, args, { timeout: EXEC_TIMEOUT_MS, killSignal: 'SIGTERM' }).then(
     (r) => ({ stdout: r.stdout, stderr: r.stderr }),
@@ -134,11 +132,12 @@ function defaultExecFn(file: string, args: string[]): Promise<{ stdout: string; 
  *
  * P3: cache hit/miss is logged so the daemon log shows whether a probe ran.
  *
+ * A `hostname` pins auth to that server and bypasses ambient-host cache/inflight.
  * Pass `{ ttlMs: 0 }` in tests to bypass the cache; pass `{ execFn }` to inject
  * a mock exec.
  */
 export async function checkGhReady(
-  opts: { execFn?: ExecFn; ttlMs?: number; _now?: () => number; log?: (msg: string) => void } = {},
+  opts: { execFn?: ExecFn; ttlMs?: number; hostname?: string; _now?: () => number; log?: (msg: string) => void } = {},
 ): Promise<GhReadiness> {
   const now = (opts._now ?? (() => Date.now()))();
   const ttlMs = opts.ttlMs ?? 60_000;
@@ -146,14 +145,14 @@ export async function checkGhReady(
   const log = opts.log ?? (() => {});
 
   // P1: only positive results are cached — failures must always re-probe
-  if (cache && cache.expiresAt > now) {
+  if (!opts.hostname && cache && cache.expiresAt > now) {
     log('[gh] checkGhReady cache hit');
     return cache.result;
   }
   log('[gh] checkGhReady cache miss — probing');
 
   // C5: in-flight dedup — if a probe is already running, join it
-  if (inflight) return inflight;
+  if (!opts.hostname && inflight) return inflight;
 
   const probe = async (): Promise<GhReadiness> => {
     // Step 1: check gh is on PATH
@@ -174,7 +173,7 @@ export async function checkGhReady(
 
     // Step 2: check gh is authenticated
     try {
-      await exec('gh', ['auth', 'status']);
+      await exec('gh', ['auth', 'status', ...(opts.hostname ? ['--hostname', opts.hostname] : [])]);
     } catch (err: unknown) {
       const e = err as { code?: string; killed?: boolean };
       // C6: network errors get a connectivity hint instead of an auth hint
@@ -189,12 +188,14 @@ export async function checkGhReady(
 
     // P1: only cache successes
     const result: GhReadiness = { ok: true };
-    if (ttlMs > 0) {
+    if (!opts.hostname && ttlMs > 0) {
       cache = { result, expiresAt: now + ttlMs };
     }
     return result;
   };
 
+  // Host-specific probes must not reuse or poison the ambient GH_HOST cache/inflight.
+  if (opts.hostname) return probe();
   inflight = probe().finally(() => {
     inflight = null;
   });
@@ -267,7 +268,7 @@ interface ExecError extends Error {
  * hard timeout as `defaultExecFn`; on timeout the child is SIGTERM'd and the
  * rejection carries `killed: true` so `classifyStderr` maps it to `'timeout'`.
  */
-function defaultExecWithInput(
+export function defaultExecWithInput(
   file: string,
   args: string[],
   input: string,

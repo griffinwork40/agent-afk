@@ -24,6 +24,7 @@
 
 import { createHash } from 'crypto';
 
+import { redactSecrets } from '../../redact-secrets.js';
 import type {
   ToolCallCompletedPayload,
   ToolCallStartedPayload,
@@ -164,6 +165,50 @@ function computeResourceFingerprint(
 }
 
 /**
+ * Cap for the `errorHead` field on failed tool_call.completed events.
+ * Deliberately small: the goal is failure-kind classification (stale edit,
+ * wrong path, policy refusal text), not full output reconstruction.
+ */
+const ERROR_HEAD_CAP = 200;
+
+/**
+ * Extract a short, sanitized head of the error text for inclusion in the
+ * `tool_call.completed` trace payload.
+ *
+ * - Returns `undefined` for successful calls or empty error content.
+ * - Collapses all control characters (C0 range \x00–\x1F, DEL \x7F, and C1
+ *   range \x80–\x9F) to a single space, keeping the head one line and free
+ *   of raw control bytes (trace JSONL must not embed them in field values).
+ * - Trims surrounding whitespace after control-character collapse.
+ * - Passes the result through {@link redactSecrets} so common token shapes
+ *   (sk-ant-*, Authorization Bearer, JWT, AWS key IDs, ≥32-char opaque
+ *   hex/base64 blobs) are replaced with `[REDACTED]`.
+ * - Caps at {@link ERROR_HEAD_CAP} characters (code points, not bytes) and
+ *   appends `… (truncated)` when the collapsed content exceeds that limit.
+ *
+ * The 200-char cap limits incidental-secret exposure; regex redaction is
+ * best-effort (connection strings, PEM blocks, and PII are not caught). The
+ * field is local-only (witness traces live in `~/.afk/state/witness/`) and
+ * is meant to classify failure kind, not reconstruct the full output.
+ */
+export function buildErrorHead(isError: boolean, content: string): string | undefined {
+  if (!isError) return undefined;
+  // Collapse all control characters (C0, DEL, and C1) to a space, then
+  // collapse consecutive spaces and trim. Includes \x80-\x9F (C1) for parity
+  // with sanitizeForDisplay in terminal-sanitize.ts.
+  // eslint-disable-next-line no-control-regex
+  const oneLine = content.replace(/[\x00-\x1F\x7F-\x9F]/g, ' ').replace(/  +/g, ' ').trim();
+  if (oneLine.length === 0) return undefined;
+  const redacted = redactSecrets(oneLine);
+  // Use Array.from to count/slice by Unicode code points (not UTF-16 code
+  // units) so an astral-plane character (emoji, supplementary CJK) straddling
+  // the cap boundary cannot leave a lone surrogate in the stored field.
+  const codePoints = Array.from(redacted);
+  if (codePoints.length <= ERROR_HEAD_CAP) return redacted;
+  return codePoints.slice(0, ERROR_HEAD_CAP).join('') + '… (truncated)';
+}
+
+/**
  * Build the `tool_call.completed` payload emitted AFTER a tool dispatch
  * settles, pairing with the `started` event above via `toolUseId`.
  *
@@ -185,12 +230,14 @@ export function buildToolCallCompletedPayload(args: {
   subagentId?: string | undefined;
 }): ToolCallCompletedPayload {
   const { toolUseId, name, result, truncated, durationMs, subagentId } = args;
+  const isError = result.isError === true;
+  const errorHead = buildErrorHead(isError, result.content);
   return {
     phase: 'completed',
     toolUseId,
     name,
     resultBytes: Buffer.byteLength(result.content, 'utf8'),
-    isError: result.isError === true,
+    isError,
     truncated,
     durationMs,
     ...(result.incomplete === true ? { incomplete: true } : {}),
@@ -202,5 +249,6 @@ export function buildToolCallCompletedPayload(args: {
       : {}),
     ...(subagentId !== undefined ? { subagentId } : {}),
     ...(result.testResult !== undefined ? { testResult: result.testResult } : {}),
+    ...(errorHead !== undefined ? { errorHead } : {}),
   };
 }

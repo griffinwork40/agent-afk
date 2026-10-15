@@ -222,6 +222,39 @@ describe('IdleWatchdog', () => {
     wd.dispose();
   });
 
+  it('arms to waitDeadline + slack (not a days-away resetsAt) for a bounded hot-swap park', () => {
+    const controller = new AbortController();
+    const wd = new IdleWatchdog(controller, IDLE, 'child-4b');
+
+    // Far-reset park: resetsAt is days away, but the provider bounds the park
+    // at waitDeadline (2h). The watchdog must cover the park, then fire at
+    // waitDeadline + slack rather than parking for days.
+    const parkMs = 2 * 60 * 60_000;
+    const waitDeadline = new Date(Date.now() + parkMs);
+    const resetsAt = new Date(Date.now() + 5 * 24 * 60 * 60_000);
+    wd.onEvent({ type: 'paused', reason: 'usage-limit', resetsAt, waitDeadline });
+
+    vi.advanceTimersByTime(parkMs + IDLE_WATCHDOG_PAUSE_SLACK_MS - 1);
+    expect(controller.signal.aborted).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(controller.signal.aborted).toBe(true);
+
+    wd.dispose();
+  });
+
+  it('covers a no-ts hot-swap park via waitDeadline (no 8-minute idle kill)', () => {
+    const controller = new AbortController();
+    const wd = new IdleWatchdog(controller, IDLE, 'child-4c');
+
+    const waitDeadline = new Date(Date.now() + 2 * 60 * 60_000);
+    wd.onEvent({ type: 'paused', reason: 'usage-limit', waitDeadline });
+
+    vi.advanceTimersByTime(IDLE * 3);
+    expect(controller.signal.aborted).toBe(false);
+
+    wd.dispose();
+  });
+
   it('uses a normal idle window for a `paused` event with no resetsAt', () => {
     const controller = new AbortController();
     const wd = new IdleWatchdog(controller, IDLE, 'child-5');

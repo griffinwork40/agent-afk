@@ -5,7 +5,8 @@ import { palette } from '../../palette.js';
 import { getTerminalWidth } from '../../terminal-size.js';
 import { wrapToWidth } from '../../wrap.js';
 import { truncateDisplayWidth } from '../../display.js';
-import { capToMeasure } from '../../render/measure.js';
+import { capToMeasure, contentBand } from '../../render/measure.js';
+import { TOOL_LANE_INDENT } from './tool-lane-flush-margin.js';
 import { sanitizeTextParagraph } from './tool-lane-format.js';
 
 /**
@@ -56,7 +57,15 @@ export function clampLineToTerminal(line: string, cols: number): string {
  * calling this, not by both happening to read the terminal.
  */
 export function toolLaneWidth(): number {
-  return capToMeasure(getTerminalWidth());
+  const tw = getTerminalWidth();
+  const capped = capToMeasure(tw);
+  // Content centering (AFK_CENTER_CONTENT): tool rows are painted at
+  // `margin + TOOL_LANE_INDENT + row`, so the row must fit the band minus the
+  // indent or it soft-wraps a stray `…` row on terminals just wider than the
+  // measure (e.g. 101-104 cols). No-op when centering is off.
+  const band = contentBand(tw);
+  if (band.marginCols === 0) return capped;
+  return Math.max(1, Math.min(capped, band.width - TOOL_LANE_INDENT.length));
 }
 
 interface ToolEntryFields {
@@ -144,6 +153,37 @@ interface ToolEntryFields {
    * or included in any part of the conversation history.
    */
   outputTail?: string;
+  /**
+   * Count of directly or indirectly failed descendant agent entries.
+   * Incremented on every ancestor NESTING_TOOLS entry when a child agent
+   * signals an error via {@link ToolLane.propagateChildFailure}. Used by
+   * the live overlay to render a compact failure badge (e.g. `⚠ 2`) on
+   * the ancestor row so an operator can spot nested trouble at a glance
+   * without scrolling the entire tree.
+   *
+   * Only set on NESTING_TOOLS entries (Agent / skill / compose / Task).
+   * Plain leaf tools never act as parents and thus never carry this field.
+   *
+   * Invariant: increment-only. Never decremented. A retried child that
+   * eventually succeeds still leaves its ancestor's count intact — the
+   * count signals "at least N failures occurred here", which is always
+   * true and never misleads the operator.
+   *
+   * Invariant: the renderer's 60s stall auto-settle
+   * (stream-renderer-lifecycle.ts `checkPauseAnnotations`) paints a
+   * provisional `[no-result — timed out]` error row but deliberately does
+   * NOT propagate. That row self-heals when a real result arrives later
+   * (finalizeSubagent overwrites it), and an increment-only count cannot
+   * un-count it, so propagating there would leave a permanent false badge.
+   */
+  failedChildCount?: number;
+  /**
+   * Set once this entry's own failure has been counted into its ancestors'
+   * `failedChildCount`. Guards against double-counting when the same failure
+   * arrives via both the subagent 'error' event and the dispatch's isError
+   * tool_result. See `propagateChildFailure` in tool-lane.ancestry.ts.
+   */
+  failurePropagated?: boolean;
 }
 
 export type ToolEntry = ToolEntryFields & { kind: 'tool' };
@@ -420,32 +460,8 @@ export function renderTextChildLines(text: string, indent: string, g: Readonly<G
 }
 
 
-/**
- * Push a possibly multi-line outcome string into `lines`, splitting on `\n` so
- * every continuation line (hiddenLineCount notice, tailPreview rows) carries the
- * spine-aware `continuationIndent` instead of the hardcoded 4-space indent that
- * `formatOutcome` embeds. The first line is concatenated with `headPrefix`;
- * subsequent lines get `continuationIndent` prepended. Every emitted line is
- * clamped to `cols`.
- *
- * Centralizes the split-and-re-indent pattern used by both the overlay and flush
- * child-render paths (tool-lane-render-children.ts) and the root NESTING-entry
- * path (tool-lane.ts), so the spine is never severed on multi-line outcomes.
- */
-export function pushOutcomeLines(
-  lines: string[],
-  headPrefix: string,
-  outcomeText: string,
-  continuationIndent: string,
-  cols: number,
-  headSuffix = '',
-): void {
-  const parts = outcomeText.split('\n');
-  lines.push(clampLineToTerminal(headPrefix + parts[0]! + headSuffix, cols));
-  for (let i = 1; i < parts.length; i++) {
-    lines.push(clampLineToTerminal(continuationIndent + parts[i]!, cols));
-  }
-}
+// Completed-row composition (head fitting + continuation rows) lives in
+// tool-lane-outcome-rows.ts (pushOutcomeRows), which replaced pushOutcomeLines.
 
 
 // Re-export from grouping module

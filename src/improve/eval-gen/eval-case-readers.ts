@@ -8,7 +8,8 @@
  * @module improve/eval-gen/eval-case-readers
  */
 
-import { existsSync, readFileSync, readdirSync } from 'fs';
+import { existsSync, readdirSync } from 'fs';
+import { readJsonFileLoose } from '../../utils/json-file.js';
 import { join } from 'path';
 import { EvalCaseSchema, type EvalCase } from '../schemas.js';
 import { getEvalCaseJsonPath, getEvalCasesDir } from '../paths.js';
@@ -82,14 +83,11 @@ export function getEvalCasesForProposal(proposalId: string): EvalCase[] {
 }
 
 export function readEvalCaseIfExists(path: string): EvalCase | undefined {
-  if (!existsSync(path)) return undefined;
-  try {
-    const raw = readFileSync(path, 'utf-8');
-    const parsed = JSON.parse(raw);
-    const validated = EvalCaseSchema.safeParse(parsed);
-    if (!validated.success) return undefined;
-    return validated.data;
-  } catch {
-    return undefined;
-  }
+  // readJsonFileLoose: ENOENT and parse errors both yield undefined — a missing
+  // or corrupt eval case should be skipped, matching the original try/catch.
+  // Unexpected I/O errors (EACCES, EISDIR) re-throw. Zod validates the shape.
+  const raw = readJsonFileLoose<unknown>(path);
+  if (raw == null) return undefined;
+  const validated = EvalCaseSchema.safeParse(raw);
+  return validated.success ? validated.data : undefined;
 }

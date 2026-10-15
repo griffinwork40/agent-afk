@@ -2,11 +2,12 @@
  * Bounded retention for session sidecar files (`$AFK_STATE_DIR/sessions/*.json`).
  *
  * Each root session writes a flat JSON sidecar under `state/sessions/<id>.json`
- * containing the session summary (cost, model, label, etc.). The `<uuid>/`
- * subdirectories in the same folder are per-session ledger dirs — this sweep
- * only touches the `.json` files, never the subdirectories.
+ * containing the session summary (cost, model, label, etc.). The `<id>/`
+ * subdirectories in the same folder hold per-session data (ledger, message
+ * journal, blobs, subagents); they are swept by age in a sibling pass —
+ * see session-sidecar-sweep.dirs.ts.
  *
- * Two eviction passes run in order:
+ * Sidecar eviction passes run in order:
  *   1. Age pass — remove any sidecar whose `savedAt` timestamp (or mtime
  *      fallback) is older than `AFK_SESSION_MAX_AGE_DAYS` (default 30).
  *   2. Count pass — evict oldest-first until at most `AFK_SESSION_MAX_COUNT`
@@ -19,10 +20,12 @@
  * @module agent/session-sidecar-sweep
  */
 
-import { readdir, readFile, stat, unlink, writeFile, access } from 'node:fs/promises';
+import { readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { pathExists } from '../utils/fs.js';
 import { join } from 'node:path';
 import { getSessionsDir } from '../paths.js';
 import { env } from '../config/env.js';
+import { sweepSessionDirs } from './session-sidecar-sweep.dirs.js';
 
 /** Minimum wall-clock gap between two sweeps. */
 const SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
@@ -56,6 +59,8 @@ export interface SessionSweepResult {
   evictedCount: number;
   /** Number of sidecars remaining after the sweep. */
   remaining: number;
+  /** Number of `sessions/<id>/` directories removed by the age pass. */
+  evictedDirs: number;
 }
 
 export interface SessionSweepOptions {
@@ -77,6 +82,8 @@ export interface SessionSweepOptions {
    * @internal
    */
   _unlink?: (path: string) => Promise<void>;
+  /** Override directory removal (testing only). @internal */
+  _rmDir?: (path: string) => Promise<void>;
 }
 
 function positiveNumber(raw: string | undefined, fallback: number): number {
@@ -90,6 +97,7 @@ const noop = (reason: string): SessionSweepResult => ({
   evictedAge: 0,
   evictedCount: 0,
   remaining: 0,
+  evictedDirs: 0,
 });
 
 /** True when the stamp says a sweep ran recently enough to skip this one. */
@@ -102,15 +110,7 @@ async function sweptRecently(root: string, now: number): Promise<boolean> {
   }
 }
 
-/** True when the path exists (async replacement for existsSync). */
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
+// pathExists imported from utils/fs.js — shared async existence check.
 
 /**
  * Sweep session sidecar files, evicting files that exceed the age bound,
@@ -134,12 +134,21 @@ export async function sweepSessionSidecars(opts?: SessionSweepOptions): Promise<
     }
 
     if (!(await pathExists(root))) {
-      return { skipped: false, evictedAge: 0, evictedCount: 0, remaining: 0 };
+      return { skipped: false, evictedAge: 0, evictedCount: 0, remaining: 0, evictedDirs: 0 };
     }
 
     const maxAgeDays = positiveNumber(env.AFK_SESSION_MAX_AGE_DAYS, DEFAULT_MAX_AGE_DAYS);
     const maxCount = positiveNumber(env.AFK_SESSION_MAX_COUNT, DEFAULT_MAX_COUNT);
     const maxAgeMs = maxAgeDays * DAY_MS;
+
+    const evictedDirs = await sweepSessionDirs({
+      root,
+      now,
+      maxAgeMs,
+      graceMs: GRACE_MS,
+      ...(opts?.activeSessionId !== undefined ? { activeSessionId: opts.activeSessionId } : {}),
+      ...(opts?._rmDir ? { _rm: opts._rmDir } : {}),
+    });
 
     // Enumerate all flat .json files (skip subdirectories and the stamp file).
     const entries = await readdir(root, { withFileTypes: true });
@@ -275,8 +284,8 @@ export async function sweepSessionSidecars(opts?: SessionSweepOptions): Promise<
       // Stamp is an optimization, not a correctness requirement.
     }
 
-    return { skipped: false, evictedAge, evictedCount, remaining };
+    return { skipped: false, evictedAge, evictedCount, remaining, evictedDirs };
   } catch {
-    return { skipped: false, evictedAge: 0, evictedCount: 0, remaining: 0 };
+    return { skipped: false, evictedAge: 0, evictedCount: 0, remaining: 0, evictedDirs: 0 };
   }
 }

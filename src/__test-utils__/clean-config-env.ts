@@ -60,6 +60,13 @@ beforeEach(() => {
   for (const key of CONFIG_OVERRIDE_VARS) {
     delete process.env[key]; // audit-env-access: allow — dynamic delete of registry-derived config keys
   }
+  // Invariant: the daemon usage-budget gate is OFF by default under test. Its
+  // default path reads the developer's real Claude OAuth token from the
+  // keychain and calls the live usage endpoint before every agent task, so any
+  // test that drives CronScheduler.runOnce would leak a real network call (and
+  // hang under fake timers). Suites that exercise the gate delete this var or
+  // inject `budgetGate` / `fetchUsage` explicitly.
+  process.env['AFK_DAEMON_BUDGET_GATE_DISABLED'] = '1'; // audit-env-access: allow — test-safety default, see Invariant
 });
 
 afterEach(() => {

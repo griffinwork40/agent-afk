@@ -9,14 +9,15 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { createExitPlanModeHandler } from './exit-plan-mode.js';
+import { createExitPlanModeHandler, PLAN_TEXT_REFUSAL } from './exit-plan-mode.js';
+import { MIN_PLAN_TEXT_CHARS } from '../../session/plan-text-tracker.js';
 import { elicitationRouter } from '../../elicitation-router.js';
 import { buildPlanExitPrompt } from '../../plan-mode-exit-prompt.js';
 import { getProjectPlansDir } from '../../../paths.js';
 import { AgentSession } from '../../session/agent-session.js';
 import { createMockProvider } from '../../__fixtures__/mock-provider.js';
 import type { PlanExitControls } from '../../types/config-types.js';
-import type { ModelProvider, ProviderQueryArgs, ProviderQuery } from '../../provider.js';
+import type { ModelProvider, ProviderEvent, ProviderQueryArgs, ProviderQuery } from '../../provider.js';
 import type { PermissionMode } from '../../types/sdk-types.js';
 
 const CWD = '/work/proj';
@@ -385,6 +386,137 @@ describe('AgentSession plan-exit seed bridge', () => {
 
     expect(getControls()).toBeUndefined();
 
+    await session.close();
+  });
+});
+
+describe('exit_plan_mode visible-plan-text gate (checkPlanText)', () => {
+  it('refuse: returns the refusal without showing the picker, flipping mode, or seeding', async () => {
+    let pickerShown = false;
+    elicitationRouter.install(async (request) => {
+      pickerShown = true;
+      return { action: 'accept', content: { value: request.choices?.[0] } };
+    });
+    const { controls, modeCalls, seeds } = makeControls();
+    controls.checkPlanText = () => 'refuse';
+    const handler = createExitPlanModeHandler(controls);
+
+    const res = await handler({}, new AbortController().signal, { resolveBase: CWD });
+
+    expect(pickerShown).toBe(false);
+    expect(modeCalls).toEqual([]);
+    expect(seeds).toEqual([]);
+    expect(res.content).toBe(PLAN_TEXT_REFUSAL);
+    expect(res.content).toContain('visible text');
+  });
+
+  it('ok: shows the normal picker message', async () => {
+    let message = '';
+    elicitationRouter.install(async (request) => {
+      message = request.message;
+      return { action: 'accept', content: { value: request.choices?.[0] } };
+    });
+    const { controls, seeds } = makeControls();
+    controls.checkPlanText = () => 'ok';
+    const res = await createExitPlanModeHandler(controls)({}, new AbortController().signal, { resolveBase: CWD });
+
+    expect(message).toContain('Your plan is in the conversation above');
+    expect(seeds).toHaveLength(1);
+    expect(res.content).toContain('mode=default');
+  });
+
+  it('warn: still shows the picker, but with a warning instead of the "plan is above" claim', async () => {
+    let message = '';
+    elicitationRouter.install(async (request) => {
+      message = request.message;
+      return { action: 'accept', content: { value: request.choices?.[0] } };
+    });
+    const { controls, seeds } = makeControls();
+    controls.checkPlanText = () => 'warn';
+    await createExitPlanModeHandler(controls)({}, new AbortController().signal, { resolveBase: CWD });
+
+    expect(message).toContain('Warning');
+    expect(message).not.toContain('Your plan is in the conversation above');
+    expect(message.length).toBeLessThan(512); // REPL picker sanitize cap
+    expect(seeds).toHaveLength(1);
+  });
+
+  it('a queued user message still wins over the gate', async () => {
+    const { controls } = makeControls();
+    controls.hasPendingUserMessage = () => true;
+    let gateCalls = 0;
+    controls.checkPlanText = () => { gateCalls++; return 'refuse'; };
+    const res = await createExitPlanModeHandler(controls)({}, new AbortController().signal, { resolveBase: CWD });
+
+    expect(res.content).toContain('queued message');
+    expect(gateCalls).toBe(0); // no refusal budget consumed
+  });
+});
+
+/**
+ * Wraps the mock provider so each turn runs `script` right before the mock's
+ * assistant reply. The script yields provider events and then calls the
+ * session-wired `checkPlanText` exactly where the real dispatcher would invoke
+ * the exit handler: after the generator resumes past its last yield, by which
+ * point the turn runner has observed every event already yielded.
+ */
+function scriptedProvider(
+  script: (controls: PlanExitControls, turn: number) => AsyncGenerator<ProviderEvent, void>,
+): ModelProvider {
+  const base = createMockProvider();
+  return {
+    name: 'scripted',
+    query: (args: ProviderQueryArgs): ProviderQuery => {
+      const q = base.query(args);
+      const controls = args.config.planExitControls;
+      let turn = 0;
+      return {
+        ...q,
+        async *[Symbol.asyncIterator]() {
+          for await (const e of q) {
+            if (e.type === 'assistant.message' && controls) yield* script(controls, turn++);
+            yield e;
+          }
+        },
+      } as ProviderQuery;
+    },
+  };
+}
+
+describe('AgentSession wires the visible-plan-text gate end to end', () => {
+  const PLAN = 'p'.repeat(MIN_PLAN_TEXT_CHARS);
+  const start = (name: string): ProviderEvent => ({ type: 'tool.use.start', toolUseId: `id-${name}`, toolName: name, toolInput: '' });
+  const out = (name: string): ProviderEvent => ({ type: 'tool.output', toolUseId: `id-${name}`, content: 'r' });
+
+  it('refuses a tool-only response after subagent results; passes once the plan is written; resets per turn', async () => {
+    const verdicts: string[] = [];
+    const provider = scriptedProvider(async function* (controls, turn) {
+      if (turn === 0) {
+        // Round 1: prose + subagent dispatch whose result returns.
+        yield { type: 'delta.text', text: PLAN };
+        yield start('agent');
+        yield out('agent');
+        // Round 2: exit_plan_mode with no visible text (the observed bug).
+        yield start('exit_plan_mode');
+        verdicts.push(controls.checkPlanText!());
+        yield out('exit_plan_mode');
+        // Round 3: the model writes the plan, then calls again.
+        yield { type: 'delta.text', text: PLAN };
+        yield start('exit_plan_mode');
+        verdicts.push(controls.checkPlanText!());
+      } else {
+        // New user turn: fresh window, so a tool-only call is refused again.
+        yield start('exit_plan_mode');
+        verdicts.push(controls.checkPlanText!());
+      }
+    });
+    const session = new AgentSession({ model: 'sonnet', apiKey: 'test-key', provider });
+    await session.waitForInitialization();
+
+    await session.sendMessage('plan it');
+    await session.sendMessage('go on');
+
+    expect(verdicts).toEqual(['refuse', 'ok', 'refuse']);
     await session.close();
   });
 });

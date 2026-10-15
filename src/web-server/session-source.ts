@@ -20,6 +20,8 @@ import type { Dirent } from 'node:fs';
 import { getSessionLedgerPath, getSessionsDir, isSafeLedgerSessionId } from '../paths.js';
 import { readLedger } from '../agent/session-ledger.js';
 import { readLivePresenceFiles } from '../agent/awareness/presence.js';
+import { isPreamble, extractUserContent } from '../agent/session/preamble-strip.js';
+import { readSidecarName } from './session-name-head.js';
 
 /** One agent session as the web UI's session list can render it. */
 export interface WebSessionSummary {
@@ -31,7 +33,11 @@ export interface WebSessionSummary {
   surface?: string;
   /** ISO 8601 timestamp — the session ledger file's mtime. */
   updatedAt?: string;
-  /** First user message, truncated to ~80 chars. */
+  /**
+   * The session's sidecar `name` (the same name `/resume` lists and `/name`
+   * sets) when it has one; otherwise the first user message, truncated to
+   * ~80 chars.
+   */
   title?: string;
   /** Liveness from presence records. Set for foreign sessions only. */
   alive?: boolean;
@@ -49,110 +55,6 @@ const TITLE_MAX_LEN = 80;
  * large over a long session.
  */
 const HEAD_RECORD_SCAN_LIMIT = 20;
-
-/**
- * Detect plugin/skill preamble text injected as a synthetic first user turn.
- * These start with a bracketed tag like `[agent-workflow-amplifiers: unlocked]`
- * or `[skill-routing: active]`, OR with an XML tag like
- * `<preflight-context ...>` or `<command-name>` from skill dispatch.
- */
-function isPreamble(text: string): boolean {
-  return /^\s*(\[[\w-]+[:\s]|<(preflight-context|command-name)\b)/.test(text);
-}
-
-/**
- * Extract a readable "/<skill> <args>" title from XML-tagged skill dispatch
- * records. When `summarizeContentBlocks` joins a manifest + breadcrumb +
- * instruction, the ledger record contains `<command-name>` and
- * `<command-args>` tags from the breadcrumb formatter.
- */
-function extractSkillTitle(text: string): string | undefined {
-  const skillMatch = text.match(/<command-name>\/?([^<]+)<\/command-name>/);
-  if (!skillMatch) return undefined;
-  const skillName = skillMatch[1]!.replace(/^\//, '').trim();
-  const argsMatch = text.match(/<command-args>([^<]*)<\/command-args>/);
-  const args = argsMatch?.[1]?.trim();
-  return args ? `/${skillName} ${args}` : `/${skillName}`;
-}
-
-/**
- * Extract user-authored content from a ledger record whose text begins with
- * plugin/bridge preamble.
- *
- * History: the harness concatenates the plugin preamble, bridge context, memory
- * hints, and the real user message into a single `user` record. The old code
- * skipped the whole record on `isPreamble()`, leaving every plugin session
- * untitled in the dashboard. This function peels known boilerplate sections
- * and returns whatever the user actually typed, or `undefined` when the record
- * is pure boilerplate with no user content.
- *
- * Invariant: the bridge section always ends with a recognizable tail marker
- * ("Read any referenced file for deeper context before acting"). User content
- * appears either on the same line (after the marker's trailing punctuation)
- * or on subsequent lines. When no bridge marker is present, fall back to
- * collecting lines after the last bracketed section header.
- */
-function extractUserContent(text: string): string | undefined {
-  // Strategy 1: find the bridge-tail marker and take everything after it.
-  // The user message is appended either on the same line (after "not full
-  // content.") or on the lines that follow.
-  const bridgeMarker = 'Read any referenced file for deeper context before acting';
-  const markerIdx = text.lastIndexOf(bridgeMarker);
-  if (markerIdx >= 0) {
-    // Skip past the marker line's known suffixes (punctuation variants).
-    const afterMarker = text.slice(markerIdx + bridgeMarker.length);
-    // Strip the rest of the marker line's boilerplate tail, e.g.
-    // " — these are pointers, not full content." before user text.
-    const cleaned = afterMarker.replace(
-      /^[^.]*\.\s*/,
-      '',
-    );
-    const result = cleaned.trim();
-    // When the bridge-tail extraction yields user content, return it.
-    // When it yields nothing, the bridge marker was present but no user text
-    // followed — fall through to the XML-tag strategy only, since the bridge
-    // marker is authoritative evidence that everything before it is boilerplate.
-    if (result) return result;
-    // Bridge marker found but no user content after it — try XML tags only.
-    const xmlFallback = extractSkillTitle(text);
-    return xmlFallback;
-  }
-
-  // Strategy 2: XML-tagged skill dispatch records.
-  const xmlTitle = extractSkillTitle(text);
-  if (xmlTitle) return xmlTitle;
-
-  // Strategy 3 (no bridge marker, no XML tags): collect lines after the last
-  // bracketed section header. Handles minimal preambles like
-  // "[skill-routing: active]\n…"
-  const lines = text.split('\n');
-  let lastBracketLine = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (/^\s*\[[\w-]+[:\s]/.test(lines[i]!)) lastBracketLine = i;
-  }
-  if (lastBracketLine < 0) return undefined;
-
-  // Take everything after the last bracketed header, skipping the header's
-  // own body (indented/bulleted continuation lines).
-  const tail: string[] = [];
-  let pastBody = false;
-  for (let i = lastBracketLine + 1; i < lines.length; i++) {
-    const line = lines[i]!;
-    const trimmed = line.trim();
-    if (!pastBody) {
-      // Skip blank lines and lines that look like preamble body (bullets,
-      // indented text, known boilerplate starters).
-      if (!trimmed || /^[-*]/.test(trimmed)) continue;
-      if (/^\[[\w-]+[:\s]/.test(trimmed)) continue;
-      pastBody = true;
-    }
-    tail.push(line);
-  }
-
-  const result = tail.join('\n').trim();
-  if (!result || /^\s*\[[\w-]+[:\s]/.test(result)) return undefined;
-  return result;
-}
 
 function truncateTitle(text: string): string {
   const flat = text.trim().replace(/\s+/g, ' ');
@@ -181,14 +83,14 @@ async function readLedgerHead(
         if (rec.cwd !== undefined) out.cwd = rec.cwd;
         if (rec.surface !== undefined) out.surface = rec.surface;
       } else if (rec.kind === 'user' && out.title === undefined) {
-        // Invariant: plugin-dispatched sessions concatenate the plugin
-        // preamble, bridge context, and the real user message into a single
-        // `user` record. Skipping the whole record (the pre-2026-09 behavior)
-        // left every plugin session untitled. Instead, peel the preamble and
-        // extract whatever the user actually typed.
-        const content = isPreamble(rec.text)
-          ? extractUserContent(rec.text)
-          : rec.text;
+        // Prefer `input` (the caller's own message, recorded when framework
+        // context was prepended). Older ledgers lack it, so fall back to
+        // `text`, which concatenates the plugin preamble, bridge context,
+        // and the real user message. Skipping the whole record (the
+        // pre-2026-09 behavior) left every plugin session untitled; instead,
+        // peel the preamble and extract whatever the user actually typed.
+        const source = rec.input ?? rec.text;
+        const content = isPreamble(source) ? extractUserContent(source) : source;
         if (content) out.title = truncateTitle(content);
         // If extraction returned nothing (pure-boilerplate record), fall
         // through and let a subsequent user record supply the title.
@@ -246,11 +148,24 @@ async function readAliveIds(): Promise<Set<string> | null> {
   }
 }
 
-/** Newest-first comparator. Sessions with no `updatedAt` sort last, stably. */
+/**
+ * Rank for a session with no `updatedAt`. An owned (`live`) session without a
+ * ledger was created moments ago and has not run its first turn, so it is the
+ * NEWEST thing in the list and sorts first; anything else without a timestamp
+ * is unknown-age and sorts last.
+ */
+function undatedRank(s: WebSessionSummary): number {
+  return s.mode === 'live' ? -1 : 1;
+}
+
+/**
+ * Newest-first comparator. Brand-new owned sessions (no ledger yet) sort
+ * first; other sessions with no `updatedAt` sort last, stably.
+ */
 function compareByUpdatedAtDesc(a: WebSessionSummary, b: WebSessionSummary): number {
-  if (a.updatedAt === undefined && b.updatedAt === undefined) return 0;
-  if (a.updatedAt === undefined) return 1;
-  if (b.updatedAt === undefined) return -1;
+  if (a.updatedAt === undefined && b.updatedAt === undefined) return undatedRank(a) - undatedRank(b);
+  if (a.updatedAt === undefined) return undatedRank(a);
+  if (b.updatedAt === undefined) return -undatedRank(b);
   if (a.updatedAt > b.updatedAt) return -1;
   if (a.updatedAt < b.updatedAt) return 1;
   return 0;
@@ -307,13 +222,14 @@ export async function listWebSessions(
   const summaries = await Promise.all(
     [...ids].map(async (id): Promise<WebSessionSummary> => {
       const mode: 'live' | 'readonly' = owned.has(id) ? 'live' : 'readonly';
-      const head = await readLedgerHead(id);
+      const [head, name] = await Promise.all([readLedgerHead(id), readSidecarName(id)]);
       const mtime = onDisk.get(id);
 
       const summary: WebSessionSummary = { id, mode };
       if (head.cwd !== undefined) summary.cwd = head.cwd;
       if (head.surface !== undefined) summary.surface = head.surface;
-      if (head.title !== undefined) summary.title = head.title;
+      const title = name ?? head.title;
+      if (title !== undefined) summary.title = title;
       if (mtime !== undefined) summary.updatedAt = mtime.toISOString();
       if (mode === 'readonly' && aliveIds !== null) summary.alive = aliveIds.has(id);
       return summary;

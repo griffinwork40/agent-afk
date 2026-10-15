@@ -12,7 +12,9 @@ import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as readline from 'node:readline';
 import { getSessionLedgerDir, getSessionLedgerPath, isSafeLedgerSessionId } from '../paths.js';
+import { IncrementalLineReader } from '../utils/jsonl.js';
 import type { LedgerRecord } from './session-ledger.js';
+import { isErrnoCode } from '../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Reader
@@ -51,7 +53,7 @@ export async function* readLedger(sessionId: string): AsyncGenerator<LedgerRecor
   try {
     fd = await fsp.open(getSessionLedgerPath(sessionId), 'r');
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
+    if (isErrnoCode(e, 'ENOENT')) return;
     throw e;
   }
   try {
@@ -90,7 +92,7 @@ export async function* tailLedger(
   const { fromStart = false, signal } = opts ?? {};
 
   let fileOffset = 0;
-  let buffer = '';
+  const lineReader = new IncrementalLineReader();
   let sawClosed = false;
 
   async function* readNewRecords(): AsyncGenerator<LedgerRecord> {
@@ -104,10 +106,7 @@ export async function* tailLedger(
       const { bytesRead } = await fd.read(readBuf, 0, toRead, fileOffset);
       if (bytesRead === 0) return;
       fileOffset += bytesRead;
-      buffer += readBuf.toString('utf8', 0, bytesRead);
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
+      for (const line of lineReader.feed(readBuf.toString('utf8', 0, bytesRead))) {
         const rec = parseRecord(line);
         if (!rec) continue;
         if (rec.kind === 'closed') sawClosed = true;
@@ -115,7 +114,7 @@ export async function* tailLedger(
         if (sawClosed) return;
       }
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+      if (!isErrnoCode(e, 'ENOENT')) {
         process.stderr.write(`[afk] session-ledger: tail read error for ${sessionId}: ${String(e)}\n`);
       }
     } finally {

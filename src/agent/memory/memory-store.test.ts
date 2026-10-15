@@ -184,9 +184,10 @@ describe('saveHot — truncation covenant', () => {
 // the same file at once. Enabling WAL needs a brief EXCLUSIVE lock that SQLite
 // does NOT cover with busy_timeout, so a contended switch throws SQLITE_BUSY
 // immediately — which flaked CI's coverage run on whichever test files lost the
-// race ("database is locked", 0 tests collected). enableWalMode() defends this:
-// busy_timeout is set first (so the mode READ is protected), the switch is
-// skipped when the DB is already WAL, and the cold-start race is bound-retried.
+// race ("database is locked", 0 tests collected). configureSqliteConnection()
+// (src/agent/storage/sqlite.ts) defends this: busy_timeout is set first (so
+// the mode READ is protected), the switch is skipped when the DB is already
+// WAL, and the cold-start race is bound-retried.
 // ---------------------------------------------------------------------------
 
 describe('SQLite connection setup — WAL-mode concurrency', () => {
@@ -282,9 +283,8 @@ describe('SQLite connection setup — WAL-mode concurrency', () => {
     expect(walSwitchAttempts).toBeGreaterThanOrEqual(3);
   });
 
-  // Skip on Windows: when the MemoryStore constructor throws mid-open, the
-  // better-sqlite3 file handle is not returned and cannot be closed before the
-  // afterEach rmSync — GC is non-deterministic, leaving the file locked (EBUSY).
+  // Windows: TODO needs native equivalent — when constructor throws mid-open, the better-sqlite3 file handle
+  // is not returned and cannot be closed before afterEach rmSync — GC is non-deterministic, leaving it EBUSY.
   it.skipIf(process.platform === 'win32')('does not swallow a non-BUSY SQLite error from the WAL switch', () => {
     const original = Database.prototype.pragma;
     vi.spyOn(Database.prototype, 'pragma').mockImplementation(function (
@@ -411,7 +411,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 
     const check = new Database(dbPath, { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(4);
+      expect(check.pragma('user_version', { simple: true })).toBe(5);
       const cols = (check.pragma('table_info(sessions)') as Array<{ name: string }>).map(
         (c) => c.name,
       );
@@ -438,7 +438,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     }
   });
 
-  it('stamps a fresh DB at v4 with the actor column present', () => {
+  it('stamps a fresh DB at v5 with the actor column present', () => {
     const freshStore = new MemoryStore(migDir);
     freshStore.startSession({ session_id: 's', surface: 'cli', actor: 'main' });
     // Close before opening a readonly copy; also prevents EBUSY on Windows rmSync.
@@ -446,7 +446,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 
     const check = new Database(join(migDir, 'memory.db'), { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(4);
+      expect(check.pragma('user_version', { simple: true })).toBe(5);
       const row = check
         .prepare('SELECT actor FROM sessions WHERE session_id = ?')
         .get('s') as { actor: string | null };
@@ -456,7 +456,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     }
   });
 
-  it('handles concurrent racer adding the actor column via pre-check (no try/catch) and still reaches v4', () => {
+  it('handles concurrent racer adding the actor column via pre-check (no try/catch) and still reaches v5', () => {
     const dbPath = join(migDir, 'memory.db');
     // Simulate a cross-process race: another opener has already added the actor
     // column to the DB (user_version still 2 — the racer ran the ALTER but was
@@ -470,7 +470,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 
     const check = new Database(dbPath, { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(4);
+      expect(check.pragma('user_version', { simple: true })).toBe(5);
       const cols = (check.pragma('table_info(sessions)') as Array<{ name: string }>).map(
         (c) => c.name,
       );
@@ -481,7 +481,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     }
   });
 
-  // Skip on Windows: constructor throws mid-open, leaving better-sqlite3 handle unreachable (EBUSY).
+  // Windows: TODO needs native equivalent — constructor throws mid-open, leaving better-sqlite3 handle unreachable (EBUSY)
   it.skipIf(process.platform === 'win32')('re-throws a non-duplicate ALTER failure that leaves the column absent', () => {
     const dbPath = join(migDir, 'memory.db');
     seedV2Db(dbPath);
@@ -521,14 +521,14 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 
     const check = new Database(dbPath, { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(4);
+      expect(check.pragma('user_version', { simple: true })).toBe(5);
     } finally {
       check.close();
       interrupted.close();
     }
   });
 
-  // Skip on Windows: constructor throws mid-open, leaving better-sqlite3 handle unreachable (EBUSY).
+  // Windows: TODO needs native equivalent — constructor throws mid-open, leaving better-sqlite3 handle unreachable (EBUSY)
   it.skipIf(process.platform === 'win32')('atomicity: a pragma throw after the ALTER rolls back the whole step (version NOT stamped, column absent)', () => {
     const dbPath = join(migDir, 'memory.db');
     // Start from v2: sessions table without actor, facts table without evidence.
@@ -585,8 +585,8 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     try {
       expect(
         check2.pragma('user_version', { simple: true }),
-        'user_version must be 4 after self-heal',
-      ).toBe(4);
+        'user_version must be 5 after self-heal',
+      ).toBe(5);
       const cols = (check2.pragma('table_info(sessions)') as Array<{ name: string }>).map(
         (c) => c.name,
       );
@@ -629,6 +629,12 @@ describe('searchFacts — access tracking', () => {
     expect(typeof after.last_accessed).toBe('string');
     // last_accessed must be a valid ISO-8601 timestamp.
     expect(new Date(after.last_accessed!).getTime()).not.toBeNaN();
+    // Recall results must expose the successful access, not the pre-UPDATE snapshot.
+    expect(results.find((r) => r.id === id)).toEqual(after);
+    expect(results[0]).not.toHaveProperty('rank');
+    const next = store.searchFacts('pnpm');
+    expect(next[0]).toEqual(store.getFact(id));
+    expect(next[0]!.access_count).toBe(2);
   });
 
   it('accumulates access_count across successive searches', () => {
@@ -663,5 +669,181 @@ describe('searchFacts — access tracking', () => {
 
     expect(store.getFact(idA)!.access_count).toBe(0);
     expect(store.getFact(idB)!.access_count).toBe(1);
+  });
+
+  it('returns the persisted counter when another recall increments after SELECT', () => {
+    const id = store.storeFact({
+      category: 'learning', content: 'concurrent recall', source_surface: 'test',
+    });
+    const originalPrepare = Database.prototype.prepare;
+    const spy = vi.spyOn(Database.prototype, 'prepare').mockImplementation(function (
+      this: BetterSqlite3.Database, sql: string,
+    ) {
+      if (/UPDATE facts\s+SET access_count/.test(sql)) {
+        // Model a competing recall between the ranked SELECT and our UPDATE.
+        originalPrepare.call(this, 'UPDATE facts SET access_count = access_count + 1 WHERE id = ?').run(id);
+      }
+      return originalPrepare.call(this, sql);
+    } as BetterSqlite3.Database['prepare']);
+    try {
+      const results = store.searchFacts('concurrent');
+      expect(results[0]!.access_count).toBe(2);
+      expect(results[0]).toEqual(store.getFact(id));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('a failed access-tracking UPDATE does not break the search (non-fatal)', () => {
+    // The access-tracking UPDATE inside searchFacts is wrapped in a try/catch.
+    // If the UPDATE throws (e.g. disk-full or a transient write error), the
+    // search results must still be returned to the caller.
+    store.storeFact({
+      category: 'preference',
+      content: 'uses vitest for testing',
+      source_surface: 'test',
+    });
+
+    // Force the next `prepare().all()` to throw when it matches the UPDATE
+    // access tracking query, simulating a transient write failure.
+    const originalPrepare = Database.prototype.prepare;
+    vi.spyOn(Database.prototype, 'prepare').mockImplementation(function (
+      this: BetterSqlite3.Database,
+      sql: string,
+    ) {
+      const stmt = originalPrepare.call(this, sql);
+      if (/UPDATE facts\s+SET access_count/.test(sql)) {
+        return {
+          ...stmt,
+          all: (..._args: unknown[]) => {
+            throw new Error('simulated disk-full error');
+          },
+        } as unknown as BetterSqlite3.Statement;
+      }
+      return stmt;
+    } as BetterSqlite3.Database['prepare']);
+
+    let results: ReturnType<typeof store.searchFacts> = [];
+    expect(() => {
+      results = store.searchFacts('vitest');
+    }).not.toThrow();
+
+    // Results must still be returned despite the UPDATE failure.
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]!.content).toContain('vitest');
+    expect(results[0]!.access_count).toBe(0);
+    expect(results[0]!.last_accessed).toBeNull();
+    expect(results[0]).toEqual(store.getFact(results[0]!.id));
+
+    vi.restoreAllMocks();
+  });
+
+  it('drops a fact deleted between SELECT and UPDATE (partial RETURNING)', () => {
+    // Two facts match the query. After the SELECT but before the UPDATE one is
+    // hard-deleted directly in SQLite (simulating a concurrent cross-process
+    // delete under WAL). The UPDATE ... RETURNING will only return one row.
+    // Contract: searchFacts must return only the surviving fact, not the
+    // deleted one with stale pre-UPDATE access_count/last_accessed.
+    const idKeep = store.storeFact({
+      category: 'learning', content: 'partial returning keep', source_surface: 'test',
+    });
+    const idDrop = store.storeFact({
+      category: 'learning', content: 'partial returning drop', source_surface: 'test',
+    });
+
+    const originalPrepare = Database.prototype.prepare;
+    const spy = vi.spyOn(Database.prototype, 'prepare').mockImplementation(function (
+      this: BetterSqlite3.Database, sql: string,
+    ) {
+      if (/UPDATE facts\s+SET access_count/.test(sql)) {
+        // Simulate concurrent delete: remove idDrop before UPDATE runs.
+        originalPrepare.call(this, 'DELETE FROM facts WHERE id = ?').run(idDrop);
+      }
+      return originalPrepare.call(this, sql);
+    } as BetterSqlite3.Database['prepare']);
+
+    let results: ReturnType<typeof store.searchFacts> = [];
+    try {
+      results = store.searchFacts('partial returning');
+    } finally {
+      spy.mockRestore();
+    }
+
+    // Only the surviving fact should be returned.
+    const ids = results.map((r) => r.id);
+    expect(ids).toContain(idKeep);
+    expect(ids).not.toContain(idDrop);
+    // The returned fact must have the committed (incremented) access_count.
+    const kept = results.find((r) => r.id === idKeep)!;
+    expect(kept.access_count).toBe(1);
+    expect(typeof kept.last_accessed).toBe('string');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// search() — FTS5 hyphen / colon sanitization (issue #2669)
+// ---------------------------------------------------------------------------
+
+describe('search() — FTS5 query sanitization', () => {
+  it('returns facts for a hyphenated query (e.g. "agent-afk") instead of silently returning []', () => {
+    // This is the exact repro from issue #2669: the bare query `agent-afk`
+    // caused FTS5 to raise "no such column: afk", which was previously swallowed.
+    store.storeFact({
+      category: 'convention',
+      content: 'agent-afk uses pnpm as its package manager',
+      source_surface: 'test',
+    });
+
+    const results = store.search('agent-afk');
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]!.content).toContain('agent-afk');
+  });
+
+  it('returns facts for a colon-containing query', () => {
+    store.storeFact({
+      category: 'learning',
+      content: 'prefer src:config when referencing the config module',
+      source_surface: 'test',
+    });
+
+    const results = store.search('src:config');
+    expect(results.length).toBeGreaterThan(0);
+  });
+
+  it('an explicit operator query (foo AND bar*) still works and is not over-quoted', () => {
+    store.storeFact({
+      category: 'preference',
+      content: 'always use TypeScript strict mode',
+      source_surface: 'test',
+    });
+
+    // This must NOT be sanitized — AND and bar* are valid FTS5 syntax.
+    const results = store.search('TypeScript AND strict*');
+    expect(results.length).toBeGreaterThan(0);
+  });
+
+  it('returns the same facts whether the query is bare or manually pre-quoted', () => {
+    // Regression guard: bare `agent-afk` and explicit `"agent-afk"` must
+    // return equivalent results (the issue body's own acceptance criterion).
+    store.storeFact({
+      category: 'decision',
+      content: 'agent-afk ships as an npm package',
+      source_surface: 'test',
+    });
+
+    const bare = store.search('agent-afk');
+    const preQuoted = store.search('"agent-afk"');
+
+    expect(bare.length).toBe(preQuoted.length);
+    expect(bare.map((r) => r.content)).toEqual(preQuoted.map((r) => r.content));
+  });
+
+  it('throws (does not return []) when a query is still unparseable after sanitizing', () => {
+    // A query consisting solely of FTS5 operator tokens with no operands is
+    // syntactically invalid AND cannot be sanitized (no special bareword chars).
+    // sanitizeFtsQuery leaves "AND OR" intact, the retry re-uses the same string,
+    // and the second searchFacts call throws — which must propagate to the caller
+    // rather than being swallowed as a silent empty result.
+    expect(() => store.search('AND OR')).toThrow();
   });
 });

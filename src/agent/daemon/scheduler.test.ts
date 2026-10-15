@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { closeStore } from '../elicitation/pending-question-store.js';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,13 +47,30 @@ vi.mock('node-cron', () => ({
   })),
 }));
 
+// Mock shell-task so the shell executor path does not actually spawn a child
+// process. The spy records the resolved task (including cwd) so tests can
+// assert which cwd the scheduler chose before handing off to runShellTask.
+vi.mock('./shell-task.js', () => ({
+  runShellTask: vi.fn(async (task: { taskId: string; command: string; cwd?: string }) => ({
+    taskId: task.taskId,
+    command: task.command,
+    trigger: 'cron' as const,
+    triggeredAt: new Date().toISOString(),
+    durationMs: 0,
+    status: 'success' as const,
+    responseExcerpt: 'ok',
+  })),
+}));
+
 import { CronScheduler, daemonTraceLabel, resolveWorktreePruneRoot } from './scheduler.js';
+import { runShellTask } from './shell-task.js';
 // Reusables imported here (test-only — tests are not bound by the
 // src/agent → src/cli layering invariant that the scheduler source honours) so
 // the injected probe mirrors the production `doneUnverifiedProbe` in daemon.ts.
 import { parseTerminalState } from '../../cli/commands/interactive/terminal-state.js';
 import { DONE_EVIDENCE_TOOLS } from '../../cli/commands/interactive/afk-push.js';
-import { getTraceDir } from '../../paths.js';
+import { getTraceDir, getDaemonStateDir } from '../../paths.js';
+import { daemonDefaultCwd, _resetDaemonDefaultCwdCache } from './session-spawn.js';
 import { AgentSession } from '../session/agent-session.js';
 import { McpManager } from '../mcp/index.js';
 import type { AgentConfig } from '../types.js';
@@ -84,8 +102,13 @@ afterEach(() => {
   else process.env['AFK_HOME'] = savedAfkHome;
   if (savedAllowProjectMcp === undefined) delete process.env['AFK_ALLOW_PROJECT_MCP'];
   else process.env['AFK_ALLOW_PROJECT_MCP'] = savedAllowProjectMcp;
+  closeStore();
   if (isolatedAfkHome !== undefined) rmSync(isolatedAfkHome, { recursive: true, force: true });
   isolatedAfkHome = undefined;
+  // Reset the daemonDefaultCwd memo so each test gets a fresh resolution
+  // against the new isolatedAfkHome. Without this, the memoized value from a
+  // prior test (pointing at a deleted temp dir) would be returned.
+  _resetDaemonDefaultCwdCache();
 });
 
 /**
@@ -384,7 +407,7 @@ describe('CronScheduler — "Done" verification (doneUnverified)', () => {
   async function runWith(opts: {
     response: string;
     metadata?: Record<string, unknown>;
-  }): Promise<TaskCompletionDetails | undefined> {
+  }): Promise<{ details: TaskCompletionDetails | undefined; record: TelemetryRecord | undefined }> {
     const onTaskComplete = vi.fn();
     const scheduler = new CronScheduler({
       telemetryPath,
@@ -396,24 +419,28 @@ describe('CronScheduler — "Done" verification (doneUnverified)', () => {
     scheduler.register({ taskId: 't', command: 'run', trigger: 'cron', cronExpression: '* * * * *' });
     await scheduler.tick('t');
     await scheduler.stop();
-    if (!onTaskComplete.mock.calls[0]) return undefined;
-    return onTaskComplete.mock.calls[0][1] as TaskCompletionDetails | undefined;
+    if (!onTaskComplete.mock.calls[0]) return { details: undefined, record: undefined };
+    return {
+      record: onTaskComplete.mock.calls[0][0] as TelemetryRecord | undefined,
+      details: onTaskComplete.mock.calls[0][1] as TaskCompletionDetails | undefined,
+    };
   }
 
   it('Done + no evidence → details.doneUnverified === true', async () => {
-    const details = await runWith({ response: DONE_RESPONSE, metadata: { successfulToolNames: [] } });
+    const { details, record } = await runWith({ response: DONE_RESPONSE, metadata: { successfulToolNames: [] } });
     expect(details?.doneUnverified).toBe(true);
+    expect(record?.doneUnverified).toBe(true);
   });
 
   it('Done + no metadata (no tools ran) → details.doneUnverified === true', async () => {
     // Absent metadata is the common tool-less tick; runOnce defaults to [] and
     // the probe still flags an unbacked Done.
-    const details = await runWith({ response: DONE_RESPONSE });
+    const { details } = await runWith({ response: DONE_RESPONSE });
     expect(details?.doneUnverified).toBe(true);
   });
 
   it('Done + corroborating evidence (write_file) → doneUnverified falsy', async () => {
-    const details = await runWith({
+    const { details } = await runWith({
       response: DONE_RESPONSE,
       metadata: { successfulToolNames: ['read_file', 'write_file'] },
     });
@@ -421,7 +448,7 @@ describe('CronScheduler — "Done" verification (doneUnverified)', () => {
   });
 
   it('Done + only read-only tools → details.doneUnverified === true', async () => {
-    const details = await runWith({
+    const { details } = await runWith({
       response: DONE_RESPONSE,
       metadata: { successfulToolNames: ['read_file', 'grep', 'glob'] },
     });
@@ -429,7 +456,7 @@ describe('CronScheduler — "Done" verification (doneUnverified)', () => {
   });
 
   it('non-Done terminal state (Blocked) → doneUnverified falsy even with no evidence', async () => {
-    const details = await runWith({ response: BLOCKED_RESPONSE, metadata: { successfulToolNames: [] } });
+    const { details } = await runWith({ response: BLOCKED_RESPONSE, metadata: { successfulToolNames: [] } });
     expect(details?.doneUnverified ?? false).toBe(false);
   });
 
@@ -483,11 +510,128 @@ describe('CronScheduler — "Done" verification (doneUnverified)', () => {
     await scheduler.stop();
     expect(seen).toEqual([['bash', 'read_file']]);
   });
+
+  // ── telemetry persistence (#2307) ──────────────────────────────────────────
+
+  it('unverified Done tick writes doneUnverified:true to the telemetry file', async () => {
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => makeSession({ response: DONE_RESPONSE, metadata: { successfulToolNames: [] } }),
+      onTaskComplete: vi.fn(),
+      doneUnverifiedProbe: probe,
+    });
+    scheduler.register({ taskId: 't', command: 'run', trigger: 'cron', cronExpression: '* * * * *' });
+    await scheduler.tick('t');
+    await scheduler.stop();
+    const line = readFileSync(telemetryPath, 'utf-8').trim();
+    const written = JSON.parse(line) as { status: string; doneUnverified?: boolean };
+    expect(written.status).toBe('success');          // status unchanged (backward compat)
+    expect(written.doneUnverified).toBe(true);       // new field persisted
+  });
+
+  it('verified Done tick (has evidence) omits doneUnverified from the telemetry file', async () => {
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () =>
+        makeSession({ response: DONE_RESPONSE, metadata: { successfulToolNames: ['write_file'] } }),
+      onTaskComplete: vi.fn(),
+      doneUnverifiedProbe: probe,
+    });
+    scheduler.register({ taskId: 't', command: 'run', trigger: 'cron', cronExpression: '* * * * *' });
+    await scheduler.tick('t');
+    await scheduler.stop();
+    const line = readFileSync(telemetryPath, 'utf-8').trim();
+    const written = JSON.parse(line) as { status: string; doneUnverified?: boolean };
+    expect(written.status).toBe('success');
+    expect(written.doneUnverified).toBeUndefined();  // absent when verified
+  });
+
+  it('no probe → doneUnverified absent from telemetry (fail-open)', async () => {
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => makeSession({ response: DONE_RESPONSE, metadata: { successfulToolNames: [] } }),
+      onTaskComplete: vi.fn(),
+      // no doneUnverifiedProbe
+    });
+    scheduler.register({ taskId: 't', command: 'run', trigger: 'cron', cronExpression: '* * * * *' });
+    await scheduler.tick('t');
+    await scheduler.stop();
+    const line = readFileSync(telemetryPath, 'utf-8').trim();
+    const written = JSON.parse(line) as { status: string; doneUnverified?: boolean };
+    expect(written.status).toBe('success');
+    expect(written.doneUnverified).toBeUndefined();
+  });
 });
 
 // TaskCompletionDetails is imported implicitly through the scheduler module's
 // exported type surface; alias it for the local casts above.
 type TaskCompletionDetails = import('./scheduler.js').TaskCompletionDetails;
+type TelemetryRecord = import('./scheduler.js').TelemetryRecord;
+
+describe('CronScheduler — onTaskTurnComplete (session sidecar persistence)', () => {
+  let dir: string;
+  let telemetryPath: string;
+  beforeEach(() => {
+    dir = makeTmpDir();
+    telemetryPath = join(dir, 'forge-telemetry.jsonl');
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function sessionWithId(response: string): AgentSession {
+    const s = makeSession({ response, metadata: { sessionId: 'meta-id' } });
+    Object.defineProperty(s, 'sessionId', { value: 'live-id' });
+    Object.defineProperty(s, 'cwd', { value: '/task/cwd' });
+    return s;
+  }
+
+  it('hands the completed run (redacted) to the hook with session id and cwd', async () => {
+    const onTaskTurnComplete = vi.fn();
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => sessionWithId('all good'),
+      onTaskTurnComplete,
+    });
+    scheduler.register({ taskId: 'job', command: 'run it', trigger: 'cron', cronExpression: '* * * * *' });
+    await scheduler.tick('job');
+    await scheduler.stop();
+    expect(onTaskTurnComplete).toHaveBeenCalledTimes(1);
+    const args = onTaskTurnComplete.mock.calls[0]?.[0] as { task: { taskId: string }; sessionId: string; cwd: string; userInput: string; response: { content: string } };
+    expect(args.task.taskId).toBe('job');
+    expect(args.sessionId).toBe('live-id');
+    expect(args.cwd).toBe('/task/cwd');
+    expect(args.userInput).toBe('run it');
+    expect(args.response.content).toBe('all good');
+  });
+
+  it('is not called when the run fails', async () => {
+    const onTaskTurnComplete = vi.fn();
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => makeSession({ throws: new Error('boom') }),
+      onTaskTurnComplete,
+    });
+    scheduler.register({ taskId: 'job', command: 'run it', trigger: 'cron', cronExpression: '* * * * *' });
+    await scheduler.tick('job');
+    await scheduler.stop();
+    expect(onTaskTurnComplete).not.toHaveBeenCalled();
+  });
+
+  it('a throwing hook never fails a successful tick', async () => {
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => sessionWithId('ok'),
+      onTaskTurnComplete: () => {
+        throw new Error('disk full');
+      },
+    });
+    scheduler.register({ taskId: 'job', command: 'run it', trigger: 'cron', cronExpression: '* * * * *' });
+    const record = await scheduler.tick('job');
+    await scheduler.stop();
+    expect(record.status).toBe('success');
+  });
+});
 
 describe('CronScheduler — witness trace-writer wiring', () => {
   let dir: string;
@@ -641,7 +785,11 @@ describe('CronScheduler — MCP fixture wiring', () => {
         const record = await scheduler.tick('scheduler-mcp-fixture');
 
         expect(record.status).toBe('success');
-        expect(capturedConfig?.isNonInteractive).toBe(true);
+        // #3243 item 2: cron tasks now install an elicitation handler, so
+        // isNonInteractive is false (ask_question is NOT stripped). The
+        // unattended-bash floor is preserved via surface:'daemon' in
+        // isHeadlessSession — headless bash restrictions are unaffected.
+        expect(capturedConfig?.isNonInteractive).toBe(false);
         expect(capturedConfig?.permissionMode).toBe('bypassPermissions');
         expect(spawnedSession?.getSessionMetadata().tools?.sort()).toEqual([
           'mcp__testsrv__add',
@@ -663,7 +811,7 @@ describe('CronScheduler — MCP fixture wiring', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     },
-    { timeout: 15_000 },
+    15_000,
   );
 });
 
@@ -741,7 +889,7 @@ describe('CronScheduler — spawnSession error-path cleanup (#247)', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     },
-    { timeout: 15_000 },
+    15_000,
   );
 
   it(
@@ -810,7 +958,7 @@ describe('CronScheduler — spawnSession error-path cleanup (#247)', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     },
-    { timeout: 15_000 },
+    15_000,
   );
 });
 
@@ -885,7 +1033,7 @@ describe('CronScheduler — mcp_connect_* trace phases', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     },
-    { timeout: 15_000 },
+    15_000,
   );
 });
 
@@ -976,5 +1124,561 @@ describe('resolveWorktreePruneRoot', () => {
     const root = await resolveWorktreePruneRoot(mock as unknown as ExecFileFn, '/repo/x', '');
     expect(root).toBe('/repo');
     expect(mock).toHaveBeenCalled();
+  });
+});
+
+// ── per-task cwd ─────────────────────────────────────────────────────────────
+
+describe('CronScheduler — per-task cwd', () => {
+  let dir: string;
+  let telemetryPath: string;
+
+  beforeEach(() => {
+    dir = makeTmpDir();
+    telemetryPath = join(dir, 'telemetry.jsonl');
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('task.cwd is passed as taskCwd to spawnDaemonSession, winning over sessionConfig.cwd', async () => {
+    // We capture the config that gets built by intercepting the sessionFactory.
+    let capturedCwd: string | undefined;
+    const taskCwd = dir; // real existing dir
+    const daemonWideCwd = '/some/other/path';
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionConfig: { cwd: daemonWideCwd },
+      sessionFactory: (config) => {
+        capturedCwd = config.cwd;
+        return makeSession({ response: 'done' });
+      },
+    });
+    scheduler.register({
+      taskId: 'cwd-wins',
+      command: '/test',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+      cwd: taskCwd,
+    });
+    await scheduler.tick('cwd-wins');
+    // The per-task cwd must override the daemon-wide sessionConfig.cwd
+    expect(capturedCwd).toBe(taskCwd);
+  });
+
+  it('falls back to sessionConfig.cwd when task.cwd is absent', async () => {
+    let capturedCwd: string | undefined;
+    const daemonWideCwd = dir;
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionConfig: { cwd: daemonWideCwd },
+      sessionFactory: (config) => {
+        capturedCwd = config.cwd;
+        return makeSession({ response: 'done' });
+      },
+    });
+    scheduler.register({
+      taskId: 'fallback-cwd',
+      command: '/test',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    });
+    await scheduler.tick('fallback-cwd');
+    expect(capturedCwd).toBe(daemonWideCwd);
+  });
+
+  it('falls back to daemonDefaultCwd when neither task.cwd nor sessionConfig.cwd is set (#2585)', async () => {
+    // When no cwd is configured, the daemon must NOT fall back to process.cwd()
+    // (which is $HOME when installed as a service). It should use the daemon
+    // state dir (~/.afk/state/daemon/agent-afk@default/) instead.
+    let capturedCwd: string | undefined;
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      // No sessionConfig.cwd — simulates a bare daemon with no AFK_DAEMON_CWD.
+      sessionFactory: (config) => {
+        capturedCwd = config.cwd;
+        return makeSession({ response: 'done' });
+      },
+    });
+    scheduler.register({
+      taskId: 'no-cwd',
+      command: '/test',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+      // No cwd — simulates a task with no explicit working directory.
+    });
+    await scheduler.tick('no-cwd');
+    // The cwd must be the daemon state dir, NOT process.cwd() / $HOME.
+    expect(capturedCwd).toBe(getDaemonStateDir());
+    // It must not be $HOME or process.cwd().
+    const { homedir } = await import('node:os');
+    expect(capturedCwd).not.toBe(homedir());
+    expect(capturedCwd).not.toBe(process.cwd());
+  });
+
+  it('daemonDefaultCwd() creates the directory when it does not exist', async () => {
+    // Simulate a fresh AFK_HOME where the daemon state dir has not been created.
+    // isolatedAfkHome is set in beforeEach so getDaemonStateDir() points to a
+    // temp dir that does not yet contain the daemon subdir.
+    const expectedDir = getDaemonStateDir();
+    // The dir may or may not exist before the call — daemonDefaultCwd must create it.
+    const result = daemonDefaultCwd();
+    expect(result).toBe(expectedDir);
+    // Verify the directory now exists.
+    const { statSync } = await import('node:fs');
+    expect(statSync(result).isDirectory()).toBe(true);
+  });
+
+  it('daemonDefaultCwd() warns exactly once and does not retry mkdir on persistent failure', () => {
+    // Simulate a persistent mkdirSync failure by pointing AFK_HOME at a plain
+    // FILE — mkdirSync({ recursive: true }) throws ENOTDIR because a regular
+    // file blocks one of the ancestor path segments.
+    // The warning must fire on the first call only; subsequent calls must use
+    // the memoized fallback without re-running mkdirSync.
+    const fileAsHome = join(dir, 'fake-home-file');
+    writeFileSync(fileAsHome, '');
+    const envKey = 'AFK_HOME';
+    const prior = process.env[envKey];
+    process.env[envKey] = fileAsHome;
+    _resetDaemonDefaultCwdCache();
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const first = daemonDefaultCwd();
+      const second = daemonDefaultCwd();
+      const third = daemonDefaultCwd();
+
+      // All calls must return os.tmpdir() as the fallback.
+      expect(first).toBe(tmpdir());
+      expect(second).toBe(first);
+      expect(third).toBe(first);
+
+      // console.warn must have fired exactly once with the AFK_STATE_DIR / AFK_HOME hint.
+      const warnCalls = warnSpy.mock.calls.filter((args) =>
+        String(args[0]).includes('daemonDefaultCwd'),
+      );
+      expect(warnCalls).toHaveLength(1);
+      expect(String(warnCalls[0]![0])).toMatch(/AFK_STATE_DIR \(or AFK_HOME\)/);
+    } finally {
+      warnSpy.mockRestore();
+      if (prior === undefined) delete process.env[envKey];
+      else process.env[envKey] = prior;
+      _resetDaemonDefaultCwdCache();
+    }
+  });
+
+  it('produces an error telemetry record when task.cwd has vanished', async () => {
+    // Create a dir, register a task pointing to it, then remove the dir.
+    const vanishingDir = join(dir, 'vanishing');
+    const { mkdirSync: mkdSync } = await import('node:fs');
+    mkdSync(vanishingDir);
+    const { rmSync: rmDSync } = await import('node:fs');
+    rmDSync(vanishingDir, { recursive: true });
+
+    let sessionSpawned = false;
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: (config) => {
+        sessionSpawned = true;
+        return makeSession({ response: 'done', ...config });
+      },
+    });
+    scheduler.register({
+      taskId: 'vanished-cwd',
+      command: '/test',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+      cwd: vanishingDir,
+    });
+    const record = await scheduler.tick('vanished-cwd');
+    expect(record.status).toBe('error');
+    expect(record.errorMessage).toMatch(/does not exist/);
+    // No session was spawned — we bailed before spawn
+    expect(sessionSpawned).toBe(false);
+  });
+
+  it('builtin task with a nonexistent cwd does NOT produce a cwd-guard error (#2350)', async () => {
+    // Regression: the builtin executor branch must be checked BEFORE the cwd
+    // guard so that a builtin task with a stale (or missing) cwd field is still
+    // dispatched rather than erroring on the missing directory.
+    // The cwd field is meaningless for builtins (they ignore it), so the guard
+    // must be skipped entirely when executor === 'builtin'.
+    const nonexistentDir = join(dir, 'does-not-exist');
+    // Do not create nonexistentDir — it must not exist on disk.
+
+    const scheduler = new CronScheduler({ telemetryPath });
+    scheduler.register({
+      taskId: 'builtin-nonexistent-cwd',
+      command: 'worktree-prune',
+      executor: 'builtin',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+      cwd: nonexistentDir, // stale cwd that would trigger the guard for agent tasks
+    });
+
+    const record = await scheduler.tick('builtin-nonexistent-cwd');
+    // The task ran as a builtin (success or skipped). An error here would mean
+    // the cwd guard fired before the executor branch — that is the regression.
+    expect(record.status).not.toBe('error');
+  });
+
+  it('shell executor with no task.cwd or sessionConfig.cwd runs in getDaemonStateDir() (#2585)', async () => {
+    // When executor === 'shell' and no cwd is configured at any level, the
+    // scheduler must resolve daemonDefaultCwd() — the daemon state dir — before
+    // passing the task to runShellTask, NOT process.cwd() / $HOME.
+    const shellTaskSpy = vi.mocked(runShellTask);
+    shellTaskSpy.mockClear();
+
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      // No sessionConfig.cwd — simulates a bare daemon with no AFK_DAEMON_CWD.
+    });
+    scheduler.register({
+      taskId: 'shell-no-cwd',
+      command: 'echo ok',
+      executor: 'shell',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+      // No cwd — fallback must apply.
+    });
+
+    await scheduler.tick('shell-no-cwd');
+
+    // runShellTask must have been called exactly once.
+    expect(shellTaskSpy).toHaveBeenCalledTimes(1);
+    // The task passed to runShellTask must have cwd resolved to the daemon state dir.
+    const capturedTask = shellTaskSpy.mock.calls[0]?.[0];
+    expect(capturedTask?.cwd).toBe(getDaemonStateDir());
+    // Must not be $HOME or process.cwd().
+    const { homedir } = await import('node:os');
+    expect(capturedTask?.cwd).not.toBe(homedir());
+    expect(capturedTask?.cwd).not.toBe(process.cwd());
+  });
+});
+
+// ── overlap guard (#2299) ─────────────────────────────────────────────────────
+
+describe('CronScheduler — overlap guard (#2299)', () => {
+  let dir: string;
+  let telemetryPath: string;
+
+  beforeEach(() => {
+    dir = makeTmpDir();
+    telemetryPath = join(dir, 'telemetry.jsonl');
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('a second tick while the first is in flight yields status:skipped, skipReason:overlap', async () => {
+    // Gate: the first sendMessage never resolves until we release it.
+    let releaseFirstRun!: () => void;
+    const firstRunGate = new Promise<void>((resolve) => { releaseFirstRun = resolve; });
+
+    let sessionCallCount = 0;
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      budgetGate: async () => ({ skip: false }),
+      sessionFactory: () => {
+        sessionCallCount += 1;
+        return {
+          sendMessage: () => firstRunGate.then(() => ({ content: 'ok' })),
+          close: () => Promise.resolve(),
+        } as unknown as AgentSession;
+      },
+    });
+
+    scheduler.register({
+      taskId: 'overlap-test',
+      command: 'slow-run',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    });
+
+    // Start first tick (does not await — it is blocked on firstRunGate).
+    const firstTickPromise = scheduler.tick('overlap-test');
+
+    // Yield to the microtask queue so the first tick's `inFlightTasks.set`
+    // runs before the second tick checks the guard.
+    await Promise.resolve();
+
+    // Second tick fires while first is still in flight.
+    const secondRecord = await scheduler.tick('overlap-test');
+
+    // Verify the skip record.
+    expect(secondRecord.status).toBe('skipped');
+    expect(secondRecord.skipReason).toBe('overlap');
+    expect(secondRecord.taskId).toBe('overlap-test');
+
+    // Only one real session should have been constructed.
+    expect(sessionCallCount).toBe(1);
+
+    // Let the first tick finish and confirm it succeeds.
+    releaseFirstRun();
+    const firstRecord = await firstTickPromise;
+    expect(firstRecord.status).toBe('success');
+
+    await scheduler.stop();
+  });
+
+  it('the guard releases after a successful run so the next tick proceeds normally', async () => {
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => makeSession({ response: 'done' }),
+    });
+    scheduler.register({
+      taskId: 'guard-release-test',
+      command: 'fast-run',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    });
+
+    // First tick: completes normally.
+    const r1 = await scheduler.tick('guard-release-test');
+    expect(r1.status).toBe('success');
+
+    // Second tick: guard must be released so this also completes normally.
+    const r2 = await scheduler.tick('guard-release-test');
+    expect(r2.status).toBe('success');
+
+    await scheduler.stop();
+  });
+
+  it('the guard releases after a failed run so the next tick proceeds normally', async () => {
+    let calls = 0;
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => {
+        calls += 1;
+        // First call throws; subsequent calls succeed.
+        if (calls === 1) return makeSession({ throws: new Error('boom') });
+        return makeSession({ response: 'ok' });
+      },
+    });
+    scheduler.register({
+      taskId: 'guard-error-release',
+      command: 'flaky-run',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    });
+
+    const r1 = await scheduler.tick('guard-error-release');
+    expect(r1.status).toBe('error');
+
+    // Guard must be released even on error.
+    const r2 = await scheduler.tick('guard-error-release');
+    expect(r2.status).toBe('success');
+
+    await scheduler.stop();
+  });
+
+  it('overlap telemetry record is written to the JSONL sink', async () => {
+    let releaseFirstRun!: () => void;
+    const firstRunGate = new Promise<void>((resolve) => { releaseFirstRun = resolve; });
+
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => ({
+        sendMessage: () => firstRunGate.then(() => ({ content: 'ok' })),
+        close: () => Promise.resolve(),
+      }) as unknown as AgentSession,
+    });
+    scheduler.register({
+      taskId: 'overlap-telemetry',
+      command: 'work',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    });
+
+    const firstTickPromise = scheduler.tick('overlap-telemetry');
+    await Promise.resolve();
+
+    const skipped = await scheduler.tick('overlap-telemetry');
+    expect(skipped.status).toBe('skipped');
+
+    releaseFirstRun();
+    await firstTickPromise;
+
+    // Both records should appear in the telemetry file.
+    const lines = readFileSync(telemetryPath, 'utf-8').trim().split('\n');
+    const records = lines.map((l) => JSON.parse(l) as { status: string; skipReason?: string });
+    const skippedRecords = records.filter((r) => r.status === 'skipped');
+    expect(skippedRecords).toHaveLength(1);
+    expect(skippedRecords[0]!.skipReason).toBe('overlap');
+
+    await scheduler.stop();
+  });
+});
+
+// ── elicitation router — per-session keying (#3619) ──────────────────────────
+
+describe('elicitationRouter — installForSession / uninstallForSession isolation (#3619)', () => {
+  /**
+   * Unit tests for the per-session keyed handler slots added to fix the
+   * concurrent-cron-task race condition. Independent of CronScheduler.
+   */
+
+  it('route() with sessionKey resolves via the matching per-session handler', async () => {
+    const { elicitationRouter } = await import('../elicitation-router.js');
+
+    const keyA = 'isolation-test-A';
+    const keyB = 'isolation-test-B';
+    const handlerA = vi.fn(async () => ({ action: 'decline' as const }));
+    const handlerB = vi.fn(async () => ({ action: 'decline' as const }));
+    const req = {
+      type: 'text' as const,
+      message: 'q',
+      title: 't',
+      serverName: 's',
+      requestId: 'r',
+    };
+    const ac = new AbortController();
+
+    try {
+      elicitationRouter.installForSession(keyA, handlerA);
+      elicitationRouter.installForSession(keyB, handlerB);
+
+      // Route to A → handlerA fires, handlerB does not
+      await elicitationRouter.route(req, { signal: ac.signal, sessionKey: keyA });
+      expect(handlerA).toHaveBeenCalledOnce();
+      expect(handlerB).not.toHaveBeenCalled();
+
+      handlerA.mockClear();
+
+      // Route to B → handlerB fires, handlerA does not
+      await elicitationRouter.route(req, { signal: ac.signal, sessionKey: keyB });
+      expect(handlerB).toHaveBeenCalledOnce();
+      expect(handlerA).not.toHaveBeenCalled();
+    } finally {
+      elicitationRouter.uninstallForSession(keyA);
+      elicitationRouter.uninstallForSession(keyB);
+    }
+  });
+
+  it('uninstallForSession(keyA) does not remove the handler for keyB', async () => {
+    const { elicitationRouter } = await import('../elicitation-router.js');
+
+    const keyA = 'uninstall-iso-A';
+    const keyB = 'uninstall-iso-B';
+    const handlerB = vi.fn(async () => ({ action: 'decline' as const }));
+    const req = {
+      type: 'text' as const,
+      message: 'still?',
+      title: 't',
+      serverName: 's',
+      requestId: 'r2',
+    };
+    const ac = new AbortController();
+
+    try {
+      elicitationRouter.installForSession(keyA, vi.fn(async () => ({ action: 'decline' as const })));
+      elicitationRouter.installForSession(keyB, handlerB);
+
+      // Uninstall A only — B must still resolve to its handler
+      elicitationRouter.uninstallForSession(keyA);
+
+      await elicitationRouter.route(req, { signal: ac.signal, sessionKey: keyB });
+      expect(handlerB).toHaveBeenCalledOnce();
+    } finally {
+      elicitationRouter.uninstallForSession(keyB);
+    }
+  });
+
+  it('hasHandler() returns true while any per-session handler is installed', async () => {
+    const { elicitationRouter } = await import('../elicitation-router.js');
+    const key = 'has-handler-test';
+
+    elicitationRouter.installForSession(key, async () => ({ action: 'decline' as const }));
+    expect(elicitationRouter.hasHandler()).toBe(true);
+
+    elicitationRouter.uninstallForSession(key);
+    // After removal the router has no handlers (global is null, map is empty)
+    expect(elicitationRouter.hasHandler()).toBe(false);
+  });
+});
+
+describe('CronScheduler — concurrent cron tasks each get their own elicitation handler (#3619)', () => {
+  /**
+   * Integration regression test: two schedulers with different taskIds tick
+   * simultaneously. Each installs a per-session handler via installForSession.
+   * Verify that:
+   *   1. installForSession is called with two distinct keys (no slot collision).
+   *   2. Both ticks succeed.
+   *   3. All per-session slots are cleaned up after completion.
+   */
+  it('two concurrent ticks install distinct handler keys and clean up on completion', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'afk-elicit-race-'));
+    const telemetryPath = join(dir, 'telemetry.jsonl');
+    const handoffsDir = join(dir, 'handoffs');
+
+    // Gates hold both sessions in-flight simultaneously so both installs happen
+    // before either uninstall — the window where the race was possible.
+    let releaseA!: () => void;
+    let releaseB!: () => void;
+    const gateA = new Promise<void>((r) => { releaseA = r; });
+    const gateB = new Promise<void>((r) => { releaseB = r; });
+
+    const { elicitationRouter } = await import('../elicitation-router.js');
+    const installSpy = vi.spyOn(elicitationRouter, 'installForSession');
+    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstallForSession');
+
+    // Two separate schedulers — different taskIds prevent the overlap guard firing.
+    const schedulerA = new CronScheduler({
+      telemetryPath,
+      handoffsDir,
+      budgetGate: async () => ({ skip: false }),
+      sessionFactory: () => ({
+        sendMessage: () => gateA.then(() => ({ content: 'resp-A' })),
+        close: () => Promise.resolve(),
+      } as unknown as AgentSession),
+    });
+    const schedulerB = new CronScheduler({
+      telemetryPath,
+      handoffsDir,
+      budgetGate: async () => ({ skip: false }),
+      sessionFactory: () => ({
+        sendMessage: () => gateB.then(() => ({ content: 'resp-B' })),
+        close: () => Promise.resolve(),
+      } as unknown as AgentSession),
+    });
+
+    try {
+      schedulerA.register({ taskId: 'concurrent-A', command: 'run A', trigger: 'cron', cronExpression: '* * * * *' });
+      schedulerB.register({ taskId: 'concurrent-B', command: 'run B', trigger: 'cron', cronExpression: '* * * * *' });
+
+      // Fire both ticks concurrently — neither resolves until its gate releases.
+      const tickAPromise = schedulerA.tick('concurrent-A');
+      const tickBPromise = schedulerB.tick('concurrent-B');
+
+      // Yield enough for both ticks to reach sendMessage (past the install point).
+      await new Promise<void>((r) => setTimeout(r, 20));
+
+      // Both installs must have happened with DISTINCT keys (no overwrite).
+      const installedKeys = installSpy.mock.calls.map(([k]) => k);
+      expect(installedKeys.length).toBeGreaterThanOrEqual(2);
+      expect(new Set(installedKeys).size).toBe(installedKeys.length);
+
+      // Release both sessions — both ticks must succeed.
+      releaseA();
+      releaseB();
+      const [recA, recB] = await Promise.all([tickAPromise, tickBPromise]);
+      expect(recA.status).toBe('success');
+      expect(recB.status).toBe('success');
+
+      // After both ticks complete, every installed key must have been uninstalled.
+      const uninstalledKeys = uninstallSpy.mock.calls.map(([k]) => k);
+      for (const key of installedKeys) {
+        expect(uninstalledKeys).toContain(key);
+      }
+    } finally {
+      installSpy.mockRestore();
+      uninstallSpy.mockRestore();
+      await schedulerA.stop();
+      await schedulerB.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

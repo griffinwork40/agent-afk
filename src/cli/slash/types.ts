@@ -51,6 +51,29 @@ export interface ToolEvent {
   inputRaw?: string;
   result?: string;
   isError?: boolean;
+  /**
+   * `true` when the tool result is a subagent's partial answer (e.g. a
+   * soft-deadline wind-down or tool-use cap on a compose node). Plumbed from
+   * `ToolResultChunk.incomplete`. Absent for clean completions. Written since
+   * #2970; older session files that lack this field are read as `undefined`.
+   */
+  incomplete?: boolean;
+  /** Reason paired with incomplete, including detached compose partial nodes. */
+  incompleteReason?: string;
+  /**
+   * Compose only: number of partial DAG nodes, plumbed from
+   * `ToolResultChunk.partialNodeCount`. Written since #2978.
+   */
+  partialNodeCount?: number;
+  /**
+   * Last ~240 characters of the tool's raw output, after secret redaction.
+   * Present only on verification-like commands (test/lint/build) where the
+   * result summary is commonly at the tail. Optional — absent on older records
+   * and on non-verification tool calls. Used by `lfVerification` to parse
+   * pass/fail even when the command was piped and `isError` reflects the
+   * pipe's last stage rather than the test runner's exit status.
+   */
+  resultTail?: string;
 }
 
 /** A single stored user/assistant exchange — used by /history. */
@@ -146,7 +169,7 @@ export interface SessionStats {
    * can flag and resume conversations that started in chat; the daemon sets
    * 'daemon'.
    */
-  source?: 'cli' | 'telegram' | 'daemon';
+  source?: 'cli' | 'telegram' | 'daemon' | 'web';
   /**
    * Telegram chat id, set only when `source === 'telegram'`. Enables reverse
    * lookup from a stored session back to its chat (used by later phases).

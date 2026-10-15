@@ -242,7 +242,7 @@ describe('createGlobHandler — cwd parameter', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it('without cwd: defaults to process.cwd() when input omits path', async () => {
+  it('without resolveBase: defaults to process.cwd() when input omits path', async () => {
     // Use tempDir as the factory cwd so the handler has a bounded search
     // root instead of walking the full repo (which hits node_modules and
     // times out). The pattern is designed to never match the .foo/.bar
@@ -258,7 +258,7 @@ describe('createGlobHandler — cwd parameter', () => {
     expect(result.content).toMatch(/no files matched|No matches/i);
   });
 
-  it('with cwd: defaults to the configured directory when input omits path', async () => {
+  it('with factory cwd: defaults to the configured directory when input omits path', async () => {
     const handler = createGlobHandler(tempDir);
     const result = await handler({ pattern: '*.foo' }, createSignal());
     expect(result.isError).toBeFalsy();
@@ -291,8 +291,8 @@ describe('globHandler cwd containment', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it('rejects absolute path outside context.cwd', async () => {
-    const context: ToolHandlerContext = { cwd: tempDir };
+  it('rejects absolute path outside context.resolveBase', async () => {
+    const context: ToolHandlerContext = { resolveBase: tempDir };
     const result = await globHandler(
       { pattern: '*.ts', path: '/etc' },
       new AbortController().signal,
@@ -302,8 +302,8 @@ describe('globHandler cwd containment', () => {
     expect(result.content).toMatch(/outside the allowed/);
   });
 
-  it('resolves relative path against context.cwd', async () => {
-    const context: ToolHandlerContext = { cwd: tempDir };
+  it('resolves relative path against context.resolveBase', async () => {
+    const context: ToolHandlerContext = { resolveBase: tempDir };
     const result = await globHandler(
       { pattern: '*.ts', path: 'subdir' },
       new AbortController().signal,
@@ -313,8 +313,8 @@ describe('globHandler cwd containment', () => {
     expect(result.content).toContain('file.ts');
   });
 
-  it('allows absolute path within context.cwd', async () => {
-    const context: ToolHandlerContext = { cwd: tempDir };
+  it('allows absolute path within context.resolveBase', async () => {
+    const context: ToolHandlerContext = { resolveBase: tempDir };
     const result = await globHandler(
       { pattern: '*.ts', path: path.join(tempDir, 'subdir') },
       new AbortController().signal,
@@ -324,7 +324,7 @@ describe('globHandler cwd containment', () => {
     expect(result.content).toContain('file.ts');
   });
 
-  it('falls back to process.cwd() resolution when no cwd in context', async () => {
+  it('falls back to process.cwd() resolution when no resolveBase in context', async () => {
     const context: ToolHandlerContext = {};
     // Use an absolute path — should work without containment
     const result = await globHandler(
@@ -336,10 +336,10 @@ describe('globHandler cwd containment', () => {
     expect(result.content).toContain('file.ts');
   });
 
-  it('defaults path to context.cwd when path input is omitted', async () => {
+  it('defaults path to context.resolveBase when path input is omitted', async () => {
     // Write a file directly under tempDir for the pattern to match
     await fs.writeFile(path.join(tempDir, 'root.ts'), '');
-    const context: ToolHandlerContext = { cwd: tempDir };
+    const context: ToolHandlerContext = { resolveBase: tempDir };
     const result = await globHandler(
       { pattern: '*.ts' },
       new AbortController().signal,
@@ -544,5 +544,58 @@ describe('glob handler — globstar collapses to zero segments (root-level match
     );
     expect(result.isError).toBeUndefined();
     expect(result.content).toContain('No files matched');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Brace expansion cap — must surface as 'Invalid glob pattern:', NOT
+// 'Error scanning directory:' (#3578 regression guard).
+// ---------------------------------------------------------------------------
+
+describe('glob handler — brace expansion cap error prefix (#3578)', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'glob-brace-cap-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('exceeded cap message begins with "Invalid glob pattern:" not "Error scanning directory:"', async () => {
+    // {a,b}.repeat(9) produces 2^9 = 512 alternatives, exceeding the 256 limit.
+    const pattern = '{a,b}'.repeat(9);
+    const result = await globHandler({ pattern, path: tempDir }, new AbortController().signal);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Invalid glob pattern:');
+    expect(result.content).toContain('Brace expansion exceeds limit');
+    expect(result.content).not.toContain('Error scanning directory');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GlobAbortedError.message — the handler catch maps it to 'Search aborted'
+// ---------------------------------------------------------------------------
+
+describe('GlobAbortedError message and handler catch', () => {
+  let abortTempDir: string;
+
+  beforeEach(async () => {
+    abortTempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'glob-abort-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(abortTempDir, { recursive: true, force: true });
+  });
+
+  it('handler returns { content: "Search aborted", isError: true } when the abort signal fires before the walk starts', async () => {
+    const ac = new AbortController();
+    ac.abort(); // pre-abort so the signal is already aborted at call time
+    const result = await globHandler(
+      { pattern: '**/*.ts', path: abortTempDir },
+      ac.signal,
+    );
+    expect(result).toEqual({ content: 'Search aborted', isError: true });
   });
 });

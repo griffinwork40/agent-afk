@@ -180,9 +180,9 @@ describe('StreamRenderer — orchestrator source (no subagentId)', () => {
     expect(output).not.toContain('◇ complete');
   });
 
-  it('thinking is collapsed to a summary line in non-verbose mode', async () => {
+  it('thinking is collapsed to a summary line when thinkingMode is summary (default)', async () => {
     const { writer, lines } = makeWriter();
-    const r = new StreamRenderer({ out: writer, verbose: false, forceNonTty: true });
+    const r = new StreamRenderer({ out: writer, thinkingMode: 'summary', forceNonTty: true });
     r.process(thinkingEvent('considering options...'));
     r.process(thinkingEvent(' more thinking...'));
     r.process(contentEvent('Final.\n\n'));
@@ -1040,9 +1040,9 @@ describe('StreamRenderer — thinkingMode', () => {
     expect(output).toContain('thought for');
   });
 
-  it("'verbose: true' is a back-compat alias for 'live'", async () => {
+  it("thinkingMode: 'live' enables live thinking output", async () => {
     const { writer, lines } = makeWriter();
-    const r = new StreamRenderer({ out: writer, verbose: true, forceNonTty: true });
+    const r = new StreamRenderer({ out: writer, thinkingMode: 'live', forceNonTty: true });
     r.process(thinkingEvent('considering...'));
     r.process(doneEvent());
     await r.dispose();
@@ -1050,11 +1050,10 @@ describe('StreamRenderer — thinkingMode', () => {
     expect(output).toContain('thought for');
   });
 
-  it('explicit thinkingMode wins over the verbose alias', async () => {
+  it("thinkingMode: 'off' suppresses thinking entirely", async () => {
     const { writer, lines } = makeWriter();
     const r = new StreamRenderer({
       out: writer,
-      verbose: true,
       thinkingMode: 'off',
       forceNonTty: true,
     });

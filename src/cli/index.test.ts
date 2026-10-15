@@ -38,6 +38,7 @@ vi.mock('commander', () => {
     self['option'] = chain;
     self['alias'] = chain;
     self['action'] = chain;
+    self['hook'] = chain;
     self['argument'] = chain;
     self['addHelpText'] = chain;
     self['parseAsync'] = vi.fn().mockResolvedValue(undefined);
@@ -59,6 +60,7 @@ vi.mock('./commands/interactive.js', () => ({
 }));
 
 vi.mock('./commands/status.js', () => ({ registerStatusCommand: vi.fn() }));
+vi.mock('./commands/usage.js', () => ({ registerUsageCommand: vi.fn() }));
 vi.mock('./commands/config-command.js', () => ({ registerConfigCommand: vi.fn() }));
 vi.mock('./commands/daemon.js', () => ({ registerDaemonCommand: vi.fn() }));
 vi.mock('./commands/login-command.js', () => ({ registerLoginCommand: vi.fn() }));

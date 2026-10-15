@@ -3,27 +3,26 @@ import { abortFailureClass } from '../../../abort-reason.js';
 import { emitToolCall } from '../../../trace/emit.js';
 import type { TraceSink } from '../../../trace/index.js';
 import type { ProviderEvent } from '../../../provider.js';
-import { extractCaptureToolInput, extractRawToolInput } from '../../../facets/raw-input.js';
-import { env, isExplicitlyEnabled } from '../../../../config/env.js';
+import { extractRawToolInput } from '../../../facets/raw-input.js';
 import type { ToolDispatcher } from '../../anthropic-direct/tool-dispatcher.js';
-import type { ToolResult } from '../../anthropic-direct/types.js';
+import type { ToolCall, ToolResult } from '../../anthropic-direct/types.js';
 import { DENIAL_BREAKER_FAILURE_CLASS } from '../../../tools/denial-circuit-breaker.js';
 import { summarizeToolInput } from '../../shared/tool-input-summary.js';
-import {
-  buildToolCallCompletedPayload,
-  buildToolCallStartedPayload,
-} from '../../shared/tool-call-trace.js';
+import { buildToolCallStartedPayload } from '../../shared/tool-call-trace.js';
 import { relayWhilePending } from '../../shared/event-relay.js';
+import { emitDispatchedToolOutputs } from './dispatch-append.emit.js';
 import type { OpenAIMessage } from '../messages.js';
 import type { StreamState } from '../translate.js';
 import { finalizedToolCalls } from '../translate.js';
 import {
   accumulatedToolCallsToToolCalls,
+  requiredArgToolsOf,
   assistantMessageWithToolCalls,
   toolImageFollowupMessage,
   toolResultsToMessages,
 } from '../loop.js';
 import { errorMessage } from '../../../../utils/errors.js';
+import { VITALS_PREFIX } from '../../shared/vitals.js';
 
 export interface DispatchAndAppendInput {
   state: StreamState;
@@ -40,6 +39,8 @@ export interface DispatchAndAppendInput {
    * (a child resumes the parent's sessionId). Absent for a top-level session.
    * See issue #612. */
   subagentId?: string | undefined;
+  /** Per-round `[vitals]` note (shared/vitals.ts), appended to the last tool message. */
+  vitalsNote?: string | undefined;
 }
 
 /**
@@ -63,6 +64,7 @@ export async function* dispatchAndAppendToolCalls({
   priorTurns,
   sessionId,
   subagentId,
+  vitalsNote,
 }: DispatchAndAppendInput): AsyncGenerator<ProviderEvent, ToolResult | undefined> {
   if (!toolDispatcher) {
     // Shouldn't reach here — runIteration won't return needsToolDispatch=true
@@ -86,7 +88,7 @@ export async function* dispatchAndAppendToolCalls({
   for (const c of accumulated) {
     if (c.id.length === 0) c.id = randomUUID();
   }
-  const { calls, parseErrors } = accumulatedToolCallsToToolCalls(accumulated, signal);
+  const { calls, parseErrors } = accumulatedToolCallsToToolCalls(accumulated, signal, requiredArgToolsOf(toolDispatcher));
 
   // Witness layer: per-call start timestamps keyed by toolUseId so the
   // completed trace event carries an accurate durationMs. Mirrors
@@ -118,12 +120,6 @@ export async function* dispatchAndAppendToolCalls({
       toolName: call.name,
       toolInput: summarizeToolInput(call.name, call.input),
       toolInputRaw: extractRawToolInput(call.input),
-      // Intentionally broader than shouldCaptureSubagentOutput: isSubagentFork
-      // is not in scope here, so we populate toolInputCapture whenever the env
-      // var is set. The recorder null-gates at construction via
-      // shouldCaptureSubagentOutput, so this field is silently dropped for
-      // non-fork sessions. Wasted extractCaptureToolInput call only.
-      toolInputCapture: (env.AFK_CAPTURE_SUBAGENT_OUTPUT && isExplicitlyEnabled(env.AFK_CAPTURE_SUBAGENT_OUTPUT)) ? extractCaptureToolInput(call.input) : undefined,
       sessionId,
     };
   }
@@ -205,96 +201,80 @@ export async function* dispatchAndAppendToolCalls({
       }));
     }
 
-    for (let i = 0; i < calls.length; i++) {
-      const call = calls[i]!;
-      let result = dispatcherResults[i]!;
-      // Layer parse-error diagnostics in front of the dispatcher result —
-      // the model needs to know its arguments were malformed.
-      const parseErr = parseErrors.get(call.id);
-      if (parseErr !== undefined) {
-        result = {
-          content: `${parseErr}\n--\n${result.content}`,
-          isError: true,
-          ...(result.truncated === true ? { truncated: true } : {}),
-        };
-      }
-      results.push({ call, result });
-
-      // Witness layer: tool_call.completed pairs with the .started event
-      // emitted above. Payload built by the shared
-      // `buildToolCallCompletedPayload` (providers/shared/tool-call-trace.ts)
-      // so both providers construct this event identically. Fire-and-forget
-      // to keep the loop iteration cheap.
-      const startedAt = startTimes.get(call.id);
-      const durationMs = typeof startedAt === 'number' ? Date.now() - startedAt : 0;
-      const truncated = result.truncated === true || result.content.includes('[output truncated');
-      void emitToolCall(
-        traceWriter,
-        buildToolCallCompletedPayload({
-          toolUseId: call.id,
-          name: call.name,
-          result,
-          truncated,
-          durationMs,
-          subagentId,
-        }),
-      );
-
-      yield {
-        type: 'tool.output',
-        toolUseId: call.id,
-        toolName: call.name,
-        content: result.content,
-        ...(result.isError === true ? { isError: true } : {}),
-        ...(result.truncated === true ? { truncated: true } : {}),
-        ...(result.capturePath !== undefined ? { capturePath: result.capturePath } : {}),
-        ...(result.incomplete === true ? { incomplete: true } : {}),
-        ...(result.incompleteReason ? { incompleteReason: result.incompleteReason } : {}),
-        // Plumb concurrency-batch membership onto the render-facing event, not
-        // just the trace event above, so the TUI `∥i/N` badge works here too.
-        // Parity with anthropic-direct/loop.ts's tool.output yield — omitting it
-        // silently drops the badge for every openai-compatible session.
-        ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'
-          ? { batchIndex: result.batchIndex, batchSize: result.batchSize }
-          : {}),
-        // Carry WHY the call failed so the tool-lane can render a deliberate
-        // refusal neutrally instead of as a red ✗. Parity with
-        // anthropic-direct/loop/tool-results.ts — omitting it silently drops
-        // the benign-rejection glyph for every openai-compatible session.
-        ...(result.failureClass ? { failureClass: result.failureClass } : {}),
-        // Plumb tool-measured duration so the TUI outcome row can show `· Xs`.
-        // Prefer handler value (bash always sets result.durationMs), fall back
-        // to provider-side measurement for non-bash tools.
-        durationMs: result.durationMs !== undefined ? result.durationMs : durationMs,
-        ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
-        sessionId,
-      };
-      if (result.render?.diff) {
-        yield {
-          type: 'tool.diff',
-          toolUseId: call.id,
-          diff: result.render.diff,
-          sessionId,
-        };
-      }
-    }
+    yield* emitDispatchedToolOutputs({
+      calls,
+      dispatcherResults,
+      parseErrors,
+      startTimes,
+      traceWriter,
+      subagentId,
+      sessionId,
+      results,
+    });
   }
 
+  appendRoundHistory(priorTurns, state, accumulated, results, vision, vitalsNote);
+
+  // Denial circuit breaker (#546): if the dispatcher tripped this round, hand
+  // the tripping result back so the caller can surface a loud `error` event and
+  // stop — matching anthropic-direct/loop.ts. History is already appended above.
+  return results.find((r) => r.result.failureClass === DENIAL_BREAKER_FAILURE_CLASS)?.result;
+}
+
+/**
+ * Append the assistant{tool_calls} turn, the tool messages (the last one
+ * carrying the vitals note, if any), the authenticated queued-user carriers,
+ * and the optional image follow-up to running history, in wire order.
+ * Extracted so `dispatchAndAppendToolCalls` stays under the 200-line ceiling.
+ */
+function appendRoundHistory(
+  priorTurns: OpenAIMessage[],
+  state: StreamState,
+  accumulated: ReturnType<typeof finalizedToolCalls>,
+  results: readonly { call: ToolCall; result: ToolResult }[],
+  vision: boolean,
+  vitalsNote: string | undefined,
+): void {
   // Append the assistant turn (with tool_calls) and the tool-result
   // messages to running history so the next iteration's request includes
   // them. OpenAI is strict about this order: assistant{tool_calls} must
   // precede the tool{} messages, and each tool{} must reference a
   // tool_call_id that exists in the assistant turn.
   //
-  // `state.reasoningText` is threaded in so DeepSeek-R1-class thinking-mode
-  // providers see the reasoning trace echoed back on the assistant turn —
-  // omitting it on those providers yields a 400 ("The `reasoning_content`
-  // in the thinking mode must be passed back to the API"). Empty text is
-  // a no-op for non-thinking providers (the field is omitted entirely).
+  // `state.reasoningText` is threaded in so thinking-mode providers see the
+  // reasoning trace echoed back on the assistant turn — omitting it yields a
+  // 400 ("The `reasoning_content` in the thinking mode must be passed back to
+  // the API" on DeepSeek-R1; "property is unsupported" on Cerebras). Empty
+  // text is a no-op for non-thinking providers (the field is omitted entirely).
+  // `state.reasoningField` preserves which wire key delivered the reasoning so
+  // the echo uses the same key (Cerebras uses `reasoning`; DeepSeek uses
+  // `reasoning_content`).
   priorTurns.push(
-    assistantMessageWithToolCalls(state.assistantText, accumulated, state.reasoningText) as unknown as OpenAIMessage,
+    assistantMessageWithToolCalls(state.assistantText, accumulated, state.reasoningText, state.reasoningField) as unknown as OpenAIMessage,
   );
-  for (const m of toolResultsToMessages(results)) {
+  const toolMessages = toolResultsToMessages(results);
+  // Security: strip any lines in tool output that start with the vitals prefix
+  // before we append the real harness note. A tool could otherwise print a
+  // lookalike `[vitals] …` line and have the model treat it as an authoritative
+  // harness reading (time, context fill, usage budget). The stripping is applied
+  // to every tool message because any of them could carry spoofed lines, and the
+  // real note is always appended by the harness below — never by a tool. The
+  // check is line-based so partial matches inside longer text are unaffected.
+  for (const m of toolMessages) {
+    m.content = stripVitalsSpoofLines(m.content);
+  }
+  // Invariant: the per-round vitals note (shared/vitals.ts) is appended to the
+  // LAST tool message of the round, NOT pushed as its own `role:'user'` message
+  // as on anthropic-direct. On this wire every `role:'user'` message is a
+  // compaction boundary (openai-compatible/compact.ts isFreshUserTurn) and a
+  // /rewind target (rewind-conversation.ts isGenuineUserTurn), so a per-round
+  // user message would make compaction keep N rounds instead of N human turns
+  // and list every stamp as a rewindable turn. The note carries no operator
+  // authority (unlike queued_user_message), so riding in tool content is safe.
+  // Mutated in place before the push so tagResultFlags identity is preserved.
+  const lastTool = toolMessages.at(-1);
+  if (vitalsNote && lastTool !== undefined) lastTool.content = `${lastTool.content}\n\n${vitalsNote}`;
+  for (const m of toolMessages) {
     priorTurns.push(m as unknown as OpenAIMessage);
   }
   // Provider-agnostic authority boundary: only the structural harness carrier
@@ -311,9 +291,26 @@ export async function* dispatchAndAppendToolCalls({
   // model lacks vision or no result carried an image. See issue #127.
   const imageFollowup = toolImageFollowupMessage(results, { vision });
   if (imageFollowup) priorTurns.push(imageFollowup);
+}
 
-  // Denial circuit breaker (#546): if the dispatcher tripped this round, hand
-  // the tripping result back so the caller can surface a loud `error` event and
-  // stop — matching anthropic-direct/loop.ts. History is already appended above.
-  return results.find((r) => r.result.failureClass === DENIAL_BREAKER_FAILURE_CLASS)?.result;
+/**
+ * Remove any lines from tool output that begin with the `[vitals]` prefix.
+ *
+ * On the openai-compatible path the real harness note rides as a string suffix
+ * on the last `role:'tool'` message. A tool that emits a lookalike line (e.g.
+ * `echo '[vitals] context 99%'`) would appear indistinguishable from the
+ * harness reading. Stripping those lines before the harness note is appended
+ * closes the spoof surface: the model only ever sees the note the harness
+ * writes, never one a tool invented.
+ *
+ * Lines that merely CONTAIN the prefix somewhere in the middle are left alone
+ * — the boundary is `line.startsWith(VITALS_PREFIX)` — so prose that happens
+ * to mention "[vitals]" as part of a longer sentence is not corrupted.
+ */
+export function stripVitalsSpoofLines(content: string): string {
+  const prefix = VITALS_PREFIX + ' ';
+  const lines = content.split('\n');
+  const filtered = lines.filter((line) => !line.startsWith(prefix) && line !== VITALS_PREFIX);
+  // Preserve the original string reference when nothing was stripped (fast path).
+  return filtered.length === lines.length ? content : filtered.join('\n');
 }

@@ -21,7 +21,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname as pathDirname, join, resolve } from 'node:path';
 
 import {
   clearCdIntent,
@@ -68,6 +68,11 @@ describe('cd-on-exit', () => {
     expect(existsSync(join(tmp, 'state'))).toBe(false);
     recordCdIntent(resolve('/another/path'));
     expect(existsSync(getCdIntentPath())).toBe(true);
+    const reference = join(tmp, 'private-reference');
+    mkdirSync(reference, { mode: 0o700 });
+    // Contract: newly created state directories match native owner-only permissions.
+    expect(lstatSync(join(tmp, 'state')).mode & 0o777)
+      .toBe(lstatSync(reference).mode & 0o777);
   });
 
   it('recordCdIntent overwrites prior contents', () => {
@@ -122,7 +127,7 @@ describe('cd-on-exit', () => {
     // on the parent succeeds but writeFileSync to last-cwd fails because
     // a path component is a file, not a directory.
     const stateDir = join(tmp, 'state');
-    mkdirSync(dirname(stateDir), { recursive: true });
+    mkdirSync(pathDirname(stateDir), { recursive: true });
     writeFileSync(stateDir, 'not-a-dir', 'utf8');
     // Use tmpdir()-relative absolute path instead of '/x' so that on Windows
     // resolve() does not produce a drive-root path where mkdirSync throws
@@ -210,8 +215,3 @@ describe('cd-on-exit', () => {
   });
 });
 
-// Local dirname helper to avoid an extra import on the type-checker.
-function dirname(p: string): string {
-  const i = p.lastIndexOf('/');
-  return i <= 0 ? '/' : p.slice(0, i);
-}

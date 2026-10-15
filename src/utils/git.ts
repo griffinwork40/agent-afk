@@ -6,17 +6,18 @@
  * find the repo root. All such paths import `resolveRepoRoot` from here.
  */
 
-import { execFile as execFileCallback, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { dirname, isAbsolute, resolve as resolvePath } from 'node:path';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFileCallback);
+import { execFileAsync, type ExecFileAsync } from './exec-file.js';
 
 /**
  * Minimal shape expected by the injectable `execFile` option of
  * `resolveRepoRoot`. Compatible with the `ExecFileFn` type defined in
  * `src/cli/commands/interactive/worktree.ts` and `worktree-sweep.ts` so
  * those callers can pass their own promisified `execFile` for test isolation.
+ *
+ * Structurally compatible with {@link ExecFileAsync} from `utils/exec-file`
+ * (the shared promisified execFile); callers may pass `execFileAsync` directly.
  */
 export type ExecFileForGit = (
   file: string,

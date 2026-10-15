@@ -37,6 +37,17 @@ function makeDeps(overrides: Partial<TransformDeps> = {}): TransformDeps & { _hi
 }
 
 describe('stream-consumer: notice ProviderEvent', () => {
+  it('exposes the public file rewind target in done and returned Message metadata', () => {
+    let metadata: Message['metadata'];
+    const deps = makeDeps({ setLastResponseMetadata: value => { metadata = value; } });
+    deps.conversationHistory.push({ role: 'assistant', content: 'done' });
+    const out = transformProviderEvent(
+      { type: 'turn.completed', usage: {}, userMessageId: 'checkpoint-target' }, deps,
+    );
+    expect(out).toMatchObject({ type: 'done', metadata: { userMessageId: 'checkpoint-target' } });
+    expect(metadata?.userMessageId).toBe('checkpoint-target');
+    expect(deps.conversationHistory[0]?.metadata?.userMessageId).toBe('checkpoint-target');
+  });
   it('maps notice to a {type:"notice"} OutputEvent, preserving text and kind', () => {
     const evt: ProviderEvent = {
       type: 'notice',

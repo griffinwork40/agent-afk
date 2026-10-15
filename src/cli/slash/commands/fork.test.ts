@@ -21,17 +21,22 @@ vi.mock('../../clipboard.js', () => ({
 vi.mock('../../terminal-spawn/index.js', () => ({
   trySpawnTab: vi.fn(),
 }));
+vi.mock('../../../agent/journal/index.js', () => ({
+  forkJournal: vi.fn(),
+}));
 
 import { forkCmd, forkSpawnLines } from './fork.js';
 import { listSessions, loadSession } from '../../session-store.js';
 import { createSessionStats, recordTurn } from '../session-stats.js';
 import { copyToClipboard } from '../../clipboard.js';
 import { trySpawnTab } from '../../terminal-spawn/index.js';
+import { forkJournal } from '../../../agent/journal/index.js';
 import type { SlashContext, SessionStats } from '../types.js';
 import type { SpawnOutcome } from '../../terminal-spawn/index.js';
 
 const mockedCopyToClipboard = vi.mocked(copyToClipboard);
 const mockedTrySpawnTab = vi.mocked(trySpawnTab);
+const mockedForkJournal = vi.mocked(forkJournal);
 
 let tmpHome: string;
 let originalHome: string | undefined;
@@ -49,6 +54,7 @@ beforeEach(() => {
   // (no requestResume) — spawn refuses, clipboard would be the only fallback.
   mockedTrySpawnTab.mockReturnValue({ spawned: false, kind: 'unknown', capability: 'none', reason: 'non-interactive-surface' });
   mockedCopyToClipboard.mockReturnValue(false);
+  mockedForkJournal.mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -114,6 +120,73 @@ describe('/fork', () => {
     expect(out).toContain(forkId);
     // Honesty line about what is NOT carried over.
     expect(out).toContain('not forked');
+  });
+
+  it('forks the parent journal under the new session id', async () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'q', 'a', { sessionId: 'parent-journal-id' });
+    const { ctx } = makeCtx(stats);
+    mockedForkJournal.mockReturnValue(true);
+
+    await forkCmd.handler(ctx, '');
+
+    const forkId = listSessions()[0]!.id;
+    expect(mockedForkJournal).toHaveBeenCalledTimes(1);
+    expect(mockedForkJournal).toHaveBeenCalledWith('parent-journal-id', forkId);
+  });
+
+  it('flushes the live journal queue before reading the parent fold', async () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'q', 'a', { sessionId: 'parent-journal-id' });
+    const { ctx } = makeCtx(stats);
+    const order: string[] = [];
+    let release!: () => void;
+    const flush = vi.fn(() => new Promise<void>((r) => { release = () => { order.push('flushed'); r(); }; }));
+    (ctx.session.current as unknown as { messageJournal: unknown }).messageJournal = { flush };
+    mockedForkJournal.mockImplementation(() => { order.push('forkJournal'); return true; });
+
+    const done = forkCmd.handler(ctx, '');
+    await Promise.resolve();
+    expect(mockedForkJournal).not.toHaveBeenCalled(); // waits for the flush
+    release();
+    await done;
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['flushed', 'forkJournal']);
+  });
+
+  it('still forks the journal when the live flush rejects', async () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'q', 'a', { sessionId: 'parent-journal-id' });
+    const { ctx } = makeCtx(stats);
+    (ctx.session.current as unknown as { messageJournal: unknown }).messageJournal = {
+      flush: () => Promise.reject(new Error('disk')),
+    };
+    await forkCmd.handler(ctx, '');
+    expect(mockedForkJournal).toHaveBeenCalledTimes(1);
+  });
+
+  it('still writes a sidecar-only fork when the parent has no journal', async () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'q', 'a', { sessionId: 'no-journal-id' });
+    const { ctx, lines } = makeCtx(stats);
+    mockedForkJournal.mockReturnValue(false);
+
+    const result = await forkCmd.handler(ctx, '');
+
+    expect(result).toBe('continue');
+    expect(listSessions()).toHaveLength(1);
+    expect(lines.join('\n')).toContain('Forked');
+  });
+
+  it('skips the journal fork when the parent session id is unknown', async () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'q', 'a', undefined);
+    const { ctx } = makeCtx(stats);
+
+    await forkCmd.handler(ctx, '');
+
+    expect(listSessions()).toHaveLength(1);
+    expect(mockedForkJournal).not.toHaveBeenCalled();
   });
 
   it('is registered under /fork with a /branch alias', () => {

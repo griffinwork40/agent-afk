@@ -29,7 +29,7 @@ vi.mock('../../agent/subagent.js', () => ({
   // any real SubagentManager methods. Farm only passes the manager to
   // runSubagentDAG (via _runSubagentDAG injection) — no methods are called
   // directly by farm.ts itself.
-  SubagentManager: vi.fn().mockImplementation((opts: Record<string, unknown>) => {
+  SubagentManager: vi.fn().mockImplementation(function (opts: Record<string, unknown>) {
     shared.lastManagerOptions = opts ?? {};
     return {};
   }),

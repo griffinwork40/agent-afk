@@ -217,7 +217,7 @@ describe('AnthropicDirectProvider — MCP permission allowlist refresh', () => {
       expect(isError).toBe(false);
       expect(text).toContain('hi via mcp');
     },
-    { timeout: 15_000 },
+    15_000,
   );
 
   it(
@@ -251,6 +251,6 @@ describe('AnthropicDirectProvider — MCP permission allowlist refresh', () => {
       expect(isError).toBe(true);
       expect(text).toContain('not in the configured allowlist');
     },
-    { timeout: 15_000 },
+    15_000,
   );
 });

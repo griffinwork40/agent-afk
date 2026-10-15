@@ -16,6 +16,7 @@ import {
 import { cn } from '@/lib/utils';
 import { Collapse } from './collapse';
 import { DiffViewer } from './diff-viewer';
+import { FullToolOutput } from './full-tool-output';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -28,6 +29,8 @@ export interface ToolCallCardProps {
   status: Status;
   output?: string;
   outputUnavailable?: boolean;
+  /** Ledger preview was clipped; the full result can be lazy-loaded. */
+  outputClipped?: boolean;
   diff?: string;
   durationMs?: number;
 }
@@ -98,11 +101,13 @@ function DurationBadge({ ms, live }: { ms?: number; live?: number }) {
 
 /** Collapsible card for a single tool invocation. */
 export function ToolCallCard({
+  toolUseId,
   name,
   inputPreview,
   status,
   output,
   outputUnavailable,
+  outputClipped,
   diff,
   durationMs,
 }: ToolCallCardProps) {
@@ -187,16 +192,14 @@ export function ToolCallCard({
           </button>
           <Collapse open={outputOpen}>
             <div className="px-3 pb-2 pt-1">
-              {outputUnavailable && (
-                <p className="text-[11px] italic text-muted-foreground">
-                  Output not available (replayed session)
-                </p>
-              )}
               {diff && <DiffViewer diff={diff} />}
-              {!diff && output && (
-                <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-[11px] text-foreground">
-                  {output}
-                </pre>
+              {!diff && (
+                <FullToolOutput
+                  toolUseId={toolUseId}
+                  preview={output}
+                  clipped={outputClipped}
+                  unavailable={outputUnavailable}
+                />
               )}
             </div>
           </Collapse>

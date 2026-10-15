@@ -16,7 +16,8 @@ import { formatDuration, formatTokens } from '../../format-utils.js';
 import { costTokenParts } from '../../render/session-summary.js';
 import { contextLimitFor } from '../../model-limits.js';
 import { getQuotaSnapshot } from '../../../agent/quota-cache.js';
-import { quotaWindowsFromSnapshot } from '../../quota-indicator.js';
+import { quotaWindowsFromRecord, quotaWindowsFromSnapshot } from '../../quota-indicator.js';
+import { readUsageRecord, ANTHROPIC_OAUTH } from '../../../agent/usage/usage-snapshot.js';
 import { formatQuotaUsage } from '../../quota-footer.js';
 import { contextRatio } from './shared.js';
 import { resolveAutoResumeOnUsageLimit } from '../../config.js';
@@ -111,7 +112,9 @@ export function printTurnFooter(
   // Via the memoized-tier resolver, NOT loadConfig(): the latter re-installs
   // process-global slot bindings on every call, disqualifying it for a
   // per-turn display read.
-  const quota = formatQuotaUsage(quotaWindowsFromSnapshot(getQuotaSnapshot()), new Date(), {
+  const quota = formatQuotaUsage(
+    quotaWindowsFromRecord(readUsageRecord(ANTHROPIC_OAUTH.provider, ANTHROPIC_OAUTH.account))
+    ?? quotaWindowsFromSnapshot(getQuotaSnapshot()), new Date(), {
     autoResume: resolveAutoResumeOnUsageLimit(),
   });
   if (quota.text !== null) {

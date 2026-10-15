@@ -17,6 +17,9 @@
 import { TelegramError } from 'telegraf';
 import { classifyUsageLimitError } from '../agent/providers/anthropic-direct/usage-limit.js';
 export type { UsageLimitClassification } from '../agent/providers/anthropic-direct/usage-limit.js';
+import { isRateLimitError as isBaseRateLimitError } from '../utils/error-classifiers.js';
+import { usageLimitInfoOf } from '../agent/usage/usage-limit-info.js';
+import { describeUsageLimit } from '../agent/usage/usage-formatter.js';
 
 /**
  * True when the error originates from the Telegram Bot API itself (telegraf
@@ -44,4 +47,27 @@ export function isTelegramTransportError(error: unknown): boolean {
  */
 export { classifyUsageLimitError as classifyUsageLimit };
 
-export { isRateLimitError, isNetworkError } from '../utils/error-classifiers.js';
+export { isNetworkError } from '../utils/error-classifiers.js';
+
+/**
+ * Rate-limit OR usage-limit error. Widens the surface-agnostic
+ * `isRateLimitError` so a provider usage limit (a `UsageLimitError`, or a raw
+ * ChatGPT `usage_limit_reached` body) takes the same reply branch, where
+ * {@link formatRateLimitReply} renders its provider-labeled sentence.
+ */
+export function isRateLimitError(error: unknown): boolean {
+  return usageLimitInfoOf(error) !== null || isBaseRateLimitError(error);
+}
+
+/**
+ * Reply text for the rate-limit branch: the provider-labeled usage-limit
+ * sentence when `error` is a usage limit, else the generic rate-limit line.
+ */
+export function formatRateLimitReply(error: unknown): string {
+  const info = usageLimitInfoOf(error);
+  if (info === null) return '⏳ Rate limit reached. Please wait a moment and try again.';
+  const next = info.kind === 'credit'
+    ? 'Top up the balance, or switch model with /model.'
+    : 'Send the message again after the reset, or switch model with /model.';
+  return `⏳ ${describeUsageLimit(info)}. ${next}`;
+}

@@ -72,8 +72,8 @@ describe('multi-root containment — read_file', () => {
     expect(result.content).toMatch(/outside the allowed read roots/);
   });
 
-  it('uses cwd as back-compat fallback root', async () => {
-    const ctx: ToolHandlerContext = { cwd: rootA };
+  it('uses resolveBase as fallback root', async () => {
+    const ctx: ToolHandlerContext = { resolveBase: rootA };
     const result = await readFileHandler({ file_path: join(rootA, 'a.txt') }, sig(), ctx);
     expect(result.isError).toBeFalsy();
   });

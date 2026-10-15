@@ -22,17 +22,24 @@ Open source. Runs locally. Works with any model provider, including local models
 ## Quick Start
 
 ```bash
-npm install -g agent-afk    # Node ≥ 22 required
+npm install -g agent-afk    # Node 22.22.2–22.x, 24.15–24.x, or 26+ (23.x and 25.x excluded)
 afk login                   # authenticate (auto-detects Claude Code / Codex creds)
 afk doctor                  # verify everything works
 afk chat "hello"             # first real conversation
+
+# Preview a behaviour change before applying it
+afk whatif --append "Always ask a clarifying question before using tools." --verify
 ```
 
 That's it. You're in.
 
+**Using pnpm?** `pnpm add -g agent-afk` works, but pnpm 10 and later block build scripts by default and skips `postinstall` (with an easy-to-miss warning — see [#2199](https://github.com/griffinwork40/agent-afk/issues/2199)). Run `pnpm approve-builds -g` after install to approve the hook, or use `npm install -g agent-afk` instead. If an `afk daemon` is already running and pnpm skipped the hook, restart it manually with `afk service restart daemon` — on macOS the hook restarts the daemon automatically when it runs, but on Linux you must always run this command after an upgrade even when the hook ran. If you have a manually-started Telegram bot, also run `afk telegram restart`.
+
 **Try without installing:** `npx agent-afk chat "hello"` runs a one-shot turn with zero global install.
 
 **Already using Claude Code or Codex?** `afk login` will detect your existing credentials automatically. Run `afk migrate` to import your plugins, skills, and MCP servers too -- it live-reads the source tool's dirs, so anything you install there keeps showing up in AFK with no re-run.
+
+Codex imports use `CODEX_HOME` when set (otherwise `~/.codex`) and also discover shared skills in `~/.agents/skills`. Native `.codex-plugin/plugin.json` manifests are recognized alongside Claude-format manifests; explicit `[plugins."name@marketplace"]` enable/disable settings apply at runtime. Without an installed-plugin registry, discovery selects one cached directory per marketplace/plugin using descending numeric-aware directory order. This is a filesystem fallback, not a guarantee of the version selected by Codex. Codex-hosted app connectors and TOML MCP server loading are not imported.
 
 > 📖 **Full documentation at [docs.agentafk.com](https://docs.agentafk.com)** -- quickstart, configuration, model setup, surfaces, skills, and SDK reference.
 
@@ -45,6 +52,20 @@ That's it. You're in.
 - **Built-in orchestrators** — `/mint`, `/diagnose`, `/spec`, `/research`, `/ship`, `/review` dispatch subagent waves. `/mint` takes a feature idea and runs spec → research → plan → parallelize → build → verify → ship. `/diagnose` forks parallel root-cause hypotheses for failing tests and bugs.
 - **Cross-session memory** — Claude remembers preferences, decisions, and procedures across runs. See [Memory](#memory) below.
 - **Background subagent jobs** — dispatch a subagent with `mode:'background'`; results auto-deliver into the model's context when they finish. `/bgsub` lists running and completed jobs, `/bgsub:join <id>` replays a result manually.
+
+## What only afk does
+
+**`afk whatif` behavioural impact predictor.** Before changing a prompt, model, skill, or memory rule, predict how the agent's behaviour will shift without touching your real config. Run `afk whatif --append "Always ask a clarifying question before using tools." --verify` and the engine diffs the system prompts, predicts labelled behaviour shifts, then optionally verifies empirically by running sandboxed episodes and measuring rates. No real writes happen during the run. Source: `src/whatif/`, `docs/whatif.md`.
+
+**Jev calibrated judgment.** Jev is an external cross-family judge you configure as an MCP server in `~/.afk/config/mcp.json`. When present, `afk whatif --judge auto` selects Jev to grade verification episodes; it returns calibrated probabilities and removes Anthropic self-preference bias in verdicts. Falls back to Claude when Jev is not configured. Use `--judge claude` to keep all episode data within Anthropic. Source: `src/whatif/judge/jev-connect.ts`, `docs/whatif.md`.
+
+## What it has done
+
+**Constructed SW(29,16), the last open symmetric weighing matrix case for weight 16 listed by Rosin (arXiv:2505.23881).** Given a research campaign goal, agent-afk agents picked the target, designed a prescribed-automorphism SAT search, found a symmetric 29x29 weighing matrix in 5620 seconds of solver time, checked it with independent exact checkers on two machines, and ran a kill lane that could not refute it. The standard databases list no symmetric W(29,16). Check it yourself in under a second: [`docs/results/sw-29-16`](docs/results/sw-29-16/README.md).
+
+**Constructed SW(27,16), a symmetric weighing matrix the standard archives do not list.** Given a research campaign goal, agent-afk agents picked the target, designed a prescribed-automorphism SAT search, found a symmetric 27x27 weighing matrix in 1903 seconds of solver time, checked it with independent exact checkers on two machines, and ran a kill lane that could not refute it. The standard databases list no symmetric W(27,16). Check it yourself in under a second: [`docs/results/sw-27-16`](docs/results/sw-27-16/README.md).
+
+**Constructed SW(25,16), a math case a 2025 paper listed as open.** Given a one-sentence goal ("settle one published open question"), agent-afk agents picked the target, designed a structured SAT search, found a symmetric 25x25 weighing matrix in 760 seconds of solver time, checked it with independent exact checkers and a prior-work search, and wrote up a short proof. The author of the paper that listed the case as open confirmed it passes his verifier. Check it yourself in under a second: [`docs/results/sw-25-16`](docs/results/sw-25-16/README.md).
 
 ## How it compares
 
@@ -81,8 +102,8 @@ AFK_MODEL=sonnet
 TELEGRAM_BOT_TOKEN=1234567890:ABC...
 AFK_TELEGRAM_ALLOWED_CHAT_IDS=12345678
 
-# Per-task safety rails
-AFK_MAX_BUDGET_USD=5.00
+# Optional per-session cost cap (unset = no limit)
+# AFK_MAX_BUDGET_USD=5.00
 ```
 
 **Project-scoped system prompt.** Drop an `AFK.md` at your project root and `afk` appends it to its built-in framework prompt whenever you run from that directory — your instructions layer on top of the base, they don't replace it. No frontmatter needed.
@@ -139,7 +160,7 @@ afk chat "refactor this" --model gpt-5.5
 | Slot | Default | Notes |
 |---|---|---|
 | `local` | *(empty — you configure)* | Point at Ollama, LM Studio, or any OpenAI-compatible shim via `AFK_MODEL_LOCAL` + `AFK_MODEL_LOCAL_BASE_URL` |
-| `small` | `claude-haiku-4-5-20251001` | Cheapest/fastest Anthropic tier |
+| `small` | `claude-haiku-5-5` | Cheapest/fastest Anthropic tier |
 | `medium` | `claude-sonnet-4-6` | General-use default |
 | `large` | `claude-opus-5` | Most capable |
 

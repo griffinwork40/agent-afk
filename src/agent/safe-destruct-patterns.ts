@@ -100,7 +100,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     re: /\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*reset\s+--hard\b/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; commit or run "git stash" first. This hook cannot be self-bypassed: if the destruction is genuinely intended, stop and ask the operator to run it.',
+      'safe-destruct: blocked [git-reset-hard] — discards all uncommitted changes irrecoverably; preserve it first with "git stash push --include-untracked" or by committing the specific changed paths to a rescue branch ("git switch -c rescue-<name>", "git add <paths>", "git commit"), then switch to the target ref with "git switch -C <branch> <ref>" (which refuses when local changes exist, unlike reset --hard). This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.',
   },
   // git clean -f: BLOCK — removes untracked files with no recovery path.
   {
@@ -108,7 +108,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     re: /\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*clean\s+-[a-z]*f|\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*clean\s+[^|&;\n]*--force\b/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [git-clean-force] — deletes untracked files irrecoverably; use "git clean -n" (dry-run) to preview. This hook cannot be self-bypassed: if the destruction is genuinely intended, stop and ask the operator to run it.',
+      'safe-destruct: blocked [git-clean-force] — deletes untracked files irrecoverably; use "git clean -n" (dry-run) to preview, then move files to a quarantine directory inside the workspace (e.g. ".afk/quarantine/") and report the exact list to the operator instead of deleting. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.',
   },
   // git push --force: BLOCK — rewrites remote history, potentially for all
   // consumers. Measured at 6 firings in 5 weeks; not inner-loop.
@@ -117,7 +117,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     re: /\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*push\b[^|&;\n]*--force(?!-)|\bgit\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*push\b[^|&;\n]*(?<![\w-])-f\b/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [git-push-force] — rewrites remote history, permanently destructive for all branch consumers; prefer "--force-with-lease" or coordinate with collaborators first.',
+      'safe-destruct: blocked [git-push-force] — rewrites remote history, permanently destructive for all branch consumers; push a new branch instead ("git push origin HEAD:refs/heads/<new-branch>") and open a replacement PR that links the old one, or use "--force-with-lease" only after coordinating with collaborators. This block is deliberate: do not reach the same effect via bash, python, or a script. If the destruction is genuinely required, stop and ask the operator to run it.',
   },
   // Invariant: git branch -D stays OBSERVE because only the ref is deleted —
   // the commit objects survive in the reflog for at least 30 days by default.
@@ -140,7 +140,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     re: /\bmkfs(\.\w+)?\b/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [mkfs] — formats a filesystem, irrecoverably destroying all data on the target device; confirm the device path. This hook cannot be self-bypassed: if the destruction is genuinely intended, stop and ask the operator to run it.',
+      'safe-destruct: blocked [mkfs] — formats a filesystem, irrecoverably destroying all data on the target device; confirm the device path. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.',
   },
   {
     id: 'redirect-to-block-device',
@@ -162,7 +162,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     re: /\bshred\b/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [shred] — overwrites file data irrecoverably, bypassing the filesystem; use "rm" if secure deletion is not required. This hook cannot be self-bypassed: if the destruction is genuinely intended, stop and ask the operator to run it.',
+      'safe-destruct: blocked [shred] — overwrites file data irrecoverably, bypassing the filesystem; use "rm" if secure deletion is not required. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.',
   },
 
   // ── SQL ─────────────────────────────────────────────────────────────────────
@@ -181,7 +181,7 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     re: /\b(drop\s+(table|database|schema|index)\b|truncate\s+table\b)/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [sql-drop-truncate] — DDL destructor removes schema objects or all rows without a transaction rollback path; back up or use a migration with a down step. This hook cannot be self-bypassed: if the destruction is genuinely intended, stop and ask the operator to run it.',
+      'safe-destruct: blocked [sql-drop-truncate] — DDL destructor removes schema objects or all rows without a transaction rollback path; back up or use a migration with a down step. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.',
   },
   {
     id: 'sql-delete-from',
@@ -238,20 +238,20 @@ export const DESTRUCTIVE_PATTERNS: readonly DestructivePattern[] = [
     re: /\bterraform\s+destroy\b/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [terraform-destroy] — tears down live external infrastructure irrecoverably (new apply creates new resources, not the same ones); run "terraform plan -destroy" to preview. This hook cannot be self-bypassed: if the destruction is genuinely intended, stop and ask the operator to run it.',
+      'safe-destruct: blocked [terraform-destroy] — tears down live external infrastructure irrecoverably (new apply creates new resources, not the same ones); run "terraform plan -destroy" to preview. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.',
   },
   {
     id: 'launchctl-service-register',
     re: /\blaunchctl\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*(load|bootstrap|submit|start|kickstart|enable)(?:\s|$)/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use `afk service install` via /service-setup instead. This hook cannot be self-bypassed: if the destruction is genuinely intended, stop and ask the operator to run it.',
+      'safe-destruct: blocked [launchctl-service-register] — installs a persistent launchd service that survives reboots and session boundaries; use `afk service install` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.',
   },
   {
     id: 'systemctl-service-enable',
     re: /\bsystemctl\s+(?:(?:-{2}[\w-]+(?:=\S+)?|-[A-Za-z](?:\s+\S+)?)\s+)*(enable|start|daemon-reload)(?:\s|$)/i,
     tier: 'block',
     blockReason:
-      'safe-destruct: blocked [systemctl-service-enable] — enables/starts a systemd unit that persists across sessions and reboots; use `afk service install` via /service-setup instead. This hook cannot be self-bypassed: if the destruction is genuinely intended, stop and ask the operator to run it.',
+      'safe-destruct: blocked [systemctl-service-enable] — enables/starts a systemd unit that persists across sessions and reboots; use `afk service install` via /service-setup instead. This hook cannot be self-bypassed, and it blocks only this command: other non-destructive commands still run, but do not reach the same destructive effect another way. If the destruction is genuinely required, stop and ask the operator to run it.',
   },
 ];

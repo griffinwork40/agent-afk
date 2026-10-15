@@ -37,8 +37,11 @@ import type { ResponseMetadata } from '../../../agent/types/message-types.js';
 import type { ImageAttachment } from '../../input/attachments.js';
 import { createSkillRenderer } from './create-skill-renderer.js';
 import { recordTurn } from '../session-stats.js';
+import { saveSession } from '../../session-store.js';
+import { errorMessage } from '../../../utils/errors.js';
 import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
 import { buildSkillInvocationMessage } from './skill-message-bridge.js';
+import { buildVerificationResultTail } from '../../../agent/outcomes/verification-patterns.js';
 
 /**
  * Minimum ms between onContextProgress fires during a skill-dispatch turn.
@@ -102,6 +105,8 @@ export async function runSkillDispatchTurn(
 ): Promise<string> {
   const renderer = createSkillRenderer(ctx, {
     skillName: params.skillName,
+    // Effective args: plugin /review has already stripped --post here.
+    skillIdentity: { name: params.skillMeta.name, purpose: params.skillMeta.description, arguments: params.args },
     onCancel: () => {
       ctx.session.current.interrupt().catch(() => { /* best effort */ });
     },
@@ -212,6 +217,15 @@ export async function runSkillDispatchTurn(
           if (pending) {
             pending.result = c.content;
             pending.isError = c.isError;
+            if (c.incomplete === true) pending.incomplete = true;
+            if (c.partialNodeCount !== undefined) pending.partialNodeCount = c.partialNodeCount;
+            const resultTail = buildVerificationResultTail(
+              pending.toolName,
+              pending.input ?? '',
+              c.content,
+              c.tailPreview,
+            );
+            if (resultTail !== undefined) pending.resultTail = resultTail;
             pendingTools.delete(c.toolUseId);
           }
           if (ctx.onContextProgress) {
@@ -253,6 +267,18 @@ export async function runSkillDispatchTurn(
     // Transcript parity with repl-loop.ts's onTurnComplete append. appendTurn
     // no-ops on empty assistantText and swallows I/O errors itself.
     await ctx.transcript?.appendTurn(userInput, finalAssistantText).catch(() => { /* best-effort */ });
+    // Autosave parity with the normal-turn path (loop-iteration.turn-run.ts
+    // onTurnComplete). Without it, a REPL session whose turns were all skill
+    // dispatches (`/god …`, `/tackle-issues …`) had no sidecar until a
+    // graceful exit: absent from /resume and the web list while running, and
+    // lost for good if the process died or /clear discarded the session.
+    if (ctx.stats.sessionId) {
+      try {
+        saveSession(ctx.stats);
+      } catch (err) {
+        ctx.out.warn(`session autosave failed — this conversation may not be resumable: ${errorMessage(err)}`);
+      }
+    }
   }
 
   return finalAssistantText;

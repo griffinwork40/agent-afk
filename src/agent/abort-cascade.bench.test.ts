@@ -317,6 +317,7 @@ const results: BenchResult[] = [];
 // ---------------------------------------------------------------------------
 // Benchmark scenarios
 // ---------------------------------------------------------------------------
+// Windows: genuinely POSIX-only — spawns /bin/sh child processes for cascade simulation; no Windows shell equivalent
 describe.skipIf(process.platform === 'win32')(
   'abort-cascade correctness (POSIX only)',
   () => {

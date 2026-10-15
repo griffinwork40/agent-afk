@@ -109,6 +109,15 @@ const OPAQUE_REBUILDABLE_DIRS: readonly RegExp[] = [
   /(?:^|\/)\.mypy_cache\//,
   /(?:^|\/)\.ruff_cache\//,
   /(?:^|\/)\.nyc_output\//,
+  // SwiftPM workspace metadata: machine-generated, entirely derived from
+  // Package.swift and remote package resolution. No hand-authored content
+  // survives the next `swift package resolve`, so no expansion is needed.
+  /(?:^|\/)\.swiftpm\//,
+  // Dart/Flutter tooling cache: equivalent to `.pnpm-store/` or `__pycache__/`
+  // — the tool writes and owns it, and `flutter pub get` recreates it wholesale.
+  /(?:^|\/)\.dart_tool\//,
+  // Zig's build cache: pure compiled-output cache, no user-authored content.
+  /(?:^|\/)\.zig-cache\//,
 ];
 
 /**
@@ -129,6 +138,14 @@ const INSPECTABLE_REBUILDABLE_DIRS: readonly RegExp[] = [
   /(?:^|\/)\.output\//,
   /(?:^|\/)target\//,
   /(?:^|\/)coverage\//,
+  // SwiftPM compilation output. Inspectable (not opaque) because `.build/`
+  // can hold nested directories a developer has placed files in alongside
+  // the compiled artifacts; the scoped expansion guards against that before
+  // reaping. DerivedData (outside the repo) is deliberately excluded — it
+  // lives in ~/Library and is never git-ignored inside a checkout.
+  /(?:^|\/)\.build\//,
+  // Elixir/Erlang Mix build output (analogous to target/ in Rust/Java).
+  /(?:^|\/)_build\//,
   // Invariant: `logs/` must stay in THIS tier, never the opaque one. An opaque
   // verdict is never expanded, so `SENSITIVE_LEAF_PATTERNS` never runs on the
   // leaves and a `logs/.env` or `logs/prod.key` is force-deleted with the

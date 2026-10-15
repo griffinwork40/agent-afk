@@ -52,6 +52,7 @@ import {
   type RuntimeStateSource,
 } from '../../awareness/index.js';
 import { actorFromDepth } from '../../session/session-identity.js';
+import { ownProcessStartedAt, ownProcessStartTicks } from '../../process-liveness.start-time.js';
 import { debugLog } from '../../../utils/debug.js';
 import {
   registerPresenceCleanup,
@@ -92,7 +93,9 @@ export interface SessionIdResolutionArgs {
   parentSessionId: string | undefined;
   /**
    * The provider instance's user-facing surface (`'cli' | 'daemon' |
-   * 'telegram'`). Gates minting only — see {@link PRESENCE_MINT_SURFACES}.
+   * 'telegram'`). Controls whether presence is advertised via
+   * {@link PRESENCE_ADVERTISE_SURFACES}; a stable id is minted for all
+   * top-level surfaces regardless.
    */
   surface: string | undefined;
   /** The provider instance's memoized mint, or `null` if it has not minted. */
@@ -100,7 +103,8 @@ export interface SessionIdResolutionArgs {
 }
 
 /**
- * Surfaces whose *fresh* (non-resumed) sessions are worth advertising.
+ * Surfaces whose *fresh* (non-resumed) sessions are worth advertising with a
+ * presence file.
  *
  * Contract: three readers of presence files exist. Two are Telegram and both
  * ignore non-`cli` fresh sessions — `bot.ts` auto-subscribe filters
@@ -110,26 +114,23 @@ export interface SessionIdResolutionArgs {
  * `worktree-sweep.ts`, which reads presence with NO surface filter to protect a
  * worktree hosting a live session from being reaped.
  *
- * That third reader is why this gate is scoped to the MINT rather than the
- * write, and why it is not a regression: before this module existed, presence
- * was gated on `config.sessionId`, which only `--resume`/`--continue` populates
- * and which neither the daemon nor the Telegram surface ever sets. A fresh
- * daemon session therefore advertised nothing then either, so declining to mint
- * here restores that exact behavior — it removes no sweep protection that ever
- * existed, it only refrains from adding some. Widening this set would hand
- * daemon tasks reap-protection they have never had; that is a deliberate
- * decision to make on its own merits, not a side effect to inherit from a
- * Telegram-discoverability fix.
+ * **IMPORTANT**: This set gates the PRESENCE WRITE (via the `shouldAdvertise`
+ * flag on {@link SessionIdResolution}), NOT the id mint. Every top-level
+ * session on every surface now receives a stable minted id so that tool
+ * dispatchers (image_generate, workspace_*, state_*, bash capture) always have
+ * a sessionId to attribute work to, and `get_runtime_state` / the `# Environment`
+ * block always show the resolved id — even on `telegram` and `daemon` surfaces
+ * (fix for #2353). The worktree-sweep protection and the per-task stale-record
+ * problem are unaffected: those depend on presence FILES, not on whether an id
+ * was minted. Widening the mint without widening the write therefore adds no
+ * reap-protection to daemon tasks (that deliberate decision is unchanged) and
+ * accrues no extra presence files in a long-running daemon.
  *
- * Minting on a surface no reader consumes would still cost a file plus a
- * cleanup registration per session, which is how a long-running daemon accrued
- * one stale live-looking record per scheduled task (12 tasks ⇒ 12 records).
- * Gating the MINT also keeps the pre-existing contract intact: a session
- * carrying an explicit id (`--resume`) still advertises on every surface, which
- * `telegram/presence-surface.test.ts` pins for `cli`, `daemon`, and `telegram`
- * alike.
+ * A session carrying an explicit id (`--resume`) still advertises on every
+ * surface, which `telegram/presence-surface.test.ts` pins for `cli`, `daemon`,
+ * and `telegram` alike — that path is unaffected by this set.
  */
-export const PRESENCE_MINT_SURFACES: ReadonlySet<string> = new Set(['cli']);
+export const PRESENCE_ADVERTISE_SURFACES: ReadonlySet<string> = new Set(['cli']);
 
 export interface SessionIdResolution {
   /**
@@ -140,6 +141,15 @@ export interface SessionIdResolution {
   id: string | undefined;
   /** The value the caller must store back into its memo slot. */
   memoized: string | null;
+  /**
+   * Whether a presence file should be written for this session. True when the
+   * surface is in {@link PRESENCE_ADVERTISE_SURFACES} or when the caller
+   * supplied an explicit id (`--resume`/`--continue`). Callers MUST gate the
+   * {@link registerPresenceLifecycle} call on this flag rather than calling it
+   * unconditionally — doing so would accrue one stale file per daemon task and
+   * hand daemon sessions worktree-sweep protection they have never had.
+   */
+  shouldAdvertise: boolean;
 }
 
 /**
@@ -147,10 +157,16 @@ export interface SessionIdResolution {
  * once per provider instance when the caller supplied none.
  *
  * Precedence: an explicit id (`config.sessionId`, then `config.resume`) always
- * wins, so resume semantics are bit-for-bit unchanged. Only a top-level session
- * on a {@link PRESENCE_MINT_SURFACES} surface with no explicit id gets a mint,
- * and that mint is memoized so it stays stable across turns on the same
- * provider instance.
+ * wins, so resume semantics are bit-for-bit unchanged. Every top-level session
+ * (regardless of surface) receives a minted id that is memoized so it stays
+ * stable across turns on the same provider instance. The returned
+ * `shouldAdvertise` flag controls whether a presence FILE is written — only
+ * surfaces in {@link PRESENCE_ADVERTISE_SURFACES} or sessions carrying an
+ * explicit id write a file. Decoupling mint from advertise means non-CLI
+ * surfaces (telegram, daemon) now get a stable id for tool attribution
+ * (image_generate, workspace_*, state_*, bash capture, get_runtime_state) while
+ * the long-running-daemon stale-file and reap-protection concerns remain
+ * unchanged (fix for #2353).
  *
  * Invariant: the memoized mint survives `AgentSession.reset()` (`/clear`) on
  * purpose, so the post-clear session keeps its id. Two mechanisms depend on it.
@@ -176,21 +192,22 @@ export function resolveTopLevelSessionId(
   args: SessionIdResolutionArgs,
 ): SessionIdResolution {
   const explicit = args.sessionId ?? args.resume;
-  if (explicit !== undefined) return { id: explicit, memoized: args.memoized };
+  if (explicit !== undefined) {
+    return { id: explicit, memoized: args.memoized, shouldAdvertise: true };
+  }
 
   if (!isTopLevelSession(args.depth, args.parentSessionId)) {
-    return { id: undefined, memoized: args.memoized };
+    return { id: undefined, memoized: args.memoized, shouldAdvertise: false };
   }
 
-  // Mint only for a surface some presence consumer actually reads. Returning
-  // `undefined` here restores the pre-gate behavior for every other surface:
-  // query construction keeps its own per-call mint and nothing is advertised.
-  if (args.surface === undefined || !PRESENCE_MINT_SURFACES.has(args.surface)) {
-    return { id: undefined, memoized: args.memoized };
-  }
-
+  // Mint a stable id for every top-level session — regardless of surface —
+  // so tool dispatchers always have attribution context and get_runtime_state
+  // always reports the resolved id. Whether to WRITE a presence file is a
+  // separate concern controlled by PRESENCE_ADVERTISE_SURFACES (fix for #2353).
   const minted = args.memoized ?? randomUUID();
-  return { id: minted, memoized: minted };
+  const shouldAdvertise =
+    args.surface !== undefined && PRESENCE_ADVERTISE_SURFACES.has(args.surface);
+  return { id: minted, memoized: minted, shouldAdvertise };
 }
 
 /**
@@ -252,6 +269,10 @@ export function registerPresenceLifecycle(args: PresenceLifecycleArgs): string |
     model: { provider: args.providerName, name: args.model },
     workspace,
     pid: process.pid,
+    // Lets readers detect a recycled pid (presence.liveness.ts).
+    pidStartedAt: ownProcessStartedAt(),
+    // Linux: clock-step-immune identity, compared in preference to the epoch.
+    pidStartTicks: ownProcessStartTicks(),
   });
   // Cleanup on process exit/signal is owned by the process-level registry —
   // one set of listeners per process, not three per session, and it never

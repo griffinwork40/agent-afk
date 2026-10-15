@@ -1,13 +1,14 @@
 /**
  * Tests for {@link fetchSubscriptionUsage} and {@link formatUsagePlain}.
  *
- * All network access goes through the injectable `fetchImpl` seam — no real
- * network calls are made.
+ * Network access uses an injected `fetchImpl` or a mocked `h1ModelFetch`;
+ * no real network calls are made.
  *
  * @module agent/subscription-usage.test
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { h1ModelFetch } from './providers/shared/h1-fetch.js';
 import {
   fetchSubscriptionUsage,
   formatUsagePlain,
@@ -22,6 +23,10 @@ import {
 vi.mock('./auth/keychain.js', () => ({
   loadClaudeCodeOauthToken: vi.fn(() => undefined),
 }));
+
+vi.mock('./providers/shared/h1-fetch.js', () => ({ h1ModelFetch: vi.fn() }));
+beforeEach(() => vi.mocked(h1ModelFetch).mockReset());
+afterEach(() => vi.restoreAllMocks());
 
 const SECRET_TOKEN = 'sk-ant-oat01-super-secret-token-value';
 
@@ -40,6 +45,27 @@ function fetchThrowing(err: unknown): typeof fetch {
 }
 
 describe('fetchSubscriptionUsage', () => {
+  it('defaults to HTTP/1.1 fetch without consulting global fetch', async () => {
+    const globalFetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Unexpected global fetch'));
+    vi.mocked(h1ModelFetch).mockResolvedValue(jsonResponse(200, { five_hour: { utilization: 10 } }));
+
+    const result = await fetchSubscriptionUsage({ token: SECRET_TOKEN });
+
+    expect(result).toMatchObject({ kind: 'ok', fiveHour: { utilization: 0.1 } });
+    expect(h1ModelFetch).toHaveBeenCalledExactlyOnceWith(
+      'https://api.anthropic.com/api/oauth/usage',
+      { headers: { Authorization: `Bearer ${SECRET_TOKEN}`, 'anthropic-beta': 'oauth-2025-04-20' }, signal: expect.any(AbortSignal) },
+    );
+    expect(globalFetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps an injected fetch implementation instead of the HTTP/1.1 default', async () => {
+    const fetchImpl = fetchReturning(jsonResponse(200, { five_hour: { utilization: 10 } }));
+    const result = await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
+    expect(result.kind).toBe('ok');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(h1ModelFetch).not.toHaveBeenCalled();
+  });
   // Hermeticity: the global clean-config-env.ts setup file already deletes
   // CLAUDE_CODE_OAUTH_TOKEN from process.env before every test (it's an
   // ENV_REGISTRY 'auth'-category var), but tests asserting the no-token path
@@ -60,10 +86,10 @@ describe('fetchSubscriptionUsage', () => {
   it('happy path: parses all four known windows', async () => {
     const fetchImpl = fetchReturning(
       jsonResponse(200, {
-        five_hour: { utilization: 0.62, resets_at: '2026-07-26T18:00:00Z' },
-        seven_day: { utilization: 0.31, resets_at: 1785110400 },
-        seven_day_sonnet: { utilization: 0.28 },
-        seven_day_opus: { utilization: 0.44 },
+        five_hour: { utilization: 62, resets_at: '2026-07-26T18:00:00Z' },
+        seven_day: { utilization: 31, resets_at: 1785110400 },
+        seven_day_sonnet: { utilization: 28 },
+        seven_day_opus: { utilization: 44 },
       }),
     );
     const result = await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
@@ -79,7 +105,7 @@ describe('fetchSubscriptionUsage', () => {
   });
 
   it('sends the expected request headers and URL', async () => {
-    const fetchImpl = fetchReturning(jsonResponse(200, { five_hour: { utilization: 0.1 } }));
+    const fetchImpl = fetchReturning(jsonResponse(200, { five_hour: { utilization: 10 } }));
     await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
@@ -149,7 +175,7 @@ describe('fetchSubscriptionUsage', () => {
 
   it('parses resets_at as an ISO string', async () => {
     const fetchImpl = fetchReturning(
-      jsonResponse(200, { five_hour: { utilization: 0.5, resets_at: '2026-01-01T00:00:00Z' } }),
+      jsonResponse(200, { five_hour: { utilization: 50, resets_at: '2026-01-01T00:00:00Z' } }),
     );
     const result = await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
     const ok = result as UsageSnapshot;
@@ -159,7 +185,7 @@ describe('fetchSubscriptionUsage', () => {
   it('parses resets_at as an epoch-seconds number', async () => {
     const epoch = 1_800_000_000;
     const fetchImpl = fetchReturning(
-      jsonResponse(200, { five_hour: { utilization: 0.5, resets_at: epoch } }),
+      jsonResponse(200, { five_hour: { utilization: 50, resets_at: epoch } }),
     );
     const result = await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
     const ok = result as UsageSnapshot;
@@ -169,7 +195,7 @@ describe('fetchSubscriptionUsage', () => {
   it('drops resets_at when it is an out-of-range epoch number rather than producing Invalid Date', async () => {
     const fetchImpl = fetchReturning(
       jsonResponse(200, {
-        five_hour: { utilization: 0.5, resets_at: Number.MAX_SAFE_INTEGER },
+        five_hour: { utilization: 50, resets_at: Number.MAX_SAFE_INTEGER },
       }),
     );
     const result = await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
@@ -181,8 +207,8 @@ describe('fetchSubscriptionUsage', () => {
   it('drops resets_at when it is non-finite (NaN/Infinity) or an unrecognized type', async () => {
     const fetchImpl = fetchReturning(
       jsonResponse(200, {
-        five_hour: { utilization: 0.5, resets_at: { nested: true } },
-        seven_day: { utilization: 0.2, resets_at: null },
+        five_hour: { utilization: 50, resets_at: { nested: true } },
+        seven_day: { utilization: 20, resets_at: null },
       }),
     );
     const result = await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
@@ -195,12 +221,14 @@ describe('fetchSubscriptionUsage', () => {
     [42, 0.42],
     [100, 1],
     [150, 1],
-    [0.62, 0.62],
-    [-0.3, 0],
-    [1, 1],
+    [62, 0.62],
+    [-30, 0],
+    // Regression: a real 1% must not read as a full window.
+    [1, 0.01],
+    [0.5, 0.005],
     [0, 0],
   ])(
-    'normalizes utilization=%s (>1 treated as a percentage) to %s',
+    'normalizes utilization=%s (a 0..100 percentage) to %s',
     async (utilizationRaw, expected) => {
       const fetchImpl = fetchReturning(
         jsonResponse(200, { five_hour: { utilization: utilizationRaw } }),
@@ -217,7 +245,7 @@ describe('fetchSubscriptionUsage', () => {
         five_hour: { utilization: 'high' },
         seven_day: { utilization: Number.NaN },
         seven_day_sonnet: { utilization: Number.POSITIVE_INFINITY },
-        seven_day_opus: { utilization: 0.5 },
+        seven_day_opus: { utilization: 50 },
       }),
     );
     const result = await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
@@ -258,7 +286,7 @@ describe('fetchSubscriptionUsage', () => {
     // Passing an explicit empty-string token exercises the no-token branch
     // without touching the real keychain loader (covered above). This test
     // only asserts the options default wiring: omitting fetchImpl still
-    // type-checks and defaults to global fetch, which we don't invoke here
+    // type-checks and defaults to h1ModelFetch, which we don't invoke here
     // because we supply a token of '' to short-circuit before any request.
     // `??` treats '' as present, so this never reads CLAUDE_CODE_OAUTH_TOKEN —
     // stubbed anyway for an explicit, self-evident hermeticity guarantee.
@@ -273,7 +301,7 @@ describe('fetchSubscriptionUsage', () => {
 
   it('uses CLAUDE_CODE_OAUTH_TOKEN from the environment when the keychain has no token', async () => {
     vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'env-supplied-oauth-token');
-    const fetchImpl = fetchReturning(jsonResponse(200, { five_hour: { utilization: 0.1 } }));
+    const fetchImpl = fetchReturning(jsonResponse(200, { five_hour: { utilization: 10 } }));
     await fetchSubscriptionUsage({ fetchImpl });
     const [, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
       string,
@@ -285,7 +313,7 @@ describe('fetchSubscriptionUsage', () => {
 
   it('prefers an explicit options.token over CLAUDE_CODE_OAUTH_TOKEN from the environment', async () => {
     vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'env-supplied-oauth-token');
-    const fetchImpl = fetchReturning(jsonResponse(200, { five_hour: { utilization: 0.1 } }));
+    const fetchImpl = fetchReturning(jsonResponse(200, { five_hour: { utilization: 10 } }));
     await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
     const [, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
       string,

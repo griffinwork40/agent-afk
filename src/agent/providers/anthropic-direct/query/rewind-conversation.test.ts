@@ -11,13 +11,20 @@
 import { describe, it, expect } from 'vitest';
 import type { ContentBlockParam, MessageParam } from '@anthropic-ai/sdk/resources';
 import { listUserTurns, rewindConversationHistory } from './rewind-conversation.js';
-import type { SessionState } from './session-state.js';
+import { createSessionState, type SessionState } from './session-state.js';
+import type { ToolDispatcher } from '../tool-dispatcher.js';
 import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 
 function makeState(messages: MessageParam[], closed = false): SessionState {
-  // The handler only reads `messages` + `closed`; the rest of SessionState is
-  // irrelevant here. Structural stub (tests are not type-checked by tsc).
-  return { messages, closed } as unknown as SessionState;
+  const state = createSessionState({
+    model: 'claude-test',
+    permissionMode: 'default',
+    userSystem: null,
+    toolDispatcher: {} as unknown as ToolDispatcher,
+    initialMessages: messages,
+  });
+  state.closed = closed;
+  return state;
 }
 
 const idleAbort = { isIdle: () => true } as unknown as AbortCoordinator;

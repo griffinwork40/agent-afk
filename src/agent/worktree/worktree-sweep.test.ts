@@ -2922,7 +2922,7 @@ describe('sweep reconsideration — auto-unlock integration', () => {
     );
 
     const mainBlock = worktreeBlock({ path: repoRoot });
-    const wtBlock = `worktree ${worktreePath}\nHEAD abc1234\nbranch refs/heads/afk/ignored\nlocked afk: isolated-worktree preserved (ignored-local-state: non-rebuildable ignored files present (e.g. .env) — git status looked clean)`;
+    const wtBlock = `worktree ${worktreePath}\nHEAD abc1234\nbranch refs/heads/afk/ignored\nlocked afk: isolated-worktree preserved (ignored-local-state: .env — git status looked clean)`;
     const unlockCalls: string[][] = [];
 
     const mock = makeMock(async ({ args }) => {

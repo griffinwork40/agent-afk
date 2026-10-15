@@ -98,6 +98,8 @@ export interface ServiceStatus {
   configPath: string;
   /** Running PID if the supervisor reports the job as loaded with an active process. */
   pid?: number;
+  /** Optional running flag for backends that cannot supply a PID (e.g. Windows Task Scheduler). */
+  running?: boolean;
   /** Last exit status reported by the supervisor (0 = clean). */
   lastExitStatus?: number;
   /** Log file path AFK redirects the service's stdout+stderr to. */
@@ -113,7 +115,7 @@ export interface ServiceStatus {
  */
 export interface ServiceManager {
   /** Which supervisor this manager drives. */
-  readonly backend: 'launchd' | 'systemd';
+  readonly backend: 'launchd' | 'systemd' | 'task-scheduler';
   /** Human-readable name of the config artifact, for CLI copy ("LaunchAgent plist" / "systemd user unit"). */
   readonly configKind: string;
 

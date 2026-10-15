@@ -90,7 +90,12 @@ function renderDiff(ctx: SlashContext, diff: DiffPayload): void {
  * live-swap support is told the truth rather than shown a success line.
  */
 function reportReload(ctx: SlashContext, baseline: number): void {
-  const { applied, tokens, delta, source, shadowed } = applyReload(ctx, baseline);
+  const { applied, tokens, delta, source, shadowed, frameworkPromptError } = applyReload(ctx, baseline);
+  if (frameworkPromptError !== undefined) {
+    ctx.out.error(`Reload aborted — AFK_FRAMEWORK_PROMPT_FILE error: ${frameworkPromptError}`);
+    ctx.out.error('Unset or fix AFK_FRAMEWORK_PROMPT_FILE. The session prompt was not changed.');
+    return;
+  }
   if (shadowed) {
     ctx.out.warn(
       'Saved to disk, but AFK.md is shadowed by a higher-priority system prompt override and is not part of what the model receives.',

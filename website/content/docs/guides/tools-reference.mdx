@@ -269,6 +269,18 @@ Invoke a registered skill by name. A skill either forks an isolated subagent or 
 | `name` | string | ✓ | Skill name (e.g. `"mint"`, `"diagnose"`). |
 | `arguments` | string | | Arguments to pass to the skill. |
 
+### `model_complete`
+
+Send one prompt to any configured model and return its text reply: no tools, no conversation, no subagent fork. Use it to offload bounded text work (summarize, classify, extract, rewrite, second opinion) to a cheaper or local model; use `agent` when the work needs tools. `model` resolves through your model slots, so the slot's provider, endpoint, and API key apply. An unconfigured slot is an error, never a silent fallback to a cloud model.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `prompt` | string | ✓ | The instruction sent to the model. |
+| `system` | string | | Optional system prompt. |
+| `model` | string | | Slot (`local`, `small`, `medium`, `large`), custom slot name, alias (`haiku`, `opus`, `grok`), or raw id. Default: your configured default model (`AFK_MODEL`, else `medium`). |
+| `max_tokens` | number | | Output token cap (default 4096, max 32000). Ignored on ChatGPT-subscription models (chatgpt-oauth) because that backend rejects the output-cap parameter. |
+| `input_path` | string | | Text file (≤ 1 MB, read_file policy) appended to the prompt; its contents never enter your context, but are sent to the model's provider. |
+
 ### `cancel_background_job`
 
 Cancel a running background subagent job that the model created with `agent` in `mode="background"`. Refuses to cancel user-backgrounded jobs (those are user-owned).
@@ -467,6 +479,8 @@ Create a new scheduled task saved to `~/.afk/config/schedules.json` and live-syn
 | `trigger` | string | | `cron` (default), `sessionstart`, or `both`. |
 | `notifyOn` | string | | When to push Telegram notifications: `failure` (default), `always`, or `never`. |
 | `notifyChat` | string/number | | Route notifications to a specific chat (id or alias). |
+| `maxAttempts` | integer | | Total attempts per run for agent tasks (1–5). Default 1 = no retry. Only transient failures (429, network blip, provider 5xx) retry. |
+| `retryDelayMs` | integer | | Backoff base in ms between retries (1000–300000, doubles per attempt, capped at 5 min). Default 30000. |
 | `enabled` | boolean | | Whether to activate immediately. Default: true. |
 
 ### `list_schedules`
@@ -571,10 +585,11 @@ Read and filter events from a session's witness trace — the durable record of 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `session` | string | | Session ID or `"latest"` (default). |
-| `kinds` | array | | Filter by event kind(s): `tool_call`, `subagent_lifecycle`, `session_phase`, `closure`, `abort`, `budget`, `hook_decision`, `browser_event`, `claim`, `compaction`, `background_agent`, `queued_user_message`, `session_sealed`. |
+| `kinds` | array | | Filter by event kind(s): `tool_call`, `subagent_lifecycle`, `session_phase`, `closure`, `abort`, `budget`, `hook_decision`, `hook_summary`, `browser_event`, `claim`, `compaction`, `background_agent`, `queued_user_message`, `session_sealed`. |
 | `tool_name` | string | | Filter `tool_call` events to one tool name. |
 | `errors_only` | boolean | | When true, show only error events. Default: false. |
 | `limit` | number | | Max events to return (default 50, max 200). |
+| `where` | object | | Exact-match AND filter mapping dotted event paths to scalars, e.g. `{"payload.decision":"block"}`. Own properties only; `__proto__`, `constructor`, `prototype` segments are rejected. |
 
 ### `search_witness`
 
@@ -587,6 +602,10 @@ Search across multiple sessions' witness traces for a text pattern. Returns matc
 | `kinds` | array | | Filter results to specific event kinds. |
 | `since` | string | | ISO date — only search sessions modified after this date. |
 | `tool_name` | string | | Filter `tool_call` events to one tool name. |
+| `where` | object | | Exact-match AND filter mapping dotted event paths to scalars, e.g. `{"kind":"hook_decision","payload.decision":"block"}`. |
+| `include_current_session` | boolean | | Include the calling session's own trace (excluded by default). |
+
+Results are capped at 200 matches; when the cap stops the scan the result carries `matchLimitReached: true` and a `hint`. Allow-path hook dispatches are not written as `hook_decision` rows; they are counted in the per-session `hook_summary` event.
 
 ### `clipboard_read`
 

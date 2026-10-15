@@ -110,6 +110,16 @@ export function applyManagerApiKeyFallback(args: {
   // pre-flight failure) rather than risk shipping a foreign-provider key.
   if (effectiveParent === undefined) return undefined;
   const childProvider = providerForModel(childModel);
+  // Invariant: an Anthropic-shaped credential (sk-ant-…) must never reach a
+  // non-Anthropic child regardless of what parentProvider claims. This backstop
+  // catches misconfigured callers that supply parentProvider='openai-compatible'
+  // while holding an Anthropic token (e.g. compose-executor before the
+  // credentialModel wiring fix). One direction only: no corresponding guard for
+  // non-Anthropic keys reaching Anthropic children, which are handled by the
+  // sameCredentialFamily gate below and the fail-closed path above.
+  if (isAnthropicCredential(parentApiKey) && !sameCredentialFamily(childProvider, 'anthropic-direct')) {
+    return undefined;
+  }
   return sameCredentialFamily(childProvider, effectiveParent) ? parentApiKey : undefined;
 }
 

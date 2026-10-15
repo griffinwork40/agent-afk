@@ -407,7 +407,12 @@ describe('evaluateCommand', () => {
     mockClassifyRisk.mockReturnValue('safe');
   });
 
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    // Vitest 4: restoreAllMocks() only restores vi.spyOn spies; it no longer
+    // resets vi.fn() mocks as v2 did. resetAllMocks() keeps the v2 isolation.
+    vi.resetAllMocks();
+    vi.restoreAllMocks();
+  });
 
   it('returns met:true when command exits 0', () => {
     mockExecSync.mockReturnValue(Buffer.from(''));
@@ -444,6 +449,23 @@ describe('evaluateCommand', () => {
       { command: 'echo hello' },
       expect.objectContaining({ cwd: '/tmp' }),
     );
+  });
+
+  // #2913: Confirm gh run list is allowed through to execSync (not blocked).
+  // The real BASH_SAFE allowlist is exercised by risk-classifier.test.ts; this
+  // test pins that evaluateCommand passes 'gh run list' to the classifier and
+  // executes it when the classifier returns 'safe'.
+  it('#2913: gh run list — passes through to execSync when classifier returns safe', () => {
+    // mockClassifyRisk defaults to 'safe' in beforeEach.
+    mockExecSync.mockReturnValue(Buffer.from('[{"status":"completed"}]'));
+    const result = evaluateCommand({ type: 'command', command: 'gh run list --limit 1 --json status' });
+    expect(result.met).toBe(true);
+    expect(mockClassifyRisk).toHaveBeenCalledWith(
+      'bash',
+      { command: 'gh run list --limit 1 --json status' },
+      expect.any(Object),
+    );
+    expect(mockExecSync).toHaveBeenCalledWith(expect.stringContaining('gh run list'), expect.any(Object));
   });
 
   // H-1: Medium-risk commands must now be blocked (only 'safe' is allowed)

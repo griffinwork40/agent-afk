@@ -1,10 +1,12 @@
+import { hiddenArchivedRows } from './terminal-compositor.archived-reveal.js';
 import type { CommittedBandHost } from './terminal-compositor.committed-band-commit.js';
 import type { CommitGeometry } from './terminal-compositor.commit-geometry.js';
 import type { CommitRoute } from './terminal-compositor.commit-route.js';
 import { eraseAndPaintRow } from './terminal-compositor.scrollback.js';
 import { writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
 import { clearCommittedBand } from './terminal-compositor.committed-band-commit.js';
-import { contentMargin } from './render/measure.js';
+import { compositorBand } from './terminal-compositor.content-band.js';
+import { retainedArchivedPrefix } from './terminal-compositor.band-archived-prefix.js';
 
 /**
  * Classic (non-band-hold) Phase 3 for newTopRow > 1: merge/cap/orphan-erase/paint
@@ -86,7 +88,10 @@ export function commitPhase3Band(
       wholeBlockPainted &&
       self.committedBand.length > 0 &&
       (self.committedBandBottomRow === newTopRow - 1 ||
-        self.committedBandBottomRow === phase1EffectiveFrameTop - 1);
+        self.committedBandBottomRow === phase1EffectiveFrameTop - 1 ||
+        // content-hug: the band hugs the PRE-commit frame top, while
+        // phase1EffectiveFrameTop is the (lower) bottom-pinned room top.
+        (geo.hugSlack > 0 && self.committedBandBottomRow === geo.frameTop - 1));
     const run = contiguousPriorBand ? [...self.committedBand, ...newLines] : newLines;
     // #540: the merged run's provenance, 1:1 with `run` (same merge decision,
     // same-order arrays — self.committedBandMeta is 1:1 with self.committedBand).
@@ -97,7 +102,10 @@ export function commitPhase3Band(
     const capped = run.length > maxRun ? run.slice(run.length - maxRun) : run;
     // #540: cap the provenance by the SAME row count so it stays 1:1 with `capped`.
     const cappedMeta = run.length > maxRun ? runMeta.slice(runMeta.length - maxRun) : runMeta;
-    const bandTop = newTopRow - capped.length;
+    const prefix = retainedArchivedPrefix(self, contiguousPriorBand, run.length - capped.length);
+    const hidden = hiddenArchivedRows(self, undefined, { length: capped.length, prefix });
+    const painted = capped.slice(hidden);
+    const bandTop = newTopRow - painted.length;
     // Stale band rows above bandTop: when the extended contiguity arm fires, the
     // old band's tracked top (self.committedBandTopRow) may be ABOVE the new
     // bandTop — those rows hold echo content that was physically scrolled there
@@ -142,11 +150,11 @@ export function commitPhase3Band(
       // Content centering (AFK_CENTER_CONTENT): derive the margin from the
       // CURRENT terminal width so painted rows adapt on resize. The band stores
       // raw (unpadded) content; padding is applied at paint time only.
-      const pad = contentMargin();
-      for (let i = 0; i < capped.length; i++) {
+      const pad = compositorBand(self.stdout).margin;
+      for (let i = 0; i < painted.length; i++) {
         const row = bandTop + i;
         if (row >= newTopRow) break; // Never overwrite the live frame.
-        const line = pad && capped[i] !== '' ? pad + capped[i] : capped[i];
+        const line = pad && painted[i] !== '' ? pad + painted[i] : painted[i];
         out += eraseAndPaintRow(row, line);
       }
     } else {
@@ -161,7 +169,7 @@ export function commitPhase3Band(
       // The dropped top lines stay recoverable via the Phase-1 archive.
       // `capped` (== these same tail lines, via the tail-slice above) is the
       // band we track, so repositionCommittedBand repaints them on resize.
-      const pad = contentMargin();
+      const pad = compositorBand(self.stdout).margin;
       const room = Math.max(0, newTopRow - anchorFloor);
       const startIdx = Math.max(0, textLines.length - room);
       for (let i = startIdx; i < textLines.length; i++) {
@@ -176,6 +184,7 @@ export function commitPhase3Band(
         self.stdout.write(out);
       });
     }
+    self.committedBandArchivedPrefix = retainedArchivedPrefix(self, contiguousPriorBand, run.length - capped.length);
     self.committedBand = capped;
     self.committedBandMeta = cappedMeta;
     self.committedBandBottomRow = newTopRow - 1;
@@ -184,7 +193,7 @@ export function commitPhase3Band(
     // it above the frame; the overflow arm paints the tail that fits AND
     // Phase 1 already archived the full block to scrollback. Either way no row
     // of `capped` is unpainted-and-unarchived, so nothing is pending here.
-    self.committedBandPaintedRows = capped.length;
+    self.committedBandPaintedRows = painted.length;
   } else {
     clearCommittedBand(self);
   }

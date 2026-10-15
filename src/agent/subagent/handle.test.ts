@@ -15,6 +15,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { IAgentSession, Message, OutputEvent } from '../types.js';
 import { SubagentHandleImpl } from './handle.js';
 import { AbortGraph } from '../abort-graph.js';
+import { UsageLimitError } from '../../utils/errors.js';
 import type { WorkspaceEntry } from '../workspace/workspace-store.js';
 
 // ---------------------------------------------------------------------------
@@ -184,6 +185,33 @@ describe('R1 — runInBackground unhandled-rejection safety', () => {
     expect(results).toHaveLength(1);
     const result = results[0] as { status: string };
     expect(result.status).toBe('failed');
+  });
+
+  it('a provider usage-limit error surfaces the friendly provider-labeled message, not raw 429 JSON', async () => {
+    // What a forked child's provider yields on a fail-fast usage limit: the
+    // UsageLimitError wrap with the raw SDK error kept on `cause`.
+    const raw = Object.assign(
+      new Error('429 {"type":"usage_limit_reached","plan_type":"plus","resets_in_seconds":600}'),
+      { status: 429 },
+    );
+    const limitErr = new UsageLimitError(
+      'Codex usage limit reached (plus plan), resets at 3:42 PM (in ~10m)',
+      { provider: 'codex', kind: 'subscription', plan: 'plus' },
+      { cause: raw },
+    );
+    const session = makeMinimalSession({
+      async *sendMessageStream(): AsyncIterable<OutputEvent> {
+        yield { type: 'error', error: limitErr };
+      },
+    });
+    const result = await makeHandle(session).runToResult('prompt');
+
+    expect(result.status).toBe('failed');
+    expect(result.error?.message).toBe('Codex usage limit reached (plus plan), resets at 3:42 PM (in ~10m)');
+    expect(result.error?.message).not.toContain('usage_limit_reached');
+    expect(result.error?.name).toBe('UsageLimitError');
+    expect((result.error as UsageLimitError).status).toBe(429);
+    expect((result.error as UsageLimitError).cause).toBe(raw);
   });
 
   it('(R1-3) no unhandled rejection when onResult callback throws', async () => {

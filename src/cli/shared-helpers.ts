@@ -1,6 +1,6 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { providerForModel, type ProviderRouteHints } from '../agent/providers/index.js';
+import type { ProviderRouteHints } from '../agent/providers/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../agent/types.js';
 import { loadOpenAICredential, resolveCredentialForModel } from '../agent/auth/credential-resolver.js';
 import { env } from '../config/env.js';
@@ -109,45 +109,9 @@ export function getModel(): AgentModelInput {
   return raw;
 }
 
-/**
- * Get the default model for dispatched subagents (`agent` and `skill` tools).
- *
- * Precedence:
- *   1. `AFK_DEFAULT_SUBAGENT_MODEL` env (when set, always wins).
- *   2. If the parent session routes to `openai-compatible` (any non-Claude
- *      provider — GPT/o-series, codex-*, HF-style local ids) → return the
- *      parent model. Without this, a local-only setup silently dispatches
- *      subagents to api.anthropic.com because the literal `'medium'` fallback
- *      below routes back through `providerForModel` → `anthropic-direct`.
- *   3. `'medium'` (the medium capability tier). Preserved for Claude parents so
- *      the historical cost-management intent — "high-tier parent (e.g. opus)
- *      shouldn't auto-spawn high-tier children" — keeps working; and because it
- *      is the rebindable TIER (not the fixed `'sonnet'` identity alias), a user
- *      who rebinds `medium` redirects default subagents along with it.
- *
- * The `parentModel` arg is what enables (2); callers that don't pass it
- * (legacy / test) get the original env-var-or-`'medium'` behavior.
- *
- * Pass-through like `getModel()` — short aliases and provider-native ids both
- * work.
- */
-export function getDefaultSubagentModel(parentModel?: AgentModelInput): AgentModelInput {
-  const raw = env.AFK_DEFAULT_SUBAGENT_MODEL;
-  if (raw && raw.length > 0) return raw;
-  if (typeof parentModel === 'string') {
-    const parentProvider = providerForModel(parentModel);
-    // Inherit parent for OpenAI-compatible and xAI/Grok families so local/Grok
-    // sessions do not silently fork Anthropic `medium` children.
-    if (
-      parentProvider === 'openai-compatible'
-      || parentProvider === 'xai'
-      || parentProvider === 'xai-oauth'
-    ) {
-      return parentModel;
-    }
-  }
-  return 'medium';
-}
+// Relocated to the agent layer (#3442) so `createWiredExecutors` can use it
+// without importing src/cli. Re-exported here so no importer changes.
+export { getDefaultSubagentModel } from '../agent/session/default-subagent-model.js';
 
 /**
  * Parse thinking mode from string input.
@@ -192,9 +156,14 @@ export function getEffort(): EffortLevel | undefined {
 }
 
 /**
- * Parse a USD budget value from a CLI flag or env var. Accepts positive or
- * zero numbers (zero is a meaningful hard-stop sentinel — every dollar is
- * over budget). Rejects negatives, non-numeric strings, and NaN.
+ * Parse a USD budget value from a CLI flag. Accepts positive or zero numbers
+ * (zero is a meaningful hard-stop sentinel — every dollar is over budget).
+ * Rejects negatives, non-numeric strings, and NaN.
+ *
+ * Intended for CLI flag values supplied by the user at the command line —
+ * throws on any invalid input so the CLI can surface a clear error message.
+ * For env-var reads (where a malformed value should warn and fall back to
+ * `undefined` rather than crash the process), use {@link parseBudgetEnv}.
  *
  * The returned number is fed to the SDK as `options.maxBudgetUsd` /
  * `options.taskBudget` — see `buildQueryOptions`.
@@ -215,11 +184,51 @@ export function parseBudget(raw: string | undefined): number | undefined {
 }
 
 /**
+ * Parse a USD budget value from an environment variable. Safe variant of
+ * {@link parseBudget} designed for env-var reads where a malformed value must
+ * never crash the process (REPL, Telegram, daemon, daemon-session-factory).
+ *
+ * Differences from `parseBudget`:
+ *   - Empty string or whitespace-only: treated as **unset** → returns `undefined`
+ *     (spec: `AFK_MAX_BUDGET_USD=` must not act as a $0 hard-stop).
+ *   - Malformed / negative / NaN: emits a `console.warn` with context and
+ *     returns `undefined` (uncapped) instead of throwing.
+ *   - `undefined` input: returns `undefined` (unchanged).
+ *   - Valid non-negative number: returns the parsed value exactly as `parseBudget` would.
+ */
+export function parseBudgetEnv(raw: string | undefined, varName: string): number | undefined {
+  if (raw === undefined) return undefined;
+  // Treat empty / whitespace-only as unset — `AFK_MAX_BUDGET_USD=` must not
+  // be a $0 hard-stop; the operator just cleared the variable.
+  if (raw.trim() === '') return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    console.warn(
+      `[afk] ${varName} is not a valid finite number — ignoring (budget uncapped). ` +
+      `Set ${varName} to a non-negative number or leave it unset.`,
+    );
+    return undefined;
+  }
+  if (parsed < 0) {
+    console.warn(
+      `[afk] ${varName} is negative — ignoring (budget uncapped). ` +
+      `Set ${varName} to a non-negative number or leave it unset.`,
+    );
+    return undefined;
+  }
+  return parsed;
+}
+
+/**
  * Read session-wide budget ceiling from environment.
- * Surfaces any parse error the caller can translate into a friendly message.
+ *
+ * Uses the safe env-var parser: empty/whitespace → `undefined` (uncapped),
+ * malformed → warns once to stderr and returns `undefined` (uncapped). Never
+ * throws, so REPL, Telegram, daemon, and daemon-session-factory startups are
+ * not aborted by a stale or misconfigured `AFK_MAX_BUDGET_USD`.
  */
 export function getMaxBudgetUsd(): number | undefined {
-  return parseBudget(env.AFK_MAX_BUDGET_USD);
+  return parseBudgetEnv(env.AFK_MAX_BUDGET_USD, 'AFK_MAX_BUDGET_USD');
 }
 
 /** Read per-task budget hint from environment. */

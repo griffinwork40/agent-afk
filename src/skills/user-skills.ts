@@ -25,11 +25,12 @@
  * name, but the later one stays reachable.
  *
  * Frontmatter parsing, flag harvesting, and body extraction are delegated
- * to `src/cli/slash/_lib/flag-harvest.ts` so the user surface stays in
+ * to `src/utils/skill-md.ts` so the user surface stays in
  * lockstep with the plugin surface.
  */
 
 import { readdirSync, readFileSync } from 'fs';
+import { errorMessage, isEnoent } from '../utils/errors.js';
 import { join } from 'path';
 import { getSkillsDir } from '../paths.js';
 import {
@@ -40,7 +41,7 @@ import {
   type SkillExecutionContext,
   type SkillMetadata,
 } from './index.js';
-import { harvestFlagsFromSkillMd, parseSkillMd } from '../cli/slash/_lib/flag-harvest.js';
+import { harvestFlagsFromSkillMd, parseSkillMd } from '../utils/skill-md.js';
 import { SubagentManager } from '../agent/subagent.js';
 import { resolveChildModel } from '../agent/subagent/resolve-child-model.js';
 import { substituteSkillArgs } from '../agent/tools/skill-executor/arg-substitution.js';
@@ -63,6 +64,11 @@ interface ParsedSkillMd {
   context?: 'inline' | 'fork' | 'load';
   /** Job-to-be-done category authored in frontmatter. Passed through verbatim. */
   category?: string;
+  /**
+   * When `true`, exclude from the model-facing manifest (Claude Code parity).
+   * Parsed from `disable-model-invocation: true` in SKILL.md frontmatter.
+   */
+  disableModelInvocation?: boolean;
 }
 
 /**
@@ -147,6 +153,10 @@ function parseUserSkillMd(content: string, dirname: string): ParsedSkillMd | nul
   // category is passed through verbatim — no validation, no inference.
   const rawCategory = parsed.frontmatter['category'];
   if (rawCategory && rawCategory.length > 0) out.category = rawCategory;
+  // Claude Code parity: `disable-model-invocation: true` hides this skill from
+  // the model-facing manifest while keeping it slash-invocable.
+  const rawDMI = parsed.frontmatter['disable-model-invocation'];
+  if (rawDMI === 'true') out.disableModelInvocation = true;
   return out;
 }
 
@@ -303,9 +313,8 @@ export function scanSkillsFromDir(
     // silent on ENOENT. Surface only unexpected failures (EACCES, broken
     // symlink) so a misconfigured dir doesn't vanish without a trace — mirrors
     // the `[afk] skipping skill …` signal in parseUserSkillMd.
-    const e = err as NodeJS.ErrnoException;
-    if (e.code !== 'ENOENT') {
-      process.stderr.write(`[afk] skipping skills dir ${dir}: ${e.message}\n`);
+    if (!isEnoent(err)) {
+      process.stderr.write(`[afk] skipping skills dir ${dir}: ${errorMessage(err)}\n`);
     }
     return 0;
   }
@@ -323,9 +332,8 @@ export function scanSkillsFromDir(
       // ENOENT just means the subdirectory carries no SKILL.md (not a skill),
       // so skip quietly. Surface permission/symlink failures so a present-but-
       // unreadable skill leaves a trace instead of silently disappearing.
-      const e = err as NodeJS.ErrnoException;
-      if (e.code !== 'ENOENT') {
-        process.stderr.write(`[afk] skipping skill ${entry.name}: ${e.message}\n`);
+      if (!isEnoent(err)) {
+        process.stderr.write(`[afk] skipping skill ${entry.name}: ${errorMessage(err)}\n`);
       }
       continue;
     }
@@ -345,6 +353,7 @@ export function scanSkillsFromDir(
     if (parsed.argumentHint) meta.argumentHint = parsed.argumentHint;
     if (parsed.whenToUse) meta.whenToUse = parsed.whenToUse;
     if (parsed.flags && parsed.flags.length > 0) meta.flags = parsed.flags;
+    if (parsed.disableModelInvocation) meta.disableModelInvocation = true;
     // Narrow the raw frontmatter string to the SkillCategory union. OOV values
     // are dropped (undefined) — the listing's F1 clamping only helps at render
     // time; rejecting here keeps the registry clean.

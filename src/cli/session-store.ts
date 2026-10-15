@@ -8,13 +8,19 @@
  * session never forks a duplicate sidecar.
  *
  * Resume is client-side replay, not server-side restoration — there is no SDK
- * or server session store. `--resume <id|name>` / `/resume` read this sidecar
- * and the provider reconstructs the conversation by replaying `turns[]` as
- * `resumeHistory` (see resume-session.ts → resumeConfigFor). Only user/
- * assistant TEXT survives replay; tool calls and thinking blocks do not.
+ * or server session store. The message journal
+ * (`sessions/<id>/journal.jsonl`, see docs/message-journal.md) is the resume
+ * source: when it exists, resume-session.ts → resumeConfigFor hands the
+ * provider its full-fidelity messages as `resumeMessages` (tool_use /
+ * tool_result content included). Sidecar `turns[]` are text + metadata for
+ * /history, listings, and the text-replay fallback. Old sidecars written
+ * before the journal may still carry `userContentBlocks` /
+ * `assistantContentBlocks`; those replay via `resumeHistory` only when no
+ * journal exists for the session.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, realpathSync } from 'fs';
+import { existsSync, readdirSync, statSync, realpathSync } from 'fs';
+import { writeJsonFile, readJsonFile } from '../utils/json-file.js';
 import { join, basename, resolve, sep, isAbsolute } from 'path';
 import { randomUUID } from 'node:crypto';
 import { ensureSessionsMigrated, getSessionsDir } from '../paths.js';
@@ -41,6 +47,20 @@ export interface StoredSession {
   model: AgentModelInput;
   startedAt: number;
   savedAt: number;
+  /** Wall-clock time the session ended (Ctrl+C, SIGTERM, /exit, or natural
+   *  turn-limit). Written on every close-time save — absent on legacy sidecars
+   *  saved before this field was introduced. Consumers that need a session
+   *  duration can fall back to `savedAt - startedAt`. */
+  endedAt?: number;
+  /** Why the session ended. Written alongside `endedAt` on every close-time
+   *  save. Absent on legacy sidecars. Values:
+   *  - 'sigint'  — user pressed Ctrl+C twice at the idle prompt
+   *  - 'sigterm' — process received SIGTERM (e.g. kill, OS shutdown)
+   *  - 'sighup'  — controlling terminal closed (e.g. SSH disconnect)
+   *  - 'exit-command' — user typed /exit or /quit
+   *  - 'eof'     — stdin received EOF (pipe closed, non-interactive end)
+   */
+  exitReason?: 'sigint' | 'sigterm' | 'sighup' | 'exit-command' | 'eof';
   totalTurns: number;
   totalCostUsd: number;
   /** Count of turns where cost data was unavailable. Optional for backward compat with legacy sidecars. */
@@ -148,12 +168,22 @@ function safeResolvePath(
 /**
  * Write the current session stats to disk. Uses the SDK sessionId when
  * present; otherwise falls back to a timestamped ID. Returns the path written.
+ *
+ * @param opts.closeTime - When true, writes `endedAt` = Date.now() so the
+ *   sidecar records when the session ended (Ctrl+C, SIGTERM, /exit, or natural
+ *   turn-limit). Omit for mid-session autosaves (/name, per-turn) where the
+ *   session has not yet closed.
+ * @param opts.exitReason - The reason the session ended. Written only when
+ *   `closeTime` is true. See {@link StoredSession.exitReason} for values.
  */
-export function saveSession(stats: SessionStats, overrideId?: string): string {
-  const dir = sessionsDir();
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-
-  const id = overrideId ?? stats.sessionId ?? `session-${Date.now()}`;
+export function saveSession(
+  stats: SessionStats,
+  overrideId?: string,
+  opts?: { closeTime?: boolean; exitReason?: StoredSession['exitReason'] },
+): string {
+  // writeJsonFile (used below) creates parent dirs via atomicWriteFile mkdirp.
+  const now = Date.now();
+  const id = overrideId ?? stats.sessionId ?? `session-${now}`;
   const payload: StoredSession = {
     sessionId: stats.sessionId,
     ...(stats.name ? { name: stats.name } : {}),
@@ -163,7 +193,9 @@ export function saveSession(stats: SessionStats, overrideId?: string): string {
     ...(stats.cwd ? { cwd: stats.cwd } : {}),
     model: stats.model,
     startedAt: stats.sessionStartTime,
-    savedAt: Date.now(),
+    savedAt: now,
+    ...(opts?.closeTime ? { endedAt: now } : {}),
+    ...(opts?.closeTime && opts.exitReason ? { exitReason: opts.exitReason } : {}),
     totalTurns: stats.totalTurns,
     totalCostUsd: stats.totalCostUsd,
     unpricedTurns: stats.unpricedTurns,
@@ -175,7 +207,8 @@ export function saveSession(stats: SessionStats, overrideId?: string): string {
   // NOT block traversal; `id = '../../evil'` would otherwise escape the
   // sessions dir. safeResolvePath rejects on prefix mismatch.
   const path = safeResolvePath(id, { write: true });
-  writeFileSync(path, JSON.stringify(payload, null, 2));
+  // Atomic write: writeJsonFile uses tmp+rename (mkdirp by default).
+  writeJsonFile(path, payload);
   return path;
 }
 
@@ -184,9 +217,7 @@ export function forkStoredSession(
   stats: SessionStats,
   opts: { newId?: string } = {},
 ): { id: string; path: string } {
-  const dir = sessionsDir();
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-
+  // writeJsonFile (used below) creates parent dirs via atomicWriteFile mkdirp.
   const newId = opts.newId ?? randomUUID();
 
   // Invariant: the fork MUST receive a fresh sessionId — never the parent's.
@@ -220,7 +251,8 @@ export function forkStoredSession(
     forkedAt: Date.now(),
   };
   const path = safeResolvePath(newId, { write: true });
-  writeFileSync(path, JSON.stringify(payload, null, 2));
+  // Atomic write: writeJsonFile uses tmp+rename (mkdirp by default).
+  writeJsonFile(path, payload);
   return { id: newId, path };
 }
 
@@ -235,10 +267,13 @@ export function loadSession(idOrPath: string): StoredSession | undefined {
     console.warn(`loadSession: rejected unsafe session id ${JSON.stringify(idOrPath)}: ${errorMessage(err)}`);
     return undefined;
   }
-  if (!existsSync(path)) return undefined;
+  // readJsonFile (strict): ENOENT returns undefined via onMissing; parse errors
+  // re-throw so we can warn the caller about corruption rather than silently
+  // returning undefined. This preserves the original warn-on-parse-error
+  // behavior — treating ENOENT and SyntaxError as equivalent would lose the
+  // diagnostic signal that a sidecar is corrupt rather than merely absent.
   try {
-    const raw = readFileSync(path, 'utf-8');
-    return JSON.parse(raw) as StoredSession;
+    return readJsonFile<StoredSession>(path, { onMissing: undefined });
   } catch (err) {
     console.warn(`loadSession: failed to read/parse ${path}: ${errorMessage(err)}`);
     return undefined;

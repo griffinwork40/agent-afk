@@ -12,7 +12,7 @@
 import { join, resolve, isAbsolute, sep } from 'node:path';
 import { promises as fs } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import type { ToolHandler } from '../types.js';
+import type { ToolHandler, ToolResult } from '../types.js';
 import { runSweep } from '../../worktree/worktree-sweep.js';
 import type { ExecFileFn } from '../../worktree/worktree-sweep.js';
 import { env } from '../../../config/env.js';
@@ -24,7 +24,9 @@ import {
   removeManagedWorktreeGuarded,
   resolveAnchorBaseRef,
   type RepoContext,
+  type ManagedWorktreeInfo,
 } from './worktree-managed.js';
+import { describeWorktreeSetupFailure } from '../../worktree/worktree-setup.js';
 import { errorMessage } from '../../../utils/errors.js';
 
 /** Injectable deps for tests. */
@@ -137,6 +139,93 @@ async function resolveManagedWorktree(
   return entry;
 }
 
+/** Build the human-readable detail string for an `ignored-local-state` refusal. */
+function describeIgnoredRefusal(
+  because: 'non-rebuildable-entry' | 'git-failed',
+  detail: string,
+): string {
+  return because === 'git-failed'
+    ? `the ignored-file probe failed (${detail}), so removal would be a guess`
+    : `ignored local state \`git status\` cannot see: ${detail}`;
+}
+
+/** Args for {@link handleCreate}. */
+interface CreateArgs {
+  obj: Record<string, unknown>;
+  ctx: RepoContext;
+  anchor: string;
+  execFile: ExecFileFn;
+  generateSuffix: () => string;
+  signal: AbortSignal;
+}
+
+/** `create` action: confined path, collision auto-suffix (#1516), managed create + setup (#3601). */
+async function handleCreate(args: CreateArgs): Promise<ToolResult> {
+  const { obj, ctx, anchor, execFile, generateSuffix, signal } = args;
+  if (typeof obj['name'] !== 'string' || !obj['name']) {
+    return { content: 'Invalid input: name required for create', isError: true };
+  }
+  const slug = sanitizeSlug(obj['name']);
+  if (!slug) {
+    return { content: `Invalid input: name "${obj['name']}" sanitizes to empty`, isError: true };
+  }
+  const worktreePath = join(ctx.afkWorktreesRoot, slug);
+  let resolvedSlug = slug;
+  let worktreePathResolved = worktreePath;
+  const existing = await findEntry(execFile, ctx.repoRoot, worktreePath);
+  if (existing) {
+    // Auto-retry with a unique 4-char hex suffix rather than surfacing
+    // a collision error — the common case is a stale worktree from a
+    // prior failed run on the same issue (#1516).
+    const suffix = generateSuffix();
+    resolvedSlug = `${slug.slice(0, 80 - suffix.length - 1)}-${suffix}`;
+    worktreePathResolved = join(ctx.afkWorktreesRoot, resolvedSlug);
+    const stillExists = await findEntry(execFile, ctx.repoRoot, worktreePathResolved);
+    if (stillExists) {
+      return {
+        content: `Worktree already exists at ${worktreePath} and the auto-suffixed path ${worktreePathResolved} is also taken. Run action "list" to see all current worktrees.`,
+        isError: true,
+      };
+    }
+  }
+  const prefix = env.AFK_WORKTREE_BRANCH_PREFIX ?? 'afk/';
+  const branch = `${prefix}${resolvedSlug}`;
+  const baseInput = resolveCreateBaseRef(obj['base']);
+  if (typeof baseInput === 'object') {
+    return { content: baseInput.error, isError: true };
+  }
+  // An unspecified base resolves at the ANCHOR, not at ctx.repoRoot (#760).
+  const baseRef = baseInput ?? await resolveAnchorBaseRef(execFile, anchor);
+  const info = await createManagedWorktree({
+    execFile,
+    repoRoot: ctx.repoRoot,
+    worktreePath: worktreePathResolved,
+    branch,
+    baseRef,
+    signal,
+  });
+  return { content: JSON.stringify({ path: info.path, branch: info.branch, base: info.baseRef, note: await buildCreateNote(info) }) };
+}
+
+/**
+ * Note returned with a create. A fresh worktree does NOT share the main
+ * checkout's node_modules, so a naive build/test fails opaquely. With no
+ * repo-declared setup (#3601) the note is the pre-#3601 install hint, derived
+ * from the just-created tree's lockfile (info.path at baseRef, not main). A
+ * declared setup replaces it with the setup outcome, naming the exact failed
+ * command when it did not succeed.
+ */
+async function buildCreateNote(info: ManagedWorktreeInfo): Promise<string> {
+  if (info.setup?.status === 'ok') {
+    const ran = (info.setup.completed ?? []).map((c) => `\`${c}\``).join(', ');
+    return `Repo-declared worktree setup (.afk/worktree-setup.json) completed in ${info.path}${ran ? `: ${ran}` : ''}.`;
+  }
+  const failure = describeWorktreeSetupFailure(info.setup, info.path);
+  if (failure !== undefined) return failure;
+  const installCommand = await detectInstallCommand(info.path);
+  return `Dependencies are NOT installed in this fresh worktree (no shared node_modules). Run \`${installCommand}\` in ${info.path} before building or testing, or the build/tests will fail opaquely.`;
+}
+
 /** Build the `worktree` tool handler bound to a session cwd. */
 export function createWorktreeHandler(
   cwd?: string,
@@ -145,7 +234,7 @@ export function createWorktreeHandler(
   const execFile = deps?.execFile ?? defaultExecFile;
   const generateSuffix = deps?.generateSuffix ?? (() => randomBytes(2).toString('hex'));
 
-  return async (input, _signal, context) => {
+  return async (input, signal, context) => {
     if (!input || typeof input !== 'object') {
       return { content: 'Invalid input: expected object', isError: true };
     }
@@ -161,7 +250,7 @@ export function createWorktreeHandler(
       };
     }
 
-    const anchor = context?.resolveBase ?? context?.cwd ?? cwd ?? process.cwd();
+    const anchor = context?.resolveBase ?? cwd ?? process.cwd();
     let ctx: RepoContext;
     try {
       ctx = await resolveRepoContext(execFile, anchor);
@@ -178,64 +267,8 @@ export function createWorktreeHandler(
 
     try {
       switch (action) {
-        case 'create': {
-          if (typeof obj['name'] !== 'string' || !obj['name']) {
-            return { content: 'Invalid input: name required for create', isError: true };
-          }
-          const slug = sanitizeSlug(obj['name']);
-          if (!slug) {
-            return { content: `Invalid input: name "${obj['name']}" sanitizes to empty`, isError: true };
-          }
-          const worktreePath = join(ctx.afkWorktreesRoot, slug);
-          let resolvedSlug = slug;
-          let worktreePathResolved = worktreePath;
-          const existing = await findEntry(execFile, ctx.repoRoot, worktreePath);
-          if (existing) {
-            // Auto-retry with a unique 4-char hex suffix rather than surfacing
-            // a collision error — the common case is a stale worktree from a
-            // prior failed run on the same issue (#1516).
-            const suffix = generateSuffix();
-            resolvedSlug = `${slug.slice(0, 80 - suffix.length - 1)}-${suffix}`;
-            worktreePathResolved = join(ctx.afkWorktreesRoot, resolvedSlug);
-            const stillExists = await findEntry(execFile, ctx.repoRoot, worktreePathResolved);
-            if (stillExists) {
-              return {
-                content: `Worktree already exists at ${worktreePath} and the auto-suffixed path ${worktreePathResolved} is also taken. Run action "list" to see all current worktrees.`,
-                isError: true,
-              };
-            }
-          }
-          const prefix = env.AFK_WORKTREE_BRANCH_PREFIX ?? 'afk/';
-          const branch = `${prefix}${resolvedSlug}`;
-          const baseInput = resolveCreateBaseRef(obj['base']);
-          if (typeof baseInput === 'object') {
-            return { content: baseInput.error, isError: true };
-          }
-          // An unspecified base resolves at the ANCHOR, not at ctx.repoRoot (#760).
-          const baseRef = baseInput ?? await resolveAnchorBaseRef(execFile, anchor);
-          const info = await createManagedWorktree({
-            execFile,
-            repoRoot: ctx.repoRoot,
-            worktreePath: worktreePathResolved,
-            branch,
-            baseRef,
-          });
-          // A fresh worktree does NOT share the main checkout's node_modules,
-          // so a naive build/test here fails opaquely. Surface a clear note
-          // with the precise install command so the caller installs first.
-          // Inspect the just-created worktree (info.path, checked out at
-          // baseRef) — NOT ctx.repoRoot — so the recommended manager matches
-          // the lockfile at `base`, not main.
-          const installCommand = await detectInstallCommand(info.path);
-          return {
-            content: JSON.stringify({
-              path: info.path,
-              branch: info.branch,
-              base: info.baseRef,
-              note: `Dependencies are NOT installed in this fresh worktree (no shared node_modules). Run \`${installCommand}\` in ${info.path} before building or testing, or the build/tests will fail opaquely.`,
-            }),
-          };
-        }
+        case 'create':
+          return await handleCreate({ obj, ctx, anchor, execFile, generateSuffix, signal });
 
         case 'keep': {
           if (typeof obj['path'] !== 'string' || !obj['path']) {
@@ -319,8 +352,7 @@ export function createWorktreeHandler(
             }
             if (outcome.reason === 'ignored-local-state') {
               return {
-                content: `Refused: ${entry.path} holds non-rebuildable ignored files (e.g. .env, a gitignored plan) that ` +
-                  `\`git status\` cannot see, so removal would silently delete them. Move/back up what you need, or ` +
+                content: `Refused: ${entry.path} holds non-rebuildable ignored files — ${describeIgnoredRefusal(outcome.because, outcome.detail)}. Move/back up what you need, or ` +
                   'pass force: true to discard them along with the checkout.',
                 isError: true,
               };

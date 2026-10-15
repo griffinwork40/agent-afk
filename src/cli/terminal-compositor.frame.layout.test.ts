@@ -23,6 +23,7 @@
 import type { ChalkInstance } from 'chalk';
 import { describe, expect, it } from 'vitest';
 import {
+  hiddenIndicatorGutter,
   truncateOverlayPreservingHead,
   computeViewportLayout,
   computePickerViewportLayout,
@@ -30,6 +31,7 @@ import {
 } from './terminal-compositor.frame.layout.js';
 import { stripAnsi } from './display.js';
 import { palette } from './palette.js';
+import { ASCII_GLYPHS, UNICODE_GLYPHS } from './commands/interactive/tool-lane-render.js';
 
 // ---------------------------------------------------------------------------
 // Sentinel chalk helper — lets us assert WHICH palette role was applied
@@ -248,5 +250,236 @@ describe('computePickerViewportLayout — spine truncation', () => {
     expect(layout.trimmedOverlay[0]).toBe(root);
     expect(stripAnsi(layout.trimmedOverlay[Math.floor(16 * 0.25)]))
       .toContain('earlier lines hidden');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Indicator gutter: the hidden-lines row must continue the tree spine and sit
+// inside the content margin (regression: "17 earlier lines hidden" rendered at
+// col 6, outside the margin, severing every `│` rail it crossed).
+// ---------------------------------------------------------------------------
+
+describe('hidden-lines indicator gutter', () => {
+  const M = '          '; // content margin (10 cols)
+
+  it('carries every rail of the row below and respects the content margin', () => {
+    const lines = [
+      `${M}◉ skill(pr-triage)`,
+      `${M}  ◉ Agent(A) [worker]`,
+      `${M}  │  ├─ ◆ skill(review) ✓ 170 lines`,
+      ...Array.from({ length: 17 }, (_, i) => `${M}  │  │      hidden ${i}`),
+      `${M}  │  │      - Whether a stated intent`,
+      `${M}  │  ╰─ ▸ bash ×3 — 3 done`,
+      `${M}  ◉ Agent(B) [worker]`,
+    ];
+    const result = truncateOverlayPreservingHead(lines, 8).map((l) => stripAnsi(l));
+    const row = result.find((l) => l.includes('earlier lines hidden'))!;
+    expect(row).toBeDefined();
+    expect(row.startsWith(M)).toBe(true);
+    const below = result[result.indexOf(row) + 1]!;
+    // Every rail column in the next row must also be a rail on the indicator row.
+    [...below].forEach((ch, i) => {
+      if (ch === '│' || ch === '├' || ch === '╰') expect(row[i], `col ${i}\n${result.join('\n')}`).toBe('│');
+    });
+  });
+
+  it('draws the parent rail through a nested node glyph directly below', () => {
+    expect(hiddenIndicatorGutter(`${M}  │  ╰─ bash`, `${M}  ◉ Agent(B)`)).toBe(`${M}  │ `);
+  });
+
+  it('does not invent a rail above a top-level node', () => {
+    expect(hiddenIndicatorGutter(`${M}plain text`, `${M}◉ skill(x)`)).toBe(M);
+  });
+
+  it('turns horizontal connector runs into spaces', () => {
+    expect(hiddenIndicatorGutter('', '│  ├─ ◆ x')).toBe('│  │  ');
+  });
+
+  it('skips blank tail rows when picking the reference row', () => {
+    const lines = ['◉ root', ...Array.from({ length: 10 }, () => 'x'), '', `${M}│ tail`, `${M}│ tail2`];
+    const result = truncateOverlayPreservingHead(lines, 5).map((l) => stripAnsi(l));
+    expect(result[1]).toBe(`${M}│ 10 earlier lines hidden`);
+  });
+
+  // Finding #5 from issue #2509: blank-tail-skip test only covered headCount=1
+  // (budget 5).  Add a variant with a larger budget to exercise headCount > 1.
+  it('skips blank tail rows when picking the reference row (budget=8, headCount=2)', () => {
+    // budget=8: headCount=floor(8*0.25)=2, tailCount=8-2-1=5
+    // Make the first 2 tail rows blank so `below` must skip them.
+    const lines = [
+      '◉ root',
+      '◉ turn 2',
+      ...Array.from({ length: 10 }, () => 'x'),
+      '',
+      '',
+      `${M}│ tail-a`,
+      `${M}│ tail-b`,
+      `${M}│ tail-c`,
+    ];
+    const result = truncateOverlayPreservingHead(lines, 8).map((l) => stripAnsi(l));
+    const indicatorIdx = 2; // after 2 head lines
+    expect(result[indicatorIdx]).toContain('earlier lines hidden');
+    // The gutter must be derived from the first non-blank tail row (tail-a) which
+    // carries a `│` rail at the content-margin column.
+    expect(result[indicatorIdx].startsWith(`${M}│`)).toBe(true);
+  });
+
+  // Finding #4 from issue #2509: integrate the node-on-rail branch of
+  // `hiddenIndicatorGutter` (line 176 of the source: `node.has(ch) &&
+  // railDown.has(up)`) through `truncateOverlayPreservingHead` end-to-end.
+  // Previously this branch was only exercised by a direct `hiddenIndicatorGutter`
+  // call; this test verifies the same path fires inside the full truncation flow.
+  //
+  // Setup: budget=4 → headCount=1, tailCount=2.
+  //   head[0]  = '│  ╰─ bash'   (last connector — `│` at col 0 is in RAIL_DOWN)
+  //   tail[0]  = '◉ Agent(B)'   (node glyph at col 0 — directly below the `│`)
+  //
+  // The loop in `hiddenIndicatorGutter` reaches `◉` at col 0, finds `above[0]`
+  // is `│` (RAIL_DOWN), and appends the rail — producing gutter `'│ '`.
+  it('node-on-rail: indicator carries the parent rail through a ◉ node in the first non-blank tail row (integration)', () => {
+    const lines = [
+      '│  ╰─ bash',                     // head (last visible head row; `│` at col 0)
+      ...Array.from({ length: 5 }, (_, i) => `│  hidden ${i}`),  // hidden rows
+      '◉ Agent(B)',                      // first tail row — node at col 0 under `│`
+      '│  ├─ tool ×1',                  // second tail row
+    ];
+    // budget=4: headCount=1, tailCount=2, hidden=5
+    const result = truncateOverlayPreservingHead(lines, 4);
+    expect(result.length).toBe(4);
+    const indicator = stripAnsi(result[1]);
+    expect(indicator).toContain('5 earlier lines hidden');
+    // Gutter must be `│ ` — the node-on-rail branch fired.
+    expect(indicator.startsWith('│')).toBe(true);
+  });
+});
+
+describe('hidden-lines indicator gutter (ASCII glyph mode)', () => {
+  it('continues ASCII rails when the ASCII glyph set is active', () => {
+    expect(hiddenIndicatorGutter('', '|  +- o x', ASCII_GLYPHS)).toBe('|  |  ');
+    expect(hiddenIndicatorGutter('  |  \\- bash', '  o Agent', ASCII_GLYPHS)).toBe('  | ');
+  });
+
+  it('does not treat ASCII lookalikes as rails under the Unicode set', () => {
+    expect(hiddenIndicatorGutter('', '  | a | b |', UNICODE_GLYPHS)).toBe('  ');
+    expect(hiddenIndicatorGutter('', '  +2 more', UNICODE_GLYPHS)).toBe('  ');
+  });
+
+  it('keeps a content bullet that is not preceded by a connector', () => {
+    expect(hiddenIndicatorGutter('', '│  │      - Whether', UNICODE_GLYPHS)).toBe('│  │      ');
+    expect(hiddenIndicatorGutter('', '|  - item', ASCII_GLYPHS)).toBe('|  ');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bandReserveRows — computeViewportLayout
+// ---------------------------------------------------------------------------
+
+describe('computeViewportLayout — bandReserveRows', () => {
+  it('reserve=0 (default) leaves behaviour unchanged', () => {
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i}`);
+    const chrome = bareChrome(lines);
+    const withDefault = computeViewportLayout(chrome, 0, false, 30, noScrollRegion);
+    const withZero = computeViewportLayout(chrome, 0, false, 30, noScrollRegion, 0);
+    expect(withDefault.trimmedOverlay).toStrictEqual(withZero.trimmedOverlay);
+    expect(withDefault.trimmedOverlay).toBe(lines); // fits without truncation
+  });
+
+  it('reserve reduces the overlay budget', () => {
+    // rows=30, fixedRows: gapRow(1, overlayLines non-empty → gap=1)+input(1)=2, avail=(30-1)-2=27
+    // reserve=5 → overlayBudget=22
+    const lines = Array.from({ length: 25 }, (_, i) => `line ${i}`);
+    const chrome = bareChrome(lines);
+    const layout = computeViewportLayout(chrome, 0, false, 30, noScrollRegion, 5);
+    expect(layout.maxLines).toBe(29); // maxLines = rows - 1 = 29
+    expect(layout.trimmedOverlay.length).toBe(22);
+  });
+
+  it('small terminal: clamp keeps at least 1 overlay row when overlay is non-empty', () => {
+    // rows=5, fixedRows: gapRow(1, overlayLines non-empty → gap=1)+input(1)=2, avail=(5-1)-2=2
+    // A reserve of 10 is clamped to max(0, avail-1)=1 → overlayBudget=1
+    const lines = ['line0', 'line1', 'line2'];
+    const chrome = bareChrome(lines);
+    const layout = computeViewportLayout(chrome, 0, false, 5, noScrollRegion, 10);
+    expect(layout.trimmedOverlay.length).toBe(1);
+  });
+
+  it('avail=1 (degenerate 4-row terminal): reserve is zeroed, single overlay row still shown', () => {
+    // rows=4, fixedRows: gapRow(1, overlayLines non-empty → gap=1)+input(1)=2,
+    // maxLines=(4-1)=3, avail=3-2=1.
+    // clamp: reserve = min(bandReserveRows, max(0, avail-1)) = min(R, 0) = 0.
+    // The band-visibility guarantee cannot be honoured at this terminal height;
+    // the single available row is given to the overlay instead (overlayBudget=1).
+    // This test documents the known trade-off so regression is detected explicitly.
+    const lines = ['line0', 'line1', 'line2'];
+    const chrome = bareChrome(lines);
+    const layout = computeViewportLayout(chrome, 0, false, 4, noScrollRegion, 10);
+    expect(layout.maxLines).toBe(3); // maxLines = rows - 1 = 3
+    // reserve zeroes → overlayBudget = avail = 1 → overlay trimmed to 1 row
+    expect(layout.trimmedOverlay.length).toBe(1);
+  });
+
+  it('avail=1 (degenerate 4-row terminal): single-line overlay fits exactly — no truncation', () => {
+    // rows=4, fixedRows: gapRow(1, overlayLines non-empty → gap=1)+input(1)=2,
+    // maxLines=3, avail=1. With lines=['line0'] (length 1), overlayLines.length
+    // === overlayBudget (1) — the no-truncation branch fires and the overlay is
+    // returned as-is (same reference).
+    const lines = ['line0'];
+    const chrome = bareChrome(lines);
+    const layout = computeViewportLayout(chrome, 0, false, 4, noScrollRegion, 10);
+    expect(layout.maxLines).toBe(3); // maxLines = rows - 1 = 3
+    // overlayBudget = avail = 1; length === budget → no truncation.
+    // Intentionally asserts same reference (toBe, not toEqual) to lock the
+    // zero-copy contract: the implementation must return the original array
+    // without allocating a new one when no truncation is needed.
+    expect(layout.trimmedOverlay).toBe(lines);
+  });
+
+  it('reserve of 0 when avail is 0 results in empty trimmedOverlay (no crash)', () => {
+    // rows=3, fixedRows: gapRow(1, overlayLines non-empty → gap=1)+input(1)=2, avail=0
+    const lines = ['line0', 'line1'];
+    const chrome = bareChrome(lines);
+    const layout = computeViewportLayout(chrome, 0, false, 3, noScrollRegion, 5);
+    expect(layout.trimmedOverlay.length).toBe(0);
+  });
+
+  it('reserve larger than band does not exceed avail-1', () => {
+    // rows=10, fixedRows: gapRow(1, overlayLines non-empty → gap=1)+input(1)=2,
+    // avail=(10-1)-2=7, reserve capped at avail-1=6 → budget=1
+    const lines = Array.from({ length: 10 }, (_, i) => `line ${i}`);
+    const chrome = bareChrome(lines);
+    const layout = computeViewportLayout(chrome, 0, false, 10, noScrollRegion, 100);
+    expect(layout.trimmedOverlay.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bandReserveRows — computePickerViewportLayout
+// ---------------------------------------------------------------------------
+
+describe('computePickerViewportLayout — bandReserveRows', () => {
+  it('reserve=0 (default) leaves behaviour unchanged', () => {
+    const lines = Array.from({ length: 10 }, (_, i) => `line ${i}`);
+    const chrome = bareChrome(lines);
+    const withDefault = computePickerViewportLayout(chrome, 3, 30, noScrollRegion);
+    const withZero = computePickerViewportLayout(chrome, 3, 30, noScrollRegion, 0);
+    expect(withDefault.trimmedOverlay).toStrictEqual(withZero.trimmedOverlay);
+  });
+
+  it('picker path: reserve reduces the overlay budget', () => {
+    // rows=30, fixedRows: gapRow(1, overlayLines non-empty → gap=1)+pickerRows(3)=4, avail=(30-1)-4=25
+    // reserve=5 → overlayBudget=20
+    const lines = Array.from({ length: 25 }, (_, i) => `line ${i}`);
+    const chrome = bareChrome(lines);
+    const layout = computePickerViewportLayout(chrome, 3, 30, noScrollRegion, 5);
+    expect(layout.trimmedOverlay.length).toBe(20);
+  });
+
+  it('picker path: clamp keeps at least 1 overlay row on a small terminal', () => {
+    // rows=7, fixedRows: gapRow(1, overlayLines non-empty → gap=1)+pickerRows(3)=4, avail=(7-1)-4=2
+    // reserve of 10 clamped to avail-1=1 → budget=1
+    const lines = ['a', 'b', 'c', 'd'];
+    const chrome = bareChrome(lines);
+    const layout = computePickerViewportLayout(chrome, 3, 7, noScrollRegion, 10);
+    expect(layout.trimmedOverlay.length).toBe(1);
   });
 });

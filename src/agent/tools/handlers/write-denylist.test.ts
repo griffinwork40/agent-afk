@@ -182,6 +182,21 @@ describe('editFileHandler — denylist (C4 fix: symmetric guard)', () => {
 // ---------------------------------------------------------------------------
 
 describe('Symlink dereference — symlink pointing into protected dir', () => {
+  // Reset the denylist memo before and after every test in this describe so
+  // that direct process.env mutations (and vi.stubEnv stubs) from one test
+  // cannot leave a stale cache entry that pollutes the next test.  Without
+  // this guard the "custom denylisted directory" test below could cache the
+  // protectedDir entry, and — if afterEach's rmSync races with the next
+  // test's setup under load — the following "allows writes" test would see
+  // a non-empty denylist whose resolved entry resolves to an unexpected path
+  // inside the new tmpDir, causing a spurious "refusing to write" failure.
+  beforeEach(() => {
+    _resetWriteDenylistCacheForTests();
+  });
+  afterEach(() => {
+    _resetWriteDenylistCacheForTests();
+  });
+
   it('blocks writes through a symlink that resolves to ~/.ssh', () => {
     const sshDir = join(homedir(), '.ssh');
     if (!existsSync(sshDir)) {
@@ -210,14 +225,16 @@ describe('Symlink dereference — symlink pointing into protected dir', () => {
 
     const targetViaLink = join(linkPath, 'credentials.json');
 
-    process.env['AFK_WRITE_DENYLIST'] = protectedDir;
-    try {
-      expect(() => assertNotDenylisted(targetViaLink, 'write_file')).toThrow(
-        /refusing to write to protected path/,
-      );
-    } finally {
-      delete process.env['AFK_WRITE_DENYLIST'];
-    }
+    // Use vi.stubEnv instead of raw process.env mutation so the stub is
+    // tracked by Vitest and cleaned up by vi.unstubAllEnvs() in afterEach —
+    // the raw-mutation pattern bypassed vi's cleanup and left the module
+    // cache with a stale entry pointing to a directory that afterEach's
+    // rmSync would immediately delete, causing the next test to resolve an
+    // unexpected real path when safeRealpath walked up its ancestor chain.
+    vi.stubEnv('AFK_WRITE_DENYLIST', protectedDir);
+    expect(() => assertNotDenylisted(targetViaLink, 'write_file')).toThrow(
+      /refusing to write to protected path/,
+    );
   });
 
   it('allows writes through a symlink to a normal safe directory', () => {
@@ -742,7 +759,9 @@ describe('write-denylist — tilde backslash expansion in AFK_WRITE_DENYLIST (PR
     const list = getWriteDenylist();
     const expanded = list.find((p) => p.endsWith('.mysecrets'));
     expect(expanded).toBeDefined();
-    expect(expanded?.startsWith(homedir())).toBe(true);
+    // getWriteDenylist() realpaths entries; homedir() is a temp dir under the
+    // test HOME redirect (#2905), which macOS aliases via /private.
+    expect(expanded?.startsWith(safeRealpath(homedir()))).toBe(true);
   });
 
   it('expands ~/ in AFK_WRITE_DENYLIST to an absolute path rooted at homedir', () => {
@@ -751,6 +770,8 @@ describe('write-denylist — tilde backslash expansion in AFK_WRITE_DENYLIST (PR
     const list = getWriteDenylist();
     const expanded = list.find((p) => p.endsWith('.mysecrets2'));
     expect(expanded).toBeDefined();
-    expect(expanded?.startsWith(homedir())).toBe(true);
+    // getWriteDenylist() realpaths entries; homedir() is a temp dir under the
+    // test HOME redirect (#2905), which macOS aliases via /private.
+    expect(expanded?.startsWith(safeRealpath(homedir()))).toBe(true);
   });
 });

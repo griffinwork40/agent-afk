@@ -328,7 +328,7 @@ function bar() {
 // ---------------------------------------------------------------------------
 
 describe('editFileHandler cwd containment', () => {
-  it('rejects absolute path outside context.cwd', async () => {
+  it('rejects absolute path outside context.resolveBase', async () => {
     const signal = new AbortController().signal;
     const result = await editFileHandler(
       {
@@ -337,13 +337,13 @@ describe('editFileHandler cwd containment', () => {
         new_string: 'root',
       },
       signal,
-      { cwd: tempDir },
+      { resolveBase: tempDir },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toMatch(/outside the allowed/);
   });
 
-  it('resolves relative path against context.cwd', async () => {
+  it('resolves relative path against context.resolveBase', async () => {
     await mkdir(tempDir, { recursive: true });
     const absPath = path.join(tempDir, 'relative.txt');
     await writeFile(absPath, 'foo bar baz', 'utf-8');
@@ -356,13 +356,13 @@ describe('editFileHandler cwd containment', () => {
         new_string: 'qux',
       },
       signal,
-      { cwd: tempDir },
+      { resolveBase: tempDir },
     );
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain('Replaced 1 occurrence');
   });
 
-  it('allows absolute path within context.cwd', async () => {
+  it('allows absolute path within context.resolveBase', async () => {
     await mkdir(tempDir, { recursive: true });
     const absPath = path.join(tempDir, 'inside.txt');
     await writeFile(absPath, 'hello world', 'utf-8');
@@ -375,7 +375,7 @@ describe('editFileHandler cwd containment', () => {
         new_string: 'goodbye',
       },
       signal,
-      { cwd: tempDir },
+      { resolveBase: tempDir },
     );
     expect(result.isError).toBeFalsy();
   });
@@ -672,6 +672,47 @@ describe('editFileHandler cwd containment', () => {
       expect(result.isError).toBeUndefined();
       expect(result.content).toContain('Replaced 1 occurrence');
       expect(await readTempFile(filePath)).toBe('changed\n');
+    });
+
+    // Strict-mode callers (OpenAI Responses API) must emit every param, sending
+    // `expected_hash: ""`. A blank precondition carries no intent: it must be
+    // treated as omitted, not rejected as a malformed hash.
+    it.each([
+      ['empty string', ''],
+      ['whitespace', '   '],
+      ['null', null],
+    ])('treats a blank expected_hash (%s) as omitted', async (_label, blank) => {
+      const filePath = await createTempFile(`hash-blank-${randomBytes(3).toString('hex')}.txt`, 'original\n');
+      const signal = new AbortController().signal;
+
+      const result = await editFileHandler(
+        {
+          file_path: filePath,
+          old_string: 'original',
+          new_string: 'changed',
+          expected_hash: blank,
+        },
+        signal,
+      );
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toContain('Replaced 1 occurrence');
+      expect(await readTempFile(filePath)).toBe('changed\n');
+    });
+
+    it('still rejects a non-blank, non-string expected_hash', async () => {
+      const signal = new AbortController().signal;
+      await expect(
+        editFileHandler(
+          {
+            file_path: '/tmp/irrelevant.txt',
+            old_string: 'some',
+            new_string: 'other',
+            expected_hash: 42,
+          },
+          signal,
+        ),
+      ).rejects.toThrow(/must be a string/);
     });
   });
 

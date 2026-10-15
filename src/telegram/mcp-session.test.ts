@@ -106,7 +106,7 @@ describe('Telegram MCP session wiring', () => {
         fromConfigSpy.mockRestore();
       }
     },
-    { timeout: 15_000 },
+    15_000,
   );
 
   it(
@@ -149,7 +149,7 @@ describe('Telegram MCP session wiring', () => {
         await query.close();
       }
     },
-    { timeout: 15_000 },
+    15_000,
   );
 });
 

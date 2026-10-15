@@ -21,11 +21,13 @@
 
 import { debugLog } from '../../utils/debug.js';
 import { emitSessionPhase } from '../trace/emit.js';
+import { isReducedToolSurface, resolveSurfaceInputs } from './sdk-surface-warning.js';
+import { emitSessionIdAssigned } from './session-id-trace.js';
 import { resolveProvider, providerForModel } from '../providers/index.js';
 import { ProviderRouter } from '../providers/router/provider-router.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import { dispatchSessionStart } from './hooks-dispatch.js';
-import { HookBlockedError } from '../../utils/errors.js';
+import { HookBlockedError, ensureError} from '../../utils/errors.js';
 import { transformProviderEvent } from './stream-consumer.js';
 import { buildInitialState } from './session-setup.js';
 import { SessionStateManager } from './session-state.js';
@@ -71,7 +73,15 @@ export function buildProviderLifecycle(config: AgentConfig): ProviderLifecycleRe
   const resolvedModel = resolveModelId(config.model) ?? (config.model as string);
   const { sessionIdentity, metadata } = buildInitialState(config, resolvedModel);
 
-  const stateManager = new SessionStateManager(sessionIdentity, metadata);
+  const stateManager = new SessionStateManager(
+    sessionIdentity,
+    metadata,
+    // Emit a session_id_assigned trace event each time the provider-issued
+    // session id first becomes known or changes (e.g. resumed/forked session).
+    // Fire-and-forget: the callback must never propagate errors into
+    // updateSessionIdentity — see SessionStateManager for the try/catch.
+    (sid, prior) => void emitSessionIdAssigned(config.traceWriter, sid, prior),
+  );
   const inputStream = new QueryInputStream(() => stateManager.getSessionId());
 
   const promptIterable = inputStream.createIterable();
@@ -95,6 +105,9 @@ export function buildProviderLifecycle(config: AgentConfig): ProviderLifecycleRe
           resolveProvider(m, undefined, {
             customTools: config.customTools,
             canUseTool: config.canUseTool,
+            // #3442: opt-in executors ride along on every provider the router
+            // builds, including ones rebuilt by a cross-family model swap.
+            ...(config.executors !== undefined ? { executors: config.executors } : {}),
           });
     providerQuery = new ProviderRouter(
       { prompt: promptIterable, config },
@@ -147,28 +160,44 @@ export class ProviderInitializer {
     stateManager: SessionStateManager,
   ): Promise<void> {
     try {
-      const sessionStartInjectContext = await dispatchSessionStart(
-        this.hookRegistry,
-        {
-          event: 'SessionStart',
-          sessionId: stateManager.getSessionId(),
-          parentSessionId: this.config.parentSessionId,
-        },
-        {
-          signal: this.abortSignal,
-          ...(this.config.traceWriter ? { traceWriter: this.config.traceWriter } : {}),
-        },
-      );
+      // Perf (#3737): skip SessionStart dispatch entirely for forked children.
+      //
+      // Previously the registry fired for every fork (shared hookRegistry),
+      // running all handlers — including expensive config-driven shell hooks
+      // (e.g. jev rule-digest, ~4.7 KB) — only to have the merged
+      // injectContext discarded at the `parentSessionId === undefined` guard
+      // below.  Forked children inherit the same registry as the root session
+      // but must NOT receive root-only nudge context (skill-routing hints,
+      // forge briefs, prior-session bridge, pattern-card summaries).  Skipping
+      // dispatch entirely removes the shell-hook overhead and the discarded
+      // context budget in one step, with no behaviour change for root sessions.
+      //
+      // Handlers that govern edits tree-wide (path-approval, bash-restriction,
+      // safe-destruct, etc.) are registered on PreToolUse, PostToolUse, and
+      // SubagentStop — not on SessionStart — so they are unaffected.
+      const isForkedChild = this.config.parentSessionId !== undefined;
+      const sessionStartInjectContext = isForkedChild
+        ? undefined
+        : await dispatchSessionStart(
+            this.hookRegistry,
+            {
+              event: 'SessionStart',
+              sessionId: stateManager.getSessionId(),
+              parentSessionId: this.config.parentSessionId,
+            },
+            {
+              signal: this.abortSignal,
+              ...(this.config.traceWriter ? { traceWriter: this.config.traceWriter } : {}),
+            },
+          );
       // Invariant: queue SessionStart injectContext HERE — before the init loop
       // resolves initPromise. `sendMessageStreamInternal` awaits initPromise
       // before draining the queue, so this context rides the session's FIRST
       // outbound user message.
       //
-      // Parent-only: subagent forks run this same init path with the bubbled
-      // hook registry, so an unconditional queue would prepend session-priming
-      // context to EVERY subagent's first prompt. Gate on parentSessionId so
-      // only the parent session delivers it.
-      if (sessionStartInjectContext && this.config.parentSessionId === undefined) {
+      // Root-only: forked children skip dispatch above, so this is now also
+      // unreachable for forks. The guard is kept for clarity and defence-in-depth.
+      if (sessionStartInjectContext && !isForkedChild) {
         this.queueFrameworkContext(sessionStartInjectContext);
       }
 
@@ -179,6 +208,18 @@ export class ProviderInitializer {
           return;
         }
         const event = result.value;
+        // Invariant (#3442): stamp reducedToolSurface BEFORE transformProviderEvent,
+        // which resolves initPromise on session.init; stamping afterwards races
+        // waitForInitialization() callers. The init updater spreads `prev`, so the
+        // flag survives. Init metadata carries empty skills/tools, hence
+        // resolveSurfaceInputs (registry + executor wiring). The stderr warning is
+        // deferred to the first turn (session-send.ts) so probes stay quiet.
+        if (event.type === 'session.init') {
+          const surface = resolveSurfaceInputs(this.config, { skills: event.info.skills ?? [], tools: event.info.tools ?? [] });
+          if (isReducedToolSurface(surface)) {
+            stateManager.setSessionMetadata((prev) => ({ ...prev, reducedToolSurface: true }));
+          }
+        }
         const output = transformProviderEvent(event, buildTransformDeps());
         if (event.type === 'session.init') {
           // Witness layer: mark end of init phase with wall-clock duration.
@@ -203,7 +244,7 @@ export class ProviderInitializer {
         }
       }
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
+      const error = ensureError(err);
       if (error instanceof HookBlockedError) {
         this.accounting.markHookBlocked();
       }

@@ -23,7 +23,7 @@ export interface MockProviderHandle extends ModelProvider {
   queries: MockQueryHandle[];
 }
 
-export interface MockQueryHandle extends ProviderQuery {
+interface MockQueryHandle extends ProviderQuery {
   interruptCalls: number;
   closeCalls: number;
 }

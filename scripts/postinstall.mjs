@@ -162,6 +162,41 @@ export function isManualBotRunning(pidFilePath, probeFn = process.kill) {
 }
 
 /**
+ * Pure function. Encapsulates the platform + isGlobalInstall gate that guards
+ * daemon restarts in the main block. Extracted so unit tests can exercise the
+ * decision logic without running the `isMain` block.
+ *
+ * The function returns the array of labels that were restarted (empty when the
+ * guard fires and the restart is skipped), mirroring restartLaunchdServices.
+ *
+ * @param {object}   [opts]
+ * @param {string}   [opts.platform]    - Platform string; defaults to process.platform.
+ * @param {object}   [opts.env]         - Environment variable bag; defaults to process.env.
+ * @param {string}   [opts.pkgRoot]     - Absolute path to the package root.
+ * @param {function} [opts.existsFn]    - Injectable fs.existsSync for isGlobalInstall.
+ * @param {function} [opts.restartFn]   - Injectable restartLaunchdServices; defaults to the module export.
+ * @returns {string[]} Labels that were restarted, or [] when the guard fires.
+ */
+export function maybeRestartServices(opts = {}) {
+  const platform = opts.platform ?? process.platform;
+  const env = opts.env ?? process.env;
+  const pkgRoot =
+    opts.pkgRoot ?? fileURLToPath(new URL('..', import.meta.url));
+  const existsFn = opts.existsFn ?? existsSync;
+  const restartFn = opts.restartFn ?? restartLaunchdServices;
+
+  if (platform !== 'darwin') return [];
+  if (!isGlobalInstall(pkgRoot, env, existsFn)) return [];
+
+  try {
+    return restartFn({ labels: ['com.afk.daemon'] });
+  } catch {
+    // restartLaunchdServices is already fail-open; belt-and-suspenders.
+    return [];
+  }
+}
+
+/**
  * Restart installed AFK launchd services so they pick up the just-installed
  * code. A long-running Node process keeps the OLD module graph in memory after
  * `npm install -g` overwrites the files on disk; only a restart swaps it.
@@ -355,26 +390,19 @@ if (isMain) {
   // global package upgrade (`npm install -g`). A local `pnpm install` inside a
   // source checkout or managed worktree must NEVER trigger a restart — doing so
   // kills any in-flight sessions owned by that daemon. The isGlobalInstall()
-  // guard below enforces this; it fails closed toward NOT restarting whenever
-  // either detection signal is absent or ambiguous.
-  if (process.platform === 'darwin') {
-    if (isGlobalInstall(_pkgRoot, process.env, existsSync)) {
-      try {
-        const restarted = restartLaunchdServices({
-          labels: ['com.afk.daemon'],
-        });
-        if (restarted.length > 0) {
-          const names = restarted.map((l) => l.replace(/^com\.afk\./, '')).join(', ');
-          process.stdout.write(
-            `\n↻ Restarted AFK service(s) onto the new version: ${names}\n`,
-          );
-        }
-      } catch {
-        // restartLaunchdServices is already fail-open; belt-and-suspenders.
-      }
+  // guard inside maybeRestartServices enforces this; it fails closed toward NOT
+  // restarting whenever either detection signal is absent or ambiguous.
+  try {
+    const restarted = maybeRestartServices({ pkgRoot: _pkgRoot });
+    if (restarted.length > 0) {
+      const names = restarted.map((l) => l.replace(/^com\.afk\./, '')).join(', ');
+      process.stdout.write(
+        `\n↻ Restarted AFK service(s) onto the new version: ${names}\n`,
+      );
     }
+  } catch {
+    // maybeRestartServices is already fail-open; belt-and-suspenders.
   }
-
   // 2. A manually-started telegram bot (`afk telegram start`) is not supervised
   //    by launchd, so we cannot relaunch it safely from an npm lifecycle script.
   //    Earlier versions SIGTERM'd it here, which left it dead with nothing to

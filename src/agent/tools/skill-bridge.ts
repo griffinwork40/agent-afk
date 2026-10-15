@@ -21,7 +21,7 @@ import { listSkills, getSkill, registerSkill, isSkillVisible, evictSkillsByOrigi
 import { loadSkillPrompts } from '../../skills/_lib/prompt-loader.js';
 import { scanSkillsFromDir } from '../../skills/user-skills.js';
 import { scanLocalPlugins } from '../plugins-scanner.js';
-import { loadPluginEntrypoints } from '../plugins/load-entrypoints.js';
+import { loadPluginEntrypoints, registerPluginHook } from '../plugins/load-entrypoints.js';
 import { extractPluginSkills, resolveKnownToolNames } from '../plugins/tool-injector.js';
 import { extractPluginCommands } from '../plugins/command-files.js';
 import { readPluginManifest } from '../plugins/plugin-manifest.js';
@@ -53,6 +53,7 @@ import {
   readSourceEnabledState,
 } from '../../config/import-sources.js';
 import { errorMessage } from '../../utils/errors.js';
+import { loadJsonConfig } from '../../cli/config/json-tier.js';
 
 export interface SkillManifestEntry {
   name: string;
@@ -60,6 +61,24 @@ export interface SkillManifestEntry {
   source: 'builtin' | 'user' | 'project' | 'plugin' | 'imported' | 'command';
   argumentHint?: string;
   whenToUse?: string;
+  /**
+   * Long-form CLI flags for `--` completion, parsed once during discovery
+   * (#3332). Registry skills forward `SkillMetadata.flags`; plugin skills
+   * forward the flags resolved from their own SKILL.md (frontmatter `flags:`
+   * wins, else `argument-hint` + body scan).
+   */
+  flags?: readonly string[];
+  /** Job-to-be-done category authored in frontmatter / `registerSkill`. */
+  category?: string;
+  /**
+   * When `true`, this entry is hidden from the model-facing manifest.
+   * Set by: SKILL.md `disable-model-invocation: true` frontmatter (Claude Code
+   * parity) or when the skill name matches an entry in `skills.hidden` from
+   * `afk.config.json`. `collectSkillEntries()` propagates this flag so non-model
+   * consumers (`/skills`, `afk skill list`) can mark entries as "hidden" in their
+   * listing without repeating the config-read logic.
+   */
+  disableModelInvocation?: boolean;
 }
 
 /**
@@ -76,7 +95,11 @@ export function buildSkillManifest(
   pluginConfigs?: SdkPluginConfig[],
   opts?: BuildSkillManifestOptions,
 ): string {
-  const collected = collectSkillEntries(pluginConfigs, opts);
+  // opts.pluginConfigs wins over the positional argument when defined. This
+  // lets callers pass the full scope object without needing to hoist the
+  // pluginConfigs out separately.
+  const resolvedPluginConfigs = opts?.pluginConfigs !== undefined ? opts.pluginConfigs : pluginConfigs;
+  const collected = collectSkillEntries(resolvedPluginConfigs, opts);
   // Invariant: a skill-dispatch fork must never be handed its OWN catalogue
   // entry. Its system prompt already IS that skill's SKILL.md body, and the
   // manifest preamble tells the model to "Prefer a skill over inline
@@ -94,6 +117,17 @@ export function buildSkillManifest(
     exclude !== undefined && exclude.length > 0
       ? collected.filter((e) => e.name !== exclude && !e.name.endsWith(`:${exclude}`))
       : collected;
+  // Invariant: when an executor scope provides a skillAllowlist, only entries
+  // whose name is listed verbatim appear in the model-facing manifest. Exact
+  // string equality — `plugin:name` and bare `name` are NOT interchangeable.
+  // Undefined => no gate (today's default behaviour). This is the manifest
+  // analogue of the execute-time allowlist gate in SkillExecutor.execute().
+  // Filtered HERE so slash-command router and `/skills` still see every skill.
+  const allowlist = opts?.skillAllowlist;
+  const allowlisted =
+    allowlist !== undefined
+      ? named.filter((e) => allowlist.includes(e.name))
+      : named;
   // Invariant: Claude Code `commands/*.md` entries are user-invocable only and
   // never enter the model-facing catalogue.
   //
@@ -110,7 +144,14 @@ export function buildSkillManifest(
   // collectSkillEntries — same split the excludeName filter above uses — so
   // every non-model consumer (slash-command router, `/skills`, `afk skill
   // list`) still sees the complete set and commands stay fully invocable.
-  const entries = named.filter((e) => e.source !== 'command');
+  //
+  // Invariant: skills marked `disableModelInvocation` (either via SKILL.md
+  // `disable-model-invocation: true` frontmatter or via `skills.hidden` in
+  // afk.config.json) are also excluded here — they must be slash-invocable by
+  // users but invisible to the model's menu. The `disableModelInvocation` flag
+  // is already set on entries by `collectSkillEntries`; it is filtered here
+  // so the slash-command router and `/skills` still see and can invoke them.
+  const entries = allowlisted.filter((e) => e.source !== 'command' && !e.disableModelInvocation);
   if (entries.length === 0) return '';
 
   const lines: string[] = [];
@@ -126,7 +167,7 @@ export function buildSkillManifest(
   return [
     'Available skills (invoke via the `skill` tool):',
     '',
-    "Each skill either forks an isolated subagent (delegation — preserves the main session's context) or loads its instructions directly into your current context for you to execute directly. The mode is fixed per-skill, not per-call. To run a skill N times in parallel with isolation, dispatch N subagents (via `agent` or `compose`) that each call `skill` once. Prefer a skill over inline investigation when the task shape matches.",
+    "Each skill either forks an isolated subagent (delegation — preserves the main session's context) or loads its instructions directly into your current context for you to execute directly. The mode is fixed per-skill, not per-call. To run a skill N times in parallel with isolation, dispatch N subagents via parallel `agent` calls that each invoke `skill` once. Prefer a skill over inline investigation when the task shape matches.",
     '',
     ...lines,
   ].join('\n');
@@ -153,9 +194,10 @@ export interface CollectSkillEntriesOptions {
  * Options for {@link buildSkillManifest} — the model-facing manifest only.
  *
  * Contract: extends {@link CollectSkillEntriesOptions} with `excludeName`,
- * honored ONLY by `buildSkillManifest`. `collectSkillEntries` deliberately
- * ignores it so non-model consumers (slash-command router, skill listings)
- * always see the complete set.
+ * `pluginConfigs`, and `skillAllowlist`, all honored ONLY by
+ * `buildSkillManifest`. `collectSkillEntries` deliberately ignores them so
+ * non-model consumers (slash-command router, skill listings) always see the
+ * complete set.
  */
 export interface BuildSkillManifestOptions extends CollectSkillEntriesOptions {
   /**
@@ -164,6 +206,23 @@ export interface BuildSkillManifestOptions extends CollectSkillEntriesOptions {
    * cannot read its own entry and re-dispatch itself.
    */
   excludeName?: string;
+  /**
+   * Plugin configs to forward to `collectSkillEntries` as the sole plugin
+   * source, overriding the default full-scan. `[]` => no plugin skills.
+   * `undefined` => scan all plugin roots (today's default behaviour).
+   *
+   * Sourced from `SkillExecutor.getManifestScope().pluginConfigs`.
+   */
+  pluginConfigs?: SdkPluginConfig[];
+  /**
+   * When defined, only entries whose `name` is listed here appear in the
+   * model-facing manifest. Exact string equality — `plugin:name` and bare
+   * `name` are not interchangeable. `undefined` => no gate (today's default).
+   * `[]` => no skills listed.
+   *
+   * Sourced from `SkillExecutor.getManifestScope().skillAllowlist`.
+   */
+  skillAllowlist?: readonly string[];
 }
 
 // Invariant: skills before commands — SKILL.md wins over a same-named commands/*.md
@@ -174,6 +233,55 @@ function discoverPluginSkillsAndCommands(pluginPath: string, knownToolNames: Rea
     ...extractPluginSkills(pluginPath, knownToolNames),
     ...extractPluginCommands(pluginPath, knownToolNames),
   ];
+}
+
+/**
+ * Check whether a skill name is in the operator-configured `skills.hidden`
+ * list. Matching is bidirectional:
+ *   - Bare config entry "forge" hides qualified skill "awa-dev:forge" (suffix
+ *     match from the skill side).
+ *   - Qualified config entry "awa-dev:qualify" hides bare skill "qualify"
+ *     (the plugin prefixed its entry, but discovery registered the skill bare).
+ *
+ * Contract: this function is called from `collectSkillEntries` to annotate
+ * entries with `disableModelInvocation`; the actual filtering happens in
+ * `buildSkillManifest` (model-facing boundary only).
+ */
+function isHiddenByConfig(skillName: string, hiddenNames: ReadonlySet<string>): boolean {
+  if (hiddenNames.size === 0) return false;
+  // Exact match (bare entry matches bare skill; qualified entry matches qualified skill).
+  if (hiddenNames.has(skillName)) return true;
+  if (skillName.includes(':')) {
+    // Skill is qualified (e.g. "awa-dev:qualify"):
+    //   - bare entry "qualify" hides it (suffix match from skill side).
+    const bare = skillName.split(':').pop()!;
+    if (hiddenNames.has(bare)) return true;
+  } else {
+    // Skill is bare (e.g. "qualify"):
+    //   - qualified entry "awa-dev:qualify" in the config must also hide it
+    //     (the plugin prefixed its entry, but discovery registered the skill bare).
+    for (const entry of hiddenNames) {
+      if (entry.includes(':') && entry.split(':').pop() === skillName) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Read the `skills.hidden` list from `afk.config.json`. Returns an empty Set
+ * when the key is absent or malformed (fail-open: do not hide skills on config
+ * errors — failing closed here would make skills silently disappear on any
+ * config parse error, which is a worse outcome than showing them).
+ */
+function readHiddenSkillNames(): ReadonlySet<string> {
+  try {
+    const { config } = loadJsonConfig();
+    const hidden = config.skills?.hidden;
+    if (!Array.isArray(hidden) || hidden.length === 0) return new Set();
+    return new Set(hidden);
+  } catch {
+    return new Set();
+  }
 }
 
 /**
@@ -192,6 +300,10 @@ export function collectSkillEntries(
   // slash commands, the model could dispatch via the `skill` tool while end
   // users can't invoke directly — a worse failure mode than a clean split.
   const internalUnlocked = env.AFK_INTERNAL === '1';
+
+  // Operator-configured hidden-skill list. Read once per call (the config is a
+  // small JSON file; perf is negligible vs. the skill-dir scan that follows).
+  const hiddenNames = readHiddenSkillNames();
 
   // Resolve imported roots once — reused for both the skill-root scan loop
   // (step 1) and the plugin-config expansion (step 3). Avoids duplicate
@@ -237,7 +349,8 @@ export function collectSkillEntries(
   for (const name of listSkills()) {
     const skill = getSkill(name);
     if (!isSkillVisible(skill, internalUnlocked)) continue;
-    entries.push({
+    const dmi = skill.disableModelInvocation === true || isHiddenByConfig(name, hiddenNames);
+    const entry: SkillManifestEntry = {
       name,
       description: skill.description,
       source:
@@ -250,7 +363,11 @@ export function collectSkillEntries(
               : 'builtin',
       argumentHint: skill.argumentHint,
       whenToUse: skill.whenToUse,
-    });
+    };
+    if (skill.flags && skill.flags.length > 0) entry.flags = skill.flags;
+    if (skill.category) entry.category = skill.category;
+    if (dmi) entry.disableModelInvocation = true;
+    entries.push(entry);
     seen.add(name);
     if (name.includes(':')) seen.add(name.split(':').pop()!); // bare name for plugin-walk dedup
   }
@@ -272,13 +389,20 @@ export function collectSkillEntries(
     for (const skill of skills) {
       if (!skill.name || seen.has(skill.name)) continue;
       if (!isSkillVisible({ audience: skill.audience }, internalUnlocked)) continue;
-      entries.push({
+      const dmi = skill.disableModelInvocation === true || isHiddenByConfig(skill.name, hiddenNames);
+      const entry: SkillManifestEntry = {
         name: skill.name,
         description: skill.description ?? `Skill from plugin at ${plugin.path}`,
         source: skill.origin === 'command' ? 'command' : 'plugin',
         argumentHint: skill.argumentHint,
         whenToUse: skill.whenToUse,
-      });
+      };
+      // Metadata comes from the SAME SKILL.md that won discovery (first-wins
+      // scan order) — no cross-copy merge with shadowed same-named skills.
+      if (skill.flags && skill.flags.length > 0) entry.flags = skill.flags;
+      if (skill.category) entry.category = skill.category;
+      if (dmi) entry.disableModelInvocation = true;
+      entries.push(entry);
       seen.add(skill.name);
     }
   }
@@ -478,6 +602,8 @@ export async function ensurePluginEntrypointsLoaded(): Promise<void> {
   // discoverPluginSkillBodies, the session-facet substrate, the paths getters) WITHOUT a bare
   // `import 'agent-afk'` — which a marketplace-cloned plugin (no node_modules)
   // cannot resolve at all. See PluginApi for the full rationale.
+  //
+  // Declarations are installed on each session registry when it is created.
   await loadPluginEntrypoints(scanAllPluginRoots(), {
     pluginApi: {
       registerSkill,
@@ -495,6 +621,7 @@ export async function ensurePluginEntrypointsLoaded(): Promise<void> {
       listSessionIds,
       deriveSessionFacet,
       loadStoredSession,
+      registerHook: registerPluginHook,
     },
   });
 }

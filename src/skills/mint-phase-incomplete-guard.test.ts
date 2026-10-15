@@ -48,13 +48,13 @@ let runToResultBehavior: () => Promise<{
 });
 
 vi.mock('../agent/subagent.js', () => ({
-  SubagentManager: vi.fn(() => ({
+  SubagentManager: vi.fn(function () { return {
     forkSubagent: vi.fn(async () => ({
       id: 'mint-phase',
       runToResult: vi.fn(async () => runToResultBehavior()),
     })),
     teardownAll: vi.fn(async () => undefined),
-  })),
+  }; }),
 }));
 
 // Every phase loads its prompt via loadSkillPrompts('mint'); return a stub map

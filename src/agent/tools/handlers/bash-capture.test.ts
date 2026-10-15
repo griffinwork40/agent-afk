@@ -143,7 +143,7 @@ describe('bash capture — large output (model-truncated, command completes)', (
     expect(result.capturePath!).toContain('sess-path');
   });
 
-  // Windows: POSIX permission bits (chmod 0700) not supported on NTFS
+  // Windows: genuinely POSIX-only — NTFS has no POSIX permission bits; mode 0o700 assertion doesn't apply
   it.skipIf(isWin32)('capture parent directory has mode 0700 (owner only)', async () => {
     const result = await run(
       "python3 -c \"print('D2' * 55000)\"",
@@ -253,7 +253,7 @@ describe('bash capture — exitCode omitted when no OS status code is available'
 // SIGKILL (hard cap) path — no capture because middle bytes are unrecoverable
 // ---------------------------------------------------------------------------
 
-// Windows: head -c and /dev/zero are POSIX-only
+// Windows: genuinely POSIX-only — uses `head -c` and `/dev/zero`, which are POSIX-only commands/devices (#703)
 describe.skipIf(isWin32)('bash capture — SIGKILL overflow path (no capture)', () => {
   it('capturePath is undefined when command is killed at the hard cap', async () => {
     // Generate 9MB — crosses HARD_CAP_BYTES (8MB) and triggers SIGKILL

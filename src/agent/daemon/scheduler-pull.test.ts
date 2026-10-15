@@ -310,8 +310,10 @@ describe('stop', () => {
 describe('pull tick — elicitation handler lifecycle', () => {
   it('installs the elicitation handler for pull tasks and uninstalls it in finally', async () => {
     const { elicitationRouter } = await import('../elicitation-router.js');
-    const installSpy = vi.spyOn(elicitationRouter, 'install');
-    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstall');
+    // Daemon tasks now use installForSession/uninstallForSession (keyed slots)
+    // rather than the shared global install/uninstall (#3619).
+    const installSpy = vi.spyOn(elicitationRouter, 'installForSession');
+    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstallForSession');
 
     enqueue('/pull-elicitation-test', {}, queueDir);
     const scheduler = makeScheduler(queueDir, telemetryPath);
@@ -333,8 +335,8 @@ describe('pull tick — elicitation handler lifecycle', () => {
 
   it('does not install or uninstall elicitation handler on an empty pull tick', async () => {
     const { elicitationRouter } = await import('../elicitation-router.js');
-    const installSpy = vi.spyOn(elicitationRouter, 'install');
-    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstall');
+    const installSpy = vi.spyOn(elicitationRouter, 'installForSession');
+    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstallForSession');
 
     // An empty pull-tick (nothing in the queue) never reaches the install path.
     const scheduler = makeScheduler(queueDir, telemetryPath);
@@ -349,13 +351,19 @@ describe('pull tick — elicitation handler lifecycle', () => {
     uninstallSpy.mockRestore();
   });
 
-  it('does not install or uninstall elicitation handler for a cron runOnce tick', async () => {
+  it('installs and uninstalls the cron elicitation handler (not the pull handler) for a cron runOnce tick', async () => {
+    // Since #3243 gap-1 partial: cron ticks now install makeCronElicitationHandler
+    // so ask_question is visible (handoff written + notifyOn respected) rather
+    // than silently declined by the router's unattended path.
     const { elicitationRouter } = await import('../elicitation-router.js');
-    const installSpy = vi.spyOn(elicitationRouter, 'install');
-    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstall');
+    // Daemon tasks now use installForSession/uninstallForSession (#3619).
+    const installSpy = vi.spyOn(elicitationRouter, 'installForSession');
+    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstallForSession');
 
-    // Register a cron task and drive it via scheduler.tick() — the public
-    // seam used by scheduler.test.ts to invoke runOnce with trigger='cron'.
+    const handoffWiring = await import('./handoff-wiring.js');
+    const pullHandlerSpy = vi.spyOn(handoffWiring, 'makeDaemonElicitationHandler');
+
+    // Register a cron task and drive it via scheduler.tick().
     const scheduler = makeScheduler(queueDir, telemetryPath);
     scheduler.register({
       taskId: 'cron-elicitation-test',
@@ -365,12 +373,18 @@ describe('pull tick — elicitation handler lifecycle', () => {
     });
     await scheduler.tick('cron-elicitation-test');
 
-    expect(installSpy).not.toHaveBeenCalled();
-    expect(uninstallSpy).not.toHaveBeenCalled();
+    // The cron handler IS installed (and uninstalled) for visibility.
+    expect(installSpy).toHaveBeenCalledOnce();
+    expect(uninstallSpy).toHaveBeenCalledOnce();
+    // But the pull-task handler (makeDaemonElicitationHandler) is NOT used.
+    expect(pullHandlerSpy).not.toHaveBeenCalled();
+    // Handler must be cleaned up after the tick.
+    expect(elicitationRouter.hasHandler()).toBe(false);
 
     await scheduler.stop();
     installSpy.mockRestore();
     uninstallSpy.mockRestore();
+    pullHandlerSpy.mockRestore();
   });
 });
 

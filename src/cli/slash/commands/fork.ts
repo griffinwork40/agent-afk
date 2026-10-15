@@ -9,6 +9,10 @@
  * Two layers, decoupled:
  *   - Always: write the fork + print the resume command. This is the
  *     contract that can never fail silently.
+ *   - Best-effort: copy the parent's message journal (full tool_use /
+ *     tool_result content) under the new id so the fork resumes with full
+ *     fidelity. When the parent has no journal the fork is sidecar-only and
+ *     resumes via the text replay path, exactly as before.
  *   - Best-effort, local-interactive-REPL only: detect the terminal and open
  *     the fork in a new tab/window, or (if that doesn't happen) copy the
  *     resume command to the clipboard. Both degrade to the printed command —
@@ -17,10 +21,11 @@
 
 import { palette } from '../../palette.js';
 import { forkStoredSession } from '../../session-store.js';
+import { forkJournal } from '../../../agent/journal/index.js';
 import { formatResumeCommand } from '../../resume-command.js';
 import { copyToClipboard } from '../../clipboard.js';
 import { trySpawnTab, type SpawnOutcome, type TerminalKind } from '../../terminal-spawn/index.js';
-import type { SlashCommand } from '../types.js';
+import type { SlashCommand, SlashContext } from '../types.js';
 import { errorMessage } from '../../../utils/errors.js';
 
 const TERMINAL_LABELS: Record<TerminalKind, string> = {
@@ -65,6 +70,15 @@ export function forkSpawnLines(spawn: SpawnOutcome, command: string, copied: boo
   return lines;
 }
 
+/** Drain the running session's journal queue. Never throws (the flush is best-effort). */
+async function flushLiveJournal(ctx: SlashContext): Promise<void> {
+  try {
+    await ctx.session.current.messageJournal?.flush();
+  } catch {
+    // A failed flush just means a possibly-stale fold; the fork still proceeds.
+  }
+}
+
 export const forkCmd: SlashCommand = {
   name: '/fork',
   aliases: ['/branch'],
@@ -84,6 +98,14 @@ export const forkCmd: SlashCommand = {
     } catch (err) {
       ctx.out.error(`Could not fork: ${errorMessage(err)}`);
       return 'continue';
+    }
+    // Best-effort: `false` (no parent journal, journal disabled, write
+    // failure) leaves a sidecar-only fork, which still resumes. Never throws.
+    // The live journal writes through an async queue; flush it first so the
+    // on-disk fold forkJournal reads includes the latest messages.
+    if (ctx.stats.sessionId) {
+      await flushLiveJournal(ctx);
+      forkJournal(ctx.stats.sessionId, id);
     }
 
     const command = formatResumeCommand(id, ctx.stats.model);

@@ -27,7 +27,7 @@ import {
   parseAccountIdentifier,
 } from '../../../agent/auth/keychain.js';
 
-type ReauthResult = { accountId: string; swapped: boolean } | null;
+type ReauthResult = { accountId: string; oldAccountId: string; swapped: boolean } | null;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -104,22 +104,41 @@ describe('/reauth', () => {
     vi.mocked(loadClaudeCodeOauthToken).mockReturnValue('sk-ant-oat01-old');
     vi.mocked(parseAccountIdentifier).mockReturnValue('old@example.com');
 
-    const ctx = makeCtx(async () => ({ accountId: 'new@example.com', swapped: true }));
+    const ctx = makeCtx(async () => ({ accountId: 'new@example.com', oldAccountId: 'old@example.com', swapped: true }));
 
     const result = await reauthCmd.handler(ctx, '');
 
     expect(result).toBe('continue');
     expect(ctx.reauthCalls).toBe(1);
-    // The success line must mention the new account name.
+    // The success line must mention both old and new account names.
     expect(ctx.successes.some((s) => s.includes('new@example.com'))).toBe(true);
+    expect(ctx.successes.some((s) => s.includes('old@example.com'))).toBe(true);
     expect(ctx.successes.some((s) => /swapped|now authenticated/i.test(s))).toBe(true);
+  });
+
+  it('swapped with empty oldAccountId → uses fallback label, does not render bare arrow', async () => {
+    // Degenerate case: prior token was undefined at construction (first run
+    // before any `claude login`), so `parseAccountIdentifier('')` yields ''.
+    // The success message must not render `✓ Client swapped:  → new@example.com`
+    // (leading space before arrow) — the guard replaces '' with a readable label.
+    const ctx = makeCtx(async () => ({ accountId: 'new@example.com', oldAccountId: '', swapped: true }));
+
+    const result = await reauthCmd.handler(ctx, '');
+
+    expect(result).toBe('continue');
+    expect(ctx.successes.some((s) => s.includes('new@example.com'))).toBe(true);
+    // The fallback label must be non-empty before the arrow — not '  → new@…'.
+    const swappedLine = ctx.successes.find((s) => /→/.test(s));
+    expect(swappedLine).toBeDefined();
+    const beforeArrow = swappedLine!.split('→')[0] ?? '';
+    expect(beforeArrow.trim()).not.toBe('');
   });
 
   it('reports "token unchanged" when reauth returns swapped:false', async () => {
     vi.mocked(loadClaudeCodeOauthToken).mockReturnValue('sk-ant-oat01-same');
     vi.mocked(parseAccountIdentifier).mockReturnValue('same@example.com');
 
-    const ctx = makeCtx(async () => ({ accountId: 'same@example.com', swapped: false }));
+    const ctx = makeCtx(async () => ({ accountId: 'same@example.com', oldAccountId: 'same@example.com', swapped: false }));
 
     const result = await reauthCmd.handler(ctx, '');
 

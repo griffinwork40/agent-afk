@@ -308,7 +308,6 @@ export async function generatePromptSuggestion(
         model: deps.model,
         maxTokens: 48,
         signal: controller.signal,
-        apiKey: ctx.apiKey,
         baseUrl: ctx.baseUrl,
       }).then((raw) => ({ ok: true as const, raw })),
       abortPromise.then(() => ({ ok: false as const })),

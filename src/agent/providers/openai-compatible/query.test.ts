@@ -210,6 +210,9 @@ function makeDispatcherForPR2(opts?: { withDiff?: boolean }): {
 }
 
 beforeEach(() => {
+  // Exact-shape transcript assertions: keep the per-round [vitals] note out
+  // (covered by vitals-delivery.test.ts).
+  vi.stubEnv('AFK_VITALS', '0');
   createCalls = [];
   pendingChunks = [];
   pendingError = null;
@@ -386,6 +389,39 @@ describe('OpenAICompatibleProvider — system-prompt assembly order', () => {
     expect(iDoctrine).toBeLessThan(iHot); // before hot-memory project context
     expect(iDoctrine).toBeLessThan(iEnv); // before the # Environment reference block
   });
+
+  // Regression for #3261: a preset object { type:'preset', append } must forward
+  // the append text into the system message.  The pre-fix code used
+  //   `typeof config.systemPrompt === 'string' ? config.systemPrompt : undefined`
+  // which silently dropped the append text for non-string inputs.
+  it('preset {append} text reaches the system message (regression #3261)', async () => {
+    pendingChunks = [
+      {
+        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ];
+    const provider = new OpenAICompatibleProvider();
+    const q = provider.query({
+      prompt: singleInput('hi'),
+      config: {
+        model: 'gpt-4o-mini',
+        apiKey: 'sk-test-key',
+        systemPrompt: {
+          type: 'preset',
+          preset: 'claude_code',
+          append: 'PRESET_APPEND_SENTINEL',
+        },
+      } as AgentConfig,
+    });
+    await collect(q);
+
+    expect(createCalls).toHaveLength(1);
+    const args = createCalls[0]!.args as { messages: Array<{ role: string; content: string }> };
+    expect(args.messages[0]!.role).toBe('system');
+    // The append text must be present — it was silently dropped before #3261.
+    expect(args.messages[0]!.content).toContain('PRESET_APPEND_SENTINEL');
+  });
 });
 
 describe('OpenAICompatibleProvider — plan-mode gate via config.hookRegistry', () => {
@@ -484,6 +520,87 @@ describe('OpenAICompatibleProvider — plan-mode gate via config.hookRegistry', 
       expect(out.content).not.toContain('plan mode');
       expect(out.content).not.toContain('blocked by PreToolUse hook');
     }
+  });
+});
+
+describe('OpenAICompatibleProvider — config.isNonInteractive reaches the PreToolUse context (#2302)', () => {
+  // Parity with anthropic-direct: this provider wires itself as the session
+  // grant manager on every surface, so the bash-restriction hook's headless
+  // floor keys on `context.nonInteractive`. Pin the full query() path.
+  function scriptBashThenDone(): void {
+    installScriptedClient();
+    scriptedTurns = [
+      {
+        chunks: [
+          {
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: 'call_bash',
+                      type: 'function',
+                      function: { name: 'bash', arguments: JSON.stringify({ command: 'true' }) },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+            usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
+          },
+        ],
+      },
+      {
+        chunks: [
+          {
+            choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
+          },
+        ],
+      },
+    ];
+  }
+
+  async function captureCtx(over: Partial<AgentConfig>): Promise<{ nonInteractive: unknown; grantManagerWired: boolean }> {
+    scriptBashThenDone();
+    const seen = { nonInteractive: 'unset' as unknown, grantManagerWired: false };
+    const registry = createHookRegistry();
+    registry.register('PreToolUse', (ctx) => {
+      if (ctx.event === 'PreToolUse' && ctx.toolName === 'bash') {
+        seen.nonInteractive = ctx.nonInteractive;
+        seen.grantManagerWired = ctx.grantManager !== undefined;
+      }
+      // Block so the harmless command never actually spawns.
+      return { decision: 'block', reason: 'captured' };
+    });
+    // ask_question allowed too so the daemon-pull case can prove it survives.
+    const provider = new OpenAICompatibleProvider({ permissions: { allowedTools: ['bash', 'ask_question'] } });
+    await collect(provider.query({ prompt: singleInput('run it'), config: baseConfig({ hookRegistry: registry, ...over }) }));
+    return seen;
+  }
+
+  it('injects nonInteractive: true alongside the provider-wired grant manager', async () => {
+    const seen = await captureCtx({ isNonInteractive: true });
+    expect(seen.grantManagerWired).toBe(true);
+    expect(seen.nonInteractive).toBe(true);
+  });
+
+  it('leaves nonInteractive undefined on an interactive session', async () => {
+    const seen = await captureCtx({});
+    expect(seen.grantManagerWired).toBe(true);
+    expect(seen.nonInteractive).toBeUndefined();
+  });
+
+  it('daemon pull shape (surface daemon, isNonInteractive false): headless floor ON, ask_question KEPT', async () => {
+    const seen = await captureCtx({ surface: 'daemon', isNonInteractive: false });
+    expect(seen.grantManagerWired).toBe(true);
+    expect(seen.nonInteractive).toBe(true);
+    const tools = (createCalls[0]!.args as { tools?: Array<{ function?: { name?: string } }> }).tools ?? [];
+    expect(tools.map((t) => t.function?.name)).toContain('ask_question');
   });
 });
 
@@ -1091,13 +1208,13 @@ describe('OpenAICompatibleQuery — auth failure path', () => {
   it('emits session.init then error when no auth is resolvable', async () => {
     // Use hermetic auth deps so this test is isolated from the host machine's
     // real credentials. Without this, a developer whose ~/.codex/auth.json
-    // contains a ChatGPT OAuth bundle (and AFK_OPENAI_CHATGPT_OAUTH=1) will
+    // contains a ChatGPT OAuth bundle (the last-resort OAuth tier) will
     // resolve a real access_token — bypassing the no-auth path entirely and
     // sending the request on the Responses API wire. The mock only stubs
     // chat.completions.create, so this.client.responses.create would crash
     // with "Cannot read properties of undefined (reading 'create')".
     const noAuthDeps = {
-      readEnv: (_key: string) => undefined, // suppress OPENAI_API_KEY, CODEX_API_KEY, AFK_OPENAI_CHATGPT_OAUTH
+      readEnv: (_key: string) => undefined, // suppress OPENAI_API_KEY, CODEX_API_KEY
       homedir: () => '/nonexistent-test-home',
       readFile: (_path: string) => null, // no ~/.codex/auth.json
     };
@@ -1122,6 +1239,48 @@ describe('OpenAICompatibleQuery — auth failure path', () => {
     // covers that. Here we verify the error event surfaces the resolution.
     // This case is exercised by auth.test.ts + the integration above.
     expect(true).toBe(true);
+  });
+});
+
+describe('OpenAICompatibleQuery — warnedChatGptOAuth one-time stderr notice', () => {
+  afterEach(async () => {
+    // Reset the module-scope latch so it does not leak across test cases.
+    const { _resetChatGptOAuthNotice } = await import('./query.chatgpt-notice.js');
+    _resetChatGptOAuthNotice();
+  });
+
+  it('emits the chatgpt.com notice to stderr once per account, not on subsequent constructions', () => {
+    const written: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      written.push(typeof chunk === 'string' ? chunk : String(chunk));
+      return true;
+    });
+
+    const auth = { apiKey: 'tok', source: 'chatgpt-oauth' as const, last4: '_tok', accountId: 'acct-1' };
+
+    // First construction for this account: notice must fire.
+    const q1 = new OpenAICompatibleQuery({
+      auth,
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid1',
+      promptStream: singleInput('x'),
+      config: baseConfig(),
+    });
+    q1.close();
+    expect(written.filter((s) => s.includes('ChatGPT subscription OAuth'))).toHaveLength(1);
+
+    // Second construction for the same accountId: notice must NOT repeat.
+    const q2 = new OpenAICompatibleQuery({
+      auth,
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid2',
+      promptStream: singleInput('x'),
+      config: baseConfig(),
+    });
+    q2.close();
+    expect(written.filter((s) => s.includes('ChatGPT subscription OAuth'))).toHaveLength(1);
+
+    spy.mockRestore();
   });
 });
 
@@ -1340,7 +1499,7 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
 
     const rewind = await q.rewindFiles('fake-id');
     expect(rewind.canRewind).toBe(false);
-    expect(rewind.error).toContain('does not support');
+    expect(rewind.error).toContain('File checkpointing is not enabled');
 
     // NOTE: the in-loop `this.lastUsage = accumulatedUsage` write (query.ts:316)
     // is behaviorally tested in the 'in-loop lastUsage refresh (PR 527)' describe
@@ -3600,3 +3759,358 @@ describe('OpenAICompatibleQuery — witness-layer trace emission', () => {
     expect(halts).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Regression: extracted turn-driver context sees live mutations (issue #2565)
+//
+// The prior scouting split (commit 987d09c0) built TurnDriverContext as a plain
+// object literal with getters. Inside those getters `this` referred to the
+// literal, not the query instance — so mutable fields (currentModel,
+// currentPermissionMode, closed, responsesCompactionUnavailable) were always
+// read from construction-time snapshots. 145 of 517 provider tests broke.
+//
+// Fix: the class itself implements TurnDriverContext and passes `this` directly.
+// This test mutates currentModel via setModel() mid-session and asserts the
+// extracted runTurnInner function uses the updated value on the next turn.
+// ---------------------------------------------------------------------------
+describe('OpenAICompatibleQuery — extracted turn-driver sees live mutations (issue #2565)', () => {
+  beforeEach(() => {
+    createCalls = [];
+    pendingChunks = [];
+    pendingError = null;
+    installMockClient();
+    __setRetryBaseDelay(0);
+  });
+  afterEach(() => {
+    resetSlotBindings();
+  });
+
+  it('runTurnInner reads currentModel live after setModel() mutates it mid-session', async () => {
+    // Turn 1: start on gpt-4o-mini.
+    const controlled = makeControlledPromptStream();
+    const q = buildQueryFromConfig(baseConfig({ model: 'gpt-4o-mini' }), controlled.stream);
+    const iter = q[Symbol.asyncIterator]();
+    await iter.next(); // session.init
+
+    pendingChunks = [
+      { choices: [{ delta: { content: 'hi' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    controlled.send('turn-1');
+    let ev: IteratorResult<ProviderEvent>;
+    do { ev = await iter.next(); } while (!ev.done && ev.value.type !== 'turn.completed');
+
+    const turn1Model = (createCalls[0]!.args as { model: string }).model;
+    expect(turn1Model).toBe('gpt-4o-mini');
+
+    // Mutate model mid-session via setModel(). The extracted runTurnInner
+    // MUST read `ctx.currentModel` (live `this.currentModel`) not a snapshot.
+    await q.setModel('gpt-4o');
+
+    pendingChunks = [
+      { choices: [{ delta: { content: 'there' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    controlled.send('turn-2');
+    do { ev = await iter.next(); } while (!ev.done && ev.value.type !== 'turn.completed');
+
+    const turn2Model = (createCalls[1]!.args as { model: string }).model;
+    // The driver must have picked up the mutation and used gpt-4o, not gpt-4o-mini.
+    expect(turn2Model).toBe('gpt-4o');
+    expect(turn2Model).not.toBe('gpt-4o-mini');
+
+    q.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: setPermissionMode() mid-session is seen by next iteration
+//
+// Companion regression to the setModel test above. The permission-mode getter
+// must be live (backed by `_currentPermissionMode`) so the plan-mode addendum
+// injected in turn-iteration.ts:runIteration is computed from the CURRENT
+// mode, not a construction-time snapshot.
+// ---------------------------------------------------------------------------
+describe('OpenAICompatibleQuery — setPermissionMode mid-session seen by next turn', () => {
+  beforeEach(() => {
+    createCalls = [];
+    pendingChunks = [];
+    pendingError = null;
+    installMockClient();
+    __setRetryBaseDelay(0);
+  });
+  afterEach(() => {
+    resetSlotBindings();
+  });
+
+  it('currentPermissionMode reflects setPermissionMode() call before next turn', async () => {
+    const controlled = makeControlledPromptStream();
+    // Provide a systemPrompt so buildMessages always emits a system message — required for
+    // the plan-mode addendum injection in turn-iteration.ts:runIteration.
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'gpt-4o-mini', systemPrompt: 'you are helpful' }),
+      controlled.stream,
+    );
+    const iter = q[Symbol.asyncIterator]();
+    await iter.next(); // session.init
+
+    // Turn 1 in default mode.
+    pendingChunks = [
+      { choices: [{ delta: { content: 'ok' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    controlled.send('set me up');
+    let ev: IteratorResult<ProviderEvent>;
+    do { ev = await iter.next(); } while (!ev.done && ev.value.type !== 'turn.completed');
+
+    // Sanity: mode starts as 'default'.
+    expect(q.currentPermissionMode).toBe('default');
+
+    // Switch to plan mode mid-session.
+    await q.setPermissionMode('plan');
+    expect(q.currentPermissionMode).toBe('plan');
+
+    // Turn 2: the iteration must read the live value, not the snapshot.
+    pendingChunks = [
+      { choices: [{ delta: { content: 'planning...' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    controlled.send('make a plan');
+    do { ev = await iter.next(); } while (!ev.done && ev.value.type !== 'turn.completed');
+
+    // The turn-2 request body must contain the plan-mode addendum somewhere in
+    // the messages array — this proves runIteration read currentPermissionMode
+    // live rather than from a construction-time snapshot.
+    const turn2Args = createCalls[1]?.args as { messages?: Array<{ role: string; content: string }> } | undefined;
+    const allContent = (turn2Args?.messages ?? []).map((m) => m.content).join('\n');
+    expect(allContent).toContain(PLAN_MODE_ADDENDUM_TEXT);
+
+    q.close();
+  });
+});
+
+// ---- setSystemPrompt (#2420) ------------------------------------------------
+
+describe('OpenAICompatibleQuery — setSystemPrompt', () => {
+  beforeEach(() => {
+    installMockClient();
+    pendingChunks = [
+      { choices: [{ delta: { content: 'hi' } }] } as OpenAIChunk,
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } } as OpenAIChunk,
+    ];
+  });
+
+  it('setSystemPrompt mutates opts.config.systemPrompt when no factory is wired', () => {
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('hi'),
+      config: baseConfig({ systemPrompt: 'original' }),
+    });
+    const configRef = (q as unknown as { opts: { config: AgentConfig } }).opts.config;
+    expect(configRef.systemPrompt).toBe('original');
+
+    const result = q.setSystemPrompt('replaced');
+    expect(result).toBe(false); // no factory → false
+    expect(configRef.systemPrompt).toBe('replaced');
+    q.close();
+  });
+
+  it('setSystemPrompt invokes factory and returns true when factory is wired', () => {
+    const factory = vi.fn((base: string | undefined) => `BUILT:${base ?? ''}`);
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('hi'),
+      config: baseConfig({ systemPrompt: 'old' }),
+      systemPromptRebuildFactory: factory,
+    });
+    const configRef = (q as unknown as { opts: { config: AgentConfig } }).opts.config;
+
+    const result = q.setSystemPrompt('new base');
+    expect(result).toBe(true);
+    expect(factory).toHaveBeenCalledWith('new base');
+    expect(configRef.systemPrompt).toBe('BUILT:new base');
+    q.close();
+  });
+
+  it('provider.query() wires factory so setSystemPrompt swaps the base fragment', () => {
+    const provider = new OpenAICompatibleProvider();
+    const q = provider.query({
+      prompt: singleInput('hi'),
+      config: baseConfig({ systemPrompt: 'original-base' }),
+    });
+
+    const configRef = (q as unknown as { opts: { config: AgentConfig } }).opts.config;
+    const beforeSwap = configRef.systemPrompt as string;
+    expect(beforeSwap).toContain('original-base');
+
+    const result = q.setSystemPrompt('swapped-base');
+    expect(result).toBe(true); // factory is wired by provider
+    const afterSwap = configRef.systemPrompt as string;
+    expect(afterSwap).toContain('swapped-base');
+    expect(afterSwap).not.toContain('original-base');
+    q.close();
+  });
+});
+
+// ---- setBeforeNextRound (#2420) --------------------------------------------
+
+describe('OpenAICompatibleQuery — setBeforeNextRound', () => {
+  it('stores and exposes the callback via the beforeNextRound getter', () => {
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('hi'),
+      config: baseConfig(),
+    });
+    expect(q.beforeNextRound).toBeUndefined();
+
+    const cb = () => 'steering text';
+    q.setBeforeNextRound(cb);
+    expect(q.beforeNextRound).toBe(cb);
+
+    q.setBeforeNextRound(undefined);
+    expect(q.beforeNextRound).toBeUndefined();
+    q.close();
+  });
+});
+
+// ---- listRewindTargets / rewindConversation (#2420) -----------------------
+
+describe('OpenAICompatibleQuery — listRewindTargets and rewindConversation', () => {
+  it('listRewindTargets returns empty array before any turn', () => {
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('hi'),
+      config: baseConfig(),
+    });
+    expect(q.listRewindTargets()).toEqual([]);
+    q.close();
+  });
+
+  it('rewindConversation returns session-closed verdict on a closed query', async () => {
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('hi'),
+      config: baseConfig(),
+    });
+    q.close();
+    const result = await q.rewindConversation(0);
+    expect(result.rewound).toBe(false);
+    expect(result.reason).toBe('session-closed');
+  });
+
+  it('rewindConversation returns invalid-target for out-of-range index', async () => {
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('hi'),
+      config: baseConfig(),
+    });
+    const result = await q.rewindConversation(99);
+    expect(result.rewound).toBe(false);
+    expect(result.reason).toBe('invalid-target');
+    q.close();
+  });
+});
+
+describe('OpenAICompatibleQuery — Responses wire tool arguments on *.done events', () => {
+  // Regression for the "file_path must be a string" storms: the ChatGPT Codex
+  // backend can deliver parallel function-call arguments only on the terminal
+  // *.done events, with no argument deltas. Drives the real query loop
+  // end-to-end so translator → finalize → dispatch is covered as one path.
+  function runParallel(doneArgs: [string, string]): {
+    seen: Record<string, unknown>[];
+    run: () => Promise<ProviderEvent[]>;
+  } {
+    const seen: Record<string, unknown>[] = [];
+    const dispatcher = new SessionToolDispatcher({
+      handlers: new Map<string, ToolHandler>([
+        ['read_thing', async (input) => {
+          seen.push(input as Record<string, unknown>);
+          return { content: 'ok' };
+        }],
+      ]),
+      schemas: [{
+        name: 'read_thing',
+        description: 'Read',
+        input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+      }],
+      hookRegistry: createHookRegistry(),
+    });
+    let calls = 0;
+    __setOpenAIClientFactory(
+      () =>
+        ({
+          chat: { completions: { create: async () => { throw new Error('responses wire only'); } } },
+          responses: {
+            create: async () => {
+              calls++;
+              if (calls === 1) {
+                return (async function* () {
+                  for (const i of [0, 1]) {
+                    yield {
+                      type: 'response.output_item.added',
+                      output_index: i,
+                      item: { type: 'function_call', call_id: `c${i}`, name: 'read_thing', arguments: '' },
+                    };
+                  }
+                  for (const i of [0, 1]) {
+                    yield {
+                      type: 'response.output_item.done',
+                      output_index: i,
+                      item: { type: 'function_call', call_id: `c${i}`, name: 'read_thing', arguments: doneArgs[i] },
+                    };
+                  }
+                  yield { type: 'response.completed', response: { status: 'completed' } };
+                })();
+              }
+              return (async function* () {
+                yield { type: 'response.output_text.delta', delta: 'done' };
+                yield { type: 'response.completed', response: { status: 'completed' } };
+              })();
+            },
+          },
+        }) as unknown as OpenAI,
+    );
+    const run = async (): Promise<ProviderEvent[]> => {
+      const q = buildQueryFromConfig(baseConfig({ model: 'gpt-5.5' }), singleInput('go'), {
+        useResponsesApi: true,
+        toolDispatcher: dispatcher,
+      });
+      const events = await collect(q);
+      q.close();
+      installMockClient();
+      return events;
+    };
+    return { seen, run };
+  }
+
+  it('dispatches parallel calls with the arguments carried on output_item.done', async () => {
+    const { seen, run } = runParallel(['{"path":"/a"}', '{"path":"/b"}']);
+    await run();
+    expect(seen).toEqual([{ path: '/a' }, { path: '/b' }]);
+  });
+
+  it('labels a required-arg call with no arguments as a delivery failure', async () => {
+    const { run } = runParallel(['', '']);
+    const events = await run();
+    const outputs = events.filter((e) => e.type === 'tool.output');
+    expect(outputs).toHaveLength(2);
+    for (const o of outputs) {
+      expect(o).toMatchObject({ isError: true });
+      expect((o as { content: string }).content).toMatch(/No arguments received from the API for tool "read_thing"/);
+    }
+  });
+});
+
+// Public checkpoint lifecycle regressions live in file-checkpoint/provider-rewind.test.ts.

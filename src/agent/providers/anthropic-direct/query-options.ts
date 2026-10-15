@@ -35,6 +35,11 @@ const STARTER_MODELS: ReadonlyArray<{ value: string; displayName: string; descri
     description: 'Newer balanced Claude — adaptive thinking, new tokenizer',
   },
   {
+    value: 'claude-sonnet-5-5',
+    displayName: 'Claude Sonnet 5.5',
+    description: 'Faster, cheaper Sonnet — adaptive thinking, 1M context',
+  },
+  {
     value: 'claude-opus-5',
     displayName: 'Claude Opus 5',
     description: 'Highest-capability Claude for agentic coding',
@@ -45,9 +50,19 @@ const STARTER_MODELS: ReadonlyArray<{ value: string; displayName: string; descri
     description: 'Faster, cheaper Opus — extended thinking, adaptive by default',
   },
   {
+    value: 'claude-fable-5-1',
+    displayName: 'Claude Fable 5.1',
+    description: 'Max-capability Claude — long-horizon agentic coding and research, 1M context',
+  },
+  {
+    value: 'claude-haiku-5-5',
+    displayName: 'Claude Haiku 5.5',
+    description: 'Fastest, cheapest Claude — adaptive thinking, 1M context',
+  },
+  {
     value: 'claude-haiku-4-5-20251001',
     displayName: 'Claude Haiku 4.5',
-    description: 'Fastest, cheapest Claude',
+    description: 'Previous Haiku — 200k context, no adaptive thinking',
   },
 ];
 
@@ -58,7 +73,16 @@ export interface AnthropicDirectQueryOptions {
   promptStream: AsyncIterable<ProviderUserTurn>;
   toolDispatcher: ToolDispatcher;
   sessionId?: string;
+  /**
+   * The session's resolved working directory (`config.cwd || process.cwd()`).
+   * Stored and surfaced via the `TurnDriverContext.cwd` field so `session.init`
+   * and other metadata report the session's own cwd, not the host process's.
+   * Absent callers (tests, external integrations) fall back to `process.cwd()`.
+   */
+  cwd?: string;
   initialMessages?: MessageParam[];
+  /** Durable message-journal sink (`AgentConfig.messageJournal`); seeded into SessionState. */
+  messageJournal?: import('../../journal/index.js').MessageJournal;
   /**
    * Conservative token estimate seeded from the last completed turn of a
    * restored session (#1294). When non-zero, used as the initial `lastUsage`
@@ -82,6 +106,10 @@ export interface AnthropicDirectQueryOptions {
   permissionMode?: string;
   maxTokens: number;
   tools: AnthropicToolDef[] | null;
+  /** Rebuild the dispatcher and advertised catalog together for a changed slot deny key. */
+  modelToolsFactory?: (model: string, permissionMode: string) => { dispatcher: ToolDispatcher; tools: AnthropicToolDef[] };
+  /** Called on every non-empty setModel() so later rebuilds (cwd re-anchor) see the live model. */
+  onModelChange?: (model: string) => void;
   userSystem: string | null;
   systemPrefix: ContentBlockParam[] | null;
   /** When set, called on 401 to obtain a fresh SDK client. Retry once. */
@@ -89,11 +117,26 @@ export interface AnthropicDirectQueryOptions {
   /** Extended thinking configuration forwarded to `messages.create`. */
   thinking?: import('@anthropic-ai/sdk/resources').ThinkingConfigParam;
   /**
+   * Original unresolved thinking config from `AgentConfig.thinking`. When set,
+   * the `turnDriverContext()` getter re-resolves thinking per-turn against the
+   * CURRENT model so a mid-session `/model fable` switch picks up the Fable 5.1
+   * adaptive shape instead of replaying a Sonnet `{type:'enabled', budget_tokens}`
+   * that Fable rejects with HTTP 400.
+   */
+  rawThinkingConfig?: import('../../types/sdk-types.js').ThinkingConfig;
+  /**
    * Effort level forwarded as `output_config.effort` to `messages.create`.
    * When set, the per-request `anthropic-beta` header is extended with the
    * effort beta string via the `withEffort` flag on `buildRequestHeaders`.
    */
   effort?: import('../../types/sdk-types.js').EffortLevel;
+  /**
+   * Original unresolved caller effort from `AgentConfig.effort`. When set,
+   * the `turnDriverContext()` getter re-resolves effort per-turn against the
+   * CURRENT model so a mid-session `/model fable` switch gets Fable's `high`
+   * default instead of Sonnet's `max`.
+   */
+  rawEffort?: import('../../types/sdk-types.js').EffortLevel;
   /** Sampling temperature forwarded to `messages.create`. Omit for server default. */
   temperature?: number;
   /**
@@ -212,6 +255,13 @@ export interface AnthropicDirectQueryOptions {
    * can inject mid-run guidance without a new user turn.
    */
   beforeNextRound?: () => string | undefined;
+  /**
+   * When true, file-writing tool calls (write_file, edit_file, patch_apply)
+   * snapshot pre-edit file content before each user turn so rewindFiles() can
+   * restore the working tree to its pre-turn state. Disabled by default.
+   * Bash-made file mutations are NOT captured (out of scope).
+   */
+  enableFileCheckpointing?: boolean;
 }
 
 /** Snapshot of the starter list, freshly cloned per call (callers may mutate). */

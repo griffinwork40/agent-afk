@@ -164,7 +164,7 @@ exempts prose. Reversible via one constant if tests should be included later.
 6. `.github/workflows/ci.yml`: new step beside the other audits.
 7. `.gitattributes`: `-merge -diff` on the baseline so git never invents a broken
    JSON hybrid; collisions are resolved by regeneration, not by editing markers.
-8. Document in **both** AFK.md and CLAUDE.md (they drifted apart once already).
+8. Document in AFK.md (the single home; CLAUDE.md was removed).
 
 ### Phase 0.5 — guards the critique earned
 
@@ -244,7 +244,7 @@ products. Two defenses:
    contains raw `process.env` or `chalk.<style>` (exact-string allowlists).
 8. Verify test reach before splitting; do not add, rename, or modify any test file
    — zero test churn is the parity proof both precedent commits cite.
-9. Run `pnpm lint`, then `pnpm test <file>` (**no `--`**: pnpm 10 drops args after
+9. Run `pnpm lint`, then `pnpm test <file>` (**no `--`**: pnpm 10+ drops args after
    `--` and runs the entire suite).
 10. Return `UNSPLITTABLE` + reason rather than shave. A parked file is a valid
     outcome; a shaved file is not.
@@ -311,7 +311,9 @@ correct, and two returned *strong* alternatives against the all-136 campaign
 - **Baseline is a merge-conflict magnet** — every wave removes its files from it.
   Mitigated by generation (`--update-baseline`) + `.gitattributes -merge`;
   resolution is `git checkout origin/main -- .filesize-baseline.json &&
-  pnpm audit:filesize:update`, never editing conflict markers.
+  pnpm audit:filesize:update`, never editing conflict markers. Growth is refused
+  by default — pass `--allow-growth --reason "<text>"` to record a deliberate
+  increase; shrinks and removals are always allowed.
 - **Coverage floor has only ~1.4pt headroom** (74/79/82/74 vs 75.42/80.65/83.9/75.42).
 - **esbuild silently tree-shakes orphan siblings** — no CI signal; `build:dist`
   per wave is the only detector.

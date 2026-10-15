@@ -24,7 +24,21 @@ import { LoopStageBar } from '../../src/cli/commands/interactive/loop-stage.js';
 import { renderMarkdownToTerminal } from '../../src/cli/formatter.js';
 import { formatSubmittedEcho } from '../../src/cli/input/echo.js';
 import { commitBlockAbove } from '../../src/cli/_lib/commit-block.js';
+import { StreamingMarkdownRenderer } from '../../src/cli/markdown-stream.js';
+import { SMOKE_GLYPHS } from '../../src/cli/smoke-reveal.js';
+import { OverlayComposer } from '../../src/cli/_lib/overlay-composer.js';
+import { armSmokeEffects, THOUGHT_SUMMARY_SLOT } from '../../src/cli/_lib/stream-renderer-smoke.js';
+import { ToolLane } from '../../src/cli/commands/interactive/tool-lane.js';
+import { formatThoughtSummary } from '../../src/cli/commands/interactive/thinking-lane.js';
 import { buildResizeMarker } from './constants.js';
+
+/**
+ * Placement mode under test. The parent runs every scenario twice — legacy
+ * bottom-pinned and content-hug (the interactive REPL's mode) — passing
+ * AFK_PTY_CONTENT_HUG=1 into the pty child's env for the second run. Every
+ * scrollback expectation (exactly-once, order, no blank void) must hold in both.
+ */
+const CONTENT_HUG = process.env['AFK_PTY_CONTENT_HUG'] === '1';
 
 /** Runtime handed to a scenario's drive() from inside the pty child. */
 export interface PtyDriveCtx {
@@ -45,6 +59,18 @@ export interface PtyExpect {
   exactlyOnce?: string[];
   /** Substrings that MUST NOT appear anywhere in the buffer. */
   absent?: string[];
+  /**
+   * Content-hug only. Discount the one sanctioned duplicate before the
+   * exactlyOnce / absent / order checks: rows a tall overlay covered are in
+   * scrollback AND re-shown on screen after the collapse (archived prefix,
+   * src/cli/terminal-compositor.band-archived-prefix.ts), so the longest
+   * scrollback TAIL equal to the viewport's FIRST rows is counted once. A
+   * duplicate anywhere else (inside scrollback, or not at the seam) still
+   * fails. A real pty cannot expose compositor state, so this is the
+   * structural form of src/cli/_lib/testing/scrollback-seam.ts, which unit
+   * tests use to pin the overlap to the compositor-reported row count.
+   */
+  seamOverlap?: boolean;
   /**
    * Max run of consecutive blank rows between the first content row and the
    * live frame in the viewport. One blank is the legit rhythm separator; a
@@ -92,6 +118,13 @@ export interface PtyScenario {
   ref: string;
   drive(ctx: PtyDriveCtx): Promise<void> | void;
   expect: PtyExpect;
+  /**
+   * Expectations for the content-hug run, when the scenario's PRECONDITION is
+   * specific to bottom-pinned placement (e.g. content evicted by frame growth,
+   * which content-hug deliberately hides as pending instead). Defaults to
+   * {@link expect}.
+   */
+  hugExpect?: PtyExpect;
 }
 
 /** Let the frame's async spinner/flush settle before the next step. */
@@ -157,6 +190,35 @@ const TABLE_MD = [
   '| 3 | thread cwd through daemon | daemon.ts | plumbing |',
 ].join('\n');
 
+/**
+ * Drive the REAL StreamingMarkdownRenderer through an armed compositor with
+ * AFK_SMOKE_TEXT on, pushing `text` in small token-sized chunks. The env var
+ * is set inside the pty child (drive() runs there), before the renderer
+ * reads it at construction. The renderer reads it only once, so the previous
+ * value is restored on exit. That keeps the helper from leaking the flag if
+ * it is ever reused in-process.
+ */
+async function streamWithSmoke(ctx: PtyDriveCtx, text: string): Promise<StreamingMarkdownRenderer> {
+  const prev = process.env['AFK_SMOKE_TEXT'];
+  process.env['AFK_SMOKE_TEXT'] = '1';
+  try {
+    const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout: ctx.stdout, stdin: ctx.stdin, onCancel: () => {}, anchorRow: 1 });
+    await c.arm();
+    const md = new StreamingMarkdownRenderer({ out: ctx.stdout, compositor: c });
+    for (let i = 0; i < text.length; i += 12) {
+      md.push(text.slice(i, i + 12));
+      await settle(15);
+    }
+    return md;
+  } finally {
+    if (prev === undefined) delete process.env['AFK_SMOKE_TEXT'];
+    else process.env['AFK_SMOKE_TEXT'] = prev;
+  }
+}
+
+const SMOKE_PARA_1 = 'SMOKEONE_START the first paragraph streams in and commits whole SMOKEONE_END';
+const SMOKE_PARA_2 = 'SMOKETWO_START the second paragraph stays live in the overlay';
+
 export const SCENARIOS: Record<string, PtyScenario> = {
   // ─────────────────────────────────────────────────────────────────────────
   // multi-commit: many commitAbove calls under a held tall overlay overflow the
@@ -172,7 +234,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     ref: 'terminal-compositor.multi-commit-gap.test.ts',
     async drive({ stdout, stdin }): Promise<void> {
       const statusLine = wireProductionFooter(stdout, 'STATUSMODELXYZ');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       const ix = c as unknown as Repaintable;
       c.setSpinner({ enabled: true });
@@ -204,6 +266,20 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       contentAnchors: ['TOOL_OUTPUT_17', 'Done (114 tools)'],
       maxViewportBlankRun: 1,
     },
+    // content-hug: rows covered by the held overlay are archived AND re-shown
+    // after it clears (archived prefix), so they also sit at the scrollback
+    // tail; seamOverlap discounts exactly that overlap.
+    hugExpect: {
+      inScrollback: ['TOOL_OUTPUT_00', 'TOOL_OUTPUT_01'],
+      inViewport: ['Done (114 tools)'],
+      seamOverlap: true,
+      exactlyOnce: [
+        'TOOL_OUTPUT_00', 'TOOL_OUTPUT_05', 'TOOL_OUTPUT_11', 'TOOL_OUTPUT_17',
+        'Done (114 tools)', 'STATUSMODELXYZ',
+      ],
+      contentAnchors: ['TOOL_OUTPUT_17', 'Done (114 tools)'],
+      maxViewportBlankRun: 1,
+    },
   },
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -219,7 +295,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     ref: '#539 · terminal-compositor.collapse-void.test.ts',
     async drive({ stdout, stdin }): Promise<void> {
       const statusLine = wireStatusLine(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       statusLine.setExtraRows(1);
       c.setSpinner({ enabled: true });
@@ -246,6 +322,24 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       maxViewportBlankRun: 1,
       order: [['HEADER-MARKER', 'PROSE-01'], ['PROSE-06', 'BODY-TAIL-ROW']],
     },
+    // content-hug archives rows the tall overlay covers as soon as they are
+    // covered (no history hole mid-turn) and RETAINS them as the archived
+    // prefix, so the collapse re-shows the whole report on screen (no blank
+    // gap below the prompt). The covered rows are therefore also at the tail
+    // of scrollback until new output displaces them: seamOverlap discounts
+    // exactly that overlap; everything else stays exactly-once, in order.
+    hugExpect: {
+      inViewport: ['HEADER-MARKER', 'PROSE-01', 'PROSE-06', 'BODY-TAIL-ROW', 'pass cwd to scheduler'],
+      seamOverlap: true,
+      exactlyOnce: [
+        'HEADER-MARKER', 'PROSE-01', 'PROSE-03', 'PROSE-06',
+        'BODY-TAIL-ROW', 'pass cwd to scheduler', 'thread cwd through daemon',
+        'Nature',
+      ],
+      maxViewportBlankRun: 1,
+      contentAnchors: ['BODY-TAIL-ROW'],
+      order: [['HEADER-MARKER', 'PROSE-01'], ['PROSE-01', 'PROSE-06'], ['PROSE-06', 'BODY-TAIL-ROW']],
+    },
   },
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -262,7 +356,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     ref: 'terminal-compositor.overflow-gap.test.ts',
     async drive({ stdout, stdin }): Promise<void> {
       const statusLine = wireStatusLine(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       statusLine.setExtraRows(2); // StatusLine + LoopStageBar + VerdictLedger
       c.setSpinner({ enabled: true });
@@ -316,7 +410,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
         },
         getExtraRows(): number { return 0; },
       };
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion, anchorRow: 1 });
       await c.arm();
       const tall = Array.from({ length: 12 }, (_, i) => `stream line ${i}`).join('\n');
       c.setOverlay(tall);
@@ -361,7 +455,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       const MESSAGE = 'Reply with only the word ok and nothing else. DUPCHECK alpha bravo charlie delta echo foxtrot golf hotel india';
       for (let i = 0; i < BANNER_ROWS; i++) stdout.write(`BANNER_LINE_${i}\n`);
       const statusLine = wireProductionFooter(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: BANNER_ROWS + 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: BANNER_ROWS + 1 });
       await c.arm();
       const ix = c as unknown as Repaintable;
       // Pre-submit chrome cycle: transient chrome then collapse back to idle.
@@ -426,7 +520,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     async drive(ctx): Promise<void> {
       const { stdout, stdin } = ctx;
       const statusLine = wireProductionFooter(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       const ix = c as unknown as Repaintable;
       c.setSpinner({ enabled: true });
@@ -473,7 +567,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     async drive(ctx): Promise<void> {
       const { stdout, stdin } = ctx;
       const statusLine = wireProductionFooter(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       const ix = c as unknown as Repaintable;
       c.setSpinner({ enabled: true });
@@ -520,7 +614,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     async drive(ctx): Promise<void> {
       const { stdout, stdin } = ctx;
       const statusLine = wireProductionFooter(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       const ix = c as unknown as Repaintable;
       c.setSpinner({ enabled: true });
@@ -574,7 +668,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     async drive(ctx): Promise<void> {
       const { stdout, stdin } = ctx;
       const statusLine = wireProductionFooter(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       const ix = c as unknown as Repaintable;
       c.setSpinner({ enabled: true });
@@ -613,6 +707,10 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       // overflow)` (physical rows) makes this measure 4 and fail.
       logicalSpan: { from: 'LOGSTART', to: 'LOGEND', maxNonWrappedRows: 1 },
     },
+    // No hugExpect: since the 2026-10-02 no-history-hole change content-hug
+    // evicts growth-covered rows to scrollback exactly like bottom-pinned (it
+    // used to hide them as pending), so both modes share the eviction
+    // precondition and the soft-wrap rejoin assertion above.
   },
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -658,7 +756,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       // by a CUP-positioned frame that mis-measured the anchor row.
       const anchorRow = BANNER_ROWS + 3; // banner + 2 warnings + blank
       const statusLine = wireProductionFooter(stdout, 'M');
-      const c = new TerminalCompositor({
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG,
         stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow,
       });
       await c.arm();
@@ -695,6 +793,460 @@ export const SCENARIOS: Record<string, PtyScenario> = {
         ['SHADOWWARN', 'MCPWARN'],
         ['MCPWARN', 'FIRST_TURN_OUTPUT'],
       ],
+    },
+    // content-hug (#2229): the first commit no longer scrolls the banner into
+    // scrollback. The first reply flows directly UNDER the banner and the
+    // warnings, so all of them stay in the VIEWPORT (baseY=0). The invariant
+    // under test is unchanged (the post-clear warnings survive the arm and the
+    // first commit, exactly once, in order); only their location differs.
+    hugExpect: {
+      absent: ['PRECLEAR_LINE_0', 'PRECLEAR_LINE_29'],
+      inViewport: ['POSTCLEAR_BANNER_0', 'SHADOWWARN', 'MCPWARN', 'FIRST_TURN_OUTPUT'],
+      // The banner too: keeping it on screen must never duplicate it.
+      exactlyOnce: ['POSTCLEAR_BANNER_0', 'POSTCLEAR_BANNER_9', 'SHADOWWARN', 'MCPWARN', 'FIRST_TURN_OUTPUT'],
+      order: [
+        ['POSTCLEAR_BANNER_9', 'SHADOWWARN'],
+        ['SHADOWWARN', 'MCPWARN'],
+        ['MCPWARN', 'FIRST_TURN_OUTPUT'],
+      ],
+    },
+  },
+  // ─────────────────────────────────────────────────────────────────────────
+  // smoke-text (AFK_SMOKE_TEXT): the reveal mask must never corrupt what
+  // reaches the terminal. Paragraph 1 crosses a \n\n boundary and commits
+  // (unmasked, exactly once). Paragraph 2 stays in the live overlay, and after
+  // the stream stops the settle driver alone must finish the fade, leaving
+  // real text with no smoke glyphs behind.
+  // ─────────────────────────────────────────────────────────────────────────
+  'smoke-text-settles': {
+    description: 'AFK_SMOKE_TEXT: committed prose is intact and the live tail settles to real text with no new pushes',
+    cols: 100,
+    rows: 24,
+    ref: 'src/cli/smoke-reveal.ts',
+    async drive(ctx): Promise<void> {
+      await streamWithSmoke(ctx, `${SMOKE_PARA_1}\n\n${SMOKE_PARA_2} SMOKETWO_END`);
+      await settle(900); // no pushes from here on: only the settle driver repaints
+    },
+    expect: {
+      exactlyOnce: ['SMOKEONE_START', 'SMOKEONE_END', 'SMOKETWO_START', 'SMOKETWO_END'],
+      order: [['SMOKEONE_END', 'SMOKETWO_START']],
+      // Every smoke glyph, including the faintest speck, must be gone.
+      absent: [...SMOKE_GLYPHS],
+    },
+  },
+
+  // Positive control for the scenario above: prove the mask is actually
+  // active through the real compositor, so 'smoke-text-settles' cannot pass
+  // just because the effect silently stayed off. The lead text settles. The
+  // final chunk is snapshotted ~40ms after arrival, while it is still smoke
+  // or not yet revealed, so its marker must not be readable yet.
+  'smoke-text-mid-fade': {
+    description: 'AFK_SMOKE_TEXT: text that just arrived is still smoke (the mask is live through the compositor)',
+    cols: 100,
+    rows: 24,
+    ref: 'src/cli/smoke-reveal.ts',
+    async drive(ctx): Promise<void> {
+      const md = await streamWithSmoke(ctx, SMOKE_PARA_2);
+      await settle(700);
+      md.push(' SMOKETWO_END');
+      await settle(40);
+    },
+    expect: {
+      exactlyOnce: ['SMOKETWO_START'],
+      // Deliberately no positive smoke-glyph assertion: at 40ms the chunk may
+      // still be an unrevealed blank placeholder rather than a glyph, so
+      // requiring a specific glyph races the fade and flaked on CI.
+      absent: ['SMOKETWO_END'],
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // smoke-fade-status-order (AFK_SMOKE_TEXT machine-status fade): the
+  // `◆ thought for Xs` summary is HELD in the overlay while it fades, and a
+  // tool row fades in below it. A tool row committed to scrollback mid-fade
+  // must land BELOW the summary (the compositor commit barrier pulls the held
+  // summary in first), each exactly once, and both must settle to real text.
+  // Without the barrier the summary would commit ~210ms later, after the tool
+  // row, and the order assertion fails.
+  // ─────────────────────────────────────────────────────────────────────────
+  'smoke-fade-status-order': {
+    description: 'AFK_SMOKE_TEXT: a held thought summary commits above a tool row committed during its fade, exactly once',
+    cols: 100,
+    rows: 24,
+    ref: 'src/cli/_lib/thought-summary-hold.ts',
+    async drive(ctx): Promise<void> {
+      process.env['AFK_SMOKE_TEXT'] = '1';
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout: ctx.stdout, stdin: ctx.stdin, onCancel: () => {}, anchorRow: 1 });
+      await c.arm();
+      const composer = new OverlayComposer(c, [THOUGHT_SUMMARY_SLOT, 'tool-lane']);
+      const lane = new ToolLane();
+      composer.register({ key: 'tool-lane', render: () => lane.getOverlay() });
+      const fx = armSmokeEffects({
+        compositor: c,
+        overlayComposer: composer,
+        toolLane: lane,
+        reducedMotion: false,
+        deferFlush: (slot) => { composer.markDirty(slot); queueMicrotask(() => composer.flush()); },
+      });
+      if (!fx) throw new Error('armSmokeEffects returned null: AFK_SMOKE_TEXT did not engage in the pty child');
+      fx.thoughtHold.hold(formatThoughtSummary(4321, 200)); // "thought for 4.3s"
+      lane.addStart('tu_fade', 'Read', '("FADEROW_MARK.ts")');
+      lane.addResult('tu_fade', { type: 'tool_result', toolUseId: 'tu_fade', content: 'ok', isError: false });
+      composer.markDirty('tool-lane');
+      composer.flush();
+      await settle(40); // mid-fade for both elements
+      const rows = lane.flush();
+      composer.markDirty('tool-lane');
+      composer.flush();
+      commitBlockAbove(c, rows);
+      await settle(500); // well past both fades; only the frame driver repaints
+      fx.dispose();
+      c.endTurn();
+    },
+    expect: {
+      exactlyOnce: ['thought for 4.3s', 'FADEROW_MARK'],
+      order: [['thought for 4.3s', 'FADEROW_MARK']],
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // sigwinch-mid-streaming (#1767): SIGWINCH arrives while the compositor is
+  // actively streaming — the overlay is held non-empty when requestResize
+  // fires, exactly mimicking a token-streaming LLM turn where the user resizes
+  // the terminal window. The onResize() path in StatusLine must call
+  // eraseReservedBand() (fixed by 2377337d) before repainting; without the
+  // fix, the full-screen scroll that repositions the frame drags the status
+  // line and LoopStageBar into the reserved footer band and leaves ghost copies
+  // between absoluteBottom and the newly painted status line.
+  //
+  // Regression guard (fixes 9d2aa8da / 2377337d): after the resize AND after
+  // turn completion (overlay collapsed, spinner off), the status-line model id
+  // must appear EXACTLY ONCE across the whole emulator buffer. Any additional
+  // copy is a ghost status-line left by the onResize() path.
+  // ─────────────────────────────────────────────────────────────────────────
+  'sigwinch-mid-streaming': {
+    description: 'SIGWINCH mid-streaming leaves no ghost status-line or footer-bar copies (9d2aa8da / 2377337d)',
+    cols: 100,
+    rows: 28,
+    ref: '#1767 · status-line.ts onResize() eraseReservedBand',
+    async drive(ctx): Promise<void> {
+      const { stdout, stdin } = ctx;
+      const statusLine = wireProductionFooter(stdout, 'STREAMMODELXYZ');
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      await c.arm();
+      const ix = c as unknown as Repaintable;
+      c.setSpinner({ enabled: true });
+
+      // Phase 1 — pre-resize streaming: push enough content to overflow the
+      // viewport under the tall overlay, so early commits land in scrollback
+      // and the scenario exercises a real full-screen scroll during onResize().
+      const streamingOverlay = Array.from({ length: 14 }, (_, i) => `streaming token ${i} …`).join('\n');
+      for (let k = 0; k < 22; k++) {
+        c.setOverlay(streamingOverlay);
+        c.commitAbove(`STREAM_PRE_${String(k).padStart(2, '0')}\n`);
+      }
+      ix.repaint();
+      await settle();
+
+      // Phase 2 — SIGWINCH arrives while the overlay is STILL SET (mid-stream).
+      // The overlay remains at `streamingOverlay`; requestResize fires which
+      // triggers node-pty → SIGWINCH → onResize() while the frame is tall.
+      // The pre-fix path omitted eraseReservedBand in onResize(), leaving ghost
+      // copies of the status line and LoopStageBar in the reserved footer band.
+      c.setOverlay(streamingOverlay);
+      await requestResize(ctx, 80, 28); // NARROW 100 → 80 mid-stream
+
+      // Phase 3 — post-resize streaming continues at the NEW width; the overlay
+      // is still active (simulating tokens still arriving).
+      for (let k = 22; k < 28; k++) {
+        c.setOverlay(streamingOverlay);
+        c.commitAbove(`STREAM_POST_${String(k).padStart(2, '0')}\n`);
+      }
+      ix.repaint();
+      await settle();
+
+      // Phase 4 — turn completion: overlay collapses, spinner off, final repaint.
+      c.setSpinner({ enabled: false });
+      c.setOverlay('');
+      c.commitAbove('STREAM_DONE\n');
+      ix.repaint();
+      ix.repaint();
+      await settle();
+    },
+    expect: {
+      // Turn output lands in the buffer exactly once — duplication is the
+      // ghost-status-line symptom (a second render of the model id string).
+      exactlyOnce: ['STREAM_DONE', 'STREAMMODELXYZ'],
+      // The final committed line must be present.
+      inViewport: ['STREAM_DONE'],
+      // Pre-resize content scrolled off screen.
+      inScrollback: ['STREAM_PRE_00'],
+      // 'STREAMMODELXYZ' as a contentAnchor keeps the blank-run scan from
+      // spilling into the live-frame chrome below the committed content.
+      contentAnchors: ['STREAM_POST_27', 'STREAM_DONE'],
+      maxViewportBlankRun: 1,
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // sigwinch-mid-tool-lanes (#1767): SIGWINCH arrives while multiple tool /
+  // subagent lanes are active — the compositor holds a tall overlay (each tool
+  // call is represented by one overlay line) and receives serial commitAbove
+  // calls for tool completions. The resize fires BETWEEN two tool completions,
+  // exactly as it does in production when a user resizes the terminal during a
+  // parallel tool-call phase.
+  //
+  // Exercises both the onResize() path (2377337d) and the subsequent rearm()
+  // path: after onResize() re-anchors DECSTBM, the compositor may call
+  // StatusLine.rearm() between turns — both must call eraseReservedBand() so
+  // no ghost copies survive into the final frame. Asserts the status-line model
+  // id appears exactly once and no spurious blank runs appear around the frame.
+  // ─────────────────────────────────────────────────────────────────────────
+  'sigwinch-mid-tool-lanes': {
+    description: 'SIGWINCH mid-tool-lanes leaves no ghost status-line or footer copies (9d2aa8da / 2377337d)',
+    cols: 120,
+    rows: 30,
+    ref: '#1767 · status-line.ts onResize() + rearm() eraseReservedBand',
+    async drive(ctx): Promise<void> {
+      const { stdout, stdin } = ctx;
+      const statusLine = wireProductionFooter(stdout, 'TOOLMODELXYZ');
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      await c.arm();
+      const ix = c as unknown as Repaintable;
+      c.setSpinner({ enabled: true });
+
+      // Simulate a parallel tool/subagent phase: a tall overlay representing
+      // N active lanes, with serial commitAbove calls as each lane completes.
+      const makeLaneOverlay = (activeLanes: number): string =>
+        Array.from({ length: activeLanes }, (_, i) => `  lane ${i}: running …`).join('\n');
+
+      // Phase 1 — first batch of tool completions (12 lanes active initially).
+      // Use enough commits so early output overflows into scrollback under the
+      // tall overlay (overflow requires committing more rows than the viewport
+      // minus the overlay height). 30 rows terminal - 3 footer - 12 overlay = 15
+      // available; commit 30 rows to ensure first ~15 land in scrollback.
+      let lanes = 12;
+      for (let t = 0; t < 30; t++) {
+        c.setOverlay(makeLaneOverlay(lanes));
+        c.commitAbove(`TOOL_BATCH1_${String(t).padStart(2, '0')} — done\n`);
+        lanes = Math.max(4, lanes - 1);
+      }
+      ix.repaint();
+      await settle();
+
+      // Phase 2 — SIGWINCH arrives while the tool-lane overlay is still active
+      // (more lanes still running). The resize fires between two commitAbove
+      // calls, exactly as in production when the user drags the terminal window.
+      c.setOverlay(makeLaneOverlay(lanes));
+      await requestResize(ctx, 90, 30); // NARROW 120 → 90 mid-tool-phase
+
+      // Phase 3 — remaining tool completions continue at the new width.
+      for (let t = 6; t < 12; t++) {
+        c.setOverlay(makeLaneOverlay(Math.max(2, lanes - (t - 6))));
+        c.commitAbove(`TOOL_BATCH2_${String(t).padStart(2, '0')} — done\n`);
+      }
+      ix.repaint();
+      await settle();
+
+      // Phase 4 — rearm() is called between turns in production (e.g. after a
+      // slash command or log-update teardown). Call it explicitly to exercise
+      // the rearm() → eraseReservedBand() path fixed in 2377337d.
+      statusLine.rearm();
+      await settle();
+
+      // Phase 5 — end-of-turn: overlay collapses, spinner off, final rollup.
+      c.setSpinner({ enabled: false });
+      c.setOverlay('');
+      c.commitAbove('TOOL_PHASE_COMPLETE\n');
+      ix.repaint();
+      ix.repaint();
+      await settle();
+    },
+    expect: {
+      // The status-line model id must appear exactly once — any extra copy is a
+      // ghost left by the onResize() or rearm() path that missed eraseReservedBand.
+      exactlyOnce: ['TOOL_PHASE_COMPLETE', 'TOOLMODELXYZ'],
+      // Final rollup must be visible in the viewport.
+      inViewport: ['TOOL_PHASE_COMPLETE'],
+      // Earlier tool outputs scrolled into scrollback.
+      inScrollback: ['TOOL_BATCH1_00'],
+      contentAnchors: ['TOOL_BATCH2_11', 'TOOL_PHASE_COMPLETE'],
+      maxViewportBlankRun: 1,
+
+    },
+  },
+  // ─────────────────────────────────────────────────────────────────────────
+  // height-grow-single (#3204): pane GROWS taller mid-streaming. tmux pulls
+  // scrollback history back onto screen, shifting all content and the cursor
+  // DOWN by `delta` rows. After CPR re-anchoring the compositor must show
+  // exactly ONE spinner and ONE prompt row — no ghost duplicate from the
+  // pre-grow position. No CPR reply text must appear on the prompt line.
+  //
+  // Faithfulness note: xterm-headless simulates the scrollback-pull on height
+  // grow by decrementing `ybase` (same as tmux). The CPR reply comes from the
+  // real PTY kernel, so the compositor's requestCprOrMarkDirty sees a real
+  // SIGWINCH and a real CPR reply. The sentinel timing (settle ≥150ms past
+  // the last resize) ensures the CPR exchange and always-repaint both complete.
+  // ─────────────────────────────────────────────────────────────────────────
+  'height-grow-single': {
+    description: 'pane GROW mid-streaming: one spinner, one prompt, no CPR text on prompt line (#3204)',
+    cols: 80,
+    rows: 24,
+    ref: '#3204 · terminal-compositor.lifecycle.cpr.ts requestCprOrMarkDirty',
+    async drive(ctx): Promise<void> {
+      const { stdout, stdin } = ctx;
+      const statusLine = wireProductionFooter(stdout, 'GROWMODELXYZ');
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      await c.arm();
+      const ix = c as unknown as Repaintable;
+      c.setSpinner({ enabled: true });
+
+      // Fill the viewport with streaming content so there is scrollback to pull.
+      const overlay = Array.from({ length: 10 }, (_, i) => `streaming token ${i} …`).join('\n');
+      for (let k = 0; k < 12; k++) {
+        c.setOverlay(overlay);
+        c.commitAbove(`GROW_PRE_${String(k).padStart(2, '0')}\n`);
+      }
+      ix.repaint();
+      await settle(40);
+
+      // GROW 24→30: triggers SIGWINCH → CPR → delta correction.
+      // rows=30 > rows=24, so xterm will pull scrollback on height grow.
+      c.setOverlay(overlay);
+      await requestResize(ctx, 80, 30); // HEIGHT GROW 24 → 30
+
+      // Post-resize streaming continues.
+      for (let k = 12; k < 16; k++) {
+        c.setOverlay(overlay);
+        c.commitAbove(`GROW_POST_${String(k).padStart(2, '0')}\n`);
+      }
+      c.setSpinner({ enabled: false });
+      c.setOverlay('');
+      c.commitAbove('GROW_DONE\n');
+      ix.repaint();
+      ix.repaint();
+      await settle(200); // let CPR exchange + always-repaint complete (≥120ms timeout + debounce)
+    },
+    expect: {
+      // Turn output appears exactly once — a ghost would duplicate GROW_DONE.
+      exactlyOnce: ['GROW_DONE', 'GROWMODELXYZ'],
+      inViewport: ['GROW_DONE'],
+      // No CPR reply text (ESC[N;NR) must appear anywhere as visible content.
+      // The CPR reply is consumed by the data listener before readline; if it
+      // leaks it appears as a literal "[N;NR" sequence in the prompt area.
+      absent: [';1R', ';80R'],
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // height-shrink-single (#3204): pane SHRINKS mid-streaming. tmux pushes
+  // top rows into scrollback history, shifting the cursor UP. After CPR
+  // re-anchoring the compositor must show exactly ONE spinner and ONE prompt
+  // row with no ghost below the frame. No CPR text on prompt line.
+  // ─────────────────────────────────────────────────────────────────────────
+  'height-shrink-single': {
+    description: 'pane SHRINK mid-streaming: one spinner, one prompt, no ghost below frame (#3204)',
+    cols: 80,
+    rows: 30,
+    ref: '#3204 · terminal-compositor.lifecycle.cpr.ts requestCprOrMarkDirty',
+    async drive(ctx): Promise<void> {
+      const { stdout, stdin } = ctx;
+      const statusLine = wireProductionFooter(stdout, 'SHRINKMODELXYZ');
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      await c.arm();
+      const ix = c as unknown as Repaintable;
+      c.setSpinner({ enabled: true });
+
+      const overlay = Array.from({ length: 8 }, (_, i) => `streaming token ${i} …`).join('\n');
+      for (let k = 0; k < 10; k++) {
+        c.setOverlay(overlay);
+        c.commitAbove(`SHRINK_PRE_${String(k).padStart(2, '0')}\n`);
+      }
+      ix.repaint();
+      await settle(40);
+
+      // SHRINK 30→24: triggers SIGWINCH → CPR → negative delta correction.
+      c.setOverlay(overlay);
+      await requestResize(ctx, 80, 24); // HEIGHT SHRINK 30 → 24
+
+      for (let k = 10; k < 14; k++) {
+        c.setOverlay(overlay);
+        c.commitAbove(`SHRINK_POST_${String(k).padStart(2, '0')}\n`);
+      }
+      c.setSpinner({ enabled: false });
+      c.setOverlay('');
+      c.commitAbove('SHRINK_DONE\n');
+      ix.repaint();
+      ix.repaint();
+      await settle(200); // let CPR exchange + always-repaint complete
+    },
+    expect: {
+      exactlyOnce: ['SHRINK_DONE', 'SHRINKMODELXYZ'],
+      inViewport: ['SHRINK_DONE'],
+      absent: [';1R', ';80R'],
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // height-burst (#3204): a height GROW mid-streaming with rapid synthetic
+  // SIGWINCHes emitted to the compositor BEFORE the CPR reply arrives,
+  // exercising the "dirty" branch of the "measure until quiescent" algorithm.
+  // Uses one external resize (parent → child.resize via the marker mechanism)
+  // and then process.stdout.emit('resize') calls that fire handleResizeImmediate
+  // without a further winsize change — marking burst.dirty so a re-query fires.
+  //
+  // Note: `requestResize` can only be called ONCE per scenario run (the parent
+  // only processes the FIRST resize marker). Subsequent resizes are simulated
+  // with process.stdout.emit('resize') which fires the compositor's SIGWINCH
+  // handler synchronously; isTTY=true so the CPR is re-queued correctly.
+  // ─────────────────────────────────────────────────────────────────────────
+  'height-burst': {
+    description: 'height burst (synthetic mid-CPR SIGWINCHes): quiescent delta applied once, no ghost (#3204)',
+    cols: 80,
+    rows: 24,
+    ref: '#3204 · CprHost.cprBurst "measure until quiescent"',
+    async drive(ctx): Promise<void> {
+      const { stdout, stdin } = ctx;
+      const statusLine = wireProductionFooter(stdout, 'BURSTMODELXYZ');
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      await c.arm();
+      const ix = c as unknown as Repaintable;
+      c.setSpinner({ enabled: true });
+
+      const overlay = Array.from({ length: 10 }, (_, i) => `streaming token ${i} …`).join('\n');
+      for (let k = 0; k < 12; k++) {
+        c.setOverlay(overlay);
+        c.commitAbove(`BURST_PRE_${String(k).padStart(2, '0')}\n`);
+      }
+      ix.repaint();
+      await settle(40);
+
+      c.setOverlay(overlay);
+      // External GROW 24→30 via parent (triggers real SIGWINCH → CPR starts).
+      await requestResize(ctx, 80, 30); // HEIGHT GROW 24 → 30
+      // Immediately fire synthetic SIGWINCHes (before CPR reply arrives) to
+      // exercise the dirty-marking burst path. The compositor's rows is already
+      // 30 from the SIGWINCH; stdout.rows is read at emit time.
+      process.stdout.emit('resize');
+      process.stdout.emit('resize');
+      // Settle: let the CPR re-queries and quiescent apply complete (≥2 × 120ms).
+      await settle(300);
+
+      for (let k = 12; k < 16; k++) {
+        c.setOverlay(overlay);
+        c.commitAbove(`BURST_POST_${String(k).padStart(2, '0')}\n`);
+      }
+      c.setSpinner({ enabled: false });
+      c.setOverlay('');
+      c.commitAbove('BURST_DONE\n');
+      ix.repaint();
+      ix.repaint();
+      await settle(200);
+    },
+    expect: {
+      exactlyOnce: ['BURST_DONE', 'BURSTMODELXYZ'],
+      inViewport: ['BURST_DONE'],
+      absent: [';1R', ';80R'],
     },
   },
 };

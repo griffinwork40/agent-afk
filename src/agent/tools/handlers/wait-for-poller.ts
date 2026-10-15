@@ -29,10 +29,20 @@ export interface PollOptions {
   backoff: 'none' | 'linear' | 'exponential';
   /** Cancellation signal (session shutdown, parent abort, etc.). */
   signal: AbortSignal;
+  /**
+   * Yield contract (`../user-yield.ts`): when present and it returns true, the
+   * loop stops with `yielded_to_user` instead of waiting further. Checked after
+   * each evaluation and every {@link YIELD_CHECK_SLICE_MS} during sleeps, so a
+   * queued operator message ends the wait within about a second.
+   */
+  shouldYield?: () => boolean;
 }
 
+/** Max sleep between `shouldYield` checks while a yield probe is armed. */
+export const YIELD_CHECK_SLICE_MS = 1_000;
+
 export interface PollResult {
-  status: 'succeeded' | 'timed_out' | 'cancelled' | 'failed';
+  status: 'succeeded' | 'timed_out' | 'cancelled' | 'failed' | 'yielded_to_user';
   elapsed_ms: number;
   attempts: number;
   result?: WaitResult;
@@ -77,7 +87,7 @@ export async function pollUntil(
   evaluate: (signal: AbortSignal) => Promise<WaitResult>,
   options: PollOptions,
 ): Promise<PollResult> {
-  const { timeout_ms, poll_interval_ms, backoff, signal } = options;
+  const { timeout_ms, poll_interval_ms, backoff, signal, shouldYield } = options;
   const deadline = Date.now() + timeout_ms;
   let attempts = 0;
   let lastResult: WaitResult | undefined;
@@ -124,7 +134,10 @@ export async function pollUntil(
         }
         // Missed poll — continue to next attempt without incrementing the
         // success-attempt counter or advancing backoff (the evaluator never
-        // returned a result this round).
+        // returned a result this round). A queued operator message still wins.
+        if (shouldYield?.() === true) {
+          return { status: 'yielded_to_user', elapsed_ms: Date.now() - (deadline - timeout_ms), attempts, result: lastResult };
+        }
         continue;
       }
       const error = errorMessage(err);
@@ -137,6 +150,22 @@ export async function pollUntil(
     }
     lastResult = result;
     attempts++;
+
+    // #2750: A result with data.blocked === true signals a PERMANENT failure
+    // (e.g. risk-classifier gate, SSRF block, path denylist). There is no point
+    // retrying — the command or URL will be blocked on every subsequent attempt
+    // exactly as it was this time. Return 'failed' immediately with the detail
+    // from the evaluator so the operator sees a clear error instead of burning
+    // the entire timeout and receiving a generic 'timed_out'.
+    if (!result.met && result.data?.['blocked'] === true) {
+      return {
+        status: 'failed',
+        elapsed_ms: Date.now() - (deadline - timeout_ms),
+        attempts,
+        result,
+        error: result.detail,
+      };
+    }
 
     if (result.met) {
       return {
@@ -161,11 +190,40 @@ export async function pollUntil(
       };
     }
 
-    // Sleep, capped to remaining time.
+    // Invariant: evaluate BEFORE yielding, so a condition that is already met
+    // reports success, and a yield carries the freshest `lastResult` detail.
+    if (shouldYield?.() === true) {
+      return { status: 'yielded_to_user', elapsed_ms: now - (deadline - timeout_ms), attempts, result: lastResult };
+    }
+
+    // Sleep, capped to remaining time. With a yield probe armed, sleep in
+    // slices and stop sleeping early once it fires; the next iteration then
+    // evaluates once more and yields.
     const sleepMs = Math.min(
       nextInterval(poll_interval_ms, attempts - 1, backoff),
       deadline - now,
     );
-    await sleepWithAbort(sleepMs, signal);
+    await sleepYieldable(sleepMs, signal, shouldYield);
+  }
+}
+
+/**
+ * `sleepWithAbort`, but when `shouldYield` is supplied it sleeps in slices of
+ * at most {@link YIELD_CHECK_SLICE_MS} and returns early once it reports true.
+ */
+async function sleepYieldable(
+  ms: number,
+  signal: AbortSignal,
+  shouldYield: (() => boolean) | undefined,
+): Promise<void> {
+  if (shouldYield === undefined) {
+    await sleepWithAbort(ms, signal);
+    return;
+  }
+  const end = Date.now() + ms;
+  while (!signal.aborted && !shouldYield()) {
+    const left = end - Date.now();
+    if (left <= 0) return;
+    await sleepWithAbort(Math.min(left, YIELD_CHECK_SLICE_MS), signal);
   }
 }

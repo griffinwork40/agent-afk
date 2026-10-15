@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve, join } from 'node:path';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { spawn } from 'node:child_process';
 
 import { McpManager } from './manager.js';
 
@@ -142,5 +143,49 @@ describe('McpManager — notifications/tools/list_changed live refresh', () => {
       manager = await McpManager.fromConfig({});
       await expect(manager.refreshServer('nope')).rejects.toThrow(/not connected/);
     },
+  );
+});
+
+describe('test-server-dynamic fixture — orphan-process regression (#2865)', () => {
+  it(
+    'exits within 2s when stdin is closed (no orphaned process)',
+    async () => {
+      const triggerPath = join(
+        mkdtempSync(join(tmpdir(), 'mcp-orphan-')),
+        'trigger',
+      );
+
+      // Spawn the fixture directly — we need full control over its stdin.
+      const child = spawn(process.execPath, [FIXTURE], {
+        stdio: ['pipe', 'pipe', 'inherit'],
+        env: { ...process.env, MCP_FIXTURE_TRIGGER_FILE: triggerPath },
+      });
+
+      // Capture exit code via a promise so we can race it against a timeout.
+      const exitPromise = new Promise<number | null>((resolveFn) => {
+        child.on('exit', (code) => resolveFn(code));
+      });
+
+      // Give the fixture a moment to start, then close stdin — simulating the
+      // parent dying without calling disconnectAll().
+      await new Promise((r) => setTimeout(r, 200));
+      child.stdin.end();
+
+      // The fixture must exit within 2s of stdin closing.
+      const winner = await Promise.race([
+        exitPromise.then(() => 'exited'),
+        new Promise<string>((r) => setTimeout(() => r('timeout'), 2000)),
+      ]);
+
+      if (winner === 'timeout') {
+        child.kill();
+        throw new Error(
+          'test-server-dynamic did not exit after stdin closed — orphan-process regression',
+        );
+      }
+
+      expect(winner).toBe('exited');
+    },
+    5_000,
   );
 });

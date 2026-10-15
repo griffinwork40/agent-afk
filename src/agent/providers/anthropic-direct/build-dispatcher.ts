@@ -43,24 +43,34 @@ import {
   createExitPlanModeHandler,
   EXIT_PLAN_MODE_TOOL_NAME,
 } from '../../tools/handlers/exit-plan-mode.js';
-import { createMemoryHandlers } from '../../memory/index.js';
+import { createMemoryHandlers, guardChildHotWrites, isForkedChildSession } from '../../memory/index.js';
 import { createGetRuntimeStateHandler } from '../../awareness/index.js';
 import { resolveSessionHookRegistry } from '../../hooks.js';
-import {
-  withMcpToolsAllowed,
-  withCustomToolsAllowed,
-  type ToolPermissionConfig,
-} from '../../tools/permissions.js';
+import type { ToolPermissionConfig } from '../../tools/permissions.js';
+import { composeDispatcherPermissions } from '../../tools/permissions-compose.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
+import { userAttentionFrom } from '../../tools/user-yield.js';
 
 /** Per-call options — the session-scoped half of the dispatcher inputs. */
 export interface BuildDispatcherOptions {
   cwd?: string;
+  /**
+   * Active model input (alias or raw id) whose model-slot
+   * `tools.disabledBySlot` list applies to this dispatcher. Resolved in
+   * `composeDispatcherPermissions`; absent => no per-slot denies.
+   */
+  slotModel?: string;
   readRoots?: string[];
   writeRoots?: string[];
   env?: Record<string, string>;
   sessionId?: string;
   parentSessionId?: string;
+  /**
+   * Root (depth-0) session id, forwarded from {@link AgentConfig.rootSessionId}.
+   * Undefined on top-level sessions. Threaded into the dispatcher so every
+   * PostToolUse context carries it for deep child attribution.
+   */
+  rootSessionId?: string;
   /**
    * This fork's own subagent id. Stamped onto every `hook_decision` the
    * dispatcher emits so a policy block is attributable to the child that
@@ -117,6 +127,23 @@ export interface BuildDispatcherOptions {
    * non-TTY surfaces and forked children (no overlay to repaint).
    */
   bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
+  /**
+   * Session-scoped detach registry for the Ctrl+B bash-backgrounding contract
+   * (#2542, #2735). Forwarded from AgentConfig so the REPL Ctrl+B handler and
+   * the per-query dispatcher share the same instance. Absent for headless
+   * surfaces and forked children.
+   */
+  detachRegistry?: import('../../tools/detach-registry.js').DetachableToolRegistry;
+  /** Background process registry (`bash run_in_background`); root REPL sessions only. */
+  processJobs?: import('../../shell-jobs/process-jobs.js').ProcessJobRegistry;
+  /**
+   * `isHeadlessSession(config)` (NOT bare `AgentConfig.isNonInteractive`, so
+   * daemon pull tasks count), forwarded to the dispatcher so every
+   * PreToolUse context carries the explicit headless signal (#2302). The
+   * provider is wired as the grant manager on every surface, so grant-manager
+   * presence cannot tell the bash-restriction hook it is unattended.
+   */
+  isNonInteractive?: boolean;
 }
 
 /**
@@ -130,6 +157,8 @@ export interface BuildDispatcherDeps {
   stateStore?: StateStore;
   surface: string;
   readOnlyMemory: boolean;
+  /** When true, gate state_put/cas/delete regardless of readOnlyMemory. */
+  readOnlyState: boolean;
   readOnlyBash: boolean;
   customTools: readonly CustomToolDef[];
   mcpManager: import('../../mcp/index.js').McpManager | undefined;
@@ -172,14 +201,13 @@ export function buildDispatcher(
   opts?: BuildDispatcherOptions,
 ): SessionToolDispatcher {
   const handlers = createBuiltinHandlers(permissionMode, opts?.cwd);
-  const memoryHandlers = createMemoryHandlers(
-    deps.memoryStore,
-    undefined,
-    deps.surface,
+  // Forked children (any fork signal) get memory_update with target:"hot" rejected
+  // structurally by guardChildHotWrites — independent of any hook registry.
+  const memoryHandlers = guardChildHotWrites(
+    createMemoryHandlers(deps.memoryStore, undefined, deps.surface),
+    isForkedChildSession(deps.readOnlyState, opts),
   );
-  // Read-only memory: register `memory_search` only. The dispatcher's
-  // unknown-tool path produces a clear error if the model attempts
-  // `memory_update` / `procedure_write` despite the schema being absent.
+  // Recon sessions (readOnlyMemory=true): register only `memory_search`.
   for (const [name, handler] of memoryHandlers) {
     if (deps.readOnlyMemory && name !== 'memory_search') continue;
     handlers.set(name, handler);
@@ -203,12 +231,13 @@ export function buildDispatcher(
     }
   }
   // State store tools: state_get, state_put, state_cas, state_delete, state_query.
-  // Read-only sessions get only state_get and state_query (mirroring the
-  // readOnlyMemory gate for memory_search above).
+  // Read-only sessions (readOnlyMemory) get only state_get and state_query.
+  // Child sessions (readOnlyState) are also restricted to reads — independent
+  // of readOnlyMemory so children can write facts while being denied state writes.
   if (deps.stateStore !== undefined) {
     const stateHandlers = createStateHandlers(deps.stateStore, opts?.sessionId);
     for (const [name, handler] of stateHandlers) {
-      if (deps.readOnlyMemory && name !== 'state_get' && name !== 'state_query') continue;
+      if ((deps.readOnlyMemory || deps.readOnlyState) && name !== 'state_get' && name !== 'state_query') continue;
       handlers.set(name, handler);
     }
   }
@@ -273,6 +302,9 @@ export function buildDispatcher(
     // same _sharedReadRoots/_sharedWriteRoots the dispatcher shares by
     // reference, so hook and handler stay in lockstep.
     sessionGrantManager: deps.sessionGrantManager,
+    // Explicit headless signal for the bash-restriction floor (#2302); the
+    // grant manager above is wired on every surface, so it cannot carry this.
+    ...(opts?.isNonInteractive === true ? { isNonInteractive: true } : {}),
     // Path-containment bypass: bypassPermissions (explicit) AND autonomous
     // (AFK) both carry allowAll:true so path containment + the path-approval
     // prompt are disabled per-call. In AFK the afk-mode-gate is the safety
@@ -293,17 +325,14 @@ export function buildDispatcher(
     // the plan-mode gate (the sole built-in PreToolUse hook) never reached
     // the dispatcher and write tools ran unblocked in plan mode (c6892c6).
     hookRegistry: resolveSessionHookRegistry(opts?.hookRegistry, deps.hookRegistry),
-    // Union live MCP wire-names AND consumer-registered custom-tool names into
-    // the (statically-snapshotted) allowlist so neither is rejected by the
-    // gate while present in `schemas`/`handlers`. No-op when there is no
-    // allowlist (undefined => all allowed) or nothing to union. Registering a
-    // custom tool is the grant (same as connecting an MCP server); restricted
-    // sub-agents carry no customTools, so this never widens their allowlist.
-    permissions: withCustomToolsAllowed(
-      deps.mcpManager
-        ? withMcpToolsAllowed(deps.permissions, deps.mcpManager.getMcpToolWireNames())
-        : deps.permissions,
+    // MCP + custom-tool unions, then operator denies LAST. Ordering invariant
+    // and rationale live in tools/permissions-compose.ts (shared with the
+    // openai-compatible provider so the two cannot drift).
+    permissions: composeDispatcherPermissions(
+      deps.permissions,
+      deps.mcpManager?.getMcpToolWireNames(),
       deps.customTools.map((t) => t.schema.name),
+      opts?.slotModel,
     ),
     subagentExecutor: deps.subagentExecutor,
     skillExecutor: deps.skillExecutor,
@@ -317,6 +346,7 @@ export function buildDispatcher(
     ...(opts?.env !== undefined ? { env: opts.env } : {}),
     sessionId: opts?.sessionId,
     parentSessionId: opts?.parentSessionId,
+    ...(opts?.rootSessionId !== undefined ? { rootSessionId: opts.rootSessionId } : {}),
     ...(opts?.subagentId !== undefined ? { subagentId: opts.subagentId } : {}),
     // Central output-cap backstop (#661), FORK-SCOPED. Armed from the
     // explicit `subagentToolOutputCapBytes` signal that
@@ -340,9 +370,18 @@ export function buildDispatcher(
     readOnlyBash: deps.readOnlyBash,
     // #1430: PID registry — gates wait_for process condition to session-owned PIDs.
     ...(opts?.spawnedPidRegistry !== undefined ? { spawnedPidRegistry: opts.spawnedPidRegistry } : {}),
+    // Yield contract: the queued-message probe rides on planExitControls (the
+    // REPL installs it post-construction; top-level sessions only). Late-bound.
+    ...(planExitControls ? { userAttention: userAttentionFrom(planExitControls) } : {}),
     // #1506: Live bash output tail for REPL TUI progress display.
     ...(opts?.bashOutputTailReporter !== undefined
       ? { bashOutputTailReporter: opts.bashOutputTailReporter }
       : {}),
+    // #2542/#2735: Detach registry for Ctrl+B bash backgrounding. Top-level
+    // REPL sessions only — absent for forks (no surface to inject results into).
+    ...(opts?.detachRegistry !== undefined
+      ? { detachRegistry: opts.detachRegistry }
+      : {}),
+    ...(opts?.processJobs !== undefined ? { processJobs: opts.processJobs } : {}),
   });
 }

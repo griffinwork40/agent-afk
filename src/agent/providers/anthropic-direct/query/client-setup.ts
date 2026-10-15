@@ -29,12 +29,19 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { buildClientOptions, buildSystemPrefix } from '../auth.js';
 import type { AuthMode } from '../types.js';
 import { makeTracingFetch } from '../tracing-fetch.js';
+import { h1ModelFetch } from '../../shared/h1-fetch.js';
 import { ThrottleQueue } from '../throttle-queue.js';
 import { parseQuotaHeaders, recordQuotaSnapshot } from '../../../quota-cache.js';
 import { refreshClaudeCodeOauthToken } from '../../../auth/keychain.js';
 import type { AnthropicClientFactory } from '../provider-options.js';
-import { globalRateLimitBucket } from '../../shared/rate-limit-bucket.js';
+import { getRateLimitBucket } from '../../shared/rate-limit-bucket.registry.js';
 import { parseAnthropicRateLimitHeaders } from '../../shared/rate-limit-headers.js';
+import {
+  perMinuteFromRateLimit,
+  publishingGate,
+  publishUsage,
+  windowsFromQuotaSnapshot,
+} from '../../../usage/usage-ledger.js';
 
 export interface ClientSetupArgs {
   config: AgentConfig;
@@ -85,22 +92,30 @@ export function setUpQueryClient(args: ClientSetupArgs): ClientSetup {
     ? undefined
     : (headers: Headers): void => {
         const snapshot = parseQuotaHeaders(headers);
-        if (snapshot !== undefined) recordQuotaSnapshot(snapshot);
+        if (snapshot === undefined) return;
+        recordQuotaSnapshot(snapshot);
+        publishUsage({ v: 1, provider: 'anthropic', account: authMode, windows: windowsFromQuotaSnapshot(snapshot) });
       };
 
   // Rate-limit admission observer: captures per-minute RPM/ITPM/OTPM headers
-  // from every Anthropic response and feeds the process-wide admission bucket.
+  // from every Anthropic response and feeds this auth mode's admission bucket
+  // (keyed per provider+account so OpenAI headers never overwrite it).
   // Gated on !localMode — local shims have no meaningful per-minute limits
   // and should never be artificially throttled by the bucket.
+  const bucket = getRateLimitBucket('anthropic', authMode);
   const rateLimitObserver = localMode
     ? undefined
     : (headers: Headers): void => {
         const snapshot = parseAnthropicRateLimitHeaders(headers);
-        if (snapshot !== undefined) globalRateLimitBucket.update(snapshot);
+        if (snapshot === undefined) return;
+        bucket.update(snapshot);
+        publishUsage({ v: 1, provider: 'anthropic', account: authMode, perMinute: perMinuteFromRateLimit(snapshot, Date.now()) });
       };
 
   // Admission gate: skip in localMode — same rationale as rateLimitObserver.
-  const admissionGate = localMode ? undefined : globalRateLimitBucket;
+  // 429 freezes are mirrored into the cross-process usage ledger, where peer
+  // processes' buckets for the same key adopt them.
+  const admissionGate = localMode ? undefined : publishingGate(bucket, 'anthropic', authMode);
 
   const clientOpts = buildClientOptions(
     args.token,
@@ -113,20 +128,22 @@ export function setUpQueryClient(args: ClientSetupArgs): ClientSetup {
     // show`, (3) pushes a live signal onto `throttleQueue` so the progress
     // banner can show the backoff as it happens, (4) captures subscription-quota
     // headers into the quota cache for the status line, and (5) feeds per-minute
-    // RPM/ITPM headers into the admission bucket. Skipped entirely in local-shim
-    // mode (not Anthropic's billing surface). Note the wrapper is installed
-    // whenever ANY of the observers is live — a trace writer is no longer
-    // required, since (4) must work with tracing disabled.
+    // RPM/ITPM headers into the admission bucket.
+    //
+    // Invariant: h1ModelFetch is ALWAYS the base, even in local-shim mode —
+    // it forces HTTP/1.1 for all model API calls regardless of what jsdom or
+    // any other importer has stored in the global undici dispatcher slot.
+    // See src/agent/providers/shared/h1-fetch.ts for the full rationale.
     !localMode
       ? makeTracingFetch(
           config.traceWriter,
-          undefined,
+          undefined, // defaults to h1ModelFetch inside makeTracingFetch
           throttleQueue ? (info) => throttleQueue.push(info) : undefined,
           quotaObserver,
           rateLimitObserver,
           admissionGate,
         )
-      : undefined,
+      : h1ModelFetch,
   );
   const client = factory ? factory(clientOpts) : args.createClient(clientOpts);
   // In local-server mode, suppress the OAuth CLI-mimicry system-prefix

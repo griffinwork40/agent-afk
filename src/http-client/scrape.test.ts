@@ -77,6 +77,13 @@ describe('scrapeToMarkdown — fetch-first happy path', () => {
     expect(out.usedRender).toBe(false);
     expect(out.markdown).toContain('rich fetched body');
     expect(out.title).toBe('Article');
+    expect(out.diagnostics).toEqual({
+      fetch: {
+        httpStatus: 200, finalUrl: 'https://example.com/a', contentType: 'text/html',
+        rawBodyBytes: Buffer.byteLength(richHtml(), 'utf8'),
+      },
+      render: 'not-run',
+    });
     expect(renderFn).not.toHaveBeenCalled();
   });
 });
@@ -101,6 +108,10 @@ describe('scrapeToMarkdown — render escalation', () => {
     expect(renderFn).toHaveBeenCalledOnce();
     expect(out.usedRender).toBe(true);
     expect(out.markdown).toContain('rendered after JS');
+    expect(out.diagnostics).toMatchObject({
+      fetch: { httpStatus: 200, rawBodyBytes: Buffer.byteLength(SHELL_HTML, 'utf8') },
+      render: 'succeeded', renderHttpStatus: 200, renderFinalUrl: 'https://example.com/a',
+    });
   });
 
   it('escalates to render when the plain fetch throws a network error', async () => {
@@ -124,6 +135,8 @@ describe('scrapeToMarkdown — render escalation', () => {
     expect(renderFn).toHaveBeenCalledOnce();
     expect(out.usedRender).toBe(true);
     expect(out.markdown).toContain('rendered fallback');
+    expect(out.diagnostics?.fetch).toBeUndefined();
+    expect(out.diagnostics?.render).toBe('succeeded');
   });
 });
 
@@ -144,6 +157,7 @@ describe('scrapeToMarkdown — graceful degradation', () => {
 
     expect(out.usedRender).toBe(false);
     expect(out.markdown).toContain('Loading');
+    expect(out.diagnostics?.render).toBe('failed');
   });
 
   it('throws when both fetch and render fail (no content at all)', async () => {
@@ -336,6 +350,7 @@ describe('scrapeToMarkdown — render produces fewer chars than thin fetch', () 
     expect(out.usedRender).toBe(false);
     // The thin fetched content should be present (the "Loading" text from SHELL_HTML).
     expect(out.markdown).toContain('Loading');
+    expect(out.diagnostics?.render).toBe('succeeded');
   });
 });
 

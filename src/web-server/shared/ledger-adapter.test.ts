@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { ledgerRecordToItem, accumulateTotals, type SessionTotals } from './ledger-adapter.js';
+import {
+  ledgerRecordToItem,
+  accumulateTotals,
+  isClippedLedgerText,
+  LEDGER_CLIP_MARKER,
+  toolResultPath,
+  type SessionTotals,
+} from './ledger-adapter.js';
+import { clip } from '../../agent/session-ledger-project.js';
 
 /**
  * Invariant under test: LedgerRecord is `{ v: 1; ts: number } & LedgerPayload`.
@@ -295,5 +303,43 @@ describe('ledgerRecordToItem — Wave 1 new kinds', () => {
     expect(text).toContain('100in');
     expect(text).toContain('50out');
     expect(text).toContain('10cache');
+  });
+});
+
+describe('ledgerRecordToItem — clipped tool results (message journal lazy-load)', () => {
+  function toolThenResult(content: string) {
+    const index = new Map();
+    const tool = ledgerRecordToItem({ v: 1, ts: 1, kind: 'tool', toolName: 'bash', toolUseId: 'tu1', input: 'cat big' }, index);
+    const patched = ledgerRecordToItem({ v: 1, ts: 2, kind: 'tool_result', toolUseId: 'tu1', content, durationMs: 7 }, index);
+    if (tool?.kind !== 'tool') throw new Error('expected tool');
+    return { tool, patched };
+  }
+
+  it('flags a clipped preview so the UI can fetch the full result', () => {
+    const { tool, patched } = toolThenResult(`${'x'.repeat(400)}${LEDGER_CLIP_MARKER}`);
+    expect(patched).toBeUndefined();
+    expect(tool.outputClipped).toBe(true);
+    expect(tool.outputUnavailable).toBe(false);
+    expect(tool.durationMs).toBe(7);
+  });
+
+  it('does not flag a short, complete result', () => {
+    const { tool } = toolThenResult('ok');
+    expect(tool.output).toBe('ok');
+    expect(tool.outputClipped).toBe(false);
+  });
+
+  // The marker is duplicated as a literal (the adapter ships to the browser);
+  // this pins it to what the ledger projector actually writes.
+  it('matches the ledger projector clip marker', () => {
+    expect(isClippedLedgerText(clip('y'.repeat(500), 400))).toBe(true);
+    expect(clip('y'.repeat(500), 400).endsWith(LEDGER_CLIP_MARKER)).toBe(true);
+  });
+
+  it('builds an encoded lazy-load path', () => {
+    expect(toolResultPath('sess-1', 'toolu_1')).toBe('/api/sessions/sess-1/tool-results/toolu_1');
+    expect(toolResultPath('s', 'a/b')).toBe('/api/sessions/s/tool-results/a%2Fb');
+    expect(isClippedLedgerText('abc… [truncated]')).toBe(true);
+    expect(isClippedLedgerText('abc')).toBe(false);
   });
 });

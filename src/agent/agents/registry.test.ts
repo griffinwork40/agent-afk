@@ -444,6 +444,7 @@ describe('loadAgentRegistry', () => {
     const ESC = '\x1B';
     const RAW_ESC_RE = /[\x00-\x1F\x7F-\x9F]/;
 
+    // Windows: genuinely POSIX-only — NTFS disallows control bytes in filenames, so the poison fixture cannot be created
     it.skipIf(process.platform === 'win32')('cannot-read warning sanitizes control bytes included in the filesystem error', () => {
       const warn = vi.fn();
       const dir = join(tmp, 'proj', '.afk', 'agents');

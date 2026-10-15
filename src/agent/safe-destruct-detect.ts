@@ -54,6 +54,7 @@
  */
 
 import type { HookContext, HookDecision } from './hooks.js';
+import { maskHookCommandData } from './hook-command-data.js';
 import { DESTRUCTIVE_PATTERNS } from './safe-destruct-patterns.js';
 
 /**
@@ -76,9 +77,11 @@ export const SAFE_DESTRUCT_DETECT_REASON_PREFIX =
 export const SAFE_DESTRUCT_BLOCK_INJECT_CONTEXT =
   'This command was blocked by the safe-destruct hook because it matches an ' +
   'irrecoverable or externally-irreversible operation pattern. The block ' +
-  'cannot be self-bypassed. If the destructive action is genuinely required, ' +
-  'stop and ask the operator to run it manually, or use a safer alternative ' +
-  'named in the block reason above.';
+  'cannot be self-bypassed. First, use the safer alternative named in the ' +
+  'block reason above. The block covers this command only: keep running ' +
+  'other non-destructive commands yourself, but do not reach the same ' +
+  'destructive effect another way. Only if the destructive action is ' +
+  'genuinely required, stop and ask the operator to run it manually.';
 
 /**
  * Return the ids of every destructive pattern the command matches.
@@ -89,9 +92,10 @@ export const SAFE_DESTRUCT_BLOCK_INJECT_CONTEXT =
  */
 export function detectDestructiveCommands(command: string): string[] {
   if (!command) return [];
+  const executable = maskHookCommandData(command);
   const hits: string[] = [];
   for (const { id, re } of DESTRUCTIVE_PATTERNS) {
-    if (re.test(command)) hits.push(id);
+    if (re.test(executable)) hits.push(id);
   }
   return hits;
 }

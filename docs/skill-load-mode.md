@@ -185,3 +185,66 @@ discriminator; tests.
 - The `execute()` depth guard applies to `load` too (conservative): a load
   dispatch at `depth >= maxDepth` is refused even though load does not deepen
   nesting. Revisit if it proves limiting.
+
+---
+
+## Hide a skill from the model manifest (`disable-model-invocation`)
+
+Every registered skill appears in the model's skill catalogue by default. An
+operator can remove a skill from that catalogue — keeping it fully slash-invocable
+by users — via two additive mechanisms. Both filter at the
+`buildSkillManifest()` boundary only (same place as `excludeName` and the
+`source !== 'command'` gate), so the slash-command router, `/skills`, and
+`afk skill list` still see and invoke every skill.
+
+### 1. SKILL.md frontmatter field
+
+Add to any plugin or user/project SKILL.md:
+
+```yaml
+---
+name: my-skill
+description: Orchestration skill
+disable-model-invocation: true
+---
+```
+
+This matches the Claude Code `disable-model-invocation` field so plugin skills
+are portable between runtimes. Only the literal string `true` opts in (same
+conservative rule as `read-only:`).
+
+### 2. `skills.hidden` in `afk.config.json`
+
+For plugin skills the operator cannot edit, add a list to
+`~/.afk/config/afk.config.json`:
+
+```json
+{
+  "skills": {
+    "hidden": ["forge", "awa-dev:qualify"]
+  }
+}
+```
+
+Accepts bare names (`"forge"`) and plugin-qualified names (`"awa-dev:qualify"`).
+A bare entry suffix-matches any `<plugin>:name` form.
+
+This key is **human-tier** in `settable-keys.ts` — the model cannot set it on
+its own config (an operator hiding a skill must not be reversible by the model).
+
+### Hidden is not forbidden
+
+A hidden skill is removed from the model's menu, but the `skill` tool still
+dispatches it when called by name. This is deliberate and differs from Claude
+Code: in agent-afk a user `/name` slash command is delivered as an instruction
+to the model to call the `skill` tool (`src/cli/slash/_lib/skill-message-bridge.ts`),
+so `SkillExecutor` cannot distinguish a user-requested dispatch from a
+model-initiated one. Refusing model calls would therefore break the slash
+command as well. The goal of hiding is prompt-token savings, which the manifest
+filter alone delivers.
+
+### Scope
+
+`disableModelInvocation` is propagated as a field on `SkillManifestEntry` and
+on `SkillMetadata` so non-model consumers (e.g. `/skills`) can mark entries as
+"hidden" in their listing without re-reading config.

@@ -53,8 +53,13 @@ export const PAUSE_WINDOW_SLACK_MS = 30_000;
  */
 export function pauseWindowMs(event: OutputEvent, now: number = Date.now()): number | undefined {
   if (event.type === 'paused') {
-    if (event.resetsAt === undefined) return undefined;
-    return event.resetsAt.getTime() - now + PAUSE_WINDOW_SLACK_MS;
+    // Prefer waitDeadline when present — it is the actual park exit time.
+    // resetsAt may be days away for a far-reset park (where we give up after
+    // TWO_HOURS_MS), so using it for watchdog/ceiling arithmetic would arm
+    // timers for days instead of the bounded 2-hour window.
+    const deadline = event.waitDeadline ?? event.resetsAt;
+    if (deadline === undefined) return undefined;
+    return deadline.getTime() - now + PAUSE_WINDOW_SLACK_MS;
   }
   if (event.type === 'rate_limit') {
     const retryAfterMs = event.retryAfterMs;

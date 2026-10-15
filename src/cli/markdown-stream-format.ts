@@ -92,12 +92,22 @@ export function formatPendingBuffer(
   // can expand a single long line into multiple physical rows.
   // The per-branch caps in previewCodeFence/previewTable guard their own
   // content pre-wrap; this is the uniform post-wrap ceiling.
-  const viewportRows = Math.max(1, getTerminalHeight() - 2);
+  const viewportRows = pendingRowCap();
   const lines = wrapped.split('\n');
   if (lines.length > viewportRows) {
     return lines.slice(0, viewportRows).join('\n');
   }
   return wrapped;
+}
+
+/**
+ * Maximum physical rows the pending overlay may occupy (the viewport height
+ * minus the input/footer rows). `formatPendingBuffer` keeps only the FIRST
+ * this-many rows of an over-tall pending block, so callers that depend on the
+ * render ending with the newest text (the smoke-text mask) must check it.
+ */
+export function pendingRowCap(): number {
+  return Math.max(1, getTerminalHeight() - 2);
 }
 
 /**
@@ -286,40 +296,18 @@ export function findBlockBoundary(text: string): number {
 }
 
 /**
- * Initialize and wrap a log-update function for TTY output.
- * Returns a wrapped function with a clear() method, or null if import fails.
- *
- * Lazy-loaded to avoid unnecessary dependency on log-update module.
- */
-export async function initLogUpdateModule(): Promise<{ (str: string): void; clear: () => void } | null> {
-  try {
-    const mod = await import('log-update');
-    const logUpdateFn = (mod.default as unknown as { (str: string): void; clear: () => void });
-    // Create wrapper that preserves clear method
-    const wrapped: { (str: string): void; clear: () => void } = ((str: string) => {
-      logUpdateFn(str);
-    }) as any;
-    wrapped.clear = () => logUpdateFn.clear();
-    return wrapped;
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Parameters for routing overlay output to the appropriate sink.
  */
 export interface OverlayRoutingParams {
   indented: string;
   overlayComposer: { markDirty(slot: string): void; flush(): void } | null | undefined;
   compositor: { setOverlay(str: string): void } | null;
-  logUpdate: { (str: string): void; clear: () => void } | null;
 }
 
 /**
  * Route pending markdown output to the appropriate display channel.
- * Returns true if handled by composer/compositor, false if caller should
- * handle logUpdate path.
+ * Returns true if handled by composer/compositor, false otherwise (no-op
+ * on non-TTY surfaces that have no live overlay).
  */
 export function routeOverlayOutput(params: OverlayRoutingParams): boolean {
   if (params.overlayComposer) {

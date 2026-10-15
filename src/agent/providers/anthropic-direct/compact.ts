@@ -31,7 +31,6 @@ import {
   byteLengthOf,
   estimateTokensSaved as sharedEstimateTokensSaved,
   findCompactionBoundary as sharedFindCompactionBoundary,
-  findCompactionBoundaryAdaptive as sharedFindCompactionBoundaryAdaptive,
   isMicrocompactPlaceholder,
   microcompactToolResults as sharedMicrocompactToolResults,
   renderTranscript as sharedRenderTranscript,
@@ -179,7 +178,7 @@ function isToolResultPlaceholder(content: unknown): boolean {
  * `tool_use_id`, and its array position are all preserved, so the
  * tool_use/tool_result pairing the Messages API enforces is untouched.
  */
-export const anthropicMicrocompactOps: MicrocompactOps<MessageParam> = {
+const anthropicMicrocompactOps: MicrocompactOps<MessageParam> = {
   listToolResults(messages: ReadonlyArray<MessageParam>): ToolResultRef[] {
     // Build a map from tool_use_id -> tool name by scanning assistant messages.
     // This lets microcompaction apply a higher threshold to delegation tools
@@ -196,7 +195,7 @@ export const anthropicMicrocompactOps: MicrocompactOps<MessageParam> = {
     }
 
     const refs: ToolResultRef[] = [];
-    for (const msg of messages) {
+    for (const [messageIndex, msg] of messages.entries()) {
       if (msg.role !== 'user' || !Array.isArray(msg.content)) continue;
       const content = msg.content as ContentBlockParam[];
       for (const block of content) {
@@ -207,6 +206,7 @@ export const anthropicMicrocompactOps: MicrocompactOps<MessageParam> = {
           byteLength: toolResultContentBytes(resultBlock.content),
           isPlaceholder: isToolResultPlaceholder(resultBlock.content),
           toolName: toolUseId !== undefined ? toolNameById.get(toolUseId) : undefined,
+          messageIndex,
           clear(placeholder: string): void {
             // Replace content in place with a single text-string payload. Keeps
             // the tool_result block (and its tool_use_id) exactly where it was.
@@ -245,28 +245,6 @@ export function findCompactionBoundary(
   keepLastN: number,
 ): number {
   return sharedFindCompactionBoundary(messages, keepLastN, anthropicCompactionOps);
-}
-
-/**
- * Boundary selection with the token-fullness fallback. Thin adapter over the
- * shared {@link sharedFindCompactionBoundaryAdaptive} bound to
- * {@link anthropicCompactionOps}. See the shared docs: when the turn-count
- * keep-window is a no-op but `usedFraction >= shrinkAtFraction`, the keep-window
- * relaxes toward 1 turn so a short-but-full session can still be compacted.
- */
-export function findCompactionBoundaryAdaptive(
-  messages: ReadonlyArray<MessageParam>,
-  keepLastN: number,
-  usedFraction: number,
-  shrinkAtFraction: number,
-): number {
-  return sharedFindCompactionBoundaryAdaptive(
-    messages,
-    keepLastN,
-    anthropicCompactionOps,
-    usedFraction,
-    shrinkAtFraction,
-  );
 }
 
 /**

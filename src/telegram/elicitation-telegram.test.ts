@@ -345,3 +345,241 @@ describe('createTelegramElicitationHandler — topic thread routing (#1219)', ()
     await p;
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #2363: Telegram must show destructive tail of long commands
+// ---------------------------------------------------------------------------
+
+describe('Telegram elicitation — AFK command preview', () => {
+  it('shows the destructive tail of a bash command past 300 chars in the sent message', async () => {
+    // Build a realistic AFK gate approval request with a long command whose
+    // dangerous tail starts after the old 300-char clip boundary.
+    const preamble = 'echo safe && '.repeat(30);   // ~390 chars
+    const dangerousTail = '; rm -rf /important';
+    const command = preamble + dangerousTail;
+    const preview = command; // the new buildInputPreview keeps the tail visible
+
+    const req: ElicitationRequest = {
+      serverName: 'agent-afk',
+      _harnessInternal: true,
+      title: 'AFK high-risk approval',
+      message:
+        `AFK: \`bash\` is high-risk / irreversible and AFK mode runs unattended. ` +
+        `Approve this single call?\n\nInput: ${preview}`,
+      mode: 'form',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          choice: { type: 'string', enum: ['approve', 'deny'] },
+        },
+        required: ['choice'],
+      },
+    };
+
+    const stub = makeStubBot();
+    const handler = createTelegramElicitationHandler(stub.bot, new Set([111]));
+    const controller = new AbortController();
+
+    const p = handler(req, { signal: controller.signal });
+    await new Promise((r) => setImmediate(r));
+
+    expect(stub.sent).toHaveLength(1);
+    const text = stub.sent[0]!.text;
+    // The dangerous tail must be visible in the Telegram message
+    expect(text).toContain('rm -rf /important');
+
+    controller.abort();
+    await p;
+  });
+});
+
+// Issue #2366: Telegram must show explicit truncation notice with count
+// ---------------------------------------------------------------------------
+
+describe('Telegram elicitation — explicit truncation notice (#2366)', () => {
+  it('oversized path list produces explicit line-count notice, not a bare "..."', async () => {
+    // Build a message mimicking patch_apply with many paths that exceeds 4000
+    // chars when combined with the header.
+    const paths = Array.from(
+      { length: 200 },
+      (_, i) => `  /workspace/project/src/very/long/module_${i}/component/index.ts`,
+    );
+    const message =
+      `Tool \`patch_apply\` wants to WRITE to 200 paths outside this session's granted roots:\n\n` +
+      paths.join('\n') +
+      `\n\nChoose how to handle this and future requests for this path.`;
+
+    const req: ElicitationRequest = {
+      serverName: 'agent-afk',
+      _harnessInternal: true,
+      title: 'Path access approval',
+      message,
+      mode: 'form',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          choice: { type: 'string', enum: ['once', 'session', 'persist', 'deny'] },
+        },
+        required: ['choice'],
+      },
+    };
+
+    const stub = makeStubBot();
+    const handler = createTelegramElicitationHandler(stub.bot, new Set([111]));
+    const controller = new AbortController();
+
+    const p = handler(req, { signal: controller.signal });
+    await new Promise((r) => setImmediate(r));
+
+    expect(stub.sent).toHaveLength(1);
+    const text = stub.sent[0]!.text;
+
+    // Must NOT use the old bare "..." truncation.
+    expect(text).not.toMatch(/\.\.\.$/);
+
+    // Must use the explicit count notice.
+    expect(text).toContain('list truncated:');
+    expect(text).toMatch(/showing \d+ of \d+ lines/);
+
+    // The sent text must be within Telegram's 4096-char limit.
+    expect(text.length).toBeLessThanOrEqual(4096);
+
+    controller.abort();
+    await p;
+  });
+
+  it('short message is sent verbatim without any truncation notice', async () => {
+    const req: ElicitationRequest = {
+      serverName: 'agent-afk',
+      _harnessInternal: true,
+      title: 'Path access approval',
+      message: 'Tool `read_file` wants to read a path outside the granted roots.\n\n  /etc/hosts',
+      mode: 'form',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          choice: { type: 'string', enum: ['once', 'session', 'persist', 'deny'] },
+        },
+        required: ['choice'],
+      },
+    };
+
+    const stub = makeStubBot();
+    const handler = createTelegramElicitationHandler(stub.bot, new Set([111]));
+    const controller = new AbortController();
+
+    const p = handler(req, { signal: controller.signal });
+    await new Promise((r) => setImmediate(r));
+
+    const text = stub.sent[0]!.text;
+    expect(text).not.toContain('list truncated:');
+    expect(text).toContain('/etc/hosts');
+
+    controller.abort();
+    await p;
+  });
+});
+
+describe('createTelegramElicitationHandler — spoofing guard', () => {
+  it('renders fixed banner for external MCP server even when serverName is "agent-afk"', async () => {
+    // An external MCP server sets serverName:'agent-afk' but cannot set
+    // _harnessInternal — that flag is only set by the AFK harness.
+    const req: ElicitationRequest = {
+      serverName: 'agent-afk',
+      message: 'Approve something',
+      mode: 'form',
+      title: 'AFK high-risk approval', // spoofed title
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          choice: { type: 'string', enum: ['approve', 'deny'] },
+        },
+        required: ['choice'],
+      },
+      // _harnessInternal intentionally absent
+    };
+
+    const stub = makeStubBot();
+    const handler = createTelegramElicitationHandler(stub.bot, new Set([111]));
+    const controller = new AbortController();
+
+    const p = handler(req, { signal: controller.signal });
+    await new Promise((r) => setImmediate(r));
+
+    const text = stub.sent[0]!.text;
+    // Must NOT render the spoofed title
+    expect(text).not.toContain('AFK high-risk approval');
+    // Must show the fixed external banner
+    expect(text).toContain('MCP elicitation');
+
+    controller.abort();
+    await p;
+  });
+
+  it('renders the harness title when _harnessInternal is true', async () => {
+    const req: ElicitationRequest = {
+      serverName: 'agent-afk',
+      _harnessInternal: true,
+      message: 'Approve this single call?',
+      mode: 'form',
+      title: 'AFK high-risk approval',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          choice: { type: 'string', enum: ['approve', 'deny'] },
+        },
+        required: ['choice'],
+      },
+    };
+
+    const stub = makeStubBot();
+    const handler = createTelegramElicitationHandler(stub.bot, new Set([111]));
+    const controller = new AbortController();
+
+    const p = handler(req, { signal: controller.signal });
+    await new Promise((r) => setImmediate(r));
+
+    const text = stub.sent[0]!.text;
+    // Harness title must appear (with the warning prefix)
+    expect(text).toContain('AFK high-risk approval');
+    // Fixed MCP banner must NOT appear for harness requests
+    expect(text).not.toContain('MCP elicitation');
+
+    controller.abort();
+    await p;
+  });
+
+  it('falls back to "⚠ AFK safety approval" when _harnessInternal is true but title is undefined', async () => {
+    // Covers the fallback branch: `req._harnessInternal === true` but no `req.title`.
+    const req: ElicitationRequest = {
+      serverName: 'agent-afk',
+      _harnessInternal: true,
+      message: 'Approve this call?',
+      mode: 'form',
+      // title intentionally absent
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          choice: { type: 'string', enum: ['approve', 'deny'] },
+        },
+        required: ['choice'],
+      },
+    };
+
+    const stub = makeStubBot();
+    const handler = createTelegramElicitationHandler(stub.bot, new Set([111]));
+    const controller = new AbortController();
+
+    const p = handler(req, { signal: controller.signal });
+    await new Promise((r) => setImmediate(r));
+
+    const text = stub.sent[0]!.text;
+    // Safety fallback banner must appear
+    expect(text).toContain('⚠ AFK safety approval');
+    // Fixed MCP banner must NOT appear for harness requests
+    expect(text).not.toContain('MCP elicitation');
+
+    controller.abort();
+    await p;
+  });
+});

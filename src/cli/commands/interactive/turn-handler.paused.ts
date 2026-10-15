@@ -16,6 +16,25 @@ import { palette } from '../../palette.js';
 import { isDebugEnabled } from '../../../utils/debug.js';
 import { usageLimitBox } from '../../render.js';
 import { runPicker } from '../../render/picker.js';
+import { usageLimitProviderName } from '../../../agent/usage/usage-formatter.js';
+
+/**
+ * Picker header for a `paused` event. The `claude login` hot-swap tip is
+ * Claude-only: it shows for `provider: 'anthropic'` or an absent provider
+ * (legacy events), never for another provider, whose name leads the line.
+ */
+export function pausedPickerHeader(event: PausedEvent, resetsAtStr: string | null): string[] {
+  const isAnthropic = event.provider === undefined || event.provider === 'anthropic';
+  const label = isAnthropic ? 'Usage limit reached.' : `${usageLimitProviderName(event.provider)} usage limit reached.`;
+  return [
+    palette.warning(`  ⏳ ${label}`) +
+      (resetsAtStr ? palette.dim(`  Auto-resumes at ${resetsAtStr}.`) : ''),
+    ...(isAnthropic
+      ? [palette.dim('  Tip: run `claude login` in another terminal to switch account — this turn resumes on it automatically.')]
+      : []),
+    '',
+  ];
+}
 
 /** Narrowed event type for the `paused` output event. */
 export type PausedEvent = Extract<OutputEvent, { type: 'paused' }>;
@@ -142,12 +161,7 @@ export async function handlePausedEvent(params: HandlePausedEventParams): Promis
     // the wait, which the keychain hot-swap picks up automatically.
     // Options are ordered by increasing disruption so the safe default
     // (keep waiting) is first and pre-selected.
-    const header = [
-      palette.warning('  ⏳ Usage limit reached.') +
-        (resetsAtStr ? palette.dim(`  Auto-resumes at ${resetsAtStr}.`) : ''),
-      palette.dim('  Tip: run `claude login` in another terminal to switch account — this turn resumes on it automatically.'),
-      '',
-    ];
+    const header = pausedPickerHeader(event, resetsAtStr);
 
     void runPicker(borrowedCompositor, {
       header,
@@ -201,6 +215,8 @@ export async function handlePausedEvent(params: HandlePausedEventParams): Promis
       ...(event.resetsAt !== undefined ? { resetsAt: event.resetsAt } : {}),
       ...(event.accountId !== undefined ? { accountId: event.accountId } : {}),
       ...(event.autoResume !== undefined ? { autoResume: event.autoResume } : {}),
+      ...(event.provider !== undefined ? { provider: event.provider } : {}),
+      ...(event.plan !== undefined ? { plan: event.plan } : {}),
     }));
   }
 }

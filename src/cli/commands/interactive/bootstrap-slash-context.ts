@@ -11,6 +11,8 @@ import { formatStatusFields } from './shared.js';
 import type { FastModeController } from '../../../agent/fast-mode.js';
 import { resolveModelId } from '../../../agent/session/model-resolution.js';
 import { providerForModel } from '../../../agent/providers/index.js';
+import { isCustomOpenAIEndpoint } from '../../../agent/providers/openai-compatible/query/fast-tier-session.js';
+import { isCatalogModelPriorityEligible } from '../../../agent/providers/openai-compatible/models-catalog.js';
 
 /**
  * Assemble the `SlashContext` every slash command dispatches through.
@@ -87,14 +89,21 @@ export function createReplSlashContext(a: {
     fastMode: a.fastModeController,
     getFastModeContext: () => {
       const model = String(a.stats.model);
+      const family = providerForModel(model, {
+        ...(a.explicitProvider ? { explicit: a.explicitProvider } : {}),
+        ...(a.openaiBaseUrl ? { openaiBaseUrl: a.openaiBaseUrl } : {}),
+      });
+      // OpenAI: a user-set base URL is custom; the first-party ChatGPT backend is not.
+      const isOpenAI = family === 'openai-compatible';
+      const resolvedModelId = resolveModelId(a.stats.model) ?? model;
+      const catalogEligible = isOpenAI ? isCatalogModelPriorityEligible(resolvedModelId) : undefined;
+      const hasCustomEndpoint = isOpenAI ? isCustomOpenAIEndpoint(a.openaiBaseUrl) : a.anthropicBaseUrl !== undefined;
       return {
-        resolvedModelId: resolveModelId(a.stats.model) ?? model,
-        providerFamily: providerForModel(model, {
-          ...(a.explicitProvider ? { explicit: a.explicitProvider } : {}),
-          ...(a.openaiBaseUrl ? { openaiBaseUrl: a.openaiBaseUrl } : {}),
-        }),
-        hasCustomEndpoint: a.anthropicBaseUrl !== undefined,
+        resolvedModelId,
+        providerFamily: family,
+        hasCustomEndpoint,
         executionPath: 'top-level',
+        ...(catalogEligible !== undefined ? { modelEligible: catalogEligible } : {}),
       };
     },
     // Expose mcpManager so `/mcp auth complete` can call completeAuth().

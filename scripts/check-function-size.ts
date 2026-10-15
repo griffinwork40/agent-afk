@@ -27,16 +27,18 @@
  *                         relative to <ref> must come under the ceiling in that
  *                         same change.
  *   --list [n]            print the largest n functions (default 40).
+ *   --allow-growth        allow growth/new entries when running --update-baseline.
+ *   --reason "<text>"     required with --allow-growth; stamped on new entries.
  *
  * Baseline keys are `<path>::<qualified name>`, never line numbers — see the
  * naming invariant in `lib/function-extents.ts`.
  */
 
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { functionKey, measureFile, parseFunctionKey } from './lib/function-extents.js';
+import { parseGrowthArgs } from './lib/growth-args.js';
 import {
   changedSince,
   collectViolations,
@@ -47,6 +49,7 @@ import {
   type RatchetConfig,
   type Violation,
 } from './lib/size-ratchet.js';
+import { walkSourceFiles } from './lib/walk-source-files.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -108,17 +111,15 @@ export function isScannable(relPath: string): boolean {
 }
 
 function walk(dir: string, out: string[]): void {
-  if (!fs.existsSync(dir)) return;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (EXCLUDED_DIRS.includes(entry.name as never)) continue;
-      walk(full, out);
-    } else if (entry.isFile()) {
-      const rel = path.relative(repoRoot, full);
-      if (isScannable(rel)) out.push(rel);
-    }
-  }
+  const extraExclude = new Set(EXCLUDED_DIRS.filter(d => d !== 'node_modules' && d !== 'dist'));
+  const absPaths: string[] = [];
+  walkSourceFiles(
+    dir,
+    (absPath) => isScannable(path.relative(repoRoot, absPath)),
+    absPaths,
+    extraExclude,
+  );
+  for (const abs of absPaths) out.push(path.relative(repoRoot, abs));
 }
 
 interface Measured {
@@ -205,8 +206,33 @@ function main(): void {
   const argv = process.argv.slice(2);
   const measured = scanAll();
 
+  /** All flag tokens this script recognises — used by parseGrowthArgs to detect missing --reason values. */
+  const KNOWN_FLAGS = ['--check', '--update-baseline', '--changed-vs', '--list', '--allow-growth', '--reason'];
+
   if (argv.includes('--update-baseline')) {
-    const { kept, dropped } = updateBaseline(RATCHET, measured.sizes);
+    const parsed = parseGrowthArgs(argv, KNOWN_FLAGS);
+    if ('error' in parsed) {
+      console.error(`✗ check-function-size: ${parsed.error}`);
+      process.exit(1);
+    }
+    const { allowGrowth, reason } = parsed;
+
+    const { kept, dropped, blocked } = updateBaseline(RATCHET, measured.sizes, { allowGrowth, reason });
+
+    if (blocked.length > 0) {
+      console.error(
+        `✗ check-function-size: ${blocked.length} function(s) grew or are new — refusing to update baseline (${BASELINE_REL}, ceiling ${LIMIT}) without --allow-growth:\n`,
+      );
+      for (const e of blocked) {
+        const delta = e.oldLoc === null ? `(new, ${e.newLoc})` : `${e.oldLoc} → ${e.newLoc} (+${e.newLoc - e.oldLoc})`;
+        console.error(`    ${e.key}  ${delta}`);
+      }
+      console.error(
+        `\nTo record a deliberate increase, re-run with:\n  pnpm audit:funcsize:update --allow-growth --reason "<why this growth is intentional>"\n`,
+      );
+      process.exit(1);
+    }
+
     console.log(`✓ ${BASELINE_REL}: ${kept} entr${kept === 1 ? 'y' : 'ies'} over the ${LIMIT}-line ceiling.`);
     if (dropped.length > 0) {
       console.log(`  retired ${dropped.length} (now within the ceiling):`);

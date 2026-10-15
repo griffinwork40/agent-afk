@@ -5,6 +5,8 @@ import { runSubagentDAG, type SubagentDAGNode } from './dag-subagent.js';
 import type { SubagentManager } from './subagent.js';
 import type { IAgentSession, Message } from './types.js';
 import { DelegationBudget } from './tools/delegation-budget.js';
+import { createMessageJournal } from './journal/index.js';
+import { SOFT_DEADLINE_WIND_DOWN } from './providers/shared/soft-deadline.js';
 
 vi.mock('../utils/debug.js', () => ({ debugLog: vi.fn() }));
 
@@ -13,7 +15,7 @@ interface FakeHandle {
   teardown: ReturnType<typeof vi.fn>;
 }
 
-function makeFakeHandle(reply: string | Error, outputValue?: unknown): FakeHandle {
+function makeFakeHandle(reply: string | Error, outputValue?: unknown, stopReason?: string): FakeHandle {
   return {
     runToResult: vi.fn(async (): Promise<{
       id: string;
@@ -21,6 +23,7 @@ function makeFakeHandle(reply: string | Error, outputValue?: unknown): FakeHandl
       message?: Message;
       output?: unknown;
       error?: Error;
+      stopReason?: string;
     }> => {
       if (reply instanceof Error) {
         return { id: 'fake', status: 'failed', error: reply };
@@ -30,6 +33,7 @@ function makeFakeHandle(reply: string | Error, outputValue?: unknown): FakeHandl
         status: 'succeeded',
         message: { role: 'assistant' as const, content: reply, timestamp: new Date() },
         ...(outputValue !== undefined ? { output: outputValue } : {}),
+        ...(stopReason !== undefined ? { stopReason } : {}),
       };
     }),
     teardown: vi.fn(async () => undefined),
@@ -693,9 +697,9 @@ describe('runSubagentDAG', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // resolvedAttachments branch (lines 340-349 of dag-subagent.ts)
+  // resolvedAttachments branch (see dag-subagent.dispatch.ts)
   //
-  // When a node has `resolvedAttachments` set (and no `buildPromptAsync`), the
+  // When a node has `resolvedAttachments` set, the
   // run loop must build a ContentBlockParam[] array: a text block with the
   // string prompt followed by base64-encoded image blocks. The compose-executor
   // populates this field via resolveSubagentAttachments for nodes that declare
@@ -989,5 +993,109 @@ describe('runSubagentDAG', () => {
       expect(result.failed).toHaveLength(0);
       expect(result.outputs['A']).toBe('ok');
     });
+  });
+
+  // --- partial nodes (#2970) ---
+  describe('partial nodes (soft-deadline / tool-use cap)', () => {
+    it('records a soft-deadline wind-down node in result.partial (not failed)', async () => {
+      // A node that succeeded but wound down at the soft deadline should appear
+      // in result.partial, NOT result.failed, and its output is still in result.outputs.
+      handles.push(makeFakeHandle('I got partway there', undefined, SOFT_DEADLINE_WIND_DOWN));
+      const manager = managerFromQueue();
+
+      const result = await runSubagentDAG({
+        manager,
+        parentSession: makeParent(),
+        nodes: [{ id: 'A', systemPrompt: 's', promptBuilder: () => 'p' }],
+        edges: [],
+      });
+
+      // Node output is preserved (downstream DAG nodes can use it).
+      expect(result.failed).toHaveLength(0);
+      expect(result.outputs['A']).toBeDefined();
+      // Partial is populated with the node id and stopReason.
+      expect(result.partial).toHaveLength(1);
+      expect(result.partial[0]).toMatchObject({ id: 'A', stopReason: SOFT_DEADLINE_WIND_DOWN });
+    });
+
+    it('does NOT record a cleanly-completed node in result.partial', async () => {
+      // A clean completion (no stopReason / clean stopReason) must not be partial.
+      handles.push(makeFakeHandle('done cleanly'));
+      const manager = managerFromQueue();
+
+      const result = await runSubagentDAG({
+        manager,
+        parentSession: makeParent(),
+        nodes: [{ id: 'A', systemPrompt: 's', promptBuilder: () => 'p' }],
+        edges: [],
+      });
+
+      expect(result.failed).toHaveLength(0);
+      expect(result.partial).toHaveLength(0);
+    });
+
+    it('records partial nodes separately from node_timeout_ms hard failures', async () => {
+      // node_timeout_ms kills the node → it ends up in result.failed, NOT result.partial.
+      // Soft-deadline wind-down ends up in result.partial, NOT result.failed.
+      // Both can coexist in the same DAG run.
+      //
+      // We test the node_timeout_ms path indirectly: a failed node (status !== 'succeeded')
+      // appears in result.failed. The soft-deadline node is the only one in result.partial.
+      handles.push(makeFakeHandle(new Error('timeout'), undefined));
+      handles.push(makeFakeHandle('partial work', undefined, SOFT_DEADLINE_WIND_DOWN));
+      const manager = managerFromQueue();
+
+      const result = await runSubagentDAG({
+        manager,
+        parentSession: makeParent(),
+        nodes: [
+          { id: 'bad', systemPrompt: 's', promptBuilder: () => 'p' },
+          { id: 'wind-down', systemPrompt: 's', promptBuilder: () => 'p' },
+        ],
+        edges: [],
+        failFast: false,
+      });
+
+      // Hard-failed node is in result.failed, not partial.
+      expect(result.failed.some((f) => f.id === 'bad')).toBe(true);
+      expect(result.partial.some((p) => p.id === 'bad')).toBe(false);
+      // Soft-deadline node is in result.partial, not failed.
+      expect(result.partial.some((p) => p.id === 'wind-down')).toBe(true);
+      expect(result.failed.some((f) => f.id === 'wind-down')).toBe(false);
+    });
+
+    it('runDAG always returns partial:[] (populated only by dag-subagent layer)', async () => {
+      // Core runDAG has no concept of partial nodes; dag-subagent.ts merges in
+      // the side-channel after runDAG returns. Verify the base runDAG contract.
+      const { runDAG } = await import('./dag.js');
+      const dagResult = await runDAG({ nodes: [], edges: [] }, new AbortController().signal);
+      expect(dagResult.partial).toEqual([]);
+    });
+  });
+});
+
+describe('runSubagentDAG message journal', () => {
+  it('forks each node with the parent journal view, never the parent journal as the child config', async () => {
+    const forkSubagent = vi.fn(async () => ({
+      id: 'node-A-1',
+      runToResult: vi.fn(async () => ({ id: 'node-A-1', status: 'succeeded', message: { role: 'assistant', content: 'ok', timestamp: new Date() } })),
+      teardown: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => undefined),
+    }));
+    const manager = { forkSubagent } as unknown as SubagentManager;
+    const parentJournal = createMessageJournal({ getSessionId: () => 'root-sess' });
+    await runSubagentDAG({
+      manager,
+      parentSession: { sessionId: 'root-sess', abortSignal: new AbortController().signal, messageJournal: parentJournal },
+      nodes: [{ id: 'A', systemPrompt: 's', promptBuilder: () => 'p' }],
+      edges: [],
+    });
+    expect(forkSubagent).toHaveBeenCalledTimes(1);
+    const opts = (forkSubagent.mock.calls[0] as unknown as [{ parent: { sessionId?: string; messageJournal?: unknown }; config: { messageJournal?: unknown } }])[0];
+    // The parent VIEW carries the journal (fork-child-config derives
+    // forSubagent(childId) from it); the child config never gets it directly.
+    expect(opts.parent).toEqual({ sessionId: 'root-sess', messageJournal: parentJournal });
+    expect(opts.config.messageJournal).toBeUndefined();
+    await parentJournal.close();
   });
 });

@@ -12,7 +12,7 @@
  * @module telegram/session-manager.hydrate-stats
  */
 
-import { loadSession } from '../cli/session-store.js';
+import { loadSession, saveSession } from '../cli/session-store.js';
 import type { SessionStats } from '../cli/slash/types.js';
 import { type TelegramRoute, routeKey } from './route.js';
 import type { SessionData } from './session-manager.js';
@@ -92,4 +92,75 @@ export function hydrateStatsFromStore(
   const chatCwd = sessionData.get(key)?.cwd;
   if (chatCwd !== undefined) stats.cwd = chatCwd;
   sessionStats.set(key, stats);
+}
+
+/**
+ * Return the SDK session id for a chat route, or undefined when no model turn
+ * has completed yet. Reads from in-memory stats first; falls back to the live
+ * IAgentSession for the route. Used by feedback handlers (/good, /bad) to key
+ * the outcome record.
+ *
+ * @param sessionStats - The SessionManager's live per-route stats map
+ * @param sessions     - The SessionManager's live per-route IAgentSession map
+ * @param route        - The route to look up the session id for
+ */
+export function getRouteSessionId(
+  sessionStats: Map<string, SessionStats>,
+  sessions: Map<string, { sessionId?: string }>,
+  route: TelegramRoute,
+): string | undefined {
+  const key = routeKey(route);
+  const fromStats = sessionStats.get(key)?.sessionId;
+  if (fromStats) return fromStats;
+  return sessions.get(key)?.sessionId;
+}
+
+/**
+ * Return the human-readable session name for a chat route, or undefined.
+ * Mirrors getRouteSessionId — plain stats-map lookup that the SessionManager
+ * method delegates to after running _hydrateStatsFromStore.
+ */
+export function getRouteSessionName(
+  sessionStats: Map<string, SessionStats>,
+  route: TelegramRoute,
+): string | undefined {
+  return sessionStats.get(routeKey(route))?.name;
+}
+
+/**
+ * Persist the session name for a chat route when the session has enough state
+ * to write to disk (totalTurns > 0 and sessionId known). Captures the live
+ * session's id into stats and sessionData before saving. Extracted from
+ * SessionManager.setSessionName to keep session-manager.ts under the ceiling.
+ *
+ * @param sessionStats  - Per-route stats map (mutated: sessionId captured)
+ * @param sessionData   - Per-route session data map (mutated: sessionId mirrored)
+ * @param sessions      - Per-route live session map (read-only)
+ * @param route         - Route to persist the name for
+ * @param slug          - Already-slugified session name
+ * @returns `{ persisted: true }` when written to disk now, `{ persisted: false }` when deferred.
+ */
+export function persistSessionName(
+  sessionStats: Map<string, SessionStats>,
+  sessionData: Map<string, SessionData>,
+  sessions: Map<string, { sessionId?: string }>,
+  route: TelegramRoute,
+  slug: string,
+): { persisted: boolean } {
+  const key = routeKey(route);
+  const stats = sessionStats.get(key);
+  if (!stats) return { persisted: false };
+  stats.name = slug;
+
+  // Capture the live session's id if the stats don't carry one yet.
+  const live = sessions.get(key);
+  if (!stats.sessionId && live?.sessionId) stats.sessionId = live.sessionId;
+
+  if (stats.totalTurns > 0 && stats.sessionId) {
+    const data = sessionData.get(key);
+    if (data) data.sessionId = stats.sessionId;
+    saveSession(stats);
+    return { persisted: true };
+  }
+  return { persisted: false };
 }

@@ -87,6 +87,49 @@ describe('ask_question handler — validation', () => {
     );
     expect(result.isError).toBe(true);
   });
+
+  it('returns isError when min_length > max_length', async () => {
+    const result = await askQuestionHandler(
+      { question: 'say something?', type: 'text', min_length: 10, max_length: 5 },
+      NO_SIGNAL,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/min_length.*max_length|\u2264/i);
+  });
+
+  it('returns isError when min_length equals max_length plus 1 (boundary)', async () => {
+    const result = await askQuestionHandler(
+      { question: 'say something?', type: 'text', min_length: 6, max_length: 5 },
+      NO_SIGNAL,
+    );
+    expect(result.isError).toBe(true);
+  });
+
+  it('does NOT return isError when min_length equals max_length (valid)', async () => {
+    // min_length === max_length is a legal exact-length constraint
+    const result = await askQuestionHandler(
+      { question: 'say something?', type: 'text', min_length: 5, max_length: 5 },
+      NO_SIGNAL,
+    );
+    // Should not reject at the guard level (no handler → decline, not a validation error)
+    const content =
+      typeof result.content === 'string' ? JSON.parse(result.content) : result.content;
+    expect(content.action).toBe('decline');
+  });
+
+  it('returns isError for allow_skip + min_length on type "text" with missing handler (decline path)', async () => {
+    // Structural: allow_skip: true with min_length is valid input — the guard
+    // shouldn't reject it; no handler → decline with isError.
+    const result = await askQuestionHandler(
+      { question: 'optional detail?', type: 'text', allow_skip: true, min_length: 5 },
+      NO_SIGNAL,
+    );
+    // No handler installed → auto-decline; tagged as failure
+    expect(result.isError).toBe(true);
+    expect(result.failureClass).toBe('elicitation-declined');
+    const parsed = JSON.parse(result.content as string);
+    expect(parsed.action).toBe('decline');
+  });
 });
 
 // ---------------------------------------------------------------------------

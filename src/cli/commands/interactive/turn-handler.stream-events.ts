@@ -21,6 +21,7 @@ import { joinAtRoundSeam } from './turn-text-seam.js';
 import { observeFirstContent, type TurnTtfbState } from './turn-handler.ttfb.js';
 import { tickContextProgress } from './turn-handler.context-progress.js';
 import { handlePausedEvent, type PausedPickerRef } from './turn-handler.paused.js';
+import { buildVerificationResultTail } from '../../../agent/outcomes/verification-patterns.js';
 
 // ─── Mutable state ───────────────────────────────────────────────────────────
 
@@ -125,6 +126,7 @@ export async function processStreamEvent(
     };
     pendingTools.set(c.toolUseId, te);
     toolEvents.push(te);
+    h.onToolEvent?.(te);
     turnTtfb.plainHooks?.onToolStart(c);
   } else if (event.type === 'chunk' && event.chunk.type === 'tool_result') {
     const c = event.chunk;
@@ -134,6 +136,21 @@ export async function processStreamEvent(
     if (pending) {
       pending.result = c.content;
       pending.isError = c.isError;
+      if (c.incomplete === true) pending.incomplete = true;
+      if (c.incompleteReason !== undefined) pending.incompleteReason = c.incompleteReason;
+      if (c.partialNodeCount !== undefined) pending.partialNodeCount = c.partialNodeCount;
+      // Capture resultTail for verification commands so lfVerification can
+      // parse pass/fail even when the command was piped and isError reflects
+      // only the pipe's last stage. tailPreview (last N non-empty lines
+      // extracted by truncateContent) is preferred when available.
+      const resultTail = buildVerificationResultTail(
+        pending.toolName,
+        pending.input ?? '',
+        c.content,
+        c.tailPreview,
+      );
+      if (resultTail !== undefined) pending.resultTail = resultTail;
+      h.onToolEvent?.(pending);
       pendingTools.delete(c.toolUseId);
     }
     turnTtfb.plainHooks?.onToolResult(c, pending?.toolName);

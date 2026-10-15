@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TelegramError } from 'telegraf';
 import type { Context } from 'telegraf';
 import type { Message } from 'telegraf/types';
+import { UsageLimitError } from '../utils/errors.js';
 import {
   handlePaused,
   handleResumed,
@@ -265,6 +266,50 @@ describe('handleDone', () => {
 });
 
 // ---------------------------------------------------------------------------
+// handlePaused — provider-aware copy
+// ---------------------------------------------------------------------------
+
+describe('handlePaused — provider-aware copy', () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.mocked(sendOrEdit).mockResolvedValue(undefined); });
+  afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
+
+  it('Codex pause names Codex and its plan, never the Claude account-switch hint', async () => {
+    await handlePaused({ provider: 'codex', plan: 'plus', autoResume: true }, makeParams(makeCtx(), makeState()));
+    const msg = vi.mocked(sendOrEdit).mock.calls[0]![3] as string;
+    expect(msg).toContain('Codex usage limit reached (plus plan)');
+    expect(msg).not.toContain('Claude');
+  });
+
+  it('Codex pause with a reset shows the reset time', async () => {
+    const resetsAt = new Date(Date.now() + 45 * 60_000);
+    await handlePaused({ provider: 'codex', resetsAt, autoResume: true }, makeParams(makeCtx(), makeState()));
+    expect(vi.mocked(sendOrEdit).mock.calls[0]![3]).toContain('Resets at');
+  });
+
+  it('Codex countdown edits keep the Codex copy (no revert to generic wording)', async () => {
+    const state = makeState();
+    await handlePaused(
+      { provider: 'codex', plan: 'plus', resetsAt: new Date(Date.now() + 120 * 60_000), autoResume: true },
+      makeParams(makeCtx(), state),
+    );
+    vi.mocked(sendOrEdit).mockClear();
+    state.lastCountdownBucket = 99; // force a bucket change on the next tick
+    await vi.advanceTimersByTimeAsync(PAUSE_COUNTDOWN_INTERVAL_MS + 1);
+    const edit = vi.mocked(sendOrEdit).mock.calls[0]![3] as string;
+    expect(edit).toContain('Codex usage limit reached (plus plan)');
+    expect(edit).toContain('Resets at');
+  });
+
+  it('Anthropic and absent provider keep the Claude account-switch copy', async () => {
+    await handlePaused({ provider: 'anthropic', autoResume: true }, makeParams(makeCtx(), makeState()));
+    await handlePaused({ autoResume: true }, makeParams(makeCtx(), makeState()));
+    for (const call of vi.mocked(sendOrEdit).mock.calls) {
+      expect(call[3]).toContain('different Claude account');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // handleError
 // ---------------------------------------------------------------------------
 
@@ -344,5 +389,24 @@ describe('deliverOverflow', () => {
     const netErr = new Error('Network lost');
     vi.mocked(replyWithFloodRetryImpl).mockRejectedValueOnce(netErr);
     await expect(deliverOverflow(makeCtx(), false, '', 'long text', preview)).rejects.toBe(netErr);
+  });
+});
+
+describe('handleError — usage-limit normalization', () => {
+  it('rethrows a raw ChatGPT usage_limit_reached error as a friendly UsageLimitError', () => {
+    const raw = Object.assign(new Error('429 {"type":"usage_limit_reached"}'), {
+      status: 429,
+      error: { type: 'usage_limit_reached', plan_type: 'plus', resets_in_seconds: 600 },
+    });
+    let thrown: unknown;
+    try { handleError(raw, makeParams(makeCtx(), makeState())); } catch (e) { thrown = e; }
+    expect(thrown).toBeInstanceOf(UsageLimitError);
+    expect((thrown as Error).message).toContain('Codex usage limit reached (plus plan)');
+    expect((thrown as UsageLimitError).cause).toBe(raw);
+  });
+
+  it('rethrows other errors unchanged', () => {
+    const err = new Error('boom');
+    expect(() => handleError(err, makeParams(makeCtx(), makeState()))).toThrow(err);
   });
 });

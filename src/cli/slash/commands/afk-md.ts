@@ -16,6 +16,7 @@ import { resolveBaseSystemPrompt } from '../../shared-helpers.js';
 import { palette } from '../../palette.js';
 import type { SlashCommand, SlashContext, SlashResult } from '../types.js';
 import { resolveEditor } from './editor-spawn.js';
+import { errorMessage } from '../../../utils/errors.js';
 import { appendToTarget, editTarget } from './afk-md/edit.js';
 import { applyReload, currentOverlayTokens, formatDelta } from './afk-md/reload.js';
 import {
@@ -49,10 +50,30 @@ function scopeFromWord(word: string): AfkMdScope | null {
   return null;
 }
 
-function renderOverview(ctx: SlashContext): void {
+/**
+ * Invariant: `resolveBaseSystemPrompt()` throws when `AFK_FRAMEWORK_PROMPT_FILE`
+ * points at a missing or unreadable path. Every mid-session caller must contain
+ * that throw so a bad env var cannot crash the REPL. Startup callers (chat.ts,
+ * farm.ts, bootstrap-config.ts) intentionally let it propagate — those are
+ * process-init sites, not live commands.
+ *
+ * Returns `{ source }` on success or `null` on error (after emitting ctx.out.error).
+ */
+function tryResolveSource(ctx: SlashContext, cwd: string): string | null {
+  try {
+    return resolveBaseSystemPrompt(cwd).source;
+  } catch (err) {
+    ctx.out.error(`AFK_FRAMEWORK_PROMPT_FILE error: ${errorMessage(err)}`);
+    ctx.out.error('Unset or fix AFK_FRAMEWORK_PROMPT_FILE and try again.');
+    return null;
+  }
+}
+
+function renderOverview(ctx: SlashContext): boolean {
   const cwd = ctx.stats.cwd ?? process.cwd();
   const targets = resolveTargets(cwd);
-  const { source } = resolveBaseSystemPrompt(cwd);
+  const source = tryResolveSource(ctx, cwd);
+  if (source === null) return false;
   const loaded = loadAfkMd(cwd);
   const totalTokens = currentOverlayTokens(cwd);
   const totalBytes = loaded ? Buffer.byteLength(loaded.content, 'utf8') : 0;
@@ -93,22 +114,25 @@ function renderOverview(ctx: SlashContext): void {
     ),
   );
   ctx.out.line(palette.dim('  this command edits your AFK.md prompt overlay.'));
+  return true;
 }
 
-function renderShow(ctx: SlashContext): void {
+function renderShow(ctx: SlashContext): boolean {
   const cwd = ctx.stats.cwd ?? process.cwd();
-  const { source } = resolveBaseSystemPrompt(cwd);
+  const source = tryResolveSource(ctx, cwd);
+  if (source === null) return false;
   const loaded = loadAfkMd(cwd);
   if (!loaded) {
     ctx.out.info('No AFK.md overlay is active — nothing to show.');
     ctx.out.line(palette.dim(`  ${source}`));
-    return;
+    return true;
   }
   ctx.out.line(palette.heading('Composed overlay — exactly what the model receives'));
   ctx.out.line(palette.dim(`  ${source}`));
   ctx.out.line('');
   ctx.out.raw(loaded.content);
   ctx.out.line('');
+  return true;
 }
 
 export const afkMdCmd: SlashCommand = {
@@ -135,8 +159,11 @@ export const afkMdCmd: SlashCommand = {
 
     if (word === 'reload') {
       const baseline = currentOverlayTokens(ctx.stats.cwd);
-      const { applied, tokens, delta, source, shadowed } = applyReload(ctx, baseline);
-      if (shadowed) {
+      const { applied, tokens, delta, source, shadowed, frameworkPromptError } = applyReload(ctx, baseline);
+      if (frameworkPromptError !== undefined) {
+        ctx.out.error(`Reload aborted — AFK_FRAMEWORK_PROMPT_FILE error: ${frameworkPromptError}`);
+        ctx.out.error('Unset or fix AFK_FRAMEWORK_PROMPT_FILE. The session prompt was not changed.');
+      } else if (shadowed) {
         ctx.out.warn(
           'AFK.md is shadowed by a higher-priority system prompt override; the file is not part of what the model receives.',
         );
@@ -149,7 +176,7 @@ export const afkMdCmd: SlashCommand = {
           'Re-read from disk, but this provider cannot swap the prompt of a running session — it applies on next launch.',
         );
       }
-      ctx.out.line(palette.dim(`  ${source}`));
+      if (frameworkPromptError === undefined) ctx.out.line(palette.dim(`  ${source}`));
       return 'continue';
     }
 

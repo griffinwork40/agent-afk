@@ -34,7 +34,7 @@ vi.mock('../../agent/session.js', () => {
   const getLastResponseMetadata = vi.fn().mockReturnValue(null);
   const getInputStreamRef = vi.fn().mockReturnValue({ pushUserMessage: vi.fn() });
 
-  const MockAgentSession = vi.fn().mockImplementation(() => ({
+  const MockAgentSession = vi.fn().mockImplementation(function () { return {
     close,
     sendMessage,
     sendMessageStream,
@@ -42,7 +42,7 @@ vi.mock('../../agent/session.js', () => {
     getInputStreamRef,
     sessionId: 'mock-session-id',
     abortSignal: new AbortController().signal,
-  }));
+  }; });
 
   return { AgentSession: MockAgentSession };
 });
@@ -102,7 +102,7 @@ vi.mock('../../agent/default-hook-registry.js', () => ({
 vi.mock('../../agent/memory/index.js', () => {
   const close = vi.fn();
   return {
-    MemoryStore: vi.fn(() => ({ close })),
+    MemoryStore: vi.fn(function () { return { close }; }),
     injectHotMemory: (config: unknown) => config,
     injectGoalPrompt: (config: unknown) => config,
     MEMORY_TOOL_NAMES: [],
@@ -125,11 +125,11 @@ vi.mock('../../agent/subagent.js', () => {
 });
 
 vi.mock('../../agent/tools/subagent-executor.js', () => ({
-  SubagentExecutor: vi.fn().mockImplementation(() => ({})),
+  SubagentExecutor: vi.fn().mockImplementation(function () { return {}; }),
 }));
 
 vi.mock('../../agent/tools/skill-executor.js', () => ({
-  SkillExecutor: vi.fn().mockImplementation(() => ({})),
+  SkillExecutor: vi.fn().mockImplementation(function () { return {}; }),
 }));
 
 vi.mock('../../agent/tools/compose-executor.js', () => {
@@ -148,7 +148,7 @@ vi.mock('../../agent/tools/nesting.js', () => ({
 }));
 
 vi.mock('../../agent/providers/anthropic-direct/index.js', () => ({
-  AnthropicDirectProvider: vi.fn().mockImplementation(() => ({})),
+  AnthropicDirectProvider: vi.fn().mockImplementation(function () { return {}; }),
 }));
 
 // The dispatcher (pulled in transitively via the anthropic-direct provider)
@@ -216,7 +216,7 @@ function getStreamMock(): ReturnType<typeof vi.fn> {
  * value on the constructor mock so the returned instance carries it.
  */
 function configureStream(events: OutputEvent[]): void {
-  vi.mocked(AgentSession).mockImplementationOnce(() => ({
+  vi.mocked(AgentSession).mockImplementationOnce(function () { return {
     close: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue({ content: 'hi', timestamp: new Date() }),
     sendMessageStream: vi.fn().mockReturnValue(makeStream(events)),
@@ -224,7 +224,7 @@ function configureStream(events: OutputEvent[]): void {
     getInputStreamRef: vi.fn().mockReturnValue({ pushUserMessage: vi.fn() }),
     sessionId: 'mock-session-id',
     abortSignal: new AbortController().signal,
-  }));
+  }; });
 }
 
 /** Capture stdout writes during `fn()`, return non-empty lines.

@@ -11,7 +11,8 @@
  * @module agent/session/stream-consumer
  */
 
-import type { ProviderEvent, ProviderUsage } from '../provider.js';
+import type { ProviderEvent, ProviderProgress, ProviderUsage } from '../provider.js';
+import { recordToolOutput, recordToolUseStart, type ToolEventAccumulator } from './stream-consumer.tool-events.js';
 import type {
   Message,
   OutputEvent,
@@ -20,13 +21,14 @@ import type {
   SessionMetadata,
 } from '../types.js';
 import { BudgetExceededError } from '../../utils/errors.js';
-import { emitBudget } from '../trace/emit.js';
 import type { TraceSink } from '../trace/index.js';
 import { renderToolResult } from '../tools/render-registry.js';
 import { truncateContent } from './stream-consumer.preview.js';
+import { handleSessionInit, handleTurnCompleted } from './stream-consumer.turn-handlers.js';
+import { isOutputCapKill } from '../tools/handlers/_output-cap.js';
 
 /** Callbacks the transform needs to produce side effects. */
-export type TransformDeps = {
+export type TransformDeps = ToolEventAccumulator & {
   conversationHistory: Message[];
   getSessionMetadata: () => SessionMetadata;
   setSessionMetadata: (updater: (prev: SessionMetadata) => SessionMetadata) => void;
@@ -49,16 +51,6 @@ export type TransformDeps = {
    * pass the same `deps` object across all calls within one session loop.
    */
   _runningCostUsd?: number;
-  /**
-   * Internal per-turn accumulator: names of tools whose `tool.output` event
-   * reported success (`isError !== true`), in observed order. Mutated on each
-   * `tool.output` event and drained onto `ResponseMetadata.successfulToolNames`
-   * at `turn.completed`. Fresh per turn because `buildTransformDeps()` returns a
-   * new object each turn (unlike `_runningCostUsd`, whose cross-turn persistence
-   * is a deliberate exception owned by the same one-deps-per-turn loop), so it
-   * cannot leak across turns.
-   */
-  _successfulToolNames?: string[];
   /**
    * Witness-layer trace writer. When provided, a `budget` event fires on
    * the same turn that crosses `maxBudgetUsd`, before `abortBudget` runs.
@@ -111,7 +103,7 @@ export function parsePersistedOutput(
   };
 }
 
-export function usageToMetadata(usage: ProviderUsage, sessionId: string | undefined): ResponseMetadata {
+export function usageToMetadata(usage: ProviderUsage, sessionId: string | undefined, userMessageId?: string): ResponseMetadata {
   const usageObj: Record<string, unknown> = { ...(usage.raw ?? {}) };
   if (usage.inputTokens !== undefined) usageObj['input_tokens'] = usage.inputTokens;
   if (usage.outputTokens !== undefined) usageObj['output_tokens'] = usage.outputTokens;
@@ -124,6 +116,7 @@ export function usageToMetadata(usage: ProviderUsage, sessionId: string | undefi
   if (usage.contextWindowTokens !== undefined) usageObj['context_window_tokens'] = usage.contextWindowTokens;
 
   return {
+    ...(userMessageId !== undefined ? { userMessageId } : {}),
     sessionId,
     stopReason: usage.stopReason ?? undefined,
     resultSubtype: usage.resultSubtype,
@@ -176,6 +169,21 @@ function buildToolOutputEvent(
     ? { failureClass: event.failureClass }
     : {};
 
+  // Plumb compose soft-deadline partial flag through to both return branches.
+  // A persisted-output compose result can still carry incomplete: true when one
+  // or more of its nodes hit the soft deadline; omitting it from the persisted
+  // branch would silently drop the partial signal and leave compose_partial_nodes
+  // un-counted in the facet for any compose whose output was large enough to
+  // spill to disk.
+  const incompletePassthrough =
+    event.incomplete === true
+      ? {
+          incomplete: true as const,
+          ...(event.incompleteReason !== undefined && { incompleteReason: event.incompleteReason }),
+          ...(event.partialNodeCount !== undefined && { partialNodeCount: event.partialNodeCount }),
+        }
+      : {};
+
   const parsed = parsePersistedOutput(event.content);
   if (parsed) {
     return {
@@ -191,6 +199,7 @@ function buildToolOutputEvent(
         ...displayPassthrough,
         ...batchPassthrough,
         ...failureClassPassthrough,
+        ...incompletePassthrough,
       },
     };
   }
@@ -217,16 +226,51 @@ function buildToolOutputEvent(
       sizeBytes,
       sizeLabel,
       ...(event.truncated === true && { truncated: true }),
+      // Read the kill sentinel from the RAW content: truncateContent's preview
+      // above drops the trailing note, so the renderer cannot recover it.
+      ...(event.truncated === true && isOutputCapKill(event.content) && { outputCapKilled: true }),
       ...(event.capturePath !== undefined && { capturePath: event.capturePath }),
       ...(lineCount !== undefined && { lineCount }),
       ...(tailPreview !== undefined && tailPreview.length > 0 && { tailPreview }),
       ...(hiddenLineCount !== undefined && { hiddenLineCount }),
       ...(event.exitCode !== undefined && { exitCode: event.exitCode }),
       ...(event.durationMs !== undefined && { durationMs: event.durationMs }),
+      ...incompletePassthrough,
       ...displayPassthrough,
       ...batchPassthrough,
       ...failureClassPassthrough,
     },
+  };
+}
+
+/** Map a provider `progress` event to the output-layer shape with explicit field allow-list. */
+function mapProgressEvent(progress: ProviderProgress): OutputEvent {
+  return {
+    type: 'progress',
+    progress: {
+      taskId: progress.taskId,
+      description: progress.description,
+      ...(progress.summary !== undefined ? { summary: progress.summary } : {}),
+      ...(progress.roundsUsed !== undefined ? { roundsUsed: progress.roundsUsed } : {}),
+      ...(progress.budget !== undefined ? { budget: progress.budget } : {}),
+      ...(progress.lastToolName !== undefined ? { lastToolName: progress.lastToolName } : {}),
+      totalTokens: progress.totalTokens,
+      toolUses: progress.toolUses,
+      durationMs: progress.durationMs,
+    },
+  };
+}
+
+/** Map a provider `paused` event to the output-layer `paused` shape. */
+function mapPausedEvent(event: Extract<ProviderEvent, { type: 'paused' }>): Extract<OutputEvent, { type: 'paused' }> {
+  return {
+    type: 'paused', reason: event.reason,
+    ...(event.resetsAt !== undefined && { resetsAt: event.resetsAt }),
+    ...(event.accountId !== undefined && { accountId: event.accountId }),
+    ...(event.autoResume !== undefined && { autoResume: event.autoResume }),
+    ...(event.waitDeadline !== undefined && { waitDeadline: event.waitDeadline }),
+    ...(event.provider !== undefined && { provider: event.provider }),
+    ...(event.plan !== undefined && { plan: event.plan }),
   };
 }
 
@@ -242,31 +286,8 @@ export function transformProviderEvent(
   deps: TransformDeps,
 ): OutputEvent | null {
   switch (event.type) {
-    case 'session.init': {
-      const info = event.info;
-      deps.setSessionMetadata((prev) => ({
-        ...prev,
-        sessionId: info.sessionId,
-        model: info.model ?? prev.model,
-        ...(info.permissionMode !== undefined
-          ? { permissionMode: info.permissionMode as PermissionMode }
-          : {}),
-        ...(info.cwd !== undefined ? { cwd: info.cwd } : {}),
-        tools: info.tools ? [...info.tools] : prev.tools,
-        slashCommands: info.slashCommands ? [...info.slashCommands] : prev.slashCommands,
-        skills: info.skills ? [...info.skills] : prev.skills,
-        plugins: info.plugins ? info.plugins.map((p) => ({ ...p })) : prev.plugins,
-        mcpServers: info.mcpServers ? info.mcpServers.map((s) => ({ ...s })) : prev.mcpServers,
-        ...(info.apiKeySource !== undefined
-          ? { apiKeySource: info.apiKeySource as SessionMetadata['apiKeySource'] }
-          : {}),
-        ...(info.version !== undefined ? { claudeCodeVersion: info.version } : {}),
-        ...(info.outputStyle !== undefined ? { outputStyle: info.outputStyle } : {}),
-      }));
-      deps.updateSessionIdentity(info.sessionId);
-      deps.resolveInitialization();
-      return null;
-    }
+    case 'session.init':
+      return handleSessionInit(event.info, deps);
 
     case 'session.status': {
       deps.setSessionMetadata((prev) => ({
@@ -312,6 +333,7 @@ export function transformProviderEvent(
       return null;
 
     case 'tool.use.start':
+      recordToolUseStart(deps, event);
       return {
         type: 'chunk',
         chunk: {
@@ -320,7 +342,6 @@ export function transformProviderEvent(
           toolName: event.toolName,
           toolInput: event.toolInput,
           toolInputRaw: event.toolInputRaw,
-          toolInputCapture: event.toolInputCapture,
           ...(event.pending ? { pending: true as const } : {}),
         },
       };
@@ -339,15 +360,9 @@ export function transformProviderEvent(
       };
 
     case 'tool.output': {
-      // Accumulate the name of every tool that reported success this turn, in
-      // observed order, so `turn.completed` can expose them on metadata for
-      // headless surfaces (the daemon) that never see the per-chunk stream.
-      // Policy-free: the allowlist of which tools count as evidence lives with
-      // the consumer (see `doneHasCorroboratingEvidence`), NOT here. A tool with
-      // no name (some OpenAI Codex synthesized events omit it) is skipped.
-      if (event.isError !== true && event.toolName) {
-        (deps._successfulToolNames ??= []).push(event.toolName);
-      }
+      // What ran this turn: names for the daemon Done probe, full events (with
+      // inputs) for Done-evidence classification. See stream-consumer.tool-events.ts.
+      recordToolOutput(deps, event);
       return buildToolOutputEvent(event);
     }
 
@@ -366,95 +381,19 @@ export function transformProviderEvent(
       };
 
     case 'progress':
-      return {
-        type: 'progress',
-        progress: {
-          taskId: event.progress.taskId,
-          description: event.progress.description,
-          ...(event.progress.summary !== undefined ? { summary: event.progress.summary } : {}),
-          ...(event.progress.lastToolName !== undefined
-            ? { lastToolName: event.progress.lastToolName }
-            : {}),
-          totalTokens: event.progress.totalTokens,
-          toolUses: event.progress.toolUses,
-          durationMs: event.progress.durationMs,
-        },
-      };
+      return mapProgressEvent(event.progress);
 
     case 'suggestion':
       return { type: 'suggestion', suggestion: event.suggestion };
 
-    case 'turn.completed': {
-      const metadata = usageToMetadata(event.usage, event.sessionId ?? deps.getSessionMetadata().sessionId);
-      // Drain the per-turn successful-tool accumulator onto the metadata so the
-      // returned Message carries the raw observation (empty list ⇒ omit the
-      // field, keeping the shape identical to today for tool-less turns).
-      if (deps._successfulToolNames !== undefined && deps._successfulToolNames.length > 0) {
-        metadata.successfulToolNames = [...deps._successfulToolNames];
-      }
-      deps.setLastResponseMetadata(metadata);
-
-      for (let i = deps.conversationHistory.length - 1; i >= 0; i--) {
-        const msg = deps.conversationHistory[i];
-        if (msg?.role === 'assistant') {
-          msg.metadata = metadata;
-          break;
-        }
-      }
-
-      // Budget enforcement (C6): accumulate cost across turns and abort once
-      // the session-level running total crosses the ceiling. runningCostUsd is
-      // tracked on deps so it persists across calls within one session loop.
-      //
-      // `metadata.totalCostUsd` is populated by toProviderUsage() from the
-      // model pricing table when the model id is known. When cost is
-      // unavailable (unknown model / openai-compatible adapter) it will be
-      // `undefined` and we skip the gate.
-      if (
-        deps.maxBudgetUsd !== undefined &&
-        deps.abortBudget !== undefined &&
-        typeof metadata.totalCostUsd === 'number'
-      ) {
-        deps._runningCostUsd = (deps._runningCostUsd ?? 0) + metadata.totalCostUsd;
-        if (deps._runningCostUsd >= deps.maxBudgetUsd) {
-          // Witness layer: emit the threshold-breach record BEFORE the
-          // controller aborts. Three reasons for the ordering:
-          //   1. The abort cascade (and its own `abort` event) follows
-          //      naturally; a trace reader can correlate the budget
-          //      breach to the abort that immediately succeeds it.
-          //   2. abortBudget short-circuits the stream — if we emitted
-          //      after the abort, a fast-cancelling provider could close
-          //      before the budget event lands.
-          //   3. The closure event (reason: 'budget_exceeded') fires at
-          //      session termination; the budget event is the in-flight
-          //      record of the threshold being crossed, distinct from
-          //      the terminal record.
-          void emitBudget(deps.traceWriter, {
-            kind: 'monetary',
-            runningCostUsd: deps._runningCostUsd,
-            maxBudgetUsd: deps.maxBudgetUsd,
-            lastTurnCostUsd: metadata.totalCostUsd,
-          });
-          const err = new BudgetExceededError(deps._runningCostUsd, deps.maxBudgetUsd);
-          deps.abortBudget(err);
-          return { type: 'error', error: err };
-        }
-      }
-
-      return { type: 'done', metadata };
-    }
+    case 'turn.completed':
+      return handleTurnCompleted(event, deps);
 
     case 'error':
       return { type: 'error', error: event.error };
 
     case 'paused':
-      return {
-        type: 'paused',
-        reason: event.reason,
-        ...(event.resetsAt !== undefined ? { resetsAt: event.resetsAt } : {}),
-        ...(event.accountId !== undefined ? { accountId: event.accountId } : {}),
-        ...(event.autoResume !== undefined ? { autoResume: event.autoResume } : {}),
-      };
+      return mapPausedEvent(event);
 
     case 'resumed':
       return {

@@ -43,6 +43,7 @@ import type { AgentConfig } from '../../../types/config-types.js';
 import type { AnthropicToolDef } from '../../../tools/types.js';
 import type { ToolDispatcher } from '../tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../../tools/dispatcher.js';
+import { operatorDispatcherToolDefs, withSlotDeniedDispatcher } from '../../../tools/operator-denied-dispatcher.js';
 import {
   buildRuntimeStateSource,
   getRuntimeStateTool,
@@ -54,6 +55,8 @@ import { builtinToolSchemas } from '../../../tools/schemas.js';
 import { registerPresenceLifecycle, resolveTopLevelSessionId } from './presence-lifecycle.js';
 import type { BuildDispatcherOptions } from '../build-dispatcher.js';
 import type { RuntimeSubagents } from '../../../awareness/index.js';
+import { isWhatifEpisode } from '../../../whatif-episode-gate.js';
+import { isHeadlessSession } from '../../shared/headless-session.js';
 
 export interface DispatcherWiringArgs {
   config: AgentConfig;
@@ -64,6 +67,7 @@ export interface DispatcherWiringArgs {
   providerName: string;
   /** Non-null only when the caller injected an external dispatcher. */
   externalTools: ToolDispatcher | undefined;
+  customToolSchemas?: readonly AnthropicToolDef[] | undefined;
   sharedReadRoots: string[] | undefined;
   sharedWriteRoots: string[] | undefined;
   /**
@@ -72,6 +76,19 @@ export interface DispatcherWiringArgs {
    * {@link RuntimeSourceDeps.getCwd}.
    */
   getCwd: () => string;
+  /**
+   * Live containment base for the DISPATCHER (every build, including
+   * `modelToolsFactory` rebuilds). Distinct from {@link getCwd}, which is a
+   * display accessor that falls back to `process.cwd()`.
+   *
+   * Invariant: returns `undefined` for an UNCONFINED session (no worktree, no
+   * `config.cwd`) and must never fall back to `process.cwd()`. A dispatcher
+   * with a cwd but empty shared roots denies every path (see the
+   * `resolveAndContain` invariant in `tools/handlers/_cwd-utils.ts`); feeding
+   * it the display fallback confined every fork of an unconfined session to
+   * `read roots []` (regression from #3704).
+   */
+  getDispatcherCwd: () => string | undefined;
   /** Live MCP tool accessor for the awareness source. */
   getMcpTools: () => readonly AnthropicToolDef[];
   /** Live MCP server-state accessor for surfacing failed servers (#1702). */
@@ -97,6 +114,7 @@ export interface DispatcherWiring {
   toolDefs: AnthropicToolDef[];
   /** The session id the presence file advertises and the query must reuse. */
   resolvedSessionId: string | undefined;
+  modelToolsFactory: (model: string, permissionMode: string) => { dispatcher: ToolDispatcher; tools: AnthropicToolDef[] };
 }
 
 /**
@@ -113,14 +131,30 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
   // handler-call time, so the assignment-before-use ordering below is safe.
   let queryDispatcher: ToolDispatcher;
 
+  // Invariant: resolve the session id FIRST — before building the awareness
+  // source — so `buildRuntimeStateSource` and the dispatcher both receive the
+  // same resolved id, not the resume-only `config.sessionId` that is absent on
+  // fresh telegram/daemon sessions (fix for #2353).
+  const resolvedSession = resolveTopLevelSessionId({
+    sessionId: config.sessionId,
+    resume: config.resume,
+    depth: config.depth,
+    parentSessionId: config.parentSessionId,
+    surface,
+    memoized: args.getMintedSessionId(),
+  });
+  args.setMintedSessionId(resolvedSession.memoized);
+
   // STEP 2 — build the source, capturing the binding above.
+  // Uses `resolvedSession.id` (not `config.sessionId`) so get_runtime_state
+  // reports the correct id even on fresh non-CLI sessions.
   const runtimeStateSource: RuntimeStateSource = buildRuntimeStateSource({
     surface,
     getCwd: args.getCwd,
     modelName: args.model,
     providerName: args.providerName,
     permissionMode: args.permissionMode,
-    ...(config.sessionId !== undefined ? { sessionId: config.sessionId } : {}),
+    ...(resolvedSession.id !== undefined ? { sessionId: resolvedSession.id } : {}),
     ...(config.parentSessionId !== undefined
       ? { parentSessionId: config.parentSessionId }
       : {}),
@@ -138,48 +172,55 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
     getSubagents: args.getSubagents,
   });
 
-  // Invariant: presence and query construction MUST use the same session id,
-  // because the Telegram watcher resolves a session's ledger path from the id
-  // in its presence file. Resolve once here — BEFORE the presence write — and
-  // reuse the result for `new AnthropicDirectQuery`, so the presence file, the
-  // `session.init` event, and the ledger directory cannot diverge. Reading
-  // `config.sessionId` alone is what broke this: it is set only under
-  // --resume, so fresh sessions advertised nothing at all.
-  const resolvedSession = resolveTopLevelSessionId({
-    sessionId: config.sessionId,
-    resume: config.resume,
-    depth: config.depth,
-    parentSessionId: config.parentSessionId,
-    surface,
-    memoized: args.getMintedSessionId(),
-  });
-  args.setMintedSessionId(resolvedSession.memoized);
+  // Gate the presence write on `shouldAdvertise` (CLI surface or explicit id).
+  // Non-CLI fresh sessions now receive a stable minted id above but do NOT
+  // write a presence file — preserving the pre-existing daemon stale-record
+  // and worktree-sweep invariants (see PRESENCE_ADVERTISE_SURFACES).
+  if (resolvedSession.shouldAdvertise) {
+    args.setPresenceSessionId(
+      registerPresenceLifecycle({
+        depth: config.depth,
+        parentSessionId: config.parentSessionId,
+        sessionId: resolvedSession.id,
+        currentPresenceSessionId: args.getPresenceSessionId(),
+        runtimeStateSource,
+        surface,
+        cwd: config.cwd,
+        providerName: args.providerName,
+        model: args.model,
+      }),
+    );
+  }
 
-  args.setPresenceSessionId(
-    registerPresenceLifecycle({
-      depth: config.depth,
-      parentSessionId: config.parentSessionId,
-      sessionId: resolvedSession.id,
-      currentPresenceSessionId: args.getPresenceSessionId(),
-      runtimeStateSource,
-      surface,
-      cwd: config.cwd,
-      providerName: args.providerName,
-      model: args.model,
-    }),
-  );
+  const rebuild = (model: string, permissionMode: string) => {
+    const result = buildQueryTools({ ...args, config: { ...config, model, cwd: args.getDispatcherCwd() }, permissionMode }, runtimeStateSource, resolvedSession.id);
+    queryDispatcher = result.dispatcher;
+    return result;
+  };
+  const initial = rebuild(typeof config.model === 'string' ? config.model : args.model, args.permissionMode);
+  return { queryDispatcher: initial.dispatcher, runtimeStateSource, toolDefs: initial.tools, resolvedSessionId: resolvedSession.id, modelToolsFactory: rebuild };
+}
 
+/** Reuse the initial dispatcher wiring without repeating presence/session registration. */
+function buildQueryTools(args: DispatcherWiringArgs, runtimeStateSource: RuntimeStateSource, sessionId: string | undefined): { dispatcher: ToolDispatcher; tools: AnthropicToolDef[] } {
+  const { config } = args;
   // STEP 3 — assign. The source built in STEP 2 is handed to the dispatcher so
   // the `get_runtime_state` handler resolves against it.
-  queryDispatcher = args.externalTools
-    ? wrapDispatcherWithRuntimeState(args.externalTools, runtimeStateSource)
+  // Per-slot denies (`tools.disabledBySlot`) follow THIS query's model —
+  // see tools/operator-denied.slots.ts. Both branches carry them.
+  const slotModel = typeof config.model === 'string' ? config.model : undefined;
+  const externalTools = withSlotDeniedDispatcher(args.externalTools, slotModel, args.customToolSchemas?.map((t) => t.name));
+  const queryDispatcher = externalTools
+    ? wrapDispatcherWithRuntimeState(externalTools, runtimeStateSource)
     : args.buildDispatcher(args.permissionMode, {
         cwd: config.cwd,
+        ...(slotModel !== undefined ? { slotModel } : {}),
         readRoots: args.sharedReadRoots,
         writeRoots: args.sharedWriteRoots,
         ...(config.env !== undefined ? { env: config.env } : {}),
-        sessionId: resolvedSession.id,
+        sessionId,
         parentSessionId: config.parentSessionId,
+        ...(config.rootSessionId !== undefined ? { rootSessionId: config.rootSessionId } : {}),
         ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
         // Fork-scoped central output cap (#661): forwarded from the child
         // config that forkSubagent stamped, arming maxOutputBytes for forks
@@ -191,9 +232,19 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
         ...(config.bashOutputTailReporter !== undefined
           ? { bashOutputTailReporter: config.bashOutputTailReporter }
           : {}),
+        // #2542/#2735: Detach registry forwarded from AgentConfig so REPL
+        // Ctrl+B handler and this dispatcher share the same instance.
+        ...(config.detachRegistry !== undefined
+          ? { detachRegistry: config.detachRegistry }
+          : {}),
+        ...(config.processJobs !== undefined ? { processJobs: config.processJobs } : {}),
         runtimeStateSource,
         hookRegistry: config.hookRegistry,
         planExitControls: config.planExitControls,
+        // #2302: headless bash floor keys on this, not grant-manager absence.
+        // isHeadlessSession (not bare isNonInteractive) so daemon pull tasks,
+        // which keep ask_question, still get the unattended floor.
+        ...(isHeadlessSession(config) ? { isNonInteractive: true } : {}),
       });
 
   // External-dispatcher branch: the caller owns routing for whatever tools
@@ -202,9 +253,7 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
   // Without adding the schema here the model has no way to know the tool
   // exists — leaving the awareness layer reachable only via the
   // `SessionToolDispatcher` path.
-  const baseToolDefs = queryDispatcher instanceof SessionToolDispatcher
-    ? [...queryDispatcher.toolDefs]
-    : [...builtinToolSchemas, getRuntimeStateTool];
+  const baseToolDefs = [...operatorDispatcherToolDefs(externalTools ?? queryDispatcher, [...builtinToolSchemas, getRuntimeStateTool])];
   // Invariant: skill-dispatch sub-agents are dispatched AS a specific skill, so
   // they must neither (a) pause to ask the operator "which skill?" nor (b) mutate
   // the operator's environment. Strip `ask_question` (the operator-prompt escape
@@ -219,6 +268,11 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
   // (elicitation-router.ts). Strip it so the model proceeds on an assumption
   // or emits Blocked rather than burning a turn on an unanswerable prompt.
   // Narrower than the skill-dispatch strip: `terminal_font_size` is retained.
+  // Exception: what-if episodes (#2600) keep `ask_question` so the gate can
+  // log it as 'executed' and observe.ts can measure firstAction='ask' /
+  // askedBeforeActing. The episode gate blocks it immediately with proceed-on-
+  // assumption guidance — the call is observable without being interactive.
+  const episodeMode = isWhatifEpisode();
   const toolDefs = config.isSkillDispatch
     ? baseToolDefs.filter(
         (t) =>
@@ -227,16 +281,18 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
           t.name !== 'clipboard_write' &&
           t.name !== 'clipboard_read',
       )
-    : config.isNonInteractive
+    : config.isNonInteractive && !episodeMode
       ? baseToolDefs.filter(
           (t) => t.name !== 'ask_question' && t.name !== 'clipboard_read' && t.name !== 'clipboard_write',
         )
-      : baseToolDefs;
+      : config.isNonInteractive && episodeMode
+        // Episode mode: keep ask_question so the gate can log it as 'executed'.
+        // All remaining cases (interactive sessions, with or without episodeMode)
+        // fall through to baseToolDefs — interactive sessions keep all tools.
+        ? baseToolDefs.filter(
+            (t) => t.name !== 'clipboard_read' && t.name !== 'clipboard_write',
+          )
+        : baseToolDefs;
 
-  return {
-    queryDispatcher,
-    runtimeStateSource,
-    toolDefs,
-    resolvedSessionId: resolvedSession.id,
-  };
+  return { dispatcher: queryDispatcher, tools: toolDefs };
 }

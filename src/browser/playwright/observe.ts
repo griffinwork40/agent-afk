@@ -323,6 +323,123 @@ function getAccessibilityAPI(page: Page): AccessibilityAPI | null {
   return null;
 }
 
+/**
+ * Pairs an AX node with its matched DOM enrichment record.
+ * `dom` is undefined when no DOM record could be matched by name.
+ */
+export interface Enriched {
+  ax: AXNodeLike;
+  dom: DomRecord | undefined;
+}
+
+/** Match DOM records to AX nodes, filter hidden elements, and sort in reading order. */
+export function enrichVisibleNodes(
+  axNodes: AXNodeLike[],
+  domRecords: DomRecord[],
+  includeHidden: boolean,
+): Enriched[] {
+  // Keep the first record unless a later match supplies a non-zero width.
+  const domByName = new Map<string, DomRecord>();
+  for (const rec of domRecords) {
+    const key = matchKey(rec.name);
+    const existing = domByName.get(key);
+    if (!existing || (existing.bbox.w === 0 && rec.bbox.w > 0)) {
+      domByName.set(key, rec);
+    }
+  }
+
+  const enriched: Enriched[] = axNodes.map((ax) => ({
+    ax,
+    dom: domByName.get(matchKey(ax.name ?? '')),
+  }));
+
+  // Apply hidden filter: drop zero-bbox elements unless includeHidden
+  const visible: Enriched[] = includeHidden
+    ? enriched
+    : enriched.filter((e) => {
+        if (!e.dom) return true; // no bbox info → keep (AX tree says it exists)
+        return e.dom.bbox.w > 0 || e.dom.bbox.h > 0;
+      });
+
+  // Sort by reading order: y ascending, then x ascending
+  visible.sort((a, b) => {
+    const ay = a.dom?.bbox.y ?? 0;
+    const by_ = b.dom?.bbox.y ?? 0;
+    if (ay !== by_) return ay - by_;
+    const ax_ = a.dom?.bbox.x ?? 0;
+    const bx = b.dom?.bbox.x ?? 0;
+    return ax_ - bx;
+  });
+  return visible;
+}
+
+/** Assign an ID using the capped reading-order index and assemble element data. */
+export function buildInteractiveElement(e: Enriched, i: number): InteractiveElement {
+  const role = e.ax.role ?? 'generic';
+  const name = e.ax.name ?? '';
+  const id = elementId(role, name, i);
+
+  const bbox: BoundingBox = e.dom?.bbox ?? { x: 0, y: 0, w: 0, h: 0 };
+
+  // Derive kind from DOM type attribute
+  const kind: string | null = e.dom?.type ?? null;
+
+  // Build value: prefer AX value; only fall back to checked state when no
+  // value is present. Using else-if prevents ax.checked from overwriting
+  // ax.value when both are defined (e.g. a checked combobox with a label).
+  let value: string | null = null;
+  if (e.ax.value !== undefined && e.ax.value !== null) {
+    value = String(e.ax.value);
+  } else if (e.ax.checked !== undefined) {
+    value = String(e.ax.checked);
+  }
+
+  // Password redaction
+  if (shouldRedactElementValue({ role, kind })) {
+    value = '[redacted]';
+  }
+
+  // State flags
+  const state: InteractiveElementState = {
+    disabled: e.ax.disabled ?? false,
+  };
+  if (e.ax.checked !== undefined) {
+    state.checked = e.ax.checked === true || e.ax.checked === 'mixed';
+  }
+  if (e.ax.selected !== undefined) {
+    state.selected = e.ax.selected;
+  }
+  if (e.ax.expanded !== undefined) {
+    state.expanded = e.ax.expanded;
+  }
+
+  // Selector enrichment: prefer data-testid, then id.
+  // Escape the testId value so chars like `"` and `]` do not break the
+  // attribute selector (CSS.escape is not available in Node, so we
+  // backslash-escape the two characters that would malform the selector).
+  let selector: string | undefined;
+  if (e.dom?.testId) {
+    const escaped = e.dom.testId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    selector = `[data-testid="${escaped}"]`;
+  } else if (e.dom?.id) {
+    selector = `#${e.dom.id}`;
+  }
+
+  const el: InteractiveElement = {
+    id,
+    role,
+    label: flatLabel(name),
+    kind,
+    value,
+    state,
+    bbox,
+  };
+  if (selector !== undefined) {
+    el.selector = selector;
+  }
+  return el;
+}
+
 // ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
@@ -399,53 +516,10 @@ export async function observePage(
   }
 
   // -------------------------------------------------------------------------
-  // Phase 3 — build a lookup table from DOM records for bbox enrichment
-  //
-  // Key: matchKey(name). When multiple DOM elements share a name we keep the
-  // first non-zero bbox encountered (reading order within evaluate, which is
-  // document order).
+  // Phases 3–4 — enrich with DOM records, filter hidden nodes, sort
   // -------------------------------------------------------------------------
 
-  const domByName = new Map<string, DomRecord>();
-  for (const rec of domRecords) {
-    const key = matchKey(rec.name);
-    const existing = domByName.get(key);
-    if (!existing || (existing.bbox.w === 0 && rec.bbox.w > 0)) {
-      domByName.set(key, rec);
-    }
-  }
-
-  // -------------------------------------------------------------------------
-  // Phase 4 — enrich AX nodes with DOM data, apply hidden filter, sort
-  // -------------------------------------------------------------------------
-
-  interface Enriched {
-    ax: AXNodeLike;
-    dom: DomRecord | undefined;
-  }
-
-  const enriched: Enriched[] = axNodes.map((ax) => ({
-    ax,
-    dom: domByName.get(matchKey(ax.name ?? '')),
-  }));
-
-  // Apply hidden filter: drop zero-bbox elements unless includeHidden
-  const visible: Enriched[] = includeHidden
-    ? enriched
-    : enriched.filter((e) => {
-        if (!e.dom) return true; // no bbox info → keep (AX tree says it exists)
-        return e.dom.bbox.w > 0 || e.dom.bbox.h > 0;
-      });
-
-  // Sort by reading order: y ascending, then x ascending
-  visible.sort((a, b) => {
-    const ay = a.dom?.bbox.y ?? 0;
-    const by_ = b.dom?.bbox.y ?? 0;
-    if (ay !== by_) return ay - by_;
-    const ax_ = a.dom?.bbox.x ?? 0;
-    const bx = b.dom?.bbox.x ?? 0;
-    return ax_ - bx;
-  });
+  const visible = enrichVisibleNodes(axNodes, domRecords, includeHidden);
 
   // -------------------------------------------------------------------------
   // Phase 5 — warnings before cap
@@ -461,66 +535,7 @@ export async function observePage(
 
   const capped = visible.slice(0, maxElements);
 
-  const interactive: InteractiveElement[] = capped.map((e, i) => {
-    const role = e.ax.role ?? 'generic';
-    const name = e.ax.name ?? '';
-    const id = elementId(role, name, i);
-
-    const bbox: BoundingBox = e.dom?.bbox ?? { x: 0, y: 0, w: 0, h: 0 };
-
-    // Derive kind from DOM type attribute
-    const kind: string | null = e.dom?.type ?? null;
-
-    // Build value: prefer AX value, then fall through to checked state
-    let value: string | null = null;
-    if (e.ax.value !== undefined && e.ax.value !== null) {
-      value = String(e.ax.value);
-    }
-    if (e.ax.checked !== undefined) {
-      value = String(e.ax.checked);
-    }
-
-    // Password redaction
-    if (shouldRedactElementValue({ role, kind })) {
-      value = '[redacted]';
-    }
-
-    // State flags
-    const state: InteractiveElementState = {
-      disabled: e.ax.disabled ?? false,
-    };
-    if (e.ax.checked !== undefined) {
-      state.checked = e.ax.checked === true || e.ax.checked === 'mixed';
-    }
-    if (e.ax.selected !== undefined) {
-      state.selected = e.ax.selected;
-    }
-    if (e.ax.expanded !== undefined) {
-      state.expanded = e.ax.expanded;
-    }
-
-    // Selector enrichment: prefer data-testid, then id
-    let selector: string | undefined;
-    if (e.dom?.testId) {
-      selector = `[data-testid="${e.dom.testId}"]`;
-    } else if (e.dom?.id) {
-      selector = `#${e.dom.id}`;
-    }
-
-    const el: InteractiveElement = {
-      id,
-      role,
-      label: flatLabel(name),
-      kind,
-      value,
-      state,
-      bbox,
-    };
-    if (selector !== undefined) {
-      el.selector = selector;
-    }
-    return el;
-  });
+  const interactive: InteractiveElement[] = capped.map((e, i) => buildInteractiveElement(e, i));
 
   // -------------------------------------------------------------------------
   // Phase 7 — assemble status and remaining warnings

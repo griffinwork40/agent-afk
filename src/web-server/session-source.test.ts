@@ -403,4 +403,60 @@ describe('listWebSessions', () => {
     expect(mine).toBeDefined();
     expect(mine?.mode).toBe('live');
   });
+
+  it('titles a session from the recorded `input` instead of the preamble-laden `text`', async () => {
+    writeLedger('with-input', [
+      metaLine('with-input', { cwd: '/w' }),
+      JSON.stringify({
+        v: 1,
+        ts: Date.now(),
+        kind: 'user',
+        text: '[placeholder-prevent] Prefer running commands.\n\n[jev rules] Active project rules:\n- x\n\nwhy no titles',
+        input: 'why no titles',
+      }),
+    ]);
+    const [s0] = await listWebSessions(new Set());
+    expect(s0?.title).toBe('why no titles');
+  });
+
+  it('titles a legacy [placeholder-prevent]-led record from the user text, not the preamble', async () => {
+    const text = [
+      '[placeholder-prevent] Prefer running commands yourself with your tools.',
+      '[bridge: prior-session context]',
+      'Read any referenced file for deeper context before acting — these are pointers, not full content.',
+      '[jev rules] Active project rules:',
+      '  - rule',
+      '',
+      '1 rule(s) loaded. Edits violating these rules at >=0.80 confidence will be blocked.',
+      '',
+      'what are the local changes?',
+    ].join('\n');
+    writeLedger('legacy', [metaLine('legacy', { cwd: '/w' }), userLine(text)]);
+    const [s0] = await listWebSessions(new Set());
+    expect(s0?.title).toBe('what are the local changes?');
+  });
+
+  it('sorts a brand-new owned session (no ledger yet) first, above dated sessions', async () => {
+    writeLedger('old', [metaLine('old'), userLine('older work')], Date.now() - 60_000);
+    const sessions = await listWebSessions(new Set(['fresh-owned']));
+    expect(sessions.map((s) => s.id)).toEqual(['fresh-owned', 'old']);
+  });
+
+  it('prefers the sidecar name (what /resume shows) over the first-message preview', async () => {
+    writeLedger('named', [metaLine('named', { cwd: '/w' }), userLine('what are the local changes on main?')]);
+    const sidecar = { sessionId: 'named', name: 'what-are-the-local-changes-on', model: 'm', turns: [{ toolEvents: [{ name: 'bash' }] }] };
+    fs.writeFileSync(path.join(getSessionsDir(), 'named.json'), JSON.stringify(sidecar, null, 2));
+    const [s0] = await listWebSessions(new Set());
+    expect(s0?.title).toBe('what-are-the-local-changes-on');
+  });
+
+  it('falls back to the preview when the sidecar has no top-level name', async () => {
+    writeLedger('unnamed', [metaLine('unnamed'), userLine('hello there')]);
+    // A nested `name` inside turns must never be mistaken for the session name.
+    const sidecar = { sessionId: 'unnamed', model: 'm', turns: [{ toolEvents: [{ name: 'bash' }] }] };
+    fs.writeFileSync(path.join(getSessionsDir(), 'unnamed.json'), JSON.stringify(sidecar, null, 2));
+    const [s0] = await listWebSessions(new Set());
+    expect(s0?.title).toBe('hello there');
+  });
 });
+

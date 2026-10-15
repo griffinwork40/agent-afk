@@ -6,6 +6,8 @@ import type { TranscriptHandle } from './transcript.js';
 import { setupSurface } from './surface-setup.js';
 import { setupFooterSubsystems, type FooterSubsystems } from './footer-subsystems.js';
 import { runInputLoop } from './loop-iteration.js';
+import { installConsoleBridge } from './console-bridge.js';
+import { schedulePeerInboxSweep } from './peer-inbox-startup-sweep.js';
 import type { TurnState } from './repl-loop-shared.js';
 
 // Re-export so existing importers keep their `import { ..., type TurnState }
@@ -90,6 +92,10 @@ export async function runReplLoop(
   // setupSurface reads it lazily (the loop-stage callback only fires mid-turn,
   // long after this is assigned).
   let footer: FooterSubsystems | undefined;
+  // Inverse of the console bridge installed once the compositor is armed.
+  // Hoisted for the same reason as `footer`: the finally must run it even when
+  // a later setup step throws.
+  let restoreConsole: (() => void) | undefined;
 
   // External constraint: the try starts here (not earlier) so a rejection from
   // setupSurface's armCompositor still reaches the finally and surface.dispose()
@@ -105,7 +111,21 @@ export async function runReplLoop(
       { getLoopStageBar: () => footer?.loopStageBar, getMascotBar: () => footer?.mascotBar },
     );
 
+    // Invariant: while the persistent compositor owns the terminal, a raw
+    // console.warn/error from agent-layer code (e.g. a failing hook) lands at
+    // the compositor's parked cursor mid-row and wraps outside the content
+    // margin. Route them through commitAbove instead; see console-bridge.ts.
+    // Non-TTY surfaces have no compositor and keep the raw console.
+    const compositor = surface.getCompositor();
+    if (compositor) restoreConsole = installConsoleBridge(compositor);
+
     footer = setupFooterSubsystems(ctx, turnState);
+    // Start the peer inbox notifier (fs.watch + poll). Best-effort: start()
+    // never throws. Disposed in the finally alongside bgResultNotifier.
+    footer.peerNotifier.start();
+    // Schedule a deferred sweep of dead sessions' peer inbox directories.
+    // Mirrors the witness sweep: fire-and-forget, unref'd, never blocks startup.
+    schedulePeerInboxSweep();
 
     // Invariant: periodic terminal writers (health rail 1s tick, bg-bar spinner,
     // mascot animation) continue writing ANSI cursor escapes while a pager/editor
@@ -146,6 +166,10 @@ export async function runReplLoop(
     // fires (interactive.ts teardown) so cascade-cancelled jobs don't queue
     // notices into a buffer that will never drain.
     footer?.bgResultNotifier.dispose();
+    footer?.processJobNotifier?.dispose();
+    // Stop the peer inbox notifier (watcher + poll). Must run before the
+    // process exits so no orphaned interval keeps it alive.
+    footer?.peerNotifier.dispose();
     // Stop the footer painters top → bottom so each clears the exact row it
     // painted before the counts below it change. HealthRail is the topmost
     // reserved row, so it must clear first (its stop fires onRowCountChange(0)
@@ -174,6 +198,13 @@ export async function runReplLoop(
     const resetToConsole = (line: string) => console.log(line);
     ctx.completionWriter.fn = resetToConsole;
     ctx.completionWriter.idleFn = resetToConsole;
+    // Invariant: restoreConsole must run BEFORE surface.dispose(). The bridge
+    // routes through compositor.commitAbove; after dispose() that object is
+    // dead. Wrapped in try/catch so a throwing restore (e.g. a later wrapper
+    // that has modified console.warn after install) does not abort the
+    // surface.dispose() that follows — an un-disposed compositor in raw mode
+    // would leave the terminal unusable.
+    try { restoreConsole?.(); } catch { /* best-effort; surface.dispose() must still run */ }
     // Stage 3e: disarm the persistent compositor on REPL exit. Best-
     // effort — surface.dispose() is idempotent and swallows raw-mode
     // teardown errors so a corrupt terminal state doesn't mask the

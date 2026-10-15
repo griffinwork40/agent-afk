@@ -145,29 +145,26 @@ describe('commitAbove shrink-gap regression', () => {
     const committedIdx = lines.findIndex((l) => l.includes(COMMITTED));
     expect(committedIdx, `committed line not rendered:\n${dump}`).toBeGreaterThanOrEqual(0);
 
-    // The short-terminal blank-gap cap (#2182) limits blank rows ABOVE the
-    // band to MAX_BLANK_ROWS = ceil(ROWS/3) = ceil(24/3) = 8.
-    // After the overlay collapse, the committed line is re-pinned starting at
-    // floor(1) + MAX_BLANK_ROWS(8) = row 9 (0-based: 8) rather than
-    // immediately above the frame. There will be blank rows between the band
-    // and the live frame — this is intentional (the cap trades the zero-gap
-    // bottom-alignment invariant for a bounded, user-visible blank region).
-    //
-    // HARD CORRECTNESS GATE: the committed line must appear SOMEWHERE in the
-    // viewport (not stranded below the visible area or lost), and the blank
-    // region ABOVE the band must not exceed MAX_BLANK_ROWS.
-    const blankRowsAboveBand = committedIdx; // 0-based: rows 0..committedIdx-1 are blank
-    expect(
-      blankRowsAboveBand,
-      `blank gap above committed band (${blankRowsAboveBand} rows) exceeds MAX_BLANK_ROWS cap:\n${dump}`,
-    ).toBeLessThanOrEqual(Math.ceil(ROWS / 3));
-
-    // The frame must still appear below the committed line.
+    // Bottom-aligned band: committed content hugs the frame top, sitting
+    // immediately above the spinner/input area. Blank rows appear ABOVE
+    // the band (between scrollback and the committed text) and are not
+    // visible without scrolling. The critical invariant: no blank gap
+    // BETWEEN the committed content and the frame below it.
     const firstFrameIdx = lines.findIndex((l, i) => i > committedIdx && l.trim() !== '');
     expect(
       firstFrameIdx,
       `no frame content found below committed line at row ${committedIdx}:\n${dump}`,
     ).toBeGreaterThan(committedIdx);
+    // No blank rows between the committed band and the frame (the actual
+    // regression this test guards against).
+    let gapBetweenBandAndFrame = 0;
+    for (let i = committedIdx + 1; i < firstFrameIdx; i++) {
+      if ((lines[i] ?? '').trim() === '') gapBetweenBandAndFrame++;
+    }
+    expect(
+      gapBetweenBandAndFrame,
+      `blank gap between committed content and frame (${gapBetweenBandAndFrame} rows):\n${dump}`,
+    ).toBe(0);
 
     term.dispose();
     c.disarm();

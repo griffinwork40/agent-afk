@@ -1,4 +1,5 @@
 import type { CommittedBandHost } from './terminal-compositor.committed-band-commit.js';
+import { contentHugSlack } from './terminal-compositor.content-hug.js';
 
 export interface CommitGeometry {
   rows: number;
@@ -9,6 +10,11 @@ export interface CommitGeometry {
   anchorFloor: number;
   fitsAboveFrame: boolean;
   phase1EffectiveFrameTop: number;
+  /** content-hug: rows the frame sits above the viewport floor (0 otherwise). */
+  hugSlack: number;
+  /** Frame top used for ROOM math: `prevTopRow + hugSlack` under content-hug
+   *  (the bottom-pinned top), else `frameTop`. Contiguity keeps `frameTop`. */
+  roomTop: number;
 }
 
 /**
@@ -128,7 +134,16 @@ export function snapshotCommitGeometry(
   // dropping the block from screen AND scrollback. Falling through to the
   // overflow path archives the block to scrollback at anchorFloor instead
   // (recoverable). No existing test hits prevTopRow <= 1.
-  const fitsAboveFrame = prevTopRow > 1 && contentLineCount <= frameTop - anchorFloor;
+  // content-hug (see terminal-compositor.content-hug.ts, Contract: commit
+  // geometry): room is measured against the frame's BOTTOM-PINNED top, since a
+  // hugging frame sits above the floor by `hugSlack` rows and moves down as the
+  // commit lands. hugSlack is 0 outside content-hug, making roomTop === frameTop
+  // and every expression below byte-identical to the bottom-pinned path.
+  const hugSlack = contentHugSlack(self, Math.max(1, rows - 1 - extraRows));
+  const roomTop = hugSlack > 0 ? prevTopRow + hugSlack : frameTop;
+  const fitsAboveFrame = hugSlack > 0
+    ? roomTop > 1 && contentLineCount <= roomTop - anchorFloor
+    : prevTopRow > 1 && contentLineCount <= frameTop - anchorFloor;
   // Shrink-pad-corrected effective frame top (shared between Phase 1 and Phase 3):
   // when the prior band is positioned, the real above-frame room starts at
   // committedBandBottomRow + 1 (not at the raw frameTop which may be artificially
@@ -137,8 +152,8 @@ export function snapshotCommitGeometry(
   // writeWithGuard closure. Value matches Phase 1's `effectiveFrameTop` exactly.
   const phase1EffectiveFrameTop =
     fitsAboveFrame && self.committedBand.length > 0 && self.committedBandBottomRow > 0
-      ? Math.max(frameTop, self.committedBandBottomRow + 1)
-      : frameTop;
+      ? Math.max(roomTop, self.committedBandBottomRow + 1)
+      : roomTop;
 
   return {
     rows,
@@ -149,5 +164,7 @@ export function snapshotCommitGeometry(
     anchorFloor,
     fitsAboveFrame,
     phase1EffectiveFrameTop,
+    hugSlack,
+    roomTop,
   };
 }

@@ -17,6 +17,15 @@
  * window resets), not for another coroutine to release a semaphore. Multiple
  * coroutines can sleep simultaneously with no mutual exclusion.
  *
+ * Cross-process backoff: a bucket constructed with a {@link PeerRateLimitReader}
+ * (see `rate-limit-bucket.registry.ts`, which wires the shared usage ledger)
+ * adopts what OTHER processes on the same provider+account have observed: an
+ * in-force 429 freeze, and a lower remaining count from a reading fresher than
+ * this bucket's own last server response. The peer read is throttled to once
+ * per {@link PEER_SYNC_INTERVAL_MS} and fails open (reader error = local-only
+ * behaviour). Adoption only ever makes the bucket MORE conservative, and it
+ * still sleeps for time, so deadlock-freedom is unchanged.
+ *
  * @module agent/providers/shared/rate-limit-bucket
  */
 
@@ -33,6 +42,12 @@ const INPUT_TOKEN_OVERHEAD = 2_000;
 
 /** Characters per token estimate (conservative). */
 const CHARS_PER_TOKEN = 3.5;
+
+/** Minimum spacing between peer (ledger) reads for one bucket (ms). */
+export const PEER_SYNC_INTERVAL_MS = 1_000;
+
+/** A peer count with no reset timestamp is trusted only this long after it was read (ms). */
+const PEER_UNTIMED_MAX_AGE_MS = 60_000;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -54,7 +69,43 @@ export interface RateLimitSnapshot {
   outputTokensResetAt?: number;
 }
 
+/**
+ * What another process observed for the same provider+account. Field names
+ * match the usage ledger's `PerMinuteObservation` so a ledger record's
+ * `perMinute` section is assignable as-is. All times are epoch ms.
+ */
+export interface PeerRateLimitObservation {
+  requestsRemaining?: number;
+  requestsLimit?: number;
+  requestsResetAt?: number;
+  tokensRemaining?: number;
+  tokensLimit?: number;
+  tokensResetAt?: number;
+  frozenUntil?: number;
+  observedAt: number;
+}
+
+/** Synchronous peer source. May throw; the bucket treats a throw as "no peer data". */
+export type PeerRateLimitReader = () => PeerRateLimitObservation | undefined;
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** True when a peer's remaining count is current and lower than the local one. */
+function peerCountApplies(
+  peerRemaining: number | undefined,
+  peerResetAt: number | undefined,
+  observedAt: number,
+  now: number,
+  localRemaining: number,
+): peerRemaining is number {
+  if (peerRemaining === undefined) return false;
+  const current = peerResetAt !== undefined
+    ? peerResetAt > now
+    : now - observedAt < PEER_UNTIMED_MAX_AGE_MS;
+  if (!current) return false;
+  // -1 = unknown locally = unlimited; any known peer count is lower.
+  return localRemaining === -1 || peerRemaining < localRemaining;
+}
 
 
 function staggerJitterMs(): number {
@@ -112,6 +163,14 @@ export class RateLimitBucket {
   // Hard freeze state: a 429 arrived; block ALL new requests until this time.
   private frozenUntil = 0;
 
+  /** Epoch ms of the last `update()` (this process's own server reading). */
+  private lastObservedAt = 0;
+  /** Epoch ms of the last peer read; throttles the reader. */
+  private peerSyncedAt = 0;
+
+  /** @param peerReader optional cross-process source (see module header). */
+  constructor(private readonly peerReader?: PeerRateLimitReader) {}
+
   /** Reset all state; intended only for unit tests. */
   resetForTests(): void {
     this.requestsRemaining = -1;
@@ -122,6 +181,8 @@ export class RateLimitBucket {
     this.inputTokensLimit = -1;
     this.outputTokensRemainingVal = -1;
     this.frozenUntil = 0;
+    this.lastObservedAt = 0;
+    this.peerSyncedAt = 0;
   }
 
   /** Read-only snapshot of the tracked output-token headroom (informational; not gated). */
@@ -136,6 +197,7 @@ export class RateLimitBucket {
     if (snap.inputTokensResetAt !== undefined) this.inputTokensResetAt = snap.inputTokensResetAt;
     if (snap.inputTokensLimit !== undefined) this.inputTokensLimit = snap.inputTokensLimit;
     if (snap.outputTokensRemaining !== undefined) this.outputTokensRemainingVal = snap.outputTokensRemaining;
+    this.lastObservedAt = Date.now();
     // outputTokensResetAt is not stored — output tokens are not gated (size unknown before call).
     // A freeze is only cleared by time expiration (frozenUntil > now check in acquirePermit),
     // not by a concurrent successful response that may have been in-flight before the 429.
@@ -150,6 +212,43 @@ export class RateLimitBucket {
     const candidate = Date.now() + clamped;
     // Only extend the freeze, never shorten it.
     if (candidate > this.frozenUntil) this.frozenUntil = candidate;
+  }
+
+  /**
+   * Fold a peer observation into local state. Only ever tightens: a peer
+   * freeze still in force extends ours (same clamp as {@link freeze}); a
+   * peer count replaces ours only when it is lower, its window has not reset,
+   * and it was read after our own last server response.
+   */
+  adoptPeer(peer: PeerRateLimitObservation, now: number = Date.now()): void {
+    if (peer.frozenUntil !== undefined && peer.frozenUntil > now) {
+      const capped = Math.min(peer.frozenUntil, now + RETRY_AFTER_MAX_WAIT_MS);
+      if (capped > this.frozenUntil) this.frozenUntil = capped;
+    }
+    if (peer.observedAt <= this.lastObservedAt) return;
+    if (peerCountApplies(peer.requestsRemaining, peer.requestsResetAt, peer.observedAt, now, this.requestsRemaining)) {
+      this.requestsRemaining = peer.requestsRemaining;
+      if (peer.requestsResetAt !== undefined) this.requestsResetAt = peer.requestsResetAt;
+      if (this.requestsLimit === -1 && peer.requestsLimit !== undefined) this.requestsLimit = peer.requestsLimit;
+    }
+    if (peerCountApplies(peer.tokensRemaining, peer.tokensResetAt, peer.observedAt, now, this.inputTokensRemaining)) {
+      this.inputTokensRemaining = peer.tokensRemaining;
+      if (peer.tokensResetAt !== undefined) this.inputTokensResetAt = peer.tokensResetAt;
+      if (this.inputTokensLimit === -1 && peer.tokensLimit !== undefined) this.inputTokensLimit = peer.tokensLimit;
+    }
+  }
+
+  /** Throttled, fail-open peer read (at most once per {@link PEER_SYNC_INTERVAL_MS}). */
+  private syncPeer(now: number): void {
+    if (this.peerReader === undefined || now - this.peerSyncedAt < PEER_SYNC_INTERVAL_MS) return;
+    this.peerSyncedAt = now;
+    let peer: PeerRateLimitObservation | undefined;
+    try {
+      peer = this.peerReader();
+    } catch {
+      return; // Store failure = local-only behaviour.
+    }
+    if (peer !== undefined) this.adoptPeer(peer, now);
   }
 
   /** Advance windows whose deadline has already passed. */
@@ -192,6 +291,9 @@ export class RateLimitBucket {
       if (signal?.aborted) return;
 
       const now = Date.now();
+
+      // Adopt other processes' freezes / lower counts (throttled, fail-open).
+      this.syncPeer(now);
 
       // Hard freeze from a 429 — wait out the retry-after.
       if (this.frozenUntil > now) {
@@ -241,7 +343,10 @@ export class RateLimitBucket {
 }
 
 /**
- * Process-wide singleton. Imported by the fetch wrappers and client-setup
- * modules; never shared with concurrency-pool or the dispatch layer.
+ * Unkeyed, peer-less process-wide bucket. Kept for direct importers (tests,
+ * ad-hoc wrappers); provider clients use the per-provider+account buckets
+ * from `rate-limit-bucket.registry.ts` so one provider's headers never
+ * overwrite another's state. Never shared with concurrency-pool or the
+ * dispatch layer.
  */
 export const globalRateLimitBucket = new RateLimitBucket();

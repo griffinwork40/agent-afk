@@ -6,12 +6,13 @@
       "description": "Opt-in to loading + spawning MCP servers declared in <cwd>/.mcp.json. Fail-closed: when unset (or 0), project-local servers are NOT spawned; set to a truthy value (1/true/yes/on) to load them. A project-local .mcp.json spawns arbitrary commands on session start, so it is off by default to prevent code execution when entering an untrusted repo (issue #571). Skipped servers are listed in a startup warning with the opt-in instruction.",
       "type": "boolean",
       "required": false,
+      "default": "0",
       "example": "1",
       "category": "mcp"
     },
     {
       "name": "AFK_AUTO_ROUTING",
-      "description": "Auto-route bare slash inputs to matching skills. Applies to interactive, chat, telegram, and daemon surfaces.",
+      "description": "Auto-route bare slash inputs to matching skills. Applies to interactive, chat, and telegram surfaces. The afk web surface also inherits the interactive value (autoRouting.interactive), so this setting covers web sessions too.",
       "type": "boolean",
       "required": false,
       "example": "true",
@@ -62,11 +63,11 @@
     },
     {
       "name": "AFK_BROWSER_BACKEND",
-      "description": "Browser provider backend: auto (default, prefer Agent Browser, fall back to Playwright), agent-browser (require Agent Browser), or playwright (headless only).",
+      "description": "Browser provider backend: playwright (Playwright, the only supported backend) or auto (default, resolves to playwright). The legacy value agent-browser is accepted but deprecated — it resolves to playwright and emits a warning.",
       "type": "string",
       "required": false,
       "default": "auto",
-      "example": "agent-browser",
+      "example": "playwright",
       "category": "browser"
     },
     {
@@ -90,6 +91,7 @@
       "description": "Name of the persistent session-vault profile the agent reuses for browser sessions. The context restores its login from (and saves it back to) ~/.afk/state/browser/<profile>/storageState.json, so a human runs `afk browser login --profile <name>` once and the agent reuses that authenticated session across unattended runs. Unset defaults to `default` (a fresh, empty profile — identical to pre-vault behavior). Allowed charset: [A-Za-z0-9_-], max 128 chars.",
       "type": "string",
       "required": false,
+      "default": "default",
       "example": "work",
       "category": "browser"
     },
@@ -110,22 +112,6 @@
       "category": "browser"
     },
     {
-      "name": "AFK_CAPTURE_SUBAGENT_OUTPUT",
-      "description": "Capture subagent conversational OUTPUT (assistant text plus each tool call with its arguments) as a redacted markdown transcript under state/witness/<label>/outputs/. Flushed at every tool-call boundary, so a child killed by a timeout still leaves a usable partial record — the case where final-message capture yields nothing. Off by default. Set to 1 to enable. Note: best-effort regex redaction only — connection strings, PEM blocks, and PII are not caught.",
-      "type": "boolean",
-      "required": false,
-      "example": "1",
-      "category": "debug"
-    },
-    {
-      "name": "AFK_CAPTURE_SUBAGENT_PROMPTS",
-      "description": "Opt-in: when set to 1, every prompt a parent session sends to a subagent is written as a redacted markdown file under state/witness/<label>/prompts/. Off by default because nothing prunes the witness tree and prompts may carry secrets the regex redactor cannot catch (connection strings, PEM blocks, PII).",
-      "type": "boolean",
-      "required": false,
-      "example": "1",
-      "category": "debug"
-    },
-    {
       "name": "AFK_CENTER_CONTENT",
       "description": "When set to \"1\" (or any truthy value), content surfaces (tool-lane overlay, scrollback blocks, input line, spinner, and OODA stage rail) are horizontally centered by prepending a left margin equal to Math.floor((terminalWidth - contentMeasure) / 2). No-op when the terminal is at or below the content measure — the common 80–100 column case. Default off (empty string). Opt-in: set AFK_CENTER_CONTENT=1 to enable.",
       "type": "boolean",
@@ -144,10 +130,10 @@
     },
     {
       "name": "AFK_COMPACT_MODEL",
-      "description": "Override the model used by the /compact summarizer. Falls back to a cheap default (haiku-class).",
+      "description": "Model id or slot alias used by the /compact summarizer and auto-compaction. Accepts any model on any supported provider (anthropic, openai, xai). Cross-provider compaction is supported: set to a gpt-* id on a Claude session (or a claude-* id on an OpenAI session) and AFK will route the summarize call to that provider using its own credentials. The transcript is sent to the target provider — a one-time privacy warning is emitted on first cross-provider use. Requires that provider's credentials to be available (ANTHROPIC_API_KEY / OPENAI_API_KEY / XAI_API_KEY, or ChatGPT-subscription OAuth from `codex login`). When unset: Anthropic sessions fall back to claude-haiku-class; OpenAI API-key sessions (api.openai.com) fall back to gpt-6-luna; ChatGPT-subscription (chatgpt-oauth) and custom-baseURL sessions (local runners, proxies) fall back to the session model. Also drives ghost-text suggestions on Claude sessions (see AFK_SUGGEST_MODEL to override that independently).",
       "type": "string",
       "required": false,
-      "example": "claude-haiku-4-5",
+      "example": "gpt-6-luna",
       "category": "model"
     },
     {
@@ -165,6 +151,50 @@
       "required": false,
       "example": "/Users/me/Projects/afk-companion/PRIMER.md",
       "category": "paths"
+    },
+    {
+      "name": "AFK_CONNECT_RETRY_BUDGET_MS",
+      "description": "Experimental streaming connection retry wall budget in milliseconds. Positive finite value enables capped jittered backoff before the stream opens; unset or invalid preserves legacy retry counts. In-flight attempts retain existing timeouts.",
+      "type": "number",
+      "required": false,
+      "example": "120000",
+      "category": "model"
+    },
+    {
+      "name": "AFK_CONTEXT_GUARD_DISABLE",
+      "description": "Disable the temporary within-turn context pressure guard (1/true/yes/on). Restores unguarded tool-loop behavior; ordinary compaction and round caps remain enabled.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_CONTEXT_GUARD_PCT",
+      "description": "Temporary within-turn context guard operational threshold as percent of the effective provider-route limit (catalog metadata for subscription routes; contextLimitFor() for API-key routes). Default 95. Not a documented model capacity or guaranteed server cutoff. Valid range 1–99.",
+      "type": "number",
+      "required": false,
+      "default": "95",
+      "example": "90",
+      "category": "model"
+    },
+    {
+      "name": "AFK_DAEMON_BUDGET_GATE_DISABLED",
+      "description": "Set to 1 to disable the subscription-usage budget gate for daemon/cron agent tasks. When unset (default) the daemon checks Claude subscription utilization before starting each agent task and skips the run if any window is at or above AFK_DAEMON_BUDGET_SKIP_PCT. Shell and builtin tasks are never gated regardless of this setting.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "daemon"
+    },
+    {
+      "name": "AFK_DAEMON_BUDGET_SKIP_PCT",
+      "description": "Subscription-usage skip threshold (0–100 integer) for the daemon budget gate. When any Claude subscription window's utilization is at or above this percentage, scheduled agent tasks are skipped with a Telegram notice. Default 90 (90%). Set to 100 to disable the gate entirely (no usage fetch is made and every task passes). Requires AFK_DAEMON_BUDGET_GATE_DISABLED=0 (default).",
+      "type": "number",
+      "required": false,
+      "default": "90",
+      "example": "80",
+      "category": "daemon"
     },
     {
       "name": "AFK_DAEMON_CWD",
@@ -249,7 +279,7 @@
     },
     {
       "name": "AFK_DISABLE_BASH_INTERPRETER_GUARD",
-      "description": "Skip ONLY the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) when set to 1, leaving the rest of path-approval intact. Applies on interactive surfaces (REPL/Telegram), where the denylist is active but your workflow legitimately runs interpreter one-liners. The restricted-root substring check is unaffected. Default: denylist active on interactive surfaces; headless already fails open (opt in with AFK_FORCE_BASH_INTERPRETER_GUARD=1). To disable all of path-approval + bash restriction instead, use AFK_DISABLE_PATH_APPROVAL=1.",
+      "description": "Skip ONLY the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) when set to 1, leaving the rest of path-approval intact. Applies on interactive surfaces (REPL/Telegram), where the denylist is active but your workflow legitimately runs interpreter one-liners. The restricted-root substring check is unaffected. Default: denylist active on interactive surfaces; contexts with no grant manager already fail open (opt in with AFK_FORCE_BASH_INTERPRETER_GUARD=1). To disable all of path-approval + bash restriction instead, use AFK_DISABLE_PATH_APPROVAL=1.",
       "type": "boolean",
       "required": false,
       "default": "0",
@@ -258,7 +288,7 @@
     },
     {
       "name": "AFK_DISABLE_PATH_APPROVAL",
-      "description": "Skip the path-approval + bash-restriction hooks entirely when set to 1. Use for headless flows that need wide-open file access (CI scripts, batch jobs). Default: hooks enabled. Note: on headless surfaces (afk chat, daemon) no grant manager is wired, so the interpreter denylist (python -c, node -e, sh -c, ...) fails OPEN by default — opt headless flows into it with AFK_FORCE_BASH_INTERPRETER_GUARD=1, or set this var to 1 to disable all of path-approval.",
+      "description": "Skip the path-approval + bash-restriction hooks entirely when set to 1. Use for headless flows that need wide-open file access (CI scripts, batch jobs). Default: hooks enabled. Note: the interpreter denylist (python -c, node -e, sh -c, ...) fires wherever the session provider is wired as the grant manager (every production surface) and fails OPEN only for contexts with none; opt those into it with AFK_FORCE_BASH_INTERPRETER_GUARD=1, or set this var to 1 to disable all of path-approval.",
       "type": "boolean",
       "required": false,
       "default": "0",
@@ -310,7 +340,7 @@
     },
     {
       "name": "AFK_FORCE_BASH_INTERPRETER_GUARD",
-      "description": "Apply the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) even on headless surfaces (afk chat, daemon) where no grant manager is wired. By default the denylist fires only on interactive surfaces (REPL/Telegram), failing open on headless so legitimate automation is not hard-blocked with no recourse. Set to 1 to opt headless flows back into the guard. Overridden by AFK_DISABLE_BASH_INTERPRETER_GUARD=1. Default: off (headless fails open).",
+      "description": "Apply the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) even to tool calls whose context carries no grant manager. Every production provider wires itself as the grant manager on every surface (REPL, Telegram, afk chat, daemon, subagents), so there the denylist is already active; without one it fails open. Set to 1 to force it on for those contexts too. Overridden by AFK_DISABLE_BASH_INTERPRETER_GUARD=1. Default: off.",
       "type": "boolean",
       "required": false,
       "default": "0",
@@ -323,6 +353,14 @@
       "type": "string",
       "required": false,
       "category": "paths"
+    },
+    {
+      "name": "AFK_FRAMEWORK_PROMPT_FILE",
+      "description": "Absolute path to a replacement for the framework base system prompt (`system-prompt.md`). When set, `loadSystemPrompt()` reads this file instead of the bundled `system-prompt.md`. Unset = byte-identical default behaviour. Fail-closed: a relative path or an unreadable file is a hard error with no bundled-prompt fallback — a silent fallback would turn an A/B run into A/A. This error reaches EVERY surface that builds a system prompt. At startup (CLI, Telegram) it crashes the process with a clear message. Mid-session (`/afk-md reload`) it surfaces an error and leaves the REPL usable. Mid-server (`afk web` session-create) it rejects the request with an actionable message and keeps other sessions running. Use only with `afk whatif --env AFK_FRAMEWORK_PROMPT_FILE=<path>` — never set it persistently in `afk.env` (a stale value there blocks every surface until removed).",
+      "type": "string",
+      "required": false,
+      "example": "/tmp/whatif-narration/system-prompt.narrate.md",
+      "category": "misc"
     },
     {
       "name": "AFK_GOBLIN_MASCOT",
@@ -407,11 +445,10 @@
     },
     {
       "name": "AFK_MAX_BUDGET_USD",
-      "description": "Cumulative USD budget ceiling for the session. Aborts the turn when the running cost crosses this.",
+      "description": "Opt-in cumulative USD budget ceiling for the session. Aborts the turn when the running cost crosses this. Unset by default (no cap applied).",
       "type": "number",
       "required": false,
-      "default": "5.00",
-      "example": "10.00",
+      "example": "5.00",
       "category": "model"
     },
     {
@@ -501,6 +538,14 @@
       "category": "model"
     },
     {
+      "name": "AFK_MCP_HEALTHCHECK",
+      "description": "Enable an optional post-connect liveness probe that re-issues tools/list to every connected MCP server in parallel after the initial connect burst. OFF by default — the extra round-trip adds cold-start latency (issue #1751). Set to a truthy value (1/true/yes/on) to enable.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "mcp"
+    },
+    {
       "name": "AFK_MEMORY_EVIDENCE_GATE",
       "description": "Evidence gate for durable memory writes. When enabled, a codebase fact (memory_update category \"convention\") stored without an evidence citation is recalled as [unverified], and memory_search results carry a verification verdict. User preferences and agent reflections are never gated. On by default. Set to 0 to disable.",
       "type": "boolean",
@@ -508,6 +553,32 @@
       "default": "1",
       "example": "0",
       "category": "misc"
+    },
+    {
+      "name": "AFK_MEMORY_GC_MIN_AGE_DAYS",
+      "description": "Minimum age in days for a never-accessed fact to become a GC candidate. Only meaningful when AFK_MEMORY_GC_SWEEP_ENABLE=1. Default 30. Age is counted only for facts created since tracking began. Must be a positive number; invalid values fall back to the default.",
+      "type": "number",
+      "required": false,
+      "default": "30",
+      "example": "60",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_MEMORY_GC_SWEEP_ENABLE",
+      "description": "Enable the periodic soft-delete GC sweep for the fact archive. When set to 1, never-accessed facts older than AFK_MEMORY_GC_MIN_AGE_DAYS are marked superseded (soft-deleted) at most once every 24 hours at session start. Off by default — enable only when archive noise becomes measurable. \"preference\" facts and facts predating this database's tracking-start marker are always excluded regardless of this setting.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_MESSAGE_JOURNAL_DISABLED",
+      "description": "Disable the per-session message journal (state/sessions/<id>/journal.jsonl + blobs/). The journal records the full conversation, including full tool results, and is the source for --resume and /fork. Set to 1 to skip journal writes; resume then falls back to the text-only sidecar history.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "debug"
     },
     {
       "name": "AFK_MICROCOMPACT_DELEGATION_BYTES",
@@ -542,7 +613,7 @@
       "type": "string",
       "required": false,
       "default": "medium",
-      "example": "claude-opus-5",
+      "example": "claude-opus-5-5",
       "category": "model"
     },
     {
@@ -550,7 +621,7 @@
       "description": "Bind the \"large\" capability tier (most capable) to a model id/alias. Overrides afk.config.json models.large.",
       "type": "string",
       "required": false,
-      "example": "claude-opus-5",
+      "example": "claude-opus-5-5",
       "category": "model"
     },
     {
@@ -676,14 +747,6 @@
       "category": "model"
     },
     {
-      "name": "AFK_OPENAI_CHATGPT_OAUTH",
-      "description": "Use ChatGPT-subscription OAuth credentials from ~/.codex/auth.json (auth_mode: chatgpt) as OpenAI provider auth. Off by default. Set to 1/true/yes/on to enable. READ-ONLY: AFK never refreshes these tokens — re-run codex when the access token expires. Routes requests over the Responses API to the private ChatGPT backend (chatgpt.com/backend-api).",
-      "type": "boolean",
-      "required": false,
-      "example": "1",
-      "category": "model"
-    },
-    {
       "name": "AFK_OPENAI_USE_RESPONSES",
       "description": "Opt the OpenAI-compatible provider into the OpenAI Responses API instead of Chat Completions for API-key sessions. Truthy values: 1, true, yes, on. The ChatGPT-subscription OAuth path uses Responses automatically regardless of this flag.",
       "type": "boolean",
@@ -700,12 +763,38 @@
       "category": "model"
     },
     {
+      "name": "AFK_PEER_INBOUND",
+      "description": "How this REPL session handles incoming peer messages. 'accept' (default) delivers messages to the model at the next idle turn. 'hold' writes them to held/ for /inbox review. 'off' ignores incoming messages. Invalid values fall back to 'accept' with a one-time warning emitted via debugLog (visible under AFK_DEBUG=1).",
+      "type": "string",
+      "required": false,
+      "default": "accept",
+      "example": "hold",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_PEER_POLL_MS",
+      "description": "Polling interval in milliseconds for the peer inbox notifier when fs.watch is unavailable or unreliable. Default 1000.",
+      "type": "number",
+      "required": false,
+      "default": "1000",
+      "example": "2000",
+      "category": "misc"
+    },
+    {
       "name": "AFK_PLAIN_OUTPUT",
       "description": "Force the interactive REPL to fully behave like a non-TTY surface for rendering purposes, even when stdout/stdin ARE a TTY: append-only plain-stdout output instead of the TerminalCompositor live overlay (both the persistent between-turn compositor AND the per-turn StreamRenderer overlay), AND the input surface downgrades to the simple non-TTY line reader instead of the fancy compositor-backed input box. Same code path already used for non-TTY surfaces (pipes, CI). Full opt-out escape hatch for tmux/SSH/multiplexer sessions where cursor-up redraws and DECSTBM scroll regions misbehave — trades the live overlay and fancy input UX for reliability. Opt-in — default TTY behavior (live overlay + fancy input) is unchanged unless this var is set. Truthy values: 1, true (case-insensitive).",
       "type": "boolean",
       "required": false,
       "example": "1",
       "category": "misc"
+    },
+    {
+      "name": "AFK_PREEXISTING_LEDGER_DISABLE",
+      "description": "Set to 1 to disable the pre-existing-defect SessionEnd hook. When set, the hook will not scan session turns or append records to ~/.afk/agent-framework/preexisting-ledger.jsonl. Useful in test environments or when the ledger is not desired.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "debug"
     },
     {
       "name": "AFK_PROMPT_CACHE_TTL",
@@ -768,6 +857,14 @@
       "category": "debug"
     },
     {
+      "name": "AFK_SDK_SURFACE_WARN",
+      "description": "Controls the one-time warning emitted when an SDK session (AgentSession / query() / queryText()) discovers skills but has no skillExecutor wired, meaning the model cannot invoke them. Set to 0 to silence the warning (useful when the reduced surface is intentional).",
+      "type": "string",
+      "required": false,
+      "example": "0",
+      "category": "misc"
+    },
+    {
       "name": "AFK_SESSION_ID",
       "description": "Override the browser session ID used by the native browser-control tools. Defaults to 'default' for single-session use. Subagents inherit the parent's session by default. Set this when running multiple concurrent AFK processes that should each manage an isolated browser context.",
       "type": "string",
@@ -809,6 +906,14 @@
       "category": "debug"
     },
     {
+      "name": "AFK_SESSION_TMPDIR_DISABLE",
+      "description": "Disable per-session private temp dirs. By default every session and subagent gets its own directory under <os tmpdir>/afk-<uid>/ (removed on close) injected as TMPDIR/TMP/TEMP into bash and test_run child processes, so one session cleaning its temp files cannot delete a concurrent session's. Set to 1 to share the inherited TMPDIR instead.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "process"
+    },
+    {
       "name": "AFK_SESSIONSTART_COOLDOWN_MS",
       "description": "Cooldown in milliseconds between SessionStart trigger fires in the daemon. Prevents thundering-herd on rapid restarts.",
       "type": "number",
@@ -847,8 +952,17 @@
       "category": "debug"
     },
     {
+      "name": "AFK_SMOKE_TEXT",
+      "description": "When set to \"1\" (or true/yes/on), streamed assistant prose in the interactive REPL condenses out of faint smoke (speck, then haze, then a dim letter, then the real letter) instead of popping in. Needs a 256-color or truecolor terminal. It stays off for NO_COLOR, non-TTY output, AFK_PLAIN_OUTPUT, Telegram, the daemon, and AFK_REDUCED_MOTION=1, and it skips code fences and tables. Default off. Set AFK_SMOKE_TEXT=0 or unset it to disable.",
+      "type": "boolean",
+      "required": false,
+      "default": "",
+      "example": "1",
+      "category": "display"
+    },
+    {
       "name": "AFK_SPINNER_TIPS",
-      "description": "Show rotating tips in the loading spinner during long calls. 1 = on, 0 = off.",
+      "description": "Show rotating tips in the loading spinner during long calls. 1 = on, 0 = off. State-specific hints (e.g. the wait_for queue-to-stop hint) still show.",
       "type": "boolean",
       "required": false,
       "category": "misc"
@@ -861,6 +975,15 @@
       "category": "paths"
     },
     {
+      "name": "AFK_STOP_HOOK_MAX_CONTINUATIONS",
+      "description": "Maximum number of same-turn continuation rounds a blocking Stop hook may trigger before the turn ends normally (issue #2714). Each continuation re-enters the model loop with the block reason as a framework user message, giving the agent another chance to address the hook. 0 disables continuation entirely (the turn ends on first block). Default: 2.",
+      "type": "number",
+      "required": false,
+      "default": "2",
+      "example": "3",
+      "category": "misc"
+    },
+    {
       "name": "AFK_STREAM_BUFFER_MS",
       "description": "Input buffer window for TUI streaming in milliseconds. When set to a positive value, incoming tokens are micro-batched before parsing and rendering, producing smoother visual output. The first token after idle always passes through immediately (leading-edge). 0 = disabled (every token is parsed individually). Reasonable range: 8-50.",
       "type": "number",
@@ -868,6 +991,15 @@
       "default": "0",
       "example": "16",
       "category": "display"
+    },
+    {
+      "name": "AFK_SUBAGENT_AUTO_RESUME_ON_USAGE_LIMIT",
+      "description": "When set to 1/true, forked sub-agents that hit an OAuth usage-limit 429 will park and wait (up to 2 hours) for a keychain account hot-swap before surfacing the error — the same behaviour as top-level interactive sessions. When false (the default), forks fail fast so the parent session can decide how to recover. Ignored for daemon-surface sessions, because no human can switch accounts there. Callers may override per-fork via config.autoResumeOnUsageLimit; an explicit value always wins over this env var.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "model"
     },
     {
       "name": "AFK_SUBAGENT_IDLE_TIMEOUT_MS",
@@ -880,7 +1012,7 @@
     },
     {
       "name": "AFK_SUBAGENT_LOG",
-      "description": "Opt-in per-subagent conversation log. Writes OutputEvent JSONL to state/subagent-logs/<sessionLabel>/<subagentId>.jsonl for both foreground and background subagents. Powers /tasks:view replay. OFF by default (raw tool arguments are written without redaction — consistent with AFK_CAPTURE_SUBAGENT_PROMPTS / AFK_CAPTURE_SUBAGENT_OUTPUT). Set to 1 to enable.",
+      "description": "Opt-in per-subagent conversation log. Writes OutputEvent JSONL to state/subagent-logs/<sessionLabel>/<subagentId>.jsonl for both foreground and background subagents. Powers /tasks:view replay. OFF by default (raw tool arguments are written without redaction). Set to 1 to enable.",
       "type": "boolean",
       "required": false,
       "example": "1",
@@ -888,7 +1020,7 @@
     },
     {
       "name": "AFK_SUBAGENT_RESULT_CAP_BYTES",
-      "description": "Foreground subagent result size cap in bytes. When a subagent's final message exceeds this threshold, the full output is spilled to a sidecar file (state/sessions/<id>/subagent-handoffs/<subagentId>.txt) and the parent receives a head+tail slice with a read_file pointer. Prevents large subagent outputs from bloating parent context. Set to 0 to disable the cap entirely. Default 32768 (32KB). Note: sidecar files contain unredacted subagent output (same caveats as AFK_CAPTURE_SUBAGENT_OUTPUT). No automatic GC covers subagent-handoffs/ today; retention is tied to session-directory cleanup.",
+      "description": "Foreground subagent result size cap in bytes. When a subagent's final message exceeds this threshold, the full output is spilled to a sidecar file (state/sessions/<id>/subagent-handoffs/<subagentId>.txt) and the parent receives a head+tail slice with a read_file pointer. Prevents large subagent outputs from bloating parent context. Set to 0 to disable the cap entirely. Default 32768 (32KB). Note: sidecar files contain unredacted subagent output. No automatic GC covers subagent-handoffs/ today; retention is tied to session-directory cleanup.",
       "type": "number",
       "required": false,
       "default": "32768",
@@ -1080,6 +1212,13 @@
       "category": "model"
     },
     {
+      "name": "AFK_TOOL_HEALTH_DISABLE",
+      "description": "Disable the tool-health daemon builtin entirely. Set to \"1\" to skip registration.",
+      "type": "boolean",
+      "required": false,
+      "category": "daemon"
+    },
+    {
       "name": "AFK_TRACE_DISABLED",
       "description": "Disable the agent trace subsystem entirely. Set to 1 to skip trace file writes.",
       "type": "boolean",
@@ -1096,6 +1235,24 @@
       "category": "misc"
     },
     {
+      "name": "AFK_UNPROVEN_DIAGNOSIS_GATE",
+      "description": "Opt-in Stop hook that prevents a turn from closing with an unproven \"external / root cause unknown\" diagnosis. When set to 1, the hook scans the final assistant text for cause-unknown language (\"root cause\" near \"not found|unknown\", \"something else in\", \"likely upstream\") AND checks for the absence of instrumentation tool calls (hash/manifest checks, bypass reruns, counter/log insertions). When both conditions are met it injects a correction asking the agent to run the elimination ladder (byte-verify installs, bypass wrapper, clean-env repeat, instrument the path) before closing. Fires at most once per turn. Does not fire when instrumentation evidence is already present, or on subagent turns. Default: 0 (off).",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_USAGE_LEDGER_DISABLED",
+      "description": "Set to 1 to stop publishing/reading the cross-process usage ledger (namespace `usage` in state/kv/kv.db). Usage surfaces (`afk usage`, get_runtime_state, fan-out notice, daemon budget gate) then see only this process's in-memory quota cache. Default 0 (ledger active).",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "model"
+    },
+    {
       "name": "AFK_USER_CARD_MAX_ROWS",
       "description": "Maximum number of visual rows emitted by renderUserCard before collapsing the remainder into a dim \"…(N lines collapsed)\" summary row. Defaults to 24. Non-integer or non-positive values are silently ignored and the default applies.",
       "type": "number",
@@ -1110,6 +1267,15 @@
       "required": false,
       "example": "qwen2.5-vl,!gpt-4o-mini",
       "category": "model"
+    },
+    {
+      "name": "AFK_VITALS",
+      "description": "Per-round \"[vitals]\" harness note appended to each tool-result turn so the model stays aware of fast-changing state: local wall-clock time and elapsed turn time every round, time left before the soft deadline when one is set, context-window fill once it reaches 50%, and (root Anthropic sessions only) Claude subscription usage once it reaches 80%. Set to 0 to disable. Default: on.",
+      "type": "boolean",
+      "required": false,
+      "default": "1",
+      "example": "0",
+      "category": "misc"
     },
     {
       "name": "AFK_WAVE_MANIFEST_DISABLED",
@@ -1151,6 +1317,7 @@
       "description": "Bind address for the `afk web` browser surface. Defaults to 127.0.0.1. Unlike the daemon control surface, a non-loopback bind is REFUSED unless AFK_WEB_TOKEN (or --token) is also set, because this surface can submit prompts and approve tool use. Overridden by --host.",
       "type": "string",
       "required": false,
+      "default": "127.0.0.1",
       "example": "127.0.0.1",
       "category": "daemon"
     },
@@ -1159,6 +1326,7 @@
       "description": "Port for the `afk web` browser surface. Defaults to 4141; falls back to an ephemeral port when taken. Overridden by --port.",
       "type": "number",
       "required": false,
+      "default": "4141",
       "example": "4141",
       "category": "daemon"
     },
@@ -1169,6 +1337,41 @@
       "required": false,
       "category": "daemon",
       "secret": true
+    },
+    {
+      "name": "AFK_WHATIF_ALLOW_MCP",
+      "description": "When set to a truthy value (1/true/yes/on) inside a what-if episode (AFK_WHATIF_EPISODE=1), keep MCP servers enabled. By default, MCP servers are disabled inside episodes to prevent side effects from spawning external processes. Set this flag only when the change under test specifically concerns MCP server behaviour.",
+      "type": "boolean",
+      "required": false,
+      "default": "",
+      "example": "1",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_WHATIF_EPISODE",
+      "description": "When set to \"1\" or \"true\", the process is a sandboxed what-if episode. The episode gate (src/agent/whatif-episode-gate.ts) intercepts every PreToolUse call: read-only tools execute normally; the first side-effecting action is RECORDED as the decision but NOT executed. Episode processes are spawned by `afk whatif --verify` as isolated subprocesses with their own AFK_HOME / AFK_STATE_DIR pointing at the sandbox. Do not set this manually in production — it disables delegation, MCP (unless AFK_WHATIF_ALLOW_MCP=1), and all write tools.",
+      "type": "boolean",
+      "required": false,
+      "default": "",
+      "example": "1",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_WHATIF_KEEP_CONTEXT_HOOKS",
+      "description": "When set to a truthy value (1/true/yes/on) inside a what-if episode (AFK_WHATIF_EPISODE=1), keep SessionStart and UserPromptSubmit config/plugin hooks enabled. By default, these hooks are disabled inside episodes so that both the baseline and candidate arms see byte-identical first user messages, preventing cwd- or recency-sensitive hook output from confounding the measured delta. Set this flag only when the change under test specifically concerns context-injecting hook behaviour.",
+      "type": "boolean",
+      "required": false,
+      "default": "",
+      "example": "1",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_WHATIF_TOOL_LOG",
+      "description": "Absolute path of a JSONL file the episode gate appends every tool request to (one JSON line per call). Each line has the shape `{\"ts\":<ms>,\"tool\":<name>,\"input\":<raw input>,\"verdict\":\"executed\"|\"recorded\",\"subagent\":<bool>}`. Ignored when AFK_WHATIF_EPISODE is not set. The file is created if absent; write errors are swallowed so a full disk never disrupts tool execution.",
+      "type": "string",
+      "required": false,
+      "example": "/tmp/whatif-run-abc123/tool-log.jsonl",
+      "category": "misc"
     },
     {
       "name": "AFK_WITNESS_MAX_AGE_DAYS",
@@ -1386,6 +1589,13 @@
       "secret": true
     },
     {
+      "name": "CODEX_HOME",
+      "description": "Codex configuration, plugin, and skill directory used for imports. Defaults to ~/.codex.",
+      "type": "string",
+      "required": false,
+      "category": "paths"
+    },
+    {
       "name": "COLORFGBG",
       "description": "Terminal-set \"foreground;background\" color hint (e.g. \"15;0\"), read only for AFK_THEME=auto detection. The trailing field is the background color index; >= 7 is treated as a light background, otherwise dark. Not set by AFK — emitted by some terminals (rxvt, Konsole, iTerm2). Absent or unparseable => dark.",
       "type": "string",
@@ -1447,6 +1657,13 @@
       "category": "process"
     },
     {
+      "name": "MSYSTEM",
+      "description": "Set by Git Bash environments (e.g. MINGW64). Signals that bash.exe is already on PATH in resolve-shell.ts.",
+      "type": "string",
+      "required": false,
+      "category": "process"
+    },
+    {
       "name": "NO_COLOR",
       "description": "Standard convention (https://no-color.org). When set to any non-empty value, disables ANSI color output.",
       "type": "string",
@@ -1476,6 +1693,14 @@
       "required": false,
       "category": "auth",
       "secret": true
+    },
+    {
+      "name": "OPENAI_BASE_URL",
+      "description": "Standard OpenAI SDK base URL override. When set without AFK_OPENAI_BASE_URL, the OpenAI SDK routes the client to this endpoint while AFK's own baseURL option remains undefined. AFK reads this variable to correctly classify the effective endpoint for decisions such as compaction model selection — without it, AFK would see an undefined baseURL and incorrectly treat the session as targeting api.openai.com.",
+      "type": "string",
+      "required": false,
+      "example": "http://127.0.0.1:8000/v1",
+      "category": "model"
     },
     {
       "name": "PAGER",
@@ -1509,6 +1734,13 @@
       "category": "process"
     },
     {
+      "name": "SystemRoot",
+      "description": "Windows system root directory (typically C:\\Windows). Used to identify WSL bash.exe shim paths in resolve-shell.ts.",
+      "type": "string",
+      "required": false,
+      "category": "process"
+    },
+    {
       "name": "TELEGRAM_BOT_TOKEN",
       "description": "Telegram bot token from @BotFather. Required to run the Telegram bot surface.",
       "type": "string",
@@ -1533,10 +1765,18 @@
     },
     {
       "name": "TMUX",
-      "description": "OS-level tmux session identifier. Set automatically by tmux to the socket path and session info (e.g. /tmp/tmux-501/default,12345,0) inside any tmux pane. Not set by AFK. Read by configureColor() to detect a tmux environment; for truecolor support on Node ≤ 24, set FORCE_COLOR=3 in your shell or ~/.afk/config/afk.env.",
+      "description": "OS-level tmux session identifier. Set automatically by tmux to the socket path and session info (e.g. /tmp/tmux-501/default,12345,0) inside any tmux pane. Not set by AFK. Read by configureColor() to detect a tmux environment, and by peer messaging to derive a default session name (#S:#I); for truecolor support on Node ≤ 24, set FORCE_COLOR=3 in your shell or ~/.afk/config/afk.env.",
       "type": "string",
       "required": false,
       "example": "/tmp/tmux-501/default,12345,0",
+      "category": "process"
+    },
+    {
+      "name": "TMUX_PANE",
+      "description": "tmux pane identifier, set automatically by tmux inside any pane (e.g. %0). Used by AFK to target the correct pane when composing a tmux display-message label.",
+      "type": "string",
+      "required": false,
+      "example": "%0",
       "category": "process"
     },
     {

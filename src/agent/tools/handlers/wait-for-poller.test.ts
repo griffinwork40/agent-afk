@@ -291,3 +291,122 @@ describe('pollUntil', () => {
     expect(calls2Result[1]![0]).toBe(60_000);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #2750: Permanent-block fast-fail
+// ---------------------------------------------------------------------------
+
+describe('#2750 pollUntil — blocked:true fails fast', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns failed immediately when result has data.blocked === true', async () => {
+    // Simulate a risk-classifier block: evaluator returns met:false, blocked:true.
+    const blockedResult: import('./wait-for-conditions.js').WaitResult = {
+      met: false,
+      detail: 'command blocked by risk classifier (medium risk): gh run list',
+      data: { blocked: true, command: 'gh run list' },
+    };
+    const evaluate = vi.fn((_sig: AbortSignal) => Promise.resolve(blockedResult));
+    const ac = new AbortController();
+
+    const result = await pollUntil(evaluate, {
+      timeout_ms: DEFAULT_TIMEOUT_MS, // long timeout — should NOT exhaust
+      poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
+      backoff: 'none',
+      signal: ac.signal,
+    });
+
+    // Must fail after the FIRST attempt, not retry until the full timeout.
+    expect(result.status).toBe('failed');
+    expect(result.attempts).toBe(1);
+    expect(result.error).toContain('blocked');
+    // Must NOT sleep — no retry after a permanent block.
+    expect(mockSleep).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the evaluator detail as the error message', async () => {
+    const detail = 'command blocked by risk classifier (medium risk): some-cmd';
+    const evaluate = vi.fn((_sig: AbortSignal) => Promise.resolve({
+      met: false as const,
+      detail,
+      data: { blocked: true },
+    }));
+    const ac = new AbortController();
+
+    const result = await pollUntil(evaluate, {
+      timeout_ms: DEFAULT_TIMEOUT_MS,
+      poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
+      backoff: 'none',
+      signal: ac.signal,
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.error).toBe(detail);
+  });
+
+  it('evaluator is only called once on a permanent block', async () => {
+    const evaluate = vi.fn((_sig: AbortSignal) => Promise.resolve({
+      met: false as const,
+      detail: 'SSRF blocked: refusing to fetch — internal/private address 192.168.1.1',
+      data: { blocked: true },
+    }));
+    const ac = new AbortController();
+
+    await pollUntil(evaluate, {
+      timeout_ms: DEFAULT_TIMEOUT_MS,
+      poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
+      backoff: 'none',
+      signal: ac.signal,
+    });
+
+    // Only one call — no retry loop
+    expect(evaluate).toHaveBeenCalledTimes(1);
+  });
+
+  it('normal met:false (no blocked flag) still retries', async () => {
+    // Sanity check: a plain miss should NOT trigger the fast-fail path.
+    let calls = 0;
+    const evaluate = vi.fn((_sig: AbortSignal) => {
+      calls++;
+      return Promise.resolve(calls < 3
+        ? { met: false as const, detail: 'not yet' }
+        : { met: true as const, detail: 'done' });
+    });
+    const ac = new AbortController();
+
+    const result = await pollUntil(evaluate, {
+      timeout_ms: DEFAULT_TIMEOUT_MS,
+      poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
+      backoff: 'none',
+      signal: ac.signal,
+    });
+
+    expect(result.status).toBe('succeeded');
+    expect(result.attempts).toBe(3);
+    expect(mockSleep).toHaveBeenCalledTimes(2);
+  });
+
+  it('met:false with data.blocked === false does NOT trigger fast-fail', async () => {
+    // blocked: false must not be confused with blocked: true
+    let calls = 0;
+    const evaluate = vi.fn((_sig: AbortSignal) => {
+      calls++;
+      return Promise.resolve(calls < 2
+        ? { met: false as const, detail: 'transient miss', data: { blocked: false } }
+        : { met: true as const, detail: 'done' });
+    });
+    const ac = new AbortController();
+
+    const result = await pollUntil(evaluate, {
+      timeout_ms: DEFAULT_TIMEOUT_MS,
+      poll_interval_ms: DEFAULT_POLL_INTERVAL_MS,
+      backoff: 'none',
+      signal: ac.signal,
+    });
+
+    expect(result.status).toBe('succeeded');
+    expect(result.attempts).toBe(2);
+  });
+});

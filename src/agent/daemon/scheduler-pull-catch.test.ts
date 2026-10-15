@@ -93,13 +93,17 @@ beforeEach(() => {
 
 afterEach(async () => {
   vi.useRealTimers();
-  rmSync(queueDir, { recursive: true, force: true });
-  rmSync(telemetryDir, { recursive: true, force: true });
+  // maxRetries: background processes (SQLite ledger, state-store writes) can
+  // still hold handles open on Windows for a brief window after the scheduler
+  // stops, causing EBUSY.  Five retries with a 50 ms delay keep the teardown
+  // fast while tolerating the typical handle-release lag.
+  rmSync(queueDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  rmSync(telemetryDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   if (savedAfkHome === undefined) delete process.env['AFK_HOME'];
   else process.env['AFK_HOME'] = savedAfkHome;
   if (savedAllowProjectMcp === undefined) delete process.env['AFK_ALLOW_PROJECT_MCP'];
   else process.env['AFK_ALLOW_PROJECT_MCP'] = savedAllowProjectMcp;
-  if (homeDir !== undefined) rmSync(homeDir, { recursive: true, force: true });
+  if (homeDir !== undefined) rmSync(homeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   homeDir = undefined;
 });
 

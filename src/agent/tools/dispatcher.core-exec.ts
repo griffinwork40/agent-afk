@@ -24,6 +24,7 @@
  */
 
 import { debugLog } from '../../utils/debug.js';
+import { runInTmpdirScope } from '../session/session-tmpdir.js';
 import { dispatchPostToolUse, dispatchPostToolUseFailure } from '../subagent-hooks.js';
 import { headAndTail } from './handlers/_output-cap.js';
 import { emitPreToolUseBlock } from './dispatcher.pre-dispatch-gates.js';
@@ -38,7 +39,10 @@ import type { ToolHandler, ToolHandlerContext } from './types.js';
 import type { TraceSink } from '../trace/index.js';
 import type { GrantManager } from './grant-manager.js';
 import type { PreDispatchGateDeps } from './dispatcher.pre-dispatch-gates.js';
+import type { DetachableToolRegistry } from './detach-registry.js';
+import type { ProcessJobRegistry } from '../shell-jobs/process-jobs.js';
 import { errorMessage } from '../../utils/errors.js';
+import { OPERATOR_DENIED_MARKER } from './operator-denied.match.js';
 
 // ---------------------------------------------------------------------------
 // Dependency surface
@@ -61,6 +65,8 @@ export interface CoreExecDeps {
   sessionId: string | undefined;
   /** Parent session id; stamped on PostToolUse context. */
   parentSessionId: string | undefined;
+  /** Root (depth-0) session id; stamped on PostToolUse context for deep attribution. */
+  rootSessionId: string | undefined;
   /** Session grant manager; injected into PostToolUse context. */
   sessionGrantManager: GrantManager | undefined;
   /** Witness trace writer; forwarded to dispatchPostToolUse(Failure). */
@@ -76,6 +82,20 @@ export interface CoreExecDeps {
   skillExecutor: SkillExecutor | undefined;
   /** Compose executor (backs the `compose` tool). */
   composeExecutor: ComposeExecutor | undefined;
+  /**
+   * Detach registry for the Ctrl+B backgrounding contract (#2542).
+   *
+   * Forwarded to {@link executeCompose} so the compose executor can register
+   * its in-flight DAG and respond to detachment (mirrors the dispatcher's own
+   * `callHandlerContext` path that injects this for bash). Present only on
+   * REPL surfaces where a background-result notifier can inject the late result.
+   */
+  detachRegistry?: DetachableToolRegistry;
+  /**
+   * Background process registry (root interactive sessions only). Backs the
+   * background health/cancel tools for `proc-` ids.
+   */
+  processJobs?: ProcessJobRegistry;
   /**
    * Per-call handler context factory. The class supplies this as an arrow
    * calling its own private `callHandlerContext(call)` method so the free
@@ -93,6 +113,12 @@ export interface CoreExecDeps {
    * to build the "available tools" hint. Corresponds to `toolDefs` on the class.
    */
   toolDefs: readonly AnthropicToolDef[];
+  /**
+   * This session's private TMPDIR (session-tmpdir.ts). Every call runs inside
+   * it as the async scope so forks created by `agent`/`skill`/`compose` nest
+   * their own temp dir under this session's.
+   */
+  tmpdirScope?: string | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -107,9 +133,9 @@ export function isRegisteredTool(toolName: string, deps: CoreExecDeps): boolean 
   return (
     deps.handlers.has(toolName) ||
     (toolName === 'agent' && deps.subagentExecutor !== undefined) ||
-    (toolName === 'cancel_background_job' && deps.subagentExecutor?.supportsBackgroundJobs?.() === true) ||
+    (toolName === 'cancel_background_job' && (deps.subagentExecutor?.supportsBackgroundJobs?.() === true || deps.processJobs !== undefined)) ||
     (toolName === 'send_message_to_agent' && deps.subagentExecutor?.supportsBackgroundJobs?.() === true) ||
-    (toolName === 'get_background_job_health' && deps.subagentExecutor?.supportsBackgroundJobs?.() === true) ||
+    (toolName === 'get_background_job_health' && (deps.subagentExecutor?.supportsBackgroundJobs?.() === true || deps.processJobs !== undefined)) ||
     (toolName === 'skill' && deps.skillExecutor !== undefined) ||
     (toolName === 'compose' && deps.composeExecutor !== undefined)
   );
@@ -145,7 +171,7 @@ export function denialReason(
   permissionReason: string | undefined,
   deps: CoreExecDeps,
 ): string {
-  if (isRegisteredTool(toolName, deps)) {
+  if (permissionReason?.includes(OPERATOR_DENIED_MARKER) || isRegisteredTool(toolName, deps)) {
     return permissionReason ?? `Tool "${toolName}" is not permitted`;
   }
   return unknownToolMessage(toolName, deps);
@@ -171,15 +197,18 @@ export function firePostToolUse(
   deps: CoreExecDeps,
   input?: unknown,
   resultFlags?: Pick<ToolResult, 'incomplete' | 'incompleteReason' | 'isError'>,
+  toolUseId?: string,
 ): void {
   if (!deps.hookRegistry) return;
   const postCtx: PostToolUseContext = {
     event: 'PostToolUse',
     toolName,
+    ...(toolUseId !== undefined ? { toolUseId } : {}),
     output,
     ...(input !== undefined ? { input } : {}),
     ...(deps.sessionId !== undefined ? { sessionId: deps.sessionId } : {}),
     ...(deps.parentSessionId !== undefined ? { parentSessionId: deps.parentSessionId } : {}),
+    ...(deps.rootSessionId !== undefined ? { rootSessionId: deps.rootSessionId } : {}),
     // Mirror PreToolUse so path-approval "Once"-grant revoke uses the same grant manager.
     ...(deps.sessionGrantManager ? { grantManager: deps.sessionGrantManager } : {}),
     ...(resultFlags?.isError === true ? { isError: true } : {}),
@@ -207,11 +236,13 @@ export function firePostToolUseFailure(
   signal: AbortSignal,
   deps: CoreExecDeps,
   input?: unknown,
+  toolUseId?: string,
 ): void {
   if (!deps.hookRegistry) return;
   const ctx: PostToolUseFailureContext = {
     event: 'PostToolUseFailure',
     toolName,
+    ...(toolUseId !== undefined ? { toolUseId } : {}),
     error: errorMessage,
     ...(input !== undefined ? { input } : {}),
     ...(deps.sessionId !== undefined ? { sessionId: deps.sessionId } : {}),
@@ -264,6 +295,10 @@ export function applyOutputCap(result: ToolResult, deps: CoreExecDeps): ToolResu
 /**
  * Compose tool dispatch wrapper. Returns an error result when no executor
  * is configured rather than throwing.
+ *
+ * Forwards `deps.detachRegistry` so the compose executor can register its
+ * in-flight DAG and respond to Ctrl+B detachment (#2542). The registry is
+ * absent on headless surfaces (no REPL to inject the late result).
  */
 export async function executeCompose(call: ToolCall, deps: CoreExecDeps): Promise<ToolResult> {
   if (!deps.composeExecutor) {
@@ -273,7 +308,7 @@ export async function executeCompose(call: ToolCall, deps: CoreExecDeps): Promis
     };
   }
   try {
-    return await deps.composeExecutor.execute(call);
+    return await deps.composeExecutor.execute(call, deps.detachRegistry);
   } catch (err) {
     const message = errorMessage(err);
     return { content: `Compose tool error: ${message}`, isError: true };
@@ -293,11 +328,11 @@ export async function executeCompose(call: ToolCall, deps: CoreExecDeps): Promis
 export async function executeCoreInner(call: ToolCall, deps: CoreExecDeps): Promise<ToolResult> {
   // Agent dispatch and model cancellation share the provider-level executor.
   if (isSubagentProviderTool(call.name)) {
-    const outcome = await executeSubagentProviderTool(deps.subagentExecutor, call);
+    const outcome = await executeSubagentProviderTool(deps.subagentExecutor, call, deps.processJobs);
     if (outcome.thrownMessage !== undefined) {
-      firePostToolUseFailure(call.name, outcome.thrownMessage, call.signal, deps, call.input);
+      firePostToolUseFailure(call.name, outcome.thrownMessage, call.signal, deps, call.input, call.id);
     } else {
-      firePostToolUse(call.name, outcome.result.content, call.signal, deps, call.input, outcome.result);
+      firePostToolUse(call.name, outcome.result.content, call.signal, deps, call.input, outcome.result, call.id);
     }
     return outcome.result;
   }
@@ -321,9 +356,9 @@ export async function executeCoreInner(call: ToolCall, deps: CoreExecDeps): Prom
       result = { content: `Skill tool error: ${skillErrMsg}`, isError: true };
     }
     if (skillThrew) {
-      firePostToolUseFailure(call.name, skillErrMsg, call.signal, deps, call.input);
+      firePostToolUseFailure(call.name, skillErrMsg, call.signal, deps, call.input, call.id);
     } else {
-      firePostToolUse(call.name, result.content, call.signal, deps, call.input, result);
+      firePostToolUse(call.name, result.content, call.signal, deps, call.input, result, call.id);
     }
     return result;
   }
@@ -331,7 +366,7 @@ export async function executeCoreInner(call: ToolCall, deps: CoreExecDeps): Prom
   // Compose tool — DAG-based parallel subagent dispatch
   if (call.name === 'compose') {
     const result = await executeCompose(call, deps);
-    firePostToolUse(call.name, result.content, call.signal, deps, call.input, result);
+    firePostToolUse(call.name, result.content, call.signal, deps, call.input, result, call.id);
     return result;
   }
 
@@ -356,9 +391,9 @@ export async function executeCoreInner(call: ToolCall, deps: CoreExecDeps): Prom
 
   // Invariant: exactly one of PostToolUse / PostToolUseFailure fires per call.
   if (handlerThrew) {
-    firePostToolUseFailure(call.name, handlerErrMsg, call.signal, deps, call.input);
+    firePostToolUseFailure(call.name, handlerErrMsg, call.signal, deps, call.input, call.id);
   } else {
-    firePostToolUse(call.name, result.content, call.signal, deps, call.input, result);
+    firePostToolUse(call.name, result.content, call.signal, deps, call.input, result, call.id);
   }
   return result;
 }
@@ -374,6 +409,6 @@ export async function executeCoreInner(call: ToolCall, deps: CoreExecDeps): Prom
  * PostToolUse has already observed the full, uncapped content.
  */
 export async function executeCore(call: ToolCall, deps: CoreExecDeps): Promise<ToolResult> {
-  const result = await executeCoreInner(call, deps);
+  const result = await runInTmpdirScope(deps.tmpdirScope, () => executeCoreInner(call, deps));
   return applyOutputCap(result, deps);
 }

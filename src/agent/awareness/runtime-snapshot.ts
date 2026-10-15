@@ -35,24 +35,43 @@ export function buildRuntimeSnapshot(
       return { self: source.getSelf() };
     case 'tools':
       return { tools: source.getTools() };
-    case 'subagents':
-      return { subagents: source.getSubagents() };
+    case 'subagents': {
+      const subagentSummary = source.getSubagentOutcomeSummary();
+      return {
+        subagents: source.getSubagents(),
+        ...(subagentSummary.length > 0 ? { subagentOutcomeSummary: subagentSummary } : {}),
+      };
+    }
+    case 'hooks':
+      // Callers (the get_runtime_state handler) pre-check getHooks and return a
+      // tool error; an absent getHooks here yields an empty slice, never a throw.
+      return source.getHooks ? { hooks: source.getHooks() } : {};
     case 'workspace':
       return { workspace: source.getWorkspace() };
     case 'all':
-    default:
+    default: {
+      const summary = source.getSubagentOutcomeSummary();
       return {
         self: source.getSelf(),
         tools: source.getTools(),
         subagents: source.getSubagents(),
         workspace: source.getWorkspace(),
+        usage: source.getUsage(),
+        clock: snapshotClock(Date.now()),
+        ...(summary.length > 0 ? { subagentOutcomeSummary: summary } : {}),
       };
+    }
   }
+}
+
+/** ISO instant plus the human local form the `[vitals]` note uses. */
+export function snapshotClock(epochMs: number): { iso: string; local: string } {
+  return { iso: new Date(epochMs).toISOString(), local: formatClock(epochMs) };
 }
 
 /** Coerce arbitrary model-supplied string to a known `RuntimeView` or 'all'. */
 export function parseView(raw: unknown): RuntimeView {
-  if (raw === 'self' || raw === 'tools' || raw === 'subagents' || raw === 'workspace' || raw === 'all') {
+  if (raw === 'self' || raw === 'tools' || raw === 'subagents' || raw === 'workspace' || raw === 'hooks' || raw === 'all') {
     return raw;
   }
   return 'all';
@@ -223,5 +242,30 @@ export function formatEnvironmentDateLine(now: Date, timeZone?: string): string 
     return `${weekday}, ${pick('year')}-${pick('month')}-${pick('day')} (${tz})`;
   } catch {
     return now.toISOString().slice(0, 10);
+  }
+}
+
+/**
+ * `Fri 2026-10-09 14:32 EDT`. Falls back to an ISO UTC minute when Intl
+ * cannot resolve the zone.
+ */
+export function formatClock(epochMs: number, timeZone?: string): string {
+  const date = new Date(epochMs);
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      weekday: 'short',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+      timeZoneName: 'short',
+    }).formatToParts(date);
+    const pick = (t: Intl.DateTimeFormatPartTypes): string => parts.find((p) => p.type === t)?.value ?? '';
+    return `${pick('weekday')} ${pick('year')}-${pick('month')}-${pick('day')} ${pick('hour')}:${pick('minute')} ${pick('timeZoneName')}`;
+  } catch {
+    return `${date.toISOString().slice(0, 16).replace('T', ' ')} UTC`;
   }
 }

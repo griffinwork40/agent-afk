@@ -18,12 +18,15 @@
 
 import OpenAI from 'openai';
 import { resolveOpenAIAuth } from './auth.js';
+import { resolveWireMode } from './responses-config.js';
 import { isReasoningModel } from '../../model-capabilities.js';
 import type { OpenAIMessage } from './messages.js';
 import { buildResponsesRequestBody } from './query/request-body.js';
 import { createStreamState } from './translate.js';
 import { translateResponsesEvent, type ResponsesStreamEvent } from './responses-translate.js';
 import { abortableStream } from '../shared/abortable-stream.js';
+import type { OneShotStopReason } from '../anthropic-direct/oneshot.js';
+import { h1ModelFetch } from '../shared/h1-fetch.js';
 
 /**
  * Thrown by {@link oneShotResponses} when the summarize stream ends WITHOUT a
@@ -48,6 +51,10 @@ export type OneShotOpenAIClientFactory = (opts: {
   apiKey: string;
   baseURL?: string;
   defaultHeaders?: Record<string, string>;
+  /** Contract: always 0 — AFK owns retries. The factory must forward this. */
+  maxRetries: number;
+  /** Invariant: always h1ModelFetch — force HTTP/1.1. See h1-fetch.ts. */
+  fetch: typeof globalThis.fetch;
 }) => OpenAI;
 let oneShotClientFactory: OneShotOpenAIClientFactory | null = null;
 
@@ -98,8 +105,8 @@ export interface OpenAIOneShotInput {
   client?: OpenAI;
   /**
    * When true, resolve the ChatGPT-subscription OAuth token from
-   * `~/.codex/auth.json` ahead of every other auth tier and WITHOUT the global
-   * `AFK_OPENAI_CHATGPT_OAUTH` flag — mirrors the `provider: 'chatgpt-oauth'`
+   * `~/.codex/auth.json` ahead of every other auth tier (including an explicit
+   * key) — mirrors the `provider: 'chatgpt-oauth'`
    * slot semantics in `resolveOpenAIAuth`. Ignored when `client` is provided
    * (the pre-built client already carries the correct credentials).
    */
@@ -107,8 +114,14 @@ export interface OpenAIOneShotInput {
 }
 
 /**
- * Single non-streaming `chat.completions.create` call. Returns the assistant
- * message text, trimmed.
+ * Contract: single non-streaming `chat.completions.create` call, except newly
+ * resolved ChatGPT OAuth without a different endpoint uses {@link oneShotResponses}.
+ * That path omits the output cap and returns `'end'` only on response.completed;
+ * incomplete Responses throw. Pre-built clients retain the caller's chat wire.
+ * Returns the assistant message text paired with the mapped {@link OneShotStopReason}:
+ *   - `'max_tokens'` when `finish_reason === 'length'`
+ *   - `'end'`        when `finish_reason === 'stop'`
+ *   - `'other'`      for any other finish reason
  *
  * Throws on auth resolution failure or SDK errors (rate limit, network,
  * abort). Callers are expected to catch and fall back — this helper has no
@@ -123,7 +136,9 @@ export interface OpenAIOneShotInput {
  * `AFK_SUGGEST_MODEL` override (or a reasoning session model inherited as the
  * suggest model) does not 400 on every keystroke.
  */
-export async function oneShotChatCompletion(input: OpenAIOneShotInput): Promise<string> {
+export async function oneShotChatCompletionWithStop(
+  input: OpenAIOneShotInput,
+): Promise<{ text: string; stopReason: OneShotStopReason }> {
   const {
     apiKey,
     baseURL,
@@ -151,11 +166,26 @@ export async function oneShotChatCompletion(input: OpenAIOneShotInput): Promise<
       apiKey: string;
       baseURL?: string;
       defaultHeaders?: Record<string, string>;
-    } = { apiKey: auth.apiKey };
-    if (baseURL !== undefined) clientOpts.baseURL = baseURL;
-    if (defaultHeaders !== undefined) clientOpts.defaultHeaders = defaultHeaders;
+      maxRetries: number;
+      fetch: typeof globalThis.fetch;
+    } = { apiKey: auth.apiKey, maxRetries: 0, fetch: h1ModelFetch };
+    // Invariant: respect custom endpoints exactly as the query path does;
+    // only OAuth without a different endpoint selects the ChatGPT Responses wire.
+    const wire = resolveWireMode(auth, false, baseURL);
+    const resolvedBaseURL = wire.baseURL ?? baseURL;
+    if (resolvedBaseURL !== undefined) clientOpts.baseURL = resolvedBaseURL;
+    if (wire.headers !== undefined) clientOpts.defaultHeaders = wire.headers;
+    else if (defaultHeaders !== undefined) clientOpts.defaultHeaders = defaultHeaders;
     const factory = clientFactory ?? oneShotClientFactory;
     client = factory ? factory(clientOpts) : new OpenAI(clientOpts);
+    if (wire.mode === 'responses') {
+      const text = await oneShotResponses({
+        client, model, system, user, maxTokens, isChatGptBackend: true,
+        ...(signal ? { signal } : {}),
+      });
+      // oneShotResponses throws unless the backend completed the response.
+      return { text, stopReason: 'end' };
+    }
   }
 
   // Reasoning models (o-series ∪ gpt-5.x) reject `max_tokens` and require
@@ -180,7 +210,34 @@ export async function oneShotChatCompletion(input: OpenAIOneShotInput): Promise<
   );
 
   const content = response.choices?.[0]?.message?.content;
-  return typeof content === 'string' ? content.trim() : '';
+  const text = typeof content === 'string' ? content.trim() : '';
+
+  // Map the raw finish_reason to the canonical OneShotStopReason vocabulary.
+  const finishReason = response.choices?.[0]?.finish_reason;
+  let stopReason: OneShotStopReason;
+  if (finishReason === 'length') {
+    stopReason = 'max_tokens';
+  } else if (finishReason === 'stop') {
+    stopReason = 'end';
+  } else {
+    stopReason = 'other';
+  }
+
+  return { text, stopReason };
+}
+
+/**
+ * Thin wrapper around {@link oneShotChatCompletionWithStop} that discards the
+ * stop reason and returns only the reply text — preserving the original
+ * surface for the direct callers that do not need stop-reason visibility.
+ *
+ * Throws on auth resolution failure or SDK errors (rate limit, network,
+ * abort). Callers are expected to catch and fall back — this helper has no
+ * opinion about retry policy.
+ */
+export async function oneShotChatCompletion(input: OpenAIOneShotInput): Promise<string> {
+  const { text } = await oneShotChatCompletionWithStop(input);
+  return text;
 }
 
 export interface OpenAIResponsesOneShotInput {

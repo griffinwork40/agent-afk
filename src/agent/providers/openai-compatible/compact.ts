@@ -27,6 +27,8 @@
 import { env } from '../../../config/env.js';
 import type { ProviderCompactResult } from '../../provider.js';
 import { emitCompaction } from '../../trace/emit.js';
+import { traceTransientRetry, traceExhaustedRetry } from '../shared/transient-retry.trace.js';
+import { DEFAULT_TRANSIENT_MAX_RETRIES } from '../shared/transient-retry.js';
 import type { TraceSink } from '../../trace/index.js';
 import type { CompactionTrigger } from '../../trace/types.js';
 import {
@@ -50,16 +52,9 @@ import {
 export { readShrinkFraction };
 import type { OpenAIMessage } from './messages.js';
 
-/** Minimal structural view of an assistant `tool_calls[]` entry (runtime-present). */
-interface OpenAIToolCallView {
-  id?: string;
-  function?: { name?: string; arguments?: string };
-}
-
-/** Read the `tool_calls` array off a message without importing the OpenAI SDK type. */
-function toolCallsOf(msg: OpenAIMessage): OpenAIToolCallView[] | undefined {
-  const tc = (msg as { tool_calls?: unknown }).tool_calls;
-  return Array.isArray(tc) ? (tc as OpenAIToolCallView[]) : undefined;
+/** Read the `tool_calls` array off an assistant message, or return `undefined`. */
+function toolCallsOf(msg: OpenAIMessage): OpenAIMessage['tool_calls'] {
+  return Array.isArray(msg.tool_calls) ? msg.tool_calls : undefined;
 }
 
 function truncateArgs(args: string): string {
@@ -95,8 +90,8 @@ function renderMessage(msg: OpenAIMessage): string {
   const toolCalls = toolCallsOf(msg);
   if (toolCalls) {
     for (const tc of toolCalls) {
-      const name = tc.function?.name ?? 'unknown';
-      const args = truncateArgs(tc.function?.arguments ?? '');
+      const name = tc.function.name;
+      const args = truncateArgs(tc.function.arguments);
       lines.push(`[tool call: ${name} ${args}]`);
     }
   }
@@ -116,7 +111,7 @@ function countChars(msg: OpenAIMessage): number {
   const toolCalls = toolCallsOf(msg);
   if (toolCalls) {
     for (const tc of toolCalls) {
-      total += (tc.function?.name?.length ?? 0) + (tc.function?.arguments?.length ?? 0);
+      total += tc.function.name.length + tc.function.arguments.length;
     }
   }
   return total;
@@ -167,16 +162,17 @@ export const openaiMicrocompactOps: MicrocompactOps<OpenAIMessage> = {
       const calls = toolCallsOf(msg);
       if (!calls) continue;
       for (const tc of calls) {
-        if (tc.id && tc.function?.name) {
+        if (tc.id && tc.function.name) {
           toolNameById.set(tc.id, tc.function.name);
         }
       }
     }
 
     const refs: ToolResultRef[] = [];
-    for (const msg of messages) {
+    for (const [messageIndex, msg] of messages.entries()) {
       if (msg.role !== 'tool') continue;
       refs.push({
+        messageIndex,
         byteLength: toolMessageContentBytes(msg.content),
         isPlaceholder: isToolMessagePlaceholder(msg.content),
         toolName: msg.tool_call_id !== undefined ? toolNameById.get(msg.tool_call_id) : undefined,
@@ -295,6 +291,9 @@ export async function compactOpenAIHistory(
           tokensSavedEstimate: info.tokensSavedEstimate,
         });
       },
+      onRetry: traceTransientRetry(deps.traceWriter, 'compaction', DEFAULT_TRANSIENT_MAX_RETRIES),
+      onExhausted: traceExhaustedRetry(deps.traceWriter, 'compaction', DEFAULT_TRANSIENT_MAX_RETRIES),
+      signal: controller.signal,
     });
   } finally {
     deps.clearAbort(controller);
@@ -310,14 +309,14 @@ export async function compactOpenAIHistory(
     env.AFK_MICROCOMPACT_KEEP_LAST,
     env.AFK_MICROCOMPACT_DELEGATION_BYTES,
   );
-  const { blocksCleared, bytesReclaimed } = microcompactToolResults(deps.priorTurns, opts);
+  const { blocksCleared, bytesReclaimed, firstClearedIndex } = microcompactToolResults(deps.priorTurns, opts);
   if (blocksCleared > 0 && !result.compacted) {
     return {
       compacted: false,
       reason: 'microcompacted',
       messagesBefore,
       messagesAfter: deps.priorTurns.length,
-      microcompaction: { blocksCleared, bytesReclaimed },
+      microcompaction: { blocksCleared, bytesReclaimed, ...(firstClearedIndex !== undefined ? { firstClearedIndex } : {}) },
     };
   }
 

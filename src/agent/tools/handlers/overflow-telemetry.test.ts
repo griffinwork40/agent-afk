@@ -55,9 +55,11 @@ describe('tool.overflow_kill telemetry — grep', () => {
   });
 
   afterEach(() => {
-    // Best-effort cleanup: on Windows an open file handle may cause EBUSY;
-    // ignore errors so a failed cleanup doesn't mask the real test failure.
-    try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    // Best-effort cleanup: on Windows a just-killed rg can briefly hold the
+    // tree open (EBUSY/EPERM). maxRetries/retryDelay is Node's documented retry
+    // for exactly that; the catch keeps a failed cleanup from masking a real
+    // test failure.
+    try { rmSync(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* ignore */ }
   });
 
   it('emits tool.overflow_kill with operational fields when grep crosses the scan ceiling', async () => {
@@ -86,7 +88,7 @@ describe('tool.overflow_kill telemetry — grep', () => {
     expect(typeof evt!['total_bytes']).toBe('number');
     expect(evt!['total_bytes'] as number).toBeGreaterThanOrEqual(100_000);
 
-    rmSync(tempDir, { recursive: true, force: true });
+    rmSync(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }, 30_000);
 
   it('does NOT include the grep pattern or path in the telemetry payload', async () => {
@@ -111,7 +113,7 @@ describe('tool.overflow_kill telemetry — grep', () => {
     expect(serialized).not.toContain(tempDir);
 
     // Best-effort inline cleanup; afterEach provides the safety net on Windows.
-    try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows — afterEach will retry */ }
+    try { rmSync(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* EBUSY on Windows — afterEach will retry */ }
   }, 30_000);
 
   it('does NOT emit tool.overflow_kill on a small grep that stays under the scan ceiling', async () => {
@@ -122,7 +124,7 @@ describe('tool.overflow_kill telemetry — grep', () => {
 
     expect(findEvent('tool.overflow_kill')).toBeUndefined();
 
-    rmSync(tempDir, { recursive: true, force: true });
+    rmSync(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 });
 
@@ -131,6 +133,7 @@ describe('tool.overflow_kill telemetry — bash', () => {
     appendRoutingDecision.mockClear();
   });
 
+  // Windows: genuinely POSIX-only — uses `head -c` and `/dev/zero` (#703)
   it.skipIf(process.platform === 'win32')('emits tool.overflow_kill with operational fields when bash crosses the hard cap', async () => {
     // `head -c` and `/dev/zero` are POSIX-only — POSIX-only (#703)
     // Fast generator: head -c 9000000 from /dev/zero crosses the 8MB hard
@@ -152,6 +155,7 @@ describe('tool.overflow_kill telemetry — bash', () => {
     expect(evt!['total_bytes'] as number).toBeGreaterThanOrEqual(100_000);
   }, 30_000);
 
+  // Windows: genuinely POSIX-only — uses `head -c` and `/dev/zero` (#703)
   it.skipIf(process.platform === 'win32')('does NOT include the bash command string in the telemetry payload', async () => {
     // `head -c` and `/dev/zero` are POSIX-only — POSIX-only (#703)
     // Distinctive marker we can scan for in the serialized mock calls.

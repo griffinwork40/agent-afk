@@ -16,16 +16,12 @@ import { mkdirSync, appendFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import * as cron from 'node-cron';
 import { IdleDetector } from './idle-detector.js';
-import { makeDaemonElicitationHandler } from './handoff-wiring.js';
-import { elicitationRouter } from '../elicitation-router.js';
 import { recoverDaemonQueues } from './pull-recovery.js';
 import { getQueueDir, getTelemetryPath } from '../../paths.js';
 import type { ScheduledTask as CronTask } from 'node-cron';
 import type { TraceWriter } from '../trace/index.js';
+import type { GateRecoveryFields } from './scheduler-gate-recovery.js';
 import type { AgentSession } from '../session/agent-session.js';
-import type { MemoryStore } from '../memory/index.js';
-import type { McpManager } from '../mcp/index.js';
-import type { StateStore } from '../state/state-store.js';
 import type { AgentConfig } from '../types.js';
 import type { Telegraf } from 'telegraf';
 
@@ -33,13 +29,14 @@ import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { ScheduledTask, validateScheduledTask } from './triggers.js';
 import { runBuiltinTask } from './builtin-task.js';
 import { runShellTask } from './shell-task.js';
+import { checkTaskCwdAtRuntime, warnIfBuiltinHasCwd } from './cwd-validator.js';
 export { resolveWorktreePruneRoot } from './worktree-prune-task.js';
 export { daemonTraceLabel } from './session-spawn.js';
-import { spawnDaemonSession } from './session-spawn.js';
+import { spawnDaemonSession, daemonDefaultCwd } from './session-spawn.js';
+import { executeAgentTask, type TaskTurnCompleteArgs } from './scheduler.execute-agent-task.js';
 import {
   DEFAULT_SESSIONSTART_COOLDOWN_MS,
   evaluateSessionStartGates,
-  type GateDecision,
   type SessionStartSkipReason,
 } from './gates.js';
 import {
@@ -50,7 +47,17 @@ import {
   type FireOnTaskCompleteOptions,
 } from './scheduler.pull-tick.js';
 import { errorMessage } from '../../utils/errors.js';
+import { makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord, makeTelemetryUnwritableSkipRecord, OverlapAlertLatch, formatOverlapAlertMessage } from './scheduler.overlap-guard.js';
+import { BudgetAlertLatch, evaluateBudgetGate, formatBudgetSkipMessage, resolveDaemonUsageTarget } from './budget-gate.js';
+import { probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
+import { evaluateRunAtGate, applyAutoDisable } from './scheduler.runat-gate.js';
 
+/**
+ * Maximum length (chars) of the command preview included in crash-notice
+ * in-flight task snapshots. Redaction runs BEFORE truncation so a secret
+ * straddling the boundary is always fully masked (#3323 review).
+ */
+const COMMAND_HEAD_MAX_LEN = 60;
 
 export interface SchedulerOptions {
   /** Per-tick session config; merged with defaults at spawn time. */
@@ -68,11 +75,17 @@ export interface SchedulerOptions {
   /** Clock injection (tests). Defaults to `Date.now`. */
   now?: () => number;
   /**
-   * Optional callback invoked after the telemetry record is successfully
-   * written to disk (success, error, or skipped). If the telemetry write
-   * itself fails, the callback is NOT fired. Callback errors are caught so
+   * Optional callback invoked after every task completion (success, error, or
+   * skipped). A telemetry write failure is logged to stderr and never suppresses
+   * the callback — it fires unconditionally. Callback errors are caught so
    * notification failures never crash the scheduler. Used for out-of-band
    * notifications (Telegram push, webhooks, etc.).
+   *
+   * Contract: the `record` argument reflects the in-memory TelemetryRecord that
+   * was *attempted* to be written to disk. When the underlying `appendFileSync`
+   * call throws (e.g. ENOSPC), the callback still fires with that record, but the
+   * record may not have been persisted to the telemetry file. Callers that require
+   * durability guarantees must verify the write independently.
    */
   onTaskComplete?: (record: TelemetryRecord, details?: TaskCompletionDetails) => void | Promise<void>;
   /**
@@ -104,24 +117,48 @@ export interface SchedulerOptions {
    */
   doneUnverifiedProbe?: (args: { responseText: string; successfulToolNames: readonly string[] }) => boolean;
   /**
-   * Telegraf bot instance for rich elicitation in pull-mode tasks. When
-   * provided together with `primaryChatId`, daemon ask_question calls use
+   * Persist a completed agent-task turn as a resumable session sidecar.
+   * INJECTED for the same layering reason as `doneUnverifiedProbe`: the
+   * sidecar store lives in `src/cli/`. Optional; must not throw (guarded).
+   */
+  onTaskTurnComplete?: (args: TaskTurnCompleteArgs) => void;
+  /**
+   * Telegraf bot instance for rich elicitation in daemon tasks. When provided
+   * together with `primaryChatId`, daemon ask_question calls use
    * `sendHandoffQuestion` (inline keyboards, reply-to matching) instead of
    * falling back to the plain `pushIfConfigured` text notification path.
+   * Applies to both pull tasks and cron/sessionstart tasks (#3243 item 2).
    * Has no effect when absent — fallback is always preserved.
-   * Has no effect on cron-triggered tasks, which use the plain push path.
    */
   bot?: Telegraf;
   /** Primary Telegram chat ID for handoff question delivery. */
   primaryChatId?: number;
   /** Optional topic thread ID for supergroup delivery. */
   primaryThreadId?: number;
+  /**
+   * Override the budget gate (tests). When absent, the real `evaluateBudgetGate`
+   * from `./budget-gate.ts` is used. Provide `async () => ({ skip: false })` to
+   * bypass the gate in tests that exercise other scheduler logic.
+   */
+  budgetGate?: () => Promise<import('./budget-gate.js').BudgetGateResult>;
+  /** Override the retry backoff sleep (tests). Defaults to `sleepWithAbort`. */
+  retrySleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** Override the handoffs directory (tests). Forwarded to the cron elicitation handler. */
+  handoffsDir?: string;
+  /**
+   * Resolve a task's `notifyChat` to an allowlisted chat id (#3243 item 2).
+   * Injected by the CLI layer; `src/agent/` must never import `src/cli/`.
+   * Signature mirrors `AgentTaskOptions.resolveNotifyChat` in
+   * `scheduler.execute-agent-task.ts` — both fields flow from the same
+   * `DaemonOptions` spread in `daemon.ts`.
+   */
+  resolveNotifyChat?: (notifyChat: number | string | undefined, taskId: string) => number | undefined;
 }
 
 export type TelemetryTrigger = 'cron' | 'sessionstart' | 'pull';
-export type TelemetryStatus = 'success' | 'error' | 'skipped';
+type TelemetryStatus = 'success' | 'error' | 'skipped' | 'blocked';
 
-export interface TelemetryRecord {
+export interface TelemetryRecord extends GateRecoveryFields {
   taskId: string;
   command: string;
   trigger: TelemetryTrigger;
@@ -134,6 +171,20 @@ export interface TelemetryRecord {
   skipReason?: SessionStartSkipReason;
   /** Human-readable label from ScheduledTaskConfig, if available. */
   name?: string;
+  /**
+   * True when the tick's response self-certified a `Done` terminal state with
+   * NO corroborating evidence (no successful file-write/edit/shell call this
+   * turn). Absent when verification did not run, when the response was
+   * verified, or when the terminal state is not `Done`. Enables post-hoc
+   * review tools to distinguish a verified success from an unverified claim.
+   * The `status` field remains `'success'` for backward compatibility.
+   */
+  doneUnverified?: boolean;
+  /**
+   * Attempts made for this run (#3243). Present only when the task opted
+   * into retries (`maxAttempts > 1`); absent = single attempt, as before.
+   */
+  attempts?: number;
 }
 
 export interface TaskCompletionDetails {
@@ -147,7 +198,7 @@ export interface TaskCompletionDetails {
    * on any parse failure (fail-open). The push formatter downgrades the
    * completion message to "⚠️ Done (unverified)" only when this is `true` AND
    * `daemon.verifyDone` is enabled — see `formatTaskCompletion` in
-   * `src/cli/commands/daemon.ts`. Never persisted to telemetry.
+   * `src/cli/commands/daemon.ts`. Persisted to telemetry as `TelemetryRecord.doneUnverified` (only when `true`) as of #2307.
    */
   doneUnverified?: boolean;
   /**
@@ -177,6 +228,21 @@ export class CronScheduler {
   private pullPollTimer: ReturnType<typeof setInterval> | undefined;
   private isDequeuing = false;
   private readonly queueDir: string;
+  /**
+   * Per-task in-flight guard: maps task id → start timestamp (ms) for tasks
+   * whose runOnce promise is still pending. Intra-process only — no
+   * cross-process coordination. The timestamp enables elapsed-time reporting
+   * in crash notices (#3248).
+   */
+  private readonly inFlightTasks = new Map<string, number>();
+  /** One Telegram alert per usage-budget episode (see BudgetAlertLatch). */
+  private readonly budgetAlerts = new BudgetAlertLatch();
+  /** One Telegram alert per overlap episode per task (see OverlapAlertLatch). */
+  private readonly overlapAlerts = new OverlapAlertLatch();
+  /** One Telegram alert per daemon process for a non-writable telemetry file. */
+  private readonly telemetryAlerts = new TelemetryAlertLatch();
+  /** Aborted by `stop()` so an in-progress retry backoff ends promptly (#3243). */
+  private shutdownController = new AbortController();
   // TODO(#337-hook): hook-driven dequeue path will share isDequeuing mutex
 
   constructor(options: SchedulerOptions = {}) {
@@ -194,8 +260,11 @@ export class CronScheduler {
     }
     let cronTask: CronTask | undefined;
     if (task.trigger === 'cron' || task.trigger === 'both') {
+      // runAt one-shots have no cronExpression; poll every minute so the
+      // scheduler can evaluate the wall-clock check on each tick.
+      const expr = task.cronExpression ?? '* * * * *';
       cronTask = cron.schedule(
-        task.cronExpression!,
+        expr,
         () => {
           // Fire-and-forget — the cron callback type doesn't await, but
           // catching here means a thrown promise can't leak as unhandled.
@@ -222,8 +291,41 @@ export class CronScheduler {
   }
 
   /**
+   * Returns a point-in-time snapshot of currently-running tasks. Each entry
+   * carries the task id, the head of its command, and the elapsed wall-clock
+   * time since the tick started. Used by crash-notice formatting (#3248) to
+   * give the operator context about what was running when the daemon died.
+   *
+   * The command head is redacted BEFORE truncation: crash notices are pushed
+   * to Telegram verbatim (pushIfConfigured does not redact), and truncating
+   * first could slice a secret below the redactor's minimum-length match.
+   */
+  getInFlightTasks(): Array<{ taskId: string; displayId: string; commandHead: string; elapsedMs: number }> {
+    const now = this.now();
+    const result: Array<{ taskId: string; displayId: string; commandHead: string; elapsedMs: number }> = [];
+    for (const [taskId, startedAt] of this.inFlightTasks) {
+      const entry = this.registry.get(taskId);
+      const commandHead = entry !== undefined
+        ? redactInlineSecrets(entry.task.command).slice(0, COMMAND_HEAD_MAX_LEN)
+        : redactInlineSecrets(taskId).slice(0, COMMAND_HEAD_MAX_LEN);
+      const displayId = redactInlineSecrets(taskId);
+      result.push({ taskId, displayId, commandHead, elapsedMs: now - startedAt });
+    }
+    return result;
+  }
+
+  /**
    * Run one tick of `taskId` immediately, bypassing the cron timer and gates.
    * Used by `--once` CLI mode and by tests. Recorded as `trigger: 'cron'`.
+   *
+   * Note: subject to the per-task in-flight overlap guard
+   * ({@link CronScheduler.inFlightTasks}). If a cron run of the same task is
+   * already in progress when `tick()` is called, it will be silently skipped
+   * (a `status: 'skipped', skipReason: 'overlap'` telemetry record is written).
+   * Operators running `--once` in the foreground while the daemon is live should
+   * be aware of this — the skip is logged to telemetry but produces no terminal
+   * output. To guarantee execution regardless of in-flight state, stop the
+   * daemon before invoking `--once`.
    */
   async tick(taskId: string): Promise<TelemetryRecord> {
     const entry = this.registry.get(taskId);
@@ -243,9 +345,32 @@ export class CronScheduler {
       .map((entry) => entry.task)
       .filter((task) => task.trigger === 'sessionstart' || task.trigger === 'both');
     const records: TelemetryRecord[] = [];
+
+    // Probe writability once for the whole fireOnStart call so we can send a
+    // single Telegram alert rather than one per task.
+    const writeError = probeTelemetryWritable(this.telemetryPath());
+    if (writeError !== null) {
+      void this.telemetryAlerts.notify(this.telemetryPath(), writeError);
+    }
+
     for (const task of eligible) {
+      // Agent tasks depend on the telemetry file to enforce the sessionstart
+      // cooldown. If the file is not writable the cooldown record cannot be
+      // saved, causing the task to re-fire on every daemon restart. Skip and
+      // record the reason. Shell and builtin tasks are exempt — they don't
+      // consume model quota and don't rely on the cooldown gate.
+      const isAgentTask = (task.executor ?? 'agent') === 'agent';
       const cooldownMs = task.debounceMs ?? this.defaultCooldownMs;
-      const decision = evaluateSessionStartGates({
+      if (writeError !== null && isAgentTask && cooldownMs > 0) {
+        const skipRecord = makeTelemetryUnwritableSkipRecord(task, this.now(), writeError);
+        // Do NOT call writeTelemetry here — it calls appendFileSync to the same
+        // unwritable path, which would silently fail. Keep only the in-memory
+        // record and fire the completion callback directly for notifications.
+        records.push(skipRecord);
+        fireOnTaskComplete(skipRecord, { onTaskComplete: this.options.onTaskComplete }, task);
+        continue;
+      }
+      const decision = await evaluateSessionStartGates({
         taskId: task.taskId,
         cooldownMs,
         nowMs: this.now(),
@@ -254,13 +379,19 @@ export class CronScheduler {
       if (decision.fire) {
         records.push(await this.runOnce(task, 'sessionstart'));
       } else {
-        records.push(this.recordSkip(task, decision));
+        const skipRecord = makeSessionStartSkipRecord(task, decision, this.now());
+        this.writeTelemetry(skipRecord, task);
+        records.push(skipRecord);
       }
     }
     return records;
   }
 
   async stop(): Promise<void> {
+    // In-flight runs captured the old signal; a fresh controller keeps a
+    // scheduler reused after stop() (tests) retry-capable.
+    this.shutdownController.abort();
+    this.shutdownController = new AbortController();
     if (this.pullPollTimer !== undefined) {
       clearInterval(this.pullPollTimer);
       this.pullPollTimer = undefined;
@@ -300,14 +431,55 @@ export class CronScheduler {
   }
 
   private async runOnce(task: ScheduledTask, trigger: TelemetryTrigger): Promise<TelemetryRecord> {
-    // Dispatch by executor type -- default to 'agent' for backward compat.
-    // History: single legacy compat point for un-migrated schedules.json entries
-    // that predate executor: 'builtin'. Remove once all deployments have cycled
-    // through a migration write (target: after next major release).
+    // Overlap guard: skip and record telemetry when this task's previous run is
+    // still in progress. Prevents stacked concurrent sessions on slow ticks
+    // (the in-flight set is released in the outer finally block below, covering
+    // all executor branches including the agent path in executeAgentTask).
+    // The guard is intentionally checked BEFORE the cwd and executor branches
+    // so it applies uniformly to all executor types.
+    if (this.inFlightTasks.has(task.taskId)) {
+      const record = makeOverlapSkipRecord(task, trigger, this.now());
+      // Alert once per overlap episode (OverlapAlertLatch), overriding the
+      // task's notifyOn: 'always' for the first overlap so the operator hears
+      // about the stacking, 'never' for subsequent ticks in the same episode
+      // so a slow task does not spam once per cron interval.
+      const shouldAlert = this.overlapAlerts.shouldAlert(task.taskId);
+      const notifyTask = { ...task, notifyOn: shouldAlert ? ('always' as const) : ('never' as const) };
+      this.writeTelemetry(record, notifyTask, shouldAlert
+        ? { responseText: formatOverlapAlertMessage(task.taskId, record.command, task.cronExpression) }
+        : undefined);
+      return record;
+    }
+    this.inFlightTasks.set(task.taskId, this.now());
+    // Hoisted so the finally block can guard on kind:'pass' without a
+    // second applyAutoDisable call when 'expired' already ran it above.
+    let gateResult: ReturnType<typeof evaluateRunAtGate> | undefined;
+    try {
+      // ── expiresAt / runAt gate ───────────────────────────────────────────────
+      // Delegates to scheduler.runat-gate.ts; see that module for the full spec.
+      gateResult = evaluateRunAtGate(task, trigger, this.now());
+      if (gateResult.kind === 'expired') {
+        this.writeTelemetry(gateResult.record, task);
+        applyAutoDisable(task.taskId, (id) => this.unregister(id));
+        return gateResult.record;
+      }
+      if (gateResult.kind === 'not-yet') {
+        // Silent skip — no telemetry write; pre-fire polling is noise-free.
+        return gateResult.record;
+      }
+
+    // Resolve executor early so the cwd guard can skip builtin tasks (which
+    // ignore cwd entirely and would produce spurious errors if the dir vanishes).
+    // TODO(#2350): remove __BUILTIN_WORKTREE_PRUNE__ sentinel once all stored
+    // schedules have migrated to executor:'builtin'/command:'worktree-prune'.
+    // The sentinel was the pre-#2330 encoding; new schedules use the canonical
+    // form. Remove after one major release cycle (safe to drop when the field
+    // 'executor' is universally present in persisted schedules.json files).
     const isLegacySentinel = task.command === '__BUILTIN_WORKTREE_PRUNE__';
     const executor = task.executor
       ?? (isLegacySentinel ? 'builtin' as const : 'agent' as const);
     if (executor === 'builtin') {
+      warnIfBuiltinHasCwd(task);
       // Normalize the legacy sentinel to the canonical builtin name here --
       // the single compat point -- so runBuiltinTask only sees canonical names.
       const normalizedTask = isLegacySentinel
@@ -318,139 +490,107 @@ export class CronScheduler {
         writeTelemetry: (r) => this.writeTelemetry(r, task),
       });
     }
+    // Runtime cwd guard: fail loudly when the pinned directory has vanished
+    // rather than silently falling back to $HOME. Skipped for builtin tasks
+    // (handled above) because builtins ignore cwd entirely.
+    if (task.cwd !== undefined) {
+      const cwdError = checkTaskCwdAtRuntime(task.cwd);
+      if (cwdError !== undefined) {
+        const record: TelemetryRecord = {
+          taskId: task.taskId,
+          command: redactInlineSecrets(task.command),
+          trigger,
+          ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
+          triggeredAt: new Date(this.now()).toISOString(),
+          durationMs: 0,
+          status: 'error',
+          errorMessage: redactInlineSecrets(cwdError),
+        };
+        this.writeTelemetry(record, task);
+        return record;
+      }
+    }
     if (executor === 'shell') {
       this.idleDetector.increment();
       try {
-        return await runShellTask(task, trigger, {
-          now: this.now, writeTelemetry: (r) => this.writeTelemetry(r, task),
-        });
+        // Resolve shell cwd: task.cwd ?? daemon-wide sessionConfig.cwd ?? daemon-state-dir.
+        // Use daemonDefaultCwd() as the last resort so shell tasks started from $HOME
+        // (service-installed daemon) don't implicitly inherit the home directory as cwd.
+        const shellCwd = task.cwd ?? this.options.sessionConfig?.cwd ?? daemonDefaultCwd();
+        return await runShellTask(
+          { ...task, cwd: shellCwd },
+          trigger,
+          { now: this.now, writeTelemetry: (r) => this.writeTelemetry(r, task) },
+        );
       } finally { this.idleDetector.decrement(); }
     }
 
-    const triggeredAt = new Date(this.now());
-    const startTimeMs = this.now();
-    const baseRecord: Pick<
-      TelemetryRecord,
-      'taskId' | 'command' | 'trigger' | 'cronExpression' | 'triggeredAt'
-    > = {
-      taskId: task.taskId,
-      command: redactInlineSecrets(task.command),
+    // Budget gate: check subscription usage before spawning an agent session.
+    // Shell and builtin tasks are never gated (they don't consume model quota).
+    // Fail-open: if usage is unavailable the gate passes.
+    const budgetResult = await (this.options.budgetGate ?? (() => evaluateBudgetGate({
+      target: resolveDaemonUsageTarget(this.options.sessionConfig?.model, this.options.sessionConfig?.apiKey),
+    })))();
+    if (!budgetResult.skip) this.budgetAlerts.clear();
+    else {
+      const record = makeBudgetSkipRecord(task, trigger, this.now(), budgetResult);
+      // Alert once per budget episode (BudgetAlertLatch), overriding the
+      // task's notifyOn either way: 'always' for the first skip so the
+      // operator hears about it, 'never' for the rest so a full window does
+      // not page once per scheduled tick.
+      const alert = this.budgetAlerts.shouldAlert(budgetResult);
+      const notifyTask = { ...task, notifyOn: alert ? ('always' as const) : ('never' as const) };
+      this.writeTelemetry(record, notifyTask, {
+        responseText: formatBudgetSkipMessage(budgetResult, task.taskId, this.now()),
+      });
+      return record;
+    }
+
+    return await executeAgentTask(
+      {
+        options: this.options,
+        queueDir: this.queueDir,
+        idleDetector: this.idleDetector,
+        now: this.now,
+        spawnSession: (t, tr, gbc) => this.spawnSession(t, tr, gbc),
+        writeTelemetry: (r, t, d) => this.writeTelemetry(r, t, d),
+        shutdownSignal: this.shutdownController.signal,
+        // Unregistered/replaced mid-run → no further retry attempts. Pull
+        // tasks are synthetic (never in the registry) and never retry.
+        isCancelled: () => trigger !== 'pull' && this.registry.get(task.taskId)?.task !== task,
+        ...(this.options.retrySleep !== undefined ? { retrySleep: this.options.retrySleep } : {}),
+        ...(this.options.handoffsDir !== undefined ? { handoffsDir: this.options.handoffsDir } : {}),
+      },
+      task,
       trigger,
-      ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
-      triggeredAt: triggeredAt.toISOString(),
-    };
-
-    let session: AgentSession | null = null;
-    let memoryStore: MemoryStore | null = null;
-    let stateStore: StateStore | null = null;
-    let mcpManager: McpManager | null = null;
-    let disposeRegistration: (() => void) | null = null;
-    let handlerInstalled = false;
-    this.idleDetector.increment();
-    try {
-      const spawned = await this.spawnSession(task.taskId, trigger);
-      session = spawned.session;
-      memoryStore = spawned.memoryStore;
-      stateStore = spawned.stateStore;
-      mcpManager = spawned.mcpManager ?? null;
-      disposeRegistration = spawned.dispose;
-
-      // Invariant: handoff handler installed BEFORE sendMessage so the
-      // ask-question-gate's hasHandler() probe passes for pull tasks;
-      // uninstalled in the finally block so cron ticks never inherit it.
-      if (trigger === 'pull') {
-        elicitationRouter.install(makeDaemonElicitationHandler({
-          taskId: task.taskId,
-          originalCommand: redactInlineSecrets(task.command),
-          queueDir: this.queueDir,
-          ...(this.options.bot !== undefined ? { bot: this.options.bot } : {}),
-          ...(this.options.primaryChatId !== undefined ? { chatId: this.options.primaryChatId } : {}),
-          ...(this.options.primaryThreadId !== undefined ? { threadId: this.options.primaryThreadId } : {}),
-        }));
-        handlerInstalled = true;
-      }
-
-      const response = await session.sendMessage(task.command);
-      const responseText = redactInlineSecrets(response.content);
-      // "Done"-verification probe (opt-in via injected `doneUnverifiedProbe`,
-      // ultimately gated on `daemon.verifyDone` at the push layer). Fully
-      // guarded: a probe bug or a metadata surprise must NEVER crash a tick, so
-      // any throw is swallowed and treated as "not unverified" (push unchanged,
-      // fail-open). Feeds the probe the SAME text the notification sees (already
-      // secret-redacted) plus the raw successful-tool names the stream consumer
-      // recorded on the returned Message's metadata.
-      let doneUnverified = false;
-      try {
-        const probe = this.options.doneUnverifiedProbe;
-        if (probe !== undefined) {
-          const successfulToolNames = Array.isArray(response.metadata?.successfulToolNames)
-            ? response.metadata.successfulToolNames
-            : [];
-          doneUnverified = probe({ responseText, successfulToolNames });
-        }
-      } catch {
-        doneUnverified = false;
-      }
-      const record: TelemetryRecord = {
-        ...baseRecord,
-        durationMs: this.now() - startTimeMs,
-        status: 'success',
-        responseExcerpt: responseText.slice(0, 280),
-      };
-      this.writeTelemetry(record, task, { responseText, ...(doneUnverified ? { doneUnverified: true } : {}) });
-      return record;
-    } catch (err) {
-      const record: TelemetryRecord = {
-        ...baseRecord,
-        durationMs: this.now() - startTimeMs,
-        status: 'error',
-        errorMessage: redactInlineSecrets(errorMessage(err)),
-      };
-      this.writeTelemetry(record, task);
-      return record;
+    );
     } finally {
-      if (handlerInstalled) elicitationRouter.uninstall();
-      this.idleDetector.decrement();
-      if (session) {
-        try {
-          await session.close();
-        } catch {
-          // already-closed sessions throw; ignore.
-        }
+      this.inFlightTasks.delete(task.taskId);
+      // Any non-overlap run (success or error) ends the overlap episode for
+      // this task, so the next overlap will alert again.
+      this.overlapAlerts.clear(task.taskId);
+      // runAt one-shot: auto-disable + unregister after the run fires.
+      // Guard on kind:'pass' so we don't call applyAutoDisable a second time
+      // when the 'expired' branch above already called it and returned early
+      // (the return exits the try body but the finally still runs).
+      if (task.runAt !== undefined && gateResult?.kind === 'pass') {
+        applyAutoDisable(task.taskId, (id) => this.unregister(id));
       }
-      // Archive the cross-surface registry handle (frees its key) so the
-      // long-running daemon never accumulates handles. Best-effort.
-      disposeRegistration?.();
-      if (mcpManager) {
-        try {
-          await mcpManager.disconnectAll();
-        } catch {
-          // MCP server shutdown is best-effort during daemon tick teardown.
-        }
-      }
-      memoryStore?.close();
-      stateStore?.close();
     }
   }
 
-  private recordSkip(task: ScheduledTask, decision: GateDecision): TelemetryRecord {
-    const triggeredAt = new Date(this.now());
-    const record: TelemetryRecord = {
-      taskId: task.taskId,
-      command: task.command,
-      trigger: 'sessionstart',
-      ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
-      triggeredAt: triggeredAt.toISOString(),
-      durationMs: 0,
-      status: 'skipped',
-      ...(decision.skipReason !== undefined ? { skipReason: decision.skipReason } : {}),
-    };
-    this.writeTelemetry(record, task);
-    return record;
-  }
-
-  private async spawnSession(taskId: string, trigger: TelemetryTrigger = 'cron'): ReturnType<typeof spawnDaemonSession> {
-    return spawnDaemonSession(taskId, { ...this.options, trigger });
+  private async spawnSession(
+    task: ScheduledTask,
+    trigger: TelemetryTrigger = 'cron',
+    gateBlockCounter?: import('./scheduler-gate-recovery.js').GateBlockCounter,
+  ): ReturnType<typeof spawnDaemonSession> {
+    return spawnDaemonSession(task.taskId, {
+      ...this.options,
+      trigger,
+      // Per-task cwd takes precedence over the daemon-wide sessionConfig.cwd.
+      ...(task.cwd !== undefined ? { taskCwd: task.cwd } : {}),
+      ...(gateBlockCounter !== undefined ? { gateBlockCounter } : {}),
+    });
   }
 
   private telemetryPath(): string {
@@ -470,15 +610,19 @@ export class CronScheduler {
     task?: ScheduledTask,
     details?: TaskCompletionDetails,
   ): void {
+    // Persist doneUnverified (#2307): only written when true; absent = not unverified.
+    const persistedRecord: TelemetryRecord = details?.doneUnverified === true ? { ...record, doneUnverified: true } : record;
     try {
-      appendFileSync(this.telemetryPath(), `${JSON.stringify(record)}\n`, 'utf-8');
-      const opts: FireOnTaskCompleteOptions = { onTaskComplete: this.options.onTaskComplete };
-      fireOnTaskComplete(record, opts, task, details);
+      appendFileSync(this.telemetryPath(), `${JSON.stringify(persistedRecord)}\n`, 'utf-8');
     } catch (err) {
-      // Telemetry failure must not crash the daemon. Log to stderr and move on.
-      const msg = errorMessage(err);
+      // Telemetry write failure must not crash the daemon or suppress the
+      // completion push — log and fall through so fireOnTaskComplete still runs.
       // eslint-disable-next-line no-console
-      console.error(`[daemon] telemetry write failed: ${msg}`);
+      console.error(`[daemon] telemetry write failed: ${errorMessage(err)}`);
     }
+    // Contract: persistedRecord is passed unconditionally — if appendFileSync
+    // threw above, the record may not be on disk (see CronSchedulerOptions.onTaskComplete).
+    const opts: FireOnTaskCompleteOptions = { onTaskComplete: this.options.onTaskComplete };
+    fireOnTaskComplete(persistedRecord, opts, task, details);
   }
 }

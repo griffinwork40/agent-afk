@@ -33,6 +33,10 @@ const DEFAULT_QUERY_MODEL: AgentModelInput = 'sonnet';
  * Pass `ownedTraceWriter` to grant seal ownership to the session — mirrors the
  * second `AgentSession` constructor arg. Without it, a `traceWriter` in the
  * config is write-only and the session will not seal the trace on `close()`.
+ *
+ * Pass `executors` (from `createWiredExecutors`) to expose the `agent` /
+ * `skill` / `compose` tools; the bundle binds to the one-shot session and is
+ * drained by its `close()` when the call returns. Build a fresh bundle per call.
  */
 export type QueryOptions = Partial<Omit<AgentConfig, 'model'>> & {
   model?: AgentModelInput;

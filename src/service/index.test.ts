@@ -22,13 +22,21 @@ describe('serviceManagerFor', () => {
     expect(mgr?.configKind).toBe('systemd user unit');
   });
 
-  it('returns null for an unsupported platform (win32)', () => {
-    expect(serviceManagerFor('win32')).toBeNull();
+  it('selects the task-scheduler backend on win32', () => {
+    const mgr = serviceManagerFor('win32');
+    expect(mgr).not.toBeNull();
+    expect(mgr?.backend).toBe('task-scheduler');
+    expect(mgr?.configKind).toBe('Task Scheduler task');
   });
 
-  it('exposes the same neutral label/path surface on both backends', () => {
+  it('returns null for an unsupported platform (freebsd)', () => {
+    expect(serviceManagerFor('freebsd')).toBeNull();
+  });
+
+  it('exposes the same neutral label/path surface on all backends', () => {
     const launchd = serviceManagerFor('darwin');
     const systemd = serviceManagerFor('linux');
+    const win = serviceManagerFor('win32');
     // launchd: reverse-DNS label + LaunchAgents plist path.
     expect(launchd?.label('telegram')).toBe('com.afk.telegram');
     // Normalize backslashes for Windows CI (paths use homedir() + join()).
@@ -36,5 +44,9 @@ describe('serviceManagerFor', () => {
     // systemd: unit-name label + user-unit path.
     expect(systemd?.label('telegram')).toBe('afk-telegram.service');
     expect(systemd?.configPath('telegram').replace(/\\/g, '/')).toContain('.config/systemd/user/afk-telegram.service');
+    // windows: AFK-<name> label + afk home service dir (ends with service/AFK-telegram.xml).
+    expect(win?.label('telegram')).toBe('AFK-telegram');
+    const winPath = win?.configPath('telegram').replace(/\\/g, '/') ?? '';
+    expect(winPath).toMatch(/service\/AFK-telegram\.xml$/);
   });
 });

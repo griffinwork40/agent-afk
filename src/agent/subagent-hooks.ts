@@ -23,7 +23,7 @@
  */
 
 import { debugLog } from '../utils/debug.js';
-import { AbortError, HookBlockedError } from '../utils/errors.js';
+import { AbortError, HookBlockedError, ensureError} from '../utils/errors.js';
 import type {
   HookDecision,
   HookRegistry,
@@ -40,8 +40,10 @@ import type { HookEventName, TraceSink } from './trace/index.js';
 export interface SubagentHookDispatchOptions {
   signal?: AbortSignal;
   onError?: (err: Error) => void;
-  /** Witness-layer trace writer. When provided, every hook dispatch
-   *  emits a `hook_decision` event with the decision outcome. */
+  /** Witness-layer trace writer. When provided, every dispatch is routed
+   *  through `emitHookDecision`: informative outcomes are written as
+   *  `hook_decision` rows; pure pass-through outcomes are only counted in the
+   *  session's `hook_summary` (see trace/hook-tally.ts). */
   traceWriter?: TraceSink;
 }
 
@@ -80,7 +82,8 @@ async function emitHookDecisionFromOutcome(
     hookEvent,
     decision: decision.decision,
     ...(decision.reason !== undefined ? { reason: decision.reason } : {}),
-    ...(decision.injectContext !== undefined
+    // PreToolUse context is counted by the dispatcher only after result delivery.
+    ...(hookEvent !== 'PreToolUse' && decision.injectContext !== undefined
       ? { injectedContextBytes: Buffer.byteLength(decision.injectContext, 'utf8') }
       : {}),
   });
@@ -191,7 +194,7 @@ export async function dispatchSubagentStop(
       return {};
     }
     debugLog(`SubagentStop hook unexpected error: ${String(err)}`);
-    options.onError?.(err instanceof Error ? err : new Error(String(err)));
+    options.onError?.(ensureError(err));
     return {};
   }
 }
@@ -253,7 +256,7 @@ export async function dispatchPostToolUse(
       return;
     }
     debugLog(`PostToolUse hook unexpected error: ${String(err)}`);
-    options.onError?.(err instanceof Error ? err : new Error(String(err)));
+    options.onError?.(ensureError(err));
   }
 }
 
@@ -293,6 +296,6 @@ export async function dispatchPostToolUseFailure(
       return;
     }
     debugLog(`PostToolUseFailure hook unexpected error: ${String(err)}`);
-    options.onError?.(err instanceof Error ? err : new Error(String(err)));
+    options.onError?.(ensureError(err));
   }
 }

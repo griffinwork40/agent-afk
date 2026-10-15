@@ -81,7 +81,7 @@ describe('MCP tool dispatch — hook integration', () => {
       await new Promise((r) => setImmediate(r));
       expect(post).toHaveBeenCalledWith('mcp__srv__echo');
     },
-    { timeout: 15_000 },
+    15_000,
   );
 
   it(
@@ -122,6 +122,6 @@ describe('MCP tool dispatch — hook integration', () => {
       expect(result.content).toMatch(/blocked by PreToolUse/);
       expect(result.content).toMatch(/no boom for you/);
     },
-    { timeout: 15_000 },
+    15_000,
   );
 });

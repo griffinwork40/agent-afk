@@ -24,6 +24,7 @@
  * eviction (`verdict-card-overflow.test.ts` guards it).
  */
 
+import { resetArchivedReveal } from './terminal-compositor.archived-reveal.js';
 import type { FrameHost } from './terminal-compositor.frame.js';
 import {
   buildScrollbackArchiveEscape,
@@ -31,7 +32,13 @@ import {
   scrollbackFlushLines,
 } from './terminal-compositor.scrollback.js';
 import { withAutowrapDisabled } from './terminal-compositor.band-reflow.js';
-import { contentMargin } from './render/measure.js';
+import { compositorBand } from './terminal-compositor.content-band.js';
+import {
+  archivedPrefix,
+  capArchivedPrefix,
+  flushLinesSkippingArchived,
+  retainArchivedOnCover,
+} from './terminal-compositor.band-archived-prefix.js';
 
 /**
  * Archive the oldest `overflow` rows of the committed band to native scrollback
@@ -55,6 +62,13 @@ import { contentMargin } from './render/measure.js';
  * which emits the in-prefix rows verbatim so the on-screen tail is never
  * duplicated — that line stays fragmented (today's behaviour), while every
  * line wholly inside the prefix now rejoins on a widen.
+ *
+ * Content-hug (archive-and-retain, terminal-compositor.band-archived-prefix.ts):
+ * the covered prefix is still written to scrollback (history stays
+ * contiguous), but it is KEPT in the band model as hidden pending rows and
+ * `committedBandArchivedPrefix` advances to cover it, so a later frame shrink
+ * re-shows it (no blank gap below the prompt). Rows already inside the archived
+ * prefix are never written again. Bottom-pinned: unchanged (prefix sliced off).
  */
 export function archiveBandPrefixAndRepaintSurvivors(
   self: FrameHost,
@@ -63,6 +77,8 @@ export function archiveBandPrefixAndRepaintSurvivors(
 ): void {
   if (overflow <= 0) return;
   const bandLen = self.committedBand.length;
+  const retain = retainArchivedOnCover(self);
+  const prefix = archivedPrefix(self);
   const rows = Math.max(1, self.stdout.rows ?? 24);
   const cols = Math.max(1, self.stdout.columns ?? 80);
   self.debugLog('evict:logical-archive', { overflow, floor, bandLen });
@@ -82,8 +98,13 @@ export function archiveBandPrefixAndRepaintSurvivors(
   // #540. The algebra is equivalent (`committedBandBottomRow === floor +
   // bandLen - 1` by the class invariant), but the derivation is geometry-only
   // and cannot be stale.
+  // Retain mode: the model also holds hidden (unpainted) archived rows, so the
+  // painted footprint, not bandLen, bounds the erase (never past the screen).
+  const eraseEnd = retain
+    ? Math.min(rows, Math.max(self.committedBandBottomRow, floor + bandLen - prefix - 1))
+    : floor + bandLen - 1;
   let erase = '';
-  for (let r = floor; r < floor + bandLen; r++) erase += eraseAndPaintRow(r);
+  for (let r = floor; r <= eraseEnd; r++) erase += eraseAndPaintRow(r);
 
   // (2) Archive the prefix as logical lines. Autowrap stays ON for this write
   // (load-bearing, and the exact opposite of the on-screen band paint in step
@@ -93,7 +114,9 @@ export function archiveBandPrefixAndRepaintSurvivors(
   // `evictRowsToScrollback` does — with a StatusLine the DECSTBM region is a
   // SUB-region, and a `\n` at its bottom margin scrolls that sub-region, so the
   // displaced line exits without ever entering scrollback.
-  const archiveLines = scrollbackFlushLines(self.committedBand, self.committedBandMeta, overflow);
+  const archiveLines = retain
+    ? flushLinesSkippingArchived(self.committedBand, self.committedBandMeta, overflow, prefix)
+    : scrollbackFlushLines(self.committedBand, self.committedBandMeta, overflow);
   const archive = buildScrollbackArchiveEscape(archiveLines, floor, rows, cols);
   const writeArchive = (): void => {
     try {
@@ -122,7 +145,7 @@ export function archiveBandPrefixAndRepaintSurvivors(
     // Content centering (AFK_CENTER_CONTENT): derive the margin from the CURRENT
     // terminal width. The band stores raw (unpadded) content; padding is applied
     // at paint time so the band adapts correctly on resize.
-    const pad = contentMargin();
+    const pad = compositorBand(self.stdout).margin;
     let paint = '';
     for (let i = 0; i < survivors.length; i++) {
       const line = pad && survivors[i] !== '' ? pad + survivors[i] : survivors[i];
@@ -140,6 +163,17 @@ export function archiveBandPrefixAndRepaintSurvivors(
   // (4) Bookkeeping. Honest by construction now: every survivor was painted
   // above, so none are pending. Meta slices in lockstep to hold the 1:1
   // band<->meta invariant the reflow and logical-flush sites rely on.
+  if (retain) {
+    // Archive-and-retain: the archived rows stay in the model as the hidden
+    // pending prefix; only the survivors are painted.
+    self.committedBandArchivedPrefix = Math.max(prefix, overflow);
+    resetArchivedReveal(self);
+    self.committedBandTopRow = floor;
+    self.committedBandBottomRow = floor + survivors.length - 1;
+    self.committedBandPaintedRows = survivors.length;
+    capArchivedPrefix(self, rows);
+    return;
+  }
   self.committedBand = survivors;
   self.committedBandMeta = self.committedBandMeta.slice(overflow);
   self.committedBandTopRow = floor;

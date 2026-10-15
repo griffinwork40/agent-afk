@@ -18,7 +18,7 @@
  *     requests, if a server sends one anyway, are logged at debug and
  *     declined via the SDK's default behaviour.
  *   - We do NOT advertise `elicitation` capability in PR 2. The bridge to
- *     the existing `routeElicitation()` router is a follow-up once remote
+ *     the existing `elicitationRouter` (src/agent/elicitation-router.ts) is a follow-up once remote
  *     server integration is stable.
  *
  * Transport selection (PR 2+):
@@ -50,6 +50,7 @@ import { createTransport } from './transport.js';
 import { KeychainOAuthProvider } from './oauth.js';
 import type { McpServerLayer } from './env-containment.js';
 import { errorMessage } from '../../utils/errors.js';
+import { buildMcpSchemaValidator } from './schema-validator.js';
 
 /** Client identity advertised in the MCP handshake. */
 const CLIENT_INFO = {
@@ -72,6 +73,18 @@ const CLIENT_CAPABILITIES = {
 } as const;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+/**
+ * Shared JSON Schema validator for all MCP `Client` instances in this
+ * process. Lazily created on first use. Pre-registered with no-op stubs for
+ * gRPC integer formats (`uint32`, `uint64`, `int32`, `int64`) so Ajv does not
+ * emit "unknown format … ignored in schema" warnings when connecting to
+ * servers whose tool schemas advertise those formats (issue #2761).
+ */
+let _mcpSchemaValidator: ReturnType<typeof buildMcpSchemaValidator> | undefined;
+function getMcpSchemaValidator() {
+  return (_mcpSchemaValidator ??= buildMcpSchemaValidator());
+}
 
 export interface McpClientConnectResult {
   /** Tools the server exposed at first `tools/list`. */
@@ -164,7 +177,8 @@ export class McpClient {
       this.trustedAllowSecretEnv,
     );
 
-    const client = new Client(CLIENT_INFO, { capabilities: CLIENT_CAPABILITIES });
+    const client = new Client(CLIENT_INFO,
+      { capabilities: CLIENT_CAPABILITIES, jsonSchemaValidator: getMcpSchemaValidator() });
 
     // Wire transport-level error reporting so the manager can downgrade
     // status without the process crashing.
@@ -227,7 +241,8 @@ export class McpClient {
         // transport reference from the failed streamable-HTTP attempt and
         // cannot be reused without triggering the SDK's "Already connected"
         // guard. A new instance is cleaner than awaiting close() first.
-        const sseClient = new Client(CLIENT_INFO, { capabilities: CLIENT_CAPABILITIES });
+        const sseClient = new Client(CLIENT_INFO,
+          { capabilities: CLIENT_CAPABILITIES, jsonSchemaValidator: getMcpSchemaValidator() });
         try {
           const { ToolListChangedNotificationSchema } = await import(
             '@modelcontextprotocol/sdk/types.js'
@@ -307,12 +322,16 @@ export class McpClient {
    * lifecycle is owned by `McpManager`; the manager (or a subsequent
    * notification refresh) may legitimately retry against the same client.
    * The in-flight request remains dangling on the SDK side but is harmless.
+   *
+   * @param signal Optional abort signal forwarded to the SDK request so a
+   *   caller-side deadline (e.g. the #1751 health-check probe) cancels the
+   *   underlying `tools/list` instead of leaving it in flight.
    */
-  async listTools(): Promise<McpTool[]> {
+  async listTools(signal?: AbortSignal): Promise<McpTool[]> {
     if (!this.client) throw new Error(`McpClient(${this.serverName}): not connected`);
     const timeoutMs = this.config.timeout ?? DEFAULT_TIMEOUT_MS;
     const listed = await withTimeout(
-      this.client.listTools(),
+      this.client.listTools(undefined, signal ? { signal } : undefined),
       timeoutMs,
       () => new Error(`MCP server "${this.serverName}" listTools timed out after ${timeoutMs}ms`),
     );
@@ -461,6 +480,11 @@ type SupportedImageMediaType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image
  * Additional image blocks beyond the first are also represented as text
  * placeholders (multi-image tool results are uncommon; single-image forwarding
  * covers the practical cases).
+ *
+ * Resource `blob` blocks whose `mimeType` is a supported image type are treated
+ * identically to `image` blocks — blob payload forwarded via `ToolResult.image`.
+ * Resource link blocks (no `blob` field) are surface as URI placeholders only;
+ * payload bridging for non-image blob resources is a follow-up.
  */
 function normalizeCallToolResult(result: CallToolResult): ToolResult {
   const parts: string[] = [];
@@ -516,13 +540,40 @@ function normalizeCallToolResult(result: CallToolResult): ToolResult {
         }
       }
     } else if (block.type === 'resource') {
-      // Both embedded and link variants. Surface the URI so the model can
-      // at least cite it; payload bridging is a follow-up.
-      const uri =
+      // Embedded resource blocks carry either a `text` or a `blob` payload.
+      // Blob resources with a supported image mimeType are forwarded as
+      // multimodal content (same path as `image` blocks). All other resource
+      // variants surface as URI placeholders so the model can at least cite the
+      // source; full payload bridging for non-image blobs is a follow-up.
+      const resource =
         'resource' in block && typeof block.resource === 'object'
-          ? (block.resource as { uri?: string }).uri ?? '(unknown)'
-          : '(unknown)';
-      parts.push(`[resource block: ${uri}]`);
+          ? (block.resource as Record<string, unknown>)
+          : undefined;
+      const uri = typeof resource?.['uri'] === 'string' ? resource['uri'] : '(unknown)';
+      const blob = typeof resource?.['blob'] === 'string' ? resource['blob'] : undefined;
+      const blobMime =
+        typeof resource?.['mimeType'] === 'string' ? resource['mimeType'] : undefined;
+
+      if (blob !== undefined && blobMime !== undefined && SUPPORTED_IMAGE_MEDIA_TYPES.has(blobMime)) {
+        // Treat as an image block: apply the same size guard and forward via
+        // ToolResult.image so both provider adapters render it natively.
+        const estimatedBytes = Math.ceil((blob.length * 3) / 4);
+        if (estimatedBytes > MAX_MCP_IMAGE_BYTES) {
+          console.warn(
+            `[mcp] resource blob "${blobMime}" (${uri}) is ~${estimatedBytes} bytes decoded, ` +
+              `exceeds ${MAX_MCP_IMAGE_BYTES}-byte limit — using text placeholder`,
+          );
+          parts.push(`[resource block: ${uri} (image blob too large for model context)]`);
+        } else if (forwardedImage === undefined) {
+          const cleanBlob = blob.replace(/\s/g, '');
+          forwardedImage = { mediaType: blobMime as SupportedImageMediaType, data: cleanBlob };
+          parts.push(`[resource block: ${uri} (image: ${blobMime})]`);
+        } else {
+          parts.push(`[resource block: ${uri} (additional image blob not forwarded)]`);
+        }
+      } else {
+        parts.push(`[resource block: ${uri}]`);
+      }
     } else {
       // Forward-compat: unknown block types serialize as JSON so debugging
       // is possible without code changes.

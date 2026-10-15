@@ -1,6 +1,6 @@
 # SDK Dependency Snapshot
 
-Generated: 2026-09-23T00:54:23.081Z
+Generated: 2026-09-29T16:58:34.384Z
 
 ## Versions
 
@@ -8,18 +8,19 @@ Generated: 2026-09-23T00:54:23.081Z
 
 ## Summary
 
-- **34** files import tracked Anthropic packages
-- **1** runtime symbols, **0** type-only symbols
+- **38** files import tracked Anthropic packages
+- **2** runtime symbols, **0** type-only symbols
 
 ## `@anthropic-ai/sdk`
 
-- 34 files, 1 runtime symbols, 0 type-only symbols
+- 38 files, 2 runtime symbols, 0 type-only symbols
 
 ### Symbols
 
 | Symbol | Kind | Files | Call sites |
 |---|---|---:|---:|
-| `default as Anthropic` | runtime | 34 | 2 |
+| `BadRequestError` | runtime | 1 | 0 |
+| `default as Anthropic` | runtime | 37 | 2 |
 
 ### Files
 
@@ -34,7 +35,9 @@ Generated: 2026-09-23T00:54:23.081Z
 | `src/agent/providers/anthropic-direct/exit-plan-mode-live-tools.test.ts` | `default as Anthropic` |
 | `src/agent/providers/anthropic-direct/extended-cache-ttl-beta.test.ts` | `default as Anthropic` |
 | `src/agent/providers/anthropic-direct/interrupt-resume.test.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/journal-wiring.test.ts` | `default as Anthropic` |
 | `src/agent/providers/anthropic-direct/local-mode-oauth.test.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/loop/signature-retry.ts` | `BadRequestError` |
 | `src/agent/providers/anthropic-direct/mcp-permission-refresh.test.ts` | `default as Anthropic` |
 | `src/agent/providers/anthropic-direct/oneshot.test.ts` | `default as Anthropic` |
 | `src/agent/providers/anthropic-direct/oneshot.ts` | `default as Anthropic` |
@@ -52,7 +55,9 @@ Generated: 2026-09-23T00:54:23.081Z
 | `src/agent/providers/anthropic-direct/query/overload-pause-tier.test.ts` | `default as Anthropic` |
 | `src/agent/providers/anthropic-direct/query/retry-context.ts` | `default as Anthropic` |
 | `src/agent/providers/anthropic-direct/query/retry-layer.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/read-only-memory-hot-routes.test.ts` | `default as Anthropic` |
 | `src/agent/providers/anthropic-direct/read-only-memory.test.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/turn-budget-replay.test.ts` | `default as Anthropic` |
 | `src/agent/session/agent-session.test.ts` | `default as Anthropic` |
 | `src/agent/session/provider-switch.test.ts` | `default as Anthropic` |
 | `src/agent/session/set-system-prompt.test.ts` | `default as Anthropic` |

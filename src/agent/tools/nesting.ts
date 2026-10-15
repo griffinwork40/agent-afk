@@ -11,11 +11,13 @@
 import { env } from '../../config/env.js';
 import type { IAgentSession } from '../types.js';
 import type { ModelProvider } from '../provider.js';
-import type { AgentModelInput } from '../types.js';
+import type { AgentModelInput, CanUseTool } from '../types.js';
 import type { Surface } from '../awareness/types.js';
 import type { ReadScopeInputs } from '../subagent-read-scope.js';
+import type { JournalParent } from '../subagent/fork-types.js';
 import { AnthropicDirectProvider } from '../providers/anthropic-direct/index.js';
 import { OpenAICompatibleProvider } from '../providers/openai-compatible/index.js';
+import { XaiProvider } from '../providers/xai/index.js';
 import type { WorkspaceStore } from '../workspace/workspace-store.js';
 import { WORKSPACE_CHILD_TOOL_NAMES } from '../workspace/index.js';
 import { providerForModel } from '../providers/index.js';
@@ -27,6 +29,8 @@ import type { SubagentExecutor } from './subagent-executor.js';
 import type { TraceSink } from '../trace/index.js';
 import type { BackgroundAgentRegistry } from '../background-registry.js';
 import type { AgentRegistry } from '../agents/types.js';
+import type { SdkPluginConfig } from '../types/sdk-types.js';
+import type { HookRegistry } from '../hooks.js';
 
 export const DEFAULT_MAX_NESTING_DEPTH = 3;
 
@@ -101,6 +105,13 @@ export interface ChildProviderFactoryArgs {
    */
   readOnlyBash?: boolean;
   /**
+   * When true, the provider exposes only `state_get` and `state_query`
+   * (no `state_put`, `state_cas`, or `state_delete`). Independent of
+   * `readOnlyMemory` so children can write facts to the memory archive while
+   * still being denied state-store mutations. Always set for child sessions.
+   */
+  readOnlyState?: boolean;
+  /**
    * Custom tools to register on the child's provider. Threaded from
    * `childConfig.customTools` so tools injected at fork time (e.g.
    * `emit_progress` via `wireProgressEvents`) reach the provider's
@@ -138,13 +149,18 @@ export function createStubParentSession(
 // 'memory_search' is included because READ_ONLY_PHASE_TOOLS (src/agent/tool-category.ts:175)
 // — the most restricted role in the system (mint's spec/research/plan phases) — already trusts
 // it ("read-only by construction"). Excluding memory_search for general sub-agents while
-// allowing it in the more restricted role is incoherent. 'memory_update' and 'procedure_write'
-// are deliberately NOT included: memory_update with target:"hot" mutates HOT.md, which is
-// injected into every future session's system prompt — blast radius too large for unsupervised
-// sub-agent writes. If specific skills need memory write access, do it per-skill via a
-// buildPhaseRestrictedProvider-style opt-in builder (see nesting.ts around line 207), not by
-// extending this global default.
-export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', ...WORKSPACE_CHILD_TOOL_NAMES, 'agent', 'skill', 'state_get', 'state_query'];
+// allowing it in the more restricted role is incoherent.
+//
+// 'memory_update' is NOW included so sub-agents can persist non-volatile findings (target:
+// "fact") across sessions. Writing to target:"hot" (HOT.md, injected into every future
+// session's system prompt) is the only dangerous write — its blast radius is too large for
+// unsupervised children. That specific call is blocked at runtime by the
+// `createChildMemoryHotBlockHook` PreToolUse hook registered in default-hook-registry.ts, so
+// the schema can be present without opening the hot-write path.
+//
+// 'procedure_write' is deliberately NOT included: there is no analogous safe subset — a
+// procedure is either written or not. Per-skill opt-in remains the intended route.
+export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', 'memory_update', ...WORKSPACE_CHILD_TOOL_NAMES, 'agent', 'skill', 'state_get', 'state_query'];
 
 // Recon allowlist for a READ-ONLY skill's forked child. This is the tool half
 // of read-only-skill enforcement (the bash half is the dispatcher's
@@ -259,6 +275,10 @@ export function createChildProviderFactory(
       // Bash gate (read-only skill child). Forwarded into BOTH provider
       // constructors so the per-query dispatcher blocks mutating shell commands.
       ...(readOnlyBash === true ? { readOnlyBash: true } : {}),
+      // State gate: children may call memory_update (target:"fact") but must
+      // never write to the state store (state_put/cas/delete). Independent of
+      // readOnlyMemory so fact writes remain open while state writes stay closed.
+      readOnlyState: true as const,
       // Custom tools injected at fork time (e.g. emit_progress). The provider
       // constructor is the only read point — config.customTools is not consulted
       // at query time when a pre-built provider is set.
@@ -270,18 +290,16 @@ export function createChildProviderFactory(
         ...providerOpts,
         ...(opts.openaiBaseUrl !== undefined ? { baseURL: opts.openaiBaseUrl } : {}),
         ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
-        readOnlyMemory: true,
       });
     }
-    // Child sessions get read-only memory access — they may call `memory_search`
-    // to recall prior facts but cannot persist new memory (no `memory_update` /
-    // `procedure_write`). The parent session is the only writer; allowing writes
-    // from subagents would cause uncoordinated fan-out into the shared store.
+    // Child sessions may call memory_search AND memory_update (target:"fact").
+    // Writing to target:"hot" (HOT.md, injected into every future session's system
+    // prompt) is rejected structurally by guardChildHotWrites (keyed on readOnlyState,
+    // no hook registry required); createChildMemoryHotBlockHook is a first-party backstop.
     return new AnthropicDirectProvider({
       ...providerOpts,
       ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
       ...(subscribeHandler !== undefined ? { subscribeHandler } : {}),
-      readOnlyMemory: true,
     });
   };
 }
@@ -302,7 +320,8 @@ export function createChildProviderFactory(
  *     declared; falls back to the full RECON set when the skill declares no
  *     `tools:`)
  *   - `readOnlyBash: true` (dispatcher blocks mutating bash)
- *   - `readOnlyMemory: true` (consistency with the factory path)
+ *   - `readOnlyMemory: true` (read-only recon: no memory_update / procedure_write)
+ *   - `readOnlyState: true` (children cannot write to the state store)
  *   - NO `subagentExecutor` / `skillExecutor` — at the depth cap the child
  *     cannot fan out further anyway, so `agent`/`skill` would be dead schema.
  *
@@ -341,6 +360,14 @@ export function buildReadOnlyReconProvider(
 }
 
 /**
+ * Executor-backed tools a compose node can never run: buildComposeNodeProvider
+ * omits subagentExecutor/skillExecutor (leaf invariant below), so these are
+ * removed from every compose node's tool surface, named or not (#3579).
+ * `compose` itself is not in CHILD_ALLOWED_TOOLS, so it needs no entry.
+ */
+export const COMPOSE_LEAF_STRIPPED_TOOLS: ReadonlySet<string> = new Set(['agent', 'skill']);
+
+/**
  * Build a provider for a compose DAG node that carries the workspace store
  * (so nodes can call `workspace_publish` / `workspace_query`) but deliberately
  * omits `subagentExecutor` and `skillExecutor`.
@@ -352,43 +379,108 @@ export function buildReadOnlyReconProvider(
  * `childProviderFactory` (which bundles both executors) must never be used for
  * this purpose.
  *
- * Tool surface: `CHILD_ALLOWED_TOOLS` (same as normal children) — `compose` is
- * already absent from that set, so no additional stripping is needed.
+ * Tool surface: `CHILD_ALLOWED_TOOLS` minus `COMPOSE_LEAF_STRIPPED_TOOLS` —
+ * `compose` is already absent from `CHILD_ALLOWED_TOOLS`, and `agent`/`skill`
+ * are stripped via `COMPOSE_LEAF_STRIPPED_TOOLS` (compose nodes are leaves and
+ * have no `subagentExecutor`/`skillExecutor` to back those tools).
  *
  * @param model      Effective model for this node. Drives provider routing so
- *                   OpenAI-routed nodes get `OpenAICompatibleProvider` and
- *                   Anthropic-routed nodes get `AnthropicDirectProvider`.
+ *                   OpenAI-routed nodes get `OpenAICompatibleProvider`,
+ *                   Grok-routed nodes get `XaiProvider`, and Anthropic-routed
+ *                   nodes get `AnthropicDirectProvider`.
  * @param workspaceStore  Parent session's workspace store, shared with every node.
- * @param openaiBaseUrl   Local-shim endpoint (e.g. mlx_lm / vLLM). Forwarded as
- *                        `baseURL` when the node routes to `openai-compatible`.
- * @param readOnlyBash    When true, the node's dispatcher blocks mutating bash
- *                        commands. Forwarded for read-only skill leaf nodes.
+ * @param opts            Optional per-node configuration:
+ *   - `openaiBaseUrl`  Local-shim endpoint (e.g. mlx_lm / vLLM). Forwarded
+ *                      as `baseURL` when the node routes to `openai-compatible`.
+ *   - `readOnlyBash`   When `true`, the node's dispatcher blocks mutating bash
+ *                      commands (named agents declaring `bashReadOnly`, e.g.
+ *                      git-investigator). `true | undefined` — never `false`.
+ *   - `canUseTool`     Named-agent allowlist callback for this node.
+ *
+ * Invariant: `canUseTool` / `readOnlyBash` MUST arrive here, at construction.
+ * A preset `AgentConfig.provider` is queried directly (provider-lifecycle.ts),
+ * and both providers read these only from constructor options — a callback
+ * left on the fork config alone never reaches the dispatcher and fails open.
+ * `workspaceStore` is undefined on the AFK_WORKSPACE_DISABLED fallback.
+ *
+ * Routing: mirrors `resolveProvider()` in providers/index.ts — xAI/Grok
+ * models (`grok-*`) route to `XaiProvider` (which composes
+ * `OpenAICompatibleProvider` internally), not to `AnthropicDirectProvider`.
+ * Without this branch a node declared with `model: 'grok-3'` would silently
+ * POST to api.anthropic.com and receive a 400/404, bypassing auth and tool
+ * restrictions that only land on the correctly-routed provider constructor.
+ * `subagentExecutor` / `skillExecutor` are intentionally absent — compose
+ * nodes are leaves and must not spawn nested DAGs or invoke skills.
  */
+export interface BuildComposeNodeProviderOpts {
+  openaiBaseUrl?: string;
+  /** `true` blocks mutating bash for read-only named agents (e.g. git-investigator). */
+  readOnlyBash?: true;
+  canUseTool?: CanUseTool;
+  /**
+   * Static string allowlist that mirrors what `canUseTool` enforces at
+   * runtime.  When present, `permissions.allowedTools` is set to the
+   * intersection of `CHILD_ALLOWED_TOOLS` and this list so that `toolDefs`
+   * (the schema surface advertised to the model) exactly matches the enforced
+   * surface — closing the drift that caused the 'Unknown tool' error to list
+   * blocked tools (issue #3580).
+   *
+   * Must be present whenever `canUseTool` is set.  When absent (inherit-all
+   * named agents and unnamed nodes), `permissions.allowedTools` stays as the
+   * full `CHILD_ALLOWED_TOOLS` list.
+   *
+   * Seam for #3579: executor-backed tools (`agent`, `skill`, `compose`) that
+   * the sibling PR strips from compose-leaf allowlists should be removed from
+   * this array before it reaches here, not from `canUseTool` (async/opaque).
+   */
+  namedAgentAllowedTools?: string[];
+}
+
 export function buildComposeNodeProvider(
   model: AgentModelInput | undefined,
-  workspaceStore: WorkspaceStore,
-  openaiBaseUrl?: string,
-  readOnlyBash?: boolean,
+  workspaceStore: WorkspaceStore | undefined,
+  opts: BuildComposeNodeProviderOpts = {},
 ): ModelProvider {
+  const { openaiBaseUrl, readOnlyBash, canUseTool, namedAgentAllowedTools } = opts;
+  // Effective tool surface: when the named agent declares an allowlist, use
+  // the intersection of CHILD_ALLOWED_TOOLS and that list so that toolDefs
+  // (the per-turn schema sent to the model) matches the canUseTool enforcement
+  // gate exactly.  Without this intersection the model sees the full
+  // CHILD_ALLOWED_TOOLS surface in the API schema, calls a blocked tool, and
+  // gets a confusing denial — and the 'Unknown tool' suggestion list leaks the
+  // same blocked names (issue #3580).
+  // When namedAgentAllowedTools is absent (inherit-all agents, unnamed nodes),
+  // fall back to the full CHILD_ALLOWED_TOOLS list unchanged.
+  const leafTools = CHILD_ALLOWED_TOOLS.filter((t) => !COMPOSE_LEAF_STRIPPED_TOOLS.has(t));
+  const effectiveAllowedTools =
+    namedAgentAllowedTools !== undefined
+      ? leafTools.filter((t) => namedAgentAllowedTools.includes(t))
+      : leafTools;
   // Materialize the allowlist per call so runtime array mutations don't bleed
   // across sibling nodes (mirrors buildPhaseRestrictedProvider / buildReadOnlyReconProvider).
-  const permissions = { allowedTools: [...CHILD_ALLOWED_TOOLS] };
+  const common = {
+    permissions: { allowedTools: effectiveAllowedTools },
+    readOnlyMemory: true,
+    ...(workspaceStore !== undefined ? { workspaceStore } : {}),
+    ...(readOnlyBash === true ? { readOnlyBash: true } : {}),
+    ...(canUseTool !== undefined ? { canUseTool } : {}),
+  };
   const route = providerForModel(typeof model === 'string' ? model : undefined);
   if (route === 'openai-compatible') {
     return new OpenAICompatibleProvider({
-      permissions,
-      workspaceStore,
-      readOnlyMemory: true,
+      ...common,
       ...(openaiBaseUrl !== undefined ? { baseURL: openaiBaseUrl } : {}),
-      ...(readOnlyBash === true ? { readOnlyBash: true } : {}),
     });
   }
-  return new AnthropicDirectProvider({
-    permissions,
-    workspaceStore,
-    readOnlyMemory: true,
-    ...(readOnlyBash === true ? { readOnlyBash: true } : {}),
-  });
+  // xAI/Grok models route to XaiProvider, which wraps OpenAICompatibleProvider
+  // for the Chat Completions wire path while adding xAI-specific auth logic.
+  // Without this branch, grok-* nodes silently fall through to AnthropicDirectProvider,
+  // misrouting requests to api.anthropic.com and bypassing restrictions.
+  // No subagentExecutor / skillExecutor — compose nodes are leaves.
+  if (route === 'xai' || route === 'xai-oauth') {
+    return new XaiProvider(common);
+  }
+  return new AnthropicDirectProvider(common);
 }
 
 /**
@@ -440,6 +532,15 @@ export function createChildSkillExecutorFactory(
   workspaceStore?: WorkspaceStore,
   // Tree-wide delegation budget threaded from root. Trailing optional.
   delegationBudget?: import('./delegation-budget.js').DelegationBudget,
+  // Executor-tree scope (#3442), threaded to every depth via the recursive
+  // `factory` (and to agent-tool children, which inherit this factory):
+  // pluginConfigs defined => sole plugin source ([] => none); skillAllowlist =>
+  // exact-name skill gate; hookRegistry => reaches the nested executors' fork
+  // managers, whose stub parents carry none. Trailing optional; undefined =>
+  // byte-identical to before.
+  pluginConfigs?: SdkPluginConfig[],
+  skillAllowlist?: readonly string[],
+  hookRegistry?: HookRegistry,
 ): (
   depth: number,
   maxDepth: number,
@@ -447,6 +548,8 @@ export function createChildSkillExecutorFactory(
   inheritedCwd?: string,
   inheritedReadScope?: ReadScopeInputs,
   skillDispatchName?: string,
+  journalParent?: JournalParent,
+  rootSessionId?: string,
 ) => SkillExecutor {
   const factory: (
     depth: number,
@@ -455,7 +558,9 @@ export function createChildSkillExecutorFactory(
     inheritedCwd?: string,
     inheritedReadScope?: ReadScopeInputs,
     skillDispatchName?: string,
-  ) => SkillExecutor = (depth, maxDepth, signal, inheritedCwd, inheritedReadScope, skillDispatchName) => {
+    journalParent?: JournalParent,
+    rootSessionId?: string,
+  ) => SkillExecutor = (depth, maxDepth, signal, inheritedCwd, inheritedReadScope, skillDispatchName, journalParent, rootSessionId) => {
     // Invariant: the closure-captured `cwd` is frozen at bootstrap. For
     // born-named `afk -w` worktrees it is `undefined` (the worktree is
     // created on turn 1 via worktree-autoname, after bootstrap). A later
@@ -464,8 +569,22 @@ export function createChildSkillExecutorFactory(
     // depth-1 caller) carries the live value so grandchild SkillExecutors
     // anchor to the worktree, not the host's process.cwd().
     const effectiveCwd = inheritedCwd ?? cwd;
+    // Journal view AND session id are read LAZILY: the forking child's journal
+    // and id are backfilled only after its fork returns (subagent-executor /
+    // fork-dispatch). The live id gives nested skill forks a real
+    // `parentSessionId`, without which child-attribution drops them (#2442).
+    const stub = createStubParentSession(signal);
     return new SkillExecutor({
-      parentSession: createStubParentSession(signal),
+      parentSession: journalParent === undefined
+        ? stub
+        : {
+            ...stub,
+            get sessionId() { return journalParent.sessionId; },
+            get messageJournal() { return journalParent.messageJournal; },
+          },
+      // Root (depth-0) session id (#2442): the nested executor's skill forks
+      // and their `agent` grandchildren credit artifacts to the root record.
+      ...(rootSessionId !== undefined ? { parentRootSessionId: rootSessionId } : {}),
       defaultModel,
       // Resolved default-subagent policy threaded through every depth so a
       // nested skill child (and the SubagentExecutor it builds) defaults to the
@@ -539,6 +658,9 @@ export function createChildSkillExecutorFactory(
       // the traceWriter / cwd propagation above; see this factory's parameter.
       ...(workspaceStore !== undefined ? { workspaceStore } : {}),
       ...(delegationBudget !== undefined ? { delegationBudget } : {}),
+      ...(pluginConfigs !== undefined ? { pluginConfigs } : {}),
+      ...(skillAllowlist !== undefined ? { skillAllowlist } : {}),
+      ...(hookRegistry !== undefined ? { hookRegistry } : {}),
       // Fix A (#skill-recursion): execution guard fires when grandchild calls same skill.
       ...(skillDispatchName !== undefined ? { skillDispatchName } : {}),
     });

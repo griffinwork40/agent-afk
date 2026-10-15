@@ -28,8 +28,9 @@
 const ALWAYS_EXTERNAL_TOOLS = new Set<string>([
   // Outbound Telegram message
   'send_telegram',
-  // Image generation — paid OpenAI API call, irreversible external effect.
+  // Image generation/editing — paid OpenAI API call, irreversible external effect.
   'image_generate',
+  'image_edit',
   // MCP write tools match the `mcp__*` prefix pattern — see classifyToolCall.
 ]);
 
@@ -101,6 +102,17 @@ export function classifyToolCall(toolName: string, input: unknown): Classificati
   // Always-external tool names.
   if (ALWAYS_EXTERNAL_TOOLS.has(toolName)) {
     return { isExternal: true, operationType: toolName };
+  }
+
+  // HTTP mutations can apply remotely even when their response is lost.
+  if (toolName === 'web_request') {
+    const method = input !== null && typeof input === 'object'
+      ? (input as Record<string, unknown>)['method']
+      : undefined;
+    if (typeof method === 'string' && ['POST', 'PATCH', 'PUT', 'DELETE'].includes(method.toUpperCase())) {
+      return { isExternal: true, operationType: 'web_request_mutation' };
+    }
+    return { isExternal: false, operationType: toolName };
   }
 
   // bash: scan command content for external-effect patterns.

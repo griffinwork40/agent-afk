@@ -107,6 +107,7 @@ afk schedule add \
 | `--cron <expr>` | Yes | 5-field cron expression |
 | `--trigger <mode>` | No | `cron` \| `sessionstart` \| `both` (default: `cron`) |
 | `--notify <when>` | No | `failure` \| `always` \| `never` (default: `failure`) |
+| `--cwd <path>` | No | Per-task working directory (absolute path or `~/…`). Pins this task to a specific repo. Precedence: task `cwd` → `AFK_DAEMON_CWD` → `process.cwd()` |
 | `--disabled` | No | Add in disabled state |
 
 ### List tasks
@@ -147,9 +148,22 @@ and will take effect on next start.
 | `AFK_DAEMON_TASK` | Default task command (overridden by `--task`) |
 | `AFK_DAEMON_TASK_ID` | Default task ID (overridden by `--task-id`) |
 | `AFK_TIMEOUT_MS` | Per-tick session timeout in milliseconds |
-| `AFK_DAEMON_CWD` | Working directory for daemon-spawned sessions |
+| `AFK_DAEMON_CWD` | Daemon-wide working directory for spawned sessions. Overridden by a per-task `cwd` field. Precedence: task `cwd` → `AFK_DAEMON_CWD` → `process.cwd()` |
 | `AFK_DAEMON_HOST` | Bind address for the control HTTP surface (default `127.0.0.1`, loopback only). Overridden by `--host`. |
 | `AFK_SESSIONSTART_COOLDOWN_MS` | Cooldown between sessionstart fires |
+
+## Security: per-task cwd trust model
+
+Pinning a task to a `cwd` has the same trust implications as `AFK_DAEMON_CWD`:
+
+- **Hooks config** — daemon sessions load `hooks` config relative to the effective `cwd`
+  (task `cwd` → `AFK_DAEMON_CWD` → `process.cwd()`). A task pinned to an untrusted
+  directory will load that directory's hooks config.
+- **MCP servers** — the session reads `.mcp.json` from the effective `cwd`. Any stdio MCP
+  server defined there runs under `bypassPermissions`, the same mode all daemon tasks use.
+- **Recommendation** — only pin tasks to directories you control and trust. This is the same
+  boundary that governs `AFK_DAEMON_CWD`; per-task `cwd` does not introduce a new trust
+  escalation path.
 
 ## State and logs
 

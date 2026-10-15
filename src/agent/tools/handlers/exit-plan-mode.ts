@@ -42,6 +42,7 @@ import type { ElicitationRequest, PermissionMode } from '../../types/sdk-types.j
 import { elicitationRouter } from '../../elicitation-router.js';
 import { buildPlanExitPrompt } from '../../plan-mode-exit-prompt.js';
 import { getProjectPlansDir } from '../../../paths.js';
+import { isUserWaiting, userAttentionFrom, yieldNotice } from '../user-yield.js';
 
 /** Stable tool name — must be present in the session's tool allowlist. */
 export const EXIT_PLAN_MODE_TOOL_NAME = 'exit_plan_mode';
@@ -55,6 +56,26 @@ export const EXIT_PLAN_MODE_TOOL_NAME = 'exit_plan_mode';
 // other "bypass"-bearing choice — any other restore label must omit the word.
 const CHOICE_BYPASS = 'Approve — implement now (bypass mode: no prompts, read/write any path)';
 const CHOICE_KEEP = 'Keep planning';
+
+const PICKER_MESSAGE =
+  'Plan ready. How do you want to proceed? (Your plan is in the conversation above.)';
+// Shown when the visible-text gate's refusal budget is spent: the picker still
+// appears (the user is never stranded) but it no longer claims the plan is above.
+const PICKER_MESSAGE_UNWRITTEN =
+  'Plan ready. How do you want to proceed? (Warning: the agent did not write its ' +
+  'plan out as visible text in this response. Choose Keep planning to prompt it to write one.)';
+
+/**
+ * Tool result for a gate refusal. Names WHY (tool results and thinking are not
+ * visible to the user) so the model writes the plan instead of re-calling.
+ */
+export const PLAN_TEXT_REFUSAL =
+  'exit_plan_mode refused: you have not written your plan as visible text in this ' +
+  'response. The user cannot see your thinking, and tool results (including subagent ' +
+  'and skill output such as review findings) are collapsed in their terminal, so they ' +
+  'have not seen the plan. Write it now as normal assistant text: the chosen approach, ' +
+  'the risks, the alternatives considered, and any review findings that shaped it. ' +
+  'Then call exit_plan_mode again in that same response.';
 
 /**
  * Label for the primary "approve and implement" choice, which restores the mode
@@ -96,6 +117,9 @@ export const exitPlanModeTool: AnthropicToolDef = {
     'IMPORTANT: only call this in plan mode, and only when the task requires ' +
     'implementation (writing code or files). For research / read-only / ' +
     'understanding tasks, do NOT call it — just answer.\n\n' +
+    'Write the plan as visible assistant text in the SAME response, before this ' +
+    'call. Your thinking and tool results are not shown to the user, so a call ' +
+    'with no visible plan text is refused.\n\n' +
     'Do NOT ask "is this plan ok?" with ask_question — that is what this tool ' +
     'does. Resolve any open requirement questions with ask_question FIRST, then ' +
     'call exit_plan_mode.\n\n' +
@@ -124,12 +148,17 @@ export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandl
     // elicitation picker entirely. Delivering the queued message first lets the
     // model see the user's input before deciding whether to exit plan mode — and
     // prevents the picker from interrupting the user mid-thought.
-    if (controls.hasPendingUserMessage?.()) {
-      return {
-        content:
-          'The user has a queued message waiting to be delivered. End your turn now so ' +
-          'the message is delivered first. You can call exit_plan_mode again afterward.',
-      };
+    // Yield contract (../user-yield.ts): same probe + notice as wait_for.
+    if (isUserWaiting(userAttentionFrom(controls))) {
+      return { content: yieldNotice('You can call exit_plan_mode again afterward.') };
+    }
+
+    // Visible-text gate: refuse when the plan was never written where the user
+    // can see it (see session/plan-text-tracker.ts). Runs AFTER the queued-
+    // message check so a typed-ahead message still wins. Absent gate = 'ok'.
+    const planText = controls.checkPlanText?.() ?? 'ok';
+    if (planText === 'refuse') {
+      return { content: PLAN_TEXT_REFUSAL };
     }
 
     // Restore the mode the user was in before plan mode (falls back to 'default'
@@ -149,9 +178,7 @@ export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandl
       serverName: 'agent',
       origin: 'agent',
       type: 'choice',
-      message:
-        'Plan ready. How do you want to proceed? ' +
-        '(Your plan is in the conversation above.)',
+      message: planText === 'warn' ? PICKER_MESSAGE_UNWRITTEN : PICKER_MESSAGE,
       choices,
     };
 
@@ -196,7 +223,7 @@ export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandl
     // so the gate stays locked in plan mode for the remainder of this turn —
     // closing the mid-turn TOCTOU window where the model could issue write tools
     // in bypass mode before actually ending its turn.
-    const plansDir = getProjectPlansDir(context?.resolveBase ?? context?.cwd ?? process.cwd());
+    const plansDir = getProjectPlansDir(context?.resolveBase ?? process.cwd());
     controls.requestImplementSeed(buildPlanExitPrompt(plansDir), mode);
 
     return {

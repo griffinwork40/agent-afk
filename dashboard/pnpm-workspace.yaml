@@ -1,0 +1,6 @@
+# pnpm 11 settings for the standalone dashboard app (own lockfile; the repo
+# root's pnpm-workspace.yaml does not apply here). pnpm 11 fails the install
+# on any dependency build script not listed under allowBuilds.
+#   esbuild: postinstall verifies the platform binary (pulled in by vite)
+allowBuilds:
+  esbuild: true

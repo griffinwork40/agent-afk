@@ -19,8 +19,7 @@ import type { ProviderEvent } from '../../../provider.js';
 import type { RunTurnInput, ToolCall, ToolResult, TurnResult } from '../types.js';
 import { abortFailureClass } from '../../../abort-reason.js';
 import { emitToolCall } from '../../../trace/emit.js';
-import { extractCaptureToolInput, extractRawToolInput } from '../../../facets/raw-input.js';
-import { env, isExplicitlyEnabled } from '../../../../config/env.js';
+import { extractRawToolInput } from '../../../facets/raw-input.js';
 import { summarizeToolInput } from '../../shared/tool-input-summary.js';
 import { buildToolCallStartedPayload } from '../../shared/tool-call-trace.js';
 import { relayWhilePending } from '../../shared/event-relay.js';
@@ -81,12 +80,6 @@ export async function* dispatchToolCalls(
       toolName: block.name,
       toolInput: summarizeToolInput(block.name, block.input),
       toolInputRaw: extractRawToolInput(block.input),
-      // Intentionally broader than shouldCaptureSubagentOutput: isSubagentFork
-      // is not in scope here, so we populate toolInputCapture whenever the env
-      // var is set. The recorder null-gates at construction via
-      // shouldCaptureSubagentOutput, so this field is silently dropped for
-      // non-fork sessions. Wasted extractCaptureToolInput call only.
-      toolInputCapture: (env.AFK_CAPTURE_SUBAGENT_OUTPUT && isExplicitlyEnabled(env.AFK_CAPTURE_SUBAGENT_OUTPUT)) ? extractCaptureToolInput(block.input) : undefined,
       sessionId: input.ctx.sessionId,
     };
   }

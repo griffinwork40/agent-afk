@@ -29,6 +29,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { getSessionKeyPath } from '../paths.js';
+import { atomicWriteFile } from '../utils/atomic-write.js';
 import type { ElicitationResult } from './types/sdk-types.js';
 
 /** Per-session key length. 32 bytes (256 bits) → 64 hex chars. */
@@ -76,7 +77,7 @@ export function ensureSessionKey(sessionId: string): string | null {
     // lazily on first record); create it so the key write doesn't ENOENT.
     fs.mkdirSync(path.dirname(keyPath), { recursive: true });
     const key = randomBytes(KEY_BYTES).toString('hex');
-    fs.writeFileSync(keyPath, key + '\n', { mode: 0o600 });
+    atomicWriteFile(keyPath, key + '\n', { mode: 0o600, mkdirp: false });
     return key;
   } catch {
     // Possible concurrent create — try one more read before giving up.

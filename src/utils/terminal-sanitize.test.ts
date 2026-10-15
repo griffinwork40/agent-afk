@@ -183,4 +183,27 @@ describe('stripEscapeSequences', () => {
   it('strips 0x9C-terminated DCS sequences', () => {
     expect(stripEscapeSequences('\x1bPpayload\x9ctext')).toBe('text');
   });
+
+  // F1 regression: lone ESC bytes not consumed by ESCAPE_RE must not survive.
+  it('removes a lone trailing ESC byte (F1 regression)', () => {
+    // Without the LONE_ESC_RE pass, 'abc\x1b' would return 'abc\x1b'.
+    const result = stripEscapeSequences('abc\x1b');
+    expect(result).toBe('abc');
+    expect(result).not.toMatch(/\x1B/);
+  });
+
+  it('removes an ESC followed by a byte outside recognised ranges (F1 regression)', () => {
+    // ESC + 0x21 ('!') is not in [6-_] (0x36–0x5F), not a CSI/OSC/DCS intro —
+    // ESCAPE_RE leaves it untouched; LONE_ESC_RE must then remove the ESC.
+    const result = stripEscapeSequences('abc\x1b!xyz');
+    expect(result).not.toMatch(/\x1B/);
+    // Visible text must survive — only the ESC byte is removed.
+    expect(result).toContain('!xyz');
+  });
+
+  it('removes multiple lone ESC bytes in a single string (F1 regression)', () => {
+    const result = stripEscapeSequences('\x1bstart\x1bmiddle\x1bend');
+    expect(result).not.toMatch(/\x1B/);
+    expect(result).toBe('startmiddleend');
+  });
 });

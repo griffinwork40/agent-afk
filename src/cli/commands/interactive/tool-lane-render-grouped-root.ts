@@ -1,4 +1,4 @@
-import { displayWidth, stripAnsi, truncateDisplayWidth } from '../../display.js';
+import { displayWidth, truncateDisplayWidth } from '../../display.js';
 import { palette } from '../../palette.js';
 import { styleForToolName } from '../../tool-category.js';
 import {
@@ -11,10 +11,12 @@ import {
   shortenPaths,
 } from './tool-lane-format.js';
 import type { ToolEntry } from './tool-lane-render.js';
-import { clampLineToTerminal, pushOutcomeLines, toolLaneWidth } from './tool-lane-render.js';
+import { clampLineToTerminal, toolLaneWidth } from './tool-lane-render.js';
+import { outcomeTailWidth, pushOutcomeRows } from './tool-lane-outcome-rows.js';
 
 function groupedResultSuffix(
   entries: ToolEntry[],
+  cols: number,
   homeDir?: string,
 ): string {
   const completed = entries.filter((entry) => entry.result);
@@ -50,8 +52,11 @@ function groupedResultSuffix(
   }
 
   if (completed.length > 0) {
+    // tailWidth governs continuation-row budgets; continuation lines are then
+    // stripped below since grouped summaries are always single-line.
+    const tailWidth = outcomeTailWidth(cols, '   ');
     const outcomes = completed.map((entry) =>
-      formatOutcome(entry.result!, homeDir, 60, entry.toolName).replace(/\n[\s\S]*/u, '…'),
+      formatOutcome(entry.result!, homeDir, 60, entry.toolName, tailWidth).replace(/\n[\s\S]*/u, '…'),
     );
     return palette.dim(' — ') + outcomes.join(palette.dim(', '));
   }
@@ -80,7 +85,7 @@ export function formatGroupedToolResults(
     color.bold(toolName) +
     palette.dim(` ×${entries.length}`) +
     ' ';
-  const suffix = groupedResultSuffix(entries, homeDir);
+  const suffix = groupedResultSuffix(entries, cols, homeDir);
   const targets = entries
     .map((entry) => shortenPaths(sanitizeLabel(entry.toolInput)).trim())
     .join(', ');
@@ -120,19 +125,17 @@ export function renderGroupedRootTools(
     if (entries.length === 1) {
       const e = entries[0]!;
       if (e.result) {
-        // pushOutcomeLines splits multi-line formatOutcome so continuation
+        // pushOutcomeRows splits multi-line formatOutcome so continuation
         // lines carry '   ' (the same 3-space root indent) instead of a
         // bare inline join that would embed a raw \n into the row. This
         // mirrors the child-render and overlay paths — see
         // tool-lane-render-children.ts and tool-lane.ts.
-        pushOutcomeLines(
-          lines,
-          '   ' + e.prefix + palette.dim(' — ') + doneGlyph(e.result.isError, e.result.failureClass) + ' ',
-          formatOutcome(e.result, homeDir, Math.max(20, cols - displayWidth(stripAnsi(e.prefix)) - 12), e.toolName),
-          '   ',
-          cols,
-          batchBadge(e.result),
-        );
+        pushOutcomeRows(lines, {
+          lead: '   ',
+          label: e.prefix,
+          sep: palette.dim(' — ') + doneGlyph(e.result.isError, e.result.failureClass) + ' ',
+          suffix: batchBadge(e.result),
+        }, e.result, { continuationIndent: '   ', cols, homeDir, toolName: e.toolName });
         if (e.diff && !e.result.isError) {
           // Root-level scrollback diff: indent 4 spaces so it sits under
           // the outcome line (3 for the row indent, 1 more to clear the

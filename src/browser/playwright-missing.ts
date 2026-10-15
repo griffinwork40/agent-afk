@@ -45,22 +45,38 @@ export const PLAYWRIGHT_MISSING_HINTS = [
 const PLAYWRIGHT_DOWNLOAD_TIMEOUT_MS = 120_000;
 
 /**
- * Env-var prefix to prepend to every install command we advertise.  A plain
- * `export` in the user's shell is intentionally NOT used here — the prefix
- * form is copy-paste safe and works in any POSIX shell without side effects.
+ * Env-var prefix to prepend to every install command we advertise on POSIX
+ * systems. A plain `export` in the user's shell is intentionally NOT used here —
+ * the inline-prefix form is copy-paste safe and works in any POSIX shell without
+ * side effects.
+ *
+ * Note: `VAR=value cmd` is POSIX shell / bash syntax that does NOT work in
+ * PowerShell. On Windows the caller must use {@link playwrightEnvPrefix} with
+ * `platform = 'win32'` to get the PowerShell-compatible form (issue #2758).
  */
-const TIMEOUT_ENV_PREFIX = `PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=${PLAYWRIGHT_DOWNLOAD_TIMEOUT_MS}`;
+const TIMEOUT_ENV_PREFIX_POSIX = `PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=${PLAYWRIGHT_DOWNLOAD_TIMEOUT_MS}`;
 
 /**
- * Fallback install command when the bundled Playwright CLI cannot be resolved.
+ * PowerShell equivalent of `VAR=value cmd`: assign to `$env:VAR` before the
+ * command, separated by `;`. Works in both PowerShell 5.1 and PowerShell 7.
  *
- * Uses `pnpm exec` so the playwright version is the one pinned in the project's
- * lock file, not a globally-installed version that may have a different chromium
- * revision.  `npx playwright install` is deliberately NOT used here because
- * `npx --yes` resolves the LATEST playwright package, whose pinned chromium
- * revision can differ from the one this build expects (issue #1998).
+ * The POSIX `VAR=value cmd` inline-prefix form is a bash/sh-ism that
+ * PowerShell does not recognise (issue #2758).
  */
-const STATIC_INSTALL_COMMAND = `${TIMEOUT_ENV_PREFIX} pnpm exec playwright install chromium`;
+const TIMEOUT_ENV_PREFIX_POWERSHELL = `$env:PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=${PLAYWRIGHT_DOWNLOAD_TIMEOUT_MS};`;
+
+/**
+ * Return the platform-appropriate env-var prefix for the advertised install
+ * command.
+ *
+ * - Non-win32 (POSIX): `PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=120000`
+ *   (inline-prefix form, runs before `node` on the same line).
+ * - win32 (PowerShell): `$env:PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=120000;`
+ *   (PowerShell assignment, followed by `;` separator then the `node` call).
+ */
+function playwrightEnvPrefix(platform: NodeJS.Platform): string {
+  return platform === 'win32' ? TIMEOUT_ENV_PREFIX_POWERSHELL : TIMEOUT_ENV_PREFIX_POSIX;
+}
 
 /** Depth limit when walking `error.cause` — guards against a self-referential chain. */
 const MAX_CAUSE_DEPTH = 4;
@@ -98,8 +114,9 @@ export function isPlaywrightMissing(err: unknown): boolean {
 }
 
 // Resolution touches the filesystem, so memoize it — the hint can be built on
-// any number of failed launches.
-let cachedInstallCommand: string | undefined;
+// any number of failed launches. One cache slot per platform so injected-platform
+// tests remain isolated from the real-platform cache.
+const cachedInstallCommands = new Map<NodeJS.Platform, string>();
 
 /**
  * Resolve the absolute path of the *bundled* Playwright CLI and return a
@@ -124,7 +141,7 @@ let cachedInstallCommand: string | undefined;
  * static string rather than throwing. This code runs *inside an error path*,
  * where a secondary throw would replace an actionable message with a crash.
  */
-function resolveBundledInstallCommand(): string | undefined {
+function resolveBundledInstallCommand(platform: NodeJS.Platform): string | undefined {
   try {
     const req = createRequire(import.meta.url);
     const pkgJsonPath = req.resolve('playwright/package.json');
@@ -148,7 +165,7 @@ function resolveBundledInstallCommand(): string | undefined {
     const arg = /\s/.test(cli) ? `"${cli}"` : cli;
     // Prepend the connection-timeout override so slow-network installs do not
     // time out at Playwright's default 30 s limit (issue #1998).
-    return `${TIMEOUT_ENV_PREFIX} node ${arg} install chromium`;
+    return `${playwrightEnvPrefix(platform)} node ${arg} install chromium`;
   } catch {
     return undefined;
   }
@@ -158,18 +175,32 @@ function resolveBundledInstallCommand(): string | undefined {
  * The install command to advertise, preferring the bundled Playwright CLI and
  * degrading to `pnpm exec playwright install chromium` when it cannot be found.
  *
- * Both forms are prefixed with `PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=120000`
- * to extend Playwright's default 30 s download limit for the ~200 MB chromium
- * binary on slow connections (issue #1998).
+ * Both forms are prefixed with the connection-timeout env-var to extend
+ * Playwright's default 30 s download limit for the ~200 MB chromium binary on
+ * slow connections (issue #1998).
+ *
+ * The prefix syntax is platform-aware (issue #2758):
+ * - Non-win32: `PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=120000 node <cli> …`
+ *   (POSIX inline-prefix form).
+ * - win32: `$env:PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=120000; node <cli> …`
+ *   (PowerShell assignment + semicolon separator).
+ *
+ * @param platform - Target platform. Defaults to `process.platform`. Pass
+ *   explicitly in tests to exercise both paths without a real Windows host.
  */
-export function playwrightInstallCommand(): string {
-  cachedInstallCommand ??= resolveBundledInstallCommand() ?? STATIC_INSTALL_COMMAND;
-  return cachedInstallCommand;
+export function playwrightInstallCommand(platform: NodeJS.Platform = process.platform): string {
+  const cached = cachedInstallCommands.get(platform);
+  if (cached !== undefined) return cached;
+
+  const staticFallback = `${playwrightEnvPrefix(platform)} pnpm exec playwright install chromium`;
+  const cmd = resolveBundledInstallCommand(platform) ?? staticFallback;
+  cachedInstallCommands.set(platform, cmd);
+  return cmd;
 }
 
 /** Test-only: drop the memoized command so a test can exercise resolution again. */
 export function resetPlaywrightInstallCommandCache(): void {
-  cachedInstallCommand = undefined;
+  cachedInstallCommands.clear();
 }
 
 /**
@@ -201,6 +232,16 @@ export interface PlaywrightHintOptions {
    * login`, the per-operation handler catches) where the advice would be wrong.
    */
   latched?: boolean;
+  /**
+   * Target platform. Defaults to `process.platform`.
+   *
+   * The advertised install command uses a platform-appropriate env-var syntax:
+   * POSIX inline-prefix (`VAR=value cmd`) on non-win32, PowerShell assignment
+   * (`$env:VAR=value; cmd`) on win32. Pass this field in tests to exercise
+   * both paths without needing a real Windows host (POSIX-guard convention:
+   * never skip on win32, make tests portable by injecting platform).
+   */
+  platform?: NodeJS.Platform;
 }
 
 /**
@@ -221,6 +262,7 @@ const LATCH_RESET_NOTE =
 export function playwrightMissingHint(err: unknown, opts?: PlaywrightHintOptions): string {
   const text = flattenErrorText(err);
   const resetNote = opts?.latched === true ? ` ${LATCH_RESET_NOTE}` : '';
+  const cmd = playwrightInstallCommand(opts?.platform ?? process.platform);
 
   // Warning included in both branches: `npx playwright install` resolves the
   // LATEST playwright package, whose pinned chromium revision can differ from
@@ -243,14 +285,14 @@ export function playwrightMissingHint(err: unknown, opts?: PlaywrightHintOptions
     }
     return (
       'browser tools require the Playwright chromium binary. ' +
-      `Install via: ${playwrightInstallCommand()}.${versionNote}${artifactNote}${resetNote}`
+      `Install via: ${cmd}.${versionNote}${artifactNote}${resetNote}`
     );
   }
 
   // The `playwright` package itself is not installed.
   return (
     'browser tools require the optional `playwright` peer dependency. ' +
-    `Install via: pnpm add playwright (then ${playwrightInstallCommand()}).${versionNote} ` +
+    `Install via: pnpm add playwright (then ${cmd}).${versionNote} ` +
     `Or pick a different tool.${resetNote}`
   );
 }
@@ -277,11 +319,12 @@ export function decoratePlaywrightLaunchError(
   err: unknown,
   headless: boolean,
   latched = false,
+  platform: NodeJS.Platform = process.platform,
 ): unknown {
   if (!isPlaywrightMissing(err)) return err;
 
   const base = errorMessage(err);
-  return new Error(`${base}\n\n${playwrightMissingHint(err, { headless, latched })}`, {
+  return new Error(`${base}\n\n${playwrightMissingHint(err, { headless, latched, platform })}`, {
     cause: err,
   });
 }

@@ -41,32 +41,6 @@ export function getInboundAttachmentsDir(sessionId: string): string {
 }
 
 /**
- * Directory for opt-in captured subagent dispatch prompts, keyed by the same
- * witness `sessionLabel` as {@link getTraceDir}.
- *
- * A forked child resumes its parent's sessionId, so a child writing here lands
- * in its PARENT's directory — which is what makes "every prompt this session
- * dispatched" a single-directory read. Pure path helper: the caller owns `mkdir`
- * (see `agent/session/subagent-prompt-capture.ts`).
- */
-export function getPromptsDir(sessionId: string): string {
-  return join(getTraceDir(sessionId), 'prompts');
-}
-
-/**
- * Directory for opt-in captured subagent conversational OUTPUT — the mirror of
- * {@link getPromptsDir}, which captures only what a child was *asked*.
- *
- * Same session-label keying and same fork semantics: a child resumes its
- * parent's sessionId, so one directory holds every child transcript a session
- * produced, keyed by `subagentId` filename. Pure path helper: the caller owns
- * `mkdir` (see `agent/session/subagent-output-capture.ts`).
- */
-export function getSubagentOutputsDir(sessionId: string): string {
-  return join(getTraceDir(sessionId), 'outputs');
-}
-
-/**
  * Session-scoped directory for bash output capture files.
  *
  * Captures live under the witness trace directory for the session so the

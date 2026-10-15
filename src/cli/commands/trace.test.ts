@@ -130,6 +130,23 @@ describe('formatTrace — default human view', () => {
   });
 });
 
+describe('formatTrace — hook_summary', () => {
+  const sealed = { ts: '2026-06-05T12:31:00.000Z', seq: 2, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0, finalTurnCount: 1, closedAt: '2026-06-05T12:31:00.000Z' } };
+
+  it('renders the summary line and a header dispatch total', () => {
+    const summary = { ts: '2026-06-05T12:30:59.000Z', seq: 1, kind: 'hook_summary', payload: { scope: 'root-session-including-subagents', counts: { PreToolUse: { allow: 4, block: 1 }, Stop: { allow: 2 } }, written: 1, suppressed: 6 } };
+    const out = formatTrace('s', '/p', parseTrace(toJsonl([summary, sealed])));
+    expect(out).toContain('7 hook dispatches');
+    expect(out).toContain('PreToolUse allow=4 block=1 · Stop allow=2');
+    expect(out).toContain('6 allow rows suppressed');
+  });
+
+  it('omits the dispatch total when no summary exists (unknown, not zero)', () => {
+    const out = formatTrace('s', '/p', parseTrace(toJsonl([sealed])));
+    expect(out).not.toContain('hook dispatches');
+  });
+});
+
 describe('formatTrace — subagent timeout markers', () => {
   // PR (observable forked children): the reader must surface the new lifecycle
   // timeout signals — `[timeout]` on a failed child that blew its OWN budget
@@ -650,5 +667,72 @@ describe('formatTrace — overload pause/resume is high-signal (shown by default
 
   it('distinguishes an overload park from a usage-limit park', () => {
     expect(out).not.toContain('usage-limit');
+  });
+});
+
+describe('formatTrace — fmtErrorHead sanitizes escape sequences', () => {
+  it('strips an ESC CSI sequence injected into errorHead before rendering', () => {
+    const sessionId = 'esc-sanitize-test';
+    const tracePath = '/fake/trace.jsonl';
+    const escPayload = '\x1B[31mRED\x1B[0m text';  // CSI color sequence
+    const event = {
+      kind: 'tool_call' as const,
+      seq: 1,
+      ts: '2024-01-01T00:00:00.000Z',
+      payload: {
+        phase: 'completed' as const,
+        toolUseId: 'tu_esc1',
+        name: 'bash',
+        resultBytes: 10,
+        isError: true,
+        truncated: false,
+        durationMs: 5,
+        errorHead: escPayload,
+      },
+    };
+    const parsed = { events: [event], malformed: 0 };
+    const output = formatTrace(sessionId, tracePath, parsed, { showAll: true });
+    // The raw ESC sequence must not appear in the rendered output.
+    expect(output).not.toContain('\x1B[31m');
+    expect(output).not.toContain('\x1B[0m');
+    // But the visible text 'RED' and 'text' must survive sanitization.
+    expect(output).toContain('RED');
+    expect(output).toContain('text');
+  });
+});
+
+describe('formatTrace — fmtErrorHead truncates without splitting emoji', () => {
+  it('does not split an emoji at the 120-code-point display cut', () => {
+    // Construct an errorHead that is exactly 119 ASCII chars + an emoji.
+    // The emoji (😀, U+1F600) occupies 2 UTF-16 units. A UTF-16 `.slice(0, 119)`
+    // would cut mid-emoji and leave a lone surrogate; code-point-aware truncate
+    // must yield the emoji intact OR omit it (never split it).
+    const ascii119 = 'x'.repeat(119);
+    const headWith120thEmoji = ascii119 + '😀trailing';
+    const sessionId = 'emoji-trunc-test';
+    const tracePath = '/fake/trace.jsonl';
+    const event = {
+      kind: 'tool_call' as const,
+      seq: 1,
+      ts: '2024-01-01T00:00:00.000Z',
+      payload: {
+        phase: 'completed' as const,
+        toolUseId: 'tu_emoji_trunc',
+        name: 'bash',
+        resultBytes: 10,
+        isError: true,
+        truncated: false,
+        durationMs: 5,
+        errorHead: headWith120thEmoji,
+      },
+    };
+    const parsed = { events: [event], malformed: 0 };
+    const output = formatTrace(sessionId, tracePath, parsed, { showAll: true });
+    // Verify the rendered output does not contain a lone high surrogate
+    // (JSON.stringify would throw if it did on Node 20+).
+    expect(() => JSON.stringify(output)).not.toThrow();
+    // The emoji must appear whole or not at all — never as \uD83D alone.
+    const hasLoneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(output);
+    expect(hasLoneSurrogate).toBe(false);
   });
 });

@@ -12,6 +12,23 @@
 import type { ChromeRows } from './terminal-compositor.frame.layout.js';
 
 /**
+ * Invariant (live-frame margin ownership, AFK_CENTER_CONTENT): the compositor
+ * owns the centering margin of the rows it assembles itself — spinner, tip,
+ * attachment/mode-notice and every picker row. Those producers return
+ * UNMARGINED text and the margin is prefixed here exactly once, so no surface
+ * can forget it (the old column-0 picker/tip/notice rows) or apply it twice.
+ * Overlay rows are NOT margined here: their producers (tool lane, markdown
+ * pending, thinking, progress banner, rails…) pad themselves, and several
+ * deliberately draw into the margin. The input line, dropdown and hint rows
+ * are margined by terminal-compositor.render.ts, which also budgets their
+ * width against the margin. With centering off `margin` is '' and every row
+ * is byte-identical to the unmargined text.
+ */
+function withMargin(row: string, margin: string): string {
+  return margin && row ? margin + row : row;
+}
+
+/**
  * Assemble the ordered frame lines for a normal (non-picker) repaint.
  *
  * Layout (top → bottom):
@@ -37,13 +54,14 @@ export function buildFrameLines(
   dropdownRows: string[],
   hintRow: string | null,
   inputLine: string,
+  margin = '',
 ): string[] {
   const { spinnerRow, tipRow, attachmentRow } = chrome;
   const frameLines: string[] = [];
   frameLines.push(...trimmedOverlay);
-  if (spinnerRow) frameLines.push(spinnerRow);
-  if (tipRow) frameLines.push(tipRow);
-  if (attachmentRow) frameLines.push(attachmentRow);
+  if (spinnerRow) frameLines.push(withMargin(spinnerRow, margin));
+  if (tipRow) frameLines.push(withMargin(tipRow, margin));
+  if (attachmentRow) frameLines.push(withMargin(attachmentRow, margin));
   // Gap row sits between chrome and the (dropdown→hint→input) cluster
   // so the input + its completion popup stay visually adjacent (the
   // "input pinned, content rises" invariant above). With no chrome, no
@@ -74,14 +92,15 @@ export function buildPickerFrameLines(
   trimmedOverlay: string[],
   renderGap: boolean,
   pickerRows: string[],
+  margin = '',
 ): string[] {
   const { spinnerRow, tipRow, attachmentRow } = chrome;
   const frameLines: string[] = [];
   frameLines.push(...trimmedOverlay);
-  if (spinnerRow) frameLines.push(spinnerRow);
-  if (tipRow) frameLines.push(tipRow);
-  if (attachmentRow) frameLines.push(attachmentRow);
+  if (spinnerRow) frameLines.push(withMargin(spinnerRow, margin));
+  if (tipRow) frameLines.push(withMargin(tipRow, margin));
+  if (attachmentRow) frameLines.push(withMargin(attachmentRow, margin));
   if (renderGap) frameLines.push('');
-  frameLines.push(...pickerRows);
+  for (const row of pickerRows) frameLines.push(withMargin(row, margin));
   return frameLines;
 }

@@ -295,6 +295,74 @@ describe('applyManagerApiKeyFallback — provider-identity gate (parentProvider)
   });
 });
 
+// Credential-backstop scenarios: the compose bug that triggered this fix.
+// A REPL launched with AFK_MODEL=claude-opus-5-5 (Anthropic credential source)
+// and --model gpt-6.1-sol (OpenAI routing model) caused compose to build a
+// SubagentManager with parentModel=gpt-6.1-sol. That resolved parentProvider=
+// openai-compatible, sameCredentialFamily(openai-compatible, openai-compatible)
+// returned true for OpenAI children, and the sk-ant-… token was forwarded → 401.
+// The fix (credentialModel field in ComposeExecutorContext) ensures parentModel
+// is always the credential's source model, not the session's routing model.
+// These tests assert the applyManagerApiKeyFallback behaviour that defends the
+// backstop at the SubagentManager level when parentProvider IS supplied.
+describe('applyManagerApiKeyFallback — credential-backstop (compose bug)', () => {
+  it('rejects an sk-ant parent credential when parentProvider is openai-compatible and child is OpenAI', () => {
+    // This is the exact compose-bug path: apiKey resolved from an Anthropic
+    // credential source but the manager was told parentProvider=openai-compatible
+    // (from the wrong routing model). The key-shape guard cannot catch this
+    // because parentProvider is explicit. sameCredentialFamily(openai-compatible,
+    // openai-compatible) returns true — the manager's parentModel is wrong.
+    // After the credentialModel fix in wire-executors.ts and compose-executor.ts,
+    // parentProvider will be 'anthropic-direct' for this credential, so this
+    // test documents the INCORRECT wiring that the fix prevents.
+    expect(
+      applyManagerApiKeyFallback({
+        childModel: OPENAI_CHILD,
+        configApiKey: undefined,
+        parentApiKey: ANTHROPIC_OAUTH,
+        parentProvider: 'openai-compatible',
+      }),
+    // When parentProvider is 'openai-compatible' but the key is sk-ant-…,
+    // sameCredentialFamily(openai-compatible, openai-compatible) returns true
+    // and the key leaks. The fix is upstream (correct parentProvider); this
+    // assertion documents the failure mode when wiring is wrong.
+    ).toBeUndefined();
+  });
+
+  it('forwards an sk-ant key to an Anthropic child when parentProvider is anthropic-direct', () => {
+    expect(
+      applyManagerApiKeyFallback({
+        childModel: ANTHROPIC_CHILD,
+        configApiKey: undefined,
+        parentApiKey: ANTHROPIC_OAUTH,
+        parentProvider: 'anthropic-direct',
+      }),
+    ).toBe(ANTHROPIC_OAUTH);
+  });
+
+  it('forwards a non-sk-ant OpenAI key to an OpenAI child when parentProvider is openai-compatible', () => {
+    expect(
+      applyManagerApiKeyFallback({
+        childModel: OPENAI_CHILD,
+        configApiKey: undefined,
+        parentApiKey: OPENAI_KEY,
+        parentProvider: 'openai-compatible',
+      }),
+    ).toBe(OPENAI_KEY);
+  });
+
+  it('explicit configApiKey always wins regardless of provider mismatch', () => {
+    expect(
+      applyManagerApiKeyFallback({
+        childModel: OPENAI_CHILD,
+        configApiKey: OPENAI_KEY,
+        parentApiKey: ANTHROPIC_OAUTH,
+        parentProvider: 'openai-compatible',
+      }),
+    ).toBe(OPENAI_KEY);
+  });
+});
+
 // Fail-closed contract (#438): when the manager is built WITHOUT parentModel,
 // `parentProvider` is undefined. For a non-`sk-ant` parent key the provider is
 // then unknowable, so inheritance is refused outright — this makes the

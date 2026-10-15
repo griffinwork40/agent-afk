@@ -52,6 +52,7 @@ import { renderPathUnit, renderRestartUnit, renderServiceUnit } from './systemd/
 // Pure: unit-file generation
 // ─────────────────────────────────────────────────────────────────────────
 
+// All suites in this file are Linux-only (systemd is Linux-specific) — genuinely POSIX-only.
 describe.skipIf(process.platform !== 'linux')('renderServiceUnit', () => {
   it('emits the three sections with KeepAlive-equivalent + start-on-login invariants', () => {
     const unit = renderServiceUnit({

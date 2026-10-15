@@ -25,6 +25,7 @@
  */
 
 import type { AgentConfig } from '../types/config-types.js';
+import { appendSystemPromptBlock } from './append-system-prompt-block.js';
 
 /**
  * Render the budget preamble for a given round cap.
@@ -54,6 +55,8 @@ export function renderBudgetPreamble(maxRounds: number): string {
     `${maxRounds} is a hard ceiling, not a target. Aim to finish well under it. When the budget is`,
     'spent you get one final reply with tools removed and must answer from what you already',
     'gathered, so a partial answer delivered early beats a complete one you never get to give.',
+    'Persist requested artifacts early, then update them as you go. Near the cap, stop adding scope.',
+    'Your final reply IS the deliverable: findings, evidence, and remaining work, never future actions.',
     'If new evidence has stopped changing your conclusion, stop gathering and answer now.',
     'When writing code, a partial result should be an internally consistent checkpoint --',
     'not knowingly broken, unverified, or incoherent code returned merely to finish early.',
@@ -86,25 +89,5 @@ export function injectToolBudgetPreamble(config: AgentConfig): AgentConfig {
   }
 
   const block = renderBudgetPreamble(Math.floor(maxRounds));
-  const sp = config.systemPrompt;
-
-  if (typeof sp === 'string') {
-    return sp.length > 0
-      ? { ...config, systemPrompt: `${sp}\n\n${block}` }
-      : { ...config, systemPrompt: block };
-  }
-
-  if (sp && typeof sp === 'object' && 'type' in sp && sp.type === 'preset') {
-    const existingAppend = sp.append ?? '';
-    return {
-      ...config,
-      systemPrompt: {
-        ...sp,
-        append: existingAppend.length > 0 ? `${existingAppend}\n\n${block}` : block,
-      },
-    };
-  }
-
-  // No system prompt set — the preamble becomes the system prompt.
-  return { ...config, systemPrompt: block };
+  return appendSystemPromptBlock(config, block);
 }

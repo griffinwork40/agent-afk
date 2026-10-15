@@ -10,7 +10,7 @@
  *   afk service uninstall <name>   — deregister + remove config
  *   afk service status [name]      — show running PID + last exit + log path
  *   afk service list               — show all services and whether installed
- *   afk service restart <name>     — restart the service
+ *   afk service restart [name]     — restart one service, or all installed ones
  *
  * `<name>` ∈ { telegram, daemon }. See `src/service/types.ts` for the
  * backend-neutral contract and `src/service/{launchd,systemd}/` for the
@@ -23,14 +23,20 @@
 import { Command } from 'commander';
 import { palette } from '../palette.js';
 import { handleCommandError } from '../errors/index.js';
+import { parseServiceName, runRestart } from './restart.js';
 import {
   SERVICE_NAMES,
   SUPPORTED_SERVICE_PLATFORMS,
   serviceManagerFor,
   type ServiceManager,
-  type ServiceName,
   type ServiceStatus,
 } from '../../service/index.js';
+import {
+  readServiceStartupSidecar,
+  compareVersions,
+  formatVersionLine,
+} from '../../service/version-skew.js';
+import { getVersion } from '../version.js';
 
 /** Resolve the platform's service backend, or fail with a clear message. */
 function resolveManager(): ServiceManager {
@@ -43,16 +49,10 @@ function resolveManager(): ServiceManager {
   return mgr;
 }
 
-function parseServiceName(input: string): ServiceName {
-  const lower = input.toLowerCase();
-  if ((SERVICE_NAMES as readonly string[]).includes(lower)) return lower as ServiceName;
-  throw new Error(`Unknown service '${input}'. Supported: ${SERVICE_NAMES.join(', ')}.`);
-}
-
 export function registerServiceCommand(program: Command): void {
   const service = program
     .command('service')
-    .description('Manage AFK background services (launchd on macOS, systemd --user on Linux) — always-on, auto-restart');
+    .description('Manage AFK background services (launchd on macOS, systemd --user on Linux, Task Scheduler on Windows) — always-on, auto-restart');
 
   service
     .command('install <name>')
@@ -184,28 +184,10 @@ export function registerServiceCommand(program: Command): void {
     });
 
   service
-    .command('restart <name>')
-    .description('Restart the service (launchctl kickstart -k / systemctl --user restart)')
-    .action((nameArg: string) => {
-      try {
-        const mgr = resolveManager();
-        const name = parseServiceName(nameArg);
-        const result = mgr.restart(name);
-        if (result.kind === 'not-installed') {
-          console.error(palette.error(`✗ ${mgr.label(name)} is not installed. Run 'afk service install ${name}' first.`));
-          process.exit(1);
-        }
-        if (result.kind === 'failed') {
-          console.error(palette.error(`✗ Restart failed: ${result.reason}`));
-          process.exit(1);
-        }
-        console.log(palette.success(`✓ Restarted ${result.label}`));
-        for (const note of result.notes ?? []) {
-          console.log(palette.warning(`  ⚠ ${note}`));
-        }
-      } catch (err) {
-        handleCommandError(err);
-      }
+    .command('restart [name]')
+    .description('Restart one service, or every installed service when no name is given (launchctl kickstart -k / systemctl --user restart)')
+    .action((nameArg: string | undefined) => {
+      runRestart(nameArg);
     });
 }
 
@@ -217,8 +199,9 @@ function printStatus(s: ServiceStatus, configKind: string): void {
     console.log(palette.meta(`  Install: afk service install ${s.name}`));
     return;
   }
-  if (s.pid !== undefined) {
-    console.log(`  ${palette.success('●')} Running  (PID ${s.pid})`);
+  const isRunning = s.pid !== undefined || s.running === true;
+  if (isRunning) {
+    console.log(`  ${palette.success('●')} Running${s.pid !== undefined ? `  (PID ${s.pid})` : ''}`);
   } else {
     console.log(`  ${palette.warning('●')} Installed but not running`);
     if (s.lastExitStatus !== undefined && s.lastExitStatus !== 0) {
@@ -227,4 +210,14 @@ function printStatus(s: ServiceStatus, configKind: string): void {
   }
   console.log(palette.meta(`  Config:  ${s.configPath}  (${configKind})`));
   console.log(palette.meta(`  Log:     ${s.logFile}`));
+  if (isRunning) {
+    const sidecar = readServiceStartupSidecar(s.name);
+    const skew = compareVersions(sidecar?.version, getVersion());
+    const versionLine = formatVersionLine(skew, s.name);
+    if (skew.kind === 'skew') {
+      console.log(palette.warning(`  Version: ${versionLine}`));
+    } else {
+      console.log(palette.meta(`  Version: ${versionLine}`));
+    }
+  }
 }

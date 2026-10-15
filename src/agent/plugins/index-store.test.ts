@@ -219,3 +219,128 @@ describe('setEnabled', () => {
     expect(() => setEnabled('missing', true, indexPath)).toThrow(/not in the index/);
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// pinnedRef tests (fix #2358)
+// ---------------------------------------------------------------------------
+
+import { isPinnedRef, isMarketplacePinnedRef } from './index-store.js';
+
+describe('isPinnedRef', () => {
+  it('returns true when pinnedRef is explicitly true', () => {
+    expect(isPinnedRef({ ref: 'afk', pinnedRef: true }, 'main')).toBe(true);
+  });
+
+  it('returns false when pinnedRef is explicitly false', () => {
+    expect(isPinnedRef({ ref: 'afk', pinnedRef: false }, 'main')).toBe(false);
+  });
+
+  it('returns false when ref is null (legacy: no ref at all)', () => {
+    expect(isPinnedRef({ ref: null, pinnedRef: undefined }, 'main')).toBe(false);
+  });
+
+  it('returns false when ref matches the default branch (legacy: auto-picked branch)', () => {
+    expect(isPinnedRef({ ref: 'main', pinnedRef: undefined }, 'main')).toBe(false);
+  });
+
+  it('returns false when ref is a semver tag (legacy: auto-picked tag)', () => {
+    expect(isPinnedRef({ ref: 'v2.0.0', pinnedRef: undefined }, 'main')).toBe(false);
+    expect(isPinnedRef({ ref: '1.2.3', pinnedRef: undefined }, 'main')).toBe(false);
+  });
+
+  it('returns true when ref is a non-semver, non-default value (legacy migration: --ref branch)', () => {
+    expect(isPinnedRef({ ref: 'afk', pinnedRef: undefined }, 'main')).toBe(true);
+    expect(isPinnedRef({ ref: 'feature/foo', pinnedRef: undefined }, 'main')).toBe(true);
+    expect(isPinnedRef({ ref: 'abc1234', pinnedRef: undefined }, 'main')).toBe(true);
+  });
+});
+
+describe('isMarketplacePinnedRef', () => {
+  it('mirrors isPinnedRef semantics for marketplace entries', () => {
+    expect(isMarketplacePinnedRef({ ref: 'afk', pinnedRef: true }, 'main')).toBe(true);
+    expect(isMarketplacePinnedRef({ ref: 'v2.0.0', pinnedRef: undefined }, 'main')).toBe(false);
+    expect(isMarketplacePinnedRef({ ref: 'afk', pinnedRef: undefined }, 'main')).toBe(true);
+    expect(isMarketplacePinnedRef({ ref: 'main', pinnedRef: undefined }, 'main')).toBe(false);
+  });
+});
+
+describe('upsertPlugin — pinnedRef round-trip', () => {
+  it('persists pinnedRef: true through upsert/read cycle', () => {
+    const entry = sampleEntry({ pinnedRef: true });
+    upsertPlugin('pinned', entry, indexPath);
+    expect(readIndex(indexPath).plugins['pinned'].pinnedRef).toBe(true);
+  });
+
+  it('persists pinnedRef: false through upsert/read cycle', () => {
+    const entry = sampleEntry({ pinnedRef: false });
+    upsertPlugin('unpinned', entry, indexPath);
+    expect(readIndex(indexPath).plugins['unpinned'].pinnedRef).toBe(false);
+  });
+
+  it('preserves absence of pinnedRef for legacy entries (no field = undefined)', () => {
+    const { pinnedRef: _p, ...legacyEntry } = sampleEntry({ pinnedRef: false });
+    upsertPlugin('legacy', legacyEntry as any, indexPath);
+    const stored = readIndex(indexPath).plugins['legacy'];
+    expect(stored.pinnedRef).toBeUndefined();
+  });
+});
+
+describe('upsertMarketplace — pinnedRef round-trip', () => {
+  it('persists pinnedRef: true for marketplace entries', () => {
+    const entry = sampleMarketplace({ pinnedRef: true });
+    upsertMarketplace('pinned-mp', entry, indexPath);
+    expect(readIndex(indexPath).marketplaces['pinned-mp'].pinnedRef).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setPluginOption / unsetPluginOption
+// ---------------------------------------------------------------------------
+
+import { setPluginOption, unsetPluginOption } from './index-store.js';
+
+describe('setPluginOption', () => {
+  it('stores an option on an existing plugin entry', () => {
+    upsertPlugin('myplugin', sampleEntry(), indexPath);
+    setPluginOption('myplugin', 'provider', 'openai', indexPath);
+    const stored = readIndex(indexPath).plugins['myplugin']?.options;
+    expect(stored).toEqual({ provider: 'openai' });
+  });
+
+  it('merges with existing options without overwriting others', () => {
+    upsertPlugin('myplugin', sampleEntry({ options: { region: 'us' } }), indexPath);
+    setPluginOption('myplugin', 'provider', 'openai', indexPath);
+    const stored = readIndex(indexPath).plugins['myplugin']?.options;
+    expect(stored).toEqual({ region: 'us', provider: 'openai' });
+  });
+
+  it('throws when plugin is not in the index', () => {
+    expect(() => setPluginOption('missing', 'key', 'val', indexPath)).toThrow(/"missing"/);
+  });
+});
+
+describe('unsetPluginOption', () => {
+  it('removes a stored option key', () => {
+    upsertPlugin('myplugin', sampleEntry({ options: { provider: 'openai', region: 'us' } }), indexPath);
+    unsetPluginOption('myplugin', 'provider', indexPath);
+    const stored = readIndex(indexPath).plugins['myplugin']?.options;
+    expect(stored).toEqual({ region: 'us' });
+  });
+
+  it('sets options to undefined when last key is removed', () => {
+    upsertPlugin('myplugin', sampleEntry({ options: { provider: 'openai' } }), indexPath);
+    unsetPluginOption('myplugin', 'provider', indexPath);
+    expect(readIndex(indexPath).plugins['myplugin']?.options).toBeUndefined();
+  });
+
+  it('is a no-op when the key is absent', () => {
+    upsertPlugin('myplugin', sampleEntry({ options: { region: 'us' } }), indexPath);
+    unsetPluginOption('myplugin', 'missing', indexPath);
+    expect(readIndex(indexPath).plugins['myplugin']?.options).toEqual({ region: 'us' });
+  });
+
+  it('throws when plugin is not in the index', () => {
+    expect(() => unsetPluginOption('missing', 'key', indexPath)).toThrow(/"missing"/);
+  });
+});

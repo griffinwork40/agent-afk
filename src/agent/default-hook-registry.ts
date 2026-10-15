@@ -7,22 +7,26 @@
  */
 
 import { createHookRegistry, type HookRegistry } from './hooks.js';
+import { installPluginHooks } from './plugins/load-entrypoints.js';
 import { createShadowVerifyNudge } from './shadow-verify-nudge.js';
 import { createPlaceholderDetectHook } from './placeholder-detect.js';
 import { createPlaceholderPreventHook } from './placeholder-prevent.js';
 import { createAskQuestionGate } from './ask-question-gate.js';
 import { createSafeDestructDetect } from './safe-destruct-detect.js';
 import { createReleaseBoundaryDetect } from './release-boundary-detect.js';
-import { MemoryStore, createMemorySessionEndHook } from './memory/index.js';
+import { createShadowGitDetect } from './shadow-git-detect.js';
+import { MemoryStore, createMemorySessionEndHook, createChildMemoryHotBlockHook } from './memory/index.js';
 import { createPlanModeGate } from './plan-mode-gate.js';
 import { createAfkModeGate } from './afk-mode-gate.js';
-import { cleanupComposeSpills } from './tools/compose-executor.js';
+import { cleanupComposeSpills } from './tools/compose-executor.format.js';
 import { runReceiptSessionEndHook } from './trace/receipt.js';
 import { createFacetSessionEndHook } from './facets/session-end-hook.js';
+import { createPreexistingLedgerHook } from './preexisting-ledger/session-end-hook.js';
+import { createOutcomeSessionEndHook, createChildAttributionHook } from './outcomes/index.js';
 import { createSpineSessionEndHook } from './spine/index.js';
 import { inboundAttachmentRegistry } from './content/attachment-registry.js';
 import { env } from '../config/env.js';
-import { createEffectLedgerPostHook } from './effect-ledger/index.js';
+import { createEffectLedgerHooks } from './effect-ledger/index.js';
 import {
   createPathApprovalHook,
   type PathApprovalSurface,
@@ -33,6 +37,8 @@ import type { PermissionMode } from './types/sdk-types.js';
 import type { TraceSink } from './trace/index.js';
 import type { LoadedHooksConfig } from './hooks/config-loader.js';
 import { loadAndRegisterConfigHooks } from './hooks/config-bridge.js';
+import { createWhatifEpisodeGate } from './whatif-episode-gate.js';
+import { createUnprovenDiagnosisDetectHook } from './unproven-diagnosis-detect.js';
 
 export interface SubagentCompleteInfo {
   subagentId: string;
@@ -87,139 +93,206 @@ export function _resetWarningForTests(): void {
   surfacedConfigWarnings.clear();
 }
 
-export function createDefaultHookRegistry(
-  onSubagentComplete?: (info: SubagentCompleteInfo) => void,
-  surface?: string,
-  memoryStore?: MemoryStore,
-  getPermissionMode?: () => PermissionMode,
-  hookConfig?: LoadedHooksConfig,
-  agentOptions?: { cwd?: string; sessionId?: string; traceWriter?: TraceSink; afkPromptForApproval?: boolean },
-  getCwd?: () => string | undefined,
-): DefaultHookRegistryResult {
-  const registry = createHookRegistry();
-  // Session-scoped instance: the nudge latches once-per-turn (reset on 'Stop')
-  // and once-per-child, so a parallel verifier wave can't spam the parent with
-  // identical nudges across consecutive turns (#355).
+// Invariant: hooks run sequentially in registration order; a handler that
+// returns `decision: 'block'` short-circuits the chain so no later handler
+// in the same event fires. Registration order is therefore load-bearing and
+// must be preserved exactly across all helper functions below.
+
+/**
+ * Register the child-memory hot-write block hook on the given registry.
+ * Sub-agents may call `memory_update` with `target:"fact"` (safe — fact
+ * archive only) but are blocked from `target:"hot"` (would rewrite HOT.md,
+ * injected into every future session's system prompt). The hook is a no-op
+ * for top-level sessions (no parentSessionId).
+ */
+function registerChildMemoryGuard(registry: HookRegistry): void {
+  registry.register('PreToolUse', createChildMemoryHotBlockHook());
+}
+
+/**
+ * Register facet derivation and outcome-labeling hooks: the facet session-end
+ * hook, the outcome immediate-pass labeler, and the child artifact attribution
+ * listener. Extracted to keep {@link createDefaultHookRegistry} within its
+ * baselined line-count ceiling.
+ */
+function registerFacetAndOutcomeHooks(
+  registry: HookRegistry,
+  spineRepoRoot?: string,
+): void {
+  registry.register('SessionEnd', createFacetSessionEndHook());
+  registry.register('SessionEnd', createOutcomeSessionEndHook());
+  registry.register('PostToolUse', createChildAttributionHook());
+  registry.register('SessionEnd', createSpineSessionEndHook({ repoRoot: spineRepoRoot }));
+  registerPreexistingLedgerHook(registry);
+}
+
+/**
+ * Register the SessionEnd hooks that clean up per-session transient state:
+ * compose-truncation spill files and inbound attachment records. Both are
+ * best-effort no-ops when `sessionId` is absent (top-level teardown without
+ * an ID, or a non-SessionEnd event routed here by mistake).
+ */
+function registerSessionEndCleanupHooks(registry: HookRegistry): void {
+  registry.register('SessionEnd', (c) => { if (c.event === 'SessionEnd' && c.sessionId) cleanupComposeSpills(c.sessionId); return {}; });
+  registry.register('SessionEnd', (c) => { if (c.event === 'SessionEnd' && c.sessionId) inboundAttachmentRegistry.clear(c.sessionId); return {}; });
+}
+
+/**
+ * Register the subagent-complete forwarding handler when a callback is
+ * provided. Extracted from {@link createDefaultHookRegistry} to keep that
+ * function within its baselined line-count ceiling.
+ */
+function registerSubagentCompleteHook(
+  registry: HookRegistry,
+  onSubagentComplete: ((info: SubagentCompleteInfo) => void) | undefined,
+): void {
+  if (!onSubagentComplete) return;
+  registry.register('SubagentStop', (context) => {
+    if (context.event !== 'SubagentStop') return {};
+    if (context.status === 'idle' || context.status === 'running') return {};
+    onSubagentComplete({
+      subagentId: context.subagentId,
+      status: context.status,
+      durationMs: context.durationMs,
+      agentType: context.agentType,
+    });
+    return {};
+  });
+}
+
+/**
+ * Register the what-if episode gate as the FIRST PreToolUse hook.
+ *
+ * Self-disables when AFK_WHATIF_EPISODE is not set, so registration is
+ * unconditional. Tree-wide: no subagent exemption — episode isolation must
+ * hold across every nested fork. Extracted from {@link createDefaultHookRegistry}
+ * to keep that function within its baselined line-count ceiling.
+ */
+function registerWhatifEpisodeGate(registry: HookRegistry): void {
+  registry.register('PreToolUse', createWhatifEpisodeGate());
+}
+
+/**
+ * Register the two-layer placeholder defense and the unproven-diagnosis gate.
+ *
+ * Layer 1 (Prevention): `SessionStart` `injectContext` — proactively instructs
+ * the model to resolve placeholder values from context before presenting shell
+ * commands. Fires for top-level sessions only. See `placeholder-prevent.ts`.
+ *
+ * Layer 2 (Correction): `Stop` hook — scans shellable code blocks for
+ * unresolved placeholder tokens and injects a correction. Bounded per session
+ * (fails open after 2 corrections). No-op on non-REPL surfaces. See
+ * `placeholder-detect.ts`.
+ *
+ * Unproven-diagnosis gate (issue #2987): `Stop` hook — injects the elimination
+ * ladder when the turn closes on an external / cause-unknown diagnosis with no
+ * instrumentation evidence. Opt-in via `AFK_UNPROVEN_DIAGNOSIS_GATE=1`. See
+ * `unproven-diagnosis-detect.ts`.
+ */
+function registerPlaceholderAndDiagnosisHooks(registry: HookRegistry): void {
+  registry.register('SessionStart', createPlaceholderPreventHook());
+  registry.register('Stop', createPlaceholderDetectHook());
+  registry.register('Stop', createUnprovenDiagnosisDetectHook());
+}
+
+/**
+ * Register the pre-existing-defect ledger SessionEnd hook. Scans assistant
+ * turns for pre-existing-defect flags and appends JSONL entries to
+ * ~/.afk/agent-framework/preexisting-ledger.jsonl. Best-effort; never throws;
+ * opt-out via AFK_PREEXISTING_LEDGER_DISABLE=1.
+ */
+function registerPreexistingLedgerHook(registry: HookRegistry): void {
+  registry.register('SessionEnd', createPreexistingLedgerHook());
+}
+
+/** AgentOptions shape threaded through {@link createDefaultHookRegistry}. */
+type AgentOptions = {
+  cwd?: string;
+  sessionId?: string;
+  traceWriter?: TraceSink;
+  afkPromptForApproval?: boolean;
+  getTranscriptPath?: () => string | null;
+  daemonTaskId?: string;
+};
+
+/**
+ * Register the session-scoped shadow-verify nudge on both SubagentStop and
+ * Stop. The instance is shared so the once-per-turn + once-per-child latch
+ * (#355) prevents a parallel verifier wave from spamming the parent with
+ * identical nudges.
+ */
+function registerShadowVerifyNudge(registry: HookRegistry): void {
   const shadowVerifyNudge = createShadowVerifyNudge();
   registry.register('SubagentStop', shadowVerifyNudge);
   registry.register('Stop', shadowVerifyNudge);
-  // ── Two-layer placeholder defense (#2125) ──────────────────────────────
-  // Layer 1 (Prevention): SessionStart injectContext — proactively instructs
-  // the model to resolve placeholder values from context before presenting
-  // shell commands, and to flag unresolvable values prominently. Works on
-  // all surfaces. Non-deterministic (the model may still generate placeholders
-  // despite the instruction), so Layer 2 below provides the backstop.
-  // Fires for top-level sessions only; subagent forks are skipped both by
-  // AgentSession.pullInitialization and by the handler's own parentSessionId
-  // guard (defence-in-depth). See placeholder-prevent.ts.
-  registry.register('SessionStart', createPlaceholderPreventHook());
-  // Layer 2 (Correction): Stop hook — scans shellable code blocks in the
-  // turn's code-block register for unresolved placeholder tokens (e.g.
-  // `your-user@mac-mini-ip`, `<YOUR_API_KEY>`) that the user would
-  // copy-paste and run literally. Injects a correction into the next turn
-  // asking the model to resolve or prominently mark them. Bounded per
-  // session (fails open after 2 corrections). Reads from the code-block
-  // register (src/cli/code-block-register.ts) which is only populated in
-  // the REPL loop, so the hook is automatically a no-op on non-REPL
-  // surfaces and subagents without any guard code. See placeholder-detect.ts.
-  registry.register('Stop', createPlaceholderDetectHook());
-  // Ask-question gate: on surfaces with no elicitation handler (daemon,
-  // scheduler, one-shot chat) a question can never be answered — block it
-  // pre-flight with proceed-on-assumption guidance instead of letting the
-  // router park-and-decline after the round-trip. No-op on REPL/Telegram
-  // (handler installed; probed at call time). See ask-question-gate.ts.
-  registry.register('PreToolUse', createAskQuestionGate());
-  // Safe-destruct detector (two-tier, ALL surfaces): OBSERVE-tier records
-  // destructive bash commands (rm -rf, git branch -D, etc.) via `approve`
-  // catch-records without blocking; BLOCK-tier hard-blocks irrecoverable
-  // operations (git reset --hard, git push --force, terraform destroy, etc.)
-  // with `injectContext` guidance explaining why and what to do instead.
-  // See safe-destruct-detect.ts, safe-destruct-patterns.ts, and
-  // .afk/plans/friction-substrate-and-gate-migration.md.
-  registry.register('PreToolUse', createSafeDestructDetect());
-  // Release-boundary detector (two-tier, ALL surfaces): BLOCK-tier hard-blocks
-  // externally-irreversible publish/deploy operations (npm/pnpm/yarn/cargo/
-  // twine/poetry/gem publish, docker push, gh release create, terraform/
-  // kubectl apply) with `injectContext` guidance; OBSERVE-tier records
-  // sync-boundary operations (git push --mirror / --tags) via `approve`
-  // catch-records without blocking. See release-boundary-detect.ts,
-  // release-boundary-patterns.ts, and
-  // .afk/plans/friction-substrate-and-gate-migration.md.
-  registry.register('PreToolUse', createReleaseBoundaryDetect());
-  const store = memoryStore ?? new MemoryStore();
-  if (getPermissionMode !== undefined) {
-    registry.register('PreToolUse', createPlanModeGate(getPermissionMode));
-    // AFK-mode safety ceiling. Reads the same mode getter; AFK ('autonomous')
-    // and plan are mutually exclusive permission modes, so at most one of the
-    // two gates ever fires for a given tool call. Unlike the plan gate, this
-    // one applies tree-wide (no subagent exemption) — see afk-mode-gate.ts.
-    registry.register(
-      'PreToolUse',
-      // getCwd (live) is preferred over the static agentOptions.cwd so the
-      // gate's workspace-escape rule tracks a mid-session /cwd change — it is
-      // the SOLE path-safety layer in AFK (the path-approval prompt is disabled
-      // via allowAll for 'autonomous'; see agent/permission-policy.ts).
-      createAfkModeGate(getPermissionMode, agentOptions?.cwd, getCwd, {
-        ...(agentOptions?.traceWriter !== undefined ? { traceWriter: agentOptions.traceWriter } : {}),
-        // Surface-scoped approval posture. The REPL leaves this default (true =
-        // keep-and-fix: a high-risk op is approvable from phone/keyboard for a
-        // bounded, deliberately-armed laptop session in a trusted worktree). The
-        // always-on Telegram host passes false → high-risk / irreversible ops
-        // HARD-REFUSE + Asking summary instead of being one-tap-approvable from a
-        // standing phone surface with a possibly-broad cwd (no bounded scope, no
-        // deliberate arming). See docs/afk-telegram-native-host.md.
-        ...(agentOptions?.afkPromptForApproval !== undefined
-          ? { promptForApproval: agentOptions.afkPromptForApproval }
-          : {}),
-        // Lets a pending approval mark this session's presence file as
-        // blocked-on-human, so an out-of-process observer can see the wait.
-        ...(agentOptions?.sessionId !== undefined ? { sessionId: agentOptions.sessionId } : {}),
-      }),
-      // Longrunning: on a high-risk op the gate awaits an operator approve/deny
-      // via elicitationRouter.route() (deny-on-timeout). Bypass the 30s per-
-      // handler deadline; the gate forwards the turn signal so session/turn
-      // teardown cancels the pending prompt. Mirrors the path-approval hook.
-      { longRunning: true },
-    );
-  }
+}
 
-  // Edit-preview hook: computes a diff preview at PreToolUse time for
-  // edit_file calls and delivers it to the tool lane via a mutable callback
-  // ref. Non-blocking, display-only. The ref starts as a no-op; the
-  // StreamRenderer arms it each turn on TTY surfaces.
-  const addPreviewDiffRef: PreviewDiffRef = {
-    current: () => {}, // no-op until StreamRenderer arms it each turn
-  };
+/**
+ * Register the plan-mode gate and AFK-mode safety ceiling when a permission
+ * mode getter is provided. Both read the same getter; they are mutually
+ * exclusive (autonomous vs. plan), so at most one fires per tool call.
+ * The AFK gate applies tree-wide (no subagent exemption) and is long-running
+ * because it may await an operator approve/deny via elicitationRouter.
+ */
+function registerPermissionModeGates(
+  registry: HookRegistry,
+  getPermissionMode: () => PermissionMode,
+  agentOptions: AgentOptions | undefined,
+  getCwd: (() => string | undefined) | undefined,
+): void {
+  registry.register('PreToolUse', createPlanModeGate(getPermissionMode));
+  // AFK-mode safety ceiling. getCwd (live) is preferred over the static
+  // agentOptions.cwd so the gate's workspace-escape rule tracks a mid-session
+  // /cwd change — it is the SOLE path-safety layer in AFK mode (path-approval
+  // is disabled via allowAll for 'autonomous'; see agent/permission-policy.ts).
+  registry.register(
+    'PreToolUse',
+    createAfkModeGate(getPermissionMode, agentOptions?.cwd, getCwd, {
+      ...(agentOptions?.traceWriter !== undefined ? { traceWriter: agentOptions.traceWriter } : {}),
+      // Surface-scoped approval posture. The REPL leaves this default (true =
+      // keep-and-fix). The always-on Telegram host passes false → high-risk /
+      // irreversible ops HARD-REFUSE + Asking summary. See
+      // docs/afk-telegram-native-host.md.
+      ...(agentOptions?.afkPromptForApproval !== undefined
+        ? { promptForApproval: agentOptions.afkPromptForApproval }
+        : {}),
+      ...(agentOptions?.sessionId !== undefined ? { sessionId: agentOptions.sessionId } : {}),
+      ...(agentOptions?.daemonTaskId !== undefined ? { daemonTaskId: agentOptions.daemonTaskId } : {}),
+    }),
+    // Longrunning: on a high-risk op the gate awaits elicitationRouter.route()
+    // (deny-on-timeout). Bypass the 30s per-handler deadline; the gate
+    // forwards the turn signal so session/turn teardown cancels the prompt.
+    { longRunning: true },
+  );
+}
+
+/**
+ * Register the edit-preview hook and return the mutable {@link PreviewDiffRef}
+ * it delivers previews through. The ref starts as a no-op; the StreamRenderer
+ * arms it each turn on TTY surfaces.
+ */
+function registerEditPreviewHook(registry: HookRegistry): PreviewDiffRef {
+  const addPreviewDiffRef: PreviewDiffRef = { current: () => {} };
   registry.register('PreToolUse', createEditPreviewHook({ addPreviewDiffRef }));
+  return addPreviewDiffRef;
+}
 
-  // Path-approval + bash-restriction hooks. Both share a mutable grant-manager
-  // ref that the surface bootstrap populates after the provider exists.
-  // `AFK_DISABLE_PATH_APPROVAL=1` skips registration entirely — escape hatch
-  // for headless flows where wide-open access is desired (CI scripts, etc.).
-  //
-  // Invariant: registration order matters. Path-approval (typed file tools)
-  // runs BEFORE bash-restriction so the model gets the interactive prompt
-  // path first when both could apply (e.g. an edit_file followed by a bash
-  // grep against the same restricted root within one turn).
-  //
-  // Invariant: path-approval and bash-restriction hooks read the grant manager
-  // from `context.grantManager` (injected per-session by the dispatcher since
-  // #527; the former process-global ref was retired in #528). Headless surfaces
-  // (afk chat, daemon, threads) never wire a sessionGrantManager into the
-  // dispatcher, so on those surfaces:
-  //   - path-approval PreToolUse: fails open (no prompt; the typed-tool
-  //     handler's own resolveAndContain still enforces containment);
-  //   - bash restricted-root substring check: fails open (no backstop);
-  //   - bash interpreter denylist: ALSO fails open by default — it is gated on
-  //     a wired grant manager (interactive surfaces only), so headless
-  //     automation that runs `python -c` / `sh -c` one-liners is not hard-
-  //     blocked with no recourse. Opt headless flows back into the guard with
-  //     AFK_FORCE_BASH_INTERPRETER_GUARD=1; disable the whole feature with
-  //     AFK_DISABLE_PATH_APPROVAL=1.
-  //
-  // The former process-global `pathApprovalGrantRef` has been retired (#528).
-  // Both hooks now read the grant manager exclusively from `context.grantManager`
-  // — injected per-session by the dispatcher since #527.
+/**
+ * Register path-approval and bash-restriction hooks when
+ * `AFK_DISABLE_PATH_APPROVAL` is not set. Emits a once-per-process warning
+ * when disabled. See the module-level comment block for the grant-manager and
+ * nonInteractive semantics.
+ *
+ * Invariant: path-approval (typed file tools) is registered BEFORE
+ * bash-restriction so the model gets the interactive prompt path first when
+ * both could apply within a single turn.
+ */
+function registerPathApprovalAndBashHooks(
+  registry: HookRegistry,
+  surface: string | undefined,
+  getCwd: (() => string | undefined) | undefined,
+  agentOptions: AgentOptions | undefined,
+): void {
   const disabled = env.AFK_DISABLE_PATH_APPROVAL === '1';
   if (disabled && !warnedPathApprovalDisabled) {
     warnedPathApprovalDisabled = true;
@@ -229,112 +302,115 @@ export function createDefaultHookRegistry(
         'path-access prompts and bash restrictions are OFF for this process.',
     );
   }
-  if (!disabled) {
-    const pathApproval = createPathApprovalHook({
-      // Prefer an explicit getCwd callback (REPL/Telegram bootstrap thread a
-      // live `extras.cwd`); otherwise fall back to the static cwd carried in
-      // main's `agentOptions` (scheduler/chat/threads callers). Both feed the
-      // path-approval containment check's resolveBase.
-      getCwd: getCwd ?? (() => agentOptions?.cwd),
-      surface: mapSurface(surface),
-    });
-    registry.register(
-      'PreToolUse',
-      pathApproval.preToolUse,
-      // Longrunning: the hook awaits elicitationRouter.route(), which has no
-      // time-based deadline (it waits as long as the operator needs). Bypass
-      // the 30s per-handler deadline; the hook forwards the turn signal so
-      // session/turn teardown still cancels the pending prompt.
-      { longRunning: true },
-    );
-    // PostToolUse revokes "Once" grants after the call completes. Synchronous
-    // (no I/O, just Map/Set/Array mutations) — default timeout suffices.
-    registry.register('PostToolUse', pathApproval.postToolUse);
-    // SessionEnd safety net: revoke any "Once" grants whose PostToolUse never
-    // ran (e.g. the call's signal aborted before the revoke fired).
-    registry.register('SessionEnd', pathApproval.sessionEnd);
-    registry.register(
-      'PreToolUse',
-      createBashRestrictionHook({
-        // Granular knobs for the interpreter-eval denylist (the rest of
-        // path-approval is unaffected; AFK_DISABLE_PATH_APPROVAL=1 short-
-        // circuits the whole `if (!disabled)` block above):
-        //   - disableInterpreterGuard: force the denylist OFF even on
-        //     interactive surfaces (wins over force).
-        //   - forceInterpreterGuard: force the denylist ON even on headless
-        //     surfaces, where it otherwise fails open (the denylist is gated on
-        //     a wired grant manager so headless automation running `python -c`
-        //     / `sh -c` isn't hard-blocked with no recourse).
-        disableInterpreterGuard: env.AFK_DISABLE_BASH_INTERPRETER_GUARD === '1',
-        forceInterpreterGuard: env.AFK_FORCE_BASH_INTERPRETER_GUARD === '1',
-      }),
-    );
-  }
+  if (disabled) return;
+  const pathApproval = createPathApprovalHook({
+    // Prefer an explicit getCwd callback (REPL/Telegram bootstrap thread a
+    // live `extras.cwd`); otherwise fall back to the static cwd carried in
+    // main's `agentOptions` (scheduler/chat/threads callers).
+    getCwd: getCwd ?? (() => agentOptions?.cwd),
+    surface: mapSurface(surface),
+  });
+  registry.register(
+    'PreToolUse',
+    pathApproval.preToolUse,
+    // Longrunning: awaits elicitationRouter.route() (no time-based deadline).
+    { longRunning: true },
+  );
+  // PostToolUse revokes "Once" grants; SessionEnd is the safety-net for grants
+  // whose PostToolUse never ran (e.g. signal aborted before revoke).
+  registry.register('PostToolUse', pathApproval.postToolUse);
+  registry.register('SessionEnd', pathApproval.sessionEnd);
+  registry.register(
+    'PreToolUse',
+    createBashRestrictionHook({
+      disableInterpreterGuard: env.AFK_DISABLE_BASH_INTERPRETER_GUARD === '1',
+      forceInterpreterGuard: env.AFK_FORCE_BASH_INTERPRETER_GUARD === '1',
+    }),
+  );
+}
 
+/**
+ * Register the external-effect ledger: write intent on PreToolUse before
+ * dispatch, and settle the same record on PostToolUse / PostToolUseFailure.
+ * Registered last among built-in tool hooks so it runs after all policy hooks
+ * (path-approval once-grant revoke, etc.). PostToolUseFailure coverage ensures
+ * thrown tool handlers (the most uncertain-outcome case) are settled too.
+ */
+function registerEffectLedgerHooks(registry: HookRegistry): void {
+  const ledgerHooks = createEffectLedgerHooks();
+  registry.register('PreToolUse', ledgerHooks.pre);
+  registry.register('PostToolUse', ledgerHooks.post);
+  registry.register('PostToolUseFailure', ledgerHooks.post);
+}
+
+/**
+ * Register config-driven shell hooks after all built-ins so built-in handlers
+ * always run first. Surfaces loader warnings (parse/schema errors, orphan
+ * root-settings notice) that were computed but previously dropped on the
+ * floor — deduped via {@link surfacedConfigWarnings}. No-op when
+ * `hookConfig` is undefined (the common case).
+ */
+function registerConfigHooks(
+  registry: HookRegistry,
+  hookConfig: LoadedHooksConfig | undefined,
+  agentOptions: AgentOptions | undefined,
+): void {
+  if (hookConfig === undefined) return;
+  for (const warning of hookConfig.warnings) {
+    if (surfacedConfigWarnings.has(warning)) continue;
+    surfacedConfigWarnings.add(warning);
+    // eslint-disable-next-line no-console
+    console.warn(`[hooks] ${warning}`);
+  }
+  loadAndRegisterConfigHooks(registry, hookConfig, {
+    cwd: agentOptions?.cwd, sessionId: agentOptions?.sessionId, getTranscriptPath: agentOptions?.getTranscriptPath,
+  });
+}
+
+export function createDefaultHookRegistry(
+  onSubagentComplete?: (info: SubagentCompleteInfo) => void,
+  surface?: string,
+  memoryStore?: MemoryStore,
+  getPermissionMode?: () => PermissionMode,
+  hookConfig?: LoadedHooksConfig,
+  agentOptions?: AgentOptions,
+  getCwd?: () => string | undefined,
+): DefaultHookRegistryResult {
+  const registry = createHookRegistry();
+  // Invariant: see module-level comment — hooks run sequentially; order is
+  // load-bearing. Do not reorder registrations below without updating that note.
+  registerWhatifEpisodeGate(registry);
+  registerShadowVerifyNudge(registry);
+  // Two-layer placeholder defense (#2125) + unproven-diagnosis gate (#2987).
+  registerPlaceholderAndDiagnosisHooks(registry);
+  // Ask-question gate: blocks unanswerable questions on headless surfaces.
+  registry.register('PreToolUse', createAskQuestionGate());
+  registerChildMemoryGuard(registry);
+  // Safe-destruct detector (two-tier, ALL surfaces).
+  registry.register('PreToolUse', createSafeDestructDetect());
+  // Release-boundary detector (two-tier, ALL surfaces).
+  registry.register('PreToolUse', createReleaseBoundaryDetect());
+  // Shadow-git detector: log-only (approve) for --no-verify and identity
+  // overrides (issue #3758). Never blocks — shadow window to calibrate FP rate.
+  registry.register('PreToolUse', createShadowGitDetect());
+  const store = memoryStore ?? new MemoryStore();
+  if (getPermissionMode !== undefined) {
+    registerPermissionModeGates(registry, getPermissionMode, agentOptions, getCwd);
+  }
+  const addPreviewDiffRef = registerEditPreviewHook(registry);
+  registerPathApprovalAndBashHooks(registry, surface, getCwd, agentOptions);
   registry.register('SessionEnd', createMemorySessionEndHook(store, surface));
-  // Clean up compose-truncation spill files (written under <sessions>/<sessionId>/compose/)
-  // and evict inbound image records at session end so terminated sessions don't leak data.
-  registry.register('SessionEnd', (c) => { if (c.event === 'SessionEnd' && c.sessionId) cleanupComposeSpills(c.sessionId); return {}; });
-  registry.register('SessionEnd', (c) => { if (c.event === 'SessionEnd' && c.sessionId) inboundAttachmentRegistry.clear(c.sessionId); return {}; });
-  // Read-only run receipt: after the trace is sealed (sealing precedes
-  // SessionEnd dispatch — see agent-session.ts dispatchSessionEndOnce), emit a
-  // JSON+Markdown summary of the run under ~/.afk/state/receipts/. Best-effort
-  // and never injects/blocks; skips subagents and honors AFK_RUN_RECEIPT_DISABLED.
+  registerSessionEndCleanupHooks(registry);
+  // Run receipt: JSON+Markdown summary after trace seal. Best-effort, never
+  // injects/blocks; honors AFK_RUN_RECEIPT_DISABLED.
   registry.register('SessionEnd', runReceiptSessionEndHook);
-  // Derive and cache a session facet at teardown so every top-level session
-  // is visible to harvest --rank and other facet consumers. Best-effort;
-  // skips subagents; never blocks teardown.
-  registry.register('SessionEnd', createFacetSessionEndHook());
-  // SPINE.md: classify git diff against the architecture spine at session end.
-  // Best-effort; skips subagents; honors AFK_DISABLE_SPINE_UPDATE=1.
-  registry.register('SessionEnd', createSpineSessionEndHook({ repoRoot: agentOptions?.cwd }));
-  if (onSubagentComplete) {
-    registry.register('SubagentStop', (context) => {
-      if (context.event !== 'SubagentStop') return {};
-      if (context.status === 'idle' || context.status === 'running') return {};
-      onSubagentComplete({
-        subagentId: context.subagentId,
-        status: context.status,
-        durationMs: context.durationMs,
-        agentType: context.agentType,
-      });
-      return {};
-    });
-  }
-
-  // External-effect ledger: record outbound side effects (Telegram sends,
-  // GitHub PR creation, MCP writes, outbound bash commands) to a durable
-  // NDJSON file. Non-blocking, best-effort — write failures are swallowed so
-  // a full disk or unwritable state dir never disrupts tool execution.
-  // Registered last among built-in PostToolUse handlers so it runs after all
-  // policy hooks (path-approval once-grant revoke, etc.) have fired.
-  // Also registered for PostToolUseFailure so thrown tool handlers (the most
-  // uncertain-outcome case) are recorded with status 'failed'.
-  const ledgerHook = createEffectLedgerPostHook();
-  registry.register('PostToolUse', ledgerHook);
-  registry.register('PostToolUseFailure', ledgerHook);
-
-  // Register config-driven shell hooks after all built-ins so built-in
-  // handlers always run first. Config hooks are optional — when no
-  // hookConfig is provided (the common case) this is a no-op.
-  if (hookConfig !== undefined) {
-    // Surface loader warnings (parse/schema errors, orphan root-settings
-    // notice) that were computed but previously dropped on the floor — see
-    // surfacedConfigWarnings above. Emit before registration so problems are
-    // visible even when the config has zero registrable hooks (the orphan
-    // case). Mirrors the bridge's skipped-hook `[hooks]` console.warn channel.
-    for (const warning of hookConfig.warnings) {
-      if (surfacedConfigWarnings.has(warning)) continue;
-      surfacedConfigWarnings.add(warning);
-      // eslint-disable-next-line no-console
-      console.warn(`[hooks] ${warning}`);
-    }
-    loadAndRegisterConfigHooks(registry, hookConfig, {
-      cwd: agentOptions?.cwd,
-      sessionId: agentOptions?.sessionId,
-    });
-  }
-
+  registerFacetAndOutcomeHooks(registry, agentOptions?.cwd);
+  registerSubagentCompleteHook(registry, onSubagentComplete);
+  registerEffectLedgerHooks(registry);
+  registerConfigHooks(registry, hookConfig, agentOptions);
+  // Install process-scoped plugin declarations last; built-in and config
+  // handlers retain their registration order above.
+  installPluginHooks(registry);
   return { registry, memoryStore: store, addPreviewDiffRef };
 }
 

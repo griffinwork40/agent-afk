@@ -59,6 +59,14 @@ const ESCAPE_RE =
 // eslint-disable-next-line no-control-regex
 const CONTROL_RE = /[\x00-\x1F\x7F-\x9F]/g;
 
+// Matches any lone ESC byte (\x1B) that was not consumed by ESCAPE_RE.
+// Contract: applied as a second pass inside stripEscapeSequences so that a
+// trailing ESC or an ESC followed by a byte outside the recognised ranges
+// (e.g. \x1B\x21) cannot survive to combine with whatever the caller writes
+// next on the same terminal line.
+// eslint-disable-next-line no-control-regex
+const LONE_ESC_RE = /\x1B/g;
+
 /**
  * Strip all terminal escape sequences and neutralise control bytes so a string
  * is safe to write to a terminal. Benign text is returned unchanged apart from
@@ -87,5 +95,10 @@ export function sanitizeForDisplay(s: string): string {
  * @returns The string with all escape sequences removed; newlines and tabs intact.
  */
 export function stripEscapeSequences(s: string): string {
-  return s.replace(ESCAPE_RE, '');
+  // Pass 1: remove recognised escape sequences as whole units.
+  // Pass 2: remove any lone ESC byte not consumed above (e.g. a trailing \x1B,
+  // or \x1B followed by a byte outside the 0x36–0x5F / CSI / OSC / DCS ranges)
+  // so callers that do NOT run the full control-char pass (sanitizeForDisplay)
+  // still cannot emit a bare ESC that chains with surrounding terminal output.
+  return s.replace(ESCAPE_RE, '').replace(LONE_ESC_RE, '');
 }

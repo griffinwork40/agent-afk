@@ -25,120 +25,15 @@
  * @module agent/shell-jobs/streamer
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
 import { killProcessGroup } from '../../utils/kill-process-group.js';
-import { errorMessage } from '../../utils/errors.js';
-
-/**
- * ANSI / VT escape sequence regex — strips:
- *   • CSI sequences:  ESC [ … letter          (colours, cursor, erase, …)
- *   • OSC sequences:  ESC ] … BEL  or  ESC ] … ST   (hyperlinks, title sets)
- *   • DCS sequences:  ESC P … ST                    (device control strings)
- *   • PM  sequences:  ESC ^ … ST                    (privacy message)
- *   • APC sequences:  ESC _ … ST                    (application program cmd)
- *   • SOS sequences:  ESC X … ST                    (start of string)
- *   • Single-char ESC sequences:  ESC + one byte in 0x40-0x5F EXCEPT the
- *                                 string-introducers ] P ^ _ X
- *                                 (e.g. ESC M reverse-index — but NOT ESC ]).
- *
- * The single-char alternative deliberately EXCLUDES the string-introducer
- * bytes ] (OSC), P (DCS), ^ (PM), _ (APC), X (SOS). Those bytes only ever
- * introduce a longer string sequence whose terminator (BEL / ST) may arrive
- * in a LATER chunk. If the single-char alt could match `ESC ]` on its own it
- * would strip the 2-byte introducer and leak the sequence body as literal
- * text (e.g. a hyperlink `ESC ]8;;URL BEL` split right after `ESC ]` would
- * surface `8;;URL` to the model). Excluding them lets the partial-carry in
- * `makeAnsiStripper` hold the introducer as residue until the terminator
- * lands. (PR #565 review: L3 — caught by a cross-chunk OSC-split test.)
- *
- * Excluded set as ranges: 0x40-0x4F (@-O), 0x51-0x57 (Q-W), 0x59-0x5A (YZ),
- * 0x5C (\). Dropped vs. the naive 0x40-0x5F: P(0x50) X(0x58) ](0x5D)
- * ^(0x5E) _(0x5F).
- *
- * String Terminator (ST) is BEL (\x07) or ESC \ (\x1b\x5c).
- * The body consumer `[^\x07\x1b]*` stops at the first ESC or BEL so a
- * malformed sequence never consumes content past its intended boundary.
- */
-// eslint-disable-next-line no-control-regex
-const ANSI_REGEX =
-  /\x1b(?:\[[0-9;]*[a-zA-Z]|[\]P^_X][^\x07\x1b]*(?:\x07|\x1b\\)|[@-OQ-WYZ\\])/g;
-
-/**
- * Stateful ANSI stripper interface. Exported for direct unit testing of the
- * cross-chunk split-sequence path (PR #565 review: L3).
- */
-export interface AnsiStripper {
-  /** Strip ANSI sequences from `text`, carrying any partial sequence across calls. */
-  strip(text: string): string;
-  /**
-   * Flush any partial ESC sequence held from the last chunk.
-   * Call once when the stream closes so the residue is not silently dropped.
-   * A partial escape sequence is never printable text, so flush() discards it
-   * rather than appending raw escape bytes to modelCaptured.
-   * After flush(), the residue is cleared — calling strip() again is safe.
-   */
-  flush(): string;
-}
-
-/**
- * Returns a stateful ANSI stripper that carries a partial-sequence residual
- * across calls. This handles the case where an ESC sequence is split across
- * two `data` chunks from the child process pipe.
- *
- * The residual holds an incomplete ESC sequence tail that was at the end of
- * the previous chunk; it is prepended to the next chunk before regex-stripping,
- * then the new tail is checked for another partial sequence. Call flush() once
- * when the stream closes to discard any residue not followed by a final chunk.
- *
- * Exported for direct unit testing — forcing a split ESC sequence through a
- * real spawned process is non-deterministic, so the carry/flush behaviour is
- * verified against this factory directly (PR #565 review: L3).
- */
-export function makeAnsiStripper(): AnsiStripper {
-  let residue = '';
-  return {
-    strip(text: string): string {
-      const input = residue + text;
-      // Remove all complete ANSI sequences (CSI, OSC, DCS, single-char ESC, …).
-      const stripped = input.replace(ANSI_REGEX, '');
-      // Hold any trailing partial ESC sequence for the next chunk.
-      // Covers: bare ESC, ESC+[, ESC+[digits (CSI partial),
-      //         ESC+] / ESC+P / ESC+^ / ESC+_ / ESC+X (OSC/DCS — body not yet closed).
-      // eslint-disable-next-line no-control-regex
-      const partialMatch = stripped.match(/\x1b(?:[\]P^_X][^\x07\x1b]*|\[[0-9;]*)?$/);
-      if (partialMatch) {
-        residue = partialMatch[0];
-        return stripped.slice(0, stripped.length - residue.length);
-      }
-      residue = '';
-      return stripped;
-    },
-    flush(): string {
-      // The residue is a fragment of an incomplete ESC sequence — not printable
-      // text — so discard it rather than exposing raw escape bytes to the model.
-      // Reset so strip() works correctly if called again after flush().
-      residue = '';
-      return '';
-    },
-  };
-}
-
-/**
- * Truncate a UTF-8 Buffer to at most `maxBytes` bytes without splitting a
- * multi-byte code-point. Walks backward from the cut offset, skipping
- * continuation bytes (0x80–0xBF), to find the last complete character
- * boundary. Returns a subarray view (zero-copy).
- *
- * Exported for direct unit testing of the multi-byte-straddles-cap boundary
- * (PR #565 review: L4).
- */
-export function utf8SafeTruncate(buf: Buffer, maxBytes: number): Buffer {
-  if (buf.length <= maxBytes) return buf;
-  let end = maxBytes;
-  // Skip over UTF-8 continuation bytes so we don't split a multi-byte char.
-  while (end > 0 && (buf[end]! & 0xc0) === 0x80) end--;
-  return buf.subarray(0, end);
-}
+import {
+  spawnChild,
+  makeCaptureState,
+  wireStreams,
+  wireExitHandlers,
+} from './streamer.helpers.js';
+export { makeAnsiStripper, utf8SafeTruncate } from './streamer.utils.js';
+export type { AnsiStripper } from './streamer.utils.js';
 
 /** Default per-command timeout in milliseconds (2 minutes, matches model tool). */
 export const DEFAULT_TIMEOUT_MS = 120_000;
@@ -249,24 +144,10 @@ export function startShell(opts: StartShellOptions): ShellHandle {
   const startedAt = Date.now();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
-  const stripAnsi = makeAnsiStripper();
 
-  // Spawn shape mirrors `createBashHandler` so the failure modes that
-  // file documents (overflow kill, process-group SIGKILL, env merge) all
-  // carry over identically. The one structural difference is that this
-  // function pipes onChunk for live display where the bash tool only
-  // collects + returns.
-  let proc: ChildProcess;
-  try {
-    proc = spawn(opts.command, {
-      shell: true,
-      detached: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
-      ...(opts.env !== undefined ? { env: { ...process.env, ...opts.env } } : {}),
-    });
-  } catch (err) {
-    const message = errorMessage(err);
+  // --- Concern 1: spawn setup ---
+  const spawnResult = spawnChild(opts.command, opts.cwd, opts.env);
+  if ('spawnFailed' in spawnResult) {
     return {
       pid: undefined,
       kill: () => {},
@@ -276,74 +157,41 @@ export function startShell(opts: StartShellOptions): ShellHandle {
         displayCaptured: '',
         modelCaptured: '',
         truncated: false,
-        errorReason: 'spawn-failed',
-        errorMessage: `Failed to spawn shell: ${message}`,
+        errorReason: 'spawn-failed' as const,
+        errorMessage: `Failed to spawn shell: ${spawnResult.message}`,
       }),
     };
   }
+  const { proc } = spawnResult;
 
   // Detach the child from Node's event loop so an abandoned background
   // job doesn't keep the REPL process alive when the user exits.
   proc.unref();
 
-  // Lazy resolver — assigned inside the Promise executor.
+  // Shared mutable capture state — passed explicitly to each helper.
+  const state = makeCaptureState();
+
+  // Lazy resolver — settled is tracked inside state so helpers can read it.
   let resolveResult!: (r: ShellResult) => void;
-  let settled = false;
   const promise = new Promise<ShellResult>((resolve) => {
     resolveResult = (r) => {
-      if (settled) return;
-      settled = true;
+      if (state.settled) return;
+      state.settled = true;
       resolve(r);
     };
   });
 
-  let displayCaptured = '';
-  let modelCaptured = '';
-  let displayBytes = 0;
-  let modelBytes = 0;
-  let truncated = false;
-  let overflowKilled = false;
-  let killedByCaller = false;
-
-  function captureChunk(chunk: Buffer): void {
-    // Display buffer: raw bytes, ANSI preserved.
-    const displayRemaining = maxBytes - displayBytes;
-    if (displayRemaining > 0) {
-      const safe = chunk.length <= displayRemaining
-        ? chunk
-        : utf8SafeTruncate(chunk, displayRemaining);
-      displayBytes += safe.length;
-      displayCaptured += safe.toString('utf8');
-      if (chunk.length > displayRemaining) truncated = true;
-    } else if (chunk.length > 0) {
-      truncated = true;
-    }
-
-    // Model buffer: ANSI stripped, separate byte counter. The stateful
-    // stripAnsi closure carries any partial ESC sequence residual across
-    // chunk boundaries so split ANSI sequences are handled correctly (H-2).
-    if (modelBytes < maxBytes) {
-      const stripped = stripAnsi.strip(chunk.toString('utf8'));
-      const strippedBytes = Buffer.byteLength(stripped, 'utf8');
-      const modelRemaining = maxBytes - modelBytes;
-      if (strippedBytes <= modelRemaining) {
-        modelCaptured += stripped;
-        modelBytes += strippedBytes;
-      } else {
-        // Slice on UTF-8 byte boundary using Buffer to avoid mid-codepoint cuts.
-        const buf = Buffer.from(stripped, 'utf8');
-        modelCaptured += utf8SafeTruncate(buf, modelRemaining).toString('utf8');
-        modelBytes = maxBytes;
-        truncated = true;
-      }
-    }
-  }
+  // --- Concern 2: timeout + abort wiring ---
+  // These must be constructed before wireStreams / wireExitHandlers so the
+  // handlers can reference them.
+  // Invariant: timeoutHandle and abortHandler are created before stream/exit
+  // handlers are attached, so overflow and error/close paths can always
+  // clearTimeout and removeEventListener — even if they fire synchronously.
 
   function killGroup(): void {
     // Guard pid !== 0: `process.kill(-0, …)` would signal THIS process's own
     // group. Node never assigns pid 0 to a live child, but the guard is cheap
-    // insurance against ever turning a child-kill into a self-kill. (PR #565
-    // review: N3.)
+    // insurance. (PR #565 review: N3.)
     if (proc.pid !== undefined && proc.pid !== 0 && !proc.killed) {
       killProcessGroup(proc.pid);
     }
@@ -359,9 +207,9 @@ export function startShell(opts: StartShellOptions): ShellHandle {
     resolveResult({
       exitCode: null,
       durationMs: Date.now() - startedAt,
-      displayCaptured,
-      modelCaptured,
-      truncated,
+      displayCaptured: state.displayCaptured,
+      modelCaptured: state.modelCaptured,
+      truncated: state.truncated,
       errorReason: 'timeout',
       errorMessage: `Command timed out after ${timeoutMs}ms`,
     });
@@ -374,147 +222,38 @@ export function startShell(opts: StartShellOptions): ShellHandle {
     resolveResult({
       exitCode: null,
       durationMs: Date.now() - startedAt,
-      displayCaptured,
-      modelCaptured,
-      truncated,
+      displayCaptured: state.displayCaptured,
+      modelCaptured: state.modelCaptured,
+      truncated: state.truncated,
       errorReason: 'abort',
-      errorMessage: killedByCaller ? 'Command killed' : 'Command aborted',
+      errorMessage: state.killedByCaller ? 'Command killed' : 'Command aborted',
     });
   };
   opts.abort.addEventListener('abort', abortHandler);
 
-  // Wire stdout / stderr. The combined byte counter (displayBytes +
-  // modelBytes capped independently) means an extreme overflow on one
-  // stream doesn't starve the other; the overflowKilled latch ensures
-  // we only fire the kill+resolve once across both data handlers.
-  function maybeOverflow(): void {
-    if (overflowKilled || settled) return;
-    if (displayBytes < maxBytes && modelBytes < maxBytes) return;
-    // Both buffers are at cap. The child can keep running for as long as
-    // it wants — we'd just discard further bytes — but the model-side
-    // bash tool kills here because a runaway `yes` can hit V8's max
-    // string length faster than 120s. Mirroring that hardening: kill
-    // and settle as soon as the cap is crossed.
-    overflowKilled = true;
-    killGroup();
-    clearTimeout(timeoutHandle);
-    opts.abort.removeEventListener('abort', abortHandler);
-    resolveResult({
-      exitCode: null,
-      durationMs: Date.now() - startedAt,
-      displayCaptured,
-      modelCaptured,
-      truncated: true,
-      errorReason: 'overflow',
-      errorMessage: `Output exceeded ${maxBytes} bytes`,
-    });
-  }
+  // --- Concern 3: stream wiring (stdout/stderr data + overflow) ---
+  wireStreams(
+    proc,
+    state,
+    maxBytes,
+    startedAt,
+    timeoutHandle,
+    abortHandler,
+    opts.abort,
+    opts.onChunk,
+    resolveResult,
+  );
 
-  proc.stdout?.on('data', (chunk: Buffer) => {
-    captureChunk(chunk);
-    try {
-      opts.onChunk?.(chunk, 'stdout');
-    } catch {
-      // onChunk callbacks must not break the streamer — swallow.
-    }
-    maybeOverflow();
-  });
-
-  proc.stderr?.on('data', (chunk: Buffer) => {
-    captureChunk(chunk);
-    try {
-      opts.onChunk?.(chunk, 'stderr');
-    } catch {
-      // onChunk callbacks must not break the streamer — swallow.
-    }
-    maybeOverflow();
-  });
-
-  proc.on('error', (err) => {
-    clearTimeout(timeoutHandle);
-    opts.abort.removeEventListener('abort', abortHandler);
-    resolveResult({
-      exitCode: null,
-      durationMs: Date.now() - startedAt,
-      displayCaptured,
-      modelCaptured,
-      truncated,
-      errorReason: 'spawn-failed',
-      errorMessage: `Shell process error: ${err.message}`,
-    });
-  });
-
-  proc.on('close', (code, signal) => {
-    clearTimeout(timeoutHandle);
-    opts.abort.removeEventListener('abort', abortHandler);
-    if (overflowKilled || settled) return;
-
-    // Flush any partial ESC residue the stripper was holding across chunks.
-    // A partial escape sequence at the tail of the last chunk is never
-    // printable text, so flush() discards it rather than appending raw bytes
-    // to modelCaptured. Without this, up to ~6 bytes of the last chunk tail
-    // would silently disappear from modelCaptured while remaining visible in
-    // displayCaptured.
-    stripAnsi.flush();
-
-    // If kill() was called by the caller, surface as 'abort' so callers
-    // can disambiguate "I told you to stop" from "command exited normally
-    // with a nonzero code".
-    if (killedByCaller) {
-      resolveResult({
-        exitCode: code,
-        durationMs: Date.now() - startedAt,
-        displayCaptured,
-        modelCaptured,
-        truncated,
-        errorReason: 'abort',
-        errorMessage: 'Command killed',
-      });
-      return;
-    }
-
-    if (code !== null && code !== 0) {
-      resolveResult({
-        exitCode: code,
-        durationMs: Date.now() - startedAt,
-        displayCaptured,
-        modelCaptured,
-        truncated,
-        errorReason: 'nonzero-exit',
-        errorMessage: `Command exited with code ${code}`,
-      });
-      return;
-    }
-
-    if (code === null) {
-      // Process terminated by a signal we did NOT send (segfault, OOM-killer,
-      // external `kill`, or a self-signal like `kill -9 $$`). The caller-kill,
-      // timeout, abort, and overflow paths are all handled above, so a null
-      // code reaching here means an unrequested signal death. Surface it as a
-      // failure instead of falling through to the success resolve, which would
-      // tell the model a crashed command "succeeded". (PR #565 review: M2.)
-      resolveResult({
-        exitCode: null,
-        durationMs: Date.now() - startedAt,
-        displayCaptured,
-        modelCaptured,
-        truncated,
-        errorReason: 'signal-killed',
-        errorMessage: signal
-          ? `Command killed by signal ${signal}`
-          : 'Command killed by signal',
-      });
-      return;
-    }
-
-    resolveResult({
-      exitCode: code,
-      durationMs: Date.now() - startedAt,
-      displayCaptured,
-      modelCaptured,
-      truncated,
-    });
-  });
+  // --- Concern 4: exit/cleanup handling (error + close events) ---
+  wireExitHandlers(
+    proc,
+    state,
+    startedAt,
+    timeoutHandle,
+    abortHandler,
+    opts.abort,
+    resolveResult,
+  );
 
   return {
     pid: proc.pid,
@@ -522,7 +261,7 @@ export function startShell(opts: StartShellOptions): ShellHandle {
     kill: (signal: NodeJS.Signals = 'SIGKILL') => {
       // pid !== 0 guard: never let -pid resolve to -0 (this process's group).
       if (proc.pid === undefined || proc.pid === 0 || proc.killed) return;
-      killedByCaller = true;
+      state.killedByCaller = true;
       // Note: on Windows the `signal` argument is silently ignored — taskkill
       // always force-kills the process tree regardless of which signal is passed.
       killProcessGroup(proc.pid, signal);

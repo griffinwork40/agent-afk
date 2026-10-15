@@ -120,3 +120,21 @@ export interface WALEntry {
   timestamp: string;
   data: Record<string, unknown>;
 }
+
+/**
+ * Aggregate access-pattern statistics for the fact archive, returned by
+ * {@link MemoryStore.getAccessStats}. Useful for observability and for
+ * deciding whether a GC sweep is worthwhile.
+ */
+export interface AccessStats {
+  /** Total non-superseded facts in the archive. */
+  total: number;
+  /** Facts with access_count = 0 (never retrieved since creation). */
+  neverAccessed: number;
+  /** Facts with access_count > 0 (retrieved at least once). */
+  accessed: number;
+  /** Sum of all access_count values (total retrieval events tracked). */
+  totalAccessEvents: number;
+  /** Highest access_count among all non-superseded facts. */
+  maxAccessCount: number;
+}

@@ -62,6 +62,24 @@ export function isQueuedReserved(self: QueuedAccessHost, payload: SubmissionPayl
  * payload has attachments we return `undefined` so the whole queue drains
  * normally as its own turn with its images intact.
  */
+/**
+ * Presence check for the tool yield contract (`agent/tools/user-yield.ts`):
+ * true when the user has committed (Enter) a message that still awaits
+ * delivery. Deliberately distinct from {@link peekQueuedText}, whose
+ * attachment bail-out exists only because a Ctrl+B flush rides a text-only
+ * tool_result — an image-bearing message is still a message the user is
+ * waiting on, and the normal idle drain delivers it with images intact.
+ *
+ * Excludes: whitespace-only text with no attachments (not a real message), and
+ * payloads a Ctrl+B flush has reserved (already bound for the running turn).
+ */
+export function hasPendingSubmission(self: QueuedAccessHost): boolean {
+  return self.pendingSubmissions.some(
+    (p) =>
+      !self.queuedReservations.has(p) && (p.text.trim().length > 0 || p.attachments.length > 0),
+  );
+}
+
 export function peekQueuedText(self: QueuedAccessHost): QueuedSnapshot | undefined {
   if (self.pendingSubmissions.length === 0) return undefined;
   if (self.pendingSubmissions.some((p) => p.attachments.length > 0)) return undefined;

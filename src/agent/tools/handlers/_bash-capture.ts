@@ -30,6 +30,7 @@
  */
 
 import { mkdirSync, openSync, writeSync, closeSync } from 'fs';
+import { join } from 'node:path';
 import { getBashCapturesDir } from '../../../paths.js';
 
 /**
@@ -69,7 +70,7 @@ export function writeBashCapture(
     // contains session-scoped bash output and should not be world-readable.
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const safeId = toolUseId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 128) || 'capture';
-    const filePath = `${dir}/${safeId}.txt`;
+    const filePath = join(dir, `${safeId}.txt`);
     // Guard: never write more than CAPTURE_MAX_BYTES to disk.
     const buf = Buffer.from(fullOutput, 'utf8');
     const toWrite = buf.length <= CAPTURE_MAX_BYTES ? buf : buf.subarray(0, CAPTURE_MAX_BYTES);

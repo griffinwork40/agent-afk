@@ -38,13 +38,16 @@ import type {
   ClosurePayload,
   CompactionPayloadInput,
   HookDecisionPayload,
+  HookSummaryPayload,
+  PeerMessagePayload,
   QueuedUserMessagePayload,
   SessionPhasePayload,
   SubagentLifecyclePayload,
   ToolCallPayload,
-  TraceSink,
   TraceEventInput,
-} from './index.js';
+} from './types.js';
+import type { TraceSink } from './writer.js';
+import { isInformativeHookDecision, recordHookDecision } from './hook-tally.js';
 
 /**
  * Generic emit helper — handles the common pattern of every trace emit
@@ -71,8 +74,25 @@ async function emitTrace<K extends TraceEventInput['kind']>(
 export const emitToolCall = (w: TraceSink | undefined, p: ToolCallPayload) =>
   emitTrace(w, 'tool_call', p);
 
-export const emitHookDecision = (w: TraceSink | undefined, p: HookDecisionPayload) =>
-  emitTrace(w, 'hook_decision', p);
+/**
+ * Invariant: the single choke point for `hook_decision` rows. A payload with
+ * no information beyond `hookEvent`/`subagentId` (the allow/pass-through case)
+ * is counted in the writer's hook tally but NOT written; it surfaces only in
+ * aggregate via the once-per-session `hook_summary` event. Every row carrying
+ * a decision, reason, blockedTool, injectedContextBytes, durationMs, or
+ * approvalOutcome is written exactly as before. See ./hook-tally.ts.
+ */
+export const emitHookDecision = async (w: TraceSink | undefined, p: HookDecisionPayload) => {
+  if (!w) return;
+  const informative = isInformativeHookDecision(p);
+  recordHookDecision(w, p, informative);
+  if (!informative) return;
+  await emitTrace(w, 'hook_decision', p);
+};
+
+/** Once-per-session hook tally; written by `sealTraceWriter` before the seal. */
+export const emitHookSummary = (w: TraceSink | undefined, p: HookSummaryPayload) =>
+  emitTrace(w, 'hook_summary', p);
 
 export const emitSubagentLifecycle = (w: TraceSink | undefined, p: SubagentLifecyclePayload) =>
   emitTrace(w, 'subagent_lifecycle', p);
@@ -100,6 +120,9 @@ export const emitBrowserEvent = (w: TraceSink | undefined, p: BrowserEventPayloa
 
 export const emitQueuedUserMessage = (w: TraceSink | undefined, p: QueuedUserMessagePayload) =>
   emitTrace(w, 'queued_user_message', p);
+
+export const emitPeerMessage = (w: TraceSink | undefined, p: PeerMessagePayload) =>
+  emitTrace(w, 'peer_message', p);
 
 export const emitSessionPhase = (w: TraceSink | undefined, p: SessionPhasePayload) =>
   emitTrace(w, 'session_phase', p);

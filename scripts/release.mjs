@@ -8,7 +8,7 @@
  *   1. Verify clean working tree on `main` (or override branch via RELEASE_BRANCH).
  *   2. Verify CHANGELOG.md has an "## [Unreleased]" section with non-empty content.
  *   3. Compute the next version (or use the explicit one provided).
- *   4. Bump package.json via `pnpm version --no-git-tag-version` (no auto-tag — we tag ourselves after CHANGELOG rewrite).
+ *   4. Bump package.json via `npm version --no-git-tag-version` (no auto-tag — we tag ourselves after CHANGELOG rewrite).
  *   5. Rewrite CHANGELOG: rename `[Unreleased]` → `[X.Y.Z] - YYYY-MM-DD`, insert fresh empty `[Unreleased]` block above it.
  *   6. git add + commit `chore(release): vX.Y.Z`.
  *   7. git tag vX.Y.Z.
@@ -117,7 +117,7 @@ console.log(`Releasing ${currentVersion} → ${nextVersion} (tag ${tag}) on ${br
 console.log(`Unreleased section preview:\n---\n${unreleasedBody}\n---\n`);
 
 // 4. Bump package.json (no auto-tag, we tag after CHANGELOG rewrite)
-sh(`pnpm version ${nextVersion} --no-git-tag-version`, { mutates: true, inherit: true });
+sh(`npm version ${nextVersion} --no-git-tag-version`, { mutates: true, inherit: true });
 
 // 5. Rewrite CHANGELOG
 const today = new Date().toISOString().slice(0, 10);

@@ -21,6 +21,7 @@ import type { StageTrackerState } from '../commands/interactive/loop-stage.js';
 import type { CommitCoordinator } from './commit-coordinator.js';
 import type { SourceState } from './stream-renderer-source.js';
 import type { ChildActivityTracker } from './child-activity-select.js';
+import type { ThoughtSummaryHold } from './thought-summary-hold.js';
 import { isDebugEnabled } from '../../utils/debug.js';
 
 /**
@@ -41,6 +42,7 @@ export function makeOrchestratorCtx(args: {
   lastProgressByTask: Map<string, ProgressEvent>;
   sources?: ReadonlyMap<string, SourceState>;
   childActivity?: ChildActivityTracker;
+  thoughtHold?: ThoughtSummaryHold;
 }): OrchestratorCtx {
   return {
     out: args.out,
@@ -64,6 +66,7 @@ export function makeOrchestratorCtx(args: {
     // noise on the type surface.
     ...(args.isTTY && args.stageTracker ? { stageTracker: args.stageTracker } : {}),
     ...(args.activeSkillName ? { activeSkillName: args.activeSkillName } : {}),
+    ...(args.thoughtHold ? { thoughtHold: args.thoughtHold } : {}),
   };
 }
 

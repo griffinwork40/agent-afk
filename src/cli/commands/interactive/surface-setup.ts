@@ -1,23 +1,21 @@
 import { createSuggestEngine } from '../../input/suggest.js';
 import type { InputSurface } from '../../input/input-surface.js';
-import { elicitationRouter } from '../../../agent/elicitation-router.js';
-import { makeReplElicitationHandler } from '../../elicitation-repl.js';
-import { runPicker } from '../../render/picker.js';
-import { runTextInput } from '../../render/text-input.js';
 import { debugLog } from '../../../utils/debug.js';
 import { cyclePermissionMode } from '../../permission-mode-cycle.js';
-import { openEditorForBuffer } from '../../slash/commands/editor-open.js';
-import { palette } from '../../palette.js';
 import type { InteractiveCtx } from './shared.js';
-import { onQuotaUpdate } from '../../../agent/quota-cache.js';
-import { formatStatusFields } from './shared.js';
 import type { TranscriptHandle } from './transcript.js';
 import type { LoopStageBar } from './loop-stage.js';
 import type { MascotBar } from './mascot-bar.js';
 import { buildPrompt, type TurnState } from './repl-loop-shared.js';
 import { installHistorySubmissionTracker } from './surface-setup.history-tracking.js';
 import { buildSuggestConfig } from './surface-setup.suggest-config.js';
-import { boundLineToTerminal } from '../../render/bounded-line.js';
+import { buildOutputViewerCallback } from './surface-setup.viewer-callback.js';
+import {
+  buildOpenEditorCallback,
+  installElicitationHandler,
+  wireCompositorIntoCtx,
+  wireSlashCtxCallbacks,
+} from './surface-setup.wiring.js';
 
 /**
  * Dependencies surface-setup needs from phases that have not been
@@ -79,10 +77,11 @@ export async function setupSurface(
   // captures the mutable refs (not snapshot values) so mid-session /model
   // swaps are reflected automatically.
   //
-  // Tier-2 (LLM fallback) is gated by `AFK_SUGGEST_ENABLED` and `apiKey`.
-  // When neither is set, `llmEnabled()` returns false and the engine runs
-  // Tier-1 only (synchronous history/dropdown prefix match) — zero extra
-  // latency, zero API traffic.
+  // Tier-2 (LLM fallback) is gated by `AFK_SUGGEST_ENABLED`. When disabled,
+  // `llmEnabled()` returns false and the engine runs Tier-1 only (synchronous
+  // history/dropdown prefix match) — zero extra latency, zero API traffic.
+  // The engine resolves its own credential per suggestion model; the session
+  // credential is deliberately never handed to it (see suggest-credential.ts).
   const suggestEngine = createSuggestEngine({
     // Surface Tier-2 failures (auth, network, 404 model, unreachable shim)
     // under AFK_DEBUG=1; a no-op otherwise so normal sessions stay silent and
@@ -121,30 +120,9 @@ export async function setupSurface(
       ctx.statusLine.rearm();
     },
     // Ctrl+O → open $EDITOR seeded with the input buffer, mirroring the
-    // /editor slash command. Fire-and-forget (matches the onShiftTab idiom):
-    // the keypress dispatch is synchronous, so we kick off the async handoff
-    // and swallow rejections rather than blocking dispatch. The handoff reads
-    // the live compositor + surfaces its own notices via commitAbove, so an
-    // absent compositor (should never happen once armed) is a safe no-op.
-    onOpenEditor: () => {
-      const compositor = surface.getCompositor();
-      openEditorForBuffer({
-        compositor,
-        notify: (kind, message) => {
-          // Chords have no `ctx.out`; write the notice above the live input
-          // frame. Color by severity to match the REPL writer's conventions.
-          const painted =
-            kind === 'error' ? palette.error(message)
-            : kind === 'warn' ? palette.warning(message)
-            : palette.dim(message);
-          compositor?.commitAbove(painted);
-        },
-        // Late-bound: footer subsystems are constructed after this closure is
-        // defined, but the chord fires long after bootstrap completes.
-        suspendFooter: () => ctx.slashCtx.suspendFooter?.(),
-        resumeFooter: () => ctx.slashCtx.resumeFooter?.(),
-      }).catch(() => {});
-    },
+    // /editor slash command. See buildOpenEditorCallback in surface-setup.wiring.ts.
+    onOpenEditor: buildOpenEditorCallback(surface, ctx),
+    onOpenOutputViewer: buildOutputViewerCallback(ctx.capturePathRef, () => surface.getCompositor()),
     // StatusLine doubles as DECSTBM scroll-region guard so commitAbove
     // writes survive the persistent bottom-row reservation.
     scrollRegion: ctx.statusLine,
@@ -155,7 +133,7 @@ export async function setupSurface(
     // evicts the deficit into scrollback if the frame would otherwise
     // climb above. Undefined on daemons / non-bootstrap callers — defaults
     // the compositor to pre-fix behavior (no protection).
-    ...(ctx.preArmAnchorRow !== undefined ? { anchorRow: ctx.preArmAnchorRow } : {}),
+    ...placementArmOpts(ctx.preArmAnchorRow),
     // Ghost-text wiring — context factory extracted to surface-setup.suggest-config.ts.
     // Returns `{ suggest: { engine, getContext } }` when enabled, `{}` when disabled.
     ...buildSuggestConfig({
@@ -163,7 +141,6 @@ export async function setupSurface(
       engine: suggestEngine,
       surface,
       stats: ctx.stats,
-      apiKey: ctx.suggestApiKey,
       baseUrl: ctx.suggestBaseUrl,
       historyTracker,
     }),
@@ -174,127 +151,20 @@ export async function setupSurface(
   // path (single stdin consumer) rather than through `rl.question()`.
   // (also enforced structurally by StdinClaim — see src/cli/input/stdin-claim.ts)
   //
-  // External constraint (single-consumer stdin): when the TerminalCompositor
-  // is armed, it owns a raw-mode `keypress` listener on process.stdin and
-  // consumes every keystroke into its internal input buffer. A parallel
-  // `rl.question()` on a `terminal: false` readline ALSO consumes the same
-  // keystrokes. Both resolve — the agent receives the answer via rl.question
-  // AND the compositor buffer fills with the same digits + sets `queued =
-  // true` on Enter. The next `surface.readLine()` idle-flush then fires the
-  // stale queued buffer as a phantom user turn (terminal-compositor.ts ~508).
-  //
-  // The fix is substitution, not suppression: remove the rl.question
-  // consumer entirely so the compositor is the sole stdin consumer. The
-  // compositor's keypress listener stays live throughout — its onSubmit
-  // handler is one-shot and re-wired per `surface.readLine()` call.
-  //
-  // Non-TTY fallback (daemon, pipe, tests): `surface.getCompositor()`
-  // returns null and `surface.readLine()` falls back to readWithAutocomplete
-  // (input-surface.ts:386). The install block is unconditional — readLine
-  // works in both modes; only the `writer.line` target needs a fallback
-  // when there is no compositor to commitAbove through.
   // Arrow-key picker dependency is wired ONLY when a compositor is armed
   // (TTY mode). Non-TTY surfaces (daemon/pipe/headless tests) leave it
   // undefined and the elicitation handler's `renderAgentQuestion` falls
   // back to the numbered-text path — preserving the pre-picker behaviour
   // for surfaces that can't render a live frame.
   const armedCompositor = surface.getCompositor();
-
-  // Wire the plan-exit queue check: when the user has typed ahead a queued
-  // message, the exit_plan_mode tool handler skips the elicitation picker so
-  // the queued message is delivered first. The predicate is stored on ctx
-  // (so resume-swap can re-wire it) and installed on the session via
-  // setPlanExitQueueCheck. Only armed when a compositor exists (TTY mode).
-  if (armedCompositor) {
-    ctx.hasPendingUserMessage = () => armedCompositor.peekQueuedText() !== undefined;
-    ctx.session.current?.setPlanExitQueueCheck(ctx.hasPendingUserMessage);
-  }
-
-  const stdinElicitationHandler = makeReplElicitationHandler({
-    // Elicitation / form / MCP-question sub-prompts deliberately omit
-    // `primePromptSuggestion` (defaults false): the user is answering a
-    // specific question, so a "what should I do next" ghost over the answer
-    // field is off-topic — and it would burn one provider call per field.
-    readLine: (prompt) =>
-      surface.readLine({ promptFn: () => prompt }).then((r) => r.text),
-    writer: {
-      line: (text = '') => {
-        // Route the question header through the compositor so it commits
-        // ABOVE the persistent input row (and survives the DECSTBM repaint
-        // cycle). A raw `process.stdout.write` here would race log-update's
-        // clear/repaint tick and either get clipped or strand the question
-        // mid-frame. Falls back to raw stdout when no compositor is armed
-        // (non-TTY) — log-update is not live, so the race does not exist.
-        const c = surface.getCompositor();
-        if (c) {
-          c.commitAbove(text);
-        } else {
-          process.stdout.write(boundLineToTerminal(text, process.stdout) + '\n');
-        }
-      },
-    },
-    pendingCount: () => elicitationRouter.pendingCount(),
-    ...(armedCompositor ? {
-      pickFromList: (opts) => runPicker(armedCompositor, opts),
-      readTextOverlay: (opts) => runTextInput(armedCompositor, opts),
-    } : {}),
-  });
-  elicitationRouter.install(stdinElicitationHandler);
+  const stdinElicitationHandler = installElicitationHandler(ctx, surface, armedCompositor);
 
   // Stage 3e fix — wire the persistent compositor into the ReplRenderer
   // and SlashContext ONCE, here, immediately after the surface arms.
-  //
-  // External constraint (ordered-operation sequence): the compositor's
-  // lifetime is REPL-startup → REPL-exit. Any code path that writes to
-  // stdout between turns (verdict ledger, context pane, bg-notifications
-  // at the top of the loop; slash-skill dispatch via `/<skill>`) MUST
-  // route through `compositor.commitAbove` so log-update's tracked-line
-  // count stays consistent with the actual terminal content. A raw
-  // stdout write shifts the cursor without updating the line count;
-  // the next repaint then clears too few lines and the previous frame
-  // strands above the new one (the "stacked prompt" duplication bug).
-  //
-  // BEFORE this Stage-3e fix:
-  //   - The per-turn `setActiveCompositor` callback toggled
-  //     `replRenderer.setCompositor(c)` (mid-turn) and then `null`
-  //     (in turn-handler's finally). Between turns the renderer's
-  //     `compositor` ref was null, so `writeLine` fell through to raw
-  //     stdout.write — even though the persistent TerminalCompositor
-  //     was still armed and tracking the terminal via log-update.
-  //   - Built-in TS skills constructed a `StreamRenderer` with no
-  //     `compositor` option, so their `arm()` took the own-compositor
-  //     path and instantiated a SECOND log-update on the same stdout.
-  //
-  // The fix is two-pronged: (1) hold the persistent compositor ref on
-  // `replRenderer` for the lifetime of the surface (so writeLine never
-  // falls through to raw stdout while the compositor is armed), and
-  // (2) expose the compositor via `SlashContext.getCompositor` so the
-  // built-in-skills bridge can borrow it (see slash/builtin-skills.ts).
-  ctx.replRenderer.setCompositor(surface.getCompositor());
-  ctx.slashCtx.getCompositor = () => surface.getCompositor();
-  // Invariant: Stage 3e idle-mode completionWriter wiring. The persistent
-  // compositor is armed for the lifetime of this REPL, so between-turn
-  // slash output (e.g. `/model foo` → "Unknown model" warning routed via
-  // `ctx.out.warn` → `completionWriter.fn`) MUST commit above the live
-  // idle overlay rather than write raw at the input row's current cursor
-  // position. Without this, a between-turn warning overlays directly onto
-  // the just-echoed user input (e.g. the original `/model claude-opus-4-8`
-  // repro: warning rendered inline at the tail of the echoed input row).
-  //
-  // Enforcing peer: turn-handler.ts's finally block resets
-  // `completionWriter.fn := completionWriter.idleFn` after every turn
-  // (NOT `console.log`). Setting `idleFn` here is what keeps the
-  // borrowed-compositor wiring alive across turn boundaries.
-  //
-  // Non-TTY surfaces (daemon, pipe, tests): `surface.getCompositor()`
-  // returns `null` and both slots stay at their bootstrap default
-  // (`console.log`) — the legacy path is preserved.
-  const persistentCompositor = surface.getCompositor();
-  if (persistentCompositor) {
-    const writeIdle = (line: string) => persistentCompositor.commitAbove(line);
-    ctx.completionWriter.fn = writeIdle;
-    ctx.completionWriter.idleFn = writeIdle;
-  }
+  // See wireCompositorIntoCtx in surface-setup.wiring.ts for the full
+  // constraint commentary (ordered-operation sequence, stacked-prompt bug).
+  wireCompositorIntoCtx(ctx, surface);
+
   // Install a per-turn soft-stop handler on the surface (so ESC works) AND
   // publish it to turnState so the SIGINT handler can fire the SAME soft-stop
   // on the first Ctrl+C of a turn (Ctrl+C-once == ESC). Both the normal-turn
@@ -311,72 +181,23 @@ export async function setupSurface(
   // the compositor's onSoftStop because the surface's softStopHandler ref
   // stays null.
   ctx.slashCtx.setSoftStopHandler = installSoftStop;
-  // Mirror the TurnHandles.onStageChange / onContextProgress wiring (see the
-  // runTurn handles object in loop-iteration.ts) onto SlashContext so
-  // skill-dispatch turns (`/review`, `/mint`, plugin skills) drive the SAME
-  // footer rails as normal turns. Without these, the LoopStageBar stays frozen
-  // at "observe" and the status line stays at 0%/$0.00 for the entire skill
-  // turn — the renderer built by createSkillRenderer had no callback to fire.
-  //
-  // `getLoopStageBar` is read lazily: the footer subsystems are constructed
-  // AFTER this phase, but this closure only fires during a turn — long after
-  // the bar exists. Matches the original hoisted-`let loopStageBar` capture.
-  ctx.slashCtx.onStageChange = (stage, signals) => {
-    deps.getLoopStageBar()?.repaint(stage);
-    deps.getMascotBar()?.onStage(stage, signals);
-  };
+
+  // Mirror TurnHandles callbacks onto SlashContext, wire transcript, Telegram
+  // swap, inputSurfaceRef, git sampler, and quota repaint.
+  // See wireSlashCtxCallbacks in surface-setup.wiring.ts for full commentary.
   const maxTurnsNum = (() => { const mt = parseInt(ctx.options.maxTurns, 10); return mt > 0 ? mt : undefined; })();
-  ctx.slashCtx.onContextProgress = async () => {
-    await ctx.contextSampler.refresh();
-    await ctx.gitStatusSampler.refresh();
-    ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler, maxTurnsNum));
-  };
-  // Transcript parity for skill turns: runSkillDispatchTurn appends the
-  // completed `/skill args → assistant text` exchange through this handle,
-  // matching the normal-turn append at onTurnComplete in the loop. Without it,
-  // skill-turn output is absent from the autosaved markdown transcript.
-  ctx.slashCtx.transcript = transcript;
-
-  // AFK bidirectional Telegram (scope.lock criterion 1): expose the surface's
-  // stdin elicitation handler + a swap primitive so `/afk on` can install the
-  // ledger channel (racing a watching daemon's phone reply against this
-  // keyboard handler) and `/afk off` can restore stdin (`null` → reinstall the
-  // stdin handler). This is the authoritative wiring point — `/afk` is a slash
-  // command that only runs after this surface setup, so the bootstrap-time
-  // startup handler is always superseded here. The router captures its handler
-  // at enqueue time (elicitation-router.ts), so swapping mid-session is safe.
-  ctx.slashCtx.stdinElicitationHandler = stdinElicitationHandler;
-  ctx.slashCtx.swapElicitationHandler = (handler) =>
-    elicitationRouter.install(handler ?? stdinElicitationHandler);
-
-  // Wire the armed surface into the elicitation handler's compositor ref so
-  // ask_question suspend/resume can yield stdin raw-mode to rl.question.
-  if (ctx.inputSurfaceRef) {
-    ctx.inputSurfaceRef.current = surface;
-  }
-
-  // Git branch + PR sampler: wire an on-change repaint and kick the initial
-  // sample. Deferred to here (REPL Phase 1) rather than bootstrap so a
-  // bootstrap-only unit test never shells out to git/gh. The branch resolves
-  // in ≈ a local git call and the PR lands when its network lookup settles;
-  // onUpdate repaints the status line so both appear without waiting for a turn.
-  ctx.gitStatusSampler.setOnUpdate(() => {
-    ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler, maxTurnsNum));
-  });
-  void ctx.gitStatusSampler.refresh();
-
-  // Subscription-quota indicator: repaint when the cached quota actually moves.
-  // No debounce here on purpose — the cache only notifies when a ROUNDED
-  // percentage changes, and `repaint` throttles at 100ms with no trailing flush,
-  // so notifying per API response would churn (and sometimes drop) the bottom row.
-  // Invariant: this subscription is process-lifetime, exactly like the git
-  // sampler's onUpdate above — the quota listener set, the status line and the
-  // REPL all die together, so there is no inverse to orphan and no teardown to
-  // sequence. Tests that invoke setupSurface more than once must call
-  // resetQuotaCacheForTests() to clear the module-scope listener set.
-  onQuotaUpdate(() => {
-    ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler, maxTurnsNum));
-  });
+  wireSlashCtxCallbacks(ctx, surface, transcript, deps, maxTurnsNum, stdinElicitationHandler);
 
   return { installSoftStop };
+}
+
+/**
+ * Frame-placement options for the REPL compositor: the pre-arm anchor row
+ * (when the bootstrap measured one) plus content-hug placement, so the live
+ * frame follows committed output and a frame shrink never leaves a blank gap
+ * between content and the prompt or in scrollback
+ * (terminal-compositor.content-hug.ts).
+ */
+function placementArmOpts(preArmAnchorRow: number | undefined): { anchorRow?: number; contentHug: boolean } {
+  return { ...(preArmAnchorRow !== undefined ? { anchorRow: preArmAnchorRow } : {}), contentHug: true };
 }

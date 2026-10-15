@@ -9,6 +9,11 @@ import type { HookRegistry } from '../../../agent/hooks.js';
 import type { TraceWriter } from '../../../agent/trace/index.js';
 import { explicitProviderHints, getApiKeyForModel } from '../../shared-helpers.js';
 import type { CliConfig } from '../../config.js';
+import { MemoryStore } from '../../../agent/memory/index.js';
+import { StateStore } from '../../../agent/state/state-store.js';
+import { WorkspaceStore } from '../../../agent/workspace/workspace-store.js';
+import { getStateDatabasePath } from '../../../paths.js';
+import { env } from '../../../config/env.js';
 
 /**
  * Dependencies for constructing a fresh `AgentSession`. Captures everything
@@ -31,6 +36,13 @@ export interface BuildAgentSessionDeps {
    */
   maxToolUseIterations: number | undefined;
   /**
+   * Session-wide USD budget ceiling from `AFK_MAX_BUDGET_USD`.
+   * `undefined` = uncapped (no behavior change for operators who have not set
+   * the variable). Flows to `AgentConfig.maxBudgetUsd` and is enforced by
+   * `stream-consumer.ts`.
+   */
+  maxBudgetUsd: number | undefined;
+  /**
    * Fully-wired provider factory. Passed as `config.providerFactory` so the
    * ProviderRouter builds a wired provider (with executors, memoryStore,
    * mcpManager) on every turn — enabling cross-family /model swaps without
@@ -40,8 +52,17 @@ export interface BuildAgentSessionDeps {
   hookRegistry: HookRegistry;
   traceWriter: TraceWriter | undefined;
   drainSubagents?: ((reason: string) => Promise<unknown>) | undefined;
+  getPendingChildTerminalWrites?: (() => readonly Promise<void>[]) | undefined;
   /** Live bash output tail reporter factory (REPL-only, issue #1506). */
   bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
+  /**
+   * Session-scoped detach registry for Ctrl+B bash backgrounding (#2542, #2735).
+   * Flows through AgentConfig so providers inject it into every per-query
+   * dispatcher. Absent for subagent forks and headless surfaces.
+   */
+  detachRegistry?: import('../../../agent/tools/detach-registry.js').DetachableToolRegistry;
+  /** Background process registry (`bash run_in_background`); root REPL only. */
+  processJobs?: import('../../../agent/shell-jobs/process-jobs.js').ProcessJobRegistry;
   cwd: string | undefined;
   maxTurns: number;
   autoResumeOnUsageLimit: boolean | undefined;
@@ -84,13 +105,23 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
     ...(deps.temperature !== undefined ? { temperature: deps.temperature } : {}),
     ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
     ...(deps.maxToolUseIterations !== undefined ? { maxToolUseIterations: deps.maxToolUseIterations } : {}),
+    ...(deps.maxBudgetUsd !== undefined ? { maxBudgetUsd: deps.maxBudgetUsd } : {}),
     ...deps.resumeConfig,
     ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}),
     ...(deps.traceWriter !== undefined ? { traceWriter: deps.traceWriter } : {}),
     ...(deps.bashOutputTailReporter !== undefined
       ? { bashOutputTailReporter: deps.bashOutputTailReporter }
       : {}),
+    // #2542/#2735: Detach registry — flows to AgentConfig so providers can
+    // inject it into every per-query dispatcher. Absent for forks.
+    ...(deps.detachRegistry !== undefined
+      ? { detachRegistry: deps.detachRegistry }
+      : {}),
+    ...(deps.processJobs !== undefined ? { processJobs: deps.processJobs } : {}),
     ...(deps.drainSubagents !== undefined ? { drainSubagents: deps.drainSubagents } : {}),
+    ...(deps.getPendingChildTerminalWrites !== undefined
+      ? { getPendingChildTerminalWrites: deps.getPendingChildTerminalWrites }
+      : {}),
     ...(deps.autoResumeOnUsageLimit !== undefined
       ? { autoResumeOnUsageLimit: deps.autoResumeOnUsageLimit }
       : {}),
@@ -114,12 +145,16 @@ export function buildSharedDeps(a: {
   effort: EffortLevel | undefined;
   maxOutputTokens: number | undefined;
   maxToolUseIterations: number | undefined;
+  maxBudgetUsd: number | undefined;
   cliConfig: CliConfig;
   providerFactory: (m: string | undefined) => ModelProvider;
   hookRegistry: HookRegistry;
   traceWriter: TraceWriter | undefined;
   drainSubagents?: ((reason: string) => Promise<unknown>) | undefined;
+  getPendingChildTerminalWrites?: (() => readonly Promise<void>[]) | undefined;
   bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
+  detachRegistry?: import('../../../agent/tools/detach-registry.js').DetachableToolRegistry;
+  processJobs?: import('../../../agent/shell-jobs/process-jobs.js').ProcessJobRegistry;
   effectiveCwd: string | undefined;
   maxTurns: string;
   initialPermissionMode: PermissionMode | undefined;
@@ -134,19 +169,46 @@ export function buildSharedDeps(a: {
     effort: a.effort,
     maxOutputTokens: a.maxOutputTokens,
     maxToolUseIterations: a.maxToolUseIterations,
+    maxBudgetUsd: a.maxBudgetUsd,
     ...(a.cliConfig.baseUrl !== undefined ? { baseUrl: a.cliConfig.baseUrl } : {}),
     ...(a.cliConfig.temperature !== undefined ? { temperature: a.cliConfig.temperature } : {}),
     providerFactory: a.providerFactory,
     hookRegistry: a.hookRegistry,
     traceWriter: a.traceWriter,
     drainSubagents: a.drainSubagents,
+    getPendingChildTerminalWrites: a.getPendingChildTerminalWrites,
     ...(a.bashOutputTailReporter !== undefined
       ? { bashOutputTailReporter: a.bashOutputTailReporter }
       : {}),
+    ...(a.detachRegistry !== undefined
+      ? { detachRegistry: a.detachRegistry }
+      : {}),
+    ...(a.processJobs !== undefined ? { processJobs: a.processJobs } : {}),
     cwd: a.effectiveCwd,
     maxTurns: parseInt(a.maxTurns, 10),
     autoResumeOnUsageLimit: a.cliConfig.autoResumeOnUsageLimit,
     ...(a.initialPermissionMode !== undefined ? { permissionMode: a.initialPermissionMode } : {}),
     ...(a.explicitProvider !== undefined ? { explicitProvider: a.explicitProvider } : {}),
+  };
+}
+
+/** Return type of {@link createBootstrapSharedStores}. */
+export interface BootstrapSharedStores {
+  sharedWorkspaceStore: WorkspaceStore | undefined;
+  sharedMemoryStore: MemoryStore;
+  sharedStateStore: StateStore;
+}
+
+/**
+ * Construct the three session-scoped stores shared across all mid-session
+ * swaps: workspace (optional — disabled via AFK_WORKSPACE_DISABLED), memory,
+ * and state. Extracted from {@link bootstrapSession} to keep that function
+ * within the 200-line function ceiling.
+ */
+export function createBootstrapSharedStores(): BootstrapSharedStores {
+  return {
+    sharedWorkspaceStore: env.AFK_WORKSPACE_DISABLED === '1' ? undefined : new WorkspaceStore(),
+    sharedMemoryStore: new MemoryStore(),
+    sharedStateStore: new StateStore(getStateDatabasePath()),
   };
 }

@@ -16,9 +16,6 @@ import type { CardSpec } from '../render.js';
 import { card } from '../render.js';
 import { commitBlockAbove } from './commit-block.js';
 import { StreamingMarkdownRenderer } from '../markdown-stream.js';
-import { getTerminalWidth } from '../terminal-size.js';
-import { capToMeasure } from '../render/measure.js';
-import { ThinkingLane } from '../commands/interactive/thinking-lane.js';
 import { syntheticResult, formatDoneSummary } from './stream-renderer-source.js';
 import type { OrchestratorCtx } from './stream-renderer-orchestrator.js';
 import { setComposedOverlay } from './stream-renderer-orchestrator.js';
@@ -26,6 +23,9 @@ import {
   extractLatestThinkingClause,
   emitSubagentTextLines,
   synthesizeAgentEntry,
+  handleSubagentChunk,
+  _thinkingTailLastUpdate,
+  _overlayLastUpdate,
 } from './stream-renderer-subagent-helpers.js';
 
 /**
@@ -81,50 +81,6 @@ export interface SubagentCtx {
   orchestratorCtx?: OrchestratorCtx;
 }
 
-/**
- * Item #6 — Per-parentId debounce for setThinkingTail (content chunks).
- *
- * `setThinkingTail` is called on every content chunk, which on a fast-
- * streaming model fires ~10–50 times per second. Each call rebuilds and
- * re-renders the tool-lane overlay, causing visible flicker. This map holds
- * the timestamp of the last accepted setThinkingTail call per parentId.
- *
- * Stored at module scope (not inside the function) because
- * `handleSubagentEvent` is a free function called repeatedly across chunks
- * from the same session, and we need the timestamp to persist between calls.
- *
- * Cleaned up in `finalizeSubagent` via `_thinkingTailLastUpdate.delete(parentId)`
- * to avoid unbounded growth across many short-lived subagents in a long session.
- *
- * External constraint: the map is keyed by parentId (the visual slot in the
- * tool lane), NOT by sourceId — because parentId is the flicker unit. Two
- * sources that share a parent (rare, but possible in grandchild topologies)
- * share the same throttle budget, which is conservative but correct.
- */
-const _thinkingTailLastUpdate = new Map<string, number>();
-
-/**
- * H2 fix — Per-parentId throttle for compositor.setOverlay() calls on
- * high-frequency content and thinking chunks.
- *
- * `setOverlay` (and its downstream `repaint()`) was called on every content
- * and thinking chunk at ~50-80 Hz, driving a full CupFrameRenderer.render()
- * frame on every token. Under cursor-state drift this produces N-fold ghost
- * rows instead of in-place rewrites. Gating behind the same 1500ms window
- * already applied to `setThinkingTail` limits overlay rebuilds to ≤1 per
- * 1500ms for the streaming content/thinking paths, matching the cadence
- * the operator can meaningfully read without visible refresh.
- *
- * Discrete state transitions (tool_use_detail, tool_result, tool_diff,
- * error, finalizeSubagent done) are NOT gated — they always call setOverlay
- * immediately because each represents a real state change the user should
- * see promptly.
- *
- * Same cleanup contract as _thinkingTailLastUpdate: deleted in
- * finalizeSubagent and the error path so the map doesn't grow unboundedly.
- */
-const _overlayLastUpdate = new Map<string, number>();
-
 
 /**
  * Handle one event for a subagent source.
@@ -168,164 +124,9 @@ export function handleSubagentEvent(
       }
       return;
 
-    case 'chunk': {
-      const chunk = event.chunk;
-      if (chunk.type === 'tool_use_detail') {
-        // Thinking→acting boundary for this subagent: cap the per-source
-        // thinking-duration window so the Done row's `· thought Xs · N tok`
-        // stat reports thinking time, not tool-execution wall-clock that
-        // follows. Idempotent — see ThinkingLane.markEnded.
-        source.thinkingLane?.markEnded();
-        source.currentTextEntryId = undefined;
-        const renderer = ctx.streamingMarkdown.get(sourceId);
-        if (renderer) renderer.commitPending();
-
-        // Clear the live thinking tail — the child has transitioned from
-        // reasoning to acting, and the now-visible tool_use is a stronger
-        // progress signal than a stale clause of thought.
-        ctx.toolLane.setThinkingTail(parentId, undefined);
-
-        const cols = getTerminalWidth();
-        const maxWidth = capToMeasure(Math.max(20, cols - 14));  // 14 = indent + glyph/spinner budget
-        ctx.toolLane.addStartWithAgentContext(
-          chunk.toolUseId,
-          chunk.toolName,
-          chunk.toolInput,
-          parentId,
-          maxWidth,
-        );
-        source.stats.toolUses += 1;
-        // Route through the full composed frame so the orchestrator's live-
-        // thinking paragraph is preserved. (Issue #389.)
-        if (ctx.isTTY && ctx.orchestratorCtx) {
-          setComposedOverlay(ctx.orchestratorCtx);
-        }
-      } else if (chunk.type === 'tool_result') {
-        const renderer = ctx.streamingMarkdown.get(sourceId);
-        if (renderer) renderer.commitPending();
-        ctx.toolLane.addResult(chunk.toolUseId, chunk);
-        // Route through the full composed frame so the orchestrator's live-
-        // thinking paragraph is preserved. (Issue #389.)
-        if (ctx.isTTY && ctx.orchestratorCtx) {
-          setComposedOverlay(ctx.orchestratorCtx);
-        }
-      } else if (chunk.type === 'tool_diff') {
-        // Sidecar render-only diff for a subagent's tool call. Late-attach
-        // by toolUseId; no-op if the entry already flushed.
-        ctx.toolLane.addDiff(chunk.toolUseId, chunk.diff);
-        // Route through the full composed frame so the orchestrator's live-
-        // thinking paragraph is preserved. (Issue #389.)
-        if (ctx.isTTY && ctx.orchestratorCtx) {
-          setComposedOverlay(ctx.orchestratorCtx);
-        }
-      } else if (chunk.type === 'content') {
-        // Thinking→acting boundary for this subagent. Same idempotent cap
-        // as the tool_use_detail branch above — the first non-thinking
-        // event freezes the thinking-duration window for inlineSummary().
-        source.thinkingLane?.markEnded();
-        if (!source.currentTextEntryId) {
-          source.currentTextEntryId = '__in_text_block__';
-        }
-        source.contentBuffer += chunk.content;
-
-        if (ctx.isTTY && ctx.compositor) {
-          // TTY: subagent prose is internal reasoning — never commit it to
-          // parent scrollback. Surface the in-flight text as a transient
-          // one-liner under the synthetic Agent row via setThinkingTail
-          // (same visible slot as the thinking-tail path; content overrides
-          // any stale thinking clause). The tail clears on tool_use_detail,
-          // error, panel emission, or finalize. The Done summary row is the
-          // only artifact that lands in the parent transcript.
-          //
-          // Guard: skip the setThinkingTail call for whitespace-only chunks.
-          // A whitespace chunk produces an empty tail from extractLatestThinkingClause,
-          // which would resolve to `undefined` and clear a freshly-installed
-          // thinking-tail before any substantive text has rendered.
-          if (chunk.content.trim()) {
-            const cols = getTerminalWidth();
-            const maxTail = capToMeasure(Math.max(20, cols - 14)); // 14 = indent + glyph budget
-            const tail = extractLatestThinkingClause(source.contentBuffer, maxTail);
-            // Item #6: Throttle setThinkingTail to ≥1500ms per parentId OR a
-            // sentence-boundary arrival. External constraint: the gate is on
-            // parentId (the overlay slot) — that's the unit that flickers.
-            // Sentence boundaries bypass the timer because they signal a
-            // stronger progress transition the operator should see promptly.
-            const now = Date.now();
-            const lastUpdate = _thinkingTailLastUpdate.get(parentId) ?? 0;
-            const isSentenceBoundary = tail ? /[.!?…]$/.test(tail) : false;
-            if (tail && (now - lastUpdate >= 1500 || isSentenceBoundary)) {
-              _thinkingTailLastUpdate.set(parentId, now);
-              ctx.toolLane.setThinkingTail(parentId, tail);
-            }
-          }
-          // H2 fix: gate setComposedOverlay behind the same 1500ms throttle to
-          // prevent driving a full CupFrameRenderer.render() on every content
-          // token. Discrete state transitions (tool_use_detail, tool_result,
-          // tool_diff, error, done) are NOT gated — only the high-frequency
-          // streaming path. Routes through the full composed frame so the
-          // orchestrator's live-thinking paragraph is preserved. (Issue #389.)
-          if (ctx.orchestratorCtx) {
-            const now = Date.now();
-            const lastOverlay = _overlayLastUpdate.get(parentId) ?? 0;
-            if (now - lastOverlay >= 1500) {
-              _overlayLastUpdate.set(parentId, now);
-              setComposedOverlay(ctx.orchestratorCtx);
-            }
-          }
-        } else {
-          // Non-TTY: keep the existing gutter-prefixed scrollback emission so
-          // logs / CI / headless runs retain the full prose for debugging.
-          // Each completed line (delimited by `\n`) flushes through
-          // emitSubagentTextLines with the `│ ` gutter prefix and one level
-          // of indent under the synthetic Agent entry.
-          const newlineIdx = source.contentBuffer.lastIndexOf('\n');
-          if (newlineIdx !== -1) {
-            const ready = source.contentBuffer.slice(0, newlineIdx);
-            source.contentBuffer = source.contentBuffer.slice(newlineIdx + 1);
-            emitSubagentTextLines(ready, ctx);
-          }
-        }
-      } else if (chunk.type === 'thinking') {
-        // Thinking is cascaded from the orchestrator's mode. We do NOT
-        // stream the raw thinking text into scrollback — that's deliberately
-        // noisier than what the orchestrator itself does (which also only
-        // emits a summary). Instead we:
-        //   1. Buffer the thinking per-source so we can emit a single
-        //      `· thought Xs · Ntok` annotation on the Done row.
-        //   2. In `'live'` mode, render the latest clause as a single dim
-        //      italic line under the synthetic Agent row (the "thinking
-        //      tail" — see ToolEntry.thinkingTail) so the user can see the
-        //      child IS doing something while the parent's spinner ticks.
-        //      The tail updates in place; we never commit thinking text to
-        //      scrollback.
-        // The synthetic Agent row itself is created by `process()` on the
-        // very first event for a source — including this one — so a child
-        // that opens with extended thinking becomes visible immediately
-        // instead of disappearing behind the parent's "Decrypting…" spinner.
-        if (ctx.thinkingMode === 'off') return;
-        if (!source.thinkingLane) source.thinkingLane = new ThinkingLane();
-        source.thinkingLane.push(chunk.content);
-        if (ctx.thinkingMode === 'live' && ctx.isTTY && ctx.orchestratorCtx) {
-          const cols = getTerminalWidth();
-          const maxTail = capToMeasure(Math.max(20, cols - 14));
-          const tail = extractLatestThinkingClause(source.thinkingLane.peek(), maxTail);
-          if (tail) ctx.toolLane.setThinkingTail(parentId, tail);
-          // H2 fix: gate setComposedOverlay behind the same 1500ms throttle to
-          // prevent driving a full CupFrameRenderer.render() on every thinking
-          // token. Routes through the full composed frame so the orchestrator's
-          // live-thinking paragraph is preserved. (Issue #389.)
-          {
-            const now = Date.now();
-            const lastOverlay = _overlayLastUpdate.get(parentId) ?? 0;
-            if (now - lastOverlay >= 1500) {
-              _overlayLastUpdate.set(parentId, now);
-              setComposedOverlay(ctx.orchestratorCtx);
-            }
-          }
-        }
-      }
+    case 'chunk':
+      handleSubagentChunk(event.chunk, sourceId, source, parentId, ctx);
       return;
-    }
 
     case 'message':
       return;
@@ -347,21 +148,7 @@ export function handleSubagentEvent(
       _thinkingTailLastUpdate.delete(parentId);
       // H2 fix: clean up the overlay throttle entry on the error path too.
       _overlayLastUpdate.delete(parentId);
-      {
-        const errorSummary = `error — ${event.error.message}`;
-        // Invariant: set BOTH `addResult` (the entry's own result) AND
-        // `setAgentResultSummary` (the rendered Done/error line under the
-        // Agent header). The done-path mirrors this in `finalizeSubagent`
-        // (see this file ~540). Without setAgentResultSummary, the Agent
-        // block renders WITHOUT a terminal summary line — the user sees
-        // the in-flight tool children but no indication of how the
-        // subagent ended. The scrollback commit on the renderer-side
-        // ('error' branch of StreamRenderer.process) reads
-        // agentResultSummary to render the block's bottom row, so the
-        // omission here was the visible-error-vanishes regression.
-        ctx.toolLane.setAgentResultSummary(parentId, errorSummary);
-        ctx.toolLane.addResult(parentId, syntheticResult(errorSummary, true));
-      }
+      settleSubagentError(ctx.toolLane, parentId, event.error.message);
       // Route through the full composed frame so the orchestrator's live-
       // thinking paragraph is preserved. (Issue #389.)
       if (ctx.isTTY && ctx.orchestratorCtx) {
@@ -407,6 +194,31 @@ export function handleSubagentEvent(
       // wrong one.
       return;
   }
+}
+
+/**
+ * Stamp a subagent's terminal error onto its Agent entry and bubble the
+ * failure to every NESTING ancestor.
+ *
+ * Invariant: set BOTH `addResult` (the entry's own result) AND
+ * `setAgentResultSummary` (the rendered Done/error line under the Agent
+ * header). The done-path mirrors this in {@link finalizeSubagent}. Without
+ * setAgentResultSummary, the Agent block renders WITHOUT a terminal summary
+ * line: the user sees the in-flight tool children but no indication of how
+ * the subagent ended. The scrollback commit on the renderer side ('error'
+ * branch of StreamRenderer.process) reads agentResultSummary to render the
+ * block's bottom row, so omitting it was the visible-error-vanishes
+ * regression.
+ *
+ * Invariant: `propagateChildFailure` runs AFTER `addResult` so the failed
+ * entry's result is stamped before the ancestor walk increments each
+ * ancestor's `failedChildCount` (rendered as the overlay's `⚠ N` badge).
+ */
+function settleSubagentError(toolLane: ToolLane, parentId: string, message: string): void {
+  const errorSummary = `error — ${message}`;
+  toolLane.setAgentResultSummary(parentId, errorSummary);
+  toolLane.addResult(parentId, syntheticResult(errorSummary, true));
+  toolLane.propagateChildFailure(parentId);
 }
 
 /**

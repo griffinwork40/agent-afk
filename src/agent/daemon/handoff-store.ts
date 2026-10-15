@@ -23,6 +23,8 @@ import { mkdir, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/p
 import { join } from 'node:path';
 import { assertSafeJobId, getHandoffsDir } from '../../paths.js';
 import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
+import { isErrnoCode } from '../../utils/errors.js';
+import { debugLog } from '../../utils/debug.js';
 
 // ---------------------------------------------------------------------------
 // HandoffRecord schema
@@ -34,7 +36,7 @@ import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
  * - 'mcp'           — MCP server elicitation (form / url mode)
  * - 'path_approval' — filesystem path approval gate
  */
-export type HandoffRequestType = 'ask_question' | 'mcp' | 'path_approval';
+type HandoffRequestType = 'ask_question' | 'mcp' | 'path_approval';
 
 /**
  * Telegram route information needed to re-present the question after a
@@ -98,6 +100,26 @@ export interface HandoffRecord {
   answeredAt?: string;
   /** Which surface recorded the answer ('telegram' | 'web' | 'repl'). */
   answerSource?: string;
+  /**
+   * Opaque identity of the responder for provenance tracking.
+   *
+   * Format is surface-specific:
+   *   - Telegram: `"<userId>"` (numeric string) or `"<userId>:<username>"` when
+   *     a username is available (e.g. `"123456789:alice"`).
+   *   - Web: `"web:<remoteIp>"` when the server captures the remote address.
+   *   - REPL: `"repl"` (single interactive operator, no meaningful identity).
+   *
+   * Intentionally opaque to the store layer — callers supply whatever
+   * identity token their surface exposes; the consumer (audit log, PR 3)
+   * parses it with surface-specific logic.
+   *
+   * **PII note**: Telegram userId and username are personal data. This field
+   * is written to a 0o600 file under `getHandoffsDir()`. Records are deleted
+   * by `deleteHandoff` / `cleanupHandoff` once the answer has been consumed.
+   * Callers that retain records for audit purposes are responsible for their
+   * own retention and deletion policy.
+   */
+  responderIdentity?: string;
   /** The daemon task command, preserved for re-enqueue with injected answer. */
   originalCommand: string;
   /**
@@ -175,7 +197,7 @@ export async function readHandoff(
     const raw = await readFile(filePath, 'utf-8');
     return JSON.parse(raw) as HandoffRecord;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    if (isErrnoCode(err, 'ENOENT')) return null;
     throw err;
   }
 }
@@ -196,7 +218,7 @@ export async function deleteHandoff(
   try {
     await rm(handoffPath(handoffsDir, taskId), { force: true });
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    if (isErrnoCode(err, 'ENOENT')) return;
     throw err;
   }
 }
@@ -276,7 +298,7 @@ export async function withHandoffLock<T>(
   try {
     await writeFile(lock, '', { flag: 'wx', mode: 0o600 });
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+    if (isErrnoCode(err, 'EEXIST')) {
       // Check whether the lock is stale (crash-leftover). A fresh lock means a
       // genuine concurrent holder — give up immediately.
       let lockMtime: number;
@@ -297,7 +319,7 @@ export async function withHandoffLock<T>(
       try {
         await writeFile(lock, '', { flag: 'wx', mode: 0o600 });
       } catch (retryErr) {
-        if ((retryErr as NodeJS.ErrnoException).code === 'EEXIST') {
+        if (isErrnoCode(retryErr, 'EEXIST')) {
           // Genuine race on the retry — another process won.
           return null;
         }
@@ -317,6 +339,19 @@ export async function withHandoffLock<T>(
 }
 
 /**
+ * Options for `updateHandoffAnswer`.
+ */
+export interface UpdateHandoffAnswerOpts {
+  /** Override the handoffs directory (defaults to `getHandoffsDir()`). */
+  handoffsDir?: string;
+  /**
+   * Optional opaque identity token for the responder (surface-specific).
+   * See `HandoffRecord.responderIdentity` for format details and PII note.
+   */
+  responderIdentity?: string;
+}
+
+/**
  * Record a human answer for the given taskId using an exclusive-create lock
  * file as a compare-and-swap gate to prevent TOCTOU races.
  *
@@ -328,10 +363,10 @@ export async function withHandoffLock<T>(
  *   3. Write the updated record atomically, then release the lock.
  *   4. Return { won: true } on success.
  *
- * @param taskId      - The daemon task ID to update.
- * @param answer      - The human's response value.
- * @param source      - Which surface provided the answer ('telegram' | 'web' | 'repl').
- * @param handoffsDir - Override the handoffs directory (defaults to `getHandoffsDir()`).
+ * @param taskId  - The daemon task ID to update.
+ * @param answer  - The human's response value.
+ * @param source  - Which surface provided the answer ('telegram' | 'web' | 'repl').
+ * @param opts    - Optional overrides: `handoffsDir` and `responderIdentity`.
  * @throws If no record exists for the taskId.
  * @returns UpdateHandoffResult — won: true if this caller claimed the record.
  */
@@ -339,8 +374,9 @@ export async function updateHandoffAnswer(
   taskId: string,
   answer: unknown,
   source: string,
-  handoffsDir: string = getHandoffsDir(),
+  opts: UpdateHandoffAnswerOpts = {},
 ): Promise<UpdateHandoffResult> {
+  const { handoffsDir = getHandoffsDir(), responderIdentity } = opts;
   assertSafeJobId(taskId);
   await ensureHandoffsDir(handoffsDir);
 
@@ -364,8 +400,16 @@ export async function updateHandoffAnswer(
       answer,
       answeredAt: new Date().toISOString(),
       answerSource: source,
+      ...(responderIdentity !== undefined ? { responderIdentity } : {}),
     };
     await atomicWriteJson(handoffPath(handoffsDir, taskId), updated);
+
+    if (responderIdentity !== undefined) {
+      debugLog(`[handoff-store] responderIdentity captured for task ${taskId} (present, masked)`);
+    } else {
+      debugLog(`[handoff-store] responderIdentity absent for task ${taskId} (source: ${source})`);
+    }
+
     return { won: true };
   });
 

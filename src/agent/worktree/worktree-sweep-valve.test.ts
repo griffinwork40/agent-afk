@@ -87,8 +87,7 @@ describe('readRootSweepCount', () => {
     });
   });
 
-  // Windows: symlink behavior differs (requires elevation / Developer Mode);
-  // the production-code symlink guard is a POSIX-path-safety invariant.
+  // Windows: genuinely POSIX-only — symlink creation requires elevation/Developer Mode on Windows; O_EXCL symlink guard is POSIX
   it.skipIf(process.platform === 'win32')('refuses a symlinked marker instead of following it, and never writes through it', async () => {
     // Regression (#771 review, F-S1): the marker was written with a plain
     // writeFile (O_TRUNC, follows symlinks), so a symlink at `.sweep-runs`

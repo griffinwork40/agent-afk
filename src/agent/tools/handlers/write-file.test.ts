@@ -168,7 +168,7 @@ describe('writeFileHandler', () => {
     expect(result.content).toBe('Aborted');
   });
 
-  // Windows: POSIX permission bits (chmod) not supported on NTFS
+  // Windows: genuinely POSIX-only — NTFS has no POSIX permission bits; chmod read-only directory behavior differs
   it.skipIf(isWin32)('returns permission error for read-only parent directory', async () => {
     const parentDir = join(tmpDir, 'readonly');
     mkdirSync(parentDir, { recursive: true });
@@ -221,8 +221,8 @@ describe('writeFileHandler cwd containment', () => {
     }
   });
 
-  it('rejects absolute path outside context.cwd', async () => {
-    const context: ToolHandlerContext = { cwd: tempDir };
+  it('rejects absolute path outside context.resolveBase', async () => {
+    const context: ToolHandlerContext = { resolveBase: tempDir };
     const result = await writeFileHandler(
       { file_path: '/etc/passwd', content: 'bad' },
       AbortSignal.timeout(5000),
@@ -232,8 +232,8 @@ describe('writeFileHandler cwd containment', () => {
     expect(result.content).toMatch(/outside the allowed/);
   });
 
-  it('resolves relative path against context.cwd', async () => {
-    const context: ToolHandlerContext = { cwd: tempDir };
+  it('resolves relative path against context.resolveBase', async () => {
+    const context: ToolHandlerContext = { resolveBase: tempDir };
     const result = await writeFileHandler(
       { file_path: 'relative.txt', content: 'relative content' },
       AbortSignal.timeout(5000),
@@ -244,9 +244,9 @@ describe('writeFileHandler cwd containment', () => {
     expect(readFileSync(join(tempDir, 'relative.txt'), 'utf8')).toBe('relative content');
   });
 
-  it('allows absolute path within context.cwd', async () => {
+  it('allows absolute path within context.resolveBase', async () => {
     const filePath = join(tempDir, 'inside.txt');
-    const context: ToolHandlerContext = { cwd: tempDir };
+    const context: ToolHandlerContext = { resolveBase: tempDir };
     const result = await writeFileHandler(
       { file_path: filePath, content: 'inside data' },
       AbortSignal.timeout(5000),
@@ -256,7 +256,7 @@ describe('writeFileHandler cwd containment', () => {
     expect(readFileSync(filePath, 'utf8')).toBe('inside data');
   });
 
-  it('falls back to process.cwd() resolution when no cwd in context', async () => {
+  it('falls back to process.cwd() resolution when no resolveBase in context', async () => {
     const filePath = join(tempDir, 'nocontext.txt');
     const context: ToolHandlerContext = {};
     const result = await writeFileHandler(
@@ -422,7 +422,7 @@ describe('writeFileHandler cwd containment', () => {
       expect((result as any).render.diff.addedLines).toBeGreaterThan(0);
     });
 
-    // Windows: POSIX permission bits (chmod 0o200) not supported on NTFS
+    // Windows: genuinely POSIX-only — NTFS has no POSIX permission bits; chmod write-only (0o200) behavior differs
     it.skipIf(isWin32)('F14: suppresses diff when readFile throws a non-ENOENT error (e.g. EACCES)', async () => {
       // Create a file then make it write-only (no read bit).
       // readFile will throw EACCES; the handler must still write successfully

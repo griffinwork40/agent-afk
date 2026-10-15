@@ -10,7 +10,7 @@
  * before launcher.ts is imported.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import nodePath from 'node:path';
@@ -44,6 +44,7 @@ interface StubBrowser {
   newContext: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   isConnected: ReturnType<typeof vi.fn>;
+  process: ReturnType<typeof vi.fn>;
   _contexts: StubContext[];
 }
 
@@ -102,9 +103,15 @@ function makeStubContext(): StubContext {
 }
 
 function makeStubBrowser(): StubBrowser {
+  const stubProcess = { kill: vi.fn().mockReturnValue(true) };
   const b: StubBrowser = {
     close: vi.fn().mockResolvedValue(undefined),
     isConnected: vi.fn().mockReturnValue(true),
+    // Playwright's launched browsers expose browser.process() returning a
+    // ChildProcess-like object with a .kill() method. CDP/remote browsers
+    // return null. Default to returning the stub process so SIGKILL tests
+    // can assert on kill() without extra setup.
+    process: vi.fn().mockReturnValue(stubProcess),
     newContext: vi.fn(),
     _contexts: [],
   };
@@ -132,11 +139,26 @@ vi.mock('playwright', () => ({
   },
 }));
 
+vi.mock('../../config/env.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config/env.js')>();
+  return {
+    ...actual,
+    privateHostsAllowed: vi.fn(() => false),
+  };
+});
+
+vi.mock('../../http-client/egress-guard.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../http-client/egress-guard.js')>();
+  return { ...actual, privateHostsAllowed: vi.fn(() => false) };
+});
+
 // Import AFTER the mock so the hoisted mock is in place.
 import { BrowserLauncher } from './launcher.js';
 import type { BrowserConfig } from '../types.js';
 import { chromium } from 'playwright';
 import { getBrowserProfileStateDir, getBrowserStorageStatePath } from '../../paths.js';
+import { privateHostsAllowed } from '../../config/env.js';
+import { privateHostsAllowed as guardPrivateHostsAllowed } from '../../http-client/egress-guard.js';
 
 // ---------------------------------------------------------------------------
 // Test config fixture
@@ -413,6 +435,71 @@ describe('BrowserLauncher', () => {
       expect(currentStubBrowser.newContext).toHaveBeenCalledTimes(1);
     });
 
+    it('installs an SSRF guard on interactive navigation requests', async () => {
+      vi.mocked(privateHostsAllowed).mockReturnValue(false);
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      const ctx = await launcher.ensureContext('session-A') as unknown as StubContext;
+
+      expect(ctx.route).toHaveBeenCalledWith('**/*', expect.any(Function));
+      const handler = ctx.route.mock.calls[0]?.[1] as (route: {
+        request: () => { url: () => string; isNavigationRequest: () => boolean };
+        continue: () => Promise<void>;
+        abort: (reason: string) => Promise<void>;
+      }) => Promise<void>;
+
+      const blocked = {
+        request: () => ({
+          url: () => 'http://169.254.169.254/latest/meta-data/',
+          isNavigationRequest: () => true,
+        }),
+        continue: vi.fn().mockResolvedValue(undefined),
+        abort: vi.fn().mockResolvedValue(undefined),
+      };
+      await handler(blocked);
+      expect(blocked.continue).not.toHaveBeenCalled();
+      expect(blocked.abort).toHaveBeenCalledWith('blockedbyclient');
+
+      // Item 2: subresource requests on http(s) are also guarded — IMDS must be blocked.
+      const subresource = {
+        request: () => ({
+          url: () => 'http://169.254.169.254/latest/meta-data/',
+          isNavigationRequest: () => false,
+        }),
+        continue: vi.fn().mockResolvedValue(undefined),
+        abort: vi.fn().mockResolvedValue(undefined),
+      };
+      await handler(subresource);
+      expect(subresource.abort).toHaveBeenCalledWith('blockedbyclient');
+      expect(subresource.continue).not.toHaveBeenCalled();
+    });
+
+    it('skips route install when privateHostsAllowed is true (item 7)', async () => {
+      vi.mocked(guardPrivateHostsAllowed).mockReturnValue(true);
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      const ctx = await launcher.ensureContext('session-A') as unknown as StubContext;
+      expect(ctx.route).not.toHaveBeenCalled();
+      vi.mocked(guardPrivateHostsAllowed).mockReturnValue(false);
+    });
+
+    it('passes non-http(s) requests (e.g. data:) through unchanged (item 2)', async () => {
+      vi.mocked(guardPrivateHostsAllowed).mockReturnValue(false);
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      const ctx = await launcher.ensureContext('session-A') as unknown as StubContext;
+      const handler = ctx.route.mock.calls[0]?.[1] as (route: {
+        request: () => { url: () => string; isNavigationRequest: () => boolean };
+        continue: () => Promise<void>;
+        abort: (r: string) => Promise<void>;
+      }) => Promise<void>;
+      const dataRoute = {
+        request: () => ({ url: () => 'data:text/plain,hello', isNavigationRequest: () => false }),
+        continue: vi.fn().mockResolvedValue(undefined),
+        abort: vi.fn().mockResolvedValue(undefined),
+      };
+      await handler(dataRoute);
+      expect(dataRoute.continue).toHaveBeenCalledOnce();
+      expect(dataRoute.abort).not.toHaveBeenCalled();
+    });
+
     it('returns the cached context on repeated calls for the same session', async () => {
       const launcher = new BrowserLauncher(TEST_CONFIG);
       const ctx1 = await launcher.ensureContext('session-A');
@@ -588,6 +675,164 @@ describe('BrowserLauncher', () => {
       expect(out.finalUrl).toBe('about:blank');
       // Context must still be torn down.
       expect(ctx.close).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // renderHtml — abort + hung-close safety (issue #2519)
+  // -------------------------------------------------------------------------
+
+  describe('renderHtml — abort and hung-close safety (issue #2519)', () => {
+    beforeEach(() => {
+      vi.useRealTimers();
+    });
+
+    // afterEach ensures fake timers don't leak into sibling tests even when a
+    // test fails mid-run; afterAll alone would leave them active if an earlier
+    // test in this suite had installed vi.useFakeTimers() and then thrown.
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    afterAll(() => {
+      vi.useRealTimers();
+    });
+
+    it('context.close() is called when signal aborts before navigation resolves', async () => {
+      // Simulate: goto() hangs, caller aborts → onAbort fires → close() called.
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      const ctx = makeStubContext();
+      currentStubBrowser.newContext.mockResolvedValueOnce(ctx);
+
+      const ac = new AbortController();
+
+      // close() resolves immediately so closeContextSafe settles fast.
+      ctx.close.mockResolvedValue(undefined);
+
+      ctx.newPage.mockImplementationOnce(async () => {
+        const p = makeStubPage();
+        // goto() resolves after abort fires, simulating a late-completing navigation.
+        p.goto.mockImplementation(
+          () =>
+            new Promise<{ status: () => number }>((resolve) => {
+              // Abort first, then resolve goto on the next tick.
+              setImmediate(() => resolve({ status: () => 200 }));
+            }),
+        );
+        p.content.mockResolvedValue('<html><body>ok</body></html>');
+        p.url.mockReturnValue('https://example.com/');
+        ctx._pages.push(p);
+        return p;
+      });
+
+      // Abort synchronously so onAbort fires immediately.
+      ac.abort(new Error('subagent timeout'));
+
+      // renderHtml must still settle (pre-aborted short-circuit path).
+      await launcher
+        .renderHtml('https://example.com/', {
+          timeoutMs: 5000,
+          waitUntil: 'load',
+          signal: ac.signal,
+        })
+        .catch(() => undefined);
+
+      // context.close() must have been called (by closeContextSafe in pre-abort path).
+      expect(ctx.close).toHaveBeenCalled();
+    });
+
+    it('falls back to browser.process().kill("SIGKILL") when close() hangs', async () => {
+      // Simulate frozen Chromium: context.close() never resolves.
+      // We use fake timers so the 3 s CONTEXT_CLOSE_TIMEOUT_MS fires instantly.
+      vi.useFakeTimers();
+
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      const ctx = makeStubContext();
+      currentStubBrowser.newContext.mockResolvedValueOnce(ctx);
+
+      // close() never resolves — the frozen-browser scenario.
+      ctx.close.mockReturnValue(new Promise<void>(() => { /* intentionally never resolves */ }));
+
+      ctx.newPage.mockImplementationOnce(async () => {
+        const p = makeStubPage();
+        // goto() rejects immediately so we reach the finally block quickly.
+        p.goto.mockRejectedValue(new Error('navigation failed'));
+        ctx._pages.push(p);
+        return p;
+      });
+
+      // Start the render. It will reach the finally block, call closeContextSafe,
+      // which races context.close() (hung) vs setTimeout(3000).
+      const renderPromise = launcher
+        .renderHtml('https://example.com/', { timeoutMs: 5000, waitUntil: 'load' })
+        .catch(() => undefined);
+
+      // Advance all timers (fires the 3 s closeContextSafe timeout).
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+
+      await renderPromise;
+
+      // The hung close() triggered the SIGKILL fallback.
+      expect(ctx.close).toHaveBeenCalled();
+      const stubProcess = currentStubBrowser.process() as { kill: ReturnType<typeof vi.fn> };
+      expect(stubProcess.kill).toHaveBeenCalledWith('SIGKILL');
+    });
+
+    it('does not kill the browser when close() resolves quickly', async () => {
+      // Happy path: close() resolves in time — no SIGKILL needed.
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      const ctx = makeStubContext();
+      currentStubBrowser.newContext.mockResolvedValueOnce(ctx);
+      ctx.close.mockResolvedValue(undefined);
+
+      ctx.newPage.mockImplementationOnce(async () => {
+        const p = makeStubPage();
+        p.goto.mockResolvedValue({ status: () => 200 });
+        p.content.mockResolvedValue('<html><body>ok</body></html>');
+        p.url.mockReturnValue('https://example.com/');
+        ctx._pages.push(p);
+        return p;
+      });
+
+      await launcher.renderHtml('https://example.com/', { timeoutMs: 5000, waitUntil: 'load' });
+
+      expect(ctx.close).toHaveBeenCalledTimes(1);
+      const stubProcess = currentStubBrowser.process() as { kill: ReturnType<typeof vi.fn> };
+      expect(stubProcess.kill).not.toHaveBeenCalled();
+    });
+
+    it('falls back gracefully when browser.process() returns null (CDP/remote browser)', async () => {
+      // CDP / remote browsers expose null from browser.process() — the fallback
+      // must not throw when it cannot SIGKILL.
+      vi.useFakeTimers();
+
+      currentStubBrowser.process.mockReturnValue(null);
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      const ctx = makeStubContext();
+      currentStubBrowser.newContext.mockResolvedValueOnce(ctx);
+
+      // close() hangs — triggers the timeout path.
+      ctx.close.mockReturnValue(new Promise<void>(() => { /* never resolves */ }));
+
+      ctx.newPage.mockImplementationOnce(async () => {
+        const p = makeStubPage();
+        p.goto.mockRejectedValue(new Error('navigation failed'));
+        ctx._pages.push(p);
+        return p;
+      });
+
+      const renderPromise = launcher
+        .renderHtml('https://example.com/', { timeoutMs: 5000, waitUntil: 'load' })
+        .catch(() => undefined);
+
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+
+      // Must resolve cleanly — no unhandled rejection when process() is null.
+      await renderPromise;
+
+      expect(ctx.close).toHaveBeenCalled();
     });
   });
 
@@ -1155,5 +1400,49 @@ describe('BrowserLauncher — chromium-missing launch decoration', () => {
     expect(fastFailed?.message).toBe(first?.message);
     // Only one real launch attempt was paid for — the point of issue #722.
     expect(vi.mocked(chromium.launch)).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Guarded egress proxy wiring (#2301, ADR 20261014 PATH_B)
+// ---------------------------------------------------------------------------
+
+describe('BrowserLauncher — guarded egress proxy launch wiring', () => {
+  beforeEach(() => {
+    currentStubBrowser = makeStubBrowser();
+    vi.mocked(chromium.launch).mockClear();
+    vi.mocked(chromium.launch).mockImplementation(async () => currentStubBrowser as never);
+  });
+
+  it('launches Chromium through a listening 127.0.0.1 proxy with QUIC/WebRTC-UDP egress disabled', async () => {
+    const launcher = new BrowserLauncher(TEST_CONFIG);
+    await launcher.ensureBrowser();
+    const opts = vi.mocked(chromium.launch).mock.calls[0]?.[0];
+    expect(opts?.proxy?.server).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(opts?.proxy?.bypass).toBe('<-loopback>');
+    expect(opts?.args).toEqual(['--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp']);
+    expect(launcher.egressLog()).toBeDefined();
+    await launcher.shutdown();
+    expect(launcher.egressLog()).toBeUndefined();
+  });
+
+  it('a failed launch stops the proxy', async () => {
+    vi.mocked(chromium.launch).mockRejectedValueOnce(new Error('boom'));
+    const launcher = new BrowserLauncher(TEST_CONFIG);
+    await expect(launcher.ensureBrowser()).rejects.toThrow();
+    expect(launcher.egressLog()).toBeUndefined();
+  });
+
+  it('installs no proxy when AFK_WEB_ALLOW_PRIVATE_HOSTS opts out', async () => {
+    vi.mocked(guardPrivateHostsAllowed).mockReturnValue(true);
+    try {
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      await launcher.ensureBrowser();
+      expect(vi.mocked(chromium.launch).mock.calls[0]?.[0]).toEqual({ headless: true });
+      expect(launcher.egressLog()).toBeUndefined();
+      await launcher.shutdown();
+    } finally {
+      vi.mocked(guardPrivateHostsAllowed).mockReturnValue(false);
+    }
   });
 });

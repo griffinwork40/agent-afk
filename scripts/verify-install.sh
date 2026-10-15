@@ -3,7 +3,7 @@
 #
 # Scenarios:
 #   1. PATH gap detection: postinstall prints remediation banner
-#   2. dist/postinstall.mjs artifact exists (build-time check)
+#   2. scripts/postinstall.mjs ships in the npm tarball (package.json#files)
 #   3. postinstall.mjs exits 0 unconditionally (no crash on error path)
 #
 # Usage: bash scripts/verify-install.sh
@@ -46,13 +46,13 @@ else
 fi
 rm -rf "$FAKE_PREFIX"
 
-# ─── Scenario 2: dist/postinstall.mjs exists ─────────────────────────────────
+# ─── Scenario 2: scripts/postinstall.mjs ships in the tarball ────────────────
 echo ""
-echo "Scenario 2: dist/postinstall.mjs exists after build"
-if [ -f "dist/postinstall.mjs" ]; then
-  pass "dist/postinstall.mjs exists"
+echo "Scenario 2: scripts/postinstall.mjs is in the npm tarball"
+if npm pack --dry-run --ignore-scripts --json 2>/dev/null | grep -q '"path": "scripts/postinstall.mjs"'; then
+  pass "scripts/postinstall.mjs ships"
 else
-  fail "dist/postinstall.mjs NOT found (run 'npm run build:dist' first)"
+  fail "scripts/postinstall.mjs NOT in tarball (check package.json#files)"
 fi
 
 # ─── Scenario 3: postinstall exits 0 unconditionally ────────────────────────

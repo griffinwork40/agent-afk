@@ -22,6 +22,7 @@ import { wireQueryDispatcher } from './query/dispatcher-wiring.js';
 import { assembleQueryPrompt } from './query/prompt-assembly.js';
 import { dumpIfEnabled } from '../../session/prompt-dump.js';
 import type { ProviderQueryContext } from './provider-context.js';
+import { normalizeSystemPromptOverlay } from '../shared/system-prompt.js';
 
 /** Everything the second half of `query()` needs from this one. */
 export interface QuerySetupResult {
@@ -37,6 +38,7 @@ export interface QuerySetupResult {
   queryDispatcher: ReturnType<typeof wireQueryDispatcher>['queryDispatcher'];
   runtimeStateSource: ReturnType<typeof wireQueryDispatcher>['runtimeStateSource'];
   toolDefs: ReturnType<typeof wireQueryDispatcher>['toolDefs'];
+  modelToolsFactory: ReturnType<typeof wireQueryDispatcher>['modelToolsFactory'];
   resolvedSessionId: ReturnType<typeof wireQueryDispatcher>['resolvedSessionId'];
   stableSystemPrefix: ReturnType<typeof assembleQueryPrompt>['stableSystemPrefix'];
   toolSystemAppend: ReturnType<typeof assembleQueryPrompt>['toolSystemAppend'];
@@ -45,6 +47,10 @@ export interface QuerySetupResult {
 /**
  * Resolve the user-supplied system prompt to a plain string.
  *
+ * Delegates to `normalizeSystemPromptOverlay` (shared/system-prompt.ts) so
+ * both providers use the same logic (#3261). Kept here for callers that
+ * import it by this name.
+ *
  * - `string` → returned as-is when non-empty.
  * - `{ type: 'preset', preset: 'claude_code', append?: string }` → the preset
  *   itself has no analog on the direct path, so we drop it and forward only
@@ -52,13 +58,7 @@ export interface QuerySetupResult {
  * - everything else → `null`.
  */
 export function resolveUserSystem(sp: AgentConfig['systemPrompt']): string | null {
-  if (sp === undefined) return null;
-  if (typeof sp === 'string') return sp.length > 0 ? sp : null;
-  if (typeof sp === 'object' && sp !== null && 'append' in sp) {
-    const append = (sp as { append?: string }).append;
-    return append && append.length > 0 ? append : null;
-  }
-  return null;
+  return normalizeSystemPromptOverlay(sp);
 }
 
 /** Run the credential/model/dispatcher/prompt half of `query()`. */
@@ -140,13 +140,14 @@ export function setUpQuerySession(
   // declare/capture/assign sequence for `queryDispatcher` lives entirely
   // inside this helper — see its module header; splitting it reintroduces
   // the stale-tool-list hazard (#824).
-  const { queryDispatcher, runtimeStateSource, toolDefs, resolvedSessionId } = wireQueryDispatcher({
+  const { queryDispatcher, runtimeStateSource, toolDefs, resolvedSessionId, modelToolsFactory } = wireQueryDispatcher({
     config,
     model,
     permissionMode,
     surface: ctx.surface,
     providerName,
     externalTools: ctx.externalTools,
+    customToolSchemas: ctx.customToolSchemas,
     sharedReadRoots,
     sharedWriteRoots,
     // Live cwd: `_currentCwd` is re-seeded from this query's config above,
@@ -155,6 +156,10 @@ export function setUpQuerySession(
     // is re-read. Same `||` fall-through as the `cwd` const below, so the
     // `- Working directory:` and `- Workspace:` lines can never disagree.
     getCwd: () => ctx.getCurrentCwd() || config.cwd || process.cwd(),
+    // Containment base for the dispatcher: the live re-anchored cwd or the
+    // configured one, and NEVER the `process.cwd()` display fallback above
+    // (undefined = unconfined; see DispatcherWiringArgs.getDispatcherCwd).
+    getDispatcherCwd: () => ctx.getCurrentCwd() || config.cwd,
     getMcpTools: () => ctx.mcpManager?.getMcpTools() ?? [],
     getMcpServerStates: () => ctx.mcpManager?.getServerStates() ?? [],
     getSubagents: () =>
@@ -175,12 +180,13 @@ export function setUpQuerySession(
     cwd,
     surface: ctx.surface,
     readOnlyMemory: ctx.readOnlyMemory,
+    readOnlyState: ctx.readOnlyState,
     workspaceEnabled: ctx.workspaceStore !== undefined,
-    // Truthiness, NOT `!== undefined`: this must stay in lockstep with the
-    // constructor's `if (opts.skillExecutor) schemas.push(skillTool)` gate.
-    // Splitting them would let a falsy-but-defined executor inject a skill
-    // manifest into the system prompt with no `skill` tool registered.
-    hasSkillExecutor: Boolean(ctx.skillExecutor),
+    // Pass the executor (not just a boolean) so assembleQueryPrompt can call
+    // getManifestScope() for plugin/allowlist scoping. The truthiness gate is
+    // preserved: manifest is built iff skillExecutor is truthy (same invariant
+    // as the constructor's `if (opts.skillExecutor) schemas.push(skillTool)`).
+    skillExecutor: ctx.skillExecutor ?? undefined,
     runtimeStateSource,
     userSystem,
   });
@@ -220,6 +226,7 @@ export function setUpQuerySession(
     queryDispatcher,
     runtimeStateSource,
     toolDefs,
+    modelToolsFactory,
     resolvedSessionId,
     stableSystemPrefix,
     toolSystemAppend,

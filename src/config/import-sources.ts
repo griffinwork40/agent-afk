@@ -1,27 +1,21 @@
-/**
- * Cross-tool asset import — source maps, config parsing, and resolution.
- *
- * The trust unit for import is the *source binary* (claude-code, codex), not
- * the individual asset: a user opts into "trust everything Claude Code
- * installs" once via `importFrom` in afk.config.json, rather than reviewing
- * each plugin. This module owns the on-disk path knowledge for each known
- * binary so nothing else in AFK hardcodes a foreign path like
- * `~/.claude/plugins`.
- *
- * Layering: this is a NEUTRAL module (depends only on `paths.ts` + node
- * builtins). It is importable from both `src/agent/` (the scanners that
- * live-read imported roots) and `src/cli/` (the `afk migrate` command +
- * doctor check) without crossing the agent↛cli boundary. It deliberately
- * does NOT import `loadConfig()` (cli layer) or `readPluginManifest()` (agent
- * layer) — the small manifest-name read needed for detection is inlined.
- *
- * @module config/import-sources
- */
-
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'fs';
+import { existsSync, readdirSync, readFileSync } from 'fs';
 import { homedir } from 'os';
-import { join, basename } from 'path';
+import { isAbsolute, join } from 'path';
+import { readMcpServers } from './import-mcp-discovery.js';
+export { readMcpServers } from './import-mcp-discovery.js';
+import { env } from './env.js';
+import { readCodexEnabledPlugins } from './codex-discovery.js';
+import { findPluginDirs } from './plugin-discovery.js';
 import { getJsonConfigPath, getLegacyJsonConfigPath } from '../paths.js';
+import { debugLog } from '../utils/debug.js';
+
+/**
+ * Cross-tool import configuration: resolves which external asset sources (claude-code,
+ * codex) AFK trusts, defines per-binary source path maps (plugin roots, skill roots,
+ * MCP config candidates), and exposes detection helpers consumed by `afk migrate` and
+ * the doctor command. Security invariant: `importFrom` is only honored from the
+ * user-global config — never from a project-local `<cwd>/afk.config.json`.
+ */
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -87,6 +81,18 @@ interface SourcePathMap {
   pluginEnabledState: (home: string) => SourceEnabledMap;
 }
 
+/** Returns the Codex home directory: `CODEX_HOME` env override, or `~/.codex`. */
+function codexHome(home: string): string {
+  const override = env.CODEX_HOME?.trim();
+  // Require an absolute path — a relative value would resolve against the process
+  // cwd at runtime, which is unpredictable and almost certainly not the intent.
+  if (override && isAbsolute(override)) return override;
+  if (override) {
+    debugLog(`[import-sources] CODEX_HOME="${override}" is not absolute — ignoring and falling back to ~/.codex`);
+  }
+  return join(home, '.codex');
+}
+
 const SOURCE_MAPS: Record<ImportSourceBinary, SourcePathMap> = {
   'claude-code': {
     label: 'Claude Code',
@@ -104,13 +110,11 @@ const SOURCE_MAPS: Record<ImportSourceBinary, SourcePathMap> = {
   },
   codex: {
     label: 'Codex',
-    pluginRoots: (home) => [join(home, '.codex', 'plugins')],
-    skillRoots: (home) => [join(home, '.codex', 'skills')],
-    mcpConfigCandidates: (home) => [join(home, '.codex', 'config.toml')],
+    pluginRoots: (home) => [join(codexHome(home), 'plugins')],
+    skillRoots: (home) => [join(codexHome(home), 'skills'), join(home, '.agents', 'skills')],
+    mcpConfigCandidates: (home) => [join(codexHome(home), 'config.toml')],
     mcpFormat: 'toml',
-    // Codex plugin import is detection-only today (see `afk migrate`), so
-    // there is no enabled-state read yet — a follow-up phase.
-    pluginEnabledState: () => EMPTY_SOURCE_ENABLED,
+    pluginEnabledState: (home) => readCodexEnabledPlugins(codexHome(home)),
   },
 };
 
@@ -120,7 +124,7 @@ export const KNOWN_SOURCE_LABELS: Record<ImportSourceBinary, string> = {
   codex: SOURCE_MAPS.codex.label,
 };
 
-const MAX_PLUGIN_SCAN_DEPTH = 5;
+
 
 // ── Config parsing ─────────────────────────────────────────────────────────
 
@@ -163,19 +167,13 @@ export function importFromConfigPaths(): string[] {
 }
 
 /**
- * Read + normalize the `importFrom` block from the user-global config, without
- * the full `loadConfig()` machinery — lets agent-layer scanners self-serve the
- * import config without importing the cli layer.
+ * Load the first valid `importFrom` block found across the allowed config paths.
  *
- * Security invariant: `importFrom` authorizes AFK to live-read/execute another
- * tool's plugins+skills and auto-run its MCP servers, so it is honored ONLY
- * from the user-global config (written by the user via `afk migrate`), NEVER
- * from a project-local `<cwd>/afk.config.json` — a cloned repo must not be able
- * to silently enable foreign-asset import. Imported assets live in the user's
- * home dir and are cwd-independent, so per-repo scoping adds risk, not value.
- *
- * `configPaths` is injectable for tests. Returns `undefined` when none has a
- * valid `importFrom`.
+ * Security invariant: `importFrom` is honored ONLY from the user-global config
+ * (`$AFK_HOME/config/afk.config.json`) and the legacy `~/.afk.config.json`.
+ * It is NEVER read from the project-local `<cwd>/afk.config.json` — a cloned
+ * repo must never be able to silently enable foreign-asset or MCP-server import.
+ * {@link importFromConfigPaths} enforces this by intentionally excluding the cwd config.
  */
 export function loadImportFromConfig(
   configPaths: readonly string[] = importFromConfigPaths(),
@@ -356,56 +354,6 @@ function readClaudeEnabledPlugins(home: string): SourceEnabledMap {
   return map;
 }
 
-/** Read a plugin manifest's `name` field. Inlined to avoid an agent-layer import. */
-function manifestName(dir: string): string | null {
-  try {
-    const raw = JSON.parse(readFileSync(join(dir, '.claude-plugin', 'plugin.json'), 'utf-8')) as {
-      name?: unknown;
-    };
-    return typeof raw.name === 'string' && raw.name.length > 0 ? raw.name : null;
-  } catch {
-    return null;
-  }
-}
-
-function findPluginDirs(root: string): DetectedAsset[] {
-  if (!existsSync(root)) return [];
-  const out: DetectedAsset[] = [];
-  walkPlugins(root, 0, out, new Set<string>());
-  return out;
-}
-
-function walkPlugins(dir: string, depth: number, out: DetectedAsset[], seen: Set<string>): void {
-  let canonical: string;
-  try {
-    canonical = realpathSync(dir);
-  } catch {
-    canonical = dir;
-  }
-  if (depth > MAX_PLUGIN_SCAN_DEPTH || seen.has(canonical)) return;
-  seen.add(canonical);
-  if (existsSync(join(dir, '.claude-plugin', 'plugin.json'))) {
-    const name = manifestName(dir) ?? basename(dir) ?? dir;
-    out.push({ name, path: dir });
-    return; // plugins do not nest
-  }
-  let entries: string[];
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return;
-  }
-  for (const name of entries) {
-    if (name.startsWith('.')) continue;
-    const full = join(dir, name);
-    try {
-      if (statSync(full).isDirectory()) walkPlugins(full, depth + 1, out, seen);
-    } catch {
-      // unreadable entry — skip
-    }
-  }
-}
-
 function findSkillDirs(root: string): DetectedAsset[] {
   let entries;
   try {
@@ -415,164 +363,10 @@ function findSkillDirs(root: string): DetectedAsset[] {
   }
   const out: DetectedAsset[] = [];
   for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name.startsWith('_') || entry.name.startsWith('.')) continue;
+    if ((!entry.isDirectory() && !entry.isSymbolicLink()) || entry.name.startsWith('_') || entry.name.startsWith('.')) continue;
     if (existsSync(join(root, entry.name, 'SKILL.md'))) {
       out.push({ name: entry.name, path: join(root, entry.name) });
     }
   }
   return out;
-}
-
-/**
- * Read MCP server names + command summaries from a config file. Supports the
- * JSON `mcpServers` object (Claude Code) and the TOML `[mcp_servers.<id>]`
- * table format (Codex), where the server name is the table key. Best-effort:
- * a parse failure returns [].
- */
-export function readMcpServers(path: string, format: McpConfigFormat): DetectedMcpServer[] {
-  let content: string;
-  try {
-    content = readFileSync(path, 'utf-8');
-  } catch {
-    return [];
-  }
-  return format === 'json' ? readMcpServersJson(content) : readMcpServersToml(content);
-}
-
-function readMcpServersJson(content: string): DetectedMcpServer[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    return [];
-  }
-  if (parsed === null || typeof parsed !== 'object') return [];
-  const servers = (parsed as Record<string, unknown>)['mcpServers'];
-  if (servers === null || typeof servers !== 'object' || Array.isArray(servers)) return [];
-  const out: DetectedMcpServer[] = [];
-  for (const [name, raw] of Object.entries(servers as Record<string, unknown>)) {
-    out.push({ name, command: summarizeServerCommand(raw) });
-  }
-  return out;
-}
-
-/**
- * Parse the `[mcp_servers.<id>]` table format from a Codex `config.toml`.
- * The server name is the table key (e.g. `[mcp_servers.github]` → name "github").
- * Fields read per block: `command` (string), `args` (inline array of strings),
- * `url` (string). Command summary precedence: url → command+args joined → '(no command)'.
- * Deliberately narrow and dependency-free — ignores everything outside mcp_servers tables.
- */
-function readMcpServersToml(content: string): DetectedMcpServer[] {
-  const out: DetectedMcpServer[] = [];
-  const lines = content.split(/\r?\n/);
-  let inBlock = false;
-  let name: string | null = null;
-  let command: string | null = null;
-  let url: string | null = null;
-  let args: string[] = [];
-
-  const flush = (): void => {
-    if (inBlock && name) {
-      let summary: string;
-      if (url !== null) {
-        summary = url;
-      } else if (command !== null) {
-        summary = args.length > 0 ? [command, ...args].join(' ') : command;
-      } else {
-        summary = '(no command)';
-      }
-      out.push({ name, command: summary });
-    }
-    name = null;
-    command = null;
-    url = null;
-    args = [];
-  };
-
-  const MCP_SERVER_HEADER = /^\[mcp_servers\.([^\]]+)\]\s*$/;
-
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (line === '' || line.startsWith('#')) continue;
-
-    const headerMatch = MCP_SERVER_HEADER.exec(line);
-    if (headerMatch) {
-      flush();
-      inBlock = true;
-      name = headerMatch[1] ?? null;
-      continue;
-    }
-    if (line.startsWith('[')) {
-      flush();
-      inBlock = false;
-      continue;
-    }
-    if (!inBlock) continue;
-
-    const eq = line.indexOf('=');
-    if (eq === -1) continue;
-    const key = line.slice(0, eq).trim();
-    const rawValue = line.slice(eq + 1).trim();
-
-    if (key === 'command') {
-      command = stripTomlString(stripInlineComment(rawValue));
-    } else if (key === 'url') {
-      url = stripTomlString(stripInlineComment(rawValue));
-    } else if (key === 'args') {
-      args = parseTomlInlineStringArray(rawValue);
-    }
-  }
-  flush();
-  return out;
-}
-
-/** Strip a trailing inline TOML comment (`# ...`) from a scalar value line.
- *  Only strips when the value does not start with a quote (quoted strings may
- *  contain # legitimately). Best-effort heuristic for narrow use. */
-function stripInlineComment(value: string): string {
-  if (value.startsWith('"') || value.startsWith("'")) return value;
-  const idx = value.indexOf(' #');
-  return idx === -1 ? value : value.slice(0, idx).trimEnd();
-}
-
-/** Parse a TOML inline string array: `["-y", "pkg"]` → `['-y', 'pkg']`.
- *  Best-effort: strips surrounding `[ ]`, splits on commas, stripTomlString each.
- *  Returns [] on any parse failure. */
-function parseTomlInlineStringArray(value: string): string[] {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith('[')) return [];
-  const inner = trimmed.slice(1, trimmed.lastIndexOf(']'));
-  if (!inner.trim()) return [];
-  try {
-    return inner
-      .split(',')
-      .map((s) => stripTomlString(s.trim()))
-      .filter((s) => s.length > 0);
-  } catch {
-    return [];
-  }
-}
-
-function stripTomlString(value: string): string {
-  // Matched pair: strip surrounding quotes.
-  const m = value.match(/^"([^"]*)"$/) ?? value.match(/^'([^']*)'$/);
-  if (m && m[1] !== undefined) return m[1];
-  // Unmatched leading/trailing quote (e.g. truncated value) — strip it.
-  if (value.startsWith('"') || value.startsWith("'")) return value.slice(1);
-  if (value.endsWith('"') || value.endsWith("'")) return value.slice(0, -1);
-  return value;
-}
-
-function summarizeServerCommand(raw: unknown): string {
-  if (raw === null || typeof raw !== 'object') return '(invalid)';
-  const obj = raw as Record<string, unknown>;
-  if (typeof obj['url'] === 'string') return obj['url'];
-  if (typeof obj['command'] === 'string') {
-    const args = Array.isArray(obj['args'])
-      ? (obj['args'] as unknown[]).filter((a): a is string => typeof a === 'string')
-      : [];
-    return [obj['command'], ...args].join(' ');
-  }
-  return '(no command)';
 }

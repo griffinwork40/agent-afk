@@ -1,10 +1,40 @@
-// Windows: .mjs dynamic import of scripts/postinstall.mjs fails on Windows (#703)
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { join, resolve, dirname } from 'path';
 import { tmpdir } from 'os';
+import { fileURLToPath, pathToFileURL } from 'url';
 
-const isWin32 = process.platform === 'win32';
+const _testDir = dirname(fileURLToPath(import.meta.url));
+
+// Invariant (no real service side effects): restartLaunchdServices'
+// DEFAULT restartFn runs `node <repo>/dist/cli.mjs service restart <name>`,
+// which rewrites the developer's REAL ~/Library/LaunchAgents plists and
+// bootouts/bootstraps their live telegram bot and daemon. It fires whenever
+// existsFn reports dist/cli.mjs present, which a real `pnpm build` makes true,
+// or which a blanket `existsFn: () => true` fakes. This happened on
+// 2026-09-26: an un-injected test repointed a live bot at a worktree build and
+// sent its logs to a deleted tmp dir. Every child_process entry point is
+// therefore mocked to record-and-throw, and afterEach fails the test that
+// reached one. Inject execFn/restartFn instead.
+const realChildProcessCalls: string[] = [];
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  const refuse = (name: string) => (...args: unknown[]): never => {
+    realChildProcessCalls.push(`${name} ${JSON.stringify(args[0])} ${JSON.stringify(args[1] ?? '')}`);
+    throw new Error(`postinstall test reached real child_process.${name}; inject execFn/restartFn`);
+  };
+  return {
+    ...actual,
+    execSync: refuse('execSync'),
+    execFileSync: refuse('execFileSync'),
+    // Forward guard: production does not use spawnSync today.
+    spawnSync: refuse('spawnSync'),
+  };
+});
+afterEach(() => {
+  const leaked = realChildProcessCalls.splice(0);
+  expect(leaked, 'a test reached a real child_process call').toEqual([]);
+});
 
 type KillStaleDaemonFn = (pidFilePath: string, killFn?: (pid: number, signal: string) => void) => void;
 type IsManualBotRunningFn = (
@@ -17,32 +47,44 @@ type RestartLaunchdServicesFn = (opts?: {
   labels?: string[];
   existsFn?: (p: string) => boolean;
   execFn?: (argv: string[]) => void;
+  restartFn?: (node: string, cli: string, name: string) => void;
 }) => string[];
 type IsGlobalInstallFn = (
   pkgRoot: string,
   env?: Record<string, string | undefined>,
   existsFn?: (p: string) => boolean,
 ) => boolean;
+type MaybeRestartServicesFn = (opts?: {
+  platform?: string;
+  env?: Record<string, string | undefined>;
+  pkgRoot?: string;
+  existsFn?: (p: string) => boolean;
+  restartFn?: (opts?: { labels?: string[] }) => string[];
+}) => string[];
 type IsMainModuleFn = (metaUrl: string, argv1?: string) => boolean;
 
 let killStaleDaemon: KillStaleDaemonFn;
 let isManualBotRunning: IsManualBotRunningFn;
 let restartLaunchdServices: RestartLaunchdServicesFn;
 let isGlobalInstall: IsGlobalInstallFn;
+let maybeRestartServices: MaybeRestartServicesFn;
 let isMainModule: IsMainModuleFn;
 
 beforeAll(async () => {
   // Dynamic import avoids TypeScript transform issues with plain .mjs files.
-  // Pattern mirrors src/cli/postinstall.test.ts exactly.
-  const mod = await import('../scripts/postinstall.mjs');
+  // pathToFileURL converts the absolute path to a file:// URL so Windows ESM
+  // loaders accept it (bare absolute paths like C:\... are rejected by the loader).
+  const url = pathToFileURL(resolve(_testDir, '..', 'scripts', 'postinstall.mjs')).href;
+  const mod = await import(url);
   killStaleDaemon = mod.killStaleDaemon as KillStaleDaemonFn;
   isManualBotRunning = mod.isManualBotRunning as IsManualBotRunningFn;
   restartLaunchdServices = mod.restartLaunchdServices as RestartLaunchdServicesFn;
   isGlobalInstall = mod.isGlobalInstall as IsGlobalInstallFn;
+  maybeRestartServices = mod.maybeRestartServices as MaybeRestartServicesFn;
   isMainModule = mod.isMainModule as IsMainModuleFn;
 });
 
-describe.skipIf(isWin32)('killStaleDaemon', () => {
+describe('killStaleDaemon', () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -99,7 +141,7 @@ describe.skipIf(isWin32)('killStaleDaemon', () => {
   });
 });
 
-describe.skipIf(isWin32)('isManualBotRunning', () => {
+describe('isManualBotRunning', () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -169,7 +211,7 @@ describe.skipIf(isWin32)('isManualBotRunning', () => {
   });
 });
 
-describe.skipIf(isWin32)('restartLaunchdServices', () => {
+describe('restartLaunchdServices', () => {
   const HOME = '/Users/tester';
   const TELEGRAM_PLIST = join(HOME, 'Library', 'LaunchAgents', 'com.afk.telegram.plist');
   const DAEMON_PLIST = join(HOME, 'Library', 'LaunchAgents', 'com.afk.daemon.plist');
@@ -225,12 +267,38 @@ describe.skipIf(isWin32)('restartLaunchdServices', () => {
     const result = restartLaunchdServices({
       home: HOME,
       uid: 501,
-      existsFn: () => true, // both plists present
+      // Both plists present, dist/cli.mjs absent: exercise the raw-kickstart
+      // path. A blanket `() => true` also reported cli.mjs present, which
+      // routed into the REAL `afk service restart` (see the invariant above).
+      existsFn: (p) => p === TELEGRAM_PLIST || p === DAEMON_PLIST,
       execFn,
     });
     // telegram threw → excluded; daemon succeeded → included. No throw.
     expect(result).toEqual(['com.afk.daemon']);
     expect(execFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to raw kickstart via execFn when the CLI restartFn throws', () => {
+    // Plists AND dist/cli.mjs all reported present, so the CLI restart path is
+    // tried first. It is injected (never the real `afk service restart`) and
+    // throws, which must fall through to the raw launchctl kickstart.
+    const restartFn = vi.fn(() => {
+      throw new Error('simulated CLI restart failure');
+    });
+    const execFn = vi.fn();
+    const result = restartLaunchdServices({
+      home: HOME,
+      uid: 501,
+      labels: ['com.afk.daemon'],
+      existsFn: () => true,
+      restartFn,
+      execFn,
+    });
+    expect(result).toEqual(['com.afk.daemon']);
+    expect(restartFn).toHaveBeenCalledTimes(1);
+    expect(restartFn.mock.calls[0]?.[2]).toBe('daemon');
+    expect(execFn).toHaveBeenCalledTimes(1);
+    expect(execFn).toHaveBeenCalledWith(['kickstart', '-k', 'gui/501/com.afk.daemon']);
   });
 
   it('honours a custom labels list', () => {
@@ -252,7 +320,7 @@ describe.skipIf(isWin32)('restartLaunchdServices', () => {
 // during local `pnpm install` runs inside source checkouts and worktrees.
 // All tests inject pkgRoot, env, and existsFn so no real filesystem or npm
 // lifecycle environment leaks into the assertions.
-describe.skipIf(isWin32)('isGlobalInstall', () => {
+describe('isGlobalInstall', () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -309,18 +377,143 @@ describe.skipIf(isWin32)('isGlobalInstall', () => {
   });
 });
 
+// ─── maybeRestartServices ─────────────────────────────────────────────────────
+// Tests verify the call-site gate: the decision logic that guards daemon
+// restarts. These tests exercise the extracted maybeRestartServices() helper
+// directly — without running the isMain block — so the guard is reachable
+// from a unit test. Removing the isGlobalInstall guard inside
+// maybeRestartServices makes three of these tests fail: the
+// "npm_config_global is absent" case, the ".git marker is present" case,
+// and the "uses the default pkgRoot" case.
+//
+// All tests inject platform, env, pkgRoot, existsFn, and restartFn so no real
+// filesystem or npm lifecycle environment leaks into the assertions.
+describe('maybeRestartServices', () => {
+  const FAKE_PKG_ROOT = '/fake/pkg/root';
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('does NOT call restartFn when npm_config_global is absent', () => {
+    // Simulates: plain `pnpm install` in any local context (no lifecycle env var).
+    const restartFn = vi.fn(() => [] as string[]);
+    const result = maybeRestartServices({
+      platform: 'darwin',
+      env: {}, // npm_config_global absent
+      pkgRoot: FAKE_PKG_ROOT,
+      existsFn: () => false, // no .git
+      restartFn,
+    });
+    expect(result).toEqual([]);
+    expect(restartFn).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call restartFn when npm_config_global="true" but .git marker is present', () => {
+    // Simulates: a cron job running `pnpm install` inside a source checkout or
+    // managed worktree — the .git marker unambiguously rules out a global install.
+    const restartFn = vi.fn(() => [] as string[]);
+    const result = maybeRestartServices({
+      platform: 'darwin',
+      env: { npm_config_global: 'true' },
+      pkgRoot: FAKE_PKG_ROOT,
+      existsFn: (p) => p === join(FAKE_PKG_ROOT, '.git'), // .git present
+      restartFn,
+    });
+    expect(result).toEqual([]);
+    expect(restartFn).not.toHaveBeenCalled();
+  });
+
+  it('calls restartFn with labels: ["com.afk.daemon"] when npm_config_global="true", no .git, platform="darwin"', () => {
+    // Simulates: a genuine `npm install -g agent-afk` — both detection signals
+    // confirm a global install, so the daemon is restarted.
+    const receivedOpts: Array<{ labels?: string[] }> = [];
+    const restartFn = vi.fn((opts?: { labels?: string[] }) => {
+      receivedOpts.push(opts ?? {});
+      return ['com.afk.daemon'];
+    });
+    const result = maybeRestartServices({
+      platform: 'darwin',
+      env: { npm_config_global: 'true' },
+      pkgRoot: FAKE_PKG_ROOT,
+      existsFn: () => false, // no .git
+      restartFn,
+    });
+    expect(result).toEqual(['com.afk.daemon']);
+    expect(restartFn).toHaveBeenCalledOnce();
+    expect(receivedOpts[0]?.labels).toEqual(['com.afk.daemon']);
+  });
+
+  it('does NOT call restartFn when platform is not "darwin"', () => {
+    // Simulates: Linux, Windows, or any non-macOS platform where launchd is
+    // unavailable — restartFn must never be called regardless of the env var.
+    const restartFn = vi.fn(() => [] as string[]);
+    const result = maybeRestartServices({
+      platform: 'linux',
+      env: { npm_config_global: 'true' },
+      pkgRoot: FAKE_PKG_ROOT,
+      existsFn: () => false, // no .git
+      restartFn,
+    });
+    expect(result).toEqual([]);
+    expect(restartFn).not.toHaveBeenCalled();
+  });
+
+  it('uses the default pkgRoot (package root via fileURLToPath) when pkgRoot is omitted', () => {
+    // Exercises the default-argument path: pkgRoot falls back to
+    // fileURLToPath(new URL('..', import.meta.url)) rather than .pathname.
+    // Note: the checkout path has no percent-encoded characters, so this test
+    // cannot directly catch a fileURLToPath-vs-.pathname regression. What it
+    // does confirm is that the default is derived at all (the probed path
+    // contains the expected .git suffix) and that omitting pkgRoot does not
+    // suppress the restart when all other guards pass.
+    // platform MUST be 'darwin' and npm_config_global 'true' — otherwise the
+    // platform/env guards return before the default pkgRoot is ever read.
+    // scripts/postinstall.mjs and this file are both one level below the
+    // package root, so the same relative URL resolves the expected root.
+    const expectedGitMarker = join(fileURLToPath(new URL('..', import.meta.url)), '.git');
+    const probed: string[] = [];
+    const existsFn = (p: string) => {
+      probed.push(p);
+      return false; // no .git → treated as a global install
+    };
+    const receivedOpts: Array<{ labels?: string[] }> = [];
+    const restartFn = vi.fn((opts?: { labels?: string[] }) => {
+      receivedOpts.push(opts ?? {});
+      return ['com.afk.daemon'];
+    });
+    const result = maybeRestartServices({
+      platform: 'darwin',
+      env: { npm_config_global: 'true' },
+      existsFn,
+      restartFn,
+    });
+    expect(probed).toEqual([expectedGitMarker]);
+    expect(result).toEqual(['com.afk.daemon']);
+    expect(restartFn).toHaveBeenCalledOnce();
+    expect(receivedOpts[0]?.labels).toEqual(['com.afk.daemon']);
+  });
+});
 // ─── isMainModule ─────────────────────────────────────────────────────────────
 // Tests verify the latent bug fixed in #2198: the raw `file://${argv1}` comparison
 // returns false when the install path contains URL-encoding-required characters
 // (spaces, non-ASCII). isMainModule() uses fileURLToPath + realpathSync so the
 // comparison is always on decoded, symlink-resolved absolute paths.
-describe.skipIf(isWin32)('isMainModule', () => {
+describe('isMainModule', () => {
+  // Build valid cross-platform file:// URLs from real OS-rooted paths via
+  // pathToFileURL so Windows file URLs include the drive letter (file:///C:/…).
+  // Bare POSIX-style URLs like file:///some/path are invalid on Windows and cause
+  // fileURLToPath to throw "File URL path must be absolute".
+  const scriptUrl = pathToFileURL(join(tmpdir(), 'script.mjs')).href;
+  const otherUrl = pathToFileURL(join(tmpdir(), 'other.mjs')).href;
+  const otherPath = fileURLToPath(otherUrl);
+
   it('returns false when argv1 is undefined', () => {
-    expect(isMainModule('file:///some/path/script.mjs', undefined)).toBe(false);
+    expect(isMainModule(scriptUrl, undefined)).toBe(false);
   });
 
   it('returns false when argv1 is an empty string', () => {
-    expect(isMainModule('file:///some/path/script.mjs', '')).toBe(false);
+    expect(isMainModule(scriptUrl, '')).toBe(false);
   });
 
   it('returns true when metaUrl and argv1 refer to the same real path', async () => {
@@ -335,35 +528,40 @@ describe.skipIf(isWin32)('isMainModule', () => {
   });
 
   it('returns false when metaUrl and argv1 refer to different files', () => {
-    expect(
-      isMainModule('file:///some/path/script.mjs', '/other/path/different.mjs'),
-    ).toBe(false);
+    // scriptUrl and otherUrl are both valid cross-platform file:// URLs but
+    // point to different (non-existent) paths, so isMainModule returns false.
+    expect(isMainModule(scriptUrl, otherPath)).toBe(false);
   });
 
   it('handles a space-containing path without throwing (the URL-encoding bug)', () => {
     // This is the latent bug fixed by #2198. Previously:
     //   import.meta.url === `file://${process.argv[1]}`
-    // would compare "file:///my%20dir/script.mjs" with "file:///my dir/script.mjs"
-    // and return false even when they represent the same file.
+    // would compare the URL-encoded form with the raw argv1 and return false
+    // even when they represent the same file.
     //
     // The fix uses fileURLToPath on metaUrl and realpathSync on argv1.
     // Since argv1 does not exist on disk, realpathSync throws; isMainModule()
     // catches and falls back to comparing fileURLToPath(metaUrl) === argv1.
-    // Both sides are now raw paths, so the comparison is correct.
-    const spaceUrl = 'file:///my%20dir/script.mjs';
-    const rawPath = '/my dir/script.mjs'; // same path, not URL-encoded
+    // pathToFileURL produces a valid file:// URL including the drive letter on
+    // Windows (file:///C:/…/my%20dir/script.mjs), making fileURLToPath round-trip
+    // safe on all platforms.
+    const spaceUrl = pathToFileURL(join(tmpdir(), 'my dir', 'script.mjs')).href;
+    const rawPath = fileURLToPath(spaceUrl); // decoded, OS-native path (space not percent-encoded)
     expect(isMainModule(spaceUrl, rawPath)).toBe(true);
   });
 
   it('handles non-ASCII characters in the path without throwing', () => {
-    const encodedUrl = 'file:///home/caf%C3%A9/script.mjs'; // café
-    const rawPath = '/home/café/script.mjs';
-    expect(isMainModule(encodedUrl, rawPath)).toBe(true);
+    // café contains a non-ASCII character; pathToFileURL percent-encodes it
+    // (é → %C3%A9) in the URL, and fileURLToPath decodes it back on both sides.
+    const cafeUrl = pathToFileURL(join(tmpdir(), 'café', 'script.mjs')).href;
+    const rawPath = fileURLToPath(cafeUrl); // decoded OS-native path with é literal
+    expect(isMainModule(cafeUrl, rawPath)).toBe(true);
   });
 
   it('returns false for a non-existent argv1 that does not match', () => {
-    expect(
-      isMainModule('file:///real/script.mjs', '/nonexistent/other.mjs'),
-    ).toBe(false);
+    // scriptUrl and otherPath refer to different (non-existent) files;
+    // realpathSync throws for both, and the fallback fileURLToPath comparison
+    // sees different paths, so isMainModule returns false.
+    expect(isMainModule(scriptUrl, otherPath)).toBe(false);
   });
 });

@@ -21,6 +21,7 @@ import { detectTestResult } from './test-runner-detector.js';
 import { parseTestFailures, type TestFailure } from './test-failure-parser.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import { killProcessGroup } from '../../../utils/kill-process-group.js';
+import { buildChildEnv } from './bash-env-scrub.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -155,6 +156,7 @@ function runCommand(
   effectiveCwd: string | undefined,
   timeoutMs: number,
   signal: AbortSignal,
+  sessionEnv?: Record<string, string>,
 ): Promise<RunOutcome> {
   return new Promise((resolve) => {
     const start = Date.now();
@@ -174,6 +176,8 @@ function runCommand(
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
+      // Same child env as bash: per-session vars + private TMPDIR, scrubbed.
+      env: buildChildEnv(sessionEnv),
     });
     proc.unref();
 
@@ -265,7 +269,7 @@ export const testRunHandler: ToolHandler = async (
   }
 
   const input = parseInput(rawInput);
-  const effectiveCwd = context?.resolveBase ?? context?.cwd;
+  const effectiveCwd = context?.resolveBase;
 
   // 1. Discover
   const discovered = discoverTestCommand(effectiveCwd ?? process.cwd());
@@ -294,6 +298,7 @@ export const testRunHandler: ToolHandler = async (
     effectiveCwd,
     input.timeout_ms ?? DEFAULT_TIMEOUT_MS,
     signal,
+    context?.env,
   );
 
   if (signal.aborted) {

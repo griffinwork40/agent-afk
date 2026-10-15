@@ -5,6 +5,7 @@ import {
   resolveTextMeasure,
   resolveProseMeasure,
   contentMargin,
+  contentBand,
   DEFAULT_TEXT_MEASURE,
   DEFAULT_PROSE_MEASURE,
   MIN_TEXT_MEASURE,
@@ -19,8 +20,9 @@ import {
   type ToolEntry,
 } from '../commands/interactive/tool-lane-render.js';
 import { renderGroupedRootTools } from '../commands/interactive/tool-lane-render-grouped-root.js';
-
-const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, '');
+import { formatPreviewDiffBlock } from '../commands/interactive/tool-lane-format-diff.js';
+import { computeLineDiff } from '../../utils/diff.js';
+import { stripAnsi } from '../display.js';
 
 /** Run `fn` with `AFK_TEXT_MEASURE` set (or cleared), restoring it after. */
 function withMeasureEnv<T>(value: string | undefined, fn: () => T): T {
@@ -392,5 +394,80 @@ describe('contentMargin', () => {
         }),
       ),
     );
+  });
+});
+
+// Regression (#1619): the pre-execution diff preview sized its box from the
+// RAW terminal width, while both callers (renderOverlayChildren and the
+// overlay root path) clamp every composed line to `toolLaneWidth()`, which is
+// capped to the reading measure. On a terminal wider than the measure the box
+// was built wider than the row budget and the clamp silently cut off its
+// right edge. Pin the invariant the text-wrap regression above pins: clamping
+// a preview-diff line at the row budget is a no-op.
+describe('#1619 preview diff respects the tool-lane row budget', () => {
+  const diff = computeLineDiff(
+    'const a = 1;\nconst b = 2;\n',
+    'const a = 1;\nconst b = 3; // a deliberately long trailing comment that runs well past the reading measure on wide terminals\n',
+  );
+  for (const cols of [120, 200]) {
+    it(`clamping preview-diff lines at the row budget is a no-op at ${cols} cols`, () => {
+      expect(diff).not.toBeNull();
+      withMeasureEnv(undefined, () =>
+        withCols(cols, () => {
+          const rowBudget = toolLaneWidth();
+          const lines = formatPreviewDiffBlock(diff!, '    ');
+          expect(lines.length).toBeGreaterThan(0);
+          for (const line of lines) {
+            expect(clampLineToTerminal(line, rowBudget)).toBe(line);
+          }
+        }),
+      );
+    });
+  }
+
+  it('an explicit cols argument bounds the box to that budget', () => {
+    withMeasureEnv(undefined, () =>
+      withCols(200, () => {
+        const lines = formatPreviewDiffBlock(diff!, '    ', 72);
+        for (const line of lines) {
+          expect(clampLineToTerminal(line, 72)).toBe(line);
+        }
+      }),
+    );
+  });
+});
+
+describe('contentBand', () => {
+  it('is the identity band when centering is off (default path untouched)', () => {
+    withCenterEnv(undefined, () => {
+      expect(contentBand(200)).toEqual({ margin: '', marginCols: 0, width: 200 });
+    });
+  });
+
+  it('uses the passed cols, not process.stdout.columns', () => {
+    withCenterEnv('1', () =>
+      withCols(80, () => {
+        const band = contentBand(200);
+        expect(band.marginCols).toBe(50);
+        expect(band.margin).toBe(' '.repeat(50));
+        expect(band.width).toBe(150);
+      }),
+    );
+  });
+
+  it('width never drops below the measure, so capped content keeps its layout', () => {
+    withCenterEnv('1', () => {
+      for (const cols of [100, 101, 105, 120, 157, 200, 333]) {
+        const band = contentBand(cols);
+        expect(band.width).toBeGreaterThanOrEqual(Math.min(cols, DEFAULT_TEXT_MEASURE));
+        expect(band.marginCols + band.width).toBe(cols);
+      }
+    });
+  });
+
+  it('contentMargin(cols) agrees with contentBand(cols).margin', () => {
+    withCenterEnv('1', () => {
+      expect(contentMargin(211)).toBe(contentBand(211).margin);
+    });
   });
 });

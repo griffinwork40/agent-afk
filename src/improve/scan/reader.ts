@@ -22,7 +22,7 @@
  */
 
 import { readFileSync, readdirSync, statSync } from 'fs';
-import { join, sep } from 'path';
+import { join, sep, relative, isAbsolute } from 'path';
 import { TraceEventSchema } from '../../agent/trace/events.js';
 import type { TraceEvent } from '../../agent/trace/types.js';
 import { getWitnessRoot } from '../paths.js';
@@ -253,10 +253,11 @@ function deriveDefaultAfkHome(): string {
 
 function pathRelativeTo(absolutePath: string, root: string): string {
   if (!root) return absolutePath;
-  if (absolutePath.startsWith(root)) {
-    let rel = absolutePath.slice(root.length);
-    if (rel.startsWith('/') || rel.startsWith(sep)) rel = rel.slice(1);
-    return rel;
-  }
-  return absolutePath;
+  const rel = relative(root, absolutePath);
+  // Equal paths: relative() returns '' — preserve prior behaviour (return '').
+  if (rel === '') return '';
+  // Path escapes the root (sibling prefix like /a/rootX vs /a/root, or parent).
+  // Use sep-aware check to avoid wrongly rejecting a child literally named '..foo'.
+  if (rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) return absolutePath;
+  return rel;
 }

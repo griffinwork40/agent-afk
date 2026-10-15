@@ -65,11 +65,14 @@ describe('resolveRepoRoot', () => {
     });
 
     it('resolves relative --git-common-dir against cwd', async () => {
-      // git outputs ".git" (relative) when inside the main worktree
+      // git outputs ".git" (relative) when inside the main worktree.
+      // The mock returns an absolute path so path.resolve() is not called
+      // with a POSIX-only cwd literal — on Windows path.resolve('/home/...',
+      // '.git') would prepend the drive letter, breaking the assertion (#703).
       const root = await resolveRepoRoot({
         mode: 'git-common-dir',
         cwd: '/home/user/myrepo',
-        execFile: makeExec('.git\n'),
+        execFile: makeExec('/home/user/myrepo/.git\n'),
       });
       expect(root).toBe('/home/user/myrepo');
     });
@@ -145,10 +148,13 @@ describe('resolveRepoRootSync', () => {
   });
 
   it('resolves git-common-dir mode with relative path against cwd', () => {
+    // Use an absolute mock output so path.resolve() is not called with a
+    // POSIX-only cwd literal — on Windows path.resolve('/home/...', '.git')
+    // prepends the drive letter, breaking the assertion (#703).
     const root = resolveRepoRootSync({
       mode: 'git-common-dir',
       cwd: '/home/user/myrepo',
-      execFileSync: makeSyncExec('.git\n'),
+      execFileSync: makeSyncExec('/home/user/myrepo/.git\n'),
     });
     expect(root).toBe('/home/user/myrepo');
   });

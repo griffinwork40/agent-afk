@@ -154,7 +154,10 @@ export function commitThinkingPhase(source: SourceState, ctx: OrchestratorCtx): 
     // digest mode yields a multi-line block (paragraph + stat) — commit it
     // atomically (one geometry decision) via commitBlockAbove; other modes
     // are a single stat line and take the direct commitAbove path.
+    // AFK_SMOKE_TEXT: a single stat line fades in live first and commits
+    // once settled (or before any later commit); see thought-summary-hold.ts.
     if (lines.length > 1) commitBlockAbove(ctx.compositor, lines);
+    else if (ctx.thoughtHold) ctx.thoughtHold.hold(lines[0] ?? '');
     else ctx.compositor.commitAbove(lines[0] ?? '');
   } else {
     for (const line of lines) ctx.out.line(line);
@@ -280,6 +283,13 @@ export function finalizeOrchestrator(
               // per-line commits desync band-hold under a tall overlay (a live
               // subagent's rows). See commit-block.ts.
               commitBlockAbove(compositor, indented);
+              // Explicit blank-row commit (TUI rhythm contract): the block
+              // commit above lands the tool content; this separate
+              // commitAbove('') paints exactly one trailing blank row.
+              // commitBlockAbove joins lines on '\n' and the compositor
+              // strips a lone trailing '\n' as a line terminator, so a ''
+              // left inside the block would be swallowed. The blank MUST be
+              // a dedicated call. See docs/tui-rhythm.md and commit-block.ts.
               compositor.commitAbove('');
               // Refresh the overlay from CURRENT lane state — in-flight
               // subagent rows that survived the selective flush must keep
@@ -421,8 +431,10 @@ export function flushToolLaneToScrollback(ctx: OrchestratorCtx): void {
       // Atomic block commit — the flushed root(s) form ONE coherent block;
       // committing line-by-line desyncs the band-hold model under a tall
       // overlay and scrolls blank rows into scrollback (the "weird gaps"
-      // bug). See commit-block.ts.
-      commitBlockAbove(ctx.compositor, lines);
+      // bug). See commit-block.ts. indentForScrollback: same 2-col tool-lane
+      // indent the live overlay row had (no-op when centering is off), so the
+      // row does not jump left on commit — like every other flush path.
+      commitBlockAbove(ctx.compositor, indentForScrollback(lines));
       ctx.compositor.commitAbove('');
     }
     // Refresh from current lane state. Empty when all roots were

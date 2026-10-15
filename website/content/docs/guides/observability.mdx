@@ -24,7 +24,8 @@ Each line is a JSON event with a `kind`, a monotonic `seq`, a timestamp `ts`, an
 | Kind | What it captures |
 |---|---|
 | `tool_call` | Every tool invocation: name, duration, result size, error flag, subagent id |
-| `hook_decision` | Hook approvals and blocks, with the blocking reason |
+| `hook_decision` | Hook blocks, approvals, approval-gate outcomes, and injected-context deliveries, with the reason. Plain allow/pass-through dispatches are not written individually |
+| `hook_summary` | Once per session, just before the seal: hook dispatch counts by hook event x decision (`allow` for pass-through), covering the root session and its subagents. Absent on crashed or older traces, which means unknown, not zero |
 | `subagent_lifecycle` | Subagent start / success / failure / cancel, with cost and turn count |
 | `background_agent` | Background job start, completion, failure, cancel, and join |
 | `budget` | Cost checkpoints against the configured ceiling |

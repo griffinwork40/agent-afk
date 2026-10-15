@@ -77,6 +77,7 @@ describe('upsertEnvVar', () => {
     expect(contents).toBe('TEST_KEY=test_value\n');
   });
 
+  // Skipped on Windows: POSIX mode bits (0o600) not exposed by NTFS — genuinely POSIX-only.
   it('sets restrictive file permissions (0o600)', () => {
     // NTFS does not expose POSIX permission bits — skip on Windows.
     if (process.platform === 'win32') return;

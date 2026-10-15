@@ -251,3 +251,42 @@ describe('classifyIgnoredEntry — degenerate input fails safe', () => {
     expect(leafOf('packages/app/dist/')).toBe('dist');
   });
 });
+
+describe('classifyIgnoredEntry — SwiftPM and optional toolchain directories', () => {
+  it('classifies .build/ as inspectable at the root and nested', () => {
+    expect(classifyIgnoredEntry('.build/')).toBe('inspectable');
+    expect(classifyIgnoredEntry('app/.build/')).toBe('inspectable');
+    expect(classifyIgnoredEntry('packages/core/.build/')).toBe('inspectable');
+  });
+
+  it('classifies .swiftpm/ as opaque at the root and nested', () => {
+    expect(classifyIgnoredEntry('.swiftpm/')).toBe('opaque');
+    expect(classifyIgnoredEntry('app/.swiftpm/')).toBe('opaque');
+  });
+
+  it('classifies .dart_tool/ as opaque', () => {
+    expect(classifyIgnoredEntry('.dart_tool/')).toBe('opaque');
+    expect(classifyIgnoredEntry('pkg/.dart_tool/')).toBe('opaque');
+  });
+
+  it('classifies .zig-cache/ as opaque', () => {
+    expect(classifyIgnoredEntry('.zig-cache/')).toBe('opaque');
+    expect(classifyIgnoredEntry('src/.zig-cache/')).toBe('opaque');
+  });
+
+  it('classifies _build/ (Elixir Mix) as inspectable', () => {
+    expect(classifyIgnoredEntry('_build/')).toBe('inspectable');
+    expect(classifyIgnoredEntry('my_app/_build/')).toBe('inspectable');
+  });
+
+  it('still protects non-rebuildable entries inside .build/ (via inspectable expansion)', () => {
+    // Sensitive leaf inside .build/ — the expansion would find and protect these.
+    expect(classifyIgnoredEntry('.build/Debug/.env')).toBe('protected');
+    expect(classifyIgnoredEntry('app/.build/release/secrets.key')).toBe('protected');
+  });
+
+  it('leaves .build without a trailing slash protected (not a directory pattern)', () => {
+    // A bare file named `.build` is not SwiftPM output.
+    expect(classifyIgnoredEntry('.build')).toBe('protected');
+  });
+});

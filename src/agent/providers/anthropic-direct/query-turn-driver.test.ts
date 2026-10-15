@@ -88,6 +88,7 @@ function makeCtx(
   state: ReturnType<typeof makeStubState>,
   abort: ReturnType<typeof makeStubAbort>,
   turnEvents: ProviderEvent[],
+  cwd?: string,
 ): TurnDriverContext {
   return {
     initSessionId: 'test-session',
@@ -105,6 +106,7 @@ function makeCtx(
     tools: null,
     thinking: undefined,
     effort: undefined,
+    temperature: undefined,
     baseUrl: undefined,
     maxToolUseIterations: undefined,
     softDeadlineMs: undefined,
@@ -114,6 +116,8 @@ function makeCtx(
     hookRegistry: undefined,
     throttleQueue: undefined,
     fastModeController: undefined,
+    beforeNextRound: undefined,
+    cwd: cwd ?? process.cwd(),
     composeSystem: () => null,
     makeInterruptedTurnEvent: () => ({
       type: 'turn.completed' as const,
@@ -144,6 +148,61 @@ async function drainAfterInit(
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// session.init cwd fix — issue #2598
+// ---------------------------------------------------------------------------
+
+describe('driveTurns — session.init reports ctx.cwd, not process.cwd()', () => {
+  it('uses ctx.cwd in session.init when it differs from process.cwd()', async () => {
+    const state = makeStubState();
+    const closedPromise = new Promise<'__closed__'>(() => undefined);
+    const abort = makeStubAbort(closedPromise);
+
+    const configuredCwd = '/custom/daemon/cwd';
+    const ctx = makeCtx(state, abort, [{
+      type: 'turn.completed',
+      usage: { stopReason: 'end_turn' },
+    }], configuredCwd);
+
+    // Pull only the first event (session.init).
+    const gen = driveTurns(ctx);
+    const first = await gen.next();
+    await gen.return();
+
+    expect(first.value).toBeDefined();
+    expect(first.value?.type).toBe('session.init');
+    if (first.value?.type === 'session.init') {
+      expect(first.value.info.cwd).toBe(configuredCwd);
+      // Verify it does NOT fall back to the host process's cwd when a
+      // session-specific cwd is provided (the daemon task case).
+      if (configuredCwd !== process.cwd()) {
+        expect(first.value.info.cwd).not.toBe(process.cwd());
+      }
+    }
+  });
+
+  it('falls back to process.cwd() when ctx.cwd equals process.cwd()', async () => {
+    const state = makeStubState();
+    const closedPromise = new Promise<'__closed__'>(() => undefined);
+    const abort = makeStubAbort(closedPromise);
+
+    // makeCtx defaults cwd to process.cwd() — the normal interactive case.
+    const ctx = makeCtx(state, abort, [{
+      type: 'turn.completed',
+      usage: { stopReason: 'end_turn' },
+    }]);
+
+    const gen = driveTurns(ctx);
+    const first = await gen.next();
+    await gen.return();
+
+    expect(first.value?.type).toBe('session.init');
+    if (first.value?.type === 'session.init') {
+      expect(first.value.info.cwd).toBe(process.cwd());
+    }
+  });
+});
 
 describe('driveTurns — P2: turn.completed forwarded before closed-return', () => {
   // Core regression guard. The scenario:

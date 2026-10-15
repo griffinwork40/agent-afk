@@ -1,13 +1,71 @@
 # Dependabot configuration
 # Docs: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
 #
-# The repo root is a pnpm workspace; the docs site under website/ is a SEPARATE
-# standalone npm app with its own lockfile (website/package-lock.json). Without
-# an explicit entry, Dependabot never surfaces security or breaking-change
-# updates for the Fumadocs/Next.js stack vendored there. This adds weekly
-# coverage scoped to that directory.
+# Three independent npm-registry packages live in this repo, each with its own
+# lockfile, and each needs its own entry (Dependabot never recurses):
+#   /           the published `agent-afk` CLI (pnpm, pnpm-lock.yaml)
+#   /dashboard  the `afk web` UI bundle (pnpm, its own pnpm-lock.yaml + workspace)
+#   /website    the Fumadocs/Next.js docs site (npm, package-lock.json)
+#
+# A github-actions entry is also included so workflow action pins receive
+# version-bump PRs (without it, actions references never get updates).
+#
+# History: until this entry existed only /website was watched, so the root
+# package drifted with no update PRs (e.g. @anthropic-ai/sdk frozen
+# at 0.74.x by a caret-on-0.x range, vitest two majors behind with a critical
+# advisory). Keep the root entry first so it is never the one dropped.
+#
+# Invariant: pnpm entries use `package-ecosystem: "npm"`; Dependabot detects
+# pnpm from pnpm-lock.yaml. Its documented pnpm support is v7-v10 while this
+# repo pins pnpm 11 (lockfileVersion '9.0', same format as pnpm 9/10). If an
+# update run fails on the pnpm version, the failure is confined to the
+# Dependabot job log; nothing in CI or the published package depends on it.
+#
+# Grouping: minor+patch bumps are batched per dependency type so the weekly run
+# yields at most a couple of PRs; majors stay one-per-package because each one
+# is a migration that deserves its own review and CI run.
 version: 2
 updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(dev-deps)"
+    groups:
+      prod-minor-patch:
+        dependency-type: "production"
+        update-types:
+          - "minor"
+          - "patch"
+      dev-minor-patch:
+        dependency-type: "development"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "npm"
+    directory: "/dashboard"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(dev-deps)"
+    groups:
+      dashboard-prod-minor-patch:
+        dependency-type: "production"
+        update-types:
+          - "minor"
+          - "patch"
+      dashboard-dev-minor-patch:
+        dependency-type: "development"
+        update-types:
+          - "minor"
+          - "patch"
+
   - package-ecosystem: "npm"
     directory: "/website"
     schedule:
@@ -21,3 +79,19 @@ updates:
       fumadocs:
         patterns:
           - "fumadocs-*"
+
+  # GitHub Actions — version-bump PRs for workflow action pins.
+  # Without this entry, uses: references in .github/workflows/ never receive
+  # automated update PRs and drift silently behind upstream releases.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(actions)"
+    groups:
+      actions-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"

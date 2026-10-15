@@ -28,6 +28,8 @@
 import type { MessageParam } from '@anthropic-ai/sdk/resources';
 import type { ProviderUsage } from '../../../provider.js';
 import type { ToolDispatcher } from '../tool-dispatcher.js';
+import { JournalSync, type MessageJournal } from '../../../journal/index.js';
+import { anthropicJournalAdapter } from '../journal-adapter.js';
 
 /**
  * Per-session mutable state. Construct one with {@link createSessionState}
@@ -50,7 +52,7 @@ export interface SessionState {
    * The model the caller *requested* — a short alias (`opus_1m`, `sonnet`, …)
    * or a full id. Distinct from `currentModel` because alias resolution is
    * lossy: `opus_1m` and `opus` both resolve to the same wire id
-   * (`claude-opus-5`). Opus 5 is natively 1M, so both now report the same
+   * (`claude-opus-5-5`). Opus 5.5 is natively 1M, so both now report the same
    * *window* — but the alias still selects the auto-compaction limit, because
    * the `_1m` suffix short-circuits the reduced working budget (base `opus`
    * compacts at 200k, `opus_1m` at the full 1M — see MODEL_AUTOCOMPACT_BUDGET
@@ -111,6 +113,31 @@ export interface SessionState {
    * `this.compact()` when truthy — subject to the `abort.isIdle()` guard.
    */
   autoCompactThreshold: number | undefined;
+
+  /**
+   * Differ that mirrors {@link messages} into the session's message journal
+   * (docs/message-journal.md). Always present; a no-op when no journal is
+   * wired. Seeded with the initial (resumed) messages at construction; the
+   * loop calls `sync(messages)` at its commit points.
+   */
+  readonly journalSync: JournalSync<MessageParam>;
+
+  /** The raw journal behind {@link journalSync}, for `mark` annotations. */
+  readonly messageJournal: MessageJournal | undefined;
+
+  /**
+   * When true, the turn loop creates a {@link FileCheckpointRegistry} before
+   * each user turn and sets it on the dispatcher so write-class tool handlers
+   * snapshot pre-edit file content. Enabled via `AgentConfig.enableFileCheckpointing`.
+   */
+  enableFileCheckpointing: boolean;
+
+  /**
+   * Stable id for the CURRENT user turn; set by the turn loop before the first
+   * tool round so `rewindFiles(turnId)` can look up the correct checkpoint dir.
+   * Cleared (set to `undefined`) when no turn is active.
+   */
+  currentTurnId: string | undefined;
 }
 
 /**
@@ -144,13 +171,22 @@ export function createSessionState(opts: {
    * already-full context reach the wire and get rejected with HTTP 400.
    */
   initialUsageInputTokens?: number;
+  /** Durable journal sink (`AgentConfig.messageJournal`). Absent = journaling off. */
+  messageJournal?: MessageJournal;
+  /** Mirror of `AgentConfig.enableFileCheckpointing`. */
+  enableFileCheckpointing?: boolean;
 }): SessionState {
   const initialLastUsage: ProviderUsage | null =
     opts.initialUsageInputTokens !== undefined && opts.initialUsageInputTokens > 0
       ? { inputTokens: opts.initialUsageInputTokens, stopReason: null, resultSubtype: 'success', isError: false }
       : null;
+  const messages: MessageParam[] = opts.initialMessages ? [...opts.initialMessages] : [];
+  const journalSync = new JournalSync<MessageParam>(opts.messageJournal, anthropicJournalAdapter);
+  journalSync.seed(messages);
   return {
-    messages: opts.initialMessages ? [...opts.initialMessages] : [],
+    messages,
+    journalSync,
+    messageJournal: opts.messageJournal,
     currentModel: opts.model,
     requestedModel: opts.requestedModel ?? opts.model,
     currentPermissionMode: opts.permissionMode,
@@ -159,5 +195,7 @@ export function createSessionState(opts: {
     lastUsage: initialLastUsage,
     closed: false,
     autoCompactThreshold: opts.autoCompactThreshold,
+    enableFileCheckpointing: opts.enableFileCheckpointing ?? false,
+    currentTurnId: undefined,
   };
 }

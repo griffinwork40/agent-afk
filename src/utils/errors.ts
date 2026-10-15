@@ -7,6 +7,151 @@ export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * Extracts a human-readable message from an {@link AbortSignal}'s `reason`.
+ *
+ * This is NOT a drop-in for {@link errorMessage}: when `reason` is `undefined`
+ * (the signal was never aborted, or was aborted without a reason) it returns
+ * the sentinel string `'aborted'` rather than `'undefined'`.
+ *
+ * Use wherever code reads `signal.reason` and needs a displayable string:
+ *
+ * ```ts
+ * // Before
+ * const reason = signal.reason;
+ * const msg = errorMessage(reason ?? 'aborted');
+ *
+ * // After
+ * const msg = abortReason(signal.reason);
+ * ```
+ */
+export function abortReason(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason ?? 'aborted');
+}
+
+/**
+ * Coerces an unknown caught value to an `Error` instance.
+ *
+ * If `err` is already an `Error` (or subclass) it is returned unchanged.
+ * Otherwise a new `Error` is created whose `message` is `String(err)` —
+ * the same coercion `errorMessage` applies.
+ *
+ * Use in `catch (err)` blocks where an `Error` object is required, e.g.
+ * when setting `cause`, passing to an `onError` callback, or yielding to
+ * an error-typed event stream.
+ *
+ * Replaces the inline ternary
+ * `err instanceof Error ? err : new Error(String(err))`.
+ */
+export function ensureError(err: unknown): Error {
+  return err instanceof Error ? err : new Error(String(err));
+}
+
+/**
+ * Returns `true` when `err` is a `NodeJS.ErrnoException` whose `.code`
+ * property equals `code`.
+ *
+ * Replaces the verbose cast-and-compare pattern:
+ * `(err as NodeJS.ErrnoException).code === 'ENOENT'`
+ *
+ * The check is intentionally defensive — it returns `false` for any value
+ * that is not an object, lacks a `.code` property, or has a `.code` that
+ * does not match.
+ */
+export function isErrnoCode(err: unknown, code: string): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code: unknown }).code === code
+  );
+}
+
+/**
+ * Returns `true` when `err` is a Node.js `ENOENT` filesystem error.
+ *
+ * Convenience alias for `isErrnoCode(err, 'ENOENT')` — the most common
+ * errno check, replacing private `isEnoent` wrappers in individual modules.
+ */
+export function isEnoent(err: unknown): boolean {
+  return isErrnoCode(err, 'ENOENT');
+}
+
+/**
+ * Returns the errno `code` string for an unknown caught value, or falls back
+ * to `String(err)` when the value is not an ErrnoException.
+ *
+ * Use in `catch (err)` blocks that need the OS error code (e.g. `'EACCES'`)
+ * for logging or user-facing messages, replacing the inline ternary:
+ * `(err instanceof Error && 'code' in err) ? String((err as { code: unknown }).code) : String(err)`
+ */
+export function errCodeOrString(err: unknown): string {
+  if (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code: unknown }).code !== undefined
+  ) {
+    return String((err as { code: unknown }).code);
+  }
+  return String(err);
+}
+
+/**
+ * True when `err` is an `EgressBlockedError` — either directly or as the
+ * `cause` of a wrapping `TypeError('fetch failed', { cause })`.
+ *
+ * Detects by `.name === 'EgressBlockedError'` rather than `instanceof` so
+ * this leaf utility does not import from `src/http-client/`, which would
+ * create an upward cycle. The name is stable — see egress-guard.ts.
+ */
+export function isEgressBlocked(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err.name === 'EgressBlockedError') return true;
+  // undici wraps connect-time errors as TypeError('fetch failed', { cause })
+  const cause = (err as { cause?: unknown }).cause;
+  return cause instanceof Error && cause.name === 'EgressBlockedError';
+}
+
+/**
+ * Extract the underlying `EgressBlockedError` from a wrapping
+ * `TypeError('fetch failed', { cause: EgressBlockedError })`, or return
+ * `err` itself when it already IS the EgressBlockedError.
+ *
+ * Returns `null` when `err` is not egress-blocked.
+ */
+export function extractEgressBlockedError(err: unknown): Error | null {
+  if (!(err instanceof Error)) return null;
+  if (err.name === 'EgressBlockedError') return err;
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause instanceof Error && cause.name === 'EgressBlockedError') return cause;
+  return null;
+}
+
+/**
+ * Format a network-error message that surfaces undici's cause chain when
+ * available. When `err` is undici's `TypeError('fetch failed', { cause })`,
+ * the returned string is `"fetch failed (<cause.code>: <cause.message>)"`
+ * (code omitted when absent) — giving callers that format
+ * `web_scrape network error: <X>` an actionable message instead of the
+ * opaque `"fetch failed"`. Any other error returns its own message.
+ *
+ * Contract: existing message prefixes (`web_scrape network error:`,
+ * `web_scrape blocked:`, etc.) are NOT included here — the caller owns them.
+ * This function only formats the trailing error text.
+ */
+export function fetchFailedMessage(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause instanceof Error && err.message === 'fetch failed') {
+    const code = (cause as { code?: string }).code;
+    return code != null
+      ? `fetch failed (${code}: ${cause.message})`
+      : `fetch failed (${cause.message})`;
+  }
+  return err.message;
+}
+
 export class AbortError extends Error {
   constructor(message?: string) {
     super(message);
@@ -166,3 +311,55 @@ export class UnsupportedProviderConfigError extends Error {
   }
 }
 
+
+/**
+ * Which subscription hit its usage limit: `'anthropic'` is Claude (OAuth
+ * subscription or API credit), `'codex'` is the ChatGPT/Codex subscription
+ * backend.
+ */
+export type UsageLimitProvider = 'anthropic' | 'codex';
+
+/** Provider-neutral facts about a usage limit, shared by every surface. */
+export interface UsageLimitInfo {
+  provider: UsageLimitProvider;
+  /** `'subscription'` = a rolling subscription window; `'credit'` = an empty API credit balance. */
+  kind: 'subscription' | 'credit';
+  /** When the limit resets, when the provider reported it. */
+  resetsAt?: Date;
+  /** Subscription plan label, when the provider reported it (e.g. `plus`). */
+  plan?: string;
+}
+
+/**
+ * Contract: the terminal error a provider surfaces when a usage limit ends a
+ * turn (fail-fast, a reset beyond the wait budget, or the wait budget spent).
+ * `message` is the friendly provider-labeled sentence from
+ * `describeUsageLimit` (agent/usage/usage-formatter.ts), so the REPL, Telegram
+ * and subagent-failure paths all show it without parsing the raw body.
+ *
+ * Compatibility with the raw SDK error it replaces: `status` stays 429 (400
+ * for an empty credit balance) so status-keyed classifiers still work, the
+ * original error is kept on `cause`, and `name` is `'UsageLimitError'` (the
+ * value `errorClass` telemetry records). No SDK import: this is a leaf module.
+ */
+export class UsageLimitError extends Error {
+  /**
+   * HTTP status code for this error: `400` when `info.kind === 'credit'`
+   * (empty API credit balance), `429` for all other usage-limit kinds
+   * (subscription window exhausted). Matches the raw SDK error it replaces so
+   * status-keyed classifiers continue to work.
+   */
+  public readonly status: number;
+  public override readonly cause?: unknown;
+
+  constructor(
+    message: string,
+    public readonly info: UsageLimitInfo,
+    options?: { cause?: unknown },
+  ) {
+    super(message);
+    this.name = "UsageLimitError";
+    this.status = info.kind === 'credit' ? 400 : 429;
+    if (options?.cause !== undefined) this.cause = options.cause;
+  }
+}

@@ -31,6 +31,7 @@ import {
   categorizeTool,
   dispatchTagForCategory,
   SUBAGENT_TOOLS,
+  PEER_TOOLS,
   SKILL_TOOLS,
   DAG_TOOLS,
   NESTING_TOOLS,
@@ -41,6 +42,7 @@ export {
   categorizeTool,
   dispatchTagForCategory,
   SUBAGENT_TOOLS,
+  PEER_TOOLS,
   SKILL_TOOLS,
   DAG_TOOLS,
   NESTING_TOOLS,
@@ -70,6 +72,10 @@ function categoryColor(cat: ToolCategory): ChalkInstance {
     case 'write': return chalk.hex('#E8A33D');
     case 'shell': return chalk.hex('#A8E060');
     case 'subagent': return palette.plan;
+    // peer — violet, one hue step from subagent (plan) but desaturated enough
+    // to stay distinct. Peer tools are a sibling-dispatch pattern, not a child
+    // dispatch — different semantic weight from agent/skill.
+    case 'peer': return chalk.hex('#9B7EE8');
     case 'skill': return chalk.hex('#F08AC4');
     // dag — teal. Distinct from skill pink, subagent purple, mcp cyan, and web sage.
     case 'dag': return chalk.hex('#4EC9B0');
@@ -105,6 +111,8 @@ const CATEGORY_GLYPH: Record<ToolCategory, string> = {
   write: '✎',
   shell: '▸',
   subagent: '→',
+  // ⇆ = bidirectional arrow, evokes peer-to-peer exchange vs. subagent (→, child-only).
+  peer: '⇆',
   skill: '◆',
   // hexagon evokes the "node graph" / DAG shape; distinct from ◆ (skill)
   // and ⊡ (mcp). Single-cell width in standard monospace fonts.
@@ -134,6 +142,7 @@ export const CATEGORY_HUMAN_VERB: Record<ToolCategory, string> = {
   write: 'Writing…',
   shell: 'Running…',
   subagent: 'Delegating…',
+  peer: 'Messaging…',
   skill: 'Running skill…',
   dag: 'Coordinating…',
   mcp: 'Calling plugin…',
@@ -145,18 +154,32 @@ export const CATEGORY_HUMAN_VERB: Record<ToolCategory, string> = {
 };
 
 /**
- * Tool-specific verb overrides for tools whose action conflicts with their
- * category's default verb. `cancel_background_job` is categorized `subagent`
- * (it targets subagent handles) but the action is a cancellation, not a
- * delegation. Similarly, `list_schedules` / `get_schedule_history` are reads
- * and `cancel_schedule` is a removal, not scheduling. The override is checked
- * first by `humanVerbForTool`; missing entries fall through to the category.
+ * Tool-specific verbs for actions more precise than their category default:
+ * cancellations and schedule reads, waiting, testing, notification, image
+ * generation, questions, search, memory access, patching, and configuration.
+ * Both the tool lane and spinner resolve these through `humanVerbForTool`;
+ * missing entries fall through to the category. Action-dependent tools such
+ * as `worktree` deliberately retain the category default.
  */
-const TOOL_VERB_OVERRIDES: Partial<Record<string, string>> = {
+export const TOOL_VERB_OVERRIDES: Partial<Record<string, string>> = {
+  list_sessions: 'Listing sessions…',
+  send_to_session: 'Sending…',
   cancel_background_job: 'Cancelling…',
   list_schedules: 'Reading…',
   get_schedule_history: 'Reading…',
   cancel_schedule: 'Cancelling…',
+  wait_for: 'Waiting…',
+  test_run: 'Testing…',
+  send_telegram: 'Notifying…',
+  image_generate: 'Generating…',
+  image_edit: 'Generating…',
+  ask_question: 'Asking…',
+  grep: 'Searching…',
+  glob: 'Searching…',
+  memory_search: 'Recalling…',
+  memory_update: 'Remembering…',
+  patch_apply: 'Patching…',
+  config_set: 'Configuring…',
 };
 
 /**

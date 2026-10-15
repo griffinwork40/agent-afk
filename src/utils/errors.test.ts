@@ -5,7 +5,15 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  abortReason,
   errorMessage,
+  ensureError,
+  isErrnoCode,
+  isEnoent,
+  errCodeOrString,
+  isEgressBlocked,
+  extractEgressBlockedError,
+  fetchFailedMessage,
   AbortError,
   TimeoutError,
   IdleWatchdogError,
@@ -65,6 +73,117 @@ describe('errorMessage', () => {
     const sym = Symbol('oops');
     // Symbol cannot be implicitly coerced — String() handles it explicitly.
     expect(errorMessage(sym)).toBe('Symbol(oops)');
+  });
+});
+
+// ── ensureError() ─────────────────────────────────────────────────────────────
+
+describe('ensureError', () => {
+  it('returns an Error instance unchanged', () => {
+    const e = new Error('original');
+    expect(ensureError(e)).toBe(e);
+  });
+
+  it('returns a subclass of Error unchanged', () => {
+    class MyError extends Error {}
+    const e = new MyError('subclass');
+    expect(ensureError(e)).toBe(e);
+  });
+
+  it('wraps a string in a new Error', () => {
+    const result = ensureError('something went wrong');
+    expect(result).toBeInstanceOf(Error);
+    expect(result.message).toBe('something went wrong');
+  });
+
+  it('wraps a number', () => {
+    const result = ensureError(42);
+    expect(result).toBeInstanceOf(Error);
+    expect(result.message).toBe('42');
+  });
+
+  it('wraps null', () => {
+    const result = ensureError(null);
+    expect(result).toBeInstanceOf(Error);
+    expect(result.message).toBe('null');
+  });
+
+  it('wraps undefined', () => {
+    const result = ensureError(undefined);
+    expect(result).toBeInstanceOf(Error);
+    expect(result.message).toBe('undefined');
+  });
+
+  it('wraps a plain object', () => {
+    const result = ensureError({ code: 500 });
+    expect(result).toBeInstanceOf(Error);
+    expect(result.message).toBe('[object Object]');
+  });
+});
+
+// ── isErrnoCode() ─────────────────────────────────────────────────────────────
+
+describe('isErrnoCode', () => {
+  it('returns true when err has matching .code', () => {
+    const err = Object.assign(new Error('not found'), { code: 'ENOENT' });
+    expect(isErrnoCode(err, 'ENOENT')).toBe(true);
+  });
+
+  it('returns false when .code does not match', () => {
+    const err = Object.assign(new Error('exists'), { code: 'EEXIST' });
+    expect(isErrnoCode(err, 'ENOENT')).toBe(false);
+  });
+
+  it('returns false for an Error without .code', () => {
+    expect(isErrnoCode(new Error('plain'), 'ENOENT')).toBe(false);
+  });
+
+  it('returns false for a string', () => {
+    expect(isErrnoCode('ENOENT', 'ENOENT')).toBe(false);
+  });
+
+  it('returns false for null', () => {
+    expect(isErrnoCode(null, 'ENOENT')).toBe(false);
+  });
+
+  it('returns false for undefined', () => {
+    expect(isErrnoCode(undefined, 'ENOENT')).toBe(false);
+  });
+
+  it('matches EEXIST correctly', () => {
+    const err = Object.assign(new Error('file exists'), { code: 'EEXIST' });
+    expect(isErrnoCode(err, 'EEXIST')).toBe(true);
+    expect(isErrnoCode(err, 'ENOENT')).toBe(false);
+  });
+
+  it('works with a plain object carrying .code', () => {
+    expect(isErrnoCode({ code: 'ESRCH' }, 'ESRCH')).toBe(true);
+  });
+});
+
+// ── isEnoent() ───────────────────────────────────────────────────────────────
+
+describe('isEnoent', () => {
+  it('returns true for an ENOENT ErrnoException', () => {
+    const err = Object.assign(new Error('no such file'), { code: 'ENOENT' });
+    expect(isEnoent(err)).toBe(true);
+  });
+
+  it('returns false for a different errno code', () => {
+    const err = Object.assign(new Error('exists'), { code: 'EEXIST' });
+    expect(isEnoent(err)).toBe(false);
+  });
+
+  it('returns false for a plain Error with no code', () => {
+    expect(isEnoent(new Error('plain'))).toBe(false);
+  });
+
+  it('returns false for null', () => {
+    expect(isEnoent(null)).toBe(false);
+  });
+
+  it('returns false for undefined', () => {
+    expect(isEnoent(undefined)).toBe(false);
   });
 });
 
@@ -298,5 +417,124 @@ describe('UnsupportedProviderConfigError', () => {
   it('default message matches the documented format', () => {
     const err = new UnsupportedProviderConfigError('myProvider', 'myField');
     expect(err.message).toBe('myProvider provider does not support AgentConfig.myField.');
+  });
+});
+
+describe('egress-blocked unwrapping + fetchFailedMessage', () => {
+  function blockedError(): Error {
+    const e = new Error('refusing to connect to x (resolved)');
+    e.name = 'EgressBlockedError';
+    return e;
+  }
+
+  it('detects a top-level EgressBlockedError', () => {
+    const e = blockedError();
+    expect(isEgressBlocked(e)).toBe(true);
+    expect(extractEgressBlockedError(e)).toBe(e);
+  });
+
+  it('unwraps an EgressBlockedError wrapped as undici fetch-failed cause', () => {
+    const inner = blockedError();
+    const outer = new TypeError('fetch failed', { cause: inner });
+    expect(isEgressBlocked(outer)).toBe(true);
+    expect(extractEgressBlockedError(outer)).toBe(inner);
+  });
+
+  it('returns null / false for unrelated errors and non-errors', () => {
+    const outer = new TypeError('fetch failed', { cause: new Error('boom') });
+    expect(isEgressBlocked(outer)).toBe(false);
+    expect(extractEgressBlockedError(outer)).toBeNull();
+    expect(extractEgressBlockedError('nope')).toBeNull();
+  });
+
+  it('formats fetch failed with cause code and message', () => {
+    const cause = Object.assign(new Error('Invalid IP address: undefined'), {
+      code: 'ERR_INVALID_IP_ADDRESS',
+    });
+    const outer = new TypeError('fetch failed', { cause });
+    expect(fetchFailedMessage(outer)).toBe(
+      'fetch failed (ERR_INVALID_IP_ADDRESS: Invalid IP address: undefined)',
+    );
+  });
+
+  it('formats fetch failed with cause message when no code is present', () => {
+    const outer = new TypeError('fetch failed', { cause: new Error('socket hang up') });
+    expect(fetchFailedMessage(outer)).toBe('fetch failed (socket hang up)');
+  });
+
+  it('passes through other messages and non-errors', () => {
+    expect(fetchFailedMessage(new Error('HTTP 500'))).toBe('HTTP 500');
+    expect(fetchFailedMessage('raw')).toBe('raw');
+  });
+});
+
+// ── abortReason() ─────────────────────────────────────────────────────────────
+
+describe('abortReason', () => {
+  it('returns Error.message when reason is an Error', () => {
+    expect(abortReason(new Error('timed out after 5000ms'))).toBe('timed out after 5000ms');
+  });
+
+  it('returns String(reason) when reason is a plain string', () => {
+    expect(abortReason('cancelled')).toBe('cancelled');
+  });
+
+  it('returns "aborted" when reason is undefined', () => {
+    expect(abortReason(undefined)).toBe('aborted');
+  });
+
+  it('returns "aborted" when reason is null', () => {
+    expect(abortReason(null)).toBe('aborted');
+  });
+
+  it('returns String(reason) for other non-Error values', () => {
+    expect(abortReason(42)).toBe('42');
+    expect(abortReason(false)).toBe('false');
+  });
+
+  it('correctly extracts reason from a live AbortSignal', () => {
+    const ac = new AbortController();
+    ac.abort(new Error('session cancelled'));
+    expect(abortReason(ac.signal.reason)).toBe('session cancelled');
+  });
+
+  it('is distinct from errorMessage: undefined yields "aborted" not "undefined"', () => {
+    expect(abortReason(undefined)).toBe('aborted');
+    expect(errorMessage(undefined)).toBe('undefined');
+  });
+});
+
+// ── errCodeOrString() ─────────────────────────────────────────────────────────
+
+describe('errCodeOrString', () => {
+  it('returns the .code string for a NodeJS.ErrnoException', () => {
+    const err = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    expect(errCodeOrString(err)).toBe('ENOENT');
+  });
+
+  it('returns String(err) for a plain Error without .code', () => {
+    const err = new Error('something went wrong');
+    expect(errCodeOrString(err)).toBe('Error: something went wrong');
+  });
+
+  it('returns String(err) for a string', () => {
+    expect(errCodeOrString('boom')).toBe('boom');
+  });
+
+  it('returns String(err) for a number', () => {
+    expect(errCodeOrString(42)).toBe('42');
+  });
+
+  it('returns String(err) for null', () => {
+    expect(errCodeOrString(null)).toBe('null');
+  });
+
+  it('returns String(err) for undefined', () => {
+    expect(errCodeOrString(undefined)).toBe('undefined');
+  });
+
+  it('handles an object with code: undefined by falling back to String(err)', () => {
+    const obj = { code: undefined, toString: () => '[object]' };
+    expect(errCodeOrString(obj)).toBe('[object]');
   });
 });

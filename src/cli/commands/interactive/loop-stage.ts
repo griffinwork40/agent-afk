@@ -47,7 +47,8 @@ import type { OutputEvent } from '../../../agent/types.js';
 import { ResizeBus } from '../../terminal-size.js';
 import { palette } from '../../palette.js';
 import { isPlainOutputRequested } from '../../../config/env.js';
-import { contentMargin } from '../../render/measure.js';
+import { contentBand } from '../../render/measure.js';
+import { truncateDisplayWidth } from '../../display.js';
 
 export type LoopStage = 'observing' | 'modeling' | 'choosing' | 'acting' | 'updating';
 
@@ -242,7 +243,23 @@ export class LoopStageBar {
   private started = false;
   private currentStage: LoopStage = 'observing';
   private resizeUnsub: (() => void) | null = null;
+  private resizeImmediateUnsub: (() => void) | null = null;
   private onRowCountChange?: (rows: number) => void;
+  /**
+   * The absolute row at which the rail was most recently painted. Updated on
+   * every paint so the immediate-channel resize snapshot captures the TRUE
+   * pre-SIGWINCH address (stream.rows has already changed by the time any
+   * debounced handler runs). Mirrors StatusLine.lastPaintedRow.
+   */
+  private lastPaintedRow: number | null = null;
+  /**
+   * Snapshot of `lastPaintedRow` captured synchronously by the
+   * ResizeBus.subscribeImmediate callback — the only moment the pre-SIGWINCH
+   * address is still available. Consumed by the next repaint() to erase the
+   * ghost row left behind when the pane grows and the rail moves down. Mirrors
+   * StatusLine.preResizePaintedRow / BackgroundStatusBar.preResizeStartRow.
+   */
+  private preResizePaintedRow: number | null = null;
 
   /**
    * @param opts.getExtraRows - Returns the current total extra-rows reservation
@@ -270,6 +287,15 @@ export class LoopStageBar {
     this.started = true;
     // Reserve 1 row first so the DECSTBM is updated before we paint.
     this.onRowCountChange?.(1);
+    // Immediate channel: snapshot lastPaintedRow BEFORE the debounce window
+    // opens so the debounced repaint() can erase the old ghost row on GROW.
+    // This mirrors StatusLine.resetGeometry() / BackgroundStatusBar.resetGeometry():
+    // by the time the debounced subscriber fires, stream.rows has already changed
+    // and lastPaintedRow may have been updated by a mid-window tick, so the
+    // immediate snapshot is the only reliable source of the true pre-SIGWINCH row.
+    this.resizeImmediateUnsub = ResizeBus.subscribeImmediate(() => {
+      this.preResizePaintedRow = this.lastPaintedRow;
+    });
     this.resizeUnsub = ResizeBus.subscribe(() => this.repaint(this.currentStage));
     this.repaint(this.currentStage);
   }
@@ -281,6 +307,12 @@ export class LoopStageBar {
       this.resizeUnsub();
       this.resizeUnsub = null;
     }
+    if (this.resizeImmediateUnsub) {
+      this.resizeImmediateUnsub();
+      this.resizeImmediateUnsub = null;
+    }
+    this.preResizePaintedRow = null;
+    this.lastPaintedRow = null;
     this.clearRow();
     // Release our 1-row reservation.
     this.onRowCountChange?.(0);
@@ -302,19 +334,39 @@ export class LoopStageBar {
     // bg bar is empty).
     const paintRow = Math.max(1, totalRows - extraRows);
     this.stream.write('\x1b[s');
+    // Erase the ghost left by a pane GROW: `preResizePaintedRow` holds the
+    // pre-SIGWINCH row captured by the immediate channel before `stream.rows`
+    // changed. When the pane grows, the rail moves DOWN so the old row sits
+    // above the new position — clear it before painting the new row. Only
+    // erase when the old row differs from the new paint row AND is inside the
+    // current viewport; addressing a row outside [1, totalRows] would scroll.
+    const ghostRow = this.preResizePaintedRow;
+    this.preResizePaintedRow = null;
+    if (ghostRow !== null && ghostRow !== paintRow && ghostRow >= 1 && ghostRow <= totalRows) {
+      this.stream.write(`\x1b[${ghostRow};1H`);
+      this.stream.write('\x1b[2K');
+    }
     this.stream.write(`\x1b[${paintRow};1H`);
     this.stream.write('\x1b[2K');
     // Content centering (AFK_CENTER_CONTENT): prepend left margin so the
     // OODA stage rail floats at the same horizontal position as other content.
+    // Defensively truncate the rail to the remaining band width so future
+    // stage label growth can never overflow; all other CUP-painted footer
+    // rows apply an equivalent guard.
+    const cols = this.stream.columns ?? 80;
+    const { margin: pad, width: bandWidth } = contentBand(cols);
+    const RAIL_INDENT = '  ';
+    const railContent = formatStageRail(stage, {
+      dim: palette.dim,
+      accent: palette.brand,
+      bold: palette.bold,
+    });
+    const maxRailW = Math.max(4, bandWidth - 2 - RAIL_INDENT.length);
     this.stream.write(
-      contentMargin() + '  ' +
-        formatStageRail(stage, {
-          dim: palette.dim,
-          accent: palette.brand,
-          bold: palette.bold,
-        }),
+      pad + RAIL_INDENT + truncateDisplayWidth(railContent, maxRailW),
     );
     this.stream.write('\x1b[u');
+    this.lastPaintedRow = paintRow;
   }
 
   /**

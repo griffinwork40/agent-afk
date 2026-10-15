@@ -10,8 +10,8 @@
  */
 
 import { Command } from 'commander';
-import { existsSync, readFileSync } from 'node:fs';
 import { handleCommandError } from '../errors/index.js';
+import { readTelemetryHistory } from '../../agent/daemon/telemetry-reader.js';
 import {
   loadSchedules,
   addSchedule,
@@ -19,8 +19,31 @@ import {
   toggleScheduleEnabled,
   toScheduledTask,
 } from '../../agent/daemon/schedule-store.js';
+import { validateScheduleCwd } from '../../agent/daemon/cwd-validator.js';
 import { getTelemetryPath } from '../../paths.js';
 import { trySyncToDaemon, SYNC_FAILED_NOTE } from '../../agent/daemon/http-client.js';
+
+/**
+ * Print the schedule list as an ASCII table.
+ * Adds a CWD column only when at least one task has a per-task cwd.
+ */
+function printScheduleList(schedules: ReturnType<typeof loadSchedules>): void {
+  if (schedules.length === 0) {
+    console.log('No scheduled tasks.');
+    return;
+  }
+  const hasCwd = schedules.some((s) => s.cwd !== undefined);
+  const header = hasCwd
+    ? 'ID                   | NAME                           | CRON            | ENABLED | CWD'
+    : 'ID                   | NAME                           | CRON            | ENABLED';
+  console.log(header);
+  console.log('-'.repeat(header.length));
+  for (const s of schedules) {
+    const row = [s.id.padEnd(20), s.name.padEnd(30), s.cron.padEnd(15), String(s.enabled).padEnd(7)];
+    if (hasCwd) row.push(s.cwd ?? '');
+    console.log(row.join(' | '));
+  }
+}
 
 export function registerScheduleCommand(program: Command): void {
   const schedule = program.command('schedule').description('Manage scheduled daemon tasks');
@@ -35,6 +58,7 @@ export function registerScheduleCommand(program: Command): void {
     .option('--executor <type>', 'agent | shell (default: agent)', 'agent')
     .option('--trigger <mode>', 'cron | sessionstart | both', 'cron')
     .option('--notify <when>', 'failure | always | never', 'failure')
+    .option('--cwd <path>', 'Per-task working directory (absolute path or ~/…)')
     .option('--disabled', 'Add in disabled state', false)
     .action(
       async (opts: {
@@ -44,6 +68,7 @@ export function registerScheduleCommand(program: Command): void {
         executor: string;
         trigger: string;
         notify: string;
+        cwd?: string;
         disabled: boolean;
       }) => {
         try {
@@ -53,6 +78,16 @@ export function registerScheduleCommand(program: Command): void {
             process.exitCode = 1;
             return;
           }
+          let resolvedCwd: string | undefined;
+          if (opts.cwd !== undefined) {
+            const cwdResult = validateScheduleCwd(opts.cwd);
+            if (!cwdResult.ok) {
+              console.error(`Error: ${cwdResult.error}`);
+              process.exitCode = 1;
+              return;
+            }
+            resolvedCwd = cwdResult.resolved;
+          }
           const config = addSchedule({
             name: opts.name,
             command: opts.command,
@@ -60,6 +95,7 @@ export function registerScheduleCommand(program: Command): void {
             ...(executor !== 'agent' ? { executor } : {}),
             trigger: opts.trigger as 'cron' | 'sessionstart' | 'both',
             notifyOn: opts.notify as 'failure' | 'always' | 'never',
+            ...(resolvedCwd !== undefined ? { cwd: resolvedCwd } : {}),
             enabled: !opts.disabled,
           });
           // Mirror the create_schedule tool handler: enabled tasks are
@@ -74,6 +110,7 @@ export function registerScheduleCommand(program: Command): void {
                 ...(config.executor !== undefined ? { executor: config.executor } : {}),
                 trigger: config.trigger,
                 notifyOn: config.notifyOn,
+                ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
               })
             : await trySyncToDaemon('DELETE', `/tasks/${config.id}`);
           if (!syncAdd.synced) console.error(`⚠️  ${SYNC_FAILED_NOTE}`);
@@ -90,26 +127,7 @@ export function registerScheduleCommand(program: Command): void {
     .description('List all scheduled tasks')
     .action(() => {
       try {
-        const schedules = loadSchedules();
-        if (schedules.length === 0) {
-          console.log('No scheduled tasks.');
-          return;
-        }
-        // ASCII table: ID | NAME | CRON | ENABLED
-        const header = 'ID                   | NAME                           | CRON            | ENABLED';
-        const sep = '-'.repeat(header.length);
-        console.log(header);
-        console.log(sep);
-        for (const s of schedules) {
-          console.log(
-            [
-              s.id.padEnd(20),
-              s.name.padEnd(30),
-              s.cron.padEnd(15),
-              String(s.enabled),
-            ].join(' | '),
-          );
-        }
+        printScheduleList(loadSchedules());
       } catch (err) {
         handleCommandError(err);
       }
@@ -171,33 +189,11 @@ export function registerScheduleCommand(program: Command): void {
     .command('logs <id>')
     .description('Show recent execution history for a task')
     .option('-n, --limit <n>', 'Number of records to show', '10')
-    .action((id: string, opts: { limit: string }) => {
+    .action(async (id: string, opts: { limit: string }) => {
       try {
         const limit = Math.min(Math.max(1, parseInt(opts.limit, 10) || 10), 50);
         const telemetryPath = getTelemetryPath();
-        if (!existsSync(telemetryPath)) {
-          console.log(`No telemetry found for task: ${id}`);
-          return;
-        }
-        // 1MB tail cap, reverse scan — same logic as getScheduleHistoryHandler
-        const buf = readFileSync(telemetryPath);
-        const tailBuf = buf.length > 1_048_576 ? buf.subarray(buf.length - 1_048_576) : buf;
-        const content = tailBuf.toString('utf-8');
-        const lines = content.split('\n');
-        const matching: unknown[] = [];
-        for (let i = lines.length - 1; i >= 0; i -= 1) {
-          const line = lines[i];
-          if (!line) continue;
-          try {
-            const record = JSON.parse(line) as { taskId?: string };
-            if (record.taskId !== id) continue;
-            matching.push(record);
-            if (matching.length >= limit) break;
-          } catch {
-            continue;
-          }
-        }
-        const results = matching.reverse(); // chronological order
+        const results = await readTelemetryHistory(telemetryPath, { taskId: id, limit });
         if (results.length === 0) {
           console.log(`No history found for task: ${id}`);
           return;

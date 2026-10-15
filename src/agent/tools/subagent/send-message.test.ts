@@ -163,46 +163,26 @@ describe('sendMessageToAgent — registry and job guards', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Provider-capability check (the core fix for #1495)
+// Steering works on all providers (both Anthropic and OpenAI now supported)
 // ---------------------------------------------------------------------------
 
-describe('sendMessageToAgent — provider steering capability check', () => {
-  it('returns isError when provider does not support setBeforeNextRound', async () => {
+describe('sendMessageToAgent — steering works on any provider', () => {
+  it('queues the message via handle.steer() even when session lacks setBeforeNextRound', async () => {
+    // Both Anthropic and OpenAI now implement setBeforeNextRound. The old
+    // capability check (provider-capability-check for #1495) is removed because
+    // it incorrectly rejected OpenAI sessions. The steer() call goes through
+    // regardless of whether setBeforeNextRound is present on the session object.
     const job = makeJob();
-    const session = makeSession(false); // OpenAI-compatible: no setBeforeNextRound
+    const session = makeSession(false); // session without setBeforeNextRound
     const handle = makeHandle(session);
     const registry = makeRegistry(job, handle);
 
     const result = await sendMessageToAgent(registry, makeCall('job-abc', 'redirect here'));
 
-    expect(result.isError).toBe(true);
-    expect(result.content).toContain('Steering is not supported');
-    // The message must NOT have been queued
-    expect(handle.steer).not.toHaveBeenCalled();
-  });
-
-  it('does not queue the message to the ring buffer on unsupported provider', async () => {
-    const job = makeJob();
-    const session = makeSession(false);
-    const handle = makeHandle(session);
-    // Expose the steeringMessages so we can confirm nothing was pushed
-    (handle as Record<string, unknown>)['_steeringMessages'] = [];
-    const registry = makeRegistry(job, handle);
-
-    await sendMessageToAgent(registry, makeCall('job-abc', 'should not land'));
-
-    expect((handle as Record<string, unknown>)['_steeringMessages']).toHaveLength(0);
-  });
-
-  it('mentions "Anthropic" in the error to guide the user', async () => {
-    const job = makeJob();
-    const session = makeSession(false);
-    const handle = makeHandle(session);
-    const registry = makeRegistry(job, handle);
-
-    const result = await sendMessageToAgent(registry, makeCall('job-abc', 'steer'));
-
-    expect(result.content).toMatch(/anthropic/i);
+    // Should succeed rather than return an error.
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('queued');
+    expect(handle.steer).toHaveBeenCalledWith('redirect here');
   });
 });
 

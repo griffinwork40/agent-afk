@@ -32,6 +32,8 @@ export interface ShutdownDeps {
   ownedTraceWriter: TraceWriter | undefined;
   /** Whether this session owns the trace seal (second-arg ownership check). */
   ownsTraceSeal: boolean;
+  /** Assistant texts from the in-memory history, threaded to SessionEnd hooks. */
+  getAssistantTexts?: () => readonly string[];
 }
 
 /**
@@ -92,12 +94,16 @@ export class SessionShutdown {
       getSessionId,
       ownsTraceSeal,
       ownedTraceWriter,
+      getAssistantTexts,
     } = this.deps;
     const config = getConfig();
 
-    if (config.drainSubagents !== undefined) {
-      await config.drainSubagents(reason).catch(() => {});
-    }
+    // Drain both the opt-in executor bundle (#3442) and the caller-supplied
+    // tree hook concurrently; neither may reject the shutdown.
+    await Promise.all([
+      config.executors?.drain(reason).catch(() => {}),
+      config.drainSubagents?.(reason).catch(() => {}),
+    ]);
 
     const signals = accounting.closureSignals(getAbortController().signal, reason);
     const acct = accounting.snapshot();
@@ -125,6 +131,11 @@ export class SessionShutdown {
         subagentCompletedCount: acct.subagentCompletedCount,
         subagentRunningTokens: acct.subagentRunningTokens,
         subagentRunningCostUsd: acct.subagentRunningCostUsd,
+        // Collect in-flight child terminal emit promises so they land before
+        // session_sealed even when the drain timed out or was not configured
+        // (#3714). Called after the drain so all active handles have had a
+        // chance to start their cancellation emits.
+        pendingChildTerminalWrites: config.getPendingChildTerminalWrites?.(),
       };
       await sealTraceWriter(ownedTraceWriter, sealInput).catch(() => {});
     }
@@ -148,6 +159,8 @@ export class SessionShutdown {
         // session-end hooks (e.g. the yield probe) run git/gh against the
         // session's repo rather than process.cwd().
         ...(config.cwd ? { cwd: config.cwd } : {}),
+        // In-memory assistant turns, for surfaces that never write a sidecar.
+        ...(getAssistantTexts ? { assistantTexts: getAssistantTexts() } : {}),
       },
       // Invariant: skip traceWriter when this session owns the seal (step 3
       // above) — the writer is sealed, so the hook_decision write would throw.

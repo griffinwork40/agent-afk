@@ -17,7 +17,7 @@
 
 import type { ChalkInstance } from 'chalk';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { formatElapsed, ELAPSED_GRACE_MS, ELAPSED_AMBER_SEC, ELAPSED_RED_SEC, ELAPSED_AMBER_MAX_SEC } from './terminal-compositor.scrollback.js';
+import { formatElapsed, ELAPSED_GRACE_MS, ELAPSED_AMBER_SEC, ELAPSED_AMBER_MAX_SEC } from './terminal-compositor.scrollback.js';
 import { stripAnsi } from './display.js';
 import { palette } from './palette.js';
 
@@ -156,9 +156,8 @@ describe('formatElapsed', () => {
       expect(rawPast).toContain('WARN:');
       expect(rawPast).not.toContain('ERR:');
 
-      // ELAPSED_RED_SEC is kept as a deprecated alias — its numeric value (60)
-      // matches ELAPSED_AMBER_MAX_SEC, so the threshold math is unchanged.
-      expect(ELAPSED_RED_SEC).toBe(ELAPSED_AMBER_MAX_SEC);
+      // ELAPSED_AMBER_MAX_SEC is 60; verify the threshold value.
+      expect(ELAPSED_AMBER_MAX_SEC).toBe(60);
     } finally {
       palette.warning = savedWarning;
       palette.error = savedError;

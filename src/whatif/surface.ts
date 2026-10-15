@@ -1,0 +1,215 @@
+/**
+ * Surface-agnostic glue for `afk whatif` and `/whatif`.
+ *
+ * Exports three functions consumed by both surfaces:
+ *
+ *   - {@link resolveSpec} — turn parsed args into a `ChangeSpec`.
+ *   - {@link buildWhatifDeps} — wire `WhatifDeps` from a token + options.
+ *   - {@link buildWhatifRunOptions} — build the `WhatifOptions` object from
+ *     parsed args and surface-specific inputs (spec, home, cwd, models).
+ *
+ * The recursion guard (`isWhatifEpisode()`) is enforced here so neither
+ * surface needs to know about it.
+ *
+ * @module whatif/surface
+ */
+
+import { readdirSync } from 'node:fs';
+import { isWhatifEpisode } from '../agent/whatif-episode-gate.js';
+import { createAnthropicComplete } from './complete.js';
+import { createAfkRunner } from './runner/afk-runner.js';
+import { resolveJudge } from './judge/index.js';
+import { connectJev } from './judge/jev-connect.js';
+import { createClaudeJudge } from './judge/claude.js';
+import { compileChangeSpec } from './compile.js';
+import { describeChange } from './operators/index.js';
+import { loadSpecFile } from './args.js';
+import type { ParsedWhatifArgs } from './args.js';
+import type { ChangeSpec, CompleteFn, WhatifDeps, WhatifOptions, WhatifProgress } from './types.js';
+
+// ---------------------------------------------------------------------------
+// resolveSpec
+// ---------------------------------------------------------------------------
+
+export interface ResolveSpecDeps {
+  complete: CompleteFn;
+  analystModel: string;
+  realHome: string;
+  /** Names of user skills (dir names under <realHome>/skills). */
+  skills: string[];
+  /** Names of user plugins. */
+  plugins: string[];
+}
+
+/**
+ * Resolve parsed args to a `ChangeSpec`, compiling plain-English text when
+ * needed.
+ *
+ * Throws on unresolvable specs (`UNRESOLVED:` prefix from the compiler),
+ * bad spec files, or missing inputs.
+ */
+export async function resolveSpec(
+  parsed: ParsedWhatifArgs,
+  deps: ResolveSpecDeps,
+): Promise<ChangeSpec> {
+  // A/A calibration (#2415 Step 0): both arms run with zero changes, so there
+  // is nothing to resolve. parseWhatifArgs already rejects --aa combined with a
+  // spec file, change flags, or text, so returning the empty spec here is the
+  // only way the run.aa fast path is reachable from `afk whatif` and `/whatif`.
+  // Guard is intentionally above the deps destructure — no dep is needed here.
+  if (parsed.aaMode) {
+    return { title: 'A/A calibration (no changes)', changes: [] };
+  }
+
+  const { complete, analystModel, skills, plugins } = deps;
+
+  // Spec file takes priority.
+  if (parsed.specFile) {
+    return loadSpecFile(parsed.specFile);
+  }
+
+  // Explicit flag changes: assemble a spec directly.
+  if (parsed.flagChanges.length > 0 && !parsed.text) {
+    const title = parsed.flagChanges.map((c) => describeChange(c)).join('; ');
+    return { title: title.slice(0, 120), changes: parsed.flagChanges };
+  }
+
+  // Plain-English text: compile to a ChangeSpec.
+  if (parsed.text) {
+    const spec = await compileChangeSpec(
+      parsed.text,
+      complete,
+      analystModel,
+      { skills, plugins },
+    );
+
+    if (spec.title.startsWith('UNRESOLVED:')) {
+      throw new Error(
+        `whatif: cannot resolve the requested change: ${spec.title}\n` +
+          `The compiler could not map your description to a concrete change.\n` +
+          `Try being more specific or use explicit flags (--append, --model, etc.).`,
+      );
+    }
+
+    // Merge any flag changes too (flag changes come before compiled changes).
+    if (parsed.flagChanges.length > 0) {
+      return {
+        title: spec.title,
+        changes: [...parsed.flagChanges, ...spec.changes],
+      };
+    }
+
+    return spec;
+  }
+
+  throw new Error('whatif: no change to predict — provide text, flags, or --spec');
+}
+
+// ---------------------------------------------------------------------------
+// buildWhatifDeps
+// ---------------------------------------------------------------------------
+
+export interface BuildWhatifDepsOptions {
+  token: string;
+  analystModel: string;
+  onProgress?: (p: WhatifProgress) => void;
+  signal?: AbortSignal;
+}
+
+/**
+ * Wire `WhatifDeps` from a token and options.
+ *
+ * Enforces the recursion guard: throws if the process is already a
+ * what-if episode (`AFK_WHATIF_EPISODE=1`).
+ */
+export function buildWhatifDeps(opts: BuildWhatifDepsOptions): WhatifDeps {
+  if (isWhatifEpisode()) {
+    throw new Error(
+      'whatif cannot run inside a what-if episode — recursion guard active (AFK_WHATIF_EPISODE=1).',
+    );
+  }
+
+  const { token, analystModel, onProgress, signal } = opts;
+  const complete = createAnthropicComplete(token);
+  const runner = createAfkRunner();
+
+  const makeJudge: WhatifDeps['makeJudge'] = (choice) =>
+    resolveJudge(choice, { complete, model: analystModel, connectJev });
+
+  const makeCrossCheckJudge: WhatifDeps['makeCrossCheckJudge'] = async () =>
+    createClaudeJudge(complete, analystModel);
+
+  return { runner, complete, makeJudge, makeCrossCheckJudge, onProgress, signal };
+}
+
+// ---------------------------------------------------------------------------
+// buildWhatifRunOptions
+// ---------------------------------------------------------------------------
+
+export interface BuildWhatifRunOptionsInputs {
+  spec: ChangeSpec;
+  realHome: string;
+  realCwd: string;
+  agentModel: string;
+  analystModel: string;
+}
+
+/**
+ * Build a `WhatifOptions` object from parsed args and surface-specific inputs.
+ *
+ * Both `afk whatif` (CLI) and `/whatif` (slash command) call this so that run
+ * options — including `operatorPredictions` — are assembled in one place and
+ * cannot drift between surfaces.
+ *
+ * Surface-specific concerns (spinner, exit codes, confirmation UX, model
+ * default resolution) remain in the surface adapters as explicit inputs.
+ */
+export function buildWhatifRunOptions(
+  parsed: ParsedWhatifArgs,
+  inputs: BuildWhatifRunOptionsInputs,
+): WhatifOptions {
+  const { spec, realHome, realCwd, agentModel, analystModel } = inputs;
+  const o = parsed.options;
+  return {
+    spec,
+    realHome,
+    realCwd,
+    agentModel,
+    analystModel,
+    verify: o.verify,
+    turns: o.turns,
+    samples: o.samples,
+    maxUsd: o.maxUsd,
+    judge: o.judge,
+    concurrency: o.concurrency,
+    maxTurns: o.maxTurns,
+    episodeTimeoutMs: o.episodeTimeoutMs,
+    keepSandboxes: o.keepSandboxes,
+    force: parsed.force,
+    ...(o.probes !== undefined ? { probes: o.probes } : {}),
+    ...(o.maxPredictions !== undefined ? { maxPredictions: o.maxPredictions } : {}),
+    ...(o.noBaselineSample ? { noBaselineSample: true } : {}),
+    ...(o.operatorPredictions && o.operatorPredictions.length > 0
+      ? { operatorPredictions: o.operatorPredictions }
+      : {}),
+    ...(parsed.aaMode ? { aaMode: true } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Skill/plugin discovery helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Read skill names from a skills directory (subdirectory names).
+ * Returns an empty array when the directory does not exist.
+ */
+export function readDirNames(dir: string): string[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
+  } catch {
+    return [];
+  }
+}

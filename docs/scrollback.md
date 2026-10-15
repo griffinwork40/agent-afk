@@ -621,6 +621,87 @@ the genuine overflow ... R10 visible" — no premature eviction). Verified again
 a real `@xterm/headless` buffer across varied collapsed-frame heights (extraRows,
 spinner-at-settle, multi-step collapse) — no content loss, no premature archival.
 
+### Fixed: mid-turn history hole under content-hug (2026-10-02)
+
+Repro / regression guard: `src/cli/terminal-compositor.history-hole.repro.test.ts`.
+Operator symptom (pre-fix, tmux copy-mode): a verdict card's bottom border, the
+next prompt echo and a tool header were missing from BOTH scrollback and the
+screen mid-turn; the screen's row 1 already showed newer rows. The rows
+reappeared in history only after the turn ended.
+
+Mechanism: in content-hug placement (the REPL), rows covered by a tall live
+overlay were kept PENDING in the band model ("hide-on-growth") and rows
+committed while the overlay was tall stayed pending via band-hold. Pending rows
+were archived only once the overlay emptied, so for the rest of the turn they
+were on neither the screen nor in scrollback.
+
+Fix (`terminal-compositor.frame-preserve.ts`, `pendingEvictionAllowed`): under
+content-hug, covered and pending rows are archived to scrollback as soon as the
+frame is settled (no open dropdown/picker), on overlay growth and on the next
+repaint after a commit. Bottom-pinned placement keeps the overlay-empty gate,
+because archiving early there leaves blank rows ABOVE the band that later
+scroll into history (`terminal-compositor.collapse-void.test.ts`).
+
+Accepted trade-off (superseded 2026-10-03, see next section): archived rows
+could not return to the screen, so after a tall overlay collapsed the prompt
+sat mid-screen with blank rows BELOW it. History was always contiguous.
+`width-resize-fragment-evict-growth` runs the eviction precondition in both
+modes.
+
+### Fixed: blank gap below prompt after tall overlay collapses (content-hug) (2026-10-03)
+
+Repro / regression guard: `src/cli/terminal-compositor.shrink-gap-ghost.repro.test.ts`
+(fails on the pre-fix code with 11 / 35 blank rows below the prompt at 24 / 64
+rows). Operator symptom: mid-turn, after a subagent card or thinking preview
+shrank, the prompt sat mid-screen with ~20 blank rows between it and the HUD
+footer, and committed output only filled the top of the screen.
+
+Mechanism: the fix above archived covered rows AND removed them from the band
+model, so nothing was left to repaint when the overlay shrank; the hugging
+frame then sat directly below the few remaining band rows.
+
+Fix (archive-and-retain, `terminal-compositor.band-archived-prefix.ts`): under
+content-hug the covered rows are still archived immediately (no history hole),
+but they stay in the band model as the **archived prefix**
+(`committedBandArchivedPrefix`, the leading band rows already in scrollback).
+Hidden while covered, they are re-shown by the normal re-pin on a LARGE frame
+collapse, so the screen refills and the prompt returns to the bottom. Two rules
+keep them from reaching scrollback twice:
+
+1. Every logical-line archive (`scrollbackFlushLines` +
+   `buildScrollbackArchiveEscape`: frame-preserve archive, commit Phase 1,
+   teardown, disarm flush) skips the archived prefix.
+2. Before any raw scroll (`\n` at the bottom margin pushes whatever is on the
+   top rows into history), painted archived rows that would leave the top are
+   dropped from the model and the remaining band is repainted shifted up
+   (drop-by-repaint BEFORE the scroll); only real rows are scrolled.
+
+The prefix is capped, dropping the oldest unpainted archived rows silently
+(they are already in scrollback). Bottom-pinned placement never retains (the
+prefix is always 0 there), so it is unchanged.
+
+Accepted trade-off (the seam overlap, now limited to large collapses):
+`hiddenArchivedRows` in `terminal-compositor.archived-reveal.ts` hides a
+contiguous leading archived prefix when leaving it hidden would put at most
+`K = max(3, floor(rows / 8))` blank rows below the frame. Small spinner/tip
+shrinks therefore do not re-show historical rows or duplicate an Agent header
+at the seam. Those harmless bottom blanks are overwritten by the next commit,
+not scrolled into history. A larger collapse reveals the archived prefix and
+refills the screen, preserving the tall-overlay fix above. Reveal is a one-way
+episode latch: once revealed, threshold oscillation cannot hide it again;
+a new archive event, commit, or resize resets the episode. Initial small
+shrinks can still progress to a large collapse within the same episode (for
+example spinner-off followed by overlay-clear), then reveal only once.
+
+Only after that large-collapse reveal do rows also sit at the tail of
+scrollback, so copy-mode shows them twice at the seam until new output
+displaces them (they are dropped by repaint, not scrolled). No row is written
+to scrollback twice and none is missing. Tests that assert "exactly once across
+scrollback + viewport" discount exactly that large-collapse overlap:
+`src/cli/_lib/testing/scrollback-seam.ts` pins it to the compositor-reported
+count of painted archived rows; the PTY harness's `PtyExpect.seamOverlap`
+(`collapse-void`, `multi-commit-gap` hug expectations) is the structural form.
+
 ## What is and isn't in scrollback after a commit
 
 After a single `commitAbove(text)`:

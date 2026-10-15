@@ -14,13 +14,29 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
-import type { Browser, BrowserContext, Dialog, Page, Request, Response } from 'playwright';
-import type { BrowserType } from 'playwright';
+import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
+import type { Browser, BrowserContext, BrowserType, Dialog, Page, Request, Response } from 'playwright';
 import type { BrowserConfig } from '../types.js';
 import { decoratePlaywrightLaunchError } from '../playwright-missing.js';
 import { getBrowserStorageStatePath } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
+import { registerCleanup } from '../../utils/cleanupRegistry.js';
+import { installRenderRouteGuard, RequestGuardTrap, renderRefusalError, watchEgressRefusals } from './egress-gate.js';
+import { GuardedEgress, type RefusalLog } from './egress-launch.js';
+
+// ---------------------------------------------------------------------------
+// Close-with-fallback timeout
+// ---------------------------------------------------------------------------
+
+/**
+ * How long (ms) to wait for `context.close()` to resolve before assuming
+ * Chromium has frozen and sending SIGKILL to the browser process.
+ *
+ * 3 s is long enough for a normal teardown but short enough that a hung
+ * render doesn't block the parent process for more than a few seconds when
+ * a subagent times out.
+ */
+const CONTEXT_CLOSE_TIMEOUT_MS = 3_000;
 
 // Playwright's serialized cookies + localStorage. `newContext({ storageState })`
 // accepts exactly this shape, so reusing the method's return type keeps the
@@ -74,6 +90,7 @@ interface SessionEntry {
   consoleErrors: number;
   lastHttpStatus: number | null;
   openDialog: Dialog | undefined;
+  requestGuard: RequestGuardTrap;
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +127,9 @@ export class BrowserLauncher {
 
   // Set to true by `shutdown()` so a second call no-ops cleanly.
   private shutdownComplete = false;
+
+  // Guarded egress proxy (#2301): started before, and stopped with, Chromium.
+  private readonly egress = new GuardedEgress();
 
   constructor(config: BrowserConfig) {
     this.config = config;
@@ -236,7 +256,7 @@ export class BrowserLauncher {
       }
 
       try {
-        const b = await chromium.launch({ headless: this.config.headless });
+        const b = await chromium.launch(await this.egress.start(this.config.headless));
         this.browser = b;
         // A success must never leave a latch behind. Nothing can set one while
         // this launch is in flight (the latch short-circuits before we get
@@ -252,6 +272,7 @@ export class BrowserLauncher {
         // the only one where the hint may tell the caller to reset via
         // browser_close. Set at decoration time so the verbatim rethrow at the
         // fast-fail path carries the advice without re-messaging the error.
+        await this.egress.stop(); // a failed launch must not leak the proxy
         const decorated = decoratePlaywrightLaunchError(err, this.config.headless, true);
         // Latch the DECORATED error, not `err`: the fast-failed retry must
         // carry the same install remediation as this first failure.
@@ -311,7 +332,10 @@ export class BrowserLauncher {
       consoleErrors: 0,
       lastHttpStatus: null,
       openDialog: undefined,
+      requestGuard: new RequestGuardTrap(),
     };
+
+    await entry.requestGuard.install(context);
 
     this.sessions.set(sessionId, entry);
     return context;
@@ -405,6 +429,21 @@ export class BrowserLauncher {
     return this.sessions.get(sessionId)?.page;
   }
 
+  /** Return (and clear) the last egress refusal recorded for this session. */
+  consumeRequestGuardError(sessionId: string): unknown {
+    return this.sessions.get(sessionId)?.requestGuard.consume();
+  }
+
+  /** Refusal log of the guarded egress proxy, or undefined when the guard is off. */
+  egressLog(): RefusalLog | undefined {
+    return this.egress.isActive() ? this.egress : undefined;
+  }
+
+  /** Discard any latched egress refusal without returning it. */
+  clearRequestGuardError(sessionId: string): void {
+    this.sessions.get(sessionId)?.requestGuard.clear();
+  }
+
   // -------------------------------------------------------------------------
   // One-shot render (stateless content fetch)
   // -------------------------------------------------------------------------
@@ -418,10 +457,13 @@ export class BrowserLauncher {
    * owns its own context — so concurrent `web_scrape` renders are safe.
    *
    * Ordered teardown: the `finally` block closes the context unconditionally
-   * (page closes with it). An abort closes the context early, which rejects
-   * the in-flight `goto`/`content` with a "context closed" error the caller
-   * maps to an abort. The abort listener is removed before the close so we
-   * never leak a reference to the caller's signal.
+   * (page closes with it). An abort closes the context early via
+   * `closeContextSafe`, which races `context.close()` against a 3-second
+   * timeout and falls back to SIGKILL on the browser process so a frozen
+   * Chromium never holds the Node event loop open after a subagent timeout.
+   *
+   * The abort listener is removed before the close so we never leak a
+   * reference to the caller's signal.
    */
   async renderHtml(
     url: string,
@@ -436,27 +478,29 @@ export class BrowserLauncher {
     const context = await browser.newContext(this.contextOptions());
     let guardError: unknown;
 
-    if (opts.requestGuard !== undefined) {
-      await context.route('**/*', async (route) => {
-        try {
-          await opts.requestGuard!(route.request().url());
-          await route.continue();
-        } catch (err) {
-          guardError = err;
-          await route.abort('blockedbyclient');
-        }
-      });
-    }
+    if (opts.requestGuard !== undefined) await installRenderRouteGuard(context, opts.requestGuard, (e) => { guardError = e; });
+
+    // Register the ephemeral context with the process-wide cleanup registry so
+    // that a SIGINT/SIGTERM-triggered shutdown also closes it even when it was
+    // never stored in `this.sessions`.
+    const unregisterCleanup = registerCleanup(async () => {
+      await this.closeContextSafe(context, browser);
+    });
 
     const onAbort = (): void => {
-      void context.close().catch(() => {
-        // Best-effort — context may already be closing.
+      // Use closeContextSafe: if Chromium is frozen, context.close() will hang
+      // indefinitely and keep the Node event loop open. After 3 s we fall back
+      // to SIGKILL on the browser process so the parent remains responsive.
+      void this.closeContextSafe(context, browser).catch(() => {
+        // Errors already swallowed inside closeContextSafe; catch here to
+        // prevent an unhandled-rejection warning on the void path.
       });
     };
 
     // Pre-aborted short-circuit: tear down and reject before any navigation.
     if (opts.signal?.aborted === true) {
-      await context.close().catch(() => { /* best-effort */ });
+      unregisterCleanup();
+      await this.closeContextSafe(context, browser);
       throw new Error('render aborted');
     }
     if (opts.signal !== undefined) {
@@ -465,6 +509,10 @@ export class BrowserLauncher {
 
     try {
       const page = await context.newPage();
+      // Proxy refusals for THIS render page surface as EgressBlockedError,
+      // which web_scrape already treats as a terminal block (#2301).
+      const watch = watchEgressRefusals(page, this.egressLog());
+      const refusal = (): unknown => guardError ?? renderRefusalError(watch.check());
       let resp;
       try {
         resp = await page.goto(url, {
@@ -472,24 +520,24 @@ export class BrowserLauncher {
           waitUntil: opts.waitUntil,
         });
       } catch (err) {
-        throw guardError ?? err;
+        throw refusal() ?? err;
       }
-      if (guardError !== undefined) throw guardError;
+      if (refusal() !== undefined) throw refusal();
       const html = await page.content();
       // A script can start a request immediately after the load event. Do not
       // return successful content if the route guard rejected such a late
       // subresource while the DOM was being serialized.
-      if (guardError !== undefined) throw guardError;
+      if (refusal() !== undefined) throw refusal();
       const finalUrl = page.url();
       const httpStatus = resp !== null ? resp.status() : null;
       return { html, finalUrl, httpStatus };
     } finally {
+      unregisterCleanup();
       if (opts.signal !== undefined) {
         opts.signal.removeEventListener('abort', onAbort);
       }
-      await context.close().catch(() => {
-        // Best-effort — context may already be closed (abort / crash).
-      });
+      // Use closeContextSafe so a frozen Chromium doesn't block indefinitely.
+      await this.closeContextSafe(context, browser);
     }
   }
 
@@ -638,6 +686,7 @@ export class BrowserLauncher {
         // Swallow — browser may already be closed (e.g. crash).
       });
     }
+    await this.egress.stop();
   }
 
   /**
@@ -661,6 +710,66 @@ export class BrowserLauncher {
       viewport: { width: 1280, height: 800 },
       userAgent: `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 agent-afk/${AFK_VERSION}`,
     };
+  }
+
+  /**
+   * Close a BrowserContext with a bounded timeout fallback.
+   *
+   * Races `context.close()` against `CONTEXT_CLOSE_TIMEOUT_MS`. If
+   * `close()` does not resolve within that window (Chromium is frozen), sends
+   * SIGKILL to the browser process via `browser.process()?.kill('SIGKILL')`.
+   * Playwright's launched browsers expose `browser.process()` at runtime for
+   * exactly this purpose; `null` is returned for remote/CDP connections where
+   * we have no child PID, so the fallback silently no-ops in those cases.
+   * The method is not in Playwright's public TypeScript types, so we access
+   * it through a typed interface cast.
+   *
+   * Always resolves — never throws. Used for ephemeral render contexts where
+   * a frozen context must not hold the Node event loop open after a subagent
+   * times out (issue #2519).
+   *
+   * Idempotent by design: `onAbort`, the `finally` block of `renderHtml`, and
+   * the process-wide cleanup-registry callback can all invoke this method on
+   * the same `(context, browser)` pair. Playwright's `context.close()` is a
+   * no-op when called on an already-closed context, and `browser.process()`
+   * returns `null` after the browser exits — so re-entrant calls resolve
+   * quickly without side-effects.
+   */
+  private async closeContextSafe(
+    context: BrowserContext,
+    browser: Browser,
+  ): Promise<void> {
+    // `process()` is exposed at runtime by Playwright's launched-browser
+    // implementation but is absent from the public TypeScript types (it is
+    // an internal API). We access it via a narrow structural cast so tsc does
+    // not complain while keeping the fallback reachable.
+    const browserWithProcess = browser as unknown as {
+      process?: () => { kill: (signal: NodeJS.Signals) => boolean } | null;
+    };
+
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        context.close(),
+        new Promise<void>((_resolve, reject) => {
+          timeoutHandle = setTimeout(() => {
+            reject(new Error('context.close() timed out'));
+          }, CONTEXT_CLOSE_TIMEOUT_MS);
+        }),
+      ]);
+    } catch {
+      // context.close() timed out or threw — fall back to killing the process.
+      // Wrap kill() in its own try/catch so a throw here cannot escape and
+      // violate the "always resolves, never throws" contract.
+      debugLog('[browser/launcher] context.close() timed out; sending SIGKILL to browser process');
+      try {
+        browserWithProcess.process?.()?.kill('SIGKILL');
+      } catch (killErr) {
+        debugLog('[browser/launcher] SIGKILL failed (process already exited?)', killErr);
+      }
+    } finally {
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    }
   }
 
   /**
@@ -700,18 +809,15 @@ export class BrowserLauncher {
       const file = getBrowserStorageStatePath(profile);
       if (!fs.existsSync(file)) return;
       const state = await context.storageState();
-      // Atomic 0600 write: stage into a uniquely-named sibling temp at 0600,
-      // then POSIX-rename it over the vault. The rename swaps the file in whole,
-      // so freshly-written credentials are never observed truncated or at looser
-      // perms (the old write-then-chmod left exactly that transient window). The
-      // temp lives in the same dir as the dest, so the rename never hits EXDEV.
-      const tmp = path.join(
-        path.dirname(file),
-        `.${path.basename(file)}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`,
-      );
-      fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
-      fs.chmodSync(tmp, 0o600); // enforce exact perms regardless of umask
-      fs.renameSync(tmp, file);
+      // Atomic 0600 write via shared helper: sibling temp (random suffix) →
+      // rename. exactMode: true enforces 0o600 verbatim regardless of umask,
+      // preserving the security contract (credentials must never be briefly
+      // world-readable). The temp lives in the same dir so rename never hits EXDEV.
+      await atomicWriteFileAsync(file, JSON.stringify(state), {
+        mode: 0o600,
+        exactMode: true,
+        mkdirp: false,
+      });
       debugLog('[browser/vault] saved session', { profile, file });
     } catch (err) {
       // Swallow — vault maintenance is best-effort and must not break close().

@@ -48,7 +48,16 @@ export const RESTART_NOTE =
 
 export class UnknownKeyError extends Error {
   constructor(key: string) {
-    super(`unknown config key: ${key}`);
+    // NOTE: keys under `tools` / `tools.disabled` produce a bespoke message
+    // that does NOT match `"unknown config key:"`. Any caller that pattern-matches
+    // on that literal string (e.g. error-boundary logging) must also handle the
+    // tools.disabled message variant, or check `instanceof UnknownKeyError` instead.
+    // tools.disabledBySlot (per-model-slot deny list) shares the same
+    // operator-only gating as tools.disabled: the agent must not be able to
+    // re-enable tools the operator hid from a slot.
+    super(key === 'tools' || key.startsWith('tools.disabled')
+      ? 'tools.disabled / tools.disabledBySlot are operator-only and are not `config set` keys (the agent cannot change it). Toggle tools in the REPL with /config → Tools, or edit afk.config.json.'
+      : `unknown config key: ${key}`);
     this.name = 'UnknownKeyError';
   }
 }
@@ -229,7 +238,7 @@ function jsonPath(opts?: ConfigOptions): string {
 }
 
 /** Read + parse the config file. Throws MalformedConfigError on bad JSON. */
-function readConfigObject(file: string): Record<string, unknown> {
+export function readConfigObject(file: string): Record<string, unknown> {
   if (!existsSync(file)) return {};
   let parsed: unknown;
   try {
@@ -243,7 +252,8 @@ function readConfigObject(file: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-function writeConfigObject(file: string, obj: Record<string, unknown>): void {
+/** Atomically write the config object, keeping the prior file as `<file>.bak`. */
+export function writeConfigObject(file: string, obj: Record<string, unknown>): void {
   // Back up the prior file (last-known-good) before overwriting, so a bad write
   // is recoverable from <file>.bak.
   if (existsSync(file)) {
@@ -270,7 +280,7 @@ function assertConfigWritable(path: string, allowHumanOnly: boolean | undefined)
 export interface ConfigWriteResult {
   path: string;
   class: ConfigKeyClass;
-  value: string | number | boolean | number[] | ModelSlotBinding;
+  value: string | number | boolean | number[] | string[] | ModelSlotBinding | Record<string, unknown>;
   persistedTo: string;
 }
 

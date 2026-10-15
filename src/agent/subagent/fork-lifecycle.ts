@@ -83,6 +83,11 @@ export function emitForkStarted(args: EmitForkStartedArgs): string {
     // dispatches). Carried separately from the agentType render label so a
     // trace reader can group by real type without the label-fallback noise.
     ...(effectiveResolvedAgentType ? { resolvedAgentType: effectiveResolvedAgentType } : {}),
+    // The budget actually enforced on this child (0 = unbounded), so cap rates
+    // can be grouped by budget straight from the trace.
+    ...(typeof childConfig.maxToolUseIterations === 'number'
+      ? { maxToolUseIterations: childConfig.maxToolUseIterations }
+      : {}),
   });
 
   return modelString;

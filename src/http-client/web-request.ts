@@ -53,7 +53,9 @@ export type MethodRisk = 'low' | 'medium' | 'high';
 export type HttpMethod = 'GET' | 'HEAD' | 'OPTIONS' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 const LOW_RISK_METHODS = new Set<HttpMethod>(['GET', 'HEAD', 'OPTIONS']);
-const IDEMPOTENT_METHODS = new Set<HttpMethod>(['GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE']);
+// Invariant: even PUT/DELETE can apply before a response is lost. The ledger must
+// gate a second dispatch; do not retry mutating methods inside guardedFetch.
+const IDEMPOTENT_METHODS = new Set<HttpMethod>(['GET', 'HEAD', 'OPTIONS']);
 
 export function classifyMethodRisk(method: HttpMethod): MethodRisk {
   if (LOW_RISK_METHODS.has(method)) return 'low';
@@ -278,7 +280,7 @@ export async function webRequest(opts: WebRequestOptions): Promise<WebRequestRes
   const idempotent = isIdempotentMethod(method);
   const retryOpts = idempotent
     ? { retries: 2, baseDelayMs: 300, maxDelayMs: 5_000 }
-    : { retries: 0 }; // never auto-retry POST/PATCH
+    : { retries: 0 }; // external mutations must pass the ledger gate before each attempt
 
   const t0 = Date.now();
 
@@ -290,8 +292,13 @@ export async function webRequest(opts: WebRequestOptions): Promise<WebRequestRes
       retry: retryOpts,
     });
   } catch (err) {
-    // EgressBlockedError surfaces cleanly — re-throw as-is for the handler.
+    // Re-throw EgressBlockedError at the top level so callers can
+    // `instanceof EgressBlockedError` without knowing about undici's wrapping.
+    // When undici wraps a connect-time block as TypeError('fetch failed', { cause }),
+    // surface the cause so the handler sees the policy error, not "fetch failed".
     if (err instanceof EgressBlockedError) throw err;
+    const cause = (err instanceof Error && (err as { cause?: unknown }).cause);
+    if (cause instanceof EgressBlockedError) throw cause;
     throw err;
   }
 

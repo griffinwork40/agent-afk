@@ -24,6 +24,7 @@ import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { ToolResult } from '../../providers/shared/tool-result.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { readImageDimensions } from './_image-dimensions.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Constants — mirror browser-screenshot.ts (L32) and image-generate.ts (L46, L51)
@@ -98,8 +99,7 @@ async function viewImageImpl(
   try {
     filePath = resolveAndContain(parsed.filePath, context, 'read', cwd);
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { content: msg, isError: true };
+    return { content: errorMessage(err), isError: true };
   }
 
   // 3. Determine MIME type from extension
@@ -120,8 +120,7 @@ async function viewImageImpl(
   try {
     stat = await fs.stat(filePath);
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { content: `Cannot stat file: ${msg}`, isError: true };
+    return { content: `Cannot stat file: ${errorMessage(err)}`, isError: true };
   }
 
   if (stat.size > Math.floor(MAX_BASE64_BYTES * 3 / 4)) {
@@ -139,8 +138,7 @@ async function viewImageImpl(
   try {
     buf = await fs.readFile(filePath);
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { content: `Error reading file: ${msg}`, isError: true };
+    return { content: `Error reading file: ${errorMessage(err)}`, isError: true };
   }
 
   // 6. base64 encode

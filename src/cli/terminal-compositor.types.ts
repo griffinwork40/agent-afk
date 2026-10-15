@@ -187,11 +187,19 @@ export type CompositorInputMode = 'idle' | 'streaming' | 'picker';
  *   input stays at `absoluteBottom`; committed content and overlay grow
  *   upward into the viewport above it.
  *
- * Transition: `cursor-follow` → `bottom-pinned` fires once in `commitAbove`
- * when `hasCommitted` first becomes `true`. Reset to `cursor-follow` by
- * `resetState()` so each arm cycle starts fresh.
+ * - `'content-hug'` — opt-in replacement for `bottom-pinned`
+ *   ({@link TerminalCompositorOptions.contentHug}). The frame sits directly
+ *   below the committed content (`floor + committedBand.length`) and only
+ *   bottom-pins once content + frame fill the viewport. Any unused rows lie
+ *   BELOW the prompt, so a frame shrink never opens a blank gap between
+ *   committed content and the prompt, and blank rows never reach scrollback.
+ *   See terminal-compositor.content-hug.ts.
+ *
+ * Transition: `cursor-follow` → `bottom-pinned` (or `content-hug` when opted
+ * in) fires once in `commitAbove` when `hasCommitted` first becomes `true`.
+ * Reset to `cursor-follow` by `resetState()` so each arm cycle starts fresh.
  */
-export type FramePlacementMode = 'cursor-follow' | 'bottom-pinned';
+export type FramePlacementMode = 'cursor-follow' | 'bottom-pinned' | 'content-hug';
 
 /**
  * Picker controller — supplied by `enterPickerMode()` to delegate
@@ -313,6 +321,13 @@ export interface TerminalCompositorOptions {
    * prompt is composed); absent on surfaces without an external editor handoff.
    */
   onOpenEditor?: () => void;
+  /**
+   * Ctrl+G handler — open the in-TUI bash output viewer on the most recent
+   * capture file. Wired at REPL-arm time by `surface-setup.ts`; absent on
+   * surfaces that don't have a ToolLane (daemon, Telegram, non-TTY).
+   * The handler owns the async picker lifecycle; dispatch just fires it.
+   */
+  onOpenOutputViewer?: () => void;
   /**
    * One-shot submission handler invoked when a message "submits" —
    * either immediately on Enter in `'idle'` mode, or deferred until
@@ -440,6 +455,14 @@ export interface TerminalCompositorOptions {
    * Mutable post-construction via {@link TerminalCompositor.setAnchorRow}.
    */
   anchorRow?: number;
+  /**
+   * Opt into `'content-hug'` placement after the first commit (instead of
+   * `'bottom-pinned'`): the live frame follows the committed content and
+   * bottom-pins only once the viewport is full. Default `false` (legacy
+   * bottom-pinned). The interactive REPL enables it. See
+   * terminal-compositor.content-hug.ts.
+   */
+  contentHug?: boolean;
   /**
    * When provided, the compositor wires in ghost-text (fish-shell-style
    * inline completion) for the input line.

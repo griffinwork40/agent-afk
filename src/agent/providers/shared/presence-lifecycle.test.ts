@@ -114,11 +114,12 @@ describe('resolveTopLevelSessionId', () => {
     expect(out.memoized).toBeNull();
   });
 
-  it('mints only on a surface a presence consumer reads', () => {
-    // A daemon task or Telegram chat session advertising presence is invisible
-    // to both readers (bot.ts filters surface === 'cli'; watch.ts lists live
-    // records) while still costing a file + a cleanup registration — that is how
-    // a long-running daemon accrued one stale live-looking record per task.
+  it('mints a stable id for non-CLI surfaces but marks shouldAdvertise=false (fix #2353)', () => {
+    // Fix: decoupled mint from presence write. A daemon/telegram fresh session
+    // now receives a stable minted id for tool attribution (image_generate,
+    // workspace_*, state_*, bash capture, get_runtime_state) but shouldAdvertise
+    // is false so no presence FILE is written — preserving the pre-existing
+    // daemon stale-record and worktree-sweep invariants.
     for (const surface of ['daemon', 'telegram', 'unknown']) {
       const out = resolveTopLevelSessionId({
         sessionId: undefined,
@@ -128,14 +129,28 @@ describe('resolveTopLevelSessionId', () => {
         surface,
         memoized: null,
       });
-      expect(out.id, surface).toBeUndefined();
-      expect(out.memoized, surface).toBeNull();
+      expect(out.id, `${surface}: id should be minted`).toBeTypeOf('string');
+      expect(out.id, `${surface}: id should not be empty`).not.toBe('');
+      expect(out.memoized, `${surface}: memoized should equal id`).toBe(out.id);
+      expect(out.shouldAdvertise, `${surface}: should NOT advertise`).toBe(false);
     }
   });
 
-  it('still honors an explicit id on a non-minting surface (resume advertises everywhere)', () => {
+  it('marks shouldAdvertise=true for CLI surface fresh sessions', () => {
+    const out = resolveTopLevelSessionId({
+      sessionId: undefined,
+      resume: undefined,
+      depth: 0,
+      parentSessionId: undefined,
+      surface: 'cli',
+      memoized: null,
+    });
+    expect(out.shouldAdvertise).toBe(true);
+  });
+
+  it('still honors an explicit id on a non-advertising surface and marks shouldAdvertise=true', () => {
     // presence-surface.test.ts pins this contract for cli/daemon/telegram: the
-    // surface gate applies to the MINT, never to an explicitly supplied id.
+    // advertise flag is always true for explicit (resumed) ids, regardless of surface.
     const out = resolveTopLevelSessionId({
       sessionId: 'resumed-daemon-task',
       resume: undefined,
@@ -145,6 +160,7 @@ describe('resolveTopLevelSessionId', () => {
       memoized: null,
     });
     expect(out.id).toBe('resumed-daemon-task');
+    expect(out.shouldAdvertise).toBe(true);
   });
 
   it('keeps the memoized id across a reset() (/clear) on the same provider instance', () => {

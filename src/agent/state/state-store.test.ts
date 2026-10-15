@@ -10,7 +10,7 @@ import Database from 'better-sqlite3';
 import { existsSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StateStore } from './state-store.js';
 
 // ── Shared setup/teardown ────────────────────────────────────────────────────
@@ -26,6 +26,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   try {
     store.close();
   } catch {
@@ -180,19 +181,28 @@ describe('StateStore', () => {
     expect(limited[1].key).toBe('alpha-2');
   });
 
-  it('TTL GC: insert with ttl_ms=100; after 150ms doc is absent', async () => {
+  it('TTL GC: insert with ttl_ms=100; after 150ms doc is absent', () => {
+    // Drive Date.now() directly: a real 100ms TTL can expire before the first
+    // get() when the machine is under load.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const start = Date.now();
     store.put('ttlns', 'expiring', { data: 'bye' }, { ttl_ms: 100 });
 
     // Verify the document is visible immediately.
     expect(store.get('ttlns', 'expiring')).not.toBeNull();
 
-    // Wait past the TTL.
-    await new Promise<void>((r) => setTimeout(r, 150));
+    // Move past the TTL.
+    vi.setSystemTime(start + 150);
 
     // The in-process get() filters expired entries even before a reopen.
     expect(store.get('ttlns', 'expiring')).toBeNull();
 
     // Confirm GC also removes it on a fresh open (runTtlGc runs in constructor).
+    // NOTE: fake timers are still active here (vi.useRealTimers() runs in
+    // afterEach, not here) — the constructor sees the faked clock at
+    // start+150ms, which is past the TTL, so GC correctly prunes the entry.
+    // Do NOT move vi.useRealTimers() before this line to "fix" it; that would
+    // restore wall-clock time, making the TTL expiry non-deterministic under load.
     store.close();
     const reopened = new StateStore(dbPath);
     try {

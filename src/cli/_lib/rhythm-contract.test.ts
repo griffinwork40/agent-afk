@@ -28,6 +28,7 @@ import { StreamingMarkdownRenderer } from '../markdown-stream.js';
 import type { Writer } from '../slash/types.js';
 import type { OutputEvent } from '../../agent/types.js';
 import { printTurnFooter, printTurnSeparator } from '../commands/interactive/turn-handler.footer.js';
+import { CommitCoordinator } from './commit-coordinator.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -234,6 +235,80 @@ describe('TUI rhythm contract — done-time tool-lane flush', () => {
     }
     // Exactly one blank.
     expect(countBlanks(commitAboveCalls)).toBeLessThanOrEqual(1);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Indent test — flushCompletedRoots coordinator path
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Regression guard for the indentForScrollback call in finalizeOrchestrator's
+// coordinator before-content schedule (stream-renderer-orchestrator-emit.ts).
+// When AFK_CENTER_CONTENT is enabled the flushed tool lines must be prefixed
+// with the 2-space visual indent BEFORE the block is committed to scrollback.
+// Without the indentForScrollback call, centering is off for tool lanes while
+// prose is centered — a visible alignment gap. The blank-row commit is a
+// separate commitAbove('') and must NOT be indented (it is a blank).
+
+describe('TUI rhythm contract — flushCompletedRoots indent on coordinator path', () => {
+  afterEach(() => {
+    delete process.env['AFK_CENTER_CONTENT'];
+    Object.defineProperty(process.stdout, 'columns', {
+      value: 80, configurable: true,
+    });
+  });
+
+  it('indents tool-lane lines via indentForScrollback when AFK_CENTER_CONTENT is set', async () => {
+    // Enable centering on a wide terminal so contentMargin() returns a
+    // non-empty string and indentForScrollback actually prepends the indent.
+    process.env['AFK_CENTER_CONTENT'] = '1';
+    Object.defineProperty(process.stdout, 'columns', { value: 220, configurable: true });
+
+    const toolLane = new ToolLane();
+    toolLane.addStart('tu-indent', 'Bash', '"ls"');
+    toolLane.addResult('tu-indent', {
+      type: 'tool_result', toolUseId: 'tu-indent', content: 'ok', isError: false,
+    });
+
+    const { stub, commitAboveCalls } = makeStubCompositor();
+    const coordinator = new CommitCoordinator();
+    const ctx: OrchestratorCtx = {
+      out: makeWriter().writer,
+      isTTY: true,
+      compositor: stub,
+      toolLane,
+      thinkingLane: new ThinkingLane(),
+      thinkingMode: 'off',
+      streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
+      coordinator,
+    };
+    const source: SourceState = freshSourceState('__main__');
+
+    // finalizeOrchestrator schedules the before-content tool-lane commit.
+    handleOrchestratorEvent({ type: 'done', metadata: { durationMs: 1 } }, source, ctx);
+
+    // Drain the coordinator so the scheduled closure fires and calls compositor.
+    await coordinator.flushAll();
+
+    // At least the tool block + the explicit blank-row commit must have fired.
+    expect(commitAboveCalls.length).toBeGreaterThanOrEqual(2);
+
+    // The block commit (first call) is the joined tool-lane lines. Every
+    // physical line within the block that carries content must start with the
+    // 2-space indent (TOOL_LANE_INDENT from tool-lane-flush-margin.ts).
+    const block = commitAboveCalls[0] ?? '';
+    const physicalLines = block.split('\n').filter((l) => l.trim().length > 0);
+    expect(physicalLines.length).toBeGreaterThan(0);
+    for (const line of physicalLines) {
+      expect(
+        line.startsWith('  '),
+        `tool-lane line "${line}" must start with 2-space indent when centering is on`,
+      ).toBe(true);
+    }
+
+    // The trailing blank commit must be '' (not indented — it is a blank row).
+    expect(commitAboveCalls[commitAboveCalls.length - 1]).toBe('');
   });
 });
 

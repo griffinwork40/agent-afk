@@ -48,10 +48,12 @@ vi.mock('../../agent/daemon.js', () => ({
 
 vi.mock('../../telegram/push.js', () => ({
   pushIfConfigured: vi.fn(async () => undefined),
-  // `push` is imported by send-telegram.ts (via the tool-handlers chain pulled
-  // in transitively through daemon.ts's executor imports). The mock must export
-  // it or Vitest will throw "No push export defined on the mock".
+  // `push` and `pushMarkdown` are imported by send-telegram.ts (via the tool-handlers
+  // chain pulled in transitively through daemon.ts's executor imports). The mock must
+  // export all named exports used by the module under test; otherwise Vitest throws a
+  // "No '<name>' export is defined on the mock" error at runtime.
   push: vi.fn(async () => undefined),
+  pushMarkdown: vi.fn(async () => ({ ok: true, status: 200 })),
 }));
 
 vi.mock('../shared-helpers.js', () => ({
@@ -66,6 +68,8 @@ vi.mock('../shared-helpers.js', () => ({
   getDefaultSubagentModel: vi.fn(() => 'sonnet'),
   // Opt-in top-level tool-round ceiling reader; undefined = unlimited (default).
   getMaxToolUseIterations: vi.fn(() => undefined),
+  // Opt-in budget cap; undefined = uncapped (default, AFK_MAX_BUDGET_USD unset).
+  getMaxBudgetUsd: vi.fn(() => undefined),
   activateDumpPrompt: vi.fn(),
 }));
 
@@ -79,7 +83,7 @@ import { startDaemon } from '../../agent/daemon.js';
 import { pushIfConfigured } from '../../telegram/push.js';
 import { loadConfig, loadTelegramConfig } from '../config.js';
 import { getApiKey, getModel } from '../shared-helpers.js';
-import { formatTaskCompletion, registerDaemonCommand, resolveNotifyChatTarget } from './daemon.js';
+import { formatTaskCompletion, registerDaemonCommand, resolveNotifyChatTarget, registerDaemonCrashHandlers, registerEarlyDaemonCrashHandlers, _resetDaemonCrashHandlersForTest } from './daemon.js';
 import {
   resolveTriggerMode,
   resolveDefaultTask,
@@ -511,5 +515,221 @@ describe('resolveNotifyChatTarget', () => {
   it('returns undefined when the allowlist is empty (fail-closed)', () => {
     // no AFK_TELEGRAM_ALLOWED_CHAT_IDS set
     expect(resolveNotifyChatTarget(123, 't')).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// registerDaemonCrashHandlers — in-flight task context (#3248)
+// ---------------------------------------------------------------------------
+
+describe('registerDaemonCrashHandlers', () => {
+  beforeEach(() => {
+    // Remove any listeners left over from prior runDaemon() calls in this file,
+    // then reset the guard so registerDaemonCrashHandlers can re-register fresh.
+    process.removeAllListeners('uncaughtException');
+    process.removeAllListeners('unhandledRejection');
+    _resetDaemonCrashHandlersForTest();
+    vi.clearAllMocks();
+    mockPushIfConfigured.mockResolvedValue([{ ok: true, status: 200 }]);
+  });
+
+  afterEach(() => {
+    // Remove listeners added by registerDaemonCrashHandlers to keep process clean.
+    process.removeAllListeners('uncaughtException');
+    process.removeAllListeners('unhandledRejection');
+    _resetDaemonCrashHandlersForTest();
+  });
+
+  it('push includes error text without in-flight tasks when none provided', () => {
+    registerDaemonCrashHandlers();
+    process.emit('uncaughtException', new Error('boom'), 'uncaughtException');
+
+    expect(mockPushIfConfigured).toHaveBeenCalledOnce();
+    const [msg] = mockPushIfConfigured.mock.calls[0] as [string];
+    expect(msg).toContain('uncaughtException');
+    expect(msg).toContain('boom');
+    expect(msg).not.toContain('in-flight');
+  });
+
+  it('push includes in-flight task ids when tasks are running', () => {
+    const getInFlightTasks = vi.fn(() => [
+      { taskId: 'nightly-forge', displayId: 'nightly-forge', commandHead: '/forge-friction --auto', elapsedMs: 12_500 },
+    ]);
+    registerDaemonCrashHandlers(getInFlightTasks);
+    process.emit('uncaughtException', new Error('OOM'), 'uncaughtException');
+
+    expect(mockPushIfConfigured).toHaveBeenCalledOnce();
+    const [msg] = mockPushIfConfigured.mock.calls[0] as [string];
+    expect(msg).toContain('in-flight (1)');
+    expect(msg).toContain('nightly-forge');
+    expect(msg).toContain('/forge-friction --auto');
+    expect(msg).toContain('12.5s');
+  });
+
+  it('push includes multiple in-flight tasks', () => {
+    const getInFlightTasks = vi.fn(() => [
+      { taskId: 'task-a', displayId: 'task-a', commandHead: '/cmd-a', elapsedMs: 5_000 },
+      { taskId: 'task-b', displayId: 'task-b', commandHead: '/cmd-b', elapsedMs: 90_000 },
+    ]);
+    registerDaemonCrashHandlers(getInFlightTasks);
+    process.emit('uncaughtException', new Error('SIGSEGV'), 'uncaughtException');
+
+    const [msg] = mockPushIfConfigured.mock.calls[0] as [string];
+    expect(msg).toContain('in-flight (2)');
+    expect(msg).toContain('task-a');
+    expect(msg).toContain('task-b');
+  });
+
+  it('omits in-flight section when no tasks are running', () => {
+    const getInFlightTasks = vi.fn(() => []);
+    registerDaemonCrashHandlers(getInFlightTasks);
+    process.emit('uncaughtException', new Error('timeout'), 'uncaughtException');
+
+    const [msg] = mockPushIfConfigured.mock.calls[0] as [string];
+    expect(msg).not.toContain('in-flight');
+  });
+
+  it('is re-entry safe — duplicate calls are no-ops', () => {
+    const getInFlightTasks = vi.fn(() => []);
+    registerDaemonCrashHandlers(getInFlightTasks);
+    registerDaemonCrashHandlers(getInFlightTasks); // second call must be ignored
+
+    process.emit('uncaughtException', new Error('dupe'), 'uncaughtException');
+    // If duplicate listeners were registered, push would be called multiple times.
+    expect(mockPushIfConfigured).toHaveBeenCalledOnce();
+  });
+
+  // #3323 review: handlers used to be registered only AFTER `await startDaemon`,
+  // so a crash during async startup produced no notice at all.
+  it('daemon command registers crash handlers before startDaemon resolves', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    let listenersDuringStartup = -1;
+    mockStartDaemon.mockImplementationOnce(async () => {
+      listenersDuringStartup = process.listenerCount('uncaughtException');
+      // Simulate a crash while startup is still in progress.
+      process.emit('uncaughtException', new Error('startup-crash'), 'uncaughtException');
+      return {
+        port: 7777,
+        host: '127.0.0.1',
+        scheduler: { getInFlightTasks: () => [] },
+        registerTask: vi.fn(),
+        unregisterTask: vi.fn(),
+        tickOnce: vi.fn(),
+        fireOnStart: vi.fn(async () => []),
+        stop: vi.fn(async () => undefined),
+      } as unknown as Awaited<ReturnType<typeof startDaemon>>;
+    });
+
+    await runDaemon();
+    logSpy.mockRestore();
+
+    expect(listenersDuringStartup).toBe(1);
+    expect(mockPushIfConfigured).toHaveBeenCalledOnce();
+    const [msg] = mockPushIfConfigured.mock.calls[0] as [string];
+    expect(msg).toContain('startup-crash');
+    // No scheduler handle yet → late-bound getter yields no in-flight section.
+    expect(msg).not.toContain('in-flight');
+  });
+
+  it('daemon command binds the live scheduler snapshot once startup completes', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const getInFlightTasks = vi.fn(() => [
+      { taskId: 'live-task', displayId: 'live-task', commandHead: '/live-cmd', elapsedMs: 3_000 },
+    ]);
+    mockStartDaemon.mockImplementationOnce(async () => ({
+      port: 7777,
+      host: '127.0.0.1',
+      scheduler: { getInFlightTasks },
+      registerTask: vi.fn(),
+      unregisterTask: vi.fn(),
+      tickOnce: vi.fn(),
+      fireOnStart: vi.fn(async () => []),
+      stop: vi.fn(async () => undefined),
+    }) as unknown as Awaited<ReturnType<typeof startDaemon>>);
+
+    await runDaemon();
+    logSpy.mockRestore();
+    process.emit('uncaughtException', new Error('post-start'), 'uncaughtException');
+
+    expect(getInFlightTasks).toHaveBeenCalled();
+    const [msg] = mockPushIfConfigured.mock.calls[0] as [string];
+    expect(msg).toContain('in-flight (1)');
+    expect(msg).toContain('live-task');
+  });
+
+  // #3368: double registration after _resetDaemonCrashHandlersForTest must
+  // still produce a working binder — the second bindInFlightSource call must
+  // update the getter the crash handler actually reads.
+  it('registerEarlyDaemonCrashHandlers: second call after reset yields a working binder', () => {
+    // First registration (simulates normal startup).
+    const bind1 = registerEarlyDaemonCrashHandlers();
+    bind1(() => [{ taskId: 'first', displayId: 'first', commandHead: '/first-cmd', elapsedMs: 1_000 }]);
+    process.emit('uncaughtException', new Error('first-crash'), 'uncaughtException');
+    expect((mockPushIfConfigured.mock.calls[0] as [string])[0]).toContain('first');
+    vi.clearAllMocks();
+
+    // Reset (simulates test teardown) and second registration.
+    process.removeAllListeners('uncaughtException');
+    process.removeAllListeners('unhandledRejection');
+    _resetDaemonCrashHandlersForTest();
+
+    const bind2 = registerEarlyDaemonCrashHandlers();
+    // The second binder must update the live source; without the module-scoped
+    // earlyInFlightSource fix it would write to a stale closure var.
+    bind2(() => [{ taskId: 'second', displayId: 'second', commandHead: '/second-cmd', elapsedMs: 2_000 }]);
+    process.emit('uncaughtException', new Error('second-crash'), 'uncaughtException');
+
+    expect(mockPushIfConfigured).toHaveBeenCalledOnce();
+    const [msg] = mockPushIfConfigured.mock.calls[0] as [string];
+    expect(msg).toContain('second');
+    expect(msg).toContain('/second-cmd');
+    expect(msg).not.toContain('first');
+  });
+
+  it('truncates to 10 bullets and appends overflow line when > 10 tasks are in-flight', () => {
+    // 11 tasks → 10 bullets + "… and 1 more" overflow line (#3404).
+    const tasks = Array.from({ length: 11 }, (_, i) => ({
+      taskId: `task-${i}`,
+      displayId: `task-${i}`,
+      commandHead: `/cmd-${i}`,
+      elapsedMs: (i + 1) * 1_000,
+    }));
+    registerDaemonCrashHandlers(() => tasks);
+    process.emit('uncaughtException', new Error('overflow-test'), 'uncaughtException');
+
+    expect(mockPushIfConfigured).toHaveBeenCalledOnce();
+    const [msg] = mockPushIfConfigured.mock.calls[0] as [string];
+    expect(msg).toContain('in-flight (11)');
+    // Exactly 10 bullet lines must appear.
+    const bullets = msg.split('\n').filter((l) => l.startsWith('  •'));
+    expect(bullets).toHaveLength(10);
+    // The overflow line must be present.
+    expect(msg).toContain('  … and 1 more');
+    // task-10 (the 11th) must NOT appear as a bullet.
+    expect(bullets.some((l) => l.includes('task-10'))).toBe(false);
+  });
+
+  // #3375: crash notice must use displayId (redacted), not raw taskId, so a
+  // secret-bearing taskId (e.g. sk-proj-...) is never leaked via Telegram.
+  it('crash notice does NOT contain raw secret when taskId is secret-bearing', () => {
+    const secretTaskId = 'sk-proj-SECRET';
+    const getInFlightTasks = vi.fn(() => [
+      {
+        taskId: secretTaskId,
+        displayId: '[REDACTED]',
+        commandHead: '/safe-cmd',
+        elapsedMs: 5_000,
+      },
+    ]);
+    registerDaemonCrashHandlers(getInFlightTasks);
+    process.emit('uncaughtException', new Error('secret-leak-test'), 'uncaughtException');
+
+    expect(mockPushIfConfigured).toHaveBeenCalledOnce();
+    const [msg] = mockPushIfConfigured.mock.calls[0] as [string];
+    // The raw secret must not appear in the Telegram message.
+    expect(msg).not.toContain(secretTaskId);
+    // The safe display form must appear instead.
+    expect(msg).toContain('[REDACTED]');
+    expect(msg).toContain('/safe-cmd');
   });
 });

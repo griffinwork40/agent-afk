@@ -31,7 +31,9 @@ import type {
   RewindTarget,
 } from '../provider.js';
 import type { HookRegistry } from '../hooks.js';
+import type { MessageJournal } from '../journal/types.js';
 import type { ZodType } from 'zod';
+import type { UsageLimitProvider } from '../../utils/errors.js';
 
 /** Agent session state */
 export type SessionState = 'idle' | 'processing' | 'streaming' | 'compacting' | 'closed';
@@ -68,6 +70,20 @@ export interface SessionMetadata {
   claudeCodeVersion?: string;
   outputStyle?: string;
   status?: SDKStatus;
+  /**
+   * `true` when skills were discovered by the skill-bridge but the session has
+   * no `skillExecutor` — meaning the model cannot invoke `skill`, `agent`, or
+   * `compose` tools. This is the normal state for sessions created via the
+   * public SDK (`AgentSession` / `query()` / `queryText()`) without executor
+   * wiring. CLI/REPL/Telegram/web/daemon surfaces always wire executors, so
+   * this field is absent (or `false`) there. SDK callers clear it by passing
+   * `executors` from `createWiredExecutors()` with the `skill` tool enabled.
+   *
+   * Embedders can inspect this field after `waitForInitialization()` to decide
+   * whether to display their own warning or proxy to a fully-wired surface.
+   * See `docs/sdk-surface.md` for the full explanation.
+   */
+  reducedToolSurface?: boolean;
 }
 
 /**
@@ -85,6 +101,15 @@ export interface PanelSpec {
   /** Body content. Strings split on `\n`; arrays joined line-by-line. */
   body: string | string[];
 }
+
+/**
+ * Semantic category for a `notice` OutputEvent / ProviderEvent.
+ *
+ * Exported as a named union to enable exhaustive switch checks in consumers.
+ * New notice kinds must be added here so downstream switch statements are
+ * flagged by the TypeScript compiler.
+ */
+export type NoticeKind = 'truncation' | 'refusal' | 'fast-tier';
 
 /** Output stream event types */
 export type OutputEvent =
@@ -122,7 +147,7 @@ export type OutputEvent =
       /** Short operator-facing message (one sentence, no markdown). */
       text: string;
       /** Semantic category — guides rendering and programmatic branching. */
-      kind: 'truncation' | 'refusal';
+      kind: NoticeKind;
     }
   // Live tool-activity marker (Phase 2, issue #516). Mirrors ProviderEvent
   // 'tool.activity'. Reports the tool calls ACTUALLY running at this instant,
@@ -153,6 +178,20 @@ export type OutputEvent =
        * "no need to retype" and "send the message again" copy.
        */
       autoResume?: boolean;
+      /**
+       * Mirror of {@link import('../provider.js').ProviderEvent.paused.waitDeadline}.
+       * Absolute wall-clock deadline by which this park will end (resume or
+       * surface error). Watchdog/ceiling arithmetic prefers this over `resetsAt`
+       * when present. Never shown to users as "resumes at X" copy.
+       */
+      waitDeadline?: Date;
+      /**
+       * Mirror of {@link import('../provider.js').ProviderEvent.paused.provider}.
+       * Absent = unknown; UI layers render the legacy Claude copy for it.
+       */
+      provider?: UsageLimitProvider;
+      /** Mirror of {@link import('../provider.js').ProviderEvent.paused.plan}. */
+      plan?: string;
     }
   | {
       type: 'resumed';
@@ -208,6 +247,9 @@ export interface ProgressEvent {
   taskId: string;
   description: string;
   summary?: string;
+  /** Completed tool rounds, distinct from the tool call count. */
+  roundsUsed?: number;
+  budget?: number;
   lastToolName?: string;
   totalTokens: number;
   toolUses: number;
@@ -216,6 +258,8 @@ export interface ProgressEvent {
 
 /** Metadata for routing progress events to a subagent sink. */
 export interface SubagentProgressMeta {
+  /** Resolved display metadata for the skill tool entry keyed by parentId. */
+  skillIdentity?: import('./skill-identity.js').SkillIdentity;
   subagentId: string;
   parentId?: string;
   agentType?: string;
@@ -257,6 +301,12 @@ export interface IAgentSession {
    * session runs without hooks (e.g. tests, bare harnesses).
    */
   readonly hookRegistry?: HookRegistry;
+  /**
+   * The session's message journal, if any. Exposed so forks journal to
+   * `messageJournal.forSubagent(childId)` (never to this journal itself); see
+   * the invariant in ../subagent/fork-child-config.ts.
+   */
+  readonly messageJournal?: MessageJournal;
 
   sendMessage(content: string, options?: SendMessageOptions): Promise<Message>;
   sendMessageStream(content: string | ContentBlockParam[]): AsyncIterable<OutputEvent>;
@@ -289,6 +339,14 @@ export interface IAgentSession {
    * injection silently ignore it.
    */
   setBeforeNextRound?(cb: (() => string | undefined) | undefined): void;
+
+  /**
+   * Wire or update Stop-hook delivery callbacks. Called by surfaces (REPL,
+   * Telegram, daemon) after session construction so each surface can supply
+   * its own `getHasNextTurn` / `onStopInjectContext` / display callbacks.
+   * The runner reads these lazily on each `done` event.
+   */
+  wireStopHook?(wiring: StopWiring): void;
 
   /**
    * Tear down the SDK conversation and rebuild it from the same config.
@@ -404,4 +462,35 @@ export interface IAgentSession {
   rewindConversation(turnIndex: number): Promise<ProviderRewindConversationResult>;
 
   close(): Promise<void>;
+}
+
+/**
+ * A surface's Stop-hook delivery callbacks, supplied via
+ * `IAgentSession.wireStopHook`. The session reads the CURRENT wiring on every
+ * turn end (never a construction-time copy), so wiring after construction, or
+ * re-wiring a swapped-in session, takes effect on the next turn.
+ */
+export interface StopWiring {
+  /**
+   * `true` on surfaces with a next user turn (REPL, Telegram per-chat): a Stop
+   * `injectContext` goes to `onStopInjectContext`. `false` on one-shot surfaces
+   * (daemon/cron task, `afk chat`): it is dropped with a `stop_inject_dropped`
+   * trace event.
+   */
+  getHasNextTurn: () => boolean;
+  /** Stash the string and prepend it to the next outbound user message. */
+  onStopInjectContext?: (text: string) => void;
+  /** A Stop handler blocked (log-only until same-turn continuation lands). */
+  onStopBlocked?: (reason: string | undefined) => void;
+  /** A Stop handler exceeded STOP_HOOK_HANDLER_TIMEOUT_MS. */
+  onStopTimeout?: () => void;
+  /**
+   * Finding 2: set to `true` by `buildBeforeTurnEnd` after the provider seam
+   * dispatches Stop. Checked by `dispatchTurnStop` in turn-stream-runner.ts to
+   * avoid firing Stop twice on the same turn. Reset per turn by the session.
+   *
+   * @internal Runtime bookkeeping mutated by the session harness; not part of
+   * the public surface contract. Surfaces must not set or read it.
+   */
+  stopDispatchedBySeam?: boolean;
 }

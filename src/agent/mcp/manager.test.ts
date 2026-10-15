@@ -75,7 +75,7 @@ describe('McpManager (integration: stdio fixture)', () => {
       expect(result.isError).toBeFalsy();
       expect(result.content).toContain('hello world');
     },
-    { timeout: 15_000 },
+    15_000,
   );
 
   it(
@@ -95,7 +95,7 @@ describe('McpManager (integration: stdio fixture)', () => {
       expect(result.isError).toBe(true);
       expect(result.content).toMatch(/boom/);
     },
-    { timeout: 15_000 },
+    15_000,
   );
 
   it(
@@ -115,7 +115,7 @@ describe('McpManager (integration: stdio fixture)', () => {
       expect(result.isError).toBeFalsy();
       expect(result.content.trim()).toBe('42');
     },
-    { timeout: 15_000 },
+    15_000,
   );
 
   it(
@@ -147,7 +147,7 @@ describe('McpManager (integration: stdio fixture)', () => {
         'mcp__good__echo',
       ]);
     },
-    { timeout: 15_000 },
+    15_000,
   );
 
   it(
@@ -169,7 +169,7 @@ describe('McpManager (integration: stdio fixture)', () => {
       expect((caught as Error).message).toMatch(/alwaysLoad/);
       // manager is undefined here; afterEach is a no-op.
     },
-    { timeout: 10_000 },
+    10_000,
   );
 
   it(
@@ -208,7 +208,7 @@ describe('McpManager (integration: stdio fixture)', () => {
       expect(disconnectSpy).toHaveBeenCalled();
       disconnectSpy.mockRestore();
     },
-    { timeout: 10_000 },
+    10_000,
   );
 
   it(
@@ -227,7 +227,7 @@ describe('McpManager (integration: stdio fixture)', () => {
       expect(manager.getMcpTools()).toEqual([]);
       expect(manager.getMcpHandlers().size).toBe(0);
     },
-    { timeout: 5_000 },
+    5_000,
   );
 
   it(
@@ -314,6 +314,44 @@ describe('McpManager (integration: stdio fixture)', () => {
         manager = undefined;
       }
     },
-    { timeout: 15_000 },
+    15_000,
+  );
+
+  it(
+    // Issue #2760: the per-server timeout timer in disconnectAll() was never
+    // cleared when disconnect() succeeded — causing a spurious "timed out"
+    // console.warn ~1s after a clean teardown. The fix adds a `.finally()`
+    // that calls clearTimeout() regardless of which branch of the race won.
+    'disconnectAll does not log "disconnect timed out" when disconnect succeeds (#2760)',
+    async () => {
+      manager = await McpManager.fromConfig({
+        fast: {
+          type: 'stdio',
+          command: process.execPath,
+          args: [FIXTURE],
+        },
+      });
+
+      const state = manager.getServerStates();
+      expect(state[0]!.status).toBe('connected');
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await manager.disconnectAll();
+        manager = undefined;
+
+        // Wait slightly longer than the 1s timeout to let the stale timer
+        // fire IF the bug is present.
+        await new Promise<void>((resolve) => setTimeout(resolve, 1200));
+
+        const warnLines = warnSpy.mock.calls.map((c) => String(c[0]));
+        expect(
+          warnLines.some((l) => l.includes('disconnect timed out')),
+        ).toBe(false);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    },
+    10_000,
   );
 });

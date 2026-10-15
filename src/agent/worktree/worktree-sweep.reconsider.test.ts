@@ -26,7 +26,7 @@ function makeMock(
 }
 
 const TEARDOWN_LOCK_REASON = 'afk: isolated-worktree preserved (commits-ahead)';
-const IGNORED_LOCK_REASON = 'afk: isolated-worktree preserved (ignored-local-state: non-rebuildable ignored files present (e.g. .env) — git status looked clean)';
+const IGNORED_LOCK_REASON = 'afk: isolated-worktree preserved (ignored-local-state: .env — git status looked clean)';
 const HUMAN_LOCK_REASON = 'kept by operator';
 
 describe('reconsiderLockedWorktree — commits-ahead', () => {

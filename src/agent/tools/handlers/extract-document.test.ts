@@ -282,8 +282,8 @@ describe('extractDocumentHandler', () => {
   });
 
   describe('cwd containment', () => {
-    it('rejects paths outside context.cwd', async () => {
-      const context: ToolHandlerContext = { cwd: tmpDir };
+    it('rejects paths outside context.resolveBase', async () => {
+      const context: ToolHandlerContext = { resolveBase: tmpDir };
       const result = await extractDocumentHandler(
         { file_path: '/etc/passwd.docx' }, signal, context,
       );

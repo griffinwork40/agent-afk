@@ -7,42 +7,28 @@
 
 import type { ElicitationRequest, ElicitationResult } from '../../agent/types/sdk-types.js';
 import { debugLog } from '../../utils/debug.js';
-import { renderMultiSelector, renderSelector, CUSTOM_ANSWER_SENTINEL } from '../input/selectors.js';
-import { sanitizeSchemaString } from '../_lib/sanitize.js';
+import { CUSTOM_ANSWER_SENTINEL } from '../input/selectors.js';
+import { sanitizeSchemaString, sanitizeTerminalText } from '../_lib/sanitize.js';
 import { palette } from '../palette.js';
+import { getTerminalHeight, getTerminalWidth } from '../terminal-size.js';
+import { layoutAgentQuestion } from './agent-question.layout.js';
 import { validateNumberField, validateTextField } from './field-validation.js';
 import type { ReplElicitationDeps } from './repl-shared.js';
 import { DECLINE, CANCEL } from './repl-shared.js';
+import {
+  renderConfirmFallback,
+  renderChoiceFallback,
+  renderMultiChoiceFallback,
+  renderNumberFallback,
+  renderTextFallback,
+  SKIP,
+} from './agent-question.fallback.js';
+// Re-export SKIP so existing importers of agent-question.ts are unchanged.
+export { SKIP };
 
 // ---------------------------------------------------------------------------
 // Agent-question mode
 // ---------------------------------------------------------------------------
-
-export const SKIP: ElicitationResult = { action: 'skip' };
-
-/**
- * Build the overlay header lines that render INSIDE the picker frame
- * for both `pickFromList` and `readTextOverlay`. Lifted into a helper
- * so all overlay paths surface the same envelope (banner + question +
- * optional context) and vanish on confirm/cancel — only the single
- * `✓ <answer>` echo line below survives in scrollback.
- *
- * Layout (4 lines max):
- *   💬 Agent question
- *   ? <bold question>
- *     <dim context, optional>
- *   <trailing blank — visual breathing room before the input/options row>
- */
-function buildOverlayHeader(request: ElicitationRequest): readonly string[] {
-  const lines: string[] = [];
-  lines.push(palette.warning('  💬 Agent question'));
-  lines.push(palette.bold('  ? ' + sanitizeSchemaString(request.message, 512)));
-  if (request.context) {
-    lines.push(palette.dim('    ' + sanitizeSchemaString(request.context, 512)));
-  }
-  lines.push('');
-  return lines;
-}
 
 /**
  * Discriminated outcome from {@link runOverlayTextOrNumber}. Lets the
@@ -70,10 +56,10 @@ type OverlayTextOutcome =
 async function runOverlayTextOrNumber(
   qType: 'text' | 'number',
   request: ElicitationRequest,
+  header: readonly string[],
   readTextOverlay: NonNullable<ReplElicitationDeps['readTextOverlay']>,
   signal: AbortSignal,
 ): Promise<OverlayTextOutcome | null> {
-  const header = buildOverlayHeader(request);
   const allowSkip = request.allowSkip === true;
 
   if (qType === 'number') {
@@ -143,11 +129,21 @@ export async function renderAgentQuestion(
   // Queue-depth notice survives in scrollback so the user can see how
   // many more questions are queued even after the current overlay
   // vanishes. All other envelope chrome (banner, question, context)
-  // moves INSIDE the overlay frame below — see {@link buildOverlayHeader}.
+  // moves INSIDE the overlay frame below — see {@link layoutAgentQuestion}.
   const depth = pendingCount();
   if (depth > 1) {
     writer.line(palette.dim(`  [${depth} questions queued]`));
   }
+
+  // Overlay envelope sized to the terminal (see agent-question.layout.ts).
+  // When the full question cannot fit inside the overlay, its complete text
+  // is written to scrollback BEFORE the overlay opens (never during picker
+  // mode), so nothing the agent asked is only visible in truncated form.
+  const size = deps.terminalSize?.() ?? { columns: getTerminalWidth(), rows: getTerminalHeight() };
+  const layout = layoutAgentQuestion(request, size);
+  const spillToScrollback = (): void => {
+    for (const l of layout.scrollback) writer.line(l);
+  };
 
   // Picker path for choice / multi_choice. The question prompt, options,
   // and help line ALL render inside the picker frame so they vanish on
@@ -155,13 +151,14 @@ export async function renderAgentQuestion(
   // scrollback. Falls back to numbered-text below when pickFromList is
   // absent (non-TTY: daemon, pipes, tests that don't exercise picker UX).
   if ((qType === 'choice' || qType === 'multi_choice') && pickFromList && (request.choices?.length ?? 0) > 0) {
-    const sanitizedOptions = (request.choices ?? []).map((c) => sanitizeSchemaString(c, 128));
-    if (request.allowCustom) sanitizedOptions.push(CUSTOM_ANSWER_SENTINEL);
+    const pickerOptions = [...layout.options];
+    if (request.allowCustom) pickerOptions.push(CUSTOM_ANSWER_SENTINEL);
+    spillToScrollback();
     let selected: readonly string[] | null;
     try {
       selected = await pickFromList({
-        header: buildOverlayHeader(request),
-        options: sanitizedOptions,
+        header: layout.header,
+        options: pickerOptions,
         multi: qType === 'multi_choice',
         signal,
       });
@@ -179,7 +176,7 @@ export async function renderAgentQuestion(
     if (request.allowCustom && selected.includes(CUSTOM_ANSWER_SENTINEL)) {
       if (!readTextOverlay) return CANCEL;
       const customText = await readTextOverlay({
-        header: buildOverlayHeader(request),
+        header: layout.header,
         help: 'Type your custom answer (Esc to cancel)',
         validate: (v) => v.trim() === '' ? 'Please enter a non-empty answer' : null,
         signal,
@@ -198,15 +195,26 @@ export async function renderAgentQuestion(
 
     // Single-line result echo — survives in scrollback so the user
     // can see what they answered. Brand-coloured selection, dim prefix.
-    const echoLabel = selected.length === 1
-      ? sanitizeSchemaString(selected[0] ?? '', 128)
-      : selected.map((s) => sanitizeSchemaString(s, 128)).join(', ');
+    // Map display labels back to the agent's ORIGINAL choice strings: labels
+    // are sanitized and may be shortened/numbered to fit one row, and the
+    // agent must receive a value that exactly matches one of its choices.
+    const values = selected.map((label) => layout.choiceFor(label));
+    if (values.some((v) => v === undefined)) {
+      debugLog('[elicitation] picker returned a label with no matching choice:', selected);
+      return CANCEL;
+    }
+    // Echo the ORIGINAL choice text (not the display label which may be
+    // numbered/shortened) so scrollback shows what the operator actually chose.
+    // Type-guard filter: values[i] was already verified non-undefined above,
+    // but the filter makes this safe against future edits that drop the guard.
+    const originals = values.filter((v): v is string => v !== undefined);
+    const echoLabel = originals.map((s) => sanitizeSchemaString(s, 128)).join(', ');
     writer.line(palette.dim('  ✓ ') + palette.brand(echoLabel));
 
     if (qType === 'choice') {
-      return { action: 'accept', content: { value: selected[0] } };
+      return { action: 'accept', content: { value: originals[0] } };
     }
-    return { action: 'accept', content: { value: [...selected] } };
+    return { action: 'accept', content: { value: originals } };
   }
 
   // Confirm-as-picker: reuse the arrow-key picker with a Yes / No
@@ -217,10 +225,11 @@ export async function renderAgentQuestion(
   if (qType === 'confirm' && pickFromList) {
     const yesFirst = request.questionDefault !== false;
     const options = yesFirst ? ['Yes', 'No'] : ['No', 'Yes'];
+    spillToScrollback();
     let selected: readonly string[] | null;
     try {
       selected = await pickFromList({
-        header: buildOverlayHeader(request),
+        header: layout.header,
         options,
         multi: false,
         signal,
@@ -246,7 +255,8 @@ export async function renderAgentQuestion(
   // legacy readLine numbered path when the dep is absent (non-TTY
   // surfaces, daemon, pipes, tests that don't wire the overlay).
   if ((qType === 'text' || qType === 'number') && readTextOverlay) {
-    const result = await runOverlayTextOrNumber(qType, request, readTextOverlay, signal);
+    spillToScrollback();
+    const result = await runOverlayTextOrNumber(qType, request, layout.header, readTextOverlay, signal);
     if (result === null) return CANCEL;
     if (result.tag === 'skip') return SKIP;
 
@@ -271,33 +281,14 @@ export async function renderAgentQuestion(
   writer.line();
   writer.line(palette.warning('💬 Agent question'));
   if (request.context) {
-    writer.line(palette.dim('  context: ') + sanitizeSchemaString(request.context, 512));
+    writer.line(palette.dim('  context: ') + sanitizeTerminalText(request.context));
   }
-  writer.line(palette.bold('  ' + sanitizeSchemaString(request.message, 512)));
+  writer.line(palette.bold('  ' + sanitizeTerminalText(request.message)));
   writer.line(palette.dim('  Type :cancel to skip this question.'));
   writer.line();
 
   if (qType === 'confirm') {
-    writer.line('\x07');
-    const defaultHint = request.questionDefault === true ? 'Y/n' : 'y/N';
-    while (true) {
-      if (signal.aborted) return CANCEL;
-      let input: string;
-      try {
-        input = (await readLine(palette.dim(`  Continue? [${defaultHint}] `))).trim().toLowerCase();
-      } catch (err) {
-        debugLog('[elicitation] confirm readLine failed:', err);
-        return CANCEL;
-      }
-      if (signal.aborted) return CANCEL;
-      if (input === ':cancel') return CANCEL;
-      if (input === '') {
-        return { action: 'accept', content: { value: request.questionDefault === true } };
-      }
-      if (input === 'y' || input === 'yes') return { action: 'accept', content: { value: true } };
-      if (input === 'n' || input === 'no') return { action: 'accept', content: { value: false } };
-      writer.line(palette.warning('  Please enter y or n.'));
-    }
+    return renderConfirmFallback(request, readLine, writer, signal);
   }
 
   // Numbered-text fallback for `choice` / `multi_choice` when no
@@ -305,228 +296,17 @@ export async function renderAgentQuestion(
   // inject the picker dependency). Behaviour identical to the pre-picker
   // implementation so daemon / piped sessions keep working unchanged.
   if (qType === 'choice') {
-    writer.line('\x07');
-    const choices = request.choices ?? [];
-
-    // Interactive arrow-key selector (TTY path). suspendInput has already
-    // released the compositor's raw-mode; the selector re-enters raw mode
-    // for its own keypress handling and exits it before returning.
-    const choicesForSelector = request.allowCustom ? [...choices, CUSTOM_ANSWER_SENTINEL] : choices;
-    const selectorResult = await renderSelector(choicesForSelector, signal);
-    if (selectorResult !== null) {
-      // TTY path — selector handled it
-      if (selectorResult === ':cancel') return CANCEL;
-      // Sentinel index = original choices.length
-      if (request.allowCustom && selectorResult === choices.length) {
-        let input: string;
-        try {
-          input = (await readLine(palette.dim('  Type your answer: '))).trim();
-        } catch (err) {
-          debugLog('[elicitation] custom-answer readLine failed:', err);
-          return CANCEL;
-        }
-        if (input === ':cancel' || signal.aborted) return CANCEL;
-        return { action: 'accept', content: { value: null, custom_value: input } };
-      }
-      const chosen = choices[selectorResult];
-      if (chosen !== undefined) {
-        writer.line(palette.dim(`  Selected: ${sanitizeSchemaString(chosen, 128)}`));
-        return { action: 'accept', content: { value: chosen } };
-      }
-      // Defensive: renderSelector should only ever return an index inside
-      // choices[]. Reaching this with no message previously made a genuine
-      // selector/choices-array desync indistinguishable from a normal cancel.
-      debugLog('[elicitation] choice selector returned an out-of-range index:', {
-        selectorResult,
-        choicesLength: choices.length,
-      });
-      return CANCEL;
-    }
-
-    // Non-TTY / fallback: numbered list + text entry
-    choices.forEach((c, i) => {
-      writer.line(`  ${i + 1}. ${sanitizeSchemaString(c, 128)}`);
-    });
-    if (request.allowCustom) {
-      writer.line(`  ${choices.length + 1}. ${CUSTOM_ANSWER_SENTINEL}`);
-    }
-    while (true) {
-      if (signal.aborted) return CANCEL;
-      let input: string;
-      try {
-        input = (await readLine(palette.dim('  Enter number: '))).trim();
-      } catch (err) {
-        debugLog('[elicitation] choice readLine failed:', err);
-        return CANCEL;
-      }
-      if (signal.aborted) return CANCEL;
-      if (input === ':cancel') return CANCEL;
-      if (request.allowCustom && input === String(choices.length + 1)) {
-        let custom: string;
-        try {
-          custom = (await readLine(palette.dim('  Type your answer: '))).trim();
-        } catch (err) {
-          debugLog('[elicitation] custom-answer readLine failed:', err);
-          return CANCEL;
-        }
-        if (custom === ':cancel') return CANCEL;
-        return { action: 'accept', content: { value: null, custom_value: custom } };
-      }
-      if (input === '' && request.allowSkip) return SKIP;
-      const idx = parseInt(input, 10);
-      if (!isFinite(idx) || String(idx) !== input || idx < 1 || idx > choices.length) {
-        writer.line(palette.warning(`  Please enter a number between 1 and ${choices.length + (request.allowCustom ? 1 : 0)}.`));
-        continue;
-      }
-      return { action: 'accept', content: { value: choices[idx - 1] } };
-    }
+    return renderChoiceFallback(request, readLine, writer, signal);
   }
 
   if (qType === 'multi_choice') {
-    writer.line('\x07');
-    const choices = request.choices ?? [];
-
-    // Interactive arrow-key multi-selector (TTY path)
-    const choicesForMultiSelector = request.allowCustom ? [...choices, CUSTOM_ANSWER_SENTINEL] : choices;
-    const selectorResult = await renderMultiSelector(choicesForMultiSelector, signal);
-    if (selectorResult !== null) {
-      if (selectorResult === ':cancel') return CANCEL;
-      // Sentinel index = original choices.length. Presence (even alongside real
-      // picks) routes to free-form entry — otherwise choices[choices.length] is
-      // undefined and leaks into `values` / throws in sanitizeSchemaString.
-      if (request.allowCustom && selectorResult.includes(choices.length)) {
-        let input: string;
-        try {
-          input = (await readLine(palette.dim('  Type your answer: '))).trim();
-        } catch (err) {
-          debugLog('[elicitation] custom-answer readLine failed:', err);
-          return CANCEL;
-        }
-        if (input === ':cancel' || signal.aborted) return CANCEL;
-        return { action: 'accept', content: { value: null, custom_value: input } };
-      }
-      if (selectorResult.length === 0 && request.allowSkip) return SKIP;
-      if (selectorResult.length > 0) {
-        const values = selectorResult.map((i) => choices[i]!);
-        writer.line(palette.dim(`  Selected: ${values.map((v) => sanitizeSchemaString(v, 64)).join(', ')}`));
-        return { action: 'accept', content: { value: values } };
-      }
-      // Empty selection with allowSkip=false — fall through to text entry
-    }
-
-    // Non-TTY / fallback: numbered list + comma-separated text entry
-    choices.forEach((c, i) => {
-      writer.line(`  ${i + 1}. ${sanitizeSchemaString(c, 128)}`);
-    });
-    if (request.allowCustom) {
-      writer.line(`  ${choices.length + 1}. ${CUSTOM_ANSWER_SENTINEL}`);
-    }
-    while (true) {
-      if (signal.aborted) return CANCEL;
-      let input: string;
-      try {
-        input = (await readLine(palette.dim('  Enter numbers (comma-separated): '))).trim();
-      } catch (err) {
-        debugLog('[elicitation] multi_choice readLine failed:', err);
-        return CANCEL;
-      }
-      if (signal.aborted) return CANCEL;
-      if (input === ':cancel') return CANCEL;
-      if (request.allowCustom && input === String(choices.length + 1)) {
-        let custom: string;
-        try {
-          custom = (await readLine(palette.dim('  Type your answer: '))).trim();
-        } catch (err) {
-          debugLog('[elicitation] custom-answer readLine failed:', err);
-          return CANCEL;
-        }
-        if (custom === ':cancel') return CANCEL;
-        return { action: 'accept', content: { value: null, custom_value: custom } };
-      }
-      if (input === '' && request.allowSkip) return SKIP;
-      if (input === '') {
-        writer.line(palette.warning('  Please enter at least one selection.'));
-        continue;
-      }
-      const parts = input.split(',').map((s) => s.trim());
-      const selected: string[] = [];
-      let valid = true;
-      for (const part of parts) {
-        const idx = parseInt(part, 10);
-        if (!isFinite(idx) || String(idx) !== part || idx < 1 || idx > choices.length) {
-          writer.line(palette.warning(`  Invalid selection "${sanitizeSchemaString(part, 32)}". Enter numbers between 1 and ${choices.length + (request.allowCustom ? 1 : 0)}.`));
-          valid = false;
-          break;
-        }
-        selected.push(choices[idx - 1]!);
-      }
-      if (!valid) continue;
-      return { action: 'accept', content: { value: selected } };
-    }
+    return renderMultiChoiceFallback(request, readLine, writer, signal);
   }
 
   if (qType === 'number') {
-    const minVal = request.min;
-    const maxVal = request.max;
-    const boundsHint =
-      minVal !== undefined && maxVal !== undefined
-        ? ` [${minVal}\u2013${maxVal}]`
-        : minVal !== undefined
-        ? ` [\u2265${minVal}]`
-        : maxVal !== undefined
-        ? ` [\u2264${maxVal}]`
-        : '';
-    while (true) {
-      if (signal.aborted) return CANCEL;
-      let input: string;
-      try {
-        input = (await readLine(palette.dim(`  Enter a number${boundsHint}: `))).trim();
-      } catch (err) {
-        debugLog('[elicitation] number readLine failed:', err);
-        return CANCEL;
-      }
-      if (signal.aborted) return CANCEL;
-      if (input === ':cancel') return CANCEL;
-      const r = validateNumberField(input, {
-        allowSkip: request.allowSkip === true,
-        min: minVal,
-        max: maxVal,
-        emptyError: 'Please enter a number (or :cancel to skip).',
-      });
-      if (!r.ok) {
-        writer.line(palette.warning('  ' + r.error));
-        continue;
-      }
-      if (r.skip) return SKIP;
-      return { action: 'accept', content: { value: r.value } };
-    }
+    return renderNumberFallback(request, readLine, writer, signal);
   }
 
   // Default: text
-  const minLen = request.minLength;
-  const maxLen = request.maxLength;
-  while (true) {
-    if (signal.aborted) return CANCEL;
-    let input: string;
-    try {
-      input = (await readLine(palette.dim('  > '))).trim();
-    } catch (err) {
-      debugLog('[elicitation] text readLine failed:', err);
-      return CANCEL;
-    }
-    if (signal.aborted) return CANCEL;
-    if (input === ':cancel') return CANCEL;
-    const r = validateTextField(input, {
-      allowSkip: request.allowSkip === true,
-      minLength: minLen,
-      maxLength: maxLen,
-      emptyError: 'Please enter a response (or type :cancel to skip).',
-    });
-    if (!r.ok) {
-      writer.line(palette.warning('  ' + r.error));
-      continue;
-    }
-    if (r.skip) return SKIP;
-    return { action: 'accept', content: { value: input } };
-  }
+  return renderTextFallback(request, readLine, writer, signal);
 }

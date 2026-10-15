@@ -27,13 +27,16 @@
  * @module agent/awareness/types
  */
 
+import type { CompactUsageEntry } from '../usage/usage-formatter.js';
+import type { SubagentOutcomeSummaryEntry } from '../../insights/aggregators/subagent-outcomes.js';
+
 /**
  * Coarse-grained execution surface. Distinct from `PromptSurface`
  * (`routing-directive.ts`), which controls END_OF_TURN_DIRECTIVE injection.
  * This field is descriptive metadata for the agent's situational awareness;
  * it is the same string the provider already stores at `opts.surface`.
  */
-export type Surface = 'cli' | 'repl' | 'daemon' | 'telegram' | 'subagent' | 'web' | 'unknown';
+export type Surface = 'cli' | 'repl' | 'daemon' | 'telegram' | 'subagent' | 'web' | 'sdk' | 'unknown';
 
 /** Read/write phase enforcement tag inherited from `ForkSubagentOptions.phaseRole`. */
 export type PhaseRole = 'read-only' | 'read-write';
@@ -165,16 +168,50 @@ export interface RuntimeWorkspace {
   remoteUrl: string | null;
 }
 
-/** The full runtime snapshot (view='all'). Individual views return subsets. */
+/**
+ * Compact usage entry for one provider/account in `get_runtime_state`. Built
+ * by the shared formatter (`agent/usage/usage-formatter.ts`); full detail is
+ * available via `afk usage`.
+ */
+export type RuntimeUsageEntry = CompactUsageEntry;
+
+/** Runtime snapshot fields. The opt in hooks field is excluded from view='all'. */
 export interface RuntimeSnapshot {
   self: RuntimeSelf;
   tools: RuntimeTools;
   subagents: RuntimeSubagents;
   workspace: RuntimeWorkspace;
+  hooks?: import('./hooks-source.js').RuntimeHooks;
+  /** Compact usage summary — present in view='all' and the future view='usage'. */
+  usage?: RuntimeUsageEntry[];
+  /**
+   * Wall clock at snapshot time — present in view='all'. The pull counterpart
+   * of the per-round `[vitals]` note (providers/shared/vitals.ts).
+   */
+  clock?: { iso: string; local: string };
+  /**
+   * Historical subagent outcome summary — present in view='all' and
+   * view='subagents' (omitted when empty).
+   *
+   * Flat list of outcome statistics bucketed by model × agentType × depth,
+   * sorted by count descending (most-run buckets first). Only buckets with
+   * ≥3 completed outcomes are included; sparse buckets are too noisy to be
+   * actionable. Empty when no sufficient history is available.
+   *
+   * Each entry carries: model, agentType, depth, count, successRate,
+   * capHitRate (fraction whose stop_reason was `tool_use_loop_capped`),
+   * timeoutRate, p50Ms, and p95Ms latency. A high capHitRate (e.g. > 0.3)
+   * signals that the budget `maxToolUseIterations` is too tight for the
+   * workload at that model+type.
+   */
+  subagentOutcomeSummary?: SubagentOutcomeSummaryEntry[];
 }
 
+/** Re-export so callers can reference the type without importing from insights. */
+export type { SubagentOutcomeSummaryEntry } from '../../insights/aggregators/subagent-outcomes.js';
+
 /** Discriminator for `get_runtime_state.input.view`. */
-export type RuntimeView = 'self' | 'tools' | 'subagents' | 'workspace' | 'all';
+export type RuntimeView = 'self' | 'tools' | 'subagents' | 'workspace' | 'hooks' | 'all';
 
 /**
  * Pull-on-demand source for runtime snapshot fields. Each method MUST return
@@ -185,6 +222,8 @@ export type RuntimeView = 'self' | 'tools' | 'subagents' | 'workspace' | 'all';
  * Tests can supply hand-rolled object literals.
  */
 export interface RuntimeStateSource {
+  /** Optional for custom sources; only the explicit hooks view reads disk. */
+  getHooks?(): import('./hooks-source.js').RuntimeHooks;
   getSelf(): RuntimeSelf;
   getTools(): RuntimeTools;
   getSubagents(): RuntimeSubagents;
@@ -194,4 +233,17 @@ export interface RuntimeStateSource {
    * baseline.
    */
   getWorkspace(): RuntimeWorkspace;
+  /**
+   * Returns compact usage entries for every provider/account in the shared
+   * usage ledger (plus this process's quota cache). No network call. Empty
+   * when nothing has been observed.
+   */
+  getUsage(): RuntimeUsageEntry[];
+  /**
+   * Returns the compact subagent outcome summary — historical success/cap-hit
+   * rates and p50 latency bucketed by model × agentType × depth. Reads from
+   * routing-decisions.jsonl (the last 1 MB tail, 30-day window). Empty when
+   * no sufficient history is on disk. Never throws.
+   */
+  getSubagentOutcomeSummary(): SubagentOutcomeSummaryEntry[];
 }

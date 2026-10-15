@@ -49,38 +49,37 @@ import { loadCredential } from './config.js';
 import { runAuthWizard } from './auth-wizard.js';
 import { providerForModel } from '../agent/providers/index.js';
 import { preloadClaudeKeychainOAuth } from '../agent/auth/credential-resolver.js';
-import { runFirstRunDetector, needsCredentialGate } from './index.js';
+import { Command } from 'commander';
+import { runFirstRunDetector, needsCredentialGate } from './first-run.js';
 
-// Argv helper — tests pass explicit argv so vitest's own process.argv (test
-// file paths) can't be misread as a subcommand.
-const argvFor = (...args: string[]) => ['node', 'afk', ...args];
+// Parsed-command helper; alias/default-command behavior is exercised in the
+// companion real-Commander suite rather than duplicated in an argv parser.
+const commandFor = (name = 'interactive') => new Command(name);
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe('needsCredentialGate', () => {
-  it('never gates --version / -V / --help / -h', () => {
-    expect(needsCredentialGate(argvFor('--version'))).toBe(false);
-    expect(needsCredentialGate(argvFor('-V'))).toBe(false);
-    expect(needsCredentialGate(argvFor('--help'))).toBe(false);
-    expect(needsCredentialGate(argvFor('-h'))).toBe(false);
-    expect(needsCredentialGate(argvFor('chat', '--help'))).toBe(false);
+  it('does not gate utility commands', () => {
+    expect(needsCredentialGate(commandFor('login'))).toBe(false);
+    expect(needsCredentialGate(commandFor('doctor'))).toBe(false);
+    expect(needsCredentialGate(commandFor('telegram'))).toBe(false);
   });
 
   it('does not gate pre-auth commands (login, doctor, config, status, …)', () => {
     for (const cmd of ['login', 'doctor', 'config', 'status', 'plugin', 'completion', 'update']) {
-      expect(needsCredentialGate(argvFor(cmd))).toBe(false);
+      expect(needsCredentialGate(commandFor(cmd))).toBe(false);
     }
   });
 
   it('gates commands that need a credential', () => {
-    for (const cmd of ['chat', 'c', 'interactive', 'i', 'daemon', 'farm']) {
-      expect(needsCredentialGate(argvFor(cmd))).toBe(true);
+    for (const cmd of ['chat', 'interactive', 'daemon', 'farm']) {
+      expect(needsCredentialGate(commandFor(cmd))).toBe(true);
     }
   });
 
   it('gates bare invocation and program-flag-only invocation (REPL start)', () => {
-    expect(needsCredentialGate(argvFor())).toBe(true);
-    expect(needsCredentialGate(argvFor('--model', 'opus'))).toBe(true);
+    expect(needsCredentialGate(commandFor())).toBe(true);
+    expect(needsCredentialGate(commandFor('interactive'))).toBe(true);
   });
 });
 
@@ -110,7 +109,7 @@ describe('runFirstRunDetector', () => {
     vi.mocked(loadCredential).mockReturnValue('sk-ant-api03-existing-key');
     vi.mocked(providerForModel).mockReturnValue('anthropic-direct');
 
-    await runFirstRunDetector(argvFor());
+    await runFirstRunDetector(commandFor());
 
     expect(runAuthWizard).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
@@ -121,11 +120,13 @@ describe('runFirstRunDetector', () => {
     vi.mocked(loadCredential).mockReturnValue(undefined);
     vi.mocked(providerForModel).mockReturnValue('openai-compatible');
 
-    await runFirstRunDetector(argvFor());
+    await runFirstRunDetector(commandFor());
 
     expect(runAuthWizard).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
     expect(stderrSpy).not.toHaveBeenCalled();
+    expect(preloadClaudeKeychainOAuth).not.toHaveBeenCalled();
+    expect(loadCredential).not.toHaveBeenCalled();
   });
 
   it('writes to stderr and exits 1 when no credential and non-TTY', async () => {
@@ -139,7 +140,7 @@ describe('runFirstRunDetector', () => {
       writable: true,
     });
 
-    await runFirstRunDetector(argvFor());
+    await runFirstRunDetector(commandFor());
 
     expect(stderrSpy).toHaveBeenCalledWith(
       expect.stringContaining('No Anthropic credential found'),
@@ -160,7 +161,7 @@ describe('runFirstRunDetector', () => {
       writable: true,
     });
 
-    await runFirstRunDetector(argvFor());
+    await runFirstRunDetector(commandFor());
 
     expect(runAuthWizard).toHaveBeenCalledOnce();
     expect(exitSpy).not.toHaveBeenCalled();
@@ -178,7 +179,7 @@ describe('runFirstRunDetector', () => {
       return 'sk-ant-api03-existing';
     });
 
-    await runFirstRunDetector(argvFor('daemon'));
+    await runFirstRunDetector(commandFor('daemon'));
 
     expect(preloadClaudeKeychainOAuth).toHaveBeenCalledWith('anthropic-direct');
     expect(order).toEqual(['preload', 'loadCredential']);
@@ -204,7 +205,7 @@ describe('runFirstRunDetector', () => {
       writable: true,
     });
 
-    await runFirstRunDetector(argvFor('daemon'));
+    await runFirstRunDetector(commandFor('daemon'));
 
     expect(exitSpy).not.toHaveBeenCalled();
     expect(runAuthWizard).not.toHaveBeenCalled();
@@ -220,14 +221,14 @@ describe('runFirstRunDetector', () => {
       writable: true,
     });
 
-    await runFirstRunDetector(argvFor('chat'));
+    await runFirstRunDetector(commandFor('chat'));
 
     expect(exitSpy).not.toHaveBeenCalled();
     expect(runAuthWizard).not.toHaveBeenCalled();
   });
 
   it('does not attempt a refresh for non-gated commands', async () => {
-    await runFirstRunDetector(argvFor('doctor'));
+    await runFirstRunDetector(commandFor('doctor'));
     expect(preloadClaudeKeychainOAuth).not.toHaveBeenCalled();
   });
 });

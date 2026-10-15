@@ -21,7 +21,6 @@
 import type { ProviderEvent } from '../../../provider.js';
 import type { RunTurnInput, TurnResult } from '../types.js';
 import { translateMessageStream } from '../translate.js';
-import { StreamIncompleteError } from '../../../../utils/errors.js';
 import { abortableStream } from '../../shared/abortable-stream.js';
 import { emitSessionPhase } from '../../../trace/emit.js';
 import { env } from '../../../../config/env.js';
@@ -32,9 +31,11 @@ import {
   stallTimeoutError,
 } from '../../shared/stream-stall-timeout.js';
 import { isOverloadedErrorEvent } from './retry-budget.js';
+import { isMidStreamCut } from './network-termination.js';
 import type { RoundRetryBudget } from './retry-budget.js';
 import type { RoundOutcome } from './outcomes.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
+import { ensureError } from '../../../../utils/errors.js';
 
 /** Everything the stream phase needs from the round that opened the request. */
 export interface StreamConsumerContext {
@@ -50,6 +51,267 @@ export interface StreamConsumerContext {
   stallTimeoutMs: number;
   /** When `messages.create` was initiated, for the `model_ttfb` duration. */
   requestStartedAt: number;
+}
+
+/** Mutable per-round flags that track stream outcome as events arrive. */
+interface StreamRoundState {
+  turnResult: TurnResult | null;
+  translatorErrored: boolean;
+  retryTtfb: boolean;
+  retryOverload: boolean;
+  retryStreamIncomplete: boolean;
+  /** Mid-stream overload budget exhausted: routes to OVERLOAD_EXHAUSTED terminal. */
+  overloadExhausted: boolean;
+  /** True once the first non-error translated event has been seen. */
+  ttfbEmitted: boolean;
+}
+
+/**
+ * Emit `model_ttfb` on the first non-error translated event and disarm the
+ * TTFB stall timer so the rest of the stream runs unbounded.
+ *
+ * Mutates `state.ttfbEmitted`. Safe to call on every event — idempotent when
+ * `ttfbEmitted` is already true.
+ */
+export function handleFirstByteIfNeeded(
+  state: StreamRoundState,
+  input: RunTurnInput,
+  ttfb: FirstByteTimeoutHandle,
+  requestStartedAt: number,
+): void {
+  if (state.ttfbEmitted) return;
+  state.ttfbEmitted = true;
+  // First CONTENT token arrived: cancel the stall timer so the rest of
+  // this (now demonstrably progressing) stream runs unbounded — an
+  // actively-streaming extended-thinking response, or any long stream
+  // after its first token, is never cut off. (The bound still governs the
+  // pre-first-token window, so a prefill slower than the bound is treated
+  // as a stall before we ever reach here.)
+  ttfb.firstByteSeen();
+  // Time-to-first-byte: request initiation (incl. any auth retries inside
+  // createWithRetry) → first translated stream event. Fire-and-forget;
+  // trace latency must never stall the stream.
+  void emitSessionPhase(input.traceWriter, {
+    phase: 'model_ttfb',
+    durationMs: Date.now() - requestStartedAt,
+    // Resolved wire id for THIS call — captures mid-session model
+    // overrides/switches that differ from the session default recorded on
+    // session_init_start. `input.model` is already the resolved id passed
+    // to the Messages API (see the params build).
+    resolvedModel: input.model,
+  });
+}
+
+/**
+ * Handle an in-band `error` event from the translator.
+ *
+ * Mutates `state` to record the retry/terminal decision and returns a
+ * discriminated action:
+ * - `'break'`: caller should `break` with no yield.
+ * - `'yield-and-break'`: caller should yield `yieldEvent` then `break`.
+ */
+export function handleInBandError(
+  state: StreamRoundState,
+  errorEvent: Extract<ProviderEvent, { type: 'error' }>,
+  input: RunTurnInput,
+  ttfb: FirstByteTimeoutHandle,
+  stall: StreamStallHandle,
+  stallTimeoutMs: number,
+  retry: RoundRetryBudget,
+): { action: 'break' } | { action: 'yield-and-break'; yieldEvent: ProviderEvent } {
+  // A TTFB timeout that fires after response headers but before the
+  // first content event aborts the stream iterator; translate.ts
+  // converts that throw into this in-band error event. `ttfb.timedOut()`
+  // is true only while the timer is live (firstByteSeen clears it), and
+  // ttfbEmitted is still false here (no content byte arrived) — so this
+  // is unambiguously a first-byte stall. Re-drive while the counted
+  // TTFB budget holds allowance, then fail fast.
+  if (ttfb.timedOut() && !input.signal.aborted && retry.canRetryTtfb() && !state.ttfbEmitted) {
+    state.retryTtfb = true;
+    return { action: 'break' };
+  }
+  // Post-first-byte STALL (#762): the watchdog aborted the per-request
+  // controller after a full window with no translated output, and
+  // translate.ts surfaced that abort as this in-band error event.
+  // `input.signal.aborted` is false (we never touch the caller's
+  // signal), so this is unambiguously a stall and NOT a user interrupt.
+  // Deliberately NOT retried: unlike a TTFB stall (which costs only a
+  // prefill) a mid-stream stall has already burned a partial
+  // generation, and the pre-fix behaviour was an invisible 38–63-minute
+  // hang — terminating loudly is the fix. Swap in the operator-facing
+  // message so the surface shows a real diagnosis instead of a bare
+  // `model_stream_stall_timeout`, then fall into the same fatal lane
+  // (`translatorErrored`) that yields a terminal `error` event → real
+  // `closure` → a seal that is NOT `incomplete: true`.
+  if (stall.timedOut() && !input.signal.aborted) {
+    state.translatorErrored = true;
+    return { action: 'yield-and-break', yieldEvent: { type: 'error', error: stallTimeoutError(stallTimeoutMs) } };
+  }
+  // Mid-stream transient overload (529 / overloaded_error): the SDK
+  // throws it from inside the stream iterator with NO HTTP status, so
+  // createWithRetry — status-based and connection-phase only — never
+  // sees it. translate.ts has already converted that throw into this
+  // in-band error event. Re-drive the request after backoff instead of
+  // surfacing a fatal error: input.messages is unmutated for this round
+  // (the assistant turn and usage are committed only on clean
+  // completion), so the retry re-sends identical history. Any text
+  // already streamed for this round may re-emit on the retry — an
+  // accepted cosmetic cost vs. crashing the whole turn on a transient
+  // server hiccup.
+  if (
+    isOverloadedErrorEvent(errorEvent.error) &&
+    retry.canRetryOverload() &&
+    !input.signal.aborted
+  ) {
+    state.retryOverload = true;
+    return { action: 'break' };
+  }
+  // Invariant: mid-stream overload budget EXHAUSTED must not reach the
+  // fatal tail below. Before #762 it did — the guard above went false
+  // on the 4th hit and control fell past the interrupt check and the
+  // StreamIncomplete branch into `yield out.event; translatorErrored =
+  // true`, i.e. the same lane as an auth failure. That set
+  // `sawProviderError` (agent-session.ts) → `closure {reason:'abort'}`
+  // → seal `failed` with `finalTurnCount: 0`, discarding every
+  // accumulated turn of the session (a real incident lost 9 turns /
+  // ~2.02M cache-read tokens across five failed resumes).
+  //
+  // Route it to a CLEAN terminal instead: set the exhaustion flag and
+  // break, so the caller commits the accumulated assistant turn and
+  // emits `turn.completed` stamped with OVERLOAD_EXHAUSTED. The turn
+  // then counts (`turnCount++`), so `afk --resume` restarts from saved
+  // state. The failure stays LOUD — the sentinel maps to an `abort`
+  // closure and a `failed` seal, exactly like the
+  // `tool_use_loop_capped` precedent — it simply stops being lossy.
+  // Checked immediately after the retry guard so no other branch can
+  // claim the event, and `isOverloadedErrorEvent` is re-tested rather
+  // than inferred so a non-overload error still falls through.
+  if (isOverloadedErrorEvent(errorEvent.error) && !input.signal.aborted) {
+    state.overloadExhausted = true;
+    return { action: 'break' };
+  }
+  // User interrupt (ESC soft-stop): translate.ts converted the abort
+  // throw into this in-band `error` event, but on an interrupt the
+  // "error" IS the abort — not a real failure. Do NOT yield it. If we
+  // did, the turn would emit TWO terminal events (this error AND the
+  // `turn.completed` from the `turnResult === null` path), and a
+  // consumer that breaks on the FIRST terminal (AgentSession's
+  // sendMessageStreamInternal breaks on `done`|`error`) would strand
+  // the trailing turn.completed — the NEXT turn's first pull then eats
+  // it as a no-op `done`, so the user's next message runs a full turn
+  // late (the "type after ESC → nothing happens → poke '.' to start it"
+  // bug). Break WITHOUT yielding + WITHOUT setting translatorErrored so
+  // the caller's `turnResult === null` branch emits exactly ONE terminal
+  // turn.completed. `sawProviderError` correctly stays false — an
+  // interrupt seals as cancelled, not failed. Real (non-abort) errors
+  // fall through to the yield below unchanged. Checked before the
+  // StreamIncomplete re-drive below so an abort always wins over a retry
+  // (that branch also self-guards with `!input.signal.aborted`).
+  if (input.signal.aborted) {
+    return { action: 'break' };
+  }
+  // Mid-stream CUT (isMidStreamCut, network-termination.ts): a CLEAN
+  // close with no message_stop/stop_reason after content streamed
+  // (StreamIncompleteError), or a transport termination thrown mid-read
+  // (#2776: undici `TypeError: terminated`, ECONNRESET). translate.ts
+  // delivers both as this in-band event. The TTFB / stall / abort
+  // branches above claim cuts they caused, so ordering is load-bearing.
+  // Re-drive like overload: input.messages is unmutated for the round,
+  // so the retry re-sends identical history (already-streamed text may
+  // re-emit — reset via stream.retry). On exhaustion the ORIGINAL error
+  // is yielded below, so traces keep the transport diagnosis.
+  if (
+    isMidStreamCut(errorEvent.error) &&
+    retry.canRetryStreamIncomplete() &&
+    !input.signal.aborted
+  ) {
+    state.retryStreamIncomplete = true;
+    return { action: 'break' };
+  }
+  // Fatal error: yield it and terminate.
+  state.translatorErrored = true;
+  return { action: 'yield-and-break', yieldEvent: errorEvent };
+}
+
+/**
+ * Handle an error thrown from the `for await` loop body (vs. an in-band event).
+ *
+ * Mutates `state` to record the retry/terminal decision. Returns a result
+ * describing what the caller should do:
+ * - `{ done: true, yieldEvent? }` — caller should yield `yieldEvent` (if
+ *   present) then `return { kind: 'terminated' }`. Timers already disposed.
+ * - `{ done: false }` — timers already disposed; caller should fall through to
+ *   post-loop classification (retry/terminal) WITHOUT the final dispose.
+ */
+export function handleCatchError(
+  state: StreamRoundState,
+  err: unknown,
+  input: RunTurnInput,
+  turn: TurnAccumulator,
+  ttfb: FirstByteTimeoutHandle,
+  stall: StreamStallHandle,
+  stallTimeoutMs: number,
+  retry: RoundRetryBudget,
+): { done: true; yieldEvent?: ProviderEvent } | { done: false } {
+  // A TTFB timeout that fires AFTER response headers but BEFORE the first
+  // streamed event aborts the stream iterator here. `ttfb.timedOut()` is only
+  // true while the timer is live — firstByteSeen() above clears it, so this
+  // branch is unreachable once any event has streamed. Re-drive while the
+  // counted TTFB budget holds allowance.
+  if (ttfb.timedOut() && !input.signal.aborted && retry.canRetryTtfb() && !state.ttfbEmitted) {
+    ttfb.dispose();
+    stall.dispose();
+    state.retryTtfb = true;
+    return { done: false };
+  }
+  ttfb.dispose();
+  stall.dispose();
+  if (input.signal.aborted) {
+    const yieldEvent: ProviderEvent = {
+      type: 'turn.completed',
+      usage: turn.terminalUsage(),
+      sessionId: input.ctx.sessionId,
+    };
+    return { done: true, yieldEvent };
+  }
+  const e = ensureError(err);
+  // Post-first-byte STALL (#762) reaching us as a THROW rather than an
+  // in-band error event (abortableStream re-raises the linked signal's
+  // abort reason, which for a stall is the STALL_TIMEOUT_MESSAGE marker).
+  // Same terminal treatment as the in-band branch above: surface the
+  // operator-facing message and return, never hang. Checked BEFORE the
+  // overload re-drive so a stall can never be mistaken for a retryable
+  // overload.
+  if ((stall.timedOut() || isStallTimeoutError(e)) && !input.signal.aborted) {
+    return { done: true, yieldEvent: { type: 'error', error: stallTimeoutError(stallTimeoutMs) } };
+  }
+  // Defensive: a mid-stream overload normally reaches us as an in-band
+  // error event (handled in the loop above), but if translate.ts ever
+  // re-throws one, route it into the same retry path rather than crashing.
+  if (isOverloadedErrorEvent(e) && retry.canRetryOverload() && !input.signal.aborted) {
+    state.retryOverload = true;
+  } else if (isOverloadedErrorEvent(e) && !input.signal.aborted) {
+    // Budget exhausted on the re-thrown path: same non-lossy terminal as
+    // the in-band branch above (see the Invariant comment there).
+    state.overloadExhausted = true;
+  } else {
+    return { done: true, yieldEvent: { type: 'error', error: e } };
+  }
+  return { done: false };
+}
+
+/** Classify `state` into a {@link RoundOutcome} after stream consumption ends. */
+function classifyOutcome(state: StreamRoundState): RoundOutcome {
+  // Invariant: classification order mirrors the pre-split loop's cascade of
+  // `if` blocks. Retry classes are checked before terminals (an exhausted round
+  // is never also a retried round), and `overload-exhausted` before
+  // `translator-errored` so the clean terminal wins over the fatal lane.
+  if (state.retryTtfb) return { kind: 'retry', reason: 'ttfb' };
+  if (state.retryOverload) return { kind: 'retry', reason: 'overload' };
+  if (state.retryStreamIncomplete) return { kind: 'retry', reason: 'stream-incomplete' };
+  if (state.overloadExhausted) return { kind: 'overload-exhausted' };
+  if (state.translatorErrored) return { kind: 'translator-errored' };
+  return { kind: 'streamed', turnResult: state.turnResult };
 }
 
 /**
@@ -71,18 +333,15 @@ export async function* consumeRoundStream({
 }: StreamConsumerContext): AsyncGenerator<ProviderEvent, RoundOutcome, void> {
   // Translate the raw SDK events into ProviderEvents and capture the digested
   // TurnResult emitted at end-of-stream.
-  let turnResult: TurnResult | null = null;
-  let translatorErrored = false;
-  let retryTtfb = false;
-  let retryOverload = false;
-  let retryStreamIncomplete = false;
-  // Mid-stream overload budget exhausted for this round: routes to the clean
-  // OVERLOAD_EXHAUSTED terminal instead of the fatal tail (#762).
-  let overloadExhausted = false;
-  // Witness layer: emit model_ttfb exactly once for this API call, on the first
-  // translated stream event. Scoped per round so each model call reports its
-  // own time-to-first-byte.
-  let ttfbEmitted = false;
+  const state: StreamRoundState = {
+    turnResult: null,
+    translatorErrored: false,
+    retryTtfb: false,
+    retryOverload: false,
+    retryStreamIncomplete: false,
+    overloadExhausted: false,
+    ttfbEmitted: false,
+  };
 
   try {
     if (env.AFK_TELEGRAM_TRACE) console.log('[loop] awaiting translateMessageStream events');
@@ -114,29 +373,8 @@ export async function* consumeRoundStream({
       // that (translate.ts converts the abort throw into an error event), so
       // gating on non-error keeps `ttfb.timedOut()` meaningful in the error
       // branch below and avoids cancelling the timer on a stall.
-      const isFirstByte =
-        !ttfbEmitted && (out.kind === 'turn-result' || out.event.type !== 'error');
-      if (isFirstByte) {
-        ttfbEmitted = true;
-        // First CONTENT token arrived: cancel the stall timer so the rest of
-        // this (now demonstrably progressing) stream runs unbounded — an
-        // actively-streaming extended-thinking response, or any long stream
-        // after its first token, is never cut off. (The bound still governs the
-        // pre-first-token window, so a prefill slower than the bound is treated
-        // as a stall before we ever reach here.)
-        ttfb.firstByteSeen();
-        // Time-to-first-byte: request initiation (incl. any auth retries inside
-        // createWithRetry) → first translated stream event. Fire-and-forget;
-        // trace latency must never stall the stream.
-        void emitSessionPhase(input.traceWriter, {
-          phase: 'model_ttfb',
-          durationMs: Date.now() - requestStartedAt,
-          // Resolved wire id for THIS call — captures mid-session model
-          // overrides/switches that differ from the session default recorded on
-          // session_init_start. `input.model` is already the resolved id passed
-          // to the Messages API (see the params build).
-          resolvedModel: input.model,
-        });
+      if (!state.ttfbEmitted && (out.kind === 'turn-result' || out.event.type !== 'error')) {
+        handleFirstByteIfNeeded(state, input, ttfb, requestStartedAt);
       }
       // Observable progress for the post-first-byte stall watchdog (#762).
       // EVERY translated output re-arms the window, so "slow but streaming"
@@ -152,189 +390,34 @@ export async function* consumeRoundStream({
       if (env.AFK_TELEGRAM_TRACE) console.log('[loop] translate yielded:', out.kind, out.kind === 'event' ? out.event.type : '');
       if (out.kind === 'event') {
         if (out.event.type === 'error') {
-          // A TTFB timeout that fires after response headers but before the
-          // first content event aborts the stream iterator; translate.ts
-          // converts that throw into this in-band error event. `ttfb.timedOut()`
-          // is true only while the timer is live (firstByteSeen clears it), and
-          // ttfbEmitted is still false here (no content byte arrived) — so this
-          // is unambiguously a first-byte stall. Re-drive while the counted
-          // TTFB budget holds allowance, then fail fast.
-          if (ttfb.timedOut() && !input.signal.aborted && retry.canRetryTtfb() && !ttfbEmitted) {
-            retryTtfb = true;
-            break;
+          const decision = handleInBandError(state, out.event, input, ttfb, stall, stallTimeoutMs, retry);
+          if (decision.action === 'yield-and-break') {
+            yield decision.yieldEvent;
           }
-          // Post-first-byte STALL (#762): the watchdog aborted the per-request
-          // controller after a full window with no translated output, and
-          // translate.ts surfaced that abort as this in-band error event.
-          // `input.signal.aborted` is false (we never touch the caller's
-          // signal), so this is unambiguously a stall and NOT a user interrupt.
-          // Deliberately NOT retried: unlike a TTFB stall (which costs only a
-          // prefill) a mid-stream stall has already burned a partial
-          // generation, and the pre-fix behaviour was an invisible 38–63-minute
-          // hang — terminating loudly is the fix. Swap in the operator-facing
-          // message so the surface shows a real diagnosis instead of a bare
-          // `model_stream_stall_timeout`, then fall into the same fatal lane
-          // (`translatorErrored`) that yields a terminal `error` event → real
-          // `closure` → a seal that is NOT `incomplete: true`.
-          if (stall.timedOut() && !input.signal.aborted) {
-            yield { type: 'error', error: stallTimeoutError(stallTimeoutMs) };
-            translatorErrored = true;
-            break;
-          }
-          // Mid-stream transient overload (529 / overloaded_error): the SDK
-          // throws it from inside the stream iterator with NO HTTP status, so
-          // createWithRetry — status-based and connection-phase only — never
-          // sees it. translate.ts has already converted that throw into this
-          // in-band error event. Re-drive the request after backoff instead of
-          // surfacing a fatal error: input.messages is unmutated for this round
-          // (the assistant turn and usage are committed only on clean
-          // completion), so the retry re-sends identical history. Any text
-          // already streamed for this round may re-emit on the retry — an
-          // accepted cosmetic cost vs. crashing the whole turn on a transient
-          // server hiccup.
-          if (
-            isOverloadedErrorEvent(out.event.error) &&
-            retry.canRetryOverload() &&
-            !input.signal.aborted
-          ) {
-            retryOverload = true;
-            break;
-          }
-          // Invariant: mid-stream overload budget EXHAUSTED must not reach the
-          // fatal tail below. Before #762 it did — the guard above went false
-          // on the 4th hit and control fell past the interrupt check and the
-          // StreamIncomplete branch into `yield out.event; translatorErrored =
-          // true`, i.e. the same lane as an auth failure. That set
-          // `sawProviderError` (agent-session.ts) → `closure {reason:'abort'}`
-          // → seal `failed` with `finalTurnCount: 0`, discarding every
-          // accumulated turn of the session (a real incident lost 9 turns /
-          // ~2.02M cache-read tokens across five failed resumes).
-          //
-          // Route it to a CLEAN terminal instead: set the exhaustion flag and
-          // break, so the caller commits the accumulated assistant turn and
-          // emits `turn.completed` stamped with OVERLOAD_EXHAUSTED. The turn
-          // then counts (`turnCount++`), so `afk --resume` restarts from saved
-          // state. The failure stays LOUD — the sentinel maps to an `abort`
-          // closure and a `failed` seal, exactly like the
-          // `tool_use_loop_capped` precedent — it simply stops being lossy.
-          // Checked immediately after the retry guard so no other branch can
-          // claim the event, and `isOverloadedErrorEvent` is re-tested rather
-          // than inferred so a non-overload error still falls through.
-          if (isOverloadedErrorEvent(out.event.error) && !input.signal.aborted) {
-            overloadExhausted = true;
-            break;
-          }
-          // User interrupt (ESC soft-stop): translate.ts converted the abort
-          // throw into this in-band `error` event, but on an interrupt the
-          // "error" IS the abort — not a real failure. Do NOT yield it. If we
-          // did, the turn would emit TWO terminal events (this error AND the
-          // `turn.completed` from the `turnResult === null` path), and a
-          // consumer that breaks on the FIRST terminal (AgentSession's
-          // sendMessageStreamInternal breaks on `done`|`error`) would strand
-          // the trailing turn.completed — the NEXT turn's first pull then eats
-          // it as a no-op `done`, so the user's next message runs a full turn
-          // late (the "type after ESC → nothing happens → poke '.' to start it"
-          // bug). Break WITHOUT yielding + WITHOUT setting translatorErrored so
-          // the caller's `turnResult === null` branch emits exactly ONE terminal
-          // turn.completed. `sawProviderError` correctly stays false — an
-          // interrupt seals as cancelled, not failed. Real (non-abort) errors
-          // fall through to the yield below unchanged. Checked before the
-          // StreamIncomplete re-drive below so an abort always wins over a retry
-          // (that branch also self-guards with `!input.signal.aborted`).
-          if (input.signal.aborted) {
-            break;
-          }
-          // Mid-stream CLEAN close (StreamIncompleteError): the stream ended
-          // with no message_stop and no stop_reason AFTER content streamed — an
-          // intermediary dropped the connection mid-generation. translate.ts
-          // surfaces it as this in-band error event (it is constructed and
-          // yielded, never thrown, so it cannot reach the catch below). Neither
-          // the TTFB branch (a first byte was seen) nor the overload branch (not
-          // an overloaded_error) matches it, so without this it would fall
-          // through to the fatal path. Re-drive like overload: input.messages is
-          // unmutated for the round, so the retry re-sends identical history
-          // (already-streamed text may re-emit — reset via stream.retry).
-          if (
-            out.event.error instanceof StreamIncompleteError &&
-            retry.canRetryStreamIncomplete() &&
-            !input.signal.aborted
-          ) {
-            retryStreamIncomplete = true;
-            break;
-          }
-          yield out.event;
-          translatorErrored = true;
           break;
         }
         yield out.event;
       } else {
-        turnResult = out.result;
+        state.turnResult = out.result;
         break;
       }
     }
-    if (env.AFK_TELEGRAM_TRACE) console.log('[loop] translate loop exited, turnResult=', turnResult ? 'set' : 'null');
+    if (env.AFK_TELEGRAM_TRACE) console.log('[loop] translate loop exited, turnResult=', state.turnResult ? 'set' : 'null');
   } catch (err) {
-    // A TTFB timeout that fires AFTER response headers but BEFORE the first
-    // streamed event aborts the stream iterator here. `ttfb.timedOut()` is only
-    // true while the timer is live — firstByteSeen() above clears it, so this
-    // branch is unreachable once any event has streamed. Re-drive while the
-    // counted TTFB budget holds allowance.
-    if (ttfb.timedOut() && !input.signal.aborted && retry.canRetryTtfb() && !ttfbEmitted) {
-      ttfb.dispose();
-      stall.dispose();
-      retryTtfb = true;
-    } else {
-      ttfb.dispose();
-      stall.dispose();
-      if (input.signal.aborted) {
-        yield {
-          type: 'turn.completed',
-          usage: turn.terminalUsage(),
-          sessionId: input.ctx.sessionId,
-        };
-        return { kind: 'terminated' };
-      }
-      const e = err instanceof Error ? err : new Error(String(err));
-      // Post-first-byte STALL (#762) reaching us as a THROW rather than an
-      // in-band error event (abortableStream re-raises the linked signal's
-      // abort reason, which for a stall is the STALL_TIMEOUT_MESSAGE marker).
-      // Same terminal treatment as the in-band branch above: surface the
-      // operator-facing message and return, never hang. Checked BEFORE the
-      // overload re-drive so a stall can never be mistaken for a retryable
-      // overload.
-      if ((stall.timedOut() || isStallTimeoutError(e)) && !input.signal.aborted) {
-        yield { type: 'error', error: stallTimeoutError(stallTimeoutMs) };
-        return { kind: 'terminated' };
-      }
-      // Defensive: a mid-stream overload normally reaches us as an in-band
-      // error event (handled in the loop above), but if translate.ts ever
-      // re-throws one, route it into the same retry path rather than crashing.
-      if (isOverloadedErrorEvent(e) && retry.canRetryOverload() && !input.signal.aborted) {
-        retryOverload = true;
-      } else if (isOverloadedErrorEvent(e) && !input.signal.aborted) {
-        // Budget exhausted on the re-thrown path: same non-lossy terminal as
-        // the in-band branch above (see the Invariant comment there).
-        overloadExhausted = true;
-      } else {
-        yield { type: 'error', error: e };
-        return { kind: 'terminated' };
-      }
+    const result = handleCatchError(state, err, input, turn, ttfb, stall, stallTimeoutMs, retry);
+    if (result.done) {
+      if (result.yieldEvent !== undefined) yield result.yieldEvent;
+      return { kind: 'terminated' };
     }
+    // Timers already disposed by handleCatchError; fall through to classify.
+    return classifyOutcome(state);
   }
+
   // Dispose both stall timers for this round once stream consumption is done
   // (clean end, turn-result, or a retry decision) — idempotent, so the
   // firstByteSeen() / catch-path disposes above are harmless duplicates.
   ttfb.dispose();
   stall.dispose();
 
-  // Invariant: classification order mirrors the pre-split loop's cascade of
-  // `if` blocks. Retry classes are checked before terminals (an exhausted round
-  // is never also a retried round), and `overload-exhausted` before
-  // `translator-errored` so the clean terminal wins over the fatal lane.
-  if (retryTtfb) return { kind: 'retry', reason: 'ttfb' };
-  if (retryOverload) return { kind: 'retry', reason: 'overload' };
-  if (retryStreamIncomplete) return { kind: 'retry', reason: 'stream-incomplete' };
-  if (overloadExhausted) return { kind: 'overload-exhausted' };
-  if (translatorErrored) return { kind: 'translator-errored' };
-  return { kind: 'streamed', turnResult };
+  return classifyOutcome(state);
 }

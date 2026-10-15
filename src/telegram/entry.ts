@@ -28,16 +28,61 @@ import { StateStore } from '../agent/state/state-store.js';
 import { providerForModel } from '../agent/providers/index.js';
 import { loadConfig, loadTelegramConfig } from '../cli/config.js';
 import { getEnvConfigPath, getStateDatabasePath } from '../paths.js';
-import { loadSystemPrompt } from '../cli/shared-helpers.js';
+import { loadSystemPrompt, getThinking, getEffort } from '../cli/shared-helpers.js';
 import type { AgentModelInput } from '../agent/types.js';
 import { applyTelegramFileOverrides } from './env-file-overrides.js';
 import { planTelegramCredential, applyTelegramCredentialPlan } from './credentials.js';
-import { preloadClaudeKeychainOAuth } from '../agent/auth/credential-resolver.js';
-import { loadCredential } from '../cli/config.js';
+import { preloadClaudeKeychainOAuth, loadAnthropicCredential } from '../agent/auth/credential-resolver.js';
 import { readDiskVersion, UNKNOWN_VERSION } from './daemon-version.js';
 import { createTelegramSessionFactory } from './create-session.js';
+import { writeServiceStartupSidecar } from '../service/version-skew.js';
 import { startStatsTicker } from './stats-ticker.js';
+import { pushIfConfigured } from './push.js';
+import { installCrashNotifier } from '../utils/crash-notifier.js';
 import { errorMessage } from '../utils/errors.js';
+
+/**
+ * Crash-notification handler for the Telegram bot process.
+ *
+ * Delegates to the shared `installCrashNotifier` helper in `src/utils/`.
+ * The label `"telegram"` distinguishes bot crashes from daemon crashes in
+ * the push message. Re-entry safety and rate-limiting are owned by the helper.
+ *
+ * Exported for testing only — callers should use `main()`.
+ */
+
+/** Module-scoped handle returned by installCrashNotifier; holds the reset fn. */
+let _crashHandle: { reset: () => void } | undefined;
+
+/**
+ * Reset the re-entry guard. Exported for testing only — do not call in
+ * production code.
+ *
+ * @internal
+ */
+export function _resetCrashHandlersForTest(): void {
+  _crashHandle?.reset();
+  _crashHandle = undefined;
+}
+
+export function installCrashHandlers(): void {
+  if (_crashHandle !== undefined) return;
+  _crashHandle = installCrashNotifier('telegram', pushIfConfigured);
+}
+
+/**
+ * Write the telegram startup sidecar; warn on failure. Best-effort — never throws.
+ *
+ * Uses daemonVersion (from disk via readDiskVersion) rather than getVersion()
+ * so the recorded value is consistent with the drift watchdog. Both resolve to
+ * the same file today, but the intent is "version this binary was installed as",
+ * not "version resolved at import time".
+ */
+function recordTelegramStartup(daemonVersion: string): void {
+  if (!writeServiceStartupSidecar('telegram', daemonVersion)) {
+    console.warn('warn: failed to write service startup sidecar — `afk service status` may not show the running version');
+  }
+}
 
 export async function main(): Promise<void> {
   // Version the daemon is running as, captured once. Compared against the
@@ -67,9 +112,11 @@ export async function main(): Promise<void> {
   // fallback for when the OAuth exchange succeeded but the write-back to the
   // store failed (locked / read-only) — without it, planTelegramCredential
   // would re-read the still-expired store and report missing credentials.
-  const refreshedToken = await preloadClaudeKeychainOAuth(providerName);
+  // `loadAnthropicCredential` already incorporates the refreshed token as its
+  // final tier, so no explicit fallback is needed here.
+  await preloadClaudeKeychainOAuth(providerName);
   const credentialPlan = planTelegramCredential(providerName, {
-    loadAnthropicCredential: () => loadCredential() ?? refreshedToken,
+    loadAnthropicCredential,
   });
   if (!applyTelegramCredentialPlan(credentialPlan, config)) {
     process.exit(1);
@@ -160,6 +207,10 @@ export async function main(): Promise<void> {
     // Only meaningful for the Anthropic provider — the Codex adapter
     // ignores settingSources at construction time.
     settingSources: ['user', 'project'],
+    // Thread AFK_THINKING / AFK_EFFORT into every bot-spawned session so the
+    // Telegram surface honours these env vars just like chat, daemon, and REPL.
+    thinking: getThinking(),
+    effort: getEffort(),
     // Bot-global cwd fallback used by SessionManager when no per-chat
     // override is set via /cd. Per-session `data.cwd` takes precedence.
     ...(telegramCwd !== undefined && telegramCwd.length > 0 ? { botCwd: telegramCwd } : {}),
@@ -189,6 +240,8 @@ export async function main(): Promise<void> {
     process.exit(0);
   };
 
+  installCrashHandlers();
+
   // Invariant: signal handlers are registered BEFORE bot.start() so a
   // SIGTERM arriving during async startup still runs a clean shutdown.
   // Use `once` — shutdown calls process.exit, so a second invocation
@@ -198,6 +251,13 @@ export async function main(): Promise<void> {
 
   try {
     await bot.start();
+
+    // Write the startup sidecar so `afk service status` can surface the
+    // running version and warn on version skew. Skip when the version is
+    // unknown — a sidecar with UNKNOWN_VERSION would produce a spurious
+    // "version skew" warning rather than the intended "version unknown" path.
+    // See recordTelegramStartup() above for the daemonVersion rationale.
+    if (daemonVersion !== UNKNOWN_VERSION) recordTelegramStartup(daemonVersion);
 
     console.log('✅ Bot started successfully!');
     console.log('\n📝 Slash commands (Agent SDK):');

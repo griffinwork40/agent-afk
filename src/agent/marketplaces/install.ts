@@ -17,18 +17,20 @@ import {
   existsSync,
   mkdirSync,
   renameSync,
-  rmSync,
   symlinkSync,
-  lstatSync,
-  unlinkSync,
 } from 'fs';
-import { basename, join } from 'path';
+import { join } from 'path';
 import { getMarketplaceCacheDir, getPluginsIndexPath } from '../../paths.js';
 import { assertSafePluginName, assertWithinPluginsDir } from '../plugins/install.js';
 import { parseSource, assertHttpsUrl, type ParsedSource } from '../plugins/source.js';
 import * as git from '../plugins/git.js';
 import { upsertMarketplace, type MarketplaceIndexEntry } from '../plugins/index-store.js';
-import { pickLatestSemverTag } from '../plugins/versions.js';
+import {
+  isLink,
+  removeDest,
+  defaultGitName,
+  prepareCachedCheckout,
+} from '../plugins/checkout-lifecycle.js';
 import { readManifest } from './manifest.js';
 
 export interface MarketplaceInstallOptions {
@@ -138,18 +140,7 @@ async function installGit(
   await git.clone(parsed.url, provisionalDir, gitOpts);
 
   try {
-    let ref: string;
-    if (options.ref) {
-      ref = options.ref;
-    } else {
-      const tags = await git.listTags(provisionalDir, gitOpts);
-      const latest = pickLatestSemverTag(tags);
-      ref = latest ?? (await git.getDefaultBranch(provisionalDir, gitOpts));
-    }
-    if (options.ref || (await hasNonDefaultRef(provisionalDir, ref, gitOpts))) {
-      await git.checkout(provisionalDir, ref, gitOpts);
-    }
-    const commit = await git.getCommitSha(provisionalDir, gitOpts);
+    const { ref, commit } = await prepareCachedCheckout(provisionalDir, options.ref, gitOpts);
 
     const manifest = readManifest(provisionalDir);
     let finalName = provisionalName;
@@ -171,6 +162,7 @@ async function installGit(
       sourceType: parsed.type,
       ref,
       commit,
+      pinnedRef: options.ref !== undefined ? true : false,
       installedAt: ts,
       updatedAt: ts,
     };
@@ -187,46 +179,12 @@ async function installGit(
   }
 }
 
-async function hasNonDefaultRef(
-  dest: string,
-  ref: string,
-  gitOpts: git.GitOptions,
-): Promise<boolean> {
-  const current = await git.getDefaultBranch(dest, gitOpts);
-  return ref !== current;
-}
-
-function defaultGitName(parsed: Extract<ParsedSource, { type: 'git' | 'github' }>): string {
-  if (parsed.type === 'github') return parsed.repo;
-  const cleaned = parsed.url.replace(/\.git$/, '');
-  const lastSlash = cleaned.lastIndexOf('/');
-  const lastColon = cleaned.lastIndexOf(':');
-  const idx = Math.max(lastSlash, lastColon);
-  return idx >= 0 ? cleaned.slice(idx + 1) : basename(cleaned);
-}
-
 function assertDestAvailable(dest: string, force: boolean): void {
   if (!existsSync(dest) && !isLink(dest)) return;
   if (force) return;
   throw new Error(
     `marketplace directory already exists: ${dest} (re-run with --force to replace)`,
   );
-}
-
-function isLink(path: string): boolean {
-  try {
-    return lstatSync(path).isSymbolicLink();
-  } catch {
-    return false;
-  }
-}
-
-function removeDest(dest: string): void {
-  if (isLink(dest)) {
-    unlinkSync(dest);
-    return;
-  }
-  rmSync(dest, { recursive: true, force: true });
 }
 
 function toListEntry(p: { name: string; description?: string }): { name: string; description?: string } {

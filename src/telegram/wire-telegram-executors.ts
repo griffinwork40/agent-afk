@@ -17,13 +17,13 @@
 import type { AgentSession } from '../agent/session/agent-session.js';
 import type { AgentConfig } from '../agent/types.js';
 import { wireExecutors, type WiredExecutors, type WireExecutorsOptions } from '../agent/session/wire-executors.js';
+import { makeDeferredParentProxy } from '../agent/session/deferred-parent-proxy.js';
 import { BackgroundAgentRegistry } from '../agent/background-registry.js';
 import { TelegramBgResultNotifier } from './bg-result-notifier.js';
 import {
   getDefaultSubagentModel,
   getApiKeyForModel,
 } from '../cli/shared-helpers.js';
-import type { SubagentExecutorContext } from '../agent/tools/subagent-executor.js';
 import type { TelegramTraceWriter } from './session-context.js';
 
 export interface TelegramExecutorWiringOptions {
@@ -33,6 +33,8 @@ export interface TelegramExecutorWiringOptions {
   model: string;
   /** Raw base prompt (pre-assembly). Forwarded to children as their system prompt. */
   layeredBasePrompt: string | undefined;
+  /** Bare operator overlay (no framework); reaches unnamed `agent` children (#3324). */
+  operatorOverlay?: string;
   /** Session cwd (from `AFK_TELEGRAM_CWD` or `sessionConfig.cwd`). */
   sessionCwd: string | undefined;
   /** Trace writer for the session. */
@@ -55,6 +57,8 @@ export interface TelegramExecutorWiring {
   bgNotifier: TelegramBgResultNotifier;
   /** Wired into `AgentConfig.drainSubagents` to cascade-abort children on close. */
   drainSubagents: AgentConfig['drainSubagents'];
+  /** Wired into `AgentConfig.getPendingChildTerminalWrites` so seal() can await in-flight cancel emits (#3714). */
+  getPendingChildTerminalWrites: AgentConfig['getPendingChildTerminalWrites'];
   /**
    * Call after `new AgentSession(config)` to resolve the deferred parent proxy
    * and wire the subagent-success rollup.
@@ -73,6 +77,7 @@ export function wireTelegramExecutors(
     apiKey,
     model,
     layeredBasePrompt,
+    operatorOverlay,
     sessionCwd,
     traceWriter,
     chatId,
@@ -81,13 +86,7 @@ export function wireTelegramExecutors(
   } = opts;
 
   // -- Deferred parent proxy (session constructed after executors) -----------
-  let boundSession: AgentSession | undefined;
-  const deferredParent: SubagentExecutorContext['parentSession'] = {
-    get sessionId() { return boundSession?.sessionId; },
-    getInputStreamRef() { return boundSession?.getInputStreamRef?.() ?? { pushUserMessage: () => {} }; },
-    get abortSignal() { return boundSession?.abortSignal ?? new AbortController().signal; },
-    get hookRegistry() { return boundSession?.hookRegistry; },
-  };
+  const { proxy: deferredParent, bind: bindParent } = makeDeferredParentProxy();
 
   // -- Background registry + notifier ---------------------------------------
   const backgroundRegistry = new BackgroundAgentRegistry(
@@ -105,6 +104,7 @@ export function wireTelegramExecutors(
     defaultSubagentModel: getDefaultSubagentModel(model),
     resolveApiKeyForModel: getApiKeyForModel,
     ...(layeredBasePrompt !== undefined ? { systemPrompt: layeredBasePrompt } : {}),
+    ...(operatorOverlay !== undefined ? { operatorOverlay } : {}),
     ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
     ...(traceWriter !== null ? { traceWriter } : {}),
     backgroundRegistry,
@@ -122,7 +122,7 @@ export function wireTelegramExecutors(
 
   // -- Late-bind helper -----------------------------------------------------
   const bindSession = (session: AgentSession): void => {
-    boundSession = session;
+    bindParent(session);
     executors.rootManager.setOnSubagentSucceeded((usage, costUsd) => {
       session.recordSubagentCompletion(usage, costUsd);
     });
@@ -131,5 +131,8 @@ export function wireTelegramExecutors(
     });
   };
 
-  return { executors, backgroundRegistry, bgNotifier, drainSubagents, bindSession };
+  const getPendingChildTerminalWrites: AgentConfig['getPendingChildTerminalWrites'] =
+    () => executors.rootManager.getPendingChildTerminalWrites();
+
+  return { executors, backgroundRegistry, bgNotifier, drainSubagents, getPendingChildTerminalWrites, bindSession };
 }

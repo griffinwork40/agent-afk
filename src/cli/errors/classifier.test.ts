@@ -12,6 +12,7 @@ import {
   UnsupportedProviderConfigError,
   HookBlockedError,
   TimeoutError,
+  UsageLimitError,
 } from '../../utils/errors.js';
 
 // ─── auth ─────────────────────────────────────────────────────────────────────
@@ -43,12 +44,54 @@ describe('classifyError — rate_limit', () => {
     const result = classifyError(err);
     expect(result.kind).toBe('rate_limit');
     expect(result.exitCode).toBe(1);
+    // Provider-neutral: a plain throttle may come from any provider.
+    expect(result.userMessage).not.toContain('Anthropic');
   });
 
   it('classifies "too many requests" message as rate_limit', () => {
     const err = new Error('too many requests');
     const result = classifyError(err);
     expect(result.kind).toBe('rate_limit');
+  });
+});
+
+// ─── usage_limit ──────────────────────────────────────────────────────────────
+
+describe('classifyError — usage_limit', () => {
+  const chatGptBody = { type: 'usage_limit_reached', plan_type: 'plus', resets_in_seconds: 600 };
+
+  it('classifies a UsageLimitError above the generic 429 branch', () => {
+    const err = new UsageLimitError('Codex usage limit reached', { provider: 'codex', kind: 'subscription' });
+    expect(err.status).toBe(429);
+    const result = classifyError(err);
+    expect(result.kind).toBe('usage_limit');
+    expect(result.userMessage).toBe('Codex usage limit reached.');
+    expect(result.userMessage).not.toContain('Anthropic');
+    expect(result.hint).not.toContain('claude login');
+  });
+
+  it('matches a raw ChatGPT body (flat .error) with status 429', () => {
+    const err = Object.assign(new Error('429 usage'), { status: 429, error: chatGptBody });
+    const result = classifyError(err);
+    expect(result.kind).toBe('usage_limit');
+    expect(result.userMessage).toContain('Codex usage limit reached (plus plan), resets at');
+  });
+
+  it('matches a nested .error.error body with undefined status (mid-stream)', () => {
+    const err = Object.assign(new Error('The usage limit has been reached'), { error: { error: chatGptBody } });
+    expect(classifyError(err).kind).toBe('usage_limit');
+  });
+
+  it('Anthropic usage limit keeps the claude login hint', () => {
+    const err = new UsageLimitError('Claude usage limit reached', { provider: 'anthropic', kind: 'subscription' });
+    const result = classifyError(err);
+    expect(result.kind).toBe('usage_limit');
+    expect(result.hint).toContain('claude login');
+  });
+
+  it('a plain 429 still classifies as rate_limit', () => {
+    const err = Object.assign(new Error('Rate limited'), { status: 429, error: { type: 'rate_limit_exceeded' } });
+    expect(classifyError(err).kind).toBe('rate_limit');
   });
 });
 

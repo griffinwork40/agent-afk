@@ -122,11 +122,13 @@ export interface RunScenarioOpts {
   cols: number;
   rows: number;
   timeoutMs?: number;
+  /** Run the scenario's compositor in content-hug placement (AFK_PTY_CONTENT_HUG=1). */
+  contentHug?: boolean;
 }
 
 /** Spawn a scenario in a real pty and reconstruct its emulator buffer. */
 export async function runScenarioInPty(opts: RunScenarioOpts): Promise<PtyRunResult> {
-  const { name, cols, rows, timeoutMs = 20_000 } = opts;
+  const { name, cols, rows, timeoutMs = 20_000, contentHug = false } = opts;
   const pty = loadNodePty();
   const xterm = await import(pathToFileURL(require.resolve('@xterm/headless')).href);
   const Terminal = (xterm as { Terminal?: unknown }).Terminal
@@ -138,7 +140,7 @@ export async function runScenarioInPty(opts: RunScenarioOpts): Promise<PtyRunRes
     cols,
     rows,
     cwd: REPO_ROOT,
-    env: { ...process.env, TERM: 'xterm-256color' },
+    env: { ...process.env, TERM: 'xterm-256color', AFK_PTY_CONTENT_HUG: contentHug ? '1' : '0' },
   });
 
   let buf = '';

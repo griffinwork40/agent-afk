@@ -1,6 +1,13 @@
 import { EventEmitter } from 'node:events';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TerminalCompositor } from './terminal-compositor.js';
+
+// Transform the bootstrap module graph once, outside any test's timeout. The
+// first cold import takes several seconds under load; later imports reuse the
+// transform cache even after vi.resetModules().
+beforeAll(async () => {
+  await import('./commands/interactive/bootstrap.js');
+}, 60_000);
 
 describe('interactive bootstrap status line hooks', () => {
   beforeEach(() => {
@@ -42,7 +49,7 @@ describe('interactive bootstrap status line hooks', () => {
       })),
     }));
     vi.doMock('../agent/memory/index.js', () => ({
-      MemoryStore: vi.fn(() => ({ close: vi.fn() })),
+      MemoryStore: vi.fn(function () { return { close: vi.fn() }; }),
       injectHotMemory: vi.fn((config: unknown) => config),
       injectGoalPrompt: vi.fn((config: unknown) => config),
       memoryToolSchemas: [],
@@ -62,6 +69,7 @@ describe('interactive bootstrap status line hooks', () => {
       getEffort: vi.fn(() => undefined),
       getMaxOutputTokens: vi.fn(() => undefined),
       getMaxToolUseIterations: vi.fn(() => undefined),
+      getMaxBudgetUsd: vi.fn(() => undefined),
       getDefaultSubagentModel: vi.fn(() => 'sonnet'),
       findClaudeExecutable: vi.fn(() => '/usr/bin/claude'),
       loadSystemPrompt: vi.fn(() => undefined),
@@ -73,7 +81,7 @@ describe('interactive bootstrap status line hooks', () => {
       activateDumpPrompt: vi.fn(),
     }));
     vi.doMock('./status-line.js', () => ({
-      StatusLine: vi.fn(() => statusLine),
+      StatusLine: vi.fn(function () { return statusLine; }),
     }));
     vi.doMock('./slash/index.js', () => ({ registerAll }));
     vi.doMock('./slash/writer.js', () => ({
@@ -199,7 +207,7 @@ function applyCommonMocks(): void {
     })),
   }));
   vi.doMock('../agent/memory/index.js', () => ({
-    MemoryStore: vi.fn(() => ({ close: vi.fn() })),
+    MemoryStore: vi.fn(function () { return { close: vi.fn() }; }),
     injectHotMemory: vi.fn((config: unknown) => config),
     injectGoalPrompt: vi.fn((config: unknown) => config),
     memoryToolSchemas: [],
@@ -219,6 +227,7 @@ function applyCommonMocks(): void {
     getEffort: vi.fn(() => undefined),
     getMaxOutputTokens: vi.fn(() => undefined),
     getMaxToolUseIterations: vi.fn(() => undefined),
+    getMaxBudgetUsd: vi.fn(() => undefined),
     getDefaultSubagentModel: vi.fn(() => 'sonnet'),
     findClaudeExecutable: vi.fn(() => '/usr/bin/claude'),
     loadSystemPrompt: vi.fn(() => undefined),
@@ -230,7 +239,7 @@ function applyCommonMocks(): void {
     activateDumpPrompt: vi.fn(),
   }));
   vi.doMock('./status-line.js', () => ({
-    StatusLine: vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), repaint: vi.fn() })),
+    StatusLine: vi.fn(function () { return { start: vi.fn(), stop: vi.fn(), repaint: vi.fn() }; }),
   }));
   vi.doMock('./slash/index.js', () => ({ registerAll: vi.fn() }));
   vi.doMock('./slash/writer.js', () => ({
@@ -1204,7 +1213,7 @@ describe('interactive bootstrap — path-approval grant wiring for OpenAI-compat
       })),
     }));
     vi.doMock('../agent/memory/index.js', () => ({
-      MemoryStore: vi.fn(() => ({ close: vi.fn() })),
+      MemoryStore: vi.fn(function () { return { close: vi.fn() }; }),
       injectHotMemory: vi.fn((config: unknown) => config),
       injectGoalPrompt: vi.fn((config: unknown) => config),
       memoryToolSchemas: [],
@@ -1240,6 +1249,7 @@ describe('interactive bootstrap — path-approval grant wiring for OpenAI-compat
       getEffort: vi.fn(() => undefined),
       getMaxOutputTokens: vi.fn(() => undefined),
       getMaxToolUseIterations: vi.fn(() => undefined),
+      getMaxBudgetUsd: vi.fn(() => undefined),
       getDefaultSubagentModel: vi.fn(() => 'sonnet'),
       findClaudeExecutable: vi.fn(() => '/usr/bin/claude'),
       loadSystemPrompt: vi.fn(() => undefined),
@@ -1259,7 +1269,7 @@ describe('interactive bootstrap — path-approval grant wiring for OpenAI-compat
       activateDumpPrompt: vi.fn(),
     }));
     vi.doMock('./status-line.js', () => ({
-      StatusLine: vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), repaint: vi.fn() })),
+      StatusLine: vi.fn(function () { return { start: vi.fn(), stop: vi.fn(), repaint: vi.fn() }; }),
     }));
     vi.doMock('./slash/index.js', () => ({ registerAll: vi.fn() }));
     vi.doMock('./slash/writer.js', () => ({
@@ -1298,5 +1308,66 @@ describe('interactive bootstrap — path-approval grant wiring for OpenAI-compat
     // wireProviderGrants was called but with a non-GrantManager provider —
     // it takes the warn branch, so setAllowDirSpy still saw the call.
     expect(setAllowDirSpy).toHaveBeenCalledWith(noGrantsStub);
+  });
+});
+
+/**
+ * Regression guard for #3707 (gap 2): `maxBudgetUsd` must reach `buildAgentSession`
+ * on the initial REPL bootstrap when `getMaxBudgetUsd` returns a finite value.
+ *
+ * We test this at the `buildSharedDeps` boundary — the pure function that
+ * assembles the session deps object bootstrap.ts passes to `buildAgentSession`.
+ * `buildSharedDeps` takes `maxBudgetUsd` as a first-class input and maps it
+ * straight through; this is the only transformation step between
+ * `getMaxBudgetUsd()` and the `AgentConfig` the session receives.
+ */
+describe('interactive bootstrap — maxBudgetUsd reaches buildAgentSession (#3707)', () => {
+  it('buildSharedDeps includes maxBudgetUsd: 3 in the returned deps object', async () => {
+    const { buildSharedDeps } = await import('./commands/interactive/bootstrap-session-builder.js');
+    const deps = buildSharedDeps({
+      sessionModel: 'sonnet',
+      resumeConfig: {},
+      systemPrompt: undefined,
+      systemPromptSource: undefined,
+      thinking: undefined,
+      effort: undefined,
+      maxOutputTokens: undefined,
+      maxToolUseIterations: undefined,
+      maxBudgetUsd: 3,
+      cliConfig: {} as never,
+      providerFactory: vi.fn(),
+      hookRegistry: {} as never,
+      traceWriter: undefined,
+      effectiveCwd: undefined,
+      maxTurns: '10',
+      initialPermissionMode: undefined,
+    });
+    // maxBudgetUsd must survive the buildSharedDeps transformation so
+    // buildAgentSession (which reads deps.maxBudgetUsd) can forward it into
+    // the AgentConfig. A value of undefined here would silently drop the budget.
+    expect(deps.maxBudgetUsd).toBe(3);
+  });
+
+  it('buildSharedDeps leaves maxBudgetUsd undefined when not provided', async () => {
+    const { buildSharedDeps } = await import('./commands/interactive/bootstrap-session-builder.js');
+    const deps = buildSharedDeps({
+      sessionModel: 'sonnet',
+      resumeConfig: {},
+      systemPrompt: undefined,
+      systemPromptSource: undefined,
+      thinking: undefined,
+      effort: undefined,
+      maxOutputTokens: undefined,
+      maxToolUseIterations: undefined,
+      maxBudgetUsd: undefined,
+      cliConfig: {} as never,
+      providerFactory: vi.fn(),
+      hookRegistry: {} as never,
+      traceWriter: undefined,
+      effectiveCwd: undefined,
+      maxTurns: '10',
+      initialPermissionMode: undefined,
+    });
+    expect(deps.maxBudgetUsd).toBeUndefined();
   });
 });

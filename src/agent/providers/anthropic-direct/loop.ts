@@ -57,13 +57,11 @@
 import type { ProviderEvent } from '../../provider.js';
 import type { RunTurnInput } from './types.js';
 import { toProviderUsage } from './types.js';
-import { emitSessionPhase } from '../../trace/emit.js';
 import { resolveTtfbTimeoutMs } from '../shared/first-byte-timeout.js';
 import { resolveStallTimeoutMs } from '../shared/stream-stall-timeout.js';
 import { resolveMaxToolIterations } from '../shared/tool-loop-cap.js';
-import { OVERLOAD_EXHAUSTED, OVERLOAD_EXHAUSTED_NOTICE } from './overload-pause.js';
+import { isTruncationStopReason } from '../shared/truncation.js';
 import {
-  OVERLOAD_MAX_RETRIES,
   RoundRetryBudget,
   ttfbAttemptTimeoutMs,
 } from './loop/retry-budget.js';
@@ -71,10 +69,65 @@ import { handleRoundRetry, type RoundRetryContext } from './loop/round-retry.js'
 import { openRound } from './loop/round-request.js';
 import { consumeRoundStream } from './loop/stream-consumer.js';
 import { runToolRound } from './loop/tool-round.js';
-import { emitNonToolUseTerminal } from './loop/turn-terminal.js';
+import {
+  emitNonToolUseTerminal,
+  emitOverloadExhausted,
+  handleStreamTerminals,
+} from './loop/turn-terminal.js';
 import { TurnAccumulator } from './loop/turn-accumulator.js';
 import { TurnTrace } from '../shared/turn-trace.js';
 import { applyBeforeNextRound } from './loop/inter-round.js';
+// ---------------------------------------------------------------------------
+// Stop-hook seam (issue #2714): extracted helper to keep runTurn under 200 lines
+// ---------------------------------------------------------------------------
+
+/**
+ * Apply the provider-side stop-hook seam on natural turn ends.
+ *
+ * Returns:
+ *  - `'continue'`  — a blocking Stop hook fired; messages already updated;
+ *                    caller should `continue` the outer model loop.
+ *  - `'done'`      — non-blocking (or absent); terminal events already yielded;
+ *                    caller should `return`.
+ *  - `undefined`   — `beforeTurnEnd` not wired or end was not natural;
+ *                    caller should fall through to `emitNonToolUseTerminal`.
+ *
+ * All parameters are explicit — no closures over loop-local variables.
+ */
+async function* applyStopHookSeam(
+  input: RunTurnInput,
+  turnResult: import('./types.js').TurnResult,
+  turn: TurnAccumulator,
+  stopHookContinuation: number,
+): AsyncGenerator<ProviderEvent, 'continue' | 'done' | undefined, void> {
+  const isNaturalEnd = !input.signal.aborted
+    && turnResult.stopReason !== 'refusal'
+    && !isTruncationStopReason(turnResult.stopReason)
+    && turn.windDownReason === null;
+
+  if (!isNaturalEnd || input.beforeTurnEnd === undefined) return undefined;
+
+  // Push assistant content BEFORE the seam so Stop hooks can read the turn's
+  // final text. Strip tool_use blocks first (orphaned ones would 400 the next
+  // API call — same invariant as emitNonToolUseTerminal).
+  const safeBlocks = turnResult.assistantBlocks.filter((b) => b.type !== 'tool_use');
+  if (safeBlocks.length > 0) {
+    input.messages.push({ role: 'assistant', content: safeBlocks });
+  }
+  // Finding 3: extract the assistant text directly from the turn result so
+  // buildStopContext receives fresh data without scanning history.
+  const assistantTextForSeam = turnResult.text.length > 0 ? turnResult.text : undefined;
+  const seamResult = await input.beforeTurnEnd(stopHookContinuation, assistantTextForSeam);
+  if (seamResult?.continueWith) {
+    input.messages.push({ role: 'user', content: seamResult.continueWith });
+    input.journalSync?.sync(input.messages);
+    return 'continue';
+  }
+  // Non-blocking: emit terminal events with empty assistantBlocks (already pushed above).
+  const terminalResult = { ...turnResult, assistantBlocks: [] };
+  yield* emitNonToolUseTerminal(terminalResult, input, turn);
+  return 'done';
+}
 
 /**
  * Run one user turn through the model + tool dispatcher loop. Yields
@@ -96,6 +149,12 @@ import { applyBeforeNextRound } from './loop/inter-round.js';
 export async function* runTurn(
   input: RunTurnInput,
 ): AsyncGenerator<ProviderEvent, void, void> {
+  // stop-hook-continuation rule: track the 0-based continuation counter for
+  // this turn. Incremented each time a blocking Stop hook causes a same-turn
+  // re-entry (PR #2714). Persists across the outer while-true so the cap
+  // is evaluated per-turn, not per-round.
+  let stopHookContinuation = 0;
+
   const maxIterations = resolveMaxToolIterations(input.maxToolUseIterations);
   // TIME sibling of the round cap: `0`/unset means no soft deadline (the
   // top-level default, where a human owns the turn). Taken RAW, deliberately —
@@ -110,7 +169,7 @@ export async function* runTurn(
   // discipline. `turn` survives the whole turn, `retry` is released at every
   // clean round boundary, `trace` outlives both because its abort listener can
   // fire during any phase.
-  const turn = new TurnAccumulator();
+  const turn = input.turnState ?? new TurnAccumulator(); // survives retry-tier replays (RunTurnInput.turnState); fallback is for direct callers/tests only — restarts the clock
   const retry = new RoundRetryBudget();
   // Both TTFB re-drive sites (connection-phase and mid-stream) and both backoff
   // classes share one budget instance — see RoundRetryBudget's contract.
@@ -184,25 +243,7 @@ export async function* runTurn(
     // `error` event → sawProviderError → closure {reason:'abort'} with no
     // turn committed).
     if (opened.kind === 'overload-exhausted') {
-      void emitSessionPhase(input.traceWriter, {
-        phase: 'rate_limit',
-        metadata: {
-          reason: 'overloaded',
-          source: 'connection-phase',
-          attempt: OVERLOAD_MAX_RETRIES,
-          exhausted: true,
-        },
-      });
-      yield {
-        type: 'assistant.message',
-        text: OVERLOAD_EXHAUSTED_NOTICE,
-        sessionId: input.ctx.sessionId,
-      };
-      yield {
-        type: 'turn.completed',
-        usage: turn.withDuration({ ...turn.usage, stopReason: OVERLOAD_EXHAUSTED }),
-        sessionId: input.ctx.sessionId,
-      };
+      yield* emitOverloadExhausted('connection-phase', input.traceWriter, input.ctx.sessionId, turn);
       return;
     }
 
@@ -240,82 +281,38 @@ export async function* runTurn(
     // RoundRetryBudget.reset for the per-field contract.
     retry.reset();
 
-    // Invariant: this branch must come BEFORE the `translatorErrored` /
-    // `turnResult === null` terminals below, and must emit exactly ONE terminal
-    // event. Ordering is load-bearing in both directions: it sits below the
-    // retry `continue`s (an exhausted round is never also a retried round) and
-    // above the generic terminals (which would otherwise re-classify it).
-    //
-    // Turn preservation (#762): emit a CLEAN `turn.completed` so the session's
-    // stream consumer maps it to `done` → `turnCount++`, committing the turn and
-    // leaving the accumulated history in `input.messages` resumable via
-    // `afk --resume <sessionId>`. Previously this path yielded a raw `error`,
-    // which set `sawProviderError` and sealed the session `failed` with
-    // `finalTurnCount: 0` — every prior turn discarded.
-    //
-    // The failure is still surfaced, twice over: the OVERLOAD_EXHAUSTED
-    // stopReason drives an `abort` closure + `failed` seal downstream, and the
-    // notice replaces the raw `{"type":"overloaded_error"}` SSE envelope
-    // operators were misreading as a TypeScript error.
-    //
-    // Contract: the notice is NOT appended to THIS turn's `input.messages`, so
-    // it never re-enters the request that is failing. It is NOT invisible to the
-    // model, though — `session/stream-consumer.ts` materializes every non-empty
-    // `assistant.message` into `conversationHistory`, which threads back as
-    // model context on the next turn and on `--resume`. Same shape as the
-    // `stop_reason: 'refusal'` notice below. Read as "not retried into the dead
-    // request", not "operator-only".
+    // Invariant: this branch must come BEFORE the translator-errored /
+    // null-result terminals below, and emit exactly ONE terminal event. Ordering
+    // is load-bearing: below the retry continues, above the generic terminals.
+    // Turn-preservation rationale and contract: see emitOverloadExhausted in
+    // loop/turn-terminal.ts and docs/anthropic-direct-loop.md (#762).
     if (outcome.kind === 'overload-exhausted') {
-      void emitSessionPhase(input.traceWriter, {
-        phase: 'rate_limit',
-        metadata: {
-          reason: 'overloaded',
-          source: 'mid-stream',
-          attempt: OVERLOAD_MAX_RETRIES,
-          exhausted: true,
-        },
-      });
-      yield {
-        type: 'assistant.message',
-        text: OVERLOAD_EXHAUSTED_NOTICE,
-        sessionId: input.ctx.sessionId,
-      };
-      yield {
-        type: 'turn.completed',
-        usage: turn.withDuration({ ...turn.usage, stopReason: OVERLOAD_EXHAUSTED }),
-        sessionId: input.ctx.sessionId,
-      };
+      yield* emitOverloadExhausted('mid-stream', input.traceWriter, input.ctx.sessionId, turn);
       return;
     }
 
-    if (outcome.kind === 'translator-errored') {
-      // Error event was already yielded. On an abort (interrupt/close), emit
-      // turn.completed with accumulated usage so callers can account for
-      // partial costs. On a real stream error, skip turn.completed so cost
-      // is not double-counted and state is not incorrectly advanced.
-      if (input.signal.aborted) {
-        yield {
-          type: 'turn.completed',
-          usage: turn.terminalUsage(),
-          sessionId: input.ctx.sessionId,
-        };
-      }
-      return;
+    // After the 'overload-exhausted' guard above, only 'translator-errored' and
+    // 'streamed' remain — use control-flow narrowing instead of a cast so a
+    // future RoundOutcome variant is a compile error here, not a silent bypass.
+    if (outcome.kind !== 'translator-errored' && outcome.kind !== 'streamed') {
+      throw new Error(`Unexpected round outcome: ${(outcome as { kind: string }).kind}`);
     }
-    const turnResult = outcome.turnResult;
-    if (turnResult === null) {
-      // Stream ended without a turn-result; treat as a clean end-of-turn
-      // with the usage we already have.
-      yield {
-        type: 'turn.completed',
-        usage: turn.terminalUsage(),
-        sessionId: input.ctx.sessionId,
-      };
-      return;
-    }
+    const turnResult = outcome.kind === 'streamed' ? outcome.turnResult : null;
+    const terminal = yield* handleStreamTerminals(
+      outcome.kind,
+      turnResult,
+      input.signal,
+      input.ctx.sessionId,
+      turn,
+    );
+    if (terminal) return;
+
+    // Non-null: handleStreamTerminals returns true for translator-errored and
+    // null-result; reaching here means outcome.kind === 'streamed' and non-null.
+    const result = turnResult!;
 
     turn.addRoundUsage(
-      toProviderUsage(turnResult.usage, turnResult.stopReason, input.model, input.fastMode ? 'fast' : undefined),
+      toProviderUsage(result.usage, result.stopReason, input.model, input.fastMode ? 'fast' : undefined),
     );
     // Surface per-round cumulative usage so getContextUsage() reflects mid-turn
     // growth on the status line. Fires on every round including the terminal
@@ -323,15 +320,21 @@ export async function* runTurn(
     // turn.completed immediately after. Synchronous, never awaited.
     input.onUsageProgress?.(turn.usage);
 
-    if (turnResult.stopReason !== 'tool_use') {
-      yield* emitNonToolUseTerminal(turnResult, input, turn);
+    if (result.stopReason !== 'tool_use') {
+      // stop-hook-continuation rule: delegate to the extracted seam helper so
+      // runTurn stays under the 200-line ceiling. See applyStopHookSeam above.
+      const seamOutcome = yield* applyStopHookSeam(input, result, turn, stopHookContinuation);
+      if (seamOutcome === 'continue') { stopHookContinuation += 1; continue; }
+      if (seamOutcome === 'done') return;
+      // undefined → seam was not active; fall through to normal terminal path.
+      yield* emitNonToolUseTerminal(result, input, turn);
       return;
     }
 
     // stopReason === 'tool_use' — dispatch the tools, commit the results, and
     // decide whether the turn keeps going. The whole history mutation contract
     // (assistant push, rollback on throw, tool_result commit) lives inside.
-    const round = yield* runToolRound(turnResult, input, turn, maxIterations, softDeadlineMs);
+    const round = yield* runToolRound(result, input, turn, maxIterations, softDeadlineMs);
     if (round === 'terminated') return;
     applyBeforeNextRound(input, input.beforeNextRound?.());
   }

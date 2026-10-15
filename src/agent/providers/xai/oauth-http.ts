@@ -137,6 +137,89 @@ export async function discoverXaiOidcCached(deps: OAuthHttpDeps = {}): Promise<X
   return result;
 }
 
+export interface RawPostResult {
+  ok: boolean;
+  status: number;
+  json: Record<string, unknown>;
+  /** Populated (via safeText) only when JSON decode fails — used for plain-text error bodies. */
+  text: string;
+}
+
+/**
+ * Low-level form POST that never throws on non-ok responses.
+ * JSON decode is tolerant: a body that cannot be parsed resolves to `{}` and
+ * the raw text (up to 200 chars) is returned in `text`.
+ *
+ * All higher-level helpers ({@link postOAuthForm}, device-code flows) build on
+ * this so wire-format encoding is defined exactly once.
+ */
+export async function rawPostOAuthForm(
+  url: string,
+  params: Record<string, string>,
+  fetchFn: FetchFn = fetch,
+): Promise<RawPostResult> {
+  const res = await fetchFn(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: new URLSearchParams(params).toString(),
+  });
+  // Always clone before reading: the Fetch spec mandates that Response.clone()
+  // exists and the body is consumed on first read. The guard fell through to the
+  // original response when `.clone` was absent, so a failed JSON parse would
+  // attempt to read an already-consumed stream and return empty text.
+  const clone = res.clone();
+  let json: Record<string, unknown> = {};
+  let text = '';
+  try {
+    const parsed: unknown = await res.json();
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      json = parsed as Record<string, unknown>;
+    }
+  } catch {
+    text = await safeText(clone);
+  }
+  return { ok: res.ok, status: res.status, json, text };
+}
+
+/**
+ * POST a form-urlencoded body to an OAuth token endpoint and return the parsed
+ * JSON response body.
+ *
+ * Contract:
+ *   - Always sends `Content-Type: application/x-www-form-urlencoded` and
+ *     `Accept: application/json`.
+ *   - On a non-2xx response, throws with a message of the form
+ *     `"<prefix>: <err>[: <desc>]"` where `err` is `json.error ?? http_<status>`
+ *     and `desc` is `json.error_description` or plain-text body (omitted when absent).
+ *   - JSON decode is tolerant: a body that cannot be parsed resolves to `{}`.
+ *     This matches xAI's error responses that sometimes arrive as plain text.
+ *
+ * @param url       - Token endpoint URL.
+ * @param params    - Form fields (passed to `URLSearchParams`).
+ * @param errPrefix - Prefix for the thrown error message, e.g. `"xAI token refresh failed"`.
+ * @param fetchFn   - Injectable fetch implementation (defaults to global `fetch`).
+ * @returns Parsed JSON body as `Record<string, unknown>`.
+ * @throws Error when the response is not ok.
+ */
+export async function postOAuthForm(
+  url: string,
+  params: Record<string, string>,
+  errPrefix: string,
+  fetchFn: FetchFn = fetch,
+): Promise<Record<string, unknown>> {
+  const { ok, status, json, text } = await rawPostOAuthForm(url, params, fetchFn);
+  if (!ok) {
+    const errCode = asNonEmptyString(json['error']);
+    const desc = asNonEmptyString(json['error_description']);
+    // When the body was plain text (json.error absent), append the raw text so
+    // the caller sees the actual server message rather than only "http_<N>".
+    const err = errCode ?? `http_${status}`;
+    const detail = errCode ? desc : (text || desc);
+    throw new Error(`${errPrefix}: ${detail ? `${err}: ${detail}` : err}`);
+  }
+  return json;
+}
+
 /**
  * Map a token-endpoint JSON body to {@link XaiTokenBundle}.
  * When `fallbackRefresh` is set and the response omits refresh_token, use it

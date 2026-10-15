@@ -87,6 +87,7 @@ describe('writeLinuxCredentials — S3 file mode 0o600 regression', () => {
     }
   });
 
+  // Windows: genuinely POSIX-only — NTFS has no POSIX permission bits; mode 0o600 is meaningless there
   it.skipIf(process.platform === 'win32')('writes the credential file with mode 0o600', () => {
     // Constraint: POSIX file-mode — mode must be set at write time (no TOCTOU).
     // We exercise the Linux credential writer directly via the exported helper.

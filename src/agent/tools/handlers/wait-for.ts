@@ -28,6 +28,8 @@ import {
   MIN_POLL_INTERVAL_MS,
 } from './wait-for-poller.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { isUserWaiting, yieldNotice } from '../user-yield.js';
+import { clampNotes, TIMED_OUT_HINT } from './wait-for.limits.js';
 
 // ---------------------------------------------------------------------------
 // Input shape
@@ -123,7 +125,7 @@ function parseInput(
       // Resolve relative paths against the session's working directory rather
       // than process.cwd() (which reflects the AFK daemon's CWD, not the
       // project root the model is operating in).
-      const base = context?.resolveBase ?? context?.cwd;
+      const base = context?.resolveBase;
       const resolvedPath =
         base !== undefined && !path.isAbsolute(input.path)
           ? path.resolve(base, input.path)
@@ -149,7 +151,7 @@ function parseInput(
       if (typeof input.command !== 'string' || input.command.trim() === '') {
         throw new Error('"command" is required for type "command"');
       }
-      const cwd = context?.resolveBase ?? context?.cwd;
+      const cwd = context?.resolveBase;
       const condition: WaitCondition = {
         type: 'command',
         command: input.command,
@@ -210,11 +212,16 @@ export const waitForHandler: ToolHandler = async (
     }
   };
 
+  // Yield contract: the dispatcher attaches userAttention only on top-level
+  // interactive sessions. When the operator types while we wait, stop and hand
+  // the turn back (their message is delivered at end of turn, not mid-turn).
+  const attention = context?.userAttention;
   const pollResult = await pollUntil(evaluate, {
     timeout_ms: timeoutMs,
     poll_interval_ms: pollIntervalMs,
     backoff,
     signal,
+    ...(attention !== undefined ? { shouldYield: () => isUserWaiting(attention) } : {}),
   });
 
   const summary =
@@ -222,9 +229,24 @@ export const waitForHandler: ToolHandler = async (
     `(${pollResult.elapsed_ms}ms elapsed, ${pollResult.attempts} attempt${pollResult.attempts === 1 ? '' : 's'})` +
     (pollResult.result ? ` — ${pollResult.result.detail}` : '') +
     (pollResult.error ? ` — error: ${pollResult.error}` : '');
+  // Clamp notices ride on every outcome (not just timed_out): a succeeded wait
+  // that was capped still tells the model its requested value was not honoured.
+  const notes = clampNotes(input);
+  const noteSuffix = notes.length > 0 ? `\nNote: ${notes.join(' ')}` : '';
 
+  if (pollResult.status === 'yielded_to_user') {
+    return {
+      content:
+        `${summary}. Condition not met yet. ` +
+        yieldNotice('Call wait_for again afterward if the condition is still needed.') +
+        noteSuffix,
+      isError: false,
+    };
+  }
+
+  const hint = pollResult.status === 'timed_out' ? `. ${TIMED_OUT_HINT}` : '';
   return {
-    content: summary,
+    content: summary + hint + noteSuffix,
     isError: pollResult.status === 'failed',
   };
 };

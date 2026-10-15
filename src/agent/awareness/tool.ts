@@ -20,6 +20,7 @@ import type { ToolCall, ToolResult } from '../providers/anthropic-direct/types.j
 import type { ToolDispatcher } from '../providers/anthropic-direct/tool-dispatcher.js';
 import type { RuntimeStateSource } from './types.js';
 import { buildRuntimeSnapshot, parseView } from './runtime-snapshot.js';
+import { availableCatalogModels } from '../providers/openai-compatible/catalog-awareness.js';
 
 /**
  * Tool definition for `get_runtime_state`. Stable surface — the model relies
@@ -43,22 +44,27 @@ export const getRuntimeStateTool: AnthropicToolDef = {
     'branch / commit the session started on.\n\n' +
     'Views:\n' +
     '- `self`       — identity + model + permissions + cwd only\n' +
-    '- `tools`      — enabled tool names + MCP server summary only\n' +
+    '- `tools`      — enabled tools, MCP servers, and available OpenAI subscription models with windows and upgrade notes\n' +
     '- `subagents`  — active subagent handles + background jobs only\n' +
+    '                 (also includes subagentOutcomeSummary when history is available)\n' +
     '- `workspace`  — git state (branch, headSha, dirty, dirtyCount, remoteUrl)\n' +
-    '- `all`        — union of the four above (default)\n\n' +
-    'This is a read-only, in-memory inspection. It does not probe the file ' +
-    'system or network. Fields the runtime does not know (e.g. depth for a ' +
-    'top-level session) come back as `null` rather than synthesised defaults.',
+    '- `hooks`      — merged disk hook configuration: event, matcher, source tier/plugin name, type, resolved timeout, command fingerprint and literal executable basename only; loader warning count and trust flags. Not a live registration list; builtin listing unavailable.\n' +
+    '- `all`        — union of self/tools/subagents/workspace (default); excludes hooks to avoid extra disk I/O and size\n\n' +
+    'This is read-only. The optional subscription model list reads the local Codex catalog; the opt in hooks view reads local configuration via the session hook loader. No raw command text, arguments, env assignments or warning text are returned. No network requests. Fields the runtime does not know (e.g. depth for a ' +
+    'top-level session) come back as `null` rather than synthesised defaults.\n\n' +
+    'The `all` view also includes `subagentOutcomeSummary` — historical success ' +
+    'rate, cap-hit rate, and p50 latency bucketed by model × agentType × depth ' +
+    '(30-day window, ≥3-run buckets only; omitted when empty). A high `capHitRate` ' +
+    'signals that `maxToolUseIterations` is too tight for that model+type workload.',
   input_schema: {
     type: 'object',
     properties: {
       view: {
         type: 'string',
-        enum: ['self', 'tools', 'subagents', 'workspace', 'all'],
+        enum: ['self', 'tools', 'subagents', 'workspace', 'hooks', 'all'],
         description:
           'Which slice of state to return. Defaults to "all". Use a narrower ' +
-          'view when only one slice is needed to keep the response compact.',
+          'view when only one slice is needed to keep the response compact. Hooks is opt in and excluded from all.',
       },
     },
     required: [],
@@ -93,8 +99,14 @@ export function createGetRuntimeStateHandler(source: RuntimeStateSource): ToolHa
     const view = input && typeof input === 'object'
       ? parseView((input as Record<string, unknown>)['view'])
       : 'all';
+    // A source without getHooks (embedder fixtures) yields a tool error rather
+    // than a thrown exception from the snapshot builder.
+    if (view === 'hooks' && !source.getHooks) {
+      return { content: 'get_runtime_state: the hooks view is unavailable for this runtime source.', isError: true };
+    }
     const snapshot = buildRuntimeSnapshot(source, view);
-    return { content: JSON.stringify(snapshot) };
+    const models = view === 'tools' || view === 'all' ? availableCatalogModels() : [];
+    return { content: JSON.stringify({ ...snapshot, ...(models.length ? { openaiSubscriptionModels: models } : {}) }) };
   };
 }
 

@@ -1,4 +1,4 @@
-import { providerForModel, AnthropicDirectProvider } from '../agent/providers/index.js';
+import { AnthropicDirectProvider } from '../agent/providers/index.js';
 import { OpenAICompatibleProvider } from '../agent/providers/openai-compatible/index.js';
 import { XaiProvider } from '../agent/providers/xai/index.js';
 import { resolveXaiConstructionAuthMode } from '../agent/providers/xai/force-mode.js';
@@ -11,15 +11,7 @@ import { EXIT_PLAN_MODE_TOOL_NAME } from '../agent/tools/handlers/exit-plan-mode
 import { WORKSPACE_TOOL_NAMES } from '../agent/workspace/index.js';
 import { STATE_TOOL_NAMES } from '../agent/state/state-tools.js';
 
-const VALID_PROVIDERS: readonly string[] = [
-  'anthropic',
-  'anthropic-direct',
-  'openai-codex',
-  'openai',
-  'openai-compatible',
-  'xai',
-  'xai-oauth',
-];
+import { selectCliProvider } from './provider-selection.js';
 
 export type ParseProviderOptions = {
   subagentExecutor?: import('../agent/tools/subagent-executor.js').SubagentExecutor;
@@ -95,21 +87,8 @@ export function parseProvider(
     envProviderRaw === 'xai-oauth' ||
     envProviderRaw === 'xai_oauth';
 
-  let effective = raw;
-  if (effective === undefined && opts?.model !== undefined) {
-    const routed = providerForModel(opts.model, {
-      ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
-    });
-    // Only override for non-Anthropic routes — Anthropic is the legacy
-    // default the caller's fallback already constructs, so leaving
-    // `effective` undefined preserves the existing executor wiring path.
-    if (routed === 'openai-compatible') effective = 'openai-compatible';
-    if (routed === 'xai' || routed === 'xai-oauth') effective = routed;
-  }
+  const effective = selectCliProvider(raw, opts);
   if (effective === undefined) return undefined;
-  if (!VALID_PROVIDERS.includes(effective)) {
-    throw new Error(`Invalid --provider value: ${effective}. Expected one of: ${VALID_PROVIDERS.join(', ')}`);
-  }
   const allowedToolsFor = (): string[] => {
     // Awareness tools (`get_runtime_state`) are registered unconditionally by
     // every provider (see `anthropic-direct/index.ts`, `openai-compatible/index.ts`),
@@ -161,6 +140,7 @@ export function parseProvider(
       ...(opts?.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
       ...(opts?.mcpManager !== undefined ? { mcpManager: opts.mcpManager } : {}),
       ...(opts?.openaiBaseUrl !== undefined ? { baseURL: opts.openaiBaseUrl } : {}),
+      ...(opts?.fastModeController !== undefined ? { fastModeController: opts.fastModeController } : {}),
     });
   }
   if (effective === 'xai' || effective === 'xai-oauth') {

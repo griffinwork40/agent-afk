@@ -30,6 +30,7 @@ import { SessionStateManager } from './session-state.js';
 import { updatePresenceCwd } from '../awareness/presence.js';
 import { resolveModelId } from './model-resolution.js';
 import type { AgentConfig } from '../types.js';
+import type { JournalLifecycle } from './journal-lifecycle.js';
 import type { ProviderQuery } from '../provider.js';
 
 // ---------------------------------------------------------------------------
@@ -57,7 +58,7 @@ function makeProviderQuery(overrides: Partial<ProviderQuery> = {}): ProviderQuer
     setPermissionMode: vi.fn().mockResolvedValue(undefined),
     setSystemPrompt: vi.fn().mockReturnValue(true),
     setCwd: vi.fn(),
-    reauth: vi.fn().mockResolvedValue({ accountId: 'acct-1', swapped: false }),
+    reauth: vi.fn().mockResolvedValue({ accountId: 'acct-1', oldAccountId: '', swapped: false }),
     interrupt: vi.fn().mockResolvedValue(undefined),
     supportedCommands: vi.fn().mockResolvedValue([]),
     supportedModels: vi.fn().mockResolvedValue([]),
@@ -144,6 +145,21 @@ describe('setModel', () => {
     const before = stateManager.getSessionMetadata().model;
     await setModel('ghost', deps);
     expect(stateManager.getSessionMetadata().model).toBe(before);
+  });
+
+  it('marks the journal only when the resolved model actually changes', async () => {
+    const markModelSwitch = vi.fn();
+    const { deps, stateManager } = makeMockDeps();
+    const withJournal: ConfigDeps = {
+      ...deps,
+      getJournal: () => ({ markModelSwitch }) as unknown as JournalLifecycle,
+    };
+    const current = stateManager.getSessionMetadata().model;
+    expect(current).toBeDefined();
+    await setModel(current, withJournal);
+    expect(markModelSwitch).not.toHaveBeenCalled();
+    await setModel('some-other-model', withJournal);
+    expect(markModelSwitch).toHaveBeenCalledWith('some-other-model');
   });
 });
 
@@ -267,11 +283,11 @@ describe('reauth', () => {
   it('returns the provider reauth result when supported', async () => {
     const { deps } = makeMockDeps({
       providerQuery: {
-        reauth: vi.fn().mockResolvedValue({ accountId: 'acct-42', swapped: true }),
+        reauth: vi.fn().mockResolvedValue({ accountId: 'acct-42', oldAccountId: 'acct-old', swapped: true }),
       },
     });
     const result = await reauth(deps);
-    expect(result).toEqual({ accountId: 'acct-42', swapped: true });
+    expect(result).toEqual({ accountId: 'acct-42', oldAccountId: 'acct-old', swapped: true });
   });
 
   it('returns null when provider reauth is absent', async () => {

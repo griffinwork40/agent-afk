@@ -9,7 +9,7 @@
  */
 
 import type { AgentModelInput, ClaudeModel } from '../types.js';
-import { CLAUDE_FABLE_5_ID, DEFAULT_SLOT_BINDINGS, resolveModelInput } from './model-slots.js';
+import { CLAUDE_FABLE_5_1_ID, DEFAULT_SLOT_BINDINGS, resolveModelInput } from './model-slots.js';
 
 /**
  * Canonical short-alias → full model-ID mapping for the built-in Claude
@@ -35,7 +35,7 @@ export const MODEL_MAP: Readonly<Record<ClaudeModel, string>> = {
   // Fixed-id alias (above the large/opus tier — not a slot). Derived from the
   // canonical id in model-slots.ts so the alias table cannot drift from the
   // direct-alias resolver.
-  fable: CLAUDE_FABLE_5_ID,
+  fable: CLAUDE_FABLE_5_1_ID,
 };
 
 export function isValidModel(model: string): model is ClaudeModel {

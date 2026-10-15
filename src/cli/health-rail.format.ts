@@ -24,9 +24,9 @@ export interface HealthRailFields {
   elapsedMs: number;
   /** Total tool calls made across all completed turns in this session. */
   toolCalls: number;
-  /** Number of currently-running background subagent jobs. */
+  /** Number of currently-running subagents (foreground + background combined). */
   activeSubs: number;
-  /** Total background subagent jobs ever dispatched in this session. */
+  /** Total subagents ever dispatched in this session (foreground + background combined high-water mark). */
   totalSubs: number;
   /** Context window fill ratio [0, 1]. */
   contextRatio: number;

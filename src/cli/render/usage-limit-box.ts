@@ -3,6 +3,37 @@ import { getTerminalWidth } from '../terminal-size.js';
 import { palette } from '../palette.js';
 import { maxInnerBoxWidth } from './utils.js';
 import { drawBox } from './box.js';
+import { describeResetTime, usageLimitProviderName } from '../../agent/usage/usage-formatter.js';
+import type { UsageLimitProvider } from '../../utils/errors.js';
+
+/**
+ * Body copy for a non-Anthropic subscription limit (Codex). Names the provider
+ * and its reset time; omits every Claude-only escape (`claude login`, keychain
+ * hot-swap, Anthropic billing), none of which applies to another provider.
+ */
+function nonAnthropicLimitLines(
+  provider: UsageLimitProvider,
+  plan: string | undefined,
+  resetsAt: Date | undefined,
+  autoResume: boolean,
+): string[] {
+  const name = usageLimitProviderName(provider);
+  const lines = [`You've hit your ${name} usage limit${plan !== undefined ? ` (${plan} plan)` : ''}.`];
+  if (resetsAt !== undefined) lines.push('', `Resets at ${describeResetTime(resetsAt)}.`);
+  lines.push('');
+  if (autoResume) {
+    lines.push("I'll auto-resume when the limit resets, no need to retype.");
+    lines.push('');
+    lines.push('Or act now:');
+    lines.push('  \u2022 Switch model: type  /model <name>  then press Enter');
+    lines.push('  \u2022 Press Esc to stop waiting');
+  } else {
+    lines.push('Options:');
+    lines.push(`  \u2022 Wait for the ${name} limit to reset, then send the message again.`);
+    lines.push('  \u2022 Switch to another model or provider:  /model <name>');
+  }
+  return lines;
+}
 
 // ─── UsageLimitBox ───────────────────────────────────────────────────────────
 
@@ -17,6 +48,9 @@ import { drawBox } from './box.js';
  * shows the human-readable reset time.
  * When `opts.hotSwapped && opts.accountId`, the card appends a "Resumed on"
  * line.
+ * `opts.provider` selects the copy: `'anthropic'` or absent (legacy callers)
+ * renders the Claude card; any other provider gets provider-named copy with no
+ * Claude-only tips.
  */
 export function usageLimitBox(opts: {
   resetsAt?: Date;
@@ -37,13 +71,19 @@ export function usageLimitBox(opts: {
    * behavior (auto-resume) is the safer copy.
    */
   autoResume?: boolean;
+  /** Which subscription hit its limit. Absent = Claude (backward compatible). */
+  provider?: UsageLimitProvider;
+  /** Subscription plan label when known (shown for non-Anthropic providers). */
+  plan?: string;
 }): string {
-  const { resetsAt, reason, accountId, hotSwapped } = opts;
+  const { resetsAt, reason, accountId, hotSwapped, provider } = opts;
   const autoResume = opts.autoResume ?? true;
 
   // Build body lines based on reason.
   const bodyLines: string[] = [];
-  if (reason === 'usage-limit') {
+  if (reason === 'usage-limit' && provider !== undefined && provider !== 'anthropic') {
+    bodyLines.push(...nonAnthropicLimitLines(provider, opts.plan, resetsAt, autoResume));
+  } else if (reason === 'usage-limit') {
     bodyLines.push("You've hit your Claude subscription limit for now.");
     if (resetsAt !== undefined) {
       const nowMs = Date.now();

@@ -63,6 +63,13 @@ export function readImageDimensions(
         const height = ((bits >> 14) & 0x3fff) + 1;
         return { width, height };
       }
+      if (vp8Tag === 'VP8X') {
+        // Extended: canvas width-1 (24-bit LE) at offset 24, height-1 (24-bit LE) at offset 27.
+        if (buf.length < 30) return null;
+        const width = buf.readUIntLE(24, 3) + 1;
+        const height = buf.readUIntLE(27, 3) + 1;
+        return { width, height };
+      }
       return null;
     }
 

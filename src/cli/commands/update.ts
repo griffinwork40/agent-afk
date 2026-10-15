@@ -1,4 +1,6 @@
 import { spawn } from 'child_process';
+import { existsSync, realpathSync } from 'fs';
+import { basename, dirname, join } from 'path';
 import { Command } from 'commander';
 import { palette } from '../palette.js';
 import { getVersion } from '../version.js';
@@ -7,31 +9,42 @@ import {
   writePendingUpdateMarker,
   writeUpdateCache,
 } from '../update-checker.js';
+import { isNewerVersion } from '../update-version.js';
 
 const SEMVER_RE = /^\d+\.\d+\.\d+(-[\da-z.]+)?$/i;
 
-/** True when `latest` is strictly newer than `current`. */
-function isNewer(current: string, latest: string): boolean {
-  const c = current.split('.').map(Number);
-  const l = latest.split('.').map(Number);
-  const len = Math.max(c.length, l.length);
-  for (let i = 0; i < len; i++) {
-    const cv = c[i] ?? 0;
-    const lv = l[i] ?? 0;
-    if (lv > cv) return true;
-    if (lv < cv) return false;
+/**
+ * Locate npm's JavaScript entrypoint in the running Node installation.
+ * Calling a sibling npm launcher is insufficient: its env-node shebang can
+ * choose a different interpreter and therefore a different global prefix.
+ * Fail closed rather than silently installing with an unrelated PATH npm.
+ * Explicit npm prefix configuration remains authoritative.
+ */
+export function resolveNpmCli(
+  execPath: string = process.execPath,
+  existsFn: (p: string) => boolean = existsSync,
+  realpathFn: (p: string) => string = realpathSync,
+): string | undefined {
+  const nodeDir = dirname(execPath);
+  // Homebrew links the Cellar sibling npm to the shared prefix's npm CLI.
+  // Resolve that symlink, but never execute a shell/cmd wrapper with Node.
+  try {
+    const sibling = join(nodeDir, 'npm');
+    if (existsFn(sibling)) {
+      const cli = realpathFn(sibling);
+      if (basename(cli) === 'npm-cli.js' && existsFn(cli)) return cli;
+    }
+  } catch {
+    // No readable sibling link; try standard npm package layouts below.
   }
-  return false;
+  const candidates = [
+    join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+  ];
+  return candidates.find(existsFn);
 }
 
-/**
- * `afk update` runs an in-foreground `npm install -g agent-afk@<latest>` so the
- * user can actually see install output, error messages, and the npm progress
- * bar — instead of the silent background `triggerAutoUpdate` path used when
- * `updatePolicy` is `auto`.
- *
- * `afk upgrade` is registered as an alias.
- */
+/** Foreground installation with visible npm output; `upgrade` is an alias. */
 export function registerUpdateCommand(program: Command): void {
   program
     .command('update')
@@ -39,14 +52,12 @@ export function registerUpdateCommand(program: Command): void {
     .description('Update agent-afk to the latest published version')
     .option('--check', 'Only check whether an update is available; do not install')
     .option('--pin <version>', 'Install a specific version instead of latest (must be valid semver)')
-    .action(async (opts: { check?: boolean; pin?: string }) => {
+    .option('--no-restart', 'Skip install lifecycle scripts and forced service restarts (idle version watchdogs remain active)')
+    .action(async (opts: { check?: boolean; pin?: string; restart?: boolean }) => {
       const current = getVersion();
 
       // --check: report status only, never shell out to npm.
       if (opts.check === true) {
-        // Fetch synchronously — do NOT rely on the stale cache since the user
-        // explicitly asked for a current status.  Also suppress the background
-        // check that checkForUpdates() would otherwise spawn concurrently.
         process.stderr.write('Checking for updates…\n');
         const latest = await fetchLatestVersion();
         if (latest === undefined) {
@@ -55,11 +66,9 @@ export function registerUpdateCommand(program: Command): void {
           process.exitCode = 1;
           return;
         }
-        // Keep the passive notifier's cache in sync with what we just learned
-        // from the registry, so the startup banner doesn't render from a stale
-        // latestVersion after the user has explicitly checked.
+        // Keep the passive notifier's cache in sync with the live probe.
         writeUpdateCache(latest);
-        if (isNewer(current, latest)) {
+        if (isNewerVersion(current, latest)) {
           console.log(`${palette.bold('Update available:')} ${palette.dim(current)} → ${palette.bold(latest)}`);
           console.log(palette.dim('  Run `afk update` to install.'));
           return;
@@ -68,14 +77,12 @@ export function registerUpdateCommand(program: Command): void {
         return;
       }
 
-      // Validate --pin value before it reaches the shell.
       if (opts.pin !== undefined && !SEMVER_RE.test(opts.pin)) {
         console.error(palette.warning(`Invalid version: ${JSON.stringify(opts.pin)}. Must be valid semver (e.g. 1.2.3 or 1.2.3-beta.1).`));
         process.exitCode = 1;
         return;
       }
 
-      // Resolve target version: explicit --pin overrides the registry probe.
       let target: string | undefined = opts.pin;
       if (target === undefined) {
         process.stderr.write('Fetching latest version…\n');
@@ -85,9 +92,7 @@ export function registerUpdateCommand(program: Command): void {
           process.exitCode = 1;
           return;
         }
-        // Refresh the notifier cache with the registry's current latest so the
-        // banner is honest right after this update (only on the fetched path —
-        // an explicit --pin may target an older version and must not poison it).
+        // Explicit pins may be older and must not poison the notifier cache.
         writeUpdateCache(target);
         if (target === current) {
           console.log(`agent-afk ${palette.bold(current)} is up to date.`);
@@ -95,15 +100,26 @@ export function registerUpdateCommand(program: Command): void {
         }
       }
 
+      const npmCli = resolveNpmCli();
+      if (npmCli === undefined) {
+        console.error(palette.warning('Could not locate npm in the running Node installation. Aborting rather than using a different global prefix.'));
+        process.exitCode = 1;
+        return;
+      }
       console.log(`Updating agent-afk: ${palette.dim(current)} → ${palette.bold(target)}`);
-      console.log(palette.dim(`  npm install -g agent-afk@${target}`));
 
-      const { code, signal } = await runNpmInstall(target);
+      const { code, signal } = await runNpmInstall(target, npmCli, opts.restart !== false);
       if (code === 0) {
-        // Drop a pending-update marker so the next `afk` invocation prints
-        // a confirmation line when it sees the version has bumped.
         writePendingUpdateMarker(target);
         console.log(palette.success(`✓ agent-afk@${target} installed.`));
+        // Invariant: this process retains the OLD service renderer after npm
+        // replaces the package. Never restart through its in-memory manager.
+        // The installed package's postinstall owns macOS daemon reconciliation;
+        // Telegram retains its idle-aware version watchdog. Other backends and
+        // failed lifecycle restarts require an explicit new CLI invocation.
+        console.log(palette.dim(opts.restart === false
+          ? '  Install lifecycle scripts skipped; no forced service restarts. Idle version watchdogs remain active.'
+          : '  Telegram updates through its idle-aware watchdog. If a service remains on the old version, run `afk service restart <name>` when idle.'));
       } else if (signal !== null) {
         console.error(palette.warning(`npm install was killed by signal ${signal}.`));
         process.exitCode = 1;
@@ -116,12 +132,17 @@ export function registerUpdateCommand(program: Command): void {
 
 interface ExitResult { code: number | null; signal: NodeJS.Signals | null }
 
-function runNpmInstall(version: string): Promise<ExitResult> {
+function runNpmInstall(version: string, npmCli: string, restart: boolean): Promise<ExitResult> {
   return new Promise((resolve) => {
-    // Inherit stdio so the user sees npm's progress, prompts, and errors.
-    const child = spawn('npm', ['install', '-g', `agent-afk@${version}`], {
-      stdio: 'inherit',
-    });
+    // Invariant: npm executes lifecycle scripts before returning to the updater.
+    // --ignore-scripts prevents postinstall restarts even for older pinned
+    // releases that cannot honor a newly introduced AFK suppression variable.
+    // Normal installs keep npm >=11.19's explicit lifecycle allowlist.
+    const args = [npmCli, 'install', '-g', '--allow-scripts=agent-afk'];
+    if (!restart) args.push('--ignore-scripts');
+    args.push(`agent-afk@${version}`);
+    console.log(palette.dim(`  ${process.execPath} ${args.join(' ')}`));
+    const child = spawn(process.execPath, args, { stdio: 'inherit' });
     child.on('error', () => resolve({ code: 1, signal: null }));
     child.on('exit', (code, signal) => resolve({ code, signal }));
   });

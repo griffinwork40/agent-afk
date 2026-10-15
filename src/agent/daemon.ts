@@ -12,8 +12,9 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { writeFileSync, unlinkSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { unlinkSync, readFileSync } from 'node:fs';
+import { atomicWriteFile } from '../utils/atomic-write.js';
+import { join } from 'node:path';
 import type { AgentConfig } from './types.js';
 import type { Telegraf } from 'telegraf';
 import { CronScheduler, type SchedulerOptions, type TelemetryRecord } from './daemon/scheduler.js';
@@ -21,6 +22,10 @@ import type { ScheduledTask, TaskExecutor, TriggerMode } from './daemon/triggers
 import { getDaemonStateDir } from '../paths.js';
 import { listenWithRecovery, closeServer } from './daemon.listen.js';
 import { errorMessage } from '../utils/errors.js';
+import { validateScheduleCwd } from './daemon/cwd-validator.js';
+import { getSchedule, toScheduledTask } from './daemon/schedule-store.js';
+import { parseTaskRetryFields, type TaskRetryFields } from './daemon/task-retry.js';
+import { parseTaskRequestTime } from './daemon/task-request-time.js';
 
 export interface DaemonOptions {
   /** Port for the HTTP control surface. Defaults to 7777. */
@@ -61,6 +66,8 @@ export interface DaemonOptions {
    * `CronScheduler`. See `SchedulerOptions.doneUnverifiedProbe`.
    */
   doneUnverifiedProbe?: SchedulerOptions['doneUnverifiedProbe'];
+  /** Persist each completed agent-task run as a session sidecar. See `SchedulerOptions.onTaskTurnComplete`. */
+  onTaskTurnComplete?: SchedulerOptions['onTaskTurnComplete'];
   /**
    * Poll interval (ms) for pull-trigger mode. When set and > 0, the daemon
    * will call `scheduler.startPullLoop()` after construction and dequeue one
@@ -79,10 +86,11 @@ export interface DaemonOptions {
   writePortFile?: boolean;
   /**
    * Telegraf bot instance for rich daemon elicitation. When provided together
-   * with `primaryChatId`, pull-mode tasks use `sendHandoffQuestion` (inline
-   * keyboards, reply-to matching) instead of the plain push fallback. Follows
-   * the `doneUnverifiedProbe` injection pattern — injected from the co-running
-   * caller (e.g. a shared Telegram+daemon process) rather than imported.
+   * with `primaryChatId`, both pull-mode and cron/sessionstart tasks use
+   * `sendHandoffQuestion` (inline keyboards, reply-to matching) instead of
+   * the plain push fallback (#3243 item 2). Follows the `doneUnverifiedProbe`
+   * injection pattern — injected from the co-running caller (e.g. a shared
+   * Telegram+daemon process) rather than imported.
    * Has no effect when absent — fallback is always preserved.
    */
   bot?: Telegraf;
@@ -90,6 +98,13 @@ export interface DaemonOptions {
   primaryChatId?: number;
   /** Optional topic thread ID for supergroup delivery. */
   primaryThreadId?: number;
+  /**
+   * Resolve a task's `notifyChat` (alias or raw id) to an allowlisted numeric
+   * chat id. Injected by the CLI layer so `src/agent/` never imports
+   * `src/cli/`. Used by the cron elicitation handler to route the rich
+   * Telegram handoff question to the correct chat (#3243 item 2).
+   */
+  resolveNotifyChat?: (notifyChat: number | string | undefined, taskId: string) => number | undefined;
   /**
    * Proactive OAuth token refresher (optional).
    *
@@ -149,11 +164,13 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
     ...(options.now !== undefined ? { now: options.now } : {}),
     ...(options.onTaskComplete !== undefined ? { onTaskComplete: options.onTaskComplete } : {}),
     ...(options.doneUnverifiedProbe !== undefined ? { doneUnverifiedProbe: options.doneUnverifiedProbe } : {}),
+    ...(options.onTaskTurnComplete !== undefined ? { onTaskTurnComplete: options.onTaskTurnComplete } : {}),
     ...(options.pullPollIntervalMs !== undefined ? { pullPollIntervalMs: options.pullPollIntervalMs } : {}),
     ...(options.queueDir !== undefined ? { queueDir: options.queueDir } : {}),
     ...(options.bot !== undefined ? { bot: options.bot } : {}),
     ...(options.primaryChatId !== undefined ? { primaryChatId: options.primaryChatId } : {}),
     ...(options.primaryThreadId !== undefined ? { primaryThreadId: options.primaryThreadId } : {}),
+    ...(options.resolveNotifyChat !== undefined ? { resolveNotifyChat: options.resolveNotifyChat } : {}),
   });
 
   if (options.pullPollIntervalMs !== undefined && options.pullPollIntervalMs > 0) {
@@ -184,8 +201,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
   // is found (pre-existing port files from before this change).
   if (writePortFile) {
     try {
-      mkdirSync(dirname(portFilePath), { recursive: true });
-      writeFileSync(portFilePath, `${host}:${port}`, 'utf-8');
+      atomicWriteFile(portFilePath, `${host}:${port}`, { encoding: 'utf-8', mkdirp: true, mode: 0o644 });
     } catch {
       // Best-effort; daemon still functional without port file
     }
@@ -291,6 +307,72 @@ function handleRequest(req: IncomingMessage, res: ServerResponse, scheduler: Cro
   });
 }
 
+/** Type guard: returns true only for the three valid `notifyOn` literal values. */
+function isValidNotifyOn(v: unknown): v is ScheduledTask['notifyOn'] {
+  return v === 'failure' || v === 'always' || v === 'never';
+}
+
+/** Parameters for {@link isShellExecutorTrusted}. */
+interface ShellTrustParams {
+  taskId: string;
+  command: string;
+  cronExpression: string | undefined;
+  trigger: TriggerMode | undefined;
+  notifyOn: ScheduledTask['notifyOn'];
+  notifyChat: number | string | undefined;
+  cwd: string | undefined;
+  maxAttempts: number | undefined;
+  retryDelayMs: number | undefined;
+  runAt: string | undefined;
+  expiresAt: string | undefined;
+}
+
+/**
+ * Returns true when a shell-executor POST /tasks request can be trusted —
+ * i.e. the payload matches an enabled shell entry already persisted in the
+ * schedule store. Extracted to keep handleRequestAsync under the 200-line ceiling.
+ */
+function isShellExecutorTrusted(params: ShellTrustParams): boolean {
+  const storedConfig = getSchedule(params.taskId);
+  if (!storedConfig || !storedConfig.enabled || storedConfig.executor !== 'shell') return false;
+  const canonical = toScheduledTask(storedConfig);
+  // Normalize notifyOn to the effective default ('failure') so an omitted field
+  // in the store entry and an omitted field in the request compare equal. A bare
+  // === between two optional values would reject a valid sync when one side is
+  // undefined and the other is 'failure' (the canonical default).
+  const canonicalNotifyOn: ScheduledTask['notifyOn'] = canonical.notifyOn ?? 'failure';
+  return (
+    canonical.command === params.command &&
+    canonical.cronExpression === (params.runAt !== undefined ? undefined : params.cronExpression) &&
+    (canonical.trigger ?? 'cron') === (params.trigger ?? 'cron') &&
+    canonicalNotifyOn === params.notifyOn &&
+    canonical.notifyChat === params.notifyChat &&
+    canonical.cwd === params.cwd &&
+    canonical.maxAttempts === params.maxAttempts &&
+    canonical.retryDelayMs === params.retryDelayMs &&
+    canonical.runAt === params.runAt &&
+    canonical.expiresAt === params.expiresAt
+  );
+}
+
+/**
+ * Validate the optional retry fields (#3243) with the same bounds as the
+ * tool/web surfaces. Writes a 400 and returns null on rejection.
+ */
+function parseRetryOr400(obj: Record<string, unknown>, res: ServerResponse): TaskRetryFields | null {
+  const retry = parseTaskRetryFields(obj);
+  if (retry.ok) return retry.value;
+  res.writeHead(400, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: retry.error }));
+  return null;
+}
+
+/** Respond consistently to invalid POST /tasks fields. */
+function taskInputError(res: ServerResponse, error: string): void {
+  res.writeHead(400, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error }));
+}
+
 async function handleRequestAsync(
   req: IncomingMessage,
   res: ServerResponse,
@@ -328,27 +410,118 @@ async function handleRequestAsync(
       return;
     }
     const obj = body as Record<string, unknown>;
-    // Tolerant reader: GET /tasks returns `cronExpression`, so accept it as
-    // an alias for `cron` on the way in (round-trip symmetry for manual ops).
-    const cronValue = obj['cron'] ?? obj['cronExpression'];
-    if (
-      typeof obj['taskId'] !== 'string' ||
-      typeof obj['command'] !== 'string' ||
-      typeof cronValue !== 'string'
-    ) {
+    if (typeof obj['taskId'] !== 'string' || typeof obj['command'] !== 'string') {
+      taskInputError(res, 'taskId and command are required strings');
+      return;
+    }
+    const time = parseTaskRequestTime(obj);
+    if (!time.ok) {
+      taskInputError(res, time.error);
+      return;
+    }
+    // Per-task cwd: validate with the same rules as every other surface so a
+    // live-synced task never registers with a missing/invalid working dir.
+    const cwdRaw = obj['cwd'];
+    let cwd: string | undefined;
+    if (cwdRaw !== undefined) {
+      const cwdResult =
+        typeof cwdRaw === 'string' && cwdRaw
+          ? validateScheduleCwd(cwdRaw)
+          : { ok: false as const, error: 'cwd must be a non-empty string when provided' };
+      if (!cwdResult.ok) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: cwdResult.error }));
+        return;
+      }
+      cwd = cwdResult.resolved;
+    }
+    const retry = parseRetryOr400(obj, res);
+    if (retry === null) return;
+    const notifyChatRaw = obj['notifyChat'];
+    const executorRaw = obj['executor'];
+    const taskIdRaw = obj['taskId'] as string;
+
+    // Invariant: (security, #2300) executor:"shell" is blocked over the unauthenticated HTTP control
+    // surface UNLESS the request is a trusted in-process live-sync from a tool
+    // handler (create_schedule / update_schedule / cancel_schedule enable) that
+    // already wrote the task to the on-disk schedule store.  We verify trust by
+    // checking that (a) the taskId exists in the store as an enabled shell
+    // schedule, and (b) the incoming command / cron / trigger fields match what
+    // toScheduledTask() would produce for that store entry — so an untrusted
+    // caller cannot register an arbitrary shell command by guessing a stored id.
+    //
+    // The store is written before the HTTP POST in all tool-handler paths
+    // (addSchedule / updateSchedule both persist first, then call
+    // trySyncToDaemon), so by the time this handler runs the store entry is
+    // already present and up-to-date.  An untrusted caller can therefore only
+    // (re-)register a shell job the operator already persisted, i.e. exactly
+    // what the next daemon restart would load anyway; no new command can enter.
+    //
+    // TOCTOU window: getSchedule() reads the on-disk store and scheduler.register()
+    // runs after this guard.  A concurrent store write (e.g. CLI updateSchedule)
+    // could change the entry between the two operations.  This race is accepted for
+    // a localhost-only control surface — the worst outcome is that a command that
+    // was valid at guard-time is registered with the daemon, which is equivalent to
+    // what the next daemon restart would do anyway.  No new untrusted command can
+    // enter via this window.
+    if (executorRaw === 'shell') {
+      // Validate the request-side notifyOn against the literal union instead of
+      // an unchecked cast. An absent value means the default ('failure'); a
+      // present but unrecognized value is rejected outright, never coerced to
+      // the default, so validation can only narrow trust, not widen it.
+      const rawNotifyOn = obj['notifyOn'];
+      // null is intentionally treated as absent (i.e. the request carries no
+      // notifyOn preference) and normalizes to the effective default 'failure'
+      // below. This mirrors the JSON convention used for optional fields on
+      // POST bodies — null signals "caller does not care, use the default".
+      const notifyOnValid = rawNotifyOn === undefined || rawNotifyOn === null || isValidNotifyOn(rawNotifyOn);
+      const trusted =
+        notifyOnValid &&
+        isShellExecutorTrusted({
+          taskId: taskIdRaw,
+          command: obj['command'] as string,
+          cronExpression: time.cron,
+          trigger: obj['trigger'] as TriggerMode | undefined,
+          notifyOn: isValidNotifyOn(rawNotifyOn) ? rawNotifyOn : 'failure',
+          notifyChat:
+            typeof notifyChatRaw === 'number' || typeof notifyChatRaw === 'string' ? notifyChatRaw : undefined,
+          cwd,
+          maxAttempts: retry.maxAttempts,
+          retryDelayMs: retry.retryDelayMs,
+          runAt: time.runAt,
+          expiresAt: time.expiresAt,
+        });
+      if (!trusted) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            error:
+              'executor "shell" is not accepted over the HTTP control surface unless it ' +
+              'matches an enabled shell entry in the schedule store; create shell tasks ' +
+              'via the schedule store, CLI, or create_schedule instead',
+          }),
+        );
+        return;
+      }
+    } else if (executorRaw !== undefined && executorRaw !== 'agent') {
+      // Reject any other unknown executor value (e.g. "SHELL", "builtin", typos).
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(
-        JSON.stringify({ error: 'taskId, command, and cron (or cronExpression) are required strings' }),
+        JSON.stringify({
+          error: `executor "${String(executorRaw)}" is not a valid value; accepted values are "agent" and "shell"`,
+        }),
       );
       return;
     }
-    const notifyChatRaw = obj['notifyChat'];
-    const executorRaw = obj['executor'];
+
     const task: ScheduledTask = {
-      taskId: obj['taskId'] as string,
+      taskId: taskIdRaw,
       command: obj['command'] as string,
       trigger: (obj['trigger'] as TriggerMode | undefined) ?? 'cron',
-      cronExpression: cronValue,
+      // Omit cronExpression when runAt is set — they are mutually exclusive per
+      // validateScheduledTask. The placeholder cron from the tool layer must not
+      // become a cronExpression on the scheduler task when runAt drives firing.
+      ...(time.cron !== undefined && time.runAt === undefined ? { cronExpression: time.cron } : {}),
       ...(obj['notifyOn'] !== undefined
         ? { notifyOn: obj['notifyOn'] as ScheduledTask['notifyOn'] }
         : {}),
@@ -358,6 +531,10 @@ async function handleRequestAsync(
       ...(executorRaw === 'agent' || executorRaw === 'shell'
         ? { executor: executorRaw as TaskExecutor }
         : {}),
+      ...(cwd !== undefined ? { cwd } : {}),
+      ...(time.runAt !== undefined ? { runAt: time.runAt } : {}),
+      ...(time.expiresAt !== undefined ? { expiresAt: time.expiresAt } : {}),
+      ...retry,
     };
     try {
       scheduler.register(task);

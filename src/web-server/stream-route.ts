@@ -43,6 +43,12 @@ export async function handleStream(
     // fills and makes a live stream look hung.
     'x-accel-buffering': 'no',
   });
+  // Invariant: `writeHead` only BUFFERS the head; Node sends it with the first
+  // body write. A brand-new session has no ledger yet, so neither replay nor
+  // tail writes anything until the first prompt (or the 15s heartbeat), and the
+  // browser's `fetch()` stays unresolved, pinning the dashboard on
+  // "Connecting to session...". Flushing commits the 200 immediately.
+  res.flushHeaders();
 
   const lastEventId = header(req, 'last-event-id');
   let seq = Number.parseInt(lastEventId ?? '0', 10);

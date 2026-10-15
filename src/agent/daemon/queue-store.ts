@@ -15,24 +15,17 @@
  * @module agent/daemon/queue-store
  */
 
-import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { getQueueDir } from '../../paths.js';
+import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { leaseTask as _leaseTask, recoverExpiredLeases } from './lease-store.js';
-import { errorMessage } from '../../utils/errors.js';
+import { errorMessage, isEnoent } from '../../utils/errors.js';
 
 export { recoverExpiredLeases };
 
-/** Returns true if err is a Node.js ENOENT filesystem error. */
-function isEnoent(err: unknown): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    (err as NodeJS.ErrnoException).code === 'ENOENT'
-  );
-}
 
 export interface QueuedTask {
   /** Unique task identifier, e.g. `q-1716000000000-abc123`. */
@@ -106,17 +99,10 @@ export function enqueue(
   const seq = String(sequence).padStart(4, '0');
   const filename = `${seq}-${id}.json`;
   const filePath = join(queueDir, filename);
-  const tmpSuffix = randomBytes(4).toString('hex');
-  const tmpPath = join(queueDir, `.tmp-${tmpSuffix}.json`);
 
-  try {
-    writeFileSync(tmpPath, JSON.stringify(task), 'utf-8');
-    renameSync(tmpPath, filePath);
-  } catch (err) {
-    // Best-effort cleanup of the temp file on failure.
-    try { unlinkSync(tmpPath); } catch { /* ignore */ }
-    throw err;
-  }
+  // Atomic write: temp-file + rename so no partial file is ever visible.
+  // mode 0o600: queue entries may contain command secrets; restrict to owner.
+  atomicWriteFile(filePath, JSON.stringify(task), { mode: 0o600, mkdirp: false });
 
   return task;
 }
@@ -267,19 +253,15 @@ function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown)
   const src = join(queueDir, filename);
   try {
     mkdirSync(poisonDir, { recursive: true });
-    let dest = join(poisonDir, filename);
-    try {
-      renameSync(src, dest);
-    } catch {
-      // First rename failed — almost always a name collision with a file of the
-      // same name already in poison/ (e.g. re-quarantined after a manual
-      // restore). Retry once with a unique timestamp+random prefix so an
-      // existing poison file is never overwritten. poison/ is a subdir of
-      // queueDir, so a cross-device (EXDEV) rename cannot occur here; any other
-      // rename failure rethrows and is handled by the outer catch.
-      dest = join(poisonDir, `${Date.now()}-${randomBytes(3).toString('hex')}-${filename}`);
-      renameSync(src, dest);
-    }
+    // Always include a timestamp+random suffix so two quarantine attempts for
+    // the same filename (e.g. re-quarantined after a manual restore) never
+    // overwrite each other. POSIX renameSync() silently overwrites an existing
+    // destination, so the original try/catch collision-fallback was dead code
+    // for same-name collisions — the first rename would silently replace an
+    // older poison copy. poison/ is a subdir of queueDir, so a cross-device
+    // (EXDEV) rename cannot occur here.
+    const dest = join(poisonDir, `${Date.now()}-${randomBytes(3).toString('hex')}-${filename}`);
+    renameSync(src, dest);
     // eslint-disable-next-line no-console
     console.error(
       `[daemon] pull-queue: quarantined malformed entry ${redactedFilename} → ${POISON_SUBDIR}/ (${reason})`,

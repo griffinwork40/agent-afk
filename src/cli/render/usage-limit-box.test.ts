@@ -95,4 +95,23 @@ describe('usageLimitBox', () => {
     const first = widths[0] ?? 0;
     for (const w of widths) expect(w).toBe(first);
   });
+
+  it('Codex copy names Codex + plan + reset and has no Claude-only tips', () => {
+    const resetsAt = new Date(Date.now() + 130 * 60_000);
+    for (const autoResume of [true, false]) {
+      const out = strip(usageLimitBox({ reason: 'usage-limit', provider: 'codex', plan: 'plus', resetsAt, autoResume }));
+      expect(out).toContain("You've hit your Codex usage limit (plus plan)");
+      expect(out).toMatch(/Resets at .+ \(in ~2h\d+m\)\./);
+      expect(out).not.toContain('claude login');
+      expect(out).not.toContain('Claude');
+      expect(out).not.toContain('ANTHROPIC_API_KEY');
+      expect(out).toContain('/model');
+    }
+  });
+
+  it('explicit provider anthropic renders exactly the legacy Claude card', () => {
+    expect(usageLimitBox({ reason: 'usage-limit', provider: 'anthropic' })).toBe(usageLimitBox({ reason: 'usage-limit' }));
+    expect(usageLimitBox({ reason: 'usage-limit', provider: 'anthropic', autoResume: false }))
+      .toBe(usageLimitBox({ reason: 'usage-limit', autoResume: false }));
+  });
 });

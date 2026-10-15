@@ -3,15 +3,15 @@ import type { SlashCommand } from '../types.js';
 
 const REASONS: Record<FastModeInactiveReason, string> = {
   'preference-off': 'preference is off',
-  'unsupported-provider': 'the current provider is not Anthropic Direct',
-  'custom-endpoint': 'custom Anthropic endpoints are excluded',
-  'excluded-execution-path': 'this execution path is excluded',
-  'unsupported-model': 'the current model is not a supported Opus 5 or Opus 4.8 model',
+  'unsupported-provider': 'the current provider does not support fast mode (Anthropic or OpenAI only)',
+  'custom-endpoint': 'custom or local endpoints are excluded',
+  'excluded-execution-path': 'this execution path is excluded (fast mode applies to the main session only)',
+  'unsupported-model': 'the current model does not support fast mode (Anthropic: Opus 5 or 4.8; OpenAI: models offering the priority tier, e.g. gpt-5.5, gpt-5.6, gpt-6)',
 };
 
 export const fastCmd: SlashCommand = {
   name: '/fast', usage: '/fast [on|off]', flags: ['on', 'off'],
-  summary: 'Toggle Anthropic Opus Fast mode for the session',
+  summary: 'Toggle fast mode for the session (Anthropic Opus fast, OpenAI priority tier)',
   async handler(ctx, args) {
     const controller = ctx.fastMode;
     if (!controller) { ctx.out.warn('Fast mode is unavailable on this surface.'); return 'continue'; }

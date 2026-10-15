@@ -5,11 +5,25 @@
  * a normal text completion, and an empty completion. Every branch is terminal —
  * the caller returns immediately after delegating here.
  *
+ * Also exports two helpers used by the `runTurn` orchestrator to handle the
+ * overload-exhausted and stream-terminal outcomes without bloating that
+ * function past the 200-line ceiling:
+ *
+ *  - `emitOverloadExhausted` — shared body for the connection-phase and
+ *    mid-stream overload-budget-exhausted branches (issue #762).
+ *  - `handleStreamTerminals` — translator-errored and null-result exits.
+ *
+ * All helpers take explicit parameters; no closures over loop-local state.
+ *
  * @module agent/providers/anthropic-direct/loop/turn-terminal
  */
 
+import type { TraceSink } from '../../../trace/writer.js';
 import type { ProviderEvent } from '../../../provider.js';
+import { emitSessionPhase } from '../../../trace/emit.js';
 import { isTruncationStopReason, truncationNotice } from '../../shared/truncation.js';
+import { OVERLOAD_EXHAUSTED, OVERLOAD_EXHAUSTED_NOTICE } from '../overload-pause.js';
+import { OVERLOAD_MAX_RETRIES } from './retry-budget.js';
 import type { RunTurnInput, TurnResult } from '../types.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
 
@@ -170,6 +184,8 @@ export function* emitNonToolUseTerminal(
   if (safeAssistantBlocks.length > 0) {
     input.messages.push({ role: 'assistant', content: safeAssistantBlocks });
   }
+  // Journal commit point: the turn's final assistant message.
+  input.journalSync?.sync(input.messages);
 
   yield {
     type: 'turn.completed',
@@ -185,4 +201,97 @@ export function* emitNonToolUseTerminal(
     ),
     sessionId: input.ctx.sessionId,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Overload-exhausted terminal (shared by connection-phase and mid-stream)
+// ---------------------------------------------------------------------------
+
+/**
+ * Emit the `rate_limit` trace phase, the operator-visible notice, and the
+ * clean `turn.completed` for an overload-budget-exhausted round.
+ *
+ * Extracted so the two call-sites in `runTurn` (connection-phase and
+ * mid-stream) share one implementation and the orchestrator stays under the
+ * 200-line ceiling. All parameters are explicit — no closures.
+ *
+ * Contract: the caller MUST `return` immediately after `yield*`-ing this
+ * generator. The terminal event is emitted here; a second one would violate
+ * the single-terminal-per-turn invariant.
+ */
+export function* emitOverloadExhausted(
+  source: 'connection-phase' | 'mid-stream',
+  traceWriter: TraceSink | undefined,
+  sessionId: string,
+  turn: TurnAccumulator,
+): Generator<ProviderEvent, void, void> {
+  void emitSessionPhase(traceWriter, {
+    phase: 'rate_limit',
+    metadata: {
+      reason: 'overloaded',
+      source,
+      attempt: OVERLOAD_MAX_RETRIES,
+      exhausted: true,
+    },
+  });
+  yield {
+    type: 'assistant.message',
+    text: OVERLOAD_EXHAUSTED_NOTICE,
+    sessionId,
+  };
+  yield {
+    type: 'turn.completed',
+    usage: turn.withDuration({ ...turn.usage, stopReason: OVERLOAD_EXHAUSTED }),
+    sessionId,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Stream-terminal exits (translator-errored and null turn-result)
+// ---------------------------------------------------------------------------
+
+/**
+ * Handle the two stream-terminal outcomes that follow a clean-streamed round:
+ * `translator-errored` and a null `turnResult`.
+ *
+ * Returns `true` when a terminal was emitted (caller must `return`), `false`
+ * when neither condition matched (caller continues processing).
+ *
+ * Contract: this generator yields AT MOST ONE terminal event — either the
+ * `turn.completed` on an aborted translator error, or the `turn.completed`
+ * for a null result. The non-aborted translator-error path yields nothing
+ * (the error event was already yielded upstream).
+ */
+export function* handleStreamTerminals(
+  outcomeKind: 'translator-errored' | 'streamed',
+  turnResult: TurnResult | null,
+  signal: AbortSignal,
+  sessionId: string,
+  turn: TurnAccumulator,
+): Generator<ProviderEvent, boolean, void> {
+  if (outcomeKind === 'translator-errored') {
+    // Error event was already yielded. On an abort (interrupt/close), emit
+    // turn.completed with accumulated usage so callers can account for
+    // partial costs. On a real stream error, skip turn.completed so cost
+    // is not double-counted and state is not incorrectly advanced.
+    if (signal.aborted) {
+      yield {
+        type: 'turn.completed',
+        usage: turn.terminalUsage(),
+        sessionId,
+      };
+    }
+    return true;
+  }
+  if (turnResult === null) {
+    // Stream ended without a turn-result; treat as a clean end-of-turn
+    // with the usage we already have.
+    yield {
+      type: 'turn.completed',
+      usage: turn.terminalUsage(),
+      sessionId,
+    };
+    return true;
+  }
+  return false;
 }

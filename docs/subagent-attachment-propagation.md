@@ -1,6 +1,6 @@
 # Subagent attachment propagation — scoping + design
 
-**Status:** proposal (nothing implemented). Scoped 2026-08-01 on branch `afk/subagent-image-propagation` @ 4accb48f (== `origin/main`, v5.84.10).
+**Status:** implemented. Shipped in PR #843 (`feat(subagent): propagate path-backed image attachments`). Scoped 2026-08-01 on branch `afk/subagent-image-propagation` @ 4accb48f (== `origin/main`, v5.84.10).
 
 **Goal:** when a human sends the parent session an image, let the parent *optionally* attach that image to the prompt it dispatches to a subagent.
 

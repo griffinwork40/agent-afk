@@ -4,6 +4,7 @@ import { palette } from '../../palette.js';
 import { stripAnsi, displayWidth } from '../../display.js';
 import { previewDiff } from '../../render/preview-diff.js';
 import { getTerminalWidth } from '../../terminal-size.js';
+import { capToMeasure } from '../../render/measure.js';
 
 /**
  * Maximum number of diff body lines to render in the live overlay before
@@ -295,15 +296,25 @@ function _diffBlockCacheStore(diff: DiffPayload, key: string, result: string[]):
  * live overlay. Returns `[]` when `AFK_SHOW_DIFFS=0` (same gate as
  * {@link formatDiffBlock}). Each returned line already includes `indent`.
  */
-export function formatPreviewDiffBlock(diff: DiffPayload, indent: string): string[] {
+export function formatPreviewDiffBlock(
+  diff: DiffPayload,
+  indent: string,
+  cols: number = capToMeasure(getTerminalWidth()),
+): string[] {
   if (diffsDisabled()) return [];
-  // Thread the live terminal width so compactDiffView renders the box at the
-  // correct width instead of the hardcoded 80-col default. Use displayWidth()
-  // rather than indent.length so ANSI escape codes embedded in `indent` (e.g.
-  // from tool-lane-render-children.ts where previewIndent includes palette.dim
-  // colour codes) are excluded from the column count. Clamp to 40 so the box
-  // remains usable in very narrow panes.
+  // Contract: `cols` is the row budget the CALLER clamps each returned line
+  // to. Both callers pass their own `cols` (= toolLaneWidth(), the terminal
+  // width capped to the reading measure) so the box and the clamp agree by
+  // construction; the default computes the same capped value for any other
+  // caller. Sizing from the RAW terminal width instead built the box wider
+  // than the clamp on terminals past the measure and cut off its right edge
+  // (#1619). toolLaneWidth() itself is not imported: tool-lane-render ->
+  // tool-lane-format -> this file would make that an import cycle.
+  // Use displayWidth() rather than indent.length so ANSI escape codes embedded
+  // in `indent` (tool-lane-render-children.ts's previewIndent carries
+  // palette.dim codes) are excluded from the column count. Clamp to 40 so the
+  // box remains usable in very narrow panes.
   const indentCols = displayWidth(indent);
-  const width = Math.max(40, getTerminalWidth() - indentCols);
+  const width = Math.max(40, cols - indentCols);
   return previewDiff(diff, { width }).split('\n').map((l) => indent + l);
 }

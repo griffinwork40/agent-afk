@@ -2,20 +2,22 @@
  * Tool handler for writing files.
  *
  * Validates input, creates parent directories recursively, and writes content
- * to the filesystem. Returns a success message with byte count or an error result.
+ * to the filesystem atomically (see write-file.atomic.ts). Returns a success
+ * message with byte count or an error result.
  *
  * @module agent/tools/handlers/write-file
  */
 
 import { env } from '../../../config/env.js';
-import { readFile, writeFile, mkdir, stat } from 'fs/promises';
-import { dirname } from 'path';
+import { readFile, stat } from 'fs/promises';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { assertNotDenylisted } from './write-denylist.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { fsErrorToToolResult } from './_fs-error.js';
 import { computeLineDiff, type DiffPayload } from '../../../utils/diff.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { commitFileWrite, WriteAbortedUntouchedError } from './write-file.atomic.js';
+import { validatedWriteTarget } from '../../file-checkpoint/write-policy.js';
 
 /**
  * Input shape for the write_file tool (validated at runtime).
@@ -81,8 +83,41 @@ const writeFileImpl = async (
     return { content: errorMessage(err), isError: true };
   }
 
+  // A containment rejection of the resolved symlink target (see below) must
+  // surface exactly like the up-front containment check above.
+  let containmentErr: unknown;
+  // Re-check the path the bytes actually land on. Both checks above validate
+  // the link's own spelling; a DANGLING link inside a root can point outside
+  // it (or at a denylisted path), and commitFileWrite would follow it and
+  // mkdirp/write there. Runs before any mkdir/temp/write.
+  const validateTarget = (target: string): void => {
+    try {
+      resolveAndContain(target, context, 'write', cwd);
+    } catch (err) {
+      containmentErr = err;
+      throw err;
+    }
+    assertNotDenylisted(target, 'write_file');
+  };
+
   try {
     assertNotDenylisted(file_path, 'write_file');
+    // Pin the validated physical destination for BOTH snapshot and commit.
+    const writeTarget = await validatedWriteTarget(file_path, context, cwd);
+
+    // Snapshot the file BEFORE any mutation so rewindFiles can restore it.
+    // A snapshot failure must not silently leave the turn without a checkpoint —
+    // surface it as a warn annotation on the result so the caller knows rewind
+    // will not be available for this file.
+    let snapshotWarning: string | undefined;
+    if (context?.fileCheckpoint) {
+      try {
+        await context.fileCheckpoint.snapshotFile(writeTarget);
+      } catch (snapErr) {
+        snapshotWarning = `[write_file] checkpoint snapshot failed (rewind unavailable for this file): ${errorMessage(snapErr)}`;
+        console.warn(snapshotWarning);
+      }
+    }
 
     // Opt-out: AFK_WRITE_DIFF=0 (or "false"/"no"/"off") skips the pre-read
     // and diff computation entirely. Aligned with the AFK_SHOW_DIFFS render
@@ -138,9 +173,11 @@ const writeFileImpl = async (
       }
     }
 
-    const parentDir = dirname(file_path);
-    await mkdir(parentDir, { recursive: true });
-    await writeFile(file_path, content, { signal });
+    // Atomic temp+rename: an abort or crash leaves the old file intact, never a
+    // truncated one. Follows symlinks (re-validating the resolved target) and
+    // preserves the existing mode.
+    validateTarget(writeTarget);
+    await commitFileWrite(writeTarget, content, signal, validateTarget);
 
     let diff: DiffPayload | null = null;
     // Binary guard: skip diff for content containing null bytes.
@@ -160,11 +197,22 @@ const writeFileImpl = async (
     }
 
     const byteCount = Buffer.byteLength(content, 'utf8');
+    const successMsg = snapshotWarning
+      ? `Wrote ${byteCount} bytes to ${file_path}\nWARNING: ${snapshotWarning}`
+      : `Wrote ${byteCount} bytes to ${file_path}`;
     return {
-      content: `Wrote ${byteCount} bytes to ${file_path}`,
+      content: successMsg,
       ...(diff ? { render: { diff } } : {}),
     };
   } catch (err) {
+    if (err !== undefined && err === containmentErr) {
+      return { content: errorMessage(err), isError: true };
+    }
+    // Only commitFileWrite can prove the target untouched; a bare
+    // `signal.aborted` cannot (an in-place write may have failed partway).
+    if (err instanceof WriteAbortedUntouchedError) {
+      return { content: `Aborted; ${file_path} was not modified`, isError: true };
+    }
     const known = fsErrorToToolResult(err, file_path);
     if (known) return known;
     if (err instanceof Error) {

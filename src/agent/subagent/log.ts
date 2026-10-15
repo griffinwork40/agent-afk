@@ -7,8 +7,7 @@
  * This powers the `/tasks:view` replay command.
  *
  * OFF by default. Raw tool arguments (bash commands, file paths, API keys)
- * are serialised without redaction — consistent with the opt-in posture of
- * `AFK_CAPTURE_SUBAGENT_PROMPTS` / `AFK_CAPTURE_SUBAGENT_OUTPUT`.
+ * are serialised without redaction.
  * Enable by setting `AFK_SUBAGENT_LOG=1`.
  *
  * When enabled, fires for ALL subagents (foreground and background).

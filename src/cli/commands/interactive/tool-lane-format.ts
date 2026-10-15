@@ -10,6 +10,7 @@ import { truncateDisplayWidth } from '../../display.js';
 import { sanitizeLabel, sanitizeTextParagraph } from './tool-lane-format-sanitize.js';
 import { colorizePreviewLine } from './tool-lane-format-colorize.js';
 import { shortenPaths } from './tool-lane-format-args.js';
+import { capPreviewInput } from './tool-lane-format-bound.js';
 
 // Re-export the split modules' public surface so external callers keep
 // importing the whole tool-lane formatting API from './tool-lane-format.js'.
@@ -112,11 +113,32 @@ function outcomeNoun(toolName: string | undefined, count: number): string {
   return count === 1 ? 'line' : 'lines';
 }
 
+/**
+ * True when the tool was SIGKILL'd by its output safety cap (bash 8 MB hard
+ * cap, grep scan ceiling). Distinct from a plain `truncated` result, which
+ * grep also sets when it only head+tail-trimmed a search that ran to
+ * completion: labelling that "killed" would be false.
+ */
+function killedAtOutputCap(chunk: ToolResultChunk): boolean {
+  return chunk.outputCapKilled === true && !chunk.capturePath;
+}
+
+/**
+ * Row label for an output-cap kill. Warning tone (not error): the cap is a
+ * deliberate circuit-breaker that worked, and the user's question on seeing it
+ * is "is this a bug I must fix?" — the answer is no, so say "safety cap".
+ */
+const OUTPUT_CAP_KILL_LABEL = ' · ⚠ stopped at output safety cap';
+
 export function formatOutcome(
   chunk: ToolResultChunk,
   homeDir?: string,
   maxPreview = 60,
   toolName?: string,
+  // Width for continuation rows (tail preview lines). They render on their
+  // own rows, so callers that know the row width pass it here; see
+  // outcomeTailWidth in tool-lane-outcome-rows.ts. Omitted = legacy budget.
+  tailWidth?: number,
 ): string {
   // Three-tone split mirrors doneGlyph()/formatGroupedSibling(): a benign
   // refusal (isError with a class in BENIGN_FAILURE_CLASSES) tones its body
@@ -147,7 +169,7 @@ export function formatOutcome(
   // on error so the user sees the actual error text instead of a stale
   // success-shape summary the handler may have set before failing.
   if (chunk.display !== undefined && !chunk.isError) {
-    return resultColor(shortenPaths(chunk.display));
+    return resultColor(shortenPaths(capPreviewInput(chunk.display)));
   }
 
   if (chunk.persistedPath) {
@@ -173,7 +195,7 @@ export function formatOutcome(
     //     "N lines · full output saved → ~/…path"
     //
     //   - `truncated` true, no `capturePath` (SIGKILL'd at hard cap, middle
-    //     genuinely unrecoverable): "N lines · output capped · command killed"
+    //     genuinely unrecoverable): "N lines · ⚠ stopped at output safety cap"
     //
     //   - neither (command completed within model cap): "N lines"
     //
@@ -196,9 +218,12 @@ export function formatOutcome(
         : displayPath;
       headline = resultColor(`${chunk.lineCount} ${noun}`) +
         palette.dim(' · full output saved → ') + resultColor(linked) + exitSuffix + durSuffix;
+    } else if (killedAtOutputCap(chunk)) {
+      headline = resultColor(`${chunk.lineCount} ${noun}`) +
+        palette.warning(OUTPUT_CAP_KILL_LABEL) + exitSuffix + durSuffix;
     } else if (chunk.truncated) {
       headline = resultColor(`${chunk.lineCount} ${noun}`) +
-        palette.dim(' · output capped · command killed') + exitSuffix + durSuffix;
+        palette.dim(' · output capped') + exitSuffix + durSuffix;
     } else {
       headline = resultColor(`${chunk.lineCount} ${noun}`) + exitSuffix + durSuffix;
     }
@@ -211,10 +236,14 @@ export function formatOutcome(
     // sanitizer as the single-line preview path) and indented with `contPrefix`
     // (4 cols: error gutter + 3 spaces, or 4 plain spaces for success) to sit
     // visually under the `⎿` connector rendered by formatToolResultLine.
+    // capPreviewInput bounds each raw line before ANY formatter runs, so a
+    // single huge line cannot make every frame expensive (#2568).
     if (chunk.tailPreview !== undefined && chunk.tailPreview.length > 0) {
       const tailLines = chunk.tailPreview
         .map(l => {
-          const sanitized = sanitizeLabel(truncateDisplayWidth(shortenPaths(l), maxPreview > 0 ? maxPreview : 120));
+          const sanitized = sanitizeLabel(
+            truncateDisplayWidth(shortenPaths(capPreviewInput(l)), tailWidth ?? (maxPreview > 0 ? maxPreview : 120)),
+          );
           // Try to colorize recognizable patterns (git stat, test
           // results, tsc errors) before falling back to default dim.
           // colorizePreviewLine returns colorized CONTENT without indent;
@@ -233,7 +262,9 @@ export function formatOutcome(
   // `x.ts` first makes the preview fit in budget far more often, and prevents
   // the display-width clipper from slicing a long path before the collapsing
   // regex ever sees it.
-  const shortened = shortenPaths(sanitizeLabel(chunk.content));
+  // capPreviewInput first: chunk.content is the raw, unbounded tool result and
+  // this runs on every overlay render (#2568).
+  const shortened = shortenPaths(sanitizeLabel(capPreviewInput(chunk.content)));
   const preview = shortened.length > maxPreview
     ? truncateDisplayWidth(shortened, maxPreview)
     : shortened;
@@ -246,7 +277,8 @@ export function formatOutcome(
   const durSuffix = chunk.durationMs !== undefined
     ? palette.dim(` · ${(chunk.durationMs / 1000).toFixed(1)}s`)
     : '';
-  return resultColor(preview) + exitSuffix + durSuffix;
+  const capSuffix = killedAtOutputCap(chunk) ? palette.warning(OUTPUT_CAP_KILL_LABEL) : '';
+  return resultColor(preview) + capSuffix + exitSuffix + durSuffix;
 }
 
 /**
@@ -314,6 +346,23 @@ export function activeToolBadge(
   return typeof i === 'number'
     ? palette.brand(`  ∥${i}/${n}`)
     : palette.brand(`  ∥${n}`);
+}
+
+/**
+ * Compact failure-propagation badge for NESTING ancestor rows.
+ *
+ * Rendered on Agent / skill / compose / Task rows that have one or more
+ * failed descendants, giving operators an at-a-glance signal that something
+ * went wrong deeper in the tree. Kept intentionally small: a single warning
+ * glyph + decimal count, never the full error message (which stays at the
+ * depth where it occurred).
+ *
+ * Returns `''` when count is 0 or undefined — non-failed ancestors show
+ * no indicator (no false positives).
+ */
+export function childFailureBadge(count: number | undefined): string {
+  if (!count) return '';
+  return ' ' + palette.warning('⚠') + palette.warning(` ${count}`);
 }
 
 /**

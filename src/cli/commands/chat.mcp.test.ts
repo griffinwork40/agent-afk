@@ -33,7 +33,7 @@ async function* makeStream(events: OutputEvent[]): AsyncIterable<OutputEvent> {
 // ---------------------------------------------------------------------------
 
 vi.mock('../../agent/session.js', () => {
-  const MockAgentSession = vi.fn().mockImplementation(() => ({
+  const MockAgentSession = vi.fn().mockImplementation(function () { return {
     close: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue({ content: 'pong', timestamp: new Date() }),
     sendMessageStream: vi.fn().mockReturnValue(makeStream([{ type: 'done' }])),
@@ -41,7 +41,7 @@ vi.mock('../../agent/session.js', () => {
     getInputStreamRef: vi.fn().mockReturnValue({ pushUserMessage: vi.fn() }),
     sessionId: 'mock-session-id',
     abortSignal: new AbortController().signal,
-  }));
+  }; });
   return { AgentSession: MockAgentSession };
 });
 
@@ -81,7 +81,7 @@ vi.mock('../../agent/default-hook-registry.js', () => ({
 }));
 
 vi.mock('../../agent/memory/index.js', () => ({
-  MemoryStore: vi.fn(() => ({ close: vi.fn() })),
+  MemoryStore: vi.fn(function () { return { close: vi.fn() }; }),
   injectHotMemory: (c: unknown) => c,
   injectGoalPrompt: (config: unknown) => config,
   MEMORY_TOOL_NAMES: [],
@@ -95,11 +95,11 @@ vi.mock('../../agent/subagent.js', () => {
 });
 
 vi.mock('../../agent/tools/subagent-executor.js', () => ({
-  SubagentExecutor: vi.fn().mockImplementation(() => ({})),
+  SubagentExecutor: vi.fn().mockImplementation(function () { return {}; }),
 }));
 
 vi.mock('../../agent/tools/skill-executor.js', () => ({
-  SkillExecutor: vi.fn().mockImplementation(() => ({})),
+  SkillExecutor: vi.fn().mockImplementation(function () { return {}; }),
 }));
 
 vi.mock('../../agent/tools/compose-executor.js', () => {
@@ -127,7 +127,7 @@ vi.mock('../../agent/tools/nesting.js', () => ({
 }));
 
 vi.mock('../../agent/providers/anthropic-direct/index.js', () => ({
-  AnthropicDirectProvider: vi.fn().mockImplementation(() => ({})),
+  AnthropicDirectProvider: vi.fn().mockImplementation(function () { return {}; }),
 }));
 
 vi.mock('../../agent/tools/schemas.js', () => ({

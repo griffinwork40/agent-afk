@@ -170,7 +170,6 @@ export async function disposeRenderer(ctx: DisposeCtx): Promise<void> {
   // coordinator (e.g. entries registered after flushAll ran, or in
   // non-coordinator paths). This is the safety net; in normal operation
   // the coordinator drains all tool-lane commits before this point.
-  //
   // Invariant (TUI rhythm contract): the safety-net flush is an emitter
   // like any other, so it MUST own ONE trailing blank after its lines.
   // The post-dispose successor (verdict card, soft-stop notice, footer)
@@ -192,6 +191,7 @@ export async function disposeRenderer(ctx: DisposeCtx): Promise<void> {
         // prevents a phantom blank when hasPending() is true due to an
         // in-flight ancestor entry but flushCompletedRoots() returns [].
         commitBlockAbove(ctx.compositorRef.current, indentForScrollback(lines));
+        // Trailing blank — must be a dedicated call; '' inside the block is stripped by the compositor.
         ctx.compositorRef.current.commitAbove('');
       }
       if (ctx.overlayComposerRef.current) {
@@ -224,80 +224,9 @@ export async function disposeRenderer(ctx: DisposeCtx): Promise<void> {
   // Phase 8: Compositor teardown.
   if (ctx.compositorRef.current) {
     if (ctx.ownsCompositor) {
-      // Stage 3 (#540 — single end-of-turn flush): commit the full retained band
-      // to scrollback as one contiguous write BEFORE disarm() erases the live
-      // frame via logUpdate.clear(). At this point geometry is stable (overlay
-      // cleared in Phase 2b / Phase 6, all commits landed by Phase 3–6), so the
-      // flush produces the cleanest possible scrollback snapshot. disarm()'s own
-      // flushPendingCommittedBand becomes a no-op after this (band is empty).
-      // Best-effort: a closed TTY makes endTurn() throw; disarm() handles cleanup.
-      try { ctx.compositorRef.current.endTurn(); } catch { /* best effort */ }
-      // Renderer-owned compositor — full teardown.
-      try { ctx.compositorRef.current.disarm(); } catch { /* best effort */ }
+      teardownOwnedCompositor(ctx);
     } else {
-      // Borrowed compositor — leave it armed for the surface to keep
-      // serving the idle input row. Reset the streaming-only state
-      // (spinner + overlay) so the bottom region looks clean; flip
-      // input mode back to 'idle' so the next Enter resolves the
-      // surface's pending readLine.
-      //
-      // Ordered-operation invariant (sequence): clear overlay BEFORE
-      // flipping mode. setInputMode('idle') can synchronously fire
-      // onSubmit (when a buffer was queued mid-stream) which may
-      // trigger the surface to commitAbove the user's submission
-      // echo. That echo must commit above a CLEAN bottom region, not
-      // above a stale spinner frame from the just-ended turn.
-      //
-      // Failure-isolation invariant (per-step try/catch): each call
-      // gets its own try/catch. A single bundled try/catch lets a
-      // throw in setSpinner silently skip setOverlay('') and
-      // setInputMode('idle') — leaving the stale frame painted
-      // (compositor stuck "on top") and the surface stuck in
-      // 'streaming' mode. The throw is reachable in production:
-      // logUpdate() can propagate EPIPE/EBADF when the TTY closes
-      // mid-session (see terminal-compositor.ts:676). Per-step
-      // isolation keeps the sequence above intact under partial
-      // failure: setOverlay still runs even if setSpinner threw.
-      try {
-        ctx.compositorRef.current.setSpinner({ enabled: false });
-      } catch (e) {
-        debugLog('[stream-renderer] borrow-dispose setSpinner: ' + String(e));
-      }
-      try {
-        if (ctx.overlayComposerRef.current) {
-          ctx.overlayComposerRef.current.invalidate();
-          ctx.overlayComposerRef.current.flush();
-        } else {
-          ctx.compositorRef.current.setOverlay('');
-        }
-      } catch (e) {
-        debugLog('[stream-renderer] borrow-dispose setOverlay: ' + String(e));
-      }
-      try {
-        ctx.compositorRef.current.setInputMode('idle');
-      } catch (e) {
-        debugLog('[stream-renderer] borrow-dispose setInputMode: ' + String(e));
-      }
-      // Restore the compositor's cancel handler to whatever the owner had
-      // installed before arm() swapped in this.onCancel. The owner
-      // (InputSurface.armCompositor) installs its sigintHandler via the
-      // TerminalCompositor constructor — there is no other path to recover
-      // it. Setting null here would leave onCancel === undefined, and
-      // idle-mode Ctrl+C silently no-ops in that state
-      // (terminal-compositor.ts:1106-1108).
-      //
-      // Passing `this.priorOnCancel ?? null` is type-safe: setOnCancel(null)
-      // maps to `this.onCancel = undefined` internally, which is the
-      // correct between-turns state ONLY when the owner never installed a
-      // handler in the first place (priorOnCancel was undefined at capture).
-      try {
-        ctx.compositorRef.current.setOnCancel(ctx.priorOnCancelRef.current ?? null);
-      } catch (e) {
-        debugLog('[stream-renderer] borrow-dispose setOnCancel: ' + String(e));
-      }
-      // Clear our captured reference so a re-dispose (defensive idempotent
-      // call) doesn't try to restore a stale handler.
-      ctx.priorOnCancelRef.current = undefined;
+      teardownBorrowedCompositor(ctx);
     }
     ctx.compositorRef.current = null;
     ctx.borrowedCompositorRef.current = null;
@@ -316,4 +245,93 @@ export async function disposeRenderer(ctx: DisposeCtx): Promise<void> {
   if (typeof maybeDedup.flush === 'function') {
     try { maybeDedup.flush(); } catch { /* best effort */ }
   }
+}
+
+/**
+ * Phase 8 (owned): full teardown of a renderer-owned TerminalCompositor.
+ *
+ * Stage 3 (#540 — single end-of-turn flush): commit the full retained band
+ * to scrollback as one contiguous write BEFORE disarm() erases the live
+ * frame via logUpdate.clear(). At this point geometry is stable (overlay
+ * cleared in Phase 2b / Phase 6, all commits landed by Phase 3–6), so the
+ * flush produces the cleanest possible scrollback snapshot. disarm()'s own
+ * flushPendingCommittedBand becomes a no-op after this (band is empty).
+ * Best-effort: a closed TTY makes endTurn() throw; disarm() handles cleanup.
+ *
+ * Caller (disposeRenderer Phase 8) nulls compositorRef and borrowedCompositorRef
+ * immediately after this returns.
+ */
+function teardownOwnedCompositor(ctx: DisposeCtx): void {
+  // Non-null guaranteed by the Phase 8 guard in disposeRenderer.
+  const compositor = ctx.compositorRef.current!;
+  try { compositor.endTurn(); } catch { /* best effort */ }
+  try { compositor.disarm(); } catch { /* best effort */ }
+}
+
+/**
+ * Invariant: Phase 8 (borrowed): reset streaming-only state on a borrowed TerminalCompositor
+ * and restore the surface's cancel handler, leaving the compositor armed for idle
+ * input.
+ *
+ * Ordered-operation invariant (sequence): clear overlay BEFORE flipping mode.
+ * setInputMode('idle') can synchronously fire onSubmit (when a buffer was queued
+ * mid-stream) which may trigger the surface to commitAbove the user's submission
+ * echo. That echo must commit above a CLEAN bottom region, not above a stale
+ * spinner frame from the just-ended turn.
+ *
+ * Failure-isolation invariant (per-step try/catch): each call gets its own
+ * try/catch. A single bundled try/catch lets a throw in setSpinner silently skip
+ * setOverlay('') and setInputMode('idle') — leaving the stale frame painted
+ * (compositor stuck "on top") and the surface stuck in 'streaming' mode. The
+ * throw is reachable in production: logUpdate() can propagate EPIPE/EBADF when
+ * the TTY closes mid-session (see terminal-compositor.ts:676). Per-step isolation
+ * keeps the sequence above intact under partial failure: setOverlay still runs
+ * even if setSpinner threw.
+ *
+ * Caller (disposeRenderer Phase 8) nulls compositorRef and borrowedCompositorRef
+ * immediately after this returns.
+ */
+function teardownBorrowedCompositor(ctx: DisposeCtx): void {
+  // Non-null guaranteed by the Phase 8 guard in disposeRenderer.
+  const compositor = ctx.compositorRef.current!;
+  try {
+    compositor.setSpinner({ enabled: false });
+  } catch (e) {
+    debugLog('[stream-renderer] borrow-dispose setSpinner: ' + String(e));
+  }
+  try {
+    if (ctx.overlayComposerRef.current) {
+      ctx.overlayComposerRef.current.invalidate();
+      ctx.overlayComposerRef.current.flush();
+    } else {
+      compositor.setOverlay('');
+    }
+  } catch (e) {
+    debugLog('[stream-renderer] borrow-dispose setOverlay: ' + String(e));
+  }
+  try {
+    compositor.setInputMode('idle');
+  } catch (e) {
+    debugLog('[stream-renderer] borrow-dispose setInputMode: ' + String(e));
+  }
+  // Restore the compositor's cancel handler to whatever the owner had
+  // installed before arm() swapped in this.onCancel. The owner
+  // (InputSurface.armCompositor) installs its sigintHandler via the
+  // TerminalCompositor constructor — there is no other path to recover
+  // it. Setting null here would leave onCancel === undefined, and
+  // idle-mode Ctrl+C silently no-ops in that state
+  // (terminal-compositor.ts:1106-1108).
+  //
+  // Passing `this.priorOnCancel ?? null` is type-safe: setOnCancel(null)
+  // maps to `this.onCancel = undefined` internally, which is the
+  // correct between-turns state ONLY when the owner never installed a
+  // handler in the first place (priorOnCancel was undefined at capture).
+  try {
+    compositor.setOnCancel(ctx.priorOnCancelRef.current ?? null);
+  } catch (e) {
+    debugLog('[stream-renderer] borrow-dispose setOnCancel: ' + String(e));
+  }
+  // Clear our captured reference so a re-dispose (defensive idempotent
+  // call) doesn't try to restore a stale handler.
+  ctx.priorOnCancelRef.current = undefined;
 }

@@ -57,7 +57,10 @@ describe('deriveCallCostUsd — cache-write TTL rates', () => {
         ephemeral5m: 0,
         ephemeral1h: M,
       });
-      const expected = p.cacheWrite1hPerMTok ?? p.inputPerMTok * 2;
+      // A 1M-token write exceeds every long-prompt threshold, so a tiered row
+      // (Haiku 5.5) bills at its long-prompt rates.
+      const r = p.longPrompt !== undefined && M > p.longPrompt.thresholdTokens ? p.longPrompt.rates : p;
+      const expected = r.cacheWrite1hPerMTok ?? r.inputPerMTok * 2;
       expect(oneHour, `1h write rate for ${model}`).toBeCloseTo(expected, 8);
     }
   });

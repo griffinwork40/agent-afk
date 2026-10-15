@@ -8,7 +8,6 @@
 
 import type { ResponseMetadata } from '../../agent/types/message-types.js';
 import type { AgentModelInput } from '../../agent/types.js';
-import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { slugifySessionName } from '../session-name.js';
 import type { SessionStats, ToolEvent, TurnRecord } from './types.js';
 
@@ -65,13 +64,11 @@ export function resetStats(stats: SessionStats): void {
  * Fold a completed turn into session stats and push a TurnRecord for
  * /history. Returns the new per-turn totals for immediate display.
  *
- * @param userContentBlocks   Optional structured content blocks from the user
- *   message. When non-empty, persisted to `TurnRecord.userContentBlocks` so
- *   `resumeHistoryToMessages` can use the structured path on resume.
- * @param assistantContentBlocks   Optional structured content blocks from the
- *   assistant response. When non-empty, persisted to
- *   `TurnRecord.assistantContentBlocks` so the structured resume path
- *   preserves tool_use/tool_result semantics across sessions.
+ * The record carries text + metadata only. `userContentBlocks` /
+ * `assistantContentBlocks` are no longer written: their tool_result content
+ * was the ~80-char display preview, and replaying it on resume fed the model
+ * truncated tool output. The message journal now carries full content and is
+ * the resume source; the TurnRecord fields remain so old sidecars still load.
  */
 export function recordTurn(
   stats: SessionStats,
@@ -79,8 +76,6 @@ export function recordTurn(
   assistantText: string,
   metadata: ResponseMetadata | undefined,
   toolEvents?: ToolEvent[],
-  userContentBlocks?: ContentBlockParam[],
-  assistantContentBlocks?: ContentBlockParam[],
 ): TurnRecord {
   const costUsd = metadata?.totalCostUsd;
   const costForSum = costUsd ?? 0;
@@ -160,8 +155,6 @@ export function recordTurn(
     inputTokens: aggInput,
     outputTokens: aggOutput,
     ...(toolEvents && toolEvents.length > 0 ? { toolEvents } : {}),
-    ...(userContentBlocks && userContentBlocks.length > 0 ? { userContentBlocks } : {}),
-    ...(assistantContentBlocks && assistantContentBlocks.length > 0 ? { assistantContentBlocks } : {}),
   };
   stats.turns.push(record);
   return record;

@@ -11,6 +11,7 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AuthMode } from './types.js';
 import { composeBetaHeader } from './beta-headers.js';
+import { h1ModelFetch } from '../shared/h1-fetch.js';
 
 /**
  * Beta that activates the 1-hour prompt-cache TTL. Required in BOTH auth modes
@@ -44,6 +45,9 @@ export const OAUTH_BETA_HEADER =
  * field if the beta is absent.
  */
 export const EFFORT_BETA_HEADER = 'effort-2025-11-24';
+
+/** Beta that makes dropped Fable 5.1 thinking blocks visible via input_transformations. */
+export const THINKING_BINDING_CONTROLS_BETA_HEADER = 'thinking-binding-controls-2026-08-01';
 
 /**
  * `User-Agent` value the CLI sends. The Anthropic API gates certain model
@@ -79,23 +83,35 @@ export function detectAuthMode(token: string): AuthMode {
  * through it. Used to inject an observability wrapper (see
  * {@link makeTracingFetch}) that records 429/503/529 throttling into the
  * witness trace — otherwise the SDK's silent retry-after backoff is invisible.
+ * Defaults to {@link h1ModelFetch} so that EVERY Anthropic client — including
+ * the one-shot client in `oneshot.ts` — forces HTTP/1.1, regardless of what
+ * jsdom or any other importer has written into the global undici dispatcher.
+ * Callers that supply a tracing wrapper already chain it on top of
+ * `h1ModelFetch` (see `makeTracingFetch` default in `tracing-fetch.ts`), so
+ * this default is never overridden back to the global dispatcher by accident.
+ *
+ * `maxRetries` is always 0: AFK's own retry layers (loop/round-retry.ts,
+ * loop/retry-budget.ts, query/retry-layer.ts) are the single, traced retry
+ * authority. The SDK default of 2 would silently stack under those loops —
+ * turning each failing call into up to 3× the attempts AFK believes it is
+ * making, with the SDK-level retries invisible in the witness trace
+ * (issue #2422). `oneshot.ts` also builds its client through this function, so
+ * it gets `maxRetries: 0` and, having no AFK retry wrapper, makes exactly one
+ * attempt; its callers own retry policy (see that module's JSDoc).
  */
 export function buildClientOptions(
   token: string,
   mode: AuthMode,
   baseUrl?: string,
-  fetchImpl?: typeof fetch,
-): ({ authToken: string } | { apiKey: string }) & { baseURL?: string; fetch?: typeof fetch } {
+  fetchImpl: typeof fetch = h1ModelFetch,
+): ({ authToken: string } | { apiKey: string }) & { baseURL?: string; fetch: typeof fetch; maxRetries: 0 } {
   const base = mode === 'oauth'
-    ? { authToken: token }
-    : { apiKey: token };
+    ? { authToken: token, maxRetries: 0 as const }
+    : { apiKey: token, maxRetries: 0 as const };
   const withBase = typeof baseUrl === 'string' && baseUrl.length > 0
     ? { ...base, baseURL: baseUrl }
     : base;
-  if (fetchImpl) {
-    return { ...withBase, fetch: fetchImpl };
-  }
-  return withBase;
+  return { ...withBase, fetch: fetchImpl };
 }
 
 /**
@@ -126,14 +142,17 @@ export function buildRequestHeaders(
   withEffort?: boolean,
   extendedCacheTtl?: boolean,
   withFast?: boolean,
+  withThinkingBindingControls?: boolean,
 ): Record<string, string> {
   const betaHeader = composeBetaHeader({
     oauthEntries: mode === 'oauth' ? OAUTH_BETA_HEADER.split(',') : [],
     effort: mode === 'oauth' && withEffort === true,
     extendedCacheTtl,
     fast: withFast,
+    thinkingBindingControls: withThinkingBindingControls,
     effortEntry: EFFORT_BETA_HEADER,
     extendedCacheEntry: EXTENDED_CACHE_TTL_BETA,
+    thinkingBindingControlsEntry: THINKING_BINDING_CONTROLS_BETA_HEADER,
   });
   if (mode !== 'oauth') return betaHeader ? { 'anthropic-beta': betaHeader } : {};
   return {

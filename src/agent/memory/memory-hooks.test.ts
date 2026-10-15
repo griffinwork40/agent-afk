@@ -1,15 +1,171 @@
 /**
- * Unit tests for the memory SessionEnd hook, focused on the subagent guard.
+ * Unit tests for the memory hooks:
+ * - createChildMemoryHotBlockHook: blocks target:"hot" writes from subagents
+ * - createMemorySessionEndHook: guarded against forked subagent noise
  *
- * The hook is registered on the default registry, which forked subagents
- * inherit via their child config (subagent.ts). Without the parentSessionId
- * guard, every subagent teardown would write a start/end session pair to the
- * store — polluting it with worker sessions the user never started.
+ * The hooks are registered on a real HookRegistry so we verify that the
+ * returned decision actually causes registry dispatch to throw HookBlockedError
+ * — not just that the hook function returns a particular shape.
  */
 import { describe, expect, it, vi } from 'vitest';
-import type { SessionEndContext } from '../hooks.js';
-import { createMemorySessionEndHook } from './memory-hooks.js';
+import type { PreToolUseContext, SessionEndContext } from '../hooks.js';
+import { createHookRegistry } from '../hooks.js';
+import { createChildMemoryHotBlockHook, createMemorySessionEndHook } from './memory-hooks.js';
 import type { MemoryStore } from './memory-store.js';
+import { HookBlockedError } from '../../utils/errors.js';
+
+function preToolCtx(over: Partial<PreToolUseContext> = {}): PreToolUseContext {
+  return { event: 'PreToolUse', toolName: 'memory_update', ...over };
+}
+
+describe('createChildMemoryHotBlockHook — via registry dispatch', () => {
+  it("blocks subagent + target:'hot' — registry throws HookBlockedError", async () => {
+    const registry = createHookRegistry();
+    registry.register('PreToolUse', createChildMemoryHotBlockHook());
+
+    await expect(
+      registry.dispatch(
+        preToolCtx({
+          toolName: 'memory_update',
+          input: { target: 'hot' },
+          parentSessionId: 'parent-1',
+          sessionId: 'child-1',
+        }),
+      ),
+    ).rejects.toBeInstanceOf(HookBlockedError);
+  });
+
+  it("allows subagent + target:'fact' — registry resolves without throwing", async () => {
+    const registry = createHookRegistry();
+    registry.register('PreToolUse', createChildMemoryHotBlockHook());
+
+    await expect(
+      registry.dispatch(
+        preToolCtx({
+          toolName: 'memory_update',
+          input: { target: 'fact' },
+          parentSessionId: 'parent-1',
+          sessionId: 'child-1',
+        }),
+      ),
+    ).resolves.not.toBeInstanceOf(HookBlockedError);
+  });
+
+  it("allows top-level + target:'hot' — registry resolves without throwing", async () => {
+    const registry = createHookRegistry();
+    registry.register('PreToolUse', createChildMemoryHotBlockHook());
+
+    // No parentSessionId → top-level session; must NOT be blocked.
+    await expect(
+      registry.dispatch(
+        preToolCtx({
+          toolName: 'memory_update',
+          input: { target: 'hot' },
+          sessionId: 'top-level-1',
+        }),
+      ),
+    ).resolves.not.toBeInstanceOf(HookBlockedError);
+  });
+
+  it("allows non-memory_update tools from subagent", async () => {
+    const registry = createHookRegistry();
+    registry.register('PreToolUse', createChildMemoryHotBlockHook());
+
+    await expect(
+      registry.dispatch(
+        preToolCtx({
+          toolName: 'bash',
+          input: { command: 'ls' },
+          parentSessionId: 'parent-1',
+          sessionId: 'child-1',
+        }),
+      ),
+    ).resolves.not.toBeInstanceOf(HookBlockedError);
+  });
+
+  it("injectContext in HookBlockedError explains target:'fact' alternative", async () => {
+    const registry = createHookRegistry();
+    registry.register('PreToolUse', createChildMemoryHotBlockHook());
+
+    const err = await registry
+      .dispatch(
+        preToolCtx({
+          toolName: 'memory_update',
+          input: { target: 'hot' },
+          parentSessionId: 'parent-1',
+          sessionId: 'child-1',
+        }),
+      )
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(HookBlockedError);
+    expect((err as HookBlockedError).injectContext).toContain('target:"hot"');
+  });
+});
+
+describe('createChildMemoryHotBlockHook — fork-signal closure (#2242 item 1)', () => {
+  it('blocks hot write when only subagentToolOutputCapBytes is set (no parentSessionId in context)', async () => {
+    // Skill forks under a stub parent carry no parentSessionId in PreToolUseContext.
+    // Passing forkSignals at factory time lets the hook still block them.
+    const registry = createHookRegistry();
+    registry.register('PreToolUse', createChildMemoryHotBlockHook({ subagentToolOutputCapBytes: 100_000 }));
+
+    const err = await registry
+      .dispatch(
+        preToolCtx({
+          toolName: 'memory_update',
+          input: { target: 'hot' },
+          // No parentSessionId in context — the fork signal is in the closure.
+          sessionId: 'skill-child-1',
+        }),
+      )
+      .catch((e) => e);
+
+    expect(err).toBeInstanceOf(HookBlockedError);
+    // Must use injectContext (friendly guidance) not terse structural error.
+    expect((err as HookBlockedError).injectContext).toContain('target:"hot"');
+    expect((err as HookBlockedError).injectContext).toContain('target:"fact"');
+  });
+
+  it('allows hot write when no fork signals at all (top-level session — over-blocking guard)', async () => {
+    // Neither context.parentSessionId nor closure forkSignals are set →
+    // top-level session must NOT be blocked.
+    const registry = createHookRegistry();
+    // No forkSignals argument passed — factory called with no closure.
+    registry.register('PreToolUse', createChildMemoryHotBlockHook());
+
+    await expect(
+      registry.dispatch(
+        preToolCtx({
+          toolName: 'memory_update',
+          input: { target: 'hot' },
+          sessionId: 'top-level-2',
+          // No parentSessionId.
+        }),
+      ),
+    ).resolves.not.toBeInstanceOf(HookBlockedError);
+  });
+
+  it('blocks hot write when fork signal is in context (original parentSessionId path still works)', async () => {
+    // Ensure the extension is additive — existing behavior is preserved.
+    const registry = createHookRegistry();
+    registry.register('PreToolUse', createChildMemoryHotBlockHook());
+
+    const err = await registry
+      .dispatch(
+        preToolCtx({
+          toolName: 'memory_update',
+          input: { target: 'hot' },
+          parentSessionId: 'parent-via-context',
+          sessionId: 'child-via-context',
+        }),
+      )
+      .catch((e) => e);
+
+    expect(err).toBeInstanceOf(HookBlockedError);
+  });
+});
+
+// ---------------------------------------------------------------------------
 
 function makeStoreSpy() {
   const startSession = vi.fn();

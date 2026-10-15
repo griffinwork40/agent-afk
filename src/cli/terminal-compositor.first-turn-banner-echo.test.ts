@@ -39,6 +39,7 @@ import { TerminalCompositor } from './terminal-compositor.js';
 import { StatusLine } from './status-line.js';
 import { LoopStageBar } from './commands/interactive/loop-stage.js';
 import { formatSubmittedEcho } from './input/echo.js';
+import { createAutocompleteState } from './input/autocomplete-state.js';
 
 type MockStdout = NodeJS.WriteStream & { isTTY: boolean; columns: number; rows: number };
 type MockStdin = NodeJS.ReadStream & { isTTY: boolean; isRaw: boolean; setRawMode: ReturnType<typeof vi.fn> };
@@ -339,5 +340,185 @@ describe('first turn after banner — idle banner-followed frame commit', () => 
     expect(idx((l) => l.includes('RESPONSE_OK'))).toBeGreaterThan(idx((l) => l.includes('india')));
 
     statusLine.stop();
+  });
+});
+
+// ─── content-hug guard in the banner-path eviction ────────────────────────────
+//
+// Finding (#2290): the banner-path guard at frame-preserve.ts:188-194 checks
+// BOTH `overlay === ''` AND `contentHugFrameSettled(self)`.  `contentHugFrameSettled`
+// returns false in content-hug mode while an autocomplete dropdown is open (or
+// the compositor is in picker mode), deliberately deferring the pending-overflow
+// eviction until the dropdown closes — archiving against a temporarily-enlarged
+// input region would leave the band short once the dropdown collapses.
+//
+// This test seeds the compositor with a partially-pending band by injecting the
+// internal state directly (the same pattern used by terminal-compositor.bottom-
+// pin.test.ts) so the geometry is deterministic regardless of commit-path
+// differences between content-hug and the non-hug overflow scenario documented
+// in terminal-compositor.banner-endturn-overflow.repro.test.ts.
+//
+// Geometry:
+//   ROWS=24, anchorRow=5 (4-row banner), no status line, no spinner.
+//   At collapse: desiredTopRow = 22 (1-row frame), floor = anchorRow = 5,
+//   room = 22 - 5 = 17.  Band seeded with 20 rows, paintedRows = 5 →
+//   15 rows PENDING; bandLen (20) > room (17) → overflow = 3.
+//   The guard fires when overlayCollapsed && contentHugFrameSettled.
+//
+// Mutation check (as required by issue #2290): temporarily removing the
+//   `&& contentHugFrameSettled(self)` clause from the banner-path condition
+//   in terminal-compositor.frame-preserve.ts causes the "dropdown open — no
+//   eviction" assertion to fail because the eviction fires immediately on the
+//   first repaint while the dropdown is still open (committedBandPaintedRows
+//   jumps to committedBand.length = 17 survivors < 20 original, asserting
+//   paintedRows < length fails).  Restoring the clause makes the test green.
+describe('content-hug guard in banner-path eviction (contentHugFrameSettled)', () => {
+  const CH_COLS = 80;
+  const CH_ROWS = 24;
+  const CH_BANNER_ROWS = 4;
+  const CH_ANCHOR_ROW = CH_BANNER_ROWS + 1; // 5
+  // Band geometry: 20 rows in model, only 5 painted → 15 PENDING.
+  // room = desiredTopRow(22) - floor(5) = 17 < bandLen(20) → overflow = 3.
+  const BAND_LEN = 20;
+  const PAINTED_ROWS = 5;
+
+  it('does not evict pending rows while an autocomplete dropdown is open; evicts once the dropdown closes', async () => {
+    const acState = createAutocompleteState();
+    const stdout = makeStdout(CH_COLS, CH_ROWS);
+    const stdin = makeStdin();
+    const all = collect(stdout);
+
+    // Print the banner before arming (mirrors the interactive REPL surface).
+    for (let i = 0; i < CH_BANNER_ROWS; i++) stdout.write(`CH_BANNER_${i}\n`);
+
+    const c = new TerminalCompositor({
+      stdout,
+      stdin,
+      onCancel: vi.fn(),
+      anchorRow: CH_ANCHOR_ROW,
+      contentHug: true,
+      autocompleteState: acState,
+    });
+    await c.arm();
+
+    // Cast to internals — mirrors the pattern in terminal-compositor.bottom-pin.test.ts.
+    const internals = c as unknown as {
+      repaint(): void;
+      committedBandPaintedRows: number;
+      committedBandArchivedPrefix: number;
+      committedBand: string[];
+      committedBandMeta: Array<{ logicalText: string; isHead: boolean }>;
+      committedBandTopRow: number;
+      committedBandBottomRow: number;
+      hasCommitted: boolean;
+      placementMode: string;
+      overlay: string;
+      anchorRow: number;
+      logUpdate: { resetGeometry?(): void } | null;
+    };
+
+    // Seed the partially-pending band directly so the geometry is deterministic
+    // regardless of which commit route content-hug takes.  The band represents
+    // 20 model rows of which only the bottom 5 are painted; the oldest 15 are
+    // PENDING.  This is the canonical banner-path overflow scenario documented in
+    // terminal-compositor.banner-endturn-overflow.repro.test.ts (§ ROOT CAUSE).
+    const bandRows = Array.from({ length: BAND_LEN }, (_, i) => `CH_CONTENT_${String(i).padStart(2, '0')}`);
+    internals.committedBand = bandRows;
+    internals.committedBandMeta = bandRows.map((t) => ({ logicalText: t, isHead: true }));
+    // Physical rows: floor = CH_ANCHOR_ROW = 5.  The band's tracked span is
+    //   [floor, frameTop - 1] = [5, 21]: it hugs the settled 1-row frame at
+    //   desiredTopRow = 22, the same `newTopRow - 1` contract every production
+    //   write site uses (commit-phase3-band.ts, commit-phase3-hold.ts). The
+    //   20-row band overflows that 17-row span, which is the pending overflow
+    //   under test. An earlier seed of 5 + BAND_LEN - 1 = 24 put the band ON the
+    //   last terminal row, below absoluteBottom (23); production cannot reach
+    //   that state and the geometry guard (I2b) rejects it. Eviction reads
+    //   `room = desiredTopRow - floor`, not this field, so the fix does not
+    //   change what the test exercises.
+    internals.committedBandTopRow = CH_ANCHOR_ROW; // 5
+    internals.committedBandBottomRow = CH_ROWS - 3; // 21 = desiredTopRow(22) - 1
+    internals.committedBandPaintedRows = PAINTED_ROWS; // 5 painted; BAND_LEN(20) - PAINTED_ROWS(5) = 15 rows PENDING
+    internals.hasCommitted = true;
+    // content-hug: set placementMode so contentHugFrameSettled gate is active.
+    internals.placementMode = 'content-hug';
+    // Overlay is already '' (arm sets it empty); the frame is at idle height (1 row).
+    // anchorRow is set from the constructor option; verify it matches.
+    expect(internals.anchorRow, 'anchorRow must match option').toBe(CH_ANCHOR_ROW);
+
+    // Reset the log-update renderer geometry so desiredTopRow is computed from
+    // scratch on the first repaint (no stale prevTopRow).
+    internals.logUpdate?.resetGeometry?.();
+
+    // ── Phase 1: dropdown OPEN — guard must suppress banner-path eviction ────
+    //
+    // Open the autocomplete dropdown.  contentHugFrameSettled returns false while
+    // dropdownOpen is true (in content-hug mode), so the banner-path guard
+    // (`overlayCollapsedBanner = false`) must skip the eviction even though
+    // overlay is '' and pending rows exist.
+    acState.dropdownOpen = true;
+    acState.candidates = [
+      { value: '/chat', display: '/chat', icon: '' },
+      { value: '/clear', display: '/clear', icon: '' },
+    ];
+    acState.selectedIndex = 0;
+
+    // Fire two repaints.  The guard must hold — no eviction.
+    internals.repaint();
+    internals.repaint();
+
+    // MUTATION-SENSITIVE ASSERTION: if `&& contentHugFrameSettled(self)` is
+    // removed from frame-preserve.ts:188, the eviction fires here and
+    // committedBandPaintedRows === committedBand.length (= 17 survivors),
+    // causing this assertion to fail.
+    expect(
+      internals.committedBandPaintedRows,
+      'dropdown open: eviction must be suppressed — pending rows must still exist',
+    ).toBeLessThan(internals.committedBand.length);
+
+    // ── Phase 2: dropdown CLOSED — guard must allow eviction ─────────────────
+    //
+    // Close the dropdown.  contentHugFrameSettled now returns true; the guard
+    // lifts and the banner-path eviction should fire on the next repaint.
+    acState.dropdownOpen = false;
+    acState.candidates = [];
+
+    internals.repaint();
+    internals.repaint();
+
+    // After eviction every row the frame cannot show is in scrollback: under
+    // content-hug those rows stay in the band as the hidden ARCHIVED prefix
+    // (re-shown if the frame shrinks; terminal-compositor.band-archived-prefix.ts),
+    // so the invariant is "no pending row that is NOT already archived".
+    const nonArchivedPending =
+      internals.committedBand.length - internals.committedBandPaintedRows - internals.committedBandArchivedPrefix;
+    expect(
+      Math.max(0, nonArchivedPending),
+      'dropdown closed: eviction must have fired — no non-archived pending rows should remain',
+    ).toBe(0);
+
+    // Feed full output into headless xterm to verify all content rows survive.
+    const term = new HeadlessTerminal({
+      cols: CH_COLS,
+      rows: CH_ROWS,
+      scrollback: 800,
+      allowProposedApi: true,
+      convertEol: true,
+    });
+    await termWrite(term, all());
+    const ls = lines(term);
+    const dump = ls.map((l, i) => `[${String(i).padStart(3)}] ${JSON.stringify(l)}`).join('\n');
+
+    // Every content row must appear exactly once across the full buffer.
+    for (let i = 0; i < BAND_LEN; i++) {
+      const label = `CH_CONTENT_${String(i).padStart(2, '0')}`;
+      const hits = ls.filter((l) => l.includes(label)).length;
+      expect(hits, `"${label}" must appear exactly once:\n${dump}`).toBe(1);
+    }
+
+    // Banner rows must all be intact.
+    for (let i = 0; i < CH_BANNER_ROWS; i++) {
+      const hits = ls.filter((l) => l.trim() === `CH_BANNER_${i}`).length;
+      expect(hits, `banner row CH_BANNER_${i} must appear exactly once:\n${dump}`).toBe(1);
+    }
   });
 });

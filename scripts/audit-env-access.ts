@@ -29,6 +29,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { groupViolationsByFile, isProdTs, walkSourceFiles } from './lib/walk-source-files.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -60,6 +61,11 @@ const ALLOWED_FILES: ReadonlyArray<{ file: string; reason: string }> = [
       'Forwards process.env to child processes via `{ ...process.env, ...context.env }`. This is whole-env forwarding, not a read of a specific var.',
   },
   {
+    file: 'src/agent/tools/handlers/bash-env-scrub.ts',
+    reason:
+      'Whole-env forwarding to provide a scrubbed copy for bash child processes (issue #2425). Inherits process.env and strips episode-revealing vars; this is dynamic whole-env access, not a specific-var read.',
+  },
+  {
     file: 'src/agent/tools/handlers/web-scrape.ts',
     reason: 'Accepts `env` as an injectable opt for testing; default is `process.env` (whole object).',
   },
@@ -71,11 +77,6 @@ const ALLOWED_FILES: ReadonlyArray<{ file: string; reason: string }> = [
     file: 'src/agent/mcp/transport.ts',
     reason:
       'Inherits a fixed allowlist of OS-level env vars (PATH, USER, SHELL, TERM, TMPDIR, etc.) into spawned MCP server child processes. The keys are bounded but include vars outside the AFK domain (TMP, SYSTEMROOT, APPDATA) that do not belong in ENV_REGISTRY.',
-  },
-  {
-    file: 'src/utils/resolve-shell.ts',
-    reason:
-      'Reads OS-level env vars (MSYSTEM, PATH) to probe for Git Bash on Windows. These are system vars that do not belong in ENV_REGISTRY — same rationale as mcp/transport.ts.',
   },
   {
     file: 'src/agent/providers/openai-compatible/auth.ts',
@@ -172,17 +173,7 @@ function hasInlineAllowMarker(line: string): boolean {
 }
 
 function walk(dir: string, out: string[]): void {
-  if (!fs.existsSync(dir)) return;
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name.startsWith('.')) continue;
-      walk(full, out);
-    } else if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) {
-      out.push(full);
-    }
-  }
+  walkSourceFiles(dir, (absPath) => isProdTs(absPath), out);
 }
 
 function isAllowedFile(relPath: string): boolean {
@@ -291,14 +282,7 @@ function main(): void {
 
   console.error(`\n✗ audit-env-access: ${allViolations.length} direct process.env access(es) outside src/config/env.ts:\n`);
 
-  // Group by file for readability.
-  const byFile = new Map<string, Violation[]>();
-  for (const v of allViolations) {
-    const existing = byFile.get(v.file);
-    if (existing) existing.push(v);
-    else byFile.set(v.file, [v]);
-  }
-  for (const [file, vs] of [...byFile.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [file, vs] of groupViolationsByFile(allViolations)) {
     console.error(`  ${file}`);
     for (const v of vs) {
       const name = v.varName ?? '<dynamic>';

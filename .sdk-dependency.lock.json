@@ -1,7 +1,11 @@
 {
-  "generated_at": "2026-09-23T00:54:23.086Z",
+  "generated_at": "2026-09-29T16:58:34.389Z",
   "symbols": {
     "@anthropic-ai/sdk": {
+      "BadRequestError": {
+        "kind": "runtime",
+        "reason": "Used in signature-retry.ts to tighten isInvalidSignatureError: instanceof BadRequestError guarantees status===400 without relying on message-text or property casting, enabling a clean keyword-only guard for the thinking-signature retry path."
+      },
       "default as Anthropic": {
         "kind": "runtime",
         "reason": "Anthropic SDK client constructor — the singular entry point used to instantiate the client that backs every messages.create() call in src/agent/providers/anthropic-direct/. Removing this import would require swapping the provider implementation entirely."

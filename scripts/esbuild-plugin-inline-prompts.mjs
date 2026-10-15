@@ -268,7 +268,7 @@ export function prepareSources() {
     const systemPrompt = readFileSync(systemPromptPath, 'utf-8');
     const escaped = escapeForTemplate(systemPrompt);
     // Find and replace the exact function body using string search
-    const oldFn = `export function loadSystemPrompt(): string | undefined {
+    const oldFn = `export function loadBundledSystemPrompt(): string | undefined {
   const here = dirname(fileURLToPath(import.meta.url));
   const promptPath = resolve(here, '..', '..', 'system-prompt.md');
   if (!existsSync(promptPath)) return undefined;
@@ -278,16 +278,16 @@ export function prepareSources() {
     return undefined;
   }
 }`;
-    const newFn = 'export function loadSystemPrompt(): string | undefined {\n  return `' + escaped + '`;\n}';
+    const newFn = 'export function loadBundledSystemPrompt(): string | undefined {\n  return `' + escaped + '`;\n}';
     if (shContent.includes(oldFn)) {
       shContent = shContent.replace(oldFn, newFn);
       writeFileSync(systemPromptSourcePath, shContent);
-      console.log(`  [inline-prompts] Inlined system-prompt.md into loadSystemPrompt()`);
+      console.log(`  [inline-prompts] Inlined system-prompt.md into loadBundledSystemPrompt()`);
       stats.inlinedFiles++;
       stats.replacedCalls++;
     } else {
       throw new Error(
-        '[inline-prompts] Could not find loadSystemPrompt() in system-prompt.ts\n' +
+        '[inline-prompts] Could not find loadBundledSystemPrompt() in system-prompt.ts\n' +
         '  Pattern C replacement failed. The function body may have changed.\n' +
         '  Update the oldFn string in prepareSources() to match the current code.'
       );

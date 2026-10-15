@@ -31,7 +31,11 @@
  */
 
 import type { FrameHost } from './terminal-compositor.frame.js';
-import { archiveBandPrefixAndRepaintSurvivors } from './terminal-compositor.frame-preserve-archive.js';
+import { dropScrollingArchivedRows } from './terminal-compositor.band-archived-prefix.js';
+import {
+  evictNoBannerPath,
+  evictBannerPendingOverflow,
+} from './terminal-compositor.frame-preserve.evict.js';
 
 /**
  * Preserve rows that the next compositor frame is about to cover.
@@ -40,6 +44,13 @@ import { archiveBandPrefixAndRepaintSurvivors } from './terminal-compositor.fram
  * the same log-update renderer, and both can grow upward into the single
  * above-frame copy written by `commitAbove()`. Keeping the eviction in one
  * pre-render path prevents picker mode from bypassing commit durability.
+ *
+ * The no-banner path (`!hasBanner`, floor === 1) is handled by
+ * `evictNoBannerPath`; the banner pending-overflow path by
+ * `evictBannerPendingOverflow`. Both live in
+ * terminal-compositor.frame-preserve.evict.ts. The legacy deficit tail runs
+ * inline below (it scrolls pre-arm banner rows, not band content, and has no
+ * logical lines to emit).
  */
 export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: number): void {
   // Evict-on-growth (durability for single-copy commits): when the frame
@@ -50,162 +61,35 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
   const prevTopRow = self.logUpdate?.topRow ?? 0;
   const hasBanner = self.anchorRow !== undefined && self.anchorRow > 1;
 
-  // History: the common case (no pre-arm banner, floor === 1). The old path
-  // scrolled the FULL frame-growth deficit (prevTopRow - desiredTopRow) into
-  // scrollback on every upward growth. When the band hugged the frame with
-  // blank rows above it (a small band under a growing tall overlay — e.g. a
-  // "thought for Xs" line committed while a tall thinking preview is up), it
-  // was those BLANK rows that scrolled into scrollback — opening the "massive
-  // gap" between committed clusters in scrollback. Worse: the band's content
-  // was only ever a CUP re-paint, so the cap dropped lines believing they had
-  // scrolled to scrollback when only blanks had — lost commits.
-  //
-  // Fix: on growth the band moves up into the blank space it already had above
-  // it (no scrollback write at all when the whole band still fits). Only the
-  // OLDEST lines that overflow the new above-frame room [1, desiredTopRow-1]
-  // are scrolled into scrollback, carried as REAL content (the full band is
-  // re-painted top-aligned first so the scroll evicts band rows, never
-  // blanks). Because room === desiredTopRow - 1 here, the survivors land at
-  // [1, desiredTopRow-1] — already hugging the new frame top AND contiguous
-  // with scrollback, so no gap opens. Full design: docs/scrollback.md.
   if (!hasBanner) {
-    const bandLen = self.committedBand.length;
-
-    // Invariant (collapse-time eviction of pending overflow — content-loss fix):
-    // band-hold's commit-time `maxBandModel` can exceed the true collapse paint
-    // capacity `maxFit` (= `targetBottom - floor + 1` in repositionCommittedBand)
-    // because `maxFit` accounts for the REAL collapsed frame height (input + gap +
-    // spinner + status rows) while `maxBandModel` counts against a 1-row estimate.
-    // When maxBandModel > maxFit, repositionCommittedBand paints only `fit` rows
-    // and the oldest `excess = bandLen - fit` PENDING rows are neither painted nor
-    // archived — SILENT CONTENT LOSS. This branch runs BEFORE render(), owns
-    // evictRowsToScrollback, and is the correct place to resolve it.
-    //
-    // Trigger (gated on the genuine end-of-turn signal — DELIBERATELY not a
-    // room-magnitude threshold nor a shrink-direction heuristic):
-    //   • the OVERLAY is empty (self.overlay.trim() === '') — i.e. the turn
-    //     ended and the live frame is now at its settled (idle) height, so
-    //     `room` is the REAL above-frame capacity. This is the only reliable
-    //     "has the overlay actually collapsed?" signal: a mid-turn minor shrink
-    //     (e.g. the spinner stopping while a TALL overlay is still held) leaves
-    //     the overlay non-empty, so we do NOT fire and the pending band is kept
-    //     intact for the real collapse — never prematurely archiving rows that
-    //     should stay visible (overflow-gap.test.ts "archives the genuine
-    //     overflow ... R10 visible"). AND
-    //   • pending rows exist (committedBandPaintedRows < bandLen), AND
-    //   • the band overflows the room above the settled frame (room =
-    //     desiredTopRow - 1, anchorFloor === 1 here), AND
-    //   • room > 0 AND !commitInFlight (Phase 2 repaint runs mid-commit;
-    //     Phase 3 rewrites the band itself).
-    // Because `room` is the TRUE above-frame room for whatever the collapsed
-    // frame height turns out to be (input + gap + spinner + status, ANY height),
-    // the eviction count (bandLen - room) is exactly the overflow that cannot be
-    // shown — correct for every footer/input geometry, not just a 1–2 row frame.
-    //
-    // Action: paint the FULL model top-aligned (erasing old position) so the
-    // subsequent eviction scrolls REAL rows — never blanks — into scrollback.
-    // Then evict the oldest `overflow = bandLen - room` rows. Survivors remain
-    // at [1, room] hugging the forthcoming frame top, all materialized.
-    const room = Math.max(0, desiredTopRow - 1);
-    const hasPending = self.committedBandPaintedRows < bandLen;
-    const overlayCollapsed = self.overlay.trim().length === 0;
-    if (
-      !self.commitInFlight &&
-      hasPending &&
-      bandLen > room &&
-      overlayCollapsed &&
-      room > 0
-    ) {
-      const overflow = bandLen - room;
-      // #540 axis-2: archive the pending-overflow prefix to scrollback as
-      // SOFT-WRAPPABLE logical lines, then re-place the survivors at [1, room].
-      // `!hasBanner` ⇒ anchorFloor === 1 per the branch invariant above. The
-      // helper erases from the geometric FLOOR (row 1) rather than reading the
-      // tracked `committedBandTopRow`, retiring that adjacency-coupling read per
-      // the Stage-2-core repin change (#552, committed-band-repin.ts); the
-      // tracked `bottom` read is also retired — the erase bound is now derived
-      // from `floor + bandLen` (geometry-only). The helper owns the
-      // erase → archive → repaint ordering constraint and all band bookkeeping;
-      // see terminal-compositor.frame-preserve-archive.ts.
-      archiveBandPrefixAndRepaintSurvivors(self, overflow, 1);
-      return;
-    }
-
-    const grew = self.hasCommitted && prevTopRow > 1 && desiredTopRow < prevTopRow;
-    if (!grew || bandLen === 0) return;
-    const growRoom = Math.max(0, desiredTopRow - 1);
-    const growOverflow = bandLen - growRoom;
-    if (growOverflow <= 0) return; // whole band fits above the new frame — no scroll
-    // #540 axis-2: archive the oldest `growOverflow` rows to scrollback as
-    // SOFT-WRAPPABLE logical lines, then re-place the survivors at
-    // [1, growRoom] — already hugging the new frame top (growRoom ===
-    // desiredTopRow - 1), so a later shrink re-pins from the right place.
-    // `!hasBanner` ⇒ anchorFloor === 1. The helper owns the erase → archive →
-    // repaint ordering constraint and all band bookkeeping; see
-    // terminal-compositor.frame-preserve-archive.ts. This is the site the
-    // reported width-resize fragmentation came through (the ordinary
-    // end-of-turn → next-turn growth), pinned by the PTY guard
-    // `width-resize-fragment-evict-growth`.
-    archiveBandPrefixAndRepaintSurvivors(self, growOverflow, 1);
+    evictNoBannerPath(self, desiredTopRow, prevTopRow);
     return;
   }
 
-  // Invariant (banner-path pending-overflow eviction — collapse-time, before
-  // legacy deficit eviction):
-  // A partially-pending band (0 < committedBandPaintedRows < committedBand.length)
-  // can coexist with anchorRow > 1 when the commit overlay was tall enough to
-  // make prevTopRow ≤ 1 (BLOCKER-1: fitsAboveFrame = false, useBandHold = true)
-  // but short enough that desiredTopRow > anchorRow at Phase-2 repaint time —
-  // so anchorRow was NOT reduced and hasBanner remains true post-commit.
-  // Concretely: maxRun = newTopRow - anchorFloor < bandLen when the overlay's
-  // desiredTopRow leaves only a narrow above-banner strip, making Phase-3 paint
-  // only the bottom `maxRun` rows while the older `bandLen - maxRun` rows stay
-  // pending. On overlay collapse, desiredTopRow rises and the settled maxFit
-  // (= desiredTopRow - anchorFloor) can still be < bandLen if the collapsed
-  // frame has > 1 row (e.g. spinner still active). repositionCommittedBand then
-  // silently drops the oldest bandLen - maxFit pending rows (never painted, never
-  // archived) — content loss. The fully-pending case is handled by the !hasBanner
-  // path's anchor-eviction (newTopRow ≤ 1 → desiredTopRow ≤ 1 < anchorRow →
-  // anchorDeficit > 0 → anchorRow → 1 during Phase-2); only the PARTIALLY-
-  // pending case can reach here with anchorRow > 1.
-  //
-  // Trigger (same signal as the !hasBanner eviction, anchored at floor):
-  //   • overlayCollapsed (overlay is '' — turn has ended, frame at settled height)
-  //   • hasPending (some model rows never painted)
-  //   • bandLen > room (= desiredTopRow - floor) — band won't all fit above frame
-  //   • !commitInFlight && room > 0 (not mid-commit; room exists above frame)
-  //
-  // Action (mirrors !hasBanner path, lines 96-119, with floor = anchorFloor):
-  // Paint the full model top-aligned at [floor, floor+bandLen-1], evict the
-  // oldest `overflow = bandLen - room` rows to scrollback so the subsequent
-  // deficit path sees correct tracked rows and repositionCommittedBand never
-  // drops unpainted content.
-  const bandLenBanner = self.committedBand.length;
-  const floorBanner = Math.max(self.anchorRow ?? 1, 1);
-  const roomBanner = Math.max(0, desiredTopRow - floorBanner);
-  const hasPendingBanner = self.committedBandPaintedRows < bandLenBanner;
-  const overlayCollapsedBanner = self.overlay.trim().length === 0;
-  if (
-    !self.commitInFlight &&
-    hasPendingBanner &&
-    bandLenBanner > roomBanner &&
-    overlayCollapsedBanner &&
-    roomBanner > 0
-  ) {
-    const overflow = bandLenBanner - roomBanner;
-    // #540 axis-2: archive the pending-overflow prefix to scrollback as
-    // SOFT-WRAPPABLE logical lines, then re-place the survivors at
-    // [floorBanner, floorBanner + roomBanner - 1]. The banner/anchor rows ABOVE
-    // `floorBanner` are never touched — the helper's erase starts AT the floor.
-    // It owns the erase → archive → repaint ordering constraint (DECSTBM
-    // paint-before-scroll: CUP writes precede the \n scroll so evicted rows hold
-    // real content) and all band bookkeeping; see
-    // terminal-compositor.frame-preserve-archive.ts.
-    archiveBandPrefixAndRepaintSurvivors(self, overflow, floorBanner);
-    return;
-  }
+  if (evictBannerPendingOverflow(self, desiredTopRow)) return;
 
-  // Legacy deficit-based eviction (unchanged).
+  // Legacy deficit-based eviction.
+  //
+  // Burst-safety gate (#3212): while `resizeGeometryStale` is set, both
+  // `prevTopRow` (= logUpdate.topRow, reset to 0 by resetGeometry on SIGWINCH)
+  // and `anchorRow` (shifted by applyScrollDelta mid-burst) may not reflect
+  // the actual screen layout.  The reported symptom — every failing burst shows
+  // `evict:enter` with anchorRow between CPR cycles — traces to `anchorDeficit`
+  // firing on a stale anchor coordinate: applyScrollDelta shifts anchorRow UP
+  // after a SHRINK step, and the next CPR-resolved repaint sees
+  // desiredTopRow < anchorRow (stale), producing a non-zero anchorDeficit that
+  // scrolls committed rows into native scrollback.  On the following GROW tmux
+  // pulls those rows back as frozen ghost duplicates.
+  //
+  // `resizeGeometryStale` is set ONLY by the SIGWINCH handler, not by
+  // resumeInput() — so legitimate suspend/resume anchor evictions are not
+  // blocked.  The eviction deferred here retries on the next steady-state
+  // repaint once repositionCommittedBand clears resizeGeometryStale.
+  //
+  // Terminal-protocol ordering constraint (DECSTBM): CUP writes must precede
+  // the \n scroll so evicted rows carry real content.  Deferring eviction when
+  // geometry is stale ensures the \n never fires against wrong absolute rows.
+  if (self.resizeGeometryStale) return;
   const growthDeficit = (self.hasCommitted && prevTopRow > 1) ? Math.max(0, prevTopRow - desiredTopRow) : 0;
   // Anchor-row enforcement (legacy ceiling): never let the frame top climb
   // above a supplied pre-arm ceiling (welcome banner / update notice)
@@ -213,40 +97,53 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
   const anchorDeficit =
     desiredTopRow < self.anchorRow! ? self.anchorRow! - desiredTopRow : 0;
   const deficit = Math.max(growthDeficit, anchorDeficit);
-  if (deficit > 0) {
-    evictRowsToScrollback(self, deficit);
-    // Everything (including pre-arm content) scrolled up by `deficit`, so the
-    // safe ceiling moves up the same amount. Clamp at 1; once the banner has
-    // fully scrolled into scrollback there is nothing left to protect.
-    if (self.anchorRow !== undefined && self.anchorRow > 1) {
-      self.anchorRow = Math.max(1, self.anchorRow - deficit);
+  if (deficit > 0) scrollBannerDeficit(self, deficit);
+}
+
+/**
+ * Banner path: scroll `deficit` rows (everything, including pre-arm content,
+ * moves up) and shift the anchor floor and the tracked committed band to match.
+ * Extracted from preserveRowsBeforeFrameRender (one whole step, explicit params).
+ */
+function scrollBannerDeficit(self: FrameHost, deficit: number): void {
+  // Archived-prefix rows painted at the top must not scroll into history a
+  // second time: drop them by repaint BEFORE the scroll (band-archived-prefix.ts),
+  // then scroll only the rest. Survivor positions match the full scroll's.
+  const droppedArchived = dropScrollingArchivedRows(self, deficit);
+  evictRowsToScrollback(self, deficit - droppedArchived);
+  // Everything (including pre-arm content) scrolled up by `deficit`, so the
+  // safe ceiling moves up the same amount. Clamp at 1; once the banner has
+  // fully scrolled into scrollback there is nothing left to protect.
+  if (self.anchorRow !== undefined && self.anchorRow > 1) {
+    self.anchorRow = Math.max(1, self.anchorRow - deficit);
+  }
+  // The committed band scrolled up by the same `deficit` (a small growth —
+  // e.g. the spinner appearing — does NOT push it off-screen; it stays in
+  // the viewport, one row higher). Shift its tracked rows so a later shrink
+  // re-pins at the right screen position. Drop only the lines that crossed
+  // ABOVE the anchor floor into terminal scrollback, so the re-pin never
+  // paints scrolled-away content back into the viewport (which would
+  // duplicate what the terminal already holds in scrollback).
+  if (self.committedBand.length > 0) {
+    self.committedBandTopRow -= deficit; // as-if coordinates (dropScrollingArchivedRows)
+    self.committedBandBottomRow -= deficit;
+    const floor = Math.max(self.anchorRow ?? 1, 1);
+    if (self.committedBandTopRow < floor) {
+      const lost = floor - self.committedBandTopRow;
+      self.committedBand = self.committedBand.slice(lost);
+      self.committedBandMeta = self.committedBandMeta.slice(lost); // #540: keep 1:1
+      self.committedBandArchivedPrefix = Math.max(0, self.committedBandArchivedPrefix - lost);
+      self.committedBandTopRow = floor;
     }
-    // The committed band scrolled up by the same `deficit` (a small growth —
-    // e.g. the spinner appearing — does NOT push it off-screen; it stays in
-    // the viewport, one row higher). Shift its tracked rows so a later shrink
-    // re-pins at the right screen position. Drop only the lines that crossed
-    // ABOVE the anchor floor into terminal scrollback, so the re-pin never
-    // paints scrolled-away content back into the viewport (which would
-    // duplicate what the terminal already holds in scrollback).
-    if (self.committedBand.length > 0) {
-      self.committedBandTopRow -= deficit;
-      self.committedBandBottomRow -= deficit;
-      const floor = Math.max(self.anchorRow ?? 1, 1);
-      if (self.committedBandTopRow < floor) {
-        const lost = floor - self.committedBandTopRow;
-        self.committedBand = self.committedBand.slice(lost);
-        self.committedBandMeta = self.committedBandMeta.slice(lost); // #540: keep 1:1
-        self.committedBandTopRow = floor;
-      }
-      if (self.committedBand.length === 0 || self.committedBandBottomRow < floor) {
-        self.clearCommittedBand();
-      } else {
-        // Survivors were scrolled by the terminal as real on-screen rows.
-        // The collapse-time pending-overflow eviction above (lines 158-227)
-        // handles partially-pending bands before this deficit path runs, so
-        // any survivors reaching here are fully materialized — none pending.
-        self.committedBandPaintedRows = self.committedBand.length;
-      }
+    if (self.committedBand.length === 0 || self.committedBandBottomRow < floor) {
+      self.clearCommittedBand();
+    } else {
+      // Survivors were scrolled by the terminal as real on-screen rows.
+      // The collapse-time pending-overflow eviction above (in evictNoBannerPath /
+      // evictBannerPendingOverflow) handles partially-pending bands before this
+      // deficit path runs, so any survivors reaching here are fully
+      // materialized — none pending.
+      self.committedBandPaintedRows = self.committedBand.length;
     }
   }
 }

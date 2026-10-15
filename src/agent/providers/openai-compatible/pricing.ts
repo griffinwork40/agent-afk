@@ -166,3 +166,41 @@ export function deriveCallCostUsd(
 
   return inputCost + cachedCost + outputCost;
 }
+
+/**
+ * OpenAI fast (priority) tier price multiplier.
+ *
+ * Contract: applies ONLY when the response CONFIRMED `service_tier:
+ * "priority"` — not merely when it was requested — so a silently-downgraded
+ * call is billed at standard rates. Approximate: sourced from
+ * https://platform.openai.com/docs/guides/fast-mode (not independently re-checked).
+ * Marked approximate because OpenAI's published rate is 2× standard and may
+ * change; this expression is intentionally isolated here so a one-line edit
+ * updates all callers.
+ */
+const OPENAI_FAST_MULTIPLIER = 2;
+
+/**
+ * Contract: same as {@link deriveCallCostUsd} but applies the
+ * {@link OPENAI_FAST_MULTIPLIER} (2×) when `confirmedPriorityTier` is true.
+ *
+ * `confirmedPriorityTier` must come from the API response's `service_tier`
+ * field, NOT from the request intent — we price what was billed, not what
+ * was asked. Returns `undefined` when the model is unpriced (same contract
+ * as the base function).
+ *
+ * Pure: no env reads, no clock. Approximate: see
+ * https://platform.openai.com/docs/guides/fast-mode — the 2× rate is
+ * OpenAI's stated public multiplier and may change.
+ */
+export function deriveCallCostUsdWithTier(
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+  cachedInputTokens = 0,
+  confirmedPriorityTier = false,
+): number | undefined {
+  const base = deriveCallCostUsd(model, inputTokens, outputTokens, cachedInputTokens);
+  if (base === undefined) return undefined;
+  return confirmedPriorityTier ? base * OPENAI_FAST_MULTIPLIER : base;
+}

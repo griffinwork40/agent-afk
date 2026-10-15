@@ -15,12 +15,12 @@ const mockClose = vi.fn();
 // The MemoryStore constructor mock is defined inside vi.mock (hoisted), so we
 // use vi.hoisted to keep a stable reference to it across the hoist boundary.
 const MockMemoryStore = vi.hoisted(() =>
-  vi.fn().mockImplementation(() => ({
+  vi.fn().mockImplementation(function () { return {
     search: mockSearch,
     loadHot: mockLoadHot,
     hotUsage: mockHotUsage,
     close: mockClose,
-  })),
+  }; }),
 );
 
 vi.mock('../agent/memory/memory-store.js', () => ({

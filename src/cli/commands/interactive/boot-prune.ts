@@ -82,7 +82,7 @@ export async function bootPruneWorktrees(opts?: {
   let repoRoot: string;
   try {
     // Pass the module-scope execFile so the existing test suite's
-    // vi.mock('node:child_process') stub is honoured.
+    // `vi.mock` stub of 'node:child_process' is honoured.
     repoRoot = await resolveRepoRoot({ mode: 'git-common-dir', execFile });
   } catch {
     return { ran: false, removedCount: 0, skippedReason: 'not-in-repo' };

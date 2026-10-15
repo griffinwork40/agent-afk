@@ -15,14 +15,16 @@
  * unknown-cast — the same pattern used in `parse-provider-agent-tool.test.ts`.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
+import { rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { buildDaemonSessionFactory } from './daemon-session-factory.js';
+import { buildDaemonSessionFactory, type BuildDaemonSessionFactoryOpts, type DaemonSessionFactory } from './daemon-session-factory.js';
 import type { AgentConfig } from '../../agent/types.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
 import type { ToolPermissionConfig } from '../../agent/tools/permissions.js';
+import { closeStore } from '../../agent/goals/goal-store.js';
 
 // ---------------------------------------------------------------------------
 // Helpers — read private provider internals (same pattern as
@@ -56,6 +58,32 @@ function readComposeExecutor(provider: AnthropicDirectProvider): unknown {
 const TEST_API_KEY = 'sk-ant-test-dummy-key-for-unit-tests';
 
 // ---------------------------------------------------------------------------
+// Teardown ownership. On Windows an open SQLite handle (kv.db / memory.db)
+// makes rmSync of the tmp AFK_HOME fail with EBUSY. Each test closes exactly
+// what IT owns: the sessions it spawned, the factories it built (via their
+// opt-in dispose(), which closes the stores the factory created), and the
+// goal-store singleton that injectGoalPrompt opens. Sessions deliberately do
+// NOT close provider stores — those are shared (see daemon-session-factory.ts).
+// ---------------------------------------------------------------------------
+
+const openSessions: Array<{ close: () => Promise<void> | void }> = [];
+function trackSession<T extends { close: () => Promise<void> | void }>(s: T): T {
+  openSessions.push(s);
+  return s;
+}
+const builtFactories: DaemonSessionFactory[] = [];
+function buildFactory(opts: BuildDaemonSessionFactoryOpts): DaemonSessionFactory {
+  const factory = buildDaemonSessionFactory(opts);
+  builtFactories.push(factory);
+  return factory;
+}
+async function releaseOwnedHandles(): Promise<void> {
+  await Promise.all(openSessions.splice(0).map((s) => Promise.resolve(s.close()).catch(() => undefined)));
+  for (const factory of builtFactories.splice(0)) factory.dispose();
+  closeStore();
+}
+
+// ---------------------------------------------------------------------------
 // Minimal AgentConfig — mirrors what CronScheduler.spawnSession() builds
 // before handing off to the sessionFactory.
 // ---------------------------------------------------------------------------
@@ -81,35 +109,65 @@ describe('buildDaemonSessionFactory', () => {
   // the same temp-dir convention memory-store.test.ts uses.
   let prevAfkHome: string | undefined;
   let tmpHome: string;
-  // Track sessions created per test so we can await close() before rmSync.
-  // On Windows, open SQLite handles cause rmSync to throw EBUSY.
-  const openSessions: Array<{ close: () => Promise<void> | void }> = [];
-  function trackSession<T extends { close: () => Promise<void> | void }>(s: T): T {
-    openSessions.push(s);
-    return s;
-  }
   beforeAll(() => {
     prevAfkHome = process.env['AFK_HOME'];
     tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-factory-test-'));
     process.env['AFK_HOME'] = tmpHome;
   });
   afterAll(async () => {
-    // Close all open sessions before removing the tmpdir on Windows.
-    await Promise.all(openSessions.map((s) => Promise.resolve(s.close()).catch(() => undefined)));
-    openSessions.length = 0;
+    await releaseOwnedHandles();
     if (prevAfkHome === undefined) delete process.env['AFK_HOME'];
     else process.env['AFK_HOME'] = prevAfkHome;
-    // Best-effort: on Windows a lingering SQLite handle (kv.db) may cause EBUSY.
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  it('closes each task workspace once while keeping factory-shared stores alive', async () => {
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const first = trackSession(factory(makeConfig()));
+    const second = trackSession(factory(makeConfig()));
+    type Stores = { workspaceStore: { close(): void }; memoryStore: { close(): void }; stateStore: { close(): void } };
+    const stores = (s: unknown) => (s as { config: { provider: Stores } }).config.provider;
+    const a = stores(first);
+    const b = stores(second);
+    expect(a.workspaceStore).not.toBe(b.workspaceStore);
+    expect(a.memoryStore).toBe(b.memoryStore);
+    expect(a.stateStore).toBe(b.stateStore);
+    const workspaceA = vi.spyOn(a.workspaceStore, 'close');
+    const workspaceB = vi.spyOn(b.workspaceStore, 'close');
+    const memory = vi.spyOn(a.memoryStore, 'close');
+    const state = vi.spyOn(a.stateStore, 'close');
+    await Promise.all([first.close(), first.close()]);
+    expect(workspaceA).toHaveBeenCalledTimes(1);
+    expect(workspaceB).not.toHaveBeenCalled();
+    expect(memory).not.toHaveBeenCalled();
+    expect(state).not.toHaveBeenCalled();
+    await second.close();
+    factory.dispose();
+    factory.dispose();
+    expect(workspaceA).toHaveBeenCalledTimes(1);
+    expect(workspaceB).toHaveBeenCalledTimes(1);
+    expect(memory).toHaveBeenCalledTimes(1);
+    expect(state).toHaveBeenCalledTimes(1);
+  });
+
+  it('dispose releases residual task workspaces without double-close on later session close', async () => {
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const session = trackSession(factory(makeConfig()));
+    const provider = (session as unknown as { config: { provider: { workspaceStore: { close(): void } } } }).config.provider;
+    const close = vi.spyOn(provider.workspaceStore, 'close');
+    factory.dispose();
+    factory.dispose();
+    await session.close();
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it('returns a factory function', () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     expect(typeof factory).toBe('function');
   });
 
   it('factory produces an AgentSession instance', () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     const session = trackSession(factory(makeConfig()));
     // AgentSession has a `sendMessage` method — use it as a duck-type check.
     expect(typeof session.sendMessage).toBe('function');
@@ -117,7 +175,7 @@ describe('buildDaemonSessionFactory', () => {
   });
 
   it('session provider is an AnthropicDirectProvider for an Anthropic-routed model', () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     const session = trackSession(factory(makeConfig()));
     const internals = session as unknown as { config?: { provider?: unknown } };
     const provider = internals.config?.provider;
@@ -126,7 +184,7 @@ describe('buildDaemonSessionFactory', () => {
   });
 
   it("provider allowedTools contains 'agent', 'skill', and 'compose'", () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     const session = trackSession(factory(makeConfig()));
     const internals = session as unknown as { config?: { provider?: unknown } };
     const provider = internals.config?.provider as AnthropicDirectProvider;
@@ -141,7 +199,7 @@ describe('buildDaemonSessionFactory', () => {
   });
 
   it('subagentExecutor is truthy (not bare provider)', () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     const session = trackSession(factory(makeConfig()));
     const internals = session as unknown as { config?: { provider?: unknown } };
     const provider = internals.config?.provider as AnthropicDirectProvider;
@@ -153,7 +211,7 @@ describe('buildDaemonSessionFactory', () => {
   });
 
   it('skillExecutor is truthy', () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     const session = trackSession(factory(makeConfig()));
     const internals = session as unknown as { config?: { provider?: unknown } };
     const provider = internals.config?.provider as AnthropicDirectProvider;
@@ -165,7 +223,7 @@ describe('buildDaemonSessionFactory', () => {
   });
 
   it('composeExecutor is truthy', () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     const session = trackSession(factory(makeConfig()));
     const internals = session as unknown as { config?: { provider?: unknown } };
     const provider = internals.config?.provider as AnthropicDirectProvider;
@@ -177,7 +235,7 @@ describe('buildDaemonSessionFactory', () => {
   });
 
   it('preserves permissionMode:bypassPermissions from the incoming config', () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     const config = makeConfig({ permissionMode: 'bypassPermissions' });
     const session = trackSession(factory(config));
     // AgentSession stores config; the field survives the spread.
@@ -187,7 +245,7 @@ describe('buildDaemonSessionFactory', () => {
   });
 
   it('passes a cwd from opts into the config', () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY, cwd: '/tmp/my-repo' });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY, cwd: '/tmp/my-repo' });
     const config = makeConfig();
     const session = trackSession(factory(config));
     // cwd comes from opts and is in the provider/executor, but the spread
@@ -212,7 +270,7 @@ describe('buildDaemonSessionFactory', () => {
       seal: async () => undefined,
     } as unknown as NonNullable<AgentConfig['traceWriter']>;
 
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     const session = trackSession(factory(makeConfig({ traceWriter })));
     const internals = session as unknown as { config?: { provider?: unknown } };
     const provider = internals.config?.provider as AnthropicDirectProvider;
@@ -243,8 +301,8 @@ describe('buildDaemonSessionFactory', () => {
     let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
     try {
       process.env[key] = '1';
-      const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
-      session = factory(makeConfig());
+      const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+      session = trackSession(factory(makeConfig()));
       const internals = session as unknown as { config?: { provider?: unknown } };
       const provider = internals.config?.provider as AnthropicDirectProvider;
 
@@ -260,6 +318,173 @@ describe('buildDaemonSessionFactory', () => {
       if (original === undefined) delete process.env[key];
       else process.env[key] = original;
       void session?.close().catch(() => undefined);
+    }
+  });
+});
+
+describe('buildDaemonSessionFactory — per-task cwd wiring', () => {
+  // Verifies that wireExecutors receives config.cwd (the per-task cwd set by
+  // session-spawn.ts) rather than the fixed daemon-wide opts.cwd. This is the
+  // load-bearing fix: subagents, skills, and compose nodes inherit the task cwd.
+  let tmpAfkHome: string;
+
+  beforeAll(() => {
+    tmpAfkHome = mkdtempSync(join(tmpdir(), 'dsf-cwd-'));
+    process.env['AFK_HOME'] = tmpAfkHome;
+  });
+
+  afterAll(async () => {
+    await releaseOwnedHandles();
+    delete process.env['AFK_HOME'];
+    rmSync(tmpAfkHome, { recursive: true, force: true });
+  });
+
+  it('wireExecutors gets config.cwd when it differs from opts.cwd', () => {
+    const daemonWideCwd = tmpAfkHome; // the "daemon-wide" cwd
+    const taskCwd = join(tmpdir()); // the per-task cwd (a different, real dir)
+    const factory = buildFactory({
+      model: 'sonnet',
+      apiKey: TEST_API_KEY,
+      cwd: daemonWideCwd,
+    });
+    // Simulate session-spawn.ts setting cwd to taskCwd on the config:
+    const config = makeConfig({ cwd: taskCwd });
+    const session = trackSession(factory(config));
+    const internals = session as unknown as { config?: AgentConfig };
+    const provider = internals.config?.provider as AnthropicDirectProvider;
+    const subExec = readSubagentExecutor(provider) as { ctx?: { cwd?: string } };
+    // The subagentExecutor's cwd must be the per-task cwd, not the daemon-wide one
+    expect(subExec.ctx?.cwd).toBe(taskCwd);
+    void session.close().catch(() => undefined);
+  });
+
+  it('wireExecutors falls back to opts.cwd when config.cwd is absent', () => {
+    const daemonWideCwd = tmpAfkHome;
+    const factory = buildFactory({
+      model: 'sonnet',
+      apiKey: TEST_API_KEY,
+      cwd: daemonWideCwd,
+    });
+    // config.cwd not set — represents a task with no per-task cwd
+    const config = makeConfig();
+    const session = trackSession(factory(config));
+    const internals = session as unknown as { config?: AgentConfig };
+    const provider = internals.config?.provider as AnthropicDirectProvider;
+    const subExec = readSubagentExecutor(provider) as { ctx?: { cwd?: string } };
+    expect(subExec.ctx?.cwd).toBe(daemonWideCwd);
+    void session.close().catch(() => undefined);
+  });
+  it('executors fork from a deferred parent exposing the daemon session journal (subagents journal via forSubagent)', () => {
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const session = trackSession(factory(makeConfig()));
+    const provider = (session as unknown as { config?: { provider?: unknown } }).config?.provider as AnthropicDirectProvider;
+    expect(session.messageJournal).toBeDefined();
+    type Ctx = { ctx?: { parentSession?: { messageJournal?: unknown } } };
+    for (const exec of [readSubagentExecutor(provider), readSkillExecutor(provider), readComposeExecutor(provider)]) {
+      // Same object: fork-child-config turns it into `forSubagent(childId)`.
+      expect((exec as Ctx).ctx?.parentSession?.messageJournal).toBe(session.messageJournal);
+    }
+    void session.close().catch(() => undefined);
+  });
+});
+
+describe('buildDaemonSessionFactory — maxBudgetUsd wiring (#2297)', () => {
+  // Verifies AFK_MAX_BUDGET_USD is honored by daemon sessions so the budget
+  // knob is not silently ignored on unattended surfaces.
+  let tmpAfkHome: string;
+
+  beforeAll(() => {
+    tmpAfkHome = mkdtempSync(join(tmpdir(), 'dsf-budget-'));
+    process.env['AFK_HOME'] = tmpAfkHome;
+  });
+
+  afterAll(async () => {
+    // Close all SQLite handles (kv.db, memory.db) opened by factory.dispose()
+    // and closeStore() BEFORE removing the temp dir. On Windows an open handle
+    // causes rmSync / fs.rm to fail with EBUSY.
+    await releaseOwnedHandles();
+    delete process.env['AFK_HOME'];
+    // Belt-and-braces: retries cover any residual async flush on Windows.
+    await rm(tmpAfkHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  });
+
+  it('forwards config.maxBudgetUsd when already set (e.g. by session-spawn.ts)', () => {
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const session = trackSession(factory(makeConfig({ maxBudgetUsd: 7.5 })));
+    const internals = session as unknown as { config?: AgentConfig };
+    expect(internals.config?.maxBudgetUsd).toBe(7.5);
+    void session.close().catch(() => undefined);
+  });
+
+  it('reads AFK_MAX_BUDGET_USD from env when config.maxBudgetUsd is absent', () => {
+    const key = 'AFK_MAX_BUDGET_USD';
+    const original = process.env[key];
+    let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
+    try {
+      process.env[key] = '3.00';
+      const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+      session = trackSession(factory(makeConfig()));
+      const internals = session as unknown as { config?: AgentConfig };
+      expect(internals.config?.maxBudgetUsd).toBe(3);
+    } finally {
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+      void session?.close().catch(() => undefined);
+    }
+  });
+
+  it('leaves maxBudgetUsd undefined when AFK_MAX_BUDGET_USD is unset (uncapped)', () => {
+    const key = 'AFK_MAX_BUDGET_USD';
+    const original = process.env[key];
+    let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
+    try {
+      delete process.env[key];
+      const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+      session = trackSession(factory(makeConfig()));
+      const internals = session as unknown as { config?: AgentConfig };
+      expect(internals.config?.maxBudgetUsd).toBeUndefined();
+    } finally {
+      if (original !== undefined) process.env[key] = original;
+      void session?.close().catch(() => undefined);
+    }
+  });
+
+  it('leaves maxBudgetUsd undefined when AFK_MAX_BUDGET_USD is empty string (not a $0 hard-stop)', () => {
+    const key = 'AFK_MAX_BUDGET_USD';
+    const original = process.env[key];
+    let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
+    try {
+      process.env[key] = '';
+      const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+      session = trackSession(factory(makeConfig()));
+      const internals = session as unknown as { config?: AgentConfig };
+      expect(internals.config?.maxBudgetUsd).toBeUndefined();
+    } finally {
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+      void session?.close().catch(() => undefined);
+    }
+  });
+
+  it('leaves maxBudgetUsd undefined and warns when AFK_MAX_BUDGET_USD is malformed (does not throw)', () => {
+    const key = 'AFK_MAX_BUDGET_USD';
+    const original = process.env[key];
+    let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      process.env[key] = 'unlimited';
+      const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+      // Must not throw even with a malformed env value
+      session = trackSession(factory(makeConfig()));
+      const internals = session as unknown as { config?: AgentConfig };
+      expect(internals.config?.maxBudgetUsd).toBeUndefined();
+      // A warning must have been emitted
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+      void session?.close().catch(() => undefined);
+      vi.restoreAllMocks();
     }
   });
 });

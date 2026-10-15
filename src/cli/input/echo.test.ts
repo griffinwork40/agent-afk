@@ -6,7 +6,7 @@
  * against the right edge of the terminal.
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import stringWidth from 'string-width';
 
 /** Remove ANSI escape sequences so assertions work in any chalk level. */
@@ -47,6 +47,25 @@ describe('formatSubmittedEcho', () => {
     expect(result.endsWith(buffer)).toBe(true);
     expect(stringWidth(result)).toBe(terminalWidth - 1);
     expect(result).toBe('▶ ' + ' '.repeat(terminalWidth - 1 - stringWidth(buffer) - 2) + buffer);
+  });
+
+  it('centered content: right-aligns to the content band edge, not the terminal edge', async () => {
+    // Regression: only the LEFT centering margin was subtracted, so with
+    // AFK_CENTER_CONTENT on a wide pane the echoed message was stranded in the
+    // terminal's top-right corner, far outside the centered column.
+    vi.stubEnv('AFK_CENTER_CONTENT', '1');
+    vi.stubEnv('AFK_TEXT_MEASURE', '100');
+    try {
+      const fn = await importEcho();
+      const terminalWidth = 211;
+      const margin = Math.floor((terminalWidth - 100) / 2); // 55, prepended later by commitAbove
+      const result = strip(fn({ buffer: '/review 2219', promptText: 'afk › ', isTTY: true, terminalWidth }));
+      expect(result.endsWith('/review 2219')).toBe(true);
+      // Band is [margin, width - margin): content ends one column inside its right edge.
+      expect(margin + stringWidth(result)).toBe(terminalWidth - margin - 1);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('card path: every content line ends flush right with the cyan bar', async () => {
@@ -189,6 +208,63 @@ describe('formatSubmittedEcho', () => {
       expect(withUndef).toBe(baseline);
       expect(withEmpty).toBe(baseline);
     });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Card-path band overflow regression (AFK_CENTER_CONTENT)
+  //
+  // Spec: with AFK_CENTER_CONTENT=1, AFK_TEXT_MEASURE=100, terminalWidth 211,
+  // a single-line buffer of ~120 visible chars triggers the card path
+  // (isLong = bufferW >= cols - 2, where cols = rawCols - 2*marginLen = 101).
+  // The card must be sized to the content band (cols = 101), not the full
+  // terminal (211). Every stripped output row must satisfy:
+  //
+  //   margin + stringWidth(row) <= rawCols - margin - 1
+  //
+  // i.e. the row (plus the margin commitAbove will prepend) fits within the
+  // band with the last column reserved (DECAWM ghost prevention).
+  //
+  // Before the fix, card({kind:'user', body}) sized to getTerminalWidth()
+  // (211), producing rows up to 210 columns wide. With the 55-column margin
+  // prepended that is 265 columns, past the terminal edge.
+  // ────────────────────────────────────────────────────────────────────────
+  it('AFK_CENTER_CONTENT card path: every output row fits inside the centered band', async () => {
+    vi.stubEnv('AFK_CENTER_CONTENT', '1');
+    vi.stubEnv('AFK_TEXT_MEASURE', '100');
+    let originalColumns: PropertyDescriptor | undefined;
+    try {
+      // rawCols=211, measure=100 → margin = floor((211-100)/2) = 55
+      // cols = 211 - 2*55 = 101
+      // A 120-char buffer is isLong (bufferW=120 >= 101-2=99), so it takes the card path.
+      const rawCols = 211;
+      const margin = Math.floor((rawCols - 100) / 2); // 55
+      // Set process.stdout.columns so getTerminalWidth() returns rawCols in card.ts.
+      originalColumns = Object.getOwnPropertyDescriptor(process.stdout, 'columns');
+      Object.defineProperty(process.stdout, 'columns', { value: rawCols, configurable: true });
+      const buffer = ('word '.repeat(25)).trimEnd(); // 24 'word ' + 'word' = 120 visible chars
+      const fn = await importEcho();
+      const result = fn({ buffer, promptText: 'afk › ', isTTY: true, terminalWidth: rawCols });
+      const stripped = strip(result);
+      const lines = stripped.split('\n');
+      // Must have multiple lines (separator + content rows).
+      expect(lines.length).toBeGreaterThan(1);
+      // Every row: margin + stringWidth(row) <= rawCols - margin - 1
+      // i.e. stringWidth(row) <= rawCols - 2*margin - 1 = cols - 1 = 100
+      const bandInner = rawCols - 2 * margin; // 101 = cols
+      for (const line of lines) {
+        const w = stringWidth(line);
+        expect(
+          w,
+          `row width ${w} exceeds band ceiling ${bandInner - 1}: ${JSON.stringify(line)}`,
+        ).toBeLessThanOrEqual(bandInner - 1);
+      }
+      // The card bar marker must be present.
+      expect(stripped).toContain('│');
+    } finally {
+      vi.unstubAllEnvs();
+      if (originalColumns) Object.defineProperty(process.stdout, 'columns', originalColumns);
+      else delete (process.stdout as { columns?: number }).columns;
+    }
   });
 });
 

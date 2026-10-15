@@ -20,6 +20,7 @@ import type { ProviderQuery, ProviderEvent } from '../provider.js';
 import type { SessionStateManager } from './session-state.js';
 import type { SessionShutdown } from './session-shutdown.js';
 import type { LedgerLifecycle } from './ledger-lifecycle.js';
+import type { JournalLifecycle } from './journal-lifecycle.js';
 
 /** Context bag threaded into {@link resetSession}. */
 export interface ResetDeps {
@@ -31,6 +32,7 @@ export interface ResetDeps {
   getInitPromise: () => Promise<void> | null;
   getShutdown: () => SessionShutdown;
   getLedger: () => LedgerLifecycle;
+  getJournal: () => JournalLifecycle;
   getStateManager: () => SessionStateManager;
   /** Strips resume-context fields and triggers the SDK lifecycle rebuild. */
   reinitialize: (patchConfig: (prev: AgentConfig) => AgentConfig) => void;
@@ -83,16 +85,25 @@ export async function resetSession(deps: ResetDeps): Promise<void> {
   }
   deps.getStateManager().resolveInitializationIfNeeded();
 
+  // The journal pins its session id on first resolution and non-cli surfaces
+  // mint a new id after a reset, so the old journal is closed here and
+  // `reinitialize` opens a fresh one (fresh lazy id accessor) before the
+  // provider lifecycle is rebuilt; `markCleared` below folds it to empty.
+  // Ordering: AFTER the provider close + iterator drain (an interrupted turn's
+  // final journal sync must land in the still-open writer), BEFORE the rebuild.
+  await deps.getJournal().closeForReset();
+
   // Invariant: /clear must yield a fresh conversation, not silently
   // re-attach to a previously-resumed session. Strip resume-context fields
   // so initSdkLifecycle() below starts a new conversation. See the full
   // rationale in the pre-extraction version of reset().
   try {
     deps.reinitialize((prev) => {
-      const next = { ...prev };
+      const next = deps.getJournal().stripForReset(prev);
       delete next.resume;
       delete next.sessionId;
       delete next.resumeHistory;
+      delete next.resumeMessages;
       delete next.resumeSessionAt;
       delete next.continue;
       delete next.forkSession;
@@ -105,4 +116,5 @@ export async function resetSession(deps: ResetDeps): Promise<void> {
       { cause: err },
     );
   }
+  deps.getJournal().markCleared();
 }

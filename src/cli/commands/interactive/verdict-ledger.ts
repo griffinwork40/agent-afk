@@ -29,9 +29,9 @@
 import type { TerminalKind, TerminalState } from './terminal-state.js';
 import { palette } from '../../palette.js';
 import { displayWidth, truncateDisplayWidth } from '../../display.js';
-import { getTerminalWidth, ResizeBus } from '../../terminal-size.js';
+import { ResizeBus, getTerminalWidth } from '../../terminal-size.js';
 import { isPlainOutputRequested } from '../../../config/env.js';
-import { contentMargin } from '../../render/measure.js';
+import { contentBand, contentMargin } from '../../render/measure.js';
 
 /**
  * Compact glyph + tone for a terminal kind on the ledger rail.
@@ -141,7 +141,8 @@ export function createVerdictLedger(opts: VerdictLedgerOptions = {}): VerdictLed
   function doRepaint(): void {
     if (!started || !stream?.isTTY) return;
 
-    const line = renderRail();
+    const cols = stream!.columns ?? 80;
+    const line = renderRail(cols);
     const totalRows = currentTotalRows();
     const newRowCount = line !== null && totalRows > 1 ? 1 : 0;
 
@@ -156,7 +157,9 @@ export function createVerdictLedger(opts: VerdictLedgerOptions = {}): VerdictLed
     const row = paintRow(totalRows);
     // Content centering (AFK_CENTER_CONTENT): prepend the left margin so the
     // verdict ledger rail aligns with centered scrollback and overlay content.
-    const pad = contentMargin();
+    // Pass cols explicitly so the margin is derived from the same width used
+    // by renderRail() above — both must agree on the band geometry.
+    const pad = contentMargin(cols);
     stream!.write('\x1b[s');
     stream!.write(`\x1b[${row};1H`);
     stream!.write('\x1b[2K');
@@ -176,7 +179,15 @@ export function createVerdictLedger(opts: VerdictLedgerOptions = {}): VerdictLed
 
   // ── Rail content renderer ────────────────────────────────────────────────────
 
-  function renderRail(): string | null {
+  /**
+   * Render the ledger rail, bounded to the content band so that when
+   * doRepaint() prepends contentMargin() the total never exceeds cols.
+   *
+   * Contract: maxW = contentBand(cols).width - 2, so margin + maxW <= cols - 2.
+   * When centering is off, contentBand returns width=cols and the math is
+   * identical to the previous cols-2 calculation — default path unchanged.
+   */
+  function renderRail(cols: number): string | null {
     if (kinds.length === 0) return null;
 
     const header = palette.dim('  ledger  ');
@@ -188,7 +199,10 @@ export function createVerdictLedger(opts: VerdictLedgerOptions = {}): VerdictLed
     const tail = palette.dim(`   (${kinds.length} turn${kinds.length === 1 ? '' : 's'})`);
 
     const composed = header + cells.join(sep) + tail;
-    const maxW = Math.max(20, getTerminalWidth() - 2);
+    // Use the band width so that margin + content <= cols.
+    // contentBand returns width=cols when centering is off, preserving the
+    // non-centered behaviour exactly.
+    const maxW = Math.max(20, contentBand(cols).width - 2);
     // If the rail overflows, fall back to glyphs-only — the colors carry
     // enough signal at a glance.
     if (displayWidth(composed) <= maxW) return composed;
@@ -225,7 +239,12 @@ export function createVerdictLedger(opts: VerdictLedgerOptions = {}): VerdictLed
     },
 
     render() {
-      return renderRail();
+      // Use the stream width when started; fall back to getTerminalWidth()
+      // for callers (tests) that call render() without a live stream.
+      // getTerminalWidth() reads process.stdout.columns with an 80-col fallback
+      // — the only approved read site per scripts/check-terminal-width.ts.
+      const cols = stream?.columns ?? getTerminalWidth();
+      return renderRail(cols);
     },
 
     setRowCountChangeHandler(handler) {

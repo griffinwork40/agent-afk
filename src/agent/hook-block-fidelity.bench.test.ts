@@ -128,6 +128,7 @@ const results: BenchResult[] = [];
 // Benchmark scenarios
 // ---------------------------------------------------------------------------
 
+// Windows: genuinely POSIX-only — executes #!/bin/sh hook scripts; no Windows shell equivalent (#703)
 describe.skipIf(process.platform === 'win32')(
   'hook-block fidelity (POSIX only)',
   () => {

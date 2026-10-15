@@ -4,7 +4,8 @@
  * Redirects memory dir to a tmpdir so tests never touch the real ~/.afk/.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import BetterSqlite3 from 'better-sqlite3';
 import { existsSync, readFileSync, mkdirSync, rmSync, appendFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -294,7 +295,7 @@ describe('Concurrent open', () => {
 });
 
 describe('Schema versioning', () => {
-  it('stamps the current schema version (4) on a fresh database', () => {
+  it('stamps the current schema version (5) on a fresh database', () => {
     // The store created in beforeEach is a fresh DB.
     // Re-open the same dir with better-sqlite3 directly to read the pragma.
     // Bumped to v3 in Stage D (nullable sessions.actor column), then to v4 by
@@ -304,7 +305,7 @@ describe('Schema versioning', () => {
     const db = new Database(join(tmpMemDir, 'memory.db'));
     const version = db.pragma('user_version', { simple: true });
     db.close();
-    expect(version).toBe(4);
+    expect(version).toBe(5);
   });
 
   it('opens cleanly when user_version matches SCHEMA_VERSION', () => {
@@ -328,6 +329,115 @@ describe('Schema versioning', () => {
     expect(() => new MemoryStore(tmpMemDir)).toThrow(
       /newer than this build supports/,
     );
+  });
+});
+
+describe('Access tracking (searchFacts)', () => {
+  it('increments access_count by 1 on each retrieval', () => {
+    const id = store.storeFact({
+      category: 'preference',
+      content: 'user prefers dark theme',
+      source_surface: 'cli',
+    });
+
+    // Before first search — access_count should be 0.
+    expect(store.getFact(id)!.access_count).toBe(0);
+
+    // First retrieval.
+    store.searchFacts('dark theme');
+    expect(store.getFact(id)!.access_count).toBe(1);
+
+    // Second retrieval.
+    store.searchFacts('dark theme');
+    expect(store.getFact(id)!.access_count).toBe(2);
+  });
+
+  it('sets last_accessed to a recent ISO timestamp on retrieval', () => {
+    const before = new Date().toISOString();
+    const id = store.storeFact({
+      category: 'learning',
+      content: 'sqlite fts5 porter stemmer',
+      source_surface: 'cli',
+    });
+
+    store.searchFacts('sqlite fts5');
+
+    const after = new Date().toISOString();
+    const fact = store.getFact(id)!;
+    expect(fact.last_accessed).not.toBeNull();
+    // last_accessed must fall within the test window.
+    expect(fact.last_accessed! >= before).toBe(true);
+    expect(fact.last_accessed! <= after).toBe(true);
+  });
+
+  it('does not change search result ordering after tracking update', () => {
+    store.storeFact({ category: 'convention', content: 'use pnpm not npm', source_surface: 'cli' });
+    store.storeFact({ category: 'preference', content: 'use pnpm workspaces', source_surface: 'cli' });
+
+    const first = store.searchFacts('pnpm').map((r) => r.content);
+
+    // Retrieve a second time — ordering must be stable regardless of access_count.
+    const second = store.searchFacts('pnpm').map((r) => r.content);
+
+    expect(second).toEqual(first);
+  });
+
+  it('does not alter the returned Fact shape (no extra rank field leaked)', () => {
+    store.storeFact({ category: 'decision', content: 'deploy on friday', source_surface: 'cli' });
+
+    const results = store.searchFacts('friday');
+    expect(results.length).toBe(1);
+
+    const fact = results[0]!;
+    // The Fact interface does not include a `rank` field from FTS5.
+    // searchFacts must strip rank before returning — assert it is absent.
+    expect('rank' in fact).toBe(false);
+    expect(typeof fact.id).toBe('number');
+    expect(typeof fact.content).toBe('string');
+    expect(typeof fact.access_count).toBe('number');
+  });
+
+  it('does not update access_count when the query returns no rows', () => {
+    const id = store.storeFact({
+      category: 'preference',
+      content: 'no match item zxqxzq',
+      source_surface: 'cli',
+    });
+
+    store.searchFacts('totally different query xyz');
+
+    // The fact was not in the result set — count must remain 0.
+    expect(store.getFact(id)!.access_count).toBe(0);
+  });
+
+  it('swallows a tracking failure without surfacing to the caller', () => {
+    store.storeFact({
+      category: 'convention',
+      content: 'robust search test',
+      source_surface: 'cli',
+    });
+
+    // Stub db.prepare so that the tracking UPDATE statement throws, while
+    // every other prepare call (the SELECT) works normally via the real DB.
+    const realDb = (store as unknown as { db: BetterSqlite3.Database }).db;
+    const realPrepare = realDb.prepare.bind(realDb);
+    vi.spyOn(realDb, 'prepare').mockImplementation((sql: string) => {
+      if (sql.trimStart().startsWith('UPDATE facts')) {
+        return {
+          run: () => { throw new Error('simulated tracking failure'); },
+        } as unknown as ReturnType<BetterSqlite3.Database['prepare']>;
+      }
+      return realPrepare(sql);
+    });
+
+    // searchFacts must still return results and must not throw.
+    let results: ReturnType<typeof store.searchFacts>;
+    expect(() => {
+      results = store.searchFacts('robust search');
+    }).not.toThrow();
+    expect(results!.length).toBe(1);
+
+    vi.restoreAllMocks();
   });
 });
 

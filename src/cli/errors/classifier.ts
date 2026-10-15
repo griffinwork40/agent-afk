@@ -7,6 +7,7 @@
  *  3. HookBlockedError
  *  4. TimeoutError
  *  5. HTTP 401 / AuthenticationError name
+ *  5b. Usage limit (UsageLimitError, or a raw ChatGPT usage_limit_reached body)
  *  6. HTTP 429 / rate-limit message
  *  6b. HTTP 529 / 503 (API overloaded)
  *  7. Not-in-git-repo message
@@ -18,10 +19,13 @@
 
 import { BudgetExceededError, HookBlockedError, TimeoutError, UnsupportedProviderConfigError, errorMessage } from '../../utils/errors.js';
 import { isRateLimitError, isNetworkError } from '../../utils/error-classifiers.js';
+import { usageLimitInfoOf } from '../../agent/usage/usage-limit-info.js';
+import { describeUsageLimit } from '../../agent/usage/usage-formatter.js';
 
 type ErrorKind =
   | 'auth'
   | 'rate_limit'
+  | 'usage_limit'
   | 'overloaded'
   | 'budget_exceeded'
   | 'unsupported_config'
@@ -108,11 +112,32 @@ export function classifyError(err: unknown): ClassifiedError {
     };
   }
 
+  // 5b. Usage limit. Above the generic 429 branch so a provider-labeled
+  // usage limit never reads as an "Anthropic rate limit". Matches a raw
+  // ChatGPT body even with no status (a mid-stream error).
+  const usageLimit = usageLimitInfoOf(err);
+  if (usageLimit !== null) {
+    const isAnthropic = usageLimit.provider === 'anthropic';
+    return {
+      kind: 'usage_limit',
+      userMessage: `${describeUsageLimit(usageLimit)}.`,
+      hint: isAnthropic && usageLimit.kind === 'credit'
+        ? 'Top up at https://console.anthropic.com/settings/billing, or switch to your Claude subscription.'
+        : isAnthropic
+          ? 'Wait for the reset, switch account with `claude login`, or switch model with /model, then resend.'
+          : 'Wait for the reset, or switch model with /model, then resend.',
+      exitCode: 1,
+      raw: err,
+    };
+  }
+
   // 6. HTTP 429 / rate limit
   if (errObj['status'] === 429 || isRateLimitError(err)) {
     return {
       kind: 'rate_limit',
-      userMessage: 'Anthropic rate limit reached. The request was rejected (HTTP 429).',
+      // Provider-neutral: subscription usage limits are caught by the
+      // usage_limit branch above, so this is a plain throttle from any provider.
+      userMessage: 'Rate limit reached. The request was rejected (HTTP 429).',
       hint: 'Wait a moment and retry, or reduce the request frequency.',
       exitCode: 1,
       raw: err,

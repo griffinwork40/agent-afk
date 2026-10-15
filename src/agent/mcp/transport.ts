@@ -30,7 +30,7 @@
  */
 
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import { StdioClientTransport, type StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js';
+import type { StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 
@@ -39,6 +39,7 @@ import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.
 import type { McpServerConfig } from './types.js';
 import { expandEnvRecord, expandEnvRecordForLayer, expandEnvString, expandHeadersForLayer } from './env.js';
 import { scrubDangerousEnv, type McpServerLayer } from './env-containment.js';
+import { TrackedStdioClientTransport } from './stdio-exit-guardian.js';
 
 /**
  * True for hostnames whose traffic never leaves the local machine — the
@@ -201,7 +202,10 @@ export function createTransport(
       ...(config.args ? { args: config.args } : {}),
       env: { ...base, ...expandedEnv },
     };
-    return { transport: new StdioClientTransport(params), isSSE: false };
+    // Tracked subclass: registers the child pid with the exit guardian so a
+    // server that ignores stdin EOF is SIGTERMed if afk exits before the
+    // SDK's unref'd close ladder reaches its own SIGTERM step.
+    return { transport: new TrackedStdioClientTransport(params), isSSE: false };
   }
 
   if (type === 'streamable-http' || type === 'sse') {

@@ -18,17 +18,21 @@ import type { ModelProvider } from '../../provider.js';
 import type { TraceSink } from '../../trace/index.js';
 import type { BackgroundAgentRegistry } from '../../background-registry.js';
 import type { SdkPluginConfig } from '../../types/sdk-types.js';
+import type { HookRegistry } from '../../hooks.js';
 import type { ChildProviderFactoryArgs } from '../nesting.js';
 import type { Surface } from '../../awareness/types.js';
 import type { ReadScopeInputs } from '../../subagent-read-scope.js';
 import type { SkillExecutor } from '../skill-executor.js';
+import type { JournalParent } from '../../subagent/fork-types.js';
 
 export interface SkillExecutorContext {
   parentSession: Pick<IAgentSession, 'sessionId' | 'getInputStreamRef' | 'abortSignal'> &
     // Optional: a skill orchestrator forked under a parent that exposes its
     // hook registry dispatches SubagentStop (incl. the shadow-verify nudge)
     // back to that parent. See SubagentManager.forkSubagent's parent fallback.
-    Partial<Pick<IAgentSession, 'hookRegistry'>>;
+    Partial<Pick<IAgentSession, 'hookRegistry'>> &
+    // Optional journal view; skill forks journal to its `forSubagent(id)`.
+    JournalParent;
   defaultModel?: string;
   /**
    * User-facing surface of the session that owns this executor (cli/telegram/
@@ -75,7 +79,27 @@ export interface SkillExecutorContext {
   openaiBaseUrl?: string;
   /** xAI endpoint forwarded through skill-forked agent descendants. */
   xaiBaseUrl?: string;
+  /**
+   * Plugin source for this executor's skill discovery (registry refresh and
+   * plugin SKILL.md bodies). Defined => the SOLE plugin source (`[]` => no
+   * plugins); undefined => scan every plugin root (today's behaviour).
+   * Threaded to nested executors by the depth-aware factory (nesting.ts).
+   */
   pluginConfigs?: SdkPluginConfig[];
+  /**
+   * Skill allowlist (#3442). Exact string equality on the requested skill
+   * name: `plugin:name` / `user:name` / `project:name` must be listed
+   * verbatim, and a bare `name` authorizes only the entry keyed exactly
+   * `name`. Enforced in `SkillExecutor.execute` before any registry lookup;
+   * undefined => no gate.
+   */
+  skillAllowlist?: readonly string[];
+  /**
+   * Hook registry for the per-call {@link SubagentManager}s this executor
+   * builds (fork-dispatch.ts, fork-child-config.ts), whose stub parents carry
+   * none, so SubagentStart/Stop fire for skill forks at every depth.
+   */
+  hookRegistry?: HookRegistry;
   depth?: number;
   maxDepth?: number;
   /**
@@ -106,6 +130,12 @@ export interface SkillExecutorContext {
     inheritedCwd?: string,
     inheritedReadScope?: ReadScopeInputs,
     skillDispatchName?: string,
+    // Forking child's journal view (read lazily): nested skill forks journal
+    // via its `forSubagent(id)`. Absent → nested skill forks run unjournaled.
+    journalParent?: JournalParent,
+    // Root (depth-0) session id for child-attribution (#2442); becomes the
+    // nested executor's `parentRootSessionId`.
+    rootSessionId?: string,
   ) => SkillExecutor;
   /**
    * Witness-layer trace writer. When provided, the per-call
@@ -218,6 +248,13 @@ export interface SkillExecutorContext {
   workspaceStore?: import('../../workspace/index.js').WorkspaceStore;
   /** Tree-wide delegation budget. Opt-in: undefined when no budget env vars set. */
   delegationBudget?: import('../../tools/delegation-budget.js').DelegationBudget;
+  /**
+   * Root (depth-0) session id inherited by this executor's parent. Threaded
+   * into the per-call {@link SubagentManager} so skill-forked sub-agents
+   * are attributed to the root record. Parity with
+   * {@link SubagentExecutorContext.parentRootSessionId}.
+   */
+  parentRootSessionId?: string;
 }
 
 export interface SkillInput {

@@ -351,3 +351,29 @@ describe('delegation-aware microcompaction', () => {
     expect(isMicrocompactPlaceholder(msgs[1]!.content)).toBe(false); // tail protected
   });
 });
+
+describe('microcompactToolResults firstClearedIndex', () => {
+  const indexedOps: MicrocompactOps<FakeMsg> = {
+    listToolResults(messages) {
+      return fakeOps.listToolResults(messages).map((ref, i) => ({
+        ...ref,
+        clear: ref.clear,
+        messageIndex: messages.findIndex((m, idx) => m.kind === 'tool_result' && messages.slice(0, idx + 1).filter((x) => x.kind === 'tool_result').length === i + 1),
+      }));
+    },
+  };
+
+  it('reports the message index of the earliest cleared block', () => {
+    const msgs = [txt('q'), tr(100), tr(10_000), txt('mid'), tr(20_000), tr(5_000)];
+    const r = microcompactToolResults(msgs, indexedOps, { thresholdBytes: 4_096, keepLast: 1 });
+    expect(r.blocksCleared).toBe(2);
+    expect(r.firstClearedIndex).toBe(2);
+  });
+
+  it('is absent when nothing was cleared or indices are not supplied', () => {
+    expect(microcompactToolResults([txt('q'), tr(10)], indexedOps, { keepLast: 0 }).firstClearedIndex).toBeUndefined();
+    const r = microcompactToolResults([txt('q'), tr(10_000), tr(1)], fakeOps, { thresholdBytes: 10, keepLast: 1 });
+    expect(r.blocksCleared).toBe(1);
+    expect(r.firstClearedIndex).toBeUndefined();
+  });
+});

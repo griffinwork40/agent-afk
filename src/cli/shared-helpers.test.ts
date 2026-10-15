@@ -19,6 +19,7 @@ import {
   OPERATOR_CONFIG_HEADER,
   composeSystemPrompt,
   isGrantManager,
+  parseBudgetEnv,
   resolveBaseSystemPrompt,
 } from './shared-helpers.js';
 import { loadConfig } from './config.js';
@@ -151,6 +152,18 @@ describe('resolveBaseSystemPrompt', () => {
     expect(source).toBe('framework+afk-md:/repo/AFK.md');
   });
 
+  it('exposes the bare overlay (no framework, no header) for unnamed subagents (#3324)', () => {
+    vi.mocked(loadConfig).mockReturnValue(fakeConfig('Operator says hi', 'afk-md:/repo/AFK.md'));
+    expect(resolveBaseSystemPrompt().overlay).toBe('Operator says hi');
+  });
+
+  it('omits overlay when none (or only whitespace) is configured', () => {
+    vi.mocked(loadConfig).mockReturnValue(fakeConfig(undefined, undefined));
+    expect(resolveBaseSystemPrompt()).not.toHaveProperty('overlay');
+    vi.mocked(loadConfig).mockReturnValue(fakeConfig('   ', 'afk-md:/repo/AFK.md'));
+    expect(resolveBaseSystemPrompt()).not.toHaveProperty('overlay');
+  });
+
   it('reports source "framework" when no overlay is configured', () => {
     vi.mocked(loadConfig).mockReturnValue(fakeConfig(undefined, undefined));
     const { prompt, source } = resolveBaseSystemPrompt();
@@ -237,5 +250,48 @@ describe('isGrantManager', () => {
       getGrants: () => ({ resolveBase: undefined, readRoots: [], writeRoots: [] }),
     };
     expect(isGrantManager(mock)).toBe(true);
+  });
+});
+
+// ── parseBudgetEnv warning-text tests (#3708) ─────────────────────────────────
+describe('parseBudgetEnv', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('warns without echoing the raw value for a token-shaped input', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tokenLikeValue = 'sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
+    parseBudgetEnv(tokenLikeValue, 'AFK_MAX_BUDGET_USD');
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const msg: string = warnSpy.mock.calls[0]?.[0] as string;
+    expect(msg).not.toContain(tokenLikeValue);
+    expect(msg).toContain('AFK_MAX_BUDGET_USD');
+  });
+
+  it('says "finite" for Infinity input', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    parseBudgetEnv('Infinity', 'AFK_MAX_BUDGET_USD');
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const msg: string = warnSpy.mock.calls[0]?.[0] as string;
+    expect(msg).toContain('finite');
+  });
+
+  it('says "finite" for -Infinity input', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    parseBudgetEnv('-Infinity', 'AFK_MAX_BUDGET_USD');
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const msg: string = warnSpy.mock.calls[0]?.[0] as string;
+    expect(msg).toContain('finite');
+  });
+
+  it('warns without echoing the raw value for a negative input', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sensitiveValue = 'sk-secret-negative-looking-token';
+    // Force the negative branch by using a plain negative number string
+    parseBudgetEnv('-5', 'AFK_MAX_BUDGET_USD');
+    const msg: string = warnSpy.mock.calls[0]?.[0] as string;
+    expect(msg).not.toContain(sensitiveValue);
+    expect(msg).not.toContain('-5');
   });
 });

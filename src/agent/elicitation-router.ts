@@ -35,6 +35,7 @@
 import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js';
 import { pushIfConfigured } from '../telegram/push.js';
 import { setPresenceBlocked } from './awareness/presence.js';
+import { recordQuestion, markResolved } from './elicitation/pending-question-store.js';
 
 export type ElicitationHandler = (
   request: ElicitationRequest,
@@ -42,6 +43,18 @@ export type ElicitationHandler = (
 ) => Promise<ElicitationResult>;
 
 const DECLINE: ElicitationResult = { action: 'decline' };
+
+/**
+ * Derive a stable question id from the elicitation request. Prefers the
+ * SDK-supplied `elicitationId` so records are de-duplicated on retry. Falls
+ * back to a timestamp-based id when the SDK omits the field (older servers).
+ */
+function questionIdFor(request: ElicitationRequest): string {
+  if (request.elicitationId !== undefined && request.elicitationId !== '') {
+    return request.elicitationId;
+  }
+  return `router-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
 
 /**
  * Cap on the model-authored `message` echoed to Telegram. The prompt itself is
@@ -108,6 +121,15 @@ function markBlocked(sessionId: string | undefined, blocked: boolean): void {
 
 class ElicitationRouter {
   private handler: ElicitationHandler | null = null;
+  /**
+   * Per-session handlers keyed by an opaque string supplied by the caller
+   * (e.g. a per-attempt UUID). Looked up by `options.sessionKey` in `route()`
+   * before falling back to the global `handler`. This eliminates the
+   * single-slot race where two concurrent daemon tasks overwrite each other's
+   * handler: each task installs into its own slot and uninstalls only that
+   * slot, leaving sibling sessions unaffected (#3619).
+   */
+  private readonly sessionHandlers = new Map<string, ElicitationHandler>();
   private queue: Promise<void> = Promise.resolve();
   private queueDepth = 0;
 
@@ -120,14 +142,39 @@ class ElicitationRouter {
   }
 
   /**
+   * Install a handler scoped to a single session attempt. The `key` must be
+   * unique per concurrent task (e.g. a per-attempt UUID). A second
+   * `installForSession` call with a different key does NOT overwrite the first,
+   * so two concurrent daemon tasks each get their own handler slot.
+   *
+   * Pair every `installForSession` with exactly one `uninstallForSession` in a
+   * `finally` block to avoid accumulating stale entries in the map.
+   */
+  installForSession(key: string, handler: ElicitationHandler): void {
+    this.sessionHandlers.set(key, handler);
+  }
+
+  /**
+   * Remove the per-session handler registered under `key`. No-op when the key
+   * is absent (idempotent, safe to call in a `finally` block even if install
+   * was never reached).
+   */
+  uninstallForSession(key: string): void {
+    this.sessionHandlers.delete(key);
+  }
+
+  /**
    * Whether an elicitation handler is currently installed. Deterministic
    * probe used by the ask-question PreToolUse gate (`ask-question-gate.ts`):
    * handler presence is the ground truth for "an interactive operator surface
    * (REPL/Telegram) is attached to this process". Read at call time — a
    * handler installed later is observed by subsequent probes.
+   *
+   * Returns true when either the global handler or ANY per-session handler is
+   * installed, so daemon tasks that use the keyed path still pass the gate.
    */
   hasHandler(): boolean {
-    return this.handler !== null;
+    return this.handler !== null || this.sessionHandlers.size > 0;
   }
 
   /** Number of requests currently waiting in (or executing from) the queue. */
@@ -137,7 +184,7 @@ class ElicitationRouter {
 
   route(
     request: ElicitationRequest,
-    options: { signal: AbortSignal; onActive?: () => void; sessionId?: string },
+    options: { signal: AbortSignal; onActive?: () => void; sessionId?: string; sessionKey?: string },
   ): Promise<ElicitationResult> {
     // Fast-path: already aborted before entering the queue
     if (options.signal.aborted) return Promise.resolve(DECLINE);
@@ -149,21 +196,49 @@ class ElicitationRouter {
     });
 
     // Capture handler at enqueue time so a later install() doesn't affect
-    // requests already in the queue.
-    const capturedHandler = this.handler;
+    // requests already in the queue. Per-session handler (keyed by sessionKey)
+    // takes priority over the global handler so concurrent daemon tasks each
+    // get their own handler rather than sharing the last-installed global one.
+    const capturedHandler =
+      (options.sessionKey !== undefined ? this.sessionHandlers.get(options.sessionKey) : undefined)
+      ?? this.handler;
+
+    // Derive a stable question id early so both the record and resolve calls
+    // use the same key regardless of which branch the queue body takes.
+    const questionId = questionIdFor(request);
 
     // Chain onto the serial queue; each call waits for all prior calls to finish.
     this.queue = this.queue.then(async () => {
       try {
         // Re-check abort after waiting in queue
         if (options.signal.aborted) {
+          try { markResolved(questionId, 'aborted'); } catch { /* non-fatal */ }
           resolveResult(DECLINE);
           return;
         }
+
+        // Determine the surface label before branching so both the attended
+        // and unattended paths record a consistent value.
+        const surface = capturedHandler
+          ? (options.sessionKey !== undefined ? 'session-handler' : 'global-handler')
+          : 'unattended';
+
+        // Persist the question durably before the handler is called so that a
+        // crash between here and markResolved leaves a `pending` record that
+        // can be inspected on restart. Fire-and-forget errors: a storage
+        // failure must never block or fail the elicitation path.
+        try {
+          recordQuestion(questionId, options.sessionId, surface, request.message);
+        } catch {
+          // Storage failure is non-fatal. The in-memory elicitation path
+          // continues unaffected; durability is best-effort for this slice.
+        }
+
         if (!capturedHandler) {
           // No handler = unattended surface. Surface the prompt out-of-band
           // (Telegram) instead of declining silently, then DECLINE to continue.
           notifyUnattendedElicitation(request);
+          try { markResolved(questionId, 'decline'); } catch { /* non-fatal */ }
           resolveResult(DECLINE);
           return;
         }
@@ -201,6 +276,13 @@ class ElicitationRouter {
             capturedHandler(request, options).catch(() => DECLINE),
             abortPromise,
           ]);
+          // Record resolution durably. The action is 'decline' when the abort
+          // signal won the race (abortPromise resolves to DECLINE). Non-fatal:
+          // a storage failure must never affect the elicitation result path.
+          try {
+            const action = options.signal.aborted ? 'aborted' : (result.action ?? 'decline');
+            markResolved(questionId, action);
+          } catch { /* non-fatal */ }
           resolveResult(result);
         } finally {
           markBlocked(options.sessionId, false);
@@ -215,6 +297,9 @@ class ElicitationRouter {
         // swallowed by `.catch(() => {})` on the queue chain, leaving
         // `resultPromise` pending forever. Idempotent: Promise resolve ignores
         // later calls, so on the happy path this is a no-op.
+        // Best-effort: resolve any stale pending record when a handler threw
+        // before reaching the normal markResolved path.
+        try { markResolved(questionId, 'decline'); } catch { /* non-fatal */ }
         resolveResult(DECLINE);
       }
     }).catch(() => {});
@@ -225,14 +310,3 @@ class ElicitationRouter {
 
 export const elicitationRouter = new ElicitationRouter();
 
-/**
- * The shim {@link buildQueryOptions} installs as `options.onElicitation`.
- * Indirection lets surfaces (`src/cli/commands/interactive.ts`, telegram)
- * hot-swap handlers without reconstructing the session.
- */
-export async function routeElicitation(
-  request: ElicitationRequest,
-  options: { signal: AbortSignal; onActive?: () => void; sessionId?: string },
-): Promise<ElicitationResult> {
-  return elicitationRouter.route(request, options);
-}

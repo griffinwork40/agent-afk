@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ServerResponse } from 'node:http';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   handleListSchedules,
   handleCreateSchedule,
@@ -10,6 +13,7 @@ import {
   handleDaemonStatus,
 } from './routes.schedules.js';
 import { trySyncToDaemon } from '../agent/daemon/http-client.js';
+import { addSchedule, toggleScheduleEnabled, updateSchedule } from '../agent/daemon/schedule-store.js';
 
 // ---- mocks -----------------------------------------------------------------
 
@@ -40,6 +44,11 @@ vi.mock('../agent/daemon/schedule-store.js', () => ({
   updateSchedule: vi.fn((id: string, patch: Record<string, unknown>) =>
     id === 'nightly-forge'
       ? { ...mockSchedules[0], ...patch, updatedAt: new Date().toISOString() }
+      : undefined,
+  ),
+  toggleScheduleEnabled: vi.fn((id: string, enabled: boolean) =>
+    id === 'nightly-forge'
+      ? { ...mockSchedules[0], enabled, updatedAt: new Date().toISOString() }
       : undefined,
   ),
   removeSchedule: vi.fn((id: string) => id === 'nightly-forge'),
@@ -138,6 +147,32 @@ describe('routes.schedules', () => {
       expect(json().status).toBe(400);
     });
 
+    it('rejects an invalid trigger value', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, {
+        name: 'Test',
+        command: '/test',
+        cron: '0 * * * *',
+        trigger: 'daily',
+      });
+      const { status, body } = json();
+      expect(status).toBe(400);
+      expect((body as { message: string }).message).toMatch(/trigger must be one of/);
+    });
+
+    it('rejects an invalid notifyOn value', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, {
+        name: 'Test',
+        command: '/test',
+        cron: '0 * * * *',
+        notifyOn: 'always_and_never',
+      });
+      const { status, body } = json();
+      expect(status).toBe(400);
+      expect((body as { message: string }).message).toMatch(/notifyOn must be one of/);
+    });
+
     it('enabled:false skips daemon sync and returns daemonSynced:false without syncNote', async () => {
       const { res, json } = makeRes();
       await handleCreateSchedule(res, {
@@ -171,6 +206,32 @@ describe('routes.schedules', () => {
     });
   });
 
+  describe('retry fields (#3243)', () => {
+    it('create threads valid maxAttempts / retryDelayMs into addSchedule', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, { name: 'R', command: '/r', cron: '0 * * * *', maxAttempts: 2, retryDelayMs: 1000 });
+      expect(json().status).toBe(201);
+      expect(vi.mocked(addSchedule)).toHaveBeenCalledWith(expect.objectContaining({ maxAttempts: 2, retryDelayMs: 1000 }));
+    });
+
+    it('create rejects out-of-bounds maxAttempts with 400', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, { name: 'R', command: '/r', cron: '0 * * * *', maxAttempts: 9 });
+      expect(json().status).toBe(400);
+      expect(vi.mocked(addSchedule)).not.toHaveBeenCalled();
+    });
+
+    it('update patches valid fields and rejects bad retryDelayMs', async () => {
+      const ok = makeRes();
+      await handleUpdateSchedule(ok.res, 'nightly-forge', { maxAttempts: 3 });
+      expect(ok.json().status).toBe(200);
+      expect(vi.mocked(updateSchedule)).toHaveBeenCalledWith('nightly-forge', expect.objectContaining({ maxAttempts: 3 }));
+      const bad = makeRes();
+      await handleUpdateSchedule(bad.res, 'nightly-forge', { retryDelayMs: 5 });
+      expect(bad.json().status).toBe(400);
+    });
+  });
+
   describe('handleUpdateSchedule', () => {
     it('updates an existing schedule', async () => {
       const { res, json } = makeRes();
@@ -190,6 +251,100 @@ describe('routes.schedules', () => {
       const { res, json } = makeRes();
       await handleUpdateSchedule(res, 'bad id with spaces', { name: 'x' });
       expect(json().status).toBe(400);
+    });
+  });
+
+  describe('per-task cwd validation', () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'afk-routes-cwd-'));
+    });
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const base = { name: 'Test', command: '/test', cron: '0 * * * *' };
+    const missing = () => join(dir, 'does-not-exist');
+
+    it('create: accepts a valid cwd and persists the resolved path', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, { ...base, cwd: dir });
+      expect(json().status).toBe(201);
+      expect(vi.mocked(addSchedule)).toHaveBeenCalledWith(expect.objectContaining({ cwd: dir }));
+    });
+
+    it('create: rejects a nonexistent cwd with 400', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, { ...base, cwd: missing() });
+      expect(json().status).toBe(400);
+      expect(vi.mocked(addSchedule)).not.toHaveBeenCalled();
+    });
+
+    it('create: rejects an empty cwd with 400 (does not fall back to process.cwd())', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, { ...base, cwd: '' });
+      expect(json().status).toBe(400);
+      expect(vi.mocked(addSchedule)).not.toHaveBeenCalled();
+    });
+
+    it('create: cwd: null is treated as absent (returns 201, no cwd passed to addSchedule)', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, { ...base, cwd: null });
+      expect(json().status).toBe(201);
+      // addSchedule must have been called without a cwd field
+      expect(vi.mocked(addSchedule)).toHaveBeenCalledWith(
+        expect.not.objectContaining({ cwd: expect.anything() }),
+      );
+    });
+
+    it('update: accepts a valid cwd', async () => {
+      const { res, json } = makeRes();
+      await handleUpdateSchedule(res, 'nightly-forge', { cwd: dir });
+      expect(json().status).toBe(200);
+      expect(vi.mocked(updateSchedule)).toHaveBeenCalledWith(
+        'nightly-forge',
+        expect.objectContaining({ cwd: dir }),
+      );
+    });
+
+    it('update: rejects a nonexistent cwd with 400', async () => {
+      const { res, json } = makeRes();
+      await handleUpdateSchedule(res, 'nightly-forge', { cwd: missing() });
+      expect(json().status).toBe(400);
+      expect(vi.mocked(updateSchedule)).not.toHaveBeenCalled();
+    });
+
+    it('update: cwd: "" clears a previously-pinned cwd (null semantics)', async () => {
+      const { res, json } = makeRes();
+      await handleUpdateSchedule(res, 'nightly-forge', { cwd: '' });
+      expect(json().status).toBe(200);
+      expect(vi.mocked(updateSchedule)).toHaveBeenCalledWith(
+        'nightly-forge',
+        expect.objectContaining({ cwd: null }),
+      );
+    });
+
+    it('update: cwd: null clears a previously-pinned cwd', async () => {
+      const { res, json } = makeRes();
+      await handleUpdateSchedule(res, 'nightly-forge', { cwd: null });
+      expect(json().status).toBe(200);
+      expect(vi.mocked(updateSchedule)).toHaveBeenCalledWith(
+        'nightly-forge',
+        expect.objectContaining({ cwd: null }),
+      );
+    });
+
+    it('create: rejects a numeric cwd with 400', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, { ...base, cwd: 123 });
+      expect(json().status).toBe(400);
+      expect(vi.mocked(addSchedule)).not.toHaveBeenCalled();
+    });
+
+    it('update: rejects a numeric cwd with 400', async () => {
+      const { res, json } = makeRes();
+      await handleUpdateSchedule(res, 'nightly-forge', { cwd: 123 });
+      expect(json().status).toBe(400);
+      expect(vi.mocked(updateSchedule)).not.toHaveBeenCalled();
     });
   });
 
@@ -219,6 +374,7 @@ describe('routes.schedules', () => {
       await handleToggleSchedule(res, 'nightly-forge');
       const { status, body } = json();
       expect(status).toBe(200);
+      expect(vi.mocked(toggleScheduleEnabled)).toHaveBeenCalledWith('nightly-forge', false);
       // Was enabled, now disabled
       expect((body as { enabled: boolean }).enabled).toBe(false);
     });

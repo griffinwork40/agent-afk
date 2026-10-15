@@ -48,6 +48,21 @@ export interface HealthRailOptions {
    * Typically `() => ctx.statusLine.getExtraRows()`.
    */
   getExtraRows: () => number;
+  /**
+   * Live accessor for foreground subagent counts.
+   *
+   * Returns `{ active, total }` where:
+   *   - `active`  — number of foreground subagents currently in `running` state.
+   *   - `total`   — number of foreground subagents ever dispatched this session.
+   *
+   * Called on every `update()` so the rail reflects the live foreground-wave
+   * state. When omitted, foreground agents are not counted (legacy behaviour).
+   *
+   * Wired via `makeForegroundCountsGetter(ctx)` in `footer-subsystems.ts`.
+   * That closure excludes background-registered handles from the foreground
+   * count and ratchets the background-seen total to handle registry eviction.
+   */
+  getForegroundAgentCounts?: () => { active: number; total: number };
 }
 
 /**
@@ -61,8 +76,9 @@ interface RailSnapshot {
   /** Unix timestamp (ms) of session start — used to compute elapsed at paint time. */
   sessionStartTime: number;
   toolCalls: number;
+  /** Currently-running subagents across foreground + background. */
   activeSubs: number;
-  /** Total background subagent jobs ever dispatched in this session. */
+  /** Total subagents ever dispatched (foreground + background combined high-water mark). */
   totalSubs: number;
   contextRatio: number;
 }
@@ -72,26 +88,53 @@ export class HealthRail {
   private readonly stream: NodeJS.WriteStream;
   private readonly registry: BackgroundAgentRegistry | undefined;
   private readonly getExtraRows: () => number;
+  private readonly getForegroundAgentCounts: (() => { active: number; total: number }) | undefined;
 
   private started = false;
   private snapshot: RailSnapshot | null = null;
   private onRowCountChange?: (rows: number) => void;
   private resizeUnsub: (() => void) | null = null;
+  private resizeImmediateUnsub: (() => void) | null = null;
   /** Interval that triggers a repaint every second while the rail is running. */
   private tickInterval: ReturnType<typeof setInterval> | null = null;
   /**
-   * Monotonic high-water mark for total subagents ever dispatched.
+   * The absolute row at which the health rail was most recently painted.
+   * Updated on every paint so the immediate-channel resize snapshot captures
+   * the TRUE pre-SIGWINCH address. Mirrors LoopStageBar.lastPaintedRow.
+   */
+  private lastPaintedRow: number | null = null;
+  /**
+   * Snapshot of `lastPaintedRow` captured synchronously by the
+   * ResizeBus.subscribeImmediate callback — the only moment the pre-SIGWINCH
+   * address is still recoverable (stream.rows has already changed by the time
+   * any debounced handler runs). Consumed by the next repaint() to erase the
+   * ghost row left behind when the pane grows and the rail moves down. Mirrors
+   * StatusLine.preResizePaintedRow / LoopStageBar.preResizePaintedRow.
+   */
+  private preResizePaintedRow: number | null = null;
+  /**
+   * Monotonic high-water mark for total background subagent jobs ever dispatched.
    *
    * The background registry evicts terminal jobs ~5 minutes after they settle,
    * so `registry.list().length` can shrink over time. This counter only
    * ratchets upward, ensuring the displayed total never decreases.
    */
-  private totalSubsEver = 0;
+  private totalBgSubsEver = 0;
+  /**
+   * Monotonic high-water mark for total foreground subagent dispatches ever seen.
+   *
+   * The SubagentManager's in-flight map shrinks as children complete, so a
+   * point-in-time `total` from `getForegroundAgentCounts()` can decrease. This
+   * ratchet ensures the displayed total never decreases (same contract as
+   * `totalBgSubsEver`). Resets only with the HealthRail instance, i.e. per session.
+   */
+  private totalFgSubsEver = 0;
 
   constructor(opts: HealthRailOptions) {
     this.stream = opts.stream ?? process.stdout;
     this.registry = opts.backgroundRegistry;
     this.getExtraRows = opts.getExtraRows;
+    this.getForegroundAgentCounts = opts.getForegroundAgentCounts;
   }
 
   /** Register the row-count notification handler (wired by the REPL loop). */
@@ -108,6 +151,12 @@ export class HealthRail {
     if (isPlainOutputRequested()) return;
     this.started = true;
     this.onRowCountChange?.(1);
+    // Immediate channel: snapshot lastPaintedRow before the debounce window
+    // opens so repaint() can erase the ghost row on GROW. Mirrors the pattern
+    // used by StatusLine.resetGeometry() and LoopStageBar.resizeImmediateUnsub.
+    this.resizeImmediateUnsub = ResizeBus.subscribeImmediate(() => {
+      this.preResizePaintedRow = this.lastPaintedRow;
+    });
     this.resizeUnsub = ResizeBus.subscribe(() => this.repaint());
     // Tick every second so the elapsed-time counter advances even when no
     // events arrive (e.g. between tool calls or while the model is streaming
@@ -123,10 +172,16 @@ export class HealthRail {
       this.resizeUnsub();
       this.resizeUnsub = null;
     }
+    if (this.resizeImmediateUnsub) {
+      this.resizeImmediateUnsub();
+      this.resizeImmediateUnsub = null;
+    }
     if (this.tickInterval !== null) {
       clearInterval(this.tickInterval);
       this.tickInterval = null;
     }
+    this.preResizePaintedRow = null;
+    this.lastPaintedRow = null;
     this.clearRow();
     this.onRowCountChange?.(0);
   }
@@ -143,12 +198,21 @@ export class HealthRail {
    *   end-of-previous-turn snapshot.
    */
   update(stats: SessionStats, contextRatioOverride?: number): void {
-    const allJobs = this.registry ? this.registry.list() : [];
-    const activeSubs = allJobs.filter((j) => j.status === 'running').length;
+    // Background subagents: sourced from the BackgroundAgentRegistry.
+    const allBgJobs = this.registry ? this.registry.list() : [];
+    const activeBgSubs = allBgJobs.filter((j) => j.status === 'running').length;
     // Ratchet upward: registry evicts terminal jobs after ~5 min, so
     // list().length can shrink. The high-water mark never decreases.
-    this.totalSubsEver = Math.max(this.totalSubsEver, allJobs.length);
-    const totalSubs = this.totalSubsEver;
+    this.totalBgSubsEver = Math.max(this.totalBgSubsEver, allBgJobs.length);
+
+    // Foreground subagents: sourced from the SubagentManager via the injected
+    // callback. Falls back to 0/0 when the callback is absent (legacy mode).
+    const fg = this.getForegroundAgentCounts?.() ?? { active: 0, total: 0 };
+    this.totalFgSubsEver = Math.max(this.totalFgSubsEver, fg.total);
+
+    // Unified counts shown on the rail: foreground + background combined.
+    const activeSubs = activeBgSubs + fg.active;
+    const totalSubs = this.totalBgSubsEver + this.totalFgSubsEver;
 
     // Accumulate total tool calls across all completed turns.
     const toolCalls = stats.turns.reduce(
@@ -224,10 +288,22 @@ export class HealthRail {
     // health rail floats at the same horizontal position as other content.
     const pad = contentMargin();
     this.stream.write('\x1b[s');
+    // Erase the ghost left by a pane GROW: `preResizePaintedRow` holds the
+    // pre-SIGWINCH row captured by the immediate channel before stream.rows
+    // changed. Only erase when the old row differs from the new paint row AND
+    // is inside the current viewport — addressing rows outside [1, totalRows]
+    // would scroll. Mirrors LoopStageBar.repaint()'s ghost-erase pattern.
+    const ghostRow = this.preResizePaintedRow;
+    this.preResizePaintedRow = null;
+    if (ghostRow !== null && ghostRow !== paintRow && ghostRow >= 1 && ghostRow <= totalRows) {
+      this.stream.write(`\x1b[${ghostRow};1H`);
+      this.stream.write('\x1b[2K');
+    }
     this.stream.write(`\x1b[${paintRow};1H`);
     this.stream.write('\x1b[2K');
     this.stream.write(pad + formatHealthRail(fields, Math.max(4, maxW - pad.length)));
     this.stream.write('\x1b[u');
+    this.lastPaintedRow = paintRow;
   }
 
   private clearRow(): void {

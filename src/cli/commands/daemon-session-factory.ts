@@ -1,5 +1,5 @@
 import { env } from '../../config/env.js';
-import { getApiKeyForModel, getDefaultSubagentModel, getMaxToolUseIterations, parseProvider } from '../shared-helpers.js';
+import { getApiKeyForModel, getDefaultSubagentModel, getMaxToolUseIterations, getMaxBudgetUsd, parseProvider } from '../shared-helpers.js';
 import type { AgentConfig, AgentModelInput } from '../../agent/types.js';
 import { AgentSession } from '../../agent/session.js';
 import { MemoryStore, MEMORY_TOOL_NAMES, injectHotMemory, injectGoalPrompt } from '../../agent/memory/index.js';
@@ -27,6 +27,27 @@ export interface BuildDaemonSessionFactoryOpts {
 }
 
 /**
+ * The daemon session factory: a callable that builds one AgentSession per task,
+ * plus an explicit, opt-in {@link DaemonSessionFactory.dispose} that releases
+ * the SQLite-backed stores the factory itself lazily created.
+ */
+export type DaemonSessionFactory = ((
+  config: AgentConfig,
+  ownedTraceWriter?: import('../../agent/trace/index.js').TraceWriter,
+) => AgentSession) & {
+  /**
+   * Close the shared MemoryStore / StateStore this factory created (if any)
+   * and reset them so a later spawn re-opens fresh handles. Sessions never
+   * close these shared stores themselves — the factory is the owner. Also
+   * releases any residual per-task workspaces (normally closed with their
+   * sessions). Idempotent.
+   * Callers (tests, or a daemon shutdown path) must only call this once no
+   * session built by this factory is still running.
+   */
+  dispose(): void;
+};
+
+/**
  * Build the fully-wired session factory daemon tasks need so that
  * skill-dispatching commands like `/forge-friction --auto` or `/review pr 123`
  * can call the `skill`, `agent`, and `compose` tools.
@@ -41,7 +62,7 @@ export interface BuildDaemonSessionFactoryOpts {
  */
 export function buildDaemonSessionFactory(
   opts: BuildDaemonSessionFactoryOpts,
-): (config: AgentConfig, ownedTraceWriter?: import('../../agent/trace/index.js').TraceWriter) => AgentSession {
+): DaemonSessionFactory {
   // Invariant: exactly one MemoryStore per daemon process. The constructor
   // opens a SQLite handle synchronously (see memory-store.ts), so building a
   // fresh store inside the per-task closure would leak one file descriptor on
@@ -51,7 +72,9 @@ export function buildDaemonSessionFactory(
   // task session, which also gives cross-task memory continuity for free. The
   // store is intentionally not closed here: the daemon owns it for its whole
   // process lifetime and the SIGINT/SIGTERM shutdown path ends in
-  // process.exit(), which reclaims the descriptor.
+  // process.exit(), which reclaims the descriptor. Callers that need the
+  // handles released earlier (tests on Windows, where an open kv.db blocks
+  // tmpdir removal) call the returned factory's opt-in `dispose()`.
   //
   // WorkspaceStore is intentionally NOT shared across tasks: one task's
   // published entries are irrelevant to the next task's compose nodes, and
@@ -59,11 +82,19 @@ export function buildDaemonSessionFactory(
   // task's run. Create a fresh store per task invocation instead.
   let memoryStore: MemoryStore | undefined;
   let stateStore: StateStore | undefined;
-  return (config: AgentConfig, ownedTraceWriter?: import('../../agent/trace/index.js').TraceWriter): AgentSession => {
+  const workspaces = new Set<WorkspaceStore>();
+  const factory = (config: AgentConfig, ownedTraceWriter?: import('../../agent/trace/index.js').TraceWriter): AgentSession => {
     // Ephemeral abort controller — the daemon root session has no parent
     // to propagate cancellation from.
     const abortCtrl = new AbortController();
-    const stubParent = createStubParentSession(abortCtrl.signal);
+    // Deferred journal view: the session is built after the executors, so the
+    // parent exposes its journal lazily via `bound` (bootstrap-infra pattern).
+    // Forks journal to `messageJournal.forSubagent(id)`, never the parent's file.
+    let bound: AgentSession | undefined;
+    const stubParent = {
+      ...createStubParentSession(abortCtrl.signal),
+      get messageJournal() { return bound?.messageJournal; },
+    };
 
     // Invariant: ONE root manager per session, shared by all three executors.
     // The scheduler (scheduler.ts:spawnSession) already opened a per-tick trace
@@ -77,6 +108,7 @@ export function buildDaemonSessionFactory(
     // would inject stale workspace entries from a prior task's run.
     // Skipped when workspace is disabled (AFK_WORKSPACE_DISABLED=1).
     const workspaceStore = env.AFK_WORKSPACE_DISABLED === '1' ? undefined : new WorkspaceStore();
+    if (workspaceStore !== undefined) workspaces.add(workspaceStore);
     const { rootManager, subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
       surface: 'daemon',
       parentSession: stubParent,
@@ -91,7 +123,17 @@ export function buildDaemonSessionFactory(
       // wireExecutors) and forked children fall back to the handoff contract.
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
-      ...(opts.cwd !== undefined ? { cwd: opts.cwd, nestedCwd: opts.cwd } : {}),
+      // Use the per-session config.cwd (set by session-spawn.ts to the resolved
+      // per-task cwd) rather than the daemon-wide opts.cwd, so subagents,
+      // skills, and compose nodes forked from a task session inherit the
+      // task's working directory — the core requirement for fixing grep/glob
+      // timeouts in cron tasks that pin to a repo.
+      // Precedence (already resolved by session-spawn.ts): task.cwd ?? AFK_DAEMON_CWD ?? process.cwd().
+      // Note: the opts.cwd fallback branch is unreachable in production because
+      // session-spawn.ts always sets config.cwd (line 179). It is retained as a
+      // test-only escape hatch for unit tests that call buildDaemonSessionFactory
+      // directly without going through spawnDaemonSession.
+      ...(config.cwd !== undefined ? { cwd: config.cwd, nestedCwd: config.cwd } : (opts.cwd !== undefined ? { cwd: opts.cwd, nestedCwd: opts.cwd } : {})),
       ...(config.traceWriter !== undefined
         ? { traceWriter: config.traceWriter, skillTraceWriter: config.traceWriter }
         : {}),
@@ -138,6 +180,12 @@ export function buildDaemonSessionFactory(
     // production chokepoint the scheduler routes every task through, so it also
     // caps scheduler/cron-spawned top-level sessions.
     const daemonMaxToolUseIterations = config.maxToolUseIterations ?? getMaxToolUseIterations();
+    // USD budget ceiling. Explicit caller config wins (set by session-spawn.ts
+    // from AFK_MAX_BUDGET_USD); getMaxBudgetUsd() is the re-read fallback so
+    // buildDaemonSessionFactory works in isolation (e.g. tests) without
+    // session-spawn.ts pre-populating config.maxBudgetUsd.
+    // undefined/NaN/negative → undefined = uncapped (no behavior change).
+    const daemonMaxBudgetUsd = config.maxBudgetUsd ?? getMaxBudgetUsd();
     const session = new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectHotMemory({
       ...config,
       provider,
@@ -153,6 +201,7 @@ export function buildDaemonSessionFactory(
       // rows instead of vanishing (#733).
       drainSubagents: (reason) =>
         rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset'),
+      getPendingChildTerminalWrites: () => rootManager.getPendingChildTerminalWrites(),
       // User-facing surface for trace `origin` attribution. Forced after
       // `...config` for the same reason as `isNonInteractive`: every daemon +
       // scheduler/cron session routes through here → 'daemon'.
@@ -160,7 +209,16 @@ export function buildDaemonSessionFactory(
       ...(daemonMaxToolUseIterations !== undefined
         ? { maxToolUseIterations: daemonMaxToolUseIterations }
         : {}),
+      ...(daemonMaxBudgetUsd !== undefined ? { maxBudgetUsd: daemonMaxBudgetUsd } : {}),
     }))), ownedTraceWriter);
+    bound = session;
+    const close = session.close.bind(session);
+    let closing: Promise<void> | undefined;
+    session.close = () => closing ??= (async () => {
+      try { await close(); } finally {
+        if (workspaceStore !== undefined && workspaces.delete(workspaceStore)) workspaceStore.close();
+      }
+    })();
     // Subagent-success rollup: wire both the root manager and the compose
     // executor so all subagent token/cost data (including compose DAG nodes)
     // accumulates into this session's session_sealed telemetry. Late-bound
@@ -175,4 +233,16 @@ export function buildDaemonSessionFactory(
     });
     return session;
   };
+  return Object.assign(factory, {
+    dispose(): void {
+      for (const workspace of workspaces) {
+        workspaces.delete(workspace);
+        workspace.close();
+      }
+      memoryStore?.close();
+      memoryStore = undefined;
+      stateStore?.close();
+      stateStore = undefined;
+    },
+  });
 }

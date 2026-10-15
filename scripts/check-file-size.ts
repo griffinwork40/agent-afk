@@ -24,6 +24,8 @@
  *   --changed-vs <ref>    touch-trigger: a baselined file MODIFIED relative to
  *                         <ref> must come under the ceiling in that same change.
  *   --list                print every scanned file with its line count.
+ *   --allow-growth        allow growth/new entries when running --update-baseline.
+ *   --reason "<text>"     required with --allow-growth; stamped on new entries.
  *
  * The baseline grandfathers files that already exceeded the ceiling when the gate
  * landed, and it is a ONE-WAY RATCHET — it fails five ways, so it can never
@@ -41,12 +43,14 @@
  * one subtree then touch disjoint contiguous line ranges, so concurrent PRs
  * mostly avoid conflicting. Never resolve a conflict by editing markers — run
  * `git checkout origin/main -- .filesize-baseline.json && pnpm audit:filesize:update`.
+ * To record deliberate growth: `pnpm audit:filesize:update --allow-growth --reason "<why>"`.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { parseGrowthArgs } from './lib/growth-args.js';
 import {
   changedSince,
   collectViolations,
@@ -57,6 +61,8 @@ import {
   type RatchetConfig,
   type Violation,
 } from './lib/size-ratchet.js';
+import { EXCLUDED_DIRS, isScannable } from './lib/file-size-scope.js';
+import { walkSourceFiles } from './lib/walk-source-files.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -74,17 +80,6 @@ const BASELINE_REL = '.filesize-baseline.json';
  * agent must read whole to establish edit safety.
  */
 const SCAN_ROOTS = ['src', 'scripts'] as const;
-
-/**
- * Contract: excluded paths are those where a line count does not measure
- * context cost. Test files are a flat list of independent cases an agent greps
- * into, never read start-to-finish (223 exceed the ceiling; including them would
- * triple the baseline for no edit-safety benefit). Fixtures and generated
- * declarations are not authored prose or logic.
- */
-const EXCLUDED_SUFFIXES = ['.test.ts', '.spec.ts', '.d.ts'] as const;
-const EXCLUDED_DIRS = ['__fixtures__', '__test-utils__', 'node_modules', 'dist'] as const;
-const INCLUDED_EXTENSIONS = ['.ts', '.tsx', '.mjs', '.js'] as const;
 
 const RATCHET: RatchetConfig = {
   limit: LIMIT,
@@ -137,25 +132,16 @@ function countCodeLines(absPath: string): number {
   return codeLines;
 }
 
-function isScannable(relPath: string): boolean {
-  const base = path.basename(relPath);
-  if (!INCLUDED_EXTENSIONS.some((e) => base.endsWith(e))) return false;
-  if (EXCLUDED_SUFFIXES.some((s) => base.endsWith(s))) return false;
-  return !relPath.replaceAll('\\', '/').split('/').some((seg) => EXCLUDED_DIRS.includes(seg as never));
-}
-
 function walk(dir: string, out: string[]): void {
-  if (!fs.existsSync(dir)) return;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (EXCLUDED_DIRS.includes(entry.name as never)) continue;
-      walk(full, out);
-    } else if (entry.isFile()) {
-      const rel = path.relative(repoRoot, full);
-      if (isScannable(rel)) out.push(rel);
-    }
-  }
+  const extraExclude = new Set(EXCLUDED_DIRS.filter(d => d !== 'node_modules' && d !== 'dist'));
+  const absPaths: string[] = [];
+  walkSourceFiles(
+    dir,
+    (absPath) => isScannable(path.relative(repoRoot, absPath)),
+    absPaths,
+    extraExclude,
+  );
+  for (const abs of absPaths) out.push(path.relative(repoRoot, abs));
 }
 
 function scanAll(): Map<string, number> {
@@ -203,8 +189,33 @@ function reportAndExit(sizes: Map<string, number>, baseline: Baseline, violation
 function main(): void {
   const argv = process.argv.slice(2);
 
+  /** All flag tokens this script recognises — used by parseGrowthArgs to detect missing --reason values. */
+  const KNOWN_FLAGS = ['--check', '--update-baseline', '--changed-vs', '--list', '--allow-growth', '--reason'];
+
   if (argv.includes('--update-baseline')) {
-    const { kept, dropped } = updateBaseline(RATCHET, scanAll());
+    const parsed = parseGrowthArgs(argv, KNOWN_FLAGS);
+    if ('error' in parsed) {
+      console.error(`✗ check-file-size: ${parsed.error}`);
+      process.exit(1);
+    }
+    const { allowGrowth, reason } = parsed;
+
+    const { kept, dropped, blocked } = updateBaseline(RATCHET, scanAll(), { allowGrowth, reason });
+
+    if (blocked.length > 0) {
+      console.error(
+        `✗ check-file-size: ${blocked.length} file(s) grew or are new — refusing to update baseline (${BASELINE_REL}, ceiling ${LIMIT}) without --allow-growth:\n`,
+      );
+      for (const e of blocked) {
+        const delta = e.oldLoc === null ? `(new, ${e.newLoc})` : `${e.oldLoc} → ${e.newLoc} (+${e.newLoc - e.oldLoc})`;
+        console.error(`    ${e.key}  ${delta}`);
+      }
+      console.error(
+        `\nTo record a deliberate increase, re-run with:\n  pnpm audit:filesize:update --allow-growth --reason "<why this growth is intentional>"\n`,
+      );
+      process.exit(1);
+    }
+
     console.log(`✓ ${BASELINE_REL}: ${kept} entr${kept === 1 ? 'y' : 'ies'} over the ${LIMIT}-code-line ceiling.`);
     if (dropped.length > 0) {
       console.log(`  retired ${dropped.length} (now within the ceiling):`);

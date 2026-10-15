@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { loadSchedules } from '../../daemon/schedule-store.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -52,6 +53,26 @@ describe('create_schedule handler', () => {
     expect(parsed.name).toBe('Test Task');
     expect(parsed.cron).toBe('0 2 * * *');
     expect(parsed.enabled).toBe(true);
+  });
+
+  it('accepts runAt without cron, persists polling cadence and lists both one-shot dates', async () => {
+    const runAt = '2099-01-01T00:00:00Z';
+    const expiresAt = '2099-01-02T00:00:00Z';
+    const result = await createScheduleHandler(
+      { name: 'One Shot', command: '/cmd', runAt, expiresAt }, fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    expect(loadSchedules()[0]).toMatchObject({ cron: '* * * * *', runAt, expiresAt });
+    const list = await listSchedulesHandler(null, fakeSignal);
+    expect(JSON.parse(list.content as string)).toEqual([
+      expect.objectContaining({ runAt, expiresAt }),
+    ]);
+  });
+
+  it('rejects a create request without cron or runAt', async () => {
+    const result = await createScheduleHandler({ name: 'Missing Time', command: '/cmd' }, fakeSignal);
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/cron or runAt/);
   });
 
   it('invalid cron (3 fields) → isError: true', async () => {
@@ -450,6 +471,24 @@ describe('get_schedule_history handler', () => {
     const result = await getScheduleHistoryHandler({}, fakeSignal);
     expect(result.isError).toBe(true);
   });
+
+  it('surfaces doneUnverified:true from telemetry records that carry the field (#2307)', async () => {
+    const afDir = join(tmpDir, 'agent-framework');
+    mkdirSync(afDir, { recursive: true });
+    const telemetryPath = join(afDir, 'forge-telemetry.jsonl');
+    const records = [
+      { taskId: 'probe-task', status: 'success', triggeredAt: '2024-06-01T00:00:00Z', doneUnverified: true },
+      { taskId: 'probe-task', status: 'success', triggeredAt: '2024-06-01T01:00:00Z' },
+    ];
+    writeFileSync(telemetryPath, records.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
+
+    const result = await getScheduleHistoryHandler({ taskId: 'probe-task', limit: 10 }, fakeSignal);
+    const parsed = JSON.parse(result.content as string) as Array<{ taskId: string; doneUnverified?: boolean }>;
+    expect(parsed).toHaveLength(2);
+    // Oldest-first order: first record has doneUnverified:true, second omits it.
+    expect(parsed[0]?.doneUnverified).toBe(true);
+    expect(parsed[1]?.doneUnverified).toBeUndefined();
+  });
 });
 
 describe('live-sync surface (daemonSynced)', () => {
@@ -606,5 +645,317 @@ describe('live-sync surface (daemonSynced)', () => {
     } finally {
       await handle.stop();
     }
+  });
+});
+
+// ── per-task cwd ─────────────────────────────────────────────────────────────
+
+describe('create_schedule handler — cwd field', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedules-cwd-handler-'));
+    vi.stubEnv('AFK_HOME', tmpDir);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('accepts and stores a valid existing directory', async () => {
+    const result = await createScheduleHandler(
+      { name: 'Cwd Task', command: '/t', cron: '0 2 * * *', cwd: tmpDir },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    // The schedule was persisted
+    const { loadSchedules } = await import('../../daemon/schedule-store.js');
+    const schedules = loadSchedules();
+    expect(schedules[0]?.cwd).toBe(tmpDir);
+  });
+
+  it('returns isError for a missing directory', async () => {
+    const result = await createScheduleHandler(
+      { name: 'Bad Cwd', command: '/t', cron: '0 2 * * *', cwd: '/nonexistent/dir/abc' },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/does not exist/);
+  });
+
+  it('returns isError for a path that is a file', async () => {
+    const { writeFileSync: wfs } = await import('node:fs');
+    const { join: pjoin } = await import('node:path');
+    const file = pjoin(tmpDir, 'notadir.txt');
+    wfs(file, 'x');
+    const result = await createScheduleHandler(
+      { name: 'File Cwd', command: '/t', cron: '0 2 * * *', cwd: file },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/not a directory/);
+  });
+});
+
+describe('update_schedule handler — cwd field', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedules-cwd-update-'));
+    vi.stubEnv('AFK_HOME', tmpDir);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('patches cwd on an existing schedule', async () => {
+    // Create a schedule first
+    await createScheduleHandler(
+      { name: 'Patchable', command: '/t', cron: '0 2 * * *' },
+      fakeSignal,
+    );
+    const result = await updateScheduleHandler(
+      { taskId: 'patchable', cwd: tmpDir },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    const { loadSchedules } = await import('../../daemon/schedule-store.js');
+    expect(loadSchedules()[0]?.cwd).toBe(tmpDir);
+  });
+
+  it('returns isError for invalid cwd on update', async () => {
+    await createScheduleHandler(
+      { name: 'Update Bad', command: '/t', cron: '0 2 * * *' },
+      fakeSignal,
+    );
+    const result = await updateScheduleHandler(
+      { taskId: 'update-bad', cwd: '/nonexistent/abc' },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/does not exist/);
+  });
+
+  it('cwd: null clears a previously-pinned cwd', async () => {
+    // Set up a schedule with a cwd
+    await createScheduleHandler(
+      { name: 'Clear Me', command: '/t', cron: '0 2 * * *', cwd: tmpDir },
+      fakeSignal,
+    );
+    const { loadSchedules } = await import('../../daemon/schedule-store.js');
+    expect(loadSchedules()[0]?.cwd).toBe(tmpDir);
+    // Clear it
+    const result = await updateScheduleHandler(
+      { taskId: 'clear-me', cwd: null },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    expect(loadSchedules()[0]?.cwd).toBeUndefined();
+  });
+
+  it('cwd: "" (empty string) clears a previously-pinned cwd', async () => {
+    await createScheduleHandler(
+      { name: 'Clear Empty', command: '/t', cron: '0 2 * * *', cwd: tmpDir },
+      fakeSignal,
+    );
+    const { loadSchedules } = await import('../../daemon/schedule-store.js');
+    expect(loadSchedules()[0]?.cwd).toBe(tmpDir);
+    const result = await updateScheduleHandler(
+      { taskId: 'clear-empty', cwd: '' },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    expect(loadSchedules()[0]?.cwd).toBeUndefined();
+  });
+
+  it('non-string cwd (number) returns isError', async () => {
+    await createScheduleHandler(
+      { name: 'Bad Type', command: '/t', cron: '0 2 * * *' },
+      fakeSignal,
+    );
+    const result = await updateScheduleHandler(
+      { taskId: 'bad-type', cwd: 123 },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/string/);
+  });
+});
+
+// ── shell executor live-sync (handler level) (#2316) ─────────────────────────
+//
+// create_schedule and update_schedule write the schedule store BEFORE calling
+// trySyncToDaemon.  The daemon's store-backed shell guard relies on this
+// ordering.  These tests spin a real in-process daemon, run the handler, and
+// verify that the daemon's scheduler still holds the shell task after the sync.
+
+describe('shell executor live-sync — create_schedule + update_schedule with live daemon', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedules-shell-sync-'));
+    vi.stubEnv('AFK_HOME', tmpDir);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  interface SyncShape {
+    id?: string;
+    daemonSynced: boolean;
+    syncDetail: string;
+    syncNote?: string;
+  }
+
+  it('create_schedule with executor:"shell" live-syncs into a running daemon', async () => {
+    // The handler writes the schedule to disk, then POSTs to the daemon.
+    // The daemon's store-backed guard reads the freshly-written entry and
+    // admits the request — so the shell task is live without a restart.
+    const handle = await startDaemon({ port: 0 });
+    try {
+      const result = await createScheduleHandler(
+        {
+          name: 'Shell Live',
+          command: 'echo from-create',
+          cron: '0 4 * * *',
+          executor: 'shell',
+        },
+        fakeSignal,
+      );
+      expect(result.isError).toBeUndefined();
+      const parsed = JSON.parse(result.content as string) as SyncShape;
+      expect(parsed.daemonSynced).toBe(true);
+      expect(parsed.syncDetail).toBe('synced');
+      // The task must be live in the daemon's scheduler.
+      const tasks = (await (await fetch(`http://localhost:${handle.port}/tasks`)).json()) as Array<{
+        taskId: string;
+        executor?: string;
+      }>;
+      const task = tasks.find((t) => t.taskId === 'shell-live');
+      expect(task).toBeDefined();
+      expect(task?.executor).toBe('shell');
+    } finally {
+      await handle.stop();
+    }
+  });
+
+  it('one-shot shell task live-syncs runAt and expiresAt without a recurring cron', async () => {
+    const handle = await startDaemon({ port: 0 });
+    try {
+      const runAt = '2099-01-01T00:00:00Z';
+      const expiresAt = '2099-01-02T00:00:00Z';
+      const result = await createScheduleHandler(
+        { name: 'Shell One Shot', command: 'echo one-shot', executor: 'shell', runAt, expiresAt },
+        fakeSignal,
+      );
+      expect((JSON.parse(result.content as string) as SyncShape).daemonSynced).toBe(true);
+      expect(handle.scheduler.list().find((task) => task.taskId === 'shell-one-shot')).toMatchObject({
+        runAt, expiresAt, executor: 'shell',
+      });
+      expect(handle.scheduler.list().find((task) => task.taskId === 'shell-one-shot')?.cronExpression).toBeUndefined();
+    } finally {
+      await handle.stop();
+    }
+  });
+
+  it('update_schedule shell: enabled task stays live after DELETE+POST update cycle', async () => {
+    // Regression guard for PR #2316 review high finding:
+    // The update path does DELETE then POST.  With the old flat shell block the
+    // POST returned 400 and the job was silently dropped.  After the fix the job
+    // must remain live with the new command.
+    const handle = await startDaemon({ port: 0 });
+    try {
+      // 1. Create a live shell schedule.
+      const createResult = await createScheduleHandler(
+        {
+          name: 'Shell Update Live',
+          command: 'echo original',
+          cron: '0 5 * * *',
+          executor: 'shell',
+        },
+        fakeSignal,
+      );
+      const created = JSON.parse(createResult.content as string) as SyncShape;
+      expect(created.daemonSynced).toBe(true);
+      expect(created.syncDetail).toBe('synced');
+
+      // 2. Update the command — handler writes the updated store entry, then
+      //    DELETEs the stale registration, then POSTs the new one.
+      const updateResult = await updateScheduleHandler(
+        { taskId: 'shell-update-live', command: 'echo updated' },
+        fakeSignal,
+      );
+      expect(updateResult.isError).toBeUndefined();
+      const updated = JSON.parse(updateResult.content as string) as SyncShape;
+      expect(updated.daemonSynced).toBe(true);
+      expect(updated.syncDetail).toBe('synced');
+
+      // 3. The daemon must still have the task registered with the new command.
+      const tasks = (await (await fetch(`http://localhost:${handle.port}/tasks`)).json()) as Array<{
+        taskId: string;
+        command: string;
+        executor?: string;
+      }>;
+      const task = tasks.find((t) => t.taskId === 'shell-update-live');
+      expect(task).toBeDefined();
+      expect(task?.executor).toBe('shell');
+      expect(task?.command).toBe('echo updated');
+    } finally {
+      await handle.stop();
+    }
+  });
+});
+
+describe('schedule handlers — retry fields (#3243)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedules-handler-retry-'));
+    vi.stubEnv('AFK_HOME', tmpDir);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('create_schedule persists maxAttempts / retryDelayMs and list_schedules shows them', async () => {
+    const result = await createScheduleHandler(
+      { name: 'Retry Task', command: '/r', cron: '0 2 * * *', maxAttempts: 3, retryDelayMs: 2_000 },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    const list = JSON.parse((await listSchedulesHandler({}, fakeSignal)).content as string) as Array<Record<string, unknown>>;
+    expect(list[0]).toMatchObject({ id: 'retry-task', maxAttempts: 3, retryDelayMs: 2_000 });
+  });
+
+  it.each([
+    [{ maxAttempts: 0 }, /maxAttempts/],
+    [{ maxAttempts: 6 }, /maxAttempts/],
+    [{ maxAttempts: 2.5 }, /maxAttempts/],
+    [{ retryDelayMs: 10 }, /retryDelayMs/],
+    [{ retryDelayMs: '5000' }, /retryDelayMs/],
+  ])('create_schedule rejects %o', async (extra, pattern) => {
+    const result = await createScheduleHandler(
+      { name: 'Bad Retry', command: '/r', cron: '0 2 * * *', ...extra },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(pattern);
+  });
+
+  it('update_schedule sets and validates the fields', async () => {
+    await createScheduleHandler({ name: 'Upd Retry', command: '/r', cron: '0 2 * * *' }, fakeSignal);
+    const bad = await updateScheduleHandler({ taskId: 'upd-retry', maxAttempts: 99 }, fakeSignal);
+    expect(bad.isError).toBe(true);
+    const ok = await updateScheduleHandler({ taskId: 'upd-retry', maxAttempts: 2, retryDelayMs: 1_000 }, fakeSignal);
+    expect(ok.isError).toBeUndefined();
+    const list = JSON.parse((await listSchedulesHandler({}, fakeSignal)).content as string) as Array<Record<string, unknown>>;
+    expect(list[0]).toMatchObject({ maxAttempts: 2, retryDelayMs: 1_000 });
   });
 });

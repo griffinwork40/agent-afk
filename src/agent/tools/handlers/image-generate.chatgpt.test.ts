@@ -1,6 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { generateImageViaChatGpt } from './image-generate.chatgpt.js';
 
+// Mock h1-fetch so we can spy on the default fetchFn without a real network call.
+vi.mock('../../providers/shared/h1-fetch.js', () => ({
+  h1ModelFetch: vi.fn(),
+}));
+
+import * as h1FetchModule from '../../providers/shared/h1-fetch.js';
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -240,5 +247,28 @@ describe('generateImageViaChatGpt', () => {
     await generateImageViaChatGpt({ ...baseReq, quality: 'auto', fetchFn });
     const body = JSON.parse(fetchFn.mock.calls[0]![1].body);
     expect(body.tools[0].quality).toBe('medium');
+  });
+
+  it('uses h1ModelFetch as the default fetchFn when fetchFn is omitted', async () => {
+    // Arrange: wire the mocked h1ModelFetch to return a valid SSE response.
+    const mockH1 = vi.mocked(h1FetchModule.h1ModelFetch);
+    mockH1.mockResolvedValueOnce(makeSseResponse([
+      {
+        type: 'response.completed',
+        response: {
+          output: [{
+            type: 'image_generation_call',
+            result: { b64_json: TINY_PNG_B64 },
+          }],
+        },
+      },
+    ]) as unknown as Response);
+
+    // Act: call WITHOUT providing fetchFn — the default path must be taken.
+    const result = await generateImageViaChatGpt({ ...baseReq });
+
+    // Assert: the default h1ModelFetch was invoked.
+    expect(mockH1).toHaveBeenCalledOnce();
+    expect('error' in result).toBe(false);
   });
 });

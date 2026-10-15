@@ -49,6 +49,12 @@ export interface ToolResult {
   exitCode?: number;
   incomplete?: boolean;
   incompleteReason?: string;
+  /**
+   * Compose only: number of DAG nodes that wound down partial (soft deadline,
+   * tool-round cap) in this call. Present only alongside `incomplete: true`.
+   * Not model-facing; feeds `compose_partial_node_count` in the facet (#2978).
+   */
+  partialNodeCount?: number;
   circuitBreaker?: boolean;
   failureClass?: ToolFailureClass;
   /**
@@ -64,6 +70,14 @@ export interface ToolResult {
   blockReason?: string;
   batchIndex?: number;
   batchSize?: number;
+  /**
+   * Wall-clock timestamp (Date.now()) recorded by the batch dispatcher when
+   * this call's handler promise settled — stamped per-call so trace events
+   * carry the individual call's elapsed time rather than the whole batch's.
+   * Set by executeCallUnit (concurrent path) and runSequentialBatch.
+   * Not model-facing. See issue #2249.
+   */
+  completedAt?: number;
   render?: RenderHints;
   testResult?: import('../../tools/handlers/test-runner-detector.js').TestResult;
   image?: {

@@ -16,6 +16,7 @@
 
 import type { AgentConfig } from '../../../types/config-types.js';
 import type { RuntimeStateSource } from '../../../awareness/index.js';
+import type { SkillExecutor } from '../../../tools/skill-executor.js';
 import { buildSkillManifest } from '../../../tools/skill-bridge.js';
 import {
   resolveToolSystemPrompt,
@@ -34,11 +35,21 @@ export interface PromptAssemblyArgs {
   cwd: string;
   surface: string;
   readOnlyMemory: boolean;
+  /**
+   * When true, the child-session memory prompt variant is used (fact-only,
+   * no hot-write guidance). Set for any child session regardless of
+   * `readOnlyMemory`, because children can write facts but not hot memory.
+   * Distinct from `readOnlyMemory` which gates the schema/handler set.
+   */
+  readOnlyState?: boolean;
   /** Whether workspace tools are enabled (store is wired). Gates inclusion of
    *  the workspace system prompt fragment. */
   workspaceEnabled: boolean;
-  /** Present only when a skill executor is wired; gates manifest construction. */
-  hasSkillExecutor: boolean;
+  /**
+   * The wired skill executor, when present. Gates manifest construction and
+   * provides `getManifestScope()` for plugin/allowlist scoping.
+   */
+  skillExecutor?: SkillExecutor;
   runtimeStateSource: RuntimeStateSource;
   /** User-supplied system prompt, already normalized to a string or null. */
   userSystem: string | null;
@@ -65,12 +76,20 @@ export function assembleQueryPrompt(args: PromptAssemblyArgs): AssembledPrompt {
   // fork (see AgentConfig.skillDispatchName). Must stay in lockstep with the
   // openai-compatible call site — a per-provider divergence here is how a
   // fork on one provider silently keeps the self-entry.
-  const manifest = args.hasSkillExecutor
+  const { skillExecutor } = args;
+  const manifestScope = skillExecutor?.getManifestScope?.();
+  const manifest = skillExecutor
     ? buildSkillManifest(undefined, {
         cwd,
         ...(typeof config.skillDispatchName === 'string' &&
         config.skillDispatchName.length > 0
           ? { excludeName: config.skillDispatchName }
+          : {}),
+        ...(manifestScope?.pluginConfigs !== undefined
+          ? { pluginConfigs: manifestScope.pluginConfigs }
+          : {}),
+        ...(manifestScope?.skillAllowlist !== undefined
+          ? { skillAllowlist: manifestScope.skillAllowlist }
           : {}),
       })
     : '';
@@ -80,11 +99,13 @@ export function assembleQueryPrompt(args: PromptAssemblyArgs): AssembledPrompt {
   // that tag) would push them to ask "which skill?" instead of engaging with
   // their SKILL.md body. The ask_question strip in the dispatcher wiring is
   // the structural backstop for the same failure mode.
-  const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
+  const toolBase = resolveToolSystemPrompt(config.isSkillDispatch, config.isUnnamedWorker);
   // Read-only memory child sessions get a slimmed prompt that omits write
   // instructions for memory_update / procedure_write — keeps the model from
   // being told about tools it does not have.
-  const memoryPrompt = resolveMemorySystemPrompt(args.readOnlyMemory);
+  // Child sessions (readOnlyState) can write facts but not hot memory — give
+  // them the slimmed child-prompt variant that omits hot-write guidance.
+  const memoryPrompt = resolveMemorySystemPrompt(args.readOnlyMemory, args.readOnlyState);
   const workspacePrompt = resolveWorkspaceSystemPrompt(args.workspaceEnabled);
 
   // Awareness identity fields interleaved into the `# Environment` fragment

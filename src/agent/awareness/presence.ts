@@ -22,11 +22,14 @@
 
 import { mkdir, writeFile, unlink, readdir, readFile } from 'fs/promises';
 import { unlinkSync, existsSync, mkdirSync, writeFileSync } from 'fs';
+import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
 import { join } from 'path';
 import { getPresenceDir } from '../../paths.js';
 import type { RuntimeWorkspace } from './types.js';
 import type { TraceActor } from '../session/session-identity.js';
 import { classifyPidLiveness, type ProcessLiveness } from '../process-liveness.js';
+import { filterVerifiedLive, type StartTimeProbe } from './presence.liveness.js';
+import type { PresenceActivity } from './presence.activity.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -65,6 +68,22 @@ export interface PresenceFileInfo {
   model: { provider: string; name: string };
   workspace: RuntimeWorkspace;
   pid: number;
+  /**
+   * Epoch ms at which the process owning {@link pid} started, as this process
+   * computed it (`Date.now() - process.uptime() * 1000`, captured at module
+   * load). Display readers compare it with the start time the OS reports for
+   * `pid` today; a mismatch means the pid was recycled by an unrelated process
+   * (see `presence.liveness.ts`). Optional/additive: absent on records written
+   * by older builds.
+   */
+  pidStartedAt?: number;
+  /**
+   * Linux only: raw `starttime` (field 22 of `/proc/self/stat`, clock ticks
+   * since boot) of the process owning {@link pid}. Unlike {@link pidStartedAt}
+   * it is immune to wall-clock steps, so readers compare it tick-for-tick when
+   * both the record and the probe have it. Optional/additive.
+   */
+  pidStartTicks?: number;
   /**
    * AFK remote-control marker (bidirectional Telegram). Set `true` by the REPL
    * `/afk on` toggle and cleared on `/afk off` via {@link setPresenceAfk}. A
@@ -118,6 +137,58 @@ export interface PresenceFileInfo {
    * waiting.
    */
   blockedSince?: string;
+  /**
+   * Human-readable label for this session, set via `/name <label>` or
+   * auto-detected from tmux (`#S:#I`). Used by `list_sessions` and
+   * `send_to_session` for friendly discovery. Optional/additive.
+   */
+  name?: string;
+  /**
+   * Current turn state of this session's model loop. Set at turn start and
+   * turn end by the REPL loop so peer senders can see whether the target is
+   * actively running a turn. Optional/additive.
+   *
+   * Values:
+   *   - `'idle'` — REPL is waiting for user input; an incoming peer message
+   *     will be delivered by the next idle-wake cycle.
+   *   - `'busy'` — a model turn is in progress; the peer message is injected
+   *     at the next boundary between tool rounds (mid-turn), or at the next
+   *     turn if no tool round remains.
+   *   - `'blocked'` — the session is waiting on a human elicitation prompt.
+   */
+  turnState?: 'idle' | 'busy' | 'blocked';
+  /**
+   * ISO 8601 timestamp of the most recent {@link turnState} change. Lets a
+   * consumer render "idle for 4m" without storing a second timestamp.
+   * Optional/additive.
+   */
+  turnStateSince?: string;
+  /**
+   * True once this session's REPL peer-inbox notifier is watching its inbox,
+   * i.e. it will actually read cross-session messages. `send_to_session`
+   * refuses targets without it (one-shot `afk chat`, Telegram, and daemon have
+   * no receiver in v1). Optional/additive.
+   */
+  peerInbox?: boolean;
+  /**
+   * What this session is (or was last) working on. Written at REPL turn
+   * boundaries by `src/agent/awareness/presence.activity.ts`. Optional/additive:
+   * absent for sessions on non-REPL surfaces, or before the first turn ends.
+   *
+   * `promptHead` is sourced from the RAW user-typed text BEFORE peer-message or
+   * background-subagent-result injections are prepended — injected text never
+   * appears here. Callers that only have access to the composited `runText`
+   * must pass the pre-injection raw text instead. Absent when the first turn
+   * ended before a session id was minted and no raw text was supplied to
+   * setPresenceActivityTurnEnd.
+   *
+   * `turns` is seeded from `ctx.stats.totalTurns` after each turn completes,
+   * so it survives resume (stats.totalTurns is restored from the stored session
+   * while a plain increment would reset to 1). `lastTurnEndedAt` is when the
+   * most recent turn finished. Both update at turn end; `promptHead` updates at
+   * turn start so a busy session shows what it is working on RIGHT NOW.
+   */
+  activity?: PresenceActivity;
 }
 
 /**
@@ -303,24 +374,83 @@ export function writePresenceFileSync(info: PresenceFileInfo): void {
   }
 }
 
+/** Options for {@link touchPresenceHeartbeat}. */
+export interface TouchHeartbeatOptions {
+  /**
+   * Re-checked inside the write queue, before the read AND again right before
+   * the commit. Return `false` once the caller no longer owns `sessionId` (the
+   * heartbeat loop passes "still registered for cleanup"), and the refresh is
+   * dropped instead of rewriting a record that was retired meanwhile.
+   */
+  stillOwned?: () => boolean;
+}
+
 /**
  * Refresh the `heartbeatAt` timestamp on an existing presence file (best-effort,
  * read-modify-write). Preserves every other field.
  *
- * Call this at turn boundaries. A session that is alive but wedged, or whose pid
- * has been recycled after a SIGKILL, is indistinguishable from a healthy one on
- * pid-liveness alone — a stale heartbeat is what separates them.
+ * Invariant: a heartbeat must never CREATE or RESURRECT a presence file. The
+ * write is atomic (tmp + rename, so a concurrent reader never sees a truncated
+ * record), and the rename only commits when the file still exists and
+ * `stillOwned()` still holds, checked in the same tick as the rename (see
+ * `commitGuard` in utils/atomic-write.ts). `removePresenceFileSync` is
+ * synchronous and runs outside this queue, so it lands either before the guard
+ * (the refresh is dropped) or after the rename (the unlink wins). Residual
+ * race: another PROCESS unlinking the file in the microseconds between the
+ * guard and the rename. Only the dead-presence reaper does that, and only for a
+ * pid proven gone, which excludes this live writer.
  *
  * No-op when the presence file is absent (subagents never have one). Never
  * throws: presence is non-critical and the session must proceed regardless.
  */
-export async function touchPresenceHeartbeat(sessionId: string): Promise<void> {
+export async function touchPresenceHeartbeat(
+  sessionId: string,
+  options: TouchHeartbeatOptions = {},
+): Promise<void> {
+  const owned = options.stillOwned ?? (() => true);
   return enqueuePresenceWrite(sessionId, async () => {
     try {
+      if (!owned()) return;
       const filePath = presenceFilePath(sessionId);
       const raw = await readFile(filePath, 'utf8');
       const parsed = JSON.parse(raw) as PresenceFileInfo;
       parsed.heartbeatAt = new Date().toISOString();
+      await atomicWriteFileAsync(filePath, JSON.stringify(parsed, null, 2), {
+        mode: 0o600,
+        mkdirp: false,
+        commitGuard: () => owned() && existsSync(filePath),
+      });
+    } catch {
+      // Best-effort — presence is non-critical.
+    }
+  });
+}
+
+/**
+ * Apply `patch` to an existing presence record through this session's
+ * serialized write queue (see the Invariant above). The extension point for
+ * sibling modules (`presence.peer.ts`) that add fields: routing through here
+ * keeps every writer in ONE queue, so their read-modify-write cycles can never
+ * drop each other's mutations. No-op when the file is absent. Never throws.
+ */
+export async function patchPresenceFile(
+  sessionId: string,
+  patch: (record: PresenceFileInfo) => void,
+): Promise<void> {
+  return enqueuePresenceWrite(sessionId, async () => {
+    try {
+      const filePath = presenceFilePath(sessionId);
+      const parsed = JSON.parse(await readFile(filePath, 'utf8')) as PresenceFileInfo;
+      patch(parsed);
+      // Non-atomic writeFile is deliberate here. The PR that introduced this
+      // function (#2869) intentionally limited atomic writes to updatePresenceCwd,
+      // where the worktree-sweep guard requires crash-safety. All patchPresenceFile
+      // callers — setPresenceAfk, setPresenceBlocked (presence.ts),
+      // setPresenceName, setPresenceNameIfUnset, setPresenceTurnState,
+      // setPresencePeerInbox (presence.peer.ts), setPresenceActivityPromptHead,
+      // setPresenceActivityTurnEnd (presence.activity.ts) — are best-effort
+      // markers where a partial write is equally harmless — if the process dies
+      // mid-write the presence file is removed at cleanup anyway.
       await writeFile(filePath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
     } catch {
       // Best-effort — presence is non-critical.
@@ -404,7 +534,14 @@ export async function updatePresenceCwd(sessionId: string, cwd: string): Promise
       const raw = await readFile(filePath, 'utf8');
       const parsed = JSON.parse(raw) as PresenceFileInfo;
       parsed.cwd = cwd;
-      await writeFile(filePath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
+      // mkdirp:false — the presence directory is always created by writePresenceFile
+      // before any cwd update can be queued. updatePresenceCwd is only called from
+      // setCwd (session-config.ts), which runs AFTER presence has been written
+      // with the launch dir, so the parent directory is guaranteed to exist.
+      await atomicWriteFileAsync(filePath, JSON.stringify(parsed, null, 2), {
+        mode: 0o600,
+        mkdirp: false,
+      });
     } catch {
       // Best-effort — presence is non-critical.
     }
@@ -524,6 +661,8 @@ export interface ReadLivePresenceOptions {
    * visible.
    */
   maxHeartbeatAgeMs?: number;
+  /** Start-time probe seam for tests; defaults to the OS probe. */
+  startTimeProbe?: StartTimeProbe;
 }
 
 /**
@@ -542,21 +681,19 @@ export interface ReadLivePresenceOptions {
  * `process.once('exit'|'SIGINT'|'SIGTERM')`, none of which fire on SIGKILL or an
  * OOM kill, and nothing else reaps the directory. Before this, a crashed session
  * appeared live forever to every consumer.
+ *
+ * Also hides records whose pid was RECYCLED by an unrelated process (start-time
+ * mismatch) and legacy records with a long-stale heartbeat — see
+ * `presence.liveness.ts` for the verdict rules and thresholds.
  */
 export async function readLivePresenceFiles(
   options: ReadLivePresenceOptions = {},
 ): Promise<PresenceRecord[]> {
-  const records = await readPresenceFiles();
-  const { maxHeartbeatAgeMs } = options;
-  return records.filter((r) => {
-    if (r.liveness === 'dead') return false;
-    if (
-      maxHeartbeatAgeMs !== undefined &&
-      r.heartbeatAgeMs !== null &&
-      r.heartbeatAgeMs > maxHeartbeatAgeMs
-    ) {
-      return false;
-    }
-    return true;
-  });
+  const { maxHeartbeatAgeMs, startTimeProbe } = options;
+  // filterVerifiedLive already excludes 'dead' records; no post-filter needed here.
+  const records = await filterVerifiedLive(await readPresenceFiles(), startTimeProbe);
+  if (maxHeartbeatAgeMs === undefined) return records;
+  return records.filter(
+    (r) => r.heartbeatAgeMs === null || r.heartbeatAgeMs <= maxHeartbeatAgeMs,
+  );
 }

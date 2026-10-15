@@ -221,10 +221,15 @@ describe('SessionWatchManager', () => {
     writer.recordUser('second-batch');
     await sleep(300);
     await writer.close('close');
-    await sleep(600);
 
     // First batch send threw; later batches must still be delivered.
-    expect(sent.join('\n')).toContain('second-batch');
+    // Use vi.waitFor instead of a fixed sleep: on slow Windows runners the
+    // tailLedger poll (250ms) plus the sending Promise chain settling may
+    // take longer than a fixed budget.  vi.waitFor polls until the assertion
+    // passes or the timeout expires, eliminating the race against sleep(600).
+    await vi.waitFor(() => {
+      expect(sent.join('\n')).toContain('second-batch');
+    }, { timeout: 4_000 });
   });
 });
 
@@ -302,13 +307,17 @@ describe('SessionWatchManager — elicitation intercept + signed write-back (cri
       request: { type: 'text', message: 'What is your name?' },
     });
 
-    // Give the tail loop time to process the record and install the interceptor.
-    await sleep(200);
+    // tailLedger polls at 250ms — vi.waitFor instead of a fixed sleep so the
+    // test is correct on slow CI runners where 200ms expires before the first
+    // poll fires and installs the pending resolver (same race fixed in #3056
+    // for the skip-path sibling, now applied here for the routeKey variant).
+    await vi.waitFor(() => {
+      expect(pendingElicitations.get(routeKey({ chatId, threadId: 88 }))).toBeDefined();
+    }, { timeout: 2000 });
 
     // Simulate the operator typing an answer into Telegram (the message handler
     // fires the resolver, which is what handle() would do when it sees a text).
     const resolver = pendingElicitations.get(routeKey({ chatId, threadId: 88 }));
-    expect(resolver).toBeDefined();
     expect(bot.telegram.sendMessage).toHaveBeenCalledWith(
       chatId,
       expect.stringContaining('What is your name?'),
@@ -316,21 +325,22 @@ describe('SessionWatchManager — elicitation intercept + signed write-back (cri
     );
     resolver!('Alice');
 
-    // Give _run time to receive the result and write back the response.
-    await sleep(200);
-
-    // The elicitation_response record must be in the ledger and HMAC-verified.
+    // Poll the ledger until the elicitation_response record appears — avoids
+    // the fixed 200ms sleep that races the async write-back on slow CI hosts.
     const ledgerPath = path.join(
       tmpDir, 'state', 'sessions', id, 'events.jsonl',
     );
-    const lines = fs.readFileSync(ledgerPath, 'utf8').trim().split('\n');
-    const responseRecord = lines
-      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
-      .find((r) => r?.kind === 'elicitation_response');
+    let responseRecord: Record<string, unknown> | undefined;
+    await vi.waitFor(() => {
+      const lines = fs.readFileSync(ledgerPath, 'utf8').trim().split('\n');
+      responseRecord = lines
+        .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+        .find((r) => r?.kind === 'elicitation_response');
+      expect(responseRecord).toBeDefined();
+    }, { timeout: 2000 });
 
-    expect(responseRecord).toBeDefined();
-    expect(responseRecord.reqId).toBe(reqId);
-    const result: ElicitationResult = responseRecord.result;
+    expect(responseRecord!.reqId).toBe(reqId);
+    const result: ElicitationResult = responseRecord!.result as ElicitationResult;
     expect(result.action).toBe('accept');
 
     // Verify the HMAC using the real verifyElicitationResponse.
@@ -369,17 +379,29 @@ describe('SessionWatchManager — elicitation intercept + signed write-back (cri
       request: { type: 'text', message: 'Skip?' },
     });
 
-    await sleep(200);
+    // tailLedger polls at 250ms — vi.waitFor instead of a fixed sleep so the
+    // test is correct on slow macOS runners where 200ms expires before the
+    // first poll fires and installs the pending resolver.
+    await vi.waitFor(() => {
+      expect(pendingElicitations.get(String(chatId))).toBeDefined();
+    }, { timeout: 1000 });
 
     // Answer the pending resolver.
     const resolver = pendingElicitations.get(String(chatId));
-    expect(resolver).toBeDefined();
     resolver!('any answer');
 
-    await sleep(200);
+    // The skip path writes nothing to disk: readSessionKey returns null so
+    // watch.ts logs and continues.  Wait for the ledger to stabilise (two
+    // consecutive reads with the same line count) instead of a fixed sleep.
+    const ledgerPath = path.join(tmpDir, 'state', 'sessions', id, 'events.jsonl');
+    let prevLineCount = -1;
+    await vi.waitFor(() => {
+      const raw = fs.readFileSync(ledgerPath, 'utf8').trim();
+      const count = raw.split('\n').length;
+      if (count !== prevLineCount) { prevLineCount = count; throw new Error('still settling'); }
+    }, { timeout: 1000, interval: 50 });
 
     // No elicitation_response should be in the ledger.
-    const ledgerPath = path.join(tmpDir, 'state', 'sessions', id, 'events.jsonl');
     const lines = fs.readFileSync(ledgerPath, 'utf8').trim().split('\n');
     const responseRecord = lines
       .map((l) => { try { return JSON.parse(l); } catch { return null; } })
@@ -526,7 +548,11 @@ describe('SessionWatchManager — F1 regression: form-mode approval renders butt
       },
     });
 
-    await sleep(250);
+    // tailLedger polls at 250ms — vi.waitFor on the actual sendMessage call
+    // instead of a fixed sleep to handle slow CI runners.
+    await vi.waitFor(() => {
+      expect(sent.find((m) => m.options?.reply_markup !== undefined)).toBeDefined();
+    }, { timeout: 2000 });
 
     // ASSERTION 1: the prompt rendered with an inline keyboard whose buttons carry
     // afk:pa: callback_data. The ask-only handler would send a plain text prompt
@@ -547,19 +573,21 @@ describe('SessionWatchManager — F1 regression: form-mode approval renders butt
     const answerCbQuery = vi.fn().mockResolvedValue(undefined);
     await paAction!.handler({ callbackQuery: { data: approveBtn!.callback_data }, answerCbQuery });
 
-    await sleep(200);
-
     // ASSERTION 2: the written-back response carries content.choice (what
     // afk-mode-gate reads) — NOT content.value. Under the ask-only handler this
     // would be content.value and the gate would refuse the op.
+    // Poll instead of fixed sleep to avoid the write-back race on slow CI.
     const ledgerPath = path.join(tmpDir, 'state', 'sessions', id, 'events.jsonl');
-    const lines = fs.readFileSync(ledgerPath, 'utf8').trim().split('\n');
-    const responseRecord = lines
+    let responseRecord: Record<string, unknown> | undefined;
+    await vi.waitFor(() => {
+      const lines = fs.readFileSync(ledgerPath, 'utf8').trim().split('\n');
+      responseRecord = lines
       .map((l) => { try { return JSON.parse(l); } catch { return null; } })
-      .find((r) => r?.kind === 'elicitation_response');
-    expect(responseRecord).toBeDefined();
-    expect(responseRecord.reqId).toBe(reqId);
-    const result: ElicitationResult = responseRecord.result;
+        .find((r) => r?.kind === 'elicitation_response');
+      expect(responseRecord).toBeDefined();
+    }, { timeout: 2000 });
+    expect(responseRecord!.reqId).toBe(reqId);
+    const result: ElicitationResult = responseRecord!.result as ElicitationResult;
     expect(result.action).toBe('accept');
     expect((result.content as { choice?: string } | undefined)?.choice).toBe('approve');
 
@@ -607,15 +635,14 @@ describe('SessionWatchManager — keep-alive heartbeat for a pending elicitation
       request: { type: 'text', message: 'name?' },
     });
 
-    // Wait through many heartbeat intervals WITHOUT answering.
-    // Budget must absorb worst-case poll latency (POLL_INTERVAL_MS=250ms) plus
-    // at least one heartbeat tick (25ms) with generous slack for CI event-loop
-    // jitter — 400ms was too tight on macOS runners where fs.watch coalescing
-    // makes the 250ms poll the sole wakeup mechanism.
-    await sleep(800);
     const nudges = () => sent.filter((t) => /still waiting/i.test(t)).length;
-    // Fired at least once, but capped (MAX_ELICIT_NUDGES = 4) — never spams forever ...
-    expect(nudges()).toBeGreaterThanOrEqual(1);
+    // Wait for at least one nudge instead of a fixed sleep — eliminates the
+    // flake where event-loop jitter on slow CI runners caused the poll cycle to
+    // not fire within the old 800ms budget (#3701 converted siblings the same way).
+    await vi.waitFor(() => {
+      expect(nudges()).toBeGreaterThanOrEqual(1);
+    }, { timeout: 3000 });
+    // Capped — never spams forever (MAX_ELICIT_NUDGES = 4).
     expect(nudges()).toBeLessThanOrEqual(4);
     // ... and the wait is STILL open — answer whenever (resolver live, NOT cut off).
     const resolver = pendingElicitations.get(String(chatId));

@@ -27,7 +27,9 @@ Or set a default task in your environment:
 AFK_DAEMON_TASK="review any PRs opened since the last run and post findings as a comment" afk daemon
 ```
 
-The working directory for spawned sessions defaults to the current directory. Override with `AFK_DAEMON_CWD`.
+The working directory for spawned sessions defaults to the current directory. Override the daemon-wide default with `AFK_DAEMON_CWD`, or pin individual tasks to a specific repo with the per-task `cwd` field (see [Scheduled tasks](/docs/surfaces/daemon#scheduled-tasks) for details).
+
+**Working directory precedence:** `task.cwd` → `AFK_DAEMON_CWD` → `process.cwd()`. Setting `cwd` on a task prevents grep/glob calls from walking the entire home directory during cron sweeps.
 
 ### Running once
 

@@ -17,6 +17,7 @@ import type {
 import type { HookRegistry } from '../hooks.js';
 import type { ModelProvider } from '../provider.js';
 import type { TraceSink } from '../trace/index.js';
+import type { JournalMessage, MessageJournal } from '../journal/types.js';
 import type { AgentModelInput } from './model-types.js';
 import type { ModelSlots } from '../session/model-slots.js';
 import type { CanUseTool, PermissionBubbler } from './permission-types.js';
@@ -97,6 +98,15 @@ export interface PlanExitControls {
    * {@link import('../../session/agent-session.js').AgentSession.setPlanExitQueueCheck}.
    */
   hasPendingUserMessage?: () => boolean;
+  /**
+   * Optional visible-plan-text gate, wired by `AgentSession` to its
+   * `PlanTextTracker`. Called by the `exit_plan_mode` handler before the
+   * approval picker: `'ok'` shows the picker, `'refuse'` returns a tool result
+   * telling the model to write its plan as visible text first, and `'warn'`
+   * (refusal budget spent) shows the picker with a warning. Absent means no
+   * gate (the picker always shows), which keeps custom bridges working.
+   */
+  checkPlanText?: () => 'ok' | 'refuse' | 'warn';
 }
 
 /** Agent session configuration */
@@ -147,8 +157,7 @@ export interface AgentConfig {
    * Per-slot signal set by `applySlotCredentials` for a `provider:
    * 'chatgpt-oauth'` tier: force ChatGPT-subscription OAuth for this session's
    * openai-compatible provider — selecting the `~/.codex/auth.json` ChatGPT
-   * token over `OPENAI_API_KEY`/`CODEX_API_KEY` and WITHOUT requiring the global
-   * `AFK_OPENAI_CHATGPT_OAUTH` flag. Lets a ChatGPT-subscription model coexist
+   * token over `OPENAI_API_KEY`/`CODEX_API_KEY` and any explicit key. Lets a ChatGPT-subscription model coexist
    * with a custom keyed OpenAI model in one session. See `resolveOpenAIAuth`.
    */
   forceChatgptOAuth?: boolean;
@@ -418,7 +427,18 @@ export interface AgentConfig {
   /** Continue the most recent persisted session in the current working directory */
   continue?: boolean;
 
-  /** Resume a specific persisted session ID */
+  /**
+   * Resume a specific persisted session ID.
+   *
+   * When set (and {@link resumeMessages} and {@link resumeHistory} are absent
+   * and {@link persistSession} is not `false`), `AgentSession` automatically loads the on-disk message
+   * journal for this id and seeds `resumeMessages` — so SDK consumers get the
+   * same full-fidelity conversation rehydration the CLI achieves via
+   * `resumeConfigFor()`. The caller's explicit `resumeMessages` or
+   * `resumeHistory` always wins; passing either suppresses the auto-load.
+   * `sessionId` alone never triggers it. Journal-disabled environments
+   * (`AFK_MESSAGE_JOURNAL_DISABLED=1`) and subagent forks are excluded.
+   */
   resume?: string;
 
   /**
@@ -426,6 +446,22 @@ export interface AgentConfig {
    * persistence. Native providers can ignore this and use {@link resume}.
    */
   resumeHistory?: ResumeHistoryTurn[];
+
+  /**
+   * Full-fidelity conversation to seed on resume, folded + hydrated from the
+   * session's message journal (docs/message-journal.md). When present,
+   * providers seed from this and IGNORE {@link resumeHistory}; each provider
+   * converts it with its own `JournalAdapter.fromJournalMessages`.
+   */
+  resumeMessages?: JournalMessage[];
+
+  /**
+   * Durable message-journal sink for this session (or, on a subagent fork,
+   * the child's journal from `parent.forSubagent(id)`). Providers wrap it in
+   * a `JournalSync` and call `sync(messages)` at their commit points.
+   * Absent = journaling off (disabled, tests, one-shot callers).
+   */
+  messageJournal?: MessageJournal;
 
   /** Override or seed the SDK session ID */
   sessionId?: string;
@@ -517,6 +553,25 @@ export interface AgentConfig {
   bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
 
   /**
+   * Session-scoped detach registry for the Ctrl+B bash-backgrounding contract
+   * (#2542, #2735). When present, each per-query dispatcher injects it into the
+   * context of every tool in DETACHABLE_TOOLS (currently bash only) so the REPL
+   * Ctrl+B handler and the dispatcher share the same instance. Absent for
+   * headless surfaces, subagent children, and one-shot CLI runs that have no
+   * REPL to inject the result into. The registry must be cancelled by session
+   * teardown via cancelAll() (Invariant:D3 — see detach-registry.ts).
+   */
+  detachRegistry?: import('../tools/detach-registry.js').DetachableToolRegistry;
+
+  /**
+   * Session-scoped registry for model-started background processes (`bash`
+   * with `run_in_background: true`). Root interactive REPL sessions only;
+   * never copied into forked child configs, so subagents get an explicit
+   * "unavailable" refusal. Teardown must call `killAll()`.
+   */
+  processJobs?: import('../shell-jobs/process-jobs.js').ProcessJobRegistry;
+
+  /**
    * Cascade-abort and drain in-flight subagents before the trace writer is
    * sealed.
    *
@@ -532,6 +587,16 @@ export interface AgentConfig {
    * tree — forks themselves, one-shot probes — correctly leave it undefined.
    */
   drainSubagents?: (reason: string) => Promise<unknown>;
+
+  /**
+   * Returns promises for any in-flight child terminal trace emits that were
+   * started (e.g. fire-and-forget cancel emits) but may not have reached the
+   * writer yet. Collected by `SubagentManager` from active handle
+   * `_pendingCancellationWrite` fields immediately before the seal; passed
+   * into `TraceWriter.seal()` so the rows land BEFORE `session_sealed` even
+   * when the drain timed out or was not configured (#3714).
+   */
+  getPendingChildTerminalWrites?: () => readonly Promise<void>[];
 
   /**
    * True when this session is a forked subagent rather than the top-level
@@ -558,6 +623,22 @@ export interface AgentConfig {
    * logic. See `src/agent/provider.ts`.
    */
   provider?: ModelProvider;
+
+  /**
+   * Opt-in tool executors for the `agent`, `skill`, and `compose` tools
+   * (#3442). Default: none, so a bare `new AgentSession(config)` exposes no
+   * agent/skill/compose schemas (see `SessionMetadata.reducedToolSurface`).
+   * Build the bundle with `createWiredExecutors`, one bundle per session.
+   *
+   * Contract: mutually exclusive with {@link provider} and
+   * {@link providerFactory} (the constructor throws): an injected provider
+   * already carries its own executors. The session calls `executors.bind()`
+   * once before provider initialization, threads the defined executors into
+   * every provider it builds (including cross-family `/model` swaps), and
+   * calls `executors.drain(reason)` on close/reset alongside
+   * {@link drainSubagents}.
+   */
+  executors?: import('../session/session-executors.js').SessionExecutors;
 
   /**
    * Fully-wired provider factory for mid-session cross-family model switching.
@@ -684,6 +765,21 @@ export interface AgentConfig {
   parentSessionId?: string;
 
   /**
+   * Root session ID — the depth-0 session that owns the outcome record.
+   *
+   * Set once on a depth-1 child (to the root's sessionId) and inherited
+   * unchanged by all deeper descendants. A depth-1 child with no grandchildren
+   * sets this equal to `parentSessionId`; a grandchild's `rootSessionId` is
+   * its grandparent's id, not its immediate parent's. Child-attribution uses
+   * this to credit commit SHAs and PR URLs to the root record rather than to
+   * an intermediate session id that never writes a sidecar.
+   *
+   * Undefined on top-level (depth-0) sessions — `parentSessionId` is also
+   * undefined there, so hooks can treat both as the "no attribution" signal.
+   */
+  rootSessionId?: string;
+
+  /**
    * This session's own subagent id when it was forked as a subagent — the
    * `SubagentHandle.id` assigned by `SubagentManager.forkSubagent`. Set on the
    * child config at the fork site (subagent.ts); undefined for a top-level
@@ -770,6 +866,21 @@ export interface AgentConfig {
    * Default: `undefined` (main sessions see the complete manifest).
    */
   skillDispatchName?: string;
+
+  /**
+   * When true, the session is an unnamed (bare `agent` tool) subagent dispatch
+   * — i.e. one built by `buildChildConfig` with `namedAgent === undefined`.
+   *
+   * Providers use this flag in `resolveToolSystemPrompt` to return an empty
+   * string rather than the full tool conventions block.  The conventions are
+   * already embedded in `UNNAMED_SUBAGENT_WORKER_PROMPT` (which becomes
+   * `config.systemPrompt` for these sessions via `composeUnnamedWorkerPrompt`),
+   * so prepending `toolBase` again would duplicate `TOOL_SYSTEM_PROMPT_BASE` in
+   * the assembled system prompt (#3359).
+   *
+   * Default: `undefined` / `false` (all other sessions get `toolBase`).
+   */
+  isUnnamedWorker?: boolean;
 
   /**
    * When true, the session runs on a non-interactive surface where no human is

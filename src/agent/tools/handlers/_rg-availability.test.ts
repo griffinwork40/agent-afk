@@ -43,9 +43,7 @@ describe('describeRgUnavailable', () => {
     expect(message).not.toContain('deleted worktree');
   });
 
-  // chmod 0o000 does not reliably deny X_OK on Windows (no POSIX permission
-  // bits), so this case is skipped there — parity with the existing
-  // list-directory permission-denied test.
+  // Windows: genuinely POSIX-only — chmod 0o000 does not reliably deny X_OK on NTFS (no POSIX permission bits)
   it.skipIf(process.platform === 'win32')(
     'returns a message for an existing-but-non-executable file',
     () => {

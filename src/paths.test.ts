@@ -38,6 +38,9 @@ import {
   getBrowserStorageStatePath,
   getTraceDir,
   sessionLabelFromTracePath,
+  getWhatifDir,
+  getPluginDataDir,
+  getPluginsDir,
 } from './paths.js';
 import { useUnsetAfkHome } from './__test-utils__/unset-afk-home.js';
 
@@ -396,3 +399,58 @@ describe('sessionLabelFromTracePath — inverse of getTraceDir', () => {
 });
 
 // F5 tests live in paths-exdev.test.ts (requires vi.mock hoisting in isolation).
+
+// ---------------------------------------------------------------------------
+// getWhatifDir
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// getPluginDataDir — traversal guard
+// ---------------------------------------------------------------------------
+
+describe('getPluginDataDir', () => {
+  it('returns a path outside the installed plugins dir for a normal key', () => {
+    const dir = getPluginDataDir('my-plugin');
+    expect(dir).toBe(join(getAfkHome(), 'plugin-data', 'p-my-plugin'));
+    expect(dir.startsWith(`${getPluginsDir()}${sep}`)).toBe(false);
+  });
+
+  it('percent-encodes filesystem-unsafe characters', () => {
+    const dir = getPluginDataDir('marketplace:my-plugin');
+    expect(dir).toBe(join(getAfkHome(), 'plugin-data', 'p-marketplace%3Amy-plugin'));
+  });
+
+  it('keeps formerly colliding keys distinct', () => {
+    expect(getPluginDataDir('foo:bar')).not.toBe(getPluginDataDir('foo__bar'));
+  });
+
+  it.each([
+    ['bare dot-dot', '..'],
+    ['bare dot', '.'],
+    ['empty string', ''],
+    ['slashes', '///'],
+  ])('encodes %s under the plugin data root', (_label, key) => {
+    expect(getPluginDataDir(key)).toBe(join(getAfkHome(), 'plugin-data', `p-${encodeURIComponent(key)}`));
+  });
+});
+
+describe('getWhatifDir', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('returns a path ending with "whatif" under getAfkStateDir()', () => {
+    const dir = getWhatifDir();
+    expect(dir).toMatch(/whatif$/);
+    expect(dir).toBe(join(getAfkStateDir(), 'whatif'));
+  });
+
+  it('reflects AFK_HOME overrides', () => {
+    const customHome = join(tmpdir(), 'afk-wid-test');
+    vi.stubEnv('AFK_HOME', customHome);
+    const dir = getWhatifDir();
+    expect(dir).toContain('whatif');
+    expect(dir).toContain(customHome);
+    expect(dir).toBe(join(customHome, 'state', 'whatif'));
+  });
+});

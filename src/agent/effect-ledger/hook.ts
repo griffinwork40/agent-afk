@@ -1,280 +1,175 @@
-/**
- * PostToolUse hook that integrates the effect ledger into the hook pipeline.
- *
- * Registration: add to the default hook registry after the existing
- * PostToolUse handlers. The hook is non-blocking (never returns
- * `decision: 'block'`); its sole purpose is record-keeping.
- *
- * # Lifecycle within one tool call
- *
- *   1. PostToolUse fires after the tool returns.
- *   2. The hook classifies the call via `classifyToolCall`.
- *   3. If external:
- *      a. Computes an idempotency key from operationType + args.
- *      b. Checks for a prior record with that key via the store.
- *      c. If found with status "executed" or "confirmed": records an
- *         `ambiguous` note (we cannot know if the execution was a duplicate
- *         or a new call) and returns. No record is created.
- *      d. If not found (or only a "pending" / "failed" record exists): writes
- *         the outcome record with status "executed" or "failed".
- *
- * # Write-ahead note
- *
- * The task specifies "write-ahead recording before execution". The FULL
- * write-ahead (pending → execute) pattern requires a PreToolUse hook that
- * writes "pending" before execution, then a PostToolUse hook that updates
- * the status. This module ships the lightweight PostToolUse-only variant that
- * records the outcome; a PreToolUse companion is a natural follow-on once the
- * dedup-gate requirement is confirmed to be valuable (adding it without a clear
- * production need adds unnecessary blocking overhead to every tool call).
- *
- * The store.writePending / store.updateStatus methods are available for callers
- * that DO want full write-ahead behavior; the `createEffectLedgerPreHook`
- * export below provides the PreToolUse half if desired.
- *
- * @module agent/effect-ledger/hook
- */
-
+/* Write-ahead hooks for the existing external-effect ledger. */
 import { classifyToolCall } from './classifier.js';
 import { computeIdempotencyKey } from './idempotency.js';
 import { EffectStore } from './store.js';
 import { redactSecrets } from '../redact-secrets.js';
 import type { HookContext, HookDecision, HookHandler } from '../hooks.js';
+import type { EffectRecord, EffectStatus } from './types.js';
 
-// ---------------------------------------------------------------------------
-// Redaction helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Redact secrets from a structured tool-input object before persisting.
- *
- * Converts to JSON string (for the redaction regex), then re-parses. Returns
- * the input unchanged if serialization fails (best-effort).
- */
-function redactArgs(input: unknown): unknown {
-  try {
-    const json = JSON.stringify(input);
-    const redacted = redactSecrets(json);
-    return JSON.parse(redacted) as unknown;
-  } catch {
-    return '[serialization error]';
-  }
+function redact(value: unknown): unknown {
+  if (value === undefined) return undefined;
+  try { return JSON.parse(redactSecrets(JSON.stringify(value))) as unknown; }
+  catch { return '[serialization error]'; }
 }
 
-/**
- * Redact secrets from a tool output before persisting. Same approach.
- */
-function redactResult(output: unknown): unknown {
-  if (output === undefined) return undefined;
+function identity(context: HookContext): { key: string; operationType: string } | null {
+  if (context.event !== 'PreToolUse' && context.event !== 'PostToolUse' && context.event !== 'PostToolUseFailure') return null;
   try {
-    const json = JSON.stringify(output);
-    const redacted = redactSecrets(json);
-    return JSON.parse(redacted) as unknown;
-  } catch {
-    return '[serialization error]';
-  }
+    const classification = classifyToolCall(context.toolName, context.input);
+    if (!classification.isExternal) return null;
+    return {
+      key: computeIdempotencyKey(classification.operationType, context.input),
+      operationType: classification.operationType,
+    };
+  } catch { return null; }
 }
 
-// ---------------------------------------------------------------------------
-// PostToolUse hook factory
-// ---------------------------------------------------------------------------
+/** Only explicit pre-send refusals or a definitive HTTP 4xx prove non-application. */
+function definitiveFailure(context: HookContext): boolean {
+  if (context.event === 'PostToolUseFailure') {
+    return /^(?:web_request blocked:|web_request credential error:|Telegram is not configured)/i.test(context.error);
+  }
+  if (context.event !== 'PostToolUse') return false;
+  const output = context.output;
+  if (context.toolName === 'web_request' && typeof output === 'string') {
+    try {
+      const response = JSON.parse(output) as { status?: number };
+      // 408/409/425/429 do not establish non-application (timeout, conflict,
+      // early-data retry or rate-limit may follow a prior applied request).
+      if (typeof response.status === 'number' && response.status >= 400 && response.status < 500 &&
+          ![408, 409, 425, 429].includes(response.status)) return true;
+    } catch { /* An unparseable response is not a definitive rejection. */ }
+  }
+  if (context.isError !== true && !(output && typeof output === 'object' && (output as { isError?: boolean }).isError)) return false;
+  const text = typeof output === 'string' ? output : JSON.stringify(output);
+  return /^(?:web_request blocked:|web_request credential error:|Telegram is not configured)/i.test(text);
+}
 
-/**
- * Create a PostToolUse hook handler that records external effects to the
- * ledger.
- *
- * Pass a custom `store` in tests to avoid writing to the real ledger file.
- */
-export function createEffectLedgerPostHook(store?: EffectStore): HookHandler {
-  const effectStore = store ?? new EffectStore();
-
-  return async (context: HookContext): Promise<HookDecision> => {
-    // Handle PostToolUseFailure: tool handler threw — record as 'failed'.
-    if (context.event === 'PostToolUseFailure') {
-      const { toolName, input, sessionId } = context;
-      const classification = classifyToolCall(toolName, input);
-      if (!classification.isExternal) return {};
-
-      let ikey: string;
+function outcome(context: HookContext): Exclude<EffectStatus, 'pending'> {
+  if (definitiveFailure(context)) return 'failed';
+  if (context.event === 'PostToolUseFailure') return 'unknown';
+  if (context.event === 'PostToolUse') {
+    const output = context.output;
+    if (context.toolName === 'web_request' && typeof output === 'string') {
       try {
-        ikey = computeIdempotencyKey(classification.operationType, input);
-      } catch {
-        // Best-effort: stableStringify can throw on exotic objects (e.g.
-        // MCP-constructed inputs with getters that throw). Swallow so the
-        // hook's non-blocking contract is maintained.
-        return {};
-      }
+        const { status } = JSON.parse(output) as { status?: number };
+        // Treat any HTTP >= 400 as unknown here. definitiveFailure() carves out
+        // the narrow set of statuses that prove non-application (400-class
+        // excluding 408/409/425/429). Keep the two in sync: if definitiveFailure
+        // is updated to include new statuses, this branch may need updating too.
+        if (typeof status === 'number' && status >= 400) return 'unknown';
+      } catch { /* Unparseable errors remain uncertain when flagged below. */ }
+    }
+    if (context.isError || (output && typeof output === 'object' && (output as { isError?: boolean }).isError)) return 'unknown';
+  }
+  return 'executed';
+}
 
-      // Dedup check: mirror the PostToolUse path so retried failures with the
-      // same idempotency key are recorded as 'ambiguous' rather than producing
-      // duplicate 'failed' records that break reconciliation queries.
-      // Includes 'ambiguous' so call N>=3 is still caught.
-      let prior;
-      try {
-        prior = await effectStore.findByIdempotencyKey(ikey, sessionId);
-      } catch {
-        prior = null;
-      }
+/** Pair hooks with one store and in-flight map, including calls made by child sessions. */
+export function createEffectLedgerHooks(store: EffectStore = new EffectStore()): { pre: HookHandler; post: HookHandler } {
+  const pendingIds = new Map<string, string>();
+  const activeIds = new Set<string>();
+  const admitting = new Set<string>();
+  const duplicateIds = new Set<string>();
 
-      if (prior !== null && (prior.status === 'executed' || prior.status === 'confirmed' || prior.status === 'failed' || prior.status === 'ambiguous')) {
-        try {
-          const pending = effectStore.writePending({
-            idempotencyKey: ikey,
-            operationType: classification.operationType,
-            args: redactArgs(input),
-            sessionId,
-          });
-          await effectStore.updateStatus({ id: pending.id, status: 'ambiguous' });
-        } catch {
-          // Best-effort — ledger write failure must never disrupt tool execution.
+  const pre: HookHandler = async (context): Promise<HookDecision> => {
+    if (context.event !== 'PreToolUse') return {};
+    const effect = identity(context);
+    if (!effect) return {};
+    // Invariant: parallel batch admission must not both read an empty ledger
+    // before either append completes. Reserve the key across the async read.
+    const admissionKey = JSON.stringify([context.sessionId, effect.key]);
+    if (admitting.has(admissionKey)) {
+      return { decision: 'block', reason: 'An identical external action is being admitted. Wait for its outcome before retrying.' };
+    }
+    admitting.add(admissionKey);
+    try {
+      const prior = await store.findByIdempotencyKey(effect.key, context.sessionId);
+      if (prior && (prior.status === 'unknown' || prior.status === 'pending')) {
+        if (activeIds.has(prior.id)) {
+          return { decision: 'block', reason: 'An identical external action is still in flight. Wait for its outcome before retrying.' };
         }
-        return {};
+        if (prior.retryAcknowledgedAt === undefined) {
+          await store.acknowledgeRetry(prior.id);
+          return {
+            decision: 'block',
+            reason: `External action outcome unknown (ledger record ${prior.id}). Verify remote state first (for example check whether the PR or message exists). After verification, re-issue the identical call to proceed; that retry will be linked to this record.`,
+          };
+        }
       }
-
-      try {
-        const pending = effectStore.writePending({
-          idempotencyKey: ikey,
-          operationType: classification.operationType,
-          args: redactArgs(input),
-          sessionId,
-        });
-        await effectStore.updateStatus({
-          id: pending.id,
-          status: 'failed',
-          result: redactResult(context.error),
-        });
-      } catch {
-        // Best-effort — ledger write failure must never disrupt tool execution.
-      }
-      return {};
-    }
-
-    if (context.event !== 'PostToolUse') return {};
-
-    const { toolName, input, output, sessionId } = context;
-
-    const classification = classifyToolCall(toolName, input);
-    if (!classification.isExternal) return {};
-
-    let ikey: string;
-    try {
-      ikey = computeIdempotencyKey(classification.operationType, input);
-    } catch {
-      // Best-effort: stableStringify can throw on exotic objects.
-      return {};
-    }
-
-    // Dedup check: look for a prior record with the same key, scoped to the
-    // current session so two sessions sending the same message are independent.
-    let prior;
-    try {
-      prior = await effectStore.findByIdempotencyKey(ikey, sessionId);
-    } catch {
-      // Best-effort: if the store read fails, proceed without dedup check.
-      prior = null;
-    }
-
-    if (prior !== null && (prior.status === 'executed' || prior.status === 'confirmed' || prior.status === 'ambiguous')) {
-      // A prior executed/confirmed/ambiguous record exists — duplicate.
-      // Record it as "ambiguous" to surface in reconciliation rather than
-      // silently dropping the duplicate.
-      try {
-        const pending = effectStore.writePending({
-          idempotencyKey: ikey,
-          operationType: classification.operationType,
-          args: redactArgs(input),
-          sessionId,
-        });
-        await effectStore.updateStatus({ id: pending.id, status: 'ambiguous' });
-      } catch {
-        // Best-effort — ledger write failure must never disrupt tool execution.
-      }
-      return {};
-    }
-
-    // Write outcome record (new effect, or retry of a failed attempt).
-    // Check context.isError first (set by the dispatcher from ToolResult.isError),
-    // then fall back to the legacy object check for callers that pass output directly.
-    const isError =
-      context.isError === true ||
-      (output !== null &&
-        typeof output === 'object' &&
-        (output as Record<string, unknown>)['isError'] === true);
-
-    const status = isError ? 'failed' : 'executed';
-
-    try {
-      const pending = effectStore.writePending({
-        idempotencyKey: ikey,
-        operationType: classification.operationType,
-        args: redactArgs(input),
-        sessionId,
+      // Invariant: the intent append completes before the dispatcher can invoke the remote handler.
+      const pending = store.writePending({
+        idempotencyKey: effect.key,
+        operationType: effect.operationType,
+        args: redact(context.input),
+        sessionId: context.sessionId,
+        ...(prior && (prior.status === 'unknown' || prior.status === 'pending') ? { retryOf: prior.id } : {}),
       });
-      await effectStore.updateStatus({
-        id: pending.id,
-        status,
-        result: redactResult(output),
-      });
+      activeIds.add(pending.id);
+      if (context.toolUseId) pendingIds.set(context.toolUseId, pending.id);
+      if (prior && (prior.status === 'executed' || prior.status === 'confirmed' || prior.status === 'ambiguous')) {
+        duplicateIds.add(pending.id);
+        return { injectContext: 'An identical external action already executed in this session. This call is allowed because intentional repetition is possible; verify that another send is intended.' };
+      }
     } catch {
-      // Best-effort — ledger write failure must never disrupt tool execution.
+      // Invariant: ledger I/O is best-effort; a broken ledger must never brick tool execution.
+      return {};
+    } finally {
+      admitting.delete(admissionKey);
     }
-
     return {};
   };
+
+  const post: HookHandler = async (context): Promise<HookDecision> => {
+    if (context.event !== 'PostToolUse' && context.event !== 'PostToolUseFailure') return {};
+    const effect = identity(context);
+    if (!effect) return {};
+    const id = context.toolUseId ? pendingIds.get(context.toolUseId) : undefined;
+    if (context.toolUseId) pendingIds.delete(context.toolUseId);
+    if (id) activeIds.delete(id);
+    try {
+      // Standalone post-hook callers without a pre-hook still get a recorded outcome.
+      // Note: this path calls writePending + updateStatus — two fsynced appends per
+      // invocation. The pre+post paired path pays the same cost spread across two
+      // hook calls; this path pays it in one. Acceptable for correctness; callers
+      // that need lower write amplification should prefer the paired hook API.
+      const prior = id ? null : await store.findByIdempotencyKey(effect.key, context.sessionId);
+      const record = id ? { id } : store.writePending({
+        idempotencyKey: effect.key, operationType: effect.operationType,
+        args: redact(context.input), sessionId: context.sessionId,
+      });
+      const duplicate = id ? duplicateIds.has(id) : !!prior &&
+        (prior.status === 'executed' || prior.status === 'confirmed' || prior.status === 'ambiguous');
+      await store.updateStatus({
+        id: record.id, status: duplicate ? 'ambiguous' : outcome(context),
+        result: redact(context.event === 'PostToolUseFailure' ? context.error : context.output),
+      });
+    } catch { /* An observer must not change the tool result. */ }
+    finally { if (id) duplicateIds.delete(id); }
+    return {};
+  };
+  return { pre, post };
 }
 
-// ---------------------------------------------------------------------------
-// PreToolUse hook factory (write-ahead companion)
-// ---------------------------------------------------------------------------
+/** Compatibility surface for standalone post-hook consumers. */
+export function createEffectLedgerPostHook(store?: EffectStore): HookHandler {
+  return createEffectLedgerHooks(store).post;
+}
 
-/**
- * Create a PreToolUse hook handler that writes a "pending" record BEFORE
- * execution begins, and stores the record id in the provided map for the
- * PostToolUse companion to pick up via `toolUseId`.
- *
- * This is the write-ahead half. Wire BOTH createEffectLedgerPreHook and a
- * matching PostToolUse hook that calls `store.updateStatus` using the pending
- * id stored here, if full write-ahead behavior is required.
- *
- * Note: The id map must be shared between the pre and post hooks. This is an
- * optional advanced usage; most callers should use `createEffectLedgerPostHook`
- * alone.
- */
-export function createEffectLedgerPreHook(
-  pendingIds: Map<string, string>,
-  store?: EffectStore,
-): HookHandler {
+/** Compatibility surface for callers that provide their own in-flight id map. */
+export function createEffectLedgerPreHook(pendingIds: Map<string, string>, store?: EffectStore): HookHandler {
   const effectStore = store ?? new EffectStore();
-
-  return (context: HookContext): HookDecision => {
-    if (context.event !== 'PreToolUse') return {};
-
-    const { toolName, input, sessionId, toolUseId } = context;
-    if (!toolUseId) return {};
-
-    const classification = classifyToolCall(toolName, input);
-    if (!classification.isExternal) return {};
-
-    let ikey: string;
+  return async (context): Promise<HookDecision> => {
+    if (context.event !== 'PreToolUse' || !context.toolUseId) return {};
+    const effect = identity(context);
+    if (!effect) return {};
     try {
-      ikey = computeIdempotencyKey(classification.operationType, input);
-    } catch {
-      // Best-effort: stableStringify can throw on exotic objects.
-      return {};
-    }
-
-    try {
-      const pending = effectStore.writePending({
-        idempotencyKey: ikey,
-        operationType: classification.operationType,
-        args: redactArgs(input),
-        sessionId,
+      const record: EffectRecord = effectStore.writePending({
+        idempotencyKey: effect.key, operationType: effect.operationType,
+        args: redact(context.input), sessionId: context.sessionId,
       });
-      pendingIds.set(toolUseId, pending.id);
-    } catch {
-      // Best-effort.
-    }
-
+      pendingIds.set(context.toolUseId, record.id);
+    } catch { /* Best effort. */ }
     return {};
   };
 }

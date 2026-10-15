@@ -8,7 +8,8 @@
 import type { CommittedBandHost } from './terminal-compositor.committed-band-commit.js';
 import { eraseAndPaintRow } from './terminal-compositor.scrollback.js';
 import { withAutowrapDisabled } from './terminal-compositor.band-reflow.js';
-import { contentMargin } from './render/measure.js';
+import { hiddenArchivedRows } from './terminal-compositor.archived-reveal.js';
+import { compositorBand } from './terminal-compositor.content-band.js';
 
 /**
  * Physically erase the pre-resize on-screen footprint snapshotted by the
@@ -112,6 +113,7 @@ export function repositionCommittedBand(
     // `committedBandBottomRow > 0` alongside a non-empty band), so this
     // repaint cycle's geometry is safe to trust again.
     self.bandGeometryStale = false;
+    self.resizeGeometryStale = false; // also clear SIGWINCH-specific flag (#3212)
     return;
   }
   // On upward growth (targetBottom < committedBandBottomRow) the band must be
@@ -121,71 +123,69 @@ export function repositionCommittedBand(
   // belong at [targetBottom - fit + 1, targetBottom], which the fit math below
   // computes. The paint is always above the frame top, so it never overwrites
   // the live frame.
-  if (targetBottom < floor) return; // F2: band exists but has NO room above the
-  // current floor — do NOT clear bandGeometryStale here: committedBandBottomRow
-  // is left at its old (possibly stale) value below, so a later commit must
-  // keep distrusting it as a floor until a repaint actually re-establishes it.
+  if (targetBottom < floor && hiddenArchivedRows(self) === 0) {
+    // F2: band exists but has NO room above the current floor.
+    // Do NOT clear bandGeometryStale: committedBandBottomRow is left at its old
+    // (possibly stale) value, so a later commit must keep distrusting it as a
+    // floor until a repaint actually re-establishes it.
+    // DO clear resizeGeometryStale (#3371): unlike bandGeometryStale, this flag
+    // gates deficit eviction in preserveRowsBeforeFrameRender — leaving it set
+    // would suppress deficit eviction indefinitely after this early return (until
+    // a later repaint took the non-early path and cleared it).  The SIGWINCH
+    // geometry concern is distinct from the committedBandBottomRow floor concern.
+    self.resizeGeometryStale = false;
+    return;
+  }
   // F2: past this point `targetBottom`/`floor` are fresh values derived from
   // THIS repaint's real desiredTopRow/anchorRow, so whatever `fit` computes
   // (a real re-pin below, or "already correct, nothing moved") reflects
   // CURRENT geometry — safe to trust committedBandBottomRow again from here.
   self.bandGeometryStale = false;
-  const maxFit = targetBottom - floor + 1;
-  const fit = Math.min(self.committedBand.length, maxFit);
-  if (fit <= 0) return;
+  self.resizeGeometryStale = false; // also clear SIGWINCH-specific flag (#3212)
+  const maxFit = Math.max(0, targetBottom - floor + 1);
+  const fit = Math.min(self.committedBand.length - hiddenArchivedRows(self), maxFit);
   // Invariant (bottom-aligned band): the band is pinned at
   // [targetBottom - fit + 1, targetBottom] so committed content hugs the frame
   // top — the user's most recent output sits immediately above the input line
   // with no visual gap. Any blank rows (when the band is shorter than the
   // available room) sit ABOVE the band, between scrollback and the committed
-  // text.
-  //
-  // Short-terminal blank-gap cap (#2182): on short or wide terminals after an
-  // overlay collapse, `maxFit` (the available above-frame room) can be much
-  // larger than `fit` (the band's actual length). Without a cap the blank rows
-  // are all visible — on a 20-row terminal a 3-line band can leave 13 blank
-  // rows at the top of the viewport with content crammed at the bottom.
-  //
-  // Fix: clamp the number of blank rows above the band to MAX_BLANK_ROWS
-  // (≈ one-third of the terminal height). When the cap kicks in the band is
-  // "top-aligned within its allowance" — painted starting at
-  // `floor + MAX_BLANK_ROWS` — and the gap rows between the band bottom and the
-  // frame top are explicitly erased so no ghost content lingers there.
-  //
-  // Tracking invariant: committedBandBottomRow is kept at `targetBottom`
-  // (desiredTopRow − 1) even when the blank-gap cap shifts the visual band
-  // above it. Commit-path contiguity checks (`committedBandBottomRow ===
-  // frameTop − 1`) and the commit-geometry tests depend on this equality to
-  // detect a band that is adjacent to the frame and can be merged with the
-  // next commit. committedBandTopRow is set to `paintTop` (the clamped paint
-  // start) — which equals `newTop` when no capping occurs — so that:
-  //   • endTurnFlush can locate the real painted rows for its erase pass by
-  //     reading committedBandTopRow directly (updated to use committedBandTopRow
-  //     instead of committedBandBottomRow − paintedCount + 1 in lifecycle
-  //     teardown), avoiding the single-copy violation that would arise if it
-  //     erased only the uncapped rows at [newTop, targetBottom].
-  //   • The stable-repaint `moved` check is idempotent: both paintTop and
-  //     targetBottom are the same on every tick while geometry is stable, so
-  //     the check returns false and the above-frame region is not re-erased.
-  const totalRows = Math.max(1, self.stdout.rows ?? 24);
-  const MAX_BLANK_ROWS = Math.ceil(totalRows / 3);
+  // text. Those blanks ARE visible in the expanded viewport after an overlay
+  // collapse — the tall-overlay band-hold fix in commit-mode.ts mitigates
+  // this by retaining more rows in the model during tall-overlay phases. The
+  // statefulness guarantee is unchanged: the entire [floor, targetBottom]
+  // region is erased-and-repainted as a pure function of (committedBand,
+  // floor, targetBottom). Under content-hug placement the frame sits at
+  // floor + band.length, so targetBottom - fit + 1 === floor and there are
+  // no blank rows above the band at all (terminal-compositor.content-hug.ts).
+  // History: #2182 capped those blank rows at ceil(rows/3) by top-shifting the
+  // band and erasing the rows between it and the frame. That traded a top gap
+  // for a mid-screen gap between content and prompt (36 rows on a 62-row pane)
+  // and was reverted in favour of content-hug.
   const newTop = targetBottom - fit + 1;
-  const paintTop = newTop < floor + MAX_BLANK_ROWS ? newTop : floor + MAX_BLANK_ROWS;
-  const moved = paintTop !== self.committedBandTopRow || targetBottom !== self.committedBandBottomRow;
+  const moved = newTop !== self.committedBandTopRow || targetBottom !== self.committedBandBottomRow;
   // The render's erase pass clears [preRenderFrameTop, …]; if it started at or
   // above the band's current bottom it wiped the band → must repaint.
   const renderErasedBand = preRenderFrameTop > 0 && preRenderFrameTop <= self.committedBandBottomRow;
-  if (!moved && !renderErasedBand) return;
+  // Invariant (#2382 review, pending rows that now fit): a band-hold model
+  // stored while no frame was on screen (commitPhase3HoldStore) is tracked at
+  // the collapsed-frame position with committedBandPaintedRows = 0. When the
+  // next frame lands exactly there (the idle 1-row frame after resumeInput),
+  // `moved` is false and the render erased nothing, yet `fit` rows are owed to
+  // the screen. Repaint whenever fewer than `fit` rows are materialized; the
+  // paint below sets committedBandPaintedRows = fit, so this stays idempotent
+  // (no per-tick churn once the owed rows are on screen).
+  const owesRows = self.committedBandPaintedRows !== fit;
+  if (!moved && !renderErasedBand && !owesRows) return;
   const paint = self.committedBand.slice(self.committedBand.length - fit);
   // Content centering (AFK_CENTER_CONTENT): derive the margin from the CURRENT
   // terminal width so the band adapts on resize. The band stores raw (unpadded)
   // content; padding is a rendering concern applied here at paint time.
-  const pad = contentMargin();
+  const pad = compositorBand(self.stdout).margin;
   // Cursor stays hidden (the frame render hid it); CUP writes emit no '\n', so
   // the DECSTBM scroll region is never triggered — no writeWithGuard needed.
   let out = '\x1b[?25l';
   // Stage 2 (#540 — render, don't re-pin): erase the ENTIRE above-frame content
-  // region [floor, paintTop) from the anchor floor, NOT from the tracked band top
+  // region [floor, newTop) from the anchor floor, NOT from the tracked band top
   // (`committedBandTopRow`). The painted window below is a pure function of
   // (committedBand, floor, targetBottom); clearing from the floor makes the
   // whole render stateless — any row stranded above a STALE tracked top (the
@@ -194,24 +194,13 @@ export function repositionCommittedBand(
   // gap-free by construction rather than by trusting the incremental
   // `committedBandTopRow` adjacency. The banner/anchor above `floor` is never
   // touched. When fit === maxFit the band fills all available room, so
-  // paintTop === floor and this loop is a no-op — paint below starts immediately.
-  for (let r = floor; r < paintTop; r++) {
+  // newTop === floor and this loop is a no-op — paint below starts immediately.
+  for (let r = floor; r < newTop; r++) {
     out += eraseAndPaintRow(r);
   }
   for (let i = 0; i < paint.length; i++) {
     const line = pad && paint[i] !== '' ? pad + paint[i] : paint[i];
-    out += eraseAndPaintRow(paintTop + i, line);
-  }
-  // Gap erase (#2182): when the blank-gap cap shifted the band up from newTop
-  // to paintTop, rows [paintTop + fit, targetBottom] lie between the band
-  // bottom and the frame top. Erase them so no ghost content (old overlay
-  // rows, prior band content at a higher `newTop`) lingers in the gap. The
-  // Stage-2 stateless-render invariant already erases [floor, paintTop)
-  // above the band; this companion loop covers the symmetric gap below it.
-  // No-op when paintTop === newTop (no capping), since paintTop + fit − 1 ===
-  // targetBottom and the loop body has zero iterations.
-  for (let r = paintTop + fit; r <= targetBottom; r++) {
-    out += eraseAndPaintRow(r);
+    out += eraseAndPaintRow(newTop + i, line);
   }
   // Re-park the cursor where CupFrameRenderer.render() left it (the frame's
   // bottom content row) so the band write does not displace it.
@@ -229,7 +218,7 @@ export function repositionCommittedBand(
       /* terminal closed mid-repaint — next render's lifecycle tears us down */
     }
   });
-  self.committedBandTopRow = paintTop;
+  self.committedBandTopRow = fit > 0 ? newTop : 0;
   self.committedBandBottomRow = targetBottom;
   // `fit` rows (the band's bottom suffix) are now materialized on screen — this
   // is the collapse repaint that drains a fully-pending band-hold model. Record

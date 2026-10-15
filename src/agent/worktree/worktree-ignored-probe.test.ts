@@ -414,3 +414,32 @@ describe('probeNonRebuildableIgnoredFiles — symlinked directories', () => {
     });
   });
 });
+
+describe('probeNonRebuildableIgnoredFiles — SwiftPM .build/ directory', () => {
+  it('returns protect:false when .build/ contains only compiler output', async () => {
+    // .build/ is inspectable, so the probe expands it; compiled artifacts are all opaque/inspectable
+    const { exec, calls } = recordingExec((args) =>
+      isScoped(args) ? '!! .build/debug/MyApp\n!! .build/debug/MyApp.build/\n' : '!! .build/\n',
+    );
+    const verdict = await probeNonRebuildableIgnoredFiles(exec, '/tmp/wt');
+    // Scoped expansion was issued for the inspectable directory
+    expect(calls.filter(isScoped)).toHaveLength(1);
+    expect(verdict).toEqual({ protect: false });
+  });
+
+  it('returns protect:true when .build/ hides a non-rebuildable file', async () => {
+    const { exec } = recordingExec((args) =>
+      isScoped(args) ? '!! .build/debug/.env\n' : '!! .build/\n',
+    );
+    const verdict = await probeNonRebuildableIgnoredFiles(exec, '/tmp/wt');
+    expect(verdict).toEqual({ protect: true, because: 'non-rebuildable-entry', detail: '.build/debug/.env' });
+  });
+
+  it('treats .swiftpm/ as opaque (no expansion needed)', async () => {
+    const { exec, calls } = recordingExec(() => '!! .swiftpm/\n');
+    const verdict = await probeNonRebuildableIgnoredFiles(exec, '/tmp/wt');
+    // Opaque → no scoped expansion
+    expect(calls.filter(isScoped)).toHaveLength(0);
+    expect(verdict).toEqual({ protect: false });
+  });
+});

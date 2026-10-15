@@ -1,6 +1,7 @@
 import type { AgentConfig } from '../agent/types.js';
 import { findSession, listSessions, loadSession, type StoredSession } from './session-store.js';
 import { summarizeToolEvents } from './summarize-tool-events.js';
+import { loadJournalMessages } from '../agent/journal/index.js';
 
 export interface ResumeCliOptions {
   resume?: string;
@@ -51,9 +52,15 @@ export function resolveResumeTarget(options: ResumeCliOptions): ResolvedResumeTa
 
 export function resumeConfigFor(target: ResolvedResumeTarget | undefined): Partial<AgentConfig> {
   if (!target) return {};
+  // Full-fidelity resume (docs/message-journal.md): when the session has a
+  // message journal, providers seed from it and ignore `resumeHistory`, which
+  // is still built below for journal-less (older / disabled) sessions and for
+  // its last-turn `inputTokens` context-guard seed.
+  const resumeMessages = loadJournalMessages(target.resumeId);
   return {
     resume: target.resumeId,
     sessionId: target.resumeId,
+    ...(resumeMessages !== null ? { resumeMessages } : {}),
     ...(target.stored
       ? {
           resumeHistory: target.stored.turns.map((turn, idx, arr) => {
