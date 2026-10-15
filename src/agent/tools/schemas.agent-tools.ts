@@ -177,7 +177,7 @@ export const skillTool: AnthropicToolDef = {
     'subagent or loads its instructions into your current context for you ' +
     'to execute directly — the mode is fixed per-skill, not per-call. ' +
     'To run a skill N times in parallel with isolation, dispatch N ' +
-    'subagents (via `agent` or `compose`) that each call `skill` once. ' +
+    'subagents via parallel `agent` calls that each invoke `skill` once. ' +
     'Check the system prompt for the list of available skills and their ' +
     'descriptions.',
   input_schema: {
@@ -207,6 +207,9 @@ export const composeTool: AnthropicToolDef = {
     'independent or dependent subagent work in a single call — e.g., diagnose ' +
     'in parallel with a fix, or research → implement → verify as a pipeline.\n\n' +
     'Each node is a subagent task with its own prompt and optional model. ' +
+    'Compose nodes are leaves: they cannot call `agent`, `skill`, or `compose`; ' +
+    'to run a skill per item in parallel, dispatch parallel `agent` calls that ' +
+    'each invoke `skill` once. ' +
     'Edges declare "from must finish before to starts." Omit edges entirely ' +
     'for pure parallel fan-out.\n\n' +
     'Maximum 20 nodes per call. Split larger workloads across multiple compose calls.\n\n' +
