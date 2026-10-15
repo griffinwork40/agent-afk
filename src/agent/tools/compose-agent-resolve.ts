@@ -242,9 +242,14 @@ export function resolveComposeNodeAgent(
 
 /** Resolve the body fallback before appending the leaf notice. */
 export function resolveComposeAgentPrompt(agent: ResolvedComposeAgent, basePrompt: string): string {
-  // Invariant: notice-only instructions must never suppress the base/operator fallback.
+  // Invariant: the effective leaf allowlist, not inherited generic tool guidance,
+  // governs which calls can succeed. Keep the notice after the base fallback.
   const base = agent.systemPrompt ?? basePrompt;
-  return agent.leafNotice ? `${base}\n\n${agent.leafNotice}` : base;
+  const withLeafNotice = agent.leafNotice ? `${base}\n\n${agent.leafNotice}` : base;
+  if (agent.namedAgentAllowedTools === undefined) return withLeafNotice;
+  return `${withLeafNotice}\n\nThis compose node can use only these tools: ${agent.namedAgentAllowedTools.join(', ') || '(none)'}. ` +
+    'Do not call bash, workspace_query, or other tools unless they appear in this list; ' +
+    'use available read tools or return the missing capability to the parent.';
 }
 
 /**
