@@ -207,16 +207,25 @@ describe('bashHandler', () => {
       ).rejects.toThrow(/timeout_ms.*number/i);
     });
 
-    it('throws on timeout_ms > 600000', async () => {
-      await expect(
-        bashHandler({ command: 'echo test', timeout_ms: 700000 }, createSignal()),
-      ).rejects.toThrow(/timeout_ms.*600000/i);
+    it('clamps timeout_ms above 600000 and warns in result', async () => {
+      const result = await bashHandler({ command: 'echo test', timeout_ms: 700000 }, createSignal());
+      expect(result.isError).toBeFalsy();
+      expect(result.content).toContain('[Warning]');
+      expect(result.content).toContain('700000');
+      expect(result.content).toContain('600000');
+      expect(result.content).toContain('test');
     });
 
     it('throws on negative timeout_ms', async () => {
       await expect(
         bashHandler({ command: 'echo test', timeout_ms: -1 }, createSignal()),
       ).rejects.toThrow(/timeout_ms.*0.*600000/i);
+    });
+
+    it('throws on NaN timeout_ms', async () => {
+      await expect(
+        bashHandler({ command: 'echo test', timeout_ms: NaN }, createSignal()),
+      ).rejects.toThrow(/timeout_ms.*number/i);
     });
 
     it('accepts valid timeout_ms', async () => {

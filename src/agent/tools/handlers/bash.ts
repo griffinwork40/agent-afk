@@ -52,6 +52,7 @@ function parseBashInput(input: unknown): {
   timeout_ms: number;
   background: boolean;
   explicitTimeout: boolean;
+  clampedTimeoutWarning: string | undefined;
 } {
   if (typeof input !== 'object' || input === null) {
     throw new Error('Input must be an object');
@@ -72,14 +73,26 @@ function parseBashInput(input: unknown): {
   const maxTimeout = background ? MAX_PROCESS_MAX_RUNTIME_MS : 600000;
 
   let timeout_ms = 120000; // default 2 minutes
+  let clampedTimeoutWarning: string | undefined;
   if (bashInput.timeout_ms !== undefined) {
-    if (typeof bashInput.timeout_ms !== 'number') {
+    if (
+      typeof bashInput.timeout_ms !== 'number' ||
+      Number.isNaN(bashInput.timeout_ms)
+    ) {
       throw new Error('timeout_ms must be a number');
     }
-    if (bashInput.timeout_ms < 0 || bashInput.timeout_ms > maxTimeout) {
+    if (bashInput.timeout_ms < 0) {
       throw new Error(`timeout_ms must be between 0 and ${maxTimeout}`);
     }
-    timeout_ms = bashInput.timeout_ms;
+    if (bashInput.timeout_ms > maxTimeout) {
+      // Clamp over-max values to the ceiling rather than rejecting — the model
+      // asked for a long timeout; honouring the maximum intent is more useful
+      // than hard-failing the call with a validation error.
+      clampedTimeoutWarning = `timeout_ms ${bashInput.timeout_ms} exceeds the maximum (${maxTimeout}); clamped to ${maxTimeout}.`;
+      timeout_ms = maxTimeout;
+    } else {
+      timeout_ms = bashInput.timeout_ms;
+    }
   }
   if (background && bashInput.timeout_ms !== undefined && timeout_ms < 1000) {
     throw new Error('timeout_ms must be at least 1000 with run_in_background');
@@ -90,6 +103,7 @@ function parseBashInput(input: unknown): {
     timeout_ms,
     background,
     explicitTimeout: bashInput.timeout_ms !== undefined,
+    clampedTimeoutWarning,
   };
 }
 
@@ -212,7 +226,7 @@ export function createBashHandler(
   }
 
   return async (input: unknown, signal: AbortSignal, context?: ToolHandlerContext) => {
-    let { command, timeout_ms, background, explicitTimeout } = parseBashInput(input);
+    let { command, timeout_ms, background, explicitTimeout, clampedTimeoutWarning } = parseBashInput(input);
 
     if (signal.aborted) {
       return { content: 'Command aborted', isError: true };
@@ -234,11 +248,15 @@ export function createBashHandler(
     // Background launch: supervised by the session's ProcessJobRegistry and
     // returned immediately. timeout_ms is the max runtime (default 2 h).
     if (background) {
-      return startBackgroundBash(command, explicitTimeout ? timeout_ms : undefined, context, cwd);
+      const bgResult = await startBackgroundBash(command, explicitTimeout ? timeout_ms : undefined, context, cwd);
+      if (clampedTimeoutWarning) {
+        return { ...bgResult, content: `[Warning] ${clampedTimeoutWarning}\n\n${bgResult.content}` };
+      }
+      return bgResult;
     }
 
     const startedAt = Date.now();
-    return new Promise((resolve) => {
+    const rawResult = await new Promise<{ content: string; isError?: boolean; truncated?: boolean; capturePath?: string; durationMs?: number; exitCode?: number }>((resolve) => {
       let resolved = false;
 
       // Live rolling tail buffer — ephemeral TUI chrome only, never model-facing.
@@ -343,6 +361,10 @@ export function createBashHandler(
 
       attachErrorHandler({ proc, context, cwd, startedAt, settle });
     });
+    if (clampedTimeoutWarning) {
+      return { ...rawResult, content: `[Warning] ${clampedTimeoutWarning}\n\n${rawResult.content}` };
+    }
+    return rawResult;
   };
 }
 
