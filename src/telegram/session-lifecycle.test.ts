@@ -102,6 +102,7 @@ function makeStubWiring(): TelegramExecutorWiring {
     backgroundRegistry: {} as TelegramExecutorWiring['backgroundRegistry'],
     bgNotifier: {} as TelegramExecutorWiring['bgNotifier'],
     drainSubagents: undefined,
+    getPendingChildTerminalWrites: undefined,
     bindSession: vi.fn(),
   };
 }
