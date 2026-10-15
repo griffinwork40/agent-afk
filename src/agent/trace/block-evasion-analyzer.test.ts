@@ -25,7 +25,7 @@ let seq = 0;
 function nextSeq(): number { return seq++; }
 function resetSeq(): void { seq = 0; }
 
-function mkHardBlock(ts: string, blockedTool: string, reason = 'plan mode'): TraceEvent {
+function mkHardBlock(ts: string, blockedTool: string, reason = 'plan mode', subagentId?: string): TraceEvent {
   return {
     ts,
     seq: nextSeq(),
@@ -36,6 +36,7 @@ function mkHardBlock(ts: string, blockedTool: string, reason = 'plan mode'): Tra
       approvalOutcome: 'hard-block',
       blockedTool,
       reason,
+      ...(subagentId != null ? { subagentId } : {}),
     },
   } as TraceEvent;
 }
@@ -55,7 +56,7 @@ function mkPlainBlock(ts: string, blockedTool: string): TraceEvent {
   } as TraceEvent;
 }
 
-function mkToolOk(ts: string, name: string): TraceEvent {
+function mkToolOk(ts: string, name: string, subagentId?: string): TraceEvent {
   return {
     ts,
     seq: nextSeq(),
@@ -68,11 +69,12 @@ function mkToolOk(ts: string, name: string): TraceEvent {
       isError: false,
       truncated: false,
       durationMs: 10,
+      ...(subagentId != null ? { subagentId } : {}),
     },
   } as TraceEvent;
 }
 
-function mkToolErr(ts: string, name: string): TraceEvent {
+function mkToolErr(ts: string, name: string, subagentId?: string): TraceEvent {
   return {
     ts,
     seq: nextSeq(),
@@ -85,6 +87,7 @@ function mkToolErr(ts: string, name: string): TraceEvent {
       isError: true,
       truncated: false,
       durationMs: 5,
+      ...(subagentId != null ? { subagentId } : {}),
     },
   } as TraceEvent;
 }
@@ -278,6 +281,56 @@ describe('detectEvasions', () => {
     const candidates = detectEvasions('s11', []);
     expect(candidates).toHaveLength(0);
   });
+
+  it('scopes evasion matching to the blocked actor (subagentId)', () => {
+    resetSeq();
+    // Child A blocked on write_file, child B succeeds with edit_file
+    const events: TraceEvent[] = [
+      mkHardBlock('2026-10-14T10:00:00.000Z', 'write_file', 'plan', 'child-A'),
+      mkToolOk('2026-10-14T10:00:01.000Z', 'edit_file', 'child-B'), // different actor
+    ];
+    const candidates = detectEvasions('s-scope', events);
+    expect(candidates).toHaveLength(0);
+  });
+
+  it('detects evasion when same actor uses a different tool in same class', () => {
+    resetSeq();
+    const events: TraceEvent[] = [
+      mkHardBlock('2026-10-14T10:00:00.000Z', 'write_file', 'plan', 'child-A'),
+      mkToolOk('2026-10-14T10:00:01.000Z', 'edit_file', 'child-B'), // different actor — skip
+      mkToolOk('2026-10-14T10:00:02.000Z', 'edit_file', 'child-A'), // same actor — evasion
+    ];
+    const candidates = detectEvasions('s-scope2', events);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.differentTool).toBe('edit_file');
+  });
+
+  it('scopes root-level blocks to root-level tool calls (no subagentId)', () => {
+    resetSeq();
+    const events: TraceEvent[] = [
+      mkHardBlock('2026-10-14T10:00:00.000Z', 'write_file', 'plan'), // root block
+      mkToolOk('2026-10-14T10:00:01.000Z', 'edit_file', 'child-X'), // child — skip
+      mkToolOk('2026-10-14T10:00:02.000Z', 'edit_file'),             // root — evasion
+    ];
+    const candidates = detectEvasions('s-root', events);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.toolCallDistance).toBe(1); // only root calls counted
+  });
+
+  it('excludes the blocked call own completion from the window count', () => {
+    resetSeq();
+    // block write_file, then the denied write_file completes (isError), then edit_file
+    const events: TraceEvent[] = [
+      mkHardBlock('2026-10-14T10:00:00.000Z', 'write_file', 'plan'),
+      mkToolErr('2026-10-14T10:00:00.500Z', 'write_file'), // denied completion
+      mkToolOk('2026-10-14T10:00:01.000Z', 'edit_file'),   // same class, different tool
+    ];
+    // With window=1, if the denied completion consumed the slot, edit_file is missed
+    const candidates = detectEvasions('s-excl', events, 1);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.differentTool).toBe('edit_file');
+    expect(candidates[0]?.toolCallDistance).toBe(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -337,6 +390,54 @@ describe('detectLostWork', () => {
   it('returns empty array with no events', () => {
     resetSeq();
     expect(detectLostWork('s16', [])).toHaveLength(0);
+  });
+
+  it('scopes lost-work detection to the blocked actor (subagentId)', () => {
+    resetSeq();
+    // Child A blocked on write_file, child B recovers with edit_file
+    const events: TraceEvent[] = [
+      mkHardBlock('2026-10-14T10:00:00.000Z', 'write_file', 'plan', 'child-A'),
+      mkToolOk('2026-10-14T10:00:01.000Z', 'edit_file', 'child-B'), // different actor
+      mkClosure('2026-10-14T10:01:00.000Z'),
+      mkSealed('2026-10-14T10:01:01.000Z'),
+    ];
+    const candidates = detectLostWork('s-scope', events);
+    // Child B's recovery does NOT clear child A's block
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.blockedTool).toBe('write_file');
+  });
+
+  it('clears lost-work when the same actor recovers', () => {
+    resetSeq();
+    const events: TraceEvent[] = [
+      mkHardBlock('2026-10-14T10:00:00.000Z', 'write_file', 'plan', 'child-A'),
+      mkToolOk('2026-10-14T10:00:01.000Z', 'edit_file', 'child-A'), // same actor
+      mkSealed('2026-10-14T10:01:00.000Z'),
+    ];
+    const candidates = detectLostWork('s-scope2', events);
+    expect(candidates).toHaveLength(0);
+  });
+
+  it('does NOT report lost work on a live trace (no terminal event)', () => {
+    resetSeq();
+    // Only a hard-block, no closure/sealed/abort
+    const events: TraceEvent[] = [
+      mkHardBlock('2026-10-14T10:00:00.000Z', 'write_file', 'plan'),
+      mkToolOk('2026-10-14T10:00:01.000Z', 'read_file'),
+    ];
+    const candidates = detectLostWork('s-live', events);
+    expect(candidates).toHaveLength(0);
+  });
+
+  it('reports lost work once a terminal event is present', () => {
+    resetSeq();
+    const events: TraceEvent[] = [
+      mkHardBlock('2026-10-14T10:00:00.000Z', 'write_file', 'plan'),
+      mkToolOk('2026-10-14T10:00:01.000Z', 'read_file'),
+      mkSealed('2026-10-14T10:01:00.000Z'),
+    ];
+    const candidates = detectLostWork('s-term', events);
+    expect(candidates).toHaveLength(1);
   });
 });
 

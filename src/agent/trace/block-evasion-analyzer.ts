@@ -211,13 +211,26 @@ export function detectEvasions(
     const blockedTool = bp.blockedTool ?? '(unknown)';
     const blockedClass = effectClassOf(blockedTool);
 
-    // Scan forward up to windowSize *completed* tool_call events.
+    // Actor scoping: only count tool calls from the same actor.
+    // absent subagentId = root session.
+    const blockActor: string | undefined = bp.subagentId;
+
+    // Scan forward up to windowSize *completed* tool_call events
+    // from the same actor.
     let toolCallsSeen = 0;
     for (let j = bi + 1; j < events.length && toolCallsSeen < windowSize; j++) {
       const ev = events[j]!;
       if (ev.kind !== 'tool_call') continue;
       const p = ev.payload as ToolCallPayload;
       if (p.phase !== 'completed') continue;
+
+      // Scope to same actor (subagentId match; both undefined = root).
+      if (p.subagentId !== blockActor) continue;
+
+      // Exclude the blocked call's own (failed) completion: same tool
+      // name + isError immediately after the block should not consume
+      // a window slot.
+      if (p.name === blockedTool && p.isError) continue;
 
       toolCallsSeen++;
       const name = p.name;
@@ -282,19 +295,25 @@ export function detectLostWork(
 ): LostWorkCandidate[] {
   const candidates: LostWorkCandidate[] = [];
 
-  // Determine closure reason from the last closure or session_sealed event.
-  let closureReason = 'unknown';
+  // Determine closure reason from the last applicable terminal event.
+  // A trace without any terminal event (closure / session_sealed / abort)
+  // is considered live — lost-work detection does not apply.
+  let closureReason: string | undefined;
   for (const ev of events) {
     if (ev.kind === 'closure') {
       closureReason = (ev.payload as { reason: string }).reason;
     } else if (ev.kind === 'session_sealed') {
-      const p = ev.payload as { status: string };
-      closureReason = p.status;
+      closureReason = (ev.payload as { status: string }).status;
+    } else if (ev.kind === 'abort') {
+      closureReason ??= 'abort';
     }
   }
 
+  // No terminal event — session is still live; skip lost-work analysis.
+  if (closureReason == null) return candidates;
+
   // For each hard-block, check whether any successful call in the same class
-  // follows before session end.
+  // by the same actor follows before session end.
   for (let i = 0; i < events.length; i++) {
     const ev = events[i]!;
     if (ev.kind !== 'hook_decision') continue;
@@ -305,6 +324,9 @@ export function detectLostWork(
     const blockedClass = effectClassOf(blockedTool);
     if (blockedClass === 'other') continue;
 
+    // Actor scoping: same subagentId (both undefined = root).
+    const blockActor: string | undefined = p.subagentId;
+
     let recovered = false;
     for (let j = i + 1; j < events.length; j++) {
       const fev = events[j]!;
@@ -312,6 +334,7 @@ export function detectLostWork(
       const fp = fev.payload as ToolCallPayload;
       if (fp.phase !== 'completed') continue;
       if (fp.isError) continue;
+      if (fp.subagentId !== blockActor) continue;
       if (effectClassOf(fp.name) === blockedClass) {
         recovered = true;
         break;
