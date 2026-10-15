@@ -245,6 +245,7 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
   // Invariant: pass `null` as sessionId — the store is already scoped to one
   // root session, and children publish under their own IDs, so a session-
   // filtered query would miss sibling findings (the partition mismatch bug).
+  // Store lifetime: see the Invariant in providers/shared/chain-provider-close.ts.
   const taskPrompt = resume ?? (typeof options.config.systemPrompt === 'string'
     ? options.config.systemPrompt
     : '');
