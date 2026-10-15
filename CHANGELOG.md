@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.316.3] - 2026-10-15
+
+### Fixed
+- repair test type errors from #3765 breaking lint:tests:check on main (#3788) (69f323a3)
+
 ## [5.316.2] - 2026-10-15
 
 ### Fixed
