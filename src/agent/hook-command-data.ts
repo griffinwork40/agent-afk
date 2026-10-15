@@ -5,6 +5,37 @@ import { tokenizeSegments } from './tools/readonly-bash.tokenizer.js';
 
 interface Word { text: string; start: number; end: number; quoted: boolean }
 
+/**
+ * Strip shell comments: a `#` that begins a new word outside quotes starts a
+ * comment through end-of-line. Returns the command portion without the comment.
+ * Quote-aware: `#` inside single or double quotes is literal.
+ */
+function stripShellComment(line: string): string {
+  let i = 0;
+  while (i < line.length) {
+    const ch = line[i]!;
+    if (ch === "'") {
+      i++;
+      while (i < line.length && line[i] !== "'") i++;
+      if (i < line.length) i++;
+    } else if (ch === '"') {
+      i++;
+      while (i < line.length && line[i] !== '"') {
+        if (line[i] === '\\' && i + 1 < line.length) i++;
+        i++;
+      }
+      if (i < line.length) i++;
+    } else if (ch === '\\' && i + 1 < line.length) {
+      i += 2;
+    } else if (ch === '#' && (i === 0 || /\s/.test(line[i - 1]!))) {
+      return line.slice(0, i).trimEnd();
+    } else {
+      i++;
+    }
+  }
+  return line;
+}
+
 /** Preserve offsets and quote provenance that tokenizeSegments intentionally drops. */
 function words(line: string): Word[] | null {
   const result: Word[] = [];
@@ -16,7 +47,7 @@ function words(line: string): Word[] | null {
     let quoted = false;
     while (i < line.length && !/\s/.test(line[i]!)) {
       const ch = line[i++]!;
-      if (ch === '\\' || ch === '`' || ch === '$' || /[;|&()#]/.test(ch)) return null;
+      if (ch === '\\' || ch === '`' || ch === '$' || /[;|&()]/.test(ch)) return null;
       if (ch === "'" || ch === '"') {
         quoted = true;
         while (i < line.length && line[i] !== ch) {
@@ -31,6 +62,83 @@ function words(line: string): Word[] | null {
     result.push({ text, start, end: i, quoted });
   }
   return result;
+}
+
+/**
+ * Mask multiline quoted arguments in allowlisted commands before line splitting.
+ * A single-quoted or double-quoted argument to a known flag (--body, -m, etc.)
+ * that spans newlines has its content replaced with spaces so that the
+ * line-by-line scanner does not see the inner text as separate commands.
+ * Executable substitutions ($(...), backticks) inside double quotes bail out.
+ */
+function maskMultilineQuotedArgs(command: string): string {
+  // Invariant: only mask arguments to known data-carrying flags in allowlisted
+  // commands. Executable payloads (bash -c '...') must remain visible.
+  const dataFlags = new Set([
+    '-m', '--message', '--body', '--title',
+  ]);
+  const chars = command.split('');
+  let i = 0;
+  while (i < command.length) {
+    const ch = command[i]!;
+    if (ch === '\\' && i + 1 < command.length) { i += 2; continue; }
+    if (ch === "'") {
+      const qStart = i;
+      i++;
+      while (i < command.length && command[i] !== "'") i++;
+      if (i >= command.length) break;
+      i++; // closing quote
+      // Check if this quoted span contains newlines and is preceded by a data flag.
+      const span = command.slice(qStart, i);
+      if (!span.includes('\n')) continue;
+      // Walk backward past optional = to find the flag.
+      const before = command.slice(0, qStart);
+      const flagMatch = /(?:^|[\s=])(-m|--message|--body|--title)\s*=?\s*$/.exec(before);
+      if (!flagMatch || !dataFlags.has(flagMatch[1]!)) continue;
+      // Verify the command starts with an allowlisted consumer.
+      const prefix = command.slice(0, flagMatch.index).trimStart() + ' ' + flagMatch[1]!;
+      const prefixTokens = prefix.trim().split(/\s+/);
+      if (!isDataConsumerPrefix(prefixTokens)) continue;
+      for (let j = qStart + 1; j < i - 1; j++) chars[j] = chars[j] === '\n' ? '\n' : ' ';
+    } else if (ch === '"') {
+      const qStart = i;
+      i++;
+      let hasSubstitution = false;
+      while (i < command.length && command[i] !== '"') {
+        const c = command[i]!;
+        if (c === '\\' && i + 1 < command.length) { i += 2; continue; }
+        if (c === '$' || c === '`') { hasSubstitution = true; }
+        i++;
+      }
+      if (i >= command.length) break;
+      i++; // closing quote
+      if (hasSubstitution) continue;
+      const span = command.slice(qStart, i);
+      if (!span.includes('\n')) continue;
+      const before = command.slice(0, qStart);
+      const flagMatch = /(?:^|[\s=])(-m|--message|--body|--title)\s*=?\s*$/.exec(before);
+      if (!flagMatch || !dataFlags.has(flagMatch[1]!)) continue;
+      const prefix = command.slice(0, flagMatch.index).trimStart() + ' ' + flagMatch[1]!;
+      const prefixTokens = prefix.trim().split(/\s+/);
+      if (!isDataConsumerPrefix(prefixTokens)) continue;
+      for (let j = qStart + 1; j < i - 1; j++) chars[j] = chars[j] === '\n' ? '\n' : ' ';
+    } else {
+      i++;
+    }
+  }
+  return chars.join('');
+}
+
+/** Check whether a token prefix matches an allowlisted data consumer command. */
+function isDataConsumerPrefix(tokens: string[]): boolean {
+  if (tokens[0] === 'git') {
+    let k = 1;
+    while (tokens[k] === '-c' || tokens[k] === '-C') k += 2;
+    return tokens[k] === 'commit';
+  }
+  if (tokens[0] === 'gh' && (tokens[1] === 'pr' || tokens[1] === 'issue') &&
+      ['create', 'edit', 'comment'].includes(tokens[2] ?? '')) return true;
+  return false;
 }
 
 function consumer(tokens: readonly string[]): 'git' | 'gh' | 'text' | null {
@@ -78,7 +186,8 @@ function maskArguments(line: string): string {
  * Unsafe heredoc bodies remain verbatim, including quotes and comment markers.
  */
 export function maskHookCommandData(command: string, stripLiterals = false): string {
-  const lines = command.split('\n');
+  const masked = maskMultilineQuotedArgs(command);
+  const lines = masked.split('\n');
   const output: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
@@ -120,16 +229,19 @@ export function maskHookCommandData(command: string, stripLiterals = false): str
       i = end;
       continue;
     }
+    // Strip shell comments before testing parsability. A `#` starting a word
+    // outside quotes begins a comment; the comment text is not executable.
+    const decommented = stripShellComment(line);
     // Unsupported syntax can continue across newlines (quotes, substitutions,
     // backslashes). Do not mistake a later line in that payload for a command.
-    if (!words(line)) { output.push(...lines.slice(i)); break; }
-    const masked = maskArguments(line);
+    if (!words(decommented)) { output.push(...lines.slice(i)); break; }
+    const masked2 = maskArguments(decommented);
     // Preserve the existing literal-search exemption only for non-executing
     // text commands, not shell/interpreter payloads or command substitutions.
-    const tokens = tokenizeSegments(masked);
-    const literalSearch = words(masked) && tokens.length === 1 &&
+    const tokens = tokenizeSegments(masked2);
+    const literalSearch = words(masked2) && tokens.length === 1 &&
       ['echo', 'grep', 'rg'].includes(tokens[0]?.[0] ?? '');
-    output.push(stripLiterals && literalSearch ? masked.replace(/'[^']*'/g, '') : masked);
+    output.push(stripLiterals && literalSearch ? masked2.replace(/'[^']*'/g, '') : masked2);
   }
   return output.join('\n');
 }

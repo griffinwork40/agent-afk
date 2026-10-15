@@ -90,4 +90,88 @@ describe('hook command data exemptions (#3762)', () => {
     expect(createReleaseBoundaryDetect()({ event: 'PreToolUse', toolName: 'bash', input: { command } }).decision)
       .toBe('block');
   });
+
+  describe('shell comment handling (#3780)', () => {
+    it('strips shell comments so trailing # npm publish does not trigger a block', () => {
+      expect(detectReleaseBoundaryCommands('echo done # npm publish')).toEqual([]);
+      expect(detectDestructiveCommands('echo done # git reset --hard')).toEqual([]);
+    });
+
+    it('does not treat # inside quotes as a comment start', () => {
+      // Single-quoted: echo is a literalSearch command, so the release
+      // detector (stripLiterals) strips the quoted content and it never
+      // triggers a pattern.
+      expect(detectReleaseBoundaryCommands("echo '# npm publish'")).toEqual([]);
+      // The comment stripping itself never touches quoted #. Verify the
+      // comment-stripped output still contains the quoted content.
+      const cmd = 'echo "text with # in it" # real comment npm publish';
+      expect(detectReleaseBoundaryCommands(cmd)).toEqual([]);
+    });
+
+    it('does not treat mid-word # as a comment', () => {
+      // A # that is not preceded by whitespace is part of the word (e.g. URLs).
+      const cmd = 'curl http://example.com/page#npm-publish-section';
+      expect(detectReleaseBoundaryCommands(cmd)).toEqual([]);
+    });
+
+    it('continues scanning lines after a comment', () => {
+      // The comment should not break scanning of subsequent lines.
+      expect(detectDestructiveCommands('echo done # harmless\ngit reset --hard'))
+        .toContain('git-reset-hard');
+      expect(detectReleaseBoundaryCommands('echo done # harmless\nnpm publish'))
+        .toContain('npm-publish');
+    });
+  });
+
+  describe('multiline quoted argument handling (#3780)', () => {
+    it('masks multiline single-quoted --body in gh pr create', () => {
+      const cmd = "gh pr create --body 'line1\nnpm publish\nline3'";
+      expect(detectReleaseBoundaryCommands(cmd)).toEqual([]);
+    });
+
+    it('masks multiline single-quoted -m in git commit', () => {
+      const cmd = "git commit -m 'first line\nnpm publish\nlast line'";
+      expect(detectReleaseBoundaryCommands(cmd)).toEqual([]);
+    });
+
+    it('masks multiline double-quoted --body without substitutions', () => {
+      const cmd = 'gh pr create --body "line1\nnpm publish\nline3"';
+      expect(detectReleaseBoundaryCommands(cmd)).toEqual([]);
+    });
+
+    it('preserves multiline double-quoted args with $() substitutions', () => {
+      const cmd = 'git commit -m "$(npm publish)\nmore text"';
+      expect(detectReleaseBoundaryCommands(cmd)).toContain('npm-publish');
+    });
+
+    it('preserves multiline double-quoted args with backtick substitutions', () => {
+      const cmd = 'git commit -m "`npm publish`\nmore text"';
+      expect(detectReleaseBoundaryCommands(cmd)).toContain('npm-publish');
+    });
+
+    it('does not mask multiline args to non-allowlisted commands', () => {
+      const cmd = "bash -c 'npm publish\nmore'";
+      expect(detectReleaseBoundaryCommands(cmd)).toContain('npm-publish');
+    });
+
+    it('does not mask multiline args to non-data flags', () => {
+      const cmd = "gh release create --notes 'npm publish\nmore'";
+      expect(detectReleaseBoundaryCommands(cmd)).toContain('npm-publish');
+    });
+
+    it('masks multiline --title in gh issue create', () => {
+      const cmd = "gh issue create --title 'npm publish\nstuff'";
+      expect(detectReleaseBoundaryCommands(cmd)).toEqual([]);
+    });
+
+    it('handles git commit -m with --message= form across lines', () => {
+      const cmd = "git commit --message='first\nnpm publish\nlast'";
+      expect(detectReleaseBoundaryCommands(cmd)).toEqual([]);
+    });
+
+    it('still detects real operations after a multiline quoted arg', () => {
+      const cmd = "git commit -m 'safe body\nno triggers'\nnpm publish";
+      expect(detectReleaseBoundaryCommands(cmd)).toContain('npm-publish');
+    });
+  });
 });
