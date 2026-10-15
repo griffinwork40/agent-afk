@@ -147,7 +147,7 @@ describe('doneHasCorroboratingEvidence – bash write after passing test (Scenar
 
 describe('lfVerification – bash write after passing test (Scenario 4)', () => {
   it.fails(
-    'should return vote -1 (unverified) when bash mutates file after verification command [DEFECT: bash excluded from WRITE_TOOLS]',
+    'should not return a positive verification when bash mutates file after test [DEFECT: bash excluded from WRITE_TOOLS]',
     () => {
       const turns: Turn[] = [
         makeTurn([
@@ -166,9 +166,13 @@ describe('lfVerification – bash write after passing test (Scenario 4)', () => 
       ];
 
       const vote = lfVerification(turns, NOW);
-      // Desired: vote -1 — the artifact was mutated after the test; the pass is stale
-      expect(vote).not.toBeNull();
-      expect(vote!.vote).toBe(-1);
+      // Desired: no positive verification — the artifact was mutated after the
+      // test; the earlier pass is stale. Under fix option 1 (bash counted as a
+      // write tool) lfVerification returns null because no verification is found
+      // after the post-test bash write (lastWriteIdx advances past the test).
+      // Under fix option 2 (content-hash comparison) vote.vote would be -1.
+      // Both outcomes satisfy: result is not a positive verification.
+      expect(vote === null || vote.vote !== 1).toBe(true);
     },
   );
 
