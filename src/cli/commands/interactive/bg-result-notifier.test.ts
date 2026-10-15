@@ -367,3 +367,56 @@ describe('replCanAutoWake', () => {
     expect(replCanAutoWake()).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests: buildBgResultInjection — attribute escaping (issue #3838)
+// ---------------------------------------------------------------------------
+
+describe('buildBgResultInjection — attribute escaping', () => {
+  function makeJob(overrides: Partial<{ jobId: string; status: string; model: string; label: string }>) {
+    return {
+      jobId: overrides.jobId ?? 'bg-1',
+      subagentId: 'sub-1',
+      label: overrides.label ?? 'test task',
+      model: overrides.model ?? 'sonnet',
+      startedAt: 1000,
+      endedAt: 2000,
+      status: (overrides.status ?? 'completed') as 'completed',
+      result: {
+        id: 'sub-1',
+        status: 'succeeded' as const,
+        message: { content: 'ok', role: 'assistant' },
+      } as unknown as import('../../../agent/subagent.js').SubagentResult,
+    };
+  }
+
+  it('escapes " in model attribute so the envelope stays well-formed', () => {
+    const job = makeJob({ model: 'bad"model"name' });
+    const out = buildBgResultInjection(job);
+    // The raw double-quote must be encoded; attribute value must not contain a literal "
+    const attrMatch = /model="([^"]*)"/.exec(out);
+    expect(attrMatch).not.toBeNull();
+    expect(attrMatch![1]).not.toContain('"');
+    expect(out).toContain('&quot;');
+    // Still exactly one opening and one closing envelope tag
+    expect(out.match(/<background-subagent-result /g)).toHaveLength(1);
+    expect(out.match(/<\/background-subagent-result>/g)).toHaveLength(1);
+  });
+
+  it('escapes " in status attribute', () => {
+    const job = makeJob({ status: 'failed"injected' });
+    const out = buildBgResultInjection(job);
+    // The raw double-quote must be encoded; attribute value must not contain a literal "
+    const attrMatch = /status="([^"]*)"/.exec(out);
+    expect(attrMatch).not.toBeNull();
+    expect(attrMatch![1]).not.toContain('"');
+    expect(out).toContain('&quot;');
+  });
+
+  it('escapes < and > in model attribute', () => {
+    const job = makeJob({ model: '<script>alert(1)</script>' });
+    const out = buildBgResultInjection(job);
+    expect(out).toContain('&lt;script&gt;');
+    expect(out.match(/<\/background-subagent-result>/g)).toHaveLength(1);
+  });
+});
