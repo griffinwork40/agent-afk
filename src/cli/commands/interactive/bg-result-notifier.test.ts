@@ -11,6 +11,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import type { SubagentHandle, SubagentResult } from '../../../agent/subagent.js';
+import type { BackgroundJob } from '../../../agent/background-registry.types.js';
 import {
   BgResultNotifier,
   buildBgResultInjection,
@@ -373,20 +374,22 @@ describe('replCanAutoWake', () => {
 // ---------------------------------------------------------------------------
 
 describe('buildBgResultInjection — attribute escaping', () => {
-  function makeJob(overrides: Partial<{ jobId: string; status: string; model: string; label: string }>) {
+  function makeJob(overrides: Partial<{ jobId: string; status: string; model: string; label: string }>): BackgroundJob {
     return {
       jobId: overrides.jobId ?? 'bg-1',
+      provenance: 'model',
       subagentId: 'sub-1',
       label: overrides.label ?? 'test task',
       model: overrides.model ?? 'sonnet',
       startedAt: 1000,
       endedAt: 2000,
-      status: (overrides.status ?? 'completed') as 'completed',
+      // Cast: the escaping tests deliberately inject values outside the status union.
+      status: (overrides.status ?? 'completed') as BackgroundJob['status'],
       result: {
         id: 'sub-1',
         status: 'succeeded' as const,
         message: { content: 'ok', role: 'assistant' },
-      } as unknown as import('../../../agent/subagent.js').SubagentResult,
+      } as unknown as SubagentResult,
     };
   }
 
