@@ -12,6 +12,10 @@
  *     `procedure_write`, `config_set`, and `terminal_font_size`: the tools that
  *     persist state to disk or memory. This is the meaningful, non-bypassable
  *     no-mutation guarantee.
+ *   - `remote_agent` — always blocked in plan mode. The remote runs under its
+ *     own configured permissionMode, which defaults to `bypassPermissions`, so
+ *     a single call can mutate arbitrary state on another machine. It is risk
+ *     class `high` and must never fire silently during a planning session.
  *   - `bash` — blocked when `classifyBashCommand` (`tools/readonly-bash.ts`)
  *     judges the command state-mutating; read-only recon (`git status/log/diff`,
  *     `ls`, `cat`, `grep`, `find`, and chains thereof) passes through. This is
@@ -63,6 +67,19 @@ export function createPlanModeGate(
       return {
         decision: 'block',
         reason: `plan mode: ${toolName} is refused. Use /plan off to exit plan mode.`,
+      };
+    }
+
+    // Invariant: remote_agent is always refused in plan mode. It is risk class
+    // `high`: the remote runs under bypassPermissions by default, so one call
+    // can mutate arbitrary state on another machine — exactly the kind of silent
+    // side-effect plan mode exists to prevent. It is categorized `web`, not
+    // `write`, so the write-category block above does not catch it; this
+    // explicit check closes that gap.
+    if (toolName === 'remote_agent') {
+      return {
+        decision: 'block',
+        reason: 'plan mode: remote_agent is refused. Use /plan off to exit plan mode.',
       };
     }
 

@@ -27,8 +27,9 @@ export const remoteAgentTool: AnthropicToolDef = {
     'The remote agent cannot dispatch subagents or further remote agents. It runs headless ' +
     'under that machine\'s own configured permissionMode, which is bypassPermissions by ' +
     'default, so remote_agent is risk class high and autonomous mode (AFK gate) holds it ' +
-    'for approval. This call blocks until the remote finishes; for long work, call it from ' +
-    'a background `agent`.',
+    'for approval. This call blocks until the remote finishes; for long work outside ' +
+    'autonomous mode, call it from a background `agent` (autonomous mode hard-blocks ' +
+    'sub-agent calls).',
   input_schema: {
     type: 'object',
     properties: {

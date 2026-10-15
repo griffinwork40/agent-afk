@@ -58,11 +58,12 @@ Verified on macOS over SSH (2026-10-15), which is why it works this way:
 
 `remote_agent { host, prompt, cwd?, model?, resume? }`
 
-- Blocks until the remote run finishes. For long work, call it from a background
-  `agent`, which is delivered automatically.
+- Blocks until the remote run finishes. For long work outside autonomous mode, call
+  it from a background `agent`, which is delivered automatically (autonomous mode
+  hard-blocks sub-agent calls).
 - The result ends with `[remote_agent: host=… session=<id> run=<id>; pass resume="<id>" …]`.
   Pass that session id as `resume` to continue the same conversation on that host.
-- Risk class `medium` (outbound effect, like `send_telegram`): allowed in AFK mode.
+- Risk class `high` (remote bypassPermissions default): autonomous mode asks for approval in the main session and hard-blocks sub-agents; plan mode refuses it.
 
 ## How it works (`src/remote/`)
 
