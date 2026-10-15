@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { _setRealScratchRootsForTests, _resetScratchRootsCacheForTests } from './scratch-roots.js';
 import { writeFile, mkdir, rm } from 'fs/promises';
 import os from 'os';
 import path from 'path';
@@ -41,6 +42,12 @@ afterEach(async () => {
     // best-effort
   }
 });
+
+// This suite uses os.tmpdir() dirs as "outside every granted root". The OS
+// temp dir is an implicit WRITE root (scratch-roots.ts), so disable that
+// allowance here to keep testing granted-root containment, not temp policy.
+beforeEach(() => _setRealScratchRootsForTests([]));
+afterEach(() => _resetScratchRootsCacheForTests());
 
 describe('validatePatchChanges', () => {
   it('passes for a valid content change', async () => {

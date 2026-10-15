@@ -130,7 +130,7 @@ export const agentTool: AnthropicToolDef = {
         type: 'array',
         items: { type: 'string' },
         description:
-          'Optional extra write roots to pre-grant to the forked child. In confined sessions, by default a fork can only write inside its cwd/worktree; out-of-root writes are auto-denied. Forks of an unconfined session without an explicit cwd or worktree isolation inherit unconfined access; these roots have no effect and do not request confinement. Each entry must be an absolute path with no `..` segments. Composed WITH (never replaces) the child cwd. Mutually exclusive with isolation:"worktree".',
+          'Optional extra write roots to pre-grant to the forked child. In confined sessions, by default a fork can only write inside its cwd/worktree and the OS temp dir (/tmp, os.tmpdir(), always writable for scratch files); other out-of-root writes are auto-denied. Forks of an unconfined session without an explicit cwd or worktree isolation inherit unconfined access; these roots have no effect and do not request confinement. Each entry must be an absolute path with no `..` segments. Composed WITH (never replaces) the child cwd. Mutually exclusive with isolation:"worktree".',
       },
       readRoots: {
         type: 'array',
