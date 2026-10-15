@@ -9,6 +9,15 @@ const READ_ONLY = new Set([
   'wc', 'pwd', 'readlink',
 ]);
 
+/**
+ * Token-aware mutation guard applied to EVERY wait_for command, including ones
+ * the risk table already calls 'safe' (it rates `curl -I url -X "POST"` safe).
+ */
+export function pollMutationReason(command: string): string | undefined {
+  const mutation = classifyBashCommand(command);
+  return mutation.mutating ? mutation.reason ?? 'mutating command' : undefined;
+}
+
 /** Reject syntax that can hide execution or writes before consulting safe rules. */
 export function pollSyntaxReason(command: string): string | undefined {
   // Deliberately conservative even inside quotes: this is not a shell parser.
@@ -19,8 +28,7 @@ export function pollSyntaxReason(command: string): string | undefined {
   if (/(?:^|\s)#/.test(command)) return 'shell comments are not supported';
   // Reuse the existing token-aware mutation guard for quoted curl methods and
   // write-capable flags; the UI risk table alone is intentionally heuristic.
-  const mutation = classifyBashCommand(command);
-  return mutation.mutating ? mutation.reason ?? 'mutating command' : undefined;
+  return pollMutationReason(command);
 }
 
 /** Small, fail-closed addition to the existing risk classifier, not a shell interpreter. */

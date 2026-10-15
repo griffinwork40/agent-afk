@@ -26,6 +26,8 @@ describe('wait_for read-only command policy', () => {
     'gh pr checks 123', 'gh run list --limit 1 --json status',
     'gh pr checks 123 | grep pass && test -s result.txt',
     'curl -I https://example.com', 'git status --short',
+    // #2750 regression pin: classifier-safe polls keep quoted jq syntax.
+    `gh pr checks 1 --json state --jq '.[] | select(.state=="FAILURE")'`,
   ])('executes read-only poll: %s', (command) => {
     const result = evaluateCommand({ type: 'command', command });
     expect(result.data?.['blocked']).toBeUndefined();
@@ -35,7 +37,7 @@ describe('wait_for read-only command policy', () => {
 
   it.each([
     'rm result.txt', 'rm -rf output', 'cat result.txt > copy.txt',
-    'cat result.txt>copy.txt', 'true >>copy.txt', 'ls 2>/dev/null',
+    'cat result.txt>copy.txt', 'true >>copy.txt', 'test -f x 2>/dev/null',
     'git push', 'curl -X POST https://example.com',
     'curl -I https://example.com -X "POST"',
     'true && curl -I https://example.com -X "POST"',
@@ -44,7 +46,7 @@ describe('wait_for read-only command policy', () => {
     'test -e x && gh pr merge 123',
     'true; rm result.txt', 'test -f result.txt; touch marker',
     'test -s $(cat path.txt)', 'test -s "$(cat path.txt)"',
-    'cat `pwd`', 'cat <(ls)', 'test -f result.txt | tee copy.txt',
+    'cat `pwd`', 'test -f <(ls)', 'test -f result.txt | tee copy.txt',
     'true | unknown-command', 'true && git push',
     'PATH=. test -f result.txt', 'ssh host cat result.txt | grep ready',
     'true; g=git; $g push', 'true\\nrm result.txt',
