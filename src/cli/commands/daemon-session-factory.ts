@@ -201,6 +201,7 @@ export function buildDaemonSessionFactory(
       // rows instead of vanishing (#733).
       drainSubagents: (reason) =>
         rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset'),
+      getPendingChildTerminalWrites: () => rootManager.getPendingChildTerminalWrites(),
       // User-facing surface for trace `origin` attribution. Forced after
       // `...config` for the same reason as `isNonInteractive`: every daemon +
       // scheduler/cron session routes through here → 'daemon'.

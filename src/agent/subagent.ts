@@ -480,6 +480,15 @@ export class SubagentManager {
   }
 
   /**
+   * Snapshot the in-flight cancellation-write promises from every active handle.
+   * Threaded into `AgentConfig.getPendingChildTerminalWrites` so `seal()` can
+   * await them even when the drain timed out (#3714).
+   */
+  getPendingChildTerminalWrites(): readonly Promise<void>[] {
+    return [...this.active.values()].map((h) => h._pendingCancellationWrite);
+  }
+
+  /**
    * Cascade-abort the managed tree and wait (bounded) for every in-flight
    * child's terminal trace row to be handed to the writer.
    *

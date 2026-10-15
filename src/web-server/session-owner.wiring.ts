@@ -47,6 +47,8 @@ export interface WebSessionWiring {
   workspaceStore: WorkspaceStore;
   /** Wired into `AgentConfig.drainSubagents` to cascade-abort children on close. */
   drainSubagents: AgentConfig['drainSubagents'];
+  /** Wired into `AgentConfig.getPendingChildTerminalWrites` so seal() can await in-flight cancel emits (#3714). */
+  getPendingChildTerminalWrites: AgentConfig['getPendingChildTerminalWrites'];
 }
 
 export interface WireWebSessionOptions {
@@ -139,6 +141,9 @@ export async function wireWebSession(
   };
 
   // Late-bind helper so callers can wire after session construction.
+  const getPendingChildTerminalWrites: AgentConfig['getPendingChildTerminalWrites'] =
+    () => executors.rootManager.getPendingChildTerminalWrites();
+
   const wiring: WebSessionWiring = {
     provider,
     executors,
@@ -150,6 +155,7 @@ export async function wireWebSession(
     memoryStore,
     workspaceStore,
     drainSubagents,
+    getPendingChildTerminalWrites,
   };
 
   // Attach the late-bind setter as a post-construction hook: the caller must

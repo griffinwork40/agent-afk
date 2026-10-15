@@ -228,8 +228,14 @@ export class NdjsonTraceWriter implements TraceWriter {
       // Flush any in-flight child terminal emits before writing session_sealed
       // so their rows land ahead of the seal record (#3714). All-settled so a
       // single failed emit does not abort the others or block the seal.
+      // Temporarily re-open the write gate so pending child terminal emits
+      // can land before the seal record (#3714). The enqueue serialization
+      // guarantees no NEW writes can interleave — only the already-started
+      // promises in pendingWrites can resolve here.
       if (pendingWrites && pendingWrites.length > 0) {
+        this.sealed = false;
         await Promise.allSettled(pendingWrites);
+        this.sealed = true;
       }
       await this.ensureOpen();
       // Guard against `sealOnProcessExit()` having already won the race

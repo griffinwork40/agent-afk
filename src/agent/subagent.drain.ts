@@ -74,7 +74,7 @@ export async function abortAllAndDrainImpl(
       resolve();
     }, timeoutMs).unref(),
   );
-  await Promise.race([
+  const settled = await Promise.race([
     Promise.allSettled(
       inFlight.flatMap((h) => [h.cancel(), h._pendingCancellationWrite]),
     ),
@@ -85,6 +85,15 @@ export async function abortAllAndDrainImpl(
       `[SubagentManager] abortAllAndDrain: ${inFlight.length} child(ren) did not settle ` +
         `within ${timeoutMs}ms — sealing anyway; their terminal rows may be missing`,
     );
+  } else if (Array.isArray(settled)) {
+    const rejected = settled.filter(
+      (r): r is PromiseRejectedResult => r.status === 'rejected',
+    );
+    if (rejected.length > 0) {
+      console.warn(
+        `[SubagentManager] abortAllAndDrain: ${rejected.length} child cancel/write promise(s) rejected`,
+      );
+    }
   }
   // `/clear` ends one session lifecycle but the manager itself survives.
   // AbortSignals are terminal, so replace the root controller before the

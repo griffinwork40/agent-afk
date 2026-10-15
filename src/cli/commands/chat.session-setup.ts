@@ -197,6 +197,7 @@ export async function buildChatSession(
     apiKey: getApiKeyForModel(sessionModel, providerHints),
     drainSubagents: (reason) =>
       rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset'),
+    getPendingChildTerminalWrites: () => rootManager.getPendingChildTerminalWrites(),
     maxTurns,
     isNonInteractive: true,
     ...(dangerouslySkipPermissions
