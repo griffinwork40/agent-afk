@@ -9,7 +9,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ServerResponse } from 'node:http';
-import { handleListHandoffs } from './routes.handoffs.js';
+import { handleListHandoffs, type HandoffSummary } from './routes.handoffs.js';
 import type { HandoffRecord } from '../agent/daemon/handoff-store.js';
 
 // ---------------------------------------------------------------------------
@@ -159,10 +159,11 @@ describe('routes.handoffs — handleListHandoffs', () => {
     mockListPendingHandoffs.mockResolvedValue([record]);
     const { res, json } = makeRes();
     await handleListHandoffs(res, { handoffsDir: '/tmp/test-handoffs' });
-    const h = (json().body as { handoffs: { question: Record<string, unknown> }[] }).handoffs[0];
-    expect(h.question.message).toBeUndefined();
-    expect(h.question.type).toBeUndefined();
-    expect(h.question.choices).toBeUndefined();
+    const h = (json().body as { handoffs: HandoffSummary[] }).handoffs[0];
+    expect(h).toBeDefined();
+    expect(h?.question.message).toBeUndefined();
+    expect(h?.question.type).toBeUndefined();
+    expect(h?.question.choices).toBeUndefined();
   });
 });
 
