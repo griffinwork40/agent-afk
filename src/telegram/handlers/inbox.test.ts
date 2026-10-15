@@ -14,6 +14,7 @@ import {
   writeEnvelope,
   holdPending,
   listHeld,
+  listPending,
 } from '../../agent/peer/inbox-store.js';
 import type { PeerEnvelope } from '../../agent/peer/envelope.js';
 
@@ -132,7 +133,7 @@ describe('handleInbox release', () => {
     await handleInbox(ctx, sm);
 
     const [text] = ctx.replyCalls[0]!;
-    expect(text).toContain('Released 1 message');
+    expect(text).toContain('Accepted 1 message');
 
     // Held dir should now be empty.
     const stillHeld = await listHeld(SESSION_ID);
@@ -150,7 +151,7 @@ describe('handleInbox release', () => {
     await handleInbox(ctx, sm);
 
     const [text] = ctx.replyCalls[0]!;
-    expect(text).toContain('Released 1 message');
+    expect(text).toContain('Accepted 1 message');
   });
 
   it('warns when prefix matches nothing', async () => {
@@ -220,6 +221,59 @@ describe('handleInbox drop', () => {
 
     const [text] = ctx.replyCalls[0]!;
     expect(text).toContain('No held message id starts with');
+  });
+});
+
+describe('handleInbox release — hold-mode delivery', () => {
+  it('release claims to delivered so hold-mode rescan cannot re-hold', async () => {
+    const env = makeEnvelope({ to: SESSION_ID });
+    await writeEnvelope(env);
+    const pending = await listPending(SESSION_ID);
+    await holdPending(SESSION_ID, pending[0]!);
+
+    const { ctx } = makeCtx('/inbox release all');
+    const sm = makeSessionManager(SESSION_ID);
+    await handleInbox(ctx, sm);
+
+    const [text] = ctx.replyCalls[0]!;
+    expect(text).toContain('Accepted 1 message');
+
+    // The message should NOT be in held anymore.
+    const stillHeld = await listHeld(SESSION_ID);
+    expect(stillHeld).toHaveLength(0);
+
+    // The message should NOT be in pending (it should be in delivered).
+    const stillPending = await listPending(SESSION_ID);
+    expect(stillPending).toHaveLength(0);
+  });
+});
+
+describe('handleInbox list — long message chunking', () => {
+  it('chunks long listing across multiple replies', async () => {
+    // Create enough held messages to exceed 4096 chars.
+    for (let i = 0; i < 60; i++) {
+      const env = makeEnvelope({
+        to: SESSION_ID,
+        body: 'A'.repeat(60),
+        messageId: `msg-${String(i).padStart(4, '0')}-${Math.random().toString(36).slice(2, 10)}`,
+      });
+      await writeEnvelope(env);
+    }
+    const pending = await listPending(SESSION_ID);
+    for (const file of pending) {
+      await holdPending(SESSION_ID, file);
+    }
+
+    const { ctx } = makeCtx('/inbox');
+    const sm = makeSessionManager(SESSION_ID);
+    await handleInbox(ctx, sm);
+
+    // Should have been split into multiple replies.
+    expect(ctx.replyCalls.length).toBeGreaterThan(1);
+    // Each chunk must be under Telegram's 4096-char limit.
+    for (const [text] of ctx.replyCalls) {
+      expect(text.length).toBeLessThanOrEqual(4096);
+    }
   });
 });
 

@@ -22,13 +22,14 @@ import type { Context } from 'telegraf';
 import {
   listHeld,
   releaseHeld,
+  claimPending,
   dropHeld,
   type HeldEntry,
 } from '../../agent/peer/inbox-store.js';
 import { getPeerInboundModeConfig } from '../../agent/peer/inbound-mode.js';
 import type { SessionManager } from '../session-manager.js';
 import { routeFromCtx } from '../route.js';
-import { escapeHtml } from '../formatter.js';
+import { escapeHtml, splitLongMessage } from '../formatter.js';
 
 // ---------------------------------------------------------------------------
 // Formatting helpers (no chalk — Telegram uses HTML parse_mode)
@@ -36,6 +37,7 @@ import { escapeHtml } from '../formatter.js';
 
 /** Format milliseconds as a short human-readable age ("3m", "2h", "1d"). */
 function fmtAge(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '?';
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
@@ -106,7 +108,10 @@ async function handleList(ctx: Context, sessionId: string): Promise<void> {
     );
   }
 
-  await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
+  const fullText = lines.join('\n');
+  for (const chunk of splitLongMessage(fullText)) {
+    await ctx.reply(chunk, { parse_mode: 'HTML' });
+  }
 }
 
 async function handleRelease(
@@ -146,14 +151,22 @@ async function handleRelease(
     return;
   }
 
-  let released = 0;
+  // Invariant: Telegram sessions lack the REPL's PeerInboxNotifier, so
+  // releasing to pending alone would let scanPeerInbox re-hold the message
+  // in hold mode. We chain releaseHeld → claimPending (held → pending →
+  // delivered) to match the REPL's forceAccept semantics. Messages land in
+  // delivered/ which the scan loop never touches.
+  let accepted = 0;
   for (const entry of releasable) {
-    if (await releaseHeld(sessionId, entry.file)) released++;
+    const released = await releaseHeld(sessionId, entry.file);
+    if (!released) continue;
+    const claimed = await claimPending(sessionId, entry.file).catch(() => null);
+    if (claimed !== null) accepted++;
   }
 
   await ctx.reply(
-    `✅ Released ${released} message${released !== 1 ? 's' : ''} to pending. ` +
-    `Will be delivered on the next turn.`,
+    `✅ Accepted ${accepted} message${accepted !== 1 ? 's' : ''}. ` +
+    `Delivered (bypasses hold mode).`,
   );
 }
 
@@ -235,7 +248,7 @@ export async function handleInbox(
   // Strip the command token (/inbox or /inbox@botname).
   const afterCmd = text.replace(/^\/inbox(?:@\S+)?/, '').trim();
   const parts = afterCmd === '' ? [] : afterCmd.split(/\s+/);
-  const verb = parts[0] ?? 'list';
+  const verb = (parts[0] ?? 'list').toLowerCase();
   const arg = parts.slice(1).join(' ').trim();
 
   if (verb === 'list' || verb === '') {
