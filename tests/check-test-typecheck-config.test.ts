@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('node:child_process', () => ({ execFileSync: vi.fn() }));
 vi.mock('node:fs', async (importOriginal) => ({
@@ -13,6 +13,10 @@ vi.mock('node:fs', async (importOriginal) => ({
 
 const originalArgv = process.argv;
 const scriptPath = fileURLToPath(new URL('../scripts/check-test-typecheck.ts', import.meta.url));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 afterEach(() => {
   process.argv = originalArgv;

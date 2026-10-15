@@ -45,9 +45,11 @@ describe('validateIssueUrl', () => {
   it.each([
     '', 'not a url', 'javascript:alert(1)', 'http://github.com/o/r/issues/1',
     'https://evil.example/o/r/issues/1', 'https://github.com/other/repo/issues/1',
-    'https://github.com/o/r/issues/nope', 'https://github.com/o/r/issues/1\nextra',
+    'https://github.com/o/r/issues/nope', 'https://github.com/o/r/issues/0',
+    'https://github.com/o/r/issues/1\nextra',
     'https://user:pass@github.com/o/r/issues/1', 'https://github.com/o/r/issues/1?x=1',
     'https://github.com/o/r/issues/1#fragment',
+    'https://github.com:8443/o/r/issues/1',
   ])('rejects invalid/unexpected output %j', (value) => {
     expect(() => validateIssueUrl(value, 'github.com/o/r')).toThrow('invalid issue URL');
   });
