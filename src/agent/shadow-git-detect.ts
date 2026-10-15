@@ -77,22 +77,27 @@ export function detectShadowGit(command: string): ShadowGitHit[] {
   const hits: ShadowGitHit[] = [];
 
   // ------------------------------------------------------------------
-  // (A) --no-verify on git push / git commit
+  // (A) --no-verify / -n on git push / git commit
   // ------------------------------------------------------------------
-  // Match `git push … --no-verify` or `git commit … --no-verify`.
-  // The git sub-command and the flag may appear in either order on the line
-  // (e.g. `git push --no-verify origin main` or with flags before the verb).
-  // We look for both "git push" and "git commit" anywhere in the command,
-  // then separately check for "--no-verify". This avoids false positives on
-  // e.g. `git push origin main && echo "--no-verify disabled"`.
-  const hasNoVerify = /(?:^|[;&|]\s*|\benv\b[^;]*\s)git\s[^;]*--no-verify/.test(command);
-  if (hasNoVerify) {
-    const isPush = /(?:^|[;&|]\s*|\benv\b[^;]*\s)git\s[^;]*\bpush\b[^;]*--no-verify/.test(command)
-      || /(?:^|[;&|]\s*|\benv\b[^;]*\s)git\s[^;]*--no-verify[^;]*\bpush\b/.test(command);
-    const isCommit = /(?:^|[;&|]\s*|\benv\b[^;]*\s)git\s[^;]*\bcommit\b[^;]*--no-verify/.test(command)
-      || /(?:^|[;&|]\s*|\benv\b[^;]*\s)git\s[^;]*--no-verify[^;]*\bcommit\b/.test(command);
-    if (isPush) hits.push({ kind: 'no-verify', pattern: 'git-push-no-verify' });
-    if (isCommit) hits.push({ kind: 'no-verify', pattern: 'git-commit-no-verify' });
+  // Strategy: tokenize on shell segment boundaries (;, &&, ||, |, newline)
+  // and inspect each segment independently. Within a segment we only scan
+  // the git argument list — content inside quoted strings is excluded so
+  // `git commit -m "document --no-verify"` does not fire. Short form `-n`
+  // is treated as equivalent to `--no-verify` for `git commit` (per
+  // `git commit -h`: "-n, --no-verify").
+  for (const segment of splitSegments(command)) {
+    const stripped = stripQuotedContent(segment);
+    const gitArgList = extractGitArgList(stripped);
+    if (gitArgList === null) continue;
+    const { verb, args } = gitArgList;
+    // `git push` only recognises --no-verify (long form); `-n` on push means
+    // --dry-run. `git commit` recognises both `-n` and `--no-verify`.
+    const longNoVerify = /(?:^|\s)--no-verify(?:\s|$)/.test(args);
+    const shortNoVerify = /(?:^|\s)-n(?:\s|$)/.test(args);
+    if (verb === 'push' && longNoVerify)
+      hits.push({ kind: 'no-verify', pattern: 'git-push-no-verify' });
+    if (verb === 'commit' && (longNoVerify || shortNoVerify))
+      hits.push({ kind: 'no-verify', pattern: 'git-commit-no-verify' });
   }
 
   // ------------------------------------------------------------------
@@ -109,6 +114,89 @@ export function detectShadowGit(command: string): ShadowGitHit[] {
 }
 
 // ---------------------------------------------------------------------------
+// Segment / quote helpers (used by both (A) and (B) detectors)
+// ---------------------------------------------------------------------------
+
+/**
+ * Split a shell command string into segments on unquoted boundaries:
+ * `;`, `&&`, `||`, `|`, and newlines. Each segment is one logical command
+ * and is inspected independently so a flag in a later compound command
+ * (e.g. `echo --no-verify`) does not bleed into an earlier git invocation.
+ *
+ * Contract: this is a heuristic tokenizer, not a full shell parser. It is
+ * accurate for the subset of commands the agent produces (single-level
+ * quoting, no nested subshells in the critical paths). Backtick / $(...)
+ * subshells are not expanded — the literal characters are preserved.
+ */
+function splitSegments(command: string): string[] {
+  // Split on ;, &&, ||, |, or \n — but only when NOT inside a quoted string.
+  const segments: string[] = [];
+  let current = '';
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]!;
+    if (ch === "'" && !inDouble) { inSingle = !inSingle; current += ch; continue; }
+    if (ch === '"' && !inSingle) { inDouble = !inDouble; current += ch; continue; }
+    if (inSingle || inDouble) { current += ch; continue; }
+    // Unquoted — check for segment boundary.
+    if (ch === '\n' || ch === ';') {
+      segments.push(current); current = ''; continue;
+    }
+    if ((ch === '&' || ch === '|') && i + 1 < command.length && command[i + 1] === ch) {
+      segments.push(current); current = ''; i++; continue;
+    }
+    if (ch === '|') {
+      segments.push(current); current = ''; continue;
+    }
+    current += ch;
+  }
+  if (current.length > 0) segments.push(current);
+  return segments;
+}
+
+/**
+ * Replace the contents of single- and double-quoted strings in `s` with
+ * a single space, so that flags embedded in commit messages do not match
+ * subsequent argument-scanning regexes.
+ *
+ * Contract: only strips content; preserves the surrounding quote characters
+ * so downstream length-estimation stays approximately correct.
+ */
+function stripQuotedContent(s: string): string {
+  // Replace "..." and '...' contents with a placeholder space.
+  return s
+    .replace(/"[^"]*"/g, '" "')
+    .replace(/'[^']*'/g, "' '");
+}
+
+/**
+ * Given a (already quote-stripped) shell segment, detect whether it contains
+ * a `git` invocation and return the git sub-command verb and the rest of the
+ * argument list. Returns `null` when the segment contains no `git` call.
+ *
+ * Handles:
+ *   - `git <verb> [args]`
+ *   - `git -c key=val <verb> [args]` (one or more -c options before verb)
+ *   - `env VAR=val git <verb> [args]` prefix
+ *   - `VAR=val git <verb> [args]` bare env-assignment prefix
+ */
+function extractGitArgList(segment: string): { verb: string; args: string } | null {
+  // Match optional env-prefix then `git`, optional -c flags, then verb.
+  // Invariant: segment has already had quoted content stripped, so we will
+  // not match flags embedded inside commit messages.
+  //
+  // Contract: `-c key=val` values may become `' '` after quote-stripping
+  // (e.g. `-c user.email='foo@bar.com'` → `-c user.email=' '`). The value
+  // pattern `[^\s]*(?:'\s*')?[^\s]*` accepts both unquoted tokens and the
+  // stripped `key=' '` form so git detection still fires.
+  const m = /(?:^|\s)(?:(?:[A-Z_]+=\S*\s+)*(?:env\s+)?)?git(?:\s+-c\s+[^\s]*(?:'\s*'[^\s]*)?)*\s+(\w+)(.*)$/
+    .exec(segment);
+  if (!m) return null;
+  return { verb: m[1]!, args: m[2] ?? '' };
+}
+
+// ---------------------------------------------------------------------------
 // Email extraction helpers
 // ---------------------------------------------------------------------------
 
@@ -118,8 +206,12 @@ export function detectShadowGit(command: string): ShadowGitHit[] {
  *
  * Sources:
  *   1. `git commit --author "Name <email>"` or `git commit --author="Name <email>"`
- *   2. `git -c user.email=<email>` (with or without `git commit` following)
- *   3. `GIT_AUTHOR_EMAIL=<email>`, `GIT_COMMITTER_EMAIL=<email>` env vars
+ *      — scoped to segments containing a real git invocation.
+ *   2. `git -c user.email=<email>` — already scoped by the `-c` flag being a
+ *      git option; the regex requires the git context via `extractGitArgList`.
+ *   3. `GIT_AUTHOR_EMAIL=<email>`, `GIT_COMMITTER_EMAIL=<email>` env vars —
+ *      only when the same segment also contains a `git` invocation, so that
+ *      `echo GIT_AUTHOR_EMAIL=human@example.com` does not fire.
  *
  * `GIT_AUTHOR_NAME` / `GIT_COMMITTER_NAME` / `-c user.name=` are name-only
  * overrides; without an email they do not change authorship in a way that
@@ -129,26 +221,37 @@ export function detectShadowGit(command: string): ShadowGitHit[] {
 function extractOverrideEmails(command: string): string[] {
   const found = new Set<string>();
 
-  // 1. `git commit --author "Name <email>"` or `--author=...`
-  //    The <email> is inside angle brackets in the standard git "A U Thor <email>" format.
-  //    Capture the angle-bracket content only (the email).
-  const authorFlagRe = /--author[= ]["']?[^<"']*<([^>]+)>/g;
-  for (const m of command.matchAll(authorFlagRe)) {
-    if (m[1] !== undefined) found.add(m[1].toLowerCase().trim());
-  }
+  for (const segment of splitSegments(command)) {
+    const stripped = stripQuotedContent(segment);
+    const hasGit = extractGitArgList(stripped) !== null;
 
-  // 2. `git -c user.email=<email>` (value may be quoted or unquoted)
-  const userEmailRe = /-c\s+user\.email=["']?([^\s"';&|]+)/g;
-  for (const m of command.matchAll(userEmailRe)) {
-    if (m[1] !== undefined) found.add(m[1].toLowerCase().trim());
-  }
+    // 1. `--author "Name <email>"` or `--author=...`
+    //    Only meaningful when this segment is a git invocation.
+    if (hasGit) {
+      const authorFlagRe = /--author[= ]["']?[^<"']*<([^>]+)>/g;
+      for (const m of segment.matchAll(authorFlagRe)) {
+        if (m[1] !== undefined) found.add(m[1].toLowerCase().trim());
+      }
+    }
 
-  // 3. GIT_AUTHOR_EMAIL=<email> / GIT_COMMITTER_EMAIL=<email>
-  //    Matches both `GIT_AUTHOR_EMAIL=foo@bar.com cmd` and
-  //    `env GIT_AUTHOR_EMAIL=foo@bar.com cmd` forms.
-  const envEmailRe = /GIT_(?:AUTHOR|COMMITTER)_EMAIL=["']?([^\s"';&|]+)/g;
-  for (const m of command.matchAll(envEmailRe)) {
-    if (m[1] !== undefined) found.add(m[1].toLowerCase().trim());
+    // 2. `git -c user.email=<email>` — match on the original segment (not
+    //    stripped) so that quoted values like -c user.email='foo@bar.com' are
+    //    captured; strip outer quotes from the captured group.
+    if (hasGit) {
+      const userEmailRe = /-c\s+user\.email=["']?([^\s"';&|]+)/g;
+      for (const m of segment.matchAll(userEmailRe)) {
+        if (m[1] !== undefined) found.add(m[1].toLowerCase().trim());
+      }
+    }
+
+    // 3. GIT_AUTHOR/COMMITTER_EMAIL — only flag when the same segment also
+    //    calls git, so `echo GIT_AUTHOR_EMAIL=human@example.com` is ignored.
+    if (hasGit) {
+      const envEmailRe = /GIT_(?:AUTHOR|COMMITTER)_EMAIL=["']?([^\s"';&|]+)/g;
+      for (const m of stripped.matchAll(envEmailRe)) {
+        if (m[1] !== undefined) found.add(m[1].toLowerCase().trim());
+      }
+    }
   }
 
   return [...found];

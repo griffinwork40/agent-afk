@@ -188,6 +188,85 @@ describe('detectShadowGit – edge / empty cases', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Regression tests for review comments (issues 2, 3, 4)
+// ---------------------------------------------------------------------------
+
+describe('detectShadowGit – issue 4: git commit -n short form', () => {
+  it('flags git commit -n (short form of --no-verify)', () => {
+    const hits = detectShadowGit('git commit -n -m "wip"');
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ kind: 'no-verify', pattern: 'git-commit-no-verify' });
+  });
+
+  it('flags git commit -n with other flags', () => {
+    const hits = detectShadowGit('git commit -n -a -m "wip"');
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ kind: 'no-verify', pattern: 'git-commit-no-verify' });
+  });
+
+  it('does not flag git push -n (push has no -n / --no-verify)', () => {
+    // -n on push means --dry-run, not --no-verify; only commit is short-form
+    const hits = detectShadowGit('git push -n origin main');
+    expect(hits).toHaveLength(0);
+  });
+});
+
+describe('detectShadowGit – issue 3: no-verify in quoted message', () => {
+  it('does not flag --no-verify inside a double-quoted commit message', () => {
+    expect(detectShadowGit('git commit -m "document --no-verify usage"')).toHaveLength(0);
+  });
+
+  it('does not flag --no-verify inside a single-quoted commit message', () => {
+    expect(detectShadowGit("git commit -m 'document --no-verify usage'")).toHaveLength(0);
+  });
+
+  it('does not flag --no-verify in a later compound command after push', () => {
+    expect(detectShadowGit('git push origin main && echo --no-verify')).toHaveLength(0);
+  });
+
+  it('does not flag --no-verify in a semicolon-separated later command', () => {
+    expect(detectShadowGit('git push origin main; echo --no-verify')).toHaveLength(0);
+  });
+
+  it('does not flag --no-verify in a pipe-separated later command', () => {
+    expect(detectShadowGit('git push origin main | grep --no-verify')).toHaveLength(0);
+  });
+
+  it('still flags real --no-verify on git push in compound command', () => {
+    const hits = detectShadowGit('git push --no-verify origin main && echo done');
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ kind: 'no-verify', pattern: 'git-push-no-verify' });
+  });
+});
+
+describe('detectShadowGit – issue 2: identity regexes scoped to git invocations', () => {
+  it('does not flag echo of GIT_AUTHOR_EMAIL (not a git invocation)', () => {
+    expect(detectShadowGit('echo GIT_AUTHOR_EMAIL=human@example.com')).toHaveLength(0);
+  });
+
+  it('does not flag rg search mentioning an email (not a git invocation)', () => {
+    expect(detectShadowGit('rg "GIT_AUTHOR_EMAIL=human@example.com" .')).toHaveLength(0);
+  });
+
+  it('does not flag a commit message containing GIT_AUTHOR_EMAIL', () => {
+    expect(
+      detectShadowGit('git commit -m "set GIT_AUTHOR_EMAIL=human@example.com in env"'),
+    ).toHaveLength(0);
+  });
+
+  it('flags GIT_AUTHOR_EMAIL when same segment calls git', () => {
+    const hits = detectShadowGit('GIT_AUTHOR_EMAIL=human@example.com git commit -m "x"');
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ kind: 'identity', email: 'human@example.com' });
+  });
+
+  it('does not flag GIT_AUTHOR_EMAIL in a prior segment separated by semicolon', () => {
+    // env-var assignment is in segment 1; git runs in segment 2 with no override
+    expect(detectShadowGit('export GIT_AUTHOR_EMAIL=human@example.com; git commit -m "x"')).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // createShadowGitDetect — hook wiring
 // ---------------------------------------------------------------------------
 
