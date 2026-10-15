@@ -144,7 +144,7 @@ export const CLAUDE_FABLE_5_1_ID = 'claude-fable-5-1';
  * short alias. Update this constant when a new flagship ships; the alias
  * table, `/model` picker, and docs all follow from this single definition.
  */
-export const GROK_FLAGSHIP_ID = 'grok-4.6';
+export const GROK_FLAGSHIP_ID = 'grok-4.7';
 
 /**
  * Default tier bindings — an unconfigured install behaves identically to the
@@ -213,6 +213,10 @@ export const DIRECT_MODEL_ALIASES: Readonly<Record<string, string>> = {
  * subset, not the whole acceptable set.
  */
 export const OPENAI_MODEL_HINTS: readonly string[] = [
+  'gpt-6.1-sol',
+  'gpt-6-astra',
+  'gpt-6-sol',
+  'gpt-6-luna',
   'gpt-5.6-sol',
   'gpt-5.6-terra',
   'gpt-5.6-luna',

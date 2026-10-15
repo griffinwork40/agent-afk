@@ -19,7 +19,7 @@ import type { ImportFromConfig, ImportSourceBinary } from '../../config/import-s
  * in the environment or the user's config file. Providers that need a key
  * but don't get one (e.g. Anthropic without OAuth state) surface the
  * failure lazily at session-construction time, not up front — this is how
- * we support `AFK_MODEL=gpt-5.4` without an `ANTHROPIC_API_KEY` present.
+ * we support `AFK_MODEL=gpt-5.6-sol` without an `ANTHROPIC_API_KEY` present.
  */
 export interface AutoRoutingConfig {
   interactive?: boolean;

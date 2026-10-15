@@ -27,10 +27,11 @@ export interface XaiModelPricing {
  * @internal exported for unit tests
  */
 export const XAI_MODEL_PRICING: ReadonlyMap<string, XaiModelPricing> = new Map([
-  // Active set only (docs.x.ai models/pricing, 2026-08). Retired families
+  // Active set only (docs.x.ai models/pricing, 2026-10). Retired families
   // (grok-2/3, bare grok-4, grok-4-fast, …) are omitted — unknown ids price as
   // undefined, never silent $0.
   // Flagship coding / agentic (500k context). Newest public SKU first.
+  ['grok-4.7', { inputPerMTok: 2.0, outputPerMTok: 6.0, cachedInputPerMTok: 0.5 }],
   ['grok-4.6', { inputPerMTok: 2.0, outputPerMTok: 6.0, cachedInputPerMTok: 0.5 }],
   ['grok-4.5', { inputPerMTok: 2.0, outputPerMTok: 6.0, cachedInputPerMTok: 0.3 }],
   // General-purpose long context (1M).

@@ -93,6 +93,11 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   'gpt-5.6-sol': 128_000,
   'gpt-5.6-terra': 128_000,
   'gpt-5.6-luna': 128_000,
+  // GPT-6 family max output — 128k ceiling per OpenAI API docs (2026-10).
+  'gpt-6.1-sol': 128_000,
+  'gpt-6-astra': 128_000,
+  'gpt-6-sol': 128_000,
+  'gpt-6-luna': 128_000,
   // Cerebras Shared Inference. Invariant: AFK's choice, NOT a documented
   // provider cap (Cerebras bounds completion length only by the context window).
   // It must stay well below the free-tier window pinned in MODEL_CONTEXT_LIMITS:
@@ -269,6 +274,7 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   // Any other `grok-*` still routes and runs; unknown ids fall through to the
   // openai-compatible default via routesToOpenAICompatible (never invent
   // retired family windows here).
+  'grok-4.7': 500_000,
   'grok-4.6': 500_000,
   'grok-4.5': 500_000,
   'grok-4.3': 1_000_000,

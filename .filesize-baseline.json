@@ -1,6 +1,6 @@
 {
   "limit": 350,
   "entries": {
-
+    "src/agent/session/model-slots.ts": { "loc": 353, "reason": "add gpt-6 family to OPENAI_MODEL_HINTS (ChatGPT subscription, 2026-10)" }
   }
 }

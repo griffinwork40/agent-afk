@@ -265,7 +265,7 @@ export async function main(): Promise<void> {
     console.log('  /help    - Show command list');
     console.log('  /clear   - Clear conversation history');
     console.log('  /compact - Compact history (summarize older messages)');
-    console.log('  /model   - Switch model (opus/sonnet/haiku/gpt-5.4/...)');
+    console.log('  /model   - Switch model (opus/sonnet/haiku/gpt-5.6-sol/...');
     console.log('\n💬 Send any message to chat with the agent.');
     console.log('\n⏹️  Press Ctrl+C to stop the bot.');
 

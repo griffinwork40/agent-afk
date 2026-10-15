@@ -60,7 +60,7 @@ describe('resolveChildModel — centralized precedence chain', () => {
     expect(resolveChildModel({
       callSiteModel: undefined,
       defaultSubagentModel: undefined,
-      defaultModel: 'grok-4.6',
-    })).toBe('grok-4.6');
+      defaultModel: 'grok-4.7',
+    })).toBe('grok-4.7');
   });
 });
