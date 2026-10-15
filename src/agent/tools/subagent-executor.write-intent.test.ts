@@ -5,6 +5,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { collectPostRunWarnings, classifyDispatchIntent } from './subagent-executor.write-intent.js';
+import { checkReadOnlyDispatchIntent } from './subagent-executor.execute-once.helpers.js';
+import type { RegisteredAgent } from '../agents/types.js';
 
 const noVision = (_m: string) => false;
 const hasVision = (_m: string) => true;
@@ -294,5 +296,60 @@ describe('classifyDispatchIntent (#3754)', () => {
     it('passes "never modify the files, just audit them"', () => {
       expect(classifyDispatchIntent('never modify the files, just audit them')).toBe(false);
     });
+  });
+});
+
+// ── checkReadOnlyDispatchIntent (#3754) ──────────────────────────────────────
+// Minimal stub satisfying the RegisteredAgent shape used by checkReadOnlyDispatchIntent.
+const reconAgent = { name: 'research-agent', readOnly: true } as unknown as RegisteredAgent;
+
+// Helper: always-true / always-false classifiers for unit isolation.
+const alwaysImpl = (_: string) => true;
+const alwaysRecon = (_: string) => false;
+
+describe('checkReadOnlyDispatchIntent (#3754)', () => {
+  it('returns undefined when child is write-capable (write-capable agent, impl brief)', () => {
+    const result = checkReadOnlyDispatchIntent(true, reconAgent, 'edit src/foo.ts', alwaysImpl);
+    expect(result).toBeUndefined();
+  });
+
+  it('returns undefined when namedAgent is undefined (bare dispatch)', () => {
+    const result = checkReadOnlyDispatchIntent(false, undefined, 'edit src/foo.ts', alwaysImpl);
+    expect(result).toBeUndefined();
+  });
+
+  it('returns undefined when classifier returns false (recon brief)', () => {
+    const result = checkReadOnlyDispatchIntent(false, reconAgent, 'do not edit files', alwaysRecon);
+    expect(result).toBeUndefined();
+  });
+
+  it('returns an error ToolResult when read-only agent receives impl brief', () => {
+    const result = checkReadOnlyDispatchIntent(false, reconAgent, 'edit src/foo.ts', alwaysImpl);
+    expect(result).toBeDefined();
+    expect(result!.isError).toBe(true);
+    expect(result!.content).toContain('research-agent');
+    expect(result!.content).toContain('read-only');
+    expect(result!.content).toContain('general-purpose');
+  });
+
+  it('error message mentions patch/findings alternative', () => {
+    const result = checkReadOnlyDispatchIntent(false, reconAgent, 'implement the feature', alwaysImpl);
+    expect(result!.content).toContain('patch');
+  });
+
+  it('uses classifyDispatchIntent end-to-end: rejects real impl brief', () => {
+    const result = checkReadOnlyDispatchIntent(false, reconAgent, 'implement the feature in the module', classifyDispatchIntent);
+    expect(result).toBeDefined();
+    expect(result!.isError).toBe(true);
+  });
+
+  it('uses classifyDispatchIntent end-to-end: passes recon brief mentioning edits passively', () => {
+    const result = checkReadOnlyDispatchIntent(false, reconAgent, 'report what should be changed', classifyDispatchIntent);
+    expect(result).toBeUndefined();
+  });
+
+  it('uses classifyDispatchIntent end-to-end: passes negation brief', () => {
+    const result = checkReadOnlyDispatchIntent(false, reconAgent, 'do not edit files, only report findings', classifyDispatchIntent);
+    expect(result).toBeUndefined();
   });
 });
