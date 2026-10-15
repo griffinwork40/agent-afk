@@ -27,8 +27,8 @@ import type { SubagentHandleImpl } from './handle.js';
  *   3. onSubagentSucceeded fires synchronously before _onTerminal() so the
  *      session_sealed rollup always captures this subagent's contribution.
  */
-export async function drainAndEmitSuccess<T>(
-  handle: SubagentHandleImpl<T>,
+export async function drainAndEmitSuccess(
+  handle: SubagentHandleImpl<unknown>,
   firstMsg: Message,
   startTime: number,
   sinkOverride: SubagentProgressSink | undefined,
