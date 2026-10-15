@@ -54,7 +54,7 @@ describe('A7: verdict-ledger maxW budget respects centering margin', () => {
 
     const ledger = createVerdictLedger({ capacity: 8 });
     for (const kind of ['done', 'asking', 'done', 'blocked', 'done', 'asking', 'done', 'asking'] as const) {
-      ledger.push({ kind, summary: 'test' });
+      ledger.push({ kind, whatWasDone: 'test' });
     }
     const rail = ledger.render();
     expect(rail).not.toBeNull();

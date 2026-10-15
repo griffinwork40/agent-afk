@@ -1,1 +1,0 @@
-{ "errors": 2767, "reason": "gate was blind (TS6059): rootDir override exposes ~2.7k pre-existing semantic errors hidden since gate inception" }
