@@ -43,6 +43,17 @@ describe('readTelemetryHistory', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('round-trips recovered success and legacy blocked records without dropping additive fields', async () => {
+    const recovered = {
+      taskId: 't', status: 'success', gateBlocks: 1,
+      gateRecoveryNote: 'Recovered after 1 AFK gate block(s) (declared Done; not verified).',
+      gateBlockCalls: [{ blockedTool: 'bash', followingTools: ['read_file'] }],
+    };
+    const legacy = { taskId: 't', status: 'blocked', gateBlocks: 1 };
+    writeFileSync(telemetryPath, [legacy, recovered].map((r) => JSON.stringify(r)).join('\n') + '\n');
+    expect(await readTelemetryHistory(telemetryPath, { taskId: 't' })).toEqual([legacy, recovered]);
+  });
+
   // ── ENOENT ────────────────────────────────────────────────────────────────
 
   it('returns [] when the file does not exist', async () => {
