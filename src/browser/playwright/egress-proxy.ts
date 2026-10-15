@@ -22,6 +22,7 @@ import { lookup } from 'node:dns/promises';
 import type { Duplex } from 'node:stream';
 import { createGuardedLookup } from '../../http-client/egress-guard.lookup.js';
 import { EgressBlockedError, isBlockedAddress } from '../../http-client/egress-guard.js';
+import { raceAddresses } from './egress-proxy.race.js';
 
 /** One refused connection attempt. */
 export interface EgressRefusal {
@@ -48,9 +49,6 @@ export interface EgressProxyDeps {
   /** Bounded drain window for close(). */
   drainTimeoutMs?: number;
 }
-
-/** RFC 8305 §5: stagger delay before racing the next candidate address. */
-const HAPPY_EYEBALLS_DELAY_MS = 250;
 
 const MAX_REFUSALS = 256;
 const HOP_HEADERS = new Set(['proxy-connection', 'proxy-authorization', 'keep-alive']);
@@ -226,87 +224,13 @@ export class EgressProxy {
     });
   }
 
-  /**
-   * RFC 8305 Happy Eyeballs race over a pre-validated address list.
-   * First socket to connect wins; all others are destroyed (no leaks).
-   *
-   * Each socket is added to `done` exactly once — either by win() or fail().
-   * Subsequent events (error after close, close after error, close on a
-   * destroyed loser) are all guarded by done.has() and ignored.
-   */
+  /** Delegate to the extracted Happy Eyeballs race (egress-proxy.race.ts). */
   private raceAddresses(addresses: string[], port: number, gone: () => boolean): Promise<net.Socket> {
-    return new Promise<net.Socket>((resolve, reject) => {
-      // done: every socket that has been fully accounted for. Guards against
-      // double-counting when both 'error' and 'close' fire on the same socket.
-      const done = new Set<net.Socket>();
-      // open: sockets currently in-flight (for deadline cleanup).
-      const open = new Set<net.Socket>();
-      const timers: ReturnType<typeof setTimeout>[] = [];
-      let settled = false;
-      let lastErr: unknown = new Error('egress proxy: upstream timeout');
-      let failCount = 0;
-
-      const settle = (fn: () => void): void => {
-        if (settled) return;
-        settled = true;
-        for (const t of timers) clearTimeout(t);
-        fn();
-      };
-
-      const win = (up: net.Socket): void => {
-        if (done.has(up)) return;
-        done.add(up);
-        settle(() => {
-          // Destroy every loser still open.
-          for (const s of open) { if (s !== up) { done.add(s); s.destroy(); } }
-          if (gone()) { done.add(up); up.destroy(); reject(new Error('egress proxy: closing')); return; }
-          resolve(up);
-        });
-        // If already settled (another socket won first), this socket is a loser.
-        if (done.has(up) && open.has(up)) { open.delete(up); up.destroy(); }
-      };
-
-      const fail = (up: net.Socket, err: unknown): void => {
-        if (done.has(up)) return; // already accounted for (error+close dedup)
-        done.add(up);
-        open.delete(up);
-        lastErr = err;
-        failCount += 1;
-        if (failCount === addresses.length) {
-          settle(() => reject(lastErr));
-        }
-      };
-
-      const launch = (address: string): void => {
-        if (settled) return;
-        const up = net.connect({ host: address, port });
-        this.track(up);
-        open.add(up);
-        up.setTimeout(this.connectTimeoutMs, () =>
-          up.destroy(new Error('egress proxy: upstream timeout')),
-        );
-        up.once('connect', () => { up.setTimeout(0); open.delete(up); win(up); });
-        // 'error' always precedes 'close'; done.has() deduplicates both.
-        up.on('error', (err) => fail(up, err));
-        up.once('close', () => fail(up, new Error('egress proxy: upstream closed before connect')));
-      };
-
-      // Launch first candidate immediately; stagger the rest.
-      launch(addresses[0]!);
-      for (let i = 1; i < addresses.length; i++) {
-        const addr = addresses[i]!;
-        timers.push(setTimeout(() => launch(addr), i * HAPPY_EYEBALLS_DELAY_MS));
-      }
-
-      // Hard deadline: cancel everything if the whole budget expires.
-      timers.push(
-        setTimeout(() => {
-          settle(() => {
-            for (const s of open) { done.add(s); s.destroy(); }
-            reject(new Error('egress proxy: upstream timeout'));
-          });
-        }, this.connectTimeoutMs),
-      );
+    return raceAddresses(addresses, {
+      port,
+      connectTimeoutMs: this.connectTimeoutMs,
+      track: (s) => this.track(s),
+      gone,
     });
   }
 
