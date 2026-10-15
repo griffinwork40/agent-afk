@@ -40,6 +40,10 @@ public disclosure.
 
 ## Scope / trust model
 
+For the full explicit threat model — assets, trusted/untrusted parties, hard
+boundaries vs. accident guardrails, known gaps, and how to measure friction —
+see [`docs/threat-model.md`](docs/threat-model.md).
+
 Agent AFK is a local-first agent runtime. It does not phone home; telemetry is
 written to local JSONL files under `~/.afk/`. Particularly sensitive areas:
 
