@@ -336,7 +336,12 @@ export class MemoryStore {
         const survived = rows.filter((row) => byId.has(row.id));
         if (survived.length === 0) {
           debugLog('memory-store: all recalled rows were deleted mid-flight; returning empty.');
-          return survived.map(({ rank: _rank, ...fact }) => fact as Fact);
+          return [];
+        }
+        if (survived.length < rows.length) {
+          debugLog(
+            `memory-store: ${rows.length - survived.length} of ${rows.length} recalled rows were deleted mid-flight; omitting them.`,
+          );
         }
         for (const row of survived) Object.assign(row, byId.get(row.id));
         return survived.map(({ rank: _rank, ...fact }) => fact as Fact);

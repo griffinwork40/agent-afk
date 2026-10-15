@@ -43,10 +43,10 @@ describe('getRuntimeStateTool schema', () => {
     expect(getRuntimeStateTool.concurrencySafe).toBe(true);
   });
 
-  it('exposes the five supported views in the JSON schema enum', () => {
+  it('exposes the six supported views in the JSON schema enum', () => {
     const props = getRuntimeStateTool.input_schema.properties as Record<string, unknown>;
     const view = props['view'] as { enum?: string[] };
-    expect(view.enum).toEqual(['self', 'tools', 'subagents', 'workspace', 'all']);
+    expect(view.enum).toEqual(['self', 'tools', 'subagents', 'workspace', 'hooks', 'all']);
   });
 
   it('marks no fields as required (view is optional, defaults to all)', () => {

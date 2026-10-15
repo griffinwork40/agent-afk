@@ -12,7 +12,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Page } from 'playwright';
-import { observePage } from './observe.js';
+import { observePage, enrichVisibleNodes, buildInteractiveElement } from './observe.js';
 import type { ObservePageOptions } from './observe.js';
 
 // ---------------------------------------------------------------------------
@@ -749,5 +749,175 @@ describe('observePage', () => {
         'page is still loading — observation may be incomplete',
       );
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Direct unit tests for exported helpers
+// ---------------------------------------------------------------------------
+
+describe('enrichVisibleNodes', () => {
+  // -------------------------------------------------------------------------
+  // bbox dedup: when two DOM records share a name, prefer the one with w > 0
+  // -------------------------------------------------------------------------
+
+  it('deduplicates DOM records by name, keeping the non-zero-width record', () => {
+    const axNodes = [{ role: 'button', name: 'Submit' }];
+    const domRecords = [
+      // zero-width record appears first
+      { name: 'Submit', tagName: 'button', type: null, id: null, testId: null,
+        bbox: { x: 0, y: 0, w: 0, h: 30 } },
+      // non-zero-width record appears second — should win
+      { name: 'Submit', tagName: 'button', type: null, id: null, testId: null,
+        bbox: { x: 10, y: 20, w: 80, h: 30 } },
+    ];
+
+    const result = enrichVisibleNodes(axNodes, domRecords, false);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.dom?.bbox.w).toBe(80);
+    expect(result[0]?.dom?.bbox.x).toBe(10);
+  });
+
+  it('keeps the first record when both have non-zero width', () => {
+    const axNodes = [{ role: 'button', name: 'Click' }];
+    const domRecords = [
+      { name: 'Click', tagName: 'button', type: null, id: null, testId: null,
+        bbox: { x: 5, y: 5, w: 60, h: 30 } },
+      { name: 'Click', tagName: 'button', type: null, id: null, testId: null,
+        bbox: { x: 200, y: 200, w: 90, h: 30 } },
+    ];
+
+    const result = enrichVisibleNodes(axNodes, domRecords, false);
+
+    expect(result).toHaveLength(1);
+    // first record (w=60) is kept — second does not displace a non-zero existing
+    expect(result[0]?.dom?.bbox.w).toBe(60);
+  });
+
+  it('filters out zero-bbox elements when includeHidden is false', () => {
+    const axNodes = [
+      { role: 'button', name: 'Visible' },
+      { role: 'button', name: 'Hidden' },
+    ];
+    const domRecords = [
+      { name: 'Visible', tagName: 'button', type: null, id: null, testId: null,
+        bbox: { x: 0, y: 0, w: 100, h: 40 } },
+      { name: 'Hidden', tagName: 'button', type: null, id: null, testId: null,
+        bbox: { x: 0, y: 0, w: 0, h: 0 } },
+    ];
+
+    const result = enrichVisibleNodes(axNodes, domRecords, false);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.ax.name).toBe('Visible');
+  });
+
+  it('includes zero-bbox elements when includeHidden is true', () => {
+    const axNodes = [
+      { role: 'button', name: 'Visible' },
+      { role: 'button', name: 'Hidden' },
+    ];
+    const domRecords = [
+      { name: 'Visible', tagName: 'button', type: null, id: null, testId: null,
+        bbox: { x: 0, y: 10, w: 100, h: 40 } },
+      { name: 'Hidden', tagName: 'button', type: null, id: null, testId: null,
+        bbox: { x: 0, y: 0, w: 0, h: 0 } },
+    ];
+
+    const result = enrichVisibleNodes(axNodes, domRecords, true);
+
+    expect(result).toHaveLength(2);
+  });
+});
+
+describe('buildInteractiveElement', () => {
+  /** Minimal Enriched helper. */
+  function enriched(
+    ax: Record<string, unknown>,
+    dom?: Record<string, unknown>,
+  ) {
+    return {
+      ax,
+      dom: dom as Parameters<typeof buildInteractiveElement>[0]['dom'],
+    } as Parameters<typeof buildInteractiveElement>[0];
+  }
+
+  // -------------------------------------------------------------------------
+  // value / checked coexistence
+  // -------------------------------------------------------------------------
+
+  it('uses ax.value when both ax.value and ax.checked are defined (value wins)', () => {
+    const el = buildInteractiveElement(
+      enriched({ role: 'combobox', name: 'Size', value: 'Large', checked: true }),
+      0,
+    );
+    // value should be 'Large', NOT 'true'
+    expect(el.value).toBe('Large');
+  });
+
+  it('uses ax.checked as value when ax.value is absent', () => {
+    const el = buildInteractiveElement(
+      enriched({ role: 'checkbox', name: 'Accept', checked: true }),
+      0,
+    );
+    expect(el.value).toBe('true');
+  });
+
+  it('uses ax.checked="mixed" as value when ax.value is absent', () => {
+    const el = buildInteractiveElement(
+      enriched({ role: 'checkbox', name: 'Select all', checked: 'mixed' }),
+      0,
+    );
+    expect(el.value).toBe('mixed');
+  });
+
+  it('sets value to null when neither ax.value nor ax.checked is present', () => {
+    const el = buildInteractiveElement(
+      enriched({ role: 'button', name: 'Submit' }),
+      0,
+    );
+    expect(el.value).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // CSS selector escaping for data-testid
+  // -------------------------------------------------------------------------
+
+  it('escapes double-quotes in testId to avoid malformed selector', () => {
+    const el = buildInteractiveElement(
+      enriched(
+        { role: 'button', name: 'Confirm' },
+        { name: 'Confirm', tagName: 'button', type: null, id: null,
+          testId: 'btn-"evil"', bbox: { x: 0, y: 0, w: 80, h: 30 } },
+      ),
+      0,
+    );
+    // Must not contain a raw unescaped " inside the attribute value
+    expect(el.selector).toBe('[data-testid="btn-\\"evil\\""]');
+  });
+
+  it('escapes backslashes in testId', () => {
+    const el = buildInteractiveElement(
+      enriched(
+        { role: 'button', name: 'Go' },
+        { name: 'Go', tagName: 'button', type: null, id: null,
+          testId: 'a\\b', bbox: { x: 0, y: 0, w: 50, h: 30 } },
+      ),
+      0,
+    );
+    expect(el.selector).toBe('[data-testid="a\\\\b"]');
+  });
+
+  it('leaves a plain testId unescaped', () => {
+    const el = buildInteractiveElement(
+      enriched(
+        { role: 'button', name: 'OK' },
+        { name: 'OK', tagName: 'button', type: null, id: null,
+          testId: 'submit-btn', bbox: { x: 0, y: 0, w: 80, h: 30 } },
+      ),
+      0,
+    );
+    expect(el.selector).toBe('[data-testid="submit-btn"]');
   });
 });
