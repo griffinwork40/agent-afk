@@ -132,10 +132,41 @@ export function capToProseMeasure(width: number): number {
  * Omit to let the function read it fresh.
  */
 export function contentMargin(termWidth?: number): string {
+  return contentBand(termWidth ?? getTerminalWidth()).margin;
+}
+
+/** Horizontal geometry of the centered content band. See {@link contentBand}. */
+export interface ContentBand {
+  /** Left-margin string (spaces) painted before every content row. */
+  readonly margin: string;
+  /** `margin.length`, as a number. */
+  readonly marginCols: number;
+  /**
+   * Widest a content row may be so that `margin + row` still fits the
+   * terminal: `cols - marginCols`. Never below the active text measure, so
+   * measure-capped content keeps exactly its non-centered layout.
+   */
+  readonly width: number;
+}
+
+/**
+ * Resolve the centered content band for a terminal `cols` wide.
+ *
+ * Contract: `cols` is REQUIRED — callers that own a stream (the compositor)
+ * must pass that stream's width rather than letting this read
+ * `process.stdout.columns`, or a mock-stdout test silently sees margin 0.
+ * When centering is off (the default), returns `{ margin: '', marginCols: 0,
+ * width: cols }` — the default path is untouched.
+ *
+ * Invariant (physical rows): the margin is painted as literal spaces and the
+ * terminal autowraps at `cols`, so a row's on-screen height is
+ * `ceil((marginCols + w) / cols)`. Wrap content at `width`; measure painted
+ * height against `cols` with the margin included — never against `width`.
+ */
+export function contentBand(cols: number): ContentBand {
   const raw = env.AFK_CENTER_CONTENT;
-  if (!raw || !isExplicitlyEnabled(raw)) return '';
-  const tw = termWidth ?? getTerminalWidth();
-  const measure = resolveTextMeasure() ?? tw;
-  const marginCols = Math.max(0, Math.floor((tw - measure) / 2));
-  return ' '.repeat(marginCols);
+  if (!raw || !isExplicitlyEnabled(raw)) return { margin: '', marginCols: 0, width: cols };
+  const measure = resolveTextMeasure() ?? cols;
+  const marginCols = Math.max(0, Math.floor((cols - measure) / 2));
+  return { margin: ' '.repeat(marginCols), marginCols, width: Math.max(1, cols - marginCols) };
 }

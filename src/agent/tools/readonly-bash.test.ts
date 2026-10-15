@@ -476,6 +476,9 @@ describe('classifyBashCommand', () => {
       'echo hello | cat',
       'ps aux | grep node',
       'curl https://x | jq .',   // jq is not a shell
+      'gh pr list --json number --jq ".[0].number"', // suggested denial-message alternative
+      'gh pr list --json number -q ".[0].number"', // gh supports the short flag too
+      'gh api repos/owner/repo/pulls --jq ".[0].number"',
       // ── Fix #4 (review PR #5): a `| sh`/`| bash` inside a QUOTED search term
       // is recon data, not a pipe. PIPE_TO_SHELL now runs in STRIPPED_RULES so
       // these are no longer over-blocked. A real (unquoted) pipe still survives

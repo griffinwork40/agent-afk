@@ -5,7 +5,7 @@ import type { CommitRoute } from './terminal-compositor.commit-route.js';
 import { eraseAndPaintRow } from './terminal-compositor.scrollback.js';
 import { writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
 import { clearCommittedBand } from './terminal-compositor.committed-band-commit.js';
-import { contentMargin } from './render/measure.js';
+import { compositorBand } from './terminal-compositor.content-band.js';
 import { retainedArchivedPrefix } from './terminal-compositor.band-archived-prefix.js';
 
 /**
@@ -150,7 +150,7 @@ export function commitPhase3Band(
       // Content centering (AFK_CENTER_CONTENT): derive the margin from the
       // CURRENT terminal width so painted rows adapt on resize. The band stores
       // raw (unpadded) content; padding is applied at paint time only.
-      const pad = contentMargin();
+      const pad = compositorBand(self.stdout).margin;
       for (let i = 0; i < painted.length; i++) {
         const row = bandTop + i;
         if (row >= newTopRow) break; // Never overwrite the live frame.
@@ -169,7 +169,7 @@ export function commitPhase3Band(
       // The dropped top lines stay recoverable via the Phase-1 archive.
       // `capped` (== these same tail lines, via the tail-slice above) is the
       // band we track, so repositionCommittedBand repaints them on resize.
-      const pad = contentMargin();
+      const pad = compositorBand(self.stdout).margin;
       const room = Math.max(0, newTopRow - anchorFloor);
       const startIdx = Math.max(0, textLines.length - room);
       for (let i = startIdx; i < textLines.length; i++) {
