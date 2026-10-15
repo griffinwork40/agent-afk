@@ -84,7 +84,7 @@ describe('BgResultNotifier — dispose() with pending injections (turn-ends-befo
 
   // ── Invariant 1: stderr notice names the undrained job ────────────────────
 
-  it('dispose() writes a stderr notice when an injection is pending but undrainied', () => {
+  it('dispose() writes a stderr notice when an injection is pending but undrained', () => {
     const { handle, fireTerminal } = makeBgHandle('sub-drain-1');
     const job = registry.register({ handle, prompt: 'find the bug', model: 'sonnet' });
     fireTerminal(succeed('sub-drain-1', 'Root cause identified.'));
@@ -95,7 +95,7 @@ describe('BgResultNotifier — dispose() with pending injections (turn-ends-befo
     // Parent turn ends → dispose() is called before drainInjections().
     notifier.dispose();
 
-    const combined = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+    const combined = stderrSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('');
     expect(combined).toMatch(/background job/i);
     expect(combined).toContain(job.jobId);
     expect(combined).toMatch(/never delivered/i);
@@ -159,7 +159,7 @@ describe('BgResultNotifier — dispose() with pending injections (turn-ends-befo
     expect(notifier.hasPendingInjections()).toBe(true);
     notifier.dispose();
 
-    const combined = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+    const combined = stderrSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('');
     expect(combined).toContain(jobA.jobId);
     expect(combined).toContain(jobB.jobId);
     // The count mentioned in the notice should reflect both jobs.
