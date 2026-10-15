@@ -111,7 +111,7 @@ describe('listUserTurns', () => {
     expect(listUserTurns(messages).map((t) => t.turnIndex)).toEqual([0]);
   });
 
-  it('keeps a queued message in a tool round but drops the vitals text from it', () => {
+  it('never targets a tool-round carrier, even when it holds queued text', () => {
     const messages: MessageParam[] = [
       { role: 'user', content: 'real question' },
       { role: 'assistant', content: toolUse('t1') },
@@ -125,13 +125,34 @@ describe('listUserTurns', () => {
       },
       { role: 'assistant', content: 'answer' },
     ];
-    const targets = listUserTurns(messages);
-    expect(targets.map((t) => t.preview)).toEqual(['queued follow-up', 'real question']);
+    expect(listUserTurns(messages).map((t) => t.turnIndex)).toEqual([0]);
+
+    // Rewinding there would discard the real tool_result, orphan t1, and make
+    // repair fabricate an is_error result. The guard refuses and leaves
+    // history byte-identical.
+    const state = makeState(messages);
+    const snapshot = JSON.stringify(state.messages);
+    const result = rewindConversationHistory({ state, abort: idleAbort }, 2);
+    expect(result).toMatchObject({ rewound: false, reason: 'invalid-target' });
+    expect(JSON.stringify(state.messages)).toBe(snapshot);
+  });
+
+  it('keeps a mid-turn steering message (its own text-only user turn) rewindable', () => {
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'real question' },
+      { role: 'assistant', content: toolUse('t1') },
+      { role: 'user', content: [...toolResult('t1'), { type: 'text', text: vitals }] },
+      { role: 'user', content: [{ type: 'text', text: 'steer: use pnpm' }] },
+      { role: 'assistant', content: 'answer' },
+    ];
+    expect(listUserTurns(messages).map((t) => t.preview)).toEqual(['steer: use pnpm', 'real question']);
 
     const state = makeState(messages);
-    const result = rewindConversationHistory({ state, abort: idleAbort }, 2);
-    expect(result.rewound).toBe(true);
-    expect(result.reloadText).toBe('queued follow-up');
+    const result = rewindConversationHistory({ state, abort: idleAbort }, 3);
+    expect(result).toMatchObject({ rewound: true, reloadText: 'steer: use pnpm' });
+    // The tool_use/tool_result pair before the cut is intact, nothing fabricated.
+    expect(state.messages).toHaveLength(3);
+    expect(JSON.stringify(state.messages)).not.toContain('is_error');
   });
 
   it('leaves a typed prompt that starts with [vitals] untouched', () => {

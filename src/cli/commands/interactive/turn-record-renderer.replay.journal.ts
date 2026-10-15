@@ -30,6 +30,7 @@ import { palette } from '../../palette.js';
 import { stripCommandTags } from '../../slash/_lib/command-tags.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import { extractUserContent, isPreamble } from '../../../agent/session/preamble-strip.js';
+import { hasToolResultBlock } from '../../../agent/content/user-authored.js';
 import {
   hydrateMessages,
   isMessageJournalDisabled,
@@ -54,10 +55,6 @@ export interface ReplayTurn {
   /** Dim annotation instead of user text (e.g. a delivered background result). */
   note?: string;
   body: JournalMessage[];
-}
-
-function hasToolResult(m: JournalMessage): boolean {
-  return m.content.some((b) => b.type === 'tool_result');
 }
 
 /** A bracketed harness header with no colon/space, e.g. `[placeholder-prevent]`. */
@@ -124,7 +121,7 @@ export function groupTurns(messages: readonly JournalMessage[], hintTexts: reado
   const hints = new Set(hintTexts.map((h) => h.trim()).filter((h) => h.length > 0));
   const turns: ReplayTurn[] = [];
   for (const m of messages) {
-    if (m.role === 'user' && !hasToolResult(m)) {
+    if (m.role === 'user' && !hasToolResultBlock(m.content)) {
       const { text, note } = humanText(m, hints);
       if (text || note) {
         turns.push({ user: text, ...(note !== undefined ? { note } : {}), body: [] });
