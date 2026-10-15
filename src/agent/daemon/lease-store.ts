@@ -211,26 +211,35 @@ export function renewLease(
  * No-op if the lease file does not exist (task may have completed or been
  * recovered by another process).
  *
- * @param taskId   - Task ID whose state to update.
- * @param state    - New TaskState value to write.
- * @param queueDir - Queue root directory.
+ * Contract: when `expectedState` is given, the write happens only if the lease
+ * is currently in that state (a compare-and-set within this process), so a
+ * caller restoring a parked lease cannot clobber one another path has moved on.
+ *
+ * @param taskId        - Task ID whose state to update.
+ * @param state         - New TaskState value to write.
+ * @param queueDir      - Queue root directory.
+ * @param expectedState - Optional guard: only write when the current state matches.
+ * @returns true when the state was written; false on missing/corrupt file or guard mismatch.
  */
 export function setLeaseState(
   taskId: string,
   state: TaskState,
   queueDir: string = getQueueDir(),
-): void {
+  expectedState?: TaskState,
+): boolean {
   const path = leasedPath(queueDir, taskId);
-  if (!existsSync(path)) return;
+  if (!existsSync(path)) return false;
   let record: TaskRecord;
   try {
     record = JSON.parse(readFileSync(path, 'utf-8')) as TaskRecord;
   } catch {
-    return; // Corrupt lease file — skip.
+    return false; // Corrupt lease file — skip.
   }
+  if (expectedState !== undefined && record.state !== expectedState) return false;
   record.state = state;
   record.updatedAt = Date.now();
   atomicWriteJson(path, record);
+  return true;
 }
 
 /**

@@ -14,6 +14,7 @@
  */
 
 import { processAnsweredHandoffs } from './handoff-consume.js';
+import { sweepExpiredHandoffs } from './handoff-expiry.js';
 import { dequeueNext } from './queue-store.js';
 import { completeTask } from './lease-store.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
@@ -80,6 +81,9 @@ export async function executePullTick(ctx: PullTickContext): Promise<void> {
       // answer that arrives between ticks would otherwise wait indefinitely
       // if no other task completes to trigger the post-run sweep below.
       sweepAnsweredHandoffs(ctx.queueDir);
+      // Expire questions past their TTL (throttled; #1416). Without this a
+      // long-lived daemon only expired handoffs at its next restart.
+      sweepExpiredHandoffs(ctx.queueDir);
       return;
     }
     const syntheticTask: ScheduledTask = {
@@ -105,6 +109,7 @@ export async function executePullTick(ctx: PullTickContext): Promise<void> {
     }
     // If the session answered a handoff during this run, re-enqueue it now.
     sweepAnsweredHandoffs(ctx.queueDir);
+    sweepExpiredHandoffs(ctx.queueDir);
   } catch (err) {
     // Errors thrown INSIDE runOnce are captured there and written to
     // telemetry. Errors reaching here come from the dequeue path (now

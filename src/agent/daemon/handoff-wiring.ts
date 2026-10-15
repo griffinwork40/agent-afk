@@ -32,6 +32,7 @@ import {
   type HandoffRecord,
 } from './handoff-store.js';
 import { setLeaseState } from './lease-store.js';
+import { DEFAULT_HANDOFF_TTL_MS, expireHandoff, isHandoffStale } from './handoff-expiry.js';
 import { pushIfConfigured } from '../../telegram/push.js';
 import type { Telegraf } from 'telegraf';
 import { sendHandoffQuestion, clearPendingTextHandoff } from '../../telegram/handoff-answer.js';
@@ -42,14 +43,6 @@ import { truncateTelegramLabel } from '../../utils/truncate-telegram-label.js';
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-/**
- * Default TTL for daemon handoffs: 24 hours.
- * After this, the handoff transitions to 'expired' during the next recovery
- * sweep, and the task's lease state is restored to 'leased' so the next
- * `recoverExpiredLeases` cycle can re-enqueue or dead-letter it.
- */
-const DEFAULT_HANDOFF_TTL_MS = 24 * 60 * 60 * 1_000;
 
 /**
  * Cap on the question text echoed to Telegram. Mirrors the elicitation
@@ -252,23 +245,15 @@ export async function recoverPendingHandoffs(
     const createdMs = new Date(record.createdAt).getTime();
     const age = now - createdMs;
 
-    if (age > DEFAULT_HANDOFF_TTL_MS) {
-      // Handoff has expired — transition to 'expired' and restore the lease
-      // so recoverExpiredLeases can re-enqueue or dead-letter the task.
+    if (isHandoffStale(record, now, DEFAULT_HANDOFF_TTL_MS)) {
+      // Past its TTL: expire under the handoff lock (shared with the periodic
+      // pull-tick sweep in handoff-expiry.ts), which re-reads the record so a
+      // concurrent answer is never overwritten, restores a parked lease, and
+      // notifies the operator once. Never re-notify an expired question.
       try {
-        const expired: HandoffRecord = {
-          ...record,
-          status: 'expired',
-        };
-        await writeHandoff(expired, handoffsDir);
-        // Restore lease to 'leased' so the next recoverExpiredLeases cycle
-        // picks it up instead of leaving it orphaned in waiting_human_input.
-        setLeaseState(record.taskId, 'leased', queueDir);
-        result.expired += 1;
-        // eslint-disable-next-line no-console
-        console.error(
-          `[handoff-wiring] expired stale handoff for task ${record.taskId} (age: ${Math.round(age / 3_600_000)}h)`,
-        );
+        if (await expireHandoff(record.taskId, { handoffsDir, queueDir, now })) {
+          result.expired += 1;
+        }
       } catch {
         // Skip — leave the record as-is for the next sweep.
       }

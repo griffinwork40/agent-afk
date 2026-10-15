@@ -100,6 +100,8 @@ export interface HandoffRecord {
   answeredAt?: string;
   /** Which surface recorded the answer ('telegram' | 'web' | 'repl'). */
   answerSource?: string;
+  /** ISO 8601 timestamp when the record transitioned to 'expired' (handoff-expiry.ts). */
+  expiredAt?: string;
   /**
    * Opaque identity of the responder for provenance tracking.
    *
