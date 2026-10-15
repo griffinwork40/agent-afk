@@ -25,8 +25,6 @@ export type ExecFileForGit = (
   opts?: { cwd?: string },
 ) => Promise<{ stdout: string; stderr: string }>;
 
-
-
 // ---------------------------------------------------------------------------
 // Repo-root resolution
 // ---------------------------------------------------------------------------
