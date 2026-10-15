@@ -122,7 +122,9 @@ function registerFacetAndOutcomeHooks(
   registry.register('SessionEnd', createFacetSessionEndHook());
   registry.register('SessionEnd', createOutcomeSessionEndHook());
   registry.register('PostToolUse', createChildAttributionHook());
-  registry.register('SessionEnd', createSpineSessionEndHook({ repoRoot: spineRepoRoot }));
+  // Background lane: the SPINE classifier is a model call (measured 1-5s per
+  // run) that used to gate `/clear`'s screen clear. See RegisterOptions.background.
+  registry.register('SessionEnd', createSpineSessionEndHook({ repoRoot: spineRepoRoot }), { background: true });
   registerPreexistingLedgerHook(registry);
 }
 
