@@ -6,21 +6,20 @@ repos, accounts, and model subscriptions. Nothing is copied: move code with git.
 
 ## Setup
 
-1. The remote needs afk installed and a credential a headless SSH session can read.
-   **On macOS, `afk login`'s keychain OAuth is not enough:** the login keychain is locked
-   in SSH sessions, so the remote run fails with "No Anthropic credential found" (the
-   tool adds a hint naming this). Put `CLAUDE_CODE_OAUTH_TOKEN` (a long-lived token,
-   e.g. from `claude setup-token`) or `ANTHROPIC_API_KEY` in that machine's
-   `~/.afk/config/afk.env`; both are read before the keychain. `security
-   unlock-keychain` over `ssh -t` also works, but needs the password every time and
-   may not reach a detached run started from a later session.
+1. The remote needs afk installed and logged in. **On macOS, keychain logins need
+   `"unlockKeychain": true`** (see [Keychain unlock](#keychain-unlock)): an SSH
+   session sees the login keychain locked even while you are logged in at the GUI,
+   so without it the run fails with "No Anthropic credential found" (the tool adds a
+   hint naming the fix). Alternatively put `CLAUDE_CODE_OAUTH_TOKEN` or
+   `ANTHROPIC_API_KEY` in that machine's `~/.afk/config/afk.env`; both are read
+   before the keychain.
 2. Key-based SSH from this machine to the remote (`ssh user@host true` works with no
    password prompt).
 3. Optional: name hosts in `~/.afk/config/hosts.json`:
 
 ```json
 {
-  "cm":   { "ssh": "griffincapmisc@griffin-cm", "cwd": "~/Projects/agent-afk" },
+  "cm":   { "ssh": "griffincapmisc@griffin-cm", "cwd": "~/Projects/agent-afk", "unlockKeychain": true },
   "m6":   { "ssh": "griffinlong@100.126.251.79" },
   "mini": { "ssh": "mini", "afkPath": "/opt/homebrew/bin/afk" }
 }
@@ -28,6 +27,32 @@ repos, accounts, and model subscriptions. Nothing is copied: move code with git.
 
 A `host` absent from the file is used as a literal ssh target, so `~/.ssh/config`
 aliases work with no setup. `afkPath` is only needed when auto-discovery fails.
+
+## Keychain unlock
+
+For a host with `"unlockKeychain": true`, store that machine's login password once,
+on the machine you dispatch FROM (it prompts; nothing is echoed):
+
+```bash
+security add-generic-password -U -s afk-remote-unlock -a cm -w
+```
+
+The account (`-a`) is the host's name in hosts.json. Every run then reads it from
+this machine's keychain, sends it as the first stdin line of the launch ssh call, and
+the remote script feeds it to `security -i` through a pipe to unlock
+`~/Library/Keychains/login.keychain-db`, verifies the unlock, clears it, and starts
+afk. The password is never on any command line, in a file, or in the trace. Re-run
+the command with the new password if the remote's login password changes (the tool
+says so when the unlock fails).
+
+Verified on macOS over SSH (2026-10-15), which is why it works this way:
+
+- An SSH session sees the login keychain locked even while the user is logged in at
+  the GUI (`errSecInteractionNotAllowed`, exit 36).
+- Unlock state is per security session: an unlock in one SSH session is not visible
+  to the next. So the unlock must happen inside the launch itself; a one-off
+  `ssh -t host security unlock-keychain` does not help later runs.
+- The detached afk run stays unlocked after the launch connection closes.
 
 ## Tool
 
@@ -44,6 +69,7 @@ aliases work with no setup. `afkPath` is only needed when auto-discovery fails.
 | File | Role |
 |---|---|
 | `hosts.ts` | Loads `hosts.json`; validates the ssh target (no leading `-`, restricted charset). |
+| `keychain-unlock.ts` | Reads a host's stored login password locally; escapes it for `security -i`. |
 | `remote-script.ts` | Builds the POSIX scripts run as `/bin/sh -c` on the remote. |
 | `ssh-runner.ts` | Spawns local `ssh` (`BatchMode`, `ConnectTimeout=5`, ServerAlive probes). Injectable. |
 | `remote-run.ts` | Launch → follow → result; reconnect; cancel on abort. |

@@ -25,6 +25,8 @@ export const EXIT_MARKER = '__AFK_REMOTE_EXIT__';
 export const EXIT_AFK_NOT_FOUND = 3;
 /** Exit code the launch script uses when `cd` into the requested cwd fails. */
 export const EXIT_BAD_CWD = 4;
+/** Exit code the launch script uses when the login keychain could not be unlocked. */
+export const EXIT_KEYCHAIN_UNLOCK = 5;
 
 /** Single-quote `value` for POSIX sh. Safe for any byte sequence without NUL. */
 export function shQuote(value: string): string {
@@ -52,7 +54,27 @@ export interface LaunchScriptOptions {
   resume?: string;
   /** Absolute afk path on the remote; resolved by the script when absent. */
   afkPath?: string;
+  /**
+   * When true, the FIRST stdin line is the remote login password, already
+   * escaped for `security -i` (see `keychain-unlock.ts`); the prompt follows.
+   */
+  unlockKeychain?: boolean;
 }
+
+// Invariant: the password is read with the shell builtin `read`, interpolated
+// by the builtin `printf`, and reaches `security` only through a pipe into
+// `security -i`, so it never appears in any process's argv. The variable is
+// cleared immediately, and the unlock is verified non-interactively (over SSH
+// a locked keychain fails fast instead of prompting).
+const UNLOCK_KEYCHAIN = [
+  'IFS= read -r kcpw || kcpw=',
+  'kc="$HOME/Library/Keychains/login.keychain-db"',
+  `printf 'unlock-keychain -p "%s" "%s"\\n' "$kcpw" "$kc" | security -i >/dev/null 2>&1 || true`,
+  'kcpw=',
+  'if ! security show-keychain-info "$kc" >/dev/null 2>&1; then',
+  `  echo "could not unlock the login keychain (is the stored password current?)" >&2; exit ${EXIT_KEYCHAIN_UNLOCK}`,
+  'fi',
+];
 
 // Invariant: resolution order is (1) explicit afkPath, (2) the non-interactive
 // PATH, (3) scanning the interactive shell's PATH for an executable `afk`
@@ -83,6 +105,8 @@ export function buildLaunchScript(opts: LaunchScriptOptions): string {
     'umask 077',
     `d=${runDirExpr(opts.runId)}`,
     'mkdir -p "$d"',
+    // Must precede `cat`: the password is the first stdin line.
+    ...(opts.unlockKeychain === true ? UNLOCK_KEYCHAIN : []),
     'cat > "$d/prompt"',
     `p=${opts.afkPath !== undefined ? shQuote(opts.afkPath) : "''"}`,
     ...RESOLVE_AFK,

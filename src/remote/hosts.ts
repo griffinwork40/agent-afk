@@ -1,7 +1,9 @@
 /**
  * Host registry for `remote_agent`: `$AFK_HOME/config/hosts.json`.
  *
- * Shape: `{ "<name>": { "ssh": "user@host", "cwd"?: "~/Projects/x", "afkPath"?: "/abs/afk" } }`.
+ * Shape: `{ "<name>": { "ssh": "user@host", "cwd"?: "~/Projects/x", "afkPath"?: "/abs/afk",
+ *   "unlockKeychain"?: true } }`. `unlockKeychain` unlocks the remote's macOS login
+ * keychain before each run (see `keychain-unlock.ts`).
  * The file is optional. A name absent from it is used as a literal ssh target,
  * so `~/.ssh/config` aliases (e.g. `mini`) work with no setup.
  *
@@ -20,6 +22,7 @@ export interface RemoteHost {
   ssh: string;
   cwd?: string;
   afkPath?: string;
+  unlockKeychain?: boolean;
 }
 
 /** Characters allowed in an ssh destination (user@host, IPv6 brackets, ssh://host:port). */
@@ -57,6 +60,7 @@ export async function loadHosts(path: string = getRemoteHostsPath()): Promise<Re
     const host: RemoteHost = { name, ssh: ssh.trim() };
     if (typeof entry['cwd'] === 'string' && entry['cwd'] !== '') host.cwd = entry['cwd'];
     if (typeof entry['afkPath'] === 'string' && entry['afkPath'] !== '') host.afkPath = entry['afkPath'];
+    if (entry['unlockKeychain'] === true) host.unlockKeychain = true;
     hosts[name] = host;
   }
   return hosts;

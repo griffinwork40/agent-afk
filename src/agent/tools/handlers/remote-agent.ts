@@ -19,6 +19,7 @@ import { errorMessage } from '../../../utils/errors.js';
 import { loadHosts, resolveHost, type RemoteHost } from '../../../remote/hosts.js';
 import { runRemoteAgent, type RemoteRunOutcome } from '../../../remote/remote-run.js';
 import { defaultSshRunner, type SshRunner } from '../../../remote/ssh-runner.js';
+import { readUnlockPassword, type ReadUnlockPassword } from '../../../remote/keychain-unlock.js';
 
 /** Reply characters returned before truncation. */
 export const MAX_REPLY_CHARS = 100_000;
@@ -27,6 +28,8 @@ const ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
 export interface RemoteAgentDeps {
   runner: SshRunner;
   loadHosts: () => Promise<Record<string, RemoteHost>>;
+  /** Reads a host's stored login password from the local keychain (hosts with unlockKeychain). */
+  readUnlockPassword?: ReadUnlockPassword;
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
 }
 
@@ -108,13 +111,23 @@ export function createRemoteAgentHandler(deps: RemoteAgentDeps): ToolHandler {
     } catch (err) {
       return fail(errorMessage(err));
     }
+    let keychainPassword: string | undefined;
+    if (host.unlockKeychain === true) {
+      try {
+        keychainPassword = await (deps.readUnlockPassword ?? readUnlockPassword)(host.name);
+      } catch (err) {
+        return fail(errorMessage(err));
+      }
+    }
     const runId = `${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`;
     const sessionId = input.resume ?? randomUUID();
     const cwd = input.cwd ?? host.cwd;
     const outcome = await runRemoteAgent(
       {
         target: host.ssh,
+        hostName: host.name,
         prompt: input.prompt,
+        ...(keychainPassword !== undefined ? { keychainPassword } : {}),
         runId,
         sessionId,
         ...(cwd !== undefined ? { cwd } : {}),

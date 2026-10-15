@@ -77,3 +77,35 @@ describe('hosts registry', () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 });
+
+describe('remote_agent keychain unlock', () => {
+  it('reads the stored password for unlockKeychain hosts and never returns it', async () => {
+    vi.stubEnv('AFK_REMOTE_DEPTH', '');
+    const reads: string[] = [];
+    let launchStdin = '';
+    const r = okRunner();
+    const handler = createRemoteAgentHandler({
+      runner: { ...r, async exec(t, s, o) { launchStdin = o?.stdin ?? ''; return r.exec(t, s, o); } },
+      loadHosts: async () => ({ cm: { name: 'cm', ssh: 'me@cm', unlockKeychain: true } }),
+      readUnlockPassword: async (name) => { reads.push(name); return 'topsecret'; },
+    });
+    const res = await handler({ host: 'cm', prompt: 'hi' }, new AbortController().signal);
+    expect(reads).toEqual(['cm']);
+    expect(launchStdin).toBe('topsecret\nhi');
+    expect(res.content).not.toContain('topsecret');
+  });
+
+  it('fails with the setup command when no password is stored', async () => {
+    vi.stubEnv('AFK_REMOTE_DEPTH', '');
+    const exec = vi.fn();
+    const handler = createRemoteAgentHandler({
+      runner: { exec, stream: vi.fn() },
+      loadHosts: async () => ({ cm: { name: 'cm', ssh: 'me@cm', unlockKeychain: true } }),
+      readUnlockPassword: async () => { throw new Error('no stored keychain password for host "cm"'); },
+    });
+    const res = await handler({ host: 'cm', prompt: 'hi' }, new AbortController().signal);
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('no stored keychain password');
+    expect(exec).not.toHaveBeenCalled();
+  });
+});

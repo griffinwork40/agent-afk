@@ -19,6 +19,7 @@ import {
   EXIT_MARKER,
   EXIT_AFK_NOT_FOUND,
   EXIT_BAD_CWD,
+  EXIT_KEYCHAIN_UNLOCK,
   buildLaunchScript,
   buildFollowScript,
   buildCancelScript,
@@ -26,22 +27,24 @@ import {
 } from './remote-script.js';
 import { SSH_CONNECT_FAILURE, type SshRunner } from './ssh-runner.js';
 import { createEventCollector } from './remote-events.js';
+import { escapeForSecurityInteractive, unlockSetupCommand } from './keychain-unlock.js';
 
 export const MAX_RECONNECTS = 6;
 /** Stderr text afk prints when a headless run finds no Anthropic credential. */
 export const NO_CREDENTIAL_SIGNATURE = 'No Anthropic credential found';
 
 /**
- * Over SSH a Mac's login keychain is locked, so keychain-stored OAuth is
- * unreadable even when the host is logged in, and afk's "Run `afk login`"
- * advice is wrong there. A CLAUDE_CODE_OAUTH_TOKEN in the host's afk.env is
- * read before the keychain (src/config/env.auth.ts) and works in every session.
+ * Over SSH a Mac's login keychain is locked (per security session, even while
+ * the user is logged in at the GUI), so keychain-stored OAuth is unreadable
+ * and afk's "Run `afk login`" advice is wrong there. Two fixes: automatic
+ * per-run unlock (`keychain-unlock.ts`), or a CLAUDE_CODE_OAUTH_TOKEN in the
+ * host's afk.env, which is read before the keychain (src/config/env.auth.ts).
  */
-export function lockedKeychainHint(target: string): string {
-  return `\n\nHint: over SSH, ${target}'s macOS login keychain is locked, so afk cannot read its keychain OAuth login. ` +
-    'Fix it once by setting CLAUDE_CODE_OAUTH_TOKEN (a long-lived token, e.g. from `claude setup-token`) ' +
-    `in ~/.afk/config/afk.env on ${target}. Unlocking per session (\`ssh -t ${target} security unlock-keychain\`) ` +
-    'needs the password each time and may not reach a detached run.';
+export function lockedKeychainHint(hostName: string): string {
+  return `\n\nHint: over SSH, ${hostName}'s macOS login keychain is locked, so afk cannot read its keychain OAuth login. ` +
+    `To unlock it automatically on every run, set "unlockKeychain": true for "${hostName}" in hosts.json and store ` +
+    `its login password once on this machine with \`${unlockSetupCommand(hostName)}\`. ` +
+    `Alternatively put CLAUDE_CODE_OAUTH_TOKEN in that host's afk.env.`;
 }
 const LAUNCH_TIMEOUT_MS = 60_000;
 const CANCEL_TIMEOUT_MS = 10_000;
@@ -56,6 +59,10 @@ export interface RemoteRunRequest {
   model?: string;
   resume?: string;
   afkPath?: string;
+  /** Host name for messages and the keychain account (defaults to `target`). */
+  hostName?: string;
+  /** Remote login password (raw); when set, the launch unlocks the login keychain first. */
+  keychainPassword?: string;
 }
 
 export type RemoteRunOutcome =
@@ -82,8 +89,17 @@ async function launch(
   runner: SshRunner,
   signal: AbortSignal,
 ): Promise<{ pid: number } | RemoteRunOutcome> {
-  const script = buildLaunchScript(req);
-  const res = await runner.exec(req.target, script, { stdin: req.prompt, signal, timeoutMs: LAUNCH_TIMEOUT_MS });
+  const unlock = req.keychainPassword !== undefined;
+  let stdin = req.prompt;
+  if (unlock) {
+    try {
+      stdin = `${escapeForSecurityInteractive(req.keychainPassword ?? '')}\n${req.prompt}`;
+    } catch (err) {
+      return { kind: 'error', reason: (err as Error).message };
+    }
+  }
+  const script = buildLaunchScript({ ...req, unlockKeychain: unlock });
+  const res = await runner.exec(req.target, script, { stdin, signal, timeoutMs: LAUNCH_TIMEOUT_MS });
   if (signal.aborted) return { kind: 'aborted' };
   const stderr = res.stderr.trim();
   if (res.code === SSH_CONNECT_FAILURE) {
@@ -93,6 +109,10 @@ async function launch(
     return { kind: 'error', reason: `afk is not installed on ${req.target} (${stderr}). Install it there, or set "afkPath" for this host in hosts.json.` };
   }
   if (res.code === EXIT_BAD_CWD) return { kind: 'error', reason: `remote cwd does not exist on ${req.target}: ${stderr}` };
+  if (res.code === EXIT_KEYCHAIN_UNLOCK) {
+    const name = req.hostName ?? req.target;
+    return { kind: 'error', reason: `could not unlock the login keychain on ${req.target}; if its password changed, re-store it with \`${unlockSetupCommand(name)}\`` };
+  }
   const line = res.stdout.split('\n').find((l) => l.startsWith(PID_MARKER));
   const pid = line !== undefined ? Number(line.slice(PID_MARKER.length).trim()) : NaN;
   if (res.code !== 0 || !Number.isInteger(pid) || pid <= 0) {
@@ -138,7 +158,11 @@ export async function runRemoteAgent(
     if (exited) {
       const err = await runner.exec(req.target, buildErrTailScript(req.runId), { timeoutMs: CANCEL_TIMEOUT_MS });
       const tail = err.stdout.trim();
-      const hint = tail.includes(NO_CREDENTIAL_SIGNATURE) ? lockedKeychainHint(req.target) : '';
+      // An already-unlocked run that still lacks a credential needs `afk login`
+      // on the host, not keychain advice, so the hint is skipped then.
+      const hint = tail.includes(NO_CREDENTIAL_SIGNATURE) && req.keychainPassword === undefined
+        ? lockedKeychainHint(req.hostName ?? req.target)
+        : '';
       return { kind: 'error', reason: `remote afk exited without a result${tail ? `: ${tail}` : ''}${hint}`, pid, partial: events.finalMessage() };
     }
     // Connection dropped mid-follow: reconnect from the next unseen line.
