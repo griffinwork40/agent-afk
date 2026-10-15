@@ -4,7 +4,7 @@ import type { CommitGeometry } from './terminal-compositor.commit-geometry.js';
 import type { CommitRoute } from './terminal-compositor.commit-route.js';
 import { eraseAndPaintRow } from './terminal-compositor.scrollback.js';
 import { writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
-import { contentMargin } from './render/measure.js';
+import { compositorBand } from './terminal-compositor.content-band.js';
 import { retainedArchivedPrefix } from './terminal-compositor.band-archived-prefix.js';
 
 /**
@@ -43,7 +43,7 @@ export function commitPhase3Hold(
   // Content centering (AFK_CENTER_CONTENT): derive the margin from the CURRENT
   // terminal width so painted rows adapt on resize. The band stores raw (unpadded)
   // content; padding is applied at paint time only.
-  const pad = contentMargin();
+  const pad = compositorBand(self.stdout).margin;
   let out = '';
   for (let i = 0; i < paintedCount; i++) {
     const row = bandTop + i;
