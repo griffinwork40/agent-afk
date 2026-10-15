@@ -21,7 +21,7 @@ import {
   reflowCommittedBandToWidth,
 } from './terminal-compositor.band-reflow.js';
 import { boundLineToTerminal } from './render/bounded-line.js';
-import { contentMargin } from './render/measure.js';
+import { contentBand } from './render/measure.js';
 import { bannerScrollSequence, writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
 import { decomposeCommitText } from './terminal-compositor.commit-text.js';
 import { snapshotCommitGeometry } from './terminal-compositor.commit-geometry.js';
@@ -207,7 +207,7 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
     // Content centering (AFK_CENTER_CONTENT): the band no longer stores
     // padding (centering is a paint-time concern), so the disarmed path adds
     // it here for the raw terminal write.
-    const pad = contentMargin();
+    const pad = contentBand(Math.max(1, self.stdout.columns ?? 80)).margin;
     const padded = pad
       ? text.split('\n').map(l => l === '' ? l : pad + l).join('\n')
       : text;
@@ -263,7 +263,10 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   // read the band) — see terminal-compositor.band-reflow.ts's module doc for
   // why a stale-width row can never be trusted verbatim again. No-op (and
   // free) when nothing has resized since the band was last reflowed.
-  reflowCommittedBandToWidth(self, cols);
+  // Content centering: reflow at the band width (`cols` when centering is off)
+  // so `margin + row` fits the terminal — the same width decomposeCommitText
+  // wraps the new block at.
+  reflowCommittedBandToWidth(self, contentBand(cols).width);
 
   const t = decomposeCommitText(text, cols);
   const geo = snapshotCommitGeometry(self, t.contentLineCount, rows, cols);

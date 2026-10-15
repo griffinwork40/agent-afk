@@ -373,6 +373,9 @@ export class AnthropicDirectQuery implements ProviderQuery {
     // is unchanged (no model switch), so `currentSlotDenyKey` stays as-is.
     // Documented contract: live edits take effect at the next `/model` switch or
     // session; a cwd re-anchor is treated as a second synchronisation point.
+    // Both factories are required: without cwdDependentsFactory, setLiveCwd only
+    // moves the resolve base (no dispatcher rebuild or policy re-read); without
+    // modelToolsFactory, there is no way to regenerate the advertised catalog.
     if (this.modelToolsFactory && this.cwdDependentsFactory) {
       const { tools } = this.modelToolsFactory(
         this.state.requestedModel ?? this.state.currentModel,

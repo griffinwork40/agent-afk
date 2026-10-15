@@ -204,14 +204,14 @@ export function parseBudgetEnv(raw: string | undefined, varName: string): number
   const parsed = Number(raw);
   if (!Number.isFinite(parsed)) {
     console.warn(
-      `[afk] ${varName}=${JSON.stringify(raw)} is not a valid number — ignoring (budget uncapped). ` +
+      `[afk] ${varName} is not a valid finite number — ignoring (budget uncapped). ` +
       `Set ${varName} to a non-negative number or leave it unset.`,
     );
     return undefined;
   }
   if (parsed < 0) {
     console.warn(
-      `[afk] ${varName}=${JSON.stringify(raw)} is negative — ignoring (budget uncapped). ` +
+      `[afk] ${varName} is negative — ignoring (budget uncapped). ` +
       `Set ${varName} to a non-negative number or leave it unset.`,
     );
     return undefined;
