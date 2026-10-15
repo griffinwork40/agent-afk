@@ -14,6 +14,7 @@ import { createPlaceholderPreventHook } from './placeholder-prevent.js';
 import { createAskQuestionGate } from './ask-question-gate.js';
 import { createSafeDestructDetect } from './safe-destruct-detect.js';
 import { createReleaseBoundaryDetect } from './release-boundary-detect.js';
+import { createShadowGitDetect } from './shadow-git-detect.js';
 import { MemoryStore, createMemorySessionEndHook, createChildMemoryHotBlockHook } from './memory/index.js';
 import { createPlanModeGate } from './plan-mode-gate.js';
 import { createAfkModeGate } from './afk-mode-gate.js';
@@ -389,6 +390,9 @@ export function createDefaultHookRegistry(
   registry.register('PreToolUse', createSafeDestructDetect());
   // Release-boundary detector (two-tier, ALL surfaces).
   registry.register('PreToolUse', createReleaseBoundaryDetect());
+  // Shadow-git detector: log-only (approve) for --no-verify and identity
+  // overrides (issue #3758). Never blocks — shadow window to calibrate FP rate.
+  registry.register('PreToolUse', createShadowGitDetect());
   const store = memoryStore ?? new MemoryStore();
   if (getPermissionMode !== undefined) {
     registerPermissionModeGates(registry, getPermissionMode, agentOptions, getCwd);
