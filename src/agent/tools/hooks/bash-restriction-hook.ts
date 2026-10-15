@@ -355,8 +355,9 @@ function stripQuotedBodyFileData(command: string): string {
   const prefix = header.slice(0, match.index);
   const suffix = header.slice(match.index + match[0].length);
   // This deliberately narrow grammar is NOT a shell parser. In particular, no
-  // quotes, escapes, substitutions, comments, chaining, or other stdin redirects.
-  if (!/^[\w \t./~:=,@%+>\-]*$/.test(prefix + suffix)) return command;
+  // escapes, substitutions, comments, chaining, or other stdin redirects.
+  // Balanced quotes on EACH side prove the `<<` match is not inside a string.
+  if (!isSimpleHeaderText(prefix) || !isSimpleHeaderText(suffix)) return command;
   if (suffix !== '' && !/^[ \t>]/.test(suffix)) return command;
   const segments = tokenizeSegments(prefix + ' ' + suffix);
   if (segments.length !== 1) return command;
@@ -379,6 +380,31 @@ function stripQuotedBodyFileData(command: string): string {
     end = lineEnd + 1;
   }
   return command; // Unterminated/ambiguous heredocs retain the original scan.
+}
+
+/**
+ * Contract: true only for heredoc-header text made of plain words, `$NAME`
+ * parameter references, and balanced quoted strings, so real headers
+ * such as `gh issue create -R $R --title "x: y" --body-file - <<'EOF'` qualify.
+ * Rejects backslashes, backticks, `$(`, `<(`, and unterminated quotes (which
+ * would mean the `<<` match sat inside a string). The header itself is always
+ * still scanned; this only decides whether the body may be treated as data.
+ */
+function isSimpleHeaderText(text: string): boolean {
+  let quote: '"' | "'" | undefined;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (quote === "'") { if (ch === "'") quote = undefined; continue; }
+    if (ch === '\\' || ch === '`' || ch === '\n') return false;
+    if (ch === '$') {
+      if (!/[A-Za-z_]/.test(text[i + 1] ?? '')) return false;
+      continue;
+    }
+    if (quote === '"') { if (ch === '"') quote = undefined; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    if (!/[\w \t./~:=,@%+>\-]/.test(ch)) return false;
+  }
+  return quote === undefined;
 }
 
 /**
