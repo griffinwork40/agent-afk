@@ -131,6 +131,11 @@ export class SessionShutdown {
         subagentCompletedCount: acct.subagentCompletedCount,
         subagentRunningTokens: acct.subagentRunningTokens,
         subagentRunningCostUsd: acct.subagentRunningCostUsd,
+        // Collect in-flight child terminal emit promises so they land before
+        // session_sealed even when the drain timed out or was not configured
+        // (#3714). Called after the drain so all active handles have had a
+        // chance to start their cancellation emits.
+        pendingChildTerminalWrites: config.getPendingChildTerminalWrites?.(),
       };
       await sealTraceWriter(ownedTraceWriter, sealInput).catch(() => {});
     }

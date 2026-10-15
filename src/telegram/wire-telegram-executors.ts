@@ -57,6 +57,8 @@ export interface TelegramExecutorWiring {
   bgNotifier: TelegramBgResultNotifier;
   /** Wired into `AgentConfig.drainSubagents` to cascade-abort children on close. */
   drainSubagents: AgentConfig['drainSubagents'];
+  /** Wired into `AgentConfig.getPendingChildTerminalWrites` so seal() can await in-flight cancel emits (#3714). */
+  getPendingChildTerminalWrites: AgentConfig['getPendingChildTerminalWrites'];
   /**
    * Call after `new AgentSession(config)` to resolve the deferred parent proxy
    * and wire the subagent-success rollup.
@@ -129,5 +131,8 @@ export function wireTelegramExecutors(
     });
   };
 
-  return { executors, backgroundRegistry, bgNotifier, drainSubagents, bindSession };
+  const getPendingChildTerminalWrites: AgentConfig['getPendingChildTerminalWrites'] =
+    () => executors.rootManager.getPendingChildTerminalWrites();
+
+  return { executors, backgroundRegistry, bgNotifier, drainSubagents, getPendingChildTerminalWrites, bindSession };
 }

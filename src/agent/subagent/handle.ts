@@ -138,6 +138,14 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
   /** Guard so teardown-side SubagentStop fires exactly once per handle. */
   /** @internal */ _stopDispatched = false;
   /**
+   * Promise for the fire-and-forget cancellation trace emit started in
+   * `cancel()`. Stored so the drain can await it within the timeout bound,
+   * guaranteeing the `cancelled` lifecycle row reaches the writer before the
+   * seal fires — even when the sink's `write()` is itself async (#3714).
+   * @internal
+   */
+  _pendingCancellationWrite: Promise<void> = Promise.resolve();
+  /**
    * The `SubagentStop.injectContext` captured for in-turn delivery by the
    * caller — set only when {@link dispatchStopAndRelease} ran with
    * `deferInjectContextToCaller: true` and the hook produced a non-empty
@@ -426,7 +434,10 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     // source='explicit' marks this as a caller-initiated cancel — distinct
     // from cascade-driven cancellation which will be emitted by the
     // abort-graph wiring in a follow-up commit.
-    void emitSubagentLifecycle(this._traceWriter, {
+    // Store the promise so the drain can await it within the timeout bound
+    // (#3714: the emit is otherwise fire-and-forget and may not reach the
+    // writer before the seal fires when the sink's write() is async).
+    this._pendingCancellationWrite = emitSubagentLifecycle(this._traceWriter, {
       transition: 'cancelled',
       subagentId: this.id,
       source: 'explicit',

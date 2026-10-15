@@ -157,6 +157,7 @@ export async function bootstrapSession(
     // rows instead of vanishing (#733).
     drainSubagents: (reason) =>
       rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset'),
+    getPendingChildTerminalWrites: () => rootManager.getPendingChildTerminalWrites(),
     ...(options.provider !== undefined ? { explicitProvider: options.provider } : {}),
   });
 

@@ -21,6 +21,7 @@ import {
   type MockInstance,
 } from 'vitest';
 import { runWhatif, WhatifBudgetError, WhatifMdeError } from './run.js';
+import { jaccardSimilarity, REDUNDANCY_THRESHOLD } from './redundancy.js';
 import type {
   AgentRunner,
   ChangeSpec,
@@ -105,7 +106,10 @@ function makeBaselineTrace(episodeId: string, sample: number): EpisodeTrace {
   };
 }
 
-function makeRunner(runFn?: MockInstance): AgentRunner {
+function makeRunner(
+  runFn?: MockInstance,
+  snapshotFn?: (env: Environment) => Promise<RequestSnapshot>,
+): AgentRunner {
   const runMock =
     runFn ??
     vi.fn(async (_env: Environment, ep: Episode, sample: number): Promise<EpisodeTrace> => {
@@ -116,10 +120,13 @@ function makeRunner(runFn?: MockInstance): AgentRunner {
   return {
     name: 'fake',
     run: runMock as unknown as AgentRunner['run'],
-    snapshot: vi.fn(async (env: Environment): Promise<RequestSnapshot> => {
-      if (env.label === 'candidate') return makeSnap(CANDIDATE_SYSTEM);
-      return makeSnap(BASELINE_SYSTEM);
-    }),
+    snapshot: vi.fn(
+      snapshotFn ??
+        (async (env: Environment): Promise<RequestSnapshot> => {
+          if (env.label === 'candidate') return makeSnap(CANDIDATE_SYSTEM);
+          return makeSnap(BASELINE_SYSTEM);
+        }),
+    ),
   };
 }
 
@@ -340,19 +347,21 @@ describe('runWhatif — predict-only path', () => {
       'For tasks solvable with at most three file reads and one localized ' +
       'edit, work directly without skills or subagents.';
 
-    const customRunner: AgentRunner = {
-      name: 'fake-redundancy',
-      run: vi.fn(async (_env: Environment, ep: Episode, sample: number): Promise<EpisodeTrace> => {
-        if (_env.label === 'candidate') return makeCandidateTrace(ep.id, sample);
-        return makeBaselineTrace(ep.id, sample);
-      }) as unknown as AgentRunner['run'],
-      snapshot: vi.fn(async (env: Environment): Promise<RequestSnapshot> => {
+    // Verify the fixture pair actually exceeds REDUNDANCY_THRESHOLD so the
+    // test stays valid if the threshold or tokeniser ever changes.
+    expect(jaccardSimilarity(RICH_BASELINE, ADDED_LINE)).toBeGreaterThanOrEqual(
+      REDUNDANCY_THRESHOLD,
+    );
+
+    const customRunner = makeRunner(
+      undefined,
+      async (env: Environment): Promise<RequestSnapshot> => {
         if (env.label === 'candidate') {
           return makeSnap(`${RICH_BASELINE}\n\n${ADDED_LINE}`);
         }
         return makeSnap(RICH_BASELINE);
-      }),
-    };
+      },
+    );
 
     const deps = makeDeps({ runner: customRunner });
     await runWhatif(makeOptions({ verify: false }), deps);

@@ -136,6 +136,7 @@ export function finalizeTelegramSession(
     ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
     maxTurns: 100,
     drainSubagents: wiring.drainSubagents,
+    getPendingChildTerminalWrites: wiring.getPendingChildTerminalWrites,
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     ...(maxToolUseIterations !== undefined ? { maxToolUseIterations } : {}),
     ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
