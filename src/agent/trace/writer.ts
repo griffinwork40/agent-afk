@@ -83,8 +83,14 @@ export interface TraceSink {
 export interface TraceWriter extends TraceSink {
   /** Write the terminal `session_sealed` record and close the underlying
    *  resource. Idempotent — subsequent calls resolve to no-op. After
-   *  `seal()` returns, `write()` rejects. */
-  seal(payload: SessionSealedPayload): Promise<void>;
+   *  `seal()` returns, `write()` rejects.
+   *
+   * @param pendingWrites Optional promises for in-flight child terminal
+   *   emits. Awaited (all-settled) inside the enqueue task BEFORE the
+   *   `session_sealed` line is appended, so child cancellation rows land
+   *   before the seal record (#3714).
+   */
+  seal(payload: SessionSealedPayload, pendingWrites?: readonly Promise<void>[]): Promise<void>;
 
   /** Close the underlying resource without writing a seal record.
    *  Used by tests and by emergency teardown. A trace closed without
@@ -215,10 +221,16 @@ export class NdjsonTraceWriter implements TraceWriter {
     });
   }
 
-  async seal(payload: SessionSealedPayload): Promise<void> {
+  async seal(payload: SessionSealedPayload, pendingWrites?: readonly Promise<void>[]): Promise<void> {
     if (this.sealed) return;
     this.sealed = true;
     await this.enqueue(async () => {
+      // Flush any in-flight child terminal emits before writing session_sealed
+      // so their rows land ahead of the seal record (#3714). All-settled so a
+      // single failed emit does not abort the others or block the seal.
+      if (pendingWrites && pendingWrites.length > 0) {
+        await Promise.allSettled(pendingWrites);
+      }
       await this.ensureOpen();
       // Guard against `sealOnProcessExit()` having already won the race
       // (see the `sealRecordPersisted` field comment and the module-level
@@ -502,9 +514,12 @@ export class InMemoryTraceWriter implements TraceWriter {
     return 'in-memory://trace';
   }
 
-  async seal(payload: SessionSealedPayload): Promise<void> {
+  async seal(payload: SessionSealedPayload, pendingWrites?: readonly Promise<void>[]): Promise<void> {
     if (this.sealed) return;
     this.sealed = true;
+    if (pendingWrites && pendingWrites.length > 0) {
+      await Promise.allSettled(pendingWrites);
+    }
     this._events.push({
       ts: new Date().toISOString(),
       seq: this.seq++,

@@ -156,6 +156,13 @@ export interface SealTraceInput extends ClosureSignals, ClosureTotals {
   subagentCompletedCount: number;
   subagentRunningTokens: ClosureTokenCounters;
   subagentRunningCostUsd: number;
+  /**
+   * In-flight child terminal emit promises to flush before `session_sealed`.
+   * Collected from active handles via `AgentConfig.getPendingChildTerminalWrites`
+   * and passed into `TraceWriter.seal()` so child cancellation rows land
+   * before the seal record (#3714).
+   */
+  pendingChildTerminalWrites?: readonly Promise<void>[];
 }
 
 /**
@@ -195,13 +202,16 @@ export async function sealTraceWriter(
   const subagentCostUsd =
     input.subagentRunningCostUsd > 0 ? input.subagentRunningCostUsd : undefined;
 
-  await writer.seal({
-    status,
-    finalCostUsd: input.finalCostUsd,
-    finalTurnCount: input.finalTurnCount,
-    closedAt: new Date().toISOString(),
-    ...(subagentCount !== undefined ? { subagentCount } : {}),
-    ...(subagentTokens !== undefined ? { subagentTokens } : {}),
-    ...(subagentCostUsd !== undefined ? { subagentCostUsd } : {}),
-  });
+  await writer.seal(
+    {
+      status,
+      finalCostUsd: input.finalCostUsd,
+      finalTurnCount: input.finalTurnCount,
+      closedAt: new Date().toISOString(),
+      ...(subagentCount !== undefined ? { subagentCount } : {}),
+      ...(subagentTokens !== undefined ? { subagentTokens } : {}),
+      ...(subagentCostUsd !== undefined ? { subagentCostUsd } : {}),
+    },
+    input.pendingChildTerminalWrites,
+  );
 }

@@ -15,6 +15,12 @@ import { SUBAGENT_DRAIN_TIMEOUT_MS } from './subagent/constants.js';
 /** Minimal handle shape the drain function needs. */
 export interface DrainHandle {
   cancel(): Promise<void>;
+  /**
+   * Settled when the cancellation trace emit initiated in `cancel()` has
+   * fully reached the writer. Awaited inside the drain bound so the
+   * `cancelled` lifecycle row is guaranteed to precede the seal (#3714).
+   */
+  readonly _pendingCancellationWrite: Promise<void>;
 }
 
 /**
@@ -55,10 +61,12 @@ export async function abortAllAndDrainImpl(
   // Cascade first so descendants see the abort while we await their parents.
   abortGraph.abort(rootId, reason, origin);
 
-  // Invariant: `handle.cancel()` emits the child's `cancelled` lifecycle row
-  // synchronously before its own first await, so awaiting it here guarantees
-  // the row has ENTERED writer.write() — and is therefore queued ahead of the
-  // seal — even though the emit itself is fire-and-forget.
+  // Invariant: cancel() stores its cancellation trace emit in
+  // `_pendingCancellationWrite`. Awaiting both cancel() and that promise
+  // guarantees the `cancelled` lifecycle row has fully reached the writer
+  // before the seal fires — even when the sink's write() is itself async
+  // (#3714). Both are raced against the timeout bound so a wedged child
+  // cannot hang teardown.
   let timedOut = false;
   const bound = new Promise<void>((resolve) =>
     setTimeout(() => {
@@ -67,7 +75,9 @@ export async function abortAllAndDrainImpl(
     }, timeoutMs).unref(),
   );
   await Promise.race([
-    Promise.allSettled(inFlight.map((h) => h.cancel())),
+    Promise.allSettled(
+      inFlight.flatMap((h) => [h.cancel(), h._pendingCancellationWrite]),
+    ),
     bound,
   ]);
   if (timedOut) {

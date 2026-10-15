@@ -589,6 +589,16 @@ export interface AgentConfig {
   drainSubagents?: (reason: string) => Promise<unknown>;
 
   /**
+   * Returns promises for any in-flight child terminal trace emits that were
+   * started (e.g. fire-and-forget cancel emits) but may not have reached the
+   * writer yet. Collected by `SubagentManager` from active handle
+   * `_pendingCancellationWrite` fields immediately before the seal; passed
+   * into `TraceWriter.seal()` so the rows land BEFORE `session_sealed` even
+   * when the drain timed out or was not configured (#3714).
+   */
+  getPendingChildTerminalWrites?: () => readonly Promise<void>[];
+
+  /**
    * True when this session is a forked subagent rather than the top-level
    * session. Stamped unconditionally by `SubagentManager.forkSubagent` — the
    * single choke point every built-in fork path converges through — and never
