@@ -26,7 +26,8 @@ import { SubagentHandleImpl } from '../subagent/handle.js';
 import type { SubagentResult } from '../subagent/result.js';
 import { abortAllAndDrainImpl } from '../subagent.drain.js';
 import { emitSubagentLifecycle } from '../trace/emit.js';
-import { NdjsonTraceWriter } from '../trace/writer.js';
+import { InMemoryTraceWriter, NdjsonTraceWriter } from '../trace/writer.js';
+import { SEAL_PENDING_WRITES_TIMEOUT_MS } from '../trace/pending-writes.js';
 import { AccountingAccumulator } from './accounting-accumulator.js';
 import { SessionShutdown } from './session-shutdown.js';
 
@@ -178,4 +179,42 @@ describe('parent seals while a subagent is live', () => {
       });
     });
   }
+});
+
+// #3807 follow-up: the drain gives up on a wedged child after its bound, but
+// the same still-pending promise is then handed to seal() via
+// getPendingChildTerminalWrites. seal() must bound that wait too, or a
+// wedged child trace sink hangs shutdown and the process never exits.
+describe('wedged child trace sink at shutdown', () => {
+  it('close() completes within the seal bound and session_sealed is still written', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const writer = new InMemoryTraceWriter();
+    await emitSubagentLifecycle(writer, {
+      transition: 'started', subagentId: 'child', parentId: 'parent', model: 'sonnet',
+    });
+    const wedgedWrite = new Promise<void>(() => {});
+    const config: AgentConfig = {
+      model: 'sonnet', traceWriter: writer,
+      getPendingChildTerminalWrites: () => [wedgedWrite],
+    };
+    const shutdown = new SessionShutdown({
+      getConfig: () => config,
+      getAbortController: () => new AbortController(),
+      getHookRegistry: () => undefined,
+      accounting: new AccountingAccumulator(),
+      getTurnCount: () => 0,
+      getSessionId: () => 'parent',
+      ownedTraceWriter: writer,
+      ownsTraceSeal: true,
+    });
+    let closed = false;
+    const closing = shutdown.dispatchOnce('close').then(() => { closed = true; });
+    await vi.advanceTimersByTimeAsync(SEAL_PENDING_WRITES_TIMEOUT_MS);
+    await closing;
+    expect(closed).toBe(true);
+    expect(writer.events.at(-1)?.kind).toBe('session_sealed');
+    expect(warn.mock.calls.some((c) => /abandoned 1 of 1 pending/.test(String(c[0])))).toBe(true);
+    warn.mockRestore();
+  }, 2_000);
 });

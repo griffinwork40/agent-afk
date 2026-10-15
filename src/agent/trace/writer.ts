@@ -46,6 +46,7 @@ import type { FileHandle } from 'fs/promises';
 import { join } from 'path';
 
 import { TraceEventInputSchema } from './events.js';
+import { awaitPendingWritesBounded, SEAL_PENDING_WRITES_TIMEOUT_MS } from './pending-writes.js';
 import type {
   CompactionPayloadInput,
   CompactionPayloadPersisted,
@@ -86,9 +87,11 @@ export interface TraceWriter extends TraceSink {
    *  `seal()` returns, `write()` rejects.
    *
    * @param pendingWrites Optional promises for in-flight child terminal
-   *   emits. Awaited (all-settled) inside the enqueue task BEFORE the
-   *   `session_sealed` line is appended, so child cancellation rows land
-   *   before the seal record (#3714).
+   *   emits. Awaited (all-settled) with the write gate still open, BEFORE
+   *   the `session_sealed` line is queued, so child cancellation rows land
+   *   before the seal record (#3714). The wait is bounded by
+   *   `SEAL_PENDING_WRITES_TIMEOUT_MS`; on timeout a stderr warning names
+   *   the abandoned count and `session_sealed` is written anyway.
    */
   seal(payload: SessionSealedPayload, pendingWrites?: readonly Promise<void>[]): Promise<void>;
 
@@ -181,6 +184,9 @@ export class NdjsonTraceWriter implements TraceWriter {
   private readonly tracePath: string;
   private seq: number;
   private sealed = false;
+  /** Set the instant `seal()` is entered; makes concurrent seals no-ops
+   *  while the write gate stays open for pending child writes (#3714). */
+  private sealing = false;
   /**
    * Invariant (#171): flips to `true` only once a terminal `session_sealed`
    * record has actually been appended to disk — by whichever of `seal()`'s
@@ -222,21 +228,20 @@ export class NdjsonTraceWriter implements TraceWriter {
   }
 
   async seal(payload: SessionSealedPayload, pendingWrites?: readonly Promise<void>[]): Promise<void> {
-    if (this.sealed) return;
+    if (this.sealed || this.sealing) return;
+    this.sealing = true;
+    // Flush in-flight child terminal emits before session_sealed (#3714).
+    // Awaited OUTSIDE the write queue with the write gate still open: a
+    // pending emit whose write() has not been entered yet must be able to
+    // enqueue AHEAD of the seal task (awaiting inside the queue would make it
+    // queue behind the very task waiting on it — a deadlock). Any write that
+    // enters during this window likewise lands before session_sealed. Bounded
+    // because these are the promises the subagent drain already gave up on.
+    if (pendingWrites && pendingWrites.length > 0) {
+      await awaitPendingWritesBounded(pendingWrites, SEAL_PENDING_WRITES_TIMEOUT_MS, 'NdjsonTraceWriter');
+    }
     this.sealed = true;
     await this.enqueue(async () => {
-      // Flush any in-flight child terminal emits before writing session_sealed
-      // so their rows land ahead of the seal record (#3714). All-settled so a
-      // single failed emit does not abort the others or block the seal.
-      // Temporarily re-open the write gate so pending child terminal emits
-      // can land before the seal record (#3714). The enqueue serialization
-      // guarantees no NEW writes can interleave — only the already-started
-      // promises in pendingWrites can resolve here.
-      if (pendingWrites && pendingWrites.length > 0) {
-        this.sealed = false;
-        await Promise.allSettled(pendingWrites);
-        this.sealed = true;
-      }
       await this.ensureOpen();
       // Guard against `sealOnProcessExit()` having already won the race
       // (see the `sealRecordPersisted` field comment and the module-level
@@ -464,6 +469,7 @@ export class NdjsonTraceWriter implements TraceWriter {
 export class InMemoryTraceWriter implements TraceWriter {
   private seq = 0;
   private sealed = false;
+  private sealing = false;
   private readonly _events: TraceEvent[] = [];
 
   /** Read-only view of accumulated events, in emission order. */
@@ -521,11 +527,14 @@ export class InMemoryTraceWriter implements TraceWriter {
   }
 
   async seal(payload: SessionSealedPayload, pendingWrites?: readonly Promise<void>[]): Promise<void> {
-    if (this.sealed) return;
-    this.sealed = true;
+    if (this.sealed || this.sealing) return;
+    this.sealing = true;
+    // Parity with NdjsonTraceWriter: keep the write gate open while the
+    // (bounded) pending child writes land, then close it (#3714).
     if (pendingWrites && pendingWrites.length > 0) {
-      await Promise.allSettled(pendingWrites);
+      await awaitPendingWritesBounded(pendingWrites, SEAL_PENDING_WRITES_TIMEOUT_MS, 'InMemoryTraceWriter');
     }
+    this.sealed = true;
     this._events.push({
       ts: new Date().toISOString(),
       seq: this.seq++,

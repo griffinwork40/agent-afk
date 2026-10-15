@@ -160,7 +160,8 @@ export interface SealTraceInput extends ClosureSignals, ClosureTotals {
    * In-flight child terminal emit promises to flush before `session_sealed`.
    * Collected from active handles via `AgentConfig.getPendingChildTerminalWrites`
    * and passed into `TraceWriter.seal()` so child cancellation rows land
-   * before the seal record (#3714).
+   * before the seal record (#3714). `seal()` bounds this wait
+   * (`SEAL_PENDING_WRITES_TIMEOUT_MS`) so a wedged child cannot hang shutdown.
    */
   pendingChildTerminalWrites?: readonly Promise<void>[];
 }

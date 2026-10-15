@@ -82,8 +82,9 @@ export async function abortAllAndDrainImpl(
   ]);
   if (timedOut) {
     console.warn(
-      `[SubagentManager] abortAllAndDrain: ${inFlight.length} child(ren) did not settle ` +
-        `within ${timeoutMs}ms — sealing anyway; their terminal rows may be missing`,
+      `[SubagentManager] abortAllAndDrain: ${inFlight.length} child(ren) ` +
+        `(${[...active.keys()].join(', ')}) did not settle within ${timeoutMs}ms — ` +
+        `sealing anyway; seal() waits a further bounded interval for their terminal rows`,
     );
   } else if (Array.isArray(settled)) {
     const rejected = settled.filter(
