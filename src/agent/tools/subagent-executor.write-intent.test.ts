@@ -296,6 +296,21 @@ describe('classifyDispatchIntent (#3754)', () => {
     it('passes "never modify the files, just audit them"', () => {
       expect(classifyDispatchIntent('never modify the files, just audit them')).toBe(false);
     });
+
+    it('does not mistake git-history queries about a commit, branch, or fix for commands', () => {
+      // Witness regression: the old commit|push|deploy .* (branch|fix|code)
+      // regex crossed sentences and rejected a read-only git-investigator.
+      const briefs = [
+        'Does edeaf62 exist as a commit in this repo, or only on a remote/PR branch?',
+        'Read-only. Does commit edeaf62 exist? Which branch contains the fix?',
+        'What does git show edeaf62 show for the full diff of this commit (or PR HEAD)?',
+      ];
+      for (const brief of briefs) expect(classifyDispatchIntent(brief)).toBe(false);
+    });
+
+    it('still detects a requested push to a branch', () => {
+      expect(classifyDispatchIntent('push to the release branch')).toBe(true);
+    });
   });
 });
 
@@ -351,5 +366,11 @@ describe('checkReadOnlyDispatchIntent (#3754)', () => {
   it('uses classifyDispatchIntent end-to-end: passes negation brief', () => {
     const result = checkReadOnlyDispatchIntent(false, reconAgent, 'do not edit files, only report findings', classifyDispatchIntent);
     expect(result).toBeUndefined();
+  });
+
+  it('allows a read-only git-investigator to inspect a commit and branch', () => {
+    const gitAgent = { name: 'git-investigator', readOnly: true } as unknown as RegisteredAgent;
+    const prompt = 'Read-only. Does commit edeaf62 exist? Which branch contains the fix? Run git log.';
+    expect(checkReadOnlyDispatchIntent(false, gitAgent, prompt, classifyDispatchIntent)).toBeUndefined();
   });
 });

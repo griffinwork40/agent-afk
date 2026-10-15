@@ -76,8 +76,9 @@ const WRITE_INTENT_RE =
  *   Branch A — imperative edit/apply/implement + code target:
  *     "edit src/foo.ts", "apply the patch", "implement the feature",
  *     "fix the bug in auth.ts", "refactor the module", "update config.ts".
- *   Branch B — commit/push/deploy verb:
- *     "commit the changes", "push to main", "deploy the fix".
+ *   Branch B — push with a destination:
+ *     "push to main", "push to branch". Commit/deploy with a target are
+ *     covered by branch A; a bare "commit" is often a git-history noun.
  *   Branch C — write_file / edit_file tool call intent:
  *     "call write_file", "use edit_file to".
  *
@@ -88,7 +89,7 @@ const WRITE_INTENT_RE =
  *   - Read-only recon mentions: "check if edit_file was called".
  */
 const IMPL_INTENT_VERB_RE =
-  /\b(edit|apply|implement|fix|refactor|update|modify|change|patch|write|commit|push|deploy)\s+(?:the\s+|a\s+|an\s+|your\s+)?(?:code|file|files|patch|diff|changes?|commit|implementation|feature|bug|fix|function|module|class|method|src|test|tests)\b|\b(edit|apply|implement|fix|refactor|update|modify|change|patch|write)\s+\S+\.\w{1,6}\b|\b(commit|push|deploy)\b.*\b(changes?|code|fix|branch|main|master)\b|\b(write_file|edit_file)\b/i;
+  /\b(edit|apply|implement|fix|refactor|update|modify|change|patch|write|commit|push|deploy)\s+(?:the\s+|a\s+|an\s+|your\s+)?(?:code|file|files|patch|diff|changes?|commit|implementation|feature|bug|fix|function|module|class|method|src|test|tests)\b|\b(edit|apply|implement|fix|refactor|update|modify|change|patch|write)\s+\S+\.\w{1,6}\b|\bpush\s+to\s+(?:the\s+)?(?:[\w./-]+\s+)?(?:branch|main|master)\b|\b(write_file|edit_file)\b/i;
 
 /**
  * Patterns whose presence indicates the prompt is a RECON brief that merely
