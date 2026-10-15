@@ -133,7 +133,7 @@ describe('schedule-store future-version guard (Scenario 5 / #3714)', () => {
     expect(loaded).toHaveLength(1);
     expect(loaded[0]?.id).toBe('future-task');
     // The unknown field is silently present on the cast object.
-    expect((loaded[0] as Record<string, unknown>)['_schemaVersion']).toBe(999);
+    expect((loaded[0] as unknown as Record<string, unknown>)['_schemaVersion']).toBe(999);
   });
 
   it('CURRENT BEHAVIOUR (defect): object-wrapped file (version+tasks) is silently cast — not refused', () => {
