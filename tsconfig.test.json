@@ -3,6 +3,12 @@
   "compilerOptions": {
     /* Tests are never emitted — typecheck only. */
     "noEmit": true,
+    /* Override rootDir so tests/ is reachable without TS6059 option errors.
+       The parent tsconfig.json sets rootDir:"./src" for production emit; here
+       we widen it to "." so tsc enters semantic checking rather than stopping
+       at config/global diagnostics. Production build is unaffected because
+       this file is only used by lint:tests:check (tsconfig.test.json). */
+    "rootDir": ".",
     /* Relax noUnusedLocals/noUnusedParameters for test helpers and fixtures
        that intentionally declare variables used only as type witnesses. */
     "noUnusedLocals": false,

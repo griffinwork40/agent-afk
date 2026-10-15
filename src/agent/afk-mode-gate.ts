@@ -525,6 +525,20 @@ interface RefusalCtx {
   daemonCwd?: string;
 }
 
+/** Only workspace-escape verdicts get scratch guidance; other refusals must not suggest a workaround. */
+function workspaceEscapeTail(refusal: RefusalCtx): string {
+  // Classifier contract: risk-classifier.paths emits this prefix for containment failures.
+  if (!refusal.reason?.startsWith('workspace-escape:')) return '';
+  const scratch = refusal.daemonCwd === undefined
+    ? ` Sanctioned scratch locations: the private session temp root and $TMPDIR (os.tmpdir()).`
+    : '';
+  return scratch +
+    ` For commit messages or PR/review bodies use stdin heredocs` +
+    ` (\`git commit -F - <<'EOF'\`, \`gh pr create --body-file - <<'EOF'\`);` +
+    ` for reports or artifacts, write into the workspace \`.afk/\` directory.` +
+    ` This boundary is deliberate: do not reach the same effect via bash, python, or a script.`;
+}
+
 /** The refusal decision surfaced to the model, with a cause-specific tail. */
 function blockDecision(toolName: string, why: string, refusal: RefusalCtx): HookDecision {
   const head =
@@ -544,7 +558,7 @@ function blockDecision(toolName: string, why: string, refusal: RefusalCtx): Hook
         })()
       : `Push an Asking summary to Telegram (send_telegram) and stop, ` +
         `or have the operator run /afk off and take over.`;
-  return { decision: 'block', reason: head + tail };
+  return { decision: 'block', reason: head + tail + workspaceEscapeTail(refusal) };
 }
 
 /**

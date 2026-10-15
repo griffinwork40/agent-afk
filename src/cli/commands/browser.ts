@@ -37,6 +37,7 @@ import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { palette } from '../palette.js';
 import { handleCommandError } from '../errors/index.js';
 import { decoratePlaywrightLaunchError } from '../../browser/playwright-missing.js';
+import { GuardedEgress } from '../../browser/playwright/egress-launch.js';
 import { getMcpConfigPath, type McpConfigFile } from '../../agent/mcp/index.js';
 import type { McpServerConfig } from '../../agent/mcp/types.js';
 import { errorMessage } from '../../utils/errors.js';
@@ -256,6 +257,9 @@ export function registerBrowserCommand(program: Command): void {
     .description("Open a headed browser, log in manually, and save the session to a vault profile the agent's native browser tools reuse")
     .option('--profile <name>', 'Vault profile name to save the session under', 'default')
     .action(async (url: string, opts: { profile?: string }) => {
+      // Hoisted so the catch block can always call stop() regardless of where
+      // the error occurs relative to guardedEgress construction (#3720).
+      const guardedEgress = new GuardedEgress();
       try {
         const profile = (opts.profile ?? 'default').trim();
         assertSafeBrowserProfile(profile);
@@ -280,7 +284,14 @@ export function registerBrowserCommand(program: Command): void {
         // hardcoded above, making this the one path that ALWAYS needs the full
         // `chromium-*` build — a cache holding only the headless shell fails
         // here while satisfying every agent-facing browser tool.
-        const browserInstance = await chromium.launch({ headless: false }).catch((err: unknown) => {
+        //
+        // Route through GuardedEgress so the login browser respects the same
+        // egress policy as agent-facing browser tools (#3720). A redirect during
+        // login could otherwise reach private/link-local addresses that the
+        // proxy would block. AFK_WEB_ALLOW_PRIVATE_HOSTS opts out, matching the
+        // existing behaviour for web_scrape / browser_open / browser_act.
+        const launchOptions = await guardedEgress.start(false);
+        const browserInstance = await chromium.launch(launchOptions).catch((err: unknown) => {
           throw decoratePlaywrightLaunchError(err, false);
         });
         // Restore an existing session if present, so re-running login refreshes
@@ -306,12 +317,15 @@ export function registerBrowserCommand(program: Command): void {
         // write-then-chmod window on freshly-written credentials.
         atomicWriteFile(statePath, JSON.stringify(state), { mode: 0o600, mkdirp: false });
         await browserInstance.close().catch(() => undefined);
+        await guardedEgress.stop();
 
         console.log(palette.success(`✓ Saved session for profile "${profile}"`));
         console.log(palette.meta(`  Vault: ${statePath} (0600 — treat as a credential)`));
         console.log(palette.meta('  Point the agent at it:'));
         console.log(palette.meta(`    export AFK_BROWSER_DEFAULT_PROFILE=${profile}`));
       } catch (err) {
+        // stop() is idempotent — safe even if already called on the success path.
+        await guardedEgress.stop();
         handleCommandError(err);
       }
     });

@@ -3,6 +3,7 @@ import type { CommitGeometry } from './terminal-compositor.commit-geometry.js';
 import type { CommitRoute } from './terminal-compositor.commit-route.js';
 import { writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
 import { buildScrollbackArchiveEscape } from './terminal-compositor.scrollback.js';
+import { compositorBand } from './terminal-compositor.content-band.js';
 import {
   archivedPrefix,
   dropScrollingArchivedRows,
@@ -195,7 +196,11 @@ export function commitPhase1Teardown(
       // un-erased remnants of longer prior content on the same row.
       // Same drop-by-repaint-before-scroll rule; the whole screen scrolls here.
       dropScrollingArchivedRows(self, rows);
-      const eraseEachLine = textLines.map((l) => `\x1b[2K${l ?? ''}`).join('\n');
+      // Content centering (AFK_CENTER_CONTENT): textLines are wrapped at the
+      // band width, so `pad + line` still fits one row and `lineCount` stays
+      // exact. Empty rows stay empty (identity when centering is off).
+      const pad = compositorBand(self.stdout).margin;
+      const eraseEachLine = textLines.map((l) => `\x1b[2K${pad && l ? pad + l : (l ?? '')}`).join('\n');
       self.stdout.write(
         `\x1b[${anchorFloor};1H${eraseEachLine}\x1b[${rows};1H${'\n'.repeat(lineCount)}`,
       );

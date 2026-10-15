@@ -11,6 +11,92 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.316.2] - 2026-10-15
+
+### Fixed
+- fix value/checked precedence, escape testId, wrap map callback, JSDoc, targeted tests (#3729) (c16ea0e0)
+
+### Changed
+- Delete .test-typecheck-baseline.json (5982190e)
+- Delete .commit-msg (ccf73716)
+- Delete themes/terax directory (8b4656cd)
+
+## [5.316.1] - 2026-10-15
+
+### Fixed
+- distinguish recovered gate blocks from failed runs (#3781) (295e9b22)
+- reject fatal test typecheck input diagnostics (#3773) (000c958e)
+- make AFK_CENTER_CONTENT render as faithfully as non-centered mode (#3765) (e33892ff)
+- redact raw value from budget env warnings; say "finite" for Infinity (#3743) (14d97841)
+- tighten refusal guidance and clarify factory contracts (#3774) (42eda72b)
+- pin bug filing host and bound confirmation previews (#3776) (4275b6d3)
+
+### Changed
+- fix journal writer path in tracing section (#3787) (1e236048)
+- cover gh jq flag alternatives (#3777) (b15eac1e)
+- cover production dispatcher cwd setup (#3775) (adcb0671)
+- clarify root grants for unconfined forks (#3772) (1a76dde6)
+
+## [5.316.0] - 2026-10-14
+
+### Added
+- /bug --file files the report directly with gh after confirmation (#3750) (81098984)
+
+## [5.315.3] - 2026-10-14
+
+### Added
+- add /bug to report bugs via a prefilled GitHub issue link (#3746) (e30f0b14)
+
+### Fixed
+- show status-bar cap when maxBudgetUsd === 0 (hard-stop sentinel) (#3745) (be9a4a94)
+- name sanctioned alternatives in high-risk refusals (#3727 follow-up) (#3760) (ef09815a)
+
+## [5.315.2] - 2026-10-14
+
+### Fixed
+- restore lint:tests:check on main (merge race #3748/#3747) (#3768) (6184908e)
+
+## [5.315.1] - 2026-10-14
+
+### Fixed
+- stop confining unconfined forks to read roots [] (#3734) (761a2580)
+- match BASH_SAFE only at command position (#3761) (e608a1d6)
+- refresh advertised catalog on setCwd so execution and wire catalog agree (#3744) (c27de050)
+- make lint:tests:check gate visible by fixing TS6059 rootDir blindness (#3747) (3c1ec3ae)
+
+### Changed
+- write mutable JSON snapshots atomically (#3749) (d58ad5cb)
+- assert maxBudgetUsd reaches Telegram/REPL; add Infinity parser cases (#3748) (bd200f8f)
+- MCP tools are top-level only, not shared with subagents (#3753) (923061a4)
+
+## [5.315.0] - 2026-10-14
+
+### Added
+- content-addressed checkpoint blobs with integrity verification (#3628) (1215b324)
+
+## [5.314.0] - 2026-10-14
+
+### Added
+- suppress no-info hook_decision rows, add hook_summary and search_witness where filter (#3728) (b5c39cab)
+
+## [5.313.15] - 2026-10-14
+
+### Fixed
+- extract streamer.utils.ts, add settled guard, consolidate killGroup, add helpers tests (#3740) (6621d7a0)
+- close egress proxy test coverage gaps (items 1-4) (#3742) (484d37dd)
+
+## [5.313.14] - 2026-10-14
+
+### Fixed
+- add PreToolUse order assertion and deduplicate Invariant comment (#3730) (54af8768)
+- route browser login launch through GuardedEgress proxy (#3731) (a415bd0b)
+- batched nits — comment, unreachable fallback, mock cleanup, collectAsyncIter, named guard, debugLog (#3640) (1d93e243)
+
+## [5.313.13] - 2026-10-14
+
+### Fixed
+- name the safe alternative in two high-friction denials (#3727) (aa94b8e7)
+
 ## [5.313.12] - 2026-10-14
 
 ### Added

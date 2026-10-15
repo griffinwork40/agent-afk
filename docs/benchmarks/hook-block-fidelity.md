@@ -45,7 +45,7 @@ the trace proves what was **recorded**; the verification file proves what
 |---|---|---|
 | `explicit-block` | Returns `{ decision: 'block' }` | `HookBlockedError` thrown, chain short-circuited, `hook_decision` traced |
 | `fail-safe` | Throws `new Error(...)` | Exception wrapped in `HookBlockedError`, cause preserved, `hook_decision` traced |
-| `allow-path` | Returns `{ decision: 'approve' }` | Dispatch resolves, no block `hook_decision` in trace |
+| `allow-path` | Returns `{ decision: 'approve' }` | Dispatch resolves, no block `hook_decision` in trace (a pure pass-through with no decision writes no row at all; it is counted in `hook_summary`) |
 | `multi-handler` | H1 approves, H2 blocks, H3 exists | H1 fires, H2 blocks, H3 never fires, `hook_decision` traces the block |
 
 ---

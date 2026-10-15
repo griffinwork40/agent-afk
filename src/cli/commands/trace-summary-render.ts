@@ -30,6 +30,8 @@ interface TraceSummary {
   subagents: number;
   claims: number;
   blocks: number;
+  /** Total hook dispatches from the `hook_summary` event; null = unknown (no summary). */
+  hookDispatches: number | null;
   /** Count of rate_limit events (429/503/529 backoff). */
   throttles: number;
   /** Count of ttfb_timeout events (our client-side watchdog re-drove a stalled request). */
@@ -50,6 +52,7 @@ function summarize(events: TraceEvent[]): TraceSummary {
   let subagents = 0;
   let claims = 0;
   let blocks = 0;
+  let hookDispatches: number | null = null;
   let throttles = 0;
   let ttfbStalls = 0;
   let bootWarnings = 0;
@@ -88,6 +91,11 @@ function summarize(events: TraceEvent[]): TraceSummary {
       case 'hook_decision':
         if (e.payload.decision === 'block') blocks++;
         break;
+      case 'hook_summary':
+        hookDispatches = Object.values(e.payload.counts)
+          .flatMap((byOutcome) => Object.values(byOutcome))
+          .reduce((a, b) => a + b, 0);
+        break;
       case 'session_sealed':
         sealStatus = e.payload.status;
         finalCostUsd = e.payload.finalCostUsd;
@@ -110,6 +118,7 @@ function summarize(events: TraceEvent[]): TraceSummary {
     throttles,
     ttfbStalls,
     bootWarnings,
+    hookDispatches,
     sealStatus,
     finalCostUsd,
     model,
@@ -160,6 +169,8 @@ export function formatTrace(
       ? `sealed (${summary.sealStatus})`
       : 'unsealed (live or crashed)';
   const costPart = summary.finalCostUsd !== null ? ` · ${fmtUsd(summary.finalCostUsd)}` : '';
+  // Missing hook_summary = unknown (crash / pre-feature trace), never "0 hooks".
+  const hookPart = summary.hookDispatches !== null ? ` · ${summary.hookDispatches} hook dispatches` : '';
   const throttlePart = summary.throttles > 0 ? ` · ${summary.throttles} throttled` : '';
   // Surfaced separately from `throttled`: a ttfb stall is dead wall-clock our own
   // watchdog spent, and folding it into the throttle count is what hid it.
@@ -184,7 +195,7 @@ export function formatTrace(
   out.push(
     `       ${status} · ${summary.total} events · ${summary.toolCalls} tool calls` +
       ` (${summary.toolErrors} err) · ${summary.subagents} subagents · ${summary.claims} claims` +
-      ` · ${summary.blocks} blocks${throttlePart}${ttfbPart}${bootWarningPart}${costPart}`,
+      ` · ${summary.blocks} blocks${hookPart}${throttlePart}${ttfbPart}${bootWarningPart}${costPart}`,
   );
   if (options.resultsNote !== undefined) out.push(options.resultsNote);
   out.push('');

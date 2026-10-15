@@ -47,7 +47,8 @@ import type { OutputEvent } from '../../../agent/types.js';
 import { ResizeBus } from '../../terminal-size.js';
 import { palette } from '../../palette.js';
 import { isPlainOutputRequested } from '../../../config/env.js';
-import { contentMargin } from '../../render/measure.js';
+import { contentBand } from '../../render/measure.js';
+import { truncateDisplayWidth } from '../../display.js';
 
 export type LoopStage = 'observing' | 'modeling' | 'choosing' | 'acting' | 'updating';
 
@@ -349,13 +350,20 @@ export class LoopStageBar {
     this.stream.write('\x1b[2K');
     // Content centering (AFK_CENTER_CONTENT): prepend left margin so the
     // OODA stage rail floats at the same horizontal position as other content.
+    // Defensively truncate the rail to the remaining band width so future
+    // stage label growth can never overflow; all other CUP-painted footer
+    // rows apply an equivalent guard.
+    const cols = this.stream.columns ?? 80;
+    const { margin: pad, width: bandWidth } = contentBand(cols);
+    const RAIL_INDENT = '  ';
+    const railContent = formatStageRail(stage, {
+      dim: palette.dim,
+      accent: palette.brand,
+      bold: palette.bold,
+    });
+    const maxRailW = Math.max(4, bandWidth - 2 - RAIL_INDENT.length);
     this.stream.write(
-      contentMargin() + '  ' +
-        formatStageRail(stage, {
-          dim: palette.dim,
-          accent: palette.brand,
-          bold: palette.bold,
-        }),
+      pad + RAIL_INDENT + truncateDisplayWidth(railContent, maxRailW),
     );
     this.stream.write('\x1b[u');
     this.lastPaintedRow = paintRow;

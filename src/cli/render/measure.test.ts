@@ -5,6 +5,7 @@ import {
   resolveTextMeasure,
   resolveProseMeasure,
   contentMargin,
+  contentBand,
   DEFAULT_TEXT_MEASURE,
   DEFAULT_PROSE_MEASURE,
   MIN_TEXT_MEASURE,
@@ -433,5 +434,40 @@ describe('#1619 preview diff respects the tool-lane row budget', () => {
         }
       }),
     );
+  });
+});
+
+describe('contentBand', () => {
+  it('is the identity band when centering is off (default path untouched)', () => {
+    withCenterEnv(undefined, () => {
+      expect(contentBand(200)).toEqual({ margin: '', marginCols: 0, width: 200 });
+    });
+  });
+
+  it('uses the passed cols, not process.stdout.columns', () => {
+    withCenterEnv('1', () =>
+      withCols(80, () => {
+        const band = contentBand(200);
+        expect(band.marginCols).toBe(50);
+        expect(band.margin).toBe(' '.repeat(50));
+        expect(band.width).toBe(150);
+      }),
+    );
+  });
+
+  it('width never drops below the measure, so capped content keeps its layout', () => {
+    withCenterEnv('1', () => {
+      for (const cols of [100, 101, 105, 120, 157, 200, 333]) {
+        const band = contentBand(cols);
+        expect(band.width).toBeGreaterThanOrEqual(Math.min(cols, DEFAULT_TEXT_MEASURE));
+        expect(band.marginCols + band.width).toBe(cols);
+      }
+    });
+  });
+
+  it('contentMargin(cols) agrees with contentBand(cols).margin', () => {
+    withCenterEnv('1', () => {
+      expect(contentMargin(211)).toBe(contentBand(211).margin);
+    });
   });
 });

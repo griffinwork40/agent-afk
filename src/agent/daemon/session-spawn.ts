@@ -17,7 +17,7 @@ import { StateStore } from '../state/state-store.js';
 import { emitSessionPhase } from '../trace/emit.js';
 import { createDefaultTraceWriter } from '../trace/factory.js';
 import type { TraceSink, TraceWriter } from '../trace/index.js';
-import type { TraceEventInput } from '../trace/types.js';
+import { makeGateBlockTraceOwner, type GateBlockCounter } from './scheduler-gate-recovery.js';
 import type { AgentConfig } from '../types.js';
 
 export interface DaemonSpawnOptions {
@@ -37,7 +37,7 @@ export interface DaemonSpawnOptions {
    * caller can read the total after `sendMessage` resolves and record it on
    * the telemetry record without polling the trace file.
    */
-  gateBlockCounter?: { count: number };
+  gateBlockCounter?: GateBlockCounter;
 }
 
 /**
@@ -157,7 +157,7 @@ export function parseDaemonEnvLimits(
     const n = Number(rawMaxBudget);
     if (!Number.isFinite(n) || n < 0) {
       console.warn(
-        `[daemon] AFK_MAX_BUDGET_USD=${JSON.stringify(rawMaxBudget)} is not a valid non-negative number — ` +
+        `[daemon] AFK_MAX_BUDGET_USD is not a valid finite non-negative number — ` +
           `ignoring (budget uncapped). Set AFK_MAX_BUDGET_USD to a non-negative number or leave it unset.`,
       );
       parsedMaxBudget = undefined;
@@ -212,8 +212,8 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
   // write() to the real writer — it is purely observational — and increments
   // the counter each time it sees a hook_decision with approvalOutcome:
   // 'hard-block'. This lets executeAgentTask read the final count after
-  // sendMessage() returns and set status:'blocked' without polling the trace file.
-  const hookTraceWriter = makeGateBlockTraceWriter(trace?.writer, options.gateBlockCounter);
+  // sendMessage() returns and classify recovery without polling the trace file.
+  const hookTraceWriter = makeGateBlockTraceOwner(trace?.writer, options.gateBlockCounter);
   const { registry, memoryStore } = createDefaultHookRegistry(
     undefined,
     'daemon',
@@ -293,7 +293,7 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     // Trace writer placed before sessionConfig so an operator-supplied
     // sessionConfig.traceWriter still wins (escape-hatch parity with
     // permissionMode).
-    ...(trace ? { traceWriter: trace.writer } : {}),
+    ...(hookTraceWriter ? { traceWriter: hookTraceWriter } : {}),
     ...(mcpManager !== undefined ? { mcpManager } : {}),
     // Opt-in top-level tool-round ceiling default; overridable by an explicit
     // sessionConfig.maxToolUseIterations via the spread below.
@@ -311,7 +311,7 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     cwd: agentCwd,
   };
   try {
-    const traceOwner = options.sessionConfig?.traceWriter === undefined ? trace?.writer : undefined;
+    const traceOwner = options.sessionConfig?.traceWriter === undefined ? hookTraceWriter : undefined;
     const session = options.sessionFactory
       ? options.sessionFactory(config, traceOwner)
       : new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectHotMemory(config))), traceOwner);
@@ -409,36 +409,4 @@ async function connectDaemonMcp(
       metadata: { serverCount: enabledMcpCount },
     });
   }
-}
-
-/**
- * Wrap a real {@link TraceSink} with a shim that increments `counter.count`
- * each time the AFK gate emits a `hook_decision` with
- * `approvalOutcome: 'hard-block'` (#3466).
- *
- * Returns `undefined` when either `inner` or `counter` is absent — callers
- * spread the result with `?? undefined` so the hook registry falls back to
- * its normal no-writer path. The shim is purely observational: every `write()`
- * call is delegated to the real writer unconditionally, even on hard-block
- * events, so the trace file is unaffected.
- */
-function makeGateBlockTraceWriter(
-  inner: TraceSink | undefined,
-  counter: { count: number } | undefined,
-): TraceSink | undefined {
-  if (inner === undefined || counter === undefined) return inner;
-  return {
-    getTracePath(): string {
-      return inner.getTracePath();
-    },
-    write(event: TraceEventInput): Promise<void> {
-      if (
-        event.kind === 'hook_decision' &&
-        event.payload.approvalOutcome === 'hard-block'
-      ) {
-        counter.count += 1;
-      }
-      return inner.write(event);
-    },
-  };
 }

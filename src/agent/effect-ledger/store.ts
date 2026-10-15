@@ -23,7 +23,7 @@ import * as fs from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getEffectLedgerPath } from '../../paths.js';
-import { readJsonlFile } from '../../utils/jsonl.js';
+import { collectAsyncIter, readJsonlFile } from '../../utils/jsonl.js';
 import type {
   EffectRecord,
   EffectQuery,
@@ -55,11 +55,7 @@ async function readAllRecords(path: string): Promise<EffectRecord[]> {
   // propagate, preserving the previous throw-on-unexpected-error contract.
   // appendLine uses appendFileSync with mode 0o600 — appendJsonl cannot be
   // used here because it does not support per-file mode bits.
-  const records: EffectRecord[] = [];
-  for await (const rec of readJsonlFile<EffectRecord>(path, { guard: isEffectRecord })) {
-    records.push(rec);
-  }
-  return records;
+  return collectAsyncIter(readJsonlFile<EffectRecord>(path, { guard: isEffectRecord }));
 }
 
 /** Minimal runtime shape-check (not a full schema validator). */

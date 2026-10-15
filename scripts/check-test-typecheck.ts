@@ -43,6 +43,18 @@ const TSCONFIG_REL = 'tsconfig.test.json';
 /** Pattern that TypeScript emits for each type error. */
 const ERROR_TS_RE = /^.*error TS\d+:/m;
 
+/**
+ * Option/config diagnostics invalidate the semantic error count. Besides TS6xxx,
+ * TS18002 (empty files list) and TS18003 (no inputs) can hide the entire suite.
+ * Do not match all TS18xxx: that range also contains ordinary semantic errors.
+ */
+const CONFIG_DIAGNOSTIC_RE = /^.*error TS(?:6\d+|18002|18003):/m;
+
+/** Shared by the CLI and its tests; importing this script does not run main(). */
+export function detectConfigDiagnosticLines(output: string): string[] {
+  return output.split('\n').filter((line) => CONFIG_DIAGNOSTIC_RE.test(line));
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -99,6 +111,24 @@ function measureErrors(): number {
     const e = err as { stdout?: string; stderr?: string };
     output = `${e.stdout ?? ''}${e.stderr ?? ''}`;
   }
+
+  // Reject config failures before either check or update can use a bogus count.
+  const configLines = detectConfigDiagnosticLines(output);
+  if (configLines.length > 0) {
+    process.stderr.write(
+      `\u2717 lint:tests:check — option/config diagnostics detected (TS6xxx, TS18002, TS18003).\n` +
+        `  These errors can prevent semantic type-checking, making the gate blind.\n` +
+        `  Fix the tsconfig.test.json configuration first:\n` +
+        configLines
+          .slice(0, 5)
+          .map((l) => `    ${l.trim()}`)
+          .join('\n') +
+        (configLines.length > 5 ? `\n    … and ${configLines.length - 5} more` : '') +
+        '\n',
+    );
+    process.exit(1);
+  }
+
   return output.split('\n').filter((l) => ERROR_TS_RE.test(l)).length;
 }
 
