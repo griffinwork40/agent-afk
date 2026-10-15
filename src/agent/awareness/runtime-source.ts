@@ -24,6 +24,7 @@ import type {
   McpFailedServer,
 } from './types.js';
 import { gatherWorkspace } from './workspace-source.js';
+import { gatherHooks } from './hooks-source.js';
 import { readUsageRecords } from '../usage/usage-snapshot.js';
 import { compactUsageEntries } from '../usage/usage-formatter.js';
 import {
@@ -179,6 +180,9 @@ export interface RuntimeSourceDeps {
  */
 export function buildRuntimeStateSource(deps: RuntimeSourceDeps): RuntimeStateSource {
   return {
+    getHooks() {
+      return gatherHooks({ cwd: deps.getCwd() });
+    },
     getSelf(): RuntimeSelf {
       return {
         sessionId: deps.sessionId ?? null,

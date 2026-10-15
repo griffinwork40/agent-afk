@@ -15,7 +15,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { parseJsonlLines, readJsonlFile, IncrementalLineReader, appendJsonl } from './jsonl.js';
+import { parseJsonlLines, readJsonlFile, IncrementalLineReader, appendJsonl, collectAsyncIter } from './jsonl.js';
 
 // ---------------------------------------------------------------------------
 // Basic happy path
@@ -455,5 +455,33 @@ describe('appendJsonl', () => {
     appendJsonl(path, [1, 2]);
     const lines = readFileSync(path, 'utf-8').trim().split('\n');
     expect(lines).toEqual(['null', '42', '"hello"', '[1,2]']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// collectAsyncIter
+// ---------------------------------------------------------------------------
+
+async function* makeIter<T>(items: T[]): AsyncIterable<T> {
+  for (const item of items) yield item;
+}
+
+describe('collectAsyncIter', () => {
+  it('returns an empty array for an empty iterable', async () => {
+    const result = await collectAsyncIter(makeIter([]));
+    expect(result).toEqual([]);
+  });
+
+  it('collects all items in order', async () => {
+    const result = await collectAsyncIter(makeIter([1, 2, 3]));
+    expect(result).toEqual([1, 2, 3]);
+  });
+
+  it('propagates errors thrown mid-iteration', async () => {
+    async function* throwing(): AsyncIterable<number> {
+      yield 1;
+      throw new Error('mid-iter failure');
+    }
+    await expect(collectAsyncIter(throwing())).rejects.toThrow('mid-iter failure');
   });
 });

@@ -1,10 +1,10 @@
 /**
- * Tests for collectPostRunWarnings — the post-run warning helper extracted
- * from SubagentExecutor for issue #944.
+ * Tests for collectPostRunWarnings and classifyDispatchIntent — helpers
+ * extracted from SubagentExecutor (issues #944, #3754).
  */
 
 import { describe, it, expect } from 'vitest';
-import { collectPostRunWarnings } from './subagent-executor.write-intent.js';
+import { collectPostRunWarnings, classifyDispatchIntent } from './subagent-executor.write-intent.js';
 
 const noVision = (_m: string) => false;
 const hasVision = (_m: string) => true;
@@ -195,6 +195,104 @@ describe('collectPostRunWarnings', () => {
         hasVision,
       );
       expect(warn).toBe('');
+    });
+  });
+});
+
+describe('classifyDispatchIntent (#3754)', () => {
+  describe('true positives — implementation briefs that must be rejected', () => {
+    it('detects "edit src/foo.ts to fix the bug"', () => {
+      expect(classifyDispatchIntent('edit src/foo.ts to fix the bug')).toBe(true);
+    });
+
+    it('detects "apply the patch to the codebase"', () => {
+      expect(classifyDispatchIntent('apply the patch to the codebase')).toBe(true);
+    });
+
+    it('detects "implement the feature in the module"', () => {
+      expect(classifyDispatchIntent('implement the feature in the module')).toBe(true);
+    });
+
+    it('detects "fix the bug in auth.ts"', () => {
+      expect(classifyDispatchIntent('fix the bug in auth.ts')).toBe(true);
+    });
+
+    it('detects "refactor the module to use the new API"', () => {
+      expect(classifyDispatchIntent('refactor the module to use the new API')).toBe(true);
+    });
+
+    it('detects "commit the changes to main"', () => {
+      expect(classifyDispatchIntent('commit the changes to main')).toBe(true);
+    });
+
+    it('detects "push to main branch"', () => {
+      expect(classifyDispatchIntent('push to main branch')).toBe(true);
+    });
+
+    it('detects "use edit_file to update the config"', () => {
+      expect(classifyDispatchIntent('use edit_file to update the config')).toBe(true);
+    });
+
+    it('detects "call write_file with the new content"', () => {
+      expect(classifyDispatchIntent('call write_file with the new content')).toBe(true);
+    });
+
+    it('detects "update config.ts with the new settings"', () => {
+      expect(classifyDispatchIntent('update config.ts with the new settings')).toBe(true);
+    });
+
+    it('detects "write the implementation to disk"', () => {
+      expect(classifyDispatchIntent('write the implementation to disk')).toBe(true);
+    });
+  });
+
+  describe('false positives — recon briefs that must NOT be rejected', () => {
+    it('passes "do not edit files, only report findings"', () => {
+      expect(classifyDispatchIntent('do not edit files, only report findings')).toBe(false);
+    });
+
+    it('passes "report what should be changed in the codebase"', () => {
+      expect(classifyDispatchIntent('report what should be changed in the codebase')).toBe(false);
+    });
+
+    it('passes "identify which files need updating"', () => {
+      expect(classifyDispatchIntent('identify which files need updating')).toBe(false);
+    });
+
+    it('passes "describe edits needed without making them"', () => {
+      expect(classifyDispatchIntent('describe edits needed without making them')).toBe(false);
+    });
+
+    it('passes "find where the bug is but do not fix it"', () => {
+      expect(classifyDispatchIntent('find where the bug is but do not fix it')).toBe(false);
+    });
+
+    it('passes "research the codebase and return findings"', () => {
+      expect(classifyDispatchIntent('research the codebase and return findings')).toBe(false);
+    });
+
+    it('passes "check if edit_file was called anywhere in the session"', () => {
+      expect(classifyDispatchIntent('check if edit_file was called anywhere in the session')).toBe(false);
+    });
+
+    it('passes "analyse the module and describe what should change"', () => {
+      expect(classifyDispatchIntent('analyse the module and describe what should change')).toBe(false);
+    });
+
+    it('passes empty string', () => {
+      expect(classifyDispatchIntent('')).toBe(false);
+    });
+
+    it('passes pure recon: "grep for TODO comments across the repo"', () => {
+      expect(classifyDispatchIntent('grep for TODO comments across the repo')).toBe(false);
+    });
+
+    it('passes "list files that need to be updated"', () => {
+      expect(classifyDispatchIntent('list files that need to be updated')).toBe(false);
+    });
+
+    it('passes "never modify the files, just audit them"', () => {
+      expect(classifyDispatchIntent('never modify the files, just audit them')).toBe(false);
     });
   });
 });

@@ -11,6 +11,31 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.317.1] - 2026-10-15
+
+### Fixed
+- remove catchHandled dead code, fix exhaustiveness cast, drop unused generic (#3790) (ca243e50)
+- reject implementation dispatches to read-only named agents at dispatch time (#3786) (6319c4ba)
+
+### Changed
+- skip SessionStart dispatch entirely for forked children (#3784) (7dfcc534)
+
+## [5.317.0] - 2026-10-15
+
+### Added
+- read-only hooks view; config_get errors on unknown keys (#3735) (db3038da)
+
+### Fixed
+- drop redundant early-return, warn on partial mid-flight deletion, reorder collectAsyncIter, add direct unit tests (#3782) (9385e52b)
+
+## [5.316.4] - 2026-10-15
+
+### Fixed
+- document compose leaf tool restrictions (#3778) (1fa2e823)
+
+### Changed
+- restore .test-typecheck-baseline.json (2767) (#3793) (a43552fb)
+
 ## [5.316.3] - 2026-10-15
 
 ### Fixed
