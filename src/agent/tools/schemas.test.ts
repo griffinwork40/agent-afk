@@ -219,7 +219,8 @@ describe('agentTool', () => {
 describe('compose and skill tool descriptions', () => {
   it('documents every tool unavailable to compose leaf nodes', () => {
     expect(CHILD_ALLOWED_TOOLS).not.toContain('compose');
-    const unavailableTools = composeTool.description.match(/cannot call ([^.]+);/)?.[1];
+    const description = composeTool.description ?? '';
+    const unavailableTools = description.match(/cannot call ([^;]+);/)?.[1];
     expect(unavailableTools).toBeDefined();
     for (const name of [...COMPOSE_LEAF_STRIPPED_TOOLS, 'compose']) {
       expect(unavailableTools).toContain(`\`${name}\``);
