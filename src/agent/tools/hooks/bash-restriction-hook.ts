@@ -96,6 +96,7 @@ import {
 } from '../handlers/read-denylist.js';
 import { env } from '../../../config/env.js';
 import { textMentionsPath } from '../fs-case.js';
+import { tokenizeSegments } from '../readonly-bash.tokenizer.js';
 import {
   configuredAfkHome,
   afkAllowlistFileForms,
@@ -236,7 +237,7 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     //     typed write denylist floors all of ~/.afk/config the same way.
     const home = homedir();
     const afkHome = configuredAfkHome();
-    const normalized = normalizeHomeRefs(command, home, afkHome);
+    const normalized = normalizeHomeRefs(stripQuotedBodyFileData(command), home, afkHome);
     const scanned = headless ? normalized : scrubAllowlistedRefs(normalized, home, afkHome);
     const restrictedSubstrings =
       grantManager !== undefined && !headless
@@ -332,6 +333,52 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
 
     return {};
   };
+}
+
+/**
+ * Ignore literal stdin data only for simple, known data consumers. Reuse the
+ * readonly-bash tokenizer for argv, but NOT its stripDataStrings: quoted argv
+ * can be real paths or interpreter programs. Unknown shell syntax fails closed.
+ * Invariant: a quoted delimiter disables shell expansion, not execution by the
+ * consumer (`sh <<'EOF'` still executes its body). Never strip interpreter stdin,
+ * pipelines, wrappers, quoted shell programs, or multiple pending heredocs.
+ */
+function stripQuotedBodyFileData(command: string): string {
+  const newline = command.indexOf('\n');
+  if (newline < 0) return command;
+  const header = command.slice(0, newline);
+  const heredoc = /<<[ \t]*(?:'([A-Za-z_]\w*)'|"([A-Za-z_]\w*)"|\\([A-Za-z_]\w*))/g;
+  const matches = [...header.matchAll(heredoc)];
+  if (matches.length !== 1) return command;
+  const match = matches[0]!;
+  const delimiter = match[1] ?? match[2] ?? match[3]!;
+  const prefix = header.slice(0, match.index);
+  const suffix = header.slice(match.index + match[0].length);
+  // This deliberately narrow grammar is NOT a shell parser. In particular, no
+  // quotes, escapes, substitutions, comments, chaining, or other stdin redirects.
+  if (!/^[\w \t./~:=,@%+>\-]*$/.test(prefix + suffix)) return command;
+  if (suffix !== '' && !/^[ \t>]/.test(suffix)) return command;
+  const segments = tokenizeSegments(prefix + ' ' + suffix);
+  if (segments.length !== 1) return command;
+  const tokens = segments[0]!;
+  const [consumer, noun, verb] = tokens;
+  const bodyFile = tokens.indexOf('--body-file');
+  const isBodyFile = consumer === 'gh' && (noun === 'issue' || noun === 'pr') &&
+    ['create', 'comment', 'edit'].includes(verb ?? '') && bodyFile >= 3 && tokens[bodyFile + 1] === '-';
+  if (consumer !== 'cat' && !isBodyFile) return command;
+  const bodyStart = newline + 1;
+  let end = bodyStart;
+  while (end < command.length) {
+    const next = command.indexOf('\n', end);
+    const lineEnd = next < 0 ? command.length : next;
+    if (command.slice(end, lineEnd) === delimiter) {
+      // Keep the complete header (including redirect targets) and every command
+      // after the terminator: only the literal body is excluded from both scans.
+      return command.slice(0, bodyStart) + command.slice(end);
+    }
+    end = lineEnd + 1;
+  }
+  return command; // Unterminated/ambiguous heredocs retain the original scan.
 }
 
 /**

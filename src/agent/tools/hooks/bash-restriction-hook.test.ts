@@ -310,6 +310,59 @@ describe('createBashRestrictionHook — restricted-root substring', () => {
   });
 });
 
+describe('createBashRestrictionHook — quoted heredoc data (#3850)', () => {
+  const hook = createBashRestrictionHook({});
+  const mention = `${homedir()}/Library/LaunchAgents`;
+
+  it.each(["'EOF'", '"EOF"', '\\EOF'])(
+    'allows quoted body-file data with delimiter %s on interactive and headless surfaces',
+    (delimiter) => {
+      const command = `gh issue create --body-file - <<${delimiter}\nMention ${mention}\nEOF`;
+      expect(hook(ctx(command)).decision).not.toBe('block');
+      expect(hook(headlessCtx(command)).decision).not.toBe('block');
+    },
+  );
+
+  it.each(['pr create', 'pr comment 1', 'issue edit 1'])(
+    'allows gh %s body-file data and retains ordinary arguments after the delimiter',
+    (subcommand) => {
+      const command = `gh ${subcommand} <<'BODY' --body-file -\n${mention}\nBODY\ngit status`;
+      expect(hook(ctx(command)).decision).not.toBe('block');
+    },
+  );
+
+  it('treats substitutions inside quoted cat stdin as literal data', () => {
+    expect(hook(ctx("cat <<'EOF'\n$(cat ~/.ssh/id_rsa)\nEOF")).decision).not.toBe('block');
+  });
+
+  it.each([
+    'cat <<EOF\n$(cat ~/.ssh/id_rsa)\nEOF',
+    'cat <<EOF\n`cat ~/.ssh/id_rsa`\nEOF',
+    'cat ~/.ssh/id_rsa',
+    "cat <<'EOF' > ~/.ssh/x\nordinary data\nEOF",
+    "cat > ~/.ssh/x <<'EOF'\nordinary data\nEOF",
+    "cat <<'EOF'\nordinary data\nEOF\ncat ~/.ssh/id_rsa",
+  ])('keeps executable expansions, argv, and outside redirects blocked: %s', (command) => {
+    expect(hook(ctx(command)).decision).toBe('block');
+    expect(hook(headlessCtx(command)).decision).toBe('block');
+  });
+
+  it.each([
+    "sh <<'EOF'\ncat ~/.ssh/id_rsa\nEOF",
+    "python3 <<'EOF'\nopen('$HOME/.ssh/id_rsa')\nEOF",
+    "cat <<'EOF' | sh\ncat ~/.ssh/id_rsa\nEOF",
+    "cat <<'EOF'; sh\ncat ~/.ssh/id_rsa\nEOF",
+    "cat <<'EOF' <<OTHER\nordinary data\nEOF\n$(cat ~/.ssh/id_rsa)\nOTHER",
+    "cat <<'EOF'\n~/.ssh/id_rsa", // Unterminated.
+    "cat <<'EOF'x\nEOF\ncat ~/.ssh/id_rsa\nEOFx", // Concatenated delimiter.
+    "echo \"cat <<'EOF'\ncat ~/.ssh/id_rsa\nEOF\"", // Not a real heredoc.
+    `cat '${homedir()}/.ssh/id_rsa'`, // Quoted argv is NOT necessarily data.
+    `echo '${homedir()}/.ssh/id_rsa'`, // Retain conservative string false positives.
+  ])('retains ambiguous syntax and executable stdin in the scan: %s', (command) => {
+    expect(hook(ctx(command)).decision).toBe('block');
+  });
+});
+
 describe('createBashRestrictionHook — grant containment direction (F4 regression)', () => {
   const home = homedir();
   const appSupport = `${home}/Library/Application Support`;
