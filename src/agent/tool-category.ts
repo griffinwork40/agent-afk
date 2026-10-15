@@ -162,6 +162,8 @@ const WEB_TOOLS = new Set([
   'image_edit',
   // model_complete: one billed chat completion to a model provider.
   'model_complete',
+  // remote_agent: runs an afk agent on another host over SSH (outbound + billed).
+  'remote_agent',
 ]);
 const BROWSER_TOOLS = new Set([
   // agent-afk native browser-control tools (src/browser/, src/agent/tools/handlers/browser-*.ts).

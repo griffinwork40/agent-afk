@@ -250,4 +250,16 @@ export const MISC_ENV_REGISTRY = [
     example: '1',
     category: 'misc',
   },
+  {
+    name: 'AFK_REMOTE_DEPTH',
+    description:
+      'Set to 1 by the remote_agent tool on every afk run it launches on another host over SSH ' +
+      '(inlined into the remote command, since sshd drops forwarded env by default). When set to ' +
+      'a non-empty value other than 0, remote_agent refuses to dispatch, so a remote agent can ' +
+      'never fan out to further hosts. Not meant to be set by hand.',
+    type: 'string',
+    required: false,
+    example: '1',
+    category: 'misc',
+  },
 ] as const satisfies readonly EnvVarMeta[];

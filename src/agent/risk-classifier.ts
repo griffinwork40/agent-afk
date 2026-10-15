@@ -457,6 +457,9 @@ export function classifyRiskDetailed(
     // Can't be unsent — medium risk.
     return { level: 'medium' };
   }
+  // remote_agent starts a billed afk run on another machine: an outbound
+  // effect like send_telegram, so medium (allowed in AFK mode, never 'safe').
+  if (tool === 'remote_agent') return { level: 'medium' };
 
   // ---- MCP tools ----------------------------------------------------------
   // Any `mcp__*` tool is an externally-contributed function from a third-party

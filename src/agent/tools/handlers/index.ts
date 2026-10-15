@@ -49,6 +49,7 @@ import { testRunHandler } from './test-run.js';
 import { getFacetHandler } from './get-facet.js';
 import { jsonQueryHandler, createJsonQueryHandler } from './json-query.js';
 import { modelCompleteHandler, createModelCompleteHandler } from './model-complete.js';
+import { remoteAgentHandler } from './remote-agent.js';
 import {
   clipboardWriteHandler,
   clipboardReadHandler,
@@ -138,6 +139,7 @@ export function createBuiltinHandlers(
     ['get_facet', getFacetHandler],
     ['json_query', jsonQuery],
     ['model_complete', modelComplete],
+    ['remote_agent', remoteAgentHandler],
     ['clipboard_write', clipboardWriteHandler],
     ['clipboard_read', clipboardReadHandler],
     ['list_sessions', listSessionsHandler],
@@ -186,6 +188,7 @@ export {
   getFacetHandler,
   jsonQueryHandler,
   modelCompleteHandler,
+  remoteAgentHandler,
   createJsonQueryHandler,
   clipboardWriteHandler,
   clipboardReadHandler,

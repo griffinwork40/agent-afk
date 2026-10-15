@@ -98,6 +98,7 @@ Key layers under `src/`:
 | `src/skills/_agents/` | Vendored agent definitions. Drift detection: `vendored.test.ts`. |
 | `src/browser/` | Playwright-backed browser-control tools (open/observe/act/screenshot) + witness capture and domain-policy sanitization. |
 | `src/http-client/` | `web_scrape` pipeline: fetch → Readability → markdown extraction, with headless-render fallback and Exa search. |
+| `src/remote/` | `remote_agent` tool: runs a detached `afk chat --format stream-json` on another host over SSH, follows it with reconnect, refuses fan-out (`AFK_REMOTE_DEPTH`). Hosts in `~/.afk/config/hosts.json`. Docs: `docs/remote-dispatch.md`. |
 | `src/config/` | `env.ts` is the **canonical** `process.env` read-point (typed lazy getters + `ENV_REGISTRY`); config mutation + settable-key gating. |
 | `src/service/` | macOS LaunchAgent install/manage for always-on telegram bot / daemon (`launchd.ts`). |
 | `src/improve/` | Self-improvement pipeline: telemetry scan → eval-gen → eval-run → propose. |

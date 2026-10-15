@@ -92,6 +92,7 @@ import { getFacetTool } from './schemas.facet.js';
 import { jsonQueryTool } from './schemas.json-query.js';
 import { modelCompleteTool } from './schemas.model-complete.js';
 import { gitReadTool } from './schemas.git-read.js';
+import { remoteAgentTool } from './schemas.remote-agent.js';
 
 /**
  * The always-on built-in tool definitions,
@@ -140,6 +141,7 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   getFacetTool,
   jsonQueryTool,
   modelCompleteTool,
+  remoteAgentTool,
   clipboardWriteTool,
   clipboardReadTool,
   listSessionsTool,
