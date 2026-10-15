@@ -50,6 +50,15 @@ import { formatClock } from '../../awareness/index.js';
 /** Prefix every vitals note starts with. Tests and readers key on it. */
 export const VITALS_PREFIX = '[vitals]';
 
+/**
+ * True when `text` is a vitals note as {@link buildVitalsNote} emits it. Readers
+ * that walk conversation history (e.g. the rewind picker) use this to tell the
+ * harness note apart from text the user typed.
+ */
+export function isVitalsNoteText(text: string): boolean {
+  return text === VITALS_PREFIX || text.startsWith(`${VITALS_PREFIX} `);
+}
+
 /** Context fill (percent) at which the context field starts appearing. */
 export const CONTEXT_SHOW_PCT = 50;
 /** Subscription usage (percent) at which the usage field starts appearing. */

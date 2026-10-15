@@ -94,6 +94,50 @@ describe('listUserTurns', () => {
     expect(listUserTurns([{ role: 'assistant', content: 'hi' }])).toEqual([]);
     expect(listUserTurns([{ role: 'user', content: toolResult('t1') }])).toEqual([]);
   });
+
+  // Regression: the per-round [vitals] note rides as a sibling text block in
+  // the tool_result user message (loop/tool-results.ts). It made every tool
+  // round look like a typed prompt, flooding the Esc-Esc picker with
+  // "[vitals] …" rows.
+  const vitals = '[vitals] Thu 2026-10-15 18:31 EDT · turn 4s · context 61%';
+
+  it('excludes a tool-round carrier whose only text is the vitals note', () => {
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'real question' },
+      { role: 'assistant', content: toolUse('t1') },
+      { role: 'user', content: [...toolResult('t1'), { type: 'text', text: vitals }] },
+      { role: 'assistant', content: 'answer' },
+    ];
+    expect(listUserTurns(messages).map((t) => t.turnIndex)).toEqual([0]);
+  });
+
+  it('keeps a queued message in a tool round but drops the vitals text from it', () => {
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'real question' },
+      { role: 'assistant', content: toolUse('t1') },
+      {
+        role: 'user',
+        content: [
+          ...toolResult('t1'),
+          { type: 'text', text: 'queued follow-up' },
+          { type: 'text', text: vitals },
+        ],
+      },
+      { role: 'assistant', content: 'answer' },
+    ];
+    const targets = listUserTurns(messages);
+    expect(targets.map((t) => t.preview)).toEqual(['queued follow-up', 'real question']);
+
+    const state = makeState(messages);
+    const result = rewindConversationHistory({ state, abort: idleAbort }, 2);
+    expect(result.rewound).toBe(true);
+    expect(result.reloadText).toBe('queued follow-up');
+  });
+
+  it('leaves a typed prompt that starts with [vitals] untouched', () => {
+    const typed = [{ type: 'text', text: vitals }] as ContentBlockParam[];
+    expect(listUserTurns([{ role: 'user', content: typed }]).map((t) => t.turnIndex)).toEqual([0]);
+  });
 });
 
 describe('rewindConversationHistory', () => {

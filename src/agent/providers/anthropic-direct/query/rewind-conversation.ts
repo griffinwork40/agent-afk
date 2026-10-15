@@ -34,19 +34,33 @@ import type {
   RewindTarget,
 } from '../../../provider.js';
 import { repairOrphanToolUses } from './repair-orphan-tool-uses.js';
+import { isVitalsNoteText } from '../../shared/vitals.js';
 import type { SessionState } from './session-state.js';
 import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 
 const PREVIEW_MAX_CHARS = 72;
 
-/** Concatenate the text blocks of a user message into a single string. */
+/**
+ * Concatenate the user-authored text blocks of a user message.
+ *
+ * Invariant: a tool-round carrier (a user message holding `tool_result`
+ * blocks) also carries harness-appended sibling text blocks
+ * (`loop/tool-results.ts`): queued user messages, then the per-round
+ * `[vitals]` note. The vitals note is never user-authored, so it is dropped
+ * here. Without this, every tool round with vitals enabled became a rewind
+ * target previewing `[vitals] …`, and rewinding to a queued message would
+ * reload the vitals line into the input. The filter is scoped to tool-round
+ * carriers so a prompt the user typed is never altered.
+ */
 function extractUserText(content: MessageParam['content']): string {
   if (typeof content === 'string') return content;
+  const blocks = content as ContentBlockParam[];
+  const isToolRound = blocks.some((block) => block.type === 'tool_result');
   const parts: string[] = [];
-  for (const block of content as ContentBlockParam[]) {
-    if (block.type === 'text' && typeof block.text === 'string') {
-      parts.push(block.text);
-    }
+  for (const block of blocks) {
+    if (block.type !== 'text' || typeof block.text !== 'string') continue;
+    if (isToolRound && isVitalsNoteText(block.text)) continue;
+    parts.push(block.text);
   }
   return parts.join(' ');
 }
