@@ -221,10 +221,15 @@ describe('SessionWatchManager', () => {
     writer.recordUser('second-batch');
     await sleep(300);
     await writer.close('close');
-    await sleep(600);
 
     // First batch send threw; later batches must still be delivered.
-    expect(sent.join('\n')).toContain('second-batch');
+    // Use vi.waitFor instead of a fixed sleep: on slow Windows runners the
+    // tailLedger poll (250ms) plus the sending Promise chain settling may
+    // take longer than a fixed budget.  vi.waitFor polls until the assertion
+    // passes or the timeout expires, eliminating the race against sleep(600).
+    await vi.waitFor(() => {
+      expect(sent.join('\n')).toContain('second-batch');
+    }, { timeout: 4_000 });
   });
 });
 
