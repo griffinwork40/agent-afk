@@ -85,9 +85,13 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // provider-agnostic: the openai-compatible query path
   // (query/model-params.ts:resolveEffectiveMaxOutputTokens) calls it to bound
   // output when config.maxOutputTokens is unset. Without these entries the
-  // gpt-5.x ids fall through to DEFAULT_MAX_OUTPUT (64k) and silently cap
+  // gpt-5.x/6.x ids fall through to DEFAULT_MAX_OUTPUT (64k) and silently cap
   // responses at half their real 128k output ceiling (per OpenAI API docs:
-  // gpt-5.5 and the gpt-5.6 sol/terra/luna tiers all support 128k max output).
+  // gpt-5.5, gpt-5.6 sol/terra/luna, and gpt-6 variants all support 128k max output).
+  'gpt-6.1-sol': 128_000,
+  'gpt-6-astra': 128_000,
+  'gpt-6-sol': 128_000,
+  'gpt-6-luna': 128_000,
   'gpt-5.5': 128_000,
   'gpt-5.6': 128_000,
   'gpt-5.6-sol': 128_000,
@@ -219,6 +223,13 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'gpt-4o-mini': 128_000,
   'gpt-4.1': 1_000_000,
   'gpt-4.1-mini': 1_000_000,
+  // OpenAI GPT-6 family. gpt-6.1-sol is the ChatGPT-subscription flagship;
+  // gpt-6-astra, gpt-6-sol, and gpt-6-luna are the current subscription tier ids.
+  // Context windows are ~1M (matching the gpt-5.6 convention).
+  'gpt-6.1-sol': 1_000_000,
+  'gpt-6-astra': 1_000_000,
+  'gpt-6-sol': 1_000_000,
+  'gpt-6-luna': 1_000_000,
   // OpenAI GPT-5.6 family (GA 2026-07-09). The `gpt-5.6` alias routes to
   // `gpt-5.6-sol` (flagship); `-terra` is the balanced tier and `-luna` the
   // high-volume tier. All ship the flagship 5.x ~1.05M-token window (rounded to

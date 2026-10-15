@@ -11,8 +11,8 @@ describe('isValidModelArg', () => {
     expect(isValidModelArg('grok')).toBe(true);
   });
 
-  it('accepts grok-4.6 (xai wire id passthrough)', () => {
-    expect(isValidModelArg('grok-4.6')).toBe(true);
+  it('accepts grok-4.5 (xai wire id passthrough)', () => {
+    expect(isValidModelArg('grok-4.5')).toBe(true);
   });
 
   it('accepts grok-4.5 (xai wire id passthrough)', () => {
