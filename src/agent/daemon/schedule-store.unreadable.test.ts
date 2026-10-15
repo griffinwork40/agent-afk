@@ -48,7 +48,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  rmSyncRetry(dir, { recursive: true, force: true });
+  rmSyncRetry(dir);
 });
 
 describe('read-modify-write on an unreadable schedules.json', () => {
