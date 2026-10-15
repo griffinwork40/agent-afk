@@ -137,27 +137,6 @@ export async function discoverXaiOidcCached(deps: OAuthHttpDeps = {}): Promise<X
   return result;
 }
 
-/**
- * POST a form-urlencoded body to an OAuth token endpoint and return the parsed
- * JSON response body.
- *
- * Contract:
- *   - Always sends `Content-Type: application/x-www-form-urlencoded` and
- *     `Accept: application/json`.
- *   - On a non-2xx response, throws with a message of the form
- *     `"<prefix>: <err>[: <desc>]"` where `err` is `json.error ?? http_<status>`
- *     and `desc` is `json.error_description` (omitted when absent).
- *   - JSON decode is tolerant: a body that cannot be parsed resolves to `{}`.
- *     This matches xAI's error responses that sometimes arrive as plain text.
- *
- * @param url     - Token endpoint URL.
- * @param params  - Form fields (passed to `URLSearchParams`).
- * @param errPrefix - Prefix for the thrown error message, e.g. `"xAI token refresh failed"`.
- * @param fetchFn - Injectable fetch implementation (defaults to global `fetch`).
- * @returns Parsed JSON body as `Record<string, unknown>`.
- * @throws Error when the response is not ok.
- */
-
 export interface RawPostResult {
   ok: boolean;
   status: number;
@@ -184,9 +163,11 @@ export async function rawPostOAuthForm(
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
     body: new URLSearchParams(params).toString(),
   });
-  // Clone before reading so both JSON and text paths can access the body.
-  // (A consumed body throws on re-read; cloning is the standard workaround.)
-  const clone = typeof res.clone === 'function' ? res.clone() : res;
+  // Always clone before reading: the Fetch spec mandates that Response.clone()
+  // exists and the body is consumed on first read. The guard fell through to the
+  // original response when `.clone` was absent, so a failed JSON parse would
+  // attempt to read an already-consumed stream and return empty text.
+  const clone = res.clone();
   let json: Record<string, unknown> = {};
   let text = '';
   try {
@@ -200,17 +181,41 @@ export async function rawPostOAuthForm(
   return { ok: res.ok, status: res.status, json, text };
 }
 
+/**
+ * POST a form-urlencoded body to an OAuth token endpoint and return the parsed
+ * JSON response body.
+ *
+ * Contract:
+ *   - Always sends `Content-Type: application/x-www-form-urlencoded` and
+ *     `Accept: application/json`.
+ *   - On a non-2xx response, throws with a message of the form
+ *     `"<prefix>: <err>[: <desc>]"` where `err` is `json.error ?? http_<status>`
+ *     and `desc` is `json.error_description` or plain-text body (omitted when absent).
+ *   - JSON decode is tolerant: a body that cannot be parsed resolves to `{}`.
+ *     This matches xAI's error responses that sometimes arrive as plain text.
+ *
+ * @param url       - Token endpoint URL.
+ * @param params    - Form fields (passed to `URLSearchParams`).
+ * @param errPrefix - Prefix for the thrown error message, e.g. `"xAI token refresh failed"`.
+ * @param fetchFn   - Injectable fetch implementation (defaults to global `fetch`).
+ * @returns Parsed JSON body as `Record<string, unknown>`.
+ * @throws Error when the response is not ok.
+ */
 export async function postOAuthForm(
   url: string,
   params: Record<string, string>,
   errPrefix: string,
   fetchFn: FetchFn = fetch,
 ): Promise<Record<string, unknown>> {
-  const { ok, status, json } = await rawPostOAuthForm(url, params, fetchFn);
+  const { ok, status, json, text } = await rawPostOAuthForm(url, params, fetchFn);
   if (!ok) {
-    const err = asNonEmptyString(json['error']) ?? `http_${status}`;
+    const errCode = asNonEmptyString(json['error']);
     const desc = asNonEmptyString(json['error_description']);
-    throw new Error(`${errPrefix}: ${desc ? `${err}: ${desc}` : err}`);
+    // When the body was plain text (json.error absent), append the raw text so
+    // the caller sees the actual server message rather than only "http_<N>".
+    const err = errCode ?? `http_${status}`;
+    const detail = errCode ? desc : (text || desc);
+    throw new Error(`${errPrefix}: ${detail ? `${err}: ${detail}` : err}`);
   }
   return json;
 }

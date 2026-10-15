@@ -248,7 +248,10 @@ interface WireChildNestingArgs {
 /**
  * Wire depth-2+ nesting: build the child `SubagentManager`, `SubagentExecutor`,
  * skill executor, and provider. When at the depth cap (or no factory), falls
- * back to a minimal restricted provider. Mutates `childConfig.provider`.
+ * back to a minimal restricted provider.
+ *
+ * **Side effect:** mutates `w.childConfig.provider` across a module boundary.
+ * Callers must not assume `childConfig.provider` is stable after this call.
  */
 export function wireChildNesting(w: WireChildNestingArgs): WireChildNestingResult {
   const { args, childConfig, effectiveAllowedTools, effectiveReadOnlyBash, resolvedAccess, depth, maxDepth, signal, currentCwd, createChildExecutor } = w;
@@ -322,6 +325,8 @@ export function wireChildNesting(w: WireChildNestingArgs): WireChildNestingResul
 /**
  * Build the depth-2+ {@link SubagentManager} a nested child uses for its own
  * `agent` forks. Every input is an explicit parameter.
+ *
+ * @internal Exported for `child-config.ts` only; not part of the public API.
  */
 export function buildNestedChildManager(
   args: Pick<BuildChildConfigArgs,
@@ -344,6 +349,8 @@ export function buildNestedChildManager(
 
 /**
  * Tree-wide fields the recursive child executor inherits unchanged.
+ *
+ * @internal Exported for `child-config.ts` only; not part of the public API.
  */
 export function nestedExecutorInherits(
   args: Pick<BuildChildConfigArgs, 'traceWriter' | 'workspaceStore' | 'hookRegistry'>,

@@ -5,7 +5,7 @@
  * the prior inline POST blocks produced, now preserved via rawPostOAuthForm.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { startDeviceCodeFlow, pollDeviceCodeToken } from './oauth-device.js';
 import type { XaiOidcDiscovery } from './oauth-http.js';
 import { clearOidcCache } from './oauth-http.js';
@@ -41,13 +41,12 @@ function discoveryThenFetch(nextRes: Response): typeof fetch {
   }) as unknown as typeof fetch;
 }
 
-beforeEach(() => { clearOidcCache(); });
-
 // ---------------------------------------------------------------------------
 // startDeviceCodeFlow — happy path
 // ---------------------------------------------------------------------------
 
 describe('startDeviceCodeFlow — happy path', () => {
+  beforeEach(() => { clearOidcCache(); });
   it('returns device fields from server response', async () => {
     const fetchFn = discoveryThenFetch(jsonRes({
       device_code: 'dc-1',
@@ -83,6 +82,7 @@ describe('startDeviceCodeFlow — happy path', () => {
 // ---------------------------------------------------------------------------
 
 describe('startDeviceCodeFlow — error message format', () => {
+  beforeEach(() => { clearOidcCache(); });
   it('throws "xAI device-code start failed: HTTP <N> — <text>" when body is plain text', async () => {
     const fetchFn = discoveryThenFetch(textRes('Service Unavailable', 503));
     await expect(

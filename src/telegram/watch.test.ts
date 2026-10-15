@@ -630,15 +630,14 @@ describe('SessionWatchManager — keep-alive heartbeat for a pending elicitation
       request: { type: 'text', message: 'name?' },
     });
 
-    // Wait through many heartbeat intervals WITHOUT answering.
-    // Budget must absorb worst-case poll latency (POLL_INTERVAL_MS=250ms) plus
-    // at least one heartbeat tick (25ms) with generous slack for CI event-loop
-    // jitter — 400ms was too tight on macOS runners where fs.watch coalescing
-    // makes the 250ms poll the sole wakeup mechanism.
-    await sleep(800);
     const nudges = () => sent.filter((t) => /still waiting/i.test(t)).length;
-    // Fired at least once, but capped (MAX_ELICIT_NUDGES = 4) — never spams forever ...
-    expect(nudges()).toBeGreaterThanOrEqual(1);
+    // Wait for at least one nudge instead of a fixed sleep — eliminates the
+    // flake where event-loop jitter on slow CI runners caused the poll cycle to
+    // not fire within the old 800ms budget (#3701 converted siblings the same way).
+    await vi.waitFor(() => {
+      expect(nudges()).toBeGreaterThanOrEqual(1);
+    }, { timeout: 3000 });
+    // Capped — never spams forever (MAX_ELICIT_NUDGES = 4).
     expect(nudges()).toBeLessThanOrEqual(4);
     // ... and the wait is STILL open — answer whenever (resolver live, NOT cut off).
     const resolver = pendingElicitations.get(String(chatId));
