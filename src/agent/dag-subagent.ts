@@ -245,6 +245,8 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
 
   // Side-channel: nodes that succeeded but wound down early (#2970).
   const partialNodes: PartialNode[] = [];
+  // Side-channel: per-node worktree setup failure notices (#3661).
+  const setupNotices: Record<string, string> = {};
 
   const dagNodes: DAGNode[] = nodes.map((originalSpec) => ({
     id: originalSpec.id,
@@ -254,6 +256,7 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
       const result = await recoverDagNode(originalSpec.id,
         () => dispatchDagNode(originalSpec, inputs, nodeSignal, options, softDeadlineForNode, ++dagIsolationCounter),
         nodeSignal, originalSpec.replaySafe === true && originalSpec.canUseTool !== undefined, options.traceWriter);
+      if (result.setupNotice) setupNotices[originalSpec.id] = result.setupNotice;
       if (result.status !== 'succeeded') {
         const reason = nodeSignal.reason;
         const throwable = reason instanceof TimeoutError
@@ -264,15 +267,15 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
       recordIfPartial(partialNodes, originalSpec.id, result.stopReason);
       if (result.output !== undefined) return result.output;
       const text = result.message?.content;
-      const body = typeof text === 'string' ? annotateIfIncomplete(text, result.stopReason) : text;
-      // Prepend setup notice to string output so the compose caller sees it.
-      return result.setupNotice !== undefined && typeof body === 'string'
-        ? `${result.setupNotice}\n\n${body}`
-        : body;
+      return typeof text === 'string' ? annotateIfIncomplete(text, result.stopReason) : text;
     },
   }));
 
   // runDAG's own `partial` is always [] (it has no notion of partial output).
   const dagResult = await runDAG({ nodes: dagNodes, edges }, signal, { failFast, nodeTimeoutMs });
-  return { ...dagResult, partial: partialNodes };
+  return {
+    ...dagResult,
+    partial: partialNodes,
+    ...(Object.keys(setupNotices).length > 0 ? { setupNotices } : {}),
+  };
 }

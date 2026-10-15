@@ -221,20 +221,12 @@ export async function dispatchDagNode(
       prompt = spec.promptBuilder(inputs);
     }
     const result = await handle.runToResult(prompt);
-    // #3601 / #3660: surface a failed setup notice to the compose caller.
-    // Always attach setupNotice as a dedicated field so callers can act on it
-    // regardless of whether message.content is a plain string (outputSchema
-    // nodes, failed nodes, and cancelled nodes all produce non-string content).
-    // Additionally prepend the notice to plain-string content as before so
-    // the model sees it inline when content is readable text.
-    if (setupNotice !== undefined) {
-      const text = result.message?.content;
-      if (result.message !== undefined && typeof text === 'string') {
-        return { ...result, message: { ...result.message, content: `${setupNotice}\n\n${text}` }, setupNotice };
-      }
-      return { ...result, setupNotice };
-    }
-    return result;
+    // #3601 / #3660: attach setupNotice as a dedicated field on the result so
+    // the DAG layer (dag-subagent.ts) can propagate it through DAGRunResult
+    // regardless of return path. The notice is already injected into the node's
+    // prompt via the wrapped promptBuilder (lines 113-117); duplicating it into
+    // message.content caused a double-prepend bug (#3661 review finding 2).
+    return setupNotice !== undefined ? { ...result, setupNotice } : result;
   } finally {
     nodeSignal.removeEventListener('abort', onNodeAbort);
     await handle.teardown().catch(() => undefined);
