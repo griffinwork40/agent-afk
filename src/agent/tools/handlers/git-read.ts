@@ -35,6 +35,15 @@ export const GIT_READ_GLOBAL_ARGS: readonly string[] = [
   '-c', 'diff.external=',
   '-c', 'color.ui=false',
   '-c', 'log.showSignature=false',
+  // Defense in depth for signature verification (policy already rejects %G…,
+  // %(signature…) and --sort=signature): pin every verifier program to `false`,
+  // a no-op that always fails, so verification reports "bad" without running a
+  // repo- or user-configured program. `false` over `true`: a non-zero exit is an
+  // unambiguous verification failure on every backend.
+  '-c', 'gpg.program=false',
+  '-c', 'gpg.openpgp.program=false',
+  '-c', 'gpg.ssh.program=false',
+  '-c', 'gpg.x509.program=false',
 ];
 
 /** Child env: inherited env minus every `GIT_*` override, plus pager/editor pins. */
@@ -62,8 +71,11 @@ function clampMaxBytes(v: unknown): number {
 export function boundOutput(text: string, maxBytes: number): string {
   const buf = Buffer.from(text, 'utf8');
   if (buf.length <= maxBytes) return text;
-  const head = buf.subarray(0, maxBytes).toString('utf8');
-  return `${head}\n… [git_read output truncated: ${buf.length - maxBytes} of ${buf.length} bytes omitted; narrow with paths/args or raise max_bytes]`;
+  // Back off to a UTF-8 character boundary: never split a multi-byte sequence.
+  let end = maxBytes;
+  while (end > 0 && ((buf[end] ?? 0) & 0xc0) === 0x80) end--;
+  const head = buf.subarray(0, end).toString('utf8');
+  return `${head}\n… [git_read output truncated: ${buf.length - end} of ${buf.length} bytes omitted; narrow with paths/args or raise max_bytes]`;
 }
 
 interface ExecOutcome { stdout: string; stderr: string; code: number | null; overflow: boolean; error?: string }

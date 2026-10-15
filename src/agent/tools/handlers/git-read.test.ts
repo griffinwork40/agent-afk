@@ -61,6 +61,13 @@ describe('planGitRead: injection rejection', () => {
     ['diff', ['--no-index']],
     ['log', ['--show-signature']],
     ['log', ['--format=%GS']],
+    ['tag', ['--format=%(signature)']],
+    ['tag', ['--format=%(signature:grade)']],
+    ['tag', ['--format=%(*signature:grade)']],
+    ['branch', ['--format=%(refname) %(SIGNATURE:key)']],
+    ['tag', ['--sort=signature:grade']],
+    ['branch', ['--sort=-signature']],
+    ['log', ['--pretty=%(signature)']],
     ['blame', ['--contents=/etc/passwd']],
     ['show', ['--upload-pack=sh']],
   ])('%s %j is rejected', (sub, args) => {
@@ -107,21 +114,42 @@ describe('execution hardening', () => {
     expect(GIT_READ_GLOBAL_ARGS).toEqual(expect.arrayContaining(['--no-pager', 'core.pager=cat', 'diff.external=', 'core.fsmonitor=false']));
   });
 
+  it('global args pin every signature-verification program to false', () => {
+    for (const key of ['gpg.program', 'gpg.openpgp.program', 'gpg.ssh.program', 'gpg.x509.program']) {
+      const i = GIT_READ_GLOBAL_ARGS.indexOf(`${key}=false`);
+      expect(i).toBeGreaterThan(0);
+      expect(GIT_READ_GLOBAL_ARGS[i - 1]).toBe('-c');
+    }
+  });
+
+  it('signature-free format and sort values are still accepted', () => {
+    expect(planGitRead({ subcommand: 'tag', args: ['--format=%(refname:short)', '--sort=-creatordate'] }, CWD).ok).toBe(true);
+    expect(planGitRead({ subcommand: 'branch', args: ['--format=%(refname) %(objectname:short)', '--sort=refname'] }, CWD).ok).toBe(true);
+  });
+
   it('env pins GIT_PAGER/PAGER/GIT_EDITOR and drops inherited GIT_* overrides', () => {
+    const DROPPED = [
+      'GIT_DIR', 'GIT_EXTERNAL_DIFF', 'GIT_CONFIG_PARAMETERS', 'GIT_SSH_COMMAND', 'GIT_EXEC_PATH',
+      'GIT_PROXY_COMMAND', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0',
+    ];
     const before = { ...process.env };
     process.env['GIT_DIR'] = '/elsewhere';
     process.env['GIT_EXTERNAL_DIFF'] = '/bin/evil';
     process.env['GIT_CONFIG_PARAMETERS'] = "'core.pager'='sh'";
+    process.env['GIT_SSH_COMMAND'] = '/bin/evil-ssh';
+    process.env['GIT_EXEC_PATH'] = '/tmp/evil-libexec';
+    process.env['GIT_PROXY_COMMAND'] = '/bin/evil-proxy';
+    process.env['GIT_CONFIG_COUNT'] = '1';
+    process.env['GIT_CONFIG_KEY_0'] = 'core.pager';
+    process.env['GIT_CONFIG_VALUE_0'] = 'sh';
     try {
       const e = buildGitReadEnv(undefined);
-      expect(e['GIT_DIR']).toBeUndefined();
-      expect(e['GIT_EXTERNAL_DIFF']).toBeUndefined();
-      expect(e['GIT_CONFIG_PARAMETERS']).toBeUndefined();
+      for (const k of DROPPED) expect(e[k], k).toBeUndefined();
       expect(e['GIT_PAGER']).toBe('cat');
       expect(e['PAGER']).toBe('cat');
       expect(e['GIT_EDITOR']).toBe(':');
     } finally {
-      for (const k of ['GIT_DIR', 'GIT_EXTERNAL_DIFF', 'GIT_CONFIG_PARAMETERS']) {
+      for (const k of DROPPED) {
         if (before[k] === undefined) delete process.env[k]; else process.env[k] = before[k];
       }
     }
@@ -132,6 +160,14 @@ describe('execution hardening', () => {
     expect(out.startsWith('x'.repeat(1000))).toBe(true);
     expect(out).toContain('truncated: 4000 of 5000 bytes omitted');
     expect(boundOutput('short', 1000)).toBe('short');
+  });
+
+  it('boundOutput never splits a multi-byte UTF-8 character', () => {
+    // 'é' is 2 bytes; a 5-byte cap lands mid-character on the 3rd one.
+    const out = boundOutput('ééééé', 5);
+    expect(out.startsWith('éé\n')).toBe(true);
+    expect(out).not.toContain('\uFFFD');
+    expect(out).toContain('truncated: 6 of 10 bytes omitted');
   });
 });
 
