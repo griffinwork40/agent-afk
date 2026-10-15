@@ -52,6 +52,8 @@ import type { TraceSink } from '../trace/index.js';
 import type { GrantManager } from './grant-manager.js';
 import { isBackgroundBashLaunch } from './bash-background-flag.js';
 import { isPeerToolBlocked, peerToolChildDenial } from './peer-tool-gate.js';
+import type { HookBlockRepeatState } from './hook-block-repeat-breaker.js';
+import { applyHookBlockRepeatGate as applyHookBlockRepeat } from './dispatcher.hook-block-repeat-gate.js';
 
 // ---------------------------------------------------------------------------
 // Mutable state
@@ -81,6 +83,11 @@ export interface PreDispatchGateMutableState {
    * the last successful tool result. See {@link recordForkReadDenial}.
    */
   denialBreaker: { count: number; deniedPaths: string[] } | null;
+  /**
+   * Hook-block repeat breaker state (#3736). `null` when no block has been
+   * seen since the last successful tool result. See {@link applyHookBlockRepeat}.
+   */
+  hookBlockRepeat: HookBlockRepeatState | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -420,6 +427,19 @@ export function resetDenialBreaker(state: PreDispatchGateMutableState): void {
   state.denialBreaker = null;
 }
 
+// Hook-block repeat gate extracted to dispatcher.hook-block-repeat-gate.ts.
+export { applyHookBlockRepeatGate as applyHookBlockRepeat } from './dispatcher.hook-block-repeat-gate.js';
+
+/**
+ * Reset all progress-sensitive breakers on any successful tool result.
+ * Combines the denial-breaker reset and the hook-block-repeat reset (#3736)
+ * into one call so `dispatcher.ts` stays under the code-line ceiling.
+ */
+export function resetProgressBreakers(state: PreDispatchGateMutableState): void {
+  state.denialBreaker = null;
+  state.hookBlockRepeat = null;
+}
+
 /** @internal */
 /**
  * Post-parallel denial-breaker accounting for blocked safe calls.
@@ -584,7 +604,13 @@ export async function runPreDispatchGates(
           if (err.reason !== undefined) blockResult.blockReason = err.reason;
           return blockResult;
         }
-        return recordForkReadDenial(call, err.reason, blockResult, deps);
+        // Apply denial breaker first (fork read-containment denials), then the
+        // hook-block repeat breaker (#3736) so both run on every sequential block.
+        // Pass err.reason to applyHookBlockRepeat so it can exclude containment
+        // denials (isSubagentContainmentDenial) without relying on blockReason,
+        // which is only set on the parallelSafe path.
+        const afterDenial = recordForkReadDenial(call, err.reason, blockResult, deps);
+        return applyHookBlockRepeat(call, afterDenial, deps, err.reason);
       }
       throw err;
     }

@@ -113,6 +113,10 @@ export const SessionPhaseNameSchema = z.enum([
   // session-phase.test.ts parity enforces it.
   'compose_recovery_decision',
   'compose_leaf_tools_stripped',
+  // Hook-block repeat breaker trip (#3736). Emitted once when N consecutive
+  // PreToolUse blocks on the same gate key trip the breaker. metadata carries
+  // { tool, count, fork } where fork is true for forked children.
+  'hook_block_repeat_tripped',
   // Streaming connection opener diagnostics (opt-in AFK_CONNECT_RETRY_BUDGET_MS).
   // Must mirror the SessionPhaseName union in types.session-phase.ts;
   // session-phase.test.ts parity enforces it.

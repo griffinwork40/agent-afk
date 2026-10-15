@@ -102,6 +102,8 @@ export const TOOL_FAILURE_CLASSES = [
   'repeat-failure',
   /** The target the tool was asked to operate on does not exist (#75 follow-up). */
   'no-such-target',
+  /** N consecutive PreToolUse blocks on the same gate key with no success (#3736). */
+  'hook-block-repeat',
 ] as const;
 
 /**

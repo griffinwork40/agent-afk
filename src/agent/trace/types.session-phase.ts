@@ -292,7 +292,9 @@ export type SessionPhaseName =
   // happened; this makes it visible so operators can see which agent_type grants
   // were silently removed without inspecting the node's raw allowlist.
   // metadata: { agentType, strippedTools (comma-separated list) }
-  | 'compose_leaf_tools_stripped';
+  | 'compose_leaf_tools_stripped'
+  /** Hook-block repeat breaker trip (#3736). metadata: { tool, count, fork }. */
+  | 'hook_block_repeat_tripped';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

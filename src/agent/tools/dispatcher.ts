@@ -41,7 +41,7 @@ import { executeBatchImpl } from './dispatcher.execute-batch.js';
 import { PreToolContext } from './pre-tool-context.js';
 import {
   runPreDispatchGates as _runPreDispatchGates,
-  resetDenialBreaker as _resetDenialBreaker,
+  resetProgressBreakers as _resetProgressBreakers,
 } from './dispatcher.pre-dispatch-gates.js';
 import type {
   PreDispatchGateMutableState,
@@ -382,7 +382,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly gateState: PreDispatchGateMutableState = {
     repeatBreaker: null,
     suspectedLoopWindow: null as SuspectedLoopWindow | null,
-    denialBreaker: null,
+    denialBreaker: null, hookBlockRepeat: null,
   };
 
   /**
@@ -797,7 +797,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
   }
 
   private resetDenialBreaker(): void {
-    _resetDenialBreaker(this.gateState);
+    _resetProgressBreakers(this.gateState);
   }
 
   async execute(call: ToolCall): Promise<ToolResult> {
