@@ -68,6 +68,30 @@ export function sidecarFileName(data: SessionData): string {
 }
 
 /**
+ * Compute the encoded on-disk filename stem for a route.
+ *
+ * Shared by `saveSessionsToDisk` and `demandLoadSidecar` so both always agree
+ * on the canonical filename without duplicating the encoding logic.
+ *
+ * @param route - The route to encode.
+ * @returns The filename stem (without `.json` extension).
+ */
+export function routeFileStem(route: TelegramRoute): string {
+  return encodeRouteFilename(routeKey(route));
+}
+
+/**
+ * The legacy colon-named filename stem for a topic route.
+ *
+ * Used by `demandLoadSidecar` to fall back to the pre-fix POSIX filename when
+ * the canonical tilde-named file is absent. General routes return the same
+ * stem as `routeFileStem` (no colon).
+ */
+export function legacyRouteStem(route: TelegramRoute): string {
+  return routeKey(route);
+}
+
+/**
  * Load session data from disk into `sessionData`.
  *
  * Keys the in-memory map by the route recomputed from each file's payload
@@ -86,22 +110,27 @@ export async function loadSessionsFromDisk(
     await fs.mkdir(dataDir, { recursive: true });
     const files = await fs.readdir(dataDir);
 
-    for (const file of files) {
-      if (file.endsWith('.json')) {
-        const filePath = join(dataDir, file);
-        const content = await fs.readFile(filePath, 'utf-8');
-        const data: SessionData = JSON.parse(content);
-        // Invariant: derive the registry key from the JSON payload, not the
-        // filename, so both legacy colon-named files and new tilde-named files
-        // resolve to the same in-memory key.
-        const route: TelegramRoute = { chatId: data.chatId };
-        if (data.threadId !== undefined) route.threadId = data.threadId;
-        sessionData.set(routeKey(route), data);
-        try {
-          onEachRoute(route, data);
-        } catch {
-          // non-fatal: registry error should not skip remaining sidecars
-        }
+    // Invariant: process legacy colon-named files before tilde-named files so
+    // that, when both exist for the same route, the tilde-named (canonical)
+    // file always wins by overwriting the Map entry last.  `readdir` order is
+    // not guaranteed on all filesystems (e.g. ext4 hash-tree order), so we
+    // sort explicitly: ':' (0x3A) < '~' (0x7E) in ASCII — the desired order.
+    const jsonFiles = files.filter((f) => f.endsWith('.json')).sort();
+
+    for (const file of jsonFiles) {
+      const filePath = join(dataDir, file);
+      const content = await fs.readFile(filePath, 'utf-8');
+      const data: SessionData = JSON.parse(content);
+      // Derive the registry key from the JSON payload, not the filename, so
+      // both legacy colon-named and new tilde-named files resolve to the same
+      // in-memory key.
+      const route: TelegramRoute = { chatId: data.chatId };
+      if (data.threadId !== undefined) route.threadId = data.threadId;
+      sessionData.set(routeKey(route), data);
+      try {
+        onEachRoute(route, data);
+      } catch {
+        // non-fatal: registry error should not skip remaining sidecars
       }
     }
   } catch (error) {
@@ -114,6 +143,12 @@ export async function loadSessionsFromDisk(
 
 /**
  * Save session data to disk, one file per route (General -> `<chatId>.json`).
+ *
+ * Invariant: the legacy colon-named sibling (written by pre-fix POSIX code)
+ * is removed AFTER the new tilde-named file has been fully written and renamed
+ * into place. This ordering guarantees that a reader scanning the directory
+ * between the two operations always finds at least one valid file; it can
+ * never find zero files for a route that existed before the save.
  */
 export async function saveSessionsToDisk(
   dataDir: string,
@@ -121,9 +156,21 @@ export async function saveSessionsToDisk(
 ): Promise<void> {
   try {
     for (const data of sessionData.values()) {
+      const route: TelegramRoute = { chatId: data.chatId };
+      if (data.threadId !== undefined) route.threadId = data.threadId;
+      const key = routeKey(route);
       const filePath = join(dataDir, sidecarFileName(data));
       // Atomic write: writeJsonFileAsync uses tmp+rename (mkdirp by default).
       await writeJsonFileAsync(filePath, data);
+      // Remove any legacy colon-named sibling only for topic routes (General
+      // routes have no colon in their key so encodeRouteFilename is a no-op).
+      if (data.threadId !== undefined) {
+        const legacyPath = join(dataDir, `${key}.json`);
+        await fs.unlink(legacyPath).catch(() => {
+          // Best-effort: ENOENT is expected on fresh installs; any other error
+          // is non-fatal — the new file is already written.
+        });
+      }
     }
   } catch (error) {
     console.error('Failed to save sessions:', error);

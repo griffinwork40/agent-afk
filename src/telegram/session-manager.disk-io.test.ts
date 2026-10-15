@@ -231,4 +231,67 @@ describe('saveSessionsToDisk', () => {
     expect(loaded.has('900:7')).toBe(true);
     expect(loaded.get('900:7')!.threadId).toBe(7);
   });
+
+  it('removes the legacy colon-named file after saving a topic route', async () => {
+    // Simulate a pre-upgrade POSIX install that has a legacy colon file.
+    const data = makeSessionData(700, 9);
+    let wroteColonFile = false;
+    try {
+      fs.writeFileSync(path.join(dataDir, '700:9.json'), JSON.stringify(data));
+      wroteColonFile = true;
+    } catch {
+      // Windows: colon filenames are OS-rejected; cleanup path is untestable
+      // here, but the save itself must still succeed.
+    }
+
+    const sessionData = new Map([['700:9', data]]);
+    await saveSessionsToDisk(dataDir, sessionData);
+
+    // The canonical tilde file must always be written.
+    expect(fs.existsSync(path.join(dataDir, '700~9.json'))).toBe(true);
+
+    if (wroteColonFile) {
+      // On POSIX: the legacy file must have been removed.
+      expect(fs.existsSync(path.join(dataDir, '700:9.json'))).toBe(false);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// loadSessionsFromDisk — both filename forms present: encoded (tilde) wins
+// ---------------------------------------------------------------------------
+
+describe('loadSessionsFromDisk — determinism when both filename forms exist', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = makeTmpDir();
+  });
+
+  it('prefers the tilde-named file over the legacy colon-named file', async () => {
+    // Stale data in the legacy colon file, fresh data in the tilde file.
+    const staleData = makeSessionData(300, 4);
+    staleData.messageCount = 1;
+    const freshData = makeSessionData(300, 4);
+    freshData.messageCount = 99;
+
+    let wroteColonFile = false;
+    try {
+      fs.writeFileSync(path.join(dataDir, '300:4.json'), JSON.stringify(staleData));
+      wroteColonFile = true;
+    } catch {
+      // Windows: cannot write colon-named file.
+    }
+    fs.writeFileSync(path.join(dataDir, '300~4.json'), JSON.stringify(freshData));
+
+    const sessionData = new Map<string, SessionData>();
+    await loadSessionsFromDisk(dataDir, sessionData, () => {});
+
+    expect(sessionData.has('300:4')).toBe(true);
+    // Both platforms: the tilde (canonical) file must win.
+    expect(sessionData.get('300:4')!.messageCount).toBe(99);
+    if (wroteColonFile) {
+      expect(sessionData.get('300:4')!.messageCount).not.toBe(1);
+    }
+  });
 });
