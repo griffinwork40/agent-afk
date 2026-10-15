@@ -118,7 +118,7 @@ describe('live frame margin under AFK_CENTER_CONTENT (compositor owns the margin
       name: 'margin-probe',
       summary: 'Probe candidate for the live-frame margin guard',
       hint: 'margin probe hint',
-      handler: async () => ({ kind: 'noop' as const }),
+      handler: async () => 'continue' as const,
     });
   });
   afterEach(() => {

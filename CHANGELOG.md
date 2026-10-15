@@ -11,6 +11,21 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.316.3] - 2026-10-15
+
+### Fixed
+- repair test type errors from #3765 breaking lint:tests:check on main (#3788) (69f323a3)
+
+## [5.316.2] - 2026-10-15
+
+### Fixed
+- fix value/checked precedence, escape testId, wrap map callback, JSDoc, targeted tests (#3729) (c16ea0e0)
+
+### Changed
+- Delete .test-typecheck-baseline.json (5982190e)
+- Delete .commit-msg (ccf73716)
+- Delete themes/terax directory (8b4656cd)
+
 ## [5.316.1] - 2026-10-15
 
 ### Fixed
