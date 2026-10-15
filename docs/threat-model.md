@@ -101,7 +101,7 @@ commands at the OS level; Codex CLI runs with network off by default and scoped
 workspace writes. agent-afk does neither — see
 `src/agent/tools/hooks/bash-restriction-hook.ts:20-22` and
 docs/decisions/0001-bash-tool-path-containment.md for the accepted rationale.
-The deferred OS-sandbox work is tracked as C4 in CHANGELOG.md.
+The OS-sandbox work is tracked in #3845 (historically deferred as C4 in CHANGELOG.md).
 
 **Peer message sender identity is not authenticated.** Any process running as
 the same OS user can write an envelope with any sender ID. Trust rests entirely
