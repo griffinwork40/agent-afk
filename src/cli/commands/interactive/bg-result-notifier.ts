@@ -36,6 +36,7 @@ import type {
 } from '../../../agent/background-registry.js';
 import { extractOutputText } from '../../../agent/background-registry.result.js';
 import { redactSecrets } from '../../../agent/redact-secrets.js';
+import { escapeXml } from '../../../agent/peer/xml-escape.js';
 import { env, isPlainOutputRequested } from '../../../config/env.js';
 import { formatDuration } from '../../format-utils.js';
 import { DetachedToolNotifier } from './detached-tool-notifier.js';
@@ -60,19 +61,6 @@ const MAX_PENDING = 25;
  */
 export interface PendingBgAgentNotification {
   job: BackgroundJob;
-}
-
-/**
- * Minimal XML escaping for content inserted into the result envelope.
- * Guards against subagent output containing closing tags that would break
- * the envelope framing and inject arbitrary structure into model context —
- * same defense as ShellPassthrough's escapeXml (C-2).
- */
-function escapeXml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
 }
 
 /** Extract the model-facing output text from a settled job's result. */

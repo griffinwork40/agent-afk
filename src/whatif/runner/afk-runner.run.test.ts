@@ -470,13 +470,59 @@ describe('runEpisodeChild — done-event guard', () => {
 
   it('redacts secrets from stderr in the no-done-event error message', async () => {
     const stdout = ndjson([contentChunk('partial')]);
-    const stderr = 'key=sk-ant-api03-abc123xyz failed';
+    // Use a key whose suffix is ≥20 chars so the canonical sk-ant- pattern matches.
+    const stderr = 'key=sk-ant-api03-ABCDEFGHIJKLMNOPQRSTU failed';
     const trace = await runEpisodeChild({
       ...baseArgs,
       spawnImpl: makeSpawnFn({ stdout, stderr }),
     });
     expect(trace.error).toMatch(/stream ended without a done event/);
-    expect(trace.error).not.toMatch(/sk-ant-api03-abc123xyz/);
+    expect(trace.error).not.toMatch(/sk-ant-api03-ABCDEFGHIJKLMNOPQRSTU/);
+    expect(trace.error).toMatch(/\[REDACTED\]/);
+  });
+
+  // ── #3838: canonical redactSecrets — non-Anthropic secrets ───────────────
+  // The whatif runner previously used a local sk-ant-only regex. Replacing it
+  // with the canonical redactSecrets ensures GitHub PATs, OpenAI keys, and
+  // Authorization: Bearer tokens are also scrubbed from error messages.
+
+  it('redacts a GitHub fine-grained PAT (ghp_ prefix) from stderr', async () => {
+    const token = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345678';
+    const stdout = ndjson([contentChunk('partial')]);
+    const stderr = `Authorization failed: ${token}`;
+    const trace = await runEpisodeChild({
+      ...baseArgs,
+      spawnImpl: makeSpawnFn({ stdout, stderr }),
+    });
+    expect(trace.error).not.toContain(token);
+    expect(trace.error).toMatch(/\[REDACTED\]/);
+  });
+
+  it('redacts an OpenAI sk- key from a nonzero-exit stderr', async () => {
+    const token = 'sk-proj-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefAB';
+    const stdout = ndjson([]);
+    const stderr = `invalid api key: ${token}`;
+    const trace = await runEpisodeChild({
+      ...baseArgs,
+      spawnImpl: makeSpawnFn({ stdout, stderr, exitCode: 1 }),
+    });
+    expect(trace.error).toMatch(/afk chat exited 1/);
+    expect(trace.error).not.toContain(token);
+    expect(trace.error).toMatch(/\[REDACTED\]/);
+  });
+
+  it('redacts an Authorization: Bearer token from a timeout stderr', async () => {
+    const token = 'Authorization: Bearer eyJhbGciOiJSUzI1NiJ9FAKE_NOT_REAL_PADDING';
+    const stdout = '';
+    const stderr = `request failed: ${token}`;
+    // Use a very short timeout so timedOut fires.
+    const trace = await runEpisodeChild({
+      ...baseArgs,
+      timeoutMs: 1,
+      spawnImpl: makeSpawnFn({ stdout, stderr, exitCode: 0 }),
+    });
+    // timedOut path OR exitCode path both redact — either way the token must vanish.
+    expect(trace.error).not.toContain('Bearer eyJhbGciOiJSUzI1NiJ9FAKE_NOT_REAL_PADDING');
     expect(trace.error).toMatch(/\[REDACTED\]/);
   });
 });

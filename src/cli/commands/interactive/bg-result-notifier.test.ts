@@ -327,6 +327,65 @@ describe('buildBgResultInjection', () => {
     expect(out).toContain('block');
     expect(out).toContain('duration="1s"');
   });
+
+  // ── #3838: attribute value escaping ──────────────────────────────────────
+  // The local escapeXml previously only escaped &, <, > — missing " and '
+  // which can break attribute values. Replaced with the canonical five-char
+  // escaper from src/agent/peer/xml-escape.ts.
+
+  it('escapes double-quote in jobId attribute value', () => {
+    const job = {
+      jobId: 'id-with-"quote"',
+      subagentId: 'sub-q',
+      label: 'test',
+      model: 'sonnet',
+      startedAt: 0,
+      endedAt: 1000,
+      status: 'completed' as const,
+      result: {
+        id: 'sub-q',
+        status: 'succeeded' as const,
+        message: { content: 'done', role: 'assistant' },
+      } as unknown as SubagentResult,
+    };
+    const out = buildBgResultInjection(job);
+    // The opening tag must not contain the raw " inside the jobId value.
+    // After escaping, the literal text 'id-with-"quote"' becomes
+    // 'id-with-&quot;quote&quot;' — no raw double-quote breaks the attribute.
+    const openTag = out.split('\n')[0] ?? '';
+    expect(openTag).not.toContain('id-with-"quote"');
+    expect(openTag).toContain('id-with-&quot;quote&quot;');
+  });
+
+  it('escapes <, >, &, and " in attribute values without breaking envelope structure', () => {
+    const adversarial = 'a"b<c>d&e';
+    const job = {
+      jobId: adversarial,
+      subagentId: 'sub-adv',
+      label: adversarial,
+      model: adversarial,
+      startedAt: 0,
+      endedAt: 500,
+      status: 'completed' as const,
+      result: {
+        id: 'sub-adv',
+        status: 'succeeded' as const,
+        message: { content: 'ok', role: 'assistant' },
+      } as unknown as SubagentResult,
+    };
+    const out = buildBgResultInjection(job);
+    // None of the raw special chars may appear unescaped in attribute positions
+    // (we check the opening tag line only to avoid counting body escapes)
+    const openTag = out.split('\n')[0] ?? '';
+    expect(openTag).not.toContain('"b<');
+    expect(openTag).not.toContain('>d&');
+    expect(openTag).toContain('&quot;');
+    expect(openTag).toContain('&lt;');
+    expect(openTag).toContain('&gt;');
+    expect(openTag).toContain('&amp;');
+    // Envelope still parses as well-formed: exactly one real closing tag
+    expect(out.match(/<\/background-subagent-result>/g)).toHaveLength(1);
+  });
 });
 
 describe('replCanAutoWake', () => {
