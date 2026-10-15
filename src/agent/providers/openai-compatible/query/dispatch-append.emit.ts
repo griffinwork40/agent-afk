@@ -16,7 +16,6 @@ import { buildToolCallCompletedPayload } from '../../shared/tool-call-trace.js';
 export async function* emitDispatchedToolOutputs({
   calls,
   dispatcherResults,
-  parseErrors,
   startTimes,
   traceWriter,
   subagentId,
@@ -24,8 +23,11 @@ export async function* emitDispatchedToolOutputs({
   results,
 }: {
   calls: readonly ToolCall[];
+  /**
+   * Index-aligned with `calls`. Parse-error calls (#3808) already carry their
+   * synthetic, never-dispatched result here (dispatch-append.parse-errors.ts).
+   */
   dispatcherResults: ToolResult[];
-  parseErrors: Map<string, string>;
   startTimes: Map<string, number>;
   traceWriter: TraceSink | undefined;
   subagentId: string | undefined;
@@ -34,17 +36,7 @@ export async function* emitDispatchedToolOutputs({
 }): AsyncGenerator<ProviderEvent, void> {
   for (let i = 0; i < calls.length; i++) {
     const call = calls[i]!;
-    let result = dispatcherResults[i]!;
-    // Layer parse-error diagnostics in front of the dispatcher result —
-    // the model needs to know its arguments were malformed.
-    const parseErr = parseErrors.get(call.id);
-    if (parseErr !== undefined) {
-      result = {
-        content: `${parseErr}\n--\n${result.content}`,
-        isError: true,
-        ...(result.truncated === true ? { truncated: true } : {}),
-      };
-    }
+    const result = dispatcherResults[i]!;
     results.push({ call, result });
 
     // Witness layer: tool_call.completed pairs with the .started event

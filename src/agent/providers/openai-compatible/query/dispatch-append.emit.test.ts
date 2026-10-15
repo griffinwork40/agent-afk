@@ -3,7 +3,6 @@
  *
  * Covers the core behaviours:
  *   - yields one tool.output event per call
- *   - prepends parse-error diagnostics and marks isError=true
  *   - yields a tool.diff event when result.render.diff is present
  *   - plumbs isError, batchIndex/batchSize, failureClass, and exitCode
  *   - pushes { call, result } pairs into the results array
@@ -43,7 +42,6 @@ describe('emitDispatchedToolOutputs', () => {
       emitDispatchedToolOutputs({
         calls,
         dispatcherResults,
-        parseErrors: new Map(),
         startTimes: new Map(),
         traceWriter: undefined,
         subagentId: undefined,
@@ -61,33 +59,6 @@ describe('emitDispatchedToolOutputs', () => {
     expect(results[1]?.call.id).toBe('c2');
   });
 
-  it('prepends parse-error diagnostics and sets isError=true', async () => {
-    const calls = [makeCall('c1')];
-    const dispatcherResults = [makeResult('original output')];
-    const results: { call: ToolCall; result: ToolResult }[] = [];
-
-    const events = await collect(
-      emitDispatchedToolOutputs({
-        calls,
-        dispatcherResults,
-        parseErrors: new Map([['c1', 'bad JSON']]),
-        startTimes: new Map(),
-        traceWriter: undefined,
-        subagentId: undefined,
-        sessionId: 'sess-1',
-        results,
-      }),
-    );
-
-    const out = events.find((e) => e.type === 'tool.output');
-    expect(out).toBeDefined();
-    // isError is spread from the modified result
-    expect((out as { isError?: boolean }).isError).toBe(true);
-    // The content should contain both the parse error and the original output
-    expect((out as { content: string }).content).toContain('bad JSON');
-    expect((out as { content: string }).content).toContain('original output');
-  });
-
   it('yields a tool.diff event when result.render.diff is present', async () => {
     const calls = [makeCall('c1', 'edit_file')];
     const dispatcherResults = [makeResult('ok', { render: { diff: '--- a\n+++ b\n' } })];
@@ -97,7 +68,6 @@ describe('emitDispatchedToolOutputs', () => {
       emitDispatchedToolOutputs({
         calls,
         dispatcherResults,
-        parseErrors: new Map(),
         startTimes: new Map(),
         traceWriter: undefined,
         subagentId: undefined,
@@ -127,7 +97,6 @@ describe('emitDispatchedToolOutputs', () => {
       emitDispatchedToolOutputs({
         calls,
         dispatcherResults,
-        parseErrors: new Map(),
         startTimes: new Map(),
         traceWriter: undefined,
         subagentId: undefined,
