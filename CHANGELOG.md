@@ -11,6 +11,53 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.317.0] - 2026-10-15
+
+### Added
+- read-only hooks view; config_get errors on unknown keys (#3735) (db3038da)
+
+### Fixed
+- drop redundant early-return, warn on partial mid-flight deletion, reorder collectAsyncIter, add direct unit tests (#3782) (9385e52b)
+
+## [5.316.4] - 2026-10-15
+
+### Fixed
+- document compose leaf tool restrictions (#3778) (1fa2e823)
+
+### Changed
+- restore .test-typecheck-baseline.json (2767) (#3793) (a43552fb)
+
+## [5.316.3] - 2026-10-15
+
+### Fixed
+- repair test type errors from #3765 breaking lint:tests:check on main (#3788) (69f323a3)
+
+## [5.316.2] - 2026-10-15
+
+### Fixed
+- fix value/checked precedence, escape testId, wrap map callback, JSDoc, targeted tests (#3729) (c16ea0e0)
+
+### Changed
+- Delete .test-typecheck-baseline.json (5982190e)
+- Delete .commit-msg (ccf73716)
+- Delete themes/terax directory (8b4656cd)
+
+## [5.316.1] - 2026-10-15
+
+### Fixed
+- distinguish recovered gate blocks from failed runs (#3781) (295e9b22)
+- reject fatal test typecheck input diagnostics (#3773) (000c958e)
+- make AFK_CENTER_CONTENT render as faithfully as non-centered mode (#3765) (e33892ff)
+- redact raw value from budget env warnings; say "finite" for Infinity (#3743) (14d97841)
+- tighten refusal guidance and clarify factory contracts (#3774) (42eda72b)
+- pin bug filing host and bound confirmation previews (#3776) (4275b6d3)
+
+### Changed
+- fix journal writer path in tracing section (#3787) (1e236048)
+- cover gh jq flag alternatives (#3777) (b15eac1e)
+- cover production dispatcher cwd setup (#3775) (adcb0671)
+- clarify root grants for unconfined forks (#3772) (1a76dde6)
+
 ## [5.316.0] - 2026-10-14
 
 ### Added

@@ -14,7 +14,7 @@ import { formatDropdownRow, formatHintRow } from './input/dropdown.js';
 import { stripGhostControlChars } from './input/suggest.js';
 import { palette } from './palette.js';
 import { MAX_DROPDOWN_ROWS } from './terminal-compositor.autocomplete.js';
-import { contentMargin } from './render/measure.js';
+import { contentBand, contentMargin } from './render/measure.js';
 import type { InputCoreState } from './input-core.js';
 import type { AutocompleteState } from './input/autocomplete-state.js';
 import type { SubmissionPayload } from './terminal-compositor.types.js';
@@ -282,7 +282,8 @@ export function renderDropdownRows(self: RenderHost): string[] {
   if (!ac?.dropdownOpen) return [];
   const cols = self.stdout.columns || 80;
   if (cols <= 40) return [];
-  const maxWidth = Math.min(cols - 4, 60);
+  // Band width (=== cols when centering is off) so `margin + row` fits.
+  const maxWidth = Math.min(contentBand(cols).width - 4, 60);
   const visibleCount = Math.min(
     ac.candidates.length - ac.viewportStart,
     MAX_DROPDOWN_ROWS,
@@ -298,7 +299,9 @@ export function renderDropdownRows(self: RenderHost): string[] {
   // dropdown floats at the same horizontal position as the input line.
   // The dropdown is rendered as frame text starting at column 0 (not
   // cursor-relative), so it needs the same margin the input line gets.
-  const pad = contentMargin();
+  // Margin from the compositor's own stdout width (never process.stdout), so a
+  // mock or secondary stream sees the same band as the rows it is painted on.
+  const pad = contentBand(cols).margin;
   const rows: string[] = [];
   for (let i = 0; i < visibleCount; i++) {
     const idx = ac.viewportStart + i;
@@ -309,7 +312,9 @@ export function renderDropdownRows(self: RenderHost): string[] {
     // Use displayWidth (not .length) so CJK/emoji candidate rows measure
     // display columns, matching the `cols` variable (also display columns).
     // UTF-16 .length under-counts wide chars and produces ghost/clip artifacts.
-    const rowWidth = displayWidth(stripAnsi(rowStr));
+    // Invariant: the margin is painted as literal spaces, so the physical
+    // height is ceil((margin + width) / cols) — see contentBand().
+    const rowWidth = pad.length + displayWidth(stripAnsi(rowStr));
     const softWraps = Math.max(0, Math.ceil(rowWidth / cols) - 1);
     rows.push(pad + rowStr);
     // Push blank placeholders so log-update's line count stays correct
@@ -351,12 +356,12 @@ export function renderHintRow(self: RenderHost): string | null {
   if (cols <= 40) return null;
   const selected = ac.candidates[ac.selectedIndex];
   if (!selected) return null;
-  const hintWidth = Math.min(cols - 4, 80);
+  const hintWidth = Math.min(contentBand(cols).width - 4, 80);
   // Reserve the slot with an empty row when the candidate has no hint
   // — formatHintRow returns null there, and a null return from this
   // function would let the row collapse out of the frame.
   // Content centering: prepend left margin so the hint aligns with the
   // dropdown rows and input line.
   const hint = formatHintRow(selected.hint, hintWidth);
-  return hint !== null ? contentMargin() + hint : '';
+  return hint !== null ? contentBand(cols).margin + hint : '';
 }
