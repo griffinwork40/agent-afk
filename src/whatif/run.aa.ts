@@ -73,7 +73,7 @@ export async function runAaPhase(
     runDir,
     limits: [
       'A/A calibration run: both arms used identical configuration.',
-      'An empty structural diff and no decisive verdicts confirm harness symmetry.',
+      'Structural snapshots only: no episodes ran and no predictions were scored, so this checks config symmetry, not verdict calibration.',
       ...hookIsolationLimits({ keepContextHooks: autoKeepContextHooks, structural }),
     ],
   };
