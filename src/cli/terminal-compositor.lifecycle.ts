@@ -104,6 +104,8 @@ export interface LifecycleHost {
   // Resize ghost-erase state + committed-band rows: read by arm()'s immediate
   // SIGWINCH subscriber to snapshot the pre-resize footprint for erase.
   lastKnownRows: number;
+  /** See field doc on the class (terminal-compositor.ts). */
+  lastKnownCols: number;
   pendingResizeErase: { top: number; bottom: number; origin?: 'width-only' | 'expand' } | null;
   /**
    * Set to `true` while a CPR (Cursor Position Report) reply is in-flight
