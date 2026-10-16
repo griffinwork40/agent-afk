@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -38,6 +38,10 @@ beforeEach(async () => {
   queueDir = await mkdtemp(join(tmpdir(), 'afk-handoff-expiry-queue-'));
   vi.mocked(pushIfConfigured).mockClear();
   resetExpirySweepThrottleForTests();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 function record(taskId: string, ageMs: number, overrides: Partial<HandoffRecord> = {}): HandoffRecord {
@@ -100,9 +104,28 @@ describe('expireHandoff', () => {
   });
 
   it('routes the notice to the chat/thread the question was sent to', async () => {
+    vi.stubEnv('AFK_TELEGRAM_ALLOWED_CHAT_IDS', '42,-100123');
     await writeHandoff(record('q-routed', 25 * HOUR, { route: { chatId: -100123, threadId: 7 } }), handoffsDir);
     expect(await expireHandoff('q-routed', { handoffsDir, queueDir, now: NOW })).toBe(true);
     expect(vi.mocked(pushIfConfigured).mock.calls[0]?.[1]).toEqual({ target: -100123, messageThreadId: 7 });
+  });
+
+  it('falls back to default routing when the routed chat is no longer allowlisted', async () => {
+    vi.stubEnv('AFK_TELEGRAM_ALLOWED_CHAT_IDS', '42');
+    await writeHandoff(record('q-revoked', 25 * HOUR, { route: { chatId: -100123, threadId: 7 } }), handoffsDir);
+    expect(await expireHandoff('q-revoked', { handoffsDir, queueDir, now: NOW })).toBe(true);
+    expect(pushIfConfigured).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(pushIfConfigured).mock.calls[0]?.[1]).toBeUndefined();
+  });
+
+  it('still notifies (default routing) and counts when route is null or malformed', async () => {
+    vi.stubEnv('AFK_TELEGRAM_ALLOWED_CHAT_IDS', '42');
+    await writeHandoff(record('q-nullroute', 25 * HOUR, { route: null as unknown as HandoffRecord['route'] }), handoffsDir);
+    await writeHandoff(record('q-badroute', 25 * HOUR, { route: { chatId: 'x' } as unknown as HandoffRecord['route'] }), handoffsDir);
+    expect(await expireStaleHandoffs({ handoffsDir, queueDir, now: NOW })).toBe(2);
+    expect(pushIfConfigured).toHaveBeenCalledTimes(2);
+    for (const call of vi.mocked(pushIfConfigured).mock.calls) expect(call[1]).toBeUndefined();
+    expect((await readHandoff('q-nullroute', handoffsDir))?.status).toBe('expired');
   });
 
   it('uses default routing when the record has no route', async () => {

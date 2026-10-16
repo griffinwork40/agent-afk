@@ -46,6 +46,8 @@ import {
 } from './handoff-store.js';
 import { setLeaseState } from './lease-store.js';
 import { pushIfConfigured } from '../../telegram/push.js';
+import { isChatAllowed, parseAllowedChatIds } from '../../telegram/allowlist.js';
+import { env } from '../../config/env.js';
 import { errorMessage } from '../../utils/errors.js';
 
 /**
@@ -136,17 +138,8 @@ export async function expireHandoff(
   const ageHours = Math.round((now - Date.parse(expired.createdAt)) / 3_600_000);
   // eslint-disable-next-line no-console
   console.error(`[handoff-expiry] expired stale handoff for task ${taskId} (age: ${ageHours}h)`);
-  // Send the notice where the question went (#1416): route.chatId is the chat
-  // the question was delivered to, so it was already resolved + allowlisted.
-  const route = expired.route;
-  const notice = buildExpiryNotice(expired, ageHours);
-  void (route !== undefined
-    ? pushIfConfigured(notice, {
-      target: route.chatId,
-      ...(route.threadId !== undefined ? { messageThreadId: route.threadId } : {}),
-    })
-    : pushIfConfigured(notice)
-  ).catch(() => undefined);
+  void pushIfConfigured(buildExpiryNotice(expired, ageHours), expiryNoticeRoute(expired.route))
+    .catch(() => undefined);
   return true;
 }
 
@@ -205,6 +198,25 @@ export function sweepExpiredHandoffs(
 export function resetExpirySweepThrottleForTests(): void {
   lastSweepAt = 0;
   sweepInFlight = false;
+}
+
+/**
+ * Push options for the expiry notice. The notice goes where the question went
+ * (#1416) only when the record's `route` is a well-formed object whose
+ * `chatId` is a finite number AND that chat is still in the inbound allowlist
+ * (`pushIfConfigured` does not re-validate explicit targets). Anything else (a
+ * missing, null, or malformed route, or a chat removed from the allowlist)
+ * falls back to default routing, so the notice is never lost or misdirected.
+ */
+export function expiryNoticeRoute(route: unknown): { target: number; messageThreadId?: number } | undefined {
+  if (route === null || typeof route !== 'object') return undefined;
+  const { chatId, threadId } = route as Record<string, unknown>;
+  if (typeof chatId !== 'number' || !Number.isFinite(chatId)) return undefined;
+  if (!isChatAllowed(chatId, parseAllowedChatIds(env.AFK_TELEGRAM_ALLOWED_CHAT_IDS))) return undefined;
+  return {
+    target: chatId,
+    ...(typeof threadId === 'number' && Number.isFinite(threadId) ? { messageThreadId: threadId } : {}),
+  };
 }
 
 function buildExpiryNotice(record: HandoffRecord, ageHours: number): string {
