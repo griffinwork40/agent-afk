@@ -471,7 +471,7 @@ describe('evaluateCommand', () => {
   // H-1: Medium-risk commands must now be blocked (only 'safe' is allowed)
   it('H-1: blocks medium-risk commands before execSync is called', () => {
     mockClassifyRisk.mockReturnValue('medium');
-    const result = evaluateCommand({ type: 'command', command: 'git status' });
+    const result = evaluateCommand({ type: 'command', command: 'mv source destination' });
     expect(result.met).toBe(false);
     expect(result.detail).toContain('blocked by risk classifier (medium risk)');
     expect(result.data?.blocked).toBe(true);

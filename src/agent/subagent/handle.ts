@@ -206,7 +206,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
    */
   /** @internal */ _billingReportedTotal: BillingUsage | undefined;
   /** @internal — per-subagent conversation log writer. Set by SubagentManager after construction. */
-  /** @internal */ _logWriter?: { write(event: OutputEvent): void; close(): Promise<void> };
+  _logWriter?: { write(event: OutputEvent): void; close(): Promise<void> };
 
   /** @internal — positional argument order is not part of any public contract. */
   constructor(

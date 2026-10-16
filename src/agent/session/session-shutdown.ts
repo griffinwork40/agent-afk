@@ -65,6 +65,7 @@ export class SessionShutdown {
    *   2. Emit the `closure` trace event.
    *   3. Seal the trace writer (top-level sessions only).
    *   4. Dispatch the SessionEnd hook.
+   *   5. Await background SessionEnd handlers (top-level, non-reset only).
    *
    * Both (2) and (3) swallow writer errors so a broken sink never masks the
    * real session-end reason from downstream observers.
@@ -168,5 +169,18 @@ export class SessionShutdown {
       // above) — the writer is sealed, so the hook_decision write would throw.
       config.traceWriter && !ownsTraceSeal ? { traceWriter: config.traceWriter } : {},
     );
+
+    // Invariant: `reset` (`/clear`) must NOT await background SessionEnd
+    // handlers. That is the whole point of the lane: the SPINE classifier's
+    // model call (measured 1-5s) used to sit between `/clear` and the screen
+    // clear. The REPL process outlives a reset, so the chain finishes while
+    // the next conversation runs. Every other reason (close, error) awaits
+    // the chain so one-shot / daemon / Telegram teardown keeps its old
+    // complete-before-return behaviour, and that includes work a prior
+    // `/clear` queued. Forks share the parent's registry, so a child must
+    // never drain: it would block on the parent's queued work.
+    if (reason !== 'reset' && config.parentSessionId === undefined) {
+      await getHookRegistry()?.drainBackground?.();
+    }
   }
 }

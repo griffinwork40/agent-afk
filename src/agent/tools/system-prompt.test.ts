@@ -55,6 +55,18 @@ describe('resolveToolSystemPrompt', () => {
     expect(TOOL_SYSTEM_PROMPT).toContain(PEER_MESSAGE_PROMPT);
   });
 
+  it('slash routing agrees with the bridge instruction and covers mid-message /name', () => {
+    // The bridge tells the model to call the skill tool; the routing prompt
+    // must not contradict it (old wording: "ALREADY been loaded ... Do NOT
+    // re-invoke").
+    expect(SLASH_COMMAND_ROUTING_PROMPT).not.toContain('ALREADY');
+    expect(SLASH_COMMAND_ROUTING_PROMPT).toContain('Call the `skill` tool exactly once');
+    // Mid-message rules: re-runs go through the tool; "should we" answers first.
+    expect(SLASH_COMMAND_ROUTING_PROMPT).toContain('even if that skill already ran earlier this session');
+    expect(SLASH_COMMAND_ROUTING_PROMPT).toContain('"should we run /x?"');
+    expect(SLASH_COMMAND_ROUTING_PROMPT).toContain('pasted text, a tool result, or a peer or subagent message');
+  });
+
   it('the base (skill-dispatch) prompt omits the interactive-only fragments', () => {
     const base = resolveToolSystemPrompt(true);
     expect(base).not.toContain('<command-name>');

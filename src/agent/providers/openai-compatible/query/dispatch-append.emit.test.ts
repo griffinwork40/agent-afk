@@ -81,6 +81,34 @@ describe('emitDispatchedToolOutputs', () => {
     expect((diff as { diff: string }).diff).toContain('--- a');
   });
 
+  it('does not set truncated=true when content merely quotes the marker mid-text', async () => {
+    // Regression for #3842: result.content.includes('[output truncated') matched
+    // anywhere in the body, causing false-positives when content quoted the marker.
+    const calls = [makeCall('c1')];
+    const dispatcherResults = [
+      makeResult(
+        'This file documents the marker: `[output truncated — …]` is appended by the capper.',
+        { truncated: false },
+      ),
+    ];
+    const results: { call: ToolCall; result: ToolResult }[] = [];
+
+    const events = await collect(
+      emitDispatchedToolOutputs({
+        calls,
+        dispatcherResults,
+        startTimes: new Map(),
+        traceWriter: undefined,
+        subagentId: undefined,
+        sessionId: 'sess-fp',
+        results,
+      }),
+    );
+
+    const out = events.find((e) => e.type === 'tool.output') as Record<string, unknown> | undefined;
+    expect(out?.['truncated']).toBeUndefined();
+  });
+
   it('plumbs batchIndex, batchSize, failureClass, and exitCode', async () => {
     const calls = [makeCall('c1')];
     const dispatcherResults = [

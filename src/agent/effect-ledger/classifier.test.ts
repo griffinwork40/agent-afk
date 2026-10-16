@@ -16,6 +16,21 @@ describe('classifyToolCall — always-external tools', () => {
     expect(c.operationType).toBe('send_telegram');
   });
 
+  it('remote_agent is always external', () => {
+    const c = classifyToolCall('remote_agent', { host: 'box', prompt: 'do something' });
+    expect(c.isExternal).toBe(true);
+    expect(c.operationType).toBe('remote_agent');
+  });
+
+  it('remote_agent with a lost connection is still external (isError result recorded as unknown)', () => {
+    // The post-hook sees isError=true from a dropped-connection outcome and
+    // records status='unknown'. Verify the classifier marks it external so the
+    // hook layer is reached at all.
+    const c = classifyToolCall('remote_agent', { host: 'box', prompt: 'do something', resume: 'abc-123' });
+    expect(c.isExternal).toBe(true);
+    expect(c.operationType).toBe('remote_agent');
+  });
+
   it('mcp__ prefixed tools are external', () => {
     const c = classifyToolCall('mcp__github__create_issue', {});
     expect(c.isExternal).toBe(true);

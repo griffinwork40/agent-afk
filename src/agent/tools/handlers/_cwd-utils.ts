@@ -18,6 +18,7 @@ import {
 } from './read-denylist.js';
 import { assertNotDenylisted } from './write-denylist.js';
 import { isEnoent, isErrnoCode } from '../../../utils/errors.js';
+import { isWithinScratchRoot } from './scratch-roots.js';
 
 // Invariant: symlink containment must be resolved at the filesystem level, not
 // lexically. A symlink that lives INSIDE a granted root but points OUTSIDE it
@@ -82,8 +83,9 @@ export function _resetRootRealpathCacheForTests(): void {
  *   realpath is used internally for the containment comparison only, never
  *   returned, so callers get back the same string `resolveAndContain` returns.
  * - `restricted: false` when the session is in bypass mode (`allowAll`), is
- *   unconfined (`resolveBase === undefined`), or the resolved path is inside at
- *   least one allowed root.
+ *   unconfined (`resolveBase === undefined`), the resolved path is inside at
+ *   least one allowed root, or (write mode only) its realpath is inside the
+ *   OS temp dir (`scratch-roots.ts`).
  * - `restricted: true` when a confined session's path escapes every root.
  * - `roots` is the effective allow-list that was compared against (`[]` for the
  *   bypass / unconfined fast-paths, which never consult roots).
@@ -133,9 +135,10 @@ function computeContainment(
   const realAbs = realpathSafe(abs);
 
   // Invariant: `readRoots ?? [resolveBase]` — `[] ?? x` stays `[]`, so a
-  // confined session with EMPTY roots denies every path. That empty-roots
-  // deny-all is deliberate (a fork with no grants reads/writes nothing); do NOT
-  // "fix" it by treating `[]` as "fall back to [resolveBase]".
+  // confined session with EMPTY roots denies every path (writes excepted only
+  // for the OS temp dir, the implicit scratch root below). That empty-roots
+  // deny-all is deliberate (a fork with no grants touches nothing but scratch);
+  // do NOT "fix" it by treating `[]` as "fall back to [resolveBase]".
   const roots: string[] =
     mode === 'read'
       ? (context?.readRoots ?? [resolveBase])
@@ -161,6 +164,17 @@ function computeContainment(
     if (!rel.startsWith('..') && !path.isAbsolute(rel)) {
       return { restricted: false, resolved: abs, roots };
     }
+  }
+
+  // Invariant: the OS temp dir is an implicit WRITE root for every confined
+  // session, checked AFTER the granted roots and against the REALPATH'd
+  // candidate, so a temp-dir symlink into a credential dir resolves out of the
+  // allowance first. Containment only: the write-denylist floor still runs in
+  // every write handler afterwards. WRITE mode only: read scope is a separate
+  // axis (`subagent-read-scope.ts`) whose grants this change does not touch.
+  // Rationale + telemetry: `./scratch-roots.ts`.
+  if (mode === 'write' && isWithinScratchRoot(realAbs)) {
+    return { restricted: false, resolved: abs, roots };
   }
 
   // All roots rejected.

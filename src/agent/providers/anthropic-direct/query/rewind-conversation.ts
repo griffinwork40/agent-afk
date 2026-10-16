@@ -5,9 +5,11 @@
  *
  * Two pure operations over `state.messages`:
  *
- *   - {@link listUserTurns} — enumerate the genuine user-text turns
- *     (skipping pure `tool_result` user messages), newest-first, with a
- *     short single-line preview. Read-only.
+ *   - {@link listUserTurns} — enumerate the user-authored turns, newest-first,
+ *     with a short single-line preview. Read-only. "User-authored" is the
+ *     shared structural rule in `agent/content/user-authored.ts`: any message
+ *     carrying a `tool_result` block is a tool-round carrier, never a target,
+ *     whatever harness text (queued messages, `[vitals]`) rides beside it.
  *
  *   - {@link rewindConversationHistory} — discard a chosen user turn and
  *     everything after it, then run {@link repairOrphanToolUses} so the new
@@ -28,40 +30,17 @@
  * @module agent/providers/anthropic-direct/query/rewind-conversation
  */
 
-import type { ContentBlockParam, MessageParam } from '@anthropic-ai/sdk/resources';
+import type { MessageParam } from '@anthropic-ai/sdk/resources';
 import type {
   ProviderRewindConversationResult,
   RewindTarget,
 } from '../../../provider.js';
 import { repairOrphanToolUses } from './repair-orphan-tool-uses.js';
+import { isUserAuthoredTurn, messageText } from '../../../content/user-authored.js';
 import type { SessionState } from './session-state.js';
 import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 
 const PREVIEW_MAX_CHARS = 72;
-
-/** Concatenate the text blocks of a user message into a single string. */
-function extractUserText(content: MessageParam['content']): string {
-  if (typeof content === 'string') return content;
-  const parts: string[] = [];
-  for (const block of content as ContentBlockParam[]) {
-    if (block.type === 'text' && typeof block.text === 'string') {
-      parts.push(block.text);
-    }
-  }
-  return parts.join(' ');
-}
-
-/**
- * A "genuine" user turn is one the user actually typed — role `user` with at
- * least one non-empty text block. Pure `tool_result` user messages (the
- * synthetic turns that carry tool output back to the model) are excluded:
- * they are not rewind targets and truncating at one would strand the paired
- * `tool_use`.
- */
-function isGenuineUserTurn(message: MessageParam): boolean {
-  if (message.role !== 'user') return false;
-  return extractUserText(message.content).trim().length > 0;
-}
 
 /** Collapse whitespace to single spaces and truncate for a one-line preview. */
 function toPreview(text: string): string {
@@ -79,8 +58,8 @@ export function listUserTurns(messages: readonly MessageParam[]): RewindTarget[]
   const targets: RewindTarget[] = [];
   for (let i = 0; i < messages.length; i++) {
     const message = messages[i];
-    if (message && isGenuineUserTurn(message)) {
-      targets.push({ turnIndex: i, preview: toPreview(extractUserText(message.content)) });
+    if (message && isUserAuthoredTurn(message)) {
+      targets.push({ turnIndex: i, preview: toPreview(messageText(message.content)) });
     }
   }
   // Newest-first so the most-recent prompt sits at the top of the picker.
@@ -115,11 +94,11 @@ export function rewindConversationHistory(
     return { rewound: false, reason: 'invalid-target', messagesBefore, messagesAfter: messagesBefore };
   }
   const target = state.messages[turnIndex];
-  if (!target || !isGenuineUserTurn(target)) {
+  if (!target || !isUserAuthoredTurn(target)) {
     return { rewound: false, reason: 'invalid-target', messagesBefore, messagesAfter: messagesBefore };
   }
 
-  const reloadText = extractUserText(target.content);
+  const reloadText = messageText(target.content);
 
   // Discard the target user turn and everything after it, in place.
   state.messages.splice(turnIndex);

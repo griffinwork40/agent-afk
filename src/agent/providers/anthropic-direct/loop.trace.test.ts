@@ -143,7 +143,11 @@ describe('loop.ts runTurn — witness-layer tool_call emission', () => {
       },
     };
     const dispatcher = makeDispatcher(async () => ({
-      content: 'partial...[output truncated — exceeded 100KB]',
+      // A realistic sentinel as emitted by HARD_CAP_KILL_NOTE / scanCapKillNote —
+      // contains `[output truncated — … terminated…]` near the tail. No
+      // structured `truncated` flag, so the content fallback must fire.
+      content:
+        'partial output\n[output truncated — command exceeded the 8000000-byte output cap and was terminated. Use a narrower command.]',
       isError: true,
     }));
 
@@ -239,6 +243,60 @@ describe('loop.ts runTurn — witness-layer tool_call emission', () => {
       throw new Error('expected tool.output event');
     }
     expect(toolOutput.truncated).toBe(true);
+  });
+
+  it('does not set truncated=true when content merely quotes the marker mid-text', async () => {
+    // Regression for #3842: the old `result.content.includes('[output truncated')`
+    // check matched anywhere in the body, causing false-positives when a tool
+    // result (e.g. read_file of _output-cap.ts) quoted the sentinel mid-string.
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    let callIdx = 0;
+    const streams = [
+      () => fromArray(makeToolUseStream('tu_fp', 'read_file', '{}')),
+      () => fromArray(makeTextStream('done', 'end_turn')),
+    ];
+    const client: AnthropicClientLike = {
+      messages: {
+        create: vi.fn(() => streams[callIdx++ % streams.length]!()),
+      },
+    };
+    // Content quotes the marker mid-string but is NOT truncated.
+    const dispatcher = makeDispatcher(async () => ({
+      content: 'The capper appends `[output truncated — …]` to killed output.',
+      truncated: false,
+    }));
+
+    const events = await collect(
+      runTurn({
+        client,
+        messages: [{ role: 'user', content: 'read' }],
+        system: null,
+        tools: [{ name: 'read_file', input_schema: { type: 'object' } }],
+        toolDispatcher: dispatcher,
+        model: 'claude-test',
+        maxTokens: 1024,
+        headers: {},
+        signal: new AbortController().signal,
+        ctx,
+        traceWriter: writer,
+      }),
+    );
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const completed = writer.events.find(
+      (e) => e.kind === 'tool_call' && e.payload.phase === 'completed',
+    );
+    if (completed?.kind !== 'tool_call' || completed.payload.phase !== 'completed') {
+      throw new Error('unreachable');
+    }
+    expect(completed.payload.truncated).toBe(false);
+
+    const toolOutput = events.find((e) => e.type === 'tool.output');
+    if (toolOutput?.type !== 'tool.output') throw new Error('expected tool.output event');
+    expect(toolOutput.truncated).toBeUndefined();
   });
 
   it('emits no tool_call events when traceWriter is absent', async () => {

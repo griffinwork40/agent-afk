@@ -63,34 +63,18 @@ describe('classifyDoneEvidence – bash write after passing test (Scenario 4)', 
    * Desired behaviour: should be 'unverified' — the artifact was mutated via
    * bash AFTER the test passed, so the earlier pass no longer certifies it.
    */
-  it.fails(
-    'should return "unverified" when bash mutates the file after the test passed [DEFECT: bash writes excluded from lastMutationIndex]',
-    () => {
-      const events: ToolEventMin[] = [
-        { toolName: 'edit_file', input: 'src/foo.ts', isError: false },
-        { toolName: 'bash', input: 'pnpm test src/foo.test.ts', isError: false },
-        // Agent runs a bash command that writes to the file AFTER tests passed.
-        // bash is excluded from CODE_MUTATION_TOOLS so classifyDoneEvidence
-        // cannot see this mutation.
-        { toolName: 'bash', input: 'sed -i "s/foo/bar/g" src/foo.ts', isError: false },
-      ];
-      // Desired: 'unverified' — the post-test bash write invalidates the earlier pass
-      expect(classifyDoneEvidence(events)).toBe('unverified');
-    },
-  );
-
   it(
-    'current behaviour (status-quo pin): returns "verified" when bash mutates file after test [bash excluded from mutation tracking]',
+    'returns "unverified" when bash mutates the file after the test passed',
     () => {
       const events: ToolEventMin[] = [
         { toolName: 'edit_file', input: 'src/foo.ts', isError: false },
         { toolName: 'bash', input: 'pnpm test src/foo.test.ts', isError: false },
+        // A bash command that writes to the file AFTER tests passed.
+        // classifyBashCommand detects `sed -i` as mutating, so lastMutationIndex
+        // advances past the test run and the result is 'unverified'.
         { toolName: 'bash', input: 'sed -i "s/foo/bar/g" src/foo.ts', isError: false },
       ];
-      // DEFECT: returns 'verified' because bash is not in CODE_MUTATION_TOOLS;
-      // the pnpm-test still appears to be the last "relevant" event after the
-      // edit_file mutation. This test flips to a failure when the defect is fixed.
-      expect(classifyDoneEvidence(events)).toBe('verified');
+      expect(classifyDoneEvidence(events)).toBe('unverified');
     },
   );
 
@@ -114,27 +98,14 @@ describe('classifyDoneEvidence – bash write after passing test (Scenario 4)', 
 // ---------------------------------------------------------------------------
 
 describe('doneHasCorroboratingEvidence – bash write after passing test (Scenario 4)', () => {
-  it.fails(
-    'should return false when bash mutates artifact after test passed [DEFECT: bash writes excluded from mutation tracking]',
-    () => {
-      const events: ToolEventMin[] = [
-        { toolName: 'edit_file', input: 'src/foo.ts', isError: false },
-        { toolName: 'bash', input: 'pnpm test', isError: false },
-        { toolName: 'bash', input: 'echo "// extra" >> src/foo.ts', isError: false },
-      ];
-      // Desired: false — post-test bash mutation means the test no longer certifies the artifact
-      expect(doneHasCorroboratingEvidence(events)).toBe(false);
-    },
-  );
-
-  it('current behaviour (status-quo pin): returns true when bash writes after test [bash not tracked as mutation]', () => {
+  it('returns false when bash mutates artifact after test passed', () => {
     const events: ToolEventMin[] = [
       { toolName: 'edit_file', input: 'src/foo.ts', isError: false },
       { toolName: 'bash', input: 'pnpm test', isError: false },
+      // `echo … >>` is an output redirection — classifyBashCommand marks it mutating.
       { toolName: 'bash', input: 'echo "// extra" >> src/foo.ts', isError: false },
     ];
-    // DEFECT: returns true because bash post-test write is invisible to the classifier.
-    expect(doneHasCorroboratingEvidence(events)).toBe(true);
+    expect(doneHasCorroboratingEvidence(events)).toBe(false);
   });
 });
 
@@ -146,56 +117,30 @@ describe('doneHasCorroboratingEvidence – bash write after passing test (Scenar
 // ---------------------------------------------------------------------------
 
 describe('lfVerification – bash write after passing test (Scenario 4)', () => {
-  it.fails(
-    'should not return a positive verification when bash mutates file after test [DEFECT: bash excluded from WRITE_TOOLS]',
-    () => {
-      const turns: Turn[] = [
-        makeTurn([
-          { toolName: 'write_file', input: 'src/foo.ts', isError: false },
-          // Test passes
-          {
-            toolName: 'bash',
-            input: 'pnpm test',
-            isError: false,
-            resultTail: '1 passed (1)',
-          },
-          // Agent then writes a bash command that mutates the artifact on disk.
-          // WRITE_TOOLS does not include bash, so lfVerification cannot see this.
-          { toolName: 'bash', input: 'printf "export const x = 2;" > src/foo.ts', isError: false },
-        ]),
-      ];
-
-      const vote = lfVerification(turns, NOW);
-      // Desired: no positive verification — the artifact was mutated after the
-      // test; the earlier pass is stale. Under fix option 1 (bash counted as a
-      // write tool) lfVerification returns null because no verification is found
-      // after the post-test bash write (lastWriteIdx advances past the test).
-      // Under fix option 2 (content-hash comparison) vote.vote would be -1.
-      // Both outcomes satisfy: result is not a positive verification.
-      expect(vote === null || vote.vote !== 1).toBe(true);
-    },
-  );
-
-  it('current behaviour (status-quo pin): returns vote +1 even when bash modifies artifact after test [WRITE_TOOLS excludes bash]', () => {
+  it('does not return a positive verification when bash mutates file after test', () => {
     const turns: Turn[] = [
       makeTurn([
         { toolName: 'write_file', input: 'src/foo.ts', isError: false },
+        // Test passes
         {
           toolName: 'bash',
           input: 'pnpm test',
           isError: false,
           resultTail: '1 passed (1)',
         },
-        // Post-test bash write — invisible to lfVerification's lastWriteIdx scan
+        // Bash output-redirect after the test — classifyBashCommand marks it
+        // mutating (output redirection to a real path), so lastWriteIdx advances
+        // past the test run. lfVerification finds no verification after the new
+        // lastWriteIdx and returns null (no positive vote).
         { toolName: 'bash', input: 'printf "export const x = 2;" > src/foo.ts', isError: false },
       ]),
     ];
 
     const vote = lfVerification(turns, NOW);
-    // DEFECT: returns +1 ("verified") because the pnpm test resultTail is
-    // parsed as a pass and the bash write after it is not tracked.
-    expect(vote).not.toBeNull();
-    expect(vote!.vote).toBe(1);
+    // Option 1 fix: lastWriteIdx advances past the test → no verification found → null.
+    // Option 2 (content-hash, out of scope) would produce vote -1.
+    // Both satisfy: not a positive verification.
+    expect(vote === null || vote.vote !== 1).toBe(true);
   });
 
   /**

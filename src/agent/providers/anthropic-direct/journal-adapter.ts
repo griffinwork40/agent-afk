@@ -40,6 +40,7 @@ import type {
 } from '../../journal/index.js';
 import { JournalProvenance, readResultFlags, tagResultFlags } from '../../journal/index.js';
 import { filterContentBlocks } from './resolve-params.js';
+import { hasToolResultBlock } from '../../content/user-authored.js';
 
 /** Provider family stamped on thinking blocks this adapter writes. */
 export const ANTHROPIC_ORIGIN = 'anthropic';
@@ -248,9 +249,22 @@ export const anthropicJournalAdapter: JournalAdapter<MessageParam> = {
         continue;
       }
       const prev = out[out.length - 1];
-      // Anthropic requires role alternation: merge consecutive same-role
-      // messages (cross-provider journals, or a message emptied above).
-      if (prev && last && prev.role === native.role) {
+      // Invariant: merge consecutive same-role messages (cross-provider
+      // journals, or a message emptied above) with ONE exception: a user
+      // message carrying no tool_result keeps its boundary after a tool-result
+      // carrier. That is the exact shape a live session sends (loop/
+      // inter-round.ts pushes mid-turn steering as its own text-only user
+      // message after the carrier), so resume reproduces the live history
+      // instead of folding the steering text into the carrier, where
+      // isUserAuthoredTurn would reject it and hide it from the rewind picker
+      // (test: journal-resume-merged-steering). Consecutive tool-result
+      // carriers still merge, so every tool_result for a round stays in the
+      // single user message that answers its tool_use turn.
+      const keepSteeringBoundary = prev !== undefined
+        && native.role === 'user'
+        && hasToolResultBlock(prev.content)
+        && !hasToolResultBlock(native.content);
+      if (prev && last && prev.role === native.role && !keepSteeringBoundary) {
         prev.content = [...(prev.content as ContentBlockParam[]), ...(native.content as ContentBlockParam[])];
         last.push(m);
       } else {
