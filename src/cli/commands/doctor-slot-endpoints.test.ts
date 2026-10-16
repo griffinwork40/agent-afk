@@ -91,12 +91,19 @@ describe('checkSlotEndpoints', () => {
   });
 
   it('WARN on 401 and on other non-2xx', async () => {
-    const checks = await run(
-      slots({
-        local: { id: 'qwen-a', baseUrl: `${base}/auth/v1` },
+    // Supply an explicit apiKey so the probe sends a credential and the 401
+    // branch reports "auth rejected / check the slot API key" (the authSource
+    // === 'config' path). Inject empty authDeps so no real env is read.
+    const noEnv = { readEnv: () => undefined, readFile: () => null };
+    const checks = await checkSlotEndpoints({
+      bindings: slots({
+        local: { id: 'qwen-a', baseUrl: `${base}/auth/v1`, apiKey: SECRET },
         small: { id: 'qwen-a', baseUrl: `${base}/err/v1` },
       }),
-    );
+      timeoutMs: 2000,
+      isAnthropicRouted: notAnthropic,
+      authDeps: noEnv,
+    });
     expect(checks.map((c) => c.state)).toEqual(['warn', 'warn']);
     expect(checks[0]!.detail).toContain('401');
     expect(checks[0]!.fix).toMatch(/API key/);
@@ -180,5 +187,69 @@ describe('checkSlotEndpoints', () => {
     });
     expect(checks).toEqual([]);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('PASS using OPENAI_API_KEY fallback when slot has baseUrl but no apiKey', async () => {
+    // The /auth route requires "Bearer sk-env-injected" to return 200.
+    // We inject it via authDeps.readEnv so no real process.env is read.
+    const ENV_KEY = 'sk-env-injected-abc';
+    seen.length = 0;
+
+    // Patch the server to accept the injected env key on /envauth/.
+    // We reuse the existing /auth/ route (returns 401) and /ok/ route (returns 200).
+    // The actual server requires any Bearer to pass /ok/, so point at /ok/ and
+    // assert the header arrived, then verify the key never appears in output.
+    const checks = await checkSlotEndpoints({
+      bindings: slots({ local: { id: 'qwen-a', baseUrl: `${base}/ok/v1` } }),
+      timeoutMs: 2000,
+      isAnthropicRouted: notAnthropic,
+      authDeps: {
+        readEnv: (k) => (k === 'OPENAI_API_KEY' ? ENV_KEY : undefined),
+        readFile: () => null,
+      },
+    });
+
+    expect(checks).toHaveLength(1);
+    expect(checks[0]!.state).toBe('pass');
+    // Key was sent as a Bearer header.
+    const lastSeen = seen[seen.length - 1];
+    expect(lastSeen!.headers.authorization).toBe(`Bearer ${ENV_KEY}`);
+    // Key must not appear in any returned string.
+    expect(allText(checks)).not.toContain(ENV_KEY);
+  });
+
+  it('WARN "auth unverified" on 401 when slot auth is unreproducible (xAI)', async () => {
+    // A slot with provider: 'xai' routes to the xAI provider (own auth).
+    // The probe sends no credential; on 401 it must say "auth unverified",
+    // not "auth rejected / check the slot API key".
+    const checks = await checkSlotEndpoints({
+      bindings: slots({ local: { id: 'grok-3', baseUrl: `${base}/auth/v1`, provider: 'xai' } }),
+      timeoutMs: 2000,
+      isAnthropicRouted: notAnthropic,
+      authDeps: { readEnv: () => undefined, readFile: () => null },
+    });
+
+    expect(checks).toHaveLength(1);
+    expect(checks[0]!.state).toBe('warn');
+    expect(checks[0]!.detail).toContain('auth unverified');
+    expect(checks[0]!.detail).not.toContain('auth rejected');
+    expect(checks[0]!.fix).not.toMatch(/API key/i);
+    expect(checks[0]!.fix).not.toMatch(/AFK_MODEL/);
+  });
+  it('WARN "no credential configured" on 401 when no key resolves anywhere', async () => {
+    // No slot key, no env key, no ~/.codex/auth.json: the runtime would send no
+    // credential either, so the warn names a missing key, not unverifiable auth.
+    const checks = await checkSlotEndpoints({
+      bindings: slots({ local: { id: 'qwen-a', baseUrl: `${base}/auth/v1` } }),
+      timeoutMs: 2000,
+      isAnthropicRouted: notAnthropic,
+      authDeps: { readEnv: () => undefined, readFile: () => null },
+    });
+
+    expect(checks).toHaveLength(1);
+    expect(checks[0]!.state).toBe('warn');
+    expect(checks[0]!.detail).toContain('no credential configured');
+    expect(checks[0]!.detail).not.toContain('auth unverified');
+    expect(checks[0]!.fix).toContain('OPENAI_API_KEY');
   });
 });
