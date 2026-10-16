@@ -6,11 +6,13 @@
  * `exec /bin/sh -s`. This bypasses the remote login shell entirely — sshd
  * passes the fixed string `exec /bin/sh -s` to the user's login shell for
  * parsing, which is safe because it contains no caller-supplied data. The
- * script itself arrives on stdin, so quoting differences between POSIX sh,
- * bash, and fish in the login shell cannot affect script content. Options:
- * `BatchMode=yes` (never prompt for a password), `ConnectTimeout=5` (a
- * sleeping host fails fast), and ServerAlive probes (a dead link is noticed
- * within ~45 s, which is what lets the follow loop reconnect).
+ * script itself arrives on stdin, which ssh pipes directly to the remote process
+ * without shell re-parsing. All caller-supplied payloads (prompt, keychain
+ * password) are embedded INSIDE the script as quoted heredocs — nothing follows
+ * the script on stdin. Options: `BatchMode=yes` (never prompt for a password),
+ * `ConnectTimeout=5` (a sleeping host fails fast), and ServerAlive probes (a
+ * dead link is noticed within ~45 s, which is what lets the follow loop
+ * reconnect).
  *
  * @module remote/ssh-runner
  */
@@ -25,7 +27,6 @@ export interface SshExecResult {
 }
 
 export interface SshExecOptions {
-  stdin?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
 }
@@ -70,13 +71,9 @@ function spawnSsh(
   script: string,
   signal: AbortSignal | undefined,
   onStdout: (chunk: string, stop: () => void) => void,
-  stdin?: string,
   timeoutMs?: number,
   collectStdout = true,
 ): Promise<SshExecResult> {
-  // Prepend the script to stdin so /bin/sh -s reads it; caller-supplied stdin
-  // (e.g. the prompt text) follows after a newline separator.
-  const fullStdin = stdin !== undefined ? `${script}\n${stdin}` : script;
   return new Promise((resolve) => {
     const child = spawn('ssh', sshArgs(target), { stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
@@ -116,7 +113,8 @@ function spawnSsh(
     });
     child.on('close', (code) => finish(code));
     child.stdin.on('error', () => { /* remote closed stdin early; exit code reports the failure */ });
-    child.stdin.end(fullStdin);
+    // The script is the complete stdin — all payloads are embedded inside it.
+    child.stdin.end(script);
     if (signal?.aborted) stop();
   });
 }
@@ -124,7 +122,7 @@ function spawnSsh(
 /** Default runner backed by the local OpenSSH client. */
 export const defaultSshRunner: SshRunner = {
   exec(target, script, opts = {}) {
-    return spawnSsh(target, script, opts.signal, () => {}, opts.stdin, opts.timeoutMs);
+    return spawnSsh(target, script, opts.signal, () => {}, opts.timeoutMs);
   },
   async stream(target, script, opts) {
     let buf = '';
@@ -139,7 +137,7 @@ export const defaultSshRunner: SshRunner = {
         if (opts.onLine(line) === 'stop') { stopped = true; stop(); return; }
         nl = buf.indexOf('\n');
       }
-    }, undefined, undefined, false);
+    }, undefined, false);
     // Keep only the trailing fragment in the result; full lines went to onLine.
     return { ...res, stdout: buf };
   },

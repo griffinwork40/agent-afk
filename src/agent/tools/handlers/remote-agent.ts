@@ -83,9 +83,15 @@ export function isRemoteRun(): boolean {
   return depth !== '' && depth !== '0';
 }
 
-/** Wrap remote-sourced text so prompt-injected content cannot reach the local model as plain tool output. */
+/**
+ * Wrap remote-sourced text so prompt-injected content cannot reach the local
+ * model as plain tool output. Any literal `</remote-output` occurrence in the
+ * remote text is neutralised (case-insensitive) so the closing tag cannot be
+ * forged by injected content.
+ */
 function frameRemote(text: string): string {
-  return `<remote-output>\n${text}\n</remote-output>`;
+  const safe = text.replace(/<\/remote-output/gi, '<\\/remote-output');
+  return `<remote-output>\n${safe}\n</remote-output>`;
 }
 
 function formatOutcome(outcome: RemoteRunOutcome, host: RemoteHost, runId: string, sessionId: string): ToolResult {
@@ -101,9 +107,12 @@ function formatOutcome(outcome: RemoteRunOutcome, host: RemoteHost, runId: strin
   }
   const footer = `\n\n[remote_agent: ${where}; pass resume="${sessionId}" to continue there]`;
   const rawReply = outcome.message.trim() === '' ? '(remote agent finished with an empty reply)' : outcome.message;
-  const reply = frameRemote(rawReply);
-  if (reply.length > MAX_REPLY_CHARS) {
-    return { content: `${reply.slice(0, MAX_REPLY_CHARS)}\n… [truncated at ${MAX_REPLY_CHARS} chars]${footer}`, truncated: true };
+  // Truncate the raw reply BEFORE framing so </remote-output> always survives.
+  const truncated = rawReply.length > MAX_REPLY_CHARS;
+  const clipped = truncated ? `${rawReply.slice(0, MAX_REPLY_CHARS)}\n… [truncated at ${MAX_REPLY_CHARS} chars]` : rawReply;
+  const reply = frameRemote(clipped);
+  if (truncated) {
+    return { content: `${reply}${footer}`, truncated: true };
   }
   return { content: `${reply}${footer}` };
 }
@@ -132,6 +141,10 @@ export function createRemoteAgentHandler(deps: RemoteAgentDeps): ToolHandler {
     const runId = `${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`;
     const sessionId = input.resume ?? randomUUID();
     const cwd = input.cwd ?? host.cwd;
+    if (cwd !== undefined) {
+      if (/[\0\n\r]/.test(cwd)) return fail('resolved `cwd` must not contain NUL, newline, or carriage-return.');
+      if (cwd.startsWith('-')) return fail('resolved `cwd` may not start with "-".');
+    }
     const outcome = await runRemoteAgent(
       {
         target: host.ssh,

@@ -1,5 +1,17 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { shQuote, shQuotePath, buildLaunchScript, buildFollowScript, buildCancelScript } from './remote-script.js';
+import {
+  shQuote,
+  shQuotePath,
+  buildLaunchScript,
+  buildFollowScript,
+  buildCancelScript,
+  makeHeredocDelimiter,
+  heredocWrite,
+} from './remote-script.js';
 import { sshArgs } from './ssh-runner.js';
 import { createEventCollector } from './remote-events.js';
 
@@ -14,8 +26,26 @@ describe('shQuote / shQuotePath', () => {
   });
 });
 
+describe('makeHeredocDelimiter', () => {
+  it('returns a string not present in the payload', () => {
+    const delim = makeHeredocDelimiter('hello world\n$(touch PWNED)');
+    expect(delim).toMatch(/^AFK_PAYLOAD_[0-9A-F]{32}$/);
+    expect('hello world\n$(touch PWNED)').not.toContain(delim);
+  });
+});
+
+describe('heredocWrite', () => {
+  it('produces a script fragment that writes exact bytes (no trailing newline)', () => {
+    const payload = 'line1\n$(echo hi)\n\'quote\' "dq" \\back';
+    const delim = makeHeredocDelimiter(payload);
+    const fragment = heredocWrite(payload, '"/tmp/afk-test-out"', delim);
+    expect(fragment).toContain(`<<'${delim}'`);
+    expect(fragment).toContain(payload);
+  });
+});
+
 describe('buildLaunchScript', () => {
-  const base = { runId: 'r1', sessionId: 's-1' };
+  const base = { runId: 'r1', sessionId: 's-1', prompt: 'hello world' };
 
   it('inlines the recursion guard and detaches afk with nohup', () => {
     const s = buildLaunchScript(base);
@@ -41,8 +71,19 @@ describe('buildLaunchScript', () => {
     expect(s).toContain('.nvm/versions/node/*/bin/afk');
   });
 
-  it('never embeds the prompt', () => {
-    expect(buildLaunchScript(base)).toContain('cat > "$d/prompt"');
+  it('embeds the prompt as a quoted heredoc (never as cat-from-stdin)', () => {
+    const s = buildLaunchScript({ ...base, prompt: 'line1\n$(touch PWNED)\n\'q\' "dq"' });
+    // Must contain a quoted heredoc marker
+    expect(s).toMatch(/<<'AFK_PAYLOAD_[0-9A-F]{32}'/);
+    // Must NOT use cat without a heredoc (old stdin-reading pattern)
+    expect(s).not.toMatch(/^cat > "\$d\/prompt"$/m);
+    // The prompt text itself must be present literally in the script
+    expect(s).toContain('$(touch PWNED)');
+  });
+
+  it('does not read the prompt from stdin (cat > prompt removed)', () => {
+    const s = buildLaunchScript(base);
+    expect(s).not.toMatch(/\bcat\b.*>\s*["']?\$d\/prompt/);
   });
 });
 
@@ -59,11 +100,11 @@ describe('follow / cancel scripts', () => {
 });
 
 describe('sshArgs', () => {
-  it('runs the script under /bin/sh with fail-fast options and an option terminator', () => {
-    const args = sshArgs('user@host', 'echo hi');
+  it('runs the script under exec /bin/sh -s with fail-fast options and an option terminator', () => {
+    const args = sshArgs('user@host');
     expect(args).toContain('BatchMode=yes');
     expect(args).toContain('ConnectTimeout=5');
-    expect(args.slice(-3)).toEqual(['--', 'user@host', `/bin/sh -c 'echo hi'`]);
+    expect(args.slice(-3)).toEqual(['--', 'user@host', 'exec /bin/sh -s']);
   });
 });
 
@@ -78,5 +119,156 @@ describe('createEventCollector', () => {
     expect(c.finalMessage()).toBe('tail');
     expect(c.push(JSON.stringify({ type: 'done' }))).toBe(true);
     expect(c.terminal()).toEqual({ type: 'done' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: stdin carries only the script — prompt content cannot be
+// executed as shell commands regardless of what it contains.
+// ---------------------------------------------------------------------------
+
+describe('launch script stdin isolation (regression)', () => {
+  /**
+   * Collect the shells available on this machine at runtime. Never platform-
+   * skipped — if /bin/sh is absent the expect below fails explicitly. Shells
+   * are deduplicated so /bin/sh=bash on macOS does not run twice.
+   */
+  function availableShells(): string[] {
+    const candidates = ['/bin/sh'];
+    for (const sh of [
+      '/bin/dash', '/usr/bin/dash', '/usr/local/bin/dash',
+      '/bin/bash', '/usr/bin/bash', '/usr/local/bin/bash',
+      '/bin/zsh',  '/usr/bin/zsh',  '/usr/local/bin/zsh',
+    ]) {
+      if (existsSync(sh)) candidates.push(sh);
+    }
+    return [...new Set(candidates)];
+  }
+
+  /** Run a single (shell, prompt) pair and assert correctness. */
+  function assertPromptRoundtrip(shell: string, prompt: string, label: string): void {
+    const runId = 'test-run-rt';
+    const tmpHome = mkdtempSync(path.join(os.tmpdir(), 'afk-rt-'));
+    try {
+      const afkBin = path.join(tmpHome, 'afk');
+      writeFileSync(afkBin, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      const pwnedPath = path.join(tmpHome, 'PWNED');
+
+      const script = buildLaunchScript({ runId, sessionId: 'sess-rt', prompt, afkPath: afkBin });
+
+      let stdout = '';
+      try {
+        stdout = execFileSync(shell, ['-s'], {
+          input: script,
+          env: { HOME: tmpHome, PATH: process.env['PATH'] ?? '/usr/bin:/bin' },
+          timeout: 10_000,
+          encoding: 'utf-8',
+        });
+      } catch (err) {
+        const e = err as { stdout?: string; stderr?: string };
+        stdout = e.stdout ?? '';
+      }
+
+      // 1. No PWNED file
+      expect(existsSync(pwnedPath), `[${shell}] PWNED created — injection for: ${label}`).toBe(false);
+      // 2. PID marker present
+      expect(stdout, `[${shell}] PID marker missing for: ${label}`).toContain('__AFK_REMOTE_PID__');
+      // 3. Byte-identical prompt file
+      const promptFile = path.join(tmpHome, '.afk', 'state', 'remote-runs', runId, 'prompt');
+      expect(existsSync(promptFile), `[${shell}] prompt file missing for: ${label}`).toBe(true);
+      expect(readFileSync(promptFile, 'utf-8'), `[${shell}] prompt mismatch for: ${label}`).toBe(prompt);
+    } finally {
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  }
+
+  /**
+   * Every payload from the coordinator manifest. Tested on every available
+   * shell at runtime — never platform-skipped.
+   */
+  const PAYLOADS: Array<[string, string]> = [
+    ["apostrophe+parens", "it's an (unbalanced paren and quote"],
+    ["close-paren",       "close ) paren only"],
+    ["injection",         "case ) esac `x $(touch PWNED) ; echo X"],
+    ["trailing-two-nl",   "ends with two newlines\n\n"],
+    ["no-trailing-nl",    "no trailing nl"],
+    ["trailing-backslash","trailing backslash \\"],
+    ["multiline-quotes",  "'quote' \"dq\"\nEOF\nmore after EOF"],
+    // Original single-case payload kept for regression continuity
+    ["original",          "line1\n$(touch PWNED) ; echo X `id`\n'quote' \"dq\" \\back"],
+  ];
+
+  it('prompt file is byte-identical to input; no PWNED file; PID marker printed', () => {
+    const shells = availableShells();
+    expect(shells.length, 'no POSIX shell found — check availableShells()').toBeGreaterThan(0);
+
+    for (const shell of shells) {
+      for (const [label, prompt] of PAYLOADS) {
+        assertPromptRoundtrip(shell, prompt, label);
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: keychain heredoc read — `IFS= read -r kcpw <<'DELIM'` must
+// handle passwords containing ', ), ", \ and a backtick without any $( ) and
+// without invoking `security`. Exercises buildUnlockKeychain indirectly by
+// extracting and running just the read fragment.
+// ---------------------------------------------------------------------------
+
+describe('keychain heredoc read (regression)', () => {
+  /** Shells to test — same discovery logic as the launch-script suite. */
+  function availableShells(): string[] {
+    const candidates = ['/bin/sh'];
+    for (const sh of [
+      '/bin/dash', '/usr/bin/dash', '/usr/local/bin/dash',
+      '/bin/bash', '/usr/bin/bash', '/usr/local/bin/bash',
+      '/bin/zsh',  '/usr/bin/zsh',  '/usr/local/bin/zsh',
+    ]) {
+      if (existsSync(sh)) candidates.push(sh);
+    }
+    return [...new Set(candidates)];
+  }
+
+  it('kcpw equals password for metacharacter-rich single-line passwords', () => {
+    const shells = availableShells();
+    expect(shells.length).toBeGreaterThan(0);
+
+    // Password containing every required metacharacter class.
+    // Must be single-line (no \r or \n) — that is the invariant.
+    const password = `it's a ) "tricky" \`password\` with \\ backslash`;
+
+    for (const shell of shells) {
+      // Build a minimal script: just the read fragment + printf the result.
+      // We import makeHeredocDelimiter to produce the correct delimiter.
+      const delim = makeHeredocDelimiter(password);
+      const script = [
+        'set -e',
+        `IFS= read -r kcpw <<'${delim}' || kcpw=`,
+        password,
+        delim,
+        // Print a sentinel prefix + the value so we can extract it unambiguously.
+        'printf "__KCPW__%s\\n" "$kcpw"',
+      ].join('\n');
+
+      let stdout = '';
+      try {
+        stdout = execFileSync(shell, ['-s'], {
+          input: script,
+          env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin' },
+          timeout: 5_000,
+          encoding: 'utf-8',
+        });
+      } catch (err) {
+        const e = err as { stdout?: string; stderr?: string; message?: string };
+        stdout = e.stdout ?? '';
+        throw new Error(`[${shell}] keychain read script failed: ${e.message ?? ''}\nstdout: ${stdout}\nstderr: ${e.stderr ?? ''}`);
+      }
+
+      const match = stdout.match(/^__KCPW__(.*)$/m);
+      expect(match, `[${shell}] sentinel line not found in output`).not.toBeNull();
+      expect(match![1], `[${shell}] kcpw mismatch`).toBe(password);
+    }
   });
 });

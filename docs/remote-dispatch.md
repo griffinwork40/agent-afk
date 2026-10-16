@@ -38,7 +38,7 @@ security add-generic-password -U -s afk-remote-unlock -a cm -w
 ```
 
 The account (`-a`) is the host's name in hosts.json. Every run then reads it from
-this machine's keychain, sends it as the first stdin line of the launch ssh call, and
+this machine's keychain, embeds it as a quoted heredoc inside the launch script, and
 the remote script feeds it to `security -i` through a pipe to unlock
 `~/Library/Keychains/login.keychain-db`, verifies the unlock, clears it, and starts
 afk. The password is never on any command line, in a file, or in the trace. Re-run
@@ -76,11 +76,11 @@ Verified on macOS over SSH (2026-10-15), which is why it works this way:
 | `remote-run.ts` | Launch → follow → result; reconnect; cancel on abort. |
 | `remote-events.ts` | Tolerant parser for `afk chat --format stream-json` events. |
 
-1. **Launch.** One ssh call: the prompt goes over stdin into
-   `~/.afk/state/remote-runs/<runId>/prompt` (never embedded in a shell string), afk is
-   located, and `nohup afk chat --format stream-json` starts detached, writing
-   `out.ndjson`, `err.log`, and `pid`. A dropped connection or a sleeping laptop does
-   not kill the run.
+1. **Launch.** One ssh call: the prompt is embedded inside the script as a quoted
+   heredoc and written to `~/.afk/state/remote-runs/<runId>/prompt` (never interpreted
+   by any shell). stdin carries only the script itself. afk is located, and
+   `nohup afk chat --format stream-json` starts detached, writing `out.ndjson`,
+   `err.log`, and `pid`. A dropped connection or a sleeping laptop does not kill the run.
 2. **Locate afk.** Explicit `afkPath`, else the non-interactive PATH, else a scan of the
    interactive shell's PATH (nvm usually loads from `.zshrc`, and `afk` may be a shell
    function there, so `command -v` inside that shell is not trusted), else nvm's install

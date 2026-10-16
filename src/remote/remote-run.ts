@@ -92,16 +92,22 @@ async function launch(
   signal: AbortSignal,
 ): Promise<{ pid: number } | RemoteRunOutcome> {
   const unlock = req.keychainPassword !== undefined;
-  let stdin = req.prompt;
+  let keychainPassword: string | undefined;
   if (unlock) {
     try {
-      stdin = `${escapeForSecurityInteractive(req.keychainPassword ?? '')}\n${req.prompt}`;
+      keychainPassword = escapeForSecurityInteractive(req.keychainPassword ?? '');
     } catch (err) {
       return { kind: 'error', reason: (err as Error).message };
     }
   }
-  const script = buildLaunchScript({ ...req, unlockKeychain: unlock });
-  const res = await runner.exec(req.target, script, { stdin, signal, timeoutMs: LAUNCH_TIMEOUT_MS });
+  // The prompt and keychain password are embedded inside the script as quoted
+  // heredocs. stdin carries only the script — no trailing payload.
+  const script = buildLaunchScript({
+    ...req,
+    prompt: req.prompt,
+    ...(keychainPassword !== undefined ? { keychainPassword } : {}),
+  });
+  const res = await runner.exec(req.target, script, { signal, timeoutMs: LAUNCH_TIMEOUT_MS });
   if (signal.aborted) return { kind: 'aborted' };
   const stderr = res.stderr.trim();
   if (res.code === SSH_CONNECT_FAILURE) {
