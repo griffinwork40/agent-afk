@@ -328,11 +328,15 @@ describe('recoverPendingHandoffs', () => {
     const updated = await readHandoff(taskId, handoffsDir);
     expect(updated?.status).toBe('expired');
 
-    // Lease must no longer be in waiting_human_input — it should be 'leased'
-    // so recoverExpiredLeases can pick it up on the next cycle.
+    // Lease is now dead-lettered: the PR's expireHandoff calls reclaimSingleLease
+    // on the restored lease (handoff-expiry.ts:151). The test lease has
+    // attempts: 1 === maxAttempts: 1, so it's past the retry budget and gets
+    // dead-lettered rather than re-enqueued. This is the correct new contract:
+    // a crashed lease that has already burned through its attempts is removed,
+    // not re-leased for another (doomed) run.
     const lease = getTaskRecord(taskId, queueDir);
     expect(lease).not.toBeNull();
-    expect(lease?.state).toBe('leased');
+    expect(lease?.state).toBe('dead-letter');
   });
 });
 
