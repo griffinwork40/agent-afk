@@ -6,8 +6,6 @@ import type { ModelSlots } from '../../agent/session/model-slots.js';
 import type { Check } from './doctor-checks.js';
 
 const SECRET = 'sk-local-super-secret-123';
-const ENV_KEY = 'sk-env-injected-abc';
-const envOnly = { readEnv: (k: string) => (k === 'OPENAI_API_KEY' ? ENV_KEY : undefined), readFile: () => null };
 
 interface Seen {
   url: string | undefined;
@@ -18,15 +16,11 @@ let server: Server;
 let base: string;
 const seen: Seen[] = [];
 
-/** Routes: /ok/ lists models, /auth/ → 401, /keyed/ → 401 unless Bearer ENV_KEY, /slow/ hangs. */
+/** Routes: /ok/ lists models, /auth/ → 401, /err/ → 500, /slow/ hangs. */
 beforeAll(async () => {
   server = createServer((req, res) => {
     seen.push({ url: req.url, headers: req.headers });
     if (req.url?.startsWith('/auth/')) {
-      res.writeHead(401).end('unauthorized');
-      return;
-    }
-    if (req.url?.startsWith('/keyed/') && req.headers.authorization !== `Bearer ${ENV_KEY}`) {
       res.writeHead(401).end('unauthorized');
       return;
     }
@@ -58,9 +52,16 @@ function slots(overrides: Partial<ModelSlots>): ModelSlots {
 }
 
 const notAnthropic = async (): Promise<boolean> => false;
+// Stub the wire route so results never depend on the host's AFK_PROVIDER / env.
+const routed = (route: string) => async (): Promise<string> => route;
+const openaiRoute = routed('openai-compatible');
 
-async function run(bindings: ModelSlots, timeoutMs = 2000): Promise<Check[]> {
-  return checkSlotEndpoints({ bindings, timeoutMs, isAnthropicRouted: notAnthropic });
+async function run(bindings: ModelSlots, timeoutMs = 2000, route = openaiRoute): Promise<Check[]> {
+  return checkSlotEndpoints({ bindings, timeoutMs, isAnthropicRouted: notAnthropic, routeOf: route });
+}
+
+function lastAuthHeader(): string | undefined {
+  return seen[seen.length - 1]!.headers.authorization;
 }
 
 function allText(checks: Check[]): string {
@@ -97,21 +98,15 @@ describe('checkSlotEndpoints', () => {
   });
 
   it('WARN on 401 and on other non-2xx', async () => {
-    // Supply an explicit apiKey so the probe sends a credential and the 401
-    // branch reports "auth rejected / check the slot API key" (the authSource
-    // === 'config' path). Inject empty authDeps so no real env is read.
-    const noEnv = { readEnv: () => undefined, readFile: () => null };
-    const checks = await checkSlotEndpoints({
-      bindings: slots({
+    // The slot's own key was sent, so a 401 means the server rejected it.
+    const checks = await run(
+      slots({
         local: { id: 'qwen-a', baseUrl: `${base}/auth/v1`, apiKey: SECRET },
         small: { id: 'qwen-a', baseUrl: `${base}/err/v1` },
       }),
-      timeoutMs: 2000,
-      isAnthropicRouted: notAnthropic,
-      authDeps: noEnv,
-    });
+    );
     expect(checks.map((c) => c.state)).toEqual(['warn', 'warn']);
-    expect(checks[0]!.detail).toContain('401');
+    expect(checks[0]!.detail).toContain('401 (auth rejected)');
     expect(checks[0]!.fix).toMatch(/API key/);
     expect(checks[1]!.detail).toContain('500');
   });
@@ -195,102 +190,87 @@ describe('checkSlotEndpoints', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('PASS using OPENAI_API_KEY fallback when slot has baseUrl but no apiKey', async () => {
-    // /keyed/ answers 401 unless the probe sends exactly the injected env key,
-    // so a pass proves the fallback credential was resolved and sent.
+  it('sends nothing for a slot with no key of its own; 401 reads "auth unverified", not "rejected"', async () => {
+    // The runtime would fall back to OPENAI_API_KEY / Codex credentials; doctor
+    // deliberately does not replicate that, so it must not blame a missing key.
     seen.length = 0;
-    const checks = await checkSlotEndpoints({
-      bindings: slots({ local: { id: 'qwen-a', baseUrl: `${base}/keyed/v1` } }),
-      timeoutMs: 2000,
-      isAnthropicRouted: notAnthropic,
-      authDeps: envOnly,
-    });
+    const checks = await run(slots({ local: { id: 'qwen-a', baseUrl: `${base}/auth/v1` } }));
 
-    expect(checks).toHaveLength(1);
-    expect(checks[0]!.state).toBe('pass');
-    // Key was sent as a Bearer header.
-    const lastSeen = seen[seen.length - 1];
-    expect(lastSeen!.headers.authorization).toBe(`Bearer ${ENV_KEY}`);
-    // Key must not appear in any returned string.
-    expect(allText(checks)).not.toContain(ENV_KEY);
+    expect(lastAuthHeader()).toBeUndefined();
+    expect(checks[0]!.state).toBe('warn');
+    expect(checks[0]!.detail).toContain('auth unverified: the slot has no key of its own');
+    expect(checks[0]!.detail).toContain('OPENAI_API_KEY');
+    expect(checks[0]!.detail).not.toContain('auth rejected');
   });
 
-  it('WARN "auth unverified" on 401 when slot auth is unreproducible (xAI)', async () => {
-    // A slot with provider: 'xai' routes to the xAI provider (own auth).
-    // The probe sends no credential; on 401 it must say "auth unverified",
-    // not "auth rejected / check the slot API key".
-    const checks = await checkSlotEndpoints({
-      bindings: slots({ local: { id: 'grok-3', baseUrl: `${base}/auth/v1`, provider: 'xai' } }),
-      timeoutMs: 2000,
-      isAnthropicRouted: notAnthropic,
-      authDeps: { readEnv: () => undefined, readFile: () => null },
-    });
+  it('WARN "auth unverified" on 401 for an xAI slot, sending nothing', async () => {
+    seen.length = 0;
+    const checks = await run(
+      slots({ local: { id: 'grok-3', baseUrl: `${base}/auth/v1`, provider: 'xai' } }),
+      2000,
+      routed('xai'),
+    );
 
-    expect(checks).toHaveLength(1);
+    expect(lastAuthHeader()).toBeUndefined();
     expect(checks[0]!.state).toBe('warn');
     expect(checks[0]!.detail).toContain('auth unverified');
     expect(checks[0]!.detail).not.toContain('auth rejected');
-    expect(checks[0]!.fix).not.toMatch(/API key/i);
     expect(checks[0]!.fix).not.toMatch(/AFK_MODEL/);
   });
-  it('WARN "no credential configured" on 401 when no key resolves anywhere', async () => {
-    // No slot key, no env key, no ~/.codex/auth.json: the runtime would send no
-    // credential either, so the warn names a missing key, not unverifiable auth.
-    const checks = await checkSlotEndpoints({
-      bindings: slots({ local: { id: 'qwen-a', baseUrl: `${base}/auth/v1` } }),
-      timeoutMs: 2000,
-      isAnthropicRouted: notAnthropic,
-      authDeps: { readEnv: () => undefined, readFile: () => null },
-    });
 
-    expect(checks).toHaveLength(1);
-    expect(checks[0]!.state).toBe('warn');
-    expect(checks[0]!.detail).toContain('no credential configured');
-    expect(checks[0]!.detail).not.toContain('auth unverified');
-    expect(checks[0]!.fix).toContain('OPENAI_API_KEY');
-  });
-  it('never sends OPENAI_API_KEY to an xAI route inferred from a grok-* id', async () => {
-    // No provider field: routing infers xAI from the id (real routing decision).
+  it('never sends the slot key on an inferred xAI route (runtime may abort on key + stored OAuth)', async () => {
+    // Round-3 finding 2: a grok-* slot with apiKey and stored xAI OAuth is
+    // ambiguous at runtime (xai/auth.ts), so a keyed probe "pass" would lie.
     seen.length = 0;
-    const checks = await checkSlotEndpoints({
-      bindings: slots({ local: { id: 'grok-4', baseUrl: `${base}/auth/v1` } }),
-      timeoutMs: 2000,
-      isAnthropicRouted: notAnthropic,
-      authDeps: envOnly,
-    });
+    const checks = await run(
+      slots({ local: { id: 'grok-4', baseUrl: `${base}/ok/v1`, apiKey: SECRET } }),
+      2000,
+      routed('xai'),
+    );
 
-    expect(checks).toHaveLength(1);
-    expect(seen[seen.length - 1]!.headers.authorization).toBeUndefined();
+    expect(lastAuthHeader()).toBeUndefined();
+    expect(allText(checks)).not.toContain(SECRET);
+  });
+
+  it('never sends a key when the wire route and the slot endpoint route disagree', async () => {
+    // Round-3 finding 1: AFK_PROVIDER=openai beats a `provider: 'anthropic'`
+    // slot on the wire, but applySlotCredentials puts that slot's baseUrl on
+    // the Anthropic field, so the runtime never sends anything to this URL.
+    seen.length = 0;
+    const checks = await run(
+      slots({ local: { id: 'qwen-a', baseUrl: `${base}/auth/v1`, provider: 'anthropic', apiKey: SECRET } }),
+    );
+
+    expect(lastAuthHeader()).toBeUndefined();
     expect(checks[0]!.detail).toContain('auth unverified');
-    expect(allText(checks)).not.toContain(ENV_KEY);
+    expect(checks[0]!.detail).toContain('anthropic-direct endpoint');
+    expect(allText(checks)).not.toContain(SECRET);
   });
 
   it('sends no credential for a forced-OAuth slot even when it carries an apiKey', async () => {
     seen.length = 0;
-    const checks = await checkSlotEndpoints({
-      bindings: slots({
-        local: { id: 'gpt-5', baseUrl: `${base}/auth/v1`, provider: 'chatgpt-oauth', apiKey: SECRET },
-      }),
-      timeoutMs: 2000,
-      isAnthropicRouted: notAnthropic,
-      authDeps: envOnly,
-    });
+    const checks = await run(
+      slots({ local: { id: 'gpt-5', baseUrl: `${base}/auth/v1`, provider: 'chatgpt-oauth', apiKey: SECRET } }),
+    );
 
-    expect(seen[seen.length - 1]!.headers.authorization).toBeUndefined();
+    expect(lastAuthHeader()).toBeUndefined();
     expect(checks[0]!.state).toBe('warn');
-    expect(checks[0]!.detail).toContain('auth unverified');
+    expect(checks[0]!.detail).toContain('auth unverified: the slot uses ChatGPT OAuth');
+    expect(allText(checks)).not.toContain(SECRET);
   });
 
-  it('planProbeAuth: xAI route uses only the slot key; OpenAI route falls back', () => {
-    expect(planProbeAuth({ id: 'grok-4', apiKey: SECRET }, 'xai', envOnly)).toEqual({ key: SECRET, source: 'config' });
-    expect(planProbeAuth({ id: 'grok-4' }, 'xai', envOnly)).toEqual({});
-    expect(planProbeAuth({ id: 'qwen-a' }, 'openai-compatible', envOnly)).toMatchObject({
-      key: ENV_KEY,
-      source: 'env',
-      envVar: 'OPENAI_API_KEY',
+  it('planProbeAuth: only the slot key, only when both routes are openai-compatible', () => {
+    const oa = 'openai-compatible';
+    expect(planProbeAuth({ id: 'qwen-a', apiKey: SECRET }, oa)).toEqual({ kind: 'slot-key', key: SECRET });
+    expect(planProbeAuth({ id: 'qwen-a', apiKey: SECRET, provider: 'openai' }, oa)).toEqual({
+      kind: 'slot-key',
+      key: SECRET,
     });
-    expect(planProbeAuth({ id: 'qwen-a' }, 'openai-compatible', { readEnv: () => undefined, readFile: () => null })).toEqual({
-      source: 'none',
-    });
+    expect(planProbeAuth({ id: 'qwen-a' }, oa)).toEqual({ kind: 'no-slot-key' });
+    expect(planProbeAuth({ id: 'grok-4', apiKey: SECRET }, 'xai').kind).toBe('unverified');
+    expect(planProbeAuth({ id: 'grok-4', apiKey: SECRET, provider: 'xai-oauth' }, 'xai').kind).toBe('unverified');
+    expect(planProbeAuth({ id: 'q', apiKey: SECRET, provider: 'anthropic' }, oa).kind).toBe('unverified');
+    expect(planProbeAuth({ id: 'q', apiKey: SECRET, provider: 'xai' }, oa).kind).toBe('unverified');
+    expect(planProbeAuth({ id: 'gpt-5', apiKey: SECRET, provider: 'chatgpt-oauth' }, oa).kind).toBe('unverified');
   });
 });

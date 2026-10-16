@@ -14,20 +14,15 @@
  * wire (a `local-*` / `claude-*` id or `provider: 'anthropic'`), are skipped
  * silently — mirroring how `checkTelegram` returns nothing when unconfigured.
  *
- * Invariant: the slot API key (or fallback-resolved credential) is sent only as
- * an `Authorization` header and never appears in a returned string; URL userinfo
- * and query strings are stripped before a URL is printed or fetched.
- *
- * Auth fallback: when a slot has no per-slot apiKey but routes to the
- * openai-compatible wire, the probe resolves a credential through the same
- * precedence chain the runtime uses (OPENAI_API_KEY → CODEX_API_KEY →
- * ~/.codex/auth.json apikey mode). Forced-OAuth slots and a ChatGPT-OAuth
- * resolution send no credential and report "auth unverified" on 401/403; xAI
- * routes send only the slot's own key. See planProbeAuth.
+ * Invariant: the only credential the probe ever sends is the slot's OWN
+ * `apiKey`, only as an `Authorization` header, and never in a returned string;
+ * URL userinfo and query strings are stripped before a URL is printed or fetched.
+ * The probe never replicates the runtime's fallback auth (OPENAI_API_KEY, Codex
+ * or xAI OAuth): see planProbeAuth for why.
  */
 
 import { getSlotBindings, SLOT_NAMES, type ModelSlots, type SlotName } from '../../agent/session/model-slots.js';
-import { resolveOpenAIAuth, type AuthResolverDeps } from '../../agent/providers/openai-compatible/auth.js';
+import { explicitSlotRoute } from '../../agent/session/slot-route.js';
 import type { Check } from './doctor-checks.js';
 
 /** Default per-probe timeout. Short so `afk doctor` never hangs on a dead host. */
@@ -43,15 +38,8 @@ export interface SlotEndpointDeps {
   fetchImpl?: typeof fetch;
   /** True when the slot routes to the Anthropic Messages wire (not probed). */
   isAnthropicRouted?: (slot: SlotName, bindings: ModelSlots) => Promise<boolean>;
-  /** The slot's resolved provider route (decides which credential the probe may send). */
+  /** The slot's resolved wire route (decides whether the probe may send the slot key). */
   routeOf?: (slot: SlotName, bindings: ModelSlots) => Promise<string>;
-  /**
-   * Injectable env + fs surface forwarded to `resolveOpenAIAuth` for the
-   * fallback credential path. Tests pass a stub; production uses the default
-   * (reads real process.env / ~/.codex/auth.json via resolveOpenAIAuth's
-   * own defaults).
-   */
-  authDeps?: AuthResolverDeps;
 }
 
 /**
@@ -112,53 +100,42 @@ function listedIds(body: unknown): string[] | undefined {
     .filter((id): id is string => typeof id === 'string');
 }
 
-/**
- * Describe which credential source was used, for the 401/403 fix message.
- * Returns a human-readable string naming the source so the fix text is accurate.
- */
-function describeAuthSource(source: string, envVar?: string): string {
-  if (source === 'env') return envVar ?? 'OPENAI_API_KEY';
-  if (source === 'codex-cli') return 'Codex CLI key from ~/.codex/auth.json';
-  if (source === 'config') return 'slot API key (AFK_MODEL_<TIER>_API_KEY)';
-  return 'resolved credential';
-}
-
 /** Classify a completed HTTP response into a Check. */
 async function classifyResponse(
   name: string,
   url: string,
   modelId: string,
   res: Response,
-  authSource: string | undefined,
-  authEnvVar: string | undefined,
+  auth: ProbeAuth,
 ): Promise<Check> {
   if (res.status === 401 || res.status === 403) {
-    // Invariant: authSource === undefined means the probe sent no credential
-    // (unreproducible-auth case — xAI or chatgpt-oauth with custom baseUrl).
-    // Report "auth unverified" rather than "auth rejected" so the user is not
-    // misled into setting a key they don't need.
-    if (authSource === 'none') {
+    // Invariant: only a 401/403 to the slot's own key reads "auth rejected".
+    // When the probe sent nothing, the runtime may still authenticate through a
+    // source doctor deliberately does not replicate, so the wording is
+    // "auth unverified" and never tells the user to fix a key they may not need.
+    if (auth.kind === 'slot-key') {
       return {
         name,
         state: 'warn',
-        detail: `${url} returned ${res.status} (no credential configured)`,
-        fix: 'Set the slot API key (AFK_MODEL_<TIER>_API_KEY) or OPENAI_API_KEY to the server key',
+        detail: `${url} returned ${res.status} (auth rejected)`,
+        fix: 'Check the slot API key (AFK_MODEL_<TIER>_API_KEY) matches the server key',
       };
     }
-    if (authSource === undefined) {
+    if (auth.kind === 'no-slot-key') {
       return {
         name,
         state: 'warn',
-        detail: `${url} returned ${res.status} (auth unverified — probe could not reproduce slot auth)`,
-        fix: 'The slot uses an auth mechanism the doctor probe cannot replicate. Verify the endpoint manually.',
+        detail:
+          `${url} returned ${res.status} (auth unverified: the slot has no key of its own; ` +
+          'at runtime afk may authenticate with OPENAI_API_KEY / Codex credentials)',
+        fix: 'Give the slot its own key (AFK_MODEL_<TIER>_API_KEY) so doctor can verify it, or confirm the server accepts your OPENAI_API_KEY',
       };
     }
-    const src = describeAuthSource(authSource, authEnvVar);
     return {
       name,
       state: 'warn',
-      detail: `${url} returned ${res.status} (auth rejected)`,
-      fix: `Check the ${src} matches the server key`,
+      detail: `${url} returned ${res.status} (auth unverified: ${auth.reason})`,
+      fix: 'doctor does not replicate this auth; verify the endpoint by starting a session on this slot',
     };
   }
   if (!res.ok) {
@@ -209,71 +186,68 @@ function redactCheck(check: Check, secret: string | undefined): Check {
   return out;
 }
 
-/** What credential (if any) the probe sends, and how a 401/403 is worded. */
-interface ProbeAuth {
-  /** Sent as the Bearer token and scrubbed from output; undefined = none sent. */
-  key?: string;
-  /** 'config' | resolver source | 'none' (nothing configured); undefined = unverifiable. */
-  source?: string;
-  envVar?: string;
-}
+/** What the probe sends and how a 401/403 is worded. */
+export type ProbeAuth =
+  /** The slot's own key is sent; a 401/403 means the server rejected it. */
+  | { kind: 'slot-key'; key: string }
+  /** openai-compatible slot with no key of its own: nothing sent. */
+  | { kind: 'no-slot-key' }
+  /** The runtime authenticates in a way the probe does not replicate: nothing sent. */
+  | { kind: 'unverified'; reason: string };
 
 /**
- * Invariant: auth is decided from the slot's RESOLVED route (the same
- * `providerForModel` decision the runtime makes), never from `binding.provider`
- * alone: a `grok-*` id routes to xAI with no provider field, and the OpenAI
- * fallback chain must never send OPENAI_API_KEY to an xAI endpoint
- * (xai/auth.ts never uses it).
- *   - forced OAuth (`chatgpt-oauth` / `xai-oauth`): the runtime ignores any slot
- *     key in favour of an OAuth token the probe does not replicate, so nothing
- *     is sent and a 401 reads "auth unverified".
- *   - xAI route: only the slot's own key is sent; no cross-provider fallback.
- *   - otherwise: the slot key, else `resolveOpenAIAuth`'s fallback chain
- *     (OPENAI_API_KEY, CODEX_API_KEY, ~/.codex/auth.json API-key mode), mirroring
- *     applySlotCredentials + build-query. A ChatGPT-OAuth resolution is not
- *     replicated (unverifiable); no resolution at all is 'none'.
+ * Invariant: the probe sends a credential only when it is exactly what the
+ * runtime sends to exactly the URL being probed, so a credential never crosses
+ * to an endpoint the runtime would not send it to. That holds for the slot's
+ * own `apiKey` when BOTH routes are openai-compatible:
+ *   - the wire route (`providerForModel`, where a global AFK_PROVIDER beats the
+ *     slot provider), which decides which provider sends the request; and
+ *   - the endpoint route (`explicitSlotRoute(provider)` first, as
+ *     `applySlotCredentials` uses), which decides where the slot baseUrl lands.
+ *     If they differ (e.g. AFK_PROVIDER=openai with a `provider: 'anthropic'`
+ *     slot) the runtime never sends anything to this baseUrl.
+ * Everything else sends nothing:
+ *   - forced ChatGPT OAuth: the runtime ignores the slot key for an OAuth token;
+ *   - xAI routes: own auth, which can abort on an ambiguous key + stored OAuth
+ *     (xai/auth.ts), so a probe "pass" with the key would be false;
+ *   - no slot key: the runtime falls back to OPENAI_API_KEY / Codex credentials.
+ *     History: rounds 1-3 of PR #3887 replicated that fallback and each round
+ *     found another case where it sent a key to an endpoint the runtime does
+ *     not; the fallback was removed rather than patched again.
  */
-export function planProbeAuth(
-  binding: ModelSlots[SlotName],
-  route: string,
-  authDeps: AuthResolverDeps,
-): ProbeAuth {
-  if (binding.provider === 'chatgpt-oauth' || binding.provider === 'xai-oauth' || route === 'xai-oauth') return {};
-  if (binding.apiKey) return { key: binding.apiKey, source: 'config' };
-  if (route === 'xai') return {};
-  const resolution = resolveOpenAIAuth(undefined, authDeps, false);
-  if (resolution.apiKey === null) {
-    return resolution.source.startsWith('no-usable-auth') ? { source: 'none' } : {};
+export function planProbeAuth(binding: ModelSlots[SlotName], wireRoute: string): ProbeAuth {
+  const endpointRoute = explicitSlotRoute(binding.provider) ?? wireRoute;
+  if (wireRoute !== 'openai-compatible' || endpointRoute !== 'openai-compatible') {
+    const via = endpointRoute === wireRoute ? wireRoute : `${wireRoute} with a ${endpointRoute} endpoint`;
+    return { kind: 'unverified', reason: `the slot routes via ${via}` };
   }
-  if (resolution.source === 'chatgpt-oauth') return {};
-  const auth: ProbeAuth = { key: resolution.apiKey, source: resolution.source };
-  if (resolution.envVar !== undefined) auth.envVar = resolution.envVar;
-  return auth;
+  if (binding.provider === 'chatgpt-oauth') {
+    return { kind: 'unverified', reason: 'the slot uses ChatGPT OAuth' };
+  }
+  if (binding.apiKey) return { kind: 'slot-key', key: binding.apiKey };
+  return { kind: 'no-slot-key' };
 }
 
 async function probeSlot(
   slot: SlotName,
-  bindings: ModelSlots,
-  route: string,
+  binding: ModelSlots[SlotName],
+  baseUrl: string,
+  wireRoute: string,
   timeoutMs: number,
   fetchImpl: typeof fetch,
-  authDeps: AuthResolverDeps,
 ): Promise<Check> {
-  const binding = bindings[slot];
   const name = `Model slot "${slot}" endpoint`;
-  const url = modelsUrl(binding.baseUrl ?? '');
+  const url = modelsUrl(baseUrl);
   const headers: Record<string, string> = { Accept: 'application/json' };
   // Invariant: the credential is only ever a header value, never in output.
-  const auth = planProbeAuth(binding, route, authDeps);
-  const resolvedKey = auth.key;
-  const authSource = auth.source;
-  const authEnvVar = auth.envVar;
-  if (resolvedKey) headers['Authorization'] = `Bearer ${resolvedKey}`;
+  const auth = planProbeAuth(binding, wireRoute);
+  const sentKey = auth.kind === 'slot-key' ? auth.key : undefined;
+  if (sentKey) headers['Authorization'] = `Bearer ${sentKey}`;
 
   let check: Check;
   try {
     const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
-    check = await classifyResponse(name, url, binding.id, res, authSource, authEnvVar);
+    check = await classifyResponse(name, url, binding.id, res, auth);
   } catch (err) {
     check = {
       name,
@@ -282,8 +256,8 @@ async function probeSlot(
       fix: `Is the server running? Try: curl ${url}`,
     };
   }
-  // Redact whichever credential was used (binding.apiKey or resolved fallback).
-  return redactCheck(check, resolvedKey);
+  // Redact the slot key and the binding's key alike (defence in depth).
+  return redactCheck(redactCheck(check, sentKey), binding.apiKey);
 }
 
 /**
@@ -296,16 +270,17 @@ export async function checkSlotEndpoints(deps: SlotEndpointDeps = {}): Promise<C
   const fetchImpl = deps.fetchImpl ?? fetch;
   const isAnthropic = deps.isAnthropicRouted ?? defaultIsAnthropicRouted;
   const routeOf = deps.routeOf ?? defaultRouteOf;
-  const authDeps = deps.authDeps ?? {};
 
-  const targets: Array<{ slot: SlotName; route: string }> = [];
+  const targets: Array<{ slot: SlotName; baseUrl: string; route: string }> = [];
   for (const slot of SLOT_NAMES) {
     const baseUrl = bindings[slot]?.baseUrl;
     if (!baseUrl || !baseUrl.trim()) continue;
     if (await isAnthropic(slot, bindings)) continue;
-    targets.push({ slot, route: await routeOf(slot, bindings) });
+    targets.push({ slot, baseUrl, route: await routeOf(slot, bindings) });
   }
   return Promise.all(
-    targets.map(({ slot, route }) => probeSlot(slot, bindings, route, timeoutMs, fetchImpl, authDeps)),
+    targets.map(({ slot, baseUrl, route }) =>
+      probeSlot(slot, bindings[slot], baseUrl, route, timeoutMs, fetchImpl),
+    ),
   );
 }

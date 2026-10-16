@@ -74,7 +74,11 @@ and reports a row named `Model slot "local" endpoint`:
 | ⚠ warn | reachable, but the id is not listed (the row shows ids that are), or 401/403, or another HTTP error |
 | ✗ fail | unreachable: connection refused, DNS failure, or timeout (3 s) |
 
-The API key is sent as a header and never printed.
+The probe sends only the slot's own key (`AFK_MODEL_LOCAL_API_KEY` or
+`models.local.apiKey`), as a header, and never prints it. It does not replicate
+afk's runtime fallbacks (`OPENAI_API_KEY`, Codex, ChatGPT or xAI OAuth), so for a
+slot without its own key, or one that authenticates another way, a 401/403 is
+reported as "auth unverified" rather than "auth rejected".
 
 ## 4. Recommended settings
 
@@ -119,7 +123,8 @@ faster per task.
 | Symptom | Fix |
 | --- | --- |
 | `afk doctor` ✗ fail, "connection refused" or "timed out" | The server is down or on another port. Run `omlx start` (or start Ollama / LM Studio) and `curl <baseUrl>/models`. |
-| ⚠ warn "returned 401" / "403" (auth rejected) | The key the probe sent does not match the server key (`OMLX_API_KEY`). The fix line names which key was used: `AFK_MODEL_LOCAL_API_KEY`, or a fallback such as `OPENAI_API_KEY` when the slot has no key. "no credential configured" means none was found; "auth unverified" means the slot uses OAuth, which doctor does not replicate. |
+| ⚠ warn "returned 401" / "403" (auth rejected) | The slot's own key does not match the server key (`OMLX_API_KEY`). Fix `AFK_MODEL_LOCAL_API_KEY`. |
+| ⚠ warn "returned 401" / "403" (auth unverified) | doctor sent no key, so it could not check auth. "the slot has no key of its own": at runtime afk may use `OPENAI_API_KEY` or Codex credentials; give the slot its own key to let doctor verify it. Other reasons (ChatGPT OAuth, an xAI route with or without a key, a slot whose `provider` disagrees with the global `AFK_PROVIDER`): verify by starting a session on the slot. |
 | ⚠ warn "not listed; available: …" | The slot id does not match the server's id. Copy one of the listed ids into `AFK_MODEL_LOCAL`. |
 | ⚠ warn "did not return an OpenAI-style model list" | The base URL is missing the API prefix. Most servers need `/v1`. |
 | Errors or truncation on long sessions | afk assumes a larger window than the local model has. Set `models.local.contextWindow` to the window the server actually serves (`afk config set models.local.contextWindow <N>`). |
