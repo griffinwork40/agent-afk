@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { execSync } from 'node:child_process';
 import { classifyRisk } from '../../risk-classifier.js';
 import { evaluateCommand } from './wait-for-conditions.js';
+import { hasUnquotedBackgroundOp } from './wait-for-poll-allowlist.js';
 
 vi.mock('node:child_process', () => ({ execSync: vi.fn() }));
 
@@ -73,5 +74,81 @@ describe('wait_for read-only command policy', () => {
     expect(result.met).toBe(false);
     expect(result.data?.['blocked']).toBeUndefined();
     expect(result.data?.['exitCode']).toBe(1);
+  });
+});
+
+// Invariant: the bash risk classifier matches leading words only, so it rates
+// `git diff --output=f`, `find . -fprint f` and `curl -I u -c jar` safe even
+// though each writes a file. These cases run the REAL classifier and pin that
+// wait_for refuses them before execSync, for safe and medium commands alike.
+describe('wait_for refuses write/exec flags and background jobs', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(execSync).mockReturnValue(Buffer.from(''));
+  });
+
+  it.each([
+    // git output/exec/config flags (classifier rates most of these safe)
+    'true && git diff --output=marker', 'git diff --output=marker',
+    'git diff --output marker', 'git log -p --output=x', 'git show HEAD --output=x',
+    'git diff --ext-diff', 'git -c core.pager=touch git diff', 'git -c diff.external=./x diff',
+    'git --config-env=core.pager=X log', 'git --exec-path=/tmp log',
+    'git log --upload-pack=./evil', 'git -p log', 'git grep -O x',
+    'git grep --open-files-in-pager=vi x', 'git format-patch HEAD~1',
+    'git branch newbranch', 'git stash', 'git config user.name x',
+    'git status && git diff --output=x', 'X=1 git diff --output=x',
+    'pnpm test && git diff --output=x',
+    // other allowed families with write flags
+    'find . -delete', 'find . -exec cat {} +', 'find . -execdir ls ;',
+    'find . -ok cat {} +', 'find . -fprint out.txt', 'find . -fprintf out.txt %p',
+    'ls | find . -fls out.txt', 'ls | sort -o out.txt', 'sort -o out.txt input.txt',
+    'sed -i s/a/b/ file.txt', 'cat f | sed -i s/a/b/ g', 'true | tee output.txt',
+    'cat f > out', 'cat f >> out', 'ls &>out',
+    'curl -I https://example.com -c jar', 'curl -I https://example.com -D h.txt',
+    'curl -sI https://example.com --trace t', 'curl -I https://example.com --stderr e',
+    'curl -I https://example.com -o out', 'curl -I https://example.com -w %{json}',
+    'wget --spider -o log https://example.com', 'wget --spider -e robots=off https://example.com',
+    // unquoted background `&`: async list exits 0 → false success
+    'false &', 'true &', 'false & true', 'git status &', 'ls &',
+    'test -f x & cat x', 'git log --oneline -n 1 &', 'ls |& grep x',
+  ])('refuses before execution: %s', (command) => {
+    const result = evaluateCommand({ type: 'command', command });
+    expect(result.met).toBe(false);
+    expect(result.data?.['blocked']).toBe(true);
+    expect(execSync).not.toHaveBeenCalled();
+  });
+
+  it('names the background operator in the refusal', () => {
+    expect(evaluateCommand({ type: 'command', command: 'false &' }).detail)
+      .toContain('background operator');
+  });
+
+  it.each([
+    'true && test -s result.txt', 'test -f a && cat a | grep ready', 'true && git diff --stat',
+    'git diff --stat', 'git diff --name-only HEAD', 'git diff --cached --quiet',
+    'git log --oneline -n 10', 'git log -1 --format=%H', 'git log -n5 --stat',
+    'git status --short', 'git status -sb', 'git show HEAD --name-only',
+    'git status 2>&1 | grep -q M',
+    'git diff --stat 2>/dev/null', 'git status --short | grep -q M && test -s result.txt',
+    'find . -name "*.txt"', 'find . -name x -print', 'curl -I https://example.com',
+    'curl -sI https://example.com/health', 'curl --head --max-time 5 https://example.com',
+    'wget --spider https://example.com', `grep 'a&b' result.txt`, 'grep "a & b" result.txt',
+    'gh pr checks 123', 'gh pr view 456 --json state', 'gh issue list --state open',
+  ])('still executes read-only poll: %s', (command) => {
+    const result = evaluateCommand({ type: 'command', command });
+    expect(result.data?.['blocked']).toBeUndefined();
+    expect(result.met).toBe(true);
+    expect(execSync).toHaveBeenCalledWith(command, expect.any(Object));
+  });
+});
+
+describe('hasUnquotedBackgroundOp', () => {
+  it.each([
+    ['false &', true], ['a & b', true], ['ls &>out', true], ['ls |& grep x', true],
+    ['a && b', false], ['ls 2>&1', false], ['ls >&2', false], ['cat <&0', false],
+    [`grep 'a&b' f`, false], ['grep "a&b" f', false], ['grep a\\&b f', false],
+    ['grep "a\\"&" f', false],
+  ])('%s → %s', (command, expected) => {
+    expect(hasUnquotedBackgroundOp(command)).toBe(expected);
   });
 });

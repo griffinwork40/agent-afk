@@ -12,7 +12,7 @@ import * as fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { guardedFetch } from '../../../http-client/egress-guard.js';
 import { classifyRisk } from '../../risk-classifier.js';
-import { isReadOnlyPoll, pollMutationReason, pollSyntaxReason } from './wait-for-command-policy.js';
+import { pollRefusalReason } from './wait-for-command-policy.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import type { SpawnedPidRegistry } from './pid-registry.js';
 import { errorMessage, extractEgressBlockedError, fetchFailedMessage, isErrnoCode } from '../../../utils/errors.js';
@@ -244,17 +244,10 @@ export function evaluateCommand(cond: CommandCondition): WaitResult {
   // the tokenized read-only supplement; unknown commands still fail closed.
   const cwd = cond.cwd ?? process.cwd();
   const risk = classifyRisk('bash', { command: cond.command }, { cwd });
-  // The character-level syntax gate guards ONLY the supplement: commands the
-  // classifier already calls 'safe' keep their #2750 behaviour (e.g.
-  // `gh pr checks --jq '.[] | select(...)'`, whose quoted parens it would
-  // refuse). The token-aware mutation guard still applies to every command.
-  const syntaxReason = risk === 'medium'
-    ? pollSyntaxReason(cond.command)
-    : pollMutationReason(cond.command);
-  const allowed = syntaxReason === undefined && (risk === 'safe'
-    || (risk === 'medium' && isReadOnlyPoll(cond.command, cwd)));
-  if (!allowed) {
-    const reason = syntaxReason ?? 'command is not on the read-only polling allowlist';
+  // pollRefusalReason owns the whole gate (background `&`, syntax, mutation,
+  // per-command argv, read-only supplement); see its Invariant.
+  const reason = pollRefusalReason(cond.command, risk, cwd);
+  if (reason !== undefined) {
     return {
       met: false,
       detail: `command blocked by risk classifier (${risk} risk): ${reason}: ${cond.command}. Use wait_for type=file for file existence/content, type=url for HTTP probes, or a simple read-only command without redirects or substitutions.`,

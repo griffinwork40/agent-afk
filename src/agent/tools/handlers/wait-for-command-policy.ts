@@ -1,6 +1,7 @@
 import { classifyRisk } from '../../risk-classifier.js';
 import { tokenizeSegments } from '../readonly-bash.tokenizer.js';
 import { classifyBashCommand } from '../readonly-bash.js';
+import { hasUnquotedBackgroundOp, pollArgvReason } from './wait-for-poll-allowlist.js';
 
 // Invariant: this supplement belongs ONLY to wait_for. The bash tool's risk
 // tables and approval policy must not change when a polling builtin is added.
@@ -44,4 +45,25 @@ export function isReadOnlyPoll(command: string, cwd: string): boolean {
     const quoted = tokens.map((token) => `'${token.replaceAll("'", "'\\''")}'`).join(' ');
     return classifyRisk('bash', { command: quoted }, { cwd }) === 'safe';
   });
+}
+
+/**
+ * Single refusal gate for wait_for: undefined means the command may execute.
+ *
+ * Invariant: order is background `&` → syntax/mutation → per-command argv.
+ * The argv check runs for classifier-`safe` commands too, because the risk
+ * classifier matches leading words only and is not proof of non-mutation
+ * (`git diff --output=f` and `find . -fprint f` rate `safe`). The character
+ * syntax gate still applies only to the medium-risk supplement so #2750's
+ * quoted `--jq` filters keep working.
+ */
+export function pollRefusalReason(command: string, risk: string, cwd: string): string | undefined {
+  if (hasUnquotedBackgroundOp(command)) return 'background operator (&) is not allowed; use && to chain';
+  if (risk !== 'safe' && risk !== 'medium') return 'command is not on the read-only polling allowlist';
+  const reason = (risk === 'medium' ? pollSyntaxReason(command) : pollMutationReason(command))
+    ?? pollArgvReason(command);
+  if (reason !== undefined) return reason;
+  return risk === 'medium' && !isReadOnlyPoll(command, cwd)
+    ? 'command is not on the read-only polling allowlist'
+    : undefined;
 }
