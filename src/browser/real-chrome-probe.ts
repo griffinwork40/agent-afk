@@ -158,9 +158,32 @@ export function probeRealChrome(opts: RealChromeProbeOptions = {}): RealChromePr
 /** Parse the `--channel` value out of a chrome-devtools-mcp args list. */
 export function channelFromArgs(args: readonly string[] | undefined): RealChromeChannel {
   if (args === undefined) return 'stable';
-  const i = args.indexOf('--channel');
-  const value = i >= 0 ? args[i + 1] : undefined;
+  // Look for either `--channel` (standalone) or `--channel=<value>` (equals form).
+  const i = findChannelIndex(args);
+  const value = i >= 0 ? extractChannelValue(args, i) : undefined;
   return (REAL_CHROME_CHANNELS as readonly string[]).includes(value ?? '')
     ? (value as RealChromeChannel)
     : 'stable';
+}
+
+/** Find the index of `--channel` or `--channel=<value>` in the args list. */
+function findChannelIndex(args: readonly string[]): number {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    // Exact match: --channel.
+    if (arg === '--channel') return i;
+    // Equals form: --channel=<value>.
+    if (arg.startsWith('--channel=')) return i;
+  }
+  return -1;
+}
+
+/** Extract the channel value from either `--channel value` or `--channel=value`. */
+function extractChannelValue(args: readonly string[], index: number): string {
+  const arg = args[index]!;
+  // Handle --channel=value form (e.g. --channel=canary).
+  const eqIdx = arg.indexOf('=');
+  if (eqIdx >= 0) return arg.slice(eqIdx + 1);
+  // Handle --channel value form.
+  return args[index + 1] ?? '';
 }

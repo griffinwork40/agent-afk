@@ -95,6 +95,17 @@ describe('channelFromArgs / chromeAppName', () => {
     expect(channelFromArgs(undefined)).toBe('stable');
   });
 
+  it('parses --channel=value (equals form) from the MCP docs config example', () => {
+    expect(channelFromArgs(['--channel=canary'])).toBe('canary');
+    expect(channelFromArgs(['--channel=beta'])).toBe('beta');
+    expect(channelFromArgs(['--channel=dev'])).toBe('dev');
+    expect(channelFromArgs(['--channel=stable'])).toBe('stable');
+    // Equals form with a bogus value falls back to stable.
+    expect(channelFromArgs(['--channel=bogus'])).toBe('stable');
+    // Mixed: --channel=value with other args.
+    expect(channelFromArgs(['chrome-devtools-mcp@1.0.0', '--autoConnect', '--channel=canary'])).toBe('canary');
+  });
+
   it('names the app as macOS Files & Folders lists it', () => {
     expect(chromeAppName('stable')).toBe('Google Chrome');
     expect(chromeAppName('canary')).toBe('Google Chrome Canary');

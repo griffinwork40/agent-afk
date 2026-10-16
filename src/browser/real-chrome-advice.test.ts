@@ -39,6 +39,24 @@ describe('adviseRealChrome', () => {
     expect(a.openUrl).toBe(MAC_FILES_AND_FOLDERS_URL);
   });
 
+  it('blocked on Linux: generic permission advice, no macOS-specific text or URL', () => {
+    const a = adviseRealChrome(probe({ state: 'blocked', errorCode: 'EACCES', platform: 'linux' }));
+    expect(a.headline).toMatch(/Access.*was denied/);
+    expect(a.headline).not.toMatch(/macOS/);
+    expect(a.headline).toContain('EACCES');
+    const text = a.steps.join('\n');
+    expect(text).not.toContain('Files & Folders');
+    expect(text).not.toContain('System Settings');
+    expect(a.openUrl).toBeUndefined();
+  });
+
+  it('blocked on Windows: generic permission advice, no macOS-specific text or URL', () => {
+    const a = adviseRealChrome(probe({ state: 'blocked', errorCode: 'EPERM', platform: 'win32' }));
+    expect(a.headline).toMatch(/Access.*was denied/);
+    expect(a.headline).not.toMatch(/macOS/);
+    expect(a.openUrl).toBeUndefined();
+  });
+
   it('unknown: lists both causes and distinguishes an unresolvable dir', () => {
     const noDir = adviseRealChrome(probe({ state: 'unknown', userDataDir: null }));
     expect(noDir.headline).toMatch(/Could not locate/);
