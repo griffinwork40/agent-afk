@@ -105,6 +105,10 @@ AFK_MODEL_SMALL_BASE_URL='http://localhost:8080/v1' \
 AFK_MODEL_SMALL_API_KEY='mlx' afk i
 ```
 
+For a step-by-step local Mac setup (oMLX, verifying with `afk doctor`, and
+measured concurrency / thinking-mode settings), see
+[local-mac-models.md](local-mac-models.md).
+
 A per-slot `BASE_URL` routes the tier to the OpenAI-compatible path even for a
 bare id that matches no provider prefix (Ollama / LM Studio tags like
 `llama3.2:3b`). `provider` itself is config-only — set it in afk.config.json to
