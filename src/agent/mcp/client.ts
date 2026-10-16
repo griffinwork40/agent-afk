@@ -51,6 +51,7 @@ import { KeychainOAuthProvider } from './oauth.js';
 import type { McpServerLayer } from './env-containment.js';
 import { errorMessage } from '../../utils/errors.js';
 import { buildMcpSchemaValidator } from './schema-validator.js';
+import { applyMcpErrorHints } from './error-hints.js';
 
 /** Client identity advertised in the MCP handshake. */
 const CLIENT_INFO = {
@@ -383,13 +384,16 @@ export class McpClient {
       result = raw as CallToolResult;
     } catch (err) {
       const msg = errorMessage(err);
-      return {
+      return applyMcpErrorHints(this.serverName, this.config, {
         content: `MCP tool "${this.serverName}.${toolName}" failed: ${msg}`,
         isError: true,
-      };
+      });
     }
 
-    return normalizeCallToolResult(result);
+    // Servers usually report failures as an `isError` RESULT, not a throw
+    // (chrome-devtools-mcp's DevToolsActivePort error arrives this way), so
+    // hints must run on this path too.
+    return applyMcpErrorHints(this.serverName, this.config, normalizeCallToolResult(result));
   }
 
   /**

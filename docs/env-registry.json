@@ -2,6 +2,14 @@
   "version": 1,
   "vars": [
     {
+      "name": "__CFBundleIdentifier",
+      "description": "macOS-only, set by the OS: bundle id of the app that launched this process (e.g. the terminal). Read by the real-Chrome probe to name the app that needs Files & Folders access to Google Chrome on macOS 27+. A hint only — under tmux it reflects the app that started the tmux server.",
+      "type": "string",
+      "required": false,
+      "example": "com.apple.Terminal",
+      "category": "process"
+    },
+    {
       "name": "AFK_ALLOW_PROJECT_MCP",
       "description": "Opt-in to loading + spawning MCP servers declared in <cwd>/.mcp.json. Fail-closed: when unset (or 0), project-local servers are NOT spawned; set to a truthy value (1/true/yes/on) to load them. A project-local .mcp.json spawns arbitrary commands on session start, so it is off by default to prevent code execution when entering an untrusted repo (issue #571). Skipped servers are listed in a startup warning with the opt-in instruction.",
       "type": "boolean",
