@@ -16,6 +16,7 @@ import { SubagentLifecyclePayloadSchema } from '../trace/events.js';
 import { usageToMetadata } from '../session/stream-consumer.js';
 import { openAICompatibleBilling } from '../usage.billing.js';
 import { AccountingAccumulator } from '../session/accounting-accumulator.js';
+import { TimeoutError } from '../../utils/errors.js';
 
 /** Each `sendMessageStream` call (one per turn) yields the next event list. */
 function mockSession(turns: OutputEvent[][]): IAgentSession {
@@ -211,6 +212,61 @@ describe('subagent billing on unsuccessful terminations', () => {
     expect(cancelled.payload.source).toBe('explicit');
     expect(h.onSucceeded).toHaveBeenCalledTimes(1);
     expectBillingOnlyRollup(h.acc);
+  });
+
+  it('own wall-clock timeout: the aborted turn\'s billed done, arriving after run() settled, reaches the rollup once (#3889)', async () => {
+    // Real ordering, no manual settlement: withTimeout aborts the controller
+    // and rejects the race in the same tick, so run()'s catch settles
+    // (nothing accrued yet) BEFORE the provider yields the aborted turn's
+    // billed `done`. Only the processDoneEvent settlement point catches it.
+    const graph = new AbortGraph();
+    const controller = new AbortController();
+    graph.register('root', controller);
+    const writer = new InMemoryTraceWriter();
+    const acc = new AccountingAccumulator();
+    const onSucceeded = vi.fn(
+      (usage: Parameters<AccountingAccumulator['recordSubagentCompletion']>[0], cost: number | undefined) =>
+        acc.recordSubagentCompletion(usage, cost),
+    );
+    let lateDoneYielded = false;
+    const session: IAgentSession = {
+      sessionId: 'timeout-test',
+      state: 'idle',
+      abortSignal: new AbortController().signal,
+      async *sendMessageStream() {
+        if (!controller.signal.aborted) {
+          await new Promise<void>((resolve) => controller.signal.addEventListener('abort', () => resolve(), { once: true }));
+        }
+        // Provider unwind after abort: a macrotask later, the turn's usage arrives.
+        await new Promise<void>((resolve) => setTimeout(resolve, 5));
+        lateDoneYielded = true;
+        yield openAIDone(10_000, 9_000, 100);
+      },
+      async interrupt() {},
+      async close() {},
+      getInputStreamRef: () => ({ pushUserMessage: vi.fn() }),
+      getLastResponseMetadata: () => null,
+    } as unknown as IAgentSession;
+
+    const handle: SubagentHandleImpl<unknown> = new SubagentHandleImpl(
+      'timeout-child', session, controller, graph, undefined, 20, undefined, vi.fn(),
+      undefined, undefined, undefined, undefined, undefined, writer, onSucceeded,
+    );
+
+    await expect(handle.run('go')).rejects.toBeInstanceOf(TimeoutError);
+    // run() has already settled; the late done has not arrived yet.
+    expect(lateDoneYielded).toBe(false);
+    await vi.waitFor(() => expect(onSucceeded).toHaveBeenCalledTimes(1), { timeout: 500 });
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+    expect(onSucceeded).toHaveBeenCalledTimes(1);
+    expect(onSucceeded.mock.calls[0]?.[0]).toMatchObject({ outcome: 'failed', billing: expectedTokens });
+    const snap = acc.snapshot();
+    expect(snap.subagentCompletedCount).toBe(0);
+    expect(snap.subagentBilling).toEqual({
+      total: expectedTokens,
+      byProvider: { 'openai-compatible': expectedTokens },
+    });
   });
 
   it('explicit cancel() of an in-flight run that already accrued billing: row carries tokens', async () => {

@@ -13,7 +13,6 @@
 
 import type { ClosureSignals } from './closure-emitter.js';
 import type { ResponseMetadata } from '../types.js';
-import type { BillingUsage } from '../provider.js';
 import { billingFromUsageRecord } from '../usage.billing.js';
 import { BillingRollup, optionalBilling, type BillingRollupSnapshot } from './billing-rollup.js';
 
@@ -200,16 +199,7 @@ export class AccountingAccumulator {
    *                  {@link SubagentSucceededPayload.totalCostUsd}).
    */
   recordSubagentCompletion(
-    usage?: {
-      inputTokens?: number;
-      outputTokens?: number;
-      cacheReadTokens?: number;
-      cacheCreationTokens?: number;
-      /** Billing counts summed across ALL the child's turns (#3878). */
-      billing?: BillingUsage;
-      /** Set only for a billing-only report from a child that did not succeed. */
-      outcome?: 'failed' | 'cancelled';
-    },
+    usage?: import('../subagent/result.js').SubagentTrace['usage'],
     costUsd?: number,
   ): void {
     if (usage?.outcome !== undefined) {
