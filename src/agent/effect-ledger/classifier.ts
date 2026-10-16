@@ -31,6 +31,13 @@ const ALWAYS_EXTERNAL_TOOLS = new Set<string>([
   // Image generation/editing — paid OpenAI API call, irreversible external effect.
   'image_generate',
   'image_edit',
+  // Remote agent run — starts a billed, non-idempotent `afk chat` process on
+  // another machine. A dropped-connection (`lost`) result still leaves the run
+  // alive on the remote host; the post-hook sees isError=true and records
+  // status='unknown', which gates any replay until the caller verifies whether
+  // the remote session is still running (the run id and session id are embedded
+  // in the error text for that verification).
+  'remote_agent',
   // MCP write tools match the `mcp__*` prefix pattern — see classifyToolCall.
 ]);
 

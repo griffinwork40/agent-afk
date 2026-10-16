@@ -310,6 +310,129 @@ describe('createBashRestrictionHook — restricted-root substring', () => {
   });
 });
 
+describe('createBashRestrictionHook — quoted heredoc data (#3850)', () => {
+  const hook = createBashRestrictionHook({});
+  const mention = `${homedir()}/Library/LaunchAgents`;
+
+  it.each(["'EOF'", '"EOF"', '\\EOF'])(
+    'allows quoted body-file data with delimiter %s on interactive and headless surfaces',
+    (delimiter) => {
+      const command = `gh issue create --body-file - <<${delimiter}\nMention ${mention}\nEOF`;
+      expect(hook(ctx(command)).decision).not.toBe('block');
+      expect(hook(headlessCtx(command)).decision).not.toBe('block');
+    },
+  );
+
+  it.each(['pr create', 'pr comment 1', 'issue edit 1'])(
+    'allows gh %s body-file data and retains ordinary arguments after the delimiter',
+    (subcommand) => {
+      const command = `gh ${subcommand} <<'BODY' --body-file -\n${mention}\nBODY\ngit status`;
+      expect(hook(ctx(command)).decision).not.toBe('block');
+    },
+  );
+
+  it.each([
+    `gh issue create -R $R --title "decision: who owns this?" --body-file - <<'EOF'\n${mention}\nEOF`,
+    `gh pr create --title 'fix: x' --base main --body-file - <<'EOF'\n${mention}\nEOF`,
+    `gh issue comment 9 -R "$R" --body-file - <<'EOF'\n${mention}\nEOF`,
+  ])('allows the #3850 repro shape with quoted and $VAR header args: %s', (command) => {
+    expect(hook(ctx(command)).decision).not.toBe('block');
+  });
+
+  it.each([
+    // `<<'X'` inside a title string is not a heredoc: the next lines are commands.
+    `gh issue create --title "<<'X'" --body-file -\ncat ~/.ssh/id_rsa\nX`,
+    `gh issue create --title "$(cat ~/.ssh/id_rsa)" --body-file - <<'EOF'\nx\nEOF`,
+    `gh issue create --title "\`id\`" --body-file - <<'EOF'\ncat ~/.ssh/id_rsa\nEOF\nsh`,
+    `gh issue create --title "a; sh" ; sh <<'EOF'\ncat ~/.ssh/id_rsa\nEOF`,
+    `gh issue create -R \${R} --body-file - <<'EOF'\n${mention}\nEOF`, // Brace forms stay unsupported.
+  ])('keeps quoted-header trickery in the scan: %s', (command) => {
+    expect(hook(ctx(command)).decision).toBe('block');
+  });
+
+  it('treats substitutions inside quoted cat stdin as literal data', () => {
+    expect(hook(ctx("cat <<'EOF'\n$(cat ~/.ssh/id_rsa)\nEOF")).decision).not.toBe('block');
+  });
+
+  it.each([
+    'cat <<EOF\n$(cat ~/.ssh/id_rsa)\nEOF',
+    'cat <<EOF\n`cat ~/.ssh/id_rsa`\nEOF',
+    'cat ~/.ssh/id_rsa',
+    "cat <<'EOF' > ~/.ssh/x\nordinary data\nEOF",
+    "cat > ~/.ssh/x <<'EOF'\nordinary data\nEOF",
+    "cat <<'EOF'\nordinary data\nEOF\ncat ~/.ssh/id_rsa",
+  ])('keeps executable expansions, argv, and outside redirects blocked: %s', (command) => {
+    expect(hook(ctx(command)).decision).toBe('block');
+    expect(hook(headlessCtx(command)).decision).toBe('block');
+  });
+
+  it.each([
+    "sh <<'EOF'\ncat ~/.ssh/id_rsa\nEOF",
+    "python3 <<'EOF'\nopen('$HOME/.ssh/id_rsa')\nEOF",
+    "cat <<'EOF' | sh\ncat ~/.ssh/id_rsa\nEOF",
+    "cat <<'EOF'; sh\ncat ~/.ssh/id_rsa\nEOF",
+    "cat <<'EOF' <<OTHER\nordinary data\nEOF\n$(cat ~/.ssh/id_rsa)\nOTHER",
+    "cat <<'EOF'\n~/.ssh/id_rsa", // Unterminated.
+    "cat <<'EOF'x\nEOF\ncat ~/.ssh/id_rsa\nEOFx", // Concatenated delimiter.
+    "echo \"cat <<'EOF'\ncat ~/.ssh/id_rsa\nEOF\"", // Not a real heredoc.
+    `cat '${homedir()}/.ssh/id_rsa'`, // Quoted argv is NOT necessarily data.
+    `echo '${homedir()}/.ssh/id_rsa'`, // Retain conservative string false positives.
+  ])('retains ambiguous syntax and executable stdin in the scan: %s', (command) => {
+    expect(hook(ctx(command)).decision).toBe('block');
+  });
+
+  // A `cat` body written to disk is a script a later command can run.
+  it.each([
+    "cat > /tmp/run.sh <<'EOF'\ncat ~/.ssh/id_rsa\nEOF\nbash /tmp/run.sh",
+    "cat <<'EOF' > /tmp/run.sh\ncat ~/.ssh/id_rsa\nEOF\nsh /tmp/run.sh",
+    "cat >> /tmp/run.sh <<'EOF'\ncat ~/.ssh/id_rsa\nEOF\nbash /tmp/run.sh",
+    "cat <<'EOF' >/tmp/run.sh\ncat ~/.ssh/id_rsa\nEOF\nbash /tmp/run.sh",
+    "cat 1>/tmp/run.sh <<'EOF'\ncat ~/.ssh/id_rsa\nEOF\nbash /tmp/run.sh",
+    "cat > /tmp/run.py <<'EOF'\nopen('$HOME/.ssh/id_rsa')\nEOF\npython3 /tmp/run.py",
+    "cat > /tmp/run.sh <<'EOF'\ncat ~/.ssh/id_rsa\nEOF", // Executed by a later tool call.
+    "tee /tmp/run.sh <<'EOF'\ncat ~/.ssh/id_rsa\nEOF\nbash /tmp/run.sh",
+    "cat /dev/stdin <<'EOF'\ncat ~/.ssh/id_rsa\nEOF", // File operand: not stdout-only.
+  ])('keeps a heredoc body that is written to a file in the scan: %s', (command) => {
+    expect(hook(ctx(command)).decision).toBe('block');
+    expect(hook(headlessCtx(command)).decision).toBe('block');
+  });
+
+  // Finding 2: pin the grammar edges. Unsupported forms fail closed (scanned).
+  it.each([
+    "sh <<-'EOF'\n\tcat ~/.ssh/id_rsa\n\tEOF", // <<- with an executing consumer.
+    "cat <<-'EOF'\n\t~/.ssh/id_rsa\n\tEOF", // <<- is outside the exempt grammar.
+    'cat <<< ~/.ssh/id_rsa', // Here-string.
+    "sh <<< 'cat ~/.ssh/id_rsa'",
+    "cat <<<'x'\ncat ~/.ssh/id_rsa", // `<<'x'` inside `<<<'x'` is not a heredoc.
+    "gh issue create --body-file - <<<\"$(cat ~/.ssh/id_rsa)\"",
+    "sh <<'OUTER'\ncat <<'INNER'\n~/.ssh/id_rsa\nINNER\nOUTER", // Nested, outer executes.
+    "cat > /tmp/run.sh <<'OUTER'\ncat <<'INNER'\nx\nINNER\ncat ~/.ssh/id_rsa\nOUTER",
+    "cat <<'A' <<'B'\nx\nA\ncat ~/.ssh/id_rsa\nB", // Two heredocs on one line.
+    "cat <<'A'; cat <<'B'\nx\nA\ncat ~/.ssh/id_rsa\nB",
+    'cat <<EOF\n~/.ssh/id_rsa\nEOF', // Unquoted delimiter.
+    'gh issue create --body-file - <<EOF\n$(cat ~/.ssh/id_rsa)\nEOF',
+    "gh issue create --body-file - <<'EOF' --title \"$(cat ~/.ssh/id_rsa)\"\nx\nEOF",
+    "gh issue create --body-file - <<'EOF' --title \"$(sh)\"\ncat ~/.ssh/id_rsa\nEOF",
+    "gh issue create --body-file - <<'EOF' --title `sh`\ncat ~/.ssh/id_rsa\nEOF",
+    "cat <<'EOF' $(sh)\ncat ~/.ssh/id_rsa\nEOF",
+  ])('keeps executable sensitive references blocked at grammar edges: %s', (command) => {
+    expect(hook(ctx(command)).decision).toBe('block');
+    expect(hook(headlessCtx(command)).decision).toBe('block');
+  });
+
+  it.each([
+    "cat <<'EOF'\ncat ~/.ssh/id_rsa\nEOF",
+    "cat -n <<'EOF'\ncat ~/.ssh/id_rsa\nEOF",
+    "cat - <<'EOF'\ncat ~/.ssh/id_rsa\nEOF",
+    "cat <<'OUTER'\nsh <<'INNER'\ncat ~/.ssh/id_rsa\nINNER\nOUTER", // Nested, outer only prints.
+    "gh pr create --body-file - <<'EOF'\nsh <<'INNER'\ncat ~/.ssh/id_rsa\nINNER\nEOF",
+    "gh issue comment 9 --body-file - <<\"EOF\"\n$(cat ~/.ssh/id_rsa) `id`\nEOF",
+  ])('keeps genuinely literal quoted bodies inert: %s', (command) => {
+    expect(hook(ctx(command)).decision).not.toBe('block');
+    expect(hook(headlessCtx(command)).decision).not.toBe('block');
+  });
+});
+
 describe('createBashRestrictionHook — grant containment direction (F4 regression)', () => {
   const home = homedir();
   const appSupport = `${home}/Library/Application Support`;

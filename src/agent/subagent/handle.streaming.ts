@@ -33,6 +33,7 @@ import {
 import { buildEmptyBufferError, synthesizeEmptyBufferPartial, synthesizeTimeoutPartial } from './empty-buffer-partial.js';
 import type { SubagentHandleImpl } from './handle.js';
 import { CappedHandoffAccumulator } from './capped-handoff.js';
+import { settleUnreportedBilling } from './handle.billing.js';
 
 /**
  * Consume the streaming message iterator, forward events to progressSink,
@@ -221,6 +222,24 @@ function processDoneEvent<T>(
           ? u['cache_creation_input_tokens']
           : undefined,
     };
+    // Item 1 fix (#3889): when a subagent hits its OWN wall-clock budget,
+    // `withTimeout` aborts the controller and rejects in the same tick, so
+    // `run()`'s catch calls `settleUnreportedBilling('failed')` BEFORE this
+    // `done` event arrives (providers yield usage on abort). The spend is
+    // then stranded on `_runBilling` with no later settlement point.
+    //
+    // When the handle is already `'failed'` (set by `run()`'s catch before
+    // the aborted stream unwinds), settle the newly-arrived delta immediately.
+    // `takeUnreportedBilling` is exactly-once by amount: if the catch already
+    // reported everything (or nothing arrived yet) the delta is zero → no-op.
+    //
+    // `'cancelled'` is deliberately excluded: late billing on the cancel path
+    // is routed through `run()`'s post-cancel catch branch and
+    // `drainAndEmitSuccess` — adding a third settlement here would over-fire
+    // on drain turns where `cancel()` races a `done` inside the stream loop.
+    if ((handle._currentStatus as string) === 'failed') {
+      settleUnreportedBilling(handle, 'failed');
+    }
   }
 }
 

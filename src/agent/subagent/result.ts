@@ -196,6 +196,14 @@ export interface SubagentTrace {
      * overwrites them) and are kept unchanged for existing consumers.
      */
     billing?: BillingUsage;
+    /**
+     * Set on billing-only reports from a child that did NOT succeed (#3878).
+     * When present, `onSubagentSucceeded` is firing for accounting purposes
+     * only — the legacy success counters (`subagentCompletedCount`, running
+     * tokens/cost) are NOT incremented. Consumers MUST check this field before
+     * treating the callback as a success signal.
+     */
+    outcome?: 'failed' | 'cancelled';
   };
 }
 

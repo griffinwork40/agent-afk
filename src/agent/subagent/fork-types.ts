@@ -335,17 +335,22 @@ export interface SubagentManagerOptions {
   surface?: Surface;
   /**
    * Optional callback invoked after each forked subagent reaches
-   * `succeeded` status. Receives the subagent's token usage and optional
-   * USD cost so a parent session can accumulate them into the
-   * `session_sealed` rollup without a direct reference to `AgentSession`.
+   * `succeeded` status, AND once more (billing-only) for a child that
+   * accrued spend but did not succeed (#3878, #3889).
+   *
+   * Receives the subagent's token usage and optional USD cost so a parent
+   * session can accumulate them into the `session_sealed` rollup without a
+   * direct reference to `AgentSession`.
    *
    * Intended wiring: `AgentSession.recordSubagentCompletion` bound to the
    * session instance. The callback fires synchronously on the
    * `SubagentHandleImpl.run()` success path before `onTerminal()`.
-   * It also fires once with a billing-only usage tagged `outcome:
-   * 'failed' | 'cancelled'` for a child that accrued billing but did not
-   * succeed (#3878); `recordSubagentCompletion` routes that to the billing
-   * rollup only. Forward `usage` verbatim so the tag is preserved.
+   *
+   * **Consumers MUST check `usage?.outcome`** before treating this as a
+   * success signal. When `usage.outcome` is `'failed'` or `'cancelled'`,
+   * the callback carries only `usage.billing` — the legacy counters
+   * (`subagentCompletedCount`, running tokens/cost) must NOT be
+   * incremented. Forward `usage` verbatim so the tag is preserved.
    */
   onSubagentSucceeded?: (
     usage: import('./result.js').SubagentTrace['usage'],

@@ -10,6 +10,8 @@ import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { aggregateTraces } from './traces.js';
+import { computeSessionCost } from '../../agent/trace/cost.js';
+import { parseTraceJsonl } from '../../agent/trace/receipt.js';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -347,5 +349,32 @@ describe('aggregateTraces', () => {
     const result = aggregateTraces({ days: 30, afkHome: tmpRoot });
     expect(result.sessionsWithCost).toBe(1);
     expect(result.totalCostUsd).toBeCloseTo(0.05);
+  });
+});
+
+describe('aggregateTraces cost uses the shared per-trace definition (#3879)', () => {
+  function sealedEvent(root: number, subagent: number, seq = 9): string {
+    return JSON.stringify({
+      ts: NOW_ISO, seq, kind: 'session_sealed',
+      payload: { status: 'succeeded', finalCostUsd: root, finalTurnCount: 3, closedAt: NOW_ISO, subagentCostUsd: subagent },
+    });
+  }
+
+  it('total equals the sum of per-trace computeSessionCost totals; sessionsWithCost is per trace', () => {
+    // sess-1: root $1 + two children ($2, $0.5 failed); seal rollup saw only $2.
+    const t1 = [closureEvent(2, 1), closureEvent(0.5, 2), closureEvent(1, 3), sealedEvent(1, 2)];
+    // sess-2: root only.
+    const t2 = [closureEvent(0.25, 1), sealedEvent(0.25, 0)];
+    writeSession('sess-1', makeSession({ sessionId: 'sess-1' }));
+    writeTrace('sess-1', t1);
+    writeSession('sess-2', makeSession({ sessionId: 'sess-2' }));
+    writeTrace('sess-2', t2);
+
+    const result = aggregateTraces({ days: 30, afkHome: tmpRoot });
+    const perTrace = [t1, t2].map((t) => computeSessionCost(parseTraceJsonl(t.join('\n'))).totalCostUsd ?? 0);
+    expect(result.totalCostUsd).toBeCloseTo(perTrace[0]! + perTrace[1]!, 9);
+    expect(result.totalCostUsd).toBeCloseTo(3.75, 9);
+    // Four closures carry cost but only two traces exist.
+    expect(result.sessionsWithCost).toBe(2);
   });
 });

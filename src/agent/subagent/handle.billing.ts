@@ -16,6 +16,11 @@
  *     branch of `run()`'s catch → {@link settleUnreportedBilling} hands a
  *     BILLING-ONLY delta, tagged `outcome: 'failed' | 'cancelled'`, to the
  *     same callback.
+ *   - late `done` arriving after a terminal settlement (own-timeout path):
+ *     {@link processDoneEvent} in handle.streaming.ts detects a terminal
+ *     handle status and calls {@link settleUnreportedBilling} once more for
+ *     the newly-arrived delta, ensuring spend from an aborted turn is not
+ *     silently dropped (#3889).
  *
  * So spend that arrives AFTER an explicit `cancel()` already settled (a
  * `done` drained on interrupt, or a drain turn finishing during the cancel)
@@ -101,10 +106,7 @@ export function settleUnreportedBilling<T>(
 ): ReturnType<typeof billingLifecycleFields> {
   const billing = takeUnreportedBilling(handle);
   if (billing === undefined) return {};
-  // Non-literal on purpose: the callback's declared param type is the legacy
-  // `SubagentTrace['usage']`; the extra `outcome` tag rides along structurally
-  // and is read by `AccountingAccumulator.recordSubagentCompletion`.
-  const usage = { billing, outcome };
+  const usage: import('./result.js').SubagentTrace['usage'] = { billing, outcome };
   handle.onSubagentSucceeded?.(usage, undefined);
   return billingLifecycleFields(handle._runBilling);
 }

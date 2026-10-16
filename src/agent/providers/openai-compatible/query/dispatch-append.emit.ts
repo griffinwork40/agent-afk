@@ -3,6 +3,7 @@ import type { TraceSink } from '../../../trace/index.js';
 import type { ProviderEvent } from '../../../provider.js';
 import type { ToolCall, ToolResult } from '../../anthropic-direct/types.js';
 import { buildToolCallCompletedPayload } from '../../shared/tool-call-trace.js';
+import { hasOutputTruncatedMarker } from '../../../tools/handlers/_output-cap.js';
 
 /**
  * Emit `tool.output` (and `tool.diff`) provider events for every dispatched
@@ -51,7 +52,7 @@ export async function* emitDispatchedToolOutputs({
     // See issue #2249.
     const completedAt = result.completedAt ?? Date.now();
     const durationMs = typeof startedAt === 'number' ? completedAt - startedAt : 0;
-    const truncated = result.truncated === true || result.content.includes('[output truncated');
+    const truncated = result.truncated === true || hasOutputTruncatedMarker(result.content);
     void emitToolCall(
       traceWriter,
       buildToolCallCompletedPayload({

@@ -42,7 +42,7 @@ export interface SessionExecutorsBindTarget {
   readonly messageJournal: MessageJournal | undefined;
   getInputStreamRef(): Pick<InputStreamRef, 'pushUserMessage' | 'queueFrameworkContext'>;
   recordSubagentCompletion(
-    usage?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheCreationTokens?: number },
+    usage?: import('../subagent/result.js').SubagentTrace['usage'],
     costUsd?: number,
   ): void;
 }

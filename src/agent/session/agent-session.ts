@@ -501,7 +501,7 @@ export class AgentSession implements IAgentSession {
    * granularity); crossing it aborts with `BudgetExceededError`.
    */
   recordSubagentCompletion(
-    usage?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheCreationTokens?: number },
+    usage?: import('../subagent/result.js').SubagentTrace['usage'],
     costUsd?: number,
   ): void {
     // Tree budget: subagent cost shares config.maxBudgetUsd with this session.

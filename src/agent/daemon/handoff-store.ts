@@ -23,7 +23,7 @@ import { mkdir, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/p
 import { join } from 'node:path';
 import { assertSafeJobId, getHandoffsDir } from '../../paths.js';
 import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
-import { isErrnoCode } from '../../utils/errors.js';
+import { isErrnoCode, isWindowsLockContention } from '../../utils/errors.js';
 import { debugLog } from '../../utils/debug.js';
 
 // ---------------------------------------------------------------------------
@@ -303,6 +303,8 @@ export async function withHandoffLock<T>(
   taskId: string,
   handoffsDir: string,
   cb: () => Promise<T>,
+  /** Injectable for unit-testing on any OS; defaults to `process.platform`. */
+  platform: string = process.platform,
 ): Promise<T | null> {
   const lock = lockPath(handoffsDir, taskId);
 
@@ -310,7 +312,10 @@ export async function withHandoffLock<T>(
   try {
     await writeFile(lock, '', { flag: 'wx', mode: 0o600 });
   } catch (err) {
-    if (isErrnoCode(err, 'EEXIST')) {
+    // On Windows, a just-released lock sits in "delete-pending" state until
+    // the last handle closes. An O_EXCL create during that window gets
+    // EPERM/EACCES/EBUSY. Treat those as contention — same as EEXIST.
+    if (isErrnoCode(err, 'EEXIST') || isWindowsLockContention(err, platform)) {
       // Check whether the lock is stale (crash-leftover). A fresh lock means a
       // genuine concurrent holder — give up immediately.
       let lockMtime: number;
@@ -331,7 +336,7 @@ export async function withHandoffLock<T>(
       try {
         await writeFile(lock, '', { flag: 'wx', mode: 0o600 });
       } catch (retryErr) {
-        if (isErrnoCode(retryErr, 'EEXIST')) {
+        if (isErrnoCode(retryErr, 'EEXIST') || isWindowsLockContention(retryErr, platform)) {
           // Genuine race on the retry — another process won.
           return null;
         }

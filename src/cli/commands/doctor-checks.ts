@@ -29,6 +29,7 @@ import {
   type DetectedSource,
   type ImportFromConfig,
 } from '../../config/import-sources.js';
+import { checkSlotEndpoints } from './doctor-slot-endpoints.js';
 
 export interface Check {
   name: string;
@@ -347,6 +348,8 @@ export async function runDoctorChecks(): Promise<Check[]> {
 
   const importCheck = await checkImportAvailable();
   if (importCheck !== null) results.push(importCheck);
+
+  results.push(...(await checkSlotEndpoints()));
 
   return results;
 }

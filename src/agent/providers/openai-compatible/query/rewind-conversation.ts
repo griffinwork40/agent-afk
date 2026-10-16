@@ -5,8 +5,8 @@
  * Mirrors `anthropic-direct/query/rewind-conversation.ts` on the OpenAI
  * message shape. Two pure operations over `priorTurns`:
  *
- *   - {@link listOpenAIUserTurns} — enumerate genuine user-text turns
- *     (skipping pure tool-result user messages), newest-first.
+ *   - {@link listOpenAIUserTurns} — enumerate user-authored turns, newest-first,
+ *     via the shared structural rule in `agent/content/user-authored.ts`.
  *
  *   - {@link rewindOpenAIConversation} — discard a chosen user turn and
  *     everything after it. Returns the removed message's text so the surface
@@ -28,38 +28,14 @@ import type {
 } from '../../../provider.js';
 import type { OpenAIMessage } from '../messages.js';
 import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
+import { isUserAuthoredTurn, messageText } from '../../../content/user-authored.js';
 
 const PREVIEW_MAX_CHARS = 72;
 
-/** Extract text content from an OpenAI message (role:'user' | 'assistant'). */
-function extractOpenAIText(content: OpenAIMessage['content']): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  const parts: string[] = [];
-  for (const block of content as Array<{ type?: string; text?: string }>) {
-    if (block.type === 'text' && typeof block.text === 'string') {
-      parts.push(block.text);
-    }
-  }
-  return parts.join(' ');
-}
-
-/**
- * A "genuine" user turn is one the user typed — role `user` with at least one
- * non-empty text block. Pure tool-result messages (which also have role `user`
- * in OpenAI's wire format) carry only tool-result content blocks and so are
- * excluded automatically by the text-extraction check.
- */
-function isGenuineUserTurn(msg: OpenAIMessage): boolean {
-  if (msg.role !== 'user') return false;
-  // Tool-result messages use role:'tool' in the OpenAI wire format; the only
-  // role:'user' messages that slip through are synthetic ones injected by
-  // `harnessUserMessage` (queued_user_message). Both should be rewindable if
-  // they contain text, so the text check is the right gate.
-  // Note: image-only synthetic user turns (no extractable text) fail this
-  // check and are intentionally unrewindable — same behaviour as anthropic-direct.
-  return extractOpenAIText(msg.content).trim().length > 0;
-}
+// Tool output uses role:'tool' in the OpenAI wire format, so it fails the
+// shared rule's role check. Queued mid-turn messages (`harnessUserMessage`) are
+// pushed as their own role:'user' messages (dispatch-append.ts) and stay
+// rewindable. Image-only user turns have no text and are not targets.
 
 function toPreview(text: string): string {
   const flat = text.replace(/\s+/g, ' ').trim();
@@ -76,8 +52,8 @@ export function listOpenAIUserTurns(priorTurns: readonly OpenAIMessage[]): Rewin
   const targets: RewindTarget[] = [];
   for (let i = 0; i < priorTurns.length; i++) {
     const msg = priorTurns[i];
-    if (msg && isGenuineUserTurn(msg)) {
-      targets.push({ turnIndex: i, preview: toPreview(extractOpenAIText(msg.content)) });
+    if (msg && isUserAuthoredTurn(msg)) {
+      targets.push({ turnIndex: i, preview: toPreview(messageText(msg.content)) });
     }
   }
   return targets.reverse();
@@ -106,11 +82,11 @@ export function rewindOpenAIConversation(
     return { rewound: false, reason: 'invalid-target', messagesBefore, messagesAfter: messagesBefore };
   }
   const target = priorTurns[turnIndex];
-  if (!target || !isGenuineUserTurn(target)) {
+  if (!target || !isUserAuthoredTurn(target)) {
     return { rewound: false, reason: 'invalid-target', messagesBefore, messagesAfter: messagesBefore };
   }
 
-  const reloadText = extractOpenAIText(target.content);
+  const reloadText = messageText(target.content);
   priorTurns.splice(turnIndex);
 
   return {

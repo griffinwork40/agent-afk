@@ -30,6 +30,7 @@ import { getReceiptsDir } from '../../paths.js';
 import { env } from '../../config/env.js';
 import type { HookHandler } from '../hooks.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
+import { SessionCostAccumulator, type CostTokens, type SessionCostSource } from './cost.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
 import {
   BENIGN_FAILURE_CLASSES,
@@ -119,15 +120,20 @@ export interface RunReceipt {
     failed: number;
     cancelled: number;
   };
+  // Contract (#3879): `finalCostUsd` and `tokens` are ROOT-scoped and kept
+  // for back-compat: `finalCostUsd` is the seal's root cost (last lifecycle
+  // cycle) and `tokens` is the last closure's (normally the root's). Whole-
+  // session spend including every subagent is `totalCostUsd` / `totalTokens`,
+  // computed by `computeSessionCost` in `./cost.ts`.
   cost: {
     finalCostUsd?: number;
     turnCount?: number;
-    tokens?: {
-      input?: number;
-      output?: number;
-      cacheRead?: number;
-      cacheCreation?: number;
-    };
+    tokens?: CostTokens;
+    rootCostUsd?: number;
+    subagentCostUsd?: number;
+    totalCostUsd?: number;
+    totalTokens?: CostTokens;
+    costSource?: SessionCostSource;
   };
   failures: ReceiptToolFailure[];
   humanReviewRequired: boolean;
@@ -206,9 +212,11 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
   let sealedTurnCount: number | undefined;
   let sealedClosedAt: string | undefined;
   let incomplete = false;
+  const costAcc = new SessionCostAccumulator();
 
   for (const ev of events) {
     byKind[ev.kind] = (byKind[ev.kind] ?? 0) + 1;
+    costAcc.add(ev);
     switch (ev.kind) {
       case 'tool_call': {
         const p = ev.payload;
@@ -319,10 +327,16 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
   if (status === 'unknown')
     limitations.push('No session_sealed record was present when this receipt was generated.');
 
+  const sc = costAcc.result();
   const cost: RunReceipt['cost'] = {
     ...(finalCostUsd !== undefined ? { finalCostUsd } : {}),
     ...(turnCount !== undefined ? { turnCount } : {}),
     ...(closureTokens !== undefined ? { tokens: closureTokens } : {}),
+    ...(sc.rootCostUsd !== undefined ? { rootCostUsd: sc.rootCostUsd } : {}),
+    ...(sc.subagentCostUsd !== undefined ? { subagentCostUsd: sc.subagentCostUsd } : {}),
+    ...(sc.totalCostUsd !== undefined ? { totalCostUsd: sc.totalCostUsd } : {}),
+    ...(sc.totalTokens !== undefined ? { totalTokens: sc.totalTokens } : {}),
+    costSource: sc.source,
   };
 
   return {

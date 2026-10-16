@@ -273,7 +273,7 @@ function appendRoundHistory(
   // LAST tool message of the round, NOT pushed as its own `role:'user'` message
   // as on anthropic-direct. On this wire every `role:'user'` message is a
   // compaction boundary (openai-compatible/compact.ts isFreshUserTurn) and a
-  // /rewind target (rewind-conversation.ts isGenuineUserTurn), so a per-round
+  // /rewind target (rewind-conversation.ts isUserAuthoredTurn), so a per-round
   // user message would make compaction keep N rounds instead of N human turns
   // and list every stamp as a rewindable turn. The note carries no operator
   // authority (unlike queued_user_message), so riding in tool content is safe.

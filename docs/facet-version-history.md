@@ -3,6 +3,17 @@
 Full per-version change log for `FACET_VERSION` in `src/agent/facets/schema.ts`.
 Consumers should filter on `facet_version >= N` to guard against older cached facets.
 
+## v13 (#3879)
+
+- `token_breakdown.total_cost_usd` (root + every subagent at every depth) and
+  `token_breakdown.subagent_cost_usd` added. Both come from the witness trace
+  through `TraceSignals`, computed by `computeSessionCost` in
+  `src/agent/trace/cost.ts`, the one definition shared with receipts and
+  `afk insights`. They are absent when no trace was readable.
+- `token_breakdown.cost_usd` is unchanged and is documented as root-only (the
+  session sidecar's figure). Consumers that want the session's real spend should
+  read `total_cost_usd ?? cost_usd`.
+
 ## v12 (#3182)
 
 - `world_changes.files_written` now includes successful `patch_apply` calls (skip
