@@ -76,6 +76,8 @@ export class SessionCostAccumulator {
   private closureSum = 0;
   private closureCount = 0;
   private lastClosureCost: number | undefined;
+  /** `subagentId` from the last closure event; `null` = root (field absent); `undefined` = no closure yet. */
+  private lastClosureSubagentId: string | null | undefined = undefined;
   private readonly tokens: Record<(typeof TOKEN_KEYS)[number], number> = {
     input: 0,
     output: 0,
@@ -97,6 +99,8 @@ export class SessionCostAccumulator {
       this.closureCount++;
       this.closureSum += cost;
       this.lastClosureCost = cost;
+      // Track provenance: string = child actor, null = root (field absent).
+      this.lastClosureSubagentId = typeof p['subagentId'] === 'string' ? p['subagentId'] : null;
       const t = asRecord(p['finalTokens']);
       if (t !== undefined) {
         for (const k of TOKEN_KEYS) this.tokens[k] += finiteNonNeg(t[k]) ?? 0;
@@ -140,7 +144,15 @@ export class SessionCostAccumulator {
       // #3890 item 1: when the last closure's cost differs from sealRoot, the
       // root closure write failed but the seal succeeded, so add sealRoot to
       // closureSum. Either way the seal's own total stays a lower bound.
-      const rootClosureLost = this.lastClosureCost !== this.sealRoot;
+      //
+      // #3932: prefer actor provenance over cost equality. If the last closure
+      // carries a `subagentId` it is a child actor, not the root, so the root
+      // closure is lost. Fall back to equality for older traces that lack the
+      // field (lastClosureSubagentId === null means root; undefined = no closure).
+      const rootClosureLost =
+        this.lastClosureSubagentId !== null && this.lastClosureSubagentId !== undefined
+          ? true // last closure was a child — root's closure never wrote
+          : this.lastClosureCost !== this.sealRoot; // legacy equality heuristic
       const closureBased = rootClosureLost ? this.closureSum + (this.sealRoot ?? 0) : this.closureSum;
       totalCostUsd = Math.max(closureBased, sealTotal);
     }

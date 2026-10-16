@@ -19,6 +19,16 @@ function closure(cost: number, tokens: Record<string, number> = {}): TraceEvent 
   } as unknown as TraceEvent;
 }
 
+/** A closure event stamped with a child subagentId (provenance-aware, #3932). */
+function closureChild(cost: number, subagentId = 'child-1'): TraceEvent {
+  return {
+    ts,
+    seq: seq++,
+    kind: 'closure',
+    payload: { reason: 'cancelled', finalTurnCount: 1, finalCostUsd: cost, finalTokens: {}, subagentId },
+  } as unknown as TraceEvent;
+}
+
 function sealed(root: number, subagent?: number): TraceEvent {
   return {
     ts,
@@ -153,6 +163,26 @@ describe('computeSessionCost', () => {
     const r = computeSessionCost([closure(1.127), closure(0.812), sealed(0.812)]);
     expect(r.totalCostUsd).toBeCloseTo(1.939);
     expect(r.rootCostUsd).toBe(0.812);
+  });
+
+  // --- #3932 acceptance criteria ---
+
+  it('#3932 AC1: $1 failed-child closure (with subagentId) + sealed(1) totals $2 not $1', () => {
+    // Old heuristic: lastClosureCost($1) === sealRoot($1) → rootClosureLost=false → total=$1 (wrong).
+    // New heuristic: lastClosureSubagentId is set → rootClosureLost=true → total=$1+$1=$2.
+    const r = computeSessionCost([closureChild(1), sealed(1)]);
+    expect(r.totalCostUsd).toBe(2);
+    expect(r.rootCostUsd).toBe(1);
+    expect(r.subagentCostUsd).toBe(1);
+  });
+
+  it('#3932 AC2: old trace without subagentId on closure behaves as today (equality fallback)', () => {
+    // closure() has no subagentId → falls back to equality: lastClosureCost($1) === sealRoot($1)
+    // → rootClosureLost=false → total=$1 (normal root-only trace, unchanged behaviour).
+    const r = computeSessionCost([closure(1), sealed(1)]);
+    expect(r.totalCostUsd).toBe(1);
+    expect(r.rootCostUsd).toBe(1);
+    expect(r.subagentCostUsd).toBe(0);
   });
 
   it('ignores malformed payloads and non-finite costs; closureCount = valid closures only (#3890 item 3)', () => {
