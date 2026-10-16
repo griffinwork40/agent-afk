@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createServer, type IncomingHttpHeaders, type Server } from 'http';
 import type { AddressInfo } from 'net';
-import { checkSlotEndpoints, modelsUrl, sanitizeUrl } from './doctor-slot-endpoints.js';
+import { checkSlotEndpoints, modelsUrl, planProbeAuth, sanitizeUrl } from './doctor-slot-endpoints.js';
 import type { ModelSlots } from '../../agent/session/model-slots.js';
 import type { Check } from './doctor-checks.js';
 
 const SECRET = 'sk-local-super-secret-123';
+const ENV_KEY = 'sk-env-injected-abc';
+const envOnly = { readEnv: (k: string) => (k === 'OPENAI_API_KEY' ? ENV_KEY : undefined), readFile: () => null };
 
 interface Seen {
   url: string | undefined;
@@ -16,11 +18,15 @@ let server: Server;
 let base: string;
 const seen: Seen[] = [];
 
-/** Routes: /ok/v1/models lists models, /auth/v1/models → 401, /slow/v1/models hangs. */
+/** Routes: /ok/ lists models, /auth/ → 401, /keyed/ → 401 unless Bearer ENV_KEY, /slow/ hangs. */
 beforeAll(async () => {
   server = createServer((req, res) => {
     seen.push({ url: req.url, headers: req.headers });
     if (req.url?.startsWith('/auth/')) {
+      res.writeHead(401).end('unauthorized');
+      return;
+    }
+    if (req.url?.startsWith('/keyed/') && req.headers.authorization !== `Bearer ${ENV_KEY}`) {
       res.writeHead(401).end('unauthorized');
       return;
     }
@@ -190,23 +196,14 @@ describe('checkSlotEndpoints', () => {
   });
 
   it('PASS using OPENAI_API_KEY fallback when slot has baseUrl but no apiKey', async () => {
-    // The /auth route requires "Bearer sk-env-injected" to return 200.
-    // We inject it via authDeps.readEnv so no real process.env is read.
-    const ENV_KEY = 'sk-env-injected-abc';
+    // /keyed/ answers 401 unless the probe sends exactly the injected env key,
+    // so a pass proves the fallback credential was resolved and sent.
     seen.length = 0;
-
-    // Patch the server to accept the injected env key on /envauth/.
-    // We reuse the existing /auth/ route (returns 401) and /ok/ route (returns 200).
-    // The actual server requires any Bearer to pass /ok/, so point at /ok/ and
-    // assert the header arrived, then verify the key never appears in output.
     const checks = await checkSlotEndpoints({
-      bindings: slots({ local: { id: 'qwen-a', baseUrl: `${base}/ok/v1` } }),
+      bindings: slots({ local: { id: 'qwen-a', baseUrl: `${base}/keyed/v1` } }),
       timeoutMs: 2000,
       isAnthropicRouted: notAnthropic,
-      authDeps: {
-        readEnv: (k) => (k === 'OPENAI_API_KEY' ? ENV_KEY : undefined),
-        readFile: () => null,
-      },
+      authDeps: envOnly,
     });
 
     expect(checks).toHaveLength(1);
@@ -251,5 +248,49 @@ describe('checkSlotEndpoints', () => {
     expect(checks[0]!.detail).toContain('no credential configured');
     expect(checks[0]!.detail).not.toContain('auth unverified');
     expect(checks[0]!.fix).toContain('OPENAI_API_KEY');
+  });
+  it('never sends OPENAI_API_KEY to an xAI route inferred from a grok-* id', async () => {
+    // No provider field: routing infers xAI from the id (real routing decision).
+    seen.length = 0;
+    const checks = await checkSlotEndpoints({
+      bindings: slots({ local: { id: 'grok-4', baseUrl: `${base}/auth/v1` } }),
+      timeoutMs: 2000,
+      isAnthropicRouted: notAnthropic,
+      authDeps: envOnly,
+    });
+
+    expect(checks).toHaveLength(1);
+    expect(seen[seen.length - 1]!.headers.authorization).toBeUndefined();
+    expect(checks[0]!.detail).toContain('auth unverified');
+    expect(allText(checks)).not.toContain(ENV_KEY);
+  });
+
+  it('sends no credential for a forced-OAuth slot even when it carries an apiKey', async () => {
+    seen.length = 0;
+    const checks = await checkSlotEndpoints({
+      bindings: slots({
+        local: { id: 'gpt-5', baseUrl: `${base}/auth/v1`, provider: 'chatgpt-oauth', apiKey: SECRET },
+      }),
+      timeoutMs: 2000,
+      isAnthropicRouted: notAnthropic,
+      authDeps: envOnly,
+    });
+
+    expect(seen[seen.length - 1]!.headers.authorization).toBeUndefined();
+    expect(checks[0]!.state).toBe('warn');
+    expect(checks[0]!.detail).toContain('auth unverified');
+  });
+
+  it('planProbeAuth: xAI route uses only the slot key; OpenAI route falls back', () => {
+    expect(planProbeAuth({ id: 'grok-4', apiKey: SECRET }, 'xai', envOnly)).toEqual({ key: SECRET, source: 'config' });
+    expect(planProbeAuth({ id: 'grok-4' }, 'xai', envOnly)).toEqual({});
+    expect(planProbeAuth({ id: 'qwen-a' }, 'openai-compatible', envOnly)).toMatchObject({
+      key: ENV_KEY,
+      source: 'env',
+      envVar: 'OPENAI_API_KEY',
+    });
+    expect(planProbeAuth({ id: 'qwen-a' }, 'openai-compatible', { readEnv: () => undefined, readFile: () => null })).toEqual({
+      source: 'none',
+    });
   });
 });

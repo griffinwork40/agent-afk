@@ -119,7 +119,7 @@ faster per task.
 | Symptom | Fix |
 | --- | --- |
 | `afk doctor` ✗ fail, "connection refused" or "timed out" | The server is down or on another port. Run `omlx start` (or start Ollama / LM Studio) and `curl <baseUrl>/models`. |
-| ⚠ warn "returned 401" / "403" | `AFK_MODEL_LOCAL_API_KEY` does not match the server key (`OMLX_API_KEY`). |
+| ⚠ warn "returned 401" / "403" (auth rejected) | The key the probe sent does not match the server key (`OMLX_API_KEY`). The fix line names which key was used: `AFK_MODEL_LOCAL_API_KEY`, or a fallback such as `OPENAI_API_KEY` when the slot has no key. "no credential configured" means none was found; "auth unverified" means the slot uses OAuth, which doctor does not replicate. |
 | ⚠ warn "not listed; available: …" | The slot id does not match the server's id. Copy one of the listed ids into `AFK_MODEL_LOCAL`. |
 | ⚠ warn "did not return an OpenAI-style model list" | The base URL is missing the API prefix. Most servers need `/v1`. |
 | Errors or truncation on long sessions | afk assumes a larger window than the local model has. Set `models.local.contextWindow` to the window the server actually serves (`afk config set models.local.contextWindow <N>`). |

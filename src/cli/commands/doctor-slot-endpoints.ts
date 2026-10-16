@@ -21,9 +21,9 @@
  * Auth fallback: when a slot has no per-slot apiKey but routes to the
  * openai-compatible wire, the probe resolves a credential through the same
  * precedence chain the runtime uses (OPENAI_API_KEY → CODEX_API_KEY →
- * ~/.codex/auth.json apikey mode). Cases the probe cannot faithfully reproduce
- * (xAI-routed slots; chatgpt-oauth resolution) send no credential and report
- * "auth unverified" on 401/403 rather than a misleading "auth rejected" fix.
+ * ~/.codex/auth.json apikey mode). Forced-OAuth slots and a ChatGPT-OAuth
+ * resolution send no credential and report "auth unverified" on 401/403; xAI
+ * routes send only the slot's own key. See planProbeAuth.
  */
 
 import { getSlotBindings, SLOT_NAMES, type ModelSlots, type SlotName } from '../../agent/session/model-slots.js';
@@ -43,6 +43,8 @@ export interface SlotEndpointDeps {
   fetchImpl?: typeof fetch;
   /** True when the slot routes to the Anthropic Messages wire (not probed). */
   isAnthropicRouted?: (slot: SlotName, bindings: ModelSlots) => Promise<boolean>;
+  /** The slot's resolved provider route (decides which credential the probe may send). */
+  routeOf?: (slot: SlotName, bindings: ModelSlots) => Promise<string>;
   /**
    * Injectable env + fs surface forwarded to `resolveOpenAIAuth` for the
    * fallback credential path. Tests pass a stub; production uses the default
@@ -74,11 +76,15 @@ export function modelsUrl(baseUrl: string): string {
   return `${sanitizeUrl(baseUrl.trim()).replace(/\/+$/, '')}/models`;
 }
 
-async function defaultIsAnthropicRouted(slot: SlotName, bindings: ModelSlots): Promise<boolean> {
+async function defaultRouteOf(slot: SlotName, bindings: ModelSlots): Promise<string> {
   // Lazy import keeps doctor load light; reuses the real routing decision
   // instead of re-deriving it here.
   const { providerForModel } = await import('../../agent/providers/index.js');
-  return providerForModel(slot, { slots: bindings }) === 'anthropic-direct';
+  return providerForModel(slot, { slots: bindings });
+}
+
+async function defaultIsAnthropicRouted(slot: SlotName, bindings: ModelSlots): Promise<boolean> {
+  return (await defaultRouteOf(slot, bindings)) === 'anthropic-direct';
 }
 
 function errorCode(err: unknown): string | undefined {
@@ -203,20 +209,52 @@ function redactCheck(check: Check, secret: string | undefined): Check {
   return out;
 }
 
+/** What credential (if any) the probe sends, and how a 401/403 is worded. */
+interface ProbeAuth {
+  /** Sent as the Bearer token and scrubbed from output; undefined = none sent. */
+  key?: string;
+  /** 'config' | resolver source | 'none' (nothing configured); undefined = unverifiable. */
+  source?: string;
+  envVar?: string;
+}
+
 /**
- * Whether this slot's auth mechanism is unreproducible by the probe.
- * xAI slots use their own OAuth/API-key provider; chatgpt-oauth slots with a
- * custom baseUrl would send the OAuth token to the custom endpoint (per
- * resolveWireMode's hasCustomEndpoint gate, responses-config.ts:104-108), but
- * the probe has no forceChatgptOAuth signal and cannot safely replicate this.
+ * Invariant: auth is decided from the slot's RESOLVED route (the same
+ * `providerForModel` decision the runtime makes), never from `binding.provider`
+ * alone: a `grok-*` id routes to xAI with no provider field, and the OpenAI
+ * fallback chain must never send OPENAI_API_KEY to an xAI endpoint
+ * (xai/auth.ts never uses it).
+ *   - forced OAuth (`chatgpt-oauth` / `xai-oauth`): the runtime ignores any slot
+ *     key in favour of an OAuth token the probe does not replicate, so nothing
+ *     is sent and a 401 reads "auth unverified".
+ *   - xAI route: only the slot's own key is sent; no cross-provider fallback.
+ *   - otherwise: the slot key, else `resolveOpenAIAuth`'s fallback chain
+ *     (OPENAI_API_KEY, CODEX_API_KEY, ~/.codex/auth.json API-key mode), mirroring
+ *     applySlotCredentials + build-query. A ChatGPT-OAuth resolution is not
+ *     replicated (unverifiable); no resolution at all is 'none'.
  */
-function isUnreproducibleAuth(provider: string | undefined): boolean {
-  return provider === 'xai' || provider === 'xai-oauth' || provider === 'chatgpt-oauth';
+export function planProbeAuth(
+  binding: ModelSlots[SlotName],
+  route: string,
+  authDeps: AuthResolverDeps,
+): ProbeAuth {
+  if (binding.provider === 'chatgpt-oauth' || binding.provider === 'xai-oauth' || route === 'xai-oauth') return {};
+  if (binding.apiKey) return { key: binding.apiKey, source: 'config' };
+  if (route === 'xai') return {};
+  const resolution = resolveOpenAIAuth(undefined, authDeps, false);
+  if (resolution.apiKey === null) {
+    return resolution.source.startsWith('no-usable-auth') ? { source: 'none' } : {};
+  }
+  if (resolution.source === 'chatgpt-oauth') return {};
+  const auth: ProbeAuth = { key: resolution.apiKey, source: resolution.source };
+  if (resolution.envVar !== undefined) auth.envVar = resolution.envVar;
+  return auth;
 }
 
 async function probeSlot(
   slot: SlotName,
   bindings: ModelSlots,
+  route: string,
   timeoutMs: number,
   fetchImpl: typeof fetch,
   authDeps: AuthResolverDeps,
@@ -225,46 +263,11 @@ async function probeSlot(
   const name = `Model slot "${slot}" endpoint`;
   const url = modelsUrl(binding.baseUrl ?? '');
   const headers: Record<string, string> = { Accept: 'application/json' };
-
-  // Invariant: key only ever in Authorization header, never in output.
-  // When binding.apiKey is set, use it directly (Tier 1 of resolveOpenAIAuth).
-  // When absent and the slot's auth is reproducible, fall back through the
-  // same chain the runtime uses: OPENAI_API_KEY → CODEX_API_KEY →
-  // ~/.codex/auth.json (apikey mode only). Unreproducible-auth slots
-  // (xAI, chatgpt-oauth) send no credential.
-  let resolvedKey: string | undefined;
-  let authSource: string | undefined;
-  let authEnvVar: string | undefined;
-
-  if (binding.apiKey) {
-    resolvedKey = binding.apiKey;
-    authSource = 'config';
-  } else if (!isUnreproducibleAuth(binding.provider)) {
-    // Resolve through the same fallback chain the runtime uses.
-    // Pass undefined as explicitConfigKey (cleared by applySlotCredentials for
-    // this case), false for forceChatgptOAuth (not a chatgpt-oauth slot).
-    const resolution = resolveOpenAIAuth(undefined, authDeps, false);
-    // Only use the key if the source is a plain API key (not chatgpt-oauth,
-    // which we cannot send to a custom endpoint faithfully).
-    if (
-      resolution.apiKey !== null &&
-      resolution.source !== 'chatgpt-oauth' &&
-      resolution.source !== 'chatgpt-oauth-expired'
-    ) {
-      resolvedKey = resolution.apiKey;
-      authSource = resolution.source;
-      authEnvVar = resolution.envVar;
-    }
-    else if (resolution.apiKey === null && resolution.source.startsWith('no-usable-auth')) {
-      // Nothing resolved: the runtime would send no credential either, so a
-      // 401 means a key is genuinely missing, not that auth is unverifiable.
-      authSource = 'none';
-    }
-    // else: a ChatGPT-OAuth resolution — not replicated; authSource stays
-    // undefined so a 401 says "auth unverified" rather than "auth rejected".
-  }
-  // else: unreproducible auth — send no credential (authSource stays undefined).
-
+  // Invariant: the credential is only ever a header value, never in output.
+  const auth = planProbeAuth(binding, route, authDeps);
+  const resolvedKey = auth.key;
+  const authSource = auth.source;
+  const authEnvVar = auth.envVar;
   if (resolvedKey) headers['Authorization'] = `Bearer ${resolvedKey}`;
 
   let check: Check;
@@ -292,14 +295,17 @@ export async function checkSlotEndpoints(deps: SlotEndpointDeps = {}): Promise<C
   const timeoutMs = deps.timeoutMs ?? SLOT_PROBE_TIMEOUT_MS;
   const fetchImpl = deps.fetchImpl ?? fetch;
   const isAnthropic = deps.isAnthropicRouted ?? defaultIsAnthropicRouted;
+  const routeOf = deps.routeOf ?? defaultRouteOf;
   const authDeps = deps.authDeps ?? {};
 
-  const targets: SlotName[] = [];
+  const targets: Array<{ slot: SlotName; route: string }> = [];
   for (const slot of SLOT_NAMES) {
     const baseUrl = bindings[slot]?.baseUrl;
     if (!baseUrl || !baseUrl.trim()) continue;
     if (await isAnthropic(slot, bindings)) continue;
-    targets.push(slot);
+    targets.push({ slot, route: await routeOf(slot, bindings) });
   }
-  return Promise.all(targets.map((slot) => probeSlot(slot, bindings, timeoutMs, fetchImpl, authDeps)));
+  return Promise.all(
+    targets.map(({ slot, route }) => probeSlot(slot, bindings, route, timeoutMs, fetchImpl, authDeps)),
+  );
 }
