@@ -118,3 +118,55 @@ describe('redactInlineSecrets parity — prompt-dump egress', () => {
     expect(result).not.toContain(secret);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Regression cases for items 1–3 (spec #3918)
+// ---------------------------------------------------------------------------
+
+describe('regression — bare Bearer token (item 1)', () => {
+  const token = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.somePayload.signature';
+  const text = `API error: Bearer ${token} was rejected`;
+
+  it('redactSecrets removes bare Bearer token', () => {
+    const result = redactSecrets(text);
+    expect(result).not.toContain(token);
+    expect(result).toContain('[REDACTED]');
+  });
+
+  it('redactInlineSecrets removes bare Bearer token', () => {
+    const result = redactInlineSecrets(text);
+    expect(result).not.toContain(token);
+  });
+});
+
+describe('regression — short sk-ant payload (item 2, 8-char floor)', () => {
+  const key = 'sk-ant-abcdefgh12345678';
+  const text = `set key ${key} in config`;
+
+  it('redactSecrets removes short sk-ant key (8-char payload)', () => {
+    const result = redactSecrets(text);
+    expect(result).not.toContain(key);
+    expect(result).toContain('[REDACTED]');
+  });
+
+  it('redactInlineSecrets removes short sk-ant key', () => {
+    const result = redactInlineSecrets(text);
+    expect(result).not.toContain(key);
+  });
+});
+
+describe('regression — Telegram token inside /bot URL (item 3)', () => {
+  const token = '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi';
+  const text = `https://api.telegram.org/bot${token}/getMe`;
+
+  it('redactSecrets removes Telegram token inside /bot URL', () => {
+    const result = redactSecrets(text);
+    expect(result).not.toContain(token);
+    expect(result).toContain('[REDACTED]');
+  });
+
+  it('redactInlineSecrets removes Telegram token inside /bot URL', () => {
+    const result = redactInlineSecrets(text);
+    expect(result).not.toContain(token);
+  });
+});

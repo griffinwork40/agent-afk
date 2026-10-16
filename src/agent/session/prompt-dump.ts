@@ -61,11 +61,15 @@ const SECRET_KEY_PATTERN = /key|token|secret|password|credential|auth/i;
 
 /**
  * Inline secret patterns used to redact high-risk strings inside arbitrary
- * text fields (system prompt, message content).  Covers:
- *   - Anthropic API keys: sk-ant-*
- *   - Bearer tokens: Bearer <value>
- *   - AWS access keys: AKIA…
- *   - Slack bot tokens: xoxb-*
+ * text fields (system prompt, message content).  Covers (via canonical delegate):
+ *   - Bearer tokens: bare `Bearer <value>` and `Authorization: Bearer <value>`
+ *   - Anthropic API keys: sk-ant-* (≥8-char payload)
+ *   - OpenAI / generic sk-* keys
+ *   - AWS access key IDs: AKIA…, ASIA…, etc.
+ *   - Slack bot tokens: xoxb-*, xoxa-*, etc.
+ *   - Telegram bot tokens: <digits>:<35 alphanum>
+ *   - JWT tokens, generic ≥32-char opaque blobs
+ * Plus locally (NAME=value env-style patterns specific to prompt-dump context):
  *   - Generic KEY=value pairs where the value looks like a high-entropy secret
  *     (≥16 chars of non-whitespace after the '=').
  *
@@ -138,10 +142,12 @@ const INLINE_NAME_VALUE_PATTERNS: Array<[RegExp, (m: RegExpMatchArray) => string
 /**
  * Apply inline secret redaction to a string.
  *
- * Delegates to the canonical {@link redactSecrets} first (covers sk-ant,
- * sk- non-ant, Bearer, JWT, AWS IAM IDs, Slack xox tokens, Telegram bot
- * tokens, and generic ≥32-char opaque blobs), then applies the NAME=value
- * env-style patterns that are specific to the prompt-dump context.
+ * Applies the NAME=value env-style patterns specific to the prompt-dump
+ * context first (so the name-aware path guard sees `NAME=<value>` before the
+ * generic rule can absorb it), then delegates to the canonical
+ * {@link redactSecrets} (bare and Authorization-header Bearer tokens, sk-ant
+ * (≥8-char payload), sk- non-ant, JWT, AWS IAM IDs, Slack xox tokens,
+ * Telegram bot tokens, and generic ≥32-char opaque blobs).
  *
  * Returns a new string with matched secrets replaced by redaction markers.
  */

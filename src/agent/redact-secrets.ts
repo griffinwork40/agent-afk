@@ -26,8 +26,8 @@
  * process. Replaces matches with the literal string `[REDACTED]`.
  *
  * Patterns covered:
- *   - Authorization header bearer tokens   `Authorization: Bearer <value>`
- *   - Anthropic API keys                   `sk-ant-[A-Za-z0-9_-]{20,}`
+ *   - Bearer tokens (bare or in header)     `Bearer <value>` / `Authorization: Bearer <value>`
+ *   - Anthropic API keys                   `sk-ant-[A-Za-z0-9_-]{8,}`
  *   - OpenAI / generic `sk-` keys          `sk-<payload>` (non-ant prefix)
  *   - JWT tokens                           `<header>.<payload>.<signature>`
  *     where header and payload are base64url JSON (always start with `eyJ`).
@@ -56,16 +56,26 @@
  */
 export function redactSecrets(text: string): string {
   return text
-    // Authorization: Bearer <token>  (case-insensitive header)
+    // Bare Bearer <token> — case-insensitive, no header prefix required.
+    // Matches e.g. `API error: Bearer eyJ…` in addition to the header form below.
+    // Must run BEFORE the Authorization-header rule so the header form is also
+    // caught by this pass (the header rule is kept as a belt-and-suspenders
+    // variant that preserves the `Authorization: Bearer` label text).
+    .replace(/\bbearer\s+\S+/gi, 'Bearer [REDACTED]')
+    // Authorization: Bearer <token>  (case-insensitive header — label preserved)
     .replace(/\bauthorization:\s*bearer\s+\S+/gi, 'Authorization: Bearer [REDACTED]')
-    // Anthropic API keys: sk-ant-<payload>
-    .replace(/\bsk-ant-[A-Za-z0-9_-]{20,}/g, '[REDACTED]')
+    // Anthropic API keys: sk-ant-<payload ≥8 chars> (floor matches original inline pattern)
+    .replace(/\bsk-ant-[A-Za-z0-9_-]{8,}/g, '[REDACTED]')
     // OpenAI / generic sk- keys (non-ant): sk-<payload ≥20 chars>
     .replace(/\bsk-(?!ant-)[A-Za-z0-9_-]{20,}/g, '[REDACTED]')
     // Slack bot/user/app/workspace tokens: xox[baprs]-<payload>
     .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}/g, '[REDACTED]')
-    // Telegram bot tokens: <8–12 digits>:<35 alphanumeric chars>
-    .replace(/\b\d{8,12}:[A-Za-z0-9_-]{35}\b/g, '[REDACTED]')
+    // Telegram bot tokens: <8–12 digits>:<35 alphanumeric chars>.
+    // No leading \b on the digit run — \b between a letter and a digit does not
+    // fire (e.g. `/bot123456789:…`), so the old inline pattern had no \b here.
+    // Use a negative lookbehind for digits to avoid splitting a longer number,
+    // and a negative lookahead to avoid matching a prefix of a longer token.
+    .replace(/(?<!\d)\d{8,12}:[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])/g, '[REDACTED]')
     // JWT tokens: header.payload.signature — each segment is base64url-encoded
     // and `eyJ` is the deterministic prefix for `{"` (any JSON object). Three
     // segments required (unsigned JWTs with empty signature are intentionally
@@ -75,7 +85,10 @@ export function redactSecrets(text: string): string {
     // Prefixes per AWS docs: long-term (AKIA), STS temporary (ASIA), role
     // (AROA), user (AIDA), group (AGPA), instance profile (AIPA), managed
     // policy (ANPA/ANVA), public key (APKA), server cert (ABIA), context (ACCA).
-    .replace(/\b(?:AKIA|ASIA|AROA|AIDA|AGPA|AIPA|ANPA|ANVA|APKA|ABIA|ACCA)[A-Z0-9]{16}\b/g, '[REDACTED]')
+    // No leading \b — the old inline pattern had none, so `keyAKIA…` is still
+    // caught. Trailing \b is kept: the 20-char token must end at a word boundary
+    // so we don't clip a longer uppercase run mid-token.
+    .replace(/(?:AKIA|ASIA|AROA|AIDA|AGPA|AIPA|ANPA|ANVA|APKA|ABIA|ACCA)[A-Z0-9]{16}\b/g, '[REDACTED]')
     // Generic long hex/base64 secrets (≥32 chars of [A-Za-z0-9+/=_-]).
     // The word-boundary lookaround only guards where a match may START — it
     // does NOT stop the class from swallowing `/`, so a long bare path argument
