@@ -355,3 +355,34 @@ describe('McpManager (integration: stdio fixture)', () => {
     10_000,
   );
 });
+
+describe('McpManager stdout cleanliness (#3892)', () => {
+  it(
+    'connect log goes to stderr, not stdout',
+    async () => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        manager = await McpManager.fromConfig({
+          testsrv: {
+            type: 'stdio',
+            command: process.execPath,
+            args: [FIXTURE],
+          },
+        });
+
+        // No [mcp:...] connected line should have gone to console.log (stdout).
+        const logLines = logSpy.mock.calls.map((c) => String(c[0]));
+        expect(logLines.some((l) => l.includes('[mcp:'))).toBe(false);
+
+        // The connected line MUST appear on console.error (stderr).
+        const errLines = errorSpy.mock.calls.map((c) => String(c[0]));
+        expect(errLines.some((l) => l.includes('[mcp:testsrv] connected'))).toBe(true);
+      } finally {
+        logSpy.mockRestore();
+        errorSpy.mockRestore();
+      }
+    },
+    15_000,
+  );
+});
