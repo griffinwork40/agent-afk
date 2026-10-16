@@ -33,6 +33,14 @@ describe('verifyShortfallLimits', () => {
     const out = verifyShortfallLimits({ ...base, failedEpisodes: 1 });
     expect(out.every((l) => !l.includes('Arm-imbalance'))).toBe(true);
   });
+  it('does NOT emit "stopped early" when truncatedByBudget is false (#3876)', () => {
+    const out = verifyShortfallLimits({ ...base, truncatedByBudget: false });
+    expect(out.every((l) => !l.includes('stopped early'))).toBe(true);
+  });
+  it('emits "stopped early" only when truncatedByBudget is true (#3876)', () => {
+    const out = verifyShortfallLimits({ ...base, truncatedByBudget: true });
+    expect(out.some((l) => l.includes('stopped early'))).toBe(true);
+  });
 });
 
 describe('hookIsolationLimits', () => {

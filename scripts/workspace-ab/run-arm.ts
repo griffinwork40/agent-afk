@@ -145,6 +145,12 @@ export async function runArm(
   } else {
     delete childEnv['AFK_WORKSPACE_DISABLED'];
   }
+  // Disable the SPINE.md SessionEnd hook for both arms.  Each arm is a full
+  // `afk chat` session in the repo checkout, so without this flag the hook
+  // rewrites SPINE.md on every trial — 10 uncontrolled edits for a 5-trial
+  // run.  AFK_DISABLE_SPINE_UPDATE is NOT the experimental variable, so
+  // setting it on both arms introduces no confound.
+  childEnv['AFK_DISABLE_SPINE_UPDATE'] = '1';
 
   const args = [
     afkBin,
