@@ -40,6 +40,7 @@ import type {
 } from '../../journal/index.js';
 import { JournalProvenance, readResultFlags, tagResultFlags } from '../../journal/index.js';
 import { filterContentBlocks } from './resolve-params.js';
+import { hasToolResultBlock } from '../../content/user-authored.js';
 
 /** Provider family stamped on thinking blocks this adapter writes. */
 export const ANTHROPIC_ORIGIN = 'anthropic';
@@ -250,7 +251,17 @@ export const anthropicJournalAdapter: JournalAdapter<MessageParam> = {
       const prev = out[out.length - 1];
       // Anthropic requires role alternation: merge consecutive same-role
       // messages (cross-provider journals, or a message emptied above).
-      if (prev && last && prev.role === native.role) {
+      // Exception: never merge a text-only user message into a tool-result
+      // carrier. On a live session the harness pushes steering text as its own
+      // text-only user message (loop/inter-round.ts), so the two messages are
+      // structurally distinct. On resume, fromJournalMessages merges them;
+      // preserving the boundary ensures isUserAuthoredTurn can still reject the
+      // carrier (tool_result blocks = harness, not user) while accepting the
+      // steering message (text-only = user). Without this exception the merged
+      // carrier would swallow the steering text and hide it from the rewind
+      // picker — a regression proven by journal-resume-merged-steering.
+      const hasCarrier = prev && hasToolResultBlock(prev.content);
+      if (prev && last && prev.role === native.role && !hasCarrier) {
         prev.content = [...(prev.content as ContentBlockParam[]), ...(native.content as ContentBlockParam[])];
         last.push(m);
       } else {

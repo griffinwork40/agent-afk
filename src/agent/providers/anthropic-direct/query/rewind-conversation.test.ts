@@ -252,4 +252,25 @@ describe('rewindConversationHistory', () => {
     expect(rewindConversationHistory({ state, abort: idleAbort }, 2).reason).toBe('invalid-target');
     expect(state.messages).toHaveLength(8);
   });
+
+  // Regression: on resume, fromJournalMessages merges consecutive same-role
+  // user messages, so the steering text (pushed as a separate text-only user
+  // message by inter-round.ts in live sessions) gets merged into the preceding
+  // tool_result carrier. The fix preserves the boundary, keeping the steering
+  // message visible in the rewind picker.
+  it('lists a text-only user message after a tool-result carrier as a rewind target (resume case)', () => {
+    // This simulates what fromJournalMessages produces when a live session with
+    // mid-turn steering is resumed: the steering message survives as a separate
+    // message (the journal-adapter fix preserves the boundary).
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'first question' },
+      { role: 'assistant', content: toolUse('t1') },
+      { role: 'user', content: toolResult('t1') },  // index 2: carrier (excluded)
+      { role: 'assistant', content: 'answer' },
+      { role: 'user', content: 'actually, cancel that' },  // index 4: steering (included)
+    ];
+    const targets = listUserTurns(messages);
+    expect(targets.map((t) => t.turnIndex)).toEqual([4, 0]);
+    expect(targets.map((t) => t.preview)).toEqual(['actually, cancel that', 'first question']);
+  });
 });
