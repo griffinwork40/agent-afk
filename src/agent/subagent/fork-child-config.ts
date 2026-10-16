@@ -219,6 +219,17 @@ function inheritedParentFields<T>(args: AssembleChildConfigArgs<T>): Partial<Age
  * stops the two providers from drifting on it — see the module header on
  * ./subagent/budget-preamble.js.
  */
+
+/**
+ * Resolve the provider name for a child's journal `meta` record.
+ * Prefers the caller-injected `provider.name` (mirrors journal-lifecycle.ts
+ * which reads `config.provider?.name` for root sessions); falls back to
+ * model-based routing so the common no-injected-provider path still works. (#3836)
+ */
+function resolveChildJournalProvider(injectedProviderName: string | undefined, model: AgentModelInput): string {
+  return injectedProviderName ?? providerForModel(typeof model === 'string' ? model : undefined);
+}
+
 export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentConfig {
   const {
     options,
@@ -379,7 +390,7 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     // cleared for the same reason: children never reseed from the parent's
     // journal, they start from their own prompt. Child model + provider are
     // passed so the subagent meta record reflects what THIS child runs. (#3808)
-    messageJournal: options.parent.messageJournal?.forSubagent(id, { model: String(effectiveChildModel), provider: providerForModel(effectiveChildModel) }),
+    messageJournal: options.parent.messageJournal?.forSubagent(id, { model: String(effectiveChildModel), provider: resolveChildJournalProvider(options.config.provider?.name, effectiveChildModel) }),
     resumeMessages: undefined,
     // Child session inherits the SAME resolved registry (see `registry`
     // in forkSubagent) so its own SessionStart/SessionEnd/PreToolUse fire
