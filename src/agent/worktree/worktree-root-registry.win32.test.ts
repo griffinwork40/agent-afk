@@ -45,7 +45,6 @@ describe('acquireRegistryLock — Windows delete-pending contention (#3840)', ()
       if (callCount === 1) throw makeFakeError('EPERM');
       return realOpen(...args);
     };
-    // @ts-expect-error — intentional partial override for testing
     fs.open = patched;
     try {
       const release = await acquireRegistryLock(lockPath, 'win32');
@@ -67,7 +66,6 @@ describe('acquireRegistryLock — Windows delete-pending contention (#3840)', ()
       if (callCount === 1) throw makeFakeError('EACCES');
       return realOpen(...args);
     };
-    // @ts-expect-error — intentional partial override for testing
     fs.open = patched;
     try {
       const release = await acquireRegistryLock(lockPath, 'win32');
@@ -88,7 +86,6 @@ describe('acquireRegistryLock — Windows delete-pending contention (#3840)', ()
       if (callCount === 1) throw makeFakeError('EBUSY');
       return realOpen(...args);
     };
-    // @ts-expect-error — intentional partial override for testing
     fs.open = patched;
     try {
       const release = await acquireRegistryLock(lockPath, 'win32');
@@ -106,7 +103,6 @@ describe('acquireRegistryLock — Windows delete-pending contention (#3840)', ()
     const patched = async (..._args: Parameters<typeof fs.open>) => {
       throw makeFakeError('EPERM');
     };
-    // @ts-expect-error — intentional partial override for testing
     fs.open = patched;
     try {
       const release = await acquireRegistryLock(lockPath, 'linux');

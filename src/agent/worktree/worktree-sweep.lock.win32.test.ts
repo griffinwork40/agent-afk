@@ -56,7 +56,6 @@ async function acquireWithFakeFirstError(
     }
     return realOpen(...args);
   };
-  // @ts-expect-error — intentional partial override for testing
   fs.open = patched;
   try {
     await acquireLock(lockPath, 'win32');
@@ -101,7 +100,6 @@ describe('acquireLock — Windows delete-pending contention (#3840)', () => {
       }
       return realOpen(...args);
     };
-    // @ts-expect-error — intentional partial override for testing
     fs.open = patched;
     try {
       await expect(
