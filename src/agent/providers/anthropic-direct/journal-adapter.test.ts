@@ -158,8 +158,7 @@ describe('anthropicJournalAdapter', () => {
     expect(natives[0]!.role).toBe('user');
     expect((natives[0]!.content as ContentBlockParam[])[0]?.type).toBe('tool_result');
     expect(natives[1]!.role).toBe('user');
-    expect((natives[1]!.content as ContentBlockParam[])[0]?.type).toBe('text');
-    expect((natives[1]!.content as ContentBlockParam[])[0]?.text).toBe('actually, cancel that');
+    expect((natives[1]!.content as ContentBlockParam[])[0]).toEqual({ type: 'text', text: 'actually, cancel that' });
   });
 
   it('still merges consecutive tool-result carriers so a round keeps one tool_result message', () => {
