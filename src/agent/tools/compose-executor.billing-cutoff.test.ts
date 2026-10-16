@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentConfig } from '../types.js';
 import { AccountingAccumulator } from '../session/accounting-accumulator.js';
 import { SessionShutdown } from '../session/session-shutdown.js';
+import { managerShutdownConfig, pendingChildBillingStreams } from '../session/manager-shutdown-config.js';
+import type { SubagentManager } from '../subagent.js';
 import { InMemoryTraceWriter } from '../trace/writer.js';
 import { openAICompatibleBilling } from '../usage.billing.js';
 
@@ -75,7 +77,9 @@ describe('compose child billing cutoff', () => {
     expect(compose.getPendingChildBillingStreams()).toEqual([]);
   });
 
-  it.each(['direct', 'sdk'] as const)('includes late compose billing in parent shutdown via %s', async (slot) => {
+  // Both slots go through the production helpers every surface uses, so a
+  // surface that forgets compose (round-3 finding) fails here.
+  it.each(['surface', 'sdk'] as const)('includes late compose billing in parent shutdown via %s', async (slot) => {
     const gate = deferred();
     const accounting = new AccountingAccumulator();
     const settlement = gate.promise.then(() => {
@@ -85,10 +89,18 @@ describe('compose child billing cutoff', () => {
     const compose = executor();
     expect(await execute(compose)).toMatchObject({ isError: false });
     const writer = new InMemoryTraceWriter();
+    const rootManager = {
+      abortAllAndDrain: async () => {},
+      getPendingChildTerminalWrites: () => [],
+      getPendingChildBillingStreams: () => [],
+    } as unknown as SubagentManager;
     const config = {
       model: 'sonnet', traceWriter: writer,
-      ...(slot === 'direct' ? { composeExecutor: compose } : {
-        executors: { bind() {}, drain: async () => {}, composeExecutor: compose },
+      ...(slot === 'surface' ? managerShutdownConfig(rootManager, compose) : {
+        executors: {
+          bind() {}, drain: async () => {}, composeExecutor: compose,
+          getPendingChildBillingStreams: () => pendingChildBillingStreams(rootManager, compose),
+        },
       }),
     } as AgentConfig;
     const shutdown = new SessionShutdown({

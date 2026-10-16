@@ -34,10 +34,12 @@ it('rejects a rerun until the previous success lifecycle handoff finishes', asyn
   const first = handle.run('first');
   await entered.promise;
   expect(handle.status).toBe('succeeded');
+  // Capture BEFORE the overlapping call: an admitted rerun would replace it.
+  const ledger = handle._billingContext;
   const second = handle.run('overlap').then(() => undefined, (error: unknown) => error);
   // Observe admission synchronously without awaiting the gated second handoff.
   await Promise.resolve();
-  const ledger = handle._billingContext;
+  expect(handle._billingContext).toBe(ledger);
   write.resolve();
   await first;
   expect(await second).toBeInstanceOf(Error);

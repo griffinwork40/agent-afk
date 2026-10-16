@@ -18,6 +18,7 @@ import type { AgentSession } from '../agent/session/agent-session.js';
 import type { AgentConfig } from '../agent/types.js';
 import { wireExecutors, type WiredExecutors, type WireExecutorsOptions } from '../agent/session/wire-executors.js';
 import { makeDeferredParentProxy } from '../agent/session/deferred-parent-proxy.js';
+import { pendingChildBillingStreams } from '../agent/session/manager-shutdown-config.js';
 import { BackgroundAgentRegistry } from '../agent/background-registry.js';
 import { TelegramBgResultNotifier } from './bg-result-notifier.js';
 import {
@@ -137,6 +138,6 @@ export function wireTelegramExecutors(
 
   return {
     executors, backgroundRegistry, bgNotifier, drainSubagents, getPendingChildTerminalWrites, bindSession,
-    getPendingChildBillingStreams: () => executors.rootManager.getPendingChildBillingStreams(),
+    getPendingChildBillingStreams: () => pendingChildBillingStreams(executors.rootManager, executors.composeExecutor),
   };
 }

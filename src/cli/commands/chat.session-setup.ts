@@ -196,7 +196,7 @@ export async function buildChatSession(
     model: sessionModel,
     surface: 'cli',
     apiKey: getApiKeyForModel(sessionModel, providerHints),
-    ...managerShutdownConfig(rootManager),
+    ...managerShutdownConfig(rootManager, composeExecutor),
     maxTurns,
     isNonInteractive: true,
     ...(dangerouslySkipPermissions

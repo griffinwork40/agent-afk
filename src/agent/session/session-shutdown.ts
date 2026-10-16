@@ -98,11 +98,7 @@ export class SessionShutdown {
       ownedTraceWriter,
       getAssistantTexts,
     } = this.deps;
-    // Some caller-owned surfaces carry compose directly rather than in the
-    // SDK bundle; keep this structural and optional for legacy configs/mocks.
-    const config = getConfig() as AgentConfig & {
-      composeExecutor?: { getPendingChildBillingStreams?: () => readonly Promise<void>[] };
-    };
+    const config = getConfig();
 
     // Drain both the opt-in executor bundle (#3442) and the caller-supplied
     // tree hook concurrently; neither may reject the shutdown.
@@ -113,11 +109,11 @@ export class SessionShutdown {
 
     // Cancellation/drain can abandon a provider iterator. Wait for its final
     // billing callback BEFORE freezing accounting, not inside writer.seal().
+    // Each source already unions root-manager AND compose-node streams via
+    // `pendingChildBillingStreams` (manager-shutdown-config.ts).
     const pendingBilling = [
       ...(config.executors?.getPendingChildBillingStreams?.() ?? []),
       ...(config.getPendingChildBillingStreams?.() ?? []),
-      ...(config.composeExecutor?.getPendingChildBillingStreams?.() ?? []),
-      ...(config.executors?.composeExecutor?.getPendingChildBillingStreams?.() ?? []),
     ];
     await awaitPendingWritesBounded(
       [...new Set(pendingBilling)], SEAL_PENDING_WRITES_TIMEOUT_MS, 'SessionShutdown',
