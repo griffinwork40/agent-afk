@@ -302,6 +302,15 @@ describe('renderReceiptMarkdown', () => {
     expect(md).toContain('read-only; no agent behavior was modified');
   });
 
+  it('renders the root cost as unknown after a process-exit backstop seal (#3890)', () => {
+    const md = renderReceiptMarkdown(
+      generateReceipt([closure('model_end_turn'), sealed('failed', { incomplete: true })], META),
+    );
+    expect(md).toContain('| Cost (USD, total) | 0.1234 |');
+    expect(md).toContain('| Cost (USD, root) | unknown');
+    expect(md).toContain('| Cost (USD, subagents) | 0.1234 |');
+  });
+
   it('renders a clean run without a review section', () => {
     const md = renderReceiptMarkdown(
       generateReceipt([toolDone('bash'), closure('model_end_turn'), sealed('succeeded')], META),

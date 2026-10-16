@@ -11,6 +11,51 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.321.1] - 2026-10-16
+
+### Fixed
+- resolve each probed slot's route once instead of twice (#3910) (0a8139a9)
+- merge prompt-dump secret shapes into canonical redactSecrets; add parity test (#3918) (d4d7fb05)
+- correct lost-root-closure under-report and backstop-seal $0 root (#3909) (b694971f)
+
+## [5.321.0] - 2026-10-16
+
+### Added
+- billing-normalized token rollups split by provider (#3889) (ff2316cf)
+
+### Fixed
+- downgrade plan mode to default on Telegram (seed drain is REPL-only) (#3916) (c5f7f45c)
+
+## [5.320.5] - 2026-10-16
+
+### Fixed
+- keep per-fork workspace preamble out of the sibling-shared cached prefix (#3923) (5d12bcde)
+
+## [5.320.4] - 2026-10-16
+
+### Fixed
+- retire dead gpt-5.4/grok-4.6 ids, add gpt-6 family (#3825) (2a1ac81c)
+
+## [5.320.3] - 2026-10-16
+
+### Fixed
+- stop runAt overlap noise, record blocked reasons, warn on date-pinned crons (#3824) (e6437fc7)
+
+## [5.320.2] - 2026-10-16
+
+### Fixed
+- truncatedByBudget false when all episodes ran despite budget exceeded (#3906) (7fa0605d)
+- send MCP status logs to stderr so -f json stdout stays clean (#3905) (1c7a04c6)
+
+## [5.320.1] - 2026-10-16
+
+### Fixed
+- preserve existing body >300 chars when reinforcing SPINE entries (#3908) (58c9dd16)
+- resolve slash-routing contradiction and measure mid-message skill references (#3884) (99ac1575)
+- stop /clear waiting on the SPINE classifier (#3843) (5817ea85)
+- route-aware credential check and suppress SPINE.md rewrites in A/B arms (#3907) (d98a6350)
+- stream chatgpt-oauth turn events instead of buffering the whole turn (#3826) (40ee2959)
+
 ## [5.320.0] - 2026-10-16
 
 ### Added

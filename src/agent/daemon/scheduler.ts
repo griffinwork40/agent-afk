@@ -12,8 +12,7 @@
  * @module agent/daemon/scheduler
  */
 
-import { mkdirSync, appendFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { appendFileSync } from 'node:fs';
 import * as cron from 'node-cron';
 import { IdleDetector } from './idle-detector.js';
 import { recoverDaemonQueues } from './pull-recovery.js';
@@ -49,7 +48,7 @@ import {
 import { errorMessage } from '../../utils/errors.js';
 import { makeCwdErrorRecord, snapshotInFlightTasks, makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord, makeTelemetryUnwritableSkipRecord, OverlapAlertLatch, formatOverlapAlertMessage } from './scheduler.overlap-guard.js';
 import { BudgetAlertLatch, evaluateBudgetGate, formatBudgetSkipMessage, resolveDaemonUsageTarget } from './budget-gate.js';
-import { probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
+import { ensureTelemetrySink, probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
 import { evaluateRunAtGate, applyAutoDisable } from './scheduler.runat-gate.js';
 import { overlapKeyOf } from './handoff-resume-context.js';
 
@@ -245,7 +244,7 @@ export class CronScheduler {
     this.defaultCooldownMs = options.cooldownMs ?? DEFAULT_SESSIONSTART_COOLDOWN_MS;
     this.now = options.now ?? Date.now;
     this.queueDir = options.queueDir ?? getQueueDir();
-    this.ensureTelemetrySink();
+    ensureTelemetrySink(this.telemetryPath());
   }
 
   register(task: ScheduledTask): void {
@@ -261,6 +260,10 @@ export class CronScheduler {
       cronTask = cron.schedule(
         expr,
         () => {
+          // Invariant: runAt polls are a clock check, not independent scheduled
+          // runs. While the one-shot is executing there is nothing to poll;
+          // keep its overlap lock, but do not report these polls as missed work.
+          if (task.runAt !== undefined && this.inFlightTasks.has(task.taskId)) return;
           // Fire-and-forget — the cron callback type doesn't await, but
           // catching here means a thrown promise can't leak as unhandled.
           void this.runOnce(task, 'cron').catch(() => undefined);
@@ -599,14 +602,6 @@ export class CronScheduler {
 
   private telemetryPath(): string {
     return this.options.telemetryPath ?? getTelemetryPath();
-  }
-
-  private ensureTelemetrySink(): void {
-    try {
-      mkdirSync(dirname(this.telemetryPath()), { recursive: true });
-    } catch {
-      // Directory creation is best-effort; the actual write path will surface a real error.
-    }
   }
 
   private writeTelemetry(

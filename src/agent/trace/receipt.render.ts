@@ -61,6 +61,8 @@ export function renderReceiptMarkdown(r: RunReceipt): string {
     lines.push(`| Cost (USD, total) | ${r.cost.totalCostUsd.toFixed(4)} |`);
     if (r.cost.rootCostUsd !== undefined)
       lines.push(`| Cost (USD, root) | ${r.cost.rootCostUsd.toFixed(4)} |`);
+    else if (r.cost.costSource === 'closures-incomplete')
+      lines.push('| Cost (USD, root) | unknown (process exited before the root closed) |');
     if (r.cost.subagentCostUsd !== undefined)
       lines.push(`| Cost (USD, subagents) | ${r.cost.subagentCostUsd.toFixed(4)} |`);
   } else if (r.cost.finalCostUsd !== undefined)

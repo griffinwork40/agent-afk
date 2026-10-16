@@ -26,6 +26,7 @@ import { renderToolResult } from '../tools/render-registry.js';
 import { truncateContent } from './stream-consumer.preview.js';
 import { handleSessionInit, handleTurnCompleted } from './stream-consumer.turn-handlers.js';
 import { isOutputCapKill } from '../tools/handlers/_output-cap.js';
+import { billingToUsageFields } from '../usage.billing.js';
 
 /** Callbacks the transform needs to produce side effects. */
 export type TransformDeps = ToolEventAccumulator & {
@@ -114,6 +115,8 @@ export function usageToMetadata(usage: ProviderUsage, sessionId: string | undefi
   // so the REPL footer's context-% (computed from local stats, not the SDK
   // sampler) matches the live status line. See cli/slash/session-stats.ts.
   if (usage.contextWindowTokens !== undefined) usageObj['context_window_tokens'] = usage.contextWindowTokens;
+  // Billing-normalized counts (#3878) for the session/subagent rollups.
+  Object.assign(usageObj, billingToUsageFields(usage.billing));
 
   return {
     ...(userMessageId !== undefined ? { userMessageId } : {}),

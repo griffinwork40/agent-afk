@@ -10,6 +10,7 @@
 import type { ZodType } from 'zod';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { AbortGraph } from '../abort-graph.js';
+import type { BillingUsage } from '../provider.js';
 import { TimeoutError, errorMessage } from '../../utils/errors.js';
 import type { HookRegistry } from '../hooks.js';
 import { withTimeout } from '../timeout.js';
@@ -35,6 +36,7 @@ import {
   dispatchStopAndRelease,
 } from './handle.streaming.js';
 import { drainAndEmitSuccess } from './handle.run-success.js';
+import { settleUnreportedBilling, type RunBillingContext } from './handle.billing.js';
 
 // Re-export so external callers importing debugLog-depending path still work.
 export type { SubagentProgressMeta };
@@ -124,6 +126,7 @@ export interface SubagentHandle<T = unknown> {
 export class SubagentHandleImpl<T> implements SubagentHandle<T> {
   /** @internal */ _currentStatus: SubagentStatus = 'idle';
   private inFlight: Promise<Message> | null = null;
+  private runInProgress = false;
   /** @internal */ _lastMessage: string | undefined;
   /** @internal */ _lastDurationMs: number | undefined;
   /**
@@ -189,8 +192,26 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
    * surfaces a prior run's stop reason on the error result.
    */
   /** @internal */ _lastStopReason: string | undefined;
+  /**
+   * Billing usage (#3878) summed over EVERY turn of the current run, initial
+   * plus drain turns. Lives on the handle, not `_currentTrace`, because
+   * `streamToFinalMessage` replaces the trace on each drain turn. Reset at
+   * the start of `run()`, next to `_lastStopReason`.
+   */
+  /** @internal */ _billingContext: RunBillingContext = {};
+  /** Live stream receipts retained independently of the current run. @internal */
+  readonly _pendingBillingStreams = new Set<Promise<void>>();
+
+  get pendingBillingStreams(): Promise<void>[] {
+    return [...this._pendingBillingStreams];
+  }
+
+  /** Compatibility accessor for package-internal callers of the previous ledger. */
+  get _runBilling(): BillingUsage | undefined { return this._billingContext.total; }
+  set _runBilling(value: BillingUsage | undefined) { this._billingContext.total = value; }
+
   /** @internal — per-subagent conversation log writer. Set by SubagentManager after construction. */
-  /** @internal */ _logWriter?: { write(event: OutputEvent): void; close(): Promise<void> };
+  _logWriter?: { write(event: OutputEvent): void; close(): Promise<void> };
 
   /** @internal — positional argument order is not part of any public contract. */
   constructor(
@@ -212,7 +233,9 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
      * Optional callback invoked after a successful `run()`. Carries the
      * subagent's token usage and optional cost so the parent session can
      * accumulate them into the `session_sealed` rollup fields without
-     * reaching back into the handle's private state.
+     * reaching back into the handle's private state. Also invoked with each
+     * billing-only usage tagged `outcome: 'failed' | 'cancelled'` when a run
+     * that accrued billing ends without succeeding (#3878, `handle.billing.ts`).
      */
     /** @internal */ public readonly onSubagentSucceeded?: (
       usage: SubagentTrace['usage'],
@@ -244,7 +267,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
   }
 
   async run(prompt: string | ContentBlockParam[], sinkOverride?: SubagentProgressSink): Promise<Message> {
-    if (this._currentStatus === 'running') throw new Error(`Subagent ${this.id} is already running`);
+    if (this.runInProgress || this._currentStatus === 'running') throw new Error(`Subagent ${this.id} is already running`);
     // Invariant: reset the captured stop reason here — after the `running`
     // guard, before the `cancelled` short-circuit — so a re-invoked or
     // cancelled handle never surfaces a PRIOR run's stopReason on the error
@@ -253,6 +276,9 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     // set below), so no in-flight run owns this value for us to clobber.
     this._lastStopReason = undefined;
     if (this._currentStatus === 'cancelled') throw new Error(`Subagent ${this.id} is cancelled`);
+    this.runInProgress = true;
+    const billingContext: RunBillingContext = {};
+    this._billingContext = billingContext;
 
     this._currentStatus = 'running';
     const startTime = Date.now();
@@ -287,7 +313,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
           })
         : undefined;
     this._pauseCeiling = pauseCeiling;
-    const p = withTimeout(streamToFinalMessage(this, prompt, sinkOverride), this.timeoutMs, {
+    const p = withTimeout(streamToFinalMessage(this, prompt, sinkOverride, billingContext), this.timeoutMs, {
       controller: this._controller,
       label: this.id,
       ...(pauseCeiling !== undefined && { extender: pauseCeiling }),
@@ -299,7 +325,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       this._lastDurationMs = Date.now() - startTime;
       this._currentStatus = 'succeeded';
       this.latestTerminalStatus = 'succeeded';
-      return await drainAndEmitSuccess(this, msg, startTime, sinkOverride);
+      return await drainAndEmitSuccess(this, msg, startTime, sinkOverride, billingContext);
     } catch (err) {
       this._lastDurationMs = Date.now() - startTime;
       // Invariant: own-budget timeouts classify 'failed', inherited (cascaded)
@@ -325,10 +351,23 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
           ? this._controller.signal.reason
           : undefined;
       const surfacedErr = timeoutReason ?? err;
+      // Arm late-stream settlement before any callback or awaited trace write.
+      // Explicit cancel during a live success/drain still uses its existing
+      // catch/success settlement; only catch abandons the original stream.
+      billingContext.terminalOutcome =
+        (this._currentStatus as string) === 'cancelled' ||
+        (this._controller.signal.aborted && timeoutReason === undefined)
+          ? 'cancelled'
+          : 'failed';
       // currentStatus is 'cancelled' only when cancel() already ran and
       // emitted its own lifecycle event. In that case we suppress the
       // failed event here to avoid a double-emit for the same termination.
-      if ((this._currentStatus as string) !== 'cancelled') {
+      if ((this._currentStatus as string) === 'cancelled') {
+        // cancel() already emitted the row and settled the billing known then;
+        // settle only the DELTA that accrued after it (a `done` drained on
+        // interrupt) so it still reaches the rollup, counted once (#3878).
+        settleUnreportedBilling(this, 'cancelled', billingContext);
+      } else {
         // Invariant: cascade classification. When our controller's signal is
         // aborted at this point AND cancel() didn't fire (otherwise status
         // would already be 'cancelled') AND the abort reason is not our own
@@ -367,6 +406,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
             subagentId: this.id,
             source: 'cascade',
             ...(cascadeTimedOut ? { timeout: true } : {}),
+            ...settleUnreportedBilling(this, 'cancelled', billingContext),
           });
           this._currentStatus = 'cancelled';
           this.latestTerminalStatus = 'cancelled';
@@ -383,6 +423,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
             // TimeoutError that is NOT a cascade — the guillotined-by-budget
             // case #583/this PR targets. Absent for any other failure.
             ...(timeoutReason !== undefined ? { failureClass: 'timeout' as const } : {}),
+            ...settleUnreportedBilling(this, 'failed', billingContext),
           });
           this._currentStatus = 'failed';
           this.latestTerminalStatus = 'failed';
@@ -392,6 +433,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       throw surfacedErr;
     } finally {
       this.inFlight = null;
+      this.runInProgress = false;
     }
   }
 
@@ -441,6 +483,10 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       transition: 'cancelled',
       subagentId: this.id,
       source: 'explicit',
+      // Unreported spend accrued before the cancel (#3878): rolls up the delta,
+      // stamps the cumulative total; `{}` when all of it was already reported.
+      // May undercount spend that lands later — the rollup is authoritative.
+      ...settleUnreportedBilling(this, 'cancelled'),
     });
 
     this._steeringMessages.length = 0;

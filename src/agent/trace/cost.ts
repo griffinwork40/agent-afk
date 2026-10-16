@@ -30,7 +30,7 @@
  */
 
 /** Which trace records the breakdown was computed from. */
-export type SessionCostSource = 'closures+seal' | 'closures' | 'seal' | 'none';
+export type SessionCostSource = 'closures+seal' | 'closures' | 'closures-incomplete' | 'seal' | 'none';
 
 /** Token counters summed across closure events. */
 export interface CostTokens {
@@ -84,12 +84,16 @@ export class SessionCostAccumulator {
   };
   private sealRoot: number | undefined;
   private sealSubagent = 0;
+  private sealIncomplete = false;
 
   add(event: CostEventLike): void {
     const p = asRecord(event.payload);
     if (p === undefined) return;
     if (event.kind === 'closure') {
-      const cost = finiteNonNeg(p['finalCostUsd']) ?? 0;
+      // Item 3: skip closures whose cost is invalid (NaN/negative/missing);
+      // closureCount means valid closures only.
+      const cost = finiteNonNeg(p['finalCostUsd']);
+      if (cost === undefined) return;
       this.closureCount++;
       this.closureSum += cost;
       this.lastClosureCost = cost;
@@ -100,6 +104,9 @@ export class SessionCostAccumulator {
     } else if (event.kind === 'session_sealed') {
       this.sealRoot = finiteNonNeg(p['finalCostUsd']) ?? 0;
       this.sealSubagent = finiteNonNeg(p['subagentCostUsd']) ?? 0;
+      // sealOnProcessExit() writes incomplete:true with finalCostUsd:0 as a
+      // backstop; treat it as a marker only — do not use its $0 as rootCostUsd.
+      this.sealIncomplete = p['incomplete'] === true;
     }
   }
 
@@ -107,23 +114,53 @@ export class SessionCostAccumulator {
     const hasClosures = this.closureCount > 0;
     const hasSeal = this.sealRoot !== undefined;
     if (!hasClosures && !hasSeal) return { closureCount: 0, source: 'none' };
+    const tokens = this.tokenTotals();
+
+    // #3890 item 2: sealOnProcessExit() writes a backstop seal (incomplete:true,
+    // finalCostUsd:0) and the root closure is never written, so every surviving
+    // closure is a child. The root's spend is UNKNOWN: leave rootCostUsd absent
+    // rather than report $0 or promote a child's closure to root.
+    if (this.sealIncomplete) {
+      return {
+        subagentCostUsd: this.closureSum,
+        totalCostUsd: this.closureSum,
+        ...tokens,
+        closureCount: this.closureCount,
+        source: 'closures-incomplete',
+      };
+    }
 
     const sealTotal = (this.sealRoot ?? 0) + this.sealSubagent;
-    const totalCostUsd = hasClosures ? Math.max(this.closureSum, hasSeal ? sealTotal : 0) : sealTotal;
+    let totalCostUsd: number;
+    if (!hasClosures) {
+      totalCostUsd = sealTotal;
+    } else if (!hasSeal) {
+      totalCostUsd = this.closureSum;
+    } else {
+      // #3890 item 1: when the last closure's cost differs from sealRoot, the
+      // root closure write failed but the seal succeeded, so add sealRoot to
+      // closureSum. Either way the seal's own total stays a lower bound.
+      const rootClosureLost = this.lastClosureCost !== this.sealRoot;
+      const closureBased = rootClosureLost ? this.closureSum + (this.sealRoot ?? 0) : this.closureSum;
+      totalCostUsd = Math.max(closureBased, sealTotal);
+    }
+
     const rootCostUsd = this.sealRoot ?? this.lastClosureCost ?? 0;
     const subagentCostUsd = Math.max(0, totalCostUsd - rootCostUsd);
-
-    const totalTokens: CostTokens = {};
-    for (const k of TOKEN_KEYS) if (this.tokens[k] > 0) totalTokens[k] = this.tokens[k];
-
     return {
       rootCostUsd,
       subagentCostUsd,
       totalCostUsd,
-      ...(Object.keys(totalTokens).length > 0 ? { totalTokens } : {}),
+      ...tokens,
       closureCount: this.closureCount,
       source: hasClosures ? (hasSeal ? 'closures+seal' : 'closures') : 'seal',
     };
+  }
+
+  private tokenTotals(): { totalTokens?: CostTokens } {
+    const totalTokens: CostTokens = {};
+    for (const k of TOKEN_KEYS) if (this.tokens[k] > 0) totalTokens[k] = this.tokens[k];
+    return Object.keys(totalTokens).length > 0 ? { totalTokens } : {};
   }
 }
 
