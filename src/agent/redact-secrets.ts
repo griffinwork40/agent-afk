@@ -28,6 +28,7 @@
  * Patterns covered:
  *   - Authorization header bearer tokens   `Authorization: Bearer <value>`
  *   - Anthropic API keys                   `sk-ant-[A-Za-z0-9_-]{20,}`
+ *   - OpenAI / generic `sk-` keys          `sk-<payload>` (non-ant prefix)
  *   - JWT tokens                           `<header>.<payload>.<signature>`
  *     where header and payload are base64url JSON (always start with `eyJ`).
  *     Matched explicitly because the generic length rule below uses a
@@ -35,6 +36,8 @@
  *   - AWS IAM credential IDs               20-char tokens with known prefix
  *     (AKIA = long-lived, ASIA = STS, AROA = role, AIDA = user, ...) — below
  *     the generic 32-char floor so they need explicit coverage.
+ *   - Slack tokens                         `xox[baprs]-<payload>`
+ *   - Telegram bot tokens                  `<8–12 digits>:<35 alphanum chars>`
  *   - Generic long opaque tokens           ≥32 contiguous non-whitespace chars
  *     that consist entirely of hex or base64 alphabet characters (heuristic).
  *     Runs shaped like a filesystem/URL path are excluded — see
@@ -57,6 +60,12 @@ export function redactSecrets(text: string): string {
     .replace(/\bauthorization:\s*bearer\s+\S+/gi, 'Authorization: Bearer [REDACTED]')
     // Anthropic API keys: sk-ant-<payload>
     .replace(/\bsk-ant-[A-Za-z0-9_-]{20,}/g, '[REDACTED]')
+    // OpenAI / generic sk- keys (non-ant): sk-<payload ≥20 chars>
+    .replace(/\bsk-(?!ant-)[A-Za-z0-9_-]{20,}/g, '[REDACTED]')
+    // Slack bot/user/app/workspace tokens: xox[baprs]-<payload>
+    .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}/g, '[REDACTED]')
+    // Telegram bot tokens: <8–12 digits>:<35 alphanumeric chars>
+    .replace(/\b\d{8,12}:[A-Za-z0-9_-]{35}\b/g, '[REDACTED]')
     // JWT tokens: header.payload.signature — each segment is base64url-encoded
     // and `eyJ` is the deterministic prefix for `{"` (any JSON object). Three
     // segments required (unsigned JWTs with empty signature are intentionally

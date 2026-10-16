@@ -11,7 +11,7 @@
 import { env } from '../../config/env.js';
 import { mkdirSync, appendFileSync, existsSync } from 'fs';
 import { resolve, dirname, isAbsolute } from 'path';
-import { looksLikeFilesystemPath } from '../redact-secrets.js';
+import { redactSecrets as redactSecretsCanonical, looksLikeFilesystemPath } from '../redact-secrets.js';
 
 export type PromptShape = 'string' | 'string[]' | 'preset' | 'undefined';
 
@@ -117,19 +117,12 @@ function pathGuardedRedact(m: RegExpMatchArray): string {
   return `${name}=<REDACTED length=${value.length}>`;
 }
 
-const INLINE_SECRET_PATTERNS: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
-  // Anthropic key: sk-ant-... (up to 200 chars)
-  [/sk-ant-[A-Za-z0-9_\-]{8,200}/g, (m) => `<REDACTED sk-ant length=${m[0].length}>`],
-  // OpenAI key: sk-... (up to 200 chars, not overlapping sk-ant pattern above)
-  [/sk-(?!ant-)[A-Za-z0-9_\-]{20,200}/g, (m) => `<REDACTED sk- length=${m[0].length}>`],
-  // Bearer token
-  [/Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi, (m) => `<REDACTED Bearer length=${m[0].length}>`],
-  // AWS access key
-  [/AKIA[A-Z0-9]{16}/g, (m) => `<REDACTED AKIA length=${m[0].length}>`],
-  // Slack bot/user tokens
-  [/xox[baprs]-[A-Za-z0-9\-]{10,200}/g, (m) => `<REDACTED xox token length=${m[0].length}>`],
-  // Telegram bot token: <digits>:<alphanum 35 chars>
-  [/\d{8,12}:[A-Za-z0-9_\-]{35}/g, (m) => `<REDACTED Telegram token length=${m[0].length}>`],
+// NAME=value patterns that are NOT covered by the canonical `redactSecrets`.
+// redactSecrets handles: sk-ant, sk- (non-ant), Bearer, JWT, AWS IAM IDs,
+// xox tokens, Telegram bot tokens, and generic ≥32-char opaque blobs.
+// This set adds only the env-style `NAME=<value>` shapes specific to the
+// prompt-dump context (system prompt text, options.env values).
+const INLINE_NAME_VALUE_PATTERNS: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
   // Generic TOKEN=<value ≥16 chars> — catches OPENAI_API_KEY=, TELEGRAM_BOT_TOKEN=, etc.
   // (The existing generic pattern already covers most of these; this is belt-and-suspenders
   //  for lowercase variants, e.g. openai_api_key=...) Both capture groups are required by
@@ -143,12 +136,21 @@ const INLINE_SECRET_PATTERNS: Array<[RegExp, (m: RegExpMatchArray) => string]> =
 ];
 
 /**
- * Apply inline secret redaction patterns to a string.
+ * Apply inline secret redaction to a string.
+ *
+ * Delegates to the canonical {@link redactSecrets} first (covers sk-ant,
+ * sk- non-ant, Bearer, JWT, AWS IAM IDs, Slack xox tokens, Telegram bot
+ * tokens, and generic ≥32-char opaque blobs), then applies the NAME=value
+ * env-style patterns that are specific to the prompt-dump context.
+ *
  * Returns a new string with matched secrets replaced by redaction markers.
  */
 export function redactInlineSecrets(text: string): string {
+  // Apply NAME=value patterns first — the canonical redactor's generic ≥32-char
+  // rule would otherwise absorb `NAME=<value>` as one blob before the name-aware
+  // replacer can inspect the key name and apply the path-guard logic.
   let result = text;
-  for (const [pattern, replacer] of INLINE_SECRET_PATTERNS) {
+  for (const [pattern, replacer] of INLINE_NAME_VALUE_PATTERNS) {
     result = result.replace(pattern, (...args) => {
       // args: full match + capture groups + offset + original string
       // Build a fake RegExpMatchArray with index 0 = full match, 1..n = groups
@@ -156,7 +158,10 @@ export function redactInlineSecrets(text: string): string {
       return replacer(m);
     });
   }
-  return result;
+  // Then pass through the canonical redactor to cover sk-ant, sk- (non-ant),
+  // Bearer, JWT, AWS IAM IDs, Slack xox tokens, Telegram bot tokens, and the
+  // generic ≥32-char opaque-blob rule — shapes not covered by NAME=value patterns.
+  return redactSecretsCanonical(result);
 }
 
 /**
