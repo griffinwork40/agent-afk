@@ -217,6 +217,60 @@ function injectRoundCapNotice(priorTurns: OpenAIMessage[], round: number, maxIte
 }
 
 /**
+ * Push the final assistant message to history and invoke the stop-hook seam.
+ * Returns the `continueWith` string if the hook wants a same-turn continuation,
+ * or `undefined` to let the turn end normally.
+ *
+ * Extracted from `runTurnInner` to keep it under the 200-line function ceiling.
+ * All parameters are explicit — no closure over outer locals.
+ */
+async function pushAssistantAndCheckStopHook(
+  ctx: TurnDriverContext,
+  finalAssistantText: string,
+  finalReasoningText: string,
+  finalReasoningField: 'reasoning_content' | 'reasoning',
+  accumulatedUsage: ProviderUsage,
+  windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | typeof CONTEXT_PRESSURE_WIND_DOWN | null,
+  controller: AbortController,
+  stopHookContinuation: number,
+): Promise<string | undefined> {
+  // Push the final assistant turn to history. Echo reasoning under the same
+  // wire field it arrived in (Cerebras uses `reasoning`; DeepSeek uses
+  // `reasoning_content`) so the next request is not rejected with HTTP 400.
+  if (finalAssistantText.length > 0) {
+    const assistantTurn: OpenAIMessage = {
+      role: 'assistant',
+      content: finalAssistantText,
+    };
+    if (finalReasoningText.length > 0) {
+      assistantTurn[finalReasoningField] = finalReasoningText;
+    }
+    ctx.priorTurns.push(assistantTurn);
+  }
+
+  // stop-hook-continuation rule: call beforeTurnEnd ONLY on natural ends.
+  // Guards (same as anthropic-direct/loop.ts):
+  //   - abort: signal already fired → skip (hook must not fight the budget)
+  //   - truncation (max_tokens etc.): runtime output-ceiling → skip
+  //   - wind-down round: iteration cap / soft-deadline → skip
+  const isNaturalEnd = !controller.signal.aborted
+    && !isTruncationStopReason(accumulatedUsage.stopReason)
+    && windDownReason === null;
+
+  if (isNaturalEnd && ctx.beforeTurnEnd !== undefined) {
+    // Finding 3: pass finalAssistantText so buildStopContext gets fresh data
+    // directly from the provider rather than scanning stale history.
+    const seamResult = await ctx.beforeTurnEnd(stopHookContinuation, finalAssistantText);
+    if (seamResult?.continueWith) {
+      return seamResult.continueWith;
+    }
+  }
+  return undefined;
+}
+
+
+
+/**
  * Drive a single user turn through the model + tool loop.
  *
  * This is the body of `OpenAICompatibleQuery._runTurnInner`, extracted here so
@@ -264,6 +318,16 @@ export async function* runTurnInner(
   // blocking Stop hook re-entry instead of recursing.
   let currentContent = content;
 
+  // Fix #3930: hoist the turn-level usage accumulator OUTSIDE the outer loop
+  // so usage from earlier segments is carried forward across Stop-hook
+  // continuations. Previously this was reset at the top of each iteration,
+  // causing earlier segments' tokens to drop out of the billing rollup.
+  let turnUsage: ProviderUsage = {
+    stopReason: null,
+    resultSubtype: 'success',
+    isError: false,
+  };
+
   const maxIterations = resolveMaxToolIterations(ctx.opts.config.maxToolUseIterations);
   const softDeadlineMs = ctx.opts.config.softDeadlineMs ?? 0;
 
@@ -273,7 +337,8 @@ export async function* runTurnInner(
   for (;;) {
     pushUserTurn(ctx, currentContent);
 
-    // Reset per-iteration accumulators at the TOP so a continuation starts fresh.
+    // Per-segment accumulators — reset each iteration so each segment starts
+    // fresh. Segment usage is summed into `turnUsage` (turn scope) at round end.
     let accumulatedUsage: ProviderUsage = {
       stopReason: null,
       resultSubtype: 'success',
@@ -298,7 +363,7 @@ export async function* runTurnInner(
     for (;;) {
       if (controller.signal.aborted) {
         ctx.abort.clear(controller);
-        yield* finishTurn(ctx, accumulatedUsage, turnStartTime);
+        yield* finishTurn(ctx, sumProviderUsage(turnUsage, accumulatedUsage), turnStartTime);
         return;
       }
 
@@ -306,7 +371,7 @@ export async function* runTurnInner(
       if (result === null) {
         ctx.abort.clear(controller);
         if (controller.signal.aborted || ctx.closed) {
-          yield* finishTurn(ctx, accumulatedUsage, turnStartTime);
+          yield* finishTurn(ctx, sumProviderUsage(turnUsage, accumulatedUsage), turnStartTime);
         }
         return;
       }
@@ -353,7 +418,7 @@ export async function* runTurnInner(
 
       if (controller.signal.aborted) {
         ctx.abort.clear(controller);
-        yield* finishTurn(ctx, accumulatedUsage, turnStartTime);
+        yield* finishTurn(ctx, sumProviderUsage(turnUsage, accumulatedUsage), turnStartTime);
         return;
       }
 
@@ -378,49 +443,31 @@ export async function* runTurnInner(
 
     ctx.abort.clear(controller);
 
-    // Push the final assistant turn to history. Echo reasoning under the same
-    // wire field it arrived in (Cerebras uses `reasoning`; DeepSeek uses
-    // `reasoning_content`) so the next request is not rejected with HTTP 400.
-    if (finalAssistantText.length > 0) {
-      const assistantTurn: OpenAIMessage = {
-        role: 'assistant',
-        content: finalAssistantText,
-      };
-      if (finalReasoningText.length > 0) {
-        assistantTurn[finalReasoningField] = finalReasoningText;
-      }
-      ctx.priorTurns.push(assistantTurn);
+    // Push assistant turn to history and invoke the stop-hook seam.
+    // Returns continueWith string when a blocking Stop hook wants another round.
+    const continueWith = await pushAssistantAndCheckStopHook(
+      ctx, finalAssistantText, finalReasoningText, finalReasoningField,
+      accumulatedUsage, windDownReason, controller, stopHookContinuation,
+    );
+    if (continueWith) {
+      // A blocking Stop hook wants a same-turn continuation. Increment the
+      // shared counter (Finding 1: counter is outside this loop so the cap
+      // IS reachable), update the content cursor, and loop rather than recurse.
+      stopHookContinuation += 1;
+      currentContent = continueWith;
+      // Fix #3930: fold this segment's usage into the turn accumulator BEFORE
+      // looping so the next segment's tokens are added on top, not replacing.
+      turnUsage = sumProviderUsage(turnUsage, accumulatedUsage);
+      continue; // outer loop — next iteration pushes the continuation message
     }
 
-    // stop-hook-continuation rule: call beforeTurnEnd ONLY on natural ends.
-    // Guards (same as anthropic-direct/loop.ts):
-    //   - abort: signal already fired → skip (hook must not fight the budget)
-    //   - truncation (max_tokens etc.): runtime output-ceiling → skip
-    //   - wind-down round: iteration cap / soft-deadline → skip
-    const isNaturalEnd = !controller.signal.aborted
-      && !isTruncationStopReason(accumulatedUsage.stopReason)
-      && windDownReason === null;
-
-    if (isNaturalEnd && ctx.beforeTurnEnd !== undefined) {
-      // Finding 3: pass finalAssistantText so buildStopContext gets fresh data
-      // directly from the provider rather than scanning stale history.
-      const seamResult = await ctx.beforeTurnEnd(stopHookContinuation, finalAssistantText);
-      if (seamResult?.continueWith) {
-        // A blocking Stop hook wants a same-turn continuation. Increment the
-        // shared counter (Finding 1: counter is outside this loop so the cap
-        // IS reachable), update the content cursor, and loop rather than recurse.
-        stopHookContinuation += 1;
-        currentContent = seamResult.continueWith;
-        continue; // outer loop — next iteration pushes the continuation message
-      }
-      // Non-blocking: fall through to emit assistant.message and turn.completed.
-    }
-
+    // Final segment — fold it into the turn accumulator and emit.
+    turnUsage = sumProviderUsage(turnUsage, accumulatedUsage);
     yield* emitTurnTerminal(
       ctx,
       finalAssistantText,
       droppedToolNames,
-      accumulatedUsage,
+      turnUsage,
       windDownReason,
       turnStartTime,
     );
