@@ -30,7 +30,7 @@ import { applyManagerApiKeyFallback } from '../tools/child-credential.js';
 import { injectToolBudgetPreamble } from './budget-preamble.js';
 import { injectSubagentIdentityPreamble } from './identity-preamble.js';
 import { injectWorkspacePreamble } from '../workspace/index.js';
-import type { WorkspaceStore } from '../workspace/workspace-store.js';
+import type { WorkspaceStore, WorkspaceEntry } from '../workspace/workspace-store.js';
 import { DENY_ELICITATION, SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS } from './constants.js';
 import { resolveSoftDeadlineMs } from '../providers/shared/soft-deadline.js';
 import { childTmpEnvPatch } from '../session/session-tmpdir.js';
@@ -198,6 +198,24 @@ function inheritedParentFields<T>(args: AssembleChildConfigArgs<T>): Partial<Age
     // caller-chosen (unregistered) TMPDIR wins, like the fields above.
     ...childTmpEnvPatch(args.options.config.env, args.id),
   };
+}
+
+/**
+ * Inject the workspace preamble into an assembled child config and stamp
+ * `hasWorkspacePreamble: true` so `composeQuerySystem` can gate
+ * `splitAtWorkspacePreamble` on actual fork provenance (#3924).
+ *
+ * Extracted from {@link assembleChildConfig} to keep that function under the
+ * 200-line ceiling. Returns the config unchanged when no workspace store is set.
+ */
+function applyWorkspacePreamble(
+  assembled: AgentConfig,
+  workspaceStore: WorkspaceStore | undefined,
+  workspaceEntries: WorkspaceEntry[],
+): AgentConfig {
+  if (!workspaceStore) return assembled;
+  const withPreamble = injectWorkspacePreamble(assembled, workspaceEntries);
+  return { ...withPreamble, hasWorkspacePreamble: true };
 }
 
 /**
@@ -414,7 +432,5 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
       : {}),
   }, args.nestedAgentAllowlist);
 
-  return args.workspaceStore
-    ? injectWorkspacePreamble(assembled, workspaceEntries)
-    : assembled;
+  return applyWorkspacePreamble(assembled, args.workspaceStore, workspaceEntries);
 }
