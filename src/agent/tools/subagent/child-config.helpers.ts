@@ -282,6 +282,7 @@ export function wireChildNesting(w: WireChildNestingArgs): WireChildNestingResul
         : {}),
       parentModel: childConfig.model,
       ...(args.parentRootSessionId !== undefined ? { parentRootSessionId: args.parentRootSessionId } : {}),
+      ...(args.onSubagentSucceeded !== undefined ? { onSubagentSucceeded: args.onSubagentSucceeded } : {}),
     });
 
     const childReadScope: ReadScopeInputs = { parentReadRoots: args.childInheritedReadRoots, parentCwd: currentCwd };
@@ -293,6 +294,12 @@ export function wireChildNesting(w: WireChildNestingArgs): WireChildNestingResul
           args.parentRootSessionId,
         )
       : undefined;
+    // Billing rollup (#3929): wire the root callback into the nested skill
+    // executor so its own skill forks bubble spend up to the root session_sealed.
+    if (childSkillExecutor !== undefined && args.onSubagentSucceeded !== undefined) {
+      (childSkillExecutor as { setOnSubagentSucceeded?: (cb: typeof args.onSubagentSucceeded) => void })
+        .setOnSubagentSucceeded?.(args.onSubagentSucceeded);
+    }
 
     childConfig.provider = args.childProviderFactory({
       childExecutor,
@@ -331,7 +338,7 @@ export function wireChildNesting(w: WireChildNestingArgs): WireChildNestingResul
 export function buildNestedChildManager(
   args: Pick<BuildChildConfigArgs,
     'childInheritedReadRoots' | 'traceWriter' | 'surface' | 'workspaceStore' |
-    'parentRootSessionId' | 'hookRegistry'>,
+    'parentRootSessionId' | 'hookRegistry' | 'onSubagentSucceeded'>,
   signal: AbortSignal,
   currentCwd: string | undefined,
 ): SubagentManager {
@@ -344,6 +351,7 @@ export function buildNestedChildManager(
     ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
     ...(args.parentRootSessionId !== undefined ? { parentRootSessionId: args.parentRootSessionId } : {}),
     ...(args.hookRegistry !== undefined ? { hookRegistry: args.hookRegistry } : {}),
+    ...(args.onSubagentSucceeded !== undefined ? { onSubagentSucceeded: args.onSubagentSucceeded } : {}),
   });
 }
 

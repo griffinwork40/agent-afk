@@ -255,6 +255,16 @@ export interface SkillExecutorContext {
    * {@link SubagentExecutorContext.parentRootSessionId}.
    */
   parentRootSessionId?: string;
+  /**
+   * Billing callback from the root session. Threaded into every per-call
+   * {@link SubagentManager} this executor builds so skill-forked subagent
+   * completions bubble spend up to the root `session_sealed` rollup. Without
+   * this, skill-fork spend is silently dropped (fixes #3929).
+   */
+  onSubagentSucceeded?: (
+    usage: import('../../subagent/result.js').SubagentTrace['usage'],
+    costUsd: number | undefined,
+  ) => void;
 }
 
 export interface SkillInput {

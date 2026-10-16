@@ -91,6 +91,7 @@ function buildSkillForkManager(
     ...(ctx.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
     ...(ctx.parentRootSessionId !== undefined ? { parentRootSessionId: ctx.parentRootSessionId } : {}),
     ...(ctx.hookRegistry !== undefined ? { hookRegistry: ctx.hookRegistry } : {}),
+    ...(ctx.onSubagentSucceeded !== undefined ? { onSubagentSucceeded: ctx.onSubagentSucceeded } : {}),
   });
 }
 

@@ -204,6 +204,8 @@ export function createWiredExecutors(
       };
       wired.rootManager.setOnSubagentSucceeded(record);
       if (toggles.compose) wired.composeExecutor.setOnSubagentSucceeded(record);
+      if (toggles.agent) wired.subagentExecutor.setOnSubagentSucceeded(record);
+      if (toggles.skill) wired.skillExecutor.setOnSubagentSucceeded(record);
     },
     drain,
     getPendingChildBillingStreams: () =>

@@ -78,7 +78,22 @@ function buildSkillChildManager(
     // Hook registry (#3442): the stub parent carries none, so without it
     // SubagentStart/Stop never fire for this skill child's `agent` forks.
     ...(ctx.hookRegistry !== undefined ? { hookRegistry: ctx.hookRegistry } : {}),
+    ...(ctx.onSubagentSucceeded !== undefined ? { onSubagentSucceeded: ctx.onSubagentSucceeded } : {}),
   });
+}
+
+/**
+ * Wire the root session billing callback into a nested skill executor, if
+ * both are present. Extracted from {@link buildForkedChildConfig} to respect
+ * the 200-line function ceiling (#3929).
+ */
+function wireNestedSkillBilling(
+  childSkillExecutor: ReturnType<NonNullable<SkillExecutorInternals['ctx']['childSkillExecutorFactory']>> | undefined,
+  onSubagentSucceeded: SkillExecutorInternals['ctx']['onSubagentSucceeded'],
+): void {
+  if (childSkillExecutor === undefined || onSubagentSucceeded === undefined) return;
+  (childSkillExecutor as { setOnSubagentSucceeded?: (cb: typeof onSubagentSucceeded) => void })
+    .setOnSubagentSucceeded?.(onSubagentSucceeded);
 }
 
 /**
@@ -276,6 +291,7 @@ export function buildForkedChildConfig(
         rootSessionId, // #2442
       )
     : undefined;
+  wireNestedSkillBilling(childSkillExecutor, ctx.onSubagentSucceeded); // #3929
   // Pass `model` so the factory routes between AnthropicDirect /
   // OpenAICompatible per `providerForModel(model)`. Without this, every
   // skill-forked child inherits the legacy hardcoded

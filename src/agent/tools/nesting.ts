@@ -541,6 +541,13 @@ export function createChildSkillExecutorFactory(
   pluginConfigs?: SdkPluginConfig[],
   skillAllowlist?: readonly string[],
   hookRegistry?: HookRegistry,
+  // Billing callback from the root session. Threaded to every depth so
+  // skill-forked grandchild completions bubble spend up to the root rollup
+  // (fixes #3929). Trailing optional — legacy positional callers stay valid.
+  onSubagentSucceeded?: (
+    usage: import('../subagent/result.js').SubagentTrace['usage'],
+    costUsd: number | undefined,
+  ) => void,
 ): (
   depth: number,
   maxDepth: number,
@@ -663,6 +670,9 @@ export function createChildSkillExecutorFactory(
       ...(hookRegistry !== undefined ? { hookRegistry } : {}),
       // Fix A (#skill-recursion): execution guard fires when grandchild calls same skill.
       ...(skillDispatchName !== undefined ? { skillDispatchName } : {}),
+      // Billing rollup (#3929): thread the root callback so skill-forked
+      // grandchild completions reach the root session_sealed accumulator.
+      ...(onSubagentSucceeded !== undefined ? { onSubagentSucceeded } : {}),
     });
   };
   return factory;

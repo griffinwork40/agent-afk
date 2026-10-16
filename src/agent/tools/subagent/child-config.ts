@@ -133,6 +133,16 @@ export interface BuildChildConfigArgs {
    */
   parentRootSessionId?: string;
   /**
+   * Billing callback from the root session. Threaded into the depth-2+
+   * {@link SubagentManager} so grandchild completions bubble spend up to the
+   * root `session_sealed` rollup. Without this, nested subagent spend is
+   * silently dropped (fixes #3929).
+   */
+  onSubagentSucceeded?: (
+    usage: import('../../subagent/result.js').SubagentTrace['usage'],
+    costUsd: number | undefined,
+  ) => void;
+  /**
    * Construct the recursive child executor. Injected by the owning
    * `SubagentExecutor.execute()` as `(ctx) => new SubagentExecutor(ctx)` so
    * this module never imports the executor at runtime (circular-import seam;

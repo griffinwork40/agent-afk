@@ -71,6 +71,21 @@ export class SubagentExecutor implements SubagentControl {
   }
 
   /**
+   * Late-bind the root session's billing callback so depth-2+ nested subagent
+   * completions bubble spend up to the root `session_sealed` rollup. Mirrors
+   * the late-binding pattern of {@link SubagentManager.setOnSubagentSucceeded}:
+   * the callback is only available after `AgentSession` is constructed
+   * (post-`bind()`). The context field is read by `inheritedChildConfigArgs`
+   * at each `buildChildConfig` call and forwarded into every depth-2+ manager
+   * (fixes #3929).
+   */
+  setOnSubagentSucceeded(
+    cb: (usage: import('../subagent/result.js').SubagentTrace['usage'], costUsd: number | undefined) => void,
+  ): void {
+    this.ctx.onSubagentSucceeded = cb;
+  }
+
+  /**
    * The `agent` tool definition this executor's owning provider should
    * advertise. With a non-empty named-agent registry, the definition gains
    * the `agent_type` input property and an "Available agent types" listing
@@ -158,6 +173,7 @@ export class SubagentExecutor implements SubagentControl {
       ...(c.workspaceStore !== undefined ? { workspaceStore: c.workspaceStore } : {}),
       ...(c.delegationBudget !== undefined ? { delegationBudget: c.delegationBudget } : {}), ...(c.hookRegistry !== undefined ? { hookRegistry: c.hookRegistry } : {}),
       ...(rootSessionId !== undefined ? { parentRootSessionId: rootSessionId } : {}),
+      ...(c.onSubagentSucceeded !== undefined ? { onSubagentSucceeded: c.onSubagentSucceeded } : {}),
     };
   }
 

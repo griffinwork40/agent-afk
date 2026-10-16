@@ -132,6 +132,21 @@ export class SkillExecutor {
   }
 
   /**
+   * Late-bind the root session's billing callback so skill-forked subagent
+   * completions bubble spend up to the `session_sealed` rollup. Mirrors the
+   * late-binding pattern of {@link SubagentManager.setOnSubagentSucceeded}:
+   * the callback is only available after `AgentSession` is constructed
+   * (post-`bind()`), so it cannot be threaded at construction time. Each
+   * per-call {@link SubagentManager} built by the fork paths reads
+   * `ctx.onSubagentSucceeded` at dispatch time (fixes #3929).
+   */
+  setOnSubagentSucceeded(
+    cb: (usage: import('../subagent/result.js').SubagentTrace['usage'], costUsd: number | undefined) => void,
+  ): void {
+    this.ctx.onSubagentSucceeded = cb;
+  }
+
+  /**
    * Snapshot of the executor state the extracted per-strategy modules read
    * (`ctx` + `currentCwd`). Built fresh at each call site so `currentCwd`
    * reflects any intervening `setCwd()` re-anchor. See

@@ -280,6 +280,17 @@ export interface SubagentExecutorContext {
    * alongside the other inherited parent fields.
    */
   parentRootSessionId?: string;
+  /**
+   * Billing callback from the root session (`AgentSession.recordSubagentCompletion`
+   * bound at `bind()` time). Threaded into depth-2+ {@link SubagentManager}s via
+   * {@link BuildChildConfigArgs.onSubagentSucceeded} so grandchild completions
+   * bubble spend up to the root `session_sealed` rollup. Without this, nested
+   * subagent spend is silently dropped (fixes #3929).
+   */
+  onSubagentSucceeded?: (
+    usage: import('../../subagent/result.js').SubagentTrace['usage'],
+    costUsd: number | undefined,
+  ) => void;
 }
 
 /**
