@@ -132,6 +132,16 @@ export interface HandoffRecord {
    * Populated after the Telegram message is successfully sent.
    */
   telegramMessageId?: number;
+  /**
+   * Origin context of the task that asked (#1416), carried into the resumed
+   * run: original task id (overlap identity), pinned cwd, and notification
+   * policy. Optional; absent on records written before these fields existed.
+   * See handoff-resume-context.ts.
+   */
+  originalTaskId?: string;
+  cwd?: string;
+  notifyOn?: 'failure' | 'always' | 'never';
+  notifyChat?: number | string;
 }
 
 // ---------------------------------------------------------------------------

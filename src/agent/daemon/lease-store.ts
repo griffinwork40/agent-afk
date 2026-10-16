@@ -31,6 +31,7 @@ import { getQueueDir } from '../../paths.js';
 import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { env } from '../../config/env.js';
 import { type QueuedTask } from './queue-store.js';
+import { pickResumeFields } from './handoff-resume-context.js';
 import {
   type TaskRecord,
   type TaskState,
@@ -146,6 +147,7 @@ export function leaseTask(
       enqueuedAt: task.enqueuedAt,
       sequence: task.sequence,
       ...(task.notifyOn !== undefined ? { notifyOn: task.notifyOn } : {}),
+      ...pickResumeFields(task),
     },
   };
 
@@ -609,6 +611,7 @@ function reEnqueue(record: TaskRecord, queueDir: string): void {
     ...(record.meta?.['notifyOn'] !== undefined
       ? { notifyOn: record.meta['notifyOn'] as QueuedTask['notifyOn'] }
       : {}),
+    ...pickResumeFields(record.meta),
     // Carry retry state through re-enqueue so leaseTask can restore the
     // attempt count and retry policy in the new TaskRecord.  Without this,
     // every recovered task looks like a fresh attempt (attempts:1 / maxAttempts:1)

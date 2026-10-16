@@ -33,6 +33,7 @@
  * @module agent/daemon/scheduler.elicitation-notify
  */
 
+import { pickResumeFields, type HandoffResumeContext } from './handoff-resume-context.js';
 import { writeHandoff, type HandoffRecord } from './handoff-store.js';
 import { errorMessage } from '../../utils/errors.js';
 import { debugLog } from '../../utils/debug.js';
@@ -114,6 +115,11 @@ export interface CronElicitationHandlerOpts {
   chatId?: number;
   /** Optional topic thread ID for supergroups. */
   threadId?: number;
+  /**
+   * Origin context persisted on the handoff (#1416) so the resumed run keeps
+   * the task's pinned cwd, notify policy, and overlap identity.
+   */
+  resumeContext?: HandoffResumeContext;
 }
 
 /**
@@ -141,6 +147,7 @@ export function makeCronElicitationHandler(
       createdAt: new Date().toISOString(),
       status: 'pending',
       originalCommand: opts.originalCommand,
+      ...pickResumeFields(opts.resumeContext),
     };
 
     // Step 1: persist the handoff so the operator can answer later and

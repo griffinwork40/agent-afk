@@ -21,6 +21,7 @@
  * @module agent/daemon/handoff-wiring
  */
 
+import { pickResumeFields, type HandoffResumeContext } from './handoff-resume-context.js';
 import type { ElicitationHandler } from '../elicitation-router.js';
 import type { ElicitationRequest, ElicitationResult } from '../types/sdk-types.js';
 import { serializeRequest } from './elicitation-serialize.js';
@@ -88,6 +89,11 @@ export interface DaemonElicitationOpts {
   chatId?: number;
   /** Optional topic thread ID for supergroups. */
   threadId?: number;
+  /**
+   * Origin context persisted on the handoff (#1416) so the resumed run keeps
+   * the task's pinned cwd, notify policy, and overlap identity.
+   */
+  resumeContext?: HandoffResumeContext;
 }
 
 /**
@@ -124,6 +130,7 @@ export function makeDaemonElicitationHandler(
       createdAt: new Date().toISOString(),
       status: 'pending',
       originalCommand: opts.originalCommand,
+      ...pickResumeFields(opts.resumeContext),
     };
 
     // Step 1: persist the handoff record BEFORE any notification.

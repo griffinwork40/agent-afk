@@ -4,9 +4,9 @@
  * (`makeCronElicitationHandler`) just like pull tasks do, so the upkeep of
  * those records cannot live inside the pull loop. This module owns it:
  *
- *   - Startup (once): restore expired leases in the resume queue, then
- *     re-notify still-pending questions and expire stale ones
- *     (`recoverPendingHandoffs`).
+ *   - Startup (once): re-notify still-pending questions and expire stale ones
+ *     (`recoverPendingHandoffs`), THEN restore expired leases in the resume
+ *     queue (see `runStartupRecovery` for why the order matters).
  *   - Every tick (unref'd interval, cleared by the scheduler's `stop()`):
  *       1. throttled expiry sweep (`sweepExpiredHandoffs`, self-throttled to
  *          one walk per `EXPIRY_SWEEP_INTERVAL_MS`). This is the ONLY caller
@@ -67,18 +67,26 @@ function log(msg: string): void {
   console.error(`[daemon] handoff-maintenance: ${msg}`);
 }
 
-function runStartupRecovery(opts: HandoffMaintenanceOpts, resumeDir: string): void {
+/**
+ * Invariant: handoff recovery (re-notify + expiry) runs BEFORE the resume
+ * queue's lease recovery. Expiring a handoff moves a lease parked in
+ * 'waiting_human_input' back to 'leased'; `recoverExpiredLeases` skips parked
+ * leases, so running it first would leave that lease stranded until the next
+ * daemon restart.
+ */
+export async function runStartupRecovery(opts: HandoffMaintenanceOpts, resumeDir: string): Promise<void> {
+  try {
+    const r = await recoverPendingHandoffs(opts.handoffsDir, opts.queueDir, opts.bot);
+    if (r.renotified > 0 || r.expired > 0) log(`re-notified ${r.renotified}, expired ${r.expired}`);
+  } catch (err) {
+    log(`recovery failed: ${errorMessage(err)}`);
+  }
   try {
     const recovered = recoverExpiredLeases(resumeDir);
     if (recovered.length > 0) log(`recovered ${recovered.length} expired resume lease(s)`);
   } catch (err) {
     log(`resume lease recovery failed: ${errorMessage(err)}`);
   }
-  void recoverPendingHandoffs(opts.handoffsDir, opts.queueDir, opts.bot)
-    .then((r) => {
-      if (r.renotified > 0 || r.expired > 0) log(`re-notified ${r.renotified}, expired ${r.expired}`);
-    })
-    .catch((err: unknown) => log(`recovery failed: ${errorMessage(err)}`));
 }
 
 /** Consume answered handoffs into the resume queue, then run one resume task. */
@@ -102,7 +110,7 @@ export async function consumeAndResume(opts: HandoffMaintenanceOpts, resumeDir: 
  */
 export function startHandoffMaintenance(opts: HandoffMaintenanceOpts): HandoffMaintenanceHandle {
   const resumeDir = resumeQueueDir(opts.queueDir);
-  runStartupRecovery(opts, resumeDir);
+  void runStartupRecovery(opts, resumeDir);
   let resuming = false;
   const timer = setInterval(() => {
     // Expiry runs every tick, even while a long resume run is in progress.

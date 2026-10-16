@@ -51,6 +51,7 @@ import { makeCwdErrorRecord, snapshotInFlightTasks, makeOverlapSkipRecord, makeS
 import { BudgetAlertLatch, evaluateBudgetGate, formatBudgetSkipMessage, resolveDaemonUsageTarget } from './budget-gate.js';
 import { probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
 import { evaluateRunAtGate, applyAutoDisable } from './scheduler.runat-gate.js';
+import { overlapKeyOf } from './handoff-resume-context.js';
 
 export interface SchedulerOptions {
   /** Per-tick session config; merged with defaults at spawn time. */
@@ -430,6 +431,7 @@ export class CronScheduler {
       // The run's lease lives in `queueDir`, so the elicitation handler must
       // park it there (resume-queue tasks are not in the main pull queue).
       runOnce: (task, trigger) => this.runOnce(task, trigger, queueDir),
+      isOverlapBusy: (key) => this.inFlightTasks.has(key),
     };
     return executePullTick(ctx);
   }
@@ -445,20 +447,23 @@ export class CronScheduler {
     // all executor branches including the agent path in executeAgentTask).
     // The guard is intentionally checked BEFORE the cwd and executor branches
     // so it applies uniformly to all executor types.
-    if (this.inFlightTasks.has(task.taskId)) {
+    // Keyed by overlapKeyOf(task): a handoff resume guards as its ORIGINAL
+    // task id, so a cron fire and that task's resume never overlap (#1416).
+    const overlapKey = overlapKeyOf(task);
+    if (this.inFlightTasks.has(overlapKey)) {
       const record = makeOverlapSkipRecord(task, trigger, this.now());
       // Alert once per overlap episode (OverlapAlertLatch), overriding the
       // task's notifyOn: 'always' for the first overlap so the operator hears
       // about the stacking, 'never' for subsequent ticks in the same episode
       // so a slow task does not spam once per cron interval.
-      const shouldAlert = this.overlapAlerts.shouldAlert(task.taskId);
+      const shouldAlert = this.overlapAlerts.shouldAlert(overlapKey);
       const notifyTask = { ...task, notifyOn: shouldAlert ? ('always' as const) : ('never' as const) };
       this.writeTelemetry(record, notifyTask, shouldAlert
         ? { responseText: formatOverlapAlertMessage(task.taskId, record.command, task.cronExpression) }
         : undefined);
       return record;
     }
-    this.inFlightTasks.set(task.taskId, this.now());
+    this.inFlightTasks.set(overlapKey, this.now());
     // Hoisted so the finally block can guard on kind:'pass' without a
     // second applyAutoDisable call when 'expired' already ran it above.
     let gateResult: ReturnType<typeof evaluateRunAtGate> | undefined;
@@ -564,10 +569,10 @@ export class CronScheduler {
       trigger,
     );
     } finally {
-      this.inFlightTasks.delete(task.taskId);
+      this.inFlightTasks.delete(overlapKey);
       // Any non-overlap run (success or error) ends the overlap episode for
       // this task, so the next overlap will alert again.
-      this.overlapAlerts.clear(task.taskId);
+      this.overlapAlerts.clear(overlapKey);
       // runAt one-shot: auto-disable + unregister after the run fires.
       // Guard on kind:'pass' so we don't call applyAutoDisable a second time
       // when the 'expired' branch above already called it and returned early
