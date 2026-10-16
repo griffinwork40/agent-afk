@@ -32,6 +32,8 @@ export interface SessionBuilderOptions {
   createSession: (config: AgentConfig) => Promise<IAgentSession>;
   onResumptionOffer?: (route: TelegramRoute, text: string) => void | Promise<boolean>;
   defaultModel: AgentModelInput;
+  /** Forwarded from `SessionManagerOptions.onInjectableForRoute`. */
+  onInjectableForRoute?: (chatId: number, threadId: number | undefined) => () => void;
 }
 
 /** Live maps passed by reference from SessionManager. */
@@ -61,6 +63,13 @@ export async function buildAndRegisterSession(
     apiKey: opts.apiKey,
     telegramChatId: route.chatId,
     ...(route.threadId !== undefined ? { telegramThreadId: route.threadId } : {}),
+    // Wire the per-session idle-wake hook when the SessionManager was
+    // constructed with onInjectableForRoute. The callback is bound here (at
+    // session-creation time) so it captures the exact route and is ready to
+    // wake THIS session when a background subagent result lands.
+    ...(opts.onInjectableForRoute !== undefined
+      ? { telegramOnInjectable: opts.onInjectableForRoute(route.chatId, route.threadId) }
+      : {}),
   };
   if (opts.settingSources?.length) {
     config.settingSources = opts.settingSources;

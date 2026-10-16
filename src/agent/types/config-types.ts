@@ -956,6 +956,18 @@ export interface AgentConfig {
   telegramThreadId?: number;
 
   /**
+   * Per-session idle-wake callback for the Telegram surface. When set,
+   * `createTelegramSessionFactory` wires it as `bgNotifier.onInjectable` so
+   * a settled background subagent automatically wakes the idle session instead
+   * of waiting for the next user message. Mirrors the REPL's `tryAutoResume`
+   * path in `loop-iteration.ts`.
+   *
+   * Set by `SessionManager` from `SessionManagerOptions.onInjectableForRoute`
+   * immediately before calling `createSession`. Telegram-scoped only.
+   */
+  telegramOnInjectable?: () => void;
+
+  /**
    * In-process custom tools available to the session. Each entry is created
    * via the `tool()` helper and provides both a JSON-schema `AnthropicToolDef`
    * (so the model knows the tool exists) and a validated `ToolHandler`
