@@ -345,14 +345,14 @@ describe('routesToOpenAICompatible fallback — third-party OpenAI-shim prefix f
 describe('contextLimitFor — Codex catalog fallback', () => {
   beforeEach(() =>
     useCodexCatalog([
-      { slug: 'gpt-6-sol', context_window: 272000 },
+      { slug: 'gpt-6.1-sol-preview', context_window: 272000 },
       { slug: 'gpt-5.5', context_window: 272000 },
     ]),
   );
   afterAll(() => resetCatalogCache());
 
   it('uses the catalog window for ids the table does not list', () => {
-    expect(contextLimitFor('gpt-6-sol')).toBe(272_000);
+    expect(contextLimitFor('gpt-6.1-sol-preview')).toBe(272_000);
   });
 
   it('keeps the hand-table value when both know the model', () => {
@@ -363,6 +363,6 @@ describe('contextLimitFor — Codex catalog fallback', () => {
   it('falls back to the per-provider default when the catalog has no entry', () => {
     expect(contextLimitFor('gpt-6-unlisted')).toBe(262_144);
     useCodexCatalog(null);
-    expect(contextLimitFor('gpt-6-sol')).toBe(262_144);
+    expect(contextLimitFor('gpt-6.1-sol-preview')).toBe(262_144);
   });
 });

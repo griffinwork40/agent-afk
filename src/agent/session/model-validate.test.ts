@@ -15,10 +15,6 @@ describe('isValidModelArg', () => {
     expect(isValidModelArg('grok-4.5')).toBe(true);
   });
 
-  it('accepts grok-4.5 (xai wire id passthrough)', () => {
-    expect(isValidModelArg('grok-4.5')).toBe(true);
-  });
-
   it('accepts claude-sonnet-4-6 (Anthropic wire id)', () => {
     expect(isValidModelArg('claude-sonnet-4-6')).toBe(true);
   });
