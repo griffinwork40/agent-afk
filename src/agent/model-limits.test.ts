@@ -365,4 +365,19 @@ describe('contextLimitFor — Codex catalog fallback', () => {
     useCodexCatalog(null);
     expect(contextLimitFor('gpt-6.1-sol-preview')).toBe(262_144);
   });
+
+  it('resolves the real gpt-6 ids from the catalog, not a hardcoded table guess', () => {
+    // #3825: the table once pinned these at 1M, above even the catalog's 872k
+    // maxContextWindow, which made compaction fire too late.
+    useCodexCatalog([
+      { slug: 'gpt-6.1-sol', context_window: 500000 },
+      { slug: 'gpt-6-sol', context_window: 272000 },
+      { slug: 'gpt-6-astra', context_window: 272000 },
+      { slug: 'gpt-6-luna', context_window: 272000 },
+    ]);
+    expect(contextLimitFor('gpt-6.1-sol')).toBe(500_000);
+    for (const id of ['gpt-6-sol', 'gpt-6-astra', 'gpt-6-luna']) {
+      expect(contextLimitFor(id)).toBe(272_000);
+    }
+  });
 });
