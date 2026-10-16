@@ -161,5 +161,27 @@ describe('anthropicJournalAdapter', () => {
     expect((natives[1]!.content as ContentBlockParam[])[0]?.type).toBe('text');
     expect((natives[1]!.content as ContentBlockParam[])[0]?.text).toBe('actually, cancel that');
   });
+
+  it('still merges consecutive tool-result carriers so a round keeps one tool_result message', () => {
+    // A cross-provider journal can record one user message per tool result.
+    // Those must still merge: every tool_result answering one assistant
+    // tool_use turn belongs in the single user message that follows it.
+    const journal: JournalMessage[] = [
+      { role: 'assistant', content: [
+        { type: 'tool_use', id: 't1', name: 'bash', input: {} },
+        { type: 'tool_use', id: 't2', name: 'bash', input: {} },
+      ]},
+      { role: 'user', content: [
+        { type: 'tool_result', toolUseId: 't1', content: [{ type: 'text', text: 'one' }] },
+      ]},
+      { role: 'user', content: [
+        { type: 'tool_result', toolUseId: 't2', content: [{ type: 'text', text: 'two' }] },
+      ]},
+    ];
+    const natives = adapter.fromJournalMessages(journal);
+    expect(natives).toHaveLength(2);
+    const blocks = natives[1]!.content as ContentBlockParam[];
+    expect(blocks.map((b) => b.type)).toEqual(['tool_result', 'tool_result']);
+  });
 });
 
