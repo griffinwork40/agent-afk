@@ -19,6 +19,7 @@ import { dispatchSubagentStop } from '../subagent-hooks.js';
 import { emitSessionPhase } from '../trace/emit.js';
 import type { Message } from '../types.js';
 import { IdleWatchdog } from './idle-watchdog.js';
+import { billingFromUsageRecord, sumBillingUsage } from '../usage.billing.js';
 import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
 import { SOFT_DEADLINE_WIND_DOWN } from '../providers/shared/soft-deadline.js';
 import {
@@ -202,7 +203,13 @@ function processDoneEvent<T>(
   }
   if (typeof event.metadata?.usage === 'object' && event.metadata.usage !== null) {
     const u = event.metadata.usage as Record<string, unknown>;
+    // Billing (#3878) accumulates across the run's turns on the handle (the
+    // trace is replaced per drain turn). Each `done` carries ONE turn's usage
+    // (the provider's per-turn accumulator), so summing is a true total.
+    handle._runBilling = sumBillingUsage(handle._runBilling, billingFromUsageRecord(u));
+    const billing = handle._runBilling;
     handle._currentTrace.usage = {
+      ...(billing !== undefined ? { billing } : {}),
       inputTokens: typeof u['input_tokens'] === 'number' ? u['input_tokens'] : undefined,
       outputTokens: typeof u['output_tokens'] === 'number' ? u['output_tokens'] : undefined,
       cacheReadTokens:

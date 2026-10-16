@@ -1,5 +1,6 @@
 import type { Message, IAgentSession, OutputEvent } from '../types.js';
 import { emitSubagentLifecycle } from '../trace/emit.js';
+import { billingLifecycleFields } from '../usage.billing.js';
 import type { SubagentHandleImpl } from './handle.js';
 import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
 
@@ -72,6 +73,7 @@ export async function emitSuccessfulHandoff<T>(handle: SubagentHandleImpl<T>, me
     turnCount: handle._currentTrace.turnCount,
     outputBytes: Buffer.byteLength(message.content, 'utf8'),
     ...(handle._lastStopReason !== undefined && { stopReason: handle._lastStopReason }),
+    ...billingLifecycleFields(handle._runBilling),
     ...cappedHandoffFields(message, handle._lastStopReason),
   });
 }

@@ -13,6 +13,9 @@
 
 import type { ClosureSignals } from './closure-emitter.js';
 import type { ResponseMetadata } from '../types.js';
+import type { BillingUsage } from '../provider.js';
+import { billingFromUsageRecord } from '../usage.billing.js';
+import { BillingRollup, optionalBilling, type BillingRollupSnapshot } from './billing-rollup.js';
 
 /** Mutable token counter tuple used for both session and subagent rollups. */
 interface TokenCounters {
@@ -29,6 +32,10 @@ export interface AccountingSnapshot {
   subagentCompletedCount: number;
   subagentRunningTokens: Readonly<TokenCounters>;
   subagentRunningCostUsd: number;
+  /** Billing-normalized root-session rollup (#3878); undefined when none reported. */
+  sessionBilling?: BillingRollupSnapshot;
+  /** Billing-normalized subagent rollup, split by provider (#3878). */
+  subagentBilling?: BillingRollupSnapshot;
 }
 
 function zeroCounters(): TokenCounters {
@@ -81,6 +88,9 @@ export class AccountingAccumulator {
   private subagentRunningTokens: TokenCounters = zeroCounters();
   /** Cumulative USD cost rolled up from completed subagents. */
   private subagentRunningCostUsd = 0;
+  /** Billing rollups (#3878) — summed per round, split by provider. */
+  private readonly sessionBilling = new BillingRollup();
+  private readonly subagentBilling = new BillingRollup();
 
   /**
    * Reset all mutable accounting state for a new SDK lifecycle cycle
@@ -98,6 +108,8 @@ export class AccountingAccumulator {
     this.subagentCompletedCount = 0;
     this.subagentRunningTokens = zeroCounters();
     this.subagentRunningCostUsd = 0;
+    this.sessionBilling.reset();
+    this.subagentBilling.reset();
   }
 
   /**
@@ -126,6 +138,7 @@ export class AccountingAccumulator {
       addCounter('output_tokens', 'output');
       addCounter('cache_read_input_tokens', 'cacheRead');
       addCounter('cache_creation_input_tokens', 'cacheCreation');
+      this.sessionBilling.add(billingFromUsageRecord(u));
     }
     if (typeof m.stopReason === 'string') {
       this.lastStopReason = m.stopReason;
@@ -181,6 +194,8 @@ export class AccountingAccumulator {
       outputTokens?: number;
       cacheReadTokens?: number;
       cacheCreationTokens?: number;
+      /** Billing counts summed across ALL the child's turns (#3878). */
+      billing?: BillingUsage;
     },
     costUsd?: number,
   ): void {
@@ -196,6 +211,7 @@ export class AccountingAccumulator {
       add(usage.outputTokens, 'output');
       add(usage.cacheReadTokens, 'cacheRead');
       add(usage.cacheCreationTokens, 'cacheCreation');
+      this.subagentBilling.add(usage.billing);
     }
 
     if (typeof costUsd === 'number' && Number.isFinite(costUsd) && costUsd > 0) {
@@ -232,6 +248,8 @@ export class AccountingAccumulator {
       subagentCompletedCount: this.subagentCompletedCount,
       subagentRunningTokens: { ...this.subagentRunningTokens },
       subagentRunningCostUsd: this.subagentRunningCostUsd,
+      ...optionalBilling('sessionBilling', this.sessionBilling.snapshot()),
+      ...optionalBilling('subagentBilling', this.subagentBilling.snapshot()),
     };
   }
 }

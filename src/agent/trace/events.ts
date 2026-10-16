@@ -26,6 +26,7 @@ import {
   BackgroundAgentStartedPayloadSchema,
 } from './background-agent-schema.js';
 import { BrowserEventPayloadSchema } from './events.browser.js';
+import { SessionBillingSchema } from './events.billing.js';
 import { CompactionPayloadInputSchema, CompactionPayloadPersistedSchema } from './events.compaction.js';
 import { SessionPhasePayloadSchema } from './events.session-phase.js';
 import { ToolFailureClassSchema, SubagentLifecyclePayloadSchema } from './events.subagent-lifecycle.js';
@@ -291,6 +292,7 @@ export const SessionSealedPayloadSchema = z.object({
     })
     .optional(),
   subagentCostUsd: z.number().nonnegative().optional(),
+  billing: SessionBillingSchema.optional(),
 });
 
 // ---------------------------------------------------------------------------

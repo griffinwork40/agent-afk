@@ -26,6 +26,7 @@ import type { ClosureReason, TraceSink } from '../trace/index.js';
 import type { TraceWriter } from '../trace/writer.js';
 import { buildClosureGuidance } from './closure-guidance.js';
 import { classifyClosureReason } from './closure-reason.js';
+import { sealBillingField, type BillingRollupSnapshot } from './billing-rollup.js';
 
 /** Cumulative token tuple mirrored into the `closure` / `session_sealed` payloads. */
 export interface ClosureTokenCounters {
@@ -156,6 +157,9 @@ export interface SealTraceInput extends ClosureSignals, ClosureTotals {
   subagentCompletedCount: number;
   subagentRunningTokens: ClosureTokenCounters;
   subagentRunningCostUsd: number;
+  /** Billing-normalized rollups (#3878); omitted from the seal when absent. */
+  sessionBilling?: BillingRollupSnapshot;
+  subagentBilling?: BillingRollupSnapshot;
   /**
    * In-flight child terminal emit promises to flush before `session_sealed`.
    * Collected from active handles via `AgentConfig.getPendingChildTerminalWrites`
@@ -212,6 +216,7 @@ export async function sealTraceWriter(
       ...(subagentCount !== undefined ? { subagentCount } : {}),
       ...(subagentTokens !== undefined ? { subagentTokens } : {}),
       ...(subagentCostUsd !== undefined ? { subagentCostUsd } : {}),
+      ...sealBillingField(input.sessionBilling, input.subagentBilling),
     },
     input.pendingChildTerminalWrites,
   );

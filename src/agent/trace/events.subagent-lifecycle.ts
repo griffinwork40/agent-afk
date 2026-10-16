@@ -9,6 +9,7 @@
 
 import { z } from 'zod';
 import { TOOL_FAILURE_CLASSES } from './types.js';
+import { BillingCountersSchema } from './events.billing.js';
 
 export const ToolFailureClassSchema = z.enum(TOOL_FAILURE_CLASSES);
 
@@ -37,6 +38,8 @@ export const SubagentSucceededPayloadSchema = z.object({
   totalCostUsd: z.number().nonnegative().optional(),
   outputBytes: z.number().int().nonnegative(),
   stopReason: z.string().optional(),
+  provider: z.string().optional(),
+  tokens: BillingCountersSchema.optional(),
 });
 
 export const SubagentFailedPayloadSchema = z.object({

@@ -425,6 +425,24 @@ export interface SubagentSucceededPayload {
    * with `succeeded` status. Absent when the provider reported no stop reason.
    */
   stopReason?: string;
+  /**
+   * Bundled provider family that served this child (`anthropic-direct` |
+   * `openai-compatible`), from its billing usage (#3878). Absent when the
+   * provider reported no usage.
+   */
+  provider?: string;
+  /**
+   * Billing-normalized token counts summed across every turn of the child's
+   * run (#3878). `uncachedInput` excludes cache reads on every provider, so
+   * `cacheRead / (uncachedInput + cacheRead + cacheWrite)` is the child's
+   * true prompt-cache hit rate.
+   */
+  tokens?: {
+    uncachedInput: number;
+    cacheRead: number;
+    cacheWrite: number;
+    output: number;
+  };
 }
 
 export interface SubagentFailedPayload {
@@ -833,6 +851,32 @@ export interface SessionSealedPayload {
    * free tier or providers that don't report cost).
    */
   subagentCostUsd?: number;
+  /**
+   * Billing-normalized token rollups (#3878), each `{ total, byProvider }`.
+   * Unlike `subagentTokens` (whose cache fields are latest-round only and
+   * whose OpenAI `input` includes cached tokens), every counter here is summed
+   * per model call and `uncachedInput` excludes cache reads, so hit rate =
+   * `cacheRead / (uncachedInput + cacheRead + cacheWrite)` per provider.
+   * Omitted when no provider reported billing usage.
+   */
+  billing?: {
+    root?: SessionBillingRollup;
+    subagents?: SessionBillingRollup;
+  };
+}
+
+/** One billing rollup on `session_sealed.billing` (#3878). */
+export interface SessionBillingRollup {
+  total: SessionBillingCounters;
+  byProvider: Record<string, SessionBillingCounters>;
+}
+
+/** Billing counters on `session_sealed.billing` rollups (#3878). */
+export interface SessionBillingCounters {
+  uncachedInput: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
 }
 
 // ---------------------------------------------------------------------------

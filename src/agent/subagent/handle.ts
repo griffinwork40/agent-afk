@@ -10,6 +10,7 @@
 import type { ZodType } from 'zod';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { AbortGraph } from '../abort-graph.js';
+import type { BillingUsage } from '../provider.js';
 import { TimeoutError, errorMessage } from '../../utils/errors.js';
 import type { HookRegistry } from '../hooks.js';
 import { withTimeout } from '../timeout.js';
@@ -189,6 +190,13 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
    * surfaces a prior run's stop reason on the error result.
    */
   /** @internal */ _lastStopReason: string | undefined;
+  /**
+   * Billing usage (#3878) summed over EVERY turn of the current run, initial
+   * plus drain turns. Lives on the handle, not `_currentTrace`, because
+   * `streamToFinalMessage` replaces the trace on each drain turn. Reset at
+   * the start of `run()`, next to `_lastStopReason`.
+   */
+  /** @internal */ _runBilling: BillingUsage | undefined;
   /** @internal — per-subagent conversation log writer. Set by SubagentManager after construction. */
   /** @internal */ _logWriter?: { write(event: OutputEvent): void; close(): Promise<void> };
 
@@ -252,6 +260,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     // `currentStatus` is never `running` (and there is no `await` before it is
     // set below), so no in-flight run owns this value for us to clobber.
     this._lastStopReason = undefined;
+    this._runBilling = undefined;
     if (this._currentStatus === 'cancelled') throw new Error(`Subagent ${this.id} is cancelled`);
 
     this._currentStatus = 'running';

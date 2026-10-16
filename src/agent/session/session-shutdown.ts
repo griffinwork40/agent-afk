@@ -131,6 +131,8 @@ export class SessionShutdown {
         subagentCompletedCount: acct.subagentCompletedCount,
         subagentRunningTokens: acct.subagentRunningTokens,
         subagentRunningCostUsd: acct.subagentRunningCostUsd,
+        ...(acct.sessionBilling !== undefined ? { sessionBilling: acct.sessionBilling } : {}),
+        ...(acct.subagentBilling !== undefined ? { subagentBilling: acct.subagentBilling } : {}),
         // Collect in-flight child terminal emit promises so they land before
         // session_sealed even when the drain timed out or was not configured
         // (#3714). Called after the drain so all active handles have had a

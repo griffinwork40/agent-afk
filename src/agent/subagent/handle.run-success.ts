@@ -88,7 +88,10 @@ export async function drainAndEmitSuccess(
   // which `recordSubagentCompletion` already tolerates.
   const costUsd =
     typeof lastMsg.metadata?.totalCostUsd === 'number' ? lastMsg.metadata.totalCostUsd : undefined;
-  handle.onSubagentSucceeded?.(handle._currentTrace.usage, costUsd);
+  // Billing (#3878) spans every turn of the run, initial + drain turns.
+  const usage = handle._currentTrace.usage;
+  const billing = handle._runBilling;
+  handle.onSubagentSucceeded?.(billing !== undefined ? { ...usage, billing } : usage, costUsd);
 
   handle._onTerminal();
   return lastMsg;
