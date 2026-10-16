@@ -382,7 +382,7 @@ export class CronScheduler {
     this.shutdownController = new AbortController();
     if (this.pullPollTimer !== undefined) clearInterval(this.pullPollTimer);
     this.pullPollTimer = undefined;
-    this.handoffMaintenance?.stop();
+    await this.handoffMaintenance?.stop();
     this.handoffMaintenance = undefined;
     for (const taskId of this.registry.keys()) this.unregister(taskId);
   }
