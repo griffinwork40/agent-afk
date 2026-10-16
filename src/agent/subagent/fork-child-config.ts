@@ -245,6 +245,7 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
   // Invariant: pass `null` as sessionId — the store is already scoped to one
   // root session, and children publish under their own IDs, so a session-
   // filtered query would miss sibling findings (the partition mismatch bug).
+  // Store lifetime: see the Invariant in providers/shared/chain-provider-close.ts.
   const taskPrompt = resume ?? (typeof options.config.systemPrompt === 'string'
     ? options.config.systemPrompt
     : '');
@@ -376,8 +377,9 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     // spread so an inherited `options.config.messageJournal` (a caller that
     // cloned the parent's config) can never leak through; `resumeMessages` is
     // cleared for the same reason: children never reseed from the parent's
-    // journal, they start from their own prompt.
-    messageJournal: options.parent.messageJournal?.forSubagent(id),
+    // journal, they start from their own prompt. Child model + provider are
+    // passed so the subagent meta record reflects what THIS child runs. (#3808)
+    messageJournal: options.parent.messageJournal?.forSubagent(id, { model: String(effectiveChildModel), provider: providerForModel(effectiveChildModel) }),
     resumeMessages: undefined,
     // Child session inherits the SAME resolved registry (see `registry`
     // in forkSubagent) so its own SessionStart/SessionEnd/PreToolUse fire

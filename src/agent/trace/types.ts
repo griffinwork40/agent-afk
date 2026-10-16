@@ -405,7 +405,8 @@ export interface SubagentStartedPayload {
   maxToolUseIterations?: number;
 }
 
-export interface SubagentSucceededPayload {
+/** `provider` / `tokens` (#3878) come from {@link SubagentBillingFields}. */
+export interface SubagentSucceededPayload extends SubagentBillingFields {
   incomplete?: true;
   incompleteReason?: string;
   roundsUsed?: number;
@@ -427,7 +428,7 @@ export interface SubagentSucceededPayload {
   stopReason?: string;
 }
 
-export interface SubagentFailedPayload {
+export interface SubagentFailedPayload extends SubagentBillingFields {
   transition: 'failed';
   subagentId: string;
   errorClass: string;
@@ -444,7 +445,7 @@ export interface SubagentFailedPayload {
   failureClass?: ToolFailureClass;
 }
 
-export interface SubagentCancelledPayload {
+export interface SubagentCancelledPayload extends SubagentBillingFields {
   transition: 'cancelled';
   subagentId: string;
   /**
@@ -622,6 +623,14 @@ export interface ClosurePayload {
    * Absent for benign closes and anomalous reasons not yet covered.
    */
   guidance?: string;
+  /**
+   * Present on child (forked) sessions only; absent on the root session.
+   * Mirrors the `subagentId` field on `tool_call` events so `parseTraceSignals`
+   * can distinguish a child's closure from the root's closure and avoid
+   * falsely downgrading the root facet when a child closed abnormally (#3883).
+   * Older traces that predate this field simply omit it.
+   */
+  subagentId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -833,7 +842,31 @@ export interface SessionSealedPayload {
    * free tier or providers that don't report cost).
    */
   subagentCostUsd?: number;
+  /**
+   * Billing-normalized token rollups (#3878), each `{ total, byProvider }`.
+   * Unlike `subagentTokens` (whose cache fields are latest-round only and
+   * whose OpenAI `input` includes cached tokens), every counter here is summed
+   * per model call and `uncachedInput` excludes cache reads, so hit rate =
+   * `cacheRead / (uncachedInput + cacheRead + cacheWrite)` per provider.
+   * `subagents` covers EVERY child that accrued billing — succeeded, failed,
+   * and cancelled — unlike the success-only `subagentCount`/`subagentTokens`.
+   * Omitted when no provider reported billing usage.
+   */
+  billing?: {
+    root?: BillingRollupSnapshot;
+    subagents?: BillingRollupSnapshot;
+  };
 }
+
+// Billing shapes on `session_sealed.billing` and the terminal lifecycle
+// payloads (#3878): `z.infer`-derived in `events.billing.ts` (the single source
+// of truth, zod-only imports so no cycle), re-exported under these names.
+import type { BillingRollupSnapshot, SubagentBillingFields } from './events.billing.js';
+export type {
+  BillingCounters as SessionBillingCounters,
+  BillingRollupSnapshot as SessionBillingRollup,
+  SubagentBillingFields,
+} from './events.billing.js';
 
 // ---------------------------------------------------------------------------
 // Discriminated unions

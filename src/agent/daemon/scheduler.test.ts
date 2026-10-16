@@ -340,7 +340,7 @@ describe('CronScheduler telemetry — errorMessage redaction', () => {
   it('passes full redacted response to completion callback without persisting it', async () => {
     const rawSecret = 'sk-ant-api03-secretkeyABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstu';
     const tail = 'TAIL_AFTER_EXCERPT';
-    const response = `${'x'.repeat(350)}${rawSecret}\n${tail}`;
+    const response = `${'safe text '.repeat(35)}${rawSecret}\n${tail}`;
     const onTaskComplete = vi.fn();
     const scheduler = new CronScheduler({
       telemetryPath,

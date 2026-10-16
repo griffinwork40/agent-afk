@@ -217,7 +217,7 @@ export async function runDaemonAction(options: DaemonActionOptions): Promise<voi
     const handle = await startDaemon({
       port,
       host,
-      ...(options.once ? { writePortFile: false } : {}),
+      ...(options.once ? { writePortFile: false, handoffMaintenance: false } : {}),
       sessionConfig: {
         model: daemonModel,
         ...(daemonApiKey !== undefined ? { apiKey: daemonApiKey } : {}),

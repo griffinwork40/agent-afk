@@ -79,6 +79,7 @@ export type { ForkParent, ForkSubagentOptions, SubagentManagerOptions };
 
 export class SubagentManager {
   private readonly active = new Map<string, SubagentHandleImpl<unknown>>();
+  private readonly pendingChildBillingStreams = new Set<Promise<void>>();
   /** Recently-completed subagent handles for `/tasks:view` memory-first path. */
   readonly completed = new CompletedCache();
   private readonly parentCanUseTool: CanUseTool | undefined;
@@ -425,7 +426,12 @@ export class SubagentManager {
         getOutputEventSink: () => this.outputEventSink,
         activeMap: this.active,
         abortGraph: this.abortGraph,
-        completedCache: this.completed,
+        completedCache: {
+          recordHandle: (...args) => {
+            this.retainChildBillingStreams(args[1]);
+            this.completed.recordHandle(...args);
+          },
+        },
         onSubagentSucceeded: this.onSubagentSucceededCb,
       });
     } catch (err) {
@@ -486,6 +492,22 @@ export class SubagentManager {
    */
   getPendingChildTerminalWrites(): readonly Promise<void>[] {
     return [...this.active.values()].map((h) => h._pendingCancellationWrite);
+  }
+
+  /** Includes terminal children evicted from both the active map and completed LRU. */
+  getPendingChildBillingStreams(): readonly Promise<void>[] {
+    for (const handle of this.active.values()) this.retainChildBillingStreams(handle);
+    return [...this.pendingChildBillingStreams];
+  }
+
+  private retainChildBillingStreams(handle: SubagentHandle): void {
+    const streams = (handle as SubagentHandle & { readonly pendingBillingStreams?: readonly Promise<void>[] }).pendingBillingStreams;
+    for (const stream of streams ?? []) {
+      if (this.pendingChildBillingStreams.has(stream)) continue;
+      this.pendingChildBillingStreams.add(stream);
+      const remove = (): void => { this.pendingChildBillingStreams.delete(stream); };
+      void stream.then(remove, remove);
+    }
   }
 
   /**

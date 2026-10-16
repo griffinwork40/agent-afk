@@ -3,7 +3,11 @@
  *
  * Persists to `~/.afk/config/schedules.json` (default). All writes are
  * atomic (temp + rename) to avoid leaving a half-written file. Missing file
- * returns an empty array. JSON parse failures log to stderr and return [].
+ * returns an empty array. For read-only callers (`loadSchedules`), JSON parse
+ * failures log to stderr and return []. Read-modify-write operations load
+ * through the strict `loadSchedulesForWrite` instead, which throws
+ * `UnreadableSchedulesError` (and writes nothing) when the file exists but is
+ * not a JSON array, so a hand-edit typo can never wipe every schedule.
  *
  * Read-modify-write operations (`addSchedule`, `removeSchedule`,
  * `updateSchedule`) are guarded by an `O_EXCL` advisory lockfile so that
@@ -32,6 +36,9 @@ import type { ScheduledTask, TaskExecutor } from './triggers.js';
 import { errorMessage, isErrnoCode } from '../../utils/errors.js';
 import { sleepSync } from '../../utils/sleep-sync.js';
 import { writeJsonFile } from '../../utils/json-file.js';
+import { loadSchedulesForWrite } from './schedule-store.strict-load.js';
+
+export { UnreadableSchedulesError, loadSchedulesForWrite } from './schedule-store.strict-load.js';
 
 // ---------------------------------------------------------------------------
 // Advisory file lock (O_EXCL)
@@ -258,6 +265,10 @@ export interface ScheduledTaskConfig {
  * Load all scheduled task configs from the store.
  * Returns [] when the file is missing or contains invalid JSON.
  *
+ * Read-only: never use this inside a read-modify-write. Its lenient fallback
+ * would let a mutation overwrite an unreadable file with only the new state;
+ * mutations use `loadSchedulesForWrite` (schedule-store.strict-load.ts).
+ *
  * Consistency model: reads are lock-free (plain readFileSync). A concurrent
  * write via `withFileLock` may be in-flight; in that case this read returns
  * either the previous or the next committed snapshot, never a partial write,
@@ -309,7 +320,7 @@ export function addSchedule(
 ): ScheduledTaskConfig {
   const storePath = path ?? getSchedulesPath();
   return withFileLock(storePath, () => {
-    const schedules = loadSchedules(storePath);
+    const schedules = loadSchedulesForWrite(storePath);
     const existing = schedules.map((s) => s.id);
     const base = slugify(config.name);
     const id = resolveSlugCollision(base, existing);
@@ -336,7 +347,7 @@ export function addSchedule(
 export function removeSchedule(id: string, path?: string): boolean {
   const storePath = path ?? getSchedulesPath();
   return withFileLock(storePath, () => {
-    const schedules = loadSchedules(storePath);
+    const schedules = loadSchedulesForWrite(storePath);
     const before = schedules.length;
     const filtered = schedules.filter((s) => s.id !== id);
     if (filtered.length === before) return false;
@@ -386,7 +397,7 @@ export function updateSchedule(
 ): ScheduledTaskConfig | undefined {
   const storePath = path ?? getSchedulesPath();
   return withFileLock(storePath, () => {
-    const schedules = loadSchedules(storePath);
+    const schedules = loadSchedulesForWrite(storePath);
     const idx = schedules.findIndex((s) => s.id === id);
     if (idx === -1) return undefined;
     const existing = schedules[idx]!;

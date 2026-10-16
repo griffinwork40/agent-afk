@@ -220,6 +220,7 @@ describe('MODEL_ALIASES_HINT (single source of truth for the /model picker)', ()
       // Fixed-identity Claude/xAI aliases (DIRECT_MODEL_ALIASES)
       'opus', 'opus_1m', 'opus-5.5', 'opus-5.5_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable', 'grok',
       // Curated OpenAI wire ids (OPENAI_MODEL_HINTS)
+      'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna',
       'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
       'gpt-5.5',
     ]);

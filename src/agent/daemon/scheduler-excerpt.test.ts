@@ -74,7 +74,7 @@ afterEach(() => {
 
 describe('CronScheduler — responseExcerpt truncation marker', () => {
   it('appends "… [truncated]" when response is longer than 280 chars', async () => {
-    const long = 'x'.repeat(400);
+    const long = 'word '.repeat(80); // 400 chars, space-separated — not token-shaped
     const scheduler = new CronScheduler({
       telemetryPath,
       sessionFactory: () => makeSession(long),
@@ -86,13 +86,13 @@ describe('CronScheduler — responseExcerpt truncation marker', () => {
     expect(record.status).toBe('success');
     expect(record.responseExcerpt).toMatch(/… \[truncated\]$/);
     expect(record.responseExcerpt).toHaveLength(280 + '… [truncated]'.length);
-    expect(record.responseExcerpt!.slice(0, 280)).toBe('x'.repeat(280));
+    expect(record.responseExcerpt!.slice(0, 280)).toBe('word '.repeat(56)); // 56 × 5 = 280
 
     await scheduler.stop();
   });
 
   it('does NOT append the marker when response is exactly 280 chars', async () => {
-    const exact = 'y'.repeat(280);
+    const exact = 'abc '.repeat(70); // 70 × 4 = 280 chars, not token-shaped
     const scheduler = new CronScheduler({
       telemetryPath,
       sessionFactory: () => makeSession(exact),
@@ -109,7 +109,7 @@ describe('CronScheduler — responseExcerpt truncation marker', () => {
   });
 
   it('does NOT append the marker when response is shorter than 280 chars', async () => {
-    const short = 'z'.repeat(100);
+    const short = 'hi '.repeat(33); // 99 chars, not token-shaped
     const scheduler = new CronScheduler({
       telemetryPath,
       sessionFactory: () => makeSession(short),
@@ -119,7 +119,7 @@ describe('CronScheduler — responseExcerpt truncation marker', () => {
     const record = await scheduler.tick('short');
 
     expect(record.status).toBe('success');
-    expect(record.responseExcerpt).toBe(short);
+    expect(record.responseExcerpt).toBe('hi '.repeat(33));
     expect(record.responseExcerpt).not.toContain('truncated');
 
     await scheduler.stop();

@@ -30,6 +30,9 @@ import type { TurnStreamRunner } from './turn-stream-runner.js';
 import type { QueryInputStream } from './input-iterable.js';
 import type { PlanExitBridge } from './plan-exit-bridge.js';
 import { warnReducedSurfaceOnTurn } from './sdk-surface-warning.js';
+import { observeSkillReferences, scanSkillReferences } from './skill-reference.js';
+import { resolveInstalledSkillNames } from './skill-reference-names.js';
+import { deriveOrigin } from './session-identity.js';
 
 /** Context bag for the send-message functions. */
 export interface SendDeps {
@@ -153,10 +156,34 @@ export async function* sendMessageStream(
   deps.runner.assertCanSend();
   deps.setState('streaming');
   try {
-    yield* sendMessageStreamInternal(content, deps);
+    yield* withSkillReferenceTelemetry(content, sendMessageStreamInternal(content, deps), deps);
   } finally {
     if (deps.getState() === 'streaming') deps.setState('idle');
   }
+}
+
+/**
+ * Wrap a top-level turn with logging-only mid-message skill-reference
+ * telemetry ({@link observeSkillReferences}). Returns `stream` itself when
+ * the session is a forked child (its prompt is the parent's text, not the
+ * user's) or the content names no `/skill` candidate, so the common path
+ * adds no wrapper at all.
+ */
+function withSkillReferenceTelemetry(
+  content: string | ContentBlockParam[],
+  stream: AsyncIterableIterator<OutputEvent>,
+  deps: SendDeps,
+): AsyncIterableIterator<OutputEvent> {
+  const config = deps.getConfig();
+  if ((config.depth ?? 0) > 0 || config.parentSessionId !== undefined) return stream;
+  const scan = scanSkillReferences(content);
+  if (scan.names.length === 0) return stream;
+  const sessionId = deps.getSessionId();
+  return observeSkillReferences(scan, stream, {
+    ...(config.surface !== undefined ? { origin: deriveOrigin(config.surface) } : {}),
+    ...(sessionId !== undefined ? { sessionId } : {}),
+    resolveKnownNames: (names) => resolveInstalledSkillNames(names, config.cwd),
+  });
 }
 
 /**

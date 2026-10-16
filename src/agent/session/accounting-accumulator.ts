@@ -13,6 +13,8 @@
 
 import type { ClosureSignals } from './closure-emitter.js';
 import type { ResponseMetadata } from '../types.js';
+import { billingFromUsageRecord } from '../usage.billing.js';
+import { BillingRollup, optionalBilling, type BillingRollupSnapshot } from './billing-rollup.js';
 
 /** Mutable token counter tuple used for both session and subagent rollups. */
 interface TokenCounters {
@@ -29,6 +31,14 @@ export interface AccountingSnapshot {
   subagentCompletedCount: number;
   subagentRunningTokens: Readonly<TokenCounters>;
   subagentRunningCostUsd: number;
+  /** Billing-normalized root-session rollup (#3878); undefined when none reported. */
+  sessionBilling?: BillingRollupSnapshot;
+  /**
+   * Billing-normalized subagent rollup, split by provider (#3878). Covers
+   * EVERY child that accrued billing — succeeded, failed, and cancelled —
+   * unlike the success-only legacy `subagent*` counters above.
+   */
+  subagentBilling?: BillingRollupSnapshot;
 }
 
 function zeroCounters(): TokenCounters {
@@ -81,6 +91,9 @@ export class AccountingAccumulator {
   private subagentRunningTokens: TokenCounters = zeroCounters();
   /** Cumulative USD cost rolled up from completed subagents. */
   private subagentRunningCostUsd = 0;
+  /** Billing rollups (#3878) — summed per round, split by provider. */
+  private readonly sessionBilling = new BillingRollup();
+  private readonly subagentBilling = new BillingRollup();
 
   /**
    * Reset all mutable accounting state for a new SDK lifecycle cycle
@@ -98,6 +111,8 @@ export class AccountingAccumulator {
     this.subagentCompletedCount = 0;
     this.subagentRunningTokens = zeroCounters();
     this.subagentRunningCostUsd = 0;
+    this.sessionBilling.reset();
+    this.subagentBilling.reset();
   }
 
   /**
@@ -126,6 +141,7 @@ export class AccountingAccumulator {
       addCounter('output_tokens', 'output');
       addCounter('cache_read_input_tokens', 'cacheRead');
       addCounter('cache_creation_input_tokens', 'cacheCreation');
+      this.sessionBilling.add(billingFromUsageRecord(u));
     }
     if (typeof m.stopReason === 'string') {
       this.lastStopReason = m.stopReason;
@@ -171,19 +187,25 @@ export class AccountingAccumulator {
    * `SubagentHandle`) after each fork reaches `succeeded` status.
    * Thread-safe for sequential single-session use (no concurrent mutation).
    *
+   * Contract: a report tagged `usage.outcome` (`'failed'` | `'cancelled'`,
+   * sent by `subagent/handle.billing.ts` for a child that ended without
+   * succeeding) is BILLING-ONLY: it adds `usage.billing` to the subagent
+   * billing rollup and touches nothing else, so the legacy counters
+   * (`subagentCompletedCount`, `subagentRunningTokens`,
+   * `subagentRunningCostUsd`) keep their success-only semantics.
+   *
    * @param usage   - Token breakdown from {@link SubagentTrace.usage}.
    * @param costUsd - Optional USD cost for this subagent (from
    *                  {@link SubagentSucceededPayload.totalCostUsd}).
    */
   recordSubagentCompletion(
-    usage?: {
-      inputTokens?: number;
-      outputTokens?: number;
-      cacheReadTokens?: number;
-      cacheCreationTokens?: number;
-    },
+    usage?: import('../subagent/result.js').SubagentTrace['usage'],
     costUsd?: number,
   ): void {
+    if (usage?.outcome !== undefined) {
+      this.subagentBilling.add(usage.billing);
+      return;
+    }
     this.subagentCompletedCount++;
 
     if (usage) {
@@ -196,6 +218,7 @@ export class AccountingAccumulator {
       add(usage.outputTokens, 'output');
       add(usage.cacheReadTokens, 'cacheRead');
       add(usage.cacheCreationTokens, 'cacheCreation');
+      this.subagentBilling.add(usage.billing);
     }
 
     if (typeof costUsd === 'number' && Number.isFinite(costUsd) && costUsd > 0) {
@@ -232,6 +255,8 @@ export class AccountingAccumulator {
       subagentCompletedCount: this.subagentCompletedCount,
       subagentRunningTokens: { ...this.subagentRunningTokens },
       subagentRunningCostUsd: this.subagentRunningCostUsd,
+      ...optionalBilling('sessionBilling', this.sessionBilling.snapshot()),
+      ...optionalBilling('subagentBilling', this.subagentBilling.snapshot()),
     };
   }
 }

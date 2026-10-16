@@ -82,6 +82,15 @@ export interface ProviderUsage {
    * a provider has not populated it.
    */
   contextWindowTokens?: number;
+  /**
+   * Billing-normalized token counts (#3878). Additive: every legacy field above
+   * keeps its meaning. Unlike `cachedInputTokens`/`cacheCreationTokens` (latest
+   * round only — context occupancy), every field here is SUMMED across rounds
+   * by `sumProviderUsage`, and `uncachedInput` EXCLUDES cache reads on every
+   * provider (OpenAI's subset `cached_tokens` is subtracted once, at translate
+   * time). Absent when the provider reported no usage.
+   */
+  billing?: BillingUsage;
   totalCostUsd?: number;
   stopReason?: string | null;
   durationMs?: number;
@@ -92,6 +101,21 @@ export interface ProviderUsage {
   permissionDenials?: unknown[];
   errors?: string[];
   raw?: Record<string, unknown>;
+}
+
+/**
+ * Contract: billing-semantics token counts for one or more model calls.
+ * `uncachedInput + cacheRead + cacheWrite` is the full prompt across the summed
+ * calls; hit rate = `cacheRead / (uncachedInput + cacheRead + cacheWrite)`.
+ * `provider` is the bundled provider family that produced the counts
+ * (`anthropic-direct` | `openai-compatible`), so rollups can split by it.
+ */
+export interface BillingUsage {
+  provider: string;
+  uncachedInput: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
 }
 
 /** Provider-native progress event (long subagent / tool run summaries). */

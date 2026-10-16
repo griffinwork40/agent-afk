@@ -234,4 +234,32 @@ export const MISC_ENV_REGISTRY = [
     example: '0',
     category: 'misc',
   },
+  {
+    name: 'AFK_READONLY_GIT_TOOL',
+    description:
+      'Opt-in (#3754). When set to 1/true/yes/on, read-only child agents (read-only ' +
+      'skills such as ground-state, named agents with `bash: read-only` such as ' +
+      'git-investigator, and compose nodes running such agents) lose the generic `bash` ' +
+      'tool and get the structured `git_read` tool instead (status, log, diff, show, ' +
+      'grep, tag/branch listing, blame, ls-files; argv-only, fixed option allowlist). ' +
+      'Top-level sessions (no tool allowlist) also see `git_read` while set. ' +
+      'Default: off (read-only children keep classifier-gated bash).',
+    type: 'boolean',
+    required: false,
+    default: '0',
+    example: '1',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_REMOTE_DEPTH',
+    description:
+      'Set to 1 by the remote_agent tool on every afk run it launches on another host over SSH ' +
+      '(inlined into the remote command, since sshd drops forwarded env by default). When set to ' +
+      'a non-empty value other than 0, remote_agent refuses to dispatch, so a remote agent can ' +
+      'never fan out to further hosts. Not meant to be set by hand.',
+    type: 'string',
+    required: false,
+    example: '1',
+    category: 'misc',
+  },
 ] as const satisfies readonly EnvVarMeta[];

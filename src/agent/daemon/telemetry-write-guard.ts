@@ -33,11 +33,20 @@
  * @module agent/daemon/telemetry-write-guard
  */
 
-import { existsSync, accessSync, constants } from 'node:fs';
+import { existsSync, accessSync, constants, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { errorMessage } from '../../utils/errors.js';
 import { pushIfConfigured } from '../../telegram/push.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
+
+/** Create the telemetry parent directory; the later write reports any I/O error. */
+export function ensureTelemetrySink(path: string): void {
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+  } catch {
+    // Best-effort: append failures are reported by the scheduler's writer.
+  }
+}
 
 // ─── Writability probe ────────────────────────────────────────────────────────
 

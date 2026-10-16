@@ -598,6 +598,9 @@ export interface AgentConfig {
    */
   getPendingChildTerminalWrites?: () => readonly Promise<void>[];
 
+  /** Pending abandoned child streams; shutdown bounds settlement before its accounting snapshot. */
+  getPendingChildBillingStreams?: () => readonly Promise<void>[];
+
   /**
    * True when this session is a forked subagent rather than the top-level
    * session. Stamped unconditionally by `SubagentManager.forkSubagent` — the

@@ -157,4 +157,7 @@ export const SessionPhasePayloadSchema = z.object({
   // JSDoc in types.ts for the backward-compat contract.
   sessionId: z.string().optional(),
   priorSessionId: z.string().optional(),
+  // Running afk version, set ONLY on `session_id_assigned`. Absent on older
+  // traces and all other phase kinds. (#3808)
+  afkVersion: z.string().optional(),
 });

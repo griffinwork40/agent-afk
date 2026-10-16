@@ -33,6 +33,7 @@ import type { CanUseTool } from '../types.js';
 import type { PermissionResult } from '../types/sdk-types.js';
 import { CHILD_ALLOWED_TOOLS, COMPOSE_LEAF_STRIPPED_TOOLS } from './nesting.js';
 import { isComposeReplaySafe } from '../dag-subagent.recovery.js';
+import { isReadOnlyGitToolEnabled, GIT_READ_TOOL_NAME } from './readonly-git-surface.js';
 
 // Defined beside buildComposeNodeProvider (which withholds the executors);
 // re-exported here for callers and tests.
@@ -204,7 +205,12 @@ export function resolveComposeNodeAgent(
       return true;
     });
 
-    result.canUseTool = buildAllowlistCanUseTool(leafAllowed);
+    // #3754: the provider swaps bash for git_read on a read-only-bash node when
+    // AFK_READONLY_GIT_TOOL is on; admit git_read here too so the gates agree.
+    const gateAllowed = resolvedAccess.bashReadOnly && isReadOnlyGitToolEnabled() && leafAllowed.includes('bash')
+      ? [...leafAllowed, GIT_READ_TOOL_NAME]
+      : leafAllowed;
+    result.canUseTool = buildAllowlistCanUseTool(gateAllowed);
     result.namedAgentAllowedTools = leafAllowed;
     // compose-executor.ts still pins replaySafe to false for compose nodes
     // (conservative; unchanged).

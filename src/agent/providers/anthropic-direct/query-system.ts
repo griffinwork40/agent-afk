@@ -3,6 +3,7 @@ import { getCacheTtl, isCacheEnabled, withSystemBreakpoint } from './cache-polic
 import { buildAfkModeAddendumBlock } from './afk-mode-addendum.js';
 import { buildPlanModeAddendumBlock } from './plan-mode-addendum.js';
 import { refreshEnvironmentDate } from '../shared/date-rollover.js';
+import { WORKSPACE_PREAMBLE_MARKERS } from '../../workspace/workspace-preamble.js';
 import type { SessionState } from './query/session-state.js';
 
 /**
@@ -44,6 +45,38 @@ export function splitAtEnvironmentBoundary(
     stablePrefix: assembled.slice(0, idx),
     volatileTail: assembled.slice(idx + '\n\n'.length), // keeps the leading `# Environment\n`
   };
+}
+
+/**
+ * Split a stable prefix at the forked-child workspace preamble (#3878).
+ *
+ * `assembleChildConfig` appends the shared-workspace preamble to every fork's
+ * system prompt. Its content is a snapshot of sibling findings at fork time,
+ * so it differs between siblings forked moments apart; left inside the cached
+ * stable block, it gives every sibling a distinct prefix hash and no sibling
+ * can read another's cache write. Splitting here keeps everything before the
+ * preamble (tool conventions, worker prompt, identity + budget preambles) in
+ * the breakpointed block siblings share.
+ *
+ * Returns `null` when no preamble marker is present (every root session), so
+ * root requests keep their exact block layout.
+ */
+export function splitAtWorkspacePreamble(
+  stable: string,
+): { sharedHead: string; preambleTail: string } | null {
+  let idx = -1;
+  for (const marker of WORKSPACE_PREAMBLE_MARKERS) {
+    const at = stable.indexOf(`\n${marker}`);
+    if (at !== -1 && (idx === -1 || at < idx)) idx = at;
+  }
+  if (idx === -1) return null;
+  let cut = idx + 1;
+  // A truncated preamble starts with a `---` divider line before its notice.
+  if (stable.slice(0, cut).endsWith('\n---\n')) cut -= '---\n'.length;
+  const sharedHead = stable.slice(0, cut).replace(/\n+$/, '');
+  const preambleTail = stable.slice(cut).replace(/^\n+/, '');
+  if (sharedHead.length === 0 || preambleTail.length === 0) return null;
+  return { sharedHead, preambleTail };
 }
 
 /**
@@ -97,11 +130,15 @@ export function composeQuerySystem(options: {
       // can be reused across sessions even when the environment changes.
       const split = splitAtEnvironmentBoundary(state.userSystem);
       if (split !== null && split.stablePrefix.length > 0 && split.volatileTail.length > 0) {
+        // Forked children only: the workspace preamble varies per sibling, so
+        // it rides after the shared breakpoint (see splitAtWorkspacePreamble).
+        const fork = splitAtWorkspacePreamble(split.stablePrefix);
         blocks.push({
           type: 'text',
-          text: split.stablePrefix,
+          text: fork?.sharedHead ?? split.stablePrefix,
           cache_control: { type: 'ephemeral', ttl: ttl! },
         });
+        if (fork !== null) blocks.push({ type: 'text', text: fork.preambleTail });
         blocks.push({ type: 'text', text: split.volatileTail });
       } else {
         // No environment section found — degrade to single block (old behavior).

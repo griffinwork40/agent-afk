@@ -27,6 +27,7 @@
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { spawn as nodeSpawn } from 'node:child_process';
 import type { EpisodeTrace } from '../types.js';
+import { redactSecrets } from '../../agent/redact-secrets.js';
 import { accumulateStreamJson } from './afk-runner.stream.js';
 
 export { accumulateStreamJson } from './afk-runner.stream.js';
@@ -44,17 +45,9 @@ const STDERR_TAIL_BYTES = 500;
 /** Delay between SIGTERM and SIGKILL on timeout. */
 const SIGKILL_DELAY_MS = 5_000;
 
-/** Regex that matches Anthropic API key patterns for redaction. */
-const SK_ANT_PATTERN = /sk-ant-[A-Za-z0-9_-]+/g;
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Redact Anthropic credentials from error strings. */
-function redactSecrets(text: string): string {
-  return text.replace(SK_ANT_PATTERN, '[REDACTED]');
-}
 
 // ---------------------------------------------------------------------------
 // Spawn and wait

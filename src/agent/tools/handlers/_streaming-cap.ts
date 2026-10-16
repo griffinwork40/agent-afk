@@ -52,16 +52,18 @@ const MARKER_RESERVE_BYTES = 200;
  */
 export const SCAN_CAP_BYTES = 256_000_000;
 
+import { OUTPUT_TRUNCATED_MARKER } from './_output-cap.js';
+
 /**
  * In-band sentinel appended when the scan ceiling was crossed and the child
  * was SIGKILL'd (the search did NOT finish, so its totals are lower bounds).
- * Starts with `[output truncated` so existing consumers keying on that prefix
- * — both provider loops — still match. Takes the effective cap so an injected
- * test ceiling reports itself accurately.
+ * Starts with {@link OUTPUT_TRUNCATED_MARKER} so existing consumers keying on
+ * that prefix — both provider loops — still match. Takes the effective cap so
+ * an injected test ceiling reports itself accurately.
  */
 export function scanCapKillNote(capBytes: number): string {
   return (
-    `\n[output truncated — search exceeded the ${capBytes}-byte scan ceiling and was terminated. ` +
+    `\n${OUTPUT_TRUNCATED_MARKER} — search exceeded the ${capBytes}-byte scan ceiling and was terminated. ` +
     'This is a safety limit, not a search failure. Narrow the pattern or path, add a glob filter, ' +
     'or list matching files only.]'
   );

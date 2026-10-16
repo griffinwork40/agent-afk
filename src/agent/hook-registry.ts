@@ -13,11 +13,16 @@
  * - **Fail-safe on handler error**: a thrown handler is treated as a block.
  *   The throw is wrapped in {@link HookBlockedError} (`cause` preserved) so
  *   a bug in one handler cannot silently skip policy enforcement.
+ * - **Background lane** (`RegisterOptions.background`, SessionEnd only): the
+ *   handler is skipped by the sequential loop and enqueued on one serialized
+ *   chain instead. Its decision and errors are discarded (logged via
+ *   debugLog); `drainBackground()` awaits the chain.
  *
  * @module agent/hook-registry
  */
 
 import { AbortError, HookBlockedError, errorMessage } from '../utils/errors.js';
+import { debugLog } from '../utils/debug.js';
 import type {
   HarnessHookEvent,
   HookContext,
@@ -119,12 +124,17 @@ interface RegisteredHandler {
 
 class HookRegistryImpl implements HookRegistry {
   private readonly handlers = new Map<HarnessHookEvent, RegisteredHandler[]>();
+  /** Tail of the serialized background-handler chain. Never rejects. */
+  private backgroundTail: Promise<void> = Promise.resolve();
 
   register(
     event: HarnessHookEvent,
     handler: HookHandler,
     options: RegisterOptions = {},
   ): () => void {
+    if (options.background && event !== 'SessionEnd') {
+      throw new TypeError(`background hook handlers are only supported for SessionEnd (got ${event})`);
+    }
     let list = this.handlers.get(event);
     if (!list) {
       list = [];
@@ -144,6 +154,31 @@ class HookRegistryImpl implements HookRegistry {
     return this.handlers.get(event)?.length ?? 0;
   }
 
+  drainBackground(): Promise<void> {
+    return this.backgroundTail;
+  }
+
+  /**
+   * Invariant: background handlers run strictly one at a time in enqueue
+   * order. The SPINE hook persists its diff fingerprint only after it
+   * finishes classifying, so two overlapping runs (e.g. two quick `/clear`s,
+   * or a `/clear` followed by exit) would both classify the same diff: double
+   * Telegram alerts, last-writer-wins SPINE.md writes, concurrent `git add`.
+   * Chaining on one tail makes the second run see the first's fingerprint.
+   * The chain must never reject, or every later handler would be skipped.
+   */
+  private enqueueBackground(entry: RegisteredHandler, context: HookContext, handlerTimeoutMs: number): void {
+    const applyTimeout = !entry.options.longRunning && handlerTimeoutMs > 0 && Number.isFinite(handlerTimeoutMs);
+    this.backgroundTail = this.backgroundTail.then(async () => {
+      try {
+        const result = entry.handler(context, undefined);
+        await (applyTimeout ? withHandlerTimeout(result, handlerTimeoutMs, context.event) : result);
+      } catch (err) {
+        debugLog(`background ${context.event} hook failed: ${errorMessage(err)}`);
+      }
+    });
+  }
+
   async dispatch(
     context: HookContext,
     signal?: AbortSignal,
@@ -161,6 +196,11 @@ class HookRegistryImpl implements HookRegistry {
 
     for (const entry of snapshot) {
       assertNotAborted(signal, context.event);
+
+      if (entry.options.background) {
+        this.enqueueBackground(entry, context, handlerTimeoutMs);
+        continue;
+      }
 
       let decision: HookDecision;
       try {

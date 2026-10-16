@@ -518,3 +518,70 @@ describe('GradeEntry pairing keys support arm pairing per probe', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Budget truncation (#3876)
+// ---------------------------------------------------------------------------
+
+describe('verifyRun: truncatedByBudget (#3876)', () => {
+  /**
+   * A runner that costs `costPerTrace` USD per trace. The test controls the
+   * cap via `maxUsdRemaining` to trigger/avoid truncation.
+   */
+  function costRunner(episodes: Episode[], costPerTrace: number): AgentRunner {
+    return {
+      name: 'cost-fake',
+      run: vi.fn(async (en: Environment, ep: Episode, s: number) =>
+        ({ ...trace(ep.id, en.label, s, 'ok'), costUsd: costPerTrace }),
+      ),
+      snapshot: vi.fn(),
+    } as unknown as AgentRunner;
+  }
+
+  it('truncatedByBudget is false when budget is exceeded only after the last task finishes', async () => {
+    // 2 episodes × 2 envs × 1 sample = 4 tasks at $6 each = $24 total.
+    // Cap is $20 — exceeded after the last task, but no task was skipped.
+    const episodes: Episode[] = [
+      { id: 'e1', source: 'real', prompt: 'p1' },
+      { id: 'e2', source: 'real', prompt: 'p2' },
+    ];
+    const { verifyResult } = await verifyRun(input(episodes, [], {
+      runner: costRunner(episodes, 6),
+      options: {
+        samples: 1,
+        concurrency: 1,   // serial so cost accumulates predictably
+        maxTurns: 1,
+        episodeTimeoutMs: 1000,
+        maxUsdRemaining: 20,
+        changeKinds: ['append'],
+        calibrationFile: path.join(os.tmpdir(), 'noop-ledger.jsonl'),
+      },
+    }));
+    expect(verifyResult.truncatedByBudget).toBe(false);
+  });
+
+  it('truncatedByBudget is true when planned episodes are skipped due to budget', async () => {
+    // 4 episodes × 2 envs × 1 sample = 8 tasks at $6 each = $48 total.
+    // Cap is $13 — first 2 tasks ($12) run, 3rd would push to $18 > cap, so
+    // remaining tasks are skipped.
+    const episodes: Episode[] = [
+      { id: 'e1', source: 'real', prompt: 'p1' },
+      { id: 'e2', source: 'real', prompt: 'p2' },
+      { id: 'e3', source: 'real', prompt: 'p3' },
+      { id: 'e4', source: 'real', prompt: 'p4' },
+    ];
+    const { verifyResult } = await verifyRun(input(episodes, [], {
+      runner: costRunner(episodes, 6),
+      options: {
+        samples: 1,
+        concurrency: 1,
+        maxTurns: 1,
+        episodeTimeoutMs: 1000,
+        maxUsdRemaining: 13,
+        changeKinds: ['append'],
+        calibrationFile: path.join(os.tmpdir(), 'noop-ledger.jsonl'),
+      },
+    }));
+    expect(verifyResult.truncatedByBudget).toBe(true);
+  });
+});

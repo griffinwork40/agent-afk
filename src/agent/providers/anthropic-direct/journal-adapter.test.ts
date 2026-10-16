@@ -137,5 +137,50 @@ describe('anthropicJournalAdapter', () => {
     ]);
     expect(allUnknown[0]!.content).toEqual([{ type: 'tool_result', tool_use_id: 't2' }]);
   });
+
+  it('preserves the boundary between a tool-result carrier and a following text-only user message (journal-resume-merged-steering)', () => {
+    // Simulates what happens when a live session is resumed:
+    // inter-round.ts pushes steering text as a SEPARATE text-only user message,
+    // but fromJournalMessages merges consecutive same-role messages. Without the
+    // fix, the steering text would be swallowed into the carrier and hidden from
+    // the rewind picker (isUserAuthoredTurn rejects tool_result carriers).
+    const journal: JournalMessage[] = [
+      { role: 'user', content: [
+        { type: 'tool_result', toolUseId: 't1', content: [{ type: 'text', text: 'tool output' }] },
+      ]},
+      { role: 'user', content: [
+        { type: 'text', text: 'actually, cancel that' },
+      ]},
+    ];
+    const natives = adapter.fromJournalMessages(journal);
+    // Two separate native messages — NOT merged into one carrier.
+    expect(natives).toHaveLength(2);
+    expect(natives[0]!.role).toBe('user');
+    expect((natives[0]!.content as ContentBlockParam[])[0]?.type).toBe('tool_result');
+    expect(natives[1]!.role).toBe('user');
+    expect((natives[1]!.content as ContentBlockParam[])[0]).toEqual({ type: 'text', text: 'actually, cancel that' });
+  });
+
+  it('still merges consecutive tool-result carriers so a round keeps one tool_result message', () => {
+    // A cross-provider journal can record one user message per tool result.
+    // Those must still merge: every tool_result answering one assistant
+    // tool_use turn belongs in the single user message that follows it.
+    const journal: JournalMessage[] = [
+      { role: 'assistant', content: [
+        { type: 'tool_use', id: 't1', name: 'bash', input: {} },
+        { type: 'tool_use', id: 't2', name: 'bash', input: {} },
+      ]},
+      { role: 'user', content: [
+        { type: 'tool_result', toolUseId: 't1', content: [{ type: 'text', text: 'one' }] },
+      ]},
+      { role: 'user', content: [
+        { type: 'tool_result', toolUseId: 't2', content: [{ type: 'text', text: 'two' }] },
+      ]},
+    ];
+    const natives = adapter.fromJournalMessages(journal);
+    expect(natives).toHaveLength(2);
+    const blocks = natives[1]!.content as ContentBlockParam[];
+    expect(blocks.map((b) => b.type)).toEqual(['tool_result', 'tool_result']);
+  });
 });
 

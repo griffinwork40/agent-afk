@@ -4,13 +4,13 @@
  * When an operator answers a daemon's handoff question via Telegram (or another
  * surface), the HandoffRecord transitions to status 'answered'. This module
  * sweeps those records, builds a context-injected resume command, and
- * re-enqueues the task so the next pull-tick picks it up with the answer
- * threaded into the session prompt.
+ * re-enqueues the task so a later tick runs it with the answer threaded into
+ * the session prompt.
  *
- * Called fire-and-forget from two scheduler sites:
- *   1. startPullLoop() startup — pick up answers that arrived while the daemon
- *      was down.
- *   2. pullTick() teardown — pick up answers recorded during the completed run.
+ * Called from:
+ *   1. handoff-maintenance.ts — every daemon trigger mode, into the
+ *      resume-only queue (#1416).
+ *   2. startPullLoop() startup and pullTick() teardown (pull mode).
  *
  * Dead-letter quarantine for malformed/unsafe records lives in:
  *   ./handoff-consume.dead-letter.ts
@@ -24,6 +24,7 @@ import { mkdirSync } from 'node:fs';
 import { assertSafeJobId, getHandoffsDir } from '../../paths.js';
 import type { HandoffRecord } from './handoff-store.js';
 import { enqueue } from './queue-store.js';
+import { pickResumeFields } from './handoff-resume-context.js';
 import { errorMessage, isErrnoCode} from '../../utils/errors.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import {
@@ -89,6 +90,15 @@ export function buildHandoffResumeCommand(record: HandoffRecord): string {
     answerText,
     '--- END OPERATOR ANSWER ---',
   ].join('\n');
+}
+
+/**
+ * Enqueue options for a resume task: the asking task's cwd, notify policy, and
+ * overlap identity (#1416). A record written before `originalTaskId` existed
+ * falls back to its own taskId, which for a cron task IS the original id.
+ */
+function resumeEnqueueOpts(record: HandoffRecord): ReturnType<typeof pickResumeFields> {
+  return { originalTaskId: record.taskId, ...pickResumeFields(record) };
 }
 
 // ---------------------------------------------------------------------------
@@ -248,7 +258,7 @@ async function recoverOrphanedClaims(
       }
       if (record.status === 'answered') {
         const command = buildHandoffResumeCommand(record);
-        enqueue(command, {}, queueDir);
+        enqueue(command, resumeEnqueueOpts(record), queueDir);
       }
       await unlink(fullPath);
     } catch {
@@ -346,7 +356,7 @@ export async function processAnsweredHandoffs(
       }
 
       const command = buildHandoffResumeCommand(record);
-      enqueue(command, {}, queueDir);
+      enqueue(command, resumeEnqueueOpts(record), queueDir);
       requeued += 1;
 
       // Delete the claimed file now that the task is safely enqueued.

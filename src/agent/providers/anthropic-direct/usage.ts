@@ -12,6 +12,7 @@
 
 import type { Usage } from '@anthropic-ai/sdk/resources';
 import type { ProviderUsage } from '../../provider.js';
+import { anthropicBilling } from '../../usage.billing.js';
 import { getCacheTtl } from './cache-policy.js';
 import {
   deriveCallCostUsd,
@@ -91,6 +92,7 @@ export function toProviderUsage(
   if (usage.cache_creation_input_tokens != null)
     out.cacheCreationTokens = usage.cache_creation_input_tokens;
   out.totalTokens = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
+  out.billing = anthropicBilling(usage);
 
   if (model) {
     const cost = deriveCallCostUsd(

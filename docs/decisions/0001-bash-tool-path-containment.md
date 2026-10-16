@@ -112,7 +112,11 @@ Rationale: these paths are outside every worktree but are not an
 scan's warnings (`2>/dev/null` alone appears in a large share of agent bash
 calls). Because the warning latches once per handler, a benign `/dev/null` hit
 also silenced any later genuine escape for the rest of the session. The
-exemption only suppresses the advisory; it grants the typed file tools nothing.
+device-sink exemption only suppresses the advisory. The scratch-directory list
+is shared with the typed write tools (`src/agent/tools/handlers/scratch-roots.ts`):
+confined sessions and forks may `write_file` / `edit_file` / `patch_apply` under
+the OS temp dir too (realpath-resolved, write-denylist still applied), so the
+bash scan and the typed tools agree on what "temp" means.
 
 **Not covered** (documented limitations — the reason this is advisory, not a
 boundary):

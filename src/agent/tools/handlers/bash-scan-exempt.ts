@@ -14,10 +14,11 @@
  *   - The shared SCRATCH directories (`/tmp`, `/private/tmp`, `/var/tmp`, and
  *     `os.tmpdir()` plus its realpath — `/var/folders/…/T` on macOS).
  *
- * Invariant: this module only SUPPRESSES an advisory warning. It never widens
- * what the typed file tools may read or write — `resolveAndContain` in
- * `_cwd-utils.ts` does not consult it — and the scan itself never blocks
- * execution. Worse than noise, a false positive consumed the scan's one-time
+ * Invariant: this module only SUPPRESSES an advisory warning and never blocks
+ * execution. The scratch-root list itself lives in `scratch-roots.ts`, shared
+ * with the typed write tools (which also treat the temp dir as an implicit
+ * root), so the bash scan and `resolveAndContain` cannot drift on what "temp"
+ * means. The device-sink allowlist is bash-only: it widens no typed tool. Worse than noise, a false positive consumed the scan's one-time
  * latch, silencing a later genuine escape (e.g. a `cd` into the main checkout)
  * for the rest of the session; exempting benign paths keeps that latch for the
  * references worth seeing. See `docs/decisions/0001-bash-tool-path-containment.md`.
@@ -25,10 +26,9 @@
  * @module agent/tools/handlers/bash-scan-exempt
  */
 
-import os from 'os';
 import path from 'path';
-import { realpathSync } from 'fs';
 import { extractCandidatePaths } from './_cwd-utils.js';
+import { lexicalScratchRoots, _resetScratchRootsCacheForTests } from './scratch-roots.js';
 
 /** Device nodes that are pure sinks/sources — never a write-escape target. */
 const DEVICE_SINKS: ReadonlySet<string> = new Set([
@@ -45,31 +45,9 @@ const DEVICE_SINKS: ReadonlySet<string> = new Set([
 /** Matches `/dev/fd/<n>` (process-substitution and fd-duplication paths). */
 const DEV_FD_RE = /^\/dev\/fd\/\d+$/;
 
-function safeRealpath(p: string): string | undefined {
-  try {
-    return realpathSync.native(p);
-  } catch {
-    return undefined;
-  }
-}
-
-let scratchRootsCache: readonly string[] | undefined;
-
-/**
- * The scratch roots, computed once per process: `os.tmpdir()` is fixed at
- * process start, so caching removes a realpath syscall from every bash call.
- */
-function scratchRoots(): readonly string[] {
-  if (scratchRootsCache !== undefined) return scratchRootsCache;
-  const tmp = os.tmpdir();
-  const candidates = ['/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp', tmp, safeRealpath(tmp)];
-  scratchRootsCache = [...new Set(candidates.filter((r): r is string => r !== undefined && r !== '/'))];
-  return scratchRootsCache;
-}
-
 /** Test-only: drop the cached scratch roots (e.g. after stubbing `os.tmpdir`). */
 export function _resetScanExemptCacheForTests(): void {
-  scratchRootsCache = undefined;
+  _resetScratchRootsCacheForTests();
 }
 
 /**
@@ -103,7 +81,7 @@ export function isBashScanExemptPath(absPath: string): boolean {
   if (!path.isAbsolute(absPath)) return false;
   const { normalized, sep } = normalizeCandidate(absPath);
   if (DEVICE_SINKS.has(normalized) || DEV_FD_RE.test(normalized)) return true;
-  return scratchRoots().some(
+  return lexicalScratchRoots().some(
     (root) => normalized === root || normalized.startsWith(root + sep),
   );
 }
