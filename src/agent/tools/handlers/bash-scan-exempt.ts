@@ -18,9 +18,10 @@
  * execution. The scratch-root list itself lives in `scratch-roots.ts`, shared
  * with the typed write tools (which also treat the temp dir as an implicit
  * root), so the bash scan and `resolveAndContain` cannot drift on what "temp"
- * means. The device-sink allowlist is bash-only: it widens no typed tool. Worse than noise, a false positive consumed the scan's one-time
- * latch, silencing a later genuine escape (e.g. a `cd` into the main checkout)
- * for the rest of the session; exempting benign paths keeps that latch for the
+ * means. The device-sink allowlist is bash-only: it widens no typed tool.
+ * Worse than noise, a false positive consumed the scan's one-time latch,
+ * silencing a later genuine escape (e.g. a `cd` into the main checkout) for
+ * the rest of the session; exempting benign paths keeps that latch for the
  * references worth seeing. See `docs/decisions/0001-bash-tool-path-containment.md`.
  *
  * @module agent/tools/handlers/bash-scan-exempt
