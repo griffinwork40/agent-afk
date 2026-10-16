@@ -82,7 +82,7 @@ function parseBashInput(input: unknown): {
       throw new Error('timeout_ms must be a number');
     }
     if (bashInput.timeout_ms < 0) {
-      throw new Error(`timeout_ms must be between 0 and ${maxTimeout}`);
+      throw new Error(`timeout_ms must be >= 0 (values above ${maxTimeout} are clamped)`);
     }
     if (bashInput.timeout_ms > maxTimeout) {
       // Clamp over-max values to the ceiling rather than rejecting — the model
@@ -249,8 +249,16 @@ export function createBashHandler(
     // returned immediately. timeout_ms is the max runtime (default 2 h).
     if (background) {
       const bgResult = await startBackgroundBash(command, explicitTimeout ? timeout_ms : undefined, context, cwd);
-      if (clampedTimeoutWarning) {
-        return { ...bgResult, content: `[Warning] ${clampedTimeoutWarning}\n\n${bgResult.content}` };
+      if (clampedTimeoutWarning && !bgResult.isError) {
+        // Embed the warning inside the JSON object so the content stays parseable.
+        try {
+          const parsed = JSON.parse(bgResult.content as string) as Record<string, unknown>;
+          parsed['warning'] = clampedTimeoutWarning;
+          return { ...bgResult, content: `[Warning] ${clampedTimeoutWarning}\n\n${JSON.stringify(parsed, null, 2)}` };
+        } catch {
+          // If parsing fails for any reason, fall through to the plain prefix.
+          return { ...bgResult, content: `[Warning] ${clampedTimeoutWarning}\n\n${bgResult.content}` };
+        }
       }
       return bgResult;
     }
@@ -362,6 +370,19 @@ export function createBashHandler(
       attachErrorHandler({ proc, context, cwd, startedAt, settle });
     });
     if (clampedTimeoutWarning) {
+      // For detach placeholders (JSON with status === 'detached'), embed the
+      // warning inside the JSON to keep it parseable for downstream consumers.
+      let detachCheck: Record<string, unknown> | undefined;
+      try {
+        const maybeJson = JSON.parse(rawResult.content as string) as Record<string, unknown>;
+        if (maybeJson['status'] === 'detached') detachCheck = maybeJson;
+      } catch {
+        /* not JSON — treat as normal foreground output */
+      }
+      if (detachCheck !== undefined) {
+        detachCheck['warning'] = clampedTimeoutWarning; // bracket notation — index signature
+        return { ...rawResult, content: JSON.stringify(detachCheck) };
+      }
       return { ...rawResult, content: `[Warning] ${clampedTimeoutWarning}\n\n${rawResult.content}` };
     }
     return rawResult;

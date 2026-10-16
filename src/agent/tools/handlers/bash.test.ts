@@ -219,7 +219,7 @@ describe('bashHandler', () => {
     it('throws on negative timeout_ms', async () => {
       await expect(
         bashHandler({ command: 'echo test', timeout_ms: -1 }, createSignal()),
-      ).rejects.toThrow(/timeout_ms.*0.*600000/i);
+      ).rejects.toThrow(/timeout_ms.*>=.*0/i);
     });
 
     it('throws on NaN timeout_ms', async () => {
