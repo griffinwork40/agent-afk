@@ -85,10 +85,20 @@ describe('computeSessionCost', () => {
   });
 
   it('never reports less than seal root + seal subagent (lost root closure)', () => {
-    // Root crashed after the seal rollup but before writing its closure.
+    // root closure write failed; seal succeeded.
     const r = computeSessionCost([closure(2), sealed(1, 2)]);
+    // closureSum($2) + sealRoot($1) = $3; Math.max($3, sealTotal($3)) = $3
     expect(r.totalCostUsd).toBe(3);
     expect(r.subagentCostUsd).toBe(2);
+  });
+
+  it('lost-root with seal lower bound higher than closureSum+sealRoot: uses sealTotal (#3890 item 2 fix)', () => {
+    // closure($2) child only; sealed(root=$1, sub=$5) => sealTotal=$6
+    // closureSum($2) + sealRoot($1) = $3 < sealTotal($6); must report $6
+    const r = computeSessionCost([closure(2), sealed(1, 5)]);
+    expect(r.totalCostUsd).toBe(6);
+    expect(r.rootCostUsd).toBe(1);
+    expect(r.subagentCostUsd).toBe(5);
   });
 
   it('lost-root-closure: $2 failed-child closure + sealed(1) reports $3 not $2 (#3890 item 1)', () => {
@@ -100,17 +110,31 @@ describe('computeSessionCost', () => {
     expect(r.subagentCostUsd).toBe(2);
   });
 
-  it('backstop seal (incomplete:true, finalCostUsd:0) does not zero out root when closures exist (#3890 item 2)', () => {
-    // sealOnProcessExit writes finalCostUsd:0 + incomplete:true as a backstop
+  it('backstop seal (incomplete:true): root absent, subagent = closureSum, source closures-incomplete (#3890 item 2)', () => {
+    // sealOnProcessExit writes finalCostUsd:0 + incomplete:true; root closure is
+    // missing — all surviving closures are children, root is unknown.
     const backstopSeal: CostEventLike = {
       kind: 'session_sealed',
       payload: { status: 'failed', finalCostUsd: 0, subagentCostUsd: 0, incomplete: true, finalTurnCount: 0, closedAt: ts },
     };
     const r = computeSessionCost([closure(1.5), closure(0.75), backstopSeal]);
-    // total must be closureSum; root must NOT be 0
     expect(r.totalCostUsd).toBeCloseTo(2.25);
-    expect(r.rootCostUsd).toBeGreaterThan(0);
-    expect(r.source).toBe('closures+seal');
+    expect(r.rootCostUsd).toBeUndefined();
+    expect(r.subagentCostUsd).toBeCloseTo(2.25);
+    expect(r.source).toBe('closures-incomplete');
+  });
+
+  it('backstop seal with zero closures: total 0, root absent, source closures-incomplete', () => {
+    // Honest: zero valid closures survived — we know nothing about root or subagents.
+    const backstopSeal: CostEventLike = {
+      kind: 'session_sealed',
+      payload: { status: 'failed', finalCostUsd: 0, subagentCostUsd: 0, incomplete: true, finalTurnCount: 0, closedAt: ts },
+    };
+    const r = computeSessionCost([backstopSeal]);
+    expect(r.totalCostUsd).toBe(0);
+    expect(r.rootCostUsd).toBeUndefined();
+    expect(r.subagentCostUsd).toBe(0);
+    expect(r.source).toBe('closures-incomplete');
   });
 
   it('trace with no seal: root falls back to the last closure', () => {
@@ -131,16 +155,16 @@ describe('computeSessionCost', () => {
     expect(r.rootCostUsd).toBe(0.812);
   });
 
-  it('ignores malformed payloads and non-finite costs', () => {
+  it('ignores malformed payloads and non-finite costs; closureCount = valid closures only (#3890 item 3)', () => {
     const junk: CostEventLike[] = [
-      { kind: 'closure' },
-      { kind: 'closure', payload: { finalCostUsd: Number.NaN } },
-      { kind: 'closure', payload: { finalCostUsd: -3 } },
-      { kind: 'closure', payload: { finalCostUsd: 2 } },
+      { kind: 'closure' },                                       // no payload — skipped
+      { kind: 'closure', payload: { finalCostUsd: Number.NaN } }, // NaN — skipped
+      { kind: 'closure', payload: { finalCostUsd: -3 } },        // negative — skipped
+      { kind: 'closure', payload: { finalCostUsd: 2 } },         // valid
     ];
     const r = computeSessionCost(junk);
     expect(r.totalCostUsd).toBe(2);
-    expect(r.closureCount).toBe(3);
+    expect(r.closureCount).toBe(1); // only the valid closure counts
   });
 });
 
