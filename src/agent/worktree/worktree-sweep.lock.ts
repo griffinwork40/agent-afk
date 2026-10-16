@@ -16,7 +16,7 @@ import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { createReadStream, existsSync } from 'node:fs';
-import { isErrnoCode } from '../../utils/errors.js';
+import { isErrnoCode, isWindowsLockContention } from '../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Soft-launch counter
@@ -72,7 +72,11 @@ export class LockContestedError extends Error {
  * Contract: stale locks (PID no longer alive) are cleared and re-acquired so a
  * crashed sweep never permanently blocks future sweeps.
  */
-export async function acquireLock(lockPath: string): Promise<() => Promise<void>> {
+export async function acquireLock(
+  lockPath: string,
+  /** Injectable for unit-testing on any OS; defaults to `process.platform`. */
+  platform: string = process.platform,
+): Promise<() => Promise<void>> {
   // Ensure parent directory exists
   const parentDir = join(lockPath, '..');
   await fs.mkdir(parentDir, { recursive: true }).catch(() => {});
@@ -81,7 +85,10 @@ export async function acquireLock(lockPath: string): Promise<() => Promise<void>
     try {
       return await fs.open(lockPath, 'wx');
     } catch (err) {
-      if (!isErrnoCode(err, 'EEXIST')) throw err;
+      // On Windows, a just-released lock file sits in "delete-pending" state
+      // until the last handle closes. An O_EXCL create during that window gets
+      // EPERM/EACCES/EBUSY instead of EEXIST. Treat those as contention.
+      if (!isErrnoCode(err, 'EEXIST') && !isWindowsLockContention(err, platform)) throw err;
 
       // Check if PID in existing lock is still alive
       let existingPid: number | null = null;

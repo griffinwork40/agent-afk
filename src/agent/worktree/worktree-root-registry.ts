@@ -28,7 +28,7 @@ import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
 import { debugLog } from '../../utils/debug.js';
 import { classifyRootLiveness } from './worktree-root-registry-liveness.js';
 import { normalizeRootPath } from './worktree-root-path.js';
-import { isErrnoCode } from '../../utils/errors.js';
+import { isErrnoCode, isWindowsLockContention } from '../../utils/errors.js';
 
 /** Current on-disk schema version. Bump only on a breaking shape change. */
 const REGISTRY_VERSION = 1;
@@ -149,8 +149,17 @@ async function clearStaleLock(lockPath: string): Promise<void> {
  * lock could not be taken within {@link LOCK_TIMEOUT_MS} — in which case the
  * caller writes anyway. Returning `null` rather than throwing is the whole
  * point: bookkeeping must never fail or stall a worktree create.
+ *
+ * Exported for unit-testing only — callers outside this module should use
+ * {@link registerWorktreeRoot} / {@link readRegisteredWorktreeRoots}.
+ *
+ * @param lockPath - Path of the advisory lock file.
+ * @param platform - `process.platform`; injectable for unit-testing on any OS.
  */
-async function acquireRegistryLock(lockPath: string): Promise<(() => Promise<void>) | null> {
+export async function acquireRegistryLock(
+  lockPath: string,
+  platform: string = process.platform,
+): Promise<(() => Promise<void>) | null> {
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   for (;;) {
     try {
@@ -159,7 +168,10 @@ async function acquireRegistryLock(lockPath: string): Promise<(() => Promise<voi
       await handle.close();
       return async () => { await fs.unlink(lockPath).catch(() => undefined); };
     } catch (err) {
-      if (!isErrnoCode(err, 'EEXIST')) return null;
+      // On Windows, a just-released lock sits in "delete-pending" state until
+      // the last handle closes. An O_EXCL create during that window gets
+      // EPERM/EACCES/EBUSY. Treat those as contention and retry, same as EEXIST.
+      if (!isErrnoCode(err, 'EEXIST') && !isWindowsLockContention(err, platform)) return null;
       if (Date.now() >= deadline) return null;
       await clearStaleLock(lockPath);
       await sleep(LOCK_POLL_MS);
@@ -187,7 +199,10 @@ async function writeRegistry(entries: RootEntry[]): Promise<void> {
 }
 
 /** Apply `transform` to the current entries and persist the result. Never throws. */
-async function mutateRegistry(transform: (entries: RootEntry[]) => RootEntry[]): Promise<void> {
+async function mutateRegistry(
+  transform: (entries: RootEntry[]) => RootEntry[],
+  platform: string = process.platform,
+): Promise<void> {
   await enqueueWrite(async () => {
     const registryPath = getWorktreeRootsRegistryPath();
     // Invariant: the lock must be acquired against a directory that already
@@ -200,7 +215,7 @@ async function mutateRegistry(transform: (entries: RootEntry[]) => RootEntry[]):
     // a failure here just means the lock (and the write after it) degrade to
     // the pre-existing unlocked/failed path, never worse.
     await fs.mkdir(dirname(registryPath), { recursive: true, mode: DIR_MODE }).catch(() => undefined);
-    const release = await acquireRegistryLock(`${registryPath}.lock`);
+    const release = await acquireRegistryLock(`${registryPath}.lock`, platform);
     try {
       await writeRegistry(transform(await readEntries()));
     } catch {
