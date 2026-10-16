@@ -91,6 +91,28 @@ describe('computeSessionCost', () => {
     expect(r.subagentCostUsd).toBe(2);
   });
 
+  it('lost-root-closure: $2 failed-child closure + sealed(1) reports $3 not $2 (#3890 item 1)', () => {
+    // closureSum=$2 (failed child only), sealRoot=$1, sealSubagent=$0
+    // Math.max(2,1)=$2 is wrong; correct total is closureSum + sealRoot = $3
+    const r = computeSessionCost([closure(2), sealed(1)]);
+    expect(r.totalCostUsd).toBe(3);
+    expect(r.rootCostUsd).toBe(1);
+    expect(r.subagentCostUsd).toBe(2);
+  });
+
+  it('backstop seal (incomplete:true, finalCostUsd:0) does not zero out root when closures exist (#3890 item 2)', () => {
+    // sealOnProcessExit writes finalCostUsd:0 + incomplete:true as a backstop
+    const backstopSeal: CostEventLike = {
+      kind: 'session_sealed',
+      payload: { status: 'failed', finalCostUsd: 0, subagentCostUsd: 0, incomplete: true, finalTurnCount: 0, closedAt: ts },
+    };
+    const r = computeSessionCost([closure(1.5), closure(0.75), backstopSeal]);
+    // total must be closureSum; root must NOT be 0
+    expect(r.totalCostUsd).toBeCloseTo(2.25);
+    expect(r.rootCostUsd).toBeGreaterThan(0);
+    expect(r.source).toBe('closures+seal');
+  });
+
   it('trace with no seal: root falls back to the last closure', () => {
     const r = computeSessionCost([closure(2), closure(1)]);
     expect(r).toMatchObject({ rootCostUsd: 1, subagentCostUsd: 2, totalCostUsd: 3, source: 'closures' });

@@ -84,6 +84,7 @@ export class SessionCostAccumulator {
   };
   private sealRoot: number | undefined;
   private sealSubagent = 0;
+  private sealIncomplete = false;
 
   add(event: CostEventLike): void {
     const p = asRecord(event.payload);
@@ -100,6 +101,9 @@ export class SessionCostAccumulator {
     } else if (event.kind === 'session_sealed') {
       this.sealRoot = finiteNonNeg(p['finalCostUsd']) ?? 0;
       this.sealSubagent = finiteNonNeg(p['subagentCostUsd']) ?? 0;
+      // sealOnProcessExit() writes incomplete:true with finalCostUsd:0 as a
+      // backstop; treat it as a marker only — do not use its $0 as rootCostUsd.
+      this.sealIncomplete = p['incomplete'] === true;
     }
   }
 
@@ -109,8 +113,28 @@ export class SessionCostAccumulator {
     if (!hasClosures && !hasSeal) return { closureCount: 0, source: 'none' };
 
     const sealTotal = (this.sealRoot ?? 0) + this.sealSubagent;
-    const totalCostUsd = hasClosures ? Math.max(this.closureSum, hasSeal ? sealTotal : 0) : sealTotal;
-    const rootCostUsd = this.sealRoot ?? this.lastClosureCost ?? 0;
+
+    let totalCostUsd: number;
+    if (!hasClosures) {
+      totalCostUsd = sealTotal;
+    } else if (!hasSeal) {
+      totalCostUsd = this.closureSum;
+    } else {
+      // When the last closure's cost differs from sealRoot, the root closure
+      // was never written (crash/backstop path). Add sealRoot to closureSum so
+      // the root's spend is not silently dropped (#3890 item 1).
+      const rootClosureLost = this.lastClosureCost !== this.sealRoot;
+      totalCostUsd = rootClosureLost
+        ? this.closureSum + (this.sealRoot ?? 0)
+        : Math.max(this.closureSum, sealTotal);
+    }
+
+    // Item 2: backstop seal (incomplete:true) writes finalCostUsd:0 — prefer
+    // lastClosureCost as the root figure when closures are present.
+    const rootCostUsd =
+      hasSeal && !this.sealIncomplete
+        ? (this.sealRoot ?? this.lastClosureCost ?? 0)
+        : (this.lastClosureCost ?? this.sealRoot ?? 0);
     const subagentCostUsd = Math.max(0, totalCostUsd - rootCostUsd);
 
     const totalTokens: CostTokens = {};
