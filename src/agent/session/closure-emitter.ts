@@ -114,6 +114,13 @@ export interface ClosureTotals {
 /** Inputs for {@link emitClosureEvent}: terminal signals + session-run totals. */
 export interface EmitClosureInput extends ClosureSignals, ClosureTotals {
   runningTokens: ClosureTokenCounters;
+  /**
+   * The subagent id of this session when it is a forked child; absent for
+   * the root session. Stamped into the `closure` payload so readers
+   * (`parseTraceSignals`) can distinguish child closures from the root's
+   * and avoid falsely downgrading the root facet (#3883).
+   */
+  subagentId?: string;
 }
 
 /**
@@ -148,6 +155,7 @@ export async function emitClosureEvent(
     finalTokens,
     ...(input.lastStopReason !== undefined ? { lastStopReason: input.lastStopReason } : {}),
     ...(guidance !== null ? { guidance } : {}),
+    ...(input.subagentId !== undefined ? { subagentId: input.subagentId } : {}),
   });
 }
 

@@ -113,6 +113,10 @@ export class SessionShutdown {
       finalTurnCount: getTurnCount(),
       finalCostUsd: acct.sessionRunningCostUsd,
       runningTokens: acct.sessionRunningTokens,
+      // Present on forked children only; absent for the root session. Stamped
+      // into the closure payload so parseTraceSignals can skip child closures
+      // and avoid falsely downgrading the root facet (#3883).
+      ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
     }).catch(() => {});
 
     // Invariant: only a session explicitly given the separate owner capability
