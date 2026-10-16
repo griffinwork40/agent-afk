@@ -125,6 +125,44 @@ function makeTailBuffer(context: ToolHandlerContext | undefined): RollingTailBuf
 }
 
 /**
+ * Format a clamped-timeout warning into a tool result.
+ *
+ * For **background** results (JSON-parseable payload from `startBackgroundBash`),
+ * embeds the warning as a `warning` field inside the JSON so `JSON.parse` on the
+ * content after the `\n\n` separator still produces a valid object.
+ *
+ * For **foreground** results, checks whether the content is a detach placeholder
+ * (JSON with `status === 'detached'`). If so, embeds the warning inside that JSON.
+ * Otherwise, prepends the warning as a string prefix (the existing behavior).
+ *
+ * Contract: returns a `{ content: string; isError?: boolean }` object. The
+ * `content` field is always a valid JSON string when the input was JSON, and
+ * always contains `[Warning]` when `clampedTimeoutWarning` is non-empty.
+ */
+function formatClampedWarningResult(
+  result: { content: string; isError?: boolean },
+  clampedTimeoutWarning: string,
+  /** When true, treats JSON with status==='detached' specially (foreground path). */
+  isForegroundPath: boolean,
+): { content: string; isError?: boolean } {
+  // Try to parse the result as JSON — if it parses, embed the warning inside.
+  try {
+    const parsed = JSON.parse(result.content) as Record<string, unknown>;
+    // For the foreground path, only embed if it's a detach placeholder.
+    if (isForegroundPath && parsed['status'] !== 'detached') {
+      // Not a detach placeholder — fall through to string-prefix below.
+    } else {
+      parsed['warning'] = clampedTimeoutWarning;
+      return { ...result, content: `[Warning] ${clampedTimeoutWarning}\n\n${JSON.stringify(parsed, null, 2)}` };
+    }
+  } catch {
+    /* Not JSON — fall through to string-prefix below. */
+  }
+  // String-prefix fallback (existing behavior).
+  return { ...result, content: `[Warning] ${clampedTimeoutWarning}\n\n${result.content}` };
+}
+
+/**
  * Create a bash handler closed over the session's `_permissionMode` and
  * optional working directory. The mode parameter is unused by the handler
  * body (bypass/default differ only via hooks and `context.allowAll`); it is
@@ -249,16 +287,8 @@ export function createBashHandler(
     // returned immediately. timeout_ms is the max runtime (default 2 h).
     if (background) {
       const bgResult = await startBackgroundBash(command, explicitTimeout ? timeout_ms : undefined, context, cwd);
-      if (clampedTimeoutWarning && !bgResult.isError) {
-        // Embed the warning inside the JSON object so the content stays parseable.
-        try {
-          const parsed = JSON.parse(bgResult.content as string) as Record<string, unknown>;
-          parsed['warning'] = clampedTimeoutWarning;
-          return { ...bgResult, content: `[Warning] ${clampedTimeoutWarning}\n\n${JSON.stringify(parsed, null, 2)}` };
-        } catch {
-          // If parsing fails for any reason, fall through to the plain prefix.
-          return { ...bgResult, content: `[Warning] ${clampedTimeoutWarning}\n\n${bgResult.content}` };
-        }
+      if (clampedTimeoutWarning) {
+        return formatClampedWarningResult(bgResult, clampedTimeoutWarning, false);
       }
       return bgResult;
     }
@@ -370,20 +400,7 @@ export function createBashHandler(
       attachErrorHandler({ proc, context, cwd, startedAt, settle });
     });
     if (clampedTimeoutWarning) {
-      // For detach placeholders (JSON with status === 'detached'), embed the
-      // warning inside the JSON to keep it parseable for downstream consumers.
-      let detachCheck: Record<string, unknown> | undefined;
-      try {
-        const maybeJson = JSON.parse(rawResult.content as string) as Record<string, unknown>;
-        if (maybeJson['status'] === 'detached') detachCheck = maybeJson;
-      } catch {
-        /* not JSON — treat as normal foreground output */
-      }
-      if (detachCheck !== undefined) {
-        detachCheck['warning'] = clampedTimeoutWarning; // bracket notation — index signature
-        return { ...rawResult, content: JSON.stringify(detachCheck) };
-      }
-      return { ...rawResult, content: `[Warning] ${clampedTimeoutWarning}\n\n${rawResult.content}` };
+      return formatClampedWarningResult(rawResult, clampedTimeoutWarning, true);
     }
     return rawResult;
   };
