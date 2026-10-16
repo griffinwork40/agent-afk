@@ -24,6 +24,9 @@
 import type { ToolCall, ToolResult } from '../../anthropic-direct/types.js';
 import type { AccumulatedToolCall } from '../translate.js';
 
+/** Distinct failure class for calls that were never executed due to lost/unparseable arguments. */
+export const LOST_ARGS_FAILURE_CLASS = 'lost-args' as const;
+
 /**
  * Model-facing result for a call that was not executed. `argumentsLost`
  * selects the wording: an empty argument stream is a delivery failure the
@@ -35,7 +38,7 @@ export function parseErrorResult(name: string, diagnostic: string, argumentsLost
       `so nothing was wrong with the call you made. Resend the same "${name}" call with its full arguments.`
     : `This call was NOT executed because its arguments could not be parsed as JSON. ` +
       `Resend the "${name}" call with its arguments as a single valid JSON object.`;
-  return { content: `${diagnostic}\n\n${instruction}`, isError: true };
+  return { content: `${diagnostic}\n\n${instruction}`, isError: true, failureClass: LOST_ARGS_FAILURE_CLASS };
 }
 
 /** The calls that may reach the dispatcher: those with no recorded parse error. */
@@ -63,6 +66,17 @@ export function mergeUndispatchedResults(
   parseErrors: ReadonlyMap<string, string>,
   dispatchedResults: readonly ToolResult[],
 ): ToolResult[] {
+  // Alignment guard: `calls` and `accumulated` must be index-aligned — each
+  // calls[i] corresponds to accumulated[i]. This holds via loop.ts's
+  // accumulatedToolCallsToToolCalls (one call pushed per accumulated entry, in
+  // order), but a length mismatch here would silently read the wrong
+  // argumentsRaw and mis-classify a call. Fail fast rather than produce a
+  // subtly wrong result.
+  if (calls.length !== accumulated.length) {
+    throw new Error(
+      `mergeUndispatchedResults: calls.length (${calls.length}) !== accumulated.length (${accumulated.length}); index alignment broken`,
+    );
+  }
   let next = 0;
   return calls.map((call, i) => {
     const diagnostic = parseErrors.get(call.id);

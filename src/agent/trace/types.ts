@@ -104,6 +104,8 @@ export const TOOL_FAILURE_CLASSES = [
   'no-such-target',
   /** N consecutive PreToolUse blocks on the same gate key with no success (#3736). */
   'hook-block-repeat',
+  /** Arguments were lost in transit or failed to JSON-parse; the call was never executed (#3808). */
+  'lost-args',
 ] as const;
 
 /**
@@ -143,12 +145,17 @@ export const TOOL_FAILURE_CLASSES = [
  *                              see `_rg-exit2.ts`). The caller supplied a bad reference —
  *                              not a tool fault — so the fix is to correct the target,
  *                              not to retry the same call.
+ *   - `lost-args`            — the tool was NOT executed because its arguments were lost
+ *                              in transit (empty argument stream for a tool with required
+ *                              params) or failed to JSON-parse (#3808). The model did not
+ *                              cause this; it is asked to resend the call. A delivery
+ *                              failure, not a tool fault.
  *
  * The `tool-failure-density` detector treats `policy-refusal`, `permission-denied`,
- * `hook-block`, `abort`, `elicitation-declined`, and `no-such-target` as "the system
- * correctly said no" — excluded from failure stats entirely — while `timeout`, `budget`,
- * `denial-breaker`, and unclassified failures still count. That split is
- * `BENIGN_FAILURE_CLASSES` below.
+ * `hook-block`, `abort`, `elicitation-declined`, `no-such-target`, and `lost-args` as
+ * "the system correctly said no" — excluded from failure stats entirely — while
+ * `timeout`, `budget`, `denial-breaker`, and unclassified failures still count. That
+ * split is `BENIGN_FAILURE_CLASSES` below.
  */
 export type ToolFailureClass = (typeof TOOL_FAILURE_CLASSES)[number];
 
@@ -167,7 +174,7 @@ export type ToolFailureClass = (typeof TOOL_FAILURE_CLASSES)[number];
  *     a long run does not read as something going wrong (#75).
  *
  * Members: `policy-refusal`, `permission-denied`, `hook-block`, `abort`,
- * `elicitation-declined`, `no-such-target`.
+ * `elicitation-declined`, `no-such-target`, `lost-args`.
  *
  * Membership is deliberately narrower than "not the tool's fault". `timeout` is
  * excluded because a high timeout rate is a real problem (too tight a deadline,
@@ -175,9 +182,12 @@ export type ToolFailureClass = (typeof TOOL_FAILURE_CLASSES)[number];
  * torn down for spinning is review-worthy — see the per-class notes above.
  * `no-such-target` IS included: a nonexistent path is a caller-supplied bad
  * reference (a typo, stale memory of a moved file, ordinary exploration), not
- * evidence the tool is broken. An unclassified failure (no `failureClass`) is
- * never benign: pre-classification traces and genuine handler bugs share that
- * shape, so it must stay alarming.
+ * evidence the tool is broken. `lost-args` IS included: a transport or
+ * JSON-parse failure is a delivery problem, not a tool fault — the model is told
+ * to resend, and repeated occurrences reflect a backend problem, not a broken
+ * handler. An unclassified failure (no `failureClass`) is never benign:
+ * pre-classification traces and genuine handler bugs share that shape, so it
+ * must stay alarming.
  */
 export const BENIGN_FAILURE_CLASSES: ReadonlySet<ToolFailureClass> = new Set([
   'policy-refusal',
@@ -186,6 +196,7 @@ export const BENIGN_FAILURE_CLASSES: ReadonlySet<ToolFailureClass> = new Set([
   'abort',
   'elicitation-declined',
   'no-such-target',
+  'lost-args',
 ]);
 
 export interface ToolCallCompletedPayload {

@@ -180,7 +180,7 @@ describe('dispatchAndAppendToolCalls — undispatched parse-error calls (#3808)'
     for (let i = 0; i < 5; i++) {
       const { outputs } = await round([{ id: `lost${i}`, name: 'read_thing', args: '' }], dispatcher);
       expect(outputs[0]!.content).not.toMatch(/Repeat-failure guard/);
-      expect(outputs[0]!.failureClass).toBeUndefined();
+      expect(outputs[0]!.failureClass).toBe('lost-args');
       expect(outputs[0]!.content).toMatch(/lost in transit/);
     }
     // Never executed, and (like an aborted call) no hooks fired for it.
@@ -191,5 +191,150 @@ describe('dispatchAndAppendToolCalls — undispatched parse-error calls (#3808)'
     const { outputs } = await round([{ id: 'real', name: 'read_thing', args: '{"path":"/a"}' }], dispatcher);
     expect(outputs[0]).toMatchObject({ content: 'read ok' });
     expect(seen).toEqual([{ path: '/a' }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #3835 follow-ups
+// ---------------------------------------------------------------------------
+
+describe('dispatchAndAppendToolCalls — lost-args failureClass (#3835)', () => {
+  it('parseErrorResult carries failureClass: lost-args for argument-lost calls', async () => {
+    const { dispatcher } = fakeDispatcher();
+    const { outputs } = await round([{ id: 'lost', name: 'read_thing', args: '' }], dispatcher);
+    expect(outputs[0]).toMatchObject({ isError: true, failureClass: 'lost-args' });
+  });
+
+  it('parseErrorResult carries failureClass: lost-args for JSON-parse failures', async () => {
+    const { dispatcher } = fakeDispatcher();
+    const { outputs } = await round([{ id: 'bad', name: 'read_thing', args: '{not json' }], dispatcher);
+    expect(outputs[0]).toMatchObject({ isError: true, failureClass: 'lost-args' });
+  });
+});
+
+describe('dispatchAndAppendToolCalls — sequential fallback with mixed batch (#3835 item 2)', () => {
+  it('abort mid sequential fallback: parse-error call keeps synthetic result, second clean call gets abort result', async () => {
+    // The sequential loop (no executeBatch) checks signal.aborted BEFORE each
+    // execute() call. ok1 executes normally; ok1's handler aborts the signal,
+    // so ok2 is checked next and receives an abort result without calling execute.
+    // The lost-arg call is excluded from toDispatch, so it always keeps its
+    // synthetic lost-args result — even when the batch aborts mid-way.
+    const controller = new AbortController();
+    const execute = vi.fn(async (c: ToolCall): Promise<ToolResult> => {
+      if (c.id === 'ok1') controller.abort('mid-batch abort');
+      return { content: `ran ${c.id}` };
+    });
+    // No executeBatch — forces sequential path.
+    const dispatcher = { toolDefs: TOOL_DEFS, execute } as unknown as ToolDispatcher;
+
+    const priorTurns: OpenAIMessage[] = [{ role: 'user', content: 'go' } as OpenAIMessage];
+    const calls = [
+      { id: 'lost', name: 'read_thing', args: '' },            // parse error — synthetic result
+      { id: 'ok1',  name: 'read_thing', args: '{"path":"/a"}' }, // dispatched; aborts signal
+      { id: 'ok2',  name: 'read_thing', args: '{"path":"/b"}' }, // checked after abort: abort result
+    ];
+    const gen = dispatchAndAppendToolCalls({
+      state: stateWith(calls),
+      signal: controller.signal,
+      vision: false,
+      toolDispatcher: dispatcher,
+      traceWriter: undefined,
+      priorTurns,
+      sessionId: 'sess-3835-seq',
+    });
+    const events: ProviderEvent[] = [];
+    for (;;) {
+      const next = await gen.next();
+      if (next.done) break;
+      events.push(next.value);
+    }
+    const outputs = events.filter(
+      (e): e is Extract<ProviderEvent, { type: 'tool.output' }> => e.type === 'tool.output',
+    );
+
+    // All three results emitted in call order: lost, ok1, ok2.
+    expect(outputs.map((o) => o.toolUseId)).toEqual(['lost', 'ok1', 'ok2']);
+
+    // lost-arg call: keeps its synthetic lost-args result, NOT an abort result.
+    expect(outputs[0]).toMatchObject({ isError: true, failureClass: 'lost-args' });
+    expect(outputs[0]!.content).toMatch(/lost in transit/);
+
+    // ok1: dispatched before abort, gets a normal (non-error) result.
+    expect(outputs[1]!.toolUseId).toBe('ok1');
+    expect(outputs[1]!.isError).toBeUndefined();
+    expect(outputs[1]!.content).toBe('ran ok1');
+
+    // ok2: signal was aborted before its turn, so it receives an abort result
+    // without reaching execute.
+    expect(outputs[2]).toMatchObject({ toolUseId: 'ok2', isError: true });
+    expect(outputs[2]!.content).toMatch(/aborted/i);
+
+    // execute was called exactly once (only ok1; ok2 short-circuited).
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0]![0].id).toBe('ok1');
+
+    // Tool messages appended in call order with no extra dispatches.
+    const toolMessages = priorTurns.filter((m) => m.role === 'tool') as unknown as { tool_call_id: string }[];
+    expect(toolMessages.map((m) => m.tool_call_id)).toEqual(['lost', 'ok1', 'ok2']);
+  });
+});
+
+describe('dispatchAndAppendToolCalls — executeBatch throws with mixed batch (#3835 item 3)', () => {
+  it('batch throw: parse-error call keeps its synthetic result, clean calls get batch-failure result', async () => {
+    const executeBatch = vi.fn(async (_calls: ToolCall[]): Promise<ToolResult[]> => {
+      throw new Error('upstream batch failure');
+    });
+    const dispatcher = { toolDefs: TOOL_DEFS, executeBatch } as unknown as ToolDispatcher;
+
+    const { outputs } = await round(
+      [
+        { id: 'lost', name: 'read_thing', args: '' },           // parse error
+        { id: 'ok1',  name: 'read_thing', args: '{"path":"/a"}' }, // clean — batch throws
+        { id: 'ok2',  name: 'read_thing', args: '{"path":"/b"}' }, // clean — batch throws
+      ],
+      dispatcher,
+    );
+
+    expect(outputs.map((o) => o.toolUseId)).toEqual(['lost', 'ok1', 'ok2']);
+
+    // lost-arg call keeps its own synthetic result (not the batch-failure message).
+    expect(outputs[0]).toMatchObject({ isError: true, failureClass: 'lost-args' });
+    expect(outputs[0]!.content).toMatch(/lost in transit/);
+
+    // Both clean calls receive the batch-failure result.
+    expect(outputs[1]).toMatchObject({ isError: true });
+    expect(outputs[1]!.content).toMatch(/batch execution failed/i);
+    expect(outputs[2]).toMatchObject({ isError: true });
+    expect(outputs[2]!.content).toMatch(/batch execution failed/i);
+
+    // executeBatch was called once with only the clean calls.
+    expect(executeBatch).toHaveBeenCalledTimes(1);
+    expect(executeBatch.mock.calls[0]![0].map((c) => c.id)).toEqual(['ok1', 'ok2']);
+  });
+});
+
+describe('mergeUndispatchedResults — alignment guard (#3835 item 4)', () => {
+  it('throws when calls.length !== accumulated.length', async () => {
+    const { mergeUndispatchedResults } = await import('./dispatch-append.parse-errors.js');
+    const call = { id: 'c1', name: 'read_thing', input: {}, signal: new AbortController().signal };
+    // calls has 2 entries but accumulated has 1 — misalignment.
+    expect(() =>
+      mergeUndispatchedResults(
+        [call, { ...call, id: 'c2' }],
+        [{ index: 0, id: 'c1', name: 'read_thing', argumentsRaw: '{}', startEmitted: true }],
+        new Map(),
+        [],
+      ),
+    ).toThrow(/index alignment broken/);
+  });
+
+  it('does not throw when calls.length === accumulated.length', async () => {
+    const { mergeUndispatchedResults } = await import('./dispatch-append.parse-errors.js');
+    const signal = new AbortController().signal;
+    const call = { id: 'c1', name: 'read_thing', input: {}, signal };
+    const acc = { index: 0, id: 'c1', name: 'read_thing', argumentsRaw: '{"path":"/a"}', startEmitted: true };
+    expect(() =>
+      mergeUndispatchedResults([call], [acc], new Map(), [{ content: 'ok' }]),
+    ).not.toThrow();
   });
 });
