@@ -122,6 +122,7 @@ export function createRemoteAgentHandler(deps: RemoteAgentDeps): ToolHandler {
     const runId = `${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`;
     const sessionId = input.resume ?? randomUUID();
     const cwd = input.cwd ?? host.cwd;
+    const permissionMode = host.permissionMode;
     const outcome = await runRemoteAgent(
       {
         target: host.ssh,
@@ -134,6 +135,7 @@ export function createRemoteAgentHandler(deps: RemoteAgentDeps): ToolHandler {
         ...(input.model !== undefined ? { model: input.model } : {}),
         ...(input.resume !== undefined ? { resume: input.resume } : {}),
         ...(host.afkPath !== undefined ? { afkPath: host.afkPath } : {}),
+        ...(permissionMode !== undefined ? { permissionMode } : {}),
       },
       signal,
       { runner: deps.runner, ...(deps.sleep ? { sleep: deps.sleep } : {}) },

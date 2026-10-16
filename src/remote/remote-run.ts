@@ -65,6 +65,11 @@ export interface RemoteRunRequest {
   hostName?: string;
   /** Remote login password (raw); when set, the launch unlocks the login keychain first. */
   keychainPassword?: string;
+  /**
+   * Permission mode pinned on the remote `afk chat` invocation. When absent
+   * the remote resolves its own default (typically `bypassPermissions`).
+   */
+  permissionMode?: string;
 }
 
 export type RemoteRunOutcome =

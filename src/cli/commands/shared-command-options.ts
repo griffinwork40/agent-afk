@@ -111,5 +111,10 @@ export function applySharedChatOptions(
     )
     .option('--resume <id>', 'Resume a persisted session by id')
     .option('--continue', 'Continue the most recent persisted session in cwd')
+    .option(
+      '--permission-mode <mode>',
+      'Permission mode: default|acceptEdits|bypassPermissions|plan|dontAsk. ' +
+        'Overrides afk.config.json permissionMode. Does not affect ask_question.',
+    )
     .option('--dangerously-skip-permissions', dangerouslySkipPermissionsDescription);
 }

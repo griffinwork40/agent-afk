@@ -55,6 +55,12 @@ export interface LaunchScriptOptions {
   /** Absolute afk path on the remote; resolved by the script when absent. */
   afkPath?: string;
   /**
+   * Permission mode to pin on the remote `afk chat` invocation via
+   * `--permission-mode`. When absent the remote resolves its own default
+   * (typically `bypassPermissions` from `DEFAULT_CLI_PERMISSION_MODE`).
+   */
+  permissionMode?: string;
+  /**
    * When true, the FIRST stdin line is the remote login password, already
    * escaped for `security -i` (see `keychain-unlock.ts`); the prompt follows.
    */
@@ -100,6 +106,7 @@ export function buildLaunchScript(opts: LaunchScriptOptions): string {
   if (opts.resume !== undefined) args.push('--resume', opts.resume);
   else args.push('--session-id', opts.sessionId);
   if (opts.model !== undefined) args.push('--model', opts.model);
+  if (opts.permissionMode !== undefined) args.push('--permission-mode', opts.permissionMode);
   const lines = [
     'set -e',
     'umask 077',

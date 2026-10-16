@@ -33,6 +33,21 @@ describe('buildLaunchScript', () => {
     expect(s).toContain(`cd "$HOME"/'repo' ||`);
   });
 
+  it('passes --permission-mode with safe quoting when set', () => {
+    const s = buildLaunchScript({ ...base, permissionMode: 'default' });
+    expect(s).toContain(`'--permission-mode' 'default'`);
+  });
+
+  it('passes bypassPermissions mode with safe quoting', () => {
+    const s = buildLaunchScript({ ...base, permissionMode: 'bypassPermissions' });
+    expect(s).toContain(`'--permission-mode' 'bypassPermissions'`);
+  });
+
+  it('omits --permission-mode when not set', () => {
+    const s = buildLaunchScript(base);
+    expect(s).not.toContain('--permission-mode');
+  });
+
   it('uses an explicit afkPath when given and resolves otherwise', () => {
     expect(buildLaunchScript({ ...base, afkPath: '/opt/afk' })).toContain(`p='/opt/afk'`);
     const s = buildLaunchScript(base);
