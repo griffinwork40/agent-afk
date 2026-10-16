@@ -215,7 +215,11 @@ describe('launch script stdin isolation (regression)', () => {
       expect(existsSync(promptFile), `[${shell}] prompt file missing for: ${label}`).toBe(true);
       expect(readFileSync(promptFile, 'utf-8'), `[${shell}] prompt mismatch for: ${label}`).toBe(prompt);
     } finally {
-      rmSync(tmpHome, { recursive: true, force: true });
+      // The detached `nohup "$p" … &` stub inherits cwd tmpHome; on Windows it
+      // can still hold the directory for a moment after the shell exits
+      // (EBUSY), and a throw here would mask any assertion failure above.
+      // maxRetries makes Node retry EBUSY/ENOTEMPTY/EPERM with backoff.
+      rmSync(tmpHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   }
 
