@@ -34,7 +34,11 @@ export interface AccountingSnapshot {
   subagentRunningCostUsd: number;
   /** Billing-normalized root-session rollup (#3878); undefined when none reported. */
   sessionBilling?: BillingRollupSnapshot;
-  /** Billing-normalized subagent rollup, split by provider (#3878). */
+  /**
+   * Billing-normalized subagent rollup, split by provider (#3878). Covers
+   * EVERY child that accrued billing — succeeded, failed, and cancelled —
+   * unlike the success-only legacy `subagent*` counters above.
+   */
   subagentBilling?: BillingRollupSnapshot;
 }
 
@@ -184,6 +188,13 @@ export class AccountingAccumulator {
    * `SubagentHandle`) after each fork reaches `succeeded` status.
    * Thread-safe for sequential single-session use (no concurrent mutation).
    *
+   * Contract: a report tagged `usage.outcome` (`'failed'` | `'cancelled'`,
+   * sent by `subagent/handle.billing.ts` for a child that ended without
+   * succeeding) is BILLING-ONLY: it adds `usage.billing` to the subagent
+   * billing rollup and touches nothing else, so the legacy counters
+   * (`subagentCompletedCount`, `subagentRunningTokens`,
+   * `subagentRunningCostUsd`) keep their success-only semantics.
+   *
    * @param usage   - Token breakdown from {@link SubagentTrace.usage}.
    * @param costUsd - Optional USD cost for this subagent (from
    *                  {@link SubagentSucceededPayload.totalCostUsd}).
@@ -196,9 +207,15 @@ export class AccountingAccumulator {
       cacheCreationTokens?: number;
       /** Billing counts summed across ALL the child's turns (#3878). */
       billing?: BillingUsage;
+      /** Set only for a billing-only report from a child that did not succeed. */
+      outcome?: 'failed' | 'cancelled';
     },
     costUsd?: number,
   ): void {
+    if (usage?.outcome !== undefined) {
+      this.subagentBilling.add(usage.billing);
+      return;
+    }
     this.subagentCompletedCount++;
 
     if (usage) {

@@ -11,6 +11,7 @@
 import type { SubagentProgressSink } from '../types/session-types.js';
 import type { Message } from '../types.js';
 import { emitSuccessfulHandoff } from './capped-handoff.js';
+import { takeUnreportedBilling } from './handle.billing.js';
 import { streamToFinalMessage } from './handle.streaming.js';
 import type { SubagentHandleImpl } from './handle.js';
 
@@ -89,8 +90,14 @@ export async function drainAndEmitSuccess(
   const costUsd =
     typeof lastMsg.metadata?.totalCostUsd === 'number' ? lastMsg.metadata.totalCostUsd : undefined;
   // Billing (#3878) spans every turn of the run, initial + drain turns.
-  const usage = handle._currentTrace.usage;
-  const billing = handle._runBilling;
+  // `_currentTrace.usage` also carries the run's cumulative `billing`; strip
+  // it and attach only the UNREPORTED delta (handle.billing.ts): a cancel()
+  // that landed during the awaits above may already have settled part of it.
+  // Taking the delta records it as reported, so a later cancel()/failure
+  // reports only spend that accrues after this point — counted exactly once.
+  const { billing: _traceBilling, ...legacy } = handle._currentTrace.usage ?? {};
+  const billing = takeUnreportedBilling(handle);
+  const usage = handle._currentTrace.usage === undefined && billing === undefined ? undefined : legacy;
   handle.onSubagentSucceeded?.(billing !== undefined ? { ...usage, billing } : usage, costUsd);
 
   handle._onTerminal();

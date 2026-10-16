@@ -73,6 +73,7 @@ export async function emitSuccessfulHandoff<T>(handle: SubagentHandleImpl<T>, me
     turnCount: handle._currentTrace.turnCount,
     outputBytes: Buffer.byteLength(message.content, 'utf8'),
     ...(handle._lastStopReason !== undefined && { stopReason: handle._lastStopReason }),
+    // Cumulative run total (#3878); the rollup, not this row, is authoritative.
     ...billingLifecycleFields(handle._runBilling),
     ...cappedHandoffFields(message, handle._lastStopReason),
   });

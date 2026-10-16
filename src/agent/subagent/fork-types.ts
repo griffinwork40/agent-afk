@@ -342,6 +342,10 @@ export interface SubagentManagerOptions {
    * Intended wiring: `AgentSession.recordSubagentCompletion` bound to the
    * session instance. The callback fires synchronously on the
    * `SubagentHandleImpl.run()` success path before `onTerminal()`.
+   * It also fires once with a billing-only usage tagged `outcome:
+   * 'failed' | 'cancelled'` for a child that accrued billing but did not
+   * succeed (#3878); `recordSubagentCompletion` routes that to the billing
+   * rollup only. Forward `usage` verbatim so the tag is preserved.
    */
   onSubagentSucceeded?: (
     usage: import('./result.js').SubagentTrace['usage'],

@@ -39,6 +39,15 @@ describe('BillingRollup', () => {
     expect(r.snapshot()).toBeUndefined();
   });
 
+  it('snapshot is defined when usage was reported even if every counter is zero', () => {
+    const r = new BillingRollup();
+    r.add(anth(0, 0, 0, 0));
+    expect(r.snapshot()).toEqual({
+      total: { uncachedInput: 0, cacheRead: 0, cacheWrite: 0, output: 0 },
+      byProvider: { 'anthropic-direct': { uncachedInput: 0, cacheRead: 0, cacheWrite: 0, output: 0 } },
+    });
+  });
+
   it('snapshot is a copy (later adds do not mutate a prior snapshot)', () => {
     const r = new BillingRollup();
     r.add(anth(1, 0, 0));
@@ -78,6 +87,21 @@ describe('AccountingAccumulator billing wiring', () => {
     expect(snap.subagentBilling?.byProvider).toEqual({
       'anthropic-direct': { uncachedInput: 10, cacheRead: 5_000, cacheWrite: 0, output: 0 },
       'openai-compatible': { uncachedInput: 3_000, cacheRead: 27_000, cacheWrite: 0, output: 0 },
+    });
+  });
+
+  it('subagents: an outcome-tagged (failed/cancelled) report is billing-only', () => {
+    const acc = new AccountingAccumulator();
+    acc.recordSubagentCompletion({ inputTokens: 10, billing: anth(10, 0, 0) }, 0.5);
+    acc.recordSubagentCompletion({ billing: anth(7, 3, 1, 2), outcome: 'failed' });
+    acc.recordSubagentCompletion({ billing: openAICompatibleBilling(10, 4, 1), outcome: 'cancelled' }, 9);
+    const snap = acc.snapshot();
+    expect(snap.subagentCompletedCount).toBe(1);
+    expect(snap.subagentRunningTokens).toEqual({ input: 10, output: 0, cacheRead: 0, cacheCreation: 0 });
+    expect(snap.subagentRunningCostUsd).toBe(0.5);
+    expect(snap.subagentBilling?.byProvider).toEqual({
+      'anthropic-direct': { uncachedInput: 17, cacheRead: 3, cacheWrite: 1, output: 2 },
+      'openai-compatible': { uncachedInput: 6, cacheRead: 4, cacheWrite: 0, output: 1 },
     });
   });
 

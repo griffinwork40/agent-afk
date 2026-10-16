@@ -405,7 +405,8 @@ export interface SubagentStartedPayload {
   maxToolUseIterations?: number;
 }
 
-export interface SubagentSucceededPayload {
+/** `provider` / `tokens` (#3878) come from {@link SubagentBillingFields}. */
+export interface SubagentSucceededPayload extends SubagentBillingFields {
   incomplete?: true;
   incompleteReason?: string;
   roundsUsed?: number;
@@ -425,27 +426,9 @@ export interface SubagentSucceededPayload {
    * with `succeeded` status. Absent when the provider reported no stop reason.
    */
   stopReason?: string;
-  /**
-   * Bundled provider family that served this child (`anthropic-direct` |
-   * `openai-compatible`), from its billing usage (#3878). Absent when the
-   * provider reported no usage.
-   */
-  provider?: string;
-  /**
-   * Billing-normalized token counts summed across every turn of the child's
-   * run (#3878). `uncachedInput` excludes cache reads on every provider, so
-   * `cacheRead / (uncachedInput + cacheRead + cacheWrite)` is the child's
-   * true prompt-cache hit rate.
-   */
-  tokens?: {
-    uncachedInput: number;
-    cacheRead: number;
-    cacheWrite: number;
-    output: number;
-  };
 }
 
-export interface SubagentFailedPayload {
+export interface SubagentFailedPayload extends SubagentBillingFields {
   transition: 'failed';
   subagentId: string;
   errorClass: string;
@@ -462,7 +445,7 @@ export interface SubagentFailedPayload {
   failureClass?: ToolFailureClass;
 }
 
-export interface SubagentCancelledPayload {
+export interface SubagentCancelledPayload extends SubagentBillingFields {
   transition: 'cancelled';
   subagentId: string;
   /**
@@ -857,27 +840,25 @@ export interface SessionSealedPayload {
    * whose OpenAI `input` includes cached tokens), every counter here is summed
    * per model call and `uncachedInput` excludes cache reads, so hit rate =
    * `cacheRead / (uncachedInput + cacheRead + cacheWrite)` per provider.
+   * `subagents` covers EVERY child that accrued billing — succeeded, failed,
+   * and cancelled — unlike the success-only `subagentCount`/`subagentTokens`.
    * Omitted when no provider reported billing usage.
    */
   billing?: {
-    root?: SessionBillingRollup;
-    subagents?: SessionBillingRollup;
+    root?: BillingRollupSnapshot;
+    subagents?: BillingRollupSnapshot;
   };
 }
 
-/** One billing rollup on `session_sealed.billing` (#3878). */
-export interface SessionBillingRollup {
-  total: SessionBillingCounters;
-  byProvider: Record<string, SessionBillingCounters>;
-}
-
-/** Billing counters on `session_sealed.billing` rollups (#3878). */
-export interface SessionBillingCounters {
-  uncachedInput: number;
-  cacheRead: number;
-  cacheWrite: number;
-  output: number;
-}
+// Billing shapes on `session_sealed.billing` and the terminal lifecycle
+// payloads (#3878): `z.infer`-derived in `events.billing.ts` (the single source
+// of truth, zod-only imports so no cycle), re-exported under these names.
+import type { BillingRollupSnapshot, SubagentBillingFields } from './events.billing.js';
+export type {
+  BillingCounters as SessionBillingCounters,
+  BillingRollupSnapshot as SessionBillingRollup,
+  SubagentBillingFields,
+} from './events.billing.js';
 
 // ---------------------------------------------------------------------------
 // Discriminated unions

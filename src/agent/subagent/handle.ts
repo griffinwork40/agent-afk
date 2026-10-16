@@ -36,6 +36,7 @@ import {
   dispatchStopAndRelease,
 } from './handle.streaming.js';
 import { drainAndEmitSuccess } from './handle.run-success.js';
+import { settleUnreportedBilling } from './handle.billing.js';
 
 // Re-export so external callers importing debugLog-depending path still work.
 export type { SubagentProgressMeta };
@@ -197,6 +198,13 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
    * the start of `run()`, next to `_lastStopReason`.
    */
   /** @internal */ _runBilling: BillingUsage | undefined;
+  /**
+   * Cumulative share of `_runBilling` already handed to the parent rollup
+   * (success path or `settleUnreportedBilling`). Every settlement reports only
+   * `_runBilling − _billingReportedTotal`, so spend is counted once BY AMOUNT.
+   * Reset with `_runBilling` at the start of `run()`. See `handle.billing.ts`.
+   */
+  /** @internal */ _billingReportedTotal: BillingUsage | undefined;
   /** @internal — per-subagent conversation log writer. Set by SubagentManager after construction. */
   /** @internal */ _logWriter?: { write(event: OutputEvent): void; close(): Promise<void> };
 
@@ -220,7 +228,9 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
      * Optional callback invoked after a successful `run()`. Carries the
      * subagent's token usage and optional cost so the parent session can
      * accumulate them into the `session_sealed` rollup fields without
-     * reaching back into the handle's private state.
+     * reaching back into the handle's private state. Also invoked ONCE with a
+     * billing-only usage tagged `outcome: 'failed' | 'cancelled'` when a run
+     * that accrued billing ends without succeeding (#3878, `handle.billing.ts`).
      */
     /** @internal */ public readonly onSubagentSucceeded?: (
       usage: SubagentTrace['usage'],
@@ -261,6 +271,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     // set below), so no in-flight run owns this value for us to clobber.
     this._lastStopReason = undefined;
     this._runBilling = undefined;
+    this._billingReportedTotal = undefined;
     if (this._currentStatus === 'cancelled') throw new Error(`Subagent ${this.id} is cancelled`);
 
     this._currentStatus = 'running';
@@ -337,7 +348,12 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       // currentStatus is 'cancelled' only when cancel() already ran and
       // emitted its own lifecycle event. In that case we suppress the
       // failed event here to avoid a double-emit for the same termination.
-      if ((this._currentStatus as string) !== 'cancelled') {
+      if ((this._currentStatus as string) === 'cancelled') {
+        // cancel() already emitted the row and settled the billing known then;
+        // settle only the DELTA that accrued after it (a `done` drained on
+        // interrupt) so it still reaches the rollup, counted once (#3878).
+        settleUnreportedBilling(this, 'cancelled');
+      } else {
         // Invariant: cascade classification. When our controller's signal is
         // aborted at this point AND cancel() didn't fire (otherwise status
         // would already be 'cancelled') AND the abort reason is not our own
@@ -376,6 +392,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
             subagentId: this.id,
             source: 'cascade',
             ...(cascadeTimedOut ? { timeout: true } : {}),
+            ...settleUnreportedBilling(this, 'cancelled'),
           });
           this._currentStatus = 'cancelled';
           this.latestTerminalStatus = 'cancelled';
@@ -392,6 +409,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
             // TimeoutError that is NOT a cascade — the guillotined-by-budget
             // case #583/this PR targets. Absent for any other failure.
             ...(timeoutReason !== undefined ? { failureClass: 'timeout' as const } : {}),
+            ...settleUnreportedBilling(this, 'failed'),
           });
           this._currentStatus = 'failed';
           this.latestTerminalStatus = 'failed';
@@ -450,6 +468,10 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       transition: 'cancelled',
       subagentId: this.id,
       source: 'explicit',
+      // Unreported spend accrued before the cancel (#3878): rolls up the delta,
+      // stamps the cumulative total; `{}` when all of it was already reported.
+      // May undercount spend that lands later — the rollup is authoritative.
+      ...settleUnreportedBilling(this, 'cancelled'),
     });
 
     this._steeringMessages.length = 0;

@@ -9,7 +9,7 @@
 
 import { z } from 'zod';
 import { TOOL_FAILURE_CLASSES } from './types.js';
-import { BillingCountersSchema } from './events.billing.js';
+import { BillingLifecycleShape } from './events.billing.js';
 
 export const ToolFailureClassSchema = z.enum(TOOL_FAILURE_CLASSES);
 
@@ -38,8 +38,7 @@ export const SubagentSucceededPayloadSchema = z.object({
   totalCostUsd: z.number().nonnegative().optional(),
   outputBytes: z.number().int().nonnegative(),
   stopReason: z.string().optional(),
-  provider: z.string().optional(),
-  tokens: BillingCountersSchema.optional(),
+  ...BillingLifecycleShape,
 });
 
 export const SubagentFailedPayloadSchema = z.object({
@@ -49,6 +48,7 @@ export const SubagentFailedPayloadSchema = z.object({
   errorMessage: z.string(),
   partialOutputBytes: z.number().int().nonnegative(),
   failureClass: ToolFailureClassSchema.optional(),
+  ...BillingLifecycleShape,
 });
 
 export const SubagentCancelledPayloadSchema = z.object({
@@ -56,6 +56,7 @@ export const SubagentCancelledPayloadSchema = z.object({
   subagentId: z.string(),
   source: z.enum(['cascade', 'explicit']),
   timeout: z.boolean().optional(),
+  ...BillingLifecycleShape,
 });
 
 export const SubagentLifecyclePayloadSchema = z.discriminatedUnion('transition', [

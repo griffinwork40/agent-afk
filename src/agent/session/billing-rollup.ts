@@ -1,27 +1,18 @@
 /**
  * Per-provider billing rollup (#3878). Accumulates billing-normalized token
  * counts (see `agent/usage.billing.ts`) for the root session and, separately,
- * for completed subagents, so `session_sealed` can report true cache hit
- * rates split by provider instead of one blended figure.
+ * for subagents — succeeded, failed, AND cancelled children alike (see
+ * `subagent/handle.billing.ts`) — so `session_sealed` can report true cache
+ * hit rates split by provider instead of one blended figure.
  *
  * @module agent/session/billing-rollup
  */
 
 import type { BillingUsage } from '../provider.js';
+import type { BillingCounters, BillingRollupSnapshot } from '../trace/events.billing.js';
 
-/** Billing counters without the provider tag. */
-export interface BillingCounters {
-  uncachedInput: number;
-  cacheRead: number;
-  cacheWrite: number;
-  output: number;
-}
-
-/** Snapshot shape, emitted verbatim on `session_sealed.billing.{root,subagents}`. */
-export interface BillingRollupSnapshot {
-  total: BillingCounters;
-  byProvider: Record<string, BillingCounters>;
-}
+// Single source of truth: the zod schemas in `trace/events.billing.ts`.
+export type { BillingCounters, BillingRollupSnapshot } from '../trace/events.billing.js';
 
 const zero = (): BillingCounters => ({ uncachedInput: 0, cacheRead: 0, cacheWrite: 0, output: 0 });
 
@@ -32,16 +23,20 @@ const addInto = (target: BillingCounters, b: BillingCounters): void => {
   target.output += b.output;
 };
 
-const isEmpty = (c: BillingCounters): boolean =>
-  c.uncachedInput === 0 && c.cacheRead === 0 && c.cacheWrite === 0 && c.output === 0;
-
 export class BillingRollup {
   private total: BillingCounters = zero();
   private byProvider = new Map<string, BillingCounters>();
+  /**
+   * True once any defined billing record was added. Gates `snapshot()` so a
+   * provider that REPORTED usage with all-zero counts still surfaces a rollup
+   * (reported-zero is data; never-reported is absence).
+   */
+  private recorded = false;
 
   /** Add one billing record. A missing record (provider reported none) is a no-op. */
   add(b: BillingUsage | undefined): void {
     if (!b) return;
+    this.recorded = true;
     addInto(this.total, b);
     let bucket = this.byProvider.get(b.provider);
     if (!bucket) {
@@ -54,11 +49,12 @@ export class BillingRollup {
   reset(): void {
     this.total = zero();
     this.byProvider = new Map();
+    this.recorded = false;
   }
 
-  /** Undefined when nothing was recorded, so the seal payload omits the field. */
+  /** Undefined when no billing record was ever added, so the seal payload omits the field. */
   snapshot(): BillingRollupSnapshot | undefined {
-    if (isEmpty(this.total)) return undefined;
+    if (!this.recorded) return undefined;
     const byProvider: Record<string, BillingCounters> = {};
     for (const [provider, counters] of this.byProvider) byProvider[provider] = { ...counters };
     return { total: { ...this.total }, byProvider };
