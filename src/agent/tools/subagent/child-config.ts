@@ -110,6 +110,8 @@ export interface BuildChildConfigArgs {
    *      mirroring `cwd`).
    */
   traceWriter?: TraceSink;
+  /** Tree-wide accounting sink: forward each descendant's own report, not subtree totals. */
+  onSubagentSucceeded?: import('../../subagent/fork-types.js').SubagentManagerOptions['onSubagentSucceeded'];
   /**
    * Shared workspace store. Threaded into the same TWO places as `traceWriter`
    * above, for the same reason: (1) the depth-2+ child {@link SubagentManager},
