@@ -59,7 +59,11 @@ export function parseRemoteAgentInput(raw: unknown): RemoteAgentInput | ToolResu
   if (prompt.trim() === '') return fail('`prompt` must be a non-empty string.');
   const input: RemoteAgentInput = { host, prompt };
   const cwd = optString(obj, 'cwd');
-  if (cwd !== undefined) input.cwd = cwd;
+  if (cwd !== undefined) {
+    if (/[\0\n\r]/.test(cwd)) return fail('`cwd` must not contain NUL, newline, or carriage-return.');
+    if (cwd.startsWith('-')) return fail('`cwd` may not start with "-".');
+    input.cwd = cwd;
+  }
   const model = optString(obj, 'model');
   if (model !== undefined) {
     if (model.startsWith('-')) return fail('`model` may not start with "-".');
@@ -79,11 +83,16 @@ export function isRemoteRun(): boolean {
   return depth !== '' && depth !== '0';
 }
 
+/** Wrap remote-sourced text so prompt-injected content cannot reach the local model as plain tool output. */
+function frameRemote(text: string): string {
+  return `<remote-output>\n${text}\n</remote-output>`;
+}
+
 function formatOutcome(outcome: RemoteRunOutcome, host: RemoteHost, runId: string, sessionId: string): ToolResult {
   const where = `host=${host.name} session=${sessionId} run=${runId}`;
   if (outcome.kind === 'aborted') return fail(`aborted; the remote run was stopped (${where}).`);
   if (outcome.kind === 'error' || outcome.kind === 'lost') {
-    const partial = outcome.partial ? `\n\nPartial output:\n${outcome.partial.slice(0, 4000)}` : '';
+    const partial = outcome.partial ? `\n\nPartial output:\n${frameRemote(outcome.partial.slice(0, 4000))}` : '';
     const lostNote = outcome.kind === 'lost'
       ? ` The run continues on the remote: ~/.afk/state/remote-runs/${runId}/out.ndjson.`
       : '';
@@ -91,7 +100,8 @@ function formatOutcome(outcome: RemoteRunOutcome, host: RemoteHost, runId: strin
     return fail(`${reason}.${lostNote} (${where})${partial}`);
   }
   const footer = `\n\n[remote_agent: ${where}; pass resume="${sessionId}" to continue there]`;
-  const reply = outcome.message.trim() === '' ? '(remote agent finished with an empty reply)' : outcome.message;
+  const rawReply = outcome.message.trim() === '' ? '(remote agent finished with an empty reply)' : outcome.message;
+  const reply = frameRemote(rawReply);
   if (reply.length > MAX_REPLY_CHARS) {
     return { content: `${reply.slice(0, MAX_REPLY_CHARS)}\n… [truncated at ${MAX_REPLY_CHARS} chars]${footer}`, truncated: true };
   }

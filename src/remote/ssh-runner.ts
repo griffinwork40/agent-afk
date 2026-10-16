@@ -2,8 +2,12 @@
  * Thin SSH transport for `remote_agent`. Injected as an interface so tests can
  * substitute an in-memory fake without spawning processes.
  *
- * Contract: every script runs as `/bin/sh -c <script>` on the remote, so the
- * remote login shell only has to parse one single-quoted argument. Options:
+ * Contract: every script is delivered to the remote via stdin and executed as
+ * `exec /bin/sh -s`. This bypasses the remote login shell entirely — sshd
+ * passes the fixed string `exec /bin/sh -s` to the user's login shell for
+ * parsing, which is safe because it contains no caller-supplied data. The
+ * script itself arrives on stdin, so quoting differences between POSIX sh,
+ * bash, and fish in the login shell cannot affect script content. Options:
  * `BatchMode=yes` (never prompt for a password), `ConnectTimeout=5` (a
  * sleeping host fails fast), and ServerAlive probes (a dead link is noticed
  * within ~45 s, which is what lets the follow loop reconnect).
@@ -12,7 +16,6 @@
  */
 
 import { spawn } from 'node:child_process';
-import { shQuote } from './remote-script.js';
 
 export interface SshExecResult {
   /** Exit code; `null` when killed by a signal. ssh itself uses 255 for connection failures. */
@@ -49,9 +52,17 @@ const SSH_OPTIONS = [
 ];
 const MAX_STDERR = 16_384;
 
-/** Build the argv passed to the local `ssh` binary. */
-export function sshArgs(target: string, script: string): string[] {
-  return [...SSH_OPTIONS, '--', target, `/bin/sh -c ${shQuote(script)}`];
+/**
+ * Build the argv passed to the local `ssh` binary.
+ *
+ * The remote command is the fixed string `exec /bin/sh -s`. It contains no
+ * caller-supplied data, so the remote login shell (bash, zsh, fish, …) cannot
+ * mis-parse it regardless of quoting rules. The script itself is delivered on
+ * stdin, which ssh pipes directly to the remote process without shell
+ * re-parsing.
+ */
+export function sshArgs(target: string): string[] {
+  return [...SSH_OPTIONS, '--', target, 'exec /bin/sh -s'];
 }
 
 function spawnSsh(
@@ -63,8 +74,11 @@ function spawnSsh(
   timeoutMs?: number,
   collectStdout = true,
 ): Promise<SshExecResult> {
+  // Prepend the script to stdin so /bin/sh -s reads it; caller-supplied stdin
+  // (e.g. the prompt text) follows after a newline separator.
+  const fullStdin = stdin !== undefined ? `${script}\n${stdin}` : script;
   return new Promise((resolve) => {
-    const child = spawn('ssh', sshArgs(target, script), { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn('ssh', sshArgs(target), { stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -102,7 +116,7 @@ function spawnSsh(
     });
     child.on('close', (code) => finish(code));
     child.stdin.on('error', () => { /* remote closed stdin early; exit code reports the failure */ });
-    child.stdin.end(stdin ?? '');
+    child.stdin.end(fullStdin);
     if (signal?.aborted) stop();
   });
 }

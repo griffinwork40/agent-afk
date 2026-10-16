@@ -1,8 +1,9 @@
 /**
  * Builders for the POSIX shell scripts `remote_agent` runs on a remote host
- * over SSH. Every script is executed by `/bin/sh -c` on the remote (see
- * `ssh-runner.ts`), so it never depends on the remote user's login shell
- * (zsh does not word-split unquoted variables; bash does).
+ * over SSH. Every script is delivered on stdin and executed by `exec /bin/sh -s`
+ * on the remote (see `ssh-runner.ts`). The fixed remote command contains no
+ * caller-supplied data, so the remote login shell (zsh, fish, …) cannot
+ * mis-parse it regardless of quoting rules.
  *
  * Contract: every caller-supplied value (run id, cwd, model, resume id, afk
  * path) is embedded through {@link shQuote}. The prompt is never embedded; it
