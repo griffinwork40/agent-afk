@@ -105,7 +105,14 @@ export async function acquireLock(
         } catch { /* process gone — stale lock */ }
         if (!alive) {
           await fs.unlink(lockPath).catch(() => {});
-          return await fs.open(lockPath, 'wx');
+          // On Windows, the unlink leaves the file in "delete-pending" state
+          // until the last handle closes. A concurrent O_EXCL create during
+          // that window gets EPERM/EACCES/EBUSY instead of EEXIST.
+          try {
+            return await fs.open(lockPath, 'wx');
+          } catch (err) {
+            if (!isErrnoCode(err, 'EEXIST') && !isWindowsLockContention(err, platform)) throw err;
+          }
         }
       }
       throw new LockContestedError(lockPath);

@@ -116,4 +116,81 @@ describe('acquireLock — Windows delete-pending contention (#3840)', () => {
     expect(typeof release).toBe('function');
     await release();
   });
+
+  // ---------------------------------------------------------------------------
+  // Stale-unlink retry (the gap from the partial merge of #3875)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Pre-create the lock file, then make fs.open throw EPERM only on the
+   * retry call that happens after the stale-unlink. The first call succeeds
+   * (returns a handle), the stale-PID check finds a dead PID, unlinks, and
+   * the retry throws — asserting that the retry is guarded by
+   * isWindowsLockContention.
+   */
+  async function acquireWithStaleUnlinkRetryError(
+    lockPath: string,
+    retryErr: NodeJS.ErrnoException,
+  ): Promise<void> {
+    // Write a dead PID so the stale-PID branch triggers.
+    await fs.writeFile(lockPath, '1', 'utf-8');
+
+    const realOpen = fs.open.bind(fs);
+    let callCount = 0;
+    const patched = async (...args: Parameters<typeof fs.open>) => {
+      callCount++;
+      // First call: succeed (normal open).
+      if (callCount === 1) return realOpen(...args);
+      // Second call: the stale-unlink retry — throw EPERM.
+      throw retryErr;
+    };
+    fs.open = patched;
+    try {
+      await acquireLock(lockPath, 'win32');
+    } finally {
+      fs.open = realOpen;
+    }
+  }
+
+  it('treats EPERM on stale-unlink retry as LockContestedError, not a hard throw', async () => {
+    const lockPath = join(testDir, 'stale-eperm.lock');
+    await expect(
+      acquireWithStaleUnlinkRetryError(lockPath, makeFakeError('EPERM')),
+    ).rejects.toBeInstanceOf(LockContestedError);
+  });
+
+  it('treats EACCES on stale-unlink retry as LockContestedError, not a hard throw', async () => {
+    const lockPath = join(testDir, 'stale-eacces.lock');
+    await expect(
+      acquireWithStaleUnlinkRetryError(lockPath, makeFakeError('EACCES')),
+    ).rejects.toBeInstanceOf(LockContestedError);
+  });
+
+  it('treats EBUSY on stale-unlink retry as LockContestedError, not a hard throw', async () => {
+    const lockPath = join(testDir, 'stale-ebusy.lock');
+    await expect(
+      acquireWithStaleUnlinkRetryError(lockPath, makeFakeError('EBUSY')),
+    ).rejects.toBeInstanceOf(LockContestedError);
+  });
+
+  it('still throws non-contention errors on stale-unlink retry (linux platform)', async () => {
+    const lockPath = join(testDir, 'stale-linux-eperm.lock');
+    await fs.writeFile(lockPath, '1', 'utf-8');
+
+    const realOpen = fs.open.bind(fs);
+    let callCount = 0;
+    const patched = async (...args: Parameters<typeof fs.open>) => {
+      callCount++;
+      if (callCount === 1) return realOpen(...args);
+      throw makeFakeError('EPERM');
+    };
+    fs.open = patched;
+    try {
+      await expect(
+        acquireLock(lockPath, 'linux'),
+      ).rejects.toMatchObject({ code: 'EPERM' });
+    } finally {
+      fs.open = realOpen;
+    }
+  });
 });
