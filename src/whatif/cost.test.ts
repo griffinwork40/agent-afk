@@ -13,6 +13,7 @@ describe('estimateVerifyCost', () => {
   const baseInput = {
     episodes: 10,
     samples: 2,
+    maxTurns: 3,
     agentModel: 'claude-sonnet-5',
     analystModel: 'claude-sonnet-5',
     systemTokens: { baseline: 5000, candidate: 5100 },
@@ -79,47 +80,58 @@ describe('estimateVerifyCost', () => {
     expect(Object.keys(result.breakdown).sort()).toEqual(['agent', 'discover', 'judge', 'predict']);
   });
 
-  it('agent output token assumption: 800 tokens per call is the calibration target', () => {
-    // agentOut = 800 is the model's output-token assumption, calibrated against
-    // the pilot median (575) with headroom for multi-tool episodes.  This test
-    // pins the agent breakdown to its expected value under the known pricing so
-    // any silent change to agentOut is caught directly rather than only through
-    // the pilot ratio bound (which tolerates up to a ~23% reduction in agentOut
-    // without failing).
-    const result = estimateVerifyCost({
-      ...baseInput,
-      // 1 sample, 1 episode, equal system tokens → agent USD = 2 × callCost(agentModel, 5000+1500, 800)
-      episodes: 1,
-      samples: 1,
-      systemTokens: { baseline: 5_000, candidate: 5_000 },
-      judgeExternal: true, // isolate agent cost
-    });
-    // 2 agent calls (1 baseline + 1 candidate), each with 6500 in + 800 out.
-    // claude-sonnet-5 rates: $2/$10 per MTok (pricing.ts).
-    const agentInputTok = 6_500;
-    const agentOutputTok = 800;
-    const perCallUsd = (agentInputTok / 1_000_000) * 2.0 + (agentOutputTok / 1_000_000) * 10.0;
-    const expectedAgentUsd = 2 * perCallUsd; // baseline + candidate
-    // discover + predict overhead from analystModel (same model here)
-    const discoverUsd = (20_000 / 1_000_000) * 2.0 + (1_000 / 1_000_000) * 10.0;
-    const predictUsd = (15_000 / 1_000_000) * 2.0 + (2_000 / 1_000_000) * 10.0;
-    expect(result.breakdown.agent).toBeCloseTo(expectedAgentUsd, 8);
-    expect(result.breakdown.discover).toBeCloseTo(discoverUsd, 8);
-    expect(result.breakdown.predict).toBeCloseTo(predictUsd, 8);
-    expect(result.breakdown.judge).toBe(0);
+  it('multi-turn token model: effectiveInput and effectiveOutput scale with maxTurns', () => {
+    // With maxTurns=N, USER_TOKENS_PER_TURN=1000, OUTPUT_TOKENS_PER_TURN=800:
+    //   effectiveInput  = sys + N*1000 + (N-1)*800
+    //   effectiveOutput = N*800
+    // 1 sample, 1 episode, equal system tokens; judgeExternal to isolate agent cost.
+    // claude-sonnet-5 rates: $2/M input, $10/M output (pricing.ts).
+    const M = 1_000_000;
+    const inputRate = 2.0;
+    const outputRate = 10.0;
+    const sys = 5_000;
+
+    for (const N of [1, 2, 3]) {
+      const result = estimateVerifyCost({
+        ...baseInput,
+        episodes: 1,
+        samples: 1,
+        maxTurns: N,
+        systemTokens: { baseline: sys, candidate: sys },
+        judgeExternal: true,
+      });
+      const nonSys = N * 1_000 + (N - 1) * 800;
+      const effIn = sys + nonSys;
+      const effOut = N * 800;
+      const perCallUsd = (effIn / M) * inputRate + (effOut / M) * outputRate;
+      const expectedAgentUsd = 2 * perCallUsd; // baseline + candidate
+      const discoverUsd = (20_000 / M) * inputRate + (1_000 / M) * outputRate;
+      const predictUsd = (15_000 / M) * inputRate + (2_000 / M) * outputRate;
+      expect(result.breakdown.agent).toBeCloseTo(expectedAgentUsd, 8);
+      expect(result.breakdown.discover).toBeCloseTo(discoverUsd, 8);
+      expect(result.breakdown.predict).toBeCloseTo(predictUsd, 8);
+      expect(result.breakdown.judge).toBe(0);
+    }
   });
 
-  it('pilot regression: estimate within 1.0–1.3× of pilot actual $6.21 (issue #2489)', () => {
+  it('pilot regression: estimate within 0.9–1.15× of pilot actual $6.21 (issues #2489 #3876)', () => {
     // Fixture: paid pilot run 20260928-153056-015fbb.
     // Parameters: claude-sonnet-4-6 agent, 13 targeted episodes, 2 samples,
     // Jev judge (external), system tokens 33 389 (baseline) / 33 415 (candidate).
     // Actual total from traces.jsonl: $6.2121 across 52 successful agent calls
     // (13 episodes × 2 envs × 2 samples = 52), confirming 1 call per tuple.
+    //
+    // The pilot episodes ran as effectively single-turn (the back-calculated per-call
+    // cost of $0.1194 matches the maxTurns=1 model at $0.1152 within 3.6%).
+    // Pass maxTurns=1 to reflect the actual run; the multi-turn model would
+    // over-estimate by ~1.54× which is correct for 3-turn runs but wrong here.
+    //
     // Root cause of the prior 1.92× overestimate: agentCallsPerEp used 2×2×samples
     // instead of the correct 2×1×samples, doubling agent call count and cost.
     const pilotResult = estimateVerifyCost({
       episodes: 13,
       samples: 2,
+      maxTurns: 1, // pilot episodes were effectively single-turn
       agentModel: 'claude-sonnet-4-6',
       analystModel: 'claude-sonnet-4-6',
       systemTokens: { baseline: 33_389, candidate: 33_415 },
@@ -127,14 +139,56 @@ describe('estimateVerifyCost', () => {
     });
     const actual = 6.21;
     const ratio = pilotResult.usd / actual;
-    // Target: mildly conservative — no more than 1.3× actual, at least 1.0×.
-    // NOTE: ratio < 1.0 means the model underestimates (e.g. multi-tool episodes
-    // exceeding the 1-call assumption); it does not mean the formula is wrong.
-    // The lower bound is a goal of the conservative model, not a mathematical invariant.
-    expect(ratio).toBeGreaterThanOrEqual(1.0);
-    expect(ratio).toBeLessThanOrEqual(1.3);
+    // Target: within ±15% of actual for a maxTurns=1 run.
+    // The multi-turn (N=3) estimator would give 1.28×; maxTurns=1 gives ~0.99×.
+    // Lower bound 0.9× leaves room for episodes that genuinely ran <1 full turn
+    // (warm cache, no tools); upper bound 1.15× tolerates minor input token variance.
+    expect(ratio).toBeGreaterThanOrEqual(0.9);
+    expect(ratio).toBeLessThanOrEqual(1.15);
     // Call count sanity: 2 + 2×1×2×13 + 13×2×2 = 2 + 52 + 52 = 106
     expect(pilotResult.calls).toBe(106);
+  });
+
+  it('no-op control regression: multi-turn model (maxTurns=3) estimates more than single-turn (issue #3876)', () => {
+    // Demonstrates that the single-turn model systematically under-estimates
+    // multi-turn episodes (issue #3876), while the maxTurns=3 model corrects this.
+    //
+    // Fixture parameters approximate the no-op control run 20261015-204001-687bfc:
+    //   13 episodes, 3 samples, Jev (external), agent claude-sonnet-4-6 ($3/$15/M),
+    //   system tokens ~75 000 (typical AFK system prompt for that agent version).
+    // Actual verify portion: ~$20.90 (costUsd $22.35 minus baseline-sample $1.45).
+    // 78 agent traces (13 eps × 2 arms × 3 samples).
+    const multiTurn = estimateVerifyCost({
+      episodes: 13,
+      samples: 3,
+      maxTurns: 3,
+      agentModel: 'claude-sonnet-4-6',
+      analystModel: 'claude-sonnet-4-6',
+      systemTokens: { baseline: 75_000, candidate: 75_000 },
+      judgeExternal: true,
+    });
+    const singleTurn = estimateVerifyCost({
+      episodes: 13,
+      samples: 3,
+      maxTurns: 1,
+      agentModel: 'claude-sonnet-4-6',
+      analystModel: 'claude-sonnet-4-6',
+      systemTokens: { baseline: 75_000, candidate: 75_000 },
+      judgeExternal: true,
+    });
+    // Multi-turn must be strictly more expensive than single-turn.
+    expect(multiTurn.usd).toBeGreaterThan(singleTurn.usd);
+    // The multi-turn model must be at or above the no-op actual spend (~$20.90)
+    // for a run with these parameters.  The single-turn model is well below —
+    // this was the original under-estimation in issue #3876.
+    const actualVerify = 20.90;
+    expect(multiTurn.usd).toBeGreaterThanOrEqual(actualVerify);
+    expect(singleTurn.usd).toBeLessThan(actualVerify); // proves the old model was too low
+    // Upper bound: multi-turn model should not over-estimate by more than 2×.
+    expect(multiTurn.usd).toBeLessThanOrEqual(actualVerify * 2);
+    // Call count unchanged: 2 + 78 + 78 = 158
+    expect(multiTurn.calls).toBe(2 + 2 * 13 * 3 + 13 * 3 * 2);
+    expect(singleTurn.calls).toBe(2 + 2 * 13 * 3 + 13 * 3 * 2);
   });
 });
 
