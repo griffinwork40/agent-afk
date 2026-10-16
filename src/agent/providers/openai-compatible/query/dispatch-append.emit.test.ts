@@ -106,7 +106,7 @@ describe('emitDispatchedToolOutputs', () => {
     );
 
     const out = events.find((e) => e.type === 'tool.output') as Record<string, unknown> | undefined;
-    expect(out?.truncated).toBeUndefined();
+    expect(out?.['truncated']).toBeUndefined();
   });
 
   it('plumbs batchIndex, batchSize, failureClass, and exitCode', async () => {
