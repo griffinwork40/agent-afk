@@ -341,7 +341,8 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
  * can be real paths or interpreter programs. Unknown shell syntax fails closed.
  * Invariant: a quoted delimiter disables shell expansion, not execution by the
  * consumer (`sh <<'EOF'` still executes its body). Never strip interpreter stdin,
- * pipelines, wrappers, quoted shell programs, or multiple pending heredocs.
+ * pipelines, wrappers, quoted shell programs, multiple pending heredocs, or a
+ * body that a redirect writes to a file (see isStdoutOnlyCat).
  */
 function stripQuotedBodyFileData(command: string): string {
   const newline = command.indexOf('\n');
@@ -366,7 +367,7 @@ function stripQuotedBodyFileData(command: string): string {
   const bodyFile = tokens.indexOf('--body-file');
   const isBodyFile = consumer === 'gh' && (noun === 'issue' || noun === 'pr') &&
     ['create', 'comment', 'edit'].includes(verb ?? '') && bodyFile >= 3 && tokens[bodyFile + 1] === '-';
-  if (consumer !== 'cat' && !isBodyFile) return command;
+  if (!isBodyFile && !isStdoutOnlyCat(tokens)) return command;
   const bodyStart = newline + 1;
   let end = bodyStart;
   while (end < command.length) {
@@ -380,6 +381,16 @@ function stripQuotedBodyFileData(command: string): string {
     end = lineEnd + 1;
   }
   return command; // Unterminated/ambiguous heredocs retain the original scan.
+}
+
+/**
+ * Invariant: `cat` stdin is exempt only when it is printed to stdout. Any other
+ * argv (`> f`, `>> f`, `1>f`, a file operand) may persist the body to disk, and a
+ * persisted body is a script the same or a LATER tool call can execute
+ * (`cat > /tmp/run.sh <<'EOF'` … `bash /tmp/run.sh`), so it stays scanned.
+ */
+function isStdoutOnlyCat(tokens: readonly string[]): boolean {
+  return tokens[0] === 'cat' && tokens.slice(1).every((t) => /^-[A-Za-z]*$/.test(t));
 }
 
 /**
