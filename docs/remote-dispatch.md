@@ -71,7 +71,7 @@ Verified on macOS over SSH (2026-10-15), which is why it works this way:
 |---|---|
 | `hosts.ts` | Loads `hosts.json`; validates the ssh target (no leading `-`, restricted charset). |
 | `keychain-unlock.ts` | Reads a host's stored login password locally; escapes it for `security -i`. |
-| `remote-script.ts` | Builds the POSIX scripts run as `/bin/sh -c` on the remote. |
+| `remote-script.ts` | Builds the POSIX scripts run as `exec /bin/sh -s` on the remote (script on stdin, payloads as heredocs). |
 | `ssh-runner.ts` | Spawns local `ssh` (`BatchMode`, `ConnectTimeout=5`, ServerAlive probes). Injectable. |
 | `remote-run.ts` | Launch → follow → result; reconnect; cancel on abort. |
 | `remote-events.ts` | Tolerant parser for `afk chat --format stream-json` events. |

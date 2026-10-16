@@ -62,7 +62,7 @@ describe('runRemoteAgent', () => {
   it('reports a remote error event', async () => {
     const f = fakeRunner({ streams: [[ev({ type: 'error', error: { message: 'boom' } })]] });
     const out = await runRemoteAgent(REQ, new AbortController().signal, { runner: f.runner, sleep: noSleep });
-    expect(out).toMatchObject({ kind: 'error', reason: 'remote agent error: boom' });
+    expect(out).toMatchObject({ kind: 'error', reason: 'remote agent error', remoteDetail: 'boom' });
   });
 
   it('reconnects after a dropped connection from the next unseen line', async () => {
@@ -86,7 +86,7 @@ describe('runRemoteAgent', () => {
   it('reports the stderr tail when the remote process exits without a result', async () => {
     const f = fakeRunner({ streams: [[MSG('x'), EXIT_MARKER]], errTail: 'Error: not logged in' });
     const out = await runRemoteAgent(REQ, new AbortController().signal, { runner: f.runner, sleep: noSleep });
-    expect(out).toMatchObject({ kind: 'error', reason: 'remote afk exited without a result: Error: not logged in' });
+    expect(out).toMatchObject({ kind: 'error', reason: 'remote afk exited without a result', remoteDetail: 'Error: not logged in' });
   });
 
   it('explains the locked-keychain cause when the remote has no credential', async () => {

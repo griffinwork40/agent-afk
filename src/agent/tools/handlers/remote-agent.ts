@@ -84,14 +84,23 @@ export function isRemoteRun(): boolean {
 }
 
 /**
- * Wrap remote-sourced text so prompt-injected content cannot reach the local
- * model as plain tool output. Any literal `</remote-output` occurrence in the
- * remote text is neutralised (case-insensitive) so the closing tag cannot be
- * forged by injected content.
+ * Neutralise any `</remote-output` tag (case-insensitive) in remote-sourced
+ * text so injected content cannot close the frame early.
+ *
+ * This is the single authoritative implementation — used by both
+ * {@link frameRemote} (for success replies) and {@link formatOutcome} (for
+ * error/lost `remoteDetail` fragments). No other module may neutralise tags.
+ */
+export function neutraliseRemoteOutput(text: string): string {
+  return text.replace(/<\/remote-output/gi, '<\\/remote-output');
+}
+
+/**
+ * Wrap remote-sourced text in `<remote-output>` tags after neutralising any
+ * closing tag that could be forged by injected content.
  */
 function frameRemote(text: string): string {
-  const safe = text.replace(/<\/remote-output/gi, '<\\/remote-output');
-  return `<remote-output>\n${safe}\n</remote-output>`;
+  return `<remote-output>\n${neutraliseRemoteOutput(text)}\n</remote-output>`;
 }
 
 function formatOutcome(outcome: RemoteRunOutcome, host: RemoteHost, runId: string, sessionId: string): ToolResult {
@@ -103,7 +112,11 @@ function formatOutcome(outcome: RemoteRunOutcome, host: RemoteHost, runId: strin
       ? ` The run continues on the remote: ~/.afk/state/remote-runs/${runId}/out.ndjson.`
       : '';
     const reason = outcome.reason.replace(/\.+$/, '');
-    return fail(`${reason}.${lostNote} (${where})${partial}`);
+    // Frame any remote-sourced detail separately from the local prose reason.
+    const detail = outcome.remoteDetail
+      ? `: ${frameRemote(outcome.remoteDetail)}`
+      : '';
+    return fail(`${reason}${detail}.${lostNote} (${where})${partial}`);
   }
   const footer = `\n\n[remote_agent: ${where}; pass resume="${sessionId}" to continue there]`;
   const rawReply = outcome.message.trim() === '' ? '(remote agent finished with an empty reply)' : outcome.message;

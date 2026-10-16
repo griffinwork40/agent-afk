@@ -14,6 +14,7 @@ import {
 } from './remote-script.js';
 import { sshArgs } from './ssh-runner.js';
 import { createEventCollector } from './remote-events.js';
+import { resolveShell } from '../utils/resolve-shell.js';
 
 describe('shQuote / shQuotePath', () => {
   it('single-quotes and escapes embedded quotes', () => {
@@ -129,11 +130,26 @@ describe('createEventCollector', () => {
 
 describe('launch script stdin isolation (regression)', () => {
   /**
-   * Collect the shells available on this machine at runtime. Never platform-
-   * skipped — if /bin/sh is absent the expect below fails explicitly. Shells
-   * are deduplicated so /bin/sh=bash on macOS does not run twice.
+   * Collect the shells available on this machine at runtime.
+   *
+   * On Windows: resolveShell() finds Git Bash (C:\Program Files\Git\bin\bash.exe
+   * or derived from git.exe on PATH). PowerShell is NEVER included — it cannot
+   * run the POSIX heredoc scripts. If no POSIX shell is found on Windows, the
+   * test fails with a clear message (Git Bash is present on windows-2022 runners).
+   *
+   * On POSIX: /bin/sh is always the first candidate; dash/bash/zsh are added
+   * when present. Shells are deduplicated so /bin/sh=bash on macOS runs only once.
+   *
+   * Never platform-skipped.
    */
   function availableShells(): string[] {
+    if (process.platform === 'win32') {
+      const res = resolveShell();
+      // resolveShell() returns { shell: 'powershell.exe' } when Git Bash is absent.
+      // PowerShell cannot run POSIX heredoc scripts — treat it as no shell found.
+      if (res.shell === true || res.shell === 'powershell.exe') return [];
+      return [res.shell as string];
+    }
     const candidates = ['/bin/sh'];
     for (const sh of [
       '/bin/dash', '/usr/bin/dash', '/usr/local/bin/dash',
@@ -145,22 +161,43 @@ describe('launch script stdin isolation (regression)', () => {
     return [...new Set(candidates)];
   }
 
+  /**
+   * Convert a Node path from os.tmpdir() to a form Git Bash accepts.
+   * On Windows, os.tmpdir() returns `C:\Users\...`; Git Bash needs
+   * forward slashes (`C:/Users/...`). On POSIX this is a no-op.
+   */
+  function toShellPath(p: string): string {
+    return process.platform === 'win32' ? p.replace(/\\/g, '/') : p;
+  }
+
   /** Run a single (shell, prompt) pair and assert correctness. */
   function assertPromptRoundtrip(shell: string, prompt: string, label: string): void {
     const runId = 'test-run-rt';
     const tmpHome = mkdtempSync(path.join(os.tmpdir(), 'afk-rt-'));
     try {
+      // The stub afk must be a #!/bin/sh script so Git Bash on Windows can
+      // execute it by shebang. chmod is a no-op on Windows but harmless.
       const afkBin = path.join(tmpHome, 'afk');
+      // Use the shell-path form for the afkPath so the launch script's `p=`
+      // assignment and subsequent exec work under Git Bash on Windows.
+      const afkBinShell = toShellPath(afkBin);
       writeFileSync(afkBin, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      // PWNED is checked in tmpHome — the shell runs with cwd: tmpHome so a
+      // bare `touch PWNED` (without absolute path) lands here (item 3 fix).
       const pwnedPath = path.join(tmpHome, 'PWNED');
 
-      const script = buildLaunchScript({ runId, sessionId: 'sess-rt', prompt, afkPath: afkBin });
+      const script = buildLaunchScript({ runId, sessionId: 'sess-rt', prompt, afkPath: afkBinShell });
+
+      // HOME must be in shell-path form so the launch script's $HOME expansion
+      // produces a valid path under Git Bash on Windows.
+      const homeForShell = toShellPath(tmpHome);
 
       let stdout = '';
       try {
         stdout = execFileSync(shell, ['-s'], {
           input: script,
-          env: { HOME: tmpHome, PATH: process.env['PATH'] ?? '/usr/bin:/bin' },
+          cwd: tmpHome,   // item 3: bare `touch PWNED` lands in tmpHome
+          env: { HOME: homeForShell, PATH: process.env['PATH'] ?? '/usr/bin:/bin' },
           timeout: 10_000,
           encoding: 'utf-8',
         });
@@ -169,9 +206,9 @@ describe('launch script stdin isolation (regression)', () => {
         stdout = e.stdout ?? '';
       }
 
-      // 1. No PWNED file
+      // 1. No PWNED file (security-critical; always asserted)
       expect(existsSync(pwnedPath), `[${shell}] PWNED created — injection for: ${label}`).toBe(false);
-      // 2. PID marker present
+      // 2. PID marker present (round-trip launch succeeded)
       expect(stdout, `[${shell}] PID marker missing for: ${label}`).toContain('__AFK_REMOTE_PID__');
       // 3. Byte-identical prompt file
       const promptFile = path.join(tmpHome, '.afk', 'state', 'remote-runs', runId, 'prompt');
@@ -200,7 +237,9 @@ describe('launch script stdin isolation (regression)', () => {
 
   it('prompt file is byte-identical to input; no PWNED file; PID marker printed', () => {
     const shells = availableShells();
-    expect(shells.length, 'no POSIX shell found — check availableShells()').toBeGreaterThan(0);
+    // On Windows the runner has Git Bash; on POSIX /bin/sh is always present.
+    // Fail explicitly rather than passing vacuously when no shell is found.
+    expect(shells.length, 'no POSIX shell found — Git Bash expected on windows-2022; /bin/sh expected on POSIX').toBeGreaterThan(0);
 
     for (const shell of shells) {
       for (const [label, prompt] of PAYLOADS) {
@@ -218,8 +257,16 @@ describe('launch script stdin isolation (regression)', () => {
 // ---------------------------------------------------------------------------
 
 describe('keychain heredoc read (regression)', () => {
-  /** Shells to test — same discovery logic as the launch-script suite. */
+  /**
+   * Shells to test — same discovery logic as the launch-script suite.
+   * PowerShell is never included. Never platform-skipped.
+   */
   function availableShells(): string[] {
+    if (process.platform === 'win32') {
+      const res = resolveShell();
+      if (res.shell === true || res.shell === 'powershell.exe') return [];
+      return [res.shell as string];
+    }
     const candidates = ['/bin/sh'];
     for (const sh of [
       '/bin/dash', '/usr/bin/dash', '/usr/local/bin/dash',
@@ -233,7 +280,7 @@ describe('keychain heredoc read (regression)', () => {
 
   it('kcpw equals password for metacharacter-rich single-line passwords', () => {
     const shells = availableShells();
-    expect(shells.length).toBeGreaterThan(0);
+    expect(shells.length, 'no POSIX shell found — Git Bash expected on windows-2022; /bin/sh expected on POSIX').toBeGreaterThan(0);
 
     // Password containing every required metacharacter class.
     // Must be single-line (no \r or \n) — that is the invariant.

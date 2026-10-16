@@ -69,9 +69,9 @@ export interface RemoteRunRequest {
 
 export type RemoteRunOutcome =
   | { kind: 'done'; message: string; pid: number; metadata?: Record<string, unknown> }
-  | { kind: 'error'; reason: string; pid?: number; partial?: string }
+  | { kind: 'error'; reason: string; pid?: number; partial?: string; remoteDetail?: string }
   | { kind: 'aborted'; pid?: number }
-  | { kind: 'lost'; reason: string; pid: number; partial?: string };
+  | { kind: 'lost'; reason: string; pid: number; partial?: string; remoteDetail?: string };
 
 export interface RemoteRunDeps {
   runner: SshRunner;
@@ -111,12 +111,12 @@ async function launch(
   if (signal.aborted) return { kind: 'aborted' };
   const stderr = res.stderr.trim();
   if (res.code === SSH_CONNECT_FAILURE) {
-    return { kind: 'error', reason: `host unreachable (${req.target}): ${stderr || 'ssh exit 255'}` };
+    return { kind: 'error', reason: `host unreachable (${req.target})`, remoteDetail: stderr || 'ssh exit 255' };
   }
   if (res.code === EXIT_AFK_NOT_FOUND) {
-    return { kind: 'error', reason: `afk is not installed on ${req.target} (${stderr}). Install it there, or set "afkPath" for this host in hosts.json.` };
+    return { kind: 'error', reason: `afk is not installed on ${req.target}. Install it there, or set "afkPath" for this host in hosts.json.`, remoteDetail: stderr };
   }
-  if (res.code === EXIT_BAD_CWD) return { kind: 'error', reason: `remote cwd does not exist on ${req.target}: ${stderr}` };
+  if (res.code === EXIT_BAD_CWD) return { kind: 'error', reason: `remote cwd does not exist on ${req.target}`, remoteDetail: stderr };
   if (res.code === EXIT_KEYCHAIN_UNLOCK) {
     const name = req.hostName ?? req.target;
     return { kind: 'error', reason: `could not unlock the login keychain on ${req.target}; if its password changed, re-store it with \`${unlockSetupCommand(name)}\`` };
@@ -124,7 +124,7 @@ async function launch(
   const line = res.stdout.split('\n').find((l) => l.startsWith(PID_MARKER));
   const pid = line !== undefined ? Number(line.slice(PID_MARKER.length).trim()) : NaN;
   if (res.code !== 0 || !Number.isInteger(pid) || pid <= 0) {
-    return { kind: 'error', reason: `remote launch failed on ${req.target} (exit ${String(res.code)}): ${stderr || res.stdout.trim()}` };
+    return { kind: 'error', reason: `remote launch failed on ${req.target} (exit ${String(res.code)})`, remoteDetail: stderr || res.stdout.trim() };
   }
   return { pid };
 }
@@ -162,22 +162,24 @@ export async function runRemoteAgent(
     }
     const terminal = events.terminal();
     if (terminal?.type === 'done') return { kind: 'done', message: events.finalMessage(), pid, ...(terminal.metadata ? { metadata: terminal.metadata } : {}) };
-    if (terminal?.type === 'error') return { kind: 'error', reason: `remote agent error: ${terminal.message}`, pid, partial: events.finalMessage() };
+    if (terminal?.type === 'error') return { kind: 'error', reason: `remote agent error`, remoteDetail: terminal.message, pid, partial: events.finalMessage() };
     if (exited) {
       const err = await runner.exec(req.target, buildErrTailScript(req.runId), { timeoutMs: CANCEL_TIMEOUT_MS });
       const tail = err.stdout.trim();
       // An already-unlocked run that still lacks a credential needs `afk login`
       // on the host, not keychain advice, so the hint is skipped then.
+      // NOTE: NO_CREDENTIAL_SIGNATURE check is on `tail` (local variable), not
+      // on a remote-sourced field — so this matching is safe.
       const hint = tail.includes(NO_CREDENTIAL_SIGNATURE) && req.keychainPassword === undefined
         ? lockedKeychainHint(req.hostName ?? req.target)
         : '';
-      return { kind: 'error', reason: `remote afk exited without a result${tail ? `: ${tail}` : ''}${hint}`, pid, partial: events.finalMessage() };
+      return { kind: 'error', reason: `remote afk exited without a result${hint}`, remoteDetail: tail || undefined, pid, partial: events.finalMessage() };
     }
     // Connection dropped mid-follow: reconnect from the next unseen line.
     lastStderr = res.stderr.trim();
     failures = linesSeen > before ? 1 : failures + 1;
     if (failures > MAX_RECONNECTS) {
-      return { kind: 'lost', pid, reason: `lost connection to ${req.target} after ${MAX_RECONNECTS} reconnects${lastStderr ? ` (${lastStderr})` : ''}`, partial: events.finalMessage() };
+      return { kind: 'lost', pid, reason: `lost connection to ${req.target} after ${MAX_RECONNECTS} reconnects`, remoteDetail: lastStderr || undefined, partial: events.finalMessage() };
     }
     await sleep(Math.min(MAX_BACKOFF_MS, 1000 * 2 ** (failures - 1)), signal);
   }
