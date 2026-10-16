@@ -41,4 +41,5 @@ export {
 export {
   renderWorkspacePreamble,
   injectWorkspacePreamble,
+  WORKSPACE_PREAMBLE_MARKERS,
 } from './workspace-preamble.js';

@@ -13,7 +13,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
-import { ENV_SPLIT_MARKER, splitAtEnvironmentBoundary, composeQuerySystem } from './query-system.js';
+import { ENV_SPLIT_MARKER, splitAtEnvironmentBoundary, splitAtWorkspacePreamble, composeQuerySystem } from './query-system.js';
 import type { SessionState } from './query/session-state.js';
 import type { ToolDispatcher } from './tool-dispatcher.js';
 
@@ -300,5 +300,39 @@ describe('composeQuerySystem — systemPrefix passthrough', () => {
     expect(blocks.length).toBeGreaterThanOrEqual(3);
     const first = blocks[0] as { type: string; text: string };
     expect(first.text).toBe('PREFIX BLOCK');
+  });
+});
+
+// --- splitAtWorkspacePreamble (#3878) ---
+
+describe('splitAtWorkspacePreamble', () => {
+  it('returns null when no workspace preamble is present (root sessions)', () => {
+    expect(splitAtWorkspacePreamble('TOOLS\n\nDOCTRINE\n\n# Shared Workspace\n\nusage')).toBeNull();
+  });
+
+  it('splits before a populated preamble header', () => {
+    const r = splitAtWorkspacePreamble('HEAD\n\n# Tool budget\n\n# Workspace context (shared findings from sibling agents)\n\nfindings\n\n# Cross-Session Memory');
+    expect(r?.sharedHead).toBe('HEAD\n\n# Tool budget');
+    expect(r?.preambleTail.startsWith('# Workspace context')).toBe(true);
+    expect(r?.preambleTail).toContain('# Cross-Session Memory');
+  });
+
+  it('splits before the cold-start header', () => {
+    const r = splitAtWorkspacePreamble('HEAD\n\n# Workspace (shared agent scratchpad)\n\nhint');
+    expect(r).toEqual({ sharedHead: 'HEAD', preambleTail: '# Workspace (shared agent scratchpad)\n\nhint' });
+  });
+
+  it('keeps the leading divider of a truncated preamble in the tail', () => {
+    const r = splitAtWorkspacePreamble('HEAD\n\n\n---\n[Workspace preamble truncated: too many entries. Earlier entries omitted.]\nrest');
+    expect(r?.sharedHead).toBe('HEAD');
+    expect(r?.preambleTail.startsWith('---\n[Workspace preamble truncated')).toBe(true);
+  });
+
+  it('composeQuerySystem puts the preamble in its own uncached block after the stable breakpoint', () => {
+    const userSystem = makeAssembled('SHARED\n\n# Workspace (shared agent scratchpad)\n\nhint', '- Working directory: /x');
+    const blocks = composeQuerySystem({ state: makeState(userSystem), systemPrefix: null }) as Array<{ text: string; cache_control?: unknown }>;
+    expect(blocks.map((b) => b.text.split('\n')[0])).toEqual(['SHARED', '# Workspace (shared agent scratchpad)', '# Environment']);
+    expect(blocks[0]!.cache_control).toBeDefined();
+    expect(blocks[1]!.cache_control).toBeUndefined();
   });
 });
